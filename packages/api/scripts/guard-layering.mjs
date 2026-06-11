@@ -11,11 +11,15 @@
 // Rules:
 //   r1_generated_db_outside_repo : only repo*.ts / repo.types.ts may import
 //       generated/db or db-types.
-//   r2_tablerow_in_service_ctrl  : service.ts / controller*.ts must not use
-//       TableRow< / TableInsert< / TableUpdate<.
+//   r2_tablerow_outside_repo     : only repo*.ts / repo.types.ts may use
+//       TableRow< / TableInsert< / TableUpdate< (the kysely alias). service /
+//       controller / helper files must take repo.types records instead.
 //   r3_serializeinstant_in_layer : service.ts / controller*.ts must not call
 //       serializeInstant / serializeOptionalInstant (presenter / infra only).
 //   r4_maprow_outside_repo       : map*Row / normalize*Row defs only in repo*.ts.
+//   r5_bare_route_in_mixed       : mixed (Tier C) modules must register routes
+//       via appRoute()/wireRoute() (or split *.app.ts/*.wire.ts), never bare
+//       app.get/post/put/delete/patch(...). §5.3 mechanism.
 //   r7_dual_naming               : no `row.foo_bar || row.fooBar` and no
 //       outward `...row` spread.
 //
@@ -51,6 +55,25 @@ const isRepo = (p) => /(^|\/)repo[^/]*\.ts$|(^|\/)repo\.types\.ts$/.test(p)
 const isServiceOrCtrl = (p) =>
   /(^|\/)service[^/]*\.ts$|(^|\/)controller[^/]*\.ts$/.test(p)
 
+// §7 Tier C mixed modules (app + wire in one module). Their route
+// registrations must go through the §5.3 appRoute()/wireRoute() markers (or a
+// split *.app.ts / *.wire.ts controller), never bare app.<verb>(...).
+const MIXED_MODULES = new Set([
+  "automation",
+  "im",
+  "mcp-plugins",
+  "remote-agents",
+  "runtime-authorizations",
+  "files",
+  "devices",
+  "relationship",
+])
+const moduleOf = (p) => {
+  const m = p.split("/modules/")[1]
+  return m ? m.split("/")[0] : ""
+}
+const isMixedModuleFile = (p) => MIXED_MODULES.has(moduleOf(p))
+
 const RULES = [
   {
     id: "r1_generated_db_outside_repo",
@@ -59,8 +82,8 @@ const RULES = [
       /from\s+["'][^"']*\/(generated\/db|db-types)(\.js)?["']/.test(src),
   },
   {
-    id: "r2_tablerow_in_service_ctrl",
-    appliesTo: isServiceOrCtrl,
+    id: "r2_tablerow_outside_repo",
+    appliesTo: (p) => !isRepo(p),
     test: (src) => /\bTable(Row|Insert|Update)\s*</.test(src),
   },
   {
@@ -75,6 +98,13 @@ const RULES = [
       /\b(?:function|const)\s+(?:map|normalize)[A-Za-z0-9]*Row\b/.test(src),
   },
   {
+    id: "r5_bare_route_in_mixed",
+    appliesTo: isMixedModuleFile,
+    // matches app.get(...) AND app.get<{...}>(...) — the optional generic-arg
+    // form used by typed Fastify handlers.
+    test: (src) => /\bapp\.(get|post|put|delete|patch)\s*[<(]/.test(src),
+  },
+  {
     id: "r7_dual_naming",
     appliesTo: () => true,
     test: (src) =>
@@ -85,10 +115,20 @@ const RULES = [
 ]
 
 const files = walk(MODULES)
+
+// Strip line + block comments so a rule's keyword inside a doc-comment (e.g.
+// "never uses TableRow<...>") is not a false positive. String literals are left
+// intact — the rules target code constructs, not arbitrary strings.
+function stripComments(src) {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/[^\n]*/g, "$1")
+}
+
 const current = {}
 for (const r of RULES) current[r.id] = []
 for (const p of files) {
-  const src = readFileSync(p, "utf8")
+  const src = stripComments(readFileSync(p, "utf8"))
   const rel = relative(REPO_ROOT, p)
   for (const r of RULES) {
     if (r.appliesTo(p) && r.test(src)) current[r.id].push(rel)

@@ -26,7 +26,7 @@ import {
   DevicePairingTicketViewSchema,
   DeviceServiceViewSchema,
 } from "@synapse/shared/schemas"
-import { sendData } from "../../infrastructure/http/respond.js"
+import { appRoute, wireRoute } from "../../infrastructure/http/route.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { requireRequestAction } from "../access/guards.js"
@@ -116,9 +116,11 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
   const workspaceHook = { preHandler: [authMiddleware, workspaceMiddleware] }
   const authHook = { preHandler: [authMiddleware] }
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/devices",
-    workspaceHook,
+    { schema: z.array(DeviceViewSchema), options: workspaceHook },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       if (
@@ -133,7 +135,7 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
         return
       try {
         const records = await listDevices(workspaceId)
-        sendData(reply, z.array(DeviceViewSchema), records.map(presentDevice))
+        return records.map(presentDevice)
       } catch (err) {
         if (sendModuleError(reply, err)) return
         throw err
@@ -141,9 +143,11 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/devices/:deviceId",
-    workspaceHook,
+    { schema: DeviceDetailViewSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId, deviceId } = request.params as {
         workspaceId: string
@@ -160,11 +164,7 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
       )
         return
       try {
-        sendData(
-          reply,
-          DeviceDetailViewSchema,
-          presentDeviceDetail(await getDevice(workspaceId, deviceId))
-        )
+        return presentDeviceDetail(await getDevice(workspaceId, deviceId))
       } catch (err) {
         if (sendModuleError(reply, err)) return
         throw err
@@ -172,10 +172,12 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
     }
   )
 
-  app.delete(
+  appRoute(
+    app,
+    "DELETE",
     "/api/v1/workspaces/:workspaceId/devices/:deviceId",
-    workspaceHook,
-    async (request, reply) => {
+    { schema: DeviceDetailViewSchema, options: workspaceHook },
+    async (request, reply): Promise<undefined> => {
       const { workspaceId, deviceId } = request.params as {
         workspaceId: string
         deviceId: string
@@ -193,6 +195,7 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
       try {
         await deleteDevice(workspaceId, deviceId)
         reply.status(204).send()
+        return
       } catch (err) {
         if (sendModuleError(reply, err)) return
         throw err
@@ -200,9 +203,11 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/devices/pairing-sessions",
-    workspaceHook,
+    { schema: DevicePairingTicketViewSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       if (
@@ -239,11 +244,7 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
           deviceId: parsed.data.deviceId,
           context: parsed.data.context,
         })
-        sendData(
-          reply,
-          DevicePairingTicketViewSchema,
-          presentDevicePairingTicket(result)
-        )
+        return presentDevicePairingTicket(result)
       } catch (err) {
         if (sendModuleError(reply, err)) return
         throw err
@@ -252,9 +253,12 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
   )
 
   // Unauthenticated: pairing_code is the bearer credential (rate-limited at
-  // the edge, not in this handler).
-  app.post(
+  // the edge, not in this handler). WIRE — daemon handshake; bare payload.
+  wireRoute(
+    app,
+    "POST",
     "/api/v1/devices/pairing-sessions/consume",
+    {},
     async (request, reply) => {
       const parsed = consumePairingBodySchema.safeParse(request.body)
       if (!parsed.success) {
@@ -287,9 +291,11 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/devices/:deviceId/services",
-    workspaceHook,
+    { schema: DeviceServiceViewSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId, deviceId } = request.params as {
         workspaceId: string
@@ -319,7 +325,7 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
           deviceId,
           remoteAgentMachineId: parsed.data.remoteAgentMachineId,
         })
-        sendData(reply, DeviceServiceViewSchema, presentDeviceService(service))
+        return presentDeviceService(service)
       } catch (err) {
         if (sendModuleError(reply, err)) return
         throw err
@@ -327,10 +333,12 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
     }
   )
 
-  app.delete(
+  appRoute(
+    app,
+    "DELETE",
     "/api/v1/workspaces/:workspaceId/devices/:deviceId/services/:serviceId",
-    workspaceHook,
-    async (request, reply) => {
+    { schema: DeviceServiceViewSchema, options: workspaceHook },
+    async (request, reply): Promise<undefined> => {
       const { workspaceId, deviceId, serviceId } = request.params as {
         workspaceId: string
         deviceId: string
@@ -349,6 +357,7 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
       try {
         await detachDeviceService(workspaceId, deviceId, serviceId)
         reply.status(204).send()
+        return
       } catch (err) {
         if (sendModuleError(reply, err)) return
         throw err
@@ -364,9 +373,11 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
   // bootstrap_token for the API server to inject into the sandbox env.
   // The actual sandbox provisioning is the operator's responsibility (or a
   // host_provider plugin); the API just hands back the token.
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/devices/cloud",
-    workspaceHook,
+    { schema: CreateCloudDeviceResultViewSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       if (
@@ -403,7 +414,7 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
           hostProvider: parsedBody.data.hostProvider,
           requestedByWorkspaceMemberId: session?.workspaceMemberId ?? null,
         })
-        sendData(reply, CreateCloudDeviceResultViewSchema, result)
+        return result
       } catch (err) {
         if (sendModuleError(reply, err)) return
         throw err
@@ -414,40 +425,51 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
   // Sandbox boot handler — runs INSIDE the sandbox. Unauthenticated;
   // bootstrap_token (sha256-hashed and matched against
   // device_pairing_sessions.bootstrap_token_hash) is the credential.
-  app.post("/api/v1/devices/bootstrap", async (request, reply) => {
-    const body = request.body as {
-      bootstrap_token?: string
-      device_pubkey?: string
-      service_pubkey?: string
-      client_version?: string
-      host_provider?: string
-      platform?: string
-      arch?: string
+  // WIRE — machine bootstrap handshake; bare payload.
+  wireRoute(
+    app,
+    "POST",
+    "/api/v1/devices/bootstrap",
+    {},
+    async (request, reply) => {
+      const body = request.body as {
+        bootstrap_token?: string
+        device_pubkey?: string
+        service_pubkey?: string
+        client_version?: string
+        host_provider?: string
+        platform?: string
+        arch?: string
+      }
+      if (
+        !body?.bootstrap_token ||
+        !body.device_pubkey ||
+        !body.service_pubkey
+      ) {
+        reply.status(400).send({
+          code: "invalid_request",
+          message: "bootstrap_token, device_pubkey, service_pubkey required",
+        })
+        return
+      }
+      try {
+        const result = await consumeCloudBootstrap(
+          {
+            bootstrapToken: body.bootstrap_token,
+            devicePubkey: body.device_pubkey,
+            servicePubkey: body.service_pubkey,
+            clientVersion: body.client_version,
+            hostProvider: body.host_provider,
+            platform: body.platform,
+            arch: body.arch,
+          },
+          { controlPlaneUrl: resolveControlPlaneUrl() }
+        )
+        reply.send(result)
+      } catch (err) {
+        if (sendModuleError(reply, err)) return
+        throw err
+      }
     }
-    if (!body?.bootstrap_token || !body.device_pubkey || !body.service_pubkey) {
-      reply.status(400).send({
-        code: "invalid_request",
-        message: "bootstrap_token, device_pubkey, service_pubkey required",
-      })
-      return
-    }
-    try {
-      const result = await consumeCloudBootstrap(
-        {
-          bootstrapToken: body.bootstrap_token,
-          devicePubkey: body.device_pubkey,
-          servicePubkey: body.service_pubkey,
-          clientVersion: body.client_version,
-          hostProvider: body.host_provider,
-          platform: body.platform,
-          arch: body.arch,
-        },
-        { controlPlaneUrl: resolveControlPlaneUrl() }
-      )
-      reply.send(result)
-    } catch (err) {
-      if (sendModuleError(reply, err)) return
-      throw err
-    }
-  })
+  )
 }

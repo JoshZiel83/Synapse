@@ -1,4 +1,7 @@
-import type { TableRow } from "../../infrastructure/database/kysely.js"
+import type {
+  TableInsert,
+  TableRow,
+} from "../../infrastructure/database/kysely.js"
 
 /**
  * Session module DB-row types. Repo file: the only place in the session module
@@ -27,3 +30,12 @@ export type SessionMessageItemRow = {
 }
 
 export type ConversationItemPartRow = TableRow<"conversationItemParts">
+
+// Runtime engine (session/runtime.ts) DB-row types. Tier-D engine: these named
+// aliases keep the runtime helper free of the kysely TableRow/TableInsert alias.
+export type ToolResultRow = TableRow<"toolResults">
+export type ToolResultPartRow = TableRow<"toolResultParts">
+export type ToolCallTaskRow = TableRow<"toolCallTasks">
+export type SessionWakeupRow = TableRow<"sessionWakeups">
+export type SessionWakeupMetadataInsert =
+  TableInsert<"sessionWakeups">["metadata"]

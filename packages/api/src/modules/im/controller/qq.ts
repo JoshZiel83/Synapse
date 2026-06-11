@@ -18,6 +18,9 @@
 
 import type { FastifyInstance } from "fastify"
 import { z } from "zod"
+import { TransportAccountResponseSchema } from "@synapse/shared/schemas"
+import { appRoute } from "../../../infrastructure/http/route.js"
+import { sendData } from "../../../infrastructure/http/respond.js"
 import {
   createTransportAccount,
   getTransportAccountById,
@@ -81,9 +84,12 @@ function normalizeOrError(
 export default async function imQqController(
   app: FastifyInstance
 ): Promise<void> {
-  app.post<{ Params: { workspaceId: string }; Body: unknown }>(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/im/accounts/qq",
-    async (request, reply) => {
+    { schema: TransportAccountResponseSchema },
+    async (request, reply): Promise<undefined> => {
       const allowed = await requireWorkspaceAction(
         request,
         reply,
@@ -92,7 +98,7 @@ export default async function imQqController(
       )
       if (!allowed) return
 
-      const { workspaceId } = request.params
+      const { workspaceId } = request.params as { workspaceId: string }
       const body = qqAccountSchema.parse(request.body)
       const credentials: Record<string, unknown> = {
         appId: body.appId,
@@ -107,7 +113,8 @@ export default async function imQqController(
         configuredUrlDomains: body.configuredUrlDomains ?? [],
       })
       if (!configResult.ok) {
-        return reply.status(configResult.status).send(configResult.body)
+        reply.status(configResult.status).send(configResult.body)
+        return
       }
       const config = configResult.config
 
@@ -127,15 +134,16 @@ export default async function imQqController(
         config,
       })
       await refreshTransportRuntimeState()
-      return reply.status(201).send({ account })
+      sendData(reply, TransportAccountResponseSchema, { account }, 201)
+      return
     }
   )
 
-  app.put<{
-    Params: { workspaceId: string; accountId: string }
-    Body: unknown
-  }>(
+  appRoute(
+    app,
+    "PUT",
     "/api/v1/workspaces/:workspaceId/im/accounts/qq/:accountId",
+    { schema: TransportAccountResponseSchema },
     async (request, reply) => {
       const allowed = await requireWorkspaceAction(
         request,
@@ -145,7 +153,10 @@ export default async function imQqController(
       )
       if (!allowed) return
 
-      const { workspaceId, accountId } = request.params
+      const { workspaceId, accountId } = request.params as {
+        workspaceId: string
+        accountId: string
+      }
       const body = updateQqAccountSchema.parse(request.body)
       const credentials =
         body.appId || body.clientSecret || body.botSecret
@@ -168,7 +179,8 @@ export default async function imQqController(
       if (hasConfigField) {
         const existing = await getTransportAccountById(accountId)
         if (!existing || existing.workspaceId !== workspaceId) {
-          return reply.status(404).send({ error: "qq account not found" })
+          reply.status(404).send({ error: "qq account not found" })
+          return
         }
         // Wrong-kind hits are caught by shared `assertExpectedTransportKind`
         // inside `updateTransportAccount` (it sees
@@ -198,7 +210,8 @@ export default async function imQqController(
         // deploy, or future schema additions) is checked one more time.
         const configResult = normalizeOrError(merged)
         if (!configResult.ok) {
-          return reply.status(configResult.status).send(configResult.body)
+          reply.status(configResult.status).send(configResult.body)
+          return
         }
         config = configResult.config
       }
@@ -222,7 +235,7 @@ export default async function imQqController(
         config,
       })
       await refreshTransportRuntimeState()
-      return reply.send({ account })
+      return { account }
     }
   )
 }

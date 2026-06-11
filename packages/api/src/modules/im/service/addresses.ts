@@ -7,10 +7,11 @@
  */
 
 import { sql } from "kysely"
-import {
-  db,
-  type TableInsert,
-} from "../../../infrastructure/database/kysely.js"
+import { db } from "../../../infrastructure/database/kysely.js"
+import type {
+  TransportAddressMetadataInsert,
+  ConversationParticipantAddressMetadataInsert,
+} from "../repo.types.js"
 import { v4 as uuidv4 } from "uuid"
 import type { TransportKind } from "@synapse/shared/types"
 import { activateConversationParticipant } from "../../chat/participant-activation.js"
@@ -36,8 +37,7 @@ export async function ensureTransportAddress(params: {
       externalId: params.externalId.trim(),
       displayName: params.displayName?.trim() || null,
       workspaceMemberId: params.workspaceMemberId || null,
-      metadata: (params.metadata ||
-        {}) as TableInsert<"transportAddresses">["metadata"],
+      metadata: (params.metadata || {}) as TransportAddressMetadataInsert,
       createdAt: sql`NOW()`,
     })
     .onConflict((oc) =>
@@ -494,7 +494,7 @@ export async function ensureConversationParticipantTransportAddress(params: {
       transportAddressId: params.transportAddressId,
       isPrimary: params.isPrimary ?? false,
       metadata: (params.metadata ||
-        {}) as TableInsert<"conversationParticipantAddresses">["metadata"],
+        {}) as ConversationParticipantAddressMetadataInsert,
       createdAt: sql`NOW()`,
     })
     .onConflict((oc) =>

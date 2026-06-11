@@ -31,6 +31,9 @@ export type ToolCallTaskRuntimeAuthorizationAvailablePresets =
 export type ToolCallTasksFinalResultPayload =
   TableInsert<"toolCallTasks">["finalResultPayload"]
 
+export type ToolCallTaskActionTokensPayload =
+  TableInsert<"toolCallTaskActionTokens">["payload"]
+
 /**
  * The denormalized task row shape returned by the tasks-module SQL joins
  * (getTaskRowById / getTaskRowByIdForUpdate). This is a hand-written row

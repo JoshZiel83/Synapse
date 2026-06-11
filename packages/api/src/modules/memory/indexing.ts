@@ -1,16 +1,13 @@
 import crypto from "node:crypto"
 import { extractText, type CanonicalContentBlock } from "@synapse/shared"
 import { sql } from "kysely"
-import {
-  db,
-  type TableInsert,
-  withDbTransaction,
-} from "../../infrastructure/database/kysely.js"
+import { db, withDbTransaction } from "../../infrastructure/database/kysely.js"
 import { config } from "../../config/index.js"
 import { itemPartsToCanonicalContentBlocks } from "../chat/message-content.js"
 import { embedMemoryPassages } from "./embedding-runtime.js"
 import { memoryIndexingQueue } from "../../workers/queues.js"
 import { hashMemoryEmbeddingText } from "./embedding-input.js"
+import type { MemoryItemChunksMetadata } from "./repo.types.js"
 
 const MEMORY_VECTOR_DIMENSIONS = 384
 const TARGET_CHUNK_CHARS = 800
@@ -415,7 +412,7 @@ export async function rebuildMemoryItemLexicalIndex(memoryItemId: string) {
           metadata: {
             textDigest: source.item.textDigest,
             state: source.item.state,
-          } as TableInsert<"memoryItemChunks">["metadata"],
+          } as MemoryItemChunksMetadata,
           createdAt: sql`NOW()`,
         })
         .execute()

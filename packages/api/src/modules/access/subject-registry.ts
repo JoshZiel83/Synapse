@@ -17,10 +17,10 @@ import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
 import type {
   Executor,
   KyselyDb,
-  TableRow,
 } from "../../infrastructure/database/kysely.js"
+import type { AccessSubjectRow } from "./repo.types.js"
 
-export type AccessSubjectRow = TableRow<"accessSubjects">
+export type { AccessSubjectRow }
 
 /**
  * Maps an access_subjects.kind to the conversation participant_type semantic.

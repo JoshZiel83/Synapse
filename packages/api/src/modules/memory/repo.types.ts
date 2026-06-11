@@ -13,6 +13,8 @@ import type { MemoryCategory, MemoryItemState } from "@synapse/shared"
 
 export type MemoryItemsMetadata = TableInsert<"memoryItems">["metadata"]
 export type MemoryItemPartsMetadata = TableInsert<"memoryItemParts">["metadata"]
+export type MemoryItemChunksMetadata =
+  TableInsert<"memoryItemChunks">["metadata"]
 export type MemoryRecallRunResultsMatchedTerms =
   TableInsert<"memoryRecallRunResults">["matchedTerms"]
 export type MemoryRecallRunResultsMetadata =

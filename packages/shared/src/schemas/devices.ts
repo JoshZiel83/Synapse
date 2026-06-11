@@ -112,8 +112,12 @@ export type DevicePairingTicketView = z.infer<
 
 export const CreateCloudDeviceInputSchema = z.strictObject({
   workspaceId: z.uuid(),
-  title: z.string().min(1),
-  hostProvider: z.literal("e2b"),
+  // title/hostProvider are optional: the server applies defaults (title →
+  // "Cloud Device", hostProvider → "e2b") when omitted, so the app contract
+  // must accept their absence too — otherwise the SDK would reject requests the
+  // server happily serves.
+  title: z.string().min(1).optional(),
+  hostProvider: z.literal("e2b").optional(),
   preset: z.string().optional(),
 })
 export type CreateCloudDeviceInput = z.infer<

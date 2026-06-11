@@ -25,6 +25,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify"
 import type { WebSocket } from "ws"
 import { sql } from "kysely"
 import { formatValidationDetails } from "../../infrastructure/validation-error.js"
+import { wireRoute } from "../../infrastructure/http/route.js"
 import {
   DeviceCatalogSyncParamsSchema,
   DeviceHelloParamsSchema,
@@ -432,10 +433,17 @@ async function closeControlPlaneSession(
 }
 
 export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
-  app.get(
+  // WIRE — device control-plane WebSocket (JSON-RPC 2.0 handshake). The
+  // handler owns the socket and sends bare frames; never a { data } envelope.
+  wireRoute(
+    app,
+    "GET",
     "/api/v1/devices/control-plane",
-    { websocket: true },
-    (socket: WebSocket, request: FastifyRequest) => {
+    { options: { websocket: true } },
+    // fastify-websocket invokes this with (socket, request) when
+    // websocket:true; the wireRoute handler type is (request, reply) so the
+    // socket-first arity is bridged via the register() cast.
+    ((socket: WebSocket, request: FastifyRequest) => {
       const state: ConnectionState = {
         challengeNonce: randomBytes(32).toString("hex"),
         helloSeen: false,
@@ -906,6 +914,6 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           state.sessionId = null
         }
       })
-    }
+    }) as never
   )
 }

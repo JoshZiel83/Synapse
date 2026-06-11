@@ -24,10 +24,13 @@ import {
   GrantPolicySchema,
 } from "@synapse/shared/access/policies"
 import { workspaceRef } from "@synapse/shared"
+import { RuntimeAuthorizationGrantRecordViewSchema } from "@synapse/shared/schemas"
 import {
   BROWSER_EXPOSURE_TOOLS,
   BROWSER_TOOL_MAP,
 } from "@synapse/device-protocol/browser-tools"
+import { appRoute } from "../../infrastructure/http/route.js"
+import { sendData } from "../../infrastructure/http/respond.js"
 import { createRuntimeAuthorizationGrant } from "./service.js"
 
 const manualGrantBodySchema = z.object({
@@ -69,9 +72,14 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
 ): void {
   const workspaceHook = { preHandler: [authMiddleware, workspaceMiddleware] }
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/runtime-authorization-grants",
-    workspaceHook,
+    {
+      schema: RuntimeAuthorizationGrantRecordViewSchema,
+      options: workspaceHook,
+    },
     async (request, reply) => {
       const { workspaceId: pathWorkspaceId } = request.params as {
         workspaceId: string
@@ -222,7 +230,12 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
           policy,
           createdByWorkspaceMemberId: session?.workspaceMemberId ?? undefined,
         })
-        reply.status(201).send({ grant })
+        // §5.3 APP route: a 201-creating write. appRoute always wraps with a
+        // default 200, so send the { data } envelope here at 201 via the same
+        // sendData the helper uses (schema parse + envelope) and return
+        // undefined — appRoute then no-ops (reply already sent).
+        sendData(reply, RuntimeAuthorizationGrantRecordViewSchema, grant, 201)
+        return undefined
       } catch (err) {
         if (err instanceof BrowserGrantPolicyError) {
           reply.status(400).send({
@@ -236,6 +249,7 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
           code: "internal_error",
           message: (err as Error).message,
         })
+        return
       }
     }
   )

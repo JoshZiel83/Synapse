@@ -1,9 +1,6 @@
 import { encrypt } from "../../../infrastructure/crypto/index.js"
-import {
-  db,
-  type TableInsert,
-} from "../../../infrastructure/database/kysely.js"
-import { sql } from "kysely"
+import { db } from "../../../infrastructure/database/kysely.js"
+import type { PluginConnectionsSecretPayload } from "../repo.types.js"
 import type { MijiaAuthState } from "./types.js"
 
 function encryptDeep(value: unknown): unknown {
@@ -30,9 +27,7 @@ export async function persistMijiaConnectionState(
   await db
     .updateTable("pluginConnections")
     .set({
-      secretPayload: encryptDeep(
-        authState
-      ) as TableInsert<"pluginConnections">["secretPayload"],
+      secretPayload: encryptDeep(authState) as PluginConnectionsSecretPayload,
       expiresAt:
         typeof authState.expireTime === "number"
           ? new Date(authState.expireTime)

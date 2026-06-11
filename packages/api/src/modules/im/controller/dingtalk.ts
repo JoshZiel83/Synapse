@@ -15,6 +15,13 @@
 import type { FastifyInstance } from "fastify"
 import { z } from "zod"
 import {
+  DingtalkDeviceFlowPollResponseSchema,
+  DingtalkDeviceFlowStartResponseSchema,
+  TransportAccountResponseSchema,
+} from "@synapse/shared/schemas"
+import { appRoute } from "../../../infrastructure/http/route.js"
+import { sendData } from "../../../infrastructure/http/respond.js"
+import {
   serializeInstant,
   serializeNowInstant,
 } from "../../../infrastructure/datetime.js"
@@ -527,11 +534,11 @@ export default async function imDingtalkController(
 ): Promise<void> {
   installGenericRouteGuard(app)
 
-  app.post<{
-    Params: { workspaceId: string }
-    Body: unknown
-  }>(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/im/accounts/dingtalk/device-registration/start",
+    { schema: DingtalkDeviceFlowStartResponseSchema },
     async (request, reply) => {
       const allowed = await requireWorkspaceAction(
         request,
@@ -540,21 +547,21 @@ export default async function imDingtalkController(
         "Not allowed to manage IM accounts in this workspace"
       )
       if (!allowed) return
+      const params = request.params as { workspaceId: string }
       const body = deviceFlowStartSchema.parse(request.body)
       const provider = getActiveProvider()
-      const result = await handleStartDeviceFlow(
-        request.params.workspaceId,
-        body,
-        { provider }
-      )
-      return reply.status(200).send(result)
+      const result = await handleStartDeviceFlow(params.workspaceId, body, {
+        provider,
+      })
+      return result
     }
   )
 
-  app.get<{
-    Params: { workspaceId: string; sessionId: string }
-  }>(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/im/accounts/dingtalk/device-registration/:sessionId",
+    { schema: DingtalkDeviceFlowPollResponseSchema },
     async (request, reply) => {
       // workspace.manage (not view) — the SUCCESS branch of poll calls
       // persistDingtalkAccountFromRegistration, which writes credentials
@@ -569,21 +576,34 @@ export default async function imDingtalkController(
         "Not allowed to manage IM accounts in this workspace"
       )
       if (!allowed) return
+      const params = request.params as {
+        workspaceId: string
+        sessionId: string
+      }
       const provider = getActiveProvider()
       const outcome = await handlePollDeviceFlow(
-        request.params.workspaceId,
-        request.params.sessionId,
+        params.workspaceId,
+        params.sessionId,
         { provider }
       )
-      return reply.status(outcome.status).send(outcome.body)
+      // Non-200 outcomes (404 missing / 502 transient) carry a bare
+      // `{ error }` body the web client surfaces via ApiError — send it
+      // directly and let appRoute no-op. Only the 200 `{ session }` body
+      // gets the `{ data }` envelope.
+      if (outcome.status !== 200) {
+        reply.status(outcome.status).send(outcome.body)
+        return
+      }
+      return outcome.body as { session: unknown }
     }
   )
 
-  app.delete<{
-    Params: { workspaceId: string; sessionId: string }
-  }>(
+  appRoute(
+    app,
+    "DELETE",
     "/api/v1/workspaces/:workspaceId/im/accounts/dingtalk/device-registration/:sessionId",
-    async (request, reply) => {
+    { schema: DingtalkDeviceFlowPollResponseSchema },
+    async (request, reply): Promise<undefined> => {
       const allowed = await requireWorkspaceAction(
         request,
         reply,
@@ -591,20 +611,25 @@ export default async function imDingtalkController(
         "Not allowed to manage IM accounts in this workspace"
       )
       if (!allowed) return
+      const params = request.params as {
+        workspaceId: string
+        sessionId: string
+      }
       await deleteDingtalkRegistrationSession(
-        request.params.workspaceId,
-        request.params.sessionId
+        params.workspaceId,
+        params.sessionId
       )
-      return reply.status(204).send()
+      reply.status(204).send()
+      return
     }
   )
 
-  app.post<{
-    Params: { workspaceId: string }
-    Body: unknown
-  }>(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/im/accounts/dingtalk/manual",
-    async (request, reply) => {
+    { schema: TransportAccountResponseSchema },
+    async (request, reply): Promise<undefined> => {
       const allowed = await requireWorkspaceAction(
         request,
         reply,
@@ -612,9 +637,10 @@ export default async function imDingtalkController(
         "Not allowed to manage IM accounts in this workspace"
       )
       if (!allowed) return
+      const params = request.params as { workspaceId: string }
       const body = manualAccountSchema.parse(request.body)
       const account = await persistDingtalkAccountFromRegistration({
-        workspaceId: request.params.workspaceId,
+        workspaceId: params.workspaceId,
         clientId: body.clientId,
         clientSecret: body.clientSecret,
         displayName: body.displayName,
@@ -627,7 +653,8 @@ export default async function imDingtalkController(
           dingtalkRegistrationCompletedAt: nowIso(),
         },
       })
-      return reply.status(201).send({ account })
+      sendData(reply, TransportAccountResponseSchema, { account }, 201)
+      return
     }
   )
 }

@@ -57,7 +57,11 @@ export function appRoute<S extends z.ZodType>(
     const value = await handler(request, reply)
     // No-content / already-sent (e.g. 204 write, redirect) → don't double-send.
     if (value === undefined || reply.sent) return reply
-    return sendData(reply, config.schema, value)
+    // Respect a status the handler set before returning (e.g. reply.status(201)
+    // for a create) — sendData defaults to 200 and would otherwise clobber it.
+    const status =
+      reply.statusCode && reply.statusCode !== 200 ? reply.statusCode : 200
+    return sendData(reply, config.schema, value, status)
   })
 }
 

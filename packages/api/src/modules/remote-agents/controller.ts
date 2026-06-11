@@ -1,9 +1,18 @@
 import type { FastifyInstance, FastifyReply } from "fastify"
-import { IsoInstantStringSchema } from "@synapse/shared/schemas"
+import {
+  IsoInstantStringSchema,
+  RemoteAgentListResponseSchema,
+  RemoteAgentResponseSchema,
+  RemoteAgentGroupTaskGrantsResponseSchema,
+  RemoteAgentMachinePairingSessionResponseSchema,
+  RemoteAgentMachineListResponseSchema,
+  RemoteAgentMachineDetailResponseSchema,
+} from "@synapse/shared/schemas"
 import { z } from "zod"
 import { REMOTE_AGENT_RUNTIME_KINDS } from "@synapse/shared"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
+import { appRoute, wireRoute } from "../../infrastructure/http/route.js"
 import { requireRequestAction } from "../access/guards.js"
 import {
   bindRemoteAgent,
@@ -147,59 +156,67 @@ export default async function remoteAgentsController(app: FastifyInstance) {
   const workspacePreHandler = [authMiddleware, workspaceMiddleware]
   const internalPrefixes = ["/internal", "/api/v1/internal"] as const
 
-  app.get<{
-    Params: { workspaceId: string }
-  }>(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/remote-agents",
-    { preHandler: workspacePreHandler },
-    async (request, reply) => {
+    {
+      schema: RemoteAgentListResponseSchema,
+      options: { preHandler: workspacePreHandler },
+    },
+    async (request: any, reply) => {
       try {
         const { remoteAgents } = await listRemoteAgents({
           workspaceId: request.params.workspaceId,
           userId: getRequestUserId(request),
         })
-        return reply.send({
+        return {
           remoteAgents: remoteAgents.map((rec) =>
             presentRemoteAgent(rec, rec.requiresContactApproval)
           ),
-        })
+        }
       } catch (error) {
         return sendServiceError(reply, error)
       }
     }
   )
 
-  app.get<{
-    Params: { workspaceId: string; remoteAgentId: string }
-  }>(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/remote-agents/:remoteAgentId",
-    { preHandler: workspacePreHandler },
-    async (request, reply) => {
+    {
+      schema: RemoteAgentResponseSchema,
+      options: { preHandler: workspacePreHandler },
+    },
+    async (request: any, reply) => {
       try {
         const { remoteAgent } = await getRemoteAgent({
           workspaceId: request.params.workspaceId,
           remoteAgentId: request.params.remoteAgentId,
           userId: getRequestUserId(request),
         })
-        return reply.send({
+        return {
           remoteAgent: presentRemoteAgent(
             remoteAgent,
             remoteAgent.requiresContactApproval
           ),
-        })
+        }
       } catch (error) {
         return sendServiceError(reply, error)
       }
     }
   )
 
-  app.post<{
-    Params: { workspaceId: string; remoteAgentId: string }
-    Body: unknown
-  }>(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/remote-agents/:remoteAgentId/bind",
-    { preHandler: workspacePreHandler },
-    async (request, reply) => {
+    {
+      schema: RemoteAgentResponseSchema,
+      options: { preHandler: workspacePreHandler },
+    },
+    async (request: any, reply) => {
       const allowed = await requireRequestAction(
         request,
         reply,
@@ -219,24 +236,27 @@ export default async function remoteAgentsController(app: FastifyInstance) {
           runtimePath: body.runtimePath,
           localRootPath: body.localRootPath,
         })
-        return reply.send({
+        return {
           remoteAgent: presentRemoteAgent(
             remoteAgent,
             remoteAgent.requiresContactApproval
           ),
-        })
+        }
       } catch (error) {
         return sendServiceError(reply, error)
       }
     }
   )
 
-  app.get<{
-    Params: { workspaceId: string; remoteAgentId: string }
-  }>(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/remote-agents/:remoteAgentId/group-task-grants",
-    { preHandler: workspacePreHandler },
-    async (request, reply) => {
+    {
+      schema: RemoteAgentGroupTaskGrantsResponseSchema,
+      options: { preHandler: workspacePreHandler },
+    },
+    async (request: any, reply) => {
       const allowed = await requireRequestAction(
         request,
         reply,
@@ -251,24 +271,26 @@ export default async function remoteAgentsController(app: FastifyInstance) {
           remoteAgentId: request.params.remoteAgentId,
           userId: getRequestUserId(request),
         })
-        return reply.send({
+        return {
           grants: grants.map((grant) =>
             presentGroupTaskGrant(grant, grant.avatarUrl)
           ),
-        })
+        }
       } catch (error) {
         return sendServiceError(reply, error)
       }
     }
   )
 
-  app.put<{
-    Params: { workspaceId: string; remoteAgentId: string }
-    Body: unknown
-  }>(
+  appRoute(
+    app,
+    "PUT",
     "/api/v1/workspaces/:workspaceId/remote-agents/:remoteAgentId/group-task-grants",
-    { preHandler: workspacePreHandler },
-    async (request, reply) => {
+    {
+      schema: RemoteAgentGroupTaskGrantsResponseSchema,
+      options: { preHandler: workspacePreHandler },
+    },
+    async (request: any, reply) => {
       const allowed = await requireRequestAction(
         request,
         reply,
@@ -285,24 +307,26 @@ export default async function remoteAgentsController(app: FastifyInstance) {
           userId: getRequestUserId(request),
           workspaceMemberIds: body.workspaceMemberIds,
         })
-        return reply.send({
+        return {
           grants: grants.map((grant) =>
             presentGroupTaskGrant(grant, grant.avatarUrl)
           ),
-        })
+        }
       } catch (error) {
         return sendServiceError(reply, error)
       }
     }
   )
 
-  app.post<{
-    Params: { workspaceId: string }
-    Body: unknown
-  }>(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/remote-agent-machines/pairing-sessions",
-    { preHandler: workspacePreHandler },
-    async (request, reply) => {
+    {
+      schema: RemoteAgentMachinePairingSessionResponseSchema,
+      options: { preHandler: workspacePreHandler },
+    },
+    async (request: any, reply) => {
       if (!(await requireWorkspaceRemoteAgentAdmin(request, reply))) return
       try {
         const body = createMachineSchema.parse(request.body)
@@ -312,55 +336,62 @@ export default async function remoteAgentsController(app: FastifyInstance) {
           title: body.title,
           description: body.description,
         })
-        return reply.status(201).send({
+        reply.status(201)
+        return {
           machine: presentMachineFromCamelRow(session.machine),
           apiKey: session.apiKey,
           daemonCommand: session.daemonCommand,
           oneClickCommands: session.oneClickCommands,
-        })
+        }
       } catch (error) {
         return sendServiceError(reply, error)
       }
     }
   )
 
-  app.get<{
-    Params: { workspaceId: string }
-  }>(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/remote-agent-machines",
-    { preHandler: workspacePreHandler },
-    async (request, reply) => {
+    {
+      schema: RemoteAgentMachineListResponseSchema,
+      options: { preHandler: workspacePreHandler },
+    },
+    async (request: any, reply) => {
       try {
         const { machines } = await listRemoteAgentMachines({
           workspaceId: request.params.workspaceId,
           userId: getRequestUserId(request),
         })
-        return reply.send({
+        return {
           machines: machines.map(presentMachineListItem),
-        })
+        }
       } catch (error) {
         return sendServiceError(reply, error)
       }
     }
   )
 
-  app.get<{
-    Params: { workspaceId: string; machineId: string }
-  }>(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/remote-agent-machines/:machineId",
-    { preHandler: workspacePreHandler },
-    async (request, reply) => {
+    {
+      schema: RemoteAgentMachineDetailResponseSchema,
+      options: { preHandler: workspacePreHandler },
+    },
+    async (request: any, reply) => {
       try {
         const detail = await getRemoteAgentMachine({
           workspaceId: request.params.workspaceId,
           machineId: request.params.machineId,
           userId: getRequestUserId(request),
         })
-        return reply.send({
+        return {
           machine: presentMachineFromCamelRow(detail.machine),
           runtimeCatalog: detail.runtimeCatalog.map(presentRuntimeCatalogEntry),
           bindings: detail.bindings.map(presentMachineBinding),
-        })
+        }
       } catch (error) {
         return sendServiceError(reply, error)
       }
@@ -369,22 +400,18 @@ export default async function remoteAgentsController(app: FastifyInstance) {
 
   for (const prefix of internalPrefixes) {
     const mcpRoute = `${prefix}/remote-agents/:remoteAgentId/mcp/:conversationId`
-    app.post<{
-      Params: { remoteAgentId: string; conversationId: string }
-    }>(mcpRoute, handleRemoteAgentMcpRequest)
-    app.get<{
-      Params: { remoteAgentId: string; conversationId: string }
-    }>(mcpRoute, handleRemoteAgentMcpRequest)
-    app.delete<{
-      Params: { remoteAgentId: string; conversationId: string }
-    }>(mcpRoute, handleRemoteAgentMcpRequest)
+    const mcpHandler = (request: any, reply: FastifyReply) =>
+      handleRemoteAgentMcpRequest(request, reply)
+    wireRoute(app, "POST", mcpRoute, {}, mcpHandler)
+    wireRoute(app, "GET", mcpRoute, {}, mcpHandler)
+    wireRoute(app, "DELETE", mcpRoute, {}, mcpHandler)
 
-    app.post<{
-      Params: { remoteAgentId: string }
-      Body: unknown
-    }>(
+    wireRoute(
+      app,
+      "POST",
       `${prefix}/remote-agents/:remoteAgentId/tasks/user-input`,
-      async (request, reply) => {
+      {},
+      async (request: any, reply) => {
         try {
           const body = internalUserInputTaskSchema.parse(request.body)
           return reply.send(
@@ -405,12 +432,12 @@ export default async function remoteAgentsController(app: FastifyInstance) {
       }
     )
 
-    app.post<{
-      Params: { remoteAgentId: string }
-      Body: unknown
-    }>(
+    wireRoute(
+      app,
+      "POST",
       `${prefix}/remote-agents/:remoteAgentId/tasks/plan-approval`,
-      async (request, reply) => {
+      {},
+      async (request: any, reply) => {
         try {
           const body = internalPlanApprovalTaskSchema.parse(request.body)
           return reply.send(
@@ -434,11 +461,12 @@ export default async function remoteAgentsController(app: FastifyInstance) {
       }
     )
 
-    app.get<{
-      Params: { remoteAgentId: string }
-    }>(
+    wireRoute(
+      app,
+      "GET",
       `${prefix}/remote-agents/:remoteAgentId/conversations`,
-      async (request, reply) => {
+      {},
+      async (request: any, reply) => {
         try {
           const { conversations } = await listRemoteAgentConversations({
             remoteAgentId: request.params.remoteAgentId,
@@ -453,12 +481,12 @@ export default async function remoteAgentsController(app: FastifyInstance) {
       }
     )
 
-    app.get<{
-      Params: { remoteAgentId: string }
-      Querystring: unknown
-    }>(
+    wireRoute(
+      app,
+      "GET",
       `${prefix}/remote-agents/:remoteAgentId/check-messages`,
-      async (request, reply) => {
+      {},
+      async (request: any, reply) => {
         try {
           const query = checkMessagesQuerySchema.parse(request.query)
           const { deliveries } = await checkRemoteAgentMessages({
@@ -475,12 +503,12 @@ export default async function remoteAgentsController(app: FastifyInstance) {
       }
     )
 
-    app.post<{
-      Params: { remoteAgentId: string }
-      Body: unknown
-    }>(
+    wireRoute(
+      app,
+      "POST",
       `${prefix}/remote-agents/:remoteAgentId/complete-deliveries`,
-      async (request, reply) => {
+      {},
+      async (request: any, reply) => {
         try {
           const body = completeDeliveriesSchema.parse(request.body)
           return reply.send(
@@ -496,12 +524,12 @@ export default async function remoteAgentsController(app: FastifyInstance) {
       }
     )
 
-    app.post<{
-      Params: { remoteAgentId: string }
-      Body: unknown
-    }>(
+    wireRoute(
+      app,
+      "POST",
       `${prefix}/remote-agents/:remoteAgentId/fail-deliveries`,
-      async (request, reply) => {
+      {},
+      async (request: any, reply) => {
         try {
           const body = failDeliveriesSchema.parse(request.body)
           return reply.send(
@@ -518,12 +546,12 @@ export default async function remoteAgentsController(app: FastifyInstance) {
       }
     )
 
-    app.get<{
-      Params: { remoteAgentId: string; conversationId: string }
-      Querystring: unknown
-    }>(
+    wireRoute(
+      app,
+      "GET",
       `${prefix}/remote-agents/:remoteAgentId/history/:conversationId`,
-      async (request, reply) => {
+      {},
+      async (request: any, reply) => {
         try {
           const query = historyQuerySchema.parse(request.query)
           return reply.send(
@@ -542,12 +570,12 @@ export default async function remoteAgentsController(app: FastifyInstance) {
       }
     )
 
-    app.post<{
-      Params: { remoteAgentId: string }
-      Body: unknown
-    }>(
+    wireRoute(
+      app,
+      "POST",
       `${prefix}/remote-agents/:remoteAgentId/send`,
-      async (request, reply) => {
+      {},
+      async (request: any, reply) => {
         try {
           const body = sendMessageSchema.parse(request.body)
           return reply.send(
@@ -567,12 +595,12 @@ export default async function remoteAgentsController(app: FastifyInstance) {
       }
     )
 
-    app.get<{
-      Params: { remoteAgentId: string }
-      Querystring: unknown
-    }>(
+    wireRoute(
+      app,
+      "GET",
       `${prefix}/remote-agents/:remoteAgentId/search`,
-      async (request, reply) => {
+      {},
+      async (request: any, reply) => {
         try {
           const query = searchMessagesQuerySchema.parse(request.query)
           return reply.send(

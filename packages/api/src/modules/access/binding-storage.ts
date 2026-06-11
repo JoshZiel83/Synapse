@@ -5,8 +5,8 @@ import {
 import type {
   Executor,
   KyselyDb,
-  TableInsert,
 } from "../../infrastructure/database/kysely.js"
+import type { ResourceAccessBindingInsert } from "./repo.types.js"
 import {
   upsertAccessSubject,
   upsertAccessSubjectOn,
@@ -44,7 +44,7 @@ export async function buildAutomationEventSourceAccessBindingInsertValues(
     reason?: string | null
     source?: AutomationEventSourceBindingSource
   }
-): Promise<TableInsert<"resourceAccessBindings">> {
+): Promise<ResourceAccessBindingInsert> {
   const ref = accessGrantTargetToSubjectRef(input.target)
   const subjectId = await upsertAccessSubject(db, ref)
   const scopeRef = accessGrantTargetScopeRef(input.target)
@@ -62,7 +62,7 @@ export async function buildAutomationEventSourceAccessBindingInsertValues(
     source: input.source ?? "manual",
     createdByWorkspaceMemberId: input.createdByWorkspaceMemberId ?? null,
     reason: input.reason ?? null,
-  } satisfies TableInsert<"resourceAccessBindings">
+  } satisfies ResourceAccessBindingInsert
 }
 
 /**
@@ -80,7 +80,7 @@ export async function buildAutomationEventSourceAccessBindingInsertValuesOn(
     reason?: string | null
     source?: AutomationEventSourceBindingSource
   }
-): Promise<TableInsert<"resourceAccessBindings">> {
+): Promise<ResourceAccessBindingInsert> {
   const ref = accessGrantTargetToSubjectRef(input.target)
   const subjectId = await upsertAccessSubjectOn(client, ref)
   const scopeRef = accessGrantTargetScopeRef(input.target)
@@ -98,7 +98,7 @@ export async function buildAutomationEventSourceAccessBindingInsertValuesOn(
     source: input.source ?? "manual",
     createdByWorkspaceMemberId: input.createdByWorkspaceMemberId ?? null,
     reason: input.reason ?? null,
-  } satisfies TableInsert<"resourceAccessBindings">
+  } satisfies ResourceAccessBindingInsert
 }
 
 // ---------- P3 consolidation: unified read / mutate entry points ----------

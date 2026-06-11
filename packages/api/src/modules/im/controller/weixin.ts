@@ -9,6 +9,13 @@
  */
 
 import type { FastifyInstance } from "fastify"
+import {
+  WeixinBindingCandidatesResponseSchema,
+  WeixinBindingResponseSchema,
+  WeixinQrSessionResponseSchema,
+} from "@synapse/shared/schemas"
+import { appRoute } from "../../../infrastructure/http/route.js"
+import { sendData } from "../../../infrastructure/http/respond.js"
 import { listMembers } from "../../workspace/service.js"
 import {
   getCurrentUserWeixinBinding,
@@ -31,8 +38,11 @@ export default async function imWeixinController(
 ): Promise<void> {
   // -------- Current user's WeChat binding --------
 
-  app.get<{ Params: { workspaceId: string } }>(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/im/me/weixin-binding",
+    { schema: WeixinBindingResponseSchema },
     async (request, reply) => {
       const allowed = await requireWorkspaceAction(
         request,
@@ -42,16 +52,20 @@ export default async function imWeixinController(
       )
       if (!allowed) return
 
+      const params = request.params as { workspaceId: string }
       const binding = await getCurrentUserWeixinBinding({
-        workspaceId: request.params.workspaceId,
+        workspaceId: params.workspaceId,
         userId: (request as any).user!.userId,
       })
-      return reply.send({ binding })
+      return { binding }
     }
   )
 
-  app.get<{ Params: { workspaceId: string } }>(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/im/me/weixin-binding/candidates",
+    { schema: WeixinBindingCandidatesResponseSchema },
     async (request, reply) => {
       const allowed = await requireWorkspaceAction(
         request,
@@ -61,14 +75,18 @@ export default async function imWeixinController(
       )
       if (!allowed) return
 
-      const members = await listMembers(request.params.workspaceId)
-      return reply.send({ data: members })
+      const params = request.params as { workspaceId: string }
+      const members = await listMembers(params.workspaceId)
+      return { members }
     }
   )
 
-  app.post<{ Params: { workspaceId: string } }>(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/im/me/weixin-binding/qr",
-    async (request, reply) => {
+    { schema: WeixinQrSessionResponseSchema },
+    async (request, reply): Promise<undefined> => {
       const allowed = await requireWorkspaceAction(
         request,
         reply,
@@ -77,7 +95,7 @@ export default async function imWeixinController(
       )
       if (!allowed) return
 
-      const { workspaceId } = request.params
+      const { workspaceId } = request.params as { workspaceId: string }
       const workspaceMemberId = (request as any).workspaceMember?.id as string
       const userId = (request as any).user!.userId as string
       const existing = await getCurrentUserWeixinBinding({
@@ -85,7 +103,8 @@ export default async function imWeixinController(
         userId,
       })
       if (existing) {
-        return reply.status(409).send({ error: "WeChat already bound" })
+        reply.status(409).send({ error: "WeChat already bound" })
+        return
       }
 
       const session = await startWeixinQrLoginSession({
@@ -94,14 +113,16 @@ export default async function imWeixinController(
         ownerWorkspaceMemberId: workspaceMemberId,
         inboundActorMode: "follow_owner_chief_actor",
       })
-      return reply.status(201).send({ session })
+      sendData(reply, WeixinQrSessionResponseSchema, { session }, 201)
+      return
     }
   )
 
-  app.get<{
-    Params: { workspaceId: string; sessionId: string }
-  }>(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/im/me/weixin-binding/qr/:sessionId",
+    { schema: WeixinQrSessionResponseSchema },
     async (request, reply) => {
       const allowed = await requireWorkspaceAction(
         request,
@@ -111,7 +132,10 @@ export default async function imWeixinController(
       )
       if (!allowed) return
 
-      const { workspaceId, sessionId } = request.params
+      const { workspaceId, sessionId } = request.params as {
+        workspaceId: string
+        sessionId: string
+      }
       const workspaceMemberId = (request as any).workspaceMember?.id as string
       const owner = await getWeixinQrLoginSessionOwner({
         workspaceId,
@@ -122,7 +146,8 @@ export default async function imWeixinController(
         owner.ownerScope !== "workspace_member" ||
         owner.ownerWorkspaceMemberId !== workspaceMemberId
       ) {
-        return reply.status(404).send({ error: "Weixin QR session not found" })
+        reply.status(404).send({ error: "Weixin QR session not found" })
+        return
       }
 
       const session = await getWeixinQrLoginSession({
@@ -130,14 +155,18 @@ export default async function imWeixinController(
         sessionId,
       })
       if (!session) {
-        return reply.status(404).send({ error: "Weixin QR session not found" })
+        reply.status(404).send({ error: "Weixin QR session not found" })
+        return
       }
-      return reply.send({ session })
+      return { session }
     }
   )
 
-  app.post<{ Params: { workspaceId: string } }>(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/im/me/weixin-binding/link",
+    { schema: WeixinBindingResponseSchema },
     async (request, reply) => {
       const allowed = await requireWorkspaceAction(
         request,
@@ -147,31 +176,38 @@ export default async function imWeixinController(
       )
       if (!allowed) return
 
+      const params = request.params as { workspaceId: string }
       try {
         const binding = await linkCurrentUserWeixinBinding({
-          workspaceId: request.params.workspaceId,
+          workspaceId: params.workspaceId,
           userId: (request as any).user!.userId,
         })
-        return reply.send({ binding })
+        return { binding }
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Failed to link WeChat"
         if (message === "WeChat binding not found") {
-          return reply.status(404).send({ error: message })
+          reply.status(404).send({ error: message })
+          return
         }
         if (
           message ===
           "WeChat user is already linked to another workspace member"
         ) {
-          return reply.status(409).send({ error: message })
+          reply.status(409).send({ error: message })
+          return
         }
-        return reply.status(400).send({ error: message })
+        reply.status(400).send({ error: message })
+        return
       }
     }
   )
 
-  app.put<{ Params: { workspaceId: string }; Body: unknown }>(
+  appRoute(
+    app,
+    "PUT",
     "/api/v1/workspaces/:workspaceId/im/me/weixin-binding/auto-link",
+    { schema: WeixinBindingResponseSchema },
     async (request, reply) => {
       const allowed = await requireWorkspaceAction(
         request,
@@ -181,35 +217,42 @@ export default async function imWeixinController(
       )
       if (!allowed) return
 
+      const params = request.params as { workspaceId: string }
       try {
         const body = bindingAutoLinkSchema.parse(request.body)
         const binding = await setCurrentUserWeixinBindingAutoLink({
-          workspaceId: request.params.workspaceId,
+          workspaceId: params.workspaceId,
           userId: (request as any).user!.userId,
           targetWorkspaceMemberId: body.workspaceMemberId,
         })
-        return reply.send({ binding })
+        return { binding }
       } catch (error) {
         const message =
           error instanceof Error
             ? error.message
             : "Failed to configure WeChat binding"
         if (message === "WeChat binding not found") {
-          return reply.status(404).send({ error: message })
+          reply.status(404).send({ error: message })
+          return
         }
         if (message === "Workspace member not found") {
-          return reply.status(404).send({ error: message })
+          reply.status(404).send({ error: message })
+          return
         }
-        return reply.status(400).send({ error: message })
+        reply.status(400).send({ error: message })
+        return
       }
     }
   )
 
   // -------- Workspace-managed WeChat bot QR --------
 
-  app.post<{ Params: { workspaceId: string }; Body: unknown }>(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/im/accounts/weixin/qr",
-    async (request, reply) => {
+    { schema: WeixinQrSessionResponseSchema },
+    async (request, reply): Promise<undefined> => {
       const allowed = await requireWorkspaceAction(
         request,
         reply,
@@ -218,7 +261,7 @@ export default async function imWeixinController(
       )
       if (!allowed) return
 
-      const { workspaceId } = request.params
+      const { workspaceId } = request.params as { workspaceId: string }
       const body = weixinQrSessionSchema.parse(request.body)
       const session = await startWeixinQrLoginSession({
         workspaceId,
@@ -231,14 +274,16 @@ export default async function imWeixinController(
         inboundActorId:
           body.inboundActorId === null ? null : body.inboundActorId,
       })
-      return reply.status(201).send({ session })
+      sendData(reply, WeixinQrSessionResponseSchema, { session }, 201)
+      return
     }
   )
 
-  app.get<{
-    Params: { workspaceId: string; sessionId: string }
-  }>(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/im/accounts/weixin/qr/:sessionId",
+    { schema: WeixinQrSessionResponseSchema },
     async (request, reply) => {
       const allowed = await requireWorkspaceAction(
         request,
@@ -248,14 +293,19 @@ export default async function imWeixinController(
       )
       if (!allowed) return
 
+      const params = request.params as {
+        workspaceId: string
+        sessionId: string
+      }
       const session = await getWeixinQrLoginSession({
-        workspaceId: request.params.workspaceId,
-        sessionId: request.params.sessionId,
+        workspaceId: params.workspaceId,
+        sessionId: params.sessionId,
       })
       if (!session) {
-        return reply.status(404).send({ error: "Weixin QR session not found" })
+        reply.status(404).send({ error: "Weixin QR session not found" })
+        return
       }
-      return reply.send({ session })
+      return { session }
     }
   )
 }

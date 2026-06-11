@@ -11,8 +11,8 @@ import {
   db,
   withDbTransaction,
   type DatabaseTransaction,
-  type TableInsert,
 } from "../../../infrastructure/database/kysely.js"
+import type { TransportMessageLinkMetadataInsert } from "../repo.types.js"
 import { v4 as uuidv4 } from "uuid"
 import type {
   TransportDeliveryStatus,
@@ -113,7 +113,7 @@ export async function queueConversationTransportProjection(params: {
         endpointType: binding.endpoint.endpointType,
         endpointExternalId: binding.endpoint.externalId,
         ...(params.metadata || {}),
-      } as TableInsert<"transportMessageLinks">["metadata"],
+      } as TransportMessageLinkMetadataInsert,
       createdAt: sql`NOW()`,
     })
     .onConflict((oc) =>
@@ -196,7 +196,7 @@ export async function updateTransportMessageLinkStatus(params: {
         ...(params.externalMessageId
           ? { externalMessageId: params.externalMessageId }
           : {}),
-        metadata: merged as TableInsert<"transportMessageLinks">["metadata"],
+        metadata: merged as TransportMessageLinkMetadataInsert,
         ...(params.status === "sent"
           ? { deliveredAt: sql`COALESCE(delivered_at, NOW())` }
           : {}),
@@ -245,7 +245,7 @@ export async function patchTransportMessageLinkMetadata(params: {
     await tx
       .updateTable("transportMessageLinks")
       .set({
-        metadata: merged as TableInsert<"transportMessageLinks">["metadata"],
+        metadata: merged as TransportMessageLinkMetadataInsert,
       })
       .where("id", "=", params.linkId)
       .execute()
@@ -359,7 +359,7 @@ export async function removeTransportMessageLinkMetadataKey(
     .updateTable("transportMessageLinks")
     .set({
       metadata:
-        sql`metadata - ${key}` as unknown as TableInsert<"transportMessageLinks">["metadata"],
+        sql`metadata - ${key}` as unknown as TransportMessageLinkMetadataInsert,
     })
     .where("id", "=", linkId)
     .execute()
@@ -395,8 +395,7 @@ export async function persistOutboundLinkRowRaw(params: {
       externalMessageId: null,
       externalReplyToId: null,
       externalThreadId: null,
-      metadata: (params.metadata ||
-        {}) as TableInsert<"transportMessageLinks">["metadata"],
+      metadata: (params.metadata || {}) as TransportMessageLinkMetadataInsert,
       createdAt: sql`NOW()`,
     })
     .returning("id")

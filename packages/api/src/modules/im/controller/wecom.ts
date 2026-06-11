@@ -10,6 +10,9 @@
  */
 
 import type { FastifyInstance } from "fastify"
+import { TransportAccountResponseSchema } from "@synapse/shared/schemas"
+import { appRoute } from "../../../infrastructure/http/route.js"
+import { sendData } from "../../../infrastructure/http/respond.js"
 import { createTransportAccount, updateTransportAccount } from "../service.js"
 import {
   refreshTransportRuntimeState,
@@ -21,9 +24,12 @@ import {
 export default async function imWecomController(
   app: FastifyInstance
 ): Promise<void> {
-  app.post<{ Params: { workspaceId: string }; Body: unknown }>(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/im/accounts/wecom",
-    async (request, reply) => {
+    { schema: TransportAccountResponseSchema },
+    async (request, reply): Promise<undefined> => {
       const allowed = await requireWorkspaceAction(
         request,
         reply,
@@ -32,7 +38,7 @@ export default async function imWecomController(
       )
       if (!allowed) return
 
-      const { workspaceId } = request.params
+      const { workspaceId } = request.params as { workspaceId: string }
       const body = wecomAccountSchema.parse(request.body)
       const credentials: Record<string, unknown> = {
         botId: body.botId,
@@ -58,15 +64,16 @@ export default async function imWecomController(
         config,
       })
       await refreshTransportRuntimeState()
-      return reply.status(201).send({ account })
+      sendData(reply, TransportAccountResponseSchema, { account }, 201)
+      return
     }
   )
 
-  app.put<{
-    Params: { workspaceId: string; accountId: string }
-    Body: unknown
-  }>(
+  appRoute(
+    app,
+    "PUT",
     "/api/v1/workspaces/:workspaceId/im/accounts/wecom/:accountId",
+    { schema: TransportAccountResponseSchema },
     async (request, reply) => {
       const allowed = await requireWorkspaceAction(
         request,
@@ -76,7 +83,10 @@ export default async function imWecomController(
       )
       if (!allowed) return
 
-      const { workspaceId, accountId } = request.params
+      const { workspaceId, accountId } = request.params as {
+        workspaceId: string
+        accountId: string
+      }
       const body = updateWecomAccountSchema.parse(request.body)
       // Only include credentials if at least one of the two fields was
       // supplied — otherwise the service treats the JSONB column as a
@@ -121,7 +131,7 @@ export default async function imWecomController(
         config,
       })
       await refreshTransportRuntimeState()
-      return reply.send({ account })
+      return { account }
     }
   )
 }

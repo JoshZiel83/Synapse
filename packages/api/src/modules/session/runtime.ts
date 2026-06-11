@@ -6,12 +6,7 @@ import {
   serializeInstant,
   serializeOptionalInstant,
 } from "../../infrastructure/datetime.js"
-import {
-  db,
-  type Executor,
-  type TableInsert,
-  type TableRow,
-} from "../../infrastructure/database/kysely.js"
+import { db, type Executor } from "../../infrastructure/database/kysely.js"
 import { emitEvent } from "../../infrastructure/events/index.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
 import { sessionThinkingQueue } from "../../workers/queues.js"
@@ -45,12 +40,15 @@ import {
   type ToolResultData,
 } from "./tool-presentation/render.js"
 import { redactDeep } from "./tool-presentation/redact.js"
+import type {
+  SessionWakeupMetadataInsert,
+  SessionWakeupRow,
+  ToolCallTaskRow,
+  ToolResultPartRow,
+  ToolResultRow,
+} from "./repo.types.js"
 
 const log = createLogger("session.runtime")
-
-type ToolResultRow = TableRow<"toolResults">
-type ToolResultPartRow = TableRow<"toolResultParts">
-type ToolCallTaskRow = TableRow<"toolCallTasks">
 
 function runtimeHashKey(conversationId: string) {
   return `runtime:conversation:${conversationId}`
@@ -84,7 +82,7 @@ function mapWakeupSourceTypeToTrigger(
   return sourceType
 }
 
-function presentWakeup(row: TableRow<"sessionWakeups">): ActorRuntimeWakeup {
+function presentWakeup(row: SessionWakeupRow): ActorRuntimeWakeup {
   const metadata = parseMetadata(row.metadata)
   return {
     wakeupId: row.id,
@@ -1008,14 +1006,14 @@ export async function insertSessionWakeupRow(
   executor: Executor,
   params: EnqueueSessionWakeupParams
 ): Promise<{
-  created: TableRow<"sessionWakeups">
+  created: SessionWakeupRow
   reusedExistingWakeup: boolean
 }> {
-  let created: TableRow<"sessionWakeups"> | undefined
+  let created: SessionWakeupRow | undefined
   let reusedExistingWakeup = false
 
   if (params.sourceItemId) {
-    const insertResult = await sql<TableRow<"sessionWakeups">>`
+    const insertResult = await sql<SessionWakeupRow>`
         INSERT INTO session_wakeups (
           id,
           session_id,
@@ -1085,8 +1083,7 @@ export async function insertSessionWakeupRow(
         automationExecutionId: params.automationExecutionId || null,
         automationOccurrenceId: params.automationOccurrenceId || null,
         status: "pending",
-        metadata: (params.metadata ||
-          {}) as TableInsert<"sessionWakeups">["metadata"],
+        metadata: (params.metadata || {}) as SessionWakeupMetadataInsert,
       })
       .returningAll()
       .executeTakeFirst()

@@ -23,8 +23,12 @@ import {
   db,
   withDbTransaction,
   type DatabaseTransaction,
-  type TableInsert,
 } from "../../../infrastructure/database/kysely.js"
+import type {
+  TransportAccountCredentialsInsert,
+  TransportAccountConfigInsert,
+  TransportAccountMetadataInsert,
+} from "../repo.types.js"
 import { v4 as uuidv4 } from "uuid"
 import type {
   TransportAccountInboundActorMode,
@@ -484,11 +488,9 @@ export async function createTransportAccount(params: {
       inboundActorId: inboundActorId,
       connectionMode: params.connectionMode,
       status: nextStatus,
-      credentials:
-        normalizedCredentials as TableInsert<"transportAccounts">["credentials"],
-      config: normalizedConfig as TableInsert<"transportAccounts">["config"],
-      metadata: (params.metadata ||
-        {}) as TableInsert<"transportAccounts">["metadata"],
+      credentials: normalizedCredentials as TransportAccountCredentialsInsert,
+      config: normalizedConfig as TransportAccountConfigInsert,
+      metadata: (params.metadata || {}) as TransportAccountMetadataInsert,
       createdAt: sql`NOW()`,
     })
     .returningAll()
@@ -621,14 +623,13 @@ export async function updateTransportAccount(params: {
         inboundActorId: resolvedInboundActorId,
         connectionMode: nextConnectionMode,
         status: nextStatus,
-        credentials:
-          normalizedCredentials as TableInsert<"transportAccounts">["credentials"],
-        config: normalizedConfig as TableInsert<"transportAccounts">["config"],
+        credentials: normalizedCredentials as TransportAccountCredentialsInsert,
+        config: normalizedConfig as TransportAccountConfigInsert,
         metadata: (params.metadata !== undefined
           ? params.metadata
           : parseJsonObject(
               existing.metadata
-            )) as TableInsert<"transportAccounts">["metadata"],
+            )) as TransportAccountMetadataInsert,
       })
       .where("workspaceId", "=", params.workspaceId)
       .where("id", "=", params.accountId)

@@ -30,7 +30,7 @@ import {
 } from "./plugin-auth-connections.js"
 import { presentPluginCategory, presentPublisher } from "./presenter.js"
 import { getEventLogs, getToolCallLogs } from "./audit.js"
-import { sendData } from "../../infrastructure/http/respond.js"
+import { appRoute, wireRoute } from "../../infrastructure/http/route.js"
 import {
   MarketplacePluginViewSchema,
   MarketplacePublisherViewSchema,
@@ -85,79 +85,100 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
   const authHook = { preHandler: [authMiddleware] }
   const workspaceHook = { preHandler: [authMiddleware, workspaceMiddleware] }
 
-  app.get("/api/v1/mcp/marketplace", authHook, async (request, reply) => {
-    try {
-      const { search, tags, categories, transport } = request.query as {
-        search?: string
-        tags?: string
-        categories?: string
-        transport?: string
-      }
-      const plugins = await listPlugins({
-        search,
-        transport,
-        tags: tags
-          ? tags
-              .split(",")
-              .map((value) => value.trim())
-              .filter(Boolean)
-          : undefined,
-        categorySlugs: categories
-          ? categories
-              .split(",")
-              .map((value) => value.trim())
-              .filter(Boolean)
-          : undefined,
-      })
-      sendData(reply, z.array(MarketplacePluginViewSchema), plugins)
-    } catch (error) {
-      handleError(reply, error)
-    }
-  })
-
-  app.get("/api/v1/mcp/categories", authHook, async (_request, reply) => {
-    try {
-      const categories = await listPluginCategories()
-      sendData(
-        reply,
-        z.array(PluginCategoryViewSchema),
-        categories.map(presentPluginCategory)
-      )
-    } catch (error) {
-      handleError(reply, error)
-    }
-  })
-
-  app.get(
-    "/api/v1/mcp/marketplace/:pluginId",
-    authHook,
+  appRoute(
+    app,
+    "GET",
+    "/api/v1/mcp/marketplace",
+    { schema: z.array(MarketplacePluginViewSchema), options: authHook },
     async (request, reply) => {
       try {
-        const { pluginId } = request.params as { pluginId: string }
-        const plugin = await getPlugin(pluginId)
-        sendData(reply, MarketplacePluginViewSchema, plugin)
+        const { search, tags, categories, transport } = request.query as {
+          search?: string
+          tags?: string
+          categories?: string
+          transport?: string
+        }
+        return await listPlugins({
+          search,
+          transport,
+          tags: tags
+            ? tags
+                .split(",")
+                .map((value) => value.trim())
+                .filter(Boolean)
+            : undefined,
+          categorySlugs: categories
+            ? categories
+                .split(",")
+                .map((value) => value.trim())
+                .filter(Boolean)
+            : undefined,
+        })
       } catch (error) {
         handleError(reply, error)
+        return undefined
       }
     }
   )
 
-  app.get("/api/v1/mcp/organizations", authHook, async (_request, reply) => {
-    try {
-      const orgs = await listOrganizations()
-      sendData(
-        reply,
-        z.array(MarketplacePublisherViewSchema),
-        orgs.map(presentPublisher)
-      )
-    } catch (error) {
-      handleError(reply, error)
+  appRoute(
+    app,
+    "GET",
+    "/api/v1/mcp/categories",
+    { schema: z.array(PluginCategoryViewSchema), options: authHook },
+    async (_request, reply) => {
+      try {
+        const categories = await listPluginCategories()
+        return categories.map(presentPluginCategory)
+      } catch (error) {
+        handleError(reply, error)
+        return undefined
+      }
     }
-  })
+  )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
+    "/api/v1/mcp/marketplace/:pluginId",
+    { schema: MarketplacePluginViewSchema, options: authHook },
+    async (request, reply) => {
+      try {
+        const { pluginId } = request.params as { pluginId: string }
+        return await getPlugin(pluginId)
+      } catch (error) {
+        handleError(reply, error)
+        return undefined
+      }
+    }
+  )
+
+  appRoute(
+    app,
+    "GET",
+    "/api/v1/mcp/organizations",
+    { schema: z.array(MarketplacePublisherViewSchema), options: authHook },
+    async (_request, reply) => {
+      try {
+        const orgs = await listOrganizations()
+        return orgs.map(presentPublisher)
+      } catch (error) {
+        handleError(reply, error)
+        return undefined
+      }
+    }
+  )
+
+  appRoute(
+    app,
+    "GET",
     "/api/v1/mcp/organizations/:orgId",
-    authHook,
+    {
+      schema: MarketplacePublisherViewSchema.extend({
+        plugins: z.array(MarketplacePluginViewSchema),
+      }),
+      options: authHook,
+    },
     async (request, reply) => {
       try {
         const { orgId } = request.params as { orgId: string }
@@ -166,22 +187,19 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
           throw new McpPluginError(404, "Publisher not found")
         }
         const plugins = await listPlugins({ orgId })
-        sendData(
-          reply,
-          MarketplacePublisherViewSchema.extend({
-            plugins: z.array(MarketplacePluginViewSchema),
-          }),
-          { ...presentPublisher(org), plugins }
-        )
+        return { ...presentPublisher(org), plugins }
       } catch (error) {
         handleError(reply, error)
+        return undefined
       }
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/mcp/plugins/:pluginId/install-plan",
-    workspaceHook,
+    { schema: PluginInstallPlanEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       try {
         const allowed = await requireWorkspacePermission(
@@ -190,7 +208,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
           "workspace.manage_plugins",
           "Not allowed to manage plugin installations in this workspace"
         )
-        if (!allowed) return
+        if (!allowed) return undefined
 
         const { workspaceId, pluginId } = request.params as {
           workspaceId: string
@@ -201,16 +219,19 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
           workspaceId,
           pluginId,
         })
-        sendData(reply, PluginInstallPlanEnvelopeSchema, { plan })
+        return { plan }
       } catch (error) {
         handleError(reply, error)
+        return undefined
       }
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/mcp/plugins/:pluginId/auth/:bindingKey/start",
-    workspaceHook,
+    { schema: PluginAuthSessionEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       try {
         const allowed = await requireWorkspacePermission(
@@ -219,7 +240,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
           "workspace.manage_plugins",
           "Not allowed to manage plugin installations in this workspace"
         )
-        if (!allowed) return
+        if (!allowed) return undefined
 
         const { workspaceId, pluginId, bindingKey } = request.params as {
           workspaceId: string
@@ -228,7 +249,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
         }
         const body = startAuthSchema.parse(request.body || {})
         const workspaceMember = (request as any).workspaceMember
-        const result = await startPluginAuthSession({
+        return await startPluginAuthSession({
           workspaceId,
           pluginId,
           installationId: body.installationId,
@@ -237,16 +258,18 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
           draftConfig: body.draftConfig,
           metadata: body.metadata,
         })
-        sendData(reply, PluginAuthSessionEnvelopeSchema, result)
       } catch (error) {
         handleError(reply, error)
+        return undefined
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/mcp/auth/sessions/:sessionId",
-    workspaceHook,
+    { schema: PluginAuthSessionEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       try {
         const allowed = await requireWorkspacePermission(
@@ -255,29 +278,32 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
           "workspace.manage_plugins",
           "Not allowed to manage plugin installations in this workspace"
         )
-        if (!allowed) return
+        if (!allowed) return undefined
 
         const { workspaceId, sessionId } = request.params as {
           workspaceId: string
           sessionId: string
         }
         const workspaceMember = (request as any).workspaceMember
-        sendData(reply, PluginAuthSessionEnvelopeSchema, {
+        return {
           session: await getPluginAuthSession(
             sessionId,
             workspaceId,
             workspaceMember?.id
           ),
-        })
+        }
       } catch (error) {
         handleError(reply, error)
+        return undefined
       }
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/mcp/auth/sessions/:sessionId/inspect",
-    workspaceHook,
+    { schema: PluginAuthSessionEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       try {
         const allowed = await requireWorkspacePermission(
@@ -286,65 +312,73 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
           "workspace.manage_plugins",
           "Not allowed to manage plugin installations in this workspace"
         )
-        if (!allowed) return
+        if (!allowed) return undefined
 
         const { workspaceId, sessionId } = request.params as {
           workspaceId: string
           sessionId: string
         }
         const workspaceMember = (request as any).workspaceMember
-        sendData(
-          reply,
-          PluginAuthSessionEnvelopeSchema,
-          await inspectPluginAuthSession({
-            workspaceId,
-            sessionId,
-            workspaceMemberId: workspaceMember?.id,
-          })
-        )
+        return await inspectPluginAuthSession({
+          workspaceId,
+          sessionId,
+          workspaceMemberId: workspaceMember?.id,
+        })
       } catch (error) {
         handleError(reply, error)
+        return undefined
       }
     }
   )
 
-  app.get("/api/v1/mcp/auth/callback", async (request, reply) => {
-    try {
-      const {
-        state,
-        code,
-        error,
-        error_description: errorDescription,
-      } = request.query as {
-        state?: string
-        code?: string
-        error?: string
-        error_description?: string
+  wireRoute(
+    app,
+    "GET",
+    "/api/v1/mcp/auth/callback",
+    {},
+    async (request, reply) => {
+      try {
+        const {
+          state,
+          code,
+          error,
+          error_description: errorDescription,
+        } = request.query as {
+          state?: string
+          code?: string
+          error?: string
+          error_description?: string
+        }
+        const session = await handlePluginAuthCallback({
+          state,
+          code,
+          error,
+          errorDescription,
+        })
+        reply
+          .type("text/html; charset=utf-8")
+          .send(
+            `<!doctype html><html><body><script>window.opener&&window.opener.postMessage({type:'synapse:mcp-auth',sessionId:'${session.id}',status:'${session.status}'},'*');window.close&&window.close();</script><p>Authorization ${session.status}. You can close this window.</p></body></html>`
+          )
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Authorization failed"
+        reply
+          .status(400)
+          .type("text/html; charset=utf-8")
+          .send(`<!doctype html><html><body><p>${message}</p></body></html>`)
       }
-      const session = await handlePluginAuthCallback({
-        state,
-        code,
-        error,
-        errorDescription,
-      })
-      reply
-        .type("text/html; charset=utf-8")
-        .send(
-          `<!doctype html><html><body><script>window.opener&&window.opener.postMessage({type:'synapse:mcp-auth',sessionId:'${session.id}',status:'${session.status}'},'*');window.close&&window.close();</script><p>Authorization ${session.status}. You can close this window.</p></body></html>`
-        )
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Authorization failed"
-      reply
-        .status(400)
-        .type("text/html; charset=utf-8")
-        .send(`<!doctype html><html><body><p>${message}</p></body></html>`)
     }
-  })
+  )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/mcp/installations",
-    workspaceHook,
+    {
+      schema: z.array(PluginInstallationDetailViewSchema),
+      options: workspaceHook,
+    },
     async (request, reply) => {
       try {
         const allowed = await requireWorkspacePermission(
@@ -353,7 +387,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
           "workspace.view",
           "Not allowed to view plugin installations in this workspace"
         )
-        if (!allowed) return
+        if (!allowed) return undefined
 
         const { workspaceId } = request.params as { workspaceId: string }
         const installationIds = await listAuthorizedResourceIds(db, {
@@ -361,35 +395,29 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
           action: "plugin_installation.edit",
         })
         if (installationIds.length === 0) {
-          return sendData(
-            reply,
-            z.array(PluginInstallationDetailViewSchema),
-            []
-          )
+          return []
         }
         const { pluginId } = z
           .object({
             pluginId: z.uuid().optional(),
           })
           .parse(request.query || {})
-        const installations = await getInstallations(workspaceId, {
+        return await getInstallations(workspaceId, {
           installationIds,
           pluginId,
         })
-        sendData(
-          reply,
-          z.array(PluginInstallationDetailViewSchema),
-          installations
-        )
       } catch (error) {
         handleError(reply, error)
+        return undefined
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/mcp/installations/:installId",
-    workspaceHook,
+    { schema: PluginInstallationDetailViewSchema, options: workspaceHook },
     async (request, reply) => {
       try {
         const { installId } = request.params as { installId: string }
@@ -400,22 +428,24 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
           installId,
           "Not allowed to view this plugin installation"
         )
-        if (!allowed) return
+        if (!allowed) return undefined
 
         const { workspaceId } = request.params as {
           workspaceId: string
         }
-        const installation = await getInstallation(workspaceId, installId)
-        sendData(reply, PluginInstallationDetailViewSchema, installation)
+        return await getInstallation(workspaceId, installId)
       } catch (error) {
         handleError(reply, error)
+        return undefined
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/mcp/audit/tool-calls",
-    workspaceHook,
+    { schema: PluginAuditLogListSchema, options: workspaceHook },
     async (request, reply) => {
       try {
         const allowed = await requireWorkspacePermission(
@@ -424,7 +454,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
           "workspace.manage_plugins",
           "Not allowed to view plugin audit logs in this workspace"
         )
-        if (!allowed) return
+        if (!allowed) return undefined
 
         const { workspaceId } = request.params as { workspaceId: string }
         const { pluginId, sessionId, actorId, limit, before } =
@@ -435,26 +465,25 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
             limit?: string
             before?: string
           }
-        sendData(
-          reply,
-          PluginAuditLogListSchema,
-          await getToolCallLogs(workspaceId, {
-            pluginId,
-            sessionId,
-            actorId,
-            limit: limit ? parseInt(limit, 10) : undefined,
-            before,
-          })
-        )
+        return await getToolCallLogs(workspaceId, {
+          pluginId,
+          sessionId,
+          actorId,
+          limit: limit ? parseInt(limit, 10) : undefined,
+          before,
+        })
       } catch (error) {
         handleError(reply, error)
+        return undefined
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/mcp/audit/events",
-    workspaceHook,
+    { schema: PluginAuditLogListSchema, options: workspaceHook },
     async (request, reply) => {
       try {
         const allowed = await requireWorkspacePermission(
@@ -463,7 +492,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
           "workspace.manage_plugins",
           "Not allowed to view plugin audit logs in this workspace"
         )
-        if (!allowed) return
+        if (!allowed) return undefined
 
         const { workspaceId } = request.params as { workspaceId: string }
         const { eventType, pluginId, limit, before } = request.query as {
@@ -472,18 +501,15 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
           limit?: string
           before?: string
         }
-        sendData(
-          reply,
-          PluginAuditLogListSchema,
-          await getEventLogs(workspaceId, {
-            eventType,
-            pluginId,
-            limit: limit ? parseInt(limit, 10) : undefined,
-            before,
-          })
-        )
+        return await getEventLogs(workspaceId, {
+          eventType,
+          pluginId,
+          limit: limit ? parseInt(limit, 10) : undefined,
+          before,
+        })
       } catch (error) {
         handleError(reply, error)
+        return undefined
       }
     }
   )

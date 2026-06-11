@@ -21,9 +21,25 @@ import {
   type CapabilityAccessTarget,
 } from "@synapse/shared"
 import { IsoInstantStringSchema } from "@synapse/shared/schemas"
+import {
+  AutomationAccessGrantEnvelopeSchema,
+  AutomationEventIngestResultSchema,
+  AutomationEventSourceAccessStateSchema,
+  AutomationEventSourceListSchema,
+  AutomationEventSourceSchema,
+  AutomationExecutionListSchema,
+  AutomationOccurrenceListSchema,
+  AutomationRuleListSchema,
+  AutomationRuleSchema,
+  AutomationSuccessSchema,
+  AutomationWebhookEndpointCreateResultSchema,
+  AutomationWebhookEndpointListSchema,
+} from "@synapse/shared/schemas"
 import { z } from "zod"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
+import { appRoute, wireRoute } from "../../infrastructure/http/route.js"
+import { sendData } from "../../infrastructure/http/respond.js"
 import { requireRequestAction } from "../access/guards.js"
 import {
   archiveAutomationEventSource,
@@ -301,9 +317,14 @@ async function enqueueAutomationExecutions(executionIds: string[]) {
 export default async function automationController(app: FastifyInstance) {
   const protectedPreHandler = [authMiddleware, workspaceMiddleware]
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/automation-event-sources",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationEventSourceListSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       const allowed = await requireRequestAction(
@@ -330,9 +351,14 @@ export default async function automationController(app: FastifyInstance) {
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/automation-event-sources",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationEventSourceSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       const allowed = await requireRequestAction(
@@ -351,13 +377,19 @@ export default async function automationController(app: FastifyInstance) {
         { kind: "workspace_member", workspaceMemberId },
         body
       )
-      return reply.status(201).send(source)
+      sendData(reply, AutomationEventSourceSchema, source, 201)
+      return source
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationEventSourceSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId, eventSourceId } = request.params as {
         workspaceId: string
@@ -374,17 +406,21 @@ export default async function automationController(app: FastifyInstance) {
 
       const source = await getAutomationEventSource(workspaceId, eventSourceId)
       if (!source) {
-        return reply
-          .status(404)
-          .send({ error: "Automation event source not found" })
+        reply.status(404).send({ error: "Automation event source not found" })
+        return
       }
       return source
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId/access",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationEventSourceAccessStateSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId, eventSourceId } = request.params as {
         workspaceId: string
@@ -403,9 +439,14 @@ export default async function automationController(app: FastifyInstance) {
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId/access",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationAccessGrantEnvelopeSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId, eventSourceId } = request.params as {
         workspaceId: string
@@ -432,13 +473,19 @@ export default async function automationController(app: FastifyInstance) {
         grantedByWorkspaceMemberId: workspaceMemberId,
         reason: body.reason,
       })
-      return reply.status(201).send({ grant })
+      sendData(reply, AutomationAccessGrantEnvelopeSchema, { grant }, 201)
+      return { grant }
     }
   )
 
-  app.put(
+  appRoute(
+    app,
+    "PUT",
     "/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId/access/:bindingId",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationAccessGrantEnvelopeSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId, eventSourceId, bindingId } = request.params as {
         workspaceId: string
@@ -465,9 +512,14 @@ export default async function automationController(app: FastifyInstance) {
     }
   )
 
-  app.delete(
+  appRoute(
+    app,
+    "DELETE",
     "/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId/access/:bindingId",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationSuccessSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId, eventSourceId, bindingId } = request.params as {
         workspaceId: string
@@ -494,9 +546,14 @@ export default async function automationController(app: FastifyInstance) {
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId/occurrences",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationOccurrenceListSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId, eventSourceId } = request.params as {
         workspaceId: string
@@ -517,9 +574,14 @@ export default async function automationController(app: FastifyInstance) {
     }
   )
 
-  app.put(
+  appRoute(
+    app,
+    "PUT",
     "/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationEventSourceSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId, eventSourceId } = request.params as {
         workspaceId: string
@@ -545,9 +607,14 @@ export default async function automationController(app: FastifyInstance) {
     }
   )
 
-  app.delete(
+  appRoute(
+    app,
+    "DELETE",
     "/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationSuccessSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId, eventSourceId } = request.params as {
         workspaceId: string
@@ -570,9 +637,14 @@ export default async function automationController(app: FastifyInstance) {
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId/events",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationEventIngestResultSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId, eventSourceId } = request.params as {
         workspaceId: string
@@ -599,16 +671,23 @@ export default async function automationController(app: FastifyInstance) {
       await enqueueAutomationExecutions(
         result.executions.map((execution) => execution.id)
       )
-      return reply.status(202).send({
+      const value = {
         occurrence: result.occurrence,
         executions: result.executions,
-      })
+      }
+      sendData(reply, AutomationEventIngestResultSchema, value, 202)
+      return value
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/automations",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationRuleListSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       const allowed = await requireRequestAction(
@@ -639,9 +718,14 @@ export default async function automationController(app: FastifyInstance) {
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/automations",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationRuleSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       const allowed = await requireRequestAction(
@@ -656,10 +740,11 @@ export default async function automationController(app: FastifyInstance) {
       const body = createAutomationSchema.parse(request.body)
       const issues = validateAutomationRuleCreatePayload(body)
       if (issues.length > 0) {
-        return reply.status(400).send({
+        reply.status(400).send({
           error: issues[0]!.message,
           issues,
         })
+        return
       }
       const workspaceMemberId = (request as any).workspaceMember!.id as string
       const automation = await createAutomationRule(
@@ -667,13 +752,19 @@ export default async function automationController(app: FastifyInstance) {
         { kind: "workspace_member", workspaceMemberId },
         body
       )
-      return reply.status(201).send(automation)
+      sendData(reply, AutomationRuleSchema, automation, 201)
+      return automation
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/automations/:automationId",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationRuleSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId, automationId } = request.params as {
         workspaceId: string
@@ -690,15 +781,21 @@ export default async function automationController(app: FastifyInstance) {
 
       const automation = await getAutomationRule(workspaceId, automationId)
       if (!automation) {
-        return reply.status(404).send({ error: "Automation not found" })
+        reply.status(404).send({ error: "Automation not found" })
+        return
       }
       return automation
     }
   )
 
-  app.put(
+  appRoute(
+    app,
+    "PUT",
     "/api/v1/workspaces/:workspaceId/automations/:automationId",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationRuleSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId, automationId } = request.params as {
         workspaceId: string
@@ -728,19 +825,25 @@ export default async function automationController(app: FastifyInstance) {
           error instanceof Error &&
           (error as Error & { statusCode?: number }).statusCode === 400
         ) {
-          return reply.status(400).send({
+          reply.status(400).send({
             error: error.message,
             issues: (error as Error & { issues?: unknown }).issues || [],
           })
+          return
         }
         throw error
       }
     }
   )
 
-  app.delete(
+  appRoute(
+    app,
+    "DELETE",
     "/api/v1/workspaces/:workspaceId/automations/:automationId",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationSuccessSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId, automationId } = request.params as {
         workspaceId: string
@@ -763,9 +866,14 @@ export default async function automationController(app: FastifyInstance) {
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/automations/:automationId/executions",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationExecutionListSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId, automationId } = request.params as {
         workspaceId: string
@@ -788,9 +896,14 @@ export default async function automationController(app: FastifyInstance) {
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/automation-webhooks",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationWebhookEndpointListSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       const allowed = await requireRequestAction(
@@ -807,9 +920,14 @@ export default async function automationController(app: FastifyInstance) {
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/automation-webhooks",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationWebhookEndpointCreateResultSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       const allowed = await requireRequestAction(
@@ -828,12 +946,16 @@ export default async function automationController(app: FastifyInstance) {
         workspaceMemberId,
         body
       )
-      return reply.status(201).send(created)
+      sendData(reply, AutomationWebhookEndpointCreateResultSchema, created, 201)
+      return created
     }
   )
 
-  app.post(
+  wireRoute(
+    app,
+    "POST",
     "/api/v1/automation-webhooks/:pathToken/sources/:sourceKey/events",
+    {},
     async (request, reply) => {
       const { pathToken, sourceKey } = request.params as {
         pathToken: string
@@ -883,8 +1005,11 @@ export default async function automationController(app: FastifyInstance) {
     }
   )
 
-  app.post(
+  wireRoute(
+    app,
+    "POST",
     "/api/v1/automation-webhooks/:pathToken/events",
+    {},
     async (request, reply) => {
       const { pathToken } = request.params as { pathToken: string }
       const payload =

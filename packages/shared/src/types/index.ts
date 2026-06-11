@@ -4515,6 +4515,24 @@ export type {
   AuthMeView,
 } from "../schemas/auth.js"
 export type {
+  AutomationEventSourceSchemaType,
+  AutomationEventSourceListSchemaType,
+  AutomationRuleSchemaType,
+  AutomationRuleListSchemaType,
+  AutomationOccurrenceSchemaType,
+  AutomationOccurrenceListSchemaType,
+  AutomationExecutionSchemaType,
+  AutomationExecutionListSchemaType,
+  AutomationWebhookEndpointSchemaType,
+  AutomationWebhookEndpointListSchemaType,
+  AutomationWebhookEndpointCreateResultSchemaType,
+  AutomationEventSourceAccessGrantSchemaType,
+  AutomationEventSourceAccessStateSchemaType,
+  AutomationAccessGrantEnvelopeSchemaType,
+  AutomationSuccessSchemaType,
+  AutomationEventIngestResultSchemaType,
+} from "../schemas/automation.js"
+export type {
   ModelGroupView,
   ModelGroupItemView,
   ModelGroupGrantView,
@@ -4549,3 +4567,42 @@ export type {
   SetActiveDeviceCapabilitiesInput,
   ActiveDeviceCapabilitiesView,
 } from "../schemas/devices.js"
+export type { RuntimeAuthorizationGrantRecordView } from "../schemas/runtime-authorizations.js"
+export type {
+  FileOriginSummaryView,
+  StoredFileRecordView,
+  FileParseEnqueueResult,
+} from "../schemas/files.js"
+export type {
+  RelationshipProfileViewSchemaType,
+  IdentitySearchResponseSchemaType,
+  RelationshipScanResponseSchemaType,
+  FriendsListResponseSchemaType,
+  RequestListResponseSchemaType,
+  ResolveRequestResponseSchemaType,
+  ContactHubResponseSchemaType,
+  ContactHubDetailResponseSchemaType,
+  DirectConversationOpenResponseSchemaType,
+} from "../schemas/relationship.js"
+export type {
+  RemoteAgentListResponseSchemaType,
+  RemoteAgentResponseSchemaType,
+  RemoteAgentGroupTaskGrantsResponseSchemaType,
+  RemoteAgentMachinePairingSessionResponseSchemaType,
+  RemoteAgentMachineListResponseSchemaType,
+  RemoteAgentMachineDetailResponseSchemaType,
+} from "../schemas/remote-agents.js"
+export type {
+  TransportConnectorsResponseSchemaType,
+  TransportAccountsResponseSchemaType,
+  TransportSessionsResponseSchemaType,
+  TransportExternalUsersResponseSchemaType,
+  TransportAccountResponseSchemaType,
+  TransportSessionResponseSchemaType,
+  TransportAddressResponseSchemaType,
+  WeixinBindingCandidatesResponseSchemaType,
+  WeixinQrSessionResponseSchemaType,
+  WeixinBindingResponseSchemaType,
+  DingtalkDeviceFlowStartResponseSchemaType,
+  DingtalkDeviceFlowPollResponseSchemaType,
+} from "../schemas/im.js"

@@ -17,11 +17,7 @@ import {
   decryptSensitiveFields,
   encrypt,
 } from "../../infrastructure/crypto/index.js"
-import {
-  db,
-  type TableInsert,
-  type TableRow,
-} from "../../infrastructure/database/kysely.js"
+import { db } from "../../infrastructure/database/kysely.js"
 import {
   parseInstantString,
   serializeInstant,
@@ -63,12 +59,18 @@ const dbRunner: QueryRunner = <T extends pg.QueryResultRow = pg.QueryResultRow>(
     .executeQuery<T>(CompiledQuery.raw(text, params ?? []))
     .then((r) => ({ rows: r.rows as T[] }))
 
-export type PluginAuthSessionRow = TableRow<"pluginAuthSessions">
-
-export type PluginConnectionRow = TableRow<"pluginConnections"> & {
-  catalogItemId: string
-  catalogVersionId: string | null
-}
+export type { PluginAuthSessionRow, PluginConnectionRow } from "./repo.types.js"
+import type {
+  PluginAuthSessionRow,
+  PluginConnectionRow,
+  PluginAuthSessionsChallengePayload,
+  PluginAuthSessionsMetadata,
+  PluginAuthSessionsResultPayload,
+  PluginAuthSessionsResultPreview,
+  PluginAuthSessionsTransientPayload,
+  PluginConnectionsPublicPayload,
+  PluginConnectionsSecretPayload,
+} from "./repo.types.js"
 
 type PluginAuthSpec = {
   catalogItemId: string
@@ -736,9 +738,8 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
             phase: null,
             resultPreview: buildMijiaResultPreview(
               progress.authState
-            ) as TableInsert<"pluginAuthSessions">["resultPreview"],
-            resultPayload:
-              resultPayload as TableInsert<"pluginAuthSessions">["resultPayload"],
+            ) as PluginAuthSessionsResultPreview,
+            resultPayload: resultPayload as PluginAuthSessionsResultPayload,
             errorCode: null,
             errorMessage: null,
           })
@@ -824,10 +825,10 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
           .set({
             phase: "pending_scan",
             challengePayload:
-              nextChallenge as TableInsert<"pluginAuthSessions">["challengePayload"],
+              nextChallenge as PluginAuthSessionsChallengePayload,
             transientPayload: encryptDeep(
               nextTransient
-            ) as TableInsert<"pluginAuthSessions">["transientPayload"],
+            ) as PluginAuthSessionsTransientPayload,
             expiresAt:
               typeof nextExpiresAt === "string"
                 ? parseInstantString(nextExpiresAt)
@@ -864,10 +865,8 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
           .set({
             status: "completed",
             phase: null,
-            resultPreview:
-              resultPreview as TableInsert<"pluginAuthSessions">["resultPreview"],
-            resultPayload:
-              resultPayload as TableInsert<"pluginAuthSessions">["resultPayload"],
+            resultPreview: resultPreview as PluginAuthSessionsResultPreview,
+            resultPayload: resultPayload as PluginAuthSessionsResultPayload,
             errorCode: null,
             errorMessage: null,
           })
@@ -904,7 +903,7 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
                 transientPayload.requestedFeatures
               ),
               appScopeStatus,
-            } as TableInsert<"pluginAuthSessions">["resultPreview"],
+            } as PluginAuthSessionsResultPreview,
             errorCode: progress.errorCode,
             errorMessage: buildFeishuScopeInspectionErrorMessage({
               baseMessage: progress.errorMessage,
@@ -1101,10 +1100,8 @@ async function refreshOAuthConnection(
   await db
     .updateTable("pluginConnections")
     .set({
-      publicPayload:
-        publicPayload as TableInsert<"pluginConnections">["publicPayload"],
-      secretPayload:
-        nextSecretPayload as TableInsert<"pluginConnections">["secretPayload"],
+      publicPayload: publicPayload as PluginConnectionsPublicPayload,
+      secretPayload: nextSecretPayload as PluginConnectionsSecretPayload,
       status: "active",
       expiresAt:
         typeof expiresAt === "string"
@@ -1161,10 +1158,8 @@ async function refreshFeishuConnection(row: PluginConnectionRow) {
   await db
     .updateTable("pluginConnections")
     .set({
-      publicPayload:
-        nextPublicPayload as TableInsert<"pluginConnections">["publicPayload"],
-      secretPayload:
-        nextSecretPayload as TableInsert<"pluginConnections">["secretPayload"],
+      publicPayload: nextPublicPayload as PluginConnectionsPublicPayload,
+      secretPayload: nextSecretPayload as PluginConnectionsSecretPayload,
       status: "active",
       expiresAt: expiresAt,
     })
@@ -1368,11 +1363,10 @@ export async function startPluginAuthSession(input: {
             kind: "redirect",
             url: authorizeUrl.toString(),
             openMode: "popup",
-          } as TableInsert<"pluginAuthSessions">["challengePayload"],
+          } as PluginAuthSessionsChallengePayload,
           transientPayload:
-            transientPayload as TableInsert<"pluginAuthSessions">["transientPayload"],
-          metadata: (input.metadata ||
-            {}) as TableInsert<"pluginAuthSessions">["metadata"],
+            transientPayload as PluginAuthSessionsTransientPayload,
+          metadata: (input.metadata || {}) as PluginAuthSessionsMetadata,
           expiresAt: sql`NOW() + INTERVAL '1 hour'`,
         })
         .returningAll()
@@ -1400,12 +1394,11 @@ export async function startPluginAuthSession(input: {
           phase: "pending_scan",
           state: null,
           challengePayload:
-            result.challengePayload as TableInsert<"pluginAuthSessions">["challengePayload"],
+            result.challengePayload as PluginAuthSessionsChallengePayload,
           transientPayload: encryptDeep(
             result.transientPayload
-          ) as TableInsert<"pluginAuthSessions">["transientPayload"],
-          metadata: (input.metadata ||
-            {}) as TableInsert<"pluginAuthSessions">["metadata"],
+          ) as PluginAuthSessionsTransientPayload,
+          metadata: (input.metadata || {}) as PluginAuthSessionsMetadata,
           expiresAt: parseInstantString(result.expiresAt),
         })
         .returningAll()
@@ -1466,12 +1459,11 @@ export async function startPluginAuthSession(input: {
           phase: "pending_scan",
           state: null,
           challengePayload:
-            result.challengePayload as TableInsert<"pluginAuthSessions">["challengePayload"],
+            result.challengePayload as PluginAuthSessionsChallengePayload,
           transientPayload: encryptDeep(
             result.transientPayload
-          ) as TableInsert<"pluginAuthSessions">["transientPayload"],
-          metadata: (input.metadata ||
-            {}) as TableInsert<"pluginAuthSessions">["metadata"],
+          ) as PluginAuthSessionsTransientPayload,
+          metadata: (input.metadata || {}) as PluginAuthSessionsMetadata,
           expiresAt: parseInstantString(result.expiresAt),
         })
         .returningAll()
@@ -1551,8 +1543,7 @@ export async function inspectPluginAuthSession(input: {
   const updated = await db
     .updateTable("pluginAuthSessions")
     .set({
-      resultPreview:
-        nextPreview as TableInsert<"pluginAuthSessions">["resultPreview"],
+      resultPreview: nextPreview as PluginAuthSessionsResultPreview,
     })
     .where("id", "=", row.id)
     .returningAll()
@@ -1702,10 +1693,8 @@ export async function handlePluginAuthCallback(input: {
         .set({
           status: "completed",
           phase: null,
-          resultPreview:
-            resultPreview as TableInsert<"pluginAuthSessions">["resultPreview"],
-          resultPayload:
-            resultPayload as TableInsert<"pluginAuthSessions">["resultPayload"],
+          resultPreview: resultPreview as PluginAuthSessionsResultPreview,
+          resultPayload: resultPayload as PluginAuthSessionsResultPayload,
           errorCode: null,
           errorMessage: null,
         })

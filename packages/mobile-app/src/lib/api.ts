@@ -253,13 +253,13 @@ class ApiClient {
     workspaceId: string,
     token: string
   ): Promise<RelationshipScanResponse> {
-    return this.request<RelationshipScanResponse>(
+    return this.request<{ data: RelationshipScanResponse }>(
       `/workspaces/${workspaceId}/relationship-qr/scan`,
       {
         method: "POST",
         body: JSON.stringify({ token }),
       }
-    )
+    ).then((res) => res.data)
   }
 
   searchIdentity(
@@ -270,30 +270,30 @@ class ApiClient {
     if (query.trim()) {
       params.set("q", query.trim())
     }
-    return this.request<IdentitySearchResponse>(
+    return this.request<{ data: IdentitySearchResponse }>(
       `/workspaces/${workspaceId}/identity-search${
         params.size > 0 ? `?${params.toString()}` : ""
       }`
-    )
+    ).then((res) => res.data)
   }
 
   requestIdentityProfile(
     workspaceId: string,
     profileId: string
   ): Promise<RelationshipScanResponse> {
-    return this.request<RelationshipScanResponse>(
+    return this.request<{ data: RelationshipScanResponse }>(
       `/workspaces/${workspaceId}/identity-search/request`,
       {
         method: "POST",
         body: JSON.stringify({ profileId }),
       }
-    )
+    ).then((res) => res.data)
   }
 
   getContactHub(workspaceId: string): Promise<ContactHubResponse> {
-    return this.request<ContactHubResponse>(
+    return this.request<{ data: ContactHubResponse }>(
       `/workspaces/${workspaceId}/contact-hub`
-    )
+    ).then((res) => res.data)
   }
 
   getContactHubDetail(
@@ -301,51 +301,51 @@ class ApiClient {
     contactKind: ContactHubEntryView["kind"],
     contactId: string
   ): Promise<ContactHubDetailResponse> {
-    return this.request<ContactHubDetailResponse>(
+    return this.request<{ data: ContactHubDetailResponse }>(
       `/workspaces/${workspaceId}/contact-hub/${contactKind}/${contactId}`
-    )
+    ).then((res) => res.data)
   }
 
   getFriendRequests(workspaceId: string): Promise<FriendRequestListResponse> {
-    return this.request<FriendRequestListResponse>(
+    return this.request<{ data: FriendRequestListResponse }>(
       `/workspaces/${workspaceId}/friend-requests`
-    )
+    ).then((res) => res.data)
   }
 
   approveFriendRequest(workspaceId: string, requestId: string) {
-    return this.request<{ request: unknown }>(
+    return this.request<{ data: { request: unknown } }>(
       `/workspaces/${workspaceId}/friend-requests/${requestId}/approve`,
       { method: "POST", body: "{}" }
-    )
+    ).then((res) => res.data)
   }
 
   rejectFriendRequest(workspaceId: string, requestId: string) {
-    return this.request<{ request: unknown }>(
+    return this.request<{ data: { request: unknown } }>(
       `/workspaces/${workspaceId}/friend-requests/${requestId}/reject`,
       { method: "POST", body: "{}" }
-    )
+    ).then((res) => res.data)
   }
 
   getActorAccessRequests(
     workspaceId: string
   ): Promise<ActorAccessRequestListResponse> {
-    return this.request<ActorAccessRequestListResponse>(
+    return this.request<{ data: ActorAccessRequestListResponse }>(
       `/workspaces/${workspaceId}/actor-access-requests`
-    )
+    ).then((res) => res.data)
   }
 
   approveActorAccessRequest(workspaceId: string, requestId: string) {
-    return this.request<{ request: unknown }>(
+    return this.request<{ data: { request: unknown } }>(
       `/workspaces/${workspaceId}/actor-access-requests/${requestId}/approve`,
       { method: "POST", body: "{}" }
-    )
+    ).then((res) => res.data)
   }
 
   rejectActorAccessRequest(workspaceId: string, requestId: string) {
-    return this.request<{ request: unknown }>(
+    return this.request<{ data: { request: unknown } }>(
       `/workspaces/${workspaceId}/actor-access-requests/${requestId}/reject`,
       { method: "POST", body: "{}" }
-    )
+    ).then((res) => res.data)
   }
 
   openDirectConversation(
@@ -355,13 +355,13 @@ class ApiClient {
       contactId: string
     }
   ): Promise<DirectConversationOpenResponse> {
-    return this.request<DirectConversationOpenResponse>(
+    return this.request<{ data: DirectConversationOpenResponse }>(
       `/workspaces/${workspaceId}/chat/direct-conversations/open`,
       {
         method: "POST",
         body: JSON.stringify(input),
       }
-    )
+    ).then((res) => res.data)
   }
 
   getWorkspaceChiefActorPreference(
@@ -707,7 +707,8 @@ class ApiClient {
           return
         }
 
-        succeed(data as FileRecordView)
+        // §5.3 APP route: upload returns the { data } envelope.
+        succeed((data as { data: FileRecordView }).data)
       }
 
       xhr.onerror = () => {

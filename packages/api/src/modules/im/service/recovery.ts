@@ -27,10 +27,12 @@ import type {
   DatabaseTransaction,
   KyselyDb,
 } from "../../../infrastructure/database/kysely.js"
-import {
-  db,
-  type TableUpdate,
-} from "../../../infrastructure/database/kysely.js"
+import { db } from "../../../infrastructure/database/kysely.js"
+import type {
+  TransportMessageLinkMetadataUpdate,
+  ConversationTransportBindingMetadataUpdate,
+  ConversationTransportBindingUpdatedAtUpdate,
+} from "../repo.types.js"
 import {
   getConversationTransportBinding,
   loadTransportMessageLinkForDelivery,
@@ -67,7 +69,7 @@ export async function markLinkSkipped(params: {
       // the sweeper / recovery match on, so a shallow merge is the
       // right tool here.
       metadata:
-        sql`metadata || ${JSON.stringify({ skippedReason: params.reason })}::jsonb` as unknown as TableUpdate<"transportMessageLinks">["metadata"],
+        sql`metadata || ${JSON.stringify({ skippedReason: params.reason })}::jsonb` as unknown as TransportMessageLinkMetadataUpdate,
     })
     .where("id", "=", params.linkId)
     .execute()
@@ -124,9 +126,9 @@ export function buildReEnableAutoDisabledBindingsSql(params: {
     .set({
       outboundEnabled: true,
       updatedAt:
-        sql`NOW()` as unknown as TableUpdate<"conversationTransportBindings">["updatedAt"],
+        sql`NOW()` as unknown as ConversationTransportBindingUpdatedAtUpdate,
       metadata:
-        sql`metadata - 'autoDisabledReason'` as unknown as TableUpdate<"conversationTransportBindings">["metadata"],
+        sql`metadata - 'autoDisabledReason'` as unknown as ConversationTransportBindingMetadataUpdate,
     })
     .where("workspaceId", "=", params.workspaceId)
     .where(

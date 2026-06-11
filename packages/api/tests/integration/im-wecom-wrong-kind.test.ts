@@ -53,6 +53,13 @@ interface AccountResponse {
   }
 }
 
+// IM account routes are §5.3 APP routes: the handler value is wrapped in a
+// uniform `{ data }` envelope, so success bodies read `body.data.account`.
+// Error bodies (4xx) stay bare and are read directly off `res.json()`.
+interface DataEnvelope<T> {
+  data: T
+}
+
 test("PUT /im/accounts/wecom/:id against a Feishu account → 404, no row mutation", async () => {
   const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
@@ -64,7 +71,7 @@ test("PUT /im/accounts/wecom/:id against a Feishu account → 404, no row mutati
   // skips connector validation) and runtime.ts:listActiveTransportAccounts
   // (reconcile loop ignores non-active rows). The guard, mutation, and
   // error-mapping paths under test are all status-independent.
-  const created = await ctx.client.json<AccountResponse>(
+  const created = await ctx.client.json<DataEnvelope<AccountResponse>>(
     `/workspaces/${ws.id}/im/accounts/feishu`,
     {
       method: "POST",
@@ -77,9 +84,9 @@ test("PUT /im/accounts/wecom/:id against a Feishu account → 404, no row mutati
       },
     }
   )
-  const feishuId = created.account.id
-  assert.equal(created.account.transportKind, "feishu")
-  const originalDisplayName = created.account.displayName
+  const feishuId = created.data.account.id
+  assert.equal(created.data.account.transportKind, "feishu")
+  const originalDisplayName = created.data.account.displayName
 
   // Hijack attempt: PUT through the WeCom route, targeting the Feishu
   // account id. Should be rejected.
@@ -105,10 +112,16 @@ test("PUT /im/accounts/wecom/:id against a Feishu account → 404, no row mutati
   //     displayName is unchanged. This is the bug-class assertion —
   //     without the service-layer guard, the UPDATE would have run and
   //     the displayName would now read "Hijacked by WeCom endpoint".
-  const refreshed = await ctx.client.json<{
-    accounts: Array<{ id: string; transportKind: string; displayName: string }>
-  }>(`/workspaces/${ws.id}/im/accounts`)
-  const stillFeishu = refreshed.accounts.find((a) => a.id === feishuId)
+  const refreshed = await ctx.client.json<
+    DataEnvelope<{
+      accounts: Array<{
+        id: string
+        transportKind: string
+        displayName: string
+      }>
+    }>
+  >(`/workspaces/${ws.id}/im/accounts`)
+  const stillFeishu = refreshed.data.accounts.find((a) => a.id === feishuId)
   assert.ok(stillFeishu, "feishu account should still exist")
   assert.equal(
     stillFeishu!.transportKind,
@@ -129,7 +142,7 @@ test("PUT /im/accounts/wecom/:id against the matching WeCom account → 200 + ac
   const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
 
-  const created = await ctx.client.json<AccountResponse>(
+  const created = await ctx.client.json<DataEnvelope<AccountResponse>>(
     `/workspaces/${ws.id}/im/accounts/wecom`,
     {
       method: "POST",
@@ -141,17 +154,17 @@ test("PUT /im/accounts/wecom/:id against the matching WeCom account → 200 + ac
       },
     }
   )
-  const wecomId = created.account.id
-  assert.equal(created.account.transportKind, "wecom")
+  const wecomId = created.data.account.id
+  assert.equal(created.data.account.transportKind, "wecom")
 
-  const renamed = await ctx.client.json<AccountResponse>(
+  const renamed = await ctx.client.json<DataEnvelope<AccountResponse>>(
     `/workspaces/${ws.id}/im/accounts/wecom/${wecomId}`,
     {
       method: "PUT",
       json: { displayName: "Renamed WeCom display name" },
     }
   )
-  assert.equal(renamed.account.displayName, "Renamed WeCom display name")
+  assert.equal(renamed.data.account.displayName, "Renamed WeCom display name")
 })
 
 test("PUT /im/accounts/wecom/:id with invalid baseWsUrl scheme → 400 with invalid_request (not 500)", async () => {
@@ -163,7 +176,7 @@ test("PUT /im/accounts/wecom/:id with invalid baseWsUrl scheme → 400 with inva
   const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
 
-  const created = await ctx.client.json<AccountResponse>(
+  const created = await ctx.client.json<DataEnvelope<AccountResponse>>(
     `/workspaces/${ws.id}/im/accounts/wecom`,
     {
       method: "POST",
@@ -177,7 +190,7 @@ test("PUT /im/accounts/wecom/:id with invalid baseWsUrl scheme → 400 with inva
   )
 
   const badUrlRes = await ctx.client.fetch(
-    `/workspaces/${ws.id}/im/accounts/wecom/${created.account.id}`,
+    `/workspaces/${ws.id}/im/accounts/wecom/${created.data.account.id}`,
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },

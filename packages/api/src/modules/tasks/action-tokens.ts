@@ -25,8 +25,8 @@ import {
   db,
   runBuilder,
   type Executor,
-  type TableInsert,
 } from "../../infrastructure/database/kysely.js"
+import type { ToolCallTaskActionTokensPayload } from "./repo.types.js"
 
 export interface ActionTokenPayload {
   /** One of the option labels we offered (e.g. "allow_once", "deny"). */
@@ -77,7 +77,7 @@ export async function mintActionToken(
       taskId: params.taskId,
       payload: sql`${JSON.stringify(
         params.payload
-      )}::jsonb` as unknown as TableInsert<"toolCallTaskActionTokens">["payload"],
+      )}::jsonb` as unknown as ToolCallTaskActionTokensPayload,
       expiresAt: expiresAt,
     })
   )

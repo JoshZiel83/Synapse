@@ -12,8 +12,11 @@ import {
   db,
   withDbTransaction,
   type KyselyDb,
-  type TableInsert,
 } from "../../../infrastructure/database/kysely.js"
+import type {
+  TransportEndpointMetadataInsert,
+  ConversationTransportBindingMetadataInsert,
+} from "../repo.types.js"
 import { v4 as uuidv4 } from "uuid"
 import type {
   TransportConversationInboundActorMode,
@@ -273,8 +276,7 @@ export async function upsertConversationTransportBinding(params: {
         externalId: params.endpointExternalId.trim(),
         parentExternalId: params.parentExternalId?.trim() || null,
         displayName: params.endpointDisplayName?.trim() || null,
-        metadata: (params.metadata ||
-          {}) as TableInsert<"transportEndpoints">["metadata"],
+        metadata: (params.metadata || {}) as TransportEndpointMetadataInsert,
         createdAt: sql`NOW()`,
       })
       .onConflict((oc) =>
@@ -305,7 +307,7 @@ export async function upsertConversationTransportBinding(params: {
         inboundActorMode: inboundActorMode,
         inboundActorId: inboundActorId,
         metadata:
-          effectiveMetadata as TableInsert<"conversationTransportBindings">["metadata"],
+          effectiveMetadata as ConversationTransportBindingMetadataInsert,
         createdAt: sql`NOW()`,
       })
       .onConflict((oc) =>
@@ -384,7 +386,7 @@ export async function updateConversationTransportSettings(params: {
     updates.metadata = {
       ...parseJsonObject(existing.metadata),
       ...(params.metadata || {}),
-    } as TableInsert<"conversationTransportBindings">["metadata"]
+    } as ConversationTransportBindingMetadataInsert
   }
 
   // Wrap in a tx so the outbound_enabled change + projection recovery

@@ -1282,10 +1282,13 @@ class ApiClient {
     return { groups: res.data }
   }
 
-  getMyRelationshipProfile(wsId: string): Promise<RelationshipProfileView> {
-    return this.fetch(`/workspaces/${wsId}/me/relationship-profile`)
+  async getMyRelationshipProfile(
+    wsId: string
+  ): Promise<RelationshipProfileView> {
+    const res = await this.fetch(`/workspaces/${wsId}/me/relationship-profile`)
+    return res.data
   }
-  updateMyRelationshipProfile(
+  async updateMyRelationshipProfile(
     wsId: string,
     input: {
       approvalMode: "auto" | "manual"
@@ -1293,20 +1296,25 @@ class ApiClient {
       identitySearchEnabled?: boolean
     }
   ): Promise<RelationshipProfileView> {
-    return this.fetch(`/workspaces/${wsId}/me/relationship-profile`, {
-      method: "PUT",
-      body: JSON.stringify(input),
-    })
+    const res = await this.fetch(
+      `/workspaces/${wsId}/me/relationship-profile`,
+      {
+        method: "PUT",
+        body: JSON.stringify(input),
+      }
+    )
+    return res.data
   }
-  getActorRelationshipProfile(
+  async getActorRelationshipProfile(
     wsId: string,
     actorId: string
   ): Promise<RelationshipProfileView> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/actors/${actorId}/relationship-profile`
     )
+    return res.data
   }
-  updateActorRelationshipProfile(
+  async updateActorRelationshipProfile(
     wsId: string,
     actorId: string,
     input: {
@@ -1316,23 +1324,25 @@ class ApiClient {
       isPublicShared?: boolean
     }
   ): Promise<RelationshipProfileView> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/actors/${actorId}/relationship-profile`,
       {
         method: "PUT",
         body: JSON.stringify(input),
       }
     )
+    return res.data
   }
-  getRemoteAgentRelationshipProfile(
+  async getRemoteAgentRelationshipProfile(
     wsId: string,
     remoteAgentId: string
   ): Promise<RelationshipProfileView> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/remote-agents/${remoteAgentId}/relationship-profile`
     )
+    return res.data
   }
-  updateRemoteAgentRelationshipProfile(
+  async updateRemoteAgentRelationshipProfile(
     wsId: string,
     remoteAgentId: string,
     input: {
@@ -1342,143 +1352,176 @@ class ApiClient {
       isPublicShared?: boolean
     }
   ): Promise<RelationshipProfileView> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/remote-agents/${remoteAgentId}/relationship-profile`,
       {
         method: "PUT",
         body: JSON.stringify(input),
       }
     )
+    return res.data
   }
-  scanRelationshipQr(
+  async scanRelationshipQr(
     wsId: string,
     token: string
   ): Promise<RelationshipScanResponse> {
-    return this.fetch(`/workspaces/${wsId}/relationship-qr/scan`, {
+    const res = await this.fetch(`/workspaces/${wsId}/relationship-qr/scan`, {
       method: "POST",
       body: JSON.stringify({ token }),
     })
+    return res.data
   }
-  searchIdentity(wsId: string, query: string): Promise<IdentitySearchResponse> {
+  async searchIdentity(
+    wsId: string,
+    query: string
+  ): Promise<IdentitySearchResponse> {
     const params = new URLSearchParams()
     if (query.trim()) {
       params.set("q", query.trim())
     }
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/identity-search${
         params.size > 0 ? `?${params.toString()}` : ""
       }`
     )
+    return res.data
   }
-  requestRelationshipByIdentityProfile(
+  async requestRelationshipByIdentityProfile(
     wsId: string,
     profileId: string
   ): Promise<RelationshipScanResponse> {
-    return this.fetch(`/workspaces/${wsId}/identity-search/request`, {
-      method: "POST",
-      body: JSON.stringify({ profileId }),
-    })
+    const res = await this.fetch(
+      `/workspaces/${wsId}/identity-search/request`,
+      {
+        method: "POST",
+        body: JSON.stringify({ profileId }),
+      }
+    )
+    return res.data
   }
-  getContactHub(wsId: string): Promise<ContactHubResponse> {
-    return this.fetch(`/workspaces/${wsId}/contact-hub`)
+  async getContactHub(wsId: string): Promise<ContactHubResponse> {
+    const res = await this.fetch(`/workspaces/${wsId}/contact-hub`)
+    return res.data
   }
-  getContactHubDetail(
+  async getContactHubDetail(
     wsId: string,
     contactKind: ContactHubEntryKind,
     contactId: string
   ): Promise<ContactHubDetailResponse> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/contact-hub/${contactKind}/${contactId}`
     )
+    return res.data
   }
-  getFriendRequests(wsId: string): Promise<FriendRequestListResponse> {
-    return this.fetch(`/workspaces/${wsId}/friend-requests`)
+  async getFriendRequests(wsId: string): Promise<FriendRequestListResponse> {
+    const res = await this.fetch(`/workspaces/${wsId}/friend-requests`)
+    return res.data
   }
-  approveFriendRequest(wsId: string, requestId: string) {
-    return this.fetch(
+  async approveFriendRequest(wsId: string, requestId: string) {
+    const res = await this.fetch(
       `/workspaces/${wsId}/friend-requests/${requestId}/approve`,
       {
         method: "POST",
         body: "{}",
       }
     )
+    return res.data
   }
-  rejectFriendRequest(wsId: string, requestId: string) {
-    return this.fetch(
+  async rejectFriendRequest(wsId: string, requestId: string) {
+    const res = await this.fetch(
       `/workspaces/${wsId}/friend-requests/${requestId}/reject`,
       {
         method: "POST",
         body: "{}",
       }
     )
+    return res.data
   }
-  getActorAccessRequests(
+  async getActorAccessRequests(
     wsId: string
   ): Promise<ActorAccessRequestListResponse> {
-    return this.fetch(`/workspaces/${wsId}/actor-access-requests`)
+    const res = await this.fetch(`/workspaces/${wsId}/actor-access-requests`)
+    return res.data
   }
-  getRemoteAgentAccessRequests(
+  async getRemoteAgentAccessRequests(
     wsId: string
   ): Promise<RemoteAgentAccessRequestListResponse> {
-    return this.fetch(`/workspaces/${wsId}/remote-agent-access-requests`)
+    const res = await this.fetch(
+      `/workspaces/${wsId}/remote-agent-access-requests`
+    )
+    return res.data
   }
-  approveActorAccessRequest(wsId: string, requestId: string) {
-    return this.fetch(
+  async approveActorAccessRequest(wsId: string, requestId: string) {
+    const res = await this.fetch(
       `/workspaces/${wsId}/actor-access-requests/${requestId}/approve`,
       {
         method: "POST",
         body: "{}",
       }
     )
+    return res.data
   }
-  rejectActorAccessRequest(wsId: string, requestId: string) {
-    return this.fetch(
+  async rejectActorAccessRequest(wsId: string, requestId: string) {
+    const res = await this.fetch(
       `/workspaces/${wsId}/actor-access-requests/${requestId}/reject`,
       {
         method: "POST",
         body: "{}",
       }
     )
+    return res.data
   }
-  approveRemoteAgentAccessRequest(wsId: string, requestId: string) {
-    return this.fetch(
+  async approveRemoteAgentAccessRequest(wsId: string, requestId: string) {
+    const res = await this.fetch(
       `/workspaces/${wsId}/remote-agent-access-requests/${requestId}/approve`,
       {
         method: "POST",
         body: "{}",
       }
     )
+    return res.data
   }
-  rejectRemoteAgentAccessRequest(wsId: string, requestId: string) {
-    return this.fetch(
+  async rejectRemoteAgentAccessRequest(wsId: string, requestId: string) {
+    const res = await this.fetch(
       `/workspaces/${wsId}/remote-agent-access-requests/${requestId}/reject`,
       {
         method: "POST",
         body: "{}",
       }
     )
+    return res.data
   }
-  openDirectConversation(
+  async openDirectConversation(
     wsId: string,
     input: {
       contactKind: ContactHubEntryKind
       contactId: string
     }
   ): Promise<DirectConversationOpenResponse> {
-    return this.fetch(`/workspaces/${wsId}/chat/direct-conversations/open`, {
-      method: "POST",
-      body: JSON.stringify(input),
-    })
+    const res = await this.fetch(
+      `/workspaces/${wsId}/chat/direct-conversations/open`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      }
+    )
+    return res.data
   }
 
-  getRemoteAgents(wsId: string): Promise<{ remoteAgents: RemoteAgentView[] }> {
-    return this.fetch(`/workspaces/${wsId}/remote-agents`)
+  async getRemoteAgents(
+    wsId: string
+  ): Promise<{ remoteAgents: RemoteAgentView[] }> {
+    const res = await this.fetch(`/workspaces/${wsId}/remote-agents`)
+    return res.data
   }
-  getRemoteAgent(
+  async getRemoteAgent(
     wsId: string,
     remoteAgentId: string
   ): Promise<{ remoteAgent: RemoteAgentView }> {
-    return this.fetch(`/workspaces/${wsId}/remote-agents/${remoteAgentId}`)
+    const res = await this.fetch(
+      `/workspaces/${wsId}/remote-agents/${remoteAgentId}`
+    )
+    return res.data
   }
   async createRemoteAgent(
     wsId: string,
@@ -1547,7 +1590,7 @@ class ApiClient {
       method: "DELETE",
     })
   }
-  bindRemoteAgent(
+  async bindRemoteAgent(
     wsId: string,
     remoteAgentId: string,
     input: {
@@ -1557,62 +1600,70 @@ class ApiClient {
       localRootPath?: string
     }
   ): Promise<{ remoteAgent: RemoteAgentView }> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/remote-agents/${remoteAgentId}/bind`,
       {
         method: "POST",
         body: JSON.stringify(input),
       }
     )
+    return res.data
   }
-  createRemoteAgentMachinePairingSession(
+  async createRemoteAgentMachinePairingSession(
     wsId: string,
     input: {
       title?: string
       description?: string
     }
   ): Promise<RemoteAgentMachinePairingSessionView> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/remote-agent-machines/pairing-sessions`,
       {
         method: "POST",
         body: JSON.stringify(input),
       }
     )
+    return res.data
   }
-  getRemoteAgentMachines(
+  async getRemoteAgentMachines(
     wsId: string
   ): Promise<{ machines: RemoteAgentMachineView[] }> {
-    return this.fetch(`/workspaces/${wsId}/remote-agent-machines`)
+    const res = await this.fetch(`/workspaces/${wsId}/remote-agent-machines`)
+    return res.data
   }
-  getRemoteAgentMachine(
+  async getRemoteAgentMachine(
     wsId: string,
     machineId: string
   ): Promise<RemoteAgentMachineDetailView> {
-    return this.fetch(`/workspaces/${wsId}/remote-agent-machines/${machineId}`)
+    const res = await this.fetch(
+      `/workspaces/${wsId}/remote-agent-machines/${machineId}`
+    )
+    return res.data
   }
-  getRemoteAgentGroupTaskGrants(
+  async getRemoteAgentGroupTaskGrants(
     wsId: string,
     remoteAgentId: string
   ): Promise<{ grants: RemoteAgentGroupTaskGrantView[] }> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/remote-agents/${remoteAgentId}/group-task-grants`
     )
+    return res.data
   }
-  updateRemoteAgentGroupTaskGrants(
+  async updateRemoteAgentGroupTaskGrants(
     wsId: string,
     remoteAgentId: string,
     input: {
       workspaceMemberIds: string[]
     }
   ): Promise<{ grants: RemoteAgentGroupTaskGrantView[] }> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/remote-agents/${remoteAgentId}/group-task-grants`,
       {
         method: "PUT",
         body: JSON.stringify(input),
       }
     )
+    return res.data
   }
 
   // Actor lanes
@@ -1840,122 +1891,147 @@ class ApiClient {
       throw error
     })
   }
-  getTransportConnectors(
+  async getTransportConnectors(
     wsId: string
   ): Promise<{ connectors: TransportConnectorCapability[] }> {
-    return this.fetch(`/workspaces/${wsId}/im/connectors`)
+    const res = await this.fetch(`/workspaces/${wsId}/im/connectors`)
+    return res.data
   }
-  getTransportAccounts(
+  async getTransportAccounts(
     wsId: string
   ): Promise<{ accounts: TransportAccountSummary[] }> {
-    return this.fetch(`/workspaces/${wsId}/im/accounts`)
+    const res = await this.fetch(`/workspaces/${wsId}/im/accounts`)
+    return res.data
   }
-  getTransportSessions(
+  async getTransportSessions(
     wsId: string
   ): Promise<{ sessions: TransportSessionSummary[] }> {
-    return this.fetch(`/workspaces/${wsId}/im/sessions`)
+    const res = await this.fetch(`/workspaces/${wsId}/im/sessions`)
+    return res.data
   }
-  getTransportExternalUsers(
+  async getTransportExternalUsers(
     wsId: string,
     transportAccountId?: string
   ): Promise<{ externalUsers: TransportExternalUserSummary[] }> {
     const params = new URLSearchParams()
     if (transportAccountId) params.set("transportAccountId", transportAccountId)
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/im/external-users${params.size ? `?${params.toString()}` : ""}`
     )
+    return res.data
   }
-  createFeishuTransportAccount(
+  async createFeishuTransportAccount(
     wsId: string,
     data: Record<string, unknown>
   ): Promise<{ account: TransportAccountSummary }> {
-    return this.fetch(`/workspaces/${wsId}/im/accounts/feishu`, {
+    const res = await this.fetch(`/workspaces/${wsId}/im/accounts/feishu`, {
       method: "POST",
       body: JSON.stringify(data),
     })
+    return res.data
   }
-  updateFeishuTransportAccount(
+  async updateFeishuTransportAccount(
     wsId: string,
     accountId: string,
     data: Record<string, unknown>
   ): Promise<{ account: TransportAccountSummary }> {
-    return this.fetch(`/workspaces/${wsId}/im/accounts/feishu/${accountId}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    })
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/accounts/feishu/${accountId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    )
+    return res.data
   }
-  createWecomTransportAccount(
+  async createWecomTransportAccount(
     wsId: string,
     data: Record<string, unknown>
   ): Promise<{ account: TransportAccountSummary }> {
-    return this.fetch(`/workspaces/${wsId}/im/accounts/wecom`, {
+    const res = await this.fetch(`/workspaces/${wsId}/im/accounts/wecom`, {
       method: "POST",
       body: JSON.stringify(data),
     })
+    return res.data
   }
-  updateWecomTransportAccount(
+  async updateWecomTransportAccount(
     wsId: string,
     accountId: string,
     data: Record<string, unknown>
   ): Promise<{ account: TransportAccountSummary }> {
-    return this.fetch(`/workspaces/${wsId}/im/accounts/wecom/${accountId}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    })
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/accounts/wecom/${accountId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    )
+    return res.data
   }
-  createQqTransportAccount(
+  async createQqTransportAccount(
     wsId: string,
     data: Record<string, unknown>
   ): Promise<{ account: TransportAccountSummary }> {
-    return this.fetch(`/workspaces/${wsId}/im/accounts/qq`, {
+    const res = await this.fetch(`/workspaces/${wsId}/im/accounts/qq`, {
       method: "POST",
       body: JSON.stringify(data),
     })
+    return res.data
   }
-  updateQqTransportAccount(
+  async updateQqTransportAccount(
     wsId: string,
     accountId: string,
     data: Record<string, unknown>
   ): Promise<{ account: TransportAccountSummary }> {
-    return this.fetch(`/workspaces/${wsId}/im/accounts/qq/${accountId}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    })
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/accounts/qq/${accountId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    )
+    return res.data
   }
-  startWeixinQrTransportSession(
+  async startWeixinQrTransportSession(
     wsId: string,
     data: Record<string, unknown>
   ): Promise<{ session: WeixinQrLoginSessionSummary }> {
-    return this.fetch(`/workspaces/${wsId}/im/accounts/weixin/qr`, {
+    const res = await this.fetch(`/workspaces/${wsId}/im/accounts/weixin/qr`, {
       method: "POST",
       body: JSON.stringify(data),
     })
+    return res.data
   }
-  getWeixinQrTransportSession(
+  async getWeixinQrTransportSession(
     wsId: string,
     sessionId: string
   ): Promise<{ session: WeixinQrLoginSessionSummary }> {
-    return this.fetch(`/workspaces/${wsId}/im/accounts/weixin/qr/${sessionId}`)
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/accounts/weixin/qr/${sessionId}`
+    )
+    return res.data
   }
-  startDingtalkDeviceFlow(
+  async startDingtalkDeviceFlow(
     wsId: string,
     data: Record<string, unknown>
   ): Promise<DingtalkDeviceFlowStartResponse> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/im/accounts/dingtalk/device-registration/start`,
       {
         method: "POST",
         body: JSON.stringify(data),
       }
     )
+    return res.data
   }
-  pollDingtalkDeviceFlow(
+  async pollDingtalkDeviceFlow(
     wsId: string,
     sessionId: string
   ): Promise<DingtalkDeviceFlowPollResponse> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/im/accounts/dingtalk/device-registration/${sessionId}`
     )
+    return res.data
   }
   cancelDingtalkDeviceFlow(wsId: string, sessionId: string): Promise<void> {
     return this.fetch(
@@ -1963,99 +2039,134 @@ class ApiClient {
       { method: "DELETE" }
     )
   }
-  createDingtalkAccountManual(
+  async createDingtalkAccountManual(
     wsId: string,
     data: Record<string, unknown>
   ): Promise<{ account: TransportAccountSummary }> {
-    return this.fetch(`/workspaces/${wsId}/im/accounts/dingtalk/manual`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    })
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/accounts/dingtalk/manual`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      }
+    )
+    return res.data
   }
-  getCurrentUserWeixinBinding(
+  async getCurrentUserWeixinBinding(
     wsId: string
   ): Promise<{ binding: CurrentUserWeixinBindingSummary | null }> {
-    return this.fetch(`/workspaces/${wsId}/im/me/weixin-binding`)
+    const res = await this.fetch(`/workspaces/${wsId}/im/me/weixin-binding`)
+    return res.data
   }
-  getCurrentUserWeixinBindingCandidates(
+  async getCurrentUserWeixinBindingCandidates(
     wsId: string
   ): Promise<{ data: Array<Record<string, unknown>> }> {
-    return this.fetch(`/workspaces/${wsId}/im/me/weixin-binding/candidates`)
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/me/weixin-binding/candidates`
+    )
+    // The route now returns { data: { members: [...] } }; preserve this
+    // method's historical { data: [...] } public shape for callers.
+    return { data: res.data.members }
   }
-  startCurrentUserWeixinBindingQr(
+  async startCurrentUserWeixinBindingQr(
     wsId: string
   ): Promise<{ session: WeixinQrLoginSessionSummary }> {
-    return this.fetch(`/workspaces/${wsId}/im/me/weixin-binding/qr`, {
-      method: "POST",
-      body: "{}",
-    })
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/me/weixin-binding/qr`,
+      {
+        method: "POST",
+        body: "{}",
+      }
+    )
+    return res.data
   }
-  getCurrentUserWeixinBindingQr(
+  async getCurrentUserWeixinBindingQr(
     wsId: string,
     sessionId: string
   ): Promise<{ session: WeixinQrLoginSessionSummary }> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/im/me/weixin-binding/qr/${sessionId}`
     )
+    return res.data
   }
-  linkCurrentUserWeixinBinding(
+  async linkCurrentUserWeixinBinding(
     wsId: string
   ): Promise<{ binding: CurrentUserWeixinBindingSummary }> {
-    return this.fetch(`/workspaces/${wsId}/im/me/weixin-binding/link`, {
-      method: "POST",
-      body: "{}",
-    })
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/me/weixin-binding/link`,
+      {
+        method: "POST",
+        body: "{}",
+      }
+    )
+    return res.data
   }
-  setCurrentUserWeixinBindingAutoLink(
+  async setCurrentUserWeixinBindingAutoLink(
     wsId: string,
     workspaceMemberId: string | null
   ): Promise<{ binding: CurrentUserWeixinBindingSummary }> {
-    return this.fetch(`/workspaces/${wsId}/im/me/weixin-binding/auto-link`, {
-      method: "PUT",
-      body: JSON.stringify({ workspaceMemberId }),
-    })
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/me/weixin-binding/auto-link`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ workspaceMemberId }),
+      }
+    )
+    return res.data
   }
-  createTransportAccount(
+  async createTransportAccount(
     wsId: string,
     data: Record<string, unknown>
   ): Promise<{ account: TransportAccountSummary }> {
-    return this.fetch(`/workspaces/${wsId}/im/accounts`, {
+    const res = await this.fetch(`/workspaces/${wsId}/im/accounts`, {
       method: "POST",
       body: JSON.stringify(data),
     })
+    return res.data
   }
-  updateTransportAccount(
+  async updateTransportAccount(
     wsId: string,
     accountId: string,
     data: Record<string, unknown>
   ): Promise<{ account: TransportAccountSummary }> {
-    return this.fetch(`/workspaces/${wsId}/im/accounts/${accountId}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    })
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/accounts/${accountId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    )
+    return res.data
   }
-  updateTransportSessionSettings(
+  async updateTransportSessionSettings(
     wsId: string,
     sessionId: string,
     data: Record<string, unknown>
   ): Promise<{ session: TransportSessionSummary | null }> {
-    return this.fetch(`/workspaces/${wsId}/im/sessions/${sessionId}/settings`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    })
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/sessions/${sessionId}/settings`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    )
+    return res.data
   }
-  setTransportExternalUserWorkspaceMember(
+  async setTransportExternalUserWorkspaceMember(
     wsId: string,
     addressId: string,
     workspaceMemberId: string | null
   ): Promise<{ externalUser: TransportExternalUserSummary }> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/im/external-users/${addressId}/workspace-member`,
       {
         method: "PUT",
         body: JSON.stringify({ workspaceMemberId }),
       }
     )
+    // Route returns { data: { address: ... } }; preserve the method's
+    // historical { externalUser } public shape for callers.
+    return { externalUser: res.data.address }
   }
   // MCP Marketplace
   async getMarketplace(params?: string): Promise<MarketplacePluginView[]> {
@@ -2266,21 +2377,27 @@ class ApiClient {
   // v3.1: manual runtime-authorization grant endpoint. The chat card for
   // active-page / page_id / all_pages browser tools renders "Manual grant
   // required" — this is the endpoint that backs the Settings page.
-  createManualRuntimeAuthorizationGrant(
+  // §5.3: APP route now returns { data: grant }; unwrap and re-wrap to the
+  // method's historical { grant } public shape so callers stay unchanged.
+  async createManualRuntimeAuthorizationGrant(
     wsId: string,
     body: {
       device_capability_id: string
       policy: Record<string, unknown>
     }
   ): Promise<{ grant: Record<string, unknown> }> {
-    return this.fetch(`/workspaces/${wsId}/runtime-authorization-grants`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    })
+    const res = await this.fetch(
+      `/workspaces/${wsId}/runtime-authorization-grants`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      }
+    )
+    return { grant: res.data }
   }
 
   // Automation Event Sources
-  getAutomationEventSources(
+  async getAutomationEventSources(
     wsId: string,
     filters?: {
       status?: "active" | "deprecated" | "disabled" | "archived"
@@ -2295,11 +2412,13 @@ class ApiClient {
     if (filters?.providerRef) params.set("providerRef", filters.providerRef)
     if (filters?.sourceKey) params.set("sourceKey", filters.sourceKey)
     const qs = params.toString()
-    return this.fetch(
+    // §5.3 APP route: unwrap the { data } envelope.
+    const res = await this.fetch(
       `/workspaces/${wsId}/automation-event-sources${qs ? `?${qs}` : ""}`
     )
+    return res.data
   }
-  createAutomationEventSource(
+  async createAutomationEventSource(
     wsId: string,
     data: {
       providerKind: "device" | "webhook" | "internal" | "integration"
@@ -2322,12 +2441,17 @@ class ApiClient {
       metadata?: Record<string, unknown>
     }
   ): Promise<AutomationEventSource> {
-    return this.fetch(`/workspaces/${wsId}/automation-event-sources`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    })
+    // §5.3 APP route: unwrap the { data } envelope.
+    const res = await this.fetch(
+      `/workspaces/${wsId}/automation-event-sources`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      }
+    )
+    return res.data
   }
-  updateAutomationEventSource(
+  async updateAutomationEventSource(
     wsId: string,
     eventSourceId: string,
     data: {
@@ -2341,13 +2465,15 @@ class ApiClient {
       metadata?: Record<string, unknown>
     }
   ): Promise<AutomationEventSource> {
-    return this.fetch(
+    // §5.3 APP route: unwrap the { data } envelope.
+    const res = await this.fetch(
       `/workspaces/${wsId}/automation-event-sources/${eventSourceId}`,
       {
         method: "PUT",
         body: JSON.stringify(data),
       }
     )
+    return res.data
   }
   archiveAutomationEventSource(wsId: string, eventSourceId: string) {
     return this.fetch(
@@ -2357,17 +2483,19 @@ class ApiClient {
       }
     )
   }
-  getAutomationEventSourceOccurrences(
+  async getAutomationEventSourceOccurrences(
     wsId: string,
     eventSourceId: string
   ): Promise<AutomationOccurrence[]> {
-    return this.fetch(
+    // §5.3 APP route: unwrap the { data } envelope.
+    const res = await this.fetch(
       `/workspaces/${wsId}/automation-event-sources/${eventSourceId}/occurrences`
     )
+    return res.data
   }
 
   // Automation Rules / Triggers
-  getAutomations(
+  async getAutomations(
     wsId: string,
     filters?: {
       status?: "active" | "paused" | "error" | "archived"
@@ -2381,42 +2509,62 @@ class ApiClient {
     if (filters?.conversationId)
       params.set("conversationId", filters.conversationId)
     const qs = params.toString()
-    return this.fetch(`/workspaces/${wsId}/automations${qs ? `?${qs}` : ""}`)
+    // §5.3 APP route: unwrap the { data } envelope.
+    const res = await this.fetch(
+      `/workspaces/${wsId}/automations${qs ? `?${qs}` : ""}`
+    )
+    return res.data
   }
-  getAutomation(wsId: string, automationId: string): Promise<AutomationRule> {
-    return this.fetch(`/workspaces/${wsId}/automations/${automationId}`)
+  async getAutomation(
+    wsId: string,
+    automationId: string
+  ): Promise<AutomationRule> {
+    // §5.3 APP route: unwrap the { data } envelope.
+    const res = await this.fetch(
+      `/workspaces/${wsId}/automations/${automationId}`
+    )
+    return res.data
   }
-  createAutomation(
+  async createAutomation(
     wsId: string,
     data: AutomationRuleCreatePayload
   ): Promise<AutomationRule> {
-    return this.fetch(`/workspaces/${wsId}/automations`, {
+    // §5.3 APP route: unwrap the { data } envelope.
+    const res = await this.fetch(`/workspaces/${wsId}/automations`, {
       method: "POST",
       body: JSON.stringify(data),
     })
+    return res.data
   }
-  updateAutomation(
+  async updateAutomation(
     wsId: string,
     automationId: string,
     data: AutomationRuleUpdatePayload
   ): Promise<AutomationRule> {
-    return this.fetch(`/workspaces/${wsId}/automations/${automationId}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    })
+    // §5.3 APP route: unwrap the { data } envelope.
+    const res = await this.fetch(
+      `/workspaces/${wsId}/automations/${automationId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    )
+    return res.data
   }
   deleteAutomation(wsId: string, automationId: string) {
     return this.fetch(`/workspaces/${wsId}/automations/${automationId}`, {
       method: "DELETE",
     })
   }
-  getAutomationExecutions(
+  async getAutomationExecutions(
     wsId: string,
     automationId: string
   ): Promise<AutomationExecution[]> {
-    return this.fetch(
+    // §5.3 APP route: unwrap the { data } envelope.
+    const res = await this.fetch(
       `/workspaces/${wsId}/automations/${automationId}/executions`
     )
+    return res.data
   }
 
   // File Upload
@@ -2476,7 +2624,8 @@ class ApiClient {
         cleanup()
 
         if (request.status >= 200 && request.status < 300) {
-          resolve(request.response as FileRecordView)
+          // §5.3 APP route: upload returns the { data } envelope.
+          resolve((request.response as { data: FileRecordView }).data)
           return
         }
 
@@ -2506,8 +2655,10 @@ class ApiClient {
       request.send(formData)
     })
   }
-  getFileInfo(fileId: string): Promise<FileRecordView> {
-    return this.fetch(`/files/${fileId}/info`)
+  async getFileInfo(fileId: string): Promise<FileRecordView> {
+    // §5.3 APP route: unwrap the { data } envelope, preserve public shape.
+    const res = await this.fetch(`/files/${fileId}/info`)
+    return res.data
   }
 }
 
