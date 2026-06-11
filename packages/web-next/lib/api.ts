@@ -1,13 +1,11 @@
 import { FILE_ORIGIN_SYSTEMS } from "@synapse/shared/constants"
 import { WORKSPACE_APP_KIND } from "@synapse/shared"
 import type {
-  DeviceCapabilitySummaryView,
+  DeviceView,
   DeviceDetailView,
+  DeviceServiceView,
+  DeviceCapabilityView,
   DevicePairingTicketView,
-  DeviceServiceSummaryView,
-  DeviceSummaryView,
-} from "./device-views"
-import type {
   Actor,
   ActorDoc,
   ActorRole,
@@ -2012,7 +2010,7 @@ class ApiClient {
   }
 
   // Devices (v3)
-  listDevices(wsId: string): Promise<{ devices: DeviceSummaryView[] }> {
+  listDevices(wsId: string): Promise<{ devices: DeviceView[] }> {
     return this.fetch(`/workspaces/${wsId}/devices`)
   }
   getDevice(wsId: string, deviceId: string): Promise<DeviceDetailView> {
@@ -2042,7 +2040,7 @@ class ApiClient {
     wsId: string,
     deviceId: string,
     remoteAgentMachineId: string
-  ): Promise<DeviceServiceSummaryView> {
+  ): Promise<DeviceServiceView> {
     return this.fetch(`/workspaces/${wsId}/devices/${deviceId}/services`, {
       method: "POST",
       body: JSON.stringify({

@@ -27,10 +27,12 @@ import {
   parseJsonArray,
   sanitizeSpecialties,
   sortDocs,
-  type ActorPackageRow,
-  type ActorRow,
-  type ActorVersionRow,
 } from "./service.js"
+import type {
+  ActorPackageRow,
+  ActorRow,
+  ActorVersionRow,
+} from "./repo.types.js"
 
 function mapCatalogSourceKind(
   sourceKind: ActorPackageRow["package_source_kind"]

@@ -2354,60 +2354,34 @@ export type PluginAuthChallengeKind = "redirect" | "qr_code" | "none"
 export type AccessTarget = ScopedSubjectTarget
 export type CapabilityAccessTarget = ScopedSubjectTarget
 
-export interface PluginAuthValueSource {
-  source: "config" | "env" | "literal" | "derived"
-  field?: string
-  env?: string
-  value?: unknown
-  name?: "app_base_url" | "oauth_callback_url"
-}
-
-export interface PluginConfigFieldOption {
-  value: string
-  labelI18n: LocalizedText
-  descriptionI18n?: LocalizedText
-}
-
-export interface PluginConfigFieldDefinition {
-  key: string
-  type: PluginConfigFieldType
-  titleI18n: LocalizedText
-  descriptionI18n?: LocalizedText
-  placeholderI18n?: LocalizedText
-  required?: boolean
-  defaultValue?: unknown
-  options?: PluginConfigFieldOption[]
-  secret?: boolean
-  serverManaged?: boolean
-  authBindingKey?: string
-  validation?: Record<string, unknown>
-  metadata?: Record<string, unknown>
-}
-
-export interface PluginInstallAction {
-  kind: PluginInstallActionKind
-  bindingKey?: string
-  url?: string
-  buttonLabelI18n?: LocalizedText
-  metadata?: Record<string, unknown>
-}
-
-export interface PluginInstallStep {
-  id: string
-  kind: PluginInstallStepKind
-  titleI18n: LocalizedText
-  descriptionI18n?: LocalizedText
-  scope: "workspace" | "plugin"
-  fields: string[]
-  optional?: boolean
-  helpUrl?: string
-  helpTextI18n?: LocalizedText
-  action?: PluginInstallAction
-  metadata?: Record<string, unknown>
-}
-
-export interface PluginInstallFlow {
-  steps: PluginInstallStep[]
+// Plugin config-field / install-step / auth-binding / config-state shapes are
+// defined as zod schemas in ../schemas/mcp-plugins.ts (the single source) and
+// re-exported here as inferred types so this pure-type surface stays zod-free.
+// Imported (not just re-exported) so other interfaces in this file can use them.
+// (See the existing view re-exports near the end of this file.)
+import type {
+  PluginAuthValueSource,
+  PluginConfigFieldOption,
+  PluginConfigFieldDefinition,
+  PluginInstallAction,
+  PluginInstallStep,
+  PluginInstallFlow,
+  PluginAuthBindingDefinition,
+  PluginConfigFieldState,
+  McpValidationRule,
+  McpSetupStep,
+} from "../schemas/mcp-plugins.js"
+export type {
+  PluginAuthValueSource,
+  PluginConfigFieldOption,
+  PluginConfigFieldDefinition,
+  PluginInstallAction,
+  PluginInstallStep,
+  PluginInstallFlow,
+  PluginAuthBindingDefinition,
+  PluginConfigFieldState,
+  McpValidationRule,
+  McpSetupStep,
 }
 
 export interface PluginAuthChallenge {
@@ -2417,37 +2391,6 @@ export interface PluginAuthChallenge {
   openMode?: "popup" | "replace"
   expiresAt?: Timestamp
   metadata?: Record<string, unknown>
-}
-
-export interface PluginAuthBindingDefinition {
-  key: string
-  driver: PluginAuthBindingDriverKind
-  fieldKey: string
-  displayNameI18n: LocalizedText
-  descriptionI18n?: LocalizedText
-  prerequisiteFields?: string[]
-  authorizeUrl?: string
-  tokenUrl?: string
-  userInfoUrl?: string
-  scopes?: string[]
-  audience?: string
-  extraAuthorizeParams?: Record<string, string>
-  extraTokenParams?: Record<string, string>
-  profileIdPath?: string
-  profileDisplayNamePath?: string
-  profileAvatarUrlPath?: string
-  reusable?: boolean
-  inputs?: Record<string, PluginAuthValueSource>
-  metadata?: Record<string, unknown>
-}
-
-export interface PluginConfigFieldState {
-  key: string
-  isConfigured: boolean
-  maskedValue?: string
-  authConnectionId?: string
-  accountDisplayName?: string
-  updatedAt?: Timestamp
 }
 
 export interface AccessPolicy {
@@ -3016,37 +2959,6 @@ export interface McpEventLog {
   eventType: string
   eventData: Record<string, unknown>
   createdAt: Timestamp
-}
-
-export interface McpValidationRule {
-  field: string
-  rule:
-    | "required"
-    | "pattern"
-    | "url"
-    | "min_length"
-    | "max_length"
-    | "prefix"
-    | "enum"
-  value?: string | number | string[]
-  message: string
-}
-
-export interface McpSetupStep {
-  id: string
-  kind?: PluginInstallStepKind
-  title?: string
-  titleI18n?: LocalizedText
-  description?: string
-  descriptionI18n?: LocalizedText
-  scope: "workspace" | "plugin"
-  fields: string[]
-  optional?: boolean
-  helpUrl?: string
-  helpText?: string
-  helpTextI18n?: LocalizedText
-  action?: PluginInstallAction
-  metadata?: Record<string, unknown>
 }
 
 export type ConversationParticipantType =
@@ -4614,3 +4526,10 @@ export type {
   PluginCategoryView,
   PluginInstallationDetailView,
 } from "../schemas/mcp-plugins.js"
+export type {
+  DeviceView,
+  DeviceServiceView,
+  DeviceCapabilityView,
+  DeviceDetailView,
+  DevicePairingTicketView,
+} from "../schemas/devices.js"

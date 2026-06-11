@@ -270,60 +270,12 @@ export type SynapseError = z.infer<typeof SynapseErrorSchema>
 
 // ───────────────────────────── REST DTOs ─────────────────────────────────────
 
-export const DeviceSummarySchema = z.object({
-  id: z.uuid(),
-  workspace_id: z.uuid(),
-  title: z.string(),
-  host_kind: z.enum(HOST_KINDS),
-  host_provider: z.string().nullable(),
-  device_type: z.enum(DEVICE_TYPES),
-  platform: z.string().nullable(),
-  trust_status: z.enum(DEVICE_TRUST_STATUSES),
-  last_seen_at: IsoInstantStringSchema.nullable(),
-  last_connected_at: IsoInstantStringSchema.nullable(),
-})
-export type DeviceSummary = z.infer<typeof DeviceSummarySchema>
-
-export const DeviceServiceSummarySchema = z.object({
-  id: z.uuid(),
-  device_id: z.uuid(),
-  service_kind: z.enum(DEVICE_SERVICE_KINDS),
-  version: z.string().nullable(),
-  status: z.enum(DEVICE_SERVICE_STATUSES),
-  last_seen_at: IsoInstantStringSchema.nullable(),
-  remote_agent_machine_id: z.uuid().nullable(),
-})
-export type DeviceServiceSummary = z.infer<typeof DeviceServiceSummarySchema>
-
-export const DeviceCapabilitySummarySchema = z.object({
-  id: z.uuid(),
-  workspace_id: z.uuid(),
-  exposure_id: z.uuid(),
-  // v3.1: stable_key (e.g. "builtin/browser/navigation") so UI can group /
-  // filter without guessing from display_name. Needed by the Settings →
-  // Runtime Authorizations page to scope the operation chip list to
-  // operations the exposure can actually request.
-  exposure_stable_key: z.string(),
-  display_name: z.string(),
-  transport: z.enum(DEVICE_EXPOSURE_TRANSPORTS),
-  builtin_kind: z.enum(DEVICE_BUILTIN_KINDS).nullable(),
-  runtime_status: z.enum(DEVICE_EXPOSURE_RUNTIME_STATUSES),
-  // v3.1: exposure-level metadata pass-through. chrome-devtools-mcp provider
-  // sets metadata.enabled and metadata.disabledReason so the dashboard can
-  // render "Coming soon" / disabled rows without guessing.
-  metadata: z.record(z.string(), z.unknown()).nullable().optional(),
-})
-export type DeviceCapabilitySummary = z.infer<
-  typeof DeviceCapabilitySummarySchema
->
-
-export const DeviceDetailSchema = DeviceSummarySchema.extend({
-  description: z.string().nullable(),
-  owner_workspace_member_id: z.uuid().nullable(),
-  services: z.array(DeviceServiceSummarySchema),
-  capabilities: z.array(DeviceCapabilitySummarySchema),
-})
-export type DeviceDetail = z.infer<typeof DeviceDetailSchema>
+// Device read/management views (list / detail / service / capability) are
+// app-facing camelCase contracts owned by @synapse/shared
+// (schemas/devices.ts), consumed by web-next + the consumer-side device-sdk.
+// They are NOT machine/wire shapes, so they no longer live here (master plan
+// §2.3-6). The signed/handshake wire shapes (pairing/bootstrap/control-plane)
+// remain below.
 
 export const CreateCloudDeviceInputSchema = z.object({
   workspace_id: z.uuid(),

@@ -1,5 +1,6 @@
 export * from "./chat-content-block.js"
 export * from "./datetime.js"
+export * from "./devices.js"
 export * from "./mcp-plugins.js"
 export * from "./model-groups.js"
 export * from "./workspace-invites.js"

@@ -18,7 +18,8 @@
     "test": "tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
-    "@synapse/device-protocol": "*"
+    "@synapse/device-protocol": "*",
+    "@synapse/shared": "*"
   },
   "devDependencies": {
     "typescript": "^5.4.0"

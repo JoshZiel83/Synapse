@@ -15,6 +15,7 @@ import type {
   ModelGroupView,
 } from "@synapse/shared/types"
 import {
+  requireInstantDate,
   serializeInstant,
   serializeOptionalInstant,
 } from "../../infrastructure/datetime.js"
@@ -161,14 +162,12 @@ export function presentGroupRow(row: ModelGroupRow): ModelGroupView {
     isDefault: Boolean(row.isDefault),
     isActive: Boolean(row.isEnabled),
     createdByWorkspaceMemberId: row.createdByWorkspaceMemberId || null,
-    createdAt:
-      serializeOptionalInstant(row.createdAt) ||
-      serializeOptionalInstant(row.updatedAt) ||
-      serializeInstant(new Date(0)),
-    updatedAt:
-      serializeOptionalInstant(row.updatedAt) ||
-      serializeOptionalInstant(row.createdAt) ||
-      serializeInstant(new Date(0)),
+    createdAt: serializeInstant(
+      requireInstantDate(row.createdAt, "model group created_at")
+    ),
+    updatedAt: serializeInstant(
+      requireInstantDate(row.updatedAt, "model group updated_at")
+    ),
   }
 }
 
@@ -177,10 +176,15 @@ export function presentGroupItem(row: ModelGroupItemRow): ModelGroupItemView {
   const providerKind =
     row.providerKind || getProviderKindForVendor(row.vendor || "anthropic")
 
+  const itemId = row.itemId ?? row.id
+  if (!itemId) {
+    throw new Error("model group item row is missing binding id")
+  }
+
   return {
-    id: row.itemId ?? row.id ?? "",
+    id: itemId,
     groupId: row.groupId,
-    bindingId: row.bindingId ?? row.itemId ?? row.id ?? "",
+    bindingId: row.bindingId ?? itemId,
     currentVersionId: row.currentVersionId || null,
     displayName: row.displayName || "",
     priority: row.priority ?? 0,
@@ -270,14 +274,22 @@ export type ModelGroupItemVersionRow = {
 export function presentItemVersion(
   row: ModelGroupItemVersionRow
 ): ModelGroupItemVersionView {
+  if (!row.bindingId) {
+    throw new Error("model binding version row is missing binding_id")
+  }
+  if (!row.vendor) {
+    throw new Error("model binding version row is missing vendor")
+  }
+  if (!row.baseUrl) {
+    throw new Error("model binding version row is missing base_url")
+  }
   return {
     id: row.id,
-    bindingId: row.bindingId || "",
+    bindingId: row.bindingId,
     version: row.version ?? 0,
-    providerKind:
-      row.providerKind || getProviderKindForVendor(row.vendor || "anthropic"),
-    vendor: row.vendor || "",
-    baseUrl: row.baseUrl || "",
+    providerKind: row.providerKind || getProviderKindForVendor(row.vendor),
+    vendor: row.vendor,
+    baseUrl: row.baseUrl,
     modelName: row.modelName || null,
     maxOutputTokens: row.maxOutputTokens ?? null,
     capabilityTags: row.capabilityTags || [],

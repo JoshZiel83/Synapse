@@ -111,31 +111,50 @@ function subjectRefToTarget(input: {
   scopeWorkspaceId: string | null
   scopeConversationId: string | null
 }): CapabilityAccessTarget {
+  const requireId = (value: string | null, label: string): string => {
+    if (!value) {
+      throw new Error(`access subject ${input.kind} is missing ${label}`)
+    }
+    return value
+  }
+
   const subject: CapabilityAccessTarget["subject"] =
     input.kind === SUBJECT_KIND.WORKSPACE
-      ? { kind: SUBJECT_KIND.WORKSPACE, workspaceId: input.workspaceId || "" }
+      ? {
+          kind: SUBJECT_KIND.WORKSPACE,
+          workspaceId: requireId(input.workspaceId, "workspaceId"),
+        }
       : input.kind === SUBJECT_KIND.WORKSPACE_MEMBER
         ? {
             kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-            memberId: input.workspaceMemberId || "",
+            memberId: requireId(input.workspaceMemberId, "memberId"),
           }
         : input.kind === SUBJECT_KIND.ACTOR
-          ? { kind: SUBJECT_KIND.ACTOR, actorId: input.actorId || "" }
+          ? {
+              kind: SUBJECT_KIND.ACTOR,
+              actorId: requireId(input.actorId, "actorId"),
+            }
           : input.kind === SUBJECT_KIND.REMOTE_AGENT
             ? {
                 kind: SUBJECT_KIND.REMOTE_AGENT,
-                remoteAgentId: input.remoteAgentId || "",
+                remoteAgentId: requireId(input.remoteAgentId, "remoteAgentId"),
               }
             : {
                 kind: SUBJECT_KIND.CONVERSATION,
-                conversationId: input.conversationId || "",
+                conversationId: requireId(
+                  input.conversationId,
+                  "conversationId"
+                ),
               }
 
   const scope =
     input.scopeKind === SUBJECT_KIND.CONVERSATION
       ? {
           kind: SUBJECT_KIND.CONVERSATION,
-          conversationId: input.scopeConversationId || "",
+          conversationId: requireId(
+            input.scopeConversationId,
+            "scope conversationId"
+          ),
         }
       : undefined
 

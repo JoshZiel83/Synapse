@@ -7,24 +7,33 @@ import { randomUUID, randomBytes, createHash } from "node:crypto"
 import { sql } from "kysely"
 import {
   DEVICE_PAIRING_MODES,
-  DEVICE_PAIRING_STATUSES,
   DEVICE_SERVICE_KINDS,
   DEVICE_TYPES,
-  type DeviceCapabilitySummary,
-  type DeviceDetail,
   type DevicePairingMode,
   type DeviceServiceKind,
-  type DeviceServiceSummary,
-  type DeviceSummary,
+  type DeviceTrustStatus,
   type DeviceType,
   type HostKind,
 } from "@synapse/device-protocol"
-import {
-  dateToIsoInstant,
-  type IsoInstantString,
-} from "@synapse/shared/datetime"
-import type { OneClickInstallCommands } from "@synapse/shared"
+import { dateToIsoInstant } from "@synapse/shared/datetime"
+import type {
+  DeviceDetailView,
+  DevicePairingTicketView,
+  DeviceServiceView,
+  DeviceView,
+  OneClickInstallCommands,
+} from "@synapse/shared"
 import { db } from "../../infrastructure/database/kysely.js"
+import {
+  presentDevice,
+  presentDeviceDetail,
+  presentDeviceService,
+} from "./presenter.js"
+import type {
+  DeviceCapabilityRecord,
+  DeviceServiceRecord,
+  DeviceSummaryRecord,
+} from "./repo.types.js"
 import { config } from "../../config/index.js"
 import {
   buildDeviceInstallCommands,
@@ -60,12 +69,7 @@ export class DeviceModuleError extends Error {
   }
 }
 
-function toIsoInstant(value: Date | null | undefined): IsoInstantString | null {
-  if (!value) return null
-  return dateToIsoInstant(value)
-}
-
-function serializeDeviceSummary(row: {
+function toDeviceSummaryRecord(row: {
   id: string
   workspaceId: string
   title: string
@@ -73,27 +77,25 @@ function serializeDeviceSummary(row: {
   hostProvider: string | null
   deviceType: DeviceType
   platform: string | null
-  trustStatus: "pending" | "trusted" | "revoked"
+  trustStatus: DeviceTrustStatus
   lastSeenAt: Date | null
   lastConnectedAt: Date | null
-}): DeviceSummary {
+}): DeviceSummaryRecord {
   return {
     id: row.id,
-    workspace_id: row.workspaceId,
+    workspaceId: row.workspaceId,
     title: row.title,
-    host_kind: row.hostKind,
-    host_provider: row.hostProvider,
-    device_type: row.deviceType,
+    hostKind: row.hostKind,
+    hostProvider: row.hostProvider,
+    deviceType: row.deviceType,
     platform: row.platform,
-    trust_status: row.trustStatus,
-    last_seen_at: toIsoInstant(row.lastSeenAt),
-    last_connected_at: toIsoInstant(row.lastConnectedAt),
+    trustStatus: row.trustStatus,
+    lastSeenAt: row.lastSeenAt,
+    lastConnectedAt: row.lastConnectedAt,
   }
 }
 
-export async function listDevices(
-  workspaceId: string
-): Promise<DeviceSummary[]> {
+export async function listDevices(workspaceId: string): Promise<DeviceView[]> {
   const rows = await db
     .selectFrom("devices")
     .selectAll()
@@ -102,25 +104,27 @@ export async function listDevices(
     .orderBy("createdAt", "desc")
     .execute()
   return rows.map((row) =>
-    serializeDeviceSummary({
-      id: row.id as string,
-      workspaceId: row.workspaceId as string,
-      title: row.title as string,
-      hostKind: row.hostKind as HostKind,
-      hostProvider: row.hostProvider as string | null,
-      deviceType: row.deviceType as DeviceType,
-      platform: row.platform as string | null,
-      trustStatus: row.trustStatus as "pending" | "trusted" | "revoked",
-      lastSeenAt: row.lastSeenAt as Date | null,
-      lastConnectedAt: row.lastConnectedAt as Date | null,
-    })
+    presentDevice(
+      toDeviceSummaryRecord({
+        id: row.id as string,
+        workspaceId: row.workspaceId as string,
+        title: row.title as string,
+        hostKind: row.hostKind as HostKind,
+        hostProvider: row.hostProvider as string | null,
+        deviceType: row.deviceType as DeviceType,
+        platform: row.platform as string | null,
+        trustStatus: row.trustStatus as DeviceTrustStatus,
+        lastSeenAt: row.lastSeenAt as Date | null,
+        lastConnectedAt: row.lastConnectedAt as Date | null,
+      })
+    )
   )
 }
 
 export async function getDevice(
   workspaceId: string,
   deviceId: string
-): Promise<DeviceDetail> {
+): Promise<DeviceDetailView> {
   const deviceRow = await db
     .selectFrom("devices")
     .selectAll()
@@ -142,15 +146,14 @@ export async function getDevice(
     .where("deviceId", "=", deviceId)
     .orderBy("createdAt", "asc")
     .execute()
-  const services: DeviceServiceSummary[] = serviceRows.map((row) => ({
+  const services: DeviceServiceRecord[] = serviceRows.map((row) => ({
     id: row.id as string,
-    device_id: row.deviceId as string,
-    service_kind: row.serviceKind as DeviceServiceKind,
+    deviceId: row.deviceId as string,
+    serviceKind: row.serviceKind as DeviceServiceKind,
     version: (row.version as string | null) ?? null,
-    status: row.status as "starting" | "online" | "degraded" | "offline",
-    last_seen_at: toIsoInstant(row.lastSeenAt as Date | null),
-    remote_agent_machine_id:
-      (row.remoteAgentMachineId as string | null) ?? null,
+    status: row.status as DeviceServiceRecord["status"],
+    lastSeenAt: row.lastSeenAt as Date | null,
+    remoteAgentMachineId: (row.remoteAgentMachineId as string | null) ?? null,
   }))
 
   const capabilityRows = await db
@@ -172,22 +175,21 @@ export async function getDevice(
     .where("app.deletedAt", "is", null)
     .where("app.status", "=", "active")
     .execute()
-  const capabilities: DeviceCapabilitySummary[] = capabilityRows.map((row) => ({
+  const capabilities: DeviceCapabilityRecord[] = capabilityRows.map((row) => ({
     id: row.id as string,
-    workspace_id: row.workspaceId as string,
-    exposure_id: row.exposureId as string,
-    exposure_stable_key: row.exposureStableKey as string,
-    display_name: row.displayName as string,
-    transport: row.transport as DeviceCapabilitySummary["transport"],
-    builtin_kind:
-      (row.builtinKind as DeviceCapabilitySummary["builtin_kind"]) ?? null,
-    runtime_status:
-      row.runtimeStatus as DeviceCapabilitySummary["runtime_status"],
+    workspaceId: row.workspaceId as string,
+    exposureId: row.exposureId as string,
+    exposureStableKey: row.exposureStableKey as string,
+    displayName: row.displayName as string,
+    transport: row.transport as DeviceCapabilityRecord["transport"],
+    builtinKind:
+      (row.builtinKind as DeviceCapabilityRecord["builtinKind"]) ?? null,
+    runtimeStatus: row.runtimeStatus as DeviceCapabilityRecord["runtimeStatus"],
     metadata: (row.exposureMetadata as Record<string, unknown> | null) ?? null,
   }))
 
-  return {
-    ...serializeDeviceSummary({
+  return presentDeviceDetail({
+    ...toDeviceSummaryRecord({
       id: deviceRow.id as string,
       workspaceId: deviceRow.workspaceId as string,
       title: deviceRow.title as string,
@@ -195,16 +197,16 @@ export async function getDevice(
       hostProvider: deviceRow.hostProvider as string | null,
       deviceType: deviceRow.deviceType as DeviceType,
       platform: deviceRow.platform as string | null,
-      trustStatus: deviceRow.trustStatus as "pending" | "trusted" | "revoked",
+      trustStatus: deviceRow.trustStatus as DeviceTrustStatus,
       lastSeenAt: deviceRow.lastSeenAt as Date | null,
       lastConnectedAt: deviceRow.lastConnectedAt as Date | null,
     }),
     description: (deviceRow.description as string | null) ?? null,
-    owner_workspace_member_id:
+    ownerWorkspaceMemberId:
       (deviceRow.ownerWorkspaceMemberId as string | null) ?? null,
     services,
     capabilities,
-  }
+  })
 }
 
 export async function deleteDevice(
@@ -248,27 +250,7 @@ function generateBootstrapToken(): { token: string; hash: Buffer } {
   return { token, hash }
 }
 
-export interface StartPairingResult {
-  pairing_session_id: string
-  mode: DevicePairingMode
-  pairing_code: string | null
-  /**
-   * For cloud_bootstrap mode only: the one-time token to inject into the
-   * sandbox env. NOT persisted server-side (only its hash is). Caller MUST
-   * relay it to the sandbox in the same request.
-   */
-  bootstrap_token: string | null
-  expires_at: IsoInstantString
-  verification_uri: string | null
-  verification_uri_complete: string | null
-  status: (typeof DEVICE_PAIRING_STATUSES)[number]
-  /**
-   * One-click bootstrap installer commands ({unix, windows}) embedding the
-   * pairing code. Present for local_qr (code) pairings when a private registry
-   * is configured; null otherwise.
-   */
-  one_click_commands: OneClickInstallCommands | null
-}
+export type StartPairingResult = DevicePairingTicketView
 
 export interface StartPairingInput {
   workspaceId: string
@@ -346,17 +328,17 @@ export async function startPairing(
     .execute()
 
   return {
-    pairing_session_id: sessionId,
+    pairingSessionId: sessionId,
     mode: input.mode,
-    pairing_code: pairingCode,
-    bootstrap_token: bootstrapToken,
-    expires_at: dateToIsoInstant(expiresAt),
-    verification_uri: null,
-    verification_uri_complete: null,
+    pairingCode: pairingCode,
+    bootstrapToken: bootstrapToken,
+    expiresAt: dateToIsoInstant(expiresAt),
+    verificationUri: null,
+    verificationUriComplete: null,
     status: "pending",
     // One-click bootstrap only applies to the local_qr code flow (pairingCode
     // present). cloud_bootstrap / service_join don't use the device installer.
-    one_click_commands:
+    oneClickCommands:
       pairingCode !== null ? buildDeviceOneClick(pairingCode) : null,
   }
 }
@@ -571,7 +553,7 @@ export interface ClaimDaemonInput {
 
 export async function claimRemoteAgentDaemon(
   input: ClaimDaemonInput
-): Promise<DeviceServiceSummary> {
+): Promise<DeviceServiceView> {
   return db.transaction().execute(async (trx) => {
     const device = await trx
       .selectFrom("devices")
@@ -642,16 +624,15 @@ export async function claimRemoteAgentDaemon(
       .where("id", "=", serviceId)
       .executeTakeFirstOrThrow()
 
-    return {
+    return presentDeviceService({
       id: row.id as string,
-      device_id: row.deviceId as string,
-      service_kind: row.serviceKind as DeviceServiceKind,
+      deviceId: row.deviceId as string,
+      serviceKind: row.serviceKind as DeviceServiceKind,
       version: (row.version as string | null) ?? null,
-      status: row.status as "starting" | "online" | "degraded" | "offline",
-      last_seen_at: toIsoInstant(row.lastSeenAt as Date | null),
-      remote_agent_machine_id:
-        (row.remoteAgentMachineId as string | null) ?? null,
-    }
+      status: row.status as DeviceServiceRecord["status"],
+      lastSeenAt: row.lastSeenAt as Date | null,
+      remoteAgentMachineId: (row.remoteAgentMachineId as string | null) ?? null,
+    })
   })
 }
 

@@ -7,7 +7,7 @@ import { ArrowLeft, Loader2, Plug, Trash2 } from "lucide-react"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { api } from "@/lib/api"
 import { Button } from "@/components/ui/button"
-import type { DeviceDetailView } from "@/lib/device-views"
+import type { DeviceDetailView } from "@synapse/shared"
 
 export default function DeviceDetailPage() {
   const { workspaceId } = useWorkspace()
@@ -81,7 +81,7 @@ export default function DeviceDetailPage() {
           <div>
             <h1 className="text-xl font-semibold">{device.title}</h1>
             <p className="text-sm text-muted-foreground">
-              {device.host_kind} · {device.device_type} ·{" "}
+              {device.hostKind} · {device.deviceType} ·{" "}
               {device.platform ?? "unknown platform"}
             </p>
           </div>
@@ -102,14 +102,14 @@ export default function DeviceDetailPage() {
               <div className="flex items-center gap-3">
                 <Plug className="size-4 text-muted-foreground" />
                 <div>
-                  <div className="font-medium">{service.service_kind}</div>
+                  <div className="font-medium">{service.serviceKind}</div>
                   <div className="text-xs text-muted-foreground">
                     {service.status} · {service.version ?? "no version"}
                   </div>
                 </div>
               </div>
               <span className="text-xs text-muted-foreground">
-                {service.last_seen_at ?? "never"}
+                {service.lastSeenAt ?? "never"}
               </span>
             </li>
           ))}
@@ -142,7 +142,7 @@ export default function DeviceDetailPage() {
               >
                 <div>
                   <div className="font-medium">
-                    {cap.display_name}
+                    {cap.displayName}
                     {isDisabled ? (
                       <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 uppercase dark:bg-amber-900/50 dark:text-amber-300">
                         Coming soon
@@ -151,14 +151,14 @@ export default function DeviceDetailPage() {
                   </div>
                   <div className="text-xs text-muted-foreground">
                     {cap.transport}
-                    {cap.builtin_kind ? ` · ${cap.builtin_kind}` : ""}
+                    {cap.builtinKind ? ` · ${cap.builtinKind}` : ""}
                     {isDisabled && meta?.disabledReason
                       ? ` · ${meta.disabledReason}`
                       : ""}
                   </div>
                 </div>
                 <span className="text-xs text-muted-foreground">
-                  {cap.runtime_status}
+                  {cap.runtimeStatus}
                 </span>
               </li>
             )

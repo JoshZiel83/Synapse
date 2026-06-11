@@ -113,16 +113,16 @@ function selectSandboxBackend(
         serverBaseUrl: spec.serverOrigin,
         title: spec.title ?? `Sandbox ${spec.sessionId.slice(0, 8)}`,
       })
-      if (!pairing.pairing_code) {
+      if (!pairing.pairingCode) {
         throw new SandboxServiceError(
-          "startPairing returned no pairing_code",
+          "startPairing returned no pairingCode",
           500
         )
       }
       return {
-        pairingCode: pairing.pairing_code,
+        pairingCode: pairing.pairingCode,
         brokerDir: brokerDirFor(spec.sessionId),
-        pairingSessionId: pairing.pairing_session_id,
+        pairingSessionId: pairing.pairingSessionId,
       }
     },
   })

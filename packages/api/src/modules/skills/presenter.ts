@@ -16,6 +16,7 @@ import {
   type IsoInstantString,
 } from "@synapse/shared/datetime"
 import {
+  requireInstantDate,
   serializeInstant,
   serializeOptionalInstant,
 } from "../../infrastructure/datetime.js"
@@ -30,20 +31,23 @@ import {
   resolveInstalledSkillSourceConversationTypeMask,
   skillBindingToAccessTarget,
   visibleRowToAccessTarget,
-  type InstalledSkillRow,
-  type InstallationSummary,
-  type SkillAccessRow,
-  type SkillPackageRow,
-  type SkillSnapshotFileRow,
-  type SkillSnapshotJoinRow,
-  type VisibleSkillRow,
 } from "./service.js"
+import type {
+  InstallationSummary,
+  InstalledSkillRow,
+  SkillAccessRow,
+  SkillPackageRow,
+  SkillSnapshotFileRow,
+  SkillSnapshotJoinRow,
+  VisibleSkillRow,
+} from "./repo.types.js"
 
 /**
  * Skills presentation layer: DB row → app-facing view DTO. Owns the outward
  * semantic transforms (Date → IsoInstantString) so the service/controller never
  * call serializeInstant (guard-layering r3). Row inputs are taken structurally
- * via `import type` from service.ts — this file must not import generated/db.
+ * via `import type` from repo.types.ts (the repo layer owns the record shapes) —
+ * this file must not import generated/db.
  */
 
 export function buildSkillAttachmentFromCatalogFile(
@@ -54,8 +58,7 @@ export function buildSkillAttachmentFromCatalogFile(
     path: row.path,
     mediaType: row.media_type || undefined,
     contentBlocks: normalizeStoredBlocks(row.content_blocks),
-    createdAt:
-      serializeOptionalInstant(row.created_at) || dateToIsoInstant(new Date(0)),
+    createdAt: serializeInstant(row.created_at),
     updatedAt: serializeInstant(row.updated_at),
   }
 }
@@ -84,14 +87,12 @@ export function buildMirrorSourceSummary(row: SkillSnapshotJoinRow) {
     sourceWarnings: row.mirror_source_warnings || [],
     lastError: row.mirror_last_error || undefined,
     lastSyncedAt: serializeOptionalInstant(row.mirror_last_synced_at),
-    createdAt:
-      serializeOptionalInstant(row.mirror_created_at) ||
-      serializeOptionalInstant(row.snapshot_created_at) ||
-      dateToIsoInstant(new Date(0)),
-    updatedAt:
-      serializeOptionalInstant(row.mirror_updated_at) ||
-      serializeOptionalInstant(row.snapshot_created_at) ||
-      dateToIsoInstant(new Date(0)),
+    createdAt: serializeInstant(
+      requireInstantDate(row.mirror_created_at, "mirror source created_at")
+    ),
+    updatedAt: serializeInstant(
+      requireInstantDate(row.mirror_updated_at, "mirror source updated_at")
+    ),
   }
 }
 

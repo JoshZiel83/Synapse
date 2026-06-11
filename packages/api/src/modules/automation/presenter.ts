@@ -33,7 +33,7 @@ import type {
   AutomationRuleRow,
   AutomationTriggerRow as AutomationTriggerDbRow,
   AutomationWebhookEndpointRow,
-} from "./service.js"
+} from "./repo.types.js"
 
 /**
  * Automation presentation layer: DB row → app-facing view. Owns the outward

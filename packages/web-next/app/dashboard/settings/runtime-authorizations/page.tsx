@@ -19,7 +19,7 @@ import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { ApiError, api } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import type { DeviceDetailView, DeviceSummaryView } from "@/lib/device-views"
+import type { DeviceDetailView, DeviceView } from "@synapse/shared"
 
 // Mirrors the maps in @synapse/device-protocol/browser-tools. Duplicated
 // here intentionally so the settings page doesn't pull the whole protocol
@@ -74,7 +74,7 @@ interface CapabilityRow {
 
 export default function RuntimeAuthorizationsSettingsPage() {
   const { workspaceId } = useWorkspace()
-  const [devices, setDevices] = useState<DeviceSummaryView[] | null>(null)
+  const [devices, setDevices] = useState<DeviceView[] | null>(null)
   const [capabilities, setCapabilities] = useState<CapabilityRow[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [errorDetails, setErrorDetails] = useState<unknown>(null)
@@ -108,9 +108,9 @@ export default function RuntimeAuthorizationsSettingsPage() {
                 deviceId: device.id,
                 deviceTitle: device.title,
                 capabilityId: cap.id,
-                displayName: cap.display_name,
-                builtinKind: cap.builtin_kind ?? null,
-                exposureStableKey: cap.exposure_stable_key ?? null,
+                displayName: cap.displayName,
+                builtinKind: cap.builtinKind ?? null,
+                exposureStableKey: cap.exposureStableKey ?? null,
                 exposureMetadata: cap.metadata ?? null,
               })
             }
