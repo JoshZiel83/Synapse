@@ -131,97 +131,97 @@ export interface ConversationItemPartInput {
 }
 
 type ConversationBaseRow = {
-  conversation_id: string
+  conversationId: string
   kind: ConversationKind
-  is_im: boolean
+  isIm: boolean
   title: string | null
-  created_at: Date
-  updated_at: Date
-  unread_count: number | string
+  createdAt: Date
+  updatedAt: Date
+  unreadCount: number | string
   muted: boolean
   archived: boolean
-  pinned_sort_key: Date | null
-  last_visible_item_id: string | null
-  last_visible_sequence: number | string
-  last_visible_at: Date | null
+  pinnedSortKey: Date | null
+  lastVisibleItemId: string | null
+  lastVisibleSequence: number | string
+  lastVisibleAt: Date | null
 }
 
 type ParticipantRow = {
   id: string
-  conversation_id: string
-  participant_type: ParticipantKind
-  workspace_member_id: string | null
-  actor_id: string | null
-  remote_agent_id: string | null
-  actor_join_version_id: string | null
-  display_name: string | null
-  role_key: string
+  conversationId: string
+  participantType: ParticipantKind
+  workspaceMemberId: string | null
+  actorId: string | null
+  remoteAgentId: string | null
+  actorJoinVersionId: string | null
+  displayName: string | null
+  roleKey: string
   state: "active" | "left" | "removed"
   metadata: unknown
-  joined_at: Date
-  left_at: Date | null
-  user_id: string | null
-  user_name: string | null
-  participant_name: string | null
-  participant_title: string | null
-  participant_role: string | null
-  actor_docs: unknown
-  actor_can_represent_user: boolean | null
-  actor_specialties: unknown
-  actor_config: unknown
-  actor_current_version: number | string | null
-  participant_avatar_emoji: string | null
-  participant_avatar_file_id: string | null
-  user_avatar_file_id: string | null
-  transport_address_id: string | null
-  transport_kind: string | null
-  transport_external_id: string | null
-  transport_display_name: string | null
-  linked_user_id: string | null
-  linked_user_name: string | null
-  linked_user_avatar_file_id: string | null
-  session_id: string | null
-  session_status: string | null
+  joinedAt: Date
+  leftAt: Date | null
+  userId: string | null
+  userName: string | null
+  participantName: string | null
+  participantTitle: string | null
+  participantRole: string | null
+  actorDocs: unknown
+  actorCanRepresentUser: boolean | null
+  actorSpecialties: unknown
+  actorConfig: unknown
+  actorCurrentVersion: number | string | null
+  participantAvatarEmoji: string | null
+  participantAvatarFileId: string | null
+  userAvatarFileId: string | null
+  transportAddressId: string | null
+  transportKind: string | null
+  transportExternalId: string | null
+  transportDisplayName: string | null
+  linkedUserId: string | null
+  linkedUserName: string | null
+  linkedUserAvatarFileId: string | null
+  sessionId: string | null
+  sessionStatus: string | null
 }
 
 type ItemRow = {
   id: string
-  conversation_id: string
-  session_id?: string | null
-  turn_id?: string | null
-  client_message_id: string | null
+  conversationId: string
+  sessionId?: string | null
+  turnId?: string | null
+  clientMessageId: string | null
   scope: "shared" | "private"
   surface: "visible" | "internal"
-  item_type: "message" | "event" | "summary" | "control"
+  itemType: "message" | "event" | "summary" | "control"
   subtype: string
   role: "user" | "assistant" | "system" | "tool"
-  author_participant_id: string | null
-  reply_to_item_id: string | null
-  caused_by_item_id: string | null
-  event_payload?: unknown
-  event_timeline_policy?: string | null
-  event_context_policy?: string | null
+  authorParticipantId: string | null
+  replyToItemId: string | null
+  causedByItemId: string | null
+  eventPayload?: unknown
+  eventTimelinePolicy?: string | null
+  eventContextPolicy?: string | null
   metadata: unknown
   sequence: string | number
-  created_at: Date
+  createdAt: Date
 }
 
 type ItemPartRow = {
-  item_id: string
+  itemId: string
   ordinal: number
-  part_type: "text" | "file_ref" | "json"
-  text_value: string | null
-  ref_path: string | null
-  ref_sha256: string | null
-  json_value: unknown
-  mime_type: string | null
+  partType: "text" | "file_ref" | "json"
+  textValue: string | null
+  refPath: string | null
+  refSha256: string | null
+  jsonValue: unknown
+  mimeType: string | null
   name: string | null
   metadata: unknown
 }
 
 type ParticipantLinkRow = {
-  item_id: string
-  target_participant_id: string
+  itemId: string
+  targetParticipantId: string
 }
 
 interface ConversationItemDetailBase {
@@ -476,66 +476,60 @@ function asParticipantTransportKind(
 }
 
 function participantDisplayName(row: ParticipantRow): string {
-  if (row.participant_type === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER) {
-    if (typeof row.user_name === "string" && row.user_name.trim()) {
-      return row.user_name.trim()
+  if (row.participantType === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER) {
+    if (typeof row.userName === "string" && row.userName.trim()) {
+      return row.userName.trim()
     }
   }
-  if (row.participant_type === CONVERSATION_PARTICIPANT_TYPE.ACTOR) {
-    if (
-      typeof row.participant_name === "string" &&
-      row.participant_name.trim()
-    ) {
-      return row.participant_name.trim()
+  if (row.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR) {
+    if (typeof row.participantName === "string" && row.participantName.trim()) {
+      return row.participantName.trim()
     }
   }
-  if (row.participant_type === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT) {
-    if (
-      typeof row.participant_name === "string" &&
-      row.participant_name.trim()
-    ) {
-      return row.participant_name.trim()
+  if (row.participantType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT) {
+    if (typeof row.participantName === "string" && row.participantName.trim()) {
+      return row.participantName.trim()
     }
   }
   if (
-    row.participant_type === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL &&
-    typeof row.transport_display_name === "string" &&
-    row.transport_display_name.trim()
+    row.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL &&
+    typeof row.transportDisplayName === "string" &&
+    row.transportDisplayName.trim()
   ) {
-    return row.transport_display_name.trim()
+    return row.transportDisplayName.trim()
   }
   if (
-    row.participant_type === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL &&
-    typeof row.display_name === "string" &&
-    row.display_name.trim()
+    row.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL &&
+    typeof row.displayName === "string" &&
+    row.displayName.trim()
   ) {
-    return row.display_name.trim()
+    return row.displayName.trim()
   }
-  if (typeof row.linked_user_name === "string" && row.linked_user_name.trim()) {
-    return row.linked_user_name.trim()
+  if (typeof row.linkedUserName === "string" && row.linkedUserName.trim()) {
+    return row.linkedUserName.trim()
   }
-  if (typeof row.user_name === "string" && row.user_name.trim()) {
-    return row.user_name.trim()
+  if (typeof row.userName === "string" && row.userName.trim()) {
+    return row.userName.trim()
   }
-  if (typeof row.participant_name === "string" && row.participant_name.trim()) {
-    return row.participant_name.trim()
+  if (typeof row.participantName === "string" && row.participantName.trim()) {
+    return row.participantName.trim()
   }
-  if (typeof row.display_name === "string" && row.display_name.trim()) {
-    return row.display_name.trim()
+  if (typeof row.displayName === "string" && row.displayName.trim()) {
+    return row.displayName.trim()
   }
   return "Unknown"
 }
 
 function participantAvatarUrl(row: ParticipantRow): string | undefined {
   const fileId =
-    row.participant_avatar_file_id ??
-    row.user_avatar_file_id ??
-    row.linked_user_avatar_file_id
+    row.participantAvatarFileId ??
+    row.userAvatarFileId ??
+    row.linkedUserAvatarFileId
   return fileId ? getFileUrlById(fileId) : undefined
 }
 
 function participantAvatarEmoji(row: ParticipantRow): string | undefined {
-  return row.participant_avatar_emoji ?? undefined
+  return row.participantAvatarEmoji ?? undefined
 }
 
 function previewTextFromItem(item: ChatConversationItem | undefined): string {
@@ -669,39 +663,6 @@ function runOnDb<T extends object = Record<string, unknown>>(
   return runOn<T>(db, text, params)
 }
 
-// The Kysely executor's CamelCasePlugin (maintainNestedObjectKeys: true)
-// camelCases the top-level keys of EVERY result row — including the raw
-// `runOn`/`CompiledQuery.raw` path. `ParticipantRow` is a wide (~32 field)
-// snake_case shape read in dozens of places across this module, so rather than
-// churn every reader we invert the plugin's transform on the boundary: snake
-// back the top-level keys so the returned rows match the declared snake_case
-// `ParticipantRow` type at runtime. `metadata`/`actor_*` JSONB *values* are not
-// touched (only the row's own top-level keys).
-const camelToSnakeKey = (key: string): string =>
-  key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)
-
-function snakeCaseRowKeys<T extends object>(row: Record<string, unknown>): T {
-  const out: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(row)) {
-    out[camelToSnakeKey(key)] = value
-  }
-  return out as T
-}
-
-/**
- * `runOn` for raw queries whose declared `<RowType>` is snake_case and is read
- * with snake_case keys throughout the module. Re-snakes the camelCased keys the
- * Kysely executor produces so the runtime rows match the type.
- */
-async function runOnSnake<T extends object = Record<string, unknown>>(
-  executor: Executor,
-  text: string,
-  params: readonly unknown[] = []
-): Promise<{ rows: T[]; rowCount?: number | null }> {
-  const result = await runOn<Record<string, unknown>>(executor, text, params)
-  return { rows: result.rows.map((row) => snakeCaseRowKeys<T>(row)) }
-}
-
 async function getWorkspaceMemberIdentityOrThrow(
   workspaceId: string,
   userId: string
@@ -827,28 +788,28 @@ async function listConversationParticipantRows(
     ? "COALESCE(cp.actor_join_version_id, current_version.id)"
     : "current_version.id"
 
-  const result = await runOnSnake<ParticipantRow>(
+  const result = await runOn<ParticipantRow>(
     queryable,
     `
       SELECT
         cp.id,
-        cp.conversation_id,
-        cpsubj.kind AS participant_type,
-        cpsubj.workspace_member_id AS workspace_member_id,
-        cpsubj.actor_id AS actor_id,
-        cpsubj.remote_agent_id AS remote_agent_id,
-        cp.actor_join_version_id,
-        cp.display_name,
-        cp.role_key,
+        cp.conversation_id AS "conversationId",
+        cpsubj.kind AS "participantType",
+        cpsubj.workspace_member_id AS "workspaceMemberId",
+        cpsubj.actor_id AS "actorId",
+        cpsubj.remote_agent_id AS "remoteAgentId",
+        cp.actor_join_version_id AS "actorJoinVersionId",
+        cp.display_name AS "displayName",
+        cp.role_key AS "roleKey",
         cp.state,
         cp.metadata,
-        cp.joined_at,
-        cp.left_at,
-        wm.user_id,
-        u.name AS user_name,
-        ${participantDisplayNameExpr} AS participant_name,
-        ${participantTitleExpr} AS participant_title,
-        ${participantRoleExpr} AS participant_role,
+        cp.joined_at AS "joinedAt",
+        cp.left_at AS "leftAt",
+        wm.user_id AS "userId",
+        u.name AS "userName",
+        ${participantDisplayNameExpr} AS "participantName",
+        ${participantTitleExpr} AS "participantTitle",
+        ${participantRoleExpr} AS "participantRole",
         CASE
           WHEN ra.id IS NOT NULL THEN '[]'::jsonb
           ELSE COALESCE(
@@ -868,23 +829,23 @@ async function listConversationParticipantRows(
             ),
             '[]'::jsonb
           )
-        END AS actor_docs,
-        ${participantCanRepresentExpr} AS actor_can_represent_user,
-        ${participantSpecialtiesExpr} AS actor_specialties,
-        ${participantConfigExpr} AS actor_config,
-        ${participantCurrentVersionExpr} AS actor_current_version,
-        a.avatar_emoji AS participant_avatar_emoji,
-        a.avatar_file_id AS participant_avatar_file_id,
-        u.avatar_file_id AS user_avatar_file_id,
-        primary_address.id AS transport_address_id,
-        primary_address.transport_kind,
-        primary_address.external_id AS transport_external_id,
-        primary_address.display_name AS transport_display_name,
-        primary_address.linked_user_id,
-        linked_user.name AS linked_user_name,
-        linked_user.avatar_file_id AS linked_user_avatar_file_id,
-        ls.id AS session_id,
-        COALESCE(ls.status::text, rab.runtime_state::text) AS session_status
+        END AS "actorDocs",
+        ${participantCanRepresentExpr} AS "actorCanRepresentUser",
+        ${participantSpecialtiesExpr} AS "actorSpecialties",
+        ${participantConfigExpr} AS "actorConfig",
+        ${participantCurrentVersionExpr} AS "actorCurrentVersion",
+        a.avatar_emoji AS "participantAvatarEmoji",
+        a.avatar_file_id AS "participantAvatarFileId",
+        u.avatar_file_id AS "userAvatarFileId",
+        primary_address.id AS "transportAddressId",
+        primary_address.transport_kind AS "transportKind",
+        primary_address.external_id AS "transportExternalId",
+        primary_address.display_name AS "transportDisplayName",
+        primary_address.linked_user_id AS "linkedUserId",
+        linked_user.name AS "linkedUserName",
+        linked_user.avatar_file_id AS "linkedUserAvatarFileId",
+        ls.id AS "sessionId",
+        COALESCE(ls.status::text, rab.runtime_state::text) AS "sessionStatus"
       FROM conversation_participants cp
       LEFT JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
       LEFT JOIN workspace_members wm ON wm.id = cpsubj.workspace_member_id
@@ -938,45 +899,45 @@ async function getWorkspaceMemberConversationParticipantRow(
   conversationId: string,
   workspaceMemberId: string
 ) {
-  const result = await runOnSnake<ParticipantRow>(
+  const result = await runOn<ParticipantRow>(
     queryable,
     `
       SELECT
         cp.id,
-        cp.conversation_id,
-        cpsubj.kind AS participant_type,
-        cpsubj.workspace_member_id AS workspace_member_id,
-        cpsubj.actor_id AS actor_id,
-        cpsubj.remote_agent_id AS remote_agent_id,
-        cp.actor_join_version_id,
-        cp.display_name,
-        cp.role_key,
+        cp.conversation_id AS "conversationId",
+        cpsubj.kind AS "participantType",
+        cpsubj.workspace_member_id AS "workspaceMemberId",
+        cpsubj.actor_id AS "actorId",
+        cpsubj.remote_agent_id AS "remoteAgentId",
+        cp.actor_join_version_id AS "actorJoinVersionId",
+        cp.display_name AS "displayName",
+        cp.role_key AS "roleKey",
         cp.state,
         cp.metadata,
-        cp.joined_at,
-        cp.left_at,
-        wm.user_id,
-        u.name AS user_name,
-        COALESCE(remote_agent_app.display_name, actor_app.display_name) AS participant_name,
-        COALESCE(ra.title, a.title) AS participant_title,
-        COALESCE(CASE WHEN ra.id IS NOT NULL THEN 'remote_agent' END, a.role::text) AS participant_role,
-        '[]'::jsonb AS actor_docs,
-        a.can_represent_user AS actor_can_represent_user,
-        a.specialties AS actor_specialties,
-        a.config AS actor_config,
-        a.current_version AS actor_current_version,
-        COALESCE(ra.avatar_emoji, a.avatar_emoji) AS participant_avatar_emoji,
-        COALESCE(ra.avatar_file_id, a.avatar_file_id) AS participant_avatar_file_id,
-        u.avatar_file_id AS user_avatar_file_id,
-        primary_address.id AS transport_address_id,
-        primary_address.transport_kind,
-        primary_address.external_id AS transport_external_id,
-        primary_address.display_name AS transport_display_name,
-        primary_address.linked_user_id,
-        linked_user.name AS linked_user_name,
-        linked_user.avatar_file_id AS linked_user_avatar_file_id,
-        ls.id AS session_id,
-        COALESCE(ls.status::text, rab.runtime_state::text) AS session_status
+        cp.joined_at AS "joinedAt",
+        cp.left_at AS "leftAt",
+        wm.user_id AS "userId",
+        u.name AS "userName",
+        COALESCE(remote_agent_app.display_name, actor_app.display_name) AS "participantName",
+        COALESCE(ra.title, a.title) AS "participantTitle",
+        COALESCE(CASE WHEN ra.id IS NOT NULL THEN 'remote_agent' END, a.role::text) AS "participantRole",
+        '[]'::jsonb AS "actorDocs",
+        a.can_represent_user AS "actorCanRepresentUser",
+        a.specialties AS "actorSpecialties",
+        a.config AS "actorConfig",
+        a.current_version AS "actorCurrentVersion",
+        COALESCE(ra.avatar_emoji, a.avatar_emoji) AS "participantAvatarEmoji",
+        COALESCE(ra.avatar_file_id, a.avatar_file_id) AS "participantAvatarFileId",
+        u.avatar_file_id AS "userAvatarFileId",
+        primary_address.id AS "transportAddressId",
+        primary_address.transport_kind AS "transportKind",
+        primary_address.external_id AS "transportExternalId",
+        primary_address.display_name AS "transportDisplayName",
+        primary_address.linked_user_id AS "linkedUserId",
+        linked_user.name AS "linkedUserName",
+        linked_user.avatar_file_id AS "linkedUserAvatarFileId",
+        ls.id AS "sessionId",
+        COALESCE(ls.status::text, rab.runtime_state::text) AS "sessionStatus"
       FROM conversation_participants cp
       LEFT JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
       LEFT JOIN workspace_members wm ON wm.id = cpsubj.workspace_member_id
@@ -1030,22 +991,22 @@ async function getConversationBaseRow(
     queryable,
     `
       SELECT
-        c.id AS conversation_id,
+        c.id AS "conversationId",
         c.kind,
         EXISTS (
           SELECT 1 FROM conversation_transport_bindings b
           WHERE b.conversation_id = c.id
-        ) AS is_im,
+        ) AS "isIm",
         c.title,
-        c.created_at,
-        c.updated_at,
-        v.unread_count,
+        c.created_at AS "createdAt",
+        c.updated_at AS "updatedAt",
+        v.unread_count AS "unreadCount",
         v.muted,
         v.archived,
-        v.pinned_sort_key,
-        v.last_visible_item_id,
-        v.last_visible_sequence,
-        v.last_visible_at
+        v.pinned_sort_key AS "pinnedSortKey",
+        v.last_visible_item_id AS "lastVisibleItemId",
+        v.last_visible_sequence AS "lastVisibleSequence",
+        v.last_visible_at AS "lastVisibleAt"
       FROM workspace_member_conversation_views v
       INNER JOIN conversations c ON c.id = v.conversation_id
       WHERE v.workspace_member_id = $1
@@ -1074,22 +1035,22 @@ async function listConversationBaseRows(
     queryable,
     `
       SELECT
-        c.id AS conversation_id,
+        c.id AS "conversationId",
         c.kind,
         EXISTS (
           SELECT 1 FROM conversation_transport_bindings b
           WHERE b.conversation_id = c.id
-        ) AS is_im,
+        ) AS "isIm",
         c.title,
-        c.created_at,
-        c.updated_at,
-        v.unread_count,
+        c.created_at AS "createdAt",
+        c.updated_at AS "updatedAt",
+        v.unread_count AS "unreadCount",
         v.muted,
         v.archived,
-        v.pinned_sort_key,
-        v.last_visible_item_id,
-        v.last_visible_sequence,
-        v.last_visible_at
+        v.pinned_sort_key AS "pinnedSortKey",
+        v.last_visible_item_id AS "lastVisibleItemId",
+        v.last_visible_sequence AS "lastVisibleSequence",
+        v.last_visible_at AS "lastVisibleAt"
       FROM workspace_member_conversation_views v
       INNER JOIN conversations c ON c.id = v.conversation_id
       WHERE v.workspace_member_id = $1
@@ -1123,24 +1084,24 @@ async function listItemRowsByIds(queryable: Executor, itemIds: string[]) {
     `
       SELECT
         id,
-        conversation_id,
-        session_id,
-        turn_id,
-        client_message_id,
+        conversation_id AS "conversationId",
+        session_id AS "sessionId",
+        turn_id AS "turnId",
+        client_message_id AS "clientMessageId",
         scope,
         surface,
-        item_type,
+        item_type AS "itemType",
         subtype,
         role,
-        author_participant_id,
-        reply_to_item_id,
-        caused_by_item_id,
-        event_payload,
-        event_timeline_policy,
-        event_context_policy,
+        author_participant_id AS "authorParticipantId",
+        reply_to_item_id AS "replyToItemId",
+        caused_by_item_id AS "causedByItemId",
+        event_payload AS "eventPayload",
+        event_timeline_policy AS "eventTimelinePolicy",
+        event_context_policy AS "eventContextPolicy",
         metadata,
         sequence,
-        created_at
+        created_at AS "createdAt"
       FROM conversation_items
       WHERE id = ANY($1::uuid[])
     `,
@@ -1164,14 +1125,14 @@ async function hydrateConversationItems(
       queryable,
       `
         SELECT
-          item_id,
+          item_id AS "itemId",
           ordinal,
-          part_type,
-          text_value,
-          ref_path,
-          ref_sha256,
-          json_value,
-          mime_type,
+          part_type AS "partType",
+          text_value AS "textValue",
+          ref_path AS "refPath",
+          ref_sha256 AS "refSha256",
+          json_value AS "jsonValue",
+          mime_type AS "mimeType",
           name,
           metadata
         FROM conversation_item_parts
@@ -1183,7 +1144,7 @@ async function hydrateConversationItems(
     runOn<ParticipantLinkRow>(
       queryable,
       `
-        SELECT item_id, target_participant_id
+        SELECT item_id AS "itemId", target_participant_id AS "targetParticipantId"
         FROM conversation_item_targets
         WHERE item_id = ANY($1::uuid[])
         ORDER BY item_id ASC, target_participant_id ASC
@@ -1194,16 +1155,16 @@ async function hydrateConversationItems(
 
   const partsByItem = new Map<string, ItemPartRow[]>()
   for (const row of partsResult.rows) {
-    const current = partsByItem.get(row.item_id) ?? []
+    const current = partsByItem.get(row.itemId) ?? []
     current.push(row)
-    partsByItem.set(row.item_id, current)
+    partsByItem.set(row.itemId, current)
   }
 
   const restrictedAudienceByItem = new Map<string, string[]>()
   for (const row of restrictedAudienceResult.rows) {
-    const current = restrictedAudienceByItem.get(row.item_id) ?? []
-    current.push(row.target_participant_id)
-    restrictedAudienceByItem.set(row.item_id, current)
+    const current = restrictedAudienceByItem.get(row.itemId) ?? []
+    current.push(row.targetParticipantId)
+    restrictedAudienceByItem.set(row.itemId, current)
   }
 
   const itemMap = new Map<string, HydratedConversationItemRecord>()
@@ -1215,23 +1176,23 @@ async function hydrateConversationItems(
     )
     itemMap.set(row.id, {
       id: row.id,
-      conversationId: row.conversation_id,
+      conversationId: row.conversationId,
       sequence: toNumber(row.sequence),
-      clientMessageId: row.client_message_id ?? undefined,
-      itemType: row.item_type,
+      clientMessageId: row.clientMessageId ?? undefined,
+      itemType: row.itemType,
       role: row.role,
       subtype: row.subtype,
       scope: row.scope,
       surface: row.surface,
-      authorParticipantId: row.author_participant_id ?? undefined,
-      replyToItemId: row.reply_to_item_id ?? undefined,
-      causedByItemId: row.caused_by_item_id ?? undefined,
+      authorParticipantId: row.authorParticipantId ?? undefined,
+      replyToItemId: row.replyToItemId ?? undefined,
+      causedByItemId: row.causedByItemId ?? undefined,
       content: extractText(contentBlocks),
       contentBlocks,
       metadata: asJsonRecord(row.metadata),
       restrictedAudienceParticipantIds:
         restrictedAudienceByItem.get(row.id) ?? [],
-      createdAt: presentInstant(row.created_at),
+      createdAt: presentInstant(row.createdAt),
     })
   }
 
@@ -1256,17 +1217,17 @@ async function loadConversationViews(
     return [] as ChatConversationView[]
   }
 
-  const ids = baseRows.map((row) => row.conversation_id)
+  const ids = baseRows.map((row) => row.conversationId)
   const participants = await listConversationParticipantRows(queryable, ids)
   const participantsByConversation = new Map<string, ParticipantRow[]>()
   for (const row of participants) {
-    const current = participantsByConversation.get(row.conversation_id) ?? []
+    const current = participantsByConversation.get(row.conversationId) ?? []
     current.push(row)
-    participantsByConversation.set(row.conversation_id, current)
+    participantsByConversation.set(row.conversationId, current)
   }
 
   const lastItemIds = baseRows
-    .map((row) => row.last_visible_item_id)
+    .map((row) => row.lastVisibleItemId)
     .filter((value): value is string => Boolean(value))
   const lastItemRows = await listItemRowsByIds(queryable, [
     ...new Set(lastItemIds),
@@ -1276,22 +1237,22 @@ async function loadConversationViews(
 
   return baseRows.map((row) => {
     const conversationParticipants =
-      participantsByConversation.get(row.conversation_id) ?? []
+      participantsByConversation.get(row.conversationId) ?? []
     const mappedParticipants = conversationParticipants.map(
       participantRowToChatParticipantSummary
     )
     const viewerMembership = conversationParticipants.find(
       (participant) =>
         participant.state === "active" &&
-        participant.participant_type ===
+        participant.participantType ===
           CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
-        participant.workspace_member_id === workspaceMemberId
+        participant.workspaceMemberId === workspaceMemberId
     )
     const viewerConversationRole =
-      viewerMembership?.role_key === "owner" ||
-      viewerMembership?.role_key === "admin" ||
-      viewerMembership?.role_key === "member"
-        ? viewerMembership.role_key
+      viewerMembership?.roleKey === "owner" ||
+      viewerMembership?.roleKey === "admin" ||
+      viewerMembership?.roleKey === "member"
+        ? viewerMembership.roleKey
         : "member"
     const canManageConversation =
       row.kind !== CONVERSATION_KIND.DIRECT &&
@@ -1301,7 +1262,7 @@ async function loadConversationViews(
     const canManageParticipants = canManageConversation
     const status = conversationParticipants.some(
       (participant) =>
-        participant.actor_id && participant.session_status !== "closed"
+        participant.actorId && participant.sessionStatus !== "closed"
     )
       ? "active"
       : "completed"
@@ -1313,28 +1274,28 @@ async function loadConversationViews(
     })
     const presentation = buildConversationPresentation({
       kind: row.kind,
-      isIm: row.is_im,
+      isIm: row.isIm,
       participants: mappedParticipants,
       viewerWorkspaceMemberId: workspaceMemberId,
     })
-    const lastItem = row.last_visible_item_id
-      ? lastItemById.get(row.last_visible_item_id)
+    const lastItem = row.lastVisibleItemId
+      ? lastItemById.get(row.lastVisibleItemId)
       : undefined
     return {
-      conversationId: row.conversation_id,
+      conversationId: row.conversationId,
       workspaceId,
       title,
       kind: row.kind,
-      isIm: row.is_im,
+      isIm: row.isIm,
       status,
-      unreadCount: toNumber(row.unread_count),
+      unreadCount: toNumber(row.unreadCount),
       muted: Boolean(row.muted),
       archived: Boolean(row.archived),
-      pinnedSortKey: row.pinned_sort_key
-        ? presentInstant(row.pinned_sort_key)
+      pinnedSortKey: row.pinnedSortKey
+        ? presentInstant(row.pinnedSortKey)
         : undefined,
-      updatedAt: presentInstant(row.updated_at),
-      createdAt: presentInstant(row.created_at),
+      updatedAt: presentInstant(row.updatedAt),
+      createdAt: presentInstant(row.createdAt),
       participants: mappedParticipants,
       presentation,
       permissions: {
@@ -1398,10 +1359,10 @@ async function countUnreadVisibleMessages(
   conversationId: string,
   participantId: string
 ) {
-  const result = await runOnSnake<{ unread_count: string | number }>(
+  const result = await runOn<{ unreadCount: string | number }>(
     queryable,
     `
-      SELECT COUNT(*)::int AS unread_count
+      SELECT COUNT(*)::int AS "unreadCount"
       FROM conversation_items ci
       WHERE ci.conversation_id = $1
         AND ci.item_type = 'message'
@@ -1431,7 +1392,7 @@ async function countUnreadVisibleMessages(
     [conversationId, participantId]
   )
 
-  return toNumber(result.rows[0]?.unread_count)
+  return toNumber(result.rows[0]?.unreadCount)
 }
 
 async function syncVisibleSharedItem(params: {
@@ -1456,7 +1417,7 @@ async function syncVisibleSharedItem(params: {
 
   const visibleHumanParticipants = params.activeParticipants.filter(
     (participant) =>
-      participant.workspace_member_id &&
+      participant.workspaceMemberId &&
       effectiveVisibleParticipantIds.includes(participant.id)
   )
 
@@ -1467,7 +1428,7 @@ async function syncVisibleSharedItem(params: {
       participant.id
     )
     await upsertConversationView(params.queryable, {
-      workspaceMemberId: participant.workspace_member_id!,
+      workspaceMemberId: participant.workspaceMemberId!,
       conversationId: params.conversationId,
       lastVisibleItemId: params.item.id,
       lastVisibleSequence: params.item.sequence,
@@ -1483,7 +1444,7 @@ async function syncVisibleSharedItem(params: {
     for (const participant of visibleHumanParticipants) {
       await appendWorkspaceMemberSyncEvent(params.queryable, {
         workspaceId: params.workspaceId,
-        workspaceMemberId: participant.workspace_member_id!,
+        workspaceMemberId: participant.workspaceMemberId!,
         conversationId: params.conversationId,
         itemId: params.item.id,
         eventType: "conversation.item.created",
@@ -1498,7 +1459,7 @@ async function syncVisibleSharedItem(params: {
       params.queryable,
       params.workspaceId,
       visibleHumanParticipants
-        .map((participant) => participant.workspace_member_id)
+        .map((participant) => participant.workspaceMemberId)
         .filter((value): value is string => Boolean(value)),
       params.conversationId
     )
@@ -1766,7 +1727,7 @@ async function requireConversationManagement(
       "Direct conversations cannot be managed"
     )
   }
-  const roleKey = access.participant.role_key
+  const roleKey = access.participant.roleKey
   if (roleKey !== "owner" && roleKey !== "admin") {
     throw createChatError(
       403,
@@ -1819,12 +1780,12 @@ function resolveMentionedConversationParticipant(
   if (mention.workspaceMemberId) {
     return activeParticipants.find(
       (participant) =>
-        participant.workspace_member_id === mention.workspaceMemberId
+        participant.workspaceMemberId === mention.workspaceMemberId
     )
   }
   if (mention.actorId) {
     return activeParticipants.find(
-      (participant) => participant.actor_id === mention.actorId
+      (participant) => participant.actorId === mention.actorId
     )
   }
   if (mention.externalUserKey) {
@@ -1925,24 +1886,24 @@ async function validateConversationReplyTarget(
     `
       SELECT
         id,
-        conversation_id,
-        session_id,
-        turn_id,
-        client_message_id,
+        conversation_id AS "conversationId",
+        session_id AS "sessionId",
+        turn_id AS "turnId",
+        client_message_id AS "clientMessageId",
         scope,
         surface,
-        item_type,
+        item_type AS "itemType",
         subtype,
         role,
-        author_participant_id,
-        reply_to_item_id,
-        caused_by_item_id,
-        event_payload,
-        event_timeline_policy,
-        event_context_policy,
+        author_participant_id AS "authorParticipantId",
+        reply_to_item_id AS "replyToItemId",
+        caused_by_item_id AS "causedByItemId",
+        event_payload AS "eventPayload",
+        event_timeline_policy AS "eventTimelinePolicy",
+        event_context_policy AS "eventContextPolicy",
         metadata,
         sequence,
-        created_at
+        created_at AS "createdAt"
       FROM conversation_items
       WHERE id = $1
         AND conversation_id = $2
@@ -2157,17 +2118,16 @@ async function listMentionedParticipantIdsForItem(
   queryable: Executor,
   itemId: string
 ) {
-  const result = await runOnSnake<{ mentioned_participant_id: string }>(
+  const result = await runBuilder(
     queryable,
-    `
-      SELECT mentioned_participant_id
-      FROM conversation_item_mentions
-      WHERE item_id = $1
-      ORDER BY ordinal ASC, mentioned_participant_id ASC
-    `,
-    [itemId]
+    queryable
+      .selectFrom("conversationItemMentions")
+      .select("mentionedParticipantId")
+      .where("itemId", "=", itemId)
+      .orderBy("ordinal", "asc")
+      .orderBy("mentionedParticipantId", "asc")
   )
-  return result.rows.map((row) => row.mentioned_participant_id)
+  return result.rows.map((row) => row.mentionedParticipantId)
 }
 
 function resolveActorWakeParticipants(params: {
@@ -2181,8 +2141,8 @@ function resolveActorWakeParticipants(params: {
     (participant) =>
       participant.id !== params.authorParticipantId &&
       participant.state === "active" &&
-      typeof participant.actor_id === "string" &&
-      participant.actor_id.length > 0
+      typeof participant.actorId === "string" &&
+      participant.actorId.length > 0
   )
   if (actorParticipants.length === 0) {
     return []
@@ -2239,7 +2199,7 @@ export async function enqueueActorWakeupsForConversationMessage(params: {
     return [] as PendingActorWakeup[]
   }
   if (
-    itemRow.item_type !== "message" ||
+    itemRow.itemType !== "message" ||
     itemRow.scope !== "shared" ||
     itemRow.surface !== "visible"
   ) {
@@ -2249,7 +2209,7 @@ export async function enqueueActorWakeupsForConversationMessage(params: {
   const restrictedAudienceResult = await runOn<ParticipantLinkRow>(
     queryable,
     `
-      SELECT item_id, target_participant_id
+      SELECT item_id AS "itemId", target_participant_id AS "targetParticipantId"
       FROM conversation_item_targets
       WHERE item_id = $1
     `,
@@ -2281,13 +2241,13 @@ export async function enqueueActorWakeupsForConversationMessage(params: {
   ).then((participants) =>
     participants.filter((participant) => participant.state === "active")
   )
-  const authorParticipant = itemRow.author_participant_id
+  const authorParticipant = itemRow.authorParticipantId
     ? activeParticipants.find(
-        (participant) => participant.id === itemRow.author_participant_id
+        (participant) => participant.id === itemRow.authorParticipantId
       )
     : undefined
   const sourceParticipantType =
-    params.sourceParticipantType ?? authorParticipant?.participant_type
+    params.sourceParticipantType ?? authorParticipant?.participantType
   if (!sourceParticipantType || sourceParticipantType === "system") {
     return [] as PendingActorWakeup[]
   }
@@ -2296,14 +2256,14 @@ export async function enqueueActorWakeupsForConversationMessage(params: {
     queryable,
     params.itemId
   )
-  const replyAuthorParticipantId = itemRow.reply_to_item_id
-    ? ((await listItemRowsByIds(queryable, [itemRow.reply_to_item_id]))[0]
-        ?.author_participant_id ?? null)
+  const replyAuthorParticipantId = itemRow.replyToItemId
+    ? ((await listItemRowsByIds(queryable, [itemRow.replyToItemId]))[0]
+        ?.authorParticipantId ?? null)
     : null
   const wakeParticipants = resolveActorWakeParticipants({
     conversationKind,
     activeParticipants,
-    authorParticipantId: itemRow.author_participant_id ?? undefined,
+    authorParticipantId: itemRow.authorParticipantId ?? undefined,
     mentionedParticipantIds,
     replyAuthorParticipantId,
   })
@@ -2318,10 +2278,10 @@ export async function enqueueActorWakeupsForConversationMessage(params: {
   const sourceParticipantId =
     params.sourceParticipantId ??
     (sourceParticipantType === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
-      ? (authorParticipant?.workspace_member_id ?? undefined)
+      ? (authorParticipant?.workspaceMemberId ?? undefined)
       : sourceParticipantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
-        ? (authorParticipant?.actor_id ?? undefined)
-        : (itemRow.author_participant_id ?? undefined))
+        ? (authorParticipant?.actorId ?? undefined)
+        : (itemRow.authorParticipantId ?? undefined))
   const sourceName =
     params.sourceName ??
     (authorParticipant ? participantDisplayName(authorParticipant) : undefined)
@@ -2338,13 +2298,13 @@ export async function enqueueActorWakeupsForConversationMessage(params: {
   const pendingWakeups: PendingActorWakeup[] = []
 
   for (const participant of wakeParticipants) {
-    if (!participant.actor_id) {
+    if (!participant.actorId) {
       continue
     }
     const ensuredContext = await ensureConversationActorSessionContext(
       {
         workspaceId: params.workspaceId,
-        actorId: participant.actor_id,
+        actorId: participant.actorId,
         conversationId: params.conversationId,
         trigger: sourceType,
       },
@@ -2352,7 +2312,7 @@ export async function enqueueActorWakeupsForConversationMessage(params: {
     )
     await enqueueSessionWakeup({
       sessionId: ensuredContext.sessionId,
-      actorId: participant.actor_id,
+      actorId: participant.actorId,
       workspaceId: params.workspaceId,
       sourceType,
       sourceItemId: params.itemId,
@@ -2368,7 +2328,7 @@ export async function enqueueActorWakeupsForConversationMessage(params: {
       trigger: sourceType,
     })
     pendingWakeups.push({
-      actorId: participant.actor_id,
+      actorId: participant.actorId,
       sessionId: ensuredContext.sessionId,
       sourceType,
     })
@@ -2387,8 +2347,8 @@ async function loadHumanParticipantsForConversation(
   return participants.filter(
     (participant) =>
       participant.state === "active" &&
-      typeof participant.workspace_member_id === "string" &&
-      participant.workspace_member_id.length > 0
+      typeof participant.workspaceMemberId === "string" &&
+      participant.workspaceMemberId.length > 0
   )
 }
 
@@ -2594,12 +2554,12 @@ async function loadWorkspaceMembersByIds(
   workspaceMemberIds: string[]
 ) {
   if (workspaceMemberIds.length === 0) {
-    return [] as Array<{ id: string; user_name: string }>
+    return [] as Array<{ id: string; userName: string }>
   }
-  const result = await runOnSnake<{ id: string; user_name: string }>(
+  const result = await runOn<{ id: string; userName: string }>(
     queryable,
     `
-      SELECT wm.id, u.name AS user_name
+      SELECT wm.id, u.name AS "userName"
       FROM workspace_members wm
       INNER JOIN users u ON u.id = wm.user_id
       WHERE wm.workspace_id = $1
@@ -2616,12 +2576,12 @@ async function loadActorsByIds(
   actorIds: string[]
 ) {
   if (actorIds.length === 0) {
-    return [] as Array<{ id: string; display_name: string }>
+    return [] as Array<{ id: string; displayName: string }>
   }
-  const result = await runOnSnake<{ id: string; display_name: string }>(
+  const result = await runOn<{ id: string; displayName: string }>(
     queryable,
     `
-      SELECT actor.id, app.display_name
+      SELECT actor.id, app.display_name AS "displayName"
       FROM actors actor
       INNER JOIN workspace_apps_live app
         ON app.id = actor.id
@@ -2641,12 +2601,12 @@ async function loadRemoteAgentsByIds(
   remoteAgentIds: string[]
 ) {
   if (remoteAgentIds.length === 0) {
-    return [] as Array<{ id: string; display_name: string }>
+    return [] as Array<{ id: string; displayName: string }>
   }
-  const result = await runOnSnake<{ id: string; display_name: string }>(
+  const result = await runOn<{ id: string; displayName: string }>(
     queryable,
     `
-      SELECT agent.id, app.display_name
+      SELECT agent.id, app.display_name AS "displayName"
       FROM remote_agents agent
       INNER JOIN workspace_apps_live app
         ON app.id = agent.id
@@ -2811,7 +2771,7 @@ export async function createConversationForWorkspaceMember(params: {
         conversationId: conversation.id as string,
         participantType: "workspace_member",
         workspaceMemberId: member.id,
-        displayName: member.user_name,
+        displayName: member.userName,
         roleKey:
           member.id === params.creatorWorkspaceMemberId ? "owner" : "member",
         queryable,
@@ -2828,7 +2788,7 @@ export async function createConversationForWorkspaceMember(params: {
         conversationId: conversation.id as string,
         participantType: "actor",
         actorId: actor.id,
-        displayName: actor.display_name,
+        displayName: actor.displayName,
         queryable,
       })
     }
@@ -2838,7 +2798,7 @@ export async function createConversationForWorkspaceMember(params: {
         conversationId: conversation.id as string,
         participantType: "remote_agent",
         remoteAgentId: remoteAgent.id,
-        displayName: remoteAgent.display_name,
+        displayName: remoteAgent.displayName,
         queryable,
       })
     }
@@ -2882,10 +2842,10 @@ export async function getConversationParticipant(params: {
   queryable?: Executor
 }) {
   if (params.participantId) {
-    const result = await runOn<ParticipantRow>(
+    const result = await runOn<{ id: string }>(
       params.queryable ?? rootQueryable(),
       `
-        SELECT *
+        SELECT id
         FROM conversation_participants
         WHERE conversation_id = $1
           AND id = $2
@@ -2910,13 +2870,13 @@ export async function getConversationParticipant(params: {
       params.participantId
         ? participant.id === params.participantId
         : params.actorId
-          ? participant.actor_id === params.actorId
+          ? participant.actorId === params.actorId
           : params.remoteAgentId
-            ? participant.remote_agent_id === params.remoteAgentId
+            ? participant.remoteAgentId === params.remoteAgentId
             : params.workspaceMemberId
-              ? participant.workspace_member_id === params.workspaceMemberId
+              ? participant.workspaceMemberId === params.workspaceMemberId
               : params.transportAddressId
-                ? participant.transport_address_id === params.transportAddressId
+                ? participant.transportAddressId === params.transportAddressId
                 : false
     ) ?? null
   )
@@ -3065,13 +3025,13 @@ async function loadParticipantStatesByMember(
   workspaceMemberIds: string[]
 ): Promise<Map<string, string>> {
   if (workspaceMemberIds.length === 0) return new Map()
-  const result = await runOnSnake<{
-    workspace_member_id: string
+  const result = await runOn<{
+    workspaceMemberId: string
     state: string
   }>(
     queryable,
     `
-      SELECT cps.workspace_member_id, cp.state
+      SELECT cps.workspace_member_id AS "workspaceMemberId", cp.state
       FROM conversation_participants cp
       INNER JOIN access_subjects cps ON cps.id = cp.subject_id
       WHERE cp.conversation_id = $1
@@ -3081,7 +3041,7 @@ async function loadParticipantStatesByMember(
   )
   const map = new Map<string, string>()
   for (const row of result.rows) {
-    map.set(row.workspace_member_id, row.state)
+    map.set(row.workspaceMemberId, row.state)
   }
   return map
 }
@@ -3139,7 +3099,7 @@ export async function addConversationParticipants(params: {
           conversationId: params.conversationId,
           participantType: "workspace_member",
           workspaceMemberId: member.id,
-          displayName: member.user_name,
+          displayName: member.userName,
           queryable,
         })
         await upsertConversationView(queryable, {
@@ -3207,7 +3167,7 @@ export async function addConversationParticipants(params: {
           conversationId: params.conversationId,
           participantType: "actor",
           actorId: actor.id,
-          displayName: actor.display_name,
+          displayName: actor.displayName,
           queryable,
         })
       }
@@ -3231,7 +3191,7 @@ export async function addConversationParticipants(params: {
           conversationId: params.conversationId,
           participantType: "remote_agent",
           remoteAgentId: remoteAgent.id,
-          displayName: remoteAgent.display_name,
+          displayName: remoteAgent.displayName,
           queryable,
         })
       }
@@ -3322,24 +3282,24 @@ export async function createConversationItem(params: {
         DO NOTHING
         RETURNING
           id,
-          conversation_id,
-          session_id,
-          turn_id,
-          client_message_id,
+          conversation_id AS "conversationId",
+          session_id AS "sessionId",
+          turn_id AS "turnId",
+          client_message_id AS "clientMessageId",
           scope,
           surface,
-          item_type,
+          item_type AS "itemType",
           subtype,
           role,
-          author_participant_id,
-          reply_to_item_id,
-          caused_by_item_id,
-          event_payload,
-          event_timeline_policy,
-          event_context_policy,
+          author_participant_id AS "authorParticipantId",
+          reply_to_item_id AS "replyToItemId",
+          caused_by_item_id AS "causedByItemId",
+          event_payload AS "eventPayload",
+          event_timeline_policy AS "eventTimelinePolicy",
+          event_context_policy AS "eventContextPolicy",
           metadata,
           sequence,
-          created_at
+          created_at AS "createdAt"
       `,
       [
         itemId,
@@ -3370,24 +3330,24 @@ export async function createConversationItem(params: {
         `
           SELECT
             id,
-            conversation_id,
-            session_id,
-            turn_id,
-            client_message_id,
+            conversation_id AS "conversationId",
+            session_id AS "sessionId",
+            turn_id AS "turnId",
+            client_message_id AS "clientMessageId",
             scope,
             surface,
-            item_type,
+            item_type AS "itemType",
             subtype,
             role,
-            author_participant_id,
-            reply_to_item_id,
-            caused_by_item_id,
-            event_payload,
-            event_timeline_policy,
-            event_context_policy,
+            author_participant_id AS "authorParticipantId",
+            reply_to_item_id AS "replyToItemId",
+            caused_by_item_id AS "causedByItemId",
+            event_payload AS "eventPayload",
+            event_timeline_policy AS "eventTimelinePolicy",
+            event_context_policy AS "eventContextPolicy",
             metadata,
             sequence,
-            created_at
+            created_at AS "createdAt"
           FROM conversation_items
           WHERE conversation_id = $1
             AND author_participant_id = $2
@@ -3612,11 +3572,11 @@ export async function createConversationEvent<
         ? [...new Set(params.restrictedAudienceParticipantIds ?? [])]
         : timelinePolicy === "users_only"
           ? activeParticipants
-              .filter((participant) => participant.workspace_member_id)
+              .filter((participant) => participant.workspaceMemberId)
               .map((participant) => participant.id)
           : timelinePolicy === "actors_only"
             ? activeParticipants
-                .filter((participant) => participant.actor_id)
+                .filter((participant) => participant.actorId)
                 .map((participant) => participant.id)
             : []
 
@@ -3625,7 +3585,7 @@ export async function createConversationEvent<
         ? [...new Set(params.contextTargetParticipantIds ?? [])]
         : contextPolicy === "shared"
           ? activeParticipants
-              .filter((participant) => participant.actor_id)
+              .filter((participant) => participant.actorId)
               .map((participant) => participant.id)
           : contextPolicy === "actor_private"
             ? [...new Set(params.contextTargetParticipantIds ?? [])]
@@ -3711,7 +3671,7 @@ async function buildConversationItemDetails(
   const hydratedItems = await hydrateConversationItems(queryable, itemRows)
   const hydratedById = new Map(hydratedItems.map((item) => [item.id, item]))
   const conversationIds = [
-    ...new Set(itemRows.map((row) => row.conversation_id)),
+    ...new Set(itemRows.map((row) => row.conversationId)),
   ]
   const participants = await listConversationParticipantRows(
     queryable,
@@ -3742,7 +3702,7 @@ async function buildConversationItemDetails(
   const replyToIds = [
     ...new Set(
       itemRows
-        .map((row) => row.reply_to_item_id)
+        .map((row) => row.replyToItemId)
         .filter((replyToItemId): replyToItemId is string =>
           Boolean(replyToItemId)
         )
@@ -3770,16 +3730,16 @@ async function buildConversationItemDetails(
       itemId: replyToItemId,
       ref: buildConversationMessageRef(toNumber(replyRow.sequence)),
       sequence: toNumber(replyRow.sequence),
-      itemType: replyRow.item_type,
+      itemType: replyRow.itemType,
       subtype: replyRow.subtype,
-      author: replyRow.author_participant_id
+      author: replyRow.authorParticipantId
         ? participantRowToEntityRef(
-            participantById.get(replyRow.author_participant_id)
+            participantById.get(replyRow.authorParticipantId)
           )
         : undefined,
       previewText: replyItem.content.trim(),
       previewBlocks: replyItem.contentBlocks,
-      createdAt: presentInstant(replyRow.created_at),
+      createdAt: presentInstant(replyRow.createdAt),
     })
   }
 
@@ -3801,25 +3761,25 @@ async function buildConversationItemDetails(
       )
     const baseItem = {
       id: row.id,
-      conversationId: row.conversation_id,
-      sessionId: row.session_id ?? undefined,
-      turnId: row.turn_id ?? undefined,
+      conversationId: row.conversationId,
+      sessionId: row.sessionId ?? undefined,
+      turnId: row.turnId ?? undefined,
       sequence: toNumber(row.sequence),
       scope: row.scope,
       surface: row.surface,
       role: row.role,
-      authorParticipantId: row.author_participant_id ?? undefined,
-      authorParticipant: row.author_participant_id
-        ? participantById.get(row.author_participant_id)
+      authorParticipantId: row.authorParticipantId ?? undefined,
+      authorParticipant: row.authorParticipantId
+        ? participantById.get(row.authorParticipantId)
         : undefined,
       restrictedAudienceParticipants,
       contextTargets,
       contentBlocks: hydrated.contentBlocks,
       metadata: asJsonRecord(row.metadata),
-      replyToItemId: row.reply_to_item_id ?? undefined,
-      replyTo: row.reply_to_item_id
-        ? (replyRefById.get(row.reply_to_item_id) ?? {
-            itemId: row.reply_to_item_id,
+      replyToItemId: row.replyToItemId ?? undefined,
+      replyTo: row.replyToItemId
+        ? (replyRefById.get(row.replyToItemId) ?? {
+            itemId: row.replyToItemId,
             itemType: "message",
             subtype: "unavailable",
             previewText: "",
@@ -3827,12 +3787,12 @@ async function buildConversationItemDetails(
             isUnavailable: true,
           })
         : undefined,
-      causedByItemId: row.caused_by_item_id ?? undefined,
-      createdAt: presentInstant(row.created_at),
-      clientMessageId: row.client_message_id ?? undefined,
+      causedByItemId: row.causedByItemId ?? undefined,
+      createdAt: presentInstant(row.createdAt),
+      clientMessageId: row.clientMessageId ?? undefined,
     } satisfies ConversationItemDetailBase
 
-    if (row.item_type === "event") {
+    if (row.itemType === "event") {
       if (!isConversationEventType(row.subtype)) {
         throw new Error(
           `Unsupported conversation event subtype ${row.subtype} for item ${row.id}`
@@ -3845,18 +3805,18 @@ async function buildConversationItemDetails(
         subtype: row.subtype,
         eventPayload: asConversationFeedEventPayload(
           row.subtype,
-          row.event_payload
+          row.eventPayload
         ),
         eventTimelinePolicy:
-          (row.event_timeline_policy as ConversationEventTimelinePolicy | null) ??
+          (row.eventTimelinePolicy as ConversationEventTimelinePolicy | null) ??
           undefined,
         eventContextPolicy:
-          (row.event_context_policy as ConversationEventContextPolicy | null) ??
+          (row.eventContextPolicy as ConversationEventContextPolicy | null) ??
           undefined,
       } satisfies ConversationEventItemDetail
     }
 
-    if (row.item_type !== "summary") {
+    if (row.itemType !== "summary") {
       assertConversationMessageSubtype(row.subtype)
     } else if (row.subtype !== "summary") {
       throw new Error(
@@ -3866,7 +3826,7 @@ async function buildConversationItemDetails(
 
     return {
       ...baseItem,
-      itemType: row.item_type,
+      itemType: row.itemType,
       subtype: row.subtype,
     } satisfies ConversationNonEventItemDetail
   })
@@ -3878,22 +3838,22 @@ function participantRowToEntityRef(
   if (!participant) {
     return undefined
   }
-  const transportKind = asParticipantTransportKind(participant.transport_kind)
+  const transportKind = asParticipantTransportKind(participant.transportKind)
   return {
     participantId: participant.id,
-    participantType: subjectKindToParticipantType(participant.participant_type),
-    workspaceMemberId: participant.workspace_member_id ?? undefined,
-    actorId: participant.actor_id ?? undefined,
-    remoteAgentId: participant.remote_agent_id ?? undefined,
+    participantType: subjectKindToParticipantType(participant.participantType),
+    workspaceMemberId: participant.workspaceMemberId ?? undefined,
+    actorId: participant.actorId ?? undefined,
+    remoteAgentId: participant.remoteAgentId ?? undefined,
     externalUserKey:
-      transportKind && participant.transport_external_id
-        ? `${transportKind}:${participant.transport_external_id}`
+      transportKind && participant.transportExternalId
+        ? `${transportKind}:${participant.transportExternalId}`
         : undefined,
-    transportAddressId: participant.transport_address_id ?? undefined,
+    transportAddressId: participant.transportAddressId ?? undefined,
     transportKind,
     name: participantDisplayName(participant),
-    title: participant.participant_title ?? undefined,
-    role: participant.participant_role ?? participant.role_key,
+    title: participant.participantTitle ?? undefined,
+    role: participant.participantRole ?? participant.roleKey,
     avatarUrl: participantAvatarUrl(participant),
     avatarEmoji: participantAvatarEmoji(participant),
   }
@@ -3908,8 +3868,8 @@ function participantRowToChatParticipantSummary(
   }
   return {
     participantId: participant.id,
-    conversationId: participant.conversation_id,
-    participantType: subjectKindToParticipantType(participant.participant_type),
+    conversationId: participant.conversationId,
+    participantType: subjectKindToParticipantType(participant.participantType),
     workspaceMemberId: entity.workspaceMemberId,
     actorId: entity.actorId,
     remoteAgentId: entity.remoteAgentId,
@@ -3921,13 +3881,13 @@ function participantRowToChatParticipantSummary(
     role: entity.role,
     avatarUrl: entity.avatarUrl,
     avatarEmoji: entity.avatarEmoji,
-    roleKey: participant.role_key,
+    roleKey: participant.roleKey,
     state: participant.state,
     metadata: asJsonRecord(participant.metadata),
-    joinedAt: presentInstant(participant.joined_at),
-    leftAt: presentOptionalInstant(participant.left_at),
-    sessionId: participant.session_id ?? undefined,
-    sessionStatus: participant.session_status ?? undefined,
+    joinedAt: presentInstant(participant.joinedAt),
+    leftAt: presentOptionalInstant(participant.leftAt),
+    sessionId: participant.sessionId ?? undefined,
+    sessionStatus: participant.sessionStatus ?? undefined,
   } satisfies ChatParticipantSummary
 }
 
@@ -4094,32 +4054,32 @@ async function loadTransportDeliveriesForItems(
     return new Map<string, ConversationMessageTransportDelivery[]>()
   }
   const result = await runOn<{
-    item_id: string
-    link_id: string
-    transport_kind: TransportKind
+    itemId: string
+    linkId: string
+    transportKind: TransportKind
     direction: "inbound" | "outbound"
-    delivery_status: "pending" | "sent" | "failed" | "skipped"
-    external_message_id: string | null
+    deliveryStatus: "pending" | "sent" | "failed" | "skipped"
+    externalMessageId: string | null
     metadata: unknown
-    delivered_at: Date | null
-    endpoint_type: "direct" | "group"
-    endpoint_external_id: string | null
-    endpoint_display_name: string | null
+    deliveredAt: Date | null
+    endpointType: "direct" | "group"
+    endpointExternalId: string | null
+    endpointDisplayName: string | null
   }>(
     queryable,
     `
       SELECT
-        tml.item_id,
-        tml.id AS link_id,
-        tml.transport_kind,
+        tml.item_id AS "itemId",
+        tml.id AS "linkId",
+        tml.transport_kind AS "transportKind",
         tml.direction,
-        tml.delivery_status,
-        tml.external_message_id,
+        tml.delivery_status AS "deliveryStatus",
+        tml.external_message_id AS "externalMessageId",
         tml.metadata,
-        tml.delivered_at,
-        te.endpoint_type,
-        te.external_id AS endpoint_external_id,
-        te.display_name AS endpoint_display_name
+        tml.delivered_at AS "deliveredAt",
+        te.endpoint_type AS "endpointType",
+        te.external_id AS "endpointExternalId",
+        te.display_name AS "endpointDisplayName"
       FROM transport_message_links tml
       INNER JOIN transport_endpoints te
         ON te.id = tml.transport_endpoint_id
@@ -4130,20 +4090,20 @@ async function loadTransportDeliveriesForItems(
   )
   const byItem = new Map<string, ConversationMessageTransportDelivery[]>()
   for (const row of result.rows) {
-    const current = byItem.get(row.item_id) ?? []
+    const current = byItem.get(row.itemId) ?? []
     current.push({
-      linkId: row.link_id,
-      transportKind: row.transport_kind,
+      linkId: row.linkId,
+      transportKind: row.transportKind,
       direction: row.direction,
-      deliveryStatus: row.delivery_status,
-      endpointType: row.endpoint_type,
-      endpointExternalId: row.endpoint_external_id ?? undefined,
-      endpointDisplayName: row.endpoint_display_name ?? undefined,
-      externalMessageId: row.external_message_id ?? undefined,
-      deliveredAt: presentOptionalInstant(row.delivered_at),
+      deliveryStatus: row.deliveryStatus,
+      endpointType: row.endpointType,
+      endpointExternalId: row.endpointExternalId ?? undefined,
+      endpointDisplayName: row.endpointDisplayName ?? undefined,
+      externalMessageId: row.externalMessageId ?? undefined,
+      deliveredAt: presentOptionalInstant(row.deliveredAt),
       metadata: asJsonRecord(row.metadata),
     })
-    byItem.set(row.item_id, current)
+    byItem.set(row.itemId, current)
   }
   return byItem
 }
@@ -4230,24 +4190,24 @@ export async function getConversationFeedItemById(
     `
       SELECT
         id,
-        conversation_id,
-        session_id,
-        turn_id,
-        client_message_id,
+        conversation_id AS "conversationId",
+        session_id AS "sessionId",
+        turn_id AS "turnId",
+        client_message_id AS "clientMessageId",
         scope,
         surface,
-        item_type,
+        item_type AS "itemType",
         subtype,
         role,
-        author_participant_id,
-        reply_to_item_id,
-        caused_by_item_id,
-        event_payload,
-        event_timeline_policy,
-        event_context_policy,
+        author_participant_id AS "authorParticipantId",
+        reply_to_item_id AS "replyToItemId",
+        caused_by_item_id AS "causedByItemId",
+        event_payload AS "eventPayload",
+        event_timeline_policy AS "eventTimelinePolicy",
+        event_context_policy AS "eventContextPolicy",
         metadata,
         sequence,
-        created_at
+        created_at AS "createdAt"
       FROM conversation_items
       WHERE id = $1
       LIMIT 1
@@ -4284,24 +4244,24 @@ export async function getContextConversationItemsForParticipant(params: {
     `
       SELECT
         id,
-        conversation_id,
-        session_id,
-        turn_id,
-        client_message_id,
+        conversation_id AS "conversationId",
+        session_id AS "sessionId",
+        turn_id AS "turnId",
+        client_message_id AS "clientMessageId",
         scope,
         surface,
-        item_type,
+        item_type AS "itemType",
         subtype,
         role,
-        author_participant_id,
-        reply_to_item_id,
-        caused_by_item_id,
-        event_payload,
-        event_timeline_policy,
-        event_context_policy,
+        author_participant_id AS "authorParticipantId",
+        reply_to_item_id AS "replyToItemId",
+        caused_by_item_id AS "causedByItemId",
+        event_payload AS "eventPayload",
+        event_timeline_policy AS "eventTimelinePolicy",
+        event_context_policy AS "eventContextPolicy",
         metadata,
         sequence,
-        created_at
+        created_at AS "createdAt"
       FROM conversation_items ci
       WHERE ci.conversation_id = $1
         AND ci.scope = 'shared'
@@ -4354,24 +4314,24 @@ export async function getLastVisibleConversationItem(
     `
       SELECT
         id,
-        conversation_id,
-        session_id,
-        turn_id,
-        client_message_id,
+        conversation_id AS "conversationId",
+        session_id AS "sessionId",
+        turn_id AS "turnId",
+        client_message_id AS "clientMessageId",
         scope,
         surface,
-        item_type,
+        item_type AS "itemType",
         subtype,
         role,
-        author_participant_id,
-        reply_to_item_id,
-        caused_by_item_id,
-        event_payload,
-        event_timeline_policy,
-        event_context_policy,
+        author_participant_id AS "authorParticipantId",
+        reply_to_item_id AS "replyToItemId",
+        caused_by_item_id AS "causedByItemId",
+        event_payload AS "eventPayload",
+        event_timeline_policy AS "eventTimelinePolicy",
+        event_context_policy AS "eventContextPolicy",
         metadata,
         sequence,
-        created_at
+        created_at AS "createdAt"
       FROM conversation_items
       WHERE conversation_id = $1
         AND scope = 'shared'
@@ -4406,12 +4366,12 @@ export async function listConversationRealtimeRecipients(
   queryable: Executor = rootQueryable()
 ) {
   const result = await runOn<{
-    workspace_id: string
-    workspace_member_id: string
+    workspaceId: string
+    workspaceMemberId: string
   }>(
     queryable,
     `
-      SELECT wm.workspace_id, cpsubj.workspace_member_id
+      SELECT wm.workspace_id AS "workspaceId", cpsubj.workspace_member_id AS "workspaceMemberId"
       FROM conversation_participants cp
       INNER JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
       INNER JOIN workspace_members wm
@@ -4424,8 +4384,8 @@ export async function listConversationRealtimeRecipients(
   )
 
   return result.rows.map((row) => ({
-    workspaceId: row.workspace_id,
-    workspaceMemberId: row.workspace_member_id,
+    workspaceId: row.workspaceId,
+    workspaceMemberId: row.workspaceMemberId,
   }))
 }
 
@@ -4512,10 +4472,10 @@ export async function createChatConversation(params: {
   // minted only by the IM ingest path (syncTransportAddressConversationParticipant).
 
   const conversationId = await withDbTransaction(async (client) => {
-    const existingRequest = await runOnSnake<{ conversation_id: string }>(
+    const existingRequest = await runOn<{ conversationId: string }>(
       client,
       `
-        SELECT conversation_id
+        SELECT conversation_id AS "conversationId"
         FROM chat_conversation_create_requests
         WHERE workspace_member_id = $1
           AND client_request_id = $2
@@ -4523,8 +4483,8 @@ export async function createChatConversation(params: {
       `,
       [creator.workspaceMemberId, params.clientRequestId]
     )
-    if (existingRequest.rows[0]?.conversation_id) {
-      return existingRequest.rows[0].conversation_id
+    if (existingRequest.rows[0]?.conversationId) {
+      return existingRequest.rows[0].conversationId
     }
 
     const memberRows = await loadWorkspaceMembersByIds(
@@ -4585,7 +4545,7 @@ export async function createChatConversation(params: {
         conversationId: newConversationId,
         participantType: "workspace_member",
         workspaceMemberId: member.id,
-        displayName: member.user_name,
+        displayName: member.userName,
         roleKey: member.id === creator.workspaceMemberId ? "owner" : "member",
         metadata: {},
       })
@@ -4601,7 +4561,7 @@ export async function createChatConversation(params: {
         conversationId: newConversationId,
         participantType: "actor",
         actorId: actor.id,
-        displayName: actor.display_name,
+        displayName: actor.displayName,
         roleKey: "member",
         metadata: {},
       })
@@ -4612,7 +4572,7 @@ export async function createChatConversation(params: {
         conversationId: newConversationId,
         participantType: "remote_agent",
         remoteAgentId: remoteAgent.id,
-        displayName: remoteAgent.display_name,
+        displayName: remoteAgent.displayName,
         roleKey: "member",
         metadata: {},
       })
@@ -4711,28 +4671,28 @@ export async function getChatSync(params: {
   )
   const limit = Math.min(Math.max(params.limit ?? 200, 1), 500)
   const result = await runOn<{
-    sync_seq: string | number
-    member_seq: string | number
-    workspace_id: string
-    workspace_member_id: string
-    conversation_id: string | null
-    item_id: string | null
-    event_type: ChatSyncEventType
+    syncSeq: string | number
+    memberSeq: string | number
+    workspaceId: string
+    workspaceMemberId: string
+    conversationId: string | null
+    itemId: string | null
+    eventType: ChatSyncEventType
     payload: unknown
-    occurred_at: Date
+    occurredAt: Date
   }>(
     db,
     `
       SELECT
-        sync_seq,
-        member_seq,
-        workspace_id,
-        workspace_member_id,
-        conversation_id,
-        item_id,
-        event_type,
+        sync_seq AS "syncSeq",
+        member_seq AS "memberSeq",
+        workspace_id AS "workspaceId",
+        workspace_member_id AS "workspaceMemberId",
+        conversation_id AS "conversationId",
+        item_id AS "itemId",
+        event_type AS "eventType",
         payload,
-        occurred_at
+        occurred_at AS "occurredAt"
       FROM workspace_member_sync_events
       WHERE workspace_id = $1
         AND workspace_member_id = $2
@@ -4752,7 +4712,7 @@ export async function getChatSync(params: {
   const rows = hasMore ? result.rows.slice(0, limit) : result.rows
   const events: ChatSyncEvent[] = await Promise.all(
     rows.map(async (row) => {
-      const eventType = row.event_type
+      const eventType = row.eventType
       const payload = asChatSyncEventPayload(eventType, row.payload)
       const enrichedPayload = await enrichChatSyncEventPayloadForViewer(
         eventType,
@@ -4760,15 +4720,15 @@ export async function getChatSync(params: {
         identity.userId
       )
       return {
-        syncSeq: toNumber(row.sync_seq),
-        memberSeq: toNumber(row.member_seq),
-        workspaceId: row.workspace_id,
-        workspaceMemberId: row.workspace_member_id,
-        conversationId: row.conversation_id ?? undefined,
-        itemId: row.item_id ?? undefined,
+        syncSeq: toNumber(row.syncSeq),
+        memberSeq: toNumber(row.memberSeq),
+        workspaceId: row.workspaceId,
+        workspaceMemberId: row.workspaceMemberId,
+        conversationId: row.conversationId ?? undefined,
+        itemId: row.itemId ?? undefined,
         eventType,
         payload: enrichedPayload,
-        occurredAt: presentInstant(row.occurred_at),
+        occurredAt: presentInstant(row.occurredAt),
       }
     })
   )
@@ -4818,24 +4778,24 @@ export async function getChatConversationMessages(params: {
       `
         SELECT
           id,
-          conversation_id,
-          session_id,
-          turn_id,
-          client_message_id,
+          conversation_id AS "conversationId",
+          session_id AS "sessionId",
+          turn_id AS "turnId",
+          client_message_id AS "clientMessageId",
           scope,
           surface,
-          item_type,
+          item_type AS "itemType",
           subtype,
           role,
-          author_participant_id,
-          reply_to_item_id,
-          caused_by_item_id,
-          event_payload,
-          event_timeline_policy,
-          event_context_policy,
+          author_participant_id AS "authorParticipantId",
+          reply_to_item_id AS "replyToItemId",
+          caused_by_item_id AS "causedByItemId",
+          event_payload AS "eventPayload",
+          event_timeline_policy AS "eventTimelinePolicy",
+          event_context_policy AS "eventContextPolicy",
           metadata,
           sequence,
-          created_at
+          created_at AS "createdAt"
         FROM conversation_items
         WHERE conversation_id = $1
           AND scope = 'shared'
@@ -4874,24 +4834,24 @@ export async function getChatConversationMessages(params: {
       `
         SELECT
           id,
-          conversation_id,
-          session_id,
-          turn_id,
-          client_message_id,
+          conversation_id AS "conversationId",
+          session_id AS "sessionId",
+          turn_id AS "turnId",
+          client_message_id AS "clientMessageId",
           scope,
           surface,
-          item_type,
+          item_type AS "itemType",
           subtype,
           role,
-          author_participant_id,
-          reply_to_item_id,
-          caused_by_item_id,
-          event_payload,
-          event_timeline_policy,
-          event_context_policy,
+          author_participant_id AS "authorParticipantId",
+          reply_to_item_id AS "replyToItemId",
+          caused_by_item_id AS "causedByItemId",
+          event_payload AS "eventPayload",
+          event_timeline_policy AS "eventTimelinePolicy",
+          event_context_policy AS "eventContextPolicy",
           metadata,
           sequence,
-          created_at
+          created_at AS "createdAt"
         FROM conversation_items
         WHERE conversation_id = $1
           AND scope = 'shared'
@@ -4930,24 +4890,24 @@ export async function getChatConversationMessages(params: {
       `
         SELECT
           id,
-          conversation_id,
-          session_id,
-          turn_id,
-          client_message_id,
+          conversation_id AS "conversationId",
+          session_id AS "sessionId",
+          turn_id AS "turnId",
+          client_message_id AS "clientMessageId",
           scope,
           surface,
-          item_type,
+          item_type AS "itemType",
           subtype,
           role,
-          author_participant_id,
-          reply_to_item_id,
-          caused_by_item_id,
-          event_payload,
-          event_timeline_policy,
-          event_context_policy,
+          author_participant_id AS "authorParticipantId",
+          reply_to_item_id AS "replyToItemId",
+          caused_by_item_id AS "causedByItemId",
+          event_payload AS "eventPayload",
+          event_timeline_policy AS "eventTimelinePolicy",
+          event_context_policy AS "eventContextPolicy",
           metadata,
           sequence,
-          created_at
+          created_at AS "createdAt"
         FROM conversation_items
         WHERE conversation_id = $1
           AND scope = 'shared'
@@ -4998,11 +4958,11 @@ export async function getChatConversationMessages(params: {
   }
 
   const readState = await runOn<{
-    read_watermark_sequence: string | number
+    readWatermarkSequence: string | number
   }>(
     db,
     `
-      SELECT read_watermark_sequence
+      SELECT read_watermark_sequence AS "readWatermarkSequence"
       FROM conversation_participant_states
       WHERE conversation_id = $1
         AND participant_id = $2
@@ -5012,22 +4972,22 @@ export async function getChatConversationMessages(params: {
   )
 
   const deviceStateResult = await runOn<{
-    client_instance_id: string
-    conversation_id: string
-    last_visible_sequence: string | number
-    last_inbox_seq: string | number
-    last_opened_at: Date | null
-    draft_payload: unknown
+    clientInstanceId: string
+    conversationId: string
+    lastVisibleSequence: string | number
+    lastInboxSeq: string | number
+    lastOpenedAt: Date | null
+    draftPayload: unknown
   }>(
     db,
     `
       SELECT
-        client_instance_id,
-        conversation_id,
-        last_visible_sequence,
-        last_inbox_seq,
-        last_opened_at,
-        draft_payload
+        client_instance_id AS "clientInstanceId",
+        conversation_id AS "conversationId",
+        last_visible_sequence AS "lastVisibleSequence",
+        last_inbox_seq AS "lastInboxSeq",
+        last_opened_at AS "lastOpenedAt",
+        draft_payload AS "draftPayload"
       FROM conversation_device_states
       WHERE conversation_id = $1
         AND client_instance_id = $2
@@ -5038,12 +4998,12 @@ export async function getChatConversationMessages(params: {
   const row = deviceStateResult.rows[0]
   const deviceState: ChatDeviceState = row
     ? {
-        clientInstanceId: row.client_instance_id,
-        conversationId: row.conversation_id,
-        lastVisibleSequence: toNumber(row.last_visible_sequence),
-        lastInboxSeq: toNumber(row.last_inbox_seq),
-        lastOpenedAt: presentOptionalInstant(row.last_opened_at),
-        draftPayload: asJsonRecord(row.draft_payload),
+        clientInstanceId: row.clientInstanceId,
+        conversationId: row.conversationId,
+        lastVisibleSequence: toNumber(row.lastVisibleSequence),
+        lastInboxSeq: toNumber(row.lastInboxSeq),
+        lastOpenedAt: presentOptionalInstant(row.lastOpenedAt),
+        draftPayload: asJsonRecord(row.draftPayload),
       }
     : {
         clientInstanceId: params.clientInstanceId,
@@ -5087,7 +5047,7 @@ export async function getChatConversationMessages(params: {
     runtimeByActor: runtimeMap[params.conversationId] || {},
     runtimeByRemoteAgent,
     participantReadWatermarkSequence: toNumber(
-      readState.rows[0]?.read_watermark_sequence
+      readState.rows[0]?.readWatermarkSequence
     ),
     deviceState,
     hasMoreBefore,
@@ -5133,24 +5093,24 @@ export async function listVisibleConversationItemsForParticipant(params: {
       `
         SELECT
           id,
-          conversation_id,
-          session_id,
-          turn_id,
-          client_message_id,
+          conversation_id AS "conversationId",
+          session_id AS "sessionId",
+          turn_id AS "turnId",
+          client_message_id AS "clientMessageId",
           scope,
           surface,
-          item_type,
+          item_type AS "itemType",
           subtype,
           role,
-          author_participant_id,
-          reply_to_item_id,
-          caused_by_item_id,
-          event_payload,
-          event_timeline_policy,
-          event_context_policy,
+          author_participant_id AS "authorParticipantId",
+          reply_to_item_id AS "replyToItemId",
+          caused_by_item_id AS "causedByItemId",
+          event_payload AS "eventPayload",
+          event_timeline_policy AS "eventTimelinePolicy",
+          event_context_policy AS "eventContextPolicy",
           metadata,
           sequence,
-          created_at
+          created_at AS "createdAt"
         FROM conversation_items
         WHERE conversation_id = $1
           AND scope = 'shared'
@@ -5182,24 +5142,24 @@ export async function listVisibleConversationItemsForParticipant(params: {
       `
         SELECT
           id,
-          conversation_id,
-          session_id,
-          turn_id,
-          client_message_id,
+          conversation_id AS "conversationId",
+          session_id AS "sessionId",
+          turn_id AS "turnId",
+          client_message_id AS "clientMessageId",
           scope,
           surface,
-          item_type,
+          item_type AS "itemType",
           subtype,
           role,
-          author_participant_id,
-          reply_to_item_id,
-          caused_by_item_id,
-          event_payload,
-          event_timeline_policy,
-          event_context_policy,
+          author_participant_id AS "authorParticipantId",
+          reply_to_item_id AS "replyToItemId",
+          caused_by_item_id AS "causedByItemId",
+          event_payload AS "eventPayload",
+          event_timeline_policy AS "eventTimelinePolicy",
+          event_context_policy AS "eventContextPolicy",
           metadata,
           sequence,
-          created_at
+          created_at AS "createdAt"
         FROM conversation_items
         WHERE conversation_id = $1
           AND scope = 'shared'
@@ -5236,24 +5196,24 @@ export async function listVisibleConversationItemsForParticipant(params: {
       `
         SELECT
           id,
-          conversation_id,
-          session_id,
-          turn_id,
-          client_message_id,
+          conversation_id AS "conversationId",
+          session_id AS "sessionId",
+          turn_id AS "turnId",
+          client_message_id AS "clientMessageId",
           scope,
           surface,
-          item_type,
+          item_type AS "itemType",
           subtype,
           role,
-          author_participant_id,
-          reply_to_item_id,
-          caused_by_item_id,
-          event_payload,
-          event_timeline_policy,
-          event_context_policy,
+          author_participant_id AS "authorParticipantId",
+          reply_to_item_id AS "replyToItemId",
+          caused_by_item_id AS "causedByItemId",
+          event_payload AS "eventPayload",
+          event_timeline_policy AS "eventTimelinePolicy",
+          event_context_policy AS "eventContextPolicy",
           metadata,
           sequence,
-          created_at
+          created_at AS "createdAt"
         FROM conversation_items
         WHERE conversation_id = $1
           AND scope = 'shared'
@@ -5396,12 +5356,12 @@ export async function updateChatConversationReadWatermark(
     )
 
     const existingState = await runOn<{
-      read_watermark_sequence: string | number
-      last_read_at: Date | null
+      readWatermarkSequence: string | number
+      lastReadAt: Date | null
     }>(
       client,
       `
-        SELECT read_watermark_sequence, last_read_at
+        SELECT read_watermark_sequence AS "readWatermarkSequence", last_read_at AS "lastReadAt"
         FROM conversation_participant_states
         WHERE conversation_id = $1
           AND participant_id = $2
@@ -5410,7 +5370,7 @@ export async function updateChatConversationReadWatermark(
       [params.conversationId, access.participant.id]
     )
     const existingRow = existingState.rows[0]
-    const existingSequence = toNumber(existingRow?.read_watermark_sequence)
+    const existingSequence = toNumber(existingRow?.readWatermarkSequence)
     const nextSequence = Math.max(existingSequence, requestedSequence)
     // S6 dedup observability: if the request didn't actually advance the
     // watermark, it's a duplicate POST — the main thread and the SW
@@ -5425,7 +5385,7 @@ export async function updateChatConversationReadWatermark(
     // but isn't actually a duplicate — it's the inaugural mark. Use
     // last_read_at as the "user has marked something before" signal.
     const userHasMarkedBefore =
-      Boolean(existingRow) && existingRow!.last_read_at !== null
+      Boolean(existingRow) && existingRow!.lastReadAt !== null
     if (userHasMarkedBefore && nextSequence === existingSequence) {
       recordDuplicateWatermarkPost()
     }
@@ -5732,23 +5692,23 @@ export async function loadParticipantById(
   conversationId: string,
   participantId: string
 ) {
-  const result = await runOnSnake<{
+  const result = await runOn<{
     id: string
-    conversation_id: string
-    participant_type: ParticipantKind
-    workspace_member_id: string | null
-    actor_id: string | null
-    remote_agent_id: string | null
-    display_name: string | null
+    conversationId: string
+    participantType: ParticipantKind
+    workspaceMemberId: string | null
+    actorId: string | null
+    remoteAgentId: string | null
+    displayName: string | null
     state: string
   }>(
     queryable,
     `
-      SELECT cp.id, cp.conversation_id, cpsubj.kind AS participant_type,
-             cpsubj.workspace_member_id AS workspace_member_id,
-             cpsubj.actor_id AS actor_id,
-             cpsubj.remote_agent_id AS remote_agent_id,
-             cp.display_name, cp.state
+      SELECT cp.id, cp.conversation_id AS "conversationId", cpsubj.kind AS "participantType",
+             cpsubj.workspace_member_id AS "workspaceMemberId",
+             cpsubj.actor_id AS "actorId",
+             cpsubj.remote_agent_id AS "remoteAgentId",
+             cp.display_name AS "displayName", cp.state
       FROM conversation_participants cp
       JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
       WHERE cp.conversation_id = $1 AND cp.id = $2
@@ -5826,20 +5786,20 @@ export async function removeChatConversationParticipant(params: {
           : {
               participantId: access.participant.id,
               participantType: access.participant
-                .participant_type as ParticipantKind,
+                .participantType as ParticipantKind,
               workspaceMemberId: identity.workspaceMemberId,
             },
         participants: [
           {
             participantId: target.id,
-            participantType: target.participant_type as Exclude<
+            participantType: target.participantType as Exclude<
               ParticipantKind,
               "system"
             >,
-            workspaceMemberId: target.workspace_member_id ?? undefined,
-            actorId: target.actor_id ?? undefined,
-            remoteAgentId: target.remote_agent_id ?? undefined,
-            name: target.display_name ?? undefined,
+            workspaceMemberId: target.workspaceMemberId ?? undefined,
+            actorId: target.actorId ?? undefined,
+            remoteAgentId: target.remoteAgentId ?? undefined,
+            name: target.displayName ?? undefined,
           },
         ],
       } as never,
@@ -5869,14 +5829,14 @@ export async function removeChatConversationParticipant(params: {
     // emitted directly. Self-leave still notifies the leaver so their OTHER
     // devices drop the conversation. participants snapshot reflects the
     // post-removal active roster.
-    if (target.workspace_member_id) {
+    if (target.workspaceMemberId) {
       const activeParticipants = await listConversationParticipants(
         params.conversationId,
         { queryable: client }
       )
       await appendWorkspaceMemberSyncEventInTransaction(client, {
         workspaceId: params.workspaceId,
-        workspaceMemberId: target.workspace_member_id,
+        workspaceMemberId: target.workspaceMemberId,
         conversationId: params.conversationId,
         eventType: "conversation.membership.updated",
         payload: {
@@ -6110,7 +6070,7 @@ export async function retryAssistantMessage(params: {
     sourceItemId: params.itemId,
     sourceParticipantType: CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER,
     sourceParticipantId: identity.workspaceMemberId,
-    sourceName: access.participant.user_name ?? "user",
+    sourceName: access.participant.userName ?? "user",
     summary: "user requested retry of failed assistant turn",
     metadata: {
       source: "chat.message_retry",

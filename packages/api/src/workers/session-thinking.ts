@@ -156,7 +156,7 @@ async function loadNewContextItems(params: {
 
   for (const item of newItems) {
     maxSequence = Math.max(maxSequence, item.sequence)
-    if (item.authorParticipant?.actor_id === params.actorId) continue
+    if (item.authorParticipant?.actorId === params.actorId) continue
     const contextItem = conversationItemToContextItem(item, params.actorId)
     if (contextItem) {
       items.push(contextItem)
@@ -483,7 +483,7 @@ export function startSessionThinkingWorker() {
           )
           actorParticipantId = conversationParticipants.find(
             (member: any) =>
-              member.actor_id === actorId && member.state === "active"
+              member.actorId === actorId && member.state === "active"
           )?.id
           if (!actorParticipantId) {
             throw new Error(
@@ -492,7 +492,7 @@ export function startSessionThinkingWorker() {
           }
           const selfParticipant = conversationParticipants.find(
             (member: any) =>
-              member.actor_id === actorId && member.state === "active"
+              member.actorId === actorId && member.state === "active"
           )
           if (selfParticipant) {
             participantEntries.push({
@@ -500,41 +500,41 @@ export function startSessionThinkingWorker() {
               id: actorId,
               participantId: selfParticipant.id,
               name:
-                selfParticipant.participant_name ||
-                selfParticipant.display_name ||
+                selfParticipant.participantName ||
+                selfParticipant.displayName ||
                 actor.displayName ||
                 session.actor_display_name ||
                 "Unknown actor",
               title:
-                selfParticipant.participant_title ||
-                selfParticipant.participant_role ||
+                selfParticipant.participantTitle ||
+                selfParticipant.participantRole ||
                 "Actor",
-              role: selfParticipant.participant_role || undefined,
+              role: selfParticipant.participantRole || undefined,
             })
           }
 
           for (const member of conversationParticipants) {
             if (
-              member.actor_id &&
-              member.actor_id !== actorId &&
+              member.actorId &&
+              member.actorId !== actorId &&
               member.state === "active"
             ) {
               participantEntries.push({
                 participantType: "actor",
-                id: member.actor_id,
+                id: member.actorId,
                 participantId: member.id,
                 name:
-                  member.participant_name ||
-                  member.display_name ||
+                  member.participantName ||
+                  member.displayName ||
                   "Unknown actor",
-                title: member.participant_title,
-                role: member.participant_role || undefined,
+                title: member.participantTitle,
+                role: member.participantRole || undefined,
               })
-            } else if (member.user_id && member.state === "active") {
+            } else if (member.userId && member.state === "active") {
               const workspaceMemberId =
-                typeof member.workspace_member_id === "string" &&
-                member.workspace_member_id.trim().length > 0
-                  ? member.workspace_member_id
+                typeof member.workspaceMemberId === "string" &&
+                member.workspaceMemberId.trim().length > 0
+                  ? member.workspaceMemberId
                   : null
               if (!workspaceMemberId) {
                 throw new Error(
@@ -545,36 +545,33 @@ export function startSessionThinkingWorker() {
                 participantType: "workspace_member",
                 id: workspaceMemberId,
                 participantId: member.id,
-                name: member.user_name || "User",
+                name: member.userName || "User",
                 role: "Workspace member",
               })
             } else if (
-              member.participant_type === "external" &&
+              member.participantType === "external" &&
               member.state === "active"
             ) {
-              const linkedUserName =
-                (member.linked_user_name as string | null) || undefined
+              const linkedUserName = member.linkedUserName || undefined
               participantEntries.push({
                 participantType: "external",
                 id:
-                  (member.linked_user_id as string | null) ||
-                  (member.transport_external_id as string | null) ||
-                  (member.id as string),
+                  member.linkedUserId ||
+                  member.transportExternalId ||
+                  member.id,
                 participantId: member.id,
                 name:
-                  (member.transport_display_name as string | null) ||
-                  (member.display_name as string | null) ||
+                  member.transportDisplayName ||
+                  member.displayName ||
                   linkedUserName ||
                   "External participant",
                 title: linkedUserName
                   ? `Linked workspace user: ${linkedUserName}`
                   : "External participant",
                 role: "External participant",
-                linkedWorkspaceMemberId:
-                  (member.linked_user_id as string | null) || undefined,
+                linkedWorkspaceMemberId: member.linkedUserId || undefined,
                 linkedWorkspaceMemberName: linkedUserName,
-                externalUserKey:
-                  (member.transport_external_id as string | null) || undefined,
+                externalUserKey: member.transportExternalId || undefined,
               })
             }
           }
@@ -1034,38 +1031,38 @@ export function startSessionThinkingWorker() {
           if (!promptConversationParticipants) return actor
           const selfMember = promptConversationParticipants.find(
             (member: any) =>
-              member.actor_id === actorId && member.state === "active"
+              member.actorId === actorId && member.state === "active"
           )
           if (!selfMember) return actor
           return {
             ...actor,
             currentVersion:
-              selfMember.actor_current_version || actor.currentVersion,
+              selfMember.actorCurrentVersion || actor.currentVersion,
             displayName:
-              selfMember.participant_name ||
-              selfMember.display_name ||
+              selfMember.participantName ||
+              selfMember.displayName ||
               actor.displayName,
             definition: {
               ...actor.definition,
               displayName:
-                selfMember.participant_name ||
-                selfMember.display_name ||
+                selfMember.participantName ||
+                selfMember.displayName ||
                 actor.displayName ||
                 actor.definition.displayName,
-              title: selfMember.participant_title || actor.definition.title,
-              role: selfMember.participant_role || actor.definition.role,
-              docs: selfMember.actor_docs || actor.definition.docs,
+              title: selfMember.participantTitle || actor.definition.title,
+              role: selfMember.participantRole || actor.definition.role,
+              docs: selfMember.actorDocs || actor.definition.docs,
               canRepresentUser:
-                typeof selfMember.actor_can_represent_user === "boolean"
-                  ? selfMember.actor_can_represent_user
+                typeof selfMember.actorCanRepresentUser === "boolean"
+                  ? selfMember.actorCanRepresentUser
                   : actor.definition.canRepresentUser,
-              specialties: Array.isArray(selfMember.actor_specialties)
-                ? selfMember.actor_specialties
+              specialties: Array.isArray(selfMember.actorSpecialties)
+                ? selfMember.actorSpecialties
                 : actor.definition.specialties,
               config:
-                selfMember.actor_config &&
-                typeof selfMember.actor_config === "object"
-                  ? selfMember.actor_config
+                selfMember.actorConfig &&
+                typeof selfMember.actorConfig === "object"
+                  ? selfMember.actorConfig
                   : actor.definition.config,
             },
           }

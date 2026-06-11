@@ -420,20 +420,20 @@ function buildSendToCandidates(
   for (const participant of participants) {
     if (participant.state !== "active") continue
 
-    if (participant.actor_id) {
-      if (participant.actor_id === currentActorId) continue
+    if (participant.actorId) {
+      if (participant.actorId === currentActorId) continue
       const name =
-        participant.participant_name ||
-        participant.display_name ||
+        participant.participantName ||
+        participant.displayName ||
         "Unknown actor"
       const title =
-        participant.participant_title || participant.participant_role || "Actor"
+        participant.participantTitle || participant.participantRole || "Actor"
       candidates.push({
         participantType: "actor",
         participantId: participant.id,
-        actorId: participant.actor_id,
-        title: participant.participant_title || undefined,
-        role: participant.participant_role || undefined,
+        actorId: participant.actorId,
+        title: participant.participantTitle || undefined,
+        role: participant.participantRole || undefined,
         name,
         label: `"${name}" (actor${title ? `, ${title}` : ""})`,
         aliases: [name],
@@ -441,10 +441,10 @@ function buildSendToCandidates(
       continue
     }
 
-    if (participant.user_id) {
-      const name = participant.user_name || "User"
-      const transportKind = isTransportKind(participant.transport_kind)
-        ? participant.transport_kind
+    if (participant.userId) {
+      const name = participant.userName || "User"
+      const transportKind = isTransportKind(participant.transportKind)
+        ? participant.transportKind
         : undefined
       const transportLabel = transportKind
         ? `, reachable via ${
@@ -455,7 +455,7 @@ function buildSendToCandidates(
       candidates.push({
         participantType: "workspace_member",
         participantId: participant.id,
-        workspaceMemberId: participant.workspace_member_id,
+        workspaceMemberId: participant.workspaceMemberId,
         name,
         title: "Workspace member",
         label: `"${name}" (workspace member${transportLabel})`,
@@ -464,12 +464,11 @@ function buildSendToCandidates(
       continue
     }
 
-    if (participant.participant_type === "external") {
-      const linkedWorkspaceMemberName =
-        (participant.linked_user_name as string | null) || undefined
+    if (participant.participantType === "external") {
+      const linkedWorkspaceMemberName = participant.linkedUserName || undefined
       const name =
-        (participant.transport_display_name as string | null) ||
-        (participant.display_name as string | null) ||
+        participant.transportDisplayName ||
+        participant.displayName ||
         linkedWorkspaceMemberName ||
         "External participant"
       const aliases = Array.from(
@@ -483,8 +482,7 @@ function buildSendToCandidates(
       candidates.push({
         participantType: "external",
         participantId: participant.id,
-        externalUserKey:
-          (participant.transport_external_id as string | null) || undefined,
+        externalUserKey: participant.transportExternalId || undefined,
         name,
         title: linkedWorkspaceMemberName
           ? `Linked workspace user: ${linkedWorkspaceMemberName}`
@@ -1349,7 +1347,7 @@ export function registerCallableToolPlugins(): void {
       const allMembers = await listConversationParticipants(conversationId)
       const senderParticipant = allMembers.find(
         (member: any) =>
-          member.actor_id === context.actorId && member.state === "active"
+          member.actorId === context.actorId && member.state === "active"
       )
       if (!senderParticipant?.id) {
         throwToolError(
@@ -1590,7 +1588,7 @@ export function registerCallableToolPlugins(): void {
       const allMembers = await listConversationParticipants(conversationId)
       const requesterMember = allMembers.find(
         (member) =>
-          member.actor_id === context.actorId && member.state === "active"
+          member.actorId === context.actorId && member.state === "active"
       )
       if (!requesterMember) {
         throwToolError(
@@ -2034,7 +2032,7 @@ export function registerCallableToolPlugins(): void {
       const allMembers = await listConversationParticipants(conversationId)
       const requesterMember = allMembers.find(
         (member) =>
-          member.actor_id === context.actorId && member.state === "active"
+          member.actorId === context.actorId && member.state === "active"
       )
       if (!requesterMember) {
         throwToolError(
@@ -2625,7 +2623,7 @@ export function registerCallableToolPlugins(): void {
           await listConversationParticipants(conversationId)
         ).find(
           (member: any) =>
-            member.actor_id === context.actorId && member.state === "active"
+            member.actorId === context.actorId && member.state === "active"
         )
         if (!inviterMember?.id) {
           throwToolError(
@@ -2639,8 +2637,8 @@ export function registerCallableToolPlugins(): void {
         })
         const invitedActorIds = new Set(
           addResult
-            .filter((member: any) => member.actor_id)
-            .map((member: any) => member.actor_id as string)
+            .filter((member: any) => member.actorId)
+            .map((member: any) => member.actorId as string)
         )
         const invitedActors = uniqueActors.filter((candidate) =>
           invitedActorIds.has(candidate.id)
@@ -2668,7 +2666,7 @@ export function registerCallableToolPlugins(): void {
           contentBlocks: [
             ...invitedActors.flatMap((candidate, index) => {
               const participant = addResult.find(
-                (member: any) => member.actor_id === candidate.id
+                (member: any) => member.actorId === candidate.id
               )
               if (!participant?.id) {
                 return []

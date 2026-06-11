@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import type { ReuseScope } from "@synapse/shared"
+import type { PluginInstallationDetailView, ReuseScope } from "@synapse/shared"
 import { REUSE_SCOPES } from "@synapse/shared"
 import { Layers3, Save } from "lucide-react"
 
@@ -35,8 +35,8 @@ export default function PluginAdvancedStep({
   installation,
   onSaved,
 }: {
-  installation: any | null
-  onSaved?: (installation: any) => void | Promise<void>
+  installation: PluginInstallationDetailView | null
+  onSaved?: (installation: PluginInstallationDetailView) => void | Promise<void>
 }) {
   const { workspaceId } = useWorkspace()
 
@@ -79,8 +79,7 @@ export default function PluginAdvancedStep({
           lifecycleScope,
         }
       )
-      const savedInstallation = result?.installation || result
-      await onSaved?.(savedInstallation)
+      await onSaved?.(result)
       toast.success("Advanced settings updated")
     } catch (error) {
       console.error("Failed to update advanced plugin settings:", error)

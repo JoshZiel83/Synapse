@@ -3,6 +3,10 @@
 import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Loader2, Plus, Trash2 } from "lucide-react"
+import type {
+  MarketplacePluginView,
+  PluginInstallationDetailView,
+} from "@synapse/shared"
 import {
   AppCard,
   AppCardContent,
@@ -32,13 +36,15 @@ import {
 } from "@/components/ui/card"
 
 interface Props {
-  plugin: any
-  installations: any[]
+  plugin: MarketplacePluginView
+  installations: PluginInstallationDetailView[]
   selectedInstallationId?: string | null
-  initialInstallation?: any | null
+  initialInstallation?: PluginInstallationDetailView | null
   onSelectInstallation: (installationId: string) => void
   onCreateInstallation: () => void
-  onInstallationsChanged?: (installation: any) => void | Promise<void>
+  onInstallationsChanged?: (
+    installation: PluginInstallationDetailView
+  ) => void | Promise<void>
 }
 
 export default function PluginInstallationWorkbench({
@@ -65,11 +71,12 @@ export default function PluginInstallationWorkbench({
     return installations[0]?.id || null
   }, [installations, selectedInstallationId])
 
-  const [selectedInstallation, setSelectedInstallation] = useState<any | null>(
-    initialInstallation?.id === activeInstallationId
-      ? initialInstallation
-      : null
-  )
+  const [selectedInstallation, setSelectedInstallation] =
+    useState<PluginInstallationDetailView | null>(
+      initialInstallation?.id === activeInstallationId
+        ? initialInstallation
+        : null
+    )
   const [loadingInstallation, setLoadingInstallation] = useState(false)
   const [editorVersion, setEditorVersion] = useState(0)
   const [savingSettings, setSavingSettings] = useState(false)

@@ -7,18 +7,13 @@ import {
   type ModelGroupGrantScope,
   type ModelGroupOwnerType,
   type ModelGroupRoutingStrategy,
+  type ModelGroupView,
 } from "@synapse/shared"
 import { Building2, Globe2, UserRound } from "lucide-react"
 
 export type ModelGroupScope = ModelGroupOwnerType
 export type ModelGroupScopeFilter = ModelGroupScope | "all"
 export type ModelGroupScopeAuto = ModelGroupScope | "auto"
-
-export type ModelGroupSummaryRecord = {
-  workspaceId: string | null
-  ownerType?: ModelGroupOwnerType
-  routingStrategy: ModelGroupRoutingStrategy
-}
 
 export const MODEL_GROUP_ROUTING_OPTIONS: Array<{
   value: ModelGroupRoutingStrategy
@@ -51,7 +46,8 @@ export function getModelGroupStrategyLabel(
 }
 
 export function resolveModelGroupScope(
-  group: Pick<ModelGroupSummaryRecord, "ownerType" | "workspaceId">
+  group: Pick<ModelGroupView, "workspaceId"> &
+    Partial<Pick<ModelGroupView, "ownerType">>
 ): ModelGroupScope {
   if (
     group.ownerType === MODEL_GROUP_OWNER_TYPE.PLATFORM ||

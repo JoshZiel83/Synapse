@@ -42,7 +42,7 @@ export default function MarketplaceBrowse({
 
   const installedCount = (pluginId: string) => {
     return installations.filter(
-      (installation: any) => installation.pluginId === pluginId
+      (installation) => installation.pluginId === pluginId
     ).length
   }
 
@@ -74,7 +74,7 @@ export default function MarketplaceBrowse({
                   <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-blue-600" />
                 ) : null}
               </button>
-              {categories.map((category: any) => {
+              {categories.map((category) => {
                 const active = selectedCategorySlug === category.slug
                 return (
                   <button
@@ -135,7 +135,7 @@ export default function MarketplaceBrowse({
               "repeat(auto-fit, minmax(min(100%, 420px), 1fr))",
           }}
         >
-          {marketplace.map((plugin: any) => {
+          {marketplace.map((plugin) => {
             const count = installedCount(plugin.id)
             const title =
               translate(
@@ -192,21 +192,19 @@ export default function MarketplaceBrowse({
                   </div>
 
                   <div className="mt-2 flex flex-wrap gap-1.5">
-                    {(plugin.categories || [])
-                      .slice(1, 3)
-                      .map((category: any) => (
-                        <Badge
-                          key={category.slug}
-                          variant="secondary"
-                          className="bg-gray-50 text-[11px] text-gray-600"
-                        >
-                          {translate(
-                            category.displayNameI18n,
-                            locale,
-                            category.defaultLocale || "en"
-                          ) || category.displayName}
-                        </Badge>
-                      ))}
+                    {(plugin.categories || []).slice(1, 3).map((category) => (
+                      <Badge
+                        key={category.slug}
+                        variant="secondary"
+                        className="bg-gray-50 text-[11px] text-gray-600"
+                      >
+                        {translate(
+                          category.displayNameI18n,
+                          locale,
+                          category.defaultLocale || "en"
+                        ) || category.displayName}
+                      </Badge>
+                    ))}
                     {(plugin.tags || []).slice(0, 2).map((tag: string) => (
                       <Badge
                         key={tag}

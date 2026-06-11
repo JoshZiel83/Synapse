@@ -304,10 +304,10 @@ export async function createRuntimeAuthorizationRequest(
   const requesterMember = allMembers.find((member) => {
     if (member.state !== "active") return false
     if (params.source.remoteAgentId) {
-      return member.remote_agent_id === params.source.remoteAgentId
+      return member.remoteAgentId === params.source.remoteAgentId
     }
     if (params.source.actorId) {
-      return member.actor_id === params.source.actorId
+      return member.actorId === params.source.actorId
     }
     return false
   })

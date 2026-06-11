@@ -125,11 +125,11 @@ type RuntimeStatusMessage = {
 
 type DeliveryRow = {
   id: string
-  remote_agent_id: string
-  conversation_id: string
-  item_id: string
+  remoteAgentId: string
+  conversationId: string
+  itemId: string
   status: string
-  created_at: Date
+  createdAt: Date
   sequence: string | number
 }
 
@@ -241,17 +241,17 @@ async function loadMachineByApiKey(apiKey: string) {
 
 async function loadBoundRemoteAgentsForMachine(machineId: string) {
   const result = await runOnDb<{
-    remote_agent_id: string
-    runtime_kind: RemoteAgentRuntimeKind
-    runtime_path: string | null
-    local_root_path: string | null
+    remoteAgentId: string
+    runtimeKind: RemoteAgentRuntimeKind
+    runtimePath: string | null
+    localRootPath: string | null
   }>(
     `
       SELECT
-        binding.remote_agent_id,
-        binding.runtime_kind,
-        binding.runtime_path,
-        binding.local_root_path
+        binding.remote_agent_id AS "remoteAgentId",
+        binding.runtime_kind AS "runtimeKind",
+        binding.runtime_path AS "runtimePath",
+        binding.local_root_path AS "localRootPath"
       FROM remote_agent_bindings binding
       INNER JOIN remote_agents agent ON agent.id = binding.remote_agent_id
       INNER JOIN workspace_apps_live app
@@ -417,17 +417,17 @@ async function loadAgentStartTargetsForMachine(machineId: string) {
   // for waking a runtime; the per-conversation context's runtime_session_id is
   // passed along so the driver can resume in-place once it's waking.
   const result = await runOnDb<{
-    remote_agent_id: string
-    conversation_id: string
-    runtime_kind: RemoteAgentRuntimeKind
-    runtime_session_id: string | null
+    remoteAgentId: string
+    conversationId: string
+    runtimeKind: RemoteAgentRuntimeKind
+    runtimeSessionId: string | null
   }>(
     `
       SELECT
-        binding.remote_agent_id,
-        delivery.conversation_id,
-        binding.runtime_kind,
-        ctx.runtime_session_id
+        binding.remote_agent_id AS "remoteAgentId",
+        delivery.conversation_id AS "conversationId",
+        binding.runtime_kind AS "runtimeKind",
+        ctx.runtime_session_id AS "runtimeSessionId"
       FROM remote_agent_bindings binding
       INNER JOIN remote_agents agent ON agent.id = binding.remote_agent_id
       INNER JOIN workspace_apps_live app
@@ -512,22 +512,22 @@ async function startBoundRemoteAgents(machineId: string) {
     return
   }
   const bindingByAgentId = new Map(
-    bindings.map((row) => [row.remote_agent_id, row])
+    bindings.map((row) => [row.remoteAgentId, row])
   )
 
   const targets = await loadAgentStartTargetsForMachine(machineId)
 
   for (const target of targets) {
-    const binding = bindingByAgentId.get(target.remote_agent_id)
+    const binding = bindingByAgentId.get(target.remoteAgentId)
     if (!binding) continue
     safeSend(connection, {
       type: "agent:start",
-      remoteAgentId: target.remote_agent_id,
-      conversationId: target.conversation_id,
-      runtimeKind: binding.runtime_kind,
-      runtimePath: binding.runtime_path,
-      localRootPath: binding.local_root_path,
-      sessionId: target.runtime_session_id,
+      remoteAgentId: target.remoteAgentId,
+      conversationId: target.conversationId,
+      runtimeKind: binding.runtimeKind,
+      runtimePath: binding.runtimePath,
+      localRootPath: binding.localRootPath,
+      sessionId: target.runtimeSessionId,
       fencingToken: connection.fencingToken,
       serverUrl: config.app.baseUrl,
     })
@@ -535,11 +535,11 @@ async function startBoundRemoteAgents(machineId: string) {
 
   await notifyPendingRemoteAgentDeliveries({
     machineId,
-    remoteAgentIds: bindings.map((binding) => binding.remote_agent_id),
+    remoteAgentIds: bindings.map((binding) => binding.remoteAgentId),
   })
   await replayResolvedRemoteAgentTasks({
     machineId,
-    remoteAgentIds: bindings.map((binding) => binding.remote_agent_id),
+    remoteAgentIds: bindings.map((binding) => binding.remoteAgentId),
   })
 }
 
@@ -556,15 +556,15 @@ async function replayResolvedRemoteAgentTasks(params: {
   }
 
   const rows = await runOnDb<{
-    remote_agent_id: string
-    active_task_id: string
-    lifecycle_status: string
+    remoteAgentId: string
+    activeTaskId: string
+    lifecycleStatus: string
   }>(
     `
       SELECT
-        ctx.remote_agent_id,
-        ctx.active_task_id,
-        task.lifecycle_status
+        ctx.remote_agent_id AS "remoteAgentId",
+        ctx.active_task_id AS "activeTaskId",
+        task.lifecycle_status AS "lifecycleStatus"
       FROM remote_agent_conversation_contexts ctx
       INNER JOIN remote_agent_bindings binding
         ON binding.remote_agent_id = ctx.remote_agent_id
@@ -584,14 +584,14 @@ async function replayResolvedRemoteAgentTasks(params: {
 
   const { getTaskSummary } = await import("../tasks/service.js")
   for (const row of rows.rows) {
-    const task = await getTaskSummary(row.active_task_id)
+    const task = await getTaskSummary(row.activeTaskId)
     if (!task) {
       continue
     }
     safeSend(connection, {
       type: "agent:task:resolved",
-      remoteAgentId: row.remote_agent_id,
-      taskId: row.active_task_id,
+      remoteAgentId: row.remoteAgentId,
+      taskId: row.activeTaskId,
       task,
     })
   }
@@ -786,19 +786,19 @@ async function loadPendingRemoteAgentDeliveries(params: {
   }
 
   return runOnDb<{
-    delivery_id: string
-    remote_agent_id: string
-    machine_id: string
-    item_id: string
-    conversation_id: string
+    deliveryId: string
+    remoteAgentId: string
+    machineId: string
+    itemId: string
+    conversationId: string
   }>(
     `
       SELECT
-        delivery.id AS delivery_id,
-        delivery.remote_agent_id,
-        binding.machine_id,
-        delivery.item_id,
-        delivery.conversation_id
+        delivery.id AS "deliveryId",
+        delivery.remote_agent_id AS "remoteAgentId",
+        binding.machine_id AS "machineId",
+        delivery.item_id AS "itemId",
+        delivery.conversation_id AS "conversationId"
       FROM remote_agent_message_deliveries delivery
       INNER JOIN remote_agent_bindings binding
         ON binding.remote_agent_id = delivery.remote_agent_id
@@ -895,14 +895,14 @@ async function notifyPendingRemoteAgentDeliveries(params: {
   >()
 
   for (const row of result.rows) {
-    const current = grouped.get(row.machine_id) ?? []
+    const current = grouped.get(row.machineId) ?? []
     current.push({
-      remoteAgentId: row.remote_agent_id,
-      deliveryId: row.delivery_id,
-      conversationId: row.conversation_id,
-      itemId: row.item_id,
+      remoteAgentId: row.remoteAgentId,
+      deliveryId: row.deliveryId,
+      conversationId: row.conversationId,
+      itemId: row.itemId,
     })
-    grouped.set(row.machine_id, current)
+    grouped.set(row.machineId, current)
   }
 
   for (const [machineId, deliveries] of grouped) {
@@ -1025,15 +1025,15 @@ export async function failRemoteAgentDeliveries(params: {
 
 export async function runDueRemoteAgentDeliveryRetries() {
   const dueRows = await runOnDb<{
-    delivery_id: string
-    remote_agent_id: string
-    machine_id: string | null
+    deliveryId: string
+    remoteAgentId: string
+    machineId: string | null
   }>(
     `
       SELECT
-        delivery.id AS delivery_id,
-        delivery.remote_agent_id,
-        binding.machine_id
+        delivery.id AS "deliveryId",
+        delivery.remote_agent_id AS "remoteAgentId",
+        binding.machine_id AS "machineId"
       FROM remote_agent_message_deliveries delivery
       LEFT JOIN remote_agent_bindings binding
         ON binding.remote_agent_id = delivery.remote_agent_id
@@ -1051,10 +1051,10 @@ export async function runDueRemoteAgentDeliveryRetries() {
 
   const byMachine = new Map<string, string[]>()
   for (const row of dueRows.rows) {
-    if (!row.machine_id) continue
-    const list = byMachine.get(row.machine_id) ?? []
-    list.push(row.remote_agent_id)
-    byMachine.set(row.machine_id, list)
+    if (!row.machineId) continue
+    const list = byMachine.get(row.machineId) ?? []
+    list.push(row.remoteAgentId)
+    byMachine.set(row.machineId, list)
   }
 
   for (const [machineId, remoteAgentIds] of byMachine) {
@@ -1101,17 +1101,17 @@ export async function authenticateMachineForRemoteAgent(params: {
   }
 
   const result = await runOnDb<{
-    remote_agent_id: string
-    machine_id: string
-    workspace_id: string
-    local_root_path: string | null
+    remoteAgentId: string
+    machineId: string
+    workspaceId: string
+    localRootPath: string | null
   }>(
     `
       SELECT
-        binding.remote_agent_id,
-        binding.machine_id,
-        app.workspace_id,
-        binding.local_root_path
+        binding.remote_agent_id AS "remoteAgentId",
+        binding.machine_id AS "machineId",
+        app.workspace_id AS "workspaceId",
+        binding.local_root_path AS "localRootPath"
       FROM remote_agent_bindings binding
       INNER JOIN remote_agents agent ON agent.id = binding.remote_agent_id
       INNER JOIN workspace_apps_live app
@@ -1133,8 +1133,8 @@ export async function authenticateMachineForRemoteAgent(params: {
 
   return {
     machineId: machine.id,
-    workspaceId: binding.workspace_id,
-    localRootPath: binding.local_root_path ?? undefined,
+    workspaceId: binding.workspaceId,
+    localRootPath: binding.localRootPath ?? undefined,
   }
 }
 
@@ -1339,45 +1339,45 @@ export async function loadRemoteAgentRuntimeSnapshot(
     ) latest_ctx ON TRUE
   `
   const result = await runOn<{
-    remote_agent_id: string
-    runtime_kind: RemoteAgentRuntimeKind
-    runtime_state: RemoteAgentRuntimeStateType
-    status_text: string | null
-    latest_active_conversation_id: string | null
-    latest_active_task_id: string | null
-    latest_runtime_session_id: string | null
-    last_activity_at: Date | null
-    latest_last_run_started_at: Date | null
-    latest_last_run_finished_at: Date | null
-    last_error: string | null
-    updated_at: Date
-    pending_conversation_count: string | number
-    unread_delivery_count: string | number
+    remoteAgentId: string
+    runtimeKind: RemoteAgentRuntimeKind
+    runtimeState: RemoteAgentRuntimeStateType
+    statusText: string | null
+    latestActiveConversationId: string | null
+    latestActiveTaskId: string | null
+    latestRuntimeSessionId: string | null
+    lastActivityAt: Date | null
+    latestLastRunStartedAt: Date | null
+    latestLastRunFinishedAt: Date | null
+    lastError: string | null
+    updatedAt: Date
+    pendingConversationCount: string | number
+    unreadDeliveryCount: string | number
     capabilities: unknown
-    ctx_runtime_state: RemoteAgentRuntimeStateType | null
-    ctx_status_text: string | null
-    ctx_last_error: string | null
-    ctx_last_activity_at: Date | null
+    ctxRuntimeState: RemoteAgentRuntimeStateType | null
+    ctxStatusText: string | null
+    ctxLastError: string | null
+    ctxLastActivityAt: Date | null
   }>(
     queryable,
     `
       SELECT
-        binding.remote_agent_id,
-        binding.runtime_kind,
-        binding.runtime_state,
-        binding.status_text,
-        latest_ctx.latest_active_conversation_id,
-        latest_ctx.latest_active_task_id,
-        latest_ctx.latest_runtime_session_id,
-        binding.last_activity_at,
-        latest_ctx.latest_last_run_started_at,
-        latest_ctx.latest_last_run_finished_at,
-        binding.last_error,
-        binding.updated_at,
-        latest_ctx.ctx_runtime_state,
-        latest_ctx.ctx_status_text,
-        latest_ctx.ctx_last_error,
-        latest_ctx.ctx_last_activity_at,
+        binding.remote_agent_id AS "remoteAgentId",
+        binding.runtime_kind AS "runtimeKind",
+        binding.runtime_state AS "runtimeState",
+        binding.status_text AS "statusText",
+        latest_ctx.latest_active_conversation_id AS "latestActiveConversationId",
+        latest_ctx.latest_active_task_id AS "latestActiveTaskId",
+        latest_ctx.latest_runtime_session_id AS "latestRuntimeSessionId",
+        binding.last_activity_at AS "lastActivityAt",
+        latest_ctx.latest_last_run_started_at AS "latestLastRunStartedAt",
+        latest_ctx.latest_last_run_finished_at AS "latestLastRunFinishedAt",
+        binding.last_error AS "lastError",
+        binding.updated_at AS "updatedAt",
+        latest_ctx.ctx_runtime_state AS "ctxRuntimeState",
+        latest_ctx.ctx_status_text AS "ctxStatusText",
+        latest_ctx.ctx_last_error AS "ctxLastError",
+        latest_ctx.ctx_last_activity_at AS "ctxLastActivityAt",
         COALESCE(
           (
             SELECT COUNT(DISTINCT delivery.conversation_id)
@@ -1387,7 +1387,7 @@ export async function loadRemoteAgentRuntimeSnapshot(
               ${conversationId ? "AND delivery.conversation_id = $2" : ""}
           ),
           0
-        ) AS pending_conversation_count,
+        ) AS "pendingConversationCount",
         COALESCE(
           (
             SELECT COUNT(*)
@@ -1397,7 +1397,7 @@ export async function loadRemoteAgentRuntimeSnapshot(
               ${conversationId ? "AND delivery.conversation_id = $2" : ""}
           ),
           0
-        ) AS unread_delivery_count,
+        ) AS "unreadDeliveryCount",
         binding.capabilities
       FROM remote_agent_bindings binding
       ${lateral}
@@ -1420,38 +1420,36 @@ export async function loadRemoteAgentRuntimeSnapshot(
   // is the aggregate, so use it directly.
   const scopedToConversation = conversationId !== null
   const runtimeState = scopedToConversation
-    ? (row.ctx_runtime_state ?? "offline")
-    : row.runtime_state
-  const statusText = scopedToConversation
-    ? row.ctx_status_text
-    : row.status_text
+    ? (row.ctxRuntimeState ?? "offline")
+    : row.runtimeState
+  const statusText = scopedToConversation ? row.ctxStatusText : row.statusText
   const lastErrorMessage = scopedToConversation
-    ? row.ctx_last_error
-    : row.last_error
+    ? row.ctxLastError
+    : row.lastError
   // last_activity_at must follow the same scoping: scoped reads the
   // context's activity stamp (when the agent last did anything in THIS
   // conversation), unscoped reads binding's aggregate.
   const lastActivityAt = scopedToConversation
-    ? row.ctx_last_activity_at
-    : row.last_activity_at
+    ? row.ctxLastActivityAt
+    : row.lastActivityAt
   const lastErrorActivityAt = lastActivityAt
   return presentRuntimeSnapshot({
-    remoteAgentId: row.remote_agent_id,
-    runtimeKind: row.runtime_kind,
+    remoteAgentId: row.remoteAgentId,
+    runtimeKind: row.runtimeKind,
     state: runtimeState,
     statusText,
-    latestActiveConversationId: row.latest_active_conversation_id,
-    latestActiveTaskId: row.latest_active_task_id,
-    latestRuntimeSessionId: row.latest_runtime_session_id,
-    pendingConversationCount: row.pending_conversation_count,
-    unreadDeliveryCount: row.unread_delivery_count,
+    latestActiveConversationId: row.latestActiveConversationId,
+    latestActiveTaskId: row.latestActiveTaskId,
+    latestRuntimeSessionId: row.latestRuntimeSessionId,
+    pendingConversationCount: row.pendingConversationCount,
+    unreadDeliveryCount: row.unreadDeliveryCount,
     lastActivityAt,
-    latestLastRunStartedAt: row.latest_last_run_started_at,
-    latestLastRunFinishedAt: row.latest_last_run_finished_at,
+    latestLastRunStartedAt: row.latestLastRunStartedAt,
+    latestLastRunFinishedAt: row.latestLastRunFinishedAt,
     lastErrorMessage,
     lastErrorActivityAt,
-    updatedAtSource: row.updated_at,
-    updatedAtErrorLabel: `Remote agent ${row.remote_agent_id} updated_at`,
+    updatedAtSource: row.updatedAt,
+    updatedAtErrorLabel: `Remote agent ${row.remoteAgentId} updated_at`,
     capabilities: row.capabilities,
   })
 }
@@ -1467,12 +1465,12 @@ async function emitRemoteAgentRuntimeUpdated(
     return null
   }
   const recipients = await runOn<{
-    workspace_id: string
-    workspace_member_id: string
+    workspaceId: string
+    workspaceMemberId: string
   }>(
     queryable,
     `
-      SELECT DISTINCT member.workspace_id, viewer_subj.workspace_member_id
+      SELECT DISTINCT member.workspace_id AS "workspaceId", viewer_subj.workspace_member_id AS "workspaceMemberId"
       FROM conversation_participants agent_cp
       INNER JOIN access_subjects agent_subj ON agent_subj.id = agent_cp.subject_id
       INNER JOIN conversation_participants viewer
@@ -1490,8 +1488,8 @@ async function emitRemoteAgentRuntimeUpdated(
   const { appendWorkspaceMemberSyncEvent } = await import("../chat/service.js")
   for (const recipient of recipients.rows) {
     await appendWorkspaceMemberSyncEvent(queryable, {
-      workspaceId: recipient.workspace_id,
-      workspaceMemberId: recipient.workspace_member_id,
+      workspaceId: recipient.workspaceId,
+      workspaceMemberId: recipient.workspaceMemberId,
       eventType: "remote_agent.runtime_updated",
       payload: {
         remoteAgentId,
@@ -1507,7 +1505,7 @@ async function toRemoteAgentView(row: RemoteAgentRow) {
     db,
     "remote_agent",
     row.id,
-    row.workspace_id
+    row.workspaceId
   )
   return presentRemoteAgent(row, requiresContactApproval)
 }
@@ -1534,38 +1532,38 @@ export async function listRemoteAgents(params: {
     `
       SELECT
         agent.*,
-        app.workspace_id AS workspace_id,
-        app.display_name AS display_name,
-        app.owner_workspace_member_id AS owner_workspace_member_id,
-        (app.status = 'active') AS is_active,
-        binding.machine_id,
-        machine.title AS machine_title,
-        binding.status AS binding_status,
-        binding.runtime_path,
-        binding.local_root_path,
-        machine.lifecycle_state AS machine_lifecycle_state,
-        binding.runtime_state,
-        binding.status_text,
-        latest_ctx.latest_runtime_session_id,
-        latest_ctx.latest_active_conversation_id,
-        latest_ctx.latest_active_task_id,
-        binding.last_activity_at,
-        latest_ctx.latest_last_run_started_at,
-        latest_ctx.latest_last_run_finished_at,
-        binding.last_error,
+        app.workspace_id AS "workspaceId",
+        app.display_name AS "displayName",
+        app.owner_workspace_member_id AS "ownerWorkspaceMemberId",
+        (app.status = 'active') AS "isActive",
+        binding.machine_id AS "machineId",
+        machine.title AS "machineTitle",
+        binding.status AS "bindingStatus",
+        binding.runtime_path AS "runtimePath",
+        binding.local_root_path AS "localRootPath",
+        machine.lifecycle_state AS "machineLifecycleState",
+        binding.runtime_state AS "runtimeState",
+        binding.status_text AS "statusText",
+        latest_ctx.latest_runtime_session_id AS "latestRuntimeSessionId",
+        latest_ctx.latest_active_conversation_id AS "latestActiveConversationId",
+        latest_ctx.latest_active_task_id AS "latestActiveTaskId",
+        binding.last_activity_at AS "lastActivityAt",
+        latest_ctx.latest_last_run_started_at AS "latestLastRunStartedAt",
+        latest_ctx.latest_last_run_finished_at AS "latestLastRunFinishedAt",
+        binding.last_error AS "lastError",
         binding.capabilities,
         (
           SELECT COUNT(DISTINCT delivery.conversation_id)
           FROM remote_agent_message_deliveries delivery
           WHERE delivery.remote_agent_id = agent.id
             AND delivery.status = 'pending'
-        ) AS pending_conversation_count,
+        ) AS "pendingConversationCount",
         (
           SELECT COUNT(*)
           FROM remote_agent_message_deliveries delivery
           WHERE delivery.remote_agent_id = agent.id
             AND delivery.status = 'pending'
-        ) AS unread_delivery_count
+        ) AS "unreadDeliveryCount"
       FROM remote_agents agent
       INNER JOIN workspace_apps_live app
         ON app.id = agent.id
@@ -1610,38 +1608,38 @@ export async function getRemoteAgent(params: {
     `
       SELECT
         agent.*,
-        app.workspace_id AS workspace_id,
-        app.display_name AS display_name,
-        app.owner_workspace_member_id AS owner_workspace_member_id,
-        (app.status = 'active') AS is_active,
-        binding.machine_id,
-        machine.title AS machine_title,
-        binding.status AS binding_status,
-        binding.runtime_path,
-        binding.local_root_path,
-        machine.lifecycle_state AS machine_lifecycle_state,
-        binding.runtime_state,
-        binding.status_text,
-        latest_ctx.latest_runtime_session_id,
-        latest_ctx.latest_active_conversation_id,
-        latest_ctx.latest_active_task_id,
-        binding.last_activity_at,
-        latest_ctx.latest_last_run_started_at,
-        latest_ctx.latest_last_run_finished_at,
-        binding.last_error,
+        app.workspace_id AS "workspaceId",
+        app.display_name AS "displayName",
+        app.owner_workspace_member_id AS "ownerWorkspaceMemberId",
+        (app.status = 'active') AS "isActive",
+        binding.machine_id AS "machineId",
+        machine.title AS "machineTitle",
+        binding.status AS "bindingStatus",
+        binding.runtime_path AS "runtimePath",
+        binding.local_root_path AS "localRootPath",
+        machine.lifecycle_state AS "machineLifecycleState",
+        binding.runtime_state AS "runtimeState",
+        binding.status_text AS "statusText",
+        latest_ctx.latest_runtime_session_id AS "latestRuntimeSessionId",
+        latest_ctx.latest_active_conversation_id AS "latestActiveConversationId",
+        latest_ctx.latest_active_task_id AS "latestActiveTaskId",
+        binding.last_activity_at AS "lastActivityAt",
+        latest_ctx.latest_last_run_started_at AS "latestLastRunStartedAt",
+        latest_ctx.latest_last_run_finished_at AS "latestLastRunFinishedAt",
+        binding.last_error AS "lastError",
         binding.capabilities,
         (
           SELECT COUNT(DISTINCT delivery.conversation_id)
           FROM remote_agent_message_deliveries delivery
           WHERE delivery.remote_agent_id = agent.id
             AND delivery.status = 'pending'
-        ) AS pending_conversation_count,
+        ) AS "pendingConversationCount",
         (
           SELECT COUNT(*)
           FROM remote_agent_message_deliveries delivery
           WHERE delivery.remote_agent_id = agent.id
             AND delivery.status = 'pending'
-        ) AS unread_delivery_count
+        ) AS "unreadDeliveryCount"
       FROM remote_agents agent
       INNER JOIN workspace_apps_live app
         ON app.id = agent.id
@@ -1745,10 +1743,10 @@ export async function createRemoteAgent(params: {
   return {
     remoteAgent: await toRemoteAgentView({
       ...insertedRow,
-      workspace_id: params.workspaceId,
-      display_name: params.displayName.trim(),
-      owner_workspace_member_id: identity.workspaceMemberId,
-      is_active: true,
+      workspaceId: params.workspaceId,
+      displayName: params.displayName.trim(),
+      ownerWorkspaceMemberId: identity.workspaceMemberId,
+      isActive: true,
     }),
   }
 }
@@ -1894,7 +1892,7 @@ export async function listRemoteAgentMachines(params: {
           FROM remote_agent_bindings binding
           WHERE binding.machine_id = machine.id
             AND binding.status = 'active'
-        ) AS binding_count
+        ) AS "bindingCount"
       FROM remote_agent_machines machine
       WHERE machine.workspace_id = $1
       ORDER BY machine.created_at DESC
@@ -1933,34 +1931,34 @@ export async function getRemoteAgentMachine(params: {
     runOnDb<any>(
       `
         SELECT
-          binding.remote_agent_id,
-          binding.runtime_kind,
-          binding.runtime_path,
-          binding.local_root_path,
+          binding.remote_agent_id AS "remoteAgentId",
+          binding.runtime_kind AS "runtimeKind",
+          binding.runtime_path AS "runtimePath",
+          binding.local_root_path AS "localRootPath",
           binding.status,
-          binding.runtime_state,
-          binding.status_text,
-          latest_ctx.latest_runtime_session_id,
-          latest_ctx.latest_active_conversation_id,
-          latest_ctx.latest_active_task_id,
-          binding.last_activity_at,
-          latest_ctx.latest_last_run_started_at,
-          latest_ctx.latest_last_run_finished_at,
-          binding.last_error,
+          binding.runtime_state AS "runtimeState",
+          binding.status_text AS "statusText",
+          latest_ctx.latest_runtime_session_id AS "latestRuntimeSessionId",
+          latest_ctx.latest_active_conversation_id AS "latestActiveConversationId",
+          latest_ctx.latest_active_task_id AS "latestActiveTaskId",
+          binding.last_activity_at AS "lastActivityAt",
+          latest_ctx.latest_last_run_started_at AS "latestLastRunStartedAt",
+          latest_ctx.latest_last_run_finished_at AS "latestLastRunFinishedAt",
+          binding.last_error AS "lastError",
           binding.capabilities,
-          app.display_name,
+          app.display_name AS "displayName",
           (
             SELECT COUNT(DISTINCT delivery.conversation_id)
             FROM remote_agent_message_deliveries delivery
             WHERE delivery.remote_agent_id = binding.remote_agent_id
               AND delivery.status = 'pending'
-          ) AS pending_conversation_count,
+          ) AS "pendingConversationCount",
           (
             SELECT COUNT(*)
             FROM remote_agent_message_deliveries delivery
             WHERE delivery.remote_agent_id = binding.remote_agent_id
               AND delivery.status = 'pending'
-          ) AS unread_delivery_count
+          ) AS "unreadDeliveryCount"
         FROM remote_agent_bindings binding
         INNER JOIN remote_agents agent ON agent.id = binding.remote_agent_id
         INNER JOIN workspace_apps_live app ON app.id = agent.id
@@ -1981,11 +1979,11 @@ export async function getRemoteAgentMachine(params: {
     machine: presentMachineFromCamelRow(machine),
     runtimeCatalog: catalogResult.rows.map(presentRuntimeCatalogEntry),
     bindings: bindingResult.rows.map((row) => ({
-      remoteAgentId: row.remote_agent_id,
-      displayName: row.display_name,
-      runtimeKind: row.runtime_kind,
-      runtimePath: row.runtime_path ?? undefined,
-      localRootPath: row.local_root_path ?? undefined,
+      remoteAgentId: row.remoteAgentId,
+      displayName: row.displayName,
+      runtimeKind: row.runtimeKind,
+      runtimePath: row.runtimePath ?? undefined,
+      localRootPath: row.localRootPath ?? undefined,
       status: row.status,
       runtimeSummary: presentRuntimeSummary(row),
     })),
@@ -2097,23 +2095,23 @@ export async function listRemoteAgentGroupTaskGrants(params: {
     userId: params.userId,
   })
   const result = await runOnDb<{
-    workspace_member_id: string
-    granted_by_workspace_member_id: string | null
-    created_at: Date
-    updated_at: Date
-    user_id: string
-    user_name: string | null
-    user_avatar_file_id: string | null
+    workspaceMemberId: string
+    grantedByWorkspaceMemberId: string | null
+    createdAt: Date
+    updatedAt: Date
+    userId: string
+    userName: string | null
+    userAvatarFileId: string | null
   }>(
     `
       SELECT
-        grant_row.workspace_member_id,
-        grant_row.granted_by_workspace_member_id,
-        grant_row.created_at,
-        grant_row.updated_at,
-        wm.user_id,
-        u.name AS user_name,
-        u.avatar_file_id AS user_avatar_file_id
+        grant_row.workspace_member_id AS "workspaceMemberId",
+        grant_row.granted_by_workspace_member_id AS "grantedByWorkspaceMemberId",
+        grant_row.created_at AS "createdAt",
+        grant_row.updated_at AS "updatedAt",
+        wm.user_id AS "userId",
+        u.name AS "userName",
+        u.avatar_file_id AS "userAvatarFileId"
       FROM remote_agent_group_task_grants grant_row
       INNER JOIN workspace_members wm ON wm.id = grant_row.workspace_member_id
       INNER JOIN users u ON u.id = wm.user_id
@@ -2126,9 +2124,7 @@ export async function listRemoteAgentGroupTaskGrants(params: {
     grants: result.rows.map((row) =>
       presentGroupTaskGrant(
         row,
-        row.user_avatar_file_id
-          ? getFileUrlById(row.user_avatar_file_id)
-          : undefined
+        row.userAvatarFileId ? getFileUrlById(row.userAvatarFileId) : undefined
       )
     ),
   }
@@ -2306,13 +2302,13 @@ export async function createRemoteAgentDeliveriesForItem(params: {
     }
   }
   const participants = await runRaw<{
-    participant_id: string
-    remote_agent_id: string
+    participantId: string
+    remoteAgentId: string
   }>(
     `
       SELECT
-        cp.id AS participant_id,
-        cpsubj.remote_agent_id
+        cp.id AS "participantId",
+        cpsubj.remote_agent_id AS "remoteAgentId"
       FROM conversation_participants cp
       INNER JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
       WHERE cp.conversation_id = $1
@@ -2342,7 +2338,7 @@ export async function createRemoteAgentDeliveriesForItem(params: {
       executor
         .insertInto("remoteAgentMessageDeliveries")
         .values({
-          remoteAgentId: participant.remote_agent_id,
+          remoteAgentId: participant.remoteAgentId,
           conversationId: params.conversationId,
           itemId: params.itemId,
           status: "pending",
@@ -2356,7 +2352,7 @@ export async function createRemoteAgentDeliveriesForItem(params: {
       await executor
         .insertInto("remoteAgentConversationViews")
         .values({
-          remoteAgentId: participant.remote_agent_id,
+          remoteAgentId: participant.remoteAgentId,
           conversationId: params.conversationId,
           unreadCount: 1,
           lastDeliveryItemId: params.itemId,
@@ -2396,10 +2392,10 @@ export async function listRemoteAgentConversations(params: {
         EXISTS (
           SELECT 1 FROM conversation_transport_bindings b
           WHERE b.conversation_id = c.id
-        ) AS is_im,
+        ) AS "isIm",
         c.title,
-        c.updated_at,
-        view.unread_count
+        c.updated_at AS "updatedAt",
+        view.unread_count AS "unreadCount"
       FROM conversation_participants cp
       INNER JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
       INNER JOIN conversations c ON c.id = cp.conversation_id
@@ -2437,11 +2433,11 @@ export async function checkRemoteAgentMessages(params: {
     `
       SELECT
         delivery.id,
-        delivery.remote_agent_id,
-        delivery.conversation_id,
-        delivery.item_id,
+        delivery.remote_agent_id AS "remoteAgentId",
+        delivery.conversation_id AS "conversationId",
+        delivery.item_id AS "itemId",
         delivery.status,
-        delivery.created_at,
+        delivery.created_at AS "createdAt",
         item.sequence
       FROM remote_agent_message_deliveries delivery
       INNER JOIN conversation_items item ON item.id = delivery.item_id
@@ -2472,15 +2468,15 @@ export async function completeRemoteAgentDeliveries(params: {
 
   const rows = await runOnDb<{
     id: string
-    conversation_id: string
-    item_id: string
+    conversationId: string
+    itemId: string
     sequence: string | number
   }>(
     `
       SELECT
         delivery.id,
-        delivery.conversation_id,
-        delivery.item_id,
+        delivery.conversation_id AS "conversationId",
+        delivery.item_id AS "itemId",
         item.sequence
       FROM remote_agent_message_deliveries delivery
       INNER JOIN conversation_items item ON item.id = delivery.item_id
@@ -2507,11 +2503,11 @@ export async function completeRemoteAgentDeliveries(params: {
   const byConversation = new Map<string, { sequence: number; itemId: string }>()
   for (const row of rows.rows) {
     const sequence = Number(row.sequence)
-    const existing = byConversation.get(row.conversation_id)
+    const existing = byConversation.get(row.conversationId)
     if (!existing || sequence > existing.sequence) {
-      byConversation.set(row.conversation_id, {
+      byConversation.set(row.conversationId, {
         sequence,
-        itemId: row.item_id,
+        itemId: row.itemId,
       })
     }
   }
@@ -2767,7 +2763,7 @@ async function finalizeMachineSession(
         runtimeState: "offline",
         statusText: closeReason ?? "Daemon disconnected",
       })
-      .where("remoteAgentId", "=", binding.remote_agent_id)
+      .where("remoteAgentId", "=", binding.remoteAgentId)
       .execute()
     await db
       .updateTable("remoteAgentConversationContexts")
@@ -2776,7 +2772,7 @@ async function finalizeMachineSession(
         statusText: closeReason ?? "Daemon disconnected",
         lastRunFinishedAt: sql`COALESCE(last_run_finished_at, NOW())`,
       })
-      .where("remoteAgentId", "=", binding.remote_agent_id)
+      .where("remoteAgentId", "=", binding.remoteAgentId)
       .where("runtimeState", "in", [
         "running",
         "waiting_user_input",
@@ -2784,7 +2780,7 @@ async function finalizeMachineSession(
         "waiting_plan_approval",
       ])
       .execute()
-    await emitRemoteAgentRuntimeUpdated(binding.remote_agent_id)
+    await emitRemoteAgentRuntimeUpdated(binding.remoteAgentId)
   }
 }
 

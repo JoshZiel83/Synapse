@@ -303,36 +303,36 @@ async function loadToolResolveConversationParticipants(params: {
 
   for (const member of members) {
     if (member.state !== "active") continue
-    if (member.actor_id) {
+    if (member.actorId) {
       entries.push({
         participantType: "actor",
-        id: member.actor_id,
+        id: member.actorId,
         participantId: member.id,
-        name: member.participant_name || "Unknown actor",
-        title: member.participant_title || member.participant_role || "Actor",
-        role: member.participant_role || undefined,
+        name: member.participantName || "Unknown actor",
+        title: member.participantTitle || member.participantRole || "Actor",
+        role: member.participantRole || undefined,
       })
       continue
     }
-    if (member.user_id) {
+    if (member.userId) {
       const workspaceMemberId =
-        typeof member.workspace_member_id === "string" &&
-        member.workspace_member_id.trim().length > 0
-          ? member.workspace_member_id
+        typeof member.workspaceMemberId === "string" &&
+        member.workspaceMemberId.trim().length > 0
+          ? member.workspaceMemberId
           : null
       if (!workspaceMemberId) {
         throw new Error(
           `Conversation ${params.conversationId} has workspace participant ${member.id} without workspace_member_id`
         )
       }
-      const transportKind = isTransportKind(member.transport_kind)
-        ? member.transport_kind
+      const transportKind = isTransportKind(member.transportKind)
+        ? member.transportKind
         : undefined
       entries.push({
         participantType: "workspace_member",
         id: workspaceMemberId,
         participantId: member.id,
-        name: member.user_name || "User",
+        name: member.userName || "User",
         title: transportKind
           ? `Workspace member · reachable via ${
               getTransportConnectorCapability(transportKind)?.displayName ??
@@ -343,30 +343,24 @@ async function loadToolResolveConversationParticipants(params: {
       })
       continue
     }
-    if (member.participant_type === "external") {
-      const linkedWorkspaceMemberName =
-        (member.linked_user_name as string | null) || undefined
+    if (member.participantType === "external") {
+      const linkedWorkspaceMemberName = member.linkedUserName || undefined
       entries.push({
         participantType: "external",
-        id:
-          (member.linked_user_id as string | null) ||
-          (member.transport_external_id as string | null) ||
-          (member.id as string),
-        participantId: member.id as string,
+        id: member.linkedUserId || member.transportExternalId || member.id,
+        participantId: member.id,
         name:
-          (member.transport_display_name as string | null) ||
-          (member.display_name as string | null) ||
+          member.transportDisplayName ||
+          member.displayName ||
           linkedWorkspaceMemberName ||
           "External participant",
         title: linkedWorkspaceMemberName
           ? `Linked workspace user: ${linkedWorkspaceMemberName}`
           : "External participant",
         role: "External participant",
-        linkedWorkspaceMemberId:
-          (member.linked_user_id as string | null) || undefined,
+        linkedWorkspaceMemberId: member.linkedUserId || undefined,
         linkedWorkspaceMemberName,
-        externalUserKey:
-          (member.transport_external_id as string | null) || undefined,
+        externalUserKey: member.transportExternalId || undefined,
       })
     }
   }

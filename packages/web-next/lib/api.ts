@@ -6,6 +6,20 @@ import type {
   DeviceServiceView,
   DeviceCapabilityView,
   DevicePairingTicketView,
+  MarketplacePluginView,
+  PluginInstallationDetailView,
+  PluginCategoryView,
+  MarketplacePublisherView,
+  ModelGroupView,
+  ModelGroupDetailView,
+  ModelGroupGrantView,
+  ModelGroupItemView,
+  ModelGroupItemVersionView,
+  ActorModelGroupAssignmentView,
+  WorkspaceInviteView,
+  WorkspaceInvitePublicView,
+  WorkspaceInviteRedeemResult,
+  ReuseScope,
   Actor,
   ActorDoc,
   ActorRole,
@@ -705,11 +719,11 @@ class ApiClient {
   }
 
   // Workspace Invites
-  async getInviteInfo(token: string) {
+  async getInviteInfo(token: string): Promise<WorkspaceInvitePublicView> {
     const res = await this.fetch(`/invites/${token}`)
     return res.data
   }
-  async redeemInvite(token: string) {
+  async redeemInvite(token: string): Promise<WorkspaceInviteRedeemResult> {
     const res = await this.fetch(`/invites/${token}/redeem`, {
       method: "POST",
       body: "{}",
@@ -723,13 +737,13 @@ class ApiClient {
       maxUses?: number
       expiresAt?: import("@synapse/shared").Timestamp
     }
-  ) {
+  ): Promise<{ data: WorkspaceInviteView }> {
     return this.fetch(`/workspaces/${wsId}/invites`, {
       method: "POST",
       body: JSON.stringify(data),
     })
   }
-  listInvites(wsId: string) {
+  listInvites(wsId: string): Promise<{ data: WorkspaceInviteView[] }> {
     return this.fetch(`/workspaces/${wsId}/invites`)
   }
   revokeInvite(wsId: string, inviteId: string) {
@@ -890,19 +904,29 @@ class ApiClient {
   }
 
   // Model Groups - Workspace
-  getModelGroups(wsId: string) {
+  getModelGroups(wsId: string): Promise<{ groups: ModelGroupView[] }> {
     return this.fetch(`/workspaces/${wsId}/model-groups`)
   }
-  createModelGroup(wsId: string, data: any) {
+  createModelGroup(
+    wsId: string,
+    data: Record<string, unknown>
+  ): Promise<{ group: ModelGroupDetailView }> {
     return this.fetch(`/workspaces/${wsId}/model-groups`, {
       method: "POST",
       body: JSON.stringify(data),
     })
   }
-  getModelGroup(wsId: string, groupId: string) {
+  getModelGroup(
+    wsId: string,
+    groupId: string
+  ): Promise<{ group: ModelGroupDetailView }> {
     return this.fetch(`/workspaces/${wsId}/model-groups/${groupId}`)
   }
-  updateModelGroup(wsId: string, groupId: string, data: any) {
+  updateModelGroup(
+    wsId: string,
+    groupId: string,
+    data: Record<string, unknown>
+  ): Promise<{ group: ModelGroupDetailView }> {
     return this.fetch(`/workspaces/${wsId}/model-groups/${groupId}`, {
       method: "PUT",
       body: JSON.stringify(data),
@@ -913,10 +937,17 @@ class ApiClient {
       method: "DELETE",
     })
   }
-  getModelGroupGrants(wsId: string, groupId: string) {
+  getModelGroupGrants(
+    wsId: string,
+    groupId: string
+  ): Promise<{ grants: ModelGroupGrantView[] }> {
     return this.fetch(`/workspaces/${wsId}/model-groups/${groupId}/grants`)
   }
-  issueModelGroupGrant(wsId: string, groupId: string, data: any) {
+  issueModelGroupGrant(
+    wsId: string,
+    groupId: string,
+    data: Record<string, unknown>
+  ): Promise<{ grant: ModelGroupGrantView }> {
     return this.fetch(`/workspaces/${wsId}/model-groups/${groupId}/grants`, {
       method: "POST",
       body: JSON.stringify(data),
@@ -928,13 +959,22 @@ class ApiClient {
       { method: "POST", body: "{}" }
     )
   }
-  addModelItem(wsId: string, groupId: string, data: any) {
+  addModelItem(
+    wsId: string,
+    groupId: string,
+    data: Record<string, unknown>
+  ): Promise<{ item: ModelGroupItemView }> {
     return this.fetch(`/workspaces/${wsId}/model-groups/${groupId}/items`, {
       method: "POST",
       body: JSON.stringify(data),
     })
   }
-  updateModelItem(wsId: string, groupId: string, itemId: string, data: any) {
+  updateModelItem(
+    wsId: string,
+    groupId: string,
+    itemId: string,
+    data: Record<string, unknown>
+  ): Promise<{ item: ModelGroupItemView }> {
     return this.fetch(
       `/workspaces/${wsId}/model-groups/${groupId}/items/${itemId}`,
       { method: "PUT", body: JSON.stringify(data) }
@@ -946,26 +986,37 @@ class ApiClient {
       { method: "DELETE" }
     )
   }
-  getItemVersions(wsId: string, groupId: string, itemId: string) {
+  getItemVersions(
+    wsId: string,
+    groupId: string,
+    itemId: string
+  ): Promise<{ versions: ModelGroupItemVersionView[] }> {
     return this.fetch(
       `/workspaces/${wsId}/model-groups/${groupId}/items/${itemId}/versions`
     )
   }
 
   // Model Groups - Platform
-  getPlatformModelGroups() {
+  getPlatformModelGroups(): Promise<{ groups: ModelGroupView[] }> {
     return this.fetch("/platform/model-groups")
   }
-  createPlatformModelGroup(data: any) {
+  createPlatformModelGroup(
+    data: Record<string, unknown>
+  ): Promise<{ group: ModelGroupDetailView }> {
     return this.fetch("/platform/model-groups", {
       method: "POST",
       body: JSON.stringify(data),
     })
   }
-  getPlatformModelGroup(groupId: string) {
+  getPlatformModelGroup(
+    groupId: string
+  ): Promise<{ group: ModelGroupDetailView }> {
     return this.fetch(`/platform/model-groups/${groupId}`)
   }
-  updatePlatformModelGroup(groupId: string, data: any) {
+  updatePlatformModelGroup(
+    groupId: string,
+    data: Record<string, unknown>
+  ): Promise<{ group: ModelGroupDetailView }> {
     return this.fetch(`/platform/model-groups/${groupId}`, {
       method: "PUT",
       body: JSON.stringify(data),
@@ -974,10 +1025,15 @@ class ApiClient {
   deletePlatformModelGroup(groupId: string) {
     return this.fetch(`/platform/model-groups/${groupId}`, { method: "DELETE" })
   }
-  getPlatformModelGroupGrants(groupId: string) {
+  getPlatformModelGroupGrants(
+    groupId: string
+  ): Promise<{ grants: ModelGroupGrantView[] }> {
     return this.fetch(`/platform/model-groups/${groupId}/grants`)
   }
-  issuePlatformModelGroupGrant(groupId: string, data: any) {
+  issuePlatformModelGroupGrant(
+    groupId: string,
+    data: Record<string, unknown>
+  ): Promise<{ grant: ModelGroupGrantView }> {
     return this.fetch(`/platform/model-groups/${groupId}/grants`, {
       method: "POST",
       body: JSON.stringify(data),
@@ -989,13 +1045,20 @@ class ApiClient {
       { method: "POST", body: "{}" }
     )
   }
-  addPlatformModelItem(groupId: string, data: any) {
+  addPlatformModelItem(
+    groupId: string,
+    data: Record<string, unknown>
+  ): Promise<{ item: ModelGroupItemView }> {
     return this.fetch(`/platform/model-groups/${groupId}/items`, {
       method: "POST",
       body: JSON.stringify(data),
     })
   }
-  updatePlatformModelItem(groupId: string, itemId: string, data: any) {
+  updatePlatformModelItem(
+    groupId: string,
+    itemId: string,
+    data: Record<string, unknown>
+  ): Promise<{ item: ModelGroupItemView }> {
     return this.fetch(`/platform/model-groups/${groupId}/items/${itemId}`, {
       method: "PUT",
       body: JSON.stringify(data),
@@ -1006,26 +1069,41 @@ class ApiClient {
       method: "DELETE",
     })
   }
-  getPlatformItemVersions(groupId: string, itemId: string) {
+  getPlatformItemVersions(
+    groupId: string,
+    itemId: string
+  ): Promise<{ versions: ModelGroupItemVersionView[] }> {
     return this.fetch(
       `/platform/model-groups/${groupId}/items/${itemId}/versions`
     )
   }
 
   // Model Groups - Workspace Member
-  getWorkspaceMemberModelGroups(wsId: string) {
+  getWorkspaceMemberModelGroups(
+    wsId: string
+  ): Promise<{ groups: ModelGroupView[] }> {
     return this.fetch(`/workspaces/${wsId}/me/model-groups`)
   }
-  createWorkspaceMemberModelGroup(wsId: string, data: any) {
+  createWorkspaceMemberModelGroup(
+    wsId: string,
+    data: Record<string, unknown>
+  ): Promise<{ group: ModelGroupDetailView }> {
     return this.fetch(`/workspaces/${wsId}/me/model-groups`, {
       method: "POST",
       body: JSON.stringify(data),
     })
   }
-  getWorkspaceMemberModelGroup(wsId: string, groupId: string) {
+  getWorkspaceMemberModelGroup(
+    wsId: string,
+    groupId: string
+  ): Promise<{ group: ModelGroupDetailView }> {
     return this.fetch(`/workspaces/${wsId}/me/model-groups/${groupId}`)
   }
-  updateWorkspaceMemberModelGroup(wsId: string, groupId: string, data: any) {
+  updateWorkspaceMemberModelGroup(
+    wsId: string,
+    groupId: string,
+    data: Record<string, unknown>
+  ): Promise<{ group: ModelGroupDetailView }> {
     return this.fetch(`/workspaces/${wsId}/me/model-groups/${groupId}`, {
       method: "PUT",
       body: JSON.stringify(data),
@@ -1036,14 +1114,17 @@ class ApiClient {
       method: "DELETE",
     })
   }
-  getWorkspaceMemberModelGroupGrants(wsId: string, groupId: string) {
+  getWorkspaceMemberModelGroupGrants(
+    wsId: string,
+    groupId: string
+  ): Promise<{ grants: ModelGroupGrantView[] }> {
     return this.fetch(`/workspaces/${wsId}/me/model-groups/${groupId}/grants`)
   }
   issueWorkspaceMemberModelGroupGrant(
     wsId: string,
     groupId: string,
-    data: any
-  ) {
+    data: Record<string, unknown>
+  ): Promise<{ grant: ModelGroupGrantView }> {
     return this.fetch(`/workspaces/${wsId}/me/model-groups/${groupId}/grants`, {
       method: "POST",
       body: JSON.stringify(data),
@@ -1062,7 +1143,11 @@ class ApiClient {
       }
     )
   }
-  addWorkspaceMemberModelItem(wsId: string, groupId: string, data: any) {
+  addWorkspaceMemberModelItem(
+    wsId: string,
+    groupId: string,
+    data: Record<string, unknown>
+  ): Promise<{ item: ModelGroupItemView }> {
     return this.fetch(`/workspaces/${wsId}/me/model-groups/${groupId}/items`, {
       method: "POST",
       body: JSON.stringify(data),
@@ -1072,8 +1157,8 @@ class ApiClient {
     wsId: string,
     groupId: string,
     itemId: string,
-    data: any
-  ) {
+    data: Record<string, unknown>
+  ): Promise<{ item: ModelGroupItemView }> {
     return this.fetch(
       `/workspaces/${wsId}/me/model-groups/${groupId}/items/${itemId}`,
       {
@@ -1098,17 +1183,23 @@ class ApiClient {
     wsId: string,
     groupId: string,
     itemId: string
-  ) {
+  ): Promise<{ versions: ModelGroupItemVersionView[] }> {
     return this.fetch(
       `/workspaces/${wsId}/me/model-groups/${groupId}/items/${itemId}/versions`
     )
   }
 
   // Actor Model Group Assignment
-  getActorModelGroups(wsId: string, actorId: string) {
+  getActorModelGroups(
+    wsId: string,
+    actorId: string
+  ): Promise<{ groups: ActorModelGroupAssignmentView[] }> {
     return this.fetch(`/workspaces/${wsId}/actors/${actorId}/model-groups`)
   }
-  getVisibleActorModelGroups(wsId: string, actorId: string) {
+  getVisibleActorModelGroups(
+    wsId: string,
+    actorId: string
+  ): Promise<{ groups: ModelGroupView[] }> {
     return this.fetch(
       `/workspaces/${wsId}/actors/${actorId}/model-groups/visible`
     )
@@ -1117,7 +1208,7 @@ class ApiClient {
     wsId: string,
     actorId: string,
     groups: { groupId: string; priority: number }[]
-  ) {
+  ): Promise<{ groups: ActorModelGroupAssignmentView[] }> {
     return this.fetch(`/workspaces/${wsId}/actors/${actorId}/model-groups`, {
       method: "PUT",
       body: JSON.stringify({ groups }),
@@ -1900,29 +1991,37 @@ class ApiClient {
     )
   }
   // MCP Marketplace
-  getMarketplace(params?: string) {
+  getMarketplace(params?: string): Promise<MarketplacePluginView[]> {
     return this.fetch(`/mcp/marketplace${params ? "?" + params : ""}`)
   }
-  getMarketplacePlugin(pluginId: string) {
+  getMarketplacePlugin(pluginId: string): Promise<MarketplacePluginView> {
     return this.fetch(`/mcp/marketplace/${pluginId}`)
   }
-  getPluginCategories() {
+  getPluginCategories(): Promise<PluginCategoryView[]> {
     return this.fetch("/mcp/categories")
   }
-  getMcpOrganizations() {
+  getMcpOrganizations(): Promise<MarketplacePublisherView[]> {
     return this.fetch("/mcp/organizations")
   }
-  getMcpOrganization(orgId: string) {
+  getMcpOrganization(
+    orgId: string
+  ): Promise<MarketplacePublisherView & { plugins: MarketplacePluginView[] }> {
     return this.fetch(`/mcp/organizations/${orgId}`)
   }
 
   // MCP Unified Installations
-  getInstallations(wsId: string, params?: string) {
+  getInstallations(
+    wsId: string,
+    params?: string
+  ): Promise<PluginInstallationDetailView[]> {
     return this.fetch(
       `/workspaces/${wsId}/mcp/installations${params ? "?" + params : ""}`
     )
   }
-  getInstallation(wsId: string, installId: string) {
+  getInstallation(
+    wsId: string,
+    installId: string
+  ): Promise<{ installation: PluginInstallationDetailView }> {
     return this.fetch(`/workspaces/${wsId}/mcp/installations/${installId}`)
   }
   async installPlugin(
@@ -1944,7 +2043,7 @@ class ApiClient {
         reason?: string
       }>
     }
-  ) {
+  ): Promise<PluginInstallationDetailView> {
     const created = await this.fetch(`/workspaces/${wsId}/workspace-apps`, {
       method: "POST",
       body: JSON.stringify({
@@ -1952,9 +2051,20 @@ class ApiClient {
         ...data,
       }),
     })
-    return this.getInstallation(wsId, created.app.id)
+    const { installation } = await this.getInstallation(wsId, created.app.id)
+    return installation
   }
-  async updateInstallation(wsId: string, installId: string, data: any) {
+  async updateInstallation(
+    wsId: string,
+    installId: string,
+    data: {
+      isEnabled?: boolean
+      configData?: Record<string, unknown>
+      authSessionIds?: Record<string, string>
+      lifecycleScope?: ReuseScope
+      conversationTypeMaskOverride?: number | null
+    }
+  ): Promise<PluginInstallationDetailView> {
     await this.fetch(`/workspaces/${wsId}/workspace-apps/${installId}`, {
       method: "PUT",
       body: JSON.stringify({
@@ -1962,7 +2072,8 @@ class ApiClient {
         ...data,
       }),
     })
-    return this.getInstallation(wsId, installId)
+    const { installation } = await this.getInstallation(wsId, installId)
+    return installation
   }
   uninstallPlugin(wsId: string, installId: string) {
     return this.fetch(`/workspaces/${wsId}/workspace-apps/${installId}`, {

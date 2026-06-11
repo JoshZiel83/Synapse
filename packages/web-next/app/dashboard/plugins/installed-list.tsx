@@ -2,6 +2,7 @@
 
 import Link from "next/link"
 import { useRouter } from "next/navigation"
+import type { PluginInstallationDetailView } from "@synapse/shared"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -28,7 +29,10 @@ export default function InstalledList() {
   const { workspaceId } = useWorkspace()
   const locale = getLocale()
 
-  const handleToggle = async (install: any, enabled: boolean) => {
+  const handleToggle = async (
+    install: PluginInstallationDetailView,
+    enabled: boolean
+  ) => {
     if (!workspaceId) return
     await updateInstallation(workspaceId, install.id, { isEnabled: enabled })
   }
@@ -39,15 +43,17 @@ export default function InstalledList() {
     await uninstallPlugin(workspaceId, installId)
   }
 
-  const hasRequiredConfigMissing = (install: any): boolean => {
-    const fields: any[] = install.configFields || []
+  const hasRequiredConfigMissing = (
+    install: PluginInstallationDetailView
+  ): boolean => {
+    const fields = install.configFields || []
     const required = fields.filter((field) => field.required)
     if (required.length === 0) return false
     const configData = install.configData || {}
-    const configState = new Map<string, { isConfigured?: boolean }>(
-      (install.configState || []).map((state: any) => [state.key, state])
+    const configState = new Map(
+      (install.configState || []).map((state) => [state.key, state])
     )
-    return required.some((field: any) => {
+    return required.some((field) => {
       if (field.type === "auth_connection") {
         return !configState.get(field.key)?.isConfigured
       }
@@ -79,7 +85,7 @@ export default function InstalledList() {
 
   return (
     <div className="space-y-3">
-      {installations.map((install: any) => {
+      {installations.map((install) => {
         const configMissing = hasRequiredConfigMissing(install)
         return (
           <Card

@@ -48,28 +48,6 @@ export type TableInsert<T extends keyof Database> = Insertable<Database[T]>
 export type TableUpdate<T extends keyof Database> = Updateable<Database[T]>
 
 /**
- * Invert {@link CamelCasePlugin}'s top-level key transform for a single raw-SQL
- * result row. The plugin camelCases the TOP-LEVEL keys of EVERY result row —
- * including rows from `sql\`...\`` / `CompiledQuery.raw` whose `AS snake_case`
- * aliases the module's row types + reads expect to stay snake_case. Only the
- * row's OWN keys are mapped back; nested object values (JSONB columns like
- * `metadata` / `*_blocks`) are left intact, matching the plugin's
- * `maintainNestedObjectKeys: true`.
- *
- * Use at raw-SQL boundaries that declare a snake_case `<RowType>` and read it
- * with snake_case keys throughout. Native Kysely query builders that already
- * use camelCase identifiers do NOT need this.
- */
-export function snakeCaseTopLevelKeys<T>(row: T): T {
-  if (!row || typeof row !== "object" || Array.isArray(row)) return row
-  const out: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(row as Record<string, unknown>)) {
-    out[key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)] = value
-  }
-  return out as T
-}
-
-/**
  * Map a Kysely {@link QueryResult} to the `{ rows, rowCount }` shape the
  * `runBuilder`/`runCompilable` bridges expose. Kysely surfaces the affected-row
  * count for insert/update/delete as `numAffectedRows` (a bigint) and leaves it

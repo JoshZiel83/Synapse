@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import type { MarketplacePluginView } from "@synapse/shared"
 import { Globe, Code, Puzzle, Wrench, Key } from "lucide-react"
 import { resolveFileUrl } from "@/lib/utils"
 
@@ -38,10 +39,16 @@ function translate(
 }
 
 interface Props {
-  plugin: any
+  plugin: MarketplacePluginView
   installedCount: number
   onInstall: () => void
   onClose: () => void
+}
+
+type PluginToolSummary = { name?: string; description?: string }
+
+function asToolSummary(value: unknown): PluginToolSummary {
+  return value && typeof value === "object" ? (value as PluginToolSummary) : {}
 }
 
 const transportLabels: Record<string, string> = {
@@ -66,7 +73,7 @@ export default function PluginDetailDialog({
 }: Props) {
   const tools = plugin.toolsManifest || []
   const configFields = plugin.configFields || []
-  const hasRequiredConfig = configFields.some((field: any) => field.required)
+  const hasRequiredConfig = configFields.some((field) => field.required)
   const locale = getLocale(plugin.defaultLocale)
   const iconUrl = resolveFileUrl(plugin.iconUrl)
 
@@ -130,7 +137,7 @@ export default function PluginDetailDialog({
               Runtime:{" "}
               {reuseScopeLabels[plugin.lifecycleScope] || plugin.lifecycleScope}
             </Badge>
-            {(plugin.categories || []).map((category: any) => (
+            {(plugin.categories || []).map((category) => (
               <Badge
                 key={category.slug}
                 variant="outline"
@@ -177,19 +184,22 @@ export default function PluginDetailDialog({
                 Tools ({tools.length})
               </h4>
               <div className="space-y-2">
-                {tools.map((tool: any) => (
-                  <div
-                    key={tool.name}
-                    className="rounded border border-gray-200 bg-gray-50 p-2 dark:border-white/10 dark:bg-white/5"
-                  >
-                    <p className="font-mono text-sm font-medium text-blue-400">
-                      {tool.name}
-                    </p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {tool.description}
-                    </p>
-                  </div>
-                ))}
+                {tools.map((rawTool) => {
+                  const tool = asToolSummary(rawTool)
+                  return (
+                    <div
+                      key={tool.name}
+                      className="rounded border border-gray-200 bg-gray-50 p-2 dark:border-white/10 dark:bg-white/5"
+                    >
+                      <p className="font-mono text-sm font-medium text-blue-400">
+                        {tool.name}
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {tool.description}
+                      </p>
+                    </div>
+                  )
+                })}
               </div>
             </div>
           )}

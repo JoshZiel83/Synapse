@@ -50,7 +50,6 @@ import { getWorkspaceCapabilityConversationTypeMask } from "../capabilities/conv
 import {
   db,
   runBuilder,
-  snakeCaseTopLevelKeys,
   takeFirstOn,
   withDbTransaction,
   type Executor,
@@ -99,77 +98,81 @@ type QueryRunner = <T extends QueryRow>(
   params?: unknown[]
 ) => Promise<QueryResultLike<T>>
 
-/** Build a {@link QueryRunner} backed by an {@link Executor} (db/trx). */
+/**
+ * Build a {@link QueryRunner} backed by an {@link Executor} (db/trx).
+ *
+ * CamelCasePlugin already camelCases the top-level keys of every result row
+ * (including these raw `connection.*` / `RETURNING *` rows), and the only
+ * consumer — {@link attachAuthConnectionsToConfig} — reads its rows as the
+ * camelCase `PluginConnectionRow` (the `pluginConnections` selectable) and shapes
+ * them via `presentAuthConnection`, which reads camelCase fields. So the
+ * executor's rows pass straight through with no key transform, matching the
+ * default `dbRunner` in plugin-auth-connections.ts.
+ */
 function runnerFn(executor: Executor): QueryRunner {
   return <T extends QueryRow>(text: string, params?: unknown[]) =>
-    executor
-      .executeQuery<T>(CompiledQuery.raw(text, params ? [...params] : []))
-      .then((r) => ({
-        // CamelCasePlugin camelCases top-level keys of every result row,
-        // including these raw rows whose `AS snake_case` aliases the module's
-        // row types + reads expect snake. Re-snake the top-level keys (JSONB
-        // values untouched) so the runtime rows match the declared <RowType>.
-        rows: r.rows.map((row) => snakeCaseTopLevelKeys(row)) as T[],
-      })) as Promise<QueryResultLike<T>>
+    executor.executeQuery<T>(
+      CompiledQuery.raw(text, params ? [...params] : [])
+    ) as Promise<QueryResultLike<T>>
 }
 
 type JsonObject = Record<string, unknown>
 type JsonArray = unknown[]
 
 type PluginCatalogRow = {
-  item_id: string
-  item_workspace_id: string | null
-  item_slug: string
-  item_display_name: string
-  item_summary: string
-  item_long_description: string
-  item_source_kind: "builtin" | "official" | "workspace" | "user"
-  item_visibility: "public" | "workspace" | "private"
-  item_tags: string[] | null
-  item_is_active: boolean
-  item_download_count: number
-  item_icon_file_id: string | null
-  item_metadata: unknown
-  item_created_at: Date
-  item_updated_at: Date
-  version_id: string | null
-  version_value: string | null
-  version_status: "draft" | "active" | "deprecated" | "archived" | null
-  version_changelog: string | null
-  version_metadata: unknown
-  version_created_by_user_id: string | null
-  version_created_at: Date | null
-  spec_transport: PluginSpecTransport | null
-  spec_entry_point: string | null
-  spec_tool_manifest: unknown
-  spec_config_schema: unknown
-  spec_default_config: unknown
-  spec_install_flow: unknown
-  spec_auth_bindings: unknown
-  spec_default_reuse_scope: PluginReuseScopeV2 | null
-  spec_default_conversation_type_mask: number | null
-  spec_supported_reuse_scopes: unknown
-  spec_requires_handshake: boolean | null
-  spec_metadata: unknown
-  publisher_id: string
-  publisher_slug: string
-  publisher_display_name: string
-  publisher_description: string
-  publisher_workspace_id: string | null
-  publisher_is_builtin: boolean
-  publisher_is_verified: boolean
-  publisher_owner_user_id: string | null
-  publisher_logo_file_id: string | null
-  categories_json: unknown
-  runtime_permissions_json: unknown
+  itemId: string
+  itemWorkspaceId: string | null
+  itemSlug: string
+  itemDisplayName: string
+  itemSummary: string
+  itemLongDescription: string
+  itemSourceKind: "builtin" | "official" | "workspace" | "user"
+  itemVisibility: "public" | "workspace" | "private"
+  itemTags: string[] | null
+  itemIsActive: boolean
+  itemDownloadCount: number
+  itemIconFileId: string | null
+  itemMetadata: unknown
+  itemCreatedAt: Date
+  itemUpdatedAt: Date
+  versionId: string | null
+  versionValue: string | null
+  versionStatus: "draft" | "active" | "deprecated" | "archived" | null
+  versionChangelog: string | null
+  versionMetadata: unknown
+  versionCreatedByUserId: string | null
+  versionCreatedAt: Date | null
+  specTransport: PluginSpecTransport | null
+  specEntryPoint: string | null
+  specToolManifest: unknown
+  specConfigSchema: unknown
+  specDefaultConfig: unknown
+  specInstallFlow: unknown
+  specAuthBindings: unknown
+  specDefaultReuseScope: PluginReuseScopeV2 | null
+  specDefaultConversationTypeMask: number | null
+  specSupportedReuseScopes: unknown
+  specRequiresHandshake: boolean | null
+  specMetadata: unknown
+  publisherId: string
+  publisherSlug: string
+  publisherDisplayName: string
+  publisherDescription: string
+  publisherWorkspaceId: string | null
+  publisherIsBuiltin: boolean
+  publisherIsVerified: boolean
+  publisherOwnerUserId: string | null
+  publisherLogoFileId: string | null
+  categoriesJson: unknown
+  runtimePermissionsJson: unknown
 }
 
 type PluginCategoryRow = {
   id: string
   slug: string
-  display_name: string
+  displayName: string
   description: string
-  sort_order: number
+  sortOrder: number
   metadata: unknown
 }
 
@@ -189,22 +192,22 @@ type PublisherRow = {
 }
 
 type InstallationRow = {
-  installation_id: string
-  root_workspace_id: string
-  catalog_item_id: string
-  catalog_version_id: string
-  root_display_name: string
-  config_data: unknown
-  approved_runtime_permissions: string[] | null
-  reuse_scope: PluginReuseScopeV2
-  root_conversation_type_mask_override: number | null
-  root_status: "active" | "disabled" | "error" | "archived"
-  root_owner_workspace_member_id: string | null
-  installation_created_at: Date
-  installation_updated_at: Date
-  source_catalog_item_id: string | null
-  source_catalog_version_id: string | null
-  source_sync_mode:
+  installationId: string
+  rootWorkspaceId: string
+  catalogItemId: string
+  catalogVersionId: string
+  rootDisplayName: string
+  configData: unknown
+  approvedRuntimePermissions: string[] | null
+  reuseScope: PluginReuseScopeV2
+  rootConversationTypeMaskOverride: number | null
+  rootStatus: "active" | "disabled" | "error" | "archived"
+  rootOwnerWorkspaceMemberId: string | null
+  installationCreatedAt: Date
+  installationUpdatedAt: Date
+  sourceCatalogItemId: string | null
+  sourceCatalogVersionId: string | null
+  sourceSyncMode:
     | "notify"
     | "manual_merge"
     | "follow_upstream"
@@ -234,51 +237,51 @@ type InstallationAccessRow = {
 
 const PLUGIN_CATALOG_SELECT = `
   SELECT
-    item.id AS item_id,
-    item.workspace_id AS item_workspace_id,
-    item.slug AS item_slug,
-    item.display_name AS item_display_name,
-    item.summary AS item_summary,
-    item.long_description AS item_long_description,
-    item.source_kind AS item_source_kind,
-    item.visibility AS item_visibility,
-    item.tags AS item_tags,
-    item.is_active AS item_is_active,
-    item.download_count AS item_download_count,
-    item.icon_file_id AS item_icon_file_id,
-    item.metadata AS item_metadata,
-    item.created_at AS item_created_at,
-    item.updated_at AS item_updated_at,
-    version.id AS version_id,
-    version.version AS version_value,
-    version.status AS version_status,
-    version.changelog AS version_changelog,
-    version.metadata AS version_metadata,
-    version.created_by_user_id AS version_created_by_user_id,
-    version.created_at AS version_created_at,
-    spec.transport AS spec_transport,
-    spec.entry_point AS spec_entry_point,
-    spec.tool_manifest AS spec_tool_manifest,
-    spec.config_schema AS spec_config_schema,
-    spec.default_config AS spec_default_config,
-    spec.install_flow AS spec_install_flow,
-    spec.auth_bindings AS spec_auth_bindings,
-    spec.default_reuse_scope AS spec_default_reuse_scope,
-    spec.default_conversation_type_mask AS spec_default_conversation_type_mask,
-    spec.supported_reuse_scopes AS spec_supported_reuse_scopes,
-    spec.requires_handshake AS spec_requires_handshake,
-    spec.metadata AS spec_metadata,
-    publisher.id AS publisher_id,
-    publisher.slug AS publisher_slug,
-    publisher.display_name AS publisher_display_name,
-    publisher.description AS publisher_description,
-    publisher.workspace_id AS publisher_workspace_id,
-    publisher.is_builtin AS publisher_is_builtin,
-    publisher.is_verified AS publisher_is_verified,
-    publisher.owner_user_id AS publisher_owner_user_id,
-    publisher.logo_file_id AS publisher_logo_file_id,
-    COALESCE(categories.categories_json, '[]'::jsonb) AS categories_json,
-    COALESCE(runtime_permissions.runtime_permissions_json, '[]'::jsonb) AS runtime_permissions_json
+    item.id AS "itemId",
+    item.workspace_id AS "itemWorkspaceId",
+    item.slug AS "itemSlug",
+    item.display_name AS "itemDisplayName",
+    item.summary AS "itemSummary",
+    item.long_description AS "itemLongDescription",
+    item.source_kind AS "itemSourceKind",
+    item.visibility AS "itemVisibility",
+    item.tags AS "itemTags",
+    item.is_active AS "itemIsActive",
+    item.download_count AS "itemDownloadCount",
+    item.icon_file_id AS "itemIconFileId",
+    item.metadata AS "itemMetadata",
+    item.created_at AS "itemCreatedAt",
+    item.updated_at AS "itemUpdatedAt",
+    version.id AS "versionId",
+    version.version AS "versionValue",
+    version.status AS "versionStatus",
+    version.changelog AS "versionChangelog",
+    version.metadata AS "versionMetadata",
+    version.created_by_user_id AS "versionCreatedByUserId",
+    version.created_at AS "versionCreatedAt",
+    spec.transport AS "specTransport",
+    spec.entry_point AS "specEntryPoint",
+    spec.tool_manifest AS "specToolManifest",
+    spec.config_schema AS "specConfigSchema",
+    spec.default_config AS "specDefaultConfig",
+    spec.install_flow AS "specInstallFlow",
+    spec.auth_bindings AS "specAuthBindings",
+    spec.default_reuse_scope AS "specDefaultReuseScope",
+    spec.default_conversation_type_mask AS "specDefaultConversationTypeMask",
+    spec.supported_reuse_scopes AS "specSupportedReuseScopes",
+    spec.requires_handshake AS "specRequiresHandshake",
+    spec.metadata AS "specMetadata",
+    publisher.id AS "publisherId",
+    publisher.slug AS "publisherSlug",
+    publisher.display_name AS "publisherDisplayName",
+    publisher.description AS "publisherDescription",
+    publisher.workspace_id AS "publisherWorkspaceId",
+    publisher.is_builtin AS "publisherIsBuiltin",
+    publisher.is_verified AS "publisherIsVerified",
+    publisher.owner_user_id AS "publisherOwnerUserId",
+    publisher.logo_file_id AS "publisherLogoFileId",
+    COALESCE(categories.categories_json, '[]'::jsonb) AS "categoriesJson",
+    COALESCE(runtime_permissions.runtime_permissions_json, '[]'::jsonb) AS "runtimePermissionsJson"
   FROM catalog_items item
   JOIN publishers publisher
     ON publisher.id = item.publisher_id
@@ -529,19 +532,19 @@ function authorizationFromRuntimePermissions(
 }
 
 function mapPluginView(row: PluginCatalogRow): MarketplacePluginView {
-  const itemMetadata = asObject(row.item_metadata)
-  const specMetadata = asObject(row.spec_metadata)
-  const defaultReuseScope = publicReuseScope(row.spec_default_reuse_scope)
+  const itemMetadata = asObject(row.itemMetadata)
+  const specMetadata = asObject(row.specMetadata)
+  const defaultReuseScope = publicReuseScope(row.specDefaultReuseScope)
   const defaultConversationTypeMask = resolveEffectiveConversationTypeMask({
-    defaultMask: row.spec_default_conversation_type_mask,
+    defaultMask: row.specDefaultConversationTypeMask,
     overrideMask: null,
   })
   const supportedReuseScopes = normalizeSupportedReuseScopes(
-    row.spec_supported_reuse_scopes,
+    row.specSupportedReuseScopes,
     defaultReuseScope
   )
   const authorization = authorizationFromRuntimePermissions(
-    row.runtime_permissions_json,
+    row.runtimePermissionsJson,
     specMetadata
   )
   const configFields = asArray<PluginConfigFieldDefinition>(
@@ -551,9 +554,9 @@ function mapPluginView(row: PluginCatalogRow): MarketplacePluginView {
     specMetadata.validationRules
   )
   const setupSteps = asArray<McpSetupStep>(specMetadata.setupSteps)
-  const installFlow = asObject(row.spec_install_flow)
+  const installFlow = asObject(row.specInstallFlow)
   const categories: MarketplacePluginCategoryView[] = asArray<JsonObject>(
-    row.categories_json
+    row.categoriesJson
   ).map((category) => ({
     id: String(category.id || ""),
     slug: String(category.slug || ""),
@@ -574,20 +577,20 @@ function mapPluginView(row: PluginCatalogRow): MarketplacePluginView {
   }))
 
   return {
-    id: row.item_id,
-    orgId: row.publisher_id,
-    slug: row.item_slug,
-    displayName: row.item_display_name,
+    id: row.itemId,
+    orgId: row.publisherId,
+    slug: row.itemSlug,
+    displayName: row.itemDisplayName,
     displayNameI18n: asObject(itemMetadata.displayNameI18n) as Record<
       string,
       string
     >,
-    description: row.item_summary,
+    description: row.itemSummary,
     descriptionI18n: asObject(itemMetadata.descriptionI18n) as Record<
       string,
       string
     >,
-    longDescription: row.item_long_description,
+    longDescription: row.itemLongDescription,
     longDescriptionI18n: asObject(itemMetadata.longDescriptionI18n) as Record<
       string,
       string
@@ -597,45 +600,43 @@ function mapPluginView(row: PluginCatalogRow): MarketplacePluginView {
       typeof itemMetadata.defaultLocale === "string"
         ? itemMetadata.defaultLocale
         : "en",
-    iconUrl: row.item_icon_file_id
-      ? getFileUrlById(row.item_icon_file_id)
-      : null,
-    version: row.version_value || "1.0.0",
-    transport: row.spec_transport || "builtin",
-    entryPoint: row.spec_entry_point || "",
+    iconUrl: row.itemIconFileId ? getFileUrlById(row.itemIconFileId) : null,
+    version: row.versionValue || "1.0.0",
+    transport: row.specTransport || "builtin",
+    entryPoint: row.specEntryPoint || "",
     lifecycleScope: defaultReuseScope,
     defaultReuseScope: defaultReuseScope,
     defaultConversationTypeMask: defaultConversationTypeMask,
     supportedReuseScopes: supportedReuseScopes,
-    configSchema: asObject(row.spec_config_schema),
+    configSchema: asObject(row.specConfigSchema),
     configFields: configFields,
-    defaultConfig: asObject(row.spec_default_config),
-    toolsManifest: asArray(row.spec_tool_manifest),
+    defaultConfig: asObject(row.specDefaultConfig),
+    toolsManifest: asArray(row.specToolManifest),
     validationRules: validationRules,
     setupSteps: setupSteps,
     installFlow: (Object.keys(installFlow).length > 0
       ? installFlow
       : { steps: setupSteps }) as unknown as PluginInstallFlow,
-    authBindings: asArray<PluginAuthBindingDefinition>(row.spec_auth_bindings),
+    authBindings: asArray<PluginAuthBindingDefinition>(row.specAuthBindings),
     authorization,
-    tags: row.item_tags || [],
+    tags: row.itemTags || [],
     categories,
     categorySlugs: categories.map((category) => category.slug),
-    isActive: row.item_is_active,
-    isBuiltin: row.item_source_kind === "builtin" || row.publisher_is_builtin,
-    downloadCount: row.item_download_count || 0,
-    createdAt: presentInstant(row.item_created_at),
-    updatedAt: presentInstant(row.item_updated_at),
-    orgSlug: row.publisher_slug,
-    orgDisplayName: row.publisher_display_name,
+    isActive: row.itemIsActive,
+    isBuiltin: row.itemSourceKind === "builtin" || row.publisherIsBuiltin,
+    downloadCount: row.itemDownloadCount || 0,
+    createdAt: presentInstant(row.itemCreatedAt),
+    updatedAt: presentInstant(row.itemUpdatedAt),
+    orgSlug: row.publisherSlug,
+    orgDisplayName: row.publisherDisplayName,
     publisher: {
-      id: row.publisher_id,
-      slug: row.publisher_slug,
-      displayName: row.publisher_display_name,
-      description: row.publisher_description,
-      isVerified: row.publisher_is_verified,
+      id: row.publisherId,
+      slug: row.publisherSlug,
+      displayName: row.publisherDisplayName,
+      description: row.publisherDescription,
+      isVerified: row.publisherIsVerified,
     },
-    requiresHandshake: parseBoolean(row.spec_requires_handshake),
+    requiresHandshake: parseBoolean(row.specRequiresHandshake),
     metadata: specMetadata,
   }
 }
@@ -920,9 +921,10 @@ async function loadPluginCatalogRows(whereClause: RawBuilder<unknown>) {
       ${whereClause}
     `.compile(db)
   )
-  // Re-snake the CamelCasePlugin-transformed top-level keys: this query's
-  // `AS snake_case` aliases + PluginCatalogRow + mapPluginView all read snake.
-  return result.rows.map((row) => snakeCaseTopLevelKeys(row))
+  // PLUGIN_CATALOG_SELECT projects camelCase-quoted aliases, so CamelCasePlugin
+  // leaves the top-level keys untouched and the rows already match
+  // PluginCatalogRow + mapPluginView.
+  return result.rows
 }
 
 async function loadPluginCatalogMapByVersionIds(versionIds: string[]) {
@@ -934,7 +936,7 @@ async function loadPluginCatalogMapByVersionIds(versionIds: string[]) {
     sql`AND version.id = ANY(${versionIds}::uuid[])`
   )
 
-  return new Map(rows.map((row) => [row.version_id!, mapPluginView(row)]))
+  return new Map(rows.map((row) => [row.versionId!, mapPluginView(row)]))
 }
 
 async function getPluginCatalogRowByItemId(itemId: string) {
@@ -974,22 +976,22 @@ async function loadInstallationRows(
 
   const result = await db.executeQuery(
     sql<InstallationRow>`SELECT
-        installation.id AS installation_id,
-        app.workspace_id AS root_workspace_id,
-        installation.catalog_item_id,
-        installation.catalog_version_id,
-        app.display_name AS root_display_name,
-        installation.config_data,
-        installation.approved_runtime_permissions,
-        installation.reuse_scope,
-        app.conversation_type_mask_override AS root_conversation_type_mask_override,
-        app.status AS root_status,
-        app.owner_workspace_member_id AS root_owner_workspace_member_id,
-        app.created_at AS root_created_at,
-        app.updated_at AS root_updated_at,
-        source_ref.source_catalog_item_id,
-        source_ref.source_catalog_version_id,
-        source_ref.sync_mode AS source_sync_mode
+        installation.id AS "installationId",
+        app.workspace_id AS "rootWorkspaceId",
+        installation.catalog_item_id AS "catalogItemId",
+        installation.catalog_version_id AS "catalogVersionId",
+        app.display_name AS "rootDisplayName",
+        installation.config_data AS "configData",
+        installation.approved_runtime_permissions AS "approvedRuntimePermissions",
+        installation.reuse_scope AS "reuseScope",
+        app.conversation_type_mask_override AS "rootConversationTypeMaskOverride",
+        app.status AS "rootStatus",
+        app.owner_workspace_member_id AS "rootOwnerWorkspaceMemberId",
+        app.created_at AS "installationCreatedAt",
+        app.updated_at AS "installationUpdatedAt",
+        source_ref.source_catalog_item_id AS "sourceCatalogItemId",
+        source_ref.source_catalog_version_id AS "sourceCatalogVersionId",
+        source_ref.sync_mode AS "sourceSyncMode"
       -- Soft-delete (review F9/F16): read the live surface — excludes both
       -- tombstoned (deleted_at) AND non-live status (archived) installations,
       -- the same definition as plugin_installations manifest liveValues.
@@ -1004,8 +1006,9 @@ async function loadInstallationRows(
       ORDER BY installation.created_at DESC`.compile(db)
   )
 
-  // Re-snake CamelCasePlugin-transformed top-level keys to match InstallationRow.
-  return result.rows.map((row) => snakeCaseTopLevelKeys(row))
+  // PLUGIN installation rows project camelCase-quoted aliases, so
+  // CamelCasePlugin leaves them as-is and they already match InstallationRow.
+  return result.rows
 }
 
 async function listAccessRows(installationId: string, includeRevoked = false) {
@@ -1138,12 +1141,12 @@ function buildInstallationPayload(
   )
   const effectiveConversationTypeMask = resolveNarrowedConversationTypeMask(
     workspaceConversationTypeMask,
-    row.root_conversation_type_mask_override
+    row.rootConversationTypeMaskOverride
   )
   const { sanitizedConfig, configState } = sanitizeInstallationConfig(
     {
-      config_data: row.config_data,
-      updated_at: row.installation_updated_at,
+      config_data: row.configData,
+      updated_at: row.installationUpdatedAt,
     },
     plugin.configSchema || {},
     plugin.configFields || [],
@@ -1151,28 +1154,27 @@ function buildInstallationPayload(
   )
 
   return {
-    id: row.installation_id,
-    workspaceId: row.root_workspace_id,
-    pluginId: row.catalog_item_id,
-    lifecycleScope: publicReuseScope(row.reuse_scope),
+    id: row.installationId,
+    workspaceId: row.rootWorkspaceId,
+    pluginId: row.catalogItemId,
+    lifecycleScope: publicReuseScope(row.reuseScope),
     defaultReuseScope: plugin.defaultReuseScope,
     sourceDefaultConversationTypeMask: sourceDefaultConversationTypeMask,
     workspaceConversationTypeMask: workspaceConversationTypeMask,
-    conversationTypeMaskOverride:
-      row.root_conversation_type_mask_override ?? null,
+    conversationTypeMaskOverride: row.rootConversationTypeMaskOverride ?? null,
     effectiveConversationTypeMask: effectiveConversationTypeMask,
     supportedReuseScopes: plugin.supportedReuseScopes || [],
-    isEnabled: row.root_status === "active",
-    status: row.root_status,
+    isEnabled: row.rootStatus === "active",
+    status: row.rootStatus,
     configData: sanitizedConfig,
     configState: configState,
-    approvedRuntimePermissions: row.approved_runtime_permissions || [],
-    ownerWorkspaceMemberId: row.root_owner_workspace_member_id,
-    createdAt: presentInstant(row.installation_created_at),
-    updatedAt: presentInstant(row.installation_updated_at),
-    sourceCatalogItemId: row.source_catalog_item_id,
-    sourceCatalogVersionId: row.source_catalog_version_id,
-    sourceSyncMode: row.source_sync_mode,
+    approvedRuntimePermissions: row.approvedRuntimePermissions || [],
+    ownerWorkspaceMemberId: row.rootOwnerWorkspaceMemberId,
+    createdAt: presentInstant(row.installationCreatedAt),
+    updatedAt: presentInstant(row.installationUpdatedAt),
+    sourceCatalogItemId: row.sourceCatalogItemId,
+    sourceCatalogVersionId: row.sourceCatalogVersionId,
+    sourceSyncMode: row.sourceSyncMode,
     pluginSlug: plugin.slug,
     pluginDisplayName: plugin.displayName,
     pluginDescription: plugin.description,
@@ -1220,15 +1222,15 @@ async function getInstallationPayload(
   }
 
   const pluginsByVersionId = await loadPluginCatalogMapByVersionIds([
-    row.catalog_version_id,
+    row.catalogVersionId,
   ])
-  const plugin = pluginsByVersionId.get(row.catalog_version_id)
+  const plugin = pluginsByVersionId.get(row.catalogVersionId)
   if (!plugin) {
     throw new McpPluginError(404, "Plugin not found")
   }
   const workspaceConversationTypeMask =
     await getWorkspaceCapabilityConversationTypeMask(
-      row.root_workspace_id,
+      row.rootWorkspaceId,
       "plugin_installation"
     )
 
@@ -1833,7 +1835,7 @@ export async function installPluginUnified(data: {
 
   const result = await withDbTransaction(async (client) => {
     const catalogRow = await getPluginCatalogRowByItemId(plugin.id)
-    const catalogVersionId = catalogRow?.version_id
+    const catalogVersionId = catalogRow?.versionId
     if (!catalogVersionId) {
       throw new McpPluginError(
         500,
@@ -2033,7 +2035,7 @@ export async function getInstallations(
 ): Promise<PluginInstallationDetailView[]> {
   const rows = await loadInstallationRows(workspaceId, filters)
   const pluginsByVersionId = await loadPluginCatalogMapByVersionIds(
-    Array.from(new Set(rows.map((row) => row.catalog_version_id)))
+    Array.from(new Set(rows.map((row) => row.catalogVersionId)))
   )
   const workspaceConversationTypeMask =
     await getWorkspaceCapabilityConversationTypeMask(
@@ -2043,7 +2045,7 @@ export async function getInstallations(
 
   return rows
     .map((row) => {
-      const plugin = pluginsByVersionId.get(row.catalog_version_id)
+      const plugin = pluginsByVersionId.get(row.catalogVersionId)
       return plugin
         ? buildInstallationPayload(row, plugin, workspaceConversationTypeMask)
         : null
@@ -2087,7 +2089,7 @@ export async function updateInstallation(
     await getInstallationPayload(workspaceId, installId)
 
   const nextLifecycleScope =
-    data.lifecycleScope || publicReuseScope(row.reuse_scope)
+    data.lifecycleScope || publicReuseScope(row.reuseScope)
   const supportedReuseScopes = normalizeSupportedReuseScopes(
     plugin.supportedReuseScopes,
     plugin.defaultReuseScope || "conversation"
@@ -2100,11 +2102,11 @@ export async function updateInstallation(
 
   const mergedConfig = data.configData
     ? mergeConfigForUpdate(
-        asObject(row.config_data),
+        asObject(row.configData),
         data.configData,
         plugin.configFields || []
       )
-    : asObject(row.config_data)
+    : asObject(row.configData)
 
   if (data.conversationTypeMaskOverride !== undefined) {
     const nextInstanceConversationTypeMask =
@@ -2193,7 +2195,7 @@ export async function updateInstallation(
             workspaceId,
             workspaceMemberId:
               data.updatedByWorkspaceMemberId ||
-              row.root_owner_workspace_member_id ||
+              row.rootOwnerWorkspaceMemberId ||
               "",
             configFields: plugin.configFields || [],
             authBindings: plugin.authBindings || [],
@@ -2254,12 +2256,12 @@ export async function updateInstallation(
 
     await updateWorkspaceAppRoot(client, {
       id: installId,
-      displayName: row.root_display_name,
+      displayName: row.rootDisplayName,
       status:
         data.isEnabled === undefined
-          ? row.root_status === "active"
+          ? row.rootStatus === "active"
             ? "active"
-            : row.root_status === "disabled"
+            : row.rootStatus === "disabled"
               ? "disabled"
               : "error"
           : data.isEnabled
@@ -2267,7 +2269,7 @@ export async function updateInstallation(
             : "disabled",
       conversationTypeMaskOverride:
         data.conversationTypeMaskOverride === undefined
-          ? row.root_conversation_type_mask_override
+          ? row.rootConversationTypeMaskOverride
           : data.conversationTypeMaskOverride,
     })
   })
@@ -2278,7 +2280,7 @@ export async function updateInstallation(
     await emitEvent({
       type: "mcp.config.changed",
       workspaceId,
-      payload: { pluginId: row.catalog_item_id, workspaceId },
+      payload: { pluginId: row.catalogItemId, workspaceId },
       timestamp: nowIsoInstant(),
     })
   }
@@ -2548,7 +2550,7 @@ export async function createPluginInstallPlan(input: {
   const plugin = await getPlugin(input.pluginId)
   return {
     packageId: plugin.id,
-    revisionId: (await getPluginCatalogRowByItemId(plugin.id))!.version_id,
+    revisionId: (await getPluginCatalogRowByItemId(plugin.id))!.versionId,
     workspaceId: input.workspaceId,
     checks: [],
     grantPlan: buildPluginGrantPlan({

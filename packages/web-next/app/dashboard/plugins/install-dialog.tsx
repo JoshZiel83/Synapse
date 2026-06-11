@@ -5,9 +5,11 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import type {
   AutomationIntegrationProvider,
   CapabilityAccessTargetType,
+  MarketplacePluginView,
   PluginAuthBindingDefinition,
   PluginAuthSession,
   PluginConfigFieldDefinition,
+  PluginInstallationDetailView,
   PluginInstallStep,
   ReuseScope,
   LocalizedText,
@@ -59,13 +61,17 @@ interface ValidationRule {
 }
 
 interface Props {
-  plugin: any
+  plugin: MarketplacePluginView
   defaultActorId?: string
-  initialInstallation?: any
+  initialInstallation?: PluginInstallationDetailView | null
   onClose: () => void
   presentation?: "dialog" | "page"
-  onSuccess?: (installation: any) => void | Promise<void>
-  onInstallationSaved?: (installation: any) => void | Promise<void>
+  onSuccess?: (
+    installation: PluginInstallationDetailView
+  ) => void | Promise<void>
+  onInstallationSaved?: (
+    installation: PluginInstallationDetailView
+  ) => void | Promise<void>
   showPluginHeader?: boolean
   pageChrome?: "card" | "plain" | "tab"
   includePlacementSteps?: boolean
@@ -195,10 +201,10 @@ function translate(
 }
 
 function getIntegrationProvider(
-  plugin: any
+  plugin: MarketplacePluginView
 ): AutomationIntegrationProvider | null {
-  const orgSlug = plugin?.orgSlug
-  const pluginSlug = plugin?.pluginSlug || plugin?.slug
+  const orgSlug = plugin.orgSlug
+  const pluginSlug = plugin.slug
   if (pluginSlug !== "official-mcp") return null
   if (orgSlug === "github" || orgSlug === "gitlab") {
     return orgSlug
@@ -310,37 +316,52 @@ function getFeishuAppScopeStatus(
   }
 }
 
-function deriveConfigFields(plugin: any): PluginConfigFieldDefinition[] {
+function deriveConfigFields(
+  plugin: MarketplacePluginView
+): PluginConfigFieldDefinition[] {
   if (Array.isArray(plugin.configFields) && plugin.configFields.length > 0) {
     return plugin.configFields
   }
-  const schema = plugin.configSchema || {}
-  const properties = schema.properties || {}
+  const schema = asRecord(plugin.configSchema)
+  const properties = asRecord(schema.properties)
   const requiredFields = new Set<string>(
-    Array.isArray(schema.required) ? schema.required : []
+    Array.isArray(schema.required)
+      ? schema.required.filter((key): key is string => typeof key === "string")
+      : []
   )
-  return Object.entries(properties).map(([key, value]: [string, any]) => ({
-    key,
-    type: value.sensitive
-      ? "secret"
-      : value.type === "boolean"
-        ? "boolean"
-        : "text",
-    titleI18n: { en: value.title || value.description || key },
-    descriptionI18n: value.description ? { en: value.description } : undefined,
-    required: requiredFields.has(key),
-    defaultValue: plugin.defaultConfig?.[key],
-    secret: value.sensitive === true,
-  }))
+  return Object.entries(properties).map(([key, raw]) => {
+    const value = asRecord(raw)
+    return {
+      key,
+      type: value.sensitive
+        ? "secret"
+        : value.type === "boolean"
+          ? "boolean"
+          : "text",
+      titleI18n: {
+        en:
+          (typeof value.title === "string" && value.title) ||
+          (typeof value.description === "string" && value.description) ||
+          key,
+      },
+      descriptionI18n:
+        typeof value.description === "string"
+          ? { en: value.description }
+          : undefined,
+      required: requiredFields.has(key),
+      defaultValue: plugin.defaultConfig?.[key],
+      secret: value.sensitive === true,
+    }
+  })
 }
 
 function deriveInstallFlow(
-  plugin: any,
+  plugin: MarketplacePluginView,
   configFields: PluginConfigFieldDefinition[],
   locale: string,
   options?: { includePlacementSteps?: boolean }
 ): PluginInstallStep[] {
-  const baseSteps =
+  const baseSteps: PluginInstallStep[] =
     Array.isArray(plugin.installFlow?.steps) &&
     plugin.installFlow.steps.length > 0
       ? plugin.installFlow.steps.filter((step: PluginInstallStep) => {
@@ -350,7 +371,7 @@ function deriveInstallFlow(
       : [
           {
             id: "configure",
-            kind: "form" as const,
+            kind: "form",
             titleI18n: { [locale]: "Configure plugin" },
             descriptionI18n: {
               [locale]: "Provide the required configuration for this plugin.",
@@ -378,7 +399,7 @@ function deriveInstallFlow(
 }
 
 function buildInitialConfig(
-  plugin: any,
+  plugin: MarketplacePluginView,
   configFields: PluginConfigFieldDefinition[]
 ) {
   const initial = { ...(plugin.defaultConfig || {}) } as Record<string, unknown>
@@ -630,7 +651,9 @@ export default function InstallDialog({
   const [selectedActorId, setSelectedActorId] = useState(defaultActorId || "")
   const [selectedConversationId, setSelectedConversationId] = useState("")
   const [actors, setActors] = useState<AccessVisualActor[]>([])
-  const [conversations, setConversations] = useState<any[]>([])
+  const [conversations, setConversations] = useState<
+    AccessVisualConversation[]
+  >([])
   const [configData, setConfigData] = useState<Record<string, unknown>>(() => ({
     ...buildInitialConfig(plugin, configFields),
     ...(initialInstallation?.configData || {}),
@@ -651,9 +674,8 @@ export default function InstallDialog({
         configFields
       )
   )
-  const [currentInstallation, setCurrentInstallation] = useState<any>(
-    initialInstallation || null
-  )
+  const [currentInstallation, setCurrentInstallation] =
+    useState<PluginInstallationDetailView | null>(initialInstallation || null)
   const [setupIntegrationSources, setSetupIntegrationSources] = useState(false)
   const [integrationTargetId, setIntegrationTargetId] = useState("")
   const [integrationTargetLabelValue, setIntegrationTargetLabelValue] =
@@ -1112,7 +1134,7 @@ export default function InstallDialog({
           .map(([fieldKey, state]) => [fieldKey, state.sessionId])
       )
 
-      let installation: any
+      let installation: PluginInstallationDetailView
       const installationId = currentInstallation?.id || initialInstallation?.id
 
       if (installationId) {

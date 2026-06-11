@@ -1302,8 +1302,8 @@ async function pauseAutomationRulesMissingEventSourceAccess(
       participantId: row.created_by_participant_id,
     })
     const creatorActorId =
-      creatorParticipant?.actor_id && creatorParticipant.state === "active"
-        ? (creatorParticipant.actor_id as string)
+      creatorParticipant?.actorId && creatorParticipant.state === "active"
+        ? (creatorParticipant.actorId as string)
         : null
     const stillAllowed =
       Boolean(conversation) &&
@@ -2729,20 +2729,20 @@ async function resolveOperatorUserId(rule: AutomationRule) {
     conversationId: rule.conversationId,
     participantId: rule.createdByParticipantId,
   })
-  if (creatorParticipant?.workspace_member_id) {
+  if (creatorParticipant?.workspaceMemberId) {
     const identity = await getWorkspaceMemberIdentityById(
-      creatorParticipant.workspace_member_id as string
+      creatorParticipant.workspaceMemberId as string
     )
     if (identity?.userId) return identity.userId
   }
 
   const members = await listConversationParticipants(rule.conversationId)
   const firstUser = members.find(
-    (member: any) => member.state === "active" && member.workspace_member_id
+    (member: any) => member.state === "active" && member.workspaceMemberId
   )
-  if (firstUser?.workspace_member_id) {
+  if (firstUser?.workspaceMemberId) {
     const workspaceMember = await getWorkspaceMemberIdentityById(
-      firstUser.workspace_member_id as string
+      firstUser.workspaceMemberId as string
     )
     if (workspaceMember) {
       return workspaceMember.userId
@@ -2844,10 +2844,10 @@ async function wakeAutomationTargets(params: {
 
   for (const participant of params.targetParticipants) {
     let wakeupId: string | undefined
-    const actorId = participant.actor_id as string | undefined
+    const actorId = participant.actorId as string | undefined
     const sessionId =
-      participant.session_id && participant.state === "active"
-        ? (participant.session_id as string)
+      participant.sessionId && participant.state === "active"
+        ? (participant.sessionId as string)
         : undefined
 
     if (actorId && sessionId) {
@@ -3003,7 +3003,7 @@ export async function createAutomationRule(
     input: input.trigger,
     policy: input.policy,
     conversation,
-    creatorActorId: creatorParticipant.actor_id as string | null | undefined,
+    creatorActorId: creatorParticipant.actorId as string | null | undefined,
   })
 
   await withDbTransaction(async (trx) => {
@@ -3212,7 +3212,7 @@ export async function updateAutomationRule(
     input: mergedInput.trigger,
     policy: mergedInput.policy,
     conversation,
-    creatorActorId: creatorParticipant.actor_id as string | null | undefined,
+    creatorActorId: creatorParticipant.actorId as string | null | undefined,
   })
 
   await withDbTransaction(async (trx) => {
@@ -3984,7 +3984,7 @@ export async function processAutomationExecution(
       .values({
         workspaceId: rule.workspaceId,
         userId: (await resolveOperatorUserId(rule)) || null,
-        actorId: creatorParticipant?.actor_id || null,
+        actorId: creatorParticipant?.actorId || null,
         action: "automation_rule.trigger",
         resourceType: "automation_rule",
         resourceId: rule.id,

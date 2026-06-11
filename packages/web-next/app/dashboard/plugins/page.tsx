@@ -24,33 +24,6 @@ import { Input } from "@/components/ui/input"
 import { usePluginStore } from "@/stores/plugin-store"
 import { PluginIcon, getLocale, translate } from "./plugin-ui"
 
-type PluginInstallationEntry = {
-  id: string
-  pluginId?: string | null
-}
-
-type PluginMarketplaceCategory = {
-  slug: string
-  displayName?: string
-  displayNameI18n?: Record<string, string>
-  defaultLocale?: string
-}
-
-type PluginMarketplaceEntry = {
-  id: string
-  displayName?: string
-  displayNameI18n?: Record<string, string>
-  defaultLocale?: string
-  summaryI18n?: Record<string, string>
-  descriptionI18n?: Record<string, string>
-  description?: string
-  orgDisplayName?: string
-  tags?: string[]
-  categories?: PluginMarketplaceCategory[]
-  iconUrl?: string
-  transport?: string
-}
-
 export default function PluginsPage() {
   const router = useRouter()
   const { workspaceId } = useWorkspace()
@@ -65,8 +38,6 @@ export default function PluginsPage() {
   const [search, setSearch] = useState("")
   const locale = getLocale()
   const deferredSearch = useDeferredValue(search)
-  const typedMarketplace = marketplace as PluginMarketplaceEntry[]
-  const typedInstallations = installations as PluginInstallationEntry[]
 
   useEffect(() => {
     void loadMarketplace()
@@ -78,9 +49,9 @@ export default function PluginsPage() {
   }, [loadInstallations, workspaceId])
 
   const pluginInstallationsByPluginId = useMemo(() => {
-    const next = new Map<string, PluginInstallationEntry[]>()
+    const next = new Map<string, typeof installations>()
 
-    for (const installation of typedInstallations) {
+    for (const installation of installations) {
       const pluginId = installation.pluginId
       if (!pluginId) continue
       const current = next.get(pluginId) || []
@@ -89,12 +60,12 @@ export default function PluginsPage() {
     }
 
     return next
-  }, [typedInstallations])
+  }, [installations])
 
   const filteredPlugins = useMemo(() => {
     const normalizedSearch = deferredSearch.trim().toLowerCase()
 
-    return typedMarketplace.filter((plugin) => {
+    return marketplace.filter((plugin) => {
       if (!normalizedSearch) return true
       const title =
         translate(
@@ -123,7 +94,7 @@ export default function PluginsPage() {
 
       return haystack.includes(normalizedSearch)
     })
-  }, [deferredSearch, locale, typedMarketplace])
+  }, [deferredSearch, locale, marketplace])
 
   const configuredPlugins = useMemo(
     () =>

@@ -222,26 +222,13 @@ function runnerFn(executor: Executor): QueryRunner {
       .executeQuery<T>(CompiledQuery.raw(text, params ? [...params] : []))
       .then((r) => ({
         // The Kysely instance carries CamelCasePlugin, whose transformResult
-        // camelCases the TOP-LEVEL keys of EVERY result row — including these
-        // raw CompiledQuery.raw rows. This module's SQL aliases + row types +
-        // ~246 reads are all snake_case, so re-snake the top-level keys here to
-        // keep the raw-SQL boundary snake (JSONB values are untouched).
-        rows: r.rows.map((row) => snakeCaseTopLevelKeys(row)) as T[],
+        // camelCases the TOP-LEVEL keys of EVERY result row. Every raw query in
+        // this module now projects quoted camelCase aliases (e.g.
+        // `AS "snapshotDisplayName"`), so the plugin's transform is a no-op and
+        // the rows already match this module's camelCase row types — no key
+        // inversion ("re-snake") needed. JSONB values stay untouched.
+        rows: r.rows as T[],
       })) as Promise<QueryResultLike<T>>
-}
-
-/**
- * Invert CamelCasePlugin's top-level key transform for a single raw-SQL result
- * row. Only the row's OWN keys are mapped back to snake_case; nested object
- * values (JSONB columns like body_blocks / metadata) are left intact.
- */
-function snakeCaseTopLevelKeys<T>(row: T): T {
-  if (!row || typeof row !== "object" || Array.isArray(row)) return row
-  const out: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(row as Record<string, unknown>)) {
-    out[k.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)] = v
-  }
-  return out as T
 }
 
 /** Run raw SQL on an explicit executor (db / trx). */
@@ -300,64 +287,64 @@ const CLAWHUB_MARKETPLACE_PUBLISHER_SLUG = "clawhub-official"
 const CLAWHUB_MARKETPLACE_PUBLISHER_NAME = "ClawHub Mirror"
 
 const SKILL_SNAPSHOT_SELECT = `
-    snapshot.id AS snapshot_id,
-    snapshot.entry_path AS snapshot_entry_path,
-    snapshot.name AS snapshot_display_name,
-    snapshot.description AS snapshot_description,
-    snapshot.argument_hint AS snapshot_argument_hint,
-    snapshot.disable_model_invocation AS snapshot_disable_model_invocation,
-    snapshot.user_invocable AS snapshot_user_invocable,
-    snapshot.allowed_tools AS snapshot_allowed_tools,
-    snapshot.model AS snapshot_model,
-    snapshot.effort AS snapshot_effort,
-    snapshot.context AS snapshot_context,
-    snapshot.agent AS snapshot_agent,
-    snapshot.hooks AS snapshot_hooks,
-    snapshot.body_blocks AS snapshot_body_blocks,
-    snapshot.content_hash AS snapshot_content_hash,
-    snapshot.source_warnings AS snapshot_source_warnings,
-    snapshot.resolved_revision AS snapshot_resolved_revision,
-    snapshot.created_at AS snapshot_created_at,
-    mirror.id AS mirror_source_id,
-    mirror.source_type AS mirror_source_type,
-    mirror.locator_key AS mirror_locator_key,
-    mirror.locator AS mirror_locator,
-    mirror.requested_ref AS mirror_requested_ref,
-    mirror.resolved_revision AS mirror_resolved_revision,
-    mirror.refresh_mode AS mirror_refresh_mode,
-    mirror.last_sync_status AS mirror_last_sync_status,
-    mirror.source_warnings AS mirror_source_warnings,
-    mirror.last_error AS mirror_last_error,
-    mirror.last_synced_at AS mirror_last_synced_at,
-    mirror.created_at AS mirror_created_at,
-    mirror.updated_at AS mirror_updated_at
+    snapshot.id AS "snapshotId",
+    snapshot.entry_path AS "snapshotEntryPath",
+    snapshot.name AS "snapshotDisplayName",
+    snapshot.description AS "snapshotDescription",
+    snapshot.argument_hint AS "snapshotArgumentHint",
+    snapshot.disable_model_invocation AS "snapshotDisableModelInvocation",
+    snapshot.user_invocable AS "snapshotUserInvocable",
+    snapshot.allowed_tools AS "snapshotAllowedTools",
+    snapshot.model AS "snapshotModel",
+    snapshot.effort AS "snapshotEffort",
+    snapshot.context AS "snapshotContext",
+    snapshot.agent AS "snapshotAgent",
+    snapshot.hooks AS "snapshotHooks",
+    snapshot.body_blocks AS "snapshotBodyBlocks",
+    snapshot.content_hash AS "snapshotContentHash",
+    snapshot.source_warnings AS "snapshotSourceWarnings",
+    snapshot.resolved_revision AS "snapshotResolvedRevision",
+    snapshot.created_at AS "snapshotCreatedAt",
+    mirror.id AS "mirrorSourceId",
+    mirror.source_type AS "mirrorSourceType",
+    mirror.locator_key AS "mirrorLocatorKey",
+    mirror.locator AS "mirrorLocator",
+    mirror.requested_ref AS "mirrorRequestedRef",
+    mirror.resolved_revision AS "mirrorResolvedRevision",
+    mirror.refresh_mode AS "mirrorRefreshMode",
+    mirror.last_sync_status AS "mirrorLastSyncStatus",
+    mirror.source_warnings AS "mirrorSourceWarnings",
+    mirror.last_error AS "mirrorLastError",
+    mirror.last_synced_at AS "mirrorLastSyncedAt",
+    mirror.created_at AS "mirrorCreatedAt",
+    mirror.updated_at AS "mirrorUpdatedAt"
 `
 
 const MARKETPLACE_SKILL_SELECT = `
   SELECT
-    item.id AS item_id,
-    item.slug AS item_slug,
-    item.display_name AS item_display_name,
-    item.summary AS item_summary,
-    item.long_description AS item_long_description,
-    item.tags AS item_tags,
-    item.is_active AS item_is_active,
-    item.download_count AS item_download_count,
-    item.icon_file_id AS item_icon_file_id,
-    item.metadata AS item_metadata,
-    item.created_at AS item_created_at,
-    item.updated_at AS item_updated_at,
-    version.id AS latest_version_id,
-    version.version AS latest_version_value,
-    version.changelog AS latest_version_changelog,
-    version.created_by_user_id AS latest_version_created_by_user_id,
-    version.created_at AS latest_version_created_at,
-    spec.default_conversation_type_mask AS spec_default_conversation_type_mask,
+    item.id AS "itemId",
+    item.slug AS "itemSlug",
+    item.display_name AS "itemDisplayName",
+    item.summary AS "itemSummary",
+    item.long_description AS "itemLongDescription",
+    item.tags AS "itemTags",
+    item.is_active AS "itemIsActive",
+    item.download_count AS "itemDownloadCount",
+    item.icon_file_id AS "itemIconFileId",
+    item.metadata AS "itemMetadata",
+    item.created_at AS "itemCreatedAt",
+    item.updated_at AS "itemUpdatedAt",
+    version.id AS "latestVersionId",
+    version.version AS "latestVersionValue",
+    version.changelog AS "latestVersionChangelog",
+    version.created_by_user_id AS "latestVersionCreatedByUserId",
+    version.created_at AS "latestVersionCreatedAt",
+    spec.default_conversation_type_mask AS "specDefaultConversationTypeMask",
 ${SKILL_SNAPSHOT_SELECT},
-    publisher.id AS publisher_id,
-    publisher.slug AS publisher_slug,
-    publisher.display_name AS publisher_display_name,
-    publisher.owner_user_id AS publisher_owner_user_id
+    publisher.id AS "publisherId",
+    publisher.slug AS "publisherSlug",
+    publisher.display_name AS "publisherDisplayName",
+    publisher.owner_user_id AS "publisherOwnerUserId"
   FROM catalog_items_live item
   JOIN publishers publisher
     ON publisher.id = item.publisher_id
@@ -375,30 +362,30 @@ ${SKILL_SNAPSHOT_SELECT},
 
 const INSTALLED_SKILL_SELECT = `
   SELECT
-    skill.id AS skill_id,
-    app.workspace_id,
-    app.display_name AS display_name,
-    skill.icon_file_id,
-    skill.tags,
-    skill.current_version,
-    skill.current_snapshot_id,
-    app.status AS skill_status,
-    app.conversation_type_mask_override,
-    app.owner_workspace_member_id,
-    app.created_at,
-    app.updated_at,
-    version_row.id AS current_skill_version_id,
-    version_row.skill_snapshot_id AS current_skill_snapshot_id,
-    version_row.metadata AS version_metadata,
-    source_ref.source_catalog_item_id,
-    source_ref.source_catalog_version_id,
-    source_ref.sync_mode AS source_sync_mode,
-    source_ref.is_customized AS source_is_customized,
-    source_item.slug AS source_slug,
-    source_item.latest_version_id AS source_latest_version_id,
-    imported_version.version AS source_version_value,
-    latest_version.version AS latest_source_version,
-    imported_spec.default_conversation_type_mask AS source_default_conversation_type_mask,
+    skill.id AS "skillId",
+    app.workspace_id AS "workspaceId",
+    app.display_name AS "displayName",
+    skill.icon_file_id AS "iconFileId",
+    skill.tags AS "tags",
+    skill.current_version AS "currentVersion",
+    skill.current_snapshot_id AS "currentSnapshotId",
+    app.status AS "skillStatus",
+    app.conversation_type_mask_override AS "conversationTypeMaskOverride",
+    app.owner_workspace_member_id AS "ownerWorkspaceMemberId",
+    app.created_at AS "createdAt",
+    app.updated_at AS "updatedAt",
+    version_row.id AS "currentSkillVersionId",
+    version_row.skill_snapshot_id AS "currentSkillSnapshotId",
+    version_row.metadata AS "versionMetadata",
+    source_ref.source_catalog_item_id AS "sourceCatalogItemId",
+    source_ref.source_catalog_version_id AS "sourceCatalogVersionId",
+    source_ref.sync_mode AS "sourceSyncMode",
+    source_ref.is_customized AS "sourceIsCustomized",
+    source_item.slug AS "sourceSlug",
+    source_item.latest_version_id AS "sourceLatestVersionId",
+    imported_version.version AS "sourceVersionValue",
+    latest_version.version AS "latestSourceVersion",
+    imported_spec.default_conversation_type_mask AS "sourceDefaultConversationTypeMask",
 ${SKILL_SNAPSHOT_SELECT}
   FROM installed_skills skill
   JOIN workspace_apps_live app
@@ -672,52 +659,52 @@ export function frontmatterFromSnapshotRow(
   row: SkillSnapshotJoinRow
 ): SkillFrontmatter {
   if (
-    !row.snapshot_id ||
-    !row.snapshot_display_name ||
-    row.snapshot_description === null
+    !row.snapshotId ||
+    !row.snapshotDisplayName ||
+    row.snapshotDescription === null
   ) {
     throw new SkillError(500, "Skill snapshot metadata is missing")
   }
 
   return {
-    name: row.snapshot_display_name,
-    description: row.snapshot_description,
-    argumentHint: row.snapshot_argument_hint || undefined,
-    disableModelInvocation: Boolean(row.snapshot_disable_model_invocation),
+    name: row.snapshotDisplayName,
+    description: row.snapshotDescription,
+    argumentHint: row.snapshotArgumentHint || undefined,
+    disableModelInvocation: Boolean(row.snapshotDisableModelInvocation),
     userInvocable:
-      row.snapshot_user_invocable === null
+      row.snapshotUserInvocable === null
         ? true
-        : Boolean(row.snapshot_user_invocable),
-    allowedTools: row.snapshot_allowed_tools || [],
-    model: row.snapshot_model || undefined,
-    effort: row.snapshot_effort || undefined,
-    context: row.snapshot_context || undefined,
-    agent: row.snapshot_agent || undefined,
-    hooks: parseJsonObject(row.snapshot_hooks),
+        : Boolean(row.snapshotUserInvocable),
+    allowedTools: row.snapshotAllowedTools || [],
+    model: row.snapshotModel || undefined,
+    effort: row.snapshotEffort || undefined,
+    context: row.snapshotContext || undefined,
+    agent: row.snapshotAgent || undefined,
+    hooks: parseJsonObject(row.snapshotHooks),
   }
 }
 
 export function bodyBlocksFromSnapshotRow(row: SkillSnapshotJoinRow) {
-  return normalizeStoredBlocks(row.snapshot_body_blocks)
+  return normalizeStoredBlocks(row.snapshotBodyBlocks)
 }
 
 export function descriptionBlockFromSnapshotRow(row: SkillSnapshotJoinRow) {
-  return defaultDescriptionBlock(row.snapshot_description || "")
+  return defaultDescriptionBlock(row.snapshotDescription || "")
 }
 
 function resolvePublicUseScope(row: SkillAccessRow): SkillAccessSuggestion {
-  if (row.bind_scope === "actor" && row.conversation_id) {
+  if (row.bindScope === "actor" && row.conversationId) {
     return "actor_conversation"
   }
-  if (row.bind_scope === "remote_agent" && row.conversation_id) {
+  if (row.bindScope === "remote_agent" && row.conversationId) {
     return "remote_agent_conversation"
   }
-  switch (row.bind_scope) {
+  switch (row.bindScope) {
     case "workspace":
     case "conversation":
     case "actor":
     case "remote_agent":
-      return row.bind_scope
+      return row.bindScope
     case "workspace_member":
       // workspace_member-scoped skill bindings are individual approvals.
       // For UI grouping purposes treat them as workspace-level visibility.
@@ -728,7 +715,7 @@ function resolvePublicUseScope(row: SkillAccessRow): SkillAccessSuggestion {
 }
 
 function skillAccessCreatedAtMs(row: SkillAccessRow): number {
-  return row.created_at?.getTime?.() ?? 0
+  return row.createdAt?.getTime?.() ?? 0
 }
 
 function compareBindingPriority(left: SkillAccessRow, right: SkillAccessRow) {
@@ -747,8 +734,8 @@ function compareBindingPriority(left: SkillAccessRow, right: SkillAccessRow) {
   if (statusOrder[left.status] !== statusOrder[right.status]) {
     return statusOrder[left.status] - statusOrder[right.status]
   }
-  if (scopeOrder[left.bind_scope] !== scopeOrder[right.bind_scope]) {
-    return scopeOrder[left.bind_scope] - scopeOrder[right.bind_scope]
+  if (scopeOrder[left.bindScope] !== scopeOrder[right.bindScope]) {
+    return scopeOrder[left.bindScope] - scopeOrder[right.bindScope]
   }
   return skillAccessCreatedAtMs(right) - skillAccessCreatedAtMs(left)
 }
@@ -772,8 +759,8 @@ function compareVisibleBindingPriority(
   if (statusOrder[left.status] !== statusOrder[right.status]) {
     return statusOrder[left.status] - statusOrder[right.status]
   }
-  if (scopeOrder[left.bind_scope] !== scopeOrder[right.bind_scope]) {
-    return scopeOrder[left.bind_scope] - scopeOrder[right.bind_scope]
+  if (scopeOrder[left.bindScope] !== scopeOrder[right.bindScope]) {
+    return scopeOrder[left.bindScope] - scopeOrder[right.bindScope]
   }
   return skillAccessCreatedAtMs(right) - skillAccessCreatedAtMs(left)
 }
@@ -794,9 +781,9 @@ export function matchesScopeTarget(
     return true
   }
   return (
-    binding.bind_scope === filter.bindScope &&
-    binding.actor_id === filter.actorId &&
-    binding.conversation_id === filter.conversationId &&
+    binding.bindScope === filter.bindScope &&
+    binding.actorId === filter.actorId &&
+    binding.conversationId === filter.conversationId &&
     // Round 13 review (P3): comparing only (bind_scope, actor_id,
     // conversation_id) means two grants on the same skill with
     // different workspace_member targets (A vs B) both match a query
@@ -804,17 +791,15 @@ export function matchesScopeTarget(
     // hazard exists for remote_agent grants — bring both ids into the
     // discriminator now so a future remote_agent list filter doesn't
     // repeat the same bug.
-    binding.workspace_member_id === filter.workspaceMemberId &&
-    binding.remote_agent_id === filter.remoteAgentId
+    binding.workspaceMemberId === filter.workspaceMemberId &&
+    binding.remoteAgentId === filter.remoteAgentId
   )
 }
 
 export function resolveInstalledSkillSourceConversationTypeMask(
   row: InstalledSkillRow
 ) {
-  return (
-    row.source_default_conversation_type_mask || DEFAULT_CONVERSATION_TYPE_MASK
-  )
+  return row.sourceDefaultConversationTypeMask || DEFAULT_CONVERSATION_TYPE_MASK
 }
 
 export function resolveInstalledSkillEffectiveConversationTypeMask(row: {
@@ -848,39 +833,39 @@ export function skillBindingToAccessTarget(
   binding: SkillAccessRow,
   _fallbackWorkspaceId: string
 ): CapabilityAccessTarget {
-  switch (binding.bind_scope) {
+  switch (binding.bindScope) {
     case "workspace":
-      return { subject: workspaceRef(binding.workspace_id) }
+      return { subject: workspaceRef(binding.workspaceId) }
     case "workspace_member":
-      if (!binding.workspace_member_id) {
+      if (!binding.workspaceMemberId) {
         throw new Error(
           "workspace_member skill binding missing workspace_member_id"
         )
       }
-      return { subject: workspaceMemberRef(binding.workspace_member_id) }
+      return { subject: workspaceMemberRef(binding.workspaceMemberId) }
     case "conversation":
-      if (!binding.conversation_id) {
+      if (!binding.conversationId) {
         throw new Error("conversation skill binding missing conversation_id")
       }
-      return { subject: conversationRef(binding.conversation_id) }
+      return { subject: conversationRef(binding.conversationId) }
     case "actor":
-      if (!binding.actor_id) {
+      if (!binding.actorId) {
         throw new Error("actor skill binding missing actor_id")
       }
       return {
-        subject: actorRef(binding.actor_id),
-        ...(binding.conversation_id
-          ? { scope: conversationRef(binding.conversation_id) }
+        subject: actorRef(binding.actorId),
+        ...(binding.conversationId
+          ? { scope: conversationRef(binding.conversationId) }
           : {}),
       }
     case "remote_agent":
-      if (!binding.remote_agent_id) {
+      if (!binding.remoteAgentId) {
         throw new Error("remote_agent skill binding missing remote_agent_id")
       }
       return {
-        subject: remoteAgentRef(binding.remote_agent_id),
-        ...(binding.conversation_id
-          ? { scope: conversationRef(binding.conversation_id) }
+        subject: remoteAgentRef(binding.remoteAgentId),
+        ...(binding.conversationId
+          ? { scope: conversationRef(binding.conversationId) }
           : {}),
       }
   }
@@ -890,14 +875,14 @@ function buildAvailableSkillPayload(
   row: VisibleSkillRow
 ): AvailableSkillSummary {
   return {
-    instanceId: row.skill_id,
-    packageId: row.skill_id,
-    revisionId: row.current_skill_version_id,
-    name: row.display_name,
+    instanceId: row.skillId,
+    packageId: row.skillId,
+    revisionId: row.currentSkillVersionId,
+    name: row.displayName,
     description: row.description,
-    version: row.source_version_value || `local-${row.current_version}`,
+    version: row.sourceVersionValue || `local-${row.currentVersion}`,
     accessTarget: visibleRowToAccessTarget(row),
-    sourcePackageSlug: row.source_slug || undefined,
+    sourcePackageSlug: row.sourceSlug || undefined,
     sourceKind: "installed",
   }
 }
@@ -905,37 +890,37 @@ function buildAvailableSkillPayload(
 export function visibleRowToAccessTarget(
   row: VisibleSkillRow
 ): CapabilityAccessTarget {
-  switch (row.access_bind_scope) {
+  switch (row.accessBindScope) {
     case "workspace":
-      return { subject: workspaceRef(row.workspace_id) }
+      return { subject: workspaceRef(row.workspaceId) }
     case "workspace_member":
-      return row.workspace_member_id
-        ? { subject: workspaceMemberRef(row.workspace_member_id) }
-        : { subject: workspaceRef(row.workspace_id) }
+      return row.workspaceMemberId
+        ? { subject: workspaceMemberRef(row.workspaceMemberId) }
+        : { subject: workspaceRef(row.workspaceId) }
     case "actor":
-      return row.actor_id
+      return row.actorId
         ? {
-            subject: actorRef(row.actor_id),
-            ...(row.conversation_id
-              ? { scope: conversationRef(row.conversation_id) }
+            subject: actorRef(row.actorId),
+            ...(row.conversationId
+              ? { scope: conversationRef(row.conversationId) }
               : {}),
           }
-        : { subject: workspaceRef(row.workspace_id) }
+        : { subject: workspaceRef(row.workspaceId) }
     case "remote_agent":
-      return row.remote_agent_id
+      return row.remoteAgentId
         ? {
-            subject: remoteAgentRef(row.remote_agent_id),
-            ...(row.conversation_id
-              ? { scope: conversationRef(row.conversation_id) }
+            subject: remoteAgentRef(row.remoteAgentId),
+            ...(row.conversationId
+              ? { scope: conversationRef(row.conversationId) }
               : {}),
           }
-        : { subject: workspaceRef(row.workspace_id) }
+        : { subject: workspaceRef(row.workspaceId) }
     case "conversation":
-      return row.conversation_id
-        ? { subject: conversationRef(row.conversation_id) }
-        : { subject: workspaceRef(row.workspace_id) }
+      return row.conversationId
+        ? { subject: conversationRef(row.conversationId) }
+        : { subject: workspaceRef(row.workspaceId) }
     default:
-      return { subject: workspaceRef(row.workspace_id) }
+      return { subject: workspaceRef(row.workspaceId) }
   }
 }
 
@@ -1210,12 +1195,12 @@ async function loadSkillSnapshotFilesMap(snapshotIds: string[]) {
   const result = await runQuery<SkillSnapshotFileRow>(
     `SELECT
        id,
-       skill_snapshot_id,
+       skill_snapshot_id AS "skillSnapshotId",
        path,
-       media_type,
-       content_blocks,
-       created_at,
-       updated_at
+       media_type AS "mediaType",
+       content_blocks AS "contentBlocks",
+       created_at AS "createdAt",
+       updated_at AS "updatedAt"
      FROM skill_snapshot_files
      WHERE skill_snapshot_id = ANY($1::uuid[])
      ORDER BY path ASC`,
@@ -1224,9 +1209,9 @@ async function loadSkillSnapshotFilesMap(snapshotIds: string[]) {
 
   const filesBySnapshotId = new Map<string, SkillAttachmentFile[]>()
   for (const row of result.rows) {
-    const files = filesBySnapshotId.get(row.skill_snapshot_id) || []
+    const files = filesBySnapshotId.get(row.skillSnapshotId) || []
     files.push(buildSkillAttachmentFromCatalogFile(row))
-    filesBySnapshotId.set(row.skill_snapshot_id, files)
+    filesBySnapshotId.set(row.skillSnapshotId, files)
   }
 
   return filesBySnapshotId
@@ -1234,14 +1219,14 @@ async function loadSkillSnapshotFilesMap(snapshotIds: string[]) {
 
 async function buildMarketplaceInstallationMap(workspaceId: string) {
   const result = await runQuery<{
-    source_catalog_item_id: string
-    skill_id: string
-    installed_count: string
+    sourceCatalogItemId: string
+    skillId: string
+    installedCount: string
   }>(
     `SELECT DISTINCT ON (source_ref.source_catalog_item_id)
-       source_ref.source_catalog_item_id,
-       source_ref.skill_id,
-       COUNT(*) OVER (PARTITION BY source_ref.source_catalog_item_id) AS installed_count
+       source_ref.source_catalog_item_id AS "sourceCatalogItemId",
+       source_ref.skill_id AS "skillId",
+       COUNT(*) OVER (PARTITION BY source_ref.source_catalog_item_id) AS "installedCount"
      FROM skill_source_refs source_ref
      JOIN installed_skills skill
        ON skill.id = source_ref.skill_id
@@ -1256,10 +1241,10 @@ async function buildMarketplaceInstallationMap(workspaceId: string) {
 
   const map = new Map<string, InstallationSummary>()
   for (const row of result.rows) {
-    map.set(row.source_catalog_item_id, {
+    map.set(row.sourceCatalogItemId, {
       installed: true,
-      installedCount: Number(row.installed_count || 0),
-      installedSkillId: row.skill_id,
+      installedCount: Number(row.installedCount || 0),
+      installedSkillId: row.skillId,
     })
   }
   return map
@@ -1346,7 +1331,7 @@ async function loadInstalledSkillRows(params: {
 // helpers removed — all CapabilityAccessTarget values are now ScopedSubjectTarget.
 
 export function buildSkillAccessRow(row: SkillAccessRow): SkillAccessRow {
-  const target = skillBindingToAccessTarget(row, row.workspace_id)
+  const target = skillBindingToAccessTarget(row, row.workspaceId)
   const label = subjectScopeLabel(target)
   let bindScope: RuntimeBindingScope
   switch (label) {
@@ -1380,20 +1365,20 @@ export function buildSkillAccessRow(row: SkillAccessRow): SkillAccessRow {
       : null
   return {
     id: row.id,
-    workspace_id: row.workspace_id,
-    skill_id: row.skill_id,
-    bind_scope: bindScope,
-    conversation_id: conversationId,
-    actor_id: actorId,
-    remote_agent_id: remoteAgentId,
-    workspace_member_id: workspaceMemberId,
-    conversation_type_mask_override: row.conversation_type_mask_override,
+    workspaceId: row.workspaceId,
+    skillId: row.skillId,
+    bindScope: bindScope,
+    conversationId: conversationId,
+    actorId: actorId,
+    remoteAgentId: remoteAgentId,
+    workspaceMemberId: workspaceMemberId,
+    conversationTypeMaskOverride: row.conversationTypeMaskOverride,
     status: row.status,
     source: row.source as SkillAccessRow["source"],
-    created_by_workspace_member_id: row.created_by_workspace_member_id,
+    createdByWorkspaceMemberId: row.createdByWorkspaceMemberId,
     reason: row.reason,
-    created_at: row.created_at || new Date(0),
-    revoked_at: row.revoked_at,
+    createdAt: row.createdAt || new Date(0),
+    revokedAt: row.revokedAt,
   }
 }
 
@@ -1408,8 +1393,8 @@ async function loadAccessBindingsBySkillIds(
     .leftJoin("accessSubjects as scope", "scope.id", "app_grant.scopeSubjectId")
     .select([
       "app_grant.id",
-      "app_grant.workspaceId as workspace_id",
-      "app_grant.workspaceAppId as skill_id",
+      "app_grant.workspaceId as workspaceId",
+      "app_grant.workspaceAppId as skillId",
       sql<RuntimeBindingScope>`
         CASE subj.kind
           WHEN 'workspace' THEN 'workspace'
@@ -1418,18 +1403,18 @@ async function loadAccessBindingsBySkillIds(
           WHEN 'actor' THEN 'actor'
           WHEN 'remote_agent' THEN 'remote_agent'
         END
-      `.as("bind_scope"),
-      "scope.conversationId as conversation_id",
-      "subj.actorId as actor_id",
-      "subj.remoteAgentId as remote_agent_id",
-      "subj.workspaceMemberId as workspace_member_id",
-      "app_grant.conversationTypeMaskOverride as conversation_type_mask_override",
+      `.as("bindScope"),
+      "scope.conversationId as conversationId",
+      "subj.actorId as actorId",
+      "subj.remoteAgentId as remoteAgentId",
+      "subj.workspaceMemberId as workspaceMemberId",
+      "app_grant.conversationTypeMaskOverride as conversationTypeMaskOverride",
       "app_grant.status",
       "app_grant.source",
-      "app_grant.createdByWorkspaceMemberId as created_by_workspace_member_id",
+      "app_grant.createdByWorkspaceMemberId as createdByWorkspaceMemberId",
       "app_grant.reason",
-      "app_grant.createdAt as created_at",
-      "app_grant.revokedAt as revoked_at",
+      "app_grant.createdAt as createdAt",
+      "app_grant.revokedAt as revokedAt",
     ])
     .where("app_grant.workspaceAppId", "in", skillIds)
     .where(
@@ -1447,11 +1432,11 @@ async function loadAccessBindingsBySkillIds(
   for (const row of rows) {
     const normalizedBinding: SkillAccessRow = {
       ...row,
-      created_at: row.created_at || new Date(0),
+      createdAt: row.createdAt || new Date(0),
     }
-    const existing = map.get(normalizedBinding.skill_id) || []
+    const existing = map.get(normalizedBinding.skillId) || []
     existing.push(normalizedBinding)
-    map.set(row.skill_id, existing)
+    map.set(row.skillId, existing)
   }
   return map
 }
@@ -1472,24 +1457,24 @@ async function loadAccessBindingsBySkillIdsForContext(
   const map = new Map<string, SkillAccessRow[]>()
   for (const [skillId, rows] of bindings.entries()) {
     const filtered = rows.filter((row) => {
-      switch (row.bind_scope) {
+      switch (row.bindScope) {
         case "workspace":
           return true
         case "workspace_member":
-          return row.workspace_member_id === (context.workspaceMemberId || null)
+          return row.workspaceMemberId === (context.workspaceMemberId || null)
         case "conversation":
-          return row.conversation_id === (context.conversationId || null)
+          return row.conversationId === (context.conversationId || null)
         case "actor":
           return (
-            row.actor_id === (context.actorId || null) &&
-            (!row.conversation_id ||
-              row.conversation_id === (context.conversationId || null))
+            row.actorId === (context.actorId || null) &&
+            (!row.conversationId ||
+              row.conversationId === (context.conversationId || null))
           )
         case "remote_agent":
           return (
-            row.remote_agent_id === (context.remoteAgentId || null) &&
-            (!row.conversation_id ||
-              row.conversation_id === (context.conversationId || null))
+            row.remoteAgentId === (context.remoteAgentId || null) &&
+            (!row.conversationId ||
+              row.conversationId === (context.conversationId || null))
           )
       }
     })
@@ -1593,7 +1578,7 @@ async function findSkillIdsByBindingFilter(params: {
     .innerJoin("workspaceApps as app", "app.id", "app_grant.workspaceAppId")
     .innerJoin("accessSubjects as subj", "subj.id", "app_grant.subjectId")
     .leftJoin("accessSubjects as scope", "scope.id", "app_grant.scopeSubjectId")
-    .select("app_grant.workspaceAppId as skill_id")
+    .select("app_grant.workspaceAppId as skillId")
     .distinct()
     .where("app.workspaceId", "=", params.workspaceId)
     .where("app.kind", "=", "installed_skill")
@@ -1660,7 +1645,7 @@ async function findSkillIdsByBindingFilter(params: {
 
   const rows = await query.execute()
   return rows
-    .map((row) => row.skill_id)
+    .map((row) => row.skillId)
     .filter((skillId): skillId is string => Boolean(skillId))
 }
 
@@ -1728,11 +1713,11 @@ async function getInstalledSkillResponse(
 
   const [bindingMap, fileMap] = await Promise.all([
     chooseBindingMap([installedSkillId]),
-    loadSkillSnapshotFilesMap([row.current_snapshot_id]),
+    loadSkillSnapshotFilesMap([row.currentSnapshotId]),
   ])
   const workspaceConversationTypeMask =
     await getWorkspaceCapabilityConversationTypeMask(
-      row.workspace_id,
+      row.workspaceId,
       "installed_skill"
     )
 
@@ -1740,7 +1725,7 @@ async function getInstalledSkillResponse(
     row,
     bindingMap.get(installedSkillId),
     workspaceConversationTypeMask,
-    fileMap.get(row.current_snapshot_id) || []
+    fileMap.get(row.currentSnapshotId) || []
   )
 }
 
@@ -1778,7 +1763,7 @@ export async function listMarketplaceSkills(filters?: {
   )
 
   const latestSnapshotIds = result.rows
-    .map((row) => row.snapshot_id)
+    .map((row) => row.snapshotId)
     .filter((value): value is string => Boolean(value))
   const [filesMap, installationMap] = await Promise.all([
     loadSkillSnapshotFilesMap(latestSnapshotIds),
@@ -1790,8 +1775,8 @@ export async function listMarketplaceSkills(filters?: {
   return result.rows.map((row) =>
     mapMarketplaceEntry(
       row,
-      installationMap?.get(row.item_id),
-      row.snapshot_id ? filesMap.get(row.snapshot_id) || [] : undefined
+      installationMap?.get(row.itemId),
+      row.snapshotId ? filesMap.get(row.snapshotId) || [] : undefined
     )
   )
 }
@@ -1806,7 +1791,7 @@ export async function getMarketplaceSkill(
   }
 
   const [filesMap, installationMap] = await Promise.all([
-    loadSkillSnapshotFilesMap(row.snapshot_id ? [row.snapshot_id] : []),
+    loadSkillSnapshotFilesMap(row.snapshotId ? [row.snapshotId] : []),
     workspaceId
       ? buildMarketplaceInstallationMap(workspaceId)
       : Promise.resolve(null),
@@ -1814,8 +1799,8 @@ export async function getMarketplaceSkill(
 
   return mapMarketplaceEntry(
     row,
-    installationMap?.get(row.item_id),
-    row.snapshot_id ? filesMap.get(row.snapshot_id) || [] : undefined
+    installationMap?.get(row.itemId),
+    row.snapshotId ? filesMap.get(row.snapshotId) || [] : undefined
   )
 }
 
@@ -1855,8 +1840,8 @@ async function upsertImportedMarketplaceSkill(
 
     if (
       existing &&
-      existing.latest_version_value === imported.version &&
-      existing.snapshot_content_hash === imported.contentHash
+      existing.latestVersionValue === imported.version &&
+      existing.snapshotContentHash === imported.contentHash
     ) {
       await client
         .updateTable("catalogItems")
@@ -1867,20 +1852,20 @@ async function upsertImportedMarketplaceSkill(
           tags: imported.tags,
           metadata: sql`${JSON.stringify(imported.itemMetadata)}::jsonb`,
         })
-        .where("id", "=", existing.item_id)
+        .where("id", "=", existing.itemId)
         .execute()
-      return existing.item_id
+      return existing.itemId
     }
 
     const itemSlug = existing
-      ? existing.item_slug
+      ? existing.itemSlug
       : await allocateMarketplaceItemSlug(
           client,
           publisherId,
           sanitizeSlug(imported.catalogSlug) || "skill"
         )
 
-    let itemId = existing?.item_id || null
+    let itemId = existing?.itemId || null
     if (existing) {
       await client
         .updateTable("catalogItems")
@@ -1896,9 +1881,9 @@ async function upsertImportedMarketplaceSkill(
           isActive: true,
           metadata: sql`${JSON.stringify(imported.itemMetadata)}::jsonb`,
         })
-        .where("id", "=", existing.item_id)
+        .where("id", "=", existing.itemId)
         .execute()
-      itemId = existing.item_id
+      itemId = existing.itemId
     } else {
       const inserted = await runBuilder(
         client,
@@ -2048,22 +2033,22 @@ export async function refreshMarketplaceSkill(input: {
   authorUserId?: string
 }) {
   const existing = await getMarketplaceRowById(input.skillId)
-  if (!existing || !existing.mirror_source_id || !existing.mirror_source_type) {
+  if (!existing || !existing.mirrorSourceId || !existing.mirrorSourceType) {
     throw new SkillError(400, "Marketplace skill has no mirror source")
   }
 
-  if (existing.mirror_source_type === "github") {
-    const locator = parseJsonObject(existing.mirror_locator)
+  if (existing.mirrorSourceType === "github") {
+    const locator = parseJsonObject(existing.mirrorLocator)
     return importMarketplaceMirrorSkill({
       sourceType: "github",
       repoUrl: String(locator.repoUrl || ""),
       path: String(locator.path || "."),
-      ref: existing.mirror_requested_ref || undefined,
+      ref: existing.mirrorRequestedRef || undefined,
       authorUserId: input.authorUserId,
     })
   }
 
-  const locator = parseJsonObject(existing.mirror_locator)
+  const locator = parseJsonObject(existing.mirrorLocator)
   return importMarketplaceMirrorSkill({
     sourceType: "clawhub",
     ownerId:
@@ -2071,7 +2056,7 @@ export async function refreshMarketplaceSkill(input: {
         ? locator.ownerId
         : undefined,
     slug: String(locator.slug || ""),
-    version: existing.mirror_requested_ref || undefined,
+    version: existing.mirrorRequestedRef || undefined,
     authorUserId: input.authorUserId,
   })
 }
@@ -2130,20 +2115,20 @@ export async function publishMarketplaceSkill(input: {
           clientRunner(client)
         )
 
-    let itemId = existing?.item_id || null
-    if (existing && existing.item_id !== input.skillId && input.skillId) {
+    let itemId = existing?.itemId || null
+    if (existing && existing.itemId !== input.skillId && input.skillId) {
       throw new SkillError(404, "Skill not found")
     }
 
     const itemMetadata: JsonObject = {
-      ...parseJsonObject(existing?.item_metadata),
+      ...parseJsonObject(existing?.itemMetadata),
       canonicalSlug,
       frontmatterName: preparedSnapshot.frontmatter.name,
       ...(input.metadata || {}),
     }
     const nextIconFileId =
       input.iconFileId === undefined
-        ? (existing?.item_icon_file_id ?? null)
+        ? (existing?.itemIconFileId ?? null)
         : input.iconFileId
           ? await normalizeMarketplaceSkillIconFileId(
               input.iconFileId,
@@ -2164,9 +2149,9 @@ export async function publishMarketplaceSkill(input: {
           iconFileId: nextIconFileId,
           metadata: sql`${JSON.stringify(itemMetadata)}::jsonb`,
         })
-        .where("id", "=", existing.item_id)
+        .where("id", "=", existing.itemId)
         .execute()
-      itemId = existing.item_id
+      itemId = existing.itemId
     } else {
       const inserted = await runBuilder(
         client,
@@ -2444,7 +2429,7 @@ export async function listInstalledSkills(
   })
   if (rows.length === 0) return []
 
-  const skillIds = rows.map((row) => row.skill_id)
+  const skillIds = rows.map((row) => row.skillId)
   const [bindingMap, fileMap] = await Promise.all([
     chooseBindingMap(skillIds, {
       accessTargetType: filters?.accessTargetType,
@@ -2452,7 +2437,7 @@ export async function listInstalledSkills(
       workspaceMemberId: filters?.workspaceMemberId,
       conversationId: filters?.conversationId,
     }),
-    loadSkillSnapshotFilesMap(rows.map((row) => row.current_snapshot_id)),
+    loadSkillSnapshotFilesMap(rows.map((row) => row.currentSnapshotId)),
   ])
   const workspaceConversationTypeMask =
     await getWorkspaceCapabilityConversationTypeMask(
@@ -2463,9 +2448,9 @@ export async function listInstalledSkills(
   return rows.map((row) =>
     buildInstalledSkillPayload(
       row,
-      bindingMap.get(row.skill_id),
+      bindingMap.get(row.skillId),
       workspaceConversationTypeMask,
-      fileMap.get(row.current_snapshot_id) || []
+      fileMap.get(row.currentSnapshotId) || []
     )
   )
 }
@@ -2491,7 +2476,7 @@ export async function getInstalledSkillGrantState(
 
   const workspaceConversationTypeMask =
     await getWorkspaceCapabilityConversationTypeMask(
-      skillRow.workspace_id,
+      skillRow.workspaceId,
       "installed_skill"
     )
   const accessRows = await listSkillAccessRows(installedSkillId)
@@ -2499,7 +2484,7 @@ export async function getInstalledSkillGrantState(
     mapSkillAccessRowToGrant(row, {
       workspaceConversationTypeMask,
       instanceConversationTypeMaskOverride:
-        skillRow.conversation_type_mask_override ?? null,
+        skillRow.conversationTypeMaskOverride ?? null,
     })
   )
   const initialGrant = selectInitialSkillGrant(accessRows)
@@ -2516,12 +2501,12 @@ export async function getInstalledSkillGrantState(
         resolveInstalledSkillSourceConversationTypeMask(skillRow),
       workspaceConversationTypeMask,
       conversationTypeMaskOverride:
-        skillRow.conversation_type_mask_override ?? null,
+        skillRow.conversationTypeMaskOverride ?? null,
       effectiveConversationTypeMask:
         resolveInstalledSkillEffectiveConversationTypeMask({
           workspaceConversationTypeMask,
           conversation_type_mask_override:
-            skillRow.conversation_type_mask_override,
+            skillRow.conversationTypeMaskOverride,
         }),
       reason: "Choose who can use this installed skill.",
       effectivePermissions:
@@ -2552,7 +2537,7 @@ export async function createInstalledSkillGrant(input: {
   }
   const workspaceConversationTypeMask =
     await getWorkspaceCapabilityConversationTypeMask(
-      skillRow.workspace_id,
+      skillRow.workspaceId,
       "installed_skill"
     )
 
@@ -2572,7 +2557,7 @@ export async function createInstalledSkillGrant(input: {
   })
   const instanceConversationTypeMask = resolveNarrowedConversationTypeMask(
     workspaceConversationTypeMask,
-    skillRow.conversation_type_mask_override ?? null
+    skillRow.conversationTypeMaskOverride ?? null
   )
   const effectiveConversationTypeMask =
     assertGrantConversationTypeOverrideAllowed({
@@ -2621,17 +2606,17 @@ export async function createInstalledSkillGrant(input: {
   const existing = accessRows.find(
     (row) =>
       row.status === "active" &&
-      row.bind_scope === accessTargetLabel &&
-      row.actor_id === accessTargetActorId &&
-      row.remote_agent_id === accessTargetRemoteAgentId &&
-      row.conversation_id === accessTargetConversationId &&
-      row.workspace_member_id === accessTargetWorkspaceMemberId
+      row.bindScope === accessTargetLabel &&
+      row.actorId === accessTargetActorId &&
+      row.remoteAgentId === accessTargetRemoteAgentId &&
+      row.conversationId === accessTargetConversationId &&
+      row.workspaceMemberId === accessTargetWorkspaceMemberId
   )
   if (existing) {
     return mapSkillAccessRowToGrant(existing, {
       workspaceConversationTypeMask,
       instanceConversationTypeMaskOverride:
-        skillRow.conversation_type_mask_override ?? null,
+        skillRow.conversationTypeMaskOverride ?? null,
     })
   }
 
@@ -2648,43 +2633,42 @@ export async function createInstalledSkillGrant(input: {
     return {
       accessRow: {
         id: inserted.id,
-        workspace_id: inserted.workspaceId,
-        skill_id: inserted.workspaceAppId,
-        bind_scope: accessTarget.subject.kind as RuntimeBindingScope,
-        conversation_id:
+        workspaceId: inserted.workspaceId,
+        skillId: inserted.workspaceAppId,
+        bindScope: accessTarget.subject.kind as RuntimeBindingScope,
+        conversationId:
           accessTarget.scope?.kind === "conversation"
             ? accessTarget.scope.conversationId
             : accessTarget.subject.kind === "conversation"
               ? accessTarget.subject.conversationId
               : null,
-        actor_id:
+        actorId:
           accessTarget.subject.kind === "actor"
             ? accessTarget.subject.actorId
             : null,
-        remote_agent_id:
+        remoteAgentId:
           accessTarget.subject.kind === "remote_agent"
             ? accessTarget.subject.remoteAgentId
             : null,
-        workspace_member_id:
+        workspaceMemberId:
           accessTarget.subject.kind === "workspace_member"
             ? accessTarget.subject.memberId
             : null,
-        conversation_type_mask_override: inserted.conversationTypeMaskOverride,
+        conversationTypeMaskOverride: inserted.conversationTypeMaskOverride,
         status: inserted.status,
         source: inserted.source,
-        created_by_workspace_member_id: inserted.createdByWorkspaceMemberId,
+        createdByWorkspaceMemberId: inserted.createdByWorkspaceMemberId,
         reason: inserted.reason,
-        created_at: inserted.createdAt,
-        revoked_at: inserted.revokedAt,
-        relation: "use_workspace",
-      } as SkillAccessRow,
+        createdAt: inserted.createdAt,
+        revokedAt: inserted.revokedAt,
+      } satisfies SkillAccessRow,
     }
   })
 
   return mapSkillAccessRowToGrant(result.accessRow, {
     workspaceConversationTypeMask,
     instanceConversationTypeMaskOverride:
-      skillRow.conversation_type_mask_override ?? null,
+      skillRow.conversationTypeMaskOverride ?? null,
   })
 }
 
@@ -2704,17 +2688,17 @@ export async function updateInstalledSkillGrant(input: {
 
   const workspaceConversationTypeMask =
     await getWorkspaceCapabilityConversationTypeMask(
-      skillRow.workspace_id,
+      skillRow.workspaceId,
       "installed_skill"
     )
   const accessRows = await listSkillAccessRows(input.installedSkillId, true)
   const accessRow = accessRows.find((row) => row.id === input.grantId)
-  if (!accessRow || accessRow.workspace_id !== input.workspaceId) {
+  if (!accessRow || accessRow.workspaceId !== input.workspaceId) {
     throw new SkillError(404, "Access grant not found")
   }
   const instanceConversationTypeMask = resolveNarrowedConversationTypeMask(
     workspaceConversationTypeMask,
-    skillRow.conversation_type_mask_override ?? null
+    skillRow.conversationTypeMaskOverride ?? null
   )
   const accessRowTarget = skillBindingToAccessTarget(
     accessRow,
@@ -2756,7 +2740,7 @@ export async function updateInstalledSkillGrant(input: {
   return mapSkillAccessRowToGrant(updatedRow, {
     workspaceConversationTypeMask,
     instanceConversationTypeMaskOverride:
-      skillRow.conversation_type_mask_override ?? null,
+      skillRow.conversationTypeMaskOverride ?? null,
   })
 }
 
@@ -2767,7 +2751,7 @@ export async function revokeInstalledSkillGrant(input: {
 }) {
   const accessRows = await listSkillAccessRows(input.installedSkillId, true)
   const accessRow = accessRows.find((row) => row.id === input.grantId)
-  if (!accessRow || accessRow.workspace_id !== input.workspaceId) {
+  if (!accessRow || accessRow.workspaceId !== input.workspaceId) {
     throw new SkillError(404, "Access grant not found")
   }
   if (accessRow.status === "revoked") {
@@ -2821,8 +2805,8 @@ export async function installMarketplaceSkill(input: {
   const marketplaceSkill = await getMarketplaceRowById(input.marketSkillId)
   if (
     !marketplaceSkill ||
-    !marketplaceSkill.latest_version_id ||
-    !marketplaceSkill.snapshot_id
+    !marketplaceSkill.latestVersionId ||
+    !marketplaceSkill.snapshotId
   ) {
     throw new SkillError(404, "Marketplace skill not found")
   }
@@ -2834,12 +2818,12 @@ export async function installMarketplaceSkill(input: {
       workspaceId: input.workspaceId,
       kind: "installed_skill",
       displayName:
-        marketplaceSkill.snapshot_display_name ||
-        marketplaceSkill.item_display_name,
+        marketplaceSkill.snapshotDisplayName ||
+        marketplaceSkill.itemDisplayName,
       ownerWorkspaceMemberId: input.installedByWorkspaceMemberId || null,
       status: "active",
       conversationTypeMaskOverride:
-        marketplaceSkill.spec_default_conversation_type_mask ?? null,
+        marketplaceSkill.specDefaultConversationTypeMask ?? null,
     })
 
     const insertedSkill = await runBuilder(
@@ -2848,10 +2832,10 @@ export async function installMarketplaceSkill(input: {
         .insertInto("installedSkills")
         .values({
           id: skillId,
-          iconFileId: marketplaceSkill.item_icon_file_id,
-          tags: marketplaceSkill.item_tags || [],
+          iconFileId: marketplaceSkill.itemIconFileId,
+          tags: marketplaceSkill.itemTags || [],
           currentVersion: 1,
-          currentSnapshotId: marketplaceSkill.snapshot_id!,
+          currentSnapshotId: marketplaceSkill.snapshotId!,
         })
         .returning("id")
     )
@@ -2862,7 +2846,7 @@ export async function installMarketplaceSkill(input: {
       .values({
         skillId: insertedSkillId,
         version: 1,
-        skillSnapshotId: marketplaceSkill.snapshot_id!,
+        skillSnapshotId: marketplaceSkill.snapshotId!,
         metadata: sql`${JSON.stringify({})}::jsonb`,
         createdByWorkspaceMemberId: input.installedByWorkspaceMemberId || null,
       })
@@ -2872,8 +2856,8 @@ export async function installMarketplaceSkill(input: {
       .insertInto("skillSourceRefs")
       .values({
         skillId: insertedSkillId,
-        sourceCatalogItemId: marketplaceSkill.item_id,
-        sourceCatalogVersionId: marketplaceSkill.latest_version_id,
+        sourceCatalogItemId: marketplaceSkill.itemId,
+        sourceCatalogVersionId: marketplaceSkill.latestVersionId,
         syncMode: "manual_merge",
         isCustomized: false,
       })
@@ -2884,7 +2868,7 @@ export async function installMarketplaceSkill(input: {
       .set({
         downloadCount: sql`${sql.ref("downloadCount")} + 1`,
       })
-      .where("id", "=", marketplaceSkill.item_id)
+      .where("id", "=", marketplaceSkill.itemId)
       .execute()
 
     if (input.grants?.length) {
@@ -2942,7 +2926,7 @@ export async function updateInstalledSkill(input: {
   if (input.conversationTypeMaskOverride !== undefined) {
     const workspaceConversationTypeMask =
       await getWorkspaceCapabilityConversationTypeMask(
-        existing.workspace_id,
+        existing.workspaceId,
         "installed_skill"
       )
     const nextInstanceConversationTypeMask =
@@ -2965,24 +2949,24 @@ export async function updateInstalledSkill(input: {
   }
 
   const currentFilesMap = await loadSkillSnapshotFilesMap([
-    existing.current_snapshot_id,
+    existing.currentSnapshotId,
   ])
-  const currentFiles = currentFilesMap.get(existing.current_snapshot_id) || []
+  const currentFiles = currentFilesMap.get(existing.currentSnapshotId) || []
   const touchesContent =
     input.name !== undefined ||
     input.description !== undefined ||
     input.attachmentFiles !== undefined
 
   await withDbTransaction(async (client) => {
-    let nextVersion = existing.current_version
-    let nextDisplayName = existing.display_name
+    let nextVersion = existing.currentVersion
+    let nextDisplayName = existing.displayName
 
     if (touchesContent) {
-      nextVersion = existing.current_version + 1
-      nextDisplayName = input.name?.trim() || existing.display_name
+      nextVersion = existing.currentVersion + 1
+      nextDisplayName = input.name?.trim() || existing.displayName
 
       const preparedSnapshot = buildPreparedSnapshotFromInput({
-        fallbackName: existing.display_name,
+        fallbackName: existing.displayName,
         explicitName: nextDisplayName,
         explicitDescription: input.description,
         files: input.attachmentFiles
@@ -3000,12 +2984,11 @@ export async function updateInstalledSkill(input: {
       await client
         .insertInto("skillVersions")
         .values({
-          skillId: existing.skill_id,
+          skillId: existing.skillId,
           version: nextVersion,
           skillSnapshotId: snapshotId,
-          metadata: sql`${JSON.stringify(parseJsonObject(existing.version_metadata))}::jsonb`,
-          createdByWorkspaceMemberId:
-            existing.owner_workspace_member_id || null,
+          metadata: sql`${JSON.stringify(parseJsonObject(existing.versionMetadata))}::jsonb`,
+          createdByWorkspaceMemberId: existing.ownerWorkspaceMemberId || null,
         })
         .execute()
 
@@ -3014,7 +2997,7 @@ export async function updateInstalledSkill(input: {
         .set({
           iconFileId:
             input.iconFileId === undefined
-              ? existing.icon_file_id
+              ? existing.iconFileId
               : input.iconFileId
                 ? await normalizeWorkspaceSkillIconFileId(
                     input.iconFileId,
@@ -3026,14 +3009,14 @@ export async function updateInstalledSkill(input: {
           currentSnapshotId: snapshotId,
           updatedAt: sql`NOW()`,
         })
-        .where("id", "=", existing.skill_id)
+        .where("id", "=", existing.skillId)
         .execute()
       await updateWorkspaceAppRoot(client, {
-        id: existing.skill_id,
+        id: existing.skillId,
         displayName: nextDisplayName,
         status:
           input.isEnabled === undefined
-            ? existing.skill_status === "active"
+            ? existing.skillStatus === "active"
               ? "active"
               : "disabled"
             : input.isEnabled
@@ -3041,13 +3024,13 @@ export async function updateInstalledSkill(input: {
               : "disabled",
       })
 
-      if (existing.source_catalog_item_id) {
+      if (existing.sourceCatalogItemId) {
         await client
           .updateTable("skillSourceRefs")
           .set({
             isCustomized: true,
           })
-          .where("skillId", "=", existing.skill_id)
+          .where("skillId", "=", existing.skillId)
           .execute()
       }
 
@@ -3062,7 +3045,7 @@ export async function updateInstalledSkill(input: {
     ) {
       const nextIconFileId =
         input.iconFileId === undefined
-          ? existing.icon_file_id
+          ? existing.iconFileId
           : input.iconFileId
             ? await normalizeWorkspaceSkillIconFileId(
                 input.iconFileId,
@@ -3076,13 +3059,13 @@ export async function updateInstalledSkill(input: {
           tags: input.tags === undefined ? existing.tags || [] : input.tags,
           updatedAt: sql`NOW()`,
         })
-        .where("id", "=", existing.skill_id)
+        .where("id", "=", existing.skillId)
         .execute()
       await updateWorkspaceAppRoot(client, {
-        id: existing.skill_id,
+        id: existing.skillId,
         status:
           input.isEnabled === undefined
-            ? existing.skill_status === "active"
+            ? existing.skillStatus === "active"
               ? "active"
               : "disabled"
             : input.isEnabled
@@ -3090,7 +3073,7 @@ export async function updateInstalledSkill(input: {
               : "disabled",
         conversationTypeMaskOverride:
           input.conversationTypeMaskOverride === undefined
-            ? existing.conversation_type_mask_override
+            ? existing.conversationTypeMaskOverride
             : input.conversationTypeMaskOverride,
       })
     }
@@ -3110,24 +3093,24 @@ export async function upgradeInstalledSkill(input: {
   if (!existing) {
     throw new SkillError(404, "Installed skill not found")
   }
-  if (!existing.source_catalog_item_id) {
+  if (!existing.sourceCatalogItemId) {
     throw new SkillError(400, "Installed skill has no marketplace source")
   }
 
   const marketplaceSkill = await getMarketplaceRowById(
-    existing.source_catalog_item_id
+    existing.sourceCatalogItemId
   )
   if (
     !marketplaceSkill ||
-    !marketplaceSkill.latest_version_id ||
-    !marketplaceSkill.snapshot_id
+    !marketplaceSkill.latestVersionId ||
+    !marketplaceSkill.snapshotId
   ) {
     throw new SkillError(400, "Marketplace source has no latest version")
   }
 
   if (
-    existing.source_catalog_version_id &&
-    existing.source_catalog_version_id === marketplaceSkill.latest_version_id
+    existing.sourceCatalogVersionId &&
+    existing.sourceCatalogVersionId === marketplaceSkill.latestVersionId
   ) {
     return getInstalledSkillResponse(input.workspaceId, input.installedSkillId)
   }
@@ -3136,38 +3119,38 @@ export async function upgradeInstalledSkill(input: {
     await client
       .insertInto("skillVersions")
       .values({
-        skillId: existing.skill_id,
-        version: existing.current_version + 1,
-        skillSnapshotId: marketplaceSkill.snapshot_id!,
-        metadata: sql`${JSON.stringify(parseJsonObject(existing.version_metadata))}::jsonb`,
-        createdByWorkspaceMemberId: existing.owner_workspace_member_id || null,
+        skillId: existing.skillId,
+        version: existing.currentVersion + 1,
+        skillSnapshotId: marketplaceSkill.snapshotId!,
+        metadata: sql`${JSON.stringify(parseJsonObject(existing.versionMetadata))}::jsonb`,
+        createdByWorkspaceMemberId: existing.ownerWorkspaceMemberId || null,
       })
       .execute()
 
     await client
       .updateTable("installedSkills")
       .set({
-        iconFileId: marketplaceSkill.item_icon_file_id,
-        tags: marketplaceSkill.item_tags || [],
-        currentVersion: existing.current_version + 1,
-        currentSnapshotId: marketplaceSkill.snapshot_id!,
+        iconFileId: marketplaceSkill.itemIconFileId,
+        tags: marketplaceSkill.itemTags || [],
+        currentVersion: existing.currentVersion + 1,
+        currentSnapshotId: marketplaceSkill.snapshotId!,
       })
-      .where("id", "=", existing.skill_id)
+      .where("id", "=", existing.skillId)
       .execute()
     await updateWorkspaceAppRoot(client, {
-      id: existing.skill_id,
+      id: existing.skillId,
       displayName:
-        marketplaceSkill.snapshot_display_name ||
-        marketplaceSkill.item_display_name,
+        marketplaceSkill.snapshotDisplayName ||
+        marketplaceSkill.itemDisplayName,
     })
 
     await client
       .updateTable("skillSourceRefs")
       .set({
-        sourceCatalogVersionId: marketplaceSkill.latest_version_id,
+        sourceCatalogVersionId: marketplaceSkill.latestVersionId,
         isCustomized: false,
       })
-      .where("skillId", "=", existing.skill_id)
+      .where("skillId", "=", existing.skillId)
       .execute()
   })
 
@@ -3233,21 +3216,21 @@ function visibleRowToAccessRow(
   workspaceId: string
 ): SkillAccessRow {
   return {
-    id: row.access_binding_id,
-    workspace_id: workspaceId,
-    conversation_type_mask_override: null,
+    id: row.accessBindingId,
+    workspaceId: workspaceId,
+    conversationTypeMaskOverride: null,
     status: "active",
     source: "manual",
-    created_by_workspace_member_id: null,
+    createdByWorkspaceMemberId: null,
     reason: null,
-    created_at: row.access_created_at,
-    revoked_at: null,
-    skill_id: row.skill_id,
-    bind_scope: row.access_bind_scope,
-    actor_id: row.actor_id,
-    conversation_id: row.conversation_id,
-    remote_agent_id: row.remote_agent_id,
-    workspace_member_id: row.workspace_member_id,
+    createdAt: row.accessCreatedAt,
+    revokedAt: null,
+    skillId: row.skillId,
+    bindScope: row.accessBindScope,
+    actorId: row.actorId,
+    conversationId: row.conversationId,
+    remoteAgentId: row.remoteAgentId,
+    workspaceMemberId: row.workspaceMemberId,
   }
 }
 
@@ -3323,22 +3306,22 @@ export async function listVisibleSkills(input: {
           const [rows, bindingsBySkillId] = await Promise.all([
             runQuery<VisibleSkillRow>(
               `SELECT
-	                 skill.id AS skill_id,
-	                 app.workspace_id,
-	                 app.display_name AS display_name,
-	                 skill.current_version,
-	                 version_row.id AS current_skill_version_id,
-	                 snapshot.description,
-	                 source_item.slug AS source_slug,
-	                 imported_version.version AS source_version_value,
-	                 app.conversation_type_mask_override,
-	                 skill.id AS access_binding_id,
-	                 'workspace'::varchar AS access_bind_scope,
-                 NULL::uuid AS conversation_id,
-                 NULL::uuid AS actor_id,
-                 NULL::uuid AS remote_agent_id,
-                 NULL::uuid AS workspace_member_id,
-                 app.updated_at AS access_created_at
+	                 skill.id AS "skillId",
+	                 app.workspace_id AS "workspaceId",
+	                 app.display_name AS "displayName",
+	                 skill.current_version AS "currentVersion",
+	                 version_row.id AS "currentSkillVersionId",
+	                 snapshot.description AS "description",
+	                 source_item.slug AS "sourceSlug",
+	                 imported_version.version AS "sourceVersionValue",
+	                 app.conversation_type_mask_override AS "conversationTypeMaskOverride",
+	                 skill.id AS "accessBindingId",
+	                 'workspace'::varchar AS "accessBindScope",
+                 NULL::uuid AS "conversationId",
+                 NULL::uuid AS "actorId",
+                 NULL::uuid AS "remoteAgentId",
+                 NULL::uuid AS "workspaceMemberId",
+                 app.updated_at AS "accessCreatedAt"
                FROM installed_skills skill
                JOIN workspace_apps_live app
                  ON app.id = skill.id
@@ -3372,7 +3355,7 @@ export async function listVisibleSkills(input: {
           ])
           const workspacePolicyMap =
             await getWorkspaceCapabilityConversationTypePolicyMap(
-              rows.rows.map((row) => row.workspace_id)
+              rows.rows.map((row) => row.workspaceId)
             )
           // type-key is loop-invariant (a property of the conversation, not the
           // skill binding), so resolve it once and use the pure key check below.
@@ -3384,20 +3367,20 @@ export async function listVisibleSkills(input: {
           const deduped = new Map<string, VisibleSkillRow>()
           for (const row of rows.rows) {
             const workspaceConversationTypeMask =
-              workspacePolicyMap.get(row.workspace_id)?.installed_skill ||
+              workspacePolicyMap.get(row.workspaceId)?.installed_skill ||
               DEFAULT_CONVERSATION_TYPE_MASK
             const instanceConversationTypeMask =
               resolveInstalledSkillEffectiveConversationTypeMask({
                 workspaceConversationTypeMask,
                 conversation_type_mask_override:
-                  row.conversation_type_mask_override,
+                  row.conversationTypeMaskOverride,
               })
-            const bindings = (bindingsBySkillId.get(row.skill_id) || []).filter(
+            const bindings = (bindingsBySkillId.get(row.skillId) || []).filter(
               (binding) =>
                 maskAllowsConversationTypeKey(
                   resolveNarrowedConversationTypeMask(
                     instanceConversationTypeMask,
-                    binding.conversation_type_mask_override
+                    binding.conversationTypeMaskOverride
                   ),
                   conversationTypeKey
                 )
@@ -3410,18 +3393,17 @@ export async function listVisibleSkills(input: {
             )[0]
             const candidate: VisibleSkillRow = {
               ...row,
-              access_binding_id: chosenBinding?.id || row.access_binding_id,
-              access_bind_scope: chosenBinding?.bind_scope || "workspace",
-              conversation_id: chosenBinding?.conversation_id || null,
-              actor_id: chosenBinding?.actor_id || null,
-              remote_agent_id: chosenBinding?.remote_agent_id || null,
-              workspace_member_id: chosenBinding?.workspace_member_id || null,
-              access_created_at:
-                chosenBinding?.created_at || row.access_created_at,
+              accessBindingId: chosenBinding?.id || row.accessBindingId,
+              accessBindScope: chosenBinding?.bindScope || "workspace",
+              conversationId: chosenBinding?.conversationId || null,
+              actorId: chosenBinding?.actorId || null,
+              remoteAgentId: chosenBinding?.remoteAgentId || null,
+              workspaceMemberId: chosenBinding?.workspaceMemberId || null,
+              accessCreatedAt: chosenBinding?.createdAt || row.accessCreatedAt,
             }
-            const existing = deduped.get(row.skill_id)
+            const existing = deduped.get(row.skillId)
             if (!existing) {
-              deduped.set(row.skill_id, candidate)
+              deduped.set(row.skillId, candidate)
               continue
             }
             if (
@@ -3430,7 +3412,7 @@ export async function listVisibleSkills(input: {
                 visibleRowToAccessRow(existing, input.workspaceId)
               ) < 0
             ) {
-              deduped.set(row.skill_id, candidate)
+              deduped.set(row.skillId, candidate)
             }
           }
 
@@ -3527,7 +3509,7 @@ export async function readVisibleSkill(input: {
     db
       .selectFrom("skillSnapshotFiles")
       .select(["path", "contentBlocks"])
-      .where("skillSnapshotId", "=", installedSkill.current_snapshot_id)
+      .where("skillSnapshotId", "=", installedSkill.currentSnapshotId)
       .where("path", "=", targetPath)
       .limit(1)
   )

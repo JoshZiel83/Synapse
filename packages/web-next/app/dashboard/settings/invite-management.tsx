@@ -1,7 +1,7 @@
 "use client"
 
 import { dateToIsoInstant } from "@synapse/shared/datetime"
-import type { Timestamp } from "@synapse/shared"
+import type { WorkspaceInviteView } from "@synapse/shared"
 import { useEffect, useState, useCallback } from "react"
 import { useWorkspace } from "../workspace-provider"
 import { api } from "@/lib/api"
@@ -19,19 +19,9 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Plus, Copy, Trash2, Check } from "lucide-react"
 
-interface Invite {
-  id: string
-  token: string
-  trustLevel: string
-  maxUses: number | null
-  useCount: number
-  expiresAt: Timestamp | null
-  createdAt: Timestamp
-}
-
 export default function InviteManagement() {
   const { workspaceId } = useWorkspace()
-  const [invites, setInvites] = useState<Invite[]>([])
+  const [invites, setInvites] = useState<WorkspaceInviteView[]>([])
   const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [copiedId, setCopiedId] = useState<string | null>(null)
@@ -62,7 +52,7 @@ export default function InviteManagement() {
     if (!workspaceId) return
     setCreating(true)
     try {
-      const data: any = { trustLevel }
+      const data: Parameters<typeof api.createInvite>[1] = { trustLevel }
       if (maxUses) data.maxUses = parseInt(maxUses, 10)
       if (expiresIn) {
         const hours = parseInt(expiresIn, 10)

@@ -1,14 +1,20 @@
 "use client"
 import { create } from "zustand"
-import type { ReuseScope } from "@synapse/shared"
+import type {
+  MarketplacePluginView,
+  MarketplacePublisherView,
+  PluginCategoryView,
+  PluginInstallationDetailView,
+  ReuseScope,
+} from "@synapse/shared"
 import type { CapabilityAccessTarget } from "@synapse/shared/types"
 import { api } from "@/lib/api"
 
 interface PluginState {
-  marketplace: any[]
-  categories: any[]
-  installations: any[]
-  organizations: any[]
+  marketplace: MarketplacePluginView[]
+  categories: PluginCategoryView[]
+  installations: PluginInstallationDetailView[]
+  organizations: MarketplacePublisherView[]
   loadingMarketplace: boolean
   loadingInstalled: boolean
 
@@ -30,13 +36,19 @@ interface PluginState {
         reason?: string
       }>
     }
-  ) => Promise<any>
+  ) => Promise<PluginInstallationDetailView>
   uninstallPlugin: (wsId: string, installId: string) => Promise<void>
   updateInstallation: (
     wsId: string,
     installId: string,
-    data: any
-  ) => Promise<any>
+    data: {
+      isEnabled?: boolean
+      configData?: Record<string, unknown>
+      authSessionIds?: Record<string, string>
+      lifecycleScope?: ReuseScope
+      conversationTypeMaskOverride?: number | null
+    }
+  ) => Promise<PluginInstallationDetailView>
 }
 
 export const usePluginStore = create<PluginState>((set, get) => ({
@@ -104,7 +116,7 @@ export const usePluginStore = create<PluginState>((set, get) => ({
     await get().loadInstallations(wsId)
   },
 
-  updateInstallation: async (wsId: string, installId: string, data: any) => {
+  updateInstallation: async (wsId, installId, data) => {
     const installation = await api.updateInstallation(wsId, installId, data)
     await get().loadInstallations(wsId)
     return installation

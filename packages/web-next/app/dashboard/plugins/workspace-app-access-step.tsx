@@ -231,6 +231,10 @@ type ActorRecord = {
 
 type WorkspaceAppAccessOwner = {
   id?: string | null
+  sourceDefaultConversationTypeMask?: number | null
+  workspaceConversationTypeMask?: number | null
+  conversationTypeMaskOverride?: number | null
+  effectiveConversationTypeMask?: number | null
 }
 
 function readOwnerNumber(input: unknown): number | null {
@@ -243,15 +247,15 @@ function buildWorkspaceAppGrantSummary(
 ): WorkspaceAppGrantSummary | null {
   if (!installation) return null
   const sourceDefaultConversationTypeMask = readOwnerNumber(
-    (installation as any).sourceDefaultConversationTypeMask
+    installation.sourceDefaultConversationTypeMask
   )
   const workspaceConversationTypeMask = readOwnerNumber(
-    (installation as any).workspaceConversationTypeMask
+    installation.workspaceConversationTypeMask
   )
   const conversationTypeMaskOverride =
-    readOwnerNumber((installation as any).conversationTypeMaskOverride) ?? null
+    readOwnerNumber(installation.conversationTypeMaskOverride) ?? null
   const effectiveConversationTypeMask = readOwnerNumber(
-    (installation as any).effectiveConversationTypeMask
+    installation.effectiveConversationTypeMask
   )
 
   if (

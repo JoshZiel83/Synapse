@@ -1,12 +1,13 @@
 "use client"
 
 import type { ReactNode } from "react"
+import type { MarketplacePluginView } from "@synapse/shared"
 
 import { AppCard, AppCardContent } from "@/components/app-card"
 import { PluginIcon, getLocale, transportLabels, translate } from "./plugin-ui"
 
 interface Props {
-  plugin: any
+  plugin: MarketplacePluginView
   eyebrow?: string
   action?: ReactNode
 }

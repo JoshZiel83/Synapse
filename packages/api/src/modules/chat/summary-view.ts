@@ -28,49 +28,47 @@ type ConversationSummaryRow = {
 }
 
 export function mapConversationParticipant(row: ConversationParticipantRow) {
-  if (row.remote_agent_id) {
+  if (row.remoteAgentId) {
     return {
       participantId: row.id,
       participantType: CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT,
-      remoteAgentId: row.remote_agent_id,
-      id: row.remote_agent_id,
-      name: row.participant_name || "Remote Agent",
-      title: row.participant_title || undefined,
-      role: row.participant_role || "remote_agent",
-      avatarEmoji: row.participant_avatar_emoji || undefined,
-      avatarUrl: row.participant_avatar_file_id
-        ? getFileUrlById(row.participant_avatar_file_id)
+      remoteAgentId: row.remoteAgentId,
+      id: row.remoteAgentId,
+      name: row.participantName || "Remote Agent",
+      title: row.participantTitle || undefined,
+      role: row.participantRole || "remote_agent",
+      avatarEmoji: row.participantAvatarEmoji || undefined,
+      avatarUrl: row.participantAvatarFileId
+        ? getFileUrlById(row.participantAvatarFileId)
         : undefined,
       state: row.state,
     }
   }
 
-  if (row.actor_id) {
+  if (row.actorId) {
     return {
       participantId: row.id,
       participantType: CONVERSATION_PARTICIPANT_TYPE.ACTOR,
-      actorId: row.actor_id,
-      id: row.actor_id,
-      name: row.participant_name || "Unknown",
-      title: row.participant_title || undefined,
-      role: row.participant_role || "specialist",
-      avatarEmoji: row.participant_avatar_emoji || undefined,
-      avatarUrl: row.participant_avatar_file_id
-        ? getFileUrlById(row.participant_avatar_file_id)
+      actorId: row.actorId,
+      id: row.actorId,
+      name: row.participantName || "Unknown",
+      title: row.participantTitle || undefined,
+      role: row.participantRole || "specialist",
+      avatarEmoji: row.participantAvatarEmoji || undefined,
+      avatarUrl: row.participantAvatarFileId
+        ? getFileUrlById(row.participantAvatarFileId)
         : undefined,
       state: row.state,
     }
   }
 
-  if (row.participant_type === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL) {
+  if (row.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL) {
     return {
       participantId: row.id,
       participantType: CONVERSATION_PARTICIPANT_TYPE.EXTERNAL,
       id: row.id,
       name:
-        row.transport_display_name ||
-        row.display_name ||
-        "External participant",
+        row.transportDisplayName || row.displayName || "External participant",
       state: row.state,
     }
   }
@@ -78,13 +76,13 @@ export function mapConversationParticipant(row: ConversationParticipantRow) {
   return {
     participantId: row.id,
     participantType: CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER,
-    workspaceMemberId: row.workspace_member_id || undefined,
-    id: row.workspace_member_id || undefined,
-    name: row.user_name || "User",
-    avatarUrl: row.user_avatar_file_id
-      ? getFileUrlById(row.user_avatar_file_id)
+    workspaceMemberId: row.workspaceMemberId || undefined,
+    id: row.workspaceMemberId || undefined,
+    name: row.userName || "User",
+    avatarUrl: row.userAvatarFileId
+      ? getFileUrlById(row.userAvatarFileId)
       : undefined,
-    conversationRole: row.role_key || undefined,
+    conversationRole: row.roleKey || undefined,
     state: row.state,
   }
 }
@@ -193,19 +191,19 @@ export async function mapConversationSummaryView(
   )
   const hasOpenLane = conversationParticipants.some(
     (participant) =>
-      participant.actor_id && participant.session_status !== "closed"
+      participant.actorId && participant.sessionStatus !== "closed"
   )
   const viewerMembership = conversationParticipants.find(
     (participant) =>
       participant.state === "active" &&
-      participant.participant_type === "workspace_member" &&
-      participant.workspace_member_id === viewerWorkspaceMemberId
+      participant.participantType === "workspace_member" &&
+      participant.workspaceMemberId === viewerWorkspaceMemberId
   )
   const viewerConversationRole =
-    viewerMembership?.role_key === "owner" ||
-    viewerMembership?.role_key === "admin" ||
-    viewerMembership?.role_key === "member"
-      ? viewerMembership.role_key
+    viewerMembership?.roleKey === "owner" ||
+    viewerMembership?.roleKey === "admin" ||
+    viewerMembership?.roleKey === "member"
+      ? viewerMembership.roleKey
       : "member"
   const canManageConversation =
     row.kind !== CONVERSATION_KIND.DIRECT &&
