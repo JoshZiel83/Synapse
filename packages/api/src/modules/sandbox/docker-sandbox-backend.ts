@@ -129,8 +129,8 @@ export function createDockerSandboxBackend(
             `createCloudDevicePairing failed: ${errMsg(err)}`
           )
         }
-        pairingSessionId = pairing.pairing_session_id
-        await spec.onPairingCreated?.(pairing.pairing_session_id)
+        pairingSessionId = pairing.pairingSessionId
+        await spec.onPairingCreated?.(pairing.pairingSessionId)
 
         const containerName = `synapse-sbx-${sanitizeName(spec.sessionId)}`
 
@@ -146,7 +146,7 @@ export function createDockerSandboxBackend(
           opts,
           spec,
           containerName,
-          bootstrapToken: pairing.bootstrap_token,
+          bootstrapToken: pairing.bootstrapToken,
         })
 
         try {
@@ -168,7 +168,7 @@ export function createDockerSandboxBackend(
         try {
           resolved = await (
             opts.pollBootstrapConsumed ?? defaultPollBootstrapConsumed
-          )(pairing.pairing_session_id, bootstrapTimeoutMs)
+          )(pairing.pairingSessionId, bootstrapTimeoutMs)
         } catch (err) {
           const logs = await docker(["logs", "--tail", "50", containerId])
             .then((r) => `${r.stdout}\n${r.stderr}`.trim())
@@ -186,7 +186,7 @@ export function createDockerSandboxBackend(
           containerId,
           deviceId: resolved.deviceId,
           deviceServiceId: resolved.deviceServiceId,
-          pairingSessionId: pairing.pairing_session_id,
+          pairingSessionId: pairing.pairingSessionId,
         })
       } catch (err) {
         // Comprehensive self-cleanup of everything created before the failure:

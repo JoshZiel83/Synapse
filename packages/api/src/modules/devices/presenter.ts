@@ -1,13 +1,16 @@
 import type {
   DeviceCapabilityView,
   DeviceDetailView,
+  DevicePairingTicketView,
   DeviceServiceView,
   DeviceView,
 } from "@synapse/shared"
 import { serializeOptionalInstant } from "../../infrastructure/datetime.js"
+import { serializeInstant } from "../../infrastructure/datetime.js"
 import type {
   DeviceCapabilityRecord,
   DeviceDetailRecord,
+  DevicePairingTicketRecord,
   DeviceServiceRecord,
   DeviceSummaryRecord,
 } from "./repo.types.js"
@@ -73,5 +76,21 @@ export function presentDeviceDetail(
     ownerWorkspaceMemberId: record.ownerWorkspaceMemberId ?? null,
     services: record.services.map(presentDeviceService),
     capabilities: record.capabilities.map(presentDeviceCapability),
+  }
+}
+
+export function presentDevicePairingTicket(
+  record: DevicePairingTicketRecord
+): DevicePairingTicketView {
+  return {
+    pairingSessionId: record.pairingSessionId,
+    mode: record.mode,
+    pairingCode: record.pairingCode,
+    bootstrapToken: record.bootstrapToken,
+    expiresAt: serializeInstant(record.expiresAt),
+    verificationUri: record.verificationUri,
+    verificationUriComplete: record.verificationUriComplete,
+    status: record.status,
+    oneClickCommands: record.oneClickCommands,
   }
 }

@@ -15,11 +15,12 @@
 import { z } from "zod"
 import { formatValidationDetails } from "../../infrastructure/validation-error.js"
 import type { FastifyInstance } from "fastify"
+import { DEVICE_SERVICE_KINDS, DEVICE_TYPES } from "@synapse/device-protocol"
 import {
-  DEVICE_PAIRING_MODES,
-  DEVICE_SERVICE_KINDS,
-  DEVICE_TYPES,
-} from "@synapse/device-protocol"
+  StartPairingInputSchema,
+  ClaimDaemonServiceInputSchema,
+  CreateCloudDeviceInputSchema,
+} from "@synapse/shared/schemas"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { requireRequestAction } from "../access/guards.js"
@@ -33,18 +34,23 @@ import {
   listDevices,
   startPairing,
 } from "./service.js"
+import {
+  presentDevice,
+  presentDeviceDetail,
+  presentDevicePairingTicket,
+  presentDeviceService,
+} from "./presenter.js"
 import { consumeCloudBootstrap, createCloudDevicePairing } from "./cloud.js"
 
-const pairingModeSchema = z.enum(DEVICE_PAIRING_MODES)
 const serviceKindSchema = z.enum(DEVICE_SERVICE_KINDS)
 const deviceTypeSchema = z.enum(DEVICE_TYPES)
 
-const startPairingBodySchema = z.object({
-  mode: pairingModeSchema,
-  title: z.string().min(1).max(255).optional(),
+// App-facing request bodies (camelCase, §5.1.1). workspaceId travels in the URL
+// param, so the body schema omits it from the shared logical input contract.
+const startPairingBodySchema = StartPairingInputSchema.omit({
+  workspaceId: true,
+}).extend({
   description: z.string().max(2000).optional(),
-  device_type: deviceTypeSchema.optional(),
-  device_id: z.uuid().optional(),
   context: z.record(z.string(), z.unknown()).optional(),
 })
 
@@ -60,10 +66,7 @@ const consumePairingBodySchema = z.object({
   arch: z.string().optional(),
 })
 
-const claimDaemonBodySchema = z.object({
-  service_kind: z.literal("remote_agent_daemon"),
-  remote_agent_machine_id: z.uuid(),
-})
+const claimDaemonBodySchema = ClaimDaemonServiceInputSchema
 
 function sendModuleError(reply: any, err: unknown) {
   if (err instanceof DeviceModuleError) {
@@ -123,8 +126,8 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
       )
         return
       try {
-        const devices = await listDevices(workspaceId)
-        reply.send({ devices })
+        const records = await listDevices(workspaceId)
+        reply.send({ devices: records.map(presentDevice) })
       } catch (err) {
         if (sendModuleError(reply, err)) return
         throw err
@@ -151,7 +154,7 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
       )
         return
       try {
-        reply.send(await getDevice(workspaceId, deviceId))
+        reply.send(presentDeviceDetail(await getDevice(workspaceId, deviceId)))
       } catch (err) {
         if (sendModuleError(reply, err)) return
         throw err
@@ -222,11 +225,11 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
             `http://${request.headers.host ?? "localhost"}`,
           title: parsed.data.title,
           description: parsed.data.description,
-          deviceType: parsed.data.device_type,
-          deviceId: parsed.data.device_id,
+          deviceType: parsed.data.deviceType,
+          deviceId: parsed.data.deviceId,
           context: parsed.data.context,
         })
-        reply.send(result)
+        reply.send(presentDevicePairingTicket(result))
       } catch (err) {
         if (sendModuleError(reply, err)) return
         throw err
@@ -300,9 +303,9 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
         const service = await claimRemoteAgentDaemon({
           workspaceId,
           deviceId,
-          remoteAgentMachineId: parsed.data.remote_agent_machine_id,
+          remoteAgentMachineId: parsed.data.remoteAgentMachineId,
         })
-        reply.send(service)
+        reply.send(presentDeviceService(service))
       } catch (err) {
         if (sendModuleError(reply, err)) return
         throw err
@@ -362,19 +365,28 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
         ))
       )
         return
-      const body = request.body as {
-        title?: string
-        preset?: string
-        host_provider?: string
+      // Body carries title/preset/hostProvider (camelCase, §5.1.1); workspaceId
+      // travels in the URL param. Parse with the shared app-facing input schema
+      // (minus workspaceId) so the write path is camelCase end-to-end.
+      const cloudBodySchema = CreateCloudDeviceInputSchema.omit({
+        workspaceId: true,
+      }).partial({ title: true, hostProvider: true })
+      const parsedBody = cloudBodySchema.safeParse(request.body)
+      if (!parsedBody.success) {
+        reply.status(400).send({
+          code: "invalid_request",
+          details: formatValidationDetails(parsedBody.error),
+        })
+        return
       }
       const session = (request as { session?: { workspaceMemberId?: string } })
         .session
       try {
         const result = await createCloudDevicePairing({
           workspaceId,
-          title: body.title ?? "Cloud Device",
-          preset: body.preset,
-          hostProvider: body.host_provider,
+          title: parsedBody.data.title ?? "Cloud Device",
+          preset: parsedBody.data.preset,
+          hostProvider: parsedBody.data.hostProvider,
           requestedByWorkspaceMemberId: session?.workspaceMemberId ?? null,
         })
         reply.send(result)

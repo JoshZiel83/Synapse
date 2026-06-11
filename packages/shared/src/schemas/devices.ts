@@ -3,12 +3,14 @@ import {
   DEVICE_BUILTIN_KINDS,
   DEVICE_EXPOSURE_RUNTIME_STATUSES,
   DEVICE_EXPOSURE_TRANSPORTS,
+  DEVICE_PAIRING_MODES,
   DEVICE_SERVICE_KINDS,
   DEVICE_SERVICE_STATUSES,
   DEVICE_TRUST_STATUSES,
   DEVICE_TYPES,
   HOST_KINDS,
 } from "@synapse/device-protocol/enums"
+import { ScopedSubjectTargetWireSchema } from "@synapse/device-protocol"
 import { IsoInstantStringSchema } from "./datetime.js"
 
 /**
@@ -96,4 +98,85 @@ export const DevicePairingTicketViewSchema = z.strictObject({
 })
 export type DevicePairingTicketView = z.infer<
   typeof DevicePairingTicketViewSchema
+>
+
+// ============================================================================
+// App-facing WRITE-path input contracts (camelCase). Per master plan §5.1.1 /
+// §8.3, the request bodies for the device MANAGEMENT methods (createCloudDevice
+// / startPairing / claimRemoteAgentDaemon / setActiveDeviceCapabilities) are
+// app contracts too — defined here in camelCase, paired with their *View
+// result. controller parses with these; web-next + consumer-side device-sdk
+// send camelCase bodies. The true wire/handshake inputs (consume / bootstrap)
+// stay snake_case in @synapse/device-protocol (device-runtime/sandbox callers).
+// ============================================================================
+
+export const CreateCloudDeviceInputSchema = z.strictObject({
+  workspaceId: z.uuid(),
+  title: z.string().min(1),
+  hostProvider: z.literal("e2b"),
+  preset: z.string().optional(),
+})
+export type CreateCloudDeviceInput = z.infer<
+  typeof CreateCloudDeviceInputSchema
+>
+
+/**
+ * App-facing result of createCloudDevice (camelCase), returned to web which
+ * injects `bootstrapToken` into the sandbox env. The snake_case wire copy
+ * (device-protocol `CreateCloudDeviceResultSchema.bootstrap_token`) is the
+ * separate handshake contract used by the sandbox→/devices/bootstrap exchange;
+ * same logical value, two surfaces, two independent contracts (§13.1).
+ */
+export const CreateCloudDeviceResultViewSchema = z.strictObject({
+  pendingDeviceId: z.uuid(),
+  bootstrapToken: z.string(),
+  pairingSessionId: z.uuid(),
+  expiresAt: IsoInstantStringSchema,
+})
+export type CreateCloudDeviceResultView = z.infer<
+  typeof CreateCloudDeviceResultViewSchema
+>
+
+export const StartPairingInputSchema = z.strictObject({
+  workspaceId: z.uuid(),
+  mode: z.enum(DEVICE_PAIRING_MODES),
+  title: z.string().optional(),
+  deviceType: z.enum(DEVICE_TYPES).optional(),
+  // service_join only:
+  deviceId: z.uuid().optional(),
+  requestedPubkeyFingerprint: z.string().optional(),
+  selfChallenge: z.string().optional(),
+})
+export type StartPairingInput = z.infer<typeof StartPairingInputSchema>
+
+export const ClaimDaemonServiceInputSchema = z.strictObject({
+  serviceKind: z.literal("remote_agent_daemon"),
+  remoteAgentMachineId: z.uuid(),
+})
+export type ClaimDaemonServiceInput = z.infer<
+  typeof ClaimDaemonServiceInputSchema
+>
+
+/**
+ * Active-capability binding write. `target` reuses the device-protocol
+ * ScopedSubjectTargetWireSchema (already camelCase inner fields + the strict
+ * subject/scope whitelist); only `deviceCapabilityIds` is migrated off the
+ * legacy snake `device_capability_ids`.
+ */
+export const SetActiveDeviceCapabilitiesInputSchema = z.strictObject({
+  workspaceId: z.uuid(),
+  target: ScopedSubjectTargetWireSchema,
+  deviceCapabilityIds: z.array(z.uuid()),
+  reason: z.string().max(2000).optional(),
+})
+export type SetActiveDeviceCapabilitiesInput = z.infer<
+  typeof SetActiveDeviceCapabilitiesInputSchema
+>
+
+/** GET active-capabilities list result for a target (app-facing). */
+export const ActiveDeviceCapabilitiesViewSchema = z.strictObject({
+  deviceCapabilityIds: z.array(z.uuid()),
+})
+export type ActiveDeviceCapabilitiesView = z.infer<
+  typeof ActiveDeviceCapabilitiesViewSchema
 >

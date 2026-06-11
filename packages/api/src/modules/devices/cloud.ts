@@ -19,11 +19,18 @@ export interface CreateCloudDeviceInput {
   hostProvider?: string // 'e2b' in v3.0
 }
 
+/**
+ * camelCase domain result of a cloud pairing allocation. Structurally matches
+ * the app-facing shared `CreateCloudDeviceResultView` (the controller presents
+ * it via that schema). The snake_case wire copy lives in device-protocol
+ * (`CreateCloudDeviceResultSchema`) for the sandbox→/devices/bootstrap
+ * handshake — same logical value, two surfaces, two contracts (§13.1).
+ */
 export interface CreateCloudDeviceResult {
-  pending_device_id: string
-  bootstrap_token: string
-  pairing_session_id: string
-  expires_at: IsoInstantString
+  pendingDeviceId: string
+  bootstrapToken: string
+  pairingSessionId: string
+  expiresAt: IsoInstantString
 }
 
 /**
@@ -69,10 +76,10 @@ export async function createCloudDevicePairing(
     .execute()
 
   return {
-    pending_device_id: pendingDeviceId,
-    bootstrap_token: bootstrapToken,
-    pairing_session_id: sessionId,
-    expires_at: dateToIsoInstant(expiresAt),
+    pendingDeviceId: pendingDeviceId,
+    bootstrapToken: bootstrapToken,
+    pairingSessionId: sessionId,
+    expiresAt: dateToIsoInstant(expiresAt),
   }
 }
 

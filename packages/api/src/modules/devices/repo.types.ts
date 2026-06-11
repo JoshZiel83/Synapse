@@ -2,6 +2,8 @@ import type {
   DeviceBuiltinKind,
   DeviceExposureRuntimeStatus,
   DeviceExposureTransport,
+  DevicePairingMode,
+  DevicePairingStatus,
   DeviceServiceKind,
   DeviceServiceStatus,
   DeviceTrustStatus,
@@ -56,4 +58,22 @@ export interface DeviceDetailRecord extends DeviceSummaryRecord {
   ownerWorkspaceMemberId: string | null
   services: DeviceServiceRecord[]
   capabilities: DeviceCapabilityRecord[]
+}
+
+/**
+ * Pairing-ticket domain record produced by startPairing (camelCase, Date
+ * instant). The presenter turns it into the app-facing DevicePairingTicketView.
+ * `oneClickCommands` carries dashboard-only install commands; `bootstrapToken`
+ * is the app copy handed to web (the wire snake `bootstrap_token` is separate).
+ */
+export interface DevicePairingTicketRecord {
+  pairingSessionId: string
+  mode: DevicePairingMode
+  pairingCode: string | null
+  bootstrapToken: string | null
+  expiresAt: Date
+  verificationUri: string | null
+  verificationUriComplete: string | null
+  status: DevicePairingStatus
+  oneClickCommands: { unix: string; windows: string } | null
 }

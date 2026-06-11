@@ -904,54 +904,68 @@ class ApiClient {
   }
 
   // Model Groups - Workspace
-  getModelGroups(wsId: string): Promise<{ groups: ModelGroupView[] }> {
-    return this.fetch(`/workspaces/${wsId}/model-groups`)
+  async getModelGroups(wsId: string): Promise<{ groups: ModelGroupView[] }> {
+    const res = await this.fetch(`/workspaces/${wsId}/model-groups`)
+    return { groups: res.data }
   }
-  createModelGroup(
+  async createModelGroup(
     wsId: string,
     data: Record<string, unknown>
   ): Promise<{ group: ModelGroupDetailView }> {
-    return this.fetch(`/workspaces/${wsId}/model-groups`, {
+    const res = await this.fetch(`/workspaces/${wsId}/model-groups`, {
       method: "POST",
       body: JSON.stringify(data),
     })
+    return { group: res.data }
   }
-  getModelGroup(
+  async getModelGroup(
     wsId: string,
     groupId: string
   ): Promise<{ group: ModelGroupDetailView }> {
-    return this.fetch(`/workspaces/${wsId}/model-groups/${groupId}`)
+    const res = await this.fetch(`/workspaces/${wsId}/model-groups/${groupId}`)
+    return { group: res.data }
   }
-  updateModelGroup(
+  async updateModelGroup(
     wsId: string,
     groupId: string,
     data: Record<string, unknown>
   ): Promise<{ group: ModelGroupDetailView }> {
-    return this.fetch(`/workspaces/${wsId}/model-groups/${groupId}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    })
+    const res = await this.fetch(
+      `/workspaces/${wsId}/model-groups/${groupId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    )
+    return { group: res.data }
   }
   deleteModelGroup(wsId: string, groupId: string) {
     return this.fetch(`/workspaces/${wsId}/model-groups/${groupId}`, {
       method: "DELETE",
     })
   }
-  getModelGroupGrants(
+  async getModelGroupGrants(
     wsId: string,
     groupId: string
   ): Promise<{ grants: ModelGroupGrantView[] }> {
-    return this.fetch(`/workspaces/${wsId}/model-groups/${groupId}/grants`)
+    const res = await this.fetch(
+      `/workspaces/${wsId}/model-groups/${groupId}/grants`
+    )
+    return { grants: res.data }
   }
-  issueModelGroupGrant(
+  async issueModelGroupGrant(
     wsId: string,
     groupId: string,
     data: Record<string, unknown>
   ): Promise<{ grant: ModelGroupGrantView }> {
-    return this.fetch(`/workspaces/${wsId}/model-groups/${groupId}/grants`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    })
+    const res = await this.fetch(
+      `/workspaces/${wsId}/model-groups/${groupId}/grants`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      }
+    )
+    return { grant: res.data }
   }
   revokeModelGroupGrant(wsId: string, groupId: string, grantId: string) {
     return this.fetch(
@@ -959,26 +973,31 @@ class ApiClient {
       { method: "POST", body: "{}" }
     )
   }
-  addModelItem(
+  async addModelItem(
     wsId: string,
     groupId: string,
     data: Record<string, unknown>
   ): Promise<{ item: ModelGroupItemView }> {
-    return this.fetch(`/workspaces/${wsId}/model-groups/${groupId}/items`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    })
+    const res = await this.fetch(
+      `/workspaces/${wsId}/model-groups/${groupId}/items`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      }
+    )
+    return { item: res.data }
   }
-  updateModelItem(
+  async updateModelItem(
     wsId: string,
     groupId: string,
     itemId: string,
     data: Record<string, unknown>
   ): Promise<{ item: ModelGroupItemView }> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/model-groups/${groupId}/items/${itemId}`,
       { method: "PUT", body: JSON.stringify(data) }
     )
+    return { item: res.data }
   }
   deleteModelItem(wsId: string, groupId: string, itemId: string) {
     return this.fetch(
@@ -986,58 +1005,65 @@ class ApiClient {
       { method: "DELETE" }
     )
   }
-  getItemVersions(
+  async getItemVersions(
     wsId: string,
     groupId: string,
     itemId: string
   ): Promise<{ versions: ModelGroupItemVersionView[] }> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/model-groups/${groupId}/items/${itemId}/versions`
     )
+    return { versions: res.data }
   }
 
   // Model Groups - Platform
-  getPlatformModelGroups(): Promise<{ groups: ModelGroupView[] }> {
-    return this.fetch("/platform/model-groups")
+  async getPlatformModelGroups(): Promise<{ groups: ModelGroupView[] }> {
+    const res = await this.fetch("/platform/model-groups")
+    return { groups: res.data }
   }
-  createPlatformModelGroup(
+  async createPlatformModelGroup(
     data: Record<string, unknown>
   ): Promise<{ group: ModelGroupDetailView }> {
-    return this.fetch("/platform/model-groups", {
+    const res = await this.fetch("/platform/model-groups", {
       method: "POST",
       body: JSON.stringify(data),
     })
+    return { group: res.data }
   }
-  getPlatformModelGroup(
+  async getPlatformModelGroup(
     groupId: string
   ): Promise<{ group: ModelGroupDetailView }> {
-    return this.fetch(`/platform/model-groups/${groupId}`)
+    const res = await this.fetch(`/platform/model-groups/${groupId}`)
+    return { group: res.data }
   }
-  updatePlatformModelGroup(
+  async updatePlatformModelGroup(
     groupId: string,
     data: Record<string, unknown>
   ): Promise<{ group: ModelGroupDetailView }> {
-    return this.fetch(`/platform/model-groups/${groupId}`, {
+    const res = await this.fetch(`/platform/model-groups/${groupId}`, {
       method: "PUT",
       body: JSON.stringify(data),
     })
+    return { group: res.data }
   }
   deletePlatformModelGroup(groupId: string) {
     return this.fetch(`/platform/model-groups/${groupId}`, { method: "DELETE" })
   }
-  getPlatformModelGroupGrants(
+  async getPlatformModelGroupGrants(
     groupId: string
   ): Promise<{ grants: ModelGroupGrantView[] }> {
-    return this.fetch(`/platform/model-groups/${groupId}/grants`)
+    const res = await this.fetch(`/platform/model-groups/${groupId}/grants`)
+    return { grants: res.data }
   }
-  issuePlatformModelGroupGrant(
+  async issuePlatformModelGroupGrant(
     groupId: string,
     data: Record<string, unknown>
   ): Promise<{ grant: ModelGroupGrantView }> {
-    return this.fetch(`/platform/model-groups/${groupId}/grants`, {
+    const res = await this.fetch(`/platform/model-groups/${groupId}/grants`, {
       method: "POST",
       body: JSON.stringify(data),
     })
+    return { grant: res.data }
   }
   revokePlatformModelGroupGrant(groupId: string, grantId: string) {
     return this.fetch(
@@ -1045,90 +1071,112 @@ class ApiClient {
       { method: "POST", body: "{}" }
     )
   }
-  addPlatformModelItem(
+  async addPlatformModelItem(
     groupId: string,
     data: Record<string, unknown>
   ): Promise<{ item: ModelGroupItemView }> {
-    return this.fetch(`/platform/model-groups/${groupId}/items`, {
+    const res = await this.fetch(`/platform/model-groups/${groupId}/items`, {
       method: "POST",
       body: JSON.stringify(data),
     })
+    return { item: res.data }
   }
-  updatePlatformModelItem(
+  async updatePlatformModelItem(
     groupId: string,
     itemId: string,
     data: Record<string, unknown>
   ): Promise<{ item: ModelGroupItemView }> {
-    return this.fetch(`/platform/model-groups/${groupId}/items/${itemId}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    })
+    const res = await this.fetch(
+      `/platform/model-groups/${groupId}/items/${itemId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    )
+    return { item: res.data }
   }
   deletePlatformModelItem(groupId: string, itemId: string) {
     return this.fetch(`/platform/model-groups/${groupId}/items/${itemId}`, {
       method: "DELETE",
     })
   }
-  getPlatformItemVersions(
+  async getPlatformItemVersions(
     groupId: string,
     itemId: string
   ): Promise<{ versions: ModelGroupItemVersionView[] }> {
-    return this.fetch(
+    const res = await this.fetch(
       `/platform/model-groups/${groupId}/items/${itemId}/versions`
     )
+    return { versions: res.data }
   }
 
   // Model Groups - Workspace Member
-  getWorkspaceMemberModelGroups(
+  async getWorkspaceMemberModelGroups(
     wsId: string
   ): Promise<{ groups: ModelGroupView[] }> {
-    return this.fetch(`/workspaces/${wsId}/me/model-groups`)
+    const res = await this.fetch(`/workspaces/${wsId}/me/model-groups`)
+    return { groups: res.data }
   }
-  createWorkspaceMemberModelGroup(
+  async createWorkspaceMemberModelGroup(
     wsId: string,
     data: Record<string, unknown>
   ): Promise<{ group: ModelGroupDetailView }> {
-    return this.fetch(`/workspaces/${wsId}/me/model-groups`, {
+    const res = await this.fetch(`/workspaces/${wsId}/me/model-groups`, {
       method: "POST",
       body: JSON.stringify(data),
     })
+    return { group: res.data }
   }
-  getWorkspaceMemberModelGroup(
+  async getWorkspaceMemberModelGroup(
     wsId: string,
     groupId: string
   ): Promise<{ group: ModelGroupDetailView }> {
-    return this.fetch(`/workspaces/${wsId}/me/model-groups/${groupId}`)
+    const res = await this.fetch(
+      `/workspaces/${wsId}/me/model-groups/${groupId}`
+    )
+    return { group: res.data }
   }
-  updateWorkspaceMemberModelGroup(
+  async updateWorkspaceMemberModelGroup(
     wsId: string,
     groupId: string,
     data: Record<string, unknown>
   ): Promise<{ group: ModelGroupDetailView }> {
-    return this.fetch(`/workspaces/${wsId}/me/model-groups/${groupId}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    })
+    const res = await this.fetch(
+      `/workspaces/${wsId}/me/model-groups/${groupId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    )
+    return { group: res.data }
   }
   deleteWorkspaceMemberModelGroup(wsId: string, groupId: string) {
     return this.fetch(`/workspaces/${wsId}/me/model-groups/${groupId}`, {
       method: "DELETE",
     })
   }
-  getWorkspaceMemberModelGroupGrants(
+  async getWorkspaceMemberModelGroupGrants(
     wsId: string,
     groupId: string
   ): Promise<{ grants: ModelGroupGrantView[] }> {
-    return this.fetch(`/workspaces/${wsId}/me/model-groups/${groupId}/grants`)
+    const res = await this.fetch(
+      `/workspaces/${wsId}/me/model-groups/${groupId}/grants`
+    )
+    return { grants: res.data }
   }
-  issueWorkspaceMemberModelGroupGrant(
+  async issueWorkspaceMemberModelGroupGrant(
     wsId: string,
     groupId: string,
     data: Record<string, unknown>
   ): Promise<{ grant: ModelGroupGrantView }> {
-    return this.fetch(`/workspaces/${wsId}/me/model-groups/${groupId}/grants`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    })
+    const res = await this.fetch(
+      `/workspaces/${wsId}/me/model-groups/${groupId}/grants`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      }
+    )
+    return { grant: res.data }
   }
   revokeWorkspaceMemberModelGroupGrant(
     wsId: string,
@@ -1143,29 +1191,34 @@ class ApiClient {
       }
     )
   }
-  addWorkspaceMemberModelItem(
+  async addWorkspaceMemberModelItem(
     wsId: string,
     groupId: string,
     data: Record<string, unknown>
   ): Promise<{ item: ModelGroupItemView }> {
-    return this.fetch(`/workspaces/${wsId}/me/model-groups/${groupId}/items`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    })
+    const res = await this.fetch(
+      `/workspaces/${wsId}/me/model-groups/${groupId}/items`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      }
+    )
+    return { item: res.data }
   }
-  updateWorkspaceMemberModelItem(
+  async updateWorkspaceMemberModelItem(
     wsId: string,
     groupId: string,
     itemId: string,
     data: Record<string, unknown>
   ): Promise<{ item: ModelGroupItemView }> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/me/model-groups/${groupId}/items/${itemId}`,
       {
         method: "PUT",
         body: JSON.stringify(data),
       }
     )
+    return { item: res.data }
   }
   deleteWorkspaceMemberModelItem(
     wsId: string,
@@ -1179,40 +1232,49 @@ class ApiClient {
       }
     )
   }
-  getWorkspaceMemberItemVersions(
+  async getWorkspaceMemberItemVersions(
     wsId: string,
     groupId: string,
     itemId: string
   ): Promise<{ versions: ModelGroupItemVersionView[] }> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/me/model-groups/${groupId}/items/${itemId}/versions`
     )
+    return { versions: res.data }
   }
 
   // Actor Model Group Assignment
-  getActorModelGroups(
+  async getActorModelGroups(
     wsId: string,
     actorId: string
   ): Promise<{ groups: ActorModelGroupAssignmentView[] }> {
-    return this.fetch(`/workspaces/${wsId}/actors/${actorId}/model-groups`)
+    const res = await this.fetch(
+      `/workspaces/${wsId}/actors/${actorId}/model-groups`
+    )
+    return { groups: res.data }
   }
-  getVisibleActorModelGroups(
+  async getVisibleActorModelGroups(
     wsId: string,
     actorId: string
   ): Promise<{ groups: ModelGroupView[] }> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/actors/${actorId}/model-groups/visible`
     )
+    return { groups: res.data }
   }
-  setActorModelGroups(
+  async setActorModelGroups(
     wsId: string,
     actorId: string,
     groups: { groupId: string; priority: number }[]
   ): Promise<{ groups: ActorModelGroupAssignmentView[] }> {
-    return this.fetch(`/workspaces/${wsId}/actors/${actorId}/model-groups`, {
-      method: "PUT",
-      body: JSON.stringify({ groups }),
-    })
+    const res = await this.fetch(
+      `/workspaces/${wsId}/actors/${actorId}/model-groups`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ groups }),
+      }
+    )
+    return { groups: res.data }
   }
 
   getMyRelationshipProfile(wsId: string): Promise<RelationshipProfileView> {
@@ -1991,38 +2053,49 @@ class ApiClient {
     )
   }
   // MCP Marketplace
-  getMarketplace(params?: string): Promise<MarketplacePluginView[]> {
-    return this.fetch(`/mcp/marketplace${params ? "?" + params : ""}`)
+  async getMarketplace(params?: string): Promise<MarketplacePluginView[]> {
+    const res = await this.fetch(
+      `/mcp/marketplace${params ? "?" + params : ""}`
+    )
+    return res.data
   }
-  getMarketplacePlugin(pluginId: string): Promise<MarketplacePluginView> {
-    return this.fetch(`/mcp/marketplace/${pluginId}`)
+  async getMarketplacePlugin(pluginId: string): Promise<MarketplacePluginView> {
+    const res = await this.fetch(`/mcp/marketplace/${pluginId}`)
+    return res.data
   }
-  getPluginCategories(): Promise<PluginCategoryView[]> {
-    return this.fetch("/mcp/categories")
+  async getPluginCategories(): Promise<PluginCategoryView[]> {
+    const res = await this.fetch("/mcp/categories")
+    return res.data
   }
-  getMcpOrganizations(): Promise<MarketplacePublisherView[]> {
-    return this.fetch("/mcp/organizations")
+  async getMcpOrganizations(): Promise<MarketplacePublisherView[]> {
+    const res = await this.fetch("/mcp/organizations")
+    return res.data
   }
-  getMcpOrganization(
+  async getMcpOrganization(
     orgId: string
   ): Promise<MarketplacePublisherView & { plugins: MarketplacePluginView[] }> {
-    return this.fetch(`/mcp/organizations/${orgId}`)
+    const res = await this.fetch(`/mcp/organizations/${orgId}`)
+    return res.data
   }
 
   // MCP Unified Installations
-  getInstallations(
+  async getInstallations(
     wsId: string,
     params?: string
   ): Promise<PluginInstallationDetailView[]> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/mcp/installations${params ? "?" + params : ""}`
     )
+    return res.data
   }
-  getInstallation(
+  async getInstallation(
     wsId: string,
     installId: string
   ): Promise<{ installation: PluginInstallationDetailView }> {
-    return this.fetch(`/workspaces/${wsId}/mcp/installations/${installId}`)
+    const res = await this.fetch(
+      `/workspaces/${wsId}/mcp/installations/${installId}`
+    )
+    return { installation: res.data }
   }
   async installPlugin(
     wsId: string,
@@ -2137,8 +2210,8 @@ class ApiClient {
     body: {
       mode: "local_qr" | "cloud_bootstrap" | "service_join"
       title?: string
-      device_type?: string
-      device_id?: string
+      deviceType?: string
+      deviceId?: string
       context?: Record<string, unknown>
     }
   ): Promise<DevicePairingTicketView> {
@@ -2155,8 +2228,8 @@ class ApiClient {
     return this.fetch(`/workspaces/${wsId}/devices/${deviceId}/services`, {
       method: "POST",
       body: JSON.stringify({
-        service_kind: "remote_agent_daemon",
-        remote_agent_machine_id: remoteAgentMachineId,
+        serviceKind: "remote_agent_daemon",
+        remoteAgentMachineId,
       }),
     })
   }

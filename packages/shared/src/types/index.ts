@@ -4532,4 +4532,10 @@ export type {
   DeviceCapabilityView,
   DeviceDetailView,
   DevicePairingTicketView,
+  CreateCloudDeviceInput,
+  CreateCloudDeviceResultView,
+  StartPairingInput,
+  ClaimDaemonServiceInput,
+  SetActiveDeviceCapabilitiesInput,
+  ActiveDeviceCapabilitiesView,
 } from "../schemas/devices.js"

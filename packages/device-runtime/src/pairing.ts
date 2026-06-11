@@ -2,11 +2,11 @@
 // by packages/api/src/modules/devices/controller.ts.
 
 import { createHash } from "node:crypto"
+import type { ConsumePairingResult } from "@synapse/device-protocol"
 import type {
-  ConsumePairingResult,
-  PairingTicket,
+  DevicePairingTicketView,
   StartPairingInput as ApiStartPairingInput,
-} from "@synapse/device-protocol"
+} from "@synapse/shared"
 import type {
   DeviceIdentityBroker,
   DeviceIdentityRecord,
@@ -39,9 +39,9 @@ async function postJson<TBody, TResponse>(
 export async function startPairingSession(
   serverOrigin: string,
   workspaceId: string,
-  input: Omit<ApiStartPairingInput, "workspace_id">,
+  input: Omit<ApiStartPairingInput, "workspaceId">,
   authToken: string
-): Promise<PairingTicket & { bootstrap_token?: string | null }> {
+): Promise<DevicePairingTicketView> {
   const url = joinUrl(
     serverOrigin,
     `/api/v1/workspaces/${workspaceId}/devices/pairing-sessions`
@@ -58,9 +58,7 @@ export async function startPairingSession(
     const text = await res.text().catch(() => "")
     throw new Error(`startPairing failed: ${res.status} ${text}`)
   }
-  return (await res.json()) as PairingTicket & {
-    bootstrap_token?: string | null
-  }
+  return (await res.json()) as DevicePairingTicketView
 }
 
 /**

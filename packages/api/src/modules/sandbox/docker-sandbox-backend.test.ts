@@ -69,10 +69,10 @@ const baseOpts = {
 // A deterministic pairing stub so create() runs without a live DB.
 function fakePairing(over: Record<string, string> = {}) {
   return async () => ({
-    pending_device_id: "pend-1",
-    bootstrap_token: "tok",
-    pairing_session_id: "pair-1",
-    expires_at: assertIsoInstant("2099-01-01T00:00:00.000Z"),
+    pendingDeviceId: "pend-1",
+    bootstrapToken: "tok",
+    pairingSessionId: "pair-1",
+    expiresAt: assertIsoInstant("2099-01-01T00:00:00.000Z"),
     ...over,
   })
 }

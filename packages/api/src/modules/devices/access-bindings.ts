@@ -12,10 +12,8 @@
 import { z } from "zod"
 import { formatValidationDetails } from "../../infrastructure/validation-error.js"
 import type { FastifyInstance } from "fastify"
-import {
-  ScopedSubjectTargetWireSchema,
-  type DeviceCapabilityAccessTarget,
-} from "@synapse/device-protocol"
+import { type DeviceCapabilityAccessTarget } from "@synapse/device-protocol"
+import { SetActiveDeviceCapabilitiesInputSchema } from "@synapse/shared/schemas"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { requireRequestAction } from "../access/guards.js"
@@ -26,17 +24,12 @@ import {
   type AccessTargetInput,
 } from "../capability-projection/device-capabilities.js"
 
-// Exported for regression tests that pin the wire-vs-server schema
-// contract — the bug pattern under guard is the route accepting a
-// different shape than the SDK sends (which happened pre-Batch-18 when
-// the route used a discriminated union while the SDK migrated to
-// ScopedSubjectTarget).
-export const setActiveBodySchema = z.object({
-  workspaceId: z.uuid(),
-  target: ScopedSubjectTargetWireSchema,
-  device_capability_ids: z.array(z.uuid()),
-  reason: z.string().max(2000).optional(),
-})
+// Exported for regression tests that pin the app-facing input contract — the
+// bug pattern under guard is the route accepting a different shape than the
+// SDK/web sends. Per §5.1.1/§8.3 this management write is app-facing camelCase
+// (shared `SetActiveDeviceCapabilitiesInput`: `deviceCapabilityIds`), with the
+// `target` reusing the camelCase ScopedSubjectTargetWireSchema whitelist.
+export const setActiveBodySchema = SetActiveDeviceCapabilitiesInputSchema
 
 /**
  * Map the wire `(subject, scope?)` shape onto `AccessTargetInput`.
@@ -342,7 +335,7 @@ export function registerDeviceAccessBindingRoutes(app: FastifyInstance): void {
       )
         return
 
-      for (const capId of parsed.data.device_capability_ids) {
+      for (const capId of parsed.data.deviceCapabilityIds) {
         if (
           !(await requireRequestAction(
             request,
@@ -380,12 +373,12 @@ export function registerDeviceAccessBindingRoutes(app: FastifyInstance): void {
 
       const capabilitiesCheck = await assertCapabilitiesInWorkspace(
         pathWorkspaceId,
-        parsed.data.device_capability_ids
+        parsed.data.deviceCapabilityIds
       )
       if (!capabilitiesCheck.ok) {
         reply.status(400).send({
           code: "invalid_capability",
-          message: "one or more device_capability_ids not in this workspace",
+          message: "one or more deviceCapabilityIds not in this workspace",
           missing: capabilitiesCheck.missing,
         })
         return
@@ -397,7 +390,7 @@ export function registerDeviceAccessBindingRoutes(app: FastifyInstance): void {
         await setActiveDeviceCapabilitiesForTarget({
           workspaceId: pathWorkspaceId,
           target: internalTarget,
-          deviceCapabilityIds: parsed.data.device_capability_ids,
+          deviceCapabilityIds: parsed.data.deviceCapabilityIds,
           createdByWorkspaceMemberId: session?.workspaceMemberId ?? null,
           reason: parsed.data.reason,
         })
@@ -459,7 +452,7 @@ export function registerDeviceAccessBindingRoutes(app: FastifyInstance): void {
           workspaceId,
           target,
         })
-        reply.send({ device_capability_ids: ids })
+        reply.send({ deviceCapabilityIds: ids })
       } catch (err) {
         reply
           .status(500)

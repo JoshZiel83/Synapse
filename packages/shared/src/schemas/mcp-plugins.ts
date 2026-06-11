@@ -287,9 +287,15 @@ export const MarketplacePluginViewSchema = z.strictObject({
   defaultReuseScope: z.enum(REUSE_SCOPES),
   defaultConversationTypeMask: z.number().int(),
   supportedReuseScopes: z.array(z.enum(REUSE_SCOPES)),
+  // Plugin-author-owned JSON-Schema document describing the config form; its
+  // structure is defined by the plugin, not us — kept opaque deliberately. The
+  // structured, app-owned view of the form is `configFields` below.
   configSchema: z.record(z.string(), z.unknown()),
   configFields: z.array(PluginConfigFieldDefinitionSchema),
+  // Config VALUES keyed by author-defined field names — varies per plugin.
   defaultConfig: z.record(z.string(), z.unknown()),
+  // Raw MCP tool definitions (MCP protocol shape, author-supplied). No
+  // app-owned contract; passed through opaque.
   toolsManifest: z.array(z.unknown()),
   validationRules: z.array(McpValidationRuleSchema),
   setupSteps: z.array(McpSetupStepSchema),
@@ -361,6 +367,8 @@ export const PluginInstallationDetailViewSchema = z.strictObject({
   supportedReuseScopes: z.array(z.enum(REUSE_SCOPES)),
   isEnabled: z.boolean(),
   status: z.enum(["active", "disabled", "error", "archived"]),
+  // Sanitized config VALUES keyed by author-defined field names — varies per
+  // plugin. The structured, app-owned per-field state is `configState` below.
   configData: z.record(z.string(), z.unknown()),
   configState: z.array(PluginConfigFieldStateSchema),
   approvedRuntimePermissions: z.array(z.string()),
@@ -384,11 +392,14 @@ export const PluginInstallationDetailViewSchema = z.strictObject({
   pluginLifecycleScope: z.enum(REUSE_SCOPES),
   pluginDefaultReuseScope: z.enum(REUSE_SCOPES),
   pluginSupportedReuseScopes: z.array(z.enum(REUSE_SCOPES)),
+  // Raw MCP tool definitions (author-supplied MCP protocol shape) — opaque.
   toolsManifest: z.array(z.unknown()),
   pluginIconUrl: z.string().nullable(),
   pluginCategories: z.array(MarketplacePluginCategoryViewSchema),
   pluginCategorySlugs: z.array(z.string()),
   pluginVersion: z.string(),
+  // Plugin-author-owned JSON-Schema document — opaque (see configFields for the
+  // structured, app-owned form contract).
   configSchema: z.record(z.string(), z.unknown()),
   configFields: z.array(PluginConfigFieldDefinitionSchema),
   installFlow: PluginInstallFlowSchema,

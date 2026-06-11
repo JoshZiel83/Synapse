@@ -274,54 +274,11 @@ export type SynapseError = z.infer<typeof SynapseErrorSchema>
 // app-facing camelCase contracts owned by @synapse/shared
 // (schemas/devices.ts), consumed by web-next + the consumer-side device-sdk.
 // They are NOT machine/wire shapes, so they no longer live here (master plan
-// §2.3-6). The signed/handshake wire shapes (pairing/bootstrap/control-plane)
-// remain below.
-
-export const CreateCloudDeviceInputSchema = z.object({
-  workspace_id: z.uuid(),
-  title: z.string().min(1),
-  host_provider: z.literal("e2b"),
-  preset: z.string().optional(),
-})
-export type CreateCloudDeviceInput = z.infer<
-  typeof CreateCloudDeviceInputSchema
->
-
-// POST /workspaces/:wsId/devices/cloud returns the pending pairing-session
-// info, NOT a DeviceDetail. The sandbox runtime claims the device row via
-// /api/v1/devices/bootstrap with the bootstrap_token.
-export const CreateCloudDeviceResultSchema = z.object({
-  pending_device_id: z.uuid(),
-  bootstrap_token: z.string(),
-  pairing_session_id: z.uuid(),
-  expires_at: IsoInstantStringSchema,
-})
-export type CreateCloudDeviceResult = z.infer<
-  typeof CreateCloudDeviceResultSchema
->
-
-export const StartPairingInputSchema = z.object({
-  workspace_id: z.uuid(),
-  mode: z.enum(DEVICE_PAIRING_MODES),
-  title: z.string().optional(),
-  device_type: z.enum(DEVICE_TYPES).optional(),
-  // service_join only:
-  device_id: z.uuid().optional(),
-  requested_pubkey_fingerprint: z.string().optional(),
-  self_challenge: z.string().optional(),
-})
-export type StartPairingInput = z.infer<typeof StartPairingInputSchema>
-
-export const PairingTicketSchema = z.object({
-  pairing_session_id: z.uuid(),
-  mode: z.enum(DEVICE_PAIRING_MODES),
-  pairing_code: z.string().nullable(),
-  expires_at: IsoInstantStringSchema,
-  verification_uri: z.string().nullable(),
-  verification_uri_complete: z.string().nullable(),
-  status: z.enum(DEVICE_PAIRING_STATUSES),
-})
-export type PairingTicket = z.infer<typeof PairingTicketSchema>
+// §2.3-6). The MANAGEMENT WRITE inputs (createCloudDevice / startPairing /
+// claimRemoteAgentDaemon / setActiveDeviceCapabilities) + the cloud RESULT
+// view are likewise app-facing camelCase and now live in @synapse/shared
+// (§5.1.1/§8.3). Only the true handshake wire shapes (consume / bootstrap /
+// control-plane) remain below — device-runtime/sandbox are their sole callers.
 
 export const ConsumePairingInputSchema = z.object({
   pairing_code: z.string().min(1),
@@ -339,25 +296,6 @@ export const ConsumePairingResultSchema = z.object({
   control_plane_url: z.string(),
 })
 export type ConsumePairingResult = z.infer<typeof ConsumePairingResultSchema>
-
-export const ClaimDaemonInputSchema = z.object({
-  remote_agent_machine_id: z.uuid(),
-})
-export type ClaimDaemonInput = z.infer<typeof ClaimDaemonInputSchema>
-
-// subject-scope-refactor: SetActiveDeviceCapabilitiesInputSchema.target now
-// reuses ScopedSubjectTargetWireSchema — a strict whitelist that rejects
-// `workspace_member` subjects and any scoped combination outside
-// `actor+conversation` / `remote_agent+conversation`. wire field
-// `device_capability_ids` is unchanged (SDK + server protocol stability).
-export const SetActiveDeviceCapabilitiesInputSchema = z.object({
-  workspaceId: z.uuid(),
-  target: ScopedSubjectTargetWireSchema,
-  device_capability_ids: z.array(z.uuid()),
-})
-export type SetActiveDeviceCapabilitiesInput = z.infer<
-  typeof SetActiveDeviceCapabilitiesInputSchema
->
 
 // ───────────────────────────── Control Plane messages (§7.1) ────────────────
 

@@ -29,6 +29,13 @@ import {
   startPluginAuthSession,
 } from "./plugin-auth-connections.js"
 import { getEventLogs, getToolCallLogs } from "./audit.js"
+import { sendData } from "../../infrastructure/http/respond.js"
+import {
+  MarketplacePluginViewSchema,
+  MarketplacePublisherViewSchema,
+  PluginCategoryViewSchema,
+  PluginInstallationDetailViewSchema,
+} from "@synapse/shared/schemas"
 
 const lifecycleScopeSchema = z.enum(REUSE_SCOPES)
 const conversationTypeMaskSchema = z.number().int().min(1).max(15)
@@ -98,7 +105,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
               .filter(Boolean)
           : undefined,
       })
-      reply.send(plugins)
+      sendData(reply, z.array(MarketplacePluginViewSchema), plugins)
     } catch (error) {
       handleError(reply, error)
     }
@@ -106,7 +113,8 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
 
   app.get("/api/v1/mcp/categories", authHook, async (_request, reply) => {
     try {
-      reply.send(await listPluginCategories())
+      const categories = await listPluginCategories()
+      sendData(reply, z.array(PluginCategoryViewSchema), categories)
     } catch (error) {
       handleError(reply, error)
     }
@@ -118,7 +126,8 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
     async (request, reply) => {
       try {
         const { pluginId } = request.params as { pluginId: string }
-        reply.send(await getPlugin(pluginId))
+        const plugin = await getPlugin(pluginId)
+        sendData(reply, MarketplacePluginViewSchema, plugin)
       } catch (error) {
         handleError(reply, error)
       }
@@ -127,7 +136,8 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
 
   app.get("/api/v1/mcp/organizations", authHook, async (_request, reply) => {
     try {
-      reply.send(await listOrganizations())
+      const orgs = await listOrganizations()
+      sendData(reply, z.array(MarketplacePublisherViewSchema), orgs)
     } catch (error) {
       handleError(reply, error)
     }
@@ -140,8 +150,17 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
       try {
         const { orgId } = request.params as { orgId: string }
         const org = await getOrganization(orgId)
+        if (!org) {
+          throw new McpPluginError(404, "Publisher not found")
+        }
         const plugins = await listPlugins({ orgId })
-        reply.send({ ...org, plugins })
+        sendData(
+          reply,
+          MarketplacePublisherViewSchema.extend({
+            plugins: z.array(MarketplacePluginViewSchema),
+          }),
+          { ...org, plugins }
+        )
       } catch (error) {
         handleError(reply, error)
       }
@@ -328,18 +347,25 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
           action: "plugin_installation.edit",
         })
         if (installationIds.length === 0) {
-          return reply.send([])
+          return sendData(
+            reply,
+            z.array(PluginInstallationDetailViewSchema),
+            []
+          )
         }
         const { pluginId } = z
           .object({
             pluginId: z.uuid().optional(),
           })
           .parse(request.query || {})
-        reply.send(
-          await getInstallations(workspaceId, {
-            installationIds,
-            pluginId,
-          })
+        const installations = await getInstallations(workspaceId, {
+          installationIds,
+          pluginId,
+        })
+        sendData(
+          reply,
+          z.array(PluginInstallationDetailViewSchema),
+          installations
         )
       } catch (error) {
         handleError(reply, error)
@@ -365,9 +391,8 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
         const { workspaceId } = request.params as {
           workspaceId: string
         }
-        reply.send({
-          installation: await getInstallation(workspaceId, installId),
-        })
+        const installation = await getInstallation(workspaceId, installId)
+        sendData(reply, PluginInstallationDetailViewSchema, installation)
       } catch (error) {
         handleError(reply, error)
       }

@@ -672,7 +672,7 @@ export async function updateModelGroup(
     isDefault?: boolean
     isActive?: boolean
   }
-): Promise<ModelGroupDetailView | ModelGroupView> {
+): Promise<ModelGroupDetailView> {
   const group = await getGroupRow(groupId)
 
   if (data.isDefault === true && data.isActive !== false) {
@@ -721,7 +721,10 @@ export async function updateModelGroup(
     throw new ModelGroupError(404, "Model group not found")
   }
 
-  return presentGroupRow(updatedRow)
+  // Always return the full detail view so the PUT route can present a single
+  // schema (ModelGroupDetailView) via sendData — callers ignore the body and
+  // reload, so returning detail vs. plain view is behavior-neutral.
+  return getModelGroup(groupId)
 }
 
 export async function deleteModelGroup(groupId: string) {

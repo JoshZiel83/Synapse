@@ -40,6 +40,15 @@ import {
   updateGroupSchema,
   updateItemSchema,
 } from "./schemas.js"
+import { sendData } from "../../infrastructure/http/respond.js"
+import {
+  ActorModelGroupAssignmentViewSchema,
+  ModelGroupDetailViewSchema,
+  ModelGroupGrantViewSchema,
+  ModelGroupItemViewSchema,
+  ModelGroupItemVersionViewSchema,
+  ModelGroupViewSchema,
+} from "@synapse/shared/schemas"
 
 function handleError(error: unknown, reply: FastifyReply) {
   if (error instanceof ModelGroupError) {
@@ -206,7 +215,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
 
         const { workspaceId } = request.params as { workspaceId: string }
         const groups = await listWorkspaceModelGroups(workspaceId)
-        return reply.send({ groups })
+        return sendData(reply, z.array(ModelGroupViewSchema), groups)
       } catch (error) {
         return handleError(error, reply)
       }
@@ -235,7 +244,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
           workspaceId,
           createdByWorkspaceMemberId: workspaceMemberId,
         })
-        return reply.status(201).send({ group })
+        return sendData(reply, ModelGroupViewSchema, group, 201)
       } catch (error) {
         return handleError(error, reply)
       }
@@ -274,7 +283,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         )
         if (!groupAllowed) return
 
-        return reply.send({ group })
+        return sendData(reply, ModelGroupDetailViewSchema, group)
       } catch (error) {
         return handleError(error, reply)
       }
@@ -315,7 +324,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
 
         const body = updateGroupSchema.parse(request.body)
         const group = await updateModelGroup(scopedGroup.id, body)
-        return reply.send({ group })
+        return sendData(reply, ModelGroupDetailViewSchema, group)
       } catch (error) {
         return handleError(error, reply)
       }
@@ -395,7 +404,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         if (!groupAllowed) return
 
         const grants = await listModelGroupGrants(group.id)
-        return reply.send({ grants })
+        return sendData(reply, z.array(ModelGroupGrantViewSchema), grants)
       } catch (error) {
         return handleError(error, reply)
       }
@@ -439,7 +448,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
           ...body,
           grantedByWorkspaceMemberId: workspaceMemberId,
         })
-        return reply.status(201).send({ grant })
+        return sendData(reply, ModelGroupGrantViewSchema, grant, 201)
       } catch (error) {
         return handleError(error, reply)
       }
@@ -524,7 +533,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
           ...body,
           installedByWorkspaceMemberId: workspaceMemberId,
         })
-        return reply.status(201).send({ item })
+        return sendData(reply, ModelGroupItemViewSchema, item, 201)
       } catch (error) {
         return handleError(error, reply)
       }
@@ -566,7 +575,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         const { itemId } = request.params as { itemId: string }
         const body = updateItemSchema.parse(request.body)
         const item = await updateModelItem(group.id, itemId, body)
-        return reply.send({ item })
+        return sendData(reply, ModelGroupItemViewSchema, item)
       } catch (error) {
         return handleError(error, reply)
       }
@@ -648,7 +657,11 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
 
         const { itemId } = request.params as { itemId: string }
         const versions = await getItemVersions(itemId, group.id)
-        return reply.send({ versions })
+        return sendData(
+          reply,
+          z.array(ModelGroupItemVersionViewSchema),
+          versions
+        )
       } catch (error) {
         return handleError(error, reply)
       }
@@ -683,7 +696,11 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
           workspaceId: string
         }
         const groups = await getActorModelGroups(actorId, workspaceId)
-        return reply.send({ groups })
+        return sendData(
+          reply,
+          z.array(ActorModelGroupAssignmentViewSchema),
+          groups
+        )
       } catch (error) {
         return handleError(error, reply)
       }
@@ -718,7 +735,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
           workspaceId: string
         }
         const groups = await listVisibleActorModelGroups(actorId, workspaceId)
-        return reply.send({ groups })
+        return sendData(reply, z.array(ModelGroupViewSchema), groups)
       } catch (error) {
         return handleError(error, reply)
       }
@@ -758,7 +775,11 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
           workspaceId,
           body.groups
         )
-        return reply.send({ groups })
+        return sendData(
+          reply,
+          z.array(ActorModelGroupAssignmentViewSchema),
+          groups
+        )
       } catch (error) {
         return handleError(error, reply)
       }
@@ -779,7 +800,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         if (!allowed) return
 
         const groups = await listPlatformModelGroups()
-        return reply.send({ groups })
+        return sendData(reply, z.array(ModelGroupViewSchema), groups)
       } catch (error) {
         return handleError(error, reply)
       }
@@ -804,7 +825,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
           ...body,
           ownerType: "platform",
         })
-        return reply.status(201).send({ group })
+        return sendData(reply, ModelGroupViewSchema, group, 201)
       } catch (error) {
         return handleError(error, reply)
       }
@@ -830,7 +851,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         )
         if (!group) return
 
-        return reply.send({ group })
+        return sendData(reply, ModelGroupDetailViewSchema, group)
       } catch (error) {
         return handleError(error, reply)
       }
@@ -868,7 +889,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
 
         const body = updateGroupSchema.parse(request.body)
         const updated = await updateModelGroup(group.id, body)
-        return reply.send({ group: updated })
+        return sendData(reply, ModelGroupDetailViewSchema, updated)
       } catch (error) {
         return handleError(error, reply)
       }
@@ -932,7 +953,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         if (!group) return
 
         const grants = await listModelGroupGrants(group.id)
-        return reply.send({ grants })
+        return sendData(reply, z.array(ModelGroupGrantViewSchema), grants)
       } catch (error) {
         return handleError(error, reply)
       }
@@ -962,7 +983,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         const grant = await issueModelGroupGrant(group.id, {
           ...body,
         })
-        return reply.status(201).send({ grant })
+        return sendData(reply, ModelGroupGrantViewSchema, grant, 201)
       } catch (error) {
         return handleError(error, reply)
       }
@@ -1030,7 +1051,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         const item = await addModelItem(group.id, {
           ...body,
         })
-        return reply.status(201).send({ item })
+        return sendData(reply, ModelGroupItemViewSchema, item, 201)
       } catch (error) {
         return handleError(error, reply)
       }
@@ -1069,7 +1090,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         const { itemId } = request.params as { itemId: string }
         const body = updateItemSchema.parse(request.body)
         const item = await updateModelItem(group.id, itemId, body)
-        return reply.send({ item })
+        return sendData(reply, ModelGroupItemViewSchema, item)
       } catch (error) {
         return handleError(error, reply)
       }
@@ -1135,7 +1156,11 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
 
         const { itemId } = request.params as { itemId: string }
         const versions = await getItemVersions(itemId, group.id)
-        return reply.send({ versions })
+        return sendData(
+          reply,
+          z.array(ModelGroupItemVersionViewSchema),
+          versions
+        )
       } catch (error) {
         return handleError(error, reply)
       }
@@ -1150,7 +1175,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         const workspaceMemberId = (request as any).workspaceMember?.id as string
         const groups =
           await listWorkspaceMemberOwnedModelGroups(workspaceMemberId)
-        return reply.send({ groups })
+        return sendData(reply, z.array(ModelGroupViewSchema), groups)
       } catch (error) {
         return handleError(error, reply)
       }
@@ -1170,7 +1195,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
           ownerWorkspaceMemberId: workspaceMemberId,
           createdByWorkspaceMemberId: workspaceMemberId,
         })
-        return reply.status(201).send({ group })
+        return sendData(reply, ModelGroupViewSchema, group, 201)
       } catch (error) {
         return handleError(error, reply)
       }
@@ -1189,7 +1214,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
           reply
         )
         if (!group) return
-        return reply.send({ group })
+        return sendData(reply, ModelGroupDetailViewSchema, group)
       } catch (error) {
         return handleError(error, reply)
       }
@@ -1223,7 +1248,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
 
         const body = updateGroupSchema.parse(request.body)
         const updated = await updateModelGroup(group.id, body)
-        return reply.send({ group: updated })
+        return sendData(reply, ModelGroupDetailViewSchema, updated)
       } catch (error) {
         return handleError(error, reply)
       }
@@ -1277,7 +1302,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         if (!group) return
 
         const grants = await listModelGroupGrants(group.id)
-        return reply.send({ grants })
+        return sendData(reply, z.array(ModelGroupGrantViewSchema), grants)
       } catch (error) {
         return handleError(error, reply)
       }
@@ -1303,7 +1328,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
           grantedByWorkspaceMemberId: (request as any).workspaceMember
             ?.id as string,
         })
-        return reply.status(201).send({ grant })
+        return sendData(reply, ModelGroupGrantViewSchema, grant, 201)
       } catch (error) {
         return handleError(error, reply)
       }
@@ -1351,7 +1376,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
           installedByWorkspaceMemberId: (request as any).workspaceMember
             ?.id as string,
         })
-        return reply.status(201).send({ item })
+        return sendData(reply, ModelGroupItemViewSchema, item, 201)
       } catch (error) {
         return handleError(error, reply)
       }
@@ -1374,7 +1399,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         const { itemId } = request.params as { itemId: string }
         const body = updateItemSchema.parse(request.body)
         const item = await updateModelItem(group.id, itemId, body)
-        return reply.send({ item })
+        return sendData(reply, ModelGroupItemViewSchema, item)
       } catch (error) {
         return handleError(error, reply)
       }
@@ -1418,7 +1443,11 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
 
         const { itemId } = request.params as { itemId: string }
         const versions = await getItemVersions(itemId, group.id)
-        return reply.send({ versions })
+        return sendData(
+          reply,
+          z.array(ModelGroupItemVersionViewSchema),
+          versions
+        )
       } catch (error) {
         return handleError(error, reply)
       }

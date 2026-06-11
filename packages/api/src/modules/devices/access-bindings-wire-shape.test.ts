@@ -1,26 +1,22 @@
-// Batch 18 regression locks — POST /devices/access-bindings wire-shape
-// contract.
+// access-bindings input-contract regression locks — POST /devices/access-bindings.
 //
-// Pre-Batch-18 the route used a hand-rolled `z.discriminatedUnion("kind",
-// ...)` body schema while the SDK was already sending the wire shape
-// (`{subject: SubjectRef, scope?: SubjectRef}`) parsed by
-// `SetActiveDeviceCapabilitiesInputSchema` from @synapse/device-protocol.
-// Result: every SDK POST 400'd at the server `safeParse`. These tests
-// pin both directions of the contract so the divergence cannot reappear:
+// This management write is app-facing (§5.1.1/§8.3): both the SDK/web client
+// and the server route parse the SAME shared camelCase schema
+// (`SetActiveDeviceCapabilitiesInputSchema` from @synapse/shared:
+// `{ workspaceId, target: ScopedSubjectTarget, deviceCapabilityIds, reason? }`).
+// These tests pin both directions of the contract so they cannot drift:
 //
-//   (a) The route's body schema accepts the SDK's wire shape verbatim.
+//   (a) The client-sent shape parses server-side (route schema == shared schema).
 //   (b) The route rejects flat target shapes.
-//   (c) The wire schema's `superRefine` whitelist still rejects scoped
-//       combinations outside `(actor|remote_agent, conversation)`.
-//   (d) Batch 19: the server-side mapper actually translates every
-//       wire-accepted combination into a real service-layer target DTO.
-//       Previously `(remote_agent, conversation)` parsed at the schema
-//       layer but threw at the mapper, so the route still 400'd.
+//   (c) The target `superRefine` whitelist still rejects scoped combinations
+//       outside `(actor|remote_agent, conversation)`.
+//   (d) The server-side mapper translates every accepted combination into a
+//       real service-layer target DTO.
 
 import test from "node:test"
 import assert from "node:assert/strict"
 import type { Kysely } from "kysely"
-import { SetActiveDeviceCapabilitiesInputSchema } from "@synapse/device-protocol"
+import { SetActiveDeviceCapabilitiesInputSchema } from "@synapse/shared/schemas"
 import {
   setActiveBodySchema,
   wireTargetToInternalAccessTarget,
@@ -34,37 +30,37 @@ const convId = "00000000-0000-4000-8000-000000000003"
 const remoteAgentId = "00000000-0000-4000-8000-000000000004"
 const capId = "00000000-0000-4000-8000-000000000005"
 
-// (a) — wire shape SDK sends must parse server-side.
-test("Batch 18: POST body accepts SDK wire shape — unscoped workspace target", () => {
-  const wireBody = {
+// (a) — the client-sent shape must parse server-side.
+test("POST body accepts the client shape — unscoped workspace target", () => {
+  const body = {
     workspaceId: wsId,
     target: { subject: { kind: "workspace" as const, workspaceId: wsId } },
-    device_capability_ids: [capId],
+    deviceCapabilityIds: [capId],
   }
-  // The SDK calls this first — protocol-side parse.
-  const sdkParsed = SetActiveDeviceCapabilitiesInputSchema.safeParse(wireBody)
+  // The client calls this first — shared-schema parse.
+  const sdkParsed = SetActiveDeviceCapabilitiesInputSchema.safeParse(body)
   assert.equal(sdkParsed.success, true)
-  // The server-side route schema parses the same wire body.
-  const serverParsed = setActiveBodySchema.safeParse(wireBody)
+  // The server-side route schema parses the same body.
+  const serverParsed = setActiveBodySchema.safeParse(body)
   assert.equal(
     serverParsed.success,
     true,
-    "server schema rejected the SDK-sent ScopedSubjectTarget — the route diverged from @synapse/device-protocol"
+    "server schema rejected the client-sent ScopedSubjectTarget — the route diverged from the shared input contract"
   )
 })
 
-test("Batch 18: POST body accepts SDK wire shape — actor + scope=conversation", () => {
-  const wireBody = {
+test("POST body accepts the client shape — actor + scope=conversation", () => {
+  const body = {
     workspaceId: wsId,
     target: {
       subject: { kind: "actor" as const, actorId },
       scope: { kind: "conversation" as const, conversationId: convId },
     },
-    device_capability_ids: [capId],
+    deviceCapabilityIds: [capId],
   }
-  const sdkParsed = SetActiveDeviceCapabilitiesInputSchema.safeParse(wireBody)
+  const sdkParsed = SetActiveDeviceCapabilitiesInputSchema.safeParse(body)
   assert.equal(sdkParsed.success, true)
-  const serverParsed = setActiveBodySchema.safeParse(wireBody)
+  const serverParsed = setActiveBodySchema.safeParse(body)
   assert.equal(
     serverParsed.success,
     true,
@@ -72,33 +68,33 @@ test("Batch 18: POST body accepts SDK wire shape — actor + scope=conversation"
   )
 })
 
-test("Batch 18: POST body accepts SDK wire shape — remote_agent + scope=conversation", () => {
-  const wireBody = {
+test("POST body accepts the client shape — remote_agent + scope=conversation", () => {
+  const body = {
     workspaceId: wsId,
     target: {
       subject: { kind: "remote_agent" as const, remoteAgentId },
       scope: { kind: "conversation" as const, conversationId: convId },
     },
-    device_capability_ids: [capId],
+    deviceCapabilityIds: [capId],
   }
-  const sdkParsed = SetActiveDeviceCapabilitiesInputSchema.safeParse(wireBody)
+  const sdkParsed = SetActiveDeviceCapabilitiesInputSchema.safeParse(body)
   assert.equal(sdkParsed.success, true)
-  const serverParsed = setActiveBodySchema.safeParse(wireBody)
+  const serverParsed = setActiveBodySchema.safeParse(body)
   assert.equal(serverParsed.success, true)
 })
 
-test("Batch 18: POST body rejects legacy {kind: 'actor', actorId} flat shape", () => {
+test("POST body rejects legacy {kind: 'actor', actorId} flat shape", () => {
   const legacyBody = {
     workspaceId: wsId,
     target: { kind: "actor", actorId },
-    device_capability_ids: [capId],
+    deviceCapabilityIds: [capId],
   }
   const parsed = setActiveBodySchema.safeParse(legacyBody)
   assert.equal(parsed.success, false)
 })
 
-// (c) — superRefine whitelist still locked at the wire layer.
-test("Batch 18: POST body rejects scoped combinations outside (actor|remote_agent, conversation)", () => {
+// (c) — superRefine whitelist still locked at the target layer.
+test("POST body rejects scoped combinations outside (actor|remote_agent, conversation)", () => {
   // workspace_member subject is rejected by SubjectRefWireSchema
   // (device-protocol comment: workspace_member is platform-wide-narrow
   // and not on the device binding path).
@@ -107,7 +103,7 @@ test("Batch 18: POST body rejects scoped combinations outside (actor|remote_agen
     target: {
       subject: { kind: "workspace_member", memberId: actorId },
     },
-    device_capability_ids: [capId],
+    deviceCapabilityIds: [capId],
   }
   assert.equal(setActiveBodySchema.safeParse(memberBody).success, false)
 
@@ -118,7 +114,7 @@ test("Batch 18: POST body rejects scoped combinations outside (actor|remote_agen
       subject: { kind: "actor" as const, actorId },
       scope: { kind: "workspace" as const, workspaceId: wsId },
     },
-    device_capability_ids: [capId],
+    deviceCapabilityIds: [capId],
   }
   assert.equal(setActiveBodySchema.safeParse(actorScopeWsBody).success, false)
 
@@ -129,7 +125,7 @@ test("Batch 18: POST body rejects scoped combinations outside (actor|remote_agen
       subject: { kind: "conversation" as const, conversationId: convId },
       scope: { kind: "conversation" as const, conversationId: convId },
     },
-    device_capability_ids: [capId],
+    deviceCapabilityIds: [capId],
   }
   assert.equal(setActiveBodySchema.safeParse(convScopeConvBody).success, false)
 })

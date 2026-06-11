@@ -3,30 +3,30 @@
 // execution. Mirrors docs/device-runtime-v3.md §10.3.
 
 import {
-  ClaimDaemonInputSchema,
   ConsumePairingInputSchema,
-  CreateCloudDeviceInputSchema,
-  CreateCloudDeviceResultSchema,
-  SetActiveDeviceCapabilitiesInputSchema,
-  StartPairingInputSchema,
-  type ClaimDaemonInput,
   type ConsumePairingInput,
   type ConsumePairingResult,
-  type CreateCloudDeviceInput,
-  type CreateCloudDeviceResult,
   type DeviceCapabilityAccessTarget,
-  type SetActiveDeviceCapabilitiesInput,
-  type StartPairingInput,
 } from "@synapse/device-protocol"
 import {
   DeviceDetailViewSchema,
   DevicePairingTicketViewSchema,
   DeviceServiceViewSchema,
   DeviceViewSchema,
+  CreateCloudDeviceInputSchema,
+  CreateCloudDeviceResultViewSchema,
+  StartPairingInputSchema,
+  ClaimDaemonServiceInputSchema,
+  SetActiveDeviceCapabilitiesInputSchema,
   type DeviceDetailView,
   type DevicePairingTicketView,
   type DeviceServiceView,
   type DeviceView,
+  type CreateCloudDeviceInput,
+  type CreateCloudDeviceResultView,
+  type ClaimDaemonServiceInput,
+  type SetActiveDeviceCapabilitiesInput,
+  type StartPairingInput,
 } from "@synapse/shared/schemas"
 
 /**
@@ -126,14 +126,14 @@ export class DeviceSdk {
   // the materialized device happens via listDevices once the sandbox is up.
   async createCloudDevice(
     input: CreateCloudDeviceInput
-  ): Promise<CreateCloudDeviceResult> {
+  ): Promise<CreateCloudDeviceResultView> {
     const parsed = CreateCloudDeviceInputSchema.parse(input)
     const raw = await this.request<unknown>(
       "POST",
-      `/api/v1/workspaces/${parsed.workspace_id}/devices/cloud`,
+      `/api/v1/workspaces/${parsed.workspaceId}/devices/cloud`,
       parsed
     )
-    return CreateCloudDeviceResultSchema.parse(raw)
+    return CreateCloudDeviceResultViewSchema.parse(raw)
   }
 
   // ───────────────────────────── pairing ─────────────────────────────────────
@@ -144,14 +144,14 @@ export class DeviceSdk {
     const parsed = StartPairingInputSchema.parse(input)
     const raw = await this.request<unknown>(
       "POST",
-      `/api/v1/workspaces/${parsed.workspace_id}/devices/pairing-sessions`,
+      `/api/v1/workspaces/${parsed.workspaceId}/devices/pairing-sessions`,
       {
         mode: parsed.mode,
         title: parsed.title,
-        device_type: parsed.device_type,
-        device_id: parsed.device_id,
-        requested_pubkey_fingerprint: parsed.requested_pubkey_fingerprint,
-        self_challenge: parsed.self_challenge,
+        deviceType: parsed.deviceType,
+        deviceId: parsed.deviceId,
+        requestedPubkeyFingerprint: parsed.requestedPubkeyFingerprint,
+        selfChallenge: parsed.selfChallenge,
       }
     )
     return DevicePairingTicketViewSchema.parse(raw)
@@ -176,15 +176,18 @@ export class DeviceSdk {
   async claimRemoteAgentDaemon(
     workspaceId: string,
     deviceId: string,
-    input: ClaimDaemonInput
+    input: { remoteAgentMachineId: string }
   ): Promise<DeviceServiceView> {
-    const parsed = ClaimDaemonInputSchema.parse(input)
+    const parsed = ClaimDaemonServiceInputSchema.parse({
+      serviceKind: "remote_agent_daemon",
+      remoteAgentMachineId: input.remoteAgentMachineId,
+    })
     const raw = await this.request<unknown>(
       "POST",
       `/api/v1/workspaces/${workspaceId}/devices/${deviceId}/services`,
       {
-        service_kind: "remote_agent_daemon",
-        remote_agent_machine_id: parsed.remote_agent_machine_id,
+        serviceKind: parsed.serviceKind,
+        remoteAgentMachineId: parsed.remoteAgentMachineId,
       }
     )
     return DeviceServiceViewSchema.parse(raw)
@@ -226,20 +229,18 @@ export class DeviceSdk {
 }
 
 // Re-export the contract types so consumers depend on @synapse/device-sdk only.
-// Device read/management views are app-facing camelCase (from @synapse/shared);
-// the wire input/handshake types stay snake_case (from @synapse/device-protocol).
+// Device read/management views AND app-facing write inputs are camelCase (from
+// @synapse/shared); only the true wire/handshake types (consume) stay
+// snake_case (from @synapse/device-protocol).
 export type {
   DeviceView,
   DeviceDetailView,
   DeviceServiceView,
   DevicePairingTicketView,
-}
-export type {
-  ConsumePairingInput,
-  ConsumePairingResult,
   CreateCloudDeviceInput,
-  CreateCloudDeviceResult,
-  ClaimDaemonInput,
+  CreateCloudDeviceResultView,
+  ClaimDaemonServiceInput,
   SetActiveDeviceCapabilitiesInput,
   StartPairingInput,
 }
+export type { ConsumePairingInput, ConsumePairingResult }

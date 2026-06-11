@@ -15,22 +15,12 @@ import {
   type DeviceType,
   type HostKind,
 } from "@synapse/device-protocol"
-import { dateToIsoInstant } from "@synapse/shared/datetime"
-import type {
-  DeviceDetailView,
-  DevicePairingTicketView,
-  DeviceServiceView,
-  DeviceView,
-  OneClickInstallCommands,
-} from "@synapse/shared"
+import type { OneClickInstallCommands } from "@synapse/shared"
 import { db } from "../../infrastructure/database/kysely.js"
-import {
-  presentDevice,
-  presentDeviceDetail,
-  presentDeviceService,
-} from "./presenter.js"
 import type {
   DeviceCapabilityRecord,
+  DeviceDetailRecord,
+  DevicePairingTicketRecord,
   DeviceServiceRecord,
   DeviceSummaryRecord,
 } from "./repo.types.js"
@@ -95,7 +85,9 @@ function toDeviceSummaryRecord(row: {
   }
 }
 
-export async function listDevices(workspaceId: string): Promise<DeviceView[]> {
+export async function listDevices(
+  workspaceId: string
+): Promise<DeviceSummaryRecord[]> {
   const rows = await db
     .selectFrom("devices")
     .selectAll()
@@ -104,27 +96,25 @@ export async function listDevices(workspaceId: string): Promise<DeviceView[]> {
     .orderBy("createdAt", "desc")
     .execute()
   return rows.map((row) =>
-    presentDevice(
-      toDeviceSummaryRecord({
-        id: row.id as string,
-        workspaceId: row.workspaceId as string,
-        title: row.title as string,
-        hostKind: row.hostKind as HostKind,
-        hostProvider: row.hostProvider as string | null,
-        deviceType: row.deviceType as DeviceType,
-        platform: row.platform as string | null,
-        trustStatus: row.trustStatus as DeviceTrustStatus,
-        lastSeenAt: row.lastSeenAt as Date | null,
-        lastConnectedAt: row.lastConnectedAt as Date | null,
-      })
-    )
+    toDeviceSummaryRecord({
+      id: row.id as string,
+      workspaceId: row.workspaceId as string,
+      title: row.title as string,
+      hostKind: row.hostKind as HostKind,
+      hostProvider: row.hostProvider as string | null,
+      deviceType: row.deviceType as DeviceType,
+      platform: row.platform as string | null,
+      trustStatus: row.trustStatus as DeviceTrustStatus,
+      lastSeenAt: row.lastSeenAt as Date | null,
+      lastConnectedAt: row.lastConnectedAt as Date | null,
+    })
   )
 }
 
 export async function getDevice(
   workspaceId: string,
   deviceId: string
-): Promise<DeviceDetailView> {
+): Promise<DeviceDetailRecord> {
   const deviceRow = await db
     .selectFrom("devices")
     .selectAll()
@@ -188,7 +178,7 @@ export async function getDevice(
     metadata: (row.exposureMetadata as Record<string, unknown> | null) ?? null,
   }))
 
-  return presentDeviceDetail({
+  return {
     ...toDeviceSummaryRecord({
       id: deviceRow.id as string,
       workspaceId: deviceRow.workspaceId as string,
@@ -206,7 +196,7 @@ export async function getDevice(
       (deviceRow.ownerWorkspaceMemberId as string | null) ?? null,
     services,
     capabilities,
-  })
+  }
 }
 
 export async function deleteDevice(
@@ -250,7 +240,7 @@ function generateBootstrapToken(): { token: string; hash: Buffer } {
   return { token, hash }
 }
 
-export type StartPairingResult = DevicePairingTicketView
+export type StartPairingResult = DevicePairingTicketRecord
 
 export interface StartPairingInput {
   workspaceId: string
@@ -332,7 +322,7 @@ export async function startPairing(
     mode: input.mode,
     pairingCode: pairingCode,
     bootstrapToken: bootstrapToken,
-    expiresAt: dateToIsoInstant(expiresAt),
+    expiresAt: expiresAt,
     verificationUri: null,
     verificationUriComplete: null,
     status: "pending",
@@ -553,7 +543,7 @@ export interface ClaimDaemonInput {
 
 export async function claimRemoteAgentDaemon(
   input: ClaimDaemonInput
-): Promise<DeviceServiceView> {
+): Promise<DeviceServiceRecord> {
   return db.transaction().execute(async (trx) => {
     const device = await trx
       .selectFrom("devices")
@@ -624,7 +614,7 @@ export async function claimRemoteAgentDaemon(
       .where("id", "=", serviceId)
       .executeTakeFirstOrThrow()
 
-    return presentDeviceService({
+    return {
       id: row.id as string,
       deviceId: row.deviceId as string,
       serviceKind: row.serviceKind as DeviceServiceKind,
@@ -632,7 +622,7 @@ export async function claimRemoteAgentDaemon(
       status: row.status as DeviceServiceRecord["status"],
       lastSeenAt: row.lastSeenAt as Date | null,
       remoteAgentMachineId: (row.remoteAgentMachineId as string | null) ?? null,
-    })
+    }
   })
 }
 
