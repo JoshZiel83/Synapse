@@ -21,10 +21,8 @@ import { markWorkspaceDeleted } from "../soft-delete/orchestration.js"
 import { insertWorkspaceAppRoot } from "../workspace-apps/root-storage.js"
 import {
   deriveWorkspaceTrustLevel,
-  presentActorRow,
   presentMemberRow,
   presentWorkspaceChiefActorPreferenceRow,
-  presentWorkspaceRow,
 } from "./presenter.js"
 import type {
   ActorRecord,
@@ -431,13 +429,13 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
     )
 
     return {
-      workspace: presentWorkspaceRow(workspace),
-      secretary: presentActorRow({
+      workspace,
+      secretary: {
         row: chiefActor.actorRow,
         workspaceId: String(workspace.id),
         displayName: chiefActor.template.actorDisplayName,
         docs: chiefActor.template.actorDocs,
-      }),
+      },
       installedTemplatePackageIds: officialActorTemplates.map(
         (template) => template.packageId
       ),
@@ -473,7 +471,7 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
   }
 
   return {
-    ...result.workspace,
+    workspace: result.workspace,
     secretary: result.secretary,
   }
 }
@@ -490,11 +488,7 @@ export async function listUserWorkspaces(userId: string) {
     .where("w.deletedAt", "is", null)
     .orderBy("w.createdAt", "desc")
     .execute()
-  return rows.map((row) => ({
-    ...presentWorkspaceRow(row),
-    currentWorkspaceMemberId: row.currentWorkspaceMemberId ?? undefined,
-    trustLevel: deriveWorkspaceTrustLevel(row),
-  }))
+  return rows
 }
 
 export async function getWorkspaceById(workspaceId: string) {
@@ -504,7 +498,7 @@ export async function getWorkspaceById(workspaceId: string) {
     .where("id", "=", workspaceId)
     .where("deletedAt", "is", null)
     .executeTakeFirst()
-  return row ? presentWorkspaceRow(row) : null
+  return row ?? null
 }
 
 export async function getWorkspaceChiefActorPreference(
@@ -624,7 +618,7 @@ export async function updateWorkspace(
     .where("id", "=", workspaceId)
     .returningAll()
     .executeTakeFirst()
-  return row ? presentWorkspaceRow(row) : null
+  return row ?? null
 }
 
 /**
@@ -706,7 +700,7 @@ export async function addMember(input: AddMemberInput) {
     )
 
     return {
-      member: presentMemberRow(memberRow),
+      member: memberRow,
     }
   })
 

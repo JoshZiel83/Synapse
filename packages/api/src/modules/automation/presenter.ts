@@ -28,6 +28,7 @@ import type {
   AutomationDeliveryRow,
   AutomationEventSourceRow,
   AutomationExecutionRow,
+  AutomationExecutionWithOccurrenceRow,
   AutomationOccurrenceRow,
   AutomationPolicyRow,
   AutomationRuleRow,
@@ -333,6 +334,60 @@ export function presentExecution(
     completedAt: serializeOptionalInstant(row.completed_at),
     createdAt: serializeInstant(row.created_at),
     updatedAt: serializeInstant(row.updated_at),
+  }
+}
+
+/**
+ * Present an execution-list row (execution + joined occurrence projection) as
+ * the outward AutomationExecution view. Merges the occurrence display fields
+ * (resolved via presentOccurrence on the joined columns) onto the execution
+ * view. Behavior preserved exactly from the previous in-service mapper.
+ */
+export function presentExecutionWithOccurrence(
+  row: AutomationExecutionWithOccurrenceRow
+): AutomationExecution {
+  const execution = presentExecution(row)
+  if (!row.occurrence_id || !row.occurrence_occurred_at) {
+    return execution
+  }
+
+  const parsedSourceSnapshot = parseJsonObject(row.source_snapshot)
+  const mergedSourceSnapshot = {
+    ...parsedSourceSnapshot,
+    ruleName:
+      (typeof parsedSourceSnapshot.ruleName === "string" &&
+      parsedSourceSnapshot.ruleName.trim()
+        ? parsedSourceSnapshot.ruleName.trim()
+        : null) ||
+      row.execution_rule_name ||
+      undefined,
+  }
+
+  const occurrence = presentOccurrence({
+    id: row.occurrence_id,
+    workspace_id: row.workspace_id,
+    source_kind: row.occurrence_source_kind || "internal",
+    event_source_id: null,
+    event_source_key: row.event_source_key || null,
+    event_source_name: row.occurrence_event_source_name || null,
+    event_provider_ref: row.event_provider_ref || null,
+    source_locator: row.source_locator || null,
+    match_key: row.match_key || null,
+    dedupe_key: row.dedupe_key || null,
+    source_snapshot: mergedSourceSnapshot,
+    payload: row.payload || {},
+    occurred_at: row.occurrence_occurred_at,
+    created_at: row.occurrence_created_at || row.occurrence_occurred_at,
+  })
+
+  return {
+    ...execution,
+    occurrenceOccurredAt: occurrence.occurredAt,
+    occurrenceSourceKind: occurrence.sourceKind,
+    occurrenceEventSourceName: occurrence.eventSourceName,
+    occurrenceTitle: occurrence.displayTitle,
+    occurrenceSummary: occurrence.displaySummary,
+    occurrenceDescription: occurrence.displayDescription,
   }
 }
 

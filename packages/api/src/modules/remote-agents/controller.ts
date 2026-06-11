@@ -26,6 +26,16 @@ import {
   updateRemoteAgentGroupTaskGrants,
 } from "./service.js"
 import { handleRemoteAgentMcpRequest } from "./mcp-endpoint.js"
+import {
+  presentGroupTaskGrant,
+  presentMachineBinding,
+  presentMachineFromCamelRow,
+  presentMachineListItem,
+  presentMessageDelivery,
+  presentRemoteAgent,
+  presentRemoteAgentConversation,
+  presentRuntimeCatalogEntry,
+} from "./presenter.js"
 
 const runtimeKindSchema = z.enum(REMOTE_AGENT_RUNTIME_KINDS)
 const createMachineSchema = z.object({
@@ -144,12 +154,15 @@ export default async function remoteAgentsController(app: FastifyInstance) {
     { preHandler: workspacePreHandler },
     async (request, reply) => {
       try {
-        return reply.send(
-          await listRemoteAgents({
-            workspaceId: request.params.workspaceId,
-            userId: getRequestUserId(request),
-          })
-        )
+        const { remoteAgents } = await listRemoteAgents({
+          workspaceId: request.params.workspaceId,
+          userId: getRequestUserId(request),
+        })
+        return reply.send({
+          remoteAgents: remoteAgents.map((rec) =>
+            presentRemoteAgent(rec, rec.requiresContactApproval)
+          ),
+        })
       } catch (error) {
         return sendServiceError(reply, error)
       }
@@ -163,13 +176,17 @@ export default async function remoteAgentsController(app: FastifyInstance) {
     { preHandler: workspacePreHandler },
     async (request, reply) => {
       try {
-        return reply.send(
-          await getRemoteAgent({
-            workspaceId: request.params.workspaceId,
-            remoteAgentId: request.params.remoteAgentId,
-            userId: getRequestUserId(request),
-          })
-        )
+        const { remoteAgent } = await getRemoteAgent({
+          workspaceId: request.params.workspaceId,
+          remoteAgentId: request.params.remoteAgentId,
+          userId: getRequestUserId(request),
+        })
+        return reply.send({
+          remoteAgent: presentRemoteAgent(
+            remoteAgent,
+            remoteAgent.requiresContactApproval
+          ),
+        })
       } catch (error) {
         return sendServiceError(reply, error)
       }
@@ -193,17 +210,21 @@ export default async function remoteAgentsController(app: FastifyInstance) {
       if (!allowed) return
       try {
         const body = bindRemoteAgentSchema.parse(request.body)
-        return reply.send(
-          await bindRemoteAgent({
-            workspaceId: request.params.workspaceId,
-            remoteAgentId: request.params.remoteAgentId,
-            userId: getRequestUserId(request),
-            machineId: body.machineId,
-            runtimeKind: body.runtimeKind,
-            runtimePath: body.runtimePath,
-            localRootPath: body.localRootPath,
-          })
-        )
+        const { remoteAgent } = await bindRemoteAgent({
+          workspaceId: request.params.workspaceId,
+          remoteAgentId: request.params.remoteAgentId,
+          userId: getRequestUserId(request),
+          machineId: body.machineId,
+          runtimeKind: body.runtimeKind,
+          runtimePath: body.runtimePath,
+          localRootPath: body.localRootPath,
+        })
+        return reply.send({
+          remoteAgent: presentRemoteAgent(
+            remoteAgent,
+            remoteAgent.requiresContactApproval
+          ),
+        })
       } catch (error) {
         return sendServiceError(reply, error)
       }
@@ -225,13 +246,16 @@ export default async function remoteAgentsController(app: FastifyInstance) {
       )
       if (!allowed) return
       try {
-        return reply.send(
-          await listRemoteAgentGroupTaskGrants({
-            workspaceId: request.params.workspaceId,
-            remoteAgentId: request.params.remoteAgentId,
-            userId: getRequestUserId(request),
-          })
-        )
+        const { grants } = await listRemoteAgentGroupTaskGrants({
+          workspaceId: request.params.workspaceId,
+          remoteAgentId: request.params.remoteAgentId,
+          userId: getRequestUserId(request),
+        })
+        return reply.send({
+          grants: grants.map((grant) =>
+            presentGroupTaskGrant(grant, grant.avatarUrl)
+          ),
+        })
       } catch (error) {
         return sendServiceError(reply, error)
       }
@@ -255,14 +279,17 @@ export default async function remoteAgentsController(app: FastifyInstance) {
       if (!allowed) return
       try {
         const body = groupTaskGrantsSchema.parse(request.body)
-        return reply.send(
-          await updateRemoteAgentGroupTaskGrants({
-            workspaceId: request.params.workspaceId,
-            remoteAgentId: request.params.remoteAgentId,
-            userId: getRequestUserId(request),
-            workspaceMemberIds: body.workspaceMemberIds,
-          })
-        )
+        const { grants } = await updateRemoteAgentGroupTaskGrants({
+          workspaceId: request.params.workspaceId,
+          remoteAgentId: request.params.remoteAgentId,
+          userId: getRequestUserId(request),
+          workspaceMemberIds: body.workspaceMemberIds,
+        })
+        return reply.send({
+          grants: grants.map((grant) =>
+            presentGroupTaskGrant(grant, grant.avatarUrl)
+          ),
+        })
       } catch (error) {
         return sendServiceError(reply, error)
       }
@@ -279,14 +306,18 @@ export default async function remoteAgentsController(app: FastifyInstance) {
       if (!(await requireWorkspaceRemoteAgentAdmin(request, reply))) return
       try {
         const body = createMachineSchema.parse(request.body)
-        return reply.status(201).send(
-          await createRemoteAgentMachinePairingSession({
-            workspaceId: request.params.workspaceId,
-            userId: getRequestUserId(request),
-            title: body.title,
-            description: body.description,
-          })
-        )
+        const session = await createRemoteAgentMachinePairingSession({
+          workspaceId: request.params.workspaceId,
+          userId: getRequestUserId(request),
+          title: body.title,
+          description: body.description,
+        })
+        return reply.status(201).send({
+          machine: presentMachineFromCamelRow(session.machine),
+          apiKey: session.apiKey,
+          daemonCommand: session.daemonCommand,
+          oneClickCommands: session.oneClickCommands,
+        })
       } catch (error) {
         return sendServiceError(reply, error)
       }
@@ -300,12 +331,13 @@ export default async function remoteAgentsController(app: FastifyInstance) {
     { preHandler: workspacePreHandler },
     async (request, reply) => {
       try {
-        return reply.send(
-          await listRemoteAgentMachines({
-            workspaceId: request.params.workspaceId,
-            userId: getRequestUserId(request),
-          })
-        )
+        const { machines } = await listRemoteAgentMachines({
+          workspaceId: request.params.workspaceId,
+          userId: getRequestUserId(request),
+        })
+        return reply.send({
+          machines: machines.map(presentMachineListItem),
+        })
       } catch (error) {
         return sendServiceError(reply, error)
       }
@@ -319,13 +351,16 @@ export default async function remoteAgentsController(app: FastifyInstance) {
     { preHandler: workspacePreHandler },
     async (request, reply) => {
       try {
-        return reply.send(
-          await getRemoteAgentMachine({
-            workspaceId: request.params.workspaceId,
-            machineId: request.params.machineId,
-            userId: getRequestUserId(request),
-          })
-        )
+        const detail = await getRemoteAgentMachine({
+          workspaceId: request.params.workspaceId,
+          machineId: request.params.machineId,
+          userId: getRequestUserId(request),
+        })
+        return reply.send({
+          machine: presentMachineFromCamelRow(detail.machine),
+          runtimeCatalog: detail.runtimeCatalog.map(presentRuntimeCatalogEntry),
+          bindings: detail.bindings.map(presentMachineBinding),
+        })
       } catch (error) {
         return sendServiceError(reply, error)
       }
@@ -405,12 +440,13 @@ export default async function remoteAgentsController(app: FastifyInstance) {
       `${prefix}/remote-agents/:remoteAgentId/conversations`,
       async (request, reply) => {
         try {
-          return reply.send(
-            await listRemoteAgentConversations({
-              remoteAgentId: request.params.remoteAgentId,
-              machineKey: getMachineKeyFromHeaders(request),
-            })
-          )
+          const { conversations } = await listRemoteAgentConversations({
+            remoteAgentId: request.params.remoteAgentId,
+            machineKey: getMachineKeyFromHeaders(request),
+          })
+          return reply.send({
+            conversations: conversations.map(presentRemoteAgentConversation),
+          })
         } catch (error) {
           return sendServiceError(reply, error)
         }
@@ -425,13 +461,14 @@ export default async function remoteAgentsController(app: FastifyInstance) {
       async (request, reply) => {
         try {
           const query = checkMessagesQuerySchema.parse(request.query)
-          return reply.send(
-            await checkRemoteAgentMessages({
-              remoteAgentId: request.params.remoteAgentId,
-              machineKey: getMachineKeyFromHeaders(request),
-              limit: query.limit,
-            })
-          )
+          const { deliveries } = await checkRemoteAgentMessages({
+            remoteAgentId: request.params.remoteAgentId,
+            machineKey: getMachineKeyFromHeaders(request),
+            limit: query.limit,
+          })
+          return reply.send({
+            deliveries: deliveries.map(presentMessageDelivery),
+          })
         } catch (error) {
           return sendServiceError(reply, error)
         }

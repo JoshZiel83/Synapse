@@ -5,6 +5,11 @@ import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { requireRequestAction } from "../access/guards.js"
 import {
+  presentActorAccessRequest,
+  presentFriendRequest,
+  presentRemoteAgentAccessRequest,
+} from "./presenter.js"
+import {
   getActorRelationshipProfile,
   getContactHub,
   getContactHubDetail,
@@ -314,12 +319,14 @@ export default async function relationshipController(app: FastifyInstance) {
     "/api/v1/workspaces/:workspaceId/friend-requests",
     async (request, reply) => {
       const userId = (request as any).user!.userId
-      return reply.send(
-        await listFriendRequests({
-          workspaceId: request.params.workspaceId,
-          userId,
-        })
-      )
+      const requests = await listFriendRequests({
+        workspaceId: request.params.workspaceId,
+        userId,
+      })
+      return reply.send({
+        incoming: requests.incoming.map(presentFriendRequest),
+        outgoing: requests.outgoing.map(presentFriendRequest),
+      })
     }
   )
 
@@ -371,12 +378,14 @@ export default async function relationshipController(app: FastifyInstance) {
     "/api/v1/workspaces/:workspaceId/actor-access-requests",
     async (request, reply) => {
       const userId = (request as any).user!.userId
-      return reply.send(
-        await listActorAccessRequests({
-          workspaceId: request.params.workspaceId,
-          userId,
-        })
-      )
+      const requests = await listActorAccessRequests({
+        workspaceId: request.params.workspaceId,
+        userId,
+      })
+      return reply.send({
+        incoming: requests.incoming.map(presentActorAccessRequest),
+        outgoing: requests.outgoing.map(presentActorAccessRequest),
+      })
     }
   )
 
@@ -386,12 +395,14 @@ export default async function relationshipController(app: FastifyInstance) {
     "/api/v1/workspaces/:workspaceId/remote-agent-access-requests",
     async (request, reply) => {
       const userId = (request as any).user!.userId
-      return reply.send(
-        await listRemoteAgentAccessRequests({
-          workspaceId: request.params.workspaceId,
-          userId,
-        })
-      )
+      const requests = await listRemoteAgentAccessRequests({
+        workspaceId: request.params.workspaceId,
+        userId,
+      })
+      return reply.send({
+        incoming: requests.incoming.map(presentRemoteAgentAccessRequest),
+        outgoing: requests.outgoing.map(presentRemoteAgentAccessRequest),
+      })
     }
   )
 

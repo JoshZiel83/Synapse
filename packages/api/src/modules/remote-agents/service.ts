@@ -33,15 +33,9 @@ import {
   type Executor,
 } from "../../infrastructure/database/kysely.js"
 import {
-  presentGroupTaskGrant,
-  presentMachineFromCamelRow,
-  presentMachineListItem,
-  presentMessageDelivery,
-  presentRemoteAgent,
-  presentRemoteAgentConversation,
-  presentRuntimeCatalogEntry,
   presentRuntimeSnapshot,
-  presentRuntimeSummary,
+  type RemoteAgentConversationRecord,
+  type RemoteAgentRecord,
   type RemoteAgentRow,
 } from "./presenter.js"
 import {
@@ -1500,14 +1494,17 @@ async function emitRemoteAgentRuntimeUpdated(
   return snapshot
 }
 
-async function toRemoteAgentView(row: RemoteAgentRow) {
+async function toRemoteAgentRecord(
+  row: RemoteAgentRow
+): Promise<RemoteAgentRecord> {
   const requiresContactApproval = await deriveRequiresContactApproval(
     db,
     "remote_agent",
     row.id,
     row.workspaceId
   )
-  return presentRemoteAgent(row, requiresContactApproval)
+  const record: RemoteAgentRecord = { ...row, requiresContactApproval }
+  return record
 }
 
 export async function listRemoteAgents(params: {
@@ -1580,7 +1577,7 @@ export async function listRemoteAgents(params: {
     [params.workspaceId, visibleIds]
   )
   return {
-    remoteAgents: await Promise.all(result.rows.map(toRemoteAgentView)),
+    remoteAgents: await Promise.all(result.rows.map(toRemoteAgentRecord)),
   }
 }
 
@@ -1660,7 +1657,7 @@ export async function getRemoteAgent(params: {
     throw new Error("Remote agent not found")
   }
   return {
-    remoteAgent: await toRemoteAgentView(row),
+    remoteAgent: await toRemoteAgentRecord(row),
   }
 }
 
@@ -1741,7 +1738,7 @@ export async function createRemoteAgent(params: {
     return row
   })
   return {
-    remoteAgent: await toRemoteAgentView({
+    remoteAgent: await toRemoteAgentRecord({
       ...insertedRow,
       workspaceId: params.workspaceId,
       displayName: params.displayName.trim(),
@@ -1871,7 +1868,7 @@ export async function createRemoteAgentMachinePairingSession(params: {
   )
 
   return {
-    machine: presentMachineFromCamelRow(result.rows[0]!),
+    machine: result.rows[0]!,
     apiKey,
     daemonCommand: buildDaemonCommand(apiKey),
     oneClickCommands: buildDaemonOneClick(apiKey),
@@ -1900,7 +1897,7 @@ export async function listRemoteAgentMachines(params: {
     [params.workspaceId]
   )
   return {
-    machines: result.rows.map(presentMachineListItem),
+    machines: result.rows,
   }
 }
 
@@ -1976,17 +1973,9 @@ export async function getRemoteAgentMachine(params: {
   }
 
   return {
-    machine: presentMachineFromCamelRow(machine),
-    runtimeCatalog: catalogResult.rows.map(presentRuntimeCatalogEntry),
-    bindings: bindingResult.rows.map((row) => ({
-      remoteAgentId: row.remoteAgentId,
-      displayName: row.displayName,
-      runtimeKind: row.runtimeKind,
-      runtimePath: row.runtimePath ?? undefined,
-      localRootPath: row.localRootPath ?? undefined,
-      status: row.status,
-      runtimeSummary: presentRuntimeSummary(row),
-    })),
+    machine,
+    runtimeCatalog: catalogResult.rows,
+    bindings: bindingResult.rows,
   }
 }
 
@@ -2121,12 +2110,12 @@ export async function listRemoteAgentGroupTaskGrants(params: {
     [params.remoteAgentId]
   )
   return {
-    grants: result.rows.map((row) =>
-      presentGroupTaskGrant(
-        row,
-        row.userAvatarFileId ? getFileUrlById(row.userAvatarFileId) : undefined
-      )
-    ),
+    grants: result.rows.map((row) => ({
+      ...row,
+      avatarUrl: row.userAvatarFileId
+        ? getFileUrlById(row.userAvatarFileId)
+        : undefined,
+    })),
   }
 }
 
@@ -2409,7 +2398,7 @@ export async function listRemoteAgentConversations(params: {
     [params.remoteAgentId]
   )
   return {
-    conversations: result.rows.map(presentRemoteAgentConversation),
+    conversations: result.rows as RemoteAgentConversationRecord[],
   }
 }
 
@@ -2451,7 +2440,7 @@ export async function checkRemoteAgentMessages(params: {
   )
 
   return {
-    deliveries: result.rows.map(presentMessageDelivery),
+    deliveries: result.rows,
   }
 }
 

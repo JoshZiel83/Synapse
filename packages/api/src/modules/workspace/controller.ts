@@ -35,6 +35,12 @@ import {
   type WorkspaceAccessKey,
 } from "./service.js"
 import {
+  presentActorRow,
+  presentMemberRow,
+  presentWorkspaceListRow,
+  presentWorkspaceRow,
+} from "./presenter.js"
+import {
   listWorkspaceCapabilityConversationTypePolicies,
   updateWorkspaceCapabilityConversationTypePolicies,
 } from "../capabilities/conversation-type-policies.js"
@@ -150,7 +156,10 @@ export async function handleCreateWorkspace(
     userId: (request as any).user!.userId,
   })
 
-  return reply.status(201).send(workspace)
+  return reply.status(201).send({
+    ...presentWorkspaceRow(workspace.workspace),
+    secretary: presentActorRow(workspace.secretary),
+  })
 }
 
 export async function handleListWorkspaces(
@@ -158,7 +167,7 @@ export async function handleListWorkspaces(
   reply: FastifyReply
 ) {
   const workspaces = await listUserWorkspaces((request as any).user!.userId)
-  return reply.send({ data: workspaces })
+  return reply.send({ data: workspaces.map(presentWorkspaceListRow) })
 }
 
 export async function handleGetWorkspace(
@@ -178,7 +187,7 @@ export async function handleGetWorkspace(
     return reply.status(404).send({ error: "Workspace not found" })
   }
 
-  return reply.send(workspace)
+  return reply.send(presentWorkspaceRow(workspace))
 }
 
 export async function handleUpdateWorkspace(
@@ -209,7 +218,7 @@ export async function handleUpdateWorkspace(
     return reply.status(404).send({ error: "Workspace not found" })
   }
 
-  return reply.send(workspace)
+  return reply.send(presentWorkspaceRow(workspace))
 }
 
 export async function handleDeleteWorkspace(
@@ -264,7 +273,7 @@ export async function handleAddMember(
       .send({ error: "User is already a member of this workspace" })
   }
 
-  return reply.status(201).send(member)
+  return reply.status(201).send(presentMemberRow(member))
 }
 
 export async function handleListMembers(

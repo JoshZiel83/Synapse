@@ -20,7 +20,13 @@ import {
   StartPairingInputSchema,
   ClaimDaemonServiceInputSchema,
   CreateCloudDeviceInputSchema,
+  CreateCloudDeviceResultViewSchema,
+  DeviceViewSchema,
+  DeviceDetailViewSchema,
+  DevicePairingTicketViewSchema,
+  DeviceServiceViewSchema,
 } from "@synapse/shared/schemas"
+import { sendData } from "../../infrastructure/http/respond.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { requireRequestAction } from "../access/guards.js"
@@ -127,7 +133,7 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
         return
       try {
         const records = await listDevices(workspaceId)
-        reply.send({ devices: records.map(presentDevice) })
+        sendData(reply, z.array(DeviceViewSchema), records.map(presentDevice))
       } catch (err) {
         if (sendModuleError(reply, err)) return
         throw err
@@ -154,7 +160,11 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
       )
         return
       try {
-        reply.send(presentDeviceDetail(await getDevice(workspaceId, deviceId)))
+        sendData(
+          reply,
+          DeviceDetailViewSchema,
+          presentDeviceDetail(await getDevice(workspaceId, deviceId))
+        )
       } catch (err) {
         if (sendModuleError(reply, err)) return
         throw err
@@ -229,7 +239,11 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
           deviceId: parsed.data.deviceId,
           context: parsed.data.context,
         })
-        reply.send(presentDevicePairingTicket(result))
+        sendData(
+          reply,
+          DevicePairingTicketViewSchema,
+          presentDevicePairingTicket(result)
+        )
       } catch (err) {
         if (sendModuleError(reply, err)) return
         throw err
@@ -305,7 +319,7 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
           deviceId,
           remoteAgentMachineId: parsed.data.remoteAgentMachineId,
         })
-        reply.send(presentDeviceService(service))
+        sendData(reply, DeviceServiceViewSchema, presentDeviceService(service))
       } catch (err) {
         if (sendModuleError(reply, err)) return
         throw err
@@ -389,7 +403,7 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
           hostProvider: parsedBody.data.hostProvider,
           requestedByWorkspaceMemberId: session?.workspaceMemberId ?? null,
         })
-        reply.send(result)
+        sendData(reply, CreateCloudDeviceResultViewSchema, result)
       } catch (err) {
         if (sendModuleError(reply, err)) return
         throw err

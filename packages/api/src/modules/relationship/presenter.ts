@@ -11,9 +11,12 @@ import { serializeOptionalInstant } from "../../infrastructure/datetime.js"
  * semantic transforms (Date → IsoInstantString) so the service/controller
  * never call serializeInstant/serializeOptionalInstant (guard-layering r3).
  * See §5.1 / §10.1.
+ *
+ * The *Record types below are the domain-record shapes the service produces and
+ * the presenter consumes (controller maps record → View right before send).
  */
 
-export function presentFriendRequest(input: {
+export type FriendRequestRecord = {
   id: string
   status: string
   createdAt: Date | null | undefined
@@ -22,7 +25,40 @@ export function presentFriendRequest(input: {
   targetMember?: RelationshipMemberSummaryView | null
   targetActor?: RelationshipActorSummaryView | null
   targetRemoteAgent?: RelationshipRemoteAgentSummaryView | null
-}) {
+}
+
+export type ActorAccessRequestRecord = {
+  id: string
+  status: string
+  createdAt: Date | null | undefined
+  requester?: RelationshipMemberSummaryView | null
+  actor?: RelationshipActorSummaryView | null
+}
+
+export type RemoteAgentAccessRequestRecord = {
+  id: string
+  status: string
+  createdAt: Date | null | undefined
+  requester?: RelationshipMemberSummaryView | null
+  remoteAgent?: RelationshipRemoteAgentSummaryView | null
+}
+
+export type FriendRequestListRecord = {
+  incoming: FriendRequestRecord[]
+  outgoing: FriendRequestRecord[]
+}
+
+export type ActorAccessRequestListRecord = {
+  incoming: ActorAccessRequestRecord[]
+  outgoing: ActorAccessRequestRecord[]
+}
+
+export type RemoteAgentAccessRequestListRecord = {
+  incoming: RemoteAgentAccessRequestRecord[]
+  outgoing: RemoteAgentAccessRequestRecord[]
+}
+
+export function presentFriendRequest(input: FriendRequestRecord) {
   return {
     id: input.id,
     status: input.status,
@@ -35,13 +71,7 @@ export function presentFriendRequest(input: {
   }
 }
 
-export function presentActorAccessRequest(input: {
-  id: string
-  status: string
-  createdAt: Date | null | undefined
-  requester?: RelationshipMemberSummaryView | null
-  actor?: RelationshipActorSummaryView | null
-}) {
+export function presentActorAccessRequest(input: ActorAccessRequestRecord) {
   return {
     id: input.id,
     status: input.status,
@@ -51,13 +81,9 @@ export function presentActorAccessRequest(input: {
   }
 }
 
-export function presentRemoteAgentAccessRequest(input: {
-  id: string
-  status: string
-  createdAt: Date | null | undefined
-  requester?: RelationshipMemberSummaryView | null
-  remoteAgent?: RelationshipRemoteAgentSummaryView | null
-}) {
+export function presentRemoteAgentAccessRequest(
+  input: RemoteAgentAccessRequestRecord
+) {
   return {
     id: input.id,
     status: input.status,

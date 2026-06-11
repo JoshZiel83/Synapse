@@ -80,7 +80,7 @@ const deviceServiceViewJson = {
 }
 
 test("listDevices parses the camelCase DeviceView array (app contract)", async () => {
-  const { sdk, captured } = makeSdk({ devices: [deviceViewJson] })
+  const { sdk, captured } = makeSdk({ data: [deviceViewJson] })
   const devices = await sdk.listDevices(wsId)
   assert.equal(devices.length, 1)
   assert.equal(devices[0]?.workspaceId, wsId)
@@ -91,23 +91,25 @@ test("listDevices parses the camelCase DeviceView array (app contract)", async (
 
 test("getDevice parses the camelCase DeviceDetailView", async () => {
   const { sdk } = makeSdk({
-    ...deviceViewJson,
-    description: null,
-    ownerWorkspaceMemberId: null,
-    services: [deviceServiceViewJson],
-    capabilities: [
-      {
-        id: capId,
-        workspaceId: wsId,
-        exposureId,
-        exposureStableKey: "fs.read",
-        displayName: "Filesystem",
-        transport: "stdio",
-        builtinKind: null,
-        runtimeStatus: "healthy",
-        metadata: null,
-      },
-    ],
+    data: {
+      ...deviceViewJson,
+      description: null,
+      ownerWorkspaceMemberId: null,
+      services: [deviceServiceViewJson],
+      capabilities: [
+        {
+          id: capId,
+          workspaceId: wsId,
+          exposureId,
+          exposureStableKey: "fs.read",
+          displayName: "Filesystem",
+          transport: "stdio",
+          builtinKind: null,
+          runtimeStatus: "healthy",
+          metadata: null,
+        },
+      ],
+    },
   })
   const detail = await sdk.getDevice(wsId, deviceId)
   assert.equal(detail.services[0]?.remoteAgentMachineId, machineId)
@@ -116,10 +118,12 @@ test("getDevice parses the camelCase DeviceDetailView", async () => {
 
 test("createCloudDevice SENDS camelCase body + PARSES camelCase result view", async () => {
   const { sdk, captured } = makeSdk({
-    pendingDeviceId: deviceId,
-    bootstrapToken: "btok",
-    pairingSessionId: "11111111-0000-4000-8000-000000000001",
-    expiresAt: "2099-01-01T00:00:00.000Z",
+    data: {
+      pendingDeviceId: deviceId,
+      bootstrapToken: "btok",
+      pairingSessionId: "11111111-0000-4000-8000-000000000001",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    },
   })
   const result = await sdk.createCloudDevice({
     workspaceId: wsId,
@@ -139,15 +143,17 @@ test("createCloudDevice SENDS camelCase body + PARSES camelCase result view", as
 
 test("startPairing SENDS camelCase body + PARSES the camelCase ticket view", async () => {
   const { sdk, captured } = makeSdk({
-    pairingSessionId: "11111111-0000-4000-8000-000000000002",
-    mode: "service_join",
-    pairingCode: "abc",
-    bootstrapToken: null,
-    expiresAt: "2099-01-01T00:00:00.000Z",
-    verificationUri: null,
-    verificationUriComplete: null,
-    status: "pending",
-    oneClickCommands: null,
+    data: {
+      pairingSessionId: "11111111-0000-4000-8000-000000000002",
+      mode: "service_join",
+      pairingCode: "abc",
+      bootstrapToken: null,
+      expiresAt: "2099-01-01T00:00:00.000Z",
+      verificationUri: null,
+      verificationUriComplete: null,
+      status: "pending",
+      oneClickCommands: null,
+    },
   })
   const ticket = await sdk.startPairing({
     workspaceId: wsId,
@@ -164,7 +170,7 @@ test("startPairing SENDS camelCase body + PARSES the camelCase ticket view", asy
 })
 
 test("claimRemoteAgentDaemon SENDS camelCase body + PARSES the service view", async () => {
-  const { sdk, captured } = makeSdk(deviceServiceViewJson)
+  const { sdk, captured } = makeSdk({ data: deviceServiceViewJson })
   const service = await sdk.claimRemoteAgentDaemon(wsId, deviceId, {
     remoteAgentMachineId: machineId,
   })
@@ -219,9 +225,7 @@ test("consumePairing keeps the snake_case wire shape (device-protocol handshake)
 test("invalid response shape is rejected by the view schema parse", async () => {
   // server returns a snake_case device (regression: the contract is camelCase)
   const { sdk } = makeSdk({
-    devices: [
-      { ...deviceViewJson, workspaceId: undefined, workspace_id: wsId },
-    ],
+    data: [{ ...deviceViewJson, workspaceId: undefined, workspace_id: wsId }],
   })
   await assert.rejects(
     () => sdk.listDevices(wsId),

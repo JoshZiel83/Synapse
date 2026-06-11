@@ -5,6 +5,7 @@ import { getFileUrlById } from "../files/service.js"
 import type {
   ActorRecord,
   WorkspaceChiefActorPreferenceRow,
+  WorkspaceListRow,
   WorkspaceMemberViewRow,
   WorkspaceViewRow,
 } from "./repo.types.js"
@@ -37,6 +38,14 @@ export function presentWorkspaceRow(row: WorkspaceViewRow) {
     isTrusted: Boolean(row.isTrusted),
     createdAt: serializeOptionalInstant(row.createdAt),
     updatedAt: serializeOptionalInstant(row.updatedAt),
+  }
+}
+
+export function presentWorkspaceListRow(row: WorkspaceListRow) {
+  return {
+    ...presentWorkspaceRow(row),
+    currentWorkspaceMemberId: row.currentWorkspaceMemberId ?? undefined,
+    trustLevel: deriveWorkspaceTrustLevel(row),
   }
 }
 

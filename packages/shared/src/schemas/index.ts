@@ -1,4 +1,5 @@
 export * from "./chat-content-block.js"
+export * from "./auth.js"
 export * from "./datetime.js"
 export * from "./devices.js"
 export * from "./mcp-plugins.js"

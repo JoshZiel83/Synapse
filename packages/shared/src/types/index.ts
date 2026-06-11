@@ -4510,6 +4510,11 @@ export type {
   WorkspaceInviteRedeemResult,
 } from "../schemas/workspace-invites.js"
 export type {
+  UserProfileView,
+  AuthSessionSummaryView,
+  AuthMeView,
+} from "../schemas/auth.js"
+export type {
   ModelGroupView,
   ModelGroupItemView,
   ModelGroupGrantView,
@@ -4525,6 +4530,11 @@ export type {
   MarketplacePublisherView,
   PluginCategoryView,
   PluginInstallationDetailView,
+  PluginAuthSessionView,
+  PluginAuthSessionEnvelope,
+  PluginInstallPlanView,
+  PluginInstallPlanEnvelope,
+  PluginAuditLogList,
 } from "../schemas/mcp-plugins.js"
 export type {
   DeviceView,

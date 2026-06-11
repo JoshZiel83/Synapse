@@ -91,22 +91,22 @@ export class DeviceSdk {
   // ───────────────────────────── lifecycle ───────────────────────────────────
 
   async listDevices(workspaceId: string): Promise<DeviceView[]> {
-    const result = await this.request<{ devices: unknown[] }>(
+    const result = await this.request<{ data: unknown[] }>(
       "GET",
       `/api/v1/workspaces/${workspaceId}/devices`
     )
-    return result.devices.map((d) => DeviceViewSchema.parse(d))
+    return result.data.map((d) => DeviceViewSchema.parse(d))
   }
 
   async getDevice(
     workspaceId: string,
     deviceId: string
   ): Promise<DeviceDetailView> {
-    const raw = await this.request<unknown>(
+    const res = await this.request<{ data: unknown }>(
       "GET",
       `/api/v1/workspaces/${workspaceId}/devices/${deviceId}`
     )
-    return DeviceDetailViewSchema.parse(raw)
+    return DeviceDetailViewSchema.parse(res.data)
   }
 
   async deleteDevice(workspaceId: string, deviceId: string): Promise<void> {
@@ -128,12 +128,12 @@ export class DeviceSdk {
     input: CreateCloudDeviceInput
   ): Promise<CreateCloudDeviceResultView> {
     const parsed = CreateCloudDeviceInputSchema.parse(input)
-    const raw = await this.request<unknown>(
+    const res = await this.request<{ data: unknown }>(
       "POST",
       `/api/v1/workspaces/${parsed.workspaceId}/devices/cloud`,
       parsed
     )
-    return CreateCloudDeviceResultViewSchema.parse(raw)
+    return CreateCloudDeviceResultViewSchema.parse(res.data)
   }
 
   // ───────────────────────────── pairing ─────────────────────────────────────
@@ -142,7 +142,7 @@ export class DeviceSdk {
     input: StartPairingInput
   ): Promise<DevicePairingTicketView> {
     const parsed = StartPairingInputSchema.parse(input)
-    const raw = await this.request<unknown>(
+    const res = await this.request<{ data: unknown }>(
       "POST",
       `/api/v1/workspaces/${parsed.workspaceId}/devices/pairing-sessions`,
       {
@@ -154,7 +154,7 @@ export class DeviceSdk {
         selfChallenge: parsed.selfChallenge,
       }
     )
-    return DevicePairingTicketViewSchema.parse(raw)
+    return DevicePairingTicketViewSchema.parse(res.data)
   }
 
   // Used by the Device Runtime (not the chat client), but exposed here so
@@ -182,7 +182,7 @@ export class DeviceSdk {
       serviceKind: "remote_agent_daemon",
       remoteAgentMachineId: input.remoteAgentMachineId,
     })
-    const raw = await this.request<unknown>(
+    const res = await this.request<{ data: unknown }>(
       "POST",
       `/api/v1/workspaces/${workspaceId}/devices/${deviceId}/services`,
       {
@@ -190,7 +190,7 @@ export class DeviceSdk {
         remoteAgentMachineId: parsed.remoteAgentMachineId,
       }
     )
-    return DeviceServiceViewSchema.parse(raw)
+    return DeviceServiceViewSchema.parse(res.data)
   }
 
   async detachService(

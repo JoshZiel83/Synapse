@@ -12,17 +12,24 @@
 // values structurally (the row aliases imported below resolve to TableRow but
 // are pulled in via `import type`, so no generated/db import lands here).
 
-import type { PluginAuthConnection, PluginAuthSession } from "@synapse/shared"
+import type {
+  PluginAuthConnection,
+  PluginAuthSession,
+  MarketplacePublisherView,
+  PluginCategoryView,
+} from "@synapse/shared"
 import { assertIsoInstant } from "@synapse/shared/datetime"
 import {
   serializeInstant,
   serializeOptionalInstant,
   type IsoInstantString,
 } from "../../infrastructure/datetime.js"
+import { getFileUrlById } from "../files/service.js"
 import type {
   PluginAuthSessionRow,
   PluginConnectionRow,
 } from "./plugin-auth-connections.js"
+import type { PluginCategoryRecord, PublisherRecord } from "./repo.types.js"
 
 /** Present a stored instant as an ISO timestamp for the wire DTO. */
 export function presentInstant(value: Date): IsoInstantString {
@@ -129,5 +136,54 @@ export function presentAuthSession(
     expiresAt: serializeInstant(row.expiresAt),
     createdAt: serializeInstant(row.createdAt),
     updatedAt: serializeInstant(row.updatedAt),
+  }
+}
+
+/** Shape a publisher record into the app-facing MarketplacePublisherView DTO. */
+export function presentPublisher(
+  row: PublisherRecord
+): MarketplacePublisherView {
+  return {
+    id: row.id,
+    slug: row.slug,
+    displayName: row.displayName,
+    description: row.description || "",
+    logoUrl: row.logoFileId ? getFileUrlById(row.logoFileId) : null,
+    isBuiltin: Boolean(row.isBuiltin),
+    isVerified: Boolean(row.isVerified),
+    ownerUserId: row.ownerUserId,
+    workspaceId: row.workspaceId,
+    pluginCount:
+      typeof row.pluginCount === "number"
+        ? row.pluginCount
+        : Number(row.pluginCount || 0),
+    createdAt: serializeInstant(row.createdAt),
+    updatedAt: serializeInstant(row.updatedAt),
+  }
+}
+
+/** Shape a plugin-category record into the app-facing PluginCategoryView DTO. */
+export function presentPluginCategory(
+  row: PluginCategoryRecord
+): PluginCategoryView {
+  const metadata = asObject(row.metadata)
+  return {
+    id: row.id,
+    slug: row.slug,
+    displayName: row.displayName,
+    description: row.description || "",
+    displayNameI18n: asObject(metadata.displayNameI18n) as Record<
+      string,
+      string
+    >,
+    descriptionI18n: asObject(metadata.descriptionI18n) as Record<
+      string,
+      string
+    >,
+    defaultLocale:
+      typeof metadata.defaultLocale === "string"
+        ? metadata.defaultLocale
+        : "en",
+    sortOrder: row.sortOrder,
   }
 }

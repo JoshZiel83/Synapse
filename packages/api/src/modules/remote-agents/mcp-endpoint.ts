@@ -27,6 +27,10 @@ import {
   sendRemoteAgentConversationMessage,
 } from "./service.js"
 import { requireRemoteAgentConversationAccess } from "../chat/service.js"
+import {
+  presentMessageDelivery,
+  presentRemoteAgentConversation,
+} from "./presenter.js"
 import { sql } from "kysely"
 import { db } from "../../infrastructure/database/kysely.js"
 import { projectToolsForPrincipal } from "../capability-projection/index.js"
@@ -130,11 +134,13 @@ function buildImTools(params: {
     inputSchema: EMPTY_OBJECT_SCHEMA,
     zodSchema: z.object(listConversationsSchema),
     handler: async () => {
-      const result = await listRemoteAgentConversations({
+      const { conversations } = await listRemoteAgentConversations({
         remoteAgentId: params.remoteAgentId,
         machineKey: params.machineKey,
       })
-      return jsonToolResult(result)
+      return jsonToolResult({
+        conversations: conversations.map(presentRemoteAgentConversation),
+      })
     },
   })
 
@@ -152,13 +158,15 @@ function buildImTools(params: {
       // Scoping to params.conversationId is load-bearing for session
       // isolation: a per-conversation runtime asking the IM surface for
       // "what's queued?" must never see another conversation's deliveries.
-      const result = await checkRemoteAgentMessages({
+      const { deliveries } = await checkRemoteAgentMessages({
         remoteAgentId: params.remoteAgentId,
         machineKey: params.machineKey,
         conversationId: params.conversationId,
         limit,
       })
-      return jsonToolResult(result)
+      return jsonToolResult({
+        deliveries: deliveries.map(presentMessageDelivery),
+      })
     },
   })
 

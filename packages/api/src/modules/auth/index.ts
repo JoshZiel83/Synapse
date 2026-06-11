@@ -10,6 +10,8 @@ import { z } from "zod"
 import { auth } from "./better-auth.js"
 import { resolveOAuthErrorRedirect } from "./oauth-error-routing.js"
 import { getProfile, updateProfile, AuthError } from "./service.js"
+import { AuthMeViewSchema } from "@synapse/shared/schemas"
+import { sendData } from "../../infrastructure/http/respond.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { db, withDbTransaction } from "../../infrastructure/database/kysely.js"
 import {
@@ -197,7 +199,7 @@ const authModule: FastifyPluginAsync = async (app: FastifyInstance) => {
     { preHandler: [authMiddleware] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
-        return reply.status(200).send({
+        return sendData(reply, AuthMeViewSchema, {
           user: await getProfile((request as any).user.userId),
           session: (request as any).authSession,
         })
@@ -213,7 +215,7 @@ const authModule: FastifyPluginAsync = async (app: FastifyInstance) => {
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const body = updateMeSchema.parse(request.body)
-        return reply.status(200).send({
+        return sendData(reply, AuthMeViewSchema, {
           user: await updateProfile((request as any).user.userId, {
             name: body.name,
             avatarFileId: body.avatarFileId,

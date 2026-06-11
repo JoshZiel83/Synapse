@@ -96,6 +96,7 @@ import type {
   AutomationDeliveryRow,
   AutomationEventSourceRow,
   AutomationExecutionRow,
+  AutomationExecutionWithOccurrenceRow,
   AutomationOccurrenceRow,
   AutomationPolicyRow,
   AutomationRuleRow,
@@ -3407,7 +3408,7 @@ export async function listAutomationWebhookEndpoints(workspaceId: string) {
      ORDER BY created_at DESC`,
     [workspaceId]
   )
-  return result.rows.map(presentWebhookEndpoint)
+  return result.rows
 }
 
 export async function listAutomationOccurrences(
@@ -4024,7 +4025,7 @@ export async function listAutomationExecutions(
   ruleId: string,
   limit = 50
 ) {
-  const result = await runQuery<AutomationExecutionRow>(
+  const result = await runQuery<AutomationExecutionWithOccurrenceRow>(
     `SELECT ae.*,
             ar.name AS execution_rule_name,
             ao.occurred_at AS occurrence_occurred_at,
@@ -4049,74 +4050,5 @@ export async function listAutomationExecutions(
     [workspaceId, ruleId, Math.max(1, Math.min(limit, 200))]
   )
 
-  return result.rows.map((row) => {
-    const execution = presentExecution(row)
-    if (!row.occurrence_id || !row.occurrence_occurred_at) {
-      return execution
-    }
-
-    const rawSourceSnapshot = (
-      row as AutomationExecutionRow & {
-        source_snapshot?: Record<string, unknown> | string | null
-      }
-    ).source_snapshot
-    const parsedSourceSnapshot = parseJsonObject(rawSourceSnapshot)
-    const mergedSourceSnapshot = {
-      ...parsedSourceSnapshot,
-      ruleName:
-        (typeof parsedSourceSnapshot.ruleName === "string" &&
-        parsedSourceSnapshot.ruleName.trim()
-          ? parsedSourceSnapshot.ruleName.trim()
-          : null) ||
-        row.execution_rule_name ||
-        undefined,
-    }
-
-    const occurrence = presentOccurrence({
-      id: row.occurrence_id,
-      workspace_id: row.workspace_id,
-      source_kind: row.occurrence_source_kind || "internal",
-      event_source_id: null,
-      event_source_key:
-        (row as AutomationExecutionRow & { event_source_key?: string | null })
-          .event_source_key || null,
-      event_source_name: row.occurrence_event_source_name || null,
-      event_provider_ref:
-        (row as AutomationExecutionRow & { event_provider_ref?: string | null })
-          .event_provider_ref || null,
-      source_locator:
-        (row as AutomationExecutionRow & { source_locator?: string | null })
-          .source_locator || null,
-      match_key:
-        (row as AutomationExecutionRow & { match_key?: string | null })
-          .match_key || null,
-      dedupe_key:
-        (row as AutomationExecutionRow & { dedupe_key?: string | null })
-          .dedupe_key || null,
-      source_snapshot: mergedSourceSnapshot,
-      payload:
-        (
-          row as AutomationExecutionRow & {
-            payload?: Record<string, unknown> | string | null
-          }
-        ).payload || {},
-      occurred_at: row.occurrence_occurred_at,
-      created_at:
-        (
-          row as AutomationExecutionRow & {
-            occurrence_created_at?: Date | null
-          }
-        ).occurrence_created_at || row.occurrence_occurred_at,
-    })
-
-    return {
-      ...execution,
-      occurrenceOccurredAt: occurrence.occurredAt,
-      occurrenceSourceKind: occurrence.sourceKind,
-      occurrenceEventSourceName: occurrence.eventSourceName,
-      occurrenceTitle: occurrence.displayTitle,
-      occurrenceSummary: occurrence.displaySummary,
-      occurrenceDescription: occurrence.displayDescription,
-    }
-  })
+  return result.rows
 }

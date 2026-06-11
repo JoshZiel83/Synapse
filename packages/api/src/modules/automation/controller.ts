@@ -48,6 +48,10 @@ import {
   updateAutomationEventSourceAccessGrant,
   updateAutomationRule,
 } from "./service.js"
+import {
+  presentExecutionWithOccurrence,
+  presentWebhookEndpoint,
+} from "./presenter.js"
 import { enqueueAutomationExecutionJobs } from "../../workers/queues.js"
 
 const contentBlocksSchema = z.array(z.any()).optional()
@@ -776,7 +780,11 @@ export default async function automationController(app: FastifyInstance) {
       )
       if (!allowed) return
 
-      return listAutomationExecutions(workspaceId, automationId)
+      const executions = await listAutomationExecutions(
+        workspaceId,
+        automationId
+      )
+      return executions.map(presentExecutionWithOccurrence)
     }
   )
 
@@ -794,7 +802,8 @@ export default async function automationController(app: FastifyInstance) {
       )
       if (!allowed) return
 
-      return listAutomationWebhookEndpoints(workspaceId)
+      const endpoints = await listAutomationWebhookEndpoints(workspaceId)
+      return endpoints.map(presentWebhookEndpoint)
     }
   )
 

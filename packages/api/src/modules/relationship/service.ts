@@ -1,9 +1,9 @@
 import { sql } from "kysely"
 import { v4 as uuidv4 } from "uuid"
-import {
-  presentActorAccessRequest,
-  presentFriendRequest,
-  presentRemoteAgentAccessRequest,
+import type {
+  ActorAccessRequestListRecord,
+  FriendRequestListRecord,
+  RemoteAgentAccessRequestListRecord,
 } from "./presenter.js"
 import {
   CONTACT_DIRECT_STATE,
@@ -2803,7 +2803,7 @@ export async function listFriends(params: {
 export async function listFriendRequests(params: {
   workspaceId: string
   userId: string
-}) {
+}): Promise<FriendRequestListRecord> {
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
     params.userId
@@ -2898,18 +2898,16 @@ export async function listFriendRequests(params: {
       row.targetKind === "remote_agent" && row.targetRemoteAgentId
         ? await getRemoteAgentSummary(row.targetRemoteAgentId)
         : null
-    incoming.push(
-      presentFriendRequest({
-        id: row.id,
-        status: row.status,
-        createdAt: row.createdAt,
-        requester,
-        targetType: subjectKindToRelationshipPeerType(row.targetKind),
-        targetMember,
-        targetActor,
-        targetRemoteAgent,
-      })
-    )
+    incoming.push({
+      id: row.id,
+      status: row.status,
+      createdAt: row.createdAt,
+      requester,
+      targetType: subjectKindToRelationshipPeerType(row.targetKind),
+      targetMember,
+      targetActor,
+      targetRemoteAgent,
+    })
   }
 
   const outgoing = []
@@ -2926,17 +2924,15 @@ export async function listFriendRequests(params: {
       row.targetKind === "remote_agent" && row.targetRemoteAgentId
         ? await getRemoteAgentSummary(row.targetRemoteAgentId)
         : null
-    outgoing.push(
-      presentFriendRequest({
-        id: row.id,
-        status: row.status,
-        createdAt: row.createdAt,
-        targetType: subjectKindToRelationshipPeerType(row.targetKind),
-        targetMember,
-        targetActor,
-        targetRemoteAgent,
-      })
-    )
+    outgoing.push({
+      id: row.id,
+      status: row.status,
+      createdAt: row.createdAt,
+      targetType: subjectKindToRelationshipPeerType(row.targetKind),
+      targetMember,
+      targetActor,
+      targetRemoteAgent,
+    })
   }
 
   return { incoming, outgoing }
@@ -3065,7 +3061,7 @@ export async function resolveFriendRequest(params: {
 export async function listActorAccessRequests(params: {
   workspaceId: string
   userId: string
-}) {
+}): Promise<ActorAccessRequestListRecord> {
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
     params.userId
@@ -3130,30 +3126,26 @@ export async function listActorAccessRequests(params: {
       resourceId: row.actorId,
     })
     if (!canApprove) continue
-    incoming.push(
-      presentActorAccessRequest({
-        id: row.id,
-        status: row.status,
-        createdAt: row.createdAt,
-        requester: await getWorkspaceMemberSummaryById(
-          row.requesterWorkspaceMemberId
-        ),
-        actor: await getActorSummary(row.actorId),
-      })
-    )
+    incoming.push({
+      id: row.id,
+      status: row.status,
+      createdAt: row.createdAt,
+      requester: await getWorkspaceMemberSummaryById(
+        row.requesterWorkspaceMemberId
+      ),
+      actor: await getActorSummary(row.actorId),
+    })
   }
 
   const outgoing = []
   for (const row of outgoingRows) {
     if (!row.actorId) continue
-    outgoing.push(
-      presentActorAccessRequest({
-        id: row.id,
-        status: row.status,
-        createdAt: row.createdAt,
-        actor: await getActorSummary(row.actorId),
-      })
-    )
+    outgoing.push({
+      id: row.id,
+      status: row.status,
+      createdAt: row.createdAt,
+      actor: await getActorSummary(row.actorId),
+    })
   }
 
   return { incoming, outgoing }
@@ -3162,7 +3154,7 @@ export async function listActorAccessRequests(params: {
 export async function listRemoteAgentAccessRequests(params: {
   workspaceId: string
   userId: string
-}) {
+}): Promise<RemoteAgentAccessRequestListRecord> {
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
     params.userId
@@ -3217,30 +3209,26 @@ export async function listRemoteAgentAccessRequests(params: {
       resourceId: remoteAgentId,
     })
     if (!canApprove) continue
-    incoming.push(
-      presentRemoteAgentAccessRequest({
-        id: row.id,
-        status: row.status,
-        createdAt: row.createdAt,
-        requester: await getWorkspaceMemberSummaryById(
-          row.requesterWorkspaceMemberId
-        ),
-        remoteAgent: await getRemoteAgentSummary(remoteAgentId),
-      })
-    )
+    incoming.push({
+      id: row.id,
+      status: row.status,
+      createdAt: row.createdAt,
+      requester: await getWorkspaceMemberSummaryById(
+        row.requesterWorkspaceMemberId
+      ),
+      remoteAgent: await getRemoteAgentSummary(remoteAgentId),
+    })
   }
 
   const outgoing = []
   for (const row of outgoingRows) {
     if (!row.remoteAgentId) continue
-    outgoing.push(
-      presentRemoteAgentAccessRequest({
-        id: row.id,
-        status: row.status,
-        createdAt: row.createdAt,
-        remoteAgent: await getRemoteAgentSummary(row.remoteAgentId),
-      })
-    )
+    outgoing.push({
+      id: row.id,
+      status: row.status,
+      createdAt: row.createdAt,
+      remoteAgent: await getRemoteAgentSummary(row.remoteAgentId),
+    })
   }
 
   return { incoming, outgoing }

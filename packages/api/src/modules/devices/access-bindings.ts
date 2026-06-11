@@ -13,7 +13,11 @@ import { z } from "zod"
 import { formatValidationDetails } from "../../infrastructure/validation-error.js"
 import type { FastifyInstance } from "fastify"
 import { type DeviceCapabilityAccessTarget } from "@synapse/device-protocol"
-import { SetActiveDeviceCapabilitiesInputSchema } from "@synapse/shared/schemas"
+import {
+  SetActiveDeviceCapabilitiesInputSchema,
+  ActiveDeviceCapabilitiesViewSchema,
+} from "@synapse/shared/schemas"
+import { sendData } from "../../infrastructure/http/respond.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { requireRequestAction } from "../access/guards.js"
@@ -452,7 +456,9 @@ export function registerDeviceAccessBindingRoutes(app: FastifyInstance): void {
           workspaceId,
           target,
         })
-        reply.send({ deviceCapabilityIds: ids })
+        sendData(reply, ActiveDeviceCapabilitiesViewSchema, {
+          deviceCapabilityIds: ids,
+        })
       } catch (err) {
         reply
           .status(500)

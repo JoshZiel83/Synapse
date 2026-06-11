@@ -1,4 +1,5 @@
 import type {
+  ActorDoc,
   ActorPackageSyncMode,
   ActorRole,
   ActorUpdateSourceType,
@@ -70,6 +71,17 @@ export type ActorVersionRow = {
   source_conversation_id: string | null
   source_reason: string | null
   created_at: Date
+}
+
+/**
+ * Presenter input for an actor version: the raw version row paired with its
+ * resolved docs. The service assembles this record (row + docs) and the
+ * controller maps it through {@link presentActorVersionRow} at the boundary,
+ * keeping `serializeInstant` (Date→IsoInstantString) in the presenter layer.
+ */
+export type ActorVersionRecord = {
+  row: ActorVersionRow
+  docs: ActorDoc[]
 }
 
 export type ActorPackageRow = {

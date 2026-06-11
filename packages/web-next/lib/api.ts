@@ -343,11 +343,16 @@ class ApiClient {
     })
     return { url: res.url }
   }
-  getMe() {
-    return this.fetch("/auth/me")
+  async getMe() {
+    const res = await this.fetch("/auth/me")
+    return res.data
   }
-  updateMe(data: { name?: string; avatarFileId?: string | null }) {
-    return this.fetch("/auth/me", { method: "PUT", body: JSON.stringify(data) })
+  async updateMe(data: { name?: string; avatarFileId?: string | null }) {
+    const res = await this.fetch("/auth/me", {
+      method: "PUT",
+      body: JSON.stringify(data),
+    })
+    return res.data
   }
 
   // Workspaces
@@ -2153,7 +2158,7 @@ class ApiClient {
       method: "DELETE",
     })
   }
-  startPluginAuth(
+  async startPluginAuth(
     wsId: string,
     pluginId: string,
     bindingKey: string,
@@ -2163,22 +2168,27 @@ class ApiClient {
       metadata?: Record<string, unknown>
     }
   ) {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/mcp/plugins/${pluginId}/auth/${bindingKey}/start`,
       { method: "POST", body: JSON.stringify(data || {}) }
     )
+    return res.data
   }
-  getPluginAuthSession(wsId: string, sessionId: string) {
-    return this.fetch(`/workspaces/${wsId}/mcp/auth/sessions/${sessionId}`)
+  async getPluginAuthSession(wsId: string, sessionId: string) {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/mcp/auth/sessions/${sessionId}`
+    )
+    return res.data
   }
-  inspectPluginAuthSession(wsId: string, sessionId: string) {
-    return this.fetch(
+  async inspectPluginAuthSession(wsId: string, sessionId: string) {
+    const res = await this.fetch(
       `/workspaces/${wsId}/mcp/auth/sessions/${sessionId}/inspect`,
       {
         method: "POST",
         body: "{}",
       }
     )
+    return res.data
   }
 
   // MCP Audit
@@ -2194,18 +2204,20 @@ class ApiClient {
   }
 
   // Devices (v3)
-  listDevices(wsId: string): Promise<{ devices: DeviceView[] }> {
-    return this.fetch(`/workspaces/${wsId}/devices`)
+  async listDevices(wsId: string): Promise<{ devices: DeviceView[] }> {
+    const res = await this.fetch(`/workspaces/${wsId}/devices`)
+    return { devices: res.data }
   }
-  getDevice(wsId: string, deviceId: string): Promise<DeviceDetailView> {
-    return this.fetch(`/workspaces/${wsId}/devices/${deviceId}`)
+  async getDevice(wsId: string, deviceId: string): Promise<DeviceDetailView> {
+    const res = await this.fetch(`/workspaces/${wsId}/devices/${deviceId}`)
+    return res.data
   }
   deleteDevice(wsId: string, deviceId: string): Promise<void> {
     return this.fetch(`/workspaces/${wsId}/devices/${deviceId}`, {
       method: "DELETE",
     })
   }
-  startDevicePairingSession(
+  async startDevicePairingSession(
     wsId: string,
     body: {
       mode: "local_qr" | "cloud_bootstrap" | "service_join"
@@ -2215,23 +2227,31 @@ class ApiClient {
       context?: Record<string, unknown>
     }
   ): Promise<DevicePairingTicketView> {
-    return this.fetch(`/workspaces/${wsId}/devices/pairing-sessions`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    })
+    const res = await this.fetch(
+      `/workspaces/${wsId}/devices/pairing-sessions`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      }
+    )
+    return res.data
   }
-  claimRemoteAgentDaemon(
+  async claimRemoteAgentDaemon(
     wsId: string,
     deviceId: string,
     remoteAgentMachineId: string
   ): Promise<DeviceServiceView> {
-    return this.fetch(`/workspaces/${wsId}/devices/${deviceId}/services`, {
-      method: "POST",
-      body: JSON.stringify({
-        serviceKind: "remote_agent_daemon",
-        remoteAgentMachineId,
-      }),
-    })
+    const res = await this.fetch(
+      `/workspaces/${wsId}/devices/${deviceId}/services`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          serviceKind: "remote_agent_daemon",
+          remoteAgentMachineId,
+        }),
+      }
+    )
+    return res.data
   }
   detachDeviceService(
     wsId: string,

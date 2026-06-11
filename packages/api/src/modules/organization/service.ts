@@ -16,7 +16,6 @@ import {
   type ActorPackageRecord,
   type ActorPackageSyncMode,
   type ActorRole,
-  type ActorVersion,
   type ActorVersionChange,
   type ActorVersionSource,
   type ActorVersionChangedField,
@@ -34,19 +33,17 @@ import {
   type Executor,
 } from "../../infrastructure/database/kysely.js"
 import { createConversationEvent } from "../chat/service.js"
-import {
-  presentActorPackageRecord,
-  presentActorRow,
-  presentActorVersionRow,
-} from "./presenter.js"
+import { presentActorPackageRecord, presentActorRow } from "./presenter.js"
 import type {
   ActorPackageRow,
   ActorRow,
+  ActorVersionRecord,
   ActorVersionRow,
 } from "./repo.types.js"
 export type {
   ActorPackageRow,
   ActorRow,
+  ActorVersionRecord,
   ActorVersionRow,
 } from "./repo.types.js"
 import {
@@ -627,7 +624,7 @@ export async function getActor(
 export async function listActorVersions(
   actorId: UUID,
   workspaceId: UUID
-): Promise<ActorVersion[]> {
+): Promise<ActorVersionRecord[]> {
   const actorExists = await runQuery<{ id: string }>(
     `SELECT actor.id
      FROM actors actor
@@ -675,9 +672,10 @@ export async function listActorVersions(
     result.rows.map((row) => row.id)
   )
 
-  return result.rows.map((row) =>
-    presentActorVersionRow(row, docsByVersionId.get(row.id) || [])
-  )
+  return result.rows.map((row) => ({
+    row,
+    docs: docsByVersionId.get(row.id) || [],
+  }))
 }
 
 export async function createActor(input: {

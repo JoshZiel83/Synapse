@@ -25,6 +25,7 @@ import { requireRequestAction } from "../access/guards.js"
 import { workspaceMemberSubject } from "../access/service.js"
 import type { AccessAction } from "../access/actions.js"
 import * as service from "./service.js"
+import { presentActorVersionRow } from "./presenter.js"
 
 const actorDocKeys = new Set(
   ACTOR_DOC_TEMPLATES.map((template) => template.key)
@@ -269,7 +270,9 @@ export async function organizationController(app: FastifyInstance) {
     if (!allowed) return
 
     const versions = await service.listActorVersions(actorId, workspaceId)
-    return reply.send(versions)
+    return reply.send(
+      versions.map(({ row, docs }) => presentActorVersionRow(row, docs))
+    )
   })
 
   app.get("/:actorId", async (request, reply) => {

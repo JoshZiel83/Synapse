@@ -89,6 +89,15 @@ export type RemoteAgentRow = RuntimeSummaryRow & {
 }
 
 /**
+ * Domain record handed to the controller for a single remote agent: the joined
+ * agent/binding row plus the `requiresContactApproval` flag the service derives
+ * via a DB read. {@link presentRemoteAgent} turns this into the app View.
+ */
+export type RemoteAgentRecord = RemoteAgentRow & {
+  requiresContactApproval: boolean
+}
+
+/**
  * Present a remote-agent row as a RemoteAgentView. `requiresContactApproval` is
  * derived by the caller (it needs a DB read) and injected here so this stays a
  * pure synchronous presentation transform.
@@ -195,8 +204,8 @@ export function presentRuntimeSnapshot(input: RuntimeSnapshotInput) {
   }
 }
 
-/** Present an inserted machine row (camelCase columns). */
-export function presentMachineFromCamelRow(row: {
+/** Record shape consumed by {@link presentMachineFromCamelRow}. */
+export type MachineRecord = {
   id: string
   workspaceId: string
   title: string
@@ -206,7 +215,10 @@ export function presentMachineFromCamelRow(row: {
   lastSeenAt?: Date | null
   createdAt?: Date | null
   updatedAt?: Date | null
-}) {
+}
+
+/** Present an inserted machine row (camelCase columns). */
+export function presentMachineFromCamelRow(row: MachineRecord) {
   return {
     id: row.id,
     workspaceId: row.workspaceId,
@@ -220,8 +232,8 @@ export function presentMachineFromCamelRow(row: {
   }
 }
 
-/** Present a machine list-row (camelCase columns) with binding count. */
-export function presentMachineListItem(row: {
+/** Record shape consumed by {@link presentMachineListItem}. */
+export type MachineListRecord = {
   id: string
   workspaceId: string
   title: string
@@ -232,7 +244,10 @@ export function presentMachineListItem(row: {
   lastSeenAt?: Date | null
   createdAt?: Date | null
   updatedAt?: Date | null
-}) {
+}
+
+/** Present a machine list-row (camelCase columns) with binding count. */
+export function presentMachineListItem(row: MachineListRecord) {
   return {
     id: row.id,
     workspaceId: row.workspaceId,
@@ -247,8 +262,8 @@ export function presentMachineListItem(row: {
   }
 }
 
-/** Present a runtime catalog entry row (camelCase columns). */
-export function presentRuntimeCatalogEntry(row: {
+/** Record shape consumed by {@link presentRuntimeCatalogEntry}. */
+export type RuntimeCatalogRecord = {
   runtimeKind: RemoteAgentRuntimeKind
   executablePath?: string | null
   status: string
@@ -256,7 +271,10 @@ export function presentRuntimeCatalogEntry(row: {
   metadata?: unknown
   lastError?: string | null
   lastSeenAt?: Date | null
-}) {
+}
+
+/** Present a runtime catalog entry row (camelCase columns). */
+export function presentRuntimeCatalogEntry(row: RuntimeCatalogRecord) {
   return {
     runtimeKind: row.runtimeKind,
     executablePath: row.executablePath ?? undefined,
@@ -271,16 +289,44 @@ export function presentRuntimeCatalogEntry(row: {
   }
 }
 
+/**
+ * Record shape consumed by {@link presentMachineBinding}: a machine-detail
+ * binding row plus the joined runtime-summary columns.
+ */
+export type MachineBindingRecord = RuntimeSummaryRow & {
+  remoteAgentId: string
+  displayName: string
+  runtimePath?: string | null
+  localRootPath?: string | null
+  status: string
+}
+
+/** Present a machine-detail binding row (with its nested runtime summary). */
+export function presentMachineBinding(row: MachineBindingRecord) {
+  return {
+    remoteAgentId: row.remoteAgentId,
+    displayName: row.displayName,
+    runtimeKind: row.runtimeKind,
+    runtimePath: row.runtimePath ?? undefined,
+    localRootPath: row.localRootPath ?? undefined,
+    status: row.status,
+    runtimeSummary: presentRuntimeSummary(row),
+  }
+}
+
+/** Record shape consumed by {@link presentGroupTaskGrant}. */
+export type GroupTaskGrantRecord = {
+  workspaceMemberId: string
+  grantedByWorkspaceMemberId: string | null
+  createdAt: Date
+  updatedAt: Date
+  userId: string
+  userName: string | null
+}
+
 /** Present a group-task-grant row. `avatarUrl` is resolved by the caller. */
 export function presentGroupTaskGrant(
-  row: {
-    workspaceMemberId: string
-    grantedByWorkspaceMemberId: string | null
-    createdAt: Date
-    updatedAt: Date
-    userId: string
-    userName: string | null
-  },
+  row: GroupTaskGrantRecord,
   avatarUrl: string | undefined
 ) {
   return {
@@ -304,15 +350,20 @@ export function presentGroupTaskGrant(
   }
 }
 
-/** Present a remote-agent conversation list-row. */
-export function presentRemoteAgentConversation(row: {
+/** Record shape consumed by {@link presentRemoteAgentConversation}. */
+export type RemoteAgentConversationRecord = {
   id: string
   kind: string
   isIm?: unknown
   title?: string | null
   unreadCount?: string | number | null
   updatedAt?: Date | null
-}) {
+}
+
+/** Present a remote-agent conversation list-row. */
+export function presentRemoteAgentConversation(
+  row: RemoteAgentConversationRecord
+) {
   return {
     id: row.id,
     kind: row.kind,
@@ -323,15 +374,18 @@ export function presentRemoteAgentConversation(row: {
   }
 }
 
-/** Present a pending message-delivery row for the daemon poll response. */
-export function presentMessageDelivery(row: {
+/** Record shape consumed by {@link presentMessageDelivery}. */
+export type MessageDeliveryRecord = {
   id: string
   conversationId: string
   itemId: string
   sequence: string | number
   createdAt: Date
   status: string
-}) {
+}
+
+/** Present a pending message-delivery row for the daemon poll response. */
+export function presentMessageDelivery(row: MessageDeliveryRecord) {
   return {
     deliveryId: row.id,
     conversationId: row.conversationId,

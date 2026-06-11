@@ -36,8 +36,6 @@ import type {
   RuntimeBindingScope,
   MarketplacePluginView,
   MarketplacePluginCategoryView,
-  MarketplacePublisherView,
-  PluginCategoryView,
   PluginInstallationDetailView,
 } from "@synapse/shared"
 import { CompiledQuery, sql, type RawBuilder, type SqlBool } from "kysely"
@@ -57,8 +55,10 @@ import {
 import { presentInstant, presentOptionalInstant } from "./presenter.js"
 import type {
   CatalogCategoriesMetadata,
+  PluginCategoryRecord,
   PluginInstallationsConfigData,
   PluginPackageVersionSpecsTransport,
+  PublisherRecord,
 } from "./repo.types.js"
 import { emitEvent } from "../../infrastructure/events/index.js"
 import { saveFromBuffer } from "../../infrastructure/storage/file-io.js"
@@ -165,30 +165,6 @@ type PluginCatalogRow = {
   publisherLogoFileId: string | null
   categoriesJson: unknown
   runtimePermissionsJson: unknown
-}
-
-type PluginCategoryRow = {
-  id: string
-  slug: string
-  displayName: string
-  description: string
-  sortOrder: number
-  metadata: unknown
-}
-
-type PublisherRow = {
-  id: string
-  slug: string
-  displayName: string
-  description: string | null
-  logoFileId: string | null
-  ownerUserId: string | null
-  workspaceId: string | null
-  isBuiltin: boolean | null
-  isVerified: boolean | null
-  createdAt: Date
-  updatedAt: Date
-  pluginCount?: string | number | null
 }
 
 type InstallationRow = {
@@ -638,26 +614,6 @@ function mapPluginView(row: PluginCatalogRow): MarketplacePluginView {
     },
     requiresHandshake: parseBoolean(row.specRequiresHandshake),
     metadata: specMetadata,
-  }
-}
-
-function mapPublisherView(row: PublisherRow): MarketplacePublisherView {
-  return {
-    id: row.id,
-    slug: row.slug,
-    displayName: row.displayName,
-    description: row.description || "",
-    logoUrl: row.logoFileId ? getFileUrlById(row.logoFileId) : null,
-    isBuiltin: Boolean(row.isBuiltin),
-    isVerified: Boolean(row.isVerified),
-    ownerUserId: row.ownerUserId,
-    workspaceId: row.workspaceId,
-    pluginCount:
-      typeof row.pluginCount === "number"
-        ? row.pluginCount
-        : Number(row.pluginCount || 0),
-    createdAt: presentInstant(row.createdAt),
-    updatedAt: presentInstant(row.updatedAt),
   }
 }
 
@@ -1512,7 +1468,7 @@ export async function createOrganization(data: {
   isBuiltin?: boolean
   isVerified?: boolean
   ownerUserId?: string
-}): Promise<MarketplacePublisherView> {
+}): Promise<PublisherRecord> {
   const normalizedSlug = sanitizeSlug(data.slug)
   const row = await db
     .insertInto("publishers")
@@ -1542,10 +1498,10 @@ export async function createOrganization(data: {
     .returningAll()
     .executeTakeFirstOrThrow()
 
-  return mapPublisherView(row)
+  return row
 }
 
-export async function listOrganizations(): Promise<MarketplacePublisherView[]> {
+export async function listOrganizations(): Promise<PublisherRecord[]> {
   const rows = await db
     .selectFrom("publishers as publisher")
     .leftJoin("catalogItems as item", (join) =>
@@ -1562,12 +1518,12 @@ export async function listOrganizations(): Promise<MarketplacePublisherView[]> {
     .orderBy("publisher.displayName", "asc")
     .execute()
 
-  return rows.map((row) => mapPublisherView(row))
+  return rows
 }
 
 export async function getOrganization(
   id: string
-): Promise<MarketplacePublisherView | null> {
+): Promise<PublisherRecord | null> {
   const row = await db
     .selectFrom("publishers")
     .selectAll()
@@ -1579,12 +1535,12 @@ export async function getOrganization(
     throw new McpPluginError(404, "Publisher not found")
   }
 
-  return mapPublisherView(row)
+  return row
 }
 
 export async function getOrganizationBySlug(
   slug: string
-): Promise<MarketplacePublisherView | null> {
+): Promise<PublisherRecord | null> {
   const row = await db
     .selectFrom("publishers")
     .selectAll()
@@ -1593,7 +1549,7 @@ export async function getOrganizationBySlug(
     .limit(1)
     .executeTakeFirst()
 
-  return row ? mapPublisherView(row) : null
+  return row ?? null
 }
 
 export async function createPlugin(data: {
@@ -1702,7 +1658,7 @@ export async function listPlugins(filters?: {
   return rows.map(mapPluginView)
 }
 
-export async function listPluginCategories() {
+export async function listPluginCategories(): Promise<PluginCategoryRecord[]> {
   const rows = await db
     .selectFrom("catalogCategories")
     .selectAll()
@@ -1711,28 +1667,7 @@ export async function listPluginCategories() {
     .orderBy("displayName", "asc")
     .execute()
 
-  return rows.map((row): PluginCategoryView => {
-    const metadata = asObject(row.metadata)
-    return {
-      id: row.id,
-      slug: row.slug,
-      displayName: row.displayName,
-      description: row.description || "",
-      displayNameI18n: asObject(metadata.displayNameI18n) as Record<
-        string,
-        string
-      >,
-      descriptionI18n: asObject(metadata.descriptionI18n) as Record<
-        string,
-        string
-      >,
-      defaultLocale:
-        typeof metadata.defaultLocale === "string"
-          ? metadata.defaultLocale
-          : "en",
-      sortOrder: row.sortOrder,
-    }
-  })
+  return rows
 }
 
 export async function getPlugin(id: string): Promise<MarketplacePluginView> {

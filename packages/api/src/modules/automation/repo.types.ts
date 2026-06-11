@@ -175,6 +175,24 @@ export type AutomationExecutionRow = {
   updated_at: Date
 }
 
+/**
+ * AutomationExecutionRow joined with the occurrence columns selected by the
+ * executions-list query (LEFT JOIN automation_occurrences/event_sources). The
+ * service reads these rows; the presenter merges the occurrence projection onto
+ * the execution view.
+ */
+export type AutomationExecutionWithOccurrenceRow = AutomationExecutionRow & {
+  occurrence_source_kind?: AutomationSourceKind | null
+  event_source_key?: string | null
+  event_provider_ref?: string | null
+  source_snapshot?: Record<string, unknown> | string | null
+  payload?: Record<string, unknown> | string | null
+  source_locator?: string | null
+  match_key?: string | null
+  dedupe_key?: string | null
+  occurrence_created_at?: Date | null
+}
+
 export type AutomationWebhookEndpointRow = {
   id: string
   workspace_id: string

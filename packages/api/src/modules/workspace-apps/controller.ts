@@ -38,6 +38,11 @@ import {
   submitWorkspaceAppGrantRequest,
   updateWorkspaceApp,
 } from "./service.js"
+import {
+  presentGrant,
+  presentGrantRequest,
+  presentWorkspaceApp,
+} from "./presenter.js"
 
 const workspaceAppKindSchema = z.enum(WORKSPACE_APP_KINDS)
 const workspaceAppGrantPermissionSchema = z.enum(
@@ -329,7 +334,7 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
           "Not allowed to create this workspace app"
         )
         if (!allowed) return
-        const appView = await createWorkspaceApp({
+        const appRecord = await createWorkspaceApp({
           workspaceId,
           userId: (request as any).user.userId,
           input: {
@@ -343,7 +348,7 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
             })),
           } as any,
         })
-        reply.status(201).send({ app: appView })
+        reply.status(201).send({ app: presentWorkspaceApp(appRecord) })
       } catch (error) {
         handleError(reply, error)
       }
@@ -374,7 +379,7 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
           userId: (request as any).user.userId,
           kind: query.kind as WorkspaceAppKind | undefined,
         })
-        reply.send({ apps })
+        reply.send({ apps: apps.map(presentWorkspaceApp) })
       } catch (error) {
         handleError(reply, error)
       }
@@ -405,7 +410,7 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
           userId: (request as any).user.userId,
           conversationId: query.conversationId,
         })
-        reply.send({ apps })
+        reply.send({ apps: apps.map(presentWorkspaceApp) })
       } catch (error) {
         handleError(reply, error)
       }
@@ -429,12 +434,12 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
       )
       if (!allowed) return
       try {
-        const appView = await getWorkspaceAppInventoryDetail({
+        const appRecord = await getWorkspaceAppInventoryDetail({
           workspaceId,
           appId,
           userId: (request as any).user.userId,
         })
-        reply.send({ app: appView })
+        reply.send({ app: presentWorkspaceApp(appRecord) })
       } catch (error) {
         handleError(reply, error)
       }
@@ -451,13 +456,13 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
       }
       try {
         const body = updateWorkspaceAppSchema.parse(request.body)
-        const appView = await updateWorkspaceApp({
+        const appRecord = await updateWorkspaceApp({
           workspaceId,
           appId,
           userId: (request as any).user.userId,
           input: body as any,
         })
-        reply.send({ app: appView })
+        reply.send({ app: presentWorkspaceApp(appRecord) })
       } catch (error) {
         handleError(reply, error)
       }
@@ -507,7 +512,7 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
           appId,
           userId: (request as any).user.userId,
         })
-        reply.send({ grants })
+        reply.send({ grants: grants.map(presentGrant) })
       } catch (error) {
         handleError(reply, error)
       }
@@ -544,7 +549,7 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
             reason: grant.reason,
           })),
         })
-        reply.send({ grants })
+        reply.send({ grants: grants.map(presentGrant) })
       } catch (error) {
         handleError(reply, error)
       }
@@ -578,7 +583,7 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
           direction:
             query.direction || WORKSPACE_APP_GRANT_REQUEST_DIRECTION.INCOMING,
         })
-        reply.send({ requests })
+        reply.send({ requests: requests.map(presentGrantRequest) })
       } catch (error) {
         handleError(reply, error)
       }
@@ -609,7 +614,7 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
           userId: (request as any).user.userId,
           reason: body.reason,
         })
-        reply.status(201).send({ request: grantRequest })
+        reply.status(201).send({ request: presentGrantRequest(grantRequest) })
       } catch (error) {
         handleError(reply, error)
       }
@@ -640,7 +645,7 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
           requestId,
           userId: (request as any).user.userId,
         })
-        reply.send({ request: grantRequest })
+        reply.send({ request: presentGrantRequest(grantRequest) })
       } catch (error) {
         handleError(reply, error)
       }
@@ -671,7 +676,7 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
           requestId,
           userId: (request as any).user.userId,
         })
-        reply.send({ request: grantRequest })
+        reply.send({ request: presentGrantRequest(grantRequest) })
       } catch (error) {
         handleError(reply, error)
       }

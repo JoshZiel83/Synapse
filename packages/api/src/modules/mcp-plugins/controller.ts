@@ -28,6 +28,7 @@ import {
   PluginAuthError,
   startPluginAuthSession,
 } from "./plugin-auth-connections.js"
+import { presentPluginCategory, presentPublisher } from "./presenter.js"
 import { getEventLogs, getToolCallLogs } from "./audit.js"
 import { sendData } from "../../infrastructure/http/respond.js"
 import {
@@ -35,6 +36,9 @@ import {
   MarketplacePublisherViewSchema,
   PluginCategoryViewSchema,
   PluginInstallationDetailViewSchema,
+  PluginAuthSessionEnvelopeSchema,
+  PluginInstallPlanEnvelopeSchema,
+  PluginAuditLogListSchema,
 } from "@synapse/shared/schemas"
 
 const lifecycleScopeSchema = z.enum(REUSE_SCOPES)
@@ -114,7 +118,11 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
   app.get("/api/v1/mcp/categories", authHook, async (_request, reply) => {
     try {
       const categories = await listPluginCategories()
-      sendData(reply, z.array(PluginCategoryViewSchema), categories)
+      sendData(
+        reply,
+        z.array(PluginCategoryViewSchema),
+        categories.map(presentPluginCategory)
+      )
     } catch (error) {
       handleError(reply, error)
     }
@@ -137,7 +145,11 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
   app.get("/api/v1/mcp/organizations", authHook, async (_request, reply) => {
     try {
       const orgs = await listOrganizations()
-      sendData(reply, z.array(MarketplacePublisherViewSchema), orgs)
+      sendData(
+        reply,
+        z.array(MarketplacePublisherViewSchema),
+        orgs.map(presentPublisher)
+      )
     } catch (error) {
       handleError(reply, error)
     }
@@ -159,7 +171,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
           MarketplacePublisherViewSchema.extend({
             plugins: z.array(MarketplacePluginViewSchema),
           }),
-          { ...org, plugins }
+          { ...presentPublisher(org), plugins }
         )
       } catch (error) {
         handleError(reply, error)
@@ -189,7 +201,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
           workspaceId,
           pluginId,
         })
-        reply.send({ plan })
+        sendData(reply, PluginInstallPlanEnvelopeSchema, { plan })
       } catch (error) {
         handleError(reply, error)
       }
@@ -225,7 +237,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
           draftConfig: body.draftConfig,
           metadata: body.metadata,
         })
-        reply.send(result)
+        sendData(reply, PluginAuthSessionEnvelopeSchema, result)
       } catch (error) {
         handleError(reply, error)
       }
@@ -250,7 +262,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
           sessionId: string
         }
         const workspaceMember = (request as any).workspaceMember
-        reply.send({
+        sendData(reply, PluginAuthSessionEnvelopeSchema, {
           session: await getPluginAuthSession(
             sessionId,
             workspaceId,
@@ -281,7 +293,9 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
           sessionId: string
         }
         const workspaceMember = (request as any).workspaceMember
-        reply.send(
+        sendData(
+          reply,
+          PluginAuthSessionEnvelopeSchema,
           await inspectPluginAuthSession({
             workspaceId,
             sessionId,
@@ -421,7 +435,9 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
             limit?: string
             before?: string
           }
-        reply.send(
+        sendData(
+          reply,
+          PluginAuditLogListSchema,
           await getToolCallLogs(workspaceId, {
             pluginId,
             sessionId,
@@ -456,7 +472,9 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
           limit?: string
           before?: string
         }
-        reply.send(
+        sendData(
+          reply,
+          PluginAuditLogListSchema,
           await getEventLogs(workspaceId, {
             eventType,
             pluginId,

@@ -1,5 +1,9 @@
 import { z } from "zod"
-import { PLUGIN_SPEC_TRANSPORTS, REUSE_SCOPES } from "../constants/enums.js"
+import {
+  PLUGIN_AUTH_SESSION_STATUSES,
+  PLUGIN_SPEC_TRANSPORTS,
+  REUSE_SCOPES,
+} from "../constants/enums.js"
 import { IsoInstantStringSchema } from "./datetime.js"
 
 /*
@@ -418,3 +422,97 @@ export const PluginInstallationDetailViewSchema = z.strictObject({
 export type PluginInstallationDetailView = z.infer<
   typeof PluginInstallationDetailViewSchema
 >
+
+// ── Auxiliary plugin procedure-flow contracts (auth session / install plan) ──
+// These are app-facing (web install-dialog consumes the auth session), so per
+// master plan §5.1/§7 (Tier C app surface) they return `{ data }` via sendData.
+// The shapes mirror the PluginAuthSession / install-plan domain types in
+// ../types/index.ts. Author-owned opaque sub-objects (challenge metadata,
+// resultPreview) stay as open records — see the inline notes.
+
+export const PluginAuthChallengeViewSchema = z.strictObject({
+  kind: z.enum(["redirect", "qr_code", "none"]),
+  url: z.string().optional(),
+  qrUrl: z.string().optional(),
+  openMode: z.enum(["popup", "replace"]).optional(),
+  expiresAt: IsoInstantStringSchema.optional(),
+  // driver-defined challenge metadata; opaque.
+  metadata: z.record(z.string(), z.unknown()).optional(),
+})
+
+export const PluginAuthSessionViewSchema = z.strictObject({
+  id: z.string(),
+  workspaceId: z.string(),
+  packageId: z.string(),
+  revisionId: z.string().optional(),
+  bindingKey: z.string(),
+  driver: z.enum([
+    "oauth2_authorization_code_pkce",
+    "mijia_qr_login",
+    "feishu_cli_setup",
+  ]),
+  workspaceMemberId: z.string(),
+  status: z.enum(PLUGIN_AUTH_SESSION_STATUSES),
+  phase: z
+    .enum([
+      "awaiting_start",
+      "awaiting_external_input",
+      "awaiting_callback",
+      "pending_scan",
+      "pending_confirm",
+      "finalizing",
+    ])
+    .optional(),
+  state: z.string().optional(),
+  challenge: PluginAuthChallengeViewSchema.optional(),
+  errorCode: z.string().optional(),
+  errorMessage: z.string().optional(),
+  // driver result snapshot surfaced to the UI (e.g. displayName); opaque.
+  resultPreview: z.record(z.string(), z.unknown()),
+  authConnectionId: z.string().optional(),
+  // author-supplied session metadata; opaque.
+  metadata: z.record(z.string(), z.unknown()),
+  expiresAt: IsoInstantStringSchema,
+  createdAt: IsoInstantStringSchema,
+  updatedAt: IsoInstantStringSchema,
+})
+export type PluginAuthSessionView = z.infer<typeof PluginAuthSessionViewSchema>
+
+/** Wrapper payload of the auth-session endpoints (`{ session }`). */
+export const PluginAuthSessionEnvelopeSchema = z.strictObject({
+  session: PluginAuthSessionViewSchema,
+})
+export type PluginAuthSessionEnvelope = z.infer<
+  typeof PluginAuthSessionEnvelopeSchema
+>
+
+/** Plan returned by POST .../install-plan (checks + derived grant plan). */
+export const PluginInstallPlanViewSchema = z.strictObject({
+  packageId: z.string(),
+  revisionId: z.string().nullable(),
+  workspaceId: z.string(),
+  // pre-flight checks (currently empty []); each check is author/runtime-shaped.
+  checks: z.array(z.unknown()),
+  // derived grant plan; structure owned by buildPluginGrantPlan, passed through.
+  grantPlan: z.unknown(),
+})
+export type PluginInstallPlanView = z.infer<typeof PluginInstallPlanViewSchema>
+
+/** Wrapper payload of the install-plan endpoint (`{ plan }`). */
+export const PluginInstallPlanEnvelopeSchema = z.strictObject({
+  plan: PluginInstallPlanViewSchema,
+})
+export type PluginInstallPlanEnvelope = z.infer<
+  typeof PluginInstallPlanEnvelopeSchema
+>
+
+/**
+ * Plugin audit-log list (tool-calls / events). The row shape is DB-derived and
+ * filter-dependent (observability surface, no app-side typed consumer), so the
+ * entries stay opaque; the wrapper exists only to give these app-facing reads
+ * the uniform `{ data }` envelope via sendData (§7 Tier C app surface).
+ */
+export const PluginAuditLogListSchema = z.array(
+  z.record(z.string(), z.unknown())
+)
+export type PluginAuditLogList = z.infer<typeof PluginAuditLogListSchema>

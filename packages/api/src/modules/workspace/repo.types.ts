@@ -29,6 +29,11 @@ export type WorkspaceViewRow = Pick<
   | "updatedAt"
 >
 
+export type WorkspaceListRow = WorkspaceViewRow & {
+  currentWorkspaceMemberId?: string | null
+  trustLevel?: string | null
+}
+
 export type WorkspaceMemberViewRow = Pick<
   TableRow<"workspaceMembers">,
   "id" | "workspaceId" | "userId" | "trustLevel" | "joinedAt"
