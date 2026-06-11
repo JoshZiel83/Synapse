@@ -15,13 +15,11 @@ import {
   actorRef,
   remoteAgentRef,
   conversationRef,
-  type Timestamp,
   type SubjectRef,
 } from "@synapse/shared"
 import { serializeCommandlinePolicyToWire } from "@synapse/shared/access/policies"
 import type {
   RuntimeAuthorizationGrantRetention,
-  RuntimeAuthorizationGrantStatus,
   RuntimeAuthorizationRequestedAction,
   RuntimeAuthorizationPreset,
   SharedRuntimeAuthorizationGrantSpec,
@@ -71,42 +69,13 @@ function normalizePathPrefixes(values: unknown) {
 }
 
 // ============================================================================
-// subject-scope-refactor: RuntimeAuthorizationGrantRecord — DB row hydrated
-// with subject/scope SubjectRef pair + derived label. Extends the API-side
-// camelCase policy spec so existing readers (auto-retry envelope, UI grant
-// summary) continue to address `grant.filesystem`, `grant.browser`, etc.
+// subject-scope-refactor: RuntimeAuthorizationGrantRecord is the API-side
+// camelCase projection of a grant row. Its definition lives in repo.types.ts
+// (the module's row/projection type owner) so the presenter that builds it
+// depends on the repo layer, not on service. Re-exported here so the module
+// barrel (index.ts `export * from "./service.js"`) keeps exposing it to
+// existing importers (auto-retry, capability-projection, tasks).
 // ============================================================================
-
-export interface RuntimeAuthorizationGrantRecord extends SharedRuntimeAuthorizationGrantSpec {
-  id: string
-  workspaceId: string
-  deviceId: string
-  deviceCapabilityId: string
-  deviceExposureId: string
-  /** Authorization subject (workspace / workspace_member / actor / remote_agent / conversation). */
-  subject: SubjectRef
-  /** Optional runtime-context scope (workspace or conversation). */
-  scope?: SubjectRef
-  /**
-   * Derived display label from subjectScopeLabel({subject, scope?}). Mirrors
-   * the wire envelope's `grant_scope` field for UI / audit. Possible values
-   * include: 'workspace' | 'workspace_member' | 'actor' | 'remote_agent' |
-   * 'conversation' or scoped actor/remote_agent grants.
-   */
-  scopeLabel: string
-  createdByWorkspaceMemberId?: string
-  sourceTaskId?: string
-  sourceRetryNonce?: string
-  sourceRuntimeSessionId?: string
-  sourceRequestArgs: Record<string, unknown>
-  retention: RuntimeAuthorizationGrantRetention
-  status: RuntimeAuthorizationGrantStatus
-  createdAt: Timestamp
-  updatedAt: Timestamp
-  consumedAt?: Timestamp
-  revokedAt?: Timestamp
-  supersededAt?: Timestamp
-}
 
 /**
  * Candidate row + candidate row-with-joins types live in repo.types.ts (the
@@ -115,10 +84,12 @@ export interface RuntimeAuthorizationGrantRecord extends SharedRuntimeAuthorizat
  * RuntimeAuthorizationGrantCandidate to existing importers.
  */
 export type {
+  RuntimeAuthorizationGrantRecord,
   RuntimeAuthorizationGrantCandidate,
   RuntimeAuthorizationGrantCandidateRow,
 } from "./repo.types.js"
 import type {
+  RuntimeAuthorizationGrantRecord,
   RuntimeAuthorizationGrantCandidate,
   RuntimeAuthorizationGrantCandidateRow,
   RuntimeAuthorizationGrantPolicyInsert,

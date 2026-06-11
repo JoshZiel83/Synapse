@@ -779,7 +779,7 @@ export default function InstallDialog({
       api
         .getActors(workspaceId)
         .then((result) => {
-          const actorList = result?.actors ?? result ?? []
+          const actorList = result ?? []
           setActors(
             Array.isArray(actorList) ? actorList.map(normalizeActorOption) : []
           )

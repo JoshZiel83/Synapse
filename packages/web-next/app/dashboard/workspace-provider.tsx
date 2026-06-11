@@ -75,7 +75,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
     try {
       const res = await api.getWorkspaces()
-      const list: WorkspaceInfo[] = res?.data ?? res ?? []
+      const list: WorkspaceInfo[] = res.data ?? []
       setWorkspaces(list)
 
       if (list.length === 0) {

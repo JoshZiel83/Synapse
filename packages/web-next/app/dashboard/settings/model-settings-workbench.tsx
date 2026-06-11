@@ -1101,9 +1101,10 @@ export default function ModelSettingsWorkbench() {
       ])
 
       if (workspacesResult.status === "fulfilled") {
-        const workspaceList = (workspacesResult.value?.data ??
-          workspacesResult.value ??
-          []) as Array<{ id: string; name: string }>
+        const workspaceList = (workspacesResult.value.data ?? []) as Array<{
+          id: string
+          name: string
+        }>
         setAvailableWorkspaces(
           workspaceList.map((workspace) => ({
             id: workspace.id,
@@ -1191,18 +1192,14 @@ export default function ModelSettingsWorkbench() {
       api.getActors(workspaceId),
     ]).then(([membersResult, actorsResult]) => {
       if (membersResult.status === "fulfilled") {
-        const members = membersResult.value?.data ?? membersResult.value ?? []
+        const members = membersResult.value.data ?? []
         setWorkspaceMembers(members as WorkspaceMember[])
       } else {
         setWorkspaceMembers([])
       }
 
       if (actorsResult.status === "fulfilled") {
-        const actors =
-          actorsResult.value?.data ??
-          actorsResult.value?.actors ??
-          actorsResult.value ??
-          []
+        const actors = actorsResult.value ?? []
         setWorkspaceActors(actors as WorkspaceActor[])
       } else {
         setWorkspaceActors([])

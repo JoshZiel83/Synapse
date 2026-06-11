@@ -11,10 +11,7 @@ import {
   type SkillMarketplaceVersion,
   type WorkspaceAppGrant,
 } from "@synapse/shared"
-import {
-  dateToIsoInstant,
-  type IsoInstantString,
-} from "@synapse/shared/datetime"
+import { type IsoInstantString } from "@synapse/shared/datetime"
 import {
   requireInstantDate,
   serializeInstant,
@@ -233,8 +230,7 @@ export function buildInstalledSkillPayload(
     effectiveConversationTypeMask,
     isCustomized: Boolean(row.sourceCatalogItemId && row.sourceIsCustomized),
     ownerWorkspaceMemberId: row.ownerWorkspaceMemberId || undefined,
-    createdAt:
-      serializeOptionalInstant(row.createdAt) || dateToIsoInstant(new Date(0)),
+    createdAt: serializeInstant(row.createdAt),
     updatedAt: serializeInstant(row.updatedAt),
     sourceSkillId: row.sourceCatalogItemId || undefined,
     sourcePackageSlug: row.sourceSlug || undefined,
@@ -296,8 +292,9 @@ export function mapSkillAccessRowToGrant(
     reason: row.reason || undefined,
     conversationTypeMaskOverride: row.conversationTypeMaskOverride ?? null,
     effectiveConversationTypeMask,
-    createdAt:
-      serializeOptionalInstant(row.createdAt) || dateToIsoInstant(new Date(0)),
+    createdAt: serializeInstant(
+      requireInstantDate(row.createdAt, "workspace_app_grant created_at")
+    ),
     revokedAt: serializeOptionalInstant(row.revokedAt),
   }
 }

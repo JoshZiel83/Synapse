@@ -182,9 +182,12 @@ export function presentGrant(row: WorkspaceAppGrantViewRow): WorkspaceAppGrant {
   if (!row.createdAt) {
     throw new Error("workspace app grant row is missing created_at")
   }
+  if (!row.workspaceId) {
+    throw new Error(`workspace_app_grants.${row.id}.workspace_id is missing`)
+  }
   return {
     id: row.id,
-    workspaceId: row.workspaceId || "",
+    workspaceId: row.workspaceId,
     workspaceAppId: row.workspaceAppId,
     target: subjectRefToTarget({
       ...row,

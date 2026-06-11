@@ -3,6 +3,10 @@
 import { useEffect, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { ArrowLeft } from "lucide-react"
+import type {
+  MarketplacePluginView,
+  PluginInstallationDetailView,
+} from "@synapse/shared"
 import { Button } from "@/components/ui/button"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { api } from "@/lib/api"
@@ -13,9 +17,12 @@ export default function PluginInstallationPage() {
   const params = useParams<{ installationId: string }>()
   const router = useRouter()
   const { workspaceId } = useWorkspace()
-  const [plugin, setPlugin] = useState<any>(null)
-  const [installations, setInstallations] = useState<any[]>([])
-  const [installation, setInstallation] = useState<any>(null)
+  const [plugin, setPlugin] = useState<MarketplacePluginView | null>(null)
+  const [installations, setInstallations] = useState<
+    PluginInstallationDetailView[]
+  >([])
+  const [installation, setInstallation] =
+    useState<PluginInstallationDetailView | null>(null)
   const [loading, setLoading] = useState(true)
   const installationId = params.installationId
 

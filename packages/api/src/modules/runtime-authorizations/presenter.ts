@@ -17,8 +17,10 @@ import {
   serializeInstant,
   serializeOptionalInstant,
 } from "../../infrastructure/datetime.js"
-import type { RuntimeAuthorizationGrantCandidate } from "./repo.types.js"
-import type { RuntimeAuthorizationGrantRecord } from "./service.js"
+import type {
+  RuntimeAuthorizationGrantCandidate,
+  RuntimeAuthorizationGrantRecord,
+} from "./repo.types.js"
 
 // ============================================================================
 // Mapping: candidate → record. Mapper is a pure function — caller must pass

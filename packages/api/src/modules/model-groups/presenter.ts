@@ -130,9 +130,12 @@ function subjectKindToModelGroupGrantScope(
 export function dbRowToGrantRow(
   row: ModelGroupGrantDbRow
 ): ModelGroupGrantRow & { id: string; group_id: string } {
+  if (!row.groupId) {
+    throw new Error(`model_group_grants.${row.id}.group_id is missing`)
+  }
   return {
     id: row.id,
-    group_id: row.groupId || "",
+    group_id: row.groupId,
     grant_scope: row.mgsKind
       ? subjectKindToModelGroupGrantScope(row.mgsKind as SubjectRef["kind"])
       : MODEL_GROUP_GRANT_SCOPE.PLATFORM,

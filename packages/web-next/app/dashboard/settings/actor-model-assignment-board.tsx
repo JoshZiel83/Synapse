@@ -237,11 +237,9 @@ export default function ActorModelAssignmentBoard() {
         const response = await api.getActors(currentWorkspaceId)
         if (cancelled) return
 
-        const nextActors = (
-          Array.isArray(response)
-            ? response
-            : (response?.data ?? response?.actors ?? [])
-        ).map(normalizeActor)
+        const nextActors = (Array.isArray(response) ? response : []).map(
+          normalizeActor
+        )
         setActors(nextActors)
         setSelectedActorId((current) =>
           current &&

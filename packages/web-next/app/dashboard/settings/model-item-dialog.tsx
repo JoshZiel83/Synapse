@@ -243,7 +243,7 @@ export default function ModelItemDialog({
 
       if (item) {
         // Update - only send config fields if they changed
-        const updateData: any = {
+        const updateData: Record<string, unknown> = {
           displayName: displayName.trim(),
           priority: parseInt(priority),
           weight: parseInt(weight),

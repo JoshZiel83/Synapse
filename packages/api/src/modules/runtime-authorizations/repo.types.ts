@@ -5,7 +5,12 @@
 // using TableRow< / TableInsert< inline (guard rule r2).
 
 import type { SubjectRef } from "@synapse/shared"
-import type { RuntimeAuthorizationGrantRetention } from "@synapse/shared/types"
+import type { Timestamp } from "@synapse/shared"
+import type {
+  RuntimeAuthorizationGrantRetention,
+  RuntimeAuthorizationGrantStatus,
+  SharedRuntimeAuthorizationGrantSpec,
+} from "@synapse/shared/types"
 import type {
   GrantPolicy,
   PolicyValidationFailure,
@@ -14,6 +19,47 @@ import type {
   TableInsert,
   TableRow,
 } from "../../infrastructure/database/kysely.js"
+
+/**
+ * API-side camelCase projection of a runtime authorization grant — a DB row
+ * hydrated with its subject/scope SubjectRef pair + derived label. Extends the
+ * shared camelCase policy spec so readers (auto-retry envelope, UI grant
+ * summary) continue to address `grant.filesystem`, `grant.browser`, etc.
+ *
+ * Owned here (not in service.ts) so the presenter — which builds this record —
+ * depends on the repo type layer rather than on service (guard r-direction:
+ * presenter must not import row/projection types from ./service).
+ */
+export interface RuntimeAuthorizationGrantRecord extends SharedRuntimeAuthorizationGrantSpec {
+  id: string
+  workspaceId: string
+  deviceId: string
+  deviceCapabilityId: string
+  deviceExposureId: string
+  /** Authorization subject (workspace / workspace_member / actor / remote_agent / conversation). */
+  subject: SubjectRef
+  /** Optional runtime-context scope (workspace or conversation). */
+  scope?: SubjectRef
+  /**
+   * Derived display label from subjectScopeLabel({subject, scope?}). Mirrors
+   * the wire envelope's `grant_scope` field for UI / audit. Possible values
+   * include: 'workspace' | 'workspace_member' | 'actor' | 'remote_agent' |
+   * 'conversation' or scoped actor/remote_agent grants.
+   */
+  scopeLabel: string
+  createdByWorkspaceMemberId?: string
+  sourceTaskId?: string
+  sourceRetryNonce?: string
+  sourceRuntimeSessionId?: string
+  sourceRequestArgs: Record<string, unknown>
+  retention: RuntimeAuthorizationGrantRetention
+  status: RuntimeAuthorizationGrantStatus
+  createdAt: Timestamp
+  updatedAt: Timestamp
+  consumedAt?: Timestamp
+  revokedAt?: Timestamp
+  supersededAt?: Timestamp
+}
 
 /**
  * Candidate row pulled by the canonical helper's list step. Carries the raw

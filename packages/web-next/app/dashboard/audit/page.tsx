@@ -131,21 +131,15 @@ export default function AuditPage() {
 
   const data = auditQuery.data as
     | {
-        items?: AuditLog[]
-        data?: AuditLog[]
+        items: AuditLog[]
         total?: number
         totalPages?: number
       }
-    | AuditLog[]
     | undefined
-  const logs: AuditLog[] = Array.isArray(data)
-    ? data
-    : (data?.items ?? data?.data ?? [])
-  const totalPages = Array.isArray(data)
-    ? 1
-    : data?.total
-      ? Math.ceil(data.total / pageSize)
-      : (data?.totalPages ?? 1)
+  const logs: AuditLog[] = data?.items ?? []
+  const totalPages = data?.total
+    ? Math.ceil(data.total / pageSize)
+    : (data?.totalPages ?? 1)
   const loading = auditQuery.isPending && !!workspaceId
   const loadLogs = () => auditQuery.refetch()
 

@@ -67,8 +67,7 @@ export default function ActorAssignment() {
     setLoading(true)
     Promise.all([api.getActors(workspaceId), api.getModelGroups(workspaceId)])
       .then(([actorsRes, groupsRes]) => {
-        const actorList =
-          actorsRes?.data ?? actorsRes?.actors ?? actorsRes ?? []
+        const actorList = actorsRes ?? []
         setActors(Array.isArray(actorList) ? actorList.map(normalizeActor) : [])
         setGroups(groupsRes.groups || [])
       })

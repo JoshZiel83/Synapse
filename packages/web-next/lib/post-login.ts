@@ -12,6 +12,6 @@ export async function resolveDestination(redirect: string | null) {
   if (redirect) return redirect
 
   const result = await api.getWorkspaces()
-  const workspaces = result?.data ?? result ?? []
+  const workspaces = result.data ?? []
   return workspaces.length === 0 ? "/welcome" : "/dashboard"
 }

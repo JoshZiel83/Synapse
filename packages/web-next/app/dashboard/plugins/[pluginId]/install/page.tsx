@@ -3,6 +3,10 @@
 import { useEffect, useState } from "react"
 import { useParams, useRouter, useSearchParams } from "next/navigation"
 import { ArrowLeft } from "lucide-react"
+import type {
+  MarketplacePluginView,
+  PluginInstallationDetailView,
+} from "@synapse/shared"
 import {
   AppCard,
   AppCardContent,
@@ -21,8 +25,9 @@ export default function PluginInstallPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { workspaceId } = useWorkspace()
-  const [plugin, setPlugin] = useState<any>(null)
-  const [installation, setInstallation] = useState<any>(null)
+  const [plugin, setPlugin] = useState<MarketplacePluginView | null>(null)
+  const [installation, setInstallation] =
+    useState<PluginInstallationDetailView | null>(null)
   const [loading, setLoading] = useState(true)
   const pluginId = params.pluginId
   const reconfigureInstallationId = searchParams.get("reconfigure")
