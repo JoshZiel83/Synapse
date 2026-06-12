@@ -91,6 +91,8 @@ import type {
   SkillMarketplaceEntry,
   WorkspaceCapabilityConversationTypePoliciesView,
   UpdateMeInput,
+  UpdateMemberRelationshipProfileInput,
+  UpdateActorRelationshipProfileInput,
 } from "@synapse/shared"
 import {
   normalizeConversationCatalogEntry,
@@ -1315,11 +1317,7 @@ class ApiClient {
   }
   async updateMyRelationshipProfile(
     wsId: string,
-    input: {
-      approvalMode: "auto" | "manual"
-      identityId?: string
-      identitySearchEnabled?: boolean
-    }
+    input: UpdateMemberRelationshipProfileInput
   ): Promise<RelationshipProfileView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/me/relationship-profile`,
@@ -1342,12 +1340,7 @@ class ApiClient {
   async updateActorRelationshipProfile(
     wsId: string,
     actorId: string,
-    input: {
-      approvalMode: "auto" | "manual"
-      identityId?: string
-      identitySearchEnabled?: boolean
-      isPublicShared?: boolean
-    }
+    input: UpdateActorRelationshipProfileInput
   ): Promise<RelationshipProfileView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/actors/${actorId}/relationship-profile`,
@@ -1370,12 +1363,7 @@ class ApiClient {
   async updateRemoteAgentRelationshipProfile(
     wsId: string,
     remoteAgentId: string,
-    input: {
-      approvalMode: "auto" | "manual"
-      identityId?: string
-      identitySearchEnabled?: boolean
-      isPublicShared?: boolean
-    }
+    input: UpdateActorRelationshipProfileInput
   ): Promise<RelationshipProfileView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/remote-agents/${remoteAgentId}/relationship-profile`,

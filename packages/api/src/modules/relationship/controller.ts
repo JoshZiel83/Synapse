@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply } from "fastify"
 import { z } from "zod"
-import { CONTACT_HUB_KINDS, RELATIONSHIP_APPROVAL_MODES } from "@synapse/shared"
+import { CONTACT_HUB_KINDS } from "@synapse/shared"
 import {
   ContactHubDetailResponseSchema,
   ContactHubResponseSchema,
@@ -11,6 +11,12 @@ import {
   RelationshipScanResponseSchema,
   RequestListResponseSchema,
   ResolveRequestResponseSchema,
+  RelationshipScanInputSchema,
+  OpenDirectConversationInputSchema,
+  UpdateMemberRelationshipProfileInputSchema,
+  UpdateActorRelationshipProfileInputSchema,
+  IdentitySearchQuerySchema,
+  RequestRelationshipBySearchInputSchema,
 } from "@synapse/shared/schemas"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
@@ -43,38 +49,16 @@ import {
   updateRemoteAgentRelationshipProfile,
 } from "./service.js"
 
-const approvalModeSchema = z.enum(RELATIONSHIP_APPROVAL_MODES)
+// App-facing request bodies / queries live in @synapse/shared (§5.1.1) so the
+// API parser and the web/mobile clients share one definition.
+const scanSchema = RelationshipScanInputSchema
+const openDirectSchema = OpenDirectConversationInputSchema
+const updateMemberProfileSchema = UpdateMemberRelationshipProfileInputSchema
+const identitySearchQuerySchema = IdentitySearchQuerySchema
+const requestRelationshipBySearchSchema = RequestRelationshipBySearchInputSchema
+const updateActorProfileSchema = UpdateActorRelationshipProfileInputSchema
+// Path-param (:kind) validation — not a body DTO, stays local.
 const contactKindSchema = z.enum(CONTACT_HUB_KINDS)
-
-const scanSchema = z.object({
-  token: z.string().trim().min(1).max(256),
-})
-
-const openDirectSchema = z.object({
-  contactKind: contactKindSchema,
-  contactId: z.string().trim().min(1).max(255),
-})
-
-const updateMemberProfileSchema = z.object({
-  approvalMode: approvalModeSchema,
-  identityId: z.string().trim().min(4).max(32).optional(),
-  identitySearchEnabled: z.boolean().optional(),
-})
-
-const identitySearchQuerySchema = z.object({
-  q: z.string().trim().max(64).optional(),
-})
-
-const requestRelationshipBySearchSchema = z.object({
-  profileId: z.uuid(),
-})
-
-const updateActorProfileSchema = z.object({
-  approvalMode: approvalModeSchema,
-  identityId: z.string().trim().min(4).max(32).optional(),
-  identitySearchEnabled: z.boolean().optional(),
-  isPublicShared: z.boolean().optional(),
-})
 
 function sendServiceError(reply: FastifyReply, error: unknown) {
   const message =

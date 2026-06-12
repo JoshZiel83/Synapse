@@ -1,5 +1,6 @@
 import { z } from "zod"
 import {
+  CONTACT_HUB_KINDS,
   DIRECT_CONVERSATION_OPEN_STATUSES,
   IDENTITY_SEARCH_OUTCOMES,
   RELATIONSHIP_APPROVAL_MODES,
@@ -131,4 +132,58 @@ export const DirectConversationOpenResponseSchema = z.object({
 })
 export type DirectConversationOpenResponseSchemaType = z.infer<
   typeof DirectConversationOpenResponseSchema
+>
+
+// ───────────────────────────── request DTOs (§5.1.1) ─────────────────────────
+// App-facing request bodies / queries for the relationship routes. Single-
+// sourced here so the API parser and the web/mobile clients share one shape.
+
+/** POST relationship-qr/scan body. */
+export const RelationshipScanInputSchema = z.object({
+  token: z.string().trim().min(1).max(256),
+})
+export type RelationshipScanInput = z.infer<typeof RelationshipScanInputSchema>
+
+/** POST chat/direct-conversations/open body. */
+export const OpenDirectConversationInputSchema = z.object({
+  contactKind: z.enum(CONTACT_HUB_KINDS),
+  contactId: z.string().trim().min(1).max(255),
+})
+export type OpenDirectConversationInput = z.infer<
+  typeof OpenDirectConversationInputSchema
+>
+
+/** PUT me/relationship-profile body. */
+export const UpdateMemberRelationshipProfileInputSchema = z.object({
+  approvalMode: z.enum(RELATIONSHIP_APPROVAL_MODES),
+  identityId: z.string().trim().min(4).max(32).optional(),
+  identitySearchEnabled: z.boolean().optional(),
+})
+export type UpdateMemberRelationshipProfileInput = z.infer<
+  typeof UpdateMemberRelationshipProfileInputSchema
+>
+
+/** PUT actors|remote-agents/:id/relationship-profile body. */
+export const UpdateActorRelationshipProfileInputSchema = z.object({
+  approvalMode: z.enum(RELATIONSHIP_APPROVAL_MODES),
+  identityId: z.string().trim().min(4).max(32).optional(),
+  identitySearchEnabled: z.boolean().optional(),
+  isPublicShared: z.boolean().optional(),
+})
+export type UpdateActorRelationshipProfileInput = z.infer<
+  typeof UpdateActorRelationshipProfileInputSchema
+>
+
+/** GET identity-search query (?q=). */
+export const IdentitySearchQuerySchema = z.object({
+  q: z.string().trim().max(64).optional(),
+})
+export type IdentitySearchQuery = z.infer<typeof IdentitySearchQuerySchema>
+
+/** POST identity-search/request body. */
+export const RequestRelationshipBySearchInputSchema = z.object({
+  profileId: z.uuid(),
+})
+export type RequestRelationshipBySearchInput = z.infer<
+  typeof RequestRelationshipBySearchInputSchema
 >

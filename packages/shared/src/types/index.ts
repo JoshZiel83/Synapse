@@ -4602,6 +4602,12 @@ export type {
   ContactHubResponseSchemaType,
   ContactHubDetailResponseSchemaType,
   DirectConversationOpenResponseSchemaType,
+  RelationshipScanInput,
+  OpenDirectConversationInput,
+  UpdateMemberRelationshipProfileInput,
+  UpdateActorRelationshipProfileInput,
+  IdentitySearchQuery,
+  RequestRelationshipBySearchInput,
 } from "../schemas/relationship.js"
 export type {
   RemoteAgentListResponseSchemaType,
