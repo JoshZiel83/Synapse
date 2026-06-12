@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { REMOTE_AGENT_RUNTIME_KINDS } from "../constants/enums.js"
+import { IsoInstantStringSchema } from "./datetime.js"
 
 /**
  * App-facing contracts for the remote-agents module's APP routes (master plan
@@ -7,18 +8,135 @@ import { REMOTE_AGENT_RUNTIME_KINDS } from "../constants/enums.js"
  * through `appRoute` → `sendData` → `{ data: ... }`. These schemas describe the
  * value each handler returns (the helper wraps it).
  *
- * The route handlers map DB rows → presented views via this module's presenter
- * (`presentRemoteAgent`, `presentMachineListItem`, …) before returning. Those
- * presented views are genuinely-open presentation shapes the presenter already
- * owns, so collection entries / nested view objects are modeled as `z.unknown()`
- * — the boundary only needs to round-trip them unchanged, not re-validate their
- * interior. Top-level envelope keys (the discriminating structure consumers read
- * on) are modeled explicitly.
+ * round-6 P1-4: the presented views (RemoteAgentView, machine views, runtime
+ * catalog, group-task grants, bindings) are now modeled as real Zod, matching
+ * the presenter output (remote-agents/presenter.ts present*). Instants are
+ * IsoInstantStringSchema; open JSON (metadata / runtime capabilities) stays a
+ * passthrough record. The machine RPC /internal/* bodies live in
+ * @synapse/device-protocol (round-6 P1-5) — these are the human app views.
  */
+
+const runtimeKindSchema = z.enum(REMOTE_AGENT_RUNTIME_KINDS)
+const jsonRecordSchema = z.record(z.string(), z.unknown())
+
+/** Per-runtime capability flags (presenter emits {} when unknown). */
+export const RemoteAgentRuntimeCapabilityViewSchema = z.object({
+  supportsRequestUserInput: z.boolean().optional(),
+  supportsPlanMode: z.boolean().optional(),
+  supportsPersistentSession: z.boolean().optional(),
+  supportsCodexAppServer: z.boolean().optional(),
+  supportsStructuredIo: z.boolean().optional(),
+})
+
+/** Runtime summary (presentRuntimeSummary). */
+export const RemoteAgentRuntimeSummaryViewSchema = z.object({
+  runtimeKind: runtimeKindSchema,
+  // presenter emits the raw runtime-state string (defaults to "offline");
+  // kept as string (not z.enum) to match the producer exactly.
+  state: z.string(),
+  statusText: z.string().optional(),
+  sessionId: z.string().optional(),
+  activeConversationId: z.string().optional(),
+  activeTaskId: z.string().optional(),
+  pendingConversationCount: z.number(),
+  unreadDeliveryCount: z.number(),
+  lastActivityAt: IsoInstantStringSchema.optional(),
+  lastRunStartedAt: IsoInstantStringSchema.optional(),
+  lastRunFinishedAt: IsoInstantStringSchema.optional(),
+  lastError: z.string().optional(),
+  capabilities: RemoteAgentRuntimeCapabilityViewSchema.optional(),
+})
+
+/** Binding block embedded in a RemoteAgentView (presentRemoteAgent). */
+export const RemoteAgentBindingViewSchema = z.object({
+  machineId: z.string(),
+  machineTitle: z.string().optional(),
+  status: z.string(),
+  runtimePath: z.string().optional(),
+  localRootPath: z.string().optional(),
+  // presenter emits the raw lifecycle-state string.
+  machineLifecycleState: z.string().optional(),
+  runtimeSummary: RemoteAgentRuntimeSummaryViewSchema.optional(),
+})
+
+/** A single remote agent (presentRemoteAgent). */
+export const RemoteAgentViewSchema = z.object({
+  id: z.string(),
+  workspaceId: z.string(),
+  displayName: z.string(),
+  title: z.string(),
+  description: z.string().optional(),
+  runtimeKind: runtimeKindSchema,
+  avatarFileId: z.string().optional(),
+  avatarEmoji: z.string().optional(),
+  requiresContactApproval: z.boolean(),
+  isActive: z.boolean(),
+  isPublicShared: z.boolean(),
+  metadata: jsonRecordSchema,
+  ownerWorkspaceMemberId: z.string().optional(),
+  createdAt: IsoInstantStringSchema.optional(),
+  updatedAt: IsoInstantStringSchema.optional(),
+  runtimeSummary: RemoteAgentRuntimeSummaryViewSchema.optional(),
+  binding: RemoteAgentBindingViewSchema.optional(),
+})
+
+/** A group-task-grant row (presentGroupTaskGrant). */
+export const RemoteAgentGroupTaskGrantViewSchema = z.object({
+  workspaceMemberId: z.string(),
+  grantedByWorkspaceMemberId: z.string().optional(),
+  createdAt: IsoInstantStringSchema.optional(),
+  updatedAt: IsoInstantStringSchema.optional(),
+  userId: z.string(),
+  name: z.string(),
+  avatarUrl: z.string().optional(),
+})
+
+/** A machine list/detail row (presentMachineListItem / presentMachineFromCamelRow). */
+export const RemoteAgentMachineViewSchema = z.object({
+  id: z.string(),
+  workspaceId: z.string(),
+  title: z.string(),
+  description: z.string().optional(),
+  // presenter emits raw trust/lifecycle strings from the row.
+  trustStatus: z.string(),
+  lifecycleState: z.string().optional(),
+  bindingCount: z.number().optional(),
+  lastSeenAt: IsoInstantStringSchema.optional(),
+  createdAt: IsoInstantStringSchema.optional(),
+  updatedAt: IsoInstantStringSchema.optional(),
+})
+
+/** A runtime-catalog entry (presentRuntimeCatalogEntry). */
+export const RemoteAgentRuntimeCatalogEntryViewSchema = z.object({
+  runtimeKind: runtimeKindSchema,
+  executablePath: z.string().optional(),
+  status: z.string(),
+  version: z.string().optional(),
+  metadata: jsonRecordSchema,
+  lastError: z.string().optional(),
+  lastSeenAt: IsoInstantStringSchema.optional(),
+})
+
+/** A machine-detail binding row (presentMachineBinding). */
+export const RemoteAgentMachineBindingViewSchema = z.object({
+  remoteAgentId: z.string(),
+  displayName: z.string(),
+  runtimeKind: runtimeKindSchema,
+  runtimePath: z.string().optional(),
+  localRootPath: z.string().optional(),
+  status: z.string(),
+  runtimeSummary: RemoteAgentRuntimeSummaryViewSchema.optional(),
+})
+
+/** One-click installer command block. */
+export const OneClickInstallCommandsSchema = z.object({
+  unix: z.string(),
+  windows: z.string(),
+})
 
 /** GET remote-agents — `{ remoteAgents: RemoteAgentView[] }`. */
 export const RemoteAgentListResponseSchema = z.object({
-  remoteAgents: z.array(z.unknown()),
+  remoteAgents: z.array(RemoteAgentViewSchema),
 })
 export type RemoteAgentListResponseSchemaType = z.infer<
   typeof RemoteAgentListResponseSchema
@@ -26,7 +144,7 @@ export type RemoteAgentListResponseSchemaType = z.infer<
 
 /** GET remote-agent/:id and POST .../bind — `{ remoteAgent: RemoteAgentView }`. */
 export const RemoteAgentResponseSchema = z.object({
-  remoteAgent: z.unknown(),
+  remoteAgent: RemoteAgentViewSchema,
 })
 export type RemoteAgentResponseSchemaType = z.infer<
   typeof RemoteAgentResponseSchema
@@ -34,24 +152,22 @@ export type RemoteAgentResponseSchemaType = z.infer<
 
 /** GET/PUT group-task-grants — `{ grants: RemoteAgentGroupTaskGrantView[] }`. */
 export const RemoteAgentGroupTaskGrantsResponseSchema = z.object({
-  grants: z.array(z.unknown()),
+  grants: z.array(RemoteAgentGroupTaskGrantViewSchema),
 })
 export type RemoteAgentGroupTaskGrantsResponseSchemaType = z.infer<
   typeof RemoteAgentGroupTaskGrantsResponseSchema
 >
 
 /**
- * POST pairing-sessions (201) — the pairing-session ticket. Top-level fields are
- * fixed; `machine` is the presented machine view (open) and `oneClickCommands`
- * is the installer block (null when the private registry is unset).
+ * POST pairing-sessions (201) — the pairing-session ticket. `machine` is the
+ * presented machine view; `oneClickCommands` is the installer block (null when
+ * the private registry is unset).
  */
 export const RemoteAgentMachinePairingSessionResponseSchema = z.object({
-  machine: z.unknown(),
+  machine: RemoteAgentMachineViewSchema,
   apiKey: z.string(),
   daemonCommand: z.string(),
-  oneClickCommands: z
-    .object({ unix: z.string(), windows: z.string() })
-    .nullable(),
+  oneClickCommands: OneClickInstallCommandsSchema.nullable(),
 })
 export type RemoteAgentMachinePairingSessionResponseSchemaType = z.infer<
   typeof RemoteAgentMachinePairingSessionResponseSchema
@@ -59,20 +175,17 @@ export type RemoteAgentMachinePairingSessionResponseSchemaType = z.infer<
 
 /** GET remote-agent-machines — `{ machines: RemoteAgentMachineView[] }`. */
 export const RemoteAgentMachineListResponseSchema = z.object({
-  machines: z.array(z.unknown()),
+  machines: z.array(RemoteAgentMachineViewSchema),
 })
 export type RemoteAgentMachineListResponseSchemaType = z.infer<
   typeof RemoteAgentMachineListResponseSchema
 >
 
-/**
- * GET remote-agent-machines/:id — machine detail. The three top-level keys are
- * the structure consumers read on; their entries are open presented views.
- */
+/** GET remote-agent-machines/:id — machine detail. */
 export const RemoteAgentMachineDetailResponseSchema = z.object({
-  machine: z.unknown(),
-  runtimeCatalog: z.array(z.unknown()),
-  bindings: z.array(z.unknown()),
+  machine: RemoteAgentMachineViewSchema,
+  runtimeCatalog: z.array(RemoteAgentRuntimeCatalogEntryViewSchema),
+  bindings: z.array(RemoteAgentMachineBindingViewSchema),
 })
 export type RemoteAgentMachineDetailResponseSchemaType = z.infer<
   typeof RemoteAgentMachineDetailResponseSchema
