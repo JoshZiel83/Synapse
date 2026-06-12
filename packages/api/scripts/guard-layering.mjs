@@ -27,6 +27,10 @@
 //       app.get/post/put/delete/patch(...). §5.3 mechanism.
 //   r7_dual_naming               : no `row.foo_bar || row.fooBar` and no
 //       outward `...row` spread.
+//   r8_db_client_outside_repo    : only repo*.ts may import the DB client
+//       (`db` / withDbTransaction from infrastructure/database/kysely) or the
+//       `sql` builder from "kysely". Non-repo module files must go through the
+//       repo. Baseline-ratcheted while modules migrate (P1-6).
 //
 // Usage: node scripts/guard-layering.mjs          (exit 1 on new violation)
 //        node scripts/guard-layering.mjs --write  (regenerate baseline)
@@ -124,6 +128,22 @@ const RULES = [
       /\brow\.[a-z]+_[a-z_]+\s*\|\|\s*row\.[a-z]+[A-Z]/.test(src) ||
       /\breturn\s*\{\s*\.\.\.row\b/.test(src) ||
       /\bsend\(\s*\{\s*\.\.\.row\b/.test(src),
+  },
+  {
+    // r8: only repo*.ts may reach the DB client / Kysely query builder. A
+    // non-repo module file that imports `db` (or withDbTransaction) from
+    // infrastructure/database/kysely, or the `sql` tag from "kysely", is doing
+    // data access outside the repo boundary (§9). Baseline-ratcheted: the ~96
+    // pre-existing offenders are grandfathered while modules migrate their
+    // queries into repo.ts; a NEW non-repo DB reach fails. Genuine
+    // infrastructure adapters live under infrastructure/** (not walked here),
+    // so they're unaffected.
+    id: "r8_db_client_outside_repo",
+    appliesTo: (p) => !isRepo(p),
+    test: (src) =>
+      /\bimport\s*\{[^}]*\b(?:db|withDbTransaction)\b[^}]*\}\s*from\s*["'][^"']*\/infrastructure\/database\/kysely(\.js)?["']/.test(
+        src
+      ) || /\bimport\s*\{[^}]*\bsql\b[^}]*\}\s*from\s*["']kysely["']/.test(src),
   },
 ]
 
