@@ -8,9 +8,8 @@ import {
   type IsoInstantString,
 } from "@synapse/shared/datetime"
 import type { CloudBootstrapResult } from "@synapse/device-protocol"
-import { sql } from "kysely"
-import { db } from "../../infrastructure/database/kysely.js"
 import { DeviceModuleError } from "./service.js"
+import { insertCloudPairingSession, consumeCloudBootstrapTx } from "./repo.js"
 
 export interface CreateCloudDeviceInput {
   workspaceId: string
@@ -54,27 +53,19 @@ export async function createCloudDevicePairing(
   const sessionId = randomUUID()
   const expiresAt = new Date(Date.now() + 15 * 60 * 1000)
 
-  await db
-    .insertInto("devicePairingSessions")
-    .values({
-      id: sessionId,
-      workspaceId: input.workspaceId,
-      requestedByWorkspaceMemberId: input.requestedByWorkspaceMemberId ?? null,
-      deviceId: null,
-      mode: "cloud_bootstrap",
-      serverBaseUrl: "",
-      requestedTitle: input.title,
-      bootstrapTokenHash: bootstrapTokenHash,
-      pairingCode: null,
-      expiresAt: expiresAt,
-      status: "pending",
-      context: sql`${JSON.stringify({
-        pending_device_id: pendingDeviceId,
-        preset: input.preset ?? null,
-        host_provider: input.hostProvider ?? "e2b",
-      })}::jsonb`,
-    } as never)
-    .execute()
+  await insertCloudPairingSession({
+    sessionId: sessionId,
+    workspaceId: input.workspaceId,
+    requestedByWorkspaceMemberId: input.requestedByWorkspaceMemberId ?? null,
+    requestedTitle: input.title,
+    bootstrapTokenHash: bootstrapTokenHash,
+    expiresAt: expiresAt,
+    contextJson: JSON.stringify({
+      pending_device_id: pendingDeviceId,
+      preset: input.preset ?? null,
+      host_provider: input.hostProvider ?? "e2b",
+    }),
+  })
 
   return {
     pendingDeviceId: pendingDeviceId,
@@ -110,142 +101,71 @@ export async function consumeCloudBootstrap(
   opts: { controlPlaneUrl: string }
 ): Promise<ConsumeBootstrapResult> {
   const tokenHash = createHash("sha256").update(input.bootstrapToken).digest()
-  return db.transaction().execute(async (trx) => {
-    // Atomic single-shot consume: flip status to "consumed" only if the
-    // session is still pending + matching mode + not expired. Two concurrent
-    // sandbox boots can no longer both succeed and double-insert a device.
-    const claimedRows = await trx
-      .updateTable("devicePairingSessions")
-      .set({
-        status: "consumed",
-        confirmedAt: sql`NOW()`,
-        consumedAt: sql`NOW()`,
-      } as never)
-      .where("bootstrapTokenHash", "=", tokenHash)
-      .where("status", "=", "pending")
-      .where("mode", "=", "cloud_bootstrap")
-      .where("expiresAt", ">", sql<Date>`NOW()`)
-      .returningAll()
-      .execute()
-    const session = claimedRows[0]
-    if (!session) {
-      // Diagnose which precondition failed for a sharper error code.
-      const existing = await trx
-        .selectFrom("devicePairingSessions")
-        .selectAll()
-        .where("bootstrapTokenHash", "=", tokenHash)
-        .where("mode", "=", "cloud_bootstrap")
-        .executeTakeFirst()
-      if (!existing) {
+  const pubkeyFingerprint = createHash("sha256")
+    .update(input.devicePubkey)
+    .digest("hex")
+  const serviceFingerprint = createHash("sha256")
+    .update(input.servicePubkey)
+    .digest("hex")
+  const serviceId = randomUUID()
+  const serviceKeyId = randomUUID()
+
+  const result = await consumeCloudBootstrapTx({
+    tokenHash,
+    device: {
+      platform: input.platform ?? "linux",
+      arch: input.arch ?? "x64",
+      publicKey: input.devicePubkey,
+      publicKeyFingerprint: pubkeyFingerprint,
+    },
+    service: { serviceId, version: input.clientVersion ?? null },
+    serviceKey: {
+      serviceKeyId,
+      pubkey: input.servicePubkey,
+      pubkeyFingerprint: serviceFingerprint,
+    },
+  })
+
+  if (result.outcome !== "ok") {
+    switch (result.outcome) {
+      case "not_found":
         throw new DeviceModuleError({
           statusCode: 404,
           code: "bootstrap_token_not_found",
           message: "bootstrap token not recognised",
         })
-      }
-      if ((existing.status as string) !== "pending") {
+      case "not_pending":
         throw new DeviceModuleError({
           statusCode: 409,
           code: "pairing_session_not_pending",
-          message: `pairing session is ${existing.status as string}`,
+          message: `pairing session is ${result.existingStatus ?? "unknown"}`,
         })
-      }
-      const existingExpiresAt = new Date(
-        existing.expiresAt as unknown as string
-      ).getTime()
-      if (
-        Number.isFinite(existingExpiresAt) &&
-        existingExpiresAt < Date.now()
-      ) {
+      case "expired":
         throw new DeviceModuleError({
           statusCode: 410,
           code: "pairing_session_expired",
           message: "bootstrap window expired",
         })
-      }
-      throw new DeviceModuleError({
-        statusCode: 409,
-        code: "pairing_session_race",
-        message:
-          "bootstrap session was claimed by another consumer; retry not allowed",
-      })
+      case "corrupt":
+        throw new DeviceModuleError({
+          statusCode: 500,
+          code: "pairing_session_corrupt",
+          message: "pairing session is missing pending_device_id",
+        })
+      case "race":
+        throw new DeviceModuleError({
+          statusCode: 409,
+          code: "pairing_session_race",
+          message:
+            "bootstrap session was claimed by another consumer; retry not allowed",
+        })
     }
+  }
 
-    const context = (session.context ?? {}) as Record<string, unknown>
-    const pendingDeviceId = context["pending_device_id"] as string | undefined
-    if (!pendingDeviceId) {
-      throw new DeviceModuleError({
-        statusCode: 500,
-        code: "pairing_session_corrupt",
-        message: "pairing session is missing pending_device_id",
-      })
-    }
-    const hostProvider =
-      (context["host_provider"] as string | undefined) ?? "e2b"
-
-    const pubkeyFingerprint = createHash("sha256")
-      .update(input.devicePubkey)
-      .digest("hex")
-    const serviceFingerprint = createHash("sha256")
-      .update(input.servicePubkey)
-      .digest("hex")
-
-    await trx
-      .insertInto("devices")
-      .values({
-        id: pendingDeviceId,
-        workspaceId: session.workspaceId as string,
-        ownerWorkspaceMemberId: session.requestedByWorkspaceMemberId ?? null,
-        title: (session.requestedTitle as string | null) ?? "Cloud Device",
-        description: null,
-        hostKind: "cloud",
-        hostProvider: hostProvider,
-        deviceType: "cloud_sandbox",
-        platform: input.platform ?? "linux",
-        arch: input.arch ?? "x64",
-        publicKey: input.devicePubkey,
-        publicKeyFingerprint: pubkeyFingerprint,
-        trustStatus: "trusted",
-      } as never)
-      .execute()
-
-    const serviceId = randomUUID()
-    const serviceKeyId = randomUUID()
-    await trx
-      .insertInto("deviceServices")
-      .values({
-        id: serviceId,
-        deviceId: pendingDeviceId,
-        serviceKind: "device_runtime",
-        version: input.clientVersion ?? null,
-        status: "starting",
-        metadata: sql`'{}'::jsonb`,
-      } as never)
-      .execute()
-    await trx
-      .insertInto("deviceServiceKeys")
-      .values({
-        id: serviceKeyId,
-        serviceId: serviceId,
-        pubkey: input.servicePubkey,
-        pubkeyFingerprint: serviceFingerprint,
-      } as never)
-      .execute()
-    // Atomic UPDATE above already flipped status/timestamps. Just backfill
-    // the device_id FK now that the device row exists.
-    await trx
-      .updateTable("devicePairingSessions")
-      .set({
-        deviceId: pendingDeviceId,
-      } as never)
-      .where("id", "=", session.id as string)
-      .execute()
-
-    return {
-      device_id: pendingDeviceId,
-      service_id: serviceId,
-      service_key_id: serviceKeyId,
-      control_plane_url: opts.controlPlaneUrl,
-    }
-  })
+  return {
+    device_id: result.pendingDeviceId,
+    service_id: serviceId,
+    service_key_id: serviceKeyId,
+    control_plane_url: opts.controlPlaneUrl,
+  }
 }

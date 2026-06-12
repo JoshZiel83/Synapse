@@ -18,7 +18,6 @@ import { formatValidationDetails } from "../../infrastructure/validation-error.j
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { requireRequestAction } from "../access/guards.js"
-import { db } from "../../infrastructure/database/kysely.js"
 import {
   BrowserGrantPolicyError,
   GrantPolicySchema,
@@ -32,6 +31,7 @@ import {
 import { appRoute } from "../../infrastructure/http/route.js"
 import { sendData } from "../../infrastructure/http/respond.js"
 import { createRuntimeAuthorizationGrant } from "./service.js"
+import { findDeviceCapabilityGrantTarget } from "./repo.js"
 
 const manualGrantBodySchema = z.object({
   device_capability_id: z.uuid(),
@@ -131,23 +131,9 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
 
       // JOIN reverse-lookup: pull device_id / exposure_id / builtin_kind /
       // workspace_id / status. Verify they line up before the write.
-      const row = await db
-        .selectFrom("deviceCapabilities as dc")
-        .innerJoin("workspaceApps as app", "app.id", "dc.id")
-        .innerJoin("deviceExposures as dx", "dx.id", "dc.exposureId")
-        .innerJoin("devices as d", "d.id", "dx.deviceId")
-        .select([
-          "d.id as deviceId",
-          "app.workspaceId as workspaceId",
-          "dx.id as exposureId",
-          "dx.stableKey as exposureStableKey",
-          "dx.builtinKind as builtinKind",
-          "dx.runtimeStatus as runtimeStatus",
-          "app.status as status",
-        ])
-        .where("dc.id", "=", parsed.data.device_capability_id)
-        .where("app.deletedAt", "is", null)
-        .executeTakeFirst()
+      const row = await findDeviceCapabilityGrantTarget(
+        parsed.data.device_capability_id
+      )
       if (!row) {
         reply.status(404).send({
           code: "device_capability_not_found",

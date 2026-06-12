@@ -4,20 +4,13 @@
  * behavior. Includes endpoint upsert because every binding write also
  * writes a transport_endpoints row.
  *
- * Extracted from service.ts. service.ts re-exports for back-compat.
+ * The raw queries + transactions live in repo-bindings.ts (a repo file,
+ * which may import the db client + sql); this file keeps the business
+ * orchestration (connector binding defaults, friendly FK/trigger guards,
+ * actor resolution, outbound flip detection) and is re-exported by
+ * service.ts for back-compat.
  */
 
-import { sql } from "kysely"
-import {
-  db,
-  withDbTransaction,
-  type KyselyDb,
-} from "../../../infrastructure/database/kysely.js"
-import type {
-  TransportEndpointMetadataInsert,
-  ConversationTransportBindingMetadataInsert,
-} from "../repo.types.js"
-import { v4 as uuidv4 } from "uuid"
 import type {
   TransportConversationInboundActorMode,
   TransportEndpointType,
@@ -25,7 +18,6 @@ import type {
 } from "@synapse/shared/types"
 import { assertSupportedEndpointType } from "../connectors/index.js"
 import { tryGetConnector } from "../connectors/registry.js"
-import { recoverSkippedProjectionsForRecoveryEvent } from "./recovery.js"
 import {
   normalizeAccountRow,
   normalizeBindingRow,
@@ -36,55 +28,23 @@ import {
   loadTransportAccountRow,
   listTransportSessions,
 } from "./accounts.js"
+import type { KyselyDb } from "../../../infrastructure/database/kysely.js"
+import {
+  existsConflictingExternalParticipant,
+  existsConversationTransportBinding,
+  selectConversationIdByEndpoint,
+  selectConversationTransportBindingByEndpointRow,
+  selectConversationTransportBindingRow,
+  selectConversationWorkspaceId,
+  updateConversationTransportBindingSettings,
+  writeConversationTransportBinding,
+} from "./repo-bindings.js"
 
 export async function getConversationTransportBinding(params: {
   workspaceId: string
   conversationId: string
 }) {
-  const row = await db
-    .selectFrom("conversationTransportBindings as ctb")
-    .innerJoin("transportAccounts as ta", "ta.id", "ctb.transportAccountId")
-    .innerJoin("transportEndpoints as te", "te.id", "ctb.transportEndpointId")
-    .select([
-      "ctb.id as bindingId",
-      "ctb.workspaceId as workspaceId",
-      "ctb.conversationId as conversationId",
-      "ctb.outboundEnabled as outboundEnabled",
-      "ctb.inboundActorMode as inboundActorMode",
-      "ctb.inboundActorId as inboundActorId",
-      "ctb.metadata as bindingMetadata",
-      "ctb.createdAt as bindingCreatedAt",
-      "ctb.updatedAt as bindingUpdatedAt",
-      "ta.id",
-      "ta.accountKey as accountKey",
-      "ta.displayName as displayName",
-      "ta.transportKind as transportKind",
-      "ta.ownerScope as ownerScope",
-      "ta.ownerWorkspaceMemberId as ownerWorkspaceMemberId",
-      "ta.inboundActorMode as accountInboundActorMode",
-      "ta.inboundActorId as accountInboundActorId",
-      "ta.connectionMode as connectionMode",
-      "ta.status",
-      "ta.credentials",
-      "ta.config",
-      "ta.metadata",
-      "ta.createdAt as createdAt",
-      "ta.updatedAt as updatedAt",
-      "te.id as endpointId",
-      "te.transportAccountId as transportAccountId",
-      "te.endpointType as endpointType",
-      "te.externalId as endpointExternalId",
-      "te.parentExternalId as parentExternalId",
-      "te.displayName as endpointDisplayName",
-      "te.metadata as endpointMetadata",
-      "te.createdAt as endpointCreatedAt",
-      "te.updatedAt as endpointUpdatedAt",
-    ])
-    .where("ctb.workspaceId", "=", params.workspaceId)
-    .where("ctb.conversationId", "=", params.conversationId)
-    .limit(1)
-    .executeTakeFirst()
-
+  const row = await selectConversationTransportBindingRow(params)
   return row ? normalizeBindingRow(row) : null
 }
 
@@ -105,17 +65,7 @@ export async function hasConversationTransportBinding(params: {
   workspaceId?: string
   queryable?: KyselyDb
 }): Promise<boolean> {
-  const executor = params.queryable ?? db
-  let query = executor
-    .selectFrom("conversationTransportBindings")
-    .select(sql<number>`1`.as("one"))
-    .where("conversationId", "=", params.conversationId)
-    .limit(1)
-  if (params.workspaceId !== undefined) {
-    query = query.where("workspaceId", "=", params.workspaceId)
-  }
-  const row = await query.executeTakeFirst()
-  return Boolean(row)
+  return existsConversationTransportBinding(params)
 }
 
 export async function findConversationTransportBindingByEndpoint(params: {
@@ -123,51 +73,7 @@ export async function findConversationTransportBindingByEndpoint(params: {
   endpointType: TransportEndpointType
   endpointExternalId: string
 }) {
-  const row = await db
-    .selectFrom("conversationTransportBindings as ctb")
-    .innerJoin("transportAccounts as ta", "ta.id", "ctb.transportAccountId")
-    .innerJoin("transportEndpoints as te", "te.id", "ctb.transportEndpointId")
-    .select([
-      "ctb.id as bindingId",
-      "ctb.workspaceId as workspaceId",
-      "ctb.conversationId as conversationId",
-      "ctb.outboundEnabled as outboundEnabled",
-      "ctb.inboundActorMode as inboundActorMode",
-      "ctb.inboundActorId as inboundActorId",
-      "ctb.metadata as bindingMetadata",
-      "ctb.createdAt as bindingCreatedAt",
-      "ctb.updatedAt as bindingUpdatedAt",
-      "ta.id",
-      "ta.accountKey as accountKey",
-      "ta.displayName as displayName",
-      "ta.transportKind as transportKind",
-      "ta.ownerScope as ownerScope",
-      "ta.ownerWorkspaceMemberId as ownerWorkspaceMemberId",
-      "ta.inboundActorMode as accountInboundActorMode",
-      "ta.inboundActorId as accountInboundActorId",
-      "ta.connectionMode as connectionMode",
-      "ta.status",
-      "ta.credentials",
-      "ta.config",
-      "ta.metadata",
-      "ta.createdAt as createdAt",
-      "ta.updatedAt as updatedAt",
-      "te.id as endpointId",
-      "te.transportAccountId as transportAccountId",
-      "te.endpointType as endpointType",
-      "te.externalId as endpointExternalId",
-      "te.parentExternalId as parentExternalId",
-      "te.displayName as endpointDisplayName",
-      "te.metadata as endpointMetadata",
-      "te.createdAt as endpointCreatedAt",
-      "te.updatedAt as endpointUpdatedAt",
-    ])
-    .where("ctb.transportAccountId", "=", params.transportAccountId)
-    .where("te.endpointType", "=", params.endpointType)
-    .where("te.externalId", "=", params.endpointExternalId.trim())
-    .limit(1)
-    .executeTakeFirst()
-
+  const row = await selectConversationTransportBindingByEndpointRow(params)
   return row ? normalizeBindingRow(row) : null
 }
 
@@ -195,12 +101,9 @@ export async function upsertConversationTransportBinding(params: {
   // The conversation must belong to the same workspace as the binding/account.
   // The DB enforces this via composite FKs, but check here for a friendly error
   // rather than a raw FK violation (and to fail before the endpoint upsert).
-  const conversationRow = await db
-    .selectFrom("conversations")
-    .select("workspaceId")
-    .where("id", "=", params.conversationId)
-    .limit(1)
-    .executeTakeFirst()
+  const conversationRow = await selectConversationWorkspaceId(
+    params.conversationId
+  )
   if (!conversationRow) {
     throw new Error("Conversation not found")
   }
@@ -213,16 +116,10 @@ export async function upsertConversationTransportBinding(params: {
   // while external participants from another account remain (they would become
   // account-mismatched). The trigger is the hard enforcement; this surfaces a
   // clean error instead of a raw trigger exception.
-  const conflictingExternal = await db
-    .selectFrom("conversationParticipants as cp")
-    .innerJoin("accessSubjects as asx", "asx.id", "cp.subjectId")
-    .innerJoin("transportAddresses as ta", "ta.id", "asx.transportAddressId")
-    .select("cp.id")
-    .where("cp.conversationId", "=", params.conversationId)
-    .where("asx.kind", "=", "external")
-    .where("ta.transportAccountId", "!=", params.transportAccountId)
-    .limit(1)
-    .executeTakeFirst()
+  const conflictingExternal = await existsConflictingExternalParticipant({
+    conversationId: params.conversationId,
+    transportAccountId: params.transportAccountId,
+  })
   if (conflictingExternal) {
     throw new Error(
       "Cannot re-bind conversation to a different transport account while external participants from another account remain"
@@ -266,73 +163,19 @@ export async function upsertConversationTransportBinding(params: {
       ? { ...baseMetadata, ...defaults.metadata }
       : baseMetadata
 
-  await withDbTransaction(async (trx) => {
-    const endpointRow = await trx
-      .insertInto("transportEndpoints")
-      .values({
-        id: uuidv4(),
-        transportAccountId: params.transportAccountId,
-        endpointType: params.endpointType,
-        externalId: params.endpointExternalId.trim(),
-        parentExternalId: params.parentExternalId?.trim() || null,
-        displayName: params.endpointDisplayName?.trim() || null,
-        metadata: (params.metadata || {}) as TransportEndpointMetadataInsert,
-        createdAt: sql`NOW()`,
-      })
-      .onConflict((oc) =>
-        oc
-          .columns(["transportAccountId", "endpointType", "externalId"])
-          .doUpdateSet({
-            parentExternalId: sql`excluded.parent_external_id`,
-            displayName: sql`COALESCE(excluded.display_name, transport_endpoints.display_name)`,
-            metadata: sql`transport_endpoints.metadata || excluded.metadata`,
-          })
-      )
-      .returning("id")
-      .executeTakeFirst()
-    const endpointId = endpointRow?.id
-    if (!endpointId) {
-      throw new Error("Failed to upsert transport endpoint")
-    }
-
-    await trx
-      .insertInto("conversationTransportBindings")
-      .values({
-        id: uuidv4(),
-        workspaceId: params.workspaceId,
-        conversationId: params.conversationId,
-        transportAccountId: params.transportAccountId,
-        transportEndpointId: endpointId,
-        outboundEnabled: effectiveOutboundEnabled,
-        inboundActorMode: inboundActorMode,
-        inboundActorId: inboundActorId,
-        metadata:
-          effectiveMetadata as ConversationTransportBindingMetadataInsert,
-        createdAt: sql`NOW()`,
-      })
-      .onConflict((oc) =>
-        oc.column("conversationId").doUpdateSet({
-          transportAccountId: sql`excluded.transport_account_id`,
-          transportEndpointId: sql`excluded.transport_endpoint_id`,
-          outboundEnabled: sql`excluded.outbound_enabled`,
-          inboundActorMode: sql`excluded.inbound_actor_mode`,
-          inboundActorId: sql`excluded.inbound_actor_id`,
-          metadata: sql`excluded.metadata`,
-        })
-      )
-      .execute()
-
-    // Recovery: a fresh / replaced binding may resolve projections that
-    // were previously skipped for any of the recoverable reasons
-    // (no_binding / not_supported_in_v1 / outbound_disabled /
-    // webhook_inbound_unavailable). Fire in the same tx so the create +
-    // re-arm commit together.
-    await recoverSkippedProjectionsForRecoveryEvent(trx, {
-      kind: "binding_created_or_replaced",
-      conversationId: params.conversationId,
-      transportAccountId: params.transportAccountId,
-      transportEndpointId: endpointId,
-    })
+  await writeConversationTransportBinding({
+    workspaceId: params.workspaceId,
+    conversationId: params.conversationId,
+    transportAccountId: params.transportAccountId,
+    endpointType: params.endpointType,
+    endpointExternalId: params.endpointExternalId,
+    parentExternalId: params.parentExternalId,
+    endpointDisplayName: params.endpointDisplayName,
+    endpointMetadata: params.metadata || {},
+    outboundEnabled: effectiveOutboundEnabled,
+    inboundActorMode,
+    inboundActorId,
+    metadata: effectiveMetadata,
   })
 
   return getConversationTransportBinding({
@@ -386,32 +229,29 @@ export async function updateConversationTransportSettings(params: {
     updates.metadata = {
       ...parseJsonObject(existing.metadata),
       ...(params.metadata || {}),
-    } as ConversationTransportBindingMetadataInsert
+    }
   }
 
-  // Wrap in a tx so the outbound_enabled change + projection recovery
-  // land atomically. Without this a crash between the binding UPDATE
-  // and the recovery SQL would leave skipped projections stranded even
-  // though the operator just re-enabled outbound.
-  await db.transaction().execute(async (tx) => {
-    await tx
-      .updateTable("conversationTransportBindings")
-      .set(updates)
-      .where("workspaceId", "=", params.workspaceId)
-      .where("conversationId", "=", params.conversationId)
-      .execute()
+  // Recovery: if outbound just flipped false → true, re-arm any
+  // `outbound_disabled` projections pinned to this conversation's
+  // (account, endpoint). The endpoint id is taken from the original
+  // existing row — outbound toggling never replaces the endpoint. The
+  // flip detection is the business rule (stays here); the atomic
+  // UPDATE + re-arm commit together in the repo.
+  const recovery =
+    params.outboundEnabled === true && existing.outboundEnabled === false
+      ? ({
+          kind: "outbound_re_enabled" as const,
+          transportAccountId: existing.account.id,
+          transportEndpointId: existing.endpoint.id,
+        } as const)
+      : null
 
-    // Recovery: if outbound just flipped false → true, re-arm any
-    // `outbound_disabled` projections pinned to this conversation's
-    // (account, endpoint). The endpoint id is taken from the original
-    // existing row — outbound toggling never replaces the endpoint.
-    if (params.outboundEnabled === true && existing.outboundEnabled === false) {
-      await recoverSkippedProjectionsForRecoveryEvent(tx, {
-        kind: "outbound_re_enabled",
-        transportAccountId: existing.account.id,
-        transportEndpointId: existing.endpoint.id,
-      })
-    }
+  await updateConversationTransportBindingSettings({
+    workspaceId: params.workspaceId,
+    conversationId: params.conversationId,
+    updates,
+    recovery,
   })
 
   return getConversationTransportBinding({
@@ -428,14 +268,10 @@ export async function updateTransportSessionSettings(params: {
   inboundActorId?: string | null
   metadata?: Record<string, unknown>
 }) {
-  const row = await db
-    .selectFrom("conversationTransportBindings")
-    .select("conversationId")
-    .where("workspaceId", "=", params.workspaceId)
-    .where("transportEndpointId", "=", params.transportEndpointId)
-    .limit(1)
-    .executeTakeFirst()
-  const conversationId = row?.conversationId as string | undefined
+  const conversationId = await selectConversationIdByEndpoint({
+    workspaceId: params.workspaceId,
+    transportEndpointId: params.transportEndpointId,
+  })
   if (!conversationId) {
     throw new Error("Transport session not found")
   }

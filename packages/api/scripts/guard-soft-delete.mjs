@@ -136,7 +136,7 @@ const READ_INFRA_ALLOWLIST = new Set([
   "modules/soft-delete/orchestration.ts",
   "infrastructure/database/seed.ts",
   "infrastructure/database/seeds/actors/seed-official-actors.ts",
-  "modules/platform/admin-service.ts",
+  "modules/platform/repo.ts",
   "modules/sandbox/gc.ts",
 ])
 // Read rule (review F8): the existing business read-surface is large (~100 naked

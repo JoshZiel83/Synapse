@@ -1,4 +1,3 @@
-import { db } from "../../infrastructure/database/kysely.js"
 import { z } from "zod"
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify"
 import {
@@ -14,21 +13,22 @@ import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { requireRequestAction } from "../access/guards.js"
 import {
-  authorizeAction,
-  authorizePermission,
   getRequestAccessSubject,
   type AccessSubject,
 } from "../access/service.js"
 import {
-  checkPermission,
-  hasMemorySpaceOwnerImplicitPermissionForTuple,
-} from "../access/evaluator.js"
-import { buildRuntimePrincipalContext } from "../access/subject-resolution.js"
-import {
-  insertMemoryAccessGrant,
-  listActiveMemoryAccessGrants,
-  revokeMemoryAccessGrant,
-} from "./access-grant-storage.js"
+  authorizePermissionDefault,
+  buildRuntimePrincipalContextDefault,
+  checkPermissionDefault,
+  findMemoryAccessGrantMembership,
+  findMemoryItemSpaceMembership,
+  findMemorySpaceConversationAnchor,
+  findMemorySpaceInWorkspace,
+  hasMemorySpaceOwnerImplicitPermissionForTupleDefault,
+  insertMemoryAccessGrantDefault,
+  listActiveMemoryAccessGrantsDefault,
+  revokeMemoryAccessGrantDefault,
+} from "./repo.js"
 import {
   createMemory,
   deleteMemory,
@@ -349,32 +349,17 @@ async function requireMemoryPermission(
         ? query.conversationId
         : undefined
     if (!conversationId) {
-      const spaceAnchor = await db
-        .selectFrom("memoryItems as mi")
-        .innerJoin("memorySpaces as ms", "ms.id", "mi.memorySpaceId")
-        .innerJoin(
-          "accessSubjects as owner_subj",
-          "owner_subj.id",
-          "ms.ownerSubjectId"
-        )
-        .leftJoin(
-          "accessSubjects as scope_subj",
-          "scope_subj.id",
-          "ms.scopeSubjectId"
-        )
-        .select([
-          "owner_subj.conversationId as ownerConv",
-          "scope_subj.conversationId as scopeConv",
-        ])
-        .where("mi.id", "=", memoryId)
-        .where("mi.workspaceId", "=", workspaceId)
-        .limit(1)
-        .executeTakeFirst()
+      const spaceAnchor = await findMemorySpaceConversationAnchor(
+        memoryId,
+        workspaceId
+      )
       conversationId =
-        spaceAnchor?.scopeConv ?? spaceAnchor?.ownerConv ?? undefined
+        spaceAnchor?.scopeConversationId ??
+        spaceAnchor?.ownerConversationId ??
+        undefined
     }
     try {
-      const ctx = await buildRuntimePrincipalContext(db, {
+      const ctx = await buildRuntimePrincipalContextDefault({
         principal,
         workspaceId,
         conversationId,
@@ -385,7 +370,7 @@ async function requireMemoryPermission(
       // principal not in workspace
     }
   }
-  const allowed = await authorizePermission(db, {
+  const allowed = await authorizePermissionDefault({
     subject,
     resourceType: "memory_item",
     resourceId: memoryId,
@@ -449,7 +434,7 @@ async function requireMemorySpaceWritePermission(
   let runtimeSubjectIds: readonly string[] = []
   let runtimeScopeSubjectIds: readonly string[] = []
   try {
-    const ctx = await buildRuntimePrincipalContext(db, {
+    const ctx = await buildRuntimePrincipalContextDefault({
       principal,
       workspaceId,
       conversationId:
@@ -490,7 +475,7 @@ async function requireMemorySpaceWritePermission(
 
   let allowed = false
   if (existing) {
-    allowed = await authorizePermission(db, {
+    allowed = await authorizePermissionDefault({
       subject,
       resourceType: "memory_space",
       resourceId: existing.id,
@@ -502,8 +487,7 @@ async function requireMemorySpaceWritePermission(
     // No existing row — there can't be any memory_access_grants for it
     // yet, so the owner-implicit evaluator is sufficient (and avoids
     // writing the placeholder space we'd otherwise leak on denial).
-    allowed = await hasMemorySpaceOwnerImplicitPermissionForTuple(
-      db,
+    allowed = await hasMemorySpaceOwnerImplicitPermissionForTupleDefault(
       subject,
       {
         workspaceId,
@@ -817,7 +801,7 @@ export function registerMemoryRoutes(app: FastifyInstance) {
         let runtimeSubjectIds: readonly string[] = []
         let runtimeScopeSubjectIds: readonly string[] = []
         try {
-          const ctx = await buildRuntimePrincipalContext(db, {
+          const ctx = await buildRuntimePrincipalContextDefault({
             principal,
             workspaceId,
             // Surface the target conversation (if any) so write permission
@@ -877,7 +861,7 @@ export function registerMemoryRoutes(app: FastifyInstance) {
               : body.owner.kind === SUBJECT_KIND.CONVERSATION
                 ? body.owner.conversationId
                 : null
-          const targetCtx = await buildRuntimePrincipalContext(db, {
+          const targetCtx = await buildRuntimePrincipalContextDefault({
             principal,
             workspaceId,
             conversationId: targetConversationId,
@@ -889,7 +873,7 @@ export function registerMemoryRoutes(app: FastifyInstance) {
         } catch {
           // keep the source-side context as a conservative fallback
         }
-        const readAllowed = await authorizePermission(db, {
+        const readAllowed = await authorizePermissionDefault({
           subject,
           resourceType: "memory_item",
           resourceId: memoryId,
@@ -971,12 +955,7 @@ export function registerMemoryRoutes(app: FastifyInstance) {
     workspaceId: string,
     reply: FastifyReply
   ): Promise<boolean> {
-    const row = await db
-      .selectFrom("memorySpaces")
-      .select(["id", "workspaceId"])
-      .where("id", "=", spaceId)
-      .limit(1)
-      .executeTakeFirst()
+    const row = await findMemorySpaceInWorkspace(spaceId)
     if (!row || row.workspaceId !== workspaceId) {
       reply.status(404).send({ error: "memory space not found in workspace" })
       return false
@@ -1002,7 +981,7 @@ export function registerMemoryRoutes(app: FastifyInstance) {
     let runtimeScopeSubjectIds: readonly string[] | undefined
     if (principal) {
       try {
-        const ctx = await buildRuntimePrincipalContext(db, {
+        const ctx = await buildRuntimePrincipalContextDefault({
           principal,
           workspaceId,
           conversationId,
@@ -1013,7 +992,7 @@ export function registerMemoryRoutes(app: FastifyInstance) {
         // not in workspace
       }
     }
-    const managePermitted = await checkPermission(db, {
+    const managePermitted = await checkPermissionDefault({
       resourceType: "memory_space",
       resourceId: spaceId,
       permission: "manage",
@@ -1055,12 +1034,7 @@ export function registerMemoryRoutes(app: FastifyInstance) {
 
         const body = createMemoryGrantSchema.parse(request.body)
         if (body.memoryItemId) {
-          const itemRow = await db
-            .selectFrom("memoryItems")
-            .select(["id", "memorySpaceId", "workspaceId"])
-            .where("id", "=", body.memoryItemId)
-            .limit(1)
-            .executeTakeFirst()
+          const itemRow = await findMemoryItemSpaceMembership(body.memoryItemId)
           if (
             !itemRow ||
             itemRow.memorySpaceId !== spaceId ||
@@ -1072,7 +1046,7 @@ export function registerMemoryRoutes(app: FastifyInstance) {
           }
         }
 
-        const grant = await insertMemoryAccessGrant(db, {
+        const grant = await insertMemoryAccessGrantDefault({
           workspaceId,
           memorySpaceId: spaceId,
           memoryItemId: body.memoryItemId ?? null,
@@ -1114,7 +1088,7 @@ export function registerMemoryRoutes(app: FastifyInstance) {
           !(await assertSpaceManageable(request, reply, workspaceId, spaceId))
         )
           return
-        const grants = await listActiveMemoryAccessGrants(db, spaceId)
+        const grants = await listActiveMemoryAccessGrantsDefault(spaceId)
         return reply.status(200).send({ grants })
       } catch (error) {
         return handleError(error, reply)
@@ -1145,12 +1119,7 @@ export function registerMemoryRoutes(app: FastifyInstance) {
           !(await assertSpaceManageable(request, reply, workspaceId, spaceId))
         )
           return
-        const grantRow = await db
-          .selectFrom("memoryAccessGrants")
-          .select(["id", "memorySpaceId", "workspaceId"])
-          .where("id", "=", grantId)
-          .limit(1)
-          .executeTakeFirst()
+        const grantRow = await findMemoryAccessGrantMembership(grantId)
         if (
           !grantRow ||
           grantRow.memorySpaceId !== spaceId ||
@@ -1158,7 +1127,7 @@ export function registerMemoryRoutes(app: FastifyInstance) {
         ) {
           return reply.status(404).send({ error: "grant not found in space" })
         }
-        const revoked = await revokeMemoryAccessGrant(db, grantId)
+        const revoked = await revokeMemoryAccessGrantDefault(grantId)
         return reply.status(200).send({ revoked })
       } catch (error) {
         return handleError(error, reply)

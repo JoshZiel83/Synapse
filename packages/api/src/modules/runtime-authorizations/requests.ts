@@ -7,11 +7,9 @@ import type {
   Timestamp,
 } from "@synapse/shared/types"
 import { textBlocks } from "@synapse/shared"
-import { sql } from "kysely"
-import { db } from "../../infrastructure/database/kysely.js"
 import { sleep } from "../../infrastructure/async/index.js"
 import { randomUUID } from "node:crypto"
-import { authorizeAction } from "../access/service.js"
+import { authorizeActionDefault } from "../access/guards.js"
 import { buildUserTaskTargetCandidatesFromRows } from "../ai/session-tool-user-task-targets.js"
 import { listConversationParticipants } from "../chat/service.js"
 import {
@@ -29,6 +27,11 @@ import {
   getToolCallTask,
   type ToolCallTaskRecord,
 } from "../tool-call-tasks/service.js"
+import {
+  hasNewUserFacingConversationMessage,
+  loadConversationKindRow,
+  loadDeviceCapabilityRequestState,
+} from "./repo.js"
 
 export interface RuntimeAuthorizationRequestSource {
   workspaceId: string
@@ -193,41 +196,7 @@ async function loadConversationKindAndBoundary(
     }
   }
 
-  return db
-    .selectFrom("conversations")
-    .select(["kind"])
-    .where("id", "=", conversationId)
-    .limit(1)
-    .executeTakeFirst()
-}
-
-async function loadDeviceCapabilityRequestState(capabilityId: string) {
-  return db
-    .selectFrom("deviceCapabilities as capability")
-    .innerJoin("workspaceApps as app", "app.id", "capability.id")
-    .innerJoin(
-      "deviceExposures as exposure",
-      "exposure.id",
-      "capability.exposureId"
-    )
-    .innerJoin("devices as device", "device.id", "exposure.deviceId")
-    .select([
-      "capability.id as capabilityId",
-      "app.status as capabilityStatus",
-      "exposure.id as exposureId",
-      "exposure.runtimeStatus as exposureRuntimeStatus",
-      "device.workspaceId as ownerWorkspaceId",
-      sql<boolean>`EXISTS (
-        SELECT 1
-        FROM device_control_plane_sessions session_row
-        WHERE session_row.device_id = device.id
-          AND session_row.status = 'active'
-      )`.as("hasActiveDeviceSession"),
-    ])
-    .where("capability.id", "=", capabilityId)
-    .where("app.deletedAt", "is", null)
-    .limit(1)
-    .executeTakeFirst()
+  return loadConversationKindRow(conversationId)
 }
 
 async function canActorRequestRuntimeAuthorization(
@@ -257,33 +226,6 @@ async function canActorRequestRuntimeAuthorization(
   // upstream via the access subsystem; this helper only verifies the
   // device/exposure/capability is reachable.
   return true
-}
-
-async function hasNewUserFacingConversationMessage(
-  conversationId: string,
-  afterIso: string
-) {
-  const row = await db
-    .selectFrom("conversationItems as ci")
-    .leftJoin(
-      "conversationParticipants as cp",
-      "cp.id",
-      "ci.authorParticipantId"
-    )
-    .leftJoin("accessSubjects as cpsubj", "cpsubj.id", "cp.subjectId")
-    .select("ci.id")
-    .where("ci.conversationId", "=", conversationId)
-    .where("ci.itemType", "=", "message")
-    .where("ci.createdAt", ">", new Date(afterIso))
-    .where((eb) =>
-      eb.or([
-        eb("ci.role", "=", "user"),
-        eb("cpsubj.kind", "in", ["workspace_member", "external"]),
-      ])
-    )
-    .limit(1)
-    .executeTakeFirst()
-  return Boolean(row)
 }
 
 export function buildRuntimeAuthorizationRetryNonce() {
@@ -334,7 +276,7 @@ export async function createRuntimeAuthorizationRequest(
   const authorizerCandidates = await Promise.all(
     candidates.map(async (candidate) => ({
       candidate,
-      allowed: await authorizeAction(db, {
+      allowed: await authorizeActionDefault({
         subject: { type: "workspace_member", id: candidate.workspaceMemberId },
         action: "device_capability.request_runtime_authorization",
         resourceId: params.runtimeTarget.deviceCapabilityId,

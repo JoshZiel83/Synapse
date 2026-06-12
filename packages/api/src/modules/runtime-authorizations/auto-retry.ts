@@ -17,7 +17,6 @@ import { randomUUID, createHash } from "node:crypto"
 import { canonicalizeEnvelopePayload } from "@synapse/device-protocol"
 import { serializeCommandlinePolicyToWire } from "@synapse/shared/access/policies"
 import { dateToIsoInstant, nowIsoInstant } from "@synapse/shared/datetime"
-import { db } from "../../infrastructure/database/kysely.js"
 import { dispatchSyncTool } from "../devices/dispatch.js"
 import { signEnvelopeForDispatch } from "../devices/envelope-signer.js"
 import { getDeviceTunnelRegistry } from "../devices/tunnel-registry.js"
@@ -32,6 +31,7 @@ import {
   type PreparedDispatch,
   type RuntimeAuthorizationGrantRecord,
 } from "./service.js"
+import { findAutoRetryTarget } from "./repo.js"
 
 export interface AutoRetryDispatchResult {
   ok: boolean
@@ -69,55 +69,6 @@ export function cuaFocusScopeForAutoRetry(args: {
 }
 
 /**
- * Look up the device tool runtime target (service id, tool revision, etc.)
- * for a freshly approved runtime authorization. Returns null when any piece
- * is missing — caller must fall back to the static approval notice in that
- * case (e.g. the device went offline between request and approval).
- */
-async function resolveAutoRetryTarget(args: {
-  deviceCapabilityId: string
-  visibleToolName: string
-}): Promise<{
-  deviceId: string
-  deviceServiceId: string
-  deviceExposureId: string
-  deviceToolId: string
-  deviceToolRevisionId: string
-} | null> {
-  const row = await db
-    .selectFrom("deviceCapabilities as dc")
-    .innerJoin("workspaceApps as app", "app.id", "dc.id")
-    .innerJoin("deviceExposures as dx", "dx.id", "dc.exposureId")
-    .innerJoin("devices as d", "d.id", "dx.deviceId")
-    .innerJoin("deviceTools as dt", "dt.exposureId", "dx.id")
-    .innerJoin("deviceToolRevisions as dtr", "dtr.id", "dt.latestRevisionId")
-    .select([
-      "d.id as deviceId",
-      "dx.serviceId as deviceServiceId",
-      "dx.id as deviceExposureId",
-      "dt.id as deviceToolId",
-      "dtr.id as deviceToolRevisionId",
-    ])
-    .where("dc.id", "=", args.deviceCapabilityId)
-    .where("app.deletedAt", "is", null)
-    .where("app.status", "=", "active")
-    .where("dt.currentName", "=", args.visibleToolName)
-    .where("dt.status", "=", "active")
-    // Soft-delete (§8.6): never auto-retry against a soft-closed device's tool.
-    .where("d.deletedAt", "is", null)
-    .limit(1)
-    .executeTakeFirst()
-  if (!row) return null
-  return {
-    deviceId: row.deviceId as string,
-    deviceServiceId: row.deviceServiceId as string,
-    deviceExposureId: row.deviceExposureId as string,
-    deviceToolId: row.deviceToolId as string,
-    deviceToolRevisionId: row.deviceToolRevisionId as string,
-  }
-}
-
-/**
  * Re-dispatch the original tool call with the freshly approved grant +
  * retry_nonce baked into the envelope. The caller hands us the EXACT args
  * the user originally tried (sourceRequestArgs persisted on the
@@ -152,7 +103,7 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
     initiatedByWorkspaceMemberId: string | null
   }
 }): Promise<AutoRetryDispatchResult> {
-  const target = await resolveAutoRetryTarget({
+  const target = await findAutoRetryTarget({
     deviceCapabilityId: args.deviceCapabilityId,
     visibleToolName: args.visibleToolName,
   })

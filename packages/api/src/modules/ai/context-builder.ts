@@ -26,7 +26,11 @@ import {
   textBlocks,
 } from "@synapse/shared"
 import { renderConversationEventContextBlocks } from "../chat/event-registry.js"
-import { db } from "../../infrastructure/database/kysely.js"
+import {
+  getToolCallsForSession,
+  getToolResultsByToolCallIds,
+  getToolResultPartsByResultIds,
+} from "./repo.js"
 import { itemPartsToCanonicalContentBlocks } from "../chat/message-content.js"
 
 /**
@@ -50,11 +54,7 @@ export async function loadExecutionToolResultsForSession(
   const out = new Map<string, CanonicalToolResult>()
   if (!sessionId) return out
 
-  const toolCalls = await db
-    .selectFrom("toolCalls")
-    .select(["id", "providerCallId", "toolName"])
-    .where("sessionId", "=", sessionId)
-    .execute()
+  const toolCalls = await getToolCallsForSession(sessionId)
   if (toolCalls.length === 0) return out
 
   const callsById = new Map<
@@ -67,13 +67,7 @@ export async function loadExecutionToolResultsForSession(
   const toolCallIds = [...callsById.keys()]
 
   // Take the latest tool_results row per tool_call (highest result_index).
-  const results = await db
-    .selectFrom("toolResults")
-    .selectAll()
-    .where("toolCallId", "in", toolCallIds)
-    .orderBy("toolCallId", "asc")
-    .orderBy("resultIndex", "desc")
-    .execute()
+  const results = await getToolResultsByToolCallIds(toolCallIds)
   const latestByCall = new Map<string, (typeof results)[number]>()
   for (const row of results) {
     if (!latestByCall.has(row.toolCallId)) latestByCall.set(row.toolCallId, row)
@@ -81,13 +75,7 @@ export async function loadExecutionToolResultsForSession(
   if (latestByCall.size === 0) return out
 
   const resultIds = [...latestByCall.values()].map((r) => r.id)
-  const parts = await db
-    .selectFrom("toolResultParts")
-    .selectAll()
-    .where("toolResultId", "in", resultIds)
-    .orderBy("toolResultId", "asc")
-    .orderBy("ordinal", "asc")
-    .execute()
+  const parts = await getToolResultPartsByResultIds(resultIds)
   const partsByResult = new Map<string, any[]>()
   for (const row of parts) {
     const arr = partsByResult.get(row.toolResultId) || []

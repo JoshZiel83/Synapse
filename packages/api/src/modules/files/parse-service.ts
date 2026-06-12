@@ -5,21 +5,28 @@ import type {
   FileParseRunView,
 } from "@synapse/shared/types"
 import { parseJsonObjectOrUndefined as parseJsonObject } from "@synapse/shared"
-import { db } from "../../infrastructure/database/kysely.js"
 import { fileParsingQueue } from "../../workers/queues.js"
 import { extractImageOcrText } from "../ai/image-fallback.js"
 import { getFileDetail, getFileRecord, readFileBufferById } from "./service.js"
 import {
+  completeParseRun,
+  getLatestParseRun,
+  getParseRunById,
+  insertPendingParseRun,
+  listParseOutputRowsForRuns,
+  markParseRunFailed,
+  markParseRunFileNotFound,
+  markParseRunStrategy,
+} from "./repo-parse.js"
+import {
   presentFileParseOutput,
   presentFileParseRun,
   type FileParseRunRow as ParseRunRow,
-  type FileParseOutputRow as ParseOutputRow,
 } from "./presenter.js"
 
 const localRequire = createRequire(import.meta.url)
 
 export const DEFAULT_FILE_PARSE_PIPELINE = "default_extract"
-const PENDING_PARSER_KEY = "pending_dispatch"
 const UTF8_TEXT_PARSER_KEY = "utf8_text"
 const UTF8_TEXT_PARSER_VERSION = "1"
 const PDF_PARSE_PARSER_KEY = "pdf_parse"
@@ -55,8 +62,9 @@ type ParseStrategy =
       errorMessage: string
     }
 
-// ParseRunRow / ParseOutputRow types + their row→View presenters live in
-// ./presenter.ts (round-6 P1-7) and are imported above as aliases.
+// The ParseRunRow type + the row→View presenters live in ./presenter.ts
+// (round-6 P1-7); the DB reads/writes now live in ./repo-parse.ts (round-6
+// P1-6 guard r8). This file owns only the orchestration + pure glue.
 
 function isTextLikeMimeType(mimeType: string): boolean {
   return (
@@ -190,12 +198,7 @@ async function listParseOutputsForRuns(
     return new Map()
   }
 
-  const rows = (await db
-    .selectFrom("fileParseOutputs")
-    .selectAll()
-    .where("runId", "in", runIds)
-    .orderBy("createdAt", "asc")
-    .execute()) as ParseOutputRow[]
+  const rows = await listParseOutputRowsForRuns(runIds)
 
   const derivedFileIds = Array.from(
     new Set(
@@ -259,18 +262,11 @@ export async function enqueueFileParse(params: {
     return null
   }
 
-  const run = await db
-    .insertInto("fileParseRuns")
-    .values({
-      assetId: params.fileId,
-      pipeline: params.pipeline || DEFAULT_FILE_PARSE_PIPELINE,
-      parserKey: PENDING_PARSER_KEY,
-      parserVersion: null,
-      trigger: params.trigger,
-      status: "pending",
-    })
-    .returning("id")
-    .executeTakeFirstOrThrow()
+  const run = await insertPendingParseRun({
+    assetId: params.fileId,
+    pipeline: params.pipeline || DEFAULT_FILE_PARSE_PIPELINE,
+    trigger: params.trigger,
+  })
 
   await fileParsingQueue.add(
     "parse",
@@ -298,27 +294,14 @@ export async function enqueueDefaultFileParse(params: {
 }
 
 export async function processFileParseRun(runId: string): Promise<void> {
-  const run = (await db
-    .selectFrom("fileParseRuns")
-    .selectAll()
-    .where("id", "=", runId)
-    .executeTakeFirst()) as ParseRunRow | undefined
+  const run = await getParseRunById(runId)
   if (!run) {
     return
   }
 
   const record = await getFileRecord(run.assetId)
   if (!record) {
-    await db
-      .updateTable("fileParseRuns")
-      .set({
-        status: "failed",
-        errorCode: "FILE_NOT_FOUND",
-        errorMessage: "Referenced file was not found.",
-        finishedAt: new Date(),
-      })
-      .where("id", "=", runId)
-      .execute()
+    await markParseRunFileNotFound(runId)
     return
   }
 
@@ -327,19 +310,15 @@ export async function processFileParseRun(runId: string): Promise<void> {
     contentKind: record.contentKind,
   })
 
-  await db
-    .updateTable("fileParseRuns")
-    .set({
-      parserKey: strategy.parserKey,
-      parserVersion: strategy.parserVersion,
-      status: strategy.mode === "skip" ? "skipped" : "running",
-      startedAt: strategy.mode === "skip" ? null : new Date(),
-      finishedAt: strategy.mode === "skip" ? new Date() : null,
-      errorCode: strategy.mode === "skip" ? strategy.errorCode : null,
-      errorMessage: strategy.mode === "skip" ? strategy.errorMessage : null,
-    })
-    .where("id", "=", runId)
-    .execute()
+  await markParseRunStrategy(runId, {
+    parserKey: strategy.parserKey,
+    parserVersion: strategy.parserVersion,
+    status: strategy.mode === "skip" ? "skipped" : "running",
+    startedAt: strategy.mode === "skip" ? null : new Date(),
+    finishedAt: strategy.mode === "skip" ? new Date() : null,
+    errorCode: strategy.mode === "skip" ? strategy.errorCode : null,
+    errorMessage: strategy.mode === "skip" ? strategy.errorMessage : null,
+  })
 
   if (strategy.mode === "skip") {
     return
@@ -352,57 +331,15 @@ export async function processFileParseRun(runId: string): Promise<void> {
       contentKind: record.contentKind,
     })
 
-    await db.transaction().execute(async (trx) => {
-      if (parsed.text) {
-        await trx
-          .insertInto("fileParseOutputs")
-          .values({
-            runId: runId,
-            outputKind: "text",
-            role: "primary_text",
-            isPrimary: true,
-            textContent: parsed.text,
-          })
-          .execute()
-      }
-
-      if (parsed.structuredJson) {
-        await trx
-          .insertInto("fileParseOutputs")
-          .values({
-            runId: runId,
-            outputKind: "structured_json",
-            role: "parser_metadata",
-            isPrimary: false,
-            structuredJson: parsed.structuredJson as any,
-          })
-          .execute()
-      }
-
-      await trx
-        .updateTable("fileParseRuns")
-        .set({
-          parserKey: parsed.strategy.parserKey,
-          parserVersion: parsed.strategy.parserVersion,
-          status: "succeeded",
-          errorCode: null,
-          errorMessage: null,
-          finishedAt: new Date(),
-        })
-        .where("id", "=", runId)
-        .execute()
+    await completeParseRun({
+      runId,
+      text: parsed.text,
+      structuredJson: parsed.structuredJson,
+      parserKey: parsed.strategy.parserKey,
+      parserVersion: parsed.strategy.parserVersion,
     })
   } catch (error: any) {
-    await db
-      .updateTable("fileParseRuns")
-      .set({
-        status: "failed",
-        errorCode: "PARSE_FAILED",
-        errorMessage: error?.message || "Failed to parse file",
-        finishedAt: new Date(),
-      })
-      .where("id", "=", runId)
-      .execute()
+    await markParseRunFailed(runId, error?.message || "Failed to parse file")
     throw error
   }
 }
@@ -411,15 +348,7 @@ export async function getLatestSuccessfulFileParse(
   fileId: string,
   pipeline = DEFAULT_FILE_PARSE_PIPELINE
 ): Promise<FileParseRunView | null> {
-  const row = (await db
-    .selectFrom("fileParseRuns")
-    .selectAll()
-    .where("assetId", "=", fileId)
-    .where("pipeline", "=", pipeline)
-    .where("status", "=", "succeeded")
-    .orderBy("createdAt", "desc")
-    .limit(1)
-    .executeTakeFirst()) as ParseRunRow | undefined
+  const row = await getLatestParseRun(fileId, pipeline, { status: "succeeded" })
 
   return row ? presentParseRun(row) : null
 }
@@ -433,14 +362,7 @@ export async function getLatestAvailableFileParse(
     return latestSuccessful
   }
 
-  const row = (await db
-    .selectFrom("fileParseRuns")
-    .selectAll()
-    .where("assetId", "=", fileId)
-    .where("pipeline", "=", pipeline)
-    .orderBy("createdAt", "desc")
-    .limit(1)
-    .executeTakeFirst()) as ParseRunRow | undefined
+  const row = await getLatestParseRun(fileId, pipeline)
 
   return row ? presentParseRun(row) : null
 }

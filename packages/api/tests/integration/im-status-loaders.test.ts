@@ -42,12 +42,12 @@ import {
   type MinimalSeed,
 } from "./harness/index.js"
 
+import { computeStatusFallbackCutoffIso } from "../../src/modules/im/integration/actor-status-hooks.js"
 import {
-  computeStatusFallbackCutoffIso,
   findInboundLinkForTriggerItem,
   findRecentInboundLinkForConversation,
   loadCurrentRunningTurnRow,
-} from "../../src/modules/im/integration/actor-status-hooks.js"
+} from "../../src/modules/im/integration/repo.js"
 
 let seed: MinimalSeed
 let client: pg.Client

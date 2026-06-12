@@ -26,13 +26,15 @@ import {
   searchRemoteAgentMessages,
   sendRemoteAgentConversationMessage,
 } from "./service.js"
-import { requireRemoteAgentConversationAccess } from "../chat/service.js"
 import {
   presentMessageDelivery,
   presentRemoteAgentConversation,
 } from "./presenter.js"
-import { sql } from "kysely"
-import { db } from "../../infrastructure/database/kysely.js"
+import {
+  listPendingDeliveryRefs,
+  getConversationTypeFacts,
+  requireConversationAccessOnDefaultDb,
+} from "./repo.js"
 import { projectToolsForPrincipal } from "../capability-projection/index.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
 
@@ -195,13 +197,10 @@ function buildImTools(params: {
         beforeSequence,
         limit,
       })
-      const deliveryRows = await sql<{ id: string; itemId: string }>`
-          SELECT delivery.id, delivery.item_id
-          FROM remote_agent_message_deliveries delivery
-          WHERE delivery.remote_agent_id = ${params.remoteAgentId}
-            AND delivery.conversation_id = ${params.conversationId}
-            AND delivery.status = 'pending'
-        `.execute(db)
+      const deliveryRows = await listPendingDeliveryRefs({
+        remoteAgentId: params.remoteAgentId,
+        conversationId: params.conversationId,
+      })
       const itemIds = new Set(
         result.items
           .map((item) =>
@@ -213,7 +212,7 @@ function buildImTools(params: {
           )
           .filter((value): value is string => Boolean(value))
       )
-      const completedDeliveryIds = deliveryRows.rows
+      const completedDeliveryIds = deliveryRows
         .filter((row) => itemIds.has(row.itemId))
         .map((row) => row.id)
       if (completedDeliveryIds.length > 0) {
@@ -517,26 +516,6 @@ async function createSessionTransport(params: {
   return active
 }
 
-async function loadConversationTypeFacts(conversationId: string): Promise<{
-  kind: "direct" | "group"
-  isIm: boolean
-} | null> {
-  const result = await sql<{
-    kind: "direct" | "group"
-    is_im: boolean
-  }>`
-    SELECT kind, EXISTS (
-      SELECT 1 FROM conversation_transport_bindings b
-      WHERE b.conversation_id = conversations.id
-    ) AS is_im
-    FROM conversations WHERE id = ${conversationId} LIMIT 1`.execute(db)
-  const row = result.rows[0]
-  if (!row) {
-    return null
-  }
-  return { kind: row.kind, isIm: Boolean(row.is_im) }
-}
-
 export async function handleRemoteAgentMcpRequest(
   request: FastifyRequest<{
     Params: { remoteAgentId: string; conversationId: string }
@@ -560,8 +539,7 @@ export async function handleRemoteAgentMcpRequest(
     return reply.code(401).send({ error: message })
   }
   try {
-    await requireRemoteAgentConversationAccess(
-      db,
+    await requireConversationAccessOnDefaultDb(
       request.params.conversationId,
       request.params.remoteAgentId
     )
@@ -569,7 +547,7 @@ export async function handleRemoteAgentMcpRequest(
     const message = error instanceof Error ? error.message : String(error)
     return reply.code(403).send({ error: message })
   }
-  const conversationFacts = await loadConversationTypeFacts(
+  const conversationFacts = await getConversationTypeFacts(
     request.params.conversationId
   )
   if (!conversationFacts) {

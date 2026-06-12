@@ -12,13 +12,16 @@
 // shell string) so untrusted values can't inject.
 
 import { spawn as nodeSpawn } from "node:child_process"
-import { sql } from "kysely"
-import { db } from "../../infrastructure/database/kysely.js"
 import {
   createCloudDevicePairing,
   type CreateCloudDeviceResult,
 } from "../devices/cloud.js"
 import { deleteDevice } from "../devices/service.js"
+import {
+  getPairingSessionBootstrapState,
+  getLatestDeviceRuntimeServiceId,
+  cancelPendingPairingSession,
+} from "./repo.js"
 import {
   SandboxBackendError,
   type SandboxBackend,
@@ -371,26 +374,17 @@ async function defaultPollBootstrapConsumed(
 ): Promise<{ deviceId: string; deviceServiceId: string }> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
-    const row = await db
-      .selectFrom("devicePairingSessions")
-      .select(["status", "deviceId"])
-      .where("id", "=", pairingSessionId)
-      .executeTakeFirst()
+    const row = await getPairingSessionBootstrapState(pairingSessionId)
     if (row) {
       const status = row.status as string
       if (status === "consumed" && row.deviceId) {
-        const svc = await db
-          .selectFrom("deviceServices")
-          .select("id")
-          .where("deviceId", "=", row.deviceId as string)
-          .where("serviceKind", "=", "device_runtime")
-          .orderBy("createdAt", "desc")
-          .limit(1)
-          .executeTakeFirst()
-        if (svc) {
+        const deviceServiceId = await getLatestDeviceRuntimeServiceId(
+          row.deviceId as string
+        )
+        if (deviceServiceId) {
           return {
             deviceId: row.deviceId as string,
-            deviceServiceId: svc.id as string,
+            deviceServiceId,
           }
         }
       } else if (
@@ -440,13 +434,7 @@ async function defaultDockerFailCleanup(
   // Cancel the (still-pending) pairing session so the token can't be reused. A
   // consumed session is left as-is (the device delete already handled its FK).
   if (args.pairingSessionId) {
-    await db
-      .updateTable("devicePairingSessions")
-      .set({ status: "cancelled" } as never)
-      .where("id", "=", args.pairingSessionId)
-      .where("status", "=", "pending")
-      .execute()
-      .catch(() => {})
+    await cancelPendingPairingSession(args.pairingSessionId).catch(() => {})
   }
   if (args.containerId) {
     await docker(["rm", "-f", args.containerId]).catch(() => {})

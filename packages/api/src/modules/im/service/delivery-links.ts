@@ -3,17 +3,13 @@
  * dedupe lookup + status updates + the joined-row loader the delivery
  * worker uses to send.
  *
- * Extracted from service.ts. service.ts re-exports for back-compat.
+ * The raw queries live in repo.ts (the module's repo file, which may
+ * import the db client + sql); this file keeps the orchestration
+ * (binding lookup, BullMQ enqueue, metadata deep-merge) and re-exports
+ * the moved functions so service.ts + workers stay unchanged.
  */
 
-import { sql } from "kysely"
-import {
-  db,
-  withDbTransaction,
-  type DatabaseTransaction,
-} from "../../../infrastructure/database/kysely.js"
-import type { TransportMessageLinkMetadataInsert } from "../repo.types.js"
-import { v4 as uuidv4 } from "uuid"
+import type { DatabaseTransaction } from "../../../infrastructure/database/kysely.js"
 import type {
   TransportDeliveryStatus,
   TransportKind,
@@ -26,9 +22,25 @@ import {
   parseJsonObject,
 } from "./_helpers.js"
 import { getConversationTransportBinding } from "../service.js"
+import {
+  insertTransportMessageLinkProjection,
+  loadTransportMessageLinkForDeliveryRow,
+  runTransportMessageLinkTransaction,
+  selectTransportMessageLinkMetadataForUpdate,
+  updateTransportMessageLinkMetadataRow,
+  updateTransportMessageLinkStatusRow,
+} from "./repo.js"
 import { createLogger } from "../../../infrastructure/logger/index.js"
 
 const log = createLogger("im.delivery")
+
+// transport_message_links query helpers now live in repo.ts; re-export so
+// importers that pulled them from this file keep working unchanged.
+export {
+  findTransportMessageLinkByExternalMessage,
+  insertOutboundLinkRowRaw as persistOutboundLinkRowRaw,
+  removeTransportMessageLinkMetadataKey,
+} from "./repo.js"
 
 /**
  * Recursively merge `patch` into `target`, returning a new object.
@@ -93,39 +105,24 @@ export async function queueConversationTransportProjection(params: {
     return null
   }
 
-  const link = await db
-    .insertInto("transportMessageLinks")
-    .values({
-      id: uuidv4(),
-      workspaceId: params.workspaceId,
-      conversationId: params.conversationId,
-      itemId: params.itemId,
-      transportAccountId: binding.account.id,
-      transportEndpointId: binding.endpoint.id,
-      transportKind: binding.transportKind,
-      direction,
-      deliveryStatus: "pending",
-      externalMessageId: params.externalMessageId || null,
-      externalReplyToId: params.externalReplyToId || null,
-      externalThreadId: params.externalThreadId || null,
-      metadata: {
-        bindingId: binding.id,
-        endpointType: binding.endpoint.endpointType,
-        endpointExternalId: binding.endpoint.externalId,
-        ...(params.metadata || {}),
-      } as TransportMessageLinkMetadataInsert,
-      createdAt: sql`NOW()`,
-    })
-    .onConflict((oc) =>
-      oc.columns(["itemId", "transportEndpointId", "direction"]).doUpdateSet({
-        externalMessageId: sql`COALESCE(excluded.external_message_id, transport_message_links.external_message_id)`,
-        externalReplyToId: sql`COALESCE(excluded.external_reply_to_id, transport_message_links.external_reply_to_id)`,
-        externalThreadId: sql`COALESCE(excluded.external_thread_id, transport_message_links.external_thread_id)`,
-        metadata: sql`transport_message_links.metadata || excluded.metadata`,
-      })
-    )
-    .returningAll()
-    .executeTakeFirst()
+  const link = await insertTransportMessageLinkProjection({
+    workspaceId: params.workspaceId,
+    conversationId: params.conversationId,
+    itemId: params.itemId,
+    transportAccountId: binding.account.id,
+    transportEndpointId: binding.endpoint.id,
+    transportKind: binding.transportKind,
+    direction,
+    externalMessageId: params.externalMessageId || null,
+    externalReplyToId: params.externalReplyToId || null,
+    externalThreadId: params.externalThreadId || null,
+    metadata: {
+      bindingId: binding.id,
+      endpointType: binding.endpoint.endpointType,
+      endpointExternalId: binding.endpoint.externalId,
+      ...(params.metadata || {}),
+    },
+  })
   if (link && direction === "outbound") {
     await enqueueTransportDeliveryJobs([link.id]).catch((error) => {
       log.error(
@@ -136,31 +133,6 @@ export async function queueConversationTransportProjection(params: {
   }
 
   return link
-}
-
-export async function findTransportMessageLinkByExternalMessage(params: {
-  transportAccountId: string
-  transportEndpointId?: string
-  externalMessageId: string
-  direction: "inbound" | "outbound"
-}) {
-  let builder = db
-    .selectFrom("transportMessageLinks")
-    .selectAll()
-    .where("transportAccountId", "=", params.transportAccountId)
-    .where("externalMessageId", "=", params.externalMessageId.trim())
-    .where("direction", "=", params.direction)
-
-  if (params.transportEndpointId) {
-    builder = builder.where(
-      "transportEndpointId",
-      "=",
-      params.transportEndpointId
-    )
-  }
-
-  const row = await builder.limit(1).executeTakeFirst()
-  return row ? normalizeTransportMessageLinkRow(row) : null
 }
 
 export async function updateTransportMessageLinkStatus(params: {
@@ -180,31 +152,19 @@ export async function updateTransportMessageLinkStatus(params: {
   // entire `delivery` subtree, blowing away `delivery.ambiguous` etc.
   // Use `patchTransportMessageLinkMetadata` (deep merge in
   // application code) to keep everything that shares a namespace.
-  return await runWithTransaction(params.tx, async (tx) => {
-    const existing = await tx
-      .selectFrom("transportMessageLinks")
-      .select("metadata")
-      .where("id", "=", params.linkId)
-      .forUpdate()
-      .executeTakeFirst()
-    const current = parseJsonObject(existing?.metadata)
+  return await runTransportMessageLinkTransaction(params.tx, async (tx) => {
+    const existing = await selectTransportMessageLinkMetadataForUpdate(
+      tx,
+      params.linkId
+    )
+    const current = parseJsonObject(existing)
     const merged = deepMergeJsonObjects(current, extraMetadata)
-    const row = await tx
-      .updateTable("transportMessageLinks")
-      .set({
-        deliveryStatus: params.status,
-        ...(params.externalMessageId
-          ? { externalMessageId: params.externalMessageId }
-          : {}),
-        metadata: merged as TransportMessageLinkMetadataInsert,
-        ...(params.status === "sent"
-          ? { deliveredAt: sql`COALESCE(delivered_at, NOW())` }
-          : {}),
-      })
-      .where("id", "=", params.linkId)
-      .returningAll()
-      .executeTakeFirst()
-    return row ? normalizeTransportMessageLinkRow(row) : null
+    return updateTransportMessageLinkStatusRow(tx, {
+      linkId: params.linkId,
+      status: params.status,
+      externalMessageId: params.externalMessageId,
+      mergedMetadata: merged,
+    })
   })
 }
 
@@ -233,78 +193,19 @@ export async function patchTransportMessageLinkMetadata(params: {
   tx?: DatabaseTransaction
 }): Promise<void> {
   if (!params.patch || Object.keys(params.patch).length === 0) return
-  await runWithTransaction(params.tx, async (tx) => {
-    const existing = await tx
-      .selectFrom("transportMessageLinks")
-      .select("metadata")
-      .where("id", "=", params.linkId)
-      .forUpdate()
-      .executeTakeFirst()
-    const current = parseJsonObject(existing?.metadata)
+  await runTransportMessageLinkTransaction(params.tx, async (tx) => {
+    const existing = await selectTransportMessageLinkMetadataForUpdate(
+      tx,
+      params.linkId
+    )
+    const current = parseJsonObject(existing)
     const merged = deepMergeJsonObjects(current, params.patch)
-    await tx
-      .updateTable("transportMessageLinks")
-      .set({
-        metadata: merged as TransportMessageLinkMetadataInsert,
-      })
-      .where("id", "=", params.linkId)
-      .execute()
+    await updateTransportMessageLinkMetadataRow(tx, params.linkId, merged)
   })
 }
 
-async function runWithTransaction<T>(
-  tx: DatabaseTransaction | undefined,
-  fn: (tx: DatabaseTransaction) => Promise<T>
-): Promise<T> {
-  if (tx) return fn(tx)
-  return withDbTransaction(fn)
-}
-
 export async function loadTransportMessageLinkForDelivery(linkId: string) {
-  const row = await db
-    .selectFrom("transportMessageLinks as tml")
-    .innerJoin("transportAccounts as ta", "ta.id", "tml.transportAccountId")
-    .innerJoin("transportEndpoints as te", "te.id", "tml.transportEndpointId")
-    .innerJoin("conversationItems as ci", "ci.id", "tml.itemId")
-    .select([
-      "tml.id",
-      "tml.workspaceId",
-      "tml.conversationId",
-      "tml.itemId",
-      "tml.transportAccountId",
-      "tml.transportEndpointId",
-      "tml.transportKind",
-      "tml.direction",
-      "tml.deliveryStatus",
-      "tml.externalMessageId",
-      "tml.metadata",
-      "tml.deliveredAt",
-      "tml.createdAt",
-      "tml.updatedAt",
-      "ta.workspaceId as accountWorkspaceId",
-      "ta.accountKey",
-      "ta.displayName as accountDisplayName",
-      "ta.ownerScope",
-      "ta.ownerWorkspaceMemberId",
-      "ta.connectionMode",
-      "ta.status as accountStatus",
-      "ta.credentials",
-      "ta.config",
-      "ta.metadata as accountMetadata",
-      "ta.createdAt as accountCreatedAt",
-      "ta.updatedAt as accountUpdatedAt",
-      "te.endpointType",
-      "te.externalId as endpointExternalId",
-      "te.parentExternalId",
-      "te.displayName as endpointDisplayName",
-      "te.metadata as endpointMetadata",
-      "te.createdAt as endpointCreatedAt",
-      "te.updatedAt as endpointUpdatedAt",
-      "ci.metadata as itemMetadata",
-    ])
-    .where("tml.id", "=", linkId)
-    .limit(1)
-    .executeTakeFirst()
+  const row = await loadTransportMessageLinkForDeliveryRow(linkId)
   if (!row) return null
 
   return {
@@ -341,66 +242,6 @@ export async function loadTransportMessageLinkForDelivery(linkId: string) {
     ),
     itemMetadata: parseJsonObject(row.itemMetadata),
   }
-}
-
-/**
- * Drop a top-level key from `transport_message_links.metadata` (jsonb
- * `-` operator). Used by recovery flips that need to clear stale
- * markers like `skippedReason` without rewriting the rest of the
- * metadata object. Accepts a Kysely transaction so callers can keep
- * the delete in the same commit as the related UPDATE.
- */
-export async function removeTransportMessageLinkMetadataKey(
-  tx: DatabaseTransaction,
-  linkId: string,
-  key: string
-): Promise<void> {
-  await tx
-    .updateTable("transportMessageLinks")
-    .set({
-      metadata:
-        sql`metadata - ${key}` as unknown as TransportMessageLinkMetadataInsert,
-    })
-    .where("id", "=", linkId)
-    .execute()
-}
-
-/**
- * Persist a fully-formed `transport_message_links` row directly.
- * Used by the task-projection worker to insert a link
- * already keyed to a freshly-minted action token before enqueueing
- * delivery.
- */
-export async function persistOutboundLinkRowRaw(params: {
-  workspaceId: string
-  conversationId: string
-  itemId: string
-  transportAccountId: string
-  transportEndpointId: string
-  transportKind: TransportKind
-  metadata?: Record<string, unknown>
-}): Promise<{ id: string }> {
-  const row = await db
-    .insertInto("transportMessageLinks")
-    .values({
-      id: uuidv4(),
-      workspaceId: params.workspaceId,
-      conversationId: params.conversationId,
-      itemId: params.itemId,
-      transportAccountId: params.transportAccountId,
-      transportEndpointId: params.transportEndpointId,
-      transportKind: params.transportKind,
-      direction: "outbound",
-      deliveryStatus: "pending",
-      externalMessageId: null,
-      externalReplyToId: null,
-      externalThreadId: null,
-      metadata: (params.metadata || {}) as TransportMessageLinkMetadataInsert,
-      createdAt: sql`NOW()`,
-    })
-    .returning("id")
-    .executeTakeFirstOrThrow()
-  return { id: row.id }
 }
 
 /**

@@ -20,8 +20,12 @@ import {
   type SharedRuntimeAuthorizationGrantSpec,
   SANDBOX_MOUNT_POINTS,
 } from "@synapse/shared"
-import { db } from "../../infrastructure/database/kysely.js"
-import type { KyselyDb } from "../../infrastructure/database/kysely.js"
+import type { Executor } from "./repo.js"
+import {
+  selectDeviceBuiltinExposures,
+  selectDeviceCapabilityIds,
+  revokeActiveDeviceRuntimeGrants,
+} from "./repo.js"
 import {
   addDeviceCapabilitiesForTarget,
   revokeDeviceCapabilitiesForTarget,
@@ -55,18 +59,9 @@ export interface DeviceBuiltinIds {
  */
 export async function resolveDeviceBuiltinIds(
   deviceId: string,
-  dbh: KyselyDb = db
+  run?: Executor
 ): Promise<DeviceBuiltinIds> {
-  const rows = await dbh
-    .selectFrom("deviceExposures as e")
-    .innerJoin("deviceCapabilities as c", "c.exposureId", "e.id")
-    .innerJoin("workspaceApps as app", "app.id", "c.id")
-    .select(["e.id as exposureId", "c.id as capabilityId", "e.builtinKind"])
-    .where("e.deviceId", "=", deviceId)
-    .where("app.deletedAt", "is", null)
-    .where("app.status", "=", "active")
-    .where("e.builtinKind", "in", ["filesystem", "commandline"])
-    .execute()
+  const rows = await selectDeviceBuiltinExposures(deviceId, run)
 
   let fsExposure: string | null = null
   let fsCapability: string | null = null
@@ -205,21 +200,10 @@ export async function revokeSandboxGrants(params: {
 }): Promise<void> {
   // Layer 1: resolve THIS device's capability ids, then targeted-revoke only
   // those bindings (leaving other capabilities the actor/conversation may hold).
-  const deviceCapabilityRows = await db
-    .selectFrom("deviceCapabilities as capability")
-    .innerJoin("workspaceApps as app", "app.id", "capability.id")
-    .select("capability.id")
-    .where("app.workspaceId", "=", params.workspaceId)
-    .where(
-      "capability.exposureId",
-      "in",
-      db
-        .selectFrom("deviceExposures")
-        .select("id")
-        .where("deviceId", "=", params.deviceId)
-    )
-    .execute()
-  const deviceCapabilityIds = deviceCapabilityRows.map((r) => r.id as string)
+  const deviceCapabilityIds = await selectDeviceCapabilityIds({
+    workspaceId: params.workspaceId,
+    deviceId: params.deviceId,
+  })
   if (deviceCapabilityIds.length > 0) {
     await revokeDeviceCapabilitiesForTarget({
       workspaceId: params.workspaceId,
@@ -237,14 +221,8 @@ export async function revokeSandboxGrants(params: {
   // about to be deleted and its grant FK is ON DELETE CASCADE, so deletion
   // alone would remove them — but we revoke first for a clean audit trail and
   // so a teardown that stops short of deleteDevice still leaves no live grants.
-  await db
-    .updateTable("runtimeAuthorizationGrants")
-    .set({
-      status: "revoked",
-      revokedAt: new Date(),
-    } as never)
-    .where("deviceId", "=", params.deviceId)
-    .where("workspaceId", "=", params.workspaceId)
-    .where("status", "=", "active")
-    .execute()
+  await revokeActiveDeviceRuntimeGrants({
+    workspaceId: params.workspaceId,
+    deviceId: params.deviceId,
+  })
 }

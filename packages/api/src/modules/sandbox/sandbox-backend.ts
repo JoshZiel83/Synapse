@@ -21,9 +21,8 @@ import {
   type RunHandle,
   type SpawnSandboxRuntimeParams,
 } from "./host-provider.js"
-import { sql } from "kysely"
-import { db } from "../../infrastructure/database/kysely.js"
 import { deleteDevice } from "../devices/service.js"
+import { cancelPendingPairingSession } from "./repo.js"
 
 /** Which backend produced/owns a sandbox. Persisted on file_mounts so teardown
  *  picks the right backend regardless of the API's current env. */
@@ -257,13 +256,7 @@ async function defaultLocalFailCleanup(args: {
     await deleteDevice(args.workspaceId, args.deviceId).catch(() => {})
   }
   if (args.pairingSessionId) {
-    await db
-      .updateTable("devicePairingSessions")
-      .set({ status: "cancelled" } as never)
-      .where("id", "=", args.pairingSessionId)
-      .where("status", "=", "pending")
-      .execute()
-      .catch(() => {})
+    await cancelPendingPairingSession(args.pairingSessionId).catch(() => {})
   }
 }
 

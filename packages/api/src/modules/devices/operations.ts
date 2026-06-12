@@ -7,10 +7,9 @@
 
 import { sql } from "kysely"
 import type { OperationEnvelope, SynapseError } from "@synapse/device-protocol"
-import {
-  db,
-  type DatabaseTransaction,
-  type KyselyDb,
+import type {
+  DatabaseTransaction,
+  KyselyDb,
 } from "../../infrastructure/database/kysely.js"
 import { parseInstantString } from "../../infrastructure/datetime.js"
 import type { RuntimePrincipalContext } from "../access/subject-resolution.js"
@@ -225,19 +224,12 @@ export async function beginDeviceOperationOn(
  * NOT going through `selectAndClaimRuntimeAuthorizationGrant`). The drift
  * check + INSERT run in the same Kysely transaction so a concurrent catalog
  * sync can't slip in between.
+ *
+ * The transactional body lives in repo.ts (guard r8: only repo*.ts may import
+ * the db client). Re-exported here so existing importers
+ * (`../devices/operations.js`) keep resolving it unchanged.
  */
-export async function beginDeviceOperation(
-  input: BeginOperationInput
-): Promise<BeginOperationResult> {
-  return db.transaction().execute(async (trx) => {
-    await assertNoDeviceToolRevisionDrift(
-      trx,
-      input.envelope.device_tool_id,
-      input.envelope.device_tool_revision_id
-    )
-    return beginDeviceOperationOn(trx, input)
-  })
-}
+export { beginDeviceOperation, completeDeviceOperation } from "./repo.js"
 
 export interface CompleteOperationInput {
   operationId: string
@@ -245,43 +237,6 @@ export interface CompleteOperationInput {
   ok: boolean
   resultHash?: string
   error?: SynapseError
-}
-
-/**
- * Mark a previously-begun operation as completed or failed. Always called
- * in the dispatch loop's `finally` so partial states (errors mid-dispatch)
- * still land in the audit trail.
- */
-export async function completeDeviceOperation(
-  input: CompleteOperationInput
-): Promise<void> {
-  await db.transaction().execute(async (trx) => {
-    await trx
-      .updateTable("deviceOperationAttempts")
-      .set({
-        status: input.ok ? "acknowledged" : "failed",
-        responseAt: sql`NOW()`,
-        acknowledgedAt: input.ok ? sql`NOW()` : null,
-        metadata: input.error
-          ? sql`${JSON.stringify({ error: input.error })}::jsonb`
-          : sql`'{}'::jsonb`,
-      })
-      .where("id", "=", input.attemptId)
-      .execute()
-    await trx
-      .updateTable("deviceOperations")
-      .set({
-        // Schema's device_operations_status terminal enum value is
-        // 'succeeded' (not 'completed'). Failed dispatches use 'failed'.
-        status: input.ok ? "succeeded" : "failed",
-        resultHash: input.resultHash ?? null,
-        errorCode: input.error?.code ?? null,
-        errorMessage: input.error?.message ?? null,
-        completedAt: sql`NOW()`,
-      })
-      .where("id", "=", input.operationId)
-      .execute()
-  })
 }
 
 // subject-scope-refactor: private `assertNoRevisionDrift` removed; superseded

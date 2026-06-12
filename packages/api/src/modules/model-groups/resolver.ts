@@ -6,54 +6,20 @@ import type {
   ResolvedModelPlan,
 } from "@synapse/shared"
 import { parseJsonObject } from "@synapse/shared"
-import { db } from "../../infrastructure/database/kysely.js"
-import {
-  actorSubject,
-  listAuthorizedResourceIds,
-  workspaceMemberSubject,
-} from "../access/service.js"
 import { DEFAULT_MAX_TOKENS, DEFAULT_MODEL_ATTEMPT_POLICY } from "./defaults.js"
+import {
+  type ModelGroupCandidateRow,
+  type ModelGroupItemRow,
+  listAuthorizedModelGroupIds,
+  listCandidateGroupRows,
+  listGroupItemRows,
+} from "./repo.js"
 
 type RoutingStrategy = "weighted_random" | "priority_failover"
 
-type GroupRow = {
-  id: string
-  ownerType: "platform" | "workspace" | "workspace_member"
-  ownerWorkspaceId: string | null
-  ownerWorkspaceMemberId: string | null
-  name: string
-  routingStrategy: RoutingStrategy
-  attemptPolicy: Record<string, unknown> | null
-  isDefault: boolean
-  isEnabled: boolean
-  createdAt: Date
-  updatedAt: Date
-}
+type GroupRow = ModelGroupCandidateRow
 
-type GroupItemRow = {
-  groupId: string
-  groupName: string
-  routingStrategy: RoutingStrategy
-  attemptPolicy: Record<string, unknown> | null
-  itemId: string
-  priority: number
-  weight: number
-  itemEnabled: boolean
-  bindingId: string
-  displayName: string
-  currentVersionId: string | null
-  providerKind: string | null
-  vendor: string | null
-  apiKey: string | null
-  baseUrl: string | null
-  modelName: string | null
-  maxOutputTokens: number | null
-  capabilityTags: string[] | null
-  features: Record<string, unknown> | null
-  providerOptions: Record<string, unknown> | null
-  requestTimeoutMs: number | null
-  maxRetries: number | null
-}
+type GroupItemRow = ModelGroupItemRow
 
 type ResolveContext = {
   actorId: string
@@ -163,96 +129,29 @@ function ownerRank(group: GroupRow, current: ResolveContext) {
   return 3
 }
 
-async function listAuthorizedModelGroupIds(current: ResolveContext) {
-  const authorized = new Set<string>()
-
-  const actorResults = await listAuthorizedResourceIds(db, {
-    subject: actorSubject(current.actorId),
-    action: "model_group.use",
-  })
-  for (const id of actorResults) {
-    authorized.add(id)
-  }
-
-  if (current.workspaceMemberId) {
-    const userResults = await listAuthorizedResourceIds(db, {
-      subject: workspaceMemberSubject(current.workspaceMemberId),
-      action: "model_group.use",
-    })
-    for (const id of userResults) {
-      authorized.add(id)
-    }
-  }
-
-  return authorized
-}
-
 async function listCandidateGroups(
   current: ResolveContext,
   authorizedGroupIds: Set<string>
 ) {
-  const [
-    groupsResult,
-    assignmentsResult,
-    workspaceDefaultResult,
-    platformDefaultResult,
-    workspaceMemberDefaultResult,
-  ] = await Promise.all([
-    authorizedGroupIds.size > 0
-      ? db
-          .selectFrom("modelGroupsLive")
-          .selectAll()
-          .where("isEnabled", "=", true)
-          .where("id", "in", Array.from(authorizedGroupIds))
-          .execute()
-      : Promise.resolve([] as GroupRow[]),
-    db
-      .selectFrom("actorModelGroupAssignments")
-      .select(["groupId", "priority"])
-      .where("actorId", "=", current.actorId)
-      .orderBy("priority", "asc")
-      .execute(),
-    db
-      .selectFrom("modelGroupsLive")
-      .select("id")
-      .where("ownerType", "=", "workspace")
-      .where("ownerWorkspaceId", "=", current.workspaceId)
-      .where("isDefault", "=", true)
-      .where("isEnabled", "=", true)
-      .executeTakeFirst(),
-    db
-      .selectFrom("modelGroupsLive")
-      .select("id")
-      .where("ownerType", "=", "platform")
-      .where("isDefault", "=", true)
-      .where("isEnabled", "=", true)
-      .executeTakeFirst(),
-    current.workspaceMemberId
-      ? db
-          .selectFrom("modelGroupsLive")
-          .select("id")
-          .where("ownerType", "=", "workspace_member")
-          .where("ownerWorkspaceMemberId", "=", current.workspaceMemberId)
-          .where("isDefault", "=", true)
-          .where("isEnabled", "=", true)
-          .executeTakeFirst()
-      : Promise.resolve(undefined),
-  ])
+  const {
+    groups,
+    assignments,
+    workspaceDefaultGroupId,
+    platformDefaultGroupId,
+    workspaceMemberDefaultGroupId,
+  } = await listCandidateGroupRows({
+    actorId: current.actorId,
+    workspaceId: current.workspaceId,
+    workspaceMemberId: current.workspaceMemberId,
+    authorizedGroupIds: Array.from(authorizedGroupIds),
+  })
 
   const assignedPriority = new Map<string, number>()
-  for (const row of assignmentsResult as Array<{
-    groupId: string
-    priority: number
-  }>) {
+  for (const row of assignments) {
     assignedPriority.set(row.groupId, row.priority)
   }
 
-  const workspaceDefaultGroupId = workspaceDefaultResult?.id || undefined
-  const platformDefaultGroupId = platformDefaultResult?.id || undefined
-  const workspaceMemberDefaultGroupId =
-    workspaceMemberDefaultResult?.id || undefined
-
-  return (groupsResult as GroupRow[]).sort((a, b) => {
+  return groups.sort((a, b) => {
     const aAssigned = assignedPriority.has(a.id)
     const bAssigned = assignedPriority.has(b.id)
     if (aAssigned && bAssigned) {
@@ -288,83 +187,7 @@ async function listCandidateGroups(
 }
 
 async function listGroupItems(groupId: string): Promise<GroupItemRow[]> {
-  // Flat read: model_bindings (the item) joined to its current version row.
-  // Reads go through the soft-delete _live view so deleted bindings are excluded.
-  const result = await db
-    .selectFrom("modelBindingsLive as mb")
-    .innerJoin("modelGroupsLive as mg", "mg.id", "mb.groupId")
-    .leftJoin("modelBindingVersions as v", "v.id", "mb.currentVersionId")
-    .select([
-      "mg.id as groupId",
-      "mg.name as groupName",
-      "mg.routingStrategy",
-      "mg.attemptPolicy",
-      "mb.id as itemId",
-      "mb.priority",
-      "mb.weight",
-      "mb.isEnabled as itemEnabled",
-      "mb.id as bindingId",
-      "mb.displayName",
-      "mb.currentVersionId",
-      "v.providerKind",
-      "v.vendor",
-      "v.apiKey",
-      "v.baseUrl",
-      "v.modelName",
-      "v.maxOutputTokens",
-      "v.capabilityTags",
-      "v.features",
-      "v.providerOptions",
-      "v.requestTimeoutMs",
-      "v.maxRetries",
-    ])
-    .where("mb.groupId", "=", groupId)
-    .where("mb.isEnabled", "=", true)
-    .where("mb.currentVersionId", "is not", null)
-    .execute()
-  return result.map((row) => ({
-    groupId: row.groupId || "",
-    groupName: row.groupName || "",
-    routingStrategy: row.routingStrategy || "priority_failover",
-    attemptPolicy:
-      row.attemptPolicy &&
-      typeof row.attemptPolicy === "object" &&
-      !Array.isArray(row.attemptPolicy)
-        ? (row.attemptPolicy as Record<string, unknown>)
-        : null,
-    itemId: row.itemId || "",
-    priority: row.priority ?? 0,
-    weight: row.weight ?? 1,
-    itemEnabled: row.itemEnabled ?? false,
-    bindingId: row.bindingId || row.itemId || "",
-    displayName: row.displayName || "",
-    currentVersionId: row.currentVersionId,
-    providerKind: row.providerKind,
-    vendor: row.vendor,
-    apiKey: row.apiKey,
-    baseUrl: row.baseUrl,
-    modelName: row.modelName,
-    maxOutputTokens: row.maxOutputTokens,
-    capabilityTags: Array.isArray(row.capabilityTags)
-      ? row.capabilityTags.filter(
-          (item): item is string => typeof item === "string"
-        )
-      : null,
-    features:
-      row.features &&
-      typeof row.features === "object" &&
-      !Array.isArray(row.features)
-        ? (row.features as Record<string, unknown>)
-        : null,
-    providerOptions:
-      row.providerOptions &&
-      typeof row.providerOptions === "object" &&
-      !Array.isArray(row.providerOptions)
-        ? (row.providerOptions as Record<string, unknown>)
-        : null,
-    requestTimeoutMs: row.requestTimeoutMs,
-    maxRetries: row.maxRetries,
-  }))
+  return listGroupItemRows(groupId)
 }
 
 function toResolvedModelConfig(row: GroupItemRow): ResolvedModelConfig | null {
@@ -439,7 +262,10 @@ export async function resolveModelPlan(
     workspaceMemberId: options?.workspaceMemberId,
   }
 
-  const authorizedGroupIds = await listAuthorizedModelGroupIds(current)
+  const authorizedGroupIds = await listAuthorizedModelGroupIds({
+    actorId: current.actorId,
+    workspaceMemberId: current.workspaceMemberId,
+  })
   const groups = await listCandidateGroups(current, authorizedGroupIds)
 
   for (const group of groups) {

@@ -16,15 +16,12 @@ import {
   isGroupConversationKind,
   isThreadConversationKind,
   isTransportKind,
-  normalizeActorDocs,
   resolveThreadSemantics,
   SEND_TO_INTENTS,
-  summarizeActorForRole,
   mentionBlock,
   textBlock,
   textBlocks,
   textResult,
-  type ActorDoc,
   type ToolDefinition,
   type ToolResolveContext,
 } from "@synapse/shared"
@@ -57,9 +54,12 @@ import {
   buildUserTaskTargetCandidatesFromRows,
   type UserTaskTargetCandidate,
 } from "./session-tool-user-task-targets.js"
-import { db } from "../../infrastructure/database/kysely.js"
-import { upsertAccessSubject } from "../access/subject-registry.js"
-import { sql } from "kysely"
+import { upsertAccessSubjectDefault } from "../access/guards.js"
+import {
+  listInviteableActorRowsDefault,
+  isActorActiveConversationParticipantDefault,
+  type InviteableActor,
+} from "./repo.js"
 import { getSession, updateSessionCollaboration } from "../session/service.js"
 import { getTransportConnectorCapability } from "../im/connectors/index.js"
 import {
@@ -85,7 +85,6 @@ import {
   deleteAutomationRule,
   listAutomationRules,
 } from "../automation/service.js"
-import { isActorActiveConversationParticipant } from "../access/subject-resolution.js"
 import {
   cancelToolCallTask,
   createToolCallTaskDeduped,
@@ -101,14 +100,6 @@ import {
   createUserInputTaskRequest,
   getTaskSummaryByTaskId,
 } from "../tasks/service.js"
-
-type InviteableActor = {
-  id: string
-  displayName: string
-  title?: string
-  role?: string
-  summary?: string
-}
 
 type SendToCandidate = {
   participantType: "actor" | "workspace_member" | "external"
@@ -370,38 +361,6 @@ function buildSendToMention(candidate: SendToCandidate): ConversationEntityRef {
   }
 }
 
-function parseActorDocs(value: unknown): ActorDoc[] {
-  if (!value) return []
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value)
-      return Array.isArray(parsed)
-        ? normalizeActorDocs(parsed as ActorDoc[])
-        : []
-    } catch {
-      return []
-    }
-  }
-  return Array.isArray(value) ? normalizeActorDocs(value as ActorDoc[]) : []
-}
-
-function isGroupVisibleDoc(doc: ActorDoc): boolean {
-  return doc.visibility === "always" || doc.visibility === "multi_member_only"
-}
-
-function summarizeInviteableActor(row: {
-  title?: string | null
-  role?: string | null
-  actorDocs?: unknown
-}): string | undefined {
-  const docs = parseActorDocs(row.actorDocs).filter(isGroupVisibleDoc)
-  const summary = summarizeActorForRole(docs, row.title || row.role || "Actor")
-    .replace(/\s+/g, " ")
-    .trim()
-
-  return summary || undefined
-}
-
 function formatInviteableActor(actor: InviteableActor): string {
   const title = actor.title || actor.role || "Actor"
   return `${actor.displayName} (${title}) [${actor.id}]${actor.summary ? ` - ${actor.summary}` : ""}`
@@ -642,7 +601,7 @@ async function createGovernedToolCallTask(params: {
     // are all human-answerable → needs_response. The principal subject is the
     // actor's access_subjects row (the delivery key). request_key is derived
     // from the originating tool call so a retried turn dedupes onto one task.
-    const principalSubjectId = await upsertAccessSubject(db, {
+    const principalSubjectId = await upsertAccessSubjectDefault({
       kind: "actor",
       actorId: context.actorId,
     })
@@ -960,62 +919,7 @@ async function listInviteableActors(params: {
   conversationId: string
   actorId: string
 }): Promise<InviteableActor[]> {
-  const result = await db
-    .selectFrom("actors as a")
-    .innerJoin("workspaceApps as app", "app.id", "a.id")
-    .leftJoin("actorVersions as current_version", (join) =>
-      join
-        .onRef("current_version.actorId", "=", "a.id")
-        .onRef("current_version.version", "=", "a.currentVersion")
-    )
-    .select([
-      "a.id",
-      "app.displayName",
-      "a.title",
-      "a.role",
-      sql`COALESCE(
-        (
-          SELECT jsonb_agg(
-            jsonb_build_object(
-              'key', avd.doc_key,
-              'title', avd.title,
-              'visibility', avd.visibility,
-              'priority', avd.priority,
-              'content', avd.content_blocks
-            )
-            ORDER BY avd.priority DESC, avd.created_at ASC
-          )
-          FROM actor_version_docs avd
-          WHERE avd.actor_version_id = current_version.id
-        ),
-        '[]'::jsonb
-      )`.as("actorDocs"),
-    ])
-    .where("app.workspaceId", "=", params.workspaceId)
-    .where("app.deletedAt", "is", null)
-    .where("app.status", "=", "active")
-    .where("a.id", "<>", params.actorId)
-    .where(
-      sql<boolean>`NOT EXISTS (
-      SELECT 1
-      FROM conversation_participants cp
-      JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
-      WHERE cp.conversation_id = ${params.conversationId}
-        AND cpsubj.actor_id = a.id
-        AND cp.state = 'active'
-    )`
-    )
-    .orderBy("app.displayName", "asc")
-    .orderBy("a.id", "asc")
-    .execute()
-
-  return result.map((row) => ({
-    id: row.id as string,
-    displayName: row.displayName as string,
-    title: (row.title as string | null) || undefined,
-    role: (row.role as string | null) || undefined,
-    summary: summarizeInviteableActor(row),
-  }))
+  return listInviteableActorRowsDefault(params)
 }
 
 async function canActorUseInviteActorTool(params: {
@@ -1036,8 +940,7 @@ async function canActorUseInviteActorTool(params: {
     return false
   }
 
-  return isActorActiveConversationParticipant(
-    db,
+  return isActorActiveConversationParticipantDefault(
     params.conversationId,
     params.actorId
   )

@@ -20,7 +20,6 @@
  * connectors and not in the runtime manager.
  */
 
-import { db } from "../../../infrastructure/database/kysely.js"
 import type {
   ConversationTransportBindingSummary,
   TransportAccountSummary,
@@ -28,6 +27,7 @@ import type {
 import { derivePlainText } from "../messaging/canonical-message.js"
 import type { InboundEnvelope } from "../connectors/types.js"
 import { mergeInboundMetadata } from "../ingest-metadata.js"
+import { getWorkspaceOwnerId } from "./repo.js"
 import {
   createConversation,
   createConversationItem,
@@ -51,20 +51,6 @@ import {
 
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined
-}
-
-async function getWorkspaceOwnerId(workspaceId: string) {
-  const row = await db
-    .selectFrom("workspaces")
-    .select("ownerId")
-    .where("id", "=", workspaceId)
-    .limit(1)
-    .executeTakeFirst()
-  const ownerId = row?.ownerId
-  if (!ownerId) {
-    throw new Error(`Workspace ${workspaceId} not found`)
-  }
-  return ownerId
 }
 
 async function ensureTransportConversationBinding(params: {

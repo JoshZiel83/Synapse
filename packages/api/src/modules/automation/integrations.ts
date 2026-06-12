@@ -12,19 +12,12 @@ import type {
   Timestamp,
 } from "@synapse/shared"
 import { config } from "../../config/index.js"
-import { db } from "../../infrastructure/database/kysely.js"
 import { decryptSensitiveFields } from "../../infrastructure/crypto/index.js"
 import { parseJsonObject } from "@synapse/shared"
-
-type IntegrationInstallationRow = {
-  installationId: string
-  workspaceId: string
-  installationStatus: "active" | "disabled" | "error" | "archived"
-  configData: unknown
-  orgSlug: string
-  itemSlug: string
-  specMetadata: unknown
-}
+import {
+  selectIntegrationInstallationRow,
+  type IntegrationInstallationRow,
+} from "./repo.js"
 
 type IntegrationWebhookIngressResult =
   | {
@@ -384,30 +377,10 @@ export async function getIntegrationInstallation(
   expectedProvider?: AutomationIntegrationProvider,
   options?: { allowInactive?: boolean }
 ): Promise<ResolvedIntegrationInstallation> {
-  const row = (await db
-    .selectFrom("pluginInstallations as installation")
-    .innerJoin("workspaceApps as app", "app.id", "installation.id")
-    .innerJoin("catalogItems as item", "item.id", "installation.catalogItemId")
-    .innerJoin("publishers as publisher", "publisher.id", "item.publisherId")
-    .innerJoin(
-      "pluginPackageVersionSpecs as spec",
-      "spec.catalogVersionId",
-      "installation.catalogVersionId"
-    )
-    .select([
-      "installation.id as installationId",
-      "app.workspaceId as workspaceId",
-      "app.status as installationStatus",
-      "installation.configData",
-      "publisher.slug as orgSlug",
-      "item.slug as itemSlug",
-      "spec.metadata as specMetadata",
-    ])
-    .where("installation.id", "=", installationId)
-    .where("app.workspaceId", "=", workspaceId)
-    .where("app.deletedAt", "is", null)
-    .limit(1)
-    .executeTakeFirst()) as IntegrationInstallationRow | undefined
+  const row = await selectIntegrationInstallationRow(
+    workspaceId,
+    installationId
+  )
 
   if (!row) {
     throw new Error(`Integration installation ${installationId} was not found`)

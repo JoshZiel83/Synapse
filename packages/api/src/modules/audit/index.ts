@@ -1,8 +1,8 @@
 import type { FastifyInstance } from "fastify"
-import { db } from "../../infrastructure/database/kysely.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { requireRequestAction } from "../access/guards.js"
+import { countWorkspaceAuditLogs, listWorkspaceAuditLogs } from "./repo.js"
 import { z } from "zod"
 
 const querySchema = z.object({
@@ -35,55 +35,20 @@ export default async function auditModule(app: FastifyInstance) {
       const qs = querySchema.parse(request.query)
 
       const offset = (qs.page - 1) * qs.pageSize
-      let countQuery = db
-        .selectFrom("auditLogs as al")
-        .select(({ fn }) => fn.countAll<string>().as("count"))
-        .where("al.workspaceId", "=", workspaceId)
-      let dataQuery = db
-        .selectFrom("auditLogs as al")
-        .leftJoin("users as u", "u.id", "al.userId")
-        .leftJoin("actors as a", "a.id", "al.actorId")
-        .leftJoin("workspaceApps as actor_app", "actor_app.id", "a.id")
-        .select([
-          "al.id",
-          "al.action",
-          "al.resourceType as resourceType",
-          "al.resourceId as resourceId",
-          "al.userId as userId",
-          "al.actorId as actorId",
-          "al.details",
-          "al.ipAddress as ipAddress",
-          "al.createdAt as createdAt",
-          "u.email as userName",
-          "actor_app.displayName as actorName",
-        ])
-        .where("al.workspaceId", "=", workspaceId)
-
-      if (qs.action) {
-        countQuery = countQuery.where("al.action", "=", qs.action)
-        dataQuery = dataQuery.where("al.action", "=", qs.action)
-      }
-      if (qs.resourceType) {
-        countQuery = countQuery.where("al.resourceType", "=", qs.resourceType)
-        dataQuery = dataQuery.where("al.resourceType", "=", qs.resourceType)
-      }
-      if (qs.resourceId) {
-        countQuery = countQuery.where("al.resourceId", "=", qs.resourceId)
-        dataQuery = dataQuery.where("al.resourceId", "=", qs.resourceId)
+      const filters = {
+        action: qs.action,
+        resourceType: qs.resourceType,
+        resourceId: qs.resourceId,
       }
 
-      const [countResult, items] = await Promise.all([
-        countQuery.executeTakeFirst(),
-        dataQuery
-          .orderBy("al.createdAt", "desc")
-          .limit(qs.pageSize)
-          .offset(offset)
-          .execute(),
+      const [total, items] = await Promise.all([
+        countWorkspaceAuditLogs(workspaceId, filters),
+        listWorkspaceAuditLogs(workspaceId, filters, qs.pageSize, offset),
       ])
 
       return {
         items,
-        total: parseInt(countResult?.count || "0", 10),
+        total,
         page: qs.page,
         pageSize: qs.pageSize,
       }

@@ -1,4 +1,3 @@
-import { db } from "../../infrastructure/database/kysely.js"
 import {
   fileRefBlock,
   type CanonicalFileRefBlock,
@@ -32,7 +31,17 @@ import {
   type FileOriginInput,
   type StoredFileRecord,
 } from "./model.js"
-import { presentFileAsset, type FileJoinRow } from "./presenter.js"
+import { presentFileAsset } from "./presenter.js"
+import {
+  canUserAccessFileWorkspace,
+  getContentMimeBySha,
+  getFileAssetJoinRow,
+} from "./repo.js"
+
+// repo.ts owns the DB reads (guard r8); re-export the two that external
+// importers (controller.ts, skills/service.ts, auth/service.ts) pull from here
+// so their import paths stay unchanged.
+export { canUserAccessFileWorkspace, getContentMimeBySha }
 
 export type { FileOriginInput, StoredFileRecord }
 export {
@@ -53,38 +62,6 @@ export type FileAccessInfo = Pick<
   FileRecordView,
   "id" | "workspaceId" | "mimeType" | "originalName" | "contentKind"
 >
-
-async function getJoinedFileRow(
-  fileId: string,
-  workspaceId?: string
-): Promise<FileJoinRow | null> {
-  // file_assets folds in the old file_origins columns, so no join needed.
-  let query = db
-    .selectFrom("fileAssets as f")
-    .select([
-      "f.id",
-      "f.workspaceId",
-      "f.uploaderUserId",
-      "f.originalName",
-      "f.mimeType",
-      "f.contentKind",
-      "f.sizeBytes",
-      "f.contentSha256",
-      "f.createdAt",
-      "f.sourceFamily",
-      "f.sourceSystem",
-      "f.initiatorActorId",
-      "f.parentAssetId",
-      "f.detailsJson",
-    ])
-    .where("f.id", "=", fileId)
-
-  if (workspaceId) {
-    query = query.where("f.workspaceId", "=", workspaceId)
-  }
-
-  return (await query.executeTakeFirst()) as FileJoinRow | null
-}
 
 export function getFileUrlById(fileId: string): string {
   return getStableFileUrl(fileId)
@@ -133,21 +110,21 @@ export async function uploadFile(
 export async function getFileRecord(
   fileId: string
 ): Promise<StoredFileRecord | null> {
-  const row = await getJoinedFileRow(fileId)
+  const row = await getFileAssetJoinRow(fileId)
   return row ? presentFileAsset(row) : null
 }
 
 export async function getFileDetail(
   fileId: string
 ): Promise<FileRecordView | null> {
-  const row = await getJoinedFileRow(fileId)
+  const row = await getFileAssetJoinRow(fileId)
   return row ? presentFileAsset(row) : null
 }
 
 export async function getFileAccessInfo(
   fileId: string
 ): Promise<FileAccessInfo | null> {
-  const row = await getJoinedFileRow(fileId)
+  const row = await getFileAssetJoinRow(fileId)
   if (!row) {
     return null
   }
@@ -164,7 +141,7 @@ export async function getWorkspaceFileDetail(
   fileId: string,
   workspaceId: string
 ): Promise<FileRecordView | null> {
-  const row = await getJoinedFileRow(fileId, workspaceId)
+  const row = await getFileAssetJoinRow(fileId, workspaceId)
   return row ? presentFileAsset(row) : null
 }
 
@@ -221,40 +198,9 @@ export async function readContentBufferBySha(
 }
 
 /**
- * Best-effort MIME for a content blob. content_blobs deliberately stores no MIME
- * (the same sha can be presented as different MIME in different contexts), so we
- * read it back from whatever references the sha: an entity asset, or any file_ref
- * part that carries a mime_type. Falls back to application/octet-stream.
+ * Best-effort MIME for a content blob lives in repo.ts (guard r8) and is
+ * re-exported from this module's top for unchanged importers.
  */
-export async function getContentMimeBySha(sha256: string): Promise<string> {
-  const asset = await db
-    .selectFrom("fileAssets")
-    .select("mimeType")
-    .where("contentSha256", "=", sha256)
-    .limit(1)
-    .executeTakeFirst()
-  if (asset?.mimeType) return asset.mimeType
-
-  const part = await db
-    .selectFrom("conversationItemParts")
-    .select("mimeType")
-    .where("refSha256", "=", sha256)
-    .where("mimeType", "is not", null)
-    .limit(1)
-    .executeTakeFirst()
-  if (part?.mimeType) return part.mimeType
-
-  const toolPart = await db
-    .selectFrom("toolResultParts")
-    .select("mimeType")
-    .where("refSha256", "=", sha256)
-    .where("mimeType", "is not", null)
-    .limit(1)
-    .executeTakeFirst()
-  if (toolPart?.mimeType) return toolPart.mimeType
-
-  return "application/octet-stream"
-}
 
 /** Relative content URL for a sha256: /content/<sha256>. */
 export function getContentUrlBySha(sha256: string): string {
@@ -279,26 +225,4 @@ export function toCanonicalFileRefBlock(
     sizeBytes: record.sizeBytes,
     category: mimeToCanonicalFileCategory(record.mimeType),
   })
-}
-
-export async function canUserAccessFileWorkspace(
-  workspaceId: string | null,
-  userId: string
-): Promise<boolean> {
-  if (!workspaceId) return true
-
-  const row = await db
-    .selectFrom("workspaces as w")
-    .leftJoin("workspaceMembers as wm", (join) =>
-      join.onRef("wm.workspaceId", "=", "w.id").on("wm.userId", "=", userId)
-    )
-    .select("w.id")
-    .where("w.id", "=", workspaceId)
-    .where((eb) =>
-      eb.or([eb("w.ownerId", "=", userId), eb("wm.userId", "is not", null)])
-    )
-    .limit(1)
-    .executeTakeFirst()
-
-  return Boolean(row)
 }

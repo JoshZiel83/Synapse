@@ -5,8 +5,21 @@
 // the control-plane handler can write a structured JSON-RPC error.
 
 import { z } from "zod"
-import { sql } from "kysely"
-import { db } from "../../infrastructure/database/kysely.js"
+import {
+  upsertRuntimeSessionOpened,
+  closeRuntimeSession,
+  selectDeviceOperationOwner,
+  selectDeviceOperationAttempt,
+  selectTaskIdForOperation,
+  setDeviceOperationStatus,
+  setDeviceOperationAttemptStatus,
+  markDeviceOperationOutputStreaming,
+  finalizeDeviceOperationResult,
+  selectInFlightDeviceTaskIds,
+  selectExpiredDeviceTaskIds,
+  insertRuntimeEvent,
+  mergeVfsExposureMetadata,
+} from "./repo.js"
 import {
   appendToolCallTaskOutput,
   getToolCallTask,
@@ -42,39 +55,12 @@ export async function persistRuntimeSessionOpened(
     }
   }
   try {
-    await db.transaction().execute(async (trx) => {
-      await trx
-        .insertInto("deviceRuntimeSessions")
-        .values({
-          id: parsed.data.runtime_session_id,
-          deviceId: deviceId,
-          conversationId: parsed.data.conversation_id ?? null,
-          actorId: parsed.data.actor_id ?? null,
-          status: "open",
-          openedAt: sql`NOW()`,
-        })
-        .onConflict((oc) =>
-          oc.column("id").doUpdateSet({
-            status: "open",
-            openedAt: sql`NOW()`,
-          })
-        )
-        .execute()
-      await trx
-        .insertInto("deviceRuntimeSessionServices")
-        .values({
-          sessionId: parsed.data.runtime_session_id,
-          serviceId: serviceId,
-          status: "open",
-          openedAt: sql`NOW()`,
-        })
-        .onConflict((oc) =>
-          oc.columns(["sessionId", "serviceId"]).doUpdateSet({
-            status: "open",
-            openedAt: sql`NOW()`,
-          })
-        )
-        .execute()
+    await upsertRuntimeSessionOpened({
+      runtimeSessionId: parsed.data.runtime_session_id,
+      deviceId: deviceId,
+      serviceId: serviceId,
+      conversationId: parsed.data.conversation_id ?? null,
+      actorId: parsed.data.actor_id ?? null,
     })
     return { ok: true }
   } catch (err) {
@@ -104,22 +90,10 @@ export async function persistRuntimeSessionClosed(
     }
   }
   try {
-    await db.transaction().execute(async (trx) => {
-      await trx
-        .updateTable("deviceRuntimeSessions")
-        .set({
-          status: "closed",
-          closedAt: sql`NOW()`,
-        })
-        .where("id", "=", parsed.data.runtime_session_id)
-        .where("deviceId", "=", deviceId)
-        .execute()
-      await trx
-        .updateTable("deviceRuntimeSessionServices")
-        .set({ status: "closed", closedAt: sql`NOW()` })
-        .where("sessionId", "=", parsed.data.runtime_session_id)
-        .where("serviceId", "=", serviceId)
-        .execute()
+    await closeRuntimeSession({
+      runtimeSessionId: parsed.data.runtime_session_id,
+      deviceId: deviceId,
+      serviceId: serviceId,
     })
     return { ok: true }
   } catch (err) {
@@ -159,11 +133,7 @@ async function assertOperationOwnership(args: {
   deviceId: string
   serviceId: string
 }): Promise<PersistResult> {
-  const op = await db
-    .selectFrom("deviceOperations")
-    .select(["id", "deviceId"])
-    .where("id", "=", args.operationId)
-    .executeTakeFirst()
+  const op = await selectDeviceOperationOwner(args.operationId)
   if (!op) {
     return {
       ok: false,
@@ -171,7 +141,7 @@ async function assertOperationOwnership(args: {
       message: `operation ${args.operationId} not found`,
     }
   }
-  if ((op.deviceId as string) !== args.deviceId) {
+  if (op.deviceId !== args.deviceId) {
     return {
       ok: false,
       code: -32005,
@@ -179,11 +149,7 @@ async function assertOperationOwnership(args: {
     }
   }
   if (args.attemptId) {
-    const attempt = await db
-      .selectFrom("deviceOperationAttempts")
-      .select(["id", "operationId", "deviceServiceId"])
-      .where("id", "=", args.attemptId)
-      .executeTakeFirst()
+    const attempt = await selectDeviceOperationAttempt(args.attemptId)
     if (!attempt) {
       return {
         ok: false,
@@ -191,14 +157,14 @@ async function assertOperationOwnership(args: {
         message: `attempt ${args.attemptId} not found`,
       }
     }
-    if ((attempt.operationId as string) !== args.operationId) {
+    if (attempt.operationId !== args.operationId) {
       return {
         ok: false,
         code: -32005,
         message: `attempt ${args.attemptId} does not belong to operation ${args.operationId}`,
       }
     }
-    if ((attempt.deviceServiceId as string) !== args.serviceId) {
+    if (attempt.deviceServiceId !== args.serviceId) {
       return {
         ok: false,
         code: -32005,
@@ -225,12 +191,7 @@ async function assertOperationOwnership(args: {
 // above are what make replay/out-of-order safe today.
 
 async function taskIdForOperation(operationId: string): Promise<string | null> {
-  const row = await db
-    .selectFrom("deviceOperations")
-    .select("taskId")
-    .where("id", "=", operationId)
-    .executeTakeFirst()
-  return row?.taskId || null
+  return selectTaskIdForOperation(operationId)
 }
 
 /** Drive the task to `working` when the device acks/starts (best-effort). */
@@ -303,27 +264,14 @@ export async function failInFlightDeviceTasksForDevice(
   deviceId: string,
   reason = "Device disconnected before the tool finished."
 ): Promise<number> {
-  const rows = await db
-    .selectFrom("deviceOperations as op")
-    .innerJoin("toolCallTasks as t", "t.id", "op.taskId")
-    .select("op.taskId as taskId")
-    .where("op.deviceId", "=", deviceId)
-    .where("op.taskId", "is not", null)
-    .where("t.lifecycleStatus", "in", [
-      "submitted",
-      "working",
-      "input_required",
-      "auth_required",
-    ])
-    .execute()
+  const taskIds = await selectInFlightDeviceTaskIds(deviceId)
   let failed = 0
-  for (const row of rows) {
-    if (!row.taskId) continue
-    const task = await getToolCallTask(row.taskId)
+  for (const taskId of taskIds) {
+    const task = await getToolCallTask(taskId)
     if (!task) continue
     // Disconnect is a machinery breakdown → lifecycle `failed` (retryable), not
     // completed/tool_error (which means the tool ran and returned an error).
-    await failToolCallTask(row.taskId, {
+    await failToolCallTask(taskId, {
       summary: reason,
       finalResultPayload: { content: textBlocks(reason), isError: true },
       finalErrorPayload: { code: "device_disconnected", message: reason },
@@ -341,24 +289,12 @@ export async function failInFlightDeviceTasksForDevice(
 export async function sweepExpiredDeviceTasks(
   now = new Date()
 ): Promise<number> {
-  const rows = await db
-    .selectFrom("toolCallTasks")
-    .select("id")
-    .where("executorKind", "=", "device_tool")
-    .where("lifecycleStatus", "in", [
-      "submitted",
-      "working",
-      "input_required",
-      "auth_required",
-    ])
-    .where("expiresAt", "is not", null)
-    .where("expiresAt", "<", now)
-    .execute()
+  const taskIds = await selectExpiredDeviceTaskIds(now)
   let swept = 0
-  for (const row of rows) {
+  for (const taskId of taskIds) {
     const reason = "Device tool timed out."
     // Timeout is a machinery breakdown → lifecycle `failed`, not tool_error.
-    await failToolCallTask(row.id, {
+    await failToolCallTask(taskId, {
       summary: reason,
       finalResultPayload: { content: textBlocks(reason), isError: true },
       finalErrorPayload: { code: "device_tool_timeout", message: reason },
@@ -384,19 +320,13 @@ export async function persistTaskReceived(
     serviceId,
   })
   if (!ownership.ok) return ownership
-  await db
-    .updateTable("deviceOperations")
-    .set({ status: "received" })
-    .where("id", "=", parsed.data.operation_id)
-    .where("deviceId", "=", deviceId)
-    .execute()
+  await setDeviceOperationStatus(parsed.data.operation_id, deviceId, "received")
   if (parsed.data.attempt_id) {
-    await db
-      .updateTable("deviceOperationAttempts")
-      .set({ status: "sent" })
-      .where("id", "=", parsed.data.attempt_id)
-      .where("deviceServiceId", "=", serviceId)
-      .execute()
+    await setDeviceOperationAttemptStatus(
+      parsed.data.attempt_id,
+      serviceId,
+      "sent"
+    )
   }
   await driveDeviceTaskWorking(parsed.data.operation_id)
   return { ok: true }
@@ -418,12 +348,7 @@ export async function persistTaskStarted(
     serviceId,
   })
   if (!ownership.ok) return ownership
-  await db
-    .updateTable("deviceOperations")
-    .set({ status: "started" })
-    .where("id", "=", parsed.data.operation_id)
-    .where("deviceId", "=", deviceId)
-    .execute()
+  await setDeviceOperationStatus(parsed.data.operation_id, deviceId, "started")
   await driveDeviceTaskWorking(parsed.data.operation_id)
   return { ok: true }
 }
@@ -444,13 +369,7 @@ export async function persistTaskOutput(
     serviceId,
   })
   if (!ownership.ok) return ownership
-  await db
-    .updateTable("deviceOperations")
-    .set({ status: "output_streaming" })
-    .where("id", "=", parsed.data.operation_id)
-    .where("deviceId", "=", deviceId)
-    .where("status", "in", ["started", "output_streaming"])
-    .execute()
+  await markDeviceOperationOutputStreaming(parsed.data.operation_id, deviceId)
   await driveDeviceTaskOutput(parsed.data.operation_id, parsed.data.output)
   return { ok: true }
 }
@@ -479,31 +398,15 @@ export async function persistTaskResult(
     serviceId,
   })
   if (!ownership.ok) return ownership
-  await db.transaction().execute(async (trx) => {
-    await trx
-      .updateTable("deviceOperations")
-      .set({
-        status: parsed.data.ok ? "succeeded" : "failed",
-        resultHash: parsed.data.result_hash ?? null,
-        errorCode: parsed.data.error_code ?? null,
-        errorMessage: parsed.data.error_message ?? null,
-        completedAt: sql`NOW()`,
-      })
-      .where("id", "=", parsed.data.operation_id)
-      .where("deviceId", "=", deviceId)
-      .execute()
-    if (parsed.data.attempt_id) {
-      await trx
-        .updateTable("deviceOperationAttempts")
-        .set({
-          status: parsed.data.ok ? "acknowledged" : "failed",
-          responseAt: sql`NOW()`,
-          acknowledgedAt: parsed.data.ok ? sql`NOW()` : null,
-        })
-        .where("id", "=", parsed.data.attempt_id)
-        .where("deviceServiceId", "=", serviceId)
-        .execute()
-    }
+  await finalizeDeviceOperationResult({
+    operationId: parsed.data.operation_id,
+    deviceId,
+    attemptId: parsed.data.attempt_id,
+    serviceId,
+    ok: parsed.data.ok,
+    resultHash: parsed.data.result_hash ?? null,
+    errorCode: parsed.data.error_code ?? null,
+    errorMessage: parsed.data.error_message ?? null,
   })
   await driveDeviceTaskResult(parsed.data.operation_id, {
     ok: parsed.data.ok,
@@ -530,19 +433,13 @@ export async function persistDeviceEventEmit(
   if (!parsed.success) {
     return { ok: false, code: -32602, message: parsed.error.message }
   }
-  await db
-    .insertInto("runtimeEvents")
-    .values({
-      workspaceId: workspaceId,
-      conversationId: parsed.data.conversation_id ?? null,
-      // runtime_events_source enum carries 'device' as the device-emitted
-      // event channel.
-      source: "device",
-      level: parsed.data.level ?? "info",
-      eventType: parsed.data.event_type,
-      payload: sql`${JSON.stringify(parsed.data.payload ?? {})}::jsonb`,
-    })
-    .execute()
+  await insertRuntimeEvent({
+    workspaceId: workspaceId,
+    conversationId: parsed.data.conversation_id ?? null,
+    level: parsed.data.level ?? "info",
+    eventType: parsed.data.event_type,
+    payloadJson: JSON.stringify(parsed.data.payload ?? {}),
+  })
   return { ok: true }
 }
 
@@ -568,15 +465,10 @@ export async function persistVfsExposureUpsert(
   if (!parsed.success) {
     return { ok: false, code: -32602, message: parsed.error.message }
   }
-  await db
-    .updateTable("deviceExposures")
-    .set({
-      metadata: sql`COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('vfs', ${JSON.stringify(
-        parsed.data.vfs
-      )}::jsonb)`,
-    })
-    .where("id", "=", parsed.data.exposure_id)
-    .where("deviceId", "=", deviceId)
-    .execute()
+  await mergeVfsExposureMetadata(
+    parsed.data.exposure_id,
+    deviceId,
+    JSON.stringify(parsed.data.vfs)
+  )
   return { ok: true }
 }

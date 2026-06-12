@@ -20,13 +20,12 @@
  */
 
 import { v4 as uuidv4 } from "uuid"
-import { sql } from "kysely"
+import { type Executor } from "../../infrastructure/database/kysely.js"
 import {
-  db,
-  runBuilder,
-  type Executor,
-} from "../../infrastructure/database/kysely.js"
-import type { ToolCallTaskActionTokensPayload } from "./repo.types.js"
+  insertActionToken,
+  findActionTokenRow,
+  deleteExpiredActionTokens,
+} from "./repo.js"
 
 export interface ActionTokenPayload {
   /** One of the option labels we offered (e.g. "allow_once", "deny"). */
@@ -70,17 +69,12 @@ export async function mintActionToken(
     twentyFourHours
   )
   const expiresAt = new Date(expiresAtMs)
-  await runBuilder(
-    executor,
-    db.insertInto("toolCallTaskActionTokens").values({
-      token,
-      taskId: params.taskId,
-      payload: sql`${JSON.stringify(
-        params.payload
-      )}::jsonb` as unknown as ToolCallTaskActionTokensPayload,
-      expiresAt: expiresAt,
-    })
-  )
+  await insertActionToken(executor, {
+    token,
+    taskId: params.taskId,
+    payload: params.payload,
+    expiresAt,
+  })
   return {
     token,
     taskId: params.taskId,
@@ -93,12 +87,7 @@ export async function lookupActionToken(
   token: string
 ): Promise<ActionTokenRecord | null> {
   if (!token || typeof token !== "string") return null
-  const row = await db
-    .selectFrom("toolCallTaskActionTokens")
-    .select(["token", "taskId", "payload", "expiresAt"])
-    .where("token", "=", token)
-    .limit(1)
-    .executeTakeFirst()
+  const row = await findActionTokenRow(token)
   if (!row) return null
   const expiresAt = row.expiresAt
   if (expiresAt.getTime() < Date.now()) return null
@@ -116,11 +105,7 @@ export async function lookupActionToken(
  * separate cron because the volume is small.
  */
 export async function sweepExpiredActionTokens(): Promise<number> {
-  const result = await db
-    .deleteFrom("toolCallTaskActionTokens")
-    .where("expiresAt", "<", sql<Date>`NOW()`)
-    .executeTakeFirst()
-  return Number(result.numDeletedRows ?? 0)
+  return deleteExpiredActionTokens()
 }
 
 function parseTimestamp(value: Date | null | undefined): number | null {

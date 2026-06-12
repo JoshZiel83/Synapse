@@ -23,7 +23,6 @@ import { nowIsoInstant } from "@synapse/shared/datetime"
 import { randomBytes, randomUUID } from "node:crypto"
 import type { FastifyInstance, FastifyRequest } from "fastify"
 import type { WebSocket } from "ws"
-import { sql } from "kysely"
 import { formatValidationDetails } from "../../infrastructure/validation-error.js"
 import { wireRoute } from "../../infrastructure/http/route.js"
 import {
@@ -31,11 +30,20 @@ import {
   DeviceHelloParamsSchema,
   type JsonRpcRequest,
 } from "@synapse/device-protocol"
-import { db, type KyselyDb } from "../../infrastructure/database/kysely.js"
+import type { KyselyDb } from "../../infrastructure/database/kysely.js"
 import { persistCatalogSync } from "./catalog-sync.js"
 import { authenticateDeviceHello } from "./control-plane-auth.js"
 import { getEnvelopeServerPublicKey } from "./envelope-signer.js"
 import { getDeviceTunnelRegistry } from "./tunnel-registry.js"
+import {
+  insertControlPlaneSession as insertControlPlaneSessionRow,
+  issueTunnelPathToken,
+  selectControlPlaneSessionDeviceId,
+  closeControlPlaneSessionRows,
+  getDeviceWorkspaceId,
+  selectTunnelPathToken,
+  hasLiveLocalSandboxMount,
+} from "./repo.js"
 import {
   persistDeviceEventEmit,
   persistRuntimeSessionClosed,
@@ -143,10 +151,11 @@ function writePersistResult(
 export async function validateTunnelInternalUrl(args: {
   candidate: string
   deviceServiceId: string
-  /** Executor seam (defaults to the global db); tests inject a testcontainer db. */
+  /** Executor seam (the repo defaults to the global db); tests inject a
+   *  testcontainer db, threaded down to the repo reads. */
   executor?: KyselyDb
 }): Promise<{ ok: true } | { ok: false; message: string }> {
-  const executor = args.executor ?? db
+  const executor = args.executor
   let candidateUrl: URL
   try {
     candidateUrl = new URL(args.candidate)
@@ -202,7 +211,7 @@ export async function validateTunnelInternalUrl(args: {
 async function validateFrpEdgeUrl(args: {
   candidateUrl: URL
   deviceServiceId: string
-  executor: KyselyDb
+  executor: KyselyDb | undefined
 }): Promise<{ ok: true } | { ok: false; message: string }> {
   const tokenMatch = /\/d\/([^/]+)/.exec(args.candidateUrl.pathname)
   if (!tokenMatch) {
@@ -216,12 +225,10 @@ async function validateFrpEdgeUrl(args: {
   // it on the device_services row. Any mismatch means either the device is
   // out of sync (re-registered without re-reading the ack) or is attempting
   // to claim a peer's route — either way we reject.
-  const row = await args.executor
-    .selectFrom("deviceServices")
-    .select(["tunnelPathToken"])
-    .where("id", "=", args.deviceServiceId)
-    .executeTakeFirst()
-  const expectedToken = (row?.tunnelPathToken as string | null) ?? null
+  const expectedToken = await selectTunnelPathToken(
+    args.deviceServiceId,
+    args.executor
+  )
   if (!expectedToken) {
     return {
       ok: false,
@@ -250,7 +257,7 @@ async function validateLocalLoopbackUrl(args: {
   candidateUrl: URL
   deviceServiceId: string
   hadTrustedPrefix: boolean
-  executor: KyselyDb
+  executor: KyselyDb | undefined
 }): Promise<{ ok: true } | { ok: false; message: string }> {
   const { candidateUrl } = args
   if (candidateUrl.protocol !== "http:") {
@@ -286,15 +293,10 @@ async function validateLocalLoopbackUrl(args: {
   // file_mounts row with sandbox_backend='local' that isn't closed/failed. Raw
   // status comparison (matching getActiveMountsForSession) so the file_mount_status
   // enum compares against literals without a parameterized-text cast mismatch.
-  const liveLocalMount = await args.executor
-    .selectFrom("fileMounts as m")
-    .innerJoin("deviceServices as s", "s.deviceId", "m.deviceId")
-    .select("m.id")
-    .where("s.id", "=", args.deviceServiceId)
-    .where("m.sandboxBackend", "=", "local")
-    .where(sql<boolean>`m.status NOT IN ('closed', 'failed')`)
-    .limit(1)
-    .executeTakeFirst()
+  const liveLocalMount = await hasLiveLocalSandboxMount(
+    args.deviceServiceId,
+    args.executor
+  )
   if (!liveLocalMount) {
     return {
       ok: false,
@@ -338,30 +340,13 @@ async function insertControlPlaneSession(args: {
   remoteAddr: string | null
 }): Promise<string> {
   const sessionId = randomUUID()
-  await db
-    .insertInto("deviceControlPlaneSessions")
-    .values({
-      id: sessionId,
-      deviceId: args.deviceId,
-      serviceId: args.serviceId,
-      protocolVersion: 1,
-      clientVersion: args.clientVersion,
-      status: "active",
-      transport: "websocket",
-      remoteAddr: args.remoteAddr,
-      lastSequence: 0,
-      lastHeartbeatAt: sql`NOW()`,
-      startedAt: sql`NOW()`,
-    } as never)
-    .execute()
-  await db
-    .updateTable("deviceServices")
-    .set({
-      currentSessionId: sessionId,
-      lastSeenAt: sql`NOW()`,
-    } as never)
-    .where("id", "=", args.serviceId)
-    .execute()
+  await insertControlPlaneSessionRow({
+    sessionId,
+    deviceId: args.deviceId,
+    serviceId: args.serviceId,
+    clientVersion: args.clientVersion,
+    remoteAddr: args.remoteAddr,
+  })
   return sessionId
 }
 
@@ -374,18 +359,7 @@ async function insertControlPlaneSession(args: {
  */
 async function ensureTunnelPathToken(serviceId: string): Promise<string> {
   const fresh = randomBytes(32).toString("hex")
-  await db
-    .updateTable("deviceServices")
-    .set({ tunnelPathToken: fresh } as never)
-    .where("id", "=", serviceId)
-    .where("tunnelPathToken", "is", null)
-    .execute()
-  const row = await db
-    .selectFrom("deviceServices")
-    .select(["tunnelPathToken"])
-    .where("id", "=", serviceId)
-    .executeTakeFirst()
-  const token = (row?.tunnelPathToken as string | null) ?? null
+  const token = await issueTunnelPathToken(serviceId, fresh)
   if (!token) {
     throw new Error(
       `device_services ${serviceId} disappeared while issuing tunnel_path_token`
@@ -399,33 +373,12 @@ async function closeControlPlaneSession(
   reason: string
 ): Promise<void> {
   try {
-    const sessionRow = await db
-      .selectFrom("deviceControlPlaneSessions")
-      .select("deviceId")
-      .where("id", "=", sessionId)
-      .executeTakeFirst()
-    await db
-      .updateTable("deviceControlPlaneSessions")
-      .set({
-        status: "closed",
-        endedAt: sql`NOW()`,
-        closeReason: reason,
-      } as never)
-      .where("id", "=", sessionId)
-      .execute()
-    await db
-      .updateTable("deviceServices")
-      .set({
-        currentSessionId: null,
-      } as never)
-      .where("currentSessionId", "=", sessionId)
-      .execute()
+    const deviceId = await selectControlPlaneSessionDeviceId(sessionId)
+    await closeControlPlaneSessionRows(sessionId, reason)
     // Task unification (design §3.6): fail in-flight device_tool tasks so the
     // waiting agent is woken instead of hanging when the device drops.
-    if (sessionRow?.deviceId) {
-      await failInFlightDeviceTasksForDevice(sessionRow.deviceId).catch(
-        () => undefined
-      )
+    if (deviceId) {
+      await failInFlightDeviceTasksForDevice(deviceId).catch(() => undefined)
     }
   } catch {
     /* best effort; DB unavailability shouldn't block socket teardown */
@@ -534,13 +487,9 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
                 // Cache the device's workspace_id so per-message event
                 // persistence (runtime_events) doesn't have to re-query it.
                 try {
-                  const deviceRow = await db
-                    .selectFrom("devices")
-                    .select(["workspaceId"])
-                    .where("id", "=", result.deviceId)
-                    .executeTakeFirst()
-                  state.authenticatedWorkspaceId =
-                    (deviceRow?.workspaceId as string | undefined) ?? null
+                  state.authenticatedWorkspaceId = await getDeviceWorkspaceId(
+                    result.deviceId
+                  )
                 } catch {
                   /* workspace lookup is best-effort; event.emit will
                    * surface a structured error if it tries to write without
