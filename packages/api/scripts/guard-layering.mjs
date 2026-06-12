@@ -106,10 +106,24 @@ const isMixedModuleFile = (p) => MIXED_MODULES.has(moduleOf(p))
 //   - devices/control-plane-auth.ts: device-hello signature verification —
 //     authenticateDeviceHello(input, executor = db) is executor-injectable; db
 //     is the production default.
+//   - access/binding-storage.ts: the resource-access-binding DB layer — every
+//     fn takes `db: KyselyDb` / `client: Executor`; the singleton is only a
+//     query-builder factory fed to runBuilder(client, …), never queried direct.
+//   - workspace-apps/grant-storage.ts: the workspace-app grant / grant-request
+//     DB layer — every fn takes `run: KyselyDb`/`Executor`; db is only the
+//     production default for resolveWorkspaceAppGrantRequest's tx fallback.
+//   - files/content-access.ts: the content-authorization read layer — every fn
+//     runs on `ctx.dbh ?? db`; db is only the production default.
+//   - auth/oauth-error-routing.ts: resolveOAuthErrorRedirect({ executor = db })
+//     is executor-injectable; db is the production default.
 const R8_ALLOWLIST = new Set([
   "access/guards.ts",
   "sandbox/gc.ts",
   "devices/control-plane-auth.ts",
+  "access/binding-storage.ts",
+  "workspace-apps/grant-storage.ts",
+  "files/content-access.ts",
+  "auth/oauth-error-routing.ts",
 ])
 const r8Key = (p) => {
   const m = p.split("/modules/")[1]

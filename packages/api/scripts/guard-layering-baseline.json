@@ -10,13 +10,11 @@
   "r5_bare_route_in_mixed": [],
   "r7_dual_naming": [],
   "r8_db_client_outside_repo": [
-    "packages/api/src/modules/access/binding-storage.ts",
     "packages/api/src/modules/ai/context-builder.ts",
     "packages/api/src/modules/ai/session-tools.ts",
     "packages/api/src/modules/audit/index.ts",
     "packages/api/src/modules/auth/better-auth.ts",
     "packages/api/src/modules/auth/index.ts",
-    "packages/api/src/modules/auth/oauth-error-routing.ts",
     "packages/api/src/modules/auth/service.ts",
     "packages/api/src/modules/automation/integrations.ts",
     "packages/api/src/modules/automation/service.ts",
@@ -34,7 +32,6 @@
     "packages/api/src/modules/devices/operations.ts",
     "packages/api/src/modules/devices/service.ts",
     "packages/api/src/modules/execution/service.ts",
-    "packages/api/src/modules/files/content-access.ts",
     "packages/api/src/modules/files/parse-service.ts",
     "packages/api/src/modules/files/service.ts",
     "packages/api/src/modules/im/integration/actor-status-hooks.ts",
@@ -78,7 +75,6 @@
     "packages/api/src/modules/tasks/action-tokens.ts",
     "packages/api/src/modules/tasks/service.ts",
     "packages/api/src/modules/tool-call-tasks/service.ts",
-    "packages/api/src/modules/workspace-apps/grant-storage.ts",
     "packages/api/src/modules/workspace-apps/service.ts",
     "packages/api/src/modules/workspace/service.ts"
   ]
