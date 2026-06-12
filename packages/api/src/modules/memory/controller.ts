@@ -34,7 +34,6 @@ import {
   deleteMemory,
   findExistingMemorySpace,
   moveMemoryToSpace,
-  resolveOrCreateMemorySpace,
   getMemory,
   listMemories,
   MemoryError,

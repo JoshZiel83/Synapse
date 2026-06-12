@@ -10,18 +10,7 @@
   "r5_bare_route_in_mixed": [],
   "r7_dual_naming": [],
   "r8_db_client_outside_repo": [
-    "packages/api/src/modules/automation/service.ts",
     "packages/api/src/modules/chat/service.ts",
-    "packages/api/src/modules/execution/service.ts",
-    "packages/api/src/modules/mcp-plugins/plugin-auth-connections.ts",
-    "packages/api/src/modules/mcp-plugins/service.ts",
-    "packages/api/src/modules/memory/indexing.ts",
-    "packages/api/src/modules/memory/service.ts",
-    "packages/api/src/modules/model-groups/service.ts",
-    "packages/api/src/modules/relationship/service.ts",
-    "packages/api/src/modules/remote-agents/service.ts",
-    "packages/api/src/modules/sandbox/service.ts",
-    "packages/api/src/modules/skills/service.ts",
-    "packages/api/src/modules/workspace/service.ts"
+    "packages/api/src/modules/mcp-plugins/service.ts"
   ]
 }

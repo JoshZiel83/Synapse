@@ -14,12 +14,8 @@ import { mkdir, rm } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { join, relative, isAbsolute } from "node:path"
 import { actorRef, conversationRef } from "@synapse/shared"
-import { sql } from "kysely"
-import {
-  db,
-  withDbTransaction,
-  type Executor,
-} from "../../infrastructure/database/kysely.js"
+import type { Executor } from "./repo.js"
+import * as repo from "./repo.js"
 import { STORAGE_DIR } from "../../infrastructure/storage/index.js"
 import { config } from "../../config/index.js"
 import { startPairing, deleteDevice } from "../devices/service.js"
@@ -212,11 +208,7 @@ export function dockerBackendOptionsFromEnv(): DockerSandboxBackendOptions {
   }
 }
 
-interface SessionContext {
-  workspaceId: string
-  conversationId: string
-  actorId: string
-}
+type SessionContext = repo.SessionContext
 
 /**
  * Origin the LOCAL sandbox device-runtime dials back to (passed as `--server=`
@@ -367,17 +359,14 @@ async function isSandboxRuntimeAlive(mounts: FileMountRow[]): Promise<boolean> {
  * Bounded; best-effort; logs.
  */
 export async function reconcileSandboxes(): Promise<void> {
-  const rows = await db
-    .selectFrom("fileMounts")
-    .select("sessionId")
-    .where("status", "in", ["provisioning", "active", "committing"])
-    .groupBy("sessionId")
-    .execute()
+  const sessionIds = await repo.listReconcileCandidateSessionIds()
   const liveSessionIds = new Set<string>()
-  for (const { sessionId: session_id } of rows) {
-    const sessionId = session_id as string
+  for (const sessionId of sessionIds) {
     try {
-      const mounts = await getActiveMountsForSession(db, sessionId)
+      const mounts = await getActiveMountsForSession(
+        repo.defaultDbh(),
+        sessionId
+      )
       if (mounts.length === 0) continue
       const allActive = mounts.every((m) => m.status === "active")
       if (allActive && (await isSandboxRuntimeAlive(mounts))) {
@@ -406,14 +395,7 @@ export async function reconcileSandboxes(): Promise<void> {
     (process.env.SYNAPSE_SANDBOX_BACKEND || "local").toLowerCase() === "docker"
   const hasDockerMountHistory = envIsDocker
     ? true
-    : Boolean(
-        await db
-          .selectFrom("fileMounts")
-          .select("id")
-          .where("sandboxBackend", "=", "docker")
-          .limit(1)
-          .executeTakeFirst()
-      )
+    : await repo.hasDockerMountHistory()
   if (hasDockerMountHistory) {
     try {
       const { removed } = await reapDockerSandboxOrphans(liveSessionIds)
@@ -428,21 +410,7 @@ export async function reconcileSandboxes(): Promise<void> {
   }
 }
 
-async function loadSessionContext(
-  sessionId: string
-): Promise<SessionContext | null> {
-  const row = await db
-    .selectFrom("sessions")
-    .select(["workspaceId", "conversationId", "actorId"])
-    .where("id", "=", sessionId)
-    .executeTakeFirst()
-  if (!row) return null
-  return {
-    workspaceId: row.workspaceId as string,
-    conversationId: row.conversationId as string,
-    actorId: row.actorId as string,
-  }
-}
+const loadSessionContext = repo.loadSessionContext
 
 /** Per-session sandbox root: <STORAGE_DIR>/sandboxes/<sessionId>. */
 function sandboxRootFor(sessionId: string): string {
@@ -506,7 +474,7 @@ async function ensureSessionSpaces(ctx: SessionContext): Promise<SpaceSpec[]> {
         subpath: "conversation",
         ensure: async () =>
           (
-            await ensureFileSpace(db, {
+            await ensureFileSpace(repo.defaultDbh(), {
               workspaceId: ctx.workspaceId,
               owner: conversationRef(ctx.conversationId),
             })
@@ -516,7 +484,7 @@ async function ensureSessionSpaces(ctx: SessionContext): Promise<SpaceSpec[]> {
         subpath: "actor",
         ensure: async () =>
           (
-            await ensureFileSpace(db, {
+            await ensureFileSpace(repo.defaultDbh(), {
               workspaceId: ctx.workspaceId,
               owner: actorRef(ctx.actorId),
             })
@@ -526,7 +494,7 @@ async function ensureSessionSpaces(ctx: SessionContext): Promise<SpaceSpec[]> {
         subpath: "actor-conversation",
         ensure: async () =>
           (
-            await ensureFileSpace(db, {
+            await ensureFileSpace(repo.defaultDbh(), {
               workspaceId: ctx.workspaceId,
               owner: actorRef(ctx.actorId),
               scope: conversationRef(ctx.conversationId),
@@ -538,10 +506,10 @@ async function ensureSessionSpaces(ctx: SessionContext): Promise<SpaceSpec[]> {
   const out: SpaceSpec[] = []
   for (const s of specs) {
     const spaceId = await s.ensure()
-    const space = await getFileSpace(db, spaceId)
+    const space = await getFileSpace(repo.defaultDbh(), spaceId)
     const baseSnapshotId = space?.currentSnapshotId ?? null
     const baseManifestSha = baseSnapshotId
-      ? await getSnapshotManifestSha(db, baseSnapshotId)
+      ? await getSnapshotManifestSha(repo.defaultDbh(), baseSnapshotId)
       : null
     out.push({ subpath: s.subpath, spaceId, baseSnapshotId, baseManifestSha })
   }
@@ -576,7 +544,7 @@ export async function provisionSandbox(
   sessionId: string,
   options: ProvisionSandboxOptions = {}
 ): Promise<SandboxProvisionResult> {
-  const existing = await getActiveMountsForSession(db, sessionId)
+  const existing = await getActiveMountsForSession(repo.defaultDbh(), sessionId)
   // Fast path only when ALL mounts are 'active' (not mid-provision/commit) AND
   // the runtime is actually alive. getActiveMountsForSession returns the LIVE
   // set (status NOT IN closed/failed) which also includes 'provisioning' and
@@ -714,7 +682,7 @@ export async function provisionSandbox(
   for (const spec of specs) {
     const dir = mountDir(sessionId, spec.subpath)
     await mkdir(dir, { recursive: true })
-    const mount = await insertFileMount(db, {
+    const mount = await insertFileMount(repo.defaultDbh(), {
       workspaceId: ctx.workspaceId,
       sessionId,
       fileSpaceId: spec.spaceId,
@@ -774,7 +742,9 @@ export async function provisionSandbox(
       patch: Parameters<typeof updateFileMount>[2]
     ): Promise<void> => {
       await Promise.all(
-        mounts.map((mount) => updateFileMount(db, mount.id, patch))
+        mounts.map((mount) =>
+          updateFileMount(repo.defaultDbh(), mount.id, patch)
+        )
       )
     }
     const spec: SandboxSpec = {
@@ -895,7 +865,7 @@ export async function provisionSandbox(
     }
     await rm(sandboxRoot, { recursive: true, force: true }).catch(() => {})
     for (const mount of mounts) {
-      await updateFileMount(db, mount.id, {
+      await updateFileMount(repo.defaultDbh(), mount.id, {
         status: "failed",
         errorMessage: message,
       }).catch(() => {})
@@ -915,14 +885,7 @@ async function waitForCatalog(
   const deadline = Date.now() + opts.timeoutMs
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const ready = await db
-      .selectFrom("deviceExposures")
-      .select("id")
-      .where("deviceId", "=", deviceId)
-      .where("builtinKind", "=", "filesystem")
-      .where("runtimeStatus", "=", "healthy")
-      .limit(1)
-      .executeTakeFirst()
+    const ready = await repo.isFilesystemExposureHealthy(deviceId)
     if (ready) return
     if (Date.now() >= deadline) {
       throw new SandboxServiceError(
@@ -973,15 +936,7 @@ export async function waitForTunnelEndpoint(
 async function resolveDeviceRuntimeServiceId(
   deviceId: string
 ): Promise<string | null> {
-  const svc = await db
-    .selectFrom("deviceServices")
-    .select("id")
-    .where("deviceId", "=", deviceId)
-    .where("serviceKind", "=", "device_runtime")
-    .orderBy("createdAt", "desc")
-    .limit(1)
-    .executeTakeFirst()
-  return (svc?.id as string | undefined) ?? null
+  return repo.resolveDeviceRuntimeServiceId(deviceId)
 }
 
 /** Injectable seams for {@link fastPathEndpointReady} (tests stub these so the
@@ -1055,8 +1010,8 @@ export interface RefreshDeps {
 
 function defaultRefreshDeps(): RefreshDeps {
   return {
-    dbh: db,
-    runInTx: (fn) => withDbTransaction(fn),
+    dbh: repo.defaultDbh(),
+    runInTx: (fn) => repo.runInTx(fn),
     sync: syncDir,
     applyHead: applyHeadForConflicts,
   }
@@ -1413,8 +1368,8 @@ export interface CommitDeps {
 
 function defaultCommitDeps(): CommitDeps {
   return {
-    dbh: db,
-    runInTx: (fn) => withDbTransaction(fn),
+    dbh: repo.defaultDbh(),
+    runInTx: (fn) => repo.runInTx(fn),
     loadCtx: loadSessionContext,
     reconcile: async (
       mount,
@@ -1521,8 +1476,6 @@ export async function commitSpaces(
   return out
 }
 
-const PENDING_CONFLICTS_KEY = "_sandboxPendingCommitConflicts"
-
 /**
  * Pure union of an existing pending-conflict map with newly-recorded conflicts:
  * per subpath, dedup paths (Set) and dedup sidecars by SIDECAR path (not by
@@ -1557,33 +1510,10 @@ export function mergePendingConflicts(
  * deduped sidecars) rather than replacing — otherwise a still-undelivered notice
  * from a turn whose actorThink threw (so it wasn't cleared) would be clobbered by
  * a new conflict. Each subpath carries both the lost paths and the sidecars where
- * the agent's pre-conflict copy was preserved (round-7 #C).
+ * the agent's pre-conflict copy was preserved (round-7 #C). The read-merge-write
+ * core (FOR UPDATE on the injected runInTx) lives in repo.ts.
  */
-async function recordPendingCommitConflicts(
-  sessionId: string,
-  conflictsBySubpath: Record<string, PendingCommitConflict>,
-  runInTx: <T>(fn: (tx: Executor) => Promise<T>) => Promise<T> = (fn) =>
-    withDbTransaction(fn)
-): Promise<void> {
-  await runInTx(async (txq) => {
-    const existing = await sql<{ collaborationState: unknown }>`
-      SELECT collaboration_state FROM sessions WHERE id = ${sessionId} FOR UPDATE`.execute(
-      txq
-    )
-    const state = (existing.rows[0]?.collaborationState ?? {}) as Record<
-      string,
-      unknown
-    >
-    const prev = normalizePendingConflicts(state[PENDING_CONFLICTS_KEY])
-    const merged = mergePendingConflicts(prev, conflictsBySubpath)
-    await sql`
-      UPDATE sessions
-       SET collaboration_state =
-         COALESCE(collaboration_state, '{}'::jsonb)
-         || jsonb_build_object(${PENDING_CONFLICTS_KEY}::text, ${JSON.stringify(merged)}::jsonb)
-       WHERE id = ${sessionId}`.execute(txq)
-  })
-}
+const recordPendingCommitConflicts = repo.recordPendingCommitConflicts
 
 /**
  * Coerce the stored pending-conflicts blob into the current shape. Tolerates the
@@ -1636,35 +1566,13 @@ function normalizeSidecarRef(raw: unknown): ConflictSidecarRef {
  * teardown/commit. At-least-once delivery: the caller surfaces these to the
  * agent, then calls clearPendingCommitConflicts ONLY after the model has
  * actually consumed them (post-actorThink), so a crash in between re-delivers
- * rather than drops the notice.
+ * rather than drops the notice. (DB read lives in repo.ts; re-exported here so
+ * index.ts / the session-thinking worker keep importing it from this module.)
  */
-export async function peekPendingCommitConflicts(
-  sessionId: string
-): Promise<Record<string, PendingCommitConflict>> {
-  const row = await db
-    .selectFrom("sessions")
-    .select("collaborationState")
-    .where("id", "=", sessionId)
-    .executeTakeFirst()
-  const state = (row?.collaborationState ?? {}) as Record<string, unknown>
-  const pending = normalizePendingConflicts(state[PENDING_CONFLICTS_KEY])
-  return Object.keys(pending).length > 0 ? pending : {}
-}
+export const peekPendingCommitConflicts = repo.peekPendingCommitConflicts
 
 /** Clear the stashed commit conflicts (after the agent has consumed them). */
-export async function clearPendingCommitConflicts(
-  sessionId: string
-): Promise<void> {
-  await db
-    .updateTable("sessions")
-    .set({
-      collaborationState: sql`COALESCE(collaboration_state, '{}'::jsonb) - ${PENDING_CONFLICTS_KEY}::text`,
-    } as never)
-    .where("id", "=", sessionId)
-    .execute()
-}
-
-const PENDING_REFRESH_KEY = "_sandboxPendingRefreshConflicts"
+export const clearPendingCommitConflicts = repo.clearPendingCommitConflicts
 
 /**
  * Pure union of an existing pending-refresh map with newly-recorded refresh
@@ -1745,93 +1653,26 @@ export function normalizePendingRefresh(
 }
 
 /**
- * Persist refresh conflicts (deferred paths + sidecars) for at-least-once
- * delivery (round-10 #1), MERGING with any still-undelivered ones. syncFailures
- * are deliberately excluded — they self-heal (next turn head!=base re-runs the
- * sync) so persisting them would re-warn forever.
- */
-async function recordPendingRefreshConflicts(
-  sessionId: string,
-  incoming: Pick<
-    PendingRefreshConflicts,
-    "deferredConflictsBySubpath" | "sidecarsBySubpath"
-  >,
-  runInTx: <T>(fn: (tx: Executor) => Promise<T>) => Promise<T> = (fn) =>
-    withDbTransaction(fn)
-): Promise<void> {
-  await runInTx((txq) =>
-    recordPendingRefreshConflictsOn(txq, sessionId, incoming)
-  )
-}
-
-/**
- * Executor-bound core of recordPendingRefreshConflicts: read-merge-write the
+ * Executor-bound core of the refresh-conflict persist: read-merge-write the
  * pending refresh blob on the given (already-open) transaction. Used by
  * refreshSpaces to couple the persist with the per-mount base advance in ONE
  * transaction (round-11 #2: a persist failure must roll back the base advance,
- * so head!=base self-heals instead of silently degrading durability).
+ * so head!=base self-heals instead of silently degrading durability). The DB
+ * body (FOR UPDATE + jsonb merge-write) lives in repo.ts.
  */
-async function recordPendingRefreshConflictsOn(
-  txq: Executor,
-  sessionId: string,
-  incoming: Pick<
-    PendingRefreshConflicts,
-    "deferredConflictsBySubpath" | "sidecarsBySubpath"
-  >
-): Promise<void> {
-  const existing = await sql<{ collaborationState: unknown }>`
-    SELECT collaboration_state FROM sessions WHERE id = ${sessionId} FOR UPDATE`.execute(
-    txq
-  )
-  const state = (existing.rows[0]?.collaborationState ?? {}) as Record<
-    string,
-    unknown
-  >
-  const prev = normalizePendingRefresh(state[PENDING_REFRESH_KEY])
-  const merged = mergePendingRefreshConflicts(prev, incoming)
-  await sql`
-    UPDATE sessions
-       SET collaboration_state =
-         COALESCE(collaboration_state, '{}'::jsonb)
-         || jsonb_build_object(${PENDING_REFRESH_KEY}::text, ${JSON.stringify(merged)}::jsonb)
-       WHERE id = ${sessionId}`.execute(txq)
-}
+const recordPendingRefreshConflictsOn = repo.recordPendingRefreshConflictsOn
 
 /**
  * Read (WITHOUT clearing) refresh conflicts stashed by a previous turn whose
  * notice the actor may not have consumed (at-least-once delivery, round-10 #1).
  * Returns the persisted deferred paths + sidecars (NOT syncFailures — those are
  * recomputed fresh each turn). The caller clears only after actorThink returns.
+ * (DB read lives in repo.ts; re-exported here for index.ts / the worker.)
  */
-export async function peekPendingRefreshConflicts(
-  sessionId: string
-): Promise<
-  Pick<
-    PendingRefreshConflicts,
-    "deferredConflictsBySubpath" | "sidecarsBySubpath"
-  >
-> {
-  const row = await db
-    .selectFrom("sessions")
-    .select("collaborationState")
-    .where("id", "=", sessionId)
-    .executeTakeFirst()
-  const state = (row?.collaborationState ?? {}) as Record<string, unknown>
-  return normalizePendingRefresh(state[PENDING_REFRESH_KEY])
-}
+export const peekPendingRefreshConflicts = repo.peekPendingRefreshConflicts
 
 /** Clear the stashed refresh conflicts (after the agent has consumed them). */
-export async function clearPendingRefreshConflicts(
-  sessionId: string
-): Promise<void> {
-  await db
-    .updateTable("sessions")
-    .set({
-      collaborationState: sql`COALESCE(collaboration_state, '{}'::jsonb) - ${PENDING_REFRESH_KEY}::text`,
-    } as never)
-    .where("id", "=", sessionId)
-    .execute()
-}
+export const clearPendingRefreshConflicts = repo.clearPendingRefreshConflicts
 
 /**
  * Re-materialize every durable pending conflict sidecar (commit + refresh) into
@@ -2168,7 +2009,7 @@ export async function teardownSandbox(
   _options: TeardownSandboxOptions = {}
 ): Promise<void> {
   const ctx = await loadSessionContext(sessionId)
-  const mounts = await getActiveMountsForSession(db, sessionId)
+  const mounts = await getActiveMountsForSession(repo.defaultDbh(), sessionId)
   if (mounts.length === 0) return
 
   // ① commit ALL dirty spaces (incl /actor-conversation, and any /conversation
@@ -2228,7 +2069,7 @@ export async function teardownSandbox(
 
     // ④ close mounts.
     for (const mount of mounts) {
-      await updateFileMount(db, mount.id, {
+      await updateFileMount(repo.defaultDbh(), mount.id, {
         status: "closed",
         closedAt: true,
       }).catch(() => {})
@@ -2240,7 +2081,7 @@ export async function teardownSandbox(
     const message =
       commitError instanceof Error ? commitError.message : String(commitError)
     for (const mount of mounts) {
-      await updateFileMount(db, mount.id, {
+      await updateFileMount(repo.defaultDbh(), mount.id, {
         status: "failed",
         errorMessage: `teardown commit failed (live dir preserved at ${mount.materializedDir}): ${message}`,
       }).catch(() => {})
@@ -2307,7 +2148,7 @@ export interface RecoverFailedMountsResult {
  * hand. Best-effort and idempotent: safe to call on every API startup.
  */
 export async function recoverFailedSandboxMounts(): Promise<RecoverFailedMountsResult> {
-  const mounts = await getFailedRecoverableMounts(db)
+  const mounts = await getFailedRecoverableMounts(repo.defaultDbh())
   // Group by session so we make the live-runtime decision ONCE per runtime (the
   // runtime is per-session, not per-mount) before touching any of its dirs.
   const bySession = new Map<string, FileMountRow[]>()
@@ -2395,7 +2236,7 @@ async function recoverOneFailedMount(
   // The dir may have been cleaned already (e.g. by a later successful run);
   // skip if it's gone — there's nothing to recover.
   if (!existsSync(mount.materializedDir)) {
-    await updateFileMount(db, mount.id, {
+    await updateFileMount(repo.defaultDbh(), mount.id, {
       status: "closed",
       closedAt: true,
       errorMessage: "recovered: live dir already gone, nothing to commit",
@@ -2410,7 +2251,7 @@ async function recoverOneFailedMount(
       defaultCommitDeps()
     )
     // Commit succeeded (or there was nothing new) → close + remove the dir.
-    await updateFileMount(db, mount.id, {
+    await updateFileMount(repo.defaultDbh(), mount.id, {
       status: "closed",
       closedAt: true,
       resultSnapshotId: result.snapshotId ?? mount.resultSnapshotId,

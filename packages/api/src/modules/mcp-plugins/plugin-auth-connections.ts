@@ -1,5 +1,4 @@
 import { createHash, randomBytes } from "crypto"
-import type pg from "pg"
 import type {
   PluginAuthBindingDefinition,
   PluginAuthConnection,
@@ -7,22 +6,29 @@ import type {
   PluginConfigFieldDefinition,
 } from "@synapse/shared"
 import { parseJsonObject } from "@synapse/shared"
-import { CompiledQuery, sql } from "kysely"
 import { config } from "../../config/index.js"
-import {
-  PLUGIN_CONNECTION_LIVE_STATUSES,
-  PLUGIN_INSTALLATION_LIVE_STATUSES,
-} from "./live-status.js"
 import {
   decrypt,
   decryptSensitiveFields,
   encrypt,
 } from "../../infrastructure/crypto/index.js"
-import { db } from "../../infrastructure/database/kysely.js"
 import {
   parseInstantString,
   serializeInstant,
 } from "../../infrastructure/datetime.js"
+import {
+  defaultPluginConnectionRunner,
+  findPluginAuthConnectionRow,
+  findPluginAuthSessionRow,
+  findPluginAuthSessionRowByState,
+  findPluginInstallationAuthConfigRow,
+  getPluginAuthSpecRow,
+  insertPluginAuthSession,
+  updatePluginAuthSession,
+  updatePluginAuthSessionNoReturn,
+  updatePluginConnection,
+  type PluginConnectionQueryRunner,
+} from "./repo.js"
 import {
   normalizeMijiaLocale,
   progressMijiaQrLoginSession,
@@ -46,19 +52,6 @@ import { normalizeFeishuFeatureKeys } from "./feishu/features.js"
 import { presentAuthConnection, presentAuthSession } from "./presenter.js"
 
 type JsonObject = Record<string, unknown>
-type QueryRunner = <T extends pg.QueryResultRow = pg.QueryResultRow>(
-  text: string,
-  params?: any[]
-) => Promise<{ rows: T[] }>
-
-/** Default {@link QueryRunner} backed by the top-level Kysely db. */
-const dbRunner: QueryRunner = <T extends pg.QueryResultRow = pg.QueryResultRow>(
-  text: string,
-  params?: any[]
-) =>
-  db
-    .executeQuery<T>(CompiledQuery.raw(text, params ?? []))
-    .then((r) => ({ rows: r.rows as T[] }))
 
 export type { PluginAuthSessionRow, PluginConnectionRow } from "./repo.types.js"
 import type {
@@ -214,32 +207,12 @@ async function getPluginAuthSpec(
   pluginId: string,
   catalogVersionId?: string | null
 ): Promise<PluginAuthSpec> {
-  const result = await db.executeQuery(
-    sql<{
-      catalogItemId: string
-      catalogVersionId: string | null
-      defaultConfig: unknown
-      authBindings: unknown
-    }>`SELECT
-        item.id AS catalog_item_id,
-        version.id AS catalog_version_id,
-        spec.default_config,
-        spec.auth_bindings
-      FROM catalog_items item
-      LEFT JOIN catalog_versions version
-        ON version.id = COALESCE(${catalogVersionId || null}::uuid, item.latest_version_id)
-      LEFT JOIN plugin_package_version_specs spec
-        ON spec.catalog_version_id = version.id
-      WHERE item.id = ${pluginId}
-        AND item.item_kind = 'plugin_package'
-      LIMIT 1`.compile(db)
-  )
+  const row = await getPluginAuthSpecRow(pluginId, catalogVersionId)
 
-  if (result.rows.length === 0) {
+  if (!row) {
     throw new PluginAuthError(404, "Plugin not found")
   }
 
-  const row = result.rows[0]!
   return {
     catalogItemId: row.catalogItemId,
     catalogVersionId: row.catalogVersionId,
@@ -266,14 +239,11 @@ async function getSessionRow(
   workspaceId: string,
   workspaceMemberId: string
 ) {
-  const row = await db
-    .selectFrom("pluginAuthSessions")
-    .selectAll()
-    .where("id", "=", sessionId)
-    .where("workspaceId", "=", workspaceId)
-    .where("workspaceMemberId", "=", workspaceMemberId)
-    .limit(1)
-    .executeTakeFirst()
+  const row = await findPluginAuthSessionRow(
+    sessionId,
+    workspaceId,
+    workspaceMemberId
+  )
   if (!row) {
     throw new PluginAuthError(404, "Auth session not found")
   }
@@ -281,12 +251,7 @@ async function getSessionRow(
 }
 
 async function getSessionRowByState(state: string) {
-  const row = await db
-    .selectFrom("pluginAuthSessions")
-    .selectAll()
-    .where("state", "=", state)
-    .limit(1)
-    .executeTakeFirst()
+  const row = await findPluginAuthSessionRowByState(state)
   if (!row) {
     throw new PluginAuthError(404, "Auth session not found")
   }
@@ -294,31 +259,7 @@ async function getSessionRowByState(state: string) {
 }
 
 async function getConnectionRow(connectionId: string, workspaceId?: string) {
-  let builder = db
-    // Live predicate (review F5/F16): a connection resolves secrets only when both
-    // it and its parent installation are live (deleted_at IS NULL AND status ∈
-    // liveValues — excludes archived install / expired-revoked connection). Base
-    // tables (not _live views) so NOT NULL column types survive.
-    .selectFrom("pluginConnections as connection")
-    .innerJoin(
-      "pluginInstallations as installation",
-      "installation.id",
-      "connection.installationId"
-    )
-    .innerJoin("workspaceApps as app", "app.id", "installation.id")
-    .selectAll("connection")
-    .select(["installation.catalogItemId", "installation.catalogVersionId"])
-    .where("connection.id", "=", connectionId)
-    .where("connection.deletedAt", "is", null)
-    .where("connection.status", "in", PLUGIN_CONNECTION_LIVE_STATUSES)
-    .where("app.deletedAt", "is", null)
-    .where("app.status", "in", PLUGIN_INSTALLATION_LIVE_STATUSES)
-
-  if (workspaceId) {
-    builder = builder.where("connection.workspaceId", "=", workspaceId)
-  }
-
-  const row = await builder.limit(1).executeTakeFirst()
+  const row = await findPluginAuthConnectionRow(connectionId, workspaceId)
   if (!row) {
     throw new PluginAuthError(404, "Auth connection not found")
   }
@@ -329,27 +270,10 @@ async function getInstallationConfigRow(
   installationId: string,
   workspaceId: string
 ): Promise<InstallationConfigRow> {
-  const row = await db
-    // Live predicate (review F16): exclude tombstoned + non-live-status installs.
-    .selectFrom("pluginInstallations as installation")
-    .innerJoin("workspaceApps as app", "app.id", "installation.id")
-    .innerJoin(
-      "pluginPackageVersionSpecs as spec",
-      "spec.catalogVersionId",
-      "installation.catalogVersionId"
-    )
-    .select([
-      "installation.catalogItemId",
-      "installation.catalogVersionId",
-      "installation.configData",
-      "spec.defaultConfig",
-    ])
-    .where("installation.id", "=", installationId)
-    .where("app.workspaceId", "=", workspaceId)
-    .where("app.deletedAt", "is", null)
-    .where("app.status", "in", PLUGIN_INSTALLATION_LIVE_STATUSES)
-    .limit(1)
-    .executeTakeFirst()
+  const row = await findPluginInstallationAuthConfigRow(
+    installationId,
+    workspaceId
+  )
 
   if (!row) {
     throw new PluginAuthError(404, "Installation not found")
@@ -671,18 +595,12 @@ async function buildFeishuAppScopeInspection(input: {
 }
 
 async function expirePluginAuthSession(sessionId: string) {
-  const expired = await db
-    .updateTable("pluginAuthSessions")
-    .set({
-      status: "expired",
-      phase: null,
-      errorCode: "AUTH_SESSION_EXPIRED",
-      errorMessage: "Auth session expired",
-    })
-    .where("id", "=", sessionId)
-    .returningAll()
-    .executeTakeFirstOrThrow()
-  return expired
+  return updatePluginAuthSession(sessionId, {
+    status: "expired",
+    phase: null,
+    errorCode: "AUTH_SESSION_EXPIRED",
+    errorMessage: "Auth session expired",
+  })
 }
 
 async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
@@ -709,61 +627,41 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
           return row
         }
 
-        const updated = await db
-          .updateTable("pluginAuthSessions")
-          .set({
-            phase: progress.phase,
-          })
-          .where("id", "=", row.id)
-          .returningAll()
-          .executeTakeFirstOrThrow()
+        const updated = await updatePluginAuthSession(row.id, {
+          phase: progress.phase,
+        })
         return updated
       }
       case "completed": {
         const resultPayload = buildMijiaResultPayload(progress.authState)
-        const updated = await db
-          .updateTable("pluginAuthSessions")
-          .set({
-            status: "completed",
-            phase: null,
-            resultPreview: buildMijiaResultPreview(
-              progress.authState
-            ) as PluginAuthSessionsResultPreview,
-            resultPayload: resultPayload as PluginAuthSessionsResultPayload,
-            errorCode: null,
-            errorMessage: null,
-          })
-          .where("id", "=", row.id)
-          .returningAll()
-          .executeTakeFirstOrThrow()
+        const updated = await updatePluginAuthSession(row.id, {
+          status: "completed",
+          phase: null,
+          resultPreview: buildMijiaResultPreview(
+            progress.authState
+          ) as PluginAuthSessionsResultPreview,
+          resultPayload: resultPayload as PluginAuthSessionsResultPayload,
+          errorCode: null,
+          errorMessage: null,
+        })
         return updated
       }
       case "expired": {
-        const expired = await db
-          .updateTable("pluginAuthSessions")
-          .set({
-            status: "expired",
-            phase: null,
-            errorCode: progress.errorCode,
-            errorMessage: progress.errorMessage,
-          })
-          .where("id", "=", row.id)
-          .returningAll()
-          .executeTakeFirstOrThrow()
+        const expired = await updatePluginAuthSession(row.id, {
+          status: "expired",
+          phase: null,
+          errorCode: progress.errorCode,
+          errorMessage: progress.errorMessage,
+        })
         return expired
       }
       case "failed": {
-        const failed = await db
-          .updateTable("pluginAuthSessions")
-          .set({
-            status: "failed",
-            phase: null,
-            errorCode: progress.errorCode,
-            errorMessage: progress.errorMessage,
-          })
-          .where("id", "=", row.id)
-          .returningAll()
-          .executeTakeFirstOrThrow()
+        const failed = await updatePluginAuthSession(row.id, {
+          status: "failed",
+          phase: null,
+          errorCode: progress.errorCode,
+          errorMessage: progress.errorMessage,
+        })
         return failed
       }
       default:
@@ -774,17 +672,12 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
       error instanceof Error
         ? error.message
         : "Unable to complete Mijia authorization."
-    const failed = await db
-      .updateTable("pluginAuthSessions")
-      .set({
-        status: "failed",
-        phase: null,
-        errorCode: "MIJIA_AUTH_ERROR",
-        errorMessage: message,
-      })
-      .where("id", "=", row.id)
-      .returningAll()
-      .executeTakeFirstOrThrow()
+    const failed = await updatePluginAuthSession(row.id, {
+      status: "failed",
+      phase: null,
+      errorCode: "MIJIA_AUTH_ERROR",
+      errorMessage: message,
+    })
     return failed
   }
 }
@@ -810,23 +703,17 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
           progress.challengePayload || asObject(row.challengePayload)
         const nextExpiresAt = progress.expiresAt || row.expiresAt
 
-        const updated = await db
-          .updateTable("pluginAuthSessions")
-          .set({
-            phase: "pending_scan",
-            challengePayload:
-              nextChallenge as PluginAuthSessionsChallengePayload,
-            transientPayload: encryptDeep(
-              nextTransient
-            ) as PluginAuthSessionsTransientPayload,
-            expiresAt:
-              typeof nextExpiresAt === "string"
-                ? parseInstantString(nextExpiresAt)
-                : nextExpiresAt,
-          })
-          .where("id", "=", row.id)
-          .returningAll()
-          .executeTakeFirstOrThrow()
+        const updated = await updatePluginAuthSession(row.id, {
+          phase: "pending_scan",
+          challengePayload: nextChallenge as PluginAuthSessionsChallengePayload,
+          transientPayload: encryptDeep(
+            nextTransient
+          ) as PluginAuthSessionsTransientPayload,
+          expiresAt:
+            typeof nextExpiresAt === "string"
+              ? parseInstantString(nextExpiresAt)
+              : nextExpiresAt,
+        })
         return updated
       }
       case "completed": {
@@ -850,59 +737,44 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
           appScopeStatus,
         })
 
-        const updated = await db
-          .updateTable("pluginAuthSessions")
-          .set({
-            status: "completed",
-            phase: null,
-            resultPreview: resultPreview as PluginAuthSessionsResultPreview,
-            resultPayload: resultPayload as PluginAuthSessionsResultPayload,
-            errorCode: null,
-            errorMessage: null,
-          })
-          .where("id", "=", row.id)
-          .returningAll()
-          .executeTakeFirstOrThrow()
+        const updated = await updatePluginAuthSession(row.id, {
+          status: "completed",
+          phase: null,
+          resultPreview: resultPreview as PluginAuthSessionsResultPreview,
+          resultPayload: resultPayload as PluginAuthSessionsResultPayload,
+          errorCode: null,
+          errorMessage: null,
+        })
         return updated
       }
       case "expired": {
-        const expired = await db
-          .updateTable("pluginAuthSessions")
-          .set({
-            status: "expired",
-            phase: null,
-            errorCode: progress.errorCode,
-            errorMessage: progress.errorMessage,
-          })
-          .where("id", "=", row.id)
-          .returningAll()
-          .executeTakeFirstOrThrow()
+        const expired = await updatePluginAuthSession(row.id, {
+          status: "expired",
+          phase: null,
+          errorCode: progress.errorCode,
+          errorMessage: progress.errorMessage,
+        })
         return expired
       }
       case "failed": {
         const appScopeStatus = await buildFeishuAppScopeInspection({
           transientPayload,
         })
-        const failed = await db
-          .updateTable("pluginAuthSessions")
-          .set({
-            status: "failed",
-            phase: null,
-            resultPreview: {
-              features: normalizeFeishuFeatureKeys(
-                transientPayload.requestedFeatures
-              ),
-              appScopeStatus,
-            } as PluginAuthSessionsResultPreview,
-            errorCode: progress.errorCode,
-            errorMessage: buildFeishuScopeInspectionErrorMessage({
-              baseMessage: progress.errorMessage,
-              inspection: appScopeStatus,
-            }),
-          })
-          .where("id", "=", row.id)
-          .returningAll()
-          .executeTakeFirstOrThrow()
+        const failed = await updatePluginAuthSession(row.id, {
+          status: "failed",
+          phase: null,
+          resultPreview: {
+            features: normalizeFeishuFeatureKeys(
+              transientPayload.requestedFeatures
+            ),
+            appScopeStatus,
+          } as PluginAuthSessionsResultPreview,
+          errorCode: progress.errorCode,
+          errorMessage: buildFeishuScopeInspectionErrorMessage({
+            baseMessage: progress.errorMessage,
+            inspection: appScopeStatus,
+          }),
+        })
         return failed
       }
       default:
@@ -913,17 +785,12 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
       error instanceof Error
         ? error.message
         : "Unable to complete Feishu authorization."
-    const failed = await db
-      .updateTable("pluginAuthSessions")
-      .set({
-        status: "failed",
-        phase: null,
-        errorCode: "FEISHU_AUTH_ERROR",
-        errorMessage: message,
-      })
-      .where("id", "=", row.id)
-      .returningAll()
-      .executeTakeFirstOrThrow()
+    const failed = await updatePluginAuthSession(row.id, {
+      status: "failed",
+      phase: null,
+      errorCode: "FEISHU_AUTH_ERROR",
+      errorMessage: message,
+    })
     return failed
   }
 }
@@ -1087,19 +954,13 @@ async function refreshOAuthConnection(
     expiresAt,
   }
 
-  await db
-    .updateTable("pluginConnections")
-    .set({
-      publicPayload: publicPayload as PluginConnectionsPublicPayload,
-      secretPayload: nextSecretPayload as PluginConnectionsSecretPayload,
-      status: "active",
-      expiresAt:
-        typeof expiresAt === "string"
-          ? parseInstantString(expiresAt)
-          : expiresAt,
-    })
-    .where("id", "=", row.id)
-    .execute()
+  await updatePluginConnection(row.id, {
+    publicPayload: publicPayload as PluginConnectionsPublicPayload,
+    secretPayload: nextSecretPayload as PluginConnectionsSecretPayload,
+    status: "active",
+    expiresAt:
+      typeof expiresAt === "string" ? parseInstantString(expiresAt) : expiresAt,
+  })
 
   return getConnectionRow(row.id)
 }
@@ -1145,16 +1006,12 @@ async function refreshFeishuConnection(row: PluginConnectionRow) {
     refreshExpiresAt: serializeInstant(refreshExpiresAt),
   }
 
-  await db
-    .updateTable("pluginConnections")
-    .set({
-      publicPayload: nextPublicPayload as PluginConnectionsPublicPayload,
-      secretPayload: nextSecretPayload as PluginConnectionsSecretPayload,
-      status: "active",
-      expiresAt: expiresAt,
-    })
-    .where("id", "=", row.id)
-    .execute()
+  await updatePluginConnection(row.id, {
+    publicPayload: nextPublicPayload as PluginConnectionsPublicPayload,
+    secretPayload: nextSecretPayload as PluginConnectionsSecretPayload,
+    status: "active",
+    expiresAt: expiresAt,
+  })
 
   return getConnectionRow(row.id)
 }
@@ -1218,13 +1075,9 @@ async function ensureFreshPluginConnection(row: PluginConnectionRow) {
         )
     }
   } catch {
-    await db
-      .updateTable("pluginConnections")
-      .set({
-        status: "expired",
-      })
-      .where("id", "=", row.id)
-      .execute()
+    await updatePluginConnection(row.id, {
+      status: "expired",
+    })
     // Reflect the just-persisted status on the in-memory row without spreading
     // the DB row outward (guard-layering r7); the caller reads named fields.
     const expiredRow: PluginConnectionRow = { ...row }
@@ -1336,9 +1189,8 @@ export async function startPluginAuthSession(input: {
         },
       }
 
-      const inserted = await db
-        .insertInto("pluginAuthSessions")
-        .values({
+      const inserted = await insertPluginAuthSession(
+        {
           workspaceId: input.workspaceId,
           catalogItemId: spec.catalogItemId,
           catalogVersionId: spec.catalogVersionId,
@@ -1357,10 +1209,9 @@ export async function startPluginAuthSession(input: {
           transientPayload:
             transientPayload as PluginAuthSessionsTransientPayload,
           metadata: (input.metadata || {}) as PluginAuthSessionsMetadata,
-          expiresAt: sql`NOW() + INTERVAL '1 hour'`,
-        })
-        .returningAll()
-        .executeTakeFirstOrThrow()
+        },
+        { kind: "now_plus_1h" }
+      )
 
       return {
         session: presentAuthSession(inserted),
@@ -1370,9 +1221,8 @@ export async function startPluginAuthSession(input: {
       const result = await startMijiaQrLoginSession({
         locale: draftConfig.locale,
       })
-      const inserted = await db
-        .insertInto("pluginAuthSessions")
-        .values({
+      const inserted = await insertPluginAuthSession(
+        {
           workspaceId: input.workspaceId,
           catalogItemId: spec.catalogItemId,
           catalogVersionId: spec.catalogVersionId,
@@ -1389,10 +1239,9 @@ export async function startPluginAuthSession(input: {
             result.transientPayload
           ) as PluginAuthSessionsTransientPayload,
           metadata: (input.metadata || {}) as PluginAuthSessionsMetadata,
-          expiresAt: parseInstantString(result.expiresAt),
-        })
-        .returningAll()
-        .executeTakeFirstOrThrow()
+        },
+        parseInstantString(result.expiresAt)
+      )
 
       return {
         session: presentAuthSession(inserted),
@@ -1435,9 +1284,8 @@ export async function startPluginAuthSession(input: {
         selectedFeatures,
         existingAppCredentials
       )
-      const inserted = await db
-        .insertInto("pluginAuthSessions")
-        .values({
+      const inserted = await insertPluginAuthSession(
+        {
           workspaceId: input.workspaceId,
           catalogItemId: spec.catalogItemId,
           catalogVersionId: spec.catalogVersionId,
@@ -1454,10 +1302,9 @@ export async function startPluginAuthSession(input: {
             result.transientPayload
           ) as PluginAuthSessionsTransientPayload,
           metadata: (input.metadata || {}) as PluginAuthSessionsMetadata,
-          expiresAt: parseInstantString(result.expiresAt),
-        })
-        .returningAll()
-        .executeTakeFirstOrThrow()
+        },
+        parseInstantString(result.expiresAt)
+      )
 
       return {
         session: presentAuthSession(inserted),
@@ -1530,14 +1377,9 @@ export async function inspectPluginAuthSession(input: {
         : normalizeFeishuFeatureKeys(transientPayload.requestedFeatures),
     appScopeStatus: inspection,
   }
-  const updated = await db
-    .updateTable("pluginAuthSessions")
-    .set({
-      resultPreview: nextPreview as PluginAuthSessionsResultPreview,
-    })
-    .where("id", "=", row.id)
-    .returningAll()
-    .executeTakeFirstOrThrow()
+  const updated = await updatePluginAuthSession(row.id, {
+    resultPreview: nextPreview as PluginAuthSessionsResultPreview,
+  })
 
   return {
     session: presentAuthSession(updated),
@@ -1557,28 +1399,19 @@ export async function handlePluginAuthCallback(input: {
   const session = await getSessionRowByState(input.state)
 
   if (session.expiresAt.getTime() <= Date.now()) {
-    await db
-      .updateTable("pluginAuthSessions")
-      .set({
-        status: "expired",
-      })
-      .where("id", "=", session.id)
-      .execute()
+    await updatePluginAuthSessionNoReturn(session.id, {
+      status: "expired",
+    })
     throw new PluginAuthError(410, "Auth session expired")
   }
 
   if (input.error) {
-    const failed = await db
-      .updateTable("pluginAuthSessions")
-      .set({
-        status: "failed",
-        phase: null,
-        errorCode: input.error,
-        errorMessage: input.errorDescription || input.error,
-      })
-      .where("id", "=", session.id)
-      .returningAll()
-      .executeTakeFirstOrThrow()
+    const failed = await updatePluginAuthSession(session.id, {
+      status: "failed",
+      phase: null,
+      errorCode: input.error,
+      errorMessage: input.errorDescription || input.error,
+    })
     return presentAuthSession(failed)
   }
 
@@ -1678,19 +1511,14 @@ export async function handlePluginAuthCallback(input: {
         },
       }
 
-      const updated = await db
-        .updateTable("pluginAuthSessions")
-        .set({
-          status: "completed",
-          phase: null,
-          resultPreview: resultPreview as PluginAuthSessionsResultPreview,
-          resultPayload: resultPayload as PluginAuthSessionsResultPayload,
-          errorCode: null,
-          errorMessage: null,
-        })
-        .where("id", "=", session.id)
-        .returningAll()
-        .executeTakeFirstOrThrow()
+      const updated = await updatePluginAuthSession(session.id, {
+        status: "completed",
+        phase: null,
+        resultPreview: resultPreview as PluginAuthSessionsResultPreview,
+        resultPayload: resultPayload as PluginAuthSessionsResultPayload,
+        errorCode: null,
+        errorMessage: null,
+      })
 
       return presentAuthSession(updated)
     }
@@ -1719,9 +1547,9 @@ export async function attachAuthConnectionsToConfig(input: {
   authBindings: PluginAuthBindingDefinition[]
   configData?: Record<string, unknown>
   authSessionIds?: Record<string, string>
-  run?: QueryRunner
+  run?: PluginConnectionQueryRunner
 }) {
-  const run = input.run || dbRunner
+  const run = input.run || defaultPluginConnectionRunner
   const result: Record<string, unknown> = { ...(input.configData || {}) }
   const authSessionIds = input.authSessionIds || {}
   const bindingMap = new Map(

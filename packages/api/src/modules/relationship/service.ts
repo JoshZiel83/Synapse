@@ -1,4 +1,3 @@
-import { sql } from "kysely"
 import { v4 as uuidv4 } from "uuid"
 import type {
   ActorAccessRequestListRecord,
@@ -38,23 +37,13 @@ import {
   type RelationshipScanResponse,
   type RemoteAgentAccessRequestListResponse,
 } from "@synapse/shared"
-import { db } from "../../infrastructure/database/kysely.js"
 import { getFileUrlById } from "../files/service.js"
 import {
-  authorizeAction,
-  resolveWorkspaceAccessSubject,
-  userSubject,
-  workspaceMemberSubject,
-} from "../access/service.js"
-import {
-  deriveRequiresContactApproval,
-  deriveRequiresContactApprovalMany,
-} from "../access/contact-approval.js"
-import {
-  insertWorkspaceAppGrant,
-  insertWorkspaceAppGrantRequest,
-  resolveWorkspaceAppGrantRequest,
-} from "../workspace-apps/grant-storage.js"
+  authorizeActionDefault,
+  resolveWorkspaceAccessSubjectDefault,
+  upsertAccessSubjectDefault,
+} from "../access/guards.js"
+import { resolveWorkspaceAppGrantRequest } from "../workspace-apps/grant-storage.js"
 import {
   createChatConversation,
   listWorkspaceConversationViews,
@@ -62,29 +51,12 @@ import {
 import { getWorkspaceMemberIdentity } from "../chat/workspace-identity.js"
 import {
   canonicalizeDirectConversationPair,
-  directConversationBindingPeer,
-  directConversationBindingValues,
   directConversationIdentityKey,
   type DirectConversationIdentity,
 } from "../chat/direct-binding.js"
 import { mapConversationSummaryView } from "../chat/summary-view.js"
 import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
-import {
-  upsertAccessSubject,
-  loadAccessSubject,
-} from "../access/subject-registry.js"
-
-type WorkspaceAppGrantRequestJoinRow = {
-  id: string
-  workspaceId: string
-  requesterWorkspaceMemberId: string
-  status: string
-  resolvedByWorkspaceMemberId: string | null
-  resolvedAt: Date | null
-  createdAt: Date
-  updatedAt: Date
-  remoteAgentId: string | null
-}
+import * as repo from "./repo.js"
 
 /**
  * P1b: translate a relationship target type (`member` | `actor` | `remote_agent`)
@@ -197,11 +169,7 @@ function workspaceSummary(row: {
 async function getWorkspaceById(
   workspaceId: string
 ): Promise<WorkspaceSummary | null> {
-  const row = await db
-    .selectFrom("workspaces")
-    .select(["id", "name", "slug"])
-    .where("id", "=", workspaceId)
-    .executeTakeFirst()
+  const row = await repo.selectWorkspaceById(workspaceId)
   return row ? workspaceSummary(row) : null
 }
 
@@ -209,24 +177,7 @@ async function getWorkspaceMemberSummaryByUser(
   workspaceId: string,
   userId: string
 ): Promise<WorkspaceMemberSummary | null> {
-  const row = await db
-    .selectFrom("workspaceMembers as wm")
-    .innerJoin("users as u", "u.id", "wm.userId")
-    .innerJoin("workspaces as w", "w.id", "wm.workspaceId")
-    .select([
-      "wm.id as workspaceMemberId",
-      "wm.workspaceId",
-      "w.name as workspaceName",
-      "w.slug as workspaceSlug",
-      "wm.userId",
-      "wm.trustLevel",
-      "u.name",
-      "u.email",
-      "u.avatarFileId",
-    ])
-    .where("wm.workspaceId", "=", workspaceId)
-    .where("wm.userId", "=", userId)
-    .executeTakeFirst()
+  const row = await repo.selectWorkspaceMemberSummaryByUser(workspaceId, userId)
   if (!row) return null
   return {
     workspace: workspaceSummary(row),
@@ -242,23 +193,7 @@ async function getWorkspaceMemberSummaryByUser(
 async function getWorkspaceMemberSummaryById(
   workspaceMemberId: string
 ): Promise<WorkspaceMemberSummary | null> {
-  const row = await db
-    .selectFrom("workspaceMembers as wm")
-    .innerJoin("users as u", "u.id", "wm.userId")
-    .innerJoin("workspaces as w", "w.id", "wm.workspaceId")
-    .select([
-      "wm.id as workspaceMemberId",
-      "wm.workspaceId",
-      "w.name as workspaceName",
-      "w.slug as workspaceSlug",
-      "wm.userId",
-      "wm.trustLevel",
-      "u.name",
-      "u.email",
-      "u.avatarFileId",
-    ])
-    .where("wm.id", "=", workspaceMemberId)
-    .executeTakeFirst()
+  const row = await repo.selectWorkspaceMemberSummaryById(workspaceMemberId)
   if (!row) return null
   return {
     workspace: workspaceSummary(row),
@@ -272,22 +207,11 @@ async function getWorkspaceMemberSummaryById(
 }
 
 async function getMemberRelationshipProfileRow(workspaceMemberId: string) {
-  const subjectId = await upsertAccessSubject(db, {
+  const subjectId = await upsertAccessSubjectDefault({
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
     memberId: workspaceMemberId,
   })
-  const row = await db
-    .selectFrom("workspaceRelationshipProfiles")
-    .select([
-      "id",
-      "workspaceId",
-      "identityId",
-      "identitySearchEnabled",
-      "approvalMode",
-      "qrToken",
-    ])
-    .where("subjectId", "=", subjectId)
-    .executeTakeFirst()
+  const row = await repo.selectMemberRelationshipProfileBySubjectId(subjectId)
   if (!row) {
     throw new Error("Relationship profile not found")
   }
@@ -295,34 +219,14 @@ async function getMemberRelationshipProfileRow(workspaceMemberId: string) {
 }
 
 async function getActorSummary(actorId: string): Promise<ActorSummary | null> {
-  const row = await db
-    .selectFrom("actors as a")
-    .innerJoin("workspaceApps as app", "app.id", "a.id")
-    .innerJoin("workspaces as w", "w.id", "app.workspaceId")
-    .leftJoin("fileAssets as avatar_file", "avatar_file.id", "a.avatarFileId")
-    .select([
-      "a.id as actorId",
-      "app.workspaceId",
-      "w.name as workspaceName",
-      "w.slug as workspaceSlug",
-      "app.displayName",
-      "a.title",
-      "a.role",
-      "a.isPublicShared",
-      "a.avatarEmoji",
-      "avatar_file.id as avatarFileId",
-    ])
-    .where("a.id", "=", actorId)
-    .where("app.deletedAt", "is", null)
-    .where("app.status", "=", "active")
-    .executeTakeFirst()
+  const row = await repo.selectActorSummaryRow(actorId)
   if (!row) return null
-  const requiresContactApproval = await deriveRequiresContactApproval(
-    db,
-    "actor",
-    row.actorId,
-    row.workspaceId
-  )
+  const requiresContactApproval =
+    await repo.deriveRequiresContactApprovalDefault(
+      "actor",
+      row.actorId,
+      row.workspaceId
+    )
   return {
     workspace: workspaceSummary(row),
     actorId: row.actorId,
@@ -339,47 +243,14 @@ async function getActorSummary(actorId: string): Promise<ActorSummary | null> {
 async function getRemoteAgentSummary(
   remoteAgentId: string
 ): Promise<RemoteAgentSummary | null> {
-  const result = await sql<{
-    remoteAgentId: string
-    workspaceId: string
-    workspaceName: string
-    workspaceSlug: string
-    displayName: string
-    title: string
-    runtimeKind: "claude_code" | "codex"
-    avatarFileId: string | null
-    avatarEmoji: string | null
-    isPublicShared: boolean
-  }>`
-      SELECT
-        ra.id AS remote_agent_id,
-        app.workspace_id,
-        w.name AS workspace_name,
-        w.slug AS workspace_slug,
-        app.display_name,
-        ra.title,
-        ra.runtime_kind,
-        ra.avatar_file_id,
-        ra.avatar_emoji,
-        ra.is_public_shared
-      FROM remote_agents ra
-      INNER JOIN workspace_apps_live app
-        ON app.id = ra.id
-      INNER JOIN workspaces w ON w.id = app.workspace_id
-      WHERE ra.id = ${remoteAgentId}
-        AND app.deleted_at IS NULL
-        AND app.status = 'active'
-      LIMIT 1
-    `.execute(db)
-
-  const row = result.rows[0]
+  const row = await repo.selectRemoteAgentSummaryRow(remoteAgentId)
   if (!row) return null
-  const requiresContactApproval = await deriveRequiresContactApproval(
-    db,
-    "remote_agent",
-    row.remoteAgentId,
-    row.workspaceId
-  )
+  const requiresContactApproval =
+    await repo.deriveRequiresContactApprovalDefault(
+      "remote_agent",
+      row.remoteAgentId,
+      row.workspaceId
+    )
   return {
     workspace: workspaceSummary(row),
     remoteAgentId: row.remoteAgentId,
@@ -570,26 +441,19 @@ async function ensureRelationshipProfile(params: {
     peerActorId: params.subjectActorId,
     peerRemoteAgentId: params.subjectRemoteAgentId,
   })
-  const subjectId = await upsertAccessSubject(db, subjectRef)
-  const existing = await db
-    .selectFrom("workspaceRelationshipProfiles")
-    .selectAll()
-    .where("workspaceId", "=", params.workspaceId)
-    .where("subjectId", "=", subjectId)
-    .executeTakeFirst()
+  const subjectId = await upsertAccessSubjectDefault(subjectRef)
+  const existing = await repo.selectRelationshipProfileByWorkspaceAndSubject(
+    params.workspaceId,
+    subjectId
+  )
   if (existing) return existing
 
-  const inserted = await db
-    .insertInto("workspaceRelationshipProfiles")
-    .values({
-      workspaceId: params.workspaceId,
-      subjectId: subjectId,
-      qrToken: uuidv4(),
-      createdByWorkspaceMemberId: params.createdByWorkspaceMemberId,
-      approvalMode: "manual",
-    })
-    .returningAll()
-    .executeTakeFirst()
+  const inserted = await repo.insertRelationshipProfile({
+    workspaceId: params.workspaceId,
+    subjectId: subjectId,
+    qrToken: uuidv4(),
+    createdByWorkspaceMemberId: params.createdByWorkspaceMemberId,
+  })
   if (!inserted) {
     throw new Error("Failed to create relationship profile")
   }
@@ -603,7 +467,7 @@ async function grantActorContactVisibilityToMember(params: {
   grantedByWorkspaceMemberId: string
 }) {
   try {
-    await insertWorkspaceAppGrant(db, {
+    await repo.insertWorkspaceAppGrantDefault({
       workspaceId: params.workspaceId,
       workspaceAppId: params.actorId,
       target: {
@@ -628,7 +492,7 @@ async function grantRemoteAgentContactVisibilityToMember(params: {
   grantedByWorkspaceMemberId?: string
 }) {
   try {
-    await insertWorkspaceAppGrant(db, {
+    await repo.insertWorkspaceAppGrantDefault({
       workspaceId: params.workspaceId,
       workspaceAppId: params.remoteAgentId,
       target: {
@@ -661,17 +525,13 @@ async function ensureFriendEntry(params: {
     peerActorId: params.peerActorId,
     peerRemoteAgentId: params.peerRemoteAgentId,
   })
-  const peerSubjectId = await upsertAccessSubject(db, peerSubjectRef)
-  await db
-    .insertInto("workspaceFriendEntries")
-    .values({
-      workspaceId: params.workspaceId,
-      ownerWorkspaceMemberId: params.ownerWorkspaceMemberId,
-      peerSubjectId: peerSubjectId,
-      sourceRequestId: params.sourceRequestId || null,
-    })
-    .onConflict((oc) => oc.doNothing())
-    .execute()
+  const peerSubjectId = await upsertAccessSubjectDefault(peerSubjectRef)
+  await repo.insertFriendEntry({
+    workspaceId: params.workspaceId,
+    ownerWorkspaceMemberId: params.ownerWorkspaceMemberId,
+    peerSubjectId: peerSubjectId,
+    sourceRequestId: params.sourceRequestId || null,
+  })
 }
 
 async function findExistingFriendEntry(params: {
@@ -688,27 +548,12 @@ async function findExistingFriendEntry(params: {
     peerActorId: params.peerActorId,
     peerRemoteAgentId: params.peerRemoteAgentId,
   })
-  const peerSubjectId = await upsertAccessSubject(db, peerSubjectRef)
-  const queryBuilder = db
-    .selectFrom("workspaceFriendEntries as e")
-    .innerJoin("accessSubjects as s", "s.id", "e.peerSubjectId")
-    .select([
-      "e.id",
-      "e.workspaceId",
-      "e.ownerWorkspaceMemberId",
-      "e.peerSubjectId",
-      "e.sourceRequestId",
-      "e.createdAt",
-      "e.updatedAt",
-      "s.workspaceMemberId as peerWorkspaceMemberId",
-      "s.actorId as peerActorId",
-      "s.remoteAgentId as peerRemoteAgentId",
-      "s.kind as peerKind",
-    ])
-    .where("e.workspaceId", "=", params.workspaceId)
-    .where("e.ownerWorkspaceMemberId", "=", params.ownerWorkspaceMemberId)
-    .where("e.peerSubjectId", "=", peerSubjectId)
-  return queryBuilder.executeTakeFirst()
+  const peerSubjectId = await upsertAccessSubjectDefault(peerSubjectRef)
+  return repo.selectFriendEntryByPeerSubject({
+    workspaceId: params.workspaceId,
+    ownerWorkspaceMemberId: params.ownerWorkspaceMemberId,
+    peerSubjectId,
+  })
 }
 
 async function findPendingFriendRequest(params: {
@@ -724,33 +569,11 @@ async function findPendingFriendRequest(params: {
     peerActorId: params.targetActorId,
     peerRemoteAgentId: params.targetRemoteAgentId,
   })
-  const targetSubjectId = await upsertAccessSubject(db, targetSubjectRef)
-  const queryBuilder = db
-    .selectFrom("workspaceFriendRequests as r")
-    .innerJoin("accessSubjects as s", "s.id", "r.targetSubjectId")
-    .select([
-      "r.id",
-      "r.requesterWorkspaceMemberId",
-      "r.targetSubjectId",
-      "r.requestedViaProfileId",
-      "r.status",
-      "r.resolvedByWorkspaceMemberId",
-      "r.resolvedAt",
-      "r.createdAt",
-      "r.updatedAt",
-      "s.kind as targetKind",
-      "s.workspaceMemberId as targetWorkspaceMemberId",
-      "s.actorId as targetActorId",
-      "s.remoteAgentId as targetRemoteAgentId",
-    ])
-    .where(
-      "r.requesterWorkspaceMemberId",
-      "=",
-      params.requesterWorkspaceMemberId
-    )
-    .where("r.targetSubjectId", "=", targetSubjectId)
-    .where("r.status", "=", "pending")
-  return queryBuilder.executeTakeFirst()
+  const targetSubjectId = await upsertAccessSubjectDefault(targetSubjectRef)
+  return repo.selectPendingFriendRequestByTarget({
+    requesterWorkspaceMemberId: params.requesterWorkspaceMemberId,
+    targetSubjectId,
+  })
 }
 
 async function createFriendRequest(params: {
@@ -772,17 +595,12 @@ async function createFriendRequest(params: {
       peerActorId: params.targetActorId,
       peerRemoteAgentId: params.targetRemoteAgentId,
     })
-    const targetSubjectId = await upsertAccessSubject(db, targetSubjectRef)
-    const created = await db
-      .insertInto("workspaceFriendRequests")
-      .values({
-        requesterWorkspaceMemberId: params.requesterWorkspaceMemberId,
-        targetSubjectId: targetSubjectId,
-        requestedViaProfileId: params.profileId || null,
-        status: "pending",
-      })
-      .returningAll()
-      .executeTakeFirst()
+    const targetSubjectId = await upsertAccessSubjectDefault(targetSubjectRef)
+    const created = await repo.insertFriendRequest({
+      requesterWorkspaceMemberId: params.requesterWorkspaceMemberId,
+      targetSubjectId: targetSubjectId,
+      requestedViaProfileId: params.profileId || null,
+    })
     if (!created) {
       throw new Error("Failed to create friend request")
     }
@@ -800,14 +618,11 @@ async function createActorAccessRequest(params: {
   actorId: string
   requesterWorkspaceMemberId: string
 }) {
-  const existing = await db
-    .selectFrom("workspaceAppGrantRequests as app_request")
-    .selectAll()
-    .where("workspaceId", "=", params.workspaceId)
-    .where("workspaceAppId", "=", params.actorId)
-    .where("requesterWorkspaceMemberId", "=", params.requesterWorkspaceMemberId)
-    .where("status", "=", "pending")
-    .executeTakeFirst()
+  const existing = await repo.selectPendingAppGrantRequest({
+    workspaceId: params.workspaceId,
+    workspaceAppId: params.actorId,
+    requesterWorkspaceMemberId: params.requesterWorkspaceMemberId,
+  })
   if (existing) {
     return {
       request: { ...existing, actor_id: params.actorId },
@@ -816,7 +631,7 @@ async function createActorAccessRequest(params: {
   }
 
   try {
-    const created = await insertWorkspaceAppGrantRequest(db, {
+    const created = await repo.insertWorkspaceAppGrantRequestDefault({
       workspaceId: params.workspaceId,
       workspaceAppId: params.actorId,
       grantee: {
@@ -834,18 +649,11 @@ async function createActorAccessRequest(params: {
     }
   } catch (error) {
     if (!isUniqueViolation(error)) throw error
-    const retry = await db
-      .selectFrom("workspaceAppGrantRequests")
-      .selectAll()
-      .where("workspaceId", "=", params.workspaceId)
-      .where("workspaceAppId", "=", params.actorId)
-      .where(
-        "requesterWorkspaceMemberId",
-        "=",
-        params.requesterWorkspaceMemberId
-      )
-      .where("status", "=", "pending")
-      .executeTakeFirst()
+    const retry = await repo.selectPendingAppGrantRequest({
+      workspaceId: params.workspaceId,
+      workspaceAppId: params.actorId,
+      requesterWorkspaceMemberId: params.requesterWorkspaceMemberId,
+    })
     if (!retry) throw error
     return {
       request: { ...retry, actor_id: params.actorId },
@@ -859,14 +667,11 @@ async function createRemoteAgentAccessRequest(params: {
   remoteAgentId: string
   requesterWorkspaceMemberId: string
 }) {
-  const existing = await db
-    .selectFrom("workspaceAppGrantRequests")
-    .selectAll()
-    .where("workspaceId", "=", params.workspaceId)
-    .where("workspaceAppId", "=", params.remoteAgentId)
-    .where("requesterWorkspaceMemberId", "=", params.requesterWorkspaceMemberId)
-    .where("status", "=", "pending")
-    .executeTakeFirst()
+  const existing = await repo.selectPendingAppGrantRequest({
+    workspaceId: params.workspaceId,
+    workspaceAppId: params.remoteAgentId,
+    requesterWorkspaceMemberId: params.requesterWorkspaceMemberId,
+  })
   if (existing) {
     return {
       request: { ...existing, remote_agent_id: params.remoteAgentId },
@@ -875,7 +680,7 @@ async function createRemoteAgentAccessRequest(params: {
   }
 
   try {
-    const created = await insertWorkspaceAppGrantRequest(db, {
+    const created = await repo.insertWorkspaceAppGrantRequestDefault({
       workspaceId: params.workspaceId,
       workspaceAppId: params.remoteAgentId,
       grantee: {
@@ -893,18 +698,11 @@ async function createRemoteAgentAccessRequest(params: {
     }
   } catch (error) {
     if (!isUniqueViolation(error)) throw error
-    const retry = await db
-      .selectFrom("workspaceAppGrantRequests")
-      .selectAll()
-      .where("workspaceId", "=", params.workspaceId)
-      .where("workspaceAppId", "=", params.remoteAgentId)
-      .where(
-        "requesterWorkspaceMemberId",
-        "=",
-        params.requesterWorkspaceMemberId
-      )
-      .where("status", "=", "pending")
-      .executeTakeFirst()
+    const retry = await repo.selectPendingAppGrantRequest({
+      workspaceId: params.workspaceId,
+      workspaceAppId: params.remoteAgentId,
+      requesterWorkspaceMemberId: params.requesterWorkspaceMemberId,
+    })
     if (!retry) throw error
     return {
       request: { ...retry, remote_agent_id: params.remoteAgentId },
@@ -917,20 +715,12 @@ async function loadViewerDirectConversationMap(workspaceMemberId: string) {
   // P1b: filter by the viewer's workspace_member subject_id (resolved via
   // upsertAccessSubject), not the dropped participant_*_workspace_member_id
   // columns.
-  const viewerSubjectId = await upsertAccessSubject(db, {
+  const viewerSubjectId = await upsertAccessSubjectDefault({
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
     memberId: workspaceMemberId,
   })
-  const rows = await db
-    .selectFrom("directConversationBindings")
-    .selectAll()
-    .where((eb) =>
-      eb.or([
-        eb("participantOneSubjectId", "=", viewerSubjectId),
-        eb("participantTwoSubjectId", "=", viewerSubjectId),
-      ])
-    )
-    .execute()
+  const rows =
+    await repo.selectDirectConversationBindingsForSubject(viewerSubjectId)
 
   const viewerIdentity: DirectConversationIdentity = {
     kind: "workspace_member",
@@ -938,8 +728,7 @@ async function loadViewerDirectConversationMap(workspaceMemberId: string) {
   }
   const map = new Map<string, string>()
   for (const row of rows) {
-    const peer = await directConversationBindingPeer(
-      db,
+    const peer = await repo.directConversationBindingPeerDefault(
       {
         participant_one_subject_id: row.participantOneSubjectId,
         participant_two_subject_id: row.participantTwoSubjectId,
@@ -962,13 +751,10 @@ async function hasWorkspaceAppContactVisible(params: {
     params.userId
   )
   if (!viewer) return false
-  const app = await db
-    .selectFrom("workspaceAppsLive")
-    .select(["ownerWorkspaceMemberId", "kind"])
-    .where("id", "=", params.workspaceAppId)
-    .where("workspaceId", "=", params.workspaceId)
-    .where("deletedAt", "is", null)
-    .executeTakeFirst()
+  const app = await repo.selectWorkspaceAppLiveOwnerKind(
+    params.workspaceAppId,
+    params.workspaceId
+  )
   if (!app) return false
   if (
     (app.kind === "actor" || app.kind === "remote_agent") &&
@@ -976,31 +762,19 @@ async function hasWorkspaceAppContactVisible(params: {
   ) {
     return true
   }
-  const workspaceSubjectId = await upsertAccessSubject(db, {
+  const workspaceSubjectId = await upsertAccessSubjectDefault({
     kind: SUBJECT_KIND.WORKSPACE,
     workspaceId: params.workspaceId,
   })
-  const memberSubjectId = await upsertAccessSubject(db, {
+  const memberSubjectId = await upsertAccessSubjectDefault({
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
     memberId: viewer.workspaceMemberId,
   })
-  const grant = await db
-    .selectFrom("workspaceAppGrants")
-    .select("id")
-    .where("workspaceAppId", "=", params.workspaceAppId)
-    .where("status", "=", "active")
-    .where("scopeSubjectId", "is", null)
-    .where(
-      sql<boolean>`'contact_visible'::workspace_app_grant_permission = ANY(permissions)`
-    )
-    .where((eb) =>
-      eb.or([
-        eb("subjectId", "=", workspaceSubjectId),
-        eb("subjectId", "=", memberSubjectId),
-      ])
-    )
-    .limit(1)
-    .executeTakeFirst()
+  const grant = await repo.selectWorkspaceAppContactVisibleGrant({
+    workspaceAppId: params.workspaceAppId,
+    workspaceSubjectId,
+    memberSubjectId,
+  })
   return Boolean(grant)
 }
 
@@ -1009,14 +783,8 @@ async function findDirectConversationId(
   right: DirectConversationIdentity
 ) {
   const pair = canonicalizeDirectConversationPair(left, right)
-  const values = await directConversationBindingValues(db, pair)
-  const row = await db
-    .selectFrom("directConversationBindings")
-    .select(["conversationId"])
-    .where("participantOneSubjectId", "=", values.participant_one_subject_id)
-    .where("participantTwoSubjectId", "=", values.participant_two_subject_id)
-    .executeTakeFirst()
-  return row?.conversationId || null
+  const values = await repo.directConversationBindingValuesDefault(pair)
+  return repo.selectDirectConversationIdByPair(values)
 }
 
 async function getActorAccessState(params: {
@@ -1126,26 +894,11 @@ async function resolveContactReference(params: {
     }
   }
 
-  const friendEntry = await db
-    .selectFrom("workspaceFriendEntries as e")
-    .innerJoin("accessSubjects as s", "s.id", "e.peerSubjectId")
-    .select([
-      "e.id",
-      "e.workspaceId",
-      "e.ownerWorkspaceMemberId",
-      "e.peerSubjectId",
-      "e.sourceRequestId",
-      "e.createdAt",
-      "e.updatedAt",
-      "s.workspaceMemberId as peerWorkspaceMemberId",
-      "s.actorId as peerActorId",
-      "s.remoteAgentId as peerRemoteAgentId",
-      "s.kind as peerKind",
-    ])
-    .where("e.workspaceId", "=", params.workspaceId)
-    .where("e.ownerWorkspaceMemberId", "=", viewer?.workspaceMemberId || "")
-    .where("e.id", "=", params.contactId)
-    .executeTakeFirst()
+  const friendEntry = await repo.selectFriendEntryById({
+    workspaceId: params.workspaceId,
+    ownerWorkspaceMemberId: viewer?.workspaceMemberId || "",
+    id: params.contactId,
+  })
   if (!friendEntry) {
     throw new Error("Friend not found")
   }
@@ -1226,146 +979,43 @@ async function buildContactHubEntryMap(params: {
   const [
     members,
     actors,
-    remoteAgentsResult,
+    remoteAgents,
     friendEntries,
     pendingActorAccessRows,
     pendingRemoteAgentAccessRows,
   ] = await Promise.all([
-    db
-      .selectFrom("workspaceMembers as wm")
-      .innerJoin("users as u", "u.id", "wm.userId")
-      .innerJoin("workspaces as w", "w.id", "wm.workspaceId")
-      .select([
-        "wm.id as workspaceMemberId",
-        "wm.workspaceId",
-        "w.name as workspaceName",
-        "w.slug as workspaceSlug",
-        "wm.userId",
-        "wm.trustLevel",
-        "u.name",
-        "u.email",
-        "u.avatarFileId",
-      ])
-      .where("wm.workspaceId", "=", params.workspaceId)
-      .where("wm.userId", "<>", params.userId)
-      .orderBy("u.name", "asc")
-      .execute(),
-    db
-      .selectFrom("actors as a")
-      .innerJoin("workspaceApps as app", "app.id", "a.id")
-      .innerJoin("workspaces as w", "w.id", "app.workspaceId")
-      .leftJoin("fileAssets as avatar_file", "avatar_file.id", "a.avatarFileId")
-      .select([
-        "a.id as actorId",
-        "app.workspaceId",
-        "w.name as workspaceName",
-        "w.slug as workspaceSlug",
-        "app.displayName",
-        "a.title",
-        "a.role",
-        "a.isPublicShared",
-        "a.avatarEmoji",
-        "avatar_file.id as avatarFileId",
-      ])
-      .where("app.workspaceId", "=", params.workspaceId)
-      .where("app.deletedAt", "is", null)
-      .where("app.status", "=", "active")
-      .orderBy("app.displayName", "asc")
-      .execute(),
-    sql<{
-      remoteAgentId: string
-      workspaceId: string
-      workspaceName: string
-      workspaceSlug: string
-      displayName: string
-      title: string
-      runtimeKind: "claude_code" | "codex"
-      isPublicShared: boolean
-      avatarEmoji: string | null
-      avatarFileId: string | null
-    }>`
-          SELECT
-            ra.id AS remote_agent_id,
-            app.workspace_id,
-            w.name AS workspace_name,
-            w.slug AS workspace_slug,
-            app.display_name,
-            ra.title,
-            ra.runtime_kind,
-            ra.is_public_shared,
-            ra.avatar_emoji,
-            ra.avatar_file_id
-          FROM remote_agents ra
-          INNER JOIN workspace_apps_live app
-            ON app.id = ra.id
-          INNER JOIN workspaces w ON w.id = app.workspace_id
-          WHERE app.workspace_id = ${params.workspaceId}
-            AND app.deleted_at IS NULL
-            AND app.status = 'active'
-          ORDER BY app.display_name ASC, ra.created_at ASC
-        `.execute(db),
-    db
-      .selectFrom("workspaceFriendEntries as e")
-      .innerJoin("accessSubjects as s", "s.id", "e.peerSubjectId")
-      .select([
-        "e.id",
-        "e.workspaceId",
-        "e.ownerWorkspaceMemberId",
-        "e.peerSubjectId",
-        "e.sourceRequestId",
-        "e.createdAt",
-        "e.updatedAt",
-        "s.workspaceMemberId as peerWorkspaceMemberId",
-        "s.actorId as peerActorId",
-        "s.remoteAgentId as peerRemoteAgentId",
-        "s.kind as peerKind",
-      ])
-      .where("e.workspaceId", "=", params.workspaceId)
-      .where(
-        "e.ownerWorkspaceMemberId",
-        "=",
-        viewerWorkspaceMember?.workspaceMemberId || ""
-      )
-      .orderBy("e.createdAt", "desc")
-      .execute(),
+    repo.selectWorkspaceMembersForHub(params.workspaceId, params.userId),
+    repo.selectWorkspaceActorsForHub(params.workspaceId),
+    repo.selectWorkspaceRemoteAgentsForHub(params.workspaceId),
     viewerWorkspaceMember
-      ? db
-          .selectFrom("workspaceAppGrantRequests as app_request")
-          .innerJoin(
-            "workspaceApps as app",
-            "app.id",
-            "app_request.workspaceAppId"
-          )
-          .select(["app_request.workspaceAppId as actorId"])
-          .where("app_request.workspaceId", "=", params.workspaceId)
-          .where(
-            "app_request.requesterWorkspaceMemberId",
-            "=",
-            viewerWorkspaceMember.workspaceMemberId
-          )
-          .where("app_request.status", "=", "pending")
-          .where("app.kind", "=", "actor")
-          .execute()
-      : Promise.resolve([]),
+      ? repo.selectFriendEntriesForOwner({
+          workspaceId: params.workspaceId,
+          ownerWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+        })
+      : repo.selectFriendEntriesForOwner({
+          workspaceId: params.workspaceId,
+          ownerWorkspaceMemberId: "",
+        }),
     viewerWorkspaceMember
-      ? db
-          .selectFrom("workspaceAppGrantRequests as app_request")
-          .innerJoin(
-            "workspaceApps as app",
-            "app.id",
-            "app_request.workspaceAppId"
+      ? repo
+          .selectPendingAppGrantRequestIdsByKind({
+            workspaceId: params.workspaceId,
+            requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+            kind: "actor",
+          })
+          .then((rows) => rows.map((row) => ({ actorId: row.workspaceAppId })))
+      : Promise.resolve([] as { actorId: string | null }[]),
+    viewerWorkspaceMember
+      ? repo
+          .selectPendingAppGrantRequestIdsByKind({
+            workspaceId: params.workspaceId,
+            requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+            kind: "remote_agent",
+          })
+          .then((rows) =>
+            rows.map((row) => ({ remoteAgentId: row.workspaceAppId }))
           )
-          .select(["app_request.workspaceAppId as remoteAgentId"])
-          .where("app_request.workspaceId", "=", params.workspaceId)
-          .where(
-            "app_request.requesterWorkspaceMemberId",
-            "=",
-            viewerWorkspaceMember.workspaceMemberId
-          )
-          .where("app_request.status", "=", "pending")
-          .where("app.kind", "=", "remote_agent")
-          .execute()
-      : Promise.resolve([]),
+      : Promise.resolve([] as { remoteAgentId: string | null }[]),
   ])
 
   const pendingActorAccessIds = new Set(
@@ -1399,12 +1049,12 @@ async function buildContactHubEntryMap(params: {
     })
   )
 
-  const actorApprovalRequirements = await deriveRequiresContactApprovalMany(
-    db,
-    "actor",
-    params.workspaceId,
-    actors.map((row) => row.actorId)
-  )
+  const actorApprovalRequirements =
+    await repo.deriveRequiresContactApprovalManyDefault(
+      "actor",
+      params.workspaceId,
+      actors.map((row) => row.actorId)
+    )
   const workspaceActors: ContactHubEntry[] = []
   for (const row of actors) {
     const actor: ActorSummary = {
@@ -1442,14 +1092,13 @@ async function buildContactHubEntryMap(params: {
   }
 
   const remoteAgentApprovalRequirements =
-    await deriveRequiresContactApprovalMany(
-      db,
+    await repo.deriveRequiresContactApprovalManyDefault(
       "remote_agent",
       params.workspaceId,
-      remoteAgentsResult.rows.map((row) => row.remoteAgentId)
+      remoteAgents.map((row) => row.remoteAgentId)
     )
   const workspaceRemoteAgents: ContactHubEntry[] = []
-  for (const row of remoteAgentsResult.rows) {
+  for (const row of remoteAgents) {
     const remoteAgent: RemoteAgentSummary = {
       workspace: workspaceSummary(row),
       remoteAgentId: row.remoteAgentId,
@@ -1711,28 +1360,8 @@ export async function searchRelationshipsByIdentity(params: {
     throw new Error("Workspace member not found")
   }
 
-  const profile = await db
-    .selectFrom("workspaceRelationshipProfiles as p")
-    .innerJoin("accessSubjects as s", "s.id", "p.subjectId")
-    .select([
-      "p.id",
-      "p.workspaceId",
-      "p.subjectId",
-      "p.identityId",
-      "p.identitySearchEnabled",
-      "p.approvalMode",
-      "p.qrToken",
-      "p.createdByWorkspaceMemberId",
-      "p.createdAt",
-      "p.updatedAt",
-      "s.kind as subjectType",
-      "s.workspaceMemberId as subjectWorkspaceMemberId",
-      "s.actorId as subjectActorId",
-      "s.remoteAgentId as subjectRemoteAgentId",
-    ])
-    .where("p.identityId", "=", normalizedQuery)
-    .where("p.identitySearchEnabled", "=", true)
-    .executeTakeFirst()
+  const profile =
+    await repo.selectSearchableProfileByIdentityId(normalizedQuery)
   if (!profile) {
     return {
       query: normalizedQuery,
@@ -1884,22 +1513,19 @@ export async function searchRelationshipsByIdentity(params: {
     )
 
     if (remoteAgent.workspace.id === params.workspaceId) {
-      const pendingRemoteAgentRequest = await sql<{ id: string }>`
-          SELECT id
-          FROM workspace_app_grant_requests
-          WHERE workspace_id = ${params.workspaceId}
-            AND workspace_app_id = ${remoteAgent.remoteAgentId}
-            AND requester_workspace_member_id = ${viewerWorkspaceMember.workspaceMemberId}
-            AND status = 'pending'
-          LIMIT 1
-        `.execute(db)
+      const pendingRemoteAgentRequest =
+        await repo.selectPendingRemoteAgentAppGrantRequestId({
+          workspaceId: params.workspaceId,
+          workspaceAppId: remoteAgent.remoteAgentId,
+          requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+        })
       const accessState = await getRemoteAgentAccessState({
         workspaceId: params.workspaceId,
         userId: params.userId,
         remoteAgent,
         conversationId,
         pendingRequestRemoteAgentIds: new Set(
-          pendingRemoteAgentRequest.rows[0] ? [remoteAgent.remoteAgentId] : []
+          pendingRemoteAgentRequest ? [remoteAgent.remoteAgentId] : []
         ),
       })
       return {
@@ -1923,7 +1549,7 @@ export async function searchRelationshipsByIdentity(params: {
               id: remoteAgent.remoteAgentId,
             },
             conversationId,
-            requestId: pendingRemoteAgentRequest.rows[0]?.id,
+            requestId: pendingRemoteAgentRequest?.id,
           },
         ],
       }
@@ -2010,18 +1636,11 @@ export async function searchRelationshipsByIdentity(params: {
   )
 
   if (actor.workspace.id === params.workspaceId) {
-    const pendingActorRequest = await db
-      .selectFrom("workspaceAppGrantRequests")
-      .select(["id"])
-      .where("workspaceId", "=", params.workspaceId)
-      .where("workspaceAppId", "=", actor.actorId)
-      .where(
-        "requesterWorkspaceMemberId",
-        "=",
-        viewerWorkspaceMember.workspaceMemberId
-      )
-      .where("status", "=", "pending")
-      .executeTakeFirst()
+    const pendingActorRequest = await repo.selectPendingActorAppGrantRequestId({
+      workspaceId: params.workspaceId,
+      workspaceAppId: actor.actorId,
+      requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+    })
     const accessState = await getActorAccessState({
       workspaceId: params.workspaceId,
       userId: params.userId,
@@ -2134,27 +1753,7 @@ export async function requestRelationshipByIdentityProfile(params: {
     throw new Error("Workspace member not found")
   }
 
-  const profile = await db
-    .selectFrom("workspaceRelationshipProfiles as p")
-    .innerJoin("accessSubjects as s", "s.id", "p.subjectId")
-    .select([
-      "p.id",
-      "p.workspaceId",
-      "p.subjectId",
-      "p.identityId",
-      "p.identitySearchEnabled",
-      "p.approvalMode",
-      "p.qrToken",
-      "p.createdByWorkspaceMemberId",
-      "p.createdAt",
-      "p.updatedAt",
-      "s.kind as subjectType",
-      "s.workspaceMemberId as subjectWorkspaceMemberId",
-      "s.actorId as subjectActorId",
-      "s.remoteAgentId as subjectRemoteAgentId",
-    ])
-    .where("p.id", "=", params.profileId)
-    .executeTakeFirst()
+  const profile = await repo.selectProfileById(params.profileId)
   if (!profile) {
     throw new Error("Search target not found")
   }
@@ -2446,22 +2045,17 @@ export async function updateMemberRelationshipProfile(params: {
     subjectWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
   })
   try {
-    const updated = await db
-      .updateTable("workspaceRelationshipProfiles")
-      .set({
-        approvalMode: params.approvalMode,
-        identityId:
-          typeof params.identityId === "string"
-            ? validateIdentityId(params.identityId)
-            : profile.identityId,
-        identitySearchEnabled:
-          typeof params.identitySearchEnabled === "boolean"
-            ? params.identitySearchEnabled
-            : profile.identitySearchEnabled,
-      })
-      .where("id", "=", profile.id)
-      .returningAll()
-      .executeTakeFirst()
+    const updated = await repo.updateRelationshipProfile(profile.id, {
+      approvalMode: params.approvalMode,
+      identityId:
+        typeof params.identityId === "string"
+          ? validateIdentityId(params.identityId)
+          : profile.identityId,
+      identitySearchEnabled:
+        typeof params.identitySearchEnabled === "boolean"
+          ? params.identitySearchEnabled
+          : profile.identitySearchEnabled,
+    })
     if (!updated) {
       throw new Error("Failed to update relationship profile")
     }
@@ -2575,22 +2169,17 @@ export async function updateActorRelationshipProfile(params: {
 
   let updatedProfile
   try {
-    updatedProfile = await db
-      .updateTable("workspaceRelationshipProfiles")
-      .set({
-        approvalMode: params.approvalMode,
-        identityId:
-          typeof params.identityId === "string"
-            ? validateIdentityId(params.identityId)
-            : profile.identityId,
-        identitySearchEnabled:
-          typeof params.identitySearchEnabled === "boolean"
-            ? params.identitySearchEnabled
-            : profile.identitySearchEnabled,
-      })
-      .where("id", "=", profile.id)
-      .returningAll()
-      .executeTakeFirst()
+    updatedProfile = await repo.updateRelationshipProfile(profile.id, {
+      approvalMode: params.approvalMode,
+      identityId:
+        typeof params.identityId === "string"
+          ? validateIdentityId(params.identityId)
+          : profile.identityId,
+      identitySearchEnabled:
+        typeof params.identitySearchEnabled === "boolean"
+          ? params.identitySearchEnabled
+          : profile.identitySearchEnabled,
+    })
   } catch (error) {
     if (isUniqueViolation(error)) {
       throw new Error("This identity ID is already taken.")
@@ -2605,24 +2194,11 @@ export async function updateActorRelationshipProfile(params: {
   let requiresContactApproval = actorSummary?.requiresContactApproval ?? false
   let isPublicShared = actorSummary?.isPublicShared ?? false
   if (typeof params.isPublicShared === "boolean") {
-    const actorResult = await db
-      .updateTable("actors")
-      .set({
-        isPublicShared: params.isPublicShared,
-      })
-      .where("id", "=", params.actorId)
-      .where((eb) =>
-        eb.exists(
-          db
-            .selectFrom("workspaceAppsLive as app")
-            .select("app.id")
-            .where("app.id", "=", params.actorId)
-            .where("app.workspaceId", "=", params.workspaceId)
-            .where("app.deletedAt", "is", null)
-        )
-      )
-      .returning(["isPublicShared"])
-      .executeTakeFirst()
+    const actorResult = await repo.updateActorPublicShared(
+      params.actorId,
+      params.workspaceId,
+      params.isPublicShared
+    )
     if (!actorResult) {
       throw new Error("Actor not found")
     }
@@ -2666,22 +2242,17 @@ export async function updateRemoteAgentRelationshipProfile(params: {
 
   let updatedProfile
   try {
-    updatedProfile = await db
-      .updateTable("workspaceRelationshipProfiles")
-      .set({
-        approvalMode: params.approvalMode,
-        identityId:
-          typeof params.identityId === "string"
-            ? validateIdentityId(params.identityId)
-            : profile.identityId,
-        identitySearchEnabled:
-          typeof params.identitySearchEnabled === "boolean"
-            ? params.identitySearchEnabled
-            : profile.identitySearchEnabled,
-      })
-      .where("id", "=", profile.id)
-      .returningAll()
-      .executeTakeFirst()
+    updatedProfile = await repo.updateRelationshipProfile(profile.id, {
+      approvalMode: params.approvalMode,
+      identityId:
+        typeof params.identityId === "string"
+          ? validateIdentityId(params.identityId)
+          : profile.identityId,
+      identitySearchEnabled:
+        typeof params.identitySearchEnabled === "boolean"
+          ? params.identitySearchEnabled
+          : profile.identitySearchEnabled,
+    })
   } catch (error) {
     if (isUniqueViolation(error)) {
       throw new Error("This identity ID is already taken.")
@@ -2698,25 +2269,15 @@ export async function updateRemoteAgentRelationshipProfile(params: {
   let isPublicShared = remoteAgentSummary?.isPublicShared ?? false
 
   if (typeof params.isPublicShared === "boolean") {
-    const updateResult = await sql<{ isPublicShared: boolean }>`
-        UPDATE remote_agents
-        SET is_public_shared = ${params.isPublicShared},
-            updated_at = NOW()
-        WHERE id = ${params.remoteAgentId}
-          AND EXISTS (
-            SELECT 1
-            FROM workspace_apps_live app
-            WHERE app.id = remote_agents.id
-              AND app.workspace_id = ${params.workspaceId}
-              AND app.deleted_at IS NULL
-              AND app.status = 'active'
-          )
-        RETURNING is_public_shared
-      `.execute(db)
-    if (!updateResult.rows[0]) {
+    const updateResult = await repo.updateRemoteAgentPublicShared(
+      params.remoteAgentId,
+      params.workspaceId,
+      params.isPublicShared
+    )
+    if (!updateResult) {
       throw new Error("Remote agent not found")
     }
-    isPublicShared = Boolean(updateResult.rows[0].isPublicShared)
+    isPublicShared = Boolean(updateResult.isPublicShared)
   }
 
   return {
@@ -2744,27 +2305,7 @@ export async function scanRelationshipQr(params: {
     throw new Error("Workspace member not found")
   }
 
-  const profile = await db
-    .selectFrom("workspaceRelationshipProfiles as p")
-    .innerJoin("accessSubjects as s", "s.id", "p.subjectId")
-    .select([
-      "p.id",
-      "p.workspaceId",
-      "p.subjectId",
-      "p.identityId",
-      "p.identitySearchEnabled",
-      "p.approvalMode",
-      "p.qrToken",
-      "p.createdByWorkspaceMemberId",
-      "p.createdAt",
-      "p.updatedAt",
-      "s.kind as subjectType",
-      "s.workspaceMemberId as subjectWorkspaceMemberId",
-      "s.actorId as subjectActorId",
-      "s.remoteAgentId as subjectRemoteAgentId",
-    ])
-    .where("p.qrToken", "=", params.token)
-    .executeTakeFirst()
+  const profile = await repo.selectProfileByQrToken(params.token)
   if (!profile) {
     throw new Error("Relationship QR code not found")
   }
@@ -2812,27 +2353,7 @@ export async function listFriendRequests(params: {
     throw new Error("Workspace member not found")
   }
 
-  const pendingRows = await db
-    .selectFrom("workspaceFriendRequests as r")
-    .innerJoin("accessSubjects as s", "s.id", "r.targetSubjectId")
-    .select([
-      "r.id",
-      "r.requesterWorkspaceMemberId",
-      "r.targetSubjectId",
-      "r.requestedViaProfileId",
-      "r.status",
-      "r.resolvedByWorkspaceMemberId",
-      "r.resolvedAt",
-      "r.createdAt",
-      "r.updatedAt",
-      "s.kind as targetKind",
-      "s.workspaceMemberId as targetWorkspaceMemberId",
-      "s.actorId as targetActorId",
-      "s.remoteAgentId as targetRemoteAgentId",
-    ])
-    .where("r.status", "=", "pending")
-    .orderBy("r.createdAt", "desc")
-    .execute()
+  const pendingRows = await repo.selectPendingFriendRequests()
   const outgoingRows = pendingRows.filter(
     (row) =>
       row.requesterWorkspaceMemberId === viewerWorkspaceMember.workspaceMemberId
@@ -2851,9 +2372,8 @@ export async function listFriendRequests(params: {
       if (!targetActor || targetActor.workspace.id !== params.workspaceId) {
         continue
       }
-      const canApprove = await authorizeAction(db, {
-        subject: await resolveWorkspaceAccessSubject(
-          db,
+      const canApprove = await authorizeActionDefault({
+        subject: await resolveWorkspaceAccessSubjectDefault(
           params.workspaceId,
           params.userId
         ),
@@ -2871,9 +2391,8 @@ export async function listFriendRequests(params: {
       ) {
         continue
       }
-      const canApprove = await authorizeAction(db, {
-        subject: await resolveWorkspaceAccessSubject(
-          db,
+      const canApprove = await authorizeActionDefault({
+        subject: await resolveWorkspaceAccessSubjectDefault(
           params.workspaceId,
           params.userId
         ),
@@ -2951,26 +2470,7 @@ export async function resolveFriendRequest(params: {
   if (!viewerWorkspaceMember) {
     throw new Error("Workspace member not found")
   }
-  const request = await db
-    .selectFrom("workspaceFriendRequests as r")
-    .innerJoin("accessSubjects as s", "s.id", "r.targetSubjectId")
-    .select([
-      "r.id",
-      "r.requesterWorkspaceMemberId",
-      "r.targetSubjectId",
-      "r.requestedViaProfileId",
-      "r.status",
-      "r.resolvedByWorkspaceMemberId",
-      "r.resolvedAt",
-      "r.createdAt",
-      "r.updatedAt",
-      "s.kind as targetSubjectType",
-      "s.workspaceMemberId as targetWorkspaceMemberId",
-      "s.actorId as targetActorId",
-      "s.remoteAgentId as targetRemoteAgentId",
-    ])
-    .where("r.id", "=", params.requestId)
-    .executeTakeFirst()
+  const request = await repo.selectFriendRequestById(params.requestId)
   if (!request) {
     throw new Error("Friend request not found")
   }
@@ -2990,9 +2490,8 @@ export async function resolveFriendRequest(params: {
     if (!targetActor || targetActor.workspace.id !== params.workspaceId) {
       throw new Error("Friend request not found")
     }
-    const canApprove = await authorizeAction(db, {
-      subject: await resolveWorkspaceAccessSubject(
-        db,
+    const canApprove = await authorizeActionDefault({
+      subject: await resolveWorkspaceAccessSubjectDefault(
         params.workspaceId,
         params.userId
       ),
@@ -3015,9 +2514,8 @@ export async function resolveFriendRequest(params: {
     ) {
       throw new Error("Friend request not found")
     }
-    const canApprove = await authorizeAction(db, {
-      subject: await resolveWorkspaceAccessSubject(
-        db,
+    const canApprove = await authorizeActionDefault({
+      subject: await resolveWorkspaceAccessSubjectDefault(
         params.workspaceId,
         params.userId
       ),
@@ -3040,16 +2538,11 @@ export async function resolveFriendRequest(params: {
     })
   }
 
-  const updated = await db
-    .updateTable("workspaceFriendRequests")
-    .set({
-      status: params.decision === "approve" ? "approved" : "rejected",
-      resolvedByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
-      resolvedAt: sql`NOW()`,
-    })
-    .where("id", "=", request.id)
-    .returningAll()
-    .executeTakeFirst()
+  const updated = await repo.updateFriendRequestResolution({
+    id: request.id,
+    status: params.decision === "approve" ? "approved" : "rejected",
+    resolvedByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+  })
 
   if (!updated) {
     throw new Error("Failed to resolve friend request")
@@ -3070,55 +2563,18 @@ export async function listActorAccessRequests(params: {
     throw new Error("Workspace member not found")
   }
   const [incomingRows, outgoingRows] = await Promise.all([
-    db
-      .selectFrom("workspaceAppGrantRequests as app_request")
-      .innerJoin("workspaceApps as app", "app.id", "app_request.workspaceAppId")
-      .select([
-        "app_request.id",
-        "app_request.workspaceId",
-        "app_request.requesterWorkspaceMemberId",
-        "app_request.status",
-        "app_request.resolvedByWorkspaceMemberId",
-        "app_request.resolvedAt",
-        "app_request.createdAt",
-        "app_request.updatedAt",
-        "app_request.workspaceAppId as actorId",
-      ])
-      .where("app_request.workspaceId", "=", params.workspaceId)
-      .where("app_request.status", "=", "pending")
-      .where("app.kind", "=", "actor")
-      .execute(),
-    db
-      .selectFrom("workspaceAppGrantRequests as app_request")
-      .innerJoin("workspaceApps as app", "app.id", "app_request.workspaceAppId")
-      .select([
-        "app_request.id",
-        "app_request.workspaceId",
-        "app_request.requesterWorkspaceMemberId",
-        "app_request.status",
-        "app_request.resolvedByWorkspaceMemberId",
-        "app_request.resolvedAt",
-        "app_request.createdAt",
-        "app_request.updatedAt",
-        "app_request.workspaceAppId as actorId",
-      ])
-      .where("app_request.workspaceId", "=", params.workspaceId)
-      .where(
-        "app_request.requesterWorkspaceMemberId",
-        "=",
-        viewerWorkspaceMember.workspaceMemberId
-      )
-      .where("app_request.status", "=", "pending")
-      .where("app.kind", "=", "actor")
-      .execute(),
+    repo.selectIncomingActorAccessRequests(params.workspaceId),
+    repo.selectOutgoingActorAccessRequests({
+      workspaceId: params.workspaceId,
+      requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+    }),
   ])
 
   const incoming = []
   for (const row of incomingRows) {
     if (!row.actorId) continue
-    const canApprove = await authorizeAction(db, {
-      subject: await resolveWorkspaceAccessSubject(
-        db,
+    const canApprove = await authorizeActionDefault({
+      subject: await resolveWorkspaceAccessSubjectDefault(
         params.workspaceId,
         params.userId
       ),
@@ -3164,44 +2620,19 @@ export async function listRemoteAgentAccessRequests(params: {
   }
 
   const [incomingRows, outgoingRows] = await Promise.all([
-    sql<WorkspaceAppGrantRequestJoinRow>`
-        SELECT request.id, request.workspace_id, request.requester_workspace_member_id,
-               request.status, request.resolved_by_workspace_member_id, request.resolved_at,
-               request.created_at, request.updated_at,
-               request.workspace_app_id AS remote_agent_id
-        FROM workspace_app_grant_requests request
-        JOIN workspace_apps_live app ON app.id = request.workspace_app_id
-        WHERE request.workspace_id = ${params.workspaceId}
-          AND request.status = 'pending'
-          AND app.kind = 'remote_agent'
-        ORDER BY request.created_at DESC
-      `
-      .execute(db)
-      .then((result) => result.rows),
-    sql<WorkspaceAppGrantRequestJoinRow>`
-        SELECT request.id, request.workspace_id, request.requester_workspace_member_id,
-               request.status, request.resolved_by_workspace_member_id, request.resolved_at,
-               request.created_at, request.updated_at,
-               request.workspace_app_id AS remote_agent_id
-        FROM workspace_app_grant_requests request
-        JOIN workspace_apps_live app ON app.id = request.workspace_app_id
-        WHERE request.workspace_id = ${params.workspaceId}
-          AND request.requester_workspace_member_id = ${viewerWorkspaceMember.workspaceMemberId}
-          AND request.status = 'pending'
-          AND app.kind = 'remote_agent'
-        ORDER BY request.created_at DESC
-      `
-      .execute(db)
-      .then((result) => result.rows),
+    repo.selectIncomingRemoteAgentAccessRequests(params.workspaceId),
+    repo.selectOutgoingRemoteAgentAccessRequests({
+      workspaceId: params.workspaceId,
+      requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+    }),
   ])
 
   const incoming = []
   for (const row of incomingRows) {
     if (!row.remoteAgentId) continue
     const remoteAgentId = row.remoteAgentId
-    const canApprove = await authorizeAction(db, {
-      subject: await resolveWorkspaceAccessSubject(
-        db,
+    const canApprove = await authorizeActionDefault({
+      subject: await resolveWorkspaceAccessSubjectDefault(
         params.workspaceId,
         params.userId
       ),
@@ -3247,19 +2678,9 @@ export async function resolveActorAccessRequest(params: {
   if (!approverWorkspaceMember) {
     throw new Error("Workspace member not found")
   }
-  const request = await db
-    .selectFrom("workspaceAppGrantRequests as app_request")
-    .innerJoin("workspaceApps as app", "app.id", "app_request.workspaceAppId")
-    .select([
-      "app_request.id",
-      "app_request.workspaceId",
-      "app_request.workspaceAppId as actorId",
-      "app_request.requesterWorkspaceMemberId",
-      "app_request.status",
-      "app.kind as targetKind",
-    ])
-    .where("app_request.id", "=", params.requestId)
-    .executeTakeFirst()
+  const request = await repo.selectActorAccessRequestForResolve(
+    params.requestId
+  )
   if (
     !request ||
     request.workspaceId !== params.workspaceId ||
@@ -3271,9 +2692,8 @@ export async function resolveActorAccessRequest(params: {
   if (request.status !== "pending") {
     throw new Error("Actor access request has already been resolved")
   }
-  const canApprove = await authorizeAction(db, {
-    subject: await resolveWorkspaceAccessSubject(
-      db,
+  const canApprove = await authorizeActionDefault({
+    subject: await resolveWorkspaceAccessSubjectDefault(
       params.workspaceId,
       params.userId
     ),
@@ -3307,25 +2727,9 @@ export async function resolveRemoteAgentAccessRequest(params: {
     throw new Error("Workspace member not found")
   }
 
-  const requestResult = await sql<{
-    id: string
-    workspaceId: string
-    requesterWorkspaceMemberId: string
-    status: string
-    resolvedAt: Date | null
-    resolvedByWorkspaceMemberId: string | null
-    remoteAgentId: string | null
-    targetKind: string
-  }>`
-      SELECT request.id, request.workspace_id, request.requester_workspace_member_id,
-             request.status, request.resolved_at, request.resolved_by_workspace_member_id,
-             request.workspace_app_id AS remote_agent_id, app.kind AS target_kind
-      FROM workspace_app_grant_requests request
-      JOIN workspace_apps_live app ON app.id = request.workspace_app_id
-      WHERE request.id = ${params.requestId}
-      LIMIT 1
-    `.execute(db)
-  const request = requestResult.rows[0]
+  const request = await repo.selectRemoteAgentAccessRequestForResolve(
+    params.requestId
+  )
   if (
     !request ||
     request.workspaceId !== params.workspaceId ||
@@ -3338,9 +2742,8 @@ export async function resolveRemoteAgentAccessRequest(params: {
     throw new Error("Remote agent access request has already been resolved")
   }
 
-  const canApprove = await authorizeAction(db, {
-    subject: await resolveWorkspaceAccessSubject(
-      db,
+  const canApprove = await authorizeActionDefault({
+    subject: await resolveWorkspaceAccessSubjectDefault(
       params.workspaceId,
       params.userId
     ),
@@ -3630,21 +3033,18 @@ export async function openDirectConversation(params: {
         : [],
     })
 
-    const directBindingValues = await directConversationBindingValues(
-      db,
-      canonicalizeDirectConversationPair(
-        requesterIdentity,
-        resolved.peerIdentity
+    const directBindingValues =
+      await repo.directConversationBindingValuesDefault(
+        canonicalizeDirectConversationPair(
+          requesterIdentity,
+          resolved.peerIdentity
+        )
       )
-    )
-    await db
-      .insertInto("directConversationBindings")
-      .values({
-        conversationId: created.conversation.conversationId,
-        participantOneSubjectId: directBindingValues.participant_one_subject_id,
-        participantTwoSubjectId: directBindingValues.participant_two_subject_id,
-      })
-      .execute()
+    await repo.insertDirectConversationBinding({
+      conversationId: created.conversation.conversationId as string,
+      participantOneSubjectId: directBindingValues.participant_one_subject_id,
+      participantTwoSubjectId: directBindingValues.participant_two_subject_id,
+    })
 
     return {
       status: DIRECT_CONVERSATION_OPEN_STATUS.READY,

@@ -9,7 +9,8 @@
  * intentionally bypass the CamelCasePlugin.
  */
 
-import { sql } from "kysely"
+import type pg from "pg"
+import { CompiledQuery, sql } from "kysely"
 import {
   DEFAULT_CONVERSATION_TYPE_MASK,
   SUBJECT_KIND,
@@ -18,11 +19,24 @@ import {
   resolveNarrowedConversationTypeMask,
   type PluginSpecTransport,
 } from "@synapse/shared"
-import { db } from "../../infrastructure/database/kysely.js"
+import {
+  db,
+  type Executor,
+  type TableInsert,
+} from "../../infrastructure/database/kysely.js"
 import { buildConversationCapabilitySubjects } from "../access/subject-resolution.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
 import { getWorkspaceCapabilityConversationTypePolicyMap } from "../capabilities/conversation-type-policies.js"
-import { PLUGIN_INSTALLATION_LIVE_STATUSES } from "./live-status.js"
+import {
+  PLUGIN_CONNECTION_LIVE_STATUSES,
+  PLUGIN_INSTALLATION_LIVE_STATUSES,
+} from "./live-status.js"
+import type {
+  PluginAuthSessionRow,
+  PluginAuthSessionsUpdate,
+  PluginConnectionRow,
+  PluginConnectionsUpdate,
+} from "./repo.types.js"
 
 // ---------------------------------------------------------------------------
 // audit.ts queries
@@ -553,3 +567,242 @@ export async function loadVisiblePluginRows(
     return matchingBindings.length > 0
   }) as VisiblePluginRow[]
 }
+
+// ---------------------------------------------------------------------------
+// plugin-auth-connections.ts queries (OAuth / Mijia / Feishu auth flows)
+//
+// These own every db-client query the auth-connection service touches. Each
+// read returns the camelCase domain row (or undefined) and KEEPS Date objects —
+// the service decides whether a miss is a 404 (PluginAuthError). Each mutation
+// returns the camelCase row (Date-bearing) the service presents. The service
+// keeps building the heterogeneous `.set({…})` patch objects inline (typed via
+// repo.types' Update aliases) and hands them here to run.
+// ---------------------------------------------------------------------------
+
+export type PluginAuthSpecRow = {
+  catalogItemId: string
+  catalogVersionId: string | null
+  defaultConfig: unknown
+  authBindings: unknown
+}
+
+/**
+ * Raw catalog/spec read for an auth flow. Snake_case SELECT aliases rely on
+ * CamelCasePlugin to map back (catalog_item_id → catalogItemId), so the raw sql
+ * is kept verbatim. Returns the row or null (service throws the 404).
+ */
+export async function getPluginAuthSpecRow(
+  pluginId: string,
+  catalogVersionId?: string | null
+): Promise<PluginAuthSpecRow | null> {
+  const result = await db.executeQuery(
+    sql<PluginAuthSpecRow>`SELECT
+        item.id AS catalog_item_id,
+        version.id AS catalog_version_id,
+        spec.default_config,
+        spec.auth_bindings
+      FROM catalog_items item
+      LEFT JOIN catalog_versions version
+        ON version.id = COALESCE(${catalogVersionId || null}::uuid, item.latest_version_id)
+      LEFT JOIN plugin_package_version_specs spec
+        ON spec.catalog_version_id = version.id
+      WHERE item.id = ${pluginId}
+        AND item.item_kind = 'plugin_package'
+      LIMIT 1`.compile(db)
+  )
+  return result.rows[0] ?? null
+}
+
+/** Auth session scoped to (id, workspace, member). Returns undefined on miss. */
+export async function findPluginAuthSessionRow(
+  sessionId: string,
+  workspaceId: string,
+  workspaceMemberId: string
+): Promise<PluginAuthSessionRow | undefined> {
+  return db
+    .selectFrom("pluginAuthSessions")
+    .selectAll()
+    .where("id", "=", sessionId)
+    .where("workspaceId", "=", workspaceId)
+    .where("workspaceMemberId", "=", workspaceMemberId)
+    .limit(1)
+    .executeTakeFirst()
+}
+
+/** Auth session by OAuth `state`. Returns undefined on miss. */
+export async function findPluginAuthSessionRowByState(
+  state: string
+): Promise<PluginAuthSessionRow | undefined> {
+  return db
+    .selectFrom("pluginAuthSessions")
+    .selectAll()
+    .where("state", "=", state)
+    .limit(1)
+    .executeTakeFirst()
+}
+
+/**
+ * Live auth connection (+ catalog ids) for the resolve path. Live predicate
+ * (review F5/F16): a connection resolves only when both it and its parent
+ * installation are live (deleted_at IS NULL AND status ∈ liveValues — excludes
+ * archived install / expired-revoked connection). Base tables (not _live views)
+ * so NOT NULL column types survive. Returns undefined on miss.
+ */
+export async function findPluginAuthConnectionRow(
+  connectionId: string,
+  workspaceId?: string
+): Promise<PluginConnectionRow | undefined> {
+  let builder = db
+    .selectFrom("pluginConnections as connection")
+    .innerJoin(
+      "pluginInstallations as installation",
+      "installation.id",
+      "connection.installationId"
+    )
+    .innerJoin("workspaceApps as app", "app.id", "installation.id")
+    .selectAll("connection")
+    .select(["installation.catalogItemId", "installation.catalogVersionId"])
+    .where("connection.id", "=", connectionId)
+    .where("connection.deletedAt", "is", null)
+    .where("connection.status", "in", PLUGIN_CONNECTION_LIVE_STATUSES)
+    .where("app.deletedAt", "is", null)
+    .where("app.status", "in", PLUGIN_INSTALLATION_LIVE_STATUSES)
+
+  if (workspaceId) {
+    builder = builder.where("connection.workspaceId", "=", workspaceId)
+  }
+
+  return builder.limit(1).executeTakeFirst()
+}
+
+export type PluginInstallationAuthConfigRow = {
+  catalogItemId: string
+  catalogVersionId: string
+  configData: unknown
+  defaultConfig: unknown
+}
+
+/**
+ * Installation config (+ spec default config) for an auth flow. Live predicate
+ * (review F16): exclude tombstoned + non-live-status installs. Returns undefined
+ * on miss (service throws the 404).
+ */
+export async function findPluginInstallationAuthConfigRow(
+  installationId: string,
+  workspaceId: string
+): Promise<PluginInstallationAuthConfigRow | undefined> {
+  return db
+    .selectFrom("pluginInstallations as installation")
+    .innerJoin("workspaceApps as app", "app.id", "installation.id")
+    .innerJoin(
+      "pluginPackageVersionSpecs as spec",
+      "spec.catalogVersionId",
+      "installation.catalogVersionId"
+    )
+    .select([
+      "installation.catalogItemId",
+      "installation.catalogVersionId",
+      "installation.configData",
+      "spec.defaultConfig",
+    ])
+    .where("installation.id", "=", installationId)
+    .where("app.workspaceId", "=", workspaceId)
+    .where("app.deletedAt", "is", null)
+    .where("app.status", "in", PLUGIN_INSTALLATION_LIVE_STATUSES)
+    .limit(1)
+    .executeTakeFirst()
+}
+
+/**
+ * Insert a new auth session. `expiresAt` is either a Date the service computed,
+ * or the server-clock-authoritative `NOW() + INTERVAL '1 hour'` the OAuth start
+ * path relies on (kept as raw sql so Postgres' clock — not the app's — sets it).
+ */
+export async function insertPluginAuthSession(
+  values: Omit<TableInsert<"pluginAuthSessions">, "expiresAt">,
+  expiresAt: Date | { kind: "now_plus_1h" }
+): Promise<PluginAuthSessionRow> {
+  return db
+    .insertInto("pluginAuthSessions")
+    .values({
+      ...values,
+      expiresAt:
+        "kind" in expiresAt ? sql<Date>`NOW() + INTERVAL '1 hour'` : expiresAt,
+    })
+    .returningAll()
+    .executeTakeFirstOrThrow()
+}
+
+/**
+ * Apply a typed patch to one auth session and return the updated row. The
+ * service builds each `.set({…})` shape; `TableUpdate` keeps it within the
+ * table's updatable columns.
+ */
+export async function updatePluginAuthSession(
+  sessionId: string,
+  patch: PluginAuthSessionsUpdate
+): Promise<PluginAuthSessionRow> {
+  return db
+    .updateTable("pluginAuthSessions")
+    .set(patch)
+    .where("id", "=", sessionId)
+    .returningAll()
+    .executeTakeFirstOrThrow()
+}
+
+/**
+ * Apply a typed patch to one auth session without reading the row back (mirrors
+ * the original fire-and-forget `.execute()` on the callback expire path — it does
+ * not require a row to exist).
+ */
+export async function updatePluginAuthSessionNoReturn(
+  sessionId: string,
+  patch: PluginAuthSessionsUpdate
+): Promise<void> {
+  await db
+    .updateTable("pluginAuthSessions")
+    .set(patch)
+    .where("id", "=", sessionId)
+    .execute()
+}
+
+/** Apply a typed patch to one auth connection (no row returned). */
+export async function updatePluginConnection(
+  connectionId: string,
+  patch: PluginConnectionsUpdate
+): Promise<void> {
+  await db
+    .updateTable("pluginConnections")
+    .set(patch)
+    .where("id", "=", connectionId)
+    .execute()
+}
+
+/**
+ * QueryRunner contract shared with {@link attachAuthConnectionsToConfig}: a
+ * parameterized raw-SQL executor. The service composes its
+ * withDbTransaction-bound runner; this default backs the unenrolled path.
+ */
+export type PluginConnectionQueryRunner = <
+  T extends pg.QueryResultRow = pg.QueryResultRow,
+>(
+  text: string,
+  params?: unknown[]
+) => Promise<{ rows: T[] }>
+
+/**
+ * Default {@link PluginConnectionQueryRunner} backed by the top-level db. The
+ * service's attach path runs its raw upsert/consume SQL on whichever runner it
+ * is handed (its own trx-bound runner inside withDbTransaction, or this default
+ * when called standalone) — so the transaction enrollment decision stays with
+ * the caller and is never split across auto-committing repo calls.
+ */
+export const defaultPluginConnectionRunner: PluginConnectionQueryRunner = <
+  T extends pg.QueryResultRow = pg.QueryResultRow,
+>(
+  text: string,
+  params?: unknown[]
+) =>
+  db
+    .executeQuery<T>(CompiledQuery.raw(text, params ? [...params] : []))
+    .then((r) => ({ rows: r.rows as T[] }))

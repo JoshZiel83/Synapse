@@ -10,6 +10,7 @@
 import type {
   TableInsert,
   TableRow,
+  TableUpdate,
 } from "../../infrastructure/database/kysely.js"
 
 export type PluginPackageVersionSpecsTransport =
@@ -54,6 +55,17 @@ export type PluginAuthSessionsTransientPayload =
   TableInsert<"pluginAuthSessions">["transientPayload"]
 export type PluginAuthSessionsMetadata =
   TableInsert<"pluginAuthSessions">["metadata"]
+
+/**
+ * Updateable column maps for the auth-connection write paths. The
+ * plugin-auth-connections repo updaters (`updatePluginAuthSession` /
+ * `updatePluginConnection`) take these so the service can keep building each
+ * heterogeneous `.set({…})` patch object inline (typed against the table's
+ * updatable column set, so a patch can never widen past the table) and hand it
+ * to the repo to run (guard-layering r8 — only the repo touches the db client).
+ */
+export type PluginAuthSessionsUpdate = TableUpdate<"pluginAuthSessions">
+export type PluginConnectionsUpdate = TableUpdate<"pluginConnections">
 
 /**
  * Domain record the publisher presenter consumes (the camelCase publisher row
