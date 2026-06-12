@@ -25,6 +25,8 @@ snake_case 出现在两种地方：(a) DB 物理层与 device-protocol wire 契�
 | schemas      | `schemas.ts`                | 路由本地 zod（path/query 拼装）                                             | 重新定义对外契约类型——app 请求体/响应 DTO 均 import 自 shared          |
 | index        | `index.ts`                  | `fastify-plugin` + `app.register(controller, { prefix })`                   | 业务逻辑                                                               |
 
+> **service 调 `present*` 的判定（避免被反复误报为"未收口"）**：service 层被禁的是"**拼对外 HTTP 响应 DTO 并交给 controller 裸发**"——即 service 直接产出某个 `XxxView` 作为 HTTP body 的唯一来源。**允许**的 `present*` 调用有三类，它们不是违规：(a) **行→域记录 / 记录装配** 映射（如 `presentFileAsset`→`StoredFileRecord`、`presentActorRow`→`Actor`、`presentUser`→`User`——产出在 api 内部流转的 `XxxRecord` 域记录，被本模块业务逻辑或装配进更大记录使用）；(b) **薄时间包装** `presentInstant` / `presentOptionalInstant`（presenter 拥有的字段级序列化 helper，可在记录装配处调用）；(c) **跨模块消费的记录**（被其它模块或 worker import 并按记录形态读取，如 automation 的 `AutomationRule` 被 ai/session-tools 读、remote-agents 的 runtime snapshot 被 chat 读）。判据：present\* 的产物是否作为 **HTTP body 的唯一来源被 controller 裸发**？是→违规，移到 controller（经 `appRoute`/`sendData`）；否（域记录/跨模块/时间包装）→允许。规范的 app 出口仍是 controller 经 `appRoute`/`sendData(XxxViewSchema, …)`。
+
 `infrastructure/**` 与 `workers/**` **不**强制套这套模板，但必须有明确 adapter 边界，可合法使用 `serializeInstant()` 等 infra helper。
 
 ### 硬规则（guard 强制）
