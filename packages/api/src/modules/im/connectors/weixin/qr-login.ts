@@ -9,10 +9,8 @@
  */
 
 import crypto from "node:crypto"
-import {
-  serializeInstant,
-  serializeNowInstant,
-} from "../../../../infrastructure/datetime.js"
+import { serializeNowInstant } from "../../../../infrastructure/datetime.js"
+import { presentWeixinQrLoginSession } from "../../presenter.js"
 import type {
   TransportAccountInboundActorMode,
   TransportAccountSummary,
@@ -280,20 +278,8 @@ async function buildSummary(
   const transportAccount = session.transportAccountId
     ? await getTransportAccountById(session.transportAccountId)
     : null
-  return {
-    sessionId: session.sessionId,
-    workspaceId: session.workspaceId,
-    status: session.status,
-    message: session.message,
-    qrCodeUrl: session.qrCodeUrl,
-    baseUrl: session.baseUrl,
-    botId: session.botId,
-    scannerUserId: session.scannerUserId,
-    createdAt: serializeInstant(new Date(session.createdAt)),
-    updatedAt: serializeInstant(new Date(session.updatedAt)),
-    expiresAt: serializeInstant(new Date(session.expiresAt)),
-    transportAccount: transportAccount || undefined,
-  } satisfies WeixinQrLoginSessionSummary
+  // Pure ms→ISO presentation lives in the im presenter (guard-layering r3).
+  return presentWeixinQrLoginSession(session, transportAccount || undefined)
 }
 
 export async function startWeixinQrLoginSession(params: {
