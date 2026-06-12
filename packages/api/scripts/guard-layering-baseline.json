@@ -28,7 +28,6 @@
     "packages/api/src/modules/capability-projection/device-capabilities.ts",
     "packages/api/src/modules/capability-projection/service.ts",
     "packages/api/src/modules/chat/service.ts",
-    "packages/api/src/modules/chat/workspace-identity.ts",
     "packages/api/src/modules/context/service.ts",
     "packages/api/src/modules/devices/access-bindings.ts",
     "packages/api/src/modules/devices/catalog-sync.ts",
