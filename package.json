@@ -45,6 +45,7 @@
     "test:conformance": "npm run test:conformance -w packages/api",
     "guard:datetime": "node scripts/guard-datetime-boundaries.mjs",
     "audit:business-enums": "node ./scripts/audit-business-enum-literals.mjs",
+    "verify:boundary": "bash ./scripts/verify-boundary.sh",
     "audit:device-runtime-sidecars": "tsx ./scripts/audit-device-runtime-sidecars.mts",
     "installer:gen-node-manifest": "node ./scripts/installer/generate-node-manifest.mjs",
     "verify:installer": "bash ./scripts/installer/install.test.sh",
