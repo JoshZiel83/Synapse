@@ -256,7 +256,7 @@ export function buildInstalledSkillPayload(
   }
 }
 
-export function mapSkillAccessRowToGrant(
+export function presentSkillAccessGrant(
   row: SkillAccessRow,
   options?: {
     workspaceConversationTypeMask: number

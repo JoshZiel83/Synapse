@@ -1,7 +1,4 @@
-import type {
-  AutomationEventSourceAccessGrant,
-  CapabilityAccessTarget,
-} from "@synapse/shared/types"
+import type { CapabilityAccessTarget } from "@synapse/shared/types"
 import {
   SUBJECT_KIND,
   isScopeEligibleSubject,
@@ -10,10 +7,6 @@ import {
   type ScopedSubjectTarget,
   type SubjectRef,
 } from "@synapse/shared"
-import {
-  serializeInstant,
-  serializeOptionalInstant,
-} from "../../infrastructure/datetime.js"
 
 export type AutomationEventSourceBindingResourceType = "automation_event_source"
 
@@ -404,32 +397,10 @@ function scopeInContext(
   }
 }
 
-export function mapAutomationEventSourceAccessBindingToGrant(
-  row: AutomationEventSourceBindingJoinedRow,
-  fallbackReason?: string,
-  options?: {
-    effectiveConversationTypeMask?: number
-  }
-): AutomationEventSourceAccessGrant {
-  const target = readAutomationEventSourceAccessBindingTarget(row)
-  const capabilityTarget: CapabilityAccessTarget = target.scope
-    ? { subject: target.subject, scope: target.scope }
-    : { subject: target.subject }
-
-  return {
-    id: row.id,
-    resourceId: row.resourceId,
-    workspaceId: row.workspaceId || "",
-    target: capabilityTarget,
-    status: row.status,
-    grantedByWorkspaceMemberId: row.createdByWorkspaceMemberId || undefined,
-    reason: row.reason || fallbackReason,
-    conversationTypeMaskOverride: row.conversationTypeMaskOverride ?? null,
-    effectiveConversationTypeMask: options?.effectiveConversationTypeMask,
-    createdAt: serializeInstant(row.createdAt),
-    revokedAt: serializeOptionalInstant(row.revokedAt),
-  }
-}
+// mapAutomationEventSourceAccessBindingToGrant moved to ./presenter.ts (it does
+// Date→ISO serialization, which guard-layering r3 confines to presenter*.ts).
+// Re-exported so existing `./bindings.js` importers are unchanged. round-6 P1-7.
+export { mapAutomationEventSourceAccessBindingToGrant } from "./presenter.js"
 
 // Re-export the helper for callers that want the legacy display label.
 export { subjectScopeLabel }

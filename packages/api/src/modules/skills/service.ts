@@ -103,7 +103,7 @@ import {
   buildInstalledSkillPayload,
   buildSkillAttachmentFromCatalogFile,
   mapMarketplaceEntry,
-  mapSkillAccessRowToGrant,
+  presentSkillAccessGrant,
 } from "./presenter.js"
 import type {
   InstallationSummary,
@@ -2481,7 +2481,7 @@ export async function getInstalledSkillGrantState(
     )
   const accessRows = await listSkillAccessRows(installedSkillId)
   const grants = accessRows.map((row) =>
-    mapSkillAccessRowToGrant(row, {
+    presentSkillAccessGrant(row, {
       workspaceConversationTypeMask,
       instanceConversationTypeMaskOverride:
         skillRow.conversationTypeMaskOverride ?? null,
@@ -2613,7 +2613,7 @@ export async function createInstalledSkillGrant(input: {
       row.workspaceMemberId === accessTargetWorkspaceMemberId
   )
   if (existing) {
-    return mapSkillAccessRowToGrant(existing, {
+    return presentSkillAccessGrant(existing, {
       workspaceConversationTypeMask,
       instanceConversationTypeMaskOverride:
         skillRow.conversationTypeMaskOverride ?? null,
@@ -2665,7 +2665,7 @@ export async function createInstalledSkillGrant(input: {
     }
   })
 
-  return mapSkillAccessRowToGrant(result.accessRow, {
+  return presentSkillAccessGrant(result.accessRow, {
     workspaceConversationTypeMask,
     instanceConversationTypeMaskOverride:
       skillRow.conversationTypeMaskOverride ?? null,
@@ -2737,7 +2737,7 @@ export async function updateInstalledSkillGrant(input: {
     throw new SkillError(404, "Access grant not found")
   }
 
-  return mapSkillAccessRowToGrant(updatedRow, {
+  return presentSkillAccessGrant(updatedRow, {
     workspaceConversationTypeMask,
     instanceConversationTypeMaskOverride:
       skillRow.conversationTypeMaskOverride ?? null,
@@ -2755,7 +2755,7 @@ export async function revokeInstalledSkillGrant(input: {
     throw new SkillError(404, "Access grant not found")
   }
   if (accessRow.status === "revoked") {
-    return mapSkillAccessRowToGrant(accessRow)
+    return presentSkillAccessGrant(accessRow)
   }
 
   await revokeWorkspaceAppGrant(db, accessRow.id)
