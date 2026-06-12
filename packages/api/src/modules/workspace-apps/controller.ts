@@ -43,6 +43,27 @@ import {
   presentGrantRequest,
   presentWorkspaceApp,
 } from "./presenter.js"
+import { appRoute } from "../../infrastructure/http/route.js"
+import {
+  WorkspaceAppViewSchema,
+  WorkspaceAppGrantViewSchema,
+  WorkspaceAppGrantRequestViewSchema,
+} from "@synapse/shared/schemas"
+
+const workspaceAppEnvelopeSchema = z.object({ app: WorkspaceAppViewSchema })
+const workspaceAppsEnvelopeSchema = z.object({
+  apps: z.array(WorkspaceAppViewSchema),
+})
+const grantsEnvelopeSchema = z.object({
+  grants: z.array(WorkspaceAppGrantViewSchema),
+})
+const grantRequestsEnvelopeSchema = z.object({
+  requests: z.array(WorkspaceAppGrantRequestViewSchema),
+})
+const grantRequestEnvelopeSchema = z.object({
+  request: WorkspaceAppGrantRequestViewSchema,
+})
+const successEnvelopeSchema = z.object({ success: z.boolean() })
 
 const workspaceAppKindSchema = z.enum(WORKSPACE_APP_KINDS)
 const workspaceAppGrantPermissionSchema = z.enum(
@@ -311,9 +332,11 @@ function handleError(reply: FastifyReply, error: unknown) {
 export function registerWorkspaceAppRoutes(app: FastifyInstance) {
   const workspaceHook = { preHandler: [authMiddleware, workspaceMiddleware] }
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/workspace-apps",
-    workspaceHook,
+    { schema: workspaceAppEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       try {
@@ -348,16 +371,20 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
             })),
           } as any,
         })
-        reply.status(201).send({ app: presentWorkspaceApp(appRecord) })
+        reply.status(201)
+        return { app: presentWorkspaceApp(appRecord) }
       } catch (error) {
         handleError(reply, error)
+        return
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/workspace-apps",
-    workspaceHook,
+    { schema: workspaceAppsEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       const allowed = await requireRequestAction(
@@ -379,16 +406,19 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
           userId: (request as any).user.userId,
           kind: query.kind as WorkspaceAppKind | undefined,
         })
-        reply.send({ apps: apps.map(presentWorkspaceApp) })
+        return { apps: apps.map(presentWorkspaceApp) }
       } catch (error) {
         handleError(reply, error)
+        return
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/workspace-apps/discover",
-    workspaceHook,
+    { schema: workspaceAppsEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       const allowed = await requireRequestAction(
@@ -410,16 +440,19 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
           userId: (request as any).user.userId,
           conversationId: query.conversationId,
         })
-        reply.send({ apps: apps.map(presentWorkspaceApp) })
+        return { apps: apps.map(presentWorkspaceApp) }
       } catch (error) {
         handleError(reply, error)
+        return
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/workspace-apps/:appId",
-    workspaceHook,
+    { schema: workspaceAppEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId, appId } = request.params as {
         workspaceId: string
@@ -439,16 +472,19 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
           appId,
           userId: (request as any).user.userId,
         })
-        reply.send({ app: presentWorkspaceApp(appRecord) })
+        return { app: presentWorkspaceApp(appRecord) }
       } catch (error) {
         handleError(reply, error)
+        return
       }
     }
   )
 
-  app.put(
+  appRoute(
+    app,
+    "PUT",
     "/api/v1/workspaces/:workspaceId/workspace-apps/:appId",
-    workspaceHook,
+    { schema: workspaceAppEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId, appId } = request.params as {
         workspaceId: string
@@ -462,16 +498,19 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
           userId: (request as any).user.userId,
           input: body as any,
         })
-        reply.send({ app: presentWorkspaceApp(appRecord) })
+        return { app: presentWorkspaceApp(appRecord) }
       } catch (error) {
         handleError(reply, error)
+        return
       }
     }
   )
 
-  app.delete(
+  appRoute(
+    app,
+    "DELETE",
     "/api/v1/workspaces/:workspaceId/workspace-apps/:appId",
-    workspaceHook,
+    { schema: successEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId, appId } = request.params as {
         workspaceId: string
@@ -483,16 +522,19 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
           appId,
           userId: (request as any).user.userId,
         })
-        reply.send({ success: deleted })
+        return { success: deleted }
       } catch (error) {
         handleError(reply, error)
+        return
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/workspace-apps/:appId/grants",
-    workspaceHook,
+    { schema: grantsEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId, appId } = request.params as {
         workspaceId: string
@@ -512,16 +554,19 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
           appId,
           userId: (request as any).user.userId,
         })
-        reply.send({ grants: grants.map(presentGrant) })
+        return { grants: grants.map(presentGrant) }
       } catch (error) {
         handleError(reply, error)
+        return
       }
     }
   )
 
-  app.put(
+  appRoute(
+    app,
+    "PUT",
     "/api/v1/workspaces/:workspaceId/workspace-apps/:appId/grants",
-    workspaceHook,
+    { schema: grantsEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId, appId } = request.params as {
         workspaceId: string
@@ -549,16 +594,19 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
             reason: grant.reason,
           })),
         })
-        reply.send({ grants: grants.map(presentGrant) })
+        return { grants: grants.map(presentGrant) }
       } catch (error) {
         handleError(reply, error)
+        return
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/workspace-apps/:appId/grant-requests",
-    workspaceHook,
+    { schema: grantRequestsEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId, appId } = request.params as {
         workspaceId: string
@@ -583,16 +631,19 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
           direction:
             query.direction || WORKSPACE_APP_GRANT_REQUEST_DIRECTION.INCOMING,
         })
-        reply.send({ requests: requests.map(presentGrantRequest) })
+        return { requests: requests.map(presentGrantRequest) }
       } catch (error) {
         handleError(reply, error)
+        return
       }
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/workspace-apps/:appId/grant-requests",
-    workspaceHook,
+    { schema: grantRequestEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId, appId } = request.params as {
         workspaceId: string
@@ -614,16 +665,20 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
           userId: (request as any).user.userId,
           reason: body.reason,
         })
-        reply.status(201).send({ request: presentGrantRequest(grantRequest) })
+        reply.status(201)
+        return { request: presentGrantRequest(grantRequest) }
       } catch (error) {
         handleError(reply, error)
+        return
       }
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/workspace-apps/:appId/grant-requests/:requestId/approve",
-    workspaceHook,
+    { schema: grantRequestEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId, appId, requestId } = request.params as {
         workspaceId: string
@@ -645,16 +700,19 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
           requestId,
           userId: (request as any).user.userId,
         })
-        reply.send({ request: presentGrantRequest(grantRequest) })
+        return { request: presentGrantRequest(grantRequest) }
       } catch (error) {
         handleError(reply, error)
+        return
       }
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/workspace-apps/:appId/grant-requests/:requestId/reject",
-    workspaceHook,
+    { schema: grantRequestEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId, appId, requestId } = request.params as {
         workspaceId: string
@@ -676,16 +734,19 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
           requestId,
           userId: (request as any).user.userId,
         })
-        reply.send({ request: presentGrantRequest(grantRequest) })
+        return { request: presentGrantRequest(grantRequest) }
       } catch (error) {
         handleError(reply, error)
+        return
       }
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/workspace-apps/:appId/grant-requests/:requestId/cancel",
-    workspaceHook,
+    { schema: successEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId, appId, requestId } = request.params as {
         workspaceId: string
@@ -707,9 +768,10 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
           requestId,
           userId: (request as any).user.userId,
         })
-        reply.send({ success: cancelled })
+        return { success: cancelled }
       } catch (error) {
         handleError(reply, error)
+        return
       }
     }
   )

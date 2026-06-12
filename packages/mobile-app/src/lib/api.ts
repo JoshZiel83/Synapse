@@ -216,14 +216,20 @@ class ApiClient {
     )
   }
 
-  createWorkspace(name: string, description?: string): Promise<WorkspaceInfo> {
-    return this.request<WorkspaceInfo>("/workspaces", {
+  async createWorkspace(
+    name: string,
+    description?: string
+  ): Promise<WorkspaceInfo> {
+    // App-facing create returns the `{ data }` envelope (appRoute + sendData).
+    // Unwrap so callers keep the bare WorkspaceInfo shape (e.g. `workspace.id`).
+    const res = await this.request<{ data: WorkspaceInfo }>("/workspaces", {
       method: "POST",
       body: JSON.stringify({
         name,
         description,
       }),
     })
+    return res.data
   }
 
   getActors(workspaceId: string): Promise<ActorListResponse> {
@@ -369,34 +375,39 @@ class ApiClient {
     ).then((res) => res.data)
   }
 
-  getWorkspaceChiefActorPreference(
+  async getWorkspaceChiefActorPreference(
     workspaceId: string
   ): Promise<WorkspaceChiefActorPreference> {
-    return this.request<WorkspaceChiefActorPreference>(
+    // App-facing route now returns the `{ data }` envelope; unwrap to the bare
+    // preference shape callers expect (e.g. `preference?.chiefActorId`).
+    const res = await this.request<{ data: WorkspaceChiefActorPreference }>(
       `/workspaces/${workspaceId}/preferences/chief-actor`
     )
+    return res.data
   }
 
-  updateWorkspaceChiefActorPreference(
+  async updateWorkspaceChiefActorPreference(
     workspaceId: string,
     data: { chiefActorId: string | null }
   ): Promise<WorkspaceChiefActorPreference> {
-    return this.request<WorkspaceChiefActorPreference>(
+    const res = await this.request<{ data: WorkspaceChiefActorPreference }>(
       `/workspaces/${workspaceId}/preferences/chief-actor`,
       {
         method: "PUT",
         body: JSON.stringify(data),
       }
     )
+    return res.data
   }
 
-  getChatBootstrap(workspaceId: string): Promise<ChatBootstrapResponse> {
-    return this.request<ChatBootstrapResponse>(
+  async getChatBootstrap(workspaceId: string): Promise<ChatBootstrapResponse> {
+    const res = await this.request<{ data: ChatBootstrapResponse }>(
       `/workspaces/${workspaceId}/chat/bootstrap`
     )
+    return res.data
   }
 
-  getChatSync(
+  async getChatSync(
     workspaceId: string,
     input?: { cursor?: number; limit?: number }
   ): Promise<ChatSyncResponse> {
@@ -409,51 +420,52 @@ class ApiClient {
     }
     const query = params.toString()
 
-    return this.request<ChatSyncResponse>(
+    const res = await this.request<{ data: ChatSyncResponse }>(
       `/workspaces/${workspaceId}/chat/sync${query ? `?${query}` : ""}`
     )
+    return res.data
   }
 
-  createChatClientInstance(
+  async createChatClientInstance(
     workspaceId: string,
     input?: ChatClientInstanceCreateInput
   ): Promise<ChatClientInstanceRegistrationResponse> {
-    return this.request<ChatClientInstanceRegistrationResponse>(
-      `/workspaces/${workspaceId}/chat/client-instances`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          platform: input?.platform,
-          deviceLabel: input?.deviceLabel,
-          metadata: input?.metadata,
-        }),
-      }
-    )
+    const res = await this.request<{
+      data: ChatClientInstanceRegistrationResponse
+    }>(`/workspaces/${workspaceId}/chat/client-instances`, {
+      method: "POST",
+      body: JSON.stringify({
+        platform: input?.platform,
+        deviceLabel: input?.deviceLabel,
+        metadata: input?.metadata,
+      }),
+    })
+    return res.data
   }
 
-  touchChatClientInstance(
+  async touchChatClientInstance(
     workspaceId: string,
     clientInstanceId: string,
     input?: ChatClientInstanceTouchInput
   ): Promise<ChatClientInstanceRegistrationResponse> {
-    return this.request<ChatClientInstanceRegistrationResponse>(
-      `/workspaces/${workspaceId}/chat/client-instances/${clientInstanceId}`,
-      {
-        method: "PUT",
-        body: JSON.stringify({
-          platform: input?.platform,
-          deviceLabel: input?.deviceLabel,
-          metadata: input?.metadata,
-        }),
-      }
-    )
+    const res = await this.request<{
+      data: ChatClientInstanceRegistrationResponse
+    }>(`/workspaces/${workspaceId}/chat/client-instances/${clientInstanceId}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        platform: input?.platform,
+        deviceLabel: input?.deviceLabel,
+        metadata: input?.metadata,
+      }),
+    })
+    return res.data
   }
 
-  createChatConversation(
+  async createChatConversation(
     workspaceId: string,
     input: ChatConversationCreateInput
   ): Promise<ChatConversationCreateResponse> {
-    return this.request<ChatConversationCreateResponse>(
+    const res = await this.request<{ data: ChatConversationCreateResponse }>(
       `/workspaces/${workspaceId}/chat/conversations`,
       {
         method: "POST",
@@ -468,9 +480,10 @@ class ApiClient {
         }),
       }
     )
+    return res.data
   }
 
-  getChatConversationMessages(
+  async getChatConversationMessages(
     workspaceId: string,
     conversationId: string,
     input: ChatConversationMessagesQuery
@@ -488,28 +501,32 @@ class ApiClient {
     params.set("clientInstanceId", input.clientInstanceId)
     const query = params.toString()
 
-    return this.request<ChatConversationMessagesPage>(
+    const res = await this.request<{ data: ChatConversationMessagesPage }>(
       `/workspaces/${workspaceId}/chat/conversations/${conversationId}/messages${query ? `?${query}` : ""}`
     )
+    return res.data
   }
 
-  getChatConversationRuntimeTurnDetail(
+  async getChatConversationRuntimeTurnDetail(
     workspaceId: string,
     conversationId: string,
     actorId: string,
     turnId: string
   ): Promise<ActorRuntimeTurnActivityDetail> {
-    return this.request<ActorRuntimeTurnActivityDetail>(
+    const res = await this.request<{ data: ActorRuntimeTurnActivityDetail }>(
       `/workspaces/${workspaceId}/chat/conversations/${conversationId}/actors/${actorId}/runtime-turns/${turnId}`
     )
+    return res.data
   }
 
-  sendChatConversationMessage(
+  async sendChatConversationMessage(
     workspaceId: string,
     conversationId: string,
     input: ChatConversationSendMessageInput
   ): Promise<ChatConversationSendMessageResponse> {
-    return this.request<ChatConversationSendMessageResponse>(
+    const res = await this.request<{
+      data: ChatConversationSendMessageResponse
+    }>(
       `/workspaces/${workspaceId}/chat/conversations/${conversationId}/messages`,
       {
         method: "POST",
@@ -522,6 +539,7 @@ class ApiClient {
         }),
       }
     )
+    return res.data
   }
 
   resolveChatTask(
@@ -530,30 +548,34 @@ class ApiClient {
     taskId: string,
     input: ChatTaskResolveInput
   ): Promise<ChatTaskResolveResponse> {
-    return this.request<ChatTaskResolveResponse>(
+    return this.request<{ data: ChatTaskResolveResponse }>(
       `/workspaces/${workspaceId}/chat/conversations/${conversationId}/tasks/${taskId}/respond`,
       {
         method: "POST",
         body: JSON.stringify(input),
       }
-    ).catch((error) => {
-      if (
-        error instanceof ApiError &&
-        error.status === 409 &&
-        isChatTaskResolveConflictResponse(error.details)
-      ) {
-        return error.details
-      }
-      throw error
-    })
+    )
+      .then((res) => res.data)
+      .catch((error) => {
+        if (
+          error instanceof ApiError &&
+          error.status === 409 &&
+          isChatTaskResolveConflictResponse(error.details)
+        ) {
+          return error.details
+        }
+        throw error
+      })
   }
 
-  updateChatConversationReadWatermark(
+  async updateChatConversationReadWatermark(
     workspaceId: string,
     conversationId: string,
     input: ChatConversationReadWatermarkInput
   ): Promise<ChatConversationReadWatermarkResponse> {
-    return this.request<ChatConversationReadWatermarkResponse>(
+    const res = await this.request<{
+      data: ChatConversationReadWatermarkResponse
+    }>(
       `/workspaces/${workspaceId}/chat/conversations/${conversationId}/read-watermark`,
       {
         method: "POST",
@@ -564,20 +586,22 @@ class ApiClient {
         }),
       }
     )
+    return res.data
   }
 
-  sendChatTypingState(
+  async sendChatTypingState(
     workspaceId: string,
     conversationId: string,
     state: "started" | "stopped"
   ) {
-    return this.request<{ broadcast: boolean }>(
+    const res = await this.request<{ data: { broadcast: boolean } }>(
       `/workspaces/${workspaceId}/chat/conversations/${conversationId}/typing`,
       { method: "POST", body: JSON.stringify({ state }) }
     )
+    return res.data
   }
 
-  registerChatPushToken(
+  async registerChatPushToken(
     workspaceId: string,
     input: {
       platform: "ios" | "android" | "web"
@@ -586,25 +610,28 @@ class ApiClient {
       metadata?: Record<string, unknown>
     }
   ) {
-    return this.request<{
-      token: { id: string; platform: string; createdAt: Timestamp }
+    const res = await this.request<{
+      data: { token: { id: string; platform: string; createdAt: Timestamp } }
     }>(`/workspaces/${workspaceId}/chat/push-tokens`, {
       method: "POST",
       body: JSON.stringify(input),
     })
+    return res.data
   }
 
-  listChatPushTokens(workspaceId: string) {
-    return this.request<{ tokens: Array<{ id: string; platform: string }> }>(
-      `/workspaces/${workspaceId}/chat/push-tokens`
-    )
+  async listChatPushTokens(workspaceId: string) {
+    const res = await this.request<{
+      data: { tokens: Array<{ id: string; platform: string }> }
+    }>(`/workspaces/${workspaceId}/chat/push-tokens`)
+    return res.data
   }
 
-  deleteChatPushToken(workspaceId: string, tokenId: string) {
-    return this.request<{ deleted: boolean }>(
+  async deleteChatPushToken(workspaceId: string, tokenId: string) {
+    const res = await this.request<{ data: { deleted: boolean } }>(
       `/workspaces/${workspaceId}/chat/push-tokens/${tokenId}`,
       { method: "DELETE" }
     )
+    return res.data
   }
 
   async uploadAsset(

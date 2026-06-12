@@ -4,6 +4,7 @@ import { serializeOptionalInstant } from "../../infrastructure/datetime.js"
 import { getFileUrlById } from "../files/service.js"
 import type {
   ActorRecord,
+  WorkspaceAccessKey,
   WorkspaceChiefActorPreferenceRow,
   WorkspaceListRow,
   WorkspaceMemberViewRow,
@@ -90,6 +91,40 @@ export function presentMemberRow(row: WorkspaceMemberViewRow) {
     trustLevel: deriveWorkspaceTrustLevel(row),
     accessKeys: Array.isArray(row.accessKeys) ? row.accessKeys : [],
     joinedAt: serializeOptionalInstant(row.joinedAt),
+  }
+}
+
+/**
+ * Workspace access binding view (app-facing). Owns the Date → IsoInstantString
+ * transform so the service builds the binding value without calling
+ * serializeInstant (guard-layering r3). `userId` plus the joined user/trust
+ * fields are supplied by the service's list query; the grant path omits them.
+ */
+export function presentAccessBindingRow(row: {
+  workspaceId: string
+  workspaceMemberId: string
+  userId: string
+  accessKey: WorkspaceAccessKey
+  assignedByWorkspaceMemberId: string | null
+  createdAt?: Date | null
+  updatedAt?: Date | null
+  trustLevel?: string | null
+  userName?: string | null
+  userEmail?: string | null
+  avatarUrl?: string | null
+}) {
+  return {
+    workspaceId: row.workspaceId,
+    workspaceMemberId: row.workspaceMemberId,
+    userId: row.userId,
+    accessKey: row.accessKey,
+    assignedByWorkspaceMemberId: row.assignedByWorkspaceMemberId,
+    createdAt: serializeOptionalInstant(row.createdAt),
+    updatedAt: serializeOptionalInstant(row.updatedAt),
+    ...(row.trustLevel !== undefined ? { trustLevel: row.trustLevel } : {}),
+    ...(row.userName !== undefined ? { userName: row.userName } : {}),
+    ...(row.userEmail !== undefined ? { userEmail: row.userEmail } : {}),
+    ...(row.avatarUrl !== undefined ? { avatarUrl: row.avatarUrl } : {}),
   }
 }
 

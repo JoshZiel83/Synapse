@@ -21,11 +21,19 @@ import {
 } from "@synapse/shared"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
+import { appRoute } from "../../infrastructure/http/route.js"
 import { requireRequestAction } from "../access/guards.js"
 import { workspaceMemberSubject } from "../access/service.js"
 import type { AccessAction } from "../access/actions.js"
 import * as service from "./service.js"
 import { presentActorVersionRow } from "./presenter.js"
+import {
+  ActorPackageInstallResultViewSchema,
+  ActorPackageRecordViewSchema,
+  ActorTreeNodeViewSchema,
+  ActorVersionViewSchema,
+  ActorViewSchema,
+} from "@synapse/shared/schemas"
 
 const actorDocKeys = new Set(
   ACTOR_DOC_TEMPLATES.map((template) => template.key)
@@ -168,131 +176,172 @@ export async function organizationController(app: FastifyInstance) {
   app.addHook("onRequest", authMiddleware)
   app.addHook("onRequest", workspaceMiddleware)
 
-  app.get("/", async (request, reply) => {
-    const { workspaceId } = request.params as WorkspaceParams
-    const actors = await service.listActors(
-      workspaceId,
-      workspaceMemberSubject((request as any).workspaceMember!.id)
-    )
-    return reply.send(actors)
-  })
-
-  app.get("/tree", async (request, reply) => {
-    const { workspaceId } = request.params as WorkspaceParams
-    const tree = await service.getFullOrgTree(
-      workspaceId,
-      workspaceMemberSubject((request as any).workspaceMember!.id)
-    )
-    return reply.send(tree)
-  })
-
-  app.get("/packages", async (request, reply) => {
-    const { workspaceId } = request.params as WorkspaceParams
-    const { search } = request.query as { search?: string }
-    const packages = await service.listActorPackages({ workspaceId, search })
-    return reply.send(packages)
-  })
-
-  app.get("/packages/:packageId", async (request, reply) => {
-    try {
-      const { workspaceId, packageId } = request.params as WorkspaceParams & {
-        packageId: string
-      }
-      const actorPackage = await service.getActorPackage(packageId, workspaceId)
-      return reply.send(actorPackage)
-    } catch (error) {
-      return reply.status(404).send({
-        error:
-          error instanceof Error ? error.message : "Actor package not found",
-      })
-    }
-  })
-
-  app.post("/packages/:packageId/install", async (request, reply) => {
-    const allowed = await requireWorkspacePermission(
-      request as FastifyRequest<{ Params: WorkspaceParams }>,
-      reply,
-      "workspace.manage_actors",
-      "Not allowed to manage actors"
-    )
-    if (!allowed) return
-
-    const parsed = installActorPackageSchema.safeParse(request.body)
-    if (!parsed.success) {
-      return reply.status(400).send({
-        error: "Validation failed",
-        details: formatValidationDetails(parsed.error),
-      })
-    }
-
-    try {
-      const { workspaceId, packageId } = request.params as WorkspaceParams & {
-        packageId: string
-      }
-      const result = await service.installActorPackage({
+  appRoute(
+    app,
+    "GET",
+    "/",
+    { schema: z.array(ActorViewSchema) },
+    async (request) => {
+      const { workspaceId } = request.params as WorkspaceParams
+      return service.listActors(
         workspaceId,
-        packageId,
-        createdByWorkspaceMemberId: (request as any).workspaceMember!.id,
-        displayName: parsed.data.displayName,
-        title: parsed.data.title,
-        parentId: parsed.data.parentId,
-        syncMode: parsed.data.syncMode,
-        grants: parsed.data.grants?.map((grant) => ({
-          target: toCapabilityAccessTarget(grant.target),
-          permissions: grant.permissions as WorkspaceAppGrantPermission[],
-          conversationTypeMaskOverride:
-            grant.conversationTypeMaskOverride ?? null,
-          reason: grant.reason,
-        })),
-      })
-      return reply.status(201).send(result)
-    } catch (error) {
-      return reply.status(400).send({
-        error:
-          error instanceof Error
-            ? error.message
-            : "Failed to install actor package",
-      })
+        workspaceMemberSubject((request as any).workspaceMember!.id)
+      )
     }
-  })
+  )
 
-  app.get("/:actorId/versions", async (request, reply) => {
-    const { workspaceId, actorId } = request.params as WorkspaceParams & {
-      actorId: string
+  appRoute(
+    app,
+    "GET",
+    "/tree",
+    { schema: z.array(ActorTreeNodeViewSchema) },
+    async (request) => {
+      const { workspaceId } = request.params as WorkspaceParams
+      return service.getFullOrgTree(
+        workspaceId,
+        workspaceMemberSubject((request as any).workspaceMember!.id)
+      )
     }
-    const allowed = await requireActorPermission(
-      request,
-      reply,
-      actorId,
-      "actor.view",
-      "Not allowed to view this actor"
-    )
-    if (!allowed) return
+  )
 
-    const versions = await service.listActorVersions(actorId, workspaceId)
-    return reply.send(
-      versions.map(({ row, docs }) => presentActorVersionRow(row, docs))
-    )
-  })
-
-  app.get("/:actorId", async (request, reply) => {
-    const { workspaceId, actorId } = request.params as WorkspaceParams & {
-      actorId: string
+  appRoute(
+    app,
+    "GET",
+    "/packages",
+    { schema: z.array(ActorPackageRecordViewSchema) },
+    async (request) => {
+      const { workspaceId } = request.params as WorkspaceParams
+      const { search } = request.query as { search?: string }
+      return service.listActorPackages({ workspaceId, search })
     }
-    const allowed = await requireActorPermission(
-      request,
-      reply,
-      actorId,
-      "actor.view",
-      "Not allowed to view this actor"
-    )
-    if (!allowed) return
+  )
 
-    const actor = await service.getActor(actorId, workspaceId)
-    if (!actor) {
-      return reply.status(404).send({ error: "Actor not found" })
+  appRoute(
+    app,
+    "GET",
+    "/packages/:packageId",
+    { schema: ActorPackageRecordViewSchema },
+    async (request, reply) => {
+      try {
+        const { workspaceId, packageId } = request.params as WorkspaceParams & {
+          packageId: string
+        }
+        return await service.getActorPackage(packageId, workspaceId)
+      } catch (error) {
+        reply.status(404).send({
+          error:
+            error instanceof Error ? error.message : "Actor package not found",
+        })
+        return undefined
+      }
     }
+  )
 
-    return reply.send(actor)
-  })
+  appRoute(
+    app,
+    "POST",
+    "/packages/:packageId/install",
+    { schema: ActorPackageInstallResultViewSchema },
+    async (request, reply) => {
+      const allowed = await requireWorkspacePermission(
+        request as FastifyRequest<{ Params: WorkspaceParams }>,
+        reply,
+        "workspace.manage_actors",
+        "Not allowed to manage actors"
+      )
+      if (!allowed) return undefined
+
+      const parsed = installActorPackageSchema.safeParse(request.body)
+      if (!parsed.success) {
+        reply.status(400).send({
+          error: "Validation failed",
+          details: formatValidationDetails(parsed.error),
+        })
+        return undefined
+      }
+
+      try {
+        const { workspaceId, packageId } = request.params as WorkspaceParams & {
+          packageId: string
+        }
+        const result = await service.installActorPackage({
+          workspaceId,
+          packageId,
+          createdByWorkspaceMemberId: (request as any).workspaceMember!.id,
+          displayName: parsed.data.displayName,
+          title: parsed.data.title,
+          parentId: parsed.data.parentId,
+          syncMode: parsed.data.syncMode,
+          grants: parsed.data.grants?.map((grant) => ({
+            target: toCapabilityAccessTarget(grant.target),
+            permissions: grant.permissions as WorkspaceAppGrantPermission[],
+            conversationTypeMaskOverride:
+              grant.conversationTypeMaskOverride ?? null,
+            reason: grant.reason,
+          })),
+        })
+        reply.status(201)
+        return result
+      } catch (error) {
+        reply.status(400).send({
+          error:
+            error instanceof Error
+              ? error.message
+              : "Failed to install actor package",
+        })
+        return undefined
+      }
+    }
+  )
+
+  appRoute(
+    app,
+    "GET",
+    "/:actorId/versions",
+    { schema: z.array(ActorVersionViewSchema) },
+    async (request, reply) => {
+      const { workspaceId, actorId } = request.params as WorkspaceParams & {
+        actorId: string
+      }
+      const allowed = await requireActorPermission(
+        request,
+        reply,
+        actorId,
+        "actor.view",
+        "Not allowed to view this actor"
+      )
+      if (!allowed) return undefined
+
+      const versions = await service.listActorVersions(actorId, workspaceId)
+      return versions.map(({ row, docs }) => presentActorVersionRow(row, docs))
+    }
+  )
+
+  appRoute(
+    app,
+    "GET",
+    "/:actorId",
+    { schema: ActorViewSchema },
+    async (request, reply) => {
+      const { workspaceId, actorId } = request.params as WorkspaceParams & {
+        actorId: string
+      }
+      const allowed = await requireActorPermission(
+        request,
+        reply,
+        actorId,
+        "actor.view",
+        "Not allowed to view this actor"
+      )
+      if (!allowed) return undefined
+
+      const actor = await service.getActor(actorId, workspaceId)
+      if (!actor) {
+        reply.status(404).send({ error: "Actor not found" })
+        return undefined
+      }
+
+      return actor
+    }
+  )
 }

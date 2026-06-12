@@ -21,6 +21,7 @@ import { markWorkspaceDeleted } from "../soft-delete/orchestration.js"
 import { insertWorkspaceAppRoot } from "../workspace-apps/root-storage.js"
 import {
   deriveWorkspaceTrustLevel,
+  presentAccessBindingRow,
   presentMemberRow,
   presentWorkspaceChiefActorPreferenceRow,
 } from "./presenter.js"
@@ -785,19 +786,21 @@ export async function listWorkspaceAccessBindings(workspaceId: string) {
     .orderBy("wab.createdAt", "asc")
     .execute()
 
-  return rows.map((row) => ({
-    workspaceId: row.workspaceId,
-    workspaceMemberId: row.workspaceMemberId,
-    userId: row.userId,
-    accessKey: row.accessKey as WorkspaceAccessKey,
-    assignedByWorkspaceMemberId: row.assignedByWorkspaceMemberId ?? null,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-    trustLevel: deriveWorkspaceTrustLevel(row),
-    userName: row.userName,
-    userEmail: row.userEmail,
-    avatarUrl: row.avatarFileId ? getFileUrlById(row.avatarFileId) : null,
-  }))
+  return rows.map((row) =>
+    presentAccessBindingRow({
+      workspaceId: row.workspaceId,
+      workspaceMemberId: row.workspaceMemberId,
+      userId: row.userId,
+      accessKey: row.accessKey as WorkspaceAccessKey,
+      assignedByWorkspaceMemberId: row.assignedByWorkspaceMemberId ?? null,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      trustLevel: deriveWorkspaceTrustLevel(row),
+      userName: row.userName,
+      userEmail: row.userEmail,
+      avatarUrl: row.avatarFileId ? getFileUrlById(row.avatarFileId) : null,
+    })
+  )
 }
 
 export async function grantWorkspaceAccess(input: {
@@ -847,7 +850,7 @@ export async function grantWorkspaceAccess(input: {
     throw new Error("Access already granted")
   }
 
-  return {
+  return presentAccessBindingRow({
     workspaceId: membership.workspaceId,
     workspaceMemberId: row.workspaceMemberId,
     userId: membership.userId,
@@ -855,7 +858,7 @@ export async function grantWorkspaceAccess(input: {
     assignedByWorkspaceMemberId: row.assignedByWorkspaceMemberId ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
-  }
+  })
 }
 
 export async function revokeWorkspaceAccess(

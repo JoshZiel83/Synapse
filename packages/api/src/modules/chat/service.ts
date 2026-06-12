@@ -5853,7 +5853,7 @@ export async function removeChatConversationParticipant(params: {
     return {
       conversationId: params.conversationId,
       participantId: target.id,
-      state: isSelfRemoval ? "left" : "removed",
+      state: (isSelfRemoval ? "left" : "removed") as "left" | "removed",
     }
   })
 }

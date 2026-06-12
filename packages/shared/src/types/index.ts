@@ -4510,6 +4510,16 @@ export type {
   WorkspaceInviteRedeemResult,
 } from "../schemas/workspace-invites.js"
 export type {
+  WorkspaceView,
+  WorkspaceListItemView,
+  WorkspaceCreateResultView,
+  WorkspaceMemberView,
+  WorkspaceAccessBindingView,
+  WorkspaceNavigationView,
+  WorkspaceChiefActorPreferenceView,
+  WorkspaceCapabilityConversationTypePoliciesViewSchemaType,
+} from "../schemas/workspace.js"
+export type {
   UserProfileView,
   AuthSessionSummaryView,
   AuthMeView,
@@ -4540,6 +4550,13 @@ export type {
   ActorModelGroupAssignmentView,
   ModelGroupItemVersionView,
 } from "../schemas/model-groups.js"
+export type {
+  ActorView,
+  ActorTreeNodeView,
+  ActorVersionView,
+  ActorPackageRecordView,
+  ActorPackageInstallResultView,
+} from "../schemas/organization.js"
 export type {
   PluginAuthorizationView,
   MarketplacePluginCategoryView,
@@ -4606,3 +4623,28 @@ export type {
   DingtalkDeviceFlowStartResponseSchemaType,
   DingtalkDeviceFlowPollResponseSchemaType,
 } from "../schemas/im.js"
+export type {
+  WorkspaceAppViewSchemaType,
+  WorkspaceAppGrantViewSchemaType,
+  WorkspaceAppGrantRequestViewSchemaType,
+} from "../schemas/workspace-apps.js"
+export type {
+  ChatBootstrapViewSchemaType,
+  ChatSyncViewSchemaType,
+  ChatClientInstanceViewSchemaType,
+  ChatConversationEnvelopeViewSchemaType,
+  ChatConversationListViewSchemaType,
+  ChatConversationMessagesViewSchemaType,
+  ChatRuntimeTurnDetailViewSchemaType,
+  ChatSendMessageViewSchemaType,
+  ChatReadWatermarkViewSchemaType,
+  ChatParticipantRemovalViewSchemaType,
+  ChatPushTokenRegistrationViewSchemaType,
+  ChatPushTokenListViewSchemaType,
+  ChatPushTokenDeleteViewSchemaType,
+  ChatTypingBroadcastViewSchemaType,
+  ChatMessageRetryViewSchemaType,
+  ChatTaskRespondViewSchemaType,
+  ChatDedupCountersViewSchemaType,
+  ChatRealtimeOutboxGcViewSchemaType,
+} from "../schemas/chat.js"
