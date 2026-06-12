@@ -1,14 +1,6 @@
 import type { FastifyInstance } from "fastify"
 import { ZodError, z } from "zod"
-import {
-  CHAT_TYPING_STATES,
-  CONVERSATION_KINDS,
-  TASK_DECISIONS,
-  PLAN_APPROVAL_DECISIONS,
-  PUSH_TOKEN_PLATFORMS,
-  RUNTIME_AUTHORIZATION_PRESETS,
-} from "@synapse/shared"
-import { CanonicalContentBlockSchema } from "@synapse/shared/schemas"
+import { TASK_DECISIONS } from "@synapse/shared"
 import {
   ChatBootstrapViewSchema,
   ChatClientInstanceViewSchema,
@@ -28,6 +20,17 @@ import {
   ChatSyncViewSchema,
   ChatTaskRespondViewSchema,
   ChatTypingBroadcastViewSchema,
+  ChatConversationCreateInputSchema,
+  ChatClientInstanceRegistrationInputSchema,
+  ChatConversationMessagesQuerySchema,
+  ChatConversationPatchInputSchema,
+  ChatAddParticipantsInputSchema,
+  ChatPushTokenRegistrationInputSchema,
+  ChatTypingInputSchema,
+  ChatSyncQuerySchema,
+  ChatSendMessageInputSchema,
+  ChatReadWatermarkInputSchema,
+  ChatTaskResolveInputSchema,
 } from "@synapse/shared/schemas"
 import { appRoute } from "../../infrastructure/http/route.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
@@ -76,161 +79,30 @@ import { isPlatformSuperAdmin } from "../platform/admin-service.js"
 
 const CHAT_BASE_PATH = "/api/v1/workspaces/:workspaceId/chat"
 
-const jsonRecordSchema = z.record(z.string(), z.any()).optional()
+// App-facing request bodies / queries live in @synapse/shared (§5.1.1) so the
+// API parser and the web/mobile clients share one definition (this replaced the
+// controller-local zod schemas + the hand-written ChatXxxRequest interfaces
+// that had drifted as two tracks). The strictObject create/add-participants
+// schemas keep their legacy-field-rejecting behavior in the shared definition.
+const createConversationSchema = ChatConversationCreateInputSchema
+const registerClientInstanceSchema = ChatClientInstanceRegistrationInputSchema
+const conversationMessagesQuerySchema = ChatConversationMessagesQuerySchema
+const patchConversationSchema = ChatConversationPatchInputSchema
+const addParticipantsSchema = ChatAddParticipantsInputSchema
+const pushTokenSchema = ChatPushTokenRegistrationInputSchema
+const typingSchema = ChatTypingInputSchema
+const syncQuerySchema = ChatSyncQuerySchema
+const sendMessageSchema = ChatSendMessageInputSchema
+const readWatermarkSchema = ChatReadWatermarkInputSchema
+const resolveTaskSchema = ChatTaskResolveInputSchema
 
-// CanonicalContentBlock zod is owned by @synapse/shared so any future
-// consumer (ingest CLI, device-runtime, etc.) validates against the same
-// shape the chat HTTP API enforces here.
-const canonicalContentBlockSchema = CanonicalContentBlockSchema
-
-// strictObject so legacy clients sending the removed `boundary` /
-// `externalParticipants` fields get a clean 400 instead of having them silently
-// stripped (zod's default object strips unknown keys). External participants are
-// created only by the IM ingest path now; IM-ness is derived from the transport
-// binding, never passed at create time.
-const createConversationSchema = z.strictObject({
-  clientRequestId: chatUuidSchema,
-  kind: z.enum(CONVERSATION_KINDS),
-  title: z.string().trim().min(1).max(255).optional(),
-  workspaceMemberIds: z.array(chatUuidSchema).optional().default([]),
-  actorIds: z.array(chatUuidSchema).optional().default([]),
-  remoteAgentIds: z.array(chatUuidSchema).optional().default([]),
-  metadata: jsonRecordSchema,
-})
-
-const registerClientInstanceSchema = z.object({
-  platform: z.string().trim().min(1).max(64).optional(),
-  deviceLabel: z.string().trim().min(1).max(255).optional(),
-  metadata: jsonRecordSchema,
-})
-
-const conversationMessagesQuerySchema = z
-  .object({
-    afterSequence: z.coerce.number().int().min(0).optional(),
-    beforeSequence: z.coerce.number().int().min(0).optional(),
-    limit: z.coerce.number().int().min(1).max(200).optional(),
-    clientInstanceId: chatUuidSchema,
-  })
-  .refine(
-    (value) =>
-      !(
-        typeof value.afterSequence === "number" &&
-        typeof value.beforeSequence === "number"
-      ),
-    {
-      message: "afterSequence and beforeSequence cannot both be provided",
-    }
-  )
-
-const patchConversationSchema = z
-  .object({
-    title: z.string().trim().min(1).max(255).nullable().optional(),
-    metadata: jsonRecordSchema,
-  })
-  .refine(
-    (value) => value.title !== undefined || value.metadata !== undefined,
-    { message: "At least one of title or metadata must be provided" }
-  )
-
-const addParticipantsSchema = z
-  .strictObject({
-    workspaceMemberIds: z.array(chatUuidSchema).optional().default([]),
-    actorIds: z.array(chatUuidSchema).optional().default([]),
-    remoteAgentIds: z.array(chatUuidSchema).optional().default([]),
-  })
-  .refine(
-    (value) =>
-      value.workspaceMemberIds.length +
-        value.actorIds.length +
-        value.remoteAgentIds.length >
-      0,
-    { message: "At least one participant identifier is required" }
-  )
-
+// Path-param validator (:workspaceId/:conversationId/:participantId) — not a
+// body DTO, stays local.
 const removeParticipantParamsSchema = z.object({
   workspaceId: chatUuidSchema,
   conversationId: chatUuidSchema,
   participantId: chatUuidSchema,
 })
-
-const pushTokenSchema = z.object({
-  platform: z.enum(PUSH_TOKEN_PLATFORMS),
-  token: z.string().trim().min(1).max(2048),
-  deviceLabel: z.string().trim().min(1).max(255).optional(),
-  metadata: jsonRecordSchema,
-})
-
-const typingSchema = z.object({
-  state: z.enum(CHAT_TYPING_STATES),
-})
-
-const syncQuerySchema = z.object({
-  cursor: z.coerce.number().int().min(0).optional(),
-  limit: z.coerce.number().int().min(1).max(500).optional(),
-})
-
-const sendMessageSchema = z.object({
-  contentBlocks: z.array(canonicalContentBlockSchema).min(1),
-  clientMessageId: chatUuidSchema,
-  replyToItemId: chatUuidSchema.optional(),
-  clientInstanceId: chatUuidSchema,
-  metadata: jsonRecordSchema,
-})
-
-const readWatermarkSchema = z.object({
-  readUpToSequence: z.number().int().min(0),
-  lastVisibleSequence: z.number().int().min(0).optional(),
-  clientInstanceId: chatUuidSchema,
-})
-
-const taskAnswerSchema = z.object({
-  questionId: z.string().trim().min(1),
-  selectedOptionIds: z.array(z.string().trim().min(1)).optional(),
-  otherText: z.string().trim().optional(),
-  text: z.string().trim().optional(),
-})
-
-const resolveTaskCommandSchema = z.object({
-  commandId: chatUuidSchema,
-  baseRevision: z.number().int().min(1),
-})
-
-const resolveTaskUserInputSchema = resolveTaskCommandSchema
-  .extend({
-    answers: z.array(taskAnswerSchema).min(1),
-    note: z.string().trim().optional(),
-  })
-  .strict()
-
-const resolveTaskPlanApprovalSchema = resolveTaskCommandSchema
-  .extend({
-    decision: z.enum(PLAN_APPROVAL_DECISIONS),
-    note: z.string().trim().optional(),
-  })
-  .strict()
-
-const resolveTaskRuntimeAuthorizationApproveSchema = resolveTaskCommandSchema
-  .extend({
-    decision: z.literal(TASK_DECISIONS[0]),
-    preset: z.enum(RUNTIME_AUTHORIZATION_PRESETS),
-    selectedGrantOptionId: z.string().trim().min(1),
-    note: z.string().trim().optional(),
-  })
-  .strict()
-
-const resolveTaskRuntimeAuthorizationRejectSchema = resolveTaskCommandSchema
-  .extend({
-    decision: z.literal(TASK_DECISIONS[1]),
-    note: z.string().trim().optional(),
-  })
-  .strict()
-
-const resolveTaskSchema = z.union([
-  resolveTaskUserInputSchema,
-  resolveTaskPlanApprovalSchema,
-  resolveTaskRuntimeAuthorizationApproveSchema,
-  resolveTaskRuntimeAuthorizationRejectSchema,
-])
 
 function getRequestUserId(request: any) {
   return (request as any).user!.userId as string
