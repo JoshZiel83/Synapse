@@ -594,7 +594,9 @@ export default async function imDingtalkController(
         reply.status(outcome.status).send(outcome.body)
         return
       }
-      return outcome.body as { session: unknown }
+      // status===200 ⇒ body is the success variant (DingtalkDeviceFlowPollResponse);
+      // status is not a discriminant of the body union, so narrow explicitly.
+      return outcome.body as DingtalkDeviceFlowPollResponse
     }
   )
 
