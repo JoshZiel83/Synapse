@@ -14,8 +14,13 @@
 //   r2_tablerow_outside_repo     : only repo*.ts / repo.types.ts may use
 //       TableRow< / TableInsert< / TableUpdate< (the kysely alias). service /
 //       controller / helper files must take repo.types records instead.
-//   r3_serializeinstant_in_layer : service.ts / controller*.ts must not call
-//       serializeInstant / serializeOptionalInstant (presenter / infra only).
+//   r3_serializeinstant_in_layer : time-serialization (serializeInstant /
+//       serializeOptionalInstant) is allowed ONLY in presenter*.ts (Date→ISO is
+//       the presenter's job) — NOT in controllers, services, connectors, infra
+//       helpers, runtime files, etc. repo*.ts is excluded here because the repo
+//       still emits ISO strings; converting repo to emit Date is tracked under
+//       P1-7. Broadened in round-6 P1-9 from the old service*/controller* match,
+//       which missed controller/dingtalk.ts, parse-service.ts, runtime.ts, …
 //   r4_maprow_outside_repo       : map*Row / normalize*Row defs only in repo*.ts.
 //   r5_bare_route_in_mixed       : mixed (Tier C) modules must register routes
 //       via appRoute()/wireRoute() (or split *.app.ts/*.wire.ts), never bare
@@ -52,8 +57,16 @@ function walk(dir, out = []) {
 }
 
 const isRepo = (p) => /(^|\/)repo[^/]*\.ts$|(^|\/)repo\.types\.ts$/.test(p)
-const isServiceOrCtrl = (p) =>
-  /(^|\/)service[^/]*\.ts$|(^|\/)controller[^/]*\.ts$/.test(p)
+const isPresenter = (p) => /(^|\/)presenter[^/]*\.ts$/.test(p)
+// r3 (time-serialization boundary) applies to every module file EXCEPT
+// presenters (the legitimate home for Date→ISO) and repo*.ts (repo currently
+// emits ISO strings; converting it to emit Date is tracked under P1-7, so repo
+// is excluded here to avoid double-counting that migration). This catches the
+// round-6 P1-9 leak: serializeInstant in controller/dingtalk.ts, parse-service.ts,
+// service/repo.ts, runtime.ts, etc. — files the old `service*/controller*`
+// filename match missed. Baseline-ratcheted: existing offenders are
+// grandfathered; new ones fail.
+const isTimeSerializationLayer = (p) => !isPresenter(p) && !isRepo(p)
 
 // §7 Tier C mixed modules (app + wire in one module). Their route
 // registrations must go through the §5.3 appRoute()/wireRoute() markers (or a
@@ -88,7 +101,7 @@ const RULES = [
   },
   {
     id: "r3_serializeinstant_in_layer",
-    appliesTo: isServiceOrCtrl,
+    appliesTo: isTimeSerializationLayer,
     test: (src) => /\bserialize(Optional)?Instant\s*\(/.test(src),
   },
   {

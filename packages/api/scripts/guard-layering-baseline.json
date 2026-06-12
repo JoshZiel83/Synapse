@@ -1,7 +1,15 @@
 {
   "r1_generated_db_outside_repo": [],
   "r2_tablerow_outside_repo": [],
-  "r3_serializeinstant_in_layer": [],
+  "r3_serializeinstant_in_layer": [
+    "packages/api/src/modules/access/bindings.ts",
+    "packages/api/src/modules/files/parse-service.ts",
+    "packages/api/src/modules/im/connectors/weixin/qr-login.ts",
+    "packages/api/src/modules/im/controller/dingtalk.ts",
+    "packages/api/src/modules/im/integration/actor-status-hooks.ts",
+    "packages/api/src/modules/mcp-plugins/plugin-auth-connections.ts",
+    "packages/api/src/modules/session/runtime.ts"
+  ],
   "r4_maprow_outside_repo": [],
   "r5_bare_route_in_mixed": [],
   "r7_dual_naming": []
