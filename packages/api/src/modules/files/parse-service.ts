@@ -6,14 +6,15 @@ import type {
 } from "@synapse/shared/types"
 import { parseJsonObjectOrUndefined as parseJsonObject } from "@synapse/shared"
 import { db } from "../../infrastructure/database/kysely.js"
-import {
-  requireInstantDate,
-  serializeInstant,
-  serializeOptionalInstant,
-} from "../../infrastructure/datetime.js"
 import { fileParsingQueue } from "../../workers/queues.js"
 import { extractImageOcrText } from "../ai/image-fallback.js"
 import { getFileDetail, getFileRecord, readFileBufferById } from "./service.js"
+import {
+  presentFileParseOutput,
+  presentFileParseRun,
+  type FileParseRunRow as ParseRunRow,
+  type FileParseOutputRow as ParseOutputRow,
+} from "./presenter.js"
 
 const localRequire = createRequire(import.meta.url)
 
@@ -54,32 +55,8 @@ type ParseStrategy =
       errorMessage: string
     }
 
-type ParseRunRow = {
-  id: string
-  assetId: string
-  pipeline: string
-  parserKey: string
-  parserVersion: string | null
-  trigger: string
-  status: FileParseRunView["status"]
-  errorCode: string | null
-  errorMessage: string | null
-  createdAt: Date | null
-  startedAt: Date | null
-  finishedAt: Date | null
-}
-
-type ParseOutputRow = {
-  id: string
-  runId: string
-  outputKind: FileParseOutputView["outputKind"]
-  role: string
-  isPrimary: boolean
-  textContent: string | null
-  structuredJson: unknown
-  derivedAssetId: string | null
-  createdAt: Date | null
-}
+// ParseRunRow / ParseOutputRow types + their row→View presenters live in
+// ./presenter.ts (round-6 P1-7) and are imported above as aliases.
 
 function isTextLikeMimeType(mimeType: string): boolean {
   return (
@@ -245,24 +222,14 @@ async function listParseOutputsForRuns(
     if (!grouped.has(row.runId)) {
       grouped.set(row.runId, [])
     }
-    grouped.get(row.runId)!.push({
-      id: row.id,
-      outputKind: row.outputKind,
-      role: row.role,
-      isPrimary: row.isPrimary,
-      textContent: row.textContent ?? undefined,
-      structuredJson: parseJsonObject(row.structuredJson),
-      derivedFileId: row.derivedAssetId,
-      derivedFile: row.derivedAssetId
-        ? derivedFiles.get(row.derivedAssetId)
-        : undefined,
-      createdAt: serializeInstant(
-        requireInstantDate(
-          row.createdAt,
-          `file_parse_outputs.${row.id}.created_at`
+    grouped
+      .get(row.runId)!
+      .push(
+        presentFileParseOutput(
+          row,
+          row.derivedAssetId ? derivedFiles.get(row.derivedAssetId) : undefined
         )
-      ),
-    })
+      )
   }
 
   return grouped
@@ -270,23 +237,7 @@ async function listParseOutputsForRuns(
 
 async function presentParseRun(row: ParseRunRow): Promise<FileParseRunView> {
   const outputsByRunId = await listParseOutputsForRuns([row.id])
-  return {
-    id: row.id,
-    fileId: row.assetId,
-    pipeline: row.pipeline,
-    parserKey: row.parserKey,
-    parserVersion: row.parserVersion,
-    trigger: row.trigger,
-    status: row.status,
-    errorCode: row.errorCode,
-    errorMessage: row.errorMessage,
-    createdAt: serializeInstant(
-      requireInstantDate(row.createdAt, `file_parse_runs.${row.id}.created_at`)
-    ),
-    startedAt: serializeOptionalInstant(row.startedAt) ?? null,
-    finishedAt: serializeOptionalInstant(row.finishedAt) ?? null,
-    outputs: outputsByRunId.get(row.id) || [],
-  }
+  return presentFileParseRun(row, outputsByRunId.get(row.id) || [])
 }
 
 export async function enqueueFileParse(params: {

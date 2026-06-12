@@ -1,8 +1,15 @@
 import {
   requireInstantDate,
   serializeInstant,
+  serializeOptionalInstant,
 } from "../../infrastructure/datetime.js"
-import { parseJsonObject, type FileRecordView } from "@synapse/shared"
+import {
+  parseJsonObject,
+  parseJsonObjectOrUndefined,
+  type FileRecordView,
+  type FileParseOutputView,
+  type FileParseRunView,
+} from "@synapse/shared"
 import {
   getStableFileUrl,
   getStableFullFileUrl,
@@ -56,5 +63,88 @@ export function presentFileAsset(row: FileJoinRow): StoredFileRecord {
     createdAt: serializeInstant(
       requireInstantDate(row.createdAt, `file_assets.${row.id}.created_at`)
     ),
+  }
+}
+
+// ─────────────────────────── file-parse presenters ───────────────────────────
+// round-6 P1-7: the Date→ISO serialization for file-parse runs/outputs lives
+// here (presenter), not in parse-service.ts (guard r3). The service still owns
+// the DB reads + derived-file resolution; it hands these pure row→View
+// transforms the already-read rows.
+
+/** A file_parse_runs row (Dates kept) handed to presentFileParseRun. */
+export type FileParseRunRow = {
+  id: string
+  assetId: string
+  pipeline: string
+  parserKey: string
+  parserVersion: string | null
+  trigger: string
+  status: FileParseRunView["status"]
+  errorCode: string | null
+  errorMessage: string | null
+  createdAt: Date | null
+  startedAt: Date | null
+  finishedAt: Date | null
+}
+
+/** A file_parse_outputs row (Dates kept) handed to presentFileParseOutput. */
+export type FileParseOutputRow = {
+  id: string
+  runId: string
+  outputKind: FileParseOutputView["outputKind"]
+  role: string
+  isPrimary: boolean
+  textContent: string | null
+  structuredJson: unknown
+  derivedAssetId: string | null
+  createdAt: Date | null
+}
+
+/** Present a single parse-output row as its app View. `derivedFile` is resolved
+ * by the caller (it needs a DB read) and injected so this stays pure. */
+export function presentFileParseOutput(
+  row: FileParseOutputRow,
+  derivedFile?: FileRecordView
+): FileParseOutputView {
+  return {
+    id: row.id,
+    outputKind: row.outputKind,
+    role: row.role,
+    isPrimary: row.isPrimary,
+    textContent: row.textContent ?? undefined,
+    structuredJson: parseJsonObjectOrUndefined(row.structuredJson),
+    derivedFileId: row.derivedAssetId,
+    derivedFile: row.derivedAssetId ? derivedFile : undefined,
+    createdAt: serializeInstant(
+      requireInstantDate(
+        row.createdAt,
+        `file_parse_outputs.${row.id}.created_at`
+      )
+    ),
+  }
+}
+
+/** Present a parse-run row as its app View. `outputs` are already presented. */
+export function presentFileParseRun(
+  row: FileParseRunRow,
+  outputs: FileParseOutputView[]
+): FileParseRunView {
+  return {
+    id: row.id,
+    fileId: row.assetId,
+    pipeline: row.pipeline,
+    parserKey: row.parserKey,
+    parserVersion: row.parserVersion,
+    trigger: row.trigger,
+    status: row.status,
+    errorCode: row.errorCode,
+    errorMessage: row.errorMessage,
+    createdAt: serializeInstant(
+      requireInstantDate(row.createdAt, `file_parse_runs.${row.id}.created_at`)
+    ),
+    startedAt: serializeOptionalInstant(row.startedAt) ?? null,
+    finishedAt: serializeOptionalInstant(row.finishedAt) ?? null,
+    outputs,
   }
 }

@@ -2,7 +2,6 @@
   "r1_generated_db_outside_repo": [],
   "r2_tablerow_outside_repo": [],
   "r3_serializeinstant_in_layer": [
-    "packages/api/src/modules/files/parse-service.ts",
     "packages/api/src/modules/im/connectors/weixin/qr-login.ts",
     "packages/api/src/modules/im/integration/actor-status-hooks.ts",
     "packages/api/src/modules/mcp-plugins/plugin-auth-connections.ts",
