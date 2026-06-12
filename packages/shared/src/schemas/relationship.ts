@@ -1,8 +1,12 @@
 import { z } from "zod"
 import {
+  CONTACT_DIRECT_STATES,
   CONTACT_HUB_KINDS,
+  CONTACT_TARGET_TYPES,
   DIRECT_CONVERSATION_OPEN_STATUSES,
+  IDENTITY_SEARCH_MATCH_STATES,
   IDENTITY_SEARCH_OUTCOMES,
+  REMOTE_AGENT_RUNTIME_KINDS,
   RELATIONSHIP_APPROVAL_MODES,
   RELATIONSHIP_PROFILE_SUBJECT_TYPES,
   RELATIONSHIP_SCAN_OUTCOMES,
@@ -14,13 +18,136 @@ import {
  * response value is wrapped through `appRoute` → `sendData` → `{ data: ... }`.
  * These schemas describe the value each handler returns (the helper wraps it).
  *
- * Top-level discriminant / scalar fields are modeled explicitly. Deeply-nested
- * presentation views (contact-hub entries, identity-search matches, request
- * views, conversation summaries, raw grant-request rows) are genuinely-open
- * shapes the presenter/service already own, so they are modeled as `z.unknown()`
- * / open records — the boundary only needs to round-trip them unchanged, not
- * re-validate their interior.
+ * round-6 P1-4: the interior presentation views (contact-hub entries,
+ * identity-search matches, friend/actor/remote-agent request views, the
+ * member/actor/remote-agent summaries they embed) are now modeled as real Zod
+ * here — they were `z.unknown()`. The presenter builds them from joined rows
+ * (relationship/presenter.ts present*), so a closed schema validates casing +
+ * catches a raw-Date leak via IsoInstantStringSchema.
  */
+
+// ─────────────────────────── interior view shapes ────────────────────────────
+
+/** Minimal workspace summary embedded in every relationship view. */
+export const RelationshipWorkspaceSummarySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  slug: z.string(),
+})
+
+export const RelationshipMemberSummaryViewSchema = z.object({
+  workspace: RelationshipWorkspaceSummarySchema,
+  workspaceMemberId: z.string(),
+  userId: z.string(),
+  name: z.string(),
+  email: z.string(),
+  avatarFileId: z.string().nullable().optional(),
+  trustLevel: z.string().optional(),
+})
+
+export const RelationshipActorSummaryViewSchema = z.object({
+  workspace: RelationshipWorkspaceSummarySchema,
+  actorId: z.string(),
+  displayName: z.string(),
+  title: z.string(),
+  role: z.string(),
+  avatarFileId: z.string().nullable().optional(),
+  avatarEmoji: z.string().nullable().optional(),
+  requiresContactApproval: z.boolean(),
+  isPublicShared: z.boolean(),
+})
+
+export const RelationshipRemoteAgentSummaryViewSchema = z.object({
+  workspace: RelationshipWorkspaceSummarySchema,
+  remoteAgentId: z.string(),
+  displayName: z.string(),
+  title: z.string(),
+  runtimeKind: z.enum(REMOTE_AGENT_RUNTIME_KINDS),
+  avatarFileId: z.string().nullable().optional(),
+  avatarEmoji: z.string().nullable().optional(),
+  requiresContactApproval: z.boolean(),
+  isPublicShared: z.boolean(),
+})
+
+/** Contact-hub entry direct-state block. */
+export const ContactHubDirectStateSchema = z.object({
+  status: z.enum(CONTACT_DIRECT_STATES),
+  conversationId: z.string().optional(),
+})
+
+/** A single contact-hub entry (presented). */
+export const ContactHubEntryViewSchema = z.object({
+  kind: z.enum(CONTACT_HUB_KINDS),
+  id: z.string(),
+  targetType: z.enum(CONTACT_TARGET_TYPES),
+  title: z.string(),
+  subtitle: z.string().optional(),
+  avatarUrl: z.string().optional(),
+  avatarEmoji: z.string().optional(),
+  workspace: RelationshipWorkspaceSummarySchema,
+  workspaceMemberId: z.string().optional(),
+  userId: z.string().optional(),
+  actorId: z.string().optional(),
+  remoteAgentId: z.string().optional(),
+  relationLabel: z.string(),
+  directState: ContactHubDirectStateSchema,
+})
+
+/** A reference to a contact-hub entry ({ kind, id }). */
+export const ContactHubEntryRefSchema = z.object({
+  kind: z.enum(CONTACT_HUB_KINDS),
+  id: z.string(),
+})
+
+/** A single identity-search match (presented). */
+export const IdentitySearchMatchViewSchema = z.object({
+  profileId: z.string(),
+  targetType: z.enum(CONTACT_TARGET_TYPES),
+  title: z.string(),
+  subtitle: z.string().optional(),
+  avatarUrl: z.string().optional(),
+  avatarEmoji: z.string().optional(),
+  workspace: RelationshipWorkspaceSummarySchema,
+  workspaceMemberId: z.string().optional(),
+  userId: z.string().optional(),
+  actorId: z.string().optional(),
+  remoteAgentId: z.string().optional(),
+  state: z.enum(IDENTITY_SEARCH_MATCH_STATES),
+  contact: ContactHubEntryRefSchema.optional(),
+  conversationId: z.string().optional(),
+  requestId: z.string().optional(),
+})
+
+/** Friend request (presentFriendRequest) — createdAt may be null. */
+export const FriendRequestViewSchema = z.object({
+  id: z.string(),
+  status: z.string(),
+  createdAt: z.string().nullable().optional(),
+  requester: RelationshipMemberSummaryViewSchema.nullable().optional(),
+  targetType: z.enum(CONTACT_TARGET_TYPES),
+  targetMember: RelationshipMemberSummaryViewSchema.nullable().optional(),
+  targetActor: RelationshipActorSummaryViewSchema.nullable().optional(),
+  targetRemoteAgent:
+    RelationshipRemoteAgentSummaryViewSchema.nullable().optional(),
+})
+
+/** Actor access request (presentActorAccessRequest). */
+export const ActorAccessRequestViewSchema = z.object({
+  id: z.string(),
+  status: z.string(),
+  createdAt: z.string().nullable().optional(),
+  requester: RelationshipMemberSummaryViewSchema.nullable().optional(),
+  actor: RelationshipActorSummaryViewSchema.nullable().optional(),
+})
+
+/** Remote-agent access request (presentRemoteAgentAccessRequest). */
+export const RemoteAgentAccessRequestViewSchema = z.object({
+  id: z.string(),
+  status: z.string(),
+  createdAt: z.string().nullable().optional(),
+  requester: RelationshipMemberSummaryViewSchema.nullable().optional(),
+  remoteAgent: RelationshipRemoteAgentSummaryViewSchema.nullable().optional(),
+})
 
 /** GET/PUT relationship-profile (member/actor/remote-agent). */
 export const RelationshipProfileViewSchema = z.object({
@@ -37,11 +164,11 @@ export type RelationshipProfileViewSchemaType = z.infer<
   typeof RelationshipProfileViewSchema
 >
 
-/** GET identity-search. `matches` entries are open presentation views. */
+/** GET identity-search. */
 export const IdentitySearchResponseSchema = z.object({
   query: z.string(),
   outcome: z.enum(IDENTITY_SEARCH_OUTCOMES),
-  matches: z.array(z.unknown()),
+  matches: z.array(IdentitySearchMatchViewSchema),
 })
 export type IdentitySearchResponseSchemaType = z.infer<
   typeof IdentitySearchResponseSchema
@@ -49,7 +176,7 @@ export type IdentitySearchResponseSchemaType = z.infer<
 
 /**
  * POST relationship-qr/scan and POST identity-search/request.
- * `contact` is an open `{ kind, id }` ref the service already shapes.
+ * `contact` is an open `{ kind, id }`-ish ref the service shapes per outcome.
  */
 export const RelationshipScanResponseSchema = z.object({
   outcome: z.enum(RELATIONSHIP_SCAN_OUTCOMES),
@@ -60,9 +187,9 @@ export type RelationshipScanResponseSchemaType = z.infer<
   typeof RelationshipScanResponseSchema
 >
 
-/** GET friends — `{ friends: ContactHubEntryView[] }` (open entries). */
+/** GET friends — `{ friends: ContactHubEntryView[] }`. */
 export const FriendsListResponseSchema = z.object({
-  friends: z.array(z.unknown()),
+  friends: z.array(ContactHubEntryViewSchema),
 })
 export type FriendsListResponseSchemaType = z.infer<
   typeof FriendsListResponseSchema
@@ -70,12 +197,17 @@ export type FriendsListResponseSchemaType = z.infer<
 
 /**
  * GET friend-requests / actor-access-requests / remote-agent-access-requests.
- * The controller maps records → presented views before sending; the views are
- * open presentation shapes, so each side is modeled as an array of unknown.
+ * One schema serves all three endpoints; an entry is whichever request view the
+ * endpoint produces, so the entries are the union of the three presented views.
  */
+const AnyRequestViewSchema = z.union([
+  FriendRequestViewSchema,
+  ActorAccessRequestViewSchema,
+  RemoteAgentAccessRequestViewSchema,
+])
 export const RequestListResponseSchema = z.object({
-  incoming: z.array(z.unknown()),
-  outgoing: z.array(z.unknown()),
+  incoming: z.array(AnyRequestViewSchema),
+  outgoing: z.array(AnyRequestViewSchema),
 })
 export type RequestListResponseSchemaType = z.infer<
   typeof RequestListResponseSchema
@@ -84,7 +216,7 @@ export type RequestListResponseSchemaType = z.infer<
 /**
  * POST approve/reject (friend / actor-access / remote-agent-access). The handler
  * returns `{ request: <resolved row | grant-request result> }`; the resolved
- * value is a genuinely-open record consumers do not read.
+ * value is a genuinely-open record (varies by request type) consumers don't read.
  */
 export const ResolveRequestResponseSchema = z.object({
   request: z.unknown(),
@@ -94,8 +226,8 @@ export type ResolveRequestResponseSchemaType = z.infer<
 >
 
 /**
- * GET contact-hub. `requestSummary` is a fixed counter block; the entry/group
- * collections are open presentation views.
+ * GET contact-hub. The entry collections are ContactHubEntryView[]; `groups`
+ * are conversation/group structures the service shapes (left open).
  */
 export const ContactHubResponseSchema = z.object({
   requestSummary: z.object({
@@ -104,19 +236,19 @@ export const ContactHubResponseSchema = z.object({
     remoteAgentAccessPendingCount: z.number(),
     totalPendingCount: z.number(),
   }),
-  workspaceActors: z.array(z.unknown()),
-  workspaceRemoteAgents: z.array(z.unknown()),
-  workspaceMembers: z.array(z.unknown()),
-  friends: z.array(z.unknown()),
+  workspaceActors: z.array(ContactHubEntryViewSchema),
+  workspaceRemoteAgents: z.array(ContactHubEntryViewSchema),
+  workspaceMembers: z.array(ContactHubEntryViewSchema),
+  friends: z.array(ContactHubEntryViewSchema),
   groups: z.array(z.unknown()),
 })
 export type ContactHubResponseSchemaType = z.infer<
   typeof ContactHubResponseSchema
 >
 
-/** GET contact-hub/:kind/:contactId. */
+/** GET contact-hub/:kind/:contactId. `groups` are open group structures. */
 export const ContactHubDetailResponseSchema = z.object({
-  contact: z.unknown(),
+  contact: ContactHubEntryViewSchema,
   groups: z.array(z.unknown()),
 })
 export type ContactHubDetailResponseSchemaType = z.infer<
