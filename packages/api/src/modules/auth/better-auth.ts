@@ -5,9 +5,8 @@ import { getOAuth2Tokens } from "better-auth/oauth2"
 import { expo } from "@better-auth/expo"
 import { config } from "../../config/index.js"
 import { createBetterAuthDialect } from "../../infrastructure/database/kysely.js"
-import { db } from "../../infrastructure/database/kysely.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
-import { createGeneratedUserAvatarFile } from "../avatar/service.js"
+import { backfillGeneratedUserAvatar, selectUserDeletedState } from "./repo.js"
 import { AUTH_SESSION_MAX_AGE_SECONDS } from "@synapse/shared"
 import { disconnectSocketsForSession } from "../../infrastructure/websocket/auth-session-registry.js"
 import { deviceSessionCookie } from "./device-session-cookie.js"
@@ -376,22 +375,7 @@ export const auth = betterAuth({
           // this hook is awaited, so a throw would fail the (already-committed)
           // sign-up/OAuth — log and move on instead.
           try {
-            const existing = await db
-              .selectFrom("users")
-              .select("avatarFileId")
-              .where("id", "=", user.id)
-              .executeTakeFirst()
-            if (existing?.avatarFileId) return
-            const avatar = await createGeneratedUserAvatarFile(db, {
-              userId: user.id,
-              name: user.name,
-              email: user.email,
-            })
-            await db
-              .updateTable("users")
-              .set({ avatarFileId: avatar.fileId })
-              .where("id", "=", user.id)
-              .execute()
+            await backfillGeneratedUserAvatar(user)
           } catch (error) {
             log.error(
               { err: error, userId: user.id },
@@ -416,11 +400,7 @@ export const auth = betterAuth({
           // exist, the downstream FK / adapter write will fail anyway.
           const userId = session.userId as string | undefined
           if (!userId) return undefined
-          const userRow = await db
-            .selectFrom("users")
-            .select(["id", "deletedAt"])
-            .where("id", "=", userId)
-            .executeTakeFirst()
+          const userRow = await selectUserDeletedState(userId)
           if (userRow && userRow.deletedAt !== null) {
             throw new Error("Cannot create a session for a deleted user")
           }

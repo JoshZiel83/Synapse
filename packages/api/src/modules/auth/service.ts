@@ -2,14 +2,13 @@ import type { FastifyRequest } from "fastify"
 import { Headers as UndiciHeaders } from "undici"
 import { fromNodeHeaders } from "better-auth/node"
 import type { User } from "@synapse/shared"
-import { db } from "../../infrastructure/database/kysely.js"
 import {
   canUserAccessFileWorkspace,
   getFileAccessInfo,
 } from "../files/service.js"
-import { sql } from "kysely"
 import { auth } from "./better-auth.js"
-import { presentUser, type UserRow } from "./presenter.js"
+import { presentUser } from "./presenter.js"
+import { selectUserById, updateUserProfileRow, isUserLive } from "./repo.js"
 
 /**
  * Auth service — Better Auth edition.
@@ -39,22 +38,8 @@ export class AuthError extends Error {
   }
 }
 
-const userSelection = [
-  "id",
-  "email",
-  "name",
-  "avatarFileId",
-  "createdAt",
-  "updatedAt",
-] as const
-
-async function getUserById(userId: string): Promise<UserRow | null> {
-  const row = await db
-    .selectFrom("users")
-    .select(userSelection)
-    .where("id", "=", userId)
-    .executeTakeFirst()
-  return (row as UserRow | undefined) ?? null
+async function getUserById(userId: string) {
+  return selectUserById(userId)
 }
 
 export async function getProfile(userId: string): Promise<User> {
@@ -98,20 +83,15 @@ export async function updateProfile(
     }
   }
 
-  const row = await db
-    .updateTable("users")
-    .set({
-      name: nextName,
-      avatarFileId: nextAvatarFileId ?? null,
-    })
-    .where("id", "=", userId)
-    .returning(userSelection)
-    .executeTakeFirst()
+  const row = await updateUserProfileRow(userId, {
+    name: nextName,
+    avatarFileId: nextAvatarFileId ?? null,
+  })
 
   if (!row) {
     throw new AuthError("User not found", 404, "USER_NOT_FOUND")
   }
-  return presentUser(row as UserRow)
+  return presentUser(row)
 }
 
 /**
@@ -148,12 +128,7 @@ async function rejectIfUserDeleted(
   authed: AuthenticatedRequestSession | null
 ): Promise<AuthenticatedRequestSession | null> {
   if (!authed) return null
-  const live = await db
-    .selectFrom("users")
-    .select("id")
-    .where("id", "=", authed.user.id)
-    .where("deletedAt", "is", null)
-    .executeTakeFirst()
+  const live = await isUserLive(authed.user.id)
   return live ? authed : null
 }
 

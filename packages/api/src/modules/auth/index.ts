@@ -17,10 +17,10 @@ import {
 } from "@synapse/shared/schemas"
 import { sendData } from "../../infrastructure/http/respond.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
-import { db, withDbTransaction } from "../../infrastructure/database/kysely.js"
+import { deleteVerificationByIdentifier } from "./repo.js"
 import {
-  markUserDeleted,
-  markAccountUnlinked,
+  markUserDeletedTx,
+  markAccountUnlinkedTx,
   LastAccountError,
 } from "../soft-delete/orchestration.js"
 
@@ -104,7 +104,6 @@ async function tryHandleOAuthCallbackError(
       cookies?.["__Secure-better-auth.state"] ?? cookies?.["better-auth.state"]
 
     const { target, consumed } = await resolveOAuthErrorRedirect({
-      executor: db,
       state,
       stateCookieValue,
       errorCode: url.searchParams.get("error") ?? undefined,
@@ -112,11 +111,7 @@ async function tryHandleOAuthCallbackError(
 
     if (consumed && state) {
       // Early errors never reach Better Auth's own state consumption; clean up.
-      await db
-        .deleteFrom("verification")
-        .where("identifier", "=", state)
-        .execute()
-        .catch(() => {})
+      await deleteVerificationByIdentifier(state).catch(() => {})
     }
 
     reply.status(302).header("location", target)
@@ -231,7 +226,7 @@ const authModule: FastifyPluginAsync = async (app: FastifyInstance) => {
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const userId = (request as any).user.userId as string
-        await withDbTransaction((trx) => markUserDeleted(trx, userId))
+        await markUserDeletedTx(userId)
         return reply.status(204).send()
       } catch (error) {
         return handleAuthError(error, reply)
@@ -251,8 +246,10 @@ const authModule: FastifyPluginAsync = async (app: FastifyInstance) => {
       try {
         const userId = (request as any).user.userId as string
         const body = unlinkAccountSchema.parse(request.body)
-        const unlinked = await withDbTransaction((trx) =>
-          markAccountUnlinked(trx, userId, body.providerId, body.accountId)
+        const unlinked = await markAccountUnlinkedTx(
+          userId,
+          body.providerId,
+          body.accountId
         )
         if (!unlinked) {
           return reply

@@ -116,6 +116,11 @@ const isMixedModuleFile = (p) => MIXED_MODULES.has(moduleOf(p))
 //     runs on `ctx.dbh ?? db`; db is only the production default.
 //   - auth/oauth-error-routing.ts: resolveOAuthErrorRedirect({ executor = db })
 //     is executor-injectable; db is the production default.
+//   - soft-delete/orchestration.ts: the soft-delete write edge — the
+//     Executor-taking markX(db,…) orchestrators run inside ONE transaction;
+//     the *Tx default-bound entry points (markUserDeletedTx etc.) open that
+//     withDbTransaction so callers don't import it. Atomicity requires the
+//     transaction live here.
 const R8_ALLOWLIST = new Set([
   "access/guards.ts",
   "sandbox/gc.ts",
@@ -124,6 +129,7 @@ const R8_ALLOWLIST = new Set([
   "workspace-apps/grant-storage.ts",
   "files/content-access.ts",
   "auth/oauth-error-routing.ts",
+  "soft-delete/orchestration.ts",
 ])
 const r8Key = (p) => {
   const m = p.split("/modules/")[1]

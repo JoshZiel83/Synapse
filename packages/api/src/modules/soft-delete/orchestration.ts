@@ -14,7 +14,10 @@
 // transaction; callers should wrap multi-step orchestration in withDbTransaction.
 
 import { sql } from "kysely"
-import type { Executor } from "../../infrastructure/database/kysely.js"
+import {
+  withDbTransaction,
+  type Executor,
+} from "../../infrastructure/database/kysely.js"
 
 /** Soft-delete roots that are workspace-scoped via a plain workspace_id column. */
 const WORKSPACE_SCOPED_ROOTS_BY_WORKSPACE_ID = [
@@ -355,4 +358,23 @@ export async function markAccountUnlinked(
     WHERE id = ${target.id} AND deleted_at IS NULL
   `.execute(db)
   return true
+}
+
+// Default-db-bound transactional entry points (round-6 P1-6): callers (the auth
+// controller) must not import withDbTransaction just to wrap these. Each opens
+// ONE transaction and runs the orchestration inside it (the atomicity these
+// multi-table closures require). The Executor-taking variants above stay for
+// callers that already hold a transaction.
+export function markUserDeletedTx(userId: string): Promise<void> {
+  return withDbTransaction((trx) => markUserDeleted(trx, userId))
+}
+
+export function markAccountUnlinkedTx(
+  userId: string,
+  providerId: string,
+  accountId: string
+): Promise<boolean> {
+  return withDbTransaction((trx) =>
+    markAccountUnlinked(trx, userId, providerId, accountId)
+  )
 }
