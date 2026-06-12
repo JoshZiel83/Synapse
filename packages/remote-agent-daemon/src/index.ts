@@ -7,6 +7,17 @@ import path from "node:path"
 import process from "node:process"
 import { setTimeout as sleep } from "node:timers/promises"
 import WebSocket from "ws"
+// Type-only binding to the single source for the daemon↔API machine RPC
+// contract (round-6 P1-5). These are `import type` so they erase at build —
+// the daemon takes NO runtime dependency on device-protocol (its published
+// shrinkwrap stays unchanged); tsc statically checks every outbound body
+// against the same schema the API parses inbound. The API is the runtime
+// validator (separate trust domain).
+import type {
+  RemoteAgentUserInputTaskBody,
+  RemoteAgentPlanApprovalTaskBody,
+  RemoteAgentFailDeliveriesBody,
+} from "@synapse/device-protocol"
 import { ClaudeDriver } from "./drivers/claude-driver.js"
 import { CodexDriver } from "./drivers/codex-driver.js"
 import { registerDriver, tryGetDriver } from "./drivers/registry.js"
@@ -600,7 +611,10 @@ class ManagedRemoteAgent {
         `/api/v1/internal/remote-agents/${this.params.remoteAgentId}/fail-deliveries`,
         {
           method: "POST",
-          body: JSON.stringify({ deliveryIds, reason: reason.slice(0, 2000) }),
+          body: JSON.stringify({
+            deliveryIds,
+            reason: reason.slice(0, 2000),
+          } satisfies RemoteAgentFailDeliveriesBody),
         }
       )
     } catch (error) {
@@ -942,7 +956,7 @@ class ManagedRemoteAgent {
                 runKey,
                 title: event.title,
                 questions: event.questions,
-              }),
+              } satisfies RemoteAgentUserInputTaskBody),
             }
           )
           this.pendingTasks.set(result.task.id, {
@@ -988,7 +1002,7 @@ class ManagedRemoteAgent {
                 summary: event.summary,
                 planMarkdown: event.planMarkdown,
                 checklist: event.checklist,
-              }),
+              } satisfies RemoteAgentPlanApprovalTaskBody),
             }
           )
           this.pendingTasks.set(result.task.id, {

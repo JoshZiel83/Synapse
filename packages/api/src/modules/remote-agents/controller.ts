@@ -1,6 +1,5 @@
 import type { FastifyInstance, FastifyReply } from "fastify"
 import {
-  IsoInstantStringSchema,
   RemoteAgentListResponseSchema,
   RemoteAgentResponseSchema,
   RemoteAgentGroupTaskGrantsResponseSchema,
@@ -10,6 +9,19 @@ import {
 } from "@synapse/shared/schemas"
 import { z } from "zod"
 import { REMOTE_AGENT_RUNTIME_KINDS } from "@synapse/shared"
+// /api/v1/internal/* is the daemon↔API machine RPC surface (wireRoute). Its
+// body/query contracts are single-sourced in @synapse/device-protocol so the
+// API parser and the daemon client reference one definition (round-6 P1-5).
+import {
+  RemoteAgentUserInputTaskBodySchema,
+  RemoteAgentPlanApprovalTaskBodySchema,
+  RemoteAgentSendMessageBodySchema,
+  RemoteAgentCompleteDeliveriesBodySchema,
+  RemoteAgentFailDeliveriesBodySchema,
+  RemoteAgentHistoryQuerySchema,
+  RemoteAgentCheckMessagesQuerySchema,
+  RemoteAgentSearchMessagesQuerySchema,
+} from "@synapse/device-protocol"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { appRoute, wireRoute } from "../../infrastructure/http/route.js"
@@ -63,59 +75,16 @@ const groupTaskGrantsSchema = z.object({
   workspaceMemberIds: z.array(z.uuid()).max(200),
 })
 
-const historyQuerySchema = z.object({
-  afterSequence: z.coerce.number().int().min(0).optional(),
-  beforeSequence: z.coerce.number().int().min(0).optional(),
-  limit: z.coerce.number().int().min(1).max(200).optional(),
-})
-
-const checkMessagesQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(500).optional(),
-})
-
-const searchMessagesQuerySchema = z.object({
-  conversationId: z.uuid(),
-  q: z.string().trim().min(1).max(512),
-  limit: z.coerce.number().int().min(1).max(100).optional(),
-})
-
-const sendMessageSchema = z.object({
-  conversationId: z.uuid(),
-  clientMessageId: z.uuid().optional(),
-  contentBlocks: z.array(z.any()).min(1),
-  replyToItemId: z.uuid().optional(),
-  metadata: z.record(z.string(), z.any()).optional(),
-})
-
-const completeDeliveriesSchema = z.object({
-  deliveryIds: z.array(z.uuid()).min(1),
-})
-
-const failDeliveriesSchema = z.object({
-  deliveryIds: z.array(z.uuid()).min(1),
-  reason: z.string().trim().max(2000).optional(),
-})
-
-const internalUserInputTaskSchema = z.object({
-  conversationId: z.uuid(),
-  runKey: z.string().trim().min(1).max(255),
-  title: z.string().trim().min(1).max(255),
-  instructions: z.string().trim().max(5000).optional(),
-  questions: z.array(z.any()).min(1).max(4),
-  expiresAt: IsoInstantStringSchema.optional(),
-})
-
-const internalPlanApprovalTaskSchema = z.object({
-  conversationId: z.uuid(),
-  runKey: z.string().trim().min(1).max(255),
-  title: z.string().trim().min(1).max(255),
-  summary: z.string().trim().max(5000).optional(),
-  planMarkdown: z.string().trim().min(1),
-  checklist: z.array(z.any()).optional(),
-  collaborationMode: z.string().trim().max(120).optional(),
-  collaborationState: z.record(z.string(), z.any()).optional(),
-  expiresAt: IsoInstantStringSchema.optional(),
-})
+// Machine RPC body/query contracts (daemon↔API). Single-sourced in
+// @synapse/device-protocol — these aliases keep the route handlers terse.
+const historyQuerySchema = RemoteAgentHistoryQuerySchema
+const checkMessagesQuerySchema = RemoteAgentCheckMessagesQuerySchema
+const searchMessagesQuerySchema = RemoteAgentSearchMessagesQuerySchema
+const sendMessageSchema = RemoteAgentSendMessageBodySchema
+const completeDeliveriesSchema = RemoteAgentCompleteDeliveriesBodySchema
+const failDeliveriesSchema = RemoteAgentFailDeliveriesBodySchema
+const internalUserInputTaskSchema = RemoteAgentUserInputTaskBodySchema
+const internalPlanApprovalTaskSchema = RemoteAgentPlanApprovalTaskBodySchema
 
 function getRequestUserId(request: any) {
   return (request as any).user!.userId as string

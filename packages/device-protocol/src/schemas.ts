@@ -332,6 +332,97 @@ export const CloudBootstrapResultSchema = z.object({
 })
 export type CloudBootstrapResult = z.infer<typeof CloudBootstrapResultSchema>
 
+// ─────────────── remote-agent daemon internal RPC (machine surface) ──────────
+// The remote-agent daemon (packages/remote-agent-daemon) talks to the API over
+// a machine-key-authenticated REST surface mounted under /api/v1/internal/* .
+// These are NOT app-facing ({ data }) endpoints — they are the daemon↔API
+// machine protocol, registered via wireRoute() and consumed only by the daemon.
+// The field set is camelCase (matching the deployed daemon's bodies; this is a
+// machine RPC, not a signed handshake). They live here so the API route parser
+// and the daemon's request-body construction reference ONE source instead of
+// the previous split (API-local zod schemas + daemon hand-built JSON literals).
+// Open payload arrays/records (questions / contentBlocks / checklist /
+// collaborationState / metadata) are deliberately passthrough — their inner
+// shape is owned by the agent-session/chat layers, not the transport.
+
+export const RemoteAgentUserInputTaskBodySchema = z.object({
+  conversationId: z.uuid(),
+  runKey: z.string().trim().min(1).max(255),
+  title: z.string().trim().min(1).max(255),
+  instructions: z.string().trim().max(5000).optional(),
+  questions: z.array(z.any()).min(1).max(4),
+  expiresAt: IsoInstantStringSchema.optional(),
+})
+export type RemoteAgentUserInputTaskBody = z.infer<
+  typeof RemoteAgentUserInputTaskBodySchema
+>
+
+export const RemoteAgentPlanApprovalTaskBodySchema = z.object({
+  conversationId: z.uuid(),
+  runKey: z.string().trim().min(1).max(255),
+  title: z.string().trim().min(1).max(255),
+  summary: z.string().trim().max(5000).optional(),
+  planMarkdown: z.string().trim().min(1),
+  checklist: z.array(z.any()).optional(),
+  collaborationMode: z.string().trim().max(120).optional(),
+  collaborationState: z.record(z.string(), z.any()).optional(),
+  expiresAt: IsoInstantStringSchema.optional(),
+})
+export type RemoteAgentPlanApprovalTaskBody = z.infer<
+  typeof RemoteAgentPlanApprovalTaskBodySchema
+>
+
+export const RemoteAgentSendMessageBodySchema = z.object({
+  conversationId: z.uuid(),
+  clientMessageId: z.uuid().optional(),
+  contentBlocks: z.array(z.any()).min(1),
+  replyToItemId: z.uuid().optional(),
+  metadata: z.record(z.string(), z.any()).optional(),
+})
+export type RemoteAgentSendMessageBody = z.infer<
+  typeof RemoteAgentSendMessageBodySchema
+>
+
+export const RemoteAgentCompleteDeliveriesBodySchema = z.object({
+  deliveryIds: z.array(z.uuid()).min(1),
+})
+export type RemoteAgentCompleteDeliveriesBody = z.infer<
+  typeof RemoteAgentCompleteDeliveriesBodySchema
+>
+
+export const RemoteAgentFailDeliveriesBodySchema = z.object({
+  deliveryIds: z.array(z.uuid()).min(1),
+  reason: z.string().trim().max(2000).optional(),
+})
+export type RemoteAgentFailDeliveriesBody = z.infer<
+  typeof RemoteAgentFailDeliveriesBodySchema
+>
+
+export const RemoteAgentHistoryQuerySchema = z.object({
+  afterSequence: z.coerce.number().int().min(0).optional(),
+  beforeSequence: z.coerce.number().int().min(0).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+})
+export type RemoteAgentHistoryQuery = z.infer<
+  typeof RemoteAgentHistoryQuerySchema
+>
+
+export const RemoteAgentCheckMessagesQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+})
+export type RemoteAgentCheckMessagesQuery = z.infer<
+  typeof RemoteAgentCheckMessagesQuerySchema
+>
+
+export const RemoteAgentSearchMessagesQuerySchema = z.object({
+  conversationId: z.uuid(),
+  q: z.string().trim().min(1).max(512),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+})
+export type RemoteAgentSearchMessagesQuery = z.infer<
+  typeof RemoteAgentSearchMessagesQuerySchema
+>
+
 // ───────────────────────────── Control Plane messages (§7.1) ────────────────
 
 // JSON-RPC 2.0 framing.
