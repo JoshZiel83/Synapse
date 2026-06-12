@@ -96,6 +96,7 @@ import type {
   BindRemoteAgentInput,
   CreateRemoteAgentMachineInput,
   UpdateRemoteAgentGroupTaskGrantsInput,
+  StartPluginAuthInput,
 } from "@synapse/shared"
 import {
   normalizeConversationCatalogEntry,
@@ -2307,11 +2308,7 @@ class ApiClient {
     wsId: string,
     pluginId: string,
     bindingKey: string,
-    data?: {
-      installationId?: string
-      draftConfig?: Record<string, unknown>
-      metadata?: Record<string, unknown>
-    }
+    data?: StartPluginAuthInput
   ) {
     const res = await this.fetch(
       `/workspaces/${wsId}/mcp/plugins/${pluginId}/auth/${bindingKey}/start`,

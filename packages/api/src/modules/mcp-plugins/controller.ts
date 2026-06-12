@@ -1,6 +1,5 @@
 import { z } from "zod"
 import type { FastifyInstance, FastifyReply } from "fastify"
-import { REUSE_SCOPES } from "@synapse/shared/constants"
 import { db } from "../../infrastructure/database/kysely.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
@@ -39,18 +38,13 @@ import {
   PluginAuthSessionEnvelopeSchema,
   PluginInstallPlanEnvelopeSchema,
   PluginAuditLogListSchema,
+  StartPluginAuthInputSchema,
 } from "@synapse/shared/schemas"
 
-const lifecycleScopeSchema = z.enum(REUSE_SCOPES)
-const conversationTypeMaskSchema = z.number().int().min(1).max(15)
-
+// App-facing request body lives in @synapse/shared (§5.1.1) so the API parser
+// and the web/mobile clients share one definition. install-plan takes no body.
 const installPlanSchema = z.object({})
-
-const startAuthSchema = z.object({
-  installationId: z.uuid().optional(),
-  draftConfig: z.record(z.string(), z.unknown()).optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-})
+const startAuthSchema = StartPluginAuthInputSchema
 
 const log = createLogger("mcp.controller")
 

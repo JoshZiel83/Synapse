@@ -516,3 +516,18 @@ export const PluginAuditLogListSchema = z.array(
   z.record(z.string(), z.unknown())
 )
 export type PluginAuditLogList = z.infer<typeof PluginAuditLogListSchema>
+
+// ───────────────────────────── request DTOs (§5.1.1) ─────────────────────────
+// App-facing request bodies for the mcp-plugins APP routes. Single-sourced here
+// so the API parser and the web/mobile clients share one definition.
+
+/**
+ * Body for POST .../mcp/plugins/:pluginId/auth/:bindingKey/start. draftConfig /
+ * metadata are passthrough config objects the plugin-auth flow owns.
+ */
+export const StartPluginAuthInputSchema = z.object({
+  installationId: z.uuid().optional(),
+  draftConfig: z.record(z.string(), z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+})
+export type StartPluginAuthInput = z.infer<typeof StartPluginAuthInputSchema>

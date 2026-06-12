@@ -4572,6 +4572,7 @@ export type {
   PluginInstallPlanView,
   PluginInstallPlanEnvelope,
   PluginAuditLogList,
+  StartPluginAuthInput,
 } from "../schemas/mcp-plugins.js"
 export type {
   DeviceView,
