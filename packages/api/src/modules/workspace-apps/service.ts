@@ -1,21 +1,16 @@
-import { sql } from "kysely"
 import {
-  ACCESS_BINDING_STATUS,
   SUBJECT_KIND,
   WORKSPACE_APP_KIND,
   WORKSPACE_APP_GRANT_PERMISSION,
   WORKSPACE_APP_GRANT_REQUEST_DIRECTION,
-  WORKSPACE_APP_GRANT_REQUEST_STATUS,
   type WorkspaceAppGrantRequestDirection,
-  WORKSPACE_APP_GRANT_STATUS,
+  WORKSPACE_APP_GRANT_REQUEST_STATUS,
   WORKSPACE_APP_STATUS,
   type CapabilityAccessTarget,
   type WorkspaceAppGrantPermission,
   type WorkspaceAppKind,
 } from "@synapse/shared"
-import { db } from "../../infrastructure/database/kysely.js"
 import { requireWorkspaceMemberIdentity } from "../chat/workspace-identity.js"
-import { isSubjectActiveConversationParticipant } from "../access/subject-resolution.js"
 import {
   createActor,
   deleteActor,
@@ -37,20 +32,26 @@ import {
   uninstallPluginUnified,
   updateInstallation,
 } from "../mcp-plugins/service.js"
+import { resolveWorkspaceAppGrantRequest } from "./grant-storage.js"
 import {
-  cancelWorkspaceAppGrantRequest,
-  insertWorkspaceAppGrant,
-  insertWorkspaceAppGrantRequest,
-  listActiveWorkspaceAppGrants,
-  listWorkspaceAppGrantRequests,
-  resolveWorkspaceAppGrantRequest,
-  revokeWorkspaceAppGrant,
-  revokeWorkspaceAppGrantsForApp,
-  type WorkspaceAppGrantRequestRow,
-  type WorkspaceAppGrantRow,
-} from "./grant-storage.js"
-import { upsertAccessSubject } from "../access/subject-registry.js"
-import { updateWorkspaceAppRoot } from "./root-storage.js"
+  cancelWorkspaceAppGrantRequestDefault,
+  findGrantRequestById,
+  findManageableWorkspaceApp,
+  hasManageGrantForSubject,
+  insertWorkspaceAppGrantRequestDefault,
+  isSubjectActiveConversationParticipantDefault,
+  listGrantedWorkspaceApps,
+  listImplicitOwnerWorkspaceApps,
+  listWorkspaceAppGrantRequestViewRows,
+  listWorkspaceAppGrantViewRows,
+  listWorkspaceAppsLive,
+  loadWorkspaceMemberAccessRecord,
+  replaceWorkspaceAppGrantsTx,
+  revokeWorkspaceAppGrantsForAppDefault,
+  updateWorkspaceAppRootDefault,
+  upsertWorkspaceAppSubjectIdDefault,
+  type WorkspaceMemberAccessRecord,
+} from "./repo.js"
 import {
   isCompleteWorkspaceAppRow,
   type WorkspaceAppRow,
@@ -58,14 +59,7 @@ import {
   type WorkspaceAppGrantRequestViewRow,
 } from "./presenter.js"
 
-type WorkspaceMemberAccess = {
-  workspaceMemberId: string
-  workspaceId: string
-  userId: string
-  ownerId: string
-  trustLevel: string
-  accessKeys: string[]
-}
+type WorkspaceMemberAccess = WorkspaceMemberAccessRecord
 
 const IMPLICIT_OWNER_VISIBLE_WORKSPACE_APP_KINDS = [
   WORKSPACE_APP_KIND.ACTOR,
@@ -100,39 +94,7 @@ async function loadWorkspaceMemberAccess(
   workspaceId: string,
   userId: string
 ): Promise<WorkspaceMemberAccess | null> {
-  const row = await db
-    .selectFrom("workspaceMembers as wm")
-    .innerJoin("workspaces as w", "w.id", "wm.workspaceId")
-    .select([
-      "wm.id",
-      "wm.workspaceId",
-      "wm.userId",
-      "wm.trustLevel",
-      "w.ownerId",
-    ])
-    .where("wm.workspaceId", "=", workspaceId)
-    .where("wm.userId", "=", userId)
-    .where("wm.status", "=", "active")
-    .where("w.deletedAt", "is", null)
-    .limit(1)
-    .executeTakeFirst()
-  if (!row) return null
-
-  const accessRows = await db
-    .selectFrom("workspaceAccessBindings")
-    .select("accessKey")
-    .where("workspaceMemberId", "=", row.id)
-    .where("status", "=", ACCESS_BINDING_STATUS.ACTIVE)
-    .execute()
-
-  return {
-    workspaceMemberId: row.id,
-    workspaceId: row.workspaceId,
-    userId: row.userId,
-    ownerId: row.ownerId,
-    trustLevel: row.trustLevel,
-    accessKeys: accessRows.map((entry) => entry.accessKey),
-  }
+  return loadWorkspaceMemberAccessRecord(workspaceId, userId)
 }
 
 function isWorkspaceAdmin(access: WorkspaceMemberAccess) {
@@ -147,22 +109,7 @@ async function hasManageGrant(
   workspaceAppId: string,
   workspaceMemberId: string
 ): Promise<boolean> {
-  const memberSubjectId = await upsertAccessSubject(db, {
-    kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: workspaceMemberId,
-  })
-  const row = await db
-    .selectFrom("workspaceAppGrants")
-    .select("id")
-    .where("workspaceAppId", "=", workspaceAppId)
-    .where("subjectId", "=", memberSubjectId)
-    .where("status", "=", WORKSPACE_APP_GRANT_STATUS.ACTIVE)
-    .where(
-      sql<boolean>`${WORKSPACE_APP_GRANT_PERMISSION.MANAGE}::workspace_app_grant_permission = ANY(permissions)`
-    )
-    .limit(1)
-    .executeTakeFirst()
-  return Boolean(row)
+  return hasManageGrantForSubject(workspaceAppId, workspaceMemberId)
 }
 
 async function requireManageWorkspaceApp(
@@ -174,13 +121,7 @@ async function requireManageWorkspaceApp(
   if (!access) {
     throw new Error("Workspace member not found")
   }
-  const app = await db
-    .selectFrom("workspaceAppsLive")
-    .selectAll()
-    .where("id", "=", appId)
-    .where("workspaceId", "=", workspaceId)
-    .where("deletedAt", "is", null)
-    .executeTakeFirst()
+  const app = await findManageableWorkspaceApp(appId, workspaceId)
   if (!app) {
     throw new Error("Workspace app not found")
   }
@@ -211,19 +152,8 @@ export async function listWorkspaceAppsInventory(params: {
     throw new Error("Workspace member not found")
   }
 
-  let query = db
-    .selectFrom("workspaceAppsLive")
-    .selectAll()
-    .where("workspaceId", "=", params.workspaceId)
-    .where("deletedAt", "is", null)
-    .orderBy("createdAt", "desc")
-
-  if (params.kind) {
-    query = query.where("kind", "=", params.kind)
-  }
-
   const isAdmin = isWorkspaceAdmin(access)
-  const rows = await query.execute()
+  const rows = await listWorkspaceAppsLive(params.workspaceId, params.kind)
   const filtered = await Promise.all(
     rows.map(async (row) => {
       if (!row?.id || !row.kind) return null
@@ -252,24 +182,23 @@ export async function discoverWorkspaceAppsForMember(params: {
     params.workspaceId,
     params.userId
   )
-  const workspaceSubjectId = await upsertAccessSubject(db, {
+  const workspaceSubjectId = await upsertWorkspaceAppSubjectIdDefault({
     kind: SUBJECT_KIND.WORKSPACE,
     workspaceId: params.workspaceId,
   })
-  const memberSubjectId = await upsertAccessSubject(db, {
+  const memberSubjectId = await upsertWorkspaceAppSubjectIdDefault({
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
     memberId: identity.workspaceMemberId,
   })
 
   let conversationSubjectId: string | null = null
   if (params.conversationId) {
-    const participant = await isSubjectActiveConversationParticipant(
-      db,
+    const participant = await isSubjectActiveConversationParticipantDefault(
       params.conversationId,
       memberSubjectId
     )
     if (participant) {
-      conversationSubjectId = await upsertAccessSubject(db, {
+      conversationSubjectId = await upsertWorkspaceAppSubjectIdDefault({
         kind: SUBJECT_KIND.CONVERSATION,
         conversationId: params.conversationId,
       })
@@ -277,51 +206,17 @@ export async function discoverWorkspaceAppsForMember(params: {
   }
 
   const claimSubjectIds = [workspaceSubjectId, memberSubjectId]
-  const grantRows = await db
-    .selectFrom("workspaceAppGrants as app_grant")
-    .innerJoin("workspaceApps as app", "app.id", "app_grant.workspaceAppId")
-    .select([
-      "app.id",
-      "app.workspaceId",
-      "app.kind",
-      "app.displayName",
-      "app.ownerWorkspaceMemberId",
-      "app.status",
-      "app.conversationTypeMaskOverride",
-      "app.createdAt",
-      "app.updatedAt",
-    ])
-    .where("app.workspaceId", "=", params.workspaceId)
-    .where("app.deletedAt", "is", null)
-    .where("app.status", "=", WORKSPACE_APP_STATUS.ACTIVE)
-    .where("app_grant.status", "=", WORKSPACE_APP_GRANT_STATUS.ACTIVE)
-    .where("app_grant.subjectId", "in", claimSubjectIds)
-    .where((eb) =>
-      conversationSubjectId
-        ? eb.or([
-            eb("app_grant.scopeSubjectId", "is", null),
-            eb("app_grant.scopeSubjectId", "=", conversationSubjectId),
-          ])
-        : eb("app_grant.scopeSubjectId", "is", null)
-    )
-    .where(
-      sql<boolean>`(
-        ${WORKSPACE_APP_GRANT_PERMISSION.USE}::workspace_app_grant_permission = ANY(app_grant.permissions)
-        OR ${WORKSPACE_APP_GRANT_PERMISSION.CONTACT_VISIBLE}::workspace_app_grant_permission = ANY(app_grant.permissions)
-      )`
-    )
-    .distinct()
-    .execute()
+  const grantRows = await listGrantedWorkspaceApps({
+    workspaceId: params.workspaceId,
+    claimSubjectIds,
+    conversationSubjectId,
+  })
 
-  const implicitOwnerRows = await db
-    .selectFrom("workspaceAppsLive as app")
-    .selectAll()
-    .where("app.workspaceId", "=", params.workspaceId)
-    .where("app.deletedAt", "is", null)
-    .where("app.status", "=", WORKSPACE_APP_STATUS.ACTIVE)
-    .where("app.ownerWorkspaceMemberId", "=", identity.workspaceMemberId)
-    .where("app.kind", "in", IMPLICIT_OWNER_VISIBLE_WORKSPACE_APP_KINDS)
-    .execute()
+  const implicitOwnerRows = await listImplicitOwnerWorkspaceApps({
+    workspaceId: params.workspaceId,
+    ownerWorkspaceMemberId: identity.workspaceMemberId,
+    kinds: IMPLICIT_OWNER_VISIBLE_WORKSPACE_APP_KINDS,
+  })
 
   const byId = new Map<string, WorkspaceAppRow>()
   for (const row of grantRows) {
@@ -357,37 +252,7 @@ export async function listWorkspaceAppGrantsView(params: {
     params.appId,
     params.userId
   )
-  const rows = await db
-    .selectFrom("workspaceAppGrants as app_grant")
-    .innerJoin("accessSubjects as subj", "subj.id", "app_grant.subjectId")
-    .leftJoin("accessSubjects as scope", "scope.id", "app_grant.scopeSubjectId")
-    .select([
-      "app_grant.id",
-      "app_grant.workspaceId",
-      "app_grant.workspaceAppId",
-      "app_grant.permissions",
-      "app_grant.status",
-      "app_grant.source",
-      "app_grant.createdByWorkspaceMemberId",
-      "app_grant.reason",
-      "app_grant.conversationTypeMaskOverride",
-      "app_grant.createdAt",
-      "app_grant.revokedAt",
-      "subj.kind",
-      "subj.workspaceId",
-      "subj.workspaceMemberId",
-      "subj.actorId",
-      "subj.remoteAgentId",
-      "subj.conversationId",
-      "scope.kind as scopeKind",
-      "scope.workspaceId as scopeWorkspaceIdViaJoin",
-      "scope.conversationId as scopeConversationIdViaJoin",
-    ])
-    .where("app_grant.workspaceAppId", "=", params.appId)
-    .where("app_grant.status", "=", WORKSPACE_APP_GRANT_STATUS.ACTIVE)
-    .orderBy("app_grant.createdAt", "desc")
-    .execute()
-  return rows
+  return listWorkspaceAppGrantViewRows(params.appId)
 }
 
 export async function replaceWorkspaceAppGrants(params: {
@@ -406,23 +271,11 @@ export async function replaceWorkspaceAppGrants(params: {
     params.appId,
     params.userId
   )
-  await db.transaction().execute(async (trx) => {
-    const existing = await listActiveWorkspaceAppGrants(trx, params.appId)
-    for (const grant of existing) {
-      await revokeWorkspaceAppGrant(trx, grant.id)
-    }
-    for (const grant of params.grants) {
-      await insertWorkspaceAppGrant(trx, {
-        workspaceId: params.workspaceId,
-        workspaceAppId: params.appId,
-        target: grant.target,
-        permissions: grant.permissions,
-        conversationTypeMaskOverride:
-          grant.conversationTypeMaskOverride ?? null,
-        createdByWorkspaceMemberId: access.workspaceMemberId,
-        reason: grant.reason ?? null,
-      })
-    }
+  await replaceWorkspaceAppGrantsTx({
+    workspaceId: params.workspaceId,
+    appId: params.appId,
+    grants: params.grants,
+    createdByWorkspaceMemberId: access.workspaceMemberId,
   })
   return listWorkspaceAppGrantsView(params)
 }
@@ -444,53 +297,11 @@ export async function listWorkspaceAppGrantRequestsView(params: {
       params.userId
     )
   }
-  const rows = await db
-    .selectFrom("workspaceAppGrantRequests as app_request")
-    .innerJoin(
-      "accessSubjects as grantee",
-      "grantee.id",
-      "app_request.granteeSubjectId"
-    )
-    .leftJoin(
-      "accessSubjects as scope",
-      "scope.id",
-      "app_request.granteeScopeSubjectId"
-    )
-    .select([
-      "app_request.id",
-      "app_request.workspaceId",
-      "app_request.workspaceAppId",
-      "app_request.requestedPermissions",
-      "app_request.requesterWorkspaceMemberId",
-      "app_request.status",
-      "app_request.resolvedByWorkspaceMemberId",
-      "app_request.resolvedAt",
-      "app_request.reason",
-      "app_request.createdAt",
-      "app_request.updatedAt",
-      "grantee.kind as granteeKind",
-      "grantee.workspaceId as granteeWorkspaceIdViaJoin",
-      "grantee.workspaceMemberId as granteeWorkspaceMemberIdViaJoin",
-      "grantee.actorId as granteeActorIdViaJoin",
-      "grantee.remoteAgentId as granteeRemoteAgentIdViaJoin",
-      "grantee.conversationId as granteeConversationIdViaJoin",
-      "scope.kind as granteeScopeKind",
-      "scope.workspaceId as granteeScopeWorkspaceIdViaJoin",
-      "scope.conversationId as granteeScopeConversationIdViaJoin",
-    ])
-    .where("app_request.workspaceAppId", "=", params.appId)
-    .where((eb) =>
-      params.direction === WORKSPACE_APP_GRANT_REQUEST_DIRECTION.OUTGOING
-        ? eb(
-            "app_request.requesterWorkspaceMemberId",
-            "=",
-            identity.workspaceMemberId
-          )
-        : eb.val(true)
-    )
-    .orderBy("app_request.createdAt", "desc")
-    .execute()
-  return rows
+  return listWorkspaceAppGrantRequestViewRows({
+    appId: params.appId,
+    direction: params.direction,
+    requesterWorkspaceMemberId: identity.workspaceMemberId,
+  })
 }
 
 export async function submitWorkspaceAppGrantRequest(params: {
@@ -503,7 +314,7 @@ export async function submitWorkspaceAppGrantRequest(params: {
     params.workspaceId,
     params.userId
   )
-  const row = await insertWorkspaceAppGrantRequest(db, {
+  const row = await insertWorkspaceAppGrantRequestDefault({
     workspaceId: params.workspaceId,
     workspaceAppId: params.appId,
     grantee: {
@@ -593,17 +404,7 @@ export async function cancelWorkspaceAppGrantRequestByRequester(params: {
     params.workspaceId,
     params.userId
   )
-  const request = await db
-    .selectFrom("workspaceAppGrantRequests")
-    .select([
-      "id",
-      "workspaceId",
-      "workspaceAppId",
-      "requesterWorkspaceMemberId",
-      "status",
-    ])
-    .where("id", "=", params.requestId)
-    .executeTakeFirst()
+  const request = await findGrantRequestById(params.requestId)
   if (!request) {
     throw new Error("Workspace app grant request not found")
   }
@@ -619,7 +420,7 @@ export async function cancelWorkspaceAppGrantRequestByRequester(params: {
   if (request.status !== WORKSPACE_APP_GRANT_REQUEST_STATUS.PENDING) {
     throw new Error("Workspace app grant request is no longer pending")
   }
-  const cancelled = await cancelWorkspaceAppGrantRequest(db, {
+  const cancelled = await cancelWorkspaceAppGrantRequestDefault({
     workspaceId: params.workspaceId,
     workspaceAppId: params.appId,
     requestId: params.requestId,
@@ -935,7 +736,7 @@ export async function updateWorkspaceApp(params: {
       })
       break
     case WORKSPACE_APP_KIND.DEVICE_CAPABILITY:
-      await updateWorkspaceAppRoot(db, {
+      await updateWorkspaceAppRootDefault({
         id: params.appId,
         displayName: params.input.displayName,
         conversationTypeMaskOverride: params.input.conversationTypeMaskOverride,
@@ -979,12 +780,12 @@ export async function deleteWorkspaceApp(params: {
       await uninstallPluginUnified(params.appId)
       return true
     case WORKSPACE_APP_KIND.DEVICE_CAPABILITY:
-      await updateWorkspaceAppRoot(db, {
+      await updateWorkspaceAppRootDefault({
         id: params.appId,
         status: WORKSPACE_APP_STATUS.ARCHIVED,
         deletedAt: new Date(),
       })
-      await revokeWorkspaceAppGrantsForApp(db, params.appId)
+      await revokeWorkspaceAppGrantsForAppDefault(params.appId)
       return true
     default:
       throw new Error("Workspace app deletion is not supported for this kind")

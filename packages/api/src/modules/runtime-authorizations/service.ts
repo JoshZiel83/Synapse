@@ -29,15 +29,21 @@ import {
   validateGrantPolicyForCapability,
   type PolicyValidationFailure,
 } from "@synapse/shared/access/policies"
-import { sql, type Selectable } from "kysely"
 import type { ZodIssue } from "zod"
+import type { Executor } from "../../infrastructure/database/kysely.js"
 import {
-  db,
-  runBuilder,
-  takeFirstOn,
-  type Executor,
-  type KyselyDb,
-} from "../../infrastructure/database/kysely.js"
+  consumeRuntimeAuthorizationGrantRow,
+  getRuntimeAuthorizationGrantRow,
+  insertRuntimeAuthorizationGrantRow,
+  listCandidateRowsForDispatch,
+  listDashboardGrantRows,
+  lockActiveGrantForShare,
+  lockDeviceToolLatestRevisionForShare,
+  revokeRuntimeAuthorizationGrantRow,
+  runRuntimeAuthorizationGrantTransaction,
+  setLocalLockTimeout,
+  supersedeRuntimeAuthorizationGrantRow,
+} from "./repo.js"
 import {
   BrowserGrantPolicyError,
   normalizeBrowserGrantPolicy,
@@ -306,44 +312,6 @@ export class UnsupportedGrantTargetError extends Error {
 }
 
 // ============================================================================
-// SELECT column projection
-// ============================================================================
-
-function runtimeAuthorizationGrantSelectColumns() {
-  return [
-    "g.id",
-    "g.workspaceId",
-    "g.deviceId",
-    "g.deviceCapabilityId",
-    "g.deviceExposureId",
-    "g.subjectId",
-    "g.scopeSubjectId",
-    "g.createdByWorkspaceMemberId",
-    "g.sourceTaskId",
-    "g.retention",
-    "g.status",
-    "g.policy",
-    "g.sourceRetryNonce",
-    "g.sourceRuntimeSessionId",
-    "g.sourceRequestArgs",
-    "g.consumedAt",
-    "g.revokedAt",
-    "g.supersededAt",
-    "g.createdAt",
-    "g.updatedAt",
-    "subj.kind as subjectKind",
-    "subj.workspaceId as subjectWorkspaceId",
-    "subj.workspaceMemberId as subjectWorkspaceMemberId",
-    "subj.actorId as subjectActorId",
-    "subj.remoteAgentId as subjectRemoteAgentId",
-    "subj.conversationId as subjectConversationId",
-    "scope_subj.kind as scopeKind",
-    "scope_subj.workspaceId as scopeWorkspaceId",
-    "scope_subj.conversationId as scopeConversationId",
-  ] as const
-}
-
-// ============================================================================
 // Mapping: candidate → record. mapRuntimeAuthorizationGrantCandidate lives in
 // presenter.ts (it shapes the DTO + serializes instants). Imported + re-exported
 // above. Mapper is a pure function — caller must pass parsedPolicy from a
@@ -516,10 +484,12 @@ export async function createRuntimeAuthorizationGrant(
 
   // No transaction: normalize to a fresh Kysely transaction so we still run
   // subject upsert + grant INSERT + refetch in the same transaction (no
-  // partial state if an unrelated failure rolls back).
-  return db
-    .transaction()
-    .execute((trx) => createGrantInKyselyTx(trx, params, grantSpec))
+  // partial state if an unrelated failure rolls back). The transaction-open
+  // lives in repo.ts (the designated db-client layer); the service threads the
+  // in-flight trx into both the cross-module upsert and the repo row fns.
+  return runRuntimeAuthorizationGrantTransaction((trx) =>
+    createGrantInKyselyTx(trx, params, grantSpec)
+  )
 }
 
 async function createGrantInKyselyTx(
@@ -531,42 +501,26 @@ async function createGrantInKyselyTx(
   const scopeSubjectId = params.scope
     ? await upsertAccessSubject(trx, params.scope)
     : null
-  const inserted = await trx
-    .insertInto("runtimeAuthorizationGrants")
-    .values({
-      workspaceId: params.workspaceId,
-      deviceId: params.deviceId,
-      deviceCapabilityId: params.deviceCapabilityId,
-      deviceExposureId: params.deviceExposureId,
-      subjectId: subjectId,
-      scopeSubjectId: scopeSubjectId,
-      createdByWorkspaceMemberId: params.createdByWorkspaceMemberId || null,
-      sourceTaskId: params.sourceTaskId || null,
-      retention: params.retention,
-      status: "active",
-      policy: grantSpec as unknown as RuntimeAuthorizationGrantPolicyInsert,
-      sourceRetryNonce: params.sourceRetryNonce || null,
-      sourceRuntimeSessionId: params.sourceRuntimeSessionId || null,
-      sourceRequestArgs: (params.sourceRequestArgs ||
-        {}) as RuntimeAuthorizationGrantSourceRequestArgsInsert,
-    })
-    .returning("id")
-    .executeTakeFirst()
+  const inserted = await insertRuntimeAuthorizationGrantRow(trx, {
+    workspaceId: params.workspaceId,
+    deviceId: params.deviceId,
+    deviceCapabilityId: params.deviceCapabilityId,
+    deviceExposureId: params.deviceExposureId,
+    subjectId: subjectId,
+    scopeSubjectId: scopeSubjectId,
+    createdByWorkspaceMemberId: params.createdByWorkspaceMemberId || null,
+    sourceTaskId: params.sourceTaskId || null,
+    retention: params.retention,
+    policy: grantSpec as unknown as RuntimeAuthorizationGrantPolicyInsert,
+    sourceRetryNonce: params.sourceRetryNonce || null,
+    sourceRuntimeSessionId: params.sourceRuntimeSessionId || null,
+    sourceRequestArgs: (params.sourceRequestArgs ||
+      {}) as RuntimeAuthorizationGrantSourceRequestArgsInsert,
+  })
   if (!inserted) {
     throw new Error("Failed to create runtime authorization grant")
   }
-  const row = await trx
-    .selectFrom("runtimeAuthorizationGrants as g")
-    .innerJoin("accessSubjects as subj", "subj.id", "g.subjectId")
-    .leftJoin(
-      "accessSubjects as scope_subj",
-      "scope_subj.id",
-      "g.scopeSubjectId"
-    )
-    .select(runtimeAuthorizationGrantSelectColumns())
-    .where("g.id", "=", inserted.id)
-    .limit(1)
-    .executeTakeFirst()
+  const row = await getRuntimeAuthorizationGrantRow(inserted.id, trx)
   if (!row) {
     throw new Error("Failed to re-fetch inserted runtime authorization grant")
   }
@@ -586,23 +540,9 @@ export async function getRuntimeAuthorizationGrant(
   id: string,
   queryable?: Executor
 ): Promise<RuntimeAuthorizationGrantRecord | null> {
-  const statement = db
-    .selectFrom("runtimeAuthorizationGrants as g")
-    .innerJoin("accessSubjects as subj", "subj.id", "g.subjectId")
-    .leftJoin(
-      "accessSubjects as scope_subj",
-      "scope_subj.id",
-      "g.scopeSubjectId"
-    )
-    .select(runtimeAuthorizationGrantSelectColumns())
-    .where("g.id", "=", id)
-    .limit(1)
   const row = queryable
-    ? await takeFirstOn<RuntimeAuthorizationGrantCandidateRow>(
-        queryable,
-        statement
-      )
-    : await statement.executeTakeFirst()
+    ? await getRuntimeAuthorizationGrantRow(id, queryable)
+    : await getRuntimeAuthorizationGrantRow(id)
   if (!row) return null
   const candidate = rowToCandidate(row)
   if (!candidate.policyValidationResult.ok) {
@@ -621,38 +561,22 @@ export async function revokeRuntimeAuthorizationGrant(
   id: string,
   queryable?: Executor
 ) {
-  const statement = db
-    .updateTable("runtimeAuthorizationGrants")
-    .set({
-      status: "revoked",
-      revokedAt: sql`NOW()`,
-    })
-    .where("id", "=", id)
-    .where("status", "=", "active")
   if (queryable) {
-    await runBuilder(queryable, statement)
+    await revokeRuntimeAuthorizationGrantRow(id, queryable)
     return
   }
-  await statement.execute()
+  await revokeRuntimeAuthorizationGrantRow(id)
 }
 
 export async function supersedeRuntimeAuthorizationGrant(
   id: string,
   queryable?: Executor
 ) {
-  const statement = db
-    .updateTable("runtimeAuthorizationGrants")
-    .set({
-      status: "superseded",
-      supersededAt: sql`NOW()`,
-    })
-    .where("id", "=", id)
-    .where("status", "=", "active")
   if (queryable) {
-    await runBuilder(queryable, statement)
+    await supersedeRuntimeAuthorizationGrantRow(id, queryable)
     return
   }
-  await statement.execute()
+  await supersedeRuntimeAuthorizationGrantRow(id)
 }
 
 // ============================================================================
@@ -660,27 +584,18 @@ export async function supersedeRuntimeAuthorizationGrant(
 // caller actually flipped the row to 'consumed'; false = another concurrent
 // dispatch won the race, or the row was already non-active). MUST only be
 // called on `consume_once` retention candidates; until_revoked grants are
-// validated separately via FOR SHARE (no state mutation).
+// validated separately via FOR SHARE (no state mutation). The raw FOR UPDATE
+// SKIP LOCKED statement lives in repo.ts (guard r8); this thin wrapper keeps the
+// public service symbol + signature stable for the module barrel.
 // ============================================================================
 
 export async function consumeRuntimeAuthorizationGrant(
   id: string,
   executor?: Executor
 ): Promise<boolean> {
-  // Use raw SQL for SKIP LOCKED semantics — Kysely's updateTable doesn't yet
-  // expose a clean way to nest a FOR UPDATE SKIP LOCKED sub-select.
-  const statement = sql<{ id: string }>`
-    UPDATE runtime_authorization_grants
-    SET status = 'consumed', consumed_at = NOW()
-    WHERE id = (
-      SELECT id FROM runtime_authorization_grants
-      WHERE id = ${id} AND status = 'active'
-      FOR UPDATE SKIP LOCKED
-    )
-    RETURNING id
-  `
-  const result = await statement.execute(executor ?? db)
-  return result.rows.length > 0
+  return executor
+    ? consumeRuntimeAuthorizationGrantRow(id, executor)
+    : consumeRuntimeAuthorizationGrantRow(id)
 }
 
 // ============================================================================
@@ -1258,53 +1173,50 @@ async function tryClaimAndBegin(input: {
   prepared: PreparedDispatch
 }): Promise<TryClaimResult> {
   try {
-    const result = await db.transaction().execute(async (trx) => {
-      // Short lock timeout: a lock_timeout means another connection is
-      // updating device_tools (e.g., catalog sync); abort and surface as a
-      // transient runtime_constraint instead of waiting indefinitely.
-      await sql`SET LOCAL lock_timeout = '500ms'`.execute(trx)
-      // FOR SHARE: blocks catalog UPDATE without blocking other dispatch
-      // share-lockers.
-      const toolRow = await trx
-        .selectFrom("deviceTools")
-        .select(["latestRevisionId"])
-        .where("id", "=", input.prepared.toolId)
-        .forShare()
-        .executeTakeFirst()
-      if (
-        !toolRow ||
-        (toolRow.latestRevisionId as string | null) !==
-          input.prepared.toolRevisionId
-      ) {
-        return { kind: "denied_drift" as const }
-      }
-      if (input.record.retention === "consume_once") {
-        const claimed = await consumeRuntimeAuthorizationGrant(
-          input.record.id,
-          trx
-        )
-        if (!claimed) {
-          return { kind: "race_lost" as const }
+    const result =
+      await runRuntimeAuthorizationGrantTransaction<TryClaimResult>(
+        async (trx) => {
+          // Short lock timeout: a lock_timeout means another connection is
+          // updating device_tools (e.g., catalog sync); abort and surface as a
+          // transient runtime_constraint instead of waiting indefinitely.
+          await setLocalLockTimeout(trx)
+          // FOR SHARE: blocks catalog UPDATE without blocking other dispatch
+          // share-lockers.
+          const toolRow = await lockDeviceToolLatestRevisionForShare(
+            trx,
+            input.prepared.toolId
+          )
+          if (
+            !toolRow ||
+            toolRow.latestRevisionId !== input.prepared.toolRevisionId
+          ) {
+            return { kind: "denied_drift" as const }
+          }
+          if (input.record.retention === "consume_once") {
+            const claimed = await consumeRuntimeAuthorizationGrantRow(
+              input.record.id,
+              trx
+            )
+            if (!claimed) {
+              return { kind: "race_lost" as const }
+            }
+          } else {
+            // until_revoked: FOR SHARE re-check of grant status. No state mutation.
+            const stillActive = await lockActiveGrantForShare(
+              trx,
+              input.record.id
+            )
+            if (!stillActive) {
+              return { kind: "race_lost" as const }
+            }
+          }
+          const operation = await beginDeviceOperationOn(
+            trx,
+            input.prepared.beginInput
+          )
+          return { kind: "ok" as const, operation }
         }
-      } else {
-        // until_revoked: FOR SHARE re-check of grant status. No state mutation.
-        const grantRow = await trx
-          .selectFrom("runtimeAuthorizationGrants")
-          .select("id")
-          .where("id", "=", input.record.id)
-          .where("status", "=", "active")
-          .forShare()
-          .executeTakeFirst()
-        if (!grantRow) {
-          return { kind: "race_lost" as const }
-        }
-      }
-      const operation = await beginDeviceOperationOn(
-        trx,
-        input.prepared.beginInput
       )
-      return { kind: "ok" as const, operation }
-    })
     return result
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -1331,51 +1243,16 @@ async function listCandidatesForDispatch(params: {
   sourceTaskId?: string
 }): Promise<RuntimeAuthorizationGrantCandidate[]> {
   if (params.runtimeSubjectIds.length === 0) return []
-  const rows = await db
-    .selectFrom("runtimeAuthorizationGrants as g")
-    .innerJoin("accessSubjects as subj", "subj.id", "g.subjectId")
-    .leftJoin(
-      "accessSubjects as scope_subj",
-      "scope_subj.id",
-      "g.scopeSubjectId"
-    )
-    .select(runtimeAuthorizationGrantSelectColumns())
-    .where("g.workspaceId", "=", params.workspaceId)
-    .where("g.deviceId", "=", params.deviceId)
-    .where("g.deviceCapabilityId", "=", params.deviceCapabilityId)
-    .where("g.deviceExposureId", "=", params.deviceExposureId)
-    .where("g.status", "=", "active")
-    .where("g.subjectId", "in", params.runtimeSubjectIds)
-    .where((eb) =>
-      eb.or([
-        eb("g.scopeSubjectId", "is", null),
-        ...(params.runtimeScopeSubjectIds.length > 0
-          ? [eb("g.scopeSubjectId", "in", params.runtimeScopeSubjectIds)]
-          : []),
-      ])
-    )
-    .where((eb) => {
-      const branches: any[] = [eb("g.retention", "=", "until_revoked")]
-      if (params.retryNonce) {
-        branches.push(
-          eb.and([
-            eb("g.retention", "=", "consume_once"),
-            eb("g.sourceRetryNonce", "=", params.retryNonce),
-          ])
-        )
-      }
-      if (params.sourceTaskId) {
-        branches.push(
-          eb.and([
-            eb("g.retention", "=", "consume_once"),
-            eb("g.sourceTaskId", "=", params.sourceTaskId),
-          ])
-        )
-      }
-      return eb.or(branches)
-    })
-    .orderBy("g.createdAt", "desc")
-    .execute()
+  const rows = await listCandidateRowsForDispatch({
+    workspaceId: params.workspaceId,
+    deviceId: params.deviceId,
+    deviceCapabilityId: params.deviceCapabilityId,
+    deviceExposureId: params.deviceExposureId,
+    runtimeSubjectIds: params.runtimeSubjectIds,
+    runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
+    retryNonce: params.retryNonce,
+    sourceTaskId: params.sourceTaskId,
+  })
   return rows
     .map((row) => {
       try {
@@ -1411,22 +1288,11 @@ export async function listDeviceCapabilityRuntimeAuthorizationGrantsForDashboard
   deviceCapabilityId: string
   includeRevoked?: boolean
 }): Promise<DashboardGrantListResult> {
-  let query = db
-    .selectFrom("runtimeAuthorizationGrants as g")
-    .innerJoin("accessSubjects as subj", "subj.id", "g.subjectId")
-    .leftJoin(
-      "accessSubjects as scope_subj",
-      "scope_subj.id",
-      "g.scopeSubjectId"
-    )
-    .select(runtimeAuthorizationGrantSelectColumns())
-    .where("g.workspaceId", "=", input.workspaceId)
-    .where("g.deviceCapabilityId", "=", input.deviceCapabilityId)
-    .orderBy("g.createdAt", "desc")
-  if (!input.includeRevoked) {
-    query = query.where("g.status", "=", "active")
-  }
-  const rows = await query.execute()
+  const rows = await listDashboardGrantRows({
+    workspaceId: input.workspaceId,
+    deviceCapabilityId: input.deviceCapabilityId,
+    includeRevoked: input.includeRevoked,
+  })
   const valid: RuntimeAuthorizationGrantRecord[] = []
   const corrupt: CorruptGrantRow[] = []
   for (const row of rows) {

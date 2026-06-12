@@ -6,13 +6,12 @@ import {
   serializeInstant,
   serializeOptionalInstant,
 } from "../../infrastructure/datetime.js"
-import { db, type Executor } from "../../infrastructure/database/kysely.js"
+import type { Executor } from "../../infrastructure/database/kysely.js"
 import { emitEvent } from "../../infrastructure/events/index.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
 import { sessionThinkingQueue } from "../../workers/queues.js"
 import {
   isThreadConversationKind,
-  THREAD_CONVERSATION_KINDS,
   textBlock,
   type ActorRuntimeActivityState,
   type ActorRuntimePhase,
@@ -30,9 +29,9 @@ import {
   type SessionWakeupSourceType,
   type SessionWakeupStatus,
 } from "@synapse/shared"
-import { sql } from "kysely"
 import { itemPartsToCanonicalContentBlocks } from "../chat/message-content.js"
 import { getSession, updateSessionStatus } from "./service.js"
+import * as repo from "./repo.js"
 import { resolveToolPresentation } from "./tool-presentation/resolver.js"
 import {
   renderToolRequest,
@@ -41,7 +40,6 @@ import {
 } from "./tool-presentation/render.js"
 import { redactDeep } from "./tool-presentation/redact.js"
 import type {
-  SessionWakeupMetadataInsert,
   SessionWakeupRow,
   ToolCallTaskRow,
   ToolResultPartRow,
@@ -110,13 +108,7 @@ async function loadRuntimeWakeups(
   sessionId: string,
   statuses: SessionWakeupStatus[] = ["pending", "attached"]
 ) {
-  const rows = await db
-    .selectFrom("sessionWakeups")
-    .selectAll()
-    .where("sessionId", "=", sessionId)
-    .where("status", "in", statuses)
-    .orderBy("createdAt", "asc")
-    .execute()
+  const rows = await repo.listSessionWakeups(sessionId, statuses)
 
   return rows.map(presentWakeup)
 }
@@ -262,36 +254,13 @@ function mapTaskLifecycleToRuntimeTaskStatus(
 }
 
 async function loadActiveTurnIdForSession(sessionId: string) {
-  const row = await db
-    .selectFrom("turns")
-    .select("id")
-    .where("sessionId", "=", sessionId)
-    .where("status", "=", "running")
-    .orderBy("startedAt", "desc")
-    .limit(1)
-    .executeTakeFirst()
-
-  return row?.id
+  return repo.getActiveTurnId(sessionId)
 }
 
 async function loadProcessingTargetsForTurn(
   turnId: string
 ): Promise<ActorRuntimeProcessingTarget[]> {
-  const rows = await db
-    .selectFrom("sessionWakeups")
-    .select([
-      "id",
-      "sourceParticipantType",
-      "sourceParticipantId",
-      "sourceName",
-      "summary",
-      "createdAt",
-      "attachedAt",
-    ])
-    .where("turnId", "=", turnId)
-    .where("status", "=", "attached")
-    .orderBy("createdAt", "asc")
-    .execute()
+  const rows = await repo.listAttachedWakeupTargets(turnId)
 
   return rows.map((row) => ({
     wakeupId: row.id,
@@ -378,37 +347,13 @@ function readToolMeta(metadata: unknown): Record<string, unknown> | undefined {
 }
 
 async function buildToolActivityDetail(turnId: string) {
-  const turnRow = await db
-    .selectFrom("turns")
-    .innerJoin("sessions as s", "s.id", "turns.sessionId")
-    .innerJoin("actors as a", "a.id", "turns.actorId")
-    .innerJoin("workspaceApps as app", "app.id", "a.id")
-    .select([
-      "turns.id",
-      "turns.sessionId",
-      "turns.conversationId",
-      "turns.actorId",
-      "turns.startedAt",
-      "turns.updatedAt",
-      "turns.completedAt",
-      "s.workspaceId",
-      "app.displayName as actorDisplayName",
-    ])
-    .where("turns.id", "=", turnId)
-    .limit(1)
-    .executeTakeFirst()
+  const turnRow = await repo.getTurnActivityHeader(turnId)
 
   if (!turnRow) {
     return null
   }
 
-  const toolCalls = await db
-    .selectFrom("toolCalls")
-    .selectAll()
-    .where("turnId", "=", turnId)
-    .orderBy("createdAt", "asc")
-    .orderBy("callIndex", "asc")
-    .execute()
+  const toolCalls = await repo.listTurnToolCalls(turnId)
 
   const toolCallIds = toolCalls.map((row) => row.id)
   const latestResultsByToolCall = new Map<string, ToolResultRow>()
@@ -420,13 +365,7 @@ async function buildToolActivityDetail(turnId: string) {
   >()
 
   if (toolCallIds.length > 0) {
-    const results = await db
-      .selectFrom("toolResults")
-      .selectAll()
-      .where("toolCallId", "in", toolCallIds)
-      .orderBy("toolCallId", "asc")
-      .orderBy("resultIndex", "desc")
-      .execute()
+    const results = await repo.listToolResultsForToolCalls(toolCallIds)
 
     for (const row of results) {
       if (!latestResultsByToolCall.has(row.toolCallId)) {
@@ -436,13 +375,7 @@ async function buildToolActivityDetail(turnId: string) {
 
     const resultIds = [...latestResultsByToolCall.values()].map((row) => row.id)
     if (resultIds.length > 0) {
-      const resultParts = await db
-        .selectFrom("toolResultParts")
-        .selectAll()
-        .where("toolResultId", "in", resultIds)
-        .orderBy("toolResultId", "asc")
-        .orderBy("ordinal", "asc")
-        .execute()
+      const resultParts = await repo.listToolResultParts(resultIds)
 
       for (const row of resultParts) {
         const existing = resultPartsByResultId.get(row.toolResultId) || []
@@ -451,12 +384,7 @@ async function buildToolActivityDetail(turnId: string) {
       }
     }
 
-    const tasks = await db
-      .selectFrom("toolCallTasks")
-      .selectAll()
-      .where("sourceToolCallId", "in", toolCallIds)
-      .orderBy("createdAt", "desc")
-      .execute()
+    const tasks = await repo.listLatestTasksForToolCalls(toolCallIds)
 
     for (const row of tasks) {
       if (
@@ -469,13 +397,7 @@ async function buildToolActivityDetail(turnId: string) {
 
     const taskIds = [...latestTasksByToolCall.values()].map((row) => row.id)
     if (taskIds.length > 0) {
-      const outputRows = await db
-        .selectFrom("toolCallTaskOutputChunks")
-        .select(["taskId", "stream", "textValue", "seq"])
-        .where("taskId", "in", taskIds)
-        .orderBy("taskId", "asc")
-        .orderBy("seq", "desc")
-        .execute()
+      const outputRows = await repo.listTaskOutputChunks(taskIds)
 
       for (const row of outputRows) {
         const existing = outputChunksByTaskId.get(row.taskId) || []
@@ -730,13 +652,8 @@ export async function getConversationRuntimeMap(conversationIds: string[]) {
     runtimeMap[conversationId] = parsed
   }
 
-  const sessionResult = await db
-    .selectFrom("sessions as s")
-    .innerJoin("conversations as c", "c.id", "s.conversationId")
-    .select(["s.id", "s.actorId", "s.conversationId"])
-    .where("s.conversationId", "in", conversationIds)
-    .where("c.kind", "in", [...THREAD_CONVERSATION_KINDS])
-    .execute()
+  const sessionResult =
+    await repo.listThreadSessionsForConversations(conversationIds)
 
   const missingSessions = sessionResult.filter(
     (row) => !runtimeMap[row.conversationId]?.[row.actorId]
@@ -1009,89 +926,7 @@ export async function insertSessionWakeupRow(
   created: SessionWakeupRow
   reusedExistingWakeup: boolean
 }> {
-  let created: SessionWakeupRow | undefined
-  let reusedExistingWakeup = false
-
-  if (params.sourceItemId) {
-    const insertResult = await sql<SessionWakeupRow>`
-        INSERT INTO session_wakeups (
-          id,
-          session_id,
-          source_type,
-          source_item_id,
-          source_session_id,
-          source_participant_type,
-          source_participant_id,
-          source_name,
-          summary,
-          reason_text,
-          automation_execution_id,
-          automation_occurrence_id,
-          status,
-          metadata
-        )
-        VALUES (
-          ${crypto.randomUUID()},
-          ${params.sessionId},
-          ${params.sourceType},
-          ${params.sourceItemId},
-          ${params.sourceSessionId || null},
-          ${params.sourceParticipantType || null},
-          ${params.sourceParticipantId || null},
-          ${params.sourceName || null},
-          ${params.summary},
-          ${params.reasonText || null},
-          ${params.automationExecutionId || null},
-          ${params.automationOccurrenceId || null},
-          'pending',
-          ${JSON.stringify(params.metadata || {})}::jsonb
-        )
-        ON CONFLICT (session_id, source_type, source_item_id)
-        WHERE source_item_id IS NOT NULL
-        DO NOTHING
-        RETURNING *
-      `.execute(executor)
-    created = insertResult.rows[0]
-
-    if (!created) {
-      const existing = await executor
-        .selectFrom("sessionWakeups")
-        .selectAll()
-        .where("sessionId", "=", params.sessionId)
-        .where("sourceType", "=", params.sourceType)
-        .where("sourceItemId", "=", params.sourceItemId)
-        .orderBy("createdAt", "desc")
-        .limit(1)
-        .execute()
-      created = existing[0]
-      reusedExistingWakeup = Boolean(created)
-    }
-  } else {
-    created = await executor
-      .insertInto("sessionWakeups")
-      .values({
-        id: crypto.randomUUID(),
-        sessionId: params.sessionId,
-        sourceType: params.sourceType,
-        sourceItemId: null,
-        sourceSessionId: params.sourceSessionId || null,
-        sourceParticipantType: params.sourceParticipantType || null,
-        sourceParticipantId: params.sourceParticipantId || null,
-        sourceName: params.sourceName || null,
-        summary: params.summary,
-        reasonText: params.reasonText || null,
-        automationExecutionId: params.automationExecutionId || null,
-        automationOccurrenceId: params.automationOccurrenceId || null,
-        status: "pending",
-        metadata: (params.metadata || {}) as SessionWakeupMetadataInsert,
-      })
-      .returningAll()
-      .executeTakeFirst()
-  }
-  if (!created) {
-    throw new Error("Failed to enqueue session wakeup")
-  }
-  return { created, reusedExistingWakeup }
+  return repo.insertSessionWakeupRow(executor, params)
 }
 
 /**
@@ -1154,10 +989,8 @@ export async function enqueueSessionWakeup(params: EnqueueSessionWakeupParams) {
     throw new Error(`Session ${params.sessionId} is closed`)
   }
 
-  const { created, reusedExistingWakeup } = await insertSessionWakeupRow(
-    db,
-    params
-  )
+  const { created, reusedExistingWakeup } =
+    await repo.insertSessionWakeupRowDefault(params)
 
   if (reusedExistingWakeup) {
     return created
@@ -1171,48 +1004,29 @@ export async function enqueueSessionWakeup(params: EnqueueSessionWakeupParams) {
 export async function attachPendingWakeupsToTurn(
   sessionId: string,
   turnId: string,
-  executor: Executor = db
+  executor?: Executor
 ) {
-  const rows = await executor
-    .updateTable("sessionWakeups")
-    .set({
-      status: "attached",
-      turnId: turnId,
-      attachedAt: sql`NOW()`,
-    })
-    .where("sessionId", "=", sessionId)
-    .where("status", "=", "pending")
-    .returningAll()
-    .execute()
+  const rows = await repo.attachPendingWakeupsToTurnRows(
+    sessionId,
+    turnId,
+    executor
+  )
 
   return rows.map(presentWakeup)
 }
 
-export async function markTurnWakeupsProcessed(turnId: string) {
-  await db
-    .updateTable("sessionWakeups")
-    .set({
-      status: "processed",
-      processedAt: sql`NOW()`,
-    })
-    .where("turnId", "=", turnId)
-    .where("status", "=", "attached")
-    .execute()
+export async function markTurnWakeupsProcessed(
+  turnId: string,
+  executor?: Executor
+) {
+  await repo.markTurnWakeupsProcessed(turnId, executor)
 }
 
 export async function markTurnWakeupsDropped(
   turnId: string,
-  executor: Executor = db
+  executor?: Executor
 ) {
-  await executor
-    .updateTable("sessionWakeups")
-    .set({
-      status: "dropped",
-      processedAt: sql`NOW()`,
-    })
-    .where("turnId", "=", turnId)
-    .where("status", "=", "attached")
-    .execute()
+  await repo.markTurnWakeupsDropped(turnId, executor)
 }
 
 /**
@@ -1223,42 +1037,20 @@ export async function markTurnWakeupsDropped(
  */
 export async function restoreTurnWakeupsToPending(
   turnId: string,
-  executor: Executor = db
+  executor?: Executor
 ) {
-  await executor
-    .updateTable("sessionWakeups")
-    .set({
-      status: "pending",
-      turnId: null,
-      attachedAt: null,
-    })
-    .where("turnId", "=", turnId)
-    .where("status", "=", "attached")
-    .execute()
+  await repo.restoreTurnWakeupsToPending(turnId, executor)
 }
 
 export async function getPendingWakeupCount(
   sessionId: string,
-  executor: Executor = db
+  executor?: Executor
 ) {
-  const row = await executor
-    .selectFrom("sessionWakeups")
-    .select(({ fn }) => fn.count<number>("id").as("count"))
-    .where("sessionId", "=", sessionId)
-    .where("status", "=", "pending")
-    .executeTakeFirst()
-
-  return Number(row?.count || 0)
+  return repo.getPendingWakeupCount(sessionId, executor)
 }
 
 export async function getPendingWakeups(sessionId: string) {
-  const rows = await db
-    .selectFrom("sessionWakeups")
-    .selectAll()
-    .where("sessionId", "=", sessionId)
-    .where("status", "=", "pending")
-    .orderBy("createdAt", "asc")
-    .execute()
+  const rows = await repo.listPendingSessionWakeups(sessionId)
 
   return rows.map(presentWakeup)
 }

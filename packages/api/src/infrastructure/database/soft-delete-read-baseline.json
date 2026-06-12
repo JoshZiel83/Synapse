@@ -23,18 +23,12 @@
     "conversations": 4,
     "users": 5
   },
-  "modules/devices/catalog-sync.ts": {
-    "devices": 1
-  },
   "modules/devices/control-plane-auth.ts": {
     "devices": 1
   },
   "modules/devices/repo.ts": {
     "conversations": 1,
-    "devices": 1
-  },
-  "modules/devices/service.ts": {
-    "devices": 3
+    "devices": 5
   },
   "modules/files/repo.ts": {
     "workspaces": 1
@@ -62,7 +56,7 @@
   "modules/model-groups/service.ts": {
     "workspaces": 1
   },
-  "modules/organization/service.ts": {
+  "modules/organization/repo.ts": {
     "catalog_items": 2,
     "publishers": 2
   },
@@ -86,7 +80,7 @@
   "modules/skills/service.ts": {
     "publishers": 1
   },
-  "modules/tasks/service.ts": {
+  "modules/tasks/repo.ts": {
     "conversations": 1,
     "devices": 2,
     "users": 6

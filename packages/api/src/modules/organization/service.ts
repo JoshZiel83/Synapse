@@ -1,10 +1,8 @@
-import type pg from "pg"
 import deepEqual from "fast-deep-equal"
 import {
   extractText,
   GROUP_CONVERSATION_KIND,
   normalizeActorDocs,
-  normalizeCanonicalContentBlocks,
   summarizeActorDoc,
   textBlocks,
   type Actor,
@@ -26,12 +24,6 @@ import {
   type UUID,
   type WorkspaceAppGrantPermission,
 } from "@synapse/shared"
-import { CompiledQuery } from "kysely"
-import {
-  db,
-  withDbTransaction,
-  type Executor,
-} from "../../infrastructure/database/kysely.js"
 import { createConversationEvent } from "../chat/service.js"
 import { presentActorPackageRecord, presentActorRow } from "./presenter.js"
 import type {
@@ -46,22 +38,22 @@ export type {
   ActorVersionRecord,
   ActorVersionRow,
 } from "./repo.types.js"
+import { type AccessSubject } from "../access/service.js"
 import {
-  listAuthorizedResourceIds,
-  type AccessSubject,
-} from "../access/service.js"
-import {
-  insertWorkspaceAppRoot,
-  updateWorkspaceAppRoot,
-} from "../workspace-apps/root-storage.js"
-import { insertWorkspaceAppGrant } from "../workspace-apps/grant-storage.js"
-
-type QueryRow = pg.QueryResultRow
-type QueryResultLike<T extends QueryRow> = { rows: T[] }
-type QueryRunner = <T extends QueryRow>(
-  text: string,
-  params?: unknown[]
-) => Promise<QueryResultLike<T>>
+  actorExists,
+  createActorTx,
+  deleteActorTx,
+  getActorPackageRow,
+  getActorRow,
+  getActorRowsByIds,
+  installActorPackageTx,
+  listActorPackageRows,
+  listActorVersionRows,
+  listAuthorizedActorIds,
+  loadActorDocsMap,
+  updateActorAvatar,
+  updateActorTx,
+} from "./repo.js"
 
 export interface ActorUpdateSourceInput {
   type: ActorUpdateSourceType
@@ -73,121 +65,9 @@ export interface ActorUpdateSourceInput {
   reason?: string
 }
 
-type ActorDocRow = {
-  id: string
-  actor_version_id: string
-  doc_key: ActorDoc["key"]
-  title: string
-  visibility: ActorDoc["visibility"]
-  priority: number
-  content_blocks: unknown
-}
-
 type ActorTreeNode = Actor & {
   children: ActorTreeNode[]
 }
-
-const ACTOR_SELECT = `
-  SELECT
-    a.id,
-    app.workspace_id,
-    app.display_name,
-    a.role,
-    a.title,
-    a.avatar_file_id,
-    a.avatar_emoji,
-    a.parent_id,
-    a.can_represent_user,
-    a.specialties,
-    a.config,
-    a.current_version,
-    (app.status = 'active') AS is_active,
-    a.is_public_shared,
-    a.created_at,
-    a.updated_at,
-    current_version.id AS current_actor_version_id,
-    source_ref.source_catalog_item_id,
-    source_ref.source_catalog_version_id,
-    source_ref.sync_mode AS source_sync_mode,
-    source_ref.baseline_actor_version AS source_baseline_actor_version,
-    source_ref.created_at AS source_created_at,
-    source_ref.updated_at AS source_updated_at,
-    source_item.slug AS source_slug,
-    source_item.display_name AS source_display_name,
-    source_item.latest_version_id AS source_latest_version_id,
-    source_publisher.slug AS source_publisher_slug,
-    source_publisher.display_name AS source_publisher_display_name,
-    imported_version.version AS source_imported_version,
-    latest_version.version AS source_latest_version
-  FROM actors a
-  JOIN workspace_apps_live app
-    ON app.id = a.id
-  JOIN actor_versions current_version
-    ON current_version.actor_id = a.id
-   AND current_version.version = a.current_version
-  LEFT JOIN actor_source_refs source_ref
-    ON source_ref.actor_id = a.id
-  LEFT JOIN catalog_items source_item
-    ON source_item.id = source_ref.source_catalog_item_id
-  LEFT JOIN publishers source_publisher
-    ON source_publisher.id = source_item.publisher_id
-  LEFT JOIN catalog_versions imported_version
-    ON imported_version.id = source_ref.source_catalog_version_id
-  LEFT JOIN catalog_versions latest_version
-    ON latest_version.id = source_item.latest_version_id
-`
-
-const ACTOR_PACKAGE_SELECT = `
-  SELECT
-    item.id AS package_id,
-    item.workspace_id AS package_workspace_id,
-    item.slug AS package_slug,
-    item.display_name AS package_display_name,
-    item.icon_file_id AS package_icon_file_id,
-    item.summary AS package_summary,
-    item.long_description AS package_long_description,
-    item.source_kind AS package_source_kind,
-    item.visibility AS package_visibility,
-    item.tags AS package_tags,
-    item.download_count AS package_download_count,
-    item.is_active AS package_is_active,
-    item.metadata AS package_metadata,
-    item.created_at AS package_created_at,
-    item.updated_at AS package_updated_at,
-    publisher.id AS publisher_id,
-    publisher.slug AS publisher_slug,
-    publisher.display_name AS publisher_display_name,
-    publisher.description AS publisher_description,
-    publisher.owner_user_id AS publisher_owner_user_id,
-    publisher.workspace_id AS publisher_workspace_id,
-    publisher.is_builtin AS publisher_is_builtin,
-    publisher.is_verified AS publisher_is_verified,
-    publisher.created_at AS publisher_created_at,
-    publisher.updated_at AS publisher_updated_at,
-    version.id AS version_id,
-    version.version AS version_value,
-    version.status AS version_status,
-    version.changelog AS version_changelog,
-    version.metadata AS version_metadata,
-    version.created_by_user_id AS version_created_by_user_id,
-    version.created_at AS version_created_at,
-    spec.role AS actor_role,
-    spec.display_name AS actor_display_name,
-    spec.avatar_file_id AS actor_avatar_file_id,
-    spec.avatar_emoji AS actor_avatar_emoji,
-    spec.title AS actor_title,
-    spec.can_represent_user AS actor_can_represent_user,
-    spec.docs AS actor_docs,
-    spec.specialties AS actor_specialties,
-    spec.config AS actor_config,
-    spec.metadata AS actor_metadata
-  FROM catalog_items item
-  JOIN publishers publisher ON publisher.id = item.publisher_id
-  JOIN catalog_versions version ON version.id = item.latest_version_id
-  JOIN actor_template_version_specs spec ON spec.catalog_version_id = version.id
-  WHERE item.item_kind = 'actor_template'
-    AND item.is_active = TRUE
-`
 
 export function parseJsonArray<T>(value: unknown): T[] {
   if (!value) return []
@@ -440,128 +320,9 @@ function buildActorVersionDelta(
   }
 }
 
-async function runQuery<T extends QueryRow>(text: string, params?: unknown[]) {
-  return runnerFor(db)<T>(text, params)
-}
-
-/**
- * Adapt an {@link Executor} (the top-level `db` or a transaction) to the
- * `(text, params) => { rows }` runner convention used throughout this module.
- * Routes raw SQL through Kysely's `CompiledQuery.raw` so the same statement
- * runs on whichever executor (pool or trx) the caller holds.
- */
-function runnerFor(executor: Executor): QueryRunner {
-  return async <T extends QueryRow>(text: string, params?: unknown[]) =>
-    executor.executeQuery<T>(
-      CompiledQuery.raw(text, params ? [...params] : [])
-    ) as Promise<QueryResultLike<T>>
-}
-
-async function loadActorDocsMap(
-  runner: QueryRunner,
-  actorVersionIds: string[]
-): Promise<Map<string, ActorDoc[]>> {
-  if (actorVersionIds.length === 0) {
-    return new Map()
-  }
-
-  const result = await runner<ActorDocRow>(
-    `SELECT id, actor_version_id, doc_key, title, visibility, priority, content_blocks
-     FROM actor_version_docs
-     WHERE actor_version_id = ANY($1::uuid[])
-     ORDER BY priority DESC, created_at ASC`,
-    [actorVersionIds]
-  )
-
-  const docsByVersionId = new Map<string, ActorDoc[]>()
-  for (const row of result.rows) {
-    const docs = docsByVersionId.get(row.actor_version_id) || []
-    docs.push({
-      id: row.id,
-      key: row.doc_key,
-      title: row.title,
-      visibility: row.visibility,
-      priority: row.priority,
-      content: normalizeCanonicalContentBlocks(
-        parseJsonArray(row.content_blocks)
-      ),
-    })
-    docsByVersionId.set(row.actor_version_id, docs)
-  }
-
-  for (const [versionId, docs] of docsByVersionId.entries()) {
-    docsByVersionId.set(versionId, sortDocs(docs))
-  }
-
-  return docsByVersionId
-}
-
-async function getActorRowsByIds(
-  workspaceId: UUID,
-  actorIds: UUID[]
-): Promise<ActorRow[]> {
-  if (actorIds.length === 0) return []
-
-  const result = await runQuery<ActorRow>(
-    `${ACTOR_SELECT}
-     WHERE app.workspace_id = $1
-       AND app.deleted_at IS NULL
-       AND a.id = ANY($2::uuid[])
-     ORDER BY a.created_at DESC`,
-    [workspaceId, actorIds]
-  )
-
-  return result.rows
-}
-
-async function getActorRow(
-  workspaceId: UUID,
-  actorId: UUID,
-  runner: QueryRunner = runQuery
-): Promise<ActorRow | null> {
-  const result = await runner<ActorRow>(
-    `${ACTOR_SELECT}
-     WHERE app.workspace_id = $1
-       AND app.deleted_at IS NULL
-       AND a.id = $2
-     LIMIT 1`,
-    [workspaceId, actorId]
-  )
-  return result.rows[0] || null
-}
-
-async function ensureParentActor(
-  workspaceId: UUID,
-  parentId: UUID | null | undefined,
-  actorId?: UUID,
-  runner: QueryRunner = runQuery
-) {
-  if (!parentId) return
-  if (actorId && parentId === actorId) {
-    throw new Error("Actor cannot be its own parent")
-  }
-
-  const parent = await runner<{ id: string }>(
-    `SELECT actor.id
-     FROM actors actor
-     INNER JOIN workspace_apps_live app
-       ON app.id = actor.id
-     WHERE actor.id = $1
-       AND app.workspace_id = $2
-       AND app.deleted_at IS NULL
-     LIMIT 1`,
-    [parentId, workspaceId]
-  )
-
-  if (parent.rows.length === 0) {
-    throw new Error("Parent actor not found")
-  }
-}
-
 async function buildActorResponseFromRows(rows: ActorRow[]) {
   if (rows.length === 0) return []
   const docsByVersionId = await loadActorDocsMap(
-    runQuery,
     rows.map((row) => row.current_actor_version_id)
   )
   return rows.map((row) =>
@@ -576,11 +337,8 @@ export async function listActors(
   workspaceId: UUID,
   subject: AccessSubject
 ): Promise<Actor[]> {
-  const actorIds = await listAuthorizedResourceIds(db, {
-    subject,
-    action: "actor.view",
-  })
-  const rows = await getActorRowsByIds(workspaceId, actorIds as UUID[])
+  const actorIds = await listAuthorizedActorIds(subject, "actor.view")
+  const rows = await getActorRowsByIds(workspaceId, actorIds)
   return buildActorResponseFromRows(rows)
 }
 
@@ -612,9 +370,7 @@ export async function getActor(
 ): Promise<Actor | null> {
   const row = await getActorRow(workspaceId, actorId)
   if (!row) return null
-  const docsByVersionId = await loadActorDocsMap(runQuery, [
-    row.current_actor_version_id,
-  ])
+  const docsByVersionId = await loadActorDocsMap([row.current_actor_version_id])
   return presentActorRow(
     row,
     docsByVersionId.get(row.current_actor_version_id) || []
@@ -625,54 +381,14 @@ export async function listActorVersions(
   actorId: UUID,
   workspaceId: UUID
 ): Promise<ActorVersionRecord[]> {
-  const actorExists = await runQuery<{ id: string }>(
-    `SELECT actor.id
-     FROM actors actor
-     INNER JOIN workspace_apps_live app
-       ON app.id = actor.id
-     WHERE actor.id = $1
-       AND app.workspace_id = $2
-       AND app.deleted_at IS NULL
-     LIMIT 1`,
-    [actorId, workspaceId]
-  )
-  if (actorExists.rows.length === 0) return []
+  const exists = await actorExists(workspaceId, actorId)
+  if (!exists) return []
 
-  const result = await runQuery<ActorVersionRow>(
-    `SELECT
-        id,
-        actor_id,
-        version,
-        previous_version_id,
-        display_name,
-        role,
-        title,
-        parent_id,
-        can_represent_user,
-        specialties,
-        config,
-        version_delta,
-        created_by_workspace_member_id,
-        source_type,
-        source_workspace_member_id,
-        source_actor_id,
-        source_session_id,
-        source_turn_id,
-        source_conversation_id,
-        source_reason,
-        created_at
-     FROM actor_versions
-     WHERE actor_id = $1
-     ORDER BY version DESC`,
-    [actorId]
-  )
+  const rows = await listActorVersionRows(actorId)
 
-  const docsByVersionId = await loadActorDocsMap(
-    runQuery,
-    result.rows.map((row) => row.id)
-  )
+  const docsByVersionId = await loadActorDocsMap(rows.map((row) => row.id))
 
-  return result.rows.map((row) => ({
+  return rows.map((row) => ({
     row,
     docs: docsByVersionId.get(row.id) || [],
   }))
@@ -705,126 +421,20 @@ export async function createActor(input: {
   const docs = sortDocs(normalizeActorDocs(input.docs || []))
   const specialties = sanitizeSpecialties(input.specialties)
 
-  const result = await withDbTransaction(async (trx) => {
-    const runner = runnerFor(trx)
-    await ensureParentActor(
-      input.workspaceId,
-      input.parentId,
-      undefined,
-      runner
-    )
-
-    const actorId = crypto.randomUUID()
-    await insertWorkspaceAppRoot(trx, {
-      id: actorId,
-      workspaceId: input.workspaceId,
-      kind: "actor",
-      displayName: input.displayName,
-      ownerWorkspaceMemberId: input.createdByWorkspaceMemberId || null,
-      status: "active",
-    })
-    const actorResult = await runner<{ id: string }>(
-      `INSERT INTO actors (
-	         id,
-	         role,
-         title,
-         avatar_file_id,
-         avatar_emoji,
-         parent_id,
-         can_represent_user,
-         specialties,
-         config,
-         current_version
-       )
-	       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, 1)
-	       RETURNING id`,
-      [
-        actorId,
-        input.role,
-        input.title || "",
-        input.avatarFileId || null,
-        normalizeAvatarEmoji(input.avatarEmoji) || null,
-        input.parentId || null,
-        Boolean(input.canRepresentUser),
-        specialties,
-        JSON.stringify(input.config || {}),
-      ]
-    )
-    const insertedActorId = actorResult.rows[0]!.id
-
-    for (const grant of input.grants || []) {
-      await insertWorkspaceAppGrant(trx, {
-        workspaceId: input.workspaceId,
-        workspaceAppId: insertedActorId,
-        target: grant.target,
-        permissions: grant.permissions,
-        conversationTypeMaskOverride:
-          grant.conversationTypeMaskOverride ?? null,
-        createdByWorkspaceMemberId: input.createdByWorkspaceMemberId || null,
-        reason: grant.reason ?? null,
-      })
-    }
-
-    const versionResult = await runner<{ id: string }>(
-      `INSERT INTO actor_versions (
-         actor_id,
-         version,
-         display_name,
-         role,
-         title,
-         parent_id,
-         can_represent_user,
-         specialties,
-         config,
-         created_by_workspace_member_id,
-         source_type,
-         source_workspace_member_id,
-         source_reason
-       )
-       VALUES ($1, 1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12)
-       RETURNING id`,
-      [
-        insertedActorId,
-        input.displayName,
-        input.role,
-        input.title || "",
-        input.parentId || null,
-        Boolean(input.canRepresentUser),
-        specialties,
-        JSON.stringify(input.config || {}),
-        input.createdByWorkspaceMemberId || null,
-        input.createdByWorkspaceMemberId ? "workspace_member" : "system",
-        input.createdByWorkspaceMemberId || null,
-        "actor_create",
-      ]
-    )
-    const actorVersionId = versionResult.rows[0]!.id
-
-    for (const doc of docs) {
-      await runner(
-        `INSERT INTO actor_version_docs (
-           actor_version_id,
-           doc_key,
-           title,
-           visibility,
-           priority,
-           content_blocks
-         )
-         VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
-        [
-          actorVersionId,
-          doc.key,
-          doc.title,
-          doc.visibility,
-          doc.priority,
-          JSON.stringify(doc.content),
-        ]
-      )
-    }
-
-    return {
-      actorId: insertedActorId,
-    }
+  const result = await createActorTx({
+    workspaceId: input.workspaceId,
+    createdByWorkspaceMemberId: input.createdByWorkspaceMemberId,
+    displayName: input.displayName,
+    role: input.role,
+    title: input.title,
+    avatarFileId: input.avatarFileId,
+    avatarEmoji: normalizeAvatarEmoji(input.avatarEmoji) || null,
+    canRepresentUser: input.canRepresentUser,
+    parentId: input.parentId,
+    specialties,
+    config: input.config,
+    docs,
+    grants: input.grants,
   })
 
   const actor = await getActor(result.actorId, input.workspaceId)
@@ -910,27 +520,11 @@ export async function updateActor(
 
   if (!delta) {
     if (avatarChanged) {
-      await runQuery(
-        `UPDATE actors
-         SET avatar_file_id = $2,
-             avatar_emoji = $3
-         WHERE id = $1
-           AND EXISTS (
-             SELECT 1
-             FROM workspace_apps_live app
-             WHERE app.id = actors.id
-               AND app.workspace_id = $4
-               AND app.deleted_at IS NULL
-           )`,
-        [
-          actorId,
-          nextAvatarFileId || null,
-          nextAvatarEmoji || null,
-          workspaceId,
-        ]
-      )
-      await updateWorkspaceAppRoot(db, {
-        id: actorId,
+      await updateActorAvatar({
+        actorId,
+        workspaceId,
+        avatarFileId: nextAvatarFileId || null,
+        avatarEmoji: nextAvatarEmoji || null,
         displayName: nextDefinition.displayName,
       })
       return getActor(actorId, workspaceId)
@@ -940,123 +534,23 @@ export async function updateActor(
 
   const nextVersion = currentActor.currentVersion + 1
 
-  await withDbTransaction(async (trx) => {
-    const runner = runnerFor(trx)
-    await ensureParentActor(
-      workspaceId,
-      nextDefinition.parentId || null,
-      actorId,
-      runner
-    )
-
-    const versionResult = await runner<{ id: string }>(
-      `INSERT INTO actor_versions (
-         actor_id,
-         version,
-         previous_version_id,
-         display_name,
-         role,
-         title,
-         parent_id,
-         can_represent_user,
-         specialties,
-         config,
-         version_delta,
-         created_by_workspace_member_id,
-         source_type,
-         source_workspace_member_id,
-	         source_actor_id,
-	         source_session_id,
-	         source_turn_id,
-	         source_conversation_id,
-	         source_reason
-	       )
-	       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13, $14, $15, $16, $17, $18, $19)
-	       RETURNING id`,
-      [
-        actorId,
-        nextVersion,
-        currentActorRow.current_actor_version_id,
-        nextDefinition.displayName,
-        nextDefinition.role,
-        nextDefinition.title,
-        nextDefinition.parentId || null,
-        nextDefinition.canRepresentUser,
-        sanitizeSpecialties(nextDefinition.specialties),
-        JSON.stringify(nextDefinition.config || {}),
-        JSON.stringify(delta),
-        source.workspaceMemberId || null,
-        source.type,
-        source.workspaceMemberId || null,
-        source.actorId || null,
-        source.sessionId || null,
-        source.turnId || null,
-        source.conversationId || null,
-        source.reason || null,
-      ]
-    )
-    const actorVersionId = versionResult.rows[0]!.id
-
-    for (const doc of nextDefinition.docs) {
-      await runner(
-        `INSERT INTO actor_version_docs (
-           actor_version_id,
-           doc_key,
-           title,
-           visibility,
-           priority,
-           content_blocks
-         )
-         VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
-        [
-          actorVersionId,
-          doc.key,
-          doc.title,
-          doc.visibility,
-          doc.priority,
-          JSON.stringify(doc.content),
-        ]
-      )
-    }
-
-    await runner(
-      `UPDATE actors
-      SET role = $2,
-           title = $3,
-           avatar_file_id = $4,
-           avatar_emoji = $5,
-           parent_id = $6,
-           can_represent_user = $7,
-           specialties = $8,
-           config = $9::jsonb,
-           current_version = $10,
-           updated_at = NOW()
-       WHERE id = $1
-         AND EXISTS (
-           SELECT 1
-           FROM workspace_apps_live app
-           WHERE app.id = actors.id
-             AND app.workspace_id = $11
-             AND app.deleted_at IS NULL
-         )`,
-      [
-        actorId,
-        nextDefinition.role,
-        nextDefinition.title,
-        nextDefinition.avatarFileId || null,
-        nextDefinition.avatarEmoji || null,
-        nextDefinition.parentId || null,
-        nextDefinition.canRepresentUser,
-        sanitizeSpecialties(nextDefinition.specialties),
-        JSON.stringify(nextDefinition.config || {}),
-        nextVersion,
-        workspaceId,
-      ]
-    )
-    await updateWorkspaceAppRoot(trx, {
-      id: actorId,
-      displayName: nextDefinition.displayName,
-    })
+  await updateActorTx({
+    actorId,
+    workspaceId,
+    nextVersion,
+    previousVersionId: currentActorRow.current_actor_version_id,
+    displayName: nextDefinition.displayName,
+    role: nextDefinition.role,
+    title: nextDefinition.title,
+    avatarFileId: nextDefinition.avatarFileId || null,
+    avatarEmoji: nextDefinition.avatarEmoji || null,
+    parentId: nextDefinition.parentId || null,
+    canRepresentUser: nextDefinition.canRepresentUser,
+    specialties: sanitizeSpecialties(nextDefinition.specialties),
+    config: nextDefinition.config || {},
+    delta,
+    docs: nextDefinition.docs,
+    source,
   })
 
   const actor = await getActor(actorId, workspaceId)
@@ -1069,33 +563,7 @@ export async function deleteActor(
   actorId: UUID,
   workspaceId: UUID
 ): Promise<boolean> {
-  const result = await withDbTransaction(async (trx) => {
-    const runner = runnerFor(trx)
-    const existing = await runner<{ id: string }>(
-      `SELECT actor.id
-       FROM actors actor
-       INNER JOIN workspace_apps_live app
-         ON app.id = actor.id
-       WHERE actor.id = $1
-         AND app.workspace_id = $2
-         AND app.deleted_at IS NULL
-       LIMIT 1`,
-      [actorId, workspaceId]
-    )
-    if (existing.rows.length === 0) {
-      return { deleted: false }
-    }
-
-    // Root lifecycle lives on workspace_apps. The detail row stays until purge.
-    await updateWorkspaceAppRoot(trx, {
-      id: actorId,
-      status: "archived",
-      deletedAt: new Date(),
-    })
-
-    return { deleted: true }
-  })
-
+  const result = await deleteActorTx(actorId, workspaceId)
   return result.deleted
 }
 
@@ -1103,49 +571,15 @@ export async function listActorPackages(params: {
   workspaceId: UUID
   search?: string
 }): Promise<ActorPackageRecord[]> {
-  const values: unknown[] = [params.workspaceId]
-  const searchSql = params.search?.trim()
-    ? `AND (
-         item.display_name ILIKE $2
-         OR item.slug ILIKE $2
-         OR item.summary ILIKE $2
-         OR publisher.display_name ILIKE $2
-       )`
-    : ""
-  if (searchSql) {
-    values.push(`%${params.search!.trim()}%`)
-  }
-
-  const result = await runQuery<ActorPackageRow>(
-    `${ACTOR_PACKAGE_SELECT}
-       AND (
-         (item.workspace_id IS NULL AND item.visibility <> 'private')
-         OR item.workspace_id = $1
-       )
-       ${searchSql}
-     ORDER BY item.download_count DESC, item.updated_at DESC`,
-    values
-  )
-
-  return result.rows.map(presentActorPackageRecord)
+  const rows = await listActorPackageRows(params)
+  return rows.map(presentActorPackageRecord)
 }
 
 export async function getActorPackage(
   packageId: UUID,
   workspaceId: UUID
 ): Promise<ActorPackageRecord> {
-  const result = await runQuery<ActorPackageRow>(
-    `${ACTOR_PACKAGE_SELECT}
-       AND item.id = $1
-       AND (
-         (item.workspace_id IS NULL AND item.visibility <> 'private')
-         OR item.workspace_id = $2
-       )
-     LIMIT 1`,
-    [packageId, workspaceId]
-  )
-
-  const row = result.rows[0]
+  const row = await getActorPackageRow(packageId, workspaceId)
   if (!row) {
     throw new Error("Actor package not found")
   }
@@ -1177,150 +611,23 @@ export async function installActorPackage(input: {
   const actorTitle = input.title ?? packageActor.title
   const syncMode = input.syncMode || "notify"
 
-  const result = await withDbTransaction(async (trx) => {
-    const runner = runnerFor(trx)
-    await ensureParentActor(
-      input.workspaceId,
-      input.parentId || null,
-      undefined,
-      runner
-    )
-
-    const actorId = crypto.randomUUID()
-    await insertWorkspaceAppRoot(trx, {
-      id: actorId,
-      workspaceId: input.workspaceId,
-      kind: "actor",
-      displayName: actorDisplayName,
-      ownerWorkspaceMemberId: input.createdByWorkspaceMemberId || null,
-      status: "active",
-    })
-    const actorResult = await runner<{ id: string }>(
-      `INSERT INTO actors (
-         id,
-         role,
-         title,
-         avatar_file_id,
-         avatar_emoji,
-         parent_id,
-         can_represent_user,
-         specialties,
-         config,
-         current_version
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, 1)
-       RETURNING id`,
-      [
-        actorId,
-        packageActor.role,
-        actorTitle,
-        packageActor.avatarFileId || null,
-        packageActor.avatarEmoji || null,
-        input.parentId || null,
-        packageActor.canRepresentUser,
-        sanitizeSpecialties(packageActor.specialties),
-        JSON.stringify(packageActor.config || {}),
-      ]
-    )
-    const insertedActorId = actorResult.rows[0]!.id
-
-    for (const grant of input.grants || []) {
-      await insertWorkspaceAppGrant(trx, {
-        workspaceId: input.workspaceId,
-        workspaceAppId: insertedActorId,
-        target: grant.target,
-        permissions: grant.permissions,
-        conversationTypeMaskOverride:
-          grant.conversationTypeMaskOverride ?? null,
-        createdByWorkspaceMemberId: input.createdByWorkspaceMemberId || null,
-        reason: grant.reason ?? null,
-      })
-    }
-
-    const versionResult = await runner<{ id: string }>(
-      `INSERT INTO actor_versions (
-         actor_id,
-         version,
-         display_name,
-         role,
-         title,
-         parent_id,
-         can_represent_user,
-         specialties,
-         config,
-         created_by_workspace_member_id,
-         source_type,
-         source_workspace_member_id,
-         source_reason
-       )
-       VALUES ($1, 1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12)
-       RETURNING id`,
-      [
-        insertedActorId,
-        actorDisplayName,
-        packageActor.role,
-        actorTitle,
-        input.parentId || null,
-        packageActor.canRepresentUser,
-        sanitizeSpecialties(packageActor.specialties),
-        JSON.stringify(packageActor.config || {}),
-        input.createdByWorkspaceMemberId || null,
-        input.createdByWorkspaceMemberId ? "workspace_member" : "system",
-        input.createdByWorkspaceMemberId || null,
-        "actor_package_install",
-      ]
-    )
-    const actorVersionId = versionResult.rows[0]!.id
-
-    for (const doc of packageActor.docs) {
-      await runner(
-        `INSERT INTO actor_version_docs (
-           actor_version_id,
-           doc_key,
-           title,
-           visibility,
-           priority,
-           content_blocks
-         )
-         VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
-        [
-          actorVersionId,
-          doc.key,
-          doc.title,
-          doc.visibility,
-          doc.priority,
-          JSON.stringify(doc.content),
-        ]
-      )
-    }
-
-    await runner(
-      `INSERT INTO actor_source_refs (
-         actor_id,
-         source_catalog_item_id,
-         source_catalog_version_id,
-         sync_mode,
-         baseline_actor_version
-       )
-       VALUES ($1, $2, $3, $4, 1)`,
-      [
-        actorId,
-        actorPackage.package.id,
-        actorPackage.package.latestRevisionId || null,
-        syncMode,
-      ]
-    )
-
-    await runner(
-      `UPDATE catalog_items
-       SET download_count = download_count + 1
-       WHERE id = $1`,
-      [actorPackage.package.id]
-    )
-
-    return {
-      actorId: insertedActorId,
-    }
+  const result = await installActorPackageTx({
+    workspaceId: input.workspaceId,
+    createdByWorkspaceMemberId: input.createdByWorkspaceMemberId,
+    displayName: actorDisplayName,
+    role: packageActor.role,
+    title: actorTitle,
+    avatarFileId: packageActor.avatarFileId || null,
+    avatarEmoji: packageActor.avatarEmoji || null,
+    parentId: input.parentId || null,
+    canRepresentUser: packageActor.canRepresentUser,
+    specialties: sanitizeSpecialties(packageActor.specialties),
+    config: packageActor.config || {},
+    docs: packageActor.docs,
+    grants: input.grants,
+    sourceCatalogItemId: actorPackage.package.id,
+    sourceCatalogVersionId: actorPackage.package.latestRevisionId || null,
+    syncMode,
   })
 
   const actor = await getActor(result.actorId, input.workspaceId)

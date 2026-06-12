@@ -32,6 +32,9 @@ import {
   type DatabaseTransaction,
 } from "../../../infrastructure/database/kysely.js"
 import type {
+  TransportAccountCredentialsInsert,
+  TransportAccountConfigInsert,
+  TransportAccountMetadataInsert,
   TransportAddressMetadataInsert,
   ConversationParticipantAddressMetadataInsert,
   TransportMessageLinkMetadataInsert,
@@ -1229,4 +1232,306 @@ export async function updateTransportEndpointMetadataJsonb(params: {
     .where("id", "=", params.endpointId)
     .returningAll()
     .executeTakeFirst()
+}
+
+// ─────────────────────── queries: accounts ───────────────────────
+
+/**
+ * The workspace-member-app actor existence check behind
+ * `assertWorkspaceActor`: the actor row must join to a non-deleted,
+ * active workspace app in the given workspace. Soft-delete predicate
+ * (`app.deletedAt is null`) + `app.status = 'active'` are load-bearing.
+ */
+export async function selectActorInWorkspace(params: {
+  actorId: string
+  workspaceId: string
+}): Promise<{ id: string } | undefined> {
+  return db
+    .selectFrom("actors as actor")
+    .innerJoin("workspaceApps as app", "app.id", "actor.id")
+    .select("actor.id")
+    .where("actor.id", "=", params.actorId)
+    .where("app.workspaceId", "=", params.workspaceId)
+    .where("app.deletedAt", "is", null)
+    .where("app.status", "=", "active")
+    .limit(1)
+    .executeTakeFirst()
+}
+
+/**
+ * Load a single transport_accounts row scoped to its workspace. Returns
+ * the raw row; the service normalizes (and reads snake-free columns like
+ * `transportKind`/`status` straight off the row for its guards).
+ */
+export async function selectTransportAccountRow(
+  workspaceId: string,
+  accountId: string
+) {
+  return db
+    .selectFrom("transportAccounts")
+    .selectAll()
+    .where("workspaceId", "=", workspaceId)
+    .where("id", "=", accountId)
+    .limit(1)
+    .executeTakeFirst()
+}
+
+export async function selectTransportAccountRowByWorkspaceKey(params: {
+  workspaceId: string
+  transportKind: TransportKind
+  accountKey: string
+}) {
+  return db
+    .selectFrom("transportAccounts")
+    .selectAll()
+    .where("workspaceId", "=", params.workspaceId)
+    .where("transportKind", "=", params.transportKind)
+    .where("accountKey", "=", params.accountKey.trim())
+    .limit(1)
+    .executeTakeFirst()
+}
+
+export async function selectTransportAccountRowById(accountId: string) {
+  return db
+    .selectFrom("transportAccounts")
+    .selectAll()
+    .where("id", "=", accountId)
+    .limit(1)
+    .executeTakeFirst()
+}
+
+export async function selectTransportAccountRows(workspaceId: string) {
+  return db
+    .selectFrom("transportAccounts")
+    .selectAll()
+    .where("workspaceId", "=", workspaceId)
+    .orderBy("createdAt", "desc")
+    .execute()
+}
+
+export async function selectTransportAccountRowByKindAndId(params: {
+  accountId: string
+  transportKind: TransportKind
+}) {
+  return db
+    .selectFrom("transportAccounts")
+    .selectAll()
+    .where("id", "=", params.accountId)
+    .where("transportKind", "=", params.transportKind)
+    .limit(1)
+    .executeTakeFirst()
+}
+
+/**
+ * Active transport accounts, optionally filtered by connection mode +
+ * transport kind. The `status = 'active'` predicate is the runtime
+ * supervisor's load-bearing filter.
+ */
+export async function selectActiveTransportAccountRows(params?: {
+  connectionMode?: TransportConnectionMode
+  transportKind?: TransportKind
+}) {
+  let builder = db
+    .selectFrom("transportAccounts")
+    .selectAll()
+    .where("status", "=", "active")
+
+  if (params?.connectionMode) {
+    builder = builder.where("connectionMode", "=", params.connectionMode)
+  }
+  if (params?.transportKind) {
+    builder = builder.where("transportKind", "=", params.transportKind)
+  }
+
+  return builder.orderBy("createdAt", "asc").execute()
+}
+
+/**
+ * The dashboard "session" loader: every (account, endpoint) pair with its
+ * optional conversation binding + last inbound/outbound activity. The raw
+ * `MAX(created_at)` sub-selects and the `COALESCE(..., te.updated_at)`
+ * orderBy carry snake_case column literals verbatim (CamelCasePlugin does
+ * not rewrite raw-sql string contents). Returns raw joined rows; the
+ * service maps them through `normalizeTransportSessionRow`.
+ */
+export async function selectTransportSessionRows(workspaceId: string) {
+  const inboundActivity = db
+    .selectFrom("transportMessageLinks")
+    .select("transportEndpointId")
+    .select(sql<Date | null>`MAX(created_at)`.as("lastInboundAt"))
+    .where("direction", "=", "inbound")
+    .groupBy("transportEndpointId")
+    .as("inbound_activity")
+
+  const outboundActivity = db
+    .selectFrom("transportMessageLinks")
+    .select("transportEndpointId")
+    .select(sql<Date | null>`MAX(created_at)`.as("lastOutboundAt"))
+    .where("direction", "=", "outbound")
+    .groupBy("transportEndpointId")
+    .as("outbound_activity")
+
+  return db
+    .selectFrom("transportEndpoints as te")
+    .innerJoin("transportAccounts as ta", "ta.id", "te.transportAccountId")
+    .leftJoin(
+      "conversationTransportBindings as ctb",
+      "ctb.transportEndpointId",
+      "te.id"
+    )
+    .leftJoin("conversations as c", "c.id", "ctb.conversationId")
+    .leftJoin(inboundActivity, "inbound_activity.transportEndpointId", "te.id")
+    .leftJoin(
+      outboundActivity,
+      "outbound_activity.transportEndpointId",
+      "te.id"
+    )
+    .select([
+      "ctb.id as bindingId",
+      "ctb.workspaceId",
+      "ctb.conversationId",
+      "ctb.outboundEnabled",
+      "ctb.inboundActorMode",
+      "ctb.inboundActorId",
+      "ctb.metadata as bindingMetadata",
+      "ctb.createdAt as bindingCreatedAt",
+      "ctb.updatedAt as bindingUpdatedAt",
+      "c.title as conversationTitle",
+      "ta.id",
+      "ta.workspaceId as accountWorkspaceId",
+      "ta.accountKey",
+      "ta.displayName",
+      "ta.transportKind",
+      "ta.ownerScope",
+      "ta.ownerWorkspaceMemberId",
+      "ta.inboundActorMode as accountInboundActorMode",
+      "ta.inboundActorId as accountInboundActorId",
+      "ta.connectionMode",
+      "ta.status",
+      "ta.credentials",
+      "ta.config",
+      "ta.metadata",
+      "ta.createdAt",
+      "ta.updatedAt",
+      "te.id as endpointId",
+      "te.transportAccountId",
+      "te.endpointType",
+      "te.externalId as endpointExternalId",
+      "te.parentExternalId",
+      "te.displayName as endpointDisplayName",
+      "te.metadata as endpointMetadata",
+      "te.createdAt as endpointCreatedAt",
+      "te.updatedAt as endpointUpdatedAt",
+      "inbound_activity.lastInboundAt as lastInboundAt",
+      "outbound_activity.lastOutboundAt as lastOutboundAt",
+    ])
+    .where("ta.workspaceId", "=", workspaceId)
+    .orderBy(
+      sql`COALESCE(inbound_activity.last_inbound_at, outbound_activity.last_outbound_at, te.updated_at)`,
+      "desc"
+    )
+    .orderBy("te.createdAt", "desc")
+    .execute()
+}
+
+/**
+ * Insert a new transport_accounts row. Callers pass already-validated +
+ * normalized credentials/config/metadata; the repo owns the `id`/`NOW()`
+ * minting and the JSONB column casts. Returns the raw inserted row for
+ * the service to normalize.
+ */
+export async function insertTransportAccountRow(params: {
+  workspaceId: string
+  transportKind: TransportKind
+  accountKey: string
+  displayName: string
+  ownerScope: TransportAccountOwnerScope
+  ownerWorkspaceMemberId: string | null
+  inboundActorMode: TransportAccountInboundActorMode
+  inboundActorId: string | null
+  connectionMode: TransportConnectionMode
+  status: "active" | "disabled" | "error"
+  credentials: Record<string, unknown>
+  config: Record<string, unknown>
+  metadata: Record<string, unknown>
+}) {
+  return db
+    .insertInto("transportAccounts")
+    .values({
+      id: uuidv4(),
+      workspaceId: params.workspaceId,
+      transportKind: params.transportKind,
+      accountKey: params.accountKey.trim(),
+      displayName: params.displayName.trim(),
+      ownerScope: params.ownerScope,
+      ownerWorkspaceMemberId: params.ownerWorkspaceMemberId,
+      inboundActorMode: params.inboundActorMode,
+      inboundActorId: params.inboundActorId,
+      connectionMode: params.connectionMode,
+      status: params.status,
+      credentials: params.credentials as TransportAccountCredentialsInsert,
+      config: params.config as TransportAccountConfigInsert,
+      metadata: params.metadata as TransportAccountMetadataInsert,
+      createdAt: sql`NOW()`,
+    })
+    .returningAll()
+    .executeTakeFirstOrThrow()
+}
+
+/**
+ * UPDATE a transport_accounts row inside the supplied transaction. Takes
+ * an injected `tx` so the service can keep the UPDATE in the same commit
+ * as its connector-recovery side-effects (see
+ * `runTransportAccountTransaction`). Returns the raw updated row.
+ */
+export async function updateTransportAccountRow(
+  tx: DatabaseTransaction,
+  params: {
+    workspaceId: string
+    accountId: string
+    set: {
+      displayName: string
+      ownerScope: TransportAccountOwnerScope
+      ownerWorkspaceMemberId: string | null
+      inboundActorMode: TransportAccountInboundActorMode
+      inboundActorId: string | null
+      connectionMode: TransportConnectionMode
+      status: "active" | "disabled" | "error"
+      credentials: Record<string, unknown>
+      config: Record<string, unknown>
+      metadata: Record<string, unknown>
+    }
+  }
+) {
+  return tx
+    .updateTable("transportAccounts")
+    .set({
+      displayName: params.set.displayName,
+      ownerScope: params.set.ownerScope,
+      ownerWorkspaceMemberId: params.set.ownerWorkspaceMemberId,
+      inboundActorMode: params.set.inboundActorMode,
+      inboundActorId: params.set.inboundActorId,
+      connectionMode: params.set.connectionMode,
+      status: params.set.status,
+      credentials: params.set.credentials as TransportAccountCredentialsInsert,
+      config: params.set.config as TransportAccountConfigInsert,
+      metadata: params.set.metadata as TransportAccountMetadataInsert,
+    })
+    .where("workspaceId", "=", params.workspaceId)
+    .where("id", "=", params.accountId)
+    .returningAll()
+    .executeTakeFirstOrThrow()
+}
+
+/**
+ * Open a transaction for the account-update flow so the UPDATE composes
+ * with the connector-recovery side-effects the service threads `tx`
+ * into. The recovery dispatch (the closed `AccountRecoveryAction` switch)
+ * stays in the service; this only owns the `withDbTransaction` wrapper so
+ * `accounts.ts` no longer imports the db client.
+ */
+export async function runTransportAccountTransaction<T>(
+  fn: (tx: DatabaseTransaction) => Promise<T>
+): Promise<T> {
+  return withDbTransaction(fn)
 }

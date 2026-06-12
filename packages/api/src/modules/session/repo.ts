@@ -13,19 +13,26 @@ import {
   type Executor,
 } from "../../infrastructure/database/kysely.js"
 import { sql } from "kysely"
-import { SUBJECT_KIND } from "@synapse/shared"
+import { SUBJECT_KIND, THREAD_CONVERSATION_KINDS } from "@synapse/shared"
 import type {
   UUID,
   SessionStatus,
   SessionTrigger,
   SessionInterruptType,
+  SessionWakeupStatus,
 } from "@synapse/shared"
 import { upsertAccessSubjectOn } from "../access/subject-registry.js"
 import type {
   ConversationItemPartRow,
   SessionMessageItemRow,
   SessionRow,
+  SessionWakeupMetadataInsert,
+  SessionWakeupRow,
+  ToolCallTaskRow,
+  ToolResultPartRow,
+  ToolResultRow,
 } from "./repo.types.js"
+import type { EnqueueSessionWakeupParams } from "./runtime.js"
 
 export async function getActorJoinVersionId(actorId: UUID) {
   const row = await db
@@ -283,4 +290,406 @@ export async function hasPendingSessionInterrupt(
 
   const row = await query.limit(1).executeTakeFirst()
   return Boolean(row?.id)
+}
+
+// ---------------------------------------------------------------------------
+// Runtime engine (session/runtime.ts) query ownership.
+//
+// These back the runtime snapshot/turn-activity reads and the session-wakeup
+// write edge. Reads return camelCase DOMAIN rows with Date columns intact —
+// runtime.ts does the Date→IsoInstant serialization (presentWakeup /
+// buildToolActivityDetail) and JSON metadata decoding (guard r3/r5). The write
+// helpers take an injected `executor: Executor` so they can participate in a
+// caller's transaction (e.g. tool-call-tasks delivery commits a wakeup row +
+// task-completion marker atomically); the `= db` default lives here in the repo
+// (the only session file allowed the db client, guard r8).
+// ---------------------------------------------------------------------------
+
+/** Wakeups for a session in the given statuses, oldest first. */
+export async function listSessionWakeups(
+  sessionId: string,
+  statuses: SessionWakeupStatus[]
+): Promise<SessionWakeupRow[]> {
+  return db
+    .selectFrom("sessionWakeups")
+    .selectAll()
+    .where("sessionId", "=", sessionId)
+    .where("status", "in", statuses)
+    .orderBy("createdAt", "asc")
+    .execute()
+}
+
+/** Pending wakeups for a session, oldest first. */
+export async function listPendingSessionWakeups(
+  sessionId: string
+): Promise<SessionWakeupRow[]> {
+  return db
+    .selectFrom("sessionWakeups")
+    .selectAll()
+    .where("sessionId", "=", sessionId)
+    .where("status", "=", "pending")
+    .orderBy("createdAt", "asc")
+    .execute()
+}
+
+/** Id of the session's most-recently-started running turn, if any. */
+export async function getActiveTurnId(
+  sessionId: string
+): Promise<string | undefined> {
+  const row = await db
+    .selectFrom("turns")
+    .select("id")
+    .where("sessionId", "=", sessionId)
+    .where("status", "=", "running")
+    .orderBy("startedAt", "desc")
+    .limit(1)
+    .executeTakeFirst()
+  return row?.id
+}
+
+export type AttachedWakeupTargetRow = {
+  id: string
+  sourceParticipantType: string | null
+  sourceParticipantId: string | null
+  sourceName: string | null
+  summary: string
+  createdAt: Date
+  attachedAt: Date | null
+}
+
+/** Attached wakeups for a turn (the turn's processing targets), oldest first. */
+export async function listAttachedWakeupTargets(
+  turnId: string
+): Promise<AttachedWakeupTargetRow[]> {
+  return db
+    .selectFrom("sessionWakeups")
+    .select([
+      "id",
+      "sourceParticipantType",
+      "sourceParticipantId",
+      "sourceName",
+      "summary",
+      "createdAt",
+      "attachedAt",
+    ])
+    .where("turnId", "=", turnId)
+    .where("status", "=", "attached")
+    .orderBy("createdAt", "asc")
+    .execute()
+}
+
+export type TurnActivityHeaderRow = {
+  id: string
+  sessionId: string
+  conversationId: string
+  actorId: string
+  startedAt: Date | null
+  updatedAt: Date
+  completedAt: Date | null
+  workspaceId: string
+  actorDisplayName: string | null
+}
+
+/** The turn header (turns ⨝ sessions ⨝ actors ⨝ workspaceApps) for activity detail. */
+export async function getTurnActivityHeader(
+  turnId: string
+): Promise<TurnActivityHeaderRow | undefined> {
+  const row = await db
+    .selectFrom("turns")
+    .innerJoin("sessions as s", "s.id", "turns.sessionId")
+    .innerJoin("actors as a", "a.id", "turns.actorId")
+    .innerJoin("workspaceApps as app", "app.id", "a.id")
+    .select([
+      "turns.id",
+      "turns.sessionId",
+      "turns.conversationId",
+      "turns.actorId",
+      "turns.startedAt",
+      "turns.updatedAt",
+      "turns.completedAt",
+      "s.workspaceId",
+      "app.displayName as actorDisplayName",
+    ])
+    .where("turns.id", "=", turnId)
+    .limit(1)
+    .executeTakeFirst()
+  return row as TurnActivityHeaderRow | undefined
+}
+
+/** Tool calls for a turn, ordered by creation then call index. */
+export async function listTurnToolCalls(turnId: string) {
+  return db
+    .selectFrom("toolCalls")
+    .selectAll()
+    .where("turnId", "=", turnId)
+    .orderBy("createdAt", "asc")
+    .orderBy("callIndex", "asc")
+    .execute()
+}
+
+/** Tool results for the given tool-call ids (newest result per call first). */
+export async function listToolResultsForToolCalls(
+  toolCallIds: string[]
+): Promise<ToolResultRow[]> {
+  return db
+    .selectFrom("toolResults")
+    .selectAll()
+    .where("toolCallId", "in", toolCallIds)
+    .orderBy("toolCallId", "asc")
+    .orderBy("resultIndex", "desc")
+    .execute()
+}
+
+/** Result parts for the given result ids, ordered for assembly. */
+export async function listToolResultParts(
+  resultIds: string[]
+): Promise<ToolResultPartRow[]> {
+  return db
+    .selectFrom("toolResultParts")
+    .selectAll()
+    .where("toolResultId", "in", resultIds)
+    .orderBy("toolResultId", "asc")
+    .orderBy("ordinal", "asc")
+    .execute()
+}
+
+/** Latest tasks sourced from the given tool-call ids (newest first). */
+export async function listLatestTasksForToolCalls(
+  toolCallIds: string[]
+): Promise<ToolCallTaskRow[]> {
+  return db
+    .selectFrom("toolCallTasks")
+    .selectAll()
+    .where("sourceToolCallId", "in", toolCallIds)
+    .orderBy("createdAt", "desc")
+    .execute()
+}
+
+/** Output chunks for the given task ids (newest seq first). */
+export async function listTaskOutputChunks(taskIds: string[]) {
+  return db
+    .selectFrom("toolCallTaskOutputChunks")
+    .select(["taskId", "stream", "textValue", "seq"])
+    .where("taskId", "in", taskIds)
+    .orderBy("taskId", "asc")
+    .orderBy("seq", "desc")
+    .execute()
+}
+
+export type ThreadSessionRow = {
+  id: string
+  actorId: string
+  conversationId: string
+}
+
+/**
+ * Thread-conversation sessions for the given conversation ids. Filters by
+ * THREAD_CONVERSATION_KINDS (the domain filter stays in the repo query) so the
+ * runtime map only hydrates thread sessions.
+ */
+export async function listThreadSessionsForConversations(
+  conversationIds: string[]
+): Promise<ThreadSessionRow[]> {
+  return db
+    .selectFrom("sessions as s")
+    .innerJoin("conversations as c", "c.id", "s.conversationId")
+    .select(["s.id", "s.actorId", "s.conversationId"])
+    .where("s.conversationId", "in", conversationIds)
+    .where("c.kind", "in", [...THREAD_CONVERSATION_KINDS])
+    .execute()
+}
+
+/**
+ * Durable half of enqueueSessionWakeup: insert (or idempotently reuse) the
+ * `session_wakeups` row on the given executor. No Redis/queue side effects, so
+ * it can run INSIDE a caller's transaction. The raw `sql` INSERT keeps its
+ * snake_case identifiers, `::jsonb` cast, and the partial-unique-index
+ * ON CONFLICT verbatim — it already runs on the injected executor.
+ *
+ * Returns the row plus `reusedExistingWakeup` (true when ON CONFLICT hit an
+ * existing pending wakeup for the same source item — the nudge is then a no-op).
+ */
+export async function insertSessionWakeupRow(
+  executor: Executor,
+  params: EnqueueSessionWakeupParams
+): Promise<{
+  created: SessionWakeupRow
+  reusedExistingWakeup: boolean
+}> {
+  let created: SessionWakeupRow | undefined
+  let reusedExistingWakeup = false
+
+  if (params.sourceItemId) {
+    const insertResult = await sql<SessionWakeupRow>`
+        INSERT INTO session_wakeups (
+          id,
+          session_id,
+          source_type,
+          source_item_id,
+          source_session_id,
+          source_participant_type,
+          source_participant_id,
+          source_name,
+          summary,
+          reason_text,
+          automation_execution_id,
+          automation_occurrence_id,
+          status,
+          metadata
+        )
+        VALUES (
+          ${crypto.randomUUID()},
+          ${params.sessionId},
+          ${params.sourceType},
+          ${params.sourceItemId},
+          ${params.sourceSessionId || null},
+          ${params.sourceParticipantType || null},
+          ${params.sourceParticipantId || null},
+          ${params.sourceName || null},
+          ${params.summary},
+          ${params.reasonText || null},
+          ${params.automationExecutionId || null},
+          ${params.automationOccurrenceId || null},
+          'pending',
+          ${JSON.stringify(params.metadata || {})}::jsonb
+        )
+        ON CONFLICT (session_id, source_type, source_item_id)
+        WHERE source_item_id IS NOT NULL
+        DO NOTHING
+        RETURNING *
+      `.execute(executor)
+    created = insertResult.rows[0]
+
+    if (!created) {
+      const existing = await executor
+        .selectFrom("sessionWakeups")
+        .selectAll()
+        .where("sessionId", "=", params.sessionId)
+        .where("sourceType", "=", params.sourceType)
+        .where("sourceItemId", "=", params.sourceItemId)
+        .orderBy("createdAt", "desc")
+        .limit(1)
+        .execute()
+      created = existing[0]
+      reusedExistingWakeup = Boolean(created)
+    }
+  } else {
+    created = await executor
+      .insertInto("sessionWakeups")
+      .values({
+        id: crypto.randomUUID(),
+        sessionId: params.sessionId,
+        sourceType: params.sourceType,
+        sourceItemId: null,
+        sourceSessionId: params.sourceSessionId || null,
+        sourceParticipantType: params.sourceParticipantType || null,
+        sourceParticipantId: params.sourceParticipantId || null,
+        sourceName: params.sourceName || null,
+        summary: params.summary,
+        reasonText: params.reasonText || null,
+        automationExecutionId: params.automationExecutionId || null,
+        automationOccurrenceId: params.automationOccurrenceId || null,
+        status: "pending",
+        metadata: (params.metadata || {}) as SessionWakeupMetadataInsert,
+      })
+      .returningAll()
+      .executeTakeFirst()
+  }
+  if (!created) {
+    throw new Error("Failed to enqueue session wakeup")
+  }
+  return { created, reusedExistingWakeup }
+}
+
+/** Default-db binding of {@link insertSessionWakeupRow} for the post-commit edge. */
+export function insertSessionWakeupRowDefault(
+  params: EnqueueSessionWakeupParams
+): Promise<{
+  created: SessionWakeupRow
+  reusedExistingWakeup: boolean
+}> {
+  return insertSessionWakeupRow(db, params)
+}
+
+/** Flip a session's `pending` wakeups to `attached` on this turn (returns rows). */
+export async function attachPendingWakeupsToTurnRows(
+  sessionId: string,
+  turnId: string,
+  executor: Executor = db
+): Promise<SessionWakeupRow[]> {
+  return executor
+    .updateTable("sessionWakeups")
+    .set({
+      status: "attached",
+      turnId: turnId,
+      attachedAt: sql`NOW()`,
+    })
+    .where("sessionId", "=", sessionId)
+    .where("status", "=", "pending")
+    .returningAll()
+    .execute()
+}
+
+/** Mark a turn's `attached` wakeups as `processed`. */
+export async function markTurnWakeupsProcessed(
+  turnId: string,
+  executor: Executor = db
+): Promise<void> {
+  await executor
+    .updateTable("sessionWakeups")
+    .set({
+      status: "processed",
+      processedAt: sql`NOW()`,
+    })
+    .where("turnId", "=", turnId)
+    .where("status", "=", "attached")
+    .execute()
+}
+
+/** Mark a turn's `attached` wakeups as `dropped`. */
+export async function markTurnWakeupsDropped(
+  turnId: string,
+  executor: Executor = db
+): Promise<void> {
+  await executor
+    .updateTable("sessionWakeups")
+    .set({
+      status: "dropped",
+      processedAt: sql`NOW()`,
+    })
+    .where("turnId", "=", turnId)
+    .where("status", "=", "attached")
+    .execute()
+}
+
+/** Reverse attach: flip a turn's `attached` wakeups back to `pending`. */
+export async function restoreTurnWakeupsToPending(
+  turnId: string,
+  executor: Executor = db
+): Promise<void> {
+  await executor
+    .updateTable("sessionWakeups")
+    .set({
+      status: "pending",
+      turnId: null,
+      attachedAt: null,
+    })
+    .where("turnId", "=", turnId)
+    .where("status", "=", "attached")
+    .execute()
+}
+
+/** Count of `pending` wakeups for a session. */
+export async function getPendingWakeupCount(
+  sessionId: string,
+  executor: Executor = db
+): Promise<number> {
+  const row = await executor
+    .selectFrom("sessionWakeups")
+    .select(({ fn }) => fn.count<number>("id").as("count"))
+    .where("sessionId", "=", sessionId)
+    .where("status", "=", "pending")
+    .executeTakeFirst()
+
+  return Number(row?.count || 0)
 }

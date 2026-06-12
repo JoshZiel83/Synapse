@@ -7,7 +7,16 @@
 
 import { sql } from "kysely"
 import { db } from "../../infrastructure/database/kysely.js"
-import type { Executor } from "../../infrastructure/database/kysely.js"
+import type {
+  DatabaseTransaction,
+  Executor,
+} from "../../infrastructure/database/kysely.js"
+import type {
+  RuntimeAuthorizationGrantCandidateRow,
+  RuntimeAuthorizationGrantPolicyInsert,
+  RuntimeAuthorizationGrantSourceRequestArgsInsert,
+} from "./repo.types.js"
+import type { RuntimeAuthorizationGrantRetention } from "@synapse/shared/types"
 
 /**
  * Device tool runtime target (service id, tool revision, etc.) for a freshly
@@ -197,4 +206,342 @@ export async function hasNewUserFacingConversationMessage(
     .limit(1)
     .executeTakeFirst()
   return Boolean(row)
+}
+
+// ============================================================================
+// Runtime-authorization-grant row queries (moved out of service.ts for guard
+// r8). Every fn takes an injected `executor: Executor` (db or an in-flight
+// transaction) so the service can keep its multi-statement transactions atomic
+// and thread the same trx into both these repo fns and the cross-module
+// helpers (upsertAccessSubject, beginDeviceOperationOn). Rows are returned RAW
+// (camelCase via CamelCasePlugin, Date objects intact); the service/presenter
+// owns rowToCandidate hydration, policy validation, and instant serialization.
+// ============================================================================
+
+/**
+ * SELECT projection for a grant row joined with its subject + scope
+ * access_subjects view columns. Aliases are camelCase so the CamelCasePlugin
+ * does not double-rewrite; raw `subj`/`scope_subj` table aliases are copied
+ * verbatim from the original service query.
+ */
+function runtimeAuthorizationGrantSelectColumns() {
+  return [
+    "g.id",
+    "g.workspaceId",
+    "g.deviceId",
+    "g.deviceCapabilityId",
+    "g.deviceExposureId",
+    "g.subjectId",
+    "g.scopeSubjectId",
+    "g.createdByWorkspaceMemberId",
+    "g.sourceTaskId",
+    "g.retention",
+    "g.status",
+    "g.policy",
+    "g.sourceRetryNonce",
+    "g.sourceRuntimeSessionId",
+    "g.sourceRequestArgs",
+    "g.consumedAt",
+    "g.revokedAt",
+    "g.supersededAt",
+    "g.createdAt",
+    "g.updatedAt",
+    "subj.kind as subjectKind",
+    "subj.workspaceId as subjectWorkspaceId",
+    "subj.workspaceMemberId as subjectWorkspaceMemberId",
+    "subj.actorId as subjectActorId",
+    "subj.remoteAgentId as subjectRemoteAgentId",
+    "subj.conversationId as subjectConversationId",
+    "scope_subj.kind as scopeKind",
+    "scope_subj.workspaceId as scopeWorkspaceId",
+    "scope_subj.conversationId as scopeConversationId",
+  ] as const
+}
+
+/** Single grant row by id (get + post-insert refetch). Returns undefined when absent. */
+export async function getRuntimeAuthorizationGrantRow(
+  id: string,
+  executor: Executor = db
+): Promise<RuntimeAuthorizationGrantCandidateRow | undefined> {
+  return executor
+    .selectFrom("runtimeAuthorizationGrants as g")
+    .innerJoin("accessSubjects as subj", "subj.id", "g.subjectId")
+    .leftJoin(
+      "accessSubjects as scope_subj",
+      "scope_subj.id",
+      "g.scopeSubjectId"
+    )
+    .select(runtimeAuthorizationGrantSelectColumns())
+    .where("g.id", "=", id)
+    .limit(1)
+    .executeTakeFirst() as Promise<
+    RuntimeAuthorizationGrantCandidateRow | undefined
+  >
+}
+
+export interface InsertRuntimeAuthorizationGrantValues {
+  workspaceId: string
+  deviceId: string
+  deviceCapabilityId: string
+  deviceExposureId: string
+  subjectId: string
+  scopeSubjectId: string | null
+  createdByWorkspaceMemberId: string | null
+  sourceTaskId: string | null
+  retention: RuntimeAuthorizationGrantRetention
+  policy: RuntimeAuthorizationGrantPolicyInsert
+  sourceRetryNonce: string | null
+  sourceRuntimeSessionId: string | null
+  sourceRequestArgs: RuntimeAuthorizationGrantSourceRequestArgsInsert
+}
+
+/** INSERT a grant row, RETURNING its id. Caller refetches the joined row. */
+export async function insertRuntimeAuthorizationGrantRow(
+  executor: Executor,
+  values: InsertRuntimeAuthorizationGrantValues
+): Promise<{ id: string } | undefined> {
+  return executor
+    .insertInto("runtimeAuthorizationGrants")
+    .values({
+      workspaceId: values.workspaceId,
+      deviceId: values.deviceId,
+      deviceCapabilityId: values.deviceCapabilityId,
+      deviceExposureId: values.deviceExposureId,
+      subjectId: values.subjectId,
+      scopeSubjectId: values.scopeSubjectId,
+      createdByWorkspaceMemberId: values.createdByWorkspaceMemberId,
+      sourceTaskId: values.sourceTaskId,
+      retention: values.retention,
+      status: "active",
+      policy: values.policy,
+      sourceRetryNonce: values.sourceRetryNonce,
+      sourceRuntimeSessionId: values.sourceRuntimeSessionId,
+      sourceRequestArgs: values.sourceRequestArgs,
+    })
+    .returning("id")
+    .executeTakeFirst()
+}
+
+/** Status-flip to 'revoked' (NOW()), guarded by status='active'. */
+export async function revokeRuntimeAuthorizationGrantRow(
+  id: string,
+  executor: Executor = db
+): Promise<void> {
+  await executor
+    .updateTable("runtimeAuthorizationGrants")
+    .set({
+      status: "revoked",
+      revokedAt: sql`NOW()`,
+    })
+    .where("id", "=", id)
+    .where("status", "=", "active")
+    .execute()
+}
+
+/** Status-flip to 'superseded' (NOW()), guarded by status='active'. */
+export async function supersedeRuntimeAuthorizationGrantRow(
+  id: string,
+  executor: Executor = db
+): Promise<void> {
+  await executor
+    .updateTable("runtimeAuthorizationGrants")
+    .set({
+      status: "superseded",
+      supersededAt: sql`NOW()`,
+    })
+    .where("id", "=", id)
+    .where("status", "=", "active")
+    .execute()
+}
+
+/**
+ * Atomic consume of a `consume_once` grant via raw SQL FOR UPDATE SKIP LOCKED —
+ * snake_case identifiers are intentional (this fragment is NOT rewritten by the
+ * CamelCasePlugin). Returns true when THIS caller flipped the row to 'consumed';
+ * false when another concurrent dispatch won the race or the row was non-active.
+ */
+export async function consumeRuntimeAuthorizationGrantRow(
+  id: string,
+  executor: Executor = db
+): Promise<boolean> {
+  const statement = sql<{ id: string }>`
+    UPDATE runtime_authorization_grants
+    SET status = 'consumed', consumed_at = NOW()
+    WHERE id = (
+      SELECT id FROM runtime_authorization_grants
+      WHERE id = ${id} AND status = 'active'
+      FOR UPDATE SKIP LOCKED
+    )
+    RETURNING id
+  `
+  const result = await statement.execute(executor)
+  return result.rows.length > 0
+}
+
+export interface ListCandidateRowsForDispatchParams {
+  workspaceId: string
+  deviceId: string
+  deviceCapabilityId: string
+  deviceExposureId: string
+  runtimeSubjectIds: string[]
+  runtimeScopeSubjectIds: string[]
+  retryNonce?: string
+  sourceTaskId?: string
+}
+
+/**
+ * Multi-predicate candidate SELECT for the dispatch claim path. Every
+ * where-clause/guard (status active, subject in-list, scope OR-branch,
+ * retention/retryNonce/sourceTaskId OR-branches) is preserved verbatim. Caller
+ * guarantees runtimeSubjectIds is non-empty.
+ */
+export async function listCandidateRowsForDispatch(
+  params: ListCandidateRowsForDispatchParams,
+  executor: Executor = db
+): Promise<RuntimeAuthorizationGrantCandidateRow[]> {
+  const rows = await executor
+    .selectFrom("runtimeAuthorizationGrants as g")
+    .innerJoin("accessSubjects as subj", "subj.id", "g.subjectId")
+    .leftJoin(
+      "accessSubjects as scope_subj",
+      "scope_subj.id",
+      "g.scopeSubjectId"
+    )
+    .select(runtimeAuthorizationGrantSelectColumns())
+    .where("g.workspaceId", "=", params.workspaceId)
+    .where("g.deviceId", "=", params.deviceId)
+    .where("g.deviceCapabilityId", "=", params.deviceCapabilityId)
+    .where("g.deviceExposureId", "=", params.deviceExposureId)
+    .where("g.status", "=", "active")
+    .where("g.subjectId", "in", params.runtimeSubjectIds)
+    .where((eb) =>
+      eb.or([
+        eb("g.scopeSubjectId", "is", null),
+        ...(params.runtimeScopeSubjectIds.length > 0
+          ? [eb("g.scopeSubjectId", "in", params.runtimeScopeSubjectIds)]
+          : []),
+      ])
+    )
+    .where((eb) => {
+      const branches: any[] = [eb("g.retention", "=", "until_revoked")]
+      if (params.retryNonce) {
+        branches.push(
+          eb.and([
+            eb("g.retention", "=", "consume_once"),
+            eb("g.sourceRetryNonce", "=", params.retryNonce),
+          ])
+        )
+      }
+      if (params.sourceTaskId) {
+        branches.push(
+          eb.and([
+            eb("g.retention", "=", "consume_once"),
+            eb("g.sourceTaskId", "=", params.sourceTaskId),
+          ])
+        )
+      }
+      return eb.or(branches)
+    })
+    .orderBy("g.createdAt", "desc")
+    .execute()
+  return rows as RuntimeAuthorizationGrantCandidateRow[]
+}
+
+/**
+ * Dashboard list SELECT. Returns raw rows (service splits into {valid, corrupt}).
+ * When includeRevoked is false the active-status guard is applied verbatim.
+ */
+export async function listDashboardGrantRows(
+  input: {
+    workspaceId: string
+    deviceCapabilityId: string
+    includeRevoked?: boolean
+  },
+  executor: Executor = db
+): Promise<RuntimeAuthorizationGrantCandidateRow[]> {
+  let query = executor
+    .selectFrom("runtimeAuthorizationGrants as g")
+    .innerJoin("accessSubjects as subj", "subj.id", "g.subjectId")
+    .leftJoin(
+      "accessSubjects as scope_subj",
+      "scope_subj.id",
+      "g.scopeSubjectId"
+    )
+    .select(runtimeAuthorizationGrantSelectColumns())
+    .where("g.workspaceId", "=", input.workspaceId)
+    .where("g.deviceCapabilityId", "=", input.deviceCapabilityId)
+    .orderBy("g.createdAt", "desc")
+  if (!input.includeRevoked) {
+    query = query.where("g.status", "=", "active")
+  }
+  const rows = await query.execute()
+  return rows as RuntimeAuthorizationGrantCandidateRow[]
+}
+
+// ============================================================================
+// Transaction edge for the claim/create paths. The `db.transaction()` open
+// lives here (repo is the designated db-client layer) so service.ts can stay
+// free of the singleton while keeping its multi-statement transactions atomic:
+// service supplies a callback and receives the in-flight trx, threading it into
+// both these repo fns and the cross-module helpers it orchestrates.
+// ============================================================================
+
+/**
+ * Open a fresh runtime-authorization transaction and run `fn` inside it. The
+ * service uses this for the no-executor create path and the claim path so the
+ * subject upsert + INSERT + refetch (create) and lock_timeout + FOR SHARE
+ * drift/race checks + beginDeviceOperationOn (claim) all run atomically.
+ */
+export async function runRuntimeAuthorizationGrantTransaction<T>(
+  fn: (trx: DatabaseTransaction) => Promise<T>
+): Promise<T> {
+  return db.transaction().execute(fn)
+}
+
+/**
+ * `SET LOCAL lock_timeout = '500ms'` for the claim transaction: a lock_timeout
+ * means another connection is updating device_tools (catalog sync); the service
+ * aborts and surfaces a transient runtime_constraint rather than waiting.
+ */
+export async function setLocalLockTimeout(
+  trx: DatabaseTransaction
+): Promise<void> {
+  await sql`SET LOCAL lock_timeout = '500ms'`.execute(trx)
+}
+
+/**
+ * FOR SHARE read of device_tools.latest_revision_id inside the claim tx: blocks
+ * the catalog UPDATE without blocking other dispatch share-lockers. Returns the
+ * row (or undefined) so the service does its drift comparison.
+ */
+export async function lockDeviceToolLatestRevisionForShare(
+  trx: DatabaseTransaction,
+  toolId: string
+): Promise<{ latestRevisionId: string | null } | undefined> {
+  const row = await trx
+    .selectFrom("deviceTools")
+    .select(["latestRevisionId"])
+    .where("id", "=", toolId)
+    .forShare()
+    .executeTakeFirst()
+  if (!row) return undefined
+  return { latestRevisionId: row.latestRevisionId as string | null }
+}
+
+/**
+ * FOR SHARE re-check that an until_revoked grant is still active inside the
+ * claim tx. No state mutation. Returns true when the row is still active.
+ */
+export async function lockActiveGrantForShare(
+  trx: DatabaseTransaction,
+  id: string
+): Promise<boolean> {
+  const grantRow = await trx
+    .selectFrom("runtimeAuthorizationGrants")
+    .select("id")
+    .where("id", "=", id)
+    .where("status", "=", "active")
+    .forShare()
+    .executeTakeFirst()
+  return Boolean(grantRow)
 }

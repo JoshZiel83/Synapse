@@ -17,19 +17,8 @@
  * service.ts re-exports everything for back-compat.
  */
 
-import { sql } from "kysely"
 import { nowIsoInstant } from "@synapse/shared/datetime"
-import {
-  db,
-  withDbTransaction,
-  type DatabaseTransaction,
-} from "../../../infrastructure/database/kysely.js"
-import type {
-  TransportAccountCredentialsInsert,
-  TransportAccountConfigInsert,
-  TransportAccountMetadataInsert,
-} from "../repo.types.js"
-import { v4 as uuidv4 } from "uuid"
+import type { DatabaseTransaction } from "../../../infrastructure/database/kysely.js"
 import type {
   TransportAccountInboundActorMode,
   TransportAccountOwnerScope,
@@ -50,6 +39,19 @@ import {
   parseJsonObject,
   readTrimmedString,
 } from "./_helpers.js"
+import {
+  insertTransportAccountRow,
+  runTransportAccountTransaction,
+  selectActiveTransportAccountRows,
+  selectActorInWorkspace,
+  selectTransportAccountRow,
+  selectTransportAccountRowByKindAndId,
+  selectTransportAccountRowById,
+  selectTransportAccountRowByWorkspaceKey,
+  selectTransportAccountRows,
+  selectTransportSessionRows,
+  updateTransportAccountRow,
+} from "./repo.js"
 import {
   orderAccountRecoveryActions,
   planAccountRecoveryActions,
@@ -103,16 +105,10 @@ async function assertWorkspaceActor(params: {
     throw new Error(`${params.label} is required`)
   }
 
-  const actor = await db
-    .selectFrom("actors as actor")
-    .innerJoin("workspaceApps as app", "app.id", "actor.id")
-    .select("actor.id")
-    .where("actor.id", "=", actorId)
-    .where("app.workspaceId", "=", params.workspaceId)
-    .where("app.deletedAt", "is", null)
-    .where("app.status", "=", "active")
-    .limit(1)
-    .executeTakeFirst()
+  const actor = await selectActorInWorkspace({
+    actorId,
+    workspaceId: params.workspaceId,
+  })
   if (!actor?.id) {
     throw new Error(`${params.label} is not available in this workspace`)
   }
@@ -203,13 +199,7 @@ export async function loadTransportAccountRow(
   workspaceId: string,
   accountId: string
 ) {
-  return db
-    .selectFrom("transportAccounts")
-    .selectAll()
-    .where("workspaceId", "=", workspaceId)
-    .where("id", "=", accountId)
-    .limit(1)
-    .executeTakeFirst()
+  return selectTransportAccountRow(workspaceId, accountId)
 }
 
 async function loadTransportAccountRowByWorkspaceKey(params: {
@@ -217,23 +207,11 @@ async function loadTransportAccountRowByWorkspaceKey(params: {
   transportKind: TransportKind
   accountKey: string
 }) {
-  return db
-    .selectFrom("transportAccounts")
-    .selectAll()
-    .where("workspaceId", "=", params.workspaceId)
-    .where("transportKind", "=", params.transportKind)
-    .where("accountKey", "=", params.accountKey.trim())
-    .limit(1)
-    .executeTakeFirst()
+  return selectTransportAccountRowByWorkspaceKey(params)
 }
 
 async function loadTransportAccountRowById(accountId: string) {
-  return db
-    .selectFrom("transportAccounts")
-    .selectAll()
-    .where("id", "=", accountId)
-    .limit(1)
-    .executeTakeFirst()
+  return selectTransportAccountRowById(accountId)
 }
 
 // ───────────────────────── Lookups ─────────────────────────
@@ -241,12 +219,7 @@ async function loadTransportAccountRowById(accountId: string) {
 export async function listTransportAccounts(
   workspaceId: string
 ): Promise<TransportAccountSummary[]> {
-  const rows = await db
-    .selectFrom("transportAccounts")
-    .selectAll()
-    .where("workspaceId", "=", workspaceId)
-    .orderBy("createdAt", "desc")
-    .execute()
+  const rows = await selectTransportAccountRows(workspaceId)
   return rows.map(normalizeAccountRow)
 }
 
@@ -259,13 +232,7 @@ export async function getTransportAccountByKindAndId(params: {
   accountId: string
   transportKind: TransportKind
 }) {
-  const row = await db
-    .selectFrom("transportAccounts")
-    .selectAll()
-    .where("id", "=", params.accountId)
-    .where("transportKind", "=", params.transportKind)
-    .limit(1)
-    .executeTakeFirst()
+  const row = await selectTransportAccountRowByKindAndId(params)
   return row ? normalizeAccountRow(row) : null
 }
 
@@ -321,103 +288,14 @@ export async function listActiveTransportAccounts(params?: {
   connectionMode?: TransportConnectionMode
   transportKind?: TransportKind
 }) {
-  let builder = db
-    .selectFrom("transportAccounts")
-    .selectAll()
-    .where("status", "=", "active")
-
-  if (params?.connectionMode) {
-    builder = builder.where("connectionMode", "=", params.connectionMode)
-  }
-  if (params?.transportKind) {
-    builder = builder.where("transportKind", "=", params.transportKind)
-  }
-
-  const rows = await builder.orderBy("createdAt", "asc").execute()
+  const rows = await selectActiveTransportAccountRows(params)
   return rows.map(normalizeAccountRow)
 }
 
 export async function listTransportSessions(
   workspaceId: string
 ): Promise<TransportSessionSummary[]> {
-  const inboundActivity = db
-    .selectFrom("transportMessageLinks")
-    .select("transportEndpointId")
-    .select(sql<Date | null>`MAX(created_at)`.as("lastInboundAt"))
-    .where("direction", "=", "inbound")
-    .groupBy("transportEndpointId")
-    .as("inbound_activity")
-
-  const outboundActivity = db
-    .selectFrom("transportMessageLinks")
-    .select("transportEndpointId")
-    .select(sql<Date | null>`MAX(created_at)`.as("lastOutboundAt"))
-    .where("direction", "=", "outbound")
-    .groupBy("transportEndpointId")
-    .as("outbound_activity")
-
-  const rows = await db
-    .selectFrom("transportEndpoints as te")
-    .innerJoin("transportAccounts as ta", "ta.id", "te.transportAccountId")
-    .leftJoin(
-      "conversationTransportBindings as ctb",
-      "ctb.transportEndpointId",
-      "te.id"
-    )
-    .leftJoin("conversations as c", "c.id", "ctb.conversationId")
-    .leftJoin(inboundActivity, "inbound_activity.transportEndpointId", "te.id")
-    .leftJoin(
-      outboundActivity,
-      "outbound_activity.transportEndpointId",
-      "te.id"
-    )
-    .select([
-      "ctb.id as bindingId",
-      "ctb.workspaceId",
-      "ctb.conversationId",
-      "ctb.outboundEnabled",
-      "ctb.inboundActorMode",
-      "ctb.inboundActorId",
-      "ctb.metadata as bindingMetadata",
-      "ctb.createdAt as bindingCreatedAt",
-      "ctb.updatedAt as bindingUpdatedAt",
-      "c.title as conversationTitle",
-      "ta.id",
-      "ta.workspaceId as accountWorkspaceId",
-      "ta.accountKey",
-      "ta.displayName",
-      "ta.transportKind",
-      "ta.ownerScope",
-      "ta.ownerWorkspaceMemberId",
-      "ta.inboundActorMode as accountInboundActorMode",
-      "ta.inboundActorId as accountInboundActorId",
-      "ta.connectionMode",
-      "ta.status",
-      "ta.credentials",
-      "ta.config",
-      "ta.metadata",
-      "ta.createdAt",
-      "ta.updatedAt",
-      "te.id as endpointId",
-      "te.transportAccountId",
-      "te.endpointType",
-      "te.externalId as endpointExternalId",
-      "te.parentExternalId",
-      "te.displayName as endpointDisplayName",
-      "te.metadata as endpointMetadata",
-      "te.createdAt as endpointCreatedAt",
-      "te.updatedAt as endpointUpdatedAt",
-      "inbound_activity.lastInboundAt as lastInboundAt",
-      "outbound_activity.lastOutboundAt as lastOutboundAt",
-    ])
-    .where("ta.workspaceId", "=", workspaceId)
-    .orderBy(
-      sql`COALESCE(inbound_activity.last_inbound_at, outbound_activity.last_outbound_at, te.updated_at)`,
-      "desc"
-    )
-    .orderBy("te.createdAt", "desc")
-    .execute()
-
+  const rows = await selectTransportSessionRows(workspaceId)
   return rows.map(normalizeTransportSessionRow)
 }
 
@@ -474,27 +352,21 @@ export async function createTransportAccount(params: {
   // (shared-prep version above already normalizes config — keep the
   // single call; the QQ-side duplicate was redundant.)
 
-  const row = await db
-    .insertInto("transportAccounts")
-    .values({
-      id: uuidv4(),
-      workspaceId: params.workspaceId,
-      transportKind: params.transportKind,
-      accountKey: params.accountKey.trim(),
-      displayName: params.displayName.trim(),
-      ownerScope: ownerScope,
-      ownerWorkspaceMemberId: ownerWorkspaceMemberId,
-      inboundActorMode: inboundActorMode,
-      inboundActorId: inboundActorId,
-      connectionMode: params.connectionMode,
-      status: nextStatus,
-      credentials: normalizedCredentials as TransportAccountCredentialsInsert,
-      config: normalizedConfig as TransportAccountConfigInsert,
-      metadata: (params.metadata || {}) as TransportAccountMetadataInsert,
-      createdAt: sql`NOW()`,
-    })
-    .returningAll()
-    .executeTakeFirstOrThrow()
+  const row = await insertTransportAccountRow({
+    workspaceId: params.workspaceId,
+    transportKind: params.transportKind,
+    accountKey: params.accountKey,
+    displayName: params.displayName,
+    ownerScope: ownerScope,
+    ownerWorkspaceMemberId: ownerWorkspaceMemberId,
+    inboundActorMode: inboundActorMode,
+    inboundActorId: inboundActorId,
+    connectionMode: params.connectionMode,
+    status: nextStatus,
+    credentials: normalizedCredentials,
+    config: normalizedConfig,
+    metadata: params.metadata || {},
+  })
 
   return normalizeAccountRow(row)
 }
@@ -612,10 +484,11 @@ export async function updateTransportAccount(params: {
   // Wrap UPDATE + recovery executor in one transaction so a
   // half-applied state can't leave the account updated but the
   // recovery side-effects skipped (or vice versa).
-  const updatedAccount = await withDbTransaction(async (tx) => {
-    const row = await tx
-      .updateTable("transportAccounts")
-      .set({
+  const updatedAccount = await runTransportAccountTransaction(async (tx) => {
+    const row = await updateTransportAccountRow(tx, {
+      workspaceId: params.workspaceId,
+      accountId: params.accountId,
+      set: {
         displayName: params.displayName?.trim() || existing.displayName,
         ownerScope: nextOwnerScope,
         ownerWorkspaceMemberId: resolvedOwnerWorkspaceMemberId,
@@ -623,18 +496,14 @@ export async function updateTransportAccount(params: {
         inboundActorId: resolvedInboundActorId,
         connectionMode: nextConnectionMode,
         status: nextStatus,
-        credentials: normalizedCredentials as TransportAccountCredentialsInsert,
-        config: normalizedConfig as TransportAccountConfigInsert,
-        metadata: (params.metadata !== undefined
-          ? params.metadata
-          : parseJsonObject(
-              existing.metadata
-            )) as TransportAccountMetadataInsert,
-      })
-      .where("workspaceId", "=", params.workspaceId)
-      .where("id", "=", params.accountId)
-      .returningAll()
-      .executeTakeFirstOrThrow()
+        credentials: normalizedCredentials,
+        config: normalizedConfig,
+        metadata:
+          params.metadata !== undefined
+            ? params.metadata
+            : parseJsonObject(existing.metadata),
+      },
+    })
 
     const previousSummary = normalizeAccountRow(existing)
     const nextSummary = normalizeAccountRow(row)
