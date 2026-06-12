@@ -14,6 +14,7 @@ import type {
 import { config } from "../../config/index.js"
 import { db } from "../../infrastructure/database/kysely.js"
 import { decryptSensitiveFields } from "../../infrastructure/crypto/index.js"
+import { parseJsonObject } from "@synapse/shared"
 
 type IntegrationInstallationRow = {
   installationId: string
@@ -101,12 +102,9 @@ const INTEGRATION_EVENT_SPECS: Record<string, IntegrationEventSpec> = {
   },
 }
 
-function asObject(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {}
-  }
-  return value as Record<string, unknown>
-}
+// Business JSON decode → shared parseJsonObject (string-parse + array-reject).
+// r6 P1-8: replaces a local copy that only handled already-parsed objects.
+const asObject = parseJsonObject
 
 function readString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null

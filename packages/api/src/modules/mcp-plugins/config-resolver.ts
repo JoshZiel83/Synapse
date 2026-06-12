@@ -1,3 +1,4 @@
+import { parseJsonObject } from "@synapse/shared"
 import { decryptSensitiveFields } from "../../infrastructure/crypto/index.js"
 import { db } from "../../infrastructure/database/kysely.js"
 import { resolveAuthConnectionRefs } from "./plugin-auth-connections.js"
@@ -9,19 +10,9 @@ export interface ResolvedPluginConfig {
   config: Record<string, unknown>
 }
 
-function asObject(value: unknown): Record<string, unknown> {
-  if (!value) return {}
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value) as Record<string, unknown>
-    } catch {
-      return {}
-    }
-  }
-  return typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {}
-}
+// Business JSON decode → shared parseJsonObject (string-parse + array-reject;
+// replaces a local copy that blindly cast JSON.parse, accepting arrays). r6 P1-8.
+const asObject = parseJsonObject
 
 function mergeConfigs(...layers: Record<string, unknown>[]) {
   const result: Record<string, unknown> = {}
