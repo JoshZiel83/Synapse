@@ -93,6 +93,9 @@ import type {
   UpdateMeInput,
   UpdateMemberRelationshipProfileInput,
   UpdateActorRelationshipProfileInput,
+  BindRemoteAgentInput,
+  CreateRemoteAgentMachineInput,
+  UpdateRemoteAgentGroupTaskGrantsInput,
 } from "@synapse/shared"
 import {
   normalizeConversationCatalogEntry,
@@ -1606,12 +1609,7 @@ class ApiClient {
   async bindRemoteAgent(
     wsId: string,
     remoteAgentId: string,
-    input: {
-      machineId: string
-      runtimeKind: RemoteAgentRuntimeKind
-      runtimePath?: string
-      localRootPath?: string
-    }
+    input: BindRemoteAgentInput
   ): Promise<{ remoteAgent: RemoteAgentView }> {
     const res = await this.fetch(
       `/workspaces/${wsId}/remote-agents/${remoteAgentId}/bind`,
@@ -1624,10 +1622,7 @@ class ApiClient {
   }
   async createRemoteAgentMachinePairingSession(
     wsId: string,
-    input: {
-      title?: string
-      description?: string
-    }
+    input: CreateRemoteAgentMachineInput
   ): Promise<RemoteAgentMachinePairingSessionView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/remote-agent-machines/pairing-sessions`,
@@ -1665,9 +1660,7 @@ class ApiClient {
   async updateRemoteAgentGroupTaskGrants(
     wsId: string,
     remoteAgentId: string,
-    input: {
-      workspaceMemberIds: string[]
-    }
+    input: UpdateRemoteAgentGroupTaskGrantsInput
   ): Promise<{ grants: RemoteAgentGroupTaskGrantView[] }> {
     const res = await this.fetch(
       `/workspaces/${wsId}/remote-agents/${remoteAgentId}/group-task-grants`,

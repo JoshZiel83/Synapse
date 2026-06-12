@@ -6,9 +6,10 @@ import {
   RemoteAgentMachinePairingSessionResponseSchema,
   RemoteAgentMachineListResponseSchema,
   RemoteAgentMachineDetailResponseSchema,
+  CreateRemoteAgentMachineInputSchema,
+  BindRemoteAgentInputSchema,
+  UpdateRemoteAgentGroupTaskGrantsInputSchema,
 } from "@synapse/shared/schemas"
-import { z } from "zod"
-import { REMOTE_AGENT_RUNTIME_KINDS } from "@synapse/shared"
 // /api/v1/internal/* is the daemon↔API machine RPC surface (wireRoute). Its
 // body/query contracts are single-sourced in @synapse/device-protocol so the
 // API parser and the daemon client reference one definition (round-6 P1-5).
@@ -58,22 +59,11 @@ import {
   presentRuntimeCatalogEntry,
 } from "./presenter.js"
 
-const runtimeKindSchema = z.enum(REMOTE_AGENT_RUNTIME_KINDS)
-const createMachineSchema = z.object({
-  title: z.string().trim().min(1).max(255).optional(),
-  description: z.string().trim().max(2000).optional(),
-})
-
-const bindRemoteAgentSchema = z.object({
-  machineId: z.uuid(),
-  runtimeKind: runtimeKindSchema,
-  runtimePath: z.string().trim().min(1).optional(),
-  localRootPath: z.string().trim().min(1).optional(),
-})
-
-const groupTaskGrantsSchema = z.object({
-  workspaceMemberIds: z.array(z.uuid()).max(200),
-})
+// App-facing request bodies live in @synapse/shared (§5.1.1) so the API parser
+// and the web/mobile clients share one definition.
+const createMachineSchema = CreateRemoteAgentMachineInputSchema
+const bindRemoteAgentSchema = BindRemoteAgentInputSchema
+const groupTaskGrantsSchema = UpdateRemoteAgentGroupTaskGrantsInputSchema
 
 // Machine RPC body/query contracts (daemon↔API). Single-sourced in
 // @synapse/device-protocol — these aliases keep the route handlers terse.

@@ -4616,6 +4616,9 @@ export type {
   RemoteAgentMachinePairingSessionResponseSchemaType,
   RemoteAgentMachineListResponseSchemaType,
   RemoteAgentMachineDetailResponseSchemaType,
+  CreateRemoteAgentMachineInput,
+  BindRemoteAgentInput,
+  UpdateRemoteAgentGroupTaskGrantsInput,
 } from "../schemas/remote-agents.js"
 export type {
   TransportConnectorsResponseSchemaType,

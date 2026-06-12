@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { REMOTE_AGENT_RUNTIME_KINDS } from "../constants/enums.js"
 
 /**
  * App-facing contracts for the remote-agents module's APP routes (master plan
@@ -75,4 +76,36 @@ export const RemoteAgentMachineDetailResponseSchema = z.object({
 })
 export type RemoteAgentMachineDetailResponseSchemaType = z.infer<
   typeof RemoteAgentMachineDetailResponseSchema
+>
+
+// ───────────────────────────── request DTOs (§5.1.1) ─────────────────────────
+// App-facing request bodies for the remote-agents APP routes (the machine-RPC
+// /internal/* bodies live in @synapse/device-protocol — see round-6 P1-5).
+// Single-sourced here so the API parser and the web/mobile clients share one
+// definition.
+
+/** POST remote-agent-machines/pairing-sessions body. */
+export const CreateRemoteAgentMachineInputSchema = z.object({
+  title: z.string().trim().min(1).max(255).optional(),
+  description: z.string().trim().max(2000).optional(),
+})
+export type CreateRemoteAgentMachineInput = z.infer<
+  typeof CreateRemoteAgentMachineInputSchema
+>
+
+/** POST remote-agents/:id/bind body. */
+export const BindRemoteAgentInputSchema = z.object({
+  machineId: z.uuid(),
+  runtimeKind: z.enum(REMOTE_AGENT_RUNTIME_KINDS),
+  runtimePath: z.string().trim().min(1).optional(),
+  localRootPath: z.string().trim().min(1).optional(),
+})
+export type BindRemoteAgentInput = z.infer<typeof BindRemoteAgentInputSchema>
+
+/** PUT remote-agents/:id/group-task-grants body. */
+export const UpdateRemoteAgentGroupTaskGrantsInputSchema = z.object({
+  workspaceMemberIds: z.array(z.uuid()).max(200),
+})
+export type UpdateRemoteAgentGroupTaskGrantsInput = z.infer<
+  typeof UpdateRemoteAgentGroupTaskGrantsInputSchema
 >
