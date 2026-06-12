@@ -196,7 +196,8 @@ export async function mapConversationSummaryView(
   const viewerMembership = conversationParticipants.find(
     (participant) =>
       participant.state === "active" &&
-      participant.participantType === "workspace_member" &&
+      participant.participantType ===
+        CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
       participant.workspaceMemberId === viewerWorkspaceMemberId
   )
   const viewerConversationRole =

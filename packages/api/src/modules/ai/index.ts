@@ -343,7 +343,7 @@ async function loadToolResolveConversationParticipants(params: {
       })
       continue
     }
-    if (member.participantType === "external") {
+    if (member.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL) {
       const linkedWorkspaceMemberName = member.linkedUserName || undefined
       entries.push({
         participantType: "external",

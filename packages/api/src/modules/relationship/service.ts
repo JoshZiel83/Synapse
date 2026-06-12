@@ -1645,7 +1645,7 @@ async function resolveMemberRelationshipProfile(params: {
     }
   }
 
-  if (params.profile.approvalMode === "auto") {
+  if (params.profile.approvalMode === RELATIONSHIP_APPROVAL_MODE.AUTO) {
     await createOrApproveFriendship({
       requesterWorkspaceMemberId: params.viewerWorkspaceMemberId,
       targetType: "workspace_member",
@@ -2202,7 +2202,7 @@ export async function requestRelationshipByIdentityProfile(params: {
         }
       }
 
-      if (profile.approvalMode === "auto") {
+      if (profile.approvalMode === RELATIONSHIP_APPROVAL_MODE.AUTO) {
         await grantRemoteAgentContactVisibilityToMember({
           workspaceId: params.workspaceId,
           remoteAgentId: remoteAgent.remoteAgentId,
@@ -2250,7 +2250,7 @@ export async function requestRelationshipByIdentityProfile(params: {
       }
     }
 
-    if (profile.approvalMode === "auto") {
+    if (profile.approvalMode === RELATIONSHIP_APPROVAL_MODE.AUTO) {
       await createOrApproveFriendship({
         requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
         targetType: "remote_agent",
@@ -2311,7 +2311,7 @@ export async function requestRelationshipByIdentityProfile(params: {
       }
     }
 
-    if (profile.approvalMode === "auto") {
+    if (profile.approvalMode === RELATIONSHIP_APPROVAL_MODE.AUTO) {
       await grantActorContactVisibilityToMember({
         workspaceId: params.workspaceId,
         actorId: actor.actorId,
@@ -2360,7 +2360,7 @@ export async function requestRelationshipByIdentityProfile(params: {
     }
   }
 
-  if (profile.approvalMode === "auto") {
+  if (profile.approvalMode === RELATIONSHIP_APPROVAL_MODE.AUTO) {
     await createOrApproveFriendship({
       requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
       targetType: "actor",

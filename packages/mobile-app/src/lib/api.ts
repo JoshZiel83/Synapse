@@ -194,15 +194,20 @@ class ApiClient {
     return data as T
   }
 
-  getMe(): Promise<AuthMeResponse> {
-    return this.request<AuthMeResponse>("/auth/me")
+  async getMe(): Promise<AuthMeResponse> {
+    // API returns the app-facing envelope { data: { user, session } }
+    // (sendData + AuthMeViewSchema). Unwrap so callers keep the { user, session }
+    // shape, matching web (packages/web-next/lib/api.ts getMe).
+    const res = await this.request<{ data: AuthMeResponse }>("/auth/me")
+    return res.data
   }
 
-  updateMe(data: { name?: string; avatarFileId?: string | null }) {
-    return this.request<AuthMeResponse>("/auth/me", {
+  async updateMe(data: { name?: string; avatarFileId?: string | null }) {
+    const res = await this.request<{ data: AuthMeResponse }>("/auth/me", {
       method: "PUT",
       body: JSON.stringify(data),
     })
+    return res.data
   }
 
   getWorkspaces(): Promise<WorkspaceListResponse> {

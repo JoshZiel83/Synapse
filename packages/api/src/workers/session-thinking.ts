@@ -15,6 +15,7 @@ import {
   DEFAULT_MAX_CONCURRENT_SESSIONS,
   isThreadConversationKind,
   textBlocks,
+  CONVERSATION_PARTICIPANT_TYPE,
 } from "@synapse/shared"
 import { nowIsoInstant } from "@synapse/shared/datetime"
 import { isPlanCollaborationMode } from "@synapse/shared/utils"
@@ -549,7 +550,8 @@ export function startSessionThinkingWorker() {
                 role: "Workspace member",
               })
             } else if (
-              member.participantType === "external" &&
+              member.participantType ===
+                CONVERSATION_PARTICIPANT_TYPE.EXTERNAL &&
               member.state === "active"
             ) {
               const linkedUserName = member.linkedUserName || undefined

@@ -130,9 +130,15 @@ test("createCloudDevice SENDS camelCase body + PARSES camelCase result view", as
     title: "Cloud",
     hostProvider: "e2b",
   })
-  // sends camelCase body — NO snake_case workspace_id/host_provider
+  // workspaceId travels in the URL, NOT the body (the API body schema is a
+  // strictObject that omits workspaceId and rejects unknown keys).
+  assert.match(
+    captured[0]?.url ?? "",
+    new RegExp(`/workspaces/${wsId}/devices/cloud$`)
+  )
   const body = captured[0]?.body as Record<string, unknown>
-  assert.equal(body.workspaceId, wsId)
+  assert.ok(!("workspaceId" in body), "workspaceId must NOT be in the body")
+  assert.equal(body.title, "Cloud")
   assert.equal(body.hostProvider, "e2b")
   assert.ok(!("workspace_id" in body), "must not send snake workspace_id")
   assert.ok(!("host_provider" in body), "must not send snake host_provider")

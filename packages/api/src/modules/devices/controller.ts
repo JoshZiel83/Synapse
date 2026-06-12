@@ -391,11 +391,12 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
       )
         return
       // Body carries title/preset/hostProvider (camelCase, §5.1.1); workspaceId
-      // travels in the URL param. Parse with the shared app-facing input schema
-      // (minus workspaceId) so the write path is camelCase end-to-end.
+      // travels in the URL param. title/hostProvider are already optional on the
+      // shared schema (server applies defaults), so the SDK and server validate
+      // the identical body shape.
       const cloudBodySchema = CreateCloudDeviceInputSchema.omit({
         workspaceId: true,
-      }).partial({ title: true, hostProvider: true })
+      })
       const parsedBody = cloudBodySchema.safeParse(request.body)
       if (!parsedBody.success) {
         reply.status(400).send({
