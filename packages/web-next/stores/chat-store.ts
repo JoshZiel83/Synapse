@@ -42,6 +42,8 @@ import {
   normalizeCanonicalContentBlocks,
   summarizeConversationEvent,
   textBlocks,
+  CONVERSATION_PARTICIPANT_TYPE,
+  CONVERSATION_KIND,
 } from "@synapse/shared"
 import {
   clearConversationTombstone,
@@ -600,7 +602,8 @@ function getViewerParticipant(
 
   return conversation.participants.find(
     (participant) =>
-      participant.participantType === "workspace_member" &&
+      participant.participantType ===
+        CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
       participant.workspaceMemberId === workspaceMemberId
   )
 }
@@ -614,7 +617,8 @@ function getPeerParticipant(
       (participant) =>
         participant.state === "active" &&
         !(
-          participant.participantType === "workspace_member" &&
+          participant.participantType ===
+            CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
           participant.workspaceMemberId === workspaceMemberId
         )
     ) ?? conversation.participants[0]
@@ -625,7 +629,7 @@ function getConversationDisplayName(
   conversation: ChatConversationView,
   workspaceMemberId?: string | null
 ) {
-  if (conversation.kind === "direct") {
+  if (conversation.kind === CONVERSATION_KIND.DIRECT) {
     const peer = getPeerParticipant(conversation, workspaceMemberId)
     return peer?.name?.trim() || conversation.title?.trim() || "Direct chat"
   }
@@ -704,13 +708,15 @@ function deriveLastMessageRole(
   if (itemType === "event") {
     return "system"
   }
-  if (author?.participantType === "workspace_member") {
+  if (
+    author?.participantType === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
+  ) {
     return "user"
   }
-  if (author?.participantType === "actor") {
+  if (author?.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR) {
     return "assistant"
   }
-  if (author?.participantType === "remote_agent") {
+  if (author?.participantType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT) {
     return "assistant"
   }
   return "system"
@@ -758,7 +764,8 @@ function rawConversationToSummary(
             conversation.lastItem.itemType
           ),
           actorName:
-            conversation.lastItem.author?.participantType === "actor"
+            conversation.lastItem.author?.participantType ===
+            CONVERSATION_PARTICIPANT_TYPE.ACTOR
               ? conversation.lastItem.author.name
               : undefined,
           createdAt: conversation.lastItem.createdAt,
@@ -877,7 +884,9 @@ function chatItemToFeedMessage(item: ChatConversationItem): FeedMessage {
       fromActorId: item.author?.actorId,
       fromWorkspaceMemberId: item.author?.workspaceMemberId,
       actorName:
-        item.author?.participantType === "actor" ? item.author.name : undefined,
+        item.author?.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
+          ? item.author.name
+          : undefined,
       actorRole: item.author?.role,
       actorEmoji: item.author?.avatarEmoji,
       createdAt: item.createdAt,
@@ -904,7 +913,9 @@ function chatItemToFeedMessage(item: ChatConversationItem): FeedMessage {
     fromActorId: item.author?.actorId,
     fromWorkspaceMemberId: item.author?.workspaceMemberId,
     actorName:
-      item.author?.participantType === "actor" ? item.author.name : undefined,
+      item.author?.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
+        ? item.author.name
+        : undefined,
     actorRole: item.author?.role,
     actorEmoji: item.author?.avatarEmoji,
     createdAt: item.createdAt,
@@ -1065,7 +1076,8 @@ function applyRuntimeToConversationMembers(
   return {
     ...conversation,
     members: conversation.members.map((member) =>
-      member.participantType === "actor" && member.id === runtime.actorId
+      member.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
+      member.id === runtime.actorId
         ? { ...member, sessionStatus: runtime.laneState }
         : member
     ),
@@ -1077,7 +1089,7 @@ function deriveConversationStatus(
   runtimesForConversation?: Record<string, ActorRuntimeState>
 ) {
   const actorMembers = conversation.members.filter(
-    (member) => member.participantType === "actor"
+    (member) => member.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
   )
   if (actorMembers.length === 0) return "completed" as const
   const hasOpenLane = actorMembers.some((member) => {

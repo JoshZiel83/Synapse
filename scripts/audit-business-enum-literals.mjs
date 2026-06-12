@@ -12,6 +12,10 @@ const scanRoots = [
   "packages/web-next/app",
   "packages/web-next/components",
   "packages/web-next/lib",
+  // round-6 P1-11/P2-2: stores + hooks were unscanned, hiding raw
+  // participantType literals (e.g. chat-store.ts).
+  "packages/web-next/stores",
+  "packages/web-next/hooks",
   "packages/mobile-app/app",
   "packages/mobile-app/src",
   "packages/remote-agent-daemon/src",
