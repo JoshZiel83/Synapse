@@ -91,13 +91,33 @@ const moduleOf = (p) => {
 }
 const isMixedModuleFile = (p) => MIXED_MODULES.has(moduleOf(p))
 
-// r8 allowlist: files that are the DESIGNATED db-edge-binders for their module
-// (they import the runtime defaultDb purely to bind it into request-handler-
-// facing wrappers — the same role infrastructure/** plays, but they live under
-// modules/ for cohesion). access/guards.ts binds defaultDb into
-// requireRequestAction + authorizeActionDefault/etc. so controllers don't import
-// the client (round-6 P1-6). These are intentional boundaries, not leaks.
-const R8_ALLOWLIST = new Set(["access/guards.ts"])
+// r8 allowlist: files that are the DESIGNATED db-edge / executor-injectable DB
+// layer for their module — same role infrastructure/** plays, but living under
+// modules/ for cohesion. They are repo-like by structure (every fn takes an
+// Executor, or they bind defaultDb into request-handler wrappers); they are
+// intentional boundaries, not leaks. (round-6 P1-6)
+//   - access/guards.ts: binds defaultDb into requireRequestAction +
+//     authorizeActionDefault/etc. so controllers don't import the client.
+//   - sandbox/space.ts: the file_spaces/file_mounts/file_snapshots DB layer —
+//     every fn takes `client: Executor`; imports only `sql` + the Executor type
+//     (no db client). Repo in all but name.
+//   - soft-delete/orchestration.ts: transactional soft-delete orchestrator —
+//     every fn takes `db: Executor` and callers run it inside one
+//     withDbTransaction(trx); binding a default would break atomicity. Imports
+//     only `sql` + the Executor type.
+//   - sandbox/gc.ts: the CAS mark-sweep GC job — runContentGc(opts.dbh ?? db)
+//     is executor-injectable; db is just the production default for a
+//     cross-cutting infra sweep over 6+ tables.
+//   - devices/control-plane-auth.ts: device-hello signature verification —
+//     authenticateDeviceHello(input, executor = db) is executor-injectable; db
+//     is the production default.
+const R8_ALLOWLIST = new Set([
+  "access/guards.ts",
+  "sandbox/space.ts",
+  "soft-delete/orchestration.ts",
+  "sandbox/gc.ts",
+  "devices/control-plane-auth.ts",
+])
 const r8Key = (p) => {
   const m = p.split("/modules/")[1]
   return m || ""
