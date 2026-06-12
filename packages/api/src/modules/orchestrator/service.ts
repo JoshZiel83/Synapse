@@ -7,13 +7,10 @@ import type {
   UUID,
 } from "@synapse/shared"
 import { SUBJECT_KIND } from "@synapse/shared"
-import { db } from "../../infrastructure/database/kysely.js"
 import { createMemory, presetToOwnerScope } from "../memory/service.js"
 import type { MemoryPreset } from "../memory/service.js"
-import {
-  createGeneratedActorPixelArtAvatarFile,
-  type PixelArtAvatarOptionsInput,
-} from "../avatar/service.js"
+import { createGeneratedActorPixelArtAvatarFileDefault } from "../access/guards.js"
+import type { PixelArtAvatarOptionsInput } from "../avatar/service.js"
 import {
   getActor,
   updateActor,
@@ -330,7 +327,7 @@ async function handleChangeAvatar(
     const pixelArtOptions = parsePixelArtAvatarOptions(
       action.metadata?.pixelArt
     )
-    const avatarFile = await createGeneratedActorPixelArtAvatarFile(db, {
+    const avatarFile = await createGeneratedActorPixelArtAvatarFileDefault({
       workspaceId,
       actorId,
       actorDisplayName: actor.displayName || actor.definition.displayName,

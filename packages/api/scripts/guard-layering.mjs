@@ -130,6 +130,7 @@ const R8_ALLOWLIST = new Set([
   "files/content-access.ts",
   "auth/oauth-error-routing.ts",
   "soft-delete/orchestration.ts",
+  "capability-projection/service.ts",
 ])
 const r8Key = (p) => {
   const m = p.split("/modules/")[1]

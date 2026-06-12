@@ -20,6 +20,8 @@ import {
   resolveWorkspaceAccessSubject,
 } from "./service.js"
 import { upsertAccessSubject } from "./subject-registry.js"
+import { createGeneratedActorPixelArtAvatarFile } from "../avatar/service.js"
+import type { PixelArtAvatarOptionsInput } from "../avatar/service.js"
 import type { SubjectRef } from "@synapse/shared"
 import type { AccessAction } from "./actions.js"
 
@@ -76,4 +78,19 @@ export function upsertAccessSubjectDefault(
   ref: SubjectRef
 ): ReturnType<typeof upsertAccessSubject> {
   return upsertAccessSubject(defaultDb, ref)
+}
+
+// Default-db binder for the avatar generator (round-6 P1-6): orchestrator/service.ts
+// only imported the db client to thread it into this avatar-module function. The
+// function stays executor-injectable for tests; the binder lives here (an
+// allowlisted edge) so the orchestrator drops its db-client import.
+export function createGeneratedActorPixelArtAvatarFileDefault(params: {
+  workspaceId: string
+  actorId: string
+  actorDisplayName: string
+  actorTitle: string
+  uploaderUserId?: string | null
+  options?: PixelArtAvatarOptionsInput
+}): ReturnType<typeof createGeneratedActorPixelArtAvatarFile> {
+  return createGeneratedActorPixelArtAvatarFile(defaultDb, params)
 }
