@@ -109,10 +109,16 @@ const RULES = [
     test: (src) => /\bserialize(Optional)?Instant\s*\(/.test(src),
   },
   {
+    // r4: row→domain mappers belong in repo*.ts. Matches map*/normalize* names
+    // where "Row" appears anywhere (not only as a suffix), so it also catches
+    // mapAccessRowToGrant / mapSkillAccessRowToGrant (round-6 P2-2 broadened it
+    // from the old "ends in Row" form).
     id: "r4_maprow_outside_repo",
     appliesTo: (p) => !isRepo(p),
     test: (src) =>
-      /\b(?:function|const)\s+(?:map|normalize)[A-Za-z0-9]*Row\b/.test(src),
+      /\b(?:function|const)\s+(?:map|normalize)[A-Za-z0-9]*Row[A-Za-z0-9]*\b/.test(
+        src
+      ),
   },
   {
     id: "r5_bare_route_in_mixed",

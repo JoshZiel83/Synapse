@@ -9,7 +9,10 @@
     "packages/api/src/modules/mcp-plugins/plugin-auth-connections.ts",
     "packages/api/src/modules/session/runtime.ts"
   ],
-  "r4_maprow_outside_repo": [],
+  "r4_maprow_outside_repo": [
+    "packages/api/src/modules/mcp-plugins/service.ts",
+    "packages/api/src/modules/skills/presenter.ts"
+  ],
   "r5_bare_route_in_mixed": [],
   "r7_dual_naming": [],
   "r8_db_client_outside_repo": [
