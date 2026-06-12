@@ -1,8 +1,6 @@
-import { sql } from "kysely"
 import {
   CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES,
   DEFAULT_CONVERSATION_TYPE_MASK,
-  SUBJECT_KIND,
   normalizeConversationTypeMask,
 } from "@synapse/shared"
 import type {
@@ -10,14 +8,15 @@ import type {
   WorkspaceCapabilityConversationTypePoliciesView,
   WorkspaceCapabilityConversationTypePolicy,
 } from "@synapse/shared/types"
-import { db, type Executor } from "../../infrastructure/database/kysely.js"
-import { upsertAccessSubject } from "../access/subject-registry.js"
-
-type WorkspaceCapabilityConversationTypePolicyRow = {
-  workspace_id: string
-  resource_family: CapabilityConversationTypePolicyResourceFamily
-  default_conversation_type_mask: number
-}
+import type { Executor } from "../../infrastructure/database/kysely.js"
+import {
+  insertWorkspacePolicyDefault,
+  selectWorkspacePolicyRows,
+  selectWorkspacePolicyRowsForIds,
+  upsertWorkspacePolicy,
+  upsertWorkspaceSubjectId,
+  type WorkspaceCapabilityConversationTypePolicyRow,
+} from "./repo.js"
 
 function presentWorkspacePolicy(
   workspaceId: string,
@@ -58,36 +57,17 @@ export async function seedWorkspaceCapabilityConversationTypePolicies(
   run: Executor,
   workspaceId: string
 ) {
-  const workspaceSubjectId = await upsertAccessSubject(run, {
-    kind: SUBJECT_KIND.WORKSPACE,
-    workspaceId,
-  })
+  const workspaceSubjectId = await upsertWorkspaceSubjectId(run, workspaceId)
   for (const resourceFamily of CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES) {
-    await sql`
-      INSERT INTO workspace_capability_conversation_type_policies (
-        subject_id,
-        resource_family,
-        default_conversation_type_mask
-      )
-      VALUES (${workspaceSubjectId}, ${resourceFamily}, ${DEFAULT_CONVERSATION_TYPE_MASK})
-      ON CONFLICT (subject_id, resource_family) DO NOTHING`.execute(run)
+    await insertWorkspacePolicyDefault(run, workspaceSubjectId, resourceFamily)
   }
 }
 
 export async function listWorkspaceCapabilityConversationTypePolicies(
   workspaceId: string
 ) {
-  const result = await sql<WorkspaceCapabilityConversationTypePolicyRow>`
-    SELECT
-      subj.workspace_id,
-      policy.resource_family,
-      policy.default_conversation_type_mask
-    FROM workspace_capability_conversation_type_policies policy
-    INNER JOIN access_subjects subj ON subj.id = policy.subject_id
-    WHERE subj.workspace_id = ${workspaceId}
-      AND subj.kind = 'workspace'
-    ORDER BY policy.resource_family ASC`.execute(db)
-  return buildWorkspacePoliciesView(workspaceId, result.rows)
+  const rows = await selectWorkspacePolicyRows(workspaceId)
+  return buildWorkspacePoliciesView(workspaceId, rows)
 }
 
 export async function updateWorkspaceCapabilityConversationTypePolicies(input: {
@@ -100,26 +80,11 @@ export async function updateWorkspaceCapabilityConversationTypePolicies(input: {
     ([, mask]) => mask !== undefined
   ) as Array<[CapabilityConversationTypePolicyResourceFamily, number]>
 
-  const workspaceSubjectId = await upsertAccessSubject(db, {
-    kind: SUBJECT_KIND.WORKSPACE,
-    workspaceId: input.workspaceId,
-  })
-
   for (const [resourceFamily, defaultMask] of entries) {
-    await sql`
-      INSERT INTO workspace_capability_conversation_type_policies (
-        subject_id,
-        resource_family,
-        default_conversation_type_mask
-      )
-      VALUES (
-        ${workspaceSubjectId},
-        ${resourceFamily},
-        ${normalizeConversationTypeMask(defaultMask, DEFAULT_CONVERSATION_TYPE_MASK)}
-      )
-      ON CONFLICT (subject_id, resource_family) DO UPDATE
-        SET default_conversation_type_mask = EXCLUDED.default_conversation_type_mask`.execute(
-      db
+    await upsertWorkspacePolicy(
+      input.workspaceId,
+      resourceFamily,
+      normalizeConversationTypeMask(defaultMask, DEFAULT_CONVERSATION_TYPE_MASK)
     )
   }
 
@@ -139,15 +104,7 @@ export async function getWorkspaceCapabilityConversationTypePolicyMap(
     return map
   }
 
-  const result = await sql<WorkspaceCapabilityConversationTypePolicyRow>`
-    SELECT
-      subj.workspace_id,
-      policy.resource_family,
-      policy.default_conversation_type_mask
-    FROM workspace_capability_conversation_type_policies policy
-    INNER JOIN access_subjects subj ON subj.id = policy.subject_id
-    WHERE subj.workspace_id = ANY(${uniqueWorkspaceIds}::uuid[])
-      AND subj.kind = 'workspace'`.execute(db)
+  const rows = await selectWorkspacePolicyRowsForIds(uniqueWorkspaceIds)
 
   for (const workspaceId of uniqueWorkspaceIds) {
     map.set(workspaceId, {
@@ -157,7 +114,7 @@ export async function getWorkspaceCapabilityConversationTypePolicyMap(
     })
   }
 
-  for (const row of result.rows) {
+  for (const row of rows) {
     const current = map.get(row.workspace_id)
     if (!current) continue
     current[row.resource_family] = normalizeConversationTypeMask(

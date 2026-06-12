@@ -15,8 +15,6 @@
     "packages/api/src/modules/audit/index.ts",
     "packages/api/src/modules/automation/integrations.ts",
     "packages/api/src/modules/automation/service.ts",
-    "packages/api/src/modules/capabilities/conversation-type-policies.ts",
-    "packages/api/src/modules/capabilities/surface.ts",
     "packages/api/src/modules/capability-projection/device-capabilities.ts",
     "packages/api/src/modules/capability-projection/service.ts",
     "packages/api/src/modules/chat/service.ts",

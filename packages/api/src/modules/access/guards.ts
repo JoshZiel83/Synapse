@@ -19,6 +19,8 @@ import {
   listAuthorizedResourceIds,
   resolveWorkspaceAccessSubject,
 } from "./service.js"
+import { upsertAccessSubject } from "./subject-registry.js"
+import type { SubjectRef } from "@synapse/shared"
 import type { AccessAction } from "./actions.js"
 
 export function createRequireRequestAction(db: KyselyDb) {
@@ -68,4 +70,10 @@ export function resolveWorkspaceAccessSubjectDefault(
   userId: string
 ): ReturnType<typeof resolveWorkspaceAccessSubject> {
   return resolveWorkspaceAccessSubject(defaultDb, workspaceId, userId)
+}
+
+export function upsertAccessSubjectDefault(
+  ref: SubjectRef
+): ReturnType<typeof upsertAccessSubject> {
+  return upsertAccessSubject(defaultDb, ref)
 }
