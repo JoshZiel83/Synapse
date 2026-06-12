@@ -5,7 +5,6 @@
     "packages/api/src/modules/access/bindings.ts",
     "packages/api/src/modules/files/parse-service.ts",
     "packages/api/src/modules/im/connectors/weixin/qr-login.ts",
-    "packages/api/src/modules/im/controller/dingtalk.ts",
     "packages/api/src/modules/im/integration/actor-status-hooks.ts",
     "packages/api/src/modules/mcp-plugins/plugin-auth-connections.ts",
     "packages/api/src/modules/session/runtime.ts"

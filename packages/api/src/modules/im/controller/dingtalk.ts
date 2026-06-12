@@ -21,10 +21,8 @@ import {
 } from "@synapse/shared/schemas"
 import { appRoute } from "../../../infrastructure/http/route.js"
 import { sendData } from "../../../infrastructure/http/respond.js"
-import {
-  serializeInstant,
-  serializeNowInstant,
-} from "../../../infrastructure/datetime.js"
+import { serializeNowInstant } from "../../../infrastructure/datetime.js"
+import { presentDingtalkDeviceFlowSession } from "../presenter.js"
 import type {
   DingtalkDeviceFlowPollResponse,
   DingtalkDeviceFlowSessionSummary,
@@ -109,21 +107,8 @@ async function buildSummary(
     const account = await getAccountById(session.transportAccountId)
     transportAccount = account ?? undefined
   }
-  return {
-    sessionId: session.sessionId,
-    workspaceId: session.workspaceId,
-    status: session.status,
-    message: session.message,
-    verificationUriComplete: session.verificationUriComplete,
-    verificationUri: session.verificationUri,
-    userCode: session.userCode,
-    expiresInSeconds: session.expiresInSeconds,
-    intervalSeconds: session.intervalSeconds,
-    createdAt: serializeInstant(new Date(session.createdAt)),
-    updatedAt: serializeInstant(new Date(session.updatedAt)),
-    expiresAt: serializeInstant(new Date(session.expiresAt)),
-    transportAccount,
-  }
+  // Pure ms→ISO presentation lives in the presenter (guard-layering r3).
+  return presentDingtalkDeviceFlowSession(session, transportAccount)
 }
 
 function getActiveProvider(): RegistrationProvider | null {
