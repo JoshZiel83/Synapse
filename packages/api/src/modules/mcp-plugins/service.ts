@@ -53,7 +53,11 @@ import {
   withDbTransaction,
   type Executor,
 } from "../../infrastructure/database/kysely.js"
-import { presentInstant, presentOptionalInstant } from "./presenter.js"
+import {
+  presentInstant,
+  presentOptionalInstant,
+  presentInstallationAccessGrant,
+} from "./presenter.js"
 import type {
   CatalogCategoriesMetadata,
   PluginCategoryRecord,
@@ -211,6 +215,7 @@ type InstallationAccessRow = {
   created_at: Date
   revoked_at: Date | null
 }
+export type { InstallationAccessRow }
 
 const PLUGIN_CATALOG_SELECT = `
   SELECT
@@ -761,7 +766,7 @@ function mergeConfigForUpdate(
  * Decode the plugin-installation grant row back into a canonical
  * ScopedSubjectTarget-like shape for policy validation and UI mapping.
  */
-function installationAccessRowToTarget(
+export function installationAccessRowToTarget(
   row: InstallationAccessRow
 ): CapabilityAccessTarget {
   switch (row.access_target_type) {
@@ -1042,39 +1047,10 @@ function suggestedAccessTargetType(
   return subjectScopeLabel(target) as RuntimeBindingScope
 }
 
-function mapAccessRowToGrant(
-  mount: InstallationAccessRow,
-  options?: {
-    workspaceConversationTypeMask: number
-    instanceConversationTypeMaskOverride: number | null
-  }
-): WorkspaceAppGrant {
-  const effectiveConversationTypeMask = options
-    ? resolveNarrowedConversationTypeMask(
-        resolveNarrowedConversationTypeMask(
-          options.workspaceConversationTypeMask,
-          options.instanceConversationTypeMaskOverride
-        ),
-        mount.conversation_type_mask_override
-      )
-    : undefined
-  return {
-    id: mount.id,
-    workspaceAppId: mount.installation_id,
-    workspaceId: mount.workspace_id,
-    target: installationAccessRowToTarget(mount),
-    permissions: [WORKSPACE_APP_GRANT_PERMISSION.USE],
-    status: mount.status,
-    source: mount.source,
-    grantedByWorkspaceMemberId:
-      mount.created_by_workspace_member_id || undefined,
-    reason: mount.reason || undefined,
-    conversationTypeMaskOverride: mount.conversation_type_mask_override ?? null,
-    effectiveConversationTypeMask,
-    createdAt: presentInstant(mount.created_at),
-    revokedAt: presentOptionalInstant(mount.revoked_at),
-  }
-}
+// Row→WorkspaceAppGrant View builder lives in ./presenter.ts as
+// presentInstallationAccessGrant (it serializes Date→ISO + is a row→DTO mapper —
+// guard r3/r4 confine that to the presenter); called directly at its 6 sites
+// below. round-6 P1-7.
 
 function buildInstallationPayload(
   row: InstallationRow,
@@ -2223,7 +2199,7 @@ export async function getPluginInstallationGrantState(
   const grants = accessRows
     .filter((binding) => binding.status === "active")
     .map((binding) =>
-      mapAccessRowToGrant(binding, {
+      presentInstallationAccessGrant(binding, {
         workspaceConversationTypeMask,
         instanceConversationTypeMaskOverride:
           installation.conversationTypeMaskOverride ?? null,
@@ -2326,7 +2302,7 @@ export async function createPluginInstallationGrant(input: {
       entry.workspace_member_id === accessTargetWorkspaceMemberId
   )
   if (existing) {
-    return mapAccessRowToGrant(existing, {
+    return presentInstallationAccessGrant(existing, {
       workspaceConversationTypeMask,
       instanceConversationTypeMaskOverride:
         installation.conversationTypeMaskOverride ?? null,
@@ -2364,7 +2340,7 @@ export async function createPluginInstallationGrant(input: {
 
   await incrementMcpVersion(input.workspaceId)
 
-  return mapAccessRowToGrant(result.accessRow, {
+  return presentInstallationAccessGrant(result.accessRow, {
     workspaceConversationTypeMask,
     instanceConversationTypeMaskOverride:
       installation.conversationTypeMaskOverride ?? null,
@@ -2385,7 +2361,7 @@ export async function updatePluginInstallationGrant(input: {
     if (!accessRow || accessRow.workspace_id !== input.workspaceId) {
       throw new McpPluginError(404, "Access grant not found")
     }
-    return mapAccessRowToGrant(accessRow, {
+    return presentInstallationAccessGrant(accessRow, {
       workspaceConversationTypeMask,
       instanceConversationTypeMaskOverride:
         installation.conversationTypeMaskOverride ?? null,
@@ -2437,7 +2413,7 @@ export async function updatePluginInstallationGrant(input: {
     throw new McpPluginError(404, "Access grant not found")
   }
 
-  return mapAccessRowToGrant(updatedAccessRow, {
+  return presentInstallationAccessGrant(updatedAccessRow, {
     workspaceConversationTypeMask,
     instanceConversationTypeMaskOverride:
       installation.conversationTypeMaskOverride ?? null,
@@ -2455,7 +2431,7 @@ export async function revokePluginInstallationGrant(input: {
     throw new McpPluginError(404, "Access grant not found")
   }
   if (accessRow.status === "revoked") {
-    return mapAccessRowToGrant(accessRow)
+    return presentInstallationAccessGrant(accessRow)
   }
 
   await revokeWorkspaceAppGrant(db as any, accessRow.id)

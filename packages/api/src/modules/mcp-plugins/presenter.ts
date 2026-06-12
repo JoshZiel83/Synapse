@@ -17,8 +17,13 @@ import type {
   PluginAuthSession,
   MarketplacePublisherView,
   PluginCategoryView,
+  WorkspaceAppGrant,
 } from "@synapse/shared"
-import { parseJsonObject } from "@synapse/shared"
+import {
+  parseJsonObject,
+  resolveNarrowedConversationTypeMask,
+  WORKSPACE_APP_GRANT_PERMISSION,
+} from "@synapse/shared"
 import { assertIsoInstant } from "@synapse/shared/datetime"
 import {
   serializeInstant,
@@ -30,7 +35,51 @@ import type {
   PluginAuthSessionRow,
   PluginConnectionRow,
 } from "./plugin-auth-connections.js"
+import {
+  installationAccessRowToTarget,
+  type InstallationAccessRow,
+} from "./service.js"
 import type { PluginCategoryRecord, PublisherRecord } from "./repo.types.js"
+
+/**
+ * Present a stored installation-access row as a WorkspaceAppGrant View. Row→DTO
+ * mapper + Date→ISO serializer, so it lives in the presenter (guard r3/r4). The
+ * row decoder installationAccessRowToTarget + the row type stay in service.ts;
+ * this imports them (same direction as skills/presenter ← service). round-6 P1-7.
+ */
+export function presentInstallationAccessGrant(
+  mount: InstallationAccessRow,
+  options?: {
+    workspaceConversationTypeMask: number
+    instanceConversationTypeMaskOverride: number | null
+  }
+): WorkspaceAppGrant {
+  const effectiveConversationTypeMask = options
+    ? resolveNarrowedConversationTypeMask(
+        resolveNarrowedConversationTypeMask(
+          options.workspaceConversationTypeMask,
+          options.instanceConversationTypeMaskOverride
+        ),
+        mount.conversation_type_mask_override
+      )
+    : undefined
+  return {
+    id: mount.id,
+    workspaceAppId: mount.installation_id,
+    workspaceId: mount.workspace_id,
+    target: installationAccessRowToTarget(mount),
+    permissions: [WORKSPACE_APP_GRANT_PERMISSION.USE],
+    status: mount.status,
+    source: mount.source,
+    grantedByWorkspaceMemberId:
+      mount.created_by_workspace_member_id || undefined,
+    reason: mount.reason || undefined,
+    conversationTypeMaskOverride: mount.conversation_type_mask_override ?? null,
+    effectiveConversationTypeMask,
+    createdAt: serializeInstant(mount.created_at),
+    revokedAt: serializeOptionalInstant(mount.revoked_at),
+  }
+}
 
 /** Present a stored instant as an ISO timestamp for the wire DTO. */
 export function presentInstant(value: Date): IsoInstantString {
