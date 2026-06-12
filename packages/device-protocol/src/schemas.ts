@@ -203,16 +203,10 @@ export const RuntimeAuthorizationGrantSpecSchema = z
       })
     }
   })
-/** @deprecated camelCase API-side spec; wire (snake_case) consumers should use
- * RuntimeAuthorizationGrantWireSpec. API-side camelCase consumers should
- * import SharedRuntimeAuthorizationGrantSpec from @synapse/shared. */
-export type RuntimeAuthorizationGrantSpec = z.infer<
-  typeof RuntimeAuthorizationGrantSpecSchema
->
-// subject-scope-refactor: wire-side snake_case alias. API code MUST disambiguate
-// (Shared* for camelCase, *WireSpec for snake_case). Bare
-// `RuntimeAuthorizationGrantSpec` is forbidden in packages/api/src (residue
-// scan in plan Batch 12).
+// subject-scope-refactor: wire-side snake_case spec. API code MUST disambiguate
+// (Shared* for camelCase from @synapse/shared, *WireSpec for snake_case here).
+// The old bare `RuntimeAuthorizationGrantSpec` alias was removed in round-6 P2-1
+// (it duplicated this type); use RuntimeAuthorizationGrantWireSpec on the wire.
 export type RuntimeAuthorizationGrantWireSpec = z.infer<
   typeof RuntimeAuthorizationGrantSpecSchema
 >

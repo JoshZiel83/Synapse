@@ -38,7 +38,7 @@ import type {
   DeviceCatalogExposure,
   DeviceCatalogTool,
   OperationEnvelope,
-  RuntimeAuthorizationGrantSpec,
+  RuntimeAuthorizationGrantWireSpec,
 } from "@synapse/device-protocol"
 import type {
   CatalogProvider,
@@ -299,15 +299,15 @@ function filterExtraArgs(args: string[], logger: RuntimeLogger): string[] {
 
 function browserGrants(
   envelope: OperationEnvelope | undefined
-): RuntimeAuthorizationGrantSpec[] {
+): RuntimeAuthorizationGrantWireSpec[] {
   const specs = envelope?.runtime_authorization?.grant_specs ?? []
   return specs.filter(
     (s) => s.capability === "browser" && s.browser
-  ) as RuntimeAuthorizationGrantSpec[]
+  ) as RuntimeAuthorizationGrantWireSpec[]
 }
 
 function grantToPolicy(
-  spec: RuntimeAuthorizationGrantSpec
+  spec: RuntimeAuthorizationGrantWireSpec
 ): BrowserPolicy | null {
   const b = spec.browser
   if (!b) return null
@@ -602,7 +602,7 @@ export function createChromeDevtoolsMcpBuiltin(
   // ── authz ─────────────────────────────────────────────────────────────────
 
   function checkScope(
-    grants: RuntimeAuthorizationGrantSpec[],
+    grants: RuntimeAuthorizationGrantWireSpec[],
     descriptor: { action: "read" | "write"; operation: BrowserOperation },
     url: string
   ): { ok: true } | { ok: false; reason: string } {
@@ -1050,7 +1050,7 @@ export function createChromeDevtoolsMcpBuiltin(
 
   function filterListPagesByGrants(
     result: unknown,
-    grants: RuntimeAuthorizationGrantSpec[]
+    grants: RuntimeAuthorizationGrantWireSpec[]
   ): CatalogToolInvocationResult {
     const parsed = parseListPagesResult(
       result as Parameters<typeof parseListPagesResult>[0]

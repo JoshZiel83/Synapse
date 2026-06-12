@@ -26,7 +26,7 @@ import {
   type ProjectedToolDefinition,
   type ToolRef,
 } from "@synapse/shared"
-import type { RuntimeAuthorizationGrantSpec as RuntimeAuthorizationGrantWireSpec } from "@synapse/device-protocol"
+import type { RuntimeAuthorizationGrantWireSpec } from "@synapse/device-protocol"
 // subject-scope-refactor: Renamed alias to disambiguate from the API-side
 // SharedRuntimeAuthorizationGrantSpec; envelope payloads use the snake_case
 // wire spec.

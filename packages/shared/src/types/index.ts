@@ -3462,10 +3462,6 @@ export interface RuntimeAuthorizationRequestedAction {
 // `RuntimeAuthorizationGrantSpec` (which once doubled as both).
 // P4: derived from the Zod GrantPolicySchema (see packages/shared/src/access/policies).
 export type SharedRuntimeAuthorizationGrantSpec = GrantPolicyBase
-/** @deprecated Use SharedRuntimeAuthorizationGrantSpec (camelCase, API side) or
- * RuntimeAuthorizationGrantWireSpec (snake_case, wire side from
- * @synapse/device-protocol) to disambiguate. */
-export type RuntimeAuthorizationGrantSpec = SharedRuntimeAuthorizationGrantSpec
 
 export interface RuntimeAuthorizationGrantOption {
   id: string

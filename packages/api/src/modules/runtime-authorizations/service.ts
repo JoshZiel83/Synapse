@@ -1037,7 +1037,7 @@ export function specificityRank(
 
 export function toRuntimeAuthorizationGrantWireSpec(
   record: RuntimeAuthorizationGrantRecord
-): import("@synapse/device-protocol").RuntimeAuthorizationGrantSpec {
+): import("@synapse/device-protocol").RuntimeAuthorizationGrantWireSpec {
   return {
     capability: record.capability,
     filesystem: record.filesystem

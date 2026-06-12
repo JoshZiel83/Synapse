@@ -22,7 +22,7 @@ import {
   TASK_REQUEST_KIND,
   type TaskInputQuestionSummary,
   type TaskSummary,
-  type RuntimeAuthorizationGrantSpec,
+  type SharedRuntimeAuthorizationGrantSpec,
   type RuntimeAuthorizationRequestedAction,
 } from "@shared"
 
@@ -265,7 +265,7 @@ function formatRuntimeAuthorizationPresetLabel(preset: string) {
 }
 
 function describeRuntimeAuthorizationSpec(
-  scope: RuntimeAuthorizationGrantSpec
+  scope: SharedRuntimeAuthorizationGrantSpec
 ) {
   if (scope.capability === "filesystem" && scope.filesystem) {
     return {

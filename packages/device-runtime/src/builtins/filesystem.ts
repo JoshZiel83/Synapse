@@ -12,7 +12,6 @@ import type {
   DeviceCatalogExposure,
   DeviceCatalogTool,
   OperationEnvelope,
-  RuntimeAuthorizationGrantSpec,
 } from "@synapse/device-protocol"
 import {
   assertHelperWorkDirOutsideRoot,

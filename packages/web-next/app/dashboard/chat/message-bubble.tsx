@@ -24,7 +24,7 @@ import {
   type IsoInstantString,
 } from "@synapse/shared/datetime"
 import type {
-  RuntimeAuthorizationGrantSpec,
+  SharedRuntimeAuthorizationGrantSpec,
   RuntimeAuthorizationPreset,
   RuntimeAuthorizationRequestedAction,
 } from "@synapse/shared/types"
@@ -540,7 +540,7 @@ function formatRuntimeAuthorizationPresetLabel(
 }
 
 function getRuntimeAuthorizationCapabilityIcon(
-  capability: RuntimeAuthorizationGrantSpec["capability"]
+  capability: SharedRuntimeAuthorizationGrantSpec["capability"]
 ) {
   switch (capability) {
     case "filesystem":
@@ -556,7 +556,7 @@ function getRuntimeAuthorizationCapabilityIcon(
 }
 
 function describeRuntimeAuthorizationSpec(
-  scope: RuntimeAuthorizationGrantSpec
+  scope: SharedRuntimeAuthorizationGrantSpec
 ) {
   if (scope.capability === "filesystem" && scope.filesystem) {
     return {
