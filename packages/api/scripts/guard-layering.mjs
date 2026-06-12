@@ -91,20 +91,15 @@ const moduleOf = (p) => {
 }
 const isMixedModuleFile = (p) => MIXED_MODULES.has(moduleOf(p))
 
-// r8 allowlist: files that are the DESIGNATED db-edge / executor-injectable DB
-// layer for their module — same role infrastructure/** plays, but living under
-// modules/ for cohesion. They are repo-like by structure (every fn takes an
-// Executor, or they bind defaultDb into request-handler wrappers); they are
-// intentional boundaries, not leaks. (round-6 P1-6)
+// r8 allowlist: files that import the DB CLIENT but are the DESIGNATED db-edge /
+// injectable-default DB layer for their module — same role infrastructure/**
+// plays, but living under modules/ for cohesion. They are intentional
+// boundaries, not leaks. (round-6 P1-6) NOTE: files that import only `sql` + an
+// Executor/KyselyDb TYPE (executor-injectable, never touch the singleton) are
+// NOT flagged by r8 at all and need no entry here — e.g. sandbox/space.ts,
+// soft-delete/orchestration.ts, access/evaluator.ts.
 //   - access/guards.ts: binds defaultDb into requireRequestAction +
 //     authorizeActionDefault/etc. so controllers don't import the client.
-//   - sandbox/space.ts: the file_spaces/file_mounts/file_snapshots DB layer —
-//     every fn takes `client: Executor`; imports only `sql` + the Executor type
-//     (no db client). Repo in all but name.
-//   - soft-delete/orchestration.ts: transactional soft-delete orchestrator —
-//     every fn takes `db: Executor` and callers run it inside one
-//     withDbTransaction(trx); binding a default would break atomicity. Imports
-//     only `sql` + the Executor type.
 //   - sandbox/gc.ts: the CAS mark-sweep GC job — runContentGc(opts.dbh ?? db)
 //     is executor-injectable; db is just the production default for a
 //     cross-cutting infra sweep over 6+ tables.
@@ -113,8 +108,6 @@ const isMixedModuleFile = (p) => MIXED_MODULES.has(moduleOf(p))
 //     is the production default.
 const R8_ALLOWLIST = new Set([
   "access/guards.ts",
-  "sandbox/space.ts",
-  "soft-delete/orchestration.ts",
   "sandbox/gc.ts",
   "devices/control-plane-auth.ts",
 ])
@@ -168,21 +161,25 @@ const RULES = [
       /\bsend\(\s*\{\s*\.\.\.row\b/.test(src),
   },
   {
-    // r8: only repo*.ts may reach the DB client / Kysely query builder. A
-    // non-repo module file that imports `db` (or withDbTransaction) from
-    // infrastructure/database/kysely, or the `sql` tag from "kysely", is doing
-    // data access outside the repo boundary (§9). Baseline-ratcheted: the ~96
-    // pre-existing offenders are grandfathered while modules migrate their
-    // queries into repo.ts; a NEW non-repo DB reach fails. Genuine
-    // infrastructure adapters live under infrastructure/** (not walked here),
-    // so they're unaffected; designated module-level db-edge-binders are in
-    // R8_ALLOWLIST (e.g. access/guards.ts).
+    // r8: only repo*.ts may import the DB CLIENT (`db` / withDbTransaction from
+    // infrastructure/database/kysely) — that is the module singleton, and a
+    // non-repo file importing it is reaching the DB outside the repo boundary
+    // (§9). NOTE: this flags the db-client import, NOT the bare `sql` tag from
+    // "kysely": a file that only imports `sql` + an `Executor`/`KyselyDb` type
+    // and runs every query on an INJECTED executor is the legitimate
+    // executor-injectable DB layer (it cannot reach the singleton) — flagging
+    // `sql` there was a false positive. `sql`…`.execute(db)` is still caught,
+    // because such a file must import `db`. Baseline-ratcheted while modules
+    // migrate their queries into repo.ts; a NEW db-client import fails. Genuine
+    // infrastructure adapters live under infrastructure/** (not walked here);
+    // designated module-level db-edge-binders / injectable-default DB layers are
+    // in R8_ALLOWLIST (e.g. access/guards.ts).
     id: "r8_db_client_outside_repo",
     appliesTo: (p) => !isRepo(p) && !R8_ALLOWLIST.has(r8Key(p)),
     test: (src) =>
       /\bimport\s*\{[^}]*\b(?:db|withDbTransaction)\b[^}]*\}\s*from\s*["'][^"']*\/infrastructure\/database\/kysely(\.js)?["']/.test(
         src
-      ) || /\bimport\s*\{[^}]*\bsql\b[^}]*\}\s*from\s*["']kysely["']/.test(src),
+      ),
   },
 ]
 
