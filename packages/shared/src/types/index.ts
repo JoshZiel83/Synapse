@@ -4523,6 +4523,8 @@ export type {
   UserProfileView,
   AuthSessionSummaryView,
   AuthMeView,
+  UpdateMeInput,
+  UnlinkAccountInput,
 } from "../schemas/auth.js"
 export type {
   AutomationEventSourceSchemaType,

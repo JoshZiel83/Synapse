@@ -41,7 +41,7 @@ import type {
   WorkspaceInfo,
   WorkspaceListResponse,
 } from "@/types/api"
-import type { FileRecordView } from "@shared"
+import type { FileRecordView, UpdateMeInput } from "@shared"
 
 let authToken: string | null = null
 let unauthorizedHandler: (() => void | Promise<void>) | null = null
@@ -202,7 +202,7 @@ class ApiClient {
     return res.data
   }
 
-  async updateMe(data: { name?: string; avatarFileId?: string | null }) {
+  async updateMe(data: UpdateMeInput) {
     const res = await this.request<{ data: AuthMeResponse }>("/auth/me", {
       method: "PUT",
       body: JSON.stringify(data),

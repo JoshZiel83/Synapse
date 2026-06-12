@@ -10,7 +10,11 @@ import { z } from "zod"
 import { auth } from "./better-auth.js"
 import { resolveOAuthErrorRedirect } from "./oauth-error-routing.js"
 import { getProfile, updateProfile, AuthError } from "./service.js"
-import { AuthMeViewSchema } from "@synapse/shared/schemas"
+import {
+  AuthMeViewSchema,
+  UpdateMeInputSchema,
+  UnlinkAccountInputSchema,
+} from "@synapse/shared/schemas"
 import { sendData } from "../../infrastructure/http/respond.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { db, withDbTransaction } from "../../infrastructure/database/kysely.js"
@@ -20,24 +24,10 @@ import {
   LastAccountError,
 } from "../soft-delete/orchestration.js"
 
-const updateMeSchema = z
-  .object({
-    name: z.string().min(1).max(100).optional(),
-    avatarFileId: z.uuid().nullable().optional(),
-  })
-  .refine(
-    (body) => body.name !== undefined || body.avatarFileId !== undefined,
-    {
-      message: "At least one field is required",
-    }
-  )
-
-// Body for DELETE /api/v1/auth/me/accounts — identifies the account to unlink by
-// its (providerId, accountId) pair (the same key Better Auth uses).
-const unlinkAccountSchema = z.object({
-  providerId: z.string().min(1).max(100),
-  accountId: z.string().min(1).max(255),
-})
+// App-facing request bodies live in @synapse/shared (§5.1.1) so the API parser
+// and the web/mobile clients share one definition.
+const updateMeSchema = UpdateMeInputSchema
+const unlinkAccountSchema = UnlinkAccountInputSchema
 
 function handleAuthError(error: unknown, reply: FastifyReply) {
   if (error instanceof AuthError) {

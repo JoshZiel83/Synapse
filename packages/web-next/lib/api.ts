@@ -90,6 +90,7 @@ import type {
   WorkspaceAppGrant,
   SkillMarketplaceEntry,
   WorkspaceCapabilityConversationTypePoliciesView,
+  UpdateMeInput,
 } from "@synapse/shared"
 import {
   normalizeConversationCatalogEntry,
@@ -347,7 +348,7 @@ class ApiClient {
     const res = await this.fetch("/auth/me")
     return res.data
   }
-  async updateMe(data: { name?: string; avatarFileId?: string | null }) {
+  async updateMe(data: UpdateMeInput) {
     const res = await this.fetch("/auth/me", {
       method: "PUT",
       body: JSON.stringify(data),
