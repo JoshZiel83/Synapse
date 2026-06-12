@@ -78,7 +78,6 @@
     "packages/api/src/modules/sandbox/service.ts",
     "packages/api/src/modules/session/runtime.ts",
     "packages/api/src/modules/session/service.ts",
-    "packages/api/src/modules/session/tool-presentation/resolver.ts",
     "packages/api/src/modules/skills/service.ts",
     "packages/api/src/modules/tasks/action-tokens.ts",
     "packages/api/src/modules/tasks/service.ts",

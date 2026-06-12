@@ -16,9 +16,8 @@
 import type { ToolPresentationDescriptor } from "@synapse/device-protocol/tool-presentation"
 import { parseToolPresentation } from "@synapse/device-protocol/tool-presentation/schema"
 import { BUILTIN_PRESENTATION } from "@synapse/device-runtime/builtin-presentation"
-import { db } from "../../../infrastructure/database/kysely.js"
-import { livePluginInstallations } from "../../soft-delete/live-reads.js"
 import { getToolPlugin } from "../../ai/tool-plugins.js"
+import { selectPluginToolManifest } from "./repo.js"
 import { genericDescriptor } from "./render.js"
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -69,17 +68,9 @@ async function resolvePluginPresentation(
   if (!installationId) return null
   const upstream = str(snapshot.upstreamToolName)
   if (!upstream) return null
-  const row = await livePluginInstallations(db)
-    .innerJoin(
-      "pluginPackageVersionSpecs as spec",
-      "spec.catalogVersionId",
-      "pluginInstallationsLive.catalogVersionId"
-    )
-    .select(["spec.toolManifest as toolManifest"])
-    .where("pluginInstallationsLive.id", "=", installationId)
-    .executeTakeFirst()
-  if (!row) return null
-  const manifest = Array.isArray(row.toolManifest) ? row.toolManifest : []
+  const toolManifest = await selectPluginToolManifest(installationId)
+  if (toolManifest === null) return null
+  const manifest = Array.isArray(toolManifest) ? toolManifest : []
   for (const entry of manifest) {
     const rec = asRecord(entry)
     if (!rec) continue
