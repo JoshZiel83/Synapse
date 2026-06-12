@@ -16,6 +16,7 @@
  */
 import {
   normalizeCanonicalContentBlocks,
+  parseJsonObjectOrUndefined,
   textBlock,
   type CanonicalContentBlock,
   type ToolResultOrigin,
@@ -112,12 +113,9 @@ function originToFileOrigin(
   })
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined
-  }
-  return value as Record<string, unknown>
-}
+// Business JSON decode → shared parseJsonObjectOrUndefined (object-only,
+// array-reject, undefined fallback). r6 P1-8: replaces a local copy.
+const asRecord = parseJsonObjectOrUndefined
 
 function mergeBinaryMetadata(
   base?: Record<string, unknown>,

@@ -5,6 +5,7 @@ import type {
   ResolvedModelConfig,
   ResolvedModelPlan,
 } from "@synapse/shared"
+import { parseJsonObject } from "@synapse/shared"
 import { db } from "../../infrastructure/database/kysely.js"
 import {
   actorSubject,
@@ -63,10 +64,9 @@ type ResolveContext = {
 
 const DEFAULT_ATTEMPT_POLICY: ModelAttemptPolicy = DEFAULT_MODEL_ATTEMPT_POLICY
 
-function asObject(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {}
-  return value as Record<string, unknown>
-}
+// Business JSON decode → shared parseJsonObject (object-only, array-reject).
+// r6 P1-8: replaces a local copy with identical semantics.
+const asObject = parseJsonObject
 
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value)
