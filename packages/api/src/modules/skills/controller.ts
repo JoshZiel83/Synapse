@@ -1,4 +1,3 @@
-import { db } from "../../infrastructure/database/kysely.js"
 import { z } from "zod"
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify"
 import {
@@ -15,14 +14,13 @@ import {
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { PLATFORM_RESOURCE_ID } from "../access/evaluator.js"
-import { requireRequestAction } from "../access/guards.js"
 import {
-  authorizeAction,
-  getRequestAccessSubject,
-  getRequestUserId,
-  listAuthorizedResourceIds,
-  resolveWorkspaceAccessSubject,
-} from "../access/service.js"
+  requireRequestAction,
+  authorizeActionDefault,
+  listAuthorizedResourceIdsDefault,
+  resolveWorkspaceAccessSubjectDefault,
+} from "../access/guards.js"
+import { getRequestAccessSubject, getRequestUserId } from "../access/service.js"
 import {
   createWorkspaceSkill,
   SkillError,
@@ -132,9 +130,8 @@ async function requireWorkspaceQueryView(
   workspaceId: string,
   errorMessage: string
 ) {
-  const allowed = await authorizeAction(db, {
-    subject: await resolveWorkspaceAccessSubject(
-      db,
+  const allowed = await authorizeActionDefault({
+    subject: await resolveWorkspaceAccessSubjectDefault(
       workspaceId,
       getRequestUserId(request)
     ),
@@ -296,7 +293,7 @@ export function registerSkillRoutes(app: FastifyInstance) {
         )
         if (!allowed) return
 
-        const authorizedSkillIds = await listAuthorizedResourceIds(db, {
+        const authorizedSkillIds = await listAuthorizedResourceIdsDefault({
           subject: getRequestAccessSubject(request),
           action: "installed_skill.edit",
         })

@@ -1,4 +1,3 @@
-import { db } from "../../infrastructure/database/kysely.js"
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify"
 import { z } from "zod"
 import { formatValidationDetails } from "../../infrastructure/validation-error.js"
@@ -11,8 +10,11 @@ import {
   revokePlatformAccess,
   type PlatformAccessKey,
 } from "./admin-service.js"
-import { requireRequestAction } from "../access/guards.js"
-import { authorizeAction, userSubject } from "../access/service.js"
+import {
+  requireRequestAction,
+  authorizeActionDefault,
+} from "../access/guards.js"
+import { userSubject } from "../access/service.js"
 
 const platformAccessSchema = z.object({
   userId: z.uuid(),
@@ -34,7 +36,7 @@ async function requirePlatformManagePermission(
 }
 
 async function canPlatformPermission(userId: string) {
-  return authorizeAction(db, {
+  return authorizeActionDefault({
     subject: userSubject(userId),
     action: "platform.manage",
     resourceId: PLATFORM_RESOURCE_ID,

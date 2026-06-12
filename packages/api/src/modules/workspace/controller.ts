@@ -1,4 +1,3 @@
-import { db } from "../../infrastructure/database/kysely.js"
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify"
 import type {
   WorkspaceInviteView,
@@ -18,11 +17,11 @@ import {
   optionalAuth,
 } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
-import { requireRequestAction } from "../access/guards.js"
 import {
-  authorizeAction,
-  resolveWorkspaceAccessSubject,
-} from "../access/service.js"
+  requireRequestAction,
+  authorizeActionDefault,
+  resolveWorkspaceAccessSubjectDefault,
+} from "../access/guards.js"
 import type { AccessAction } from "../access/actions.js"
 import {
   createWorkspace,
@@ -127,8 +126,8 @@ async function canWorkspacePermission(
   userId: string,
   action: AccessAction
 ): Promise<boolean> {
-  return authorizeAction(db, {
-    subject: await resolveWorkspaceAccessSubject(db, workspaceId, userId),
+  return authorizeActionDefault({
+    subject: await resolveWorkspaceAccessSubjectDefault(workspaceId, userId),
     action,
     resourceId: workspaceId,
   })

@@ -1,15 +1,13 @@
-import { db } from "../../infrastructure/database/kysely.js"
 import { z } from "zod"
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { PLATFORM_RESOURCE_ID } from "../access/evaluator.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
-import { requireRequestAction } from "../access/guards.js"
 import {
-  authorizeAction,
-  userSubject,
-  workspaceMemberSubject,
-} from "../access/service.js"
+  requireRequestAction,
+  authorizeActionDefault,
+} from "../access/guards.js"
+import { userSubject, workspaceMemberSubject } from "../access/service.js"
 import {
   addModelItem,
   createModelGroup,
@@ -136,7 +134,7 @@ async function requireModelGroupPermission(
         : permission === "grant"
           ? "model_group.grant"
           : "model_group.delete"
-  const allowed = await authorizeAction(db, {
+  const allowed = await authorizeActionDefault({
     subject: workspaceId
       ? workspaceMemberSubject(principalId)
       : userSubject(principalId),

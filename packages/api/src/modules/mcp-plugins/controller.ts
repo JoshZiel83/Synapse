@@ -1,14 +1,13 @@
 import { z } from "zod"
 import type { FastifyInstance, FastifyReply } from "fastify"
-import { db } from "../../infrastructure/database/kysely.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
-import { requireRequestAction } from "../access/guards.js"
 import {
-  getRequestAccessSubject,
-  listAuthorizedResourceIds,
-} from "../access/service.js"
+  requireRequestAction,
+  listAuthorizedResourceIdsDefault,
+} from "../access/guards.js"
+import { getRequestAccessSubject } from "../access/service.js"
 import {
   createPluginInstallPlan,
   getInstallation,
@@ -384,7 +383,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
         if (!allowed) return undefined
 
         const { workspaceId } = request.params as { workspaceId: string }
-        const installationIds = await listAuthorizedResourceIds(db, {
+        const installationIds = await listAuthorizedResourceIdsDefault({
           subject: getRequestAccessSubject(request),
           action: "plugin_installation.edit",
         })

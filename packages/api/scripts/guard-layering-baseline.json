@@ -55,7 +55,6 @@
     "packages/api/src/modules/im/service/weixin-binding.ts",
     "packages/api/src/modules/mcp-plugins/audit.ts",
     "packages/api/src/modules/mcp-plugins/config-resolver.ts",
-    "packages/api/src/modules/mcp-plugins/controller.ts",
     "packages/api/src/modules/mcp-plugins/instance-manager.ts",
     "packages/api/src/modules/mcp-plugins/mijia/connection-store.ts",
     "packages/api/src/modules/mcp-plugins/plugin-auth-connections.ts",
@@ -65,13 +64,11 @@
     "packages/api/src/modules/memory/controller.ts",
     "packages/api/src/modules/memory/indexing.ts",
     "packages/api/src/modules/memory/service.ts",
-    "packages/api/src/modules/model-groups/controller.ts",
     "packages/api/src/modules/model-groups/resolver.ts",
     "packages/api/src/modules/model-groups/service.ts",
     "packages/api/src/modules/orchestrator/service.ts",
     "packages/api/src/modules/organization/service.ts",
     "packages/api/src/modules/platform/admin-service.ts",
-    "packages/api/src/modules/platform/controller.ts",
     "packages/api/src/modules/relationship/service.ts",
     "packages/api/src/modules/remote-agents/mcp-endpoint.ts",
     "packages/api/src/modules/remote-agents/service.ts",
@@ -88,7 +85,6 @@
     "packages/api/src/modules/session/runtime.ts",
     "packages/api/src/modules/session/service.ts",
     "packages/api/src/modules/session/tool-presentation/resolver.ts",
-    "packages/api/src/modules/skills/controller.ts",
     "packages/api/src/modules/skills/service.ts",
     "packages/api/src/modules/soft-delete/orchestration.ts",
     "packages/api/src/modules/tasks/action-tokens.ts",
@@ -98,7 +94,6 @@
     "packages/api/src/modules/workspace-apps/grant-storage.ts",
     "packages/api/src/modules/workspace-apps/root-storage.ts",
     "packages/api/src/modules/workspace-apps/service.ts",
-    "packages/api/src/modules/workspace/controller.ts",
     "packages/api/src/modules/workspace/service.ts"
   ]
 }
