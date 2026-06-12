@@ -91,6 +91,18 @@ const moduleOf = (p) => {
 }
 const isMixedModuleFile = (p) => MIXED_MODULES.has(moduleOf(p))
 
+// r8 allowlist: files that are the DESIGNATED db-edge-binders for their module
+// (they import the runtime defaultDb purely to bind it into request-handler-
+// facing wrappers — the same role infrastructure/** plays, but they live under
+// modules/ for cohesion). access/guards.ts binds defaultDb into
+// requireRequestAction + authorizeActionDefault/etc. so controllers don't import
+// the client (round-6 P1-6). These are intentional boundaries, not leaks.
+const R8_ALLOWLIST = new Set(["access/guards.ts"])
+const r8Key = (p) => {
+  const m = p.split("/modules/")[1]
+  return m || ""
+}
+
 const RULES = [
   {
     id: "r1_generated_db_outside_repo",
@@ -143,9 +155,10 @@ const RULES = [
     // pre-existing offenders are grandfathered while modules migrate their
     // queries into repo.ts; a NEW non-repo DB reach fails. Genuine
     // infrastructure adapters live under infrastructure/** (not walked here),
-    // so they're unaffected.
+    // so they're unaffected; designated module-level db-edge-binders are in
+    // R8_ALLOWLIST (e.g. access/guards.ts).
     id: "r8_db_client_outside_repo",
-    appliesTo: (p) => !isRepo(p),
+    appliesTo: (p) => !isRepo(p) && !R8_ALLOWLIST.has(r8Key(p)),
     test: (src) =>
       /\bimport\s*\{[^}]*\b(?:db|withDbTransaction)\b[^}]*\}\s*from\s*["'][^"']*\/infrastructure\/database\/kysely(\.js)?["']/.test(
         src

@@ -13,7 +13,6 @@
     "packages/api/src/modules/access/binding-storage.ts",
     "packages/api/src/modules/access/contact-approval.ts",
     "packages/api/src/modules/access/evaluator.ts",
-    "packages/api/src/modules/access/guards.ts",
     "packages/api/src/modules/access/subject-resolution.ts",
     "packages/api/src/modules/ai/context-builder.ts",
     "packages/api/src/modules/ai/session-tools.ts",
