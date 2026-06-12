@@ -1,20 +1,15 @@
 import { z } from "zod"
 import type { FastifyInstance, FastifyReply } from "fastify"
 import {
-  ACTOR_ROLES,
   actorRef,
   CAPABILITY_ACCESS_TARGET_TYPES,
   conversationRef,
-  REMOTE_AGENT_RUNTIME_KINDS,
-  REUSE_SCOPES,
   remoteAgentRef,
   SUBJECT_KIND,
   WORKSPACE_APP_KIND,
   WORKSPACE_APP_GRANT_REQUEST_DIRECTION,
   workspaceMemberRef,
   workspaceRef,
-  WORKSPACE_APP_GRANT_PERMISSIONS,
-  WORKSPACE_APP_GRANT_REQUEST_DIRECTIONS,
   WORKSPACE_APP_KINDS,
   type CapabilityAccessTarget,
   type WorkspaceAppGrantPermission,
@@ -48,6 +43,12 @@ import {
   WorkspaceAppViewSchema,
   WorkspaceAppGrantViewSchema,
   WorkspaceAppGrantRequestViewSchema,
+  WorkspaceAppGrantTargetSchema,
+  ReplaceWorkspaceAppGrantsInputSchema,
+  CreateWorkspaceAppGrantRequestInputSchema,
+  CreateWorkspaceAppInputSchema,
+  UpdateWorkspaceAppInputSchema,
+  WorkspaceAppGrantRequestDirectionSchema,
 } from "@synapse/shared/schemas"
 
 const workspaceAppEnvelopeSchema = z.object({ app: WorkspaceAppViewSchema })
@@ -65,225 +66,17 @@ const grantRequestEnvelopeSchema = z.object({
 })
 const successEnvelopeSchema = z.object({ success: z.boolean() })
 
+// App-facing request bodies / queries live in @synapse/shared (§5.1.1) so the
+// API parser and the web/mobile clients share one definition. The grant target
+// schema feeds toCapabilityAccessTarget below (typed via z.infer).
+const targetSchema = WorkspaceAppGrantTargetSchema
+const replaceGrantsSchema = ReplaceWorkspaceAppGrantsInputSchema
+const requestDirectionSchema = WorkspaceAppGrantRequestDirectionSchema
+const createGrantRequestSchema = CreateWorkspaceAppGrantRequestInputSchema
+const createWorkspaceAppSchema = CreateWorkspaceAppInputSchema
+const updateWorkspaceAppSchema = UpdateWorkspaceAppInputSchema
+// Query-param (?kind=) enum filter — not a body DTO, stays local.
 const workspaceAppKindSchema = z.enum(WORKSPACE_APP_KINDS)
-const workspaceAppGrantPermissionSchema = z.enum(
-  WORKSPACE_APP_GRANT_PERMISSIONS
-)
-const conversationTypeMaskSchema = z.number().int().min(1).max(15)
-const targetSubjectSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal(SUBJECT_KIND.WORKSPACE),
-    workspaceId: z.uuid(),
-  }),
-  z.object({
-    kind: z.literal(SUBJECT_KIND.WORKSPACE_MEMBER),
-    memberId: z.uuid(),
-  }),
-  z.object({
-    kind: z.literal(SUBJECT_KIND.CONVERSATION),
-    conversationId: z.uuid(),
-  }),
-  z.object({
-    kind: z.literal(SUBJECT_KIND.ACTOR),
-    actorId: z.uuid(),
-  }),
-  z.object({
-    kind: z.literal(SUBJECT_KIND.REMOTE_AGENT),
-    remoteAgentId: z.uuid(),
-  }),
-])
-
-const targetSchema = z.object({
-  subject: targetSubjectSchema,
-  scope: z
-    .object({
-      kind: z.literal(SUBJECT_KIND.CONVERSATION),
-      conversationId: z.uuid(),
-    })
-    .optional(),
-})
-
-const replaceGrantsSchema = z.object({
-  grants: z.array(
-    z.object({
-      target: targetSchema,
-      permissions: z.array(workspaceAppGrantPermissionSchema).min(1),
-      conversationTypeMaskOverride: conversationTypeMaskSchema
-        .nullable()
-        .optional(),
-      reason: z.string().trim().min(1).optional(),
-    })
-  ),
-})
-
-const requestDirectionSchema = z
-  .enum(WORKSPACE_APP_GRANT_REQUEST_DIRECTIONS)
-  .default(WORKSPACE_APP_GRANT_REQUEST_DIRECTIONS[0])
-const createGrantRequestSchema = z.object({
-  reason: z.string().trim().min(1).optional(),
-})
-const createWorkspaceAppSchema = z.union([
-  z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.ACTOR),
-    displayName: z.string().trim().min(1).max(255),
-    role: z.enum(ACTOR_ROLES),
-    title: z.string().trim().max(255).optional(),
-    avatarFileId: z.uuid().optional(),
-    avatarEmoji: z.string().trim().max(32).optional(),
-    canRepresentUser: z.boolean().optional(),
-    docs: z.array(z.any()).optional(),
-    parentId: z.uuid().optional(),
-    specialties: z.array(z.string()).optional(),
-    config: z.record(z.string(), z.unknown()).optional(),
-    grants: z
-      .array(
-        z.object({
-          target: targetSchema,
-          permissions: z.array(workspaceAppGrantPermissionSchema).min(1),
-          conversationTypeMaskOverride: conversationTypeMaskSchema
-            .nullable()
-            .optional(),
-          reason: z.string().trim().min(1).optional(),
-        })
-      )
-      .optional(),
-  }),
-  z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.INSTALLED_SKILL),
-    sourceType: z.literal("custom"),
-    displayName: z.string().trim().min(1).max(255),
-    description: z.any().optional(),
-    iconFileId: z.uuid().optional(),
-    tags: z.array(z.string()).optional(),
-    attachmentFiles: z.array(z.any()).optional(),
-    grants: z
-      .array(
-        z.object({
-          target: targetSchema,
-          permissions: z.array(workspaceAppGrantPermissionSchema).min(1),
-          conversationTypeMaskOverride: conversationTypeMaskSchema
-            .nullable()
-            .optional(),
-          reason: z.string().trim().min(1).optional(),
-        })
-      )
-      .optional(),
-  }),
-  z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.INSTALLED_SKILL),
-    sourceType: z.literal("marketplace"),
-    marketSkillId: z.uuid(),
-    grants: z
-      .array(
-        z.object({
-          target: targetSchema,
-          permissions: z.array(workspaceAppGrantPermissionSchema).min(1),
-          conversationTypeMaskOverride: conversationTypeMaskSchema
-            .nullable()
-            .optional(),
-          reason: z.string().trim().min(1).optional(),
-        })
-      )
-      .optional(),
-  }),
-  z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.REMOTE_AGENT),
-    displayName: z.string().trim().min(1).max(255),
-    title: z.string().trim().min(1).max(255),
-    description: z.string().trim().max(5000).optional(),
-    runtimeKind: z.enum(REMOTE_AGENT_RUNTIME_KINDS),
-    avatarFileId: z.uuid().optional(),
-    avatarEmoji: z.string().trim().max(32).optional(),
-    isPublicShared: z.boolean().optional(),
-    metadata: z.record(z.string(), z.unknown()).optional(),
-    grants: z
-      .array(
-        z.object({
-          target: targetSchema,
-          permissions: z.array(workspaceAppGrantPermissionSchema).min(1),
-          conversationTypeMaskOverride: conversationTypeMaskSchema
-            .nullable()
-            .optional(),
-          reason: z.string().trim().min(1).optional(),
-        })
-      )
-      .optional(),
-  }),
-  z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.PLUGIN_INSTALLATION),
-    pluginId: z.uuid(),
-    lifecycleScope: z.enum(REUSE_SCOPES).optional(),
-    configData: z.record(z.string(), z.unknown()).optional(),
-    authSessionIds: z.record(z.string(), z.uuid()).optional(),
-    grants: z
-      .array(
-        z.object({
-          target: targetSchema,
-          permissions: z.array(workspaceAppGrantPermissionSchema).min(1),
-          conversationTypeMaskOverride: conversationTypeMaskSchema
-            .nullable()
-            .optional(),
-          reason: z.string().trim().min(1).optional(),
-        })
-      )
-      .optional(),
-  }),
-])
-const updateWorkspaceAppSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.ACTOR),
-    displayName: z.string().trim().min(1).max(255).optional(),
-    role: z.enum(ACTOR_ROLES).optional(),
-    title: z.string().trim().max(255).optional(),
-    avatarFileId: z.uuid().nullable().optional(),
-    avatarEmoji: z.string().trim().max(32).nullable().optional(),
-    canRepresentUser: z.boolean().optional(),
-    docs: z.array(z.any()).optional(),
-    parentId: z.uuid().nullable().optional(),
-    specialties: z.array(z.string()).optional(),
-    config: z.record(z.string(), z.unknown()).optional(),
-  }),
-  z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.REMOTE_AGENT),
-    displayName: z.string().trim().min(1).max(255).optional(),
-    title: z.string().trim().min(1).max(255).optional(),
-    description: z.string().trim().max(5000).nullable().optional(),
-    avatarFileId: z.uuid().nullable().optional(),
-    avatarEmoji: z.string().trim().max(32).nullable().optional(),
-    isPublicShared: z.boolean().optional(),
-    isActive: z.boolean().optional(),
-    metadata: z.record(z.string(), z.unknown()).optional(),
-  }),
-  z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.INSTALLED_SKILL),
-    displayName: z.string().trim().min(1).max(255).optional(),
-    description: z.any().optional(),
-    iconFileId: z.uuid().nullable().optional(),
-    tags: z.array(z.string()).optional(),
-    isEnabled: z.boolean().optional(),
-    conversationTypeMaskOverride: conversationTypeMaskSchema
-      .nullable()
-      .optional(),
-    attachmentFiles: z.array(z.any()).optional(),
-  }),
-  z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.DEVICE_CAPABILITY),
-    displayName: z.string().trim().min(1).max(255).optional(),
-    conversationTypeMaskOverride: conversationTypeMaskSchema
-      .nullable()
-      .optional(),
-  }),
-  z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.PLUGIN_INSTALLATION),
-    isEnabled: z.boolean().optional(),
-    configData: z.record(z.string(), z.unknown()).optional(),
-    authSessionIds: z.record(z.string(), z.uuid()).optional(),
-    lifecycleScope: z.enum(REUSE_SCOPES).optional(),
-    conversationTypeMaskOverride: conversationTypeMaskSchema
-      .nullable()
-      .optional(),
-  }),
-])
 
 function toCapabilityAccessTarget(
   input: z.infer<typeof targetSchema>

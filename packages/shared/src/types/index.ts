@@ -4639,6 +4639,12 @@ export type {
   WorkspaceAppViewSchemaType,
   WorkspaceAppGrantViewSchemaType,
   WorkspaceAppGrantRequestViewSchemaType,
+  WorkspaceAppGrantTargetInput,
+  WorkspaceAppGrantEntryInput,
+  ReplaceWorkspaceAppGrantsInput,
+  CreateWorkspaceAppGrantRequestInput,
+  CreateWorkspaceAppInput,
+  UpdateWorkspaceAppInput,
 } from "../schemas/workspace-apps.js"
 export type {
   ChatBootstrapViewSchemaType,
