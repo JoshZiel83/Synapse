@@ -13,6 +13,7 @@ import {
   nowIsoInstant,
   parseIsoInstant,
 } from "@synapse/shared/datetime"
+import { parseJsonObject } from "@synapse/shared"
 import type { Timestamp } from "@synapse/shared"
 
 type JsonObject = Record<string, unknown>
@@ -79,12 +80,8 @@ export type FeishuCliSetupProgressResult =
       errorMessage: string
     }
 
-function asObject(value: unknown): JsonObject {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {}
-  }
-  return value as JsonObject
-}
+// Business JSON decode → shared parseJsonObject (object-only, array-reject). r6 P1-8.
+const asObject = parseJsonObject
 
 function asString(value: unknown) {
   return typeof value === "string" ? value.trim() : ""

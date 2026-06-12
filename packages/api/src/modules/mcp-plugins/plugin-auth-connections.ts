@@ -6,6 +6,7 @@ import type {
   PluginAuthValueSource,
   PluginConfigFieldDefinition,
 } from "@synapse/shared"
+import { parseJsonObject } from "@synapse/shared"
 import { CompiledQuery, sql } from "kysely"
 import { config } from "../../config/index.js"
 import {
@@ -112,19 +113,8 @@ export class PluginAuthError extends Error {
   }
 }
 
-function asObject(value: unknown): JsonObject {
-  if (!value) return {}
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value) as JsonObject
-    } catch {
-      return {}
-    }
-  }
-  return typeof value === "object" && !Array.isArray(value)
-    ? (value as JsonObject)
-    : {}
-}
+// Business JSON decode → shared parseJsonObject (object-only, array-reject). r6 P1-8.
+const asObject = parseJsonObject
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value.trim() : ""

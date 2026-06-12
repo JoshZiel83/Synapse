@@ -18,6 +18,7 @@ import type {
   MarketplacePublisherView,
   PluginCategoryView,
 } from "@synapse/shared"
+import { parseJsonObject } from "@synapse/shared"
 import { assertIsoInstant } from "@synapse/shared/datetime"
 import {
   serializeInstant,
@@ -45,19 +46,8 @@ export function presentOptionalInstant(
 
 type JsonObject = Record<string, unknown>
 
-function asObject(value: unknown): JsonObject {
-  if (!value) return {}
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value) as JsonObject
-    } catch {
-      return {}
-    }
-  }
-  return typeof value === "object" && !Array.isArray(value)
-    ? (value as JsonObject)
-    : {}
-}
+// Business JSON decode → shared parseJsonObject (object-only, array-reject). r6 P1-8.
+const asObject = parseJsonObject
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value.trim() : ""

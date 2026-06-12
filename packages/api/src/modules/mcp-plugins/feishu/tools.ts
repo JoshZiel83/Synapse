@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { dateToIsoInstant } from "@synapse/shared/datetime"
 import {
   FILE_ORIGIN_SYSTEMS,
+  parseJsonObject,
   textBlock,
   textBlocks,
   type ToolDefinition,
@@ -71,12 +72,8 @@ function asString(value: unknown) {
   return typeof value === "string" ? value.trim() : ""
 }
 
-function asObject(value: unknown): JsonObject {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {}
-  }
-  return value as JsonObject
-}
+// Business JSON decode → shared parseJsonObject (object-only, array-reject). r6 P1-8.
+const asObject = parseJsonObject
 
 function asNumber(value: unknown, fallback = 0) {
   if (typeof value === "number" && Number.isFinite(value)) {

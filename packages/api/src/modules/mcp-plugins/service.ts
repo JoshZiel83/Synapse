@@ -8,6 +8,7 @@ import {
   actorRef,
   conversationRef,
   normalizeConversationTypeMask,
+  parseJsonObject,
   REUSE_SCOPES,
   remoteAgentRef,
   resolveEffectiveConversationTypeMask,
@@ -314,19 +315,8 @@ function sanitizeSlug(value: string) {
   return slugify(value, { maxLength: 120 })
 }
 
-function asObject(value: unknown): JsonObject {
-  if (!value) return {}
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value) as JsonObject
-    } catch {
-      return {}
-    }
-  }
-  return typeof value === "object" && !Array.isArray(value)
-    ? (value as JsonObject)
-    : {}
-}
+// Business JSON decode → shared parseJsonObject (object-only, array-reject). r6 P1-8.
+const asObject = parseJsonObject
 
 function asArray<T>(value: unknown): T[] {
   if (!value) return []

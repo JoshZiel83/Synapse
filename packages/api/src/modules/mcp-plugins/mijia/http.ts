@@ -1,3 +1,4 @@
+import { parseJsonObject } from "@synapse/shared"
 import type { JsonObject } from "./types.js"
 
 export class MijiaTimeoutError extends Error {
@@ -59,12 +60,8 @@ export class CookieJar {
   }
 }
 
-export function asObject(value: unknown): JsonObject {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {}
-  }
-  return value as JsonObject
-}
+// Business JSON decode → shared parseJsonObject (object-only, array-reject). r6 P1-8.
+export const asObject = parseJsonObject
 
 export function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : []
