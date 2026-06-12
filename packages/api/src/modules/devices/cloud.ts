@@ -7,6 +7,7 @@ import {
   dateToIsoInstant,
   type IsoInstantString,
 } from "@synapse/shared/datetime"
+import type { CloudBootstrapResult } from "@synapse/device-protocol"
 import { sql } from "kysely"
 import { db } from "../../infrastructure/database/kysely.js"
 import { DeviceModuleError } from "./service.js"
@@ -23,7 +24,7 @@ export interface CreateCloudDeviceInput {
  * camelCase domain result of a cloud pairing allocation. Structurally matches
  * the app-facing shared `CreateCloudDeviceResultView` (the controller presents
  * it via that schema). The snake_case wire copy lives in device-protocol
- * (`CreateCloudDeviceResultSchema`) for the sandbox→/devices/bootstrap
+ * (`CloudBootstrapResultSchema`) for the sandbox→/devices/bootstrap
  * handshake — same logical value, two surfaces, two contracts (§13.1).
  */
 export interface CreateCloudDeviceResult {
@@ -93,12 +94,10 @@ export interface ConsumeBootstrapInput {
   arch?: string
 }
 
-export interface ConsumeBootstrapResult {
-  device_id: string
-  service_id: string
-  service_key_id: string
-  control_plane_url: string
-}
+// Wire result of the sandbox bootstrap handshake. The snake_case shape is the
+// device-protocol contract (CloudBootstrapResultSchema) — sole consumer is the
+// device-runtime cloud-bootstrap client.
+export type ConsumeBootstrapResult = CloudBootstrapResult
 
 /**
  * Sandbox boot handler. Resolves the bootstrap_token (hashed) to its

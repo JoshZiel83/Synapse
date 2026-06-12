@@ -280,12 +280,23 @@ export type SynapseError = z.infer<typeof SynapseErrorSchema>
 // (§5.1.1/§8.3). Only the true handshake wire shapes (consume / bootstrap /
 // control-plane) remain below — device-runtime/sandbox are their sole callers.
 
+// Local-QR / service-join handshake. The runtime reports its self-describing
+// device facts (title / device_type / platform / arch) up-front so the API can
+// persist platformKey from pairing onwards (see device-runtime/src/pairing.ts:
+// without platform+arch the bundle-eligibility gate falls back to the
+// conservative-permissive branch). These were previously only modelled in the
+// API controller's local body schema — they are wire fields and belong here so
+// the runtime client, SDK, and API parse one source.
 export const ConsumePairingInputSchema = z.object({
   pairing_code: z.string().min(1),
   device_pubkey: z.string(),
   service_pubkey: z.string(),
   service_kind: z.enum(DEVICE_SERVICE_KINDS).default("device_runtime"),
   client_version: z.string().optional(),
+  title: z.string().optional(),
+  device_type: z.enum(DEVICE_TYPES).optional(),
+  platform: z.string().optional(),
+  arch: z.string().optional(),
 })
 export type ConsumePairingInput = z.infer<typeof ConsumePairingInputSchema>
 
@@ -296,6 +307,30 @@ export const ConsumePairingResultSchema = z.object({
   control_plane_url: z.string(),
 })
 export type ConsumePairingResult = z.infer<typeof ConsumePairingResultSchema>
+
+// Cloud sandbox bootstrap handshake (§8.2). Runs INSIDE the sandbox on first
+// boot, exchanging the env-injected bootstrap_token for long-term device +
+// service credentials via POST /api/v1/devices/bootstrap. Unauthenticated; the
+// bootstrap_token IS the credential. The result intentionally mirrors
+// ConsumePairingResult (same logical handshake output, different entry path).
+export const CloudBootstrapInputSchema = z.object({
+  bootstrap_token: z.string().min(1),
+  device_pubkey: z.string().min(1),
+  service_pubkey: z.string().min(1),
+  client_version: z.string().optional(),
+  host_provider: z.string().optional(),
+  platform: z.string().optional(),
+  arch: z.string().optional(),
+})
+export type CloudBootstrapInput = z.infer<typeof CloudBootstrapInputSchema>
+
+export const CloudBootstrapResultSchema = z.object({
+  device_id: z.uuid(),
+  service_id: z.uuid(),
+  service_key_id: z.uuid(),
+  control_plane_url: z.string(),
+})
+export type CloudBootstrapResult = z.infer<typeof CloudBootstrapResultSchema>
 
 // ───────────────────────────── Control Plane messages (§7.1) ────────────────
 

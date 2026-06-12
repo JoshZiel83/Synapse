@@ -2,7 +2,10 @@
 // by packages/api/src/modules/devices/controller.ts.
 
 import { createHash } from "node:crypto"
-import type { ConsumePairingResult } from "@synapse/device-protocol"
+import {
+  ConsumePairingInputSchema,
+  type ConsumePairingResult,
+} from "@synapse/device-protocol"
 import type {
   DevicePairingTicketView,
   StartPairingInput as ApiStartPairingInput,
@@ -82,26 +85,26 @@ export async function pair(opts: PairOptions): Promise<PairResult> {
     opts.serverOrigin,
     "/api/v1/devices/pairing-sessions/consume"
   )
-  const result = await postJson<Record<string, unknown>, ConsumePairingResult>(
-    url,
-    {
-      pairing_code: opts.pairingCode,
-      device_pubkey: deviceKey.publicKey,
-      service_pubkey: serviceKey.publicKey,
-      service_kind: "device_runtime",
-      client_version: opts.clientVersion,
-      title: opts.title,
-      // Report platform + arch up-front so the API knows the
-      // device's platformKey from pairing onwards. Without this the
-      // `devices` row is created with platform=NULL/arch=NULL and the
-      // bundle-eligibility gate (isBundleAvailableForPlatform) falls
-      // back to the conservative-permissive branch, defeating the
-      // Windows-no-bundled-fallback guard. cloud-bootstrap already
-      // does this; this brings local_qr to parity.
-      platform: process.platform,
-      arch: process.arch,
-    }
-  )
+  // Validate the wire body against the device-protocol contract before sending
+  // so a field drift fails here, not silently on the server.
+  const body = ConsumePairingInputSchema.parse({
+    pairing_code: opts.pairingCode,
+    device_pubkey: deviceKey.publicKey,
+    service_pubkey: serviceKey.publicKey,
+    service_kind: "device_runtime",
+    client_version: opts.clientVersion,
+    title: opts.title,
+    // Report platform + arch up-front so the API knows the
+    // device's platformKey from pairing onwards. Without this the
+    // `devices` row is created with platform=NULL/arch=NULL and the
+    // bundle-eligibility gate (isBundleAvailableForPlatform) falls
+    // back to the conservative-permissive branch, defeating the
+    // Windows-no-bundled-fallback guard. cloud-bootstrap already
+    // does this; this brings local_qr to parity.
+    platform: process.platform,
+    arch: process.arch,
+  })
+  const result = await postJson<typeof body, ConsumePairingResult>(url, body)
 
   const identity: DeviceIdentityRecord = {
     deviceId: result.device_id,

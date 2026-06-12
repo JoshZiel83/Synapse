@@ -15,7 +15,10 @@
 import { z } from "zod"
 import { formatValidationDetails } from "../../infrastructure/validation-error.js"
 import type { FastifyInstance } from "fastify"
-import { DEVICE_SERVICE_KINDS, DEVICE_TYPES } from "@synapse/device-protocol"
+import {
+  ConsumePairingInputSchema,
+  CloudBootstrapInputSchema,
+} from "@synapse/device-protocol"
 import {
   StartPairingInputSchema,
   ClaimDaemonServiceInputSchema,
@@ -48,9 +51,6 @@ import {
 } from "./presenter.js"
 import { consumeCloudBootstrap, createCloudDevicePairing } from "./cloud.js"
 
-const serviceKindSchema = z.enum(DEVICE_SERVICE_KINDS)
-const deviceTypeSchema = z.enum(DEVICE_TYPES)
-
 // App-facing request bodies (camelCase, §5.1.1). workspaceId travels in the URL
 // param, so the body schema omits it from the shared logical input contract.
 const startPairingBodySchema = StartPairingInputSchema.omit({
@@ -60,17 +60,10 @@ const startPairingBodySchema = StartPairingInputSchema.omit({
   context: z.record(z.string(), z.unknown()).optional(),
 })
 
-const consumePairingBodySchema = z.object({
-  pairing_code: z.string().min(1),
-  device_pubkey: z.string().min(1),
-  service_pubkey: z.string().min(1),
-  service_kind: serviceKindSchema.default("device_runtime"),
-  client_version: z.string().optional(),
-  title: z.string().optional(),
-  device_type: deviceTypeSchema.optional(),
-  platform: z.string().optional(),
-  arch: z.string().optional(),
-})
+// WIRE — consume/bootstrap handshake bodies are snake_case wire contracts owned
+// by @synapse/device-protocol (single source for runtime client + SDK + API).
+const consumePairingBodySchema = ConsumePairingInputSchema
+const cloudBootstrapBodySchema = CloudBootstrapInputSchema
 
 const claimDaemonBodySchema = ClaimDaemonServiceInputSchema
 
@@ -433,26 +426,16 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
     "/api/v1/devices/bootstrap",
     {},
     async (request, reply) => {
-      const body = request.body as {
-        bootstrap_token?: string
-        device_pubkey?: string
-        service_pubkey?: string
-        client_version?: string
-        host_provider?: string
-        platform?: string
-        arch?: string
-      }
-      if (
-        !body?.bootstrap_token ||
-        !body.device_pubkey ||
-        !body.service_pubkey
-      ) {
+      const parsed = cloudBootstrapBodySchema.safeParse(request.body)
+      if (!parsed.success) {
         reply.status(400).send({
           code: "invalid_request",
           message: "bootstrap_token, device_pubkey, service_pubkey required",
+          details: formatValidationDetails(parsed.error),
         })
         return
       }
+      const body = parsed.data
       try {
         const result = await consumeCloudBootstrap(
           {
