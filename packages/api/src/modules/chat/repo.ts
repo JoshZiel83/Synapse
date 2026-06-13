@@ -29,14 +29,19 @@ export interface ChatPushTokenRow {
 export function mapPushTokenRow(
   row: Record<string, unknown>
 ): ChatPushTokenRow {
+  // The push-token query runs via `runOnDb` (CompiledQuery.raw) but still flows
+  // through Kysely's CamelCasePlugin result transformer, so top-level keys arrive
+  // camelCased (createdAt / lastSeenAt / workspaceMemberId / deviceLabel) even
+  // though the SQL RETURNING list is snake_case. Read the camelCase keys, and
+  // coerce the pg-text timestamps to Date before serializing.
   return {
     id: String(row.id),
-    workspaceMemberId: String(row.workspace_member_id),
+    workspaceMemberId: String(row.workspaceMemberId),
     platform: row.platform as "ios" | "android" | "web",
     token: String(row.token),
-    deviceLabel: (row.device_label as string | null) ?? null,
-    createdAt: serializeInstant(row.created_at as Date),
-    lastSeenAt: serializeInstant(row.last_seen_at as Date),
+    deviceLabel: (row.deviceLabel as string | null) ?? null,
+    createdAt: serializeInstant(new Date(row.createdAt as string)),
+    lastSeenAt: serializeInstant(new Date(row.lastSeenAt as string)),
   }
 }
 

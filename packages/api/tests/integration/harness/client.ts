@@ -56,7 +56,7 @@ export function createApiClient(options: {
           `${init?.method ?? "GET"} ${path} -> ${res.status}`
         )
       }
-      return data as never
+      return unwrapEnvelope(data) as never
     },
     withToken(nextToken: string) {
       return createApiClient({ baseUrl, token: nextToken })
@@ -71,6 +71,25 @@ function safeJsonParse(text: string): unknown {
   } catch {
     return text
   }
+}
+
+// App routes registered via `appRoute`/`sendData` wrap their payload in a
+// single-key `{ data: <payload> }` envelope (§5.1). Better Auth routes
+// (e.g. /auth/sign-up/email -> { token, user }) and bare `{ error }` bodies
+// are NOT enveloped. Auto-unwrap ONLY when the response is an object whose
+// sole own key is `data`, which matches the sendData envelope exactly and
+// leaves every other shape untouched.
+function unwrapEnvelope(body: unknown): unknown {
+  if (
+    body !== null &&
+    typeof body === "object" &&
+    !Array.isArray(body) &&
+    Object.keys(body as Record<string, unknown>).length === 1 &&
+    "data" in (body as Record<string, unknown>)
+  ) {
+    return (body as { data: unknown }).data
+  }
+  return body
 }
 
 export class ApiError extends Error {
