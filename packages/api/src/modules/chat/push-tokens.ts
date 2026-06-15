@@ -1,26 +1,10 @@
-import { createChatError } from "./errors.js"
+import { getWorkspaceMemberIdentityOrThrow } from "./identity.js"
 import {
   deleteChatPushTokenRecord,
   listChatPushTokenRecords,
   upsertChatPushTokenRecord,
   type ChatPushTokenRow,
 } from "./repo.js"
-import { requireWorkspaceMemberIdentity } from "./workspace-identity.js"
-
-async function getWorkspaceMemberIdentityOrThrow(
-  workspaceId: string,
-  userId: string
-) {
-  try {
-    return await requireWorkspaceMemberIdentity(workspaceId, userId)
-  } catch {
-    throw createChatError(
-      403,
-      "workspace_access_denied",
-      "You are not a member of this workspace"
-    )
-  }
-}
 
 export async function registerChatPushToken(params: {
   workspaceId: string

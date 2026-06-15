@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto"
 import type { Executor } from "../../infrastructure/database/kysely.js"
 import { createChatError } from "./errors.js"
+import { getWorkspaceMemberIdentityOrThrow } from "./identity.js"
 import {
   getChatClientInstanceOwner,
   insertChatClientInstance,
@@ -8,7 +9,6 @@ import {
   withChatTransaction,
 } from "./repo.js"
 import type { ChatClientInstanceRegistrationRecord } from "./presenter.js"
-import { requireWorkspaceMemberIdentity } from "./workspace-identity.js"
 
 type RegisterClientInstanceInput = {
   workspaceId: string
@@ -20,21 +20,6 @@ type RegisterClientInstanceInput = {
 
 type UpdateClientInstanceInput = RegisterClientInstanceInput & {
   clientInstanceId: string
-}
-
-async function getWorkspaceMemberIdentityOrThrow(
-  workspaceId: string,
-  userId: string
-) {
-  try {
-    return await requireWorkspaceMemberIdentity(workspaceId, userId)
-  } catch {
-    throw createChatError(
-      403,
-      "workspace_access_denied",
-      "You are not a member of this workspace"
-    )
-  }
 }
 
 export async function ensureClientInstance(

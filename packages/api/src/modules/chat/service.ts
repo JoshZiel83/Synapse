@@ -180,10 +180,7 @@ import {
   recordDuplicateClientMessageIdSend,
   recordDuplicateWatermarkPost,
 } from "./observability.js"
-import {
-  requireWorkspaceMemberIdentity,
-  type WorkspaceMemberIdentity,
-} from "./workspace-identity.js"
+import { getWorkspaceMemberIdentityOrThrow } from "./identity.js"
 import { enrichTaskForUser } from "../tasks/service.js"
 import {
   getConversationRuntimeMap,
@@ -519,21 +516,6 @@ function isUniqueViolation(error: unknown) {
 
 function rootQueryable(): Executor {
   return chatRootExecutor()
-}
-
-async function getWorkspaceMemberIdentityOrThrow(
-  workspaceId: string,
-  userId: string
-) {
-  try {
-    return await requireWorkspaceMemberIdentity(workspaceId, userId)
-  } catch {
-    throw createChatError(
-      403,
-      "workspace_access_denied",
-      "You are not a member of this workspace"
-    )
-  }
 }
 
 async function listConversationParticipantRows(
