@@ -3,8 +3,8 @@
  * by a crashed dispatcher (which otherwise are never re-claimed and the event
  * is silently never delivered).
  *
- * recoverStuckProcessingRealtimeOutboxEntries operates on the GLOBAL db
- * (events/index.ts binds db to DATABASE_URL), so this seeds + asserts via that
+ * recoverStuckProcessingRealtimeOutboxEntries delegates to the realtime outbox
+ * repo adapter, which operates on the GLOBAL db. This seeds + asserts via that
  * same global handle and is skipped when DATABASE_URL is unset.
  */
 

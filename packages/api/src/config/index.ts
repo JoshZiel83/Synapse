@@ -281,7 +281,8 @@ export const config = {
     // verification window. Set to 0 to delete-on-dispatch (no debug
     // window). 'failed' rows are NEVER GC'd regardless of retention
     // because the dispatcher still retries them — see
-    // gcRealtimeEventOutbox in infrastructure/events/index.ts.
+    // gcRealtimeEventOutbox in infrastructure/events/index.ts, which
+    // delegates persistence to infrastructure/events/repo.ts.
     outboxRetentionHours: env.REALTIME_OUTBOX_RETENTION_HOURS,
     // How often the dispatcher loop runs the GC sweep. 1 minute is
     // fine — GC just trims stale rows; missing a window doesn't lose
