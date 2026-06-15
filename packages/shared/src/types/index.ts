@@ -47,6 +47,7 @@ import {
   CONVERSATION_KINDS,
   CONVERSATION_MESSAGE_TRANSPORT_DIRECTIONS,
   CONVERSATION_MESSAGE_SUBTYPES,
+  CONVERSATION_PARTICIPANT_ROLE_KEYS,
   CONVERSATION_PARTICIPANT_TYPE,
   CONVERSATION_PARTICIPANT_STATES,
   CONVERSATION_PARTICIPANT_TYPES,
@@ -2977,6 +2978,9 @@ export interface McpEventLog {
 
 export type ConversationParticipantType =
   (typeof CONVERSATION_PARTICIPANT_TYPES)[number]
+
+export type ConversationParticipantRoleKey =
+  (typeof CONVERSATION_PARTICIPANT_ROLE_KEYS)[number]
 
 import type { TransportKind } from "../constants/enums.js"
 export type { TransportKind } from "../constants/enums.js"

@@ -8,6 +8,7 @@ import {
   getChatConversationBaseRow,
   getChatWorkspaceMemberConversationParticipantRow,
 } from "./repo.js"
+import { canManageConversationRole } from "./roles.js"
 
 export async function requireConversationAccess(
   queryable: Executor,
@@ -71,8 +72,7 @@ export async function requireConversationManagement(
       "Direct conversations cannot be managed"
     )
   }
-  const roleKey = access.participant.roleKey
-  if (roleKey !== "owner" && roleKey !== "admin") {
+  if (!canManageConversationRole(access.participant.roleKey)) {
     throw createChatError(
       403,
       "conversation_manage_denied",

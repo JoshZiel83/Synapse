@@ -25,6 +25,7 @@ import {
   ChatConversationView,
   ChatSyncEvent,
   type ConversationFeedItemSubtype,
+  type ConversationParticipantRoleKey,
   Timestamp,
 } from "@synapse/shared"
 import type { ChatSyncViewSchemaType } from "@synapse/shared/schemas"
@@ -33,6 +34,7 @@ import {
   serializeOptionalInstant,
   type IsoInstantString,
 } from "../../infrastructure/datetime.js"
+import { canManageConversationRole } from "./roles.js"
 
 type ConversationKind = (typeof CONVERSATION_KINDS)[number]
 
@@ -41,7 +43,7 @@ export type ChatClientInstanceRegistrationRecord = {
   workspaceMemberId: string
 }
 
-type ChatConversationRoleRecord = "owner" | "admin" | "member"
+type ChatConversationRoleRecord = ConversationParticipantRoleKey
 
 type ChatConversationLastItemRecord = {
   itemId: string
@@ -205,8 +207,7 @@ export function presentChatConversationRecord(
 ): ChatConversationView {
   const canManageConversation =
     record.kind !== CONVERSATION_KIND.DIRECT &&
-    (record.viewerConversationRole === "owner" ||
-      record.viewerConversationRole === "admin")
+    canManageConversationRole(record.viewerConversationRole)
   const canRename =
     record.kind !== CONVERSATION_KIND.DIRECT && canManageConversation
   const status = record.participants.some(

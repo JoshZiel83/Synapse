@@ -15,6 +15,7 @@ import {
   CONVERSATION_MESSAGE_TRANSPORT_DIRECTION,
   CONVERSATION_MESSAGE_SUBTYPE,
   CONVERSATION_MESSAGE_SUBTYPES,
+  CONVERSATION_PARTICIPANT_ROLE_KEY,
   CONVERSATION_PARTICIPANT_STATE,
   CONVERSATION_PARTICIPANT_TYPE,
   CONVERSATION_REPLY_REF_SPECIAL_SUBTYPE,
@@ -182,6 +183,7 @@ import {
   recordDuplicateWatermarkPost,
 } from "./observability.js"
 import { getWorkspaceMemberIdentityOrThrow } from "./identity.js"
+import { normalizeConversationParticipantRoleKey } from "./roles.js"
 import { enrichTaskForUser } from "../tasks/service.js"
 import {
   getConversationRuntimeMap,
@@ -662,12 +664,9 @@ async function loadConversationViews(
           CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
         participant.workspaceMemberId === workspaceMemberId
     )
-    const viewerConversationRole =
-      viewerMembership?.roleKey === "owner" ||
-      viewerMembership?.roleKey === "admin" ||
-      viewerMembership?.roleKey === "member"
-        ? viewerMembership.roleKey
-        : "member"
+    const viewerConversationRole = normalizeConversationParticipantRoleKey(
+      viewerMembership?.roleKey
+    )
     const lastItem = row.lastVisibleItemId
       ? lastItemById.get(row.lastVisibleItemId)
       : undefined
@@ -1643,7 +1642,9 @@ export async function createConversationForWorkspaceMember(params: {
         workspaceMemberId: member.id,
         displayName: member.userName,
         roleKey:
-          member.id === params.creatorWorkspaceMemberId ? "owner" : "member",
+          member.id === params.creatorWorkspaceMemberId
+            ? CONVERSATION_PARTICIPANT_ROLE_KEY.OWNER
+            : CONVERSATION_PARTICIPANT_ROLE_KEY.MEMBER,
         queryable,
       })
       await upsertConversationView(queryable, {
@@ -1811,7 +1812,7 @@ export async function ensureConversationParticipant(params: {
       participantId: existingId,
       actorJoinVersionId: params.actorJoinVersionId,
       displayName: params.displayName,
-      roleKey: params.roleKey ?? "member",
+      roleKey: params.roleKey ?? CONVERSATION_PARTICIPANT_ROLE_KEY.MEMBER,
       metadata: params.metadata,
     })
 
@@ -1838,7 +1839,7 @@ export async function ensureConversationParticipant(params: {
     remoteAgentId: params.remoteAgentId,
     actorJoinVersionId: params.actorJoinVersionId,
     displayName: params.displayName,
-    roleKey: params.roleKey ?? "member",
+    roleKey: params.roleKey ?? CONVERSATION_PARTICIPANT_ROLE_KEY.MEMBER,
     metadata: params.metadata,
     transportAddressId: params.transportAddressId,
     subjectId: targetSubjectId,
@@ -3024,7 +3025,10 @@ export async function createChatConversation(params: {
         participantType: "workspace_member",
         workspaceMemberId: member.id,
         displayName: member.userName,
-        roleKey: member.id === creator.workspaceMemberId ? "owner" : "member",
+        roleKey:
+          member.id === creator.workspaceMemberId
+            ? CONVERSATION_PARTICIPANT_ROLE_KEY.OWNER
+            : CONVERSATION_PARTICIPANT_ROLE_KEY.MEMBER,
         metadata: {},
       })
       await upsertConversationView(client, {
@@ -3040,7 +3044,7 @@ export async function createChatConversation(params: {
         participantType: "actor",
         actorId: actor.id,
         displayName: actor.displayName ?? undefined,
-        roleKey: "member",
+        roleKey: CONVERSATION_PARTICIPANT_ROLE_KEY.MEMBER,
         metadata: {},
       })
     }
@@ -3051,7 +3055,7 @@ export async function createChatConversation(params: {
         participantType: "remote_agent",
         remoteAgentId: remoteAgent.id,
         displayName: remoteAgent.displayName ?? undefined,
-        roleKey: "member",
+        roleKey: CONVERSATION_PARTICIPANT_ROLE_KEY.MEMBER,
         metadata: {},
       })
     }

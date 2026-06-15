@@ -9,6 +9,10 @@ import type { Timestamp, TransportKind } from "@synapse/shared"
 import { assertIsoInstant } from "@synapse/shared/datetime"
 import { getFileUrlById } from "../files/service.js"
 import { listConversationParticipants } from "./service.js"
+import {
+  canManageConversationRole,
+  normalizeConversationParticipantRoleKey,
+} from "./roles.js"
 
 type ConversationParticipantRow = Awaited<
   ReturnType<typeof listConversationParticipants>
@@ -213,15 +217,12 @@ export async function mapConversationSummaryView(
         CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
       participant.workspaceMemberId === viewerWorkspaceMemberId
   )
-  const viewerConversationRole =
-    viewerMembership?.roleKey === "owner" ||
-    viewerMembership?.roleKey === "admin" ||
-    viewerMembership?.roleKey === "member"
-      ? viewerMembership.roleKey
-      : "member"
+  const viewerConversationRole = normalizeConversationParticipantRoleKey(
+    viewerMembership?.roleKey
+  )
   const canManageConversation =
     row.kind !== CONVERSATION_KIND.DIRECT &&
-    (viewerConversationRole === "owner" || viewerConversationRole === "admin")
+    canManageConversationRole(viewerConversationRole)
   const canManageParticipants = canManageConversation
   const presentation = buildConversationPresentation({
     row,
