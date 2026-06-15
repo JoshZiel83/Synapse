@@ -12,6 +12,7 @@ import {
   buildConversationMessageRef,
   CONVERSATION_MESSAGE_SUBTYPE,
   isToolResultOrigin,
+  parseJsonObject,
 } from "@synapse/shared"
 import { assertIsoInstant } from "@synapse/shared/datetime"
 import type {
@@ -158,14 +159,7 @@ function mimeToCategory(mimeType: string): CanonicalFileCategory {
 }
 
 function parseMetadata(metadata: unknown): Record<string, unknown> {
-  if (typeof metadata === "string") {
-    try {
-      return JSON.parse(metadata)
-    } catch {
-      return {}
-    }
-  }
-  return (metadata || {}) as Record<string, unknown>
+  return parseJsonObject(metadata)
 }
 
 function parseJsonValue(value: unknown): unknown {

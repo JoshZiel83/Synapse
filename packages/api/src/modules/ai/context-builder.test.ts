@@ -234,6 +234,34 @@ test("buildSessionContextItems: child_result becomes tool_result_batch with chil
   assert.equal(extractText(tr.content), "child agent reply")
 })
 
+test("conversationItemToContextItem parses only object metadata", () => {
+  assert.equal(
+    conversationItemToContextItem(
+      {
+        id: "hidden-msg",
+        role: "user",
+        contentBlocks: textBlocks("hidden"),
+        metadata: JSON.stringify({ excludeFromContext: true }),
+      },
+      "actor-1"
+    ),
+    null
+  )
+
+  const item = conversationItemToContextItem(
+    {
+      id: "visible-msg",
+      role: "user",
+      contentBlocks: textBlocks("visible"),
+      metadata: JSON.stringify(["not", "an", "object"]),
+    },
+    "actor-1"
+  )
+
+  assert.equal(item?.kind, "message")
+  assert.deepEqual((item as any).metadata, {})
+})
+
 test("buildSessionContextItems: interrupt body has no [System Interrupt - X] prefix", () => {
   const items = buildSessionContextItems([], {
     interrupts: [{ type: "user_pause", content: "wait, I need to think" }],
