@@ -7,7 +7,6 @@ import {
   CONVERSATION_ITEM_SURFACES,
   CONVERSATION_ITEM_TYPE,
   CONVERSATION_ITEM_TYPES,
-  CONVERSATION_FEED_MESSAGE_TYPE,
   CONVERSATION_KINDS,
   CONVERSATION_MESSAGE_SUBTYPE,
   CONVERSATION_PARTICIPANT_ROLE_KEY,
@@ -117,7 +116,6 @@ import {
   type ChatConversationSendMessageRecord,
   type ChatSyncRecord,
 } from "./presenter.js"
-import { isConversationEventType } from "./event-registry.js"
 import { createChatError } from "./errors.js"
 export { isChatServiceError, type ChatServiceError } from "./errors.js"
 import { getWorkspaceMemberIdentityOrThrow } from "./identity.js"
@@ -189,17 +187,9 @@ import {
 export { isFeedItemVisibleToWorkspaceMember } from "./conversation-feed-visibility.js"
 import { conversationItemDetailToFeedItem } from "./conversation-feed-mapper.js"
 export { conversationItemDetailToFeedItem } from "./conversation-feed-mapper.js"
-import {
-  assertConversationMessageSubtype,
-  type ConversationEventItemDetail,
-  type ConversationItemDetail,
-  type ConversationItemDetailBase,
-  type ConversationNonEventItemDetail,
-} from "./conversation-item-detail.js"
-import {
-  buildConversationReplyRefs,
-  unavailableConversationReplyRef,
-} from "./conversation-reply-ref.js"
+import { type ConversationItemDetail } from "./conversation-item-detail.js"
+import { buildConversationItemDetail } from "./conversation-item-detail-builder.js"
+import { buildConversationReplyRefs } from "./conversation-reply-ref.js"
 import { enrichTaskForUser } from "../tasks/service.js"
 import {
   getConversationRuntimeMap,
@@ -1292,86 +1282,13 @@ async function buildConversationItemDetails(
     if (!hydrated) {
       throw new Error(`Failed to hydrate conversation item ${row.id}`)
     }
-    const restrictedAudienceParticipants =
-      hydrated.restrictedAudienceParticipantIds
-        .map((participantId) => participantById.get(participantId))
-        .filter((participant): participant is ParticipantRow =>
-          Boolean(participant)
-        )
-    const contextTargets = (contextTargetIdsByItem.get(row.id) ?? [])
-      .map((participantId) => participantById.get(participantId))
-      .filter((participant): participant is ParticipantRow =>
-        Boolean(participant)
-      )
-    const baseItem = {
-      id: row.id,
-      conversationId: row.conversationId,
-      sessionId: row.sessionId ?? undefined,
-      turnId: row.turnId ?? undefined,
-      sequence: toNumber(row.sequence),
-      scope: row.scope,
-      surface: row.surface,
-      role: row.role,
-      authorParticipantId: row.authorParticipantId ?? undefined,
-      authorParticipant: row.authorParticipantId
-        ? participantById.get(row.authorParticipantId)
-        : undefined,
-      restrictedAudienceParticipants,
-      contextTargets,
-      contentBlocks: hydrated.contentBlocks,
-      metadata: row.metadata,
-      replyToItemId: row.replyToItemId ?? undefined,
-      replyTo: row.replyToItemId
-        ? (replyRefById.get(row.replyToItemId) ??
-          unavailableConversationReplyRef(row.replyToItemId))
-        : undefined,
-      causedByItemId: row.causedByItemId ?? undefined,
-      createdAt: presentInstant(row.createdAt),
-      clientMessageId: row.clientMessageId ?? undefined,
-    } satisfies ConversationItemDetailBase
-
-    if (row.itemType === CONVERSATION_ITEM_TYPE.EVENT) {
-      if (!isConversationEventType(row.subtype)) {
-        throw new Error(
-          `Unsupported conversation event subtype ${row.subtype} for item ${row.id}`
-        )
-      }
-      return {
-        ...baseItem,
-        itemType: CONVERSATION_ITEM_TYPE.EVENT,
-        subtype: row.subtype,
-        eventPayload: asConversationFeedEventPayload(
-          row.subtype,
-          row.eventPayload
-        ),
-        eventTimelinePolicy:
-          (row.eventTimelinePolicy as ConversationEventTimelinePolicy | null) ??
-          undefined,
-        eventContextPolicy:
-          (row.eventContextPolicy as ConversationEventContextPolicy | null) ??
-          undefined,
-      } satisfies ConversationEventItemDetail
-    }
-
-    if (row.itemType === CONVERSATION_ITEM_TYPE.SUMMARY) {
-      if (row.subtype !== CONVERSATION_FEED_MESSAGE_TYPE.SUMMARY) {
-        throw new Error(
-          `Unsupported conversation summary subtype ${row.subtype} for item ${row.id}`
-        )
-      }
-      return {
-        ...baseItem,
-        itemType: CONVERSATION_ITEM_TYPE.SUMMARY,
-        subtype: row.subtype,
-      } satisfies ConversationNonEventItemDetail
-    }
-
-    assertConversationMessageSubtype(row.subtype)
-    return {
-      ...baseItem,
-      itemType: row.itemType,
-      subtype: row.subtype,
-    } satisfies ConversationNonEventItemDetail
+    return buildConversationItemDetail({
+      row,
+      hydrated,
+      participantById,
+      contextTargetIdsByItem,
+      replyRefById,
+    })
   })
 }
 
