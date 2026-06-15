@@ -121,6 +121,24 @@ type TransportExternalUserRow = {
   sessions?: unknown
 }
 
+type TransportAddressRow = {
+  id: string
+  workspaceId: string
+  transportAccountId: string
+  transportKind: TransportKind
+  addressType: string
+  externalId: string
+  displayName: string | null
+  workspaceMemberId: string | null
+  metadata: unknown
+  createdAt: Date
+  updatedAt: Date
+}
+
+export type TransportAddressRecord = Omit<TransportAddressRow, "metadata"> & {
+  metadata: Record<string, unknown>
+}
+
 type TransportMessageLinkRow = {
   id: string
   workspaceId: string
@@ -187,6 +205,24 @@ export function decodeTransportMessageLinkMetadata(row: {
   metadata: unknown
 }): Record<string, unknown> {
   return parseJsonObject(row.metadata)
+}
+
+export function normalizeTransportAddressRow(
+  row: TransportAddressRow
+): TransportAddressRecord {
+  return {
+    id: row.id,
+    workspaceId: row.workspaceId,
+    transportAccountId: row.transportAccountId,
+    transportKind: row.transportKind,
+    addressType: row.addressType,
+    externalId: row.externalId,
+    displayName: row.displayName,
+    workspaceMemberId: row.workspaceMemberId,
+    metadata: parseJsonObject(row.metadata),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  }
 }
 
 export function normalizeTransportOutboxSweepCandidateRow(
@@ -1016,7 +1052,7 @@ export async function insertTransportAddress(params: {
   workspaceMemberId?: string
   metadata?: Record<string, unknown>
 }) {
-  return db
+  const row = await db
     .insertInto("transportAddresses")
     .values({
       id: uuidv4(),
@@ -1041,6 +1077,7 @@ export async function insertTransportAddress(params: {
     )
     .returningAll()
     .executeTakeFirstOrThrow()
+  return normalizeTransportAddressRow(row)
 }
 
 export async function selectTransportAddressByExternalId(params: {
@@ -1048,7 +1085,7 @@ export async function selectTransportAddressByExternalId(params: {
   externalId: string
   addressType?: "user" | "bot" | "system"
 }) {
-  return db
+  const row = await db
     .selectFrom("transportAddresses")
     .selectAll()
     .where("transportAccountId", "=", params.transportAccountId)
@@ -1056,15 +1093,17 @@ export async function selectTransportAddressByExternalId(params: {
     .where("externalId", "=", params.externalId.trim())
     .limit(1)
     .executeTakeFirst()
+  return row ? normalizeTransportAddressRow(row) : undefined
 }
 
 export async function selectTransportAddressById(transportAddressId: string) {
-  return db
+  const row = await db
     .selectFrom("transportAddresses")
     .selectAll()
     .where("id", "=", transportAddressId)
     .limit(1)
     .executeTakeFirst()
+  return row ? normalizeTransportAddressRow(row) : undefined
 }
 
 export async function selectPrimaryTransportAddressForParticipant(params: {
@@ -1089,11 +1128,12 @@ export async function selectPrimaryTransportAddressForParticipant(params: {
     )
   }
 
-  return builder
+  const row = await builder
     .orderBy("cpa.isPrimary", "desc")
     .orderBy("cpa.createdAt", "asc")
     .limit(1)
     .executeTakeFirst()
+  return row ? normalizeTransportAddressRow(row) : undefined
 }
 
 export async function selectReachableTransportAddressForParticipant(params: {

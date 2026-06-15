@@ -32,19 +32,6 @@ function nonEmptyString(value: unknown) {
 }
 
 /**
- * The transport_address row's `metadata` JSONB column is typed as
- * Kysely's `JsonValue`, which permits primitives and arrays. Connectors
- * always want `Record<string, unknown> | undefined` here, so normalize
- * once at the worker boundary instead of asking every connector to
- * re-validate.
- */
-function asObjectMetadata(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined
-}
-
-/**
  * Dependencies injected into processImTransportDeliveryJob.
  *
  * Each field corresponds to a cross-module call the handler currently makes
@@ -70,9 +57,8 @@ export interface ImTransportDeliveryDeps {
   findExternalMessageIdForItem: typeof findExternalMessageIdForItem
   /**
    * Looks up the recipient transport_address row when the connector
-   * declares `requiresRecipientAddressMetadata = true`. The result's
-   * `metadata` is normalized to a plain object before being passed to
-   * `connector.sendMessage` (see `asObjectMetadata`).
+   * declares `requiresRecipientAddressMetadata = true`. The repo normalizes
+   * `metadata` to a plain object before this worker sees the row.
    */
   loadRecipientAddress: typeof getTransportAddressByExternalId
   /**
@@ -303,7 +289,7 @@ export async function processImTransportDeliveryJob(
         addressType: "user",
         externalId: link.endpoint.externalId,
       })
-      recipientAddressMetadata = asObjectMetadata(addressRow?.metadata)
+      recipientAddressMetadata = addressRow?.metadata
     }
 
     const deliveryResult = await connector.sendMessage({

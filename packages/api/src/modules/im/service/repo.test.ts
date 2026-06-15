@@ -6,6 +6,7 @@ import {
   decodeTransportAccountCredentials,
   decodeTransportAccountMetadata,
   decodeTransportMessageLinkMetadata,
+  normalizeTransportAddressRow,
   normalizeTransportOutboxSweepCandidateRow,
 } from "./repo.js"
 
@@ -43,6 +44,70 @@ test("decodeTransportMessageLinkMetadata decodes link metadata at repo exit", ()
   })
 
   assert.deepEqual(metadata, { delivery: { attempt: 1 } })
+})
+
+test("normalizeTransportAddressRow decodes address metadata at repo exit", () => {
+  const createdAt = new Date("2026-06-15T09:00:00.000Z")
+  const updatedAt = new Date("2026-06-15T09:00:01.000Z")
+  const row = normalizeTransportAddressRow({
+    id: "addr-1",
+    workspaceId: "workspace-1",
+    transportAccountId: "account-1",
+    transportKind: "weixin",
+    addressType: "user",
+    externalId: "openid-1",
+    displayName: "Alice",
+    workspaceMemberId: null,
+    metadata: JSON.stringify({ contextToken: "ctx-1" }),
+    createdAt,
+    updatedAt,
+  })
+
+  assert.deepEqual(row, {
+    id: "addr-1",
+    workspaceId: "workspace-1",
+    transportAccountId: "account-1",
+    transportKind: "weixin",
+    addressType: "user",
+    externalId: "openid-1",
+    displayName: "Alice",
+    workspaceMemberId: null,
+    metadata: { contextToken: "ctx-1" },
+    createdAt,
+    updatedAt,
+  })
+})
+
+test("normalizeTransportAddressRow normalizes non-object address metadata", () => {
+  const createdAt = new Date("2026-06-15T09:00:00.000Z")
+  const updatedAt = new Date("2026-06-15T09:00:01.000Z")
+  const base = {
+    id: "addr-1",
+    workspaceId: "workspace-1",
+    transportAccountId: "account-1",
+    transportKind: "weixin" as const,
+    addressType: "user",
+    externalId: "openid-1",
+    displayName: null,
+    workspaceMemberId: null,
+    createdAt,
+    updatedAt,
+  }
+
+  assert.deepEqual(
+    normalizeTransportAddressRow({
+      ...base,
+      metadata: "not an object",
+    }).metadata,
+    {}
+  )
+  assert.deepEqual(
+    normalizeTransportAddressRow({
+      ...base,
+      metadata: [1, 2, 3],
+    }).metadata,
+    {}
+  )
 })
 
 test("normalizeTransportOutboxSweepCandidateRow decodes sweep metadata at repo exit", () => {
