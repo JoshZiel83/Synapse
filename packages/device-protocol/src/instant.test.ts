@@ -1,7 +1,12 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 
-import { assertIsoInstantString, isIsoInstantString } from "./instant.js"
+import {
+  assertIsoInstantString,
+  dateToIsoInstant,
+  isIsoInstantString,
+  nowIsoInstant,
+} from "./instant.js"
 
 const CANONICAL = "2026-06-08T12:34:56.789Z"
 
@@ -22,4 +27,19 @@ test("assertIsoInstantString returns branded value for canonical strings", () =>
 
 test("assertIsoInstantString throws on invalid strings", () => {
   assert.throws(() => assertIsoInstantString("2026-06-08T12:34:56Z"))
+})
+
+test("dateToIsoInstant returns branded canonical UTC ISO strings", () => {
+  assert.equal(
+    dateToIsoInstant(new Date("2026-06-08T12:34:56.789Z")),
+    CANONICAL
+  )
+})
+
+test("dateToIsoInstant rejects invalid Date values", () => {
+  assert.throws(() => dateToIsoInstant(new Date(Number.NaN)))
+})
+
+test("nowIsoInstant produces a canonical instant", () => {
+  assert.equal(isIsoInstantString(nowIsoInstant()), true)
 })

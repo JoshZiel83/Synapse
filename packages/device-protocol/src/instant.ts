@@ -4,6 +4,13 @@ export type IsoInstantString = string & {
   readonly __synapseIsoInstant: unique symbol
 }
 
+function isValidDateInstance(value: unknown): value is Date {
+  return (
+    Object.prototype.toString.call(value) === "[object Date]" &&
+    !Number.isNaN((value as Date).getTime())
+  )
+}
+
 /**
  * Wire-level ISO-8601 UTC instant guard.
  *
@@ -30,4 +37,15 @@ export function assertIsoInstantString(value: string): IsoInstantString {
     )
   }
   return value
+}
+
+export function dateToIsoInstant(value: Date): IsoInstantString {
+  if (!isValidDateInstance(value)) {
+    throw new Error("Expected a valid Date when converting to IsoInstantString")
+  }
+  return assertIsoInstantString(value.toISOString())
+}
+
+export function nowIsoInstant(): IsoInstantString {
+  return dateToIsoInstant(new Date())
 }
