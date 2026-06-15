@@ -16,15 +16,12 @@
 import type { ToolPresentationDescriptor } from "@synapse/device-protocol/tool-presentation"
 import { parseToolPresentation } from "@synapse/device-protocol/tool-presentation/schema"
 import { BUILTIN_PRESENTATION } from "@synapse/device-runtime/builtin-presentation"
+import { parseJsonObjectOrUndefined } from "@synapse/shared"
 import { getToolPlugin } from "../../ai/tool-plugins.js"
 import { selectPluginToolManifest } from "./repo.js"
 import { genericDescriptor } from "./render.js"
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined
-}
+const asRecord = parseJsonObjectOrUndefined
 
 const str = (v: unknown): string | undefined =>
   typeof v === "string" && v.length > 0 ? v : undefined
