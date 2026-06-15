@@ -103,6 +103,11 @@ export type AutomationRuleEventMatcherRecord = {
   matcher: Record<string, unknown>
 }
 
+export type AutomationPausedRuleRow = {
+  id: string
+  workspaceId: string
+}
+
 export type DueAutomationScheduleRow = {
   ruleId: string
   ruleName: string
@@ -556,6 +561,50 @@ export async function loadAutomationRuleComponentRows(
     deliveries: deliveriesResult.rows.map(toAutomationDeliveryDbRow),
     targetsByRule,
   }
+}
+
+export async function pauseAutomationRuleRowsForEventSource(params: {
+  eventSourceId: string
+  category: AutomationRuleDbRow["category"]
+  reason: string
+  executor?: Executor
+}): Promise<AutomationPausedRuleRow[]> {
+  const runner = resolveQueryRunner(params.executor)
+  const result = await runner.run<AutomationPausedRuleRow>(
+    `UPDATE automation_rules ar
+     SET status = 'paused',
+         last_error_at = NOW(),
+         last_error_message = $2
+     FROM automation_triggers at
+     WHERE at.rule_id = ar.id
+       AND at.event_source_id = $1::uuid
+       AND ar.category = $3::automation_rules_category
+       AND ar.status = 'active'
+       AND ar.deleted_at IS NULL
+     RETURNING ar.id, ar.workspace_id`,
+    [params.eventSourceId, params.reason, params.category]
+  )
+  return result.rows
+}
+
+export async function listActiveEventSubscriptionRuleRowsByEventSource(params: {
+  eventSourceId: string
+  category: AutomationRuleDbRow["category"]
+  executor?: Executor
+}): Promise<AutomationRuleDbRow[]> {
+  const runner = resolveQueryRunner(params.executor)
+  const result = await runner.run<AutomationRuleComponentRawRow>(
+    `SELECT ar.*
+     FROM automation_rules ar
+     JOIN automation_triggers at
+       ON at.rule_id = ar.id
+     WHERE at.event_source_id = $1::uuid
+       AND ar.category = $2::automation_rules_category
+       AND ar.status = 'active'
+       AND ar.deleted_at IS NULL`,
+    [params.eventSourceId, params.category]
+  )
+  return result.rows.map(toAutomationRuleDbRow)
 }
 
 // ---------------------------------------------------------------------------

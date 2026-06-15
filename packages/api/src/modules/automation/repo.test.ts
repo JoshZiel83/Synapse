@@ -2,6 +2,9 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import {
   AUTOMATION_COMPLETION_STATUSES,
+  AUTOMATION_CREATOR_KIND,
+  AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS,
+  AUTOMATION_EVENT_SOURCE_STATUSES,
   AUTOMATION_RULE_CATEGORY,
   AUTOMATION_RULE_STATUSES,
   AUTOMATION_SCHEDULE_KINDS,
@@ -19,9 +22,11 @@ import {
   decodeAutomationEventSourceMetadata,
   decodeAutomationTriggerMatcher,
   insertAutomationDeliveryRow,
+  insertAutomationEventSourceRow,
   insertAutomationPolicyRow,
   insertAutomationRuleRow,
   insertAutomationTriggerRow,
+  listActiveEventSubscriptionRuleRowsByEventSource,
   loadAutomationRuleComponentRows,
   lockDueAutomationScheduleRows,
   normalizeAutomationDeliveryRow,
@@ -32,6 +37,7 @@ import {
   normalizeAutomationRuleRow,
   normalizeAutomationTriggerRow,
   normalizeAutomationWebhookEndpointRow,
+  pauseAutomationRuleRowsForEventSource,
   persistAutomationDeliveryTargets,
   updateAutomationTriggerRow,
 } from "./repo.js"
@@ -106,6 +112,7 @@ async function insertAutomationRuleFixture(db: AnyDb) {
     .executeTakeFirstOrThrow()
 
   return {
+    memberId: member.id as string,
     workspaceId: workspace.id as string,
     conversationId: conversation.id as string,
     participantId: participant.id as string,
@@ -352,6 +359,101 @@ test(
       assert.equal(dueRow.workspaceId, workspaceId)
       assert.equal(dueRow.scheduleExpr, "*/5 * * * *")
       assert.ok(dueRow.nextFireAt instanceof Date)
+    })
+  }
+)
+
+test(
+  "automation repo helpers own event-source rule list and pause queries",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const { memberId, workspaceId, conversationId, participantId } =
+        await insertAutomationRuleFixture(db)
+      const eventSourceId = crypto.randomUUID()
+      const ruleId = crypto.randomUUID()
+      const pauseReason = "repo helper pause"
+
+      await insertAutomationEventSourceRow(
+        {
+          id: eventSourceId,
+          workspaceId,
+          providerKind: AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS[2],
+          providerRef: null,
+          webhookEndpointId: null,
+          integrationBindingId: null,
+          sourceKey: `repo.${crypto.randomUUID()}`,
+          name: "repo helper source",
+          description: "",
+          recommendedUsage: "",
+          payloadSchema: JSON.stringify({}),
+          examplePayload: JSON.stringify({}),
+          status: AUTOMATION_EVENT_SOURCE_STATUSES[0],
+          createdByKind: AUTOMATION_CREATOR_KIND.WORKSPACE_MEMBER,
+          createdByWorkspaceMemberId: memberId,
+          createdByActorId: null,
+          createdBySessionId: null,
+          metadata: JSON.stringify({ source: true }),
+        },
+        db
+      )
+
+      await insertAutomationRuleRow(db, {
+        id: ruleId,
+        workspaceId,
+        conversationId,
+        category: AUTOMATION_RULE_CATEGORY.EVENT_SUBSCRIPTION,
+        status: AUTOMATION_RULE_STATUSES[0],
+        name: "repo helper event rule",
+        description: "",
+        createdByParticipantId: participantId,
+        createdBySessionId: null,
+        metadata: JSON.stringify({ rule: true }),
+      })
+
+      await insertAutomationTriggerRow(db, ruleId, {
+        trigger_kind: AUTOMATION_TRIGGER_KINDS[1],
+        source_kind: AUTOMATION_TRIGGER_SOURCE_KINDS[3],
+        event_source_id: eventSourceId,
+        source_locator: null,
+        match_key: "repo-helper",
+        matcher: { event: true },
+        schedule_kind: null,
+        schedule_expr: null,
+        schedule_timezone: null,
+        interval_seconds: null,
+        starts_at: null,
+        next_fire_at: null,
+        last_fired_at: null,
+        metadata: {},
+      })
+
+      const activeRows = await listActiveEventSubscriptionRuleRowsByEventSource(
+        {
+          eventSourceId,
+          category: AUTOMATION_RULE_CATEGORY.EVENT_SUBSCRIPTION,
+          executor: db,
+        }
+      )
+      assert.equal(activeRows.length, 1)
+      assert.equal(activeRows[0]?.id, ruleId)
+      assert.equal(activeRows[0]?.workspace_id, workspaceId)
+
+      const pausedRows = await pauseAutomationRuleRowsForEventSource({
+        eventSourceId,
+        category: AUTOMATION_RULE_CATEGORY.EVENT_SUBSCRIPTION,
+        reason: pauseReason,
+        executor: db,
+      })
+      assert.deepEqual(pausedRows, [{ id: ruleId, workspaceId }])
+
+      const pausedRule = await db
+        .selectFrom("automationRules")
+        .select(["status", "lastErrorMessage"])
+        .where("id", "=", ruleId)
+        .executeTakeFirstOrThrow()
+      assert.equal(pausedRule.status, AUTOMATION_RULE_STATUSES[1])
+      assert.equal(pausedRule.lastErrorMessage, pauseReason)
     })
   }
 )

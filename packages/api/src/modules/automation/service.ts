@@ -65,6 +65,7 @@ import {
   insertIntegrationBindingRow,
   insertWebhookEndpointRow,
   listActiveIntegrationSourceKeysForBinding as listActiveIntegrationSourceKeysForBindingRepo,
+  listActiveEventSubscriptionRuleRowsByEventSource,
   loadAutomationRuleComponentRows,
   lockDueAutomationScheduleRows,
   loadAutomationEventSourceAccessBindingRows,
@@ -81,6 +82,7 @@ import {
   normalizeAutomationTriggerRow,
   normalizeAutomationWebhookEndpointRow,
   pauseActiveAutomationRule,
+  pauseAutomationRuleRowsForEventSource,
   persistAutomationDeliveryTargets,
   resolveQueryRunner,
   revokeAutomationEventSourceAccessBindingById,
@@ -789,24 +791,15 @@ async function pauseAutomationRulesForEventSource(
   reason: string
 ) {
   const auditUserId = await resolveAutomationAuditUserId(operator)
-  const affected = await runQuery<{ id: string; workspace_id: string }>(
-    `UPDATE automation_rules ar
-     SET status = 'paused',
-         last_error_at = NOW(),
-         last_error_message = $2
-     FROM automation_triggers at
-     WHERE at.rule_id = ar.id
-       AND at.event_source_id = $1
-       AND ar.category = $3
-       AND ar.status = 'active'
-       AND ar.deleted_at IS NULL
-     RETURNING ar.id, ar.workspace_id`,
-    [eventSourceId, reason, AUTOMATION_RULE_CATEGORY.EVENT_SUBSCRIPTION]
-  )
+  const affected = await pauseAutomationRuleRowsForEventSource({
+    eventSourceId,
+    reason,
+    category: AUTOMATION_RULE_CATEGORY.EVENT_SUBSCRIPTION,
+  })
 
-  for (const row of affected.rows) {
+  for (const row of affected) {
     await appendAutomationAuditLog({
-      workspaceId: row.workspace_id,
+      workspaceId: row.workspaceId,
       userId: auditUserId,
       actorId: operator.actorId || null,
       action: "automation_rule.pause",
@@ -1212,19 +1205,12 @@ async function pauseAutomationRulesMissingEventSourceAccess(
   operator: AutomationOperatorInput,
   reason: string
 ) {
-  const result = await runQuery<AutomationRuleDbRow>(
-    `SELECT ar.*
-     FROM automation_rules ar
-     JOIN automation_triggers at
-       ON at.rule_id = ar.id
-     WHERE at.event_source_id = $1
-       AND ar.category = $2
-       AND ar.status = 'active'
-       AND ar.deleted_at IS NULL`,
-    [eventSourceId, AUTOMATION_RULE_CATEGORY.EVENT_SUBSCRIPTION]
-  )
+  const rows = await listActiveEventSubscriptionRuleRowsByEventSource({
+    eventSourceId,
+    category: AUTOMATION_RULE_CATEGORY.EVENT_SUBSCRIPTION,
+  })
 
-  for (const row of result.rows.map(normalizeAutomationRuleRow)) {
+  for (const row of rows.map(normalizeAutomationRuleRow)) {
     const conversation = await loadConversationWithImFlag(row.conversation_id)
     const creatorParticipant = await getConversationParticipant({
       conversationId: row.conversation_id,
