@@ -21,12 +21,14 @@ import {
   SUBJECT_KIND,
   parseJsonObject,
 } from "@synapse/shared"
+import { dateToIsoInstant } from "@synapse/shared/datetime"
 import { withTestDb } from "../../test/helpers/db.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
 import {
   claimPendingAutomationExecutionRow,
   decodeAutomationEventSourceMetadata,
   decodeAutomationTriggerMatcher,
+  expireAutomationRuleRows,
   getAutomationEventSourceRow,
   insertAutomationDeliveryRow,
   insertAutomationEventSourceRow,
@@ -53,6 +55,7 @@ import {
   normalizeAutomationTriggerRow,
   normalizeAutomationWebhookEndpointRow,
   pauseAutomationRuleRowsForEventSource,
+  pauseAutomationRuleRowsForInactiveCreators,
   persistAutomationDeliveryTargets,
   selectAutomationOccurrenceRow,
   selectAutomationIntegrationBindingRow,
@@ -756,6 +759,156 @@ test(
       assert.equal(dueRow.workspaceId, workspaceId)
       assert.equal(dueRow.scheduleExpr, "*/5 * * * *")
       assert.ok(dueRow.nextFireAt instanceof Date)
+    })
+  }
+)
+
+test(
+  "automation repo helpers own rule liveness expiry and inactive-creator pause",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const { workspaceId, conversationId, participantId } =
+        await insertAutomationRuleFixture(db)
+      const referenceTime = dateToIsoInstant(new Date())
+      const expiredRuleId = crypto.randomUUID()
+      const futureRuleId = crypto.randomUUID()
+
+      async function insertRuleWithPolicy(
+        ruleId: string,
+        name: string,
+        activeUntil: Date
+      ) {
+        await insertAutomationRuleRow(db, {
+          id: ruleId,
+          workspaceId,
+          conversationId,
+          category: AUTOMATION_RULE_CATEGORY.SCHEDULE,
+          status: AUTOMATION_RULE_STATUSES[0],
+          name,
+          description: "",
+          createdByParticipantId: participantId,
+          createdBySessionId: null,
+          metadata: JSON.stringify({ rule: name }),
+        })
+        await insertAutomationPolicyRow(db, {
+          ruleId,
+          activeFrom: null,
+          activeUntil,
+          maxTriggerCount: null,
+          triggerCount: 0,
+          completionStatus: AUTOMATION_COMPLETION_STATUSES[0],
+          completedAt: null,
+          metadata: JSON.stringify({ policy: name }),
+        })
+      }
+
+      await insertRuleWithPolicy(
+        expiredRuleId,
+        "expired rule",
+        new Date(Date.now() - 60_000)
+      )
+      await insertRuleWithPolicy(
+        futureRuleId,
+        "future rule",
+        new Date(Date.now() + 60_000)
+      )
+
+      const expiredRows = await expireAutomationRuleRows({
+        referenceTime,
+        workspaceId,
+        executor: db,
+      })
+      assert.deepEqual(
+        expiredRows.map((row) => row.id),
+        [expiredRuleId]
+      )
+      assert.equal(expiredRows[0]?.workspaceId, workspaceId)
+
+      const expiredRule = await db
+        .selectFrom("automationRules")
+        .select(["status"])
+        .where("id", "=", expiredRuleId)
+        .executeTakeFirstOrThrow()
+      assert.equal(expiredRule.status, AUTOMATION_RULE_STATUSES[5])
+
+      const expiredPolicy = await db
+        .selectFrom("automationPolicies")
+        .select(["completedAt"])
+        .where("ruleId", "=", expiredRuleId)
+        .executeTakeFirstOrThrow()
+      assert.ok(expiredPolicy.completedAt instanceof Date)
+
+      const futureRule = await db
+        .selectFrom("automationRules")
+        .select(["status"])
+        .where("id", "=", futureRuleId)
+        .executeTakeFirstOrThrow()
+      assert.equal(futureRule.status, AUTOMATION_RULE_STATUSES[0])
+
+      const expireAudit = await db
+        .selectFrom("auditLogs")
+        .select(["action", "resourceId", "details"])
+        .where("resourceId", "=", expiredRuleId)
+        .executeTakeFirstOrThrow()
+      assert.equal(expireAudit.action, "automation_rule.expire")
+      assert.deepEqual(parseJsonObject(expireAudit.details), { referenceTime })
+
+      const {
+        workspaceId: pauseWorkspaceId,
+        conversationId: pauseConversationId,
+        participantId: pauseParticipantId,
+      } = await insertAutomationRuleFixture(db)
+      const pauseRuleId = crypto.randomUUID()
+      await insertAutomationRuleRow(db, {
+        id: pauseRuleId,
+        workspaceId: pauseWorkspaceId,
+        conversationId: pauseConversationId,
+        category: AUTOMATION_RULE_CATEGORY.EVENT_SUBSCRIPTION,
+        status: AUTOMATION_RULE_STATUSES[0],
+        name: "inactive creator rule",
+        description: "",
+        createdByParticipantId: pauseParticipantId,
+        createdBySessionId: null,
+        metadata: JSON.stringify({ rule: "inactive creator" }),
+      })
+      await db
+        .updateTable("conversationParticipants")
+        .set({ state: "removed" })
+        .where("id", "=", pauseParticipantId)
+        .execute()
+
+      const pausedRows = await pauseAutomationRuleRowsForInactiveCreators({
+        workspaceId: pauseWorkspaceId,
+        executor: db,
+      })
+      assert.deepEqual(
+        pausedRows.map((row) => row.id),
+        [pauseRuleId]
+      )
+      assert.equal(pausedRows[0]?.workspaceId, pauseWorkspaceId)
+
+      const pausedRule = await db
+        .selectFrom("automationRules")
+        .select(["status", "lastErrorAt", "lastErrorMessage"])
+        .where("id", "=", pauseRuleId)
+        .executeTakeFirstOrThrow()
+      assert.equal(pausedRule.status, AUTOMATION_RULE_STATUSES[1])
+      assert.ok(pausedRule.lastErrorAt instanceof Date)
+      assert.equal(
+        pausedRule.lastErrorMessage,
+        "Creator participant is no longer active"
+      )
+
+      const pauseAudit = await db
+        .selectFrom("auditLogs")
+        .select(["action", "resourceId", "details"])
+        .where("resourceId", "=", pauseRuleId)
+        .executeTakeFirstOrThrow()
+      assert.equal(pauseAudit.action, "automation_rule.pause")
+      assert.deepEqual(parseJsonObject(pauseAudit.details), {
+        reason: "Creator participant is no longer active",
+      })
     })
   }
 )

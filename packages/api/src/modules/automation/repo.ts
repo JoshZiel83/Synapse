@@ -131,6 +131,11 @@ export type DueAutomationScheduleRow = {
   lastFiredAt: Date | null
 }
 
+export type AutomationRuleLivenessMutationRow = {
+  id: string
+  workspaceId: string
+}
+
 type AutomationRuleComponentRawRow = {
   id: string
   workspaceId: string
@@ -1629,6 +1634,100 @@ export async function lockDueAutomationScheduleRows(
      FOR UPDATE OF at SKIP LOCKED`,
     [batchSize]
   )
+  return result.rows
+}
+
+export async function expireAutomationRuleRows(params: {
+  referenceTime: Timestamp
+  workspaceId?: string
+  executor?: Executor
+}): Promise<AutomationRuleLivenessMutationRow[]> {
+  const executor = params.executor ?? db
+  const runner = runnerFor(executor)
+  const result = await runner.run<AutomationRuleLivenessMutationRow>(
+    `UPDATE automation_rules ar
+     SET status = 'expired'
+     FROM automation_policies ap
+     WHERE ap.rule_id = ar.id
+       AND ar.status = 'active'
+       AND ar.deleted_at IS NULL
+       AND ap.active_until IS NOT NULL
+       AND ap.active_until < $1
+       ${params.workspaceId ? "AND ar.workspace_id = $2" : ""}
+     RETURNING ar.id, ar.workspace_id AS "workspaceId"`,
+    params.workspaceId
+      ? [params.referenceTime, params.workspaceId]
+      : [params.referenceTime]
+  )
+
+  await Promise.all(
+    result.rows.map((row) =>
+      runner.run(
+        `UPDATE automation_policies
+         SET completed_at = COALESCE(completed_at, $2)
+         WHERE rule_id = $1`,
+        [row.id, params.referenceTime]
+      )
+    )
+  )
+
+  await Promise.all(
+    result.rows.map((row) =>
+      appendAutomationAuditLog(
+        {
+          workspaceId: row.workspaceId,
+          action: "automation_rule.expire",
+          resourceType: "automation_rule",
+          resourceId: row.id,
+          details: {
+            referenceTime: params.referenceTime,
+          },
+        },
+        executor
+      )
+    )
+  )
+
+  return result.rows
+}
+
+export async function pauseAutomationRuleRowsForInactiveCreators(params: {
+  workspaceId?: string
+  executor?: Executor
+}): Promise<AutomationRuleLivenessMutationRow[]> {
+  const executor = params.executor ?? db
+  const runner = runnerFor(executor)
+  const reason = "Creator participant is no longer active"
+  const result = await runner.run<AutomationRuleLivenessMutationRow>(
+    `UPDATE automation_rules ar
+     SET status = 'paused',
+         last_error_at = NOW(),
+         last_error_message = $1
+     FROM conversation_participants cp
+     WHERE cp.id = ar.created_by_participant_id
+       AND ar.status = 'active'
+       AND ar.deleted_at IS NULL
+       AND cp.state <> 'active'
+       ${params.workspaceId ? "AND ar.workspace_id = $2" : ""}
+     RETURNING ar.id, ar.workspace_id AS "workspaceId"`,
+    params.workspaceId ? [reason, params.workspaceId] : [reason]
+  )
+
+  await Promise.all(
+    result.rows.map((row) =>
+      appendAutomationAuditLog(
+        {
+          workspaceId: row.workspaceId,
+          action: "automation_rule.pause",
+          resourceType: "automation_rule",
+          resourceId: row.id,
+          details: { reason },
+        },
+        executor
+      )
+    )
+  )
+
   return result.rows
 }
 

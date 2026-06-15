@@ -57,6 +57,7 @@ import {
   clearAutomationRuleError,
   existsAutomationEventSourceKey,
   existsAutomationExecution,
+  expireAutomationRuleRows,
   insertAutomationDeliveryRow,
   insertAutomationEventSourceRow,
   insertAutomationTriggerRow,
@@ -91,6 +92,7 @@ import {
   normalizeAutomationTriggerRow,
   normalizeAutomationWebhookEndpointRow,
   pauseActiveAutomationRule,
+  pauseAutomationRuleRowsForInactiveCreators,
   pauseAutomationRuleRowsForEventSource,
   persistAutomationDeliveryTargets,
   resolveQueryRunner,
@@ -2011,93 +2013,30 @@ async function listIntegrationEventSourcesByWebhookPathToken(
 }
 
 async function expireAutomationRules(params: {
-  referenceTime?: string
+  referenceTime?: Timestamp
   workspaceId?: string
   client?: Executor
 }) {
-  const runner = resolveQueryRunner(params.client)
   const referenceTime = params.referenceTime || nowIsoInstant()
-  const result = await runner.run<{ id: string; workspace_id: string }>(
-    `UPDATE automation_rules ar
-     SET status = 'expired'
-     FROM automation_policies ap
-     WHERE ap.rule_id = ar.id
-       AND ar.status = 'active'
-       AND ar.deleted_at IS NULL
-       AND ap.active_until IS NOT NULL
-       AND ap.active_until < $1
-       ${params.workspaceId ? "AND ar.workspace_id = $2" : ""}
-     RETURNING ar.id, ar.workspace_id`,
-    params.workspaceId ? [referenceTime, params.workspaceId] : [referenceTime]
-  )
-
-  await Promise.all(
-    result.rows.map((row) =>
-      runner.run(
-        `UPDATE automation_policies
-         SET completed_at = COALESCE(completed_at, $2)
-         WHERE rule_id = $1`,
-        [row.id, referenceTime]
-      )
-    )
-  )
-
-  await Promise.all(
-    result.rows.map((row) =>
-      runner.run(
-        `INSERT INTO audit_logs (workspace_id, action, resource_type, resource_id, details)
-         VALUES ($1, 'automation_rule.expire', 'automation_rule', $2, $3)`,
-        [
-          row.workspace_id,
-          row.id,
-          JSON.stringify({
-            referenceTime,
-          }),
-        ]
-      )
-    )
-  )
+  await expireAutomationRuleRows({
+    referenceTime,
+    workspaceId: params.workspaceId,
+    executor: params.client,
+  })
 }
 
 async function pauseAutomationRulesForInactiveCreators(params: {
   workspaceId?: string
   client?: Executor
 }) {
-  const runner = resolveQueryRunner(params.client)
-  const result = await runner.run<{ id: string; workspace_id: string }>(
-    `UPDATE automation_rules ar
-     SET status = 'paused',
-         last_error_at = NOW(),
-         last_error_message = 'Creator participant is no longer active'
-     FROM conversation_participants cp
-     WHERE cp.id = ar.created_by_participant_id
-       AND ar.status = 'active'
-       AND ar.deleted_at IS NULL
-       AND cp.state <> 'active'
-       ${params.workspaceId ? "AND ar.workspace_id = $1" : ""}
-     RETURNING ar.id, ar.workspace_id`,
-    params.workspaceId ? [params.workspaceId] : []
-  )
-
-  await Promise.all(
-    result.rows.map((row) =>
-      runner.run(
-        `INSERT INTO audit_logs (workspace_id, action, resource_type, resource_id, details)
-         VALUES ($1, 'automation_rule.pause', 'automation_rule', $2, $3)`,
-        [
-          row.workspace_id,
-          row.id,
-          JSON.stringify({
-            reason: "Creator participant is no longer active",
-          }),
-        ]
-      )
-    )
-  )
+  await pauseAutomationRuleRowsForInactiveCreators({
+    workspaceId: params.workspaceId,
+    executor: params.client,
+  })
 }
 
 async function syncAutomationRuleLiveness(params: {
-  referenceTime?: string
+  referenceTime?: Timestamp
   workspaceId?: string
   client?: Executor
 }) {
