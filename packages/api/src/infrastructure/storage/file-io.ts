@@ -1,4 +1,3 @@
-import { db } from "../database/kysely.js"
 import { serializeInstant } from "../datetime.js"
 import type { FileStorageBackend } from "@synapse/shared/types"
 import { createLogger } from "../logger/index.js"
@@ -18,6 +17,7 @@ import {
   type FileOriginInput,
   type StoredFileRecord,
 } from "../../modules/files/model.js"
+import { persistLocalCasFileAsset } from "./repo.js"
 
 const log = createLogger("file-io")
 
@@ -31,10 +31,6 @@ type CreateStoredFileParams = {
   uploaderUserId: string | null
   origin: FileOriginInput
   backend?: FileStorageBackend
-}
-
-function toJsonObject(value: Record<string, unknown>): any {
-  return value as any
 }
 
 function assertExplicitOrigin(
@@ -70,66 +66,38 @@ async function createStoredFile(
   const blobRef = await putBufferCas(params.buffer)
   const contentKind = mimeToFileContentKind(resolvedMimeType)
 
-  const record = await db.transaction().execute(async (trx) => {
-    // Upsert the content_blobs row (sha256 PK). ON CONFLICT DO NOTHING: a
-    // dedup hit means the row already exists with identical content.
-    await trx
-      .insertInto("contentBlobs")
-      .values({
-        sha256: blobRef.sha256,
-        sizeBytes: String(blobRef.sizeBytes),
-        backend: "local_cas",
-        locatorJson: toJsonObject({}),
-      })
-      .onConflict((oc) => oc.column("sha256").doNothing())
-      .execute()
-
-    const asset = await trx
-      .insertInto("fileAssets")
-      .values({
-        workspaceId: params.workspaceId,
-        contentSha256: blobRef.sha256,
-        originalName: normalizedOriginalName,
-        mimeType: resolvedMimeType,
-        contentKind: contentKind,
-        sizeBytes: String(blobRef.sizeBytes),
-        uploaderUserId: params.uploaderUserId,
-        initiatorActorId: params.origin.initiatorActorId ?? null,
-        sourceFamily: params.origin.family,
-        sourceSystem: params.origin.system,
-        parentAssetId: params.origin.parentFileId ?? null,
-        detailsJson: toJsonObject(normalizeDetails(params.origin.details)),
-      })
-      .returning([
-        "id",
-        "workspaceId",
-        "uploaderUserId",
-        "originalName",
-        "mimeType",
-        "contentKind",
-        "sizeBytes",
-        "contentSha256",
-        "createdAt",
-      ])
-      .executeTakeFirstOrThrow()
-
-    return {
-      id: asset.id,
-      assetId: asset.id,
-      workspaceId: asset.workspaceId,
-      uploaderUserId: asset.uploaderUserId,
-      originalName: asset.originalName,
-      url: getStableFileUrl(asset.id),
-      fullUrl: getStableFullFileUrl(asset.id),
-      mimeType: asset.mimeType,
-      contentKind: asset.contentKind,
-      sizeBytes: Number(asset.sizeBytes),
-      sha256: asset.contentSha256,
-      storageBackend: "local_cas" as FileStorageBackend,
-      originSummary: toFileOriginSummary(params.origin),
-      createdAt: serializeInstant(asset.createdAt),
-    } satisfies StoredFileRecord
+  const asset = await persistLocalCasFileAsset({
+    workspaceId: params.workspaceId,
+    contentSha256: blobRef.sha256,
+    originalName: normalizedOriginalName,
+    mimeType: resolvedMimeType,
+    contentKind: contentKind,
+    sizeBytes: blobRef.sizeBytes,
+    uploaderUserId: params.uploaderUserId,
+    initiatorActorId: params.origin.initiatorActorId ?? null,
+    sourceFamily: params.origin.family,
+    sourceSystem: params.origin.system,
+    parentAssetId: params.origin.parentFileId ?? null,
+    details: normalizeDetails(params.origin.details),
+    backend: params.backend ?? "local_cas",
   })
+
+  const record = {
+    id: asset.id,
+    assetId: asset.id,
+    workspaceId: asset.workspaceId,
+    uploaderUserId: asset.uploaderUserId,
+    originalName: asset.originalName,
+    url: getStableFileUrl(asset.id),
+    fullUrl: getStableFullFileUrl(asset.id),
+    mimeType: asset.mimeType,
+    contentKind: asset.contentKind,
+    sizeBytes: asset.sizeBytes,
+    sha256: asset.contentSha256,
+    storageBackend: asset.storageBackend,
+    originSummary: toFileOriginSummary(params.origin),
+    createdAt: serializeInstant(asset.createdAt),
+  } satisfies StoredFileRecord
 
   void import("../../modules/files/parse-service.js")
     .then(({ enqueueDefaultFileParse }) =>
