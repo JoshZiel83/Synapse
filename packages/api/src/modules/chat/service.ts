@@ -4,12 +4,6 @@ import {
   parseConversationMessageRef,
   type ConversationParticipantType,
 } from "@synapse/shared"
-import type {
-  ConversationEventContextPolicy,
-  ConversationEventTimelinePolicy,
-  ConversationFeedEventPayloadMap,
-  ConversationFeedEventType,
-} from "@synapse/shared/types"
 import { type Executor } from "../../infrastructure/database/kysely.js"
 import { canonicalContentBlocksToDraftParts } from "./message-content.js"
 import { requireConversationAccess } from "./conversation-access.js"
@@ -28,7 +22,6 @@ import {
   chatRootExecutor,
   getConversationRecord,
   getVisibleConversationReplyRefRow,
-  listChatConversationParticipantRows,
   listNearbyVisibleConversationReplyRefRows,
   withChatTransaction,
 } from "./repo.js"
@@ -73,19 +66,14 @@ import {
   type CreateChatConversationDeps,
   type CreateConversationForWorkspaceMemberDeps,
 } from "./create-conversation.js"
-import {
-  createConversationItem,
-  sendConversationMessageFromParticipant,
-} from "./item-write.js"
+import { sendConversationMessageFromParticipant } from "./item-write.js"
 export {
   createConversationItem,
   sendConversationMessageFromParticipant,
   type ConversationItemPartInput,
 } from "./item-write.js"
-import {
-  createConversationEventUseCase,
-  type CreateConversationEventDeps,
-} from "./event-write.js"
+import { createConversationEvent } from "./event-write.js"
+export { createConversationEvent } from "./event-write.js"
 import { enqueueActorWakeupsForConversationMessage } from "./actor-wakeup.js"
 export { enqueueActorWakeupsForConversationMessage } from "./actor-wakeup.js"
 import { syncConversationUpsertForWorkspaceMembers } from "./conversation-upsert-sync.js"
@@ -153,18 +141,6 @@ function isUniqueViolation(error: unknown) {
 
 function rootQueryable(): Executor {
   return chatRootExecutor()
-}
-
-async function listConversationParticipantRows(
-  queryable: Executor,
-  conversationIds: string[],
-  options?: { useProfileSnapshot?: boolean }
-) {
-  return listChatConversationParticipantRows(
-    queryable,
-    conversationIds,
-    options
-  )
 }
 
 export async function resolveConversationReplyRef(params: {
@@ -260,13 +236,6 @@ function chatRouteSendMessageDeps(): SendChatConversationMessageDeps {
   }
 }
 
-function chatCreateConversationEventDeps(): CreateConversationEventDeps {
-  return {
-    listConversationParticipants: listConversationParticipantRows,
-    createConversationItem,
-  }
-}
-
 export async function getConversation(
   conversationId: string,
   queryable: Executor = rootQueryable()
@@ -346,29 +315,6 @@ export async function addConversationParticipants(params: {
   queryable?: Executor
 }) {
   return addConversationParticipantsUseCase(params, chatAddParticipantsDeps())
-}
-
-export async function createConversationEvent<
-  T extends ConversationFeedEventType,
->(params: {
-  workspaceId?: string
-  conversationId: string
-  sessionId?: string
-  turnId?: string
-  eventType: T
-  authorParticipantId?: string
-  metadata?: Record<string, unknown>
-  eventPayload: ConversationFeedEventPayloadMap[T]
-  timelinePolicy?: ConversationEventTimelinePolicy
-  contextPolicy?: ConversationEventContextPolicy
-  restrictedAudienceParticipantIds?: string[]
-  contextTargetParticipantIds?: string[]
-  queryable?: Executor
-}) {
-  return createConversationEventUseCase(
-    params,
-    chatCreateConversationEventDeps()
-  )
 }
 
 export async function listConversationRealtimeRecipients(

@@ -22,11 +22,15 @@ import {
 import { buildNormalizedMessageContent } from "./message-content.js"
 import {
   chatRootExecutor,
+  listChatConversationParticipantRows,
   updateConversationItemEventPayload as updateConversationItemEventPayloadRow,
   withChatTransaction,
   type ChatParticipantRow,
 } from "./repo.js"
-import type { CreateConversationItemInput } from "./item-write.js"
+import {
+  createConversationItem,
+  type CreateConversationItemInput,
+} from "./item-write.js"
 
 export type CreateConversationEventInput<T extends ConversationFeedEventType> =
   {
@@ -74,6 +78,20 @@ export type UpdateConversationItemEventPayloadDeps = {
     itemId: string,
     payload: unknown
   ) => Promise<void>
+}
+
+async function listConversationParticipantRows(
+  queryable: Executor,
+  conversationIds: string[]
+) {
+  return listChatConversationParticipantRows(queryable, conversationIds)
+}
+
+function chatCreateConversationEventDeps(): CreateConversationEventDeps {
+  return {
+    listConversationParticipants: listConversationParticipantRows,
+    createConversationItem,
+  }
 }
 
 export async function updateConversationItemEventPayloadUseCase<
@@ -241,4 +259,13 @@ export async function createConversationEventUseCase<
     return executeCreate(params.queryable)
   }
   return withChatTransaction((client) => executeCreate(client))
+}
+
+export async function createConversationEvent<
+  T extends ConversationFeedEventType,
+>(params: CreateConversationEventInput<T>) {
+  return createConversationEventUseCase(
+    params,
+    chatCreateConversationEventDeps()
+  )
 }
