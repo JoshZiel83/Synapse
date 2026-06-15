@@ -625,8 +625,6 @@ const isMixedModuleFile = (p) => MIXED_MODULES.has(moduleOf(p))
 // or repo* files that use executor-injected queries.
 //   - access/guards.ts: binds defaultDb into requireRequestAction +
 //     authorizeActionDefault/etc. so controllers don't import the client.
-//   - files/content-access.ts: the content-authorization read layer — every fn
-//     runs on `ctx.dbh ?? db`; db is only the production default.
 //   - soft-delete/orchestration.ts: the soft-delete write edge — the
 //     Executor-taking markX(db,…) orchestrators run inside ONE transaction;
 //     the *Tx default-bound entry points (markUserDeletedTx etc.) open that
@@ -634,7 +632,6 @@ const isMixedModuleFile = (p) => MIXED_MODULES.has(moduleOf(p))
 //     transaction live here.
 const R8_ALLOWLIST = new Set([
   "access/guards.ts",
-  "files/content-access.ts",
   "soft-delete/orchestration.ts",
 ])
 const r8Key = (p) => {
