@@ -1,5 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import type pg from "pg"
 import {
   normalizeInstallationConfigData,
   normalizeInstallationConfigRow,
@@ -10,7 +11,9 @@ import {
   normalizePluginInstallationAuthConfigRow,
   normalizePluginAuthSpecRow,
   normalizeVisiblePluginRow,
+  upsertPluginAuthConnectionFromSessionResult,
   type PluginCatalogDbRow,
+  type PluginConnectionQueryRunner,
 } from "./repo.js"
 
 const createdAt = new Date("2026-06-14T00:00:00.000Z")
@@ -105,6 +108,78 @@ test("normalizePluginAuthSpecRow decodes auth spec config and bindings", () => {
   assert.deepEqual(row.defaultConfig, { region: "iad" })
   assert.equal(row.authBindings[0]?.key, "oauth")
   assert.equal(row.authBindings[0]?.driver, "oauth2_authorization_code_pkce")
+})
+
+test("upsertPluginAuthConnectionFromSessionResult owns connection upsert and session consume SQL", async () => {
+  const calls: Array<{ text: string; params?: unknown[] }> = []
+  const connectionRow = {
+    id: "connection-1",
+    installationId: "installation-1",
+    workspaceId: "workspace-1",
+    bindingKey: "oauth",
+    driver: "oauth2_authorization_code_pkce",
+    externalAccountId: "external-1",
+    displayName: "Demo User",
+    avatarUrl: null,
+    status: "active",
+    expiresAt: null,
+    publicPayload: { scope: "drive:read" },
+    secretPayload: { accessToken: "secret" },
+    deletedAt: null,
+    createdAt,
+    updatedAt,
+    catalogItemId: "plugin-1",
+    catalogVersionId: "version-1",
+  }
+  const run: PluginConnectionQueryRunner = async <
+    T extends pg.QueryResultRow = pg.QueryResultRow,
+  >(
+    text: string,
+    params?: unknown[]
+  ) => {
+    calls.push({ text, params })
+    if (text.includes("INSERT INTO plugin_connections")) {
+      return { rows: [connectionRow as unknown as T] }
+    }
+    if (text.includes("UPDATE plugin_auth_sessions")) {
+      return { rows: [] as T[] }
+    }
+    if (text.includes("SELECT") && text.includes("plugin_connections")) {
+      return { rows: [] as T[] }
+    }
+    throw new Error(`Unexpected SQL: ${text}`)
+  }
+
+  const row = await upsertPluginAuthConnectionFromSessionResult({
+    run,
+    installationId: "installation-1",
+    workspaceId: "workspace-1",
+    bindingKey: "oauth",
+    driver: "oauth2_authorization_code_pkce",
+    externalAccountId: "external-1",
+    displayName: "Demo User",
+    avatarUrl: null,
+    expiresAt: null,
+    publicPayload: { scope: "drive:read" },
+    secretPayload: { accessToken: "secret" },
+    sessionId: "session-1",
+    sessionMetadata: { previous: true },
+  })
+
+  assert.equal(row.id, "connection-1")
+  assert.equal(calls.length, 3)
+  assert.match(calls[1]!.text, /INSERT INTO plugin_connections/)
+  assert.deepEqual(JSON.parse(calls[1]!.params![9] as string), {
+    scope: "drive:read",
+  })
+  assert.deepEqual(JSON.parse(calls[1]!.params![10] as string), {
+    accessToken: "secret",
+  })
+  assert.match(calls[2]!.text, /UPDATE plugin_auth_sessions/)
+  assert.deepEqual(JSON.parse(calls[2]!.params![2] as string), {
+    previous: true,
+    consumedConnectionId: "connection-1",
+  })
 })
 
 test("normalizeJsonArray returns an empty array for non-array JSON", () => {

@@ -20,6 +20,8 @@ import {
   SUBJECT_KIND,
   WORKSPACE_APP_KIND,
   WORKSPACE_APP_STATUS,
+  PLUGIN_AUTH_CONNECTION_STATUS,
+  PLUGIN_AUTH_SESSION_STATUS,
   maskAllowsConversationType,
   parseJsonObject,
   redactSecrets,
@@ -2054,3 +2056,138 @@ export const defaultPluginConnectionRunner: PluginConnectionQueryRunner = <
   db
     .executeQuery<T>(CompiledQuery.raw(text, params ? [...params] : []))
     .then((r) => ({ rows: r.rows as T[] }))
+
+export async function upsertPluginAuthConnectionFromSessionResult(input: {
+  run: PluginConnectionQueryRunner
+  installationId: string
+  workspaceId: string
+  bindingKey: string
+  driver: string
+  externalAccountId: string | null
+  displayName: string | null
+  avatarUrl: string | null
+  expiresAt: string | null
+  publicPayload: Record<string, unknown>
+  secretPayload: Record<string, unknown>
+  sessionId: string
+  sessionMetadata: Record<string, unknown>
+}): Promise<PluginConnectionRow> {
+  const existing = await input.run<PluginConnectionRow>(
+    `SELECT
+       connection.*,
+       installation.catalog_item_id,
+       installation.catalog_version_id
+     FROM plugin_connections connection
+     JOIN plugin_installations installation
+       ON installation.id = connection.installation_id
+     WHERE connection.installation_id = $1
+       AND connection.workspace_id = $2
+       AND connection.binding_key = $3
+       AND connection.external_account_id IS NOT DISTINCT FROM $4
+       AND connection.deleted_at IS NULL
+     ORDER BY connection.updated_at DESC
+     LIMIT 1`,
+    [
+      input.installationId,
+      input.workspaceId,
+      input.bindingKey,
+      input.externalAccountId,
+    ]
+  )
+
+  const connectionRow =
+    existing.rows.length > 0
+      ? (
+          await input.run<PluginConnectionRow>(
+            `UPDATE plugin_connections
+             SET display_name = $2,
+                 avatar_url = $3,
+                 status = $4,
+                 expires_at = $5,
+                 public_payload = $6::jsonb,
+                 secret_payload = $7::jsonb
+             WHERE id = $1
+             RETURNING *,
+               (
+                 SELECT catalog_item_id
+                 FROM plugin_installations
+                 WHERE id = plugin_connections.installation_id
+               ) AS catalog_item_id,
+               (
+                 SELECT catalog_version_id
+                 FROM plugin_installations
+                 WHERE id = plugin_connections.installation_id
+               ) AS catalog_version_id`,
+            [
+              existing.rows[0]!.id,
+              input.displayName,
+              input.avatarUrl,
+              PLUGIN_AUTH_CONNECTION_STATUS.ACTIVE,
+              input.expiresAt,
+              JSON.stringify(input.publicPayload),
+              JSON.stringify(input.secretPayload),
+            ]
+          )
+        ).rows[0]!
+      : (
+          await input.run<PluginConnectionRow>(
+            `INSERT INTO plugin_connections (
+               installation_id,
+               workspace_id,
+               binding_key,
+               driver,
+               external_account_id,
+               display_name,
+               avatar_url,
+               status,
+               expires_at,
+               public_payload,
+               secret_payload
+             )
+             VALUES (
+               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb
+             )
+             RETURNING *,
+               (
+                 SELECT catalog_item_id
+                 FROM plugin_installations
+                 WHERE id = plugin_connections.installation_id
+               ) AS catalog_item_id,
+               (
+                 SELECT catalog_version_id
+                 FROM plugin_installations
+                 WHERE id = plugin_connections.installation_id
+               ) AS catalog_version_id`,
+            [
+              input.installationId,
+              input.workspaceId,
+              input.bindingKey,
+              input.driver,
+              input.externalAccountId,
+              input.displayName,
+              input.avatarUrl,
+              PLUGIN_AUTH_CONNECTION_STATUS.ACTIVE,
+              input.expiresAt,
+              JSON.stringify(input.publicPayload),
+              JSON.stringify(input.secretPayload),
+            ]
+          )
+        ).rows[0]!
+
+  await input.run(
+    `UPDATE plugin_auth_sessions
+     SET status = $2,
+         metadata = $3::jsonb
+     WHERE id = $1`,
+    [
+      input.sessionId,
+      PLUGIN_AUTH_SESSION_STATUS.CONSUMED,
+      JSON.stringify({
+        ...input.sessionMetadata,
+        consumedConnectionId: connectionRow.id,
+      }),
+    ]
+  )
+
+  return connectionRow
+}

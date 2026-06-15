@@ -35,6 +35,7 @@ import {
   updatePluginAuthSession,
   updatePluginAuthSessionNoReturn,
   updatePluginConnection,
+  upsertPluginAuthConnectionFromSessionResult,
   type PluginConnectionQueryRunner,
 } from "./repo.js"
 import {
@@ -1635,109 +1636,22 @@ export async function attachAuthConnectionsToConfig(input: {
       )
       const displayName = asNullableString(normalizedPayload.displayName)
       const avatarUrl = asNullableString(normalizedPayload.avatarUrl)
-      const existing = await run<PluginConnectionRow>(
-        `SELECT
-           connection.*,
-           installation.catalog_item_id,
-           installation.catalog_version_id
-         FROM plugin_connections connection
-         JOIN plugin_installations installation
-           ON installation.id = connection.installation_id
-         WHERE connection.installation_id = $1
-           AND connection.workspace_id = $2
-           AND connection.binding_key = $3
-           AND connection.external_account_id IS NOT DISTINCT FROM $4
-           AND connection.deleted_at IS NULL
-         ORDER BY connection.updated_at DESC
-         LIMIT 1`,
-        [input.installationId, input.workspaceId, bindingKey, externalAccountId]
-      )
-
-      let connectionRow: PluginConnectionRow
-      if (existing.rows.length > 0) {
-        const updated = await run<PluginConnectionRow>(
-          `UPDATE plugin_connections
-           SET display_name = $2,
-               avatar_url = $3,
-               status = $4,
-               expires_at = $5,
-               public_payload = $6::jsonb,
-               secret_payload = $7::jsonb
-           WHERE id = $1
-           RETURNING *,
-             (
-               SELECT catalog_item_id
-               FROM plugin_installations
-               WHERE id = plugin_connections.installation_id
-             ) AS catalog_item_id`,
-          [
-            existing.rows[0]!.id,
-            displayName,
-            avatarUrl,
-            PLUGIN_AUTH_CONNECTION_STATUS.ACTIVE,
-            asNullableString(secretPayload.expiresAt),
-            JSON.stringify(publicPayload),
-            JSON.stringify(secretPayload),
-          ]
-        )
-        connectionRow = updated.rows[0]!
-      } else {
-        const inserted = await run<PluginConnectionRow>(
-          `INSERT INTO plugin_connections (
-             installation_id,
-             workspace_id,
-             binding_key,
-             driver,
-             external_account_id,
-             display_name,
-             avatar_url,
-             status,
-             expires_at,
-             public_payload,
-             secret_payload
-           )
-           VALUES (
-             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb
-           )
-           RETURNING *,
-             (
-               SELECT catalog_item_id
-               FROM plugin_installations
-               WHERE id = plugin_connections.installation_id
-             ) AS catalog_item_id`,
-          [
-            input.installationId,
-            input.workspaceId,
-            bindingKey,
-            session.driver,
-            externalAccountId,
-            displayName,
-            avatarUrl,
-            PLUGIN_AUTH_CONNECTION_STATUS.ACTIVE,
-            asNullableString(secretPayload.expiresAt),
-            JSON.stringify(publicPayload),
-            JSON.stringify(secretPayload),
-          ]
-        )
-        connectionRow = inserted.rows[0]!
-      }
-
+      const connectionRow = await upsertPluginAuthConnectionFromSessionResult({
+        run,
+        installationId: input.installationId,
+        workspaceId: input.workspaceId,
+        bindingKey,
+        driver: session.driver,
+        externalAccountId,
+        displayName,
+        avatarUrl,
+        expiresAt: asNullableString(secretPayload.expiresAt),
+        publicPayload,
+        secretPayload,
+        sessionId: session.id,
+        sessionMetadata: metadata,
+      })
       connection = presentAuthConnection(connectionRow)
-
-      await run(
-        `UPDATE plugin_auth_sessions
-         SET status = $2,
-             metadata = $3::jsonb
-         WHERE id = $1`,
-        [
-          session.id,
-          PLUGIN_AUTH_SESSION_STATUS.CONSUMED,
-          JSON.stringify({
-            ...metadata,
-            consumedConnectionId: connection.id,
-          }),
-        ]
-      )
     }
 
     result[field.key] = {
