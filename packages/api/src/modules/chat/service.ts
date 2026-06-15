@@ -193,6 +193,7 @@ import {
   participantRowToChatParticipantSummary,
   participantRowToEntityRef,
 } from "./participant-projection.js"
+export { isFeedItemVisibleToWorkspaceMember } from "./conversation-feed-visibility.js"
 import { enrichTaskForUser } from "../tasks/service.js"
 import {
   getConversationRuntimeMap,
@@ -1669,36 +1670,6 @@ export function conversationItemDetailToFeedItem(
     createdAt: assertIsoInstant(item.createdAt),
     clientMessageId: item.clientMessageId,
   } satisfies ConversationFeedMessageItem
-}
-
-export function isFeedItemVisibleToWorkspaceMember(
-  item: ConversationFeedItem,
-  workspaceMemberId: string
-) {
-  if (item.kind === "message") {
-    if (item.messageType === CONVERSATION_MESSAGE_SUBTYPE.MODEL_ERROR_NOTICE) {
-      if (!item.restrictedAudience || item.restrictedAudience.length === 0) {
-        return true
-      }
-      if (item.author?.workspaceMemberId === workspaceMemberId) {
-        return true
-      }
-      return item.restrictedAudience.some(
-        (target) => target.workspaceMemberId === workspaceMemberId
-      )
-    }
-    return true
-  }
-
-  if (!item.restrictedAudience || item.restrictedAudience.length === 0) {
-    return true
-  }
-  if (item.author?.workspaceMemberId === workspaceMemberId) {
-    return true
-  }
-  return item.restrictedAudience.some(
-    (target) => target.workspaceMemberId === workspaceMemberId
-  )
 }
 
 export async function getConversationFeedItemById(
