@@ -168,6 +168,7 @@ test("upsertPluginAuthConnectionFromSessionResult owns connection upsert and ses
 
   assert.equal(row.id, "connection-1")
   assert.equal(calls.length, 3)
+  assert.match(calls[0]!.text, /FROM plugin_connections_live/)
   assert.match(calls[1]!.text, /INSERT INTO plugin_connections/)
   assert.deepEqual(JSON.parse(calls[1]!.params![9] as string), {
     scope: "drive:read",

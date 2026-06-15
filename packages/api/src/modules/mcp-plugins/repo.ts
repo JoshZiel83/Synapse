@@ -2077,14 +2077,13 @@ export async function upsertPluginAuthConnectionFromSessionResult(input: {
        connection.*,
        installation.catalog_item_id,
        installation.catalog_version_id
-     FROM plugin_connections connection
+     FROM plugin_connections_live connection
      JOIN plugin_installations installation
        ON installation.id = connection.installation_id
      WHERE connection.installation_id = $1
        AND connection.workspace_id = $2
        AND connection.binding_key = $3
        AND connection.external_account_id IS NOT DISTINCT FROM $4
-       AND connection.deleted_at IS NULL
      ORDER BY connection.updated_at DESC
      LIMIT 1`,
     [

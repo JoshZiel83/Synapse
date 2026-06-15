@@ -29,9 +29,6 @@
   "modules/im/service/repo.ts": {
     "workspaces": 1
   },
-  "modules/mcp-plugins/plugin-auth-connections.ts": {
-    "plugin_connections": 1
-  },
   "modules/mcp-plugins/repo.ts": {
     "catalog_items": 2,
     "publishers": 4
