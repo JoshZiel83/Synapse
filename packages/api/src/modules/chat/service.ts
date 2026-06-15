@@ -109,7 +109,6 @@ import {
   upsertConversationParticipantAddress,
   withChatRepeatableRead,
   withChatTransaction,
-  type ChatConversationBaseRow,
   type ChatConversationItemRow,
   type ChatConversationItemPartRow,
   type ChatParticipantRow,
@@ -139,7 +138,6 @@ import { isConversationEventType } from "./event-registry.js"
 import { createChatError } from "./errors.js"
 export { isChatServiceError, type ChatServiceError } from "./errors.js"
 import { getWorkspaceMemberIdentityOrThrow } from "./identity.js"
-import { normalizeConversationParticipantRoleKey } from "./roles.js"
 import {
   updateChatConversationReadWatermarkUseCase,
   type ReadWatermarkInput,
@@ -185,6 +183,11 @@ import {
 import { syncVisibleSharedItemUseCase } from "./visible-sync.js"
 import { syncConversationUpsertForWorkspaceMembersUseCase } from "./conversation-upsert-sync.js"
 import { listConversationRealtimeRecipientsUseCase } from "./realtime-recipients.js"
+import {
+  loadConversationViewUseCase,
+  loadConversationViewsUseCase,
+  type LoadConversationViewsDeps,
+} from "./conversation-view.js"
 import { enrichTaskForUser } from "../tasks/service.js"
 import {
   getConversationRuntimeMap,
@@ -199,8 +202,6 @@ type ItemType = (typeof CONVERSATION_ITEM_TYPES)[number]
 type ItemRole = (typeof CONVERSATION_ITEM_ROLES)[number]
 type NonEventItemType = Exclude<ItemType, "event">
 type MessageLikeItemType = Exclude<NonEventItemType, "summary">
-
-type ConversationBaseRow = ChatConversationBaseRow
 
 type ParticipantRow = ChatParticipantRow
 
@@ -482,13 +483,6 @@ function participantAvatarEmoji(row: ParticipantRow): string | undefined {
   return row.participantAvatarEmoji ?? undefined
 }
 
-function previewTextFromItem(item: ChatConversationItem | undefined): string {
-  if (!item) return ""
-  const text = item.content.trim() || extractText(item.contentBlocks).trim()
-  if (text) return text
-  return item.itemType === "message" ? "Attachment" : `[${item.subtype}]`
-}
-
 function isUniqueViolation(error: unknown) {
   const candidate = error as { code?: string } | null
   return (
@@ -594,108 +588,6 @@ async function hydrateConversationItems(
   }
 
   return itemRows.map((row) => itemMap.get(row.id)!).filter(Boolean)
-}
-
-async function loadConversationViews(
-  queryable: Executor,
-  workspaceId: string,
-  workspaceMemberId: string,
-  conversationIds?: string[]
-) {
-  const baseRows = conversationIds
-    ? await Promise.all(
-        conversationIds.map((conversationId) =>
-          getConversationBaseRow(queryable, workspaceMemberId, conversationId)
-        )
-      ).then((rows) => rows.filter(Boolean) as ConversationBaseRow[])
-    : await listConversationBaseRows(queryable, workspaceMemberId)
-
-  if (baseRows.length === 0) {
-    return [] as ChatConversationRecord[]
-  }
-
-  const ids = baseRows.map((row) => row.conversationId)
-  const participants = await listConversationParticipantRows(queryable, ids)
-  const participantsByConversation = new Map<string, ParticipantRow[]>()
-  for (const row of participants) {
-    const current = participantsByConversation.get(row.conversationId) ?? []
-    current.push(row)
-    participantsByConversation.set(row.conversationId, current)
-  }
-
-  const lastItemIds = baseRows
-    .map((row) => row.lastVisibleItemId)
-    .filter((value): value is string => Boolean(value))
-  const lastItemRows = await listItemRowsByIds(queryable, [
-    ...new Set(lastItemIds),
-  ])
-  const lastItems = await buildChatConversationItems(queryable, lastItemRows)
-  const lastItemById = new Map(lastItems.map((item) => [item.id, item]))
-
-  return baseRows.map((row) => {
-    const conversationParticipants =
-      participantsByConversation.get(row.conversationId) ?? []
-    const mappedParticipants = conversationParticipants.map(
-      participantRowToChatParticipantSummary
-    )
-    const viewerMembership = conversationParticipants.find(
-      (participant) =>
-        participant.state === CONVERSATION_PARTICIPANT_STATE.ACTIVE &&
-        participant.participantType ===
-          CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
-        participant.workspaceMemberId === workspaceMemberId
-    )
-    const viewerConversationRole = normalizeConversationParticipantRoleKey(
-      viewerMembership?.roleKey
-    )
-    const lastItem = row.lastVisibleItemId
-      ? lastItemById.get(row.lastVisibleItemId)
-      : undefined
-    return {
-      conversationId: row.conversationId,
-      workspaceId,
-      baseTitle: row.title,
-      kind: row.kind,
-      isIm: row.isIm,
-      unreadCount: toNumber(row.unreadCount),
-      muted: Boolean(row.muted),
-      archived: Boolean(row.archived),
-      pinnedSortKey: row.pinnedSortKey ?? undefined,
-      updatedAt: row.updatedAt,
-      createdAt: row.createdAt,
-      participants: mappedParticipants,
-      viewerWorkspaceMemberId: workspaceMemberId,
-      viewerParticipantId: viewerMembership?.id,
-      viewerConversationRole,
-      lastItem: lastItem
-        ? {
-            itemId: lastItem.id,
-            sequence: lastItem.sequence,
-            itemType: lastItem.itemType,
-            subtype: lastItem.subtype,
-            previewText: previewTextFromItem(lastItem),
-            authorParticipantId: lastItem.authorParticipantId,
-            author: lastItem.author,
-            createdAt: lastItem.createdAt,
-          }
-        : undefined,
-    } satisfies ChatConversationRecord
-  })
-}
-
-async function loadConversationView(
-  queryable: Executor,
-  workspaceId: string,
-  workspaceMemberId: string,
-  conversationId: string
-) {
-  const views = await loadConversationViews(
-    queryable,
-    workspaceId,
-    workspaceMemberId,
-    [conversationId]
-  )
-  return views[0] ?? null
 }
 
 async function getCurrentSyncCursor(
@@ -1157,6 +1049,47 @@ function chatConversationForWorkspaceMemberDeps(): CreateConversationForWorkspac
     ensureConversationParticipant,
     syncConversationUpsert: syncConversationUpsertForWorkspaceMembers,
   }
+}
+
+function chatConversationViewDeps(): LoadConversationViewsDeps {
+  return {
+    getConversationBaseRow,
+    listConversationBaseRows,
+    listConversationParticipants: listConversationParticipantRows,
+    listItemRowsByIds,
+    buildChatConversationItems,
+    participantToSummary: participantRowToChatParticipantSummary,
+  }
+}
+
+async function loadConversationViews(
+  queryable: Executor,
+  workspaceId: string,
+  workspaceMemberId: string,
+  conversationIds?: string[]
+) {
+  return loadConversationViewsUseCase(
+    queryable,
+    workspaceId,
+    workspaceMemberId,
+    conversationIds,
+    chatConversationViewDeps()
+  )
+}
+
+async function loadConversationView(
+  queryable: Executor,
+  workspaceId: string,
+  workspaceMemberId: string,
+  conversationId: string
+) {
+  return loadConversationViewUseCase(
+    queryable,
+    workspaceId,
+    workspaceMemberId,
+    conversationId,
+    chatConversationViewDeps()
+  )
 }
 
 function chatCreateConversationDeps(): CreateChatConversationDeps {
