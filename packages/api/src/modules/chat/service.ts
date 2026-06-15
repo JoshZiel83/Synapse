@@ -83,7 +83,6 @@ import {
   conversationItemHasTargets,
   conversationParticipantExists,
   countUnreadVisibleConversationMessages,
-  getChatConversationCreateRequestConversationId,
   getChatConversationBaseRow,
   getConversationDeviceState,
   getConversationKind,
@@ -96,8 +95,6 @@ import {
   getVisibleConversationReplyRefRow,
   getVisibleConversationReplyTargetRow,
   getWorkspaceMemberSyncCursor,
-  insertChatConversationCreateRequest,
-  insertConversationRecord,
   insertConversationRecordReturning,
   insertConversationItemDetailRows,
   insertConversationItemRecord,
@@ -178,6 +175,10 @@ import {
   addConversationParticipantsUseCase,
   type AddChatConversationParticipantsDeps,
 } from "./add-participants.js"
+import {
+  createChatConversationUseCase,
+  type CreateChatConversationDeps,
+} from "./create-conversation.js"
 import { enrichTaskForUser } from "../tasks/service.js"
 import {
   getConversationRuntimeMap,
@@ -1497,6 +1498,14 @@ function chatAddParticipantsDeps(): AddChatConversationParticipantsDeps {
   }
 }
 
+function chatCreateConversationDeps(): CreateChatConversationDeps {
+  return {
+    insertParticipant,
+    loadConversationView,
+    syncConversationUpsert: syncConversationUpsertForWorkspaceMembers,
+  }
+}
+
 export async function getConversation(
   conversationId: string,
   queryable: Executor = rootQueryable()
@@ -2744,152 +2753,20 @@ export async function createChatConversation(params: {
     params.workspaceId,
     params.userId
   )
-  const workspaceMemberIds = [
-    ...new Set([
-      creator.workspaceMemberId,
-      ...(params.workspaceMemberIds ?? []),
-    ]),
-  ]
-  const actorIds = [...new Set(params.actorIds ?? [])]
-  const remoteAgentIds = [...new Set(params.remoteAgentIds ?? [])]
-  // External participants are not creatable through this public path; they are
-  // minted only by the IM ingest path (syncTransportAddressConversationParticipant).
-
-  const conversationId = await withChatTransaction(async (client) => {
-    const existingConversationId =
-      await getChatConversationCreateRequestConversationId(client, {
-        workspaceMemberId: creator.workspaceMemberId,
-        clientRequestId: params.clientRequestId,
-      })
-    if (existingConversationId) {
-      return existingConversationId
-    }
-
-    const memberRows = await loadWorkspaceMembersByIds(
-      client,
-      params.workspaceId,
-      workspaceMemberIds
-    )
-    if (memberRows.length !== workspaceMemberIds.length) {
-      throw createChatError(
-        400,
-        "invalid_workspace_member",
-        "One or more workspace members are invalid"
-      )
-    }
-
-    const actorRows = await loadActorsByIds(
-      client,
-      params.workspaceId,
-      actorIds
-    )
-    if (actorRows.length !== actorIds.length) {
-      throw createChatError(
-        400,
-        "invalid_actor",
-        "One or more actors are invalid"
-      )
-    }
-
-    const remoteAgentRows = await loadRemoteAgentsByIds(
-      client,
-      params.workspaceId,
-      remoteAgentIds
-    )
-    if (remoteAgentRows.length !== remoteAgentIds.length) {
-      throw createChatError(
-        400,
-        "invalid_remote_agent",
-        "One or more remote agents are invalid"
-      )
-    }
-
-    const newConversationId = crypto.randomUUID()
-    await insertConversationRecord(client, {
-      conversationId: newConversationId,
-      kind: params.kind,
+  return createChatConversationUseCase(
+    {
       workspaceId: params.workspaceId,
-      title: params.title,
-      createdByWorkspaceMemberId: creator.workspaceMemberId,
-      metadata: params.metadata,
-    })
-
-    for (const member of memberRows) {
-      await insertParticipant(client, {
-        conversationId: newConversationId,
-        participantType: "workspace_member",
-        workspaceMemberId: member.id,
-        displayName: member.userName,
-        roleKey:
-          member.id === creator.workspaceMemberId
-            ? CONVERSATION_PARTICIPANT_ROLE_KEY.OWNER
-            : CONVERSATION_PARTICIPANT_ROLE_KEY.MEMBER,
-        metadata: {},
-      })
-      await upsertConversationView(client, {
-        workspaceMemberId: member.id,
-        conversationId: newConversationId,
-        unreadCount: 0,
-      })
-    }
-
-    for (const actor of actorRows) {
-      await insertParticipant(client, {
-        conversationId: newConversationId,
-        participantType: "actor",
-        actorId: actor.id,
-        displayName: actor.displayName ?? undefined,
-        roleKey: CONVERSATION_PARTICIPANT_ROLE_KEY.MEMBER,
-        metadata: {},
-      })
-    }
-
-    for (const remoteAgent of remoteAgentRows) {
-      await insertParticipant(client, {
-        conversationId: newConversationId,
-        participantType: "remote_agent",
-        remoteAgentId: remoteAgent.id,
-        displayName: remoteAgent.displayName ?? undefined,
-        roleKey: CONVERSATION_PARTICIPANT_ROLE_KEY.MEMBER,
-        metadata: {},
-      })
-    }
-
-    await insertChatConversationCreateRequest(client, {
-      workspaceMemberId: creator.workspaceMemberId,
+      creatorWorkspaceMemberId: creator.workspaceMemberId,
       clientRequestId: params.clientRequestId,
-      workspaceId: params.workspaceId,
-      conversationId: newConversationId,
-    })
-
-    await syncConversationUpsertForWorkspaceMembers(
-      client,
-      params.workspaceId,
-      memberRows.map((row) => row.id),
-      newConversationId
-    )
-
-    return newConversationId
-  })
-
-  const conversation = await loadConversationView(
-    rootQueryable(),
-    params.workspaceId,
-    creator.workspaceMemberId,
-    conversationId
+      kind: params.kind,
+      title: params.title,
+      workspaceMemberIds: params.workspaceMemberIds,
+      actorIds: params.actorIds,
+      remoteAgentIds: params.remoteAgentIds,
+      metadata: params.metadata,
+    },
+    chatCreateConversationDeps()
   )
-
-  if (!conversation) {
-    throw createChatError(
-      500,
-      "conversation_load_failed",
-      "Failed to load created conversation"
-    )
-  }
-
-  return {
-    conversation,
-  }
 }
 
 export async function getChatBootstrap(params: {
