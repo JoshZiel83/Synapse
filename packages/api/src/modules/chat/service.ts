@@ -60,7 +60,6 @@ import {
 } from "../access/subject-registry.js"
 import { getFileUrlById } from "../files/service.js"
 import {
-  buildNormalizedMessageContent,
   canonicalContentBlocksToDraftParts,
   itemPartsToCanonicalContentBlocks,
 } from "./message-content.js"
@@ -140,11 +139,7 @@ import {
   type ChatConversationSendMessageRecord,
   type ChatSyncRecord,
 } from "./presenter.js"
-import {
-  getConversationEventSpec,
-  isConversationEventType,
-  renderConversationEventTimelineBlocks,
-} from "./event-registry.js"
+import { isConversationEventType } from "./event-registry.js"
 import { createChatError } from "./errors.js"
 export { isChatServiceError, type ChatServiceError } from "./errors.js"
 import { getWorkspaceMemberIdentityOrThrow } from "./identity.js"
@@ -183,6 +178,10 @@ import {
   type MentionedParticipantRef,
 } from "./item-write.js"
 export type { ConversationItemPartInput } from "./item-write.js"
+import {
+  createConversationEventUseCase,
+  type CreateConversationEventDeps,
+} from "./event-write.js"
 import { enrichTaskForUser } from "../tasks/service.js"
 import {
   getConversationRuntimeMap,
@@ -1495,6 +1494,13 @@ function chatSendConversationMessageDeps(): SendConversationMessageDeps {
   }
 }
 
+function chatCreateConversationEventDeps(): CreateConversationEventDeps {
+  return {
+    listConversationParticipants: listConversationParticipantRows,
+    createConversationItem,
+  }
+}
+
 export async function getConversation(
   conversationId: string,
   queryable: Executor = rootQueryable()
@@ -1763,96 +1769,10 @@ export async function createConversationEvent<
   contextTargetParticipantIds?: string[]
   queryable?: Executor
 }) {
-  const executeCreate = async (queryable: Executor) => {
-    const spec = getConversationEventSpec(params.eventType)
-    const timelinePolicy = params.timelinePolicy ?? spec.timelinePolicy
-    const contextPolicy = params.contextPolicy ?? spec.contextPolicy
-    const eventPayload = params.eventPayload
-    const participants = await listConversationParticipantRows(queryable, [
-      params.conversationId,
-    ])
-    const activeParticipants = participants.filter(
-      (participant) =>
-        participant.state === CONVERSATION_PARTICIPANT_STATE.ACTIVE
-    )
-
-    const timelineTargetParticipantIds =
-      timelinePolicy === "targeted_members"
-        ? [...new Set(params.restrictedAudienceParticipantIds ?? [])]
-        : timelinePolicy === "users_only"
-          ? activeParticipants
-              .filter((participant) => participant.workspaceMemberId)
-              .map((participant) => participant.id)
-          : timelinePolicy === "actors_only"
-            ? activeParticipants
-                .filter((participant) => participant.actorId)
-                .map((participant) => participant.id)
-            : []
-
-    const contextTargetParticipantIds =
-      contextPolicy === "targeted_members"
-        ? [...new Set(params.contextTargetParticipantIds ?? [])]
-        : contextPolicy === "shared"
-          ? activeParticipants
-              .filter((participant) => participant.actorId)
-              .map((participant) => participant.id)
-          : contextPolicy === "actor_private"
-            ? [...new Set(params.contextTargetParticipantIds ?? [])]
-            : []
-
-    const normalizedTimeline = await buildNormalizedMessageContent({
-      content: "",
-      contentBlocks: renderConversationEventTimelineBlocks(
-        params.eventType,
-        eventPayload
-      ),
-      metadata: params.metadata ?? {},
-    })
-
-    const item = await createConversationItem({
-      workspaceId: params.workspaceId,
-      conversationId: params.conversationId,
-      sessionId: params.sessionId,
-      turnId: params.turnId,
-      scope: "shared",
-      surface: timelinePolicy === "none" ? "internal" : "visible",
-      itemType: "event",
-      subtype: params.eventType,
-      role: "system",
-      authorParticipantId: params.authorParticipantId,
-      eventPayload,
-      eventTimelinePolicy: timelinePolicy,
-      eventContextPolicy: contextPolicy,
-      metadata: params.metadata ?? {},
-      parts: normalizedTimeline.parts,
-      restrictedAudienceParticipantIds: timelineTargetParticipantIds,
-      contextTargetParticipantIds,
-      queryable,
-    })
-
-    if (item.itemType !== "event") {
-      throw new Error(
-        `Expected event item for conversation event ${params.eventType}`
-      )
-    }
-
-    return {
-      item: item as ChatConversationEventItem<T>,
-      timelinePolicy,
-      contextPolicy,
-      timelineTargetParticipantIds,
-      contextTargetParticipantIds,
-      timelineContent: normalizedTimeline.normalizedContent,
-      timelineContentBlocks: normalizedTimeline.contentBlocks,
-      metadata: normalizedTimeline.normalizedMetadata,
-      eventPayload,
-    }
-  }
-
-  if (params.queryable) {
-    return executeCreate(params.queryable)
-  }
-  return withChatTransaction((client) => executeCreate(client))
+  return createConversationEventUseCase(
+    params,
+    chatCreateConversationEventDeps()
+  )
 }
 
 export async function updateConversationItemEventPayload<
