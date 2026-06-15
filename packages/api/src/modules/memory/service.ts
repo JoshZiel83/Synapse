@@ -20,7 +20,6 @@ import {
   textBlocks,
 } from "@synapse/shared"
 import { nowIsoInstant } from "@synapse/shared/datetime"
-import { sql, type RawBuilder } from "kysely"
 import { v4 as uuidv4 } from "uuid"
 import { parseInstantString } from "../../infrastructure/datetime.js"
 import { emitEvent } from "../../infrastructure/events/index.js"
@@ -58,18 +57,19 @@ import {
   getMemoryRow,
   hasMemorySpaceOwnerImplicitPermissionForTupleDefault,
   insertMemoryRecallRunTx,
-  listMemoryCandidateRows,
+  listMemoryCandidateRowsForInput,
   listMemoryItemPartRows,
   listSpaceLevelGrantSpaceIdsDefault,
   loadAccessSubjectRows,
   loadOwnerImplicitSpaceIds as loadOwnerImplicitSpaceIdsRepo,
   moveMemoryItemToSpaceTx,
-  searchLexicalCandidateRows,
-  searchVectorCandidateRows,
+  searchLexicalMemoryCandidateRows,
+  searchVectorMemoryCandidateRows,
   softDeleteMemoryItemTx,
   updateMemoryItemTx,
   upsertMemorySubject,
 } from "./repo.js"
+import type { SearchCandidateRow } from "./repo.js"
 import type {
   MemoryItemsMetadata,
   MemoryRecallRunResultsMatchedTerms,
@@ -111,15 +111,6 @@ type MemoryPartRow = {
   name?: string | null
   metadata?: Record<string, unknown> | string | null
   sizeBytes?: number | null
-}
-
-type SearchCandidateRow = MemoryRow & {
-  matchedChunkId: string
-  chunkSearchText: string
-  textScore?: number | null
-  similarityScore?: number | null
-  vectorScore?: number | null
-  rrfScore?: number | null
 }
 
 /**
@@ -721,221 +712,12 @@ export interface RecallMemoriesInput extends SearchMemoriesInput {
  * legacy unauthenticated list path, which keeps the wide-open candidate
  * set so the post-fetch filter still has a chance to work.
  */
-function hasPrincipalSearchContext(
-  input: Pick<
-    SearchMemoriesInput,
-    "actorId" | "workspaceMemberId" | "accessSubject"
-  >
-) {
-  if (input.accessSubject) {
-    return (
-      input.accessSubject.type === "actor" ||
-      input.accessSubject.type === "workspace_member"
-    )
-  }
-  return Boolean(input.actorId || input.workspaceMemberId)
-}
-
-function isActorSearchContext(
-  input: Pick<
-    SearchMemoriesInput,
-    "actorId" | "workspaceMemberId" | "accessSubject"
-  >
-) {
-  if (input.accessSubject?.type === "actor") {
-    return true
-  }
-  if (
-    input.accessSubject?.type === "workspace_member" ||
-    input.accessSubject?.type === "user"
-  ) {
-    return false
-  }
-  return Boolean(input.actorId && !input.workspaceMemberId)
-}
-
-function buildOwnerScopeFilter(params: {
-  spaceAlias: string
-  owners?: SubjectRef[]
-  scopes?: SubjectRef[]
-  namespaceKeys?: string[]
-}) {
-  const conditions: RawBuilder<unknown>[] = []
-  const space = sql.raw(params.spaceAlias)
-
-  if (params.namespaceKeys && params.namespaceKeys.length > 0) {
-    conditions.push(
-      sql`${space}.namespace_key = ANY(${params.namespaceKeys}::text[])`
-    )
-  }
-
-  // owner / scope filtering operates via the joined access_subjects rows.
-  // For each owner SubjectRef we accept any subject_id matching the requested
-  // kind+id; for scope similarly.
-  return conditions
-}
-
 async function subjectIdsForRefs(refs: SubjectRef[]): Promise<string[]> {
   const ids: string[] = []
   for (const ref of refs) {
     ids.push(await upsertMemorySubject(ref))
   }
   return Array.from(new Set(ids))
-}
-
-function buildSearchFilters(
-  workspaceId: string,
-  input: SearchMemoriesInput,
-  itemAlias = "mi",
-  spaceAlias = "ms",
-  /**
-   * Space-level grant-reachable memory_space ids — these widen the visibility
-   * filter so a granted space (where the principal isn't the owner) still
-   * shows up in list/search/recall candidate SQL.
-   */
-  grantSpaceIds: readonly string[] = [],
-  /** Owner-implicit reachable memory_space ids derived from runtimeSubjectIds. */
-  ownerSpaceIds: readonly string[] = [],
-  /**
-   * P2 fix (post-D4): caller-supplied owner / scope filters from
-   * `SearchMemoriesInput.owners` and `.scopes`. The schema accepted them but
-   * the SQL ignored them, so a UI filter like "only actor X's memories"
-   * silently degraded to "every reachable memory". When provided we restrict
-   * the candidate set by intersecting with the corresponding access_subjects
-   * ids (resolved once by the caller and passed through here).
-   */
-  ownerSubjectIdFilters: readonly string[] = [],
-  scopeSubjectIdFilters: readonly string[] = [],
-  scopeFilterIncludesUnscoped = false
-) {
-  const item = sql.raw(itemAlias)
-  const space = sql.raw(spaceAlias)
-  const conditions: RawBuilder<unknown>[] = [
-    sql`${item}.workspace_id = ${workspaceId}`,
-  ]
-
-  if (input.namespaceKeys && input.namespaceKeys.length > 0) {
-    conditions.push(
-      sql`${space}.namespace_key = ANY(${input.namespaceKeys}::text[])`
-    )
-  }
-
-  if (ownerSubjectIdFilters.length > 0) {
-    conditions.push(
-      sql`${space}.owner_subject_id = ANY(${[...ownerSubjectIdFilters]}::uuid[])`
-    )
-  }
-
-  if (scopeSubjectIdFilters.length > 0) {
-    if (scopeFilterIncludesUnscoped) {
-      conditions.push(
-        sql`(${space}.scope_subject_id IS NULL OR ${space}.scope_subject_id = ANY(${[...scopeSubjectIdFilters]}::uuid[]))`
-      )
-    } else {
-      conditions.push(
-        sql`${space}.scope_subject_id = ANY(${[...scopeSubjectIdFilters]}::uuid[])`
-      )
-    }
-  }
-
-  if (input.categories && input.categories.length > 0) {
-    conditions.push(
-      sql`${item}.category::text = ANY(${input.categories}::text[])`
-    )
-  }
-
-  const states =
-    input.states && input.states.length > 0
-      ? input.states
-      : input.statuses && input.statuses.length > 0
-        ? input.statuses
-        : ["active"]
-  conditions.push(sql`${item}.state::text = ANY(${states}::text[])`)
-
-  // Reachability gate: any workspace-bound principal (actor OR
-  // workspace_member) is restricted to spaces they have implicit owner
-  // access to plus spaces with active space-level grants. The union of
-  // (ownerSpaceIds, grantSpaceIds) bounds the candidate set so the SQL
-  // LIMIT doesn't push authorized rows out of the window before the
-  // post-fetch authz filter runs.
-  //
-  // Round-7 review fix: the old `isActorSearchContext` check excluded
-  // `workspace_member` from this gate, so dashboard search/recall hit
-  // the workspace's full memory_items, scored unreachable rows alongside
-  // authorized ones, and lost the latter to LIMIT. Broadened to any
-  // resolved principal context.
-  if (hasPrincipalSearchContext(input)) {
-    const reachable = Array.from(new Set([...ownerSpaceIds, ...grantSpaceIds]))
-    if (reachable.length === 0) {
-      conditions.push(sql`FALSE`)
-    } else {
-      conditions.push(sql`${space}.id = ANY(${reachable}::uuid[])`)
-    }
-  }
-
-  return sql`${sql.join(conditions, sql` AND `)}`
-}
-
-async function searchLexicalCandidates(
-  workspaceId: string,
-  input: SearchMemoriesInput,
-  candidateLimit: number,
-  queryText: string,
-  grantSpaceIds: readonly string[] = [],
-  ownerSpaceIds: readonly string[] = [],
-  ownerSubjectIdFilters: readonly string[] = [],
-  scopeSubjectIdFilters: readonly string[] = [],
-  scopeFilterIncludesUnscoped = false
-) {
-  const whereClause = buildSearchFilters(
-    workspaceId,
-    input,
-    "mi",
-    "ms",
-    grantSpaceIds,
-    ownerSpaceIds,
-    ownerSubjectIdFilters,
-    scopeSubjectIdFilters,
-    scopeFilterIncludesUnscoped
-  )
-  if (!queryText) return []
-  const normalizedQueryText = normalizeWhitespace(queryText).toLowerCase()
-  return searchLexicalCandidateRows({
-    whereClause,
-    queryText,
-    normalizedQueryText,
-    candidateLimit,
-  })
-}
-
-async function searchVectorCandidates(
-  workspaceId: string,
-  input: SearchMemoriesInput,
-  embedding: number[],
-  candidateLimit: number,
-  grantSpaceIds: readonly string[] = [],
-  ownerSpaceIds: readonly string[] = [],
-  ownerSubjectIdFilters: readonly string[] = [],
-  scopeSubjectIdFilters: readonly string[] = [],
-  scopeFilterIncludesUnscoped = false
-) {
-  const whereClause = buildSearchFilters(
-    workspaceId,
-    input,
-    "mi",
-    "ms",
-    grantSpaceIds,
-    ownerSpaceIds,
-    ownerSubjectIdFilters,
-    scopeSubjectIdFilters,
-    scopeFilterIncludesUnscoped
-  )
-  const formattedEmbedding = `[${embedding.map((value) => (Number.isFinite(value) ? value.toFixed(8) : "0")).join(",")}]`
-  return searchVectorCandidateRows({
-    whereClause,
-    formattedEmbedding,
-    candidateLimit,
-  })
 }
 
 function fuseCandidateRows(sources: Array<{ rows: SearchCandidateRow[] }>) {
@@ -1530,47 +1312,35 @@ export async function listMemories(
     ? await loadSpaceLevelGrantSpaceIds(workspaceId, runtimeContext, "read")
     : []
 
-  const conditions: RawBuilder<unknown>[] = [
-    sql`mi.workspace_id = ${workspaceId}`,
-  ]
-  if (input.category) conditions.push(sql`mi.category = ${input.category}`)
-  if (input.state || input.status) {
-    conditions.push(sql`mi.state = ${(input.state || input.status)!}`)
-  }
-  if (input.tags && input.tags.length > 0) {
-    conditions.push(sql`mi.tags && ${input.tags}`)
-  }
-  if (input.namespaceKey) {
-    conditions.push(sql`ms.namespace_key = ${input.namespaceKey}`)
-  }
-  if (input.owner) {
-    const ownerSubjectId = await upsertMemorySubject(input.owner)
-    conditions.push(sql`ms.owner_subject_id = ${ownerSubjectId}`)
-  }
-  if (input.scope) {
-    const scopeSubjectId = await upsertMemorySubject(input.scope)
-    conditions.push(sql`ms.scope_subject_id = ${scopeSubjectId}`)
-  }
-
+  const ownerSubjectId = input.owner
+    ? await upsertMemorySubject(input.owner)
+    : undefined
+  const scopeSubjectId = input.scope
+    ? await upsertMemorySubject(input.scope)
+    : undefined
+  const reachableSpaceIds = subject
+    ? Array.from(new Set([...ownerSpaceIds, ...grantSpaceIds]))
+    : undefined
   if (subject) {
     // Subject-based reachability gate: owner-implicit + space-grant. The
     // workspace-admin manage_memories override only unlocks manage/delete on
     // private spaces (not read/recall — see hasMemorySpaceOwnerImplicitPermission)
     // so it is NOT added here; surfacing those rows would only push authorized
     // ones out of the SQL LIMIT window before the post-fetch authz filter ran.
-    const reachable = Array.from(new Set([...ownerSpaceIds, ...grantSpaceIds]))
-    if (reachable.length === 0) {
+    if (!reachableSpaceIds || reachableSpaceIds.length === 0) {
       // No reachable spaces — bail early; nothing to fetch.
       return []
     }
-    conditions.push(sql`ms.id = ANY(${reachable}::uuid[])`)
   }
 
-  const whereClause = sql`${sql.join(conditions, sql` AND `)}`
   // Oversample so post-fetch authz (item-level grants) has room to swap rows.
   const candidateOversample = Math.min(2000, requestedLimit * 5)
-  let rows = await listMemoryCandidateRows({
-    whereClause,
+  let rows = await listMemoryCandidateRowsForInput({
+    workspaceId,
+    input,
+    ownerSubjectId,
+    scopeSubjectId,
+    reachableSpaceIds,
     candidateOversample,
   })
 
@@ -1634,16 +1404,16 @@ export async function searchMemories(
     for (const variant of buildLexicalVariants(queryText)) {
       try {
         lexicalSources.push({
-          rows: await searchLexicalCandidates(
+          rows: await searchLexicalMemoryCandidateRows({
             workspaceId,
             input,
             candidateLimit,
-            variant,
+            queryText: variant,
             grantSpaceIds,
             ownerSpaceIds,
             ownerSubjectIdFilters,
-            scopeSubjectIdFilters
-          ),
+            scopeSubjectIdFilters,
+          }),
         })
       } catch (error) {
         if (!isTsqueryStackOverflow(error)) throw error
@@ -1665,7 +1435,7 @@ export async function searchMemories(
     try {
       const embedding = await embedMemoryQueryCached(queryText)
       if (embedding) {
-        vectorRows = await searchVectorCandidates(
+        vectorRows = await searchVectorMemoryCandidateRows({
           workspaceId,
           input,
           embedding,
@@ -1673,8 +1443,8 @@ export async function searchMemories(
           grantSpaceIds,
           ownerSpaceIds,
           ownerSubjectIdFilters,
-          scopeSubjectIdFilters
-        )
+          scopeSubjectIdFilters,
+        })
       }
     } catch (error) {
       log.warn(

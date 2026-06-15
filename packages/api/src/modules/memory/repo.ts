@@ -21,7 +21,12 @@
 import crypto from "node:crypto"
 import { CompiledQuery, sql, type RawBuilder } from "kysely"
 import { v4 as uuidv4 } from "uuid"
-import { parseJsonObject, type SubjectRef } from "@synapse/shared"
+import {
+  parseJsonObject,
+  type MemoryCategory,
+  type MemoryItemState,
+  type SubjectRef,
+} from "@synapse/shared"
 import {
   db,
   withDbTransaction,
@@ -1123,10 +1128,169 @@ export async function loadOwnerImplicitSpaceIds(
   return rows.map((row) => row.id)
 }
 
+type MemorySearchCandidateFilterInput = {
+  actorId?: string
+  workspaceMemberId?: string
+  accessSubject?: { type: string } | null
+  namespaceKeys?: string[]
+  categories?: MemoryCategory[]
+  states?: MemoryItemState[]
+  statuses?: MemoryItemState[]
+}
+
+type MemoryListCandidateFilterInput = {
+  category?: MemoryCategory
+  state?: MemoryItemState
+  status?: MemoryItemState
+  tags?: string[]
+  namespaceKey?: string
+}
+
+function normalizeSearchWhitespace(value: string) {
+  return value.replace(/\s+/g, " ").trim()
+}
+
+function hasPrincipalSearchContext(
+  input: Pick<
+    MemorySearchCandidateFilterInput,
+    "actorId" | "workspaceMemberId" | "accessSubject"
+  >
+) {
+  if (input.accessSubject) {
+    return (
+      input.accessSubject.type === "actor" ||
+      input.accessSubject.type === "workspace_member"
+    )
+  }
+  return Boolean(input.actorId || input.workspaceMemberId)
+}
+
+function buildMemorySearchWhereClause(params: {
+  workspaceId: string
+  input: MemorySearchCandidateFilterInput
+  itemAlias?: string
+  spaceAlias?: string
+  grantSpaceIds?: readonly string[]
+  ownerSpaceIds?: readonly string[]
+  ownerSubjectIdFilters?: readonly string[]
+  scopeSubjectIdFilters?: readonly string[]
+  scopeFilterIncludesUnscoped?: boolean
+}) {
+  const item = sql.raw(params.itemAlias ?? "mi")
+  const space = sql.raw(params.spaceAlias ?? "ms")
+  const input = params.input
+  const conditions: RawBuilder<unknown>[] = [
+    sql`${item}.workspace_id = ${params.workspaceId}`,
+  ]
+
+  if (input.namespaceKeys && input.namespaceKeys.length > 0) {
+    conditions.push(
+      sql`${space}.namespace_key = ANY(${input.namespaceKeys}::text[])`
+    )
+  }
+
+  const ownerSubjectIdFilters = params.ownerSubjectIdFilters ?? []
+  if (ownerSubjectIdFilters.length > 0) {
+    conditions.push(
+      sql`${space}.owner_subject_id = ANY(${[...ownerSubjectIdFilters]}::uuid[])`
+    )
+  }
+
+  const scopeSubjectIdFilters = params.scopeSubjectIdFilters ?? []
+  if (scopeSubjectIdFilters.length > 0) {
+    if (params.scopeFilterIncludesUnscoped) {
+      conditions.push(
+        sql`(${space}.scope_subject_id IS NULL OR ${space}.scope_subject_id = ANY(${[...scopeSubjectIdFilters]}::uuid[]))`
+      )
+    } else {
+      conditions.push(
+        sql`${space}.scope_subject_id = ANY(${[...scopeSubjectIdFilters]}::uuid[])`
+      )
+    }
+  }
+
+  if (input.categories && input.categories.length > 0) {
+    conditions.push(
+      sql`${item}.category::text = ANY(${input.categories}::text[])`
+    )
+  }
+
+  const states =
+    input.states && input.states.length > 0
+      ? input.states
+      : input.statuses && input.statuses.length > 0
+        ? input.statuses
+        : ["active"]
+  conditions.push(sql`${item}.state::text = ANY(${states}::text[])`)
+
+  if (hasPrincipalSearchContext(input)) {
+    const reachable = Array.from(
+      new Set([
+        ...(params.ownerSpaceIds ?? []),
+        ...(params.grantSpaceIds ?? []),
+      ])
+    )
+    if (reachable.length === 0) {
+      conditions.push(sql`FALSE`)
+    } else {
+      conditions.push(sql`${space}.id = ANY(${reachable}::uuid[])`)
+    }
+  }
+
+  return sql`${sql.join(conditions, sql` AND `)}`
+}
+
+function buildMemoryListWhereClause(params: {
+  workspaceId: string
+  input: MemoryListCandidateFilterInput
+  ownerSubjectId?: string
+  scopeSubjectId?: string
+  reachableSpaceIds?: readonly string[]
+}) {
+  const conditions: RawBuilder<unknown>[] = [
+    sql`mi.workspace_id = ${params.workspaceId}`,
+  ]
+  const input = params.input
+
+  if (input.category) conditions.push(sql`mi.category = ${input.category}`)
+  if (input.state || input.status) {
+    conditions.push(sql`mi.state = ${(input.state || input.status)!}`)
+  }
+  if (input.tags && input.tags.length > 0) {
+    conditions.push(sql`mi.tags && ${input.tags}`)
+  }
+  if (input.namespaceKey) {
+    conditions.push(sql`ms.namespace_key = ${input.namespaceKey}`)
+  }
+  if (params.ownerSubjectId) {
+    conditions.push(sql`ms.owner_subject_id = ${params.ownerSubjectId}`)
+  }
+  if (params.scopeSubjectId) {
+    conditions.push(sql`ms.scope_subject_id = ${params.scopeSubjectId}`)
+  }
+
+  if (params.reachableSpaceIds) {
+    if (params.reachableSpaceIds.length === 0) {
+      conditions.push(sql`FALSE`)
+    } else {
+      conditions.push(
+        sql`ms.id = ANY(${[...params.reachableSpaceIds]}::uuid[])`
+      )
+    }
+  }
+
+  return sql`${sql.join(conditions, sql` AND `)}`
+}
+
+function formatEmbeddingVector(embedding: number[]) {
+  return `[${embedding
+    .map((value) => (Number.isFinite(value) ? value.toFixed(8) : "0"))
+    .join(",")}]`
+}
+
 /**
- * Hybrid lexical candidate query. The caller builds the where-clause fragment
- * (buildSearchFilters, pure `sql` tags) and passes it in; the repo owns the
- * full SQL assembly + execution. queryText / normalizedQueryText are
+ * Hybrid lexical candidate query. The repo owns the where-clause fragment,
+ * full SQL assembly, and execution. queryText / normalizedQueryText are
  * interpolated as bound params verbatim.
  */
 export async function searchLexicalCandidateRows(params: {
@@ -1163,9 +1327,32 @@ export async function searchLexicalCandidateRows(params: {
   return result.rows.map(normalizeMemoryRow)
 }
 
+export async function searchLexicalMemoryCandidateRows(params: {
+  workspaceId: string
+  input: MemorySearchCandidateFilterInput
+  candidateLimit: number
+  queryText: string
+  grantSpaceIds?: readonly string[]
+  ownerSpaceIds?: readonly string[]
+  ownerSubjectIdFilters?: readonly string[]
+  scopeSubjectIdFilters?: readonly string[]
+  scopeFilterIncludesUnscoped?: boolean
+}): Promise<SearchCandidateRow[]> {
+  if (!params.queryText) return []
+  const whereClause = buildMemorySearchWhereClause(params)
+  return searchLexicalCandidateRows({
+    whereClause,
+    queryText: params.queryText,
+    normalizedQueryText: normalizeSearchWhitespace(
+      params.queryText
+    ).toLowerCase(),
+    candidateLimit: params.candidateLimit,
+  })
+}
+
 /**
- * Vector (pgvector) candidate query. The caller builds the where-clause and the
- * `[..]` embedding literal; the repo owns the `::vector` cast + execution.
+ * Vector (pgvector) candidate query. The repo owns the where-clause, the
+ * `[..]` embedding literal, the `::vector` cast, and execution.
  */
 export async function searchVectorCandidateRows(params: {
   whereClause: RawBuilder<unknown>
@@ -1193,9 +1380,28 @@ export async function searchVectorCandidateRows(params: {
   return result.rows.map(normalizeMemoryRow)
 }
 
+export async function searchVectorMemoryCandidateRows(params: {
+  workspaceId: string
+  input: MemorySearchCandidateFilterInput
+  embedding: number[]
+  candidateLimit: number
+  grantSpaceIds?: readonly string[]
+  ownerSpaceIds?: readonly string[]
+  ownerSubjectIdFilters?: readonly string[]
+  scopeSubjectIdFilters?: readonly string[]
+  scopeFilterIncludesUnscoped?: boolean
+}): Promise<SearchCandidateRow[]> {
+  const whereClause = buildMemorySearchWhereClause(params)
+  return searchVectorCandidateRows({
+    whereClause,
+    formattedEmbedding: formatEmbeddingVector(params.embedding),
+    candidateLimit: params.candidateLimit,
+  })
+}
+
 /**
- * listMemories candidate query. The caller builds the where-clause fragment;
- * the repo owns the SQL assembly + execution.
+ * listMemories candidate query. The repo owns the where-clause fragment,
+ * SQL assembly, and execution.
  */
 export async function listMemoryCandidateRows(params: {
   whereClause: RawBuilder<unknown>
@@ -1210,6 +1416,21 @@ export async function listMemoryCandidateRows(params: {
        LIMIT ${params.candidateOversample}`.compile(db)
   )
   return result.rows.map(normalizeMemoryRow)
+}
+
+export async function listMemoryCandidateRowsForInput(params: {
+  workspaceId: string
+  input: MemoryListCandidateFilterInput
+  ownerSubjectId?: string
+  scopeSubjectId?: string
+  reachableSpaceIds?: readonly string[]
+  candidateOversample: number
+}): Promise<MemoryRow[]> {
+  const whereClause = buildMemoryListWhereClause(params)
+  return listMemoryCandidateRows({
+    whereClause,
+    candidateOversample: params.candidateOversample,
+  })
 }
 
 // ---------------------------------------------------------------------------
