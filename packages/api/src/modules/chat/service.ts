@@ -1746,29 +1746,6 @@ export async function getChatConversationMessages(params: {
   }
 }
 
-export async function requireRemoteAgentConversationAccess(
-  queryable: Executor,
-  conversationId: string,
-  remoteAgentId: string
-) {
-  const participant = await getConversationParticipant({
-    conversationId,
-    remoteAgentId,
-    queryable,
-  })
-  if (
-    !participant ||
-    participant.state !== CONVERSATION_PARTICIPANT_STATE.ACTIVE
-  ) {
-    throw createChatError(
-      403,
-      "conversation_access_denied",
-      "Remote agent is not an active participant in this conversation"
-    )
-  }
-  return { participant }
-}
-
 export async function listVisibleConversationItemsForParticipant(params: {
   conversationId: string
   participantId: string

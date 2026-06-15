@@ -30,7 +30,15 @@ import {
   authorizeActionDefault,
   listAuthorizedResourceIdsDefault,
 } from "../access/guards.js"
-import { listVisibleConversationItemsForParticipant } from "../chat/service.js"
+import {
+  listVisibleConversationItemsForParticipant,
+  sendConversationMessageFromParticipant,
+} from "../chat/service.js"
+import {
+  requireRemoteAgentConversationAccessOnDefaultDb,
+  sendRemoteAgentConversationMessageUseCase,
+  requireRemoteAgentConversationAccess,
+} from "../chat/remote-agent-bridge.js"
 import { getFileUrlById } from "../files/service.js"
 import { requireWorkspaceMemberIdentity } from "../chat/workspace-identity.js"
 import * as repo from "./repo.js"
@@ -1057,7 +1065,7 @@ export async function createRemoteAgentUserInputTask(params: {
 }) {
   const access = await authenticateMachineForRemoteAgent(params)
   const conversationAccess =
-    await repo.requireRemoteAgentConversationAccessRepo(
+    await requireRemoteAgentConversationAccessOnDefaultDb(
       params.conversationId,
       params.remoteAgentId
     )
@@ -1107,7 +1115,7 @@ export async function createRemoteAgentPlanApprovalTask(params: {
 }) {
   const access = await authenticateMachineForRemoteAgent(params)
   const conversationAccess =
-    await repo.requireRemoteAgentConversationAccessRepo(
+    await requireRemoteAgentConversationAccessOnDefaultDb(
       params.conversationId,
       params.remoteAgentId
     )
@@ -1270,7 +1278,7 @@ export async function getRemoteAgentConversationHistory(params: {
   limit?: number
 }) {
   await authenticateMachineForRemoteAgent(params)
-  const access = await repo.requireRemoteAgentConversationAccessRepo(
+  const access = await requireRemoteAgentConversationAccessOnDefaultDb(
     params.conversationId,
     params.remoteAgentId
   )
@@ -1298,14 +1306,22 @@ export async function sendRemoteAgentConversationMessage(params: {
   metadata?: Record<string, unknown>
 }) {
   await authenticateMachineForRemoteAgent(params)
-  const item = await repo.sendConversationMessageTx({
-    remoteAgentId: params.remoteAgentId,
-    conversationId: params.conversationId,
-    clientMessageId: params.clientMessageId ?? crypto.randomUUID(),
-    contentBlocks: params.contentBlocks,
-    replyToItemId: params.replyToItemId,
-    metadata: params.metadata,
-  })
+  const item = await sendRemoteAgentConversationMessageUseCase(
+    {
+      remoteAgentId: params.remoteAgentId,
+      conversationId: params.conversationId,
+      clientMessageId: params.clientMessageId ?? crypto.randomUUID(),
+      contentBlocks: params.contentBlocks,
+      replyToItemId: params.replyToItemId,
+      metadata: params.metadata,
+    },
+    {
+      withTransaction: repo.withRemoteAgentTransaction,
+      requireRemoteAgentConversationAccess,
+      loadConversationHostWorkspaceId: repo.loadConversationHostWorkspaceIdRepo,
+      sendConversationMessageFromParticipant,
+    }
+  )
 
   await notifyRemoteAgentDeliveriesForConversation(params.conversationId)
 
@@ -1322,7 +1338,7 @@ export async function searchRemoteAgentMessages(params: {
   limit?: number
 }) {
   await authenticateMachineForRemoteAgent(params)
-  const access = await repo.requireRemoteAgentConversationAccessRepo(
+  const access = await requireRemoteAgentConversationAccessOnDefaultDb(
     params.conversationId,
     params.remoteAgentId
   )

@@ -41,11 +41,8 @@ import {
   presentMessageDelivery,
   presentRemoteAgentConversation,
 } from "./presenter.js"
-import {
-  listPendingDeliveryRefs,
-  getConversationTypeFacts,
-  requireConversationAccessOnDefaultDb,
-} from "./repo.js"
+import { listPendingDeliveryRefs, getConversationTypeFacts } from "./repo.js"
+import { requireRemoteAgentConversationAccessOnDefaultDb } from "../chat/remote-agent-bridge.js"
 import { projectToolsForPrincipal } from "../capability-projection/index.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
 
@@ -534,7 +531,7 @@ export async function handleRemoteAgentMcpRequest(
     return reply.code(401).send({ error: message })
   }
   try {
-    await requireConversationAccessOnDefaultDb(
+    await requireRemoteAgentConversationAccessOnDefaultDb(
       request.params.conversationId,
       request.params.remoteAgentId
     )

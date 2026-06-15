@@ -34,11 +34,7 @@ import {
   insertWorkspaceAppGrant,
   type InsertWorkspaceAppGrantInput,
 } from "../workspace-apps/grant-storage.js"
-import {
-  requireRemoteAgentConversationAccess,
-  sendConversationMessageFromParticipant,
-  appendWorkspaceMemberSyncEvent,
-} from "../chat/service.js"
+import { appendWorkspaceMemberSyncEvent } from "../chat/service.js"
 import { nextAttemptAt, shouldFailDelivery } from "./delivery-retry.js"
 
 /**
@@ -141,34 +137,6 @@ export async function getConversationTypeFacts(
     return null
   }
   return { kind: row.kind, isIm: Boolean(row.is_im) }
-}
-
-/**
- * Default-db-bound wrapper around the chat module's conversation-access guard.
- * Keeps the singleton `db` thread inside this guard-exempt repo file rather
- * than relocating it into the (guarded) mcp-endpoint caller.
- */
-export async function requireConversationAccessOnDefaultDb(
-  conversationId: string,
-  remoteAgentId: string
-) {
-  return requireRemoteAgentConversationAccess(db, conversationId, remoteAgentId)
-}
-
-/**
- * Default-db-bound wrapper around requireRemoteAgentConversationAccess for
- * service call sites that don't already have a transaction executor in hand.
- */
-export async function requireRemoteAgentConversationAccessRepo(
-  conversationId: string,
-  remoteAgentId: string,
-  executor: Executor = db
-) {
-  return requireRemoteAgentConversationAccess(
-    executor,
-    conversationId,
-    remoteAgentId
-  )
 }
 
 export async function loadMachineByApiKeyRepo(
@@ -1974,44 +1942,6 @@ export async function upsertConversationViewReadStateRepo(
       params.sequence,
     ]
   )
-}
-
-/**
- * Whole-transaction send of a remote-agent conversation message: re-checks
- * access + resolves the host workspace + delegates to the chat module's
- * participant-send, all on the same transaction executor. Returns the created
- * conversation item.
- */
-export async function sendConversationMessageTx(params: {
-  remoteAgentId: string
-  conversationId: string
-  clientMessageId: string
-  contentBlocks: unknown[]
-  replyToItemId?: string
-  metadata?: Record<string, unknown>
-}) {
-  return withDbTransaction(async (client) => {
-    const access = await requireRemoteAgentConversationAccess(
-      client,
-      params.conversationId,
-      params.remoteAgentId
-    )
-    const hostWorkspaceId = await loadConversationHostWorkspaceIdRepo(
-      params.conversationId,
-      client
-    )
-    return sendConversationMessageFromParticipant({
-      workspaceId: hostWorkspaceId ?? undefined,
-      conversationId: params.conversationId,
-      senderParticipantId: access.participant.id,
-      clientMessageId: params.clientMessageId,
-      role: "assistant",
-      contentBlocks: params.contentBlocks as any[],
-      replyToItemId: params.replyToItemId,
-      metadata: params.metadata,
-      queryable: client,
-    })
-  })
 }
 
 export async function searchRemoteAgentMessagesRepo(
