@@ -9,8 +9,6 @@ import {
   CONVERSATION_ITEM_TYPES,
   CONVERSATION_KINDS,
   CONVERSATION_MESSAGE_SUBTYPE,
-  CONVERSATION_PARTICIPANT_STATE,
-  normalizeCanonicalContentBlocks,
   parseConversationMessageRef,
   type CanonicalContentBlock,
   type ConversationMessageSubtype,
@@ -18,7 +16,6 @@ import {
   type SessionWakeupSourceParticipantType,
 } from "@synapse/shared"
 import type {
-  ConversationEntityRef,
   ConversationEventContextPolicy,
   ConversationEventTimelinePolicy,
   ConversationFeedEventPayloadMap,
@@ -44,13 +41,11 @@ import {
   getConversationKind,
   getConversationRecord,
   getVisibleConversationReplyRefRow,
-  getVisibleConversationReplyTargetRow,
   listChatConversationParticipantRows,
   listConversationItemRowsByIds,
   listNearbyVisibleConversationReplyRefRows,
   listMentionedParticipantIdsForConversationItem,
   withChatTransaction,
-  type ChatParticipantRow,
 } from "./repo.js"
 // Re-exported for existing consumers that import the row DTO from chat/service.
 export type { ChatPushTokenRow } from "./repo.js"
@@ -98,11 +93,10 @@ import {
   sendConversationMessageFromParticipantUseCase,
   type ConversationItemPartInput,
   type CreateConversationItemDeps,
-  type PreparedConversationItemWrite,
   type SendConversationMessageDeps,
-  type MentionedParticipantRef,
 } from "./item-write.js"
 export type { ConversationItemPartInput } from "./item-write.js"
+import { prepareConversationItemWrite } from "./conversation-item-write-prep.js"
 import {
   createConversationEventUseCase,
   type CreateConversationEventDeps,
@@ -124,7 +118,6 @@ import { type HydratedConversationItemRecord } from "./conversation-item-hydrati
 import {
   participantDisplayName,
   participantRowToChatParticipantSummary,
-  participantRowToEntityRef,
 } from "./participant-projection.js"
 export { isFeedItemVisibleToWorkspaceMember } from "./conversation-feed-visibility.js"
 export { conversationItemDetailToFeedItem } from "./conversation-feed-mapper.js"
@@ -161,8 +154,6 @@ type ItemScope = (typeof CONVERSATION_ITEM_SCOPES)[number]
 type ItemSurface = (typeof CONVERSATION_ITEM_SURFACES)[number]
 type ItemType = (typeof CONVERSATION_ITEM_TYPES)[number]
 type ItemRole = (typeof CONVERSATION_ITEM_ROLES)[number]
-
-type ParticipantRow = ChatParticipantRow
 
 function toNumber(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -204,149 +195,6 @@ async function listConversationParticipantRows(
 
 async function listItemRowsByIds(queryable: Executor, itemIds: string[]) {
   return listConversationItemRowsByIds(queryable, itemIds)
-}
-
-function parseMentionBlockFromPart(part: ConversationItemPartInput) {
-  if (part.type !== "json" || !part.json) {
-    return null
-  }
-  const normalized = normalizeCanonicalContentBlocks([part.json as any])
-  const block = normalized[0]
-  return block?.type === "mention" ? block : null
-}
-
-function resolveMentionedConversationParticipant(
-  participants: ParticipantRow[],
-  mention: ConversationEntityRef
-) {
-  const activeParticipants = participants.filter(
-    (participant) => participant.state === CONVERSATION_PARTICIPANT_STATE.ACTIVE
-  )
-  if (mention.participantId) {
-    return activeParticipants.find(
-      (participant) => participant.id === mention.participantId
-    )
-  }
-  if (mention.workspaceMemberId) {
-    return activeParticipants.find(
-      (participant) =>
-        participant.workspaceMemberId === mention.workspaceMemberId
-    )
-  }
-  if (mention.actorId) {
-    return activeParticipants.find(
-      (participant) => participant.actorId === mention.actorId
-    )
-  }
-  if (mention.externalUserKey) {
-    return activeParticipants.find(
-      (participant) =>
-        participantRowToEntityRef(participant)?.externalUserKey ===
-        mention.externalUserKey
-    )
-  }
-  return null
-}
-
-async function canonicalizeConversationItemParts(
-  queryable: Executor,
-  params: {
-    conversationId: string
-    parts?: ConversationItemPartInput[]
-    activeParticipants?: ParticipantRow[]
-  }
-): Promise<{
-  parts: ConversationItemPartInput[]
-  mentionedParticipants: MentionedParticipantRef[]
-}> {
-  const originalParts = params.parts ?? []
-  if (originalParts.length === 0) {
-    return {
-      parts: [],
-      mentionedParticipants: [],
-    }
-  }
-  const participants =
-    params.activeParticipants ??
-    (
-      await listConversationParticipantRows(
-        queryable,
-        [params.conversationId],
-        {
-          useProfileSnapshot: true,
-        }
-      )
-    ).filter(
-      (participant) =>
-        participant.state === CONVERSATION_PARTICIPANT_STATE.ACTIVE
-    )
-  const parts: ConversationItemPartInput[] = []
-  const mentionedParticipants: MentionedParticipantRef[] = []
-
-  for (const [ordinal, part] of originalParts.entries()) {
-    const mentionBlock = parseMentionBlockFromPart(part)
-    if (!mentionBlock) {
-      parts.push(part)
-      continue
-    }
-
-    const participant = resolveMentionedConversationParticipant(
-      participants,
-      mentionBlock.mention
-    )
-    if (!participant) {
-      throw createChatError(
-        400,
-        "invalid_mention",
-        "One or more mentions are invalid for this conversation"
-      )
-    }
-    const canonicalMention = {
-      ...mentionBlock,
-      mention: participantRowToEntityRef(participant)!,
-    }
-    mentionedParticipants.push({
-      participantId: participant.id,
-      ordinal,
-    })
-    parts.push({
-      ...part,
-      json: canonicalMention,
-      metadata: {
-        ...(part.metadata ?? {}),
-        mention: canonicalMention.mention,
-      },
-    })
-  }
-
-  return {
-    parts,
-    mentionedParticipants,
-  }
-}
-
-async function validateConversationReplyTarget(
-  queryable: Executor,
-  conversationId: string,
-  replyToItemId?: string,
-  authorParticipantId?: string
-) {
-  if (!replyToItemId) {
-    return null
-  }
-  const row = await getVisibleConversationReplyTargetRow(queryable, {
-    conversationId,
-    replyToItemId,
-    authorParticipantId,
-  })
-  if (!row) {
-    throw createChatError(
-      400,
-      "invalid_reply_to_item",
-      "replyToItemId must reference a visible item in the same conversation"
-    )
-  }
-  return row
 }
 
 export async function resolveConversationReplyRef(params: {
@@ -400,71 +248,6 @@ export async function resolveConversationReplyRef(params: {
     "invalid_reply_ref",
     `Unknown replyToRef "${params.replyRef}".${suggestionText}`
   )
-}
-
-async function prepareConversationItemWrite(
-  queryable: Executor,
-  params: {
-    conversationId: string
-    scope: ItemScope
-    surface: ItemSurface
-    parts?: ConversationItemPartInput[]
-    restrictedAudienceParticipantIds?: string[]
-    contextTargetParticipantIds?: string[]
-    replyToItemId?: string
-    authorParticipantId?: string
-  }
-): Promise<PreparedConversationItemWrite> {
-  const activeParticipants =
-    params.scope === CONVERSATION_ITEM_SCOPE.SHARED &&
-    params.surface === CONVERSATION_ITEM_SURFACE.VISIBLE
-      ? await listConversationParticipantRows(
-          queryable,
-          [params.conversationId],
-          {
-            useProfileSnapshot: true,
-          }
-        ).then((participants) =>
-          participants.filter(
-            (participant) =>
-              participant.state === CONVERSATION_PARTICIPANT_STATE.ACTIVE
-          )
-        )
-      : []
-  const validParticipantIds = new Set(
-    activeParticipants.map((participant) => participant.id)
-  )
-
-  for (const participantId of params.restrictedAudienceParticipantIds ?? []) {
-    if (!validParticipantIds.has(participantId)) {
-      throw new Error(
-        `Invalid restricted audience participant ${participantId}`
-      )
-    }
-  }
-  for (const participantId of params.contextTargetParticipantIds ?? []) {
-    if (!validParticipantIds.has(participantId)) {
-      throw new Error(`Invalid context target participant ${participantId}`)
-    }
-  }
-
-  const normalizedParts = await canonicalizeConversationItemParts(queryable, {
-    conversationId: params.conversationId,
-    parts: params.parts,
-    activeParticipants,
-  })
-
-  return {
-    activeParticipants,
-    parts: normalizedParts.parts,
-    mentionedParticipants: normalizedParts.mentionedParticipants,
-    replyToItem: await validateConversationReplyTarget(
-      queryable,
-      params.conversationId,
-      params.replyToItemId,
-      params.authorParticipantId
-    ),
-  }
 }
 
 async function listMentionedParticipantIdsForItem(
