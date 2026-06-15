@@ -11,7 +11,7 @@ import {
   type ResolveTaskRequestParams,
   type ResolveTaskRequestResult,
 } from "../tasks/service.js"
-import { getConversationParticipant } from "./service.js"
+import { getConversationParticipantUseCase as getConversationParticipant } from "./participant-roster.js"
 
 type TaskResponseSuccessBody = {
   outcome: ChatTaskResolveOutcome

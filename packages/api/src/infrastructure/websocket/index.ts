@@ -15,7 +15,7 @@ import {
   authenticateSessionFromHeaders,
   authenticateSessionToken,
 } from "../../modules/auth/service.js"
-import { getConversationParticipant } from "../../modules/chat/service.js"
+import { getConversationParticipantUseCase as getConversationParticipant } from "../../modules/chat/participant-roster.js"
 import { getWorkspaceMemberIdentity } from "../../modules/chat/workspace-identity.js"
 import { enrichTaskForUser } from "../../modules/tasks/service.js"
 import {

@@ -8,7 +8,7 @@ import {
 import type { Timestamp, TransportKind } from "@synapse/shared"
 import { assertIsoInstant } from "@synapse/shared/datetime"
 import { getFileUrlById } from "../files/service.js"
-import { listConversationParticipants } from "./service.js"
+import { listConversationParticipantsUseCase as listConversationParticipants } from "./participant-roster.js"
 import {
   canManageConversationRole,
   normalizeConversationParticipantRoleKey,

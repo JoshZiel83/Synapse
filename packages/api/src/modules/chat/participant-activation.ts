@@ -3,11 +3,11 @@ import {
   CONVERSATION_PARTICIPANT_STATE,
   CONVERSATION_PARTICIPANT_TYPE,
 } from "@synapse/shared"
+import { createConversationEvent } from "./event-write.js"
 import {
-  createConversationEvent,
-  ensureConversationParticipant,
-  getConversationParticipant,
-} from "./service.js"
+  ensureConversationParticipantUseCase as ensureConversationParticipant,
+  getConversationParticipantUseCase as getConversationParticipant,
+} from "./participant-roster.js"
 
 type ParticipantInitiator = {
   participantType: "actor" | "remote_agent" | "workspace_member"
