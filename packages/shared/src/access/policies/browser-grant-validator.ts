@@ -11,7 +11,7 @@
 // Bundle-safe; relies only on URL + tldts.
 
 import { getDomain } from "tldts"
-import { browserActionCoversOperations } from "@synapse/device-protocol/browser-tools"
+import { browserActionCoversOperations } from "@synapse/device-protocol/enums"
 import type { BrowserPolicy } from "./browser.js"
 
 export class BrowserGrantPolicyError extends Error {

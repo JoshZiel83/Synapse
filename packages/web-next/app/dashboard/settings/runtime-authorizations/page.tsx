@@ -30,8 +30,8 @@ import type {
 // package into the web bundle.
 //
 // Keep in lockstep with:
-//   - BROWSER_OPERATION_REQUIRED_ACTION in browser-tools.ts (derives the
-//     minimum action needed for an op)
+//   - BROWSER_OPERATION_REQUIRED_ACTION in device-protocol/enums.ts (derives
+//     the minimum action needed for an op)
 //   - BROWSER_EXPOSURE_TOOLS + BROWSER_TOOL_MAP (which ops each exposure
 //     can ever ask for)
 const ALL_BROWSER_OPERATIONS = [

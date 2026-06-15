@@ -213,6 +213,46 @@ export const RUNTIME_AUTHORIZATION_BROWSER_OPERATIONS = [
 export type BrowserOperation =
   (typeof RUNTIME_AUTHORIZATION_BROWSER_OPERATIONS)[number]
 
+export type BrowserOperationRequiredAction = "read" | "write"
+
+/**
+ * Minimum action level required to grant each browser operation.
+ *
+ * This lives with the browser operation enum so app/shared policy validators can
+ * check action coverage without importing the browser tool map/descriptors.
+ */
+export const BROWSER_OPERATION_REQUIRED_ACTION: Readonly<
+  Record<BrowserOperation, BrowserOperationRequiredAction>
+> = {
+  "page.read": "read",
+  "page.navigate": "write",
+  "page.input": "write",
+  "screenshot.capture": "read",
+  "console.read": "read",
+  "network.list": "read",
+  "network.body.read": "read",
+  "script.evaluate": "write",
+  "performance.trace": "read",
+  // Deferred operations: not in BROWSER_TOOL_MAP today, but listed in the enum
+  // so a grant policy can name them. Each one is write-sensitive.
+  "file.upload": "write",
+  "extension.manage": "write",
+  "webmcp.execute": "write",
+}
+
+export function browserActionCoversOperations(
+  action: BrowserOperationRequiredAction,
+  operations: readonly BrowserOperation[]
+): { ok: true } | { ok: false; offending: BrowserOperation[] } {
+  if (action === "write") return { ok: true }
+  const offending = operations.filter((op) => {
+    const required = BROWSER_OPERATION_REQUIRED_ACTION[op]
+    if (required === undefined) return true
+    return required === "write"
+  })
+  return offending.length === 0 ? { ok: true } : { ok: false, offending }
+}
+
 // Operation lifecycle statuses. awaiting_authorization is new in v3 (§6).
 export const DEVICE_OPERATION_STATUSES = [
   "created",
