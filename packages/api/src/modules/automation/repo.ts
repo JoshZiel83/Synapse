@@ -43,6 +43,7 @@ import type {
   AutomationEventSourceRow,
   AutomationExecutionWithOccurrenceDbRow,
   AutomationExecutionWithOccurrenceRow,
+  AutomationExecutionRow,
   AutomationIntegrationBindingRow,
   AutomationOccurrenceDbRow,
   AutomationOccurrenceRow,
@@ -54,6 +55,7 @@ import type {
   AutomationTriggerRow,
   AutomationWebhookEndpointDbRow,
   AutomationWebhookEndpointRow,
+  AutomationWebhookEventSourceRow,
 } from "./repo.types.js"
 
 export type {
@@ -75,6 +77,7 @@ export type {
   AutomationTriggerRow,
   AutomationWebhookEndpointDbRow,
   AutomationWebhookEndpointRow,
+  AutomationWebhookEventSourceRow,
 } from "./repo.types.js"
 
 /**
@@ -265,6 +268,73 @@ type AutomationIntegrationBindingRawRow = {
   metadata: unknown
   createdAt: Date
   updatedAt: Date
+}
+
+type AutomationWebhookEventSourceRawRow =
+  AutomationEventSourceComponentRawRow & {
+    endpointSecretCiphertext: string
+    endpointName: string
+    endpointId: string
+  }
+
+type AutomationOccurrenceRawRow = {
+  id: string
+  workspaceId: string
+  sourceKind: AutomationOccurrenceDbRow["source_kind"]
+  eventSourceId: string | null
+  eventSourceKey?: string | null
+  eventSourceName?: string | null
+  eventProviderRef?: string | null
+  eventWebhookEndpointId?: string | null
+  eventIntegrationBindingId?: string | null
+  eventIntegrationInstallationId?: string | null
+  eventIntegrationProvider?: AutomationOccurrenceDbRow["event_integration_provider"]
+  eventIntegrationIngressKind?: AutomationOccurrenceDbRow["event_integration_ingress_kind"]
+  eventIntegrationTargetKind?: AutomationOccurrenceDbRow["event_integration_target_kind"]
+  eventIntegrationTargetId?: string | null
+  eventIntegrationTargetLabel?: string | null
+  eventIntegrationWebhookEndpointId?: string | null
+  eventExternalSubscriptionId?: string | null
+  sourceLocator: string | null
+  matchKey: string | null
+  dedupeKey: string | null
+  sourceSnapshot: unknown
+  payload: unknown
+  occurredAt: Date
+  createdAt: Date
+}
+
+type AutomationExecutionRawRow = {
+  id: string
+  workspaceId: string
+  ruleId: string
+  executionRuleName?: string | null
+  occurrenceId: string
+  occurrenceOccurredAt?: Date | null
+  occurrenceSourceKind?: AutomationExecutionRow["occurrence_source_kind"]
+  occurrenceEventSourceName?: string | null
+  occurrenceDisplayTitle?: string | null
+  occurrenceDisplaySummary?: string | null
+  occurrenceDisplayDescription?: string | null
+  status: AutomationExecutionRow["status"]
+  attemptCount: number
+  errorMessage: string | null
+  startedAt: Date | null
+  completedAt: Date | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+type AutomationExecutionWithOccurrenceRawRow = AutomationExecutionRawRow & {
+  occurrenceSourceKind?: AutomationExecutionWithOccurrenceDbRow["occurrence_source_kind"]
+  eventSourceKey?: string | null
+  eventProviderRef?: string | null
+  sourceSnapshot?: unknown
+  payload?: unknown
+  sourceLocator?: string | null
+  matchKey?: string | null
+  dedupeKey?: string | null
+  occurrenceCreatedAt?: Date | null
 }
 
 export function decodeAutomationEventSourceMetadata(row: {
@@ -629,6 +699,91 @@ function toAutomationIntegrationBindingRow(
   }
 }
 
+function toAutomationWebhookEventSourceRow(
+  row: AutomationWebhookEventSourceRawRow
+): AutomationWebhookEventSourceRow {
+  return {
+    ...normalizeAutomationEventSourceRow(toAutomationEventSourceDbRow(row)),
+    endpoint_secret_ciphertext: row.endpointSecretCiphertext,
+    endpoint_name: row.endpointName,
+    endpoint_id: row.endpointId,
+  }
+}
+
+function toAutomationOccurrenceDbRow(
+  row: AutomationOccurrenceRawRow
+): AutomationOccurrenceDbRow {
+  return {
+    id: row.id,
+    workspace_id: row.workspaceId,
+    source_kind: row.sourceKind,
+    event_source_id: row.eventSourceId,
+    event_source_key: row.eventSourceKey,
+    event_source_name: row.eventSourceName,
+    event_provider_ref: row.eventProviderRef,
+    event_webhook_endpoint_id: row.eventWebhookEndpointId,
+    event_integration_binding_id: row.eventIntegrationBindingId,
+    event_integration_installation_id: row.eventIntegrationInstallationId,
+    event_integration_provider: row.eventIntegrationProvider,
+    event_integration_ingress_kind: row.eventIntegrationIngressKind,
+    event_integration_target_kind: row.eventIntegrationTargetKind,
+    event_integration_target_id: row.eventIntegrationTargetId,
+    event_integration_target_label: row.eventIntegrationTargetLabel,
+    event_integration_webhook_endpoint_id:
+      row.eventIntegrationWebhookEndpointId,
+    event_external_subscription_id: row.eventExternalSubscriptionId,
+    source_locator: row.sourceLocator,
+    match_key: row.matchKey,
+    dedupe_key: row.dedupeKey,
+    source_snapshot: row.sourceSnapshot,
+    payload: row.payload,
+    occurred_at: row.occurredAt,
+    created_at: row.createdAt,
+  }
+}
+
+function toAutomationExecutionRow(
+  row: AutomationExecutionRawRow
+): AutomationExecutionRow {
+  return {
+    id: row.id,
+    workspace_id: row.workspaceId,
+    rule_id: row.ruleId,
+    execution_rule_name: row.executionRuleName,
+    occurrence_id: row.occurrenceId,
+    occurrence_occurred_at: row.occurrenceOccurredAt,
+    occurrence_source_kind: row.occurrenceSourceKind,
+    occurrence_event_source_name: row.occurrenceEventSourceName,
+    occurrence_display_title: row.occurrenceDisplayTitle,
+    occurrence_display_summary: row.occurrenceDisplaySummary,
+    occurrence_display_description: row.occurrenceDisplayDescription,
+    status: row.status,
+    attempt_count: row.attemptCount,
+    error_message: row.errorMessage,
+    started_at: row.startedAt,
+    completed_at: row.completedAt,
+    created_at: row.createdAt,
+    updated_at: row.updatedAt,
+  }
+}
+
+function toAutomationExecutionWithOccurrenceDbRow(
+  row: AutomationExecutionWithOccurrenceRawRow
+): AutomationExecutionWithOccurrenceDbRow {
+  return {
+    ...toAutomationExecutionRow(row),
+    occurrence_source_kind: row.occurrenceSourceKind,
+    event_source_key: row.eventSourceKey,
+    event_provider_ref: row.eventProviderRef,
+    source_snapshot: row.sourceSnapshot,
+    payload: row.payload,
+    source_locator: row.sourceLocator,
+    match_key: row.matchKey,
+    dedupe_key: row.dedupeKey,
+    occurrence_created_at: row.occurrenceCreatedAt,
+  }
+}
+
 export async function loadAutomationRuleComponentRows(
   workspaceId: string,
   ruleIds: string[],
@@ -834,6 +989,237 @@ export async function listAutomationEventSourceRows(params: {
     values
   )
   return result.rows.map(toAutomationEventSourceDbRow)
+}
+
+export async function selectWebhookAutomationEventSourceByPathToken(params: {
+  pathToken: string
+  sourceKey: string
+  executor?: Executor
+}): Promise<AutomationWebhookEventSourceRow | null> {
+  const result = await resolveQueryRunner(
+    params.executor
+  ).run<AutomationWebhookEventSourceRawRow>(
+    `SELECT ${automationEventSourceSelectClause("aes", "aib")},
+            awe.secret_ciphertext AS endpoint_secret_ciphertext,
+            awe.name AS endpoint_name,
+            awe.id AS endpoint_id
+     FROM automation_event_sources aes
+     ${automationEventSourceJoinClause("aes", "aib")}
+     JOIN automation_webhook_endpoints awe
+       ON awe.id = aes.webhook_endpoint_id
+     WHERE awe.path_token = $1::text
+       AND awe.status = 'active'
+       AND awe.deleted_at IS NULL
+       AND aes.provider_kind = 'webhook'
+       AND aes.source_key = $2::text
+       AND aes.status IN ('active', 'deprecated')
+       AND aes.deleted_at IS NULL
+     LIMIT 1`,
+    [params.pathToken, params.sourceKey]
+  )
+  const row = result.rows[0]
+  return row ? toAutomationWebhookEventSourceRow(row) : null
+}
+
+export async function listIntegrationAutomationEventSourceRowsByWebhookPathToken(params: {
+  pathToken: string
+  executor?: Executor
+}): Promise<AutomationWebhookEventSourceRow[]> {
+  const result = await resolveQueryRunner(
+    params.executor
+  ).run<AutomationWebhookEventSourceRawRow>(
+    `SELECT ${automationEventSourceSelectClause("aes", "aib")},
+            awe.secret_ciphertext AS endpoint_secret_ciphertext,
+            awe.name AS endpoint_name,
+            awe.id AS endpoint_id
+     FROM automation_integration_bindings aib
+     JOIN automation_webhook_endpoints awe
+       ON awe.id = aib.webhook_endpoint_id
+     JOIN automation_event_sources aes
+       ON aes.integration_binding_id = aib.id
+     WHERE awe.path_token = $1::text
+       AND awe.status = 'active'
+       AND awe.deleted_at IS NULL
+       AND aib.ingress_kind = 'webhook'
+       AND aib.deleted_at IS NULL
+       AND aes.provider_kind = 'integration'
+       AND aes.status IN ('active', 'deprecated')
+       AND aes.deleted_at IS NULL
+     ORDER BY aes.created_at ASC`,
+    [params.pathToken]
+  )
+  return result.rows.map(toAutomationWebhookEventSourceRow)
+}
+
+export async function listAutomationRuleIds(params: {
+  workspaceId: string
+  filters?: {
+    status?: AutomationRuleDbRow["status"]
+    category?: AutomationRuleDbRow["category"]
+    conversationId?: string
+  }
+  executor?: Executor
+}): Promise<string[]> {
+  const values: unknown[] = [params.workspaceId]
+  let where = "workspace_id = $1::uuid AND deleted_at IS NULL"
+
+  if (params.filters?.status) {
+    values.push(params.filters.status)
+    where += ` AND status = $${values.length}::automation_rules_status`
+  }
+  if (params.filters?.category) {
+    values.push(params.filters.category)
+    where += ` AND category = $${values.length}::automation_rules_category`
+  }
+  if (params.filters?.conversationId) {
+    values.push(params.filters.conversationId)
+    where += ` AND conversation_id = $${values.length}::uuid`
+  }
+
+  const result = await resolveQueryRunner(params.executor).run<{ id: string }>(
+    `SELECT id
+     FROM automation_rules
+     WHERE ${where}
+     ORDER BY created_at DESC`,
+    values
+  )
+  return result.rows.map((row) => row.id)
+}
+
+export async function listAutomationOccurrenceRows(params: {
+  workspaceId: string
+  filters?: {
+    eventSourceId?: string
+    limit?: number
+  }
+  executor?: Executor
+}): Promise<AutomationOccurrenceDbRow[]> {
+  const values: unknown[] = [params.workspaceId]
+  let where = "ao.workspace_id = $1::uuid"
+
+  if (params.filters?.eventSourceId) {
+    values.push(params.filters.eventSourceId)
+    where += ` AND ao.event_source_id = $${values.length}::uuid`
+  }
+
+  values.push(Math.max(1, Math.min(params.filters?.limit || 50, 200)))
+  const result = await resolveQueryRunner(
+    params.executor
+  ).run<AutomationOccurrenceRawRow>(
+    `SELECT ao.*,
+            aes.source_key AS event_source_key,
+            aes.name AS event_source_name,
+            aes.provider_ref AS event_provider_ref,
+            aes.webhook_endpoint_id AS event_webhook_endpoint_id,
+            aes.integration_binding_id AS event_integration_binding_id,
+            aib.installation_id AS event_integration_installation_id,
+            aib.provider AS event_integration_provider,
+            aib.ingress_kind AS event_integration_ingress_kind,
+            aib.target_kind AS event_integration_target_kind,
+            aib.target_id AS event_integration_target_id,
+            aib.target_label AS event_integration_target_label,
+            aib.webhook_endpoint_id AS event_integration_webhook_endpoint_id,
+            aib.external_subscription_id AS event_external_subscription_id
+     FROM automation_occurrences ao
+     LEFT JOIN automation_event_sources aes ON aes.id = ao.event_source_id
+     LEFT JOIN automation_integration_bindings aib ON aib.id = aes.integration_binding_id
+     WHERE ${where}
+     ORDER BY ao.created_at DESC
+     LIMIT $${values.length}`,
+    values
+  )
+  return result.rows.map(toAutomationOccurrenceDbRow)
+}
+
+export async function claimPendingAutomationExecutionRow(
+  executionId: string,
+  executor?: Executor
+): Promise<AutomationExecutionRow | null> {
+  const result = await resolveQueryRunner(
+    executor
+  ).run<AutomationExecutionRawRow>(
+    `UPDATE automation_executions
+     SET status = 'running',
+         attempt_count = attempt_count + 1,
+         started_at = COALESCE(started_at, NOW())
+     WHERE id = $1::uuid
+       AND status = 'pending'
+     RETURNING *`,
+    [executionId]
+  )
+  const row = result.rows[0]
+  return row ? toAutomationExecutionRow(row) : null
+}
+
+export async function selectAutomationOccurrenceRow(
+  occurrenceId: string,
+  executor?: Executor
+): Promise<AutomationOccurrenceDbRow | null> {
+  const result = await resolveQueryRunner(
+    executor
+  ).run<AutomationOccurrenceRawRow>(
+    `SELECT ao.*,
+            aes.source_key AS event_source_key,
+            aes.name AS event_source_name,
+            aes.provider_ref AS event_provider_ref,
+            aes.webhook_endpoint_id AS event_webhook_endpoint_id,
+            aes.integration_binding_id AS event_integration_binding_id,
+            aib.installation_id AS event_integration_installation_id,
+            aib.provider AS event_integration_provider,
+            aib.ingress_kind AS event_integration_ingress_kind,
+            aib.target_kind AS event_integration_target_kind,
+            aib.target_id AS event_integration_target_id,
+            aib.target_label AS event_integration_target_label,
+            aib.webhook_endpoint_id AS event_integration_webhook_endpoint_id,
+            aib.external_subscription_id AS event_external_subscription_id
+     FROM automation_occurrences ao
+     LEFT JOIN automation_event_sources aes ON aes.id = ao.event_source_id
+     LEFT JOIN automation_integration_bindings aib ON aib.id = aes.integration_binding_id
+     WHERE ao.id = $1::uuid
+     LIMIT 1`,
+    [occurrenceId]
+  )
+  const row = result.rows[0]
+  return row ? toAutomationOccurrenceDbRow(row) : null
+}
+
+export async function listAutomationExecutionRows(params: {
+  workspaceId: string
+  ruleId: string
+  limit?: number
+  executor?: Executor
+}): Promise<AutomationExecutionWithOccurrenceDbRow[]> {
+  const result = await resolveQueryRunner(
+    params.executor
+  ).run<AutomationExecutionWithOccurrenceRawRow>(
+    `SELECT ae.*,
+            ar.name AS execution_rule_name,
+            ao.occurred_at AS occurrence_occurred_at,
+            ao.source_kind AS occurrence_source_kind,
+            aes.name AS occurrence_event_source_name,
+            aes.source_key AS event_source_key,
+            aes.provider_ref AS event_provider_ref,
+            ao.source_snapshot,
+            ao.payload,
+            ao.source_locator,
+            ao.match_key,
+            ao.dedupe_key,
+            ao.created_at AS occurrence_created_at
+     FROM automation_executions ae
+     LEFT JOIN automation_rules ar ON ar.id = ae.rule_id
+     LEFT JOIN automation_occurrences ao ON ao.id = ae.occurrence_id
+     LEFT JOIN automation_event_sources aes ON aes.id = ao.event_source_id
+     WHERE ae.workspace_id = $1::uuid
+       AND ae.rule_id = $2::uuid
+     ORDER BY ae.created_at DESC
+     LIMIT $3`,
+    [
+      params.workspaceId,
+      params.ruleId,
+      Math.max(1, Math.min(params.limit || 50, 200)),
+    ]
+  )
+  return result.rows.map(toAutomationExecutionWithOccurrenceDbRow)
 }
 
 // ---------------------------------------------------------------------------

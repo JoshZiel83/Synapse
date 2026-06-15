@@ -5,12 +5,17 @@ import {
   AUTOMATION_CREATOR_KIND,
   AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS,
   AUTOMATION_EVENT_SOURCE_STATUSES,
+  AUTOMATION_EXECUTION_STATUS,
+  AUTOMATION_INTEGRATION_INGRESS_KINDS,
+  AUTOMATION_INTEGRATION_PROVIDERS,
+  AUTOMATION_INTEGRATION_TARGET_KINDS,
   AUTOMATION_RULE_CATEGORY,
   AUTOMATION_RULE_STATUSES,
   AUTOMATION_SCHEDULE_KINDS,
   AUTOMATION_TARGET_POLICIES,
   AUTOMATION_TRIGGER_KINDS,
   AUTOMATION_TRIGGER_SOURCE_KINDS,
+  AUTOMATION_WEBHOOK_ENDPOINT_STATUS,
   CONVERSATION_KIND,
   INVITE_TRUST_LEVELS,
   SUBJECT_KIND,
@@ -19,6 +24,7 @@ import {
 import { withTestDb } from "../../test/helpers/db.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
 import {
+  claimPendingAutomationExecutionRow,
   decodeAutomationEventSourceMetadata,
   decodeAutomationTriggerMatcher,
   getAutomationEventSourceRow,
@@ -29,9 +35,13 @@ import {
   insertAutomationTriggerRow,
   insertAutomationWebhookEndpointReturningRow,
   insertIntegrationBindingRow,
+  listAutomationExecutionRows,
   listActiveEventSubscriptionRuleRowsByEventSource,
   listAutomationEventSourceRows,
+  listAutomationOccurrenceRows,
+  listAutomationRuleIds,
   listAutomationWebhookEndpointRows,
+  listIntegrationAutomationEventSourceRowsByWebhookPathToken,
   loadAutomationRuleComponentRows,
   lockDueAutomationScheduleRows,
   normalizeAutomationDeliveryRow,
@@ -44,9 +54,11 @@ import {
   normalizeAutomationWebhookEndpointRow,
   pauseAutomationRuleRowsForEventSource,
   persistAutomationDeliveryTargets,
+  selectAutomationOccurrenceRow,
   selectAutomationIntegrationBindingRow,
   selectAutomationWebhookEndpointRow,
   selectExistingAutomationIntegrationBindingRow,
+  selectWebhookAutomationEventSourceByPathToken,
   updateAutomationTriggerRow,
 } from "./repo.js"
 import type {
@@ -367,6 +379,251 @@ test("automation repo helpers own integration binding read queries", async () =>
     assert.equal(existing?.external_subscription_id, "sub-1")
   })
 })
+
+test(
+  "automation repo helpers own webhook source and execution list queries",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const { memberId, workspaceId, conversationId, participantId } =
+        await insertAutomationRuleFixture(db)
+      const directEndpointId = crypto.randomUUID()
+      const directPathToken = `direct-${crypto.randomUUID()}`
+      const directSourceId = crypto.randomUUID()
+      const directSourceKey = `direct.${crypto.randomUUID()}`
+
+      await insertAutomationWebhookEndpointReturningRow(
+        {
+          id: directEndpointId,
+          workspaceId,
+          name: "direct webhook",
+          status: AUTOMATION_WEBHOOK_ENDPOINT_STATUS.ACTIVE,
+          pathToken: directPathToken,
+          secretCiphertext: "direct-secret",
+          secretHint: "hint",
+          metadata: { endpoint: "direct" },
+          createdByWorkspaceMemberId: memberId,
+        },
+        db
+      )
+
+      await insertAutomationEventSourceRow(
+        {
+          id: directSourceId,
+          workspaceId,
+          providerKind: AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS[1],
+          providerRef: null,
+          webhookEndpointId: directEndpointId,
+          integrationBindingId: null,
+          sourceKey: directSourceKey,
+          name: "direct source",
+          description: "",
+          recommendedUsage: "",
+          payloadSchema: JSON.stringify({ direct: true }),
+          examplePayload: JSON.stringify({ direct: "event" }),
+          status: AUTOMATION_EVENT_SOURCE_STATUSES[0],
+          createdByKind: AUTOMATION_CREATOR_KIND.WORKSPACE_MEMBER,
+          createdByWorkspaceMemberId: memberId,
+          createdByActorId: null,
+          createdBySessionId: null,
+          metadata: JSON.stringify({ source: "direct" }),
+        },
+        db
+      )
+
+      const directSource = await selectWebhookAutomationEventSourceByPathToken({
+        pathToken: directPathToken,
+        sourceKey: directSourceKey,
+        executor: db,
+      })
+      assert.equal(directSource?.id, directSourceId)
+      assert.equal(directSource?.workspace_id, workspaceId)
+      assert.equal(directSource?.endpoint_id, directEndpointId)
+      assert.equal(directSource?.endpoint_secret_ciphertext, "direct-secret")
+      assert.deepEqual(directSource?.payload_schema, { direct: true })
+
+      const integrationEndpointId = crypto.randomUUID()
+      const integrationPathToken = `integration-${crypto.randomUUID()}`
+      const bindingId = crypto.randomUUID()
+      const integrationSourceId = crypto.randomUUID()
+      const integrationSourceKey = `integration.${crypto.randomUUID()}`
+      const installationId = await insertPluginInstallationFixture(db, {
+        workspaceId,
+        memberId,
+      })
+
+      await insertAutomationWebhookEndpointReturningRow(
+        {
+          id: integrationEndpointId,
+          workspaceId,
+          name: "integration webhook",
+          status: AUTOMATION_WEBHOOK_ENDPOINT_STATUS.ACTIVE,
+          pathToken: integrationPathToken,
+          secretCiphertext: "integration-secret",
+          secretHint: "hint",
+          metadata: { endpoint: "integration" },
+          createdByWorkspaceMemberId: memberId,
+        },
+        db
+      )
+      await insertIntegrationBindingRow(db, {
+        id: bindingId,
+        workspaceId,
+        installationId,
+        provider: AUTOMATION_INTEGRATION_PROVIDERS[0],
+        ingressKind: AUTOMATION_INTEGRATION_INGRESS_KINDS[0],
+        targetKind: AUTOMATION_INTEGRATION_TARGET_KINDS[0],
+        targetId: "synapse/test",
+        targetLabel: "synapse/test",
+        webhookEndpointId: integrationEndpointId,
+        externalSubscriptionId: "sub-2",
+        metadata: JSON.stringify({ binding: "integration" }),
+      })
+      await insertAutomationEventSourceRow(
+        {
+          id: integrationSourceId,
+          workspaceId,
+          providerKind: AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS[3],
+          providerRef: AUTOMATION_INTEGRATION_PROVIDERS[0],
+          webhookEndpointId: null,
+          integrationBindingId: bindingId,
+          sourceKey: integrationSourceKey,
+          name: "integration source",
+          description: "",
+          recommendedUsage: "",
+          payloadSchema: JSON.stringify({ integration: true }),
+          examplePayload: JSON.stringify({ integration: "event" }),
+          status: AUTOMATION_EVENT_SOURCE_STATUSES[0],
+          createdByKind: AUTOMATION_CREATOR_KIND.WORKSPACE_MEMBER,
+          createdByWorkspaceMemberId: memberId,
+          createdByActorId: null,
+          createdBySessionId: null,
+          metadata: JSON.stringify({ source: "integration" }),
+        },
+        db
+      )
+
+      const integrationSources =
+        await listIntegrationAutomationEventSourceRowsByWebhookPathToken({
+          pathToken: integrationPathToken,
+          executor: db,
+        })
+      assert.deepEqual(
+        integrationSources.map((source) => source.id),
+        [integrationSourceId]
+      )
+      assert.equal(
+        integrationSources[0]?.integration_installation_id,
+        installationId
+      )
+      assert.equal(integrationSources[0]?.endpoint_id, integrationEndpointId)
+      assert.deepEqual(integrationSources[0]?.metadata, {
+        source: "integration",
+      })
+
+      const ruleId = crypto.randomUUID()
+      await insertAutomationRuleRow(db, {
+        id: ruleId,
+        workspaceId,
+        conversationId,
+        category: AUTOMATION_RULE_CATEGORY.EVENT_SUBSCRIPTION,
+        status: AUTOMATION_RULE_STATUSES[0],
+        name: "repo event rule",
+        description: "",
+        createdByParticipantId: participantId,
+        createdBySessionId: null,
+        metadata: JSON.stringify({ rule: true }),
+      })
+
+      const listedRuleIds = await listAutomationRuleIds({
+        workspaceId,
+        filters: {
+          category: AUTOMATION_RULE_CATEGORY.EVENT_SUBSCRIPTION,
+          status: AUTOMATION_RULE_STATUSES[0],
+          conversationId,
+        },
+        executor: db,
+      })
+      assert.deepEqual(listedRuleIds, [ruleId])
+
+      const occurrenceId = crypto.randomUUID()
+      await db
+        .insertInto("automationOccurrences")
+        .values({
+          id: occurrenceId,
+          workspaceId,
+          sourceKind: AUTOMATION_TRIGGER_SOURCE_KINDS[2],
+          eventSourceId: directSourceId,
+          sourceLocator: "webhook/direct",
+          matchKey: "direct-match",
+          dedupeKey: `dedupe-${crypto.randomUUID()}`,
+          sourceSnapshot: JSON.stringify({ ruleName: "repo event rule" }),
+          payload: JSON.stringify({ severity: "critical" }),
+          occurredAt: new Date(),
+        } as any)
+        .execute()
+
+      const occurrenceRows = await listAutomationOccurrenceRows({
+        workspaceId,
+        filters: { eventSourceId: directSourceId, limit: 10 },
+        executor: db,
+      })
+      assert.deepEqual(
+        occurrenceRows.map((row) => row.id),
+        [occurrenceId]
+      )
+      const occurrence = normalizeAutomationOccurrenceRow(occurrenceRows[0]!)
+      assert.equal(occurrence.event_source_key, directSourceKey)
+      assert.deepEqual(occurrence.payload, { severity: "critical" })
+
+      const selectedOccurrence = await selectAutomationOccurrenceRow(
+        occurrenceId,
+        db
+      )
+      assert.equal(selectedOccurrence?.id, occurrenceId)
+      assert.equal(selectedOccurrence?.event_source_name, "direct source")
+
+      const executionId = crypto.randomUUID()
+      await db
+        .insertInto("automationExecutions")
+        .values({
+          id: executionId,
+          workspaceId,
+          ruleId,
+          occurrenceId,
+          status: AUTOMATION_EXECUTION_STATUS.PENDING,
+          attemptCount: 0,
+        } as any)
+        .execute()
+
+      const claimed = await claimPendingAutomationExecutionRow(executionId, db)
+      assert.equal(claimed?.id, executionId)
+      assert.equal(claimed?.status, AUTOMATION_EXECUTION_STATUS.RUNNING)
+      assert.equal(claimed?.attempt_count, 1)
+      assert.ok(claimed?.started_at instanceof Date)
+
+      const executionRows = await listAutomationExecutionRows({
+        workspaceId,
+        ruleId,
+        limit: 10,
+        executor: db,
+      })
+      assert.deepEqual(
+        executionRows.map((row) => row.id),
+        [executionId]
+      )
+      const execution = normalizeAutomationExecutionWithOccurrenceRow(
+        executionRows[0]!
+      )
+      assert.equal(execution.event_source_key, directSourceKey)
+      assert.equal(execution.occurrence_event_source_name, "direct source")
+      assert.deepEqual(execution.source_snapshot, {
+        ruleName: "repo event rule",
+      })
+      assert.deepEqual(execution.payload, { severity: "critical" })
+    })
+  }
+)
 
 test(
   "automation repo helpers own rule trigger writes and delivery targets",

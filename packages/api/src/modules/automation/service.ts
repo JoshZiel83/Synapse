@@ -53,6 +53,7 @@ import { type Executor } from "../../infrastructure/database/kysely.js"
 import {
   appendAutomationAuditLog,
   applyAutomationPolicyAfterTrigger as applyAutomationPolicyAfterTriggerRepo,
+  claimPendingAutomationExecutionRow,
   clearAutomationRuleError,
   existsAutomationEventSourceKey,
   existsAutomationExecution,
@@ -68,8 +69,12 @@ import {
   getAutomationEventSourceRow,
   listActiveIntegrationSourceKeysForBinding as listActiveIntegrationSourceKeysForBindingRepo,
   listActiveEventSubscriptionRuleRowsByEventSource,
+  listAutomationExecutionRows,
   listAutomationEventSourceRows,
+  listAutomationOccurrenceRows,
+  listAutomationRuleIds,
   listAutomationWebhookEndpointRows,
+  listIntegrationAutomationEventSourceRowsByWebhookPathToken,
   loadAutomationRuleComponentRows,
   lockDueAutomationScheduleRows,
   loadAutomationEventSourceAccessBindingRows,
@@ -91,14 +96,15 @@ import {
   resolveQueryRunner,
   revokeAutomationEventSourceAccessBindingById,
   runnerFor,
-  runQuery,
   selectActiveAutomationEventSourceId,
   selectActiveAutomationRuleEventMatchers,
   selectActiveWebhookEndpointId,
+  selectAutomationOccurrenceRow,
   selectAutomationEventSourceReuseRow,
   selectAutomationIntegrationBindingRow,
   selectAutomationWebhookEndpointRow,
   selectExistingAutomationIntegrationBindingRow,
+  selectWebhookAutomationEventSourceByPathToken,
   selectIntegrationEventSourceReuseRow,
   selectWorkspaceOwnerId,
   setAutomationEventSourceStatus,
@@ -155,9 +161,6 @@ import type {
   AutomationDeliveryDbRow,
   AutomationDeliveryRow,
   AutomationEventSourceDbRow,
-  AutomationEventSourceRow,
-  AutomationExecutionRow,
-  AutomationExecutionWithOccurrenceDbRow,
   AutomationIntegrationBindingRow,
   AutomationOccurrenceDbRow,
   AutomationOccurrenceRow,
@@ -360,28 +363,6 @@ import {
   presentTrigger,
   presentWebhookEndpoint,
 } from "./presenter.js"
-
-function automationEventSourceJoinClause(
-  eventSourceAlias = "aes",
-  bindingAlias = "aib"
-) {
-  return `LEFT JOIN automation_integration_bindings ${bindingAlias} ON ${bindingAlias}.id = ${eventSourceAlias}.integration_binding_id`
-}
-
-function automationEventSourceSelectClause(
-  eventSourceAlias = "aes",
-  bindingAlias = "aib"
-) {
-  return `${eventSourceAlias}.*,
-          ${bindingAlias}.installation_id AS integration_installation_id,
-          ${bindingAlias}.provider AS integration_provider,
-          ${bindingAlias}.ingress_kind AS integration_ingress_kind,
-          ${bindingAlias}.target_kind AS integration_target_kind,
-          ${bindingAlias}.target_id AS integration_target_id,
-          ${bindingAlias}.target_label AS integration_target_label,
-          ${bindingAlias}.webhook_endpoint_id AS integration_webhook_endpoint_id,
-          ${bindingAlias}.external_subscription_id AS integration_external_subscription_id`
-}
 
 function mergeUniqueIds(values: string[] | undefined) {
   return Array.from(new Set((values || []).filter(Boolean)))
@@ -2015,64 +1996,18 @@ async function getAutomationEventSourceByWebhookPathToken(
   pathToken: string,
   sourceKey: string
 ) {
-  const result = await runQuery<
-    AutomationEventSourceRow & {
-      endpoint_secret_ciphertext: string
-      endpoint_name: string
-      endpoint_id: string
-    }
-  >(
-    `SELECT aes.*,
-            awe.secret_ciphertext AS endpoint_secret_ciphertext,
-            awe.name AS endpoint_name,
-            awe.id AS endpoint_id
-     FROM automation_event_sources aes
-     JOIN automation_webhook_endpoints awe
-       ON awe.id = aes.webhook_endpoint_id
-     WHERE awe.path_token = $1
-       AND awe.status = 'active'
-       AND awe.deleted_at IS NULL
-       AND aes.provider_kind = 'webhook'
-       AND aes.source_key = $2
-       AND aes.status IN ('active', 'deprecated')
-       AND aes.deleted_at IS NULL
-     LIMIT 1`,
-    [pathToken, sourceKey]
-  )
-  return result.rows[0] || null
+  return selectWebhookAutomationEventSourceByPathToken({
+    pathToken,
+    sourceKey,
+  })
 }
 
 async function listIntegrationEventSourcesByWebhookPathToken(
   pathToken: string
 ) {
-  const result = await runQuery<
-    AutomationEventSourceRow & {
-      endpoint_secret_ciphertext: string
-      endpoint_name: string
-      endpoint_id: string
-    }
-  >(
-    `SELECT ${automationEventSourceSelectClause("aes", "aib")},
-            awe.secret_ciphertext AS endpoint_secret_ciphertext,
-            awe.name AS endpoint_name,
-            awe.id AS endpoint_id
-     FROM automation_integration_bindings aib
-     JOIN automation_webhook_endpoints awe
-       ON awe.id = aib.webhook_endpoint_id
-     JOIN automation_event_sources aes
-       ON aes.integration_binding_id = aib.id
-     WHERE awe.path_token = $1
-       AND awe.status = 'active'
-       AND awe.deleted_at IS NULL
-       AND aib.ingress_kind = 'webhook'
-       AND aib.deleted_at IS NULL
-       AND aes.provider_kind = 'integration'
-       AND aes.status IN ('active', 'deprecated')
-       AND aes.deleted_at IS NULL
-     ORDER BY aes.created_at ASC`,
-    [pathToken]
-  )
-  return result.rows
+  return listIntegrationAutomationEventSourceRowsByWebhookPathToken({
+    pathToken,
+  })
 }
 
 async function expireAutomationRules(params: {
@@ -2695,33 +2630,8 @@ export async function listAutomationRules(
 ) {
   await syncAutomationRuleLiveness({ workspaceId })
 
-  const values: unknown[] = [workspaceId]
-  let where = "workspace_id = $1 AND deleted_at IS NULL"
-
-  if (filters?.status) {
-    values.push(filters.status)
-    where += ` AND status = $${values.length}`
-  }
-  if (filters?.category) {
-    values.push(filters.category)
-    where += ` AND category = $${values.length}`
-  }
-  if (filters?.conversationId) {
-    values.push(filters.conversationId)
-    where += ` AND conversation_id = $${values.length}`
-  }
-
-  const result = await runQuery<{ id: string }>(
-    `SELECT id
-     FROM automation_rules
-     WHERE ${where}
-     ORDER BY created_at DESC`,
-    values
-  )
-  return loadAutomationRulesByIds(
-    workspaceId,
-    result.rows.map((row) => row.id)
-  )
+  const ruleIds = await listAutomationRuleIds({ workspaceId, filters })
+  return loadAutomationRulesByIds(workspaceId, ruleIds)
 }
 
 export async function getAutomationRule(workspaceId: string, ruleId: string) {
@@ -2920,40 +2830,9 @@ export async function listAutomationOccurrences(
     limit?: number
   }
 ) {
-  const values: unknown[] = [workspaceId]
-  let where = "ao.workspace_id = $1"
+  const rows = await listAutomationOccurrenceRows({ workspaceId, filters })
 
-  if (filters?.eventSourceId) {
-    values.push(filters.eventSourceId)
-    where += ` AND ao.event_source_id = $${values.length}`
-  }
-
-  values.push(Math.max(1, Math.min(filters?.limit || 50, 200)))
-  const result = await runQuery<AutomationOccurrenceDbRow>(
-    `SELECT ao.*,
-            aes.source_key AS event_source_key,
-            aes.name AS event_source_name,
-            aes.provider_ref AS event_provider_ref,
-            aes.webhook_endpoint_id AS event_webhook_endpoint_id,
-            aes.integration_binding_id AS event_integration_binding_id,
-            aib.installation_id AS event_integration_installation_id,
-            aib.provider AS event_integration_provider,
-            aib.ingress_kind AS event_integration_ingress_kind,
-            aib.target_kind AS event_integration_target_kind,
-            aib.target_id AS event_integration_target_id,
-            aib.target_label AS event_integration_target_label,
-            aib.webhook_endpoint_id AS event_integration_webhook_endpoint_id,
-            aib.external_subscription_id AS event_external_subscription_id
-     FROM automation_occurrences ao
-     LEFT JOIN automation_event_sources aes ON aes.id = ao.event_source_id
-     LEFT JOIN automation_integration_bindings aib ON aib.id = aes.integration_binding_id
-     WHERE ${where}
-     ORDER BY ao.created_at DESC
-     LIMIT $${values.length}`,
-    values
-  )
-
-  return result.rows.map((row) =>
+  return rows.map((row) =>
     presentOccurrence(normalizeAutomationOccurrenceRow(row))
   )
 }
@@ -3290,17 +3169,7 @@ export async function scheduleDueAutomationExecutions(
 export async function processAutomationExecution(
   executionId: string
 ): Promise<ProcessAutomationExecutionResult> {
-  const executionResult = await runQuery<AutomationExecutionRow>(
-    `UPDATE automation_executions
-     SET status = 'running',
-         attempt_count = attempt_count + 1,
-         started_at = COALESCE(started_at, NOW())
-     WHERE id = $1
-       AND status = 'pending'
-     RETURNING *`,
-    [executionId]
-  )
-  const executionRow = executionResult.rows[0]
+  const executionRow = await claimPendingAutomationExecutionRow(executionId)
   if (!executionRow) {
     const exists = await existsAutomationExecution(executionId)
     if (!exists) {
@@ -3313,22 +3182,11 @@ export async function processAutomationExecution(
   }
 
   const execution = presentExecution(executionRow)
-  const occurrenceResult = await runQuery<AutomationOccurrenceDbRow>(
-    `SELECT ao.*,
-            aes.source_key AS event_source_key,
-            aes.name AS event_source_name,
-            aes.provider_ref AS event_provider_ref
-     FROM automation_occurrences
-     ao
-     LEFT JOIN automation_event_sources aes ON aes.id = ao.event_source_id
-     WHERE ao.id = $1
-     LIMIT 1`,
-    [execution.occurrenceId]
+  const occurrenceRow = await selectAutomationOccurrenceRow(
+    execution.occurrenceId
   )
-  const occurrence = occurrenceResult.rows[0]
-    ? presentOccurrence(
-        normalizeAutomationOccurrenceRow(occurrenceResult.rows[0])
-      )
+  const occurrence = occurrenceRow
+    ? presentOccurrence(normalizeAutomationOccurrenceRow(occurrenceRow))
     : null
   if (!occurrence) {
     throw new Error(`Automation occurrence ${execution.occurrenceId} not found`)
@@ -3430,30 +3288,7 @@ export async function listAutomationExecutions(
   ruleId: string,
   limit = 50
 ) {
-  const result = await runQuery<AutomationExecutionWithOccurrenceDbRow>(
-    `SELECT ae.*,
-            ar.name AS execution_rule_name,
-            ao.occurred_at AS occurrence_occurred_at,
-            ao.source_kind AS occurrence_source_kind,
-            aes.name AS occurrence_event_source_name,
-            aes.source_key AS event_source_key,
-            aes.provider_ref AS event_provider_ref,
-            ao.source_snapshot,
-            ao.payload,
-            ao.source_locator,
-            ao.match_key,
-            ao.dedupe_key,
-            ao.created_at AS occurrence_created_at
-     FROM automation_executions ae
-     LEFT JOIN automation_rules ar ON ar.id = ae.rule_id
-     LEFT JOIN automation_occurrences ao ON ao.id = ae.occurrence_id
-     LEFT JOIN automation_event_sources aes ON aes.id = ao.event_source_id
-     WHERE ae.workspace_id = $1
-       AND ae.rule_id = $2
-     ORDER BY ae.created_at DESC
-     LIMIT $3`,
-    [workspaceId, ruleId, Math.max(1, Math.min(limit, 200))]
-  )
+  const rows = await listAutomationExecutionRows({ workspaceId, ruleId, limit })
 
-  return result.rows.map(normalizeAutomationExecutionWithOccurrenceRow)
+  return rows.map(normalizeAutomationExecutionWithOccurrenceRow)
 }

@@ -159,6 +159,12 @@ export type AutomationEventSourceDbRow = Omit<
   metadata: unknown
 }
 
+export type AutomationWebhookEventSourceRow = AutomationEventSourceRow & {
+  endpoint_secret_ciphertext: string
+  endpoint_name: string
+  endpoint_id: string
+}
+
 export type AutomationIntegrationBindingRow = {
   id: string
   workspace_id: string
