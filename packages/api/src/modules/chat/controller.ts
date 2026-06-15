@@ -45,16 +45,10 @@ import {
 import {
   createChatClientInstance,
   createChatConversation,
-  getChatConversationActorRuntimeTurnDetail,
-  getChatBootstrap,
-  getChatConversationMessages,
-  getChatSync,
   isChatServiceError,
   sendChatConversationMessage,
   touchChatClientInstance,
   updateChatConversationReadWatermark,
-  listChatConversations,
-  getChatConversationDetail,
   patchChatConversation,
   addChatConversationParticipants,
   removeChatConversationParticipant,
@@ -65,6 +59,14 @@ import {
   broadcastTypingState,
   retryAssistantMessage,
 } from "./service.js"
+import {
+  getChatBootstrap,
+  getChatConversationActorRuntimeTurnDetail,
+  getChatConversationDetail,
+  getChatConversationMessages,
+  getChatSync,
+  listChatConversations,
+} from "./app-read.js"
 import { respondToChatTask } from "./task-response.js"
 import {
   presentChatBootstrap,

@@ -42,10 +42,8 @@ import {
   upsertAccessSubjectDefault,
 } from "../access/guards.js"
 import { resolveWorkspaceAppGrantRequest } from "../workspace-apps/grant-storage.js"
-import {
-  createChatConversation,
-  listWorkspaceConversationViews,
-} from "../chat/service.js"
+import { createChatConversation } from "../chat/service.js"
+import { listWorkspaceConversationViews } from "../chat/app-read.js"
 import { getWorkspaceMemberIdentity } from "../chat/workspace-identity.js"
 import {
   canonicalizeDirectConversationPair,

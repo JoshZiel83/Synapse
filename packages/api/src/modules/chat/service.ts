@@ -10,17 +10,9 @@ import {
   CONVERSATION_KINDS,
   CONVERSATION_MESSAGE_SUBTYPE,
   CONVERSATION_PARTICIPANT_STATE,
-  CONVERSATION_PARTICIPANT_TYPE,
   normalizeCanonicalContentBlocks,
   parseConversationMessageRef,
   type CanonicalContentBlock,
-  type ActorRuntimeTurnActivityDetail,
-  type ChatConversationItem,
-  type ChatDeviceState,
-  type ChatSyncEvent,
-  type ChatSyncEventPayloadMap,
-  type ChatSyncEventType,
-  type Timestamp,
   type ConversationMessageSubtype,
   type ConversationParticipantType,
   type SessionWakeupSourceParticipantType,
@@ -31,7 +23,6 @@ import type {
   ConversationEventTimelinePolicy,
   ConversationFeedEventPayloadMap,
   ConversationFeedEventType,
-  TaskSummary,
 } from "@synapse/shared/types"
 import { type Executor } from "../../infrastructure/database/kysely.js"
 import { canonicalContentBlocksToDraftParts } from "./message-content.js"
@@ -50,24 +41,15 @@ export { broadcastTypingState } from "./typing.js"
 import {
   chatRootExecutor,
   conversationItemHasTargets,
-  getChatConversationBaseRow,
-  getConversationDeviceState,
   getConversationKind,
   getConversationRecord,
-  getConversationParticipantReadState,
   getVisibleConversationReplyRefRow,
   getVisibleConversationReplyTargetRow,
-  getWorkspaceMemberSyncCursor,
-  listChatConversationBaseRows,
   listChatConversationParticipantRows,
   listConversationItemRowsByIds,
   listNearbyVisibleConversationReplyRefRows,
   listMentionedParticipantIdsForConversationItem,
-  listVisibleConversationMessageRows,
-  listWorkspaceMemberSyncEventRows,
-  withChatRepeatableRead,
   withChatTransaction,
-  type ChatConversationItemRow,
   type ChatParticipantRow,
 } from "./repo.js"
 // Re-exported for existing consumers that import the row DTO from chat/service.
@@ -78,18 +60,11 @@ export {
   appendWorkspaceMemberSyncEventInTransaction,
 } from "./sync-events.js"
 import {
-  presentChatConversationRecord,
-  presentInstant,
-  presentOptionalInstant,
-  type ChatBootstrapRecord,
   type ChatConversationCreateRecord,
   type ChatConversationEnvelopeRecord,
-  type ChatConversationListRecord,
-  type ChatConversationMessagesRecord,
   type ChatConversationRecord,
   type ChatConversationReadWatermarkRecord,
   type ChatConversationSendMessageRecord,
-  type ChatSyncRecord,
 } from "./presenter.js"
 import { createChatError } from "./errors.js"
 export { isChatServiceError, type ChatServiceError } from "./errors.js"
@@ -144,11 +119,7 @@ import {
   type SendChatConversationMessageInput,
   type SendChatConversationMessageDeps,
 } from "./send-message.js"
-import {
-  loadConversationViewUseCase,
-  loadConversationViewsUseCase,
-  type LoadConversationViewsDeps,
-} from "./conversation-view.js"
+import { loadChatConversationView } from "./conversation-view-read.js"
 import { type HydratedConversationItemRecord } from "./conversation-item-hydration.js"
 import {
   participantDisplayName,
@@ -159,7 +130,6 @@ export { isFeedItemVisibleToWorkspaceMember } from "./conversation-feed-visibili
 export { conversationItemDetailToFeedItem } from "./conversation-feed-mapper.js"
 import {
   buildChatConversationItems,
-  buildConversationItemDetails,
   getConversationFeedItemById,
   hydrateConversationItems,
 } from "./conversation-item-read.js"
@@ -169,17 +139,21 @@ export {
   getLastVisibleConversationItem,
   listVisibleConversationItemsForParticipant,
 } from "./conversation-item-read.js"
+export {
+  getChatBootstrap,
+  getChatConversationActorRuntimeTurnDetail,
+  getChatConversationDetail,
+  getChatConversationMessages,
+  getChatSync,
+  listChatConversations,
+  listWorkspaceConversationViews,
+} from "./app-read.js"
 import {
   ensureConversationParticipantUseCase,
   getConversationParticipantUseCase,
   insertParticipant,
   listConversationParticipantsUseCase,
 } from "./participant-roster.js"
-import { enrichTaskForUser } from "../tasks/service.js"
-import {
-  getConversationRuntimeMap,
-  getSessionRuntimeTurnActivityDetail,
-} from "../session/runtime.js"
 
 type ConversationKind = (typeof CONVERSATION_KINDS)[number]
 type ParticipantKind = ConversationParticipantType
@@ -189,8 +163,6 @@ type ItemType = (typeof CONVERSATION_ITEM_TYPES)[number]
 type ItemRole = (typeof CONVERSATION_ITEM_ROLES)[number]
 
 type ParticipantRow = ChatParticipantRow
-
-type ItemRow = ChatConversationItemRow
 
 function toNumber(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -203,85 +175,6 @@ function toNumber(value: unknown): number {
     }
   }
   return 0
-}
-
-function asConversationFeedEventPayload<T extends ConversationFeedEventType>(
-  eventType: T,
-  payload: Record<string, unknown>
-): ConversationFeedEventPayloadMap[T] {
-  return payload as unknown as ConversationFeedEventPayloadMap[T]
-}
-
-function asChatSyncEventPayload<T extends ChatSyncEventType>(
-  eventType: T,
-  payload: Record<string, unknown>
-): ChatSyncEventPayloadMap[T] {
-  return payload as unknown as ChatSyncEventPayloadMap[T]
-}
-
-async function enrichChatConversationItemForViewer(
-  item: ChatConversationItem,
-  userId: string
-): Promise<ChatConversationItem> {
-  if (item.itemType !== "event" || item.subtype !== "task_requested") {
-    return item
-  }
-
-  const payload = item.eventPayload
-  const task =
-    payload && typeof payload === "object" && "task" in payload
-      ? (payload as ConversationFeedEventPayloadMap["task_requested"]).task
-      : undefined
-
-  if (!task) {
-    return item
-  }
-
-  return {
-    ...item,
-    eventPayload: {
-      ...payload,
-      task: await enrichTaskForUser(task as TaskSummary, userId),
-    },
-  } as ChatConversationItem
-}
-
-async function enrichChatConversationItemsForViewer(
-  items: ChatConversationItem[],
-  userId: string
-) {
-  const enriched = await Promise.all(
-    items.map((item) => enrichChatConversationItemForViewer(item, userId))
-  )
-  return enriched
-}
-
-async function enrichChatSyncEventPayloadForViewer<T extends ChatSyncEventType>(
-  eventType: T,
-  payload: ChatSyncEventPayloadMap[T],
-  userId: string
-): Promise<ChatSyncEventPayloadMap[T]> {
-  if (eventType === "conversation.item.created") {
-    const eventPayload =
-      payload as ChatSyncEventPayloadMap["conversation.item.created"]
-    return {
-      ...eventPayload,
-      item: await enrichChatConversationItemForViewer(
-        eventPayload.item,
-        userId
-      ),
-    } as ChatSyncEventPayloadMap[T]
-  }
-
-  if (eventType === "task.updated") {
-    const eventPayload = payload as ChatSyncEventPayloadMap["task.updated"]
-    return {
-      ...eventPayload,
-      task: await enrichTaskForUser(eventPayload.task, userId),
-    } as ChatSyncEventPayloadMap[T]
-  }
-
-  return payload
 }
 
 function isUniqueViolation(error: unknown) {
@@ -309,40 +202,8 @@ async function listConversationParticipantRows(
   )
 }
 
-async function getConversationBaseRow(
-  queryable: Executor,
-  workspaceMemberId: string,
-  conversationId: string
-) {
-  return getChatConversationBaseRow(queryable, {
-    workspaceMemberId,
-    conversationId,
-  })
-}
-
-async function listConversationBaseRows(
-  queryable: Executor,
-  workspaceMemberId: string
-) {
-  return listChatConversationBaseRows(queryable, workspaceMemberId)
-}
-
 async function listItemRowsByIds(queryable: Executor, itemIds: string[]) {
   return listConversationItemRowsByIds(queryable, itemIds)
-}
-
-async function getCurrentSyncCursor(
-  queryable: Executor,
-  workspaceId: string,
-  workspaceMemberId: string
-) {
-  // member_seq is the authoritative client cursor (see getChatSync).
-  return toNumber(
-    await getWorkspaceMemberSyncCursor(queryable, {
-      workspaceId,
-      workspaceMemberId,
-    })
-  )
 }
 
 function parseMentionBlockFromPart(part: ConversationItemPartInput) {
@@ -651,7 +512,7 @@ async function syncConversationUpsertForWorkspaceMembers(
     workspaceId,
     workspaceMemberIds,
     conversationId,
-    { loadConversationView }
+    { loadConversationView: loadChatConversationView }
   )
 }
 
@@ -659,7 +520,7 @@ function chatAddParticipantsDeps(): AddChatConversationParticipantsDeps {
   return {
     ensureConversationParticipant,
     listConversationParticipants,
-    loadConversationView,
+    loadConversationView: loadChatConversationView,
     participantToSummary: participantRowToChatParticipantSummary,
     syncConversationUpsert: syncConversationUpsertForWorkspaceMembers,
   }
@@ -672,51 +533,10 @@ function chatConversationForWorkspaceMemberDeps(): CreateConversationForWorkspac
   }
 }
 
-function chatConversationViewDeps(): LoadConversationViewsDeps {
-  return {
-    getConversationBaseRow,
-    listConversationBaseRows,
-    listConversationParticipants: listConversationParticipantRows,
-    listItemRowsByIds,
-    buildChatConversationItems,
-    participantToSummary: participantRowToChatParticipantSummary,
-  }
-}
-
-async function loadConversationViews(
-  queryable: Executor,
-  workspaceId: string,
-  workspaceMemberId: string,
-  conversationIds?: string[]
-) {
-  return loadConversationViewsUseCase(
-    queryable,
-    workspaceId,
-    workspaceMemberId,
-    conversationIds,
-    chatConversationViewDeps()
-  )
-}
-
-async function loadConversationView(
-  queryable: Executor,
-  workspaceId: string,
-  workspaceMemberId: string,
-  conversationId: string
-) {
-  return loadConversationViewUseCase(
-    queryable,
-    workspaceId,
-    workspaceMemberId,
-    conversationId,
-    chatConversationViewDeps()
-  )
-}
-
 function chatCreateConversationDeps(): CreateChatConversationDeps {
   return {
     insertParticipant,
-    loadConversationView,
+    loadConversationView: loadChatConversationView,
     syncConversationUpsert: syncConversationUpsertForWorkspaceMembers,
   }
 }
@@ -940,19 +760,6 @@ export async function createConversationEvent<
   )
 }
 
-export async function listWorkspaceConversationViews(params: {
-  workspaceId: string
-  workspaceMemberId: string
-  queryable?: Executor
-}) {
-  const conversations = await loadConversationViews(
-    params.queryable ?? rootQueryable(),
-    params.workspaceId,
-    params.workspaceMemberId
-  )
-  return conversations.map(presentChatConversationRecord)
-}
-
 export async function listConversationRealtimeRecipients(
   conversationId: string,
   queryable: Executor = rootQueryable()
@@ -991,280 +798,6 @@ export async function createChatConversation(params: {
   )
 }
 
-export async function getChatBootstrap(params: {
-  workspaceId: string
-  userId: string
-}): Promise<ChatBootstrapRecord> {
-  const identity = await getWorkspaceMemberIdentityOrThrow(
-    params.workspaceId,
-    params.userId
-  )
-  // Read the conversation projection AND the cursor in ONE repeatable-read
-  // snapshot. Otherwise an event committing between the two reads could push
-  // the cursor past a state the projection didn't include (e.g. a removal at
-  // member_seq=N+1 commits after we read conversations but before we read the
-  // cursor) — the client would then tombstone at a boundary that resurrects a
-  // stale higher-seq upsert. A single snapshot makes the projection strictly
-  // consistent with nextInboxCursor.
-  const { conversations, nextInboxCursor } = await withChatRepeatableRead(
-    async (trx) => {
-      const conversations = await loadConversationViews(
-        trx,
-        params.workspaceId,
-        identity.workspaceMemberId
-      )
-      const nextInboxCursor = await getCurrentSyncCursor(
-        trx,
-        params.workspaceId,
-        identity.workspaceMemberId
-      )
-      return { conversations, nextInboxCursor }
-    }
-  )
-
-  return {
-    workspaceMemberId: identity.workspaceMemberId,
-    clientInstanceRequired: true,
-    conversations,
-    nextInboxCursor,
-  }
-}
-
-export async function getChatSync(params: {
-  workspaceId: string
-  userId: string
-  cursor?: number
-  limit?: number
-}): Promise<ChatSyncRecord> {
-  const identity = await getWorkspaceMemberIdentityOrThrow(
-    params.workspaceId,
-    params.userId
-  )
-  const limit = Math.min(Math.max(params.limit ?? 200, 1), 500)
-  const result = await listWorkspaceMemberSyncEventRows(rootQueryable(), {
-    workspaceId: params.workspaceId,
-    workspaceMemberId: identity.workspaceMemberId,
-    cursor: params.cursor ?? 0,
-    limit: limit + 1,
-  })
-
-  const hasMore = result.length > limit
-  const rows = hasMore ? result.slice(0, limit) : result
-  const events: ChatSyncEvent[] = await Promise.all(
-    rows.map(async (row) => {
-      const eventType = row.eventType
-      const payload = asChatSyncEventPayload(eventType, row.payload)
-      const enrichedPayload = await enrichChatSyncEventPayloadForViewer(
-        eventType,
-        payload,
-        identity.userId
-      )
-      return {
-        syncSeq: toNumber(row.syncSeq),
-        memberSeq: toNumber(row.memberSeq),
-        workspaceId: row.workspaceId,
-        workspaceMemberId: row.workspaceMemberId,
-        conversationId: row.conversationId ?? undefined,
-        itemId: row.itemId ?? undefined,
-        eventType,
-        payload: enrichedPayload,
-        occurredAt: presentInstant(row.occurredAt),
-      }
-    })
-  )
-
-  return {
-    events,
-    nextCursor:
-      events.length > 0
-        ? events[events.length - 1]!.memberSeq
-        : (params.cursor ?? 0),
-    hasMore,
-  }
-}
-
-export async function getChatConversationMessages(params: {
-  workspaceId: string
-  userId: string
-  conversationId: string
-  afterSequence?: number
-  beforeSequence?: number
-  limit?: number
-  clientInstanceId: string
-}): Promise<ChatConversationMessagesRecord> {
-  const identity = await getWorkspaceMemberIdentityOrThrow(
-    params.workspaceId,
-    params.userId
-  )
-  const access = await requireConversationAccess(
-    rootQueryable(),
-    params.conversationId,
-    identity.workspaceMemberId
-  )
-
-  await ensureClientInstance(rootQueryable(), {
-    workspaceId: params.workspaceId,
-    workspaceMemberId: identity.workspaceMemberId,
-    clientInstanceId: params.clientInstanceId,
-  })
-
-  const limit = Math.min(Math.max(params.limit ?? 100, 1), 200)
-  let rows: ItemRow[] = []
-  let hasMoreBefore = false
-  let hasMoreAfter = false
-  if (typeof params.afterSequence === "number") {
-    const result = await listVisibleConversationMessageRows(rootQueryable(), {
-      conversationId: params.conversationId,
-      participantId: access.participant.id,
-      afterSequence: params.afterSequence,
-      limit: limit + 1,
-    })
-    hasMoreAfter = result.length > limit
-    hasMoreBefore = params.afterSequence > 0
-    rows = hasMoreAfter ? result.slice(0, limit) : result
-  } else if (typeof params.beforeSequence === "number") {
-    const result = await listVisibleConversationMessageRows(rootQueryable(), {
-      conversationId: params.conversationId,
-      participantId: access.participant.id,
-      beforeSequence: params.beforeSequence,
-      limit: limit + 1,
-    })
-    hasMoreBefore = result.length > limit
-    hasMoreAfter = true
-    rows = (hasMoreBefore ? result.slice(0, limit) : result).reverse()
-  } else {
-    const result = await listVisibleConversationMessageRows(rootQueryable(), {
-      conversationId: params.conversationId,
-      participantId: access.participant.id,
-      limit: limit + 1,
-    })
-    hasMoreBefore = result.length > limit
-    rows = (hasMoreBefore ? result.slice(0, limit) : result).reverse()
-  }
-
-  const items = await buildChatConversationItems(rootQueryable(), rows, {
-    includeTransportDeliveries: true,
-  })
-  const enrichedItems = await enrichChatConversationItemsForViewer(
-    items,
-    identity.userId
-  )
-
-  const conversation = await loadConversationView(
-    rootQueryable(),
-    params.workspaceId,
-    identity.workspaceMemberId,
-    params.conversationId
-  )
-  if (!conversation) {
-    throw createChatError(
-      404,
-      "conversation_not_found",
-      "Conversation not found"
-    )
-  }
-
-  const readState = await getConversationParticipantReadState(rootQueryable(), {
-    conversationId: params.conversationId,
-    participantId: access.participant.id,
-  })
-
-  const row = await getConversationDeviceState(rootQueryable(), {
-    conversationId: params.conversationId,
-    clientInstanceId: params.clientInstanceId,
-  })
-  const deviceState: ChatDeviceState = row
-    ? {
-        clientInstanceId: row.clientInstanceId,
-        conversationId: row.conversationId,
-        lastVisibleSequence: toNumber(row.lastVisibleSequence),
-        lastInboxSeq: toNumber(row.lastInboxSeq),
-        lastOpenedAt: presentOptionalInstant(row.lastOpenedAt),
-        draftPayload: row.draftPayload,
-      }
-    : {
-        clientInstanceId: params.clientInstanceId,
-        conversationId: params.conversationId,
-        lastVisibleSequence: 0,
-        lastInboxSeq: 0,
-        draftPayload: {},
-      }
-
-  const runtimeMap = await getConversationRuntimeMap([params.conversationId])
-  const remoteAgentIds = conversation.participants
-    .filter(
-      (participant) =>
-        participant.participantType ===
-        CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT
-    )
-    .map((participant) => participant.remoteAgentId)
-    .filter((value): value is string => Boolean(value))
-  const runtimeByRemoteAgent: Record<string, any> = {}
-  if (remoteAgentIds.length > 0) {
-    const { loadRemoteAgentRuntimeSnapshot } =
-      await import("../remote-agents/service.js")
-    for (const remoteAgentId of remoteAgentIds) {
-      // Pass the chat's conversationId so the snapshot reflects this
-      // conversation's runtime state, not whichever sibling conversation
-      // happened to win the global LATERAL pick in the snapshot SQL.
-      // Core execution is already per-conversation; this completes the
-      // user-visible isolation.
-      const snapshot = await loadRemoteAgentRuntimeSnapshot(remoteAgentId, {
-        conversationId: params.conversationId,
-      })
-      if (snapshot) {
-        runtimeByRemoteAgent[remoteAgentId] = snapshot
-      }
-    }
-  }
-
-  return {
-    conversation,
-    items: enrichedItems,
-    runtimeByActor: runtimeMap[params.conversationId] || {},
-    runtimeByRemoteAgent,
-    participantReadWatermarkSequence: toNumber(
-      readState?.readWatermarkSequence
-    ),
-    deviceState,
-    hasMoreBefore,
-    hasMoreAfter,
-  }
-}
-
-export async function getChatConversationActorRuntimeTurnDetail(params: {
-  workspaceId: string
-  userId: string
-  conversationId: string
-  actorId: string
-  turnId: string
-}): Promise<ActorRuntimeTurnActivityDetail> {
-  const identity = await getWorkspaceMemberIdentityOrThrow(
-    params.workspaceId,
-    params.userId
-  )
-  await requireConversationAccess(
-    rootQueryable(),
-    params.conversationId,
-    identity.workspaceMemberId
-  )
-
-  const detail = await getSessionRuntimeTurnActivityDetail({
-    conversationId: params.conversationId,
-    actorId: params.actorId,
-    turnId: params.turnId,
-  })
-  if (!detail) {
-    throw createChatError(
-      404,
-      "runtime_turn_not_found",
-      "Current turn activity not found"
-    )
-  }
-
-  return detail
-}
-
 export async function sendChatConversationMessage(
   params: SendChatConversationMessageInput
 ): Promise<ChatConversationSendMessageRecord> {
@@ -1277,58 +810,6 @@ export async function updateChatConversationReadWatermark(
   return updateChatConversationReadWatermarkUseCase(params, {
     syncConversationUpsert: syncConversationUpsertForWorkspaceMembers,
   })
-}
-
-// ============ Stage 3: conversation CRUD ============
-
-export async function listChatConversations(params: {
-  workspaceId: string
-  userId: string
-}): Promise<ChatConversationListRecord> {
-  const identity = await getWorkspaceMemberIdentityOrThrow(
-    params.workspaceId,
-    params.userId
-  )
-  const conversations = await loadConversationViews(
-    rootQueryable(),
-    params.workspaceId,
-    identity.workspaceMemberId
-  )
-  return {
-    workspaceMemberId: identity.workspaceMemberId,
-    conversations,
-  }
-}
-
-export async function getChatConversationDetail(params: {
-  workspaceId: string
-  userId: string
-  conversationId: string
-}): Promise<ChatConversationEnvelopeRecord> {
-  const identity = await getWorkspaceMemberIdentityOrThrow(
-    params.workspaceId,
-    params.userId
-  )
-  const queryable = rootQueryable()
-  await requireConversationAccess(
-    queryable,
-    params.conversationId,
-    identity.workspaceMemberId
-  )
-  const conversation = await loadConversationView(
-    queryable,
-    params.workspaceId,
-    identity.workspaceMemberId,
-    params.conversationId
-  )
-  if (!conversation) {
-    throw createChatError(
-      404,
-      "conversation_not_found",
-      "Conversation not found"
-    )
-  }
-  return { conversation }
 }
 
 export async function patchChatConversation(params: {
@@ -1352,7 +833,7 @@ export async function patchChatConversation(params: {
     },
     {
       listConversationRealtimeRecipients,
-      loadConversationView,
+      loadConversationView: loadChatConversationView,
       syncConversationUpsert: syncConversationUpsertForWorkspaceMembers,
     }
   )
