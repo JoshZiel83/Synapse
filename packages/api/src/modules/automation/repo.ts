@@ -231,6 +231,21 @@ type AutomationEventSourceComponentRawRow = {
   updatedAt: Date
 }
 
+type AutomationWebhookEndpointRawRow = {
+  id: string
+  workspaceId: string
+  name: string
+  status: AutomationWebhookEndpoint["status"]
+  pathToken: string
+  secretCiphertext?: string | null
+  secretHint: string
+  metadata: unknown
+  createdByWorkspaceMemberId: string | null
+  lastReceivedAt: Date | null
+  createdAt: Date
+  updatedAt: Date
+}
+
 export function decodeAutomationEventSourceMetadata(row: {
   metadata: unknown
 }): Record<string, unknown> {
@@ -549,6 +564,25 @@ function toAutomationEventSourceDbRow(
     created_by_session_id: row.createdBySessionId,
     last_triggered_at: row.lastTriggeredAt,
     metadata: row.metadata,
+    created_at: row.createdAt,
+    updated_at: row.updatedAt,
+  }
+}
+
+function toAutomationWebhookEndpointDbRow(
+  row: AutomationWebhookEndpointRawRow
+): AutomationWebhookEndpointDbRow {
+  return {
+    id: row.id,
+    workspace_id: row.workspaceId,
+    name: row.name,
+    status: row.status,
+    path_token: row.pathToken,
+    secret_ciphertext: row.secretCiphertext || undefined,
+    secret_hint: row.secretHint,
+    metadata: row.metadata,
+    created_by_workspace_member_id: row.createdByWorkspaceMemberId,
+    last_received_at: row.lastReceivedAt,
     created_at: row.createdAt,
     updated_at: row.updatedAt,
   }
@@ -1459,6 +1493,42 @@ export async function insertWebhookEndpointRow(
     .execute()
 }
 
+export async function insertAutomationWebhookEndpointReturningRow(
+  values: {
+    id: string
+    workspaceId: string
+    name: string
+    status: AutomationWebhookEndpoint["status"]
+    pathToken: string
+    secretCiphertext: string
+    secretHint: string
+    metadata: Record<string, unknown>
+    createdByWorkspaceMemberId: string
+  },
+  executor?: Executor
+): Promise<AutomationWebhookEndpointDbRow> {
+  const result = await resolveQueryRunner(
+    executor
+  ).run<AutomationWebhookEndpointRawRow>(
+    `INSERT INTO automation_webhook_endpoints
+       (id, workspace_id, name, status, path_token, secret_ciphertext, secret_hint, metadata, created_by_workspace_member_id, created_at, updated_at)
+     VALUES ($1, $2, $3, $4::automation_webhook_endpoints_status, $5, $6, $7, $8, $9, NOW(), NOW())
+     RETURNING *`,
+    [
+      values.id,
+      values.workspaceId,
+      values.name,
+      values.status,
+      values.pathToken,
+      values.secretCiphertext,
+      values.secretHint,
+      JSON.stringify(values.metadata),
+      values.createdByWorkspaceMemberId,
+    ]
+  )
+  return toAutomationWebhookEndpointDbRow(result.rows[0]!)
+}
+
 /** Update an integration binding's external subscription id. */
 export async function updateIntegrationBindingExternalSubscriptionId(
   bindingId: string,
@@ -1474,6 +1544,40 @@ export async function updateIntegrationBindingExternalSubscriptionId(
 // ---------------------------------------------------------------------------
 // Webhook endpoint mutations
 // ---------------------------------------------------------------------------
+
+export async function selectAutomationWebhookEndpointRow(
+  endpointId: string,
+  executor?: Executor
+): Promise<AutomationWebhookEndpointDbRow | null> {
+  const result = await resolveQueryRunner(
+    executor
+  ).run<AutomationWebhookEndpointRawRow>(
+    `SELECT *
+     FROM automation_webhook_endpoints
+     WHERE id = $1::uuid
+     LIMIT 1`,
+    [endpointId]
+  )
+  const row = result.rows[0]
+  return row ? toAutomationWebhookEndpointDbRow(row) : null
+}
+
+export async function listAutomationWebhookEndpointRows(
+  workspaceId: string,
+  executor?: Executor
+): Promise<AutomationWebhookEndpointDbRow[]> {
+  const result = await resolveQueryRunner(
+    executor
+  ).run<AutomationWebhookEndpointRawRow>(
+    `SELECT *
+     FROM automation_webhook_endpoints
+     WHERE workspace_id = $1::uuid
+       AND deleted_at IS NULL
+     ORDER BY created_at DESC`,
+    [workspaceId]
+  )
+  return result.rows.map(toAutomationWebhookEndpointDbRow)
+}
 
 /** Update a webhook endpoint's status. */
 export async function updateWebhookEndpointStatus(

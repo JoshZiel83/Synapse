@@ -62,12 +62,14 @@ import {
   insertAutomationExecutionTarget,
   insertAutomationPolicyRow,
   insertAutomationRuleRow,
+  insertAutomationWebhookEndpointReturningRow,
   insertIntegrationBindingRow,
   insertWebhookEndpointRow,
   getAutomationEventSourceRow,
   listActiveIntegrationSourceKeysForBinding as listActiveIntegrationSourceKeysForBindingRepo,
   listActiveEventSubscriptionRuleRowsByEventSource,
   listAutomationEventSourceRows,
+  listAutomationWebhookEndpointRows,
   loadAutomationRuleComponentRows,
   lockDueAutomationScheduleRows,
   loadAutomationEventSourceAccessBindingRows,
@@ -94,6 +96,7 @@ import {
   selectActiveAutomationRuleEventMatchers,
   selectActiveWebhookEndpointId,
   selectAutomationEventSourceReuseRow,
+  selectAutomationWebhookEndpointRow,
   selectIntegrationEventSourceReuseRow,
   selectWorkspaceOwnerId,
   setAutomationEventSourceStatus,
@@ -161,7 +164,6 @@ import type {
   AutomationRuleRow,
   AutomationTriggerDbRow,
   AutomationTriggerRow,
-  AutomationWebhookEndpointDbRow,
   AutomationWebhookEndpointRow,
 } from "./repo.types.js"
 export type {
@@ -1316,14 +1318,7 @@ export async function listAutomationEventSources(
 }
 
 async function loadAutomationWebhookEndpointSecret(endpointId: string) {
-  const result = await runQuery<AutomationWebhookEndpointDbRow>(
-    `SELECT *
-     FROM automation_webhook_endpoints
-     WHERE id = $1
-     LIMIT 1`,
-    [endpointId]
-  )
-  const row = result.rows[0]
+  const row = await selectAutomationWebhookEndpointRow(endpointId)
   if (!row?.secret_ciphertext) {
     throw new Error(`Webhook endpoint ${endpointId} secret was not found`)
   }
@@ -2925,41 +2920,29 @@ export async function createAutomationWebhookEndpoint(
   }
 ): Promise<AutomationWebhookEndpointCreateResult> {
   const secret = generateSecret()
-  const result = await runQuery<AutomationWebhookEndpointDbRow>(
-    `INSERT INTO automation_webhook_endpoints
-       (id, workspace_id, name, status, path_token, secret_ciphertext, secret_hint, metadata, created_by_workspace_member_id, created_at, updated_at)
-     VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8, NOW(), NOW())
-     RETURNING *`,
-    [
-      uuidv4(),
-      workspaceId,
-      params.name.trim(),
-      crypto.randomBytes(18).toString("hex"),
-      encrypt(secret),
-      secretHint(secret),
-      JSON.stringify(params.metadata || {}),
-      createdByWorkspaceMemberId,
-    ]
-  )
+  const row = await insertAutomationWebhookEndpointReturningRow({
+    id: uuidv4(),
+    workspaceId,
+    name: params.name.trim(),
+    status: "active",
+    pathToken: crypto.randomBytes(18).toString("hex"),
+    secretCiphertext: encrypt(secret),
+    secretHint: secretHint(secret),
+    metadata: params.metadata || {},
+    createdByWorkspaceMemberId,
+  })
 
   return {
     endpoint: presentWebhookEndpoint(
-      normalizeAutomationWebhookEndpointRow(result.rows[0]!)
+      normalizeAutomationWebhookEndpointRow(row)
     ),
     secret,
   }
 }
 
 export async function listAutomationWebhookEndpoints(workspaceId: string) {
-  const result = await runQuery<AutomationWebhookEndpointDbRow>(
-    `SELECT *
-     FROM automation_webhook_endpoints
-     WHERE workspace_id = $1
-       AND deleted_at IS NULL
-     ORDER BY created_at DESC`,
-    [workspaceId]
-  )
-  return result.rows.map(normalizeAutomationWebhookEndpointRow)
+  const rows = await listAutomationWebhookEndpointRows(workspaceId)
+  return rows.map(normalizeAutomationWebhookEndpointRow)
 }
 
 export async function listAutomationOccurrences(

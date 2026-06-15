@@ -27,8 +27,10 @@ import {
   insertAutomationPolicyRow,
   insertAutomationRuleRow,
   insertAutomationTriggerRow,
+  insertAutomationWebhookEndpointReturningRow,
   listActiveEventSubscriptionRuleRowsByEventSource,
   listAutomationEventSourceRows,
+  listAutomationWebhookEndpointRows,
   loadAutomationRuleComponentRows,
   lockDueAutomationScheduleRows,
   normalizeAutomationDeliveryRow,
@@ -41,6 +43,7 @@ import {
   normalizeAutomationWebhookEndpointRow,
   pauseAutomationRuleRowsForEventSource,
   persistAutomationDeliveryTargets,
+  selectAutomationWebhookEndpointRow,
   updateAutomationTriggerRow,
 } from "./repo.js"
 import type {
@@ -228,6 +231,41 @@ test("automation webhook endpoint rows decode metadata at repo exit", () => {
     } as AutomationWebhookEndpointDbRow).metadata,
     { channel: "alerts" }
   )
+})
+
+test("automation repo helpers own webhook endpoint create and list queries", async () => {
+  await withTestDb(async (db) => {
+    const { workspaceId, memberId } = await insertAutomationRuleFixture(db)
+    const endpointId = crypto.randomUUID()
+    const row = await insertAutomationWebhookEndpointReturningRow(
+      {
+        id: endpointId,
+        workspaceId,
+        name: "repo webhook endpoint",
+        status: "active",
+        pathToken: `repo-${crypto.randomUUID()}`,
+        secretCiphertext: "encrypted-secret",
+        secretHint: "hint",
+        metadata: { channel: "alerts" },
+        createdByWorkspaceMemberId: memberId,
+      },
+      db
+    )
+
+    assert.equal(row.id, endpointId)
+    assert.equal(row.workspace_id, workspaceId)
+    assert.deepEqual(parseJsonObject(row.metadata), { channel: "alerts" })
+
+    const loaded = await selectAutomationWebhookEndpointRow(endpointId, db)
+    assert.equal(loaded?.id, endpointId)
+    assert.equal(loaded?.secret_ciphertext, "encrypted-secret")
+
+    const listed = await listAutomationWebhookEndpointRows(workspaceId, db)
+    assert.deepEqual(
+      listed.map((endpoint) => endpoint.id),
+      [endpointId]
+    )
+  })
 })
 
 test(
