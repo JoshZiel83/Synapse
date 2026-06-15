@@ -12,6 +12,7 @@ import {
   CONVERSATION_KIND,
   CONVERSATION_STATUS,
   CONVERSATION_KINDS,
+  CONVERSATION_PARTICIPANT_STATE,
   CONVERSATION_PARTICIPANT_TYPE,
   type ChatConversationMessagesPage,
   type ChatParticipantSummary,
@@ -130,7 +131,7 @@ function computeConversationTitle(params: {
   }
 
   const active = params.participants.filter(
-    (participant) => participant.state === "active"
+    (participant) => participant.state === CONVERSATION_PARTICIPANT_STATE.ACTIVE
   )
   const labels =
     params.kind === CONVERSATION_KIND.DIRECT
@@ -160,7 +161,7 @@ function computeConversationTitle(params: {
 
 function buildConversationPresentation(record: ChatConversationRecord) {
   const activeParticipants = record.participants.filter(
-    (participant) => participant.state === "active"
+    (participant) => participant.state === CONVERSATION_PARTICIPANT_STATE.ACTIVE
   )
   const peer =
     record.kind === CONVERSATION_KIND.DIRECT

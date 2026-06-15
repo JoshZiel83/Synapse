@@ -1,5 +1,8 @@
 import crypto from "node:crypto"
-import { CONVERSATION_PARTICIPANT_TYPE } from "@synapse/shared"
+import {
+  CONVERSATION_PARTICIPANT_STATE,
+  CONVERSATION_PARTICIPANT_TYPE,
+} from "@synapse/shared"
 import {
   createConversationEvent,
   ensureConversationParticipant,
@@ -92,9 +95,12 @@ export async function activateConversationParticipant(params: {
     // is never found, so every IM inbound would re-fire participant_joined.
     transportAddressId: params.transportAddressId,
   })
-  const activated = !existing || existing.state !== "active"
+  const activated =
+    !existing || existing.state !== CONVERSATION_PARTICIPANT_STATE.ACTIVE
   const created = !existing
-  const revived = Boolean(existing && existing.state !== "active")
+  const revived = Boolean(
+    existing && existing.state !== CONVERSATION_PARTICIPANT_STATE.ACTIVE
+  )
 
   const member = await ensureConversationParticipant({
     conversationId: params.conversationId,

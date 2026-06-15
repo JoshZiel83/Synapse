@@ -1,5 +1,6 @@
 import {
   CONVERSATION_KIND,
+  CONVERSATION_PARTICIPANT_STATE,
   CONVERSATION_PARTICIPANT_TYPE,
   CONVERSATION_STATUS,
   isTransportKind,
@@ -112,7 +113,7 @@ function buildConversationPresentation(params: {
     canManageParticipants,
   } = params
   const activeParticipants = participants.filter(
-    (participant) => participant.state === "active"
+    (participant) => participant.state === CONVERSATION_PARTICIPANT_STATE.ACTIVE
   )
   const peer =
     row.kind === CONVERSATION_KIND.DIRECT
@@ -191,7 +192,9 @@ export async function mapConversationSummaryView(
     typeof viewer === "string" ? viewer : viewer.workspaceMemberId
   const conversationParticipants = (
     await listConversationParticipants(row.id)
-  ).filter((participant) => participant.state === "active")
+  ).filter(
+    (participant) => participant.state === CONVERSATION_PARTICIPANT_STATE.ACTIVE
+  )
   const mappedParticipants = conversationParticipants.map(
     mapConversationParticipant
   )
@@ -205,7 +208,7 @@ export async function mapConversationSummaryView(
   )
   const viewerMembership = conversationParticipants.find(
     (participant) =>
-      participant.state === "active" &&
+      participant.state === CONVERSATION_PARTICIPANT_STATE.ACTIVE &&
       participant.participantType ===
         CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
       participant.workspaceMemberId === viewerWorkspaceMemberId

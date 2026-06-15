@@ -657,7 +657,7 @@ async function loadConversationViews(
     )
     const viewerMembership = conversationParticipants.find(
       (participant) =>
-        participant.state === "active" &&
+        participant.state === CONVERSATION_PARTICIPANT_STATE.ACTIVE &&
         participant.participantType ===
           CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
         participant.workspaceMemberId === workspaceMemberId
@@ -887,7 +887,7 @@ function resolveMentionedConversationParticipant(
   mention: ConversationEntityRef
 ) {
   const activeParticipants = participants.filter(
-    (participant) => participant.state === "active"
+    (participant) => participant.state === CONVERSATION_PARTICIPANT_STATE.ACTIVE
   )
   if (mention.participantId) {
     return activeParticipants.find(
@@ -943,7 +943,10 @@ async function canonicalizeConversationItemParts(
           useProfileSnapshot: true,
         }
       )
-    ).filter((participant) => participant.state === "active")
+    ).filter(
+      (participant) =>
+        participant.state === CONVERSATION_PARTICIPANT_STATE.ACTIVE
+    )
   const parts: ConversationItemPartInput[] = []
   const mentionedParticipants: MentionedParticipantRef[] = []
 
@@ -1089,7 +1092,10 @@ async function prepareConversationItemWrite(
             useProfileSnapshot: true,
           }
         ).then((participants) =>
-          participants.filter((participant) => participant.state === "active")
+          participants.filter(
+            (participant) =>
+              participant.state === CONVERSATION_PARTICIPANT_STATE.ACTIVE
+          )
         )
       : []
   const validParticipantIds = new Set(
@@ -1145,7 +1151,7 @@ function resolveActorWakeParticipants(params: {
   const actorParticipants = params.activeParticipants.filter(
     (participant) =>
       participant.id !== params.authorParticipantId &&
-      participant.state === "active" &&
+      participant.state === CONVERSATION_PARTICIPANT_STATE.ACTIVE &&
       typeof participant.actorId === "string" &&
       participant.actorId.length > 0
   )
@@ -1228,7 +1234,10 @@ export async function enqueueActorWakeupsForConversationMessage(params: {
     [params.conversationId],
     { useProfileSnapshot: true }
   ).then((participants) =>
-    participants.filter((participant) => participant.state === "active")
+    participants.filter(
+      (participant) =>
+        participant.state === CONVERSATION_PARTICIPANT_STATE.ACTIVE
+    )
   )
   const authorParticipant = itemRow.authorParticipantId
     ? activeParticipants.find(
@@ -1335,7 +1344,7 @@ async function loadHumanParticipantsForConversation(
   ])
   return participants.filter(
     (participant) =>
-      participant.state === "active" &&
+      participant.state === CONVERSATION_PARTICIPANT_STATE.ACTIVE &&
       typeof participant.workspaceMemberId === "string" &&
       participant.workspaceMemberId.length > 0
   )
@@ -2246,7 +2255,8 @@ export async function createConversationEvent<
       params.conversationId,
     ])
     const activeParticipants = participants.filter(
-      (participant) => participant.state === "active"
+      (participant) =>
+        participant.state === CONVERSATION_PARTICIPANT_STATE.ACTIVE
     )
 
     const timelineTargetParticipantIds =
@@ -3334,7 +3344,10 @@ export async function requireRemoteAgentConversationAccess(
     remoteAgentId,
     queryable,
   })
-  if (!participant || participant.state !== "active") {
+  if (
+    !participant ||
+    participant.state !== CONVERSATION_PARTICIPANT_STATE.ACTIVE
+  ) {
     throw createChatError(
       403,
       "conversation_access_denied",
@@ -3813,7 +3826,7 @@ export async function removeChatConversationParticipant(params: {
         "Participant not found in this conversation"
       )
     }
-    if (target.state !== "active") {
+    if (target.state !== CONVERSATION_PARTICIPANT_STATE.ACTIVE) {
       throw createChatError(
         409,
         "participant_not_active",
