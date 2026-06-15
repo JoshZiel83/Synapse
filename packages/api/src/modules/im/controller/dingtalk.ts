@@ -13,14 +13,16 @@
  */
 
 import type { FastifyInstance } from "fastify"
-import { z } from "zod"
+import { DINGTALK_DEVICE_FLOW_STATUS } from "@synapse/shared"
 import {
+  DingtalkDeviceFlowStartInputSchema,
   DingtalkDeviceFlowPollResponseSchema,
   DingtalkDeviceFlowStartResponseSchema,
+  DingtalkManualAccountCreateInputSchema,
   TransportAccountResponseSchema,
+  type DingtalkDeviceFlowStartParsedInput,
 } from "@synapse/shared/schemas"
 import { appRoute } from "../../../infrastructure/http/route.js"
-import { sendData } from "../../../infrastructure/http/respond.js"
 import { serializeNowInstant } from "../../../infrastructure/datetime.js"
 import { presentDingtalkDeviceFlowSession } from "../presenter.js"
 import type {
@@ -47,13 +49,7 @@ import {
   type DingtalkRegistrationSession,
   type RegistrationSessionStatus,
 } from "../connectors/dingtalk/registration-session-store.js"
-import {
-  requireWorkspaceAction,
-  transportAccountInboundActorCreateShape,
-  transportAccountOwnerCreateShape,
-  validateTransportAccountInboundActorCreate,
-  validateTransportAccountOwnerCreate,
-} from "./_shared.js"
+import { requireWorkspaceAction } from "./_shared.js"
 
 // Number of consecutive provider transient failures we tolerate before
 // flipping the session to `fail`. Five matches the plan; the 1-4 fall
@@ -63,28 +59,8 @@ const TRANSIENT_FAILURE_LIMIT = 5
 
 // ───────────────────────── schemas ─────────────────────────
 
-const accountOwnerInboundShape = {
-  ...transportAccountOwnerCreateShape,
-  ...transportAccountInboundActorCreateShape,
-}
-
-const deviceFlowStartSchema = z
-  .object({
-    displayName: z.string().trim().min(1).max(255),
-    ...accountOwnerInboundShape,
-  })
-  .superRefine(validateTransportAccountOwnerCreate)
-  .superRefine(validateTransportAccountInboundActorCreate)
-
-const manualAccountSchema = z
-  .object({
-    clientId: z.string().trim().min(8).max(255),
-    clientSecret: z.string().trim().min(8).max(255),
-    displayName: z.string().trim().min(1).max(255),
-    ...accountOwnerInboundShape,
-  })
-  .superRefine(validateTransportAccountOwnerCreate)
-  .superRefine(validateTransportAccountInboundActorCreate)
+const deviceFlowStartSchema = DingtalkDeviceFlowStartInputSchema
+const manualAccountSchema = DingtalkManualAccountCreateInputSchema
 
 // ───────────────────────── helpers ─────────────────────────
 
@@ -127,7 +103,7 @@ async function persistSession(
   store: SessionStore,
   session: DingtalkRegistrationSession
 ): Promise<void> {
-  if (session.status === "waiting") {
+  if (session.status === DINGTALK_DEVICE_FLOW_STATUS.WAITING) {
     await store.set(session)
     return
   }
@@ -163,7 +139,7 @@ const defaultSessionStore: SessionStore = {
 
 async function handleStartDeviceFlow(
   workspaceId: string,
-  input: z.infer<typeof deviceFlowStartSchema>,
+  input: DingtalkDeviceFlowStartParsedInput,
   deps: StartRouteDeps
 ): Promise<DingtalkDeviceFlowStartResponse> {
   const provider = deps.provider
@@ -208,7 +184,7 @@ async function handleStartDeviceFlow(
     expiresAt: now + begin.expiresInSeconds * 1000,
     createdAt: now,
     updatedAt: now,
-    status: "waiting",
+    status: DINGTALK_DEVICE_FLOW_STATUS.WAITING,
     providerFailureCount: 0,
     message: "Scan the QR code with the DingTalk mobile app to continue.",
     // pendingForm carries the caller's display/owner/inboundActor choices
@@ -264,7 +240,7 @@ async function handlePollDeviceFlow(
 
   // Terminal-state short-circuit — return summary without re-polling provider
   // or re-running persist. Defends against polling/refresh after success.
-  if (existing.status !== "waiting") {
+  if (existing.status !== DINGTALK_DEVICE_FLOW_STATUS.WAITING) {
     // Special case: status="waiting" in store but past expiry → flip to
     // expired in the grace window before Redis evicts the key.
     return {
@@ -275,7 +251,7 @@ async function handlePollDeviceFlow(
   if (existing.expiresAt <= now) {
     const expired: DingtalkRegistrationSession = {
       ...existing,
-      status: "expired",
+      status: DINGTALK_DEVICE_FLOW_STATUS.EXPIRED,
       message: "Device code expired; please restart the registration flow.",
       updatedAt: now,
     }
@@ -292,7 +268,7 @@ async function handlePollDeviceFlow(
     // re-route to manual.
     const failed: DingtalkRegistrationSession = {
       ...existing,
-      status: "fail",
+      status: DINGTALK_DEVICE_FLOW_STATUS.FAIL,
       message:
         "DingTalk Device Flow is currently disabled; use the manual route",
       updatedAt: now,
@@ -311,7 +287,7 @@ async function handlePollDeviceFlow(
     if (err instanceof RegistrationBusinessError) {
       const failed: DingtalkRegistrationSession = {
         ...existing,
-        status: "fail",
+        status: DINGTALK_DEVICE_FLOW_STATUS.FAIL,
         message: err.message,
         updatedAt: now,
         providerFailureCount: 0,
@@ -327,7 +303,7 @@ async function handlePollDeviceFlow(
       if (nextCount >= TRANSIENT_FAILURE_LIMIT) {
         const failed: DingtalkRegistrationSession = {
           ...existing,
-          status: "fail",
+          status: DINGTALK_DEVICE_FLOW_STATUS.FAIL,
           message: "provider unreachable",
           updatedAt: now,
           providerFailureCount: 0,
@@ -359,7 +335,7 @@ async function handlePollDeviceFlow(
   }
 
   switch (pollResult.status) {
-    case "waiting": {
+    case DINGTALK_DEVICE_FLOW_STATUS.WAITING: {
       const next: DingtalkRegistrationSession = {
         ...existing,
         ...baseUpdate,
@@ -371,8 +347,8 @@ async function handlePollDeviceFlow(
         body: { session: await buildSummary(next, getAccount) },
       }
     }
-    case "fail":
-    case "expired": {
+    case DINGTALK_DEVICE_FLOW_STATUS.FAIL:
+    case DINGTALK_DEVICE_FLOW_STATUS.EXPIRED: {
       const next: DingtalkRegistrationSession = {
         ...existing,
         ...baseUpdate,
@@ -386,12 +362,12 @@ async function handlePollDeviceFlow(
         body: { session: await buildSummary(next, getAccount) },
       }
     }
-    case "success": {
+    case DINGTALK_DEVICE_FLOW_STATUS.SUCCESS: {
       if (!pollResult.clientId || !pollResult.clientSecret) {
         const failed: DingtalkRegistrationSession = {
           ...existing,
           ...baseUpdate,
-          status: "fail",
+          status: DINGTALK_DEVICE_FLOW_STATUS.FAIL,
           message: "provider reported success but did not include credentials",
           updatedAt: now,
         }
@@ -419,7 +395,7 @@ async function handlePollDeviceFlow(
       const next: DingtalkRegistrationSession = {
         ...existing,
         ...baseUpdate,
-        status: "success",
+        status: DINGTALK_DEVICE_FLOW_STATUS.SUCCESS,
         message: "DingTalk account connected.",
         transportAccountId: account.id,
         updatedAt: now,
@@ -434,7 +410,7 @@ async function handlePollDeviceFlow(
       const failed: DingtalkRegistrationSession = {
         ...existing,
         ...baseUpdate,
-        status: "fail",
+        status: DINGTALK_DEVICE_FLOW_STATUS.FAIL,
         message:
           "registration provider returned unrecognized status; please retry or fall back to manual",
         updatedAt: now,
@@ -616,7 +592,7 @@ export default async function imDingtalkController(
     "POST",
     "/api/v1/workspaces/:workspaceId/im/accounts/dingtalk/manual",
     { schema: TransportAccountResponseSchema },
-    async (request, reply): Promise<undefined> => {
+    async (request, reply) => {
       const allowed = await requireWorkspaceAction(
         request,
         reply,
@@ -640,8 +616,8 @@ export default async function imDingtalkController(
           dingtalkRegistrationCompletedAt: nowIso(),
         },
       })
-      sendData(reply, TransportAccountResponseSchema, { account }, 201)
-      return
+      reply.status(201)
+      return { account }
     }
   )
 }

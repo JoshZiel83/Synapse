@@ -1,8 +1,12 @@
 import {
   normalizeCanonicalContentBlocks,
-  parseJsonObject,
   summarizeActorForPrompt,
   summarizeActorForRole,
+  ACTOR_PACKAGE_LINK_STATUS,
+  ACTOR_PACKAGE_SYNC_MODE,
+  MARKETPLACE_ITEM_KIND,
+  MARKETPLACE_SOURCE_TYPE,
+  MARKETPLACE_SYNC_MODE,
   type Actor,
   type ActorDefinition,
   type ActorDoc,
@@ -10,7 +14,6 @@ import {
   type ActorPackageSourceLink,
   type ActorRole,
   type ActorVersion,
-  type ActorVersionDelta,
   type ActorVersionSource,
   type MarketplaceItem,
   type MarketplacePublisher,
@@ -24,10 +27,10 @@ import {
 import { getFileUrlById } from "../files/service.js"
 import {
   normalizeActorDocInputs,
-  parseJsonArray,
+  readDecodedArray,
   sanitizeSpecialties,
   sortDocs,
-} from "./service.js"
+} from "./doc-codec.js"
 import type {
   ActorPackageRow,
   ActorRow,
@@ -39,13 +42,13 @@ function mapCatalogSourceKind(
 ): MarketplaceSourceType {
   switch (sourceKind) {
     case "builtin":
-      return "builtin"
+      return MARKETPLACE_SOURCE_TYPE.BUILTIN
     case "official":
-      return "official"
+      return MARKETPLACE_SOURCE_TYPE.OFFICIAL
     case "workspace":
-      return "workspace_upload"
+      return MARKETPLACE_SOURCE_TYPE.WORKSPACE_UPLOAD
     case "user":
-      return "user_upload"
+      return MARKETPLACE_SOURCE_TYPE.USER_UPLOAD
   }
 }
 
@@ -60,7 +63,7 @@ function buildActorPackageDefinition(row: ActorPackageRow): ActorDefinition {
     canRepresentUser: Boolean(row.actor_can_represent_user),
     docs,
     specialties: sanitizeSpecialties(row.actor_specialties || []),
-    config: parseJsonObject(row.actor_config),
+    config: row.actor_config,
   }
 }
 
@@ -84,12 +87,12 @@ function buildActorPackageRevision(
   row: ActorPackageRow,
   actor: ActorDefinition
 ): MarketplaceVersion {
-  const versionMetadata = parseJsonObject(row.version_metadata)
+  const versionMetadata = row.version_metadata
   const setupGuide = normalizeCanonicalContentBlocks(
-    parseJsonArray(versionMetadata.setupGuide)
+    readDecodedArray(versionMetadata.setupGuide)
   )
   const releaseNotes = normalizeCanonicalContentBlocks(
-    parseJsonArray(versionMetadata.releaseNotes)
+    readDecodedArray(versionMetadata.releaseNotes)
   )
 
   return {
@@ -98,7 +101,7 @@ function buildActorPackageRevision(
     version: row.version_value,
     status: row.version_status,
     manifest: {
-      kind: "actor",
+      kind: MARKETPLACE_ITEM_KIND.ACTOR,
       actorPackage: {
         actor,
         setupGuide,
@@ -137,7 +140,7 @@ export function presentActorPackageRecord(
     id: row.package_id,
     publisherId: row.publisher_id,
     workspaceId: row.package_workspace_id || undefined,
-    kind: "actor",
+    kind: MARKETPLACE_ITEM_KIND.ACTOR,
     slug: row.package_slug,
     displayName: row.package_display_name,
     iconUrl: row.package_icon_file_id
@@ -155,7 +158,7 @@ export function presentActorPackageRecord(
     latestRevisionId: row.version_id,
     defaultReuseScope: "workspace",
     requiresHandshake: false,
-    metadata: parseJsonObject(row.package_metadata),
+    metadata: row.package_metadata,
     createdAt: serializeInstant(row.package_created_at),
     updatedAt: serializeInstant(row.package_updated_at),
     publisher,
@@ -167,10 +170,10 @@ export function presentActorPackageRecord(
     manifest: {
       actor,
       setupGuide: normalizeCanonicalContentBlocks(
-        parseJsonArray(parseJsonObject(row.version_metadata).setupGuide)
+        readDecodedArray(row.version_metadata.setupGuide)
       ),
       releaseNotes: normalizeCanonicalContentBlocks(
-        parseJsonArray(parseJsonObject(row.version_metadata).releaseNotes)
+        readDecodedArray(row.version_metadata.releaseNotes)
       ),
     },
     dependencies: [],
@@ -189,15 +192,19 @@ function buildActorSourceLink(
     Boolean(row.source_latest_version_id) &&
     row.source_catalog_version_id !== row.source_latest_version_id
 
-  let status: ActorPackageSourceLink["status"] = "up_to_date"
-  if ((row.source_sync_mode || "notify") === "detached") {
-    status = "detached"
+  let status: ActorPackageSourceLink["status"] =
+    ACTOR_PACKAGE_LINK_STATUS.UP_TO_DATE
+  if (
+    (row.source_sync_mode || ACTOR_PACKAGE_SYNC_MODE.NOTIFY) ===
+    MARKETPLACE_SYNC_MODE.DETACHED
+  ) {
+    status = ACTOR_PACKAGE_LINK_STATUS.DETACHED
   } else if (hasLocalChanges && hasUpstreamUpdate) {
-    status = "update_available_with_local_changes"
+    status = ACTOR_PACKAGE_LINK_STATUS.UPDATE_AVAILABLE_WITH_LOCAL_CHANGES
   } else if (hasLocalChanges) {
-    status = "diverged"
+    status = ACTOR_PACKAGE_LINK_STATUS.DIVERGED
   } else if (hasUpstreamUpdate) {
-    status = "update_available"
+    status = ACTOR_PACKAGE_LINK_STATUS.UPDATE_AVAILABLE
   }
 
   return {
@@ -216,7 +223,9 @@ function buildActorSourceLink(
     latestVersion: row.source_latest_version || undefined,
     baselineActorVersion,
     syncMode:
-      row.source_sync_mode === "manual_merge" ? "manual_merge" : "notify",
+      row.source_sync_mode === ACTOR_PACKAGE_SYNC_MODE.MANUAL_MERGE
+        ? ACTOR_PACKAGE_SYNC_MODE.MANUAL_MERGE
+        : ACTOR_PACKAGE_SYNC_MODE.NOTIFY,
     hasLocalChanges,
     hasUpstreamUpdate,
     status,
@@ -239,7 +248,7 @@ function buildActorDefinition(
     parent_id: string | null
     can_represent_user: boolean
     specialties: string[] | null
-    config: Record<string, unknown> | string | null
+    config: Record<string, unknown>
   },
   docs: ActorDoc[]
 ): ActorDefinition {
@@ -253,7 +262,7 @@ function buildActorDefinition(
     canRepresentUser: Boolean(row.can_represent_user),
     docs: sortDocs(docs),
     specialties: sanitizeSpecialties(row.specialties || []),
-    config: parseJsonObject(row.config),
+    config: row.config,
   }
 }
 
@@ -309,10 +318,7 @@ export function presentActorVersionRow(
     version: row.version,
     previousVersionId: row.previous_version_id || undefined,
     snapshot: buildActorDefinition(row, docs),
-    delta:
-      typeof row.version_delta === "string"
-        ? (JSON.parse(row.version_delta) as ActorVersionDelta)
-        : row.version_delta || undefined,
+    delta: row.version_delta || undefined,
     createdByWorkspaceMemberId: row.created_by_workspace_member_id || undefined,
     source: buildActorVersionSourceFromRow(row),
     createdAt: serializeInstant(row.created_at),

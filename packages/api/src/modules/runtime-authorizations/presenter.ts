@@ -7,7 +7,6 @@
 // from repo.types.
 
 import {
-  parseJsonObject,
   subjectScopeLabel,
   type SharedRuntimeAuthorizationGrantSpec,
 } from "@synapse/shared"
@@ -51,7 +50,7 @@ export function mapRuntimeAuthorizationGrantCandidate(
     sourceTaskId: row.sourceTaskId || undefined,
     sourceRetryNonce: row.sourceRetryNonce || undefined,
     sourceRuntimeSessionId: row.sourceRuntimeSessionId || undefined,
-    sourceRequestArgs: parseJsonObject(row.sourceRequestArgs),
+    sourceRequestArgs: row.sourceRequestArgs,
     retention: row.retention,
     status: row.status,
     ...(parsedPolicy as SharedRuntimeAuthorizationGrantSpec),

@@ -1,11 +1,14 @@
 import {
   getProviderKindForVendor,
+  isProviderKind,
   SUBJECT_KIND,
+  type ProviderKind,
   type SubjectRef,
 } from "@synapse/shared"
 import { MODEL_GROUP_GRANT_SCOPE } from "@synapse/shared/constants"
 import type {
   ActorModelGroupAssignmentView,
+  ModelGroupDetailView,
   ModelGroupGrantScope,
   ModelGroupGrantView,
   ModelGroupItemVersionView,
@@ -27,8 +30,6 @@ import {
  * (guard-layering r3) and never define map*Row (r4). DB-row types are taken
  * structurally here; this file must NOT import generated/db or use TableRow.
  */
-
-type JsonMap = Record<string, unknown>
 
 export type ModelGroupRow = {
   id: string
@@ -95,17 +96,17 @@ export type ModelGroupItemRow = {
   modelName?: string | null
   maxOutputTokens?: number | null
   capabilityTags?: string[] | null
-  features?: unknown
-  providerOptions?: unknown
+  features: Record<string, unknown> | null
+  providerOptions: Record<string, unknown> | null
   requestTimeoutMs?: number | null
   maxRetries?: number | null
   createdAt: Date | null
   updatedAt: Date | null
 }
 
-export function asObject(value: unknown): JsonMap {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {}
-  return value as JsonMap
+export type ModelGroupDetailRecord = ModelGroupRow & {
+  items: ModelGroupItemRow[]
+  grants: Array<ModelGroupGrantRow & { id: string; group_id: string }>
 }
 
 function subjectKindToModelGroupGrantScope(
@@ -125,6 +126,15 @@ function subjectKindToModelGroupGrantScope(
         `Unsupported subject kind for model_group_grants: ${kind}`
       )
   }
+}
+
+function resolveProviderKind(
+  value: string | null | undefined,
+  vendor?: string | null
+): ProviderKind {
+  if (!value) return getProviderKindForVendor(vendor || "anthropic")
+  if (isProviderKind(value)) return value
+  throw new Error(`Unexpected model provider kind: ${value}`)
 }
 
 export function dbRowToGrantRow(
@@ -161,7 +171,7 @@ export function presentGroupRow(row: ModelGroupRow): ModelGroupView {
     name: row.name,
     description: row.description || "",
     routingStrategy: row.routingStrategy,
-    attemptPolicy: asObject(row.attemptPolicy),
+    attemptPolicy: row.attemptPolicy ?? {},
     isDefault: Boolean(row.isDefault),
     isActive: Boolean(row.isEnabled),
     createdByWorkspaceMemberId: row.createdByWorkspaceMemberId || null,
@@ -174,10 +184,19 @@ export function presentGroupRow(row: ModelGroupRow): ModelGroupView {
   }
 }
 
+export function presentGroupDetail(
+  record: ModelGroupDetailRecord
+): ModelGroupDetailView {
+  return {
+    ...presentGroupRow(record),
+    items: record.items.map(presentGroupItem),
+    grants: record.grants.map(presentGrantRow),
+  }
+}
+
 export function presentGroupItem(row: ModelGroupItemRow): ModelGroupItemView {
-  const features = asObject(row.features)
-  const providerKind =
-    row.providerKind || getProviderKindForVendor(row.vendor || "anthropic")
+  const features = row.features ?? {}
+  const providerKind = resolveProviderKind(row.providerKind, row.vendor)
 
   const itemId = row.itemId ?? row.id
   if (!itemId) {
@@ -201,7 +220,7 @@ export function presentGroupItem(row: ModelGroupItemRow): ModelGroupItemView {
     maxOutputTokens: row.maxOutputTokens || null,
     capabilityTags: row.capabilityTags || [],
     features,
-    providerOptions: asObject(row.providerOptions),
+    providerOptions: row.providerOptions ?? {},
     requestTimeoutMs: row.requestTimeoutMs ?? null,
     maxRetries: row.maxRetries ?? null,
     createdAt: serializeOptionalInstant(row.createdAt) ?? null,
@@ -267,8 +286,8 @@ export type ModelGroupItemVersionRow = {
   modelName: string | null
   maxOutputTokens: number | null
   capabilityTags: string[] | null
-  features?: unknown
-  providerOptions?: unknown
+  features: Record<string, unknown> | null
+  providerOptions: Record<string, unknown> | null
   requestTimeoutMs: number | null
   maxRetries: number | null
   createdAt: Date | null
@@ -290,14 +309,14 @@ export function presentItemVersion(
     id: row.id,
     bindingId: row.bindingId,
     version: row.version ?? 0,
-    providerKind: row.providerKind || getProviderKindForVendor(row.vendor),
+    providerKind: resolveProviderKind(row.providerKind, row.vendor),
     vendor: row.vendor,
     baseUrl: row.baseUrl,
     modelName: row.modelName || null,
     maxOutputTokens: row.maxOutputTokens ?? null,
     capabilityTags: row.capabilityTags || [],
-    features: asObject(row.features),
-    providerOptions: asObject(row.providerOptions),
+    features: row.features ?? {},
+    providerOptions: row.providerOptions ?? {},
     requestTimeoutMs: row.requestTimeoutMs ?? null,
     maxRetries: row.maxRetries ?? null,
     createdAt: serializeOptionalInstant(row.createdAt) ?? null,

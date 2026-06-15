@@ -1,10 +1,12 @@
 import type {
   WorkspaceInvitePublicView,
+  WorkspaceInviteRedeemResult,
   WorkspaceInviteView,
 } from "@synapse/shared"
 import { serializeInstant } from "../../../infrastructure/datetime.js"
 import type {
   WorkspaceInviteRecord,
+  WorkspaceInviteRedeemRecord,
   WorkspaceInviteWithWorkspaceNameRecord,
 } from "./repo.js"
 
@@ -37,6 +39,16 @@ export function presentWorkspaceInvitePublic(
 ): WorkspaceInvitePublicView {
   return {
     token: record.token,
+    workspaceName: record.workspaceName,
+    trustLevel: record.trustLevel,
+  }
+}
+
+export function presentWorkspaceInviteRedeemResult(
+  record: WorkspaceInviteRedeemRecord
+): WorkspaceInviteRedeemResult {
+  return {
+    workspaceId: record.workspaceId,
     workspaceName: record.workspaceName,
     trustLevel: record.trustLevel,
   }

@@ -3,7 +3,6 @@ import type {
   CanonicalArchiveFrame,
   CanonicalArchivePoint,
 } from "@synapse/shared"
-import { parseJsonObjectOrUndefined as parseJsonObject } from "@synapse/shared"
 import { serializeInstant } from "../../infrastructure/datetime.js"
 
 /**
@@ -18,7 +17,7 @@ export type ArchivePointRecord = {
   session_id: string | null
   parent_archive_point_id: string | null
   covers_until_sequence: number | string | null
-  metadata: unknown
+  metadata?: Record<string, unknown>
   created_at: Date
 }
 
@@ -38,7 +37,7 @@ export function presentArchivePoint(
     parentArchivePointId: record.parent_archive_point_id || undefined,
     coversUntilSequence: Number(record.covers_until_sequence || 0),
     frames,
-    metadata: parseJsonObject(record.metadata),
+    metadata: record.metadata,
     createdAt: serializeInstant(record.created_at),
   }
 }

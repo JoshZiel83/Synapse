@@ -1,20 +1,10 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify"
-import { z } from "zod"
 import { formatValidationDetails } from "../../infrastructure/validation-error.js"
 import {
-  ACTOR_DOC_TEMPLATES,
-  ACTOR_DOC_VISIBILITIES,
-  ACTOR_PACKAGE_SYNC_MODES,
-  ACTOR_ROLES,
-  CAPABILITY_ACCESS_TARGET_TYPES,
-  CANONICAL_FILE_CATEGORIES,
   SUBJECT_KIND,
-  WORKSPACE_APP_GRANT_PERMISSIONS,
   actorRef,
   conversationRef,
-  type ActorDoc,
   type CapabilityAccessTarget,
-  type WorkspaceAppGrantPermission,
   remoteAgentRef,
   workspaceMemberRef,
   workspaceRef,
@@ -28,98 +18,20 @@ import type { AccessAction } from "../access/actions.js"
 import * as service from "./service.js"
 import { presentActorVersionRow } from "./presenter.js"
 import {
+  ActorPackageInstallInputSchema,
   ActorPackageInstallResultViewSchema,
+  ActorPackageListViewSchema,
+  ActorPackageListQuerySchema,
   ActorPackageRecordViewSchema,
-  ActorTreeNodeViewSchema,
-  ActorVersionViewSchema,
+  type ActorPackageInitialGrantTargetInput,
+  ActorListViewSchema,
+  ActorTreeViewSchema,
+  ActorVersionListViewSchema,
   ActorViewSchema,
 } from "@synapse/shared/schemas"
 
-const actorDocKeys = new Set(
-  ACTOR_DOC_TEMPLATES.map((template) => template.key)
-)
-
-const contentBlockSchema = z.discriminatedUnion("type", [
-  z.object({
-    id: z.uuid().optional(),
-    type: z.literal("text"),
-    text: z.string(),
-  }),
-  z.object({
-    id: z.uuid().optional(),
-    type: z.literal("file_ref"),
-    sha256: z.string().length(64),
-    path: z.string().min(1).optional(),
-    mimeType: z.string(),
-    name: z.string(),
-    sizeBytes: z.number(),
-    category: z.enum(CANONICAL_FILE_CATEGORIES),
-  }),
-])
-
-const actorDocSchema = z.object({
-  id: z.uuid().optional(),
-  key: z.custom<ActorDoc["key"]>(
-    (value) =>
-      typeof value === "string" &&
-      (actorDocKeys.has(value as any) || value === "custom"),
-    { message: "Invalid actor doc key" }
-  ),
-  title: z.string().min(1).max(255),
-  content: z.array(contentBlockSchema).default([]),
-  visibility: z.enum(ACTOR_DOC_VISIBILITIES),
-  priority: z.number().int().min(-1000).max(1000),
-})
-
-const workspaceAppGrantPermissionSchema = z.enum(
-  WORKSPACE_APP_GRANT_PERMISSIONS
-)
-const initialGrantSubjectSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal(SUBJECT_KIND.WORKSPACE),
-    workspaceId: z.uuid(),
-  }),
-  z.object({
-    kind: z.literal(SUBJECT_KIND.WORKSPACE_MEMBER),
-    memberId: z.uuid(),
-  }),
-  z.object({
-    kind: z.literal(SUBJECT_KIND.CONVERSATION),
-    conversationId: z.uuid(),
-  }),
-  z.object({
-    kind: z.literal(SUBJECT_KIND.ACTOR),
-    actorId: z.uuid(),
-  }),
-  z.object({
-    kind: z.literal(SUBJECT_KIND.REMOTE_AGENT),
-    remoteAgentId: z.uuid(),
-  }),
-])
-const initialGrantTargetSchema = z.object({
-  subject: initialGrantSubjectSchema,
-  scope: z
-    .object({
-      kind: z.literal(SUBJECT_KIND.CONVERSATION),
-      conversationId: z.uuid(),
-    })
-    .optional(),
-})
-const initialGrantSchema = z.object({
-  target: initialGrantTargetSchema,
-  permissions: z.array(workspaceAppGrantPermissionSchema).min(1),
-  conversationTypeMaskOverride: z
-    .number()
-    .int()
-    .min(1)
-    .max(15)
-    .nullable()
-    .optional(),
-  reason: z.string().trim().min(1).optional(),
-})
-
 function toCapabilityAccessTarget(
-  input: z.infer<typeof initialGrantTargetSchema>
+  input: ActorPackageInitialGrantTargetInput
 ): CapabilityAccessTarget {
   const subject =
     input.subject.kind === SUBJECT_KIND.WORKSPACE
@@ -136,14 +48,6 @@ function toCapabilityAccessTarget(
     : undefined
   return scope ? { subject, scope } : { subject }
 }
-
-const installActorPackageSchema = z.object({
-  displayName: z.string().min(1).max(255).optional(),
-  title: z.string().max(255).optional(),
-  parentId: z.uuid().nullable().optional(),
-  syncMode: z.enum(ACTOR_PACKAGE_SYNC_MODES).default("notify"),
-  grants: z.array(initialGrantSchema).optional(),
-})
 
 type WorkspaceParams = { workspaceId: string }
 
@@ -180,7 +84,7 @@ export async function organizationController(app: FastifyInstance) {
     app,
     "GET",
     "/",
-    { schema: z.array(ActorViewSchema) },
+    { schema: ActorListViewSchema },
     async (request) => {
       const { workspaceId } = request.params as WorkspaceParams
       return service.listActors(
@@ -194,7 +98,7 @@ export async function organizationController(app: FastifyInstance) {
     app,
     "GET",
     "/tree",
-    { schema: z.array(ActorTreeNodeViewSchema) },
+    { schema: ActorTreeViewSchema },
     async (request) => {
       const { workspaceId } = request.params as WorkspaceParams
       return service.getFullOrgTree(
@@ -208,10 +112,10 @@ export async function organizationController(app: FastifyInstance) {
     app,
     "GET",
     "/packages",
-    { schema: z.array(ActorPackageRecordViewSchema) },
+    { schema: ActorPackageListViewSchema },
     async (request) => {
       const { workspaceId } = request.params as WorkspaceParams
-      const { search } = request.query as { search?: string }
+      const { search } = ActorPackageListQuerySchema.parse(request.query || {})
       return service.listActorPackages({ workspaceId, search })
     }
   )
@@ -251,7 +155,7 @@ export async function organizationController(app: FastifyInstance) {
       )
       if (!allowed) return undefined
 
-      const parsed = installActorPackageSchema.safeParse(request.body)
+      const parsed = ActorPackageInstallInputSchema.safeParse(request.body)
       if (!parsed.success) {
         reply.status(400).send({
           error: "Validation failed",
@@ -274,7 +178,7 @@ export async function organizationController(app: FastifyInstance) {
           syncMode: parsed.data.syncMode,
           grants: parsed.data.grants?.map((grant) => ({
             target: toCapabilityAccessTarget(grant.target),
-            permissions: grant.permissions as WorkspaceAppGrantPermission[],
+            permissions: grant.permissions,
             conversationTypeMaskOverride:
               grant.conversationTypeMaskOverride ?? null,
             reason: grant.reason,
@@ -298,7 +202,7 @@ export async function organizationController(app: FastifyInstance) {
     app,
     "GET",
     "/:actorId/versions",
-    { schema: z.array(ActorVersionViewSchema) },
+    { schema: ActorVersionListViewSchema },
     async (request, reply) => {
       const { workspaceId, actorId } = request.params as WorkspaceParams & {
         actorId: string

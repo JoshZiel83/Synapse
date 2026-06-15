@@ -1,25 +1,23 @@
 import type { FastifyInstance } from "fastify"
+import {
+  AuditLogListQuerySchema,
+  AuditLogListViewSchema,
+} from "@synapse/shared/schemas"
+import { appRoute } from "../../infrastructure/http/route.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { requireRequestAction } from "../access/guards.js"
+import { presentAuditLogList } from "./presenter.js"
 import { countWorkspaceAuditLogs, listWorkspaceAuditLogs } from "./repo.js"
-import { z } from "zod"
-
-const querySchema = z.object({
-  workspaceId: z.uuid().optional(),
-  action: z.string().optional(),
-  resourceType: z.string().optional(),
-  resourceId: z.uuid().optional(),
-  page: z.coerce.number().default(1),
-  pageSize: z.coerce.number().default(50),
-})
 
 export default async function auditModule(app: FastifyInstance) {
-  // List audit logs for a workspace
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/audit-logs",
     {
-      preHandler: [authMiddleware, workspaceMiddleware],
+      schema: AuditLogListViewSchema,
+      options: { preHandler: [authMiddleware, workspaceMiddleware] },
     },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
@@ -32,7 +30,7 @@ export default async function auditModule(app: FastifyInstance) {
       )
       if (!allowed) return
 
-      const qs = querySchema.parse(request.query)
+      const qs = AuditLogListQuerySchema.parse(request.query)
 
       const offset = (qs.page - 1) * qs.pageSize
       const filters = {
@@ -46,12 +44,12 @@ export default async function auditModule(app: FastifyInstance) {
         listWorkspaceAuditLogs(workspaceId, filters, qs.pageSize, offset),
       ])
 
-      return {
+      return presentAuditLogList({
         items,
         total,
         page: qs.page,
         pageSize: qs.pageSize,
-      }
+      })
     }
   )
 }

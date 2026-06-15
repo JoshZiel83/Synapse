@@ -1,6 +1,11 @@
 import {
+  REMOTE_AGENT_BINDING_STATUS,
   REMOTE_AGENT_RUNTIME_STATE,
+  type RemoteAgentBindingStatus,
   type RemoteAgentRuntimeCapabilityView,
+  type RemoteAgentLifecycleState,
+  type RemoteAgentMachineTrustStatus,
+  type RemoteAgentRuntimeCatalogStatus,
   type RemoteAgentRuntimeKind,
   type RemoteAgentRuntimeStateType,
   type RemoteAgentRuntimeState,
@@ -23,6 +28,8 @@ import {
  */
 
 type RuntimeCapabilities = RemoteAgentRuntimeCapabilityView
+export type RemoteAgentRuntimeCapabilityRecord =
+  RemoteAgentRuntimeCapabilityView
 
 /** Shape of the runtime columns selected alongside an agent/binding row. */
 export type RuntimeSummaryRow = {
@@ -82,10 +89,10 @@ export type RemoteAgentRow = RuntimeSummaryRow & {
   updatedAt: Date
   machineId?: string | null
   machineTitle?: string | null
-  bindingStatus?: string | null
+  bindingStatus?: RemoteAgentBindingStatus | null
   runtimePath?: string | null
   localRootPath?: string | null
-  machineLifecycleState?: string | null
+  machineLifecycleState?: RemoteAgentLifecycleState | null
 }
 
 /**
@@ -135,7 +142,7 @@ export function presentRemoteAgent(
       ? {
           machineId: row.machineId,
           machineTitle: row.machineTitle ?? undefined,
-          status: row.bindingStatus ?? "active",
+          status: row.bindingStatus ?? REMOTE_AGENT_BINDING_STATUS.ACTIVE,
           runtimePath: row.runtimePath ?? undefined,
           localRootPath: row.localRootPath ?? undefined,
           machineLifecycleState: row.machineLifecycleState ?? undefined,
@@ -210,8 +217,8 @@ export type MachineRecord = {
   workspaceId: string
   title: string
   description: string | null
-  trustStatus: string
-  lifecycleState?: string | null
+  trustStatus: RemoteAgentMachineTrustStatus
+  lifecycleState?: RemoteAgentLifecycleState | null
   lastSeenAt?: Date | null
   createdAt?: Date | null
   updatedAt?: Date | null
@@ -238,8 +245,8 @@ export type MachineListRecord = {
   workspaceId: string
   title: string
   description: string | null
-  trustStatus: string
-  lifecycleState?: string | null
+  trustStatus: RemoteAgentMachineTrustStatus
+  lifecycleState?: RemoteAgentLifecycleState | null
   bindingCount?: string | number | null
   lastSeenAt?: Date | null
   createdAt?: Date | null
@@ -266,7 +273,7 @@ export function presentMachineListItem(row: MachineListRecord) {
 export type RuntimeCatalogRecord = {
   runtimeKind: RemoteAgentRuntimeKind
   executablePath?: string | null
-  status: string
+  status: RemoteAgentRuntimeCatalogStatus
   version?: string | null
   metadata?: unknown
   lastError?: string | null
@@ -298,7 +305,7 @@ export type MachineBindingRecord = RuntimeSummaryRow & {
   displayName: string
   runtimePath?: string | null
   localRootPath?: string | null
-  status: string
+  status: RemoteAgentBindingStatus
 }
 
 /** Present a machine-detail binding row (with its nested runtime summary). */

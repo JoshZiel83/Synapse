@@ -2,7 +2,6 @@ import { TASK_INPUT_QUESTION_TYPES, TASK_REQUEST_KIND } from "@synapse/shared"
 import type {
   ConversationEntityRef,
   PlanChecklistStep,
-  RuntimeAuthorizationGrantOption,
   RuntimeAuthorizationPreset,
   RuntimeAuthorizationRequestMode,
   RuntimeAuthorizationRequestedAction,
@@ -36,64 +35,14 @@ export function toRevisionNumber(
   throw new Error(`${label} must be a finite revision number`)
 }
 
-export function requireJsonObject(
-  value: unknown,
-  label: string
-): Record<string, unknown> {
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (value === null || value === undefined) {
     throw new Error(`${label} is required`)
-  }
-  if (typeof value === "string") {
-    if (value.trim().length === 0) {
-      throw new Error(`${label} is required`)
-    }
-    try {
-      const parsed = JSON.parse(value)
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error(`${label} must be a JSON object`)
-      }
-      return parsed as Record<string, unknown>
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message === `${label} must be a JSON object`
-      ) {
-        throw error
-      }
-      throw new Error(`${label} must be a valid JSON object`)
-    }
   }
   if (typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${label} must be a JSON object`)
   }
   return value as Record<string, unknown>
-}
-
-export function parseJsonArray<T>(value: unknown, label: string): T[] {
-  if (value === null || value === undefined) {
-    return []
-  }
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value)
-      if (!Array.isArray(parsed)) {
-        throw new Error(`${label} must be a JSON array`)
-      }
-      return parsed as T[]
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message === `${label} must be a JSON array`
-      ) {
-        throw error
-      }
-      throw new Error(`${label} must be a valid JSON array`)
-    }
-  }
-  if (!Array.isArray(value)) {
-    throw new Error(`${label} must be a JSON array`)
-  }
-  return value as T[]
 }
 
 export function requireTrimmedString(value: unknown, label: string): string {
@@ -530,10 +479,7 @@ export function presentTaskSummary(row: RawTaskRow): TaskSummary {
         `Task ${row.id} resolved_by`
       )
     : undefined
-  const resolutionPayload = requireJsonObject(
-    row.resolution_payload,
-    `Task ${row.id} resolution_payload`
-  )
+  const resolutionPayload = row.resolution_payload
 
   const baseTask = {
     id: row.id,
@@ -558,10 +504,7 @@ export function presentTaskSummary(row: RawTaskRow): TaskSummary {
   }
 
   if (row.kind === TASK_REQUEST_KIND.USER_INPUT) {
-    const promptPayload = requireJsonObject(
-      row.prompt_payload,
-      `Task ${row.id} prompt_payload`
-    )
+    const promptPayload = row.prompt_payload
     return {
       ...baseTask,
       kind: TASK_REQUEST_KIND.USER_INPUT,
@@ -584,10 +527,7 @@ export function presentTaskSummary(row: RawTaskRow): TaskSummary {
   }
 
   if (row.kind === TASK_REQUEST_KIND.PLAN_APPROVAL) {
-    const planPayload = requireJsonObject(
-      row.plan_payload,
-      `Task ${row.id} plan_payload`
-    )
+    const planPayload = row.plan_payload
     return {
       ...baseTask,
       kind: TASK_REQUEST_KIND.PLAN_APPROVAL,
@@ -612,18 +552,12 @@ export function presentTaskSummary(row: RawTaskRow): TaskSummary {
     }
   }
 
-  const requestedAction = requireJsonObject(
+  const requestedAction = requireRecord(
     row.requested_action,
     `Task ${row.id} requested_action`
   ) as unknown as RuntimeAuthorizationRequestedAction
-  const grantOptions = parseJsonArray<RuntimeAuthorizationGrantOption>(
-    row.grant_options,
-    `Task ${row.id} grant_options`
-  )
-  const availablePresets = parseJsonArray<RuntimeAuthorizationPreset>(
-    row.available_presets,
-    `Task ${row.id} available_presets`
-  )
+  const grantOptions = row.grant_options ?? []
+  const availablePresets = row.available_presets ?? []
   const runtimeAuthorization: RuntimeAuthorizationTaskDetails = {
     requestedToolName: requireTrimmedString(
       row.requested_tool_name,

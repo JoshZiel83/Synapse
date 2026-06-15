@@ -10,7 +10,6 @@
 import type { FastifyInstance } from "fastify"
 import { TransportAccountResponseSchema } from "@synapse/shared/schemas"
 import { appRoute } from "../../../infrastructure/http/route.js"
-import { sendData } from "../../../infrastructure/http/respond.js"
 import { createTransportAccount, updateTransportAccount } from "../service.js"
 import {
   feishuAccountSchema,
@@ -27,7 +26,7 @@ export default async function imFeishuController(
     "POST",
     "/api/v1/workspaces/:workspaceId/im/accounts/feishu",
     { schema: TransportAccountResponseSchema },
-    async (request, reply): Promise<undefined> => {
+    async (request, reply) => {
       const allowed = await requireWorkspaceAction(
         request,
         reply,
@@ -66,8 +65,8 @@ export default async function imFeishuController(
         credentials,
       })
       await refreshTransportRuntimeState()
-      sendData(reply, TransportAccountResponseSchema, { account }, 201)
-      return
+      reply.status(201)
+      return { account }
     }
   )
 

@@ -12,7 +12,6 @@
 // Bootstrap (cloud), re-key (Case A/B), and the full pairing-session lookup
 // surface land in PR #5 + PR #12.
 
-import { z } from "zod"
 import { formatValidationDetails } from "../../infrastructure/validation-error.js"
 import type { FastifyInstance } from "fastify"
 import {
@@ -25,6 +24,7 @@ import {
   CreateCloudDeviceInputSchema,
   CreateCloudDeviceResultViewSchema,
   DeviceViewSchema,
+  DeviceListViewSchema,
   DeviceDetailViewSchema,
   DevicePairingTicketViewSchema,
   DeviceServiceViewSchema,
@@ -53,11 +53,8 @@ import { consumeCloudBootstrap, createCloudDevicePairing } from "./cloud.js"
 
 // App-facing request bodies (camelCase, §5.1.1). workspaceId travels in the URL
 // param, so the body schema omits it from the shared logical input contract.
-const startPairingBodySchema = StartPairingInputSchema.omit({
+export const startPairingBodySchema = StartPairingInputSchema.omit({
   workspaceId: true,
-}).extend({
-  description: z.string().max(2000).optional(),
-  context: z.record(z.string(), z.unknown()).optional(),
 })
 
 // WIRE — consume/bootstrap handshake bodies are snake_case wire contracts owned
@@ -113,7 +110,7 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
     app,
     "GET",
     "/api/v1/workspaces/:workspaceId/devices",
-    { schema: z.array(DeviceViewSchema), options: workspaceHook },
+    { schema: DeviceListViewSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       if (

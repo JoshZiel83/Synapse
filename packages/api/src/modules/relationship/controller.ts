@@ -24,8 +24,13 @@ import { appRoute } from "../../infrastructure/http/route.js"
 import { requireRequestAction } from "../access/guards.js"
 import {
   presentActorAccessRequest,
+  presentContactHub,
+  presentContactHubDetail,
+  presentDirectConversationOpen,
   presentFriendRequest,
+  presentRelationshipProfile,
   presentRemoteAgentAccessRequest,
+  presentResolvedRelationshipRequest,
 } from "./presenter.js"
 import {
   getActorRelationshipProfile,
@@ -84,10 +89,12 @@ export default async function relationshipController(app: FastifyInstance) {
     async (request) => {
       const params = request.params as { workspaceId: string }
       const userId = (request as any).user!.userId
-      return getMemberRelationshipProfile({
-        workspaceId: params.workspaceId,
-        userId,
-      })
+      return presentRelationshipProfile(
+        await getMemberRelationshipProfile({
+          workspaceId: params.workspaceId,
+          userId,
+        })
+      )
     }
   )
 
@@ -100,13 +107,15 @@ export default async function relationshipController(app: FastifyInstance) {
       const params = request.params as { workspaceId: string }
       const userId = (request as any).user!.userId
       const body = updateMemberProfileSchema.parse(request.body)
-      return updateMemberRelationshipProfile({
-        workspaceId: params.workspaceId,
-        userId,
-        approvalMode: body.approvalMode,
-        identityId: body.identityId,
-        identitySearchEnabled: body.identitySearchEnabled,
-      })
+      return presentRelationshipProfile(
+        await updateMemberRelationshipProfile({
+          workspaceId: params.workspaceId,
+          userId,
+          approvalMode: body.approvalMode,
+          identityId: body.identityId,
+          identitySearchEnabled: body.identitySearchEnabled,
+        })
+      )
     }
   )
 
@@ -127,11 +136,13 @@ export default async function relationshipController(app: FastifyInstance) {
       if (!allowed) return
       const userId = (request as any).user!.userId
       try {
-        return await getActorRelationshipProfile({
-          workspaceId: params.workspaceId,
-          actorId: params.actorId,
-          userId,
-        })
+        return presentRelationshipProfile(
+          await getActorRelationshipProfile({
+            workspaceId: params.workspaceId,
+            actorId: params.actorId,
+            userId,
+          })
+        )
       } catch (error) {
         sendServiceError(reply, error)
         return
@@ -157,15 +168,17 @@ export default async function relationshipController(app: FastifyInstance) {
       const userId = (request as any).user!.userId
       const body = updateActorProfileSchema.parse(request.body)
       try {
-        return await updateActorRelationshipProfile({
-          workspaceId: params.workspaceId,
-          actorId: params.actorId,
-          userId,
-          approvalMode: body.approvalMode,
-          identityId: body.identityId,
-          identitySearchEnabled: body.identitySearchEnabled,
-          isPublicShared: body.isPublicShared,
-        })
+        return presentRelationshipProfile(
+          await updateActorRelationshipProfile({
+            workspaceId: params.workspaceId,
+            actorId: params.actorId,
+            userId,
+            approvalMode: body.approvalMode,
+            identityId: body.identityId,
+            identitySearchEnabled: body.identitySearchEnabled,
+            isPublicShared: body.isPublicShared,
+          })
+        )
       } catch (error) {
         sendServiceError(reply, error)
         return
@@ -193,11 +206,13 @@ export default async function relationshipController(app: FastifyInstance) {
       if (!allowed) return
       const userId = (request as any).user!.userId
       try {
-        return await getRemoteAgentRelationshipProfile({
-          workspaceId: params.workspaceId,
-          remoteAgentId: params.remoteAgentId,
-          userId,
-        })
+        return presentRelationshipProfile(
+          await getRemoteAgentRelationshipProfile({
+            workspaceId: params.workspaceId,
+            remoteAgentId: params.remoteAgentId,
+            userId,
+          })
+        )
       } catch (error) {
         sendServiceError(reply, error)
         return
@@ -226,15 +241,17 @@ export default async function relationshipController(app: FastifyInstance) {
       const userId = (request as any).user!.userId
       const body = updateActorProfileSchema.parse(request.body)
       try {
-        return await updateRemoteAgentRelationshipProfile({
-          workspaceId: params.workspaceId,
-          remoteAgentId: params.remoteAgentId,
-          userId,
-          approvalMode: body.approvalMode,
-          identityId: body.identityId,
-          identitySearchEnabled: body.identitySearchEnabled,
-          isPublicShared: body.isPublicShared,
-        })
+        return presentRelationshipProfile(
+          await updateRemoteAgentRelationshipProfile({
+            workspaceId: params.workspaceId,
+            remoteAgentId: params.remoteAgentId,
+            userId,
+            approvalMode: body.approvalMode,
+            identityId: body.identityId,
+            identitySearchEnabled: body.identitySearchEnabled,
+            isPublicShared: body.isPublicShared,
+          })
+        )
       } catch (error) {
         sendServiceError(reply, error)
         return
@@ -349,14 +366,14 @@ export default async function relationshipController(app: FastifyInstance) {
       }
       const userId = (request as any).user!.userId
       try {
-        return {
-          request: await resolveFriendRequest({
+        return presentResolvedRelationshipRequest(
+          await resolveFriendRequest({
             workspaceId: params.workspaceId,
             userId,
             requestId: params.requestId,
             decision: "approve",
-          }),
-        }
+          })
+        )
       } catch (error) {
         sendServiceError(reply, error)
         return
@@ -376,14 +393,14 @@ export default async function relationshipController(app: FastifyInstance) {
       }
       const userId = (request as any).user!.userId
       try {
-        return {
-          request: await resolveFriendRequest({
+        return presentResolvedRelationshipRequest(
+          await resolveFriendRequest({
             workspaceId: params.workspaceId,
             userId,
             requestId: params.requestId,
             decision: "reject",
-          }),
-        }
+          })
+        )
       } catch (error) {
         sendServiceError(reply, error)
         return
@@ -441,14 +458,14 @@ export default async function relationshipController(app: FastifyInstance) {
       }
       const userId = (request as any).user!.userId
       try {
-        return {
-          request: await resolveActorAccessRequest({
+        return presentResolvedRelationshipRequest(
+          await resolveActorAccessRequest({
             workspaceId: params.workspaceId,
             userId,
             requestId: params.requestId,
             decision: "approve",
-          }),
-        }
+          })
+        )
       } catch (error) {
         sendServiceError(reply, error)
         return
@@ -468,14 +485,14 @@ export default async function relationshipController(app: FastifyInstance) {
       }
       const userId = (request as any).user!.userId
       try {
-        return {
-          request: await resolveActorAccessRequest({
+        return presentResolvedRelationshipRequest(
+          await resolveActorAccessRequest({
             workspaceId: params.workspaceId,
             userId,
             requestId: params.requestId,
             decision: "reject",
-          }),
-        }
+          })
+        )
       } catch (error) {
         sendServiceError(reply, error)
         return
@@ -495,14 +512,14 @@ export default async function relationshipController(app: FastifyInstance) {
       }
       const userId = (request as any).user!.userId
       try {
-        return {
-          request: await resolveRemoteAgentAccessRequest({
+        return presentResolvedRelationshipRequest(
+          await resolveRemoteAgentAccessRequest({
             workspaceId: params.workspaceId,
             userId,
             requestId: params.requestId,
             decision: "approve",
-          }),
-        }
+          })
+        )
       } catch (error) {
         sendServiceError(reply, error)
         return
@@ -522,14 +539,14 @@ export default async function relationshipController(app: FastifyInstance) {
       }
       const userId = (request as any).user!.userId
       try {
-        return {
-          request: await resolveRemoteAgentAccessRequest({
+        return presentResolvedRelationshipRequest(
+          await resolveRemoteAgentAccessRequest({
             workspaceId: params.workspaceId,
             userId,
             requestId: params.requestId,
             decision: "reject",
-          }),
-        }
+          })
+        )
       } catch (error) {
         sendServiceError(reply, error)
         return
@@ -545,10 +562,12 @@ export default async function relationshipController(app: FastifyInstance) {
     async (request) => {
       const params = request.params as { workspaceId: string }
       const userId = (request as any).user!.userId
-      return getContactHub({
-        workspaceId: params.workspaceId,
-        userId,
-      })
+      return presentContactHub(
+        await getContactHub({
+          workspaceId: params.workspaceId,
+          userId,
+        })
+      )
     }
   )
 
@@ -566,12 +585,14 @@ export default async function relationshipController(app: FastifyInstance) {
       const userId = (request as any).user!.userId
       const kind = contactKindSchema.parse(params.kind)
       try {
-        return await getContactHubDetail({
-          workspaceId: params.workspaceId,
-          userId,
-          contactKind: kind,
-          contactId: params.contactId,
-        })
+        return presentContactHubDetail(
+          await getContactHubDetail({
+            workspaceId: params.workspaceId,
+            userId,
+            contactKind: kind,
+            contactId: params.contactId,
+          })
+        )
       } catch (error) {
         sendServiceError(reply, error)
         return
@@ -589,12 +610,14 @@ export default async function relationshipController(app: FastifyInstance) {
       const userId = (request as any).user!.userId
       const body = openDirectSchema.parse(request.body)
       try {
-        return await openDirectConversation({
-          workspaceId: params.workspaceId,
-          userId,
-          contactKind: body.contactKind,
-          contactId: body.contactId,
-        })
+        return presentDirectConversationOpen(
+          await openDirectConversation({
+            workspaceId: params.workspaceId,
+            userId,
+            contactKind: body.contactKind,
+            contactId: body.contactId,
+          })
+        )
       } catch (error) {
         sendServiceError(reply, error)
         return

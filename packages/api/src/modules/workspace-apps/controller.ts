@@ -10,7 +10,6 @@ import {
   WORKSPACE_APP_GRANT_REQUEST_DIRECTION,
   workspaceMemberRef,
   workspaceRef,
-  WORKSPACE_APP_KINDS,
   type CapabilityAccessTarget,
   type WorkspaceAppGrantPermission,
   type WorkspaceAppKind,
@@ -25,8 +24,8 @@ import {
   deleteWorkspaceApp,
   discoverWorkspaceAppsForMember,
   getWorkspaceAppInventoryDetail,
-  listWorkspaceAppGrantRequestsView,
-  listWorkspaceAppGrantsView,
+  listWorkspaceAppGrantRecords,
+  listWorkspaceAppGrantRequestRecords,
   listWorkspaceAppsInventory,
   rejectWorkspaceAppGrantRequest,
   replaceWorkspaceAppGrants,
@@ -40,43 +39,40 @@ import {
 } from "./presenter.js"
 import { appRoute } from "../../infrastructure/http/route.js"
 import {
-  WorkspaceAppViewSchema,
-  WorkspaceAppGrantViewSchema,
-  WorkspaceAppGrantRequestViewSchema,
   WorkspaceAppGrantTargetSchema,
   ReplaceWorkspaceAppGrantsInputSchema,
   CreateWorkspaceAppGrantRequestInputSchema,
   CreateWorkspaceAppInputSchema,
   UpdateWorkspaceAppInputSchema,
-  WorkspaceAppGrantRequestDirectionSchema,
+  WorkspaceAppDiscoverQuerySchema,
+  WorkspaceAppEnvelopeViewSchema,
+  WorkspaceAppGrantRequestListQuerySchema,
+  WorkspaceAppListQuerySchema,
+  WorkspaceAppListViewSchema,
+  WorkspaceAppGrantListViewSchema,
+  WorkspaceAppGrantRequestListViewSchema,
+  WorkspaceAppGrantRequestEnvelopeViewSchema,
+  WorkspaceAppSuccessViewSchema,
 } from "@synapse/shared/schemas"
 
-const workspaceAppEnvelopeSchema = z.object({ app: WorkspaceAppViewSchema })
-const workspaceAppsEnvelopeSchema = z.object({
-  apps: z.array(WorkspaceAppViewSchema),
-})
-const grantsEnvelopeSchema = z.object({
-  grants: z.array(WorkspaceAppGrantViewSchema),
-})
-const grantRequestsEnvelopeSchema = z.object({
-  requests: z.array(WorkspaceAppGrantRequestViewSchema),
-})
-const grantRequestEnvelopeSchema = z.object({
-  request: WorkspaceAppGrantRequestViewSchema,
-})
-const successEnvelopeSchema = z.object({ success: z.boolean() })
+const workspaceAppEnvelopeSchema = WorkspaceAppEnvelopeViewSchema
+const workspaceAppsEnvelopeSchema = WorkspaceAppListViewSchema
+const grantsEnvelopeSchema = WorkspaceAppGrantListViewSchema
+const grantRequestsEnvelopeSchema = WorkspaceAppGrantRequestListViewSchema
+const grantRequestEnvelopeSchema = WorkspaceAppGrantRequestEnvelopeViewSchema
+const successEnvelopeSchema = WorkspaceAppSuccessViewSchema
 
 // App-facing request bodies / queries live in @synapse/shared (§5.1.1) so the
 // API parser and the web/mobile clients share one definition. The grant target
 // schema feeds toCapabilityAccessTarget below (typed via z.infer).
 const targetSchema = WorkspaceAppGrantTargetSchema
 const replaceGrantsSchema = ReplaceWorkspaceAppGrantsInputSchema
-const requestDirectionSchema = WorkspaceAppGrantRequestDirectionSchema
 const createGrantRequestSchema = CreateWorkspaceAppGrantRequestInputSchema
 const createWorkspaceAppSchema = CreateWorkspaceAppInputSchema
 const updateWorkspaceAppSchema = UpdateWorkspaceAppInputSchema
-// Query-param (?kind=) enum filter — not a body DTO, stays local.
-const workspaceAppKindSchema = z.enum(WORKSPACE_APP_KINDS)
+const workspaceAppListQuerySchema = WorkspaceAppListQuerySchema
+const workspaceAppDiscoverQuerySchema = WorkspaceAppDiscoverQuerySchema
+const grantRequestListQuerySchema = WorkspaceAppGrantRequestListQuerySchema
 
 function toCapabilityAccessTarget(
   input: z.infer<typeof targetSchema>
@@ -189,11 +185,7 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
       )
       if (!allowed) return
       try {
-        const query = z
-          .object({
-            kind: workspaceAppKindSchema.optional(),
-          })
-          .parse(request.query || {})
+        const query = workspaceAppListQuerySchema.parse(request.query || {})
         const apps = await listWorkspaceAppsInventory({
           workspaceId,
           userId: (request as any).user.userId,
@@ -223,11 +215,7 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
       )
       if (!allowed) return
       try {
-        const query = z
-          .object({
-            conversationId: z.uuid().optional(),
-          })
-          .parse(request.query || {})
+        const query = workspaceAppDiscoverQuerySchema.parse(request.query || {})
         const apps = await discoverWorkspaceAppsForMember({
           workspaceId,
           userId: (request as any).user.userId,
@@ -342,7 +330,7 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
       )
       if (!allowed) return
       try {
-        const grants = await listWorkspaceAppGrantsView({
+        const grants = await listWorkspaceAppGrantRecords({
           workspaceId,
           appId,
           userId: (request as any).user.userId,
@@ -414,10 +402,8 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
       )
       if (!allowed) return
       try {
-        const query = z
-          .object({ direction: requestDirectionSchema.optional() })
-          .parse(request.query || {})
-        const requests = await listWorkspaceAppGrantRequestsView({
+        const query = grantRequestListQuerySchema.parse(request.query || {})
+        const requests = await listWorkspaceAppGrantRequestRecords({
           workspaceId,
           appId,
           userId: (request as any).user.userId,

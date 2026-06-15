@@ -13,10 +13,10 @@ import {
   getInstallation,
   getInstallations,
   getOrganization,
-  getPlugin,
+  getPluginRecord,
   listOrganizations,
   listPluginCategories,
-  listPlugins,
+  listPluginRecords,
   McpPluginError,
 } from "./service.js"
 import {
@@ -26,24 +26,43 @@ import {
   PluginAuthError,
   startPluginAuthSession,
 } from "./plugin-auth-connections.js"
-import { presentPluginCategory, presentPublisher } from "./presenter.js"
+import {
+  presentMarketplacePlugin,
+  presentPluginInstallationDetail,
+  presentPluginCategory,
+  presentPublisher,
+} from "./presenter.js"
 import { getEventLogs, getToolCallLogs } from "./audit.js"
 import { appRoute, wireRoute } from "../../infrastructure/http/route.js"
 import {
+  MarketplacePluginListViewSchema,
   MarketplacePluginViewSchema,
+  MarketplacePublisherDetailViewSchema,
+  MarketplacePublisherListViewSchema,
   MarketplacePublisherViewSchema,
+  McpMarketplaceListQuerySchema,
+  McpPluginEventAuditLogListQuerySchema,
+  McpPluginInstallationListQuerySchema,
+  McpPluginToolCallAuditLogListQuerySchema,
+  PluginCategoryListViewSchema,
   PluginCategoryViewSchema,
   PluginInstallationDetailViewSchema,
+  PluginInstallationListViewSchema,
   PluginAuthSessionEnvelopeSchema,
   PluginInstallPlanEnvelopeSchema,
   PluginAuditLogListSchema,
+  PluginInstallPlanInputSchema,
   StartPluginAuthInputSchema,
 } from "@synapse/shared/schemas"
 
 // App-facing request body lives in @synapse/shared (§5.1.1) so the API parser
 // and the web/mobile clients share one definition. install-plan takes no body.
-const installPlanSchema = z.object({})
+const installPlanSchema = PluginInstallPlanInputSchema
 const startAuthSchema = StartPluginAuthInputSchema
+const marketplaceListQuerySchema = McpMarketplaceListQuerySchema
+const installationListQuerySchema = McpPluginInstallationListQuerySchema
+const toolCallAuditLogListQuerySchema = McpPluginToolCallAuditLogListQuerySchema
+const eventAuditLogListQuerySchema = McpPluginEventAuditLogListQuerySchema
 
 const log = createLogger("mcp.controller")
 
@@ -82,31 +101,18 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
     app,
     "GET",
     "/api/v1/mcp/marketplace",
-    { schema: z.array(MarketplacePluginViewSchema), options: authHook },
+    { schema: MarketplacePluginListViewSchema, options: authHook },
     async (request, reply) => {
       try {
-        const { search, tags, categories, transport } = request.query as {
-          search?: string
-          tags?: string
-          categories?: string
-          transport?: string
-        }
-        return await listPlugins({
+        const { search, tags, categories, transport } =
+          marketplaceListQuerySchema.parse(request.query || {})
+        const records = await listPluginRecords({
           search,
           transport,
-          tags: tags
-            ? tags
-                .split(",")
-                .map((value) => value.trim())
-                .filter(Boolean)
-            : undefined,
-          categorySlugs: categories
-            ? categories
-                .split(",")
-                .map((value) => value.trim())
-                .filter(Boolean)
-            : undefined,
+          tags,
+          categorySlugs: categories,
         })
+        return records.map(presentMarketplacePlugin)
       } catch (error) {
         handleError(reply, error)
         return undefined
@@ -118,7 +124,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
     app,
     "GET",
     "/api/v1/mcp/categories",
-    { schema: z.array(PluginCategoryViewSchema), options: authHook },
+    { schema: PluginCategoryListViewSchema, options: authHook },
     async (_request, reply) => {
       try {
         const categories = await listPluginCategories()
@@ -138,7 +144,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
     async (request, reply) => {
       try {
         const { pluginId } = request.params as { pluginId: string }
-        return await getPlugin(pluginId)
+        return presentMarketplacePlugin(await getPluginRecord(pluginId))
       } catch (error) {
         handleError(reply, error)
         return undefined
@@ -150,7 +156,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
     app,
     "GET",
     "/api/v1/mcp/organizations",
-    { schema: z.array(MarketplacePublisherViewSchema), options: authHook },
+    { schema: MarketplacePublisherListViewSchema, options: authHook },
     async (_request, reply) => {
       try {
         const orgs = await listOrganizations()
@@ -167,9 +173,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
     "GET",
     "/api/v1/mcp/organizations/:orgId",
     {
-      schema: MarketplacePublisherViewSchema.extend({
-        plugins: z.array(MarketplacePluginViewSchema),
-      }),
+      schema: MarketplacePublisherDetailViewSchema,
       options: authHook,
     },
     async (request, reply) => {
@@ -179,8 +183,11 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
         if (!org) {
           throw new McpPluginError(404, "Publisher not found")
         }
-        const plugins = await listPlugins({ orgId })
-        return { ...presentPublisher(org), plugins }
+        const plugins = await listPluginRecords({ orgId })
+        return {
+          ...presentPublisher(org),
+          plugins: plugins.map(presentMarketplacePlugin),
+        }
       } catch (error) {
         handleError(reply, error)
         return undefined
@@ -369,7 +376,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
     "GET",
     "/api/v1/workspaces/:workspaceId/mcp/installations",
     {
-      schema: z.array(PluginInstallationDetailViewSchema),
+      schema: PluginInstallationListViewSchema,
       options: workspaceHook,
     },
     async (request, reply) => {
@@ -390,15 +397,14 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
         if (installationIds.length === 0) {
           return []
         }
-        const { pluginId } = z
-          .object({
-            pluginId: z.uuid().optional(),
-          })
-          .parse(request.query || {})
-        return await getInstallations(workspaceId, {
+        const { pluginId } = installationListQuerySchema.parse(
+          request.query || {}
+        )
+        const installations = await getInstallations(workspaceId, {
           installationIds,
           pluginId,
         })
+        return installations.map(presentPluginInstallationDetail)
       } catch (error) {
         handleError(reply, error)
         return undefined
@@ -426,7 +432,9 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
         const { workspaceId } = request.params as {
           workspaceId: string
         }
-        return await getInstallation(workspaceId, installId)
+        return presentPluginInstallationDetail(
+          await getInstallation(workspaceId, installId)
+        )
       } catch (error) {
         handleError(reply, error)
         return undefined
@@ -451,18 +459,12 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
 
         const { workspaceId } = request.params as { workspaceId: string }
         const { pluginId, sessionId, actorId, limit, before } =
-          request.query as {
-            pluginId?: string
-            sessionId?: string
-            actorId?: string
-            limit?: string
-            before?: string
-          }
+          toolCallAuditLogListQuerySchema.parse(request.query || {})
         return await getToolCallLogs(workspaceId, {
           pluginId,
           sessionId,
           actorId,
-          limit: limit ? parseInt(limit, 10) : undefined,
+          limit,
           before,
         })
       } catch (error) {
@@ -488,16 +490,12 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
         if (!allowed) return undefined
 
         const { workspaceId } = request.params as { workspaceId: string }
-        const { eventType, pluginId, limit, before } = request.query as {
-          eventType?: string
-          pluginId?: string
-          limit?: string
-          before?: string
-        }
+        const { eventType, pluginId, limit, before } =
+          eventAuditLogListQuerySchema.parse(request.query || {})
         return await getEventLogs(workspaceId, {
           eventType,
           pluginId,
-          limit: limit ? parseInt(limit, 10) : undefined,
+          limit,
           before,
         })
       } catch (error) {

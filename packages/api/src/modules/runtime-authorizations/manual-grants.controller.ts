@@ -13,30 +13,23 @@
 // MVP. The chat approval path remains for those.
 
 import type { FastifyInstance } from "fastify"
-import { z } from "zod"
 import { formatValidationDetails } from "../../infrastructure/validation-error.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { requireRequestAction } from "../access/guards.js"
-import {
-  BrowserGrantPolicyError,
-  GrantPolicySchema,
-} from "@synapse/shared/access/policies"
+import { BrowserGrantPolicyError } from "@synapse/shared/access/policies"
 import { workspaceRef } from "@synapse/shared"
-import { RuntimeAuthorizationGrantRecordViewSchema } from "@synapse/shared/schemas"
+import {
+  CreateManualRuntimeAuthorizationGrantInputSchema,
+  RuntimeAuthorizationGrantRecordViewSchema,
+} from "@synapse/shared/schemas"
 import {
   BROWSER_EXPOSURE_TOOLS,
   BROWSER_TOOL_MAP,
 } from "@synapse/device-protocol/browser-tools"
 import { appRoute } from "../../infrastructure/http/route.js"
-import { sendData } from "../../infrastructure/http/respond.js"
 import { createRuntimeAuthorizationGrant } from "./service.js"
 import { findDeviceCapabilityGrantTarget } from "./repo.js"
-
-const manualGrantBodySchema = z.object({
-  device_capability_id: z.uuid(),
-  policy: z.unknown(), // validated below via GrantPolicySchema
-})
 
 /**
  * For a given exposure stable_key (e.g. `builtin/browser/navigation`),
@@ -84,7 +77,9 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
       const { workspaceId: pathWorkspaceId } = request.params as {
         workspaceId: string
       }
-      const parsed = manualGrantBodySchema.safeParse(request.body)
+      const parsed = CreateManualRuntimeAuthorizationGrantInputSchema.safeParse(
+        request.body
+      )
       if (!parsed.success) {
         reply.status(400).send({
           code: "invalid_request",
@@ -93,18 +88,9 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
         return
       }
 
-      // Validate GrantPolicy shape (BrowserPolicy.strip() drops any stray
-      // scopeSource on the way in — see plan §clarification #10).
-      const policyParse = GrantPolicySchema.safeParse(parsed.data.policy)
-      if (!policyParse.success) {
-        reply.status(400).send({
-          code: "invalid_request",
-          message: "policy did not match GrantPolicySchema",
-          details: formatValidationDetails(policyParse.error),
-        })
-        return
-      }
-      const policy = policyParse.data
+      // The shared app input schema validates the grant policy and strips
+      // browser-only request fields such as scopeSource at the app boundary.
+      const policy = parsed.data.policy
 
       // Permission: workspace.manage_devices + device_capability.grant on
       // the target capability. Mirrors access-bindings.ts.
@@ -123,7 +109,7 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
           request,
           reply,
           "device_capability.grant",
-          parsed.data.device_capability_id,
+          parsed.data.deviceCapabilityId,
           "Cannot grant runtime authorization on this device capability"
         ))
       )
@@ -132,12 +118,12 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
       // JOIN reverse-lookup: pull device_id / exposure_id / builtin_kind /
       // workspace_id / status. Verify they line up before the write.
       const row = await findDeviceCapabilityGrantTarget(
-        parsed.data.device_capability_id
+        parsed.data.deviceCapabilityId
       )
       if (!row) {
         reply.status(404).send({
           code: "device_capability_not_found",
-          message: `device_capability ${parsed.data.device_capability_id} not found`,
+          message: `device capability ${parsed.data.deviceCapabilityId} not found`,
         })
         return
       }
@@ -209,19 +195,15 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
           // policy. No scope (workspace grants are unscoped).
           workspaceId: pathWorkspaceId,
           deviceId: row.deviceId,
-          deviceCapabilityId: parsed.data.device_capability_id,
+          deviceCapabilityId: parsed.data.deviceCapabilityId,
           deviceExposureId: row.exposureId,
           subject: workspaceRef(pathWorkspaceId),
           retention: "until_revoked",
           policy,
           createdByWorkspaceMemberId: session?.workspaceMemberId ?? undefined,
         })
-        // §5.3 APP route: a 201-creating write. appRoute always wraps with a
-        // default 200, so send the { data } envelope here at 201 via the same
-        // sendData the helper uses (schema parse + envelope) and return
-        // undefined — appRoute then no-ops (reply already sent).
-        sendData(reply, RuntimeAuthorizationGrantRecordViewSchema, grant, 201)
-        return undefined
+        reply.status(201)
+        return grant
       } catch (err) {
         if (err instanceof BrowserGrantPolicyError) {
           reply.status(400).send({

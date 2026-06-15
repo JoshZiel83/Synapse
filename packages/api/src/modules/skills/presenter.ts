@@ -1,7 +1,6 @@
 import {
   DEFAULT_CONVERSATION_TYPE_MASK,
   WORKSPACE_APP_GRANT_PERMISSION,
-  parseJsonObject,
   resolveNarrowedConversationTypeMask,
   workspaceRef,
   type CapabilityAccessTarget,
@@ -19,11 +18,11 @@ import {
 } from "../../infrastructure/datetime.js"
 import { getFileUrlById } from "../files/service.js"
 import { SKILL_ENTRY_PATH, buildSyntheticEntryFile } from "./manifest.js"
+import { normalizeStoredBlocks } from "./content-block-codec.js"
 import {
   bodyBlocksFromSnapshotRow,
   descriptionBlockFromSnapshotRow,
   frontmatterFromSnapshotRow,
-  normalizeStoredBlocks,
   resolveInstalledSkillEffectiveConversationTypeMask,
   resolveInstalledSkillSourceConversationTypeMask,
   skillBindingToAccessTarget,
@@ -69,7 +68,7 @@ export function buildMirrorSourceSummary(row: SkillSnapshotJoinRow) {
     id: row.mirrorSourceId,
     sourceType: row.mirrorSourceType,
     locatorKey: row.mirrorLocatorKey,
-    locator: parseJsonObject(row.mirrorLocator),
+    locator: row.mirrorLocator,
     requestedRef: row.mirrorRequestedRef || undefined,
     resolvedRevision:
       row.snapshotResolvedRevision || row.mirrorResolvedRevision || undefined,
@@ -109,9 +108,12 @@ function buildSyntheticEntryAttachment(
 function buildSnapshotAttachmentFiles(
   row: SkillSnapshotJoinRow,
   timestamp: IsoInstantString,
-  files?: SkillAttachmentFile[]
+  files?: SkillSnapshotFileRow[]
 ) {
-  return [buildSyntheticEntryAttachment(row, timestamp), ...(files || [])]
+  return [
+    buildSyntheticEntryAttachment(row, timestamp),
+    ...(files || []).map(buildSkillAttachmentFromCatalogFile),
+  ]
 }
 
 function resolveMarketplaceSkillDefaultConversationTypeMask(
@@ -122,7 +124,7 @@ function resolveMarketplaceSkillDefaultConversationTypeMask(
 
 function mapMarketplaceVersion(
   row: SkillPackageRow,
-  files?: SkillAttachmentFile[]
+  files?: SkillSnapshotFileRow[]
 ): SkillMarketplaceVersion | undefined {
   if (!row.latestVersionId || !row.latestVersionValue) {
     return undefined
@@ -164,7 +166,7 @@ function mapMarketplaceVersion(
 export function mapMarketplaceEntry(
   row: SkillPackageRow,
   installation?: InstallationSummary,
-  files?: SkillAttachmentFile[]
+  files?: SkillSnapshotFileRow[]
 ): SkillMarketplaceEntry {
   const defaultConversationTypeMask =
     resolveMarketplaceSkillDefaultConversationTypeMask(row)
@@ -196,7 +198,7 @@ export function buildInstalledSkillPayload(
   row: InstalledSkillRow,
   binding: SkillAccessRow | undefined,
   workspaceConversationTypeMask: number,
-  files?: SkillAttachmentFile[]
+  files?: SkillSnapshotFileRow[]
 ): InstalledSkill {
   const chosenBinding = binding
   const accessTarget: CapabilityAccessTarget = chosenBinding
@@ -254,6 +256,25 @@ export function buildInstalledSkillPayload(
     ),
     mirrorSource: buildMirrorSourceSummary(row),
   }
+}
+
+export type InstalledSkillPresentationRecord = {
+  id: string
+  row: InstalledSkillRow
+  binding: SkillAccessRow | undefined
+  workspaceConversationTypeMask: number
+  files: SkillSnapshotFileRow[]
+}
+
+export function presentInstalledSkillRecord(
+  record: InstalledSkillPresentationRecord
+): InstalledSkill {
+  return buildInstalledSkillPayload(
+    record.row,
+    record.binding,
+    record.workspaceConversationTypeMask,
+    record.files
+  )
 }
 
 export function presentSkillAccessGrant(

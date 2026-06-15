@@ -377,12 +377,12 @@ export default async function remoteAgentsController(app: FastifyInstance) {
             await createRemoteAgentUserInputTask({
               remoteAgentId: request.params.remoteAgentId,
               machineKey: getMachineKeyFromHeaders(request),
-              conversationId: body.conversationId,
-              runKey: body.runKey,
+              conversationId: body.conversation_id,
+              runKey: body.run_key,
               title: body.title,
               instructions: body.instructions,
               questions: body.questions,
-              expiresAt: body.expiresAt,
+              expiresAt: body.expires_at,
             })
           )
         } catch (error) {
@@ -403,15 +403,15 @@ export default async function remoteAgentsController(app: FastifyInstance) {
             await createRemoteAgentPlanApprovalTask({
               remoteAgentId: request.params.remoteAgentId,
               machineKey: getMachineKeyFromHeaders(request),
-              conversationId: body.conversationId,
-              runKey: body.runKey,
+              conversationId: body.conversation_id,
+              runKey: body.run_key,
               title: body.title,
               summary: body.summary,
-              planMarkdown: body.planMarkdown,
+              planMarkdown: body.plan_markdown,
               checklist: body.checklist,
-              collaborationMode: body.collaborationMode,
-              collaborationState: body.collaborationState,
-              expiresAt: body.expiresAt,
+              collaborationMode: body.collaboration_mode,
+              collaborationState: body.collaboration_state,
+              expiresAt: body.expires_at,
             })
           )
         } catch (error) {
@@ -474,7 +474,7 @@ export default async function remoteAgentsController(app: FastifyInstance) {
             await completeRemoteAgentDeliveries({
               remoteAgentId: request.params.remoteAgentId,
               machineKey: getMachineKeyFromHeaders(request),
-              deliveryIds: body.deliveryIds,
+              deliveryIds: body.delivery_ids,
             })
           )
         } catch (error) {
@@ -495,7 +495,7 @@ export default async function remoteAgentsController(app: FastifyInstance) {
             await failRemoteAgentDeliveries({
               remoteAgentId: request.params.remoteAgentId,
               machineKey: getMachineKeyFromHeaders(request),
-              deliveryIds: body.deliveryIds,
+              deliveryIds: body.delivery_ids,
               reason: body.reason,
             })
           )
@@ -518,8 +518,8 @@ export default async function remoteAgentsController(app: FastifyInstance) {
               remoteAgentId: request.params.remoteAgentId,
               machineKey: getMachineKeyFromHeaders(request),
               conversationId: request.params.conversationId,
-              afterSequence: query.afterSequence,
-              beforeSequence: query.beforeSequence,
+              afterSequence: query.after_sequence,
+              beforeSequence: query.before_sequence,
               limit: query.limit,
             })
           )
@@ -541,10 +541,10 @@ export default async function remoteAgentsController(app: FastifyInstance) {
             await sendRemoteAgentConversationMessage({
               remoteAgentId: request.params.remoteAgentId,
               machineKey: getMachineKeyFromHeaders(request),
-              conversationId: body.conversationId,
-              clientMessageId: body.clientMessageId,
-              contentBlocks: body.contentBlocks,
-              replyToItemId: body.replyToItemId,
+              conversationId: body.conversation_id,
+              clientMessageId: body.client_message_id,
+              contentBlocks: body.content_blocks,
+              replyToItemId: body.reply_to_item_id,
               metadata: body.metadata,
             })
           )
@@ -566,7 +566,7 @@ export default async function remoteAgentsController(app: FastifyInstance) {
             await searchRemoteAgentMessages({
               remoteAgentId: request.params.remoteAgentId,
               machineKey: getMachineKeyFromHeaders(request),
-              conversationId: query.conversationId,
+              conversationId: query.conversation_id,
               query: query.q,
               limit: query.limit,
             })

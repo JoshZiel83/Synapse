@@ -17,14 +17,18 @@ import { z } from "zod"
 import {
   TransportAccountResponseSchema,
   TransportAccountsResponseSchema,
-  TransportAddressResponseSchema,
   TransportConnectorsResponseSchema,
+  TransportAccountCreateInputSchema,
+  TransportExternalUserResponseSchema,
+  TransportExternalUserLinkedMemberInputSchema,
   TransportExternalUsersResponseSchema,
+  TransportExternalUsersListQuerySchema,
   TransportSessionResponseSchema,
+  TransportSessionSettingsInputSchema,
   TransportSessionsResponseSchema,
+  TransportAccountUpdateInputSchema,
 } from "@synapse/shared/schemas"
 import { appRoute } from "../../infrastructure/http/route.js"
-import { sendData } from "../../infrastructure/http/respond.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import {
@@ -38,18 +42,22 @@ import {
 } from "./service.js"
 import { listTransportConnectorCapabilities } from "./connectors/index.js"
 import {
-  accountSchema,
-  linkedUserSchema,
   refreshTransportRuntimeState,
   requireWorkspaceAction,
-  transportSessionSettingsSchema,
-  updateAccountSchema,
 } from "./controller/_shared.js"
 import imFeishuController from "./controller/feishu.js"
 import imWecomController from "./controller/wecom.js"
 import imQqController from "./controller/qq.js"
 import imWeixinController from "./controller/weixin.js"
 import imDingtalkController from "./controller/dingtalk.js"
+
+// Generic IM app request bodies/queries live in @synapse/shared/schemas; the
+// per-transport credential controllers are migrated separately.
+const accountSchema = TransportAccountCreateInputSchema
+const updateAccountSchema = TransportAccountUpdateInputSchema
+const transportSessionSettingsSchema = TransportSessionSettingsInputSchema
+const linkedUserSchema = TransportExternalUserLinkedMemberInputSchema
+const externalUsersQuerySchema = TransportExternalUsersListQuerySchema
 
 export default async function imController(app: FastifyInstance) {
   app.addHook("onRequest", authMiddleware)
@@ -135,7 +143,7 @@ export default async function imController(app: FastifyInstance) {
       if (!allowed) return
 
       const { workspaceId } = request.params as { workspaceId: string }
-      const query = request.query as { transportAccountId?: string }
+      const query = externalUsersQuerySchema.parse(request.query || {})
       const externalUsers = await listTransportExternalUsers({
         workspaceId,
         transportAccountId: query.transportAccountId,
@@ -180,7 +188,7 @@ export default async function imController(app: FastifyInstance) {
     app,
     "PUT",
     "/api/v1/workspaces/:workspaceId/im/external-users/:addressId/workspace-member",
-    { schema: TransportAddressResponseSchema },
+    { schema: TransportExternalUserResponseSchema },
     async (request, reply) => {
       const allowed = await requireWorkspaceAction(
         request,
@@ -195,12 +203,12 @@ export default async function imController(app: FastifyInstance) {
         addressId: string
       }
       const body = linkedUserSchema.parse(request.body)
-      const address = await setTransportAddressLinkedUser({
+      const externalUser = await setTransportAddressLinkedUser({
         workspaceId,
         transportAddressId: addressId,
         workspaceMemberId: body.workspaceMemberId,
       })
-      return { address }
+      return { externalUser }
     }
   )
 
@@ -211,7 +219,7 @@ export default async function imController(app: FastifyInstance) {
     "POST",
     "/api/v1/workspaces/:workspaceId/im/accounts",
     { schema: TransportAccountResponseSchema },
-    async (request, reply): Promise<undefined> => {
+    async (request, reply) => {
       const allowed = await requireWorkspaceAction(
         request,
         reply,
@@ -259,11 +267,8 @@ export default async function imController(app: FastifyInstance) {
         throw err
       }
       await refreshTransportRuntimeState()
-      // Preserve the 201 status. `appRoute`'s default send path would force
-      // 200 (sendData defaults to 200), so send the { data } envelope here
-      // with the explicit 201 and return undefined → appRoute no-ops.
-      sendData(reply, TransportAccountResponseSchema, { account }, 201)
-      return
+      reply.status(201)
+      return { account }
     }
   )
 

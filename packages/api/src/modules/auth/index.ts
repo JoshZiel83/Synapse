@@ -15,7 +15,7 @@ import {
   UpdateMeInputSchema,
   UnlinkAccountInputSchema,
 } from "@synapse/shared/schemas"
-import { sendData } from "../../infrastructure/http/respond.js"
+import { appRoute } from "../../infrastructure/http/route.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { deleteVerificationByIdentifier } from "./repo.js"
 import {
@@ -176,39 +176,53 @@ async function handleWithBetterAuth(
 }
 
 const authModule: FastifyPluginAsync = async (app: FastifyInstance) => {
+  const noContentResponseSchema = z.undefined()
+
   // Custom profile endpoints. Registered BEFORE the Better Auth wildcard so the
   // explicit paths win; they preserve the legacy `{ user, session }` response
   // shape the web/mobile clients (and the proxy guard) still expect from /me.
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/auth/me",
-    { preHandler: [authMiddleware] },
+    {
+      schema: AuthMeViewSchema,
+      options: { preHandler: [authMiddleware] },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
-        return sendData(reply, AuthMeViewSchema, {
+        return {
           user: await getProfile((request as any).user.userId),
           session: (request as any).authSession,
-        })
+        }
       } catch (error) {
-        return handleAuthError(error, reply)
+        handleAuthError(error, reply)
+        return undefined
       }
     }
   )
 
-  app.put(
+  appRoute(
+    app,
+    "PUT",
     "/api/v1/auth/me",
-    { preHandler: [authMiddleware] },
+    {
+      schema: AuthMeViewSchema,
+      options: { preHandler: [authMiddleware] },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const body = updateMeSchema.parse(request.body)
-        return sendData(reply, AuthMeViewSchema, {
+        return {
           user: await updateProfile((request as any).user.userId, {
             name: body.name,
             avatarFileId: body.avatarFileId,
           }),
           session: (request as any).authSession,
-        })
+        }
       } catch (error) {
-        return handleAuthError(error, reply)
+        handleAuthError(error, reply)
+        return undefined
       }
     }
   )
@@ -220,16 +234,23 @@ const authModule: FastifyPluginAsync = async (app: FastifyInstance) => {
   // delete users and CASCADE account/session); BA's deleteUser is disabled and
   // account.delete.before is fail-closed. After closure the user's sessions are
   // already revoked inside the transaction, so subsequent requests are rejected.
-  app.delete(
+  appRoute(
+    app,
+    "DELETE",
     "/api/v1/auth/me",
-    { preHandler: [authMiddleware] },
+    {
+      schema: noContentResponseSchema,
+      options: { preHandler: [authMiddleware] },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const userId = (request as any).user.userId as string
         await markUserDeletedTx(userId)
-        return reply.status(204).send()
+        reply.status(204).send()
+        return undefined
       } catch (error) {
-        return handleAuthError(error, reply)
+        handleAuthError(error, reply)
+        return undefined
       }
     }
   )
@@ -239,9 +260,14 @@ const authModule: FastifyPluginAsync = async (app: FastifyInstance) => {
   // soft-deletes + anonymizes the one account so its provider identity is
   // released, refusing if it is the user's last live login method (423 Locked).
   // BA's own unlink-account endpoint stays fail-closed at the hook.
-  app.delete(
+  appRoute(
+    app,
+    "DELETE",
     "/api/v1/auth/me/accounts",
-    { preHandler: [authMiddleware] },
+    {
+      schema: noContentResponseSchema,
+      options: { preHandler: [authMiddleware] },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const userId = (request as any).user.userId as string
@@ -252,18 +278,20 @@ const authModule: FastifyPluginAsync = async (app: FastifyInstance) => {
           body.accountId
         )
         if (!unlinked) {
-          return reply
+          reply
             .status(404)
             .send({ error: "Account not found", code: "ACCOUNT_NOT_FOUND" })
+          return undefined
         }
-        return reply.status(204).send()
+        reply.status(204).send()
+        return undefined
       } catch (error) {
         if (error instanceof LastAccountError) {
-          return reply
-            .status(423)
-            .send({ error: error.message, code: "LAST_ACCOUNT" })
+          reply.status(423).send({ error: error.message, code: "LAST_ACCOUNT" })
+          return undefined
         }
-        return handleAuthError(error, reply)
+        handleAuthError(error, reply)
+        return undefined
       }
     }
   )

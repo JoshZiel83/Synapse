@@ -1,10 +1,11 @@
 import {
+  CONVERSATION_MESSAGE_SUBTYPE,
   isGroupConversationKind,
   isThreadConversationKind,
   type SessionMessage,
 } from "@synapse/shared"
 import { serializeInstant } from "../../infrastructure/datetime.js"
-import { parseSessionCollaborationState } from "./collaboration-state.js"
+import type { IsoInstantString } from "../../infrastructure/datetime.js"
 import { itemPartsToCanonicalContentBlocks } from "../chat/message-content.js"
 import type {
   ConversationItemPartRow,
@@ -19,32 +20,14 @@ import type {
  * See docs/architecture-boundary-refactor-master-plan.md §8.
  */
 
-/**
- * Parse the `collaboration_state` JSONB. Business JSON: must be a valid object
- * (throws otherwise) before it reaches business logic. Kept here as the decode
- * boundary for the session presenter.
- */
-function parseCollaborationStateJson(value: unknown): Record<string, unknown> {
-  if (!value) return {}
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value)
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error("collaboration_state must be a JSON object")
-      }
-      return parsed as Record<string, unknown>
-    } catch (error) {
-      throw new Error(
-        `collaboration_state must be valid JSON: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      )
-    }
-  }
-  if (typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("collaboration_state must be an object")
-  }
-  return value as Record<string, unknown>
+export function presentInstant(value: Date): IsoInstantString {
+  return serializeInstant(value)
+}
+
+export function presentOptionalInstant(
+  value: Date | null | undefined
+): IsoInstantString | undefined {
+  return value ? presentInstant(value) : undefined
 }
 
 export function presentSession(row: SessionRow | null) {
@@ -57,9 +40,7 @@ export function presentSession(row: SessionRow | null) {
     conversationTitle: row.conversationTitle,
     collaborationMode: row.collaborationMode || "default",
     activePlanApprovalTaskId: row.activePlanApprovalTaskId || undefined,
-    collaborationState: parseSessionCollaborationState(
-      parseCollaborationStateJson(row.collaborationState)
-    ),
+    collaborationState: row.collaborationState,
     isGroupConversation: isGroupConversationKind(row.conversationKind),
     hasThreadContext: isThreadConversationKind(row.conversationKind),
   }
@@ -69,16 +50,13 @@ export function presentSession(row: SessionRow | null) {
 export function presentSessionMessageRole(
   row: Pick<SessionMessageItemRow, "role" | "subtype">
 ): SessionMessage["role"] {
-  if (row.subtype === "tool_result" || row.role === "tool") {
+  if (
+    row.subtype === CONVERSATION_MESSAGE_SUBTYPE.TOOL_RESULT ||
+    row.role === "tool"
+  ) {
     return "tool_result"
   }
   return row.role
-}
-
-function buildMetadataFromItem(item: { metadata?: unknown }) {
-  return typeof item.metadata === "string"
-    ? JSON.parse(item.metadata)
-    : { ...((item.metadata as Record<string, unknown>) || {}) }
 }
 
 export function presentSessionMessage(
@@ -96,7 +74,7 @@ export function presentSessionMessage(
     contentBlocks: itemPartsToCanonicalContentBlocks(parts || []),
     fromActorId: row.fromActorId || undefined,
     fromWorkspaceMemberId: row.fromWorkspaceMemberId || undefined,
-    metadata: buildMetadataFromItem(row),
+    metadata: row.metadata,
     createdAt: serializeInstant(row.createdAt) as SessionMessage["createdAt"],
   } as SessionMessage
 }

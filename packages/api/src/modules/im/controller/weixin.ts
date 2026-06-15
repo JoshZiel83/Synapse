@@ -15,7 +15,6 @@ import {
   WeixinQrSessionResponseSchema,
 } from "@synapse/shared/schemas"
 import { appRoute } from "../../../infrastructure/http/route.js"
-import { sendData } from "../../../infrastructure/http/respond.js"
 import { listMembers } from "../../workspace/service.js"
 import {
   getCurrentUserWeixinBinding,
@@ -86,7 +85,7 @@ export default async function imWeixinController(
     "POST",
     "/api/v1/workspaces/:workspaceId/im/me/weixin-binding/qr",
     { schema: WeixinQrSessionResponseSchema },
-    async (request, reply): Promise<undefined> => {
+    async (request, reply) => {
       const allowed = await requireWorkspaceAction(
         request,
         reply,
@@ -113,8 +112,8 @@ export default async function imWeixinController(
         ownerWorkspaceMemberId: workspaceMemberId,
         inboundActorMode: "follow_owner_chief_actor",
       })
-      sendData(reply, WeixinQrSessionResponseSchema, { session }, 201)
-      return
+      reply.status(201)
+      return { session }
     }
   )
 
@@ -252,7 +251,7 @@ export default async function imWeixinController(
     "POST",
     "/api/v1/workspaces/:workspaceId/im/accounts/weixin/qr",
     { schema: WeixinQrSessionResponseSchema },
-    async (request, reply): Promise<undefined> => {
+    async (request, reply) => {
       const allowed = await requireWorkspaceAction(
         request,
         reply,
@@ -274,8 +273,8 @@ export default async function imWeixinController(
         inboundActorId:
           body.inboundActorId === null ? null : body.inboundActorId,
       })
-      sendData(reply, WeixinQrSessionResponseSchema, { session }, 201)
-      return
+      reply.status(201)
+      return { session }
     }
   )
 

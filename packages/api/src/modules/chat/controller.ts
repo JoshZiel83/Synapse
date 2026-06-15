@@ -68,6 +68,17 @@ import {
   retryAssistantMessage,
 } from "./service.js"
 import {
+  presentChatBootstrap,
+  presentChatClientInstanceRegistration,
+  presentChatConversationCreate,
+  presentChatConversationEnvelope,
+  presentChatConversationList,
+  presentChatConversationMessages,
+  presentChatConversationReadWatermark,
+  presentChatConversationSendMessage,
+  presentChatSync,
+} from "./presenter.js"
+import {
   canUserViewTask,
   enrichTaskForUser,
   getTaskSummary,
@@ -209,10 +220,12 @@ export default async function chatController(app: FastifyInstance) {
     async (request, reply) => {
       try {
         const params = chatWorkspaceParamsSchema.parse(request.params)
-        return await getChatBootstrap({
-          workspaceId: params.workspaceId,
-          userId: getRequestUserId(request),
-        })
+        return presentChatBootstrap(
+          await getChatBootstrap({
+            workspaceId: params.workspaceId,
+            userId: getRequestUserId(request),
+          })
+        )
       } catch (error) {
         replyChatError(reply, error)
         return undefined
@@ -229,12 +242,14 @@ export default async function chatController(app: FastifyInstance) {
       try {
         const params = chatWorkspaceParamsSchema.parse(request.params)
         const query = syncQuerySchema.parse(request.query)
-        return await getChatSync({
-          workspaceId: params.workspaceId,
-          userId: getRequestUserId(request),
-          cursor: query.cursor,
-          limit: query.limit,
-        })
+        return presentChatSync(
+          await getChatSync({
+            workspaceId: params.workspaceId,
+            userId: getRequestUserId(request),
+            cursor: query.cursor,
+            limit: query.limit,
+          })
+        )
       } catch (error) {
         replyChatError(reply, error)
         return undefined
@@ -252,13 +267,15 @@ export default async function chatController(app: FastifyInstance) {
         const params = chatWorkspaceParamsSchema.parse(request.params)
         const body = registerClientInstanceSchema.parse(request.body)
         reply.status(201)
-        return await createChatClientInstance({
-          workspaceId: params.workspaceId,
-          userId: getRequestUserId(request),
-          platform: body.platform,
-          deviceLabel: body.deviceLabel,
-          metadata: body.metadata,
-        })
+        return presentChatClientInstanceRegistration(
+          await createChatClientInstance({
+            workspaceId: params.workspaceId,
+            userId: getRequestUserId(request),
+            platform: body.platform,
+            deviceLabel: body.deviceLabel,
+            metadata: body.metadata,
+          })
+        )
       } catch (error) {
         replyChatError(reply, error)
         return undefined
@@ -275,14 +292,16 @@ export default async function chatController(app: FastifyInstance) {
       try {
         const params = chatClientInstanceParamsSchema.parse(request.params)
         const body = registerClientInstanceSchema.parse(request.body)
-        return await touchChatClientInstance({
-          workspaceId: params.workspaceId,
-          userId: getRequestUserId(request),
-          clientInstanceId: params.clientInstanceId,
-          platform: body.platform,
-          deviceLabel: body.deviceLabel,
-          metadata: body.metadata,
-        })
+        return presentChatClientInstanceRegistration(
+          await touchChatClientInstance({
+            workspaceId: params.workspaceId,
+            userId: getRequestUserId(request),
+            clientInstanceId: params.clientInstanceId,
+            platform: body.platform,
+            deviceLabel: body.deviceLabel,
+            metadata: body.metadata,
+          })
+        )
       } catch (error) {
         replyChatError(reply, error)
         return undefined
@@ -299,17 +318,19 @@ export default async function chatController(app: FastifyInstance) {
       try {
         const params = chatWorkspaceParamsSchema.parse(request.params)
         const body = createConversationSchema.parse(request.body)
-        return await createChatConversation({
-          workspaceId: params.workspaceId,
-          userId: getRequestUserId(request),
-          clientRequestId: body.clientRequestId,
-          kind: body.kind,
-          title: body.title,
-          workspaceMemberIds: body.workspaceMemberIds,
-          actorIds: body.actorIds,
-          remoteAgentIds: body.remoteAgentIds,
-          metadata: body.metadata,
-        })
+        return presentChatConversationCreate(
+          await createChatConversation({
+            workspaceId: params.workspaceId,
+            userId: getRequestUserId(request),
+            clientRequestId: body.clientRequestId,
+            kind: body.kind,
+            title: body.title,
+            workspaceMemberIds: body.workspaceMemberIds,
+            actorIds: body.actorIds,
+            remoteAgentIds: body.remoteAgentIds,
+            metadata: body.metadata,
+          })
+        )
       } catch (error) {
         replyChatError(reply, error)
         return undefined
@@ -326,15 +347,17 @@ export default async function chatController(app: FastifyInstance) {
       try {
         const params = chatConversationParamsSchema.parse(request.params)
         const query = conversationMessagesQuerySchema.parse(request.query)
-        return await getChatConversationMessages({
-          workspaceId: params.workspaceId,
-          userId: getRequestUserId(request),
-          conversationId: params.conversationId,
-          afterSequence: query.afterSequence,
-          beforeSequence: query.beforeSequence,
-          limit: query.limit,
-          clientInstanceId: query.clientInstanceId,
-        })
+        return presentChatConversationMessages(
+          await getChatConversationMessages({
+            workspaceId: params.workspaceId,
+            userId: getRequestUserId(request),
+            conversationId: params.conversationId,
+            afterSequence: query.afterSequence,
+            beforeSequence: query.beforeSequence,
+            limit: query.limit,
+            clientInstanceId: query.clientInstanceId,
+          })
+        )
       } catch (error) {
         replyChatError(reply, error)
         return undefined
@@ -379,16 +402,18 @@ export default async function chatController(app: FastifyInstance) {
           reply
         )
         if (!workspaceMemberId) return undefined
-        return await sendChatConversationMessage({
-          workspaceId: params.workspaceId,
-          workspaceMemberId,
-          conversationId: params.conversationId,
-          clientInstanceId: body.clientInstanceId,
-          clientMessageId: body.clientMessageId,
-          contentBlocks: body.contentBlocks as never,
-          replyToItemId: body.replyToItemId,
-          metadata: body.metadata,
-        })
+        return presentChatConversationSendMessage(
+          await sendChatConversationMessage({
+            workspaceId: params.workspaceId,
+            workspaceMemberId,
+            conversationId: params.conversationId,
+            clientInstanceId: body.clientInstanceId,
+            clientMessageId: body.clientMessageId,
+            contentBlocks: body.contentBlocks as never,
+            replyToItemId: body.replyToItemId,
+            metadata: body.metadata,
+          })
+        )
       } catch (error) {
         replyChatError(reply, error)
         return undefined
@@ -411,14 +436,16 @@ export default async function chatController(app: FastifyInstance) {
           reply
         )
         if (!workspaceMemberId) return undefined
-        return await updateChatConversationReadWatermark({
-          workspaceId: params.workspaceId,
-          workspaceMemberId,
-          conversationId: params.conversationId,
-          clientInstanceId: body.clientInstanceId,
-          readUpToSequence: body.readUpToSequence,
-          lastVisibleSequence: body.lastVisibleSequence,
-        })
+        return presentChatConversationReadWatermark(
+          await updateChatConversationReadWatermark({
+            workspaceId: params.workspaceId,
+            workspaceMemberId,
+            conversationId: params.conversationId,
+            clientInstanceId: body.clientInstanceId,
+            readUpToSequence: body.readUpToSequence,
+            lastVisibleSequence: body.lastVisibleSequence,
+          })
+        )
       } catch (error) {
         replyChatError(reply, error)
         return undefined
@@ -558,10 +585,12 @@ export default async function chatController(app: FastifyInstance) {
     async (request, reply) => {
       try {
         const params = chatWorkspaceParamsSchema.parse(request.params)
-        return await listChatConversations({
-          workspaceId: params.workspaceId,
-          userId: getRequestUserId(request),
-        })
+        return presentChatConversationList(
+          await listChatConversations({
+            workspaceId: params.workspaceId,
+            userId: getRequestUserId(request),
+          })
+        )
       } catch (error) {
         replyChatError(reply, error)
         return undefined
@@ -577,11 +606,13 @@ export default async function chatController(app: FastifyInstance) {
     async (request, reply) => {
       try {
         const params = chatConversationParamsSchema.parse(request.params)
-        return await getChatConversationDetail({
-          workspaceId: params.workspaceId,
-          userId: getRequestUserId(request),
-          conversationId: params.conversationId,
-        })
+        return presentChatConversationEnvelope(
+          await getChatConversationDetail({
+            workspaceId: params.workspaceId,
+            userId: getRequestUserId(request),
+            conversationId: params.conversationId,
+          })
+        )
       } catch (error) {
         replyChatError(reply, error)
         return undefined
@@ -598,13 +629,14 @@ export default async function chatController(app: FastifyInstance) {
       try {
         const params = chatConversationParamsSchema.parse(request.params)
         const body = patchConversationSchema.parse(request.body)
-        return await patchChatConversation({
+        const record = await patchChatConversation({
           workspaceId: params.workspaceId,
           userId: getRequestUserId(request),
           conversationId: params.conversationId,
           title: body.title,
           metadata: body.metadata,
         })
+        return record ? presentChatConversationEnvelope(record) : undefined
       } catch (error) {
         replyChatError(reply, error)
         return undefined
@@ -622,14 +654,16 @@ export default async function chatController(app: FastifyInstance) {
         const params = chatConversationParamsSchema.parse(request.params)
         const body = addParticipantsSchema.parse(request.body)
         reply.status(201)
-        return await addChatConversationParticipants({
-          workspaceId: params.workspaceId,
-          userId: getRequestUserId(request),
-          conversationId: params.conversationId,
-          workspaceMemberIds: body.workspaceMemberIds,
-          actorIds: body.actorIds,
-          remoteAgentIds: body.remoteAgentIds,
-        })
+        return presentChatConversationEnvelope(
+          await addChatConversationParticipants({
+            workspaceId: params.workspaceId,
+            userId: getRequestUserId(request),
+            conversationId: params.conversationId,
+            workspaceMemberIds: body.workspaceMemberIds,
+            actorIds: body.actorIds,
+            remoteAgentIds: body.remoteAgentIds,
+          })
+        )
       } catch (error) {
         replyChatError(reply, error)
         return undefined

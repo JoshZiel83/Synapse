@@ -9,11 +9,13 @@
  */
 
 import type { CanonicalContentBlock, Memory, SubjectRef } from "@synapse/shared"
-import { parseJsonObject, SUBJECT_KIND } from "@synapse/shared"
+import { SUBJECT_KIND } from "@synapse/shared"
 import {
   serializeInstant,
   serializeOptionalInstant,
 } from "../../infrastructure/datetime.js"
+import type { MemoryAccessGrantView } from "@synapse/shared/schemas"
+import type { MemoryAccessGrantRow } from "./access-grant-storage.js"
 import type { MemoryRow } from "./repo.types.js"
 
 export function buildSubjectRefFromJoin(params: {
@@ -65,34 +67,34 @@ export function presentMemoryRow(
   contentBlocks: CanonicalContentBlock[]
 ): Memory {
   const owner = buildSubjectRefFromJoin({
-    kind: row.owner_kind,
-    workspaceId: row.owner_workspace_id,
-    workspaceMemberId: row.owner_workspace_member_id,
-    actorId: row.owner_actor_id,
-    remoteAgentId: row.owner_remote_agent_id,
-    conversationId: row.owner_conversation_id,
+    kind: row.ownerKind,
+    workspaceId: row.ownerWorkspaceId,
+    workspaceMemberId: row.ownerWorkspaceMemberId,
+    actorId: row.ownerActorId,
+    remoteAgentId: row.ownerRemoteAgentId,
+    conversationId: row.ownerConversationId,
   })
   if (!owner) {
     throw new Error(
-      `memory_items ${row.id}: could not decode owner subject (kind=${row.owner_kind})`
+      `memory_items ${row.id}: could not decode owner subject (kind=${row.ownerKind})`
     )
   }
   const scope = buildSubjectRefFromJoin({
-    kind: row.scope_kind,
-    workspaceId: row.scope_workspace_id_via_join,
+    kind: row.scopeKind,
+    workspaceId: row.scopeWorkspaceIdViaJoin,
     workspaceMemberId: null,
     actorId: null,
     remoteAgentId: null,
-    conversationId: row.scope_conversation_id_via_join,
+    conversationId: row.scopeConversationIdViaJoin,
   })
   const state = row.state
   return {
     id: row.id,
-    workspaceId: row.workspace_id,
-    spaceId: row.memory_space_id,
+    workspaceId: row.workspaceId,
+    spaceId: row.memorySpaceId,
     owner,
     scope,
-    namespaceKey: row.space_namespace_key,
+    namespaceKey: row.spaceNamespaceKey,
     category: row.category,
     state,
     status: state,
@@ -100,22 +102,44 @@ export function presentMemoryRow(
     importance: Number(row.importance ?? 0),
     confidence: Number(row.confidence ?? 0),
     tags: row.tags ?? [],
-    textDigest: row.text_digest || "",
-    searchText: row.search_text || "",
+    textDigest: row.textDigest || "",
+    searchText: row.searchText || "",
     contentBlocks,
-    sourceItemId: row.source_item_id ?? undefined,
-    sourceToolCallId: row.source_tool_call_id ?? undefined,
-    sourceTurnId: row.source_turn_id ?? undefined,
-    supersedesMemoryId: row.supersedes_item_id ?? undefined,
-    metadata: parseJsonObject(row.metadata),
-    indexStatus: row.index_status,
-    embeddingModel: row.embedding_model || undefined,
-    embeddingDim: row.embedding_dim ?? undefined,
-    indexedAt: serializeOptionalInstant(row.indexed_at),
-    indexError: row.index_error ?? undefined,
-    createdAt: serializeInstant(row.created_at),
-    updatedAt: serializeInstant(row.updated_at),
-    ownerLabel: row.owner_label ?? undefined,
-    scopeLabel: row.scope_label ?? undefined,
+    sourceItemId: row.sourceItemId ?? undefined,
+    sourceToolCallId: row.sourceToolCallId ?? undefined,
+    sourceTurnId: row.sourceTurnId ?? undefined,
+    supersedesMemoryId: row.supersedesItemId ?? undefined,
+    metadata: row.metadata,
+    indexStatus: row.indexStatus,
+    embeddingModel: row.embeddingModel || undefined,
+    embeddingDim: row.embeddingDim ?? undefined,
+    indexedAt: serializeOptionalInstant(row.indexedAt),
+    indexError: row.indexError ?? undefined,
+    createdAt: serializeInstant(row.createdAt),
+    updatedAt: serializeInstant(row.updatedAt),
+    ownerLabel: row.ownerLabel ?? undefined,
+    scopeLabel: row.scopeLabel ?? undefined,
+  }
+}
+
+export function presentMemoryAccessGrant(
+  row: MemoryAccessGrantRow
+): MemoryAccessGrantView {
+  return {
+    id: row.id,
+    workspaceId: row.workspaceId,
+    memorySpaceId: row.memorySpaceId,
+    memoryItemId: row.memoryItemId,
+    subjectId: row.subjectId,
+    scopeSubjectId: row.scopeSubjectId,
+    permissions: row.permissions,
+    status: row.status,
+    source: row.source,
+    createdByWorkspaceMemberId: row.createdByWorkspaceMemberId,
+    sourceTaskId: row.sourceTaskId,
+    revokedAt: serializeOptionalInstant(row.revokedAt) ?? null,
+    supersededAt: serializeOptionalInstant(row.supersededAt) ?? null,
+    createdAt: serializeInstant(row.createdAt),
+    updatedAt: serializeInstant(row.updatedAt),
   }
 }

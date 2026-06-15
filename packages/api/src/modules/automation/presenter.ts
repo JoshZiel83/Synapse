@@ -16,7 +16,6 @@ import type {
 } from "@synapse/shared"
 import {
   normalizeCanonicalContentBlocks,
-  parseJsonObject,
   resolveAutomationOccurrenceDisplay,
 } from "@synapse/shared"
 import {
@@ -32,7 +31,7 @@ import type {
   AutomationOccurrenceRow,
   AutomationPolicyRow,
   AutomationRuleRow,
-  AutomationTriggerRow as AutomationTriggerDbRow,
+  AutomationTriggerRow,
   AutomationWebhookEndpointRow,
 } from "./repo.types.js"
 
@@ -107,32 +106,32 @@ export function presentRule(
     lastTriggeredAt: serializeOptionalInstant(row.last_triggered_at),
     lastErrorAt: serializeOptionalInstant(row.last_error_at),
     lastErrorMessage: row.last_error_message || undefined,
-    metadata: parseJsonObject(row.metadata),
+    metadata: row.metadata,
     createdAt: serializeInstant(row.created_at),
     updatedAt: serializeInstant(row.updated_at),
   }
 }
 
-export function presentTrigger(row: AutomationTriggerDbRow): AutomationTrigger {
+export function presentTrigger(row: AutomationTriggerRow): AutomationTrigger {
   return {
     ruleId: row.rule_id,
     triggerKind: row.trigger_kind,
     sourceKind: row.source_kind,
     eventSourceId: row.event_source_id || undefined,
     eventSourceKey:
-      (row as AutomationTriggerDbRow & { event_source_key?: string | null })
+      (row as AutomationTriggerRow & { event_source_key?: string | null })
         .event_source_key || undefined,
     eventSourceName:
-      (row as AutomationTriggerDbRow & { event_source_name?: string | null })
+      (row as AutomationTriggerRow & { event_source_name?: string | null })
         .event_source_name || undefined,
     eventProviderKind:
       (
-        row as AutomationTriggerDbRow & {
+        row as AutomationTriggerRow & {
           event_provider_kind?: AutomationEventProviderKind | null
         }
       ).event_provider_kind || undefined,
     eventProviderRef:
-      (row as AutomationTriggerDbRow & { event_provider_ref?: string | null })
+      (row as AutomationTriggerRow & { event_provider_ref?: string | null })
         .event_provider_ref || undefined,
     eventSourceIntegration: presentEventSourceIntegration({
       integration_binding_id: row.event_integration_binding_id,
@@ -148,13 +147,13 @@ export function presentTrigger(row: AutomationTriggerDbRow): AutomationTrigger {
     }),
     eventSourceStatus:
       (
-        row as AutomationTriggerDbRow & {
+        row as AutomationTriggerRow & {
           event_source_status?: AutomationTrigger["eventSourceStatus"]
         }
       ).event_source_status || undefined,
     sourceLocator: row.source_locator || undefined,
     matchKey: row.match_key || undefined,
-    matcher: parseJsonObject(row.matcher),
+    matcher: row.matcher,
     scheduleKind:
       (row.schedule_kind as AutomationTrigger["scheduleKind"]) || undefined,
     scheduleExpr: row.schedule_expr || undefined,
@@ -163,7 +162,7 @@ export function presentTrigger(row: AutomationTriggerDbRow): AutomationTrigger {
     startsAt: serializeOptionalInstant(row.starts_at),
     nextFireAt: serializeOptionalInstant(row.next_fire_at),
     lastFiredAt: serializeOptionalInstant(row.last_fired_at),
-    metadata: parseJsonObject(row.metadata),
+    metadata: row.metadata,
   }
 }
 
@@ -176,7 +175,7 @@ export function presentPolicy(row: AutomationPolicyRow): AutomationPolicy {
     triggerCount: row.trigger_count,
     completionStatus: row.completion_status,
     completedAt: serializeOptionalInstant(row.completed_at),
-    metadata: parseJsonObject(row.metadata),
+    metadata: row.metadata,
   }
 }
 
@@ -191,7 +190,7 @@ export function presentDelivery(
     messageBlocks: normalizeContentBlocks(row.message_blocks),
     targetPolicy: row.target_policy,
     targetParticipantIds,
-    metadata: parseJsonObject(row.metadata),
+    metadata: row.metadata,
   }
 }
 
@@ -208,15 +207,15 @@ export function presentEventSource(
     name: row.name,
     description: row.description,
     recommendedUsage: row.recommended_usage || undefined,
-    payloadSchema: parseJsonObject(row.payload_schema),
-    examplePayload: parseJsonObject(row.example_payload),
+    payloadSchema: row.payload_schema,
+    examplePayload: row.example_payload,
     status: row.status,
     createdByKind: row.created_by_kind,
     createdByWorkspaceMemberId: row.created_by_workspace_member_id || undefined,
     createdByActorId: row.created_by_actor_id || undefined,
     createdBySessionId: row.created_by_session_id || undefined,
     lastTriggeredAt: serializeOptionalInstant(row.last_triggered_at),
-    metadata: parseJsonObject(row.metadata),
+    metadata: row.metadata,
     createdAt: serializeInstant(row.created_at),
     updatedAt: serializeInstant(row.updated_at),
   }
@@ -298,8 +297,8 @@ export function presentOccurrence(
       sourceLocator: row.source_locator || undefined,
       matchKey: row.match_key || undefined,
       dedupeKey: row.dedupe_key || undefined,
-      sourceSnapshot: parseJsonObject(row.source_snapshot),
-      payload: parseJsonObject(row.payload),
+      sourceSnapshot: row.source_snapshot,
+      payload: row.payload,
       occurredAt: serializeInstant(row.occurred_at),
       createdAt: serializeInstant(row.created_at),
     },
@@ -351,7 +350,7 @@ export function presentExecutionWithOccurrence(
     return execution
   }
 
-  const parsedSourceSnapshot = parseJsonObject(row.source_snapshot)
+  const parsedSourceSnapshot = row.source_snapshot ?? {}
   const mergedSourceSnapshot = {
     ...parsedSourceSnapshot,
     ruleName:
@@ -375,7 +374,7 @@ export function presentExecutionWithOccurrence(
     match_key: row.match_key || null,
     dedupe_key: row.dedupe_key || null,
     source_snapshot: mergedSourceSnapshot,
-    payload: row.payload || {},
+    payload: row.payload ?? {},
     occurred_at: row.occurrence_occurred_at,
     created_at: row.occurrence_created_at || row.occurrence_occurred_at,
   })
@@ -401,7 +400,7 @@ export function presentWebhookEndpoint(
     status: row.status,
     pathToken: row.path_token,
     secretHint: row.secret_hint,
-    metadata: parseJsonObject(row.metadata),
+    metadata: row.metadata,
     createdByWorkspaceMemberId: row.created_by_workspace_member_id || undefined,
     lastReceivedAt: serializeOptionalInstant(row.last_received_at),
     createdAt: serializeInstant(row.created_at),

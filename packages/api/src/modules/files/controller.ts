@@ -1,18 +1,12 @@
 import type { FastifyInstance, FastifyReply } from "fastify"
-import { z } from "zod"
-import { USER_UPLOAD_FILE_ORIGIN_SYSTEMS } from "@synapse/shared/constants"
 import {
+  FileUploadOriginInputSchema,
   FileParseEnqueueResultSchema,
   FileParseRunViewSchema,
   FileRecordViewSchema,
   StoredFileRecordViewSchema,
 } from "@synapse/shared/schemas"
-import type {
-  FileCreateOriginInput,
-  UserUploadFileOriginSystem,
-} from "@synapse/shared/types"
 import { appRoute, wireRoute } from "../../infrastructure/http/route.js"
-import { sendData } from "../../infrastructure/http/respond.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import {
@@ -30,12 +24,6 @@ import {
   enqueueFileParse,
   getLatestAvailableFileParse,
 } from "./parse-service.js"
-
-const fileUploadOriginSchema = z.strictObject({
-  family: z.literal("user_upload"),
-  system: z.enum(USER_UPLOAD_FILE_ORIGIN_SYSTEMS),
-  details: z.record(z.string(), z.unknown()).optional(),
-})
 
 async function sendStoredFile(
   reply: FastifyReply,
@@ -78,7 +66,7 @@ export async function filesUploadController(app: FastifyInstance) {
       const userId = (request as any).user!.userId
 
       let filePart: Awaited<ReturnType<typeof request.file>> | null = null
-      let originInput: FileCreateOriginInput | null = null
+      let originInput: unknown = null
       try {
         for await (const part of request.parts()) {
           if (part.type === "file") {
@@ -92,7 +80,7 @@ export async function filesUploadController(app: FastifyInstance) {
 
           if (part.fieldname === "origin" && typeof part.value === "string") {
             try {
-              originInput = JSON.parse(part.value) as FileCreateOriginInput
+              originInput = JSON.parse(part.value)
             } catch {
               reply.status(400).send({ error: "origin must be valid JSON" })
               return
@@ -117,7 +105,7 @@ export async function filesUploadController(app: FastifyInstance) {
         return
       }
 
-      const parsedOrigin = fileUploadOriginSchema.safeParse(originInput)
+      const parsedOrigin = FileUploadOriginInputSchema.safeParse(originInput)
       if (!parsedOrigin.success) {
         reply.status(400).send({
           error: `Invalid origin: ${parsedOrigin.error.issues.map((issue) => issue.message).join(" ")}`,
@@ -132,15 +120,13 @@ export async function filesUploadController(app: FastifyInstance) {
         workspaceId,
         userId,
         buildUserUploadOrigin({
-          system: parsedOrigin.data.system as UserUploadFileOriginSystem,
+          system: parsedOrigin.data.system,
           initiatorUserId: userId,
           details: parsedOrigin.data.details,
         })
       )
-      // 201-creating write: send the { data } envelope at 201 via the same
-      // sendData the helper uses, then no-op appRoute (reply already sent).
-      sendData(reply, StoredFileRecordViewSchema, record, 201)
-      return undefined
+      reply.status(201)
+      return record
     }
   )
 }
@@ -242,10 +228,8 @@ export async function filesReadController(app: FastifyInstance) {
         return
       }
 
-      // 202-accepted write: send the { data } envelope at 202 via the same
-      // sendData the helper uses, then no-op appRoute (reply already sent).
-      sendData(reply, FileParseEnqueueResultSchema, { runId }, 202)
-      return undefined
+      reply.status(202)
+      return { runId }
     }
   )
 

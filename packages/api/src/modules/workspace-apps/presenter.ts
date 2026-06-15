@@ -1,9 +1,9 @@
 import {
   SUBJECT_KIND,
-  type CapabilityAccessTarget,
   type WorkspaceAppGrant,
   type WorkspaceAppGrantPermission,
   type WorkspaceAppGrantRequest,
+  type WorkspaceAppGrantTargetInput,
   type WorkspaceAppKind,
   type WorkspaceAppView,
 } from "@synapse/shared"
@@ -33,7 +33,7 @@ export type WorkspaceAppRow = {
   deletedAt?: Date | null
 }
 
-export type WorkspaceAppGrantViewRow = {
+export type WorkspaceAppGrantPresentationRow = {
   id: string
   kind: string
   workspaceId: string | null
@@ -55,7 +55,7 @@ export type WorkspaceAppGrantViewRow = {
   scopeConversationIdViaJoin?: string | null
 }
 
-export type WorkspaceAppGrantRequestViewRow = {
+export type WorkspaceAppGrantRequestPresentationRow = {
   id: string
   workspaceId: string
   workspaceAppId: string
@@ -110,7 +110,7 @@ function subjectRefToTarget(input: {
   scopeKind: string | null
   scopeWorkspaceId: string | null
   scopeConversationId: string | null
-}): CapabilityAccessTarget {
+}): WorkspaceAppGrantTargetInput {
   const requireId = (value: string | null, label: string): string => {
     if (!value) {
       throw new Error(`access subject ${input.kind} is missing ${label}`)
@@ -118,7 +118,7 @@ function subjectRefToTarget(input: {
     return value
   }
 
-  const subject: CapabilityAccessTarget["subject"] =
+  const subject: WorkspaceAppGrantTargetInput["subject"] =
     input.kind === SUBJECT_KIND.WORKSPACE
       ? {
           kind: SUBJECT_KIND.WORKSPACE,
@@ -178,7 +178,9 @@ export function presentWorkspaceApp(row: WorkspaceAppRow): WorkspaceAppView {
   }
 }
 
-export function presentGrant(row: WorkspaceAppGrantViewRow): WorkspaceAppGrant {
+export function presentGrant(
+  row: WorkspaceAppGrantPresentationRow
+): WorkspaceAppGrant {
   if (!row.createdAt) {
     throw new Error("workspace app grant row is missing created_at")
   }
@@ -206,7 +208,7 @@ export function presentGrant(row: WorkspaceAppGrantViewRow): WorkspaceAppGrant {
 }
 
 export function presentGrantRequest(
-  row: WorkspaceAppGrantRequestViewRow
+  row: WorkspaceAppGrantRequestPresentationRow
 ): WorkspaceAppGrantRequest {
   if (!row.granteeKind || !row.createdAt || !row.updatedAt) {
     throw new Error("workspace app grant request row is missing joined fields")

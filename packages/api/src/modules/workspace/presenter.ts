@@ -1,5 +1,11 @@
 import type { WorkspaceChiefActorPreference } from "@synapse/shared"
-import { type ActorDoc, type ActorRole } from "@synapse/shared"
+import {
+  ACTOR_ROLES,
+  WORKSPACE_TRUST_LEVELS,
+  type ActorDoc,
+  type ActorRole,
+  type TrustLevel,
+} from "@synapse/shared"
 import { serializeOptionalInstant } from "../../infrastructure/datetime.js"
 import { getFileUrlById } from "../files/service.js"
 import type {
@@ -18,15 +24,33 @@ import type {
  * from repo.types — this file must not import generated/db. See §5.1 / §10.1.
  */
 
+function asWorkspaceTrustLevel(
+  value: string | null | undefined
+): TrustLevel | null {
+  if (value == null) return null
+  if ((WORKSPACE_TRUST_LEVELS as readonly string[]).includes(value)) {
+    return value as TrustLevel
+  }
+  throw new Error(`Unexpected workspace trust level: ${value}`)
+}
+
+function asActorRole(value: string | null | undefined): ActorRole | null {
+  if (value == null) return null
+  if ((ACTOR_ROLES as readonly string[]).includes(value)) {
+    return value as ActorRole
+  }
+  throw new Error(`Unexpected actor role: ${value}`)
+}
+
 export function deriveWorkspaceTrustLevel(row: {
   ownerId?: string | null
   userId?: string | null
   trustLevel?: string | null
-}) {
+}): TrustLevel | null {
   if (row.ownerId && row.userId && row.ownerId === row.userId) {
     return "owner"
   }
-  return row.trustLevel ?? null
+  return asWorkspaceTrustLevel(row.trustLevel)
 }
 
 export function presentWorkspaceRow(row: WorkspaceViewRow) {
@@ -61,19 +85,15 @@ export function presentActorRow(params: {
     id: row.id,
     workspaceId,
     definition: {
-      name: displayName,
+      displayName,
       role: row.role,
       title: row.title,
       avatarFileId: row.avatarFileId ?? undefined,
       parentId: row.parentId ?? undefined,
       canRepresentUser: Boolean(row.canRepresentUser),
       docs,
-      specialties: Array.isArray(row.specialties) ? row.specialties : [],
-      config: row.config
-        ? typeof row.config === "string"
-          ? JSON.parse(row.config)
-          : row.config
-        : {},
+      specialties: row.specialties,
+      config: row.config,
     },
     currentVersion: Number(row.currentVersion || 1),
     isActive: true,
@@ -121,7 +141,9 @@ export function presentAccessBindingRow(row: {
     assignedByWorkspaceMemberId: row.assignedByWorkspaceMemberId,
     createdAt: serializeOptionalInstant(row.createdAt),
     updatedAt: serializeOptionalInstant(row.updatedAt),
-    ...(row.trustLevel !== undefined ? { trustLevel: row.trustLevel } : {}),
+    ...(row.trustLevel !== undefined
+      ? { trustLevel: asWorkspaceTrustLevel(row.trustLevel) }
+      : {}),
     ...(row.userName !== undefined ? { userName: row.userName } : {}),
     ...(row.userEmail !== undefined ? { userEmail: row.userEmail } : {}),
     ...(row.avatarUrl !== undefined ? { avatarUrl: row.avatarUrl } : {}),
@@ -143,7 +165,7 @@ export function presentWorkspaceChiefActorPreferenceRow(
         ? {
             id: chiefActorId,
             displayName: row.chiefActorDisplayName,
-            role: (row.chiefActorRole as ActorRole | null) || "assistant",
+            role: asActorRole(row.chiefActorRole) ?? "assistant",
             title: row.chiefActorTitle || row.chiefActorRole || "Actor",
             avatarUrl: row.chiefActorAvatarFileId
               ? getFileUrlById(row.chiefActorAvatarFileId)

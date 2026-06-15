@@ -4,14 +4,7 @@ import type {
   WorkspaceInvitePublicView,
   WorkspaceInviteRedeemResult,
 } from "@synapse/shared/types"
-import { IsoInstantStringSchema } from "@synapse/shared/schemas"
-import { z } from "zod"
 import { formatValidationDetails } from "../../infrastructure/validation-error.js"
-import {
-  CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES,
-  INVITE_TRUST_LEVELS,
-  WORKSPACE_ACCESS_KEYS,
-} from "@synapse/shared/constants"
 import {
   authMiddleware,
   optionalAuth,
@@ -56,66 +49,38 @@ import {
   revokeInvite,
 } from "./invite/service.js"
 import {
+  presentWorkspaceInvite,
+  presentWorkspaceInvitePublic,
+  presentWorkspaceInviteRedeemResult,
+} from "./invite/presenter.js"
+import {
+  CreateWorkspaceInviteInputSchema,
+  WorkspaceAccessGrantInputSchema,
+  WorkspaceAccessBindingListViewSchema,
+  type WorkspaceAccessBindingListView,
   WorkspaceAccessBindingViewSchema,
+  WorkspaceAddMemberInputSchema,
   WorkspaceCapabilityConversationTypePoliciesViewSchema,
+  WorkspaceCapabilityConversationTypePolicyUpdateInputSchema,
+  WorkspaceChiefActorPreferenceInputSchema,
   WorkspaceChiefActorPreferenceViewSchema,
+  WorkspaceCreateInputSchema,
   WorkspaceCreateResultViewSchema,
   WorkspaceInvitePublicViewSchema,
   WorkspaceInviteRedeemResultSchema,
+  WorkspaceInviteListViewSchema,
+  type WorkspaceInviteListView,
   WorkspaceInviteViewSchema,
-  WorkspaceListItemViewSchema,
+  WorkspaceListViewSchema,
+  type WorkspaceListView,
+  WorkspaceMemberListViewSchema,
+  type WorkspaceMemberListView,
   WorkspaceMemberViewSchema,
   WorkspaceNavigationViewSchema,
+  WorkspaceUpdateInputSchema,
   WorkspaceViewSchema,
 } from "@synapse/shared/schemas"
 import { appRoute } from "../../infrastructure/http/route.js"
-
-// ── Schemas ──
-
-const createWorkspaceSchema = z.object({
-  name: z.string().min(1).max(255),
-  description: z.string().max(2000).optional(),
-})
-
-const updateWorkspaceSchema = z.object({
-  name: z.string().min(1).max(255).optional(),
-  description: z.string().max(2000).optional(),
-})
-
-const addMemberSchema = z.object({
-  userId: z.uuid(),
-  trustLevel: z.enum(INVITE_TRUST_LEVELS),
-})
-
-const createInviteSchema = z.object({
-  trustLevel: z.enum(INVITE_TRUST_LEVELS).optional(),
-  maxUses: z.number().int().positive().optional(),
-  expiresAt: IsoInstantStringSchema.optional(),
-})
-
-const workspaceAccessSchema = z.object({
-  workspaceMemberId: z.uuid(),
-  accessKey: z.enum(WORKSPACE_ACCESS_KEYS),
-})
-
-const chiefActorPreferenceSchema = z.object({
-  chiefActorId: z.uuid().nullable(),
-})
-
-const conversationTypeMaskSchema = z.number().int().min(1).max(15)
-const capabilityConversationTypePolicyFamilySchema = z.enum(
-  CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES
-)
-const workspaceCapabilityConversationTypePolicyUpdateSchema = z.object({
-  policies: z
-    .record(
-      capabilityConversationTypePolicyFamilySchema,
-      conversationTypeMaskSchema
-    )
-    .refine((value) => Object.keys(value).length > 0, {
-      message: "At least one policy update is required",
-    }),
-})
 
 // ── Helpers ──
 
@@ -149,7 +114,7 @@ export async function handleCreateWorkspace(
   request: FastifyRequest,
   reply: FastifyReply
 ) {
-  const parsed = createWorkspaceSchema.safeParse(request.body)
+  const parsed = WorkspaceCreateInputSchema.safeParse(request.body)
   if (!parsed.success) {
     reply.status(400).send({
       error: "Validation failed",
@@ -171,7 +136,9 @@ export async function handleCreateWorkspace(
   }
 }
 
-export async function handleListWorkspaces(request: FastifyRequest) {
+export async function handleListWorkspaces(
+  request: FastifyRequest
+): Promise<WorkspaceListView> {
   const workspaces = await listUserWorkspaces((request as any).user!.userId)
   return workspaces.map(presentWorkspaceListRow)
 }
@@ -210,7 +177,7 @@ export async function handleUpdateWorkspace(
   )
   if (!allowed) return undefined
 
-  const parsed = updateWorkspaceSchema.safeParse(request.body)
+  const parsed = WorkspaceUpdateInputSchema.safeParse(request.body)
   if (!parsed.success) {
     reply.status(400).send({
       error: "Validation failed",
@@ -264,7 +231,7 @@ export async function handleAddMember(
   )
   if (!allowed) return undefined
 
-  const parsed = addMemberSchema.safeParse(request.body)
+  const parsed = WorkspaceAddMemberInputSchema.safeParse(request.body)
   if (!parsed.success) {
     reply.status(400).send({
       error: "Validation failed",
@@ -294,7 +261,7 @@ export async function handleAddMember(
 export async function handleListMembers(
   request: FastifyRequest,
   reply: FastifyReply
-) {
+): Promise<WorkspaceMemberListView | undefined> {
   const allowed = await requireWorkspacePermission(
     request,
     reply,
@@ -311,7 +278,7 @@ export async function handleListMembers(
 export async function handleListWorkspaceAccess(
   request: FastifyRequest,
   reply: FastifyReply
-) {
+): Promise<WorkspaceAccessBindingListView | undefined> {
   const allowed = await requireWorkspacePermission(
     request,
     reply,
@@ -354,7 +321,7 @@ export async function handleUpdateWorkspaceCapabilityConversationTypePolicies(
   if (!allowed) return undefined
 
   const parsed =
-    workspaceCapabilityConversationTypePolicyUpdateSchema.safeParse(
+    WorkspaceCapabilityConversationTypePolicyUpdateInputSchema.safeParse(
       request.body
     )
   if (!parsed.success) {
@@ -410,7 +377,9 @@ export async function handleUpdateWorkspaceChiefActorPreference(
   )
   if (!allowed) return undefined
 
-  const parsed = chiefActorPreferenceSchema.safeParse(request.body)
+  const parsed = WorkspaceChiefActorPreferenceInputSchema.safeParse(
+    request.body
+  )
   if (!parsed.success) {
     reply.status(400).send({
       error: "Validation failed",
@@ -476,7 +445,7 @@ export async function handleGrantWorkspaceAccess(
   )
   if (!allowed) return undefined
 
-  const parsed = workspaceAccessSchema.safeParse(request.body)
+  const parsed = WorkspaceAccessGrantInputSchema.safeParse(request.body)
   if (!parsed.success) {
     reply.status(400).send({
       error: "Validation failed",
@@ -560,7 +529,7 @@ export async function handleCreateInvite(
   )
   if (!allowed) return undefined
 
-  const parsed = createInviteSchema.safeParse(request.body)
+  const parsed = CreateWorkspaceInviteInputSchema.safeParse(request.body)
   if (!parsed.success) {
     reply.status(400).send({
       error: "Validation failed",
@@ -583,13 +552,13 @@ export async function handleCreateInvite(
   }
 
   reply.status(201)
-  return invite
+  return presentWorkspaceInvite(invite)
 }
 
 export async function handleListInvites(
   request: FastifyRequest,
   reply: FastifyReply
-): Promise<WorkspaceInviteView[] | undefined> {
+): Promise<WorkspaceInviteListView | undefined> {
   const allowed = await requireWorkspacePermission(
     request,
     reply,
@@ -599,7 +568,7 @@ export async function handleListInvites(
   if (!allowed) return undefined
 
   const { workspaceId } = request.params as WorkspaceParams
-  return listWorkspaceInvites(workspaceId)
+  return (await listWorkspaceInvites(workspaceId)).map(presentWorkspaceInvite)
 }
 
 export async function handleRevokeInvite(
@@ -621,7 +590,7 @@ export async function handleRevokeInvite(
     reply.status(404).send({ error: "Invite not found" })
     return undefined
   }
-  return revoked
+  return presentWorkspaceInvite(revoked)
 }
 
 export async function handleGetInviteInfo(
@@ -643,7 +612,7 @@ export async function handleGetInviteInfo(
     return undefined
   }
 
-  return lookup.view
+  return presentWorkspaceInvitePublic(lookup.record)
 }
 
 export async function handleRedeemInvite(
@@ -653,7 +622,7 @@ export async function handleRedeemInvite(
   const { token } = request.params as TokenParams
   const userId = (request as any).user!.userId
   try {
-    return await redeemInvite(token, userId)
+    return presentWorkspaceInviteRedeemResult(await redeemInvite(token, userId))
   } catch (err: any) {
     const msg = err.message || "Failed to redeem invite"
     if (msg === "Already a member of this workspace") {
@@ -686,7 +655,7 @@ export async function registerWorkspaceRoutes(fastify: FastifyInstance) {
     fastify,
     "GET",
     "/api/v1/workspaces",
-    { schema: WorkspaceListItemViewSchema.array(), options: authHook },
+    { schema: WorkspaceListViewSchema, options: authHook },
     handleListWorkspaces
   )
 
@@ -725,7 +694,7 @@ export async function registerWorkspaceRoutes(fastify: FastifyInstance) {
     fastify,
     "GET",
     "/api/v1/workspaces/:workspaceId/members",
-    { schema: WorkspaceMemberViewSchema.array(), options: workspaceAuthHook },
+    { schema: WorkspaceMemberListViewSchema, options: workspaceAuthHook },
     handleListMembers
   )
   appRoute(
@@ -760,7 +729,7 @@ export async function registerWorkspaceRoutes(fastify: FastifyInstance) {
     "GET",
     "/api/v1/workspaces/:workspaceId/access",
     {
-      schema: WorkspaceAccessBindingViewSchema.array(),
+      schema: WorkspaceAccessBindingListViewSchema,
       options: workspaceAuthHook,
     },
     handleListWorkspaceAccess
@@ -812,7 +781,7 @@ export async function registerWorkspaceRoutes(fastify: FastifyInstance) {
     fastify,
     "GET",
     "/api/v1/workspaces/:workspaceId/invites",
-    { schema: WorkspaceInviteViewSchema.array(), options: workspaceAuthHook },
+    { schema: WorkspaceInviteListViewSchema, options: workspaceAuthHook },
     handleListInvites
   )
   appRoute(

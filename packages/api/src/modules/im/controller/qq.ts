@@ -20,7 +20,6 @@ import type { FastifyInstance } from "fastify"
 import { z } from "zod"
 import { TransportAccountResponseSchema } from "@synapse/shared/schemas"
 import { appRoute } from "../../../infrastructure/http/route.js"
-import { sendData } from "../../../infrastructure/http/respond.js"
 import {
   createTransportAccount,
   getTransportAccountById,
@@ -89,7 +88,7 @@ export default async function imQqController(
     "POST",
     "/api/v1/workspaces/:workspaceId/im/accounts/qq",
     { schema: TransportAccountResponseSchema },
-    async (request, reply): Promise<undefined> => {
+    async (request, reply) => {
       const allowed = await requireWorkspaceAction(
         request,
         reply,
@@ -134,8 +133,8 @@ export default async function imQqController(
         config,
       })
       await refreshTransportRuntimeState()
-      sendData(reply, TransportAccountResponseSchema, { account }, 201)
-      return
+      reply.status(201)
+      return { account }
     }
   )
 

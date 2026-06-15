@@ -31,44 +31,57 @@ import {
 } from "./service.js"
 
 import {
-  addItemSchema,
-  createGroupSchema,
-  issueGrantSchema,
-  setActorGroupsSchema,
-  updateGroupSchema,
-  updateItemSchema,
-} from "./schemas.js"
-import {
   presentActorModelGroup,
   presentGrantRow,
+  presentGroupDetail,
   presentGroupItem,
   presentGroupRow,
   presentItemVersion,
 } from "./presenter.js"
-import { sendData } from "../../infrastructure/http/respond.js"
 import {
-  ActorModelGroupAssignmentViewSchema,
+  ActorModelGroupAssignmentListViewSchema,
+  ActorModelGroupSetInputSchema as setActorGroupsSchema,
+  ModelGroupCreateInputSchema as createGroupSchema,
   ModelGroupDetailViewSchema,
+  ModelGroupGrantIssueInputSchema as issueGrantSchema,
+  ModelGroupGrantListViewSchema,
   ModelGroupGrantViewSchema,
+  ModelGroupItemCreateInputSchema as addItemSchema,
+  ModelGroupItemUpdateInputSchema as updateItemSchema,
+  ModelGroupItemVersionListViewSchema,
   ModelGroupItemViewSchema,
-  ModelGroupItemVersionViewSchema,
+  ModelGroupListViewSchema,
+  ModelGroupUpdateInputSchema as updateGroupSchema,
   ModelGroupViewSchema,
 } from "@synapse/shared/schemas"
+import { appRoute } from "../../infrastructure/http/route.js"
 
 function handleError(error: unknown, reply: FastifyReply) {
   if (error instanceof ModelGroupError) {
-    return reply.status(error.statusCode).send({ error: error.message })
+    reply.status(error.statusCode).send({ error: error.message })
+    return undefined
   }
   if (error instanceof z.ZodError) {
-    return reply.status(400).send({
+    reply.status(400).send({
       error: "Validation failed",
       details: error.issues.map((e) => ({
         field: e.path.join("."),
         message: e.message,
       })),
     })
+    return undefined
   }
   throw error
+}
+
+function created<T>(reply: FastifyReply, value: T): T {
+  reply.status(201)
+  return value
+}
+
+function sendNoContent(reply: FastifyReply): undefined {
+  reply.status(204).send()
+  return undefined
 }
 
 async function requireWorkspacePermission(
@@ -204,10 +217,16 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
     "/api/v1/workspaces/:workspaceId/me/model-groups"
   const wsPreHandler = [authMiddleware, workspaceMiddleware]
   const authPreHandler = [authMiddleware]
+  const noContentResponseSchema = z.undefined()
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     wsPrefix,
-    { preHandler: wsPreHandler },
+    {
+      schema: ModelGroupListViewSchema,
+      options: { preHandler: wsPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const allowed = await requireWorkspacePermission(
@@ -220,20 +239,18 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
 
         const { workspaceId } = request.params as { workspaceId: string }
         const groups = await listWorkspaceModelGroups(workspaceId)
-        return sendData(
-          reply,
-          z.array(ModelGroupViewSchema),
-          groups.map(presentGroupRow)
-        )
+        return groups.map(presentGroupRow)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     wsPrefix,
-    { preHandler: wsPreHandler },
+    { schema: ModelGroupViewSchema, options: { preHandler: wsPreHandler } },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const allowed = await requireWorkspacePermission(
@@ -253,21 +270,21 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
           workspaceId,
           createdByWorkspaceMemberId: workspaceMemberId,
         })
-        return sendData(
-          reply,
-          ModelGroupViewSchema,
-          presentGroupRow(group),
-          201
-        )
+        return created(reply, presentGroupRow(group))
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     `${wsPrefix}/:groupId`,
-    { preHandler: wsPreHandler },
+    {
+      schema: ModelGroupDetailViewSchema,
+      options: { preHandler: wsPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const workspaceAllowed = await requireWorkspacePermission(
@@ -297,16 +314,21 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         )
         if (!groupAllowed) return
 
-        return sendData(reply, ModelGroupDetailViewSchema, group)
+        return presentGroupDetail(group)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.put(
+  appRoute(
+    app,
+    "PUT",
     `${wsPrefix}/:groupId`,
-    { preHandler: wsPreHandler },
+    {
+      schema: ModelGroupDetailViewSchema,
+      options: { preHandler: wsPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const workspaceAllowed = await requireWorkspacePermission(
@@ -338,16 +360,18 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
 
         const body = updateGroupSchema.parse(request.body)
         const group = await updateModelGroup(scopedGroup.id, body)
-        return sendData(reply, ModelGroupDetailViewSchema, group)
+        return presentGroupDetail(group)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.delete(
+  appRoute(
+    app,
+    "DELETE",
     `${wsPrefix}/:groupId`,
-    { preHandler: wsPreHandler },
+    { schema: noContentResponseSchema, options: { preHandler: wsPreHandler } },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const workspaceAllowed = await requireWorkspacePermission(
@@ -378,16 +402,21 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         if (!groupAllowed) return
 
         await deleteModelGroup(scopedGroup.id)
-        return reply.status(204).send()
+        return sendNoContent(reply)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     `${wsPrefix}/:groupId/grants`,
-    { preHandler: wsPreHandler },
+    {
+      schema: ModelGroupGrantListViewSchema,
+      options: { preHandler: wsPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const workspaceAllowed = await requireWorkspacePermission(
@@ -418,20 +447,21 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         if (!groupAllowed) return
 
         const grants = await listModelGroupGrants(group.id)
-        return sendData(
-          reply,
-          z.array(ModelGroupGrantViewSchema),
-          grants.map(presentGrantRow)
-        )
+        return grants.map(presentGrantRow)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     `${wsPrefix}/:groupId/grants`,
-    { preHandler: wsPreHandler },
+    {
+      schema: ModelGroupGrantViewSchema,
+      options: { preHandler: wsPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const workspaceAllowed = await requireWorkspacePermission(
@@ -466,21 +496,18 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
           ...body,
           grantedByWorkspaceMemberId: workspaceMemberId,
         })
-        return sendData(
-          reply,
-          ModelGroupGrantViewSchema,
-          presentGrantRow(grant),
-          201
-        )
+        return created(reply, presentGrantRow(grant))
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     `${wsPrefix}/:groupId/grants/:grantId/revoke`,
-    { preHandler: wsPreHandler },
+    { schema: noContentResponseSchema, options: { preHandler: wsPreHandler } },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const workspaceAllowed = await requireWorkspacePermission(
@@ -512,16 +539,21 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
 
         const { grantId } = request.params as { grantId: string }
         await revokeModelGroupGrant(group.id, grantId)
-        return reply.status(204).send()
+        return sendNoContent(reply)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     `${wsPrefix}/:groupId/items`,
-    { preHandler: wsPreHandler },
+    {
+      schema: ModelGroupItemViewSchema,
+      options: { preHandler: wsPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const workspaceAllowed = await requireWorkspacePermission(
@@ -556,21 +588,21 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
           ...body,
           installedByWorkspaceMemberId: workspaceMemberId,
         })
-        return sendData(
-          reply,
-          ModelGroupItemViewSchema,
-          presentGroupItem(item),
-          201
-        )
+        return created(reply, presentGroupItem(item))
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.put(
+  appRoute(
+    app,
+    "PUT",
     `${wsPrefix}/:groupId/items/:itemId`,
-    { preHandler: wsPreHandler },
+    {
+      schema: ModelGroupItemViewSchema,
+      options: { preHandler: wsPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const workspaceAllowed = await requireWorkspacePermission(
@@ -603,16 +635,18 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         const { itemId } = request.params as { itemId: string }
         const body = updateItemSchema.parse(request.body)
         const item = await updateModelItem(group.id, itemId, body)
-        return sendData(reply, ModelGroupItemViewSchema, presentGroupItem(item))
+        return presentGroupItem(item)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.delete(
+  appRoute(
+    app,
+    "DELETE",
     `${wsPrefix}/:groupId/items/:itemId`,
-    { preHandler: wsPreHandler },
+    { schema: noContentResponseSchema, options: { preHandler: wsPreHandler } },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const workspaceAllowed = await requireWorkspacePermission(
@@ -644,16 +678,21 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
 
         const { itemId } = request.params as { itemId: string }
         await deleteModelItem(group.id, itemId)
-        return reply.status(204).send()
+        return sendNoContent(reply)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     `${wsPrefix}/:groupId/items/:itemId/versions`,
-    { preHandler: wsPreHandler },
+    {
+      schema: ModelGroupItemVersionListViewSchema,
+      options: { preHandler: wsPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const workspaceAllowed = await requireWorkspacePermission(
@@ -685,20 +724,21 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
 
         const { itemId } = request.params as { itemId: string }
         const versions = await getItemVersions(itemId, group.id)
-        return sendData(
-          reply,
-          z.array(ModelGroupItemVersionViewSchema),
-          versions.map(presentItemVersion)
-        )
+        return versions.map(presentItemVersion)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/actors/:actorId/model-groups",
-    { preHandler: wsPreHandler },
+    {
+      schema: ActorModelGroupAssignmentListViewSchema,
+      options: { preHandler: wsPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const workspaceAllowed = await requireWorkspacePermission(
@@ -724,20 +764,21 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
           workspaceId: string
         }
         const groups = await getActorModelGroups(actorId, workspaceId)
-        return sendData(
-          reply,
-          z.array(ActorModelGroupAssignmentViewSchema),
-          groups.map(presentActorModelGroup)
-        )
+        return groups.map(presentActorModelGroup)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/actors/:actorId/model-groups/visible",
-    { preHandler: wsPreHandler },
+    {
+      schema: ModelGroupListViewSchema,
+      options: { preHandler: wsPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const workspaceAllowed = await requireWorkspacePermission(
@@ -763,20 +804,21 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
           workspaceId: string
         }
         const groups = await listVisibleActorModelGroups(actorId, workspaceId)
-        return sendData(
-          reply,
-          z.array(ModelGroupViewSchema),
-          groups.map(presentGroupRow)
-        )
+        return groups.map(presentGroupRow)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.put(
+  appRoute(
+    app,
+    "PUT",
     "/api/v1/workspaces/:workspaceId/actors/:actorId/model-groups",
-    { preHandler: wsPreHandler },
+    {
+      schema: ActorModelGroupAssignmentListViewSchema,
+      options: { preHandler: wsPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const workspaceAllowed = await requireWorkspacePermission(
@@ -807,20 +849,21 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
           workspaceId,
           body.groups
         )
-        return sendData(
-          reply,
-          z.array(ActorModelGroupAssignmentViewSchema),
-          groups.map(presentActorModelGroup)
-        )
+        return groups.map(presentActorModelGroup)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     platformPrefix,
-    { preHandler: authPreHandler },
+    {
+      schema: ModelGroupListViewSchema,
+      options: { preHandler: authPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const allowed = await requirePlatformPermission(
@@ -832,20 +875,18 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         if (!allowed) return
 
         const groups = await listPlatformModelGroups()
-        return sendData(
-          reply,
-          z.array(ModelGroupViewSchema),
-          groups.map(presentGroupRow)
-        )
+        return groups.map(presentGroupRow)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     platformPrefix,
-    { preHandler: authPreHandler },
+    { schema: ModelGroupViewSchema, options: { preHandler: authPreHandler } },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const allowed = await requirePlatformPermission(
@@ -861,21 +902,21 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
           ...body,
           ownerType: "platform",
         })
-        return sendData(
-          reply,
-          ModelGroupViewSchema,
-          presentGroupRow(group),
-          201
-        )
+        return created(reply, presentGroupRow(group))
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     `${platformPrefix}/:groupId`,
-    { preHandler: authPreHandler },
+    {
+      schema: ModelGroupDetailViewSchema,
+      options: { preHandler: authPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const allowed = await requirePlatformPermission(
@@ -892,16 +933,21 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         )
         if (!group) return
 
-        return sendData(reply, ModelGroupDetailViewSchema, group)
+        return presentGroupDetail(group)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.put(
+  appRoute(
+    app,
+    "PUT",
     `${platformPrefix}/:groupId`,
-    { preHandler: authPreHandler },
+    {
+      schema: ModelGroupDetailViewSchema,
+      options: { preHandler: authPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const allowed = await requirePlatformPermission(
@@ -930,16 +976,21 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
 
         const body = updateGroupSchema.parse(request.body)
         const updated = await updateModelGroup(group.id, body)
-        return sendData(reply, ModelGroupDetailViewSchema, updated)
+        return presentGroupDetail(updated)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.delete(
+  appRoute(
+    app,
+    "DELETE",
     `${platformPrefix}/:groupId`,
-    { preHandler: authPreHandler },
+    {
+      schema: noContentResponseSchema,
+      options: { preHandler: authPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const allowed = await requirePlatformPermission(
@@ -967,16 +1018,21 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         if (!groupAllowed) return
 
         await deleteModelGroup(group.id)
-        return reply.status(204).send()
+        return sendNoContent(reply)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     `${platformPrefix}/:groupId/grants`,
-    { preHandler: authPreHandler },
+    {
+      schema: ModelGroupGrantListViewSchema,
+      options: { preHandler: authPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const allowed = await requirePlatformPermission(
@@ -994,20 +1050,21 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         if (!group) return
 
         const grants = await listModelGroupGrants(group.id)
-        return sendData(
-          reply,
-          z.array(ModelGroupGrantViewSchema),
-          grants.map(presentGrantRow)
-        )
+        return grants.map(presentGrantRow)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     `${platformPrefix}/:groupId/grants`,
-    { preHandler: authPreHandler },
+    {
+      schema: ModelGroupGrantViewSchema,
+      options: { preHandler: authPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const allowed = await requirePlatformPermission(
@@ -1028,21 +1085,21 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         const grant = await issueModelGroupGrant(group.id, {
           ...body,
         })
-        return sendData(
-          reply,
-          ModelGroupGrantViewSchema,
-          presentGrantRow(grant),
-          201
-        )
+        return created(reply, presentGrantRow(grant))
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     `${platformPrefix}/:groupId/grants/:grantId/revoke`,
-    { preHandler: authPreHandler },
+    {
+      schema: noContentResponseSchema,
+      options: { preHandler: authPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const allowed = await requirePlatformPermission(
@@ -1061,16 +1118,21 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
 
         const { grantId } = request.params as { grantId: string }
         await revokeModelGroupGrant(group.id, grantId)
-        return reply.status(204).send()
+        return sendNoContent(reply)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     `${platformPrefix}/:groupId/items`,
-    { preHandler: authPreHandler },
+    {
+      schema: ModelGroupItemViewSchema,
+      options: { preHandler: authPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const allowed = await requirePlatformPermission(
@@ -1101,21 +1163,21 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         const item = await addModelItem(group.id, {
           ...body,
         })
-        return sendData(
-          reply,
-          ModelGroupItemViewSchema,
-          presentGroupItem(item),
-          201
-        )
+        return created(reply, presentGroupItem(item))
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.put(
+  appRoute(
+    app,
+    "PUT",
     `${platformPrefix}/:groupId/items/:itemId`,
-    { preHandler: authPreHandler },
+    {
+      schema: ModelGroupItemViewSchema,
+      options: { preHandler: authPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const allowed = await requirePlatformPermission(
@@ -1145,16 +1207,21 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         const { itemId } = request.params as { itemId: string }
         const body = updateItemSchema.parse(request.body)
         const item = await updateModelItem(group.id, itemId, body)
-        return sendData(reply, ModelGroupItemViewSchema, presentGroupItem(item))
+        return presentGroupItem(item)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.delete(
+  appRoute(
+    app,
+    "DELETE",
     `${platformPrefix}/:groupId/items/:itemId`,
-    { preHandler: authPreHandler },
+    {
+      schema: noContentResponseSchema,
+      options: { preHandler: authPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const allowed = await requirePlatformPermission(
@@ -1183,16 +1250,21 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
 
         const { itemId } = request.params as { itemId: string }
         await deleteModelItem(group.id, itemId)
-        return reply.status(204).send()
+        return sendNoContent(reply)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     `${platformPrefix}/:groupId/items/:itemId/versions`,
-    { preHandler: authPreHandler },
+    {
+      schema: ModelGroupItemVersionListViewSchema,
+      options: { preHandler: authPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const allowed = await requirePlatformPermission(
@@ -1211,39 +1283,38 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
 
         const { itemId } = request.params as { itemId: string }
         const versions = await getItemVersions(itemId, group.id)
-        return sendData(
-          reply,
-          z.array(ModelGroupItemVersionViewSchema),
-          versions.map(presentItemVersion)
-        )
+        return versions.map(presentItemVersion)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     workspaceMemberPrefix,
-    { preHandler: wsPreHandler },
+    {
+      schema: ModelGroupListViewSchema,
+      options: { preHandler: wsPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const workspaceMemberId = (request as any).workspaceMember?.id as string
         const groups =
           await listWorkspaceMemberOwnedModelGroups(workspaceMemberId)
-        return sendData(
-          reply,
-          z.array(ModelGroupViewSchema),
-          groups.map(presentGroupRow)
-        )
+        return groups.map(presentGroupRow)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     workspaceMemberPrefix,
-    { preHandler: wsPreHandler },
+    { schema: ModelGroupViewSchema, options: { preHandler: wsPreHandler } },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const body = createGroupSchema.parse(request.body)
@@ -1254,21 +1325,21 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
           ownerWorkspaceMemberId: workspaceMemberId,
           createdByWorkspaceMemberId: workspaceMemberId,
         })
-        return sendData(
-          reply,
-          ModelGroupViewSchema,
-          presentGroupRow(group),
-          201
-        )
+        return created(reply, presentGroupRow(group))
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     `${workspaceMemberPrefix}/:groupId`,
-    { preHandler: wsPreHandler },
+    {
+      schema: ModelGroupDetailViewSchema,
+      options: { preHandler: wsPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const group = await requireWorkspaceMemberOwnedGroup(
@@ -1278,16 +1349,21 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
           reply
         )
         if (!group) return
-        return sendData(reply, ModelGroupDetailViewSchema, group)
+        return presentGroupDetail(group)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.put(
+  appRoute(
+    app,
+    "PUT",
     `${workspaceMemberPrefix}/:groupId`,
-    { preHandler: wsPreHandler },
+    {
+      schema: ModelGroupDetailViewSchema,
+      options: { preHandler: wsPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const workspaceId = (request.params as any).workspaceId as string
@@ -1312,16 +1388,18 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
 
         const body = updateGroupSchema.parse(request.body)
         const updated = await updateModelGroup(group.id, body)
-        return sendData(reply, ModelGroupDetailViewSchema, updated)
+        return presentGroupDetail(updated)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.delete(
+  appRoute(
+    app,
+    "DELETE",
     `${workspaceMemberPrefix}/:groupId`,
-    { preHandler: wsPreHandler },
+    { schema: noContentResponseSchema, options: { preHandler: wsPreHandler } },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const workspaceId = (request.params as any).workspaceId as string
@@ -1345,16 +1423,21 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         if (!groupAllowed) return
 
         await deleteModelGroup(group.id)
-        return reply.status(204).send()
+        return sendNoContent(reply)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     `${workspaceMemberPrefix}/:groupId/grants`,
-    { preHandler: wsPreHandler },
+    {
+      schema: ModelGroupGrantListViewSchema,
+      options: { preHandler: wsPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const group = await requireWorkspaceMemberOwnedGroup(
@@ -1366,20 +1449,21 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         if (!group) return
 
         const grants = await listModelGroupGrants(group.id)
-        return sendData(
-          reply,
-          z.array(ModelGroupGrantViewSchema),
-          grants.map(presentGrantRow)
-        )
+        return grants.map(presentGrantRow)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     `${workspaceMemberPrefix}/:groupId/grants`,
-    { preHandler: wsPreHandler },
+    {
+      schema: ModelGroupGrantViewSchema,
+      options: { preHandler: wsPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const group = await requireWorkspaceMemberOwnedGroup(
@@ -1396,21 +1480,18 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
           grantedByWorkspaceMemberId: (request as any).workspaceMember
             ?.id as string,
         })
-        return sendData(
-          reply,
-          ModelGroupGrantViewSchema,
-          presentGrantRow(grant),
-          201
-        )
+        return created(reply, presentGrantRow(grant))
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     `${workspaceMemberPrefix}/:groupId/grants/:grantId/revoke`,
-    { preHandler: wsPreHandler },
+    { schema: noContentResponseSchema, options: { preHandler: wsPreHandler } },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const group = await requireWorkspaceMemberOwnedGroup(
@@ -1423,16 +1504,21 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
 
         const { grantId } = request.params as { grantId: string }
         await revokeModelGroupGrant(group.id, grantId)
-        return reply.status(204).send()
+        return sendNoContent(reply)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     `${workspaceMemberPrefix}/:groupId/items`,
-    { preHandler: wsPreHandler },
+    {
+      schema: ModelGroupItemViewSchema,
+      options: { preHandler: wsPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const group = await requireWorkspaceMemberOwnedGroup(
@@ -1449,21 +1535,21 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
           installedByWorkspaceMemberId: (request as any).workspaceMember
             ?.id as string,
         })
-        return sendData(
-          reply,
-          ModelGroupItemViewSchema,
-          presentGroupItem(item),
-          201
-        )
+        return created(reply, presentGroupItem(item))
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.put(
+  appRoute(
+    app,
+    "PUT",
     `${workspaceMemberPrefix}/:groupId/items/:itemId`,
-    { preHandler: wsPreHandler },
+    {
+      schema: ModelGroupItemViewSchema,
+      options: { preHandler: wsPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const group = await requireWorkspaceMemberOwnedGroup(
@@ -1477,16 +1563,18 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         const { itemId } = request.params as { itemId: string }
         const body = updateItemSchema.parse(request.body)
         const item = await updateModelItem(group.id, itemId, body)
-        return sendData(reply, ModelGroupItemViewSchema, presentGroupItem(item))
+        return presentGroupItem(item)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.delete(
+  appRoute(
+    app,
+    "DELETE",
     `${workspaceMemberPrefix}/:groupId/items/:itemId`,
-    { preHandler: wsPreHandler },
+    { schema: noContentResponseSchema, options: { preHandler: wsPreHandler } },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const group = await requireWorkspaceMemberOwnedGroup(
@@ -1499,16 +1587,21 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
 
         const { itemId } = request.params as { itemId: string }
         await deleteModelItem(group.id, itemId)
-        return reply.status(204).send()
+        return sendNoContent(reply)
       } catch (error) {
         return handleError(error, reply)
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     `${workspaceMemberPrefix}/:groupId/items/:itemId/versions`,
-    { preHandler: wsPreHandler },
+    {
+      schema: ModelGroupItemVersionListViewSchema,
+      options: { preHandler: wsPreHandler },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const group = await requireWorkspaceMemberOwnedGroup(
@@ -1521,11 +1614,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
 
         const { itemId } = request.params as { itemId: string }
         const versions = await getItemVersions(itemId, group.id)
-        return sendData(
-          reply,
-          z.array(ModelGroupItemVersionViewSchema),
-          versions.map(presentItemVersion)
-        )
+        return versions.map(presentItemVersion)
       } catch (error) {
         return handleError(error, reply)
       }

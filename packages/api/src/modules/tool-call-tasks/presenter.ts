@@ -1,4 +1,4 @@
-import { parseJsonObject, type Timestamp } from "@synapse/shared"
+import type { Timestamp } from "@synapse/shared"
 import {
   requireInstantDate,
   serializeInstant,
@@ -15,12 +15,10 @@ import type {
 } from "./repo.types.js"
 
 /**
- * Tool-call-task presentation layer: DB row → app-facing record/DTO. Owns the
- * outward semantic transforms (Date → IsoInstantString, JSON parse) so the
- * service/controller never call serializeInstant/serializeOptionalInstant
- * (guard-layering r3) and the `map*Row` shaping lives outside the service
- * (guard-layering r4). Row types are taken via `import type` from repo.types
- * so this file never touches generated/db or TableRow.
+ * Tool-call-task presentation layer: repo record → app-facing record/DTO. Owns
+ * outward semantic transforms (Date → IsoInstantString) so the service/controller
+ * never call serializeInstant/serializeOptionalInstant (guard-layering r3).
+ * The repo owns DB JSONB decoding before records reach this file.
  */
 
 export interface ToolCallTaskRecord {
@@ -118,11 +116,11 @@ export function presentToolCallTask(
     targetParticipantId: row.targetParticipantId || undefined,
     resolvedByParticipantId: row.resolvedByParticipantId || undefined,
     resolvedAt: serializeOptionalInstant(row.resolvedAt),
-    requestPayload: parseJsonObject(row.requestPayload),
-    immediateResultPayload: parseJsonObject(row.immediateResultPayload),
-    finalResultPayload: parseJsonObject(row.finalResultPayload),
-    finalErrorPayload: parseJsonObject(row.finalErrorPayload),
-    metadata: parseJsonObject(row.metadata),
+    requestPayload: row.requestPayload,
+    immediateResultPayload: row.immediateResultPayload,
+    finalResultPayload: row.finalResultPayload,
+    finalErrorPayload: row.finalErrorPayload,
+    metadata: row.metadata,
     conversationItemId: row.conversationItemId || undefined,
     completionItemId: row.completionItemId || undefined,
     deadlineAt: serializeOptionalInstant(row.deadlineAt),
@@ -160,6 +158,6 @@ export function presentToolCallTaskOutputChunk(
         "Tool-call task output chunk created_at"
       )
     ),
-    metadata: parseJsonObject(row.metadata),
+    metadata: row.metadata,
   }
 }

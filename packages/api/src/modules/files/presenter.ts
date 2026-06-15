@@ -4,8 +4,6 @@ import {
   serializeOptionalInstant,
 } from "../../infrastructure/datetime.js"
 import {
-  parseJsonObject,
-  parseJsonObjectOrUndefined,
   type FileRecordView,
   type FileParseOutputView,
   type FileParseRunView,
@@ -34,7 +32,7 @@ export type FileJoinRow = {
   sourceSystem: FileRecordView["originSummary"]["system"]
   initiatorActorId: string | null
   parentAssetId: string | null
-  detailsJson: unknown
+  details: Record<string, unknown>
 }
 
 export function presentFileAsset(row: FileJoinRow): StoredFileRecord {
@@ -43,7 +41,7 @@ export function presentFileAsset(row: FileJoinRow): StoredFileRecord {
     system: row.sourceSystem,
     initiatorActorId: row.initiatorActorId,
     parentFileId: row.parentAssetId,
-    details: parseJsonObject(row.detailsJson),
+    details: row.details,
   } satisfies FileOriginInput
 
   return {
@@ -96,7 +94,7 @@ export type FileParseOutputRow = {
   role: string
   isPrimary: boolean
   textContent: string | null
-  structuredJson: unknown
+  structuredJson?: Record<string, unknown>
   derivedAssetId: string | null
   createdAt: Date | null
 }
@@ -113,7 +111,7 @@ export function presentFileParseOutput(
     role: row.role,
     isPrimary: row.isPrimary,
     textContent: row.textContent ?? undefined,
-    structuredJson: parseJsonObjectOrUndefined(row.structuredJson),
+    structuredJson: row.structuredJson,
     derivedFileId: row.derivedAssetId,
     derivedFile: row.derivedAssetId ? derivedFile : undefined,
     createdAt: serializeInstant(
