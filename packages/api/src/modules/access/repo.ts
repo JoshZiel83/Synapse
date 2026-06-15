@@ -1,4 +1,5 @@
 import { SUBJECT_KIND } from "@synapse/shared"
+import type { KyselyDb } from "../../infrastructure/database/kysely.js"
 import {
   readAutomationEventSourceAccessBindingResourceId,
   type AutomationEventSourceBindingRelation,
@@ -54,4 +55,27 @@ export function normalizeAutomationEventSourceAccessBindingRow<
     relation,
   }
   return normalized
+}
+
+export async function findActiveWorkspaceMemberIdForUser(
+  db: KyselyDb,
+  params: {
+    workspaceId: string
+    userId: string
+  }
+): Promise<string | null> {
+  const member = await db
+    .selectFrom("workspaceMembers as wm")
+    .innerJoin("workspaces as w", "w.id", "wm.workspaceId")
+    .select("wm.id")
+    .where("wm.workspaceId", "=", params.workspaceId)
+    .where("wm.userId", "=", params.userId)
+    // Soft delete (§8.4): only an active member of a live workspace resolves to
+    // a workspace_member subject.
+    .where("wm.status", "=", "active")
+    .where("w.deletedAt", "is", null)
+    .limit(1)
+    .executeTakeFirst()
+
+  return member?.id ?? null
 }
