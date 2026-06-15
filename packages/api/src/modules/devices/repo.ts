@@ -13,6 +13,8 @@ import { sql } from "kysely"
 import type {
   DeviceCatalogExposure,
   DeviceCatalogTool,
+  OperationEnvelope,
+  SynapseError,
 } from "@synapse/device-protocol"
 import {
   db,
@@ -23,15 +25,7 @@ import {
   insertWorkspaceAppRoot,
   updateWorkspaceAppRoot,
 } from "../workspace-apps/root-storage.js"
-import type {
-  BeginOperationInput,
-  BeginOperationResult,
-  CompleteOperationInput,
-} from "./operations.js"
-import {
-  assertNoDeviceToolRevisionDrift,
-  beginDeviceOperationOn,
-} from "./operations.js"
+import { parseInstantString } from "../../infrastructure/datetime.js"
 import type {
   DeviceCapabilityRecord,
   DeviceDetailRecord,
@@ -803,6 +797,144 @@ export async function mergeVfsExposureMetadata(
 // ════════════════════════════════════════════════════════════════════════════
 // operations.ts — device operation transactions
 // ════════════════════════════════════════════════════════════════════════════
+
+export type OperationPrincipalKind =
+  | "actor"
+  | "conversation"
+  | "remote_agent"
+  | "workspace_member"
+
+export interface BeginOperationInput {
+  workspaceId: string
+  conversationId: string | null
+  envelope: OperationEnvelope
+  args: Record<string, unknown>
+  toolName: string
+  deviceId: string
+  deviceServiceId: string
+  tunnelInternalUrl: string | null
+  principalKind: OperationPrincipalKind
+  principalSubjectId: string
+  initiatedByWorkspaceMemberId: string | null
+  initiatedBySessionId: string | null
+}
+
+export interface BeginOperationResult {
+  operationId: string
+  attemptId: string
+  attemptSeq: number
+}
+
+export interface CompleteOperationInput {
+  operationId: string
+  attemptId: string
+  ok: boolean
+  resultHash?: string
+  error?: SynapseError
+}
+
+export class RevisionDriftError extends Error {
+  readonly code = "tool_definition_changed" as const
+  constructor(message: string) {
+    super(message)
+    this.name = "RevisionDriftError"
+  }
+}
+
+export async function assertNoDeviceToolRevisionDrift(
+  dbOrTrx: KyselyDb | DatabaseTransaction,
+  toolId: string,
+  expectedRevisionId: string
+): Promise<void> {
+  const tool = await dbOrTrx
+    .selectFrom("deviceTools")
+    .select(["latestRevisionId"])
+    .where("id", "=", toolId)
+    .executeTakeFirst()
+  if (!tool) {
+    throw new RevisionDriftError(
+      `device_tool ${toolId} not found (catalog may have been re-synced and removed the tool)`
+    )
+  }
+  if ((tool.latestRevisionId as string | null) !== expectedRevisionId) {
+    throw new RevisionDriftError(
+      `device_tool ${toolId} revision drifted: envelope expected ${expectedRevisionId}, current latest is ${tool.latestRevisionId ?? "null"}`
+    )
+  }
+}
+
+export async function beginDeviceOperationOn(
+  trx: DatabaseTransaction,
+  input: BeginOperationInput
+): Promise<BeginOperationResult> {
+  const operationId = input.envelope.operation_id
+  const attemptId = input.envelope.attempt_id
+  await trx
+    .insertInto("deviceOperations")
+    .values({
+      id: operationId,
+      workspaceId: input.workspaceId,
+      conversationId: input.conversationId,
+      principalKind: input.principalKind,
+      principalSubjectId: input.principalSubjectId,
+      initiatedByWorkspaceMemberId: input.initiatedByWorkspaceMemberId,
+      initiatedBySessionId: input.initiatedBySessionId,
+      deviceId: input.deviceId,
+      deviceExposureId: input.envelope.device_exposure_id,
+      deviceCapabilityId: input.envelope.device_capability_id,
+      catalogRevisionId: await getCatalogRevisionForToolRevision(
+        trx,
+        input.envelope.device_tool_revision_id
+      ),
+      toolId: input.envelope.device_tool_id,
+      toolRevisionId: input.envelope.device_tool_revision_id,
+      visibleToolName: input.toolName,
+      taskMode: input.envelope.task_mode,
+      status: "dispatched",
+      inputPayload: sql`${JSON.stringify(input.args)}::jsonb`,
+      authorizationPayload: sql`${JSON.stringify(
+        input.envelope.runtime_authorization ?? {}
+      )}::jsonb`,
+      inputHash: input.envelope.input_hash,
+      expiresAt: parseInstantString(input.envelope.expires_at),
+    })
+    .execute()
+
+  await trx
+    .insertInto("deviceOperationAttempts")
+    .values({
+      id: attemptId,
+      operationId: operationId,
+      attemptSeq: 1n,
+      transport: "mcp_http",
+      deviceServiceId: input.deviceServiceId,
+      tunnelInternalUrl: input.tunnelInternalUrl,
+      mcpRequestId: attemptId,
+      envelopeSignatureKid: input.envelope.signature_kid,
+      status: "issued",
+      startedAt: sql`NOW()`,
+    })
+    .execute()
+
+  return { operationId, attemptId, attemptSeq: 1 }
+}
+
+async function getCatalogRevisionForToolRevision(
+  trx: DatabaseTransaction,
+  toolRevisionId: string
+): Promise<string> {
+  const row = await trx
+    .selectFrom("deviceToolRevisions")
+    .select(["catalogRevisionId"])
+    .where("id", "=", toolRevisionId)
+    .executeTakeFirst()
+  if (!row) {
+    throw new Error(
+      `device_tool_revision ${toolRevisionId} not found — envelope is stale`
+    )
+  }
+  return row.catalogRevisionId as string
+}
 
 /**
  * Insert a device_operations + first device_operation_attempts row pair, with a
