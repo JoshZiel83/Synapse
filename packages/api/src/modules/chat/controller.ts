@@ -1,6 +1,5 @@
 import type { FastifyInstance } from "fastify"
 import { ZodError, z } from "zod"
-import { TASK_DECISIONS } from "@synapse/shared"
 import {
   ChatBootstrapViewSchema,
   ChatClientInstanceViewSchema,
@@ -47,7 +46,6 @@ import {
   createChatClientInstance,
   createChatConversation,
   getChatConversationActorRuntimeTurnDetail,
-  getConversationParticipant,
   getChatBootstrap,
   getChatConversationMessages,
   getChatSync,
@@ -67,6 +65,7 @@ import {
   broadcastTypingState,
   retryAssistantMessage,
 } from "./service.js"
+import { respondToChatTask } from "./task-response.js"
 import {
   presentChatBootstrap,
   presentChatClientInstanceRegistration,
@@ -78,12 +77,6 @@ import {
   presentChatConversationSendMessage,
   presentChatSync,
 } from "./presenter.js"
-import {
-  canUserViewTask,
-  enrichTaskForUser,
-  getTaskSummary,
-  resolveTaskRequest,
-} from "../tasks/service.js"
 import { getChatDedupCountersSnapshot } from "./observability.js"
 import { gcRealtimeEventOutbox } from "../../infrastructure/events/index.js"
 import { isPlatformSuperAdmin } from "../platform/admin-service.js"
@@ -469,105 +462,19 @@ export default async function chatController(app: FastifyInstance) {
         )
         if (!workspaceMemberId) return undefined
 
-        const task = await getTaskSummary(params.taskId)
-        if (
-          !task ||
-          task.workspaceId !== params.workspaceId ||
-          task.conversationId !== params.conversationId
-        ) {
-          reply.status(404).send({
-            error: "Task not found",
-            code: "task_not_found",
-          })
-          return undefined
-        }
-
-        const canView = await canUserViewTask({
-          taskId: task.id,
-          userId: getRequestUserId(request),
-        })
-        if (!canView) {
-          reply.status(403).send({
-            error: "You cannot access this task",
-            code: "task_access_denied",
-          })
-          return undefined
-        }
-
-        const resolverParticipant = await getConversationParticipant({
+        const result = await respondToChatTask({
+          workspaceId: params.workspaceId,
           conversationId: params.conversationId,
+          taskId: params.taskId,
           workspaceMemberId,
+          userId: getRequestUserId(request),
+          input: body,
         })
-        if (!resolverParticipant?.id) {
-          reply.status(403).send({
-            error: "You are not an active participant in this conversation",
-            code: "task_resolver_not_participant",
-          })
+        if (result.statusCode !== 200) {
+          reply.status(result.statusCode).send(result.body)
           return undefined
         }
-
-        try {
-          const resolveParamsBase = {
-            taskId: task.id,
-            resolverWorkspaceMemberId: workspaceMemberId,
-            resolverParticipantId: resolverParticipant.id,
-            commandId: body.commandId,
-            baseRevision: body.baseRevision,
-          }
-          const resolveParams =
-            "answers" in body
-              ? {
-                  ...resolveParamsBase,
-                  answers: body.answers,
-                  note: body.note,
-                }
-              : body.decision === TASK_DECISIONS[1]
-                ? {
-                    ...resolveParamsBase,
-                    decision: body.decision,
-                    note: body.note,
-                  }
-                : "preset" in body && "selectedGrantOptionId" in body
-                  ? {
-                      ...resolveParamsBase,
-                      decision: body.decision,
-                      preset: body.preset,
-                      selectedGrantOptionId: body.selectedGrantOptionId,
-                      note: body.note,
-                    }
-                  : {
-                      ...resolveParamsBase,
-                      decision: body.decision,
-                      note: body.note,
-                    }
-
-          const result = await resolveTaskRequest(resolveParams)
-          const taskForViewer = await enrichTaskForUser(
-            result.task,
-            getRequestUserId(request)
-          )
-          if (result.outcome === "conflict") {
-            reply.status(409).send({
-              error: "Task state changed before this submission was applied",
-              code: "task_conflict",
-              outcome: result.outcome,
-              task: taskForViewer,
-            })
-            return undefined
-          }
-          return {
-            outcome: result.outcome,
-            task: taskForViewer,
-          }
-        } catch (error) {
-          const message =
-            error instanceof Error ? error.message : "Failed to resolve task"
-          reply.status(400).send({
-            error: message,
-            code: "task_resolution_failed",
-          })
-          return undefined
-        }
+        return result.body
       } catch (error) {
         replyChatError(reply, error)
         return undefined
