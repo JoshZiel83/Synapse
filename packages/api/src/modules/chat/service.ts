@@ -83,10 +83,7 @@ export {
   registerChatPushToken,
 } from "./push-tokens.js"
 export { broadcastTypingState } from "./typing.js"
-import {
-  parseInstantString,
-  serializeNowInstant,
-} from "../../infrastructure/datetime.js"
+import { parseInstantString } from "../../infrastructure/datetime.js"
 import {
   chatRootExecutor,
   conversationItemHasTargets,
@@ -94,12 +91,10 @@ import {
   countUnreadVisibleConversationMessages,
   getChatConversationCreateRequestConversationId,
   getChatConversationBaseRow,
-  getConversationMaxSequence,
   getConversationDeviceState,
   getConversationParticipantById,
   getConversationKind,
   getConversationRecord,
-  getLastConversationItemIdAtOrBeforeSequence,
   getLastVisibleConversationItemRow,
   getConversationParticipantReadState,
   getConversationParticipantStateBySubject,
@@ -135,8 +130,6 @@ import {
   updateConversationItemEventPayload as updateConversationItemEventPayloadRow,
   updateConversationMutableFields,
   updateConversationParticipantState,
-  upsertConversationDeviceState,
-  upsertConversationParticipantReadState,
   upsertWorkspaceMemberConversationView,
   upsertConversationParticipantAddress,
   touchConversationUpdatedAt,
@@ -178,12 +171,13 @@ import {
 } from "./event-registry.js"
 import { createChatError } from "./errors.js"
 export { isChatServiceError, type ChatServiceError } from "./errors.js"
-import {
-  recordDuplicateClientMessageIdSend,
-  recordDuplicateWatermarkPost,
-} from "./observability.js"
+import { recordDuplicateClientMessageIdSend } from "./observability.js"
 import { getWorkspaceMemberIdentityOrThrow } from "./identity.js"
 import { normalizeConversationParticipantRoleKey } from "./roles.js"
+import {
+  updateChatConversationReadWatermarkUseCase,
+  type ReadWatermarkInput,
+} from "./read-watermark.js"
 import { enrichTaskForUser } from "../tasks/service.js"
 import {
   getConversationRuntimeMap,
@@ -289,15 +283,6 @@ type SendMessageInput = {
   workspaceMemberId: string
   conversationId: string
 } & ChatConversationSendMessageRequest
-
-type ReadWatermarkInput = {
-  workspaceId: string
-  workspaceMemberId: string
-  conversationId: string
-  clientInstanceId: string
-  readUpToSequence: number
-  lastVisibleSequence?: number
-}
 
 function toNumber(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -833,25 +818,6 @@ async function upsertConversationView(
       ? parseInstantString(params.lastVisibleAt)
       : null,
   })
-}
-
-async function getConversationSequenceMax(
-  queryable: Executor,
-  conversationId: string
-) {
-  return toNumber(await getConversationMaxSequence(queryable, conversationId))
-}
-
-async function getLastItemAtOrBeforeSequence(
-  queryable: Executor,
-  conversationId: string,
-  sequence: number
-) {
-  return getLastConversationItemIdAtOrBeforeSequence(
-    queryable,
-    conversationId,
-    sequence
-  )
 }
 
 type PendingActorWakeup = {
@@ -3492,117 +3458,8 @@ export async function sendChatConversationMessage(
 export async function updateChatConversationReadWatermark(
   params: ReadWatermarkInput
 ): Promise<ChatConversationReadWatermarkRecord> {
-  return withChatTransaction(async (client) => {
-    const access = await requireConversationAccess(
-      client,
-      params.conversationId,
-      params.workspaceMemberId
-    )
-
-    await ensureClientInstance(client, {
-      workspaceId: params.workspaceId,
-      workspaceMemberId: params.workspaceMemberId,
-      clientInstanceId: params.clientInstanceId,
-    })
-
-    const maxSequence = await getConversationSequenceMax(
-      client,
-      params.conversationId
-    )
-    const requestedSequence = Math.min(
-      Math.max(params.readUpToSequence, 0),
-      maxSequence
-    )
-
-    const existingRow = await getConversationParticipantReadState(client, {
-      conversationId: params.conversationId,
-      participantId: access.participant.id,
-    })
-    const existingSequence = toNumber(existingRow?.readWatermarkSequence)
-    const nextSequence = Math.max(existingSequence, requestedSequence)
-    // S6 dedup observability: if the request didn't actually advance the
-    // watermark, it's a duplicate POST — the main thread and the SW
-    // both flushed the same pending-read. Count it so we can monitor
-    // whether the mutex (isChatServiceWorkerActive guard, S23) is
-    // holding.
-    //
-    // S37: require an EXISTING USER-INITIATED watermark before counting.
-    // Adding a participant pre-inserts a row with sequence=0 and
-    // last_read_at=NULL (see ensureConversationParticipant). The user's
-    // first POST with readUpTo=0 collides with that pre-initialized row
-    // but isn't actually a duplicate — it's the inaugural mark. Use
-    // last_read_at as the "user has marked something before" signal.
-    const userHasMarkedBefore =
-      Boolean(existingRow) && existingRow!.lastReadAt !== null
-    if (userHasMarkedBefore && nextSequence === existingSequence) {
-      recordDuplicateWatermarkPost()
-    }
-    const lastReadItemId = await getLastItemAtOrBeforeSequence(
-      client,
-      params.conversationId,
-      nextSequence
-    )
-
-    await upsertConversationParticipantReadState(client, {
-      conversationId: params.conversationId,
-      participantId: access.participant.id,
-      readWatermarkSequence: nextSequence,
-      lastReadItemId: lastReadItemId,
-    })
-
-    if (params.clientInstanceId) {
-      const lastVisibleSequence = Math.min(
-        maxSequence,
-        Math.max(params.lastVisibleSequence ?? nextSequence, nextSequence)
-      )
-      await upsertConversationDeviceState(client, {
-        conversationId: params.conversationId,
-        clientInstanceId: params.clientInstanceId,
-        lastVisibleSequence: lastVisibleSequence,
-      })
-    }
-
-    const unreadCount = await countUnreadVisibleMessages(
-      client,
-      params.conversationId,
-      access.participant.id
-    )
-
-    await upsertConversationView(client, {
-      workspaceMemberId: params.workspaceMemberId,
-      conversationId: params.conversationId,
-      unreadCount,
-    })
-
-    const lastReadAt = serializeNowInstant()
-    await appendWorkspaceMemberSyncEvent(client, {
-      workspaceId: params.workspaceId,
-      workspaceMemberId: params.workspaceMemberId,
-      conversationId: params.conversationId,
-      eventType: "conversation.read.updated",
-      payload: {
-        conversationId: params.conversationId,
-        workspaceMemberId: params.workspaceMemberId,
-        participantId: access.participant.id,
-        readWatermarkSequence: nextSequence,
-        lastReadAt,
-      },
-    })
-
-    await syncConversationUpsertForWorkspaceMembers(
-      client,
-      params.workspaceId,
-      [params.workspaceMemberId],
-      params.conversationId
-    )
-
-    return {
-      conversationId: params.conversationId,
-      workspaceMemberId: params.workspaceMemberId,
-      participantId: access.participant.id,
-      readWatermarkSequence: nextSequence,
-      lastReadAt,
-    }
+  return updateChatConversationReadWatermarkUseCase(params, {
+    syncConversationUpsert: syncConversationUpsertForWorkspaceMembers,
   })
 }
 
