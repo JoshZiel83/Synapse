@@ -24,6 +24,9 @@ import {
   DEVICE_TRUST_STATUSES,
   DEVICE_TYPES,
   HOST_KINDS,
+  REMOTE_AGENT_RUNTIME_CATALOG_STATUSES,
+  REMOTE_AGENT_RUNTIME_KINDS,
+  REMOTE_AGENT_RUNTIME_STATES,
   RUNTIME_AUTHORIZATION_BROWSER_OPERATIONS,
   RUNTIME_AUTHORIZATION_CAPABILITIES,
   RUNTIME_AUTHORIZATION_GRANT_RETENTIONS,
@@ -417,6 +420,102 @@ export const RemoteAgentSearchMessagesQuerySchema = z.strictObject({
 })
 export type RemoteAgentSearchMessagesQuery = z.infer<
   typeof RemoteAgentSearchMessagesQuerySchema
+>
+
+// Remote-agent daemon -> API WebSocket messages. This is the non-REST machine
+// surface under /ws/remote-agents. It uses snake_case wire keys, and the API
+// converts these to internal camelCase records inside remote-agents/wire.ts.
+const RemoteAgentRuntimeKindWireSchema = z.enum(REMOTE_AGENT_RUNTIME_KINDS)
+const RemoteAgentRuntimeStateWireSchema = z.enum(REMOTE_AGENT_RUNTIME_STATES)
+const RemoteAgentRuntimeCatalogStatusWireSchema = z.enum(
+  REMOTE_AGENT_RUNTIME_CATALOG_STATUSES
+)
+
+export const RemoteAgentRuntimeCapabilityWireSchema = z.strictObject({
+  supports_request_user_input: z.boolean().optional(),
+  supports_plan_mode: z.boolean().optional(),
+  supports_persistent_session: z.boolean().optional(),
+  supports_codex_app_server: z.boolean().optional(),
+  supports_structured_io: z.boolean().optional(),
+})
+export type RemoteAgentRuntimeCapabilityWire = z.infer<
+  typeof RemoteAgentRuntimeCapabilityWireSchema
+>
+
+export const RemoteAgentRuntimeCatalogEntryWireSchema = z.strictObject({
+  runtime_kind: RemoteAgentRuntimeKindWireSchema,
+  executable_path: z.string().optional(),
+  status: RemoteAgentRuntimeCatalogStatusWireSchema,
+  version: z.string().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+  last_error: z.string().optional(),
+})
+export type RemoteAgentRuntimeCatalogEntryWire = z.infer<
+  typeof RemoteAgentRuntimeCatalogEntryWireSchema
+>
+
+export const RemoteAgentMachineHeartbeatMessageSchema = z.strictObject({
+  type: z.literal("heartbeat"),
+})
+export type RemoteAgentMachineHeartbeatMessage = z.infer<
+  typeof RemoteAgentMachineHeartbeatMessageSchema
+>
+
+export const RemoteAgentMachineReadyMessageSchema = z.strictObject({
+  type: z.literal("ready"),
+  runtime_catalog: z.array(RemoteAgentRuntimeCatalogEntryWireSchema),
+})
+export type RemoteAgentMachineReadyMessage = z.infer<
+  typeof RemoteAgentMachineReadyMessageSchema
+>
+
+export const RemoteAgentRuntimeCatalogMessageSchema = z.strictObject({
+  type: z.literal("runtime:catalog"),
+  runtime_catalog: z.array(RemoteAgentRuntimeCatalogEntryWireSchema),
+})
+export type RemoteAgentRuntimeCatalogMessage = z.infer<
+  typeof RemoteAgentRuntimeCatalogMessageSchema
+>
+
+export const RemoteAgentSessionMessageSchema = z.strictObject({
+  type: z.literal("agent:session"),
+  remote_agent_id: z.string().min(1),
+  conversation_id: z.string().min(1),
+  state: RemoteAgentRuntimeStateWireSchema.optional(),
+  session_id: z.string().nullable().optional(),
+})
+export type RemoteAgentSessionMessage = z.infer<
+  typeof RemoteAgentSessionMessageSchema
+>
+
+export const RemoteAgentStatusMessageSchema = z.strictObject({
+  type: z.literal("agent:status"),
+  remote_agent_id: z.string().min(1),
+  state: RemoteAgentRuntimeStateWireSchema,
+  status_text: z.string().nullable().optional(),
+  conversation_id: z.string().nullable().optional(),
+  task_id: z.string().nullable().optional(),
+  session_id: z.string().nullable().optional(),
+  last_error: z.string().nullable().optional(),
+  run_key: z.string().nullable().optional(),
+  capabilities: RemoteAgentRuntimeCapabilityWireSchema.optional(),
+})
+export type RemoteAgentStatusMessage = z.infer<
+  typeof RemoteAgentStatusMessageSchema
+>
+
+export const RemoteAgentDaemonToApiWsMessageSchema = z.discriminatedUnion(
+  "type",
+  [
+    RemoteAgentMachineHeartbeatMessageSchema,
+    RemoteAgentMachineReadyMessageSchema,
+    RemoteAgentRuntimeCatalogMessageSchema,
+    RemoteAgentSessionMessageSchema,
+    RemoteAgentStatusMessageSchema,
+  ]
+)
+export type RemoteAgentDaemonToApiWsMessage = z.infer<
+  typeof RemoteAgentDaemonToApiWsMessageSchema
 >
 
 // ───────────────────────────── Control Plane messages (§7.1) ────────────────

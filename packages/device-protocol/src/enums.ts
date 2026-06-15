@@ -81,6 +81,31 @@ export const DEVICE_SYNC_SOURCE_KINDS = [
 ] as const
 export type DeviceSyncSourceKind = (typeof DEVICE_SYNC_SOURCE_KINDS)[number]
 
+export const REMOTE_AGENT_RUNTIME_KINDS = ["claude_code", "codex"] as const
+export type RemoteAgentRuntimeKind = (typeof REMOTE_AGENT_RUNTIME_KINDS)[number]
+
+export const REMOTE_AGENT_RUNTIME_STATES = [
+  "offline",
+  "idle",
+  "running",
+  "waiting_user_input",
+  "plan_drafting",
+  "waiting_plan_approval",
+  "error",
+] as const
+export type RemoteAgentRuntimeState =
+  (typeof REMOTE_AGENT_RUNTIME_STATES)[number]
+
+export const REMOTE_AGENT_RUNTIME_CATALOG_STATUSES = [
+  "available",
+  "missing_binary",
+  "broken_path",
+  "unsupported_platform",
+  "runtime_error",
+] as const
+export type RemoteAgentRuntimeCatalogStatus =
+  (typeof REMOTE_AGENT_RUNTIME_CATALOG_STATUSES)[number]
+
 export const DEVICE_SYNC_MODES = ["snapshot", "follow"] as const
 export type DeviceSyncMode = (typeof DEVICE_SYNC_MODES)[number]
 

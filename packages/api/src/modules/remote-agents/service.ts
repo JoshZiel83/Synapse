@@ -24,7 +24,6 @@ import type { Executor } from "../../infrastructure/database/kysely.js"
 import {
   type RemoteAgentConversationRecord,
   type RemoteAgentRecord,
-  type RemoteAgentRuntimeCapabilityRecord,
   type RemoteAgentRow,
 } from "./presenter.js"
 import {
@@ -35,8 +34,11 @@ import { listVisibleConversationItemsForParticipant } from "../chat/service.js"
 import { getFileUrlById } from "../files/service.js"
 import { requireWorkspaceMemberIdentity } from "../chat/workspace-identity.js"
 import * as repo from "./repo.js"
-
-type RuntimeCapabilities = RemoteAgentRuntimeCapabilityRecord
+import {
+  parseRemoteAgentMachineMessage,
+  type RemoteAgentMachineMessage,
+  type RemoteAgentRuntimeCatalogRecord,
+} from "./wire.js"
 
 type MachineConnection = {
   machineId: string
@@ -45,28 +47,6 @@ type MachineConnection = {
   fencingToken: string
   socket: any
   ready: boolean
-}
-
-type RuntimeCatalogEntry = {
-  runtimeKind: RemoteAgentRuntimeKind
-  executablePath?: string
-  status: (typeof REMOTE_AGENT_RUNTIME_CATALOG_STATUS)[keyof typeof REMOTE_AGENT_RUNTIME_CATALOG_STATUS]
-  version?: string
-  metadata?: Record<string, unknown>
-  lastError?: string
-}
-
-type RuntimeStatusMessage = {
-  type: "agent:status"
-  remoteAgentId: string
-  state: RemoteAgentRuntimeStateType
-  statusText?: string
-  conversationId?: string | null
-  taskId?: string | null
-  sessionId?: string | null
-  lastError?: string | null
-  runKey?: string | null
-  capabilities?: RuntimeCapabilities
 }
 
 const machineConnections = new Map<string, MachineConnection>()
@@ -201,7 +181,7 @@ async function setMachineLifecycleState(
 
 async function upsertRuntimeCatalog(
   machineId: string,
-  entries: RuntimeCatalogEntry[],
+  entries: RemoteAgentRuntimeCatalogRecord[],
   queryable?: Executor
 ) {
   await repo.upsertRuntimeCatalogRepo(machineId, entries, queryable)
@@ -287,7 +267,7 @@ async function replayResolvedRemoteAgentTasks(params: {
 
 async function updateRemoteAgentRuntimeStatus(
   machineId: string,
-  message: RuntimeStatusMessage,
+  message: Extract<RemoteAgentMachineMessage, { type: "agent:status" }>,
   queryable?: Executor
 ) {
   const runStatus =
@@ -1509,10 +1489,8 @@ export async function handleRemoteAgentDaemonConnection(
   } catch {}
 
   socket.on("message", async (raw: any) => {
-    let message: any
-    try {
-      message = JSON.parse(String(raw))
-    } catch {
+    const message = parseRemoteAgentMachineMessage(raw)
+    if (!message) {
       return
     }
 
@@ -1538,23 +1516,17 @@ export async function handleRemoteAgentDaemonConnection(
     if (message?.type === "ready") {
       connection.ready = true
       await repo.markMachineSessionActiveRepo(sessionId)
-      if (Array.isArray(message.runtimeCatalog)) {
-        await upsertRuntimeCatalog(machine.id, message.runtimeCatalog)
-      }
+      await upsertRuntimeCatalog(machine.id, message.runtimeCatalog)
       await startBoundRemoteAgents(machine.id)
       return
     }
 
-    if (message?.type === "runtime:catalog" && Array.isArray(message.catalog)) {
-      await upsertRuntimeCatalog(machine.id, message.catalog)
+    if (message?.type === "runtime:catalog") {
+      await upsertRuntimeCatalog(machine.id, message.runtimeCatalog)
       return
     }
 
-    if (
-      message?.type === "agent:session" &&
-      typeof message.remoteAgentId === "string" &&
-      typeof message.conversationId === "string"
-    ) {
+    if (message?.type === "agent:session") {
       const bindingRuntimeKind = await repo.loadBindingRuntimeKindRepo(
         message.remoteAgentId,
         machine.id
@@ -1574,14 +1546,8 @@ export async function handleRemoteAgentDaemonConnection(
       return
     }
 
-    if (
-      message?.type === "agent:status" &&
-      typeof message.remoteAgentId === "string"
-    ) {
-      await updateRemoteAgentRuntimeStatus(
-        machine.id,
-        message as RuntimeStatusMessage
-      )
+    if (message?.type === "agent:status") {
+      await updateRemoteAgentRuntimeStatus(machine.id, message)
       return
     }
   })

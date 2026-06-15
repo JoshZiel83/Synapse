@@ -14,6 +14,12 @@ import WebSocket from "ws"
 // same schema the API parses inbound. The API is the runtime validator
 // (separate trust domain).
 import type {
+  RemoteAgentMachineHeartbeatMessage,
+  RemoteAgentMachineReadyMessage,
+  RemoteAgentRuntimeCatalogEntryWire,
+  RemoteAgentRuntimeCapabilityWire,
+  RemoteAgentSessionMessage,
+  RemoteAgentStatusMessage,
   RemoteAgentUserInputTaskBody,
   RemoteAgentPlanApprovalTaskBody,
   RemoteAgentFailDeliveriesBody,
@@ -84,6 +90,14 @@ type ConnectedMessage = {
 }
 
 type LogLevel = "error" | "warn" | "info" | "debug"
+
+type DaemonRuntimeCapabilities = {
+  supportsRequestUserInput?: boolean
+  supportsPlanMode?: boolean
+  supportsPersistentSession?: boolean
+  supportsCodexAppServer?: boolean
+  supportsStructuredIo?: boolean
+}
 
 const DEFAULT_HEARTBEAT_MS = 30_000
 const DEFAULT_RECONNECT_MS = 3_000
@@ -304,6 +318,31 @@ function describeRuntimeCatalogIssue(entry: RuntimeCatalogEntry) {
   }
 }
 
+function runtimeCatalogEntryToWire(
+  entry: RuntimeCatalogEntry
+): RemoteAgentRuntimeCatalogEntryWire {
+  return {
+    runtime_kind: entry.runtimeKind,
+    executable_path: entry.executablePath,
+    status: entry.status,
+    version: entry.version,
+    metadata: entry.metadata,
+    last_error: entry.lastError,
+  }
+}
+
+function runtimeCapabilitiesToWire(
+  capabilities: DaemonRuntimeCapabilities
+): RemoteAgentRuntimeCapabilityWire {
+  return {
+    supports_request_user_input: capabilities.supportsRequestUserInput,
+    supports_plan_mode: capabilities.supportsPlanMode,
+    supports_persistent_session: capabilities.supportsPersistentSession,
+    supports_codex_app_server: capabilities.supportsCodexAppServer,
+    supports_structured_io: capabilities.supportsStructuredIo,
+  }
+}
+
 async function requestJson<T>(
   serverUrl: string,
   machineKey: string,
@@ -411,7 +450,9 @@ class DaemonSupervisor {
       ws.once("open", () => {
         log("info", "daemon", "WebSocket connected")
         heartbeatTimer = setInterval(() => {
-          this.send({ type: "heartbeat" })
+          this.send({
+            type: "heartbeat",
+          } satisfies RemoteAgentMachineHeartbeatMessage)
         }, this.config.heartbeatMs)
       })
 
@@ -441,7 +482,10 @@ class DaemonSupervisor {
             sessionId: connected.sessionId,
           })
           log("info", "daemon", "Runtime catalog detected", { runtimeCatalog })
-          this.send({ type: "ready", runtimeCatalog })
+          this.send({
+            type: "ready",
+            runtime_catalog: runtimeCatalog.map(runtimeCatalogEntryToWire),
+          } satisfies RemoteAgentMachineReadyMessage)
           return
         }
 
@@ -891,10 +935,10 @@ class ManagedRemoteAgent {
       onSessionStarted: (conversationId, sessionId) => {
         this.params.daemon.send({
           type: "agent:session",
-          remoteAgentId: this.params.remoteAgentId,
-          conversationId,
-          sessionId,
-        })
+          remote_agent_id: this.params.remoteAgentId,
+          conversation_id: conversationId,
+          session_id: sessionId,
+        } satisfies RemoteAgentSessionMessage)
         // A fresh session means we're starting clean — any error from the
         // previous lifecycle is stale by definition. Use the empty-string
         // sentinel so the server clears last_error instead of preserving
@@ -1093,19 +1137,19 @@ class ManagedRemoteAgent {
       : undefined
     this.params.daemon.send({
       type: "agent:status",
-      remoteAgentId: this.params.remoteAgentId,
+      remote_agent_id: this.params.remoteAgentId,
       state: params.state,
-      statusText: params.statusText,
-      conversationId: conversationId ?? bridgeLast ?? null,
-      taskId: params.taskId ?? null,
-      sessionId: params.sessionId ?? null,
-      lastError: params.lastError ?? null,
-      runKey: params.runKey ?? null,
-      capabilities: this.runtimeCapabilities(),
-    })
+      status_text: params.statusText,
+      conversation_id: conversationId ?? bridgeLast ?? null,
+      task_id: params.taskId ?? null,
+      session_id: params.sessionId ?? null,
+      last_error: params.lastError ?? null,
+      run_key: params.runKey ?? null,
+      capabilities: runtimeCapabilitiesToWire(this.runtimeCapabilities()),
+    } satisfies RemoteAgentStatusMessage)
   }
 
-  private runtimeCapabilities() {
+  private runtimeCapabilities(): DaemonRuntimeCapabilities {
     if (this.runtimeKind === "claude_code") {
       return {
         supportsRequestUserInput: true,
