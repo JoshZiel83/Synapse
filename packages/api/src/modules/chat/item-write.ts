@@ -17,6 +17,10 @@ import type {
   ConversationEventTimelinePolicy,
 } from "@synapse/shared/types"
 import type { Executor } from "../../infrastructure/database/kysely.js"
+import { enqueueActorWakeupsForConversationMessage } from "./actor-wakeup.js"
+import { buildChatConversationItems } from "./conversation-item-read.js"
+import { prepareConversationItemWrite } from "./conversation-item-write-prep.js"
+import { syncConversationUpsertForWorkspaceMembers } from "./conversation-upsert-sync.js"
 import { buildNormalizedMessageContent } from "./message-content.js"
 import { recordDuplicateClientMessageIdSend } from "./observability.js"
 import {
@@ -27,6 +31,7 @@ import {
   type ChatConversationItemRow,
   type ChatParticipantRow,
 } from "./repo.js"
+import { syncVisibleSharedItemUseCase } from "./visible-sync.js"
 
 type ItemScope = (typeof CONVERSATION_ITEM_SCOPES)[number]
 type ItemSurface = (typeof CONVERSATION_ITEM_SURFACES)[number]
@@ -153,6 +158,34 @@ export type SendConversationMessageDeps = {
   ) => Promise<void>
 }
 
+function chatCreateConversationItemDeps(): CreateConversationItemDeps {
+  return {
+    prepareConversationItemWrite,
+    buildChatConversationItems,
+    syncVisibleSharedItem: (params) =>
+      syncVisibleSharedItemUseCase(params, {
+        syncConversationUpsert: syncConversationUpsertForWorkspaceMembers,
+      }),
+    createRemoteAgentDeliveriesForItem: async (params) => {
+      const { createRemoteAgentDeliveriesForItem } =
+        await import("../remote-agents/service.js")
+      await createRemoteAgentDeliveriesForItem(params)
+    },
+  }
+}
+
+function chatSendConversationMessageDeps(): SendConversationMessageDeps {
+  return {
+    createConversationItem,
+    enqueueActorWakeupsForConversationMessage,
+    notifyRemoteAgentDeliveriesForConversation: async (conversationId) => {
+      const { notifyRemoteAgentDeliveriesForConversation } =
+        await import("../remote-agents/service.js")
+      await notifyRemoteAgentDeliveriesForConversation(conversationId)
+    },
+  }
+}
+
 export async function createConversationItemUseCase(
   params: CreateConversationItemInput,
   deps: CreateConversationItemDeps
@@ -262,6 +295,12 @@ export async function createConversationItemUseCase(
   return withChatTransaction((client) => executeInsert(client))
 }
 
+export async function createConversationItem(
+  params: CreateConversationItemInput
+) {
+  return createConversationItemUseCase(params, chatCreateConversationItemDeps())
+}
+
 export async function sendConversationMessageFromParticipantUseCase(
   params: SendConversationMessageInput,
   deps: SendConversationMessageDeps
@@ -304,4 +343,13 @@ export async function sendConversationMessageFromParticipantUseCase(
   })
   await deps.notifyRemoteAgentDeliveriesForConversation(params.conversationId)
   return item
+}
+
+export async function sendConversationMessageFromParticipant(
+  params: SendConversationMessageInput
+) {
+  return sendConversationMessageFromParticipantUseCase(
+    params,
+    chatSendConversationMessageDeps()
+  )
 }

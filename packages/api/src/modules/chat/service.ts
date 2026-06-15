@@ -1,17 +1,7 @@
 import {
   buildConversationMessageRef,
-  CONVERSATION_ITEM_SCOPE,
-  CONVERSATION_ITEM_SCOPES,
-  CONVERSATION_ITEM_ROLES,
-  CONVERSATION_ITEM_SURFACE,
-  CONVERSATION_ITEM_SURFACES,
-  CONVERSATION_ITEM_TYPE,
-  CONVERSATION_ITEM_TYPES,
   CONVERSATION_KINDS,
-  CONVERSATION_MESSAGE_SUBTYPE,
   parseConversationMessageRef,
-  type CanonicalContentBlock,
-  type ConversationMessageSubtype,
   type ConversationParticipantType,
 } from "@synapse/shared"
 import type {
@@ -84,21 +74,20 @@ import {
   type CreateConversationForWorkspaceMemberDeps,
 } from "./create-conversation.js"
 import {
-  createConversationItemUseCase,
-  sendConversationMessageFromParticipantUseCase,
-  type ConversationItemPartInput,
-  type CreateConversationItemDeps,
-  type SendConversationMessageDeps,
+  createConversationItem,
+  sendConversationMessageFromParticipant,
 } from "./item-write.js"
-export type { ConversationItemPartInput } from "./item-write.js"
-import { prepareConversationItemWrite } from "./conversation-item-write-prep.js"
+export {
+  createConversationItem,
+  sendConversationMessageFromParticipant,
+  type ConversationItemPartInput,
+} from "./item-write.js"
 import {
   createConversationEventUseCase,
   type CreateConversationEventDeps,
 } from "./event-write.js"
 import { enqueueActorWakeupsForConversationMessage } from "./actor-wakeup.js"
 export { enqueueActorWakeupsForConversationMessage } from "./actor-wakeup.js"
-import { syncVisibleSharedItemUseCase } from "./visible-sync.js"
 import { syncConversationUpsertForWorkspaceMembers } from "./conversation-upsert-sync.js"
 import { listConversationRealtimeRecipientsUseCase } from "./realtime-recipients.js"
 import {
@@ -114,10 +103,7 @@ import {
 } from "./participant-projection.js"
 export { isFeedItemVisibleToWorkspaceMember } from "./conversation-feed-visibility.js"
 export { conversationItemDetailToFeedItem } from "./conversation-feed-mapper.js"
-import {
-  buildChatConversationItems,
-  getConversationFeedItemById,
-} from "./conversation-item-read.js"
+import { getConversationFeedItemById } from "./conversation-item-read.js"
 export {
   getContextConversationItemsForParticipant,
   getConversationFeedItemById,
@@ -142,10 +128,6 @@ import {
 
 type ConversationKind = (typeof CONVERSATION_KINDS)[number]
 type ParticipantKind = ConversationParticipantType
-type ItemScope = (typeof CONVERSATION_ITEM_SCOPES)[number]
-type ItemSurface = (typeof CONVERSATION_ITEM_SURFACES)[number]
-type ItemType = (typeof CONVERSATION_ITEM_TYPES)[number]
-type ItemRole = (typeof CONVERSATION_ITEM_ROLES)[number]
 
 function toNumber(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -263,34 +245,6 @@ function chatCreateConversationDeps(): CreateChatConversationDeps {
   }
 }
 
-function chatCreateConversationItemDeps(): CreateConversationItemDeps {
-  return {
-    prepareConversationItemWrite,
-    buildChatConversationItems,
-    syncVisibleSharedItem: (params) =>
-      syncVisibleSharedItemUseCase(params, {
-        syncConversationUpsert: syncConversationUpsertForWorkspaceMembers,
-      }),
-    createRemoteAgentDeliveriesForItem: async (params) => {
-      const { createRemoteAgentDeliveriesForItem } =
-        await import("../remote-agents/service.js")
-      await createRemoteAgentDeliveriesForItem(params)
-    },
-  }
-}
-
-function chatSendConversationMessageDeps(): SendConversationMessageDeps {
-  return {
-    createConversationItem,
-    enqueueActorWakeupsForConversationMessage,
-    notifyRemoteAgentDeliveriesForConversation: async (conversationId) => {
-      const { notifyRemoteAgentDeliveriesForConversation } =
-        await import("../remote-agents/service.js")
-      await notifyRemoteAgentDeliveriesForConversation(conversationId)
-    },
-  }
-}
-
 function chatRouteSendMessageDeps(): SendChatConversationMessageDeps {
   return {
     withChatTransaction,
@@ -392,51 +346,6 @@ export async function addConversationParticipants(params: {
   queryable?: Executor
 }) {
   return addConversationParticipantsUseCase(params, chatAddParticipantsDeps())
-}
-
-export async function createConversationItem(params: {
-  workspaceId?: string
-  conversationId: string
-  sessionId?: string
-  turnId?: string
-  clientMessageId?: string
-  scope: ItemScope
-  surface: ItemSurface
-  itemType: ItemType
-  subtype: string
-  role: ItemRole
-  authorParticipantId?: string
-  bundleId?: string
-  replyToItemId?: string
-  causedByItemId?: string
-  eventPayload?: unknown
-  eventTimelinePolicy?: ConversationEventTimelinePolicy
-  eventContextPolicy?: ConversationEventContextPolicy
-  metadata?: Record<string, unknown>
-  parts?: ConversationItemPartInput[]
-  restrictedAudienceParticipantIds?: string[]
-  contextTargetParticipantIds?: string[]
-  queryable?: Executor
-}) {
-  return createConversationItemUseCase(params, chatCreateConversationItemDeps())
-}
-
-export async function sendConversationMessageFromParticipant(params: {
-  workspaceId?: string
-  conversationId: string
-  senderParticipantId: string
-  sessionId?: string
-  clientMessageId?: string
-  role?: "user" | "assistant" | "system"
-  contentBlocks: CanonicalContentBlock[]
-  replyToItemId?: string
-  metadata?: Record<string, unknown>
-  queryable?: Executor
-}) {
-  return sendConversationMessageFromParticipantUseCase(
-    params,
-    chatSendConversationMessageDeps()
-  )
 }
 
 export async function createConversationEvent<
