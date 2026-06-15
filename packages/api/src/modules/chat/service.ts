@@ -11,7 +11,6 @@ import {
   CONVERSATION_ITEM_TYPE,
   CONVERSATION_ITEM_TYPES,
   CONVERSATION_FEED_MESSAGE_TYPE,
-  CONVERSATION_KIND,
   CONVERSATION_KINDS,
   CONVERSATION_MESSAGE_TRANSPORT_DIRECTION,
   CONVERSATION_MESSAGE_SUBTYPE,
@@ -68,6 +67,10 @@ import {
   canonicalContentBlocksToDraftParts,
   itemPartsToCanonicalContentBlocks,
 } from "./message-content.js"
+import {
+  requireConversationAccess,
+  requireConversationManagement,
+} from "./conversation-access.js"
 import { ensureClientInstance } from "./client-instances.js"
 export {
   createChatClientInstance,
@@ -89,7 +92,6 @@ import {
   countUnreadVisibleConversationMessages,
   getChatConversationCreateRequestConversationId,
   getChatConversationBaseRow,
-  getChatWorkspaceMemberConversationParticipantRow,
   getConversationMaxSequence,
   getConversationDeviceState,
   getConversationParticipantById,
@@ -546,17 +548,6 @@ async function listConversationParticipantRows(
   )
 }
 
-async function getWorkspaceMemberConversationParticipantRow(
-  queryable: Executor,
-  conversationId: string,
-  workspaceMemberId: string
-) {
-  return getChatWorkspaceMemberConversationParticipantRow(queryable, {
-    conversationId,
-    workspaceMemberId,
-  })
-}
-
 async function getConversationBaseRow(
   queryable: Executor,
   workspaceMemberId: string,
@@ -879,77 +870,6 @@ async function getLastItemAtOrBeforeSequence(
     conversationId,
     sequence
   )
-}
-
-async function requireConversationAccess(
-  queryable: Executor,
-  conversationId: string,
-  workspaceMemberId: string
-) {
-  const participant = await getWorkspaceMemberConversationParticipantRow(
-    queryable,
-    conversationId,
-    workspaceMemberId
-  )
-  if (!participant || participant.state !== "active") {
-    throw createChatError(
-      403,
-      "conversation_access_denied",
-      "You are not a participant in this conversation"
-    )
-  }
-
-  const baseRow = await getConversationBaseRow(
-    queryable,
-    workspaceMemberId,
-    conversationId
-  )
-  if (!baseRow) {
-    throw createChatError(
-      404,
-      "conversation_not_found",
-      "Conversation not found"
-    )
-  }
-
-  return {
-    participant,
-    baseRow,
-  }
-}
-
-/**
- * Same as requireConversationAccess + asserts the viewer has management
- * rights (kind != "direct" AND role_key in ('owner','admin')). Throws
- * 403 conversation_manage_denied otherwise. Used by PATCH conversation,
- * POST participants, DELETE participants.
- */
-async function requireConversationManagement(
-  queryable: Executor,
-  conversationId: string,
-  workspaceMemberId: string
-) {
-  const access = await requireConversationAccess(
-    queryable,
-    conversationId,
-    workspaceMemberId
-  )
-  if (access.baseRow.kind === CONVERSATION_KIND.DIRECT) {
-    throw createChatError(
-      403,
-      "conversation_manage_denied",
-      "Direct conversations cannot be managed"
-    )
-  }
-  const roleKey = access.participant.roleKey
-  if (roleKey !== "owner" && roleKey !== "admin") {
-    throw createChatError(
-      403,
-      "conversation_manage_denied",
-      "Only conversation owners or admins can perform this action"
-    )
-  }
-  return access
 }
 
 type PendingActorWakeup = {
