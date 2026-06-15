@@ -4,10 +4,14 @@
 // extra fields are ignored. Mismatches return a Result with `ok:false` so
 // the control-plane handler can write a structured JSON-RPC error.
 
-import { z } from "zod"
 import {
+  DeviceEventEmitParamsSchema,
   DeviceRuntimeSessionClosedParamsSchema,
   DeviceRuntimeSessionOpenedParamsSchema,
+  DeviceTaskOutputParamsSchema,
+  DeviceTaskRefParamsSchema,
+  DeviceTaskResultParamsSchema,
+  DeviceVfsExposureUpsertParamsSchema,
 } from "@synapse/device-protocol"
 import {
   upsertRuntimeSessionOpened,
@@ -100,20 +104,6 @@ export async function persistRuntimeSessionClosed(
 }
 
 // ─── device.task.* (async lifecycle for existing device_operations) ─────────
-
-const TaskRefSchema = z.object({
-  operation_id: z.uuid(),
-  attempt_id: z.uuid().optional(),
-})
-const TaskOutputSchema = TaskRefSchema.extend({
-  output: z.unknown(),
-})
-const TaskResultSchema = TaskRefSchema.extend({
-  ok: z.boolean(),
-  error_code: z.string().optional(),
-  error_message: z.string().optional(),
-  result_hash: z.string().optional(),
-})
 
 /**
  * Verifies the operation row belongs to the authenticated device + the
@@ -303,7 +293,7 @@ export async function persistTaskReceived(
   serviceId: string,
   raw: unknown
 ): Promise<PersistResult> {
-  const parsed = TaskRefSchema.safeParse(raw)
+  const parsed = DeviceTaskRefParamsSchema.safeParse(raw)
   if (!parsed.success) {
     return { ok: false, code: -32602, message: parsed.error.message }
   }
@@ -331,7 +321,7 @@ export async function persistTaskStarted(
   serviceId: string,
   raw: unknown
 ): Promise<PersistResult> {
-  const parsed = TaskRefSchema.safeParse(raw)
+  const parsed = DeviceTaskRefParamsSchema.safeParse(raw)
   if (!parsed.success) {
     return { ok: false, code: -32602, message: parsed.error.message }
   }
@@ -352,7 +342,7 @@ export async function persistTaskOutput(
   serviceId: string,
   raw: unknown
 ): Promise<PersistResult> {
-  const parsed = TaskOutputSchema.safeParse(raw)
+  const parsed = DeviceTaskOutputParamsSchema.safeParse(raw)
   if (!parsed.success) {
     return { ok: false, code: -32602, message: parsed.error.message }
   }
@@ -381,7 +371,7 @@ export async function persistTaskResult(
   serviceId: string,
   raw: unknown
 ): Promise<PersistResult> {
-  const parsed = TaskResultSchema.safeParse(raw)
+  const parsed = DeviceTaskResultParamsSchema.safeParse(raw)
   if (!parsed.success) {
     return { ok: false, code: -32602, message: parsed.error.message }
   }
@@ -412,18 +402,11 @@ export async function persistTaskResult(
 
 // ─── device.event.emit ──────────────────────────────────────────────────────
 
-const EventEmitSchema = z.object({
-  event_type: z.string().min(1).max(80),
-  level: z.enum(["debug", "info", "warn", "error"]).optional(),
-  conversation_id: z.uuid().nullable().optional(),
-  payload: z.record(z.string(), z.unknown()).optional(),
-})
-
 export async function persistDeviceEventEmit(
   workspaceId: string,
   raw: unknown
 ): Promise<PersistResult> {
-  const parsed = EventEmitSchema.safeParse(raw)
+  const parsed = DeviceEventEmitParamsSchema.safeParse(raw)
   if (!parsed.success) {
     return { ok: false, code: -32602, message: parsed.error.message }
   }
@@ -439,11 +422,6 @@ export async function persistDeviceEventEmit(
 
 // ─── device.vfs.exposure.upsert ─────────────────────────────────────────────
 
-const VfsExposureUpsertSchema = z.object({
-  exposure_id: z.uuid(),
-  vfs: z.record(z.string(), z.unknown()),
-})
-
 /**
  * VFS exposures are projections on top of filesystem / browser / cua
  * exposures. The v3.0 skeleton doesn't have a dedicated table for the
@@ -455,7 +433,7 @@ export async function persistVfsExposureUpsert(
   deviceId: string,
   raw: unknown
 ): Promise<PersistResult> {
-  const parsed = VfsExposureUpsertSchema.safeParse(raw)
+  const parsed = DeviceVfsExposureUpsertParamsSchema.safeParse(raw)
   if (!parsed.success) {
     return { ok: false, code: -32602, message: parsed.error.message }
   }

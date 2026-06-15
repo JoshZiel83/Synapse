@@ -2,15 +2,23 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 
 import {
+  DeviceEventEmitParamsSchema,
   DeviceRuntimeSessionClosedParamsSchema,
   DeviceRuntimeSessionOpenedParamsSchema,
+  DeviceTaskOutputParamsSchema,
+  DeviceTaskRefParamsSchema,
+  DeviceTaskResultParamsSchema,
   DeviceTunnelDownParamsSchema,
   DeviceTunnelUpParamsSchema,
+  DeviceVfsExposureUpsertParamsSchema,
 } from "./schemas.js"
 
 const RUNTIME_SESSION_ID = "00000000-0000-4000-8000-000000000030"
 const CONVERSATION_ID = "00000000-0000-4000-8000-000000000031"
 const ACTOR_ID = "00000000-0000-4000-8000-000000000032"
+const OPERATION_ID = "00000000-0000-4000-8000-000000000033"
+const ATTEMPT_ID = "00000000-0000-4000-8000-000000000034"
+const EXPOSURE_ID = "00000000-0000-4000-8000-000000000035"
 
 test("DeviceTunnelUpParamsSchema accepts snake_case tunnel URL", () => {
   const parsed = DeviceTunnelUpParamsSchema.parse({
@@ -66,6 +74,83 @@ test("DeviceRuntimeSessionClosedParamsSchema accepts only runtime_session_id", (
   assert.throws(() =>
     DeviceRuntimeSessionClosedParamsSchema.parse({
       runtimeSessionId: RUNTIME_SESSION_ID,
+    })
+  )
+})
+
+test("DeviceTaskRefParamsSchema accepts snake_case operation refs", () => {
+  const parsed = DeviceTaskRefParamsSchema.parse({
+    operation_id: OPERATION_ID,
+    attempt_id: ATTEMPT_ID,
+  })
+  assert.equal(parsed.operation_id, OPERATION_ID)
+  assert.equal(parsed.attempt_id, ATTEMPT_ID)
+  assert.throws(() =>
+    DeviceTaskRefParamsSchema.parse({
+      operationId: OPERATION_ID,
+      attemptId: ATTEMPT_ID,
+    })
+  )
+})
+
+test("DeviceTaskOutputParamsSchema preserves opaque output", () => {
+  const parsed = DeviceTaskOutputParamsSchema.parse({
+    operation_id: OPERATION_ID,
+    output: { nested_value: true },
+  })
+  assert.deepEqual(parsed.output, { nested_value: true })
+})
+
+test("DeviceTaskResultParamsSchema accepts snake_case result fields", () => {
+  const parsed = DeviceTaskResultParamsSchema.parse({
+    operation_id: OPERATION_ID,
+    attempt_id: ATTEMPT_ID,
+    ok: false,
+    error_code: "tool_error",
+    error_message: "failed",
+    result_hash: "sha256:abc",
+  })
+  assert.equal(parsed.error_code, "tool_error")
+  assert.equal(parsed.error_message, "failed")
+  assert.equal(parsed.result_hash, "sha256:abc")
+  assert.throws(() =>
+    DeviceTaskResultParamsSchema.parse({
+      operationId: OPERATION_ID,
+      ok: true,
+      resultHash: "sha256:abc",
+    })
+  )
+})
+
+test("DeviceEventEmitParamsSchema accepts snake_case event payload", () => {
+  const parsed = DeviceEventEmitParamsSchema.parse({
+    event_type: "device.tool.progress",
+    level: "info",
+    conversation_id: CONVERSATION_ID,
+    payload: { percent: 50 },
+  })
+  assert.equal(parsed.event_type, "device.tool.progress")
+  assert.equal(parsed.conversation_id, CONVERSATION_ID)
+  assert.deepEqual(parsed.payload, { percent: 50 })
+  assert.throws(() =>
+    DeviceEventEmitParamsSchema.parse({
+      eventType: "device.tool.progress",
+      conversationId: CONVERSATION_ID,
+    })
+  )
+})
+
+test("DeviceVfsExposureUpsertParamsSchema accepts snake_case exposure id", () => {
+  const parsed = DeviceVfsExposureUpsertParamsSchema.parse({
+    exposure_id: EXPOSURE_ID,
+    vfs: { root: { kind: "dir" } },
+  })
+  assert.equal(parsed.exposure_id, EXPOSURE_ID)
+  assert.deepEqual(parsed.vfs, { root: { kind: "dir" } })
+  assert.throws(() =>
+    DeviceVfsExposureUpsertParamsSchema.parse({
+      exposureId: EXPOSURE_ID,
+      vfs: {},
     })
   )
 })

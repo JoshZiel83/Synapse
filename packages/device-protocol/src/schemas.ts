@@ -759,6 +759,45 @@ export type DeviceRuntimeSessionClosedParams = z.infer<
   typeof DeviceRuntimeSessionClosedParamsSchema
 >
 
+export const DeviceTaskRefParamsSchema = z.object({
+  operation_id: z.uuid(),
+  attempt_id: z.uuid().optional(),
+})
+export type DeviceTaskRefParams = z.infer<typeof DeviceTaskRefParamsSchema>
+
+export const DeviceTaskOutputParamsSchema = DeviceTaskRefParamsSchema.extend({
+  output: z.unknown(),
+})
+export type DeviceTaskOutputParams = z.infer<
+  typeof DeviceTaskOutputParamsSchema
+>
+
+export const DeviceTaskResultParamsSchema = DeviceTaskRefParamsSchema.extend({
+  ok: z.boolean(),
+  error_code: z.string().optional(),
+  error_message: z.string().optional(),
+  result_hash: z.string().optional(),
+})
+export type DeviceTaskResultParams = z.infer<
+  typeof DeviceTaskResultParamsSchema
+>
+
+export const DeviceEventEmitParamsSchema = z.object({
+  event_type: z.string().min(1).max(80),
+  level: z.enum(["debug", "info", "warn", "error"]).optional(),
+  conversation_id: z.uuid().nullable().optional(),
+  payload: z.record(z.string(), z.unknown()).optional(),
+})
+export type DeviceEventEmitParams = z.infer<typeof DeviceEventEmitParamsSchema>
+
+export const DeviceVfsExposureUpsertParamsSchema = z.object({
+  exposure_id: z.uuid(),
+  vfs: z.record(z.string(), z.unknown()),
+})
+export type DeviceVfsExposureUpsertParams = z.infer<
+  typeof DeviceVfsExposureUpsertParamsSchema
+>
+
 // server → device
 export const ServerRuntimeSessionOpenParamsSchema = z.object({
   runtime_session_id: z.uuid(),
