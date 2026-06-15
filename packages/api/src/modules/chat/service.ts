@@ -59,10 +59,7 @@ import {
   upsertAccessSubjectOn,
 } from "../access/subject-registry.js"
 import { getFileUrlById } from "../files/service.js"
-import {
-  canonicalContentBlocksToDraftParts,
-  itemPartsToCanonicalContentBlocks,
-} from "./message-content.js"
+import { canonicalContentBlocksToDraftParts } from "./message-content.js"
 import { requireConversationAccess } from "./conversation-access.js"
 import { ensureClientInstance } from "./client-instances.js"
 export {
@@ -110,7 +107,6 @@ import {
   withChatRepeatableRead,
   withChatTransaction,
   type ChatConversationItemRow,
-  type ChatConversationItemPartRow,
   type ChatParticipantRow,
 } from "./repo.js"
 // Re-exported for existing consumers that import the row DTO from chat/service.
@@ -188,6 +184,11 @@ import {
   loadConversationViewsUseCase,
   type LoadConversationViewsDeps,
 } from "./conversation-view.js"
+import {
+  hydrateConversationItemsUseCase,
+  type HydrateConversationItemsDeps,
+  type HydratedConversationItemRecord,
+} from "./conversation-item-hydration.js"
 import { enrichTaskForUser } from "../tasks/service.js"
 import {
   getConversationRuntimeMap,
@@ -206,8 +207,6 @@ type MessageLikeItemType = Exclude<NonEventItemType, "summary">
 type ParticipantRow = ChatParticipantRow
 
 type ItemRow = ChatConversationItemRow
-
-type ItemPartRow = ChatConversationItemPartRow
 
 interface ConversationItemDetailBase {
   id: string
@@ -254,26 +253,6 @@ export interface ConversationEventItemDetail<
 export type ConversationItemDetail =
   | ConversationNonEventItemDetail
   | ConversationEventItemDetail
-
-type HydratedConversationItemRecord = {
-  id: string
-  conversationId: string
-  sequence: number
-  clientMessageId?: string
-  itemType: ItemType
-  role: ItemRole
-  subtype: string
-  scope: ItemScope
-  surface: ItemSurface
-  authorParticipantId?: string
-  replyToItemId?: string
-  causedByItemId?: string
-  content: string
-  contentBlocks: CanonicalContentBlock[]
-  metadata: Record<string, unknown>
-  restrictedAudienceParticipantIds: string[]
-  createdAt: Timestamp
-}
 
 type SendMessageInput = {
   workspaceId: string
@@ -534,60 +513,11 @@ async function hydrateConversationItems(
   queryable: Executor,
   itemRows: ItemRow[]
 ) {
-  if (itemRows.length === 0) {
-    return [] as HydratedConversationItemRecord[]
-  }
-
-  const itemIds = itemRows.map((row) => row.id)
-  const [parts, restrictedAudience] = await Promise.all([
-    listConversationItemPartRows(queryable, itemIds),
-    listConversationItemTargetRows(queryable, itemIds),
-  ])
-
-  const partsByItem = new Map<string, ItemPartRow[]>()
-  for (const row of parts) {
-    const current = partsByItem.get(row.itemId) ?? []
-    current.push(row)
-    partsByItem.set(row.itemId, current)
-  }
-
-  const restrictedAudienceByItem = new Map<string, string[]>()
-  for (const row of restrictedAudience) {
-    const current = restrictedAudienceByItem.get(row.itemId) ?? []
-    current.push(row.targetParticipantId)
-    restrictedAudienceByItem.set(row.itemId, current)
-  }
-
-  const itemMap = new Map<string, HydratedConversationItemRecord>()
-  for (const row of itemRows) {
-    const contentBlocks = itemPartsToCanonicalContentBlocks(
-      (partsByItem.get(row.id) ?? []) as Parameters<
-        typeof itemPartsToCanonicalContentBlocks
-      >[0]
-    )
-    itemMap.set(row.id, {
-      id: row.id,
-      conversationId: row.conversationId,
-      sequence: toNumber(row.sequence),
-      clientMessageId: row.clientMessageId ?? undefined,
-      itemType: row.itemType,
-      role: row.role,
-      subtype: row.subtype,
-      scope: row.scope,
-      surface: row.surface,
-      authorParticipantId: row.authorParticipantId ?? undefined,
-      replyToItemId: row.replyToItemId ?? undefined,
-      causedByItemId: row.causedByItemId ?? undefined,
-      content: extractText(contentBlocks),
-      contentBlocks,
-      metadata: row.metadata,
-      restrictedAudienceParticipantIds:
-        restrictedAudienceByItem.get(row.id) ?? [],
-      createdAt: presentInstant(row.createdAt),
-    })
-  }
-
-  return itemRows.map((row) => itemMap.get(row.id)!).filter(Boolean)
+  return hydrateConversationItemsUseCase(
+    queryable,
+    itemRows,
+    chatConversationItemHydrationDeps()
+  )
 }
 
 async function getCurrentSyncCursor(
@@ -1059,6 +989,13 @@ function chatConversationViewDeps(): LoadConversationViewsDeps {
     listItemRowsByIds,
     buildChatConversationItems,
     participantToSummary: participantRowToChatParticipantSummary,
+  }
+}
+
+function chatConversationItemHydrationDeps(): HydrateConversationItemsDeps {
+  return {
+    listConversationItemParts: listConversationItemPartRows,
+    listConversationItemTargets: listConversationItemTargetRows,
   }
 }
 
