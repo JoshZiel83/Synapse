@@ -129,12 +129,11 @@ import {
   updateWebhookEndpointStatus,
   withAutomationTransaction,
 } from "./repo.js"
+import { createConversationEvent, getConversation } from "../chat/service.js"
 import {
-  createConversationEvent,
-  getConversation,
-  getConversationParticipant,
-  listConversationParticipants,
-} from "../chat/service.js"
+  getConversationParticipantUseCase as getConversationParticipant,
+  listConversationParticipantsUseCase as listConversationParticipants,
+} from "../chat/participant-roster.js"
 import { hasConversationTransportBinding } from "../im/service/bindings.js"
 import { buildNormalizedMessageContent } from "../chat/message-content.js"
 import {

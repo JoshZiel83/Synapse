@@ -81,7 +81,7 @@ import {
 import { buildAdHocContextItems } from "./context-builder.js"
 import { buildAdHocProviderContextWindow } from "../context/service.js"
 import { DEFAULT_MODEL_ATTEMPT_POLICY } from "../model-groups/defaults.js"
-import { listConversationParticipants as getLiveConversationParticipants } from "../chat/service.js"
+import { listConversationParticipantsUseCase as getLiveConversationParticipants } from "../chat/participant-roster.js"
 import {
   createToolCall,
   createToolExecutionAttempt,

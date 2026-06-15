@@ -44,10 +44,10 @@ import { updateSessionCollaboration } from "../session/service.js"
 import { userSubject, workspaceMemberSubject } from "../access/service.js"
 import { authorizeActionDefault } from "../access/guards.js"
 import {
-  appendWorkspaceMemberSyncEvent,
   createConversationEvent,
   listConversationRealtimeRecipients,
 } from "../chat/service.js"
+import { appendWorkspaceMemberSyncEvent } from "../chat/sync-events.js"
 import { updateConversationItemEventPayload } from "../chat/event-write.js"
 import {
   createRuntimeAuthorizationGrant,

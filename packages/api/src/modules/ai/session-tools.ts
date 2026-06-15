@@ -68,11 +68,13 @@ import {
 } from "../session/collaboration-state.js"
 import {
   addConversationParticipants,
-  getConversationParticipant,
-  listConversationParticipants,
   resolveConversationReplyRef,
   sendConversationMessageFromParticipant,
 } from "../chat/service.js"
+import {
+  getConversationParticipantUseCase as getConversationParticipant,
+  listConversationParticipantsUseCase as listConversationParticipants,
+} from "../chat/participant-roster.js"
 import { buildNormalizedMessageContent } from "../chat/message-content.js"
 import { buildDefaultUserMention } from "./inline-ref-resolver.js"
 import { runMemorySearch } from "../memory/service.js"

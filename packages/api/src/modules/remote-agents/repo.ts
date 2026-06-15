@@ -34,7 +34,7 @@ import {
   insertWorkspaceAppGrant,
   type InsertWorkspaceAppGrantInput,
 } from "../workspace-apps/grant-storage.js"
-import { appendWorkspaceMemberSyncEvent } from "../chat/service.js"
+import { appendWorkspaceMemberSyncEvent } from "../chat/sync-events.js"
 import { nextAttemptAt, shouldFailDelivery } from "./delivery-retry.js"
 
 /**

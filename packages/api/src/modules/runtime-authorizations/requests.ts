@@ -11,7 +11,7 @@ import { sleep } from "../../infrastructure/async/index.js"
 import { randomUUID } from "node:crypto"
 import { authorizeActionDefault } from "../access/guards.js"
 import { buildUserTaskTargetCandidatesFromRows } from "../ai/session-tool-user-task-targets.js"
-import { listConversationParticipants } from "../chat/service.js"
+import { listConversationParticipantsUseCase as listConversationParticipants } from "../chat/participant-roster.js"
 import {
   buildRuntimeAuthorizationDedupeKey,
   buildRuntimeAuthorizationRequestKey,

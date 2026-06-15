@@ -1,10 +1,8 @@
 import { type Executor } from "../../infrastructure/database/kysely.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
 import { queueConversationTransportProjection } from "../im/service.js"
-import {
-  createConversationItem,
-  ensureConversationParticipant,
-} from "../chat/service.js"
+import { createConversationItem } from "../chat/service.js"
+import { ensureConversationParticipantUseCase as ensureConversationParticipant } from "../chat/participant-roster.js"
 import { buildNormalizedMessageContent } from "../chat/message-content.js"
 import type {
   UUID,

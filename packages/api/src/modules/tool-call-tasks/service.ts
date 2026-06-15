@@ -45,10 +45,8 @@ import type {
   ToolCallTaskOutputChunkMetadata,
   ToolCallTaskRequestPayload,
 } from "./repo.types.js"
-import {
-  createConversationEvent,
-  getConversationParticipant,
-} from "../chat/service.js"
+import { createConversationEvent } from "../chat/service.js"
+import { getConversationParticipantUseCase as getConversationParticipant } from "../chat/participant-roster.js"
 import {
   insertSessionWakeupRow,
   nudgeSessionAfterWakeup,
