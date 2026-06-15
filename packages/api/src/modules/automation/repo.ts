@@ -103,6 +103,21 @@ export type AutomationRuleEventMatcherRecord = {
   matcher: Record<string, unknown>
 }
 
+export type DueAutomationScheduleRow = {
+  ruleId: string
+  ruleName: string
+  workspaceId: string
+  scheduleKind: "cron" | "at" | "interval"
+  scheduleExpr: string | null
+  scheduleTimezone: string | null
+  intervalSeconds: number | null
+  startsAt: Date | null
+  activeFrom: Date | null
+  activeUntil: Date | null
+  nextFireAt: Date
+  lastFiredAt: Date | null
+}
+
 export function decodeAutomationEventSourceMetadata(row: {
   metadata: unknown
 }): Record<string, unknown> {
@@ -671,6 +686,32 @@ export async function updateAutomationTriggerSchedule(
     .set(values as never)
     .where("ruleId", "=", ruleId)
     .execute()
+}
+
+export async function lockDueAutomationScheduleRows(
+  run: Executor,
+  batchSize: number
+): Promise<DueAutomationScheduleRow[]> {
+  const result = await runnerFor(run).run<DueAutomationScheduleRow>(
+    `SELECT at.rule_id, ar.name AS rule_name, ar.workspace_id, at.schedule_kind, at.schedule_expr, at.schedule_timezone,
+            at.interval_seconds, at.starts_at, ap.active_from, ap.active_until, at.next_fire_at, at.last_fired_at
+     FROM automation_triggers at
+     JOIN automation_rules ar ON ar.id = at.rule_id
+     JOIN automation_policies ap ON ap.rule_id = ar.id
+     WHERE at.trigger_kind = 'schedule'
+       AND ar.status = 'active'
+       AND ar.deleted_at IS NULL
+       AND at.next_fire_at IS NOT NULL
+       AND at.next_fire_at <= NOW()
+       AND (ap.active_from IS NULL OR ap.active_from <= at.next_fire_at)
+       AND (ap.active_until IS NULL OR ap.active_until >= at.next_fire_at)
+       AND (ap.max_trigger_count IS NULL OR ap.trigger_count < ap.max_trigger_count)
+     ORDER BY at.next_fire_at ASC
+     LIMIT $1
+     FOR UPDATE OF at SKIP LOCKED`,
+    [batchSize]
+  )
+  return result.rows
 }
 
 /**

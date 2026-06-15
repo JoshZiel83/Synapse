@@ -65,6 +65,7 @@ import {
   insertIntegrationBindingRow,
   insertWebhookEndpointRow,
   listActiveIntegrationSourceKeysForBinding as listActiveIntegrationSourceKeysForBindingRepo,
+  lockDueAutomationScheduleRows,
   loadAutomationEventSourceAccessBindingRows,
   markAutomationExecutionCompleted,
   markAutomationExecutionFailed,
@@ -3406,53 +3407,22 @@ export async function scheduleDueAutomationExecutions(
   await withAutomationTransaction(async (trx) => {
     await syncAutomationRuleLiveness({ client: trx })
 
-    const dueResult = await runnerFor(trx).run<{
-      rule_id: string
-      rule_name: string
-      workspace_id: string
-      schedule_kind: "cron" | "at" | "interval"
-      schedule_expr: string | null
-      schedule_timezone: string | null
-      interval_seconds: number | null
-      starts_at: Date | null
-      active_from: Date | null
-      active_until: Date | null
-      next_fire_at: Date
-      last_fired_at: Date | null
-    }>(
-      `SELECT at.rule_id, ar.name AS rule_name, ar.workspace_id, at.schedule_kind, at.schedule_expr, at.schedule_timezone,
-              at.interval_seconds, at.starts_at, ap.active_from, ap.active_until, at.next_fire_at, at.last_fired_at
-       FROM automation_triggers at
-       JOIN automation_rules ar ON ar.id = at.rule_id
-       JOIN automation_policies ap ON ap.rule_id = ar.id
-       WHERE at.trigger_kind = 'schedule'
-         AND ar.status = 'active'
-         AND ar.deleted_at IS NULL
-         AND at.next_fire_at IS NOT NULL
-         AND at.next_fire_at <= NOW()
-         AND (ap.active_from IS NULL OR ap.active_from <= at.next_fire_at)
-         AND (ap.active_until IS NULL OR ap.active_until >= at.next_fire_at)
-         AND (ap.max_trigger_count IS NULL OR ap.trigger_count < ap.max_trigger_count)
-       ORDER BY at.next_fire_at ASC
-       LIMIT $1
-       FOR UPDATE OF at SKIP LOCKED`,
-      [batchSize]
-    )
+    const dueRows = await lockDueAutomationScheduleRows(trx, batchSize)
 
-    for (const row of dueResult.rows) {
+    for (const row of dueRows) {
       const rowDates = presentDueScheduleRowDates(row)
       const occurrence = await createAutomationOccurrence({
-        workspaceId: row.workspace_id,
+        workspaceId: row.workspaceId,
         sourceKind: "clock",
-        sourceLocator: row.schedule_timezone || "UTC",
-        dedupeKey: `${row.rule_id}:${row.next_fire_at}`,
+        sourceLocator: row.scheduleTimezone || "UTC",
+        dedupeKey: `${row.ruleId}:${row.nextFireAt}`,
         sourceSnapshot: {
-          ruleId: row.rule_id,
-          ruleName: row.rule_name,
-          scheduleKind: row.schedule_kind,
-          scheduleExpr: row.schedule_expr,
-          scheduleTimezone: row.schedule_timezone,
-          intervalSeconds: row.interval_seconds,
+          ruleId: row.ruleId,
+          ruleName: row.ruleName,
+          scheduleKind: row.scheduleKind,
+          scheduleExpr: row.scheduleExpr,
+          scheduleTimezone: row.scheduleTimezone,
+          intervalSeconds: row.intervalSeconds,
           startsAt: rowDates.startsAt,
           activeFrom: rowDates.activeFrom,
           activeUntil: rowDates.activeUntil,
@@ -3464,26 +3434,26 @@ export async function scheduleDueAutomationExecutions(
       })
 
       const { execution, isNew } = await createAutomationExecution({
-        workspaceId: row.workspace_id,
-        ruleId: row.rule_id,
+        workspaceId: row.workspaceId,
+        ruleId: row.ruleId,
         occurrenceId: occurrence.id,
         client: trx,
       })
 
       const nextFireAt = computeNextFireAt({
-        scheduleKind: row.schedule_kind,
-        scheduleExpr: row.schedule_expr || undefined,
-        scheduleTimezone: row.schedule_timezone || undefined,
-        intervalSeconds: row.interval_seconds || undefined,
+        scheduleKind: row.scheduleKind,
+        scheduleExpr: row.scheduleExpr || undefined,
+        scheduleTimezone: row.scheduleTimezone || undefined,
+        intervalSeconds: row.intervalSeconds || undefined,
         startsAt: rowDates.startsAt ?? null,
         activeFrom: rowDates.activeFrom ?? null,
         activeUntil: rowDates.activeUntil ?? null,
-        baseTime: row.next_fire_at,
+        baseTime: row.nextFireAt,
         lastFiredAt: rowDates.nextFireAt,
       })
 
-      await updateAutomationTriggerSchedule(trx, row.rule_id, {
-        lastFiredAt: row.next_fire_at,
+      await updateAutomationTriggerSchedule(trx, row.ruleId, {
+        lastFiredAt: row.nextFireAt,
         nextFireAt: nextFireAt ? parseInstantString(nextFireAt) : null,
       })
       if (isNew) {

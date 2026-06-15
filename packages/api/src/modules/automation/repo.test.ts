@@ -22,6 +22,7 @@ import {
   insertAutomationPolicyRow,
   insertAutomationRuleRow,
   insertAutomationTriggerRow,
+  lockDueAutomationScheduleRows,
   normalizeAutomationDeliveryRow,
   normalizeAutomationEventSourceRow,
   normalizeAutomationExecutionWithOccurrenceRow,
@@ -227,6 +228,7 @@ test(
       const { workspaceId, conversationId, participantId } =
         await insertAutomationRuleFixture(db)
       const ruleId = crypto.randomUUID()
+      const dueAt = new Date(Date.now() - 60_000)
 
       await insertAutomationRuleRow(db, {
         id: ruleId,
@@ -264,7 +266,7 @@ test(
         schedule_timezone: "UTC",
         interval_seconds: null,
         starts_at: null,
-        next_fire_at: null,
+        next_fire_at: dueAt,
         last_fired_at: null,
         metadata: { trigger: true },
       } satisfies Omit<AutomationTriggerRow, "rule_id">
@@ -327,6 +329,15 @@ test(
       assert.equal(targets.length, 1)
       assert.equal(targets[0]?.targetParticipantId, participantId)
       assert.ok(targets[0]?.createdAt instanceof Date)
+
+      const dueRows = await lockDueAutomationScheduleRows(db, 10)
+      assert.ok(dueRows.length > 0, JSON.stringify(dueRows))
+      const dueRow = dueRows.find((row) => row.ruleId === ruleId)
+      assert.ok(dueRow, JSON.stringify(dueRows))
+      assert.equal(dueRow.ruleName, "repo helper rule")
+      assert.equal(dueRow.workspaceId, workspaceId)
+      assert.equal(dueRow.scheduleExpr, "*/5 * * * *")
+      assert.ok(dueRow.nextFireAt instanceof Date)
     })
   }
 )

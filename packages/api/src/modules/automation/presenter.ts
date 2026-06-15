@@ -415,10 +415,10 @@ export function presentWebhookEndpoint(
  * serializer functions.
  */
 export function presentDueScheduleRowDates(row: {
-  starts_at: Date | null
-  active_from: Date | null
-  active_until: Date | null
-  next_fire_at: Date
+  startsAt: Date | null
+  activeFrom: Date | null
+  activeUntil: Date | null
+  nextFireAt: Date
 }): {
   startsAt: IsoInstantString | undefined
   activeFrom: IsoInstantString | undefined
@@ -426,9 +426,9 @@ export function presentDueScheduleRowDates(row: {
   nextFireAt: IsoInstantString
 } {
   return {
-    startsAt: serializeOptionalInstant(row.starts_at),
-    activeFrom: serializeOptionalInstant(row.active_from),
-    activeUntil: serializeOptionalInstant(row.active_until),
-    nextFireAt: serializeInstant(row.next_fire_at),
+    startsAt: serializeOptionalInstant(row.startsAt),
+    activeFrom: serializeOptionalInstant(row.activeFrom),
+    activeUntil: serializeOptionalInstant(row.activeUntil),
+    nextFireAt: serializeInstant(row.nextFireAt),
   }
 }
