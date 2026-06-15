@@ -9,6 +9,10 @@ import type {
   ChatConversationEnvelopeRecord,
   ChatConversationRecord,
 } from "./presenter.js"
+import { getWorkspaceMemberIdentityOrThrow } from "./identity.js"
+import { listConversationRealtimeRecipientsUseCase } from "./realtime-recipients.js"
+import { loadChatConversationView } from "./conversation-view-read.js"
+import { syncConversationUpsertForWorkspaceMembers } from "./conversation-upsert-sync.js"
 
 export type PatchChatConversationInput = {
   workspaceId: string
@@ -103,4 +107,36 @@ export async function patchChatConversationUseCase(
     }
     return { conversation }
   })
+}
+
+function patchChatConversationDeps(): PatchChatConversationDeps {
+  return {
+    listConversationRealtimeRecipients:
+      listConversationRealtimeRecipientsUseCase,
+    loadConversationView: loadChatConversationView,
+    syncConversationUpsert: syncConversationUpsertForWorkspaceMembers,
+  }
+}
+
+export async function patchChatConversation(params: {
+  workspaceId: string
+  userId: string
+  conversationId: string
+  title?: string | null
+  metadata?: Record<string, unknown>
+}): Promise<ChatConversationEnvelopeRecord | undefined> {
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  return patchChatConversationUseCase(
+    {
+      workspaceId: params.workspaceId,
+      workspaceMemberId: identity.workspaceMemberId,
+      conversationId: params.conversationId,
+      title: params.title,
+      metadata: params.metadata,
+    },
+    patchChatConversationDeps()
+  )
 }

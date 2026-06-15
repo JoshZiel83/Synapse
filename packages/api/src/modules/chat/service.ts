@@ -44,7 +44,7 @@ import {
   type RemoveParticipantDeps,
 } from "./remove-participant.js"
 export { loadParticipantById } from "./remove-participant.js"
-import { patchChatConversationUseCase } from "./patch-conversation.js"
+export { patchChatConversation } from "./patch-conversation.js"
 import { retryAssistantMessageUseCase } from "./retry-message.js"
 import {
   addChatConversationParticipantsUseCase,
@@ -323,33 +323,6 @@ export async function createChatConversation(params: {
       metadata: params.metadata,
     },
     chatCreateConversationDeps()
-  )
-}
-
-export async function patchChatConversation(params: {
-  workspaceId: string
-  userId: string
-  conversationId: string
-  title?: string | null
-  metadata?: Record<string, unknown>
-}): Promise<ChatConversationEnvelopeRecord | undefined> {
-  const identity = await getWorkspaceMemberIdentityOrThrow(
-    params.workspaceId,
-    params.userId
-  )
-  return patchChatConversationUseCase(
-    {
-      workspaceId: params.workspaceId,
-      workspaceMemberId: identity.workspaceMemberId,
-      conversationId: params.conversationId,
-      title: params.title,
-      metadata: params.metadata,
-    },
-    {
-      listConversationRealtimeRecipients,
-      loadConversationView: loadChatConversationView,
-      syncConversationUpsert: syncConversationUpsertForWorkspaceMembers,
-    }
   )
 }
 
