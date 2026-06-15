@@ -4,8 +4,8 @@
 // server-issued nonce with the matching device_service_keys.pubkey.
 
 import { createPublicKey, verify as cryptoVerify } from "node:crypto"
-import { db } from "../../infrastructure/database/kysely.js"
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
+import { selectDeviceHelloAuthContext } from "./repo.js"
 
 export interface DeviceHelloAuthInput {
   deviceId: string
@@ -48,45 +48,30 @@ function decodeBase64(value: string): Buffer | null {
  * authenticated device_service_keys.id so the caller can record it on the
  * device_control_plane_sessions row.
  *
- * `executor` defaults to the global `db` singleton; a test injects the
- * testcontainer-backed handle (e.g. the `withTestDb` transaction) so the lookups
- * run against the same isolated schema the test seeded — instead of the global
- * pool, which points at config.database.url and may not exist in CI.
+ * `executor` is optional; the repo lookup defaults to the global DB singleton.
+ * Tests inject the testcontainer-backed handle (e.g. the `withTestDb`
+ * transaction) so lookups run against the same isolated schema they seeded.
  */
 export async function authenticateDeviceHello(
   input: DeviceHelloAuthInput,
-  executor: KyselyDb = db
+  executor?: KyselyDb
 ): Promise<DeviceHelloAuthResult> {
-  const device = await executor
-    .selectFrom("devices")
-    .select(["id"])
-    .where("id", "=", input.deviceId)
-    .executeTakeFirst()
-  if (!device) {
+  const context = await selectDeviceHelloAuthContext(input, executor)
+  if (!context.deviceExists) {
     return {
       ok: false,
       code: "device_not_found",
       message: `device ${input.deviceId} not found`,
     }
   }
-  const service = await executor
-    .selectFrom("deviceServices")
-    .select(["id", "deviceId"])
-    .where("id", "=", input.serviceId)
-    .executeTakeFirst()
-  if (!service || (service.deviceId as string) !== input.deviceId) {
+  if (!context.service) {
     return {
       ok: false,
       code: "service_not_found",
       message: `device_service ${input.serviceId} not found on device ${input.deviceId}`,
     }
   }
-  const key = await executor
-    .selectFrom("deviceServiceKeys")
-    .select(["id", "pubkey", "pubkeyFingerprint", "revokedAt"])
-    .where("serviceId", "=", input.serviceId)
-    .where("revokedAt", "is", null)
-    .executeTakeFirst()
+  const key = context.activeKey
   if (!key) {
     return {
       ok: false,
@@ -106,7 +91,7 @@ export async function authenticateDeviceHello(
   const nonceBytes = Buffer.from(input.challengeNonce, "utf8")
   let pubKey
   try {
-    pubKey = createPublicKey({ key: key.pubkey as string, format: "pem" })
+    pubKey = createPublicKey({ key: key.pubkey, format: "pem" })
   } catch (err) {
     return {
       ok: false,
@@ -138,7 +123,7 @@ export async function authenticateDeviceHello(
     ok: true,
     deviceId: input.deviceId,
     serviceId: input.serviceId,
-    serviceKeyId: key.id as string,
-    pubkeyFingerprint: key.pubkeyFingerprint as string,
+    serviceKeyId: key.id,
+    pubkeyFingerprint: key.pubkeyFingerprint,
   }
 }

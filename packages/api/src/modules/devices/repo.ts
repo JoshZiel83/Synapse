@@ -439,6 +439,61 @@ export async function selectTunnelPathToken(
   return (row?.tunnelPathToken as string | null) ?? null
 }
 
+export type DeviceHelloAuthContext = {
+  deviceExists: boolean
+  service: { id: string; deviceId: string } | null
+  activeKey: {
+    id: string
+    pubkey: string
+    pubkeyFingerprint: string
+  } | null
+}
+
+/** device.hello auth lookup. Signature verification stays in control-plane-auth. */
+export async function selectDeviceHelloAuthContext(
+  input: { deviceId: string; serviceId: string },
+  executor: KyselyDb = db
+): Promise<DeviceHelloAuthContext> {
+  const device = await executor
+    .selectFrom("devices")
+    .select(["id"])
+    .where("id", "=", input.deviceId)
+    .executeTakeFirst()
+  if (!device) return { deviceExists: false, service: null, activeKey: null }
+
+  const serviceRow = await executor
+    .selectFrom("deviceServices")
+    .select(["id", "deviceId"])
+    .where("id", "=", input.serviceId)
+    .executeTakeFirst()
+  const service =
+    serviceRow && serviceRow.deviceId === input.deviceId
+      ? {
+          id: serviceRow.id as string,
+          deviceId: serviceRow.deviceId as string,
+        }
+      : null
+  if (!service) return { deviceExists: true, service: null, activeKey: null }
+
+  const keyRow = await executor
+    .selectFrom("deviceServiceKeys")
+    .select(["id", "pubkey", "pubkeyFingerprint"])
+    .where("serviceId", "=", input.serviceId)
+    .where("revokedAt", "is", null)
+    .executeTakeFirst()
+  return {
+    deviceExists: true,
+    service,
+    activeKey: keyRow
+      ? {
+          id: keyRow.id as string,
+          pubkey: keyRow.pubkey as string,
+          pubkeyFingerprint: keyRow.pubkeyFingerprint as string,
+        }
+      : null,
+  }
+}
+
 /**
  * Whether the device_service maps to a device with a LIVE local sandbox mount.
  * Raw status comparison (matching getActiveMountsForSession) so the
