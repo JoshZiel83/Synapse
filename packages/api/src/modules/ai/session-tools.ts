@@ -66,11 +66,9 @@ import {
   buildSessionPlanDraftState,
   requireSessionPlanDraftState,
 } from "../session/collaboration-state.js"
-import {
-  addConversationParticipants,
-  resolveConversationReplyRef,
-  sendConversationMessageFromParticipant,
-} from "../chat/service.js"
+import { addConversationParticipants } from "../chat/add-participants.js"
+import { resolveConversationReplyRef } from "../chat/conversation-reply-ref.js"
+import { sendConversationMessageFromParticipant } from "../chat/item-write.js"
 import {
   getConversationParticipantUseCase as getConversationParticipant,
   listConversationParticipantsUseCase as listConversationParticipants,
