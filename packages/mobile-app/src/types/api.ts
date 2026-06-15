@@ -5,7 +5,6 @@ import type {
   ContactHubDetailResponse,
   ContactHubEntryView,
   ContactHubResponse,
-  ConversationFeedItem,
   ConversationFeedPage,
   DirectConversationOpenResponse,
   FileRecordView,
@@ -26,8 +25,6 @@ export type WorkspaceCreateResult = WorkspaceCreateResultView
 
 export type WorkspaceMemberView = SharedWorkspaceMemberView
 
-export type WorkspaceMemberListResponse = { data: WorkspaceMemberView[] }
-
 export interface ContactWorkspaceRef {
   id: string
   name: string
@@ -40,16 +37,6 @@ export type {
   ConversationPresentationView,
   ConversationSummaryView,
 } from "@shared"
-
-import type { ConversationParticipantView } from "@shared"
-
-export interface ConversationMemberListResponse {
-  members: ConversationParticipantView[]
-}
-
-export interface ConversationSendResponse {
-  item: ConversationFeedItem
-}
 
 export interface UploadAssetInput {
   uri: string
