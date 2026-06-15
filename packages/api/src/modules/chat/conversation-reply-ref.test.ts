@@ -16,6 +16,7 @@ import {
 import type { HydratedConversationItemRecord } from "./conversation-item-hydration.js"
 import {
   buildConversationReplyRefs,
+  resolveConversationReplyRef,
   unavailableConversationReplyRef,
 } from "./conversation-reply-ref.js"
 import type { ChatConversationItemRow, ChatParticipantRow } from "./repo.js"
@@ -198,4 +199,31 @@ test("unavailableConversationReplyRef returns the shared unavailable shape", () 
     previewBlocks: [],
     isUnavailable: true,
   })
+})
+
+test("resolveConversationReplyRef returns null when replyRef is absent", async () => {
+  const resolved = await resolveConversationReplyRef({
+    conversationId: randomUUID(),
+  })
+
+  assert.equal(resolved, null)
+})
+
+test("resolveConversationReplyRef rejects malformed refs before querying", async () => {
+  await assert.rejects(
+    () =>
+      resolveConversationReplyRef({
+        conversationId: randomUUID(),
+        replyRef: "not-a-message-ref",
+      }),
+    (error) => {
+      assert.equal((error as { statusCode?: unknown }).statusCode, 400)
+      assert.equal((error as { code?: unknown }).code, "invalid_reply_ref")
+      assert.match(
+        (error as { message?: string }).message ?? "",
+        /replyToRef must use/
+      )
+      return true
+    }
+  )
 })
