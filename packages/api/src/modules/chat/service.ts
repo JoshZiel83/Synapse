@@ -9,7 +9,6 @@ import {
   CONVERSATION_ITEM_TYPES,
   CONVERSATION_FEED_MESSAGE_TYPE,
   CONVERSATION_KINDS,
-  CONVERSATION_MESSAGE_TRANSPORT_DIRECTION,
   CONVERSATION_MESSAGE_SUBTYPE,
   CONVERSATION_MESSAGE_SUBTYPES,
   CONVERSATION_PARTICIPANT_ROLE_KEY,
@@ -47,7 +46,6 @@ import type {
   ConversationFeedEventType,
   ConversationFeedItem,
   ConversationFeedMessageItem,
-  ConversationMessageTransportContext,
   ConversationMessageTransportDelivery,
   TaskSummary,
 } from "@synapse/shared/types"
@@ -189,6 +187,11 @@ import {
   type HydrateConversationItemsDeps,
   type HydratedConversationItemRecord,
 } from "./conversation-item-hydration.js"
+import {
+  loadConversationTransportDeliveriesUseCase,
+  mapConversationTransportContext,
+  type LoadConversationTransportDeliveriesDeps,
+} from "./conversation-transport.js"
 import { enrichTaskForUser } from "../tasks/service.js"
 import {
   getConversationRuntimeMap,
@@ -999,6 +1002,12 @@ function chatConversationItemHydrationDeps(): HydrateConversationItemsDeps {
   }
 }
 
+function chatConversationTransportDeps(): LoadConversationTransportDeliveriesDeps {
+  return {
+    listTransportDeliveryRowsForItems,
+  }
+}
+
 async function loadConversationViews(
   queryable: Executor,
   workspaceId: string,
@@ -1668,7 +1677,7 @@ function conversationItemDetailToChatItem(
       ...baseItem,
       itemType: CONVERSATION_ITEM_TYPE.SUMMARY,
       subtype: item.subtype,
-      transport: mapTransportContext(item.metadata),
+      transport: mapConversationTransportContext(item.metadata),
       transportDeliveries,
     } satisfies ChatConversationItem
   }
@@ -1677,7 +1686,7 @@ function conversationItemDetailToChatItem(
     ...baseItem,
     itemType: item.itemType,
     subtype: item.subtype,
-    transport: mapTransportContext(item.metadata),
+    transport: mapConversationTransportContext(item.metadata),
     transportDeliveries,
   } satisfies ChatConversationItem
 }
@@ -1729,81 +1738,15 @@ function conversationEventDetailToFeedItem<T extends ConversationFeedEventType>(
   } as ConversationFeedEventItem<T>
 }
 
-function mapTransportContext(
-  metadata: Record<string, unknown>
-): ConversationMessageTransportContext | undefined {
-  const raw = metadata.transport
-  if (!raw || typeof raw !== "object") {
-    return undefined
-  }
-  const value = raw as Record<string, unknown>
-  const direction =
-    value.direction === CONVERSATION_MESSAGE_TRANSPORT_DIRECTION.INBOUND ||
-    value.direction === CONVERSATION_MESSAGE_TRANSPORT_DIRECTION.OUTBOUND
-      ? value.direction
-      : undefined
-  const transportKind = isTransportKind(value.transportKind)
-    ? value.transportKind
-    : undefined
-  if (!direction || !transportKind) {
-    return undefined
-  }
-  return {
-    direction,
-    transportKind,
-    transportAccountId:
-      typeof value.transportAccountId === "string"
-        ? value.transportAccountId
-        : undefined,
-    endpointType:
-      value.endpointType === "direct" || value.endpointType === "group"
-        ? value.endpointType
-        : undefined,
-    endpointExternalId:
-      typeof value.endpointExternalId === "string"
-        ? value.endpointExternalId
-        : undefined,
-    externalMessageId:
-      typeof value.externalMessageId === "string"
-        ? value.externalMessageId
-        : undefined,
-    transportAddressId:
-      typeof value.transportAddressId === "string"
-        ? value.transportAddressId
-        : undefined,
-    senderExternalId:
-      typeof value.senderExternalId === "string"
-        ? value.senderExternalId
-        : undefined,
-  }
-}
-
 async function loadTransportDeliveriesForItems(
   queryable: Executor,
   itemIds: string[]
 ) {
-  if (itemIds.length === 0) {
-    return new Map<string, ConversationMessageTransportDelivery[]>()
-  }
-  const rows = await listTransportDeliveryRowsForItems(queryable, itemIds)
-  const byItem = new Map<string, ConversationMessageTransportDelivery[]>()
-  for (const row of rows) {
-    const current = byItem.get(row.itemId) ?? []
-    current.push({
-      linkId: row.linkId,
-      transportKind: row.transportKind,
-      direction: row.direction,
-      deliveryStatus: row.deliveryStatus,
-      endpointType: row.endpointType,
-      endpointExternalId: row.endpointExternalId ?? undefined,
-      endpointDisplayName: row.endpointDisplayName ?? undefined,
-      externalMessageId: row.externalMessageId ?? undefined,
-      deliveredAt: presentOptionalInstant(row.deliveredAt),
-      metadata: row.metadata,
-    })
-    byItem.set(row.itemId, current)
-  }
-  return byItem
+  return loadConversationTransportDeliveriesUseCase(
+    queryable,
+    itemIds,
+    chatConversationTransportDeps()
+  )
 }
 
 export function conversationItemDetailToFeedItem(
@@ -1842,7 +1785,7 @@ export function conversationItemDetailToFeedItem(
     content: extractText(item.contentBlocks),
     contentBlocks: item.contentBlocks,
     metadata: item.metadata,
-    transport: mapTransportContext(item.metadata),
+    transport: mapConversationTransportContext(item.metadata),
     transportDeliveries,
     createdAt: assertIsoInstant(item.createdAt),
     clientMessageId: item.clientMessageId,
