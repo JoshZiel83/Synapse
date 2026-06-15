@@ -6,7 +6,7 @@ import type {
 } from "@synapse/device-protocol"
 import {
   RemoteAgentApiToDaemonWsMessageSchema,
-  RemoteAgentDaemonToApiWsMessageSchema,
+  parseRemoteAgentDaemonToApiWsFrame,
 } from "@synapse/device-protocol"
 import type {
   RemoteAgentRuntimeCatalogStatus,
@@ -92,18 +92,11 @@ export type RemoteAgentApiToDaemonMessage =
 export function parseRemoteAgentMachineMessage(
   raw: unknown
 ): RemoteAgentMachineMessage | null {
-  let json: unknown
-  try {
-    json = JSON.parse(String(raw))
-  } catch {
+  const parsed = parseRemoteAgentDaemonToApiWsFrame(String(raw))
+  if (!parsed.ok) {
     return null
   }
-
-  const parsed = RemoteAgentDaemonToApiWsMessageSchema.safeParse(json)
-  if (!parsed.success) {
-    return null
-  }
-  return fromWireMessage(parsed.data)
+  return fromWireMessage(parsed.message)
 }
 
 export function serializeRemoteAgentApiToDaemonMessage(

@@ -7,6 +7,7 @@ import {
   RemoteAgentDaemonToApiWsMessageSchema,
   RemoteAgentMachineReadyMessageSchema,
   RemoteAgentStatusMessageSchema,
+  parseRemoteAgentDaemonToApiWsFrame,
 } from "./schemas.js"
 
 test("RemoteAgentMachineReadyMessageSchema accepts snake_case runtime catalog", () => {
@@ -72,6 +73,40 @@ test("RemoteAgentDaemonToApiWsMessageSchema dispatches heartbeat", () => {
   })
 
   assert.equal(parsed.type, "heartbeat")
+})
+
+test("parseRemoteAgentDaemonToApiWsFrame validates daemon frames", () => {
+  const parsed = parseRemoteAgentDaemonToApiWsFrame(
+    JSON.stringify({
+      type: "agent:session",
+      remote_agent_id: "agent-1",
+      conversation_id: "conversation-1",
+      session_id: "session-1",
+    })
+  )
+  assert.equal(parsed.ok, true)
+  if (!parsed.ok) throw new Error("expected valid daemon frame")
+  assert.equal(parsed.message.type, "agent:session")
+  assert.equal(parsed.message.remote_agent_id, "agent-1")
+})
+
+test("parseRemoteAgentDaemonToApiWsFrame distinguishes parse and shape failures", () => {
+  assert.deepEqual(parseRemoteAgentDaemonToApiWsFrame("{"), {
+    ok: false,
+    error: "parse_error",
+  })
+
+  const invalid = parseRemoteAgentDaemonToApiWsFrame(
+    JSON.stringify({
+      type: "agent:session",
+      remoteAgentId: "agent-1",
+      conversationId: "conversation-1",
+    })
+  )
+  assert.equal(invalid.ok, false)
+  if (invalid.ok) throw new Error("expected invalid daemon frame")
+  assert.equal(invalid.error, "invalid_message")
+  assert.ok(invalid.details)
 })
 
 test("RemoteAgentApiConnectedMessageSchema accepts snake_case session ids", () => {

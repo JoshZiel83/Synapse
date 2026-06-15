@@ -560,6 +560,39 @@ export type RemoteAgentDaemonToApiWsMessage = z.infer<
   typeof RemoteAgentDaemonToApiWsMessageSchema
 >
 
+export type RemoteAgentDaemonToApiWsFrameParseResult =
+  | {
+      ok: true
+      message: RemoteAgentDaemonToApiWsMessage
+    }
+  | {
+      ok: false
+      error: "parse_error" | "invalid_message"
+      details?: z.ZodError
+    }
+
+export function parseRemoteAgentDaemonToApiWsFrame(
+  raw: string
+): RemoteAgentDaemonToApiWsFrameParseResult {
+  let json: unknown
+  try {
+    json = JSON.parse(raw)
+  } catch {
+    return { ok: false, error: "parse_error" }
+  }
+
+  const parsed = RemoteAgentDaemonToApiWsMessageSchema.safeParse(json)
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: "invalid_message",
+      details: parsed.error,
+    }
+  }
+
+  return { ok: true, message: parsed.data }
+}
+
 export const RemoteAgentApiConnectedMessageSchema = z.strictObject({
   type: z.literal("connected"),
   machine_id: z.string().min(1),
