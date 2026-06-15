@@ -19,7 +19,6 @@ import {
   type ActorRuntimeTurnActivityDetail,
   type ChatConversationEventItem,
   type ChatConversationItem,
-  type ChatConversationSendMessageRequest,
   type ChatDeviceState,
   type ChatSyncEvent,
   type ChatSyncEventPayloadMap,
@@ -164,6 +163,11 @@ import { syncVisibleSharedItemUseCase } from "./visible-sync.js"
 import { syncConversationUpsertForWorkspaceMembersUseCase } from "./conversation-upsert-sync.js"
 import { listConversationRealtimeRecipientsUseCase } from "./realtime-recipients.js"
 import {
+  sendChatConversationMessageUseCase,
+  type SendChatConversationMessageInput,
+  type SendChatConversationMessageDeps,
+} from "./send-message.js"
+import {
   loadConversationViewUseCase,
   loadConversationViewsUseCase,
   type LoadConversationViewsDeps,
@@ -205,12 +209,6 @@ type ItemRole = (typeof CONVERSATION_ITEM_ROLES)[number]
 type ParticipantRow = ChatParticipantRow
 
 type ItemRow = ChatConversationItemRow
-
-type SendMessageInput = {
-  workspaceId: string
-  workspaceMemberId: string
-  conversationId: string
-} & ChatConversationSendMessageRequest
 
 function toNumber(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -904,6 +902,21 @@ function chatCreateConversationItemDeps(): CreateConversationItemDeps {
 function chatSendConversationMessageDeps(): SendConversationMessageDeps {
   return {
     createConversationItem,
+    enqueueActorWakeupsForConversationMessage,
+    notifyRemoteAgentDeliveriesForConversation: async (conversationId) => {
+      const { notifyRemoteAgentDeliveriesForConversation } =
+        await import("../remote-agents/service.js")
+      await notifyRemoteAgentDeliveriesForConversation(conversationId)
+    },
+  }
+}
+
+function chatRouteSendMessageDeps(): SendChatConversationMessageDeps {
+  return {
+    withChatTransaction,
+    requireConversationAccess,
+    ensureClientInstance,
+    sendConversationMessageFromParticipant,
     enqueueActorWakeupsForConversationMessage,
     notifyRemoteAgentDeliveriesForConversation: async (conversationId) => {
       const { notifyRemoteAgentDeliveriesForConversation } =
@@ -1833,55 +1846,9 @@ export async function getChatConversationActorRuntimeTurnDetail(params: {
 }
 
 export async function sendChatConversationMessage(
-  params: SendMessageInput
+  params: SendChatConversationMessageInput
 ): Promise<ChatConversationSendMessageRecord> {
-  const contentBlocks = params.contentBlocks
-  if (!Array.isArray(contentBlocks) || contentBlocks.length === 0) {
-    throw createChatError(
-      400,
-      "invalid_content_blocks",
-      "contentBlocks is required"
-    )
-  }
-
-  const item = await withChatTransaction(async (client) => {
-    const access = await requireConversationAccess(
-      client,
-      params.conversationId,
-      params.workspaceMemberId
-    )
-
-    await ensureClientInstance(client, {
-      workspaceId: params.workspaceId,
-      workspaceMemberId: params.workspaceMemberId,
-      clientInstanceId: params.clientInstanceId,
-    })
-
-    return sendConversationMessageFromParticipant({
-      workspaceId: params.workspaceId,
-      conversationId: params.conversationId,
-      senderParticipantId: access.participant.id,
-      clientMessageId: params.clientMessageId,
-      role: "user",
-      contentBlocks,
-      replyToItemId: params.replyToItemId,
-      metadata: params.metadata,
-      queryable: client,
-    })
-  })
-
-  await enqueueActorWakeupsForConversationMessage({
-    workspaceId: params.workspaceId,
-    conversationId: params.conversationId,
-    itemId: item.id,
-  })
-  const { notifyRemoteAgentDeliveriesForConversation } =
-    await import("../remote-agents/service.js")
-  await notifyRemoteAgentDeliveriesForConversation(params.conversationId)
-
-  return {
-    item,
-  }
+  return sendChatConversationMessageUseCase(params, chatRouteSendMessageDeps())
 }
 
 export async function updateChatConversationReadWatermark(
