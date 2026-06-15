@@ -11,6 +11,7 @@ import { sessionThinkingQueue } from "../../workers/queues.js"
 import {
   ACTOR_RUNTIME_HEALTH,
   isThreadConversationKind,
+  parseJsonObjectOrUndefined,
   textBlock,
   type ActorRuntimeActivityState,
   type ActorRuntimePhase,
@@ -109,10 +110,7 @@ function parseJsonValue(value: unknown): unknown {
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {}
-  }
-  return value as Record<string, unknown>
+  return parseJsonObjectOrUndefined(value) ?? {}
 }
 
 function prettyJson(value: unknown) {
