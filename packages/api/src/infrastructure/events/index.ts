@@ -16,6 +16,7 @@ import {
   type RealtimeOutboxEventType,
   type RealtimeOutboxRecipient,
 } from "./repo.js"
+import { parseSystemEventRedisFrame } from "./codec.js"
 
 const log = createLogger("events")
 
@@ -298,7 +299,7 @@ export async function initEventBus() {
     if (channel !== REDIS_CHANNELS.EVENTS) return
 
     try {
-      const event: SystemEvent = JSON.parse(message)
+      const event = parseSystemEventRedisFrame(message)
       const typeHandlers = handlers.get(event.type)
       if (typeHandlers) {
         for (const handler of typeHandlers) {

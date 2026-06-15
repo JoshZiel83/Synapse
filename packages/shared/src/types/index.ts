@@ -34,6 +34,7 @@ import {
   CONTACT_HUB_KINDS,
   CONTACT_TARGET_TYPES,
   CANONICAL_FILE_CATEGORIES,
+  EVENT_TYPES,
   CONVERSATION_EVENT_CONTEXT_POLICIES,
   CONVERSATION_EVENT_TIMELINE_POLICIES,
   CONVERSATION_FEED_EVENT_TYPES,
@@ -824,20 +825,7 @@ export interface AuditLog {
 }
 
 // ============ Events ============
-export type EventType =
-  | "work_item.created"
-  | "work_item.updated"
-  | "work_item.transitioned"
-  | "message.created"
-  | "actor.created"
-  | "actor.updated"
-  | "memory.created"
-  | "actor.thinking"
-  | "actor.action"
-  | "chat.sync.event"
-  | "runtime.updated"
-  | "mcp.config.changed"
-  | "chat.typing"
+export type EventType = (typeof EVENT_TYPES)[number]
 
 export interface SystemEvent {
   type: EventType
