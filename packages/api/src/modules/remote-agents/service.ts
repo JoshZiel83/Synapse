@@ -41,6 +41,10 @@ import {
 } from "../chat/remote-agent-bridge.js"
 import { getFileUrlById } from "../files/service.js"
 import { requireWorkspaceMemberIdentity } from "../chat/workspace-identity.js"
+import {
+  notifyRemoteAgentTaskResolvedUseCase,
+  replayResolvedRemoteAgentTasksUseCase,
+} from "./task-resolution-notifier.js"
 import * as repo from "./repo.js"
 import {
   parseRemoteAgentMachineMessage,
@@ -156,6 +160,26 @@ function clearInFlightDeliveries(machineId: string, deliveryIds: string[]) {
   }
 }
 
+async function getTaskSummaryLazy(taskId: string) {
+  const { getTaskSummary } = await import("../tasks/service.js")
+  return getTaskSummary(taskId)
+}
+
+function hasMachineConnection(machineId: string) {
+  return machineConnections.has(machineId)
+}
+
+function sendToMachine(
+  machineId: string,
+  message: RemoteAgentApiToDaemonMessage
+) {
+  const connection = machineConnections.get(machineId)
+  if (!connection) {
+    return false
+  }
+  return safeSend(connection, message)
+}
+
 async function loadMachineByApiKey(apiKey: string) {
   return repo.loadMachineByApiKeyRepo(hashMachineApiKey(apiKey))
 }
@@ -246,36 +270,13 @@ async function replayResolvedRemoteAgentTasks(params: {
   machineId: string
   remoteAgentIds: string[]
 }) {
-  if (params.remoteAgentIds.length === 0) {
-    return
-  }
-  const connection = machineConnections.get(params.machineId)
-  if (!connection) {
-    return
-  }
-
-  const rows = await repo.loadReplayResolvedTaskTargetsRepo(
-    params.machineId,
-    params.remoteAgentIds
-  )
-
-  if (rows.length === 0) {
-    return
-  }
-
-  const { getTaskSummary } = await import("../tasks/service.js")
-  for (const row of rows) {
-    const task = await getTaskSummary(row.activeTaskId)
-    if (!task) {
-      continue
-    }
-    safeSend(connection, {
-      type: "agent:task:resolved",
-      remoteAgentId: row.remoteAgentId,
-      taskId: row.activeTaskId,
-      task: task as unknown as Record<string, unknown>,
-    })
-  }
+  await replayResolvedRemoteAgentTasksUseCase(params, {
+    hasMachineConnection,
+    loadReplayResolvedTaskTargets: ({ machineId, remoteAgentIds }) =>
+      repo.loadReplayResolvedTaskTargetsRepo(machineId, remoteAgentIds),
+    getTaskSummary: getTaskSummaryLazy,
+    sendToMachine,
+  })
 }
 
 async function updateRemoteAgentRuntimeStatus(
@@ -1359,31 +1360,10 @@ export async function searchRemoteAgentMessages(params: {
 }
 
 export async function notifyRemoteAgentTaskResolved(taskId: string) {
-  const { getTaskSummary } = await import("../tasks/service.js")
-  const task = await getTaskSummary(taskId)
-  if (
-    !task ||
-    task.requester?.participantType !== "remote_agent" ||
-    !task.requester.remoteAgentId
-  ) {
-    return false
-  }
-
-  const machineId = await repo.loadActiveBindingMachineIdRepo(
-    task.requester.remoteAgentId
-  )
-  if (!machineId) {
-    return false
-  }
-  const connection = machineConnections.get(machineId)
-  if (!connection) {
-    return false
-  }
-  return safeSend(connection, {
-    type: "agent:task:resolved",
-    remoteAgentId: task.requester.remoteAgentId,
-    taskId,
-    task: task as unknown as Record<string, unknown>,
+  return notifyRemoteAgentTaskResolvedUseCase(taskId, {
+    getTaskSummary: getTaskSummaryLazy,
+    loadActiveBindingMachineId: repo.loadActiveBindingMachineIdRepo,
+    sendToMachine,
   })
 }
 

@@ -1,9 +1,9 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { sql } from "kysely"
 import type { Kysely } from "kysely"
 import crypto from "node:crypto"
 import { withTestDb } from "../../test/helpers/db.js"
+import { loadReplayResolvedTaskTargetsRepo } from "./repo.js"
 
 /**
  * Regression for remote-agent startup replay: active_task_id points at
@@ -18,35 +18,15 @@ function rid(): string {
   return Math.random().toString(36).slice(2, 10)
 }
 
-// Mirrors the exact query replayResolvedRemoteAgentTasks runs (kept in
-// lockstep with remote-agents/service.ts). Parameterized via the kysely `sql`
-// tag so binding matches production; the point under test is that it references
-// `tool_call_tasks` / `lifecycle_status` and so executes against the real
-// schema without throwing.
+// Runs the repo helper that powers remote-agent startup replay. The point under
+// test is that it references `tool_call_tasks` / `lifecycle_status` through the
+// production query and so executes against the real schema without throwing.
 function runReplayQuery(
   db: Kysely<any>,
   machineId: string,
   remoteAgentIds: string[]
 ) {
-  return sql<{
-    remoteAgentId: string
-    activeTaskId: string
-    lifecycleStatus: string
-  }>`
-    SELECT
-      ctx.remote_agent_id,
-      ctx.active_task_id,
-      task.lifecycle_status
-    FROM remote_agent_conversation_contexts ctx
-    INNER JOIN remote_agent_bindings binding
-      ON binding.remote_agent_id = ctx.remote_agent_id
-    INNER JOIN tool_call_tasks task
-      ON task.id = ctx.active_task_id
-    WHERE binding.machine_id = ${machineId}
-      AND ctx.remote_agent_id = ANY(${remoteAgentIds}::uuid[])
-      AND ctx.active_task_id IS NOT NULL
-      AND task.lifecycle_status IN ('completed', 'failed', 'cancelled', 'expired')
-  `.execute(db)
+  return loadReplayResolvedTaskTargetsRepo(machineId, remoteAgentIds, db as any)
 }
 
 async function buildAgentMachineFixture(db: Kysely<any>) {
@@ -173,10 +153,10 @@ test(
         .execute()
 
       // Runs without "relation tool_call_tasks does not exist".
-      const result = await runReplayQuery(db, fx.machineId, [fx.remoteAgentId])
+      const rows = await runReplayQuery(db, fx.machineId, [fx.remoteAgentId])
 
-      assert.equal(result.rows.length, 1, "the completed task is replayed")
-      const row = result.rows[0] as {
+      assert.equal(rows.length, 1, "the completed task is replayed")
+      const row = rows[0] as {
         remoteAgentId: string
         activeTaskId: string
         lifecycleStatus: string
@@ -205,13 +185,9 @@ test(
         } as any)
         .execute()
 
-      const result = await runReplayQuery(db, fx.machineId, [fx.remoteAgentId])
+      const rows = await runReplayQuery(db, fx.machineId, [fx.remoteAgentId])
 
-      assert.equal(
-        result.rows.length,
-        0,
-        "a non-terminal task must not be replayed"
-      )
+      assert.equal(rows.length, 0, "a non-terminal task must not be replayed")
     })
   }
 )
