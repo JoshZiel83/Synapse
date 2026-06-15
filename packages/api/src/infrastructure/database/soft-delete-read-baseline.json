@@ -1,8 +1,4 @@
 {
-  "modules/access/evaluator.ts": {
-    "conversations": 1,
-    "devices": 1
-  },
   "modules/access/repo-subject-registry.ts": {
     "conversations": 1
   },
