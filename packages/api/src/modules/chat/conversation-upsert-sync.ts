@@ -4,6 +4,7 @@ import {
   presentChatConversationRecord,
   type ChatConversationRecord,
 } from "./presenter.js"
+import { loadChatConversationView } from "./conversation-view-read.js"
 
 export type LoadConversationViewForSync = (
   queryable: Executor,
@@ -46,4 +47,19 @@ export async function syncConversationUpsertForWorkspaceMembersUseCase(
       },
     })
   }
+}
+
+export async function syncConversationUpsertForWorkspaceMembers(
+  queryable: Executor,
+  workspaceId: string,
+  workspaceMemberIds: string[],
+  conversationId: string
+) {
+  await syncConversationUpsertForWorkspaceMembersUseCase(
+    queryable,
+    workspaceId,
+    workspaceMemberIds,
+    conversationId,
+    { loadConversationView: loadChatConversationView }
+  )
 }

@@ -99,7 +99,7 @@ import {
 import { enqueueActorWakeupsForConversationMessage } from "./actor-wakeup.js"
 export { enqueueActorWakeupsForConversationMessage } from "./actor-wakeup.js"
 import { syncVisibleSharedItemUseCase } from "./visible-sync.js"
-import { syncConversationUpsertForWorkspaceMembersUseCase } from "./conversation-upsert-sync.js"
+import { syncConversationUpsertForWorkspaceMembers } from "./conversation-upsert-sync.js"
 import { listConversationRealtimeRecipientsUseCase } from "./realtime-recipients.js"
 import {
   sendChatConversationMessageUseCase,
@@ -235,21 +235,6 @@ export async function resolveConversationReplyRef(params: {
     400,
     "invalid_reply_ref",
     `Unknown replyToRef "${params.replyRef}".${suggestionText}`
-  )
-}
-
-async function syncConversationUpsertForWorkspaceMembers(
-  queryable: Executor,
-  workspaceId: string,
-  workspaceMemberIds: string[],
-  conversationId: string
-) {
-  await syncConversationUpsertForWorkspaceMembersUseCase(
-    queryable,
-    workspaceId,
-    workspaceMemberIds,
-    conversationId,
-    { loadConversationView: loadChatConversationView }
   )
 }
 
