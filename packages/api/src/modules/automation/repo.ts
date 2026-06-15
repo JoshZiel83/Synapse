@@ -27,6 +27,7 @@ import type {
   AutomationIntegrationIngressKind,
   AutomationIntegrationProvider,
   AutomationIntegrationTargetKind,
+  AutomationSourceKind,
   AutomationWebhookEndpoint,
   Timestamp,
 } from "@synapse/shared"
@@ -1129,6 +1130,72 @@ export async function listAutomationOccurrenceRows(params: {
   return result.rows.map(toAutomationOccurrenceDbRow)
 }
 
+export async function selectAutomationOccurrenceRowByDedupeKey(params: {
+  workspaceId: string
+  sourceKind: AutomationSourceKind
+  eventSourceId?: string | null
+  dedupeKey: string
+  executor?: Executor
+}): Promise<AutomationOccurrenceDbRow | null> {
+  const result = await resolveQueryRunner(
+    params.executor
+  ).run<AutomationOccurrenceRawRow>(
+    `SELECT *
+     FROM automation_occurrences
+     WHERE workspace_id = $1::uuid
+       AND ${
+         params.eventSourceId
+           ? "event_source_id = $2::uuid"
+           : "source_kind = $2::automation_occurrences_source_kind"
+       }
+       AND dedupe_key = $3
+     LIMIT 1`,
+    [
+      params.workspaceId,
+      params.eventSourceId || params.sourceKind,
+      params.dedupeKey,
+    ]
+  )
+  const row = result.rows[0]
+  return row ? toAutomationOccurrenceDbRow(row) : null
+}
+
+export async function insertAutomationOccurrenceReturningRow(params: {
+  id: string
+  workspaceId: string
+  sourceKind: AutomationSourceKind
+  eventSourceId?: string | null
+  sourceLocator?: string | null
+  matchKey?: string | null
+  dedupeKey?: string | null
+  sourceSnapshot: Record<string, unknown>
+  payload: Record<string, unknown>
+  occurredAt: Timestamp
+  executor?: Executor
+}): Promise<AutomationOccurrenceDbRow> {
+  const result = await resolveQueryRunner(
+    params.executor
+  ).run<AutomationOccurrenceRawRow>(
+    `INSERT INTO automation_occurrences
+       (id, workspace_id, source_kind, event_source_id, source_locator, match_key, dedupe_key, source_snapshot, payload, occurred_at, created_at)
+     VALUES ($1, $2, $3::automation_occurrences_source_kind, $4, $5, $6, $7, $8, $9, $10, NOW())
+     RETURNING *`,
+    [
+      params.id,
+      params.workspaceId,
+      params.sourceKind,
+      params.eventSourceId || null,
+      params.sourceLocator || null,
+      params.matchKey || null,
+      params.dedupeKey || null,
+      JSON.stringify(params.sourceSnapshot),
+      JSON.stringify(params.payload),
+      params.occurredAt,
+    ]
+  )
+  return toAutomationOccurrenceDbRow(result.rows[0]!)
+}
+
 export async function claimPendingAutomationExecutionRow(
   executionId: string,
   executor?: Executor
@@ -1147,6 +1214,44 @@ export async function claimPendingAutomationExecutionRow(
   )
   const row = result.rows[0]
   return row ? toAutomationExecutionRow(row) : null
+}
+
+export async function selectAutomationExecutionRowByRuleOccurrence(params: {
+  ruleId: string
+  occurrenceId: string
+  executor?: Executor
+}): Promise<AutomationExecutionRow | null> {
+  const result = await resolveQueryRunner(
+    params.executor
+  ).run<AutomationExecutionRawRow>(
+    `SELECT *
+     FROM automation_executions
+     WHERE rule_id = $1::uuid
+       AND occurrence_id = $2::uuid
+     LIMIT 1`,
+    [params.ruleId, params.occurrenceId]
+  )
+  const row = result.rows[0]
+  return row ? toAutomationExecutionRow(row) : null
+}
+
+export async function insertAutomationExecutionReturningRow(params: {
+  id: string
+  workspaceId: string
+  ruleId: string
+  occurrenceId: string
+  executor?: Executor
+}): Promise<AutomationExecutionRow> {
+  const result = await resolveQueryRunner(
+    params.executor
+  ).run<AutomationExecutionRawRow>(
+    `INSERT INTO automation_executions
+       (id, workspace_id, rule_id, occurrence_id, status, attempt_count, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, 'pending', 0, NOW(), NOW())
+     RETURNING *`,
+    [params.id, params.workspaceId, params.ruleId, params.occurrenceId]
+  )
+  return toAutomationExecutionRow(result.rows[0]!)
 }
 
 export async function selectAutomationOccurrenceRow(

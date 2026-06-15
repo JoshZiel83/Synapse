@@ -30,8 +30,10 @@ import {
   decodeAutomationTriggerMatcher,
   expireAutomationRuleRows,
   getAutomationEventSourceRow,
+  insertAutomationExecutionReturningRow,
   insertAutomationDeliveryRow,
   insertAutomationEventSourceRow,
+  insertAutomationOccurrenceReturningRow,
   insertAutomationPolicyRow,
   insertAutomationRuleRow,
   insertAutomationTriggerRow,
@@ -58,7 +60,9 @@ import {
   pauseAutomationRuleRowsForInactiveCreators,
   persistAutomationDeliveryTargets,
   selectAutomationOccurrenceRow,
+  selectAutomationExecutionRowByRuleOccurrence,
   selectAutomationIntegrationBindingRow,
+  selectAutomationOccurrenceRowByDedupeKey,
   selectAutomationWebhookEndpointRow,
   selectExistingAutomationIntegrationBindingRow,
   selectWebhookAutomationEventSourceByPathToken,
@@ -909,6 +913,87 @@ test(
       assert.deepEqual(parseJsonObject(pauseAudit.details), {
         reason: "Creator participant is no longer active",
       })
+    })
+  }
+)
+
+test(
+  "automation repo helpers own occurrence and execution creation queries",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const { workspaceId, conversationId, participantId } =
+        await insertAutomationRuleFixture(db)
+      const ruleId = crypto.randomUUID()
+      await insertAutomationRuleRow(db, {
+        id: ruleId,
+        workspaceId,
+        conversationId,
+        category: AUTOMATION_RULE_CATEGORY.EVENT_SUBSCRIPTION,
+        status: AUTOMATION_RULE_STATUSES[0],
+        name: "repo execution rule",
+        description: "",
+        createdByParticipantId: participantId,
+        createdBySessionId: null,
+        metadata: JSON.stringify({ rule: "execution" }),
+      })
+
+      const occurrenceId = crypto.randomUUID()
+      const dedupeKey = `dedupe-${crypto.randomUUID()}`
+      const sourceKind = AUTOMATION_TRIGGER_SOURCE_KINDS[3]
+      const occurredAt = dateToIsoInstant(new Date())
+      const insertedOccurrence = await insertAutomationOccurrenceReturningRow({
+        id: occurrenceId,
+        workspaceId,
+        sourceKind,
+        sourceLocator: "internal/test",
+        matchKey: "match-1",
+        dedupeKey,
+        sourceSnapshot: { source: "repo-test" },
+        payload: { severity: "critical" },
+        occurredAt,
+        executor: db,
+      })
+      assert.equal(insertedOccurrence.id, occurrenceId)
+      assert.equal(insertedOccurrence.workspace_id, workspaceId)
+
+      const selectedOccurrence = await selectAutomationOccurrenceRowByDedupeKey(
+        {
+          workspaceId,
+          sourceKind,
+          dedupeKey,
+          executor: db,
+        }
+      )
+      assert.equal(selectedOccurrence?.id, occurrenceId)
+      assert.deepEqual(
+        normalizeAutomationOccurrenceRow(selectedOccurrence!).payload,
+        { severity: "critical" }
+      )
+
+      const executionId = crypto.randomUUID()
+      const insertedExecution = await insertAutomationExecutionReturningRow({
+        id: executionId,
+        workspaceId,
+        ruleId,
+        occurrenceId,
+        executor: db,
+      })
+      assert.equal(insertedExecution.id, executionId)
+      assert.equal(
+        insertedExecution.status,
+        AUTOMATION_EXECUTION_STATUS.PENDING
+      )
+      assert.equal(insertedExecution.attempt_count, 0)
+
+      const selectedExecution =
+        await selectAutomationExecutionRowByRuleOccurrence({
+          ruleId,
+          occurrenceId,
+          executor: db,
+        })
+      assert.equal(selectedExecution?.id, executionId)
+      assert.equal(selectedExecution?.workspace_id, workspaceId)
     })
   }
 )

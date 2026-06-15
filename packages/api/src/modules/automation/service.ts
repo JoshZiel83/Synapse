@@ -58,8 +58,10 @@ import {
   existsAutomationEventSourceKey,
   existsAutomationExecution,
   expireAutomationRuleRows,
+  insertAutomationExecutionReturningRow,
   insertAutomationDeliveryRow,
   insertAutomationEventSourceRow,
+  insertAutomationOccurrenceReturningRow,
   insertAutomationTriggerRow,
   insertAutomationExecutionTarget,
   insertAutomationPolicyRow,
@@ -95,13 +97,13 @@ import {
   pauseAutomationRuleRowsForInactiveCreators,
   pauseAutomationRuleRowsForEventSource,
   persistAutomationDeliveryTargets,
-  resolveQueryRunner,
   revokeAutomationEventSourceAccessBindingById,
-  runnerFor,
   selectActiveAutomationEventSourceId,
   selectActiveAutomationRuleEventMatchers,
   selectActiveWebhookEndpointId,
+  selectAutomationExecutionRowByRuleOccurrence,
   selectAutomationOccurrenceRow,
+  selectAutomationOccurrenceRowByDedupeKey,
   selectAutomationEventSourceReuseRow,
   selectAutomationIntegrationBindingRow,
   selectAutomationWebhookEndpointRow,
@@ -126,8 +128,6 @@ import {
   updateIntegrationBindingTargetLabel,
   updateWebhookEndpointStatus,
   withAutomationTransaction,
-  type QueryRunner,
-  type SqlRunner,
 } from "./repo.js"
 import {
   createConversationEvent,
@@ -164,7 +164,6 @@ import type {
   AutomationDeliveryRow,
   AutomationEventSourceDbRow,
   AutomationIntegrationBindingRow,
-  AutomationOccurrenceDbRow,
   AutomationOccurrenceRow,
   AutomationPolicyDbRow,
   AutomationPolicyRow,
@@ -2073,47 +2072,37 @@ async function createAutomationOccurrence(params: {
   occurredAt?: Timestamp
   client?: Executor
 }) {
-  const runner = resolveQueryRunner(params.client)
   const occurredAt = params.occurredAt || nowIsoInstant()
   const dedupeKey = params.dedupeKey?.trim() || null
 
   if (dedupeKey) {
-    const existing = await runner.run<AutomationOccurrenceDbRow>(
-      `SELECT *
-       FROM automation_occurrences
-       WHERE workspace_id = $1
-         AND ${params.eventSourceId ? "event_source_id = $2" : "source_kind = $2"}
-         AND dedupe_key = $3
-       LIMIT 1`,
-      [params.workspaceId, params.eventSourceId || params.sourceKind, dedupeKey]
-    )
-    if (existing.rows[0]) {
-      return presentOccurrence(
-        normalizeAutomationOccurrenceRow(existing.rows[0])
-      )
+    const existing = await selectAutomationOccurrenceRowByDedupeKey({
+      workspaceId: params.workspaceId,
+      sourceKind: params.sourceKind,
+      eventSourceId: params.eventSourceId,
+      dedupeKey,
+      executor: params.client,
+    })
+    if (existing) {
+      return presentOccurrence(normalizeAutomationOccurrenceRow(existing))
     }
   }
 
-  const result = await runner.run<AutomationOccurrenceDbRow>(
-    `INSERT INTO automation_occurrences
-       (id, workspace_id, source_kind, event_source_id, source_locator, match_key, dedupe_key, source_snapshot, payload, occurred_at, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
-     RETURNING *`,
-    [
-      uuidv4(),
-      params.workspaceId,
-      params.sourceKind,
-      params.eventSourceId || null,
-      params.sourceLocator || null,
-      params.matchKey || null,
-      dedupeKey,
-      JSON.stringify(params.sourceSnapshot || {}),
-      JSON.stringify(params.payload || {}),
-      occurredAt,
-    ]
-  )
+  const row = await insertAutomationOccurrenceReturningRow({
+    id: uuidv4(),
+    workspaceId: params.workspaceId,
+    sourceKind: params.sourceKind,
+    eventSourceId: params.eventSourceId,
+    sourceLocator: params.sourceLocator,
+    matchKey: params.matchKey,
+    dedupeKey,
+    sourceSnapshot: params.sourceSnapshot || {},
+    payload: params.payload || {},
+    occurredAt,
+    executor: params.client,
+  })
 
-  return presentOccurrence(normalizeAutomationOccurrenceRow(result.rows[0]!))
+  return presentOccurrence(normalizeAutomationOccurrenceRow(row))
 }
 
 async function createAutomationExecution(params: {
@@ -2122,31 +2111,27 @@ async function createAutomationExecution(params: {
   occurrenceId: string
   client?: Executor
 }) {
-  const runner = resolveQueryRunner(params.client)
-  const existing = await runner.run(
-    `SELECT *
-     FROM automation_executions
-     WHERE rule_id = $1
-       AND occurrence_id = $2
-     LIMIT 1`,
-    [params.ruleId, params.occurrenceId]
-  )
-  if (existing.rows[0]) {
+  const existing = await selectAutomationExecutionRowByRuleOccurrence({
+    ruleId: params.ruleId,
+    occurrenceId: params.occurrenceId,
+    executor: params.client,
+  })
+  if (existing) {
     return {
-      execution: presentExecution(existing.rows[0]),
+      execution: presentExecution(existing),
       isNew: false,
     }
   }
 
-  const result = await runner.run(
-    `INSERT INTO automation_executions
-       (id, workspace_id, rule_id, occurrence_id, status, attempt_count, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, 'pending', 0, NOW(), NOW())
-     RETURNING *`,
-    [uuidv4(), params.workspaceId, params.ruleId, params.occurrenceId]
-  )
+  const row = await insertAutomationExecutionReturningRow({
+    id: uuidv4(),
+    workspaceId: params.workspaceId,
+    ruleId: params.ruleId,
+    occurrenceId: params.occurrenceId,
+    executor: params.client,
+  })
   return {
-    execution: presentExecution(result.rows[0]!),
+    execution: presentExecution(row),
     isNew: true,
   }
 }
