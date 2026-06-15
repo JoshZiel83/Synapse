@@ -48,6 +48,7 @@ import {
   listIntegrationAutomationEventSourceRowsByWebhookPathToken,
   loadAutomationRuleComponentRows,
   lockDueAutomationScheduleRows,
+  normalizeIntegrationInstallationRow,
   normalizeAutomationDeliveryRow,
   normalizeAutomationEventSourceRow,
   normalizeAutomationExecutionWithOccurrenceRow,
@@ -307,6 +308,33 @@ test("automation webhook endpoint rows decode metadata at repo exit", () => {
     } as AutomationWebhookEndpointDbRow).metadata,
     { channel: "alerts" }
   )
+})
+
+test("integration installation rows decode config and spec metadata at repo exit", () => {
+  const row = normalizeIntegrationInstallationRow({
+    installationId: "installation-1",
+    workspaceId: "workspace-1",
+    installationStatus: "active",
+    configData: JSON.stringify({
+      apiKey: "secret",
+      baseUrl: "https://gitlab.example.test",
+    }),
+    orgSlug: "gitlab",
+    itemSlug: "gitlab-plugin",
+    specMetadata: JSON.stringify({
+      integrationProvider: "gitlab",
+      setupSteps: ["connect"],
+    }),
+  })
+
+  assert.deepEqual(row.configData, {
+    apiKey: "secret",
+    baseUrl: "https://gitlab.example.test",
+  })
+  assert.deepEqual(row.specMetadata, {
+    integrationProvider: "gitlab",
+    setupSteps: ["connect"],
+  })
 })
 
 test("automation repo helpers own webhook endpoint create and list queries", async () => {

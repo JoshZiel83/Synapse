@@ -13,7 +13,6 @@ import type {
 } from "@synapse/shared"
 import { config } from "../../config/index.js"
 import { decryptSensitiveFields } from "../../infrastructure/crypto/index.js"
-import { parseJsonObject } from "@synapse/shared"
 import {
   selectIntegrationInstallationRow,
   type IntegrationInstallationRow,
@@ -95,20 +94,20 @@ const INTEGRATION_EVENT_SPECS: Record<string, IntegrationEventSpec> = {
   },
 }
 
-// Business JSON decode → shared parseJsonObject (string-parse + array-reject).
-// r6 P1-8: replaces a local copy that only handled already-parsed objects.
-const asObject = parseJsonObject
-
 function readString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null
+}
+
+function readObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
 }
 
 function integrationProviderFromRow(
   row: IntegrationInstallationRow
 ): AutomationIntegrationProvider | null {
-  const metadataProvider = readString(
-    asObject(row.specMetadata).integrationProvider
-  )
+  const metadataProvider = readString(row.specMetadata.integrationProvider)
   if (metadataProvider === "github" || metadataProvider === "gitlab") {
     return metadataProvider
   }
@@ -407,7 +406,7 @@ export async function getIntegrationInstallation(
     provider,
     orgSlug: row.orgSlug,
     itemSlug: row.itemSlug,
-    configData: decryptSensitiveFields(asObject(row.configData)),
+    configData: decryptSensitiveFields(row.configData),
   }
 }
 
@@ -666,7 +665,7 @@ export function normalizeIntegrationWebhookIngress(input: {
         githubEvent: eventName,
         githubDeliveryId: headerValue(input.headers, "x-github-delivery"),
         repositoryFullName:
-          readString(asObject(payload.repository).full_name) ||
+          readString(readObject(payload.repository).full_name) ||
           input.integration.targetLabel,
       },
     }
@@ -697,7 +696,7 @@ export function normalizeIntegrationWebhookIngress(input: {
       gitlabEventUuid: headerValue(input.headers, "x-gitlab-event-uuid"),
       gitlabWebhookUuid: headerValue(input.headers, "x-gitlab-webhook-uuid"),
       projectPathWithNamespace:
-        readString(asObject(payload.project).path_with_namespace) ||
+        readString(readObject(payload.project).path_with_namespace) ||
         input.integration.targetLabel,
     },
   }

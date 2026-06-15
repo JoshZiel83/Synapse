@@ -81,20 +81,14 @@ export type {
   AutomationWebhookEventSourceRow,
 } from "./repo.types.js"
 
-/**
- * Raw integration-installation row projection. Columns are selected with
- * explicit camelCase `as` aliases (so the CamelCasePlugin is moot). No Date
- * columns are projected; configData/specMetadata are raw JSONB left as
- * `unknown` and decoded by the service.
- */
 export type IntegrationInstallationRow = {
   installationId: string
   workspaceId: string
   installationStatus: "active" | "disabled" | "error" | "archived"
-  configData: unknown
+  configData: Record<string, unknown>
   orgSlug: string
   itemSlug: string
-  specMetadata: unknown
+  specMetadata: Record<string, unknown>
 }
 
 export type AutomationEventSourceReuseRow = {
@@ -343,6 +337,28 @@ type AutomationExecutionWithOccurrenceRawRow = AutomationExecutionRawRow & {
   occurrenceCreatedAt?: Date | null
 }
 
+type IntegrationInstallationRawRow = Omit<
+  IntegrationInstallationRow,
+  "configData" | "specMetadata"
+> & {
+  configData: unknown
+  specMetadata: unknown
+}
+
+export function normalizeIntegrationInstallationRow(
+  row: IntegrationInstallationRawRow
+): IntegrationInstallationRow {
+  return {
+    installationId: row.installationId,
+    workspaceId: row.workspaceId,
+    installationStatus: row.installationStatus,
+    orgSlug: row.orgSlug,
+    itemSlug: row.itemSlug,
+    configData: parseJsonObject(row.configData),
+    specMetadata: parseJsonObject(row.specMetadata),
+  }
+}
+
 export function decodeAutomationEventSourceMetadata(row: {
   metadata: unknown
 }): Record<string, unknown> {
@@ -440,15 +456,12 @@ export function normalizeAutomationWebhookEndpointRow(
   return normalized
 }
 
-/**
- * Read one integration installation for a workspace, scoped to non-deleted
- * workspace apps. Returns the raw camelCase row (no JSON decode / decryption).
- */
+/** Read one integration installation for a workspace, scoped to non-deleted workspace apps. */
 export async function selectIntegrationInstallationRow(
   workspaceId: string,
   installationId: string
 ): Promise<IntegrationInstallationRow | undefined> {
-  return (await db
+  const row = (await db
     .selectFrom("pluginInstallations as installation")
     .innerJoin("workspaceApps as app", "app.id", "installation.id")
     .innerJoin("catalogItems as item", "item.id", "installation.catalogItemId")
@@ -471,7 +484,9 @@ export async function selectIntegrationInstallationRow(
     .where("app.workspaceId", "=", workspaceId)
     .where("app.deletedAt", "is", null)
     .limit(1)
-    .executeTakeFirst()) as IntegrationInstallationRow | undefined
+    .executeTakeFirst()) as IntegrationInstallationRawRow | undefined
+
+  return row ? normalizeIntegrationInstallationRow(row) : undefined
 }
 
 // ---------------------------------------------------------------------------
