@@ -1071,12 +1071,12 @@ export const RUNTIME_AUTHORIZATION_BROWSER_SCOPE_TYPES = [
   "origin",
 ] as const
 // v3.1: Re-export the operation enum from device-protocol so both packages stay
-// in lockstep. Callers should `import {BrowserOperation, RUNTIME_AUTHORIZATION_
-// BROWSER_OPERATIONS} from "@synapse/shared"` to avoid reaching across packages.
+// in lockstep. Import from the enum-only subpath so the shared root does not
+// pull in the browser tool map/descriptors.
 export {
   RUNTIME_AUTHORIZATION_BROWSER_OPERATIONS,
   type BrowserOperation,
-} from "@synapse/device-protocol/browser-tools"
+} from "@synapse/device-protocol/enums"
 export const RUNTIME_AUTHORIZATION_COMMAND_EXECUTORS = [
   "bash",
   "powershell",
