@@ -1,4 +1,5 @@
 import {
+  CONVERSATION_PARTICIPANT_ROLE_KEY,
   MEMORY_PERMISSION,
   SUBJECT_KIND,
   WORKSPACE_APP_GRANT_PERMISSION,
@@ -163,7 +164,8 @@ async function hasConversationPermission(
       Boolean(conversation.workspaceId) &&
       access.workspaceId === conversation.workspaceId
     const isConversationAdmin =
-      membership?.roleKey === "owner" || membership?.roleKey === "admin"
+      membership?.roleKey === CONVERSATION_PARTICIPANT_ROLE_KEY.OWNER ||
+      membership?.roleKey === CONVERSATION_PARTICIPANT_ROLE_KEY.ADMIN
     const isWorkspaceConversationAdmin =
       sameWorkspace &&
       workspacePermissionFromAccess(access, "manage_conversations")
