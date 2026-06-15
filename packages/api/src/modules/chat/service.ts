@@ -182,6 +182,10 @@ import {
   createConversationEventUseCase,
   type CreateConversationEventDeps,
 } from "./event-write.js"
+import {
+  enqueueActorWakeupsForConversationMessageUseCase,
+  type ActorWakeupDeps,
+} from "./actor-wakeup.js"
 import { enrichTaskForUser } from "../tasks/service.js"
 import {
   getConversationRuntimeMap,
@@ -813,12 +817,6 @@ async function upsertConversationView(
   })
 }
 
-type PendingActorWakeup = {
-  actorId: string
-  sessionId: string
-  sourceType: "user_message" | "actor_message"
-}
-
 function parseMentionBlockFromPart(part: ConversationItemPartInput) {
   if (part.type !== "json" || !part.json) {
     return null
@@ -1087,51 +1085,6 @@ async function listMentionedParticipantIdsForItem(
   return listMentionedParticipantIdsForConversationItem(queryable, itemId)
 }
 
-function resolveActorWakeParticipants(params: {
-  conversationKind: ConversationKind
-  activeParticipants: ParticipantRow[]
-  authorParticipantId?: string
-  mentionedParticipantIds: string[]
-  replyAuthorParticipantId?: string | null
-}) {
-  const actorParticipants = params.activeParticipants.filter(
-    (participant) =>
-      participant.id !== params.authorParticipantId &&
-      participant.state === CONVERSATION_PARTICIPANT_STATE.ACTIVE &&
-      typeof participant.actorId === "string" &&
-      participant.actorId.length > 0
-  )
-  if (actorParticipants.length === 0) {
-    return []
-  }
-  if (params.conversationKind !== "group") {
-    return actorParticipants
-  }
-
-  const mentionedSet = new Set(params.mentionedParticipantIds)
-  const explicitWakeTargets = new Map<string, ParticipantRow>()
-  for (const participant of actorParticipants) {
-    if (mentionedSet.has(participant.id)) {
-      explicitWakeTargets.set(participant.id, participant)
-    }
-  }
-  if (params.replyAuthorParticipantId) {
-    const replyActor = actorParticipants.find(
-      (participant) => participant.id === params.replyAuthorParticipantId
-    )
-    if (replyActor) {
-      explicitWakeTargets.set(replyActor.id, replyActor)
-    }
-  }
-  if (explicitWakeTargets.size > 0) {
-    return Array.from(explicitWakeTargets.values())
-  }
-  if (params.mentionedParticipantIds.length > 0) {
-    return []
-  }
-  return actorParticipants
-}
-
 export async function enqueueActorWakeupsForConversationMessage(params: {
   workspaceId?: string
   conversationId: string
@@ -1147,138 +1100,16 @@ export async function enqueueActorWakeupsForConversationMessage(params: {
   queryable?: Executor
 }) {
   if (!params.workspaceId) {
-    return [] as PendingActorWakeup[]
+    return []
   }
-  const queryable = params.queryable ?? rootQueryable()
-  const itemRows = await listItemRowsByIds(queryable, [params.itemId])
-  const itemRow = itemRows[0]
-  if (!itemRow) {
-    return [] as PendingActorWakeup[]
-  }
-  if (
-    itemRow.itemType !== "message" ||
-    itemRow.scope !== "shared" ||
-    itemRow.surface !== "visible"
-  ) {
-    return [] as PendingActorWakeup[]
-  }
-
-  if (await conversationItemHasTargets(queryable, params.itemId)) {
-    return [] as PendingActorWakeup[]
-  }
-
-  const conversationKind = await getConversationKind(
-    queryable,
-    params.conversationId
-  )
-  if (!conversationKind) {
-    return [] as PendingActorWakeup[]
-  }
-
-  const activeParticipants = await listConversationParticipantRows(
-    queryable,
-    [params.conversationId],
-    { useProfileSnapshot: true }
-  ).then((participants) =>
-    participants.filter(
-      (participant) =>
-        participant.state === CONVERSATION_PARTICIPANT_STATE.ACTIVE
-    )
-  )
-  const authorParticipant = itemRow.authorParticipantId
-    ? activeParticipants.find(
-        (participant) => participant.id === itemRow.authorParticipantId
-      )
-    : undefined
-  const sourceParticipantType =
-    params.sourceParticipantType ?? authorParticipant?.participantType
-  if (!sourceParticipantType || sourceParticipantType === "system") {
-    return [] as PendingActorWakeup[]
-  }
-
-  const mentionedParticipantIds = await listMentionedParticipantIdsForItem(
-    queryable,
-    params.itemId
-  )
-  const replyAuthorParticipantId = itemRow.replyToItemId
-    ? ((await listItemRowsByIds(queryable, [itemRow.replyToItemId]))[0]
-        ?.authorParticipantId ?? null)
-    : null
-  const wakeParticipants = resolveActorWakeParticipants({
-    conversationKind,
-    activeParticipants,
-    authorParticipantId: itemRow.authorParticipantId ?? undefined,
-    mentionedParticipantIds,
-    replyAuthorParticipantId,
-  })
-  if (wakeParticipants.length === 0) {
-    return [] as PendingActorWakeup[]
-  }
-
-  const sourceType =
-    sourceParticipantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
-      ? "actor_message"
-      : "user_message"
-  const sourceParticipantId =
-    params.sourceParticipantId ??
-    (sourceParticipantType === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
-      ? (authorParticipant?.workspaceMemberId ?? undefined)
-      : sourceParticipantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
-        ? (authorParticipant?.actorId ?? undefined)
-        : (itemRow.authorParticipantId ?? undefined))
-  const sourceName =
-    params.sourceName ??
-    (authorParticipant ? participantDisplayName(authorParticipant) : undefined)
-  const itemSummary =
-    params.summary ??
-    (await hydrateConversationItems(queryable, [itemRow]))
-      .map((item) => item.content.trim())
-      .find(Boolean) ??
-    "New message"
-
-  const { ensureConversationActorSessionContext } =
-    await import("../session/service.js")
-  const { enqueueSessionWakeup } = await import("../session/runtime.js")
-  const pendingWakeups: PendingActorWakeup[] = []
-
-  for (const participant of wakeParticipants) {
-    if (!participant.actorId) {
-      continue
-    }
-    const ensuredContext = await ensureConversationActorSessionContext(
-      {
-        workspaceId: params.workspaceId,
-        actorId: participant.actorId,
-        conversationId: params.conversationId,
-        trigger: sourceType,
-      },
-      queryable
-    )
-    await enqueueSessionWakeup({
-      sessionId: ensuredContext.sessionId,
-      actorId: participant.actorId,
+  return enqueueActorWakeupsForConversationMessageUseCase(
+    {
+      ...params,
       workspaceId: params.workspaceId,
-      sourceType,
-      sourceItemId: params.itemId,
-      sourceParticipantType,
-      sourceParticipantId,
-      sourceName,
-      summary:
-        itemSummary.replace(/\s+/g, " ").trim().slice(0, 96) || "New message",
-      metadata: {
-        source: "chat.message_wakeup",
-        conversationId: params.conversationId,
-      },
-      trigger: sourceType,
-    })
-    pendingWakeups.push({
-      actorId: participant.actorId,
-      sessionId: ensuredContext.sessionId,
-      sourceType,
-    })
-  }
-
-  return pendingWakeups
+      queryable: params.queryable ?? rootQueryable(),
+    },
+    chatActorWakeupDeps()
+  )
 }
 
 async function loadHumanParticipantsForConversation(
@@ -1498,6 +1329,26 @@ function chatCreateConversationEventDeps(): CreateConversationEventDeps {
   return {
     listConversationParticipants: listConversationParticipantRows,
     createConversationItem,
+  }
+}
+
+function chatActorWakeupDeps(): ActorWakeupDeps {
+  return {
+    listItemRowsByIds,
+    conversationItemHasTargets,
+    getConversationKind,
+    listConversationParticipants: listConversationParticipantRows,
+    listMentionedParticipantIdsForItem,
+    hydrateConversationItems,
+    ensureConversationActorSessionContext: async (params, queryable) => {
+      const { ensureConversationActorSessionContext } =
+        await import("../session/service.js")
+      return ensureConversationActorSessionContext(params, queryable)
+    },
+    enqueueSessionWakeup: async (params) => {
+      const { enqueueSessionWakeup } = await import("../session/runtime.js")
+      await enqueueSessionWakeup(params)
+    },
   }
 }
 
