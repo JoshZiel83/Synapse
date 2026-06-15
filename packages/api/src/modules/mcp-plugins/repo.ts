@@ -2066,7 +2066,7 @@ export async function upsertPluginAuthConnectionFromSessionResult(input: {
   externalAccountId: string | null
   displayName: string | null
   avatarUrl: string | null
-  expiresAt: string | null
+  expiresAt: Date | null
   publicPayload: Record<string, unknown>
   secretPayload: Record<string, unknown>
   sessionId: string

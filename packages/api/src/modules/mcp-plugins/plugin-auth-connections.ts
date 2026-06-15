@@ -1636,6 +1636,7 @@ export async function attachAuthConnectionsToConfig(input: {
       )
       const displayName = asNullableString(normalizedPayload.displayName)
       const avatarUrl = asNullableString(normalizedPayload.avatarUrl)
+      const payloadExpiresAt = asNullableString(secretPayload.expiresAt)
       const connectionRow = await upsertPluginAuthConnectionFromSessionResult({
         run,
         installationId: input.installationId,
@@ -1645,7 +1646,9 @@ export async function attachAuthConnectionsToConfig(input: {
         externalAccountId,
         displayName,
         avatarUrl,
-        expiresAt: asNullableString(secretPayload.expiresAt),
+        expiresAt: payloadExpiresAt
+          ? parseInstantString(payloadExpiresAt)
+          : null,
         publicPayload,
         secretPayload,
         sessionId: session.id,
