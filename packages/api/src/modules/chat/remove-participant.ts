@@ -25,6 +25,12 @@ import {
 } from "./conversation-access.js"
 import { appendWorkspaceMemberSyncEventInTransaction } from "./sync-events.js"
 import { createChatError } from "./errors.js"
+import { getWorkspaceMemberIdentityOrThrow } from "./identity.js"
+import { createConversationEvent } from "./event-write.js"
+import { listConversationParticipantsUseCase } from "./participant-roster.js"
+import { listConversationRealtimeRecipientsUseCase } from "./realtime-recipients.js"
+import { participantRowToChatParticipantSummary } from "./participant-projection.js"
+import { syncConversationUpsertForWorkspaceMembers } from "./conversation-upsert-sync.js"
 
 type ParticipantKind = ConversationParticipantType
 type RemovalEventType =
@@ -274,5 +280,61 @@ export async function leaveChatConversationUseCase(
       participantId: access.participant.id,
     },
     deps
+  )
+}
+
+function chatParticipantRemovalDeps(): RemoveParticipantDeps {
+  return {
+    createRemovalConversationEvent: async (eventParams) => {
+      await createConversationEvent({
+        ...eventParams,
+        eventPayload: eventParams.eventPayload as never,
+      })
+    },
+    listConversationParticipants: listConversationParticipantsUseCase,
+    listConversationRealtimeRecipients:
+      listConversationRealtimeRecipientsUseCase,
+    participantToSummary: participantRowToChatParticipantSummary,
+    syncConversationUpsert: syncConversationUpsertForWorkspaceMembers,
+  }
+}
+
+export async function removeChatConversationParticipant(params: {
+  workspaceId: string
+  userId: string
+  conversationId: string
+  participantId: string
+}): Promise<ChatParticipantRemovalRecord> {
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  return removeChatConversationParticipantUseCase(
+    {
+      workspaceId: params.workspaceId,
+      workspaceMemberId: identity.workspaceMemberId,
+      conversationId: params.conversationId,
+      participantId: params.participantId,
+    },
+    chatParticipantRemovalDeps()
+  )
+}
+
+export async function leaveChatConversation(params: {
+  workspaceId: string
+  userId: string
+  conversationId: string
+}): Promise<ChatParticipantRemovalRecord> {
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  return leaveChatConversationUseCase(
+    {
+      workspaceId: params.workspaceId,
+      workspaceMemberId: identity.workspaceMemberId,
+      conversationId: params.conversationId,
+    },
+    chatParticipantRemovalDeps()
   )
 }

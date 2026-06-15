@@ -31,14 +31,12 @@ export {
 import { type ChatConversationRecord } from "./presenter.js"
 import { createChatError } from "./errors.js"
 export { isChatServiceError, type ChatServiceError } from "./errors.js"
-import { getWorkspaceMemberIdentityOrThrow } from "./identity.js"
 export { updateChatConversationReadWatermark } from "./read-watermark.js"
-import {
-  leaveChatConversationUseCase,
-  removeChatConversationParticipantUseCase,
-  type RemoveParticipantDeps,
+export {
+  leaveChatConversation,
+  loadParticipantById,
+  removeChatConversationParticipant,
 } from "./remove-participant.js"
-export { loadParticipantById } from "./remove-participant.js"
 export { patchChatConversation } from "./patch-conversation.js"
 export { retryAssistantMessage } from "./retry-message.js"
 import {
@@ -61,17 +59,12 @@ export {
   sendConversationMessageFromParticipant,
   type ConversationItemPartInput,
 } from "./item-write.js"
-import { createConversationEvent } from "./event-write.js"
 export { createConversationEvent } from "./event-write.js"
 export { enqueueActorWakeupsForConversationMessage } from "./actor-wakeup.js"
-import { syncConversationUpsertForWorkspaceMembers } from "./conversation-upsert-sync.js"
 import { listConversationRealtimeRecipientsUseCase } from "./realtime-recipients.js"
 export { sendChatConversationMessage } from "./send-message.js"
 import { type HydratedConversationItemRecord } from "./conversation-item-hydration.js"
-import {
-  participantDisplayName,
-  participantRowToChatParticipantSummary,
-} from "./participant-projection.js"
+import { participantDisplayName } from "./participant-projection.js"
 export { isFeedItemVisibleToWorkspaceMember } from "./conversation-feed-visibility.js"
 export { conversationItemDetailToFeedItem } from "./conversation-feed-mapper.js"
 export {
@@ -223,59 +216,4 @@ export async function listConversationRealtimeRecipients(
   queryable: Executor = rootQueryable()
 ) {
   return listConversationRealtimeRecipientsUseCase(conversationId, queryable)
-}
-
-function chatParticipantRemovalDeps(): RemoveParticipantDeps {
-  return {
-    createRemovalConversationEvent: async (eventParams) => {
-      await createConversationEvent({
-        ...eventParams,
-        eventPayload: eventParams.eventPayload as never,
-      })
-    },
-    listConversationParticipants,
-    listConversationRealtimeRecipients,
-    participantToSummary: participantRowToChatParticipantSummary,
-    syncConversationUpsert: syncConversationUpsertForWorkspaceMembers,
-  }
-}
-
-export async function removeChatConversationParticipant(params: {
-  workspaceId: string
-  userId: string
-  conversationId: string
-  participantId: string
-}) {
-  const identity = await getWorkspaceMemberIdentityOrThrow(
-    params.workspaceId,
-    params.userId
-  )
-  return removeChatConversationParticipantUseCase(
-    {
-      workspaceId: params.workspaceId,
-      workspaceMemberId: identity.workspaceMemberId,
-      conversationId: params.conversationId,
-      participantId: params.participantId,
-    },
-    chatParticipantRemovalDeps()
-  )
-}
-
-export async function leaveChatConversation(params: {
-  workspaceId: string
-  userId: string
-  conversationId: string
-}) {
-  const identity = await getWorkspaceMemberIdentityOrThrow(
-    params.workspaceId,
-    params.userId
-  )
-  return leaveChatConversationUseCase(
-    {
-      workspaceId: params.workspaceId,
-      workspaceMemberId: identity.workspaceMemberId,
-      conversationId: params.conversationId,
-    },
-    chatParticipantRemovalDeps()
-  )
 }
