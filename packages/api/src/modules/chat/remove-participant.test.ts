@@ -1,8 +1,18 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { SUBJECT_KIND } from "@synapse/shared"
+import {
+  CHAT_MEMBERSHIP_UPDATE_REASON,
+  CHAT_PARTICIPANT_REMOVAL_STATE,
+  CONVERSATION_FEED_EVENT_TYPE,
+  SUBJECT_KIND,
+} from "@synapse/shared"
 import { withTestDbAndClient } from "../../test/helpers/db.js"
+import type { DatabaseTransaction } from "../../infrastructure/database/kysely.js"
 import { upsertAccessSubjectOn } from "../access/subject-registry.js"
+import {
+  loadParticipantById,
+  removeChatConversationParticipantUseCase,
+} from "./remove-participant.js"
 
 type AnyDb = import("kysely").Kysely<any>
 
@@ -121,7 +131,8 @@ async function insertConversationParticipant(
   conversationId: string,
   participantType: "workspace_member" | "actor" | "remote_agent",
   entityId: string,
-  state: "active" | "left" | "removed" = "active"
+  state: "active" | "left" | "removed" = "active",
+  roleKey = "member"
 ): Promise<string> {
   const subjectId = await upsertAccessSubjectOn(db, {
     kind:
@@ -142,7 +153,7 @@ async function insertConversationParticipant(
     .values({
       conversation_id: conversationId,
       subject_id: subjectId,
-      role_key: "member",
+      role_key: roleKey,
       state,
     })
     .returning("id")
@@ -176,6 +187,126 @@ test(
       assert.equal(row.actorId, null)
       assert.equal(row.remoteAgentId, null)
       assert.equal(row.state, "active")
+    })
+  }
+)
+
+test(
+  "removeChatConversationParticipantUseCase updates state and emits membership removal event",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDbAndClient(async ({ db }) => {
+      const ownerUserId = await insertUser(db)
+      const targetUserId = await insertUser(db)
+      const workspaceId = await insertWorkspace(db, ownerUserId)
+      const ownerMemberId = await insertWorkspaceMember(
+        db,
+        workspaceId,
+        ownerUserId
+      )
+      const targetMemberId = await insertWorkspaceMember(
+        db,
+        workspaceId,
+        targetUserId
+      )
+      const conversationId = await insertConversation(db, workspaceId)
+      await insertConversationParticipant(
+        db,
+        conversationId,
+        "workspace_member",
+        ownerMemberId,
+        "active",
+        "owner"
+      )
+      const targetParticipantId = await insertConversationParticipant(
+        db,
+        conversationId,
+        "workspace_member",
+        targetMemberId
+      )
+      await db
+        .insertInto("workspaceMemberConversationViews")
+        .values({
+          workspaceMemberId: ownerMemberId,
+          conversationId,
+          unreadCount: 0,
+        })
+        .execute()
+
+      const removalEvents: unknown[] = []
+      const syncCalls: Array<{
+        workspaceId: string
+        workspaceMemberIds: string[]
+        conversationId: string
+      }> = []
+      const withTransaction = <T>(
+        fn: (trx: DatabaseTransaction) => Promise<T>
+      ) => fn(db as unknown as DatabaseTransaction)
+
+      const result = await removeChatConversationParticipantUseCase(
+        {
+          workspaceId,
+          workspaceMemberId: ownerMemberId,
+          conversationId,
+          participantId: targetParticipantId,
+        },
+        {
+          createRemovalConversationEvent: async (event) => {
+            removalEvents.push(event)
+          },
+          listConversationParticipants: async () => [],
+          listConversationRealtimeRecipients: async () => [
+            { workspaceMemberId: ownerMemberId },
+          ],
+          participantToSummary: () => {
+            throw new Error("unexpected participant summary mapping")
+          },
+          syncConversationUpsert: async (
+            _queryable,
+            workspaceId,
+            workspaceMemberIds,
+            conversationId
+          ) => {
+            syncCalls.push({ workspaceId, workspaceMemberIds, conversationId })
+          },
+          withTransaction,
+        }
+      )
+
+      assert.deepEqual(result, {
+        conversationId,
+        participantId: targetParticipantId,
+        state: CHAT_PARTICIPANT_REMOVAL_STATE.REMOVED,
+      })
+      const targetAfter = await loadParticipantById(
+        db,
+        conversationId,
+        targetParticipantId
+      )
+      assert.equal(targetAfter?.state, CHAT_PARTICIPANT_REMOVAL_STATE.REMOVED)
+      assert.equal(removalEvents.length, 1)
+      assert.equal(
+        (removalEvents[0] as { eventType: string }).eventType,
+        CONVERSATION_FEED_EVENT_TYPE.PARTICIPANT_KICKED
+      )
+      assert.deepEqual(syncCalls, [
+        { workspaceId, workspaceMemberIds: [ownerMemberId], conversationId },
+      ])
+
+      const events = await db
+        .selectFrom("workspaceMemberSyncEvents")
+        .select(["eventType", "memberSeq", "payload"])
+        .where("workspaceMemberId", "=", targetMemberId)
+        .execute()
+      assert.equal(events.length, 1)
+      assert.equal(events[0]!.eventType, "conversation.membership.updated")
+      assert.equal(Number(events[0]!.memberSeq), 1)
+      const payload = events[0]!.payload as {
+        selfState?: string
+        reason?: string
+      }
+      assert.equal(payload.selfState, CHAT_PARTICIPANT_REMOVAL_STATE.REMOVED)
+      assert.equal(payload.reason, CHAT_MEMBERSHIP_UPDATE_REASON.KICKED)
     })
   }
 )

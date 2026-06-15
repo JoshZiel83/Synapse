@@ -1,7 +1,6 @@
 import {
   buildConversationMessageRef,
   CHAT_MEMBERSHIP_UPDATE_REASON,
-  CHAT_PARTICIPANT_REMOVAL_STATE,
   CONVERSATION_ITEM_SCOPE,
   CONVERSATION_ITEM_SCOPES,
   CONVERSATION_ITEM_ROLE,
@@ -29,7 +28,6 @@ import {
   type ChatConversationSendMessageRequest,
   type ChatDeviceState,
   type ChatParticipantSummary,
-  type ChatParticipantRemovalState,
   type ChatSyncEvent,
   type ChatSyncEventPayloadMap,
   type ChatSyncEventType,
@@ -92,7 +90,6 @@ import {
   getChatConversationCreateRequestConversationId,
   getChatConversationBaseRow,
   getConversationDeviceState,
-  getConversationParticipantById,
   getConversationKind,
   getConversationRecord,
   getLastVisibleConversationItemRow,
@@ -129,7 +126,6 @@ import {
   reactivateConversationParticipant,
   updateConversationItemEventPayload as updateConversationItemEventPayloadRow,
   updateConversationMutableFields,
-  updateConversationParticipantState,
   upsertWorkspaceMemberConversationView,
   upsertConversationParticipantAddress,
   touchConversationUpdatedAt,
@@ -142,10 +138,7 @@ import {
 } from "./repo.js"
 // Re-exported for existing consumers that import the row DTO from chat/service.
 export type { ChatPushTokenRow } from "./repo.js"
-import {
-  appendWorkspaceMemberSyncEvent,
-  appendWorkspaceMemberSyncEventInTransaction,
-} from "./sync-events.js"
+import { appendWorkspaceMemberSyncEvent } from "./sync-events.js"
 export {
   appendWorkspaceMemberSyncEvent,
   appendWorkspaceMemberSyncEventInTransaction,
@@ -178,6 +171,8 @@ import {
   updateChatConversationReadWatermarkUseCase,
   type ReadWatermarkInput,
 } from "./read-watermark.js"
+import { removeChatConversationParticipantUseCase } from "./remove-participant.js"
+export { loadParticipantById } from "./remove-participant.js"
 import { enrichTaskForUser } from "../tasks/service.js"
 import {
   getConversationRuntimeMap,
@@ -3633,31 +3628,6 @@ export async function addChatConversationParticipants(params: {
   })
 }
 
-async function setParticipantState(
-  queryable: Executor,
-  participantId: string,
-  state: ChatParticipantRemovalState
-) {
-  await updateConversationParticipantState(queryable, participantId, state)
-}
-
-// Exported for unit-test coverage; see remove-participant.test.ts. After the
-// P1b polymorphic-FK collapse, conversation_participants no longer carries
-// workspace_member_id / actor_id / remote_agent_id directly — those projections
-// come from access_subjects via cp.subject_id. A regression here would only
-// surface at runtime when DELETE /chat/conversations/:cid/participants/:pid
-// is hit; a focused test on the SQL keeps it honest.
-export async function loadParticipantById(
-  queryable: Executor,
-  conversationId: string,
-  participantId: string
-) {
-  return getConversationParticipantById(queryable, {
-    conversationId,
-    participantId,
-  })
-}
-
 export async function removeChatConversationParticipant(params: {
   workspaceId: string
   userId: string
@@ -3668,135 +3638,26 @@ export async function removeChatConversationParticipant(params: {
     params.workspaceId,
     params.userId
   )
-  return withChatTransaction(async (client) => {
-    const access = await requireConversationAccess(
-      client,
-      params.conversationId,
-      identity.workspaceMemberId
-    )
-
-    const target = await loadParticipantById(
-      client,
-      params.conversationId,
-      params.participantId
-    )
-    if (!target) {
-      throw createChatError(
-        404,
-        "participant_not_found",
-        "Participant not found in this conversation"
-      )
-    }
-    if (target.state !== CONVERSATION_PARTICIPANT_STATE.ACTIVE) {
-      throw createChatError(
-        409,
-        "participant_not_active",
-        "Participant is already left or removed"
-      )
-    }
-
-    const isSelfRemoval = target.id === access.participant.id
-    // Kicking someone else requires conversation management rights;
-    // removing yourself ("leave") only requires being a participant.
-    if (!isSelfRemoval) {
-      await requireConversationManagement(
-        client,
-        params.conversationId,
-        identity.workspaceMemberId
-      )
-    }
-    const eventType = isSelfRemoval ? "participant_left" : "participant_kicked"
-
-    const removalState = isSelfRemoval
-      ? CHAT_PARTICIPANT_REMOVAL_STATE.LEFT
-      : CHAT_PARTICIPANT_REMOVAL_STATE.REMOVED
-
-    await setParticipantState(client, target.id, removalState)
-
-    await createConversationEvent({
+  return removeChatConversationParticipantUseCase(
+    {
       workspaceId: params.workspaceId,
+      workspaceMemberId: identity.workspaceMemberId,
       conversationId: params.conversationId,
-      eventType,
-      authorParticipantId: access.participant.id,
-      eventPayload: {
-        batchId: crypto.randomUUID(),
-        initiator: isSelfRemoval
-          ? undefined
-          : {
-              participantId: access.participant.id,
-              participantType: access.participant
-                .participantType as ParticipantKind,
-              workspaceMemberId: identity.workspaceMemberId,
-            },
-        participants: [
-          {
-            participantId: target.id,
-            participantType: target.participantType as Exclude<
-              ParticipantKind,
-              "system"
-            >,
-            workspaceMemberId: target.workspaceMemberId ?? undefined,
-            actorId: target.actorId ?? undefined,
-            remoteAgentId: target.remoteAgentId ?? undefined,
-            name: target.displayName ?? undefined,
-          },
-        ],
-      } as never,
-      queryable: client,
-    })
-
-    const recipients = await listConversationRealtimeRecipients(
-      params.conversationId,
-      client
-    )
-    // Remaining active members get a conversation.upsert (roster now reflects
-    // the removal). The removed member is intentionally NOT in this list — a
-    // conversation.upsert would (a) be skipped by syncConversationUpsert because
-    // loadConversationView now excludes them via the active filter, and (b)
-    // wrongly imply the conversation is still theirs. They get an explicit
-    // membership.updated below instead.
-    await syncConversationUpsertForWorkspaceMembers(
-      client,
-      params.workspaceId,
-      recipients.map((r) => r.workspaceMemberId),
-      params.conversationId
-    )
-
-    // Tell the removed member (every one of their devices) they are out. This
-    // is the authoritative "you were removed/left" signal — it does NOT depend
-    // on loadConversationView (which now returns null for them), so it is
-    // emitted directly. Self-leave still notifies the leaver so their OTHER
-    // devices drop the conversation. participants snapshot reflects the
-    // post-removal active roster.
-    if (target.workspaceMemberId) {
-      const activeParticipants = await listConversationParticipants(
-        params.conversationId,
-        { queryable: client }
-      )
-      await appendWorkspaceMemberSyncEventInTransaction(client, {
-        workspaceId: params.workspaceId,
-        workspaceMemberId: target.workspaceMemberId,
-        conversationId: params.conversationId,
-        eventType: "conversation.membership.updated",
-        payload: {
-          conversationId: params.conversationId,
-          selfState: removalState,
-          reason: isSelfRemoval
-            ? CHAT_MEMBERSHIP_UPDATE_REASON.LEFT
-            : CHAT_MEMBERSHIP_UPDATE_REASON.KICKED,
-          participants: activeParticipants
-            .filter((p) => p.state === CONVERSATION_PARTICIPANT_STATE.ACTIVE)
-            .map(participantRowToChatParticipantSummary),
-        },
-      })
+      participantId: params.participantId,
+    },
+    {
+      createRemovalConversationEvent: async (eventParams) => {
+        await createConversationEvent({
+          ...eventParams,
+          eventPayload: eventParams.eventPayload as never,
+        })
+      },
+      listConversationParticipants,
+      listConversationRealtimeRecipients,
+      participantToSummary: participantRowToChatParticipantSummary,
+      syncConversationUpsert: syncConversationUpsertForWorkspaceMembers,
     }
-
-    return {
-      conversationId: params.conversationId,
-      participantId: target.id,
-      state: removalState,
-    }
-  })
+  )
 }
 
 export async function leaveChatConversation(params: {
