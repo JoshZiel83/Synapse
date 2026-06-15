@@ -67,6 +67,10 @@
     "./tool-source": {
       "types": "./dist/tool-source/index.d.ts",
       "default": "./dist/tool-source/index.js"
+    },
+    "./tool-presentation": {
+      "types": "./dist/tool-presentation/index.d.ts",
+      "default": "./dist/tool-presentation/index.js"
     }
   },
   "scripts": {

@@ -996,8 +996,8 @@ export interface ActorRuntimeTurnPreviewTool {
   // `icon` + resolvePresentation(titlePresentation) (falling back to
   // displayTitle). Preview stays light: no result blocks/summary here.
   icon?: string
-  titlePresentation?: import("@synapse/device-protocol/tool-presentation").PresentationString
-  detailPresentation?: import("@synapse/device-protocol/tool-presentation").PresentationString
+  titlePresentation?: import("../tool-presentation/index.js").PresentationString
+  detailPresentation?: import("../tool-presentation/index.js").PresentationString
   startedAt: Timestamp
   updatedAt: Timestamp
   completedAt?: Timestamp
@@ -1027,9 +1027,9 @@ export interface ActorRuntimeTurnActivityItem {
   // friendly one-line result; requestBlocks/resultBlocks are the (redacted)
   // rendered bodies.
   icon?: string
-  titlePresentation?: import("@synapse/device-protocol/tool-presentation").PresentationString
-  detailPresentation?: import("@synapse/device-protocol/tool-presentation").PresentationString
-  resultSummary?: import("@synapse/device-protocol/tool-presentation").PresentationString
+  titlePresentation?: import("../tool-presentation/index.js").PresentationString
+  detailPresentation?: import("../tool-presentation/index.js").PresentationString
+  resultSummary?: import("../tool-presentation/index.js").PresentationString
   requestBlocks: CanonicalContentBlock[]
   resultBlocks: CanonicalContentBlock[]
   taskStatus?: ActorRuntimeTaskStatus
