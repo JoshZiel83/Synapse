@@ -173,6 +173,7 @@ import {
 import { removeChatConversationParticipantUseCase } from "./remove-participant.js"
 export { loadParticipantById } from "./remove-participant.js"
 import { patchChatConversationUseCase } from "./patch-conversation.js"
+import { retryAssistantMessageUseCase } from "./retry-message.js"
 import { enrichTaskForUser } from "../tasks/service.js"
 import {
   getConversationRuntimeMap,
@@ -3670,77 +3671,14 @@ export async function retryAssistantMessage(params: {
     params.workspaceId,
     params.userId
   )
-  const access = await requireConversationAccess(
-    rootQueryable(),
-    params.conversationId,
-    identity.workspaceMemberId
-  )
-
-  const item = await getConversationFeedItemById(params.itemId)
-  if (!item || item.conversationId !== params.conversationId) {
-    throw createChatError(404, "item_not_found", "Conversation item not found")
-  }
-  if (
-    item.kind !== "message" ||
-    item.messageType !== CONVERSATION_MESSAGE_SUBTYPE.MODEL_ERROR_NOTICE
-  ) {
-    throw createChatError(
-      400,
-      "item_not_retryable",
-      "Only model error notices can be retried"
-    )
-  }
-
-  const metadata = (item.metadata ?? {}) as Record<string, unknown>
-  const retrySessionId =
-    typeof metadata.retrySessionId === "string" ? metadata.retrySessionId : null
-  if (!retrySessionId) {
-    throw createChatError(
-      400,
-      "retry_metadata_missing",
-      "model_error_notice is missing retrySessionId in metadata"
-    )
-  }
-
-  const actorId =
-    typeof item.author?.actorId === "string" ? item.author.actorId : null
-  if (!actorId) {
-    throw createChatError(
-      400,
-      "retry_actor_missing",
-      "model_error_notice has no actor author"
-    )
-  }
-
-  // S19: the wakeup "source" is the caller (the user clicking retry),
-  // NOT the original assistant author. The downstream model-error notice
-  // path in session-thinking.ts:922 expects sourceParticipantType="workspace_member"
-  // to come with sourceParticipantId = workspace_members.id (NOT a
-  // conversation_participants.id) so it can re-query the participant
-  // via getConversationParticipant({workspaceMemberId}).
   const { enqueueSessionWakeup } = await import("../session/runtime.js")
-  await enqueueSessionWakeup({
-    sessionId: retrySessionId,
-    actorId,
-    workspaceId: params.workspaceId,
-    sourceType: "user_message",
-    sourceItemId: params.itemId,
-    sourceParticipantType: CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER,
-    sourceParticipantId: identity.workspaceMemberId,
-    sourceName: access.participant.userName ?? "user",
-    summary: "user requested retry of failed assistant turn",
-    metadata: {
-      source: "chat.message_retry",
-      retryItemId: params.itemId,
+  return retryAssistantMessageUseCase(
+    {
+      workspaceId: params.workspaceId,
+      workspaceMemberId: identity.workspaceMemberId,
       conversationId: params.conversationId,
-      retryByParticipantId: access.participant.id,
+      itemId: params.itemId,
     },
-    trigger: "user_message",
-  })
-
-  return {
-    retryEnqueued: true,
-    sessionId: retrySessionId,
-    actorId,
-  }
+    { enqueueSessionWakeup, getConversationFeedItemById }
+  )
 }
