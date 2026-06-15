@@ -23,6 +23,14 @@ import type {
   ChatConversationEnvelopeRecord,
   ChatConversationRecord,
 } from "./presenter.js"
+import { getWorkspaceMemberIdentityOrThrow } from "./identity.js"
+import {
+  ensureConversationParticipantUseCase,
+  listConversationParticipantsUseCase,
+} from "./participant-roster.js"
+import { participantRowToChatParticipantSummary } from "./participant-projection.js"
+import { loadChatConversationView } from "./conversation-view-read.js"
+import { syncConversationUpsertForWorkspaceMembers } from "./conversation-upsert-sync.js"
 
 type ParticipantKind = ConversationParticipantType
 
@@ -314,4 +322,45 @@ export async function addChatConversationParticipantsUseCase(
     }
     return { conversation }
   })
+}
+
+function chatAddParticipantsDeps(): AddChatConversationParticipantsDeps {
+  return {
+    ensureConversationParticipant: ensureConversationParticipantUseCase,
+    listConversationParticipants: listConversationParticipantsUseCase,
+    loadConversationView: loadChatConversationView,
+    participantToSummary: participantRowToChatParticipantSummary,
+    syncConversationUpsert: syncConversationUpsertForWorkspaceMembers,
+  }
+}
+
+export async function addConversationParticipants(
+  params: AddConversationParticipantsInput
+) {
+  return addConversationParticipantsUseCase(params, chatAddParticipantsDeps())
+}
+
+export async function addChatConversationParticipants(params: {
+  workspaceId: string
+  userId: string
+  conversationId: string
+  workspaceMemberIds?: string[]
+  actorIds?: string[]
+  remoteAgentIds?: string[]
+}): Promise<ChatConversationEnvelopeRecord> {
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  return addChatConversationParticipantsUseCase(
+    {
+      workspaceId: params.workspaceId,
+      workspaceMemberId: identity.workspaceMemberId,
+      conversationId: params.conversationId,
+      workspaceMemberIds: params.workspaceMemberIds,
+      actorIds: params.actorIds,
+      remoteAgentIds: params.remoteAgentIds,
+    },
+    chatAddParticipantsDeps()
+  )
 }

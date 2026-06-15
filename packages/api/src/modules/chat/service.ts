@@ -31,7 +31,6 @@ export {
 } from "./sync-events.js"
 import {
   type ChatConversationCreateRecord,
-  type ChatConversationEnvelopeRecord,
   type ChatConversationRecord,
 } from "./presenter.js"
 import { createChatError } from "./errors.js"
@@ -47,10 +46,10 @@ export { loadParticipantById } from "./remove-participant.js"
 export { patchChatConversation } from "./patch-conversation.js"
 export { retryAssistantMessage } from "./retry-message.js"
 import {
-  addChatConversationParticipantsUseCase,
-  addConversationParticipantsUseCase,
-  type AddChatConversationParticipantsDeps,
+  addChatConversationParticipants,
+  addConversationParticipants,
 } from "./add-participants.js"
+export { addChatConversationParticipants, addConversationParticipants }
 import {
   createConversationForWorkspaceMemberUseCase,
   createConversationRecordUseCase,
@@ -181,16 +180,6 @@ export async function resolveConversationReplyRef(params: {
   )
 }
 
-function chatAddParticipantsDeps(): AddChatConversationParticipantsDeps {
-  return {
-    ensureConversationParticipant,
-    listConversationParticipants,
-    loadConversationView: loadChatConversationView,
-    participantToSummary: participantRowToChatParticipantSummary,
-    syncConversationUpsert: syncConversationUpsertForWorkspaceMembers,
-  }
-}
-
 function chatConversationForWorkspaceMemberDeps(): CreateConversationForWorkspaceMemberDeps {
   return {
     ensureConversationParticipant,
@@ -276,17 +265,6 @@ export async function ensureConversationParticipant(params: {
   return ensureConversationParticipantUseCase(params)
 }
 
-export async function addConversationParticipants(params: {
-  workspaceId: string
-  conversationId: string
-  workspaceMemberIds?: string[]
-  actorIds?: string[]
-  remoteAgentIds?: string[]
-  queryable?: Executor
-}) {
-  return addConversationParticipantsUseCase(params, chatAddParticipantsDeps())
-}
-
 export async function listConversationRealtimeRecipients(
   conversationId: string,
   queryable: Executor = rootQueryable()
@@ -322,31 +300,6 @@ export async function createChatConversation(params: {
       metadata: params.metadata,
     },
     chatCreateConversationDeps()
-  )
-}
-
-export async function addChatConversationParticipants(params: {
-  workspaceId: string
-  userId: string
-  conversationId: string
-  workspaceMemberIds?: string[]
-  actorIds?: string[]
-  remoteAgentIds?: string[]
-}): Promise<ChatConversationEnvelopeRecord> {
-  const identity = await getWorkspaceMemberIdentityOrThrow(
-    params.workspaceId,
-    params.userId
-  )
-  return addChatConversationParticipantsUseCase(
-    {
-      workspaceId: params.workspaceId,
-      workspaceMemberId: identity.workspaceMemberId,
-      conversationId: params.conversationId,
-      workspaceMemberIds: params.workspaceMemberIds,
-      actorIds: params.actorIds,
-      remoteAgentIds: params.remoteAgentIds,
-    },
-    chatAddParticipantsDeps()
   )
 }
 
