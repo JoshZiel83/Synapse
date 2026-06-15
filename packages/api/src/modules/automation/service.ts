@@ -49,7 +49,6 @@ import {
   validateAutomationRuleCreatePayload,
 } from "@synapse/shared/automation"
 import { decrypt, encrypt } from "../../infrastructure/crypto/index.js"
-import { sql } from "kysely"
 import { type Executor } from "../../infrastructure/database/kysely.js"
 import {
   appendAutomationAuditLog,
@@ -59,6 +58,7 @@ import {
   existsAutomationExecution,
   insertAutomationDeliveryRow,
   insertAutomationEventSourceRow,
+  insertAutomationTriggerRow,
   insertAutomationExecutionTarget,
   insertAutomationPolicyRow,
   insertAutomationRuleRow,
@@ -79,6 +79,7 @@ import {
   normalizeAutomationTriggerRow,
   normalizeAutomationWebhookEndpointRow,
   pauseActiveAutomationRule,
+  persistAutomationDeliveryTargets,
   resolveQueryRunner,
   revokeAutomationEventSourceAccessBindingById,
   runnerFor,
@@ -100,6 +101,7 @@ import {
   updateAutomationPolicyRow,
   updateAutomationRuleError,
   updateAutomationRuleRow,
+  updateAutomationTriggerRow,
   updateAutomationTriggerSchedule,
   updateIntegrationBindingExternalSubscriptionId,
   updateIntegrationBindingTargetLabel,
@@ -1563,7 +1565,6 @@ async function ensureAutomationIntegrationBinding(params: {
           integrationTargetLabel: targetLabel,
         }),
         createdByWorkspaceMemberId: params.creator.workspaceMemberId || null,
-        createdAt: sql`NOW()`,
       })
     }
 
@@ -1582,7 +1583,6 @@ async function ensureAutomationIntegrationBinding(params: {
         integrationProvider: params.integration.provider,
         integrationTargetKind: params.integration.targetKind,
       }),
-      createdAt: sql`NOW()`,
     })
   })
 
@@ -1837,7 +1837,6 @@ async function createIntegrationAutomationEventSource(
           ...(template.metadata || {}),
           ...(input.metadata || {}),
         }),
-        createdAt: sql`NOW()`,
       },
       trx
     )
@@ -1988,7 +1987,6 @@ export async function createAutomationEventSource(
     createdByActorId: creator.actorId || null,
     createdBySessionId: creator.sessionId || null,
     metadata: JSON.stringify(input.metadata || {}),
-    createdAt: sql`NOW()`,
   })
 
   await appendAutomationAuditLog({
@@ -2240,24 +2238,6 @@ async function listIntegrationEventSourcesByWebhookPathToken(
     [pathToken]
   )
   return result.rows
-}
-
-async function persistAutomationTargets(
-  executor: Executor,
-  tableName: "automation_delivery_targets",
-  ruleId: string,
-  targetParticipantIds: string[]
-) {
-  await runnerFor(executor).run(`DELETE FROM ${tableName} WHERE rule_id = $1`, [
-    ruleId,
-  ])
-  for (const targetParticipantId of targetParticipantIds) {
-    await runnerFor(executor).run(
-      `INSERT INTO ${tableName} (id, rule_id, target_participant_id, created_at)
-       VALUES ($1, $2, $3, NOW())`,
-      [uuidv4(), ruleId, targetParticipantId]
-    )
-  }
 }
 
 async function expireAutomationRules(params: {
@@ -2805,7 +2785,6 @@ export async function createAutomationRule(
       createdByParticipantId: creatorParticipant.id,
       createdBySessionId: creator.sessionId || null,
       metadata: JSON.stringify(input.metadata || {}),
-      createdAt: sql`NOW()`,
     })
 
     await insertAutomationPolicyRow(trx, {
@@ -2817,32 +2796,9 @@ export async function createAutomationRule(
       completionStatus: normalizedPolicy.completion_status,
       completedAt: normalizedPolicy.completed_at,
       metadata: JSON.stringify(normalizedPolicy.metadata),
-      createdAt: sql`NOW()`,
     })
 
-    await runnerFor(trx).run(
-      `INSERT INTO automation_triggers
-         (rule_id, trigger_kind, source_kind, event_source_id, source_locator, match_key, matcher, schedule_kind, schedule_expr,
-          schedule_timezone, interval_seconds, starts_at, next_fire_at, last_fired_at, metadata, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), NOW())`,
-      [
-        ruleId,
-        normalizedTrigger.trigger_kind,
-        normalizedTrigger.source_kind,
-        normalizedTrigger.event_source_id,
-        normalizedTrigger.source_locator,
-        normalizedTrigger.match_key,
-        JSON.stringify(normalizedTrigger.matcher),
-        normalizedTrigger.schedule_kind,
-        normalizedTrigger.schedule_expr,
-        normalizedTrigger.schedule_timezone,
-        normalizedTrigger.interval_seconds,
-        normalizedTrigger.starts_at,
-        normalizedTrigger.next_fire_at,
-        normalizedTrigger.last_fired_at,
-        JSON.stringify(normalizedTrigger.metadata),
-      ]
-    )
+    await insertAutomationTriggerRow(trx, ruleId, normalizedTrigger)
 
     await insertAutomationDeliveryRow(trx, {
       ruleId: ruleId,
@@ -2851,12 +2807,10 @@ export async function createAutomationRule(
       messageBlocks: JSON.stringify(normalizedDelivery.message_blocks),
       targetPolicy: normalizedDelivery.target_policy,
       metadata: JSON.stringify(normalizedDelivery.metadata),
-      createdAt: sql`NOW()`,
     })
 
-    await persistAutomationTargets(
+    await persistAutomationDeliveryTargets(
       trx,
-      "automation_delivery_targets",
       ruleId,
       normalizedDelivery.targetParticipantIds
     )
@@ -3021,39 +2975,7 @@ export async function updateAutomationRule(
       metadata: JSON.stringify(normalizedPolicy.metadata),
     })
 
-    await runnerFor(trx).run(
-      `UPDATE automation_triggers
-       SET trigger_kind = $2,
-           source_kind = $3,
-           event_source_id = $4,
-           source_locator = $5,
-           match_key = $6,
-           matcher = $7,
-           schedule_kind = $8,
-           schedule_expr = $9,
-           schedule_timezone = $10,
-           interval_seconds = $11,
-           starts_at = $12,
-           next_fire_at = $13,
-           metadata = $14
-       WHERE rule_id = $1`,
-      [
-        ruleId,
-        normalizedTrigger.trigger_kind,
-        normalizedTrigger.source_kind,
-        normalizedTrigger.event_source_id,
-        normalizedTrigger.source_locator,
-        normalizedTrigger.match_key,
-        JSON.stringify(normalizedTrigger.matcher),
-        normalizedTrigger.schedule_kind,
-        normalizedTrigger.schedule_expr,
-        normalizedTrigger.schedule_timezone,
-        normalizedTrigger.interval_seconds,
-        normalizedTrigger.starts_at,
-        normalizedTrigger.next_fire_at,
-        JSON.stringify(normalizedTrigger.metadata),
-      ]
-    )
+    await updateAutomationTriggerRow(trx, ruleId, normalizedTrigger)
 
     await updateAutomationDeliveryRow(trx, ruleId, {
       messageText: normalizedDelivery.message_text,
@@ -3063,9 +2985,8 @@ export async function updateAutomationRule(
       metadata: JSON.stringify(normalizedDelivery.metadata),
     })
 
-    await persistAutomationTargets(
+    await persistAutomationDeliveryTargets(
       trx,
-      "automation_delivery_targets",
       ruleId,
       normalizedDelivery.targetParticipantIds
     )

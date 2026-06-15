@@ -271,6 +271,15 @@ export function resolveQueryRunner(executor?: Executor): QueryRunner {
 export const runQuery: SqlRunner = (text, params) =>
   resolveQueryRunner().run(text, params)
 
+function withCreatedAt(
+  values: Record<string, unknown>
+): Record<string, unknown> {
+  return {
+    ...values,
+    createdAt: sql`NOW()`,
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Transaction wrapper (so the service never imports withDbTransaction directly)
 // ---------------------------------------------------------------------------
@@ -505,7 +514,7 @@ export async function insertAutomationRuleRow(
 ) {
   await run
     .insertInto("automationRules")
-    .values(values as never)
+    .values(withCreatedAt(values) as never)
     .execute()
 }
 
@@ -529,7 +538,7 @@ export async function insertAutomationPolicyRow(
 ) {
   await run
     .insertInto("automationPolicies")
-    .values(values as never)
+    .values(withCreatedAt(values) as never)
     .execute()
 }
 
@@ -553,7 +562,7 @@ export async function insertAutomationDeliveryRow(
 ) {
   await run
     .insertInto("automationDeliveries")
-    .values(values as never)
+    .values(withCreatedAt(values) as never)
     .execute()
 }
 
@@ -567,6 +576,87 @@ export async function updateAutomationDeliveryRow(
     .updateTable("automationDeliveries")
     .set(values as never)
     .where("ruleId", "=", ruleId)
+    .execute()
+}
+
+export async function insertAutomationTriggerRow(
+  run: Executor,
+  ruleId: string,
+  trigger: Omit<AutomationTriggerRow, "rule_id">
+) {
+  await run
+    .insertInto("automationTriggers")
+    .values({
+      ruleId,
+      triggerKind: trigger.trigger_kind,
+      sourceKind: trigger.source_kind,
+      eventSourceId: trigger.event_source_id,
+      sourceLocator: trigger.source_locator,
+      matchKey: trigger.match_key,
+      matcher: JSON.stringify(trigger.matcher),
+      scheduleKind: trigger.schedule_kind,
+      scheduleExpr: trigger.schedule_expr,
+      scheduleTimezone: trigger.schedule_timezone,
+      intervalSeconds: trigger.interval_seconds,
+      startsAt: trigger.starts_at,
+      nextFireAt: trigger.next_fire_at,
+      lastFiredAt: trigger.last_fired_at,
+      metadata: JSON.stringify(trigger.metadata),
+      createdAt: sql`NOW()`,
+      updatedAt: sql`NOW()`,
+    } as never)
+    .execute()
+}
+
+export async function updateAutomationTriggerRow(
+  run: Executor,
+  ruleId: string,
+  trigger: Omit<AutomationTriggerRow, "rule_id" | "last_fired_at">
+) {
+  await run
+    .updateTable("automationTriggers")
+    .set({
+      triggerKind: trigger.trigger_kind,
+      sourceKind: trigger.source_kind,
+      eventSourceId: trigger.event_source_id,
+      sourceLocator: trigger.source_locator,
+      matchKey: trigger.match_key,
+      matcher: JSON.stringify(trigger.matcher),
+      scheduleKind: trigger.schedule_kind,
+      scheduleExpr: trigger.schedule_expr,
+      scheduleTimezone: trigger.schedule_timezone,
+      intervalSeconds: trigger.interval_seconds,
+      startsAt: trigger.starts_at,
+      nextFireAt: trigger.next_fire_at,
+      metadata: JSON.stringify(trigger.metadata),
+    } as never)
+    .where("ruleId", "=", ruleId)
+    .execute()
+}
+
+export async function persistAutomationDeliveryTargets(
+  run: Executor,
+  ruleId: string,
+  targetParticipantIds: string[]
+) {
+  await run
+    .deleteFrom("automationDeliveryTargets")
+    .where("ruleId", "=", ruleId)
+    .execute()
+
+  if (targetParticipantIds.length === 0) {
+    return
+  }
+
+  await run
+    .insertInto("automationDeliveryTargets")
+    .values(
+      targetParticipantIds.map((targetParticipantId) => ({
+        ruleId,
+        targetParticipantId,
+        createdAt: sql`NOW()`,
+      })) as never
+    )
     .execute()
 }
 
@@ -738,7 +828,7 @@ export async function insertAutomationEventSourceRow(
 ) {
   await run
     .insertInto("automationEventSources")
-    .values(values as never)
+    .values(withCreatedAt(values) as never)
     .execute()
 }
 
@@ -844,7 +934,7 @@ export async function insertIntegrationBindingRow(
 ) {
   await run
     .insertInto("automationIntegrationBindings")
-    .values(values as never)
+    .values(withCreatedAt(values) as never)
     .execute()
 }
 
@@ -858,7 +948,7 @@ export async function insertWebhookEndpointRow(
 ) {
   await run
     .insertInto("automationWebhookEndpoints")
-    .values(values as never)
+    .values(withCreatedAt(values) as never)
     .execute()
 }
 
