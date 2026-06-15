@@ -9,7 +9,6 @@ import {
   CONVERSATION_ITEM_TYPES,
   CONVERSATION_KINDS,
   CONVERSATION_MESSAGE_SUBTYPE,
-  CONVERSATION_PARTICIPANT_ROLE_KEY,
   CONVERSATION_PARTICIPANT_STATE,
   CONVERSATION_PARTICIPANT_TYPE,
   normalizeCanonicalContentBlocks,
@@ -39,11 +38,6 @@ import type {
   TaskSummary,
 } from "@synapse/shared/types"
 import { type Executor } from "../../infrastructure/database/kysely.js"
-import { SUBJECT_KIND } from "@synapse/shared"
-import {
-  upsertAccessSubject,
-  upsertAccessSubjectOn,
-} from "../access/subject-registry.js"
 import { canonicalContentBlocksToDraftParts } from "./message-content.js"
 import { requireConversationAccess } from "./conversation-access.js"
 import { ensureClientInstance } from "./client-instances.js"
@@ -60,20 +54,16 @@ export { broadcastTypingState } from "./typing.js"
 import {
   chatRootExecutor,
   conversationItemHasTargets,
-  conversationParticipantExists,
   getChatConversationBaseRow,
   getConversationDeviceState,
   getConversationKind,
   getConversationRecord,
   getLastVisibleConversationItemRow,
   getConversationParticipantReadState,
-  getConversationParticipantStateBySubject,
   getConversationItemRowById,
-  getTransportAddressSubjectRow,
   getVisibleConversationReplyRefRow,
   getVisibleConversationReplyTargetRow,
   getWorkspaceMemberSyncCursor,
-  insertConversationParticipantRecord,
   listChatConversationBaseRows,
   listChatConversationParticipantRows,
   listContextConversationItemRowsForParticipant,
@@ -86,8 +76,6 @@ import {
   listMentionedParticipantIdsForConversationItem,
   listVisibleConversationMessageRows,
   listWorkspaceMemberSyncEventRows,
-  reactivateConversationParticipant,
-  upsertConversationParticipantAddress,
   withChatRepeatableRead,
   withChatTransaction,
   type ChatConversationItemRow,
@@ -193,6 +181,12 @@ export { conversationItemDetailToFeedItem } from "./conversation-feed-mapper.js"
 import { type ConversationItemDetail } from "./conversation-item-detail.js"
 import { buildConversationItemDetail } from "./conversation-item-detail-builder.js"
 import { buildConversationReplyRefs } from "./conversation-reply-ref.js"
+import {
+  ensureConversationParticipantUseCase,
+  getConversationParticipantUseCase,
+  insertParticipant,
+  listConversationParticipantsUseCase,
+} from "./participant-roster.js"
 import { enrichTaskForUser } from "../tasks/service.js"
 import {
   getConversationRuntimeMap,
@@ -684,126 +678,6 @@ async function syncConversationUpsertForWorkspaceMembers(
   )
 }
 
-/**
- * Resolve the access_subjects.id for a participant of the given kind, minting
- * the subject if needed. Shared by `insertParticipant` (write) and
- * `ensureConversationParticipant` (dedup lookup) so both agree on the subject
- * identity — dedup is keyed on (conversation_id, subject_id), not display_name.
- */
-async function resolveParticipantSubjectId(
-  queryable: Executor,
-  params: {
-    participantType: ParticipantKind
-    workspaceMemberId?: string
-    actorId?: string
-    remoteAgentId?: string
-    transportAddressId?: string
-  }
-): Promise<string> {
-  if (
-    params.participantType === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
-    params.workspaceMemberId
-  ) {
-    return upsertAccessSubjectOn(queryable, {
-      kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-      memberId: params.workspaceMemberId,
-    })
-  }
-  if (
-    params.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
-    params.actorId
-  ) {
-    return upsertAccessSubjectOn(queryable, {
-      kind: SUBJECT_KIND.ACTOR,
-      actorId: params.actorId,
-    })
-  }
-  if (
-    params.participantType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT &&
-    params.remoteAgentId
-  ) {
-    return upsertAccessSubjectOn(queryable, {
-      kind: SUBJECT_KIND.REMOTE_AGENT,
-      remoteAgentId: params.remoteAgentId,
-    })
-  }
-  // external participant. Require a transport identity (no throwaway).
-  if (!params.transportAddressId) {
-    throw new Error(
-      "resolveParticipantSubjectId: external participant requires transportAddressId"
-    )
-  }
-  const addr = await getTransportAddressSubjectRow(
-    queryable,
-    params.transportAddressId
-  )
-  if (!addr) {
-    throw new Error(
-      `resolveParticipantSubjectId: transport_addresses(${params.transportAddressId}) not found`
-    )
-  }
-  if (addr.addressType !== "user") {
-    throw new Error(
-      `resolveParticipantSubjectId: address ${params.transportAddressId} is not a user address`
-    )
-  }
-  if (addr.workspaceMemberId) {
-    throw new Error(
-      `resolveParticipantSubjectId: address ${params.transportAddressId} is linked to a workspace member; add it as a member, not an external participant`
-    )
-  }
-  return upsertAccessSubjectOn(queryable, {
-    kind: SUBJECT_KIND.EXTERNAL,
-    workspaceId: addr.workspaceId,
-    transportAddressId: params.transportAddressId,
-  })
-}
-
-async function insertParticipant(
-  queryable: Executor,
-  params: {
-    conversationId: string
-    participantType: ParticipantKind
-    workspaceMemberId?: string
-    actorId?: string
-    remoteAgentId?: string
-    actorJoinVersionId?: string
-    displayName?: string
-    roleKey: string
-    metadata?: Record<string, unknown>
-    // The transport identity for an external participant: mints the first-class
-    // subject AND is bound to the participant via conversation_participant_addresses.
-    transportAddressId?: string
-    // Optional pre-resolved subject id (from resolveParticipantSubjectId) so
-    // the dedup lookup and the insert agree on the same subject without
-    // resolving twice.
-    subjectId?: string
-  }
-) {
-  const participantId = crypto.randomUUID()
-  // Every participant gets a real subject_id. Workspace_member / actor /
-  // remote_agent map to their canonical access_subjects rows; external maps to
-  // a first-class, workspace-rooted subject keyed by its transport_address
-  // (deduped across conversations). There is no throwaway/anonymous escape
-  // hatch — an external participant must carry a transport identity.
-  const participantSubjectId =
-    params.subjectId ?? (await resolveParticipantSubjectId(queryable, params))
-  await insertConversationParticipantRecord(queryable, {
-    participantId,
-    conversationId: params.conversationId,
-    subjectId: participantSubjectId,
-    actorJoinVersionId: params.actorJoinVersionId,
-    displayName: params.displayName,
-    roleKey: params.roleKey,
-    metadata: params.metadata,
-    transportAddressId: params.transportAddressId,
-  })
-
-  return {
-    id: participantId,
-  }
-}
-
 function chatAddParticipantsDeps(): AddChatConversationParticipantsDeps {
   return {
     ensureConversationParticipant,
@@ -992,11 +866,7 @@ export async function listConversationParticipants(
   conversationId: string,
   options?: { useProfileSnapshot?: boolean; queryable?: Executor }
 ) {
-  return listConversationParticipantRows(
-    options?.queryable ?? rootQueryable(),
-    [conversationId],
-    { useProfileSnapshot: options?.useProfileSnapshot }
-  )
+  return listConversationParticipantsUseCase(conversationId, options)
 }
 
 export async function getConversationParticipant(params: {
@@ -1008,40 +878,7 @@ export async function getConversationParticipant(params: {
   transportAddressId?: string
   queryable?: Executor
 }) {
-  if (params.participantId) {
-    const exists = await conversationParticipantExists(
-      params.queryable ?? rootQueryable(),
-      {
-        conversationId: params.conversationId,
-        participantId: params.participantId,
-      }
-    )
-    if (!exists) {
-      return null
-    }
-  }
-
-  const participants = await listConversationParticipants(
-    params.conversationId,
-    {
-      queryable: params.queryable,
-    }
-  )
-  return (
-    participants.find((participant) =>
-      params.participantId
-        ? participant.id === params.participantId
-        : params.actorId
-          ? participant.actorId === params.actorId
-          : params.remoteAgentId
-            ? participant.remoteAgentId === params.remoteAgentId
-            : params.workspaceMemberId
-              ? participant.workspaceMemberId === params.workspaceMemberId
-              : params.transportAddressId
-                ? participant.transportAddressId === params.transportAddressId
-                : false
-    ) ?? null
-  )
+  return getConversationParticipantUseCase(params)
 }
 
 export async function ensureConversationParticipant(params: {
@@ -1057,95 +894,7 @@ export async function ensureConversationParticipant(params: {
   transportAddressId?: string
   queryable?: Executor
 }) {
-  const queryable = params.queryable ?? rootQueryable()
-  const conversation = await getConversation(params.conversationId, queryable)
-  if (!conversation) {
-    throw new Error("Conversation not found")
-  }
-
-  if (
-    params.participantType === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
-    !params.workspaceMemberId
-  ) {
-    throw new Error("workspaceMemberId is required for workspace participants")
-  }
-  if (
-    params.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
-    !params.actorId
-  ) {
-    throw new Error("actorId is required for actor participants")
-  }
-  if (
-    params.participantType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT &&
-    !params.remoteAgentId
-  ) {
-    throw new Error("remoteAgentId is required for remote agent participants")
-  }
-
-  // F3: resolve the target subject_id up front and dedup by
-  // (conversation_id, subject_id) — the canonical identity — instead of by
-  // display_name (which let a renamed external participant insert a duplicate
-  // and let two different externals with the same name collide).
-  const targetSubjectId = await resolveParticipantSubjectId(queryable, {
-    participantType: params.participantType,
-    workspaceMemberId: params.workspaceMemberId,
-    actorId: params.actorId,
-    remoteAgentId: params.remoteAgentId,
-    transportAddressId: params.transportAddressId,
-  })
-
-  const existing = await getConversationParticipantStateBySubject(queryable, {
-    conversationId: params.conversationId,
-    subjectId: targetSubjectId,
-  })
-
-  const existingId = existing?.id
-  if (existingId) {
-    // P1b: subject_id is fixed at insert time. The existing-participant path
-    // only refreshes presentation/state fields; the workspace_member_id /
-    // actor_id / remote_agent_id columns no longer exist on this table.
-    await reactivateConversationParticipant(queryable, {
-      participantId: existingId,
-      actorJoinVersionId: params.actorJoinVersionId,
-      displayName: params.displayName,
-      roleKey: params.roleKey ?? CONVERSATION_PARTICIPANT_ROLE_KEY.MEMBER,
-      metadata: params.metadata,
-    })
-
-    if (params.transportAddressId) {
-      await upsertConversationParticipantAddress(
-        queryable,
-        existingId,
-        params.transportAddressId
-      )
-    }
-
-    return getConversationParticipant({
-      conversationId: params.conversationId,
-      participantId: existingId,
-      queryable,
-    })
-  }
-
-  const inserted = await insertParticipant(queryable, {
-    conversationId: params.conversationId,
-    participantType: params.participantType,
-    workspaceMemberId: params.workspaceMemberId,
-    actorId: params.actorId,
-    remoteAgentId: params.remoteAgentId,
-    actorJoinVersionId: params.actorJoinVersionId,
-    displayName: params.displayName,
-    roleKey: params.roleKey ?? CONVERSATION_PARTICIPANT_ROLE_KEY.MEMBER,
-    metadata: params.metadata,
-    transportAddressId: params.transportAddressId,
-    subjectId: targetSubjectId,
-  })
-
-  return getConversationParticipant({
-    conversationId: params.conversationId,
-    participantId: inserted.id,
-    queryable,
-  })
+  return ensureConversationParticipantUseCase(params)
 }
 
 export async function addConversationParticipants(params: {
