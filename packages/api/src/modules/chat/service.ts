@@ -10,7 +10,6 @@ import {
   CONVERSATION_FEED_MESSAGE_TYPE,
   CONVERSATION_KINDS,
   CONVERSATION_MESSAGE_SUBTYPE,
-  CONVERSATION_MESSAGE_SUBTYPES,
   CONVERSATION_PARTICIPANT_ROLE_KEY,
   CONVERSATION_PARTICIPANT_STATE,
   CONVERSATION_PARTICIPANT_TYPE,
@@ -38,12 +37,8 @@ import type {
   ConversationEntityRef,
   ConversationEventContextPolicy,
   ConversationEventTimelinePolicy,
-  ConversationFeedEventItem,
-  ConversationFeedItemSubtype,
   ConversationFeedEventPayloadMap,
   ConversationFeedEventType,
-  ConversationFeedItem,
-  ConversationFeedMessageItem,
   ConversationMessageTransportDelivery,
   TaskSummary,
 } from "@synapse/shared/types"
@@ -194,6 +189,16 @@ import {
   participantRowToEntityRef,
 } from "./participant-projection.js"
 export { isFeedItemVisibleToWorkspaceMember } from "./conversation-feed-visibility.js"
+import { conversationItemDetailToFeedItem } from "./conversation-feed-mapper.js"
+export { conversationItemDetailToFeedItem } from "./conversation-feed-mapper.js"
+import {
+  assertConversationMessageSubtype,
+  normalizeConversationItemSubtype,
+  type ConversationEventItemDetail,
+  type ConversationItemDetail,
+  type ConversationItemDetailBase,
+  type ConversationNonEventItemDetail,
+} from "./conversation-item-detail.js"
 import { enrichTaskForUser } from "../tasks/service.js"
 import {
   getConversationRuntimeMap,
@@ -206,58 +211,10 @@ type ItemScope = (typeof CONVERSATION_ITEM_SCOPES)[number]
 type ItemSurface = (typeof CONVERSATION_ITEM_SURFACES)[number]
 type ItemType = (typeof CONVERSATION_ITEM_TYPES)[number]
 type ItemRole = (typeof CONVERSATION_ITEM_ROLES)[number]
-type NonEventItemType = Exclude<ItemType, "event">
-type MessageLikeItemType = Exclude<NonEventItemType, "summary">
 
 type ParticipantRow = ChatParticipantRow
 
 type ItemRow = ChatConversationItemRow
-
-interface ConversationItemDetailBase {
-  id: string
-  conversationId: string
-  sessionId?: string
-  turnId?: string
-  sequence: number
-  scope: ItemScope
-  surface: ItemSurface
-  role: ItemRole
-  authorParticipantId?: string
-  authorParticipant?: ParticipantRow
-  restrictedAudienceParticipants: ParticipantRow[]
-  contextTargets: ParticipantRow[]
-  contentBlocks: CanonicalContentBlock[]
-  metadata: Record<string, unknown>
-  replyToItemId?: string
-  replyTo?: ConversationReplyRef
-  causedByItemId?: string
-  createdAt: Timestamp
-  clientMessageId?: string
-}
-
-export type ConversationNonEventItemDetail =
-  | (ConversationItemDetailBase & {
-      itemType: MessageLikeItemType
-      subtype: ConversationMessageSubtype
-    })
-  | (ConversationItemDetailBase & {
-      itemType: typeof CONVERSATION_ITEM_TYPE.SUMMARY
-      subtype: typeof CONVERSATION_FEED_MESSAGE_TYPE.SUMMARY
-    })
-
-export interface ConversationEventItemDetail<
-  T extends ConversationFeedEventType = ConversationFeedEventType,
-> extends ConversationItemDetailBase {
-  itemType: "event"
-  subtype: T
-  eventPayload: ConversationFeedEventPayloadMap[T]
-  eventTimelinePolicy?: ConversationEventTimelinePolicy
-  eventContextPolicy?: ConversationEventContextPolicy
-}
-
-export type ConversationItemDetail =
-  | ConversationNonEventItemDetail
-  | ConversationEventItemDetail
 
 type SendMessageInput = {
   workspaceId: string
@@ -276,53 +233,6 @@ function toNumber(value: unknown): number {
     }
   }
   return 0
-}
-
-const CONVERSATION_MESSAGE_SUBTYPE_SET = new Set<ConversationMessageSubtype>(
-  CONVERSATION_MESSAGE_SUBTYPES
-)
-
-function isConversationMessageSubtype(
-  value: string
-): value is ConversationMessageSubtype {
-  return CONVERSATION_MESSAGE_SUBTYPE_SET.has(
-    value as ConversationMessageSubtype
-  )
-}
-
-function assertConversationMessageSubtype(
-  value: string
-): asserts value is ConversationMessageSubtype {
-  if (!isConversationMessageSubtype(value)) {
-    throw new Error(`Unsupported conversation message subtype: ${value}`)
-  }
-}
-
-function normalizeConversationItemSubtype(
-  itemType: ItemType,
-  subtype: string,
-  itemId: string
-): ConversationFeedItemSubtype {
-  if (itemType === CONVERSATION_ITEM_TYPE.EVENT) {
-    if (!isConversationEventType(subtype)) {
-      throw new Error(
-        `Unsupported conversation event subtype ${subtype} for item ${itemId}`
-      )
-    }
-    return subtype
-  }
-
-  if (itemType === CONVERSATION_ITEM_TYPE.SUMMARY) {
-    if (subtype !== CONVERSATION_FEED_MESSAGE_TYPE.SUMMARY) {
-      throw new Error(
-        `Unsupported conversation summary subtype ${subtype} for item ${itemId}`
-      )
-    }
-    return subtype
-  }
-
-  assertConversationMessageSubtype(subtype)
-  return subtype
 }
 
 function asConversationFeedEventPayload<T extends ConversationFeedEventType>(
@@ -1596,28 +1506,6 @@ async function buildChatConversationItems(
   )
 }
 
-function conversationEventDetailToFeedItem<T extends ConversationFeedEventType>(
-  item: ConversationEventItemDetail<T>,
-  author: ConversationEntityRef | undefined,
-  restrictedAudience: ConversationEntityRef[]
-): ConversationFeedEventItem<T> {
-  return {
-    kind: "event",
-    itemId: item.id,
-    conversationId: item.conversationId,
-    sequence: item.sequence,
-    sessionId: item.sessionId,
-    turnId: item.turnId,
-    author,
-    restrictedAudience:
-      restrictedAudience.length > 0 ? restrictedAudience : undefined,
-    causedByItemId: item.causedByItemId,
-    eventType: item.subtype,
-    payload: item.eventPayload,
-    createdAt: assertIsoInstant(item.createdAt),
-  } as ConversationFeedEventItem<T>
-}
-
 async function loadTransportDeliveriesForItems(
   queryable: Executor,
   itemIds: string[]
@@ -1627,49 +1515,6 @@ async function loadTransportDeliveriesForItems(
     itemIds,
     chatConversationTransportDeps()
   )
-}
-
-export function conversationItemDetailToFeedItem(
-  item: ConversationItemDetail,
-  transportDeliveries: ConversationMessageTransportDelivery[] = []
-): ConversationFeedItem {
-  const author = participantRowToEntityRef(item.authorParticipant)
-  const restrictedAudience = item.restrictedAudienceParticipants
-    .map((participant) => participantRowToEntityRef(participant))
-    .filter((participant): participant is ConversationEntityRef =>
-      Boolean(participant)
-    )
-
-  if (item.itemType === CONVERSATION_ITEM_TYPE.EVENT) {
-    return conversationEventDetailToFeedItem(item, author, restrictedAudience)
-  }
-
-  if (item.itemType !== "summary") {
-    assertConversationMessageSubtype(item.subtype)
-  }
-
-  return {
-    kind: "message",
-    itemId: item.id,
-    conversationId: item.conversationId,
-    sequence: item.sequence,
-    sessionId: item.sessionId,
-    turnId: item.turnId,
-    role: item.role === "tool" ? "system" : item.role,
-    messageType: item.subtype,
-    author,
-    replyToItemId: item.replyToItemId,
-    replyTo: item.replyTo,
-    restrictedAudience:
-      restrictedAudience.length > 0 ? restrictedAudience : undefined,
-    content: extractText(item.contentBlocks),
-    contentBlocks: item.contentBlocks,
-    metadata: item.metadata,
-    transport: mapConversationTransportContext(item.metadata),
-    transportDeliveries,
-    createdAt: assertIsoInstant(item.createdAt),
-    clientMessageId: item.clientMessageId,
-  } satisfies ConversationFeedMessageItem
 }
 
 export async function getConversationFeedItemById(
