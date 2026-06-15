@@ -1,6 +1,5 @@
 import {
   buildConversationMessageRef,
-  CONVERSATION_KINDS,
   parseConversationMessageRef,
   type ConversationParticipantType,
 } from "@synapse/shared"
@@ -29,10 +28,7 @@ export {
   appendWorkspaceMemberSyncEvent,
   appendWorkspaceMemberSyncEventInTransaction,
 } from "./sync-events.js"
-import {
-  type ChatConversationCreateRecord,
-  type ChatConversationRecord,
-} from "./presenter.js"
+import { type ChatConversationRecord } from "./presenter.js"
 import { createChatError } from "./errors.js"
 export { isChatServiceError, type ChatServiceError } from "./errors.js"
 import { getWorkspaceMemberIdentityOrThrow } from "./identity.js"
@@ -51,12 +47,15 @@ import {
 } from "./add-participants.js"
 export { addChatConversationParticipants, addConversationParticipants }
 import {
-  createConversationForWorkspaceMemberUseCase,
-  createConversationRecordUseCase,
-  createChatConversationUseCase,
-  type CreateChatConversationDeps,
-  type CreateConversationForWorkspaceMemberDeps,
+  createChatConversation,
+  createConversation,
+  createConversationForWorkspaceMember,
 } from "./create-conversation.js"
+export {
+  createChatConversation,
+  createConversation,
+  createConversationForWorkspaceMember,
+}
 export {
   createConversationItem,
   sendConversationMessageFromParticipant,
@@ -68,7 +67,6 @@ export { enqueueActorWakeupsForConversationMessage } from "./actor-wakeup.js"
 import { syncConversationUpsertForWorkspaceMembers } from "./conversation-upsert-sync.js"
 import { listConversationRealtimeRecipientsUseCase } from "./realtime-recipients.js"
 export { sendChatConversationMessage } from "./send-message.js"
-import { loadChatConversationView } from "./conversation-view-read.js"
 import { type HydratedConversationItemRecord } from "./conversation-item-hydration.js"
 import {
   participantDisplayName,
@@ -94,11 +92,9 @@ export {
 import {
   ensureConversationParticipantUseCase,
   getConversationParticipantUseCase,
-  insertParticipant,
   listConversationParticipantsUseCase,
 } from "./participant-roster.js"
 
-type ConversationKind = (typeof CONVERSATION_KINDS)[number]
 type ParticipantKind = ConversationParticipantType
 
 function toNumber(value: unknown): number {
@@ -180,54 +176,11 @@ export async function resolveConversationReplyRef(params: {
   )
 }
 
-function chatConversationForWorkspaceMemberDeps(): CreateConversationForWorkspaceMemberDeps {
-  return {
-    ensureConversationParticipant,
-    syncConversationUpsert: syncConversationUpsertForWorkspaceMembers,
-  }
-}
-
-function chatCreateConversationDeps(): CreateChatConversationDeps {
-  return {
-    insertParticipant,
-    loadConversationView: loadChatConversationView,
-    syncConversationUpsert: syncConversationUpsertForWorkspaceMembers,
-  }
-}
-
 export async function getConversation(
   conversationId: string,
   queryable: Executor = rootQueryable()
 ) {
   return getConversationRecord(queryable, conversationId)
-}
-
-export async function createConversation(params: {
-  kind: ConversationKind
-  workspaceId: string
-  title?: string
-  createdByWorkspaceMemberId?: string
-  metadata?: Record<string, unknown>
-  queryable?: Executor
-}) {
-  return createConversationRecordUseCase(params)
-}
-
-export async function createConversationForWorkspaceMember(params: {
-  workspaceId: string
-  creatorWorkspaceMemberId?: string
-  kind: ConversationKind
-  title?: string
-  workspaceMemberIds?: string[]
-  actorIds?: string[]
-  remoteAgentIds?: string[]
-  metadata?: Record<string, unknown>
-  queryable?: Executor
-}) {
-  return createConversationForWorkspaceMemberUseCase(
-    params,
-    chatConversationForWorkspaceMemberDeps()
-  )
 }
 
 export async function listConversationParticipants(
@@ -270,37 +223,6 @@ export async function listConversationRealtimeRecipients(
   queryable: Executor = rootQueryable()
 ) {
   return listConversationRealtimeRecipientsUseCase(conversationId, queryable)
-}
-
-export async function createChatConversation(params: {
-  workspaceId: string
-  userId: string
-  clientRequestId: string
-  kind: ConversationKind
-  title?: string
-  workspaceMemberIds?: string[]
-  actorIds?: string[]
-  remoteAgentIds?: string[]
-  metadata?: Record<string, unknown>
-}): Promise<ChatConversationCreateRecord> {
-  const creator = await getWorkspaceMemberIdentityOrThrow(
-    params.workspaceId,
-    params.userId
-  )
-  return createChatConversationUseCase(
-    {
-      workspaceId: params.workspaceId,
-      creatorWorkspaceMemberId: creator.workspaceMemberId,
-      clientRequestId: params.clientRequestId,
-      kind: params.kind,
-      title: params.title,
-      workspaceMemberIds: params.workspaceMemberIds,
-      actorIds: params.actorIds,
-      remoteAgentIds: params.remoteAgentIds,
-      metadata: params.metadata,
-    },
-    chatCreateConversationDeps()
-  )
 }
 
 function chatParticipantRemovalDeps(): RemoveParticipantDeps {

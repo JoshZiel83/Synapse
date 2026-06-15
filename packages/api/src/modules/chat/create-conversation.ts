@@ -22,6 +22,13 @@ import type {
   ChatConversationCreateRecord,
   ChatConversationRecord,
 } from "./presenter.js"
+import { getWorkspaceMemberIdentityOrThrow } from "./identity.js"
+import {
+  ensureConversationParticipantUseCase,
+  insertParticipant,
+} from "./participant-roster.js"
+import { loadChatConversationView } from "./conversation-view-read.js"
+import { syncConversationUpsertForWorkspaceMembers } from "./conversation-upsert-sync.js"
 
 type ConversationKind = (typeof CONVERSATION_KINDS)[number]
 type ParticipantType =
@@ -414,4 +421,63 @@ export async function createChatConversationUseCase(
   }
 
   return { conversation }
+}
+
+function chatConversationForWorkspaceMemberDeps(): CreateConversationForWorkspaceMemberDeps {
+  return {
+    ensureConversationParticipant: ensureConversationParticipantUseCase,
+    syncConversationUpsert: syncConversationUpsertForWorkspaceMembers,
+  }
+}
+
+function chatCreateConversationDeps(): CreateChatConversationDeps {
+  return {
+    insertParticipant,
+    loadConversationView: loadChatConversationView,
+    syncConversationUpsert: syncConversationUpsertForWorkspaceMembers,
+  }
+}
+
+export async function createConversation(params: CreateConversationInput) {
+  return createConversationRecordUseCase(params)
+}
+
+export async function createConversationForWorkspaceMember(
+  params: CreateConversationForWorkspaceMemberInput
+) {
+  return createConversationForWorkspaceMemberUseCase(
+    params,
+    chatConversationForWorkspaceMemberDeps()
+  )
+}
+
+export async function createChatConversation(params: {
+  workspaceId: string
+  userId: string
+  clientRequestId: string
+  kind: ConversationKind
+  title?: string
+  workspaceMemberIds?: string[]
+  actorIds?: string[]
+  remoteAgentIds?: string[]
+  metadata?: Record<string, unknown>
+}): Promise<ChatConversationCreateRecord> {
+  const creator = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  return createChatConversationUseCase(
+    {
+      workspaceId: params.workspaceId,
+      creatorWorkspaceMemberId: creator.workspaceMemberId,
+      clientRequestId: params.clientRequestId,
+      kind: params.kind,
+      title: params.title,
+      workspaceMemberIds: params.workspaceMemberIds,
+      actorIds: params.actorIds,
+      remoteAgentIds: params.remoteAgentIds,
+      metadata: params.metadata,
+    },
+    chatCreateConversationDeps()
+  )
 }
