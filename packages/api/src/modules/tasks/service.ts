@@ -390,24 +390,10 @@ function requireTaskResolveOutcome(
   throw new Error(`${label} is invalid`)
 }
 
-function requireJsonObject(
-  value: unknown,
-  label: string
-): Record<string, unknown> {
-  if (value === null || value === undefined) {
-    throw new Error(`${label} is required`)
-  }
-  if (typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${label} must be a JSON object`)
-  }
-  return value as Record<string, unknown>
-}
-
 function parseStoredTaskResolvePayload(
-  value: unknown,
+  payload: Record<string, unknown>,
   label: string
 ): StoredTaskResolvePayload {
-  const payload = requireJsonObject(value, label)
   const outcome = requireTaskResolveOutcome(payload.outcome, `${label}.outcome`)
   if (!payload.task || typeof payload.task !== "object") {
     throw new Error(`${label}.task is required`)
@@ -1776,12 +1762,8 @@ export async function resolveTaskRequest(
       client
     )
     if (existingCommand) {
-      const storedRequestPayload = requireJsonObject(
-        existingCommand.request_payload,
-        `Task command ${existingCommand.id} request_payload`
-      )
       if (
-        stableJsonStringify(storedRequestPayload) !==
+        stableJsonStringify(existingCommand.request_payload) !==
         stableJsonStringify(normalizedCommandPayload)
       ) {
         throw new Error(
