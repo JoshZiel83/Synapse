@@ -26,12 +26,36 @@ export type ToolCallTaskHumanSurface = ToolCallTasksHumanSurface
 export type ToolCallTaskExecutorKind = ToolCallTasksExecutorKind
 
 // ── DB-row types ────────────────────────────────────────────────────────────
-export type ToolCallTaskRow = TableRow<"toolCallTasks">
+type ToolCallTaskRawRow = TableRow<"toolCallTasks">
 
-export type ToolCallTaskOutputChunkRow = Pick<
+export type ToolCallTaskRow = Omit<
+  ToolCallTaskRawRow,
+  | "requestPayload"
+  | "immediateResultPayload"
+  | "finalResultPayload"
+  | "finalErrorPayload"
+  | "metadata"
+> & {
+  requestPayload: Record<string, unknown>
+  immediateResultPayload: Record<string, unknown>
+  finalResultPayload: Record<string, unknown>
+  finalErrorPayload: Record<string, unknown>
+  metadata: Record<string, unknown>
+}
+
+type ToolCallTaskOutputChunkRawRow = Pick<
   TableRow<"toolCallTaskOutputChunks">,
   "createdAt" | "metadata" | "seq" | "stream" | "textValue"
 >
+
+export type ToolCallTaskOutputChunkRow = Omit<
+  ToolCallTaskOutputChunkRawRow,
+  "metadata"
+> & {
+  metadata: Record<string, unknown>
+}
+
+export type { ToolCallTaskRawRow, ToolCallTaskOutputChunkRawRow }
 
 // ── Insert column-type aliases (JSON columns the service casts payloads to) ──
 export type ToolCallTaskInsert = TableInsert<"toolCallTasks">

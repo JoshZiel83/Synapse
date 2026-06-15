@@ -42,10 +42,7 @@
  * session and released on terminal events / shutdown.
  */
 
-import {
-  type IsoInstantString,
-  serializeInstant,
-} from "../../../infrastructure/datetime.js"
+import type { IsoInstantString } from "../../../infrastructure/datetime.js"
 import { onEvent } from "../../../infrastructure/events/index.js"
 import { redis } from "../../../infrastructure/redis/index.js"
 import { createLogger } from "../../../infrastructure/logger/index.js"
@@ -77,6 +74,7 @@ import {
   findRecentInboundLinkForConversation,
   loadConversationIdForSession,
   loadCurrentRunningTurnRow,
+  presentStatusInstant,
   type InboundLinkLookup,
   type InboundLinkLookupWithCreatedAt,
   type RunningTurnRow,
@@ -136,7 +134,7 @@ export function computeStatusFallbackCutoffIso(
 ): IsoInstantString {
   return (
     runningTurn?.started_at ??
-    serializeInstant(new Date(now - starvationWindowMs))
+    presentStatusInstant(new Date(now - starvationWindowMs))
   )
 }
 

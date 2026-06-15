@@ -16,7 +16,7 @@ import type {
   ConversationMessage,
   ServerToolCall,
 } from "@synapse/shared"
-import { textBlock } from "@synapse/shared"
+import { MODEL_SERVER_TOOL, textBlock } from "@synapse/shared"
 import type { GenerateTextResult, ToolSet } from "ai"
 
 export interface AdaptedResponse {
@@ -90,13 +90,15 @@ function extractServerToolCalls(
     // the UI can label an unknown provider tool correctly (fix: was silently
     // mislabeling every non-web_fetch tool "web_search").
     const type: ServerToolCall["type"] =
-      toolName === "web_fetch" ? "web_fetch" : "web_search"
+      toolName === MODEL_SERVER_TOOL.WEB_FETCH
+        ? MODEL_SERVER_TOOL.WEB_FETCH
+        : MODEL_SERVER_TOOL.WEB_SEARCH
     const call: ServerToolCall = { type, ...(toolName ? { toolName } : {}) }
     const input = (tc.input ?? {}) as Record<string, unknown>
     const query = typeof input.query === "string" ? input.query : undefined
     const url = typeof input.url === "string" ? input.url : undefined
-    if (type === "web_search" && query) call.query = query
-    if (type === "web_fetch" && url) call.url = url
+    if (type === MODEL_SERVER_TOOL.WEB_SEARCH && query) call.query = query
+    if (type === MODEL_SERVER_TOOL.WEB_FETCH && url) call.url = url
     // Pull search results out of the provider-executed tool output when present.
     const output = resultsByCallId.get(tc.toolCallId)?.output
     const items = Array.isArray(output)
@@ -129,7 +131,7 @@ function extractServerToolCalls(
 function buildServerToolDisplay(
   call: ServerToolCall
 ): NonNullable<ServerToolCall["display"]> {
-  if (call.type === "web_fetch") {
+  if (call.type === MODEL_SERVER_TOOL.WEB_FETCH) {
     return {
       icon: "globe",
       titleKey: "tool.server.web_fetch.title",
@@ -145,7 +147,7 @@ function buildServerToolDisplay(
   // no query falls back to that generic label).
   const label = call.query
     ? `搜索 ${truncate(call.query, 60)}`
-    : call.toolName && call.toolName !== "web_search"
+    : call.toolName && call.toolName !== MODEL_SERVER_TOOL.WEB_SEARCH
       ? call.toolName
       : "网络搜索"
   return {

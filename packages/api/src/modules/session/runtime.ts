@@ -3,14 +3,13 @@ import { nowIsoInstant } from "@synapse/shared/datetime"
 import {
   parseInstantString,
   requireInstantDate,
-  serializeInstant,
-  serializeOptionalInstant,
 } from "../../infrastructure/datetime.js"
 import type { Executor } from "../../infrastructure/database/kysely.js"
 import { emitEvent } from "../../infrastructure/events/index.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
 import { sessionThinkingQueue } from "../../workers/queues.js"
 import {
+  ACTOR_RUNTIME_HEALTH,
   isThreadConversationKind,
   textBlock,
   type ActorRuntimeActivityState,
@@ -32,6 +31,7 @@ import {
 import { itemPartsToCanonicalContentBlocks } from "../chat/message-content.js"
 import { getSession, updateSessionStatus } from "./service.js"
 import * as repo from "./repo.js"
+import { presentInstant, presentOptionalInstant } from "./presenter.js"
 import { resolveToolPresentation } from "./tool-presentation/resolver.js"
 import {
   renderToolRequest,
@@ -58,22 +58,6 @@ function runtimeSequenceKey(conversationId: string) {
 
 const runtimePublishDebounceTimers = new Map<string, NodeJS.Timeout>()
 
-function parseMetadata(value: unknown): Record<string, unknown> {
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value)
-      return parsed && typeof parsed === "object"
-        ? (parsed as Record<string, unknown>)
-        : {}
-    } catch {
-      return {}
-    }
-  }
-  return value && typeof value === "object"
-    ? (value as Record<string, unknown>)
-    : {}
-}
-
 function mapWakeupSourceTypeToTrigger(
   sourceType: SessionWakeupSourceType
 ): SessionTrigger {
@@ -81,7 +65,7 @@ function mapWakeupSourceTypeToTrigger(
 }
 
 function presentWakeup(row: SessionWakeupRow): ActorRuntimeWakeup {
-  const metadata = parseMetadata(row.metadata)
+  const metadata = row.metadata
   return {
     wakeupId: row.id,
     sourceType: row.sourceType,
@@ -99,8 +83,8 @@ function presentWakeup(row: SessionWakeupRow): ActorRuntimeWakeup {
         : undefined,
     delivery:
       typeof metadata.delivery === "string" ? metadata.delivery : undefined,
-    createdAt: serializeInstant(row.createdAt),
-    attachedAt: serializeOptionalInstant(row.attachedAt),
+    createdAt: presentInstant(row.createdAt),
+    attachedAt: presentOptionalInstant(row.attachedAt),
   }
 }
 
@@ -270,10 +254,10 @@ async function loadProcessingTargetsForTurn(
     participantId: row.sourceParticipantId || undefined,
     name: row.sourceName || row.summary,
     summary: row.summary || undefined,
-    createdAt: serializeInstant(
+    createdAt: presentInstant(
       requireInstantDate(row.createdAt, "session_wakeups.created_at")
     ),
-    attachedAt: serializeOptionalInstant(row.attachedAt),
+    attachedAt: presentOptionalInstant(row.attachedAt),
   }))
 }
 
@@ -286,7 +270,7 @@ function buildResultBodyBlocks(params: {
   latestResult?: {
     isError?: boolean | null
     errorMessage?: string | null
-    metadata?: unknown
+    metadata?: Record<string, unknown>
   }
   task?: {
     statusMessage?: string | null
@@ -310,8 +294,8 @@ function buildResultBodyBlocks(params: {
     )
   }
 
-  const finalErrorPayload = parseJsonValue(params.task?.finalErrorPayload)
-  const finalResultPayload = parseJsonValue(params.task?.finalResultPayload)
+  const finalErrorPayload = params.task?.finalErrorPayload
+  const finalResultPayload = params.task?.finalResultPayload
   if (
     finalErrorPayload &&
     Object.keys(asRecord(finalErrorPayload)).length > 0
@@ -338,8 +322,10 @@ function buildResultBodyBlocks(params: {
 
 // Pull the Phase-2 structured result namespace (tool_results.metadata.toolMeta)
 // for the presentation renderer's ResultRef `meta.*` paths.
-function readToolMeta(metadata: unknown): Record<string, unknown> | undefined {
-  const record = asRecord(parseJsonValue(metadata))
+function readToolMeta(
+  metadata: Record<string, unknown> | undefined
+): Record<string, unknown> | undefined {
+  const record = metadata || {}
   const toolMeta = record.toolMeta
   return toolMeta && typeof toolMeta === "object" && !Array.isArray(toolMeta)
     ? (toolMeta as Record<string, unknown>)
@@ -456,11 +442,11 @@ async function buildToolActivityDetail(turnId: string) {
       sourceSnapshot: toolCall.sourceSnapshot,
       pluginInstallationId: toolCall.pluginInstallationId,
     })
-    const args = asRecord(parseJsonValue(toolCall.normalizedInput))
+    const args = asRecord(toolCall.normalizedInput)
     const request = renderToolRequest(descriptor, args)
     const resultData: ToolResultData = {
       meta: readToolMeta(latestResult?.metadata),
-      task: parseJsonValue(task?.finalResultPayload),
+      task: task?.finalResultPayload,
       error:
         latestResult?.errorMessage ||
         (typeof task?.finalErrorPayload === "object"
@@ -506,20 +492,20 @@ async function buildToolActivityDetail(turnId: string) {
       requestBlocks: rendered.requestBlocks,
       resultBlocks: rendered.resultBlocks,
       taskStatus,
-      startedAt: serializeInstant(
+      startedAt: presentInstant(
         requireInstantDate(toolCall.createdAt, "tool_calls.created_at")
       ),
       updatedAt: pickLatestTimestamp(
-        serializeOptionalInstant(task?.updatedAt),
-        serializeOptionalInstant(latestResult?.createdAt),
-        serializeOptionalInstant(toolCall.completedAt),
-        serializeInstant(
+        presentOptionalInstant(task?.updatedAt),
+        presentOptionalInstant(latestResult?.createdAt),
+        presentOptionalInstant(toolCall.completedAt),
+        presentInstant(
           requireInstantDate(toolCall.createdAt, "tool_calls.created_at")
         )
       )!,
       completedAt:
-        serializeOptionalInstant(toolCall.completedAt) ||
-        serializeOptionalInstant(task?.completedAt) ||
+        presentOptionalInstant(toolCall.completedAt) ||
+        presentOptionalInstant(task?.completedAt) ||
         undefined,
     })
   }
@@ -527,9 +513,9 @@ async function buildToolActivityDetail(turnId: string) {
   const updatedAt = pickLatestTimestamp(
     ...processingTargets.map((target) => target.attachedAt || target.createdAt),
     ...items.map((item) => item.updatedAt),
-    serializeOptionalInstant(turnRow.completedAt),
-    serializeInstant(requireInstantDate(turnRow.updatedAt, "turns.updated_at")),
-    serializeOptionalInstant(turnRow.startedAt)
+    presentOptionalInstant(turnRow.completedAt),
+    presentInstant(requireInstantDate(turnRow.updatedAt, "turns.updated_at")),
+    presentOptionalInstant(turnRow.startedAt)
   )!
 
   return {
@@ -539,12 +525,10 @@ async function buildToolActivityDetail(turnId: string) {
     turnId: turnRow.id,
     sessionId: turnRow.sessionId,
     startedAt:
-      serializeOptionalInstant(turnRow.startedAt) ||
+      presentOptionalInstant(turnRow.startedAt) ||
       // `turns` no longer has a created_at column; for legacy/test rows that
       // still carry NULL started_at, fall back to the always-present updated_at.
-      serializeInstant(
-        requireInstantDate(turnRow.updatedAt, "turns.updated_at")
-      ),
+      presentInstant(requireInstantDate(turnRow.updatedAt, "turns.updated_at")),
     updatedAt,
     processingTargets,
     items,
@@ -711,13 +695,13 @@ export async function buildSessionRuntimeSnapshot(
   overrides: SessionRuntimeSnapshotOverrides = {}
 ): Promise<ActorRuntimeState | null> {
   const session = await getSession(sessionId)
-  if (!session || !isThreadConversationKind(session.conversation_kind))
+  if (!session || !isThreadConversationKind(session.conversationKind))
     return null
 
   let cachedRuntime: ActorRuntimeState | null = null
   const cachedRaw = await redis.hget(
-    runtimeHashKey(session.conversation_id),
-    session.actor_id
+    runtimeHashKey(session.conversationId),
+    session.actorId
   )
   if (cachedRaw) {
     try {
@@ -743,11 +727,11 @@ export async function buildSessionRuntimeSnapshot(
       ? undefined
       : overrides.lastError ||
         cachedRuntime?.lastError ||
-        (session.error_message
+        (session.errorMessage
           ? {
-              message: session.error_message as string,
-              at: serializeInstant(
-                requireInstantDate(session.updated_at, "sessions.updated_at")
+              message: session.errorMessage as string,
+              at: presentInstant(
+                requireInstantDate(session.updatedAt, "sessions.updated_at")
               ),
             }
           : undefined)
@@ -777,10 +761,10 @@ export async function buildSessionRuntimeSnapshot(
   const currentTurnPreview = buildTurnPreviewFromDetail(currentTurnDetail)
 
   return {
-    conversationId: session.conversation_id,
+    conversationId: session.conversationId,
     sessionId: session.id,
-    actorId: session.actor_id,
-    actorDisplayName: session.actor_display_name || "Unknown",
+    actorId: session.actorId,
+    actorDisplayName: session.actorDisplayName || "Unknown",
     laneState,
     health,
     phase,
@@ -882,8 +866,8 @@ export async function removeSessionRuntime(sessionId: string) {
     runtimePublishDebounceTimers.delete(sessionId)
   }
   const session = await getSession(sessionId)
-  if (!session || !isThreadConversationKind(session.conversation_kind)) return
-  await redis.hdel(runtimeHashKey(session.conversation_id), session.actor_id)
+  if (!session || !isThreadConversationKind(session.conversationKind)) return
+  await redis.hdel(runtimeHashKey(session.conversationId), session.actorId)
 }
 
 export interface EnqueueSessionWakeupParams {
@@ -965,7 +949,7 @@ export async function nudgeSessionAfterWakeup(
 
   await publishSessionRuntime(params.workspaceId, params.sessionId, {
     laneState: session.status === "running" ? "running" : "queued",
-    health: session.status === "blocked" ? "ok" : undefined,
+    health: session.status === "blocked" ? ACTOR_RUNTIME_HEALTH.OK : undefined,
     ...requeueOverrides,
   })
 

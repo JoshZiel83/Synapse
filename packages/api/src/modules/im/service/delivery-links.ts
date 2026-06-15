@@ -19,10 +19,10 @@ import {
   normalizeAccountRow,
   normalizeEndpointRow,
   normalizeTransportMessageLinkRow,
-  parseJsonObject,
 } from "./_helpers.js"
 import { getConversationTransportBinding } from "../service.js"
 import {
+  decodeConversationItemMetadata,
   insertTransportMessageLinkProjection,
   loadTransportMessageLinkForDeliveryRow,
   runTransportMessageLinkTransaction,
@@ -157,8 +157,7 @@ export async function updateTransportMessageLinkStatus(params: {
       tx,
       params.linkId
     )
-    const current = parseJsonObject(existing)
-    const merged = deepMergeJsonObjects(current, extraMetadata)
+    const merged = deepMergeJsonObjects(existing, extraMetadata)
     return updateTransportMessageLinkStatusRow(tx, {
       linkId: params.linkId,
       status: params.status,
@@ -198,8 +197,7 @@ export async function patchTransportMessageLinkMetadata(params: {
       tx,
       params.linkId
     )
-    const current = parseJsonObject(existing)
-    const merged = deepMergeJsonObjects(current, params.patch)
+    const merged = deepMergeJsonObjects(existing, params.patch)
     await updateTransportMessageLinkMetadataRow(tx, params.linkId, merged)
   })
 }
@@ -240,7 +238,7 @@ export async function loadTransportMessageLinkForDelivery(linkId: string) {
       },
       row.transportKind as TransportKind
     ),
-    itemMetadata: parseJsonObject(row.itemMetadata),
+    itemMetadata: decodeConversationItemMetadata(row),
   }
 }
 

@@ -7,6 +7,7 @@
 // objects — instant serialization stays at the boundary (guard r3). round-6 P1-6.
 
 import { db } from "../../infrastructure/database/kysely.js"
+import { parseJsonObject } from "@synapse/shared"
 
 export type AuditLogFilters = {
   action?: string
@@ -21,11 +22,31 @@ export type AuditLogRecord = {
   resourceId: string | null
   userId: string | null
   actorId: string | null
-  details: unknown
+  details: Record<string, unknown>
   ipAddress: string | null
   createdAt: Date
   userName: string | null
   actorName: string | null
+}
+
+type AuditLogDbRow = Omit<AuditLogRecord, "details"> & {
+  details: unknown
+}
+
+export function normalizeAuditLogRow(row: AuditLogDbRow): AuditLogRecord {
+  return {
+    id: row.id,
+    action: row.action,
+    resourceType: row.resourceType,
+    resourceId: row.resourceId,
+    userId: row.userId,
+    actorId: row.actorId,
+    details: parseJsonObject(row.details),
+    ipAddress: row.ipAddress,
+    createdAt: row.createdAt,
+    userName: row.userName,
+    actorName: row.actorName,
+  }
 }
 
 /** Count of audit logs for one workspace matching the filters. */
@@ -89,9 +110,10 @@ export async function listWorkspaceAuditLogs(
     dataQuery = dataQuery.where("al.resourceId", "=", filters.resourceId)
   }
 
-  return dataQuery
+  const rows = await dataQuery
     .orderBy("al.createdAt", "desc")
     .limit(pageSize)
     .offset(offset)
     .execute()
+  return rows.map((row) => normalizeAuditLogRow(row as AuditLogDbRow))
 }

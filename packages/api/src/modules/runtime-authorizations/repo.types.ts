@@ -69,7 +69,7 @@ export interface RuntimeAuthorizationGrantRecord extends SharedRuntimeAuthorizat
  * propagation that would mask corrupt rows as silent fallbacks.
  */
 export interface RuntimeAuthorizationGrantCandidate {
-  rawRow: TableRow<"runtimeAuthorizationGrants">
+  rawRow: RuntimeAuthorizationGrantCandidateRecord
   rawPolicy: unknown
   policyValidationResult:
     | { ok: true; parsed: GrantPolicy }
@@ -79,6 +79,13 @@ export interface RuntimeAuthorizationGrantCandidate {
   retention: RuntimeAuthorizationGrantRetention
   retryNonceOnRow?: string
   sourceTaskIdOnRow?: string
+}
+
+export type RuntimeAuthorizationGrantCandidateRecord = Omit<
+  TableRow<"runtimeAuthorizationGrants">,
+  "sourceRequestArgs"
+> & {
+  sourceRequestArgs: Record<string, unknown>
 }
 
 /**

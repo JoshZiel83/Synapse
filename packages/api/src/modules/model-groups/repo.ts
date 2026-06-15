@@ -8,6 +8,7 @@
  */
 
 import { sql } from "kysely"
+import { parseJsonObject } from "@synapse/shared"
 import {
   db,
   withDbTransaction,
@@ -80,6 +81,48 @@ export type ListCandidateGroupRowsResult = {
   workspaceDefaultGroupId?: string
   platformDefaultGroupId?: string
   workspaceMemberDefaultGroupId?: string
+}
+
+export function decodeNullableModelGroupJsonRecord(
+  value: unknown
+): Record<string, unknown> | null {
+  if (value === null || typeof value === "undefined") return null
+  return parseJsonObject(value)
+}
+
+export function normalizeModelGroupRowJson<
+  T extends { attemptPolicy?: unknown },
+>(
+  row: T
+): Omit<T, "attemptPolicy"> & {
+  attemptPolicy: Record<string, unknown> | null
+} {
+  const normalized = row as Omit<T, "attemptPolicy"> & {
+    attemptPolicy: Record<string, unknown> | null
+  }
+  normalized.attemptPolicy = decodeNullableModelGroupJsonRecord(
+    row.attemptPolicy
+  )
+  return normalized
+}
+
+export function normalizeModelGroupItemJson<
+  T extends { features?: unknown; providerOptions?: unknown },
+>(
+  row: T
+): Omit<T, "features" | "providerOptions"> & {
+  features: Record<string, unknown> | null
+  providerOptions: Record<string, unknown> | null
+} {
+  const normalized = row as Omit<T, "features" | "providerOptions"> & {
+    features: Record<string, unknown> | null
+    providerOptions: Record<string, unknown> | null
+  }
+  normalized.features = decodeNullableModelGroupJsonRecord(row.features)
+  normalized.providerOptions = decodeNullableModelGroupJsonRecord(
+    row.providerOptions
+  )
+  return normalized
 }
 
 /**
@@ -178,7 +221,9 @@ export async function listCandidateGroupRows(
   ])
 
   return {
-    groups: groupsResult as ModelGroupCandidateRow[],
+    groups: (groupsResult as ModelGroupCandidateRow[]).map(
+      normalizeModelGroupRowJson
+    ),
     assignments: assignmentsResult as Array<{
       groupId: string
       priority: number
@@ -236,12 +281,7 @@ export async function listGroupItemRows(
     groupId: row.groupId || "",
     groupName: row.groupName || "",
     routingStrategy: row.routingStrategy || "priority_failover",
-    attemptPolicy:
-      row.attemptPolicy &&
-      typeof row.attemptPolicy === "object" &&
-      !Array.isArray(row.attemptPolicy)
-        ? (row.attemptPolicy as Record<string, unknown>)
-        : null,
+    attemptPolicy: decodeNullableModelGroupJsonRecord(row.attemptPolicy),
     itemId: row.itemId || "",
     priority: row.priority ?? 0,
     weight: row.weight ?? 1,
@@ -260,18 +300,8 @@ export async function listGroupItemRows(
           (item): item is string => typeof item === "string"
         )
       : null,
-    features:
-      row.features &&
-      typeof row.features === "object" &&
-      !Array.isArray(row.features)
-        ? (row.features as Record<string, unknown>)
-        : null,
-    providerOptions:
-      row.providerOptions &&
-      typeof row.providerOptions === "object" &&
-      !Array.isArray(row.providerOptions)
-        ? (row.providerOptions as Record<string, unknown>)
-        : null,
+    features: decodeNullableModelGroupJsonRecord(row.features),
+    providerOptions: decodeNullableModelGroupJsonRecord(row.providerOptions),
     requestTimeoutMs: row.requestTimeoutMs,
     maxRetries: row.maxRetries,
   }))
@@ -337,7 +367,7 @@ export async function listPlatformModelGroupRows(
     .orderBy("isDefault", "desc")
     .orderBy("name")
     .execute()
-  return result.map((row) => row as ModelGroupRow)
+  return result.map((row) => normalizeModelGroupRowJson(row) as ModelGroupRow)
 }
 
 export async function listPlatformModelGroupImportRows(
@@ -384,7 +414,7 @@ export async function listWorkspaceModelGroupRows(
     .orderBy("mg.isDefault", "desc")
     .orderBy("mg.name")
     .execute()
-  return result.map((row) => row as ModelGroupRow)
+  return result.map((row) => normalizeModelGroupRowJson(row) as ModelGroupRow)
 }
 
 export async function listWorkspaceMemberOwnedModelGroupRows(
@@ -400,19 +430,20 @@ export async function listWorkspaceMemberOwnedModelGroupRows(
     .orderBy("isDefault", "desc")
     .orderBy("name")
     .execute()
-  return result.map((row) => row as ModelGroupRow)
+  return result.map((row) => normalizeModelGroupRowJson(row) as ModelGroupRow)
 }
 
 export async function getModelGroupRow(
   groupId: string,
   run: KyselyDb = db
 ): Promise<ModelGroupRow | undefined> {
-  return (await run
+  const row = await run
     .selectFrom("modelGroups")
     .selectAll()
     .where("id", "=", groupId)
     .limit(1)
-    .executeTakeFirst()) as ModelGroupRow | undefined
+    .executeTakeFirst()
+  return row ? (normalizeModelGroupRowJson(row) as ModelGroupRow) : undefined
 }
 
 export async function getModelGroupDetailRows(
@@ -473,7 +504,7 @@ export async function getModelGroupDetailRows(
       .execute(),
   ])
   return {
-    items: itemsResult,
+    items: itemsResult.map((row) => normalizeModelGroupItemJson(row)),
     grants: grantsResult as ModelGroupGrantDbRow[],
   }
 }
@@ -593,7 +624,7 @@ export async function listVisibleActorModelGroupRows(
     .orderBy("mg.isDefault", "desc")
     .orderBy("mg.name")
     .execute()
-  return result.map((row) => row as ModelGroupRow)
+  return result.map((row) => normalizeModelGroupRowJson(row) as ModelGroupRow)
 }
 
 export async function listModelGroupGrantDbRows(
@@ -782,7 +813,7 @@ export async function getModelGroupItemForUpdate(
   groupId: string,
   run: KyselyDb = db
 ) {
-  return await run
+  const row = await run
     .selectFrom("modelBindingsLive as mb")
     .leftJoin("modelBindingVersions as v", "v.id", "mb.currentVersionId")
     .select([
@@ -811,13 +842,14 @@ export async function getModelGroupItemForUpdate(
     .where("mb.deletedAt", "is", null)
     .limit(1)
     .executeTakeFirst()
+  return row ? normalizeModelGroupItemJson(row) : undefined
 }
 
 export async function getModelGroupItemFullRow(
   itemId: string,
   run: KyselyDb = db
 ) {
-  return await run
+  const row = await run
     .selectFrom("modelBindingsLive as mb")
     .leftJoin("modelBindingVersions as v", "v.id", "mb.currentVersionId")
     .select([
@@ -846,6 +878,7 @@ export async function getModelGroupItemFullRow(
     .where("mb.id", "=", itemId)
     .limit(1)
     .executeTakeFirstOrThrow()
+  return normalizeModelGroupItemJson(row)
 }
 
 export async function modelGroupItemExists(
@@ -906,7 +939,9 @@ export async function listBindingVersionRows(
     .where("v.bindingId", "=", itemId)
     .orderBy("v.version", "desc")
     .execute()
-  return rows.map((row) => row as ModelGroupItemVersionRow)
+  return rows.map((row) =>
+    normalizeModelGroupItemJson(row)
+  ) as ModelGroupItemVersionRow[]
 }
 
 export async function getBindingVersionVendorModel(
@@ -998,7 +1033,7 @@ export async function insertModelGroupWithDefaultGrant(params: {
         trx
       )
     }
-    const row = (await trx
+    const row = await trx
       .insertInto("modelGroups")
       .values({
         ownerType: params.groupValues.ownerType,
@@ -1014,7 +1049,7 @@ export async function insertModelGroupWithDefaultGrant(params: {
           params.groupValues.createdByWorkspaceMemberId,
       })
       .returningAll()
-      .executeTakeFirstOrThrow()) as ModelGroupRow
+      .executeTakeFirstOrThrow()
 
     const subjectId = await upsertAccessSubject(
       trx,
@@ -1032,7 +1067,7 @@ export async function insertModelGroupWithDefaultGrant(params: {
       .returningAll()
       .executeTakeFirstOrThrow()
 
-    return row
+    return normalizeModelGroupRowJson(row) as ModelGroupRow
   })
 }
 
@@ -1041,12 +1076,13 @@ export async function updateModelGroupRow(
   updateData: Record<string, unknown>,
   run: KyselyDb = db
 ): Promise<ModelGroupRow | undefined> {
-  return (await run
+  const row = await run
     .updateTable("modelGroups")
     .set(updateData as any)
     .where("id", "=", groupId)
     .returningAll()
-    .executeTakeFirst()) as ModelGroupRow | undefined
+    .executeTakeFirst()
+  return row ? (normalizeModelGroupRowJson(row) as ModelGroupRow) : undefined
 }
 
 /**

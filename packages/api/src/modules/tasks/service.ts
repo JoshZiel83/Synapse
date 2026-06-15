@@ -1,7 +1,6 @@
 import {
   CONVERSATION_PARTICIPANT_TYPE,
   TASK_REQUEST_KIND,
-  parseJsonObject,
   textBlocks,
   type SubjectRef,
 } from "@synapse/shared"
@@ -62,10 +61,8 @@ import {
 } from "../session/collaboration-state.js"
 import { upsertTaskTransportProjection } from "./transport-projections.js"
 import {
-  parseJsonArray,
   parseUserInputQuestionDefinitions,
   presentTaskSummary,
-  requireJsonObject,
   requireTrimmedString,
   toRevisionNumber,
 } from "./presenter.js"
@@ -86,6 +83,8 @@ import {
   isActiveTargetParticipantForUser,
   buildRuntimePrincipalContextDefault,
   clearRemoteAgentConversationContextOnResolve,
+  decodeTaskPromptPayload,
+  decodeTaskResolutionPayload,
   resolveParticipantSubjectId,
   taskViewableByUser,
   updateTaskConversationItemId,
@@ -377,7 +376,7 @@ function isOpenTaskLifecycle(lifecycle: ToolCallTaskLifecycleStatus): boolean {
   }
 }
 
-type StoredTaskResolveResponse = {
+type StoredTaskResolvePayload = {
   outcome: ChatTaskResolveOutcome
   task: TaskSummary
 }
@@ -392,10 +391,23 @@ function requireTaskResolveOutcome(
   throw new Error(`${label} is invalid`)
 }
 
-function parseStoredTaskResolveResponse(
+function requireJsonObject(
   value: unknown,
   label: string
-): StoredTaskResolveResponse {
+): Record<string, unknown> {
+  if (value === null || value === undefined) {
+    throw new Error(`${label} is required`)
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be a JSON object`)
+  }
+  return value as Record<string, unknown>
+}
+
+function parseStoredTaskResolvePayload(
+  value: unknown,
+  label: string
+): StoredTaskResolvePayload {
   const payload = requireJsonObject(value, label)
   const outcome = requireTaskResolveOutcome(payload.outcome, `${label}.outcome`)
   if (!payload.task || typeof payload.task !== "object") {
@@ -1422,7 +1434,7 @@ export async function cancelTaskRequest(taskId: string, note?: string) {
     return current
   }
 
-  const resolutionPayload = parseJsonObject(existing.resolution_payload)
+  const resolutionPayload = decodeTaskResolutionPayload(existing)
   const task = await withTaskTransaction(async (client) => {
     await updateTaskRequestRow(client, taskId, {
       lifecycleStatus: "cancelled",
@@ -1780,16 +1792,16 @@ export async function resolveTaskRequest(
         )
       }
 
-      const storedResponse = parseStoredTaskResolveResponse(
+      const storedPayload = parseStoredTaskResolvePayload(
         existingCommand.response_payload,
         `Task command ${existingCommand.id} response_payload`
       )
       return {
         outcome:
-          storedResponse.outcome === "applied"
+          storedPayload.outcome === "applied"
             ? ("duplicate" as const)
-            : storedResponse.outcome,
-        task: storedResponse.task,
+            : storedPayload.outcome,
+        task: storedPayload.task,
         createdGrant: undefined,
       }
     }
@@ -1860,7 +1872,7 @@ export async function resolveTaskRequest(
       lockedRevision !== params.baseRevision
     ) {
       const currentTask = presentTaskSummary(locked)
-      const responsePayload: StoredTaskResolveResponse = {
+      const responsePayload: StoredTaskResolvePayload = {
         outcome: "conflict",
         task: currentTask,
       }
@@ -1886,7 +1898,7 @@ export async function resolveTaskRequest(
     let lockedPrincipalSubjectForReturn: SubjectRef | undefined
 
     if (locked.kind === TASK_REQUEST_KIND.USER_INPUT) {
-      const promptPayload = parseJsonObject(locked.prompt_payload)
+      const promptPayload = decodeTaskPromptPayload(locked)
       const questions = parseUserInputQuestionDefinitions(promptPayload)
       if (questions.length === 0) {
         throw new Error("User input request is invalid")
@@ -1956,12 +1968,7 @@ export async function resolveTaskRequest(
         }
 
         const collaborationState = parseSessionCollaborationState(
-          sessionRow.collaborationState == null
-            ? {}
-            : requireJsonObject(
-                sessionRow.collaborationState,
-                `Session ${taskRow.session_id} collaboration_state`
-              )
+          sessionRow.collaborationState
         )
         const existingDraft = collaborationState.planDraft
         if (!existingDraft) {
@@ -2026,14 +2033,8 @@ export async function resolveTaskRequest(
           )
         }
 
-        const grantOptions = parseJsonArray<RuntimeAuthorizationGrantOption>(
-          locked.grant_options,
-          `Task ${locked.id} grant_options`
-        )
-        const availablePresets = parseJsonArray<RuntimeAuthorizationPreset>(
-          locked.available_presets,
-          `Task ${locked.id} available_presets`
-        )
+        const grantOptions = locked.grant_options ?? []
+        const availablePresets = locked.available_presets ?? []
         if (!availablePresets.includes(params.preset || "once")) {
           throw new Error(
             `preset ${params.preset || "once"} is not allowed for this runtime authorization request`
@@ -2313,7 +2314,7 @@ export async function markRuntimeAuthorizationTaskSuperseded(
     return current
   }
 
-  const resolutionPayload = parseJsonObject(existing.resolution_payload)
+  const resolutionPayload = decodeTaskResolutionPayload(existing)
   const task = await withTaskTransaction(async (client) => {
     await updateTaskRequestRow(client, taskId, {
       lifecycleStatus: "cancelled",

@@ -14,6 +14,7 @@ import { sql } from "kysely"
 import type { Selectable } from "kysely"
 import {
   normalizeActorDocs,
+  parseJsonObject,
   summarizeActorForRole,
   type ActorDoc,
 } from "@synapse/shared"
@@ -35,6 +36,29 @@ export interface AiToolCallRow {
   toolName: string
 }
 
+export type AiToolResultRow = Omit<Selectable<ToolResults>, "metadata"> & {
+  metadata: Record<string, unknown>
+}
+
+export function normalizeToolResultMetadata(
+  metadata: unknown
+): Record<string, unknown> {
+  return parseJsonObject(metadata)
+}
+
+function normalizeToolResultRow(row: Selectable<ToolResults>): AiToolResultRow {
+  return {
+    attemptId: row.attemptId,
+    createdAt: row.createdAt,
+    errorMessage: row.errorMessage,
+    id: row.id,
+    isError: row.isError,
+    metadata: normalizeToolResultMetadata(row.metadata),
+    resultIndex: row.resultIndex,
+    toolCallId: row.toolCallId,
+  }
+}
+
 /** Owns the tool_calls read for a session (CamelCasePlugin yields camelCase). */
 export async function getToolCallsForSession(
   sessionId: string
@@ -53,14 +77,16 @@ export async function getToolCallsForSession(
  */
 export async function getToolResultsByToolCallIds(
   toolCallIds: string[]
-): Promise<Selectable<ToolResults>[]> {
-  return db
+): Promise<AiToolResultRow[]> {
+  const rows = await db
     .selectFrom("toolResults")
     .selectAll()
     .where("toolCallId", "in", toolCallIds)
     .orderBy("toolCallId", "asc")
     .orderBy("resultIndex", "desc")
     .execute()
+
+  return rows.map(normalizeToolResultRow)
 }
 
 /**
@@ -91,18 +117,8 @@ export type InviteableActor = {
   summary?: string
 }
 
-function parseActorDocs(value: unknown): ActorDoc[] {
+export function normalizeInviteableActorDocs(value: unknown): ActorDoc[] {
   if (!value) return []
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value)
-      return Array.isArray(parsed)
-        ? normalizeActorDocs(parsed as ActorDoc[])
-        : []
-    } catch {
-      return []
-    }
-  }
   return Array.isArray(value) ? normalizeActorDocs(value as ActorDoc[]) : []
 }
 
@@ -115,7 +131,9 @@ function summarizeInviteableActor(row: {
   role?: string | null
   actorDocs?: unknown
 }): string | undefined {
-  const docs = parseActorDocs(row.actorDocs).filter(isGroupVisibleDoc)
+  const docs = normalizeInviteableActorDocs(row.actorDocs).filter(
+    isGroupVisibleDoc
+  )
   const summary = summarizeActorForRole(docs, row.title || row.role || "Actor")
     .replace(/\s+/g, " ")
     .trim()

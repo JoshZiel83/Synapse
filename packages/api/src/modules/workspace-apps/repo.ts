@@ -4,7 +4,7 @@
 // import the db client (guard r8). Owns the inline `db` selects that previously
 // lived in service.ts: the workspace-member access load, the manage-grant probe,
 // the manageable-app lookup, the inventory/discover queries, the grant and
-// grant-request view joins, the replace-grants transaction, and default-bound
+// grant-request presentation joins, the replace-grants transaction, and default-bound
 // wrappers around the executor-injectable storage helpers the service threads.
 //
 // Functions return camelCase domain rows with Date objects kept intact (no
@@ -39,8 +39,8 @@ import {
 import { updateWorkspaceAppRoot } from "./root-storage.js"
 import type {
   WorkspaceAppRow,
-  WorkspaceAppGrantViewRow,
-  WorkspaceAppGrantRequestViewRow,
+  WorkspaceAppGrantPresentationRow,
+  WorkspaceAppGrantRequestPresentationRow,
 } from "./presenter.js"
 
 export type WorkspaceMemberAccessRecord = {
@@ -238,10 +238,10 @@ export async function listImplicitOwnerWorkspaceApps(params: {
     .execute()
 }
 
-/** Active grants for an app joined to subject/scope for the management view. */
-export async function listWorkspaceAppGrantViewRows(
+/** Active grants for an app joined to subject/scope for presentation. */
+export async function listWorkspaceAppGrantPresentationRows(
   appId: string
-): Promise<WorkspaceAppGrantViewRow[]> {
+): Promise<WorkspaceAppGrantPresentationRow[]> {
   return db
     .selectFrom("workspaceAppGrants as app_grant")
     .innerJoin("accessSubjects as subj", "subj.id", "app_grant.subjectId")
@@ -310,12 +310,12 @@ export async function replaceWorkspaceAppGrantsTx(params: {
   })
 }
 
-/** Grant requests for an app joined to grantee/scope for the request view. */
-export async function listWorkspaceAppGrantRequestViewRows(params: {
+/** Grant requests for an app joined to grantee/scope for presentation. */
+export async function listWorkspaceAppGrantRequestPresentationRows(params: {
   appId: string
   direction: WorkspaceAppGrantRequestDirection
   requesterWorkspaceMemberId: string
-}): Promise<WorkspaceAppGrantRequestViewRow[]> {
+}): Promise<WorkspaceAppGrantRequestPresentationRow[]> {
   return db
     .selectFrom("workspaceAppGrantRequests as app_request")
     .innerJoin(

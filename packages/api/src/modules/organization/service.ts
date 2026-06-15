@@ -5,6 +5,10 @@ import {
   normalizeActorDocs,
   summarizeActorDoc,
   textBlocks,
+  ACTOR_DOC_CHANGED_FIELD,
+  ACTOR_PACKAGE_SYNC_MODE,
+  ACTOR_VERSION_CHANGED_FIELD,
+  ACTOR_VERSION_DOC_CHANGE_TYPE,
   type Actor,
   type CapabilityAccessTarget,
   type ActorDefinition,
@@ -26,6 +30,7 @@ import {
 } from "@synapse/shared"
 import { createConversationEvent } from "../chat/service.js"
 import { presentActorPackageRecord, presentActorRow } from "./presenter.js"
+import { sanitizeSpecialties, sortDocs } from "./doc-codec.js"
 import type {
   ActorPackageRow,
   ActorRow,
@@ -69,18 +74,6 @@ type ActorTreeNode = Actor & {
   children: ActorTreeNode[]
 }
 
-export function parseJsonArray<T>(value: unknown): T[] {
-  if (!value) return []
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value) as T[]
-    } catch {
-      return []
-    }
-  }
-  return Array.isArray(value) ? (value as T[]) : []
-}
-
 function arraysEqual(left: string[], right: string[]) {
   if (left.length !== right.length) return false
   return left.every((value, index) => value === right[index])
@@ -88,23 +81,6 @@ function arraysEqual(left: string[], right: string[]) {
 
 function jsonEqual(left: unknown, right: unknown) {
   return deepEqual(left ?? {}, right ?? {})
-}
-
-export function sortDocs(docs: ActorDoc[]) {
-  return [...docs].sort((left, right) => {
-    if (right.priority !== left.priority) return right.priority - left.priority
-    return left.title.localeCompare(right.title)
-  })
-}
-
-export function normalizeActorDocInputs(docs: unknown): ActorDoc[] {
-  return sortDocs(normalizeActorDocs(parseJsonArray<ActorDocInput>(docs)))
-}
-
-export function sanitizeSpecialties(specialties?: string[]) {
-  return Array.from(
-    new Set((specialties || []).map((value) => value.trim()).filter(Boolean))
-  )
 }
 
 function normalizeAvatarEmoji(value?: string | null) {
@@ -180,28 +156,28 @@ function buildDocFieldChanges(
 
   if (beforeDoc.title !== afterDoc.title) {
     changes.push({
-      field: "title",
+      field: ACTOR_DOC_CHANGED_FIELD.TITLE,
       before: beforeDoc.title,
       after: afterDoc.title,
     })
   }
   if (beforeDoc.visibility !== afterDoc.visibility) {
     changes.push({
-      field: "visibility",
+      field: ACTOR_DOC_CHANGED_FIELD.VISIBILITY,
       before: beforeDoc.visibility,
       after: afterDoc.visibility,
     })
   }
   if (beforeDoc.priority !== afterDoc.priority) {
     changes.push({
-      field: "priority",
+      field: ACTOR_DOC_CHANGED_FIELD.PRIORITY,
       before: beforeDoc.priority,
       after: afterDoc.priority,
     })
   }
   if (!jsonEqual(beforeDoc.content, afterDoc.content)) {
     changes.push({
-      field: "content",
+      field: ACTOR_DOC_CHANGED_FIELD.CONTENT,
       beforeSummaryText: summarizeActorDoc(beforeDoc, 180),
       afterSummaryText: summarizeActorDoc(afterDoc, 180),
     })
@@ -217,7 +193,11 @@ function buildDocChange(
   if (!beforeDoc && !afterDoc) return null
   const referenceDoc = afterDoc || beforeDoc!
   const changeType: ActorVersionDocChange["changeType"] =
-    beforeDoc && afterDoc ? "updated" : afterDoc ? "added" : "removed"
+    beforeDoc && afterDoc
+      ? ACTOR_VERSION_DOC_CHANGE_TYPE.UPDATED
+      : afterDoc
+        ? ACTOR_VERSION_DOC_CHANGE_TYPE.ADDED
+        : ACTOR_VERSION_DOC_CHANGE_TYPE.REMOVED
   const summaryText =
     summarizeActorDoc(afterDoc || beforeDoc!, 180) ||
     `${referenceDoc.title} ${changeType}`
@@ -246,19 +226,35 @@ function buildActorVersionDelta(
 
   if (before.displayName !== after.displayName) {
     changes.push(
-      buildFieldChange("displayName", before.displayName, after.displayName)
+      buildFieldChange(
+        ACTOR_VERSION_CHANGED_FIELD.DISPLAY_NAME,
+        before.displayName,
+        after.displayName
+      )
     )
   }
   if (before.role !== after.role) {
-    changes.push(buildFieldChange("role", before.role, after.role))
+    changes.push(
+      buildFieldChange(
+        ACTOR_VERSION_CHANGED_FIELD.ROLE,
+        before.role,
+        after.role
+      )
+    )
   }
   if (before.title !== after.title) {
-    changes.push(buildFieldChange("title", before.title, after.title))
+    changes.push(
+      buildFieldChange(
+        ACTOR_VERSION_CHANGED_FIELD.TITLE,
+        before.title,
+        after.title
+      )
+    )
   }
   if ((before.parentId || null) !== (after.parentId || null)) {
     changes.push(
       buildFieldChange(
-        "parentId",
+        ACTOR_VERSION_CHANGED_FIELD.PARENT_ID,
         before.parentId || null,
         after.parentId || null
       )
@@ -267,7 +263,7 @@ function buildActorVersionDelta(
   if (before.canRepresentUser !== after.canRepresentUser) {
     changes.push(
       buildFieldChange(
-        "canRepresentUser",
+        ACTOR_VERSION_CHANGED_FIELD.CAN_REPRESENT_USER,
         before.canRepresentUser,
         after.canRepresentUser
       )
@@ -275,11 +271,21 @@ function buildActorVersionDelta(
   }
   if (!arraysEqual(before.specialties, after.specialties)) {
     changes.push(
-      buildFieldChange("specialties", before.specialties, after.specialties)
+      buildFieldChange(
+        ACTOR_VERSION_CHANGED_FIELD.SPECIALTIES,
+        before.specialties,
+        after.specialties
+      )
     )
   }
   if (!jsonEqual(before.config, after.config)) {
-    changes.push(buildFieldChange("config", before.config, after.config))
+    changes.push(
+      buildFieldChange(
+        ACTOR_VERSION_CHANGED_FIELD.CONFIG,
+        before.config,
+        after.config
+      )
+    )
   }
 
   const docIds = new Set([
@@ -609,7 +615,7 @@ export async function installActorPackage(input: {
     packageActor.displayName ||
     actorPackage.package.displayName
   const actorTitle = input.title ?? packageActor.title
-  const syncMode = input.syncMode || "notify"
+  const syncMode = input.syncMode || ACTOR_PACKAGE_SYNC_MODE.NOTIFY
 
   const result = await installActorPackageTx({
     workspaceId: input.workspaceId,

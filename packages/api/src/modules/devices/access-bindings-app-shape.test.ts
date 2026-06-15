@@ -1,4 +1,6 @@
-// access-bindings input-contract regression locks — POST /devices/access-bindings.
+// access-bindings app input-contract regression locks — POST /devices/access-bindings.
+// Also pins selected device-management body schemas that share the same app
+// contract ownership rule.
 //
 // This management write is app-facing (§5.1.1/§8.3): both the SDK/web client
 // and the server route parse the SAME shared camelCase schema
@@ -16,11 +18,17 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import type { Kysely } from "kysely"
-import { SetActiveDeviceCapabilitiesInputSchema } from "@synapse/shared/schemas"
 import {
+  ActiveDeviceCapabilitiesListQuerySchema,
+  DevicePairingTicketViewSchema,
+  SetActiveDeviceCapabilitiesInputSchema,
+  StartPairingInputSchema,
+} from "@synapse/shared/schemas"
+import {
+  appTargetToInternalAccessTarget,
   setActiveBodySchema,
-  wireTargetToInternalAccessTarget,
 } from "./access-bindings.js"
+import { startPairingBodySchema } from "./controller.js"
 import { resolveScopedSubjectTarget } from "../capability-projection/device-capabilities.js"
 import { withTestDb } from "../../test/helpers/db.js"
 
@@ -29,6 +37,73 @@ const actorId = "00000000-0000-4000-8000-000000000002"
 const convId = "00000000-0000-4000-8000-000000000003"
 const remoteAgentId = "00000000-0000-4000-8000-000000000004"
 const capId = "00000000-0000-4000-8000-000000000005"
+const deviceId = "00000000-0000-4000-8000-000000000006"
+
+test("start pairing body schema uses shared app fields with workspaceId in path", () => {
+  const sharedInput = {
+    workspaceId: wsId,
+    mode: "service_join" as const,
+    title: "Remote daemon",
+    description: "Join remote agent daemon",
+    deviceType: "desktop_computer" as const,
+    deviceId,
+    context: { serviceKind: "remote_agent_daemon" },
+  }
+
+  assert.ok(
+    StartPairingInputSchema.safeParse(sharedInput).success,
+    "shared StartPairingInputSchema should accept the app-facing body fields"
+  )
+
+  const { workspaceId: _workspaceId, ...body } = sharedInput
+  assert.deepEqual(startPairingBodySchema.parse(body), body)
+  assert.equal(
+    startPairingBodySchema.safeParse({
+      ...body,
+      workspaceId: wsId,
+    }).success,
+    false,
+    "workspaceId belongs in the URL path, not the app body"
+  )
+  assert.equal(
+    startPairingBodySchema.safeParse({
+      ...body,
+      device_type: "desktop_computer",
+    }).success,
+    false,
+    "device pairing app bodies stay camelCase"
+  )
+})
+
+test("pairing ticket view schema validates finite shared pairing mode and status", () => {
+  const ticket = {
+    pairingSessionId: "00000000-0000-4000-8000-000000000007",
+    mode: "cloud_bootstrap" as const,
+    pairingCode: null,
+    bootstrapToken: "bootstrap-token",
+    expiresAt: "2026-06-14T00:00:00.000Z",
+    verificationUri: null,
+    verificationUriComplete: null,
+    status: "pending" as const,
+    oneClickCommands: null,
+  }
+
+  assert.deepEqual(DevicePairingTicketViewSchema.parse(ticket), ticket)
+  assert.equal(
+    DevicePairingTicketViewSchema.safeParse({
+      ...ticket,
+      mode: "nearby_bluetooth",
+    }).success,
+    false
+  )
+  assert.equal(
+    DevicePairingTicketViewSchema.safeParse({
+      ...ticket,
+      status: "stale",
+    }).success,
+    false
+  )
+})
 
 // (a) — the client-sent shape must parse server-side.
 test("POST body accepts the client shape — unscoped workspace target", () => {
@@ -93,11 +168,60 @@ test("POST body rejects legacy {kind: 'actor', actorId} flat shape", () => {
   assert.equal(parsed.success, false)
 })
 
+test("GET list query accepts app-facing active-capability target filters", () => {
+  assert.deepEqual(
+    ActiveDeviceCapabilitiesListQuerySchema.parse({
+      subjectKind: "remote_agent",
+      subjectRemoteAgentId: remoteAgentId,
+      scopeKind: "conversation",
+      scopeConversationId: convId,
+    }),
+    {
+      subjectKind: "remote_agent",
+      subjectRemoteAgentId: remoteAgentId,
+      scopeKind: "conversation",
+      scopeConversationId: convId,
+    }
+  )
+})
+
+test("GET list query rejects invalid active-capability target filters", () => {
+  assert.equal(
+    ActiveDeviceCapabilitiesListQuerySchema.safeParse({
+      subjectKind: "workspace_member",
+      subjectWorkspaceMemberId: actorId,
+    }).success,
+    false
+  )
+  assert.equal(
+    ActiveDeviceCapabilitiesListQuerySchema.safeParse({
+      subjectKind: "workspace",
+      scopeKind: "conversation",
+      scopeConversationId: convId,
+    }).success,
+    false
+  )
+  assert.equal(
+    ActiveDeviceCapabilitiesListQuerySchema.safeParse({
+      subjectKind: "actor",
+      subjectActorId: actorId,
+      scopeKind: "conversation",
+    }).success,
+    false
+  )
+  assert.equal(
+    ActiveDeviceCapabilitiesListQuerySchema.safeParse({
+      subjectKind: "remote_agent",
+      subjectRemoteAgentId: "not-a-uuid",
+    }).success,
+    false
+  )
+})
+
 // (c) — superRefine whitelist still locked at the target layer.
 test("POST body rejects scoped combinations outside (actor|remote_agent, conversation)", () => {
-  // workspace_member subject is rejected by SubjectRefWireSchema
-  // (device-protocol comment: workspace_member is platform-wide-narrow
-  // and not on the device binding path).
+  // workspace_member subject is rejected by the shared app target schema; it is
+  // platform-wide-narrow and not on the device binding path.
   const memberBody = {
     workspaceId: wsId,
     target: {
@@ -130,42 +254,42 @@ test("POST body rejects scoped combinations outside (actor|remote_agent, convers
   assert.equal(setActiveBodySchema.safeParse(convScopeConvBody).success, false)
 })
 
-// (d) — every wire-accepted shape MUST translate to a real flat target.
-// Pre-Batch-19 the wire schema admitted `(remote_agent, conversation)` but
+// (d) — every app-schema-accepted shape MUST translate to a real flat target.
+// Pre-Batch-19 the target schema admitted `(remote_agent, conversation)` but
 // the mapper threw, so the route 400'd on a valid SDK body. These tests
-// pin the contract: every shape that survives the wire-schema parse also
-// survives `wireTargetToInternalAccessTarget`.
+// pin the contract: every shape that survives the app-schema parse also
+// survives `appTargetToInternalAccessTarget`.
 
-test("Batch 19: wireTargetToInternalAccessTarget — unscoped shapes", () => {
+test("Batch 19: appTargetToInternalAccessTarget — unscoped shapes", () => {
   assert.deepEqual(
-    wireTargetToInternalAccessTarget({
+    appTargetToInternalAccessTarget({
       subject: { kind: "workspace", workspaceId: wsId },
     }),
     { kind: "workspace", workspaceId: wsId }
   )
   assert.deepEqual(
-    wireTargetToInternalAccessTarget({
+    appTargetToInternalAccessTarget({
       subject: { kind: "actor", actorId },
     }),
     { kind: "actor", actorId }
   )
   assert.deepEqual(
-    wireTargetToInternalAccessTarget({
+    appTargetToInternalAccessTarget({
       subject: { kind: "conversation", conversationId: convId },
     }),
     { kind: "conversation", conversationId: convId }
   )
   assert.deepEqual(
-    wireTargetToInternalAccessTarget({
+    appTargetToInternalAccessTarget({
       subject: { kind: "remote_agent", remoteAgentId },
     }),
     { kind: "remote_agent", remoteAgentId }
   )
 })
 
-test("Batch 19: wireTargetToInternalAccessTarget — actor + scope=conversation", () => {
+test("Batch 19: appTargetToInternalAccessTarget — actor + scope=conversation", () => {
   assert.deepEqual(
-    wireTargetToInternalAccessTarget({
+    appTargetToInternalAccessTarget({
       subject: { kind: "actor", actorId },
       scope: { kind: "conversation", conversationId: convId },
     }),
@@ -177,12 +301,12 @@ test("Batch 19: wireTargetToInternalAccessTarget — actor + scope=conversation"
   )
 })
 
-test("Batch 19: wireTargetToInternalAccessTarget — remote_agent + scope=conversation translates (no longer throws)", () => {
+test("Batch 19: appTargetToInternalAccessTarget — remote_agent + scope=conversation translates (no longer throws)", () => {
   // Pre-Batch-19 this threw inside the mapper, surfacing as a route 400
-  // even though the wire schema admitted the shape. Lock the fix: the
+  // even though the app schema admitted the shape. Lock the fix: the
   // mapper now returns the canonical remote_agent target with conversationId.
   assert.deepEqual(
-    wireTargetToInternalAccessTarget({
+    appTargetToInternalAccessTarget({
       subject: { kind: "remote_agent", remoteAgentId },
       scope: { kind: "conversation", conversationId: convId },
     }),

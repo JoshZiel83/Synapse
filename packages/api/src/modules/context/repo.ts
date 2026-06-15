@@ -12,8 +12,8 @@
 // stays out of the DB layer while the entire sequence remains atomic.
 //
 // Records keep Date columns (created_at) — the presenter (presentArchivePoint)
-// serializes for the wire. JSON columns stay raw unknown; decode stays in the
-// reader below / presenter. round-6 P1-6.
+// serializes for the wire. DB JSON columns are decoded by repo readers before
+// presenter shaping. round-6 P1-6.
 
 import { sql } from "kysely"
 import type {
@@ -31,13 +31,13 @@ import {
   type Executor,
 } from "../../infrastructure/database/kysely.js"
 import { itemPartsToCanonicalBlocks } from "../ai/context-builder.js"
-import { presentArchivePoint } from "./presenter.js"
+import { presentArchivePoint, type ArchivePointRecord } from "./presenter.js"
 
 const MIN_COMPACTION_ITEMS = 12
 const SHARED_ARCHIVE_TAIL_TARGET = 24
 const PRIVATE_ARCHIVE_TAIL_TARGET = 32
 
-type ArchivePointRow = {
+export type ArchivePointRow = {
   id: string
   chain_scope: CanonicalArchiveChainScope
   conversation_id: string
@@ -46,6 +46,21 @@ type ArchivePointRow = {
   covers_until_sequence: number | string | null
   metadata: unknown
   created_at: Date
+}
+
+export function normalizeArchivePointRow(
+  row: ArchivePointRow
+): ArchivePointRecord {
+  return {
+    id: row.id,
+    chain_scope: row.chain_scope,
+    conversation_id: row.conversation_id,
+    session_id: row.session_id,
+    parent_archive_point_id: row.parent_archive_point_id,
+    covers_until_sequence: row.covers_until_sequence,
+    metadata: parseJsonObject(row.metadata),
+    created_at: row.created_at,
+  }
 }
 
 type ArchiveFrameQueryRow = {
@@ -182,7 +197,7 @@ export async function loadArchivePoint(
     })
   )
 
-  return presentArchivePoint(point, frames)
+  return presentArchivePoint(normalizeArchivePointRow(point), frames)
 }
 
 function blockToArchivePart(block: CanonicalContentBlock) {

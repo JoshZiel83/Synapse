@@ -9,10 +9,12 @@ import {
 import { db, type TableInsert } from "../infrastructure/database/kysely.js"
 import { emitEvent } from "../infrastructure/events/index.js"
 import {
+  ACTOR_RUNTIME_HEALTH,
   QUEUE_NAMES,
   SESSION_LOCK_TTL,
   REDIS_CHANNELS,
   DEFAULT_MAX_CONCURRENT_SESSIONS,
+  CONVERSATION_MESSAGE_SUBTYPE,
   isThreadConversationKind,
   textBlocks,
   CONVERSATION_PARTICIPANT_TYPE,
@@ -188,7 +190,7 @@ async function putSessionToIdle(sessionId: string) {
   }
 
   await updateSessionStatus(sessionId, "idle", { errorMessage: null })
-  await publishSessionRuntime(session.workspace_id, sessionId, {
+  await publishSessionRuntime(session.workspaceId, sessionId, {
     laneState: "idle",
     phase: "idle",
     // A clean idle transition. Clear any cached statusText/lastError
@@ -370,7 +372,7 @@ export function startSessionThinkingWorker() {
           }
           await publishSessionRuntime(workspaceId, sessionId, {
             laneState: "idle",
-            health: "ok",
+            health: ACTOR_RUNTIME_HEALTH.OK,
             phase: "idle",
             // Idle early-return: another worker already handled the wakeup,
             // or there's nothing to do. Clear any cached statusText/lastError
@@ -386,9 +388,9 @@ export function startSessionThinkingWorker() {
         const previousStatus = session.status
         if (session.status !== "running") {
           const conversationId = isThreadConversationKind(
-            session.conversation_kind
+            session.conversationKind
           )
-            ? session.conversation_id
+            ? session.conversationId
             : undefined
           await updateSessionStatus(sessionId, "running", {
             errorMessage: null,
@@ -404,9 +406,9 @@ export function startSessionThinkingWorker() {
           }
         }
         const conversationId = isThreadConversationKind(
-          session.conversation_kind
+          session.conversationKind
         )
-          ? session.conversation_id
+          ? session.conversationId
           : undefined
         threadConversationId = conversationId
 
@@ -425,15 +427,13 @@ export function startSessionThinkingWorker() {
             sessionId,
             actorId,
             actorDisplayName:
-              thinkingActorDisplayName ||
-              session.actor_display_name ||
-              "Unknown",
+              thinkingActorDisplayName || session.actorDisplayName || "Unknown",
             status,
             phase: currentPhase,
           }
           await publishSessionRuntime(workspaceId, sessionId, {
             laneState: "running",
-            health: "ok",
+            health: ACTOR_RUNTIME_HEALTH.OK,
             phase: currentPhase,
             statusText: status,
             activeTurnId: turn?.id,
@@ -451,7 +451,7 @@ export function startSessionThinkingWorker() {
           void thinkingPayload
         }
 
-        thinkingActorDisplayName = session.actor_display_name || "Unknown"
+        thinkingActorDisplayName = session.actorDisplayName || "Unknown"
         await emitThinkingStatus("Analyzing message...")
 
         const actor = await getActor(actorId, workspaceId)
@@ -504,7 +504,7 @@ export function startSessionThinkingWorker() {
                 selfParticipant.participantName ||
                 selfParticipant.displayName ||
                 actor.displayName ||
-                session.actor_display_name ||
+                session.actorDisplayName ||
                 "Unknown actor",
               title:
                 selfParticipant.participantTitle ||
@@ -579,7 +579,7 @@ export function startSessionThinkingWorker() {
           }
           contextManifest = {
             conversationId,
-            conversationKind: session.conversation_kind,
+            conversationKind: session.conversationKind,
             isImConversation: session.isImConversation,
             selfParticipantId: actorParticipantId,
             selfActorId: actorId,
@@ -617,17 +617,17 @@ export function startSessionThinkingWorker() {
           })
         }
 
-        const recallType = session.memory_bootstrap_completed
+        const recallType = session.memoryBootstrapCompleted
           ? "turn_recall"
           : "bootstrap"
         const recallQuery = buildMemoryRecallQuery({
           actorDisplayName: actor.displayName || actor.definition.displayName,
-          conversationTitle: session.conversation_title,
+          conversationTitle: session.conversationTitle,
           contextItems,
         })
         const recallResult = await recallMemories(workspaceId, {
           actorId,
-          conversationId: session.conversation_id,
+          conversationId: session.conversationId,
           recallType,
           queryText: recallQuery,
           queryBlocks: recallQuery ? textBlocks(recallQuery) : [],
@@ -653,7 +653,7 @@ export function startSessionThinkingWorker() {
             ...contextItems,
           ]
         }
-        if (recallType === "bootstrap" && !session.memory_bootstrap_completed) {
+        if (recallType === "bootstrap" && !session.memoryBootstrapCompleted) {
           await db
             .updateTable("sessions")
             .set({
@@ -664,7 +664,7 @@ export function startSessionThinkingWorker() {
         }
 
         const resolvedModelPlan = await resolveModelPlan(actorId, workspaceId, {
-          conversationId: session.conversation_id,
+          conversationId: session.conversationId,
         })
         const primaryModel = resolvedModelPlan?.candidates[0] || null
 
@@ -1006,7 +1006,7 @@ export function startSessionThinkingWorker() {
         }
 
         contextWindow = await buildProviderContextWindow({
-          conversationId: session.conversation_id,
+          conversationId: session.conversationId,
           sessionId,
           items: finalContextItems,
           manifest: contextManifest,
@@ -1016,8 +1016,8 @@ export function startSessionThinkingWorker() {
           workspaceId,
           actorId,
           sessionId,
-          conversationId: session.conversation_id,
-          conversationKind: session.conversation_kind,
+          conversationId: session.conversationId,
+          conversationKind: session.conversationKind,
           isImConversation: session.isImConversation,
           userId,
         })
@@ -1076,27 +1076,23 @@ export function startSessionThinkingWorker() {
             undefined,
             undefined,
             isPlanCollaborationMode(
-              currentSession.collaborationMode ||
-                currentSession.collaboration_mode ||
-                "default"
+              currentSession.collaborationMode || "default"
             )
               ? undefined
               : mcpTools.tools.length > 0
                 ? mcpTools.tools
                 : undefined,
             promptConversationParticipants || conversationParticipants,
-            currentSession.conversation_kind,
+            currentSession.conversationKind,
             availableSkills,
-            currentSession.collaborationMode ||
-              currentSession.collaboration_mode ||
-              "default"
+            currentSession.collaborationMode || "default"
           ).system
 
         const system = buildSystemPrompt(session)
 
         turn = await createTurn({
           sessionId,
-          conversationId: session.conversation_id,
+          conversationId: session.conversationId,
           actorId,
           triggerType: pendingWakeups[0]!.sourceType,
           triggerItemId: pendingWakeups[0]!.sourceItemId,
@@ -1109,7 +1105,7 @@ export function startSessionThinkingWorker() {
         await attachPendingWakeupsToTurn(sessionId, turn.id)
         await publishSessionRuntime(workspaceId, sessionId, {
           laneState: "running",
-          health: "ok",
+          health: ACTOR_RUNTIME_HEALTH.OK,
           phase: currentPhase,
           statusText: currentStatusText,
           activeTurnId: turn.id,
@@ -1157,12 +1153,9 @@ export function startSessionThinkingWorker() {
             {
               sessionId,
               turnId: turn.id,
-              collaborationMode:
-                session.collaborationMode ||
-                session.collaboration_mode ||
-                "default",
-              conversationId: session.conversation_id,
-              conversationKind: session.conversation_kind,
+              collaborationMode: session.collaborationMode || "default",
+              conversationId: session.conversationId,
+              conversationKind: session.conversationKind,
               isImConversation: session.isImConversation,
               conversationParticipants: participantEntries,
               userId,
@@ -1207,7 +1200,7 @@ export function startSessionThinkingWorker() {
                         await attachPendingWakeupsToTurn(sessionId, turn.id)
                         await publishSessionRuntime(workspaceId, sessionId, {
                           laneState: "running",
-                          health: "ok",
+                          health: ACTOR_RUNTIME_HEALTH.OK,
                           phase:
                             currentPhase === "error"
                               ? "thinking"
@@ -1333,7 +1326,7 @@ export function startSessionThinkingWorker() {
           sessionId,
           turnId: turn.id,
           userId,
-          conversationId: session.conversation_id,
+          conversationId: session.conversationId,
         })
 
         assertStillHoldLock()
@@ -1362,7 +1355,7 @@ export function startSessionThinkingWorker() {
         if (messagePersistence.kind === "respond") {
           await publishSessionRuntime(workspaceId, sessionId, {
             laneState: "running",
-            health: "ok",
+            health: ACTOR_RUNTIME_HEALTH.OK,
             phase: "responding",
             statusText: "Responding...",
             activeTurnId: turn.id,
@@ -1434,7 +1427,7 @@ export function startSessionThinkingWorker() {
           await updateSessionStatus(sessionId, "queued", { errorMessage: null })
           await publishSessionRuntime(workspaceId, sessionId, {
             laneState: "queued",
-            health: "ok",
+            health: ACTOR_RUNTIME_HEALTH.OK,
             phase: "idle",
             statusText: "Queued follow-up messages",
           })
@@ -1570,7 +1563,7 @@ export function startSessionThinkingWorker() {
               () =>
                 publishSessionRuntime(workspaceId, sessionId, {
                   laneState: "queued",
-                  health: "ok",
+                  health: ACTOR_RUNTIME_HEALTH.OK,
                   phase: "idle",
                   statusText: "Queued follow-up messages",
                 })
@@ -1601,7 +1594,7 @@ export function startSessionThinkingWorker() {
           () =>
             publishSessionRuntime(workspaceId, sessionId, {
               laneState: "blocked",
-              health: "error",
+              health: ACTOR_RUNTIME_HEALTH.ERROR,
               phase: "error",
               statusText: errorMessage,
               activeTurnId: turn?.id,
@@ -1629,7 +1622,7 @@ export function startSessionThinkingWorker() {
             wakeup.sourceParticipantId
         )
 
-        if (failedSession?.conversation_id && wakeupTargets.length > 0) {
+        if (failedSession?.conversationId && wakeupTargets.length > 0) {
           await runCleanupStep(
             `publish model error notice for session ${sessionId}`,
             async () => {
@@ -1637,20 +1630,20 @@ export function startSessionThinkingWorker() {
                 wakeupTargets.map(async (wakeup) => {
                   if (wakeup.sourceParticipantType === "workspace_member") {
                     return getConversationParticipant({
-                      conversationId: failedSession.conversation_id,
+                      conversationId: failedSession.conversationId,
                       workspaceMemberId: wakeup.sourceParticipantId as string,
                     })
                   }
 
                   if (wakeup.sourceParticipantType === "remote_agent") {
                     return getConversationParticipant({
-                      conversationId: failedSession.conversation_id,
+                      conversationId: failedSession.conversationId,
                       remoteAgentId: wakeup.sourceParticipantId as string,
                     })
                   }
 
                   return getConversationParticipant({
-                    conversationId: failedSession.conversation_id,
+                    conversationId: failedSession.conversationId,
                     participantId: wakeup.sourceParticipantId as string,
                   })
                 })
@@ -1676,7 +1669,7 @@ export function startSessionThinkingWorker() {
                 sessionId,
                 workspaceId,
                 role: "assistant",
-                subtype: "model_error_notice",
+                subtype: CONVERSATION_MESSAGE_SUBTYPE.MODEL_ERROR_NOTICE,
                 visibility: "shared_visible",
                 contentBlocks: textBlocks("出错了"),
                 fromActorId: actorId,

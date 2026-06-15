@@ -6,10 +6,28 @@
 // service). Returns camelCase domain rows with Date objects KEPT (Date→ISO
 // serialization stays in presenter.ts per r3). round-6 P1-6.
 
+import { parseJsonObjectOrUndefined } from "@synapse/shared"
 import { db } from "../../infrastructure/database/kysely.js"
 import type { FileParseRunRow, FileParseOutputRow } from "./presenter.js"
 
 const PENDING_PARSER_KEY = "pending_dispatch"
+
+export type FileParseOutputDbRow = Omit<
+  FileParseOutputRow,
+  "structuredJson"
+> & {
+  structuredJson: unknown
+}
+
+export function normalizeFileParseOutputRow(
+  row: FileParseOutputDbRow
+): FileParseOutputRow {
+  const { structuredJson, ...rest } = row
+  return {
+    ...rest,
+    structuredJson: parseJsonObjectOrUndefined(structuredJson),
+  }
+}
 
 export async function insertPendingParseRun(params: {
   assetId: string
@@ -154,12 +172,13 @@ export async function markParseRunFailed(
 export async function listParseOutputRowsForRuns(
   runIds: string[]
 ): Promise<FileParseOutputRow[]> {
-  return (await db
+  const rows = (await db
     .selectFrom("fileParseOutputs")
     .selectAll()
     .where("runId", "in", runIds)
     .orderBy("createdAt", "asc")
-    .execute()) as FileParseOutputRow[]
+    .execute()) as FileParseOutputDbRow[]
+  return rows.map(normalizeFileParseOutputRow)
 }
 
 export async function getLatestParseRun(

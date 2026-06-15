@@ -1,10 +1,19 @@
 import { v4 as uuidv4 } from "uuid"
 import type {
   ActorAccessRequestListRecord,
+  ContactHubEntryRecord,
+  ContactHubDetailRecord,
+  ContactHubRecord,
+  RelationshipActorSummaryRecord,
+  DirectConversationOpenRecord,
   FriendRequestListRecord,
+  RelationshipMemberSummaryRecord,
+  RelationshipProfileRecord,
   RemoteAgentAccessRequestListRecord,
+  RelationshipRemoteAgentSummaryRecord,
 } from "./presenter.js"
 import {
+  ACTOR_ROLES,
   CONTACT_DIRECT_STATE,
   CONTACT_HUB_KIND,
   CONVERSATION_KIND,
@@ -15,27 +24,16 @@ import {
   IDENTITY_SEARCH_OUTCOME,
   RELATIONSHIP_APPROVAL_MODE,
   RELATIONSHIP_PROFILE_SUBJECT_TYPE,
+  RELATIONSHIP_REQUEST_STATUS,
   RELATIONSHIP_SCAN_OUTCOME,
   WORKSPACE_APP_KIND,
   WORKSPACE_APP_GRANT_PERMISSION,
-  type ActorAccessRequestListResponse,
-  type ContactHubDetailResponse,
-  type ContactHubEntryView,
   type ContactHubKind,
-  type ContactHubResponse,
   type ContactTargetType,
-  type DirectConversationOpenResponse,
-  type FriendRequestListResponse,
+  type ActorRole,
   type IdentitySearchMatchState,
   type IdentitySearchOutcome,
-  type IdentitySearchResponse,
-  type RelationshipActorSummaryView,
   type RelationshipApprovalMode,
-  type RelationshipMemberSummaryView,
-  type RelationshipProfileView,
-  type RelationshipRemoteAgentSummaryView,
-  type RelationshipScanResponse,
-  type RemoteAgentAccessRequestListResponse,
 } from "@synapse/shared"
 import { getFileUrlById } from "../files/service.js"
 import {
@@ -117,10 +115,10 @@ type WorkspaceSummary = {
   slug: string
 }
 
-type WorkspaceMemberSummary = RelationshipMemberSummaryView
-type ActorSummary = RelationshipActorSummaryView
-type RemoteAgentSummary = RelationshipRemoteAgentSummaryView
-type ContactHubEntry = ContactHubEntryView
+type WorkspaceMemberSummary = RelationshipMemberSummaryRecord
+type ActorSummary = RelationshipActorSummaryRecord
+type RemoteAgentSummary = RelationshipRemoteAgentSummaryRecord
+type ContactHubEntry = ContactHubEntryRecord
 
 const IDENTITY_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{3,31})$/
 
@@ -147,10 +145,6 @@ function validateIdentityId(value: string) {
   return normalized
 }
 
-function buildRelationshipQrUrl(token: string) {
-  return `synapse://relationship-qr?token=${encodeURIComponent(token)}`
-}
-
 function workspaceSummary(row: {
   workspaceId?: string
   workspaceName?: string
@@ -164,6 +158,13 @@ function workspaceSummary(row: {
     name: row.workspaceName || row.name || "Unknown workspace",
     slug: row.workspaceSlug || row.slug || "",
   }
+}
+
+function asActorRole(value: string | null | undefined): ActorRole {
+  if (value && (ACTOR_ROLES as readonly string[]).includes(value)) {
+    return value as ActorRole
+  }
+  throw new Error(`Unexpected actor role: ${value ?? "<empty>"}`)
 }
 
 async function getWorkspaceById(
@@ -232,7 +233,7 @@ async function getActorSummary(actorId: string): Promise<ActorSummary | null> {
     actorId: row.actorId,
     displayName: row.displayName,
     title: row.title,
-    role: row.role,
+    role: asActorRole(row.role),
     avatarFileId: row.avatarFileId,
     avatarEmoji: row.avatarEmoji,
     requiresContactApproval,
@@ -1062,7 +1063,7 @@ async function buildContactHubEntryMap(params: {
       actorId: row.actorId,
       displayName: row.displayName,
       title: row.title,
-      role: row.role,
+      role: asActorRole(row.role),
       avatarFileId: row.avatarFileId,
       avatarEmoji: row.avatarEmoji,
       requiresContactApproval:
@@ -1999,7 +2000,7 @@ export async function requestRelationshipByIdentityProfile(params: {
 export async function getMemberRelationshipProfile(params: {
   workspaceId: string
   userId: string
-}): Promise<RelationshipProfileView> {
+}): Promise<RelationshipProfileRecord> {
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
     params.userId
@@ -2017,7 +2018,6 @@ export async function getMemberRelationshipProfile(params: {
     subjectType: RELATIONSHIP_PROFILE_SUBJECT_TYPE.MEMBER,
     approvalMode: profile.approvalMode,
     qrToken: profile.qrToken,
-    qrUrl: buildRelationshipQrUrl(profile.qrToken),
     identityId: profile.identityId,
     identitySearchEnabled: profile.identitySearchEnabled,
     requiresContactApproval: false,
@@ -2030,7 +2030,7 @@ export async function updateMemberRelationshipProfile(params: {
   approvalMode: ApprovalMode
   identityId?: string
   identitySearchEnabled?: boolean
-}): Promise<RelationshipProfileView> {
+}): Promise<RelationshipProfileRecord> {
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
     params.userId
@@ -2063,7 +2063,6 @@ export async function updateMemberRelationshipProfile(params: {
       subjectType: RELATIONSHIP_PROFILE_SUBJECT_TYPE.MEMBER,
       approvalMode: updated.approvalMode,
       qrToken: updated.qrToken,
-      qrUrl: buildRelationshipQrUrl(updated.qrToken),
       identityId: updated.identityId,
       identitySearchEnabled: updated.identitySearchEnabled,
       requiresContactApproval: false,
@@ -2080,7 +2079,7 @@ export async function getActorRelationshipProfile(params: {
   workspaceId: string
   actorId: string
   userId: string
-}): Promise<RelationshipProfileView> {
+}): Promise<RelationshipProfileRecord> {
   const actor = await getActorSummary(params.actorId)
   if (!actor || actor.workspace.id !== params.workspaceId) {
     throw new Error("Actor not found")
@@ -2102,7 +2101,6 @@ export async function getActorRelationshipProfile(params: {
     subjectType: RELATIONSHIP_PROFILE_SUBJECT_TYPE.ACTOR,
     approvalMode: profile.approvalMode,
     qrToken: profile.qrToken,
-    qrUrl: buildRelationshipQrUrl(profile.qrToken),
     identityId: profile.identityId,
     identitySearchEnabled: profile.identitySearchEnabled,
     requiresContactApproval: actor.requiresContactApproval,
@@ -2114,7 +2112,7 @@ export async function getRemoteAgentRelationshipProfile(params: {
   workspaceId: string
   remoteAgentId: string
   userId: string
-}): Promise<RelationshipProfileView> {
+}): Promise<RelationshipProfileRecord> {
   const remoteAgent = await getRemoteAgentSummary(params.remoteAgentId)
   if (!remoteAgent || remoteAgent.workspace.id !== params.workspaceId) {
     throw new Error("Remote agent not found")
@@ -2136,7 +2134,6 @@ export async function getRemoteAgentRelationshipProfile(params: {
     subjectType: RELATIONSHIP_PROFILE_SUBJECT_TYPE.REMOTE_AGENT,
     approvalMode: profile.approvalMode,
     qrToken: profile.qrToken,
-    qrUrl: buildRelationshipQrUrl(profile.qrToken),
     identityId: profile.identityId,
     identitySearchEnabled: profile.identitySearchEnabled,
     requiresContactApproval: remoteAgent.requiresContactApproval,
@@ -2152,7 +2149,7 @@ export async function updateActorRelationshipProfile(params: {
   identityId?: string
   identitySearchEnabled?: boolean
   isPublicShared?: boolean
-}): Promise<RelationshipProfileView> {
+}): Promise<RelationshipProfileRecord> {
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
     params.userId
@@ -2209,7 +2206,6 @@ export async function updateActorRelationshipProfile(params: {
     subjectType: RELATIONSHIP_PROFILE_SUBJECT_TYPE.ACTOR,
     approvalMode: updatedProfile.approvalMode,
     qrToken: updatedProfile.qrToken,
-    qrUrl: buildRelationshipQrUrl(updatedProfile.qrToken),
     identityId: updatedProfile.identityId,
     identitySearchEnabled: updatedProfile.identitySearchEnabled,
     requiresContactApproval,
@@ -2225,7 +2221,7 @@ export async function updateRemoteAgentRelationshipProfile(params: {
   identityId?: string
   identitySearchEnabled?: boolean
   isPublicShared?: boolean
-}): Promise<RelationshipProfileView> {
+}): Promise<RelationshipProfileRecord> {
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
     params.userId
@@ -2284,7 +2280,6 @@ export async function updateRemoteAgentRelationshipProfile(params: {
     subjectType: RELATIONSHIP_PROFILE_SUBJECT_TYPE.REMOTE_AGENT,
     approvalMode: updatedProfile.approvalMode,
     qrToken: updatedProfile.qrToken,
-    qrUrl: buildRelationshipQrUrl(updatedProfile.qrToken),
     identityId: updatedProfile.identityId,
     identitySearchEnabled: updatedProfile.identitySearchEnabled,
     requiresContactApproval,
@@ -2419,7 +2414,7 @@ export async function listFriendRequests(params: {
         : null
     incoming.push({
       id: row.id,
-      status: row.status,
+      status: RELATIONSHIP_REQUEST_STATUS.PENDING,
       createdAt: row.createdAt,
       requester,
       targetType: subjectKindToRelationshipPeerType(row.targetKind),
@@ -2445,7 +2440,7 @@ export async function listFriendRequests(params: {
         : null
     outgoing.push({
       id: row.id,
-      status: row.status,
+      status: RELATIONSHIP_REQUEST_STATUS.PENDING,
       createdAt: row.createdAt,
       targetType: subjectKindToRelationshipPeerType(row.targetKind),
       targetMember,
@@ -2584,7 +2579,7 @@ export async function listActorAccessRequests(params: {
     if (!canApprove) continue
     incoming.push({
       id: row.id,
-      status: row.status,
+      status: RELATIONSHIP_REQUEST_STATUS.PENDING,
       createdAt: row.createdAt,
       requester: await getWorkspaceMemberSummaryById(
         row.requesterWorkspaceMemberId
@@ -2598,7 +2593,7 @@ export async function listActorAccessRequests(params: {
     if (!row.actorId) continue
     outgoing.push({
       id: row.id,
-      status: row.status,
+      status: RELATIONSHIP_REQUEST_STATUS.PENDING,
       createdAt: row.createdAt,
       actor: await getActorSummary(row.actorId),
     })
@@ -2642,7 +2637,7 @@ export async function listRemoteAgentAccessRequests(params: {
     if (!canApprove) continue
     incoming.push({
       id: row.id,
-      status: row.status,
+      status: RELATIONSHIP_REQUEST_STATUS.PENDING,
       createdAt: row.createdAt,
       requester: await getWorkspaceMemberSummaryById(
         row.requesterWorkspaceMemberId
@@ -2656,7 +2651,7 @@ export async function listRemoteAgentAccessRequests(params: {
     if (!row.remoteAgentId) continue
     outgoing.push({
       id: row.id,
-      status: row.status,
+      status: RELATIONSHIP_REQUEST_STATUS.PENDING,
       createdAt: row.createdAt,
       remoteAgent: await getRemoteAgentSummary(row.remoteAgentId),
     })
@@ -2766,7 +2761,7 @@ export async function resolveRemoteAgentAccessRequest(params: {
 export async function getContactHub(params: {
   workspaceId: string
   userId: string
-}): Promise<ContactHubResponse> {
+}): Promise<ContactHubRecord> {
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
     params.userId
@@ -2833,7 +2828,7 @@ export async function getContactHubDetail(params: {
   userId: string
   contactKind: ContactHubKind
   contactId: string
-}): Promise<ContactHubDetailResponse> {
+}): Promise<ContactHubDetailRecord> {
   const hub = await getContactHub({
     workspaceId: params.workspaceId,
     userId: params.userId,
@@ -2888,7 +2883,7 @@ export async function openDirectConversation(params: {
   userId: string
   contactKind: ContactHubKind
   contactId: string
-}): Promise<DirectConversationOpenResponse> {
+}): Promise<DirectConversationOpenRecord> {
   const resolved = await resolveContactReference(params)
   const requesterWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,

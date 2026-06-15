@@ -17,15 +17,12 @@
 
 import { redis } from "../../../../infrastructure/redis/index.js"
 import type {
+  DingtalkDeviceFlowStatus,
   TransportAccountInboundActorMode,
   TransportAccountOwnerScope,
 } from "@synapse/shared/types"
 
-export type RegistrationSessionStatus =
-  | "waiting"
-  | "success"
-  | "fail"
-  | "expired"
+export type RegistrationSessionStatus = DingtalkDeviceFlowStatus
 
 /**
  * Form fields supplied to /device-registration/start that need to survive

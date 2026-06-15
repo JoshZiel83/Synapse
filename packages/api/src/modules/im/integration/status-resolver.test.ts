@@ -1,5 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import { ACTOR_RUNTIME_HEALTH } from "@synapse/shared"
 import {
   decideRuntimeUpdateAction,
   resolveActorActionStatus,
@@ -97,7 +98,7 @@ test("decision: hard error (health=error) → terminal-error", () => {
   assert.deepEqual(
     decideRuntimeUpdateAction({
       laneState: "blocked",
-      health: "error",
+      health: ACTOR_RUNTIME_HEALTH.ERROR,
       phase: "error",
     }),
     { kind: "terminal-error" }
@@ -117,7 +118,7 @@ test("decision: phase=error alone is NOT terminal (may be inherited stale phase 
   assert.deepEqual(
     decideRuntimeUpdateAction({
       laneState: "queued",
-      health: "ok",
+      health: ACTOR_RUNTIME_HEALTH.OK,
       phase: "error",
     }),
     { kind: "noop" }
@@ -125,7 +126,7 @@ test("decision: phase=error alone is NOT terminal (may be inherited stale phase 
   assert.deepEqual(
     decideRuntimeUpdateAction({
       laneState: "running",
-      health: "ok",
+      health: ACTOR_RUNTIME_HEALTH.OK,
       phase: "error",
     }),
     { kind: "noop" }
@@ -154,7 +155,7 @@ test("decision: clean completion (idle+idle) → terminal-done", () => {
   assert.deepEqual(
     decideRuntimeUpdateAction({
       laneState: "idle",
-      health: "ok",
+      health: ACTOR_RUNTIME_HEALTH.OK,
       phase: "idle",
     }),
     { kind: "terminal-done" }
@@ -169,7 +170,7 @@ test("decision: queued-follow-up (queued+idle) is NOT terminal", () => {
   assert.deepEqual(
     decideRuntimeUpdateAction({
       laneState: "queued",
-      health: "ok",
+      health: ACTOR_RUNTIME_HEALTH.OK,
       phase: "idle",
     }),
     { kind: "noop" }
@@ -180,7 +181,7 @@ test("decision: running+thinking → set-level=thinking + (handler stops typing)
   assert.deepEqual(
     decideRuntimeUpdateAction({
       laneState: "running",
-      health: "ok",
+      health: ACTOR_RUNTIME_HEALTH.OK,
       phase: "thinking",
     }),
     { kind: "set-level", level: "thinking" }
@@ -191,7 +192,7 @@ test("decision: running+tool → set-level=tool", () => {
   assert.deepEqual(
     decideRuntimeUpdateAction({
       laneState: "running",
-      health: "ok",
+      health: ACTOR_RUNTIME_HEALTH.OK,
       phase: "tool",
     }),
     { kind: "set-level", level: "tool" }
@@ -202,7 +203,7 @@ test("decision: running+responding → set-level=coding (model writing output)",
   assert.deepEqual(
     decideRuntimeUpdateAction({
       laneState: "running",
-      health: "ok",
+      health: ACTOR_RUNTIME_HEALTH.OK,
       phase: "responding",
     }),
     { kind: "set-level", level: "coding" }
@@ -213,7 +214,7 @@ test("decision: running+blocked (wait state) → noop (keep previous reaction)",
   assert.deepEqual(
     decideRuntimeUpdateAction({
       laneState: "running",
-      health: "ok",
+      health: ACTOR_RUNTIME_HEALTH.OK,
       phase: "blocked",
     }),
     { kind: "noop" }
@@ -234,7 +235,7 @@ test("decision: error takes precedence over completion", () => {
   assert.deepEqual(
     decideRuntimeUpdateAction({
       laneState: "idle",
-      health: "error",
+      health: ACTOR_RUNTIME_HEALTH.ERROR,
       phase: "idle",
     }),
     { kind: "terminal-error" }

@@ -210,6 +210,30 @@ function isOfficialChiefTemplate(row: {
   )
 }
 
+function normalizeActorRecord(row: {
+  [K in keyof ActorRecord]: K extends "config"
+    ? unknown
+    : K extends "specialties"
+      ? string[] | null
+      : ActorRecord[K]
+}): ActorRecord {
+  return {
+    id: row.id,
+    role: row.role,
+    title: row.title,
+    avatarFileId: row.avatarFileId,
+    avatarEmoji: row.avatarEmoji,
+    parentId: row.parentId,
+    canRepresentUser: row.canRepresentUser,
+    config: parseJsonObject(row.config),
+    specialties: Array.isArray(row.specialties) ? row.specialties : [],
+    currentVersion: row.currentVersion,
+    isPublicShared: row.isPublicShared,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  }
+}
+
 async function loadOfficialActorTemplates(
   executor: Executor
 ): Promise<LoadedOfficialActorTemplate[]> {
@@ -358,6 +382,7 @@ export async function createWorkspaceTx(input: CreateWorkspaceInput) {
       if (!actorRow) {
         throw new Error(`Failed to install actor ${template.actorDisplayName}`)
       }
+      const normalizedActorRow = normalizeActorRecord(actorRow)
 
       const actorVersionResult = await trx
         .insertInto("actorVersions")
@@ -408,7 +433,7 @@ export async function createWorkspaceTx(input: CreateWorkspaceInput) {
         .execute()
 
       installedActors.push({
-        actorRow,
+        actorRow: normalizedActorRow,
         template,
       })
     }

@@ -23,6 +23,12 @@ export type WorkspaceInviteWithWorkspaceNameRecord = WorkspaceInviteRecord & {
   workspaceName: string | null
 }
 
+export type WorkspaceInviteRedeemRecord = {
+  workspaceId: string
+  workspaceName: string | null
+  trustLevel: WorkspaceInvitesTrustLevel
+}
+
 export function generateInviteToken(): string {
   return crypto.randomBytes(6).toString("base64url").slice(0, 8)
 }
@@ -93,11 +99,7 @@ export async function updateInviteRevoked(
 export async function redeemInviteTx(
   token: string,
   userId: string
-): Promise<{
-  workspaceId: string
-  workspaceName: string | null
-  trustLevel: WorkspaceInvitesTrustLevel
-}> {
+): Promise<WorkspaceInviteRedeemRecord> {
   return withDbTransaction(async (trx) => {
     const invite = await trx
       .selectFrom("workspaceInvites")

@@ -8,12 +8,8 @@ import {
   commandlinePolicyAllows as sharedCommandlinePolicyAllows,
   cuaPolicyAllows as sharedCuaPolicyAllows,
   browserPolicyAllows as sharedBrowserPolicyAllows,
-  parseJsonObject,
   SUBJECT_KIND,
   workspaceRef,
-  workspaceMemberRef,
-  actorRef,
-  remoteAgentRef,
   conversationRef,
   type SubjectRef,
 } from "@synapse/shared"
@@ -26,19 +22,21 @@ import type {
 } from "@synapse/shared/types"
 import {
   GrantPolicySchema,
-  validateGrantPolicyForCapability,
   type PolicyValidationFailure,
 } from "@synapse/shared/access/policies"
-import type { ZodIssue } from "zod"
 import type { Executor } from "../../infrastructure/database/kysely.js"
 import {
   consumeRuntimeAuthorizationGrantRow,
   getRuntimeAuthorizationGrantRow,
+  InvalidGrantSubjectRowError,
   insertRuntimeAuthorizationGrantRow,
   listCandidateRowsForDispatch,
   listDashboardGrantRows,
   lockActiveGrantForShare,
   lockDeviceToolLatestRevisionForShare,
+  runtimeAuthorizationGrantPolicyCapability,
+  runtimeAuthorizationGrantRowToCandidate as rowToCandidate,
+  runtimeAuthorizationGrantSubjectFailure,
   revokeRuntimeAuthorizationGrantRow,
   runRuntimeAuthorizationGrantTransaction,
   setLocalLockTimeout,
@@ -92,12 +90,10 @@ function normalizePathPrefixes(values: unknown) {
 export type {
   RuntimeAuthorizationGrantRecord,
   RuntimeAuthorizationGrantCandidate,
-  RuntimeAuthorizationGrantCandidateRow,
 } from "./repo.types.js"
 import type {
   RuntimeAuthorizationGrantRecord,
   RuntimeAuthorizationGrantCandidate,
-  RuntimeAuthorizationGrantCandidateRow,
   RuntimeAuthorizationGrantPolicyInsert,
   RuntimeAuthorizationGrantSourceRequestArgsInsert,
 } from "./repo.types.js"
@@ -108,68 +104,7 @@ import { mapRuntimeAuthorizationGrantCandidate } from "./presenter.js"
 // module barrel keeps exposing it to existing importers.
 export { mapRuntimeAuthorizationGrantCandidate }
 
-/**
- * Helper: hydrate a candidate row's joined access_subjects view into a typed
- * SubjectRef. Throws InvalidGrantSubjectRowError if the joined columns can't
- * be reconciled with the kind discriminator (data corruption case — should be
- * impossible under tg_runtime_authorization_grant_validate enforcement, but
- * guarded here for defense-in-depth).
- */
-function subjectRowToRef(input: {
-  kind: string
-  workspaceId: string | null
-  workspaceMemberId: string | null
-  actorId: string | null
-  remoteAgentId: string | null
-  conversationId: string | null
-}): SubjectRef {
-  switch (input.kind) {
-    case SUBJECT_KIND.WORKSPACE:
-      if (!input.workspaceId) {
-        throw new InvalidGrantSubjectRowError(
-          "workspace subject missing workspace_id"
-        )
-      }
-      return workspaceRef(input.workspaceId)
-    case SUBJECT_KIND.WORKSPACE_MEMBER:
-      if (!input.workspaceMemberId) {
-        throw new InvalidGrantSubjectRowError(
-          "workspace_member subject missing workspace_member_id"
-        )
-      }
-      return workspaceMemberRef(input.workspaceMemberId)
-    case SUBJECT_KIND.ACTOR:
-      if (!input.actorId) {
-        throw new InvalidGrantSubjectRowError("actor subject missing actor_id")
-      }
-      return actorRef(input.actorId)
-    case SUBJECT_KIND.REMOTE_AGENT:
-      if (!input.remoteAgentId) {
-        throw new InvalidGrantSubjectRowError(
-          "remote_agent subject missing remote_agent_id"
-        )
-      }
-      return remoteAgentRef(input.remoteAgentId)
-    case SUBJECT_KIND.CONVERSATION:
-      if (!input.conversationId) {
-        throw new InvalidGrantSubjectRowError(
-          "conversation subject missing conversation_id"
-        )
-      }
-      return conversationRef(input.conversationId)
-    default:
-      throw new InvalidGrantSubjectRowError(
-        `unsupported subject kind ${input.kind}`
-      )
-  }
-}
-
-export class InvalidGrantSubjectRowError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = "InvalidGrantSubjectRowError"
-  }
-}
+export { InvalidGrantSubjectRowError }
 
 // ============================================================================
 // subject-scope-refactor: presetToOwnerScope — caller-side helper. Translates
@@ -312,46 +247,10 @@ export class UnsupportedGrantTargetError extends Error {
 }
 
 // ============================================================================
-// Mapping: candidate → record. mapRuntimeAuthorizationGrantCandidate lives in
-// presenter.ts (it shapes the DTO + serializes instants). Imported + re-exported
-// above. Mapper is a pure function — caller must pass parsedPolicy from a
-// successful validateGrantPolicyForCapability call.
+// Mapping: candidate → record. Candidate hydration and grant-policy business
+// JSON validation live in repo.ts; mapRuntimeAuthorizationGrantCandidate lives
+// in presenter.ts (it shapes the DTO + serializes instants).
 // ============================================================================
-
-function rowToCandidate(
-  row: RuntimeAuthorizationGrantCandidateRow
-): RuntimeAuthorizationGrantCandidate {
-  const subject = subjectRowToRef({
-    kind: row.subjectKind,
-    workspaceId: row.subjectWorkspaceId,
-    workspaceMemberId: row.subjectWorkspaceMemberId,
-    actorId: row.subjectActorId,
-    remoteAgentId: row.subjectRemoteAgentId,
-    conversationId: row.subjectConversationId,
-  })
-  const scope = row.scopeKind
-    ? subjectRowToRef({
-        kind: row.scopeKind,
-        workspaceId: row.scopeWorkspaceId,
-        workspaceMemberId: null,
-        actorId: null,
-        remoteAgentId: null,
-        conversationId: row.scopeConversationId,
-      })
-    : undefined
-  const rawPolicy = parseJsonObject(row.policy)
-  const validationResult = validateGrantPolicyForCapability(rawPolicy)
-  return {
-    rawRow: row,
-    rawPolicy,
-    policyValidationResult: validationResult,
-    subject,
-    scope,
-    retention: row.retention,
-    retryNonceOnRow: row.sourceRetryNonce || undefined,
-    sourceTaskIdOnRow: row.sourceTaskId || undefined,
-  }
-}
 
 // ============================================================================
 // CRUD: create, get, revoke, supersede
@@ -1303,17 +1202,8 @@ export async function listDeviceCapabilityRuntimeAuthorizationGrantsForDashboard
       // Subject row corruption case (rare, gated by trigger).
       corrupt.push({
         rowId: row.id,
-        capability: parseJsonObject(row.policy)?.capability,
-        validatorFailure: {
-          kind: "parse_error",
-          issues: [
-            {
-              code: "custom" as any,
-              message: err instanceof Error ? err.message : String(err),
-              path: ["subject"],
-            } as ZodIssue,
-          ],
-        },
+        capability: runtimeAuthorizationGrantPolicyCapability(row.policy),
+        validatorFailure: runtimeAuthorizationGrantSubjectFailure(err),
       })
       continue
     }

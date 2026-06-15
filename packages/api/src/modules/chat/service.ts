@@ -1,6 +1,8 @@
 import { randomUUID } from "crypto"
 import {
   buildConversationMessageRef,
+  CHAT_MEMBERSHIP_UPDATE_REASON,
+  CHAT_PARTICIPANT_REMOVAL_STATE,
   CONVERSATION_ITEM_SCOPE,
   CONVERSATION_ITEM_SCOPES,
   CONVERSATION_ITEM_ROLE,
@@ -9,30 +11,29 @@ import {
   CONVERSATION_ITEM_SURFACES,
   CONVERSATION_ITEM_TYPE,
   CONVERSATION_ITEM_TYPES,
+  CONVERSATION_FEED_MESSAGE_TYPE,
   CONVERSATION_KIND,
   CONVERSATION_KINDS,
+  CONVERSATION_MESSAGE_TRANSPORT_DIRECTION,
+  CONVERSATION_MESSAGE_SUBTYPE,
+  CONVERSATION_MESSAGE_SUBTYPES,
+  CONVERSATION_PARTICIPANT_STATE,
   CONVERSATION_PARTICIPANT_TYPE,
+  CONVERSATION_REPLY_REF_SPECIAL_SUBTYPE,
   normalizeCanonicalContentBlocks,
   parseConversationMessageRef,
   extractText,
   type CanonicalContentBlock,
   type ActorRuntimeTurnActivityDetail,
-  type ChatBootstrapResponse,
-  type ChatClientInstanceRegistrationResponse,
   type ChatConversationEventItem,
-  type ChatConversationCreateResponse,
   type ChatConversationItem,
-  type ChatConversationMessagesPage,
-  type ChatConversationReadWatermarkResponse,
   type ChatConversationSendMessageRequest,
-  type ChatConversationSendMessageResponse,
-  type ChatConversationView,
   type ChatDeviceState,
   type ChatParticipantSummary,
+  type ChatParticipantRemovalState,
   type ChatSyncEvent,
   type ChatSyncEventPayloadMap,
   type ChatSyncEventType,
-  type ChatSyncResponse,
   type Timestamp,
   type ConversationMessageSubtype,
   type ConversationParticipantType,
@@ -46,7 +47,7 @@ import type {
   ConversationEventContextPolicy,
   ConversationEventTimelinePolicy,
   ConversationFeedEventItem,
-  ConversationFeedMessageType,
+  ConversationFeedItemSubtype,
   ConversationFeedEventPayloadMap,
   ConversationFeedEventType,
   ConversationFeedItem,
@@ -54,13 +55,8 @@ import type {
   ConversationMessageTransportContext,
   ConversationMessageTransportDelivery,
   TaskSummary,
-  TransportKind,
 } from "@synapse/shared/types"
-import { CompiledQuery, sql } from "kysely"
 import {
-  db,
-  runBuilder,
-  withDbTransaction,
   type Executor,
   type DatabaseTransaction,
 } from "../../infrastructure/database/kysely.js"
@@ -82,10 +78,93 @@ import {
   requireInstantDate,
   serializeNowInstant,
 } from "../../infrastructure/datetime.js"
-import { jsonbValue, mapPushTokenRow, type ChatPushTokenRow } from "./repo.js"
+import {
+  chatRootExecutor,
+  conversationItemHasTargets,
+  conversationParticipantExists,
+  countUnreadVisibleConversationMessages,
+  deleteChatPushTokenRecord,
+  getChatConversationCreateRequestConversationId,
+  getChatConversationBaseRow,
+  getChatWorkspaceMemberConversationParticipantRow,
+  getConversationMaxSequence,
+  getConversationDeviceState,
+  getConversationParticipantById,
+  getConversationKind,
+  getConversationRecord,
+  getLastConversationItemIdAtOrBeforeSequence,
+  getLastVisibleConversationItemRow,
+  getChatClientInstanceOwner,
+  getConversationParticipantReadState,
+  getConversationParticipantStateBySubject,
+  getConversationItemRowById,
+  getTransportAddressSubjectRow,
+  getVisibleConversationReplyRefRow,
+  getVisibleConversationReplyTargetRow,
+  getWorkspaceMemberSyncCursor,
+  insertChatConversationCreateRequest,
+  insertChatClientInstance,
+  insertConversationRecord,
+  insertConversationRecordReturning,
+  insertConversationItemDetailRows,
+  insertConversationItemRecord,
+  insertConversationParticipantRecord,
+  insertWorkspaceMemberSyncEventRow,
+  isChatTransaction,
+  listActorDisplayNameRows,
+  listChatConversationBaseRows,
+  listChatConversationParticipantRows,
+  listChatPushTokenRecords,
+  listContextConversationItemRowsForParticipant,
+  listConversationItemPartRows,
+  listConversationItemRowsByIds,
+  listConversationItemTargetRows,
+  listConversationParticipantStatesByWorkspaceMember,
+  listConversationRealtimeRecipientRows,
+  listConversationItemContextTargetRows,
+  listTransportDeliveryRowsForItems,
+  listNearbyVisibleConversationReplyRefRows,
+  listMentionedParticipantIdsForConversationItem,
+  listRemoteAgentDisplayNameRows,
+  listVisibleConversationMessageRows,
+  listWorkspaceMemberSyncEventRows,
+  listWorkspaceMemberNameRows,
+  reactivateConversationParticipant,
+  upsertChatPushTokenRecord,
+  updateConversationItemEventPayload as updateConversationItemEventPayloadRow,
+  updateChatClientInstanceSeen,
+  updateConversationMutableFields,
+  updateConversationParticipantState,
+  upsertConversationDeviceState,
+  upsertConversationParticipantReadState,
+  upsertWorkspaceMemberConversationView,
+  upsertConversationParticipantAddress,
+  touchConversationUpdatedAt,
+  withChatRepeatableRead,
+  withChatTransaction,
+  type ChatConversationBaseRow,
+  type ChatConversationItemRow,
+  type ChatConversationItemPartRow,
+  type ChatParticipantRow,
+  type ChatPushTokenRow,
+} from "./repo.js"
 // Re-exported for existing consumers that import the row DTO from chat/service.
 export type { ChatPushTokenRow }
-import { presentInstant, presentOptionalInstant } from "./presenter.js"
+import {
+  presentChatConversationRecord,
+  presentInstant,
+  presentOptionalInstant,
+  type ChatBootstrapRecord,
+  type ChatClientInstanceRegistrationRecord,
+  type ChatConversationCreateRecord,
+  type ChatConversationEnvelopeRecord,
+  type ChatConversationListRecord,
+  type ChatConversationMessagesRecord,
+  type ChatConversationRecord,
+  type ChatConversationReadWatermarkRecord,
+  type ChatConversationSendMessageRecord,
+  type ChatSyncRecord,
+} from "./presenter.js"
 import {
   getConversationEventSpec,
   isConversationEventType,
@@ -118,6 +197,7 @@ type ItemSurface = (typeof CONVERSATION_ITEM_SURFACES)[number]
 type ItemType = (typeof CONVERSATION_ITEM_TYPES)[number]
 type ItemRole = (typeof CONVERSATION_ITEM_ROLES)[number]
 type NonEventItemType = Exclude<ItemType, "event">
+type MessageLikeItemType = Exclude<NonEventItemType, "summary">
 
 export interface ConversationItemPartInput {
   type: "text" | "file_ref" | "json"
@@ -130,99 +210,13 @@ export interface ConversationItemPartInput {
   metadata?: Record<string, unknown>
 }
 
-type ConversationBaseRow = {
-  conversationId: string
-  kind: ConversationKind
-  isIm: boolean
-  title: string | null
-  createdAt: Date
-  updatedAt: Date
-  unreadCount: number | string
-  muted: boolean
-  archived: boolean
-  pinnedSortKey: Date | null
-  lastVisibleItemId: string | null
-  lastVisibleSequence: number | string
-  lastVisibleAt: Date | null
-}
+type ConversationBaseRow = ChatConversationBaseRow
 
-type ParticipantRow = {
-  id: string
-  conversationId: string
-  participantType: ParticipantKind
-  workspaceMemberId: string | null
-  actorId: string | null
-  remoteAgentId: string | null
-  actorJoinVersionId: string | null
-  displayName: string | null
-  roleKey: string
-  state: "active" | "left" | "removed"
-  metadata: unknown
-  joinedAt: Date
-  leftAt: Date | null
-  userId: string | null
-  userName: string | null
-  participantName: string | null
-  participantTitle: string | null
-  participantRole: string | null
-  actorDocs: unknown
-  actorCanRepresentUser: boolean | null
-  actorSpecialties: unknown
-  actorConfig: unknown
-  actorCurrentVersion: number | string | null
-  participantAvatarEmoji: string | null
-  participantAvatarFileId: string | null
-  userAvatarFileId: string | null
-  transportAddressId: string | null
-  transportKind: string | null
-  transportExternalId: string | null
-  transportDisplayName: string | null
-  linkedUserId: string | null
-  linkedUserName: string | null
-  linkedUserAvatarFileId: string | null
-  sessionId: string | null
-  sessionStatus: string | null
-}
+type ParticipantRow = ChatParticipantRow
 
-type ItemRow = {
-  id: string
-  conversationId: string
-  sessionId?: string | null
-  turnId?: string | null
-  clientMessageId: string | null
-  scope: "shared" | "private"
-  surface: "visible" | "internal"
-  itemType: "message" | "event" | "summary" | "control"
-  subtype: string
-  role: "user" | "assistant" | "system" | "tool"
-  authorParticipantId: string | null
-  replyToItemId: string | null
-  causedByItemId: string | null
-  eventPayload?: unknown
-  eventTimelinePolicy?: string | null
-  eventContextPolicy?: string | null
-  metadata: unknown
-  sequence: string | number
-  createdAt: Date
-}
+type ItemRow = ChatConversationItemRow
 
-type ItemPartRow = {
-  itemId: string
-  ordinal: number
-  partType: "text" | "file_ref" | "json"
-  textValue: string | null
-  refPath: string | null
-  refSha256: string | null
-  jsonValue: unknown
-  mimeType: string | null
-  name: string | null
-  metadata: unknown
-}
-
-type ParticipantLinkRow = {
-  itemId: string
-  targetParticipantId: string
-}
+type ItemPartRow = ChatConversationItemPartRow
 
 interface ConversationItemDetailBase {
   id: string
@@ -246,10 +240,15 @@ interface ConversationItemDetailBase {
   clientMessageId?: string
 }
 
-export interface ConversationNonEventItemDetail extends ConversationItemDetailBase {
-  itemType: NonEventItemType
-  subtype: ConversationFeedMessageType
-}
+export type ConversationNonEventItemDetail =
+  | (ConversationItemDetailBase & {
+      itemType: MessageLikeItemType
+      subtype: ConversationMessageSubtype
+    })
+  | (ConversationItemDetailBase & {
+      itemType: typeof CONVERSATION_ITEM_TYPE.SUMMARY
+      subtype: typeof CONVERSATION_FEED_MESSAGE_TYPE.SUMMARY
+    })
 
 export interface ConversationEventItemDetail<
   T extends ConversationFeedEventType = ConversationFeedEventType,
@@ -347,32 +346,9 @@ function toNumber(value: unknown): number {
   return 0
 }
 
-function asJsonRecord(value: unknown): Record<string, unknown> {
-  if (!value) return {}
-  if (typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>
-  }
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value)
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as Record<string, unknown>
-      }
-    } catch {
-      return {}
-    }
-  }
-  return {}
-}
-
-const CONVERSATION_MESSAGE_SUBTYPE_SET = new Set<ConversationMessageSubtype>([
-  "chat.message",
-  "user",
-  "assistant",
-  "system",
-  "tool_result",
-  "model_error_notice",
-])
+const CONVERSATION_MESSAGE_SUBTYPE_SET = new Set<ConversationMessageSubtype>(
+  CONVERSATION_MESSAGE_SUBTYPES
+)
 
 function isConversationMessageSubtype(
   value: string
@@ -390,18 +366,45 @@ function assertConversationMessageSubtype(
   }
 }
 
+function normalizeConversationItemSubtype(
+  itemType: ItemType,
+  subtype: string,
+  itemId: string
+): ConversationFeedItemSubtype {
+  if (itemType === CONVERSATION_ITEM_TYPE.EVENT) {
+    if (!isConversationEventType(subtype)) {
+      throw new Error(
+        `Unsupported conversation event subtype ${subtype} for item ${itemId}`
+      )
+    }
+    return subtype
+  }
+
+  if (itemType === CONVERSATION_ITEM_TYPE.SUMMARY) {
+    if (subtype !== CONVERSATION_FEED_MESSAGE_TYPE.SUMMARY) {
+      throw new Error(
+        `Unsupported conversation summary subtype ${subtype} for item ${itemId}`
+      )
+    }
+    return subtype
+  }
+
+  assertConversationMessageSubtype(subtype)
+  return subtype
+}
+
 function asConversationFeedEventPayload<T extends ConversationFeedEventType>(
   eventType: T,
-  payload: unknown
+  payload: Record<string, unknown>
 ): ConversationFeedEventPayloadMap[T] {
-  return asJsonRecord(payload) as unknown as ConversationFeedEventPayloadMap[T]
+  return payload as unknown as ConversationFeedEventPayloadMap[T]
 }
 
 function asChatSyncEventPayload<T extends ChatSyncEventType>(
   eventType: T,
-  payload: unknown
+  payload: Record<string, unknown>
 ): ChatSyncEventPayloadMap[T] {
-  return asJsonRecord(payload) as unknown as ChatSyncEventPayloadMap[T]
+  return payload as unknown as ChatSyncEventPayloadMap[T]
 }
 
 async function enrichChatConversationItemForViewer(
@@ -539,93 +542,6 @@ function previewTextFromItem(item: ChatConversationItem | undefined): string {
   return item.itemType === "message" ? "Attachment" : `[${item.subtype}]`
 }
 
-function computeConversationTitle(params: {
-  baseTitle: string | null
-  kind: ConversationKind
-  participants: ChatParticipantSummary[]
-  viewerWorkspaceMemberId: string
-}): string {
-  const baseTitle =
-    typeof params.baseTitle === "string" ? params.baseTitle.trim() : ""
-  if (baseTitle) {
-    return baseTitle
-  }
-
-  const active = params.participants.filter(
-    (participant) => participant.state === "active"
-  )
-  const labels =
-    params.kind === CONVERSATION_KIND.DIRECT
-      ? active
-          .filter(
-            (participant) =>
-              !(
-                participant.participantType ===
-                  CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
-                participant.workspaceMemberId === params.viewerWorkspaceMemberId
-              )
-          )
-          .map((participant) => participant.name)
-      : active.map((participant) => participant.name)
-
-  const uniqueLabels = [...new Set(labels.filter(Boolean))]
-  if (uniqueLabels.length === 0) {
-    return params.kind === CONVERSATION_KIND.DIRECT
-      ? "Direct message"
-      : "Untitled conversation"
-  }
-  if (uniqueLabels.length <= 3) {
-    return uniqueLabels.join(", ")
-  }
-  return `${uniqueLabels.slice(0, 3).join(", ")} +${uniqueLabels.length - 3}`
-}
-
-function buildConversationPresentation(params: {
-  kind: ConversationKind
-  isIm: boolean
-  participants: ChatParticipantSummary[]
-  viewerWorkspaceMemberId: string
-}) {
-  const activeParticipants = params.participants.filter(
-    (participant) => participant.state === "active"
-  )
-  const peer =
-    params.kind === CONVERSATION_KIND.DIRECT
-      ? (activeParticipants.find(
-          (participant) =>
-            !(
-              participant.participantType ===
-                CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
-              participant.workspaceMemberId === params.viewerWorkspaceMemberId
-            )
-        ) ?? activeParticipants[0])
-      : undefined
-  const avatarParticipants =
-    params.kind === CONVERSATION_KIND.DIRECT
-      ? peer
-        ? [peer]
-        : activeParticipants.slice(0, 1)
-      : activeParticipants.slice(0, 4)
-  const isDirect = params.kind === CONVERSATION_KIND.DIRECT
-
-  return {
-    chatType: isDirect ? "direct" : "group",
-    subtitle: params.isIm
-      ? isDirect
-        ? "IM direct chat"
-        : "IM group chat"
-      : isDirect
-        ? "Direct message"
-        : "Group chat",
-    avatarParticipantIds: avatarParticipants.map(
-      (participant) => participant.participantId
-    ),
-    peerParticipantId: peer?.participantId,
-    avatarUrl: peer?.avatarUrl,
-    avatarEmoji: peer?.avatarEmoji,
-  } satisfies ChatConversationView["presentation"]
-}
-
 function isUniqueViolation(error: unknown) {
   const candidate = error as { code?: string } | null
   return (
@@ -636,31 +552,7 @@ function isUniqueViolation(error: unknown) {
 }
 
 function rootQueryable(): Executor {
-  return db
-}
-
-/**
- * Run a raw SQL statement (text + positional params) on either the top-level
- * `db` or a transaction `trx` — the chat module's raw-SQL execution path.
- * Routes through Kysely's `CompiledQuery.raw`.
- */
-async function runOn<T extends object = Record<string, unknown>>(
-  executor: Executor,
-  text: string,
-  params: readonly unknown[] = []
-): Promise<{ rows: T[]; rowCount?: number | null }> {
-  const result = await executor.executeQuery<T>(
-    CompiledQuery.raw(text, [...params])
-  )
-  return { rows: result.rows as T[] }
-}
-
-/** `runOn` bound to the top-level `db` (replaces the old pool-scoped executeSql). */
-function runOnDb<T extends object = Record<string, unknown>>(
-  text: string,
-  params: readonly unknown[] = []
-): Promise<{ rows: T[]; rowCount?: number | null }> {
-  return runOn<T>(db, text, params)
+  return chatRootExecutor()
 }
 
 async function getWorkspaceMemberIdentityOrThrow(
@@ -682,15 +574,10 @@ async function ensureClientInstance(
   queryable: Executor,
   input: UpdateClientInstanceInput
 ) {
-  const existing = await runBuilder(
+  const owner = await getChatClientInstanceOwner(
     queryable,
-    queryable
-      .selectFrom("chatClientInstances")
-      .select(["workspaceId", "workspaceMemberId"])
-      .where("id", "=", input.clientInstanceId)
-      .limit(1)
+    input.clientInstanceId
   )
-  const owner = existing.rows[0]
   if (!owner) {
     throw createChatError(
       404,
@@ -715,20 +602,14 @@ async function createClientInstance(
   input: RegisterClientInstanceInput
 ) {
   const clientInstanceId = randomUUID()
-  await queryable
-    .insertInto("chatClientInstances")
-    .values({
-      id: clientInstanceId,
-      workspaceId: input.workspaceId,
-      workspaceMemberId: input.workspaceMemberId,
-      platform: input.platform ?? null,
-      deviceLabel: input.deviceLabel ?? null,
-      status: "active",
-      metadata: jsonbValue(input.metadata ?? {}),
-      lastSeenAt: sql`NOW()`,
-      createdAt: sql`NOW()`,
-    })
-    .execute()
+  await insertChatClientInstance(queryable, {
+    clientInstanceId,
+    workspaceId: input.workspaceId,
+    workspaceMemberId: input.workspaceMemberId,
+    platform: input.platform,
+    deviceLabel: input.deviceLabel,
+    metadata: input.metadata,
+  })
 
   return clientInstanceId
 }
@@ -739,19 +620,12 @@ async function touchClientInstance(
 ) {
   await ensureClientInstance(queryable, input)
 
-  await queryable
-    .updateTable("chatClientInstances")
-    .set({
-      platform: sql`COALESCE(${input.platform ?? null}, platform)`,
-      deviceLabel: sql`COALESCE(${input.deviceLabel ?? null}, device_label)`,
-      metadata: sql`COALESCE(metadata, '{}'::jsonb) || ${jsonbValue(
-        input.metadata ?? {}
-      )}`,
-      status: "active",
-      lastSeenAt: sql`NOW()`,
-    })
-    .where("id", "=", input.clientInstanceId)
-    .execute()
+  await updateChatClientInstanceSeen(queryable, {
+    clientInstanceId: input.clientInstanceId,
+    platform: input.platform,
+    deviceLabel: input.deviceLabel,
+    metadata: input.metadata,
+  })
 }
 
 async function listConversationParticipantRows(
@@ -759,139 +633,11 @@ async function listConversationParticipantRows(
   conversationIds: string[],
   options?: { useProfileSnapshot?: boolean }
 ) {
-  if (conversationIds.length === 0) {
-    return [] as ParticipantRow[]
-  }
-
-  const participantDisplayNameExpr = options?.useProfileSnapshot
-    ? "COALESCE(remote_agent_app.display_name, joined_version.display_name, actor_app.display_name)"
-    : "COALESCE(remote_agent_app.display_name, actor_app.display_name)"
-  const participantTitleExpr = options?.useProfileSnapshot
-    ? "COALESCE(ra.title, joined_version.title, a.title)"
-    : "COALESCE(ra.title, a.title)"
-  const participantRoleExpr = options?.useProfileSnapshot
-    ? "COALESCE(CASE WHEN ra.id IS NOT NULL THEN 'remote_agent' END, joined_version.role::text, a.role::text)"
-    : "COALESCE(CASE WHEN ra.id IS NOT NULL THEN 'remote_agent' END, a.role::text)"
-  const participantCanRepresentExpr = options?.useProfileSnapshot
-    ? "COALESCE(joined_version.can_represent_user, a.can_represent_user)"
-    : "a.can_represent_user"
-  const participantSpecialtiesExpr = options?.useProfileSnapshot
-    ? "COALESCE(joined_version.specialties, a.specialties)"
-    : "a.specialties"
-  const participantConfigExpr = options?.useProfileSnapshot
-    ? "COALESCE(joined_version.config, a.config)"
-    : "a.config"
-  const participantCurrentVersionExpr = options?.useProfileSnapshot
-    ? "COALESCE(joined_version.version, a.current_version)"
-    : "a.current_version"
-  const participantDocVersionExpr = options?.useProfileSnapshot
-    ? "COALESCE(cp.actor_join_version_id, current_version.id)"
-    : "current_version.id"
-
-  const result = await runOn<ParticipantRow>(
+  return listChatConversationParticipantRows(
     queryable,
-    `
-      SELECT
-        cp.id,
-        cp.conversation_id AS "conversationId",
-        cpsubj.kind AS "participantType",
-        cpsubj.workspace_member_id AS "workspaceMemberId",
-        cpsubj.actor_id AS "actorId",
-        cpsubj.remote_agent_id AS "remoteAgentId",
-        cp.actor_join_version_id AS "actorJoinVersionId",
-        cp.display_name AS "displayName",
-        cp.role_key AS "roleKey",
-        cp.state,
-        cp.metadata,
-        cp.joined_at AS "joinedAt",
-        cp.left_at AS "leftAt",
-        wm.user_id AS "userId",
-        u.name AS "userName",
-        ${participantDisplayNameExpr} AS "participantName",
-        ${participantTitleExpr} AS "participantTitle",
-        ${participantRoleExpr} AS "participantRole",
-        CASE
-          WHEN ra.id IS NOT NULL THEN '[]'::jsonb
-          ELSE COALESCE(
-            (
-              SELECT jsonb_agg(
-                jsonb_build_object(
-                  'key', avd.doc_key,
-                  'title', avd.title,
-                  'visibility', avd.visibility,
-                  'priority', avd.priority,
-                  'content', avd.content_blocks
-                )
-                ORDER BY avd.priority DESC, avd.created_at ASC
-              )
-              FROM actor_version_docs avd
-              WHERE avd.actor_version_id = ${participantDocVersionExpr}
-            ),
-            '[]'::jsonb
-          )
-        END AS "actorDocs",
-        ${participantCanRepresentExpr} AS "actorCanRepresentUser",
-        ${participantSpecialtiesExpr} AS "actorSpecialties",
-        ${participantConfigExpr} AS "actorConfig",
-        ${participantCurrentVersionExpr} AS "actorCurrentVersion",
-        a.avatar_emoji AS "participantAvatarEmoji",
-        a.avatar_file_id AS "participantAvatarFileId",
-        u.avatar_file_id AS "userAvatarFileId",
-        primary_address.id AS "transportAddressId",
-        primary_address.transport_kind AS "transportKind",
-        primary_address.external_id AS "transportExternalId",
-        primary_address.display_name AS "transportDisplayName",
-        primary_address.linked_user_id AS "linkedUserId",
-        linked_user.name AS "linkedUserName",
-        linked_user.avatar_file_id AS "linkedUserAvatarFileId",
-        ls.id AS "sessionId",
-        COALESCE(ls.status::text, rab.runtime_state::text) AS "sessionStatus"
-      FROM conversation_participants cp
-      LEFT JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
-      LEFT JOIN workspace_members wm ON wm.id = cpsubj.workspace_member_id
-      LEFT JOIN users u ON u.id = wm.user_id
-      LEFT JOIN actors a ON a.id = cpsubj.actor_id
-      LEFT JOIN workspace_apps_live actor_app ON actor_app.id = a.id
-      LEFT JOIN remote_agents ra ON ra.id = cpsubj.remote_agent_id
-      LEFT JOIN workspace_apps_live remote_agent_app ON remote_agent_app.id = ra.id
-      LEFT JOIN actor_versions current_version
-        ON current_version.actor_id = a.id
-       AND current_version.version = a.current_version
-      LEFT JOIN actor_versions joined_version
-        ON joined_version.id = cp.actor_join_version_id
-      LEFT JOIN LATERAL (
-        SELECT
-          ta.id,
-          ta.transport_kind,
-          ta.external_id,
-          linked_wm.user_id AS linked_user_id,
-          COALESCE(ta.display_name, cp.display_name) AS display_name
-        FROM conversation_participant_addresses cpa
-        JOIN transport_addresses ta ON ta.id = cpa.transport_address_id
-        LEFT JOIN workspace_members linked_wm
-          ON linked_wm.id = ta.workspace_member_id
-        WHERE cpa.conversation_participant_id = cp.id
-        ORDER BY cpa.is_primary DESC, cpa.created_at ASC
-        LIMIT 1
-      ) primary_address ON TRUE
-      LEFT JOIN users linked_user ON linked_user.id = primary_address.linked_user_id
-      LEFT JOIN remote_agent_bindings rab
-        ON rab.remote_agent_id = cpsubj.remote_agent_id
-      LEFT JOIN LATERAL (
-        SELECT s.id, s.status
-        FROM sessions s
-        WHERE s.conversation_id = cp.conversation_id
-          AND s.actor_id = cpsubj.actor_id
-        ORDER BY s.created_at DESC
-        LIMIT 1
-      ) ls ON TRUE
-      WHERE cp.conversation_id = ANY($1::uuid[])
-      ORDER BY cp.conversation_id ASC, cp.joined_at ASC, cp.id ASC
-    `,
-    [conversationIds]
+    conversationIds,
+    options
   )
-
-  return result.rows
 }
 
 async function getWorkspaceMemberConversationParticipantRow(
@@ -899,87 +645,10 @@ async function getWorkspaceMemberConversationParticipantRow(
   conversationId: string,
   workspaceMemberId: string
 ) {
-  const result = await runOn<ParticipantRow>(
-    queryable,
-    `
-      SELECT
-        cp.id,
-        cp.conversation_id AS "conversationId",
-        cpsubj.kind AS "participantType",
-        cpsubj.workspace_member_id AS "workspaceMemberId",
-        cpsubj.actor_id AS "actorId",
-        cpsubj.remote_agent_id AS "remoteAgentId",
-        cp.actor_join_version_id AS "actorJoinVersionId",
-        cp.display_name AS "displayName",
-        cp.role_key AS "roleKey",
-        cp.state,
-        cp.metadata,
-        cp.joined_at AS "joinedAt",
-        cp.left_at AS "leftAt",
-        wm.user_id AS "userId",
-        u.name AS "userName",
-        COALESCE(remote_agent_app.display_name, actor_app.display_name) AS "participantName",
-        COALESCE(ra.title, a.title) AS "participantTitle",
-        COALESCE(CASE WHEN ra.id IS NOT NULL THEN 'remote_agent' END, a.role::text) AS "participantRole",
-        '[]'::jsonb AS "actorDocs",
-        a.can_represent_user AS "actorCanRepresentUser",
-        a.specialties AS "actorSpecialties",
-        a.config AS "actorConfig",
-        a.current_version AS "actorCurrentVersion",
-        COALESCE(ra.avatar_emoji, a.avatar_emoji) AS "participantAvatarEmoji",
-        COALESCE(ra.avatar_file_id, a.avatar_file_id) AS "participantAvatarFileId",
-        u.avatar_file_id AS "userAvatarFileId",
-        primary_address.id AS "transportAddressId",
-        primary_address.transport_kind AS "transportKind",
-        primary_address.external_id AS "transportExternalId",
-        primary_address.display_name AS "transportDisplayName",
-        primary_address.linked_user_id AS "linkedUserId",
-        linked_user.name AS "linkedUserName",
-        linked_user.avatar_file_id AS "linkedUserAvatarFileId",
-        ls.id AS "sessionId",
-        COALESCE(ls.status::text, rab.runtime_state::text) AS "sessionStatus"
-      FROM conversation_participants cp
-      LEFT JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
-      LEFT JOIN workspace_members wm ON wm.id = cpsubj.workspace_member_id
-      LEFT JOIN users u ON u.id = wm.user_id
-      LEFT JOIN actors a ON a.id = cpsubj.actor_id
-      LEFT JOIN workspace_apps_live actor_app ON actor_app.id = a.id
-      LEFT JOIN remote_agents ra ON ra.id = cpsubj.remote_agent_id
-      LEFT JOIN workspace_apps_live remote_agent_app ON remote_agent_app.id = ra.id
-      LEFT JOIN LATERAL (
-        SELECT
-          ta.id,
-          ta.transport_kind,
-          ta.external_id,
-          linked_wm.user_id AS linked_user_id,
-          COALESCE(ta.display_name, cp.display_name) AS display_name
-        FROM conversation_participant_addresses cpa
-        JOIN transport_addresses ta ON ta.id = cpa.transport_address_id
-        LEFT JOIN workspace_members linked_wm
-          ON linked_wm.id = ta.workspace_member_id
-        WHERE cpa.conversation_participant_id = cp.id
-        ORDER BY cpa.is_primary DESC, cpa.created_at ASC
-        LIMIT 1
-      ) primary_address ON TRUE
-      LEFT JOIN users linked_user ON linked_user.id = primary_address.linked_user_id
-      LEFT JOIN remote_agent_bindings rab
-        ON rab.remote_agent_id = cpsubj.remote_agent_id
-      LEFT JOIN LATERAL (
-        SELECT s.id, s.status
-        FROM sessions s
-        WHERE s.conversation_id = cp.conversation_id
-          AND s.actor_id = cpsubj.actor_id
-        ORDER BY s.created_at DESC
-        LIMIT 1
-      ) ls ON TRUE
-      WHERE cp.conversation_id = $1
-        AND cpsubj.workspace_member_id = $2
-      LIMIT 1
-    `,
-    [conversationId, workspaceMemberId]
-  )
-
-  return result.rows[0] ?? null
+  return getChatWorkspaceMemberConversationParticipantRow(queryable, {
+    conversationId,
+    workspaceMemberId,
+  })
 }
 
 async function getConversationBaseRow(
@@ -987,128 +656,21 @@ async function getConversationBaseRow(
   workspaceMemberId: string,
   conversationId: string
 ) {
-  const result = await runOn<ConversationBaseRow>(
-    queryable,
-    `
-      SELECT
-        c.id AS "conversationId",
-        c.kind,
-        EXISTS (
-          SELECT 1 FROM conversation_transport_bindings b
-          WHERE b.conversation_id = c.id
-        ) AS "isIm",
-        c.title,
-        c.created_at AS "createdAt",
-        c.updated_at AS "updatedAt",
-        v.unread_count AS "unreadCount",
-        v.muted,
-        v.archived,
-        v.pinned_sort_key AS "pinnedSortKey",
-        v.last_visible_item_id AS "lastVisibleItemId",
-        v.last_visible_sequence AS "lastVisibleSequence",
-        v.last_visible_at AS "lastVisibleAt"
-      FROM workspace_member_conversation_views v
-      INNER JOIN conversations c ON c.id = v.conversation_id
-      WHERE v.workspace_member_id = $1
-        AND v.conversation_id = $2
-        AND c.deleted_at IS NULL
-        AND EXISTS (
-          SELECT 1 FROM conversation_participants cp
-          INNER JOIN access_subjects cps ON cps.id = cp.subject_id
-          WHERE cp.conversation_id = v.conversation_id
-            AND cps.workspace_member_id = v.workspace_member_id
-            AND cp.state = 'active'
-        )
-      LIMIT 1
-    `,
-    [workspaceMemberId, conversationId]
-  )
-
-  return result.rows[0] ?? null
+  return getChatConversationBaseRow(queryable, {
+    workspaceMemberId,
+    conversationId,
+  })
 }
 
 async function listConversationBaseRows(
   queryable: Executor,
   workspaceMemberId: string
 ) {
-  const result = await runOn<ConversationBaseRow>(
-    queryable,
-    `
-      SELECT
-        c.id AS "conversationId",
-        c.kind,
-        EXISTS (
-          SELECT 1 FROM conversation_transport_bindings b
-          WHERE b.conversation_id = c.id
-        ) AS "isIm",
-        c.title,
-        c.created_at AS "createdAt",
-        c.updated_at AS "updatedAt",
-        v.unread_count AS "unreadCount",
-        v.muted,
-        v.archived,
-        v.pinned_sort_key AS "pinnedSortKey",
-        v.last_visible_item_id AS "lastVisibleItemId",
-        v.last_visible_sequence AS "lastVisibleSequence",
-        v.last_visible_at AS "lastVisibleAt"
-      FROM workspace_member_conversation_views v
-      INNER JOIN conversations c ON c.id = v.conversation_id
-      WHERE v.workspace_member_id = $1
-        AND c.deleted_at IS NULL
-        AND EXISTS (
-          SELECT 1 FROM conversation_participants cp
-          INNER JOIN access_subjects cps ON cps.id = cp.subject_id
-          WHERE cp.conversation_id = v.conversation_id
-            AND cps.workspace_member_id = v.workspace_member_id
-            AND cp.state = 'active'
-        )
-      ORDER BY
-        v.archived ASC,
-        v.pinned_sort_key DESC NULLS LAST,
-        COALESCE(v.last_visible_at, c.updated_at, c.created_at) DESC,
-        c.id ASC
-    `,
-    [workspaceMemberId]
-  )
-
-  return result.rows
+  return listChatConversationBaseRows(queryable, workspaceMemberId)
 }
 
 async function listItemRowsByIds(queryable: Executor, itemIds: string[]) {
-  if (itemIds.length === 0) {
-    return [] as ItemRow[]
-  }
-
-  const result = await runOn<ItemRow>(
-    queryable,
-    `
-      SELECT
-        id,
-        conversation_id AS "conversationId",
-        session_id AS "sessionId",
-        turn_id AS "turnId",
-        client_message_id AS "clientMessageId",
-        scope,
-        surface,
-        item_type AS "itemType",
-        subtype,
-        role,
-        author_participant_id AS "authorParticipantId",
-        reply_to_item_id AS "replyToItemId",
-        caused_by_item_id AS "causedByItemId",
-        event_payload AS "eventPayload",
-        event_timeline_policy AS "eventTimelinePolicy",
-        event_context_policy AS "eventContextPolicy",
-        metadata,
-        sequence,
-        created_at AS "createdAt"
-      FROM conversation_items
-      WHERE id = ANY($1::uuid[])
-    `,
-    [itemIds]
-  )
-
-  return result.rows
+  return listConversationItemRowsByIds(queryable, itemIds)
 }
 
 async function hydrateConversationItems(
@@ -1120,48 +682,20 @@ async function hydrateConversationItems(
   }
 
   const itemIds = itemRows.map((row) => row.id)
-  const [partsResult, restrictedAudienceResult] = await Promise.all([
-    runOn<ItemPartRow>(
-      queryable,
-      `
-        SELECT
-          item_id AS "itemId",
-          ordinal,
-          part_type AS "partType",
-          text_value AS "textValue",
-          ref_path AS "refPath",
-          ref_sha256 AS "refSha256",
-          json_value AS "jsonValue",
-          mime_type AS "mimeType",
-          name,
-          metadata
-        FROM conversation_item_parts
-        WHERE item_id = ANY($1::uuid[])
-        ORDER BY item_id ASC, ordinal ASC
-      `,
-      [itemIds]
-    ),
-    runOn<ParticipantLinkRow>(
-      queryable,
-      `
-        SELECT item_id AS "itemId", target_participant_id AS "targetParticipantId"
-        FROM conversation_item_targets
-        WHERE item_id = ANY($1::uuid[])
-        ORDER BY item_id ASC, target_participant_id ASC
-      `,
-      [itemIds]
-    ),
+  const [parts, restrictedAudience] = await Promise.all([
+    listConversationItemPartRows(queryable, itemIds),
+    listConversationItemTargetRows(queryable, itemIds),
   ])
 
   const partsByItem = new Map<string, ItemPartRow[]>()
-  for (const row of partsResult.rows) {
+  for (const row of parts) {
     const current = partsByItem.get(row.itemId) ?? []
     current.push(row)
     partsByItem.set(row.itemId, current)
   }
 
   const restrictedAudienceByItem = new Map<string, string[]>()
-  for (const row of restrictedAudienceResult.rows) {
+  for (const row of restrictedAudience) {
     const current = restrictedAudienceByItem.get(row.itemId) ?? []
     current.push(row.targetParticipantId)
     restrictedAudienceByItem.set(row.itemId, current)
@@ -1189,7 +723,7 @@ async function hydrateConversationItems(
       causedByItemId: row.causedByItemId ?? undefined,
       content: extractText(contentBlocks),
       contentBlocks,
-      metadata: asJsonRecord(row.metadata),
+      metadata: row.metadata,
       restrictedAudienceParticipantIds:
         restrictedAudienceByItem.get(row.id) ?? [],
       createdAt: presentInstant(row.createdAt),
@@ -1214,7 +748,7 @@ async function loadConversationViews(
     : await listConversationBaseRows(queryable, workspaceMemberId)
 
   if (baseRows.length === 0) {
-    return [] as ChatConversationView[]
+    return [] as ChatConversationRecord[]
   }
 
   const ids = baseRows.map((row) => row.conversationId)
@@ -1254,56 +788,25 @@ async function loadConversationViews(
       viewerMembership?.roleKey === "member"
         ? viewerMembership.roleKey
         : "member"
-    const canManageConversation =
-      row.kind !== CONVERSATION_KIND.DIRECT &&
-      (viewerConversationRole === "owner" || viewerConversationRole === "admin")
-    const canRename =
-      row.kind !== CONVERSATION_KIND.DIRECT && canManageConversation
-    const canManageParticipants = canManageConversation
-    const status = conversationParticipants.some(
-      (participant) =>
-        participant.actorId && participant.sessionStatus !== "closed"
-    )
-      ? "active"
-      : "completed"
-    const title = computeConversationTitle({
-      baseTitle: row.title,
-      kind: row.kind,
-      participants: mappedParticipants,
-      viewerWorkspaceMemberId: workspaceMemberId,
-    })
-    const presentation = buildConversationPresentation({
-      kind: row.kind,
-      isIm: row.isIm,
-      participants: mappedParticipants,
-      viewerWorkspaceMemberId: workspaceMemberId,
-    })
     const lastItem = row.lastVisibleItemId
       ? lastItemById.get(row.lastVisibleItemId)
       : undefined
     return {
       conversationId: row.conversationId,
       workspaceId,
-      title,
+      baseTitle: row.title,
       kind: row.kind,
       isIm: row.isIm,
-      status,
       unreadCount: toNumber(row.unreadCount),
       muted: Boolean(row.muted),
       archived: Boolean(row.archived),
-      pinnedSortKey: row.pinnedSortKey
-        ? presentInstant(row.pinnedSortKey)
-        : undefined,
-      updatedAt: presentInstant(row.updatedAt),
-      createdAt: presentInstant(row.createdAt),
+      pinnedSortKey: row.pinnedSortKey ?? undefined,
+      updatedAt: row.updatedAt,
+      createdAt: row.createdAt,
       participants: mappedParticipants,
-      presentation,
-      permissions: {
-        canManageConversation,
-        canManageParticipants,
-        canRename,
-      },
+      viewerWorkspaceMemberId: workspaceMemberId,
       viewerParticipantId: viewerMembership?.id,
+      viewerConversationRole,
       lastItem: lastItem
         ? {
             itemId: lastItem.id,
@@ -1316,7 +819,7 @@ async function loadConversationViews(
             createdAt: lastItem.createdAt,
           }
         : undefined,
-    } satisfies ChatConversationView
+    } satisfies ChatConversationRecord
   })
 }
 
@@ -1341,17 +844,12 @@ async function getCurrentSyncCursor(
   workspaceMemberId: string
 ) {
   // member_seq is the authoritative client cursor (see getChatSync).
-  const result = await runOn<{ cursor: string | number }>(
-    queryable,
-    `
-      SELECT COALESCE(MAX(member_seq), 0) AS cursor
-      FROM workspace_member_sync_events
-      WHERE workspace_id = $1
-        AND workspace_member_id = $2
-    `,
-    [workspaceId, workspaceMemberId]
+  return toNumber(
+    await getWorkspaceMemberSyncCursor(queryable, {
+      workspaceId,
+      workspaceMemberId,
+    })
   )
-  return toNumber(result.rows[0]?.cursor)
 }
 
 async function countUnreadVisibleMessages(
@@ -1359,40 +857,12 @@ async function countUnreadVisibleMessages(
   conversationId: string,
   participantId: string
 ) {
-  const result = await runOn<{ unreadCount: string | number }>(
-    queryable,
-    `
-      SELECT COUNT(*)::int AS "unreadCount"
-      FROM conversation_items ci
-      WHERE ci.conversation_id = $1
-        AND ci.item_type = 'message'
-        AND ci.scope = 'shared'
-        AND ci.surface = 'visible'
-        AND ci.author_participant_id IS DISTINCT FROM $2::uuid
-        AND ci.sequence > COALESCE((
-          SELECT cps.read_watermark_sequence
-          FROM conversation_participant_states cps
-          WHERE cps.conversation_id = $1
-            AND cps.participant_id = $2::uuid
-        ), 0)
-        AND (
-          NOT EXISTS (
-            SELECT 1
-            FROM conversation_item_targets t
-            WHERE t.item_id = ci.id
-          )
-          OR EXISTS (
-            SELECT 1
-            FROM conversation_item_targets t
-            WHERE t.item_id = ci.id
-              AND t.target_participant_id = $2::uuid
-          )
-        )
-    `,
-    [conversationId, participantId]
+  return toNumber(
+    await countUnreadVisibleConversationMessages(queryable, {
+      conversationId,
+      participantId,
+    })
   )
-
-  return toNumber(result.rows[0]?.unreadCount)
 }
 
 async function syncVisibleSharedItem(params: {
@@ -1478,41 +948,23 @@ async function upsertConversationView(
     summary?: Record<string, unknown>
   }
 ) {
-  await queryable
-    .insertInto("workspaceMemberConversationViews")
-    .values({
-      workspaceMemberId: params.workspaceMemberId,
-      conversationId: params.conversationId,
-      lastVisibleItemId: params.lastVisibleItemId ?? null,
-      lastVisibleSequence: params.lastVisibleSequence ?? 0,
-      lastVisibleAt: params.lastVisibleAt
-        ? parseInstantString(params.lastVisibleAt)
-        : null,
-      unreadCount: params.unreadCount,
-      summary: jsonbValue(params.summary ?? {}),
-      createdAt: sql`NOW()`,
-    })
-    .onConflict((oc) =>
-      oc.columns(["workspaceMemberId", "conversationId"]).doUpdateSet({
-        lastVisibleItemId: sql`COALESCE(EXCLUDED.last_visible_item_id, workspace_member_conversation_views.last_visible_item_id)`,
-        lastVisibleSequence: sql`GREATEST(workspace_member_conversation_views.last_visible_sequence, EXCLUDED.last_visible_sequence)`,
-        lastVisibleAt: sql`COALESCE(EXCLUDED.last_visible_at, workspace_member_conversation_views.last_visible_at)`,
-        unreadCount: sql`EXCLUDED.unread_count`,
-        summary: sql`COALESCE(workspace_member_conversation_views.summary, '{}'::jsonb) || EXCLUDED.summary`,
-      })
-    )
-    .execute()
+  await upsertWorkspaceMemberConversationView(queryable, {
+    ...params,
+    lastVisibleAt: params.lastVisibleAt
+      ? parseInstantString(params.lastVisibleAt)
+      : null,
+  })
 }
 
 /**
- * Discriminate a Kysely transaction from the top-level `db`. Kysely exposes
+ * Discriminate a Kysely transaction from the root executor. Kysely exposes
  * `isTransaction` on the instance (true only for a Transaction<DB>); used by the
  * sync-append wrapper to decide whether to reuse the caller's tx or open one.
  */
 function isDatabaseTransaction(
   executor: Executor
 ): executor is DatabaseTransaction {
-  return (executor as { isTransaction?: boolean }).isTransaction === true
+  return isChatTransaction(executor)
 }
 
 /**
@@ -1528,7 +980,7 @@ function isDatabaseTransaction(
  *
  * Exported because external producers (tasks, remote-agents) append from
  * inside their OWN business transaction and must keep the domain write + sync +
- * outbox atomic; they call this directly with their `trx`. Bare-`db` callers go
+ * outbox atomic; they call this directly with their `trx`. Root-executor callers go
  * through the `appendWorkspaceMemberSyncEvent` wrapper, which opens a tx.
  */
 export async function appendWorkspaceMemberSyncEventInTransaction<
@@ -1544,39 +996,7 @@ export async function appendWorkspaceMemberSyncEventInTransaction<
     payload: ChatSyncEventPayloadMap[T]
   }
 ) {
-  // Serialize concurrent appends for THIS member. hashtextextended yields a
-  // stable 64-bit key (avoids the 32-bit hashtext collision space that would
-  // make unrelated members block each other). The lock auto-releases at
-  // commit/rollback (pg_advisory_xact_lock).
-  await sql`SELECT pg_advisory_xact_lock(hashtextextended(${params.workspaceMemberId}, 0))`.execute(
-    trx
-  )
-
-  const inserted = await runBuilder(
-    trx,
-    trx
-      .insertInto("workspaceMemberSyncEvents")
-      .values({
-        // member_seq = (current max for this member) + 1, computed under the
-        // advisory lock above so it is contiguous and commit-ordered.
-        memberSeq: sql<number>`(
-          SELECT COALESCE(MAX(member_seq), 0) + 1
-          FROM workspace_member_sync_events
-          WHERE workspace_member_id = ${params.workspaceMemberId}
-        )`,
-        workspaceId: params.workspaceId,
-        workspaceMemberId: params.workspaceMemberId,
-        conversationId: params.conversationId ?? null,
-        itemId: params.itemId ?? null,
-        eventType: params.eventType,
-        payload: jsonbValue(params.payload),
-        occurredAt: sql`NOW()`,
-        createdAt: sql`NOW()`,
-      })
-      .returning(["syncSeq", "memberSeq", "occurredAt"])
-  )
-
-  const row = inserted.rows[0]
+  const row = await insertWorkspaceMemberSyncEventRow(trx, params)
   const envelope: ChatSyncEvent<T> = {
     syncSeq: toNumber(row?.syncSeq),
     memberSeq: toNumber(row?.memberSeq),
@@ -1608,7 +1028,7 @@ export async function appendWorkspaceMemberSyncEventInTransaction<
 /**
  * Transaction-aware append wrapper. If the caller already holds a transaction
  * (`queryable` is a Kysely transaction), reuse it so the domain write + sync +
- * outbox stay atomic. If the caller passes the bare `db` (autocommit), open a
+ * outbox stay atomic. If the caller passes the root executor (autocommit), open a
  * transaction here — the advisory-lock-protected `MAX(member_seq)+1` MUST live
  * inside a transaction or the lock would release at statement end and the
  * counter could race.
@@ -1629,7 +1049,7 @@ export async function appendWorkspaceMemberSyncEvent<
   if (isDatabaseTransaction(queryable)) {
     return appendWorkspaceMemberSyncEventInTransaction(queryable, params)
   }
-  return withDbTransaction((trx) =>
+  return withChatTransaction((trx) =>
     appendWorkspaceMemberSyncEventInTransaction(trx, params)
   )
 }
@@ -1638,15 +1058,7 @@ async function getConversationSequenceMax(
   queryable: Executor,
   conversationId: string
 ) {
-  const result = await runBuilder(
-    queryable,
-    queryable
-      .selectFrom("conversationItems")
-      .select((eb) => eb.fn.max("sequence").as("maxSequence"))
-      .where("conversationId", "=", conversationId)
-  )
-
-  return toNumber(result.rows[0]?.maxSequence)
+  return toNumber(await getConversationMaxSequence(queryable, conversationId))
 }
 
 async function getLastItemAtOrBeforeSequence(
@@ -1654,17 +1066,11 @@ async function getLastItemAtOrBeforeSequence(
   conversationId: string,
   sequence: number
 ) {
-  const result = await runBuilder(
+  return getLastConversationItemIdAtOrBeforeSequence(
     queryable,
-    queryable
-      .selectFrom("conversationItems")
-      .select("id")
-      .where("conversationId", "=", conversationId)
-      .where("sequence", "<=", String(sequence))
-      .orderBy("sequence", "desc")
-      .limit(1)
+    conversationId,
+    sequence
   )
-  return result.rows[0]?.id ?? null
 }
 
 async function requireConversationAccess(
@@ -1881,54 +1287,11 @@ async function validateConversationReplyTarget(
   if (!replyToItemId) {
     return null
   }
-  const rows = await runOn<ItemRow>(
-    queryable,
-    `
-      SELECT
-        id,
-        conversation_id AS "conversationId",
-        session_id AS "sessionId",
-        turn_id AS "turnId",
-        client_message_id AS "clientMessageId",
-        scope,
-        surface,
-        item_type AS "itemType",
-        subtype,
-        role,
-        author_participant_id AS "authorParticipantId",
-        reply_to_item_id AS "replyToItemId",
-        caused_by_item_id AS "causedByItemId",
-        event_payload AS "eventPayload",
-        event_timeline_policy AS "eventTimelinePolicy",
-        event_context_policy AS "eventContextPolicy",
-        metadata,
-        sequence,
-        created_at AS "createdAt"
-      FROM conversation_items
-      WHERE id = $1
-        AND conversation_id = $2
-        AND scope = 'shared'
-        AND surface = 'visible'
-        AND (
-          $3::uuid IS NULL
-          OR NOT EXISTS (
-            SELECT 1
-            FROM conversation_item_targets cit0
-            WHERE cit0.item_id = conversation_items.id
-          )
-          OR conversation_items.author_participant_id = $3
-          OR EXISTS (
-            SELECT 1
-            FROM conversation_item_targets cit
-            WHERE cit.item_id = conversation_items.id
-              AND cit.target_participant_id = $3
-          )
-        )
-      LIMIT 1
-    `,
-    [replyToItemId, conversationId, authorParticipantId ?? null]
-  )
-  const row = rows.rows[0] ?? null
+  const row = await getVisibleConversationReplyTargetRow(queryable, {
+    conversationId,
+    replyToItemId,
+    authorParticipantId,
+  })
   if (!row) {
     throw createChatError(
       400,
@@ -1950,7 +1313,7 @@ export async function resolveConversationReplyRef(params: {
   }
 
   const sequence = parseConversationMessageRef(params.replyRef)
-  if (!Number.isFinite(sequence)) {
+  if (sequence === null || !Number.isFinite(sequence)) {
     throw createChatError(
       400,
       "invalid_reply_ref",
@@ -1958,42 +1321,12 @@ export async function resolveConversationReplyRef(params: {
     )
   }
 
-  const exactSql = `
-      SELECT id, sequence
-      FROM conversation_items
-      WHERE conversation_id = $1
-        AND sequence = $2::bigint
-        AND scope = 'shared'
-        AND surface = 'visible'
-        AND (
-          $3::uuid IS NULL
-          OR NOT EXISTS (
-            SELECT 1
-            FROM conversation_item_targets cit0
-            WHERE cit0.item_id = conversation_items.id
-          )
-          OR conversation_items.author_participant_id = $3
-          OR EXISTS (
-            SELECT 1
-            FROM conversation_item_targets cit
-            WHERE cit.item_id = conversation_items.id
-              AND cit.target_participant_id = $3
-          )
-        )
-      LIMIT 1
-    `
-  const exact = params.queryable
-    ? await runOn<Pick<ItemRow, "id" | "sequence">>(
-        params.queryable,
-        exactSql,
-        [params.conversationId, sequence, params.participantId ?? null]
-      )
-    : await runOnDb<Pick<ItemRow, "id" | "sequence">>(exactSql, [
-        params.conversationId,
-        sequence,
-        params.participantId ?? null,
-      ])
-  const row = exact.rows[0]
+  const queryable = params.queryable ?? rootQueryable()
+  const row = await getVisibleConversationReplyRefRow(queryable, {
+    conversationId: params.conversationId,
+    sequence,
+    participantId: params.participantId,
+  })
   if (row) {
     return {
       itemId: row.id,
@@ -2002,42 +1335,12 @@ export async function resolveConversationReplyRef(params: {
     }
   }
 
-  const nearbySql = `
-      SELECT id, sequence
-      FROM conversation_items
-      WHERE conversation_id = $1
-        AND scope = 'shared'
-        AND surface = 'visible'
-        AND (
-          $3::uuid IS NULL
-          OR NOT EXISTS (
-            SELECT 1
-            FROM conversation_item_targets cit0
-            WHERE cit0.item_id = conversation_items.id
-          )
-          OR conversation_items.author_participant_id = $3
-          OR EXISTS (
-            SELECT 1
-            FROM conversation_item_targets cit
-            WHERE cit.item_id = conversation_items.id
-              AND cit.target_participant_id = $3
-          )
-        )
-      ORDER BY ABS(sequence - $2::bigint) ASC, sequence ASC
-      LIMIT 3
-    `
-  const nearby = params.queryable
-    ? await runOn<Pick<ItemRow, "id" | "sequence">>(
-        params.queryable,
-        nearbySql,
-        [params.conversationId, sequence, params.participantId ?? null]
-      )
-    : await runOnDb<Pick<ItemRow, "id" | "sequence">>(nearbySql, [
-        params.conversationId,
-        sequence,
-        params.participantId ?? null,
-      ])
-  const suggestions = nearby.rows
+  const nearby = await listNearbyVisibleConversationReplyRefRows(queryable, {
+    conversationId: params.conversationId,
+    sequence,
+    participantId: params.participantId,
+  })
+  const suggestions = nearby
     .map((candidate) =>
       buildConversationMessageRef(toNumber(candidate.sequence))
     )
@@ -2118,16 +1421,7 @@ async function listMentionedParticipantIdsForItem(
   queryable: Executor,
   itemId: string
 ) {
-  const result = await runBuilder(
-    queryable,
-    queryable
-      .selectFrom("conversationItemMentions")
-      .select("mentionedParticipantId")
-      .where("itemId", "=", itemId)
-      .orderBy("ordinal", "asc")
-      .orderBy("mentionedParticipantId", "asc")
-  )
-  return result.rows.map((row) => row.mentionedParticipantId)
+  return listMentionedParticipantIdsForConversationItem(queryable, itemId)
 }
 
 function resolveActorWakeParticipants(params: {
@@ -2206,30 +1500,14 @@ export async function enqueueActorWakeupsForConversationMessage(params: {
     return [] as PendingActorWakeup[]
   }
 
-  const restrictedAudienceResult = await runOn<ParticipantLinkRow>(
-    queryable,
-    `
-      SELECT item_id AS "itemId", target_participant_id AS "targetParticipantId"
-      FROM conversation_item_targets
-      WHERE item_id = $1
-    `,
-    [params.itemId]
-  )
-  if (restrictedAudienceResult.rows.length > 0) {
+  if (await conversationItemHasTargets(queryable, params.itemId)) {
     return [] as PendingActorWakeup[]
   }
 
-  const conversationRow = await runOn<{ kind: ConversationKind }>(
+  const conversationKind = await getConversationKind(
     queryable,
-    `
-      SELECT kind
-      FROM conversations
-      WHERE id = $1
-      LIMIT 1
-    `,
-    [params.conversationId]
+    params.conversationId
   )
-  const conversationKind = conversationRow.rows[0]?.kind
   if (!conversationKind) {
     return [] as PendingActorWakeup[]
   }
@@ -2359,13 +1637,13 @@ async function syncConversationUpsertForWorkspaceMembers(
   conversationId: string
 ) {
   for (const workspaceMemberId of [...new Set(workspaceMemberIds)]) {
-    const conversation = await loadConversationView(
+    const conversationRecord = await loadConversationView(
       queryable,
       workspaceId,
       workspaceMemberId,
       conversationId
     )
-    if (!conversation) {
+    if (!conversationRecord) {
       continue
     }
     await appendWorkspaceMemberSyncEvent(queryable, {
@@ -2374,7 +1652,7 @@ async function syncConversationUpsertForWorkspaceMembers(
       conversationId,
       eventType: "conversation.upsert",
       payload: {
-        conversation,
+        conversation: presentChatConversationRecord(conversationRecord),
       },
     })
   }
@@ -2429,41 +1707,28 @@ async function resolveParticipantSubjectId(
       "resolveParticipantSubjectId: external participant requires transportAddressId"
     )
   }
-  // Defence-in-depth: every funnel that mints an external subject validates the
-  // address here, so a future caller of ensureConversationParticipant can't
-  // attach a bot/system or member-linked address as an external participant —
-  // even if it skips the higher-level validateTransportAddresses gate.
-  // NOTE: runOn routes through the Kysely executor, whose CamelCasePlugin
-  // camelCases the top-level result keys — so the runtime row keys are
-  // camelCase even though the SQL selects snake_case columns.
-  const addr = await runOn<{
-    workspaceId: string
-    addressType: string
-    workspaceMemberId: string | null
-  }>(
+  const addr = await getTransportAddressSubjectRow(
     queryable,
-    `SELECT workspace_id, address_type, workspace_member_id
-       FROM transport_addresses WHERE id = $1`,
-    [params.transportAddressId]
+    params.transportAddressId
   )
-  if (!addr.rows[0]) {
+  if (!addr) {
     throw new Error(
       `resolveParticipantSubjectId: transport_addresses(${params.transportAddressId}) not found`
     )
   }
-  if (addr.rows[0].addressType !== "user") {
+  if (addr.addressType !== "user") {
     throw new Error(
       `resolveParticipantSubjectId: address ${params.transportAddressId} is not a user address`
     )
   }
-  if (addr.rows[0].workspaceMemberId) {
+  if (addr.workspaceMemberId) {
     throw new Error(
       `resolveParticipantSubjectId: address ${params.transportAddressId} is linked to a workspace member; add it as a member, not an external participant`
     )
   }
   return upsertAccessSubjectOn(queryable, {
     kind: SUBJECT_KIND.EXTERNAL,
-    workspaceId: addr.rows[0].workspaceId,
+    workspaceId: addr.workspaceId,
     transportAddressId: params.transportAddressId,
   })
 }
@@ -2497,51 +1762,16 @@ async function insertParticipant(
   // hatch — an external participant must carry a transport identity.
   const participantSubjectId =
     params.subjectId ?? (await resolveParticipantSubjectId(queryable, params))
-  await queryable
-    .insertInto("conversationParticipants")
-    .values({
-      id: participantId,
-      conversationId: params.conversationId,
-      subjectId: participantSubjectId,
-      actorJoinVersionId: params.actorJoinVersionId ?? null,
-      displayName: params.displayName ?? null,
-      roleKey: params.roleKey,
-      state: "active",
-      metadata: jsonbValue(params.metadata ?? {}),
-      joinedAt: sql`NOW()`,
-    })
-    .execute()
-
-  await queryable
-    .insertInto("conversationParticipantStates")
-    .values({
-      conversationId: params.conversationId,
-      participantId: participantId,
-      readWatermarkSequence: 0,
-      createdAt: sql`NOW()`,
-    })
-    .onConflict((oc) =>
-      oc.columns(["conversationId", "participantId"]).doNothing()
-    )
-    .execute()
-
-  if (params.transportAddressId) {
-    await queryable
-      .insertInto("conversationParticipantAddresses")
-      .values({
-        conversationParticipantId: participantId,
-        transportAddressId: params.transportAddressId,
-        isPrimary: true,
-        metadata: jsonbValue({}),
-        createdAt: sql`NOW()`,
-      })
-      .onConflict((oc) =>
-        oc
-          .columns(["conversationParticipantId", "transportAddressId"])
-          .doNothing()
-      )
-      .execute()
-  }
+  await insertConversationParticipantRecord(queryable, {
+    participantId,
+    conversationId: params.conversationId,
+    subjectId: participantSubjectId,
+    actorJoinVersionId: params.actorJoinVersionId,
+    displayName: params.displayName,
+    roleKey: params.roleKey,
+    metadata: params.metadata,
+    transportAddressId: params.transportAddressId,
+  })
 
   return {
     id: participantId,
@@ -2553,21 +1783,7 @@ async function loadWorkspaceMembersByIds(
   workspaceId: string,
   workspaceMemberIds: string[]
 ) {
-  if (workspaceMemberIds.length === 0) {
-    return [] as Array<{ id: string; userName: string }>
-  }
-  const result = await runOn<{ id: string; userName: string }>(
-    queryable,
-    `
-      SELECT wm.id, u.name AS "userName"
-      FROM workspace_members wm
-      INNER JOIN users u ON u.id = wm.user_id
-      WHERE wm.workspace_id = $1
-        AND wm.id = ANY($2::uuid[])
-    `,
-    [workspaceId, workspaceMemberIds]
-  )
-  return result.rows
+  return listWorkspaceMemberNameRows(queryable, workspaceId, workspaceMemberIds)
 }
 
 async function loadActorsByIds(
@@ -2575,24 +1791,7 @@ async function loadActorsByIds(
   workspaceId: string,
   actorIds: string[]
 ) {
-  if (actorIds.length === 0) {
-    return [] as Array<{ id: string; displayName: string }>
-  }
-  const result = await runOn<{ id: string; displayName: string }>(
-    queryable,
-    `
-      SELECT actor.id, app.display_name AS "displayName"
-      FROM actors actor
-      INNER JOIN workspace_apps_live app
-        ON app.id = actor.id
-      WHERE app.workspace_id = $1
-        AND app.deleted_at IS NULL
-        AND app.status = 'active'
-        AND actor.id = ANY($2::uuid[])
-    `,
-    [workspaceId, actorIds]
-  )
-  return result.rows
+  return listActorDisplayNameRows(queryable, workspaceId, actorIds)
 }
 
 async function loadRemoteAgentsByIds(
@@ -2600,41 +1799,14 @@ async function loadRemoteAgentsByIds(
   workspaceId: string,
   remoteAgentIds: string[]
 ) {
-  if (remoteAgentIds.length === 0) {
-    return [] as Array<{ id: string; displayName: string }>
-  }
-  const result = await runOn<{ id: string; displayName: string }>(
-    queryable,
-    `
-      SELECT agent.id, app.display_name AS "displayName"
-      FROM remote_agents agent
-      INNER JOIN workspace_apps_live app
-        ON app.id = agent.id
-      WHERE app.workspace_id = $1
-        AND app.deleted_at IS NULL
-        AND app.status = 'active'
-        AND agent.id = ANY($2::uuid[])
-    `,
-    [workspaceId, remoteAgentIds]
-  )
-  return result.rows
+  return listRemoteAgentDisplayNameRows(queryable, workspaceId, remoteAgentIds)
 }
 
 export async function getConversation(
   conversationId: string,
   queryable: Executor = rootQueryable()
 ) {
-  const result = await runOn<Record<string, unknown>>(
-    queryable,
-    `
-      SELECT *
-      FROM conversations
-      WHERE id = $1
-      LIMIT 1
-    `,
-    [conversationId]
-  )
-  return result.rows[0] ?? null
+  return getConversationRecord(queryable, conversationId)
 }
 
 export async function createConversation(params: {
@@ -2653,36 +1825,14 @@ export async function createConversation(params: {
     throw new Error("createConversation: workspaceId is required")
   }
   const id = crypto.randomUUID()
-  const result = await runOn<Record<string, unknown>>(
-    queryable,
-    `
-      INSERT INTO conversations (
-        id,
-        kind,
-        workspace_id,
-        title,
-        created_by_workspace_member_id,
-        metadata,
-        created_at,
-        updated_at
-      )
-      VALUES ($1, $2, $3, $4, $5, $6::jsonb, NOW(), NOW())
-      RETURNING *
-    `,
-    [
-      id,
-      params.kind,
-      params.workspaceId,
-      params.title?.trim() || null,
-      params.createdByWorkspaceMemberId ?? null,
-      JSON.stringify(params.metadata ?? {}),
-    ]
-  )
-  const created = result.rows[0]
-  if (!created) {
-    throw new Error("Failed to create conversation")
-  }
-  return created
+  return insertConversationRecordReturning(queryable, {
+    conversationId: id,
+    kind: params.kind,
+    workspaceId: params.workspaceId,
+    title: params.title,
+    createdByWorkspaceMemberId: params.createdByWorkspaceMemberId,
+    metadata: params.metadata,
+  })
 }
 
 export async function createConversationForWorkspaceMember(params: {
@@ -2788,7 +1938,7 @@ export async function createConversationForWorkspaceMember(params: {
         conversationId: conversation.id as string,
         participantType: "actor",
         actorId: actor.id,
-        displayName: actor.displayName,
+        displayName: actor.displayName ?? undefined,
         queryable,
       })
     }
@@ -2798,7 +1948,7 @@ export async function createConversationForWorkspaceMember(params: {
         conversationId: conversation.id as string,
         participantType: "remote_agent",
         remoteAgentId: remoteAgent.id,
-        displayName: remoteAgent.displayName,
+        displayName: remoteAgent.displayName ?? undefined,
         queryable,
       })
     }
@@ -2818,7 +1968,7 @@ export async function createConversationForWorkspaceMember(params: {
   if (params.queryable) {
     return executeCreate(params.queryable)
   }
-  return withDbTransaction((client) => executeCreate(client))
+  return withChatTransaction((client) => executeCreate(client))
 }
 
 export async function listConversationParticipants(
@@ -2842,19 +1992,14 @@ export async function getConversationParticipant(params: {
   queryable?: Executor
 }) {
   if (params.participantId) {
-    const result = await runOn<{ id: string }>(
+    const exists = await conversationParticipantExists(
       params.queryable ?? rootQueryable(),
-      `
-        SELECT id
-        FROM conversation_participants
-        WHERE conversation_id = $1
-          AND id = $2
-        LIMIT 1
-      `,
-      [params.conversationId, params.participantId]
+      {
+        conversationId: params.conversationId,
+        participantId: params.participantId,
+      }
     )
-    const row = result.rows[0]
-    if (!row) {
+    if (!exists) {
       return null
     }
   }
@@ -2932,56 +2077,30 @@ export async function ensureConversationParticipant(params: {
     transportAddressId: params.transportAddressId,
   })
 
-  const existing = await runBuilder(
-    queryable,
-    queryable
-      .selectFrom("conversationParticipants")
-      .select(["id", "state"])
-      .where("conversationId", "=", params.conversationId)
-      .where("subjectId", "=", targetSubjectId)
-      .limit(1)
-  )
+  const existing = await getConversationParticipantStateBySubject(queryable, {
+    conversationId: params.conversationId,
+    subjectId: targetSubjectId,
+  })
 
-  const existingId = existing.rows[0]?.id
+  const existingId = existing?.id
   if (existingId) {
     // P1b: subject_id is fixed at insert time. The existing-participant path
     // only refreshes presentation/state fields; the workspace_member_id /
     // actor_id / remote_agent_id columns no longer exist on this table.
-    await queryable
-      .updateTable("conversationParticipants")
-      .set({
-        actorJoinVersionId: sql`COALESCE(${
-          params.actorJoinVersionId ?? null
-        }, actor_join_version_id)`,
-        displayName: sql`COALESCE(${params.displayName ?? null}, display_name)`,
-        roleKey: sql`COALESCE(${params.roleKey ?? "member"}, role_key)`,
-        state: "active",
-        leftAt: null,
-        metadata: sql`COALESCE(conversation_participants.metadata, '{}'::jsonb) || ${jsonbValue(
-          params.metadata ?? {}
-        )}`,
-      })
-      .where("id", "=", existingId)
-      .execute()
+    await reactivateConversationParticipant(queryable, {
+      participantId: existingId,
+      actorJoinVersionId: params.actorJoinVersionId,
+      displayName: params.displayName,
+      roleKey: params.roleKey ?? "member",
+      metadata: params.metadata,
+    })
 
     if (params.transportAddressId) {
-      await queryable
-        .insertInto("conversationParticipantAddresses")
-        .values({
-          conversationParticipantId: existingId,
-          transportAddressId: params.transportAddressId,
-          isPrimary: true,
-          metadata: jsonbValue({}),
-          createdAt: sql`NOW()`,
-        })
-        .onConflict((oc) =>
-          oc
-            .columns(["conversationParticipantId", "transportAddressId"])
-            .doUpdateSet({
-              isPrimary: sql`EXCLUDED.is_primary`,
-            })
-        )
-        .execute()
+      await upsertConversationParticipantAddress(
+        queryable,
+        existingId,
+        params.transportAddressId
+      )
     }
 
     return getConversationParticipant({
@@ -3024,23 +2143,12 @@ async function loadParticipantStatesByMember(
   conversationId: string,
   workspaceMemberIds: string[]
 ): Promise<Map<string, string>> {
-  if (workspaceMemberIds.length === 0) return new Map()
-  const result = await runOn<{
-    workspaceMemberId: string
-    state: string
-  }>(
+  const rows = await listConversationParticipantStatesByWorkspaceMember(
     queryable,
-    `
-      SELECT cps.workspace_member_id AS "workspaceMemberId", cp.state
-      FROM conversation_participants cp
-      INNER JOIN access_subjects cps ON cps.id = cp.subject_id
-      WHERE cp.conversation_id = $1
-        AND cps.workspace_member_id = ANY($2::uuid[])
-    `,
-    [conversationId, workspaceMemberIds]
+    { conversationId, workspaceMemberIds }
   )
   const map = new Map<string, string>()
-  for (const row of result.rows) {
+  for (const row of rows) {
     map.set(row.workspaceMemberId, row.state)
   }
   return map
@@ -3126,7 +2234,10 @@ export async function addConversationParticipants(params: {
       // Re-added members (prior state removed/left): clear their tombstone.
       for (const memberId of workspaceMemberIds) {
         const prior = priorStateByMember.get(memberId)
-        if (prior === "removed" || prior === "left") {
+        if (
+          prior === CONVERSATION_PARTICIPANT_STATE.REMOVED ||
+          prior === CONVERSATION_PARTICIPANT_STATE.LEFT
+        ) {
           const activeParticipants = await listConversationParticipants(
             params.conversationId,
             { queryable }
@@ -3138,10 +2249,12 @@ export async function addConversationParticipants(params: {
             eventType: "conversation.membership.updated",
             payload: {
               conversationId: params.conversationId,
-              selfState: "active",
-              reason: "added",
+              selfState: CONVERSATION_PARTICIPANT_STATE.ACTIVE,
+              reason: CHAT_MEMBERSHIP_UPDATE_REASON.ADDED,
               participants: activeParticipants
-                .filter((p) => p.state === "active")
+                .filter(
+                  (p) => p.state === CONVERSATION_PARTICIPANT_STATE.ACTIVE
+                )
                 .map(participantRowToChatParticipantSummary),
             },
           })
@@ -3167,7 +2280,7 @@ export async function addConversationParticipants(params: {
           conversationId: params.conversationId,
           participantType: "actor",
           actorId: actor.id,
-          displayName: actor.displayName,
+          displayName: actor.displayName ?? undefined,
           queryable,
         })
       }
@@ -3191,7 +2304,7 @@ export async function addConversationParticipants(params: {
           conversationId: params.conversationId,
           participantType: "remote_agent",
           remoteAgentId: remoteAgent.id,
-          displayName: remoteAgent.displayName,
+          displayName: remoteAgent.displayName ?? undefined,
           queryable,
         })
       }
@@ -3207,7 +2320,7 @@ export async function addConversationParticipants(params: {
   if (params.queryable) {
     return executeAdd(params.queryable)
   }
-  return withDbTransaction((client) => executeAdd(client))
+  return withChatTransaction((client) => executeAdd(client))
 }
 
 export async function createConversationItem(params: {
@@ -3247,128 +2360,35 @@ export async function createConversationItem(params: {
     })
 
     const itemId = crypto.randomUUID()
-    let insertedItem: ItemRow | null = null
 
-    const inserted = await runOn<ItemRow>(
-      queryable,
-      `
-        INSERT INTO conversation_items (
-          id,
-          conversation_id,
-          session_id,
-          turn_id,
-          client_message_id,
-          scope,
-          surface,
-          item_type,
-          subtype,
-          role,
-          author_participant_id,
-          bundle_id,
-          reply_to_item_id,
-          caused_by_item_id,
-          event_payload,
-          event_timeline_policy,
-          event_context_policy,
-          metadata,
-          created_at
-        )
-        VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-          $15::jsonb, $16, $17, $18::jsonb, NOW()
-        )
-        ON CONFLICT (conversation_id, author_participant_id, client_message_id)
-        WHERE author_participant_id IS NOT NULL AND client_message_id IS NOT NULL
-        DO NOTHING
-        RETURNING
-          id,
-          conversation_id AS "conversationId",
-          session_id AS "sessionId",
-          turn_id AS "turnId",
-          client_message_id AS "clientMessageId",
-          scope,
-          surface,
-          item_type AS "itemType",
-          subtype,
-          role,
-          author_participant_id AS "authorParticipantId",
-          reply_to_item_id AS "replyToItemId",
-          caused_by_item_id AS "causedByItemId",
-          event_payload AS "eventPayload",
-          event_timeline_policy AS "eventTimelinePolicy",
-          event_context_policy AS "eventContextPolicy",
-          metadata,
-          sequence,
-          created_at AS "createdAt"
-      `,
-      [
-        itemId,
-        params.conversationId,
-        params.sessionId ?? null,
-        params.turnId ?? null,
-        params.clientMessageId ?? null,
-        params.scope,
-        params.surface,
-        params.itemType,
-        params.subtype,
-        params.role,
-        params.authorParticipantId ?? null,
-        params.bundleId ?? null,
-        prepared.replyToItem?.id ?? null,
-        params.causedByItemId ?? null,
-        JSON.stringify(params.eventPayload ?? {}),
-        params.eventTimelinePolicy ?? null,
-        params.eventContextPolicy ?? null,
-        JSON.stringify(params.metadata ?? {}),
-      ]
-    )
-    insertedItem = inserted.rows[0] ?? null
-
-    if (!insertedItem && params.clientMessageId && params.authorParticipantId) {
-      const existing = await runOn<ItemRow>(
-        queryable,
-        `
-          SELECT
-            id,
-            conversation_id AS "conversationId",
-            session_id AS "sessionId",
-            turn_id AS "turnId",
-            client_message_id AS "clientMessageId",
-            scope,
-            surface,
-            item_type AS "itemType",
-            subtype,
-            role,
-            author_participant_id AS "authorParticipantId",
-            reply_to_item_id AS "replyToItemId",
-            caused_by_item_id AS "causedByItemId",
-            event_payload AS "eventPayload",
-            event_timeline_policy AS "eventTimelinePolicy",
-            event_context_policy AS "eventContextPolicy",
-            metadata,
-            sequence,
-            created_at AS "createdAt"
-          FROM conversation_items
-          WHERE conversation_id = $1
-            AND author_participant_id = $2
-            AND client_message_id = $3
-          LIMIT 1
-        `,
-        [
-          params.conversationId,
-          params.authorParticipantId,
-          params.clientMessageId,
-        ]
-      )
-      insertedItem = existing.rows[0] ?? null
-    }
+    const insertResult = await insertConversationItemRecord(queryable, {
+      itemId,
+      conversationId: params.conversationId,
+      sessionId: params.sessionId,
+      turnId: params.turnId,
+      clientMessageId: params.clientMessageId,
+      scope: params.scope,
+      surface: params.surface,
+      itemType: params.itemType,
+      subtype: params.subtype,
+      role: params.role,
+      authorParticipantId: params.authorParticipantId,
+      bundleId: params.bundleId,
+      replyToItemId: prepared.replyToItem?.id,
+      causedByItemId: params.causedByItemId,
+      eventPayload: params.eventPayload,
+      eventTimelinePolicy: params.eventTimelinePolicy,
+      eventContextPolicy: params.eventContextPolicy,
+      metadata: params.metadata,
+    })
+    const insertedItem = insertResult.item
 
     if (!insertedItem) {
       throw new Error("Failed to create conversation item")
     }
 
     const isDuplicate =
-      insertedItem.id !== itemId &&
+      !insertResult.inserted &&
       !!params.clientMessageId &&
       !!params.authorParticipantId
     if (isDuplicate) {
@@ -3382,66 +2402,17 @@ export async function createConversationItem(params: {
       return duplicateItems[0]!
     }
 
-    for (const [ordinal, part] of prepared.parts.entries()) {
-      await queryable
-        .insertInto("conversationItemParts")
-        .values({
-          id: crypto.randomUUID(),
-          itemId: insertedItem.id,
-          ordinal,
-          partType: part.type,
-          textValue: part.type === "text" ? (part.text ?? "") : null,
-          refPath: part.type === "file_ref" ? (part.refPath ?? null) : null,
-          refSha256: part.type === "file_ref" ? (part.refSha256 ?? null) : null,
-          jsonValue: part.type === "json" ? jsonbValue(part.json ?? {}) : null,
-          mimeType: part.mimeType ?? null,
-          name: part.name ?? null,
-          metadata: jsonbValue(part.metadata ?? {}),
-        })
-        .execute()
-    }
+    await insertConversationItemDetailRows(queryable, {
+      itemId: insertedItem.id,
+      parts: prepared.parts,
+      mentionedParticipants: prepared.mentionedParticipants,
+      restrictedAudienceParticipantIds: params.restrictedAudienceParticipantIds,
+      contextTargetParticipantIds: params.contextTargetParticipantIds,
+    })
 
-    if (prepared.mentionedParticipants.length > 0) {
-      for (const mention of prepared.mentionedParticipants) {
-        await queryable
-          .insertInto("conversationItemMentions")
-          .values({
-            itemId: insertedItem.id,
-            ordinal: mention.ordinal,
-            mentionedParticipantId: mention.participantId,
-          })
-          .execute()
-      }
-    }
-
-    for (const participantId of params.restrictedAudienceParticipantIds ?? []) {
-      await queryable
-        .insertInto("conversationItemTargets")
-        .values({
-          itemId: insertedItem.id,
-          targetParticipantId: participantId,
-          targetKind: "to",
-        })
-        .execute()
-    }
-
-    for (const participantId of params.contextTargetParticipantIds ?? []) {
-      await queryable
-        .insertInto("conversationItemContextTargets")
-        .values({
-          itemId: insertedItem.id,
-          targetParticipantId: participantId,
-        })
-        .execute()
-    }
-
-    await queryable
-      .updateTable("conversations")
-      // Conversation items are appended in child tables; touching the parent
-      // conversation preserves "last activity" semantics for list ordering.
-      .set({ updatedAt: sql`NOW()` })
-      .where("id", "=", params.conversationId)
-      .execute()
+    // Conversation items are appended in child tables; touching the parent
+    // conversation preserves "last activity" semantics for list ordering.
+    await touchConversationUpdatedAt(queryable, params.conversationId)
 
     const hydrated = await buildChatConversationItems(queryable, [insertedItem])
     const item = hydrated[0]
@@ -3481,7 +2452,7 @@ export async function createConversationItem(params: {
   if (params.queryable) {
     return executeInsert(params.queryable)
   }
-  return withDbTransaction((client) => executeInsert(client))
+  return withChatTransaction((client) => executeInsert(client))
 }
 
 export async function sendConversationMessageFromParticipant(params: {
@@ -3516,7 +2487,7 @@ export async function sendConversationMessageFromParticipant(params: {
     scope: "shared",
     surface: "visible",
     itemType: "message",
-    subtype: "chat.message",
+    subtype: CONVERSATION_MESSAGE_SUBTYPE.CHAT_MESSAGE,
     role: params.role ?? "user",
     authorParticipantId: params.senderParticipantId,
     replyToItemId: params.replyToItemId,
@@ -3643,7 +2614,7 @@ export async function createConversationEvent<
   if (params.queryable) {
     return executeCreate(params.queryable)
   }
-  return withDbTransaction((client) => executeCreate(client))
+  return withChatTransaction((client) => executeCreate(client))
 }
 
 export async function updateConversationItemEventPayload<
@@ -3653,11 +2624,7 @@ export async function updateConversationItemEventPayload<
   payload: ConversationFeedEventPayloadMap[T],
   queryable: Executor = rootQueryable()
 ) {
-  await queryable
-    .updateTable("conversationItems")
-    .set({ eventPayload: jsonbValue(payload) })
-    .where("id", "=", itemId)
-    .execute()
+  await updateConversationItemEventPayloadRow(queryable, itemId, payload)
 }
 
 async function buildConversationItemDetails(
@@ -3684,17 +2651,12 @@ async function buildConversationItemDetails(
     participants.map((participant) => [participant.id, participant])
   )
   const itemIds = itemRows.map((row) => row.id)
-  const contextTargetsResult = await runBuilder(
+  const contextTargetRows = await listConversationItemContextTargetRows(
     queryable,
-    queryable
-      .selectFrom("conversationItemContextTargets")
-      .select(["itemId", "targetParticipantId"])
-      .where("itemId", "in", itemIds)
-      .orderBy("itemId", "asc")
-      .orderBy("targetParticipantId", "asc")
+    itemIds
   )
   const contextTargetIdsByItem = new Map<string, string[]>()
-  for (const row of contextTargetsResult.rows) {
+  for (const row of contextTargetRows) {
     const current = contextTargetIdsByItem.get(row.itemId) ?? []
     current.push(row.targetParticipantId)
     contextTargetIdsByItem.set(row.itemId, current)
@@ -3726,12 +2688,17 @@ async function buildConversationItemDetails(
     ) {
       continue
     }
+    const replySubtype = normalizeConversationItemSubtype(
+      replyRow.itemType,
+      replyRow.subtype,
+      replyRow.id
+    )
     replyRefById.set(replyToItemId, {
       itemId: replyToItemId,
       ref: buildConversationMessageRef(toNumber(replyRow.sequence)),
       sequence: toNumber(replyRow.sequence),
-      itemType: replyRow.itemType,
-      subtype: replyRow.subtype,
+      itemType: replyItem.itemType,
+      subtype: replySubtype,
       author: replyRow.authorParticipantId
         ? participantRowToEntityRef(
             participantById.get(replyRow.authorParticipantId)
@@ -3775,13 +2742,13 @@ async function buildConversationItemDetails(
       restrictedAudienceParticipants,
       contextTargets,
       contentBlocks: hydrated.contentBlocks,
-      metadata: asJsonRecord(row.metadata),
+      metadata: row.metadata,
       replyToItemId: row.replyToItemId ?? undefined,
       replyTo: row.replyToItemId
         ? (replyRefById.get(row.replyToItemId) ?? {
             itemId: row.replyToItemId,
             itemType: "message",
-            subtype: "unavailable",
+            subtype: CONVERSATION_REPLY_REF_SPECIAL_SUBTYPE.UNAVAILABLE,
             previewText: "",
             previewBlocks: [],
             isUnavailable: true,
@@ -3792,16 +2759,15 @@ async function buildConversationItemDetails(
       clientMessageId: row.clientMessageId ?? undefined,
     } satisfies ConversationItemDetailBase
 
-    if (row.itemType === "event") {
+    if (row.itemType === CONVERSATION_ITEM_TYPE.EVENT) {
       if (!isConversationEventType(row.subtype)) {
         throw new Error(
           `Unsupported conversation event subtype ${row.subtype} for item ${row.id}`
         )
       }
-
       return {
         ...baseItem,
-        itemType: "event",
+        itemType: CONVERSATION_ITEM_TYPE.EVENT,
         subtype: row.subtype,
         eventPayload: asConversationFeedEventPayload(
           row.subtype,
@@ -3816,14 +2782,20 @@ async function buildConversationItemDetails(
       } satisfies ConversationEventItemDetail
     }
 
-    if (row.itemType !== "summary") {
-      assertConversationMessageSubtype(row.subtype)
-    } else if (row.subtype !== "summary") {
-      throw new Error(
-        `Unsupported conversation summary subtype ${row.subtype} for item ${row.id}`
-      )
+    if (row.itemType === CONVERSATION_ITEM_TYPE.SUMMARY) {
+      if (row.subtype !== CONVERSATION_FEED_MESSAGE_TYPE.SUMMARY) {
+        throw new Error(
+          `Unsupported conversation summary subtype ${row.subtype} for item ${row.id}`
+        )
+      }
+      return {
+        ...baseItem,
+        itemType: CONVERSATION_ITEM_TYPE.SUMMARY,
+        subtype: row.subtype,
+      } satisfies ConversationNonEventItemDetail
     }
 
+    assertConversationMessageSubtype(row.subtype)
     return {
       ...baseItem,
       itemType: row.itemType,
@@ -3883,7 +2855,7 @@ function participantRowToChatParticipantSummary(
     avatarEmoji: entity.avatarEmoji,
     roleKey: participant.roleKey,
     state: participant.state,
-    metadata: asJsonRecord(participant.metadata),
+    metadata: participant.metadata,
     joinedAt: presentInstant(participant.joinedAt),
     leftAt: presentOptionalInstant(participant.leftAt),
     sessionId: participant.sessionId ?? undefined,
@@ -3934,12 +2906,22 @@ function conversationItemDetailToChatItem(
   if (item.itemType === CONVERSATION_ITEM_TYPE.EVENT) {
     return {
       ...baseItem,
-      itemType: "event",
+      itemType: CONVERSATION_ITEM_TYPE.EVENT,
       subtype: item.subtype,
       eventPayload: item.eventPayload,
       eventTimelinePolicy: item.eventTimelinePolicy,
       eventContextPolicy: item.eventContextPolicy,
     } as ChatConversationEventItem
+  }
+
+  if (item.itemType === CONVERSATION_ITEM_TYPE.SUMMARY) {
+    return {
+      ...baseItem,
+      itemType: CONVERSATION_ITEM_TYPE.SUMMARY,
+      subtype: item.subtype,
+      transport: mapTransportContext(item.metadata),
+      transportDeliveries,
+    } satisfies ChatConversationItem
   }
 
   return {
@@ -4007,7 +2989,8 @@ function mapTransportContext(
   }
   const value = raw as Record<string, unknown>
   const direction =
-    value.direction === "inbound" || value.direction === "outbound"
+    value.direction === CONVERSATION_MESSAGE_TRANSPORT_DIRECTION.INBOUND ||
+    value.direction === CONVERSATION_MESSAGE_TRANSPORT_DIRECTION.OUTBOUND
       ? value.direction
       : undefined
   const transportKind = isTransportKind(value.transportKind)
@@ -4053,43 +3036,9 @@ async function loadTransportDeliveriesForItems(
   if (itemIds.length === 0) {
     return new Map<string, ConversationMessageTransportDelivery[]>()
   }
-  const result = await runOn<{
-    itemId: string
-    linkId: string
-    transportKind: TransportKind
-    direction: "inbound" | "outbound"
-    deliveryStatus: "pending" | "sent" | "failed" | "skipped"
-    externalMessageId: string | null
-    metadata: unknown
-    deliveredAt: Date | null
-    endpointType: "direct" | "group"
-    endpointExternalId: string | null
-    endpointDisplayName: string | null
-  }>(
-    queryable,
-    `
-      SELECT
-        tml.item_id AS "itemId",
-        tml.id AS "linkId",
-        tml.transport_kind AS "transportKind",
-        tml.direction,
-        tml.delivery_status AS "deliveryStatus",
-        tml.external_message_id AS "externalMessageId",
-        tml.metadata,
-        tml.delivered_at AS "deliveredAt",
-        te.endpoint_type AS "endpointType",
-        te.external_id AS "endpointExternalId",
-        te.display_name AS "endpointDisplayName"
-      FROM transport_message_links tml
-      INNER JOIN transport_endpoints te
-        ON te.id = tml.transport_endpoint_id
-      WHERE tml.item_id = ANY($1::uuid[])
-      ORDER BY tml.item_id ASC, tml.created_at ASC
-    `,
-    [itemIds]
-  )
+  const rows = await listTransportDeliveryRowsForItems(queryable, itemIds)
   const byItem = new Map<string, ConversationMessageTransportDelivery[]>()
-  for (const row of result.rows) {
+  for (const row of rows) {
     const current = byItem.get(row.itemId) ?? []
     current.push({
       linkId: row.linkId,
@@ -4101,7 +3050,7 @@ async function loadTransportDeliveriesForItems(
       endpointDisplayName: row.endpointDisplayName ?? undefined,
       externalMessageId: row.externalMessageId ?? undefined,
       deliveredAt: presentOptionalInstant(row.deliveredAt),
-      metadata: asJsonRecord(row.metadata),
+      metadata: row.metadata,
     })
     byItem.set(row.itemId, current)
   }
@@ -4156,7 +3105,7 @@ export function isFeedItemVisibleToWorkspaceMember(
   workspaceMemberId: string
 ) {
   if (item.kind === "message") {
-    if (item.messageType === "model_error_notice") {
+    if (item.messageType === CONVERSATION_MESSAGE_SUBTYPE.MODEL_ERROR_NOTICE) {
       if (!item.restrictedAudience || item.restrictedAudience.length === 0) {
         return true
       }
@@ -4185,36 +3134,7 @@ export async function getConversationFeedItemById(
   itemId: string,
   queryable: Executor = rootQueryable()
 ) {
-  const rows = await runOn<ItemRow>(
-    queryable,
-    `
-      SELECT
-        id,
-        conversation_id AS "conversationId",
-        session_id AS "sessionId",
-        turn_id AS "turnId",
-        client_message_id AS "clientMessageId",
-        scope,
-        surface,
-        item_type AS "itemType",
-        subtype,
-        role,
-        author_participant_id AS "authorParticipantId",
-        reply_to_item_id AS "replyToItemId",
-        caused_by_item_id AS "causedByItemId",
-        event_payload AS "eventPayload",
-        event_timeline_policy AS "eventTimelinePolicy",
-        event_context_policy AS "eventContextPolicy",
-        metadata,
-        sequence,
-        created_at AS "createdAt"
-      FROM conversation_items
-      WHERE id = $1
-      LIMIT 1
-    `,
-    [itemId]
-  )
-  const row = rows.rows[0]
+  const row = await getConversationItemRowById(queryable, itemId)
   if (!row) {
     return null
   }
@@ -4239,69 +3159,16 @@ export async function getContextConversationItemsForParticipant(params: {
   queryable?: Executor
 }) {
   const queryable = params.queryable ?? rootQueryable()
-  const result = await runOn<ItemRow>(
+  const result = await listContextConversationItemRowsForParticipant(
     queryable,
-    `
-      SELECT
-        id,
-        conversation_id AS "conversationId",
-        session_id AS "sessionId",
-        turn_id AS "turnId",
-        client_message_id AS "clientMessageId",
-        scope,
-        surface,
-        item_type AS "itemType",
-        subtype,
-        role,
-        author_participant_id AS "authorParticipantId",
-        reply_to_item_id AS "replyToItemId",
-        caused_by_item_id AS "causedByItemId",
-        event_payload AS "eventPayload",
-        event_timeline_policy AS "eventTimelinePolicy",
-        event_context_policy AS "eventContextPolicy",
-        metadata,
-        sequence,
-        created_at AS "createdAt"
-      FROM conversation_items ci
-      WHERE ci.conversation_id = $1
-        AND ci.scope = 'shared'
-        AND (
-          (
-            ci.surface = 'visible'
-            AND (
-              NOT EXISTS (
-                SELECT 1
-                FROM conversation_item_targets cit0
-                WHERE cit0.item_id = ci.id
-              )
-              OR ci.author_participant_id = $2
-              OR EXISTS (
-                SELECT 1
-                FROM conversation_item_targets cit
-                WHERE cit.item_id = ci.id
-                  AND cit.target_participant_id = $2
-              )
-            )
-          )
-          OR EXISTS (
-            SELECT 1
-            FROM conversation_item_context_targets cict
-            WHERE cict.item_id = ci.id
-              AND cict.target_participant_id = $2
-          )
-        )
-        AND ($3::bigint IS NULL OR ci.sequence < $3)
-      ORDER BY ci.sequence DESC
-      LIMIT $4
-    `,
-    [
-      params.conversationId,
-      params.participantId,
-      params.beforeSequence ?? null,
-      Math.max(1, Math.min(params.limit ?? 200, 500)),
-    ]
+    {
+      conversationId: params.conversationId,
+      participantId: params.participantId,
+      beforeSequence: params.beforeSequence,
+      limit: Math.max(1, Math.min(params.limit ?? 200, 500)),
+    }
   )
-  const rows = [...result.rows].reverse()
+  const rows = [...result].reverse()
   return buildConversationItemDetails(queryable, rows)
 }
 
@@ -4309,39 +3176,7 @@ export async function getLastVisibleConversationItem(
   conversationId: string,
   queryable: Executor = rootQueryable()
 ) {
-  const result = await runOn<ItemRow>(
-    queryable,
-    `
-      SELECT
-        id,
-        conversation_id AS "conversationId",
-        session_id AS "sessionId",
-        turn_id AS "turnId",
-        client_message_id AS "clientMessageId",
-        scope,
-        surface,
-        item_type AS "itemType",
-        subtype,
-        role,
-        author_participant_id AS "authorParticipantId",
-        reply_to_item_id AS "replyToItemId",
-        caused_by_item_id AS "causedByItemId",
-        event_payload AS "eventPayload",
-        event_timeline_policy AS "eventTimelinePolicy",
-        event_context_policy AS "eventContextPolicy",
-        metadata,
-        sequence,
-        created_at AS "createdAt"
-      FROM conversation_items
-      WHERE conversation_id = $1
-        AND scope = 'shared'
-        AND surface = 'visible'
-      ORDER BY sequence DESC
-      LIMIT 1
-    `,
-    [conversationId]
-  )
-  const row = result.rows[0]
+  const row = await getLastVisibleConversationItemRow(queryable, conversationId)
   if (!row) {
     return null
   }
@@ -4354,36 +3189,24 @@ export async function listWorkspaceConversationViews(params: {
   workspaceMemberId: string
   queryable?: Executor
 }) {
-  return loadConversationViews(
+  const conversations = await loadConversationViews(
     params.queryable ?? rootQueryable(),
     params.workspaceId,
     params.workspaceMemberId
   )
+  return conversations.map(presentChatConversationRecord)
 }
 
 export async function listConversationRealtimeRecipients(
   conversationId: string,
   queryable: Executor = rootQueryable()
 ) {
-  const result = await runOn<{
-    workspaceId: string
-    workspaceMemberId: string
-  }>(
+  const rows = await listConversationRealtimeRecipientRows(
     queryable,
-    `
-      SELECT wm.workspace_id AS "workspaceId", cpsubj.workspace_member_id AS "workspaceMemberId"
-      FROM conversation_participants cp
-      INNER JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
-      INNER JOIN workspace_members wm
-        ON wm.id = cpsubj.workspace_member_id
-      WHERE cp.conversation_id = $1
-        AND cp.state = 'active'
-        AND cpsubj.workspace_member_id IS NOT NULL
-    `,
-    [conversationId]
+    conversationId
   )
 
-  return result.rows.map((row) => ({
+  return rows.map((row) => ({
     workspaceId: row.workspaceId,
     workspaceMemberId: row.workspaceMemberId,
   }))
@@ -4395,12 +3218,12 @@ export async function createChatClientInstance(params: {
   platform?: string
   deviceLabel?: string
   metadata?: Record<string, unknown>
-}): Promise<ChatClientInstanceRegistrationResponse> {
+}): Promise<ChatClientInstanceRegistrationRecord> {
   const identity = await getWorkspaceMemberIdentityOrThrow(
     params.workspaceId,
     params.userId
   )
-  const clientInstanceId = await withDbTransaction(async (client) =>
+  const clientInstanceId = await withChatTransaction(async (client) =>
     createClientInstance(client, {
       workspaceId: params.workspaceId,
       workspaceMemberId: identity.workspaceMemberId,
@@ -4423,12 +3246,12 @@ export async function touchChatClientInstance(params: {
   platform?: string
   deviceLabel?: string
   metadata?: Record<string, unknown>
-}): Promise<ChatClientInstanceRegistrationResponse> {
+}): Promise<ChatClientInstanceRegistrationRecord> {
   const identity = await getWorkspaceMemberIdentityOrThrow(
     params.workspaceId,
     params.userId
   )
-  await withDbTransaction(async (client) => {
+  await withChatTransaction(async (client) => {
     await touchClientInstance(client, {
       workspaceId: params.workspaceId,
       workspaceMemberId: identity.workspaceMemberId,
@@ -4455,7 +3278,7 @@ export async function createChatConversation(params: {
   actorIds?: string[]
   remoteAgentIds?: string[]
   metadata?: Record<string, unknown>
-}): Promise<ChatConversationCreateResponse> {
+}): Promise<ChatConversationCreateRecord> {
   const creator = await getWorkspaceMemberIdentityOrThrow(
     params.workspaceId,
     params.userId
@@ -4471,20 +3294,14 @@ export async function createChatConversation(params: {
   // External participants are not creatable through this public path; they are
   // minted only by the IM ingest path (syncTransportAddressConversationParticipant).
 
-  const conversationId = await withDbTransaction(async (client) => {
-    const existingRequest = await runOn<{ conversationId: string }>(
-      client,
-      `
-        SELECT conversation_id AS "conversationId"
-        FROM chat_conversation_create_requests
-        WHERE workspace_member_id = $1
-          AND client_request_id = $2
-        LIMIT 1
-      `,
-      [creator.workspaceMemberId, params.clientRequestId]
-    )
-    if (existingRequest.rows[0]?.conversationId) {
-      return existingRequest.rows[0].conversationId
+  const conversationId = await withChatTransaction(async (client) => {
+    const existingConversationId =
+      await getChatConversationCreateRequestConversationId(client, {
+        workspaceMemberId: creator.workspaceMemberId,
+        clientRequestId: params.clientRequestId,
+      })
+    if (existingConversationId) {
+      return existingConversationId
     }
 
     const memberRows = await loadWorkspaceMembersByIds(
@@ -4527,18 +3344,14 @@ export async function createChatConversation(params: {
     }
 
     const newConversationId = crypto.randomUUID()
-    await client
-      .insertInto("conversations")
-      .values({
-        id: newConversationId,
-        kind: params.kind,
-        workspaceId: params.workspaceId,
-        title: params.title?.trim() || null,
-        createdByWorkspaceMemberId: creator.workspaceMemberId,
-        metadata: jsonbValue(params.metadata ?? {}),
-        createdAt: sql`NOW()`,
-      })
-      .execute()
+    await insertConversationRecord(client, {
+      conversationId: newConversationId,
+      kind: params.kind,
+      workspaceId: params.workspaceId,
+      title: params.title,
+      createdByWorkspaceMemberId: creator.workspaceMemberId,
+      metadata: params.metadata,
+    })
 
     for (const member of memberRows) {
       await insertParticipant(client, {
@@ -4561,7 +3374,7 @@ export async function createChatConversation(params: {
         conversationId: newConversationId,
         participantType: "actor",
         actorId: actor.id,
-        displayName: actor.displayName,
+        displayName: actor.displayName ?? undefined,
         roleKey: "member",
         metadata: {},
       })
@@ -4572,22 +3385,18 @@ export async function createChatConversation(params: {
         conversationId: newConversationId,
         participantType: "remote_agent",
         remoteAgentId: remoteAgent.id,
-        displayName: remoteAgent.displayName,
+        displayName: remoteAgent.displayName ?? undefined,
         roleKey: "member",
         metadata: {},
       })
     }
 
-    await client
-      .insertInto("chatConversationCreateRequests")
-      .values({
-        workspaceMemberId: creator.workspaceMemberId,
-        clientRequestId: params.clientRequestId,
-        workspaceId: params.workspaceId,
-        conversationId: newConversationId,
-        createdAt: sql`NOW()`,
-      })
-      .execute()
+    await insertChatConversationCreateRequest(client, {
+      workspaceMemberId: creator.workspaceMemberId,
+      clientRequestId: params.clientRequestId,
+      workspaceId: params.workspaceId,
+      conversationId: newConversationId,
+    })
 
     await syncConversationUpsertForWorkspaceMembers(
       client,
@@ -4622,7 +3431,7 @@ export async function createChatConversation(params: {
 export async function getChatBootstrap(params: {
   workspaceId: string
   userId: string
-}): Promise<ChatBootstrapResponse> {
+}): Promise<ChatBootstrapRecord> {
   const identity = await getWorkspaceMemberIdentityOrThrow(
     params.workspaceId,
     params.userId
@@ -4634,10 +3443,8 @@ export async function getChatBootstrap(params: {
   // cursor) — the client would then tombstone at a boundary that resurrects a
   // stale higher-seq upsert. A single snapshot makes the projection strictly
   // consistent with nextInboxCursor.
-  const { conversations, nextInboxCursor } = await db
-    .transaction()
-    .setIsolationLevel("repeatable read")
-    .execute(async (trx) => {
+  const { conversations, nextInboxCursor } = await withChatRepeatableRead(
+    async (trx) => {
       const conversations = await loadConversationViews(
         trx,
         params.workspaceId,
@@ -4649,7 +3456,8 @@ export async function getChatBootstrap(params: {
         identity.workspaceMemberId
       )
       return { conversations, nextInboxCursor }
-    })
+    }
+  )
 
   return {
     workspaceMemberId: identity.workspaceMemberId,
@@ -4664,52 +3472,21 @@ export async function getChatSync(params: {
   userId: string
   cursor?: number
   limit?: number
-}): Promise<ChatSyncResponse> {
+}): Promise<ChatSyncRecord> {
   const identity = await getWorkspaceMemberIdentityOrThrow(
     params.workspaceId,
     params.userId
   )
   const limit = Math.min(Math.max(params.limit ?? 200, 1), 500)
-  const result = await runOn<{
-    syncSeq: string | number
-    memberSeq: string | number
-    workspaceId: string
-    workspaceMemberId: string
-    conversationId: string | null
-    itemId: string | null
-    eventType: ChatSyncEventType
-    payload: unknown
-    occurredAt: Date
-  }>(
-    db,
-    `
-      SELECT
-        sync_seq AS "syncSeq",
-        member_seq AS "memberSeq",
-        workspace_id AS "workspaceId",
-        workspace_member_id AS "workspaceMemberId",
-        conversation_id AS "conversationId",
-        item_id AS "itemId",
-        event_type AS "eventType",
-        payload,
-        occurred_at AS "occurredAt"
-      FROM workspace_member_sync_events
-      WHERE workspace_id = $1
-        AND workspace_member_id = $2
-        AND member_seq > $3
-      ORDER BY member_seq ASC
-      LIMIT $4
-    `,
-    [
-      params.workspaceId,
-      identity.workspaceMemberId,
-      params.cursor ?? 0,
-      limit + 1,
-    ]
-  )
+  const result = await listWorkspaceMemberSyncEventRows(rootQueryable(), {
+    workspaceId: params.workspaceId,
+    workspaceMemberId: identity.workspaceMemberId,
+    cursor: params.cursor ?? 0,
+    limit: limit + 1,
+  })
 
-  const hasMore = result.rows.length > limit
-  const rows = hasMore ? result.rows.slice(0, limit) : result.rows
+  const hasMore = result.length > limit
+  const rows = hasMore ? result.slice(0, limit) : result
   const events: ChatSyncEvent[] = await Promise.all(
     rows.map(async (row) => {
       const eventType = row.eventType
@@ -4751,7 +3528,7 @@ export async function getChatConversationMessages(params: {
   beforeSequence?: number
   limit?: number
   clientInstanceId: string
-}): Promise<ChatConversationMessagesPage> {
+}): Promise<ChatConversationMessagesRecord> {
   const identity = await getWorkspaceMemberIdentityOrThrow(
     params.workspaceId,
     params.userId
@@ -4773,166 +3550,33 @@ export async function getChatConversationMessages(params: {
   let hasMoreBefore = false
   let hasMoreAfter = false
   if (typeof params.afterSequence === "number") {
-    const result = await runOn<ItemRow>(
-      db,
-      `
-        SELECT
-          id,
-          conversation_id AS "conversationId",
-          session_id AS "sessionId",
-          turn_id AS "turnId",
-          client_message_id AS "clientMessageId",
-          scope,
-          surface,
-          item_type AS "itemType",
-          subtype,
-          role,
-          author_participant_id AS "authorParticipantId",
-          reply_to_item_id AS "replyToItemId",
-          caused_by_item_id AS "causedByItemId",
-          event_payload AS "eventPayload",
-          event_timeline_policy AS "eventTimelinePolicy",
-          event_context_policy AS "eventContextPolicy",
-          metadata,
-          sequence,
-          created_at AS "createdAt"
-        FROM conversation_items
-        WHERE conversation_id = $1
-          AND scope = 'shared'
-          AND surface = 'visible'
-          AND (
-            NOT EXISTS (
-              SELECT 1
-              FROM conversation_item_targets cit0
-              WHERE cit0.item_id = conversation_items.id
-            )
-            OR conversation_items.author_participant_id = $3
-            OR EXISTS (
-              SELECT 1
-              FROM conversation_item_targets cit
-              WHERE cit.item_id = conversation_items.id
-                AND cit.target_participant_id = $3
-            )
-          )
-          AND sequence > $2
-        ORDER BY sequence ASC
-        LIMIT $4
-      `,
-      [
-        params.conversationId,
-        params.afterSequence,
-        access.participant.id,
-        limit + 1,
-      ]
-    )
-    hasMoreAfter = result.rows.length > limit
+    const result = await listVisibleConversationMessageRows(rootQueryable(), {
+      conversationId: params.conversationId,
+      participantId: access.participant.id,
+      afterSequence: params.afterSequence,
+      limit: limit + 1,
+    })
+    hasMoreAfter = result.length > limit
     hasMoreBefore = params.afterSequence > 0
-    rows = hasMoreAfter ? result.rows.slice(0, limit) : result.rows
+    rows = hasMoreAfter ? result.slice(0, limit) : result
   } else if (typeof params.beforeSequence === "number") {
-    const result = await runOn<ItemRow>(
-      db,
-      `
-        SELECT
-          id,
-          conversation_id AS "conversationId",
-          session_id AS "sessionId",
-          turn_id AS "turnId",
-          client_message_id AS "clientMessageId",
-          scope,
-          surface,
-          item_type AS "itemType",
-          subtype,
-          role,
-          author_participant_id AS "authorParticipantId",
-          reply_to_item_id AS "replyToItemId",
-          caused_by_item_id AS "causedByItemId",
-          event_payload AS "eventPayload",
-          event_timeline_policy AS "eventTimelinePolicy",
-          event_context_policy AS "eventContextPolicy",
-          metadata,
-          sequence,
-          created_at AS "createdAt"
-        FROM conversation_items
-        WHERE conversation_id = $1
-          AND scope = 'shared'
-          AND surface = 'visible'
-          AND (
-            NOT EXISTS (
-              SELECT 1
-              FROM conversation_item_targets cit0
-              WHERE cit0.item_id = conversation_items.id
-            )
-            OR conversation_items.author_participant_id = $3
-            OR EXISTS (
-              SELECT 1
-              FROM conversation_item_targets cit
-              WHERE cit.item_id = conversation_items.id
-                AND cit.target_participant_id = $3
-            )
-          )
-          AND sequence < $2
-        ORDER BY sequence DESC
-        LIMIT $4
-      `,
-      [
-        params.conversationId,
-        params.beforeSequence,
-        access.participant.id,
-        limit + 1,
-      ]
-    )
-    hasMoreBefore = result.rows.length > limit
+    const result = await listVisibleConversationMessageRows(rootQueryable(), {
+      conversationId: params.conversationId,
+      participantId: access.participant.id,
+      beforeSequence: params.beforeSequence,
+      limit: limit + 1,
+    })
+    hasMoreBefore = result.length > limit
     hasMoreAfter = true
-    rows = (hasMoreBefore ? result.rows.slice(0, limit) : result.rows).reverse()
+    rows = (hasMoreBefore ? result.slice(0, limit) : result).reverse()
   } else {
-    const result = await runOn<ItemRow>(
-      db,
-      `
-        SELECT
-          id,
-          conversation_id AS "conversationId",
-          session_id AS "sessionId",
-          turn_id AS "turnId",
-          client_message_id AS "clientMessageId",
-          scope,
-          surface,
-          item_type AS "itemType",
-          subtype,
-          role,
-          author_participant_id AS "authorParticipantId",
-          reply_to_item_id AS "replyToItemId",
-          caused_by_item_id AS "causedByItemId",
-          event_payload AS "eventPayload",
-          event_timeline_policy AS "eventTimelinePolicy",
-          event_context_policy AS "eventContextPolicy",
-          metadata,
-          sequence,
-          created_at AS "createdAt"
-        FROM conversation_items
-        WHERE conversation_id = $1
-          AND scope = 'shared'
-          AND surface = 'visible'
-          AND (
-            NOT EXISTS (
-              SELECT 1
-              FROM conversation_item_targets cit0
-              WHERE cit0.item_id = conversation_items.id
-            )
-            OR conversation_items.author_participant_id = $2
-            OR EXISTS (
-              SELECT 1
-              FROM conversation_item_targets cit
-              WHERE cit.item_id = conversation_items.id
-                AND cit.target_participant_id = $2
-            )
-          )
-        ORDER BY sequence DESC
-        LIMIT $3
-      `,
-      [params.conversationId, access.participant.id, limit + 1]
-    )
-    hasMoreBefore = result.rows.length > limit
-    rows = (hasMoreBefore ? result.rows.slice(0, limit) : result.rows).reverse()
+    const result = await listVisibleConversationMessageRows(rootQueryable(), {
+      conversationId: params.conversationId,
+      participantId: access.participant.id,
+      limit: limit + 1,
+    })
+    hasMoreBefore = result.length > limit
+    rows = (hasMoreBefore ? result.slice(0, limit) : result).reverse()
   }
 
   const items = await buildChatConversationItems(rootQueryable(), rows, {
@@ -4957,45 +3601,15 @@ export async function getChatConversationMessages(params: {
     )
   }
 
-  const readState = await runOn<{
-    readWatermarkSequence: string | number
-  }>(
-    db,
-    `
-      SELECT read_watermark_sequence AS "readWatermarkSequence"
-      FROM conversation_participant_states
-      WHERE conversation_id = $1
-        AND participant_id = $2
-      LIMIT 1
-    `,
-    [params.conversationId, access.participant.id]
-  )
+  const readState = await getConversationParticipantReadState(rootQueryable(), {
+    conversationId: params.conversationId,
+    participantId: access.participant.id,
+  })
 
-  const deviceStateResult = await runOn<{
-    clientInstanceId: string
-    conversationId: string
-    lastVisibleSequence: string | number
-    lastInboxSeq: string | number
-    lastOpenedAt: Date | null
-    draftPayload: unknown
-  }>(
-    db,
-    `
-      SELECT
-        client_instance_id AS "clientInstanceId",
-        conversation_id AS "conversationId",
-        last_visible_sequence AS "lastVisibleSequence",
-        last_inbox_seq AS "lastInboxSeq",
-        last_opened_at AS "lastOpenedAt",
-        draft_payload AS "draftPayload"
-      FROM conversation_device_states
-      WHERE conversation_id = $1
-        AND client_instance_id = $2
-      LIMIT 1
-    `,
-    [params.conversationId, params.clientInstanceId]
-  )
-  const row = deviceStateResult.rows[0]
+  const row = await getConversationDeviceState(rootQueryable(), {
+    conversationId: params.conversationId,
+    clientInstanceId: params.clientInstanceId,
+  })
   const deviceState: ChatDeviceState = row
     ? {
         clientInstanceId: row.clientInstanceId,
@@ -5003,7 +3617,7 @@ export async function getChatConversationMessages(params: {
         lastVisibleSequence: toNumber(row.lastVisibleSequence),
         lastInboxSeq: toNumber(row.lastInboxSeq),
         lastOpenedAt: presentOptionalInstant(row.lastOpenedAt),
-        draftPayload: asJsonRecord(row.draftPayload),
+        draftPayload: row.draftPayload,
       }
     : {
         clientInstanceId: params.clientInstanceId,
@@ -5047,7 +3661,7 @@ export async function getChatConversationMessages(params: {
     runtimeByActor: runtimeMap[params.conversationId] || {},
     runtimeByRemoteAgent,
     participantReadWatermarkSequence: toNumber(
-      readState.rows[0]?.readWatermarkSequence
+      readState?.readWatermarkSequence
     ),
     deviceState,
     hasMoreBefore,
@@ -5088,156 +3702,29 @@ export async function listVisibleConversationItemsForParticipant(params: {
   let rows: ItemRow[] = []
 
   if (typeof params.afterSequence === "number") {
-    const result = await runOn<ItemRow>(
-      queryable,
-      `
-        SELECT
-          id,
-          conversation_id AS "conversationId",
-          session_id AS "sessionId",
-          turn_id AS "turnId",
-          client_message_id AS "clientMessageId",
-          scope,
-          surface,
-          item_type AS "itemType",
-          subtype,
-          role,
-          author_participant_id AS "authorParticipantId",
-          reply_to_item_id AS "replyToItemId",
-          caused_by_item_id AS "causedByItemId",
-          event_payload AS "eventPayload",
-          event_timeline_policy AS "eventTimelinePolicy",
-          event_context_policy AS "eventContextPolicy",
-          metadata,
-          sequence,
-          created_at AS "createdAt"
-        FROM conversation_items
-        WHERE conversation_id = $1
-          AND scope = 'shared'
-          AND surface = 'visible'
-          AND (
-            NOT EXISTS (
-              SELECT 1
-              FROM conversation_item_targets cit0
-              WHERE cit0.item_id = conversation_items.id
-            )
-            OR conversation_items.author_participant_id = $3
-            OR EXISTS (
-              SELECT 1
-              FROM conversation_item_targets cit
-              WHERE cit.item_id = conversation_items.id
-                AND cit.target_participant_id = $3
-            )
-          )
-          AND sequence > $2
-        ORDER BY sequence ASC
-        LIMIT $4
-      `,
-      [params.conversationId, params.afterSequence, params.participantId, limit]
-    )
-    rows = result.rows
+    rows = await listVisibleConversationMessageRows(queryable, {
+      conversationId: params.conversationId,
+      participantId: params.participantId,
+      afterSequence: params.afterSequence,
+      limit,
+    })
   } else if (typeof params.beforeSequence === "number") {
-    const result = await runOn<ItemRow>(
-      queryable,
-      `
-        SELECT
-          id,
-          conversation_id AS "conversationId",
-          session_id AS "sessionId",
-          turn_id AS "turnId",
-          client_message_id AS "clientMessageId",
-          scope,
-          surface,
-          item_type AS "itemType",
-          subtype,
-          role,
-          author_participant_id AS "authorParticipantId",
-          reply_to_item_id AS "replyToItemId",
-          caused_by_item_id AS "causedByItemId",
-          event_payload AS "eventPayload",
-          event_timeline_policy AS "eventTimelinePolicy",
-          event_context_policy AS "eventContextPolicy",
-          metadata,
-          sequence,
-          created_at AS "createdAt"
-        FROM conversation_items
-        WHERE conversation_id = $1
-          AND scope = 'shared'
-          AND surface = 'visible'
-          AND (
-            NOT EXISTS (
-              SELECT 1
-              FROM conversation_item_targets cit0
-              WHERE cit0.item_id = conversation_items.id
-            )
-            OR conversation_items.author_participant_id = $3
-            OR EXISTS (
-              SELECT 1
-              FROM conversation_item_targets cit
-              WHERE cit.item_id = conversation_items.id
-                AND cit.target_participant_id = $3
-            )
-          )
-          AND sequence < $2
-        ORDER BY sequence DESC
-        LIMIT $4
-      `,
-      [
-        params.conversationId,
-        params.beforeSequence,
-        params.participantId,
+    rows = (
+      await listVisibleConversationMessageRows(queryable, {
+        conversationId: params.conversationId,
+        participantId: params.participantId,
+        beforeSequence: params.beforeSequence,
         limit,
-      ]
-    )
-    rows = [...result.rows].reverse()
+      })
+    ).reverse()
   } else {
-    const result = await runOn<ItemRow>(
-      queryable,
-      `
-        SELECT
-          id,
-          conversation_id AS "conversationId",
-          session_id AS "sessionId",
-          turn_id AS "turnId",
-          client_message_id AS "clientMessageId",
-          scope,
-          surface,
-          item_type AS "itemType",
-          subtype,
-          role,
-          author_participant_id AS "authorParticipantId",
-          reply_to_item_id AS "replyToItemId",
-          caused_by_item_id AS "causedByItemId",
-          event_payload AS "eventPayload",
-          event_timeline_policy AS "eventTimelinePolicy",
-          event_context_policy AS "eventContextPolicy",
-          metadata,
-          sequence,
-          created_at AS "createdAt"
-        FROM conversation_items
-        WHERE conversation_id = $1
-          AND scope = 'shared'
-          AND surface = 'visible'
-          AND (
-            NOT EXISTS (
-              SELECT 1
-              FROM conversation_item_targets cit0
-              WHERE cit0.item_id = conversation_items.id
-            )
-            OR conversation_items.author_participant_id = $2
-            OR EXISTS (
-              SELECT 1
-              FROM conversation_item_targets cit
-              WHERE cit.item_id = conversation_items.id
-                AND cit.target_participant_id = $2
-            )
-          )
-        ORDER BY sequence DESC
-        LIMIT $3
-      `,
-      [params.conversationId, params.participantId, limit]
-    )
-    rows = [...result.rows].reverse()
+    rows = (
+      await listVisibleConversationMessageRows(queryable, {
+        conversationId: params.conversationId,
+        participantId: params.participantId,
+        limit,
+      })
+    ).reverse()
   }
 
   return buildChatConversationItems(queryable, rows, {
@@ -5280,7 +3767,7 @@ export async function getChatConversationActorRuntimeTurnDetail(params: {
 
 export async function sendChatConversationMessage(
   params: SendMessageInput
-): Promise<ChatConversationSendMessageResponse> {
+): Promise<ChatConversationSendMessageRecord> {
   const contentBlocks = params.contentBlocks
   if (!Array.isArray(contentBlocks) || contentBlocks.length === 0) {
     throw createChatError(
@@ -5290,7 +3777,7 @@ export async function sendChatConversationMessage(
     )
   }
 
-  const item = await withDbTransaction(async (client) => {
+  const item = await withChatTransaction(async (client) => {
     const access = await requireConversationAccess(
       client,
       params.conversationId,
@@ -5332,8 +3819,8 @@ export async function sendChatConversationMessage(
 
 export async function updateChatConversationReadWatermark(
   params: ReadWatermarkInput
-): Promise<ChatConversationReadWatermarkResponse> {
-  return withDbTransaction(async (client) => {
+): Promise<ChatConversationReadWatermarkRecord> {
+  return withChatTransaction(async (client) => {
     const access = await requireConversationAccess(
       client,
       params.conversationId,
@@ -5355,21 +3842,10 @@ export async function updateChatConversationReadWatermark(
       maxSequence
     )
 
-    const existingState = await runOn<{
-      readWatermarkSequence: string | number
-      lastReadAt: Date | null
-    }>(
-      client,
-      `
-        SELECT read_watermark_sequence AS "readWatermarkSequence", last_read_at AS "lastReadAt"
-        FROM conversation_participant_states
-        WHERE conversation_id = $1
-          AND participant_id = $2
-        LIMIT 1
-      `,
-      [params.conversationId, access.participant.id]
-    )
-    const existingRow = existingState.rows[0]
+    const existingRow = await getConversationParticipantReadState(client, {
+      conversationId: params.conversationId,
+      participantId: access.participant.id,
+    })
     const existingSequence = toNumber(existingRow?.readWatermarkSequence)
     const nextSequence = Math.max(existingSequence, requestedSequence)
     // S6 dedup observability: if the request didn't actually advance the
@@ -5395,48 +3871,23 @@ export async function updateChatConversationReadWatermark(
       nextSequence
     )
 
-    await client
-      .insertInto("conversationParticipantStates")
-      .values({
-        conversationId: params.conversationId,
-        participantId: access.participant.id,
-        readWatermarkSequence: nextSequence,
-        lastReadItemId: lastReadItemId,
-        lastReadAt: sql`NOW()`,
-        createdAt: sql`NOW()`,
-      })
-      .onConflict((oc) =>
-        oc.columns(["conversationId", "participantId"]).doUpdateSet({
-          readWatermarkSequence: sql`GREATEST(conversation_participant_states.read_watermark_sequence, EXCLUDED.read_watermark_sequence)`,
-          lastReadItemId: sql`EXCLUDED.last_read_item_id`,
-          lastReadAt: sql`NOW()`,
-        })
-      )
-      .execute()
+    await upsertConversationParticipantReadState(client, {
+      conversationId: params.conversationId,
+      participantId: access.participant.id,
+      readWatermarkSequence: nextSequence,
+      lastReadItemId: lastReadItemId,
+    })
 
     if (params.clientInstanceId) {
       const lastVisibleSequence = Math.min(
         maxSequence,
         Math.max(params.lastVisibleSequence ?? nextSequence, nextSequence)
       )
-      await client
-        .insertInto("conversationDeviceStates")
-        .values({
-          conversationId: params.conversationId,
-          clientInstanceId: params.clientInstanceId,
-          lastVisibleSequence: lastVisibleSequence,
-          lastOpenedAt: sql`NOW()`,
-          lastInboxSeq: 0,
-          draftPayload: jsonbValue({}),
-          createdAt: sql`NOW()`,
-        })
-        .onConflict((oc) =>
-          oc.columns(["conversationId", "clientInstanceId"]).doUpdateSet({
-            lastVisibleSequence: sql`GREATEST(conversation_device_states.last_visible_sequence, EXCLUDED.last_visible_sequence)`,
-            lastOpenedAt: sql`NOW()`,
-          })
-        )
-        .execute()
+      await upsertConversationDeviceState(client, {
+        conversationId: params.conversationId,
+        clientInstanceId: params.clientInstanceId,
+        lastVisibleSequence: lastVisibleSequence,
+      })
     }
 
     const unreadCount = await countUnreadVisibleMessages(
@@ -5488,7 +3939,7 @@ export async function updateChatConversationReadWatermark(
 export async function listChatConversations(params: {
   workspaceId: string
   userId: string
-}) {
+}): Promise<ChatConversationListRecord> {
   const identity = await getWorkspaceMemberIdentityOrThrow(
     params.workspaceId,
     params.userId
@@ -5508,7 +3959,7 @@ export async function getChatConversationDetail(params: {
   workspaceId: string
   userId: string
   conversationId: string
-}) {
+}): Promise<ChatConversationEnvelopeRecord> {
   const identity = await getWorkspaceMemberIdentityOrThrow(
     params.workspaceId,
     params.userId
@@ -5519,20 +3970,20 @@ export async function getChatConversationDetail(params: {
     params.conversationId,
     identity.workspaceMemberId
   )
-  const view = await loadConversationView(
+  const conversation = await loadConversationView(
     queryable,
     params.workspaceId,
     identity.workspaceMemberId,
     params.conversationId
   )
-  if (!view) {
+  if (!conversation) {
     throw createChatError(
       404,
       "conversation_not_found",
       "Conversation not found"
     )
   }
-  return { conversation: view }
+  return { conversation }
 }
 
 export async function patchChatConversation(params: {
@@ -5541,7 +3992,7 @@ export async function patchChatConversation(params: {
   conversationId: string
   title?: string | null
   metadata?: Record<string, unknown>
-}) {
+}): Promise<ChatConversationEnvelopeRecord | undefined> {
   if (params.title === undefined && params.metadata === undefined) {
     throw createChatError(
       400,
@@ -5553,34 +4004,21 @@ export async function patchChatConversation(params: {
     params.workspaceId,
     params.userId
   )
-  return withDbTransaction(async (client) => {
+  return withChatTransaction(async (client) => {
     await requireConversationManagement(
       client,
       params.conversationId,
       identity.workspaceMemberId
     )
 
-    const setFragments: string[] = []
-    const values: unknown[] = []
-    let position = 1
-    if (params.title !== undefined) {
-      setFragments.push(`title = $${position++}`)
-      values.push(params.title?.trim() || null)
-    }
-    if (params.metadata !== undefined) {
-      setFragments.push(`metadata = $${position++}::jsonb`)
-      values.push(JSON.stringify(params.metadata))
-    }
-    if (setFragments.length === 0) {
+    const updated = await updateConversationMutableFields(client, {
+      conversationId: params.conversationId,
+      title: params.title,
+      metadata: params.metadata,
+    })
+    if (!updated) {
       return
     }
-    values.push(params.conversationId)
-
-    await runOn(
-      client,
-      `UPDATE conversations SET ${setFragments.join(", ")} WHERE id = $${position}`,
-      values
-    )
 
     const recipients = await listConversationRealtimeRecipients(
       params.conversationId,
@@ -5593,20 +4031,20 @@ export async function patchChatConversation(params: {
       params.conversationId
     )
 
-    const view = await loadConversationView(
+    const conversation = await loadConversationView(
       client,
       params.workspaceId,
       identity.workspaceMemberId,
       params.conversationId
     )
-    if (!view) {
+    if (!conversation) {
       throw createChatError(
         404,
         "conversation_not_found",
         "Conversation not found"
       )
     }
-    return { conversation: view }
+    return { conversation }
   })
 }
 
@@ -5617,12 +4055,12 @@ export async function addChatConversationParticipants(params: {
   workspaceMemberIds?: string[]
   actorIds?: string[]
   remoteAgentIds?: string[]
-}) {
+}): Promise<ChatConversationEnvelopeRecord> {
   const identity = await getWorkspaceMemberIdentityOrThrow(
     params.workspaceId,
     params.userId
   )
-  return withDbTransaction(async (client) => {
+  return withChatTransaction(async (client) => {
     await requireConversationManagement(
       client,
       params.conversationId,
@@ -5649,36 +4087,29 @@ export async function addChatConversationParticipants(params: {
       params.conversationId
     )
 
-    const view = await loadConversationView(
+    const conversation = await loadConversationView(
       client,
       params.workspaceId,
       identity.workspaceMemberId,
       params.conversationId
     )
-    if (!view) {
+    if (!conversation) {
       throw createChatError(
         404,
         "conversation_not_found",
         "Conversation not found"
       )
     }
-    return { conversation: view }
+    return { conversation }
   })
 }
 
 async function setParticipantState(
   queryable: Executor,
   participantId: string,
-  state: "removed" | "left"
+  state: ChatParticipantRemovalState
 ) {
-  await queryable
-    .updateTable("conversationParticipants")
-    .set({
-      state,
-      leftAt: sql`COALESCE(left_at, NOW())`,
-    })
-    .where("id", "=", participantId)
-    .execute()
+  await updateConversationParticipantState(queryable, participantId, state)
 }
 
 // Exported for unit-test coverage; see remove-participant.test.ts. After the
@@ -5692,31 +4123,10 @@ export async function loadParticipantById(
   conversationId: string,
   participantId: string
 ) {
-  const result = await runOn<{
-    id: string
-    conversationId: string
-    participantType: ParticipantKind
-    workspaceMemberId: string | null
-    actorId: string | null
-    remoteAgentId: string | null
-    displayName: string | null
-    state: string
-  }>(
-    queryable,
-    `
-      SELECT cp.id, cp.conversation_id AS "conversationId", cpsubj.kind AS "participantType",
-             cpsubj.workspace_member_id AS "workspaceMemberId",
-             cpsubj.actor_id AS "actorId",
-             cpsubj.remote_agent_id AS "remoteAgentId",
-             cp.display_name AS "displayName", cp.state
-      FROM conversation_participants cp
-      JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
-      WHERE cp.conversation_id = $1 AND cp.id = $2
-      LIMIT 1
-    `,
-    [conversationId, participantId]
-  )
-  return result.rows[0] ?? null
+  return getConversationParticipantById(queryable, {
+    conversationId,
+    participantId,
+  })
 }
 
 export async function removeChatConversationParticipant(params: {
@@ -5729,7 +4139,7 @@ export async function removeChatConversationParticipant(params: {
     params.workspaceId,
     params.userId
   )
-  return withDbTransaction(async (client) => {
+  return withChatTransaction(async (client) => {
     const access = await requireConversationAccess(
       client,
       params.conversationId,
@@ -5768,11 +4178,11 @@ export async function removeChatConversationParticipant(params: {
     }
     const eventType = isSelfRemoval ? "participant_left" : "participant_kicked"
 
-    await setParticipantState(
-      client,
-      target.id,
-      isSelfRemoval ? "left" : "removed"
-    )
+    const removalState = isSelfRemoval
+      ? CHAT_PARTICIPANT_REMOVAL_STATE.LEFT
+      : CHAT_PARTICIPANT_REMOVAL_STATE.REMOVED
+
+    await setParticipantState(client, target.id, removalState)
 
     await createConversationEvent({
       workspaceId: params.workspaceId,
@@ -5841,10 +4251,12 @@ export async function removeChatConversationParticipant(params: {
         eventType: "conversation.membership.updated",
         payload: {
           conversationId: params.conversationId,
-          selfState: isSelfRemoval ? "left" : "removed",
-          reason: isSelfRemoval ? "left" : "kicked",
+          selfState: removalState,
+          reason: isSelfRemoval
+            ? CHAT_MEMBERSHIP_UPDATE_REASON.LEFT
+            : CHAT_MEMBERSHIP_UPDATE_REASON.KICKED,
           participants: activeParticipants
-            .filter((p) => p.state === "active")
+            .filter((p) => p.state === CONVERSATION_PARTICIPANT_STATE.ACTIVE)
             .map(participantRowToChatParticipantSummary),
         },
       })
@@ -5853,7 +4265,7 @@ export async function removeChatConversationParticipant(params: {
     return {
       conversationId: params.conversationId,
       participantId: target.id,
-      state: (isSelfRemoval ? "left" : "removed") as "left" | "removed",
+      state: removalState,
     }
   })
 }
@@ -5894,29 +4306,14 @@ export async function registerChatPushToken(params: {
     params.workspaceId,
     params.userId
   )
-  const result = await runOnDb<Record<string, unknown>>(
-    `
-      INSERT INTO chat_push_tokens (workspace_member_id, platform, token, device_label, metadata)
-      VALUES ($1, $2, $3, $4, $5::jsonb)
-      ON CONFLICT (workspace_member_id, token)
-      DO UPDATE SET platform = EXCLUDED.platform,
-                    device_label = EXCLUDED.device_label,
-                    metadata = EXCLUDED.metadata,
-                    last_seen_at = NOW()
-      RETURNING id, workspace_member_id, platform, token, device_label,
-                created_at, last_seen_at
-    `,
-    [
-      identity.workspaceMemberId,
-      params.platform,
-      params.token,
-      params.deviceLabel ?? null,
-      JSON.stringify(params.metadata ?? {}),
-    ]
-  )
-  const row = result.rows[0]
-  if (!row) throw new Error("Failed to register push token")
-  return { token: mapPushTokenRow(row) }
+  const token = await upsertChatPushTokenRecord({
+    workspaceMemberId: identity.workspaceMemberId,
+    platform: params.platform,
+    token: params.token,
+    deviceLabel: params.deviceLabel,
+    metadata: params.metadata,
+  })
+  return { token }
 }
 
 export async function listChatPushTokens(params: {
@@ -5927,17 +4324,8 @@ export async function listChatPushTokens(params: {
     params.workspaceId,
     params.userId
   )
-  const result = await runOnDb<Record<string, unknown>>(
-    `
-      SELECT id, workspace_member_id, platform, token, device_label,
-             created_at, last_seen_at
-      FROM chat_push_tokens
-      WHERE workspace_member_id = $1
-      ORDER BY last_seen_at DESC
-    `,
-    [identity.workspaceMemberId]
-  )
-  return { tokens: result.rows.map(mapPushTokenRow) }
+  const tokens = await listChatPushTokenRecords(identity.workspaceMemberId)
+  return { tokens }
 }
 
 export async function deleteChatPushToken(params: {
@@ -5949,16 +4337,11 @@ export async function deleteChatPushToken(params: {
     params.workspaceId,
     params.userId
   )
-  const result = await runOn<{ id: string }>(
-    db,
-    `
-      DELETE FROM chat_push_tokens
-      WHERE id = $1 AND workspace_member_id = $2
-      RETURNING id
-    `,
-    [params.tokenId, identity.workspaceMemberId]
-  )
-  return { deleted: result.rows.length > 0 }
+  const deleted = await deleteChatPushTokenRecord({
+    tokenId: params.tokenId,
+    workspaceMemberId: identity.workspaceMemberId,
+  })
+  return { deleted }
 }
 
 export async function broadcastTypingState(params: {
@@ -6026,7 +4409,10 @@ export async function retryAssistantMessage(params: {
   if (!item || item.conversationId !== params.conversationId) {
     throw createChatError(404, "item_not_found", "Conversation item not found")
   }
-  if (item.kind !== "message" || item.messageType !== "model_error_notice") {
+  if (
+    item.kind !== "message" ||
+    item.messageType !== CONVERSATION_MESSAGE_SUBTYPE.MODEL_ERROR_NOTICE
+  ) {
     throw createChatError(
       400,
       "item_not_retryable",

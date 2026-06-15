@@ -9,15 +9,14 @@ import {
 } from "../../infrastructure/database/kysely.js"
 import {
   DEFAULT_CONVERSATION_TYPE_MASK,
+  parseJsonObject,
   type CanonicalContentBlock,
   type RuntimeBindingScope,
   type SkillFrontmatter,
-  type SkillAttachmentFile,
 } from "@synapse/shared"
 import crypto from "node:crypto"
 import { SKILL_ENTRY_PATH, renderCanonicalBlocksToText } from "./manifest.js"
 import type { PreparedSkillSnapshot } from "./mirror-import.js"
-import { buildSkillAttachmentFromCatalogFile } from "./presenter.js"
 import { lookupResources } from "../access/evaluator.js"
 import { revokeWorkspaceAppGrant } from "../workspace-apps/grant-storage.js"
 import {
@@ -31,6 +30,7 @@ import type {
   InstalledSkillRow,
   SkillAccessRow,
   SkillPackageRow,
+  SkillSnapshotJoinRow,
   SkillSnapshotFileRow,
   VisibleSkillRow,
 } from "./repo.types.js"
@@ -48,8 +48,9 @@ import type {
  * projects quoted camelCase aliases (e.g. `AS "snapshotDisplayName"`), so the
  * plugin's transform is a no-op and the rows already match this module's
  * camelCase row types — no key inversion ("re-snake") needed. JSONB values stay
- * untouched. Repo fns return camelCase domain records and KEEP Date objects;
- * JSON columns stay raw unknown (decode stays in service/presenter).
+ * untouched. Repo fns return camelCase domain records and KEEP Date objects.
+ * Service-facing JSONB fields that participate in business decisions are
+ * decoded through repo helpers below.
  */
 
 /** Re-export so the service can open transactions without importing the client. */
@@ -105,6 +106,61 @@ export const runQuery: QueryRunner = runnerFn(db)
 export function clientRunner(client: Executor): QueryRunner {
   return async <T extends QueryRow>(text: string, params?: unknown[]) =>
     runOn<T>(client, text, params)
+}
+
+export function decodeSkillSnapshotHooks(row: {
+  snapshotHooks: unknown
+}): Record<string, unknown> {
+  return parseJsonObject(row.snapshotHooks)
+}
+
+export function decodeSkillMirrorLocator(row: {
+  mirrorLocator: unknown
+}): Record<string, unknown> {
+  return parseJsonObject(row.mirrorLocator)
+}
+
+export function decodeSkillPackageItemMetadata(
+  row: { itemMetadata?: unknown } | null | undefined
+): Record<string, unknown> {
+  return parseJsonObject(row?.itemMetadata)
+}
+
+export function decodeInstalledSkillVersionMetadata(row: {
+  versionMetadata: unknown
+}): Record<string, unknown> {
+  return parseJsonObject(row.versionMetadata)
+}
+
+export function normalizeSkillSnapshotJoinRow<T extends SkillSnapshotJoinRow>(
+  row: T
+): T {
+  const normalized = {
+    ...row,
+    snapshotHooks: decodeSkillSnapshotHooks(row),
+    mirrorLocator: decodeSkillMirrorLocator(row),
+  }
+  return normalized
+}
+
+export function normalizeSkillPackageRow(
+  row: SkillPackageRow
+): SkillPackageRow {
+  const normalized = {
+    ...normalizeSkillSnapshotJoinRow(row),
+    itemMetadata: decodeSkillPackageItemMetadata(row),
+  }
+  return normalized
+}
+
+export function normalizeInstalledSkillRow(
+  row: InstalledSkillRow
+): InstalledSkillRow {
+  const normalized = {
+    ...normalizeSkillSnapshotJoinRow(row),
+    versionMetadata: decodeInstalledSkillVersionMetadata(row),
+  }
+  return normalized
 }
 
 const SKILL_SNAPSHOT_SELECT = `
@@ -418,9 +474,188 @@ export async function insertSkillSnapshot(
   return snapshotId
 }
 
+export async function insertInstalledSkillRecord(
+  executor: Executor,
+  input: {
+    id: string
+    iconFileId: string | null
+    tags: string[]
+    currentVersion: number
+    currentSnapshotId: string
+  }
+) {
+  const result = await runBuilder(
+    executor,
+    executor
+      .insertInto("installedSkills")
+      .values({
+        id: input.id,
+        iconFileId: input.iconFileId,
+        tags: input.tags,
+        currentVersion: input.currentVersion,
+        currentSnapshotId: input.currentSnapshotId,
+      })
+      .returning("id")
+  )
+
+  return result.rows[0]!.id
+}
+
+export async function insertSkillVersionRecord(
+  executor: Executor,
+  input: {
+    skillId: string
+    version: number
+    skillSnapshotId: string
+    metadata: Record<string, unknown>
+    createdByWorkspaceMemberId?: string | null
+  }
+) {
+  await executor
+    .insertInto("skillVersions")
+    .values({
+      skillId: input.skillId,
+      version: input.version,
+      skillSnapshotId: input.skillSnapshotId,
+      metadata: sql`${JSON.stringify(input.metadata)}::jsonb`,
+      createdByWorkspaceMemberId: input.createdByWorkspaceMemberId || null,
+    })
+    .execute()
+}
+
+export async function updateInstalledSkillContentState(
+  executor: Executor,
+  input: {
+    skillId: string
+    iconFileId: string | null
+    tags: string[]
+    currentVersion: number
+    currentSnapshotId: string
+  }
+) {
+  await executor
+    .updateTable("installedSkills")
+    .set({
+      iconFileId: input.iconFileId,
+      tags: input.tags,
+      currentVersion: input.currentVersion,
+      currentSnapshotId: input.currentSnapshotId,
+      updatedAt: sql`NOW()`,
+    })
+    .where("id", "=", input.skillId)
+    .execute()
+}
+
+export async function updateInstalledSkillProfileState(
+  executor: Executor,
+  input: {
+    skillId: string
+    iconFileId: string | null
+    tags: string[]
+  }
+) {
+  await executor
+    .updateTable("installedSkills")
+    .set({
+      iconFileId: input.iconFileId,
+      tags: input.tags,
+      updatedAt: sql`NOW()`,
+    })
+    .where("id", "=", input.skillId)
+    .execute()
+}
+
+export async function updateInstalledSkillMarketplaceState(
+  executor: Executor,
+  input: {
+    skillId: string
+    iconFileId: string | null
+    tags: string[]
+    currentVersion: number
+    currentSnapshotId: string
+  }
+) {
+  await executor
+    .updateTable("installedSkills")
+    .set({
+      iconFileId: input.iconFileId,
+      tags: input.tags,
+      currentVersion: input.currentVersion,
+      currentSnapshotId: input.currentSnapshotId,
+    })
+    .where("id", "=", input.skillId)
+    .execute()
+}
+
+export async function insertSkillSourceRefRecord(
+  executor: Executor,
+  input: {
+    skillId: string
+    sourceCatalogItemId: string
+    sourceCatalogVersionId: string | null
+    syncMode: "notify" | "manual_merge" | "follow_upstream" | "detached"
+    isCustomized: boolean
+  }
+) {
+  await executor
+    .insertInto("skillSourceRefs")
+    .values({
+      skillId: input.skillId,
+      sourceCatalogItemId: input.sourceCatalogItemId,
+      sourceCatalogVersionId: input.sourceCatalogVersionId,
+      syncMode: input.syncMode,
+      isCustomized: input.isCustomized,
+    })
+    .execute()
+}
+
+export async function incrementSkillCatalogDownloadCount(
+  executor: Executor,
+  catalogItemId: string
+) {
+  await executor
+    .updateTable("catalogItems")
+    .set({
+      downloadCount: sql`${sql.ref("downloadCount")} + 1`,
+    })
+    .where("id", "=", catalogItemId)
+    .execute()
+}
+
+export async function markSkillSourceRefCustomized(
+  executor: Executor,
+  skillId: string
+) {
+  await executor
+    .updateTable("skillSourceRefs")
+    .set({
+      isCustomized: true,
+    })
+    .where("skillId", "=", skillId)
+    .execute()
+}
+
+export async function updateSkillSourceRefVersion(
+  executor: Executor,
+  input: {
+    skillId: string
+    sourceCatalogVersionId: string
+    isCustomized: boolean
+  }
+) {
+  await executor
+    .updateTable("skillSourceRefs")
+    .set({
+      sourceCatalogVersionId: input.sourceCatalogVersionId,
+      isCustomized: input.isCustomized,
+    })
+    .where("skillId", "=", input.skillId)
+    .execute()
+}
+
 export async function loadSkillSnapshotFilesMap(snapshotIds: string[]) {
   if (snapshotIds.length === 0) {
-    return new Map<string, SkillAttachmentFile[]>()
+    return new Map<string, SkillSnapshotFileRow[]>()
   }
 
   const result = await runQuery<SkillSnapshotFileRow>(
@@ -438,10 +673,10 @@ export async function loadSkillSnapshotFilesMap(snapshotIds: string[]) {
     [snapshotIds]
   )
 
-  const filesBySnapshotId = new Map<string, SkillAttachmentFile[]>()
+  const filesBySnapshotId = new Map<string, SkillSnapshotFileRow[]>()
   for (const row of result.rows) {
     const files = filesBySnapshotId.get(row.skillSnapshotId) || []
-    files.push(buildSkillAttachmentFromCatalogFile(row))
+    files.push(row)
     filesBySnapshotId.set(row.skillSnapshotId, files)
   }
 
@@ -492,7 +727,8 @@ export async function getMarketplaceRowById(
     [skillId]
   )
 
-  return result.rows[0] || null
+  const row = result.rows[0]
+  return row ? normalizeSkillPackageRow(row) : null
 }
 
 export async function getMarketplaceRowBySlug(
@@ -508,7 +744,8 @@ export async function getMarketplaceRowBySlug(
     [publisherId, slug]
   )
 
-  return result.rows[0] || null
+  const row = result.rows[0]
+  return row ? normalizeSkillPackageRow(row) : null
 }
 
 export async function getMarketplaceRowByMirrorSourceId(
@@ -522,7 +759,241 @@ export async function getMarketplaceRowByMirrorSourceId(
     [mirrorSourceId]
   )
 
-  return result.rows[0] || null
+  const row = result.rows[0]
+  return row ? normalizeSkillPackageRow(row) : null
+}
+
+export async function updateMarketplaceCatalogItemSummary(
+  executor: Executor,
+  input: {
+    itemId: string
+    displayName: string
+    summary: string
+    longDescription: string
+    tags: string[]
+    metadata: unknown
+  }
+) {
+  await executor
+    .updateTable("catalogItems")
+    .set({
+      displayName: input.displayName,
+      summary: input.summary,
+      longDescription: input.longDescription,
+      tags: input.tags,
+      metadata: sql`${JSON.stringify(input.metadata)}::jsonb`,
+    })
+    .where("id", "=", input.itemId)
+    .execute()
+}
+
+export async function updateMarketplaceCatalogItemRecord(
+  executor: Executor,
+  input: {
+    itemId: string
+    slug: string
+    displayName: string
+    summary: string
+    longDescription: string
+    mirrorSourceId: string | null
+    sourceKind: "official"
+    visibility: "public"
+    tags: string[]
+    isActive: boolean
+    iconFileId?: string | null
+    metadata: unknown
+  }
+) {
+  await executor
+    .updateTable("catalogItems")
+    .set({
+      slug: input.slug,
+      displayName: input.displayName,
+      summary: input.summary,
+      longDescription: input.longDescription,
+      mirrorSourceId: input.mirrorSourceId,
+      sourceKind: input.sourceKind,
+      visibility: input.visibility,
+      tags: input.tags,
+      isActive: input.isActive,
+      iconFileId: input.iconFileId ?? null,
+      metadata: sql`${JSON.stringify(input.metadata)}::jsonb`,
+    })
+    .where("id", "=", input.itemId)
+    .execute()
+}
+
+export async function insertMarketplaceCatalogItemRecord(
+  executor: Executor,
+  input: {
+    publisherId: string
+    slug: string
+    displayName: string
+    summary: string
+    longDescription: string
+    mirrorSourceId: string | null
+    sourceKind: "official"
+    visibility: "public"
+    tags: string[]
+    isActive: boolean
+    iconFileId?: string | null
+    metadata: unknown
+  }
+) {
+  const result = await runBuilder(
+    executor,
+    executor
+      .insertInto("catalogItems")
+      .values({
+        publisherId: input.publisherId,
+        workspaceId: null,
+        itemKind: "skill_package",
+        slug: input.slug,
+        displayName: input.displayName,
+        summary: input.summary,
+        longDescription: input.longDescription,
+        mirrorSourceId: input.mirrorSourceId,
+        sourceKind: input.sourceKind,
+        visibility: input.visibility,
+        tags: input.tags,
+        isActive: input.isActive,
+        iconFileId: input.iconFileId ?? null,
+        metadata: sql`${JSON.stringify(input.metadata)}::jsonb`,
+      })
+      .returning("id")
+  )
+
+  return result.rows[0]!.id
+}
+
+export async function getCatalogVersionId(
+  executor: Executor,
+  input: {
+    catalogItemId: string
+    version: string
+  }
+) {
+  const result = await runBuilder(
+    executor,
+    executor
+      .selectFrom("catalogVersions")
+      .select("id")
+      .where("catalogItemId", "=", input.catalogItemId)
+      .where("version", "=", input.version)
+      .limit(1)
+  )
+
+  return result.rows[0]?.id ?? null
+}
+
+export async function insertCatalogVersionRecord(
+  executor: Executor,
+  input: {
+    catalogItemId: string
+    version: string
+    changelog: string
+    metadata: unknown
+    createdByUserId?: string | null
+  }
+) {
+  const result = await runBuilder(
+    executor,
+    executor
+      .insertInto("catalogVersions")
+      .values({
+        catalogItemId: input.catalogItemId,
+        version: input.version,
+        status: "active",
+        changelog: input.changelog,
+        metadata: sql`${JSON.stringify(input.metadata)}::jsonb`,
+        createdByUserId: input.createdByUserId || null,
+      })
+      .returning("id")
+  )
+
+  return result.rows[0]!.id
+}
+
+export async function updateCatalogVersionRecord(
+  executor: Executor,
+  input: {
+    versionId: string
+    changelog: string
+    metadata: unknown
+  }
+) {
+  await executor
+    .updateTable("catalogVersions")
+    .set({
+      status: "active",
+      changelog: input.changelog,
+      metadata: sql`${JSON.stringify(input.metadata)}::jsonb`,
+    })
+    .where("id", "=", input.versionId)
+    .execute()
+}
+
+export async function updateRepublishedCatalogVersionRecord(
+  executor: Executor,
+  input: {
+    versionId: string
+    changelog: string
+    metadata: unknown
+    createdByUserId?: string | null
+  }
+) {
+  await executor
+    .updateTable("catalogVersions")
+    .set({
+      status: "active",
+      changelog: input.changelog,
+      metadata: sql`${JSON.stringify(input.metadata)}::jsonb`,
+      createdByUserId: sql`COALESCE(created_by_user_id, ${input.createdByUserId || null})`,
+      createdAt: sql`created_at`,
+    })
+    .where("id", "=", input.versionId)
+    .execute()
+}
+
+export async function upsertSkillPackageVersionSpecRecord(
+  executor: Executor,
+  input: {
+    catalogVersionId: string
+    skillSnapshotId: string
+    defaultConversationTypeMask: number
+  }
+) {
+  await executor
+    .insertInto("skillPackageVersionSpecs")
+    .values({
+      catalogVersionId: input.catalogVersionId,
+      skillSnapshotId: input.skillSnapshotId,
+      defaultConversationTypeMask: input.defaultConversationTypeMask,
+      createdAt: sql`NOW()`,
+    })
+    .onConflict((oc) =>
+      oc.column("catalogVersionId").doUpdateSet({
+        skillSnapshotId: sql`excluded.skill_snapshot_id`,
+        defaultConversationTypeMask: sql`excluded.default_conversation_type_mask`,
+      })
+    )
+    .execute()
+}
+
+export async function updateCatalogItemLatestVersion(
+  executor: Executor,
+  input: {
+    itemId: string
+    versionId: string
+  }
+) {
+  await executor
+    .updateTable("catalogItems")
+    .set({
+      latestVersionId: input.versionId,
+    })
+    .where("id", "=", input.itemId)
+    .execute()
 }
 
 export async function loadInstalledSkillRows(params: {
@@ -555,7 +1026,25 @@ export async function loadInstalledSkillRows(params: {
     values
   )
 
-  return result.rows
+  return result.rows.map(normalizeInstalledSkillRow)
+}
+
+export async function getInstalledSkillRowForWorkspace(
+  executor: Executor,
+  params: { workspaceId: string; installedSkillId: string }
+): Promise<InstalledSkillRow | null> {
+  const result = await runOn<InstalledSkillRow>(
+    executor,
+    `${INSTALLED_SKILL_SELECT}
+     WHERE app.workspace_id = $1
+       AND app.deleted_at IS NULL
+       AND skill.id = $2
+     LIMIT 1`,
+    [params.workspaceId, params.installedSkillId]
+  )
+
+  const row = result.rows[0]
+  return row ? normalizeInstalledSkillRow(row) : null
 }
 
 export async function loadAccessBindingsBySkillIds(
@@ -634,6 +1123,7 @@ export async function findSkillIdsByBindingFilter(params: {
   } | null
   workspaceMemberId?: string
   actorId?: string
+  remoteAgentId?: string
   conversationId?: string
 }) {
   const target = params.resolvedTarget
@@ -716,6 +1206,9 @@ export async function findSkillIdsByBindingFilter(params: {
     if (params.actorId) {
       query = query.where("subj.actorId", "=", params.actorId)
     }
+    if (params.remoteAgentId) {
+      query = query.where("subj.remoteAgentId", "=", params.remoteAgentId)
+    }
     if (params.conversationId) {
       query = query.where(
         sql<boolean>`COALESCE(scope.conversation_id, subj.conversation_id) = ${params.conversationId}`
@@ -761,7 +1254,7 @@ export async function listMarketplaceRows(filters?: {
     values
   )
 
-  return result.rows
+  return result.rows.map(normalizeSkillPackageRow)
 }
 
 export async function loadVisibleSkillRows(skillIds: string[]) {

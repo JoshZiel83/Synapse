@@ -30,7 +30,7 @@ export type SkillSnapshotJoinRow = {
   snapshotEffort: "low" | "medium" | "high" | "max" | null
   snapshotContext: "fork" | null
   snapshotAgent: string | null
-  snapshotHooks: unknown
+  snapshotHooks: Record<string, unknown>
   snapshotBodyBlocks: unknown
   snapshotContentHash: string | null
   snapshotSourceWarnings: string[] | null
@@ -39,7 +39,7 @@ export type SkillSnapshotJoinRow = {
   mirrorSourceId: string | null
   mirrorSourceType: "github" | "clawhub" | null
   mirrorLocatorKey: string | null
-  mirrorLocator: unknown
+  mirrorLocator: Record<string, unknown>
   mirrorRequestedRef: string | null
   mirrorResolvedRevision: string | null
   mirrorRefreshMode: "manual" | null
@@ -61,7 +61,7 @@ export type SkillPackageRow = {
   itemIsActive: boolean
   itemDownloadCount: number
   itemIconFileId: string | null
-  itemMetadata: unknown
+  itemMetadata: Record<string, unknown>
   itemCreatedAt: Date
   itemUpdatedAt: Date
   latestVersionId: string | null
@@ -91,7 +91,7 @@ export type InstalledSkillRow = {
   currentSnapshotId: string
   currentSkillVersionId: string
   currentSkillSnapshotId: string
-  versionMetadata: unknown
+  versionMetadata: Record<string, unknown>
   sourceCatalogItemId: string | null
   sourceCatalogVersionId: string | null
   sourceSyncMode:

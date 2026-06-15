@@ -1,4 +1,5 @@
 import { config } from "../../config/index.js"
+import { PLATFORM_ACCESS_SOURCE } from "@synapse/shared"
 import { getFileUrlById } from "../files/service.js"
 import * as repo from "./repo.js"
 import type { PlatformAccessKey } from "./repo.js"
@@ -99,8 +100,8 @@ export async function grantPlatformAccess(input: {
 
 export async function ensureSeedPlatformAdminForUser(user: UserIdentity) {
   const source = isConfiguredPlatformAdminEmail(user.email)
-    ? "config"
-    : "manual"
+    ? PLATFORM_ACCESS_SOURCE.CONFIG
+    : PLATFORM_ACCESS_SOURCE.MANUAL
 
   await repo.upsertSeedSuperAdmin(user.id, source)
 
@@ -117,7 +118,7 @@ export async function revokePlatformAccess(
     throw new Error("Access grant not found")
   }
 
-  if (existing.source === "config") {
+  if (existing.source === PLATFORM_ACCESS_SOURCE.CONFIG) {
     throw new Error("Config-managed access cannot be revoked manually")
   }
 

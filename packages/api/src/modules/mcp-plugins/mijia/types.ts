@@ -19,7 +19,7 @@ export interface MijiaAuthState {
 
 export interface MijiaQrLoginStartResult {
   challengePayload: {
-    kind: "qr_code"
+    kind: typeof import("@synapse/shared").PLUGIN_AUTH_CHALLENGE_KIND.QR_CODE
     qrUrl: string
     expiresAt: import("@synapse/shared").Timestamp
     metadata: Record<string, unknown>
@@ -32,15 +32,19 @@ export interface MijiaQrLoginStartResult {
 
 export type MijiaQrLoginProgress =
   | {
-      status: "pending"
-      phase?: "pending_scan" | "pending_confirm"
+      status: typeof import("@synapse/shared").PLUGIN_AUTH_SESSION_STATUS.PENDING
+      phase?:
+        | typeof import("@synapse/shared").PLUGIN_AUTH_SESSION_PHASE.PENDING_SCAN
+        | typeof import("@synapse/shared").PLUGIN_AUTH_SESSION_PHASE.PENDING_CONFIRM
     }
   | {
-      status: "completed"
+      status: typeof import("@synapse/shared").PLUGIN_AUTH_SESSION_STATUS.COMPLETED
       authState: MijiaAuthState
     }
   | {
-      status: "failed" | "expired"
+      status:
+        | typeof import("@synapse/shared").PLUGIN_AUTH_SESSION_STATUS.FAILED
+        | typeof import("@synapse/shared").PLUGIN_AUTH_SESSION_STATUS.EXPIRED
       errorCode: string
       errorMessage: string
     }

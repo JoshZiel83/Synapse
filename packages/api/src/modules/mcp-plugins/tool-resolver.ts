@@ -103,10 +103,6 @@ function buildPluginToolRef(
   }
 }
 
-function asArray<T>(value: unknown): T[] {
-  return Array.isArray(value) ? (value as T[]) : []
-}
-
 function publicReuseScope(scope: VisiblePluginRow["reuseScope"]) {
   return scope || "conversation"
 }
@@ -207,15 +203,10 @@ async function resolveTools(
         workspaceId: plugin.ownerWorkspaceId,
       })
 
-      const manifest = asArray<{
-        name: string
-        description?: string
-        inputSchema?: Record<string, unknown>
-      }>(plugin.toolManifest)
       const upstreamTools =
         runtimeInstance.tools.length > 0
           ? runtimeInstance.tools
-          : manifest.map((tool) => manifestToolToDefinition(tool))
+          : plugin.toolManifest.map((tool) => manifestToolToDefinition(tool))
 
       for (const tool of upstreamTools) {
         const ref = buildPluginToolRef(runtimeInstance, tool.name)

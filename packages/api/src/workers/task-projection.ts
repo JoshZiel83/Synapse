@@ -31,6 +31,7 @@
 
 import { CompiledQuery, sql } from "kysely"
 import {
+  CONVERSATION_MESSAGE_SUBTYPE,
   TASK_REQUEST_KIND,
   type RuntimeAuthorizationPreset,
 } from "@synapse/shared"
@@ -401,7 +402,7 @@ async function processOne(
       scope: "shared",
       surface: "internal",
       itemType: "message",
-      subtype: "system",
+      subtype: CONVERSATION_MESSAGE_SUBTYPE.SYSTEM,
       role: "system",
       metadata: { transport: encoded.transportMetadata },
       parts: buildItemParts(message),

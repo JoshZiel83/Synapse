@@ -15,6 +15,7 @@ import { createOpenAI } from "@ai-sdk/openai"
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
 import { wrapLanguageModel, type LanguageModel } from "ai"
 import type { LanguageModelV3 } from "@ai-sdk/provider"
+import { MODEL_API_STYLE } from "@synapse/shared"
 import { proxyFetch } from "./proxy-fetch.js"
 import { defaultMiddleware } from "./middleware.js"
 import {
@@ -120,7 +121,7 @@ function buildProviderFactory(spec: LanguageModelSpec): ProviderFactory {
       // EXPLICIT .chat()/.responses(): openai(modelId) defaults to Responses in
       // v6, which gateway-served chat models do not speak.
       return (modelName) =>
-        style === "responses"
+        style === MODEL_API_STYLE.RESPONSES
           ? provider.responses(modelName)
           : provider.chat(modelName)
     }

@@ -10,33 +10,1182 @@
  */
 
 import type pg from "pg"
-import { CompiledQuery, sql } from "kysely"
+import { CompiledQuery, sql, type RawBuilder, type SqlBool } from "kysely"
 import {
+  ACCESS_BINDING_STATUS,
   DEFAULT_CONVERSATION_TYPE_MASK,
+  FILE_ORIGIN_SYSTEMS,
+  MARKETPLACE_VERSION_STATUS,
+  REUSE_SCOPES,
   SUBJECT_KIND,
+  WORKSPACE_APP_KIND,
+  WORKSPACE_APP_STATUS,
   maskAllowsConversationType,
+  parseJsonObject,
   redactSecrets,
+  resolveEffectiveConversationTypeMask,
   resolveNarrowedConversationTypeMask,
+  slugify,
+  type AccessBindingStatus,
+  type MarketplaceSyncMode,
+  type MarketplaceVersionStatus,
+  type McpSetupStep,
+  type McpValidationRule,
+  type PluginAuthBindingDefinition,
+  type PluginConfigFieldDefinition,
+  type PluginInstallFlow,
+  type PluginInstallationStatus,
+  type PluginReuseScopeV2,
   type PluginSpecTransport,
+  type ReuseScope,
+  type RuntimeBindingScope,
+  type WorkspaceAppGrantSource,
 } from "@synapse/shared"
+import type { CapabilityAccessTarget } from "@synapse/shared/types"
 import {
   db,
   type Executor,
   type TableInsert,
+  withDbTransaction,
 } from "../../infrastructure/database/kysely.js"
+import { validateConversationScopedAccessTarget } from "../access/policy.js"
 import { buildConversationCapabilitySubjects } from "../access/subject-resolution.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
 import { getWorkspaceCapabilityConversationTypePolicyMap } from "../capabilities/conversation-type-policies.js"
+import { revokeWorkspaceAppGrant } from "../workspace-apps/grant-storage.js"
 import {
   PLUGIN_CONNECTION_LIVE_STATUSES,
   PLUGIN_INSTALLATION_LIVE_STATUSES,
 } from "./live-status.js"
 import type {
+  CatalogCategoriesMetadata,
   PluginAuthSessionRow,
   PluginAuthSessionsUpdate,
   PluginConnectionRow,
   PluginConnectionsUpdate,
+  PluginInstallationsConfigData,
+  PluginPackageVersionSpecsTransport,
+  PublisherRecord,
 } from "./repo.types.js"
+
+type JsonObject = Record<string, unknown>
+type QueryRow = pg.QueryResultRow
+type QueryResultLike<T extends QueryRow> = { rows: T[] }
+export type QueryRunner = <T extends QueryRow>(
+  text: string,
+  params?: unknown[]
+) => Promise<QueryResultLike<T>>
+
+export type PluginCatalogRow = {
+  itemId: string
+  itemWorkspaceId: string | null
+  itemSlug: string
+  itemDisplayName: string
+  itemSummary: string
+  itemLongDescription: string
+  itemSourceKind: "builtin" | "official" | "workspace" | "user"
+  itemVisibility: "public" | "workspace" | "private"
+  itemTags: string[] | null
+  itemIsActive: boolean
+  itemDownloadCount: number
+  itemIconFileId: string | null
+  itemMetadata: JsonObject
+  itemCreatedAt: Date
+  itemUpdatedAt: Date
+  versionId: string | null
+  versionValue: string | null
+  versionStatus: MarketplaceVersionStatus | null
+  versionChangelog: string | null
+  versionMetadata: JsonObject
+  versionCreatedByUserId: string | null
+  versionCreatedAt: Date | null
+  specTransport: PluginSpecTransport | null
+  specEntryPoint: string | null
+  specToolManifest: unknown[]
+  specConfigSchema: JsonObject
+  specDefaultConfig: JsonObject
+  specInstallFlow: JsonObject
+  specAuthBindings: PluginAuthBindingDefinition[]
+  specDefaultReuseScope: PluginReuseScopeV2 | null
+  specDefaultConversationTypeMask: number | null
+  specSupportedReuseScopes: unknown[]
+  specRequiresHandshake: boolean | null
+  specMetadata: JsonObject
+  publisherId: string
+  publisherSlug: string
+  publisherDisplayName: string
+  publisherDescription: string
+  publisherWorkspaceId: string | null
+  publisherIsBuiltin: boolean
+  publisherIsVerified: boolean
+  publisherOwnerUserId: string | null
+  publisherLogoFileId: string | null
+  categoriesJson: JsonObject[]
+  runtimePermissionsJson: JsonObject[]
+}
+
+export type PluginCatalogDbRow = Omit<
+  PluginCatalogRow,
+  | "itemMetadata"
+  | "versionMetadata"
+  | "specToolManifest"
+  | "specConfigSchema"
+  | "specDefaultConfig"
+  | "specInstallFlow"
+  | "specAuthBindings"
+  | "specSupportedReuseScopes"
+  | "specMetadata"
+  | "categoriesJson"
+  | "runtimePermissionsJson"
+> & {
+  itemMetadata: unknown
+  versionMetadata: unknown
+  specToolManifest: unknown
+  specConfigSchema: unknown
+  specDefaultConfig: unknown
+  specInstallFlow: unknown
+  specAuthBindings: unknown
+  specSupportedReuseScopes: unknown
+  specMetadata: unknown
+  categoriesJson: unknown
+  runtimePermissionsJson: unknown
+}
+
+export type InstallationRow = {
+  installationId: string
+  rootWorkspaceId: string
+  catalogItemId: string
+  catalogVersionId: string
+  rootDisplayName: string
+  configData: Record<string, unknown>
+  approvedRuntimePermissions: string[] | null
+  reuseScope: PluginReuseScopeV2
+  rootConversationTypeMaskOverride: number | null
+  rootStatus: PluginInstallationStatus
+  rootOwnerWorkspaceMemberId: string | null
+  installationCreatedAt: Date
+  installationUpdatedAt: Date
+  sourceCatalogItemId: string | null
+  sourceCatalogVersionId: string | null
+  sourceSyncMode: MarketplaceSyncMode | null
+}
+
+export type InstallationRowRaw = Omit<InstallationRow, "configData"> & {
+  configData: unknown
+}
+
+export type InstallationAccessRow = {
+  id: string
+  workspace_id: string
+  installation_id: string
+  access_target_type: RuntimeBindingScope
+  conversation_id: string | null
+  actor_id: string | null
+  remote_agent_id: string | null
+  workspace_member_id: string | null
+  conversation_type_mask_override: number | null
+  status: AccessBindingStatus
+  source: WorkspaceAppGrantSource
+  created_by_workspace_member_id: string | null
+  reason: string | null
+  created_at: Date
+  revoked_at: Date | null
+}
+
+function sanitizeSlug(value: string) {
+  return slugify(value, { maxLength: 120 })
+}
+
+function isReuseScope(value: unknown): value is ReuseScope {
+  return typeof value === "string" && REUSE_SCOPES.includes(value as ReuseScope)
+}
+
+function normalizeSupportedReuseScopes(
+  value: unknown,
+  defaultScope: ReuseScope
+): ReuseScope[] {
+  const requested = Array.isArray(value) ? value.filter(isReuseScope) : []
+  const enabledScopes = new Set<ReuseScope>(requested)
+  if (enabledScopes.size === 0) {
+    for (const scope of REUSE_SCOPES) {
+      enabledScopes.add(scope)
+    }
+  }
+  enabledScopes.add(defaultScope)
+  return REUSE_SCOPES.filter((scope) => enabledScopes.has(scope))
+}
+
+function internalReuseScope(scope: ReuseScope): PluginReuseScopeV2 {
+  return scope
+}
+
+export function normalizeInstallationConfigData(
+  value: unknown
+): Record<string, unknown> {
+  return parseJsonObject(value)
+}
+
+export function normalizeNullablePluginConnectionPublicPayload(
+  value: unknown
+): Record<string, unknown> | null {
+  if (value === null || typeof value === "undefined") return null
+  return parseJsonObject(value)
+}
+
+export function normalizeJsonArray<T = unknown>(value: unknown): T[] {
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value) as unknown
+      return Array.isArray(parsed) ? (parsed as T[]) : []
+    } catch {
+      return []
+    }
+  }
+  return Array.isArray(value) ? (value as T[]) : []
+}
+
+export function normalizePluginCatalogRow(
+  row: PluginCatalogDbRow
+): PluginCatalogRow {
+  const {
+    itemMetadata,
+    versionMetadata,
+    specToolManifest,
+    specConfigSchema,
+    specDefaultConfig,
+    specInstallFlow,
+    specAuthBindings,
+    specSupportedReuseScopes,
+    specMetadata,
+    categoriesJson,
+    runtimePermissionsJson,
+    ...rest
+  } = row
+  return {
+    ...rest,
+    itemMetadata: parseJsonObject(itemMetadata),
+    versionMetadata: parseJsonObject(versionMetadata),
+    specToolManifest: normalizeJsonArray(specToolManifest),
+    specConfigSchema: parseJsonObject(specConfigSchema),
+    specDefaultConfig: parseJsonObject(specDefaultConfig),
+    specInstallFlow: parseJsonObject(specInstallFlow),
+    specAuthBindings:
+      normalizeJsonArray<PluginAuthBindingDefinition>(specAuthBindings),
+    specSupportedReuseScopes: normalizeJsonArray(specSupportedReuseScopes),
+    specMetadata: parseJsonObject(specMetadata),
+    categoriesJson: normalizeJsonArray<JsonObject>(categoriesJson),
+    runtimePermissionsJson: normalizeJsonArray<JsonObject>(
+      runtimePermissionsJson
+    ),
+  }
+}
+
+export function normalizeInstallationRow(
+  row: InstallationRowRaw
+): InstallationRow {
+  return {
+    installationId: row.installationId,
+    rootWorkspaceId: row.rootWorkspaceId,
+    catalogItemId: row.catalogItemId,
+    catalogVersionId: row.catalogVersionId,
+    rootDisplayName: row.rootDisplayName,
+    configData: normalizeInstallationConfigData(row.configData),
+    approvedRuntimePermissions: row.approvedRuntimePermissions,
+    reuseScope: row.reuseScope,
+    rootConversationTypeMaskOverride: row.rootConversationTypeMaskOverride,
+    rootStatus: row.rootStatus,
+    rootOwnerWorkspaceMemberId: row.rootOwnerWorkspaceMemberId,
+    installationCreatedAt: row.installationCreatedAt,
+    installationUpdatedAt: row.installationUpdatedAt,
+    sourceCatalogItemId: row.sourceCatalogItemId,
+    sourceCatalogVersionId: row.sourceCatalogVersionId,
+    sourceSyncMode: row.sourceSyncMode,
+  }
+}
+
+/**
+ * Build a query runner backed by an Executor (db/trx).
+ *
+ * CamelCasePlugin already camelCases top-level result keys for raw queries.
+ * Auth connection presentation expects the camelCase pluginConnections shape,
+ * so rows pass through unchanged.
+ */
+export function createMcpPluginQueryRunner(executor: Executor): QueryRunner {
+  return <T extends QueryRow>(text: string, params?: unknown[]) =>
+    executor.executeQuery<T>(
+      CompiledQuery.raw(text, params ? [...params] : [])
+    ) as Promise<QueryResultLike<T>>
+}
+
+export async function withMcpPluginTransaction<T>(
+  fn: (client: Executor) => Promise<T>
+): Promise<T> {
+  return withDbTransaction((client) => fn(client))
+}
+
+const PLUGIN_CATALOG_SELECT = `
+  SELECT
+    item.id AS "itemId",
+    item.workspace_id AS "itemWorkspaceId",
+    item.slug AS "itemSlug",
+    item.display_name AS "itemDisplayName",
+    item.summary AS "itemSummary",
+    item.long_description AS "itemLongDescription",
+    item.source_kind AS "itemSourceKind",
+    item.visibility AS "itemVisibility",
+    item.tags AS "itemTags",
+    item.is_active AS "itemIsActive",
+    item.download_count AS "itemDownloadCount",
+    item.icon_file_id AS "itemIconFileId",
+    item.metadata AS "itemMetadata",
+    item.created_at AS "itemCreatedAt",
+    item.updated_at AS "itemUpdatedAt",
+    version.id AS "versionId",
+    version.version AS "versionValue",
+    version.status AS "versionStatus",
+    version.changelog AS "versionChangelog",
+    version.metadata AS "versionMetadata",
+    version.created_by_user_id AS "versionCreatedByUserId",
+    version.created_at AS "versionCreatedAt",
+    spec.transport AS "specTransport",
+    spec.entry_point AS "specEntryPoint",
+    spec.tool_manifest AS "specToolManifest",
+    spec.config_schema AS "specConfigSchema",
+    spec.default_config AS "specDefaultConfig",
+    spec.install_flow AS "specInstallFlow",
+    spec.auth_bindings AS "specAuthBindings",
+    spec.default_reuse_scope AS "specDefaultReuseScope",
+    spec.default_conversation_type_mask AS "specDefaultConversationTypeMask",
+    spec.supported_reuse_scopes AS "specSupportedReuseScopes",
+    spec.requires_handshake AS "specRequiresHandshake",
+    spec.metadata AS "specMetadata",
+    publisher.id AS "publisherId",
+    publisher.slug AS "publisherSlug",
+    publisher.display_name AS "publisherDisplayName",
+    publisher.description AS "publisherDescription",
+    publisher.workspace_id AS "publisherWorkspaceId",
+    publisher.is_builtin AS "publisherIsBuiltin",
+    publisher.is_verified AS "publisherIsVerified",
+    publisher.owner_user_id AS "publisherOwnerUserId",
+    publisher.logo_file_id AS "publisherLogoFileId",
+    COALESCE(categories.categories_json, '[]'::jsonb) AS "categoriesJson",
+    COALESCE(runtime_permissions.runtime_permissions_json, '[]'::jsonb) AS "runtimePermissionsJson"
+  FROM catalog_items item
+  JOIN publishers publisher
+    ON publisher.id = item.publisher_id
+  JOIN catalog_versions version
+    ON version.catalog_item_id = item.id
+  LEFT JOIN plugin_package_version_specs spec
+    ON spec.catalog_version_id = version.id
+  LEFT JOIN LATERAL (
+    SELECT jsonb_agg(
+      jsonb_build_object(
+        'id', category.id,
+        'slug', category.slug,
+        'display_name', category.display_name,
+        'description', category.description,
+        'display_name_i18n', COALESCE(category.metadata->'displayNameI18n', '{}'::jsonb),
+        'description_i18n', COALESCE(category.metadata->'descriptionI18n', '{}'::jsonb),
+        'default_locale', COALESCE(category.metadata->>'defaultLocale', 'en')
+      )
+      ORDER BY category.sort_order ASC, category.display_name ASC
+    ) AS categories_json
+    FROM catalog_item_categories item_category
+    JOIN catalog_categories category
+      ON category.id = item_category.category_id
+    WHERE item_category.catalog_item_id = item.id
+      AND category.item_kind = 'plugin_package'
+  ) categories ON TRUE
+  LEFT JOIN LATERAL (
+    SELECT jsonb_agg(
+      jsonb_build_object(
+        'permissionKey', permission_key,
+        'isRequired', is_required,
+        'rationale', rationale
+      )
+      ORDER BY permission_key ASC
+    ) AS runtime_permissions_json
+    FROM plugin_version_runtime_permissions permission_row
+    WHERE permission_row.catalog_version_id = version.id
+  ) runtime_permissions ON TRUE
+  WHERE item.item_kind = 'plugin_package'
+`
+
+let builtinPluginIconFilesTableAvailable: boolean | null = null
+
+export async function hasBuiltinPluginFilesTable() {
+  if (builtinPluginIconFilesTableAvailable !== null) {
+    return builtinPluginIconFilesTableAvailable
+  }
+
+  const result = await db.executeQuery(
+    sql<{ exists: boolean }>`SELECT EXISTS (
+      SELECT 1
+      FROM information_schema.tables
+      WHERE table_schema = 'public'
+        AND table_name = 'files'
+    ) AS exists`.compile(db)
+  )
+
+  builtinPluginIconFilesTableAvailable = result.rows[0]?.exists === true
+  return builtinPluginIconFilesTableAvailable
+}
+
+export async function ensureCatalogItem(
+  ex: Executor,
+  input: {
+    orgId: string
+    workspaceId?: string
+    slug: string
+    displayName: string
+    description?: string
+    longDescription?: string
+    iconFileId?: string
+    tags?: string[]
+    isBuiltin?: boolean
+    transport: PluginSpecTransport
+    displayNameI18n?: Record<string, string>
+    descriptionI18n?: Record<string, string>
+    longDescriptionI18n?: Record<string, string>
+    summaryI18n?: Record<string, string>
+    defaultLocale?: string
+  }
+) {
+  const normalizedSlug = sanitizeSlug(input.slug)
+  const existing = await ex
+    .selectFrom("catalogItems")
+    .select("id")
+    .where("publisherId", "=", input.orgId)
+    .where("itemKind", "=", "plugin_package")
+    .where("slug", "=", normalizedSlug)
+    .where(
+      sql<SqlBool>`${sql.ref("workspaceId")} is not distinct from ${
+        input.workspaceId || null
+      }`
+    )
+    .limit(1)
+    .execute()
+
+  const metadata = {
+    displayNameI18n: input.displayNameI18n || { en: input.displayName },
+    descriptionI18n: input.descriptionI18n || { en: input.description || "" },
+    longDescriptionI18n:
+      input.longDescriptionI18n ||
+      (input.longDescription ? { en: input.longDescription } : undefined),
+    summaryI18n: input.summaryI18n,
+    defaultLocale: input.defaultLocale || "en",
+  }
+
+  if (existing.length > 0) {
+    const itemId = existing[0]!.id
+    await ex
+      .updateTable("catalogItems")
+      .set({
+        displayName: input.displayName,
+        summary: input.description || "",
+        longDescription: input.longDescription || "",
+        sourceKind: input.isBuiltin ? "builtin" : "official",
+        visibility: "public",
+        tags: input.tags || [],
+        isActive: true,
+        iconFileId: input.iconFileId || null,
+        metadata: sql`${JSON.stringify(metadata)}::jsonb`,
+      })
+      .where("id", "=", itemId)
+      .execute()
+    return itemId
+  }
+
+  const inserted = await ex
+    .insertInto("catalogItems")
+    .values({
+      publisherId: input.orgId,
+      workspaceId: input.workspaceId || null,
+      itemKind: "plugin_package",
+      slug: normalizedSlug,
+      displayName: input.displayName,
+      summary: input.description || "",
+      longDescription: input.longDescription || "",
+      iconFileId: input.iconFileId || null,
+      sourceKind: input.isBuiltin ? "builtin" : "official",
+      visibility: "public",
+      tags: input.tags || [],
+      isActive: true,
+      metadata: sql`${JSON.stringify(metadata)}::jsonb`,
+    })
+    .returning("id")
+    .execute()
+
+  return inserted[0]!.id
+}
+
+export async function upsertPluginVersion(
+  ex: Executor,
+  itemId: string,
+  input: {
+    version?: string
+    transport: PluginSpecTransport
+    entryPoint?: string
+    lifecycleScope?: ReuseScope
+    supportedReuseScopes?: ReuseScope[]
+    defaultConversationTypeMask?: number
+    requiresHandshake?: boolean
+    toolsManifest?: unknown[]
+    configSchema?: Record<string, unknown>
+    defaultConfig?: Record<string, unknown>
+    installFlow?: PluginInstallFlow
+    authBindings?: PluginAuthBindingDefinition[]
+    configFields?: PluginConfigFieldDefinition[]
+    validationRules?: McpValidationRule[]
+    setupSteps?: McpSetupStep[]
+    authorization?: {
+      requiredPermissions?: string[]
+      reason?: string
+    }
+  }
+) {
+  const versionValue = input.version || "1.0.0"
+  const upsertedVersion = await ex
+    .insertInto("catalogVersions")
+    .values({
+      catalogItemId: itemId,
+      version: versionValue,
+      status: MARKETPLACE_VERSION_STATUS.ACTIVE,
+      changelog: "",
+      metadata: sql`'{}'::jsonb`,
+    })
+    .onConflict((oc) =>
+      oc.columns(["catalogItemId", "version"]).doUpdateSet({
+        status: MARKETPLACE_VERSION_STATUS.ACTIVE,
+      })
+    )
+    .returning("id")
+    .execute()
+  const versionId = upsertedVersion[0]!.id
+
+  const metadata = {
+    configFields: input.configFields || [],
+    validationRules: input.validationRules || [],
+    setupSteps: input.setupSteps || [],
+    authorization: {
+      reason: input.authorization?.reason || undefined,
+    },
+  }
+  const defaultReuseScope = input.lifecycleScope || "conversation"
+  const defaultConversationTypeMask = resolveEffectiveConversationTypeMask({
+    defaultMask: input.defaultConversationTypeMask,
+    overrideMask: null,
+  })
+  const supportedReuseScopes = normalizeSupportedReuseScopes(
+    input.supportedReuseScopes,
+    defaultReuseScope
+  )
+
+  await ex
+    .insertInto("pluginPackageVersionSpecs")
+    .values({
+      catalogVersionId: versionId,
+      transport: input.transport as PluginPackageVersionSpecsTransport,
+      entryPoint: input.entryPoint || null,
+      toolManifest: sql`${JSON.stringify(input.toolsManifest || [])}::jsonb`,
+      configSchema: sql`${JSON.stringify(input.configSchema || {})}::jsonb`,
+      defaultConfig: sql`${JSON.stringify(input.defaultConfig || {})}::jsonb`,
+      installFlow: sql`${JSON.stringify(
+        input.installFlow || { steps: input.setupSteps || [] }
+      )}::jsonb`,
+      authBindings: sql`${JSON.stringify(input.authBindings || [])}::jsonb`,
+      defaultReuseScope: internalReuseScope(defaultReuseScope),
+      defaultConversationTypeMask: defaultConversationTypeMask,
+      supportedReuseScopes: supportedReuseScopes.map((scope) =>
+        internalReuseScope(scope)
+      ),
+      requiresHandshake:
+        input.requiresHandshake ?? input.transport !== "builtin",
+      metadata: sql`${JSON.stringify(metadata)}::jsonb`,
+    })
+    .onConflict((oc) =>
+      oc.column("catalogVersionId").doUpdateSet({
+        transport: sql`excluded.transport`,
+        entryPoint: sql`excluded.entry_point`,
+        toolManifest: sql`excluded.tool_manifest`,
+        configSchema: sql`excluded.config_schema`,
+        defaultConfig: sql`excluded.default_config`,
+        installFlow: sql`excluded.install_flow`,
+        authBindings: sql`excluded.auth_bindings`,
+        defaultReuseScope: sql`excluded.default_reuse_scope`,
+        defaultConversationTypeMask: sql`excluded.default_conversation_type_mask`,
+        supportedReuseScopes: sql`excluded.supported_reuse_scopes`,
+        requiresHandshake: sql`excluded.requires_handshake`,
+        metadata: sql`excluded.metadata`,
+      })
+    )
+    .execute()
+
+  await sql`SELECT sd_replace_plugin_runtime_permissions(${versionId}::uuid)`.execute(
+    ex
+  )
+
+  for (const permissionKey of input.authorization?.requiredPermissions || []) {
+    await ex
+      .insertInto("pluginVersionRuntimePermissions")
+      .values({
+        catalogVersionId: versionId,
+        permissionKey: permissionKey,
+        isRequired: true,
+        rationale: "",
+      })
+      .execute()
+  }
+
+  await ex
+    .updateTable("catalogItems")
+    .set({
+      latestVersionId: versionId,
+    })
+    .where("id", "=", itemId)
+    .execute()
+
+  return versionId
+}
+
+export async function assignPluginCategories(
+  ex: Executor,
+  itemId: string,
+  categorySlugs: string[]
+) {
+  await sql`SELECT sd_replace_catalog_item_categories(${itemId}::uuid)`.execute(
+    ex
+  )
+
+  if (categorySlugs.length === 0) return
+
+  const result = await ex
+    .selectFrom("catalogCategories")
+    .select("id")
+    .where("itemKind", "=", "plugin_package")
+    .where("slug", "in", categorySlugs)
+    .execute()
+
+  for (const row of result) {
+    await ex
+      .insertInto("catalogItemCategories")
+      .values({
+        catalogItemId: itemId,
+        categoryId: row.id,
+      })
+      .onConflict((oc) => oc.doNothing())
+      .execute()
+  }
+}
+
+export async function findBuiltinPluginIconFileAsset(params: {
+  key: string
+  sha256: string
+}): Promise<{ id: string } | null> {
+  const existing = await db
+    .selectFrom("fileAssets as f")
+    .select("f.id")
+    .where("f.workspaceId", "is", null)
+    .where("f.sourceFamily", "=", "platform_asset")
+    .where("f.sourceSystem", "=", FILE_ORIGIN_SYSTEMS.BUILTIN_PLUGIN_ICON)
+    .where(
+      sql<boolean>`f.details_json->>'builtinPluginIconKey' = ${params.key}`
+    )
+    .where("f.contentSha256", "=", params.sha256)
+    .limit(1)
+    .executeTakeFirst()
+
+  return existing ?? null
+}
+
+export async function loadPluginCatalogRows(
+  whereClause: RawBuilder<unknown>
+): Promise<PluginCatalogRow[]> {
+  const result = await db.executeQuery(
+    sql<PluginCatalogDbRow>`
+      ${sql.raw(PLUGIN_CATALOG_SELECT)}
+      ${whereClause}
+    `.compile(db)
+  )
+  return result.rows.map(normalizePluginCatalogRow)
+}
+
+export async function getPluginCatalogRowByItemId(
+  itemId: string
+): Promise<PluginCatalogRow | null> {
+  const rows = await loadPluginCatalogRows(
+    sql`AND item.id = ${itemId}
+       AND version.id = item.latest_version_id
+       LIMIT 1`
+  )
+
+  return rows[0] || null
+}
+
+export async function listPluginCatalogRowsByVersionIds(
+  versionIds: string[]
+): Promise<PluginCatalogRow[]> {
+  if (versionIds.length === 0) {
+    return []
+  }
+
+  return loadPluginCatalogRows(sql`AND version.id = ANY(${versionIds}::uuid[])`)
+}
+
+export async function listPublicPluginCatalogRows(filters?: {
+  orgId?: string
+  transport?: string
+  search?: string
+  tags?: string[]
+  categorySlugs?: string[]
+}): Promise<PluginCatalogRow[]> {
+  const conditions: RawBuilder<unknown>[] = [
+    sql`version.id = item.latest_version_id`,
+    sql`item.is_active = TRUE`,
+    sql`item.workspace_id IS NULL`,
+  ]
+
+  if (filters?.orgId) {
+    conditions.push(sql`item.publisher_id = ${filters.orgId}`)
+  }
+
+  if (filters?.transport) {
+    conditions.push(sql`spec.transport = ${filters.transport}`)
+  }
+
+  if (filters?.search) {
+    const search = `%${filters.search.trim()}%`
+    conditions.push(
+      sql`(item.display_name ILIKE ${search} OR item.summary ILIKE ${search} OR item.long_description ILIKE ${search} OR EXISTS (
+         SELECT 1
+         FROM unnest(COALESCE(item.tags, ARRAY[]::text[])) tag
+         WHERE tag ILIKE ${search}
+       ))`
+    )
+  }
+
+  if (filters?.tags && filters.tags.length > 0) {
+    conditions.push(sql`item.tags && ${filters.tags}::text[]`)
+  }
+
+  if (filters?.categorySlugs && filters.categorySlugs.length > 0) {
+    conditions.push(
+      sql`EXISTS (
+         SELECT 1
+         FROM catalog_item_categories item_category
+         JOIN catalog_categories category
+           ON category.id = item_category.category_id
+         WHERE item_category.catalog_item_id = item.id
+           AND category.item_kind = 'plugin_package'
+           AND category.slug = ANY(${filters.categorySlugs}::text[])
+       )`
+    )
+  }
+
+  return loadPluginCatalogRows(
+    sql`AND ${sql.join(conditions, sql` AND `)}
+       ORDER BY item.download_count DESC, item.created_at DESC`
+  )
+}
+
+export async function getActivePluginConnectionPublicPayload(
+  ex: Executor,
+  connectionId: string
+): Promise<Record<string, unknown> | null> {
+  const row = await ex
+    .selectFrom("pluginConnections")
+    .select("publicPayload")
+    .where("id", "=", connectionId)
+    .where("deletedAt", "is", null)
+    .where("status", "in", PLUGIN_CONNECTION_LIVE_STATUSES)
+    .limit(1)
+    .executeTakeFirst()
+
+  return normalizeNullablePluginConnectionPublicPayload(row?.publicPayload)
+}
+
+export async function insertPluginInstallationRecord(
+  ex: Executor,
+  input: {
+    id: string
+    catalogItemId: string
+    catalogVersionId: string
+    configData: Record<string, unknown>
+    approvedRuntimePermissions: string[]
+    reuseScope: PluginReuseScopeV2
+  }
+): Promise<string> {
+  const inserted = await ex
+    .insertInto("pluginInstallations")
+    .values({
+      id: input.id,
+      catalogItemId: input.catalogItemId,
+      catalogVersionId: input.catalogVersionId,
+      configData: input.configData as PluginInstallationsConfigData,
+      approvedRuntimePermissions: input.approvedRuntimePermissions,
+      reuseScope: input.reuseScope,
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+
+  return inserted.id
+}
+
+export async function updatePluginInstallationConfigData(
+  ex: Executor,
+  installationId: string,
+  configData: Record<string, unknown>
+): Promise<void> {
+  await ex
+    .updateTable("pluginInstallations")
+    .set({
+      configData: sql`${JSON.stringify(configData)}::jsonb`,
+    })
+    .where("id", "=", installationId)
+    .execute()
+}
+
+export async function updatePluginInstallationReuseScope(
+  ex: Executor,
+  installationId: string,
+  reuseScope: PluginReuseScopeV2
+): Promise<void> {
+  await ex
+    .updateTable("pluginInstallations")
+    .set({
+      reuseScope,
+    })
+    .where("id", "=", installationId)
+    .execute()
+}
+
+export async function insertPluginSourceRefRecord(
+  ex: Executor,
+  input: {
+    installationId: string
+    sourceCatalogItemId: string
+    sourceCatalogVersionId: string
+    syncMode: MarketplaceSyncMode
+  }
+): Promise<void> {
+  await ex
+    .insertInto("pluginSourceRefs")
+    .values({
+      installationId: input.installationId,
+      sourceCatalogItemId: input.sourceCatalogItemId,
+      sourceCatalogVersionId: input.sourceCatalogVersionId,
+      syncMode: input.syncMode,
+    })
+    .execute()
+}
+
+export async function incrementPluginCatalogDownloadCount(
+  ex: Executor,
+  catalogItemId: string
+): Promise<void> {
+  await ex
+    .updateTable("catalogItems")
+    .set({
+      downloadCount: sql`download_count + 1`,
+    })
+    .where("id", "=", catalogItemId)
+    .execute()
+}
+
+export async function revokePluginConnectionsForInstallation(
+  ex: Executor,
+  installationId: string
+): Promise<void> {
+  await ex
+    .updateTable("pluginConnections")
+    .set({
+      deletedAt: sql`NOW()`,
+      status: ACCESS_BINDING_STATUS.REVOKED,
+    })
+    .where("installationId", "=", installationId)
+    .where("deletedAt", "is", null)
+    .execute()
+}
+
+export async function loadInstallationRows(
+  workspaceId: string,
+  filters?: {
+    installationIds?: string[]
+    pluginId?: string
+    installationId?: string
+  }
+): Promise<InstallationRow[]> {
+  const conditions: RawBuilder<unknown>[] = [
+    sql`app.workspace_id = ${workspaceId}`,
+  ]
+
+  if (filters?.pluginId) {
+    conditions.push(sql`installation.catalog_item_id = ${filters.pluginId}`)
+  }
+
+  if (filters?.installationId) {
+    conditions.push(sql`installation.id = ${filters.installationId}`)
+  }
+  if (filters?.installationIds?.length) {
+    conditions.push(
+      sql`installation.id = ANY(${filters.installationIds}::uuid[])`
+    )
+  }
+
+  const result = await db.executeQuery(
+    sql<InstallationRowRaw>`SELECT
+        installation.id AS "installationId",
+        app.workspace_id AS "rootWorkspaceId",
+        installation.catalog_item_id AS "catalogItemId",
+        installation.catalog_version_id AS "catalogVersionId",
+        app.display_name AS "rootDisplayName",
+        installation.config_data AS "configData",
+        installation.approved_runtime_permissions AS "approvedRuntimePermissions",
+        installation.reuse_scope AS "reuseScope",
+        app.conversation_type_mask_override AS "rootConversationTypeMaskOverride",
+        app.status AS "rootStatus",
+        app.owner_workspace_member_id AS "rootOwnerWorkspaceMemberId",
+        app.created_at AS "installationCreatedAt",
+        app.updated_at AS "installationUpdatedAt",
+        source_ref.source_catalog_item_id AS "sourceCatalogItemId",
+        source_ref.source_catalog_version_id AS "sourceCatalogVersionId",
+        source_ref.sync_mode AS "sourceSyncMode"
+      FROM plugin_installations installation
+      INNER JOIN workspace_apps_live app
+        ON app.id = installation.id
+      LEFT JOIN plugin_source_refs source_ref
+        ON source_ref.installation_id = installation.id
+      WHERE app.deleted_at IS NULL
+        AND app.status IN ('active', 'disabled', 'error')
+        AND ${sql.join(conditions, sql` AND `)}
+      ORDER BY installation.created_at DESC`.compile(db)
+  )
+
+  return result.rows.map(normalizeInstallationRow)
+}
+
+export async function listPluginInstallationAccessRows(
+  installationId: string,
+  includeRevoked = false
+): Promise<InstallationAccessRow[]> {
+  let query = db
+    .selectFrom("workspaceAppGrants as app_grant")
+    .innerJoin("accessSubjects as subj", "subj.id", "app_grant.subjectId")
+    .leftJoin("accessSubjects as scope", "scope.id", "app_grant.scopeSubjectId")
+    .select([
+      "app_grant.id",
+      "app_grant.workspaceId as workspace_id",
+      "app_grant.workspaceAppId as installation_id",
+      sql<RuntimeBindingScope>`
+        CASE subj.kind
+          WHEN 'workspace' THEN 'workspace'
+          WHEN 'workspace_member' THEN 'workspace_member'
+          WHEN 'conversation' THEN 'conversation'
+          WHEN 'actor' THEN 'actor'
+          WHEN 'remote_agent' THEN 'remote_agent'
+        END
+      `.as("access_target_type"),
+      "subj.actorId as actor_id",
+      "subj.remoteAgentId as remote_agent_id",
+      "subj.workspaceMemberId as workspace_member_id",
+      "scope.conversationId as conversation_id",
+      "app_grant.conversationTypeMaskOverride as conversation_type_mask_override",
+      "app_grant.status",
+      "app_grant.source",
+      "app_grant.createdByWorkspaceMemberId as created_by_workspace_member_id",
+      "app_grant.reason",
+      "app_grant.createdAt as created_at",
+      "app_grant.revokedAt as revoked_at",
+    ])
+    .where("app_grant.workspaceAppId", "=", installationId)
+    .where(
+      sql<boolean>`'use'::workspace_app_grant_permission = ANY(app_grant.permissions)`
+    )
+    .orderBy("app_grant.createdAt", "desc")
+
+  if (!includeRevoked) {
+    query = query.where("app_grant.status", "=", ACCESS_BINDING_STATUS.ACTIVE)
+  }
+
+  return (await query.execute()).map((row) => ({
+    ...row,
+    created_at: row.created_at || new Date(0),
+  }))
+}
+
+export async function createPluginPublisherRecord(data: {
+  slug: string
+  displayName: string
+  description?: string
+  logoFileId?: string
+  isBuiltin?: boolean
+  isVerified?: boolean
+  ownerUserId?: string
+}): Promise<PublisherRecord> {
+  return db
+    .insertInto("publishers")
+    .values({
+      slug: data.slug,
+      displayName: data.displayName,
+      description: data.description || "",
+      logoFileId: data.logoFileId || null,
+      ownerUserId: data.ownerUserId || null,
+      workspaceId: null,
+      isBuiltin: data.isBuiltin === true,
+      isVerified: data.isVerified === true,
+    })
+    .onConflict((oc) =>
+      oc
+        .column("slug")
+        .where("deletedAt", "is", null)
+        .doUpdateSet({
+          displayName: data.displayName,
+          description: data.description || "",
+          logoFileId: data.logoFileId || null,
+          ownerUserId: sql`COALESCE(publishers.owner_user_id, excluded.owner_user_id)`,
+          isBuiltin: data.isBuiltin === true,
+          isVerified: data.isVerified === true,
+        })
+    )
+    .returningAll()
+    .executeTakeFirstOrThrow()
+}
+
+export async function listPluginPublisherRecords(): Promise<PublisherRecord[]> {
+  return db
+    .selectFrom("publishers as publisher")
+    .leftJoin("catalogItems as item", (join) =>
+      join
+        .onRef("item.publisherId", "=", "publisher.id")
+        .on("item.itemKind", "=", "plugin_package")
+        .on("item.isActive", "=", true)
+        .on("item.workspaceId", "is", null)
+    )
+    .selectAll("publisher")
+    .select(sql<number>`COUNT(item.id)::int`.as("pluginCount"))
+    .groupBy("publisher.id")
+    .orderBy("publisher.isVerified", "desc")
+    .orderBy("publisher.displayName", "asc")
+    .execute()
+}
+
+export async function getPluginPublisherRecord(
+  id: string
+): Promise<PublisherRecord | null> {
+  const row = await db
+    .selectFrom("publishers")
+    .selectAll()
+    .select(sql<number>`0::int`.as("pluginCount"))
+    .where("id", "=", id)
+    .limit(1)
+    .executeTakeFirst()
+
+  return row ?? null
+}
+
+export async function getPluginPublisherRecordBySlug(
+  slug: string
+): Promise<PublisherRecord | null> {
+  const row = await db
+    .selectFrom("publishers")
+    .selectAll()
+    .select(sql<number>`0::int`.as("pluginCount"))
+    .where("slug", "=", slug)
+    .limit(1)
+    .executeTakeFirst()
+
+  return row ?? null
+}
+
+export async function listPluginCategoryRecords(): Promise<
+  import("./repo.types.js").PluginCategoryRecord[]
+> {
+  return db
+    .selectFrom("catalogCategories")
+    .selectAll()
+    .where("itemKind", "=", "plugin_package")
+    .orderBy("sortOrder", "asc")
+    .orderBy("displayName", "asc")
+    .execute()
+}
+
+export async function findPluginInstallationWorkspace(
+  installId: string
+): Promise<{ installationId: string; workspaceId: string } | null> {
+  const row = await db
+    .selectFrom("pluginInstallations as installation")
+    .innerJoin("workspaceApps as app", "app.id", "installation.id")
+    .select([
+      "installation.id as installationId",
+      "app.workspaceId as workspaceId",
+    ])
+    .where("installation.id", "=", installId)
+    .where("app.deletedAt", "is", null)
+    .limit(1)
+    .executeTakeFirst()
+
+  return row ?? null
+}
+
+export async function validateMcpPluginConversationScopedAccessTarget(params: {
+  target: CapabilityAccessTarget
+  effectiveConversationTypeMask: number
+  buildError: (message: string) => Error
+}) {
+  return validateConversationScopedAccessTarget({
+    db,
+    target: params.target,
+    effectiveConversationTypeMask: params.effectiveConversationTypeMask,
+    buildError: params.buildError,
+  })
+}
+
+export async function updatePluginInstallationGrantConversationTypeMask(params: {
+  workspaceId: string
+  grantId: string
+  conversationTypeMaskOverride: number | null
+}) {
+  await db
+    .updateTable("workspaceAppGrants")
+    .set({
+      conversationTypeMaskOverride: params.conversationTypeMaskOverride,
+    } as any)
+    .where("id", "=", params.grantId)
+    .where("workspaceId", "=", params.workspaceId)
+    .execute()
+}
+
+export async function revokePluginWorkspaceAppGrant(grantId: string) {
+  await revokeWorkspaceAppGrant(db as any, grantId)
+}
+
+export async function upsertBuiltinPluginCategory(input: {
+  slug: string
+  displayName: string
+  description?: string
+  sortOrder: number
+  metadata: CatalogCategoriesMetadata
+}) {
+  await db
+    .insertInto("catalogCategories")
+    .values({
+      slug: input.slug,
+      itemKind: "plugin_package",
+      displayName: input.displayName,
+      description: input.description || "",
+      sortOrder: input.sortOrder,
+      metadata: input.metadata,
+    })
+    .onConflict((oc) =>
+      oc.columns(["itemKind", "slug"]).doUpdateSet({
+        displayName: input.displayName,
+        description: input.description || "",
+        sortOrder: input.sortOrder,
+        metadata: input.metadata,
+      })
+    )
+    .execute()
+}
 
 // ---------------------------------------------------------------------------
 // audit.ts queries
@@ -170,63 +1319,118 @@ export async function listRuntimeEventAuditLogs(
 
 export interface InstallationConfigRow {
   catalogItemId: string
+  configData: Record<string, unknown>
+  defaultConfig: Record<string, unknown>
+  configSchema: Record<string, unknown>
+}
+
+export type InstallationConfigRowRaw = Omit<
+  InstallationConfigRow,
+  "configData" | "defaultConfig" | "configSchema"
+> & {
   configData: unknown
   defaultConfig: unknown
   configSchema: unknown
 }
 
+export function normalizeInstallationConfigRow(
+  row: InstallationConfigRowRaw
+): InstallationConfigRow {
+  return {
+    catalogItemId: row.catalogItemId,
+    configData: normalizeInstallationConfigData(row.configData),
+    defaultConfig: parseJsonObject(row.defaultConfig),
+    configSchema: parseJsonObject(row.configSchema),
+  }
+}
+
 export async function findInstallationConfigRow(
   installationId: string
 ): Promise<InstallationConfigRow | undefined> {
-  return (
-    db
-      // Live predicate (review F16): exclude tombstoned AND non-live status
-      // (archived) installs — same definition as plugin_installations_live /
-      // manifest liveValues. Read the base table (not the _live view) so the NOT
-      // NULL column types are preserved (views type every column nullable).
-      .selectFrom("pluginInstallations as installation")
-      .innerJoin("workspaceApps as app", "app.id", "installation.id")
-      .innerJoin(
-        "pluginPackageVersionSpecs as spec",
-        "spec.catalogVersionId",
-        "installation.catalogVersionId"
-      )
-      .select([
-        "installation.catalogItemId",
-        "installation.configData",
-        "spec.defaultConfig",
-        "spec.configSchema",
-      ])
-      .where("installation.id", "=", installationId)
-      .where("app.deletedAt", "is", null)
-      .where("app.status", "in", PLUGIN_INSTALLATION_LIVE_STATUSES)
-      .limit(1)
-      .executeTakeFirst()
-  )
+  const row = await db
+    // Live predicate (review F16): exclude tombstoned AND non-live status
+    // (archived) installs — same definition as plugin_installations_live /
+    // manifest liveValues. Read the base table (not the _live view) so the NOT
+    // NULL column types are preserved (views type every column nullable).
+    .selectFrom("pluginInstallations as installation")
+    .innerJoin("workspaceApps as app", "app.id", "installation.id")
+    .innerJoin(
+      "pluginPackageVersionSpecs as spec",
+      "spec.catalogVersionId",
+      "installation.catalogVersionId"
+    )
+    .select([
+      "installation.catalogItemId",
+      "installation.configData",
+      "spec.defaultConfig",
+      "spec.configSchema",
+    ])
+    .where("installation.id", "=", installationId)
+    .where("app.deletedAt", "is", null)
+    .where("app.status", "in", PLUGIN_INSTALLATION_LIVE_STATUSES)
+    .limit(1)
+    .executeTakeFirst()
+
+  return row ? normalizeInstallationConfigRow(row) : undefined
 }
 
 // ---------------------------------------------------------------------------
 // tool-resolver.ts queries + subject builders
 // ---------------------------------------------------------------------------
 
+export type VisiblePluginToolManifestEntry = {
+  name: string
+  description?: string
+  inputSchema?: Record<string, unknown>
+}
+
 export type VisiblePluginRow = {
   installationId: string
   ownerWorkspaceId: string
-  installationStatus: "active" | "disabled" | "error" | "archived"
+  installationStatus: PluginInstallationStatus
   catalogItemId: string
   itemSlug: string
   publisherSlug: string
   transport: PluginSpecTransport
   entryPoint: string | null
-  toolManifest: unknown
+  toolManifest: VisiblePluginToolManifestEntry[]
   reuseScope: "turn" | "session" | "workspace" | "conversation" | "actor" | null
   conversationTypeMaskOverride: number | null
+}
+
+export type VisiblePluginRowRaw = Omit<
+  VisiblePluginRow,
+  "installationStatus" | "toolManifest"
+> & {
+  installationStatus: VisiblePluginRow["installationStatus"] | "deprecated"
+  toolManifest: unknown
+}
+
+export function normalizeVisiblePluginRow(
+  row: VisiblePluginRowRaw
+): VisiblePluginRow {
+  return {
+    installationId: row.installationId,
+    ownerWorkspaceId: row.ownerWorkspaceId,
+    installationStatus:
+      row.installationStatus as VisiblePluginRow["installationStatus"],
+    catalogItemId: row.catalogItemId,
+    itemSlug: row.itemSlug,
+    publisherSlug: row.publisherSlug,
+    transport: row.transport,
+    entryPoint: row.entryPoint,
+    toolManifest: normalizeJsonArray<VisiblePluginToolManifestEntry>(
+      row.toolManifest
+    ),
+    reuseScope: row.reuseScope,
+    conversationTypeMaskOverride: row.conversationTypeMaskOverride,
+  }
 }
 
 export type VisibleAccessBindingRow = {
   id: string
   workspace_id: string
-  resource_type: "plugin_installation"
+  resource_type: typeof WORKSPACE_APP_KIND.PLUGIN_INSTALLATION
   resource_id: string
   target_type:
     | "workspace"
@@ -240,7 +1444,7 @@ export type VisibleAccessBindingRow = {
   subject_remote_agent_id: string | null
   subject_conversation_id: string | null
   conversation_type_mask_override: number | null
-  status: "active" | "revoked"
+  status: AccessBindingStatus
   created_by_workspace_member_id: string | null
   reason: string | null
   metadata: unknown
@@ -344,7 +1548,7 @@ async function loadVisibleAccessBindings(params: { resourceIds: string[] }) {
       "scope.conversationId as scopeConversationIdViaJoin",
     ])
     .where("app_grant.workspaceAppId", "in", params.resourceIds)
-    .where("app_grant.status", "=", "active")
+    .where("app_grant.status", "=", ACCESS_BINDING_STATUS.ACTIVE)
     .where(
       sql<boolean>`'use'::workspace_app_grant_permission = ANY(app_grant.permissions)`
     )
@@ -393,7 +1597,7 @@ async function loadVisibleAccessBindings(params: { resourceIds: string[] }) {
     const visible: VisibleAccessBindingRow = {
       id: row.id,
       workspace_id: row.workspaceId,
-      resource_type: "plugin_installation",
+      resource_type: WORKSPACE_APP_KIND.PLUGIN_INSTALLATION,
       resource_id: row.resourceId,
       target_type,
       subject_workspace_id: row.subjectWorkspaceIdViaJoin ?? null,
@@ -480,7 +1684,7 @@ export async function loadVisiblePluginRows(
     .selectFrom("workspaceAppGrants as app_grant")
     .select("app_grant.workspaceAppId")
     .distinct()
-    .where("app_grant.status", "=", "active")
+    .where("app_grant.status", "=", ACCESS_BINDING_STATUS.ACTIVE)
     .where("app_grant.subjectId", "in", subjectIds)
     .where(
       sql<boolean>`'use'::workspace_app_grant_permission = ANY(app_grant.permissions)`
@@ -529,7 +1733,7 @@ export async function loadVisiblePluginRows(
       "installation.reuseScope",
     ])
     .where("installation.id", "in", Array.from(visibleInstallationIds))
-    .where("app.status", "=", "active")
+    .where("app.status", "=", WORKSPACE_APP_STATUS.ACTIVE)
     .where("app.deletedAt", "is", null)
     .orderBy("installation.updatedAt", "desc")
     .execute()
@@ -543,7 +1747,7 @@ export async function loadVisiblePluginRows(
     ),
   ])
 
-  return installationRows.filter((row) => {
+  const visibleRows = installationRows.filter((row) => {
     const workspaceConversationTypeMask =
       workspacePolicyMap.get(row.ownerWorkspaceId)?.plugin_installation ||
       DEFAULT_CONVERSATION_TYPE_MASK
@@ -565,7 +1769,8 @@ export async function loadVisiblePluginRows(
         )
     )
     return matchingBindings.length > 0
-  }) as VisiblePluginRow[]
+  })
+  return visibleRows.map(normalizeVisiblePluginRow)
 }
 
 // ---------------------------------------------------------------------------
@@ -582,8 +1787,29 @@ export async function loadVisiblePluginRows(
 export type PluginAuthSpecRow = {
   catalogItemId: string
   catalogVersionId: string | null
+  defaultConfig: Record<string, unknown>
+  authBindings: PluginAuthBindingDefinition[]
+}
+
+export type PluginAuthSpecRowRaw = Omit<
+  PluginAuthSpecRow,
+  "defaultConfig" | "authBindings"
+> & {
   defaultConfig: unknown
   authBindings: unknown
+}
+
+export function normalizePluginAuthSpecRow(
+  row: PluginAuthSpecRowRaw
+): PluginAuthSpecRow {
+  return {
+    catalogItemId: row.catalogItemId,
+    catalogVersionId: row.catalogVersionId,
+    defaultConfig: parseJsonObject(row.defaultConfig),
+    authBindings: normalizeJsonArray<PluginAuthBindingDefinition>(
+      row.authBindings
+    ),
+  }
 }
 
 /**
@@ -596,7 +1822,7 @@ export async function getPluginAuthSpecRow(
   catalogVersionId?: string | null
 ): Promise<PluginAuthSpecRow | null> {
   const result = await db.executeQuery(
-    sql<PluginAuthSpecRow>`SELECT
+    sql<PluginAuthSpecRowRaw>`SELECT
         item.id AS catalog_item_id,
         version.id AS catalog_version_id,
         spec.default_config,
@@ -610,7 +1836,8 @@ export async function getPluginAuthSpecRow(
         AND item.item_kind = 'plugin_package'
       LIMIT 1`.compile(db)
   )
-  return result.rows[0] ?? null
+  const row = result.rows[0]
+  return row ? normalizePluginAuthSpecRow(row) : null
 }
 
 /** Auth session scoped to (id, workspace, member). Returns undefined on miss. */
@@ -678,8 +1905,27 @@ export async function findPluginAuthConnectionRow(
 export type PluginInstallationAuthConfigRow = {
   catalogItemId: string
   catalogVersionId: string
+  configData: Record<string, unknown>
+  defaultConfig: Record<string, unknown>
+}
+
+export type PluginInstallationAuthConfigRowRaw = Omit<
+  PluginInstallationAuthConfigRow,
+  "configData" | "defaultConfig"
+> & {
   configData: unknown
   defaultConfig: unknown
+}
+
+export function normalizePluginInstallationAuthConfigRow(
+  row: PluginInstallationAuthConfigRowRaw
+): PluginInstallationAuthConfigRow {
+  return {
+    catalogItemId: row.catalogItemId,
+    catalogVersionId: row.catalogVersionId,
+    configData: normalizeInstallationConfigData(row.configData),
+    defaultConfig: parseJsonObject(row.defaultConfig),
+  }
 }
 
 /**
@@ -691,7 +1937,7 @@ export async function findPluginInstallationAuthConfigRow(
   installationId: string,
   workspaceId: string
 ): Promise<PluginInstallationAuthConfigRow | undefined> {
-  return db
+  const row = await db
     .selectFrom("pluginInstallations as installation")
     .innerJoin("workspaceApps as app", "app.id", "installation.id")
     .innerJoin(
@@ -711,6 +1957,8 @@ export async function findPluginInstallationAuthConfigRow(
     .where("app.status", "in", PLUGIN_INSTALLATION_LIVE_STATUSES)
     .limit(1)
     .executeTakeFirst()
+
+  return row ? normalizePluginInstallationAuthConfigRow(row) : undefined
 }
 
 /**

@@ -49,6 +49,10 @@ export interface RunningTurnRow {
   started_at: IsoInstantString | null
 }
 
+export function presentStatusInstant(value: Date): IsoInstantString {
+  return serializeInstant(value)
+}
+
 export async function loadConversationIdForSession(
   sessionId: string
 ): Promise<string | null> {

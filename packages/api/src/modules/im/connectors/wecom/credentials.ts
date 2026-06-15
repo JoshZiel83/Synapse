@@ -8,6 +8,7 @@
  */
 
 import type { TransportAccountSummary } from "@synapse/shared/types"
+import { WECOM_BASE_WS_URL_MAX_BYTES } from "@synapse/shared/constants"
 
 export interface WecomCredentials {
   botId: string
@@ -94,15 +95,6 @@ export function validateWecomCredentialsForMode(
  * parity here, the generic `/im/accounts` route would silently accept
  * malformed URLs the per-route schema rejects.
  */
-/**
- * Hard cap on the rendered `baseWsUrl` string. Real WeCom WSS endpoints
- * are short (`wss://openws.work.weixin.qq.com` is ~32 chars; even with a
- * private gateway it stays under 100), so 255 covers all realistic input.
- * Exported so the per-route Zod schema in `controller/_shared.ts` uses
- * the same value — without sharing it, the two API paths would diverge
- * the way they did before this fix.
- */
-export const WECOM_BASE_WS_URL_MAX_BYTES = 255
 const WECOM_ALLOWED_WS_PROTOCOLS = new Set(["wss:", "ws:"])
 
 function checkBaseWsUrl(value: string): string | null {

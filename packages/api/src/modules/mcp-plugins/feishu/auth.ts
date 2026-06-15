@@ -13,7 +13,11 @@ import {
   nowIsoInstant,
   parseIsoInstant,
 } from "@synapse/shared/datetime"
-import { parseJsonObject } from "@synapse/shared"
+import {
+  PLUGIN_AUTH_CHALLENGE_KIND,
+  PLUGIN_AUTH_SESSION_STATUS,
+  parseJsonObject,
+} from "@synapse/shared"
 import type { Timestamp } from "@synapse/shared"
 
 type JsonObject = Record<string, unknown>
@@ -51,13 +55,13 @@ export interface FeishuCliSetupTransientPayload {
 
 export type FeishuCliSetupProgressResult =
   | {
-      status: "pending"
+      status: typeof PLUGIN_AUTH_SESSION_STATUS.PENDING
       transientPayload?: FeishuCliSetupTransientPayload
       challengePayload?: JsonObject
       expiresAt?: Timestamp
     }
   | {
-      status: "completed"
+      status: typeof PLUGIN_AUTH_SESSION_STATUS.COMPLETED
       appCredentials: {
         brand: FeishuBrand
         appId: string
@@ -75,7 +79,9 @@ export type FeishuCliSetupProgressResult =
       requestedFeatures: FeishuFeatureKey[]
     }
   | {
-      status: "failed" | "expired"
+      status:
+        | typeof PLUGIN_AUTH_SESSION_STATUS.FAILED
+        | typeof PLUGIN_AUTH_SESSION_STATUS.EXPIRED
       errorCode: string
       errorMessage: string
     }
@@ -104,7 +110,7 @@ function buildQrChallenge(input: {
     input.stage === "app_registration" ? "create_app" : "authorize_user"
 
   return {
-    kind: "qr_code",
+    kind: PLUGIN_AUTH_CHALLENGE_KIND.QR_CODE,
     expiresAt: input.expiresAt,
     metadata: {
       provider: "feishu",
@@ -190,17 +196,19 @@ async function beginAppRegistration() {
 
 async function pollAppRegistration(payload: AppRegistrationPayload): Promise<
   | {
-      status: "pending"
+      status: typeof PLUGIN_AUTH_SESSION_STATUS.PENDING
       next: AppRegistrationPayload
     }
   | {
-      status: "completed"
+      status: typeof PLUGIN_AUTH_SESSION_STATUS.COMPLETED
       brand: FeishuBrand
       appId: string
       appSecret: string
     }
   | {
-      status: "failed" | "expired"
+      status:
+        | typeof PLUGIN_AUTH_SESSION_STATUS.FAILED
+        | typeof PLUGIN_AUTH_SESSION_STATUS.EXPIRED
       errorCode: string
       errorMessage: string
     }
@@ -243,7 +251,7 @@ async function pollAppRegistration(payload: AppRegistrationPayload): Promise<
     }
 
     return {
-      status: "completed",
+      status: PLUGIN_AUTH_SESSION_STATUS.COMPLETED,
       brand: tenantBrand,
       appId: asString(result.client_id),
       appSecret: asString(result.client_secret),
@@ -254,7 +262,7 @@ async function pollAppRegistration(payload: AppRegistrationPayload): Promise<
     case "":
     case "authorization_pending":
       return {
-        status: "pending",
+        status: PLUGIN_AUTH_SESSION_STATUS.PENDING,
         next: {
           ...payload,
           lastPollAt: nowIso,
@@ -262,7 +270,7 @@ async function pollAppRegistration(payload: AppRegistrationPayload): Promise<
       }
     case "slow_down":
       return {
-        status: "pending",
+        status: PLUGIN_AUTH_SESSION_STATUS.PENDING,
         next: {
           ...payload,
           interval: Math.min(payload.interval + 5, 60),
@@ -271,7 +279,7 @@ async function pollAppRegistration(payload: AppRegistrationPayload): Promise<
       }
     case "access_denied":
       return {
-        status: "failed",
+        status: PLUGIN_AUTH_SESSION_STATUS.FAILED,
         errorCode: "FEISHU_APP_REGISTRATION_DENIED",
         errorMessage:
           asString(result.error_description) ||
@@ -280,7 +288,7 @@ async function pollAppRegistration(payload: AppRegistrationPayload): Promise<
     case "expired_token":
     case "invalid_grant":
       return {
-        status: "expired",
+        status: PLUGIN_AUTH_SESSION_STATUS.EXPIRED,
         errorCode: "FEISHU_APP_REGISTRATION_EXPIRED",
         errorMessage:
           asString(result.error_description) ||
@@ -288,7 +296,7 @@ async function pollAppRegistration(payload: AppRegistrationPayload): Promise<
       }
     default:
       return {
-        status: "failed",
+        status: PLUGIN_AUTH_SESSION_STATUS.FAILED,
         errorCode: "FEISHU_APP_REGISTRATION_ERROR",
         errorMessage:
           asString(result.error_description) ||
@@ -359,11 +367,11 @@ async function pollUserAuthorization(input: {
   payload: UserAuthorizationPayload
 }): Promise<
   | {
-      status: "pending"
+      status: typeof PLUGIN_AUTH_SESSION_STATUS.PENDING
       next: UserAuthorizationPayload
     }
   | {
-      status: "completed"
+      status: typeof PLUGIN_AUTH_SESSION_STATUS.COMPLETED
       tokenData: {
         accessToken: string
         refreshToken: string
@@ -374,7 +382,9 @@ async function pollUserAuthorization(input: {
       }
     }
   | {
-      status: "failed" | "expired"
+      status:
+        | typeof PLUGIN_AUTH_SESSION_STATUS.FAILED
+        | typeof PLUGIN_AUTH_SESSION_STATUS.EXPIRED
       errorCode: string
       errorMessage: string
     }
@@ -402,7 +412,7 @@ async function pollUserAuthorization(input: {
 
   if (!error && asString(payload.access_token)) {
     return {
-      status: "completed",
+      status: PLUGIN_AUTH_SESSION_STATUS.COMPLETED,
       tokenData: {
         accessToken: asString(payload.access_token),
         refreshToken: asString(payload.refresh_token),
@@ -418,7 +428,7 @@ async function pollUserAuthorization(input: {
     case "":
     case "authorization_pending":
       return {
-        status: "pending",
+        status: PLUGIN_AUTH_SESSION_STATUS.PENDING,
         next: {
           ...input.payload,
           lastPollAt: nowIso,
@@ -426,7 +436,7 @@ async function pollUserAuthorization(input: {
       }
     case "slow_down":
       return {
-        status: "pending",
+        status: PLUGIN_AUTH_SESSION_STATUS.PENDING,
         next: {
           ...input.payload,
           interval: Math.min(input.payload.interval + 5, 60),
@@ -435,7 +445,7 @@ async function pollUserAuthorization(input: {
       }
     case "access_denied":
       return {
-        status: "failed",
+        status: PLUGIN_AUTH_SESSION_STATUS.FAILED,
         errorCode: "FEISHU_AUTH_DENIED",
         errorMessage:
           asString(payload.error_description) ||
@@ -444,7 +454,7 @@ async function pollUserAuthorization(input: {
     case "expired_token":
     case "invalid_grant":
       return {
-        status: "expired",
+        status: PLUGIN_AUTH_SESSION_STATUS.EXPIRED,
         errorCode: "FEISHU_AUTH_EXPIRED",
         errorMessage:
           asString(payload.error_description) ||
@@ -452,7 +462,7 @@ async function pollUserAuthorization(input: {
       }
     default:
       return {
-        status: "failed",
+        status: PLUGIN_AUTH_SESSION_STATUS.FAILED,
         errorCode: "FEISHU_AUTH_ERROR",
         errorMessage:
           asString(payload.error_description) ||
@@ -610,26 +620,26 @@ export async function progressFeishuCliSetup(
     const appRegistration = transientPayload.appRegistration
     if (!appRegistration) {
       return {
-        status: "failed",
+        status: PLUGIN_AUTH_SESSION_STATUS.FAILED,
         errorCode: "FEISHU_APP_REGISTRATION_STATE_INVALID",
         errorMessage: "Feishu app registration state is missing.",
       }
     }
     if (!shouldPoll(appRegistration.lastPollAt, appRegistration.interval)) {
-      return { status: "pending" }
+      return { status: PLUGIN_AUTH_SESSION_STATUS.PENDING }
     }
 
     const result = await pollAppRegistration(appRegistration)
-    if (result.status === "pending") {
+    if (result.status === PLUGIN_AUTH_SESSION_STATUS.PENDING) {
       return {
-        status: "pending",
+        status: PLUGIN_AUTH_SESSION_STATUS.PENDING,
         transientPayload: {
           ...transientPayload,
           appRegistration: result.next,
         },
       }
     }
-    if (result.status !== "completed") {
+    if (result.status !== PLUGIN_AUTH_SESSION_STATUS.COMPLETED) {
       return result
     }
 
@@ -660,7 +670,7 @@ export async function progressFeishuCliSetup(
     }
 
     return {
-      status: "pending",
+      status: PLUGIN_AUTH_SESSION_STATUS.PENDING,
       transientPayload: nextPayload,
       challengePayload: buildQrChallenge({
         stage: "user_authorization",
@@ -677,13 +687,13 @@ export async function progressFeishuCliSetup(
     const userAuthorization = transientPayload.userAuthorization
     if (!appCredentials || !userAuthorization) {
       return {
-        status: "failed",
+        status: PLUGIN_AUTH_SESSION_STATUS.FAILED,
         errorCode: "FEISHU_AUTH_STATE_INVALID",
         errorMessage: "Feishu authorization state is missing.",
       }
     }
     if (!shouldPoll(userAuthorization.lastPollAt, userAuthorization.interval)) {
-      return { status: "pending" }
+      return { status: PLUGIN_AUTH_SESSION_STATUS.PENDING }
     }
 
     const result = await pollUserAuthorization({
@@ -691,16 +701,16 @@ export async function progressFeishuCliSetup(
       appSecret: appCredentials.appSecret,
       payload: userAuthorization,
     })
-    if (result.status === "pending") {
+    if (result.status === PLUGIN_AUTH_SESSION_STATUS.PENDING) {
       return {
-        status: "pending",
+        status: PLUGIN_AUTH_SESSION_STATUS.PENDING,
         transientPayload: {
           ...transientPayload,
           userAuthorization: result.next,
         },
       }
     }
-    if (result.status !== "completed") {
+    if (result.status !== PLUGIN_AUTH_SESSION_STATUS.COMPLETED) {
       return result
     }
 
@@ -710,7 +720,7 @@ export async function progressFeishuCliSetup(
     )
 
     return {
-      status: "completed",
+      status: PLUGIN_AUTH_SESSION_STATUS.COMPLETED,
       appCredentials,
       tokenData: result.tokenData,
       profile,
@@ -719,7 +729,7 @@ export async function progressFeishuCliSetup(
   }
 
   return {
-    status: "failed",
+    status: PLUGIN_AUTH_SESSION_STATUS.FAILED,
     errorCode: "FEISHU_AUTH_STAGE_INVALID",
     errorMessage: "Unsupported Feishu authorization stage.",
   }

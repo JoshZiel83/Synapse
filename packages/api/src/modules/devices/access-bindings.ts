@@ -2,20 +2,19 @@
 // module so the picker can call setActiveDeviceCapabilitiesForTarget without
 // going through capability-projection's internal module boundary.
 //
-// subject-scope-refactor: the wire shape is `ScopedSubjectTarget` from
-// `@synapse/device-protocol` (`{subject: SubjectRefWire, scope?: SubjectRefWire}`).
-// The SDK sends this shape; the route parses with the protocol schema
-// directly so they cannot drift. The route maps
-// `ScopedSubjectTarget → AccessTargetInput` at the boundary via
-// `wireTargetToInternalAccessTarget`.
+// subject-scope-refactor: the app shape is a shared-owned `ScopedSubjectTarget`
+// (`{subject, scope?}`) nested in SetActiveDeviceCapabilitiesInputSchema. The
+// SDK/web send this app contract; the route maps it to AccessTargetInput at the
+// boundary via appTargetToInternalAccessTarget.
 
-import { z } from "zod"
 import { formatValidationDetails } from "../../infrastructure/validation-error.js"
 import type { FastifyInstance } from "fastify"
-import { type DeviceCapabilityAccessTarget } from "@synapse/device-protocol"
+import type { DeviceCapabilityAccessTargetInput } from "@synapse/shared"
 import {
   SetActiveDeviceCapabilitiesInputSchema,
   ActiveDeviceCapabilitiesViewSchema,
+  ActiveDeviceCapabilitiesListQuerySchema,
+  type ActiveDeviceCapabilitiesListQuery,
 } from "@synapse/shared/schemas"
 import { appRoute } from "../../infrastructure/http/route.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
@@ -36,24 +35,24 @@ import {
 // Exported for regression tests that pin the app-facing input contract — the
 // bug pattern under guard is the route accepting a different shape than the
 // SDK/web sends. Per §5.1.1/§8.3 this management write is app-facing camelCase
-// (shared `SetActiveDeviceCapabilitiesInput`: `deviceCapabilityIds`), with the
-// `target` reusing the camelCase ScopedSubjectTargetWireSchema whitelist.
+// (shared `SetActiveDeviceCapabilitiesInput`: `deviceCapabilityIds`), with a
+// shared-owned target whitelist.
 export const setActiveBodySchema = SetActiveDeviceCapabilitiesInputSchema
 
 /**
- * Map the wire `(subject, scope?)` shape onto `AccessTargetInput`.
+ * Map the app `(subject, scope?)` shape onto `AccessTargetInput`.
  *
- * The wire schema's `superRefine` already rejects every combination
+ * The shared app schema's `superRefine` already rejects every combination
  * outside the supported whitelist (unscoped any-of-4, or
  * actor/remote_agent + conversation), so we only need to handle those
  * shapes here. Anything else is unreachable.
  */
-// Exported for regression tests that pin the wire→internal mapping —
-// without this lock, the wire schema could keep accepting a shape that
-// then throws at the mapper (which is what happened pre-Batch-19 with
+// Exported for regression tests that pin the app→internal mapping — without
+// this lock, the shared app schema could keep accepting a shape that then throws
+// at the mapper (which is what happened pre-Batch-19 with
 // `(remote_agent, conversation)`).
-export function wireTargetToInternalAccessTarget(
-  target: DeviceCapabilityAccessTarget
+export function appTargetToInternalAccessTarget(
+  target: DeviceCapabilityAccessTargetInput
 ): AccessTargetInput {
   const { subject, scope } = target
   if (scope) {
@@ -71,9 +70,9 @@ export function wireTargetToInternalAccessTarget(
         conversationId: scope.conversationId,
       }
     }
-    // Unreachable — wire schema rejected everything else upstream.
+    // Unreachable — shared app target schema rejected everything else upstream.
     throw new Error(
-      `wireTargetToInternalAccessTarget: unsupported (${subject.kind}, ${scope.kind}) escaped the wire whitelist`
+      `appTargetToInternalAccessTarget: unsupported (${subject.kind}, ${scope.kind}) escaped the app target whitelist`
     )
   }
   switch (subject.kind) {
@@ -104,38 +103,11 @@ export function wireTargetToInternalAccessTarget(
  * `scopeKind=workspace` is explicitly rejected — the binding model only supports
  * `actor|remote_agent + conversation`.
  */
-const listQuerySchema = z
-  .object({
-    subjectKind: z.enum(["workspace", "actor", "conversation", "remote_agent"]),
-    subjectWorkspaceId: z.uuid().optional(),
-    subjectActorId: z.uuid().optional(),
-    subjectConversationId: z.uuid().optional(),
-    subjectRemoteAgentId: z.uuid().optional(),
-    scopeKind: z.enum(["conversation"]).optional(),
-    scopeConversationId: z.uuid().optional(),
-  })
-  .superRefine((q, ctx) => {
-    if (q.scopeKind === "conversation") {
-      if (!q.scopeConversationId) {
-        ctx.addIssue({
-          code: "custom",
-          message: "scopeConversationId required when scopeKind=conversation",
-          path: ["scopeConversationId"],
-        })
-      }
-      if (q.subjectKind !== "actor" && q.subjectKind !== "remote_agent") {
-        ctx.addIssue({
-          code: "custom",
-          message: `scopeKind=conversation only allowed with subjectKind=actor|remote_agent (got ${q.subjectKind})`,
-          path: ["scopeKind"],
-        })
-      }
-    }
-  })
+const listQuerySchema = ActiveDeviceCapabilitiesListQuerySchema
 
 function listQueryToInternalAccessTarget(
   workspaceId: string,
-  q: z.infer<typeof listQuerySchema>
+  q: ActiveDeviceCapabilitiesListQuery
 ): AccessTargetInput | null {
   if (q.scopeKind === "conversation" && q.scopeConversationId) {
     if (q.subjectKind === "actor" && q.subjectActorId) {
@@ -329,7 +301,7 @@ export function registerDeviceAccessBindingRoutes(app: FastifyInstance): void {
 
       let internalTarget: AccessTargetInput
       try {
-        internalTarget = wireTargetToInternalAccessTarget(parsed.data.target)
+        internalTarget = appTargetToInternalAccessTarget(parsed.data.target)
       } catch (err) {
         reply.status(400).send({
           code: "unsupported_target",

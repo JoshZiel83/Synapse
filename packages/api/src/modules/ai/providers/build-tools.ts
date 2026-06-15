@@ -15,7 +15,11 @@
 import { tool, jsonSchema, type ToolSet } from "ai"
 import { anthropic } from "@ai-sdk/anthropic"
 import type { JSONSchema7 } from "@ai-sdk/provider"
-import type { AnthropicBuiltinTool, ToolDefinition } from "@synapse/shared"
+import {
+  MODEL_SERVER_TOOL,
+  type AnthropicBuiltinTool,
+  type ToolDefinition,
+} from "@synapse/shared"
 import type { ProviderKind } from "./registry.js"
 
 const EMPTY_OBJECT_SCHEMA: JSONSchema7 = {
@@ -60,9 +64,9 @@ export function buildServerTools(
   }
   const set: ToolSet = {}
   for (const name of serverTools) {
-    if (name === "web_search") {
+    if (name === MODEL_SERVER_TOOL.WEB_SEARCH) {
       set.web_search = anthropic.tools.webSearch_20250305()
-    } else if (name === "web_fetch") {
+    } else if (name === MODEL_SERVER_TOOL.WEB_FETCH) {
       set.web_fetch = anthropic.tools.webFetch_20250910()
     }
   }

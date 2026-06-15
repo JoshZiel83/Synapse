@@ -23,9 +23,11 @@ import type pg from "pg"
 import { CompiledQuery } from "kysely"
 import {
   normalizeCanonicalContentBlocks,
+  parseJsonObject,
   type ActorDoc,
   type ActorRole,
   type ActorUpdateSourceType,
+  type ActorVersionDelta,
   type CapabilityAccessTarget,
   type UUID,
   type WorkspaceAppGrantPermission,
@@ -188,6 +190,51 @@ function parseJsonArrayLocal<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : []
 }
 
+function parseOptionalJsonRecord(
+  value: unknown
+): Record<string, unknown> | null {
+  if (value === null || value === undefined) return null
+  if (typeof value === "string") {
+    const parsed = JSON.parse(value) as unknown
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null
+  }
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+export function normalizeActorRow<T extends ActorRow>(row: T): T {
+  const normalized = {
+    ...row,
+    config: parseJsonObject(row.config),
+  }
+  return normalized
+}
+
+export function normalizeActorVersionRow<T extends ActorVersionRow>(row: T): T {
+  const normalized = {
+    ...row,
+    config: parseJsonObject(row.config),
+    version_delta: parseOptionalJsonRecord(
+      row.version_delta
+    ) as ActorVersionDelta | null,
+  }
+  return normalized
+}
+
+export function normalizeActorPackageRow<T extends ActorPackageRow>(row: T): T {
+  const normalized = {
+    ...row,
+    package_metadata: parseJsonObject(row.package_metadata),
+    version_metadata: parseJsonObject(row.version_metadata),
+    actor_config: parseJsonObject(row.actor_config),
+    actor_metadata: parseJsonObject(row.actor_metadata),
+  }
+  return normalized
+}
+
 /**
  * Adapt an {@link Executor} (the top-level `db` or a transaction) to the
  * `(text, params) => { rows }` runner convention used throughout this module.
@@ -317,7 +364,7 @@ export async function getActorRowsByIds(
     [workspaceId, actorIds]
   )
 
-  return result.rows
+  return result.rows.map(normalizeActorRow)
 }
 
 /** A single actor row in a workspace (not deleted), or null. */
@@ -334,7 +381,7 @@ export async function getActorRow(
      LIMIT 1`,
     [workspaceId, actorId]
   )
-  return result.rows[0] || null
+  return result.rows[0] ? normalizeActorRow(result.rows[0]) : null
 }
 
 /** True when the actor exists in the workspace and is not soft-deleted. */
@@ -390,7 +437,7 @@ export async function listActorVersionRows(
      ORDER BY version DESC`,
     [actorId]
   )
-  return result.rows
+  return result.rows.map(normalizeActorVersionRow)
 }
 
 /** Actor-template catalog rows visible to a workspace, optionally filtered. */
@@ -422,7 +469,7 @@ export async function listActorPackageRows(
     values
   )
 
-  return result.rows
+  return result.rows.map(normalizeActorPackageRow)
 }
 
 /** A single actor-template catalog row visible to a workspace, or null. */
@@ -441,7 +488,7 @@ export async function getActorPackageRow(
      LIMIT 1`,
     [packageId, workspaceId]
   )
-  return result.rows[0] || null
+  return result.rows[0] ? normalizeActorPackageRow(result.rows[0]) : null
 }
 
 async function insertActorVersionDoc(

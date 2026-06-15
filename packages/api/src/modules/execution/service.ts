@@ -1,4 +1,5 @@
 import { createHash } from "crypto"
+import { ACTOR_RUNTIME_HEALTH } from "@synapse/shared"
 import { nowIsoInstant } from "@synapse/shared/datetime"
 import { createLogger } from "../../infrastructure/logger/index.js"
 import type { PayloadBlobsRetentionClass } from "./repo.types.js"
@@ -373,7 +374,7 @@ export async function recoverInterruptedExecutions(params?: {
     if (sessionInfo.workspaceId) {
       await publishSessionRuntime(sessionInfo.workspaceId, sessionId, {
         laneState: "blocked",
-        health: "error",
+        health: ACTOR_RUNTIME_HEALTH.ERROR,
         phase: "error",
         statusText: errorMessage,
         activeTurnId: sessionInfo.turnId,

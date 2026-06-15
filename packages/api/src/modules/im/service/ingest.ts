@@ -24,6 +24,7 @@ import type {
   ConversationTransportBindingSummary,
   TransportAccountSummary,
 } from "@synapse/shared/types"
+import { CONVERSATION_MESSAGE_SUBTYPE } from "@synapse/shared"
 import { derivePlainText } from "../messaging/canonical-message.js"
 import type { InboundEnvelope } from "../connectors/types.js"
 import { mergeInboundMetadata } from "../ingest-metadata.js"
@@ -263,7 +264,7 @@ export async function ingestInboundEnvelope(params: {
     scope: "shared",
     surface: "visible",
     itemType: "message",
-    subtype: "chat.message",
+    subtype: CONVERSATION_MESSAGE_SUBTYPE.CHAT_MESSAGE,
     role: "user",
     authorParticipantId: senderParticipant.id,
     metadata: mergedMetadata,

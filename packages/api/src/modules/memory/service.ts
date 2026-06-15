@@ -7,6 +7,7 @@ import type {
   MemoryRecallResult,
   MemoryRecallRun,
   MemoryRecallType,
+  MemorySpaceType,
   MemoryStability,
   SubjectRef,
   UUID,
@@ -97,12 +98,7 @@ const log = createLogger("memory")
  * with controller / orchestrator / AI tool surfaces that still accept the
  * literal preset strings.
  */
-export type MemoryPreset =
-  | "workspace_shared"
-  | "conversation_shared"
-  | "actor_private"
-  | "participant_private"
-  | "user_private"
+export type MemoryPreset = MemorySpaceType
 
 type MemoryPartRow = {
   memoryItemId: string
@@ -118,12 +114,12 @@ type MemoryPartRow = {
 }
 
 type SearchCandidateRow = MemoryRow & {
-  matched_chunk_id: string
-  chunk_search_text: string
-  text_score?: number | null
-  similarity_score?: number | null
-  vector_score?: number | null
-  rrf_score?: number | null
+  matchedChunkId: string
+  chunkSearchText: string
+  textScore?: number | null
+  similarityScore?: number | null
+  vectorScore?: number | null
+  rrfScore?: number | null
 }
 
 /**
@@ -376,10 +372,10 @@ function computeBaseScore(
   memory: Memory,
   target: MemoryAccessTarget
 ) {
-  const rrfScore = clamp01((row.rrf_score ?? 0) * 18)
-  const vectorScore = Math.max(0, row.vector_score ?? 0)
-  const textScore = clamp01(row.text_score ?? 0)
-  const similarityScore = clamp01(row.similarity_score ?? 0)
+  const rrfScore = clamp01((row.rrfScore ?? 0) * 18)
+  const vectorScore = Math.max(0, row.vectorScore ?? 0)
+  const textScore = clamp01(row.textScore ?? 0)
+  const similarityScore = clamp01(row.similarityScore ?? 0)
   const importanceScore = clamp01(row.importance ?? 0)
   const confidenceScore = clamp01(row.confidence ?? 0)
   const baseScore =
@@ -947,36 +943,33 @@ function fuseCandidateRows(sources: Array<{ rows: SearchCandidateRow[] }>) {
 
   for (const source of sources) {
     source.rows.forEach((row, index) => {
-      const key = `${row.id}:${row.matched_chunk_id}`
+      const key = `${row.id}:${row.matchedChunkId}`
       const contribution = 1 / (MEMORY_RRF_K + index + 1)
       const existing = byChunkKey.get(key)
 
       if (!existing) {
         byChunkKey.set(key, {
           ...row,
-          rrf_score: contribution,
+          rrfScore: contribution,
         })
         return
       }
 
-      existing.rrf_score = (existing.rrf_score ?? 0) + contribution
-      existing.text_score = Math.max(
-        existing.text_score ?? 0,
-        row.text_score ?? 0
+      existing.rrfScore = (existing.rrfScore ?? 0) + contribution
+      existing.textScore = Math.max(existing.textScore ?? 0, row.textScore ?? 0)
+      existing.similarityScore = Math.max(
+        existing.similarityScore ?? 0,
+        row.similarityScore ?? 0
       )
-      existing.similarity_score = Math.max(
-        existing.similarity_score ?? 0,
-        row.similarity_score ?? 0
-      )
-      existing.vector_score = Math.max(
-        existing.vector_score ?? 0,
-        row.vector_score ?? 0
+      existing.vectorScore = Math.max(
+        existing.vectorScore ?? 0,
+        row.vectorScore ?? 0
       )
     })
   }
 
   return Array.from(byChunkKey.values()).sort(
-    (left, right) => (right.rrf_score ?? 0) - (left.rrf_score ?? 0)
+    (left, right) => (right.rrfScore ?? 0) - (left.rrfScore ?? 0)
   )
 }
 
@@ -1104,7 +1097,7 @@ async function buildSearchHits(params: {
   const bestByMemoryId = new Map<string, SearchCandidateRow>()
   for (const row of rows) {
     const existing = bestByMemoryId.get(row.id)
-    if (!existing || (existing.rrf_score ?? 0) < (row.rrf_score ?? 0)) {
+    if (!existing || (existing.rrfScore ?? 0) < (row.rrfScore ?? 0)) {
       bestByMemoryId.set(row.id, row)
     }
   }
@@ -1122,7 +1115,7 @@ async function buildSearchHits(params: {
         baseScore: computeBaseScore(row, memory, params.target),
         mmrTokens: new Set(
           tokenizeMemorySearchText(
-            row.chunk_search_text || memory.textDigest || memory.searchText
+            row.chunkSearchText || memory.textDigest || memory.searchText
           )
         ),
       }
@@ -1138,15 +1131,15 @@ async function buildSearchHits(params: {
     ({ row, memory, baseScore }, index) =>
       ({
         ...memory,
-        matchedChunkId: row.matched_chunk_id,
+        matchedChunkId: row.matchedChunkId,
         rank: index + 1,
         finalScore: baseScore,
-        vectorScore: row.vector_score ?? undefined,
-        textScore: row.text_score ?? undefined,
-        similarityScore: row.similarity_score ?? undefined,
+        vectorScore: row.vectorScore ?? undefined,
+        textScore: row.textScore ?? undefined,
+        similarityScore: row.similarityScore ?? undefined,
         matchedTerms: computeMatchedTerms(
           params.queryText,
-          row.chunk_search_text
+          row.chunkSearchText
         ),
       }) satisfies MemoryRecallResult
   )
@@ -1457,7 +1450,7 @@ export async function moveMemoryToSpace(
 
   // No-op move: source and target are the same space. Skip the permission
   // dance and the UPDATE; report the unchanged memory.
-  if (existingTarget && existingTarget.id === existingRow.memory_space_id) {
+  if (existingTarget && existingTarget.id === existingRow.memorySpaceId) {
     const same = await getMemory(workspaceId, memoryId)
     if (!same) {
       throw new MemoryError("Memory disappeared during move (unexpected)", 500)
@@ -1507,7 +1500,7 @@ export async function moveMemoryToSpace(
   await moveMemoryItemToSpaceTx({
     workspaceId,
     memoryId,
-    sourceMemorySpaceId: existingRow.memory_space_id,
+    sourceMemorySpaceId: existingRow.memorySpaceId,
     owner: target.owner,
     scope: target.scope,
     namespaceKey: target.namespaceKey,

@@ -9,6 +9,7 @@
 // (presenter.ts does the Date→IsoInstant + JSON decode), so this file never
 // serializes datetimes or parses JSON. round-6 P1-6.
 
+import { parseJsonObject } from "@synapse/shared"
 import { sql } from "kysely"
 import {
   db,
@@ -20,7 +21,9 @@ import type {
   ToolCallTaskInsert,
   ToolCallTaskLifecycleStatus,
   ToolCallTaskOutputChunkInsert,
+  ToolCallTaskOutputChunkRawRow,
   ToolCallTaskOutputChunkRow,
+  ToolCallTaskRawRow,
   ToolCallTaskRow,
 } from "./repo.types.js"
 
@@ -48,6 +51,66 @@ const NON_TERMINAL_TOOL_CALL_TASK_STATUSES: ToolCallTaskLifecycleStatus[] = [
   "auth_required",
 ]
 
+export function normalizeToolCallTaskRow(
+  row: ToolCallTaskRawRow
+): ToolCallTaskRow {
+  return {
+    id: row.id,
+    workspaceId: row.workspaceId,
+    conversationId: row.conversationId,
+    executorKind: row.executorKind,
+    deliveryKind: row.deliveryKind,
+    humanSurface: row.humanSurface,
+    principalSubjectId: row.principalSubjectId,
+    sessionId: row.sessionId,
+    remoteAgentRunId: row.remoteAgentRunId,
+    turnId: row.turnId,
+    sourceToolCallId: row.sourceToolCallId,
+    sourceToolName: row.sourceToolName,
+    lifecycleStatus: row.lifecycleStatus,
+    outcome: row.outcome,
+    statusMessage: row.statusMessage,
+    supportsCancel: row.supportsCancel,
+    supportsOutputTail: row.supportsOutputTail,
+    revision: row.revision,
+    requestKey: row.requestKey,
+    requesterParticipantId: row.requesterParticipantId,
+    targetParticipantId: row.targetParticipantId,
+    resolvedByParticipantId: row.resolvedByParticipantId,
+    resolvedAt: row.resolvedAt,
+    requestPayload: parseJsonObject(row.requestPayload),
+    immediateResultPayload: parseJsonObject(row.immediateResultPayload),
+    finalResultPayload: parseJsonObject(row.finalResultPayload),
+    finalErrorPayload: parseJsonObject(row.finalErrorPayload),
+    metadata: parseJsonObject(row.metadata),
+    conversationItemId: row.conversationItemId,
+    completionItemId: row.completionItemId,
+    deadlineAt: row.deadlineAt,
+    expiresAt: row.expiresAt,
+    retentionTtlMs: row.retentionTtlMs,
+    retainUntil: row.retainUntil,
+    cancelRequestedAt: row.cancelRequestedAt,
+    cancelReason: row.cancelReason,
+    lastOutputSeq: row.lastOutputSeq,
+    lastOutputAt: row.lastOutputAt,
+    completedAt: row.completedAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  }
+}
+
+export function normalizeToolCallTaskOutputChunkRow(
+  row: ToolCallTaskOutputChunkRawRow
+): ToolCallTaskOutputChunkRow {
+  return {
+    seq: row.seq,
+    stream: row.stream,
+    textValue: row.textValue,
+    createdAt: row.createdAt,
+    metadata: parseJsonObject(row.metadata),
+  }
+}
+
 /** Minimal session row used by the session_wakeup precondition check. */
 export async function selectSessionStatusRow(
   run: Executor,
@@ -72,7 +135,7 @@ export async function insertToolCallTaskRow(
     .values(row)
     .returningAll()
     .executeTakeFirst()
-  return created ?? null
+  return created ? normalizeToolCallTaskRow(created) : null
 }
 
 /**
@@ -100,7 +163,7 @@ export async function insertToolCallTaskRowDeduped(
     )
     .returningAll()
     .executeTakeFirst()
-  return created ?? null
+  return created ? normalizeToolCallTaskRow(created) : null
 }
 
 /**
@@ -124,7 +187,7 @@ export async function selectLiveToolCallTaskByRequestKey(
     ])
     .limit(1)
     .executeTakeFirst()
-  return row ?? null
+  return row ? normalizeToolCallTaskRow(row) : null
 }
 
 /** Fetch a single tool-call task by id. */
@@ -138,7 +201,7 @@ export async function selectToolCallTaskById(
     .where("id", "=", taskId)
     .limit(1)
     .executeTakeFirst()
-  return row ?? null
+  return row ? normalizeToolCallTaskRow(row) : null
 }
 
 /** Fetch a single tool-call task scoped to a session. */
@@ -154,7 +217,7 @@ export async function selectToolCallTaskForSession(
     .where("sessionId", "=", sessionId)
     .limit(1)
     .executeTakeFirst()
-  return row ?? null
+  return row ? normalizeToolCallTaskRow(row) : null
 }
 
 /** List a session's tool-call tasks (optionally filtered by status), newest first. */
@@ -175,7 +238,11 @@ export async function selectToolCallTasksForSession(
     statement = statement.where("lifecycleStatus", "in", params.statuses)
   }
 
-  return statement.orderBy("createdAt", "desc").limit(params.limit).execute()
+  const rows = await statement
+    .orderBy("createdAt", "desc")
+    .limit(params.limit)
+    .execute()
+  return rows.map(normalizeToolCallTaskRow)
 }
 
 /**
@@ -204,10 +271,11 @@ export async function selectToolCallTaskOutputChunks(
     statement = statement.where("stream", "=", params.stream)
   }
 
-  return statement
+  const rows = await statement
     .orderBy("seq", params.afterSeq > 0 ? "asc" : "desc")
     .limit(params.limit)
     .execute()
+  return rows.map(normalizeToolCallTaskOutputChunkRow)
 }
 
 /** Insert an output chunk with a caller-supplied seq (idempotent on conflict). */
@@ -299,7 +367,7 @@ export async function updateToolCallTaskRow(
   }
 
   const row = await update.returningAll().executeTakeFirst()
-  return row ?? null
+  return row ? normalizeToolCallTaskRow(row) : null
 }
 
 /**
@@ -319,7 +387,7 @@ export async function flipToolCallTaskTerminal(
     .where("lifecycleStatus", "in", NON_TERMINAL_TOOL_CALL_TASK_STATUSES)
     .returningAll()
     .executeTakeFirst()
-  return row ?? null
+  return row ? normalizeToolCallTaskRow(row) : null
 }
 
 /**
@@ -337,7 +405,7 @@ export async function setToolCallTaskCompletionItem(
     .where("id", "=", taskId)
     .returningAll()
     .executeTakeFirst()
-  return row ?? null
+  return row ? normalizeToolCallTaskRow(row) : null
 }
 
 /**

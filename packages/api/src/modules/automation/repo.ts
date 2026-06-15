@@ -4,9 +4,8 @@
 // client (guard r8). Owns the integration-installation row read PLUS the
 // module's raw-SQL runner layer, the withDbTransaction wrapper, the shared
 // audit-log writer, and thin Kysely/runBuilder query helpers that the service
-// composes. Business mapping (JSON decode via asObject, decryptSensitiveFields,
-// provider resolution) stays in integrations.ts / service.ts so the repo is a
-// thin row layer. round-6 P1-6.
+// composes. Selected DB JSONB business fields are decoded here before service
+// orchestration consumes them. round-6 P1-6.
 //
 // Atomicity: every helper here that participates in a write transaction takes an
 // injected `run: Executor` (or a `runner: QueryRunner` built from `runnerFor`)
@@ -20,11 +19,13 @@ import {
   withDbTransaction,
   type Executor,
 } from "../../infrastructure/database/kysely.js"
+import { parseJsonObject } from "@synapse/shared"
 import type {
   AutomationEventProviderKind,
   AutomationEventSourceStatus,
   AutomationExecutionStatus,
   AutomationWebhookEndpoint,
+  Timestamp,
 } from "@synapse/shared"
 import {
   loadAutomationEventSourceAccessBindingRowsForSources,
@@ -32,15 +33,42 @@ import {
   updateAutomationEventSourceAccessGrantConversationTypeMaskOverride,
 } from "../access/binding-storage.js"
 import type { AutomationEventSourceBindingJoinedRow } from "../access/bindings.js"
+import type {
+  AutomationDeliveryDbRow,
+  AutomationDeliveryRow,
+  AutomationEventSourceDbRow,
+  AutomationEventSourceRow,
+  AutomationExecutionWithOccurrenceDbRow,
+  AutomationExecutionWithOccurrenceRow,
+  AutomationOccurrenceDbRow,
+  AutomationOccurrenceRow,
+  AutomationPolicyDbRow,
+  AutomationPolicyRow,
+  AutomationRuleDbRow,
+  AutomationRuleRow,
+  AutomationTriggerDbRow,
+  AutomationTriggerRow,
+  AutomationWebhookEndpointDbRow,
+  AutomationWebhookEndpointRow,
+} from "./repo.types.js"
 
 export type {
+  AutomationDeliveryDbRow,
   AutomationDeliveryRow,
+  AutomationEventSourceDbRow,
   AutomationEventSourceRow,
+  AutomationExecutionWithOccurrenceDbRow,
+  AutomationExecutionWithOccurrenceRow,
   AutomationExecutionRow,
+  AutomationOccurrenceDbRow,
   AutomationOccurrenceRow,
+  AutomationPolicyDbRow,
   AutomationPolicyRow,
+  AutomationRuleDbRow,
   AutomationRuleRow,
+  AutomationTriggerDbRow,
   AutomationTriggerRow,
+  AutomationWebhookEndpointDbRow,
   AutomationWebhookEndpointRow,
 } from "./repo.types.js"
 
@@ -58,6 +86,118 @@ export type IntegrationInstallationRow = {
   orgSlug: string
   itemSlug: string
   specMetadata: unknown
+}
+
+export type AutomationEventSourceReuseRow = {
+  id: string
+  metadata: Record<string, unknown>
+}
+
+export type IntegrationAutomationEventSourceReuseRow =
+  AutomationEventSourceReuseRow & {
+    status: AutomationEventSourceStatus
+  }
+
+export type AutomationRuleEventMatcherRecord = {
+  ruleId: string
+  matcher: Record<string, unknown>
+}
+
+export function decodeAutomationEventSourceMetadata(row: {
+  metadata: unknown
+}): Record<string, unknown> {
+  return parseJsonObject(row.metadata)
+}
+
+export function decodeAutomationTriggerMatcher(row: {
+  matcher: unknown
+}): Record<string, unknown> {
+  return parseJsonObject(row.matcher)
+}
+
+export function normalizeAutomationRuleRow(
+  row: AutomationRuleDbRow
+): AutomationRuleRow {
+  const normalized = {
+    ...row,
+    metadata: parseJsonObject(row.metadata),
+  }
+  return normalized
+}
+
+export function normalizeAutomationTriggerRow(
+  row: AutomationTriggerDbRow
+): AutomationTriggerRow {
+  const normalized = {
+    ...row,
+    matcher: parseJsonObject(row.matcher),
+    metadata: parseJsonObject(row.metadata),
+  }
+  return normalized
+}
+
+export function normalizeAutomationPolicyRow(
+  row: AutomationPolicyDbRow
+): AutomationPolicyRow {
+  const normalized = {
+    ...row,
+    metadata: parseJsonObject(row.metadata),
+  }
+  return normalized
+}
+
+export function normalizeAutomationDeliveryRow(
+  row: AutomationDeliveryDbRow
+): AutomationDeliveryRow {
+  const normalized = {
+    ...row,
+    metadata: parseJsonObject(row.metadata),
+  }
+  return normalized
+}
+
+export function normalizeAutomationEventSourceRow(
+  row: AutomationEventSourceDbRow
+): AutomationEventSourceRow {
+  const normalized = {
+    ...row,
+    payload_schema: parseJsonObject(row.payload_schema),
+    example_payload: parseJsonObject(row.example_payload),
+    metadata: parseJsonObject(row.metadata),
+  }
+  return normalized
+}
+
+export function normalizeAutomationOccurrenceRow(
+  row: AutomationOccurrenceDbRow
+): AutomationOccurrenceRow {
+  const normalized = {
+    ...row,
+    source_snapshot: parseJsonObject(row.source_snapshot),
+    payload: parseJsonObject(row.payload),
+  }
+  return normalized
+}
+
+export function normalizeAutomationExecutionWithOccurrenceRow(
+  row: AutomationExecutionWithOccurrenceDbRow
+): AutomationExecutionWithOccurrenceRow {
+  const normalized = {
+    ...row,
+    source_snapshot: parseJsonObject(row.source_snapshot),
+    payload: parseJsonObject(row.payload),
+  }
+  return normalized
+}
+
+export function normalizeAutomationWebhookEndpointRow(
+  row: AutomationWebhookEndpointDbRow
+): AutomationWebhookEndpointRow {
+  const normalized = {
+    ...row,
+    metadata: parseJsonObject(row.metadata),
+  }
+  return normalized
 }
 
 /**
@@ -235,10 +375,7 @@ export async function selectIntegrationEventSourceReuseRow(params: {
   workspaceId: string
   bindingId: string
   sourceKey: string
-}): Promise<
-  | { id: string; status: AutomationEventSourceStatus; metadata: unknown }
-  | undefined
-> {
+}): Promise<IntegrationAutomationEventSourceReuseRow | undefined> {
   const result = await runBuilder<{
     id: string
     status: AutomationEventSourceStatus
@@ -254,7 +391,14 @@ export async function selectIntegrationEventSourceReuseRow(params: {
       .where("sourceKey", "=", params.sourceKey)
       .limit(1)
   )
-  return result.rows[0]
+  const row = result.rows[0]
+  return row
+    ? {
+        id: row.id,
+        status: row.status,
+        metadata: decodeAutomationEventSourceMetadata(row),
+      }
+    : undefined
 }
 
 /**
@@ -266,7 +410,7 @@ export async function selectAutomationEventSourceReuseRow(params: {
   providerKind: AutomationEventProviderKind
   providerRef?: string | null
   sourceKey: string
-}): Promise<{ id: string; metadata: unknown } | undefined> {
+}): Promise<AutomationEventSourceReuseRow | undefined> {
   const result = await runBuilder<{ id: string; metadata: unknown }>(
     db,
     db
@@ -282,7 +426,10 @@ export async function selectAutomationEventSourceReuseRow(params: {
       .where("sourceKey", "=", params.sourceKey)
       .limit(1)
   )
-  return result.rows[0]
+  const row = result.rows[0]
+  return row
+    ? { id: row.id, metadata: decodeAutomationEventSourceMetadata(row) }
+    : undefined
 }
 
 /**
@@ -313,6 +460,38 @@ export async function selectActiveAutomationEventSourceId(params: {
       .limit(1)
   )
   return result.rows[0]?.id
+}
+
+/**
+ * Load active event-triggered rules for an event source and decode trigger
+ * matcher JSON at the repo exit. The service only applies subsetMatch against
+ * already-decoded matcher objects.
+ */
+export async function selectActiveAutomationRuleEventMatchers(params: {
+  workspaceId: string
+  eventSourceId: string
+  occurredAt: Timestamp
+}): Promise<AutomationRuleEventMatcherRecord[]> {
+  const result = await runQuery<{ id: string; matcher: unknown }>(
+    `SELECT ar.id, at.matcher
+     FROM automation_rules ar
+     JOIN automation_triggers at ON at.rule_id = ar.id
+     JOIN automation_policies ap ON ap.rule_id = ar.id
+     WHERE ar.workspace_id = $1
+       AND ar.status = 'active'
+       AND ar.deleted_at IS NULL
+       AND at.trigger_kind = 'event'
+       AND at.event_source_id = $2
+       AND (ap.active_from IS NULL OR ap.active_from <= $3)
+       AND (ap.active_until IS NULL OR ap.active_until >= $3)
+       AND (ap.max_trigger_count IS NULL OR ap.trigger_count < ap.max_trigger_count)`,
+    [params.workspaceId, params.eventSourceId, params.occurredAt]
+  )
+
+  return result.rows.map((row) => ({
+    ruleId: row.id,
+    matcher: decodeAutomationTriggerMatcher(row),
+  }))
 }
 
 // ---------------------------------------------------------------------------

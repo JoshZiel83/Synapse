@@ -12,11 +12,27 @@ import type {
   Executor,
 } from "../../infrastructure/database/kysely.js"
 import type {
+  RuntimeAuthorizationGrantCandidate,
+  RuntimeAuthorizationGrantCandidateRecord,
   RuntimeAuthorizationGrantCandidateRow,
   RuntimeAuthorizationGrantPolicyInsert,
   RuntimeAuthorizationGrantSourceRequestArgsInsert,
 } from "./repo.types.js"
 import type { RuntimeAuthorizationGrantRetention } from "@synapse/shared/types"
+import {
+  actorRef,
+  conversationRef,
+  parseJsonObject,
+  remoteAgentRef,
+  SUBJECT_KIND,
+  workspaceMemberRef,
+  workspaceRef,
+} from "@synapse/shared"
+import {
+  validateGrantPolicyForCapability,
+  type PolicyValidationFailure,
+} from "@synapse/shared/access/policies"
+import type { ZodIssue } from "zod"
 
 /**
  * Device tool runtime target (service id, tool revision, etc.) for a freshly
@@ -213,9 +229,10 @@ export async function hasNewUserFacingConversationMessage(
 // r8). Every fn takes an injected `executor: Executor` (db or an in-flight
 // transaction) so the service can keep its multi-statement transactions atomic
 // and thread the same trx into both these repo fns and the cross-module
-// helpers (upsertAccessSubject, beginDeviceOperationOn). Rows are returned RAW
-// (camelCase via CamelCasePlugin, Date objects intact); the service/presenter
-// owns rowToCandidate hydration, policy validation, and instant serialization.
+// helpers (upsertAccessSubject, beginDeviceOperationOn). Rows are returned
+// camelCase via CamelCasePlugin, Date objects intact. This repo layer owns
+// subject hydration and business JSON policy parsing/validation; presenter owns
+// instant serialization.
 // ============================================================================
 
 /**
@@ -256,6 +273,154 @@ function runtimeAuthorizationGrantSelectColumns() {
     "scope_subj.workspaceId as scopeWorkspaceId",
     "scope_subj.conversationId as scopeConversationId",
   ] as const
+}
+
+/**
+ * Helper: hydrate a joined access_subjects row into a typed SubjectRef. This is
+ * part of repo-exit row decoding because the joined columns are DB projections,
+ * not service-domain inputs.
+ */
+function subjectRowToRef(input: {
+  kind: string
+  workspaceId: string | null
+  workspaceMemberId: string | null
+  actorId: string | null
+  remoteAgentId: string | null
+  conversationId: string | null
+}) {
+  switch (input.kind) {
+    case SUBJECT_KIND.WORKSPACE:
+      if (!input.workspaceId) {
+        throw new InvalidGrantSubjectRowError(
+          "workspace subject missing workspace_id"
+        )
+      }
+      return workspaceRef(input.workspaceId)
+    case SUBJECT_KIND.WORKSPACE_MEMBER:
+      if (!input.workspaceMemberId) {
+        throw new InvalidGrantSubjectRowError(
+          "workspace_member subject missing workspace_member_id"
+        )
+      }
+      return workspaceMemberRef(input.workspaceMemberId)
+    case SUBJECT_KIND.ACTOR:
+      if (!input.actorId) {
+        throw new InvalidGrantSubjectRowError("actor subject missing actor_id")
+      }
+      return actorRef(input.actorId)
+    case SUBJECT_KIND.REMOTE_AGENT:
+      if (!input.remoteAgentId) {
+        throw new InvalidGrantSubjectRowError(
+          "remote_agent subject missing remote_agent_id"
+        )
+      }
+      return remoteAgentRef(input.remoteAgentId)
+    case SUBJECT_KIND.CONVERSATION:
+      if (!input.conversationId) {
+        throw new InvalidGrantSubjectRowError(
+          "conversation subject missing conversation_id"
+        )
+      }
+      return conversationRef(input.conversationId)
+    default:
+      throw new InvalidGrantSubjectRowError(
+        `unsupported subject kind ${input.kind}`
+      )
+  }
+}
+
+export class InvalidGrantSubjectRowError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "InvalidGrantSubjectRowError"
+  }
+}
+
+/**
+ * Decode a grant row into the domain candidate shape consumed by service logic.
+ * Business JSON (`policy`, `sourceRequestArgs`) is parsed/validated at repo
+ * exit so downstream code handles typed records instead of raw JSONB.
+ */
+export function runtimeAuthorizationGrantRowToCandidate(
+  row: RuntimeAuthorizationGrantCandidateRow
+): RuntimeAuthorizationGrantCandidate {
+  const subject = subjectRowToRef({
+    kind: row.subjectKind,
+    workspaceId: row.subjectWorkspaceId,
+    workspaceMemberId: row.subjectWorkspaceMemberId,
+    actorId: row.subjectActorId,
+    remoteAgentId: row.subjectRemoteAgentId,
+    conversationId: row.subjectConversationId,
+  })
+  const scope = row.scopeKind
+    ? subjectRowToRef({
+        kind: row.scopeKind,
+        workspaceId: row.scopeWorkspaceId,
+        workspaceMemberId: null,
+        actorId: null,
+        remoteAgentId: null,
+        conversationId: row.scopeConversationId,
+      })
+    : undefined
+  const rawPolicy = parseJsonObject(row.policy)
+  const validationResult = validateGrantPolicyForCapability(rawPolicy)
+  return {
+    rawRow: normalizeRuntimeAuthorizationGrantRow(row),
+    rawPolicy,
+    policyValidationResult: validationResult,
+    subject,
+    scope,
+    retention: row.retention,
+    retryNonceOnRow: row.sourceRetryNonce || undefined,
+    sourceTaskIdOnRow: row.sourceTaskId || undefined,
+  }
+}
+
+function normalizeRuntimeAuthorizationGrantRow(
+  row: RuntimeAuthorizationGrantCandidateRow
+): RuntimeAuthorizationGrantCandidateRecord {
+  return {
+    id: row.id,
+    workspaceId: row.workspaceId,
+    deviceId: row.deviceId,
+    deviceCapabilityId: row.deviceCapabilityId,
+    deviceExposureId: row.deviceExposureId,
+    subjectId: row.subjectId,
+    scopeSubjectId: row.scopeSubjectId,
+    createdByWorkspaceMemberId: row.createdByWorkspaceMemberId,
+    sourceTaskId: row.sourceTaskId,
+    retention: row.retention,
+    status: row.status,
+    policy: row.policy,
+    sourceRetryNonce: row.sourceRetryNonce,
+    sourceRuntimeSessionId: row.sourceRuntimeSessionId,
+    sourceRequestArgs: parseJsonObject(row.sourceRequestArgs),
+    consumedAt: row.consumedAt,
+    revokedAt: row.revokedAt,
+    supersededAt: row.supersededAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  }
+}
+
+export function runtimeAuthorizationGrantPolicyCapability(
+  policy: unknown
+): unknown {
+  return parseJsonObject(policy).capability
+}
+
+export function runtimeAuthorizationGrantSubjectFailure(
+  err: unknown
+): PolicyValidationFailure {
+  const issue: ZodIssue = {
+    code: "custom",
+    message: err instanceof Error ? err.message : String(err),
+    path: ["subject"],
+  }
+  return {
+    kind: "parse_error",
+    issues: [issue],
+  }
 }
 
 /** Single grant row by id (get + post-insert refetch). Returns undefined when absent. */

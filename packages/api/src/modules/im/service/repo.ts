@@ -43,7 +43,7 @@ import {
   serializeInstant,
   serializeOptionalInstant,
 } from "../../../infrastructure/datetime.js"
-import { parseJsonArray, readTrimmedString } from "./_helpers.js"
+import { readTrimmedString } from "./_helpers.js"
 
 type TransportAccountRow = {
   id: string
@@ -140,6 +140,48 @@ type TransportMessageLinkRow = {
   updatedAt?: Date | null
 }
 
+export function decodeTransportAccountCredentials(row: {
+  credentials: unknown
+}): Record<string, unknown> {
+  return parseJsonObject(row.credentials)
+}
+
+export function decodeTransportAccountConfig(row: {
+  config: unknown
+}): Record<string, unknown> {
+  return parseJsonObject(row.config)
+}
+
+export function decodeTransportAccountMetadata(row: {
+  metadata: unknown
+}): Record<string, unknown> {
+  return parseJsonObject(row.metadata)
+}
+
+export function decodeTransportMessageLinkMetadata(row: {
+  metadata: unknown
+}): Record<string, unknown> {
+  return parseJsonObject(row.metadata)
+}
+
+export function decodeConversationItemMetadata(row: {
+  itemMetadata: unknown
+}): Record<string, unknown> {
+  return parseJsonObject(row.itemMetadata)
+}
+
+function parseJsonArray<T>(value: unknown): T[] {
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value) as unknown
+      return Array.isArray(parsed) ? (parsed as T[]) : []
+    } catch {
+      return []
+    }
+  }
+  return Array.isArray(value) ? (value as T[]) : []
+}
+
 export function normalizeAccountRow(
   row: TransportAccountRow
 ): TransportAccountSummary {
@@ -162,9 +204,9 @@ export function normalizeAccountRow(
       row.accountInboundActorId || row.inboundActorId || undefined,
     connectionMode: row.connectionMode,
     status: row.status,
-    credentials: parseJsonObject(row.credentials),
-    config: parseJsonObject(row.config),
-    metadata: parseJsonObject(row.metadata),
+    credentials: decodeTransportAccountCredentials(row),
+    config: decodeTransportAccountConfig(row),
+    metadata: decodeTransportAccountMetadata(row),
     createdAt: serializeInstant(row.createdAt),
     updatedAt: serializeInstant(row.updatedAt),
   }
@@ -326,6 +368,7 @@ export async function getWorkspaceOwnerId(
 export async function listTransportExternalUsers(params: {
   workspaceId: string
   transportAccountId?: string
+  transportAddressId?: string
 }): Promise<TransportExternalUserSummary[]> {
   const activity = db
     .selectFrom("conversationParticipantAddresses as cpa_activity")
@@ -412,6 +455,9 @@ export async function listTransportExternalUsers(params: {
       "=",
       params.transportAccountId
     )
+  }
+  if (params.transportAddressId) {
+    builder = builder.where("ta.id", "=", params.transportAddressId)
   }
 
   const rows = await builder
@@ -675,22 +721,24 @@ export async function updateTransportMessageLinkStatusRow(
 }
 
 /**
- * SELECT … FOR UPDATE the current metadata of a link inside the supplied
- * (or freshly-opened) transaction. The deep-merge + write-back live in the
- * service so the merge logic stays out of the repo; this owns only the
- * locking read so the lock is held for the duration of the merge + UPDATE.
+ * SELECT … FOR UPDATE and decode the current metadata of a link inside the
+ * supplied transaction. The deep-merge + write-back live in the service so the
+ * merge logic stays out of the repo; this owns the locking read and DB JSONB
+ * decode so the lock is held for the duration of the merge + UPDATE.
  */
 export async function selectTransportMessageLinkMetadataForUpdate(
   tx: DatabaseTransaction,
   linkId: string
-): Promise<unknown> {
+): Promise<Record<string, unknown>> {
   const existing = await tx
     .selectFrom("transportMessageLinks")
     .select("metadata")
     .where("id", "=", linkId)
     .forUpdate()
     .executeTakeFirst()
-  return existing?.metadata
+  return decodeTransportMessageLinkMetadata({
+    metadata: existing?.metadata,
+  })
 }
 
 /**

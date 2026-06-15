@@ -1,13 +1,19 @@
 import { db, withDbTransaction } from "../../infrastructure/database/kysely.js"
 import { sql } from "kysely"
-import { PLATFORM_ACCESS_KEYS } from "@synapse/shared"
+import type { PlatformAccessSource as SharedPlatformAccessSource } from "@synapse/shared"
+import {
+  PLATFORM_ACCESS_KEY,
+  PLATFORM_ACCESS_KEYS,
+  PLATFORM_ACCESS_SOURCE,
+} from "@synapse/shared"
 
 export type PlatformAccessKey = (typeof PLATFORM_ACCESS_KEYS)[number]
+export type PlatformAccessSource = SharedPlatformAccessSource
 
 export type PlatformAccessBindingRecord = {
   userId: string
-  accessKey: string
-  source: string
+  accessKey: PlatformAccessKey
+  source: PlatformAccessSource
   assignedByUserId: string | null
   createdAt: Date
   updatedAt: Date
@@ -18,8 +24,8 @@ export type PlatformAccessBindingRecord = {
 
 export type PlatformGrantRecord = {
   userId: string
-  accessKey: string
-  source: string
+  accessKey: PlatformAccessKey
+  source: PlatformAccessSource
   assignedByUserId: string | null
   createdAt: Date
   updatedAt: Date
@@ -106,14 +112,14 @@ export async function upsertManualGrant(input: {
     .values({
       userId: input.userId,
       accessKey: input.accessKey,
-      source: "manual",
+      source: PLATFORM_ACCESS_SOURCE.MANUAL,
       assignedByUserId: input.assignedByUserId,
     })
     .onConflict((oc) =>
       oc.columns(["userId", "accessKey"]).doUpdateSet({
         status: "active",
         revokedAt: null,
-        source: "manual",
+        source: PLATFORM_ACCESS_SOURCE.MANUAL,
         assignedByUserId: input.assignedByUserId,
       })
     )
@@ -136,13 +142,13 @@ export async function upsertManualGrant(input: {
 
 export async function upsertSeedSuperAdmin(
   userId: string,
-  source: "config" | "manual"
+  source: PlatformAccessSource
 ): Promise<void> {
   await db
     .insertInto("platformAccessBindings")
     .values({
       userId,
-      accessKey: "super_admin",
+      accessKey: PLATFORM_ACCESS_KEY.SUPER_ADMIN,
       source,
       assignedByUserId: null,
     })
@@ -158,7 +164,7 @@ export async function upsertSeedSuperAdmin(
 export async function selectActiveBindingSource(
   userId: string,
   accessKey: PlatformAccessKey
-): Promise<{ source: string } | undefined> {
+): Promise<{ source: PlatformAccessSource } | undefined> {
   return db
     .selectFrom("platformAccessBindings")
     .select("source")
@@ -189,15 +195,15 @@ export async function upsertConfiguredSuperAdmin(
     .insertInto("platformAccessBindings")
     .values({
       userId,
-      accessKey: "super_admin",
-      source: "config",
+      accessKey: PLATFORM_ACCESS_KEY.SUPER_ADMIN,
+      source: PLATFORM_ACCESS_SOURCE.CONFIG,
       assignedByUserId: null,
     })
     .onConflict((oc) =>
       oc.columns(["userId", "accessKey"]).doUpdateSet({
         status: "active",
         revokedAt: null,
-        source: "config",
+        source: PLATFORM_ACCESS_SOURCE.CONFIG,
       })
     )
     .execute()
@@ -223,8 +229,8 @@ export async function reconcileConfiguredSuperAdmins(
       await trx
         .updateTable("platformAccessBindings")
         .set({ status: "revoked", revokedAt: sql`NOW()` })
-        .where("source", "=", "config")
-        .where("accessKey", "=", "super_admin")
+        .where("source", "=", PLATFORM_ACCESS_SOURCE.CONFIG)
+        .where("accessKey", "=", PLATFORM_ACCESS_KEY.SUPER_ADMIN)
         .where("status", "=", "active")
         .execute()
       return
@@ -233,8 +239,8 @@ export async function reconcileConfiguredSuperAdmins(
     await trx
       .updateTable("platformAccessBindings")
       .set({ status: "revoked", revokedAt: sql`NOW()` })
-      .where("source", "=", "config")
-      .where("accessKey", "=", "super_admin")
+      .where("source", "=", PLATFORM_ACCESS_SOURCE.CONFIG)
+      .where("accessKey", "=", PLATFORM_ACCESS_KEY.SUPER_ADMIN)
       .where("userId", "not in", matchedUserIds)
       .where("status", "=", "active")
       .execute()
@@ -243,8 +249,8 @@ export async function reconcileConfiguredSuperAdmins(
       .values(
         matchedUserIds.map((userId) => ({
           userId: userId,
-          accessKey: "super_admin" as const,
-          source: "config" as const,
+          accessKey: PLATFORM_ACCESS_KEY.SUPER_ADMIN,
+          source: PLATFORM_ACCESS_SOURCE.CONFIG,
           assignedByUserId: null,
         }))
       )
@@ -252,7 +258,7 @@ export async function reconcileConfiguredSuperAdmins(
         oc.columns(["userId", "accessKey"]).doUpdateSet({
           status: "active",
           revokedAt: null,
-          source: "config",
+          source: PLATFORM_ACCESS_SOURCE.CONFIG,
         })
       )
       .execute()
@@ -263,7 +269,7 @@ export async function countActiveSuperAdmins(): Promise<number> {
   const platformAdminCount = await db
     .selectFrom("platformAccessBindings")
     .select(({ fn }) => fn.countAll<string>().as("count"))
-    .where("accessKey", "=", "super_admin")
+    .where("accessKey", "=", PLATFORM_ACCESS_KEY.SUPER_ADMIN)
     .where("status", "=", "active")
     .executeTakeFirstOrThrow()
   return Number(platformAdminCount.count)

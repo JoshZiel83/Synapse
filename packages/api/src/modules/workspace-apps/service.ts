@@ -42,8 +42,8 @@ import {
   isSubjectActiveConversationParticipantDefault,
   listGrantedWorkspaceApps,
   listImplicitOwnerWorkspaceApps,
-  listWorkspaceAppGrantRequestViewRows,
-  listWorkspaceAppGrantViewRows,
+  listWorkspaceAppGrantPresentationRows,
+  listWorkspaceAppGrantRequestPresentationRows,
   listWorkspaceAppsLive,
   loadWorkspaceMemberAccessRecord,
   replaceWorkspaceAppGrantsTx,
@@ -55,8 +55,8 @@ import {
 import {
   isCompleteWorkspaceAppRow,
   type WorkspaceAppRow,
-  type WorkspaceAppGrantViewRow,
-  type WorkspaceAppGrantRequestViewRow,
+  type WorkspaceAppGrantPresentationRow,
+  type WorkspaceAppGrantRequestPresentationRow,
 } from "./presenter.js"
 
 type WorkspaceMemberAccess = WorkspaceMemberAccessRecord
@@ -242,17 +242,17 @@ export async function getWorkspaceAppInventoryDetail(params: {
   return app
 }
 
-export async function listWorkspaceAppGrantsView(params: {
+export async function listWorkspaceAppGrantRecords(params: {
   workspaceId: string
   appId: string
   userId: string
-}): Promise<WorkspaceAppGrantViewRow[]> {
+}): Promise<WorkspaceAppGrantPresentationRow[]> {
   await requireManageWorkspaceApp(
     params.workspaceId,
     params.appId,
     params.userId
   )
-  return listWorkspaceAppGrantViewRows(params.appId)
+  return listWorkspaceAppGrantPresentationRows(params.appId)
 }
 
 export async function replaceWorkspaceAppGrants(params: {
@@ -265,7 +265,7 @@ export async function replaceWorkspaceAppGrants(params: {
     conversationTypeMaskOverride?: number | null
     reason?: string
   }>
-}): Promise<WorkspaceAppGrantViewRow[]> {
+}): Promise<WorkspaceAppGrantPresentationRow[]> {
   const { access } = await requireManageWorkspaceApp(
     params.workspaceId,
     params.appId,
@@ -277,15 +277,15 @@ export async function replaceWorkspaceAppGrants(params: {
     grants: params.grants,
     createdByWorkspaceMemberId: access.workspaceMemberId,
   })
-  return listWorkspaceAppGrantsView(params)
+  return listWorkspaceAppGrantRecords(params)
 }
 
-export async function listWorkspaceAppGrantRequestsView(params: {
+export async function listWorkspaceAppGrantRequestRecords(params: {
   workspaceId: string
   appId: string
   userId: string
   direction: WorkspaceAppGrantRequestDirection
-}): Promise<WorkspaceAppGrantRequestViewRow[]> {
+}): Promise<WorkspaceAppGrantRequestPresentationRow[]> {
   const identity = await requireWorkspaceMemberIdentity(
     params.workspaceId,
     params.userId
@@ -297,7 +297,7 @@ export async function listWorkspaceAppGrantRequestsView(params: {
       params.userId
     )
   }
-  return listWorkspaceAppGrantRequestViewRows({
+  return listWorkspaceAppGrantRequestPresentationRows({
     appId: params.appId,
     direction: params.direction,
     requesterWorkspaceMemberId: identity.workspaceMemberId,
@@ -309,7 +309,7 @@ export async function submitWorkspaceAppGrantRequest(params: {
   appId: string
   userId: string
   reason?: string
-}): Promise<WorkspaceAppGrantRequestViewRow> {
+}): Promise<WorkspaceAppGrantRequestPresentationRow> {
   const identity = await requireWorkspaceMemberIdentity(
     params.workspaceId,
     params.userId
@@ -327,7 +327,7 @@ export async function submitWorkspaceAppGrantRequest(params: {
     requesterWorkspaceMemberId: identity.workspaceMemberId,
     reason: params.reason ?? null,
   })
-  const record: WorkspaceAppGrantRequestViewRow = {
+  const record: WorkspaceAppGrantRequestPresentationRow = {
     ...row,
     granteeKind: SUBJECT_KIND.WORKSPACE_MEMBER,
     granteeWorkspaceIdViaJoin: params.workspaceId,
@@ -347,7 +347,7 @@ export async function approveWorkspaceAppGrantRequest(params: {
   appId: string
   requestId: string
   userId: string
-}): Promise<WorkspaceAppGrantRequestViewRow> {
+}): Promise<WorkspaceAppGrantRequestPresentationRow> {
   const { access } = await requireManageWorkspaceApp(
     params.workspaceId,
     params.appId,
@@ -360,7 +360,7 @@ export async function approveWorkspaceAppGrantRequest(params: {
     approverWorkspaceMemberId: access.workspaceMemberId,
     decision: "approve",
   })
-  return listWorkspaceAppGrantRequestsView({
+  return listWorkspaceAppGrantRequestRecords({
     workspaceId: params.workspaceId,
     appId: params.appId,
     userId: params.userId,
@@ -373,7 +373,7 @@ export async function rejectWorkspaceAppGrantRequest(params: {
   appId: string
   requestId: string
   userId: string
-}): Promise<WorkspaceAppGrantRequestViewRow> {
+}): Promise<WorkspaceAppGrantRequestPresentationRow> {
   const { access } = await requireManageWorkspaceApp(
     params.workspaceId,
     params.appId,
@@ -386,7 +386,7 @@ export async function rejectWorkspaceAppGrantRequest(params: {
     approverWorkspaceMemberId: access.workspaceMemberId,
     decision: "reject",
   })
-  return listWorkspaceAppGrantRequestsView({
+  return listWorkspaceAppGrantRequestRecords({
     workspaceId: params.workspaceId,
     appId: params.appId,
     userId: params.userId,
@@ -591,7 +591,7 @@ export async function createWorkspaceApp(params: {
     })
     return getWorkspaceAppInventoryDetail({
       workspaceId: params.workspaceId,
-      appId: installation.id,
+      appId: installation.row.installationId,
       userId: params.userId,
     })
   }

@@ -13,7 +13,11 @@ import {
   type Executor,
 } from "../../infrastructure/database/kysely.js"
 import { sql } from "kysely"
-import { SUBJECT_KIND, THREAD_CONVERSATION_KINDS } from "@synapse/shared"
+import {
+  parseJsonObject,
+  SUBJECT_KIND,
+  THREAD_CONVERSATION_KINDS,
+} from "@synapse/shared"
 import type {
   UUID,
   SessionStatus,
@@ -24,6 +28,13 @@ import type {
 import { upsertAccessSubjectOn } from "../access/subject-registry.js"
 import type {
   ConversationItemPartRow,
+  SessionDbRow,
+  ToolCallDbRow,
+  ToolCallRow,
+  ToolCallTaskDbRow,
+  ToolResultDbRow,
+  SessionWakeupDbRow,
+  SessionMessageItemDbRow,
   SessionMessageItemRow,
   SessionRow,
   SessionWakeupMetadataInsert,
@@ -33,6 +44,103 @@ import type {
   ToolResultRow,
 } from "./repo.types.js"
 import type { EnqueueSessionWakeupParams } from "./runtime.js"
+import { parseSessionCollaborationState } from "./collaboration-state.js"
+
+function parseCollaborationStateJson(value: unknown): Record<string, unknown> {
+  if (!value) return {}
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value) as unknown
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("collaboration_state must be a JSON object")
+      }
+      return parsed as Record<string, unknown>
+    } catch (error) {
+      throw new Error(
+        `collaboration_state must be valid JSON: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      )
+    }
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("collaboration_state must be an object")
+  }
+  return value as Record<string, unknown>
+}
+
+export function decodeSessionCollaborationState(value: unknown) {
+  return parseSessionCollaborationState(parseCollaborationStateJson(value))
+}
+
+export function normalizeSessionRow(row: SessionDbRow): SessionRow {
+  const normalized = {
+    ...row,
+    collaborationState: decodeSessionCollaborationState(row.collaborationState),
+  }
+  return normalized
+}
+
+export function normalizeSessionMessageItemRow(
+  row: SessionMessageItemDbRow
+): SessionMessageItemRow {
+  const normalized = {
+    ...row,
+    metadata: { ...parseJsonObject(row.metadata) },
+  }
+  return normalized
+}
+
+export function normalizeSessionWakeupRow(
+  row: SessionWakeupDbRow
+): SessionWakeupRow {
+  const normalized = {
+    ...row,
+    metadata: { ...parseJsonObject(row.metadata) },
+  }
+  return normalized
+}
+
+function parseJsonValue(value: unknown): unknown {
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value) as unknown
+    } catch {
+      return value
+    }
+  }
+  return value
+}
+
+export function normalizeRuntimeToolCallRow(row: ToolCallDbRow): ToolCallRow {
+  const normalized = {
+    ...row,
+    normalizedInput: { ...parseJsonObject(row.normalizedInput) },
+    sourceSnapshot: { ...parseJsonObject(row.sourceSnapshot) },
+  }
+  return normalized
+}
+
+export function normalizeRuntimeToolResultRow(
+  row: ToolResultDbRow
+): ToolResultRow {
+  const normalized = {
+    ...row,
+    metadata: { ...parseJsonObject(row.metadata) },
+  }
+  return normalized
+}
+
+export function normalizeRuntimeToolCallTaskRow(
+  row: ToolCallTaskDbRow
+): ToolCallTaskRow {
+  const normalized = {
+    ...row,
+    finalErrorPayload: parseJsonValue(row.finalErrorPayload),
+    finalResultPayload: parseJsonValue(row.finalResultPayload),
+  }
+  return normalized
+}
 
 export async function getActorJoinVersionId(actorId: UUID) {
   const row = await db
@@ -75,7 +183,7 @@ export async function loadSessionRow(
     ])
     .where("s.id", "=", sessionId)
     .executeTakeFirst()
-  return (row as SessionRow | undefined) ?? null
+  return row ? normalizeSessionRow(row as SessionDbRow) : null
 }
 
 export async function getConversationActorSessionRow(
@@ -233,7 +341,9 @@ export async function getSessionMessageItemRows(
     .orderBy("ci.createdAt", "asc")
     .orderBy("ci.sequence", "asc")
     .execute()
-  return items as unknown as SessionMessageItemRow[]
+  return (items as unknown as SessionMessageItemDbRow[]).map(
+    normalizeSessionMessageItemRow
+  )
 }
 
 export async function getSessionMessagePartRows(
@@ -298,7 +408,8 @@ export async function hasPendingSessionInterrupt(
 // These back the runtime snapshot/turn-activity reads and the session-wakeup
 // write edge. Reads return camelCase DOMAIN rows with Date columns intact —
 // runtime.ts does the Date→IsoInstant serialization (presentWakeup /
-// buildToolActivityDetail) and JSON metadata decoding (guard r3/r5). The write
+// buildToolActivityDetail). The repo decodes session_wakeups.metadata before
+// runtime presentation consumes it. The write
 // helpers take an injected `executor: Executor` so they can participate in a
 // caller's transaction (e.g. tool-call-tasks delivery commits a wakeup row +
 // task-completion marker atomically); the `= db` default lives here in the repo
@@ -310,26 +421,30 @@ export async function listSessionWakeups(
   sessionId: string,
   statuses: SessionWakeupStatus[]
 ): Promise<SessionWakeupRow[]> {
-  return db
+  const rows = await db
     .selectFrom("sessionWakeups")
     .selectAll()
     .where("sessionId", "=", sessionId)
     .where("status", "in", statuses)
     .orderBy("createdAt", "asc")
     .execute()
+
+  return rows.map((row) => normalizeSessionWakeupRow(row as SessionWakeupDbRow))
 }
 
 /** Pending wakeups for a session, oldest first. */
 export async function listPendingSessionWakeups(
   sessionId: string
 ): Promise<SessionWakeupRow[]> {
-  return db
+  const rows = await db
     .selectFrom("sessionWakeups")
     .selectAll()
     .where("sessionId", "=", sessionId)
     .where("status", "=", "pending")
     .orderBy("createdAt", "asc")
     .execute()
+
+  return rows.map((row) => normalizeSessionWakeupRow(row as SessionWakeupDbRow))
 }
 
 /** Id of the session's most-recently-started running turn, if any. */
@@ -417,27 +532,35 @@ export async function getTurnActivityHeader(
 }
 
 /** Tool calls for a turn, ordered by creation then call index. */
-export async function listTurnToolCalls(turnId: string) {
-  return db
+export async function listTurnToolCalls(
+  turnId: string
+): Promise<ToolCallRow[]> {
+  const rows = await db
     .selectFrom("toolCalls")
     .selectAll()
     .where("turnId", "=", turnId)
     .orderBy("createdAt", "asc")
     .orderBy("callIndex", "asc")
     .execute()
+
+  return rows.map((row) => normalizeRuntimeToolCallRow(row as ToolCallDbRow))
 }
 
 /** Tool results for the given tool-call ids (newest result per call first). */
 export async function listToolResultsForToolCalls(
   toolCallIds: string[]
 ): Promise<ToolResultRow[]> {
-  return db
+  const rows = await db
     .selectFrom("toolResults")
     .selectAll()
     .where("toolCallId", "in", toolCallIds)
     .orderBy("toolCallId", "asc")
     .orderBy("resultIndex", "desc")
     .execute()
+
+  return rows.map((row) =>
+    normalizeRuntimeToolResultRow(row as ToolResultDbRow)
+  )
 }
 
 /** Result parts for the given result ids, ordered for assembly. */
@@ -457,12 +580,16 @@ export async function listToolResultParts(
 export async function listLatestTasksForToolCalls(
   toolCallIds: string[]
 ): Promise<ToolCallTaskRow[]> {
-  return db
+  const rows = await db
     .selectFrom("toolCallTasks")
     .selectAll()
     .where("sourceToolCallId", "in", toolCallIds)
     .orderBy("createdAt", "desc")
     .execute()
+
+  return rows.map((row) =>
+    normalizeRuntimeToolCallTaskRow(row as ToolCallTaskDbRow)
+  )
 }
 
 /** Output chunks for the given task ids (newest seq first). */
@@ -520,7 +647,7 @@ export async function insertSessionWakeupRow(
   let reusedExistingWakeup = false
 
   if (params.sourceItemId) {
-    const insertResult = await sql<SessionWakeupRow>`
+    const insertResult = await sql<SessionWakeupDbRow>`
         INSERT INTO session_wakeups (
           id,
           session_id,
@@ -558,7 +685,10 @@ export async function insertSessionWakeupRow(
         DO NOTHING
         RETURNING *
       `.execute(executor)
-    created = insertResult.rows[0]
+    const inserted = insertResult.rows[0]
+    created = inserted
+      ? normalizeSessionWakeupRow(inserted as SessionWakeupDbRow)
+      : undefined
 
     if (!created) {
       const existing = await executor
@@ -571,10 +701,12 @@ export async function insertSessionWakeupRow(
         .limit(1)
         .execute()
       created = existing[0]
+        ? normalizeSessionWakeupRow(existing[0] as SessionWakeupDbRow)
+        : undefined
       reusedExistingWakeup = Boolean(created)
     }
   } else {
-    created = await executor
+    const inserted = await executor
       .insertInto("sessionWakeups")
       .values({
         id: crypto.randomUUID(),
@@ -594,6 +726,9 @@ export async function insertSessionWakeupRow(
       })
       .returningAll()
       .executeTakeFirst()
+    created = inserted
+      ? normalizeSessionWakeupRow(inserted as SessionWakeupDbRow)
+      : undefined
   }
   if (!created) {
     throw new Error("Failed to enqueue session wakeup")
@@ -617,7 +752,7 @@ export async function attachPendingWakeupsToTurnRows(
   turnId: string,
   executor: Executor = db
 ): Promise<SessionWakeupRow[]> {
-  return executor
+  const rows = await executor
     .updateTable("sessionWakeups")
     .set({
       status: "attached",
@@ -628,6 +763,8 @@ export async function attachPendingWakeupsToTurnRows(
     .where("status", "=", "pending")
     .returningAll()
     .execute()
+
+  return rows.map((row) => normalizeSessionWakeupRow(row as SessionWakeupDbRow))
 }
 
 /** Mark a turn's `attached` wakeups as `processed`. */

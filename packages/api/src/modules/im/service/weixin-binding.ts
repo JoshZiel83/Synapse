@@ -22,11 +22,7 @@ import {
   setTransportAddressLinkedUser,
 } from "./addresses.js"
 import { listTransportExternalUsers } from "./external-users.js"
-import {
-  normalizeAccountRow,
-  parseJsonObject,
-  readTrimmedString,
-} from "./_helpers.js"
+import { normalizeAccountRow, readTrimmedString } from "./_helpers.js"
 import {
   findWeixinWorkspaceMemberIdByUser,
   findWorkspaceMemberDisplayName,
@@ -79,7 +75,7 @@ export async function getCurrentUserWeixinBinding(params: {
   if (account.status !== "active") {
     return null
   }
-  const metadata = parseJsonObject(row.metadata)
+  const metadata = account.metadata
   const scannerUserId = readTrimmedString(metadata, "scannerUserId")
   const pendingAutoLinkWorkspaceMemberId =
     readPendingAutoLinkWorkspaceMemberId(metadata)

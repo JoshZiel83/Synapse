@@ -20,6 +20,23 @@ test("validateRealtimeAsrAudioConfig accepts PCM/raw and OGG/opus only", () => {
     }
   )
 
+  assert.deepEqual(
+    validateRealtimeAsrAudioConfig({
+      format: "ogg",
+      codec: "opus",
+      rate: 16000,
+      bits: 16,
+      channel: 1,
+    }),
+    {
+      format: "ogg",
+      codec: "opus",
+      rate: 16000,
+      bits: 16,
+      channel: 1,
+    }
+  )
+
   assert.throws(
     () =>
       validateRealtimeAsrAudioConfig({
@@ -30,6 +47,28 @@ test("validateRealtimeAsrAudioConfig accepts PCM/raw and OGG/opus only", () => {
         channel: 1,
       }),
     /PCM audio must use the raw codec/
+  )
+
+  assert.throws(
+    () =>
+      validateRealtimeAsrAudioConfig({
+        format: "ogg",
+        codec: "raw",
+        rate: 16000,
+        bits: 16,
+        channel: 1,
+      }),
+    /OGG audio must use the opus codec/
+  )
+
+  assert.throws(() =>
+    validateRealtimeAsrAudioConfig({
+      format: "webm",
+      codec: "opus",
+      rate: 16000,
+      bits: 16,
+      channel: 1,
+    })
   )
 })
 

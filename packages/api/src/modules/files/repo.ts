@@ -5,8 +5,21 @@
 // workspace-access check. Returns camelCase domain rows with Date objects KEPT
 // (Date→ISO serialization stays in presenter.ts per r3). round-6 P1-6.
 
+import { parseJsonObject } from "@synapse/shared"
 import { db } from "../../infrastructure/database/kysely.js"
 import type { FileJoinRow } from "./presenter.js"
+
+export type FileAssetDbRow = Omit<FileJoinRow, "details"> & {
+  detailsJson: unknown
+}
+
+export function normalizeFileAssetJoinRow(row: FileAssetDbRow): FileJoinRow {
+  const { detailsJson, ...rest } = row
+  return {
+    ...rest,
+    details: parseJsonObject(detailsJson),
+  }
+}
 
 export async function getFileAssetJoinRow(
   fileId: string,
@@ -37,7 +50,8 @@ export async function getFileAssetJoinRow(
     query = query.where("f.workspaceId", "=", workspaceId)
   }
 
-  return (await query.executeTakeFirst()) as FileJoinRow | null
+  const row = (await query.executeTakeFirst()) as FileAssetDbRow | undefined
+  return row ? normalizeFileAssetJoinRow(row) : null
 }
 
 /**

@@ -11,6 +11,7 @@
 import crypto from "node:crypto"
 import { serializeNowInstant } from "../../../../infrastructure/datetime.js"
 import { presentWeixinQrLoginSession } from "../../presenter.js"
+import { WEIXIN_QR_LOGIN_STATUS } from "@synapse/shared"
 import type {
   TransportAccountInboundActorMode,
   TransportAccountSummary,
@@ -120,14 +121,14 @@ function mapStatus(
 ): WeixinQrLoginStatus {
   switch (status) {
     case "scaned":
-      return "scanned"
+      return WEIXIN_QR_LOGIN_STATUS.SCANNED
     case "confirmed":
-      return "confirmed"
+      return WEIXIN_QR_LOGIN_STATUS.CONFIRMED
     case "expired":
-      return "expired"
+      return WEIXIN_QR_LOGIN_STATUS.EXPIRED
     case "wait":
     default:
-      return "waiting"
+      return WEIXIN_QR_LOGIN_STATUS.WAITING
   }
 }
 
@@ -314,7 +315,7 @@ export async function startWeixinQrLoginSession(params: {
     ownerWorkspaceMemberId: params.ownerWorkspaceMemberId || null,
     inboundActorMode: params.inboundActorMode || "none",
     inboundActorId: params.inboundActorId || null,
-    status: "waiting",
+    status: WEIXIN_QR_LOGIN_STATUS.WAITING,
     message: "Scan the QR code with WeChat to finish connecting.",
     createdAt: now,
     updatedAt: now,
@@ -331,10 +332,13 @@ export async function getWeixinQrLoginSession(params: {
   const existing = await getQrSession(params.workspaceId, params.sessionId)
   if (!existing) return null
 
-  if (!isFresh(existing) && existing.status !== "confirmed") {
+  if (
+    !isFresh(existing) &&
+    existing.status !== WEIXIN_QR_LOGIN_STATUS.CONFIRMED
+  ) {
     const expired: ActiveWeixinQrLogin = {
       ...existing,
-      status: "expired",
+      status: WEIXIN_QR_LOGIN_STATUS.EXPIRED,
       message: "QR code expired. Generate a new one.",
       updatedAt: Date.now(),
     }
@@ -342,7 +346,10 @@ export async function getWeixinQrLoginSession(params: {
     return buildSummary(expired)
   }
 
-  if (existing.status === "confirmed" || existing.status === "error") {
+  if (
+    existing.status === WEIXIN_QR_LOGIN_STATUS.CONFIRMED ||
+    existing.status === WEIXIN_QR_LOGIN_STATUS.ERROR
+  ) {
     return buildSummary(existing)
   }
 
@@ -364,15 +371,15 @@ export async function getWeixinQrLoginSession(params: {
         nonEmptyString(statusResponse.ilink_user_id) || existing.scannerUserId,
       updatedAt: Date.now(),
       message:
-        nextStatus === "scanned"
+        nextStatus === WEIXIN_QR_LOGIN_STATUS.SCANNED
           ? "QR code scanned. Confirm the login in WeChat."
-          : nextStatus === "expired"
+          : nextStatus === WEIXIN_QR_LOGIN_STATUS.EXPIRED
             ? "QR code expired. Generate a new one."
             : existing.message,
     }
 
     const confirmedToken = nonEmptyString(statusResponse.bot_token)
-    if (nextStatus === "confirmed" && confirmedToken) {
+    if (nextStatus === WEIXIN_QR_LOGIN_STATUS.CONFIRMED && confirmedToken) {
       const account = await persistWeixinAccount({
         session: nextSession,
         botToken: confirmedToken,
@@ -383,7 +390,7 @@ export async function getWeixinQrLoginSession(params: {
       nextSession = {
         ...nextSession,
         transportAccountId: account.id,
-        status: "confirmed",
+        status: WEIXIN_QR_LOGIN_STATUS.CONFIRMED,
         message: "WeChat account connected.",
       }
     }
@@ -393,7 +400,7 @@ export async function getWeixinQrLoginSession(params: {
   } catch (error) {
     const failed: ActiveWeixinQrLogin = {
       ...existing,
-      status: "error",
+      status: WEIXIN_QR_LOGIN_STATUS.ERROR,
       message:
         error instanceof Error
           ? error.message

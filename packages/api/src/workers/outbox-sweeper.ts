@@ -45,12 +45,12 @@
 
 import type { Job, JobsOptions, Queue } from "bullmq"
 import { sql } from "kysely"
+import { parseJsonObject } from "@synapse/shared"
 import { nowIsoInstant } from "@synapse/shared/datetime"
 import { parseInstantString } from "../infrastructure/datetime.js"
 import { db } from "../infrastructure/database/kysely.js"
 import { redis } from "../infrastructure/redis/index.js"
 import { acquireLock, releaseLock } from "../infrastructure/redis/lock.js"
-import { parseJsonObject } from "../modules/im/service/_helpers.js"
 import { patchTransportMessageLinkMetadata } from "../modules/im/service.js"
 import {
   canonicalTransportDeliveryJobId,

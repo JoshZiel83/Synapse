@@ -11,6 +11,7 @@
  * tool calls is treated as "completion" by the caller, not via this resolver).
  */
 
+import { ACTOR_RUNTIME_HEALTH } from "@synapse/shared"
 import {
   isTerminalStatus,
   pickDominantToolStatus,
@@ -112,9 +113,9 @@ export function resolveRuntimePhaseStatus(phase: string): StatusLevel | null {
  *    + phase="blocked" wait state).
  *
  * Behavior tables encoded here:
- *   health === "error"                              → terminal-error
+ *   health === ACTOR_RUNTIME_HEALTH.ERROR          → terminal-error
  *   laneState === "closed"                          → terminal-error
- *   phase === "error" AND (health === "error"
+ *   phase === "error" AND (health === ACTOR_RUNTIME_HEALTH.ERROR
  *     OR laneState ∈ {"blocked","closed"})         → terminal-error
  *   laneState === "idle" AND phase === "idle"       → terminal-done
  *   phase ∈ {"thinking","tool","responding"}        → set-level
@@ -155,7 +156,7 @@ export function decideRuntimeUpdateAction(snapshot: {
   const health = String(snapshot.health || "")
   const phase = String(snapshot.phase || "")
 
-  if (health === "error" || laneState === "closed") {
+  if (health === ACTOR_RUNTIME_HEALTH.ERROR || laneState === "closed") {
     return { kind: "terminal-error" }
   }
   // phase="error" alone is unreliable — it can be inherited from a stale
@@ -164,7 +165,9 @@ export function decideRuntimeUpdateAction(snapshot: {
   // when corroborated by health or laneState.
   if (
     phase === "error" &&
-    (health === "error" || laneState === "blocked" || laneState === "closed")
+    (health === ACTOR_RUNTIME_HEALTH.ERROR ||
+      laneState === "blocked" ||
+      laneState === "closed")
   ) {
     return { kind: "terminal-error" }
   }

@@ -1,11 +1,14 @@
-import type {
+import {
+  MODEL_API_STYLES,
+  MODEL_SERVER_TOOLS,
+  type ModelApiStyle,
+  type ModelServerTool,
   ModelAttemptPolicy,
   MultimodalConfig,
   ProviderKind,
   ResolvedModelConfig,
   ResolvedModelPlan,
 } from "@synapse/shared"
-import { parseJsonObject } from "@synapse/shared"
 import { DEFAULT_MAX_TOKENS, DEFAULT_MODEL_ATTEMPT_POLICY } from "./defaults.js"
 import {
   type ModelGroupCandidateRow,
@@ -30,22 +33,37 @@ type ResolveContext = {
 
 const DEFAULT_ATTEMPT_POLICY: ModelAttemptPolicy = DEFAULT_MODEL_ATTEMPT_POLICY
 
-// Business JSON decode → shared parseJsonObject (object-only, array-reject).
-// r6 P1-8: replaces a local copy with identical semantics.
-const asObject = parseJsonObject
-
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
     : []
 }
 
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
+}
+
 function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined
 }
 
-function parseAttemptPolicy(value: unknown): ModelAttemptPolicy {
-  const policy = asObject(value)
+const MODEL_API_STYLE_SET = new Set<string>(MODEL_API_STYLES)
+const MODEL_SERVER_TOOL_SET = new Set<string>(MODEL_SERVER_TOOLS)
+
+function isModelApiStyle(value: unknown): value is ModelApiStyle {
+  return typeof value === "string" && MODEL_API_STYLE_SET.has(value)
+}
+
+function isModelServerTool(value: unknown): value is ModelServerTool {
+  return typeof value === "string" && MODEL_SERVER_TOOL_SET.has(value)
+}
+
+function parseAttemptPolicy(
+  value: Record<string, unknown> | null | undefined
+): ModelAttemptPolicy {
+  const policy = value ?? {}
   return {
     maxAttemptsTotal:
       asNumber(policy.maxAttemptsTotal) ??
@@ -76,9 +94,11 @@ function parseRetryBackoff(value: unknown): number[] {
   return parsed.length > 0 ? parsed : DEFAULT_ATTEMPT_POLICY.retryBackoffMs
 }
 
-function finalizeAttemptPolicy(value: unknown): ModelAttemptPolicy {
+function finalizeAttemptPolicy(
+  value: Record<string, unknown> | null | undefined
+): ModelAttemptPolicy {
   const base = parseAttemptPolicy(value)
-  const policy = asObject(value)
+  const policy = value ?? {}
   return {
     ...base,
     retryBackoffMs: parseRetryBackoff(policy.retryBackoffMs),
@@ -202,8 +222,8 @@ function toResolvedModelConfig(row: GroupItemRow): ResolvedModelConfig | null {
     return null
   }
 
-  const features = asObject(row.features)
-  const multimodalConfig = asObject(features.multimodal)
+  const features = row.features ?? {}
+  const multimodalConfig = recordValue(features.multimodal)
   const multimodal: MultimodalConfig | undefined =
     multimodalConfig.supported === true
       ? {
@@ -215,10 +235,10 @@ function toResolvedModelConfig(row: GroupItemRow): ResolvedModelConfig | null {
       : undefined
 
   const apiStyleRaw = features.apiStyle
-  const apiStyle =
-    apiStyleRaw === "responses" || apiStyleRaw === "chat"
-      ? apiStyleRaw
-      : undefined
+  const apiStyle = isModelApiStyle(apiStyleRaw) ? apiStyleRaw : undefined
+  const serverTools = Array.isArray(features.serverTools)
+    ? features.serverTools.filter(isModelServerTool)
+    : undefined
 
   return {
     groupId: row.groupId,
@@ -231,15 +251,11 @@ function toResolvedModelConfig(row: GroupItemRow): ResolvedModelConfig | null {
     baseUrl: row.baseUrl,
     modelName: row.modelName,
     maxOutputTokens: row.maxOutputTokens || DEFAULT_MAX_TOKENS,
-    serverTools: Array.isArray(features.serverTools)
-      ? (features.serverTools as ResolvedModelConfig["serverTools"])
-      : undefined,
+    serverTools,
     multimodal,
     crossTurnToolHistory:
       features.crossTurnToolHistory === true ? true : undefined,
-    providerOptions: row.providerOptions
-      ? asObject(row.providerOptions)
-      : undefined,
+    providerOptions: row.providerOptions ?? undefined,
     priority: row.priority,
     weight: row.weight,
     requestTimeoutMs: row.requestTimeoutMs ?? undefined,

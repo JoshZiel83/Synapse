@@ -1,9 +1,9 @@
 import type {
   ActorDoc,
-  ActorPackageSyncMode,
   ActorRole,
   ActorUpdateSourceType,
   ActorVersionDelta,
+  MarketplaceSyncMode,
   MarketplaceVersionStatus,
 } from "@synapse/shared"
 
@@ -27,7 +27,7 @@ export type ActorRow = {
   parent_id: string | null
   can_represent_user: boolean
   specialties: string[] | null
-  config: Record<string, unknown> | string | null
+  config: Record<string, unknown>
   current_version: number
   is_active: boolean
   is_public_shared: boolean
@@ -36,7 +36,7 @@ export type ActorRow = {
   current_actor_version_id: string
   source_catalog_item_id: string | null
   source_catalog_version_id: string | null
-  source_sync_mode: ActorPackageSyncMode | "follow_upstream" | "detached" | null
+  source_sync_mode: MarketplaceSyncMode | null
   source_baseline_actor_version: number | null
   source_created_at: Date | null
   source_updated_at: Date | null
@@ -60,8 +60,8 @@ export type ActorVersionRow = {
   parent_id: string | null
   can_represent_user: boolean
   specialties: string[] | null
-  config: Record<string, unknown> | string | null
-  version_delta: ActorVersionDelta | string | null
+  config: Record<string, unknown>
+  version_delta: ActorVersionDelta | null
   created_by_workspace_member_id: string | null
   source_type: ActorUpdateSourceType
   source_workspace_member_id: string | null
@@ -97,7 +97,7 @@ export type ActorPackageRow = {
   package_tags: string[] | null
   package_download_count: number
   package_is_active: boolean
-  package_metadata: Record<string, unknown> | string | null
+  package_metadata: Record<string, unknown>
   package_created_at: Date
   package_updated_at: Date
   publisher_id: string
@@ -114,7 +114,7 @@ export type ActorPackageRow = {
   version_value: string
   version_status: MarketplaceVersionStatus
   version_changelog: string
-  version_metadata: Record<string, unknown> | string | null
+  version_metadata: Record<string, unknown>
   version_created_by_user_id: string | null
   version_created_at: Date
   actor_role: ActorRole
@@ -125,6 +125,6 @@ export type ActorPackageRow = {
   actor_can_represent_user: boolean
   actor_docs: unknown
   actor_specialties: string[] | null
-  actor_config: Record<string, unknown> | string | null
-  actor_metadata: Record<string, unknown> | string | null
+  actor_config: Record<string, unknown>
+  actor_metadata: Record<string, unknown>
 }

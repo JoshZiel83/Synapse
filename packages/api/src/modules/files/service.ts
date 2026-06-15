@@ -1,8 +1,4 @@
-import {
-  fileRefBlock,
-  type CanonicalFileRefBlock,
-  type FileRecordView,
-} from "@synapse/shared"
+import { fileRefBlock, type CanonicalFileRefBlock } from "@synapse/shared"
 import {
   fileToBase64,
   fileToBuffer,
@@ -59,7 +55,7 @@ export {
 }
 
 export type FileAccessInfo = Pick<
-  FileRecordView,
+  StoredFileRecord,
   "id" | "workspaceId" | "mimeType" | "originalName" | "contentKind"
 >
 
@@ -116,7 +112,7 @@ export async function getFileRecord(
 
 export async function getFileDetail(
   fileId: string
-): Promise<FileRecordView | null> {
+): Promise<StoredFileRecord | null> {
   const row = await getFileAssetJoinRow(fileId)
   return row ? presentFileAsset(row) : null
 }
@@ -140,7 +136,7 @@ export async function getFileAccessInfo(
 export async function getWorkspaceFileDetail(
   fileId: string,
   workspaceId: string
-): Promise<FileRecordView | null> {
+): Promise<StoredFileRecord | null> {
   const row = await getFileAssetJoinRow(fileId, workspaceId)
   return row ? presentFileAsset(row) : null
 }
@@ -214,7 +210,7 @@ export function getFullContentUrlBySha(sha256: string): string {
 
 export function toCanonicalFileRefBlock(
   record: Pick<
-    FileRecordView,
+    StoredFileRecord,
     "mimeType" | "originalName" | "sizeBytes" | "sha256"
   >
 ): CanonicalFileRefBlock {

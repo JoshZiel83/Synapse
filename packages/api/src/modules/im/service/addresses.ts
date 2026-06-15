@@ -16,6 +16,7 @@ import {
   detachParticipantAddress,
   existsWorkspaceMember,
   insertTransportAddress,
+  listTransportExternalUsers,
   selectAttachedParticipantsForAddress,
   selectConversationExternalParticipantPrimaryAddress,
   selectConversationIdsForTransportAddress,
@@ -301,7 +302,14 @@ export async function setTransportAddressLinkedUser(params: {
     workspaceMemberId: nextWorkspaceMemberId,
   })
 
-  return row
+  const [externalUser] = await listTransportExternalUsers({
+    workspaceId: params.workspaceId,
+    transportAddressId: row.id,
+  })
+  if (!externalUser) {
+    throw new Error("Transport external user not found")
+  }
+  return externalUser
 }
 
 export async function ensureConversationParticipantTransportAddress(params: {

@@ -5,7 +5,6 @@ import {
 } from "@synapse/shared"
 import { MODEL_GROUP_GRANT_SCOPE } from "@synapse/shared/constants"
 import type {
-  ModelGroupDetailView,
   ModelGroupGrantScope,
   ModelGroupOwnerType,
   ModelGroupRoutingStrategy,
@@ -19,12 +18,9 @@ import type {
   ModelGroupsAttemptPolicy,
 } from "./repo.types.js"
 import {
-  asObject,
   dbRowToGrantRow,
-  presentGrantRow,
-  presentGroupItem,
-  presentGroupRow,
   type ActorModelGroupAssignmentRow,
+  type ModelGroupDetailRecord,
   type ModelGroupGrantRow,
   type ModelGroupItemRow,
   type ModelGroupItemVersionRow,
@@ -268,15 +264,15 @@ export async function listModelGroups(
 
 export async function getModelGroup(
   groupId: string
-): Promise<ModelGroupDetailView> {
+): Promise<ModelGroupDetailRecord> {
   const group = await getGroupRow(groupId)
 
   const { items, grants } = await repo.getModelGroupDetailRows(groupId)
 
   return {
-    ...presentGroupRow(group),
-    items: items.map((row) => presentGroupItem(row as ModelGroupItemRow)),
-    grants: grants.map(dbRowToGrantRow).map(presentGrantRow),
+    ...group,
+    items: items.map((row) => row as ModelGroupItemRow),
+    grants: grants.map(dbRowToGrantRow),
   }
 }
 
@@ -374,7 +370,7 @@ export async function updateModelGroup(
     isDefault?: boolean
     isActive?: boolean
   }
-): Promise<ModelGroupDetailView> {
+): Promise<ModelGroupDetailRecord> {
   const group = await getGroupRow(groupId)
 
   if (data.isDefault === true && data.isActive !== false) {
@@ -418,9 +414,9 @@ export async function updateModelGroup(
     throw new ModelGroupError(404, "Model group not found")
   }
 
-  // Always return the full detail view so the PUT route can present a single
-  // schema (ModelGroupDetailView) via sendData — callers ignore the body and
-  // reload, so returning detail vs. plain view is behavior-neutral.
+  // Always return the full detail record so the controller can present one shared
+  // detail schema via sendData. Callers ignore the body and reload, so returning
+  // detail vs. plain row is behavior-neutral.
   return getModelGroup(groupId)
 }
 
@@ -586,9 +582,11 @@ export async function updateModelItem(
       capabilityTags:
         data.capabilityTags || (item.capabilityTags as string[] | null) || [],
       features: (data.features ??
-        asObject(item.features)) as ModelBindingVersionsFeatures,
+        item.features ??
+        {}) as ModelBindingVersionsFeatures,
       providerOptions: (data.providerOptions ??
-        asObject(item.providerOptions)) as ModelBindingVersionsProviderOptions,
+        item.providerOptions ??
+        {}) as ModelBindingVersionsProviderOptions,
       requestTimeoutMs:
         data.requestTimeoutMs ??
         (item.requestTimeoutMs as number | null) ??

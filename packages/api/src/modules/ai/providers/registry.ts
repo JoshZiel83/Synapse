@@ -6,8 +6,10 @@
  * factory needs (default API style, server-tool support) and the ApiStyle type.
  */
 import {
+  MODEL_API_STYLE,
   isProviderKind,
   PROVIDER_KINDS,
+  type ModelApiStyle,
   type ProviderKind,
 } from "@synapse/shared"
 
@@ -15,7 +17,7 @@ export { isProviderKind, PROVIDER_KINDS }
 export type { ProviderKind }
 
 /** OpenAI API surface selector. Only meaningful for kind === "openai". */
-export type ApiStyle = "chat" | "responses"
+export type ApiStyle = ModelApiStyle
 
 export interface ProviderKindFacts {
   /** Whether this kind can carry Anthropic-style server tools. */
@@ -25,9 +27,15 @@ export interface ProviderKindFacts {
 }
 
 export const PROVIDER_KIND_FACTS: Record<ProviderKind, ProviderKindFacts> = {
-  anthropic: { supportsServerTools: true, defaultApiStyle: "chat" },
-  openai: { supportsServerTools: false, defaultApiStyle: "chat" },
-  openai_compatible: { supportsServerTools: false, defaultApiStyle: "chat" },
+  anthropic: {
+    supportsServerTools: true,
+    defaultApiStyle: MODEL_API_STYLE.CHAT,
+  },
+  openai: { supportsServerTools: false, defaultApiStyle: MODEL_API_STYLE.CHAT },
+  openai_compatible: {
+    supportsServerTools: false,
+    defaultApiStyle: MODEL_API_STYLE.CHAT,
+  },
 }
 
 export function providerKindFacts(kind: ProviderKind): ProviderKindFacts {

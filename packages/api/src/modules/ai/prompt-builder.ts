@@ -36,15 +36,8 @@ export interface ConversationParticipantInfo {
   actor_current_version?: number
 }
 
-function parseJsonArray<T>(value: unknown): T[] {
+function readDecodedArray<T>(value: unknown): T[] {
   if (!value) return []
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value) as T[]
-    } catch {
-      return []
-    }
-  }
   return Array.isArray(value) ? (value as T[]) : []
 }
 
@@ -55,7 +48,7 @@ function actorSource(actor: any) {
 function parseActorDocs(actor: any): ActorDoc[] {
   const source = actorSource(actor)
   return normalizeActorDocs(
-    parseJsonArray<ActorDoc>(source.docs ?? actor.actor_docs)
+    readDecodedArray<ActorDoc>(source.docs ?? actor.actor_docs)
   )
 }
 
@@ -256,9 +249,9 @@ export function buildActorPrompt(
       renderDocSections(actor, mode)
   )
 
-  const specialties = Array.isArray(source.specialties)
-    ? source.specialties
-    : parseJsonArray<string>(source.specialties ?? actor.specialties)
+  const specialties = readDecodedArray<string>(
+    source.specialties ?? actor.specialties
+  )
   if (specialties.length > 0) {
     parts.push(
       `## Your Structured Specialties\n` +

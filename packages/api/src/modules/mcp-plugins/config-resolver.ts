@@ -1,4 +1,3 @@
-import { parseJsonObject } from "@synapse/shared"
 import { decryptSensitiveFields } from "../../infrastructure/crypto/index.js"
 import { resolveAuthConnectionRefs } from "./plugin-auth-connections.js"
 import { findInstallationConfigRow } from "./repo.js"
@@ -8,10 +7,6 @@ export interface ResolvedPluginConfig {
   installationId: string
   config: Record<string, unknown>
 }
-
-// Business JSON decode → shared parseJsonObject (string-parse + array-reject;
-// replaces a local copy that blindly cast JSON.parse, accepting arrays). r6 P1-8.
-const asObject = parseJsonObject
 
 function mergeConfigs(...layers: Record<string, unknown>[]) {
   const result: Record<string, unknown> = {}
@@ -38,10 +33,7 @@ export async function resolveInstallationConfig(
     }
   }
 
-  const merged = mergeConfigs(
-    asObject(row.defaultConfig),
-    asObject(row.configData)
-  )
+  const merged = mergeConfigs(row.defaultConfig, row.configData)
   const decrypted = decryptSensitiveFields(merged)
   const withConnections = await resolveAuthConnectionRefs(decrypted)
 

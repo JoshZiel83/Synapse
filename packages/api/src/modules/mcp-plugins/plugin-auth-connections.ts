@@ -5,17 +5,25 @@ import type {
   PluginAuthValueSource,
   PluginConfigFieldDefinition,
 } from "@synapse/shared"
-import { parseJsonObject } from "@synapse/shared"
+import {
+  PLUGIN_AUTH_BINDING_DRIVER_KIND,
+  PLUGIN_AUTH_CHALLENGE_KIND,
+  PLUGIN_AUTH_CHALLENGE_OPEN_MODE,
+  PLUGIN_AUTH_CONNECTION_STATUS,
+  PLUGIN_AUTH_DERIVED_VALUE_NAME,
+  PLUGIN_AUTH_SESSION_PHASE,
+  PLUGIN_AUTH_SESSION_STATUS,
+  PLUGIN_AUTH_VALUE_SOURCE_KIND,
+  PLUGIN_CONFIG_FIELD_TYPE,
+  parseJsonObject,
+} from "@synapse/shared"
 import { config } from "../../config/index.js"
 import {
   decrypt,
   decryptSensitiveFields,
   encrypt,
 } from "../../infrastructure/crypto/index.js"
-import {
-  parseInstantString,
-  serializeInstant,
-} from "../../infrastructure/datetime.js"
+import { parseInstantString } from "../../infrastructure/datetime.js"
 import {
   defaultPluginConnectionRunner,
   findPluginAuthConnectionRow,
@@ -49,7 +57,11 @@ import {
   resolveFeishuOpenBaseUrl,
 } from "./feishu/client.js"
 import { normalizeFeishuFeatureKeys } from "./feishu/features.js"
-import { presentAuthConnection, presentAuthSession } from "./presenter.js"
+import {
+  presentAuthConnection,
+  presentAuthSession,
+  presentInstant,
+} from "./presenter.js"
 
 type JsonObject = Record<string, unknown>
 
@@ -76,8 +88,8 @@ type PluginAuthSpec = {
 type InstallationConfigRow = {
   catalogItemId: string
   catalogVersionId: string
-  configData: unknown
-  defaultConfig: unknown
+  configData: Record<string, unknown>
+  defaultConfig: Record<string, unknown>
 }
 
 type OAuthTransientPayload = {
@@ -216,10 +228,8 @@ async function getPluginAuthSpec(
   return {
     catalogItemId: row.catalogItemId,
     catalogVersionId: row.catalogVersionId,
-    defaultConfig: asObject(row.defaultConfig),
-    authBindings: Array.isArray(row.authBindings)
-      ? (row.authBindings as PluginAuthBindingDefinition[])
-      : [],
+    defaultConfig: row.defaultConfig,
+    authBindings: row.authBindings,
   }
 }
 
@@ -318,7 +328,7 @@ async function buildDraftConfig(input: {
 
   return mergeConfigLayers(
     input.defaultConfig,
-    decryptSensitiveFields(asObject(row.configData)),
+    decryptSensitiveFields(row.configData),
     input.draftConfig || {}
   )
 }
@@ -333,17 +343,17 @@ function resolveAuthValue(
 ) {
   if (!source) return undefined
   switch (source.source) {
-    case "config":
+    case PLUGIN_AUTH_VALUE_SOURCE_KIND.CONFIG:
       return source.field ? configData[source.field] : undefined
-    case "env":
+    case PLUGIN_AUTH_VALUE_SOURCE_KIND.ENV:
       return source.env ? process.env[source.env] : undefined
-    case "literal":
+    case PLUGIN_AUTH_VALUE_SOURCE_KIND.LITERAL:
       return source.value
-    case "derived":
-      if (source.name === "app_base_url") {
+    case PLUGIN_AUTH_VALUE_SOURCE_KIND.DERIVED:
+      if (source.name === PLUGIN_AUTH_DERIVED_VALUE_NAME.APP_BASE_URL) {
         return config.app.baseUrl.replace(/\/$/, "")
       }
-      if (source.name === "oauth_callback_url") {
+      if (source.name === PLUGIN_AUTH_DERIVED_VALUE_NAME.OAUTH_CALLBACK_URL) {
         return defaultOauthCallbackUrl()
       }
       return undefined
@@ -399,7 +409,7 @@ function buildMijiaResultPayload(authState: object) {
   const state = authState as JsonObject
   const expiresAt =
     typeof state.expireTime === "number"
-      ? serializeInstant(new Date(state.expireTime))
+      ? presentInstant(new Date(state.expireTime))
       : null
   const preview = buildMijiaResultPreview(authState)
 
@@ -464,10 +474,10 @@ function buildFeishuResultPayload(input: {
   requestedFeatures: string[]
   appScopeStatus?: FeishuAppScopeInspection
 }) {
-  const expiresAt = serializeInstant(
+  const expiresAt = presentInstant(
     new Date(Date.now() + input.tokenData.expiresIn * 1000)
   )
-  const refreshExpiresAt = serializeInstant(
+  const refreshExpiresAt = presentInstant(
     new Date(Date.now() + input.tokenData.refreshExpiresIn * 1000)
   )
   const preview = buildFeishuResultPreview({
@@ -596,7 +606,7 @@ async function buildFeishuAppScopeInspection(input: {
 
 async function expirePluginAuthSession(sessionId: string) {
   return updatePluginAuthSession(sessionId, {
-    status: "expired",
+    status: PLUGIN_AUTH_SESSION_STATUS.EXPIRED,
     phase: null,
     errorCode: "AUTH_SESSION_EXPIRED",
     errorMessage: "Auth session expired",
@@ -604,7 +614,10 @@ async function expirePluginAuthSession(sessionId: string) {
 }
 
 async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
-  if (row.driver !== "mijia_qr_login" || row.status !== "pending") {
+  if (
+    row.driver !== PLUGIN_AUTH_BINDING_DRIVER_KIND.MIJIA_QR_LOGIN ||
+    row.status !== PLUGIN_AUTH_SESSION_STATUS.PENDING
+  ) {
     return row
   }
 
@@ -622,7 +635,7 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
     })
 
     switch (progress.status) {
-      case "pending": {
+      case PLUGIN_AUTH_SESSION_STATUS.PENDING: {
         if (!progress.phase || progress.phase === row.phase) {
           return row
         }
@@ -632,10 +645,10 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
         })
         return updated
       }
-      case "completed": {
+      case PLUGIN_AUTH_SESSION_STATUS.COMPLETED: {
         const resultPayload = buildMijiaResultPayload(progress.authState)
         const updated = await updatePluginAuthSession(row.id, {
-          status: "completed",
+          status: PLUGIN_AUTH_SESSION_STATUS.COMPLETED,
           phase: null,
           resultPreview: buildMijiaResultPreview(
             progress.authState
@@ -646,18 +659,18 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
         })
         return updated
       }
-      case "expired": {
+      case PLUGIN_AUTH_SESSION_STATUS.EXPIRED: {
         const expired = await updatePluginAuthSession(row.id, {
-          status: "expired",
+          status: PLUGIN_AUTH_SESSION_STATUS.EXPIRED,
           phase: null,
           errorCode: progress.errorCode,
           errorMessage: progress.errorMessage,
         })
         return expired
       }
-      case "failed": {
+      case PLUGIN_AUTH_SESSION_STATUS.FAILED: {
         const failed = await updatePluginAuthSession(row.id, {
-          status: "failed",
+          status: PLUGIN_AUTH_SESSION_STATUS.FAILED,
           phase: null,
           errorCode: progress.errorCode,
           errorMessage: progress.errorMessage,
@@ -673,7 +686,7 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
         ? error.message
         : "Unable to complete Mijia authorization."
     const failed = await updatePluginAuthSession(row.id, {
-      status: "failed",
+      status: PLUGIN_AUTH_SESSION_STATUS.FAILED,
       phase: null,
       errorCode: "MIJIA_AUTH_ERROR",
       errorMessage: message,
@@ -683,7 +696,10 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
 }
 
 async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
-  if (row.driver !== "feishu_cli_setup" || row.status !== "pending") {
+  if (
+    row.driver !== PLUGIN_AUTH_BINDING_DRIVER_KIND.FEISHU_CLI_SETUP ||
+    row.status !== PLUGIN_AUTH_SESSION_STATUS.PENDING
+  ) {
     return row
   }
 
@@ -696,7 +712,7 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
   try {
     const progress = await progressFeishuCliSetup(transientPayload as any)
     switch (progress.status) {
-      case "pending": {
+      case PLUGIN_AUTH_SESSION_STATUS.PENDING: {
         const nextTransient =
           progress.transientPayload || (transientPayload as any)
         const nextChallenge =
@@ -704,7 +720,7 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
         const nextExpiresAt = progress.expiresAt || row.expiresAt
 
         const updated = await updatePluginAuthSession(row.id, {
-          phase: "pending_scan",
+          phase: PLUGIN_AUTH_SESSION_PHASE.PENDING_SCAN,
           challengePayload: nextChallenge as PluginAuthSessionsChallengePayload,
           transientPayload: encryptDeep(
             nextTransient
@@ -716,7 +732,7 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
         })
         return updated
       }
-      case "completed": {
+      case PLUGIN_AUTH_SESSION_STATUS.COMPLETED: {
         const appScopeStatus = await buildFeishuAppScopeInspection({
           transientPayload,
         })
@@ -738,7 +754,7 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
         })
 
         const updated = await updatePluginAuthSession(row.id, {
-          status: "completed",
+          status: PLUGIN_AUTH_SESSION_STATUS.COMPLETED,
           phase: null,
           resultPreview: resultPreview as PluginAuthSessionsResultPreview,
           resultPayload: resultPayload as PluginAuthSessionsResultPayload,
@@ -747,21 +763,21 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
         })
         return updated
       }
-      case "expired": {
+      case PLUGIN_AUTH_SESSION_STATUS.EXPIRED: {
         const expired = await updatePluginAuthSession(row.id, {
-          status: "expired",
+          status: PLUGIN_AUTH_SESSION_STATUS.EXPIRED,
           phase: null,
           errorCode: progress.errorCode,
           errorMessage: progress.errorMessage,
         })
         return expired
       }
-      case "failed": {
+      case PLUGIN_AUTH_SESSION_STATUS.FAILED: {
         const appScopeStatus = await buildFeishuAppScopeInspection({
           transientPayload,
         })
         const failed = await updatePluginAuthSession(row.id, {
-          status: "failed",
+          status: PLUGIN_AUTH_SESSION_STATUS.FAILED,
           phase: null,
           resultPreview: {
             features: normalizeFeishuFeatureKeys(
@@ -786,7 +802,7 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
         ? error.message
         : "Unable to complete Feishu authorization."
     const failed = await updatePluginAuthSession(row.id, {
-      status: "failed",
+      status: PLUGIN_AUTH_SESSION_STATUS.FAILED,
       phase: null,
       errorCode: "FEISHU_AUTH_ERROR",
       errorMessage: message,
@@ -928,7 +944,7 @@ async function refreshOAuthConnection(
 
   const expiresAt =
     typeof tokenResponse.expires_in === "number"
-      ? serializeInstant(new Date(Date.now() + tokenResponse.expires_in * 1000))
+      ? presentInstant(new Date(Date.now() + tokenResponse.expires_in * 1000))
       : row.expiresAt
 
   const publicPayload = {
@@ -957,7 +973,7 @@ async function refreshOAuthConnection(
   await updatePluginConnection(row.id, {
     publicPayload: publicPayload as PluginConnectionsPublicPayload,
     secretPayload: nextSecretPayload as PluginConnectionsSecretPayload,
-    status: "active",
+    status: PLUGIN_AUTH_CONNECTION_STATUS.ACTIVE,
     expiresAt:
       typeof expiresAt === "string" ? parseInstantString(expiresAt) : expiresAt,
   })
@@ -1002,14 +1018,14 @@ async function refreshFeishuConnection(row: PluginConnectionRow) {
     accessToken: encrypt(tokenResponse.accessToken),
     refreshToken: encrypt(tokenResponse.refreshToken),
     tokenType: tokenResponse.tokenType,
-    expiresAt: serializeInstant(expiresAt),
-    refreshExpiresAt: serializeInstant(refreshExpiresAt),
+    expiresAt: presentInstant(expiresAt),
+    refreshExpiresAt: presentInstant(refreshExpiresAt),
   }
 
   await updatePluginConnection(row.id, {
     publicPayload: nextPublicPayload as PluginConnectionsPublicPayload,
     secretPayload: nextSecretPayload as PluginConnectionsSecretPayload,
-    status: "active",
+    status: PLUGIN_AUTH_CONNECTION_STATUS.ACTIVE,
     expiresAt: expiresAt,
   })
 
@@ -1032,7 +1048,7 @@ async function refreshMijiaConnection(row: PluginConnectionRow) {
 
 async function ensureFreshPluginConnection(row: PluginConnectionRow) {
   if (
-    row.status !== "active" ||
+    row.status !== PLUGIN_AUTH_CONNECTION_STATUS.ACTIVE ||
     !row.expiresAt ||
     row.expiresAt.getTime() > Date.now() + 60_000
   ) {
@@ -1051,8 +1067,8 @@ async function ensureFreshPluginConnection(row: PluginConnectionRow) {
     row.workspaceId
   )
   const configData = mergeConfigLayers(
-    asObject(installationRow.defaultConfig),
-    decryptSensitiveFields(asObject(installationRow.configData))
+    installationRow.defaultConfig,
+    decryptSensitiveFields(installationRow.configData)
   )
   const spec = await getPluginAuthSpec(
     row.catalogItemId,
@@ -1062,11 +1078,11 @@ async function ensureFreshPluginConnection(row: PluginConnectionRow) {
 
   try {
     switch (row.driver) {
-      case "oauth2_authorization_code_pkce":
+      case PLUGIN_AUTH_BINDING_DRIVER_KIND.OAUTH2_AUTHORIZATION_CODE_PKCE:
         return await refreshOAuthConnection(binding, row, configData)
-      case "mijia_qr_login":
+      case PLUGIN_AUTH_BINDING_DRIVER_KIND.MIJIA_QR_LOGIN:
         return await refreshMijiaConnection(row)
-      case "feishu_cli_setup":
+      case PLUGIN_AUTH_BINDING_DRIVER_KIND.FEISHU_CLI_SETUP:
         return await refreshFeishuConnection(row)
       default:
         throw new PluginAuthError(
@@ -1076,12 +1092,12 @@ async function ensureFreshPluginConnection(row: PluginConnectionRow) {
     }
   } catch {
     await updatePluginConnection(row.id, {
-      status: "expired",
+      status: PLUGIN_AUTH_CONNECTION_STATUS.EXPIRED,
     })
     // Reflect the just-persisted status on the in-memory row without spreading
     // the DB row outward (guard-layering r7); the caller reads named fields.
     const expiredRow: PluginConnectionRow = { ...row }
-    expiredRow.status = "expired"
+    expiredRow.status = PLUGIN_AUTH_CONNECTION_STATUS.EXPIRED
     return expiredRow
   }
 }
@@ -1126,7 +1142,7 @@ export async function startPluginAuthSession(input: {
   validatePrerequisiteFields(binding, draftConfig)
 
   switch (binding.driver) {
-    case "oauth2_authorization_code_pkce": {
+    case PLUGIN_AUTH_BINDING_DRIVER_KIND.OAUTH2_AUTHORIZATION_CODE_PKCE: {
       const clientId = getBindingStringInput(binding, "clientId", draftConfig)
       if (!clientId) {
         throw new PluginAuthError(
@@ -1198,13 +1214,13 @@ export async function startPluginAuthSession(input: {
           bindingKey: binding.key,
           driver: binding.driver,
           workspaceMemberId: input.workspaceMemberId,
-          status: "pending",
-          phase: "awaiting_callback",
+          status: PLUGIN_AUTH_SESSION_STATUS.PENDING,
+          phase: PLUGIN_AUTH_SESSION_PHASE.AWAITING_CALLBACK,
           state,
           challengePayload: {
-            kind: "redirect",
+            kind: PLUGIN_AUTH_CHALLENGE_KIND.REDIRECT,
             url: authorizeUrl.toString(),
-            openMode: "popup",
+            openMode: PLUGIN_AUTH_CHALLENGE_OPEN_MODE.POPUP,
           } as PluginAuthSessionsChallengePayload,
           transientPayload:
             transientPayload as PluginAuthSessionsTransientPayload,
@@ -1217,7 +1233,7 @@ export async function startPluginAuthSession(input: {
         session: presentAuthSession(inserted),
       }
     }
-    case "mijia_qr_login": {
+    case PLUGIN_AUTH_BINDING_DRIVER_KIND.MIJIA_QR_LOGIN: {
       const result = await startMijiaQrLoginSession({
         locale: draftConfig.locale,
       })
@@ -1230,8 +1246,8 @@ export async function startPluginAuthSession(input: {
           bindingKey: binding.key,
           driver: binding.driver,
           workspaceMemberId: input.workspaceMemberId,
-          status: "pending",
-          phase: "pending_scan",
+          status: PLUGIN_AUTH_SESSION_STATUS.PENDING,
+          phase: PLUGIN_AUTH_SESSION_PHASE.PENDING_SCAN,
           state: null,
           challengePayload:
             result.challengePayload as PluginAuthSessionsChallengePayload,
@@ -1247,7 +1263,7 @@ export async function startPluginAuthSession(input: {
         session: presentAuthSession(inserted),
       }
     }
-    case "feishu_cli_setup": {
+    case PLUGIN_AUTH_BINDING_DRIVER_KIND.FEISHU_CLI_SETUP: {
       const selectedFeatures = normalizeFeishuFeatureKeys(draftConfig.features)
       const existingConnectionRef = asObject(draftConfig.feishuAccount)
       let existingAppCredentials:
@@ -1293,8 +1309,8 @@ export async function startPluginAuthSession(input: {
           bindingKey: binding.key,
           driver: binding.driver,
           workspaceMemberId: input.workspaceMemberId,
-          status: "pending",
-          phase: "pending_scan",
+          status: PLUGIN_AUTH_SESSION_STATUS.PENDING,
+          phase: PLUGIN_AUTH_SESSION_PHASE.PENDING_SCAN,
           state: null,
           challengePayload:
             result.challengePayload as PluginAuthSessionsChallengePayload,
@@ -1324,12 +1340,18 @@ export async function getPluginAuthSession(
   workspaceMemberId: string
 ) {
   let row = await getSessionRow(sessionId, workspaceId, workspaceMemberId)
-  if (row.driver === "mijia_qr_login" && row.status === "pending") {
+  if (
+    row.driver === PLUGIN_AUTH_BINDING_DRIVER_KIND.MIJIA_QR_LOGIN &&
+    row.status === PLUGIN_AUTH_SESSION_STATUS.PENDING
+  ) {
     row = await progressMijiaPluginAuthSession(row)
-  } else if (row.driver === "feishu_cli_setup" && row.status === "pending") {
+  } else if (
+    row.driver === PLUGIN_AUTH_BINDING_DRIVER_KIND.FEISHU_CLI_SETUP &&
+    row.status === PLUGIN_AUTH_SESSION_STATUS.PENDING
+  ) {
     row = await progressFeishuPluginAuthSession(row)
   } else if (
-    row.status === "pending" &&
+    row.status === PLUGIN_AUTH_SESSION_STATUS.PENDING &&
     row.expiresAt.getTime() <= Date.now()
   ) {
     row = await expirePluginAuthSession(row.id)
@@ -1347,7 +1369,7 @@ export async function inspectPluginAuthSession(input: {
     input.workspaceId,
     input.workspaceMemberId
   )
-  if (row.driver !== "feishu_cli_setup") {
+  if (row.driver !== PLUGIN_AUTH_BINDING_DRIVER_KIND.FEISHU_CLI_SETUP) {
     throw new PluginAuthError(
       400,
       "Only Feishu auth sessions support app scope inspection."
@@ -1400,14 +1422,14 @@ export async function handlePluginAuthCallback(input: {
 
   if (session.expiresAt.getTime() <= Date.now()) {
     await updatePluginAuthSessionNoReturn(session.id, {
-      status: "expired",
+      status: PLUGIN_AUTH_SESSION_STATUS.EXPIRED,
     })
     throw new PluginAuthError(410, "Auth session expired")
   }
 
   if (input.error) {
     const failed = await updatePluginAuthSession(session.id, {
-      status: "failed",
+      status: PLUGIN_AUTH_SESSION_STATUS.FAILED,
       phase: null,
       errorCode: input.error,
       errorMessage: input.errorDescription || input.error,
@@ -1416,7 +1438,7 @@ export async function handlePluginAuthCallback(input: {
   }
 
   switch (session.driver) {
-    case "oauth2_authorization_code_pkce": {
+    case PLUGIN_AUTH_BINDING_DRIVER_KIND.OAUTH2_AUTHORIZATION_CODE_PKCE: {
       if (!input.code) {
         throw new PluginAuthError(400, "Missing authorization code")
       }
@@ -1475,7 +1497,7 @@ export async function handlePluginAuthCallback(input: {
           : []
       const expiresAt =
         typeof tokenResponse.expires_in === "number"
-          ? serializeInstant(
+          ? presentInstant(
               new Date(Date.now() + tokenResponse.expires_in * 1000)
             )
           : null
@@ -1512,7 +1534,7 @@ export async function handlePluginAuthCallback(input: {
       }
 
       const updated = await updatePluginAuthSession(session.id, {
-        status: "completed",
+        status: PLUGIN_AUTH_SESSION_STATUS.COMPLETED,
         phase: null,
         resultPreview: resultPreview as PluginAuthSessionsResultPreview,
         resultPayload: resultPayload as PluginAuthSessionsResultPayload,
@@ -1556,7 +1578,7 @@ export async function attachAuthConnectionsToConfig(input: {
     input.authBindings.map((binding) => [binding.key, binding])
   )
   const authFields = input.configFields.filter(
-    (field) => field.type === "auth_connection"
+    (field) => field.type === PLUGIN_CONFIG_FIELD_TYPE.AUTH_CONNECTION
   )
 
   for (const field of authFields) {
@@ -1568,7 +1590,10 @@ export async function attachAuthConnectionsToConfig(input: {
       input.workspaceId,
       input.workspaceMemberId
     )
-    if (!["completed", "consumed"].includes(session.status)) {
+    if (
+      session.status !== PLUGIN_AUTH_SESSION_STATUS.COMPLETED &&
+      session.status !== PLUGIN_AUTH_SESSION_STATUS.CONSUMED
+    ) {
       throw new PluginAuthError(
         400,
         `Authorization for '${field.key}' is not completed`
@@ -1586,7 +1611,7 @@ export async function attachAuthConnectionsToConfig(input: {
 
     let connection: PluginAuthConnection
     if (
-      session.status === "consumed" &&
+      session.status === PLUGIN_AUTH_SESSION_STATUS.CONSUMED &&
       typeof metadata.consumedConnectionId === "string"
     ) {
       connection = await getAuthConnection(
@@ -1634,10 +1659,10 @@ export async function attachAuthConnectionsToConfig(input: {
           `UPDATE plugin_connections
            SET display_name = $2,
                avatar_url = $3,
-               status = 'active',
-               expires_at = $6,
-               public_payload = $7::jsonb,
-               secret_payload = $8::jsonb
+               status = $4,
+               expires_at = $5,
+               public_payload = $6::jsonb,
+               secret_payload = $7::jsonb
            WHERE id = $1
            RETURNING *,
              (
@@ -1649,6 +1674,7 @@ export async function attachAuthConnectionsToConfig(input: {
             existing.rows[0]!.id,
             displayName,
             avatarUrl,
+            PLUGIN_AUTH_CONNECTION_STATUS.ACTIVE,
             asNullableString(secretPayload.expiresAt),
             JSON.stringify(publicPayload),
             JSON.stringify(secretPayload),
@@ -1671,7 +1697,7 @@ export async function attachAuthConnectionsToConfig(input: {
              secret_payload
            )
            VALUES (
-             $1, $2, $3, $4, $5, $6, $7, 'active', $8, $9::jsonb, $10::jsonb
+             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb
            )
            RETURNING *,
              (
@@ -1687,6 +1713,7 @@ export async function attachAuthConnectionsToConfig(input: {
             externalAccountId,
             displayName,
             avatarUrl,
+            PLUGIN_AUTH_CONNECTION_STATUS.ACTIVE,
             asNullableString(secretPayload.expiresAt),
             JSON.stringify(publicPayload),
             JSON.stringify(secretPayload),
@@ -1699,11 +1726,12 @@ export async function attachAuthConnectionsToConfig(input: {
 
       await run(
         `UPDATE plugin_auth_sessions
-         SET status = 'consumed',
-             metadata = $2::jsonb
+         SET status = $2,
+             metadata = $3::jsonb
          WHERE id = $1`,
         [
           session.id,
+          PLUGIN_AUTH_SESSION_STATUS.CONSUMED,
           JSON.stringify({
             ...metadata,
             consumedConnectionId: connection.id,
@@ -1743,7 +1771,7 @@ export async function resolveAuthConnectionRefs(
       await getConnectionRow(ref.connectionId)
     )
     let secretPayload = asObject(decryptDeep(asObject(row.secretPayload)))
-    if (row.status !== "active") {
+    if (row.status !== PLUGIN_AUTH_CONNECTION_STATUS.ACTIVE) {
       // Fail-closed: never forward a non-active connection's secrets. Clear the
       // whole payload (not just OAuth's accessToken) so drivers like Mijia,
       // whose secret is the full session dict, can't leak a stale serviceToken.
@@ -1752,7 +1780,7 @@ export async function resolveAuthConnectionRefs(
       secretPayload = {}
     }
     resolved[key] = {
-      type: "auth_connection",
+      type: PLUGIN_CONFIG_FIELD_TYPE.AUTH_CONNECTION,
       connectionId: row.id,
       bindingKey: row.bindingKey,
       driver: row.driver,

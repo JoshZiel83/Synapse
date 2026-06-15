@@ -10,6 +10,7 @@ import type {
 } from "@synapse/shared"
 import {
   buildConversationMessageRef,
+  CONVERSATION_MESSAGE_SUBTYPE,
   isToolResultOrigin,
 } from "@synapse/shared"
 import { assertIsoInstant } from "@synapse/shared/datetime"
@@ -86,7 +87,7 @@ export async function loadExecutionToolResultsForSession(
   for (const [toolCallId, resultRow] of latestByCall.entries()) {
     const call = callsById.get(toolCallId)
     if (!call) continue
-    const meta = parseMetadata(resultRow.metadata)
+    const meta = resultRow.metadata
     const contentBlocks = itemPartsToCanonicalContentBlocks(
       partsByResult.get(resultRow.id) || []
     )
@@ -381,7 +382,10 @@ export function conversationItemToContextItem(
     return null
   }
 
-  if (itemType === "message" && item.subtype === "model_error_notice") {
+  if (
+    itemType === "message" &&
+    item.subtype === CONVERSATION_MESSAGE_SUBTYPE.MODEL_ERROR_NOTICE
+  ) {
     return null
   }
 

@@ -7,13 +7,8 @@ import {
   REMOTE_AGENT_RUNTIME_STATE,
   type CapabilityAccessTarget,
   type RemoteAgentLifecycleState,
-  type RemoteAgentMachineDetailView,
-  type RemoteAgentMachinePairingSessionView,
   type OneClickInstallCommands,
   type RemoteAgentMachineTrustStatus,
-  type RemoteAgentMachineView,
-  type RemoteAgentRuntimeCapabilityView,
-  type RemoteAgentRuntimeCatalogEntryView,
   type RemoteAgentRuntimeKind,
   type RemoteAgentRuntimeStateType,
   type WorkspaceAppGrantPermission,
@@ -29,6 +24,7 @@ import type { Executor } from "../../infrastructure/database/kysely.js"
 import {
   type RemoteAgentConversationRecord,
   type RemoteAgentRecord,
+  type RemoteAgentRuntimeCapabilityRecord,
   type RemoteAgentRow,
 } from "./presenter.js"
 import {
@@ -40,7 +36,7 @@ import { getFileUrlById } from "../files/service.js"
 import { requireWorkspaceMemberIdentity } from "../chat/workspace-identity.js"
 import * as repo from "./repo.js"
 
-type RuntimeCapabilities = RemoteAgentRuntimeCapabilityView
+type RuntimeCapabilities = RemoteAgentRuntimeCapabilityRecord
 
 type MachineConnection = {
   machineId: string

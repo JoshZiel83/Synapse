@@ -1,5 +1,4 @@
 import crypto from "node:crypto"
-import { sql } from "kysely"
 import {
   DEFAULT_CONVERSATION_TYPE_MASK,
   FILE_ORIGIN_SYSTEMS,
@@ -7,7 +6,6 @@ import {
   conversationRef,
   maskAllowsConversationTypeKey,
   normalizeConversationTypeMask,
-  parseJsonObject,
   remoteAgentRef,
   resolveConversationTypeKey,
   resolveEffectiveConversationTypeMask,
@@ -24,8 +22,8 @@ import {
   normalizeCanonicalContentBlocks,
   type RuntimeBindingScope,
   type ScopedSubjectTarget,
-  type SkillAttachmentFile,
   type SkillFrontmatter,
+  type WorkspaceAppGrantTargetInput,
   textBlock,
 } from "@synapse/shared"
 import { ACCESS_ACTIONS } from "../access/actions.js"
@@ -41,20 +39,36 @@ import {
 import { type Executor } from "../../infrastructure/database/kysely.js"
 import {
   withSkillsTransaction,
-  runBuilder,
-  runOn,
   clientRunner,
-  INSTALLED_SKILL_SELECT,
   ensureMarketplacePublisher,
   allocateMarketplaceItemSlug,
   upsertSkillMirrorSource,
   insertSkillSnapshot,
+  insertInstalledSkillRecord,
+  insertSkillVersionRecord,
+  updateInstalledSkillContentState,
+  updateInstalledSkillProfileState,
+  updateInstalledSkillMarketplaceState,
+  insertSkillSourceRefRecord,
+  incrementSkillCatalogDownloadCount,
+  markSkillSourceRefCustomized,
+  updateSkillSourceRefVersion,
   loadSkillSnapshotFilesMap,
   buildMarketplaceInstallationMap,
   getMarketplaceRowById,
   getMarketplaceRowBySlug,
   getMarketplaceRowByMirrorSourceId,
+  updateMarketplaceCatalogItemSummary,
+  updateMarketplaceCatalogItemRecord,
+  insertMarketplaceCatalogItemRecord,
+  getCatalogVersionId,
+  insertCatalogVersionRecord,
+  updateCatalogVersionRecord,
+  updateRepublishedCatalogVersionRecord,
+  upsertSkillPackageVersionSpecRecord,
+  updateCatalogItemLatestVersion,
   loadInstalledSkillRows,
+  getInstalledSkillRowForWorkspace,
   loadAccessBindingsBySkillIds,
   findSkillIdsByBindingFilter as findSkillIdsByBindingFilterRepo,
   listMarketplaceRows,
@@ -115,11 +129,11 @@ import {
   type PreparedSkillSnapshot,
 } from "./mirror-import.js"
 import {
-  buildInstalledSkillPayload,
-  buildSkillAttachmentFromCatalogFile,
   mapMarketplaceEntry,
   presentSkillAccessGrant,
+  type InstalledSkillPresentationRecord,
 } from "./presenter.js"
+import { normalizeStoredBlocks } from "./content-block-codec.js"
 import type {
   InstallationSummary,
   InstalledSkillRow,
@@ -402,26 +416,6 @@ function normalizeScopeTarget(input: {
   }
 }
 
-function parseJsonArray<T>(value: unknown): T[] {
-  if (!value) return []
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value) as T[]
-    } catch {
-      return []
-    }
-  }
-
-  return Array.isArray(value) ? (value as T[]) : []
-}
-
-export function normalizeStoredBlocks(value: unknown) {
-  const blocks = normalizeCanonicalContentBlocks(
-    parseJsonArray<CanonicalContentBlockInput>(value)
-  )
-  return blocks
-}
-
 function descriptionBlockFromStored(value: unknown) {
   return normalizeStoredBlocks(value)[0] || defaultDescriptionBlock()
 }
@@ -523,7 +517,7 @@ export function frontmatterFromSnapshotRow(
     effort: row.snapshotEffort || undefined,
     context: row.snapshotContext || undefined,
     agent: row.snapshotAgent || undefined,
-    hooks: parseJsonObject(row.snapshotHooks),
+    hooks: row.snapshotHooks,
   }
 }
 
@@ -675,7 +669,7 @@ export function resolveInstalledSkillEffectiveConversationTypeMask(row: {
 export function skillBindingToAccessTarget(
   binding: SkillAccessRow,
   _fallbackWorkspaceId: string
-): CapabilityAccessTarget {
+): WorkspaceAppGrantTargetInput {
   switch (binding.bindScope) {
     case "workspace":
       return { subject: workspaceRef(binding.workspaceId) }
@@ -732,7 +726,7 @@ function buildAvailableSkillPayload(
 
 export function visibleRowToAccessTarget(
   row: VisibleSkillRow
-): CapabilityAccessTarget {
+): WorkspaceAppGrantTargetInput {
   switch (row.accessBindScope) {
     case "workspace":
       return { subject: workspaceRef(row.workspaceId) }
@@ -783,7 +777,7 @@ function buildPreparedSnapshotFromInput(params: {
   existingSnapshot?: {
     frontmatter: SkillFrontmatter
     bodyBlocks: CanonicalContentBlock[]
-    files: SkillAttachmentFile[]
+    files: SkillSnapshotFileRow[]
   }
 }) {
   const descriptionText = descriptionTextFromInput(params.explicitDescription)
@@ -811,8 +805,8 @@ function buildPreparedSnapshotFromInput(params: {
         bodyBlocks: params.existingSnapshot.bodyBlocks,
         files: params.existingSnapshot.files.map((file) => ({
           path: file.path,
-          mediaType: file.mediaType,
-          contentBlocks: file.contentBlocks,
+          mediaType: file.mediaType || undefined,
+          contentBlocks: normalizeStoredBlocks(file.contentBlocks),
         })),
       }),
       frontmatterOverrides: {
@@ -983,6 +977,7 @@ async function chooseBindingMap(
   filters?: {
     accessTargetType?: SkillUseScope
     actorId?: string
+    remoteAgentId?: string
     workspaceMemberId?: string
     conversationId?: string
   }
@@ -992,6 +987,7 @@ async function chooseBindingMap(
     ? normalizeScopeTarget({
         useScope: filters.accessTargetType,
         actorId: filters.actorId,
+        remoteAgentId: filters.remoteAgentId,
         workspaceMemberId: filters.workspaceMemberId,
         conversationId: filters.conversationId,
       })
@@ -1018,12 +1014,14 @@ async function findSkillIdsByBindingFilter(params: {
   workspaceId: string
   accessTargetType?: SkillUseScope
   actorId?: string
+  remoteAgentId?: string
   workspaceMemberId?: string
   conversationId?: string
 }) {
   if (
     !params.accessTargetType &&
     !params.actorId &&
+    !params.remoteAgentId &&
     !params.workspaceMemberId &&
     !params.conversationId
   ) {
@@ -1037,6 +1035,7 @@ async function findSkillIdsByBindingFilter(params: {
           useScope: params.accessTargetType,
           workspaceId: params.workspaceId,
           actorId: params.actorId,
+          remoteAgentId: params.remoteAgentId,
           workspaceMemberId: params.workspaceMemberId,
           conversationId: params.conversationId,
         }),
@@ -1047,6 +1046,7 @@ async function findSkillIdsByBindingFilter(params: {
     workspaceId: params.workspaceId,
     resolvedTarget: target,
     actorId: params.actorId,
+    remoteAgentId: params.remoteAgentId,
     workspaceMemberId: params.workspaceMemberId,
     conversationId: params.conversationId,
   })
@@ -1105,10 +1105,10 @@ async function ensureSkillBinding(
   }
 }
 
-async function getInstalledSkillResponse(
+async function getInstalledSkillRecord(
   workspaceId: string,
   installedSkillId: string
-) {
+): Promise<InstalledSkillPresentationRecord> {
   const row = await loadInstalledSkillForUpdate(workspaceId, installedSkillId)
   if (!row) {
     throw new SkillError(404, "Installed skill not found")
@@ -1124,12 +1124,13 @@ async function getInstalledSkillResponse(
       "installed_skill"
     )
 
-  return buildInstalledSkillPayload(
+  return {
+    id: row.skillId,
     row,
-    bindingMap.get(installedSkillId),
+    binding: bindingMap.get(installedSkillId),
     workspaceConversationTypeMask,
-    fileMap.get(row.currentSnapshotId) || []
-  )
+    files: fileMap.get(row.currentSnapshotId) || [],
+  }
 }
 
 export async function listMarketplaceSkills(filters?: {
@@ -1223,17 +1224,14 @@ async function upsertImportedMarketplaceSkill(
       existing.latestVersionValue === imported.version &&
       existing.snapshotContentHash === imported.contentHash
     ) {
-      await client
-        .updateTable("catalogItems")
-        .set({
-          displayName: imported.frontmatter.name,
-          summary: imported.frontmatter.description,
-          longDescription: imported.frontmatter.description,
-          tags: imported.tags,
-          metadata: sql`${JSON.stringify(imported.itemMetadata)}::jsonb`,
-        })
-        .where("id", "=", existing.itemId)
-        .execute()
+      await updateMarketplaceCatalogItemSummary(client, {
+        itemId: existing.itemId,
+        displayName: imported.frontmatter.name,
+        summary: imported.frontmatter.description,
+        longDescription: imported.frontmatter.description,
+        tags: imported.tags,
+        metadata: imported.itemMetadata,
+      })
       return existing.itemId
     }
 
@@ -1247,46 +1245,34 @@ async function upsertImportedMarketplaceSkill(
 
     let itemId = existing?.itemId || null
     if (existing) {
-      await client
-        .updateTable("catalogItems")
-        .set({
-          slug: itemSlug,
-          displayName: imported.frontmatter.name,
-          summary: imported.frontmatter.description,
-          longDescription: imported.frontmatter.description,
-          mirrorSourceId: mirrorSourceId,
-          sourceKind: "official",
-          visibility: "public",
-          tags: imported.tags,
-          isActive: true,
-          metadata: sql`${JSON.stringify(imported.itemMetadata)}::jsonb`,
-        })
-        .where("id", "=", existing.itemId)
-        .execute()
+      await updateMarketplaceCatalogItemRecord(client, {
+        itemId: existing.itemId,
+        slug: itemSlug,
+        displayName: imported.frontmatter.name,
+        summary: imported.frontmatter.description,
+        longDescription: imported.frontmatter.description,
+        mirrorSourceId: mirrorSourceId,
+        sourceKind: "official",
+        visibility: "public",
+        tags: imported.tags,
+        isActive: true,
+        metadata: imported.itemMetadata,
+      })
       itemId = existing.itemId
     } else {
-      const inserted = await runBuilder(
-        client,
-        client
-          .insertInto("catalogItems")
-          .values({
-            publisherId: publisherId,
-            workspaceId: null,
-            itemKind: "skill_package",
-            slug: itemSlug,
-            displayName: imported.frontmatter.name,
-            summary: imported.frontmatter.description,
-            longDescription: imported.frontmatter.description,
-            mirrorSourceId: mirrorSourceId,
-            sourceKind: "official",
-            visibility: "public",
-            tags: imported.tags,
-            isActive: true,
-            metadata: sql`${JSON.stringify(imported.itemMetadata)}::jsonb`,
-          })
-          .returning("id")
-      )
-      itemId = inserted.rows[0]!.id
+      itemId = await insertMarketplaceCatalogItemRecord(client, {
+        publisherId: publisherId,
+        slug: itemSlug,
+        displayName: imported.frontmatter.name,
+        summary: imported.frontmatter.description,
+        longDescription: imported.frontmatter.description,
+        mirrorSourceId: mirrorSourceId,
+        sourceKind: "official",
+        visibility: "public",
+        tags: imported.tags,
+        isActive: true,
+        metadata: imported.itemMetadata,
+      })
     }
 
     const snapshotId = await insertSkillSnapshot(client, imported, {
@@ -1294,70 +1280,39 @@ async function upsertImportedMarketplaceSkill(
       resolvedRevision: imported.mirrorSource.resolvedRevision || null,
     })
 
-    const existingVersion = await runBuilder(
-      client,
-      client
-        .selectFrom("catalogVersions")
-        .select("id")
-        .where("catalogItemId", "=", itemId!)
-        .where("version", "=", imported.version)
-        .limit(1)
-    )
+    const existingVersionId = await getCatalogVersionId(client, {
+      catalogItemId: itemId!,
+      version: imported.version,
+    })
 
     const versionId =
-      existingVersion.rows[0]?.id ||
-      (
-        await runBuilder(
-          client,
-          client
-            .insertInto("catalogVersions")
-            .values({
-              catalogItemId: itemId!,
-              version: imported.version,
-              status: "active",
-              changelog: imported.changelog,
-              metadata: sql`${JSON.stringify(imported.itemMetadata)}::jsonb`,
-              createdByUserId: authorUserId || null,
-            })
-            .returning("id")
-        )
-      ).rows[0]!.id
+      existingVersionId ||
+      (await insertCatalogVersionRecord(client, {
+        catalogItemId: itemId!,
+        version: imported.version,
+        changelog: imported.changelog,
+        metadata: imported.itemMetadata,
+        createdByUserId: authorUserId || null,
+      }))
 
-    if (existingVersion.rows[0]) {
-      await client
-        .updateTable("catalogVersions")
-        .set({
-          status: "active",
-          changelog: imported.changelog,
-          metadata: sql`${JSON.stringify(imported.itemMetadata)}::jsonb`,
-        })
-        .where("id", "=", versionId)
-        .execute()
+    if (existingVersionId) {
+      await updateCatalogVersionRecord(client, {
+        versionId,
+        changelog: imported.changelog,
+        metadata: imported.itemMetadata,
+      })
     }
 
-    await client
-      .insertInto("skillPackageVersionSpecs")
-      .values({
-        catalogVersionId: versionId,
-        skillSnapshotId: snapshotId,
-        defaultConversationTypeMask: DEFAULT_CONVERSATION_TYPE_MASK,
-        createdAt: sql`NOW()`,
-      })
-      .onConflict((oc) =>
-        oc.column("catalogVersionId").doUpdateSet({
-          skillSnapshotId: sql`excluded.skill_snapshot_id`,
-          defaultConversationTypeMask: sql`excluded.default_conversation_type_mask`,
-        })
-      )
-      .execute()
+    await upsertSkillPackageVersionSpecRecord(client, {
+      catalogVersionId: versionId,
+      skillSnapshotId: snapshotId,
+      defaultConversationTypeMask: DEFAULT_CONVERSATION_TYPE_MASK,
+    })
 
-    await client
-      .updateTable("catalogItems")
-      .set({
-        latestVersionId: versionId,
-      })
-      .where("id", "=", itemId!)
-      .execute()
+    await updateCatalogItemLatestVersion(client, {
+      itemId: itemId!,
+      versionId,
+    })
 
     return itemId
   })
@@ -1418,7 +1373,7 @@ export async function refreshMarketplaceSkill(input: {
   }
 
   if (existing.mirrorSourceType === "github") {
-    const locator = parseJsonObject(existing.mirrorLocator)
+    const locator = existing.mirrorLocator
     return importMarketplaceMirrorSkill({
       sourceType: "github",
       repoUrl: String(locator.repoUrl || ""),
@@ -1428,7 +1383,7 @@ export async function refreshMarketplaceSkill(input: {
     })
   }
 
-  const locator = parseJsonObject(existing.mirrorLocator)
+  const locator = existing.mirrorLocator
   return importMarketplaceMirrorSkill({
     sourceType: "clawhub",
     ownerId:
@@ -1501,7 +1456,7 @@ export async function publishMarketplaceSkill(input: {
     }
 
     const itemMetadata: JsonObject = {
-      ...parseJsonObject(existing?.itemMetadata),
+      ...(existing?.itemMetadata || {}),
       canonicalSlug,
       frontmatterName: preparedSnapshot.frontmatter.name,
       ...(input.metadata || {}),
@@ -1517,116 +1472,75 @@ export async function publishMarketplaceSkill(input: {
           : null
 
     if (existing) {
-      await client
-        .updateTable("catalogItems")
-        .set({
-          slug: canonicalSlug,
-          displayName: preparedSnapshot.frontmatter.name,
-          summary: preparedSnapshot.frontmatter.description,
-          longDescription: preparedSnapshot.frontmatter.description,
-          tags: input.tags || [],
-          isActive: input.isActive ?? true,
-          iconFileId: nextIconFileId,
-          metadata: sql`${JSON.stringify(itemMetadata)}::jsonb`,
-        })
-        .where("id", "=", existing.itemId)
-        .execute()
+      await updateMarketplaceCatalogItemRecord(client, {
+        itemId: existing.itemId,
+        slug: canonicalSlug,
+        displayName: preparedSnapshot.frontmatter.name,
+        summary: preparedSnapshot.frontmatter.description,
+        longDescription: preparedSnapshot.frontmatter.description,
+        mirrorSourceId: null,
+        sourceKind: "official",
+        visibility: "public",
+        tags: input.tags || [],
+        isActive: input.isActive ?? true,
+        iconFileId: nextIconFileId,
+        metadata: itemMetadata,
+      })
       itemId = existing.itemId
     } else {
-      const inserted = await runBuilder(
-        client,
-        client
-          .insertInto("catalogItems")
-          .values({
-            publisherId: publisherId,
-            workspaceId: null,
-            itemKind: "skill_package",
-            slug: canonicalSlug,
-            displayName: preparedSnapshot.frontmatter.name,
-            summary: preparedSnapshot.frontmatter.description,
-            longDescription: preparedSnapshot.frontmatter.description,
-            mirrorSourceId: null,
-            sourceKind: "official",
-            visibility: "public",
-            tags: input.tags || [],
-            isActive: input.isActive ?? true,
-            iconFileId: nextIconFileId,
-            metadata: sql`${JSON.stringify(itemMetadata)}::jsonb`,
-          })
-          .returning("id")
-      )
-      itemId = inserted.rows[0]!.id
+      itemId = await insertMarketplaceCatalogItemRecord(client, {
+        publisherId: publisherId,
+        slug: canonicalSlug,
+        displayName: preparedSnapshot.frontmatter.name,
+        summary: preparedSnapshot.frontmatter.description,
+        longDescription: preparedSnapshot.frontmatter.description,
+        mirrorSourceId: null,
+        sourceKind: "official",
+        visibility: "public",
+        tags: input.tags || [],
+        isActive: input.isActive ?? true,
+        iconFileId: nextIconFileId,
+        metadata: itemMetadata,
+      })
     }
 
     const snapshotId = await insertSkillSnapshot(client, preparedSnapshot)
 
-    const existingVersion = await runBuilder(
-      client,
-      client
-        .selectFrom("catalogVersions")
-        .select("id")
-        .where("catalogItemId", "=", itemId!)
-        .where("version", "=", version)
-        .limit(1)
-    )
+    const existingVersionId = await getCatalogVersionId(client, {
+      catalogItemId: itemId!,
+      version,
+    })
 
     const versionMetadata = input.metadata || {}
     const versionId =
-      existingVersion.rows[0]?.id ||
-      (
-        await runBuilder(
-          client,
-          client
-            .insertInto("catalogVersions")
-            .values({
-              catalogItemId: itemId!,
-              version,
-              status: "active",
-              changelog: input.changelog || "",
-              metadata: sql`${JSON.stringify(versionMetadata)}::jsonb`,
-              createdByUserId: input.authorUserId || null,
-            })
-            .returning("id")
-        )
-      ).rows[0]!.id
+      existingVersionId ||
+      (await insertCatalogVersionRecord(client, {
+        catalogItemId: itemId!,
+        version,
+        changelog: input.changelog || "",
+        metadata: versionMetadata,
+        createdByUserId: input.authorUserId || null,
+      }))
 
-    if (existingVersion.rows[0]) {
-      await client
-        .updateTable("catalogVersions")
-        .set({
-          status: "active",
-          changelog: input.changelog || "",
-          metadata: sql`${JSON.stringify(versionMetadata)}::jsonb`,
-          createdByUserId: sql`COALESCE(created_by_user_id, ${input.authorUserId || null})`,
-          createdAt: sql`created_at`,
-        })
-        .where("id", "=", versionId)
-        .execute()
+    if (existingVersionId) {
+      await updateRepublishedCatalogVersionRecord(client, {
+        versionId,
+        changelog: input.changelog || "",
+        metadata: versionMetadata,
+        createdByUserId: input.authorUserId || null,
+      })
     }
 
-    await client
-      .insertInto("skillPackageVersionSpecs")
-      .values({
-        catalogVersionId: versionId,
-        skillSnapshotId: snapshotId,
-        defaultConversationTypeMask: defaultConversationTypeMask,
-        createdAt: sql`NOW()`,
-      })
-      .onConflict((oc) =>
-        oc.column("catalogVersionId").doUpdateSet({
-          skillSnapshotId: sql`excluded.skill_snapshot_id`,
-          defaultConversationTypeMask: sql`excluded.default_conversation_type_mask`,
-        })
-      )
-      .execute()
+    await upsertSkillPackageVersionSpecRecord(client, {
+      catalogVersionId: versionId,
+      skillSnapshotId: snapshotId,
+      defaultConversationTypeMask: defaultConversationTypeMask,
+    })
 
-    await client
-      .updateTable("catalogItems")
-      .set({
-        latestVersionId: versionId,
-      })
-      .where("id", "=", itemId!)
-      .execute()
+    await updateCatalogItemLatestVersion(client, {
+      itemId: itemId!,
+      versionId,
+    })
 
     return itemId
   })
@@ -1714,31 +1628,21 @@ export async function createWorkspaceSkill(input: {
       status: "active",
       conversationTypeMaskOverride: null,
     })
-    const insertedSkill = await runBuilder(
-      client,
-      client
-        .insertInto("installedSkills")
-        .values({
-          id: skillId,
-          iconFileId: iconFileId,
-          tags: input.tags || [],
-          currentVersion: 1,
-          currentSnapshotId: snapshotId,
-        })
-        .returning("id")
-    )
-    const insertedSkillId = insertedSkill.rows[0]!.id
+    const insertedSkillId = await insertInstalledSkillRecord(client, {
+      id: skillId,
+      iconFileId: iconFileId,
+      tags: input.tags || [],
+      currentVersion: 1,
+      currentSnapshotId: snapshotId,
+    })
 
-    await client
-      .insertInto("skillVersions")
-      .values({
-        skillId: insertedSkillId,
-        version: 1,
-        skillSnapshotId: snapshotId,
-        metadata: sql`${JSON.stringify({})}::jsonb`,
-        createdByWorkspaceMemberId: input.installedByWorkspaceMemberId || null,
-      })
-      .execute()
+    await insertSkillVersionRecord(client, {
+      skillId: insertedSkillId,
+      version: 1,
+      skillSnapshotId: snapshotId,
+      metadata: {},
+      createdByWorkspaceMemberId: input.installedByWorkspaceMemberId || null,
+    })
 
     if (input.grants?.length) {
       for (const grant of input.grants) {
@@ -1771,7 +1675,7 @@ export async function createWorkspaceSkill(input: {
     }
   })
 
-  return getInstalledSkillResponse(input.workspaceId, result.skillId)
+  return getInstalledSkillRecord(input.workspaceId, result.skillId)
 }
 
 export async function listInstalledSkills(
@@ -1788,6 +1692,7 @@ export async function listInstalledSkills(
     // "workspaceMemberId is required for workspace_member scope".
     workspaceMemberId?: string
     conversationId?: string
+    remoteAgentId?: string
     sourceSkillId?: string
   }
 ) {
@@ -1795,6 +1700,7 @@ export async function listInstalledSkills(
     workspaceId,
     accessTargetType: filters?.accessTargetType,
     actorId: filters?.actorId,
+    remoteAgentId: filters?.remoteAgentId,
     workspaceMemberId: filters?.workspaceMemberId,
     conversationId: filters?.conversationId,
   })
@@ -1814,6 +1720,7 @@ export async function listInstalledSkills(
     chooseBindingMap(skillIds, {
       accessTargetType: filters?.accessTargetType,
       actorId: filters?.actorId,
+      remoteAgentId: filters?.remoteAgentId,
       workspaceMemberId: filters?.workspaceMemberId,
       conversationId: filters?.conversationId,
     }),
@@ -1825,13 +1732,14 @@ export async function listInstalledSkills(
       "installed_skill"
     )
 
-  return rows.map((row) =>
-    buildInstalledSkillPayload(
+  return rows.map(
+    (row): InstalledSkillPresentationRecord => ({
+      id: row.skillId,
       row,
-      bindingMap.get(row.skillId),
+      binding: bindingMap.get(row.skillId),
       workspaceConversationTypeMask,
-      fileMap.get(row.currentSnapshotId) || []
-    )
+      files: fileMap.get(row.currentSnapshotId) || [],
+    })
   )
 }
 
@@ -1839,7 +1747,7 @@ export async function getInstalledSkill(
   workspaceId: string,
   installedSkillId: string
 ) {
-  return getInstalledSkillResponse(workspaceId, installedSkillId)
+  return getInstalledSkillRecord(workspaceId, installedSkillId)
 }
 
 export async function getInstalledSkillGrantState(
@@ -2201,50 +2109,31 @@ export async function installMarketplaceSkill(input: {
         marketplaceSkill.specDefaultConversationTypeMask ?? null,
     })
 
-    const insertedSkill = await runBuilder(
-      client,
-      client
-        .insertInto("installedSkills")
-        .values({
-          id: skillId,
-          iconFileId: marketplaceSkill.itemIconFileId,
-          tags: marketplaceSkill.itemTags || [],
-          currentVersion: 1,
-          currentSnapshotId: marketplaceSkill.snapshotId!,
-        })
-        .returning("id")
-    )
-    const insertedSkillId = insertedSkill.rows[0]!.id
+    const insertedSkillId = await insertInstalledSkillRecord(client, {
+      id: skillId,
+      iconFileId: marketplaceSkill.itemIconFileId,
+      tags: marketplaceSkill.itemTags || [],
+      currentVersion: 1,
+      currentSnapshotId: marketplaceSkill.snapshotId!,
+    })
 
-    await client
-      .insertInto("skillVersions")
-      .values({
-        skillId: insertedSkillId,
-        version: 1,
-        skillSnapshotId: marketplaceSkill.snapshotId!,
-        metadata: sql`${JSON.stringify({})}::jsonb`,
-        createdByWorkspaceMemberId: input.installedByWorkspaceMemberId || null,
-      })
-      .execute()
+    await insertSkillVersionRecord(client, {
+      skillId: insertedSkillId,
+      version: 1,
+      skillSnapshotId: marketplaceSkill.snapshotId!,
+      metadata: {},
+      createdByWorkspaceMemberId: input.installedByWorkspaceMemberId || null,
+    })
 
-    await client
-      .insertInto("skillSourceRefs")
-      .values({
-        skillId: insertedSkillId,
-        sourceCatalogItemId: marketplaceSkill.itemId,
-        sourceCatalogVersionId: marketplaceSkill.latestVersionId,
-        syncMode: "manual_merge",
-        isCustomized: false,
-      })
-      .execute()
+    await insertSkillSourceRefRecord(client, {
+      skillId: insertedSkillId,
+      sourceCatalogItemId: marketplaceSkill.itemId,
+      sourceCatalogVersionId: marketplaceSkill.latestVersionId,
+      syncMode: "manual_merge",
+      isCustomized: false,
+    })
 
-    await client
-      .updateTable("catalogItems")
-      .set({
-        downloadCount: sql`${sql.ref("downloadCount")} + 1`,
-      })
-      .where("id", "=", marketplaceSkill.itemId)
-      .execute()
+    await incrementSkillCatalogDownloadCount(client, marketplaceSkill.itemId)
 
     if (input.grants?.length) {
       for (const grant of input.grants) {
@@ -2277,7 +2166,7 @@ export async function installMarketplaceSkill(input: {
     }
   })
 
-  return getInstalledSkillResponse(input.workspaceId, result.skillId)
+  return getInstalledSkillRecord(input.workspaceId, result.skillId)
 }
 
 export async function updateInstalledSkill(input: {
@@ -2355,36 +2244,30 @@ export async function updateInstalledSkill(input: {
       const snapshotId = await insertSkillSnapshot(client, preparedSnapshot)
       nextDisplayName = preparedSnapshot.frontmatter.name
 
-      await client
-        .insertInto("skillVersions")
-        .values({
-          skillId: existing.skillId,
-          version: nextVersion,
-          skillSnapshotId: snapshotId,
-          metadata: sql`${JSON.stringify(parseJsonObject(existing.versionMetadata))}::jsonb`,
-          createdByWorkspaceMemberId: existing.ownerWorkspaceMemberId || null,
-        })
-        .execute()
+      await insertSkillVersionRecord(client, {
+        skillId: existing.skillId,
+        version: nextVersion,
+        skillSnapshotId: snapshotId,
+        metadata: existing.versionMetadata,
+        createdByWorkspaceMemberId: existing.ownerWorkspaceMemberId || null,
+      })
 
-      await client
-        .updateTable("installedSkills")
-        .set({
-          iconFileId:
-            input.iconFileId === undefined
-              ? existing.iconFileId
-              : input.iconFileId
-                ? await normalizeWorkspaceSkillIconFileId(
-                    input.iconFileId,
-                    input.workspaceId
-                  )
-                : null,
-          tags: input.tags || existing.tags || [],
-          currentVersion: nextVersion,
-          currentSnapshotId: snapshotId,
-          updatedAt: sql`NOW()`,
-        })
-        .where("id", "=", existing.skillId)
-        .execute()
+      const nextIconFileId =
+        input.iconFileId === undefined
+          ? existing.iconFileId
+          : input.iconFileId
+            ? await normalizeWorkspaceSkillIconFileId(
+                input.iconFileId,
+                input.workspaceId
+              )
+            : null
+      await updateInstalledSkillContentState(client, {
+        skillId: existing.skillId,
+        iconFileId: nextIconFileId,
+        tags: input.tags || existing.tags || [],
+        currentVersion: nextVersion,
+        currentSnapshotId: snapshotId,
+      })
       await updateWorkspaceAppRoot(client, {
         id: existing.skillId,
         displayName: nextDisplayName,
@@ -2399,13 +2282,7 @@ export async function updateInstalledSkill(input: {
       })
 
       if (existing.sourceCatalogItemId) {
-        await client
-          .updateTable("skillSourceRefs")
-          .set({
-            isCustomized: true,
-          })
-          .where("skillId", "=", existing.skillId)
-          .execute()
+        await markSkillSourceRefCustomized(client, existing.skillId)
       }
 
       return
@@ -2426,15 +2303,11 @@ export async function updateInstalledSkill(input: {
                 input.workspaceId
               )
             : null
-      await client
-        .updateTable("installedSkills")
-        .set({
-          iconFileId: nextIconFileId,
-          tags: input.tags === undefined ? existing.tags || [] : input.tags,
-          updatedAt: sql`NOW()`,
-        })
-        .where("id", "=", existing.skillId)
-        .execute()
+      await updateInstalledSkillProfileState(client, {
+        skillId: existing.skillId,
+        iconFileId: nextIconFileId,
+        tags: input.tags === undefined ? existing.tags || [] : input.tags,
+      })
       await updateWorkspaceAppRoot(client, {
         id: existing.skillId,
         status:
@@ -2453,7 +2326,7 @@ export async function updateInstalledSkill(input: {
     }
   })
 
-  return getInstalledSkillResponse(input.workspaceId, input.installedSkillId)
+  return getInstalledSkillRecord(input.workspaceId, input.installedSkillId)
 }
 
 export async function upgradeInstalledSkill(input: {
@@ -2486,31 +2359,27 @@ export async function upgradeInstalledSkill(input: {
     existing.sourceCatalogVersionId &&
     existing.sourceCatalogVersionId === marketplaceSkill.latestVersionId
   ) {
-    return getInstalledSkillResponse(input.workspaceId, input.installedSkillId)
+    return getInstalledSkillRecord(input.workspaceId, input.installedSkillId)
   }
+  const nextSourceVersionId = marketplaceSkill.latestVersionId
+  const nextSnapshotId = marketplaceSkill.snapshotId
 
   await withSkillsTransaction(async (client) => {
-    await client
-      .insertInto("skillVersions")
-      .values({
-        skillId: existing.skillId,
-        version: existing.currentVersion + 1,
-        skillSnapshotId: marketplaceSkill.snapshotId!,
-        metadata: sql`${JSON.stringify(parseJsonObject(existing.versionMetadata))}::jsonb`,
-        createdByWorkspaceMemberId: existing.ownerWorkspaceMemberId || null,
-      })
-      .execute()
+    await insertSkillVersionRecord(client, {
+      skillId: existing.skillId,
+      version: existing.currentVersion + 1,
+      skillSnapshotId: nextSnapshotId,
+      metadata: existing.versionMetadata,
+      createdByWorkspaceMemberId: existing.ownerWorkspaceMemberId || null,
+    })
 
-    await client
-      .updateTable("installedSkills")
-      .set({
-        iconFileId: marketplaceSkill.itemIconFileId,
-        tags: marketplaceSkill.itemTags || [],
-        currentVersion: existing.currentVersion + 1,
-        currentSnapshotId: marketplaceSkill.snapshotId!,
-      })
-      .where("id", "=", existing.skillId)
-      .execute()
+    await updateInstalledSkillMarketplaceState(client, {
+      skillId: existing.skillId,
+      iconFileId: marketplaceSkill.itemIconFileId,
+      tags: marketplaceSkill.itemTags || [],
+      currentVersion: existing.currentVersion + 1,
+      currentSnapshotId: nextSnapshotId,
+    })
     await updateWorkspaceAppRoot(client, {
       id: existing.skillId,
       displayName:
@@ -2518,17 +2387,14 @@ export async function upgradeInstalledSkill(input: {
         marketplaceSkill.itemDisplayName,
     })
 
-    await client
-      .updateTable("skillSourceRefs")
-      .set({
-        sourceCatalogVersionId: marketplaceSkill.latestVersionId,
-        isCustomized: false,
-      })
-      .where("skillId", "=", existing.skillId)
-      .execute()
+    await updateSkillSourceRefVersion(client, {
+      skillId: existing.skillId,
+      sourceCatalogVersionId: nextSourceVersionId,
+      isCustomized: false,
+    })
   })
 
-  return getInstalledSkillResponse(input.workspaceId, input.installedSkillId)
+  return getInstalledSkillRecord(input.workspaceId, input.installedSkillId)
 }
 
 export async function uninstallInstalledSkill(
@@ -2536,16 +2402,10 @@ export async function uninstallInstalledSkill(
   installedSkillId: string
 ) {
   const result = await withSkillsTransaction(async (client) => {
-    const existing = await runOn<InstalledSkillRow>(
-      client,
-      `${INSTALLED_SKILL_SELECT}
-       WHERE app.workspace_id = $1
-         AND app.deleted_at IS NULL
-         AND skill.id = $2
-       LIMIT 1`,
-      [workspaceId, installedSkillId]
-    )
-    const skill = existing.rows[0]
+    const skill = await getInstalledSkillRowForWorkspace(client, {
+      workspaceId,
+      installedSkillId,
+    })
     if (!skill) {
       return {
         deleted: false,

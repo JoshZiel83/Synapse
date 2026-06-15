@@ -1,8 +1,10 @@
 import {
   CONVERSATION_KIND,
   CONVERSATION_PARTICIPANT_TYPE,
+  CONVERSATION_STATUS,
+  isTransportKind,
 } from "@synapse/shared"
-import type { Timestamp } from "@synapse/shared"
+import type { Timestamp, TransportKind } from "@synapse/shared"
 import { assertIsoInstant } from "@synapse/shared/datetime"
 import { getFileUrlById } from "../files/service.js"
 import { listConversationParticipants } from "./service.js"
@@ -25,6 +27,14 @@ type ConversationSummaryRow = {
   lastMessageAt?: Timestamp | null
   unread_count?: number | null
   createdAt: Timestamp
+}
+
+function asOptionalTransportKind(
+  value: string | null | undefined
+): TransportKind | undefined {
+  if (!value) return undefined
+  if (isTransportKind(value)) return value
+  throw new Error(`Unexpected conversation transport kind: ${value}`)
 }
 
 export function mapConversationParticipant(row: ConversationParticipantRow) {
@@ -222,8 +232,10 @@ export async function mapConversationSummaryView(
     id: row.id,
     kind: row.kind,
     isIm: Boolean(row.is_im ?? row.isIm),
-    status: hasOpenLane ? ("active" as const) : ("completed" as const),
-    transportKind: row.transport_kind || undefined,
+    status: hasOpenLane
+      ? CONVERSATION_STATUS.ACTIVE
+      : CONVERSATION_STATUS.COMPLETED,
+    transportKind: asOptionalTransportKind(row.transport_kind),
     participants: mappedParticipants,
     members: mappedParticipants,
     actorParticipants,

@@ -18,11 +18,7 @@ import type {
 } from "@synapse/shared/types"
 import { assertSupportedEndpointType } from "../connectors/index.js"
 import { tryGetConnector } from "../connectors/registry.js"
-import {
-  normalizeAccountRow,
-  normalizeBindingRow,
-  parseJsonObject,
-} from "./_helpers.js"
+import { normalizeAccountRow, normalizeBindingRow } from "./_helpers.js"
 import {
   assertConversationInboundActor,
   loadTransportAccountRow,
@@ -227,7 +223,7 @@ export async function updateConversationTransportSettings(params: {
   }
   if (params.metadata !== undefined) {
     updates.metadata = {
-      ...parseJsonObject(existing.metadata),
+      ...existing.metadata,
       ...(params.metadata || {}),
     }
   }

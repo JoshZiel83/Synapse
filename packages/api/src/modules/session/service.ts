@@ -17,6 +17,7 @@ import type {
   SessionCollaborationState,
 } from "@synapse/shared/types"
 import {
+  CONVERSATION_MESSAGE_SUBTYPE,
   type SessionInterruptType,
   type SessionStatus,
   type SessionTrigger,
@@ -34,7 +35,7 @@ type SessionConversationMessageRole =
 
 type SessionConversationMessageSubtype = Exclude<
   ConversationMessageSubtype,
-  "chat.message"
+  typeof CONVERSATION_MESSAGE_SUBTYPE.CHAT_MESSAGE
 >
 import { v4 as uuidv4 } from "uuid"
 

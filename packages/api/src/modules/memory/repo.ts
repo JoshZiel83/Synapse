@@ -21,7 +21,7 @@
 import crypto from "node:crypto"
 import { CompiledQuery, sql, type RawBuilder } from "kysely"
 import { v4 as uuidv4 } from "uuid"
-import type { SubjectRef } from "@synapse/shared"
+import { parseJsonObject, type SubjectRef } from "@synapse/shared"
 import {
   db,
   withDbTransaction,
@@ -518,12 +518,11 @@ export async function markMemoryItemEmbeddingFailed(params: {
 // pure `sql` tags), and the presenter mapping stay in service.ts; this file
 // owns every `db.executeQuery` / Kysely builder run + the 5 transactions.
 //
-// Raw-SQL note: getMemoryRow / search / list use hand-written snake_case SQL
-// with explicit `AS id` aliases returning the snake_case MemoryRow shape — they
-// do NOT pass through CamelCasePlugin, so MemoryRow stays snake_case and the
-// presenter keeps decoding it. The `::vector` / `::jsonb` casts and the
-// sd_replace_memory_item_parts SECURITY DEFINER churn are load-bearing and
-// preserved verbatim.
+// Raw-SQL note: getMemoryRow / search / list use hand-written physical
+// snake_case SQL, but Kysely's CamelCasePlugin still transforms raw-query
+// top-level result keys. Repo output records are therefore camelCase; the
+// `::vector` / `::jsonb` casts and the sd_replace_memory_item_parts SECURITY
+// DEFINER churn are load-bearing and preserved verbatim.
 // ---------------------------------------------------------------------------
 
 const DEFAULT_NAMESPACE = "default"
@@ -550,12 +549,20 @@ type MemoryPartRow = {
 }
 
 export type SearchCandidateRow = MemoryRow & {
-  matched_chunk_id: string
-  chunk_search_text: string
-  text_score?: number | null
-  similarity_score?: number | null
-  vector_score?: number | null
-  rrf_score?: number | null
+  matchedChunkId: string
+  chunkSearchText: string
+  textScore?: number | null
+  similarityScore?: number | null
+  vectorScore?: number | null
+  rrfScore?: number | null
+}
+
+export function normalizeMemoryRow<T extends MemoryRow>(row: T): T {
+  const normalized = {
+    ...row,
+    metadata: parseJsonObject(row.metadata),
+  }
+  return normalized
 }
 
 /**
@@ -637,7 +644,8 @@ export async function getMemoryRow(
        WHERE mi.workspace_id = ${workspaceId} AND mi.id = ${memoryId}
        LIMIT 1`.compile(db)
   )
-  return result.rows[0]
+  const row = result.rows[0]
+  return row ? normalizeMemoryRow(row) : undefined
 }
 
 /**
@@ -1152,7 +1160,7 @@ export async function searchLexicalCandidateRows(params: {
       ORDER BY text_score DESC, similarity_score DESC, mi.importance DESC, mi.updated_at DESC
       LIMIT ${params.candidateLimit}`.compile(db)
   )
-  return result.rows
+  return result.rows.map(normalizeMemoryRow)
 }
 
 /**
@@ -1182,7 +1190,7 @@ export async function searchVectorCandidateRows(params: {
       ORDER BY mic.embedding <=> ${params.formattedEmbedding}::vector ASC
       LIMIT ${params.candidateLimit}`.compile(db)
   )
-  return result.rows
+  return result.rows.map(normalizeMemoryRow)
 }
 
 /**
@@ -1201,7 +1209,7 @@ export async function listMemoryCandidateRows(params: {
        ORDER BY mi.updated_at DESC
        LIMIT ${params.candidateOversample}`.compile(db)
   )
-  return result.rows
+  return result.rows.map(normalizeMemoryRow)
 }
 
 // ---------------------------------------------------------------------------

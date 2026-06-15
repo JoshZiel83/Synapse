@@ -28,10 +28,13 @@ import type {
   TaskRequestKind,
   Timestamp,
 } from "@synapse/shared/types"
+import { parseJsonObject } from "@synapse/shared"
 import type { ToolCallTaskExecutorKind } from "../tool-call-tasks/service.js"
 import type {
   RawTaskCommandRow,
+  RawTaskDbRow,
   RawTaskRow,
+  TaskCommandRow,
   ToolCallTaskActionTokensPayload,
   ToolCallTaskResponseCommandsBaseRevision,
   ToolCallTaskResponseCommandsRequestPayload,
@@ -94,6 +97,153 @@ export async function runCompiledOn<T = any>(
 /** `value::jsonb` cast helper used by the task writers. */
 export function jsonbValue<T>(value: T) {
   return sql<T>`${JSON.stringify(value ?? null)}::jsonb`
+}
+
+function requireJsonObject(
+  value: unknown,
+  label: string
+): Record<string, unknown> {
+  if (value === null || value === undefined) {
+    throw new Error(`${label} is required`)
+  }
+  if (typeof value === "string") {
+    if (value.trim().length === 0) {
+      throw new Error(`${label} is required`)
+    }
+    try {
+      const parsed = JSON.parse(value) as unknown
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error(`${label} must be a JSON object`)
+      }
+      return parsed as Record<string, unknown>
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message === `${label} must be a JSON object`
+      ) {
+        throw error
+      }
+      throw new Error(`${label} must be a valid JSON object`)
+    }
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be a JSON object`)
+  }
+  return value as Record<string, unknown>
+}
+
+function parseOptionalJsonObject(
+  value: unknown,
+  label: string
+): Record<string, unknown> | null {
+  if (value === null || value === undefined) {
+    return null
+  }
+  return requireJsonObject(value, label)
+}
+
+function parseJsonArray<T>(value: unknown, label: string): T[] {
+  if (value === null || value === undefined) {
+    return []
+  }
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value) as unknown
+      if (!Array.isArray(parsed)) {
+        throw new Error(`${label} must be a JSON array`)
+      }
+      return parsed as T[]
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message === `${label} must be a JSON array`
+      ) {
+        throw error
+      }
+      throw new Error(`${label} must be a valid JSON array`)
+    }
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be a JSON array`)
+  }
+  return value as T[]
+}
+
+function parseOptionalJsonArray<T>(value: unknown, label: string): T[] | null {
+  if (value === null || value === undefined) {
+    return null
+  }
+  return parseJsonArray<T>(value, label)
+}
+
+export function decodeTaskPromptPayload(row: {
+  prompt_payload: unknown
+}): Record<string, unknown> {
+  return parseJsonObject(row.prompt_payload)
+}
+
+export function decodeTaskResolutionPayload(row: {
+  resolution_payload: unknown
+}): Record<string, unknown> {
+  return parseJsonObject(row.resolution_payload)
+}
+
+export function normalizeTaskRow(row: RawTaskDbRow): RawTaskRow {
+  const normalized = {
+    ...row,
+    prompt_payload: requireJsonObject(
+      row.prompt_payload,
+      `Task ${row.id} prompt_payload`
+    ),
+    plan_payload: requireJsonObject(
+      row.plan_payload,
+      `Task ${row.id} plan_payload`
+    ),
+    resolution_payload: requireJsonObject(
+      row.resolution_payload,
+      `Task ${row.id} resolution_payload`
+    ),
+    requested_action: parseOptionalJsonObject(
+      row.requested_action,
+      `Task ${row.id} requested_action`
+    ) as RuntimeAuthorizationRequestedAction | null,
+    grant_options: parseOptionalJsonArray<RuntimeAuthorizationGrantOption>(
+      row.grant_options,
+      `Task ${row.id} grant_options`
+    ),
+    available_presets: parseOptionalJsonArray<RuntimeAuthorizationPreset>(
+      row.available_presets,
+      `Task ${row.id} available_presets`
+    ),
+    source_request_args: parseOptionalJsonObject(
+      row.source_request_args,
+      `Task ${row.id} source_request_args`
+    ),
+  }
+  return normalized
+}
+
+export function normalizeTaskCommandRow(
+  row: RawTaskCommandRow
+): TaskCommandRow {
+  return {
+    id: row.id,
+    task_id: row.task_id,
+    command_id: row.command_id,
+    base_revision: row.base_revision,
+    outcome: row.outcome,
+    request_payload: requireJsonObject(
+      row.request_payload,
+      `Task command ${row.id} request_payload`
+    ),
+    response_payload: requireJsonObject(
+      row.response_payload,
+      `Task command ${row.id} response_payload`
+    ),
+    created_by_workspace_member_id: row.created_by_workspace_member_id,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  }
 }
 
 /**
@@ -177,7 +327,7 @@ export async function resolveParticipantSubjectId(
 }
 
 export async function getTaskRowById(taskId: string, queryable?: Executor) {
-  const compiled = sql<RawTaskRow>`
+  const compiled = sql<RawTaskDbRow>`
     SELECT ir.*,
             ir.executor_kind AS kind,
             ir.request_payload AS prompt_payload,
@@ -296,15 +446,16 @@ export async function getTaskRowById(taskId: string, queryable?: Executor) {
      WHERE ir.id = ${taskId}
      LIMIT 1
   `.compile(db)
-  const result = await runCompiledOn<RawTaskRow>(queryable, compiled)
-  return result.rows[0] || null
+  const result = await runCompiledOn<RawTaskDbRow>(queryable, compiled)
+  const row = result.rows[0]
+  return row ? normalizeTaskRow(row) : null
 }
 
 export async function getTaskRowByIdForUpdate(
   taskId: string,
   queryable: Executor
 ) {
-  const compiled = sql<RawTaskRow>`
+  const compiled = sql<RawTaskDbRow>`
     SELECT ir.*,
             ir.executor_kind AS kind,
             ir.request_payload AS prompt_payload,
@@ -424,8 +575,9 @@ export async function getTaskRowByIdForUpdate(
      LIMIT 1
      FOR UPDATE OF ir
   `.compile(db)
-  const result = await runCompiledOn<RawTaskRow>(queryable, compiled)
-  return result.rows[0] || null
+  const result = await runCompiledOn<RawTaskDbRow>(queryable, compiled)
+  const row = result.rows[0]
+  return row ? normalizeTaskRow(row) : null
 }
 
 export async function getTaskCommandRow(
@@ -441,7 +593,8 @@ export async function getTaskCommandRow(
     .limit(1)
     .compile()
   const result = await runCompiledOn<RawTaskCommandRow>(queryable, compiled)
-  return result.rows[0] || null
+  const row = result.rows[0]
+  return row ? normalizeTaskCommandRow(row) : null
 }
 
 export async function insertTaskCommandRow(
@@ -976,7 +1129,7 @@ export async function findSessionPlanRowOn(
   client: Executor,
   sessionId: string
 ): Promise<{
-  collaborationState: unknown
+  collaborationState: Record<string, unknown>
   collaborationMode: string | null
   activePlanApprovalTaskId: string | null
   conversationKind: string
@@ -993,7 +1146,20 @@ export async function findSessionPlanRowOn(
     .where("s.id", "=", sessionId)
     .limit(1)
     .executeTakeFirst()
-  return row ?? null
+  return row
+    ? {
+        collaborationState:
+          row.collaborationState == null
+            ? {}
+            : requireJsonObject(
+                row.collaborationState,
+                `Session ${sessionId} collaboration_state`
+              ),
+        collaborationMode: row.collaborationMode,
+        activePlanApprovalTaskId: row.activePlanApprovalTaskId,
+        conversationKind: row.conversationKind,
+      }
+    : null
 }
 
 /**

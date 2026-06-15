@@ -42,7 +42,10 @@ export type WorkspaceMemberViewRow = Pick<
   accessKeys?: string[] | null
 }
 
-export type ActorRecord = TableRow<"actors">
+export type ActorRecord = Omit<TableRow<"actors">, "config" | "specialties"> & {
+  config: Record<string, unknown>
+  specialties: string[]
+}
 
 export type ActorsConfig = TableInsert<"actors">["config"]
 export type ActorVersionsConfig = TableInsert<"actorVersions">["config"]

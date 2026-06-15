@@ -26,6 +26,59 @@ export type DraftConversationPart = {
   metadata?: Record<string, unknown>
 }
 
+type StoredItemPart = {
+  partType: string
+  textValue?: string | null
+  refPath?: string | null
+  refSha256?: string | null
+  jsonValue?: unknown
+  mimeType?: string | null
+  name?: string | null
+  metadata?: unknown
+}
+
+function nullableString(value: unknown): string | null {
+  return typeof value === "string" ? value : null
+}
+
+function normalizeStoredItemPart(part: unknown): StoredItemPart | null {
+  if (!part || typeof part !== "object" || Array.isArray(part)) {
+    return null
+  }
+  const record = part as Record<string, unknown>
+
+  // Primary shape: Kysely/CamelCasePlugin row objects.
+  if (typeof record.partType === "string") {
+    return {
+      partType: record.partType,
+      textValue: nullableString(record.textValue),
+      refPath: nullableString(record.refPath),
+      refSha256: nullableString(record.refSha256),
+      jsonValue: record.jsonValue,
+      mimeType: nullableString(record.mimeType),
+      name: nullableString(record.name),
+      metadata: record.metadata,
+    }
+  }
+
+  // Legacy/raw SQL archive shape. Normalize once at the codec boundary instead
+  // of making every caller carry dual naming fallbacks.
+  if (typeof record.part_type === "string") {
+    return {
+      partType: record.part_type,
+      textValue: nullableString(record.text_value),
+      refPath: nullableString(record.ref_path),
+      refSha256: nullableString(record.ref_sha256),
+      jsonValue: record.json_value,
+      mimeType: nullableString(record.mime_type),
+      name: nullableString(record.name),
+      metadata: record.metadata,
+    }
+  }
+
+  return null
+}
+
 function getCategoryFromMimeType(mimeType: string): CanonicalFileCategory {
   if (mimeType.startsWith("image/")) return "image"
   if (mimeType.startsWith("audio/")) return "audio"
@@ -186,26 +239,31 @@ export function itemPartsToCanonicalContentBlocks(
 ): CanonicalContentBlock[] {
   const blocks: CanonicalContentBlock[] = []
 
-  for (const part of parts || []) {
-    if (part.part_type === "text") {
-      if (part.text_value) {
-        blocks.push(textBlock(part.text_value))
+  for (const rawPart of parts || []) {
+    const part = normalizeStoredItemPart(rawPart)
+    if (!part) {
+      continue
+    }
+
+    if (part.partType === "text") {
+      if (part.textValue) {
+        blocks.push(textBlock(part.textValue))
       }
       continue
     }
 
-    if (part.part_type === "file_ref" && part.ref_sha256) {
+    if (part.partType === "file_ref" && part.refSha256) {
       const metadata = parseJson(part.metadata)
       const mimeType =
-        part.mime_type ||
+        part.mimeType ||
         (typeof metadata.mimeType === "string" ? metadata.mimeType : null) ||
         "application/octet-stream"
       const path =
-        part.ref_path ??
+        part.refPath ??
         (typeof metadata.path === "string" ? metadata.path : undefined)
       blocks.push(
         fileRefBlock({
-          sha256: part.ref_sha256,
+          sha256: part.refSha256,
           path: path ?? undefined,
           mimeType,
           name:
@@ -225,8 +283,8 @@ export function itemPartsToCanonicalContentBlocks(
       continue
     }
 
-    if (part.part_type === "json") {
-      const payload = parseJsonValue(part.json_value)
+    if (part.partType === "json") {
+      const payload = parseJsonValue(part.jsonValue)
       if (!payload || typeof payload !== "object") continue
       const normalized = normalizeCanonicalContentBlocks([
         payload as CanonicalContentBlockInput,

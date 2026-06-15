@@ -36,10 +36,12 @@ import {
 import {
   normalizeAccountRow,
   normalizeTransportSessionRow,
-  parseJsonObject,
   readTrimmedString,
 } from "./_helpers.js"
 import {
+  decodeTransportAccountConfig,
+  decodeTransportAccountCredentials,
+  decodeTransportAccountMetadata,
   insertTransportAccountRow,
   runTransportAccountTransaction,
   selectActiveTransportAccountRows,
@@ -250,8 +252,7 @@ export async function getTransportAccountByWorkspaceKindAndKey(params: {
 export function getPendingTransportAccountAutoLinkWorkspaceMemberId(
   account: Pick<TransportAccountSummary, "metadata">
 ) {
-  const metadata = parseJsonObject(account.metadata)
-  return readPendingAutoLinkWorkspaceMemberId(metadata) || null
+  return readPendingAutoLinkWorkspaceMemberId(account.metadata) || null
 }
 
 export async function consumeTransportAccountAutoLink(params: {
@@ -267,7 +268,7 @@ export async function consumeTransportAccountAutoLink(params: {
   })
 
   const nextMetadata = {
-    ...parseJsonObject(params.account.metadata),
+    ...params.account.metadata,
     pendingAutoLinkConsumedAt: nowIsoInstant(),
     pendingAutoLinkConsumedExternalId: params.matchedExternalId,
   }
@@ -428,7 +429,7 @@ export async function updateTransportAccount(params: {
   // intact. If the caller wants a clean replacement they must send the
   // full credential object.
   const mergedCredentials = mergeAccountCredentials(
-    parseJsonObject(existing.credentials),
+    decodeTransportAccountCredentials(existing),
     params.credentials
   )
   const nextOwnerScope =
@@ -454,7 +455,7 @@ export async function updateTransportAccount(params: {
     config:
       params.config !== undefined
         ? params.config
-        : parseJsonObject(existing.config),
+        : decodeTransportAccountConfig(existing),
   })
   const resolvedOwnerWorkspaceMemberId = await assertTransportAccountOwner({
     workspaceId: params.workspaceId,
@@ -501,7 +502,7 @@ export async function updateTransportAccount(params: {
         metadata:
           params.metadata !== undefined
             ? params.metadata
-            : parseJsonObject(existing.metadata),
+            : decodeTransportAccountMetadata(existing),
       },
     })
 

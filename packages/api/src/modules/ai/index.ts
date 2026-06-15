@@ -25,6 +25,7 @@ import type {
 } from "@synapse/shared/types"
 import {
   CONVERSATION_PARTICIPANT_TYPE,
+  MODEL_SERVER_TOOL,
   describeTransportKind,
   extractText,
   formatMentionText,
@@ -1195,9 +1196,10 @@ export async function actorThink(
         allServerToolCalls.push(...serverCalls)
         if (onStatus) {
           const labels = serverCalls.map((sc) => {
-            if (sc.type === "web_search")
+            if (sc.type === MODEL_SERVER_TOOL.WEB_SEARCH)
               return `Searching "${sc.query || "..."}"`
-            if (sc.type === "web_fetch") return `Fetching ${sc.url || "..."}`
+            if (sc.type === MODEL_SERVER_TOOL.WEB_FETCH)
+              return `Fetching ${sc.url || "..."}`
             return sc.type
           })
           await onStatus(labels.join(", "))

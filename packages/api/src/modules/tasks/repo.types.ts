@@ -1,5 +1,10 @@
-import type { TaskRequestKind } from "@synapse/shared/types"
-import type { ChatTaskResolveOutcome } from "@synapse/shared/types"
+import type {
+  ChatTaskResolveOutcome,
+  RuntimeAuthorizationGrantOption,
+  RuntimeAuthorizationPreset,
+  RuntimeAuthorizationRequestedAction,
+  TaskRequestKind,
+} from "@synapse/shared/types"
 import type { TableInsert } from "../../infrastructure/database/kysely.js"
 import type {
   ToolCallTaskLifecycleStatus,
@@ -53,15 +58,15 @@ export type RawTaskRow = {
   lifecycle_status: ToolCallTaskLifecycleStatus
   outcome: ToolCallTaskOutcome | null
   revision: string | number
-  prompt_payload: unknown
-  plan_payload: unknown
+  prompt_payload: Record<string, unknown>
+  plan_payload: Record<string, unknown>
   requested_tool_name: string | null
   reason: string | null
   request_mode: string | null
-  requested_action: unknown
-  grant_options: unknown
-  available_presets: unknown
-  source_request_args: unknown
+  requested_action: RuntimeAuthorizationRequestedAction | null
+  grant_options: RuntimeAuthorizationGrantOption[] | null
+  available_presets: RuntimeAuthorizationPreset[] | null
+  source_request_args: Record<string, unknown> | null
   source_runtime_session_id: string | null
   source_retry_nonce: string | null
   // subject-scope-refactor: principal_remote_agent_id is derived from
@@ -73,7 +78,7 @@ export type RawTaskRow = {
   // Derived alias for dashboard consumers.
   principal_remote_agent_id: string | null
   principal_subject_kind: string | null
-  resolution_payload: unknown
+  resolution_payload: Record<string, unknown>
   resolved_at: Date | null
   expires_at: Date | null
   created_at: Date
@@ -123,6 +128,25 @@ export type RawTaskRow = {
   resolved_by_avatar_emoji: string | null
 }
 
+export type RawTaskDbRow = Omit<
+  RawTaskRow,
+  | "prompt_payload"
+  | "plan_payload"
+  | "requested_action"
+  | "grant_options"
+  | "available_presets"
+  | "source_request_args"
+  | "resolution_payload"
+> & {
+  prompt_payload: unknown
+  plan_payload: unknown
+  requested_action: unknown
+  grant_options: unknown
+  available_presets: unknown
+  source_request_args: unknown
+  resolution_payload: unknown
+}
+
 export type RawTaskCommandRow = {
   id: string
   task_id: string
@@ -134,4 +158,12 @@ export type RawTaskCommandRow = {
   created_by_workspace_member_id: string | null
   created_at: Date
   updated_at: Date
+}
+
+export type TaskCommandRow = Omit<
+  RawTaskCommandRow,
+  "request_payload" | "response_payload"
+> & {
+  request_payload: Record<string, unknown>
+  response_payload: Record<string, unknown>
 }
