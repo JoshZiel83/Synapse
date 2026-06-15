@@ -1,6 +1,6 @@
 import type { FastifyRequest, FastifyReply } from "fastify"
 import { requireRequestAction } from "../../modules/access/guards.js"
-import { db } from "../database/kysely.js"
+import { findActiveWorkspaceMemberForMiddleware } from "./repo.js"
 
 export async function workspaceMiddleware(
   request: FastifyRequest,
@@ -16,14 +16,10 @@ export async function workspaceMiddleware(
     return reply.status(401).send({ error: "Authentication required" })
   }
 
-  const member = await db
-    .selectFrom("workspaceMembers")
-    .select(["id", "workspaceId", "userId", "trustLevel"])
-    .where("workspaceId", "=", workspaceId)
-    .where("userId", "=", user.userId)
-    // Soft delete (design §8.4): a left/removed member must lose workspace access.
-    .where("status", "=", "active")
-    .executeTakeFirst()
+  const member = await findActiveWorkspaceMemberForMiddleware({
+    workspaceId,
+    userId: user.userId,
+  })
 
   ;(request as any).workspaceMember = member ?? null
 
