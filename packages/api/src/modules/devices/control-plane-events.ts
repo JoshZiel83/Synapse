@@ -6,6 +6,10 @@
 
 import { z } from "zod"
 import {
+  DeviceRuntimeSessionClosedParamsSchema,
+  DeviceRuntimeSessionOpenedParamsSchema,
+} from "@synapse/device-protocol"
+import {
   upsertRuntimeSessionOpened,
   closeRuntimeSession,
   selectDeviceOperationOwner,
@@ -35,18 +39,12 @@ export type PersistResult =
 
 // ─── device.runtime_session.opened / closed ─────────────────────────────────
 
-const RuntimeSessionOpenedSchema = z.object({
-  runtime_session_id: z.uuid(),
-  conversation_id: z.uuid().nullable().optional(),
-  actor_id: z.uuid().nullable().optional(),
-})
-
 export async function persistRuntimeSessionOpened(
   deviceId: string,
   serviceId: string,
   raw: unknown
 ): Promise<PersistResult> {
-  const parsed = RuntimeSessionOpenedSchema.safeParse(raw)
+  const parsed = DeviceRuntimeSessionOpenedParamsSchema.safeParse(raw)
   if (!parsed.success) {
     return {
       ok: false,
@@ -72,16 +70,12 @@ export async function persistRuntimeSessionOpened(
   }
 }
 
-const RuntimeSessionClosedSchema = z.object({
-  runtime_session_id: z.uuid(),
-})
-
 export async function persistRuntimeSessionClosed(
   deviceId: string,
   serviceId: string,
   raw: unknown
 ): Promise<PersistResult> {
-  const parsed = RuntimeSessionClosedSchema.safeParse(raw)
+  const parsed = DeviceRuntimeSessionClosedParamsSchema.safeParse(raw)
   if (!parsed.success) {
     return {
       ok: false,

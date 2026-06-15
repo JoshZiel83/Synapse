@@ -4,6 +4,8 @@ import { EventEmitter } from "node:events"
 import type {
   DeviceCatalogSyncParams,
   DeviceHelloParams,
+  DeviceTunnelDownParams,
+  DeviceTunnelUpParams,
   TunnelHandle,
 } from "@synapse/device-protocol"
 import { TransportClient } from "./transport.js"
@@ -256,9 +258,10 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
         // call returns no_tunnel_endpoint. Throws on failure for the same
         // fail-closed reason as pushCatalog above.
         if (this.tunnelHandle) {
-          await this.transport!.request("device.tunnel.up", {
+          const params: DeviceTunnelUpParams = {
             internal_url: this.tunnelHandle.internalUrl,
-          })
+          }
+          await this.transport!.request("device.tunnel.up", params)
           logger.info("device.tunnel.up registered with server", {
             internalUrl: this.tunnelHandle.internalUrl,
           })
@@ -336,7 +339,8 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
     this.updateStatus("degraded")
     if (!this.transport) return
     try {
-      this.transport.notify("device.tunnel.down", { reason })
+      const params: DeviceTunnelDownParams = { reason }
+      this.transport.notify("device.tunnel.down", params)
     } catch {
       /* best-effort: WSS may already be gone */
     }

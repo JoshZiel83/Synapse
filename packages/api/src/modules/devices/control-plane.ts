@@ -28,6 +28,8 @@ import { wireRoute } from "../../infrastructure/http/route.js"
 import {
   DeviceCatalogSyncParamsSchema,
   DeviceHelloParamsSchema,
+  DeviceTunnelDownParamsSchema,
+  DeviceTunnelUpParamsSchema,
   type JsonRpcRequest,
 } from "@synapse/device-protocol"
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
@@ -609,13 +611,16 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           }
           case "device.tunnel.up": {
             if (!requireAuthenticated(req)) return
-            const params = req.params as { internal_url?: unknown } | undefined
-            if (!params || typeof params.internal_url !== "string") {
+            const parsedTunnel = DeviceTunnelUpParamsSchema.safeParse(
+              req.params
+            )
+            if (!parsedTunnel.success) {
               writeError(
                 socket,
                 req.id ?? null,
                 -32602,
-                "device.tunnel.up: 'internal_url' (string) required"
+                "Invalid device.tunnel.up params",
+                formatValidationDetails(parsedTunnel.error)
               )
               return
             }
@@ -624,7 +629,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
             // present the server-issued tunnel_path_token for its own
             // service so peer devices can't squat on its route.
             validateTunnelInternalUrl({
-              candidate: params.internal_url,
+              candidate: parsedTunnel.data.internal_url,
               deviceServiceId: state.authenticatedServiceId!,
             })
               .then((validation) => {
@@ -639,7 +644,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
                 }
                 getDeviceTunnelRegistry().register({
                   deviceServiceId: state.authenticatedServiceId!,
-                  internalUrl: params.internal_url as string,
+                  internalUrl: parsedTunnel.data.internal_url,
                 })
                 state.registeredTunnelServiceId = state.authenticatedServiceId
                 writeResult(socket, req.id ?? null, { registered: true })
@@ -656,6 +661,19 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           }
           case "device.tunnel.down": {
             if (!requireAuthenticated(req)) return
+            const parsedTunnel = DeviceTunnelDownParamsSchema.safeParse(
+              req.params ?? {}
+            )
+            if (!parsedTunnel.success) {
+              writeError(
+                socket,
+                req.id ?? null,
+                -32602,
+                "Invalid device.tunnel.down params",
+                formatValidationDetails(parsedTunnel.error)
+              )
+              return
+            }
             if (state.registeredTunnelServiceId) {
               getDeviceTunnelRegistry().unregister(
                 state.registeredTunnelServiceId

@@ -727,6 +727,37 @@ export const DeviceServiceStatusParamsSchema = z.object({
   status: z.enum(DEVICE_SERVICE_STATUSES),
   detail: z.string().optional(),
 })
+export type DeviceServiceStatusParams = z.infer<
+  typeof DeviceServiceStatusParamsSchema
+>
+
+export const DeviceTunnelUpParamsSchema = z.object({
+  internal_url: z.string(),
+})
+export type DeviceTunnelUpParams = z.infer<typeof DeviceTunnelUpParamsSchema>
+
+export const DeviceTunnelDownParamsSchema = z.object({
+  reason: z.string().optional(),
+})
+export type DeviceTunnelDownParams = z.infer<
+  typeof DeviceTunnelDownParamsSchema
+>
+
+export const DeviceRuntimeSessionOpenedParamsSchema = z.object({
+  runtime_session_id: z.uuid(),
+  conversation_id: z.uuid().nullable().optional(),
+  actor_id: z.uuid().nullable().optional(),
+})
+export type DeviceRuntimeSessionOpenedParams = z.infer<
+  typeof DeviceRuntimeSessionOpenedParamsSchema
+>
+
+export const DeviceRuntimeSessionClosedParamsSchema = z.object({
+  runtime_session_id: z.uuid(),
+})
+export type DeviceRuntimeSessionClosedParams = z.infer<
+  typeof DeviceRuntimeSessionClosedParamsSchema
+>
 
 // server → device
 export const ServerRuntimeSessionOpenParamsSchema = z.object({
