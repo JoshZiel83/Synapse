@@ -659,7 +659,7 @@ export function presentPublisher(
 export function presentPluginCategory(
   row: PluginCategoryRecord
 ): PluginCategoryView {
-  const metadata = asObject(row.metadata)
+  const metadata = row.metadata
   return {
     id: row.id,
     slug: row.slug,

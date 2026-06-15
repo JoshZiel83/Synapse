@@ -20,6 +20,8 @@ export type PluginInstallationsConfigData =
 export type CatalogCategoriesMetadata =
   TableInsert<"catalogCategories">["metadata"]
 
+export type CatalogCategoryTableRow = TableRow<"catalogCategories">
+
 export type PluginAuthSessionTableRow = TableRow<"pluginAuthSessions">
 
 /**
@@ -119,5 +121,5 @@ export type PluginCategoryRecord = {
   displayName: string
   description: string | null
   sortOrder: number
-  metadata: unknown
+  metadata: Record<string, unknown>
 }

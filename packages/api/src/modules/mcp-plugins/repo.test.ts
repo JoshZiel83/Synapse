@@ -9,6 +9,7 @@ import {
   normalizeNullablePluginConnectionPublicPayload,
   normalizePluginCatalogRow,
   normalizePluginAuthSessionRow,
+  normalizePluginCategoryRecord,
   normalizePluginConnectionRow,
   normalizePluginInstallationAuthConfigRow,
   normalizePluginAuthSpecRow,
@@ -172,6 +173,27 @@ test("normalizePluginConnectionRow decodes connection payloads at repo exit", ()
 
   assert.deepEqual(row.publicPayload, { scope: "drive:read" })
   assert.deepEqual(row.secretPayload, { accessToken: "secret" })
+})
+
+test("normalizePluginCategoryRecord decodes category metadata at repo exit", () => {
+  const row = normalizePluginCategoryRecord({
+    id: "category-1",
+    slug: "productivity",
+    displayName: "Productivity",
+    description: null,
+    sortOrder: 10,
+    metadata: '{"displayNameI18n":{"en":"Productivity"},"defaultLocale":"en"}',
+    iconFileId: null,
+    itemKind: "plugin_package",
+    createdAt,
+    updatedAt,
+  })
+
+  assert.deepEqual(row.metadata, {
+    displayNameI18n: { en: "Productivity" },
+    defaultLocale: "en",
+  })
+  assert.equal(row.sortOrder, 10)
 })
 
 test("upsertPluginAuthConnectionFromSessionResult owns connection upsert and session consume SQL", async () => {

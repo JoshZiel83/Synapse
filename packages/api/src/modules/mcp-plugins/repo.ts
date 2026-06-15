@@ -61,6 +61,7 @@ import {
 } from "./live-status.js"
 import type {
   CatalogCategoriesMetadata,
+  CatalogCategoryTableRow,
   PluginAuthSessionRow,
   PluginAuthSessionTableRow,
   PluginAuthSessionsUpdate,
@@ -69,6 +70,7 @@ import type {
   PluginConnectionsUpdate,
   PluginInstallationsConfigData,
   PluginPackageVersionSpecsTransport,
+  PluginCategoryRecord,
   PublisherRecord,
 } from "./repo.types.js"
 
@@ -1101,16 +1103,30 @@ export async function getPluginPublisherRecordBySlug(
   return row ?? null
 }
 
+export function normalizePluginCategoryRecord(
+  row: CatalogCategoryTableRow
+): PluginCategoryRecord {
+  return {
+    id: row.id,
+    slug: row.slug,
+    displayName: row.displayName,
+    description: row.description,
+    sortOrder: row.sortOrder,
+    metadata: parseJsonObject(row.metadata),
+  }
+}
+
 export async function listPluginCategoryRecords(): Promise<
   import("./repo.types.js").PluginCategoryRecord[]
 > {
-  return db
+  const rows = await db
     .selectFrom("catalogCategories")
     .selectAll()
     .where("itemKind", "=", "plugin_package")
     .orderBy("sortOrder", "asc")
     .orderBy("displayName", "asc")
     .execute()
+  return rows.map(normalizePluginCategoryRecord)
 }
 
 export async function findPluginInstallationWorkspace(
