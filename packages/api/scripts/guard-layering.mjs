@@ -621,19 +621,10 @@ const isMixedModuleFile = (p) => MIXED_MODULES.has(moduleOf(p))
 // plays, but living under modules/ for cohesion. They are intentional
 // boundaries, not leaks. (round-6 P1-6) NOTE: files that import only `sql` + an
 // Executor/KyselyDb TYPE (executor-injectable, never touch the singleton) are
-// NOT flagged by r8 at all and need no entry here — e.g. sandbox/space.ts,
-// soft-delete/orchestration.ts, access/evaluator.ts.
+// NOT flagged by r8 at all and need no entry here — e.g. access/evaluator.ts
+// or repo* files that use executor-injected queries.
 //   - access/guards.ts: binds defaultDb into requireRequestAction +
 //     authorizeActionDefault/etc. so controllers don't import the client.
-//   - sandbox/gc.ts: the CAS mark-sweep GC job — runContentGc(opts.dbh ?? db)
-//     is executor-injectable; db is just the production default for a
-//     cross-cutting infra sweep over 6+ tables.
-//   - access/binding-storage.ts: the resource-access-binding DB layer — every
-//     fn takes `db: KyselyDb` / `client: Executor`; the singleton is only a
-//     query-builder factory fed to runBuilder(client, …), never queried direct.
-//   - workspace-apps/grant-storage.ts: the workspace-app grant / grant-request
-//     DB layer — every fn takes `run: KyselyDb`/`Executor`; db is only the
-//     production default for resolveWorkspaceAppGrantRequest's tx fallback.
 //   - files/content-access.ts: the content-authorization read layer — every fn
 //     runs on `ctx.dbh ?? db`; db is only the production default.
 //   - soft-delete/orchestration.ts: the soft-delete write edge — the
@@ -643,12 +634,8 @@ const isMixedModuleFile = (p) => MIXED_MODULES.has(moduleOf(p))
 //     transaction live here.
 const R8_ALLOWLIST = new Set([
   "access/guards.ts",
-  "sandbox/gc.ts",
-  "access/binding-storage.ts",
-  "workspace-apps/grant-storage.ts",
   "files/content-access.ts",
   "soft-delete/orchestration.ts",
-  "capability-projection/service.ts",
 ])
 const r8Key = (p) => {
   const m = p.split("/modules/")[1]
