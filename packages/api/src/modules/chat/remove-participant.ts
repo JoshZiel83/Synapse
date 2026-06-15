@@ -13,6 +13,7 @@ import type {
   Executor,
 } from "../../infrastructure/database/kysely.js"
 import {
+  chatRootExecutor,
   getConversationParticipantById,
   updateConversationParticipantState,
   withChatTransaction,
@@ -69,6 +70,18 @@ type RunRemoveParticipantTransaction = <T>(
   fn: (trx: DatabaseTransaction) => Promise<T>
 ) => Promise<T>
 
+type RequireConversationAccess = (
+  queryable: Executor,
+  conversationId: string,
+  workspaceMemberId: string
+) => Promise<{
+  participant: {
+    id: string
+    participantType: ConversationParticipantType
+    userName?: string | null
+  }
+}>
+
 export type RemoveParticipantInput = {
   workspaceId: string
   workspaceMemberId: string
@@ -83,8 +96,15 @@ export type RemoveParticipantDeps = {
   participantToSummary: (
     participant: ChatParticipantRow
   ) => ChatParticipantSummary
+  requireConversationAccess?: RequireConversationAccess
   syncConversationUpsert: SyncConversationUpsert
   withTransaction?: RunRemoveParticipantTransaction
+}
+
+export type LeaveConversationInput = {
+  workspaceId: string
+  workspaceMemberId: string
+  conversationId: string
 }
 
 async function setParticipantState(
@@ -111,8 +131,9 @@ export async function removeChatConversationParticipantUseCase(
   deps: RemoveParticipantDeps
 ): Promise<ChatParticipantRemovalRecord> {
   const withTransaction = deps.withTransaction ?? withChatTransaction
+  const loadAccess = deps.requireConversationAccess ?? requireConversationAccess
   return withTransaction(async (client) => {
-    const access = await requireConversationAccess(
+    const access = await loadAccess(
       client,
       params.conversationId,
       params.workspaceMemberId
@@ -233,4 +254,25 @@ export async function removeChatConversationParticipantUseCase(
       state: removalState,
     }
   })
+}
+
+export async function leaveChatConversationUseCase(
+  params: LeaveConversationInput,
+  deps: RemoveParticipantDeps
+): Promise<ChatParticipantRemovalRecord> {
+  const loadAccess = deps.requireConversationAccess ?? requireConversationAccess
+  const access = await loadAccess(
+    chatRootExecutor(),
+    params.conversationId,
+    params.workspaceMemberId
+  )
+  return removeChatConversationParticipantUseCase(
+    {
+      workspaceId: params.workspaceId,
+      workspaceMemberId: params.workspaceMemberId,
+      conversationId: params.conversationId,
+      participantId: access.participant.id,
+    },
+    deps
+  )
 }

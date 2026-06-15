@@ -170,7 +170,11 @@ import {
   updateChatConversationReadWatermarkUseCase,
   type ReadWatermarkInput,
 } from "./read-watermark.js"
-import { removeChatConversationParticipantUseCase } from "./remove-participant.js"
+import {
+  leaveChatConversationUseCase,
+  removeChatConversationParticipantUseCase,
+  type RemoveParticipantDeps,
+} from "./remove-participant.js"
 export { loadParticipantById } from "./remove-participant.js"
 import { patchChatConversationUseCase } from "./patch-conversation.js"
 import { retryAssistantMessageUseCase } from "./retry-message.js"
@@ -3594,6 +3598,21 @@ export async function addChatConversationParticipants(params: {
   })
 }
 
+function chatParticipantRemovalDeps(): RemoveParticipantDeps {
+  return {
+    createRemovalConversationEvent: async (eventParams) => {
+      await createConversationEvent({
+        ...eventParams,
+        eventPayload: eventParams.eventPayload as never,
+      })
+    },
+    listConversationParticipants,
+    listConversationRealtimeRecipients,
+    participantToSummary: participantRowToChatParticipantSummary,
+    syncConversationUpsert: syncConversationUpsertForWorkspaceMembers,
+  }
+}
+
 export async function removeChatConversationParticipant(params: {
   workspaceId: string
   userId: string
@@ -3611,18 +3630,7 @@ export async function removeChatConversationParticipant(params: {
       conversationId: params.conversationId,
       participantId: params.participantId,
     },
-    {
-      createRemovalConversationEvent: async (eventParams) => {
-        await createConversationEvent({
-          ...eventParams,
-          eventPayload: eventParams.eventPayload as never,
-        })
-      },
-      listConversationParticipants,
-      listConversationRealtimeRecipients,
-      participantToSummary: participantRowToChatParticipantSummary,
-      syncConversationUpsert: syncConversationUpsertForWorkspaceMembers,
-    }
+    chatParticipantRemovalDeps()
   )
 }
 
@@ -3635,17 +3643,14 @@ export async function leaveChatConversation(params: {
     params.workspaceId,
     params.userId
   )
-  const access = await requireConversationAccess(
-    rootQueryable(),
-    params.conversationId,
-    identity.workspaceMemberId
+  return leaveChatConversationUseCase(
+    {
+      workspaceId: params.workspaceId,
+      workspaceMemberId: identity.workspaceMemberId,
+      conversationId: params.conversationId,
+    },
+    chatParticipantRemovalDeps()
   )
-  return removeChatConversationParticipant({
-    workspaceId: params.workspaceId,
-    userId: params.userId,
-    conversationId: params.conversationId,
-    participantId: access.participant.id,
-  })
 }
 
 // ============ Stage 16: assistant message retry ============

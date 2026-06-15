@@ -10,6 +10,7 @@ import { withTestDbAndClient } from "../../test/helpers/db.js"
 import type { DatabaseTransaction } from "../../infrastructure/database/kysely.js"
 import { upsertAccessSubjectOn } from "../access/subject-registry.js"
 import {
+  leaveChatConversationUseCase,
   loadParticipantById,
   removeChatConversationParticipantUseCase,
 } from "./remove-participant.js"
@@ -307,6 +308,84 @@ test(
       }
       assert.equal(payload.selfState, CHAT_PARTICIPANT_REMOVAL_STATE.REMOVED)
       assert.equal(payload.reason, CHAT_MEMBERSHIP_UPDATE_REASON.KICKED)
+    })
+  }
+)
+
+test(
+  "leaveChatConversationUseCase resolves the caller participant before removal",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDbAndClient(async ({ db }) => {
+      const userId = await insertUser(db)
+      const workspaceId = await insertWorkspace(db, userId)
+      const memberId = await insertWorkspaceMember(db, workspaceId, userId)
+      const conversationId = await insertConversation(db, workspaceId)
+      const participantId = await insertConversationParticipant(
+        db,
+        conversationId,
+        "workspace_member",
+        memberId,
+        "active",
+        "owner"
+      )
+      await db
+        .insertInto("workspaceMemberConversationViews")
+        .values({
+          workspaceMemberId: memberId,
+          conversationId,
+          unreadCount: 0,
+        })
+        .execute()
+      const participant = await loadParticipantById(
+        db,
+        conversationId,
+        participantId
+      )
+      assert.ok(participant)
+
+      const removalEvents: unknown[] = []
+      const withTransaction = <T>(
+        fn: (trx: DatabaseTransaction) => Promise<T>
+      ) => fn(db as unknown as DatabaseTransaction)
+
+      const result = await leaveChatConversationUseCase(
+        {
+          workspaceId,
+          workspaceMemberId: memberId,
+          conversationId,
+        },
+        {
+          createRemovalConversationEvent: async (event) => {
+            removalEvents.push(event)
+          },
+          listConversationParticipants: async () => [],
+          listConversationRealtimeRecipients: async () => [],
+          participantToSummary: () => {
+            throw new Error("unexpected participant summary mapping")
+          },
+          requireConversationAccess: async () => ({ participant }),
+          syncConversationUpsert: async () => {},
+          withTransaction,
+        }
+      )
+
+      assert.deepEqual(result, {
+        conversationId,
+        participantId,
+        state: CHAT_PARTICIPANT_REMOVAL_STATE.LEFT,
+      })
+      const participantAfter = await loadParticipantById(
+        db,
+        conversationId,
+        participantId
+      )
+      assert.equal(participantAfter?.state, CHAT_PARTICIPANT_REMOVAL_STATE.LEFT)
+      assert.equal(removalEvents.length, 1)
+      assert.equal(
+        (removalEvents[0] as { eventType: string }).eventType,
+        CONVERSATION_FEED_EVENT_TYPE.PARTICIPANT_LEFT
+      )
     })
   }
 )
