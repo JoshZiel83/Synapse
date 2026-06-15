@@ -67,11 +67,11 @@ import {
   consumeInterrupts,
   hasPendingInterrupt,
 } from "../modules/session/service.js"
+import { getContextConversationItemsForParticipant } from "../modules/chat/conversation-item-read.js"
 import {
-  getConversationParticipant,
-  getContextConversationItemsForParticipant,
-  listConversationParticipants,
-} from "../modules/chat/service.js"
+  getConversationParticipantUseCase as getConversationParticipant,
+  listConversationParticipantsUseCase as listConversationParticipants,
+} from "../modules/chat/participant-roster.js"
 import {
   attachPendingWakeupsToTurn,
   getPendingWakeupCount,

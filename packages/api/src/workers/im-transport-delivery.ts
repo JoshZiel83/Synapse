@@ -2,7 +2,7 @@ import { UnrecoverableError, Worker } from "bullmq"
 import { CONVERSATION_PARTICIPANT_TYPE, QUEUE_NAMES } from "@synapse/shared"
 import type { TransportKind } from "@synapse/shared/types"
 import { redis } from "../infrastructure/redis/index.js"
-import { getConversationFeedItemById } from "../modules/chat/service.js"
+import { getConversationFeedItemById } from "../modules/chat/conversation-item-read.js"
 import {
   findExternalMessageIdForItem,
   getConversationTransportBinding,

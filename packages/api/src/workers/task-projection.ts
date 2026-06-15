@@ -50,7 +50,7 @@ import { getTaskSummary } from "../modules/tasks/service.js"
 import {
   createConversationItem,
   type ConversationItemPartInput,
-} from "../modules/chat/service.js"
+} from "../modules/chat/item-write.js"
 import {
   enqueueOutboundDelivery,
   persistOutboundLinkRowRaw,
