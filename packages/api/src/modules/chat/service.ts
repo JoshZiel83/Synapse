@@ -2,7 +2,6 @@ import {
   buildConversationMessageRef,
   CONVERSATION_ITEM_SCOPE,
   CONVERSATION_ITEM_SCOPES,
-  CONVERSATION_ITEM_ROLE,
   CONVERSATION_ITEM_ROLES,
   CONVERSATION_ITEM_SURFACE,
   CONVERSATION_ITEM_SURFACES,
@@ -95,8 +94,6 @@ import {
   getVisibleConversationReplyRefRow,
   getVisibleConversationReplyTargetRow,
   getWorkspaceMemberSyncCursor,
-  insertConversationItemDetailRows,
-  insertConversationItemRecord,
   insertConversationParticipantRecord,
   listChatConversationBaseRows,
   listChatConversationParticipantRows,
@@ -115,7 +112,6 @@ import {
   updateConversationItemEventPayload as updateConversationItemEventPayloadRow,
   upsertWorkspaceMemberConversationView,
   upsertConversationParticipantAddress,
-  touchConversationUpdatedAt,
   withChatRepeatableRead,
   withChatTransaction,
   type ChatConversationBaseRow,
@@ -151,7 +147,6 @@ import {
 } from "./event-registry.js"
 import { createChatError } from "./errors.js"
 export { isChatServiceError, type ChatServiceError } from "./errors.js"
-import { recordDuplicateClientMessageIdSend } from "./observability.js"
 import { getWorkspaceMemberIdentityOrThrow } from "./identity.js"
 import { normalizeConversationParticipantRoleKey } from "./roles.js"
 import {
@@ -178,6 +173,16 @@ import {
   type CreateChatConversationDeps,
   type CreateConversationForWorkspaceMemberDeps,
 } from "./create-conversation.js"
+import {
+  createConversationItemUseCase,
+  sendConversationMessageFromParticipantUseCase,
+  type ConversationItemPartInput,
+  type CreateConversationItemDeps,
+  type PreparedConversationItemWrite,
+  type SendConversationMessageDeps,
+  type MentionedParticipantRef,
+} from "./item-write.js"
+export type { ConversationItemPartInput } from "./item-write.js"
 import { enrichTaskForUser } from "../tasks/service.js"
 import {
   getConversationRuntimeMap,
@@ -192,17 +197,6 @@ type ItemType = (typeof CONVERSATION_ITEM_TYPES)[number]
 type ItemRole = (typeof CONVERSATION_ITEM_ROLES)[number]
 type NonEventItemType = Exclude<ItemType, "event">
 type MessageLikeItemType = Exclude<NonEventItemType, "summary">
-
-export interface ConversationItemPartInput {
-  type: "text" | "file_ref" | "json"
-  text?: string
-  refPath?: string | null
-  refSha256?: string | null
-  json?: unknown
-  mimeType?: string
-  name?: string
-  metadata?: Record<string, unknown>
-}
 
 type ConversationBaseRow = ChatConversationBaseRow
 
@@ -824,18 +818,6 @@ type PendingActorWakeup = {
   actorId: string
   sessionId: string
   sourceType: "user_message" | "actor_message"
-}
-
-type MentionedParticipantRef = {
-  participantId: string
-  ordinal: number
-}
-
-type PreparedConversationItemWrite = {
-  activeParticipants: ParticipantRow[]
-  parts: ConversationItemPartInput[]
-  mentionedParticipants: MentionedParticipantRef[]
-  replyToItem: ItemRow | null
 }
 
 function parseMentionBlockFromPart(part: ConversationItemPartInput) {
@@ -1488,6 +1470,31 @@ function chatCreateConversationDeps(): CreateChatConversationDeps {
   }
 }
 
+function chatCreateConversationItemDeps(): CreateConversationItemDeps {
+  return {
+    prepareConversationItemWrite,
+    buildChatConversationItems,
+    syncVisibleSharedItem,
+    createRemoteAgentDeliveriesForItem: async (params) => {
+      const { createRemoteAgentDeliveriesForItem } =
+        await import("../remote-agents/service.js")
+      await createRemoteAgentDeliveriesForItem(params)
+    },
+  }
+}
+
+function chatSendConversationMessageDeps(): SendConversationMessageDeps {
+  return {
+    createConversationItem,
+    enqueueActorWakeupsForConversationMessage,
+    notifyRemoteAgentDeliveriesForConversation: async (conversationId) => {
+      const { notifyRemoteAgentDeliveriesForConversation } =
+        await import("../remote-agents/service.js")
+      await notifyRemoteAgentDeliveriesForConversation(conversationId)
+    },
+  }
+}
+
 export async function getConversation(
   conversationId: string,
   queryable: Executor = rootQueryable()
@@ -1718,112 +1725,7 @@ export async function createConversationItem(params: {
   contextTargetParticipantIds?: string[]
   queryable?: Executor
 }) {
-  const executeInsert = async (queryable: Executor) => {
-    const prepared = await prepareConversationItemWrite(queryable, {
-      conversationId: params.conversationId,
-      scope: params.scope,
-      surface: params.surface,
-      parts: params.parts,
-      restrictedAudienceParticipantIds: params.restrictedAudienceParticipantIds,
-      contextTargetParticipantIds: params.contextTargetParticipantIds,
-      replyToItemId: params.replyToItemId,
-      authorParticipantId: params.authorParticipantId,
-    })
-
-    const itemId = crypto.randomUUID()
-
-    const insertResult = await insertConversationItemRecord(queryable, {
-      itemId,
-      conversationId: params.conversationId,
-      sessionId: params.sessionId,
-      turnId: params.turnId,
-      clientMessageId: params.clientMessageId,
-      scope: params.scope,
-      surface: params.surface,
-      itemType: params.itemType,
-      subtype: params.subtype,
-      role: params.role,
-      authorParticipantId: params.authorParticipantId,
-      bundleId: params.bundleId,
-      replyToItemId: prepared.replyToItem?.id,
-      causedByItemId: params.causedByItemId,
-      eventPayload: params.eventPayload,
-      eventTimelinePolicy: params.eventTimelinePolicy,
-      eventContextPolicy: params.eventContextPolicy,
-      metadata: params.metadata,
-    })
-    const insertedItem = insertResult.item
-
-    if (!insertedItem) {
-      throw new Error("Failed to create conversation item")
-    }
-
-    const isDuplicate =
-      !insertResult.inserted &&
-      !!params.clientMessageId &&
-      !!params.authorParticipantId
-    if (isDuplicate) {
-      // S6 dedup observability: a duplicate clientMessageId reaching the
-      // server means main thread + SW both flushed the same outbox
-      // entry. Counter is exposed via getChatDedupCountersSnapshot().
-      recordDuplicateClientMessageIdSend()
-      const duplicateItems = await buildChatConversationItems(queryable, [
-        insertedItem,
-      ])
-      return duplicateItems[0]!
-    }
-
-    await insertConversationItemDetailRows(queryable, {
-      itemId: insertedItem.id,
-      parts: prepared.parts,
-      mentionedParticipants: prepared.mentionedParticipants,
-      restrictedAudienceParticipantIds: params.restrictedAudienceParticipantIds,
-      contextTargetParticipantIds: params.contextTargetParticipantIds,
-    })
-
-    // Conversation items are appended in child tables; touching the parent
-    // conversation preserves "last activity" semantics for list ordering.
-    await touchConversationUpdatedAt(queryable, params.conversationId)
-
-    const hydrated = await buildChatConversationItems(queryable, [insertedItem])
-    const item = hydrated[0]
-    if (!item) {
-      throw new Error("Failed to hydrate conversation item")
-    }
-
-    if (
-      params.scope === CONVERSATION_ITEM_SCOPE.SHARED &&
-      params.surface === CONVERSATION_ITEM_SURFACE.VISIBLE
-    ) {
-      await syncVisibleSharedItem({
-        queryable,
-        workspaceId: params.workspaceId,
-        conversationId: params.conversationId,
-        item,
-        activeParticipants: prepared.activeParticipants,
-        authorParticipantId: params.authorParticipantId,
-        restrictedAudienceParticipantIds:
-          params.restrictedAudienceParticipantIds,
-      })
-
-      const { createRemoteAgentDeliveriesForItem } =
-        await import("../remote-agents/service.js")
-      await createRemoteAgentDeliveriesForItem({
-        workspaceId: params.workspaceId,
-        conversationId: params.conversationId,
-        itemId: item.id,
-        authorParticipantId: params.authorParticipantId,
-        queryable,
-      })
-    }
-
-    return item
-  }
-
-  if (params.queryable) {
-    return executeInsert(params.queryable)
-  }
-  return withChatTransaction((client) => executeInsert(client))
+  return createConversationItemUseCase(params, chatCreateConversationItemDeps())
 }
 
 export async function sendConversationMessageFromParticipant(params: {
@@ -1838,46 +1740,10 @@ export async function sendConversationMessageFromParticipant(params: {
   metadata?: Record<string, unknown>
   queryable?: Executor
 }) {
-  if (
-    !Array.isArray(params.contentBlocks) ||
-    params.contentBlocks.length === 0
-  ) {
-    throw new Error("contentBlocks is required")
-  }
-  const normalized = await buildNormalizedMessageContent({
-    content: "",
-    contentBlocks: params.contentBlocks,
-    metadata: params.metadata ?? {},
-  })
-
-  const item = await createConversationItem({
-    workspaceId: params.workspaceId,
-    conversationId: params.conversationId,
-    sessionId: params.sessionId,
-    clientMessageId: params.clientMessageId,
-    scope: "shared",
-    surface: "visible",
-    itemType: "message",
-    subtype: CONVERSATION_MESSAGE_SUBTYPE.CHAT_MESSAGE,
-    role: params.role ?? "user",
-    authorParticipantId: params.senderParticipantId,
-    replyToItemId: params.replyToItemId,
-    metadata: normalized.normalizedMetadata,
-    parts: normalized.parts,
-    queryable: params.queryable,
-  })
-  if (params.queryable || !params.workspaceId) {
-    return item
-  }
-  await enqueueActorWakeupsForConversationMessage({
-    workspaceId: params.workspaceId,
-    conversationId: params.conversationId,
-    itemId: item.id,
-  })
-  const { notifyRemoteAgentDeliveriesForConversation } =
-    await import("../remote-agents/service.js")
-  await notifyRemoteAgentDeliveriesForConversation(params.conversationId)
-  return item
+  return sendConversationMessageFromParticipantUseCase(
+    params,
+    chatSendConversationMessageDeps()
+  )
 }
 
 export async function createConversationEvent<
