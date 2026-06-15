@@ -33,15 +33,11 @@ import {
   type ChatConversationCreateRecord,
   type ChatConversationEnvelopeRecord,
   type ChatConversationRecord,
-  type ChatConversationReadWatermarkRecord,
 } from "./presenter.js"
 import { createChatError } from "./errors.js"
 export { isChatServiceError, type ChatServiceError } from "./errors.js"
 import { getWorkspaceMemberIdentityOrThrow } from "./identity.js"
-import {
-  updateChatConversationReadWatermarkUseCase,
-  type ReadWatermarkInput,
-} from "./read-watermark.js"
+export { updateChatConversationReadWatermark } from "./read-watermark.js"
 import {
   leaveChatConversationUseCase,
   removeChatConversationParticipantUseCase,
@@ -328,14 +324,6 @@ export async function createChatConversation(params: {
     },
     chatCreateConversationDeps()
   )
-}
-
-export async function updateChatConversationReadWatermark(
-  params: ReadWatermarkInput
-): Promise<ChatConversationReadWatermarkRecord> {
-  return updateChatConversationReadWatermarkUseCase(params, {
-    syncConversationUpsert: syncConversationUpsertForWorkspaceMembers,
-  })
 }
 
 export async function patchChatConversation(params: {

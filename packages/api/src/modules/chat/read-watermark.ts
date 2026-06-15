@@ -15,6 +15,7 @@ import {
 } from "./repo.js"
 import { requireConversationAccess } from "./conversation-access.js"
 import { ensureClientInstance } from "./client-instances.js"
+import { syncConversationUpsertForWorkspaceMembers } from "./conversation-upsert-sync.js"
 import { appendWorkspaceMemberSyncEvent } from "./sync-events.js"
 import { recordDuplicateWatermarkPost } from "./observability.js"
 import type { ChatConversationReadWatermarkRecord } from "./presenter.js"
@@ -182,5 +183,13 @@ export async function updateChatConversationReadWatermarkUseCase(
       readWatermarkSequence: nextSequence,
       lastReadAt,
     }
+  })
+}
+
+export async function updateChatConversationReadWatermark(
+  params: ReadWatermarkInput
+): Promise<ChatConversationReadWatermarkRecord> {
+  return updateChatConversationReadWatermarkUseCase(params, {
+    syncConversationUpsert: syncConversationUpsertForWorkspaceMembers,
   })
 }
