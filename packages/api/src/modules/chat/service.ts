@@ -125,7 +125,6 @@ import {
   listWorkspaceMemberNameRows,
   reactivateConversationParticipant,
   updateConversationItemEventPayload as updateConversationItemEventPayloadRow,
-  updateConversationMutableFields,
   upsertWorkspaceMemberConversationView,
   upsertConversationParticipantAddress,
   touchConversationUpdatedAt,
@@ -173,6 +172,7 @@ import {
 } from "./read-watermark.js"
 import { removeChatConversationParticipantUseCase } from "./remove-participant.js"
 export { loadParticipantById } from "./remove-participant.js"
+import { patchChatConversationUseCase } from "./patch-conversation.js"
 import { enrichTaskForUser } from "../tasks/service.js"
 import {
   getConversationRuntimeMap,
@@ -3517,59 +3517,24 @@ export async function patchChatConversation(params: {
   title?: string | null
   metadata?: Record<string, unknown>
 }): Promise<ChatConversationEnvelopeRecord | undefined> {
-  if (params.title === undefined && params.metadata === undefined) {
-    throw createChatError(
-      400,
-      "invalid_patch",
-      "At least one of title or metadata must be provided"
-    )
-  }
   const identity = await getWorkspaceMemberIdentityOrThrow(
     params.workspaceId,
     params.userId
   )
-  return withChatTransaction(async (client) => {
-    await requireConversationManagement(
-      client,
-      params.conversationId,
-      identity.workspaceMemberId
-    )
-
-    const updated = await updateConversationMutableFields(client, {
+  return patchChatConversationUseCase(
+    {
+      workspaceId: params.workspaceId,
+      workspaceMemberId: identity.workspaceMemberId,
       conversationId: params.conversationId,
       title: params.title,
       metadata: params.metadata,
-    })
-    if (!updated) {
-      return
+    },
+    {
+      listConversationRealtimeRecipients,
+      loadConversationView,
+      syncConversationUpsert: syncConversationUpsertForWorkspaceMembers,
     }
-
-    const recipients = await listConversationRealtimeRecipients(
-      params.conversationId,
-      client
-    )
-    await syncConversationUpsertForWorkspaceMembers(
-      client,
-      params.workspaceId,
-      recipients.map((r) => r.workspaceMemberId),
-      params.conversationId
-    )
-
-    const conversation = await loadConversationView(
-      client,
-      params.workspaceId,
-      identity.workspaceMemberId,
-      params.conversationId
-    )
-    if (!conversation) {
-      throw createChatError(
-        404,
-        "conversation_not_found",
-        "Conversation not found"
-      )
-    }
-    return { conversation }
-  })
+  )
 }
 
 export async function addChatConversationParticipants(params: {
