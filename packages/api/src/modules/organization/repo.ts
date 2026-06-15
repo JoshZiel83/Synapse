@@ -40,7 +40,7 @@ import {
 import {
   insertWorkspaceAppRoot,
   updateWorkspaceAppRoot,
-} from "../workspace-apps/root-storage.js"
+} from "../workspace-apps/repo.js"
 import { insertWorkspaceAppGrant } from "../workspace-apps/grant-storage.js"
 import { listAuthorizedResourceIdsDefault } from "../access/guards.js"
 import type { AccessSubject } from "../access/service.js"

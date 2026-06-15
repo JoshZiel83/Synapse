@@ -24,7 +24,7 @@ import {
 import {
   insertWorkspaceAppRoot,
   updateWorkspaceAppRoot,
-} from "../workspace-apps/root-storage.js"
+} from "../workspace-apps/repo.js"
 import { parseInstantString } from "../../infrastructure/datetime.js"
 import type {
   DeviceCapabilityRecord,

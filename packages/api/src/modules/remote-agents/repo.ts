@@ -29,7 +29,7 @@ import { deriveRequiresContactApproval } from "../access/contact-approval.js"
 import {
   insertWorkspaceAppRoot,
   updateWorkspaceAppRoot,
-} from "../workspace-apps/root-storage.js"
+} from "../workspace-apps/repo.js"
 import {
   insertWorkspaceAppGrant,
   type InsertWorkspaceAppGrantInput,
@@ -2207,7 +2207,7 @@ export async function markMachineSessionActiveRepo(
 }
 
 /**
- * Default-db-bound wrapper around the workspace-apps root-storage update so the
+ * Default-db-bound wrapper around the workspace-apps root update so the
  * service can adjust an agent's workspace-app root (display name / status /
  * soft-delete) without importing the db client. The underlying storage fn stays
  * executor-injectable for transactional callers.

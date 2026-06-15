@@ -22,9 +22,14 @@ import {
   type CapabilityAccessTarget,
   type WorkspaceAppGrantPermission,
   type WorkspaceAppKind,
+  type WorkspaceAppStatus,
   type WorkspaceAppGrantRequestDirection,
 } from "@synapse/shared"
-import { db } from "../../infrastructure/database/kysely.js"
+import {
+  db,
+  type Executor,
+  type KyselyDb,
+} from "../../infrastructure/database/kysely.js"
 import { isSubjectActiveConversationParticipant } from "../access/subject-resolution.js"
 import { upsertAccessSubjectDefault } from "../access/guards.js"
 import {
@@ -36,12 +41,74 @@ import {
   revokeWorkspaceAppGrantsForApp,
   type WorkspaceAppGrantRequestRow,
 } from "./grant-storage.js"
-import { updateWorkspaceAppRoot } from "./root-storage.js"
 import type {
   WorkspaceAppRow,
   WorkspaceAppGrantPresentationRow,
   WorkspaceAppGrantRequestPresentationRow,
 } from "./presenter.js"
+
+export async function insertWorkspaceAppRoot(
+  run: KyselyDb | Executor,
+  input: {
+    id: string
+    workspaceId: string
+    kind: WorkspaceAppKind
+    displayName: string
+    ownerWorkspaceMemberId?: string | null
+    status?: WorkspaceAppStatus
+    conversationTypeMaskOverride?: number | null
+  }
+) {
+  await run
+    .insertInto("workspaceApps")
+    .values({
+      id: input.id,
+      workspaceId: input.workspaceId,
+      kind: input.kind,
+      displayName: input.displayName,
+      ownerWorkspaceMemberId: input.ownerWorkspaceMemberId ?? null,
+      status: input.status ?? "active",
+      conversationTypeMaskOverride: input.conversationTypeMaskOverride ?? null,
+    } as any)
+    .execute()
+}
+
+export async function updateWorkspaceAppRoot(
+  run: KyselyDb | Executor,
+  input: {
+    id: string
+    displayName?: string
+    ownerWorkspaceMemberId?: string | null
+    status?: WorkspaceAppStatus
+    conversationTypeMaskOverride?: number | null
+    deletedAt?: Date | null
+  }
+) {
+  const patch: Record<string, unknown> = {
+    updatedAt: sql`NOW()`,
+  }
+  if (input.displayName !== undefined) {
+    patch.displayName = input.displayName
+  }
+  if (input.ownerWorkspaceMemberId !== undefined) {
+    patch.ownerWorkspaceMemberId = input.ownerWorkspaceMemberId
+  }
+  if (input.status !== undefined) {
+    patch.status = input.status
+  }
+  if (input.conversationTypeMaskOverride !== undefined) {
+    patch.conversationTypeMaskOverride = input.conversationTypeMaskOverride
+  }
+  if (input.deletedAt !== undefined) {
+    patch.deletedAt = input.deletedAt
+  }
+
+  await run
+    .updateTable("workspaceApps")
+    .set(patch as any)
+    .where("id", "=", input.id)
+    .execute()
+}
 
 export type WorkspaceMemberAccessRecord = {
   workspaceMemberId: string

@@ -110,7 +110,7 @@ import { resolveAccessGrantTarget } from "../access/access-target-resolver.js"
 import {
   insertWorkspaceAppRoot,
   updateWorkspaceAppRoot,
-} from "../workspace-apps/root-storage.js"
+} from "../workspace-apps/repo.js"
 import {
   insertWorkspaceAppGrant,
   revokeWorkspaceAppGrantsForApp,

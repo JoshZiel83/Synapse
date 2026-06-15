@@ -16,7 +16,7 @@ import {
 } from "@synapse/shared"
 import { seedWorkspaceCapabilityConversationTypePolicies } from "../capabilities/conversation-type-policies.js"
 import { markWorkspaceDeleted } from "../soft-delete/orchestration.js"
-import { insertWorkspaceAppRoot } from "../workspace-apps/root-storage.js"
+import { insertWorkspaceAppRoot } from "../workspace-apps/repo.js"
 import type {
   ActorRecord,
   ActorsConfig,

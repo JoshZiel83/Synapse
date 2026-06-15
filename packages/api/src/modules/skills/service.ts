@@ -30,7 +30,7 @@ import { ACCESS_ACTIONS } from "../access/actions.js"
 import {
   insertWorkspaceAppRoot,
   updateWorkspaceAppRoot,
-} from "../workspace-apps/root-storage.js"
+} from "../workspace-apps/repo.js"
 import {
   insertWorkspaceAppGrant,
   listActiveWorkspaceAppGrants,
