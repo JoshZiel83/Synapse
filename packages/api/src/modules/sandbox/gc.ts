@@ -24,11 +24,18 @@
 // The sweep runs in the fs-helper (fs.cas.gc) which deletes blobs whose sha is
 // absent from the reachable set we pass.
 
-import { sql } from "kysely"
-import { db, type Executor } from "../../infrastructure/database/kysely.js"
 import { readCasBlob } from "../../infrastructure/storage/index.js"
 import { parseManifestShas } from "../files/manifest-parse.js"
 import { gcCas } from "./materialize.js"
+import {
+  defaultDbh,
+  gcPartTables,
+  listGcAssetContentShas,
+  listGcPartRefShas,
+  listGcPendingSidecarStates,
+  listGcSnapshotManifestShas,
+  type Executor,
+} from "./repo.js"
 
 export interface GcResult {
   reachableCount: number
@@ -45,19 +52,15 @@ export interface GcResult {
 export async function runContentGc(
   opts: { dryRun?: boolean; dbh?: Executor; graceSecs?: number } = {}
 ): Promise<GcResult> {
-  const dbh = opts.dbh ?? db
+  const dbh = opts.dbh ?? defaultDbh()
   const reachable = new Set<string>()
   let manifestsExpanded = 0
   let manifestsUnreadable = 0
 
   // 1. Snapshots: manifest blob + every content sha inside each manifest.
-  // NOTE: CamelCasePlugin camelCases the result keys of raw sql`...`.execute()
-  // queries too, so reads below use camelCase even though the SQL is snake_case.
-  const snapshots = await sql<{ manifestSha256: string }>`
-    SELECT DISTINCT manifest_sha256 FROM file_snapshots`.execute(dbh)
-  for (const row of snapshots.rows) {
-    const manifestSha = row.manifestSha256
-    if (!manifestSha) continue
+  // Repo helpers return camelCase keys because Kysely's CamelCasePlugin still
+  // transforms raw SQL result aliases at the DB boundary.
+  for (const manifestSha of await listGcSnapshotManifestShas(dbh)) {
     reachable.add(manifestSha)
     try {
       const bytes = await readCasBlob(manifestSha)
@@ -71,28 +74,15 @@ export async function runContentGc(
   }
 
   // 2. Historical file_ref parts across all part tables.
-  for (const table of [
-    "conversation_item_parts",
-    "tool_result_parts",
-    "memory_item_parts",
-    "context_archive_frame_parts",
-  ] as const) {
-    const parts = await sql<{ refSha256: string }>`
-      SELECT DISTINCT ref_sha256 FROM ${sql.ref(table)} WHERE ref_sha256 IS NOT NULL`.execute(
-      dbh
-    )
-    for (const p of parts.rows) {
-      if (p.refSha256) reachable.add(p.refSha256)
+  for (const table of gcPartTables()) {
+    for (const sha of await listGcPartRefShas(table, dbh)) {
+      reachable.add(sha)
     }
   }
 
   // 3. Entity assets by content.
-  const assets = await sql<{ contentSha256: string }>`
-    SELECT DISTINCT content_sha256 FROM file_assets WHERE content_sha256 IS NOT NULL`.execute(
-    dbh
-  )
-  for (const a of assets.rows) {
-    if (a.contentSha256) reachable.add(a.contentSha256)
+  for (const sha of await listGcAssetContentShas(dbh)) {
+    reachable.add(sha)
   }
 
   // 4. Pending conflict-sidecar content blobs (round-11 follow-up). These are
@@ -131,12 +121,12 @@ async function collectPendingSidecarShas(dbh: Executor): Promise<Set<string>> {
   // Only sessions that actually carry a pending store (keeps the scan cheap).
   // The SELECTed column surfaces as `collaborationState` (CamelCasePlugin); the
   // JSONB `?` containment in the WHERE clause uses the physical column name.
-  const rows = await sql<{ collaborationState: unknown }>`
-    SELECT collaboration_state FROM sessions
-      WHERE collaboration_state ? ${PENDING_COMMIT_KEY}
-         OR collaboration_state ? ${PENDING_REFRESH_KEY}`.execute(dbh)
-  for (const row of rows.rows) {
-    const state = (row.collaborationState ?? {}) as Record<string, unknown>
+  const states = await listGcPendingSidecarStates(dbh, {
+    pendingCommitKey: PENDING_COMMIT_KEY,
+    pendingRefreshKey: PENDING_REFRESH_KEY,
+  })
+  for (const rawState of states) {
+    const state = (rawState ?? {}) as Record<string, unknown>
     // Commit store: { subpath: { paths, sidecars: [{contentSha,kind}] } }
     collectFromSidecarMap(
       out,

@@ -155,6 +155,65 @@ export async function hasDockerMountHistory(
   )
 }
 
+export async function listGcSnapshotManifestShas(
+  run: Executor = db
+): Promise<string[]> {
+  const rows = await sql<{ manifestSha256: string }>`
+    SELECT DISTINCT manifest_sha256 FROM file_snapshots`.execute(run)
+  return rows.rows
+    .map((row) => row.manifestSha256)
+    .filter((sha): sha is string => typeof sha === "string" && sha.length > 0)
+}
+
+const GC_PART_TABLES = [
+  "conversation_item_parts",
+  "tool_result_parts",
+  "memory_item_parts",
+  "context_archive_frame_parts",
+] as const
+
+export type GcPartTable = (typeof GC_PART_TABLES)[number]
+
+export function gcPartTables(): readonly GcPartTable[] {
+  return GC_PART_TABLES
+}
+
+export async function listGcPartRefShas(
+  table: GcPartTable,
+  run: Executor = db
+): Promise<string[]> {
+  const rows = await sql<{ refSha256: string }>`
+    SELECT DISTINCT ref_sha256 FROM ${sql.ref(table)} WHERE ref_sha256 IS NOT NULL`.execute(
+    run
+  )
+  return rows.rows
+    .map((row) => row.refSha256)
+    .filter((sha): sha is string => typeof sha === "string" && sha.length > 0)
+}
+
+export async function listGcAssetContentShas(
+  run: Executor = db
+): Promise<string[]> {
+  const rows = await sql<{ contentSha256: string }>`
+    SELECT DISTINCT content_sha256 FROM file_assets WHERE content_sha256 IS NOT NULL`.execute(
+    run
+  )
+  return rows.rows
+    .map((row) => row.contentSha256)
+    .filter((sha): sha is string => typeof sha === "string" && sha.length > 0)
+}
+
+export async function listGcPendingSidecarStates(
+  run: Executor,
+  keys: { pendingCommitKey: string; pendingRefreshKey: string }
+): Promise<unknown[]> {
+  const rows = await sql<{ collaborationState: unknown }>`
+    SELECT collaboration_state FROM sessions
+      WHERE collaboration_state ? ${keys.pendingCommitKey}
+         OR collaboration_state ? ${keys.pendingRefreshKey}`.execute(run)
+  return rows.rows.map((row) => row.collaborationState)
+}
+
 // ── service.ts pending-conflict JSONB store (sessions.collaboration_state) ───
 //
 // Raw sql is preserved VERBATIM: the SQL bodies keep snake_case
