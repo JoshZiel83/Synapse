@@ -13,7 +13,6 @@ import {
   CONVERSATION_PARTICIPANT_ROLE_KEY,
   CONVERSATION_PARTICIPANT_STATE,
   CONVERSATION_PARTICIPANT_TYPE,
-  CONVERSATION_REPLY_REF_SPECIAL_SUBTYPE,
   normalizeCanonicalContentBlocks,
   parseConversationMessageRef,
   extractText,
@@ -29,7 +28,6 @@ import {
   type Timestamp,
   type ConversationMessageSubtype,
   type ConversationParticipantType,
-  type ConversationReplyRef,
   type SessionWakeupSourceParticipantType,
 } from "@synapse/shared"
 import { assertIsoInstant } from "@synapse/shared/datetime"
@@ -193,12 +191,15 @@ import { conversationItemDetailToFeedItem } from "./conversation-feed-mapper.js"
 export { conversationItemDetailToFeedItem } from "./conversation-feed-mapper.js"
 import {
   assertConversationMessageSubtype,
-  normalizeConversationItemSubtype,
   type ConversationEventItemDetail,
   type ConversationItemDetail,
   type ConversationItemDetailBase,
   type ConversationNonEventItemDetail,
 } from "./conversation-item-detail.js"
+import {
+  buildConversationReplyRefs,
+  unavailableConversationReplyRef,
+} from "./conversation-reply-ref.js"
 import { enrichTaskForUser } from "../tasks/service.js"
 import {
   getConversationRuntimeMap,
@@ -1279,43 +1280,12 @@ async function buildConversationItemDetails(
   ]
   const replyRows = await listItemRowsByIds(queryable, replyToIds)
   const replyHydrated = await hydrateConversationItems(queryable, replyRows)
-  const replyRowById = new Map(replyRows.map((row) => [row.id, row]))
-  const replyHydratedById = new Map(
-    replyHydrated.map((item) => [item.id, item])
-  )
-  const replyRefById = new Map<string, ConversationReplyRef>()
-  for (const replyToItemId of replyToIds) {
-    const replyRow = replyRowById.get(replyToItemId)
-    const replyItem = replyHydratedById.get(replyToItemId)
-    if (
-      !replyRow ||
-      !replyItem ||
-      replyRow.scope !== "shared" ||
-      replyRow.surface !== "visible"
-    ) {
-      continue
-    }
-    const replySubtype = normalizeConversationItemSubtype(
-      replyRow.itemType,
-      replyRow.subtype,
-      replyRow.id
-    )
-    replyRefById.set(replyToItemId, {
-      itemId: replyToItemId,
-      ref: buildConversationMessageRef(toNumber(replyRow.sequence)),
-      sequence: toNumber(replyRow.sequence),
-      itemType: replyItem.itemType,
-      subtype: replySubtype,
-      author: replyRow.authorParticipantId
-        ? participantRowToEntityRef(
-            participantById.get(replyRow.authorParticipantId)
-          )
-        : undefined,
-      previewText: replyItem.content.trim(),
-      previewBlocks: replyItem.contentBlocks,
-      createdAt: presentInstant(replyRow.createdAt),
-    })
-  }
+  const replyRefById = buildConversationReplyRefs({
+    replyToIds,
+    replyRows,
+    replyHydratedItems: replyHydrated,
+    participantById,
+  })
 
   return itemRows.map((row) => {
     const hydrated = hydratedById.get(row.id)
@@ -1352,14 +1322,8 @@ async function buildConversationItemDetails(
       metadata: row.metadata,
       replyToItemId: row.replyToItemId ?? undefined,
       replyTo: row.replyToItemId
-        ? (replyRefById.get(row.replyToItemId) ?? {
-            itemId: row.replyToItemId,
-            itemType: "message",
-            subtype: CONVERSATION_REPLY_REF_SPECIAL_SUBTYPE.UNAVAILABLE,
-            previewText: "",
-            previewBlocks: [],
-            isUnavailable: true,
-          })
+        ? (replyRefById.get(row.replyToItemId) ??
+          unavailableConversationReplyRef(row.replyToItemId))
         : undefined,
       causedByItemId: row.causedByItemId ?? undefined,
       createdAt: presentInstant(row.createdAt),
