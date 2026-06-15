@@ -555,7 +555,7 @@ export function presentPluginInstallationDetail(
 function getAuthChallenge(
   row: PluginAuthSessionRow
 ): PluginAuthSession["challenge"] | undefined {
-  const challenge = asObject(row.challengePayload)
+  const challenge = row.challengePayload
   const kind = asString(challenge.kind)
   if (!kind) return undefined
   if (!PLUGIN_AUTH_CHALLENGE_KINDS.includes(kind as PluginAuthChallengeKind)) {
@@ -595,7 +595,7 @@ export function presentAuthConnection(
     avatarUrl: row.avatarUrl || undefined,
     status: row.status as PluginAuthConnection["status"],
     expiresAt: serializeOptionalInstant(row.expiresAt),
-    publicPayload: asObject(row.publicPayload),
+    publicPayload: row.publicPayload,
     createdAt: serializeInstant(row.createdAt),
     updatedAt: serializeInstant(row.updatedAt),
   }
@@ -605,7 +605,7 @@ export function presentAuthConnection(
 export function presentAuthSession(
   row: PluginAuthSessionRow
 ): PluginAuthSession {
-  const metadata = asObject(row.metadata)
+  const metadata = row.metadata
   return {
     id: row.id,
     workspaceId: row.workspaceId,
@@ -620,7 +620,7 @@ export function presentAuthSession(
     challenge: getAuthChallenge(row),
     errorCode: row.errorCode || undefined,
     errorMessage: row.errorMessage || undefined,
-    resultPreview: asObject(row.resultPreview),
+    resultPreview: row.resultPreview,
     authConnectionId:
       typeof metadata.consumedConnectionId === "string"
         ? metadata.consumedConnectionId

@@ -62,8 +62,10 @@ import {
 import type {
   CatalogCategoriesMetadata,
   PluginAuthSessionRow,
+  PluginAuthSessionTableRow,
   PluginAuthSessionsUpdate,
   PluginConnectionRow,
+  PluginConnectionTableRow,
   PluginConnectionsUpdate,
   PluginInstallationsConfigData,
   PluginPackageVersionSpecsTransport,
@@ -1814,6 +1816,63 @@ export function normalizePluginAuthSpecRow(
   }
 }
 
+export function normalizePluginAuthSessionRow(
+  row: PluginAuthSessionTableRow
+): PluginAuthSessionRow {
+  return {
+    id: row.id,
+    workspaceId: row.workspaceId,
+    catalogItemId: row.catalogItemId,
+    catalogVersionId: row.catalogVersionId,
+    installationId: row.installationId,
+    bindingKey: row.bindingKey,
+    driver: row.driver,
+    workspaceMemberId: row.workspaceMemberId,
+    status: row.status,
+    phase: row.phase,
+    state: row.state,
+    challengePayload: parseJsonObject(row.challengePayload),
+    transientPayload: parseJsonObject(row.transientPayload),
+    errorCode: row.errorCode,
+    errorMessage: row.errorMessage,
+    resultPreview: parseJsonObject(row.resultPreview),
+    resultPayload: parseJsonObject(row.resultPayload),
+    metadata: parseJsonObject(row.metadata),
+    expiresAt: row.expiresAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  }
+}
+
+type PluginConnectionJoinedTableRow = PluginConnectionTableRow & {
+  catalogItemId: string
+  catalogVersionId: string | null
+}
+
+export function normalizePluginConnectionRow(
+  row: PluginConnectionJoinedTableRow
+): PluginConnectionRow {
+  return {
+    id: row.id,
+    installationId: row.installationId,
+    workspaceId: row.workspaceId,
+    bindingKey: row.bindingKey,
+    driver: row.driver,
+    externalAccountId: row.externalAccountId,
+    displayName: row.displayName,
+    avatarUrl: row.avatarUrl,
+    status: row.status,
+    expiresAt: row.expiresAt,
+    publicPayload: parseJsonObject(row.publicPayload),
+    secretPayload: parseJsonObject(row.secretPayload),
+    deletedAt: row.deletedAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    catalogItemId: row.catalogItemId,
+    catalogVersionId: row.catalogVersionId,
+  }
+}
+
 /**
  * Raw catalog/spec read for an auth flow. Snake_case SELECT aliases rely on
  * CamelCasePlugin to map back (catalog_item_id → catalogItemId), so the raw sql
@@ -1848,7 +1907,7 @@ export async function findPluginAuthSessionRow(
   workspaceId: string,
   workspaceMemberId: string
 ): Promise<PluginAuthSessionRow | undefined> {
-  return db
+  const row = await db
     .selectFrom("pluginAuthSessions")
     .selectAll()
     .where("id", "=", sessionId)
@@ -1856,18 +1915,20 @@ export async function findPluginAuthSessionRow(
     .where("workspaceMemberId", "=", workspaceMemberId)
     .limit(1)
     .executeTakeFirst()
+  return row ? normalizePluginAuthSessionRow(row) : undefined
 }
 
 /** Auth session by OAuth `state`. Returns undefined on miss. */
 export async function findPluginAuthSessionRowByState(
   state: string
 ): Promise<PluginAuthSessionRow | undefined> {
-  return db
+  const row = await db
     .selectFrom("pluginAuthSessions")
     .selectAll()
     .where("state", "=", state)
     .limit(1)
     .executeTakeFirst()
+  return row ? normalizePluginAuthSessionRow(row) : undefined
 }
 
 /**
@@ -1901,7 +1962,8 @@ export async function findPluginAuthConnectionRow(
     builder = builder.where("connection.workspaceId", "=", workspaceId)
   }
 
-  return builder.limit(1).executeTakeFirst()
+  const row = await builder.limit(1).executeTakeFirst()
+  return row ? normalizePluginConnectionRow(row) : undefined
 }
 
 export type PluginInstallationAuthConfigRow = {
@@ -1972,7 +2034,7 @@ export async function insertPluginAuthSession(
   values: Omit<TableInsert<"pluginAuthSessions">, "expiresAt">,
   expiresAt: Date | { kind: "now_plus_1h" }
 ): Promise<PluginAuthSessionRow> {
-  return db
+  const row = await db
     .insertInto("pluginAuthSessions")
     .values({
       ...values,
@@ -1981,6 +2043,7 @@ export async function insertPluginAuthSession(
     })
     .returningAll()
     .executeTakeFirstOrThrow()
+  return normalizePluginAuthSessionRow(row)
 }
 
 /**
@@ -1992,12 +2055,13 @@ export async function updatePluginAuthSession(
   sessionId: string,
   patch: PluginAuthSessionsUpdate
 ): Promise<PluginAuthSessionRow> {
-  return db
+  const row = await db
     .updateTable("pluginAuthSessions")
     .set(patch)
     .where("id", "=", sessionId)
     .returningAll()
     .executeTakeFirstOrThrow()
+  return normalizePluginAuthSessionRow(row)
 }
 
 /**
@@ -2072,7 +2136,7 @@ export async function upsertPluginAuthConnectionFromSessionResult(input: {
   sessionId: string
   sessionMetadata: Record<string, unknown>
 }): Promise<PluginConnectionRow> {
-  const existing = await input.run<PluginConnectionRow>(
+  const existing = await input.run<PluginConnectionJoinedTableRow>(
     `SELECT
        connection.*,
        installation.catalog_item_id,
@@ -2097,7 +2161,7 @@ export async function upsertPluginAuthConnectionFromSessionResult(input: {
   const connectionRow =
     existing.rows.length > 0
       ? (
-          await input.run<PluginConnectionRow>(
+          await input.run<PluginConnectionJoinedTableRow>(
             `UPDATE plugin_connections
              SET display_name = $2,
                  avatar_url = $3,
@@ -2129,7 +2193,7 @@ export async function upsertPluginAuthConnectionFromSessionResult(input: {
           )
         ).rows[0]!
       : (
-          await input.run<PluginConnectionRow>(
+          await input.run<PluginConnectionJoinedTableRow>(
             `INSERT INTO plugin_connections (
                installation_id,
                workspace_id,
@@ -2188,5 +2252,5 @@ export async function upsertPluginAuthConnectionFromSessionResult(input: {
     ]
   )
 
-  return connectionRow
+  return normalizePluginConnectionRow(connectionRow)
 }

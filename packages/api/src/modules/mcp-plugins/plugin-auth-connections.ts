@@ -626,7 +626,7 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
     return expirePluginAuthSession(row.id)
   }
 
-  const transientPayload = asObject(decryptDeep(asObject(row.transientPayload)))
+  const transientPayload = asObject(decryptDeep(row.transientPayload))
   const mijiaPayload = asObject(transientPayload.mijia)
 
   try {
@@ -708,7 +708,7 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
     return expirePluginAuthSession(row.id)
   }
 
-  const transientPayload = asObject(decryptDeep(asObject(row.transientPayload)))
+  const transientPayload = asObject(decryptDeep(row.transientPayload))
 
   try {
     const progress = await progressFeishuCliSetup(transientPayload as any)
@@ -716,8 +716,7 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
       case PLUGIN_AUTH_SESSION_STATUS.PENDING: {
         const nextTransient =
           progress.transientPayload || (transientPayload as any)
-        const nextChallenge =
-          progress.challengePayload || asObject(row.challengePayload)
+        const nextChallenge = progress.challengePayload || row.challengePayload
         const nextExpiresAt = progress.expiresAt || row.expiresAt
 
         const updated = await updatePluginAuthSession(row.id, {
@@ -876,7 +875,7 @@ async function refreshOAuthConnection(
     )
   }
 
-  const storedSecretPayload = asObject(row.secretPayload)
+  const storedSecretPayload = row.secretPayload
   const secretPayload = asObject(decryptDeep(storedSecretPayload))
   const refreshToken = asString(secretPayload.refreshToken)
   if (!refreshToken) {
@@ -949,7 +948,7 @@ async function refreshOAuthConnection(
       : row.expiresAt
 
   const publicPayload = {
-    ...asObject(row.publicPayload),
+    ...row.publicPayload,
     ...(typeof tokenResponse.scope === "string"
       ? {
           scopes: tokenResponse.scope.split(/\s+/).filter(Boolean),
@@ -983,9 +982,9 @@ async function refreshOAuthConnection(
 }
 
 async function refreshFeishuConnection(row: PluginConnectionRow) {
-  const storedSecretPayload = asObject(row.secretPayload)
+  const storedSecretPayload = row.secretPayload
   const secretPayload = asObject(decryptDeep(storedSecretPayload))
-  const publicPayload = asObject(row.publicPayload)
+  const publicPayload = row.publicPayload
   const brand = asString(publicPayload.brand) === "lark" ? "lark" : "feishu"
   const appId = asString(secretPayload.appId)
   const appSecret = asString(secretPayload.appSecret)
@@ -1039,7 +1038,7 @@ async function refreshFeishuConnection(row: PluginConnectionRow) {
 // connection store) before the credentials are forwarded. The decrypted
 // secret_payload is the internal MijiaAuthState.
 async function refreshMijiaConnection(row: PluginConnectionRow) {
-  const secretPayload = asObject(decryptDeep(asObject(row.secretPayload)))
+  const secretPayload = asObject(decryptDeep(row.secretPayload))
   const nextState = await refreshMijiaSessionTokens(
     secretPayload as unknown as MijiaAuthState
   )
@@ -1282,10 +1281,8 @@ export async function startPluginAuthSession(input: {
           existingConnectionRef.connectionId,
           input.workspaceId
         )
-        const publicPayload = asObject(connectionRow.publicPayload)
-        const secretPayload = asObject(
-          decryptDeep(asObject(connectionRow.secretPayload))
-        )
+        const publicPayload = connectionRow.publicPayload
+        const secretPayload = asObject(decryptDeep(connectionRow.secretPayload))
         const appId = asString(secretPayload.appId)
         const appSecret = asString(secretPayload.appSecret)
         if (appId && appSecret) {
@@ -1377,8 +1374,8 @@ export async function inspectPluginAuthSession(input: {
     )
   }
 
-  const transientPayload = asObject(decryptDeep(asObject(row.transientPayload)))
-  const resultPayload = asObject(row.resultPayload)
+  const transientPayload = asObject(decryptDeep(row.transientPayload))
+  const resultPayload = row.resultPayload
   const inspection = await buildFeishuAppScopeInspection({
     transientPayload,
     resultPayload,
@@ -1390,7 +1387,7 @@ export async function inspectPluginAuthSession(input: {
     )
   }
 
-  const previousPreview = asObject(row.resultPreview)
+  const previousPreview = row.resultPreview
   const nextPreview = {
     ...previousPreview,
     features:
@@ -1444,9 +1441,7 @@ export async function handlePluginAuthCallback(input: {
         throw new PluginAuthError(400, "Missing authorization code")
       }
 
-      const transientPayload = asObject(
-        decryptDeep(asObject(session.transientPayload))
-      )
+      const transientPayload = asObject(decryptDeep(session.transientPayload))
       const oauth = asObject(transientPayload.oauth) as OAuthTransientPayload
       if (
         !oauth.tokenUrl ||
@@ -1601,7 +1596,7 @@ export async function attachAuthConnectionsToConfig(input: {
       )
     }
 
-    const metadata = asObject(session.metadata)
+    const metadata = session.metadata
     const bindingKey = session.bindingKey
     if (field.authBindingKey && bindingKey !== field.authBindingKey) {
       throw new PluginAuthError(
@@ -1620,7 +1615,7 @@ export async function attachAuthConnectionsToConfig(input: {
         input.workspaceId
       )
     } else {
-      const normalizedPayload = asObject(session.resultPayload)
+      const normalizedPayload = session.resultPayload
       const publicPayload = asObject(normalizedPayload.publicPayload)
       const secretPayload = asObject(normalizedPayload.secretPayload)
       if (Object.keys(secretPayload).length === 0) {
@@ -1687,7 +1682,7 @@ export async function resolveAuthConnectionRefs(
     const row = await ensureFreshPluginConnection(
       await getConnectionRow(ref.connectionId)
     )
-    let secretPayload = asObject(decryptDeep(asObject(row.secretPayload)))
+    let secretPayload = asObject(decryptDeep(row.secretPayload))
     if (row.status !== PLUGIN_AUTH_CONNECTION_STATUS.ACTIVE) {
       // Fail-closed: never forward a non-active connection's secrets. Clear the
       // whole payload (not just OAuth's accessToken) so drivers like Mijia,
@@ -1706,7 +1701,7 @@ export async function resolveAuthConnectionRefs(
       avatarUrl: row.avatarUrl || undefined,
       status: row.status,
       expiresAt: row.expiresAt || undefined,
-      publicPayload: asObject(row.publicPayload),
+      publicPayload: row.publicPayload,
       secretPayload,
     }
   }

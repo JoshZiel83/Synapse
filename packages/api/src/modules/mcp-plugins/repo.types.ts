@@ -20,20 +20,40 @@ export type PluginInstallationsConfigData =
 export type CatalogCategoriesMetadata =
   TableInsert<"catalogCategories">["metadata"]
 
-/**
- * Selectable row of the `plugin_auth_sessions` table (camelCase). Consumed by
- * the auth-connection helpers + presenter; the alias lives here so the helper
- * file (plugin-auth-connections.ts) and presenter.ts never reference
- * `TableRow<…>` directly (guard-layering r2).
- */
-export type PluginAuthSessionRow = TableRow<"pluginAuthSessions">
+export type PluginAuthSessionTableRow = TableRow<"pluginAuthSessions">
 
 /**
- * Selectable row of the `plugin_connections` table (camelCase) widened with the
- * catalog identifiers the connection helpers join in. Consumed by the
- * auth-connection helpers + presenter.
+ * Service-facing row of the `plugin_auth_sessions` table (camelCase), with
+ * JSONB payload columns decoded to plain objects at repo exit.
  */
-export type PluginConnectionRow = TableRow<"pluginConnections"> & {
+export type PluginAuthSessionRow = Omit<
+  PluginAuthSessionTableRow,
+  | "challengePayload"
+  | "transientPayload"
+  | "resultPreview"
+  | "resultPayload"
+  | "metadata"
+> & {
+  challengePayload: Record<string, unknown>
+  transientPayload: Record<string, unknown>
+  resultPreview: Record<string, unknown>
+  resultPayload: Record<string, unknown>
+  metadata: Record<string, unknown>
+}
+
+export type PluginConnectionTableRow = TableRow<"pluginConnections">
+
+/**
+ * Service-facing row of the `plugin_connections` table (camelCase) widened with
+ * catalog identifiers, with JSONB payload columns decoded to plain objects at
+ * repo exit. Consumed by the auth-connection helpers + presenter.
+ */
+export type PluginConnectionRow = Omit<
+  PluginConnectionTableRow,
+  "publicPayload" | "secretPayload"
+> & {
+  publicPayload: Record<string, unknown>
+  secretPayload: Record<string, unknown>
   catalogItemId: string
   catalogVersionId: string | null
 }

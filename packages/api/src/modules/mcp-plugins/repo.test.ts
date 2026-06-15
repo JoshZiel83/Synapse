@@ -8,6 +8,8 @@ import {
   normalizeJsonArray,
   normalizeNullablePluginConnectionPublicPayload,
   normalizePluginCatalogRow,
+  normalizePluginAuthSessionRow,
+  normalizePluginConnectionRow,
   normalizePluginInstallationAuthConfigRow,
   normalizePluginAuthSpecRow,
   normalizeVisiblePluginRow,
@@ -108,6 +110,68 @@ test("normalizePluginAuthSpecRow decodes auth spec config and bindings", () => {
   assert.deepEqual(row.defaultConfig, { region: "iad" })
   assert.equal(row.authBindings[0]?.key, "oauth")
   assert.equal(row.authBindings[0]?.driver, "oauth2_authorization_code_pkce")
+})
+
+test("normalizePluginAuthSessionRow decodes auth session JSON payloads at repo exit", () => {
+  const row = normalizePluginAuthSessionRow({
+    id: "session-1",
+    workspaceId: "workspace-1",
+    catalogItemId: "plugin-1",
+    catalogVersionId: "version-1",
+    installationId: "installation-1",
+    bindingKey: "oauth",
+    driver: "oauth2_authorization_code_pkce",
+    workspaceMemberId: "member-1",
+    status: "completed",
+    phase: null,
+    state: "state-1",
+    challengePayload: '{"kind":"redirect","url":"https://auth.example"}',
+    transientPayload: '{"oauth":{"clientId":"client-1"}}',
+    errorCode: null,
+    errorMessage: null,
+    resultPreview: '{"displayName":"Demo User"}',
+    resultPayload: '{"publicPayload":{"scope":"drive:read"}}',
+    metadata: '{"consumedConnectionId":"connection-1"}',
+    expiresAt: createdAt,
+    createdAt,
+    updatedAt,
+  })
+
+  assert.deepEqual(row.challengePayload, {
+    kind: "redirect",
+    url: "https://auth.example",
+  })
+  assert.deepEqual(row.transientPayload, { oauth: { clientId: "client-1" } })
+  assert.deepEqual(row.resultPreview, { displayName: "Demo User" })
+  assert.deepEqual(row.resultPayload, {
+    publicPayload: { scope: "drive:read" },
+  })
+  assert.deepEqual(row.metadata, { consumedConnectionId: "connection-1" })
+})
+
+test("normalizePluginConnectionRow decodes connection payloads at repo exit", () => {
+  const row = normalizePluginConnectionRow({
+    id: "connection-1",
+    installationId: "installation-1",
+    workspaceId: "workspace-1",
+    bindingKey: "oauth",
+    driver: "oauth2_authorization_code_pkce",
+    externalAccountId: "external-1",
+    displayName: "Demo User",
+    avatarUrl: null,
+    status: "active",
+    expiresAt: null,
+    publicPayload: '{"scope":"drive:read"}',
+    secretPayload: '{"accessToken":"secret"}',
+    deletedAt: null,
+    createdAt,
+    updatedAt,
+    catalogItemId: "plugin-1",
+    catalogVersionId: "version-1",
+  })
+
+  assert.deepEqual(row.publicPayload, { scope: "drive:read" })
+  assert.deepEqual(row.secretPayload, { accessToken: "secret" })
 })
 
 test("upsertPluginAuthConnectionFromSessionResult owns connection upsert and session consume SQL", async () => {
