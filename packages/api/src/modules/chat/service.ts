@@ -1,5 +1,3 @@
-import { type ConversationParticipantType } from "@synapse/shared"
-import { type Executor } from "../../infrastructure/database/kysely.js"
 export {
   createChatClientInstance,
   touchChatClientInstance,
@@ -25,21 +23,15 @@ export {
 } from "./remove-participant.js"
 export { patchChatConversation } from "./patch-conversation.js"
 export { retryAssistantMessage } from "./retry-message.js"
-import {
+export {
   addChatConversationParticipants,
   addConversationParticipants,
 } from "./add-participants.js"
-export { addChatConversationParticipants, addConversationParticipants }
-import {
-  createChatConversation,
-  createConversation,
-  createConversationForWorkspaceMember,
-} from "./create-conversation.js"
 export {
   createChatConversation,
   createConversation,
   createConversationForWorkspaceMember,
-}
+} from "./create-conversation.js"
 export {
   createConversationItem,
   sendConversationMessageFromParticipant,
@@ -68,45 +60,8 @@ export {
 } from "./app-read.js"
 export { getConversation } from "./conversation-record.js"
 export { resolveConversationReplyRef } from "./conversation-reply-ref.js"
-import {
-  ensureConversationParticipantUseCase,
-  getConversationParticipantUseCase,
-  listConversationParticipantsUseCase,
+export {
+  ensureConversationParticipantUseCase as ensureConversationParticipant,
+  getConversationParticipantUseCase as getConversationParticipant,
+  listConversationParticipantsUseCase as listConversationParticipants,
 } from "./participant-roster.js"
-
-type ParticipantKind = ConversationParticipantType
-
-export async function listConversationParticipants(
-  conversationId: string,
-  options?: { useProfileSnapshot?: boolean; queryable?: Executor }
-) {
-  return listConversationParticipantsUseCase(conversationId, options)
-}
-
-export async function getConversationParticipant(params: {
-  conversationId: string
-  participantId?: string
-  actorId?: string
-  remoteAgentId?: string
-  workspaceMemberId?: string
-  transportAddressId?: string
-  queryable?: Executor
-}) {
-  return getConversationParticipantUseCase(params)
-}
-
-export async function ensureConversationParticipant(params: {
-  conversationId: string
-  participantType: ParticipantKind
-  workspaceMemberId?: string
-  actorId?: string
-  remoteAgentId?: string
-  displayName?: string
-  actorJoinVersionId?: string
-  roleKey?: string
-  metadata?: Record<string, unknown>
-  transportAddressId?: string
-  queryable?: Executor
-}) {
-  return ensureConversationParticipantUseCase(params)
-}
