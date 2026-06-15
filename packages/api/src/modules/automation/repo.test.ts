@@ -28,6 +28,7 @@ import {
   insertAutomationRuleRow,
   insertAutomationTriggerRow,
   insertAutomationWebhookEndpointReturningRow,
+  insertIntegrationBindingRow,
   listActiveEventSubscriptionRuleRowsByEventSource,
   listAutomationEventSourceRows,
   listAutomationWebhookEndpointRows,
@@ -43,7 +44,9 @@ import {
   normalizeAutomationWebhookEndpointRow,
   pauseAutomationRuleRowsForEventSource,
   persistAutomationDeliveryTargets,
+  selectAutomationIntegrationBindingRow,
   selectAutomationWebhookEndpointRow,
+  selectExistingAutomationIntegrationBindingRow,
   updateAutomationTriggerRow,
 } from "./repo.js"
 import type {
@@ -122,6 +125,60 @@ async function insertAutomationRuleFixture(db: AnyDb) {
     conversationId: conversation.id as string,
     participantId: participant.id as string,
   }
+}
+
+async function insertPluginInstallationFixture(
+  db: AnyDb,
+  params: { workspaceId: string; memberId: string }
+) {
+  const publisher = await db
+    .insertInto("publishers")
+    .values({
+      slug: `automation-pub-${crypto.randomUUID().slice(0, 8)}`,
+      displayName: "automation publisher",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const item = await db
+    .insertInto("catalogItems")
+    .values({
+      publisherId: publisher.id,
+      itemKind: "plugin_package",
+      slug: `automation-plugin-${crypto.randomUUID().slice(0, 8)}`,
+      displayName: "automation plugin",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const version = await db
+    .insertInto("catalogVersions")
+    .values({
+      catalogItemId: item.id,
+      version: "1.0.0",
+      status: "active",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const installationId = crypto.randomUUID()
+  await db
+    .insertInto("workspaceApps")
+    .values({
+      id: installationId,
+      workspaceId: params.workspaceId,
+      kind: "plugin_installation",
+      displayName: "automation plugin",
+      ownerWorkspaceMemberId: params.memberId,
+      status: "active",
+    } as any)
+    .execute()
+  await db
+    .insertInto("pluginInstallations")
+    .values({
+      id: installationId,
+      catalogItemId: item.id,
+      catalogVersionId: version.id,
+    } as any)
+    .execute()
+  return installationId
 }
 
 test("decodeAutomationEventSourceMetadata decodes JSONB metadata at repo exit", () => {
@@ -265,6 +322,49 @@ test("automation repo helpers own webhook endpoint create and list queries", asy
       listed.map((endpoint) => endpoint.id),
       [endpointId]
     )
+  })
+})
+
+test("automation repo helpers own integration binding read queries", async () => {
+  await withTestDb(async (db) => {
+    const { workspaceId, memberId } = await insertAutomationRuleFixture(db)
+    const installationId = await insertPluginInstallationFixture(db, {
+      workspaceId,
+      memberId,
+    })
+    const bindingId = crypto.randomUUID()
+    await insertIntegrationBindingRow(db, {
+      id: bindingId,
+      workspaceId,
+      installationId,
+      provider: "github",
+      ingressKind: "polling",
+      targetKind: "repository",
+      targetId: "synapse/test",
+      targetLabel: "synapse/test",
+      webhookEndpointId: null,
+      externalSubscriptionId: "sub-1",
+      metadata: JSON.stringify({ source: "repo-test" }),
+    })
+
+    const loaded = await selectAutomationIntegrationBindingRow(bindingId, db)
+    assert.equal(loaded?.id, bindingId)
+    assert.equal(loaded?.workspace_id, workspaceId)
+    assert.equal(loaded?.installation_id, installationId)
+    assert.equal(loaded?.ingress_kind, "polling")
+    assert.equal(loaded?.target_id, "synapse/test")
+
+    const existing = await selectExistingAutomationIntegrationBindingRow({
+      workspaceId,
+      installationId,
+      provider: "github",
+      ingressKind: "polling",
+      targetKind: "repository",
+      targetId: "synapse/test",
+      executor: db,
+    })
+    assert.equal(existing?.id, bindingId)
+    assert.equal(existing?.external_subscription_id, "sub-1")
   })
 })
 

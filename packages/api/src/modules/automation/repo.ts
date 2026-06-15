@@ -24,6 +24,9 @@ import type {
   AutomationEventProviderKind,
   AutomationEventSourceStatus,
   AutomationExecutionStatus,
+  AutomationIntegrationIngressKind,
+  AutomationIntegrationProvider,
+  AutomationIntegrationTargetKind,
   AutomationWebhookEndpoint,
   Timestamp,
 } from "@synapse/shared"
@@ -40,6 +43,7 @@ import type {
   AutomationEventSourceRow,
   AutomationExecutionWithOccurrenceDbRow,
   AutomationExecutionWithOccurrenceRow,
+  AutomationIntegrationBindingRow,
   AutomationOccurrenceDbRow,
   AutomationOccurrenceRow,
   AutomationPolicyDbRow,
@@ -60,6 +64,7 @@ export type {
   AutomationExecutionWithOccurrenceDbRow,
   AutomationExecutionWithOccurrenceRow,
   AutomationExecutionRow,
+  AutomationIntegrationBindingRow,
   AutomationOccurrenceDbRow,
   AutomationOccurrenceRow,
   AutomationPolicyDbRow,
@@ -242,6 +247,22 @@ type AutomationWebhookEndpointRawRow = {
   metadata: unknown
   createdByWorkspaceMemberId: string | null
   lastReceivedAt: Date | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+type AutomationIntegrationBindingRawRow = {
+  id: string
+  workspaceId: string
+  installationId: string
+  provider: AutomationIntegrationBindingRow["provider"]
+  ingressKind: AutomationIntegrationBindingRow["ingress_kind"]
+  targetKind: AutomationIntegrationBindingRow["target_kind"]
+  targetId: string
+  targetLabel: string
+  webhookEndpointId: string | null
+  externalSubscriptionId: string | null
+  metadata: unknown
   createdAt: Date
   updatedAt: Date
 }
@@ -583,6 +604,26 @@ function toAutomationWebhookEndpointDbRow(
     metadata: row.metadata,
     created_by_workspace_member_id: row.createdByWorkspaceMemberId,
     last_received_at: row.lastReceivedAt,
+    created_at: row.createdAt,
+    updated_at: row.updatedAt,
+  }
+}
+
+function toAutomationIntegrationBindingRow(
+  row: AutomationIntegrationBindingRawRow
+): AutomationIntegrationBindingRow {
+  return {
+    id: row.id,
+    workspace_id: row.workspaceId,
+    installation_id: row.installationId,
+    provider: row.provider,
+    ingress_kind: row.ingressKind,
+    target_kind: row.targetKind,
+    target_id: row.targetId,
+    target_label: row.targetLabel,
+    webhook_endpoint_id: row.webhookEndpointId,
+    external_subscription_id: row.externalSubscriptionId,
+    metadata: row.metadata,
     created_at: row.createdAt,
     updated_at: row.updatedAt,
   }
@@ -1433,6 +1474,57 @@ export async function softDeleteAutomationEventSource(
 // ---------------------------------------------------------------------------
 // Integration binding mutations
 // ---------------------------------------------------------------------------
+
+export async function selectAutomationIntegrationBindingRow(
+  bindingId: string,
+  executor?: Executor
+): Promise<AutomationIntegrationBindingRow | null> {
+  const result = await resolveQueryRunner(
+    executor
+  ).run<AutomationIntegrationBindingRawRow>(
+    `SELECT *
+     FROM automation_integration_bindings
+     WHERE id = $1::uuid
+     LIMIT 1`,
+    [bindingId]
+  )
+  const row = result.rows[0]
+  return row ? toAutomationIntegrationBindingRow(row) : null
+}
+
+export async function selectExistingAutomationIntegrationBindingRow(params: {
+  workspaceId: string
+  installationId: string
+  provider: AutomationIntegrationProvider
+  ingressKind: AutomationIntegrationIngressKind
+  targetKind: AutomationIntegrationTargetKind
+  targetId: string
+  executor?: Executor
+}): Promise<AutomationIntegrationBindingRow | null> {
+  const result = await resolveQueryRunner(
+    params.executor
+  ).run<AutomationIntegrationBindingRawRow>(
+    `SELECT *
+     FROM automation_integration_bindings
+     WHERE workspace_id = $1::uuid
+       AND installation_id = $2::uuid
+       AND provider = $3::automation_integration_bindings_provider
+       AND ingress_kind = $4::automation_integration_bindings_ingress_kind
+       AND target_kind = $5::automation_integration_bindings_target_kind
+       AND target_id = $6::text
+     LIMIT 1`,
+    [
+      params.workspaceId,
+      params.installationId,
+      params.provider,
+      params.ingressKind,
+      params.targetKind,
+      params.targetId,
+    ]
+  )
+  const row = result.rows[0]
+  return row ? toAutomationIntegrationBindingRow(row) : null
+}
 
 /** List active/deprecated integration source keys for a binding. */
 export async function listActiveIntegrationSourceKeysForBinding(

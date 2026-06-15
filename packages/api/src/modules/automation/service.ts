@@ -96,7 +96,9 @@ import {
   selectActiveAutomationRuleEventMatchers,
   selectActiveWebhookEndpointId,
   selectAutomationEventSourceReuseRow,
+  selectAutomationIntegrationBindingRow,
   selectAutomationWebhookEndpointRow,
+  selectExistingAutomationIntegrationBindingRow,
   selectIntegrationEventSourceReuseRow,
   selectWorkspaceOwnerId,
   setAutomationEventSourceStatus,
@@ -156,6 +158,7 @@ import type {
   AutomationEventSourceRow,
   AutomationExecutionRow,
   AutomationExecutionWithOccurrenceDbRow,
+  AutomationIntegrationBindingRow,
   AutomationOccurrenceDbRow,
   AutomationOccurrenceRow,
   AutomationPolicyDbRow,
@@ -197,22 +200,6 @@ type AutomationEventSourceAccessRow = AutomationEventSourceBindingJoinedRow
 type AutomationEventSourceAccessContext = {
   conversationId: string
   actorId?: string | null
-}
-
-type AutomationIntegrationBindingRow = {
-  id: string
-  workspace_id: string
-  installation_id: string
-  provider: AutomationIntegrationProvider
-  ingress_kind: AutomationIntegrationIngressKind
-  target_kind: AutomationIntegrationTargetKind
-  target_id: string
-  target_label: string
-  webhook_endpoint_id: string | null
-  external_subscription_id: string | null
-  metadata: Record<string, unknown> | string | null
-  created_at: Date
-  updated_at: Date
 }
 
 type AutomationValidationError = Error & {
@@ -1331,14 +1318,7 @@ async function loadAutomationWebhookEndpointSecret(endpointId: string) {
 }
 
 async function getAutomationIntegrationBinding(bindingId: string) {
-  const result = await runQuery<AutomationIntegrationBindingRow>(
-    `SELECT *
-     FROM automation_integration_bindings
-     WHERE id = $1
-     LIMIT 1`,
-    [bindingId]
-  )
-  return result.rows[0] || null
+  return selectAutomationIntegrationBindingRow(bindingId)
 }
 
 function integrationEndpointName(
@@ -1380,26 +1360,14 @@ async function ensureAutomationIntegrationBinding(params: {
   const ingressKind = params.integration.ingressKind || "webhook"
   const targetId = params.integration.targetId.trim()
   const targetLabel = params.integration.targetLabel?.trim() || targetId
-  const existingResult = await runQuery<AutomationIntegrationBindingRow>(
-    `SELECT *
-     FROM automation_integration_bindings
-     WHERE workspace_id = $1
-       AND installation_id = $2
-       AND provider = $3
-       AND ingress_kind = $4
-       AND target_kind = $5
-       AND target_id = $6
-     LIMIT 1`,
-    [
-      params.workspaceId,
-      params.installation.id,
-      params.integration.provider,
-      ingressKind,
-      params.integration.targetKind,
-      targetId,
-    ]
-  )
-  const existing = existingResult.rows[0]
+  const existing = await selectExistingAutomationIntegrationBindingRow({
+    workspaceId: params.workspaceId,
+    installationId: params.installation.id,
+    provider: params.integration.provider,
+    ingressKind,
+    targetKind: params.integration.targetKind,
+    targetId,
+  })
   if (existing) {
     if (existing.target_label !== targetLabel) {
       await updateIntegrationBindingTargetLabel(existing.id, targetLabel)

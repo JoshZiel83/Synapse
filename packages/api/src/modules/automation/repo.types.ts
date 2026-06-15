@@ -159,6 +159,22 @@ export type AutomationEventSourceDbRow = Omit<
   metadata: unknown
 }
 
+export type AutomationIntegrationBindingRow = {
+  id: string
+  workspace_id: string
+  installation_id: string
+  provider: AutomationIntegrationProvider
+  ingress_kind: AutomationIntegrationIngressKind
+  target_kind: AutomationIntegrationTargetKind
+  target_id: string
+  target_label: string
+  webhook_endpoint_id: string | null
+  external_subscription_id: string | null
+  metadata: unknown
+  created_at: Date
+  updated_at: Date
+}
+
 export type AutomationOccurrenceRow = {
   id: string
   workspace_id: string
