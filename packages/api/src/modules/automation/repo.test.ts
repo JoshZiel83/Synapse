@@ -22,6 +22,7 @@ import {
   insertAutomationPolicyRow,
   insertAutomationRuleRow,
   insertAutomationTriggerRow,
+  loadAutomationRuleComponentRows,
   lockDueAutomationScheduleRows,
   normalizeAutomationDeliveryRow,
   normalizeAutomationEventSourceRow,
@@ -329,6 +330,19 @@ test(
       assert.equal(targets.length, 1)
       assert.equal(targets[0]?.targetParticipantId, participantId)
       assert.ok(targets[0]?.createdAt instanceof Date)
+
+      const components = await loadAutomationRuleComponentRows(
+        workspaceId,
+        [ruleId],
+        db
+      )
+      assert.equal(components.rules.length, 1)
+      assert.equal(components.rules[0]?.workspace_id, workspaceId)
+      assert.equal(components.triggers[0]?.rule_id, ruleId)
+      assert.equal(components.triggers[0]?.schedule_expr, "*/5 * * * *")
+      assert.equal(components.policies[0]?.rule_id, ruleId)
+      assert.equal(components.deliveries[0]?.rule_id, ruleId)
+      assert.deepEqual(components.targetsByRule.get(ruleId), [participantId])
 
       const dueRows = await lockDueAutomationScheduleRows(db, 10)
       assert.ok(dueRows.length > 0, JSON.stringify(dueRows))

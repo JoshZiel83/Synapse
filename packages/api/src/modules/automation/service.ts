@@ -65,6 +65,7 @@ import {
   insertIntegrationBindingRow,
   insertWebhookEndpointRow,
   listActiveIntegrationSourceKeysForBinding as listActiveIntegrationSourceKeysForBindingRepo,
+  loadAutomationRuleComponentRows,
   lockDueAutomationScheduleRows,
   loadAutomationEventSourceAccessBindingRows,
   markAutomationExecutionCompleted,
@@ -183,11 +184,6 @@ type AutomationTargetRow = {
   metadata: Record<string, unknown> | string | null
   created_at: Date
   updated_at: Date
-}
-
-type TargetParticipantRow = {
-  rule_id: string
-  target_participant_id: string
 }
 
 type AutomationEventSourceAccessRow = AutomationEventSourceBindingJoinedRow
@@ -666,103 +662,28 @@ async function normalizeDeliveryInput(input: AutomationDeliveryInput): Promise<
   }
 }
 
-async function loadAutomationTargets(
-  tableName: "automation_delivery_targets",
-  ruleIds: string[]
-) {
-  if (ruleIds.length === 0) {
-    return new Map<string, string[]>()
-  }
-  const result = await runQuery<TargetParticipantRow>(
-    `SELECT rule_id, target_participant_id
-     FROM ${tableName}
-     WHERE rule_id = ANY($1)
-     ORDER BY created_at ASC`,
-    [ruleIds]
-  )
-  const mapped = new Map<string, string[]>()
-  for (const row of result.rows) {
-    const existing = mapped.get(row.rule_id) || []
-    existing.push(row.target_participant_id)
-    mapped.set(row.rule_id, existing)
-  }
-  return mapped
-}
-
 async function loadAutomationRulesByIds(
   workspaceId: string,
   ruleIds: string[]
 ) {
   if (ruleIds.length === 0) return [] as AutomationRule[]
-  const [
-    rulesResult,
-    triggersResult,
-    policiesResult,
-    deliveriesResult,
-    targetsByRule,
-  ] = await Promise.all([
-    runQuery<AutomationRuleDbRow>(
-      `SELECT *
-       FROM automation_rules
-       WHERE workspace_id = $1
-         AND id = ANY($2)
-         AND deleted_at IS NULL
-       ORDER BY created_at DESC`,
-      [workspaceId, ruleIds]
-    ),
-    runQuery<AutomationTriggerDbRow>(
-      `SELECT at.*,
-              aes.source_key AS event_source_key,
-              aes.name AS event_source_name,
-              aes.provider_kind AS event_provider_kind,
-              aes.provider_ref AS event_provider_ref,
-              aes.webhook_endpoint_id AS event_webhook_endpoint_id,
-              aes.integration_binding_id AS event_integration_binding_id,
-              aib.installation_id AS event_integration_installation_id,
-              aib.provider AS event_integration_provider,
-              aib.ingress_kind AS event_integration_ingress_kind,
-              aib.target_kind AS event_integration_target_kind,
-              aib.target_id AS event_integration_target_id,
-              aib.target_label AS event_integration_target_label,
-              aib.webhook_endpoint_id AS event_integration_webhook_endpoint_id,
-              aib.external_subscription_id AS event_external_subscription_id,
-              aes.status AS event_source_status
-       FROM automation_triggers
-       at
-       LEFT JOIN automation_event_sources aes ON aes.id = at.event_source_id
-       LEFT JOIN automation_integration_bindings aib ON aib.id = aes.integration_binding_id
-       WHERE at.rule_id = ANY($1)`,
-      [ruleIds]
-    ),
-    runQuery<AutomationPolicyDbRow>(
-      `SELECT *
-       FROM automation_policies
-       WHERE rule_id = ANY($1)`,
-      [ruleIds]
-    ),
-    runQuery<AutomationDeliveryDbRow>(
-      `SELECT *
-       FROM automation_deliveries
-       WHERE rule_id = ANY($1)`,
-      [ruleIds]
-    ),
-    loadAutomationTargets("automation_delivery_targets", ruleIds),
-  ])
+  const { rules, triggers, policies, deliveries, targetsByRule } =
+    await loadAutomationRuleComponentRows(workspaceId, ruleIds)
 
   const triggerByRule = new Map(
-    triggersResult.rows.map((row) => {
+    triggers.map((row) => {
       const triggerRow = normalizeAutomationTriggerRow(row)
       return [triggerRow.rule_id, presentTrigger(triggerRow)]
     })
   )
   const policyByRule = new Map(
-    policiesResult.rows.map((row) => {
+    policies.map((row) => {
       const policyRow = normalizeAutomationPolicyRow(row)
       return [policyRow.rule_id, presentPolicy(policyRow)]
     })
   )
   const deliveryByRule = new Map(
-    deliveriesResult.rows.map((row) => {
+    deliveries.map((row) => {
       const deliveryRow = normalizeAutomationDeliveryRow(row)
       return [
         deliveryRow.rule_id,
@@ -774,7 +695,7 @@ async function loadAutomationRulesByIds(
     })
   )
 
-  return rulesResult.rows
+  return rules
     .map((row) => {
       const ruleRow = normalizeAutomationRuleRow(row)
       const trigger = triggerByRule.get(ruleRow.id)

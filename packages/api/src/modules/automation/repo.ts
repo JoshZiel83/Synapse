@@ -118,6 +118,82 @@ export type DueAutomationScheduleRow = {
   lastFiredAt: Date | null
 }
 
+type AutomationRuleComponentRawRow = {
+  id: string
+  workspaceId: string
+  conversationId: string
+  category: AutomationRuleDbRow["category"]
+  status: AutomationRuleDbRow["status"]
+  name: string
+  description: string
+  createdByParticipantId: string
+  createdBySessionId: string | null
+  lastTriggeredAt: Date | null
+  lastErrorAt: Date | null
+  lastErrorMessage: string | null
+  metadata: unknown
+  createdAt: Date
+  updatedAt: Date
+}
+
+type AutomationTriggerComponentRawRow = {
+  ruleId: string
+  triggerKind: AutomationTriggerDbRow["trigger_kind"]
+  sourceKind: AutomationTriggerDbRow["source_kind"]
+  eventSourceId: string | null
+  eventSourceKey?: string | null
+  eventSourceName?: string | null
+  eventProviderKind?: AutomationTriggerDbRow["event_provider_kind"]
+  eventProviderRef?: string | null
+  eventWebhookEndpointId?: string | null
+  eventIntegrationBindingId?: string | null
+  eventIntegrationInstallationId?: string | null
+  eventIntegrationProvider?: AutomationTriggerDbRow["event_integration_provider"]
+  eventIntegrationIngressKind?: AutomationTriggerDbRow["event_integration_ingress_kind"]
+  eventIntegrationTargetKind?: AutomationTriggerDbRow["event_integration_target_kind"]
+  eventIntegrationTargetId?: string | null
+  eventIntegrationTargetLabel?: string | null
+  eventIntegrationWebhookEndpointId?: string | null
+  eventExternalSubscriptionId?: string | null
+  eventSourceStatus?: AutomationTriggerDbRow["event_source_status"]
+  sourceLocator: string | null
+  matchKey: string | null
+  matcher: unknown
+  scheduleKind: string | null
+  scheduleExpr: string | null
+  scheduleTimezone: string | null
+  intervalSeconds: number | null
+  startsAt: Date | null
+  nextFireAt: Date | null
+  lastFiredAt: Date | null
+  metadata: unknown
+}
+
+type AutomationPolicyComponentRawRow = {
+  ruleId: string
+  activeFrom: Date | null
+  activeUntil: Date | null
+  maxTriggerCount: number | null
+  triggerCount: number
+  completionStatus: AutomationPolicyDbRow["completion_status"]
+  completedAt: Date | null
+  metadata: unknown
+}
+
+type AutomationDeliveryComponentRawRow = {
+  ruleId: string
+  messageText: string
+  wakeReasonText: string | null
+  messageBlocks: unknown
+  targetPolicy: AutomationDeliveryDbRow["target_policy"]
+  metadata: unknown
+}
+
+type AutomationDeliveryTargetRawRow = {
+  ruleId: string
+  targetParticipantId: string
+}
+
 export function decodeAutomationEventSourceMetadata(row: {
   metadata: unknown
 }): Record<string, unknown> {
@@ -292,6 +368,193 @@ function withCreatedAt(
   return {
     ...values,
     createdAt: sql`NOW()`,
+  }
+}
+
+function toAutomationRuleDbRow(
+  row: AutomationRuleComponentRawRow
+): AutomationRuleDbRow {
+  return {
+    id: row.id,
+    workspace_id: row.workspaceId,
+    conversation_id: row.conversationId,
+    category: row.category,
+    status: row.status,
+    name: row.name,
+    description: row.description,
+    created_by_participant_id: row.createdByParticipantId,
+    created_by_session_id: row.createdBySessionId,
+    last_triggered_at: row.lastTriggeredAt,
+    last_error_at: row.lastErrorAt,
+    last_error_message: row.lastErrorMessage,
+    metadata: row.metadata,
+    created_at: row.createdAt,
+    updated_at: row.updatedAt,
+  }
+}
+
+function toAutomationTriggerDbRow(
+  row: AutomationTriggerComponentRawRow
+): AutomationTriggerDbRow {
+  return {
+    rule_id: row.ruleId,
+    trigger_kind: row.triggerKind,
+    source_kind: row.sourceKind,
+    event_source_id: row.eventSourceId,
+    event_source_key: row.eventSourceKey,
+    event_source_name: row.eventSourceName,
+    event_provider_kind: row.eventProviderKind,
+    event_provider_ref: row.eventProviderRef,
+    event_webhook_endpoint_id: row.eventWebhookEndpointId,
+    event_integration_binding_id: row.eventIntegrationBindingId,
+    event_integration_installation_id: row.eventIntegrationInstallationId,
+    event_integration_provider: row.eventIntegrationProvider,
+    event_integration_ingress_kind: row.eventIntegrationIngressKind,
+    event_integration_target_kind: row.eventIntegrationTargetKind,
+    event_integration_target_id: row.eventIntegrationTargetId,
+    event_integration_target_label: row.eventIntegrationTargetLabel,
+    event_integration_webhook_endpoint_id:
+      row.eventIntegrationWebhookEndpointId,
+    event_external_subscription_id: row.eventExternalSubscriptionId,
+    event_source_status: row.eventSourceStatus,
+    source_locator: row.sourceLocator,
+    match_key: row.matchKey,
+    matcher: row.matcher,
+    schedule_kind: row.scheduleKind,
+    schedule_expr: row.scheduleExpr,
+    schedule_timezone: row.scheduleTimezone,
+    interval_seconds: row.intervalSeconds,
+    starts_at: row.startsAt,
+    next_fire_at: row.nextFireAt,
+    last_fired_at: row.lastFiredAt,
+    metadata: row.metadata,
+  }
+}
+
+function toAutomationPolicyDbRow(
+  row: AutomationPolicyComponentRawRow
+): AutomationPolicyDbRow {
+  return {
+    rule_id: row.ruleId,
+    active_from: row.activeFrom,
+    active_until: row.activeUntil,
+    max_trigger_count: row.maxTriggerCount,
+    trigger_count: row.triggerCount,
+    completion_status: row.completionStatus,
+    completed_at: row.completedAt,
+    metadata: row.metadata,
+  }
+}
+
+function toAutomationDeliveryDbRow(
+  row: AutomationDeliveryComponentRawRow
+): AutomationDeliveryDbRow {
+  return {
+    rule_id: row.ruleId,
+    message_text: row.messageText,
+    wake_reason_text: row.wakeReasonText,
+    message_blocks: row.messageBlocks,
+    target_policy: row.targetPolicy,
+    metadata: row.metadata,
+  }
+}
+
+export async function loadAutomationRuleComponentRows(
+  workspaceId: string,
+  ruleIds: string[],
+  executor: Executor = db
+): Promise<{
+  rules: AutomationRuleDbRow[]
+  triggers: AutomationTriggerDbRow[]
+  policies: AutomationPolicyDbRow[]
+  deliveries: AutomationDeliveryDbRow[]
+  targetsByRule: Map<string, string[]>
+}> {
+  if (ruleIds.length === 0) {
+    return {
+      rules: [],
+      triggers: [],
+      policies: [],
+      deliveries: [],
+      targetsByRule: new Map(),
+    }
+  }
+  const runner = resolveQueryRunner(executor)
+
+  const [
+    rulesResult,
+    triggersResult,
+    policiesResult,
+    deliveriesResult,
+    targetsResult,
+  ] = await Promise.all([
+    runner.run<AutomationRuleComponentRawRow>(
+      `SELECT *
+       FROM automation_rules
+       WHERE workspace_id = $1::uuid
+         AND id = ANY($2::uuid[])
+         AND deleted_at IS NULL
+       ORDER BY created_at DESC`,
+      [workspaceId, ruleIds]
+    ),
+    runner.run<AutomationTriggerComponentRawRow>(
+      `SELECT at.*,
+              aes.source_key AS event_source_key,
+              aes.name AS event_source_name,
+              aes.provider_kind AS event_provider_kind,
+              aes.provider_ref AS event_provider_ref,
+              aes.webhook_endpoint_id AS event_webhook_endpoint_id,
+              aes.integration_binding_id AS event_integration_binding_id,
+              aib.installation_id AS event_integration_installation_id,
+              aib.provider AS event_integration_provider,
+              aib.ingress_kind AS event_integration_ingress_kind,
+              aib.target_kind AS event_integration_target_kind,
+              aib.target_id AS event_integration_target_id,
+              aib.target_label AS event_integration_target_label,
+              aib.webhook_endpoint_id AS event_integration_webhook_endpoint_id,
+              aib.external_subscription_id AS event_external_subscription_id,
+              aes.status AS event_source_status
+       FROM automation_triggers
+       at
+       LEFT JOIN automation_event_sources aes ON aes.id = at.event_source_id
+       LEFT JOIN automation_integration_bindings aib ON aib.id = aes.integration_binding_id
+       WHERE at.rule_id = ANY($1::uuid[])`,
+      [ruleIds]
+    ),
+    runner.run<AutomationPolicyComponentRawRow>(
+      `SELECT *
+       FROM automation_policies
+       WHERE rule_id = ANY($1::uuid[])`,
+      [ruleIds]
+    ),
+    runner.run<AutomationDeliveryComponentRawRow>(
+      `SELECT *
+       FROM automation_deliveries
+       WHERE rule_id = ANY($1::uuid[])`,
+      [ruleIds]
+    ),
+    runner.run<AutomationDeliveryTargetRawRow>(
+      `SELECT rule_id, target_participant_id
+       FROM automation_delivery_targets
+       WHERE rule_id = ANY($1::uuid[])
+       ORDER BY created_at ASC`,
+      [ruleIds]
+    ),
+  ])
+
+  const targetsByRule = new Map<string, string[]>()
+  for (const row of targetsResult.rows) {
+    const existing = targetsByRule.get(row.ruleId) || []
+    existing.push(row.targetParticipantId)
+    targetsByRule.set(row.ruleId, existing)
+  }
+
+  return {
+    rules: rulesResult.rows.map(toAutomationRuleDbRow),
+    triggers: triggersResult.rows.map(toAutomationTriggerDbRow),
+    policies: policiesResult.rows.map(toAutomationPolicyDbRow),
+    deliveries: deliveriesResult.rows.map(toAutomationDeliveryDbRow),
+    targetsByRule,
   }
 }
 
