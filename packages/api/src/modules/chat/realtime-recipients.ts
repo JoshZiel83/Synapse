@@ -1,5 +1,8 @@
 import type { Executor } from "../../infrastructure/database/kysely.js"
-import { listConversationRealtimeRecipientRows } from "./repo.js"
+import {
+  chatRootExecutor,
+  listConversationRealtimeRecipientRows,
+} from "./repo.js"
 
 export type ConversationRealtimeRecipient = {
   workspaceId: string
@@ -26,4 +29,15 @@ export async function listConversationRealtimeRecipientsUseCase(
     workspaceId: row.workspaceId,
     workspaceMemberId: row.workspaceMemberId,
   }))
+}
+
+function rootQueryable(): Executor {
+  return chatRootExecutor()
+}
+
+export async function listConversationRealtimeRecipients(
+  conversationId: string,
+  queryable: Executor = rootQueryable()
+) {
+  return listConversationRealtimeRecipientsUseCase(conversationId, queryable)
 }

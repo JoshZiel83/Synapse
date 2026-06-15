@@ -48,7 +48,7 @@ export {
 } from "./item-write.js"
 export { createConversationEvent } from "./event-write.js"
 export { enqueueActorWakeupsForConversationMessage } from "./actor-wakeup.js"
-import { listConversationRealtimeRecipientsUseCase } from "./realtime-recipients.js"
+export { listConversationRealtimeRecipients } from "./realtime-recipients.js"
 export { sendChatConversationMessage } from "./send-message.js"
 export { isFeedItemVisibleToWorkspaceMember } from "./conversation-feed-visibility.js"
 export { conversationItemDetailToFeedItem } from "./conversation-feed-mapper.js"
@@ -120,11 +120,4 @@ export async function ensureConversationParticipant(params: {
   queryable?: Executor
 }) {
   return ensureConversationParticipantUseCase(params)
-}
-
-export async function listConversationRealtimeRecipients(
-  conversationId: string,
-  queryable: Executor = rootQueryable()
-) {
-  return listConversationRealtimeRecipientsUseCase(conversationId, queryable)
 }
