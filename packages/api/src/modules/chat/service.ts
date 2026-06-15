@@ -10,7 +10,6 @@ export {
   registerChatPushToken,
 } from "./push-tokens.js"
 export { broadcastTypingState } from "./typing.js"
-import { chatRootExecutor, getConversationRecord } from "./repo.js"
 // Re-exported for existing consumers that import the row DTO from chat/service.
 export type { ChatPushTokenRow } from "./repo.js"
 export {
@@ -67,6 +66,7 @@ export {
   listChatConversations,
   listWorkspaceConversationViews,
 } from "./app-read.js"
+export { getConversation } from "./conversation-record.js"
 export { resolveConversationReplyRef } from "./conversation-reply-ref.js"
 import {
   ensureConversationParticipantUseCase,
@@ -75,17 +75,6 @@ import {
 } from "./participant-roster.js"
 
 type ParticipantKind = ConversationParticipantType
-
-function rootQueryable(): Executor {
-  return chatRootExecutor()
-}
-
-export async function getConversation(
-  conversationId: string,
-  queryable: Executor = rootQueryable()
-) {
-  return getConversationRecord(queryable, conversationId)
-}
 
 export async function listConversationParticipants(
   conversationId: string,

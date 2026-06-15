@@ -129,8 +129,8 @@ import {
   updateWebhookEndpointStatus,
   withAutomationTransaction,
 } from "./repo.js"
+import { getConversation } from "../chat/conversation-record.js"
 import { createConversationEvent } from "../chat/event-write.js"
-import { getConversation } from "../chat/service.js"
 import {
   getConversationParticipantUseCase as getConversationParticipant,
   listConversationParticipantsUseCase as listConversationParticipants,
