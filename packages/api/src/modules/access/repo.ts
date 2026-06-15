@@ -1,4 +1,8 @@
-import { SUBJECT_KIND } from "@synapse/shared"
+import {
+  resolveConversationTypeKey,
+  SUBJECT_KIND,
+  type ConversationTypeKey,
+} from "@synapse/shared"
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
 import {
   readAutomationEventSourceAccessBindingResourceId,
@@ -78,4 +82,74 @@ export async function findActiveWorkspaceMemberIdForUser(
     .executeTakeFirst()
 
   return member?.id ?? null
+}
+
+export type AccessConversationTargetRecord = {
+  conversationId: string
+  kind: string
+  isIm: boolean
+  conversationTypeKey: ConversationTypeKey
+}
+
+export async function loadAccessConversationTargetRecord(
+  db: KyselyDb,
+  conversationId: string
+): Promise<AccessConversationTargetRecord | null> {
+  const row = await db
+    .selectFrom("conversations as c")
+    .select((eb) => [
+      "c.id as id",
+      "c.kind as kind",
+      eb
+        .exists(
+          eb
+            .selectFrom("conversationTransportBindings as b")
+            .select("b.id")
+            .whereRef("b.conversationId", "=", "c.id")
+        )
+        .as("isIm"),
+    ])
+    .where("c.id", "=", conversationId)
+    .limit(1)
+    .executeTakeFirst()
+  if (!row) {
+    return null
+  }
+
+  const isIm = Boolean(row.isIm)
+  const conversationTypeKey = resolveConversationTypeKey(row.kind, isIm)
+  if (!conversationTypeKey) {
+    return null
+  }
+
+  return {
+    conversationId: row.id,
+    kind: row.kind,
+    isIm,
+    conversationTypeKey,
+  }
+}
+
+/**
+ * Generic "is this subject an active participant in the conversation?" lookup.
+ * The caller still carries participantType for policy error context; the stable
+ * database identity is the access_subjects id stored on conversationParticipants.
+ */
+export async function isAccessSubjectActiveConversationParticipant(
+  db: KyselyDb,
+  params: {
+    conversationId: string
+    participantType: "actor" | "remote_agent" | "workspace_member"
+    subjectId: string
+  }
+): Promise<boolean> {
+  const row = await db
+    .selectFrom("conversationParticipants")
+    .select("id")
+    .where("conversationId", "=", params.conversationId)
+    .where("subjectId", "=", params.subjectId)
+    .where("state", "=", "active")
+    .limit(1)
+    .executeTakeFirst()
+  return Boolean(row)
 }

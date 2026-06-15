@@ -10,21 +10,17 @@ import {
   isValidConversationTypeMask,
   maskAllowsConversationTypeKey,
   normalizeConversationTypeMask,
-  resolveConversationTypeKey,
   resolveNarrowedConversationTypeMask,
   SUBJECT_KIND,
   type ConversationTypeKey,
 } from "@synapse/shared"
 import type { CapabilityAccessTarget } from "@synapse/shared/types"
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
+import {
+  isAccessSubjectActiveConversationParticipant,
+  loadAccessConversationTargetRecord,
+} from "./repo.js"
 import { upsertAccessSubject } from "./subject-registry.js"
-
-type ConversationTargetRecord = {
-  conversationId: string
-  kind: string
-  isIm: boolean
-  conversationTypeKey: ConversationTypeKey
-}
 
 function formatConversationTypeKey(value: ConversationTypeKey) {
   // im_direct / im_group should read as "IM direct" / "IM group" (the leading
@@ -109,80 +105,6 @@ export function assertGrantConversationTypeOverrideAllowed(params: {
   })
 }
 
-async function loadConversationTargetRecord(
-  db: KyselyDb,
-  conversationId: string
-): Promise<ConversationTargetRecord | null> {
-  const row = await db
-    .selectFrom("conversations as c")
-    .select((eb) => [
-      "c.id as id",
-      "c.kind as kind",
-      eb
-        .exists(
-          eb
-            .selectFrom("conversationTransportBindings as b")
-            .select("b.id")
-            .whereRef("b.conversationId", "=", "c.id")
-        )
-        .as("isIm"),
-    ])
-    .where("c.id", "=", conversationId)
-    .limit(1)
-    .executeTakeFirst()
-  if (!row) {
-    return null
-  }
-  const isIm = Boolean(row.isIm)
-  const conversationTypeKey = resolveConversationTypeKey(row.kind, isIm)
-  if (!conversationTypeKey) {
-    return null
-  }
-  return {
-    conversationId: row.id,
-    kind: row.kind,
-    isIm,
-    conversationTypeKey,
-  }
-}
-
-/**
- * Post-D4 round 8 review (P2): generic "is this subject an active
- * participant in the conversation?" matching the runtime visibility
- * layer's view. The earlier helper special-cased actors; the policy
- * validator missed remote_agent + scope=conversation grants, which the
- * runtime path already matches (see loadVisibleAccessBindings
- * scoped remote_agent branch). Same SQL shape, parametrized
- * over participant_type + subject_id.
- *
- * Round 9 review extension: also accepts `workspace_member` — the
- * conversation_participants enum supports it (workspace_member / actor
- * / remote_agent / external / system), evaluator-scope.test.ts already
- * exercises workspace_member + scope=conversation, so the creation
- * path must validate it too. Without this branch a controller could
- * write a "member M in conversation C" grant for a member who isn't in
- * C, then runtime would interpret it under the active-participant
- * model — silent semantic mismatch.
- */
-async function isSubjectActiveParticipantInConversation(
-  db: KyselyDb,
-  params: {
-    conversationId: string
-    participantType: "actor" | "remote_agent" | "workspace_member"
-    subjectId: string
-  }
-): Promise<boolean> {
-  const row = await db
-    .selectFrom("conversationParticipants")
-    .select("id")
-    .where("conversationId", "=", params.conversationId)
-    .where("subjectId", "=", params.subjectId)
-    .where("state", "=", "active")
-    .limit(1)
-    .executeTakeFirst()
-  return Boolean(row)
-}
-
 export async function validateConversationScopedAccessTarget(params: {
   db: KyselyDb
   target: CapabilityAccessTarget
@@ -252,7 +174,7 @@ export async function validateConversationScopedAccessTarget(params: {
     )
   }
 
-  const conversation = await loadConversationTargetRecord(
+  const conversation = await loadAccessConversationTargetRecord(
     params.db,
     conversationId
   )
@@ -299,11 +221,14 @@ export async function validateConversationScopedAccessTarget(params: {
       break
   }
   const principalSubjectId = await upsertAccessSubject(params.db, principalRef)
-  const hasActive = await isSubjectActiveParticipantInConversation(params.db, {
-    conversationId,
-    participantType: activeParticipantCheck.participantType,
-    subjectId: principalSubjectId,
-  })
+  const hasActive = await isAccessSubjectActiveConversationParticipant(
+    params.db,
+    {
+      conversationId,
+      participantType: activeParticipantCheck.participantType,
+      subjectId: principalSubjectId,
+    }
+  )
   if (!hasActive) {
     const label =
       activeParticipantCheck.principalKind === "actor"
