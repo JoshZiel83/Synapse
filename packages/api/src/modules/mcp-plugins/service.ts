@@ -121,8 +121,6 @@ import {
   assertGrantConversationTypeOverrideAllowed,
 } from "../access/policy.js"
 
-type JsonObject = Record<string, unknown>
-type JsonArray = unknown[]
 export type { InstallationAccessRow } from "./repo.js"
 
 export class McpPluginError extends Error {
@@ -138,12 +136,6 @@ const log = createLogger("mcp.service")
 
 function sanitizeSlug(value: string) {
   return slugify(value, { maxLength: 120 })
-}
-
-function asObject(value: unknown): JsonObject {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as JsonObject)
-    : {}
 }
 
 function asArray<T>(value: unknown): T[] {
@@ -643,7 +635,12 @@ export async function installPluginUnified(data: {
       )
     }
 
-    const rawConnection = asObject(config.feishuAccount)
+    const rawConnection =
+      config.feishuAccount &&
+      typeof config.feishuAccount === "object" &&
+      !Array.isArray(config.feishuAccount)
+        ? (config.feishuAccount as Record<string, unknown>)
+        : {}
     if (
       rawConnection.__kind !== "auth_connection_ref" ||
       typeof rawConnection.connectionId !== "string"
@@ -934,7 +931,12 @@ export async function updateInstallation(
       )
     }
 
-    const rawConnection = asObject(config.feishuAccount)
+    const rawConnection =
+      config.feishuAccount &&
+      typeof config.feishuAccount === "object" &&
+      !Array.isArray(config.feishuAccount)
+        ? (config.feishuAccount as Record<string, unknown>)
+        : {}
     if (
       rawConnection.__kind !== "auth_connection_ref" ||
       typeof rawConnection.connectionId !== "string"
