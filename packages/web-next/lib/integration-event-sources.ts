@@ -2,16 +2,9 @@ import { listAutomationEventDefinitions } from "@synapse/shared/automation"
 import type {
   AutomationIntegrationProvider,
   AutomationIntegrationTargetKind,
+  PluginInstallationDetailView,
 } from "@synapse/shared"
 import { api } from "./api"
-
-export type IntegrationInstallationView = {
-  id: string
-  orgSlug?: string
-  pluginSlug?: string
-  pluginDisplayName?: string
-  status?: string
-}
 
 export type IntegrationEventDefinitionOption = {
   sourceKey: string
@@ -51,7 +44,7 @@ export function listIntegrationEventDefinitionOptions(
 }
 
 export function listIntegrationInstallations(
-  installations: IntegrationInstallationView[],
+  installations: PluginInstallationDetailView[],
   provider: AutomationIntegrationProvider
 ) {
   return installations.filter(

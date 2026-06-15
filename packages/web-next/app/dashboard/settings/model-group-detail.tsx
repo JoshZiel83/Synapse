@@ -93,42 +93,42 @@ export default function ModelGroupDetail({
     setLoading(true)
     try {
       if (scope !== "auto") {
-        const response = await fetchGroupByScope(scope, groupId, workspaceId)
-        setGroup(response.group)
+        const group = await fetchGroupByScope(scope, groupId, workspaceId)
+        setGroup(group)
         setResolvedScope(scope)
         return
       }
 
       if (workspaceId) {
         try {
-          const response = await fetchGroupByScope(
+          const group = await fetchGroupByScope(
             MODEL_GROUP_OWNER_TYPE.WORKSPACE,
             groupId,
             workspaceId
           )
-          setGroup(response.group)
+          setGroup(group)
           setResolvedScope(MODEL_GROUP_OWNER_TYPE.WORKSPACE)
           return
         } catch {}
       }
 
       try {
-        const response = await fetchGroupByScope(
+        const group = await fetchGroupByScope(
           MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER,
           groupId,
           workspaceId
         )
-        setGroup(response.group)
+        setGroup(group)
         setResolvedScope(MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER)
         return
       } catch {}
 
-      const response = await fetchGroupByScope(
+      const group = await fetchGroupByScope(
         MODEL_GROUP_OWNER_TYPE.PLATFORM,
         groupId,
         workspaceId
       )
-      setGroup(response.group)
+      setGroup(group)
       setResolvedScope(MODEL_GROUP_OWNER_TYPE.PLATFORM)
     } catch (err) {
       console.error("Failed to load model group:", err)

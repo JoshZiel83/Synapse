@@ -64,8 +64,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setLoading(true)
 
       try {
-        const response = await api.getWorkspaces()
-        const list = response.data ?? []
+        const list = await api.getWorkspaces()
         setWorkspaces(list)
         setNeedsOnboarding(list.length === 0)
 

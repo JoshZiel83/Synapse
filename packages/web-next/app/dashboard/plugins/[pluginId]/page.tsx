@@ -35,10 +35,7 @@ export default function PluginDetailPage() {
         setLoading(true)
         const [pluginData, installData] = await Promise.all([
           api.getMarketplacePlugin(pluginId),
-          api.getInstallations(
-            workspaceId,
-            new URLSearchParams({ pluginId }).toString()
-          ),
+          api.getInstallations(workspaceId, { pluginId }),
         ])
         if (cancelled) return
         setPlugin(pluginData)
@@ -115,10 +112,9 @@ export default function PluginDetailPage() {
           }
           onInstallationsChanged={async () => {
             if (!workspaceId) return
-            const installData = await api.getInstallations(
-              workspaceId,
-              new URLSearchParams({ pluginId }).toString()
-            )
+            const installData = await api.getInstallations(workspaceId, {
+              pluginId,
+            })
             setInstallations(installData)
           }}
         />

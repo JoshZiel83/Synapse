@@ -4,6 +4,7 @@ import Link from "next/link"
 import { useParams } from "next/navigation"
 import { useEffect, useState } from "react"
 import { ArrowLeft, RefreshCcw, Server } from "lucide-react"
+import { REMOTE_AGENT_BINDING_STATUS } from "@synapse/shared"
 
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import type {
@@ -284,7 +285,9 @@ export default function RemoteAgentMachineDetailPage() {
                   </div>
                   <Badge
                     variant={
-                      binding.status === "active" ? "secondary" : "outline"
+                      binding.status === REMOTE_AGENT_BINDING_STATUS.ACTIVE
+                        ? "secondary"
+                        : "outline"
                     }
                   >
                     {binding.status}

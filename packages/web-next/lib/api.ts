@@ -1,39 +1,44 @@
 import { FILE_ORIGIN_SYSTEMS } from "@synapse/shared/constants"
-import { WORKSPACE_APP_KIND } from "@synapse/shared"
+import {
+  WORKSPACE_APP_GRANT_PERMISSION,
+  WORKSPACE_APP_KIND,
+} from "@synapse/shared"
 import type {
-  DeviceView,
+  DeviceListView,
   DeviceDetailView,
   DeviceServiceView,
   DeviceCapabilityView,
   DevicePairingTicketView,
   MarketplacePluginView,
-  PluginInstallationDetailView,
-  PluginCategoryView,
-  MarketplacePublisherView,
+  PluginAuditLogList,
   ModelGroupView,
+  ModelGroupListView,
   ModelGroupDetailView,
   ModelGroupGrantView,
+  ModelGroupGrantListView,
   ModelGroupItemView,
-  ModelGroupItemVersionView,
-  ActorModelGroupAssignmentView,
+  ModelGroupItemVersionListView,
+  ActorModelGroupAssignmentListView,
   WorkspaceInviteView,
+  WorkspaceInviteListView,
   WorkspaceInvitePublicView,
   WorkspaceInviteRedeemResult,
-  ReuseScope,
+  WorkspaceNavigationView,
+  WorkspaceMemberListView,
+  WorkspaceAccessBindingListView,
+  WorkspaceAccessBindingView,
   Actor,
-  ActorDoc,
-  ActorRole,
-  ActorPackageInstallResult,
   ActorRuntimeTurnActivityDetail,
   CapabilityAccessTarget,
   AuthResponse,
-  ActorPackageRecord,
   AutomationEventSource,
+  AutomationEventSourceListSchemaType,
   AutomationExecution,
+  AutomationExecutionListSchemaType,
   AutomationOccurrence,
+  AutomationOccurrenceListSchemaType,
   AutomationRule,
-  AutomationRuleCreatePayload,
-  AutomationRuleUpdatePayload,
+  AutomationRuleListSchemaType,
   CanonicalContentBlock,
   ChatBootstrapResponse,
   ChatClientInstanceCreateInput,
@@ -50,8 +55,6 @@ import type {
   ChatTaskResolveInput,
   ChatTaskResolveResponse,
   ChatSyncResponse,
-  CurrentUserWeixinBindingSummary,
-  InstalledSkill,
   TaskSummary,
   ContactHubDetailResponse,
   ContactHubEntryView,
@@ -79,16 +82,9 @@ import type {
   RemoteAgentView,
   ActorAccessRequestListResponse,
   FriendRequestListResponse,
-  TransportAccountSummary,
-  TransportConnectorCapability,
-  TransportExternalUserSummary,
-  TransportSessionSummary,
-  WeixinQrLoginSessionSummary,
-  DingtalkDeviceFlowStartResponse,
-  DingtalkDeviceFlowPollResponse,
   WorkspaceChiefActorPreference,
+  WorkspaceListView,
   WorkspaceAppGrant,
-  SkillMarketplaceEntry,
   WorkspaceCapabilityConversationTypePoliciesView,
   UpdateMeInput,
   UpdateMemberRelationshipProfileInput,
@@ -97,6 +93,8 @@ import type {
   CreateRemoteAgentMachineInput,
   UpdateRemoteAgentGroupTaskGrantsInput,
   StartPluginAuthInput,
+  TrustLevel,
+  WorkspaceAppSuccessViewSchemaType,
 } from "@synapse/shared"
 import {
   normalizeConversationCatalogEntry,
@@ -107,6 +105,109 @@ import {
   type ChatTaskResolvePayload,
   type FileRecordView,
 } from "@synapse/shared/types"
+import type {
+  ActorPackageInstallInput,
+  AuditLogListQuery,
+  AuditLogListView,
+  AutomationEventSourceCreateInput,
+  AutomationEventSourceListQuery,
+  AutomationEventSourceUpdateInput,
+  AutomationRuleCreateInput,
+  AutomationRuleListQuery,
+  AutomationRuleUpdateInput,
+  AutomationSuccessSchemaType,
+  ActorModelGroupSetInput,
+  ActorPackageInstallResultView,
+  ActorPackageListView,
+  ActorPackageListQuery,
+  ActorPackageRecordView,
+  ActorTreeView,
+  ActorVersionListView,
+  CreateManualRuntimeAuthorizationGrantInput,
+  CreateMemoryInputBody,
+  CreateWorkspaceAppInput,
+  CreateWorkspaceInviteInput,
+  DingtalkDeviceFlowStartInput,
+  DingtalkDeviceFlowStartResponseSchemaType,
+  DingtalkDeviceFlowPollResponseSchemaType,
+  DingtalkManualAccountCreateInput,
+  FileUploadOriginInput,
+  ImportMarketplaceSkillInput,
+  InstalledSkillItemView,
+  InstalledSkillListQuery,
+  InstalledSkillListView,
+  McpMarketplaceListQuery,
+  McpPluginEventAuditLogListQuery,
+  McpPluginInstallationListQuery,
+  McpPluginToolCallAuditLogListQuery,
+  MemoryItemEnvelopeView,
+  MemoryListQuery,
+  MemoryListView,
+  MemoryMoveResultView,
+  MarketplacePluginListView,
+  MarketplacePublisherDetailView,
+  MarketplacePublisherListView,
+  ModelGroupCreateInput,
+  ModelGroupGrantIssueInput,
+  ModelGroupItemCreateInput,
+  ModelGroupItemUpdateInput,
+  ModelGroupUpdateInput,
+  MoveMemoryInput,
+  PublishMarketplaceSkillInput,
+  PlatformAccessBindingListView,
+  PlatformAccessBindingView,
+  PlatformAccessGrantInput,
+  PlatformNavigationView,
+  PluginCategoryListView,
+  PluginInstallationDetailView,
+  PluginInstallationListView,
+  ReplaceWorkspaceAppGrantsInput,
+  RemoteAgentGroupTaskGrantsResponseSchemaType,
+  RemoteAgentListResponseSchemaType,
+  RemoteAgentMachineListResponseSchemaType,
+  RemoteAgentResponseSchemaType,
+  RuntimeAuthorizationGrantRecordView,
+  SkillMarketplaceItemView,
+  SkillMarketplaceItemQuery,
+  SkillMarketplaceListView,
+  SkillMarketplaceListQuery,
+  StartPairingInput,
+  TransportAccountResponseSchemaType,
+  TransportAccountCreateInput,
+  TransportAccountUpdateInput,
+  TransportAccountsResponseSchemaType,
+  TransportConnectorsResponseSchemaType,
+  TransportExternalUserResponseSchemaType,
+  TransportExternalUserLinkedMemberInput,
+  TransportExternalUsersResponseSchemaType,
+  TransportExternalUsersListQuery,
+  TransportFeishuAccountCreateInput,
+  TransportFeishuAccountUpdateInput,
+  TransportQqAccountCreateInput,
+  TransportQqAccountUpdateInput,
+  TransportSessionResponseSchemaType,
+  TransportSessionsResponseSchemaType,
+  TransportSessionSettingsInput,
+  TransportWecomAccountCreateInput,
+  TransportWecomAccountUpdateInput,
+  WeixinBindingAutoLinkInput,
+  WeixinBindingCandidatesResponseSchemaType,
+  WeixinBindingResponseSchemaType,
+  WeixinQrSessionCreateInput,
+  WeixinQrSessionResponseSchemaType,
+  UpdateMemoryInputBody,
+  WorkspaceAccessGrantInput,
+  WorkspaceAppGrantListViewSchemaType,
+  WorkspaceCapabilityConversationTypePolicyUpdateInput,
+  WorkspaceChiefActorPreferenceInput,
+  WorkspaceCreateInput,
+  UpdateWorkspaceAppInput,
+} from "@synapse/shared/schemas"
+import {
+  StoredFileRecordViewSchema,
+  type StoredFileRecordView,
+  WorkspaceAppGrantEntrySchema,
+} from "@synapse/shared/schemas"
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api/v1"
 
@@ -128,16 +229,20 @@ export type {
   RemoteAgentAccessRequestListResponse,
   RemoteAgentBindingView,
   RemoteAgentGroupTaskGrantView,
+  RemoteAgentGroupTaskGrantsResponseSchemaType,
   RemoteAgentLifecycleState,
   RemoteAgentMachineDetailView,
+  RemoteAgentMachineListResponseSchemaType,
   RemoteAgentMachinePairingSessionView,
   RemoteAgentMachineTrustStatus,
   RemoteAgentMachineView,
+  RemoteAgentResponseSchemaType,
   RemoteAgentRuntimeCapabilityView,
   RemoteAgentRuntimeCatalogEntryView,
   RemoteAgentRuntimeKind,
   RemoteAgentRuntimeSummaryView,
   RemoteAgentView,
+  TrustLevel,
 }
 
 export class ApiError extends Error {
@@ -160,22 +265,108 @@ export interface AuthMutationOptions {
   temporary?: boolean
 }
 
-export interface WorkspaceListResponse {
-  data: Array<{
-    id: string
-    name: string
-    slug: string
-    isTrusted?: boolean
-    currentWorkspaceMemberId?: string
-    trustLevel?: string
-  }>
-}
-
 export type ContactHubEntryKind = ContactHubKind
 export type RemoteAgentRuntimeStatus = RemoteAgentRuntimeCatalogStatus
 
+type WorkspaceAppGrantEntryInput =
+  ReplaceWorkspaceAppGrantsInput["grants"][number]
+type WorkspaceAppGrantEntryLike = Omit<
+  WorkspaceAppGrantEntryInput,
+  "target" | "permissions"
+> & {
+  target: CapabilityAccessTarget
+  permissions: string[]
+}
+
+type WorkspaceAppCreateActorInput = Omit<
+  Extract<CreateWorkspaceAppInput, { kind: typeof WORKSPACE_APP_KIND.ACTOR }>,
+  "kind" | "grants"
+> & { grants?: WorkspaceAppGrantEntryLike[] }
+type WorkspaceAppUpdateActorInput = Omit<
+  Extract<UpdateWorkspaceAppInput, { kind: typeof WORKSPACE_APP_KIND.ACTOR }>,
+  "kind"
+>
+type WorkspaceAppCreateRemoteAgentInput = Omit<
+  Extract<
+    CreateWorkspaceAppInput,
+    { kind: typeof WORKSPACE_APP_KIND.REMOTE_AGENT }
+  >,
+  "kind" | "grants"
+> & { grants?: WorkspaceAppGrantEntryLike[] }
+type WorkspaceAppUpdateRemoteAgentInput = Omit<
+  Extract<
+    UpdateWorkspaceAppInput,
+    { kind: typeof WORKSPACE_APP_KIND.REMOTE_AGENT }
+  >,
+  "kind"
+>
+type WorkspaceAppCreatePluginInstallationInput = Omit<
+  Extract<
+    CreateWorkspaceAppInput,
+    { kind: typeof WORKSPACE_APP_KIND.PLUGIN_INSTALLATION }
+  >,
+  "kind" | "grants"
+> & { grants?: WorkspaceAppGrantEntryLike[] }
+type WorkspaceAppUpdatePluginInstallationInput = Omit<
+  Extract<
+    UpdateWorkspaceAppInput,
+    { kind: typeof WORKSPACE_APP_KIND.PLUGIN_INSTALLATION }
+  >,
+  "kind"
+>
+
+function parseWorkspaceAppGrantEntry(
+  grant: WorkspaceAppGrantEntryLike
+): WorkspaceAppGrantEntryInput {
+  return WorkspaceAppGrantEntrySchema.parse(grant)
+}
+
+function parseWorkspaceAppGrantEntries(
+  grants: WorkspaceAppGrantEntryLike[] | undefined
+) {
+  return grants?.map(parseWorkspaceAppGrantEntry)
+}
+
+function parseFileUploadResponseData(value: unknown): StoredFileRecordView {
+  if (!value || typeof value !== "object" || !("data" in value)) {
+    throw new Error("Malformed upload response")
+  }
+  return StoredFileRecordViewSchema.parse((value as { data: unknown }).data)
+}
+
+type QueryValue = string | number | readonly string[] | undefined | null
+type MemoryListQueryParams = Omit<MemoryListQuery, "owner" | "scope">
+
+function withQuery<TQuery extends Record<string, QueryValue>>(
+  path: string,
+  query?: TQuery
+) {
+  if (!query) return path
+
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(query)) {
+    if (value === undefined || value === null) continue
+    if (Array.isArray(value)) {
+      const joined = value
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .join(",")
+      if (joined) params.set(key, joined)
+      continue
+    }
+    const text = String(value).trim()
+    if (text) params.set(key, text)
+  }
+
+  const queryString = params.toString()
+  return queryString ? `${path}?${queryString}` : path
+}
+
 class ApiClient {
-  private async fetch(path: string, options: RequestInit = {}) {
+  private async fetch<T = any>(
+    path: string,
+    options: RequestInit = {}
+  ): Promise<T> {
     const body = options.body
     const isFormData =
       typeof FormData !== "undefined" && body instanceof FormData
@@ -190,7 +381,7 @@ class ApiClient {
       credentials: "include",
     })
 
-    if (res.status === 204) return null
+    if (res.status === 204) return null as T
 
     const data = await res.json().catch(() => null)
     if (!res.ok) {
@@ -218,7 +409,7 @@ class ApiClient {
       throw new ApiError(candidate, res.status, code, data)
     }
 
-    return data
+    return data as T
   }
 
   // Auth — Better Auth native endpoints (mounted under /api/v1/auth).
@@ -363,13 +554,16 @@ class ApiClient {
   }
 
   // Workspaces
-  getWorkspaces(): Promise<WorkspaceListResponse> {
-    return this.fetch("/workspaces")
+  async getWorkspaces(): Promise<WorkspaceListView> {
+    const res = await this.fetch("/workspaces")
+    return res.data
   }
   async createWorkspace(name: string, description?: string) {
+    const body: WorkspaceCreateInput =
+      description === undefined ? { name } : { name, description }
     const res = await this.fetch("/workspaces", {
       method: "POST",
-      body: JSON.stringify({ name, description }),
+      body: JSON.stringify(body),
     })
     return res.data
   }
@@ -377,11 +571,13 @@ class ApiClient {
     const res = await this.fetch(`/workspaces/${id}`)
     return res.data
   }
-  getWorkspaceMembers(wsId: string) {
-    return this.fetch(`/workspaces/${wsId}/members`)
+  async getWorkspaceMembers(wsId: string): Promise<WorkspaceMemberListView> {
+    const res = await this.fetch(`/workspaces/${wsId}/members`)
+    return res.data
   }
-  getWorkspaceNavigation(wsId: string) {
-    return this.fetch(`/workspaces/${wsId}/navigation`)
+  async getWorkspaceNavigation(wsId: string): Promise<WorkspaceNavigationView> {
+    const res = await this.fetch(`/workspaces/${wsId}/navigation`)
+    return res.data
   }
   async getWorkspaceChiefActorPreference(
     wsId: string
@@ -391,7 +587,7 @@ class ApiClient {
   }
   async updateWorkspaceChiefActorPreference(
     wsId: string,
-    data: { chiefActorId: string | null }
+    data: WorkspaceChiefActorPreferenceInput
   ): Promise<WorkspaceChiefActorPreference> {
     const res = await this.fetch(
       `/workspaces/${wsId}/preferences/chief-actor`,
@@ -402,8 +598,11 @@ class ApiClient {
     )
     return res.data
   }
-  getWorkspaceAccess(wsId: string) {
-    return this.fetch(`/workspaces/${wsId}/access`)
+  async getWorkspaceAccess(
+    wsId: string
+  ): Promise<WorkspaceAccessBindingListView> {
+    const res = await this.fetch(`/workspaces/${wsId}/access`)
+    return res.data
   }
   async getWorkspaceCapabilityConversationTypePolicies(
     wsId: string
@@ -415,14 +614,7 @@ class ApiClient {
   }
   async updateWorkspaceCapabilityConversationTypePolicies(
     wsId: string,
-    data: {
-      policies: Partial<
-        Record<
-          "plugin_installation" | "installed_skill" | "device_capability",
-          number
-        >
-      >
-    }
+    data: WorkspaceCapabilityConversationTypePolicyUpdateInput
   ): Promise<WorkspaceCapabilityConversationTypePoliciesView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/capability-conversation-type-policies`,
@@ -435,71 +627,47 @@ class ApiClient {
   }
   async grantWorkspaceAccess(
     wsId: string,
-    data: {
-      workspaceMemberId: string
-      accessKey:
-        | "model_admin"
-        | "actor_admin"
-        | "skill_admin"
-        | "plugin_admin"
-        | "memory_admin"
-        | "device_admin"
-        | "conversation_admin"
-    }
-  ) {
+    data: WorkspaceAccessGrantInput
+  ): Promise<WorkspaceAccessBindingView> {
     const res = await this.fetch(`/workspaces/${wsId}/access`, {
       method: "POST",
       body: JSON.stringify(data),
     })
     return res.data
   }
-  revokeWorkspaceAccess(
+  async revokeWorkspaceAccess(
     wsId: string,
     workspaceMemberId: string,
-    accessKey:
-      | "model_admin"
-      | "actor_admin"
-      | "skill_admin"
-      | "plugin_admin"
-      | "memory_admin"
-      | "device_admin"
-      | "conversation_admin"
-  ) {
-    return this.fetch(
+    accessKey: WorkspaceAccessGrantInput["accessKey"]
+  ): Promise<WorkspaceAccessBindingView> {
+    const res = await this.fetch(
       `/workspaces/${wsId}/access/${accessKey}/members/${workspaceMemberId}/revoke`,
       { method: "POST", body: "{}" }
     )
+    return res.data
   }
 
   // Platform Access
-  getPlatformNavigation() {
-    return this.fetch("/platform/navigation")
+  async getPlatformNavigation(): Promise<PlatformNavigationView> {
+    const res = await this.fetch("/platform/navigation")
+    return res.data
   }
-  getPlatformAccess() {
-    return this.fetch("/platform/access")
+  async getPlatformAccess(): Promise<PlatformAccessBindingListView> {
+    const res = await this.fetch("/platform/access")
+    return res.data
   }
-  grantPlatformAccess(data: {
-    userId: string
-    accessKey:
-      | "super_admin"
-      | "workspace_admin"
-      | "model_admin"
-      | "support"
-      | "auditor"
-  }) {
-    return this.fetch("/platform/access", {
+  async grantPlatformAccess(
+    data: PlatformAccessGrantInput
+  ): Promise<PlatformAccessBindingView> {
+    const res = await this.fetch("/platform/access", {
       method: "POST",
       body: JSON.stringify(data),
     })
+    return res.data
   }
   revokePlatformAccess(
     userId: string,
-    accessKey:
-      | "super_admin"
-      | "workspace_admin"
-      | "model_admin"
-      | "support"
-      | "auditor"
+    accessKey: PlatformAccessGrantInput["accessKey"]
   ) {
     return this.fetch(`/platform/access/${accessKey}/users/${userId}/revoke`, {
       method: "POST",
@@ -508,77 +676,54 @@ class ApiClient {
   }
 
   // Skills Marketplace
-  getSkillMarketplace(options?: {
-    search?: string
-    tags?: string[]
-    workspaceId?: string
-  }): Promise<{ skills: SkillMarketplaceEntry[] }> {
+  getSkillMarketplace(
+    options?: SkillMarketplaceListQuery
+  ): Promise<SkillMarketplaceListView> {
     const params = new URLSearchParams()
     if (options?.search) params.set("search", options.search)
-    if (options?.tags?.length) params.set("tags", options.tags.join(","))
+    if (typeof options?.tags === "string") {
+      params.set("tags", options.tags)
+    } else if (options?.tags?.length) {
+      params.set("tags", options.tags.join(","))
+    }
     if (options?.workspaceId) params.set("workspaceId", options.workspaceId)
     const qs = params.toString()
-    return this.fetch(`/skills/marketplace${qs ? "?" + qs : ""}`)
+    return this.fetch(`/skills/marketplace${qs ? "?" + qs : ""}`).then(
+      (res) => res.data
+    )
   }
   getSkillMarketplaceItem(
     skillId: string,
-    workspaceId?: string
-  ): Promise<{ skill: SkillMarketplaceEntry }> {
+    workspaceId?: SkillMarketplaceItemQuery["workspaceId"]
+  ): Promise<SkillMarketplaceItemView> {
     const params = new URLSearchParams()
     if (workspaceId) params.set("workspaceId", workspaceId)
     const qs = params.toString()
-    return this.fetch(`/skills/marketplace/${skillId}${qs ? "?" + qs : ""}`)
+    return this.fetch(
+      `/skills/marketplace/${skillId}${qs ? "?" + qs : ""}`
+    ).then((res) => res.data)
   }
-  publishMarketplaceSkill(data: {
-    skillId?: string
-    slug: string
-    name: string
-    description?: CanonicalContentBlock
-    iconFileId?: string | null
-    tags?: string[]
-    version: string
-    changelog?: string
-    defaultConversationTypeMask?: number
-    isActive?: boolean
-    metadata?: Record<string, unknown>
-    attachmentFiles?: Array<{
-      path: string
-      contentBlocks: CanonicalContentBlock[]
-      mediaType?: string
-    }>
-  }): Promise<{ skill: SkillMarketplaceEntry }> {
+  publishMarketplaceSkill(
+    data: PublishMarketplaceSkillInput
+  ): Promise<SkillMarketplaceItemView> {
     return this.fetch("/skills/marketplace", {
       method: "POST",
       body: JSON.stringify(data),
-    })
+    }).then((res) => res.data)
   }
   importMarketplaceSkill(
-    data:
-      | {
-          sourceType: "github"
-          repoUrl: string
-          path: string
-          ref?: string
-        }
-      | {
-          sourceType: "clawhub"
-          ownerId?: string
-          slug: string
-          version?: string
-        }
-  ): Promise<{ skill: SkillMarketplaceEntry }> {
+    data: ImportMarketplaceSkillInput
+  ): Promise<SkillMarketplaceItemView> {
     return this.fetch("/skills/marketplace/import", {
       method: "POST",
       body: JSON.stringify(data),
-    })
+    }).then((res) => res.data)
   }
-  refreshMarketplaceSkill(
-    skillId: string
-  ): Promise<{ skill: SkillMarketplaceEntry }> {
+  refreshMarketplaceSkill(skillId: string): Promise<SkillMarketplaceItemView> {
     return this.fetch(`/skills/marketplace/${skillId}/refresh`, {
       method: "POST",
       body: "{}",
-    })
+    }).then((res) => res.data)
   }
   async createWorkspaceSkill(
     wsId: string,
@@ -594,24 +739,25 @@ class ApiClient {
       }>
       accessTarget: CapabilityAccessTarget
     }
-  ): Promise<{ skill: InstalledSkill }> {
+  ): Promise<InstalledSkillItemView> {
+    const body: CreateWorkspaceAppInput = {
+      kind: WORKSPACE_APP_KIND.INSTALLED_SKILL,
+      sourceType: "custom",
+      displayName: data.name,
+      description: data.description,
+      iconFileId: data.iconFileId,
+      tags: data.tags,
+      attachmentFiles: data.attachmentFiles,
+      grants: [
+        parseWorkspaceAppGrantEntry({
+          target: data.accessTarget,
+          permissions: [WORKSPACE_APP_GRANT_PERMISSION.USE],
+        }),
+      ],
+    }
     const created = await this.fetch(`/workspaces/${wsId}/workspace-apps`, {
       method: "POST",
-      body: JSON.stringify({
-        kind: WORKSPACE_APP_KIND.INSTALLED_SKILL,
-        sourceType: "custom",
-        displayName: data.name,
-        description: data.description,
-        iconFileId: data.iconFileId,
-        tags: data.tags,
-        attachmentFiles: data.attachmentFiles,
-        grants: [
-          {
-            target: data.accessTarget,
-            permissions: ["use"],
-          },
-        ],
-      }),
+      body: JSON.stringify(body),
     })
     return {
       skill: await this.getInstalledSkill(wsId, created.data.app.id).then(
@@ -623,15 +769,19 @@ class ApiClient {
   // Skills
   getInstalledSkills(
     wsId: string,
-    params?: string
-  ): Promise<{ skills: InstalledSkill[] }> {
-    return this.fetch(`/workspaces/${wsId}/skills${params ? "?" + params : ""}`)
+    query?: InstalledSkillListQuery
+  ): Promise<InstalledSkillListView> {
+    return this.fetch(withQuery(`/workspaces/${wsId}/skills`, query)).then(
+      (res) => res.data
+    )
   }
   getInstalledSkill(
     wsId: string,
     installedSkillId: string
-  ): Promise<{ skill: InstalledSkill }> {
-    return this.fetch(`/workspaces/${wsId}/skills/${installedSkillId}`)
+  ): Promise<InstalledSkillItemView> {
+    return this.fetch(`/workspaces/${wsId}/skills/${installedSkillId}`).then(
+      (res) => res.data
+    )
   }
   async installSkill(
     wsId: string,
@@ -639,20 +789,21 @@ class ApiClient {
       marketSkillId: string
       accessTarget: CapabilityAccessTarget
     }
-  ): Promise<{ skill: InstalledSkill }> {
+  ): Promise<InstalledSkillItemView> {
+    const body: CreateWorkspaceAppInput = {
+      kind: WORKSPACE_APP_KIND.INSTALLED_SKILL,
+      sourceType: "marketplace",
+      marketSkillId: data.marketSkillId,
+      grants: [
+        parseWorkspaceAppGrantEntry({
+          target: data.accessTarget,
+          permissions: [WORKSPACE_APP_GRANT_PERMISSION.USE],
+        }),
+      ],
+    }
     const created = await this.fetch(`/workspaces/${wsId}/workspace-apps`, {
       method: "POST",
-      body: JSON.stringify({
-        kind: WORKSPACE_APP_KIND.INSTALLED_SKILL,
-        sourceType: "marketplace",
-        marketSkillId: data.marketSkillId,
-        grants: [
-          {
-            target: data.accessTarget,
-            permissions: ["use"],
-          },
-        ],
-      }),
+      body: JSON.stringify(body),
     })
     return {
       skill: await this.getInstalledSkill(wsId, created.data.app.id).then(
@@ -676,19 +827,20 @@ class ApiClient {
         mediaType?: string
       }>
     }
-  ): Promise<{ skill: InstalledSkill }> {
+  ): Promise<InstalledSkillItemView> {
+    const body: UpdateWorkspaceAppInput = {
+      kind: WORKSPACE_APP_KIND.INSTALLED_SKILL,
+      displayName: data.name,
+      description: data.description,
+      iconFileId: data.iconFileId,
+      tags: data.tags,
+      isEnabled: data.isEnabled,
+      conversationTypeMaskOverride: data.conversationTypeMaskOverride,
+      attachmentFiles: data.attachmentFiles,
+    }
     await this.fetch(`/workspaces/${wsId}/workspace-apps/${installedSkillId}`, {
       method: "PUT",
-      body: JSON.stringify({
-        kind: WORKSPACE_APP_KIND.INSTALLED_SKILL,
-        displayName: data.name,
-        description: data.description,
-        iconFileId: data.iconFileId,
-        tags: data.tags,
-        isEnabled: data.isEnabled,
-        conversationTypeMaskOverride: data.conversationTypeMaskOverride,
-        attachmentFiles: data.attachmentFiles,
-      }),
+      body: JSON.stringify(body),
     })
     return {
       skill: await this.getInstalledSkill(wsId, installedSkillId).then(
@@ -699,48 +851,52 @@ class ApiClient {
   upgradeInstalledSkill(
     wsId: string,
     installedSkillId: string
-  ): Promise<{ skill: InstalledSkill }> {
+  ): Promise<InstalledSkillItemView> {
     return this.fetch(
       `/workspaces/${wsId}/skills/${installedSkillId}/upgrade`,
       {
         method: "POST",
         body: "{}",
       }
-    )
+    ).then((res) => res.data)
   }
-  uninstallInstalledSkill(wsId: string, installedSkillId: string) {
-    return this.fetch(
+  async uninstallInstalledSkill(
+    wsId: string,
+    installedSkillId: string
+  ): Promise<WorkspaceAppSuccessViewSchemaType> {
+    const res = await this.fetch(
       `/workspaces/${wsId}/workspace-apps/${installedSkillId}`,
       {
         method: "DELETE",
       }
     )
+    return res.data
   }
   async getWorkspaceAppGrants(
     wsId: string,
     appId: string
-  ): Promise<{ grants: WorkspaceAppGrant[] }> {
+  ): Promise<WorkspaceAppGrantListViewSchemaType> {
     const res = await this.fetch(
       `/workspaces/${wsId}/workspace-apps/${appId}/grants`
     )
     return res.data
   }
-  replaceWorkspaceAppGrants(
+  async replaceWorkspaceAppGrants(
     wsId: string,
     appId: string,
-    data: {
-      grants: Array<{
-        target: CapabilityAccessTarget
-        permissions: string[]
-        conversationTypeMaskOverride?: number | null
-        reason?: string
-      }>
+    data: { grants: WorkspaceAppGrantEntryLike[] }
+  ): Promise<WorkspaceAppGrantListViewSchemaType> {
+    const body: ReplaceWorkspaceAppGrantsInput = {
+      grants: data.grants.map(parseWorkspaceAppGrantEntry),
     }
-  ) {
-    return this.fetch(`/workspaces/${wsId}/workspace-apps/${appId}/grants`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    })
+    const res = await this.fetch(
+      `/workspaces/${wsId}/workspace-apps/${appId}/grants`,
+      {
+        method: "PUT",
+        body: JSON.stringify(body),
+      }
+    )
+    return res.data
   }
 
   // Workspace Invites
@@ -755,38 +911,45 @@ class ApiClient {
     })
     return res.data
   }
-  createInvite(
+  async createInvite(
     wsId: string,
-    data: {
-      trustLevel?: string
-      maxUses?: number
-      expiresAt?: import("@synapse/shared").Timestamp
-    }
-  ): Promise<{ data: WorkspaceInviteView }> {
-    return this.fetch(`/workspaces/${wsId}/invites`, {
+    data: CreateWorkspaceInviteInput
+  ): Promise<WorkspaceInviteView> {
+    const res = await this.fetch(`/workspaces/${wsId}/invites`, {
       method: "POST",
       body: JSON.stringify(data),
     })
+    return res.data
   }
-  listInvites(wsId: string): Promise<{ data: WorkspaceInviteView[] }> {
-    return this.fetch(`/workspaces/${wsId}/invites`)
+  async listInvites(wsId: string): Promise<WorkspaceInviteListView> {
+    const res = await this.fetch(`/workspaces/${wsId}/invites`)
+    return res.data
   }
-  revokeInvite(wsId: string, inviteId: string) {
-    return this.fetch(`/workspaces/${wsId}/invites/${inviteId}`, {
+  async revokeInvite(
+    wsId: string,
+    inviteId: string
+  ): Promise<WorkspaceInviteView> {
+    const res = await this.fetch(`/workspaces/${wsId}/invites/${inviteId}`, {
       method: "DELETE",
     })
+    return res.data
   }
 
   // Actors
-  async getActors(wsId: string) {
-    const res = await this.fetch(`/workspaces/${wsId}/actors`)
+  async getActors(wsId: string): Promise<Actor[]> {
+    const res = (await this.fetch(`/workspaces/${wsId}/actors`)) as {
+      data: Actor[]
+    }
     return res.data
   }
   async getActor(wsId: string, actorId: string) {
     const res = await this.fetch(`/workspaces/${wsId}/actors/${actorId}`)
     return res.data
   }
-  async getActorVersions(wsId: string, actorId: string) {
+  async getActorVersions(
+    wsId: string,
+    actorId: string
+  ): Promise<ActorVersionListView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/actors/${actorId}/versions`
     )
@@ -794,8 +957,8 @@ class ApiClient {
   }
   async getActorPackages(
     wsId: string,
-    search?: string
-  ): Promise<ActorPackageRecord[]> {
+    search?: ActorPackageListQuery["search"]
+  ): Promise<ActorPackageListView> {
     const params = search ? `?search=${encodeURIComponent(search)}` : ""
     const res = await this.fetch(`/workspaces/${wsId}/actors/packages${params}`)
     return res.data
@@ -803,7 +966,7 @@ class ApiClient {
   async getActorPackage(
     wsId: string,
     packageId: string
-  ): Promise<ActorPackageRecord> {
+  ): Promise<ActorPackageRecordView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/actors/packages/${packageId}`
     )
@@ -812,19 +975,8 @@ class ApiClient {
   async installActorPackage(
     wsId: string,
     packageId: string,
-    data?: {
-      displayName?: string
-      title?: string
-      parentId?: string | null
-      syncMode?: "notify" | "manual_merge"
-      grants?: Array<{
-        target: CapabilityAccessTarget
-        permissions: string[]
-        conversationTypeMaskOverride?: number | null
-        reason?: string
-      }>
-    }
-  ): Promise<ActorPackageInstallResult> {
+    data?: ActorPackageInstallInput
+  ): Promise<ActorPackageInstallResultView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/actors/packages/${packageId}/install`,
       {
@@ -834,138 +986,140 @@ class ApiClient {
     )
     return res.data
   }
-  async getOrgTree(wsId: string) {
+  async getOrgTree(wsId: string): Promise<ActorTreeView> {
     const res = await this.fetch(`/workspaces/${wsId}/actors/tree`)
     return res.data
   }
   async createActor(
     wsId: string,
-    data: {
-      displayName: string
-      role: ActorRole
-      title?: string
-      avatarFileId?: string
-      avatarEmoji?: string
-      canRepresentUser?: boolean
-      docs?: ActorDoc[]
-      parentId?: string
-      specialties?: string[]
-      config?: Record<string, unknown>
-      grants?: Array<{
-        target: CapabilityAccessTarget
-        permissions: string[]
-        conversationTypeMaskOverride?: number | null
-        reason?: string
-      }>
-    }
+    data: WorkspaceAppCreateActorInput
   ): Promise<Actor> {
+    const { grants, ...rest } = data
+    const body: CreateWorkspaceAppInput = {
+      kind: WORKSPACE_APP_KIND.ACTOR,
+      ...rest,
+      grants: parseWorkspaceAppGrantEntries(grants),
+    }
     const created = await this.fetch(`/workspaces/${wsId}/workspace-apps`, {
       method: "POST",
-      body: JSON.stringify({
-        kind: WORKSPACE_APP_KIND.ACTOR,
-        ...data,
-      }),
+      body: JSON.stringify(body),
     })
     return this.getActor(wsId, created.data.app.id)
   }
   async updateActor(
     wsId: string,
     actorId: string,
-    data: {
-      displayName?: string
-      role?: ActorRole
-      title?: string
-      avatarFileId?: string | null
-      avatarEmoji?: string | null
-      canRepresentUser?: boolean
-      docs?: ActorDoc[]
-      parentId?: string | null
-      specialties?: string[]
-      config?: Record<string, unknown>
-    }
+    data: WorkspaceAppUpdateActorInput
   ): Promise<Actor> {
+    const body: UpdateWorkspaceAppInput = {
+      kind: WORKSPACE_APP_KIND.ACTOR,
+      ...data,
+    }
     await this.fetch(`/workspaces/${wsId}/workspace-apps/${actorId}`, {
       method: "PUT",
-      body: JSON.stringify({
-        kind: WORKSPACE_APP_KIND.ACTOR,
-        ...data,
-      }),
+      body: JSON.stringify(body),
     })
     return this.getActor(wsId, actorId)
   }
-  deleteActor(wsId: string, actorId: string) {
-    return this.fetch(`/workspaces/${wsId}/workspace-apps/${actorId}`, {
-      method: "DELETE",
-    })
+  async deleteActor(
+    wsId: string,
+    actorId: string
+  ): Promise<WorkspaceAppSuccessViewSchemaType> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/workspace-apps/${actorId}`,
+      {
+        method: "DELETE",
+      }
+    )
+    return res.data
   }
 
   // Memories
-  getMemories(wsId: string, params?: string) {
-    return this.fetch(
-      `/workspaces/${wsId}/memories${params ? "?" + params : ""}`
+  getMemories(
+    wsId: string,
+    query?: MemoryListQueryParams
+  ): Promise<MemoryListView> {
+    return this.fetch(withQuery(`/workspaces/${wsId}/memories`, query)).then(
+      (res) => res.data
     )
   }
-  getMemory(wsId: string, id: string) {
-    return this.fetch(`/workspaces/${wsId}/memories/${id}`)
+  getMemory(wsId: string, id: string): Promise<MemoryItemEnvelopeView> {
+    return this.fetch(`/workspaces/${wsId}/memories/${id}`).then(
+      (res) => res.data
+    )
   }
-  createMemory(wsId: string, data: any) {
+  createMemory(
+    wsId: string,
+    data: CreateMemoryInputBody
+  ): Promise<MemoryItemEnvelopeView> {
     return this.fetch(`/workspaces/${wsId}/memories`, {
       method: "POST",
       body: JSON.stringify(data),
-    })
+    }).then((res) => res.data)
   }
-  updateMemory(wsId: string, id: string, data: any) {
+  updateMemory(
+    wsId: string,
+    id: string,
+    data: UpdateMemoryInputBody
+  ): Promise<MemoryItemEnvelopeView> {
     return this.fetch(`/workspaces/${wsId}/memories/${id}`, {
       method: "PUT",
       body: JSON.stringify(data),
-    })
+    }).then((res) => res.data)
   }
   deleteMemory(wsId: string, id: string) {
     return this.fetch(`/workspaces/${wsId}/memories/${id}`, {
       method: "DELETE",
     })
   }
-  moveMemory(wsId: string, id: string, data: any) {
+  moveMemory(
+    wsId: string,
+    id: string,
+    data: MoveMemoryInput
+  ): Promise<MemoryMoveResultView> {
     return this.fetch(`/workspaces/${wsId}/memories/${id}/move`, {
       method: "POST",
       body: JSON.stringify(data),
-    })
+    }).then((res) => res.data)
   }
 
   // Audit
-  getAuditLogs(wsId: string, params?: string) {
-    return this.fetch(
-      `/workspaces/${wsId}/audit-logs${params ? "?" + params : ""}`
-    )
+  getAuditLogs(
+    wsId: string,
+    query?: AuditLogListQuery
+  ): Promise<AuditLogListView> {
+    return this.fetch<{ data: AuditLogListView }>(
+      withQuery(`/workspaces/${wsId}/audit-logs`, query)
+    ).then((res) => res.data)
   }
 
   // Model Groups - Workspace
-  async getModelGroups(wsId: string): Promise<{ groups: ModelGroupView[] }> {
+  async getModelGroups(wsId: string): Promise<ModelGroupListView> {
     const res = await this.fetch(`/workspaces/${wsId}/model-groups`)
-    return { groups: res.data }
+    return res.data
   }
   async createModelGroup(
     wsId: string,
-    data: Record<string, unknown>
-  ): Promise<{ group: ModelGroupDetailView }> {
+    data: ModelGroupCreateInput
+  ): Promise<ModelGroupView> {
     const res = await this.fetch(`/workspaces/${wsId}/model-groups`, {
       method: "POST",
       body: JSON.stringify(data),
     })
-    return { group: res.data }
+    return res.data
   }
   async getModelGroup(
     wsId: string,
     groupId: string
-  ): Promise<{ group: ModelGroupDetailView }> {
+  ): Promise<ModelGroupDetailView> {
     const res = await this.fetch(`/workspaces/${wsId}/model-groups/${groupId}`)
-    return { group: res.data }
+    return res.data
   }
   async updateModelGroup(
     wsId: string,
     groupId: string,
-    data: Record<string, unknown>
-  ): Promise<{ group: ModelGroupDetailView }> {
+    data: ModelGroupUpdateInput
+  ): Promise<ModelGroupDetailView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/model-groups/${groupId}`,
       {
@@ -973,7 +1127,7 @@ class ApiClient {
         body: JSON.stringify(data),
       }
     )
-    return { group: res.data }
+    return res.data
   }
   deleteModelGroup(wsId: string, groupId: string) {
     return this.fetch(`/workspaces/${wsId}/model-groups/${groupId}`, {
@@ -983,17 +1137,17 @@ class ApiClient {
   async getModelGroupGrants(
     wsId: string,
     groupId: string
-  ): Promise<{ grants: ModelGroupGrantView[] }> {
+  ): Promise<ModelGroupGrantListView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/model-groups/${groupId}/grants`
     )
-    return { grants: res.data }
+    return res.data
   }
   async issueModelGroupGrant(
     wsId: string,
     groupId: string,
-    data: Record<string, unknown>
-  ): Promise<{ grant: ModelGroupGrantView }> {
+    data: ModelGroupGrantIssueInput
+  ): Promise<ModelGroupGrantView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/model-groups/${groupId}/grants`,
       {
@@ -1001,7 +1155,7 @@ class ApiClient {
         body: JSON.stringify(data),
       }
     )
-    return { grant: res.data }
+    return res.data
   }
   revokeModelGroupGrant(wsId: string, groupId: string, grantId: string) {
     return this.fetch(
@@ -1012,8 +1166,8 @@ class ApiClient {
   async addModelItem(
     wsId: string,
     groupId: string,
-    data: Record<string, unknown>
-  ): Promise<{ item: ModelGroupItemView }> {
+    data: ModelGroupItemCreateInput
+  ): Promise<ModelGroupItemView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/model-groups/${groupId}/items`,
       {
@@ -1021,19 +1175,19 @@ class ApiClient {
         body: JSON.stringify(data),
       }
     )
-    return { item: res.data }
+    return res.data
   }
   async updateModelItem(
     wsId: string,
     groupId: string,
     itemId: string,
-    data: Record<string, unknown>
-  ): Promise<{ item: ModelGroupItemView }> {
+    data: ModelGroupItemUpdateInput
+  ): Promise<ModelGroupItemView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/model-groups/${groupId}/items/${itemId}`,
       { method: "PUT", body: JSON.stringify(data) }
     )
-    return { item: res.data }
+    return res.data
   }
   deleteModelItem(wsId: string, groupId: string, itemId: string) {
     return this.fetch(
@@ -1045,61 +1199,59 @@ class ApiClient {
     wsId: string,
     groupId: string,
     itemId: string
-  ): Promise<{ versions: ModelGroupItemVersionView[] }> {
+  ): Promise<ModelGroupItemVersionListView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/model-groups/${groupId}/items/${itemId}/versions`
     )
-    return { versions: res.data }
+    return res.data
   }
 
   // Model Groups - Platform
-  async getPlatformModelGroups(): Promise<{ groups: ModelGroupView[] }> {
+  async getPlatformModelGroups(): Promise<ModelGroupListView> {
     const res = await this.fetch("/platform/model-groups")
-    return { groups: res.data }
+    return res.data
   }
   async createPlatformModelGroup(
-    data: Record<string, unknown>
-  ): Promise<{ group: ModelGroupDetailView }> {
+    data: ModelGroupCreateInput
+  ): Promise<ModelGroupView> {
     const res = await this.fetch("/platform/model-groups", {
       method: "POST",
       body: JSON.stringify(data),
     })
-    return { group: res.data }
+    return res.data
   }
-  async getPlatformModelGroup(
-    groupId: string
-  ): Promise<{ group: ModelGroupDetailView }> {
+  async getPlatformModelGroup(groupId: string): Promise<ModelGroupDetailView> {
     const res = await this.fetch(`/platform/model-groups/${groupId}`)
-    return { group: res.data }
+    return res.data
   }
   async updatePlatformModelGroup(
     groupId: string,
-    data: Record<string, unknown>
-  ): Promise<{ group: ModelGroupDetailView }> {
+    data: ModelGroupUpdateInput
+  ): Promise<ModelGroupDetailView> {
     const res = await this.fetch(`/platform/model-groups/${groupId}`, {
       method: "PUT",
       body: JSON.stringify(data),
     })
-    return { group: res.data }
+    return res.data
   }
   deletePlatformModelGroup(groupId: string) {
     return this.fetch(`/platform/model-groups/${groupId}`, { method: "DELETE" })
   }
   async getPlatformModelGroupGrants(
     groupId: string
-  ): Promise<{ grants: ModelGroupGrantView[] }> {
+  ): Promise<ModelGroupGrantListView> {
     const res = await this.fetch(`/platform/model-groups/${groupId}/grants`)
-    return { grants: res.data }
+    return res.data
   }
   async issuePlatformModelGroupGrant(
     groupId: string,
-    data: Record<string, unknown>
-  ): Promise<{ grant: ModelGroupGrantView }> {
+    data: ModelGroupGrantIssueInput
+  ): Promise<ModelGroupGrantView> {
     const res = await this.fetch(`/platform/model-groups/${groupId}/grants`, {
       method: "POST",
       body: JSON.stringify(data),
     })
-    return { grant: res.data }
+    return res.data
   }
   revokePlatformModelGroupGrant(groupId: string, grantId: string) {
     return this.fetch(
@@ -1109,19 +1261,19 @@ class ApiClient {
   }
   async addPlatformModelItem(
     groupId: string,
-    data: Record<string, unknown>
-  ): Promise<{ item: ModelGroupItemView }> {
+    data: ModelGroupItemCreateInput
+  ): Promise<ModelGroupItemView> {
     const res = await this.fetch(`/platform/model-groups/${groupId}/items`, {
       method: "POST",
       body: JSON.stringify(data),
     })
-    return { item: res.data }
+    return res.data
   }
   async updatePlatformModelItem(
     groupId: string,
     itemId: string,
-    data: Record<string, unknown>
-  ): Promise<{ item: ModelGroupItemView }> {
+    data: ModelGroupItemUpdateInput
+  ): Promise<ModelGroupItemView> {
     const res = await this.fetch(
       `/platform/model-groups/${groupId}/items/${itemId}`,
       {
@@ -1129,7 +1281,7 @@ class ApiClient {
         body: JSON.stringify(data),
       }
     )
-    return { item: res.data }
+    return res.data
   }
   deletePlatformModelItem(groupId: string, itemId: string) {
     return this.fetch(`/platform/model-groups/${groupId}/items/${itemId}`, {
@@ -1139,44 +1291,44 @@ class ApiClient {
   async getPlatformItemVersions(
     groupId: string,
     itemId: string
-  ): Promise<{ versions: ModelGroupItemVersionView[] }> {
+  ): Promise<ModelGroupItemVersionListView> {
     const res = await this.fetch(
       `/platform/model-groups/${groupId}/items/${itemId}/versions`
     )
-    return { versions: res.data }
+    return res.data
   }
 
   // Model Groups - Workspace Member
   async getWorkspaceMemberModelGroups(
     wsId: string
-  ): Promise<{ groups: ModelGroupView[] }> {
+  ): Promise<ModelGroupListView> {
     const res = await this.fetch(`/workspaces/${wsId}/me/model-groups`)
-    return { groups: res.data }
+    return res.data
   }
   async createWorkspaceMemberModelGroup(
     wsId: string,
-    data: Record<string, unknown>
-  ): Promise<{ group: ModelGroupDetailView }> {
+    data: ModelGroupCreateInput
+  ): Promise<ModelGroupView> {
     const res = await this.fetch(`/workspaces/${wsId}/me/model-groups`, {
       method: "POST",
       body: JSON.stringify(data),
     })
-    return { group: res.data }
+    return res.data
   }
   async getWorkspaceMemberModelGroup(
     wsId: string,
     groupId: string
-  ): Promise<{ group: ModelGroupDetailView }> {
+  ): Promise<ModelGroupDetailView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/me/model-groups/${groupId}`
     )
-    return { group: res.data }
+    return res.data
   }
   async updateWorkspaceMemberModelGroup(
     wsId: string,
     groupId: string,
-    data: Record<string, unknown>
-  ): Promise<{ group: ModelGroupDetailView }> {
+    data: ModelGroupUpdateInput
+  ): Promise<ModelGroupDetailView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/me/model-groups/${groupId}`,
       {
@@ -1184,7 +1336,7 @@ class ApiClient {
         body: JSON.stringify(data),
       }
     )
-    return { group: res.data }
+    return res.data
   }
   deleteWorkspaceMemberModelGroup(wsId: string, groupId: string) {
     return this.fetch(`/workspaces/${wsId}/me/model-groups/${groupId}`, {
@@ -1194,17 +1346,17 @@ class ApiClient {
   async getWorkspaceMemberModelGroupGrants(
     wsId: string,
     groupId: string
-  ): Promise<{ grants: ModelGroupGrantView[] }> {
+  ): Promise<ModelGroupGrantListView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/me/model-groups/${groupId}/grants`
     )
-    return { grants: res.data }
+    return res.data
   }
   async issueWorkspaceMemberModelGroupGrant(
     wsId: string,
     groupId: string,
-    data: Record<string, unknown>
-  ): Promise<{ grant: ModelGroupGrantView }> {
+    data: ModelGroupGrantIssueInput
+  ): Promise<ModelGroupGrantView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/me/model-groups/${groupId}/grants`,
       {
@@ -1212,7 +1364,7 @@ class ApiClient {
         body: JSON.stringify(data),
       }
     )
-    return { grant: res.data }
+    return res.data
   }
   revokeWorkspaceMemberModelGroupGrant(
     wsId: string,
@@ -1230,8 +1382,8 @@ class ApiClient {
   async addWorkspaceMemberModelItem(
     wsId: string,
     groupId: string,
-    data: Record<string, unknown>
-  ): Promise<{ item: ModelGroupItemView }> {
+    data: ModelGroupItemCreateInput
+  ): Promise<ModelGroupItemView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/me/model-groups/${groupId}/items`,
       {
@@ -1239,14 +1391,14 @@ class ApiClient {
         body: JSON.stringify(data),
       }
     )
-    return { item: res.data }
+    return res.data
   }
   async updateWorkspaceMemberModelItem(
     wsId: string,
     groupId: string,
     itemId: string,
-    data: Record<string, unknown>
-  ): Promise<{ item: ModelGroupItemView }> {
+    data: ModelGroupItemUpdateInput
+  ): Promise<ModelGroupItemView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/me/model-groups/${groupId}/items/${itemId}`,
       {
@@ -1254,7 +1406,7 @@ class ApiClient {
         body: JSON.stringify(data),
       }
     )
-    return { item: res.data }
+    return res.data
   }
   deleteWorkspaceMemberModelItem(
     wsId: string,
@@ -1272,37 +1424,37 @@ class ApiClient {
     wsId: string,
     groupId: string,
     itemId: string
-  ): Promise<{ versions: ModelGroupItemVersionView[] }> {
+  ): Promise<ModelGroupItemVersionListView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/me/model-groups/${groupId}/items/${itemId}/versions`
     )
-    return { versions: res.data }
+    return res.data
   }
 
   // Actor Model Group Assignment
   async getActorModelGroups(
     wsId: string,
     actorId: string
-  ): Promise<{ groups: ActorModelGroupAssignmentView[] }> {
+  ): Promise<ActorModelGroupAssignmentListView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/actors/${actorId}/model-groups`
     )
-    return { groups: res.data }
+    return res.data
   }
   async getVisibleActorModelGroups(
     wsId: string,
     actorId: string
-  ): Promise<{ groups: ModelGroupView[] }> {
+  ): Promise<ModelGroupListView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/actors/${actorId}/model-groups/visible`
     )
-    return { groups: res.data }
+    return res.data
   }
   async setActorModelGroups(
     wsId: string,
     actorId: string,
-    groups: { groupId: string; priority: number }[]
-  ): Promise<{ groups: ActorModelGroupAssignmentView[] }> {
+    groups: ActorModelGroupSetInput["groups"]
+  ): Promise<ActorModelGroupAssignmentListView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/actors/${actorId}/model-groups`,
       {
@@ -1310,7 +1462,7 @@ class ApiClient {
         body: JSON.stringify({ groups }),
       }
     )
-    return { groups: res.data }
+    return res.data
   }
 
   async getMyRelationshipProfile(
@@ -1527,14 +1679,14 @@ class ApiClient {
 
   async getRemoteAgents(
     wsId: string
-  ): Promise<{ remoteAgents: RemoteAgentView[] }> {
+  ): Promise<RemoteAgentListResponseSchemaType> {
     const res = await this.fetch(`/workspaces/${wsId}/remote-agents`)
     return res.data
   }
   async getRemoteAgent(
     wsId: string,
     remoteAgentId: string
-  ): Promise<{ remoteAgent: RemoteAgentView }> {
+  ): Promise<RemoteAgentResponseSchemaType> {
     const res = await this.fetch(
       `/workspaces/${wsId}/remote-agents/${remoteAgentId}`
     )
@@ -1542,29 +1694,17 @@ class ApiClient {
   }
   async createRemoteAgent(
     wsId: string,
-    input: {
-      displayName: string
-      title: string
-      description?: string
-      runtimeKind: RemoteAgentRuntimeKind
-      avatarFileId?: string
-      avatarEmoji?: string
-      isPublicShared?: boolean
-      metadata?: Record<string, unknown>
-      grants?: Array<{
-        target: CapabilityAccessTarget
-        permissions: string[]
-        conversationTypeMaskOverride?: number | null
-        reason?: string
-      }>
+    input: WorkspaceAppCreateRemoteAgentInput
+  ): Promise<RemoteAgentResponseSchemaType> {
+    const { grants, ...rest } = input
+    const body: CreateWorkspaceAppInput = {
+      kind: WORKSPACE_APP_KIND.REMOTE_AGENT,
+      ...rest,
+      grants: parseWorkspaceAppGrantEntries(grants),
     }
-  ): Promise<{ remoteAgent: RemoteAgentView }> {
     const created = await this.fetch(`/workspaces/${wsId}/workspace-apps`, {
       method: "POST",
-      body: JSON.stringify({
-        kind: WORKSPACE_APP_KIND.REMOTE_AGENT,
-        ...input,
-      }),
+      body: JSON.stringify(body),
     })
     return {
       remoteAgent: await this.getRemoteAgent(wsId, created.data.app.id).then(
@@ -1575,23 +1715,15 @@ class ApiClient {
   async updateRemoteAgent(
     wsId: string,
     remoteAgentId: string,
-    input: {
-      displayName?: string
-      title?: string
-      description?: string | null
-      avatarFileId?: string | null
-      avatarEmoji?: string | null
-      isPublicShared?: boolean
-      isActive?: boolean
-      metadata?: Record<string, unknown>
+    input: WorkspaceAppUpdateRemoteAgentInput
+  ): Promise<RemoteAgentResponseSchemaType> {
+    const body: UpdateWorkspaceAppInput = {
+      kind: WORKSPACE_APP_KIND.REMOTE_AGENT,
+      ...input,
     }
-  ): Promise<{ remoteAgent: RemoteAgentView }> {
     await this.fetch(`/workspaces/${wsId}/workspace-apps/${remoteAgentId}`, {
       method: "PUT",
-      body: JSON.stringify({
-        kind: WORKSPACE_APP_KIND.REMOTE_AGENT,
-        ...input,
-      }),
+      body: JSON.stringify(body),
     })
     return {
       remoteAgent: await this.getRemoteAgent(wsId, remoteAgentId).then(
@@ -1599,19 +1731,23 @@ class ApiClient {
       ),
     }
   }
-  deleteRemoteAgent(
+  async deleteRemoteAgent(
     wsId: string,
     remoteAgentId: string
-  ): Promise<{ deleted: boolean }> {
-    return this.fetch(`/workspaces/${wsId}/workspace-apps/${remoteAgentId}`, {
-      method: "DELETE",
-    })
+  ): Promise<WorkspaceAppSuccessViewSchemaType> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/workspace-apps/${remoteAgentId}`,
+      {
+        method: "DELETE",
+      }
+    )
+    return res.data
   }
   async bindRemoteAgent(
     wsId: string,
     remoteAgentId: string,
     input: BindRemoteAgentInput
-  ): Promise<{ remoteAgent: RemoteAgentView }> {
+  ): Promise<RemoteAgentResponseSchemaType> {
     const res = await this.fetch(
       `/workspaces/${wsId}/remote-agents/${remoteAgentId}/bind`,
       {
@@ -1636,7 +1772,7 @@ class ApiClient {
   }
   async getRemoteAgentMachines(
     wsId: string
-  ): Promise<{ machines: RemoteAgentMachineView[] }> {
+  ): Promise<RemoteAgentMachineListResponseSchemaType> {
     const res = await this.fetch(`/workspaces/${wsId}/remote-agent-machines`)
     return res.data
   }
@@ -1652,7 +1788,7 @@ class ApiClient {
   async getRemoteAgentGroupTaskGrants(
     wsId: string,
     remoteAgentId: string
-  ): Promise<{ grants: RemoteAgentGroupTaskGrantView[] }> {
+  ): Promise<RemoteAgentGroupTaskGrantsResponseSchemaType> {
     const res = await this.fetch(
       `/workspaces/${wsId}/remote-agents/${remoteAgentId}/group-task-grants`
     )
@@ -1662,7 +1798,7 @@ class ApiClient {
     wsId: string,
     remoteAgentId: string,
     input: UpdateRemoteAgentGroupTaskGrantsInput
-  ): Promise<{ grants: RemoteAgentGroupTaskGrantView[] }> {
+  ): Promise<RemoteAgentGroupTaskGrantsResponseSchemaType> {
     const res = await this.fetch(
       `/workspaces/${wsId}/remote-agents/${remoteAgentId}/group-task-grants`,
       {
@@ -1925,26 +2061,26 @@ class ApiClient {
   }
   async getTransportConnectors(
     wsId: string
-  ): Promise<{ connectors: TransportConnectorCapability[] }> {
+  ): Promise<TransportConnectorsResponseSchemaType> {
     const res = await this.fetch(`/workspaces/${wsId}/im/connectors`)
     return res.data
   }
   async getTransportAccounts(
     wsId: string
-  ): Promise<{ accounts: TransportAccountSummary[] }> {
+  ): Promise<TransportAccountsResponseSchemaType> {
     const res = await this.fetch(`/workspaces/${wsId}/im/accounts`)
     return res.data
   }
   async getTransportSessions(
     wsId: string
-  ): Promise<{ sessions: TransportSessionSummary[] }> {
+  ): Promise<TransportSessionsResponseSchemaType> {
     const res = await this.fetch(`/workspaces/${wsId}/im/sessions`)
     return res.data
   }
   async getTransportExternalUsers(
     wsId: string,
-    transportAccountId?: string
-  ): Promise<{ externalUsers: TransportExternalUserSummary[] }> {
+    transportAccountId?: TransportExternalUsersListQuery["transportAccountId"]
+  ): Promise<TransportExternalUsersResponseSchemaType> {
     const params = new URLSearchParams()
     if (transportAccountId) params.set("transportAccountId", transportAccountId)
     const res = await this.fetch(
@@ -1954,8 +2090,8 @@ class ApiClient {
   }
   async createFeishuTransportAccount(
     wsId: string,
-    data: Record<string, unknown>
-  ): Promise<{ account: TransportAccountSummary }> {
+    data: TransportFeishuAccountCreateInput
+  ): Promise<TransportAccountResponseSchemaType> {
     const res = await this.fetch(`/workspaces/${wsId}/im/accounts/feishu`, {
       method: "POST",
       body: JSON.stringify(data),
@@ -1965,8 +2101,8 @@ class ApiClient {
   async updateFeishuTransportAccount(
     wsId: string,
     accountId: string,
-    data: Record<string, unknown>
-  ): Promise<{ account: TransportAccountSummary }> {
+    data: TransportFeishuAccountUpdateInput
+  ): Promise<TransportAccountResponseSchemaType> {
     const res = await this.fetch(
       `/workspaces/${wsId}/im/accounts/feishu/${accountId}`,
       {
@@ -1978,8 +2114,8 @@ class ApiClient {
   }
   async createWecomTransportAccount(
     wsId: string,
-    data: Record<string, unknown>
-  ): Promise<{ account: TransportAccountSummary }> {
+    data: TransportWecomAccountCreateInput
+  ): Promise<TransportAccountResponseSchemaType> {
     const res = await this.fetch(`/workspaces/${wsId}/im/accounts/wecom`, {
       method: "POST",
       body: JSON.stringify(data),
@@ -1989,8 +2125,8 @@ class ApiClient {
   async updateWecomTransportAccount(
     wsId: string,
     accountId: string,
-    data: Record<string, unknown>
-  ): Promise<{ account: TransportAccountSummary }> {
+    data: TransportWecomAccountUpdateInput
+  ): Promise<TransportAccountResponseSchemaType> {
     const res = await this.fetch(
       `/workspaces/${wsId}/im/accounts/wecom/${accountId}`,
       {
@@ -2002,8 +2138,8 @@ class ApiClient {
   }
   async createQqTransportAccount(
     wsId: string,
-    data: Record<string, unknown>
-  ): Promise<{ account: TransportAccountSummary }> {
+    data: TransportQqAccountCreateInput
+  ): Promise<TransportAccountResponseSchemaType> {
     const res = await this.fetch(`/workspaces/${wsId}/im/accounts/qq`, {
       method: "POST",
       body: JSON.stringify(data),
@@ -2013,8 +2149,8 @@ class ApiClient {
   async updateQqTransportAccount(
     wsId: string,
     accountId: string,
-    data: Record<string, unknown>
-  ): Promise<{ account: TransportAccountSummary }> {
+    data: TransportQqAccountUpdateInput
+  ): Promise<TransportAccountResponseSchemaType> {
     const res = await this.fetch(
       `/workspaces/${wsId}/im/accounts/qq/${accountId}`,
       {
@@ -2026,8 +2162,8 @@ class ApiClient {
   }
   async startWeixinQrTransportSession(
     wsId: string,
-    data: Record<string, unknown>
-  ): Promise<{ session: WeixinQrLoginSessionSummary }> {
+    data: WeixinQrSessionCreateInput
+  ): Promise<WeixinQrSessionResponseSchemaType> {
     const res = await this.fetch(`/workspaces/${wsId}/im/accounts/weixin/qr`, {
       method: "POST",
       body: JSON.stringify(data),
@@ -2037,7 +2173,7 @@ class ApiClient {
   async getWeixinQrTransportSession(
     wsId: string,
     sessionId: string
-  ): Promise<{ session: WeixinQrLoginSessionSummary }> {
+  ): Promise<WeixinQrSessionResponseSchemaType> {
     const res = await this.fetch(
       `/workspaces/${wsId}/im/accounts/weixin/qr/${sessionId}`
     )
@@ -2045,8 +2181,8 @@ class ApiClient {
   }
   async startDingtalkDeviceFlow(
     wsId: string,
-    data: Record<string, unknown>
-  ): Promise<DingtalkDeviceFlowStartResponse> {
+    data: DingtalkDeviceFlowStartInput
+  ): Promise<DingtalkDeviceFlowStartResponseSchemaType> {
     const res = await this.fetch(
       `/workspaces/${wsId}/im/accounts/dingtalk/device-registration/start`,
       {
@@ -2059,7 +2195,7 @@ class ApiClient {
   async pollDingtalkDeviceFlow(
     wsId: string,
     sessionId: string
-  ): Promise<DingtalkDeviceFlowPollResponse> {
+  ): Promise<DingtalkDeviceFlowPollResponseSchemaType> {
     const res = await this.fetch(
       `/workspaces/${wsId}/im/accounts/dingtalk/device-registration/${sessionId}`
     )
@@ -2073,8 +2209,8 @@ class ApiClient {
   }
   async createDingtalkAccountManual(
     wsId: string,
-    data: Record<string, unknown>
-  ): Promise<{ account: TransportAccountSummary }> {
+    data: DingtalkManualAccountCreateInput
+  ): Promise<TransportAccountResponseSchemaType> {
     const res = await this.fetch(
       `/workspaces/${wsId}/im/accounts/dingtalk/manual`,
       {
@@ -2086,23 +2222,21 @@ class ApiClient {
   }
   async getCurrentUserWeixinBinding(
     wsId: string
-  ): Promise<{ binding: CurrentUserWeixinBindingSummary | null }> {
+  ): Promise<WeixinBindingResponseSchemaType> {
     const res = await this.fetch(`/workspaces/${wsId}/im/me/weixin-binding`)
     return res.data
   }
   async getCurrentUserWeixinBindingCandidates(
     wsId: string
-  ): Promise<{ data: Array<Record<string, unknown>> }> {
+  ): Promise<WeixinBindingCandidatesResponseSchemaType> {
     const res = await this.fetch(
       `/workspaces/${wsId}/im/me/weixin-binding/candidates`
     )
-    // The route now returns { data: { members: [...] } }; preserve this
-    // method's historical { data: [...] } public shape for callers.
-    return { data: res.data.members }
+    return res.data
   }
   async startCurrentUserWeixinBindingQr(
     wsId: string
-  ): Promise<{ session: WeixinQrLoginSessionSummary }> {
+  ): Promise<WeixinQrSessionResponseSchemaType> {
     const res = await this.fetch(
       `/workspaces/${wsId}/im/me/weixin-binding/qr`,
       {
@@ -2115,7 +2249,7 @@ class ApiClient {
   async getCurrentUserWeixinBindingQr(
     wsId: string,
     sessionId: string
-  ): Promise<{ session: WeixinQrLoginSessionSummary }> {
+  ): Promise<WeixinQrSessionResponseSchemaType> {
     const res = await this.fetch(
       `/workspaces/${wsId}/im/me/weixin-binding/qr/${sessionId}`
     )
@@ -2123,7 +2257,7 @@ class ApiClient {
   }
   async linkCurrentUserWeixinBinding(
     wsId: string
-  ): Promise<{ binding: CurrentUserWeixinBindingSummary }> {
+  ): Promise<WeixinBindingResponseSchemaType> {
     const res = await this.fetch(
       `/workspaces/${wsId}/im/me/weixin-binding/link`,
       {
@@ -2135,8 +2269,8 @@ class ApiClient {
   }
   async setCurrentUserWeixinBindingAutoLink(
     wsId: string,
-    workspaceMemberId: string | null
-  ): Promise<{ binding: CurrentUserWeixinBindingSummary }> {
+    workspaceMemberId: WeixinBindingAutoLinkInput["workspaceMemberId"]
+  ): Promise<WeixinBindingResponseSchemaType> {
     const res = await this.fetch(
       `/workspaces/${wsId}/im/me/weixin-binding/auto-link`,
       {
@@ -2148,8 +2282,8 @@ class ApiClient {
   }
   async createTransportAccount(
     wsId: string,
-    data: Record<string, unknown>
-  ): Promise<{ account: TransportAccountSummary }> {
+    data: TransportAccountCreateInput
+  ): Promise<TransportAccountResponseSchemaType> {
     const res = await this.fetch(`/workspaces/${wsId}/im/accounts`, {
       method: "POST",
       body: JSON.stringify(data),
@@ -2159,8 +2293,8 @@ class ApiClient {
   async updateTransportAccount(
     wsId: string,
     accountId: string,
-    data: Record<string, unknown>
-  ): Promise<{ account: TransportAccountSummary }> {
+    data: TransportAccountUpdateInput
+  ): Promise<TransportAccountResponseSchemaType> {
     const res = await this.fetch(
       `/workspaces/${wsId}/im/accounts/${accountId}`,
       {
@@ -2173,8 +2307,8 @@ class ApiClient {
   async updateTransportSessionSettings(
     wsId: string,
     sessionId: string,
-    data: Record<string, unknown>
-  ): Promise<{ session: TransportSessionSummary | null }> {
+    data: TransportSessionSettingsInput
+  ): Promise<TransportSessionResponseSchemaType> {
     const res = await this.fetch(
       `/workspaces/${wsId}/im/sessions/${sessionId}/settings`,
       {
@@ -2187,8 +2321,8 @@ class ApiClient {
   async setTransportExternalUserWorkspaceMember(
     wsId: string,
     addressId: string,
-    workspaceMemberId: string | null
-  ): Promise<{ externalUser: TransportExternalUserSummary }> {
+    workspaceMemberId: TransportExternalUserLinkedMemberInput["workspaceMemberId"]
+  ): Promise<TransportExternalUserResponseSchemaType> {
     const res = await this.fetch(
       `/workspaces/${wsId}/im/external-users/${addressId}/workspace-member`,
       {
@@ -2196,32 +2330,30 @@ class ApiClient {
         body: JSON.stringify({ workspaceMemberId }),
       }
     )
-    // Route returns { data: { address: ... } }; preserve the method's
-    // historical { externalUser } public shape for callers.
-    return { externalUser: res.data.address }
+    return res.data
   }
   // MCP Marketplace
-  async getMarketplace(params?: string): Promise<MarketplacePluginView[]> {
-    const res = await this.fetch(
-      `/mcp/marketplace${params ? "?" + params : ""}`
-    )
+  async getMarketplace(
+    query?: McpMarketplaceListQuery
+  ): Promise<MarketplacePluginListView> {
+    const res = await this.fetch(withQuery("/mcp/marketplace", query))
     return res.data
   }
   async getMarketplacePlugin(pluginId: string): Promise<MarketplacePluginView> {
     const res = await this.fetch(`/mcp/marketplace/${pluginId}`)
     return res.data
   }
-  async getPluginCategories(): Promise<PluginCategoryView[]> {
+  async getPluginCategories(): Promise<PluginCategoryListView> {
     const res = await this.fetch("/mcp/categories")
     return res.data
   }
-  async getMcpOrganizations(): Promise<MarketplacePublisherView[]> {
+  async getMcpOrganizations(): Promise<MarketplacePublisherListView> {
     const res = await this.fetch("/mcp/organizations")
     return res.data
   }
   async getMcpOrganization(
     orgId: string
-  ): Promise<MarketplacePublisherView & { plugins: MarketplacePluginView[] }> {
+  ): Promise<MarketplacePublisherDetailView> {
     const res = await this.fetch(`/mcp/organizations/${orgId}`)
     return res.data
   }
@@ -2229,80 +2361,64 @@ class ApiClient {
   // MCP Unified Installations
   async getInstallations(
     wsId: string,
-    params?: string
-  ): Promise<PluginInstallationDetailView[]> {
+    query?: McpPluginInstallationListQuery
+  ): Promise<PluginInstallationListView> {
     const res = await this.fetch(
-      `/workspaces/${wsId}/mcp/installations${params ? "?" + params : ""}`
+      withQuery(`/workspaces/${wsId}/mcp/installations`, query)
     )
     return res.data
   }
   async getInstallation(
     wsId: string,
     installId: string
-  ): Promise<{ installation: PluginInstallationDetailView }> {
+  ): Promise<PluginInstallationDetailView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/mcp/installations/${installId}`
     )
-    return { installation: res.data }
+    return res.data
   }
   async installPlugin(
     wsId: string,
-    data: {
-      pluginId: string
-      lifecycleScope?:
-        | "turn"
-        | "session"
-        | "workspace"
-        | "conversation"
-        | "actor"
-      configData?: Record<string, unknown>
-      authSessionIds?: Record<string, string>
-      grants?: Array<{
-        target: CapabilityAccessTarget
-        permissions: string[]
-        conversationTypeMaskOverride?: number | null
-        reason?: string
-      }>
-    }
+    data: WorkspaceAppCreatePluginInstallationInput
   ): Promise<PluginInstallationDetailView> {
+    const { grants, ...rest } = data
+    const body: CreateWorkspaceAppInput = {
+      kind: WORKSPACE_APP_KIND.PLUGIN_INSTALLATION,
+      ...rest,
+      grants: parseWorkspaceAppGrantEntries(grants),
+    }
     const created = await this.fetch(`/workspaces/${wsId}/workspace-apps`, {
       method: "POST",
-      body: JSON.stringify({
-        kind: WORKSPACE_APP_KIND.PLUGIN_INSTALLATION,
-        ...data,
-      }),
+      body: JSON.stringify(body),
     })
-    const { installation } = await this.getInstallation(
-      wsId,
-      created.data.app.id
-    )
-    return installation
+    return this.getInstallation(wsId, created.data.app.id)
   }
   async updateInstallation(
     wsId: string,
     installId: string,
-    data: {
-      isEnabled?: boolean
-      configData?: Record<string, unknown>
-      authSessionIds?: Record<string, string>
-      lifecycleScope?: ReuseScope
-      conversationTypeMaskOverride?: number | null
-    }
+    data: WorkspaceAppUpdatePluginInstallationInput
   ): Promise<PluginInstallationDetailView> {
+    const body: UpdateWorkspaceAppInput = {
+      kind: WORKSPACE_APP_KIND.PLUGIN_INSTALLATION,
+      ...data,
+    }
     await this.fetch(`/workspaces/${wsId}/workspace-apps/${installId}`, {
       method: "PUT",
-      body: JSON.stringify({
-        kind: WORKSPACE_APP_KIND.PLUGIN_INSTALLATION,
-        ...data,
-      }),
+      body: JSON.stringify(body),
     })
-    const { installation } = await this.getInstallation(wsId, installId)
-    return installation
+    return this.getInstallation(wsId, installId)
   }
-  uninstallPlugin(wsId: string, installId: string) {
-    return this.fetch(`/workspaces/${wsId}/workspace-apps/${installId}`, {
-      method: "DELETE",
-    })
+  async uninstallPlugin(
+    wsId: string,
+    installId: string
+  ): Promise<WorkspaceAppSuccessViewSchemaType> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/workspace-apps/${installId}`,
+      {
+        method: "DELETE",
+      }
+    )
+    return res.data
   }
   async startPluginAuth(
     wsId: string,
@@ -2334,21 +2450,29 @@ class ApiClient {
   }
 
   // MCP Audit
-  getMcpToolCallLogs(wsId: string, params?: string) {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/audit/tool-calls${params ? "?" + params : ""}`
+  async getMcpToolCallLogs(
+    wsId: string,
+    query?: McpPluginToolCallAuditLogListQuery
+  ): Promise<PluginAuditLogList> {
+    const res = await this.fetch(
+      withQuery(`/workspaces/${wsId}/mcp/audit/tool-calls`, query)
     )
+    return res.data
   }
-  getMcpEventLogs(wsId: string, params?: string) {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/audit/events${params ? "?" + params : ""}`
+  async getMcpEventLogs(
+    wsId: string,
+    query?: McpPluginEventAuditLogListQuery
+  ): Promise<PluginAuditLogList> {
+    const res = await this.fetch(
+      withQuery(`/workspaces/${wsId}/mcp/audit/events`, query)
     )
+    return res.data
   }
 
   // Devices (v3)
-  async listDevices(wsId: string): Promise<{ devices: DeviceView[] }> {
+  async listDevices(wsId: string): Promise<DeviceListView> {
     const res = await this.fetch(`/workspaces/${wsId}/devices`)
-    return { devices: res.data }
+    return res.data
   }
   async getDevice(wsId: string, deviceId: string): Promise<DeviceDetailView> {
     const res = await this.fetch(`/workspaces/${wsId}/devices/${deviceId}`)
@@ -2361,13 +2485,7 @@ class ApiClient {
   }
   async startDevicePairingSession(
     wsId: string,
-    body: {
-      mode: "local_qr" | "cloud_bootstrap" | "service_join"
-      title?: string
-      deviceType?: string
-      deviceId?: string
-      context?: Record<string, unknown>
-    }
+    body: Omit<StartPairingInput, "workspaceId">
   ): Promise<DevicePairingTicketView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/devices/pairing-sessions`,
@@ -2408,15 +2526,10 @@ class ApiClient {
   // v3.1: manual runtime-authorization grant endpoint. The chat card for
   // active-page / page_id / all_pages browser tools renders "Manual grant
   // required" — this is the endpoint that backs the Settings page.
-  // §5.3: APP route now returns { data: grant }; unwrap and re-wrap to the
-  // method's historical { grant } public shape so callers stay unchanged.
   async createManualRuntimeAuthorizationGrant(
     wsId: string,
-    body: {
-      device_capability_id: string
-      policy: Record<string, unknown>
-    }
-  ): Promise<{ grant: Record<string, unknown> }> {
+    body: CreateManualRuntimeAuthorizationGrantInput
+  ): Promise<RuntimeAuthorizationGrantRecordView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/runtime-authorization-grants`,
       {
@@ -2424,19 +2537,14 @@ class ApiClient {
         body: JSON.stringify(body),
       }
     )
-    return { grant: res.data }
+    return res.data
   }
 
   // Automation Event Sources
   async getAutomationEventSources(
     wsId: string,
-    filters?: {
-      status?: "active" | "deprecated" | "disabled" | "archived"
-      providerKind?: "device" | "webhook" | "internal" | "integration"
-      providerRef?: string
-      sourceKey?: string
-    }
-  ): Promise<AutomationEventSource[]> {
+    filters?: AutomationEventSourceListQuery
+  ): Promise<AutomationEventSourceListSchemaType> {
     const params = new URLSearchParams()
     if (filters?.status) params.set("status", filters.status)
     if (filters?.providerKind) params.set("providerKind", filters.providerKind)
@@ -2451,26 +2559,7 @@ class ApiClient {
   }
   async createAutomationEventSource(
     wsId: string,
-    data: {
-      providerKind: "device" | "webhook" | "internal" | "integration"
-      providerRef?: string
-      integration?: {
-        installationId: string
-        provider: "github" | "gitlab"
-        ingressKind?: "webhook" | "polling"
-        targetKind: "repository" | "project"
-        targetId: string
-        targetLabel?: string
-      }
-      sourceKey?: string
-      name?: string
-      description?: string
-      recommendedUsage?: string
-      payloadSchema?: Record<string, unknown>
-      examplePayload?: Record<string, unknown>
-      status?: "active" | "deprecated" | "disabled" | "archived"
-      metadata?: Record<string, unknown>
-    }
+    data: AutomationEventSourceCreateInput
   ): Promise<AutomationEventSource> {
     // §5.3 APP route: unwrap the { data } envelope.
     const res = await this.fetch(
@@ -2485,16 +2574,7 @@ class ApiClient {
   async updateAutomationEventSource(
     wsId: string,
     eventSourceId: string,
-    data: {
-      providerRef?: string
-      name?: string
-      description?: string
-      recommendedUsage?: string
-      payloadSchema?: Record<string, unknown>
-      examplePayload?: Record<string, unknown>
-      status?: "active" | "deprecated" | "disabled" | "archived"
-      metadata?: Record<string, unknown>
-    }
+    data: AutomationEventSourceUpdateInput
   ): Promise<AutomationEventSource> {
     // §5.3 APP route: unwrap the { data } envelope.
     const res = await this.fetch(
@@ -2506,18 +2586,22 @@ class ApiClient {
     )
     return res.data
   }
-  archiveAutomationEventSource(wsId: string, eventSourceId: string) {
-    return this.fetch(
+  async archiveAutomationEventSource(
+    wsId: string,
+    eventSourceId: string
+  ): Promise<AutomationSuccessSchemaType> {
+    const res = await this.fetch(
       `/workspaces/${wsId}/automation-event-sources/${eventSourceId}`,
       {
         method: "DELETE",
       }
     )
+    return res.data
   }
   async getAutomationEventSourceOccurrences(
     wsId: string,
     eventSourceId: string
-  ): Promise<AutomationOccurrence[]> {
+  ): Promise<AutomationOccurrenceListSchemaType> {
     // §5.3 APP route: unwrap the { data } envelope.
     const res = await this.fetch(
       `/workspaces/${wsId}/automation-event-sources/${eventSourceId}/occurrences`
@@ -2528,12 +2612,8 @@ class ApiClient {
   // Automation Rules / Triggers
   async getAutomations(
     wsId: string,
-    filters?: {
-      status?: "active" | "paused" | "error" | "archived"
-      category?: "schedule" | "event_subscription"
-      conversationId?: string
-    }
-  ): Promise<AutomationRule[]> {
+    filters?: AutomationRuleListQuery
+  ): Promise<AutomationRuleListSchemaType> {
     const params = new URLSearchParams()
     if (filters?.status) params.set("status", filters.status)
     if (filters?.category) params.set("category", filters.category)
@@ -2558,7 +2638,7 @@ class ApiClient {
   }
   async createAutomation(
     wsId: string,
-    data: AutomationRuleCreatePayload
+    data: AutomationRuleCreateInput
   ): Promise<AutomationRule> {
     // §5.3 APP route: unwrap the { data } envelope.
     const res = await this.fetch(`/workspaces/${wsId}/automations`, {
@@ -2570,7 +2650,7 @@ class ApiClient {
   async updateAutomation(
     wsId: string,
     automationId: string,
-    data: AutomationRuleUpdatePayload
+    data: AutomationRuleUpdateInput
   ): Promise<AutomationRule> {
     // §5.3 APP route: unwrap the { data } envelope.
     const res = await this.fetch(
@@ -2582,15 +2662,22 @@ class ApiClient {
     )
     return res.data
   }
-  deleteAutomation(wsId: string, automationId: string) {
-    return this.fetch(`/workspaces/${wsId}/automations/${automationId}`, {
-      method: "DELETE",
-    })
+  async deleteAutomation(
+    wsId: string,
+    automationId: string
+  ): Promise<AutomationSuccessSchemaType> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/automations/${automationId}`,
+      {
+        method: "DELETE",
+      }
+    )
+    return res.data
   }
   async getAutomationExecutions(
     wsId: string,
     automationId: string
-  ): Promise<AutomationExecution[]> {
+  ): Promise<AutomationExecutionListSchemaType> {
     // §5.3 APP route: unwrap the { data } envelope.
     const res = await this.fetch(
       `/workspaces/${wsId}/automations/${automationId}/executions`
@@ -2606,18 +2693,16 @@ class ApiClient {
       signal?: AbortSignal
       onProgress?: (progress: number) => void
     }
-  ): Promise<FileRecordView> {
+  ): Promise<StoredFileRecordView> {
     const formData = new FormData()
     formData.append("file", file)
-    formData.append(
-      "origin",
-      JSON.stringify({
-        family: "user_upload",
-        system: FILE_ORIGIN_SYSTEMS.WORKSPACE_WEB_UPLOAD,
-      })
-    )
+    const origin: FileUploadOriginInput = {
+      family: "user_upload",
+      system: FILE_ORIGIN_SYSTEMS.WORKSPACE_WEB_UPLOAD,
+    }
+    formData.append("origin", JSON.stringify(origin))
 
-    return new Promise<FileRecordView>((resolve, reject) => {
+    return new Promise<StoredFileRecordView>((resolve, reject) => {
       const request = new XMLHttpRequest()
       let completed = false
 
@@ -2651,14 +2736,28 @@ class ApiClient {
 
       request.addEventListener("load", () => {
         if (completed) return
-        completed = true
-        cleanup()
 
         if (request.status >= 200 && request.status < 300) {
           // §5.3 APP route: upload returns the { data } envelope.
-          resolve((request.response as { data: FileRecordView }).data)
+          let file: StoredFileRecordView
+          try {
+            file = parseFileUploadResponseData(request.response)
+          } catch (error) {
+            finalizeReject(
+              error instanceof Error
+                ? error
+                : new Error("Malformed upload response")
+            )
+            return
+          }
+          completed = true
+          cleanup()
+          resolve(file)
           return
         }
+
+        completed = true
+        cleanup()
 
         const response =
           request.response && typeof request.response === "object"

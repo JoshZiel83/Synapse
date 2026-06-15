@@ -20,7 +20,6 @@ export default function DevicesIndexPage() {
     queryKey: workspaceId ? qk.devices(workspaceId) : ["devices", "disabled"],
     queryFn: () => api.listDevices(workspaceId!),
     enabled: !!workspaceId,
-    select: (res) => res.devices,
   })
   const devices = devicesQuery.data ?? null
 

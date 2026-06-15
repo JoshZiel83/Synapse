@@ -162,8 +162,8 @@ export function WorkspaceEntityPickerScreen({
 
     try {
       if (mode === WORKSPACE_ENTITY_PICKER_MODE.ACTOR) {
-        const response = await api.getActors(workspaceId)
-        setActors(response.actors.filter((actor) => actor.isActive))
+        const actors = await api.getActors(workspaceId)
+        setActors(actors.filter((actor) => actor.isActive))
         setHub(null)
       } else {
         const response = await api.getContactHub(workspaceId)

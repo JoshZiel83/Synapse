@@ -103,12 +103,12 @@ export default function PluginInstallationWorkbench({
     const load = async () => {
       try {
         setLoadingInstallation(true)
-        const data = await api.getInstallation(
+        const installation = await api.getInstallation(
           workspaceId,
           activeInstallationId
         )
         if (!cancelled) {
-          setSelectedInstallation(data.installation)
+          setSelectedInstallation(installation)
         }
       } finally {
         if (!cancelled) {
@@ -125,8 +125,11 @@ export default function PluginInstallationWorkbench({
 
   const resetSelectedInstallation = async () => {
     if (!workspaceId || !activeInstallationId) return
-    const data = await api.getInstallation(workspaceId, activeInstallationId)
-    setSelectedInstallation(data.installation)
+    const installation = await api.getInstallation(
+      workspaceId,
+      activeInstallationId
+    )
+    setSelectedInstallation(installation)
     setEditorVersion((value) => value + 1)
   }
 
@@ -157,10 +160,9 @@ export default function PluginInstallationWorkbench({
       setRemovingInstallation(true)
       const removedId = selectedInstallation.id as string
       await api.uninstallPlugin(workspaceId, removedId)
-      const remainingInstallations = await api.getInstallations(
-        workspaceId,
-        new URLSearchParams({ pluginId: plugin.id }).toString()
-      )
+      const remainingInstallations = await api.getInstallations(workspaceId, {
+        pluginId: plugin.id,
+      })
 
       if (remainingInstallations.length > 0) {
         onSelectInstallation(remainingInstallations[0].id)

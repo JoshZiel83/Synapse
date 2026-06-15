@@ -19,7 +19,11 @@ import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { ApiError, api } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import type { DeviceDetailView, DeviceView } from "@synapse/shared"
+import type {
+  CreateManualRuntimeAuthorizationGrantInput,
+  DeviceDetailView,
+  DeviceView,
+} from "@synapse/shared"
 
 // Mirrors the maps in @synapse/device-protocol/browser-tools. Duplicated
 // here intentionally so the settings page doesn't pull the whole protocol
@@ -44,6 +48,11 @@ const ALL_BROWSER_OPERATIONS = [
 
 type BrowserOp = (typeof ALL_BROWSER_OPERATIONS)[number]
 type ScopeType = "origin" | "host" | "domain"
+type ManualRuntimeAuthorizationGrantPolicy =
+  CreateManualRuntimeAuthorizationGrantInput["policy"]
+type ManualBrowserPolicy = NonNullable<
+  ManualRuntimeAuthorizationGrantPolicy["browser"]
+>
 
 const WRITE_OPS: ReadonlySet<BrowserOp> = new Set([
   "page.navigate",
@@ -92,7 +101,7 @@ export default function RuntimeAuthorizationsSettingsPage() {
     let cancelled = false
     api
       .listDevices(workspaceId)
-      .then(async ({ devices: deviceList }) => {
+      .then(async (deviceList) => {
         if (cancelled) return
         setDevices(deviceList)
         // Load each device's capabilities so the operator can pick.
@@ -199,7 +208,7 @@ export default function RuntimeAuthorizationsSettingsPage() {
       )
       return
     }
-    const browser: Record<string, unknown> = {
+    const browser: ManualBrowserPolicy = {
       action: derivedAction,
       scopeType,
       operations: [...selectedOps],
@@ -208,12 +217,15 @@ export default function RuntimeAuthorizationsSettingsPage() {
     else if (scopeType === "host") browser.host = scopeValue.trim()
     else if (scopeType === "domain")
       browser.registrableDomain = scopeValue.trim()
-    const policy = { capability: "browser", browser }
+    const policy: ManualRuntimeAuthorizationGrantPolicy = {
+      capability: "browser",
+      browser,
+    }
 
     setSubmitting(true)
     try {
       await api.createManualRuntimeAuthorizationGrant(workspaceId, {
-        device_capability_id: capabilityId,
+        deviceCapabilityId: capabilityId,
         policy,
       })
       setSubmittedMsg(

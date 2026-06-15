@@ -7,13 +7,17 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ArrowLeft, History, Clock } from "lucide-react"
-import { MODEL_GROUP_GRANT_SCOPE, type Timestamp } from "@synapse/shared"
+import {
+  MODEL_GROUP_GRANT_SCOPE,
+  type ProviderKind,
+  type Timestamp,
+} from "@synapse/shared"
 
 interface ConfigVersion {
   id: string
   bindingId: string
   version: number
-  providerKind: string
+  providerKind: ProviderKind
   vendor: string
   baseUrl: string
   modelName: string | null
@@ -47,7 +51,7 @@ export default function ModelItemVersions({
           ? api.getWorkspaceMemberItemVersions(workspaceId!, groupId, itemId)
           : api.getItemVersions(workspaceId!, groupId, itemId)
     request
-      .then((res) => setVersions(res.versions || []))
+      .then((versions) => setVersions(versions))
       .catch((err) => console.error("Failed to load versions:", err))
       .finally(() => setLoading(false))
   }, [workspaceId, groupId, itemId, scope])

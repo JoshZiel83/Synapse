@@ -10,15 +10,16 @@ import {
 } from "@synapse/device-protocol"
 import {
   DeviceDetailViewSchema,
+  DeviceListViewSchema,
   DevicePairingTicketViewSchema,
   DeviceServiceViewSchema,
-  DeviceViewSchema,
   CreateCloudDeviceInputSchema,
   CreateCloudDeviceResultViewSchema,
   StartPairingInputSchema,
   ClaimDaemonServiceInputSchema,
   SetActiveDeviceCapabilitiesInputSchema,
   type DeviceDetailView,
+  type DeviceListView,
   type DevicePairingTicketView,
   type DeviceServiceView,
   type DeviceView,
@@ -90,12 +91,12 @@ export class DeviceSdk {
 
   // ───────────────────────────── lifecycle ───────────────────────────────────
 
-  async listDevices(workspaceId: string): Promise<DeviceView[]> {
+  async listDevices(workspaceId: string): Promise<DeviceListView> {
     const result = await this.request<{ data: unknown[] }>(
       "GET",
       `/api/v1/workspaces/${workspaceId}/devices`
     )
-    return result.data.map((d) => DeviceViewSchema.parse(d))
+    return DeviceListViewSchema.parse(result.data)
   }
 
   async getDevice(
@@ -153,7 +154,9 @@ export class DeviceSdk {
       {
         mode: parsed.mode,
         title: parsed.title,
+        description: parsed.description,
         deviceType: parsed.deviceType,
+        context: parsed.context,
         deviceId: parsed.deviceId,
         requestedPubkeyFingerprint: parsed.requestedPubkeyFingerprint,
         selfChallenge: parsed.selfChallenge,
@@ -239,6 +242,7 @@ export class DeviceSdk {
 // snake_case (from @synapse/device-protocol).
 export type {
   DeviceView,
+  DeviceListView,
   DeviceDetailView,
   DeviceServiceView,
   DevicePairingTicketView,

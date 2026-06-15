@@ -48,8 +48,8 @@ import {
   fileRefBlock,
   type ChatConversationView,
   type ConversationReplyRef,
-  type FileRecordView,
 } from "@shared"
+import type { StoredFileRecordView } from "@shared/schemas"
 
 type AttachmentKind = "image" | "video" | "audio" | "file"
 type AttachmentStatus = "uploading" | "uploaded" | "failed"
@@ -63,7 +63,7 @@ interface LocalAttachment {
   webFile?: Blob | File | null
   progress: number
   status: AttachmentStatus
-  file?: FileRecordView
+  file?: StoredFileRecordView
   errorMessage?: string
 }
 
@@ -79,7 +79,7 @@ function inferAttachmentKind(mimeType: string): AttachmentKind {
 }
 
 function normalizeContentKindToAttachmentKind(
-  contentKind: FileRecordView["contentKind"]
+  contentKind: StoredFileRecordView["contentKind"]
 ): AttachmentKind {
   return contentKind === "document" ? "file" : contentKind
 }
@@ -361,7 +361,7 @@ export function ChatComposer({
       attachments.filter(
         (
           attachment
-        ): attachment is LocalAttachment & { file: FileRecordView } =>
+        ): attachment is LocalAttachment & { file: StoredFileRecordView } =>
           attachment.status === "uploaded" && Boolean(attachment.file)
       ),
     [attachments]

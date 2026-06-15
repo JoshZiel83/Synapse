@@ -20,8 +20,8 @@ import {
   type ConversationEntityRef,
   type ConversationParticipantType,
   type ConversationReplyRef,
-  type FileRecordView,
 } from "@synapse/shared"
+import type { StoredFileRecordView } from "@synapse/shared/schemas"
 import Mention from "@tiptap/extension-mention"
 import Placeholder from "@tiptap/extension-placeholder"
 import StarterKit from "@tiptap/starter-kit"
@@ -87,7 +87,7 @@ type PendingAttachment = {
   file: File
   progress: number
   status: PendingAttachmentStatus
-  uploadedFile?: FileRecordView
+  uploadedFile?: StoredFileRecordView
   errorMessage?: string
 }
 
@@ -1005,8 +1005,9 @@ export default function ChatComposer({
   const uploadedAttachments = attachments.filter(
     (
       attachment
-    ): attachment is PendingAttachment & { uploadedFile: FileRecordView } =>
-      attachment.status === "uploaded" && Boolean(attachment.uploadedFile)
+    ): attachment is PendingAttachment & {
+      uploadedFile: StoredFileRecordView
+    } => attachment.status === "uploaded" && Boolean(attachment.uploadedFile)
   )
   const hasFailedAttachments = attachments.some(
     (attachment) => attachment.status === "failed"
@@ -1107,7 +1108,9 @@ export default function ChatComposer({
   }
 
   function buildAttachmentBlocks(
-    nextAttachments: Array<PendingAttachment & { uploadedFile: FileRecordView }>
+    nextAttachments: Array<
+      PendingAttachment & { uploadedFile: StoredFileRecordView }
+    >
   ) {
     return nextAttachments.map((attachment) => {
       const uploaded = attachment.uploadedFile

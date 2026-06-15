@@ -1380,10 +1380,7 @@ export default function WorkspaceAppAccessStep({
     setLoadingActors(true)
     setActorsError(null)
     try {
-      const actorData = await api.getActors(workspaceId)
-      const nextActors = Array.isArray(actorData)
-        ? actorData
-        : actorData?.actors || []
+      const nextActors = await api.getActors(workspaceId)
       setActors(nextActors)
       setActorsLoaded(true)
       return nextActors

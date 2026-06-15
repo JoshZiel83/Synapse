@@ -26,6 +26,7 @@ import type {
   ChatConversationView,
   ChatSyncEvent,
   ConversationEntityRef,
+  ConversationFeedItemSubtype,
   ConversationParticipantType,
   ServerToolCall,
   ConversationFeedEventPayloadMap,
@@ -42,8 +43,11 @@ import {
   normalizeCanonicalContentBlocks,
   summarizeConversationEvent,
   textBlocks,
+  ACTOR_RUNTIME_HEALTH,
+  CONVERSATION_STATUS,
   CONVERSATION_PARTICIPANT_TYPE,
   CONVERSATION_KIND,
+  CONVERSATION_MESSAGE_SUBTYPE,
 } from "@synapse/shared"
 import {
   clearConversationTombstone,
@@ -84,7 +88,7 @@ export interface ConversationMember {
 
 export interface ConversationSummary {
   id: string
-  status: "active" | "completed" | "failed"
+  status: ChatConversationView["status"] | "failed"
   transportKind?: TransportKind
   participants: ConversationParticipant[]
   members: ConversationMember[]
@@ -112,7 +116,7 @@ export interface FeedMessage {
   sequence: number
   sessionId: string
   role: string
-  messageType?: string
+  messageType?: ConversationFeedItemSubtype
   content: string
   contentBlocks: CanonicalContentBlock[]
   author?: ConversationEntityRef
@@ -832,7 +836,7 @@ function outboxEntryToMessage(
     sequence: entry.optimisticSequence,
     sessionId: "",
     role: "user",
-    messageType: "chat.message",
+    messageType: CONVERSATION_MESSAGE_SUBTYPE.CHAT_MESSAGE,
     content: extractText(entry.contentBlocks),
     contentBlocks: entry.contentBlocks,
     author,
@@ -1043,7 +1047,11 @@ export function runtimePhaseToBadgePhase(
   runtime?: ActorRuntimeState
 ): ThinkingPhase | undefined {
   if (!runtime) return undefined
-  if (runtime.health === "error" || runtime.phase === "error") return "error"
+  if (
+    runtime.health === ACTOR_RUNTIME_HEALTH.ERROR ||
+    runtime.phase === "error"
+  )
+    return "error"
   if (runtime.phase === "tool") return "tool"
   if (runtime.phase === "responding") return "responding"
   if (
@@ -1091,13 +1099,15 @@ function deriveConversationStatus(
   const actorMembers = conversation.members.filter(
     (member) => member.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
   )
-  if (actorMembers.length === 0) return "completed" as const
+  if (actorMembers.length === 0) return CONVERSATION_STATUS.COMPLETED
   const hasOpenLane = actorMembers.some((member) => {
     const runtime = runtimesForConversation?.[member.id]
     const laneState = runtime?.laneState || member.sessionStatus
     return laneState !== "closed"
   })
-  return hasOpenLane ? ("active" as const) : ("completed" as const)
+  return hasOpenLane
+    ? CONVERSATION_STATUS.ACTIVE
+    : CONVERSATION_STATUS.COMPLETED
 }
 
 function applyRuntimeMapToConversation(

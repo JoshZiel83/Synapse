@@ -522,9 +522,7 @@ export function ActorEditPage({ actorId }: { actorId: string }) {
         ])
         if (cancelled) return
         const nextActor = actorResponse as Actor
-        const actorList = Array.isArray(actorsResponse)
-          ? (actorsResponse as Actor[])
-          : []
+        const actorList = actorsResponse
         setActor(nextActor)
         setActors(actorList)
         setForm(buildInitialState(nextActor))

@@ -4,6 +4,7 @@ import {
   RELATIONSHIP_APPROVAL_MODE,
   REMOTE_AGENT_RUNTIME_KIND,
   REMOTE_AGENT_RUNTIME_STATE,
+  type TrustLevel,
 } from "@synapse/shared"
 import Link from "next/link"
 import QRCode from "qrcode"
@@ -14,10 +15,10 @@ import { ArrowLeft, Bot, RefreshCcw, Shield, Trash2 } from "lucide-react"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import type {
   RelationshipProfileView,
-  RemoteAgentGroupTaskGrantView,
-  RemoteAgentMachineView,
+  RemoteAgentGroupTaskGrantsResponseSchemaType,
+  RemoteAgentMachineListResponseSchemaType,
+  RemoteAgentResponseSchemaType,
   RemoteAgentRuntimeSummaryView,
-  RemoteAgentView,
 } from "@/lib/api"
 import { api } from "@/lib/api"
 import { Badge } from "@/components/ui/badge"
@@ -51,6 +52,12 @@ import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
 
+type RemoteAgentDetailView = RemoteAgentResponseSchemaType["remoteAgent"]
+type RemoteAgentMachineListItemView =
+  RemoteAgentMachineListResponseSchemaType["machines"][number]
+type RemoteAgentGroupTaskGrantItemView =
+  RemoteAgentGroupTaskGrantsResponseSchemaType["grants"][number]
+
 function formatDateTime(value?: string) {
   if (!value) return "Never"
   return new Date(value).toLocaleString()
@@ -69,7 +76,7 @@ function approvalModeLabel(value?: RelationshipProfileView["approvalMode"]) {
 function contactApprovalLabel(
   value?:
     | RelationshipProfileView["requiresContactApproval"]
-    | RemoteAgentView["requiresContactApproval"]
+    | RemoteAgentDetailView["requiresContactApproval"]
 ) {
   return value ? "approval required" : "open to workspace"
 }
@@ -114,7 +121,7 @@ type WorkspaceMemberDirectoryEntry = {
   userName?: string
   userEmail?: string
   avatarUrl?: string | null
-  trustLevel?: string
+  trustLevel?: TrustLevel
 }
 
 type AgentDraft = {
@@ -145,11 +152,11 @@ export default function RemoteAgentDetailPage() {
   const [savingProfile, setSavingProfile] = useState(false)
   const [deletingAgent, setDeletingAgent] = useState(false)
   const [savingGrants, setSavingGrants] = useState(false)
-  const [agent, setAgent] = useState<RemoteAgentView | null>(null)
-  const [machines, setMachines] = useState<RemoteAgentMachineView[]>([])
+  const [agent, setAgent] = useState<RemoteAgentDetailView | null>(null)
+  const [machines, setMachines] = useState<RemoteAgentMachineListItemView[]>([])
   const [profile, setProfile] = useState<RelationshipProfileView | null>(null)
   const [groupGrants, setGroupGrants] = useState<
-    RemoteAgentGroupTaskGrantView[]
+    RemoteAgentGroupTaskGrantItemView[]
   >([])
   const [workspaceMembers, setWorkspaceMembers] = useState<
     WorkspaceMemberDirectoryEntry[]
@@ -171,7 +178,7 @@ export default function RemoteAgentDetailPage() {
   const [identityIdDraft, setIdentityIdDraft] = useState("")
   const [identitySearchEnabled, setIdentitySearchEnabled] = useState(false)
 
-  function syncAgentDraft(nextAgent: RemoteAgentView) {
+  function syncAgentDraft(nextAgent: RemoteAgentDetailView) {
     setAgentDraft({
       displayName: nextAgent.displayName,
       title: nextAgent.title,
@@ -230,9 +237,8 @@ export default function RemoteAgentDetailPage() {
         grantsResponse.grants.map((grant) => grant.workspaceMemberId)
       )
       setWorkspaceMembers(
-        Array.isArray((workspaceMembersResponse as any)?.data)
-          ? (((workspaceMembersResponse as any).data ||
-              []) as WorkspaceMemberDirectoryEntry[])
+        Array.isArray(workspaceMembersResponse)
+          ? (workspaceMembersResponse as WorkspaceMemberDirectoryEntry[])
           : []
       )
       syncAgentDraft(agentResponse.remoteAgent)

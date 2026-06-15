@@ -5,7 +5,9 @@ import Image from "next/image"
 import type {
   CurrentUserWeixinBindingSummary,
   WeixinQrLoginSessionSummary,
+  WeixinQrLoginStatus,
 } from "@synapse/shared"
+import { WEIXIN_QR_LOGIN_STATUS } from "@synapse/shared"
 import { Loader2 } from "lucide-react"
 
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
@@ -32,6 +34,17 @@ import { toast } from "sonner"
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback
+}
+
+const WEIXIN_QR_POLLING_STATUSES = new Set<WeixinQrLoginStatus>([
+  WEIXIN_QR_LOGIN_STATUS.WAITING,
+  WEIXIN_QR_LOGIN_STATUS.SCANNED,
+])
+
+function isWeixinQrPollingStatus(
+  status: WeixinQrLoginStatus | null | undefined
+) {
+  return status != null && WEIXIN_QR_POLLING_STATUSES.has(status)
 }
 
 function WechatIcon({ className }: { className?: string }) {
@@ -167,7 +180,7 @@ export function SidebarWeixinBinding() {
       !dialogOpen ||
       !workspaceId ||
       !session ||
-      !["waiting", "scanned"].includes(session.status)
+      !isWeixinQrPollingStatus(session.status)
     ) {
       return
     }
@@ -190,7 +203,7 @@ export function SidebarWeixinBinding() {
         const nextSession = result?.session || null
         setSession(nextSession)
 
-        if (nextSession?.status === "confirmed") {
+        if (nextSession?.status === WEIXIN_QR_LOGIN_STATUS.CONFIRMED) {
           const bindingResult =
             await api.getCurrentUserWeixinBinding(activeWorkspaceId)
           if (!cancelled) {
@@ -200,7 +213,10 @@ export function SidebarWeixinBinding() {
           return
         }
 
-        if (["expired", "error"].includes(nextSession?.status || "")) {
+        if (
+          nextSession?.status === WEIXIN_QR_LOGIN_STATUS.EXPIRED ||
+          nextSession?.status === WEIXIN_QR_LOGIN_STATUS.ERROR
+        ) {
           return
         }
       } catch (pollError) {
@@ -357,18 +373,18 @@ export function SidebarWeixinBinding() {
           <DialogHeader>
             <DialogTitle>Connect Wechat</DialogTitle>
             {starting ||
-            session?.status === "scanned" ||
-            session?.status === "confirmed" ||
-            session?.status === "expired" ||
-            session?.status === "error" ? (
+            session?.status === WEIXIN_QR_LOGIN_STATUS.SCANNED ||
+            session?.status === WEIXIN_QR_LOGIN_STATUS.CONFIRMED ||
+            session?.status === WEIXIN_QR_LOGIN_STATUS.EXPIRED ||
+            session?.status === WEIXIN_QR_LOGIN_STATUS.ERROR ? (
               <DialogDescription>
                 {starting
                   ? "Preparing QR..."
-                  : session?.status === "scanned"
+                  : session?.status === WEIXIN_QR_LOGIN_STATUS.SCANNED
                     ? "Confirm on your phone."
-                    : session?.status === "confirmed"
+                    : session?.status === WEIXIN_QR_LOGIN_STATUS.CONFIRMED
                       ? "Choose how to use it."
-                      : session?.status === "expired"
+                      : session?.status === WEIXIN_QR_LOGIN_STATUS.EXPIRED
                         ? "QR expired."
                         : "Connect failed."}
               </DialogDescription>
@@ -381,9 +397,7 @@ export function SidebarWeixinBinding() {
             </div>
           ) : null}
 
-          {!starting &&
-          session &&
-          ["waiting", "scanned"].includes(session.status) ? (
+          {!starting && session && isWeixinQrPollingStatus(session.status) ? (
             <div className="space-y-3">
               {qrImageUrl ? (
                 <div className="relative mx-auto w-full max-w-72">
@@ -407,7 +421,7 @@ export function SidebarWeixinBinding() {
                 </div>
               )}
 
-              {session.status === "scanned" ? (
+              {session.status === WEIXIN_QR_LOGIN_STATUS.SCANNED ? (
                 <div className="rounded-2xl border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
                   Confirm on your phone.
                 </div>
@@ -415,7 +429,7 @@ export function SidebarWeixinBinding() {
             </div>
           ) : null}
 
-          {session?.status === "confirmed" ? (
+          {session?.status === WEIXIN_QR_LOGIN_STATUS.CONFIRMED ? (
             <RadioGroup
               value={selectedUsage}
               onValueChange={(value) =>
@@ -461,7 +475,7 @@ export function SidebarWeixinBinding() {
           ) : null}
 
           <DialogFooter>
-            {session?.status === "confirmed" ? (
+            {session?.status === WEIXIN_QR_LOGIN_STATUS.CONFIRMED ? (
               <>
                 <Button
                   type="button"
@@ -489,7 +503,8 @@ export function SidebarWeixinBinding() {
                   )}
                 </Button>
               </>
-            ) : session?.status === "expired" || session?.status === "error" ? (
+            ) : session?.status === WEIXIN_QR_LOGIN_STATUS.EXPIRED ||
+              session?.status === WEIXIN_QR_LOGIN_STATUS.ERROR ? (
               <>
                 <Button
                   type="button"

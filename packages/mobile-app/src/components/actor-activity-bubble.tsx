@@ -6,6 +6,7 @@ import { api } from "@/lib/api"
 import { Avatar } from "@/components/ui"
 import { theme } from "@/theme/tokens"
 import {
+  ACTOR_RUNTIME_HEALTH,
   getActorRuntimeCurrentTool,
   getActorRuntimeProcessingTargets,
   isActorRuntimeActive,
@@ -81,7 +82,11 @@ function getToolStateColor(state: string) {
 }
 
 function getAvatarStatus(runtime: ActorRuntimeState) {
-  if (runtime.health === "error" || runtime.phase === "error") return "error"
+  if (
+    runtime.health === ACTOR_RUNTIME_HEALTH.ERROR ||
+    runtime.phase === "error"
+  )
+    return "error"
   if (runtime.phase === "tool") return "tool"
   if (runtime.phase === "responding") return "responding"
   if (isActorRuntimeActive(runtime)) {

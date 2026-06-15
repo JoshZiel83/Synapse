@@ -2,6 +2,7 @@
 
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
+import type { AuditLogListQuery, AuditLogView } from "@synapse/shared/schemas"
 import { useWorkspace } from "../workspace-provider"
 import { api } from "@/lib/api"
 import { qk } from "@/lib/query-keys"
@@ -31,19 +32,7 @@ import {
   ChevronDown,
 } from "lucide-react"
 
-interface AuditLog {
-  id: string
-  action: string
-  userId?: string
-  userName?: string
-  actorId?: string
-  actorName?: string
-  resourceType?: string
-  resourceId?: string
-  details?: any
-  ipAddress?: string
-  createdAt?: import("@synapse/shared").Timestamp
-}
+type AuditLog = AuditLogView
 
 function getActionBadge(action: string) {
   const actionLower = action?.toLowerCase() || ""
@@ -95,6 +84,11 @@ function formatFullTime(dateStr: string) {
   })
 }
 
+function formatDetails(details: unknown): string {
+  if (typeof details === "string") return details
+  return JSON.stringify(details, null, 2) ?? String(details)
+}
+
 function DetailRow({
   label,
   children,
@@ -119,27 +113,23 @@ export default function AuditPage() {
   const [selected, setSelected] = useState<AuditLog | null>(null)
   const pageSize = 20
 
-  const params = `page=${page}&pageSize=${pageSize}${actionFilter !== "all" ? `&action=${actionFilter}` : ""}`
+  const auditListQuery: AuditLogListQuery = {
+    page,
+    pageSize,
+    ...(actionFilter !== "all" ? { action: actionFilter } : {}),
+  }
 
   const auditQuery = useQuery({
     queryKey: workspaceId
-      ? qk.auditLogs(workspaceId, params)
+      ? qk.auditLogs(workspaceId, auditListQuery)
       : ["audit-logs", "disabled"],
-    queryFn: () => api.getAuditLogs(workspaceId!, params),
+    queryFn: () => api.getAuditLogs(workspaceId!, auditListQuery),
     enabled: !!workspaceId,
   })
 
-  const data = auditQuery.data as
-    | {
-        items: AuditLog[]
-        total?: number
-        totalPages?: number
-      }
-    | undefined
+  const data = auditQuery.data
   const logs: AuditLog[] = data?.items ?? []
-  const totalPages = data?.total
-    ? Math.ceil(data.total / pageSize)
-    : (data?.totalPages ?? 1)
+  const totalPages = data?.total ? Math.ceil(data.total / pageSize) : 1
   const loading = auditQuery.isPending && !!workspaceId
   const loadLogs = () => auditQuery.refetch()
 
@@ -435,12 +425,10 @@ export default function AuditPage() {
               </DetailRow>
 
               {/* Details JSON */}
-              {selected.details && (
+              {selected.details != null && (
                 <DetailRow label="Details">
                   <pre className="max-h-48 overflow-x-auto rounded-lg border border-border/30 bg-muted/20 p-3 font-mono text-xs break-all whitespace-pre-wrap">
-                    {typeof selected.details === "string"
-                      ? selected.details
-                      : JSON.stringify(selected.details, null, 2)}
+                    {formatDetails(selected.details)}
                   </pre>
                 </DetailRow>
               )}

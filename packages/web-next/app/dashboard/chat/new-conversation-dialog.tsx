@@ -98,8 +98,8 @@ export default function NewConversationDialog({
     if (!open || !workspaceId) return
     ;(async () => {
       try {
-        const data = await api.getActors(workspaceId)
-        const list: Actor[] = (data?.actors || data || []).map(normalizeActor)
+        const actors = await api.getActors(workspaceId)
+        const list: Actor[] = actors.map(normalizeActor)
         list.sort((a, b) => a.displayName.localeCompare(b.displayName))
         setActors(list)
 

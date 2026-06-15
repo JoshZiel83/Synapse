@@ -9,6 +9,10 @@ import {
   type MemoryItemState,
   type SubjectRef,
 } from "@synapse/shared"
+import type {
+  CreateMemoryInputBody,
+  MoveMemoryInput,
+} from "@synapse/shared/schemas"
 import {
   Bot,
   Building2,
@@ -249,7 +253,7 @@ export function serializeEditorState(editor: EditorState | null) {
  * shim (preset + presetActorId/...) so the controller's preset translator
  * synthesizes the right (owner, scope) tuple server-side.
  */
-export function buildMemoryPayload(editor: EditorState) {
+export function buildMemoryPayload(editor: EditorState): CreateMemoryInputBody {
   return {
     preset: editor.spaceType,
     presetActorId:
@@ -361,11 +365,7 @@ export function buildMemoryMovePayloadFromPreset(
   preset: MemoryFolderPreset,
   currentWorkspaceMemberId: string,
   workspaceId: string
-): {
-  owner: { kind: string; [k: string]: unknown }
-  scope?: { kind: string; [k: string]: unknown }
-  namespaceKey?: string
-} | null {
+): MoveMemoryInput | null {
   switch (preset.spaceType) {
     case "workspace_shared":
       return { owner: { kind: "workspace", workspaceId } }

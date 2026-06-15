@@ -47,7 +47,7 @@ export default function PluginInstallPage() {
         ])
         if (cancelled) return
         setPlugin(pluginData)
-        setInstallation(installationData?.installation || null)
+        setInstallation(installationData || null)
       } finally {
         if (!cancelled) setLoading(false)
       }

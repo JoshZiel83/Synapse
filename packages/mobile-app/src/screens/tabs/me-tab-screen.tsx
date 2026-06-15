@@ -18,7 +18,7 @@ import { getApiBaseForDisplay } from "@/lib/config"
 import { useSession } from "@/providers/session-provider"
 import { useWorkspace } from "@/providers/workspace-provider"
 import { theme } from "@/theme/tokens"
-import type { FriendIdProfileView } from "@/types/api"
+import type { RelationshipProfileView } from "@/types/api"
 
 export default function MeTabScreen() {
   const { user, signOut, updateProfile } = useSession()
@@ -33,7 +33,7 @@ export default function MeTabScreen() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [friendIdProfile, setFriendIdProfile] =
-    useState<FriendIdProfileView | null>(null)
+    useState<RelationshipProfileView | null>(null)
   const [friendIdDraft, setFriendIdDraft] = useState("")
   const [friendIdSaving, setFriendIdSaving] = useState(false)
   const [friendIdMessage, setFriendIdMessage] = useState<string | null>(null)
@@ -51,11 +51,11 @@ export default function MeTabScreen() {
 
     let active = true
     void api
-      .getMyFriendIdProfile(workspaceId)
+      .getMyRelationshipProfile(workspaceId)
       .then((profile) => {
         if (!active) return
         setFriendIdProfile(profile)
-        setFriendIdDraft(profile.friendId)
+        setFriendIdDraft(profile.identityId)
       })
       .catch(() => {
         if (!active) return
@@ -88,18 +88,19 @@ export default function MeTabScreen() {
   }
 
   async function handleSaveFriendId() {
-    if (!workspaceId) return
+    if (!workspaceId || !friendIdProfile) return
 
     setFriendIdSaving(true)
     setFriendIdMessage(null)
     try {
-      const nextProfile = await api.updateMyFriendIdProfile(workspaceId, {
-        friendId: friendIdDraft,
-        searchByIdEnabled: friendIdProfile?.searchByIdEnabled,
+      const nextProfile = await api.updateMyRelationshipProfile(workspaceId, {
+        approvalMode: friendIdProfile.approvalMode,
+        identityId: friendIdDraft,
+        identitySearchEnabled: friendIdProfile.identitySearchEnabled,
       })
       setFriendIdProfile(nextProfile)
-      setFriendIdDraft(nextProfile.friendId)
-      setFriendIdMessage(`好友 ID 已更新为 ${nextProfile.friendId}`)
+      setFriendIdDraft(nextProfile.identityId)
+      setFriendIdMessage(`好友 ID 已更新为 ${nextProfile.identityId}`)
     } catch (nextError) {
       setFriendIdMessage(
         nextError instanceof Error ? nextError.message : "保存好友 ID 失败。"
@@ -115,14 +116,15 @@ export default function MeTabScreen() {
     setFriendIdSaving(true)
     setFriendIdMessage(null)
     try {
-      const nextProfile = await api.updateMyFriendIdProfile(workspaceId, {
-        friendId: friendIdProfile.friendId,
-        searchByIdEnabled: !friendIdProfile.searchByIdEnabled,
+      const nextProfile = await api.updateMyRelationshipProfile(workspaceId, {
+        approvalMode: friendIdProfile.approvalMode,
+        identityId: friendIdProfile.identityId,
+        identitySearchEnabled: !friendIdProfile.identitySearchEnabled,
       })
       setFriendIdProfile(nextProfile)
-      setFriendIdDraft(nextProfile.friendId)
+      setFriendIdDraft(nextProfile.identityId)
       setFriendIdMessage(
-        nextProfile.searchByIdEnabled
+        nextProfile.identitySearchEnabled
           ? "已开启通过好友 ID 搜索。"
           : "已关闭通过好友 ID 搜索。"
       )
@@ -192,12 +194,16 @@ export default function MeTabScreen() {
             icon="save"
             variant="secondary"
             onPress={() => void handleSaveFriendId()}
-            disabled={friendIdSaving || !friendIdDraft.trim()}
+            disabled={
+              friendIdSaving || !friendIdProfile || !friendIdDraft.trim()
+            }
             style={styles.friendIdButton}
           />
           <Button
-            label={friendIdProfile?.searchByIdEnabled ? "关闭搜索" : "开启搜索"}
-            icon={friendIdProfile?.searchByIdEnabled ? "eye-off" : "eye"}
+            label={
+              friendIdProfile?.identitySearchEnabled ? "关闭搜索" : "开启搜索"
+            }
+            icon={friendIdProfile?.identitySearchEnabled ? "eye-off" : "eye"}
             variant="secondary"
             onPress={() => void handleToggleFriendIdSearch()}
             disabled={friendIdSaving || !friendIdProfile}

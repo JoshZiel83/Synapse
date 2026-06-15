@@ -52,7 +52,6 @@ import {
   createIntegrationEventSources,
   listIntegrationEventDefinitionOptions,
   listIntegrationInstallations,
-  type IntegrationInstallationView,
 } from "@/lib/integration-event-sources"
 import { cn } from "@/lib/utils"
 
@@ -219,7 +218,7 @@ export default function EventSourcesPage() {
       return {
         sources: nextSources,
         installations: Array.isArray(nextInstallations)
-          ? (nextInstallations as IntegrationInstallationView[])
+          ? nextInstallations
           : [],
       }
     },

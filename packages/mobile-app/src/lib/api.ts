@@ -1,5 +1,6 @@
 import { FILE_ORIGIN_SYSTEMS, isChatTaskResolveConflictResponse } from "@shared"
 import type {
+  Actor,
   ActorRuntimeTurnActivityDetail,
   CanonicalContentBlock,
   ChatBootstrapResponse,
@@ -18,6 +19,11 @@ import type {
   ChatTaskResolvePayload,
   ChatTaskResolveResponse,
   ChatSyncResponse,
+  AuthMeView,
+  RelationshipProfileView,
+  UpdateMemberRelationshipProfileInput,
+  WorkspaceCreateResultView,
+  WorkspaceListView,
   TaskSummary,
   Timestamp,
 } from "@shared"
@@ -26,22 +32,26 @@ import { Platform } from "react-native"
 import { getApiBase, resolveApiUrl } from "@/lib/config"
 import type {
   ActorAccessRequestListResponse,
-  ActorListResponse,
-  AuthMeResponse,
   ContactHubDetailResponse,
   ContactHubEntryView,
   ContactHubResponse,
   DirectConversationOpenResponse,
-  FriendIdProfileView,
   IdentitySearchResponse,
   FriendRequestListResponse,
   RelationshipScanResponse,
   UploadAssetInput,
   WorkspaceChiefActorPreference,
-  WorkspaceInfo,
-  WorkspaceListResponse,
 } from "@/types/api"
 import type { FileRecordView, UpdateMeInput } from "@shared"
+import type {
+  FileUploadOriginInput,
+  WorkspaceChiefActorPreferenceInput,
+  WorkspaceCreateInput,
+} from "@shared/schemas"
+import {
+  StoredFileRecordViewSchema,
+  type StoredFileRecordView,
+} from "@shared/schemas"
 
 let authToken: string | null = null
 let unauthorizedHandler: (() => void | Promise<void>) | null = null
@@ -69,6 +79,13 @@ export class ApiError extends Error {
     this.code = code
     this.details = details
   }
+}
+
+function parseFileUploadResponseData(value: unknown): StoredFileRecordView {
+  if (!value || typeof value !== "object" || !("data" in value)) {
+    throw new Error("Malformed upload response")
+  }
+  return StoredFileRecordViewSchema.parse((value as { data: unknown }).data)
 }
 
 interface UploadAssetOptions {
@@ -109,39 +126,6 @@ function parseErrorMessage(data: unknown, fallback: string) {
   }
 
   return fallback
-}
-
-function asArray<T>(value: unknown): T[] {
-  return Array.isArray(value) ? (value as T[]) : []
-}
-
-function normalizeWorkspaceListResponse(data: unknown): WorkspaceListResponse {
-  if (Array.isArray(data)) {
-    return { data }
-  }
-
-  if (data && typeof data === "object") {
-    return {
-      data: asArray((data as { data?: unknown }).data),
-    }
-  }
-
-  return { data: [] }
-}
-
-function normalizeActorListResponse(data: unknown): ActorListResponse {
-  if (Array.isArray(data)) {
-    return { actors: data }
-  }
-
-  if (data && typeof data === "object") {
-    const objectData = data as { actors?: unknown; data?: unknown }
-    return {
-      actors: asArray(objectData.actors ?? objectData.data),
-    }
-  }
-
-  return { actors: [] }
 }
 
 class ApiClient {
@@ -194,70 +178,73 @@ class ApiClient {
     return data as T
   }
 
-  async getMe(): Promise<AuthMeResponse> {
+  async getMe(): Promise<AuthMeView> {
     // API returns the app-facing envelope { data: { user, session } }
     // (sendData + AuthMeViewSchema). Unwrap so callers keep the { user, session }
     // shape, matching web (packages/web-next/lib/api.ts getMe).
-    const res = await this.request<{ data: AuthMeResponse }>("/auth/me")
+    const res = await this.request<{ data: AuthMeView }>("/auth/me")
     return res.data
   }
 
   async updateMe(data: UpdateMeInput) {
-    const res = await this.request<{ data: AuthMeResponse }>("/auth/me", {
+    const res = await this.request<{ data: AuthMeView }>("/auth/me", {
       method: "PUT",
       body: JSON.stringify(data),
     })
     return res.data
   }
 
-  getWorkspaces(): Promise<WorkspaceListResponse> {
-    return this.request<unknown>("/workspaces").then(
-      normalizeWorkspaceListResponse
-    )
+  async getWorkspaces(): Promise<WorkspaceListView> {
+    const res = await this.request<{ data: WorkspaceListView }>("/workspaces")
+    return res.data
   }
 
   async createWorkspace(
     name: string,
     description?: string
-  ): Promise<WorkspaceInfo> {
+  ): Promise<WorkspaceCreateResultView> {
+    const body: WorkspaceCreateInput =
+      description === undefined ? { name } : { name, description }
     // App-facing create returns the `{ data }` envelope (appRoute + sendData).
-    // Unwrap so callers keep the bare WorkspaceInfo shape (e.g. `workspace.id`).
-    const res = await this.request<{ data: WorkspaceInfo }>("/workspaces", {
-      method: "POST",
-      body: JSON.stringify({
-        name,
-        description,
-      }),
-    })
+    // Unwrap so callers keep the bare create-result payload (e.g. `workspace.id`).
+    const res = await this.request<{ data: WorkspaceCreateResultView }>(
+      "/workspaces",
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      }
+    )
     return res.data
   }
 
-  getActors(workspaceId: string): Promise<ActorListResponse> {
-    return this.request<unknown>(`/workspaces/${workspaceId}/actors`).then(
-      normalizeActorListResponse
+  async getActors(workspaceId: string): Promise<Actor[]> {
+    const res = await this.request<{ data: Actor[] }>(
+      `/workspaces/${workspaceId}/actors`
     )
+    return res.data
   }
 
-  getMyFriendIdProfile(workspaceId: string): Promise<FriendIdProfileView> {
-    return this.request<FriendIdProfileView>(
-      `/workspaces/${workspaceId}/me/friend-id`
+  async getMyRelationshipProfile(
+    workspaceId: string
+  ): Promise<RelationshipProfileView> {
+    const res = await this.request<{ data: RelationshipProfileView }>(
+      `/workspaces/${workspaceId}/me/relationship-profile`
     )
+    return res.data
   }
 
-  updateMyFriendIdProfile(
+  async updateMyRelationshipProfile(
     workspaceId: string,
-    input: {
-      friendId?: string
-      searchByIdEnabled?: boolean
-    }
-  ): Promise<FriendIdProfileView> {
-    return this.request<FriendIdProfileView>(
-      `/workspaces/${workspaceId}/me/friend-id`,
+    input: UpdateMemberRelationshipProfileInput
+  ): Promise<RelationshipProfileView> {
+    const res = await this.request<{ data: RelationshipProfileView }>(
+      `/workspaces/${workspaceId}/me/relationship-profile`,
       {
         method: "PUT",
         body: JSON.stringify(input),
       }
     )
+    return res.data
   }
 
   scanRelationshipQr(
@@ -388,7 +375,7 @@ class ApiClient {
 
   async updateWorkspaceChiefActorPreference(
     workspaceId: string,
-    data: { chiefActorId: string | null }
+    data: WorkspaceChiefActorPreferenceInput
   ): Promise<WorkspaceChiefActorPreference> {
     const res = await this.request<{ data: WorkspaceChiefActorPreference }>(
       `/workspaces/${workspaceId}/preferences/chief-actor`,
@@ -638,7 +625,7 @@ class ApiClient {
     workspaceId: string,
     asset: UploadAssetInput,
     options?: UploadAssetOptions
-  ): Promise<FileRecordView> {
+  ): Promise<StoredFileRecordView> {
     const formData = new FormData()
     if (Platform.OS === "web") {
       let fileBody: Blob | File | null = asset.file ?? null
@@ -659,13 +646,11 @@ class ApiClient {
       } as never)
     }
 
-    formData.append(
-      "origin",
-      JSON.stringify({
-        family: "user_upload",
-        system: FILE_ORIGIN_SYSTEMS.WORKSPACE_MOBILE_UPLOAD,
-      })
-    )
+    const origin: FileUploadOriginInput = {
+      family: "user_upload",
+      system: FILE_ORIGIN_SYSTEMS.WORKSPACE_MOBILE_UPLOAD,
+    }
+    formData.append("origin", JSON.stringify(origin))
 
     const headers = new Headers()
     const authHeaders = getAuthHeaders()
@@ -675,7 +660,7 @@ class ApiClient {
       )
     }
 
-    return new Promise<FileRecordView>((resolve, reject) => {
+    return new Promise<StoredFileRecordView>((resolve, reject) => {
       const xhr = new XMLHttpRequest()
       let settled = false
       let removeAbortListener: (() => void) | null = null
@@ -695,7 +680,7 @@ class ApiClient {
         reject(error)
       }
 
-      function succeed(value: FileRecordView) {
+      function succeed(value: StoredFileRecordView) {
         if (settled) {
           return
         }
@@ -740,7 +725,20 @@ class ApiClient {
         }
 
         // §5.3 APP route: upload returns the { data } envelope.
-        succeed((data as { data: FileRecordView }).data)
+        try {
+          succeed(parseFileUploadResponseData(data))
+        } catch (error) {
+          fail(
+            new ApiError(
+              error instanceof Error
+                ? error.message
+                : "Malformed upload response",
+              xhr.status || 500,
+              undefined,
+              data
+            )
+          )
+        }
       }
 
       xhr.onerror = () => {

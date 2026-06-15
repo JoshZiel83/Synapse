@@ -164,11 +164,15 @@ test("startPairing SENDS camelCase body + PARSES the camelCase ticket view", asy
   const ticket = await sdk.startPairing({
     workspaceId: wsId,
     mode: "service_join",
+    description: "Join remote agent daemon",
     deviceType: "desktop_computer",
+    context: { serviceKind: "remote_agent_daemon" },
     deviceId,
   })
   const body = captured[0]?.body as Record<string, unknown>
+  assert.equal(body.description, "Join remote agent daemon")
   assert.equal(body.deviceType, "desktop_computer")
+  assert.deepEqual(body.context, { serviceKind: "remote_agent_daemon" })
   assert.equal(body.deviceId, deviceId)
   assert.ok(!("device_type" in body), "must not send snake device_type")
   assert.ok(!("device_id" in body), "must not send snake device_id")

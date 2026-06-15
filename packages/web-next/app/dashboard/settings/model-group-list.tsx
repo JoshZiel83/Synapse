@@ -65,14 +65,11 @@ export default function ModelGroupList({
       let nextGroups: ModelGroup[] = []
 
       if (scope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
-        const response = await api.getPlatformModelGroups()
-        nextGroups = response.groups || []
+        nextGroups = await api.getPlatformModelGroups()
       } else if (scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
-        const response = await api.getWorkspaceMemberModelGroups(workspaceId!)
-        nextGroups = response.groups || []
+        nextGroups = await api.getWorkspaceMemberModelGroups(workspaceId!)
       } else {
-        const response = await api.getModelGroups(workspaceId!)
-        nextGroups = response.groups || []
+        nextGroups = await api.getModelGroups(workspaceId!)
       }
 
       if (scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE) {

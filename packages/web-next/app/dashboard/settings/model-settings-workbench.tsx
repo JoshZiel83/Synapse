@@ -3,18 +3,23 @@
 import { useDeferredValue, useEffect, useMemo, useState } from "react"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import {
+  MODEL_API_STYLE,
   MODEL_GROUP_GRANT_SCOPE,
   MODEL_GROUP_GRANT_STATUS,
   MODEL_GROUP_OWNER_TYPE,
+  MODEL_SERVER_TOOL,
   getDefaultModelBaseUrl,
   getDefaultModelName,
   getProviderKindForVendor,
   listModelVendorDefinitions,
   vendorSupportsServerTools,
+  type ModelApiStyle,
   type ModelGroupGrantScope,
   type ModelGroupGrantStatus,
   type ModelGroupOwnerType,
   type ModelGroupRoutingStrategy,
+  type ModelServerTool,
+  type ProviderKind,
   type Timestamp,
 } from "@synapse/shared"
 import {
@@ -74,6 +79,14 @@ import {
   resolveModelGroupScope,
   type ModelGroupScope,
 } from "./model-group-shared"
+import type {
+  ActorModelGroupSetInput,
+  ModelBindingFeaturesInput,
+  ModelGroupGrantIssueInput,
+  ModelGroupItemCreateInput,
+  ModelGroupItemUpdateInput,
+  ModelGroupUpdateInput,
+} from "@synapse/shared/schemas"
 
 type GrantScope = ModelGroupGrantScope
 
@@ -115,7 +128,7 @@ type ModelItem = {
   weight: number
   isEnabled: boolean
   version: number | null
-  providerKind: string
+  providerKind: ProviderKind
   vendor: string | null
   baseUrl: string | null
   modelName: string | null
@@ -161,36 +174,42 @@ type ConfigDraft = {
   priority: string
   weight: string
   isEnabled: boolean
-  apiStyle: "chat" | "responses"
-  serverTools: string[]
-  multimodalTypes: string[]
+  apiStyle: ModelApiStyle
+  serverTools: ModelServerTool[]
+  multimodalTypes: NonNullable<
+    NonNullable<ModelBindingFeaturesInput["multimodal"]>["types"]
+  >
   crossTurnToolHistory: boolean
   providerOptionsText: string
 }
 
 const SERVER_TOOLS = [
-  { key: "web_search", label: "Web Search" },
-  { key: "web_fetch", label: "Web Fetch" },
-]
+  { key: MODEL_SERVER_TOOL.WEB_SEARCH, label: "Web Search" },
+  { key: MODEL_SERVER_TOOL.WEB_FETCH, label: "Web Fetch" },
+] as const
 
 const MULTIMODAL_TYPES = [
   { key: "image", label: "Images" },
   { key: "audio", label: "Audio" },
   { key: "video", label: "Video" },
   { key: "document", label: "Documents" },
-]
+] as const
 
 const VENDOR_OPTIONS = listModelVendorDefinitions()
 const DEFAULT_VENDOR = VENDOR_OPTIONS[0]?.vendor || "anthropic"
 const API_STYLE_OPTIONS = [
-  { value: "chat", label: "Chat Completions" },
-  { value: "responses", label: "Responses API" },
+  { value: MODEL_API_STYLE.CHAT, label: "Chat Completions" },
+  { value: MODEL_API_STYLE.RESPONSES, label: "Responses API" },
 ] as const
 
 function createDraft(item?: ModelItem | null): ConfigDraft {
   const features = (item?.features || {}) as Record<string, any>
   const multimodal = features.multimodal || {}
   const vendor = item?.vendor || DEFAULT_VENDOR
+  const serverTools = new Set<ModelServerTool>(
+    SERVER_TOOLS.map((tool) => tool.key)
+  )
+  const multimodalTypes = new Set(MULTIMODAL_TYPES.map((type) => type.key))
 
   return {
     displayName: item?.displayName || "",
@@ -202,13 +221,30 @@ function createDraft(item?: ModelItem | null): ConfigDraft {
     priority: String(item?.priority ?? 0),
     weight: String(item?.weight ?? 100),
     isEnabled: item ? Boolean(item.isEnabled) : true,
-    apiStyle: features.apiStyle === "responses" ? "responses" : "chat",
+    apiStyle:
+      features.apiStyle === MODEL_API_STYLE.RESPONSES
+        ? MODEL_API_STYLE.RESPONSES
+        : MODEL_API_STYLE.CHAT,
     serverTools: Array.isArray(features.serverTools)
-      ? features.serverTools
+      ? features.serverTools.filter(
+          (value: unknown): value is ModelServerTool =>
+            typeof value === "string" &&
+            serverTools.has(value as ModelServerTool)
+        )
       : [],
     multimodalTypes:
       multimodal.supported && Array.isArray(multimodal.types)
-        ? multimodal.types
+        ? multimodal.types.filter(
+            (
+              value: unknown
+            ): value is NonNullable<
+              NonNullable<ModelBindingFeaturesInput["multimodal"]>["types"]
+            >[number] =>
+              typeof value === "string" &&
+              multimodalTypes.has(
+                value as (typeof MULTIMODAL_TYPES)[number]["key"]
+              )
+          )
         : [],
     crossTurnToolHistory: Boolean(features.crossTurnToolHistory),
     providerOptionsText:
@@ -223,18 +259,16 @@ async function fetchGroupsForScope(
   workspaceId: string | null
 ) {
   if (scope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
-    const response = await api.getPlatformModelGroups()
-    return (response.groups || []) as ModelGroupSummary[]
+    return api.getPlatformModelGroups()
   }
   if (scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
-    const response = await api.getWorkspaceMemberModelGroups(workspaceId!)
-    return (response.groups || []) as ModelGroupSummary[]
+    return api.getWorkspaceMemberModelGroups(workspaceId!)
   }
   if (!workspaceId) {
     return []
   }
-  const response = await api.getModelGroups(workspaceId)
-  return ((response.groups || []) as ModelGroupSummary[]).filter(
+  const groups = await api.getModelGroups(workspaceId)
+  return groups.filter(
     (group) =>
       resolveModelGroupScope(group) === MODEL_GROUP_OWNER_TYPE.WORKSPACE
   )
@@ -261,7 +295,7 @@ async function updateGroupForScope(
   scope: ModelGroupScope,
   groupId: string,
   workspaceId: string | null,
-  data: Record<string, unknown>
+  data: ModelGroupUpdateInput
 ) {
   if (scope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
     return api.updatePlatformModelGroup(groupId, data)
@@ -279,7 +313,7 @@ async function issueGrantForGroup(
   scope: ModelGroupScope,
   groupId: string,
   workspaceId: string | null,
-  data: Record<string, unknown>
+  data: ModelGroupGrantIssueInput
 ) {
   if (scope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
     return api.issuePlatformModelGroupGrant(groupId, data)
@@ -320,36 +354,38 @@ async function saveItemForGroup(
   groupId: string,
   workspaceId: string | null,
   itemId: string | null,
-  payload: Record<string, unknown>
+  payload: ModelGroupItemCreateInput | ModelGroupItemUpdateInput
 ) {
   if (itemId) {
+    const updatePayload = payload as ModelGroupItemUpdateInput
     if (scope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
-      return api.updatePlatformModelItem(groupId, itemId, payload)
+      return api.updatePlatformModelItem(groupId, itemId, updatePayload)
     }
     if (scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
       return api.updateWorkspaceMemberModelItem(
         workspaceId!,
         groupId,
         itemId,
-        payload
+        updatePayload
       )
     }
     if (!workspaceId) {
       throw new Error("Workspace is required")
     }
-    return api.updateModelItem(workspaceId, groupId, itemId, payload)
+    return api.updateModelItem(workspaceId, groupId, itemId, updatePayload)
   }
 
+  const createPayload = payload as ModelGroupItemCreateInput
   if (scope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
-    return api.addPlatformModelItem(groupId, payload)
+    return api.addPlatformModelItem(groupId, createPayload)
   }
   if (scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
-    return api.addWorkspaceMemberModelItem(workspaceId!, groupId, payload)
+    return api.addWorkspaceMemberModelItem(workspaceId!, groupId, createPayload)
   }
   if (!workspaceId) {
     throw new Error("Workspace is required")
   }
-  return api.addModelItem(workspaceId, groupId, payload)
+  return api.addModelItem(workspaceId, groupId, createPayload)
 }
 
 async function deleteItemForGroup(
@@ -428,7 +464,7 @@ function GrantDialog({
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onSubmit: (payload: Record<string, unknown>) => Promise<void>
+  onSubmit: (payload: ModelGroupGrantIssueInput) => Promise<void>
   groupScope: ModelGroupScope
   workspaces: Array<{ id: string; name: string }>
   members: WorkspaceMember[]
@@ -840,7 +876,9 @@ function ConfigEditor({
                   onChange({
                     ...draft,
                     apiStyle:
-                      event.target.value === "responses" ? "responses" : "chat",
+                      event.target.value === MODEL_API_STYLE.RESPONSES
+                        ? MODEL_API_STYLE.RESPONSES
+                        : MODEL_API_STYLE.CHAT,
                   })
                 }
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none"
@@ -1101,12 +1139,8 @@ export default function ModelSettingsWorkbench() {
       ])
 
       if (workspacesResult.status === "fulfilled") {
-        const workspaceList = (workspacesResult.value.data ?? []) as Array<{
-          id: string
-          name: string
-        }>
         setAvailableWorkspaces(
-          workspaceList.map((workspace) => ({
+          workspacesResult.value.map((workspace) => ({
             id: workspace.id,
             name: workspace.name,
           }))
@@ -1148,7 +1182,7 @@ export default function ModelSettingsWorkbench() {
         groupId,
         workspaceId
       )
-      setSelectedGroup(response.group as GroupDetail)
+      setSelectedGroup(response as GroupDetail)
       setExpandedItemId(null)
       setDraft(createDraft())
     } catch (error) {
@@ -1192,7 +1226,7 @@ export default function ModelSettingsWorkbench() {
       api.getActors(workspaceId),
     ]).then(([membersResult, actorsResult]) => {
       if (membersResult.status === "fulfilled") {
-        const members = membersResult.value.data ?? []
+        const members = membersResult.value ?? []
         setWorkspaceMembers(members as WorkspaceMember[])
       } else {
         setWorkspaceMembers([])
@@ -1231,7 +1265,7 @@ export default function ModelSettingsWorkbench() {
     }
   }
 
-  async function handleIssueGrant(payload: Record<string, unknown>) {
+  async function handleIssueGrant(payload: ModelGroupGrantIssueInput) {
     if (!selectedGroup) return
     const scope = resolveModelGroupScope(selectedGroup)
     await issueGrantForGroup(scope, selectedGroup.id, workspaceId, payload)
@@ -1284,7 +1318,7 @@ export default function ModelSettingsWorkbench() {
     setSavingConfig(true)
     try {
       const providerKind = getProviderKindForVendor(draft.vendor)
-      const features: Record<string, unknown> = {}
+      const features: ModelBindingFeaturesInput = {}
       if (providerKind === "openai") {
         features.apiStyle = draft.apiStyle
       }
@@ -1304,7 +1338,7 @@ export default function ModelSettingsWorkbench() {
         features.crossTurnToolHistory = true
       }
 
-      const payload: Record<string, unknown> = {
+      const payload: ModelGroupItemUpdateInput = {
         displayName: draft.displayName.trim(),
         priority: parseInt(draft.priority, 10),
         weight: parseInt(draft.weight, 10),
@@ -1320,15 +1354,26 @@ export default function ModelSettingsWorkbench() {
       if (draft.apiKey.trim()) payload.apiKey = draft.apiKey.trim()
       if (itemId) payload.isEnabled = draft.isEnabled
 
+      const requestPayload:
+        | ModelGroupItemCreateInput
+        | ModelGroupItemUpdateInput = itemId
+        ? payload
+        : {
+            ...payload,
+            apiKey: draft.apiKey.trim(),
+            baseUrl: draft.baseUrl.trim(),
+            modelName: draft.modelName.trim(),
+          }
+
       const response = await saveItemForGroup(
         resolveModelGroupScope(selectedGroup),
         selectedGroup.id,
         workspaceId,
         itemId,
-        payload
+        requestPayload
       )
       await reloadCurrentGroup()
-      setExpandedItemId(itemId || response?.item?.id || null)
+      setExpandedItemId(itemId || response?.id || null)
     } catch (error) {
       console.error("Failed to save model config:", error)
       toast.error(getSaveErrorMessage(error, "Failed to save model config."))
@@ -1355,7 +1400,7 @@ export default function ModelSettingsWorkbench() {
   }
 
   async function handleUpdateGroupSettings(
-    patch: Record<string, unknown>,
+    patch: ModelGroupUpdateInput,
     savingKey: "routing" | "default"
   ) {
     if (!selectedGroup) return
@@ -1398,13 +1443,13 @@ export default function ModelSettingsWorkbench() {
 
     setSavingGroupField(field)
     try {
+      const patch: ModelGroupUpdateInput =
+        field === "name" ? { name: nextValue } : { description: nextValue }
       await updateGroupForScope(
         resolveModelGroupScope(selectedGroup),
         selectedGroup.id,
         workspaceId,
-        {
-          [field]: nextValue,
-        }
+        patch
       )
       setGroups((current) =>
         current.map((group) =>
@@ -1604,9 +1649,17 @@ export default function ModelSettingsWorkbench() {
                   <Select
                     value={selectedGroup.routingStrategy}
                     onValueChange={(value) => {
-                      if (value === selectedGroup.routingStrategy) return
+                      const nextRouting = MODEL_GROUP_ROUTING_OPTIONS.find(
+                        (strategy) => strategy.value === value
+                      )?.value
+                      if (
+                        !nextRouting ||
+                        nextRouting === selectedGroup.routingStrategy
+                      ) {
+                        return
+                      }
                       void handleUpdateGroupSettings(
-                        { routingStrategy: value },
+                        { routingStrategy: nextRouting },
                         "routing"
                       )
                     }}

@@ -1,7 +1,7 @@
 "use client"
 
 import { dateToIsoInstant } from "@synapse/shared/datetime"
-import type { WorkspaceInviteView } from "@synapse/shared"
+import type { InviteTrustLevel, WorkspaceInviteView } from "@synapse/shared"
 import { useEffect, useState, useCallback } from "react"
 import { useWorkspace } from "../workspace-provider"
 import { api } from "@/lib/api"
@@ -27,7 +27,7 @@ export default function InviteManagement() {
   const [copiedId, setCopiedId] = useState<string | null>(null)
 
   // Create form state
-  const [trustLevel, setTrustLevel] = useState("member")
+  const [trustLevel, setTrustLevel] = useState<InviteTrustLevel>("member")
   const [maxUses, setMaxUses] = useState("")
   const [expiresIn, setExpiresIn] = useState("")
   const [creating, setCreating] = useState(false)
@@ -35,8 +35,8 @@ export default function InviteManagement() {
   const loadInvites = useCallback(async () => {
     if (!workspaceId) return
     try {
-      const res = await api.listInvites(workspaceId)
-      setInvites(res?.data ?? [])
+      const invites = await api.listInvites(workspaceId)
+      setInvites(invites ?? [])
     } catch (err) {
       console.error("Failed to load invites:", err)
     } finally {
@@ -127,7 +127,9 @@ export default function InviteManagement() {
                 <Label>Role</Label>
                 <select
                   value={trustLevel}
-                  onChange={(e) => setTrustLevel(e.target.value)}
+                  onChange={(e) =>
+                    setTrustLevel(e.target.value as InviteTrustLevel)
+                  }
                   className="mt-1.5 block w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-foreground dark:border-white/10 dark:bg-white/5"
                 >
                   <option value="member">Member</option>

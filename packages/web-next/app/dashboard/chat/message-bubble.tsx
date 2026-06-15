@@ -8,6 +8,7 @@ import type {
   ActorRuntimeState,
   CanonicalContentBlock,
   ConversationEntityRef,
+  ConversationFeedItemSubtype,
   ConversationMessageTransportContext,
   ConversationMessageTransportDelivery,
   ConversationReplyRef,
@@ -16,6 +17,7 @@ import type {
   Timestamp,
 } from "@synapse/shared"
 import {
+  CONVERSATION_MESSAGE_SUBTYPE,
   CONVERSATION_PARTICIPANT_TYPE,
   TASK_REQUEST_KIND,
 } from "@synapse/shared"
@@ -100,7 +102,7 @@ interface MessageBubbleProps {
   kind?: "message" | "event"
   messageId: string
   role: string
-  messageType?: string
+  messageType?: ConversationFeedItemSubtype
   author?: ConversationEntityRef
   contentBlocks: CanonicalContentBlock[]
   actorName?: string
@@ -396,7 +398,7 @@ function TransportSummary({
 
 function buildMessageReplyRef(input: {
   messageId: string
-  messageType?: string
+  messageType?: ConversationFeedItemSubtype
   author?: ConversationEntityRef
   content: string
   contentBlocks: CanonicalContentBlock[]
@@ -405,7 +407,7 @@ function buildMessageReplyRef(input: {
   return {
     itemId: input.messageId,
     itemType: "message" as const,
-    subtype: input.messageType || "chat.message",
+    subtype: input.messageType || CONVERSATION_MESSAGE_SUBTYPE.CHAT_MESSAGE,
     author: input.author,
     previewText: input.content.trim(),
     previewBlocks: input.contentBlocks,
@@ -2923,7 +2925,7 @@ export default function MessageBubble({
   const isRetrying = isUser && status === "retrying"
   const viewerParticipantId = viewerUserMember?.participantId
   const canRetryModelError = Boolean(
-    messageType === "model_error_notice" &&
+    messageType === CONVERSATION_MESSAGE_SUBTYPE.MODEL_ERROR_NOTICE &&
     viewerParticipantId &&
     restrictedAudienceParticipantIds?.includes(viewerParticipantId) &&
     onRetryModelError

@@ -541,9 +541,7 @@ export default function ConversationChat({
       .getActors(workspaceId)
       .then((response) => {
         if (cancelled) return
-        const nextActors = Array.isArray(response)
-          ? (response as Actor[])
-          : ((response?.actors || []) as Actor[])
+        const nextActors = response
         setWorkspaceActors(
           nextActors.filter((actor) => actor.isActive !== false)
         )

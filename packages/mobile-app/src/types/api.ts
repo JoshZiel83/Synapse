@@ -2,7 +2,6 @@ import type {
   Actor,
   ActorAccessRequestListResponse,
   AuthResponse,
-  AuthSessionSummary,
   ContactHubDetailResponse,
   ContactHubEntryView,
   ContactHubResponse,
@@ -15,43 +14,19 @@ import type {
   IdentitySearchResponse,
   RelationshipProfileView,
   RelationshipScanResponse,
-  User,
+  UpdateMemberRelationshipProfileInput,
+  WorkspaceCreateResultView,
   WorkspaceChiefActorPreference,
+  WorkspaceListItemView,
+  WorkspaceMemberView as SharedWorkspaceMemberView,
 } from "@shared"
 
-export interface AuthMeResponse {
-  user: User
-  session: AuthSessionSummary
-}
+export type WorkspaceInfo = WorkspaceListItemView
+export type WorkspaceCreateResult = WorkspaceCreateResultView
 
-export interface WorkspaceInfo {
-  id: string
-  name: string
-  slug: string
-  trustLevel?: string
-}
+export type WorkspaceMemberView = SharedWorkspaceMemberView
 
-export interface WorkspaceListResponse {
-  data: WorkspaceInfo[]
-}
-
-export interface WorkspaceMemberView {
-  id: string
-  userId: string
-  userName?: string
-  userEmail?: string
-  avatarUrl?: string | null
-  trustLevel: string
-  joinedAt: string
-}
-
-export interface WorkspaceMemberListResponse {
-  data: WorkspaceMemberView[]
-}
-
-export interface ActorListResponse {
-  actors: Actor[]
-}
+export type WorkspaceMemberListResponse = { data: WorkspaceMemberView[] }
 
 export interface ContactWorkspaceRef {
   id: string
@@ -83,11 +58,6 @@ export interface UploadAssetInput {
   file?: Blob | File | null
 }
 
-export interface FriendIdProfileView {
-  friendId: string
-  searchByIdEnabled: boolean
-}
-
 export type {
   Actor,
   ActorAccessRequestListResponse,
@@ -103,5 +73,6 @@ export type {
   IdentitySearchResponse,
   RelationshipProfileView,
   RelationshipScanResponse,
+  UpdateMemberRelationshipProfileInput,
   WorkspaceChiefActorPreference,
 }

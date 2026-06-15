@@ -8,11 +8,11 @@ import process from "node:process"
 import { setTimeout as sleep } from "node:timers/promises"
 import WebSocket from "ws"
 // Type-only binding to the single source for the daemon↔API machine RPC
-// contract (round-6 P1-5). These are `import type` so they erase at build —
-// the daemon takes NO runtime dependency on device-protocol (its published
-// shrinkwrap stays unchanged); tsc statically checks every outbound body
-// against the same schema the API parses inbound. The API is the runtime
-// validator (separate trust domain).
+// contract. These are `import type` so they erase at build — the daemon takes
+// NO runtime dependency on device-protocol (its published shrinkwrap stays
+// unchanged); tsc statically checks every outbound snake_case body against the
+// same schema the API parses inbound. The API is the runtime validator
+// (separate trust domain).
 import type {
   RemoteAgentUserInputTaskBody,
   RemoteAgentPlanApprovalTaskBody,
@@ -612,7 +612,7 @@ class ManagedRemoteAgent {
         {
           method: "POST",
           body: JSON.stringify({
-            deliveryIds,
+            delivery_ids: deliveryIds,
             reason: reason.slice(0, 2000),
           } satisfies RemoteAgentFailDeliveriesBody),
         }
@@ -952,8 +952,8 @@ class ManagedRemoteAgent {
             {
               method: "POST",
               body: JSON.stringify({
-                conversationId,
-                runKey,
+                conversation_id: conversationId,
+                run_key: runKey,
                 title: event.title,
                 questions: event.questions,
               } satisfies RemoteAgentUserInputTaskBody),
@@ -996,11 +996,11 @@ class ManagedRemoteAgent {
             {
               method: "POST",
               body: JSON.stringify({
-                conversationId,
-                runKey,
+                conversation_id: conversationId,
+                run_key: runKey,
                 title: event.title,
                 summary: event.summary,
-                planMarkdown: event.planMarkdown,
+                plan_markdown: event.planMarkdown,
                 checklist: event.checklist,
               } satisfies RemoteAgentPlanApprovalTaskBody),
             }

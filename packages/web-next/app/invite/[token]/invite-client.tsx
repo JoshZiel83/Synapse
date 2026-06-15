@@ -14,16 +14,13 @@ import {
   CardDescription,
 } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import type { WorkspaceInvitePublicView } from "@synapse/shared"
 
 export default function InviteClient({ token }: { token: string }) {
   const router = useRouter()
   const user = useAuthStore((state) => state.user)
 
-  const [invite, setInvite] = useState<{
-    token: string
-    workspaceName: string
-    trustLevel: string
-  } | null>(null)
+  const [invite, setInvite] = useState<WorkspaceInvitePublicView | null>(null)
   const [error, setError] = useState("")
   const [loadingInvite, setLoadingInvite] = useState(true)
   const [joining, setJoining] = useState(false)
@@ -32,7 +29,7 @@ export default function InviteClient({ token }: { token: string }) {
     if (!token) return
     api
       .getInviteInfo(token)
-      .then((data: any) => setInvite(data))
+      .then((data) => setInvite(data))
       .catch((err: any) => setError(err.message || "Invalid or expired invite"))
       .finally(() => setLoadingInvite(false))
   }, [token])

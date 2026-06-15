@@ -237,9 +237,7 @@ export default function ActorModelAssignmentBoard() {
         const response = await api.getActors(currentWorkspaceId)
         if (cancelled) return
 
-        const nextActors = (Array.isArray(response) ? response : []).map(
-          normalizeActor
-        )
+        const nextActors = response.map(normalizeActor)
         setActors(nextActors)
         setSelectedActorId((current) =>
           current &&
@@ -296,12 +294,8 @@ export default function ActorModelAssignmentBoard() {
 
         if (cancelled) return
 
-        const nextAssigned = (assignedResponse?.groups ?? []).map(
-          normalizeAssignedGroup
-        )
-        const nextVisible = (visibleResponse?.groups ?? []).map(
-          normalizeVisibleGroup
-        )
+        const nextAssigned = assignedResponse.map(normalizeAssignedGroup)
+        const nextVisible = visibleResponse.map(normalizeVisibleGroup)
         setAssignedGroups(nextAssigned)
         setPersistedGroups(nextAssigned)
         setVisibleGroups(nextVisible)
@@ -369,9 +363,7 @@ export default function ActorModelAssignmentBoard() {
             priority: index,
           }))
         )
-        const nextAssigned = (response?.groups ?? []).map(
-          normalizeAssignedGroup
-        )
+        const nextAssigned = response.map(normalizeAssignedGroup)
 
         if (
           workspaceIdRef.current !== currentWorkspaceId ||
@@ -449,12 +441,8 @@ export default function ActorModelAssignmentBoard() {
         api.getActorModelGroups(workspaceId, selectedActorId),
         api.getVisibleActorModelGroups(workspaceId, selectedActorId),
       ])
-      const nextAssigned = (assignedResponse?.groups ?? []).map(
-        normalizeAssignedGroup
-      )
-      const nextVisible = (visibleResponse?.groups ?? []).map(
-        normalizeVisibleGroup
-      )
+      const nextAssigned = assignedResponse.map(normalizeAssignedGroup)
+      const nextVisible = visibleResponse.map(normalizeVisibleGroup)
       setAssignedGroups(nextAssigned)
       setPersistedGroups(nextAssigned)
       setVisibleGroups(nextVisible)

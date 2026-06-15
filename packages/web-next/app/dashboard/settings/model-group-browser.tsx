@@ -2,14 +2,19 @@
 
 import { useDeferredValue, useEffect, useMemo, useState } from "react"
 import {
+  MODEL_API_STYLE,
   MODEL_GROUP_OWNER_TYPE,
+  MODEL_SERVER_TOOL,
   getDefaultModelBaseUrl,
   getDefaultModelName,
   getProviderKindForVendor,
   listModelVendorDefinitions,
   vendorSupportsServerTools,
+  type ModelApiStyle,
   type ModelGroupOwnerType,
   type ModelGroupRoutingStrategy,
+  type ModelServerTool,
+  type ProviderKind,
   type Timestamp,
 } from "@synapse/shared"
 import { Cpu, Plus, RefreshCw, Save, Search, Star, Trash2 } from "lucide-react"
@@ -68,7 +73,7 @@ type ModelItem = {
   isEnabled: boolean
   currentVersionId: string | null
   version: number | null
-  providerKind: string
+  providerKind: ProviderKind
   vendor: string | null
   baseUrl: string | null
   modelName: string | null
@@ -91,8 +96,8 @@ type ModelItemFormState = {
   maxOutputTokens: string
   priority: string
   weight: string
-  apiStyle: "chat" | "responses"
-  serverTools: string[]
+  apiStyle: ModelApiStyle
+  serverTools: ModelServerTool[]
   multimodalTypes: string[]
   crossTurnToolHistory: boolean
   providerOptionsText: string
@@ -101,12 +106,12 @@ type ModelItemFormState = {
 
 const SERVER_TOOLS = [
   {
-    key: "web_search",
+    key: MODEL_SERVER_TOOL.WEB_SEARCH,
     label: "Web Search",
     description: "Allow the model to search the web for real-time information",
   },
   {
-    key: "web_fetch",
+    key: MODEL_SERVER_TOOL.WEB_FETCH,
     label: "Web Fetch",
     description: "Allow the model to fetch and read full web page content",
   },
@@ -122,8 +127,8 @@ const MULTIMODAL_TYPES = [
 const VENDOR_OPTIONS = listModelVendorDefinitions()
 const DEFAULT_VENDOR = VENDOR_OPTIONS[0]?.vendor || "anthropic"
 const API_STYLE_OPTIONS = [
-  { value: "chat", label: "Chat Completions" },
-  { value: "responses", label: "Responses API" },
+  { value: MODEL_API_STYLE.CHAT, label: "Chat Completions" },
+  { value: MODEL_API_STYLE.RESPONSES, label: "Responses API" },
 ] as const
 
 function createFormState(item?: ModelItem | null): ModelItemFormState {
@@ -140,9 +145,16 @@ function createFormState(item?: ModelItem | null): ModelItemFormState {
     maxOutputTokens: String(item?.maxOutputTokens || 4096),
     priority: String(item?.priority ?? 0),
     weight: String(item?.weight ?? 100),
-    apiStyle: features.apiStyle === "responses" ? "responses" : "chat",
+    apiStyle:
+      features.apiStyle === MODEL_API_STYLE.RESPONSES
+        ? MODEL_API_STYLE.RESPONSES
+        : MODEL_API_STYLE.CHAT,
     serverTools: Array.isArray(features.serverTools)
-      ? features.serverTools
+      ? features.serverTools.filter(
+          (tool: unknown): tool is ModelServerTool =>
+            tool === MODEL_SERVER_TOOL.WEB_SEARCH ||
+            tool === MODEL_SERVER_TOOL.WEB_FETCH
+        )
       : [],
     multimodalTypes:
       multimodal.supported && Array.isArray(multimodal.types)
@@ -361,14 +373,12 @@ export default function ModelGroupBrowser({
       let nextGroups: ModelGroupSummary[] = []
 
       if (scope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
-        const response = await api.getPlatformModelGroups()
-        nextGroups = response.groups || []
+        nextGroups = await api.getPlatformModelGroups()
       } else if (scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
-        const response = await api.getWorkspaceMemberModelGroups(workspaceId!)
-        nextGroups = response.groups || []
+        nextGroups = await api.getWorkspaceMemberModelGroups(workspaceId!)
       } else {
-        const response = await api.getModelGroups(workspaceId!)
-        nextGroups = (response.groups || []).filter(
+        const groups = await api.getModelGroups(workspaceId!)
+        nextGroups = groups.filter(
           (group: ModelGroupSummary) =>
             resolveModelGroupScope(group) === MODEL_GROUP_OWNER_TYPE.WORKSPACE
         )
@@ -395,8 +405,11 @@ export default function ModelGroupBrowser({
   ) {
     setDetailLoading(true)
     try {
-      const response = await fetchGroupDetail(scope, groupId, workspaceId)
-      const nextGroup = response.group as GroupDetail
+      const nextGroup = (await fetchGroupDetail(
+        scope,
+        groupId,
+        workspaceId
+      )) as GroupDetail
       setSelectedGroup(nextGroup)
       setSelectedItemId((current) => {
         const nextSelectedId =
@@ -601,7 +614,7 @@ export default function ModelGroupBrowser({
           )
         }
 
-        await loadSelectedGroup(selectedGroup.id, response?.item?.id || null)
+        await loadSelectedGroup(selectedGroup.id, response?.id || null)
       }
     } catch (error) {
       console.error("Failed to save model config:", error)
@@ -1067,9 +1080,9 @@ export default function ModelGroupBrowser({
                             setItemDraft((current) => ({
                               ...current,
                               apiStyle:
-                                event.target.value === "responses"
-                                  ? "responses"
-                                  : "chat",
+                                event.target.value === MODEL_API_STYLE.RESPONSES
+                                  ? MODEL_API_STYLE.RESPONSES
+                                  : MODEL_API_STYLE.CHAT,
                             }))
                           }
                           className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none"

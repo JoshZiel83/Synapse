@@ -62,11 +62,10 @@ export const usePluginStore = create<PluginState>((set, get) => ({
   loadMarketplace: async (search?: string, categorySlugs?: string[]) => {
     set({ loadingMarketplace: true })
     try {
-      const params = new URLSearchParams()
-      if (search) params.set("search", search)
-      if (categorySlugs && categorySlugs.length > 0)
-        params.set("categories", categorySlugs.join(","))
-      const data = await api.getMarketplace(params.toString() || undefined)
+      const data = await api.getMarketplace({
+        search,
+        categories: categorySlugs,
+      })
       set({ marketplace: data })
     } catch (err) {
       console.error("Failed to load marketplace:", err)

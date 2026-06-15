@@ -67,9 +67,8 @@ export default function ActorAssignment() {
     setLoading(true)
     Promise.all([api.getActors(workspaceId), api.getModelGroups(workspaceId)])
       .then(([actorsRes, groupsRes]) => {
-        const actorList = actorsRes ?? []
-        setActors(Array.isArray(actorList) ? actorList.map(normalizeActor) : [])
-        setGroups(groupsRes.groups || [])
+        setActors(actorsRes.map(normalizeActor))
+        setGroups(groupsRes)
       })
       .catch((err) => console.error("Failed to load data:", err))
       .finally(() => setLoading(false))
@@ -79,8 +78,8 @@ export default function ActorAssignment() {
     if (!workspaceId) return
     setSelectedActor(actor)
     try {
-      const res = await api.getActorModelGroups(workspaceId, actor.id)
-      setAssignedGroups(res.groups || [])
+      const groups = await api.getActorModelGroups(workspaceId, actor.id)
+      setAssignedGroups(groups)
       setDialogOpen(true)
     } catch (err) {
       console.error("Failed to load actor groups:", err)
