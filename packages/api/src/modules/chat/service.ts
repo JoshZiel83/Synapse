@@ -73,6 +73,11 @@ export {
   createChatClientInstance,
   touchChatClientInstance,
 } from "./client-instances.js"
+export {
+  deleteChatPushToken,
+  listChatPushTokens,
+  registerChatPushToken,
+} from "./push-tokens.js"
 import {
   parseInstantString,
   serializeNowInstant,
@@ -82,7 +87,6 @@ import {
   conversationItemHasTargets,
   conversationParticipantExists,
   countUnreadVisibleConversationMessages,
-  deleteChatPushTokenRecord,
   getChatConversationCreateRequestConversationId,
   getChatConversationBaseRow,
   getChatWorkspaceMemberConversationParticipantRow,
@@ -109,7 +113,6 @@ import {
   listActorDisplayNameRows,
   listChatConversationBaseRows,
   listChatConversationParticipantRows,
-  listChatPushTokenRecords,
   listContextConversationItemRowsForParticipant,
   listConversationItemPartRows,
   listConversationItemRowsByIds,
@@ -125,7 +128,6 @@ import {
   listWorkspaceMemberSyncEventRows,
   listWorkspaceMemberNameRows,
   reactivateConversationParticipant,
-  upsertChatPushTokenRecord,
   updateConversationItemEventPayload as updateConversationItemEventPayloadRow,
   updateConversationMutableFields,
   updateConversationParticipantState,
@@ -140,10 +142,9 @@ import {
   type ChatConversationItemRow,
   type ChatConversationItemPartRow,
   type ChatParticipantRow,
-  type ChatPushTokenRow,
 } from "./repo.js"
 // Re-exported for existing consumers that import the row DTO from chat/service.
-export type { ChatPushTokenRow }
+export type { ChatPushTokenRow } from "./repo.js"
 import {
   appendWorkspaceMemberSyncEvent,
   appendWorkspaceMemberSyncEventInTransaction,
@@ -4044,56 +4045,6 @@ export async function leaveChatConversation(params: {
 }
 
 // ============ Stage 7: push tokens + typing ============
-
-export async function registerChatPushToken(params: {
-  workspaceId: string
-  userId: string
-  platform: "ios" | "android" | "web"
-  token: string
-  deviceLabel?: string
-  metadata?: Record<string, unknown>
-}): Promise<{ token: ChatPushTokenRow }> {
-  const identity = await getWorkspaceMemberIdentityOrThrow(
-    params.workspaceId,
-    params.userId
-  )
-  const token = await upsertChatPushTokenRecord({
-    workspaceMemberId: identity.workspaceMemberId,
-    platform: params.platform,
-    token: params.token,
-    deviceLabel: params.deviceLabel,
-    metadata: params.metadata,
-  })
-  return { token }
-}
-
-export async function listChatPushTokens(params: {
-  workspaceId: string
-  userId: string
-}): Promise<{ tokens: ChatPushTokenRow[] }> {
-  const identity = await getWorkspaceMemberIdentityOrThrow(
-    params.workspaceId,
-    params.userId
-  )
-  const tokens = await listChatPushTokenRecords(identity.workspaceMemberId)
-  return { tokens }
-}
-
-export async function deleteChatPushToken(params: {
-  workspaceId: string
-  userId: string
-  tokenId: string
-}): Promise<{ deleted: boolean }> {
-  const identity = await getWorkspaceMemberIdentityOrThrow(
-    params.workspaceId,
-    params.userId
-  )
-  const deleted = await deleteChatPushTokenRecord({
-    tokenId: params.tokenId,
-    workspaceMemberId: identity.workspaceMemberId,
-  })
-  return { deleted }
-}
 
 export async function broadcastTypingState(params: {
   workspaceId: string
