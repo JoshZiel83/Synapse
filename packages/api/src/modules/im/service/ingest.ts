@@ -27,11 +27,11 @@ import type {
 import type { InboundEnvelope } from "../connectors/types.js"
 import { getWorkspaceOwnerId } from "./repo.js"
 import {
-  createConversation,
   createConversationItem,
   enqueueActorWakeupsForConversationMessage,
-  ensureConversationParticipant,
 } from "../../chat/service.js"
+import { createConversationRecordUseCase } from "../../chat/create-conversation.js"
+import { ensureConversationParticipantUseCase } from "../../chat/participant-roster.js"
 import { getWorkspaceChiefActorPreference } from "../../workspace/service.js"
 import {
   ingestInboundEnvelopeUseCase,
@@ -66,7 +66,7 @@ async function ensureTransportConversationBinding(params: {
   }
 
   await getWorkspaceOwnerId(account.workspaceId)
-  const created = await createConversation({
+  const created = await createConversationRecordUseCase({
     workspaceId: account.workspaceId,
     kind: envelope.endpointType === "group" ? "group" : "direct",
     title:
@@ -129,7 +129,7 @@ async function attachDefaultWakeTarget(
   // attached to the conversation_participants so subsequent wake-up
   // enqueue can find it. The returned participant is currently unused
   // by the caller.
-  await ensureConversationParticipant({
+  await ensureConversationParticipantUseCase({
     conversationId: binding.conversationId,
     participantType: "actor",
     actorId,
