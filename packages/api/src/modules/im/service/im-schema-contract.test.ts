@@ -9,11 +9,19 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import {
+  DingtalkDeviceFlowSessionSummarySchema,
   TransportAccountSummarySchema,
   TransportEndpointSummarySchema,
   TransportSessionSummarySchema,
   TransportExternalUserSummarySchema,
+  TransportExternalUserResponseSchema,
+  WeixinBindingCandidatesResponseSchema,
+  WeixinQrLoginSessionSummarySchema,
 } from "@synapse/shared/schemas"
+import {
+  DINGTALK_DEVICE_FLOW_STATUSES,
+  WEIXIN_QR_LOGIN_STATUSES,
+} from "@synapse/shared"
 import {
   normalizeAccountRow,
   normalizeEndpointRow,
@@ -116,4 +124,87 @@ test("normalizeTransportExternalUserRow output parses TransportExternalUserSumma
   const summary = normalizeTransportExternalUserRow(row as never)
   const parsed = TransportExternalUserSummarySchema.safeParse(summary)
   assert.ok(parsed.success, JSON.stringify(parsed.error?.issues))
+
+  const response = TransportExternalUserResponseSchema.safeParse({
+    externalUser: summary,
+  })
+  assert.ok(response.success, JSON.stringify(response.error?.issues))
+})
+
+test("WeixinBindingCandidatesResponseSchema parses workspace member views", () => {
+  const parsed = WeixinBindingCandidatesResponseSchema.safeParse({
+    members: [
+      {
+        id: "wm-1",
+        workspaceId: "ws-1",
+        userId: "user-1",
+        trustLevel: "member",
+        accessKeys: ["workspace.view"],
+        joinedAt: ISO,
+        userName: "Member",
+        userEmail: "member@example.com",
+        avatarUrl: null,
+      },
+    ],
+  })
+  assert.ok(parsed.success, JSON.stringify(parsed.error?.issues))
+
+  const invalid = WeixinBindingCandidatesResponseSchema.safeParse({
+    members: [{ id: "wm-1" }],
+  })
+  assert.equal(invalid.success, false)
+})
+
+test("IM QR/device-flow session schemas validate finite app statuses", () => {
+  for (const status of WEIXIN_QR_LOGIN_STATUSES) {
+    const parsed = WeixinQrLoginSessionSummarySchema.safeParse({
+      sessionId: "qr-1",
+      workspaceId: "ws-1",
+      status,
+      message: "Scan QR",
+      createdAt: ISO,
+      updatedAt: ISO,
+      expiresAt: ISO,
+    })
+    assert.ok(parsed.success, JSON.stringify(parsed.error?.issues))
+  }
+
+  const invalidWeixin = WeixinQrLoginSessionSummarySchema.safeParse({
+    sessionId: "qr-1",
+    workspaceId: "ws-1",
+    status: "provider_scaned",
+    message: "Scan QR",
+    createdAt: ISO,
+    updatedAt: ISO,
+    expiresAt: ISO,
+  })
+  assert.equal(invalidWeixin.success, false)
+
+  for (const status of DINGTALK_DEVICE_FLOW_STATUSES) {
+    const parsed = DingtalkDeviceFlowSessionSummarySchema.safeParse({
+      sessionId: "ding-1",
+      workspaceId: "ws-1",
+      status,
+      verificationUriComplete: "https://example.com/verify",
+      expiresInSeconds: 7200,
+      intervalSeconds: 5,
+      createdAt: ISO,
+      updatedAt: ISO,
+      expiresAt: ISO,
+    })
+    assert.ok(parsed.success, JSON.stringify(parsed.error?.issues))
+  }
+
+  const invalidDingtalk = DingtalkDeviceFlowSessionSummarySchema.safeParse({
+    sessionId: "ding-1",
+    workspaceId: "ws-1",
+    status: "UNKNOWN",
+    verificationUriComplete: "https://example.com/verify",
+    expiresInSeconds: 7200,
+    intervalSeconds: 5,
+    createdAt: ISO,
+    updatedAt: ISO,
+    expiresAt: ISO,
+  })
+  assert.equal(invalidDingtalk.success, false)
 })

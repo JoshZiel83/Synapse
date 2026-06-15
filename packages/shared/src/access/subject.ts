@@ -135,31 +135,46 @@ export function isAccessTargetRef(ref: SubjectRef): ref is AccessTargetRef {
 
 // ---------- Constructors ----------
 
-export function workspaceRef(workspaceId: string): SubjectRef {
+export function workspaceRef(
+  workspaceId: string
+): Extract<SubjectRef, { kind: typeof SUBJECT_KIND.WORKSPACE }> {
   return { kind: SUBJECT_KIND.WORKSPACE, workspaceId }
 }
-export function workspaceMemberRef(memberId: string): SubjectRef {
+export function workspaceMemberRef(
+  memberId: string
+): Extract<SubjectRef, { kind: typeof SUBJECT_KIND.WORKSPACE_MEMBER }> {
   return { kind: SUBJECT_KIND.WORKSPACE_MEMBER, memberId }
 }
-export function actorRef(actorId: string): SubjectRef {
+export function actorRef(
+  actorId: string
+): Extract<SubjectRef, { kind: typeof SUBJECT_KIND.ACTOR }> {
   return { kind: SUBJECT_KIND.ACTOR, actorId }
 }
-export function remoteAgentRef(remoteAgentId: string): SubjectRef {
+export function remoteAgentRef(
+  remoteAgentId: string
+): Extract<SubjectRef, { kind: typeof SUBJECT_KIND.REMOTE_AGENT }> {
   return { kind: SUBJECT_KIND.REMOTE_AGENT, remoteAgentId }
 }
-export function conversationRef(conversationId: string): SubjectRef {
+export function conversationRef(
+  conversationId: string
+): Extract<SubjectRef, { kind: typeof SUBJECT_KIND.CONVERSATION }> {
   return { kind: SUBJECT_KIND.CONVERSATION, conversationId }
 }
-export function userRef(userId: string): SubjectRef {
+export function userRef(
+  userId: string
+): Extract<SubjectRef, { kind: typeof SUBJECT_KIND.USER }> {
   return { kind: SUBJECT_KIND.USER, userId }
 }
 export function externalRef(
   workspaceId: string,
   transportAddressId: string
-): SubjectRef {
+): Extract<SubjectRef, { kind: typeof SUBJECT_KIND.EXTERNAL }> {
   return { kind: SUBJECT_KIND.EXTERNAL, workspaceId, transportAddressId }
 }
-export const platformRef: SubjectRef = { kind: SUBJECT_KIND.PLATFORM }
+export const platformRef: Extract<
+  SubjectRef,
+  { kind: typeof SUBJECT_KIND.PLATFORM }
+> = { kind: SUBJECT_KIND.PLATFORM }
 
 // ---------- Equality ----------
 

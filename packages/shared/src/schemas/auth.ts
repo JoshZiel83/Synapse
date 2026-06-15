@@ -42,7 +42,7 @@ export type AuthMeView = z.infer<typeof AuthMeViewSchema>
 
 /** Body for PUT /api/v1/auth/me. At least one field must be present. */
 export const UpdateMeInputSchema = z
-  .object({
+  .strictObject({
     name: z.string().min(1).max(100).optional(),
     avatarFileId: z.uuid().nullable().optional(),
   })
@@ -56,7 +56,7 @@ export type UpdateMeInput = z.infer<typeof UpdateMeInputSchema>
  * Body for DELETE /api/v1/auth/me/accounts — identifies the account to unlink
  * by its (providerId, accountId) pair (the same key Better Auth uses).
  */
-export const UnlinkAccountInputSchema = z.object({
+export const UnlinkAccountInputSchema = z.strictObject({
   providerId: z.string().min(1).max(100),
   accountId: z.string().min(1).max(255),
 })

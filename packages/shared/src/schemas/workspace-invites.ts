@@ -2,6 +2,16 @@ import { z } from "zod"
 import { INVITE_TRUST_LEVELS } from "../constants/enums.js"
 import { IsoInstantStringSchema } from "./datetime.js"
 
+/** Create-invite request body for workspace invite management. */
+export const CreateWorkspaceInviteInputSchema = z.object({
+  trustLevel: z.enum(INVITE_TRUST_LEVELS).optional(),
+  maxUses: z.number().int().positive().optional(),
+  expiresAt: IsoInstantStringSchema.optional(),
+})
+export type CreateWorkspaceInviteInput = z.infer<
+  typeof CreateWorkspaceInviteInputSchema
+>
+
 /**
  * App-facing contract for a workspace invite (management view).
  * Source of truth for the `{ data }` response of the invite CRUD endpoints;
@@ -22,6 +32,10 @@ export const WorkspaceInviteViewSchema = z.strictObject({
   updatedAt: IsoInstantStringSchema,
 })
 export type WorkspaceInviteView = z.infer<typeof WorkspaceInviteViewSchema>
+export const WorkspaceInviteListViewSchema = z.array(WorkspaceInviteViewSchema)
+export type WorkspaceInviteListView = z.infer<
+  typeof WorkspaceInviteListViewSchema
+>
 
 /**
  * Public, unauthenticated invite info (what a prospective joiner sees before

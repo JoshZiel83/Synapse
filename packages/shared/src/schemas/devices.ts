@@ -4,13 +4,19 @@ import {
   DEVICE_EXPOSURE_RUNTIME_STATUSES,
   DEVICE_EXPOSURE_TRANSPORTS,
   DEVICE_PAIRING_MODES,
+  DEVICE_PAIRING_STATUSES,
   DEVICE_SERVICE_KINDS,
   DEVICE_SERVICE_STATUSES,
   DEVICE_TRUST_STATUSES,
   DEVICE_TYPES,
   HOST_KINDS,
 } from "@synapse/device-protocol/enums"
-import { ScopedSubjectTargetWireSchema } from "@synapse/device-protocol"
+import {
+  DEVICE_CAPABILITY_ACCESS_SCOPE_KIND,
+  DEVICE_CAPABILITY_ACCESS_SCOPE_KINDS,
+  DEVICE_CAPABILITY_ACCESS_SUBJECT_KIND,
+  DEVICE_CAPABILITY_ACCESS_SUBJECT_KINDS,
+} from "../constants/enums.js"
 import { IsoInstantStringSchema } from "./datetime.js"
 
 /**
@@ -34,6 +40,9 @@ export const DeviceViewSchema = z.strictObject({
   lastConnectedAt: IsoInstantStringSchema.nullable(),
 })
 export type DeviceView = z.infer<typeof DeviceViewSchema>
+
+export const DeviceListViewSchema = z.array(DeviceViewSchema)
+export type DeviceListView = z.infer<typeof DeviceListViewSchema>
 
 export const DeviceServiceViewSchema = z.strictObject({
   id: z.uuid(),
@@ -78,20 +87,13 @@ export type DeviceDetailView = z.infer<typeof DeviceDetailViewSchema>
  */
 export const DevicePairingTicketViewSchema = z.strictObject({
   pairingSessionId: z.uuid(),
-  mode: z.enum(["local_qr", "cloud_bootstrap", "service_join"]),
+  mode: z.enum(DEVICE_PAIRING_MODES),
   pairingCode: z.string().nullable(),
   bootstrapToken: z.string().nullish(),
   expiresAt: IsoInstantStringSchema,
   verificationUri: z.string().nullable(),
   verificationUriComplete: z.string().nullable(),
-  status: z.enum([
-    "pending",
-    "confirmed",
-    "consumed",
-    "expired",
-    "cancelled",
-    "rejected",
-  ]),
+  status: z.enum(DEVICE_PAIRING_STATUSES),
   oneClickCommands: z
     .strictObject({ unix: z.string(), windows: z.string() })
     .nullish(),
@@ -145,7 +147,9 @@ export const StartPairingInputSchema = z.strictObject({
   workspaceId: z.uuid(),
   mode: z.enum(DEVICE_PAIRING_MODES),
   title: z.string().optional(),
+  description: z.string().max(2000).optional(),
   deviceType: z.enum(DEVICE_TYPES).optional(),
+  context: z.record(z.string(), z.unknown()).optional(),
   // service_join only:
   deviceId: z.uuid().optional(),
   requestedPubkeyFingerprint: z.string().optional(),
@@ -161,20 +165,111 @@ export type ClaimDaemonServiceInput = z.infer<
   typeof ClaimDaemonServiceInputSchema
 >
 
+const DeviceCapabilitySubjectRefSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal(DEVICE_CAPABILITY_ACCESS_SUBJECT_KIND.WORKSPACE),
+    workspaceId: z.uuid(),
+  }),
+  z.strictObject({
+    kind: z.literal(DEVICE_CAPABILITY_ACCESS_SUBJECT_KIND.ACTOR),
+    actorId: z.uuid(),
+  }),
+  z.strictObject({
+    kind: z.literal(DEVICE_CAPABILITY_ACCESS_SUBJECT_KIND.REMOTE_AGENT),
+    remoteAgentId: z.uuid(),
+  }),
+  z.strictObject({
+    kind: z.literal(DEVICE_CAPABILITY_ACCESS_SUBJECT_KIND.CONVERSATION),
+    conversationId: z.uuid(),
+  }),
+])
+
 /**
- * Active-capability binding write. `target` reuses the device-protocol
- * ScopedSubjectTargetWireSchema (already camelCase inner fields + the strict
- * subject/scope whitelist); only `deviceCapabilityIds` is migrated off the
- * legacy snake `device_capability_ids`.
+ * App-facing active-capability target. It intentionally mirrors the current
+ * device binding whitelist without importing the device-protocol wire schema:
+ * unscoped workspace/actor/remote_agent/conversation, or actor/remote_agent
+ * scoped to a conversation.
+ */
+export const DeviceCapabilityAccessTargetInputSchema = z
+  .strictObject({
+    subject: DeviceCapabilitySubjectRefSchema,
+    scope: DeviceCapabilitySubjectRefSchema.optional(),
+  })
+  .superRefine((target, ctx) => {
+    if (!target.scope) {
+      return
+    }
+    const allowed =
+      (target.subject.kind === DEVICE_CAPABILITY_ACCESS_SUBJECT_KIND.ACTOR ||
+        target.subject.kind ===
+          DEVICE_CAPABILITY_ACCESS_SUBJECT_KIND.REMOTE_AGENT) &&
+      target.scope.kind === DEVICE_CAPABILITY_ACCESS_SCOPE_KIND.CONVERSATION
+    if (!allowed) {
+      ctx.addIssue({
+        code: "custom",
+        message: `scoped target (subject.kind=${target.subject.kind}, scope.kind=${target.scope.kind}) is not in whitelist (only actor+conversation, remote_agent+conversation)`,
+        path: ["scope"],
+      })
+    }
+  })
+export type DeviceCapabilityAccessTargetInput = z.infer<
+  typeof DeviceCapabilityAccessTargetInputSchema
+>
+
+/**
+ * Active-capability binding write. This is an app-facing management contract:
+ * camelCase body, shared-owned target schema, and no device-protocol wire schema
+ * reuse.
  */
 export const SetActiveDeviceCapabilitiesInputSchema = z.strictObject({
   workspaceId: z.uuid(),
-  target: ScopedSubjectTargetWireSchema,
+  target: DeviceCapabilityAccessTargetInputSchema,
   deviceCapabilityIds: z.array(z.uuid()),
   reason: z.string().max(2000).optional(),
 })
 export type SetActiveDeviceCapabilitiesInput = z.infer<
   typeof SetActiveDeviceCapabilitiesInputSchema
+>
+
+/**
+ * GET active-capabilities list query for a target (app-facing). This is the
+ * query-string equivalent of the shared target whitelist above; the API maps
+ * the flattened query form back to the internal AccessTarget at the route
+ * boundary.
+ */
+export const ActiveDeviceCapabilitiesListQuerySchema = z
+  .object({
+    subjectKind: z.enum(DEVICE_CAPABILITY_ACCESS_SUBJECT_KINDS),
+    subjectWorkspaceId: z.uuid().optional(),
+    subjectActorId: z.uuid().optional(),
+    subjectConversationId: z.uuid().optional(),
+    subjectRemoteAgentId: z.uuid().optional(),
+    scopeKind: z.enum(DEVICE_CAPABILITY_ACCESS_SCOPE_KINDS).optional(),
+    scopeConversationId: z.uuid().optional(),
+  })
+  .superRefine((query, ctx) => {
+    if (query.scopeKind !== DEVICE_CAPABILITY_ACCESS_SCOPE_KIND.CONVERSATION)
+      return
+    if (!query.scopeConversationId) {
+      ctx.addIssue({
+        code: "custom",
+        message: "scopeConversationId required when scopeKind=conversation",
+        path: ["scopeConversationId"],
+      })
+    }
+    if (
+      query.subjectKind !== DEVICE_CAPABILITY_ACCESS_SUBJECT_KIND.ACTOR &&
+      query.subjectKind !== DEVICE_CAPABILITY_ACCESS_SUBJECT_KIND.REMOTE_AGENT
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: `scopeKind=conversation only allowed with subjectKind=actor|remote_agent (got ${query.subjectKind})`,
+        path: ["scopeKind"],
+      })
+    }
+  })
+export type ActiveDeviceCapabilitiesListQuery = z.infer<
+  typeof ActiveDeviceCapabilitiesListQuerySchema
 >
 
 /** GET active-capabilities list result for a target (app-facing). */

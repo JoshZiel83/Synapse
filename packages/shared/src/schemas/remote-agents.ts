@@ -1,5 +1,12 @@
 import { z } from "zod"
-import { REMOTE_AGENT_RUNTIME_KINDS } from "../constants/enums.js"
+import {
+  REMOTE_AGENT_BINDING_STATUSES,
+  REMOTE_AGENT_MACHINE_LIFECYCLE_STATES,
+  REMOTE_AGENT_MACHINE_TRUST_STATUSES,
+  REMOTE_AGENT_RUNTIME_CATALOG_STATUSES,
+  REMOTE_AGENT_RUNTIME_KINDS,
+  REMOTE_AGENT_RUNTIME_STATES,
+} from "../constants/enums.js"
 import { IsoInstantStringSchema } from "./datetime.js"
 
 /**
@@ -17,6 +24,13 @@ import { IsoInstantStringSchema } from "./datetime.js"
  */
 
 const runtimeKindSchema = z.enum(REMOTE_AGENT_RUNTIME_KINDS)
+const runtimeStateSchema = z.enum(REMOTE_AGENT_RUNTIME_STATES)
+const runtimeCatalogStatusSchema = z.enum(REMOTE_AGENT_RUNTIME_CATALOG_STATUSES)
+const bindingStatusSchema = z.enum(REMOTE_AGENT_BINDING_STATUSES)
+const machineTrustStatusSchema = z.enum(REMOTE_AGENT_MACHINE_TRUST_STATUSES)
+const machineLifecycleStateSchema = z.enum(
+  REMOTE_AGENT_MACHINE_LIFECYCLE_STATES
+)
 const jsonRecordSchema = z.record(z.string(), z.unknown())
 
 /** Per-runtime capability flags (presenter emits {} when unknown). */
@@ -31,9 +45,7 @@ export const RemoteAgentRuntimeCapabilityViewSchema = z.object({
 /** Runtime summary (presentRuntimeSummary). */
 export const RemoteAgentRuntimeSummaryViewSchema = z.object({
   runtimeKind: runtimeKindSchema,
-  // presenter emits the raw runtime-state string (defaults to "offline");
-  // kept as string (not z.enum) to match the producer exactly.
-  state: z.string(),
+  state: runtimeStateSchema,
   statusText: z.string().optional(),
   sessionId: z.string().optional(),
   activeConversationId: z.string().optional(),
@@ -51,11 +63,10 @@ export const RemoteAgentRuntimeSummaryViewSchema = z.object({
 export const RemoteAgentBindingViewSchema = z.object({
   machineId: z.string(),
   machineTitle: z.string().optional(),
-  status: z.string(),
+  status: bindingStatusSchema,
   runtimePath: z.string().optional(),
   localRootPath: z.string().optional(),
-  // presenter emits the raw lifecycle-state string.
-  machineLifecycleState: z.string().optional(),
+  machineLifecycleState: machineLifecycleStateSchema.optional(),
   runtimeSummary: RemoteAgentRuntimeSummaryViewSchema.optional(),
 })
 
@@ -97,9 +108,8 @@ export const RemoteAgentMachineViewSchema = z.object({
   workspaceId: z.string(),
   title: z.string(),
   description: z.string().optional(),
-  // presenter emits raw trust/lifecycle strings from the row.
-  trustStatus: z.string(),
-  lifecycleState: z.string().optional(),
+  trustStatus: machineTrustStatusSchema,
+  lifecycleState: machineLifecycleStateSchema.optional(),
   bindingCount: z.number().optional(),
   lastSeenAt: IsoInstantStringSchema.optional(),
   createdAt: IsoInstantStringSchema.optional(),
@@ -110,7 +120,7 @@ export const RemoteAgentMachineViewSchema = z.object({
 export const RemoteAgentRuntimeCatalogEntryViewSchema = z.object({
   runtimeKind: runtimeKindSchema,
   executablePath: z.string().optional(),
-  status: z.string(),
+  status: runtimeCatalogStatusSchema,
   version: z.string().optional(),
   metadata: jsonRecordSchema,
   lastError: z.string().optional(),
@@ -124,7 +134,7 @@ export const RemoteAgentMachineBindingViewSchema = z.object({
   runtimeKind: runtimeKindSchema,
   runtimePath: z.string().optional(),
   localRootPath: z.string().optional(),
-  status: z.string(),
+  status: bindingStatusSchema,
   runtimeSummary: RemoteAgentRuntimeSummaryViewSchema.optional(),
 })
 

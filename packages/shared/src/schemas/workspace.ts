@@ -1,9 +1,13 @@
 import { z } from "zod"
 import {
+  ACTOR_ROLES,
   CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES,
+  INVITE_TRUST_LEVELS,
   WORKSPACE_ACCESS_KEYS,
+  WORKSPACE_TRUST_LEVELS,
 } from "../constants/enums.js"
 import { IsoInstantStringSchema } from "./datetime.js"
+import { ActorDefinitionSchema } from "./organization.js"
 
 /**
  * App-facing contracts for the workspace module's APP routes (master plan
@@ -13,13 +17,72 @@ import { IsoInstantStringSchema } from "./datetime.js"
  * the api presenter builds the value from the DB record and web/mobile parse it.
  *
  * Top-level scalar fields are modeled explicitly. The `secretary` actor view
- * returned by workspace-create carries the same genuinely-open `definition`
- * (docs/config) tree the organization actor views own, so it is modeled as an
- * open record here rather than re-validated interior-by-interior (deepening is
- * tracked under P1-3 / P1-7). See §5.1 / §10.1.
+ * returned by workspace-create carries the same actor definition tree as
+ * organization actor views, so it reuses the shared actor definition schema
+ * instead of treating that app response branch as opaque.
  */
 
-const TrustLevelFieldSchema = z.string().nullable()
+const TrustLevelFieldSchema = z.enum(WORKSPACE_TRUST_LEVELS).nullable()
+const ConversationTypeMaskSchema = z.number().int().min(1).max(15)
+const CapabilityConversationTypePolicyFamilySchema = z.enum(
+  CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES
+)
+
+/** Create-workspace request body. */
+export const WorkspaceCreateInputSchema = z.object({
+  name: z.string().min(1).max(255),
+  description: z.string().max(2000).optional(),
+})
+export type WorkspaceCreateInput = z.infer<typeof WorkspaceCreateInputSchema>
+
+/** Update-workspace request body. */
+export const WorkspaceUpdateInputSchema = z.object({
+  name: z.string().min(1).max(255).optional(),
+  description: z.string().max(2000).optional(),
+})
+export type WorkspaceUpdateInput = z.infer<typeof WorkspaceUpdateInputSchema>
+
+/** Add-member request body. */
+export const WorkspaceAddMemberInputSchema = z.object({
+  userId: z.uuid(),
+  trustLevel: z.enum(INVITE_TRUST_LEVELS),
+})
+export type WorkspaceAddMemberInput = z.infer<
+  typeof WorkspaceAddMemberInputSchema
+>
+
+/** Workspace-access grant request body. */
+export const WorkspaceAccessGrantInputSchema = z.object({
+  workspaceMemberId: z.uuid(),
+  accessKey: z.enum(WORKSPACE_ACCESS_KEYS),
+})
+export type WorkspaceAccessGrantInput = z.infer<
+  typeof WorkspaceAccessGrantInputSchema
+>
+
+/** Member's chief-actor preference update request body. */
+export const WorkspaceChiefActorPreferenceInputSchema = z.object({
+  chiefActorId: z.uuid().nullable(),
+})
+export type WorkspaceChiefActorPreferenceInput = z.infer<
+  typeof WorkspaceChiefActorPreferenceInputSchema
+>
+
+/** Capability/conversation-type policy update request body. */
+export const WorkspaceCapabilityConversationTypePolicyUpdateInputSchema =
+  z.object({
+    policies: z
+      .partialRecord(
+        CapabilityConversationTypePolicyFamilySchema,
+        ConversationTypeMaskSchema
+      )
+      .refine((value) => Object.keys(value).length > 0, {
+        message: "At least one policy update is required",
+      }),
+  })
+export type WorkspaceCapabilityConversationTypePolicyUpdateInput = z.infer<
+  typeof WorkspaceCapabilityConversationTypePolicyUpdateInputSchema
+>
 
 /** Base workspace view (presentWorkspaceRow): the workspace instance fields. */
 export const WorkspaceViewSchema = z.object({
@@ -43,6 +106,8 @@ export const WorkspaceListItemViewSchema = WorkspaceViewSchema.extend({
   trustLevel: TrustLevelFieldSchema,
 })
 export type WorkspaceListItemView = z.infer<typeof WorkspaceListItemViewSchema>
+export const WorkspaceListViewSchema = z.array(WorkspaceListItemViewSchema)
+export type WorkspaceListView = z.infer<typeof WorkspaceListViewSchema>
 
 /**
  * Workspace-create result: the new workspace fields plus the seeded secretary
@@ -52,7 +117,7 @@ export const WorkspaceCreateResultViewSchema = WorkspaceViewSchema.extend({
   secretary: z.object({
     id: z.string(),
     workspaceId: z.string(),
-    definition: z.unknown(),
+    definition: ActorDefinitionSchema,
     currentVersion: z.number(),
     isActive: z.boolean(),
     isPublicShared: z.boolean(),
@@ -81,6 +146,10 @@ export const WorkspaceMemberViewSchema = z.object({
   avatarUrl: z.string().nullable().optional(),
 })
 export type WorkspaceMemberView = z.infer<typeof WorkspaceMemberViewSchema>
+export const WorkspaceMemberListViewSchema = z.array(WorkspaceMemberViewSchema)
+export type WorkspaceMemberListView = z.infer<
+  typeof WorkspaceMemberListViewSchema
+>
 
 /**
  * Workspace access binding view. The list response joins the member's
@@ -103,6 +172,12 @@ export const WorkspaceAccessBindingViewSchema = z.object({
 export type WorkspaceAccessBindingView = z.infer<
   typeof WorkspaceAccessBindingViewSchema
 >
+export const WorkspaceAccessBindingListViewSchema = z.array(
+  WorkspaceAccessBindingViewSchema
+)
+export type WorkspaceAccessBindingListView = z.infer<
+  typeof WorkspaceAccessBindingListViewSchema
+>
 
 /** Workspace navigation capability flags. */
 export const WorkspaceNavigationViewSchema = z.object({
@@ -119,7 +194,7 @@ export type WorkspaceNavigationView = z.infer<
 export const WorkspaceChiefActorSummaryViewSchema = z.object({
   id: z.string(),
   displayName: z.string(),
-  role: z.string(),
+  role: z.enum(ACTOR_ROLES),
   title: z.string(),
   avatarUrl: z.string().optional(),
 })

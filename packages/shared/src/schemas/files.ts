@@ -7,6 +7,7 @@ import {
   FILE_PARSE_OUTPUT_KINDS,
   FILE_PARSE_RUN_STATUSES,
   FILE_STORAGE_BACKENDS,
+  USER_UPLOAD_FILE_ORIGIN_SYSTEMS,
 } from "../constants/enums.js"
 
 /**
@@ -27,6 +28,14 @@ const FILE_ORIGIN_SYSTEM_VALUES = Object.values(FILE_ORIGIN_SYSTEMS) as [
   string,
   ...string[],
 ]
+
+/** Multipart `origin` field for app-facing user uploads. */
+export const FileUploadOriginInputSchema = z.strictObject({
+  family: z.literal("user_upload"),
+  system: z.enum(USER_UPLOAD_FILE_ORIGIN_SYSTEMS),
+  details: z.record(z.string(), z.unknown()).optional(),
+})
+export type FileUploadOriginInput = z.infer<typeof FileUploadOriginInputSchema>
 
 /** Origin provenance summary attached to every presented file record. */
 export const FileOriginSummaryViewSchema = z.object({

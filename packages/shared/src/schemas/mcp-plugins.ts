@@ -1,47 +1,26 @@
 import { z } from "zod"
 import {
+  CAPABILITY_ACCESS_TARGET_TYPES,
+  MARKETPLACE_REQUIREMENT_KINDS,
+  MARKETPLACE_REQUIREMENT_STATUSES,
+  MARKETPLACE_SYNC_MODES,
+  MCP_VALIDATION_RULE_KINDS,
+  PLUGIN_AUTH_BINDING_DRIVER_KINDS,
+  PLUGIN_AUTH_CHALLENGE_KINDS,
+  PLUGIN_AUTH_CHALLENGE_OPEN_MODES,
+  PLUGIN_AUTH_DERIVED_VALUE_NAMES,
   PLUGIN_AUTH_SESSION_STATUSES,
+  PLUGIN_AUTH_SESSION_PHASES,
+  PLUGIN_AUTH_VALUE_SOURCE_KINDS,
+  PLUGIN_CONFIG_FIELD_TYPES,
+  PLUGIN_INSTALLATION_STATUSES,
+  PLUGIN_INSTALL_ACTION_KINDS,
+  PLUGIN_INSTALL_STEP_KINDS,
+  PLUGIN_INSTALL_STEP_SCOPES,
   PLUGIN_SPEC_TRANSPORTS,
   REUSE_SCOPES,
 } from "../constants/enums.js"
 import { IsoInstantStringSchema } from "./datetime.js"
-
-/*
- * Literal sets for the plugin-spec enums. These mirror the string-literal union
- * types in ../types/index.ts (PluginConfigFieldType, PluginInstallStepKind,
- * PluginInstallActionKind, PluginAuthBindingDriverKind) one-to-one. They live
- * here rather than in constants/enums.ts because those unions are hand-authored
- * type aliases, not runtime constant tuples. Keep in sync with that file.
- */
-const PLUGIN_CONFIG_FIELD_TYPES = [
-  "text",
-  "textarea",
-  "number",
-  "boolean",
-  "select",
-  "multiselect",
-  "secret",
-  "auth_connection",
-  "file",
-] as const
-const PLUGIN_INSTALL_STEP_KINDS = [
-  "form",
-  "auth",
-  "check",
-  "confirm",
-  "reuse_scope",
-  "integration_events",
-] as const
-const PLUGIN_INSTALL_ACTION_KINDS = [
-  "auth_start",
-  "external_link",
-  "noop",
-] as const
-const PLUGIN_AUTH_BINDING_DRIVER_KINDS = [
-  "oauth2_authorization_code_pkce",
-  "mijia_qr_login",
-  "feishu_cli_setup",
-] as const
 
 /**
  * App-facing contracts for the MCP plugin marketplace + installations.
@@ -120,7 +99,7 @@ export const PluginInstallStepSchema = z.object({
   kind: z.enum(PLUGIN_INSTALL_STEP_KINDS),
   titleI18n: localizedTextSchema,
   descriptionI18n: localizedTextSchema.optional(),
-  scope: z.enum(["workspace", "plugin"]),
+  scope: z.enum(PLUGIN_INSTALL_STEP_SCOPES),
   fields: z.array(z.string()),
   optional: z.boolean().optional(),
   helpUrl: z.string().optional(),
@@ -142,12 +121,12 @@ export type PluginInstallFlow = z.infer<typeof PluginInstallFlowSchema>
  * literal, or a server-derived value such as the OAuth callback URL).
  */
 export const PluginAuthValueSourceSchema = z.object({
-  source: z.enum(["config", "env", "literal", "derived"]),
+  source: z.enum(PLUGIN_AUTH_VALUE_SOURCE_KINDS),
   field: z.string().optional(),
   env: z.string().optional(),
   // Literal value; type depends on the binding input. Opaque.
   value: z.unknown().optional(),
-  name: z.enum(["app_base_url", "oauth_callback_url"]).optional(),
+  name: z.enum(PLUGIN_AUTH_DERIVED_VALUE_NAMES).optional(),
 })
 export type PluginAuthValueSource = z.infer<typeof PluginAuthValueSourceSchema>
 
@@ -181,15 +160,7 @@ export type PluginAuthBindingDefinition = z.infer<
 /** A server-side validation rule applied to a plugin config field. */
 export const McpValidationRuleSchema = z.object({
   field: z.string(),
-  rule: z.enum([
-    "required",
-    "pattern",
-    "url",
-    "min_length",
-    "max_length",
-    "prefix",
-    "enum",
-  ]),
+  rule: z.enum(MCP_VALIDATION_RULE_KINDS),
   value: z.union([z.string(), z.number(), z.array(z.string())]).optional(),
   message: z.string(),
 })
@@ -207,7 +178,7 @@ export const McpSetupStepSchema = z.object({
   titleI18n: localizedTextSchema.optional(),
   description: z.string().optional(),
   descriptionI18n: localizedTextSchema.optional(),
-  scope: z.enum(["workspace", "plugin"]),
+  scope: z.enum(PLUGIN_INSTALL_STEP_SCOPES),
   fields: z.array(z.string()),
   optional: z.boolean().optional(),
   helpUrl: z.string().optional(),
@@ -354,6 +325,37 @@ export const PluginCategoryViewSchema = z.strictObject({
 })
 export type PluginCategoryView = z.infer<typeof PluginCategoryViewSchema>
 
+/** App-facing contract for marketplace plugin list responses. */
+export const MarketplacePluginListViewSchema = z.array(
+  MarketplacePluginViewSchema
+)
+export type MarketplacePluginListView = z.infer<
+  typeof MarketplacePluginListViewSchema
+>
+
+/** App-facing contract for top-level plugin category list responses. */
+export const PluginCategoryListViewSchema = z.array(PluginCategoryViewSchema)
+export type PluginCategoryListView = z.infer<
+  typeof PluginCategoryListViewSchema
+>
+
+/** App-facing contract for marketplace publisher list responses. */
+export const MarketplacePublisherListViewSchema = z.array(
+  MarketplacePublisherViewSchema
+)
+export type MarketplacePublisherListView = z.infer<
+  typeof MarketplacePublisherListViewSchema
+>
+
+/** App-facing contract for a publisher detail plus its marketplace plugins. */
+export const MarketplacePublisherDetailViewSchema =
+  MarketplacePublisherViewSchema.extend({
+    plugins: MarketplacePluginListViewSchema,
+  })
+export type MarketplacePublisherDetailView = z.infer<
+  typeof MarketplacePublisherDetailViewSchema
+>
+
 /**
  * App-facing contract for an installed plugin (root + resolved plugin metadata,
  * sanitized config + per-field config state).
@@ -370,7 +372,7 @@ export const PluginInstallationDetailViewSchema = z.strictObject({
   effectiveConversationTypeMask: z.number().int(),
   supportedReuseScopes: z.array(z.enum(REUSE_SCOPES)),
   isEnabled: z.boolean(),
-  status: z.enum(["active", "disabled", "error", "archived"]),
+  status: z.enum(PLUGIN_INSTALLATION_STATUSES),
   // Sanitized config VALUES keyed by author-defined field names — varies per
   // plugin. The structured, app-owned per-field state is `configState` below.
   configData: z.record(z.string(), z.unknown()),
@@ -381,9 +383,7 @@ export const PluginInstallationDetailViewSchema = z.strictObject({
   updatedAt: IsoInstantStringSchema,
   sourceCatalogItemId: z.string().nullable(),
   sourceCatalogVersionId: z.string().nullable(),
-  sourceSyncMode: z
-    .enum(["notify", "manual_merge", "follow_upstream", "detached"])
-    .nullable(),
+  sourceSyncMode: z.enum(MARKETPLACE_SYNC_MODES).nullable(),
   pluginSlug: z.string(),
   pluginDisplayName: z.string(),
   pluginDescription: z.string(),
@@ -423,6 +423,14 @@ export type PluginInstallationDetailView = z.infer<
   typeof PluginInstallationDetailViewSchema
 >
 
+/** App-facing contract for installed plugin list responses. */
+export const PluginInstallationListViewSchema = z.array(
+  PluginInstallationDetailViewSchema
+)
+export type PluginInstallationListView = z.infer<
+  typeof PluginInstallationListViewSchema
+>
+
 // ── Auxiliary plugin procedure-flow contracts (auth session / install plan) ──
 // These are app-facing (web install-dialog consumes the auth session), so per
 // master plan §5.1/§7 (Tier C app surface) they return `{ data }` via sendData.
@@ -431,10 +439,10 @@ export type PluginInstallationDetailView = z.infer<
 // resultPreview) stay as open records — see the inline notes.
 
 export const PluginAuthChallengeViewSchema = z.strictObject({
-  kind: z.enum(["redirect", "qr_code", "none"]),
+  kind: z.enum(PLUGIN_AUTH_CHALLENGE_KINDS),
   url: z.string().optional(),
   qrUrl: z.string().optional(),
-  openMode: z.enum(["popup", "replace"]).optional(),
+  openMode: z.enum(PLUGIN_AUTH_CHALLENGE_OPEN_MODES).optional(),
   expiresAt: IsoInstantStringSchema.optional(),
   // driver-defined challenge metadata; opaque.
   metadata: z.record(z.string(), z.unknown()).optional(),
@@ -446,23 +454,10 @@ export const PluginAuthSessionViewSchema = z.strictObject({
   packageId: z.string(),
   revisionId: z.string().optional(),
   bindingKey: z.string(),
-  driver: z.enum([
-    "oauth2_authorization_code_pkce",
-    "mijia_qr_login",
-    "feishu_cli_setup",
-  ]),
+  driver: z.enum(PLUGIN_AUTH_BINDING_DRIVER_KINDS),
   workspaceMemberId: z.string(),
   status: z.enum(PLUGIN_AUTH_SESSION_STATUSES),
-  phase: z
-    .enum([
-      "awaiting_start",
-      "awaiting_external_input",
-      "awaiting_callback",
-      "pending_scan",
-      "pending_confirm",
-      "finalizing",
-    ])
-    .optional(),
+  phase: z.enum(PLUGIN_AUTH_SESSION_PHASES).optional(),
   state: z.string().optional(),
   challenge: PluginAuthChallengeViewSchema.optional(),
   errorCode: z.string().optional(),
@@ -487,14 +482,36 @@ export type PluginAuthSessionEnvelope = z.infer<
 >
 
 /** Plan returned by POST .../install-plan (checks + derived grant plan). */
+export const MarketplaceRequirementCheckSchema = z.strictObject({
+  requirementId: z.string(),
+  requirementKind: z.enum(MARKETPLACE_REQUIREMENT_KINDS),
+  status: z.enum(MARKETPLACE_REQUIREMENT_STATUSES),
+  message: z.string(),
+  matchedInstanceIds: z.array(z.string()),
+  missingPublisherSlug: z.string().optional(),
+  missingPackageSlug: z.string().optional(),
+  missingTag: z.string().optional(),
+})
+export type MarketplaceRequirementCheck = z.infer<
+  typeof MarketplaceRequirementCheckSchema
+>
+
+export const PluginInstallGrantPlanSchema = z.strictObject({
+  requiresGrant: z.boolean(),
+  requiredPermissions: z.array(z.string()),
+  suggestedAccessTargetType: z.enum(CAPABILITY_ACCESS_TARGET_TYPES).optional(),
+  reason: z.string().optional(),
+})
+export type PluginInstallGrantPlan = z.infer<
+  typeof PluginInstallGrantPlanSchema
+>
+
 export const PluginInstallPlanViewSchema = z.strictObject({
   packageId: z.string(),
   revisionId: z.string().nullable(),
   workspaceId: z.string(),
-  // pre-flight checks (currently empty []); each check is author/runtime-shaped.
-  checks: z.array(z.unknown()),
-  // derived grant plan; structure owned by buildPluginGrantPlan, passed through.
-  grantPlan: z.unknown(),
+  checks: z.array(MarketplaceRequirementCheckSchema),
+  grantPlan: PluginInstallGrantPlanSchema,
 })
 export type PluginInstallPlanView = z.infer<typeof PluginInstallPlanViewSchema>
 
@@ -518,8 +535,77 @@ export const PluginAuditLogListSchema = z.array(
 export type PluginAuditLogList = z.infer<typeof PluginAuditLogListSchema>
 
 // ───────────────────────────── request DTOs (§5.1.1) ─────────────────────────
-// App-facing request bodies for the mcp-plugins APP routes. Single-sourced here
-// so the API parser and the web/mobile clients share one definition.
+// App-facing request bodies / queries for the mcp-plugins APP routes.
+// Single-sourced here so the API parser and the web/mobile clients share one
+// definition.
+
+const commaSeparatedQueryListSchema = z
+  .union([z.string(), z.array(z.string())])
+  .optional()
+  .transform((value) => {
+    if (typeof value === "undefined") return undefined
+    const rawValues = Array.isArray(value) ? value : value.split(",")
+    const values = rawValues.map((item) => item.trim()).filter(Boolean)
+    return values.length > 0 ? values : undefined
+  })
+
+const auditLimitQuerySchema = z.coerce
+  .number()
+  .int()
+  .positive()
+  .max(200)
+  .optional()
+
+/** Query for GET /mcp/marketplace. */
+export const McpMarketplaceListQuerySchema = z.object({
+  search: z.string().trim().min(1).optional(),
+  tags: commaSeparatedQueryListSchema,
+  categories: commaSeparatedQueryListSchema,
+  transport: z.enum(PLUGIN_SPEC_TRANSPORTS).optional(),
+})
+export type McpMarketplaceListQuery = z.input<
+  typeof McpMarketplaceListQuerySchema
+>
+export type McpMarketplaceListParsedQuery = z.output<
+  typeof McpMarketplaceListQuerySchema
+>
+
+/** Query for GET /workspaces/:workspaceId/mcp/installations. */
+export const McpPluginInstallationListQuerySchema = z.object({
+  pluginId: z.uuid().optional(),
+})
+export type McpPluginInstallationListQuery = z.infer<
+  typeof McpPluginInstallationListQuerySchema
+>
+
+/** Query for GET /workspaces/:workspaceId/mcp/audit/tool-calls. */
+export const McpPluginToolCallAuditLogListQuerySchema = z.object({
+  pluginId: z.uuid().optional(),
+  sessionId: z.uuid().optional(),
+  actorId: z.uuid().optional(),
+  limit: auditLimitQuerySchema,
+  before: IsoInstantStringSchema.optional(),
+})
+export type McpPluginToolCallAuditLogListQuery = z.output<
+  typeof McpPluginToolCallAuditLogListQuerySchema
+>
+
+/** Query for GET /workspaces/:workspaceId/mcp/audit/events. */
+export const McpPluginEventAuditLogListQuerySchema = z.object({
+  eventType: z.string().trim().min(1).optional(),
+  pluginId: z.uuid().optional(),
+  limit: auditLimitQuerySchema,
+  before: IsoInstantStringSchema.optional(),
+})
+export type McpPluginEventAuditLogListQuery = z.output<
+  typeof McpPluginEventAuditLogListQuerySchema
+>
+
+/** Body for POST .../mcp/plugins/:pluginId/install-plan. */
+export const PluginInstallPlanInputSchema = z.object({})
+export type PluginInstallPlanInput = z.infer<
+  typeof PluginInstallPlanInputSchema
+>
 
 /**
  * Body for POST .../mcp/plugins/:pluginId/auth/:bindingKey/start. draftConfig /

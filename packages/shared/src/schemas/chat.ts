@@ -1,13 +1,47 @@
 import { z } from "zod"
 import {
+  ACTOR_RUNTIME_HEALTHS,
+  AUTOMATION_RULE_CATEGORIES,
+  AUTOMATION_TRIGGER_SOURCE_KINDS,
+  CHAT_MEMBERSHIP_UPDATE_REASONS,
+  CHAT_PARTICIPANT_REMOVAL_STATES,
   CHAT_TYPING_STATES,
+  CONVERSATION_EVENT_CONTEXT_POLICIES,
+  CONVERSATION_EVENT_TIMELINE_POLICIES,
+  CONVERSATION_FEED_EVENT_TYPE,
+  CONVERSATION_FEED_ITEM_SUBTYPES,
+  CONVERSATION_FEED_MESSAGE_TYPE,
   CONVERSATION_KINDS,
+  CONVERSATION_ITEM_ROLES,
+  CONVERSATION_ITEM_SCOPES,
+  CONVERSATION_ITEM_SURFACES,
+  CONVERSATION_ITEM_TYPES,
+  CONVERSATION_MESSAGE_TRANSPORT_DIRECTIONS,
+  CONVERSATION_MESSAGE_SUBTYPES,
+  CONVERSATION_PARTICIPANT_STATES,
+  CONVERSATION_PARTICIPANT_TYPES,
+  CONVERSATION_STATUSES,
+  CONVERSATION_REPLY_REF_SUBTYPES,
+  MEMORY_CATEGORIES,
   PLAN_APPROVAL_DECISIONS,
   PUSH_TOKEN_PLATFORMS,
+  REMOTE_AGENT_RUNTIME_KINDS,
+  REMOTE_AGENT_RUNTIME_STATES,
   RUNTIME_AUTHORIZATION_PRESETS,
+  SESSION_WAKEUP_SOURCE_PARTICIPANT_TYPES,
+  SESSION_STATUSES,
   TASK_DECISIONS,
+  TRANSPORT_DELIVERY_STATUSES,
+  TRANSPORT_ENDPOINT_TYPES,
+  TRANSPORT_KINDS,
 } from "../constants/enums.js"
 import { CanonicalContentBlockSchema } from "./chat-content-block.js"
+import { RemoteAgentRuntimeCapabilityViewSchema } from "./remote-agents.js"
+import {
+  SubjectRefSchema,
+  TaskNoticeSummarySchema,
+  TaskSummarySchema,
+} from "./tasks.js"
 
 /**
  * App-facing contracts for the chat module's APP routes (master plan §5.3).
@@ -17,22 +51,306 @@ import { CanonicalContentBlockSchema } from "./chat-content-block.js"
  * helper does the `{ data }` wrapping), so a `{ conversation }` envelope is
  * modeled as `z.object({ conversation: ... })` here.
  *
- * Top-level discriminant / scalar fields are modeled explicitly. The deeply
- * nested presentation views the service/presenter already own — conversation
- * views, hydrated conversation items (a discriminated message/event union with
- * canonical content blocks + per-event payload maps), participant summaries,
- * runtime-state maps, and sync-event payloads — are genuinely-open shapes the
- * boundary only round-trips unchanged. They are modeled as `z.unknown()` /
- * open records for now; deepening them is tracked under P1-3.
+ * Top-level discriminant / scalar fields are modeled explicitly. The remaining
+ * deliberately-open presentation shapes are hydrated conversation item
+ * transport/event details. Runtime-state maps, device state, sync events,
+ * viewer-scoped task summaries, and runtime-turn activity detail are modeled
+ * below because web/mobile consume them as stable shared views.
  */
 
 const timestampSchema = z.string()
 
-/** A single hydrated conversation view (open presentation shape). */
-const ChatConversationViewSchema = z.unknown()
+const ConversationEntityRefSchema = z.object({
+  participantId: z.string().optional(),
+  participantType: z.enum(CONVERSATION_PARTICIPANT_TYPES),
+  workspaceMemberId: z.string().optional(),
+  actorId: z.string().optional(),
+  remoteAgentId: z.string().optional(),
+  externalUserKey: z.string().optional(),
+  transportAddressId: z.string().optional(),
+  transportKind: z.enum(TRANSPORT_KINDS).optional(),
+  name: z.string().optional(),
+  title: z.string().optional(),
+  role: z.string().optional(),
+  avatarUrl: z.string().optional(),
+  avatarEmoji: z.string().optional(),
+})
 
-/** A single hydrated conversation item — message/event union (open). */
-const ChatConversationItemSchema = z.unknown()
+const ChatParticipantSummarySchema = ConversationEntityRefSchema.omit({
+  participantId: true,
+  participantType: true,
+  name: true,
+}).extend({
+  participantId: z.string(),
+  conversationId: z.string(),
+  participantType: z.enum(CONVERSATION_PARTICIPANT_TYPES),
+  name: z.string(),
+  roleKey: z.string(),
+  state: z.enum(CONVERSATION_PARTICIPANT_STATES),
+  metadata: z.record(z.string(), z.unknown()),
+  joinedAt: timestampSchema,
+  leftAt: timestampSchema.optional(),
+  sessionId: z.string().optional(),
+  sessionStatus: z
+    .union([z.enum(SESSION_STATUSES), z.enum(REMOTE_AGENT_RUNTIME_STATES)])
+    .optional(),
+})
+
+const ConversationParticipantRefSchema = ConversationEntityRefSchema.extend({
+  participantId: z.string(),
+  participantType: z.enum(CONVERSATION_PARTICIPANT_TYPES),
+})
+
+const ChatConversationPresentationSchema = z.object({
+  chatType: z.enum(CONVERSATION_KINDS),
+  subtitle: z.string().optional(),
+  avatarParticipantIds: z.array(z.string()),
+  peerParticipantId: z.string().optional(),
+  avatarUrl: z.string().optional(),
+  avatarEmoji: z.string().optional(),
+})
+
+const ChatConversationPermissionsSchema = z.object({
+  canManageConversation: z.boolean(),
+  canManageParticipants: z.boolean(),
+  canRename: z.boolean(),
+})
+
+const ChatConversationLastItemSchema = z.object({
+  itemId: z.string(),
+  sequence: z.number().int().nonnegative(),
+  itemType: z.enum(CONVERSATION_ITEM_TYPES),
+  subtype: z.enum(CONVERSATION_FEED_ITEM_SUBTYPES),
+  previewText: z.string(),
+  authorParticipantId: z.string().optional(),
+  author: ConversationEntityRefSchema.optional(),
+  createdAt: timestampSchema,
+})
+
+const ConversationMessageTransportContextSchema = z.object({
+  direction: z.enum(CONVERSATION_MESSAGE_TRANSPORT_DIRECTIONS),
+  transportKind: z.enum(TRANSPORT_KINDS),
+  transportAccountId: z.string().optional(),
+  endpointType: z.enum(TRANSPORT_ENDPOINT_TYPES).optional(),
+  endpointExternalId: z.string().optional(),
+  externalMessageId: z.string().optional(),
+  transportAddressId: z.string().optional(),
+  senderExternalId: z.string().optional(),
+})
+
+const ConversationMessageTransportDeliverySchema = z.object({
+  linkId: z.string(),
+  transportKind: z.enum(TRANSPORT_KINDS),
+  direction: z.enum(CONVERSATION_MESSAGE_TRANSPORT_DIRECTIONS),
+  deliveryStatus: z.enum(TRANSPORT_DELIVERY_STATUSES),
+  endpointType: z.enum(TRANSPORT_ENDPOINT_TYPES).optional(),
+  endpointExternalId: z.string().optional(),
+  endpointDisplayName: z.string().optional(),
+  externalMessageId: z.string().optional(),
+  deliveredAt: timestampSchema.optional(),
+  metadata: z.record(z.string(), z.unknown()),
+})
+
+/** A single hydrated conversation view. */
+const ChatConversationViewSchema = z.object({
+  conversationId: z.string(),
+  workspaceId: z.string(),
+  title: z.string(),
+  kind: z.enum(CONVERSATION_KINDS),
+  isIm: z.boolean(),
+  status: z.enum(CONVERSATION_STATUSES),
+  unreadCount: z.number().int().nonnegative(),
+  muted: z.boolean(),
+  archived: z.boolean(),
+  pinnedSortKey: timestampSchema.optional(),
+  updatedAt: timestampSchema,
+  createdAt: timestampSchema,
+  participants: z.array(ChatParticipantSummarySchema),
+  presentation: ChatConversationPresentationSchema,
+  permissions: ChatConversationPermissionsSchema,
+  viewerParticipantId: z.string().optional(),
+  lastItem: ChatConversationLastItemSchema.optional(),
+})
+
+const ConversationReplyRefSchema = z.object({
+  itemId: z.string(),
+  ref: z.string().optional(),
+  sequence: z.number().int().nonnegative().optional(),
+  itemType: z.enum(CONVERSATION_ITEM_TYPES),
+  subtype: z.enum(CONVERSATION_REPLY_REF_SUBTYPES),
+  author: ConversationEntityRefSchema.optional(),
+  previewText: z.string(),
+  previewBlocks: z.array(CanonicalContentBlockSchema),
+  createdAt: timestampSchema.optional(),
+  isUnavailable: z.boolean().optional(),
+})
+
+const ChatConversationItemBaseSchema = z.object({
+  id: z.string(),
+  conversationId: z.string(),
+  sequence: z.number().int().nonnegative(),
+  sessionId: z.string().optional(),
+  turnId: z.string().optional(),
+  clientMessageId: z.string().optional(),
+  role: z.enum(CONVERSATION_ITEM_ROLES),
+  scope: z.enum(CONVERSATION_ITEM_SCOPES),
+  surface: z.enum(CONVERSATION_ITEM_SURFACES),
+  authorParticipantId: z.string().optional(),
+  author: ConversationEntityRefSchema.optional(),
+  replyToItemId: z.string().optional(),
+  replyTo: ConversationReplyRefSchema.optional(),
+  causedByItemId: z.string().optional(),
+  content: z.string(),
+  contentBlocks: z.array(CanonicalContentBlockSchema),
+  metadata: z.record(z.string(), z.unknown()),
+  restrictedAudienceParticipantIds: z.array(z.string()).optional(),
+  restrictedAudience: z.array(ConversationEntityRefSchema).optional(),
+  createdAt: timestampSchema,
+})
+
+const ParticipantEventPayloadSchema = z.object({
+  batchId: z.string(),
+  initiator: ConversationEntityRefSchema.optional(),
+  participants: z.array(ConversationParticipantRefSchema),
+  focusItemId: z.string().optional(),
+})
+
+const MemoryEventPayloadBaseSchema = z.object({
+  actor: ConversationEntityRefSchema,
+  memoryId: z.string(),
+  memoryOwner: SubjectRefSchema,
+  memoryScope: SubjectRefSchema.optional(),
+  memoryNamespaceKey: z.string(),
+  memoryCategory: z.enum(MEMORY_CATEGORIES),
+  textDigest: z.string().optional(),
+  sourceItemId: z.string().optional(),
+  sourceTurnId: z.string().optional(),
+})
+
+const AutomationNoticePayloadSchema = z.object({
+  automationId: z.string(),
+  executionId: z.string(),
+  occurrenceId: z.string(),
+  category: z.enum(AUTOMATION_RULE_CATEGORIES),
+  sourceKind: z.enum(AUTOMATION_TRIGGER_SOURCE_KINDS),
+  eventSourceId: z.string().optional(),
+  eventSourceName: z.string().optional(),
+  sourceLabel: z.string().optional(),
+  sourceTitle: z.string().optional(),
+  sourceSummary: z.string().optional(),
+  sourceDescription: z.string().optional(),
+  occurredAt: timestampSchema.optional(),
+  message: z.string(),
+  messageBlocks: z.array(CanonicalContentBlockSchema).optional(),
+})
+
+const ChatConversationEventItemBaseSchema =
+  ChatConversationItemBaseSchema.extend({
+    itemType: z.literal("event"),
+    eventTimelinePolicy: z
+      .enum(CONVERSATION_EVENT_TIMELINE_POLICIES)
+      .optional(),
+    eventContextPolicy: z.enum(CONVERSATION_EVENT_CONTEXT_POLICIES).optional(),
+  })
+
+const ChatConversationEventItemSchema = z.discriminatedUnion("subtype", [
+  ChatConversationEventItemBaseSchema.extend({
+    subtype: z.literal(CONVERSATION_FEED_EVENT_TYPE.PARTICIPANT_JOINED),
+    eventPayload: ParticipantEventPayloadSchema,
+  }),
+  ChatConversationEventItemBaseSchema.extend({
+    subtype: z.literal(CONVERSATION_FEED_EVENT_TYPE.PARTICIPANT_KICKED),
+    eventPayload: ParticipantEventPayloadSchema.extend({
+      reason: z.string().optional(),
+    }),
+  }),
+  ChatConversationEventItemBaseSchema.extend({
+    subtype: z.literal(CONVERSATION_FEED_EVENT_TYPE.PARTICIPANT_LEFT),
+    eventPayload: ParticipantEventPayloadSchema,
+  }),
+  ChatConversationEventItemBaseSchema.extend({
+    subtype: z.literal(CONVERSATION_FEED_EVENT_TYPE.MEMORY_SAVED),
+    eventPayload: MemoryEventPayloadBaseSchema,
+  }),
+  ChatConversationEventItemBaseSchema.extend({
+    subtype: z.literal(CONVERSATION_FEED_EVENT_TYPE.MEMORY_UPDATED),
+    eventPayload: MemoryEventPayloadBaseSchema.extend({
+      supersedesMemoryId: z.string().optional(),
+    }),
+  }),
+  ChatConversationEventItemBaseSchema.extend({
+    subtype: z.literal(CONVERSATION_FEED_EVENT_TYPE.ACTOR_RENAMED),
+    eventPayload: z.object({
+      actor: ConversationEntityRefSchema,
+      oldName: z.string().optional(),
+      newName: z.string(),
+      sourceTurnId: z.string().optional(),
+    }),
+  }),
+  ChatConversationEventItemBaseSchema.extend({
+    subtype: z.literal(CONVERSATION_FEED_EVENT_TYPE.ACTOR_AVATAR_CHANGED),
+    eventPayload: z.object({
+      actor: ConversationEntityRefSchema,
+      oldAvatarEmoji: z.string().optional(),
+      newAvatarEmoji: z.string().optional(),
+      oldAvatarUrl: z.string().optional(),
+      newAvatarUrl: z.string().optional(),
+      sourceTurnId: z.string().optional(),
+    }),
+  }),
+  ChatConversationEventItemBaseSchema.extend({
+    subtype: z.literal(CONVERSATION_FEED_EVENT_TYPE.AUTOMATION_NOTICE),
+    eventPayload: AutomationNoticePayloadSchema,
+  }),
+  ChatConversationEventItemBaseSchema.extend({
+    subtype: z.literal(CONVERSATION_FEED_EVENT_TYPE.TASK_REQUESTED),
+    eventPayload: z.object({
+      task: TaskSummarySchema,
+    }),
+  }),
+  ChatConversationEventItemBaseSchema.extend({
+    subtype: z.literal(CONVERSATION_FEED_EVENT_TYPE.TASK_NOTICE),
+    eventPayload: TaskNoticeSummarySchema,
+  }),
+])
+
+/** A single hydrated conversation item; policies stay explicit passthrough. */
+const ChatConversationItemSchema = z.union([
+  ChatConversationItemBaseSchema.extend({
+    itemType: z.literal("message"),
+    subtype: z.enum(CONVERSATION_MESSAGE_SUBTYPES),
+    transport: ConversationMessageTransportContextSchema.optional(),
+    transportDeliveries: z
+      .array(ConversationMessageTransportDeliverySchema)
+      .optional(),
+  }),
+  ChatConversationItemBaseSchema.extend({
+    itemType: z.literal("summary"),
+    subtype: z.literal(CONVERSATION_FEED_MESSAGE_TYPE.SUMMARY),
+    transport: ConversationMessageTransportContextSchema.optional(),
+    transportDeliveries: z
+      .array(ConversationMessageTransportDeliverySchema)
+      .optional(),
+  }),
+  ChatConversationItemBaseSchema.extend({
+    itemType: z.literal("control"),
+    subtype: z.enum(CONVERSATION_MESSAGE_SUBTYPES),
+    transport: ConversationMessageTransportContextSchema.optional(),
+    transportDeliveries: z
+      .array(ConversationMessageTransportDeliverySchema)
+      .optional(),
+  }),
+  ChatConversationEventItemSchema,
+])
+
+const ChatDeviceStateSchema = z.object({
+  clientInstanceId: z.string(),
+  conversationId: z.string(),
+  lastVisibleSequence: z.number().int().nonnegative(),
+  lastInboxSeq: z.number().int().nonnegative(),
+  lastOpenedAt: timestampSchema.optional(),
+  draftPayload: z.record(z.string(), z.unknown()),
+})
 
 /** GET /chat/bootstrap. */
 export const ChatBootstrapViewSchema = z.object({
@@ -44,14 +362,6 @@ export const ChatBootstrapViewSchema = z.object({
 export type ChatBootstrapViewSchemaType = z.infer<
   typeof ChatBootstrapViewSchema
 >
-
-/** GET /chat/sync. `events` carry per-type open payloads. */
-export const ChatSyncViewSchema = z.object({
-  events: z.array(z.unknown()),
-  nextCursor: z.number(),
-  hasMore: z.boolean(),
-})
-export type ChatSyncViewSchemaType = z.infer<typeof ChatSyncViewSchema>
 
 /** POST/PUT /chat/client-instances(/:id). */
 export const ChatClientInstanceViewSchema = z.object({
@@ -82,14 +392,221 @@ export type ChatConversationListViewSchemaType = z.infer<
   typeof ChatConversationListViewSchema
 >
 
+const actorRuntimeActivityStates = [
+  "pending",
+  "running",
+  "input_required",
+  "completed",
+  "failed",
+  "skipped",
+  "cancelled",
+] as const
+
+const actorRuntimeToolKinds = ["system", "plugin", "device"] as const
+
+const actorRuntimeTaskStatuses = [
+  "working",
+  "input_required",
+  "completed",
+  "failed",
+  "cancelled",
+] as const
+
+const actorRuntimePhases = [
+  "idle",
+  "thinking",
+  "tool",
+  "responding",
+  "blocked",
+  "error",
+] as const
+
+const PresentationStringSchema = z.object({
+  key: z.string(),
+  params: z.record(z.string(), z.union([z.string(), z.number()])),
+  fallback: z.string(),
+})
+
+const ActorRuntimeProcessingTargetSchema = z.object({
+  wakeupId: z.string(),
+  participantType: z.enum(SESSION_WAKEUP_SOURCE_PARTICIPANT_TYPES).optional(),
+  participantId: z.string().optional(),
+  name: z.string(),
+  summary: z.string().optional(),
+  createdAt: timestampSchema,
+  attachedAt: timestampSchema.optional(),
+})
+
+const ActorRuntimeToolSourceSchema = z.object({
+  kind: z.enum(actorRuntimeToolKinds),
+  displayName: z.string().optional(),
+  upstreamToolName: z.string().optional(),
+})
+
+const ActorRuntimeTurnActivityItemSchema = z.object({
+  toolCallId: z.string(),
+  toolKind: z.enum(actorRuntimeToolKinds),
+  toolName: z.string(),
+  source: ActorRuntimeToolSourceSchema.optional(),
+  state: z.enum(actorRuntimeActivityStates),
+  displayTitle: z.string(),
+  displayDetail: z.string().optional(),
+  icon: z.string().optional(),
+  titlePresentation: PresentationStringSchema.optional(),
+  detailPresentation: PresentationStringSchema.optional(),
+  resultSummary: PresentationStringSchema.optional(),
+  requestBlocks: z.array(CanonicalContentBlockSchema),
+  resultBlocks: z.array(CanonicalContentBlockSchema),
+  taskStatus: z.enum(actorRuntimeTaskStatuses).optional(),
+  startedAt: timestampSchema,
+  updatedAt: timestampSchema,
+  completedAt: timestampSchema.optional(),
+})
+
+const ActorRuntimeTurnPreviewToolSchema = z.object({
+  toolCallId: z.string(),
+  toolKind: z.enum(actorRuntimeToolKinds),
+  toolName: z.string(),
+  source: ActorRuntimeToolSourceSchema.optional(),
+  state: z.enum(actorRuntimeActivityStates),
+  displayTitle: z.string(),
+  displayDetail: z.string().optional(),
+  icon: z.string().optional(),
+  titlePresentation: PresentationStringSchema.optional(),
+  detailPresentation: PresentationStringSchema.optional(),
+  startedAt: timestampSchema,
+  updatedAt: timestampSchema,
+  completedAt: timestampSchema.optional(),
+})
+
+const ActorRuntimeTurnPreviewSchema = z.object({
+  turnId: z.string(),
+  startedAt: timestampSchema,
+  updatedAt: timestampSchema,
+  processingTargets: z.array(ActorRuntimeProcessingTargetSchema),
+  activeTool: ActorRuntimeTurnPreviewToolSchema.optional(),
+  lastCompletedTool: ActorRuntimeTurnPreviewToolSchema.optional(),
+  totalToolCallCount: z.number().int().nonnegative(),
+  completedToolCallCount: z.number().int().nonnegative(),
+  failedToolCallCount: z.number().int().nonnegative(),
+})
+
+const RuntimeLastErrorSchema = z.object({
+  message: z.string(),
+  at: timestampSchema,
+})
+
+const ActorRuntimeStateSchema = z.object({
+  conversationId: z.string(),
+  sessionId: z.string(),
+  actorId: z.string(),
+  actorDisplayName: z.string(),
+  laneState: z.enum(SESSION_STATUSES),
+  health: z.enum(ACTOR_RUNTIME_HEALTHS),
+  phase: z.enum(actorRuntimePhases),
+  statusText: z.string().optional(),
+  pendingWakeupCount: z.number().int().nonnegative(),
+  currentTurnPreview: ActorRuntimeTurnPreviewSchema.optional(),
+  latestWakeupAt: timestampSchema.optional(),
+  lastError: RuntimeLastErrorSchema.optional(),
+  updatedAt: timestampSchema,
+})
+
+const RemoteAgentRuntimeStateSchema = z.object({
+  remoteAgentId: z.string(),
+  runtimeKind: z.enum(REMOTE_AGENT_RUNTIME_KINDS),
+  state: z.enum(REMOTE_AGENT_RUNTIME_STATES),
+  statusText: z.string().optional(),
+  activeConversationId: z.string().optional(),
+  activeTaskId: z.string().optional(),
+  sessionId: z.string().optional(),
+  pendingConversationCount: z.number().int().nonnegative(),
+  unreadDeliveryCount: z.number().int().nonnegative(),
+  lastActivityAt: timestampSchema.optional(),
+  lastRunStartedAt: timestampSchema.optional(),
+  lastRunFinishedAt: timestampSchema.optional(),
+  lastError: RuntimeLastErrorSchema.optional(),
+  updatedAt: timestampSchema,
+  capabilities: RemoteAgentRuntimeCapabilityViewSchema.optional(),
+})
+
+const ChatSyncEventBaseSchema = z.object({
+  syncSeq: z.number().int().nonnegative(),
+  memberSeq: z.number().int().nonnegative(),
+  workspaceId: z.string(),
+  workspaceMemberId: z.string(),
+  conversationId: z.string().optional(),
+  itemId: z.string().optional(),
+  occurredAt: timestampSchema,
+})
+
+const ChatSyncEventSchema = z.discriminatedUnion("eventType", [
+  ChatSyncEventBaseSchema.extend({
+    eventType: z.literal("conversation.upsert"),
+    payload: z.object({
+      conversation: ChatConversationViewSchema,
+    }),
+  }),
+  ChatSyncEventBaseSchema.extend({
+    eventType: z.literal("conversation.item.created"),
+    payload: z.object({
+      conversationId: z.string(),
+      item: ChatConversationItemSchema,
+    }),
+  }),
+  ChatSyncEventBaseSchema.extend({
+    eventType: z.literal("conversation.read.updated"),
+    payload: z.object({
+      conversationId: z.string(),
+      workspaceMemberId: z.string(),
+      participantId: z.string(),
+      readWatermarkSequence: z.number().int().nonnegative(),
+      lastReadAt: timestampSchema,
+    }),
+  }),
+  ChatSyncEventBaseSchema.extend({
+    eventType: z.literal("task.updated"),
+    payload: z.object({
+      conversationId: z.string(),
+      taskId: z.string(),
+      itemId: z.string().optional(),
+      task: TaskSummarySchema,
+    }),
+  }),
+  ChatSyncEventBaseSchema.extend({
+    eventType: z.literal("remote_agent.runtime_updated"),
+    payload: z.object({
+      remoteAgentId: z.string(),
+      snapshot: RemoteAgentRuntimeStateSchema,
+    }),
+  }),
+  ChatSyncEventBaseSchema.extend({
+    eventType: z.literal("conversation.membership.updated"),
+    payload: z.object({
+      conversationId: z.string(),
+      selfState: z.enum(CONVERSATION_PARTICIPANT_STATES),
+      reason: z.enum(CHAT_MEMBERSHIP_UPDATE_REASONS).optional(),
+      participants: z.array(ChatParticipantSummarySchema),
+    }),
+  }),
+])
+
+/** GET /chat/sync. */
+export const ChatSyncViewSchema = z.object({
+  events: z.array(ChatSyncEventSchema),
+  nextCursor: z.number(),
+  hasMore: z.boolean(),
+})
+export type ChatSyncViewSchemaType = z.infer<typeof ChatSyncViewSchema>
+
 /** GET /chat/conversations/:id/messages. */
 export const ChatConversationMessagesViewSchema = z.object({
   conversation: ChatConversationViewSchema,
   items: z.array(ChatConversationItemSchema),
-  runtimeByActor: z.record(z.string(), z.unknown()),
-  runtimeByRemoteAgent: z.record(z.string(), z.unknown()),
+  runtimeByActor: z.record(z.string(), ActorRuntimeStateSchema),
+  runtimeByRemoteAgent: z.record(z.string(), RemoteAgentRuntimeStateSchema),
   participantReadWatermarkSequence: z.number(),
-  deviceState: z.unknown().optional(),
+  deviceState: ChatDeviceStateSchema.optional(),
   hasMoreBefore: z.boolean(),
   hasMoreAfter: z.boolean(),
 })
@@ -98,7 +615,16 @@ export type ChatConversationMessagesViewSchemaType = z.infer<
 >
 
 /** GET /chat/conversations/:id/actors/:actorId/runtime-turns/:turnId. */
-export const ChatRuntimeTurnDetailViewSchema = z.unknown()
+export const ChatRuntimeTurnDetailViewSchema = z.object({
+  conversationId: z.string(),
+  actorId: z.string(),
+  actorDisplayName: z.string(),
+  turnId: z.string(),
+  startedAt: timestampSchema,
+  updatedAt: timestampSchema,
+  processingTargets: z.array(ActorRuntimeProcessingTargetSchema),
+  items: z.array(ActorRuntimeTurnActivityItemSchema),
+})
 export type ChatRuntimeTurnDetailViewSchemaType = z.infer<
   typeof ChatRuntimeTurnDetailViewSchema
 >
@@ -130,7 +656,7 @@ export type ChatReadWatermarkViewSchemaType = z.infer<
 export const ChatParticipantRemovalViewSchema = z.object({
   conversationId: z.string(),
   participantId: z.string(),
-  state: z.enum(["left", "removed"]),
+  state: z.enum(CHAT_PARTICIPANT_REMOVAL_STATES),
 })
 export type ChatParticipantRemovalViewSchemaType = z.infer<
   typeof ChatParticipantRemovalViewSchema
@@ -191,18 +717,21 @@ export type ChatMessageRetryViewSchemaType = z.infer<
 
 /**
  * POST /chat/conversations/:id/tasks/:taskId/respond — `{ outcome, task }`.
- * The enriched `task` is a genuinely-open viewer-scoped task summary.
+ * The enriched `task` is the shared viewer-scoped task summary.
  */
 export const ChatTaskRespondViewSchema = z.object({
   outcome: z.string(),
-  task: z.unknown(),
+  task: TaskSummarySchema,
 })
 export type ChatTaskRespondViewSchemaType = z.infer<
   typeof ChatTaskRespondViewSchema
 >
 
-/** GET /_debug/chat/dedup-counters — open in-process counter snapshot. */
-export const ChatDedupCountersViewSchema = z.record(z.string(), z.unknown())
+/** GET /_debug/chat/dedup-counters — in-process numeric counter snapshot. */
+export const ChatDedupCountersViewSchema = z.record(
+  z.string(),
+  z.number().int().nonnegative()
+)
 export type ChatDedupCountersViewSchemaType = z.infer<
   typeof ChatDedupCountersViewSchema
 >

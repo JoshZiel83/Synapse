@@ -1,4 +1,5 @@
 import {
+  ACTOR_RUNTIME_HEALTH,
   CONVERSATION_KIND,
   CONVERSATION_PARTICIPANT_TYPE,
   CONVERSATION_TYPE_KEYS,
@@ -279,7 +280,11 @@ export function getActorRuntimePriority(
   runtime: Pick<ActorRuntimeState, "health" | "laneState"> | null | undefined
 ): number {
   if (!runtime) return 3
-  if (runtime.health === "error" || runtime.laneState === "blocked") return 0
+  if (
+    runtime.health === ACTOR_RUNTIME_HEALTH.ERROR ||
+    runtime.laneState === "blocked"
+  )
+    return 0
   if (runtime.laneState === "running") return 1
   if (runtime.laneState === "queued") return 2
   return 3

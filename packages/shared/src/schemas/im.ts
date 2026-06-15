@@ -7,8 +7,12 @@ import {
   TRANSPORT_ACCOUNT_OWNER_SCOPES,
   TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES,
   TRANSPORT_CONVERSATION_INBOUND_ACTOR_MODES,
+  WEIXIN_QR_LOGIN_STATUSES,
+  DINGTALK_DEVICE_FLOW_STATUSES,
+  WECOM_BASE_WS_URL_MAX_BYTES,
 } from "../constants/enums.js"
 import { IsoInstantStringSchema } from "./datetime.js"
+import { WorkspaceMemberViewSchema } from "./workspace.js"
 
 /**
  * App-facing contracts for the IM module's APP routes (master plan §5.3).
@@ -148,7 +152,7 @@ export type TransportExternalUserSummarySchemaType = z.infer<
 export const WeixinQrLoginSessionSummarySchema = z.object({
   sessionId: z.string(),
   workspaceId: z.string(),
-  status: z.enum(["waiting", "scanned", "confirmed", "expired", "error"]),
+  status: z.enum(WEIXIN_QR_LOGIN_STATUSES),
   message: z.string(),
   qrCodeUrl: z.string().optional(),
   baseUrl: z.string().optional(),
@@ -179,7 +183,7 @@ export type CurrentUserWeixinBindingSummarySchemaType = z.infer<
 export const DingtalkDeviceFlowSessionSummarySchema = z.object({
   sessionId: z.string(),
   workspaceId: z.string(),
-  status: z.enum(["waiting", "success", "fail", "expired"]),
+  status: z.enum(DINGTALK_DEVICE_FLOW_STATUSES),
   message: z.string().optional(),
   verificationUriComplete: z.string(),
   verificationUri: z.string().optional(),
@@ -229,6 +233,14 @@ export type TransportExternalUsersResponseSchemaType = z.infer<
   typeof TransportExternalUsersResponseSchema
 >
 
+/** PUT /im/external-users/:addressId/workspace-member → `{ externalUser }`. */
+export const TransportExternalUserResponseSchema = z.object({
+  externalUser: TransportExternalUserSummarySchema,
+})
+export type TransportExternalUserResponseSchemaType = z.infer<
+  typeof TransportExternalUserResponseSchema
+>
+
 /**
  * POST/PUT account create/update across every transport kind (generic +
  * feishu/wecom/qq/dingtalk-manual) → `{ account: TransportAccountSummary }`.
@@ -252,34 +264,18 @@ export type TransportSessionResponseSchemaType = z.infer<
   typeof TransportSessionResponseSchema
 >
 
-/**
- * PUT /im/external-users/:addressId/workspace-member →
- * `{ address: <transport_addresses row> }`. NOTE: unlike the GET
- * /im/external-users list (which goes through normalizeTransportExternalUserRow
- * → TransportExternalUserSummary), this write path returns the raw
- * transport_addresses row (returningAll) with Date instants and the addressType
- * discriminator — a different, repo-shaped value. Modeling it as the summary
- * schema would be wrong, so it stays an open passthrough here; tightening this
- * route to emit a normalized summary is tracked under P1-7 (repo→domain) /
- * P1-9 (Date serialization).
- */
-export const TransportAddressResponseSchema = z.object({
-  address: z.unknown(),
-})
-export type TransportAddressResponseSchemaType = z.infer<
-  typeof TransportAddressResponseSchema
->
+export const TransportAddressResponseSchema =
+  TransportExternalUserResponseSchema
+export type TransportAddressResponseSchemaType =
+  TransportExternalUserResponseSchemaType
 
 /**
  * GET /im/me/weixin-binding/candidates. The handler returns the workspace
- * member list directly under `{ members }`; the web client preserves its
- * existing `{ data: [...] }` public shape by re-wrapping after the unwrap.
- * Each member is the workspace module's presented member row (presentMemberRow
- * + user fields) — a cross-module presentation shape owned by the workspace
- * presenter, so it stays an open record the boundary round-trips unchanged.
+ * member list directly under `{ members }`. Each member is the workspace
+ * module's presented member row (presentMemberRow + user fields).
  */
 export const WeixinBindingCandidatesResponseSchema = z.object({
-  members: z.array(z.unknown()),
+  members: z.array(WorkspaceMemberViewSchema),
 })
 export type WeixinBindingCandidatesResponseSchemaType = z.infer<
   typeof WeixinBindingCandidatesResponseSchema
@@ -339,4 +335,441 @@ export const DingtalkDeviceFlowPollResponseSchema = z.object({
 })
 export type DingtalkDeviceFlowPollResponseSchemaType = z.infer<
   typeof DingtalkDeviceFlowPollResponseSchema
+>
+
+// ───────────────────────────── request DTOs (§5.1.1) ─────────────────────────
+// Generic IM app route request bodies. Per-transport credential bodies are
+// intentionally migrated in separate slices because some compose connector-
+// specific validation.
+
+export const TransportAccountOwnerCreateShape = {
+  ownerScope: z.enum(TRANSPORT_ACCOUNT_OWNER_SCOPES).default("workspace"),
+  ownerWorkspaceMemberId: z.uuid().nullable().optional(),
+}
+
+export const TransportAccountOwnerUpdateShape = {
+  ownerScope: z.enum(TRANSPORT_ACCOUNT_OWNER_SCOPES).optional(),
+  ownerWorkspaceMemberId: z.uuid().nullable().optional(),
+}
+
+const transportAccountInboundActorModeSchema = z.enum(
+  TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES
+)
+
+const transportConversationInboundActorModeSchema = z.enum(
+  TRANSPORT_CONVERSATION_INBOUND_ACTOR_MODES
+)
+
+export const TransportAccountInboundActorCreateShape = {
+  inboundActorMode: transportAccountInboundActorModeSchema.optional(),
+  inboundActorId: z.uuid().nullable().optional(),
+}
+
+export const TransportAccountInboundActorUpdateShape = {
+  inboundActorMode: transportAccountInboundActorModeSchema.optional(),
+  inboundActorId: z.uuid().nullable().optional(),
+}
+
+export const TransportConversationInboundActorUpdateShape = {
+  inboundActorMode: transportConversationInboundActorModeSchema.optional(),
+  inboundActorId: z.uuid().nullable().optional(),
+}
+
+export function validateTransportAccountOwnerCreateInput(
+  value: {
+    ownerScope: (typeof TRANSPORT_ACCOUNT_OWNER_SCOPES)[number]
+    ownerWorkspaceMemberId?: string | null
+  },
+  ctx: z.RefinementCtx
+) {
+  if (value.ownerScope === "workspace" && value.ownerWorkspaceMemberId) {
+    ctx.addIssue({
+      code: "custom",
+      message:
+        "Workspace-owned transport accounts cannot include ownerWorkspaceMemberId",
+      path: ["ownerWorkspaceMemberId"],
+    })
+  }
+  if (
+    value.ownerScope === "workspace_member" &&
+    !value.ownerWorkspaceMemberId
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      message:
+        "Workspace-member transport accounts require ownerWorkspaceMemberId",
+      path: ["ownerWorkspaceMemberId"],
+    })
+  }
+}
+
+export function validateTransportAccountOwnerUpdateInput(
+  value: {
+    ownerScope?: (typeof TRANSPORT_ACCOUNT_OWNER_SCOPES)[number]
+    ownerWorkspaceMemberId?: string | null
+  },
+  ctx: z.RefinementCtx
+) {
+  if (value.ownerScope === "workspace" && value.ownerWorkspaceMemberId) {
+    ctx.addIssue({
+      code: "custom",
+      message:
+        "Workspace-owned transport accounts cannot include ownerWorkspaceMemberId",
+      path: ["ownerWorkspaceMemberId"],
+    })
+  }
+}
+
+export function validateTransportAccountInboundActorCreateInput(
+  value: {
+    ownerScope: (typeof TRANSPORT_ACCOUNT_OWNER_SCOPES)[number]
+    inboundActorMode?: (typeof TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES)[number]
+    inboundActorId?: string | null
+  },
+  ctx: z.RefinementCtx
+) {
+  if (!value.inboundActorMode && value.inboundActorId) {
+    ctx.addIssue({
+      code: "custom",
+      message: "inboundActorId requires inboundActorMode=specified_actor",
+      path: ["inboundActorId"],
+    })
+  }
+  if (value.inboundActorMode === "specified_actor" && !value.inboundActorId) {
+    ctx.addIssue({
+      code: "custom",
+      message: "specified_actor requires inboundActorId",
+      path: ["inboundActorId"],
+    })
+  }
+  if (
+    value.inboundActorMode &&
+    value.inboundActorMode !== "specified_actor" &&
+    value.inboundActorId
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      message: "Only specified_actor can include inboundActorId",
+      path: ["inboundActorId"],
+    })
+  }
+  if (
+    value.inboundActorMode === "follow_owner_chief_actor" &&
+    value.ownerScope !== "workspace_member"
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      message:
+        "follow_owner_chief_actor requires a workspace_member-owned account",
+      path: ["inboundActorMode"],
+    })
+  }
+}
+
+export function validateTransportAccountInboundActorUpdateInput(
+  value: {
+    ownerScope?: (typeof TRANSPORT_ACCOUNT_OWNER_SCOPES)[number]
+    inboundActorMode?: (typeof TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES)[number]
+    inboundActorId?: string | null
+  },
+  ctx: z.RefinementCtx
+) {
+  if (value.inboundActorMode === "specified_actor" && !value.inboundActorId) {
+    ctx.addIssue({
+      code: "custom",
+      message: "specified_actor requires inboundActorId",
+      path: ["inboundActorId"],
+    })
+  }
+  if (
+    value.inboundActorMode &&
+    value.inboundActorMode !== "specified_actor" &&
+    value.inboundActorId
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      message: "Only specified_actor can include inboundActorId",
+      path: ["inboundActorId"],
+    })
+  }
+  if (
+    value.inboundActorMode === "follow_owner_chief_actor" &&
+    value.ownerScope === "workspace"
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      message:
+        "follow_owner_chief_actor requires a workspace_member-owned account",
+      path: ["inboundActorMode"],
+    })
+  }
+}
+
+export function validateTransportConversationInboundActorUpdateInput(
+  value: {
+    inboundActorMode?: (typeof TRANSPORT_CONVERSATION_INBOUND_ACTOR_MODES)[number]
+    inboundActorId?: string | null
+  },
+  ctx: z.RefinementCtx
+) {
+  if (value.inboundActorMode === "specified_actor" && !value.inboundActorId) {
+    ctx.addIssue({
+      code: "custom",
+      message: "specified_actor requires inboundActorId",
+      path: ["inboundActorId"],
+    })
+  }
+  if (
+    value.inboundActorMode &&
+    value.inboundActorMode !== "specified_actor" &&
+    value.inboundActorId
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      message: "Only specified_actor can include inboundActorId",
+      path: ["inboundActorId"],
+    })
+  }
+}
+
+export const TransportAccountCreateInputSchema = z
+  .strictObject({
+    transportKind: z.enum(TRANSPORT_KINDS),
+    accountKey: z.string().trim().min(1).max(120),
+    displayName: z.string().trim().min(1).max(255),
+    connectionMode: z.enum(TRANSPORT_CONNECTION_MODES),
+    status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
+    credentials: jsonRecordSchema.optional(),
+    config: jsonRecordSchema.optional(),
+    metadata: jsonRecordSchema.optional(),
+    ...TransportAccountOwnerCreateShape,
+    ...TransportAccountInboundActorCreateShape,
+  })
+  .superRefine(validateTransportAccountOwnerCreateInput)
+  .superRefine(validateTransportAccountInboundActorCreateInput)
+export type TransportAccountCreateInput = z.input<
+  typeof TransportAccountCreateInputSchema
+>
+
+export const TransportAccountUpdateInputSchema = z
+  .strictObject({
+    displayName: z.string().trim().min(1).max(255).optional(),
+    connectionMode: z.enum(TRANSPORT_CONNECTION_MODES).optional(),
+    status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
+    credentials: jsonRecordSchema.optional(),
+    config: jsonRecordSchema.optional(),
+    metadata: jsonRecordSchema.optional(),
+    ...TransportAccountOwnerUpdateShape,
+    ...TransportAccountInboundActorUpdateShape,
+  })
+  .superRefine(validateTransportAccountOwnerUpdateInput)
+  .superRefine(validateTransportAccountInboundActorUpdateInput)
+export type TransportAccountUpdateInput = z.input<
+  typeof TransportAccountUpdateInputSchema
+>
+
+export const TransportSessionSettingsInputSchema = z
+  .strictObject({
+    outboundEnabled: z.boolean().optional(),
+    metadata: jsonRecordSchema.optional(),
+    ...TransportConversationInboundActorUpdateShape,
+  })
+  .superRefine(validateTransportConversationInboundActorUpdateInput)
+export type TransportSessionSettingsInput = z.input<
+  typeof TransportSessionSettingsInputSchema
+>
+
+export const TransportExternalUserLinkedMemberInputSchema = z.strictObject({
+  workspaceMemberId: z.uuid().nullable(),
+})
+export type TransportExternalUserLinkedMemberInput = z.input<
+  typeof TransportExternalUserLinkedMemberInputSchema
+>
+
+export const TransportExternalUsersListQuerySchema = z.strictObject({
+  transportAccountId: z.uuid().optional(),
+})
+export type TransportExternalUsersListQuery = z.input<
+  typeof TransportExternalUsersListQuerySchema
+>
+
+const utf8ByteLength = (value: string): number =>
+  new TextEncoder().encode(value).length
+
+export const TransportFeishuAccountCreateInputSchema = z
+  .object({
+    displayName: z.string().trim().min(1).max(255),
+    accountKey: z.string().trim().min(1).max(120).optional(),
+    connectionMode: z.enum(TRANSPORT_CONNECTION_MODES),
+    appId: z.string().trim().min(1).max(255),
+    appSecret: z.string().trim().min(1).max(255),
+    verificationToken: z.string().trim().max(255).optional(),
+    encryptKey: z.string().trim().max(255).optional(),
+    status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
+    ...TransportAccountOwnerCreateShape,
+    ...TransportAccountInboundActorCreateShape,
+  })
+  .superRefine(validateTransportAccountOwnerCreateInput)
+  .superRefine(validateTransportAccountInboundActorCreateInput)
+export type TransportFeishuAccountCreateInput = z.input<
+  typeof TransportFeishuAccountCreateInputSchema
+>
+
+export const TransportFeishuAccountUpdateInputSchema = z
+  .object({
+    displayName: z.string().trim().min(1).max(255).optional(),
+    accountKey: z.string().trim().min(1).max(120).optional(),
+    connectionMode: z.enum(TRANSPORT_CONNECTION_MODES).optional(),
+    appId: z.string().trim().min(1).max(255).optional(),
+    appSecret: z.string().trim().min(1).max(255).optional(),
+    verificationToken: z.string().trim().max(255).optional(),
+    encryptKey: z.string().trim().max(255).optional(),
+    status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
+    ...TransportAccountOwnerUpdateShape,
+    ...TransportAccountInboundActorUpdateShape,
+  })
+  .superRefine(validateTransportAccountOwnerUpdateInput)
+  .superRefine(validateTransportAccountInboundActorUpdateInput)
+export type TransportFeishuAccountUpdateInput = z.input<
+  typeof TransportFeishuAccountUpdateInputSchema
+>
+
+const WECOM_WS_URL_PATTERN = /^wss?:\/\//i
+
+export const WecomBaseWsUrlInputSchema = z
+  .string()
+  .trim()
+  .url()
+  .refine((value) => utf8ByteLength(value) <= WECOM_BASE_WS_URL_MAX_BYTES, {
+    message: `baseWsUrl must be at most ${WECOM_BASE_WS_URL_MAX_BYTES} bytes (UTF-8)`,
+  })
+  .refine((value) => WECOM_WS_URL_PATTERN.test(value), {
+    message: "baseWsUrl must use the wss:// (or ws:// for dev) scheme",
+  })
+
+export const TransportWecomAccountCreateInputSchema = z
+  .strictObject({
+    displayName: z.string().trim().min(1).max(255),
+    accountKey: z.string().trim().min(1).max(120).optional(),
+    connectionMode: z.literal("long_connection").default("long_connection"),
+    botId: z.string().trim().min(1).max(255),
+    secret: z.string().trim().min(1).max(255),
+    baseWsUrl: WecomBaseWsUrlInputSchema.optional(),
+    status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
+    ...TransportAccountOwnerCreateShape,
+    ...TransportAccountInboundActorCreateShape,
+  })
+  .superRefine(validateTransportAccountOwnerCreateInput)
+  .superRefine(validateTransportAccountInboundActorCreateInput)
+export type TransportWecomAccountCreateInput = z.input<
+  typeof TransportWecomAccountCreateInputSchema
+>
+
+export const TransportWecomAccountUpdateInputSchema = z
+  .strictObject({
+    displayName: z.string().trim().min(1).max(255).optional(),
+    connectionMode: z.literal("long_connection").optional(),
+    botId: z.string().trim().min(1).max(255).optional(),
+    secret: z.string().trim().min(1).max(255).optional(),
+    baseWsUrl: WecomBaseWsUrlInputSchema.nullable().optional(),
+    status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
+    ...TransportAccountOwnerUpdateShape,
+    ...TransportAccountInboundActorUpdateShape,
+  })
+  .superRefine(validateTransportAccountOwnerUpdateInput)
+  .superRefine(validateTransportAccountInboundActorUpdateInput)
+export type TransportWecomAccountUpdateInput = z.input<
+  typeof TransportWecomAccountUpdateInputSchema
+>
+
+export const TransportQqAccountCreateInputSchema = z
+  .object({
+    displayName: z.string().trim().min(1).max(255),
+    accountKey: z.string().trim().min(1).max(120).optional(),
+    connectionMode: z.enum(TRANSPORT_CONNECTION_MODES),
+    appId: z.string().trim().min(1).max(255),
+    clientSecret: z.string().trim().min(1).max(255),
+    botSecret: z.string().trim().max(255).optional(),
+    webhookInboundConfirmed: z.boolean().optional(),
+    allowProactiveBestEffort: z.boolean().optional(),
+    configuredUrlDomains: z.array(z.string().min(1)).optional(),
+    status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
+    ...TransportAccountOwnerCreateShape,
+    ...TransportAccountInboundActorCreateShape,
+  })
+  .superRefine(validateTransportAccountOwnerCreateInput)
+  .superRefine(validateTransportAccountInboundActorCreateInput)
+export type TransportQqAccountCreateInput = z.input<
+  typeof TransportQqAccountCreateInputSchema
+>
+
+export const TransportQqAccountUpdateInputSchema = z
+  .object({
+    displayName: z.string().trim().min(1).max(255).optional(),
+    accountKey: z.string().trim().min(1).max(120).optional(),
+    connectionMode: z.enum(TRANSPORT_CONNECTION_MODES).optional(),
+    appId: z.string().trim().min(1).max(255).optional(),
+    clientSecret: z.string().trim().min(1).max(255).optional(),
+    botSecret: z.string().trim().max(255).optional(),
+    webhookInboundConfirmed: z.boolean().optional(),
+    allowProactiveBestEffort: z.boolean().optional(),
+    configuredUrlDomains: z.array(z.string().min(1)).optional(),
+    status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
+    ...TransportAccountOwnerUpdateShape,
+    ...TransportAccountInboundActorUpdateShape,
+  })
+  .superRefine(validateTransportAccountOwnerUpdateInput)
+  .superRefine(validateTransportAccountInboundActorUpdateInput)
+export type TransportQqAccountUpdateInput = z.input<
+  typeof TransportQqAccountUpdateInputSchema
+>
+
+export const WeixinQrSessionCreateInputSchema = z
+  .object({
+    displayName: z.string().trim().max(255).optional(),
+    baseUrl: z.string().trim().url().optional(),
+    botType: z.string().trim().max(32).optional(),
+    ...TransportAccountOwnerCreateShape,
+    ...TransportAccountInboundActorCreateShape,
+  })
+  .superRefine(validateTransportAccountOwnerCreateInput)
+  .superRefine(validateTransportAccountInboundActorCreateInput)
+export type WeixinQrSessionCreateInput = z.input<
+  typeof WeixinQrSessionCreateInputSchema
+>
+
+export const WeixinBindingAutoLinkInputSchema = z.object({
+  workspaceMemberId: z.uuid().nullable(),
+})
+export type WeixinBindingAutoLinkInput = z.input<
+  typeof WeixinBindingAutoLinkInputSchema
+>
+
+export const DingtalkDeviceFlowStartInputSchema = z
+  .object({
+    displayName: z.string().trim().min(1).max(255),
+    ...TransportAccountOwnerCreateShape,
+    ...TransportAccountInboundActorCreateShape,
+  })
+  .superRefine(validateTransportAccountOwnerCreateInput)
+  .superRefine(validateTransportAccountInboundActorCreateInput)
+export type DingtalkDeviceFlowStartInput = z.input<
+  typeof DingtalkDeviceFlowStartInputSchema
+>
+export type DingtalkDeviceFlowStartParsedInput = z.output<
+  typeof DingtalkDeviceFlowStartInputSchema
+>
+
+export const DingtalkManualAccountCreateInputSchema = z
+  .object({
+    clientId: z.string().trim().min(8).max(255),
+    clientSecret: z.string().trim().min(8).max(255),
+    displayName: z.string().trim().min(1).max(255),
+    ...TransportAccountOwnerCreateShape,
+    ...TransportAccountInboundActorCreateShape,
+  })
+  .superRefine(validateTransportAccountOwnerCreateInput)
+  .superRefine(validateTransportAccountInboundActorCreateInput)
+export type DingtalkManualAccountCreateInput = z.input<
+  typeof DingtalkManualAccountCreateInputSchema
 >

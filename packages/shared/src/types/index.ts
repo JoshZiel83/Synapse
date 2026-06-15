@@ -1,20 +1,57 @@
 import {
   ACTOR_DOC_VISIBILITIES,
+  ACTOR_DOC_CHANGED_FIELDS,
+  ACTOR_PACKAGE_DEPENDENCY_KINDS,
+  ACTOR_PACKAGE_LINK_STATUSES,
+  ACTOR_PACKAGE_SYNC_MODES,
+  ACTOR_PACKAGE_TARGET_KINDS,
   ACTOR_ROLES,
+  ACTOR_RUNTIME_HEALTHS,
+  ACTOR_UPDATE_SOURCE_TYPES,
+  ACTOR_VERSION_CHANGED_FIELDS,
+  ACTOR_VERSION_DOC_CHANGE_TYPES,
   ACCESS_TARGET_TYPES,
+  AUTOMATION_ACCESS_TARGET_TYPES,
+  AUTOMATION_COMPLETION_STATUSES,
+  AUTOMATION_CREATOR_KINDS,
+  AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS,
+  AUTOMATION_EVENT_SOURCE_STATUSES,
+  AUTOMATION_RULE_CATEGORIES,
+  AUTOMATION_RULE_STATUSES,
+  AUTOMATION_SCHEDULE_KINDS,
+  AUTOMATION_EXECUTION_STATUSES,
+  AUTOMATION_INTEGRATION_INGRESS_KINDS,
+  AUTOMATION_INTEGRATION_PROVIDERS,
+  AUTOMATION_INTEGRATION_TARGET_KINDS,
+  AUTOMATION_TARGET_POLICIES,
+  AUTOMATION_TRIGGER_KINDS,
+  AUTOMATION_TRIGGER_SOURCE_KINDS,
+  AUTOMATION_WEBHOOK_ENDPOINT_STATUSES,
   CAPABILITY_ACCESS_TARGET_TYPES,
+  CHAT_MEMBERSHIP_UPDATE_REASONS,
+  CHAT_PARTICIPANT_REMOVAL_STATES,
   CONTACT_DIRECT_STATES,
   CONTACT_HUB_KINDS,
   CONTACT_TARGET_TYPES,
   CANONICAL_FILE_CATEGORIES,
+  CONVERSATION_EVENT_CONTEXT_POLICIES,
+  CONVERSATION_EVENT_TIMELINE_POLICIES,
+  CONVERSATION_FEED_EVENT_TYPES,
+  CONVERSATION_FEED_ITEM_SUBTYPES,
+  CONVERSATION_FEED_MESSAGE_TYPE,
+  CONVERSATION_FEED_MESSAGE_TYPES,
   CONVERSATION_ITEM_ROLES,
   CONVERSATION_ITEM_SCOPES,
   CONVERSATION_ITEM_SURFACES,
   CONVERSATION_ITEM_TYPES,
   CONVERSATION_KINDS,
+  CONVERSATION_MESSAGE_TRANSPORT_DIRECTIONS,
+  CONVERSATION_MESSAGE_SUBTYPES,
   CONVERSATION_PARTICIPANT_TYPE,
   CONVERSATION_PARTICIPANT_STATES,
   CONVERSATION_PARTICIPANT_TYPES,
+  CONVERSATION_STATUSES,
+  CONVERSATION_REPLY_REF_SUBTYPES,
   FILE_ORIGIN_SYSTEMS,
   FILE_ORIGIN_FAMILIES,
   USER_UPLOAD_FILE_ORIGIN_SYSTEMS,
@@ -35,6 +72,7 @@ import {
   PLUGIN_SPEC_TRANSPORTS,
   PLUGIN_TRANSPORTS,
   INVITE_TRUST_LEVELS,
+  WORKSPACE_TRUST_LEVELS,
   TASK_DECISIONS,
   TASK_INPUT_QUESTION_TYPES,
   TASK_LIFECYCLE_STATUSES,
@@ -51,9 +89,34 @@ import {
   MEMORY_SCOPES,
   MEMORY_STABILITIES,
   MEMORY_STATUSES,
+  MARKETPLACE_ASSET_KINDS,
+  MARKETPLACE_ITEM_KINDS,
+  MARKETPLACE_LINEAGE_KINDS,
+  MARKETPLACE_REQUIREMENT_KINDS,
+  MARKETPLACE_REQUIREMENT_STATUSES,
+  MARKETPLACE_REQUIREMENT_TARGET_KINDS,
+  MARKETPLACE_SOURCE_TYPES,
+  MARKETPLACE_SYNC_MODES,
+  MARKETPLACE_VERSION_STATUSES,
+  MCP_VALIDATION_RULE_KINDS,
+  PLUGIN_AUTH_BINDING_DRIVER_KINDS,
+  PLUGIN_AUTH_CHALLENGE_KINDS,
+  PLUGIN_AUTH_CHALLENGE_OPEN_MODES,
   PLUGIN_AUTH_CONNECTION_STATUSES,
+  PLUGIN_AUTH_DERIVED_VALUE_NAMES,
   PLUGIN_AUTH_SESSION_STATUSES,
+  PLUGIN_AUTH_SESSION_PHASES,
+  PLUGIN_AUTH_VALUE_SOURCE_KINDS,
+  PLUGIN_CONFIG_FIELD_TYPES,
+  PLUGIN_INSTALLATION_MODES,
+  PLUGIN_INSTALLATION_STATUSES,
+  PLUGIN_INSTALL_ACTION_KINDS,
+  PLUGIN_INSTALL_STEP_KINDS,
+  PLUGIN_INSTALL_STEP_SCOPES,
+  PLATFORM_ACCESS_SOURCES,
   PLAN_APPROVAL_DECISIONS,
+  REALTIME_ASR_AUDIO_CODECS,
+  REALTIME_ASR_AUDIO_FORMATS,
   TARGETED_TASK_REQUEST_KINDS,
   REUSE_SCOPES,
   RELATIONSHIP_APPROVAL_MODES,
@@ -62,6 +125,8 @@ import {
   RELATIONSHIP_SCAN_OUTCOMES,
   DEVICE_ACCESS_DENIAL_KINDS,
   DEVICE_ACCESS_DENIAL_RESOLUTIONS,
+  DEVICE_CAPABILITY_ACCESS_SCOPE_KINDS,
+  DEVICE_CAPABILITY_ACCESS_SUBJECT_KINDS,
   RUNTIME_AUTHORIZATION_BROWSER_ACTIONS,
   RUNTIME_AUTHORIZATION_BROWSER_SCOPE_TYPES,
   RUNTIME_AUTHORIZATION_CAPABILITIES,
@@ -73,6 +138,9 @@ import {
   RUNTIME_AUTHORIZATION_GRANT_STATUSES,
   RUNTIME_AUTHORIZATION_PRESETS,
   RUNTIME_AUTHORIZATION_REQUEST_MODES,
+  SKILL_FRONTMATTER_EFFORTS,
+  SKILL_MIRROR_SYNC_STATUSES,
+  SKILL_SOURCE_TYPES,
   SESSION_COLLABORATION_MODES,
   SESSION_INTERRUPT_TYPES,
   SESSION_STATUSES,
@@ -82,10 +150,13 @@ import {
   SESSION_WAKEUP_STATUSES,
   TASK_NOTICE_STATUSES,
   DIRECT_CONVERSATION_OPEN_STATUSES,
+  MODEL_API_STYLES,
   MODEL_GROUP_GRANT_SCOPES,
   MODEL_GROUP_GRANT_STATUSES,
   MODEL_GROUP_OWNER_TYPES,
   MODEL_GROUP_ROUTING_STRATEGIES,
+  MODEL_SERVER_TOOLS,
+  REMOTE_AGENT_BINDING_STATUSES,
   REMOTE_AGENT_MACHINE_LIFECYCLE_STATES,
   REMOTE_AGENT_MACHINE_TRUST_STATUSES,
   REMOTE_AGENT_RUNTIME_CATALOG_STATUSES,
@@ -100,6 +171,8 @@ import {
   TRANSPORT_DELIVERY_STATUSES,
   TRANSPORT_ENDPOINT_TYPES,
   TRANSPORT_KINDS,
+  WEIXIN_QR_LOGIN_STATUSES,
+  DINGTALK_DEVICE_FLOW_STATUSES,
 } from "../constants/enums.js"
 import type { ChatTypingState } from "../constants/enums.js"
 import type { ProviderKind } from "../constants/model-providers.js"
@@ -111,6 +184,7 @@ import type {
   GrantPolicy as GrantPolicyBase,
 } from "../access/policies/index.js"
 import type {
+  AccessBindingStatus,
   WorkspaceAppGrantPermission,
   WorkspaceAppGrantRequestStatus,
   WorkspaceAppGrantSource,
@@ -120,6 +194,7 @@ import type {
 } from "../access/enums.js"
 import type { SubjectRef, ScopedSubjectTarget } from "../access/subject.js"
 import type { IsoInstantString } from "../datetime/instant.js"
+import type { WorkspaceAppGrantTargetInput as WorkspaceAppGrantTargetContract } from "../schemas/workspace-apps.js"
 
 // ============ Common ============
 export type UUID = string
@@ -162,7 +237,7 @@ export interface AuthResponse {
 }
 
 // ============ Workspace ============
-export type TrustLevel = "owner" | "admin" | "member" | "guest"
+export type TrustLevel = (typeof WORKSPACE_TRUST_LEVELS)[number]
 
 export interface Workspace {
   id: UUID
@@ -271,11 +346,7 @@ export interface ActorDefinition {
   config: Record<string, unknown>
 }
 
-export type ActorUpdateSourceType =
-  | "workspace_member"
-  | "actor"
-  | "system"
-  | "sync"
+export type ActorUpdateSourceType = (typeof ACTOR_UPDATE_SOURCE_TYPES)[number]
 
 export interface ActorVersionSource {
   type: ActorUpdateSourceType
@@ -288,19 +359,9 @@ export interface ActorVersionSource {
 }
 
 export type ActorVersionChangedField =
-  | "displayName"
-  | "role"
-  | "title"
-  | "parentId"
-  | "canRepresentUser"
-  | "specialties"
-  | "config"
+  (typeof ACTOR_VERSION_CHANGED_FIELDS)[number]
 
-export type ActorDocChangedField =
-  | "title"
-  | "visibility"
-  | "priority"
-  | "content"
+export type ActorDocChangedField = (typeof ACTOR_DOC_CHANGED_FIELDS)[number]
 
 export interface ActorDocFieldChange {
   field: ActorDocChangedField
@@ -323,12 +384,15 @@ export interface ActorVersionDocChange {
   docId: UUID
   key: ActorDocKey
   title: string
-  changeType: "added" | "updated" | "removed"
+  changeType: ActorVersionDocChangeType
   visibility: ActorDocVisibility
   priority: number
   fieldChanges: ActorDocFieldChange[]
   summary: CanonicalContentBlock[]
 }
+
+export type ActorVersionDocChangeType =
+  (typeof ACTOR_VERSION_DOC_CHANGE_TYPES)[number]
 
 export type ActorVersionChange = ActorFieldChange | ActorVersionDocChange
 
@@ -516,45 +580,30 @@ export interface MemoryRecallRun {
 }
 
 // ============ Automation ============
-export type AutomationCategory = "schedule" | "event_subscription"
-export type AutomationStatus =
-  | "active"
-  | "paused"
-  | "error"
-  | "archived"
-  | "completed"
-  | "expired"
-export type AutomationCreatorKind = "workspace_member" | "session" | "system"
-export type AutomationTriggerKind = "schedule" | "event"
+export type AutomationCategory = (typeof AUTOMATION_RULE_CATEGORIES)[number]
+export type AutomationStatus = (typeof AUTOMATION_RULE_STATUSES)[number]
+export type AutomationCreatorKind = (typeof AUTOMATION_CREATOR_KINDS)[number]
+export type AutomationTriggerKind = (typeof AUTOMATION_TRIGGER_KINDS)[number]
 export type AutomationSourceKind =
-  | "clock"
-  | "device"
-  | "webhook"
-  | "internal"
-  | "integration"
+  (typeof AUTOMATION_TRIGGER_SOURCE_KINDS)[number]
 export type AutomationEventProviderKind =
-  | "device"
-  | "webhook"
-  | "internal"
-  | "integration"
-export type AutomationIntegrationProvider = "github" | "gitlab"
-export type AutomationIntegrationIngressKind = "webhook" | "polling"
-export type AutomationIntegrationTargetKind = "repository" | "project"
-export type AutomationScheduleKind = "cron" | "at" | "interval"
-export type AutomationCompletionStatus = "completed" | "archived"
-export type AutomationTargetPolicy = "all_members" | "specified_members"
+  (typeof AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS)[number]
+export type AutomationIntegrationProvider =
+  (typeof AUTOMATION_INTEGRATION_PROVIDERS)[number]
+export type AutomationIntegrationIngressKind =
+  (typeof AUTOMATION_INTEGRATION_INGRESS_KINDS)[number]
+export type AutomationIntegrationTargetKind =
+  (typeof AUTOMATION_INTEGRATION_TARGET_KINDS)[number]
+export type AutomationScheduleKind = (typeof AUTOMATION_SCHEDULE_KINDS)[number]
+export type AutomationCompletionStatus =
+  (typeof AUTOMATION_COMPLETION_STATUSES)[number]
+export type AutomationTargetPolicy = (typeof AUTOMATION_TARGET_POLICIES)[number]
 export type AutomationExecutionStatus =
-  | "pending"
-  | "running"
-  | "completed"
-  | "failed"
-  | "skipped"
-export type AutomationWebhookStatus = "active" | "disabled" | "archived"
+  (typeof AUTOMATION_EXECUTION_STATUSES)[number]
+export type AutomationWebhookStatus =
+  (typeof AUTOMATION_WEBHOOK_ENDPOINT_STATUSES)[number]
 export type AutomationEventSourceStatus =
-  | "active"
-  | "deprecated"
-  | "disabled"
-  | "archived"
+  (typeof AUTOMATION_EVENT_SOURCE_STATUSES)[number]
 
 export interface AutomationEventSourceIntegration {
   bindingId?: UUID
@@ -811,7 +860,7 @@ export type SessionWakeupSourceParticipantType =
 export type SessionWakeupSourceType =
   (typeof SESSION_WAKEUP_SOURCE_TYPES)[number]
 export type SessionWakeupStatus = (typeof SESSION_WAKEUP_STATUSES)[number]
-export type ActorRuntimeHealth = "ok" | "error"
+export type ActorRuntimeHealth = (typeof ACTOR_RUNTIME_HEALTHS)[number]
 export type ActorRuntimePhase =
   | "idle"
   | "thinking"
@@ -1034,12 +1083,15 @@ export type RelationshipScanOutcome =
   (typeof RELATIONSHIP_SCAN_OUTCOMES)[number]
 export type DirectConversationOpenStatus =
   (typeof DIRECT_CONVERSATION_OPEN_STATUSES)[number]
+export type ConversationStatus = (typeof CONVERSATION_STATUSES)[number]
 
 export type RemoteAgentRuntimeKind = (typeof REMOTE_AGENT_RUNTIME_KINDS)[number]
 export type RemoteAgentRuntimeStateType =
   (typeof REMOTE_AGENT_RUNTIME_STATES)[number]
 export type RemoteAgentRuntimeCatalogStatus =
   (typeof REMOTE_AGENT_RUNTIME_CATALOG_STATUSES)[number]
+export type RemoteAgentBindingStatus =
+  (typeof REMOTE_AGENT_BINDING_STATUSES)[number]
 export type RemoteAgentMachineTrustStatus =
   (typeof REMOTE_AGENT_MACHINE_TRUST_STATUSES)[number]
 export type RemoteAgentLifecycleState =
@@ -1140,7 +1192,7 @@ export interface RelationshipMemberSummaryView {
   name: string
   email: string
   avatarFileId?: UUID | null
-  trustLevel?: string
+  trustLevel?: TrustLevel
 }
 
 export interface RelationshipActorSummaryView {
@@ -1148,7 +1200,7 @@ export interface RelationshipActorSummaryView {
   actorId: UUID
   displayName: string
   title: string
-  role: string
+  role: ActorRole
   avatarFileId?: UUID | null
   avatarEmoji?: string | null
   requiresContactApproval: boolean
@@ -1247,8 +1299,8 @@ export interface ConversationSummaryView {
   id: UUID
   kind: (typeof CONVERSATION_KINDS)[number]
   isIm: boolean
-  status: "active" | "completed"
-  transportKind?: string
+  status: ConversationStatus
+  transportKind?: TransportKind
   participants: ConversationParticipantView[]
   members?: ConversationParticipantView[]
   lastMessage?: ConversationMessagePreview
@@ -1335,7 +1387,7 @@ export interface RemoteAgentGroupTaskGrantView {
 export interface RemoteAgentBindingView {
   machineId: UUID
   machineTitle?: string
-  status: string
+  status: RemoteAgentBindingStatus
   runtimePath?: string
   localRootPath?: string
   machineLifecycleState?: RemoteAgentLifecycleState
@@ -1396,7 +1448,7 @@ export interface RemoteAgentMachineDetailView {
     runtimeKind: RemoteAgentRuntimeKind
     runtimePath?: string
     localRootPath?: string
-    status: string
+    status: RemoteAgentBindingStatus
     runtimeSummary?: RemoteAgentRuntimeSummaryView
   }>
 }
@@ -1475,7 +1527,7 @@ export interface ThinkingResult {
 // ============ Server Tool Calls (Anthropic/OpenAI cloud-side tools) ============
 
 export interface ServerToolCall {
-  type: "web_search" | "web_fetch"
+  type: ModelServerTool
   // The provider-native tool name as reported by the SDK. `type` is the coarse
   // bucket the FE historically branched on; `toolName` is authoritative and lets
   // an unknown provider tool render its real name instead of being mislabeled
@@ -1598,7 +1650,9 @@ export interface AIRequestLog {
   createdAt: Timestamp
 }
 
-export type AnthropicBuiltinTool = "web_search" | "web_fetch"
+export type ModelApiStyle = (typeof MODEL_API_STYLES)[number]
+export type ModelServerTool = (typeof MODEL_SERVER_TOOLS)[number]
+export type AnthropicBuiltinTool = ModelServerTool
 
 export type MultimodalType = (typeof CANONICAL_FILE_CATEGORIES)[number]
 
@@ -1613,7 +1667,7 @@ export interface ResolvedModelConfig {
   bindingVersionId: UUID
   providerKind: ProviderKind
   vendor: string
-  apiStyle?: "chat" | "responses"
+  apiStyle?: ModelApiStyle
   apiKey: string
   baseUrl: string
   modelName: string
@@ -1884,16 +1938,9 @@ export type CanonicalContextParticipantType =
   | "system"
   | "unknown"
 export type ConversationEventTimelinePolicy =
-  | "none"
-  | "all_members"
-  | "users_only"
-  | "actors_only"
-  | "targeted_members"
+  (typeof CONVERSATION_EVENT_TIMELINE_POLICIES)[number]
 export type ConversationEventContextPolicy =
-  | "none"
-  | "shared"
-  | "actor_private"
-  | "targeted_members"
+  (typeof CONVERSATION_EVENT_CONTEXT_POLICIES)[number]
 
 export interface CanonicalContextAuthor {
   participantId?: string
@@ -1955,14 +2002,19 @@ export interface CanonicalMessageContextItem extends CanonicalContextItemBase {
 }
 
 export type ConversationMessageSubtype =
-  | "chat.message"
-  | "user"
-  | "assistant"
-  | "system"
-  | "tool_result"
-  | "model_error_notice"
+  (typeof CONVERSATION_MESSAGE_SUBTYPES)[number]
 
-export type ConversationFeedMessageType = ConversationMessageSubtype | "summary"
+export type ChatParticipantRemovalState =
+  (typeof CHAT_PARTICIPANT_REMOVAL_STATES)[number]
+
+export type ConversationFeedMessageType =
+  (typeof CONVERSATION_FEED_MESSAGE_TYPES)[number]
+
+export type ConversationFeedItemSubtype =
+  (typeof CONVERSATION_FEED_ITEM_SUBTYPES)[number]
+
+export type ConversationReplyRefSubtype =
+  (typeof CONVERSATION_REPLY_REF_SUBTYPES)[number]
 
 export interface CanonicalToolCallBatchContextItem extends CanonicalContextItemBase {
   kind: "tool_call_batch"
@@ -2252,7 +2304,7 @@ export interface AIResponse {
 // MCP Plugin Marketplace Types
 // ============================================================
 
-export type MarketplaceItemKind = "plugin" | "skill" | "actor" | "model"
+export type MarketplaceItemKind = (typeof MARKETPLACE_ITEM_KINDS)[number]
 // Plugin transport tiers — single source of truth in constants/enums.ts.
 // McpServerTransport: what the runtime instance-manager can start.
 // PluginSpecTransport: the DB catalog spec column.
@@ -2270,83 +2322,54 @@ export type CapabilityConversationTypePolicyResourceFamily =
 export type AccessTargetType = (typeof ACCESS_TARGET_TYPES)[number]
 export type CapabilityAccessTargetType =
   (typeof CAPABILITY_ACCESS_TARGET_TYPES)[number]
+export type AutomationAccessTargetType =
+  (typeof AUTOMATION_ACCESS_TARGET_TYPES)[number]
+export type ConversationMessageTransportDirection =
+  (typeof CONVERSATION_MESSAGE_TRANSPORT_DIRECTIONS)[number]
+export type DeviceCapabilityAccessSubjectKind =
+  (typeof DEVICE_CAPABILITY_ACCESS_SUBJECT_KINDS)[number]
+export type DeviceCapabilityAccessScopeKind =
+  (typeof DEVICE_CAPABILITY_ACCESS_SCOPE_KINDS)[number]
 export type ReuseScope = (typeof REUSE_SCOPES)[number]
-export type MarketplaceSourceType =
-  | "builtin"
-  | "official"
-  | "workspace_upload"
-  | "user_upload"
-export type MarketplaceLineageKind = "installed_copy" | "fork" | "share"
-export type MarketplaceSyncMode =
-  | "notify"
-  | "manual_merge"
-  | "follow_upstream"
-  | "detached"
+export type PlatformAccessSource = (typeof PLATFORM_ACCESS_SOURCES)[number]
+export type MarketplaceSourceType = (typeof MARKETPLACE_SOURCE_TYPES)[number]
+export type MarketplaceLineageKind = (typeof MARKETPLACE_LINEAGE_KINDS)[number]
+export type MarketplaceSyncMode = (typeof MARKETPLACE_SYNC_MODES)[number]
 export type MarketplaceRequirementKind =
-  | "required"
-  | "recommended"
-  | "optional"
-  | "conflicts_with"
-export type MarketplaceRequirementTargetKind = "package" | "tag"
-export type PluginInstallationMode =
-  | "manual"
-  | "seeded"
-  | "package_required"
-  | "package_recommended"
+  (typeof MARKETPLACE_REQUIREMENT_KINDS)[number]
+export type MarketplaceRequirementTargetKind =
+  (typeof MARKETPLACE_REQUIREMENT_TARGET_KINDS)[number]
+export type PluginInstallationMode = (typeof PLUGIN_INSTALLATION_MODES)[number]
 export type MarketplaceVersionStatus =
-  | "draft"
-  | "active"
-  | "deprecated"
-  | "archived"
-export type AutomationEventSourceAccessGrantStatus = "active" | "revoked"
+  (typeof MARKETPLACE_VERSION_STATUSES)[number]
+export type AutomationEventSourceAccessGrantStatus = AccessBindingStatus
 export type MarketplaceRequirementStatus =
-  | "satisfied"
-  | "missing_required"
-  | "missing_recommended"
-  | "scope_mismatch"
-  | "config_incomplete"
-export type MarketplaceAssetKind =
-  | "skill_markdown"
-  | "reference_markdown"
-  | "script"
-  | "json"
-  | "text"
-  | "binary"
+  (typeof MARKETPLACE_REQUIREMENT_STATUSES)[number]
+export type MarketplaceAssetKind = (typeof MARKETPLACE_ASSET_KINDS)[number]
 export type LocalizedText = Record<string, string>
-export type PluginConfigFieldType =
-  | "text"
-  | "textarea"
-  | "number"
-  | "boolean"
-  | "select"
-  | "multiselect"
-  | "secret"
-  | "auth_connection"
-  | "file"
-export type PluginInstallStepKind =
-  | "form"
-  | "auth"
-  | "check"
-  | "confirm"
-  | "reuse_scope"
-  | "integration_events"
-export type PluginInstallActionKind = "auth_start" | "external_link" | "noop"
+export type PluginConfigFieldType = (typeof PLUGIN_CONFIG_FIELD_TYPES)[number]
+export type PluginInstallStepKind = (typeof PLUGIN_INSTALL_STEP_KINDS)[number]
+export type PluginInstallStepScope = (typeof PLUGIN_INSTALL_STEP_SCOPES)[number]
+export type PluginInstallActionKind =
+  (typeof PLUGIN_INSTALL_ACTION_KINDS)[number]
 export type PluginAuthBindingDriverKind =
-  | "oauth2_authorization_code_pkce"
-  | "mijia_qr_login"
-  | "feishu_cli_setup"
+  (typeof PLUGIN_AUTH_BINDING_DRIVER_KINDS)[number]
+export type PluginAuthValueSourceKind =
+  (typeof PLUGIN_AUTH_VALUE_SOURCE_KINDS)[number]
+export type PluginAuthDerivedValueName =
+  (typeof PLUGIN_AUTH_DERIVED_VALUE_NAMES)[number]
 export type PluginAuthSessionStatus =
   (typeof PLUGIN_AUTH_SESSION_STATUSES)[number]
 export type PluginAuthConnectionStatus =
   (typeof PLUGIN_AUTH_CONNECTION_STATUSES)[number]
-export type PluginAuthSessionPhase =
-  | "awaiting_start"
-  | "awaiting_external_input"
-  | "awaiting_callback"
-  | "pending_scan"
-  | "pending_confirm"
-  | "finalizing"
-export type PluginAuthChallengeKind = "redirect" | "qr_code" | "none"
+export type PluginAuthSessionPhase = (typeof PLUGIN_AUTH_SESSION_PHASES)[number]
+export type PluginAuthChallengeKind =
+  (typeof PLUGIN_AUTH_CHALLENGE_KINDS)[number]
+export type PluginAuthChallengeOpenMode =
+  (typeof PLUGIN_AUTH_CHALLENGE_OPEN_MODES)[number]
+export type McpValidationRuleKind = (typeof MCP_VALIDATION_RULE_KINDS)[number]
+export type PluginInstallationStatus =
+  (typeof PLUGIN_INSTALLATION_STATUSES)[number]
 
 // AccessTarget / CapabilityAccessTarget are canonical scoped-subject payloads:
 // {subject: SubjectRef; scope?: SubjectRef}. Conversation scoping is represented
@@ -2388,7 +2411,7 @@ export interface PluginAuthChallenge {
   kind: PluginAuthChallengeKind
   url?: string
   qrUrl?: string
-  openMode?: "popup" | "replace"
+  openMode?: PluginAuthChallengeOpenMode
   expiresAt?: Timestamp
   metadata?: Record<string, unknown>
 }
@@ -2470,7 +2493,7 @@ export interface MarketplaceVersion {
   configSchema: Record<string, unknown>
   configFields: PluginConfigFieldDefinition[]
   defaultConfig: Record<string, unknown>
-  transport?: PluginTransport
+  transport?: PluginSpecTransport
   entryPoint?: string
   toolsManifest: MarketplaceTool[]
   validationRules: McpValidationRule[]
@@ -2576,7 +2599,7 @@ export interface WorkspaceAppGrant {
   id: string
   workspaceId: string
   workspaceAppId: string
-  target: CapabilityAccessTarget
+  target: WorkspaceAppGrantTargetContract
   permissions: WorkspaceAppGrantPermission[]
   status: WorkspaceAppGrantStatus
   source: WorkspaceAppGrantSource
@@ -2592,7 +2615,7 @@ export interface WorkspaceAppGrantRequest {
   id: string
   workspaceId: string
   workspaceAppId: string
-  grantee: CapabilityAccessTarget
+  grantee: WorkspaceAppGrantTargetContract
   requestedPermissions: WorkspaceAppGrantPermission[]
   requesterWorkspaceMemberId: string
   status: WorkspaceAppGrantRequestStatus
@@ -2692,21 +2715,12 @@ export interface PluginInstallPlan {
   }
 }
 
-export type ActorPackageDependencyKind = Extract<
-  MarketplaceRequirementKind,
-  "required" | "recommended"
->
-export type ActorPackageTargetKind = Extract<
-  MarketplaceItemKind,
-  "plugin" | "skill"
->
-export type ActorPackageSyncMode = "notify" | "manual_merge"
+export type ActorPackageDependencyKind =
+  (typeof ACTOR_PACKAGE_DEPENDENCY_KINDS)[number]
+export type ActorPackageTargetKind = (typeof ACTOR_PACKAGE_TARGET_KINDS)[number]
+export type ActorPackageSyncMode = (typeof ACTOR_PACKAGE_SYNC_MODES)[number]
 export type ActorPackageLinkStatus =
-  | "up_to_date"
-  | "update_available"
-  | "diverged"
-  | "update_available_with_local_changes"
-  | "detached"
+  (typeof ACTOR_PACKAGE_LINK_STATUSES)[number]
 
 export interface ActorPackageDependency {
   requirementId?: string
@@ -2775,10 +2789,10 @@ export interface AvailableSkillSummary {
 
 export type SkillAccessTargetType = CapabilityAccessTargetType
 
-export type SkillSourceType = "github" | "clawhub"
+export type SkillSourceType = (typeof SKILL_SOURCE_TYPES)[number]
 export type SkillMirrorRefreshMode = "manual"
-export type SkillMirrorSyncStatus = "pending" | "synced" | "error"
-export type SkillFrontmatterEffort = "low" | "medium" | "high" | "max"
+export type SkillMirrorSyncStatus = (typeof SKILL_MIRROR_SYNC_STATUSES)[number]
+export type SkillFrontmatterEffort = (typeof SKILL_FRONTMATTER_EFFORTS)[number]
 export type SkillFrontmatterContext = "fork"
 
 export interface SkillFrontmatter {
@@ -2995,7 +3009,7 @@ export interface ConversationReplyRef {
   ref?: string
   sequence?: number
   itemType: (typeof CONVERSATION_ITEM_TYPES)[number]
-  subtype: string
+  subtype: ConversationReplyRefSubtype
   author?: ConversationEntityRef
   previewText: string
   previewBlocks: CanonicalContentBlock[]
@@ -3107,12 +3121,7 @@ export interface TransportSessionSummary {
   endpoint: TransportEndpointSummary
 }
 
-export type WeixinQrLoginStatus =
-  | "waiting"
-  | "scanned"
-  | "confirmed"
-  | "expired"
-  | "error"
+export type WeixinQrLoginStatus = (typeof WEIXIN_QR_LOGIN_STATUSES)[number]
 
 export interface WeixinQrLoginSessionSummary {
   sessionId: string
@@ -3146,10 +3155,7 @@ export interface CurrentUserWeixinBindingSummary {
  * boundary; UNKNOWN -> "fail" with a descriptive message.
  */
 export type DingtalkDeviceFlowStatus =
-  | "waiting"
-  | "success"
-  | "fail"
-  | "expired"
+  (typeof DINGTALK_DEVICE_FLOW_STATUSES)[number]
 
 /**
  * Summary of a DingTalk Device Flow registration session.
@@ -3240,7 +3246,7 @@ export interface TransportMessageLink {
   itemId: UUID
   transportKind: TransportKind
   transportEndpointId: UUID
-  direction: "inbound" | "outbound"
+  direction: ConversationMessageTransportDirection
   deliveryStatus: TransportDeliveryStatus
   externalMessageId?: string
   /** Platform reply-to id (Feishu parent_id). Populated on inbound when
@@ -3258,7 +3264,7 @@ export interface TransportMessageLink {
 }
 
 export interface ConversationMessageTransportContext {
-  direction: "inbound" | "outbound"
+  direction: ConversationMessageTransportDirection
   transportKind: TransportKind
   transportAccountId?: UUID
   endpointType?: TransportEndpointType
@@ -3271,7 +3277,7 @@ export interface ConversationMessageTransportContext {
 export interface ConversationMessageTransportDelivery {
   linkId: UUID
   transportKind: TransportKind
-  direction: "inbound" | "outbound"
+  direction: ConversationMessageTransportDirection
   deliveryStatus: TransportDeliveryStatus
   endpointType?: TransportEndpointType
   endpointExternalId?: string
@@ -3578,16 +3584,7 @@ export interface TaskNoticeSummary {
 }
 
 export type ConversationFeedEventType =
-  | "participant_joined"
-  | "participant_kicked"
-  | "participant_left"
-  | "memory_saved"
-  | "memory_updated"
-  | "actor_renamed"
-  | "actor_avatar_changed"
-  | "automation_notice"
-  | "task_requested"
-  | "task_notice"
+  (typeof CONVERSATION_FEED_EVENT_TYPES)[number]
 
 export interface ConversationFeedEventPayloadMap {
   participant_joined: {
@@ -3753,7 +3750,7 @@ export interface ChatParticipantSummary extends Omit<
   joinedAt: Timestamp
   leftAt?: Timestamp
   sessionId?: UUID
-  sessionStatus?: string
+  sessionStatus?: SessionStatus | RemoteAgentRuntimeStateType
 }
 
 interface ChatConversationItemBase {
@@ -3786,8 +3783,15 @@ interface ChatConversationItemBase {
 }
 
 export interface ChatConversationMessageItem extends ChatConversationItemBase {
-  itemType: "message" | "summary" | "control"
-  subtype: ConversationFeedMessageType
+  itemType: "message" | "control"
+  subtype: ConversationMessageSubtype
+  transport?: ConversationMessageTransportContext
+  transportDeliveries?: ConversationMessageTransportDelivery[]
+}
+
+export interface ChatConversationSummaryItem extends ChatConversationItemBase {
+  itemType: "summary"
+  subtype: typeof CONVERSATION_FEED_MESSAGE_TYPE.SUMMARY
   transport?: ConversationMessageTransportContext
   transportDeliveries?: ConversationMessageTransportDelivery[]
 }
@@ -3808,6 +3812,7 @@ export type ChatConversationEventItem<
 
 export type ChatConversationItem =
   | ChatConversationMessageItem
+  | ChatConversationSummaryItem
   | ChatConversationEventItem
 
 export interface ChatConversationPresentation {
@@ -3831,7 +3836,7 @@ export interface ChatConversationView {
   title: string
   kind: (typeof CONVERSATION_KINDS)[number]
   isIm: boolean
-  status: "active" | "completed"
+  status: ConversationStatus
   unreadCount: number
   muted: boolean
   archived: boolean
@@ -3846,7 +3851,7 @@ export interface ChatConversationView {
     itemId: UUID
     sequence: number
     itemType: ChatConversationItem["itemType"]
-    subtype: string
+    subtype: ConversationFeedItemSubtype
     previewText: string
     authorParticipantId?: UUID
     author?: ConversationEntityRef
@@ -3897,8 +3902,8 @@ export interface ChatSyncEventPayloadMap {
    */
   "conversation.membership.updated": {
     conversationId: UUID
-    selfState: "active" | "removed" | "left"
-    reason?: "kicked" | "left" | "added"
+    selfState: (typeof CONVERSATION_PARTICIPANT_STATES)[number]
+    reason?: (typeof CHAT_MEMBERSHIP_UPDATE_REASONS)[number]
     participants: ChatParticipantSummary[]
   }
 }
@@ -4105,8 +4110,8 @@ export type ChatTaskResolveResponse =
 
 // isChatTaskResolveConflictResponse moved to ../conversation/index.ts (§2.2.1)
 
-export type RealtimeAsrAudioFormat = "pcm" | "ogg"
-export type RealtimeAsrAudioCodec = "raw" | "opus"
+export type RealtimeAsrAudioFormat = (typeof REALTIME_ASR_AUDIO_FORMATS)[number]
+export type RealtimeAsrAudioCodec = (typeof REALTIME_ASR_AUDIO_CODECS)[number]
 
 export interface RealtimeAsrAudioConfig {
   format: RealtimeAsrAudioFormat
@@ -4502,14 +4507,18 @@ export interface PluginInstallationRecord {
 // the root barrel stays zod-free.
 export type {
   WorkspaceInviteView,
+  WorkspaceInviteListView,
   WorkspaceInvitePublicView,
   WorkspaceInviteRedeemResult,
 } from "../schemas/workspace-invites.js"
 export type {
   WorkspaceView,
+  WorkspaceListView,
   WorkspaceListItemView,
   WorkspaceCreateResultView,
+  WorkspaceMemberListView,
   WorkspaceMemberView,
+  WorkspaceAccessBindingListView,
   WorkspaceAccessBindingView,
   WorkspaceNavigationView,
   WorkspaceChiefActorPreferenceView,
@@ -4547,11 +4556,19 @@ export type {
   ModelGroupDetailView,
   ActorModelGroupAssignmentView,
   ModelGroupItemVersionView,
+  ModelGroupListView,
+  ModelGroupGrantListView,
+  ModelGroupItemVersionListView,
+  ActorModelGroupAssignmentListView,
 } from "../schemas/model-groups.js"
 export type {
+  ActorListView,
   ActorView,
+  ActorTreeView,
   ActorTreeNodeView,
+  ActorVersionListView,
   ActorVersionView,
+  ActorPackageListView,
   ActorPackageRecordView,
   ActorPackageInstallResultView,
 } from "../schemas/organization.js"
@@ -4568,10 +4585,29 @@ export type {
   PluginInstallPlanView,
   PluginInstallPlanEnvelope,
   PluginAuditLogList,
+  PluginInstallPlanInput,
   StartPluginAuthInput,
 } from "../schemas/mcp-plugins.js"
 export type {
+  SkillFrontmatterView,
+  SkillMirrorSourceSummaryView,
+  SkillAttachmentFileView,
+  SkillMarketplaceVersionView,
+  SkillMarketplaceWorkspaceInstallationView,
+  SkillMarketplaceEntryView,
+  InstalledSkillView,
+  SkillMarketplaceListView,
+  SkillMarketplaceItemView,
+  InstalledSkillListView,
+  InstalledSkillItemView,
+  SkillAttachmentInput,
+  PublishMarketplaceSkillInput,
+  ImportMarketplaceSkillInput,
+  InstalledSkillListQuery,
+} from "../schemas/skills.js"
+export type {
   DeviceView,
+  DeviceListView,
   DeviceServiceView,
   DeviceCapabilityView,
   DeviceDetailView,
@@ -4580,10 +4616,14 @@ export type {
   CreateCloudDeviceResultView,
   StartPairingInput,
   ClaimDaemonServiceInput,
+  DeviceCapabilityAccessTargetInput,
   SetActiveDeviceCapabilitiesInput,
   ActiveDeviceCapabilitiesView,
 } from "../schemas/devices.js"
-export type { RuntimeAuthorizationGrantRecordView } from "../schemas/runtime-authorizations.js"
+export type {
+  RuntimeAuthorizationGrantRecordView,
+  CreateManualRuntimeAuthorizationGrantInput,
+} from "../schemas/runtime-authorizations.js"
 export type {
   FileOriginSummaryView,
   StoredFileRecordView,
@@ -4633,8 +4673,14 @@ export type {
 } from "../schemas/im.js"
 export type {
   WorkspaceAppViewSchemaType,
+  WorkspaceAppEnvelopeViewSchemaType,
+  WorkspaceAppListViewSchemaType,
   WorkspaceAppGrantViewSchemaType,
+  WorkspaceAppGrantListViewSchemaType,
   WorkspaceAppGrantRequestViewSchemaType,
+  WorkspaceAppGrantRequestListViewSchemaType,
+  WorkspaceAppGrantRequestEnvelopeViewSchemaType,
+  WorkspaceAppSuccessViewSchemaType,
   WorkspaceAppGrantTargetInput,
   WorkspaceAppGrantEntryInput,
   ReplaceWorkspaceAppGrantsInput,

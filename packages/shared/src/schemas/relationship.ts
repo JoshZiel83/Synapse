@@ -1,16 +1,27 @@
 import { z } from "zod"
 import {
+  ACTOR_ROLES,
   CONTACT_DIRECT_STATES,
   CONTACT_HUB_KINDS,
   CONTACT_TARGET_TYPES,
+  CONVERSATION_ITEM_ROLES,
+  CONVERSATION_KINDS,
+  CONVERSATION_PARTICIPANT_STATES,
+  CONVERSATION_PARTICIPANT_TYPES,
+  CONVERSATION_STATUSES,
   DIRECT_CONVERSATION_OPEN_STATUSES,
   IDENTITY_SEARCH_MATCH_STATES,
   IDENTITY_SEARCH_OUTCOMES,
   REMOTE_AGENT_RUNTIME_KINDS,
   RELATIONSHIP_APPROVAL_MODES,
   RELATIONSHIP_PROFILE_SUBJECT_TYPES,
+  RELATIONSHIP_REQUEST_STATUS,
+  RELATIONSHIP_REQUEST_STATUSES,
   RELATIONSHIP_SCAN_OUTCOMES,
+  TRANSPORT_KINDS,
+  WORKSPACE_TRUST_LEVELS,
 } from "../constants/enums.js"
+import { IsoInstantStringSchema } from "./datetime.js"
 
 /**
  * App-facing contracts for the relationship module's APP routes (master plan
@@ -42,7 +53,7 @@ export const RelationshipMemberSummaryViewSchema = z.object({
   name: z.string(),
   email: z.string(),
   avatarFileId: z.string().nullable().optional(),
-  trustLevel: z.string().optional(),
+  trustLevel: z.enum(WORKSPACE_TRUST_LEVELS).optional(),
 })
 
 export const RelationshipActorSummaryViewSchema = z.object({
@@ -50,7 +61,7 @@ export const RelationshipActorSummaryViewSchema = z.object({
   actorId: z.string(),
   displayName: z.string(),
   title: z.string(),
-  role: z.string(),
+  role: z.enum(ACTOR_ROLES),
   avatarFileId: z.string().nullable().optional(),
   avatarEmoji: z.string().nullable().optional(),
   requiresContactApproval: z.boolean(),
@@ -99,6 +110,69 @@ export const ContactHubEntryRefSchema = z.object({
   id: z.string(),
 })
 
+export const ConversationParticipantViewSchema = z.object({
+  memberId: z.string().optional(),
+  participantId: z.string().optional(),
+  participantType: z.enum(CONVERSATION_PARTICIPANT_TYPES).optional(),
+  id: z.string().optional(),
+  workspaceMemberId: z.string().optional(),
+  actorId: z.string().optional(),
+  remoteAgentId: z.string().optional(),
+  name: z.string().optional(),
+  title: z.string().optional(),
+  role: z.string().optional(),
+  conversationRole: z.string().optional(),
+  avatarUrl: z.string().optional(),
+  avatarEmoji: z.string().optional(),
+  state: z.enum(CONVERSATION_PARTICIPANT_STATES).optional(),
+})
+
+export const ConversationMessagePreviewSchema = z.object({
+  content: z.string(),
+  role: z.enum(CONVERSATION_ITEM_ROLES).refine((role) => role !== "tool", {
+    message: "Conversation summary previews cannot use the tool role",
+  }),
+  actorName: z.string().optional(),
+  createdAt: IsoInstantStringSchema,
+})
+
+export const ConversationPresentationViewSchema = z.object({
+  chatType: z.enum(CONVERSATION_KINDS),
+  title: z.string(),
+  avatarUrl: z.string().optional(),
+  subtitle: z.string().optional(),
+  peer: ConversationParticipantViewSchema.optional(),
+  canRename: z.boolean().optional(),
+  canManageMembers: z.boolean().optional(),
+  canManageParticipants: z.boolean().optional(),
+})
+
+export const ConversationSummaryViewSchema = z.object({
+  id: z.string(),
+  kind: z.enum(CONVERSATION_KINDS),
+  isIm: z.boolean(),
+  status: z.enum(CONVERSATION_STATUSES),
+  transportKind: z.enum(TRANSPORT_KINDS).optional(),
+  participants: z.array(ConversationParticipantViewSchema),
+  members: z.array(ConversationParticipantViewSchema).optional(),
+  lastMessage: ConversationMessagePreviewSchema.optional(),
+  unreadCount: z.number().int().nonnegative(),
+  createdAt: IsoInstantStringSchema,
+  title: z.string(),
+  name: z.string(),
+  avatarUrl: z.string().optional(),
+  presentation: ConversationPresentationViewSchema.optional(),
+  permissions: z
+    .object({
+      canManage: z.boolean().optional(),
+      canManageMembers: z.boolean().optional(),
+      canManageParticipants: z.boolean().optional(),
+    })
+    .optional(),
+  viewerParticipantId: z.string().optional(),
+  viewerWorkspaceMemberId: z.string().optional(),
+})
+
 /** A single identity-search match (presented). */
 export const IdentitySearchMatchViewSchema = z.object({
   profileId: z.string(),
@@ -121,7 +195,7 @@ export const IdentitySearchMatchViewSchema = z.object({
 /** Friend request (presentFriendRequest) — createdAt may be null. */
 export const FriendRequestViewSchema = z.object({
   id: z.string(),
-  status: z.string(),
+  status: z.enum(RELATIONSHIP_REQUEST_STATUSES),
   createdAt: z.string().nullable().optional(),
   requester: RelationshipMemberSummaryViewSchema.nullable().optional(),
   targetType: z.enum(CONTACT_TARGET_TYPES),
@@ -134,7 +208,7 @@ export const FriendRequestViewSchema = z.object({
 /** Actor access request (presentActorAccessRequest). */
 export const ActorAccessRequestViewSchema = z.object({
   id: z.string(),
-  status: z.string(),
+  status: z.enum(RELATIONSHIP_REQUEST_STATUSES),
   createdAt: z.string().nullable().optional(),
   requester: RelationshipMemberSummaryViewSchema.nullable().optional(),
   actor: RelationshipActorSummaryViewSchema.nullable().optional(),
@@ -143,7 +217,7 @@ export const ActorAccessRequestViewSchema = z.object({
 /** Remote-agent access request (presentRemoteAgentAccessRequest). */
 export const RemoteAgentAccessRequestViewSchema = z.object({
   id: z.string(),
-  status: z.string(),
+  status: z.enum(RELATIONSHIP_REQUEST_STATUSES),
   createdAt: z.string().nullable().optional(),
   requester: RelationshipMemberSummaryViewSchema.nullable().optional(),
   remoteAgent: RelationshipRemoteAgentSummaryViewSchema.nullable().optional(),
@@ -174,14 +248,11 @@ export type IdentitySearchResponseSchemaType = z.infer<
   typeof IdentitySearchResponseSchema
 >
 
-/**
- * POST relationship-qr/scan and POST identity-search/request.
- * `contact` is an open `{ kind, id }`-ish ref the service shapes per outcome.
- */
+/** POST relationship-qr/scan and POST identity-search/request. */
 export const RelationshipScanResponseSchema = z.object({
   outcome: z.enum(RELATIONSHIP_SCAN_OUTCOMES),
   requestId: z.string().optional(),
-  contact: z.unknown().optional(),
+  contact: ContactHubEntryRefSchema.optional(),
 })
 export type RelationshipScanResponseSchemaType = z.infer<
   typeof RelationshipScanResponseSchema
@@ -213,13 +284,19 @@ export type RequestListResponseSchemaType = z.infer<
   typeof RequestListResponseSchema
 >
 
-/**
- * POST approve/reject (friend / actor-access / remote-agent-access). The handler
- * returns `{ request: <resolved row | grant-request result> }`; the resolved
- * value is a genuinely-open record (varies by request type) consumers don't read.
- */
+const RESOLVED_RELATIONSHIP_REQUEST_STATUSES = [
+  RELATIONSHIP_REQUEST_STATUS.APPROVED,
+  RELATIONSHIP_REQUEST_STATUS.REJECTED,
+] as const
+
+export const ResolvedRelationshipRequestViewSchema = z.object({
+  id: z.string(),
+  status: z.enum(RESOLVED_RELATIONSHIP_REQUEST_STATUSES),
+})
+
+/** POST approve/reject (friend / actor-access / remote-agent-access). */
 export const ResolveRequestResponseSchema = z.object({
-  request: z.unknown(),
+  request: ResolvedRelationshipRequestViewSchema,
 })
 export type ResolveRequestResponseSchemaType = z.infer<
   typeof ResolveRequestResponseSchema
@@ -227,7 +304,7 @@ export type ResolveRequestResponseSchemaType = z.infer<
 
 /**
  * GET contact-hub. The entry collections are ContactHubEntryView[]; `groups`
- * are conversation/group structures the service shapes (left open).
+ * are ConversationSummaryView[] from chat/summary-view.
  */
 export const ContactHubResponseSchema = z.object({
   requestSummary: z.object({
@@ -240,16 +317,16 @@ export const ContactHubResponseSchema = z.object({
   workspaceRemoteAgents: z.array(ContactHubEntryViewSchema),
   workspaceMembers: z.array(ContactHubEntryViewSchema),
   friends: z.array(ContactHubEntryViewSchema),
-  groups: z.array(z.unknown()),
+  groups: z.array(ConversationSummaryViewSchema),
 })
 export type ContactHubResponseSchemaType = z.infer<
   typeof ContactHubResponseSchema
 >
 
-/** GET contact-hub/:kind/:contactId. `groups` are open group structures. */
+/** GET contact-hub/:kind/:contactId. */
 export const ContactHubDetailResponseSchema = z.object({
   contact: ContactHubEntryViewSchema,
-  groups: z.array(z.unknown()),
+  groups: z.array(ConversationSummaryViewSchema),
 })
 export type ContactHubDetailResponseSchemaType = z.infer<
   typeof ContactHubDetailResponseSchema

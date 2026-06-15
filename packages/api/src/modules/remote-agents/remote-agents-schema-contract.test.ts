@@ -6,12 +6,14 @@
 
 import test from "node:test"
 import assert from "node:assert/strict"
+import { REMOTE_AGENT_BINDING_STATUS } from "@synapse/shared"
 import {
   RemoteAgentViewSchema,
   RemoteAgentMachineViewSchema,
   RemoteAgentRuntimeCatalogEntryViewSchema,
   RemoteAgentGroupTaskGrantViewSchema,
   RemoteAgentMachineBindingViewSchema,
+  RemoteAgentRuntimeSummaryViewSchema,
 } from "@synapse/shared/schemas"
 import {
   presentRemoteAgent,
@@ -54,7 +56,7 @@ test("presentRemoteAgent (bound, with runtime summary) parses RemoteAgentViewSch
     ...baseAgentRow,
     machineId: "m-1",
     machineTitle: "Machine",
-    bindingStatus: "active",
+    bindingStatus: REMOTE_AGENT_BINDING_STATUS.ACTIVE,
     runtimePath: "/usr/bin/claude",
     machineLifecycleState: "online",
     runtimeState: "idle",
@@ -77,7 +79,7 @@ test("presentMachineListItem parses RemoteAgentMachineViewSchema", () => {
       workspaceId: "ws-1",
       title: "Machine",
       description: null,
-      trustStatus: "trusted",
+      trustStatus: "active",
       lifecycleState: "online",
       bindingCount: 3,
       lastSeenAt: asDate,
@@ -95,7 +97,7 @@ test("presentMachineFromCamelRow parses RemoteAgentMachineViewSchema", () => {
       workspaceId: "ws-1",
       title: "Machine",
       description: null,
-      trustStatus: "trusted",
+      trustStatus: "active",
       lifecycleState: "online",
       lastSeenAt: asDate,
       createdAt: asDate,
@@ -143,11 +145,95 @@ test("presentMachineBinding parses RemoteAgentMachineBindingViewSchema", () => {
       displayName: "Agent",
       runtimeKind: "claude_code",
       runtimePath: "/usr/bin/claude",
-      status: "active",
+      status: REMOTE_AGENT_BINDING_STATUS.ACTIVE,
       runtimeState: "idle",
       pendingConversationCount: 0,
       unreadDeliveryCount: 0,
     })
   )
   assert.ok(parsed.success, JSON.stringify(parsed.error?.issues))
+})
+
+test("remote-agent shared app schemas reject unknown runtime, machine, and binding statuses", () => {
+  assert.equal(
+    RemoteAgentRuntimeSummaryViewSchema.safeParse({
+      runtimeKind: "claude_code",
+      state: "manual",
+      pendingConversationCount: 0,
+      unreadDeliveryCount: 0,
+    }).success,
+    false
+  )
+  assert.equal(
+    RemoteAgentMachineViewSchema.safeParse({
+      id: "m-1",
+      workspaceId: "ws-1",
+      title: "Machine",
+      trustStatus: "trusted",
+      lifecycleState: "online",
+    }).success,
+    false
+  )
+  assert.equal(
+    RemoteAgentMachineViewSchema.safeParse({
+      id: "m-1",
+      workspaceId: "ws-1",
+      title: "Machine",
+      trustStatus: "active",
+      lifecycleState: "booting",
+    }).success,
+    false
+  )
+  assert.equal(
+    RemoteAgentRuntimeCatalogEntryViewSchema.safeParse({
+      runtimeKind: "codex",
+      status: "installed",
+      metadata: {},
+    }).success,
+    false
+  )
+  const agentWithInvalidLifecycleState = presentRemoteAgent(
+    {
+      ...baseAgentRow,
+      machineId: "m-1",
+      machineLifecycleState: "online",
+    },
+    false
+  )
+  assert.ok(agentWithInvalidLifecycleState.binding)
+  assert.equal(
+    RemoteAgentViewSchema.safeParse({
+      ...agentWithInvalidLifecycleState,
+      binding: {
+        ...agentWithInvalidLifecycleState.binding,
+        machineLifecycleState: "booting",
+      },
+    }).success,
+    false
+  )
+  assert.equal(
+    RemoteAgentViewSchema.safeParse({
+      ...agentWithInvalidLifecycleState,
+      binding: {
+        ...agentWithInvalidLifecycleState.binding,
+        status: "paused",
+      },
+    }).success,
+    false
+  )
+  assert.equal(
+    RemoteAgentMachineBindingViewSchema.safeParse({
+      remoteAgentId: "ra-1",
+      displayName: "Agent",
+      runtimeKind: "claude_code",
+      status: "paused",
+      runtimeSummary: {
+        runtimeKind: "claude_code",
+        state: "idle",
+        pendingConversationCount: 0,
+        unreadDeliveryCount: 0,
+      },
+    }).success,
+    false
+  )
 })
