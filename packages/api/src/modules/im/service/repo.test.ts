@@ -6,6 +6,7 @@ import {
   decodeTransportAccountCredentials,
   decodeTransportAccountMetadata,
   decodeTransportMessageLinkMetadata,
+  normalizeTransportOutboxSweepCandidateRow,
 } from "./repo.js"
 
 test("decodeTransportAccountCredentials decodes account credentials at repo exit", () => {
@@ -42,6 +43,29 @@ test("decodeTransportMessageLinkMetadata decodes link metadata at repo exit", ()
   })
 
   assert.deepEqual(metadata, { delivery: { attempt: 1 } })
+})
+
+test("normalizeTransportOutboxSweepCandidateRow decodes sweep metadata at repo exit", () => {
+  const createdAt = new Date("2026-06-15T09:00:00.000Z")
+  const row = normalizeTransportOutboxSweepCandidateRow({
+    id: "link-1",
+    delivery_status: "failed",
+    metadata: JSON.stringify({ qq: { attempts: { a1: "unknown" } } }),
+    created_at: createdAt,
+    skipped_reason: null,
+    has_unknown_attempt: true,
+    last_error: "qq_5xx: upstream failed",
+  })
+
+  assert.deepEqual(row, {
+    id: "link-1",
+    deliveryStatus: "failed",
+    metadata: { qq: { attempts: { a1: "unknown" } } },
+    createdAt,
+    skippedReason: null,
+    hasUnknownAttempt: true,
+    lastError: "qq_5xx: upstream failed",
+  })
 })
 
 test("decodeConversationItemMetadata preserves joined item metadata", () => {

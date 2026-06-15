@@ -38,6 +38,7 @@ import type {
   TransportAddressMetadataInsert,
   ConversationParticipantAddressMetadataInsert,
   TransportMessageLinkMetadataInsert,
+  TransportMessageLinkMetadataUpdate,
 } from "../repo.types.js"
 import {
   serializeInstant,
@@ -140,6 +141,30 @@ type TransportMessageLinkRow = {
   updatedAt?: Date | null
 }
 
+type TransportOutboxSweepCandidateRaw = {
+  id: string
+  delivery_status: TransportDeliveryStatus
+  metadata: unknown
+  created_at: Date
+  skipped_reason: string | null
+  has_unknown_attempt: boolean
+  last_error: string | null
+}
+
+export type TransportOutboxSweepCandidateRow = {
+  id: string
+  deliveryStatus: TransportDeliveryStatus
+  metadata: Record<string, unknown>
+  createdAt: Date
+  skippedReason: string | null
+  hasUnknownAttempt: boolean
+  lastError: string | null
+}
+
+const TRANSPORT_OUTBOX_PENDING_STALE_INTERVAL = "5 minutes"
+const TRANSPORT_OUTBOX_FAILED_RECOVERABLE_INTERVAL = "1 hour"
+const TRANSPORT_OUTBOX_SKIPPED_RECOVERABLE_INTERVAL = "24 hours"
+
 export function decodeTransportAccountCredentials(row: {
   credentials: unknown
 }): Record<string, unknown> {
@@ -162,6 +187,20 @@ export function decodeTransportMessageLinkMetadata(row: {
   metadata: unknown
 }): Record<string, unknown> {
   return parseJsonObject(row.metadata)
+}
+
+export function normalizeTransportOutboxSweepCandidateRow(
+  row: TransportOutboxSweepCandidateRaw
+): TransportOutboxSweepCandidateRow {
+  return {
+    id: row.id,
+    deliveryStatus: row.delivery_status,
+    metadata: decodeTransportMessageLinkMetadata(row),
+    createdAt: row.created_at,
+    skippedReason: row.skipped_reason,
+    hasUnknownAttempt: row.has_unknown_attempt,
+    lastError: row.last_error,
+  }
 }
 
 export function decodeConversationItemMetadata(row: {
@@ -742,6 +781,62 @@ export async function selectTransportMessageLinkMetadataForUpdate(
 }
 
 /**
+ * Decode one link's metadata without taking a lock. Used by worker retry-budget
+ * probes; mutation still goes through the transactional patch helper.
+ */
+export async function selectTransportMessageLinkMetadata(
+  linkId: string
+): Promise<Record<string, unknown>> {
+  const row = await db
+    .selectFrom("transportMessageLinks")
+    .select("metadata")
+    .where("id", "=", linkId)
+    .limit(1)
+    .executeTakeFirst()
+  return decodeTransportMessageLinkMetadata({
+    metadata: row?.metadata,
+  })
+}
+
+/**
+ * Candidate read for the transport outbox worker. The worker owns scheduling,
+ * budget policy, and enqueue orchestration; this repo helper owns the raw SQL
+ * and decodes transport_message_links.metadata at the DB boundary.
+ */
+export async function listTransportOutboxSweepCandidateRows(): Promise<
+  TransportOutboxSweepCandidateRow[]
+> {
+  const rows = await sql<TransportOutboxSweepCandidateRaw>`
+    SELECT
+      id,
+      delivery_status,
+      metadata,
+      created_at,
+      metadata->>'skippedReason' AS skipped_reason,
+      jsonb_path_exists(
+        metadata,
+        '$.qq.attempts.*.outcome ? (@ == "unknown" || @ == "unknown_assumed")'
+      ) AS has_unknown_attempt,
+      metadata->>'lastError' AS last_error
+    FROM transport_message_links
+    WHERE direction = 'outbound'
+      AND (
+        (delivery_status = 'pending'
+          AND created_at < NOW() - INTERVAL '${sql.raw(TRANSPORT_OUTBOX_PENDING_STALE_INTERVAL)}')
+        OR (delivery_status = 'failed'
+          AND updated_at > NOW() - INTERVAL '${sql.raw(TRANSPORT_OUTBOX_FAILED_RECOVERABLE_INTERVAL)}')
+        OR (delivery_status = 'skipped'
+          AND metadata->>'skippedReason' IN ('binding_disabled','account_disabled')
+          AND updated_at > NOW() - INTERVAL '${sql.raw(TRANSPORT_OUTBOX_SKIPPED_RECOVERABLE_INTERVAL)}')
+      )
+    ORDER BY created_at ASC
+    LIMIT 200
+  `.execute(db)
+
+  return rows.rows.map(normalizeTransportOutboxSweepCandidateRow)
+}
+
+/**
  * Write a deep-merged metadata blob back to a link inside the supplied
  * transaction (companion to selectTransportMessageLinkMetadataForUpdate).
  */
@@ -754,6 +849,21 @@ export async function updateTransportMessageLinkMetadataRow(
     .updateTable("transportMessageLinks")
     .set({
       metadata: mergedMetadata as TransportMessageLinkMetadataInsert,
+    })
+    .where("id", "=", linkId)
+    .execute()
+}
+
+export async function markTransportMessageLinkDeadLetter(
+  linkId: string
+): Promise<void> {
+  await db
+    .updateTable("transportMessageLinks")
+    .set({
+      deliveryStatus: "failed",
+      metadata: sql`transport_message_links.metadata || ${JSON.stringify({
+        lastError: "exceeded_sweeper_retry_budget",
+      })}::jsonb` as unknown as TransportMessageLinkMetadataUpdate,
     })
     .where("id", "=", linkId)
     .execute()

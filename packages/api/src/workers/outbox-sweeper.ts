@@ -44,14 +44,16 @@
  */
 
 import type { Job, JobsOptions, Queue } from "bullmq"
-import { sql } from "kysely"
-import { parseJsonObject } from "@synapse/shared"
 import { nowIsoInstant } from "@synapse/shared/datetime"
 import { parseInstantString } from "../infrastructure/datetime.js"
-import { db } from "../infrastructure/database/kysely.js"
 import { redis } from "../infrastructure/redis/index.js"
 import { acquireLock, releaseLock } from "../infrastructure/redis/lock.js"
 import { patchTransportMessageLinkMetadata } from "../modules/im/service.js"
+import {
+  listTransportOutboxSweepCandidateRows,
+  markTransportMessageLinkDeadLetter,
+  selectTransportMessageLinkMetadata,
+} from "../modules/im/service/repo.js"
 import {
   canonicalTransportDeliveryJobId,
   IM_TRANSPORT_DELIVERY_JOB_DEFAULTS,
@@ -64,10 +66,6 @@ const log = createLogger("outbox-sweeper")
 const SWEEP_INTERVAL_MS = 30_000
 const SWEEP_LOCK_KEY = "im:outbox-sweeper:lock"
 const SWEEP_LOCK_TTL_MS = SWEEP_INTERVAL_MS - 5_000
-
-const PENDING_STALE_INTERVAL = "5 minutes"
-const FAILED_RECOVERABLE_INTERVAL = "1 hour"
-const SKIPPED_RECOVERABLE_INTERVAL = "24 hours"
 
 export const SWEEPER_BUDGET_PER_LINK = 10
 export const SWEEPER_BUDGET_PER_10MIN = 3
@@ -231,13 +229,7 @@ async function bumpEnqueueRetryCount(linkId: string): Promise<number> {
   // QQ fallback); writes go to the neutral `metadata.delivery.*`
   // slot so non-QQ connectors flowing through the same sweeper don't
   // grow `metadata.qq.*` ghost keys.
-  const row = await db
-    .selectFrom("transportMessageLinks")
-    .select(["metadata"])
-    .where("id", "=", linkId)
-    .limit(1)
-    .executeTakeFirst()
-  const current = parseJsonObject(row?.metadata) as Record<string, unknown>
+  const current = await selectTransportMessageLinkMetadata(linkId)
   const prev = readEnqueueRetryCount(current)
   const next = prev + 1
   await patchTransportMessageLinkMetadata({
@@ -328,76 +320,38 @@ interface SweepCandidate {
 }
 
 async function loadSweepCandidates(): Promise<SweepCandidate[]> {
-  // We load all three candidate classes in one query and let app code
-  // bucket them. Using raw SQL because Kysely's jsonb operators aren't
-  // exposed conveniently for `jsonb_path_exists`.
-  const rows = await sql<{
-    id: string
-    delivery_status: "pending" | "sent" | "failed" | "skipped"
-    metadata: unknown
-    created_at: Date
-    skipped_reason: string | null
-    has_unknown_attempt: boolean
-    last_error: string | null
-  }>`
-    SELECT
-      id,
-      delivery_status,
-      metadata,
-      created_at,
-      metadata->>'skippedReason' AS skipped_reason,
-      jsonb_path_exists(
-        metadata,
-        '$.qq.attempts.*.outcome ? (@ == "unknown" || @ == "unknown_assumed")'
-      ) AS has_unknown_attempt,
-      metadata->>'lastError' AS last_error
-    FROM transport_message_links
-    WHERE direction = 'outbound'
-      AND (
-        (delivery_status = 'pending'
-          AND created_at < NOW() - INTERVAL '${sql.raw(PENDING_STALE_INTERVAL)}')
-        OR (delivery_status = 'failed'
-          AND updated_at > NOW() - INTERVAL '${sql.raw(FAILED_RECOVERABLE_INTERVAL)}')
-        OR (delivery_status = 'skipped'
-          AND metadata->>'skippedReason' IN ('binding_disabled','account_disabled')
-          AND updated_at > NOW() - INTERVAL '${sql.raw(SKIPPED_RECOVERABLE_INTERVAL)}')
-      )
-    ORDER BY created_at ASC
-    LIMIT 200
-  `.execute(db)
-
+  const rows = await listTransportOutboxSweepCandidateRows()
   const out: SweepCandidate[] = []
-  for (const row of rows.rows) {
-    const metadata = parseJsonObject(row.metadata) as Record<string, unknown>
-    if (row.delivery_status === "pending") {
+  for (const row of rows) {
+    if (row.deliveryStatus === "pending") {
       out.push({
         linkId: row.id,
         reason: "pending_stale",
-        metadata,
-        createdAt: row.created_at,
+        metadata: row.metadata,
+        createdAt: row.createdAt,
       })
-    } else if (row.delivery_status === "failed") {
-      const lastError = row.last_error?.split(":")[0]?.trim() ?? ""
-      if (row.has_unknown_attempt) {
+    } else if (row.deliveryStatus === "failed") {
+      const lastError = row.lastError?.split(":")[0]?.trim() ?? ""
+      if (row.hasUnknownAttempt) {
         out.push({
           linkId: row.id,
           reason: "failed_unknown_attempt",
-          metadata,
-          createdAt: row.created_at,
+          metadata: row.metadata,
+          createdAt: row.createdAt,
         })
       } else if (lastError && RETRYABLE_LAST_ERROR_CODES.has(lastError)) {
         out.push({
           linkId: row.id,
           reason: "failed_retryable_error",
-          metadata,
-          createdAt: row.created_at,
+          metadata: row.metadata,
+          createdAt: row.createdAt,
         })
       }
     } else if (
-      row.delivery_status === "skipped" &&
-      row.skipped_reason &&
-      (row.skipped_reason === "binding_disabled" ||
-        row.skipped_reason === "account_disabled")
+      row.deliveryStatus === "skipped" &&
+      row.skippedReason &&
+      (row.skippedReason === "binding_disabled" ||
+        row.skippedReason === "account_disabled")
     ) {
       // The recovery helper (G5) handles the canDeliverNow check + delivery_status
       // flip for these. The sweeper just hands them to the helper alongside
@@ -405,8 +359,8 @@ async function loadSweepCandidates(): Promise<SweepCandidate[]> {
       out.push({
         linkId: row.id,
         reason: "skipped_recoverable",
-        metadata,
-        createdAt: row.created_at,
+        metadata: row.metadata,
+        createdAt: row.createdAt,
       })
     }
   }
@@ -558,13 +512,7 @@ function checkSweeperBudget(candidate: SweepCandidate): BudgetCheck {
 
 async function bumpSweeperRetryStamp(linkId: string): Promise<void> {
   // Same pattern as bumpEnqueueRetryCount but for sweeper bookkeeping.
-  const row = await db
-    .selectFrom("transportMessageLinks")
-    .select(["metadata"])
-    .where("id", "=", linkId)
-    .limit(1)
-    .executeTakeFirst()
-  const current = parseJsonObject(row?.metadata) as Record<string, unknown>
+  const current = await selectTransportMessageLinkMetadata(linkId)
   // Read via the shared helper so the legacy `metadata.qq.*`
   // fallback applies uniformly. Writes always go to the neutral
   // `metadata.delivery.*` slot.
@@ -581,14 +529,5 @@ async function bumpSweeperRetryStamp(linkId: string): Promise<void> {
 }
 
 async function markDeadLetter(linkId: string): Promise<void> {
-  await db
-    .updateTable("transportMessageLinks")
-    .set({
-      deliveryStatus: "failed",
-      metadata: sql`transport_message_links.metadata || ${JSON.stringify({
-        lastError: "exceeded_sweeper_retry_budget",
-      })}::jsonb`,
-    })
-    .where("id", "=", linkId)
-    .execute()
+  await markTransportMessageLinkDeadLetter(linkId)
 }
