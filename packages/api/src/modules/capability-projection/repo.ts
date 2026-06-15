@@ -8,8 +8,13 @@
 // Orchestration / DTO shaping stays in device-capabilities.ts. round-6 P1-6.
 
 import { sql } from "kysely"
-import { SUBJECT_KIND } from "@synapse/shared"
-import { db, type Executor } from "../../infrastructure/database/kysely.js"
+import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
+import {
+  db,
+  type Executor,
+  type KyselyDb,
+} from "../../infrastructure/database/kysely.js"
+import { buildRuntimePrincipalContext } from "../access/subject-resolution.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
 import { upsertAccessSubjectDefault } from "../access/guards.js"
 
@@ -72,6 +77,8 @@ export interface AccessTargetInput {
   conversationId?: string
   remoteAgentId?: string
 }
+
+export type CapabilityProjectionRuntimeContextDb = KyselyDb
 
 /**
  * Owns the distinctOn multi-join device-tool projection SELECT. Returns
@@ -240,6 +247,19 @@ export async function resolveScopedSubjectTarget(
       return { subjectId, scopeSubjectId }
     }
   }
+}
+
+export async function loadRuntimePrincipalContextForCapabilityProjection(params: {
+  principal: SubjectRef
+  workspaceId: string
+  conversationId?: string | null
+  db?: CapabilityProjectionRuntimeContextDb
+}) {
+  return buildRuntimePrincipalContext(params.db ?? db, {
+    principal: params.principal,
+    workspaceId: params.workspaceId,
+    conversationId: params.conversationId ?? null,
+  })
 }
 
 export interface ReplaceDeviceCapabilityGrantsParams {

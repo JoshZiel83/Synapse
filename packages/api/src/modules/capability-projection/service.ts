@@ -36,8 +36,6 @@ import {
   resolveMcpToolsForRemoteAgent,
   type ResolvedMcpTools,
 } from "../mcp-plugins/tool-resolver.js"
-import { db } from "../../infrastructure/database/kysely.js"
-import { buildRuntimePrincipalContext } from "../access/subject-resolution.js"
 import { dispatchSyncTool } from "../devices/dispatch.js"
 import { signEnvelopeForDispatch } from "../devices/envelope-signer.js"
 import {
@@ -74,6 +72,10 @@ import {
   loadDeviceCapabilityToolsForSubjects,
   type DeviceCapabilityToolRow,
 } from "./device-capabilities.js"
+import {
+  loadRuntimePrincipalContextForCapabilityProjection,
+  type CapabilityProjectionRuntimeContextDb,
+} from "./repo.js"
 import { getWorkspaceCapabilityConversationTypePolicyMap } from "../capabilities/conversation-type-policies.js"
 import {
   maskAllowsConversationTypeKey,
@@ -370,9 +372,8 @@ function devicePrincipalToSubjectRef(
  */
 export async function principalSubjectIds(
   input: ProjectToolsInput,
-  options?: { db?: typeof db }
+  options?: { db?: CapabilityProjectionRuntimeContextDb }
 ): Promise<ResolvedPrincipalSubjects> {
-  const dbHandle = options?.db ?? db
   const subjectRef = devicePrincipalToSubjectRef(input.principal)
   if (!subjectRef) {
     return {
@@ -395,7 +396,8 @@ export async function principalSubjectIds(
         : input.principal.kind === "remote_agent"
           ? input.principal.conversationId
           : undefined
-  const ctx = await buildRuntimePrincipalContext(dbHandle, {
+  const ctx = await loadRuntimePrincipalContextForCapabilityProjection({
+    db: options?.db,
     principal: subjectRef,
     workspaceId: input.workspaceId,
     conversationId: conversationId ?? null,
