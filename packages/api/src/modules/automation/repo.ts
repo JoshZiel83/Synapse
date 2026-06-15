@@ -199,6 +199,38 @@ type AutomationDeliveryTargetRawRow = {
   targetParticipantId: string
 }
 
+type AutomationEventSourceComponentRawRow = {
+  id: string
+  workspaceId: string
+  providerKind: AutomationEventSourceDbRow["provider_kind"]
+  providerRef: string | null
+  webhookEndpointId: string | null
+  integrationBindingId: string | null
+  integrationInstallationId?: string | null
+  integrationProvider?: AutomationEventSourceDbRow["integration_provider"]
+  integrationIngressKind?: AutomationEventSourceDbRow["integration_ingress_kind"]
+  integrationTargetKind?: AutomationEventSourceDbRow["integration_target_kind"]
+  integrationTargetId?: string | null
+  integrationTargetLabel?: string | null
+  integrationWebhookEndpointId?: string | null
+  integrationExternalSubscriptionId?: string | null
+  sourceKey: string
+  name: string
+  description: string
+  recommendedUsage: string
+  payloadSchema: unknown
+  examplePayload: unknown
+  status: AutomationEventSourceDbRow["status"]
+  createdByKind: AutomationEventSourceDbRow["created_by_kind"]
+  createdByWorkspaceMemberId: string | null
+  createdByActorId: string | null
+  createdBySessionId: string | null
+  lastTriggeredAt: Date | null
+  metadata: unknown
+  createdAt: Date
+  updatedAt: Date
+}
+
 export function decodeAutomationEventSourceMetadata(row: {
   metadata: unknown
 }): Record<string, unknown> {
@@ -464,6 +496,64 @@ function toAutomationDeliveryDbRow(
   }
 }
 
+function automationEventSourceJoinClause(
+  eventSourceAlias = "aes",
+  bindingAlias = "aib"
+) {
+  return `LEFT JOIN automation_integration_bindings ${bindingAlias} ON ${bindingAlias}.id = ${eventSourceAlias}.integration_binding_id`
+}
+
+function automationEventSourceSelectClause(
+  eventSourceAlias = "aes",
+  bindingAlias = "aib"
+) {
+  return `${eventSourceAlias}.*,
+          ${bindingAlias}.installation_id AS integration_installation_id,
+          ${bindingAlias}.provider AS integration_provider,
+          ${bindingAlias}.ingress_kind AS integration_ingress_kind,
+          ${bindingAlias}.target_kind AS integration_target_kind,
+          ${bindingAlias}.target_id AS integration_target_id,
+          ${bindingAlias}.target_label AS integration_target_label,
+          ${bindingAlias}.webhook_endpoint_id AS integration_webhook_endpoint_id,
+          ${bindingAlias}.external_subscription_id AS integration_external_subscription_id`
+}
+
+function toAutomationEventSourceDbRow(
+  row: AutomationEventSourceComponentRawRow
+): AutomationEventSourceDbRow {
+  return {
+    id: row.id,
+    workspace_id: row.workspaceId,
+    provider_kind: row.providerKind,
+    provider_ref: row.providerRef,
+    webhook_endpoint_id: row.webhookEndpointId,
+    integration_binding_id: row.integrationBindingId,
+    integration_installation_id: row.integrationInstallationId,
+    integration_provider: row.integrationProvider,
+    integration_ingress_kind: row.integrationIngressKind,
+    integration_target_kind: row.integrationTargetKind,
+    integration_target_id: row.integrationTargetId,
+    integration_target_label: row.integrationTargetLabel,
+    integration_webhook_endpoint_id: row.integrationWebhookEndpointId,
+    integration_external_subscription_id: row.integrationExternalSubscriptionId,
+    source_key: row.sourceKey,
+    name: row.name,
+    description: row.description,
+    recommended_usage: row.recommendedUsage,
+    payload_schema: row.payloadSchema,
+    example_payload: row.examplePayload,
+    status: row.status,
+    created_by_kind: row.createdByKind,
+    created_by_workspace_member_id: row.createdByWorkspaceMemberId,
+    created_by_actor_id: row.createdByActorId,
+    created_by_session_id: row.createdBySessionId,
+    last_triggered_at: row.lastTriggeredAt,
+    metadata: row.metadata,
+    created_at: row.createdAt,
+    updated_at: row.updatedAt,
+  }
+}
+
 export async function loadAutomationRuleComponentRows(
   workspaceId: string,
   ruleIds: string[],
@@ -605,6 +695,70 @@ export async function listActiveEventSubscriptionRuleRowsByEventSource(params: {
     [params.eventSourceId, params.category]
   )
   return result.rows.map(toAutomationRuleDbRow)
+}
+
+export async function getAutomationEventSourceRow(params: {
+  workspaceId: string
+  eventSourceId: string
+  executor?: Executor
+}): Promise<AutomationEventSourceDbRow | null> {
+  const result = await resolveQueryRunner(
+    params.executor
+  ).run<AutomationEventSourceComponentRawRow>(
+    `SELECT ${automationEventSourceSelectClause("aes", "aib")}
+     FROM automation_event_sources aes
+     ${automationEventSourceJoinClause("aes", "aib")}
+     WHERE aes.workspace_id = $1::uuid
+       AND aes.id = $2::uuid
+       AND aes.deleted_at IS NULL
+     LIMIT 1`,
+    [params.workspaceId, params.eventSourceId]
+  )
+  const row = result.rows[0]
+  return row ? toAutomationEventSourceDbRow(row) : null
+}
+
+export async function listAutomationEventSourceRows(params: {
+  workspaceId: string
+  filters?: {
+    status?: AutomationEventSourceStatus
+    providerKind?: AutomationEventProviderKind
+    providerRef?: string
+    sourceKey?: string
+  }
+  executor?: Executor
+}): Promise<AutomationEventSourceDbRow[]> {
+  const values: unknown[] = [params.workspaceId]
+  let where = "aes.workspace_id = $1::uuid AND aes.deleted_at IS NULL"
+
+  if (params.filters?.status) {
+    values.push(params.filters.status)
+    where += ` AND aes.status = $${values.length}::automation_event_sources_status`
+  }
+  if (params.filters?.providerKind) {
+    values.push(params.filters.providerKind)
+    where += ` AND aes.provider_kind = $${values.length}::automation_event_sources_provider_kind`
+  }
+  if (params.filters?.providerRef !== undefined) {
+    values.push(params.filters.providerRef)
+    where += ` AND COALESCE(aes.provider_ref, '') = COALESCE($${values.length}::text, '')`
+  }
+  if (params.filters?.sourceKey) {
+    values.push(params.filters.sourceKey)
+    where += ` AND aes.source_key = $${values.length}::text`
+  }
+
+  const result = await resolveQueryRunner(
+    params.executor
+  ).run<AutomationEventSourceComponentRawRow>(
+    `SELECT ${automationEventSourceSelectClause("aes", "aib")}
+     FROM automation_event_sources aes
+     ${automationEventSourceJoinClause("aes", "aib")}
+     WHERE ${where}
+     ORDER BY aes.created_at DESC`,
+    values
+  )
+  return result.rows.map(toAutomationEventSourceDbRow)
 }
 
 // ---------------------------------------------------------------------------

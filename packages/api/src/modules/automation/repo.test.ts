@@ -21,12 +21,14 @@ import { upsertAccessSubject } from "../access/subject-registry.js"
 import {
   decodeAutomationEventSourceMetadata,
   decodeAutomationTriggerMatcher,
+  getAutomationEventSourceRow,
   insertAutomationDeliveryRow,
   insertAutomationEventSourceRow,
   insertAutomationPolicyRow,
   insertAutomationRuleRow,
   insertAutomationTriggerRow,
   listActiveEventSubscriptionRuleRowsByEventSource,
+  listAutomationEventSourceRows,
   loadAutomationRuleComponentRows,
   lockDueAutomationScheduleRows,
   normalizeAutomationDeliveryRow,
@@ -396,6 +398,32 @@ test(
           metadata: JSON.stringify({ source: true }),
         },
         db
+      )
+
+      const loadedSource = await getAutomationEventSourceRow({
+        workspaceId,
+        eventSourceId,
+        executor: db,
+      })
+      assert.equal(loadedSource?.id, eventSourceId)
+      assert.equal(loadedSource?.workspace_id, workspaceId)
+      assert.equal(
+        loadedSource?.provider_kind,
+        AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS[2]
+      )
+      assert.deepEqual(parseJsonObject(loadedSource?.payload_schema), {})
+
+      const listedSources = await listAutomationEventSourceRows({
+        workspaceId,
+        filters: {
+          providerKind: AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS[2],
+          sourceKey: loadedSource?.source_key,
+        },
+        executor: db,
+      })
+      assert.deepEqual(
+        listedSources.map((source) => source.id),
+        [eventSourceId]
       )
 
       await insertAutomationRuleRow(db, {

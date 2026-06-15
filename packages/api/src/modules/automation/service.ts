@@ -64,8 +64,10 @@ import {
   insertAutomationRuleRow,
   insertIntegrationBindingRow,
   insertWebhookEndpointRow,
+  getAutomationEventSourceRow,
   listActiveIntegrationSourceKeysForBinding as listActiveIntegrationSourceKeysForBindingRepo,
   listActiveEventSubscriptionRuleRowsByEventSource,
+  listAutomationEventSourceRows,
   loadAutomationRuleComponentRows,
   lockDueAutomationScheduleRows,
   loadAutomationEventSourceAccessBindingRows,
@@ -1269,19 +1271,8 @@ export async function getAutomationEventSource(
   workspaceId: string,
   eventSourceId: string
 ) {
-  const result = await runQuery<AutomationEventSourceDbRow>(
-    `SELECT ${automationEventSourceSelectClause("aes", "aib")}
-     FROM automation_event_sources aes
-     ${automationEventSourceJoinClause("aes", "aib")}
-     WHERE aes.workspace_id = $1
-       AND aes.id = $2
-       AND aes.deleted_at IS NULL
-     LIMIT 1`,
-    [workspaceId, eventSourceId]
-  )
-  return result.rows[0]
-    ? presentEventSource(normalizeAutomationEventSourceRow(result.rows[0]))
-    : null
+  const row = await getAutomationEventSourceRow({ workspaceId, eventSourceId })
+  return row ? presentEventSource(normalizeAutomationEventSourceRow(row)) : null
 }
 
 export async function listAutomationEventSources(
@@ -1294,35 +1285,8 @@ export async function listAutomationEventSources(
   },
   accessContext?: AutomationEventSourceAccessContext
 ) {
-  const values: unknown[] = [workspaceId]
-  let where = "aes.workspace_id = $1 AND aes.deleted_at IS NULL"
-
-  if (filters?.status) {
-    values.push(filters.status)
-    where += ` AND aes.status = $${values.length}`
-  }
-  if (filters?.providerKind) {
-    values.push(filters.providerKind)
-    where += ` AND aes.provider_kind = $${values.length}`
-  }
-  if (filters?.providerRef !== undefined) {
-    values.push(filters.providerRef)
-    where += ` AND COALESCE(aes.provider_ref, '') = COALESCE($${values.length}, '')`
-  }
-  if (filters?.sourceKey) {
-    values.push(filters.sourceKey)
-    where += ` AND aes.source_key = $${values.length}`
-  }
-
-  const result = await runQuery<AutomationEventSourceDbRow>(
-    `SELECT ${automationEventSourceSelectClause("aes", "aib")}
-     FROM automation_event_sources aes
-     ${automationEventSourceJoinClause("aes", "aib")}
-     WHERE ${where}
-     ORDER BY aes.created_at DESC`,
-    values
-  )
-  const sources = result.rows
+  const rows = await listAutomationEventSourceRows({ workspaceId, filters })
+  const sources = rows
     .map(normalizeAutomationEventSourceRow)
     .map(presentEventSource)
   if (!accessContext) {
