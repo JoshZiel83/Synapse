@@ -26,11 +26,9 @@ import type {
 } from "@synapse/shared/types"
 import type { InboundEnvelope } from "../connectors/types.js"
 import { getWorkspaceOwnerId } from "./repo.js"
-import {
-  createConversationItem,
-  enqueueActorWakeupsForConversationMessage,
-} from "../../chat/service.js"
+import { enqueueActorWakeupsForConversationMessage } from "../../chat/actor-wakeup.js"
 import { createConversationRecordUseCase } from "../../chat/create-conversation.js"
+import { createConversationItem } from "../../chat/item-write.js"
 import { ensureConversationParticipantUseCase } from "../../chat/participant-roster.js"
 import { getWorkspaceChiefActorPreference } from "../../workspace/service.js"
 import {

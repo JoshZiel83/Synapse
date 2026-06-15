@@ -30,7 +30,7 @@ import {
   authorizeActionDefault,
   listAuthorizedResourceIdsDefault,
 } from "../access/guards.js"
-import { sendConversationMessageFromParticipant } from "../chat/service.js"
+import { sendConversationMessageFromParticipant } from "../chat/item-write.js"
 import { listVisibleConversationItemsForParticipant } from "../chat/conversation-item-read.js"
 import {
   requireRemoteAgentConversationAccessOnDefaultDb,
