@@ -13,17 +13,18 @@
     "users": 4
   },
   "modules/automation/repo.ts": {
+    "automation_rules": 1,
     "workspaces": 1
   },
   "modules/automation/service.ts": {
     "automation_event_sources": 8,
     "automation_integration_bindings": 6,
-    "automation_rules": 6,
+    "automation_rules": 5,
     "automation_webhook_endpoints": 4
   },
-  "modules/chat/service.ts": {
+  "modules/chat/repo.ts": {
     "conversations": 4,
-    "users": 5
+    "users": 4
   },
   "modules/devices/control-plane-auth.ts": {
     "devices": 1
@@ -45,10 +46,7 @@
     "plugin_connections": 1
   },
   "modules/mcp-plugins/repo.ts": {
-    "catalog_items": 1
-  },
-  "modules/mcp-plugins/service.ts": {
-    "catalog_items": 1,
+    "catalog_items": 2,
     "publishers": 4
   },
   "modules/memory/repo.ts": {
