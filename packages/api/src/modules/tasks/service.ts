@@ -49,7 +49,6 @@ import {
   listConversationRealtimeRecipients,
   updateConversationItemEventPayload,
 } from "../chat/service.js"
-import { sql } from "kysely"
 import {
   createRuntimeAuthorizationGrant,
   type RuntimeAuthorizationGrantRecord,
@@ -88,7 +87,7 @@ import {
   resolveParticipantSubjectId,
   taskViewableByUser,
   updateTaskConversationItemId,
-  updateTaskRequestRow,
+  updateResolvedTaskRequestRow,
   updateTaskResolutionPayload,
   upsertRemoteAgentConversationContextForPlan,
   withTaskTransaction,
@@ -1436,10 +1435,8 @@ export async function cancelTaskRequest(taskId: string, note?: string) {
 
   const resolutionPayload = decodeTaskResolutionPayload(existing)
   const task = await withTaskTransaction(async (client) => {
-    await updateTaskRequestRow(client, taskId, {
+    await updateResolvedTaskRequestRow(client, taskId, {
       lifecycleStatus: "cancelled",
-      revision: sql`revision + 1`,
-      resolvedAt: sql`NOW()`,
     })
 
     const payload = {
@@ -2147,12 +2144,10 @@ export async function resolveTaskRequest(
     // (auto-retry writes only final_result_payload, which is NOT terminal-
     // guarded, so it lands on the already-terminal row).
     const taskFields = taskResolutionStatusToFields(nextStatus, locked.kind)
-    await updateTaskRequestRow(client, params.taskId, {
+    await updateResolvedTaskRequestRow(client, params.taskId, {
       lifecycleStatus: taskFields.lifecycleStatus,
       outcome: taskFields.outcome,
-      revision: sql`revision + 1`,
       resolvedByParticipantId: params.resolverParticipantId,
-      resolvedAt: sql`NOW()`,
     })
 
     await updateTaskResolutionPayload(client, params.taskId, resolutionPayload)
@@ -2316,10 +2311,8 @@ export async function markRuntimeAuthorizationTaskSuperseded(
 
   const resolutionPayload = decodeTaskResolutionPayload(existing)
   const task = await withTaskTransaction(async (client) => {
-    await updateTaskRequestRow(client, taskId, {
+    await updateResolvedTaskRequestRow(client, taskId, {
       lifecycleStatus: "cancelled",
-      revision: sql`revision + 1`,
-      resolvedAt: sql`NOW()`,
     })
     await updateTaskResolutionPayload(client, taskId, {
       ...resolutionPayload,

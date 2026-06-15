@@ -792,6 +792,18 @@ export async function updateTaskRequestRow(
   }
 }
 
+export async function updateResolvedTaskRequestRow(
+  client: Executor,
+  taskId: string,
+  values: Record<string, unknown>
+) {
+  await updateTaskRequestRow(client, taskId, {
+    ...values,
+    revision: sql`revision + 1`,
+    resolvedAt: sql`NOW()`,
+  })
+}
+
 export async function updateTaskResolutionPayload(
   client: Executor,
   taskId: string,
