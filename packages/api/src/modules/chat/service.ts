@@ -184,6 +184,7 @@ import {
   type ActorWakeupDeps,
 } from "./actor-wakeup.js"
 import { syncVisibleSharedItemUseCase } from "./visible-sync.js"
+import { syncConversationUpsertForWorkspaceMembersUseCase } from "./conversation-upsert-sync.js"
 import { enrichTaskForUser } from "../tasks/service.js"
 import {
   getConversationRuntimeMap,
@@ -1006,47 +1007,19 @@ export async function enqueueActorWakeupsForConversationMessage(params: {
   )
 }
 
-async function loadHumanParticipantsForConversation(
-  queryable: Executor,
-  conversationId: string
-) {
-  const participants = await listConversationParticipantRows(queryable, [
-    conversationId,
-  ])
-  return participants.filter(
-    (participant) =>
-      participant.state === CONVERSATION_PARTICIPANT_STATE.ACTIVE &&
-      typeof participant.workspaceMemberId === "string" &&
-      participant.workspaceMemberId.length > 0
-  )
-}
-
 async function syncConversationUpsertForWorkspaceMembers(
   queryable: Executor,
   workspaceId: string,
   workspaceMemberIds: string[],
   conversationId: string
 ) {
-  for (const workspaceMemberId of [...new Set(workspaceMemberIds)]) {
-    const conversationRecord = await loadConversationView(
-      queryable,
-      workspaceId,
-      workspaceMemberId,
-      conversationId
-    )
-    if (!conversationRecord) {
-      continue
-    }
-    await appendWorkspaceMemberSyncEvent(queryable, {
-      workspaceId,
-      workspaceMemberId,
-      conversationId,
-      eventType: "conversation.upsert",
-      payload: {
-        conversation: presentChatConversationRecord(conversationRecord),
-      },
-    })
-  }
+  await syncConversationUpsertForWorkspaceMembersUseCase(
+    queryable,
+    workspaceId,
+    workspaceMemberIds,
+    conversationId,
+    { loadConversationView }
+  )
 }
 
 /**
