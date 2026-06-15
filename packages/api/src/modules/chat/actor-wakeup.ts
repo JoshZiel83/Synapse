@@ -8,7 +8,17 @@ import {
   type SessionWakeupSourceParticipantType,
 } from "@synapse/shared"
 import type { Executor } from "../../infrastructure/database/kysely.js"
-import type { ChatConversationItemRow, ChatParticipantRow } from "./repo.js"
+import { hydrateConversationItems } from "./conversation-item-read.js"
+import {
+  chatRootExecutor,
+  conversationItemHasTargets,
+  getConversationKind,
+  listChatConversationParticipantRows,
+  listConversationItemRowsByIds,
+  listMentionedParticipantIdsForConversationItem,
+  type ChatConversationItemRow,
+  type ChatParticipantRow,
+} from "./repo.js"
 
 type ConversationKind = (typeof CONVERSATION_KINDS)[number]
 
@@ -77,6 +87,53 @@ export type ActorWakeupDeps = {
     metadata: Record<string, unknown>
     trigger: PendingActorWakeup["sourceType"]
   }) => Promise<void>
+}
+
+function rootQueryable(): Executor {
+  return chatRootExecutor()
+}
+
+async function listItemRowsByIds(queryable: Executor, itemIds: string[]) {
+  return listConversationItemRowsByIds(queryable, itemIds)
+}
+
+async function listConversationParticipantRows(
+  queryable: Executor,
+  conversationIds: string[],
+  options?: { useProfileSnapshot?: boolean }
+) {
+  return listChatConversationParticipantRows(
+    queryable,
+    conversationIds,
+    options
+  )
+}
+
+async function listMentionedParticipantIdsForItem(
+  queryable: Executor,
+  itemId: string
+) {
+  return listMentionedParticipantIdsForConversationItem(queryable, itemId)
+}
+
+function chatActorWakeupDeps(): ActorWakeupDeps {
+  return {
+    listItemRowsByIds,
+    conversationItemHasTargets,
+    getConversationKind,
+    listConversationParticipants: listConversationParticipantRows,
+    listMentionedParticipantIdsForItem,
+    hydrateConversationItems,
+    ensureConversationActorSessionContext: async (params, queryable) => {
+      const { ensureConversationActorSessionContext } =
+        await import("../session/service.js")
+      return ensureConversationActorSessionContext(params, queryable)
+    },
+    enqueueSessionWakeup: async (params) => {
+      const { enqueueSessionWakeup } = await import("../session/runtime.js")
+      await enqueueSessionWakeup(params)
+    },
+  }
 }
 
 function participantDisplayName(row: ChatParticipantRow): string {
@@ -302,4 +359,31 @@ export async function enqueueActorWakeupsForConversationMessageUseCase(
   }
 
   return pendingWakeups
+}
+
+export async function enqueueActorWakeupsForConversationMessage(params: {
+  workspaceId?: string
+  conversationId: string
+  itemId: string
+  // sourceParticipantType mixes a real participant author kind with the
+  // "system" wakeup source (automation / tool-call completion), so it is typed
+  // as the wakeup-source enum (which retains 'system') rather than a DB
+  // participant kind. The DB participant kind never equals 'system'.
+  sourceParticipantType?: SessionWakeupSourceParticipantType
+  sourceParticipantId?: string
+  sourceName?: string
+  summary?: string
+  queryable?: Executor
+}) {
+  if (!params.workspaceId) {
+    return []
+  }
+  return enqueueActorWakeupsForConversationMessageUseCase(
+    {
+      ...params,
+      workspaceId: params.workspaceId,
+      queryable: params.queryable ?? rootQueryable(),
+    },
+    chatActorWakeupDeps()
+  )
 }

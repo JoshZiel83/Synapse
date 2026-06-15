@@ -13,7 +13,6 @@ import {
   type CanonicalContentBlock,
   type ConversationMessageSubtype,
   type ConversationParticipantType,
-  type SessionWakeupSourceParticipantType,
 } from "@synapse/shared"
 import type {
   ConversationEventContextPolicy,
@@ -37,14 +36,10 @@ export {
 export { broadcastTypingState } from "./typing.js"
 import {
   chatRootExecutor,
-  conversationItemHasTargets,
-  getConversationKind,
   getConversationRecord,
   getVisibleConversationReplyRefRow,
   listChatConversationParticipantRows,
-  listConversationItemRowsByIds,
   listNearbyVisibleConversationReplyRefRows,
-  listMentionedParticipantIdsForConversationItem,
   withChatTransaction,
 } from "./repo.js"
 // Re-exported for existing consumers that import the row DTO from chat/service.
@@ -101,10 +96,8 @@ import {
   createConversationEventUseCase,
   type CreateConversationEventDeps,
 } from "./event-write.js"
-import {
-  enqueueActorWakeupsForConversationMessageUseCase,
-  type ActorWakeupDeps,
-} from "./actor-wakeup.js"
+import { enqueueActorWakeupsForConversationMessage } from "./actor-wakeup.js"
+export { enqueueActorWakeupsForConversationMessage } from "./actor-wakeup.js"
 import { syncVisibleSharedItemUseCase } from "./visible-sync.js"
 import { syncConversationUpsertForWorkspaceMembersUseCase } from "./conversation-upsert-sync.js"
 import { listConversationRealtimeRecipientsUseCase } from "./realtime-recipients.js"
@@ -124,7 +117,6 @@ export { conversationItemDetailToFeedItem } from "./conversation-feed-mapper.js"
 import {
   buildChatConversationItems,
   getConversationFeedItemById,
-  hydrateConversationItems,
 } from "./conversation-item-read.js"
 export {
   getContextConversationItemsForParticipant,
@@ -193,10 +185,6 @@ async function listConversationParticipantRows(
   )
 }
 
-async function listItemRowsByIds(queryable: Executor, itemIds: string[]) {
-  return listConversationItemRowsByIds(queryable, itemIds)
-}
-
 export async function resolveConversationReplyRef(params: {
   queryable?: Executor
   conversationId: string
@@ -247,40 +235,6 @@ export async function resolveConversationReplyRef(params: {
     400,
     "invalid_reply_ref",
     `Unknown replyToRef "${params.replyRef}".${suggestionText}`
-  )
-}
-
-async function listMentionedParticipantIdsForItem(
-  queryable: Executor,
-  itemId: string
-) {
-  return listMentionedParticipantIdsForConversationItem(queryable, itemId)
-}
-
-export async function enqueueActorWakeupsForConversationMessage(params: {
-  workspaceId?: string
-  conversationId: string
-  itemId: string
-  // sourceParticipantType mixes a real participant author kind with the
-  // "system" wakeup source (automation / tool-call completion), so it is typed
-  // as the wakeup-source enum (which retains 'system') rather than
-  // ParticipantKind. The DB participant kind never equals 'system'.
-  sourceParticipantType?: SessionWakeupSourceParticipantType
-  sourceParticipantId?: string
-  sourceName?: string
-  summary?: string
-  queryable?: Executor
-}) {
-  if (!params.workspaceId) {
-    return []
-  }
-  return enqueueActorWakeupsForConversationMessageUseCase(
-    {
-      ...params,
-      workspaceId: params.workspaceId,
-      queryable: params.queryable ?? rootQueryable(),
-    },
-    chatActorWakeupDeps()
   )
 }
 
@@ -371,26 +325,6 @@ function chatCreateConversationEventDeps(): CreateConversationEventDeps {
   return {
     listConversationParticipants: listConversationParticipantRows,
     createConversationItem,
-  }
-}
-
-function chatActorWakeupDeps(): ActorWakeupDeps {
-  return {
-    listItemRowsByIds,
-    conversationItemHasTargets,
-    getConversationKind,
-    listConversationParticipants: listConversationParticipantRows,
-    listMentionedParticipantIdsForItem,
-    hydrateConversationItems,
-    ensureConversationActorSessionContext: async (params, queryable) => {
-      const { ensureConversationActorSessionContext } =
-        await import("../session/service.js")
-      return ensureConversationActorSessionContext(params, queryable)
-    },
-    enqueueSessionWakeup: async (params) => {
-      const { enqueueSessionWakeup } = await import("../session/runtime.js")
-      await enqueueSessionWakeup(params)
-    },
   }
 }
 
