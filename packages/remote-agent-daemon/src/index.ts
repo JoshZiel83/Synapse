@@ -35,7 +35,6 @@ import type {
 } from "./drivers/types.js"
 import {
   ConversationRuntime,
-  readBridgeState,
   type ConversationRuntimeCallbacks,
 } from "./conversation-runtime.js"
 import { buildResolvedPlanTaskFallbackPrompt } from "./resolved-task-fallback.js"
@@ -1290,22 +1289,12 @@ class ManagedRemoteAgent {
     lastError?: string | null
   }) {
     const conversationId = params.conversationId ?? undefined
-    const bridgeLast = conversationId
-      ? readBridgeState(
-          path.join(
-            this.stateDirectory,
-            "conversations",
-            conversationId,
-            "bridge-state.json"
-          )
-        ).lastConversationId
-      : undefined
     this.params.daemon.send({
       type: "agent:status",
       remote_agent_id: this.params.remoteAgentId,
       state: params.state,
       status_text: params.statusText,
-      conversation_id: conversationId ?? bridgeLast ?? null,
+      conversation_id: conversationId ?? null,
       task_id: params.taskId ?? null,
       session_id: params.sessionId ?? null,
       last_error: params.lastError ?? null,

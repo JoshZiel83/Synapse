@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { mkdirSync } from "node:fs"
 import path from "node:path"
 import { getDriver } from "./drivers/registry.js"
 import { buildAgentChildEnv } from "./drivers/proxy-env.js"
@@ -60,36 +60,6 @@ function ensureDirectory(dir: string) {
   mkdirSync(dir, { recursive: true })
 }
 
-export type BridgeStateView = {
-  lastConversationId?: string
-  lastToolName?: string
-  updatedAt?: string
-}
-
-export function readBridgeState(filePath: string): BridgeStateView {
-  try {
-    if (!filePath || !existsSync(filePath)) return {}
-    const raw = readFileSync(filePath, "utf8").trim()
-    if (!raw) return {}
-    const parsed = JSON.parse(raw)
-    if (!parsed || typeof parsed !== "object") return {}
-    return {
-      lastConversationId:
-        typeof parsed.lastConversationId === "string"
-          ? parsed.lastConversationId
-          : undefined,
-      lastToolName:
-        typeof parsed.lastToolName === "string"
-          ? parsed.lastToolName
-          : undefined,
-      updatedAt:
-        typeof parsed.updatedAt === "string" ? parsed.updatedAt : undefined,
-    }
-  } catch {
-    return {}
-  }
-}
-
 export class ConversationRuntime {
   private session: AgentSession | null = null
   private currentSessionId: string | undefined
@@ -101,7 +71,6 @@ export class ConversationRuntime {
   // gets a fresh slate.
   private errorInCurrentTurn = false
   readonly workingDirectory: string
-  readonly bridgeStateFile: string
   readonly conversationDirectory: string
 
   constructor(private readonly spec: ConversationRuntimeSpec) {
@@ -122,10 +91,6 @@ export class ConversationRuntime {
     // localRootPath via additionalDirectories instead (claude SDK supports
     // it directly; codex sees the cwd-only sandbox view).
     this.workingDirectory = path.join(this.conversationDirectory, "workspace")
-    this.bridgeStateFile = path.join(
-      this.conversationDirectory,
-      "bridge-state.json"
-    )
     ensureDirectory(this.conversationDirectory)
     ensureDirectory(this.workingDirectory)
   }
@@ -196,11 +161,6 @@ export class ConversationRuntime {
         },
       },
     }
-  }
-
-  /** @deprecated kept until callers stop reading the field; bridgeStateFile is no longer used by the HTTP MCP path. */
-  getBridgeStateFile() {
-    return this.bridgeStateFile
   }
 
   private async drainEvents(session: AgentSession) {
