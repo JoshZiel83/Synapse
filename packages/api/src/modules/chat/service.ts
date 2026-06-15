@@ -81,6 +81,7 @@ export {
   listChatPushTokens,
   registerChatPushToken,
 } from "./push-tokens.js"
+export { broadcastTypingState } from "./typing.js"
 import {
   parseInstantString,
   serializeNowInstant,
@@ -3944,40 +3945,6 @@ export async function leaveChatConversation(params: {
     conversationId: params.conversationId,
     participantId: access.participant.id,
   })
-}
-
-// ============ Stage 7: push tokens + typing ============
-
-export async function broadcastTypingState(params: {
-  workspaceId: string
-  userId: string
-  conversationId: string
-  state: "started" | "stopped"
-}): Promise<{ broadcast: boolean }> {
-  const identity = await getWorkspaceMemberIdentityOrThrow(
-    params.workspaceId,
-    params.userId
-  )
-  await requireConversationAccess(
-    rootQueryable(),
-    params.conversationId,
-    identity.workspaceMemberId
-  )
-  // Fan out via the event bus. Subscribers (WS bridge) will publish to other
-  // participants. Typing is intentionally ephemeral — no DB persistence.
-  const { emitEvent } = await import("../../infrastructure/events/index.js")
-  await emitEvent({
-    type: "chat.typing",
-    workspaceId: params.workspaceId,
-    payload: {
-      conversationId: params.conversationId,
-      fromWorkspaceMemberId: identity.workspaceMemberId,
-      state: params.state,
-      occurredAt: serializeNowInstant(),
-    },
-    timestamp: serializeNowInstant(),
-  })
-  return { broadcast: true }
 }
 
 // ============ Stage 16: assistant message retry ============
