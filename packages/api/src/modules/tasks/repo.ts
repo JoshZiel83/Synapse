@@ -99,6 +99,40 @@ export function jsonbValue<T>(value: T) {
   return sql<T>`${JSON.stringify(value ?? null)}::jsonb`
 }
 
+export interface UpsertProjectionParams {
+  taskId: string
+  workspaceId: string
+  conversationId: string
+}
+
+/**
+ * Insert (or re-arm) the task transport projection row. Re-arm only fires when
+ * the existing row is skipped for a recoverable binding/transport reason.
+ */
+export async function upsertTaskTransportProjection(
+  executor: Executor,
+  params: UpsertProjectionParams
+): Promise<void> {
+  await sql`
+    INSERT INTO tool_call_task_transport_projections (
+      task_id, workspace_id, conversation_id, status
+    )
+    VALUES (${params.taskId}, ${params.workspaceId}, ${params.conversationId}, 'pending')
+    ON CONFLICT (task_id) DO UPDATE
+      SET status = 'pending',
+          next_attempt_at = NOW(),
+          attempts = 0,
+          error = NULL,
+          transport_message_link_id = NULL
+      WHERE tool_call_task_transport_projections.status = 'skipped'
+        AND tool_call_task_transport_projections.error IN (
+          'no_binding',
+          'outbound_disabled',
+          'webhook_inbound_unavailable'
+        )
+  `.execute(executor)
+}
+
 function requireJsonObject(
   value: unknown,
   label: string

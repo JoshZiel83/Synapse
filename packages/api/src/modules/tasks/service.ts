@@ -58,7 +58,6 @@ import {
   buildSessionPlanDraftState,
   parseSessionCollaborationState,
 } from "../session/collaboration-state.js"
-import { upsertTaskTransportProjection } from "./transport-projections.js"
 import {
   parseUserInputQuestionDefinitions,
   presentTaskSummary,
@@ -89,6 +88,7 @@ import {
   updateTaskConversationItemId,
   updateResolvedTaskRequestRow,
   updateTaskResolutionPayload,
+  upsertTaskTransportProjection,
   upsertRemoteAgentConversationContextForPlan,
   withTaskTransaction,
 } from "./repo.js"

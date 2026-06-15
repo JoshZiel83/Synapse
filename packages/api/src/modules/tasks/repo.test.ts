@@ -1,19 +1,28 @@
 import assert from "node:assert/strict"
+import crypto from "node:crypto"
 import test from "node:test"
 import {
+  CONVERSATION_KIND,
   CONVERSATION_PARTICIPANT_TYPE,
+  INVITE_TRUST_LEVELS,
+  SUBJECT_KIND,
   TASK_REQUEST_KIND,
 } from "@synapse/shared"
+import { withTestDb } from "../../test/helpers/db.js"
+import { upsertAccessSubject } from "../access/subject-registry.js"
 import { presentTaskSummary } from "./presenter.js"
 import {
   decodeTaskPromptPayload,
   decodeTaskResolutionPayload,
   normalizeTaskCommandRow,
   normalizeTaskRow,
+  upsertTaskTransportProjection,
 } from "./repo.js"
 import type { RawTaskDbRow } from "./repo.types.js"
 
 const now = new Date("2026-01-01T00:00:00.000Z")
+
+type AnyDb = import("kysely").Kysely<any>
 
 function buildTaskDbRow(overrides: Partial<RawTaskDbRow> = {}): RawTaskDbRow {
   return {
@@ -106,6 +115,79 @@ function buildTaskDbRow(overrides: Partial<RawTaskDbRow> = {}): RawTaskDbRow {
     resolved_by_remote_agent_avatar_file_id: null,
     resolved_by_avatar_emoji: null,
     ...overrides,
+  }
+}
+
+async function insertTaskTransportProjectionFixture(db: AnyDb) {
+  const user = await db
+    .insertInto("users")
+    .values({
+      email: `task-projection-${crypto.randomUUID()}@example.test`,
+      name: "task projection test user",
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+
+  const workspace = await db
+    .insertInto("workspaces")
+    .values({
+      ownerId: user.id,
+      slug: `task-projection-${crypto.randomUUID()}`,
+      name: "task projection test workspace",
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+
+  const member = await db
+    .insertInto("workspaceMembers")
+    .values({
+      workspaceId: workspace.id,
+      userId: user.id,
+      trustLevel: INVITE_TRUST_LEVELS[1],
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+
+  const conversation = await db
+    .insertInto("conversations")
+    .values({
+      workspaceId: workspace.id,
+      kind: CONVERSATION_KIND.GROUP,
+      title: "task projection test conversation",
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+
+  const subjectId = await upsertAccessSubject(db, {
+    kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+    memberId: member.id as string,
+  })
+
+  const task = await db
+    .insertInto("toolCallTasks")
+    .values({
+      workspaceId: workspace.id,
+      conversationId: conversation.id,
+      executorKind: TASK_REQUEST_KIND.USER_INPUT,
+      deliveryKind: "none",
+      humanSurface: "needs_response",
+      principalSubjectId: subjectId,
+      sourceToolName: "task_projection_test",
+      lifecycleStatus: "input_required",
+      requestKey: `task-projection-${crypto.randomUUID()}`,
+      requestPayload: JSON.stringify({ title: "Need input" }),
+      immediateResultPayload: JSON.stringify({}),
+      finalResultPayload: JSON.stringify({}),
+      finalErrorPayload: JSON.stringify({}),
+      metadata: JSON.stringify({}),
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+
+  return {
+    taskId: task.id as string,
+    workspaceId: workspace.id as string,
+    conversationId: conversation.id as string,
   }
 }
 
@@ -239,3 +321,67 @@ test("presentTaskSummary consumes normalized task rows without JSON parsing", ()
   assert.equal(summary.userInput.title, "Need input")
   assert.equal(summary.userInput.questions[0]?.answer?.text, "ok")
 })
+
+test(
+  "upsertTaskTransportProjection inserts and re-arms recoverable skipped projections",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const fixture = await insertTaskTransportProjectionFixture(db)
+
+      await upsertTaskTransportProjection(db, fixture)
+      const inserted = await db
+        .selectFrom("toolCallTaskTransportProjections")
+        .select(["taskId", "workspaceId", "conversationId", "status", "error"])
+        .where("taskId", "=", fixture.taskId)
+        .executeTakeFirstOrThrow()
+
+      assert.equal(inserted.workspaceId, fixture.workspaceId)
+      assert.equal(inserted.conversationId, fixture.conversationId)
+      assert.equal(inserted.status, "pending")
+      assert.equal(inserted.error, null)
+
+      await db
+        .updateTable("toolCallTaskTransportProjections")
+        .set({
+          status: "skipped",
+          error: "no_binding",
+          attempts: 3,
+        })
+        .where("taskId", "=", fixture.taskId)
+        .execute()
+
+      await upsertTaskTransportProjection(db, fixture)
+      const rearmed = await db
+        .selectFrom("toolCallTaskTransportProjections")
+        .select(["status", "error", "attempts"])
+        .where("taskId", "=", fixture.taskId)
+        .executeTakeFirstOrThrow()
+
+      assert.equal(rearmed.status, "pending")
+      assert.equal(rearmed.error, null)
+      assert.equal(rearmed.attempts, 0)
+
+      await db
+        .updateTable("toolCallTaskTransportProjections")
+        .set({
+          status: "skipped",
+          error: "not_supported_in_v1",
+          attempts: 4,
+        })
+        .where("taskId", "=", fixture.taskId)
+        .execute()
+
+      await upsertTaskTransportProjection(db, fixture)
+      const unchanged = await db
+        .selectFrom("toolCallTaskTransportProjections")
+        .select(["status", "error", "attempts"])
+        .where("taskId", "=", fixture.taskId)
+        .executeTakeFirstOrThrow()
+
+      assert.equal(unchanged.status, "skipped")
+      assert.equal(unchanged.error, "not_supported_in_v1")
+      assert.equal(unchanged.attempts, 4)
+    })
+  }
+)
