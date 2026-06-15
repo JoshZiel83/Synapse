@@ -1,7 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { getSharedTestDb } from "../../test/helpers/db.js"
-import { appendWorkspaceMemberSyncEventInTransaction } from "./service.js"
+import { appendWorkspaceMemberSyncEventInTransaction } from "./sync-events.js"
 
 type AnyDb = import("kysely").Kysely<any>
 
