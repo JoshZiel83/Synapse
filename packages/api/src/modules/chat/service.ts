@@ -6,8 +6,6 @@ import {
 } from "@synapse/shared"
 import { type Executor } from "../../infrastructure/database/kysely.js"
 import { canonicalContentBlocksToDraftParts } from "./message-content.js"
-import { requireConversationAccess } from "./conversation-access.js"
-import { ensureClientInstance } from "./client-instances.js"
 export {
   createChatClientInstance,
   touchChatClientInstance,
@@ -23,7 +21,6 @@ import {
   getConversationRecord,
   getVisibleConversationReplyRefRow,
   listNearbyVisibleConversationReplyRefRows,
-  withChatTransaction,
 } from "./repo.js"
 // Re-exported for existing consumers that import the row DTO from chat/service.
 export type { ChatPushTokenRow } from "./repo.js"
@@ -37,7 +34,6 @@ import {
   type ChatConversationEnvelopeRecord,
   type ChatConversationRecord,
   type ChatConversationReadWatermarkRecord,
-  type ChatConversationSendMessageRecord,
 } from "./presenter.js"
 import { createChatError } from "./errors.js"
 export { isChatServiceError, type ChatServiceError } from "./errors.js"
@@ -66,7 +62,6 @@ import {
   type CreateChatConversationDeps,
   type CreateConversationForWorkspaceMemberDeps,
 } from "./create-conversation.js"
-import { sendConversationMessageFromParticipant } from "./item-write.js"
 export {
   createConversationItem,
   sendConversationMessageFromParticipant,
@@ -74,15 +69,10 @@ export {
 } from "./item-write.js"
 import { createConversationEvent } from "./event-write.js"
 export { createConversationEvent } from "./event-write.js"
-import { enqueueActorWakeupsForConversationMessage } from "./actor-wakeup.js"
 export { enqueueActorWakeupsForConversationMessage } from "./actor-wakeup.js"
 import { syncConversationUpsertForWorkspaceMembers } from "./conversation-upsert-sync.js"
 import { listConversationRealtimeRecipientsUseCase } from "./realtime-recipients.js"
-import {
-  sendChatConversationMessageUseCase,
-  type SendChatConversationMessageInput,
-  type SendChatConversationMessageDeps,
-} from "./send-message.js"
+export { sendChatConversationMessage } from "./send-message.js"
 import { loadChatConversationView } from "./conversation-view-read.js"
 import { type HydratedConversationItemRecord } from "./conversation-item-hydration.js"
 import {
@@ -221,21 +211,6 @@ function chatCreateConversationDeps(): CreateChatConversationDeps {
   }
 }
 
-function chatRouteSendMessageDeps(): SendChatConversationMessageDeps {
-  return {
-    withChatTransaction,
-    requireConversationAccess,
-    ensureClientInstance,
-    sendConversationMessageFromParticipant,
-    enqueueActorWakeupsForConversationMessage,
-    notifyRemoteAgentDeliveriesForConversation: async (conversationId) => {
-      const { notifyRemoteAgentDeliveriesForConversation } =
-        await import("../remote-agents/service.js")
-      await notifyRemoteAgentDeliveriesForConversation(conversationId)
-    },
-  }
-}
-
 export async function getConversation(
   conversationId: string,
   queryable: Executor = rootQueryable()
@@ -353,12 +328,6 @@ export async function createChatConversation(params: {
     },
     chatCreateConversationDeps()
   )
-}
-
-export async function sendChatConversationMessage(
-  params: SendChatConversationMessageInput
-): Promise<ChatConversationSendMessageRecord> {
-  return sendChatConversationMessageUseCase(params, chatRouteSendMessageDeps())
 }
 
 export async function updateChatConversationReadWatermark(
