@@ -16,6 +16,7 @@ import {
   buildSystemGeneratedOrigin,
   mimeToFileContentKind,
 } from "../files/service.js"
+import { insertAvatarFileAsset, upsertAvatarContentBlob } from "./repo.js"
 
 type DatabaseExecutor = Executor
 
@@ -296,38 +297,25 @@ async function saveSvgAvatarFile(
     details: params.metadata,
   })
 
-  await executor
-    .insertInto("contentBlobs")
-    .values({
-      sha256: blobRef.sha256,
-      sizeBytes: String(blobRef.sizeBytes),
-      backend: "local_cas",
-      locatorJson: {} as any,
-    })
-    .onConflict((oc) => oc.column("sha256").doNothing())
-    .execute()
+  await upsertAvatarContentBlob(executor, {
+    sha256: blobRef.sha256,
+    sizeBytes: blobRef.sizeBytes,
+  })
 
-  const row = await executor
-    .insertInto("fileAssets")
-    .values({
-      workspaceId: params.workspaceId,
-      contentSha256: blobRef.sha256,
-      originalName: normalizedOriginalName,
-      mimeType: SVG_MIME_TYPE,
-      contentKind: mimeToFileContentKind(SVG_MIME_TYPE),
-      sizeBytes: String(blobRef.sizeBytes),
-      uploaderUserId: params.uploaderUserId,
-      initiatorActorId: origin.initiatorActorId ?? null,
-      sourceFamily: origin.family,
-      sourceSystem: origin.system,
-      parentAssetId: origin.parentFileId ?? null,
-      detailsJson: (origin.details || {}) as any,
-    })
-    .returning("id")
-    .executeTakeFirst()
-  if (!row) {
-    throw new Error("Failed to persist avatar file")
-  }
+  const row = await insertAvatarFileAsset(executor, {
+    workspaceId: params.workspaceId,
+    contentSha256: blobRef.sha256,
+    originalName: normalizedOriginalName,
+    mimeType: SVG_MIME_TYPE,
+    contentKind: mimeToFileContentKind(SVG_MIME_TYPE),
+    sizeBytes: blobRef.sizeBytes,
+    uploaderUserId: params.uploaderUserId,
+    initiatorActorId: origin.initiatorActorId ?? null,
+    sourceFamily: origin.family,
+    sourceSystem: origin.system,
+    parentAssetId: origin.parentFileId ?? null,
+    details: origin.details || {},
+  })
 
   return {
     fileId: row.id,
