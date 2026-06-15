@@ -11,6 +11,7 @@ import {
   DeviceTunnelDownParamsSchema,
   DeviceTunnelUpParamsSchema,
   DeviceVfsExposureUpsertParamsSchema,
+  parseJsonRpcRequestFrame,
 } from "./schemas.js"
 
 const RUNTIME_SESSION_ID = "00000000-0000-4000-8000-000000000030"
@@ -19,6 +20,36 @@ const ACTOR_ID = "00000000-0000-4000-8000-000000000032"
 const OPERATION_ID = "00000000-0000-4000-8000-000000000033"
 const ATTEMPT_ID = "00000000-0000-4000-8000-000000000034"
 const EXPOSURE_ID = "00000000-0000-4000-8000-000000000035"
+
+test("parseJsonRpcRequestFrame validates request frames", () => {
+  const parsed = parseJsonRpcRequestFrame(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: "hello-1",
+      method: "device.hello",
+      params: { device_id: "d" },
+    })
+  )
+  assert.equal(parsed.ok, true)
+  if (!parsed.ok) throw new Error("expected valid request")
+  assert.equal(parsed.request.method, "device.hello")
+  assert.equal(parsed.request.id, "hello-1")
+})
+
+test("parseJsonRpcRequestFrame distinguishes invalid JSON from invalid request", () => {
+  assert.deepEqual(parseJsonRpcRequestFrame("{"), {
+    ok: false,
+    error: "parse_error",
+  })
+
+  const invalid = parseJsonRpcRequestFrame(
+    JSON.stringify({ jsonrpc: "2.0", id: "missing-method" })
+  )
+  assert.equal(invalid.ok, false)
+  if (invalid.ok) throw new Error("expected invalid request")
+  assert.equal(invalid.error, "invalid_request")
+  assert.ok(invalid.details)
+})
 
 test("DeviceTunnelUpParamsSchema accepts snake_case tunnel URL", () => {
   const parsed = DeviceTunnelUpParamsSchema.parse({

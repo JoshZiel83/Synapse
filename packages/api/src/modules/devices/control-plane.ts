@@ -30,6 +30,7 @@ import {
   DeviceHelloParamsSchema,
   DeviceTunnelDownParamsSchema,
   DeviceTunnelUpParamsSchema,
+  parseJsonRpcRequestFrame,
   type JsonRpcRequest,
 } from "@synapse/device-protocol"
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
@@ -59,29 +60,6 @@ import {
   failInFlightDeviceTasksForDevice,
   type PersistResult,
 } from "./control-plane-events.js"
-
-interface ParsedFrame {
-  raw: string
-  json: unknown
-}
-
-function parseFrame(raw: string): ParsedFrame {
-  return { raw, json: JSON.parse(raw) }
-}
-
-function asJsonRpcRequest(value: unknown): JsonRpcRequest | null {
-  if (
-    value &&
-    typeof value === "object" &&
-    "jsonrpc" in value &&
-    (value as { jsonrpc: unknown }).jsonrpc === "2.0" &&
-    "method" in value &&
-    typeof (value as { method: unknown }).method === "string"
-  ) {
-    return value as JsonRpcRequest
-  }
-  return null
-}
 
 function writeResult(
   socket: WebSocket,
@@ -427,18 +405,16 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
       }
 
       socket.on("message", (raw) => {
-        let frame: ParsedFrame
-        try {
-          frame = parseFrame(String(raw))
-        } catch {
-          writeError(socket, null, -32700, "Parse error")
-          return
-        }
-        const req = asJsonRpcRequest(frame.json)
-        if (!req) {
+        const frame = parseJsonRpcRequestFrame(String(raw))
+        if (!frame.ok) {
+          if (frame.error === "parse_error") {
+            writeError(socket, null, -32700, "Parse error")
+            return
+          }
           writeError(socket, null, -32600, "Invalid request")
           return
         }
+        const req = frame.request
         switch (req.method) {
           case "device.hello": {
             if (state.helloSeen) {

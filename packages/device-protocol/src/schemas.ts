@@ -672,6 +672,39 @@ export const JsonRpcRequestSchema = z.object({
 })
 export type JsonRpcRequest = z.infer<typeof JsonRpcRequestSchema>
 
+export type JsonRpcRequestFrameParseResult =
+  | {
+      ok: true
+      request: JsonRpcRequest
+    }
+  | {
+      ok: false
+      error: "parse_error" | "invalid_request"
+      details?: z.ZodError
+    }
+
+export function parseJsonRpcRequestFrame(
+  raw: string
+): JsonRpcRequestFrameParseResult {
+  let json: unknown
+  try {
+    json = JSON.parse(raw)
+  } catch {
+    return { ok: false, error: "parse_error" }
+  }
+
+  const parsed = JsonRpcRequestSchema.safeParse(json)
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: "invalid_request",
+      details: parsed.error,
+    }
+  }
+
+  return { ok: true, request: parsed.data }
+}
+
 export const JsonRpcResponseSchema = z.object({
   jsonrpc: z.literal("2.0"),
   id: z.union([z.string(), z.number(), z.null()]),
