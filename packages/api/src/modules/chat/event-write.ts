@@ -20,7 +20,12 @@ import {
   renderConversationEventTimelineBlocks,
 } from "./event-registry.js"
 import { buildNormalizedMessageContent } from "./message-content.js"
-import { withChatTransaction, type ChatParticipantRow } from "./repo.js"
+import {
+  chatRootExecutor,
+  updateConversationItemEventPayload as updateConversationItemEventPayloadRow,
+  withChatTransaction,
+  type ChatParticipantRow,
+} from "./repo.js"
 import type { CreateConversationItemInput } from "./item-write.js"
 
 export type CreateConversationEventInput<T extends ConversationFeedEventType> =
@@ -61,6 +66,50 @@ export type CreateConversationEventDeps = {
   createConversationItem: (
     params: CreateConversationItemInput
   ) => Promise<ChatConversationItem>
+}
+
+export type UpdateConversationItemEventPayloadDeps = {
+  updateConversationItemEventPayload: (
+    queryable: Executor,
+    itemId: string,
+    payload: unknown
+  ) => Promise<void>
+}
+
+export async function updateConversationItemEventPayloadUseCase<
+  T extends ConversationFeedEventType,
+>(
+  params: {
+    itemId: string
+    payload: ConversationFeedEventPayloadMap[T]
+    queryable: Executor
+  },
+  deps: UpdateConversationItemEventPayloadDeps
+): Promise<void> {
+  await deps.updateConversationItemEventPayload(
+    params.queryable,
+    params.itemId,
+    params.payload
+  )
+}
+
+export async function updateConversationItemEventPayload<
+  T extends ConversationFeedEventType,
+>(
+  itemId: string,
+  payload: ConversationFeedEventPayloadMap[T],
+  queryable: Executor = chatRootExecutor()
+): Promise<void> {
+  await updateConversationItemEventPayloadUseCase(
+    {
+      itemId,
+      payload,
+      queryable,
+    },
+    {
+      updateConversationItemEventPayload: updateConversationItemEventPayloadRow,
+    }
+  )
 }
 
 function activeParticipants(participants: ChatParticipantRow[]) {

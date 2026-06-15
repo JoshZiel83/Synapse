@@ -17,6 +17,7 @@ import type {
 import type { Executor } from "../../infrastructure/database/kysely.js"
 import {
   createConversationEventUseCase,
+  updateConversationItemEventPayloadUseCase,
   type CreateConversationEventDeps,
 } from "./event-write.js"
 import type { CreateConversationItemInput } from "./item-write.js"
@@ -226,4 +227,45 @@ test("createConversationEventUseCase rejects non-event item results", async () =
       ),
     /Expected event item/
   )
+})
+
+test("updateConversationItemEventPayloadUseCase delegates event payload mutation", async () => {
+  const queryable = {} as Executor
+  const itemId = randomUUID()
+  const payload: ConversationFeedEventPayloadMap["task_notice"] = {
+    taskId: randomUUID(),
+    summary: "Tool completed",
+    toolName: "demo_tool",
+    status: "completed",
+  }
+  const calls: Array<{
+    queryable: Executor
+    itemId: string
+    payload: unknown
+  }> = []
+
+  await updateConversationItemEventPayloadUseCase(
+    {
+      itemId,
+      payload,
+      queryable,
+    },
+    {
+      updateConversationItemEventPayload: async (...args) => {
+        calls.push({
+          queryable: args[0],
+          itemId: args[1],
+          payload: args[2],
+        })
+      },
+    }
+  )
+
+  assert.deepEqual(calls, [
+    {
+      queryable,
+      itemId,
+      payload,
+    },
+  ])
 })

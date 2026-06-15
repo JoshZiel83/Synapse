@@ -88,7 +88,6 @@ import {
   listVisibleConversationMessageRows,
   listWorkspaceMemberSyncEventRows,
   reactivateConversationParticipant,
-  updateConversationItemEventPayload as updateConversationItemEventPayloadRow,
   upsertConversationParticipantAddress,
   withChatRepeatableRead,
   withChatTransaction,
@@ -1213,16 +1212,6 @@ export async function createConversationEvent<
     params,
     chatCreateConversationEventDeps()
   )
-}
-
-export async function updateConversationItemEventPayload<
-  T extends ConversationFeedEventType,
->(
-  itemId: string,
-  payload: ConversationFeedEventPayloadMap[T],
-  queryable: Executor = rootQueryable()
-) {
-  await updateConversationItemEventPayloadRow(queryable, itemId, payload)
 }
 
 async function buildConversationItemDetails(

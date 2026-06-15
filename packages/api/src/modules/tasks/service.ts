@@ -47,8 +47,8 @@ import {
   appendWorkspaceMemberSyncEvent,
   createConversationEvent,
   listConversationRealtimeRecipients,
-  updateConversationItemEventPayload,
 } from "../chat/service.js"
+import { updateConversationItemEventPayload } from "../chat/event-write.js"
 import {
   createRuntimeAuthorizationGrant,
   type RuntimeAuthorizationGrantRecord,
