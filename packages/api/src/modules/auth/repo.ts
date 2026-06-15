@@ -7,7 +7,11 @@
 // import the db client. round-6 P1-6. Records keep Date columns (createdAt /
 // updatedAt) — the presenter (presentUser) serializes for the wire.
 
-import { db } from "../../infrastructure/database/kysely.js"
+import { z } from "zod"
+
+import { parseJsonObject } from "@synapse/shared"
+
+import { db, type Executor } from "../../infrastructure/database/kysely.js"
 import type { UserRow } from "./presenter.js"
 import { createGeneratedUserAvatarFile } from "../avatar/service.js"
 
@@ -19,6 +23,22 @@ const userSelection = [
   "createdAt",
   "updatedAt",
 ] as const
+
+const OAuthStoredStateSchema = z
+  .object({
+    callbackURL: z.string().optional(),
+    errorURL: z.string().optional(),
+    oauthState: z.string().optional(),
+    expiresAt: z.number().optional(),
+  })
+  .passthrough()
+
+export type OAuthStoredState = z.infer<typeof OAuthStoredStateSchema>
+
+export type OAuthVerificationStateRecord = {
+  state: OAuthStoredState
+  expiresAt: Date
+}
 
 /** A user's profile row by id (null if absent). */
 export async function selectUserById(userId: string): Promise<UserRow | null> {
@@ -63,6 +83,27 @@ export async function deleteVerificationByIdentifier(
     .deleteFrom("verification")
     .where("identifier", "=", identifier)
     .execute()
+}
+
+/**
+ * Read and decode Better Auth's stored OAuth state. The route interceptor owns
+ * CSRF and redirect decisions; the repo owns the verification row shape and JSON
+ * decode at the DB boundary.
+ */
+export async function selectOAuthVerificationStateByIdentifier(
+  identifier: string,
+  executor: Executor = db
+): Promise<OAuthVerificationStateRecord | null> {
+  const row = await executor
+    .selectFrom("verification")
+    .where("identifier", "=", identifier)
+    .select(["value", "expiresAt"])
+    .executeTakeFirst()
+  if (!row) return null
+
+  const state = OAuthStoredStateSchema.safeParse(parseJsonObject(row.value))
+  if (!state.success) return null
+  return { state: state.data, expiresAt: row.expiresAt }
 }
 
 /**

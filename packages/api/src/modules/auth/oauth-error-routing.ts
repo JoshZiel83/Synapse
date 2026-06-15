@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto"
 
 import { config } from "../../config/index.js"
 import type { Executor } from "../../infrastructure/database/kysely.js"
-import { db } from "../../infrastructure/database/kysely.js"
+import { selectOAuthVerificationStateByIdentifier } from "./repo.js"
 
 /**
  * Cross-platform routing for OAuth callback EARLY errors (provider returned
@@ -109,13 +109,6 @@ function webTargetFrom(
   }
 }
 
-type StoredState = {
-  callbackURL?: string
-  errorURL?: string
-  oauthState?: string
-  expiresAt?: number
-}
-
 export type OAuthErrorRedirect = {
   /** Absolute URL (native deep link or web page) to 302 to. */
   target: string
@@ -130,7 +123,7 @@ export type OAuthErrorRedirect = {
  *   transaction so the lookup sees the same uncommitted rows.
  */
 export async function resolveOAuthErrorRedirect({
-  executor = db,
+  executor,
   state,
   stateCookieValue,
   errorCode,
@@ -152,26 +145,19 @@ export async function resolveOAuthErrorRedirect({
     return webFallback
   }
 
-  const row = await executor
-    .selectFrom("verification")
-    .where("identifier", "=", state)
-    .select(["value", "expiresAt"])
-    .executeTakeFirst()
-  if (!row) return webFallback
-
-  let stored: StoredState
-  try {
-    stored = JSON.parse(row.value) as StoredState
-  } catch {
-    return webFallback
-  }
+  const storedRecord = await selectOAuthVerificationStateByIdentifier(
+    state,
+    executor
+  )
+  if (!storedRecord) return webFallback
+  const stored = storedRecord.state
 
   // Mirror Better Auth's own state checks. Its stateDataSchema requires
   // `expiresAt: z.number()`, so a missing/non-number expiry is malformed state,
   // not a valid one — treat it as invalid (web fallback, not consumed), same as
   // an expired or oauthState-mismatched row.
   const now = Date.now()
-  const dbExpired = row.expiresAt.getTime() <= now
+  const dbExpired = storedRecord.expiresAt.getTime() <= now
   const payloadExpiryValid =
     typeof stored.expiresAt === "number" &&
     Number.isFinite(stored.expiresAt) &&
