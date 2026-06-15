@@ -1,6 +1,9 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { parseRemoteInstanceCommand } from "./instance-manager.js"
+import {
+  parseRemoteInstanceCommand,
+  parseRuntimeLeaseMetadata,
+} from "./instance-manager.js"
 
 const baseParams = {
   pluginId: "plugin-1",
@@ -64,5 +67,36 @@ test("parseRemoteInstanceCommand rejects invalid command payloads", () => {
         configHash: "hash-1",
       }),
     /Invalid input/
+  )
+})
+
+test("parseRuntimeLeaseMetadata validates persisted redis lease metadata", () => {
+  assert.deepEqual(
+    parseRuntimeLeaseMetadata(
+      JSON.stringify({
+        nodeId: "node-1",
+        token: "token-1",
+        instanceKey: "instance-key",
+        updatedAt: 123,
+      })
+    ),
+    {
+      nodeId: "node-1",
+      token: "token-1",
+      instanceKey: "instance-key",
+      updatedAt: 123,
+    }
+  )
+
+  assert.equal(parseRuntimeLeaseMetadata("{"), null)
+  assert.equal(
+    parseRuntimeLeaseMetadata(
+      JSON.stringify({
+        token: "token-1",
+        instanceKey: "instance-key",
+        updatedAt: 123,
+      })
+    ),
+    null
   )
 })

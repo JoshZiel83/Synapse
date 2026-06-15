@@ -69,12 +69,16 @@ type InstanceState = {
   leaseHeartbeatTimer?: NodeJS.Timeout
 }
 
-type RuntimeLeaseMetadata = {
-  nodeId: string
-  token: string
-  instanceKey: string
-  updatedAt: number
-}
+const RuntimeLeaseMetadataSchema = z
+  .object({
+    nodeId: z.string().min(1),
+    token: z.string().min(1),
+    instanceKey: z.string().min(1),
+    updatedAt: z.number(),
+  })
+  .strict()
+
+type RuntimeLeaseMetadata = z.infer<typeof RuntimeLeaseMetadataSchema>
 
 const RemoteInstanceCommandBaseSchema = z.object({
   params: McpInstanceParamsSchema,
@@ -115,6 +119,19 @@ export function parseRemoteInstanceCommand(
   payload: unknown
 ): RemoteInstanceCommand {
   return RemoteInstanceCommandSchema.parse(payload) as RemoteInstanceCommand
+}
+
+export function parseRuntimeLeaseMetadata(
+  raw: string
+): RuntimeLeaseMetadata | null {
+  let value: unknown
+  try {
+    value = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  const parsed = RuntimeLeaseMetadataSchema.safeParse(value)
+  return parsed.success ? parsed.data : null
 }
 
 export interface McpInstance {
@@ -303,15 +320,7 @@ async function readRuntimeLease(
   if (!raw) {
     return null
   }
-  try {
-    const parsed = JSON.parse(raw) as RuntimeLeaseMetadata
-    if (!parsed.nodeId || !parsed.token) {
-      return null
-    }
-    return parsed
-  } catch {
-    return null
-  }
+  return parseRuntimeLeaseMetadata(raw)
 }
 
 function resetTTL(key: string, ttl: number) {
