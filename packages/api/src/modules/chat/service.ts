@@ -95,11 +95,9 @@ import {
   getVisibleConversationReplyRefRow,
   getVisibleConversationReplyTargetRow,
   getWorkspaceMemberSyncCursor,
-  insertConversationRecordReturning,
   insertConversationItemDetailRows,
   insertConversationItemRecord,
   insertConversationParticipantRecord,
-  listActorDisplayNameRows,
   listChatConversationBaseRows,
   listChatConversationParticipantRows,
   listContextConversationItemRowsForParticipant,
@@ -111,10 +109,8 @@ import {
   listTransportDeliveryRowsForItems,
   listNearbyVisibleConversationReplyRefRows,
   listMentionedParticipantIdsForConversationItem,
-  listRemoteAgentDisplayNameRows,
   listVisibleConversationMessageRows,
   listWorkspaceMemberSyncEventRows,
-  listWorkspaceMemberNameRows,
   reactivateConversationParticipant,
   updateConversationItemEventPayload as updateConversationItemEventPayloadRow,
   upsertWorkspaceMemberConversationView,
@@ -176,8 +172,11 @@ import {
   type AddChatConversationParticipantsDeps,
 } from "./add-participants.js"
 import {
+  createConversationForWorkspaceMemberUseCase,
+  createConversationRecordUseCase,
   createChatConversationUseCase,
   type CreateChatConversationDeps,
+  type CreateConversationForWorkspaceMemberDeps,
 } from "./create-conversation.js"
 import { enrichTaskForUser } from "../tasks/service.js"
 import {
@@ -1464,36 +1463,19 @@ async function insertParticipant(
   }
 }
 
-async function loadWorkspaceMembersByIds(
-  queryable: Executor,
-  workspaceId: string,
-  workspaceMemberIds: string[]
-) {
-  return listWorkspaceMemberNameRows(queryable, workspaceId, workspaceMemberIds)
-}
-
-async function loadActorsByIds(
-  queryable: Executor,
-  workspaceId: string,
-  actorIds: string[]
-) {
-  return listActorDisplayNameRows(queryable, workspaceId, actorIds)
-}
-
-async function loadRemoteAgentsByIds(
-  queryable: Executor,
-  workspaceId: string,
-  remoteAgentIds: string[]
-) {
-  return listRemoteAgentDisplayNameRows(queryable, workspaceId, remoteAgentIds)
-}
-
 function chatAddParticipantsDeps(): AddChatConversationParticipantsDeps {
   return {
     ensureConversationParticipant,
     listConversationParticipants,
     loadConversationView,
     participantToSummary: participantRowToChatParticipantSummary,
+    syncConversationUpsert: syncConversationUpsertForWorkspaceMembers,
+  }
+}
+
+function chatConversationForWorkspaceMemberDeps(): CreateConversationForWorkspaceMemberDeps {
+  return {
+    ensureConversationParticipant,
     syncConversationUpsert: syncConversationUpsertForWorkspaceMembers,
   }
 }
@@ -1521,22 +1503,7 @@ export async function createConversation(params: {
   metadata?: Record<string, unknown>
   queryable?: Executor
 }) {
-  const queryable = params.queryable ?? rootQueryable()
-  if (!params.workspaceId) {
-    // Every conversation is workspace-scoped (conversations.workspace_id is
-    // NOT NULL). Assert here so a missing id fails loudly instead of writing a
-    // null and tripping the DB constraint deep in a transaction.
-    throw new Error("createConversation: workspaceId is required")
-  }
-  const id = crypto.randomUUID()
-  return insertConversationRecordReturning(queryable, {
-    conversationId: id,
-    kind: params.kind,
-    workspaceId: params.workspaceId,
-    title: params.title,
-    createdByWorkspaceMemberId: params.createdByWorkspaceMemberId,
-    metadata: params.metadata,
-  })
+  return createConversationRecordUseCase(params)
 }
 
 export async function createConversationForWorkspaceMember(params: {
@@ -1550,131 +1517,10 @@ export async function createConversationForWorkspaceMember(params: {
   metadata?: Record<string, unknown>
   queryable?: Executor
 }) {
-  const executeCreate = async (queryable: Executor) => {
-    const workspaceMemberIds = [
-      ...new Set(
-        [
-          ...(params.creatorWorkspaceMemberId
-            ? [params.creatorWorkspaceMemberId]
-            : []),
-          ...(params.workspaceMemberIds ?? []),
-        ].filter(Boolean)
-      ),
-    ]
-    const actorIds = [...new Set(params.actorIds ?? [])]
-    const remoteAgentIds = [...new Set(params.remoteAgentIds ?? [])]
-
-    // Validate EVERY participant before creating the conversation, so a rejected
-    // request never leaves an orphan conversation behind (the caller may pass a
-    // non-transactional queryable). External participants are NOT created here:
-    // they are minted only by the IM ingest path
-    // (syncTransportAddressConversationParticipant).
-    const memberRows =
-      workspaceMemberIds.length > 0
-        ? await loadWorkspaceMembersByIds(
-            queryable,
-            params.workspaceId,
-            workspaceMemberIds
-          )
-        : []
-    if (memberRows.length !== workspaceMemberIds.length) {
-      throw createChatError(
-        400,
-        "invalid_workspace_member",
-        "One or more workspace members are invalid"
-      )
-    }
-    const actorRows =
-      actorIds.length > 0
-        ? await loadActorsByIds(queryable, params.workspaceId, actorIds)
-        : []
-    if (actorRows.length !== actorIds.length) {
-      throw createChatError(
-        400,
-        "invalid_actor",
-        "One or more actors are invalid"
-      )
-    }
-    const remoteAgentRows =
-      remoteAgentIds.length > 0
-        ? await loadRemoteAgentsByIds(
-            queryable,
-            params.workspaceId,
-            remoteAgentIds
-          )
-        : []
-    if (remoteAgentRows.length !== remoteAgentIds.length) {
-      throw createChatError(
-        400,
-        "invalid_remote_agent",
-        "One or more remote agents are invalid"
-      )
-    }
-
-    const conversation = await createConversation({
-      kind: params.kind,
-      workspaceId: params.workspaceId,
-      title: params.title,
-      createdByWorkspaceMemberId: params.creatorWorkspaceMemberId,
-      metadata: params.metadata,
-      queryable,
-    })
-
-    for (const member of memberRows) {
-      await ensureConversationParticipant({
-        conversationId: conversation.id as string,
-        participantType: "workspace_member",
-        workspaceMemberId: member.id,
-        displayName: member.userName,
-        roleKey:
-          member.id === params.creatorWorkspaceMemberId
-            ? CONVERSATION_PARTICIPANT_ROLE_KEY.OWNER
-            : CONVERSATION_PARTICIPANT_ROLE_KEY.MEMBER,
-        queryable,
-      })
-      await upsertConversationView(queryable, {
-        workspaceMemberId: member.id,
-        conversationId: conversation.id as string,
-        unreadCount: 0,
-      })
-    }
-
-    for (const actor of actorRows) {
-      await ensureConversationParticipant({
-        conversationId: conversation.id as string,
-        participantType: "actor",
-        actorId: actor.id,
-        displayName: actor.displayName ?? undefined,
-        queryable,
-      })
-    }
-
-    for (const remoteAgent of remoteAgentRows) {
-      await ensureConversationParticipant({
-        conversationId: conversation.id as string,
-        participantType: "remote_agent",
-        remoteAgentId: remoteAgent.id,
-        displayName: remoteAgent.displayName ?? undefined,
-        queryable,
-      })
-    }
-
-    if (workspaceMemberIds.length > 0) {
-      await syncConversationUpsertForWorkspaceMembers(
-        queryable,
-        params.workspaceId,
-        workspaceMemberIds,
-        conversation.id as string
-      )
-    }
-
-    return conversation
-  }
-
-  if (params.queryable) {
-    return executeCreate(params.queryable)
-  }
-  return withChatTransaction((client) => executeCreate(client))
+  return createConversationForWorkspaceMemberUseCase(
+    params,
+    chatConversationForWorkspaceMemberDeps()
+  )
 }
 
 export async function listConversationParticipants(

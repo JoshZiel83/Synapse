@@ -7,7 +7,10 @@ import {
 } from "@synapse/shared"
 import type { Kysely } from "kysely"
 import { withTestDb } from "../../test/helpers/db.js"
-import { createChatConversationUseCase } from "./create-conversation.js"
+import {
+  createChatConversationUseCase,
+  createConversationForWorkspaceMemberUseCase,
+} from "./create-conversation.js"
 import type { ChatConversationRecord } from "./presenter.js"
 
 type AnyDb = Kysely<any>
@@ -258,6 +261,152 @@ test("createChatConversationUseCase creates once and reuses the client request i
         {
           workspaceMemberId: fixture.ownerMemberId,
           conversationId: first.conversation.conversationId,
+          unreadCount: 0,
+        },
+      ].sort((a, b) => a.workspaceMemberId.localeCompare(b.workspaceMemberId))
+    )
+  })
+})
+
+test("createConversationForWorkspaceMemberUseCase validates before insert and syncs created members", async () => {
+  await withTestDb(async (db) => {
+    const fixture = await seedCreateFixture(db as unknown as AnyDb)
+    const ensureCalls: Array<{
+      conversationId: string
+      participantType: string
+      workspaceMemberId?: string
+      roleKey?: string
+    }> = []
+    const syncCalls: Array<{
+      workspaceId: string
+      workspaceMemberIds: string[]
+      conversationId: string
+    }> = []
+    const deps = {
+      ensureConversationParticipant: async (params: {
+        conversationId: string
+        participantType: string
+        workspaceMemberId?: string
+        roleKey?: string
+      }) => {
+        ensureCalls.push(params)
+      },
+      syncConversationUpsert: async (
+        _queryable: unknown,
+        workspaceId: string,
+        workspaceMemberIds: string[],
+        conversationId: string
+      ) => {
+        syncCalls.push({ workspaceId, workspaceMemberIds, conversationId })
+      },
+    }
+
+    await assert.rejects(
+      () =>
+        createConversationForWorkspaceMemberUseCase(
+          {
+            workspaceId: fixture.workspaceId,
+            creatorWorkspaceMemberId: fixture.ownerMemberId,
+            kind: "group",
+            workspaceMemberIds: ["00000000-0000-0000-0000-000000000000"],
+            queryable: db as unknown as AnyDb,
+          },
+          deps
+        ),
+      (error: unknown) =>
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "invalid_workspace_member"
+    )
+    const orphanRows = await (db as unknown as AnyDb)
+      .selectFrom("conversations")
+      .select("id")
+      .where("workspaceId", "=", fixture.workspaceId)
+      .execute()
+    assert.equal(orphanRows.length, 0)
+    assert.equal(ensureCalls.length, 0)
+    assert.equal(syncCalls.length, 0)
+
+    const created = await createConversationForWorkspaceMemberUseCase(
+      {
+        workspaceId: fixture.workspaceId,
+        creatorWorkspaceMemberId: fixture.ownerMemberId,
+        kind: "group",
+        title: "Internal create",
+        workspaceMemberIds: [fixture.invitedMemberId],
+        queryable: db as unknown as AnyDb,
+      },
+      deps
+    )
+    const conversationId = created.id as string
+    assert.equal(ensureCalls.length, 2)
+    assert.deepEqual(
+      ensureCalls
+        .map((call) => ({
+          participantType: call.participantType,
+          workspaceMemberId: call.workspaceMemberId,
+          roleKey: call.roleKey,
+        }))
+        .sort((a, b) =>
+          a.workspaceMemberId!.localeCompare(b.workspaceMemberId!)
+        ),
+      [
+        {
+          participantType: CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER,
+          workspaceMemberId: fixture.invitedMemberId,
+          roleKey: CONVERSATION_PARTICIPANT_ROLE_KEY.MEMBER,
+        },
+        {
+          participantType: CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER,
+          workspaceMemberId: fixture.ownerMemberId,
+          roleKey: CONVERSATION_PARTICIPANT_ROLE_KEY.OWNER,
+        },
+      ].sort((a, b) => a.workspaceMemberId.localeCompare(b.workspaceMemberId))
+    )
+    assert.deepEqual(syncCalls, [
+      {
+        workspaceId: fixture.workspaceId,
+        workspaceMemberIds: [fixture.ownerMemberId, fixture.invitedMemberId],
+        conversationId,
+      },
+    ])
+
+    const createdConversations = await (db as unknown as AnyDb)
+      .selectFrom("conversations")
+      .select(["id", "title", "createdByWorkspaceMemberId"])
+      .where("workspaceId", "=", fixture.workspaceId)
+      .execute()
+    assert.equal(createdConversations.length, 1)
+    assert.equal(createdConversations[0]!.id, conversationId)
+    assert.equal(createdConversations[0]!.title, "Internal create")
+    assert.equal(
+      createdConversations[0]!.createdByWorkspaceMemberId,
+      fixture.ownerMemberId
+    )
+
+    const views = await (db as unknown as AnyDb)
+      .selectFrom("workspaceMemberConversationViews")
+      .select(["workspaceMemberId", "conversationId", "unreadCount"])
+      .where("conversationId", "=", conversationId)
+      .execute()
+    assert.deepEqual(
+      views
+        .map((view) => ({
+          workspaceMemberId: view.workspaceMemberId as string,
+          conversationId: view.conversationId as string,
+          unreadCount: Number(view.unreadCount),
+        }))
+        .sort((a, b) => a.workspaceMemberId.localeCompare(b.workspaceMemberId)),
+      [
+        {
+          workspaceMemberId: fixture.invitedMemberId,
+          conversationId,
+          unreadCount: 0,
+        },
+        {
+          workspaceMemberId: fixture.ownerMemberId,
+          conversationId,
           unreadCount: 0,
         },
       ].sort((a, b) => a.workspaceMemberId.localeCompare(b.workspaceMemberId))
