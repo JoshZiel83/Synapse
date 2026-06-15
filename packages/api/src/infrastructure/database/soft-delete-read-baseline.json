@@ -3,10 +3,10 @@
     "conversations": 1,
     "devices": 1
   },
-  "modules/access/policy.ts": {
+  "modules/access/repo-subject-registry.ts": {
     "conversations": 1
   },
-  "modules/access/subject-registry.ts": {
+  "modules/access/repo.ts": {
     "conversations": 1
   },
   "modules/auth/repo.ts": {
@@ -16,22 +16,13 @@
     "automation_rules": 1,
     "workspaces": 1
   },
-  "modules/automation/service.ts": {
-    "automation_event_sources": 8,
-    "automation_integration_bindings": 6,
-    "automation_rules": 5,
-    "automation_webhook_endpoints": 4
-  },
   "modules/chat/repo.ts": {
     "conversations": 4,
     "users": 4
   },
-  "modules/devices/control-plane-auth.ts": {
-    "devices": 1
-  },
   "modules/devices/repo.ts": {
     "conversations": 1,
-    "devices": 5
+    "devices": 6
   },
   "modules/files/repo.ts": {
     "workspaces": 1
@@ -73,8 +64,11 @@
   "modules/runtime-authorizations/repo.ts": {
     "conversations": 1
   },
-  "modules/sandbox/space.ts": {
+  "modules/sandbox/repo-space.ts": {
     "file_spaces": 2
+  },
+  "modules/sandbox/repo.ts": {
+    "file_assets": 1
   },
   "modules/skills/repo.ts": {
     "publishers": 1

@@ -625,15 +625,7 @@ const isMixedModuleFile = (p) => MIXED_MODULES.has(moduleOf(p))
 // or repo* files that use executor-injected queries.
 //   - access/guards.ts: binds defaultDb into requireRequestAction +
 //     authorizeActionDefault/etc. so controllers don't import the client.
-//   - soft-delete/orchestration.ts: the soft-delete write edge — the
-//     Executor-taking markX(db,…) orchestrators run inside ONE transaction;
-//     the *Tx default-bound entry points (markUserDeletedTx etc.) open that
-//     withDbTransaction so callers don't import it. Atomicity requires the
-//     transaction live here.
-const R8_ALLOWLIST = new Set([
-  "access/guards.ts",
-  "soft-delete/orchestration.ts",
-])
+const R8_ALLOWLIST = new Set(["access/guards.ts"])
 const r8Key = (p) => {
   const m = p.split("/modules/")[1]
   return m || ""
