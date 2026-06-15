@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "crypto"
 import type { ToolDefinition } from "@synapse/shared"
 import type { CapabilityInvocationContext } from "@synapse/shared/types"
+import { z } from "zod"
 import { redis } from "../../infrastructure/redis/index.js"
 import { McpRemoteClient, type RemoteMcpProtocol } from "./mcp-remote-client.js"
 import { McpStdioClient } from "./mcp-stdio-client.js"
@@ -37,19 +38,25 @@ const MCP_INSTANCE_TTL_WORKSPACE = 24 * 60 * 60 * 1000
 
 type InstanceTransport = "builtin" | "stdio" | "http" | "sse" | string
 
-export type McpInstanceParams = {
-  pluginId: string
-  installationId: string
-  pluginSlug: string
-  orgSlug: string
+const McpInstanceParamsSchema = z
+  .object({
+    pluginId: z.string().min(1),
+    installationId: z.string().min(1),
+    pluginSlug: z.string().min(1),
+    orgSlug: z.string().min(1),
+    transport: z.string().min(1),
+    entryPoint: z.string(),
+    scope: z.string().min(1),
+    scopeId: z.string().min(1),
+    config: z.record(z.string(), z.unknown()),
+    workspaceId: z.string().optional(),
+    idleTtlMs: z.number().optional(),
+    maxAgeMs: z.number().optional(),
+  })
+  .strict()
+
+export type McpInstanceParams = z.infer<typeof McpInstanceParamsSchema> & {
   transport: InstanceTransport
-  entryPoint: string
-  scope: string
-  scopeId: string
-  config: Record<string, unknown>
-  workspaceId?: string
-  idleTtlMs?: number
-  maxAgeMs?: number
 }
 
 type InstanceState = {
@@ -69,40 +76,46 @@ type RuntimeLeaseMetadata = {
   updatedAt: number
 }
 
-type RemoteInstanceCommand =
-  | {
-      command: "execute"
-      params: McpInstanceParams
-      key: string
-      configHash: string
-      toolName: string
-      input: Record<string, unknown>
-      executionContext?: McpExecutionContext
-    }
-  | {
-      command: "execute_with_binding"
-      params: McpInstanceParams
-      key: string
-      configHash: string
-      toolName: string
-      input: Record<string, unknown>
-      binding: unknown
-      executionContext?: McpExecutionContext
-    }
-  | {
-      command: "ensure_runtime_session"
-      params: McpInstanceParams
-      key: string
-      configHash: string
-    }
-  | {
-      command: "describe"
-      params: McpInstanceParams
-      key: string
-      configHash: string
-    }
+const RemoteInstanceCommandBaseSchema = z.object({
+  params: McpInstanceParamsSchema,
+  key: z.string().min(1),
+  configHash: z.string().min(1),
+})
+
+const RemoteInstanceCommandSchema = z.discriminatedUnion("command", [
+  RemoteInstanceCommandBaseSchema.extend({
+    command: z.literal("execute"),
+    toolName: z.string().min(1),
+    input: z.record(z.string(), z.unknown()),
+    executionContext: z.unknown().optional(),
+  }).strict(),
+  RemoteInstanceCommandBaseSchema.extend({
+    command: z.literal("execute_with_binding"),
+    toolName: z.string().min(1),
+    input: z.record(z.string(), z.unknown()),
+    binding: z.unknown(),
+    executionContext: z.unknown().optional(),
+  }).strict(),
+  RemoteInstanceCommandBaseSchema.extend({
+    command: z.literal("ensure_runtime_session"),
+  }).strict(),
+  RemoteInstanceCommandBaseSchema.extend({
+    command: z.literal("describe"),
+  }).strict(),
+])
+
+type RemoteInstanceCommand = z.infer<typeof RemoteInstanceCommandSchema> & {
+  params: McpInstanceParams
+  executionContext?: McpExecutionContext
+}
 
 export type McpExecutionContext = CapabilityInvocationContext
+
+export function parseRemoteInstanceCommand(
+  payload: unknown
+): RemoteInstanceCommand {
+  return RemoteInstanceCommandSchema.parse(payload) as RemoteInstanceCommand
+}
 
 export interface McpInstance {
   pluginId: string
@@ -1037,7 +1050,7 @@ export function initInstanceManagerListeners() {
   }
   instanceManagerInitialized = true
   registerRuntimeCommandHandler("mcp.instance.command", async (payload) => {
-    return handleLocalInstanceCommand(payload as RemoteInstanceCommand)
+    return handleLocalInstanceCommand(parseRemoteInstanceCommand(payload))
   })
   void initRuntimeControlPlane()
 }

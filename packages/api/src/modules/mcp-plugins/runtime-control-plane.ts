@@ -1,5 +1,6 @@
 import crypto from "node:crypto"
 import os from "node:os"
+import { z } from "zod"
 import { redis } from "../../infrastructure/redis/index.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
 
@@ -10,23 +11,40 @@ const REPLY_LIST_PREFIX = "mcp:runtime:reply:"
 const MAX_STREAM_LENGTH = 5000
 const DEFAULT_COMMAND_TIMEOUT_MS = 30_000
 
-type RuntimeCommandEnvelope = {
-  id: string
-  type: string
-  payload: string
-  replyKey: string
-}
+const RuntimeCommandEnvelopeSchema = z
+  .object({
+    id: z.string().min(1),
+    type: z.string().min(1),
+    payload: z.string(),
+    replyKey: z.string().min(1),
+  })
+  .strict()
 
-type RuntimeCommandResult =
-  | { ok: true; result: unknown }
-  | {
-      ok: false
-      error: {
-        name: string
-        message: string
-        stack?: string
-      }
-    }
+const RuntimeCommandErrorSchema = z
+  .object({
+    name: z.string().min(1),
+    message: z.string(),
+    stack: z.string().optional(),
+  })
+  .strict()
+
+const RuntimeCommandResultSchema = z.discriminatedUnion("ok", [
+  z
+    .object({
+      ok: z.literal(true),
+      result: z.unknown().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      ok: z.literal(false),
+      error: RuntimeCommandErrorSchema,
+    })
+    .strict(),
+])
+
+type RuntimeCommandEnvelope = z.infer<typeof RuntimeCommandEnvelopeSchema>
+type RuntimeCommandResult = z.infer<typeof RuntimeCommandResultSchema>
 
 type RuntimeCommandHandler = (payload: unknown) => Promise<unknown>
 
@@ -46,6 +64,45 @@ function runtimeCommandStreamKey(nodeId: string) {
 
 function runtimeReplyKey(commandId: string) {
   return `${REPLY_LIST_PREFIX}${commandId}`
+}
+
+export function parseRuntimeCommandEnvelopeFields(
+  entryId: string,
+  fields: string[]
+): RuntimeCommandEnvelope | null {
+  const values = new Map<string, string>()
+  for (let index = 0; index < fields.length; index += 2) {
+    values.set(fields[index]!, fields[index + 1] || "")
+  }
+
+  const parsed = RuntimeCommandEnvelopeSchema.safeParse({
+    id: values.get("id") || entryId,
+    type: values.get("type") || "",
+    payload: values.get("payload") || "{}",
+    replyKey: values.get("reply_key") || "",
+  })
+  return parsed.success ? parsed.data : null
+}
+
+export function parseRuntimeCommandPayload(raw: string): unknown {
+  return raw ? JSON.parse(raw) : {}
+}
+
+export function parseRuntimeCommandResult(raw: string): RuntimeCommandResult {
+  let value: unknown
+  try {
+    value = JSON.parse(raw)
+  } catch (error) {
+    throw new Error(
+      `Runtime command reply is invalid JSON: ${(error as Error).message}`
+    )
+  }
+
+  const parsed = RuntimeCommandResultSchema.safeParse(value)
+  if (!parsed.success) {
+    throw new Error("Runtime command reply has invalid shape")
+  }
+  return parsed.data
 }
 
 function serializeError(error: unknown) {
@@ -89,7 +146,7 @@ async function handleCommand(envelope: RuntimeCommandEnvelope) {
 
   let payload: unknown = {}
   try {
-    payload = envelope.payload ? JSON.parse(envelope.payload) : {}
+    payload = parseRuntimeCommandPayload(envelope.payload)
   } catch (error) {
     await pushCommandReply(envelope.replyKey, {
       ok: false,
@@ -135,16 +192,13 @@ async function runCommandListener() {
       for (const [, entries] of result as [string, [string, string[]][]][]) {
         for (const [entryId, fields] of entries) {
           lastStreamId = entryId
-          const values = new Map<string, string>()
-          for (let index = 0; index < fields.length; index += 2) {
-            values.set(fields[index]!, fields[index + 1] || "")
+          const envelope = parseRuntimeCommandEnvelopeFields(entryId, fields)
+          if (!envelope) {
+            log.warn({ entryId }, "[mcp-runtime] invalid command envelope")
+            await redis.xdel(streamKey, entryId).catch(() => undefined)
+            continue
           }
-          await handleCommand({
-            id: values.get("id") || entryId,
-            type: values.get("type") || "",
-            payload: values.get("payload") || "{}",
-            replyKey: values.get("reply_key") || "",
-          })
+          await handleCommand(envelope)
           await redis.xdel(streamKey, entryId).catch(() => undefined)
         }
       }
@@ -227,7 +281,7 @@ export async function sendRuntimeCommand<T>(
       )
     }
 
-    const message = JSON.parse(reply[1]) as RuntimeCommandResult
+    const message = parseRuntimeCommandResult(reply[1])
     if (!message.ok) {
       const error = new Error(message.error.message)
       error.name = message.error.name
