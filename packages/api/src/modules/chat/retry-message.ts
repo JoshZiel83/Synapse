@@ -7,6 +7,8 @@ import { chatRootExecutor } from "./repo.js"
 import { requireConversationAccess } from "./conversation-access.js"
 import { createChatError } from "./errors.js"
 import type { EnqueueSessionWakeupParams } from "../session/runtime.js"
+import { getWorkspaceMemberIdentityOrThrow } from "./identity.js"
+import { getConversationFeedItemById } from "./conversation-item-read.js"
 
 export type RetryAssistantMessageInput = {
   workspaceId: string
@@ -121,4 +123,26 @@ export async function retryAssistantMessageUseCase(
     sessionId: retrySessionId,
     actorId,
   }
+}
+
+export async function retryAssistantMessage(params: {
+  workspaceId: string
+  userId: string
+  conversationId: string
+  itemId: string
+}): Promise<RetryAssistantMessageRecord> {
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  const { enqueueSessionWakeup } = await import("../session/runtime.js")
+  return retryAssistantMessageUseCase(
+    {
+      workspaceId: params.workspaceId,
+      workspaceMemberId: identity.workspaceMemberId,
+      conversationId: params.conversationId,
+      itemId: params.itemId,
+    },
+    { enqueueSessionWakeup, getConversationFeedItemById }
+  )
 }

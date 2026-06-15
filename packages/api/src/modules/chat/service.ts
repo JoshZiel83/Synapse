@@ -45,7 +45,7 @@ import {
 } from "./remove-participant.js"
 export { loadParticipantById } from "./remove-participant.js"
 export { patchChatConversation } from "./patch-conversation.js"
-import { retryAssistantMessageUseCase } from "./retry-message.js"
+export { retryAssistantMessage } from "./retry-message.js"
 import {
   addChatConversationParticipantsUseCase,
   addConversationParticipantsUseCase,
@@ -77,7 +77,6 @@ import {
 } from "./participant-projection.js"
 export { isFeedItemVisibleToWorkspaceMember } from "./conversation-feed-visibility.js"
 export { conversationItemDetailToFeedItem } from "./conversation-feed-mapper.js"
-import { getConversationFeedItemById } from "./conversation-item-read.js"
 export {
   getContextConversationItemsForParticipant,
   getConversationFeedItemById,
@@ -403,40 +402,5 @@ export async function leaveChatConversation(params: {
       conversationId: params.conversationId,
     },
     chatParticipantRemovalDeps()
-  )
-}
-
-// ============ Stage 16: assistant message retry ============
-
-/**
- * Re-trigger an actor turn after a model_error_notice item. Looks up the
- * conversation item by id, verifies it's a retry-able error notice owned
- * by an accessible conversation, then enqueues a session wakeup that will
- * run another turn. UI calls this when the user taps "retry" on a failed
- * assistant message.
- */
-export async function retryAssistantMessage(params: {
-  workspaceId: string
-  userId: string
-  conversationId: string
-  itemId: string
-}): Promise<{
-  retryEnqueued: boolean
-  sessionId: string
-  actorId: string
-}> {
-  const identity = await getWorkspaceMemberIdentityOrThrow(
-    params.workspaceId,
-    params.userId
-  )
-  const { enqueueSessionWakeup } = await import("../session/runtime.js")
-  return retryAssistantMessageUseCase(
-    {
-      workspaceId: params.workspaceId,
-      workspaceMemberId: identity.workspaceMemberId,
-      conversationId: params.conversationId,
-      itemId: params.itemId,
-    },
-    { enqueueSessionWakeup, getConversationFeedItemById }
   )
 }
