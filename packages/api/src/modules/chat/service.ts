@@ -98,7 +98,6 @@ import {
   listConversationItemPartRows,
   listConversationItemRowsByIds,
   listConversationItemTargetRows,
-  listConversationRealtimeRecipientRows,
   listConversationItemContextTargetRows,
   listTransportDeliveryRowsForItems,
   listNearbyVisibleConversationReplyRefRows,
@@ -185,6 +184,7 @@ import {
 } from "./actor-wakeup.js"
 import { syncVisibleSharedItemUseCase } from "./visible-sync.js"
 import { syncConversationUpsertForWorkspaceMembersUseCase } from "./conversation-upsert-sync.js"
+import { listConversationRealtimeRecipientsUseCase } from "./realtime-recipients.js"
 import { enrichTaskForUser } from "../tasks/service.js"
 import {
   getConversationRuntimeMap,
@@ -2080,15 +2080,7 @@ export async function listConversationRealtimeRecipients(
   conversationId: string,
   queryable: Executor = rootQueryable()
 ) {
-  const rows = await listConversationRealtimeRecipientRows(
-    queryable,
-    conversationId
-  )
-
-  return rows.map((row) => ({
-    workspaceId: row.workspaceId,
-    workspaceMemberId: row.workspaceMemberId,
-  }))
+  return listConversationRealtimeRecipientsUseCase(conversationId, queryable)
 }
 
 export async function createChatConversation(params: {
