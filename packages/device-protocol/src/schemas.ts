@@ -422,6 +422,48 @@ export type RemoteAgentSearchMessagesQuery = z.infer<
   typeof RemoteAgentSearchMessagesQuerySchema
 >
 
+// Built-in reverse-MCP IM tool inputs. This is also a machine surface: the
+// remote-agent runtime calls the API's MCP endpoint, so these inputs stay
+// snake_case and the API maps them to internal camelCase service parameters.
+// Projected plugin/device tools keep their downstream-owned raw JSON Schema and
+// are intentionally not modeled here.
+export const RemoteAgentMcpListConversationsToolInputSchema = z.strictObject({})
+export type RemoteAgentMcpListConversationsToolInput = z.infer<
+  typeof RemoteAgentMcpListConversationsToolInputSchema
+>
+
+export const RemoteAgentMcpCheckMessagesToolInputSchema = z.strictObject({
+  limit: z.number().int().min(1).max(500).optional(),
+})
+export type RemoteAgentMcpCheckMessagesToolInput = z.infer<
+  typeof RemoteAgentMcpCheckMessagesToolInputSchema
+>
+
+export const RemoteAgentMcpReadHistoryToolInputSchema = z.strictObject({
+  after_sequence: z.number().int().min(0).optional(),
+  before_sequence: z.number().int().min(0).optional(),
+  limit: z.number().int().min(1).max(200).optional(),
+})
+export type RemoteAgentMcpReadHistoryToolInput = z.infer<
+  typeof RemoteAgentMcpReadHistoryToolInputSchema
+>
+
+export const RemoteAgentMcpSendMessageToolInputSchema = z.strictObject({
+  content: z.string().trim().min(1).max(20000),
+  reply_to_item_id: z.uuid().optional(),
+})
+export type RemoteAgentMcpSendMessageToolInput = z.infer<
+  typeof RemoteAgentMcpSendMessageToolInputSchema
+>
+
+export const RemoteAgentMcpSearchMessagesToolInputSchema = z.strictObject({
+  query: z.string().trim().min(1).max(512),
+  limit: z.number().int().min(1).max(100).optional(),
+})
+export type RemoteAgentMcpSearchMessagesToolInput = z.infer<
+  typeof RemoteAgentMcpSearchMessagesToolInputSchema
+>
+
 // Remote-agent daemon -> API WebSocket messages. This is the non-REST machine
 // surface under /ws/remote-agents. It uses snake_case wire keys, and the API
 // converts these to internal camelCase records inside remote-agents/wire.ts.

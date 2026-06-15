@@ -17,6 +17,11 @@ import {
   RemoteAgentHistoryQuerySchema,
   RemoteAgentCheckMessagesQuerySchema,
   RemoteAgentSearchMessagesQuerySchema,
+  RemoteAgentMcpListConversationsToolInputSchema,
+  RemoteAgentMcpCheckMessagesToolInputSchema,
+  RemoteAgentMcpReadHistoryToolInputSchema,
+  RemoteAgentMcpSendMessageToolInputSchema,
+  RemoteAgentMcpSearchMessagesToolInputSchema,
 } from "./schemas.js"
 
 const CONVERSATION_ID = "00000000-0000-4000-8000-000000000010"
@@ -130,5 +135,61 @@ test("RemoteAgentSearchMessagesQuerySchema requires a query string", () => {
       conversation_id: CONVERSATION_ID,
       q: "",
     })
+  )
+})
+
+test("RemoteAgentMcpListConversationsToolInputSchema is strict-empty", () => {
+  assert.deepEqual(RemoteAgentMcpListConversationsToolInputSchema.parse({}), {})
+  assert.throws(() =>
+    RemoteAgentMcpListConversationsToolInputSchema.parse({ limit: 1 })
+  )
+})
+
+test("RemoteAgentMcpCheckMessagesToolInputSchema caps limit", () => {
+  const parsed = RemoteAgentMcpCheckMessagesToolInputSchema.parse({ limit: 50 })
+  assert.equal(parsed.limit, 50)
+  assert.throws(() =>
+    RemoteAgentMcpCheckMessagesToolInputSchema.parse({ limit: 9999 })
+  )
+})
+
+test("RemoteAgentMcpReadHistoryToolInputSchema accepts snake_case and rejects camelCase", () => {
+  const parsed = RemoteAgentMcpReadHistoryToolInputSchema.parse({
+    after_sequence: 5,
+    before_sequence: 10,
+    limit: 20,
+  })
+  assert.equal(parsed.after_sequence, 5)
+  assert.equal(parsed.before_sequence, 10)
+  assert.throws(() =>
+    RemoteAgentMcpReadHistoryToolInputSchema.parse({
+      afterSequence: 5,
+      beforeSequence: 10,
+    })
+  )
+})
+
+test("RemoteAgentMcpSendMessageToolInputSchema accepts snake_case reply id and rejects camelCase", () => {
+  const parsed = RemoteAgentMcpSendMessageToolInputSchema.parse({
+    content: "hello",
+    reply_to_item_id: DELIVERY_ID,
+  })
+  assert.equal(parsed.reply_to_item_id, DELIVERY_ID)
+  assert.throws(() =>
+    RemoteAgentMcpSendMessageToolInputSchema.parse({
+      content: "hello",
+      replyToItemId: DELIVERY_ID,
+    })
+  )
+})
+
+test("RemoteAgentMcpSearchMessagesToolInputSchema requires query", () => {
+  const parsed = RemoteAgentMcpSearchMessagesToolInputSchema.parse({
+    query: "needle",
+    limit: 10,
+  })
+  assert.equal(parsed.query, "needle")
+  assert.throws(() =>
+    RemoteAgentMcpSearchMessagesToolInputSchema.parse({ query: "" })
   )
 })

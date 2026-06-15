@@ -8,6 +8,17 @@ import {
   CallToolRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js"
 import {
+  RemoteAgentMcpCheckMessagesToolInputSchema,
+  RemoteAgentMcpListConversationsToolInputSchema,
+  RemoteAgentMcpReadHistoryToolInputSchema,
+  RemoteAgentMcpSearchMessagesToolInputSchema,
+  RemoteAgentMcpSendMessageToolInputSchema,
+  type RemoteAgentMcpCheckMessagesToolInput,
+  type RemoteAgentMcpReadHistoryToolInput,
+  type RemoteAgentMcpSearchMessagesToolInput,
+  type RemoteAgentMcpSendMessageToolInput,
+} from "@synapse/device-protocol"
+import {
   textBlock,
   computeWireNames,
   type ToolDefinition,
@@ -77,6 +88,11 @@ type RegisteredTool = {
   handler: (input: Record<string, unknown>) => Promise<McpToolResult>
 }
 
+export type RemoteAgentMcpToolForTest = Pick<
+  RegisteredTool,
+  "name" | "inputSchema" | "zodSchema"
+>
+
 function jsonToolResult<T extends Record<string, unknown>>(
   structuredContent: T
 ): McpToolResult {
@@ -91,18 +107,9 @@ function jsonToolResult<T extends Record<string, unknown>>(
   }
 }
 
-const EMPTY_OBJECT_SCHEMA = {
-  type: "object",
-  properties: {},
-  additionalProperties: false,
-} as const
-
-/** Convert a Zod object shape into a JSON Schema for tools/list advertising. */
-function zodShapeToJsonSchema(
-  shape: Record<string, z.ZodType>
-): Record<string, unknown> {
-  const obj = z.object(shape)
-  return z.toJSONSchema(obj) as Record<string, unknown>
+/** Convert the exact Zod schema used for validation into tools/list JSON Schema. */
+function zodToJsonSchema(schema: z.ZodType): Record<string, unknown> {
+  return z.toJSONSchema(schema) as Record<string, unknown>
 }
 
 // PR #14: surface a [device:<name>] / [plugin:<name>] / [skill:<name>]
@@ -128,13 +135,14 @@ function buildImTools(params: {
 }): RegisteredTool[] {
   const tools: RegisteredTool[] = []
 
-  const listConversationsSchema: Record<string, z.ZodType> = {}
   tools.push({
     name: "list_conversations",
     description:
       "List conversations this remote agent participates in, including unread counts.",
-    inputSchema: EMPTY_OBJECT_SCHEMA,
-    zodSchema: z.object(listConversationsSchema),
+    inputSchema: zodToJsonSchema(
+      RemoteAgentMcpListConversationsToolInputSchema
+    ),
+    zodSchema: RemoteAgentMcpListConversationsToolInputSchema,
     handler: async () => {
       const { conversations } = await listRemoteAgentConversations({
         remoteAgentId: params.remoteAgentId,
@@ -146,17 +154,14 @@ function buildImTools(params: {
     },
   })
 
-  const checkMessagesShape = {
-    limit: z.number().int().min(1).max(500).optional(),
-  }
   tools.push({
     name: "check_messages",
     description:
       "Return pending message deliveries for the conversation this MCP session is bound to.",
-    inputSchema: zodShapeToJsonSchema(checkMessagesShape),
-    zodSchema: z.object(checkMessagesShape),
+    inputSchema: zodToJsonSchema(RemoteAgentMcpCheckMessagesToolInputSchema),
+    zodSchema: RemoteAgentMcpCheckMessagesToolInputSchema,
     handler: async (input) => {
-      const { limit } = input as { limit?: number }
+      const { limit } = input as RemoteAgentMcpCheckMessagesToolInput
       // Scoping to params.conversationId is load-bearing for session
       // isolation: a per-conversation runtime asking the IM surface for
       // "what's queued?" must never see another conversation's deliveries.
@@ -172,29 +177,21 @@ function buildImTools(params: {
     },
   })
 
-  const readHistoryShape = {
-    afterSequence: z.number().int().min(0).optional(),
-    beforeSequence: z.number().int().min(0).optional(),
-    limit: z.number().int().min(1).max(200).optional(),
-  }
   tools.push({
     name: "read_history",
     description:
       "Read visible conversation history for the conversation bound to this MCP session.",
-    inputSchema: zodShapeToJsonSchema(readHistoryShape),
-    zodSchema: z.object(readHistoryShape),
+    inputSchema: zodToJsonSchema(RemoteAgentMcpReadHistoryToolInputSchema),
+    zodSchema: RemoteAgentMcpReadHistoryToolInputSchema,
     handler: async (input) => {
-      const { afterSequence, beforeSequence, limit } = input as {
-        afterSequence?: number
-        beforeSequence?: number
-        limit?: number
-      }
+      const { after_sequence, before_sequence, limit } =
+        input as RemoteAgentMcpReadHistoryToolInput
       const result = await getRemoteAgentConversationHistory({
         remoteAgentId: params.remoteAgentId,
         machineKey: params.machineKey,
         conversationId: params.conversationId,
-        afterSequence,
-        beforeSequence,
+        afterSequence: after_sequence,
+        beforeSequence: before_sequence,
         limit,
       })
       const deliveryRows = await listPendingDeliveryRefs({
@@ -226,44 +223,34 @@ function buildImTools(params: {
     },
   })
 
-  const sendMessageShape = {
-    content: z.string().trim().min(1).max(20000),
-    replyToItemId: z.uuid().optional(),
-  }
   tools.push({
     name: "send_message",
     description:
       "Send a text reply into the bound Synapse conversation as this remote agent.",
-    inputSchema: zodShapeToJsonSchema(sendMessageShape),
-    zodSchema: z.object(sendMessageShape),
+    inputSchema: zodToJsonSchema(RemoteAgentMcpSendMessageToolInputSchema),
+    zodSchema: RemoteAgentMcpSendMessageToolInputSchema,
     handler: async (input) => {
-      const { content, replyToItemId } = input as {
-        content: string
-        replyToItemId?: string
-      }
+      const { content, reply_to_item_id } =
+        input as RemoteAgentMcpSendMessageToolInput
       const result = await sendRemoteAgentConversationMessage({
         remoteAgentId: params.remoteAgentId,
         machineKey: params.machineKey,
         conversationId: params.conversationId,
         clientMessageId: randomUUID(),
         contentBlocks: [textBlock(content)],
-        replyToItemId,
+        replyToItemId: reply_to_item_id,
       })
       return jsonToolResult({ item: result.item })
     },
   })
 
-  const searchMessagesShape = {
-    query: z.string().trim().min(1).max(512),
-    limit: z.number().int().min(1).max(100).optional(),
-  }
   tools.push({
     name: "search_messages",
     description: "Search visible messages inside the bound conversation.",
-    inputSchema: zodShapeToJsonSchema(searchMessagesShape),
-    zodSchema: z.object(searchMessagesShape),
+    inputSchema: zodToJsonSchema(RemoteAgentMcpSearchMessagesToolInputSchema),
+    zodSchema: RemoteAgentMcpSearchMessagesToolInputSchema,
     handler: async (input) => {
-      const { query, limit } = input as { query: string; limit?: number }
+      const { query, limit } = input as RemoteAgentMcpSearchMessagesToolInput
       const result = await searchRemoteAgentMessages({
         remoteAgentId: params.remoteAgentId,
         machineKey: params.machineKey,
@@ -276,6 +263,14 @@ function buildImTools(params: {
   })
 
   return tools
+}
+
+export function __buildImToolsForTest(params: {
+  remoteAgentId: string
+  conversationId: string
+  machineKey: string
+}): RemoteAgentMcpToolForTest[] {
+  return buildImTools(params)
 }
 
 async function buildResolvedTools(params: {
