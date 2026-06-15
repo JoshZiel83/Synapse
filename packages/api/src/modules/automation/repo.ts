@@ -606,7 +606,7 @@ function automationEventSourceJoinClause(
   eventSourceAlias = "aes",
   bindingAlias = "aib"
 ) {
-  return `LEFT JOIN automation_integration_bindings ${bindingAlias} ON ${bindingAlias}.id = ${eventSourceAlias}.integration_binding_id`
+  return `LEFT JOIN automation_integration_bindings_live ${bindingAlias} ON ${bindingAlias}.id = ${eventSourceAlias}.integration_binding_id`
 }
 
 function automationEventSourceSelectClause(
@@ -841,8 +841,8 @@ export async function loadAutomationRuleComponentRows(
               aes.status AS event_source_status
        FROM automation_triggers
        at
-       LEFT JOIN automation_event_sources aes ON aes.id = at.event_source_id
-       LEFT JOIN automation_integration_bindings aib ON aib.id = aes.integration_binding_id
+       LEFT JOIN automation_event_sources_live aes ON aes.id = at.event_source_id
+       LEFT JOIN automation_integration_bindings_live aib ON aib.id = aes.integration_binding_id
        WHERE at.rule_id = ANY($1::uuid[])`,
       [ruleIds]
     ),
@@ -915,13 +915,12 @@ export async function listActiveEventSubscriptionRuleRowsByEventSource(params: {
   const runner = resolveQueryRunner(params.executor)
   const result = await runner.run<AutomationRuleComponentRawRow>(
     `SELECT ar.*
-     FROM automation_rules ar
+     FROM automation_rules_live ar
      JOIN automation_triggers at
        ON at.rule_id = ar.id
      WHERE at.event_source_id = $1::uuid
        AND ar.category = $2::automation_rules_category
-       AND ar.status = 'active'
-       AND ar.deleted_at IS NULL`,
+       AND ar.status = 'active'`,
     [params.eventSourceId, params.category]
   )
   return result.rows.map(toAutomationRuleDbRow)
@@ -936,11 +935,10 @@ export async function getAutomationEventSourceRow(params: {
     params.executor
   ).run<AutomationEventSourceComponentRawRow>(
     `SELECT ${automationEventSourceSelectClause("aes", "aib")}
-     FROM automation_event_sources aes
+     FROM automation_event_sources_live aes
      ${automationEventSourceJoinClause("aes", "aib")}
      WHERE aes.workspace_id = $1::uuid
        AND aes.id = $2::uuid
-       AND aes.deleted_at IS NULL
      LIMIT 1`,
     [params.workspaceId, params.eventSourceId]
   )
@@ -959,7 +957,7 @@ export async function listAutomationEventSourceRows(params: {
   executor?: Executor
 }): Promise<AutomationEventSourceDbRow[]> {
   const values: unknown[] = [params.workspaceId]
-  let where = "aes.workspace_id = $1::uuid AND aes.deleted_at IS NULL"
+  let where = "aes.workspace_id = $1::uuid"
 
   if (params.filters?.status) {
     values.push(params.filters.status)
@@ -982,7 +980,7 @@ export async function listAutomationEventSourceRows(params: {
     params.executor
   ).run<AutomationEventSourceComponentRawRow>(
     `SELECT ${automationEventSourceSelectClause("aes", "aib")}
-     FROM automation_event_sources aes
+     FROM automation_event_sources_live aes
      ${automationEventSourceJoinClause("aes", "aib")}
      WHERE ${where}
      ORDER BY aes.created_at DESC`,
@@ -1003,17 +1001,15 @@ export async function selectWebhookAutomationEventSourceByPathToken(params: {
             awe.secret_ciphertext AS endpoint_secret_ciphertext,
             awe.name AS endpoint_name,
             awe.id AS endpoint_id
-     FROM automation_event_sources aes
+     FROM automation_event_sources_live aes
      ${automationEventSourceJoinClause("aes", "aib")}
-     JOIN automation_webhook_endpoints awe
+     JOIN automation_webhook_endpoints_live awe
        ON awe.id = aes.webhook_endpoint_id
      WHERE awe.path_token = $1::text
        AND awe.status = 'active'
-       AND awe.deleted_at IS NULL
        AND aes.provider_kind = 'webhook'
        AND aes.source_key = $2::text
        AND aes.status IN ('active', 'deprecated')
-       AND aes.deleted_at IS NULL
      LIMIT 1`,
     [params.pathToken, params.sourceKey]
   )
@@ -1032,19 +1028,16 @@ export async function listIntegrationAutomationEventSourceRowsByWebhookPathToken
             awe.secret_ciphertext AS endpoint_secret_ciphertext,
             awe.name AS endpoint_name,
             awe.id AS endpoint_id
-     FROM automation_integration_bindings aib
-     JOIN automation_webhook_endpoints awe
+     FROM automation_integration_bindings_live aib
+     JOIN automation_webhook_endpoints_live awe
        ON awe.id = aib.webhook_endpoint_id
-     JOIN automation_event_sources aes
+     JOIN automation_event_sources_live aes
        ON aes.integration_binding_id = aib.id
      WHERE awe.path_token = $1::text
        AND awe.status = 'active'
-       AND awe.deleted_at IS NULL
        AND aib.ingress_kind = 'webhook'
-       AND aib.deleted_at IS NULL
        AND aes.provider_kind = 'integration'
        AND aes.status IN ('active', 'deprecated')
-       AND aes.deleted_at IS NULL
      ORDER BY aes.created_at ASC`,
     [params.pathToken]
   )
@@ -1061,7 +1054,7 @@ export async function listAutomationRuleIds(params: {
   executor?: Executor
 }): Promise<string[]> {
   const values: unknown[] = [params.workspaceId]
-  let where = "workspace_id = $1::uuid AND deleted_at IS NULL"
+  let where = "workspace_id = $1::uuid"
 
   if (params.filters?.status) {
     values.push(params.filters.status)
@@ -1078,7 +1071,7 @@ export async function listAutomationRuleIds(params: {
 
   const result = await resolveQueryRunner(params.executor).run<{ id: string }>(
     `SELECT id
-     FROM automation_rules
+     FROM automation_rules_live
      WHERE ${where}
      ORDER BY created_at DESC`,
     values
@@ -1121,8 +1114,8 @@ export async function listAutomationOccurrenceRows(params: {
             aib.webhook_endpoint_id AS event_integration_webhook_endpoint_id,
             aib.external_subscription_id AS event_external_subscription_id
      FROM automation_occurrences ao
-     LEFT JOIN automation_event_sources aes ON aes.id = ao.event_source_id
-     LEFT JOIN automation_integration_bindings aib ON aib.id = aes.integration_binding_id
+     LEFT JOIN automation_event_sources_live aes ON aes.id = ao.event_source_id
+     LEFT JOIN automation_integration_bindings_live aib ON aib.id = aes.integration_binding_id
      WHERE ${where}
      ORDER BY ao.created_at DESC
      LIMIT $${values.length}`,
@@ -1173,8 +1166,8 @@ export async function selectAutomationOccurrenceRow(
             aib.webhook_endpoint_id AS event_integration_webhook_endpoint_id,
             aib.external_subscription_id AS event_external_subscription_id
      FROM automation_occurrences ao
-     LEFT JOIN automation_event_sources aes ON aes.id = ao.event_source_id
-     LEFT JOIN automation_integration_bindings aib ON aib.id = aes.integration_binding_id
+     LEFT JOIN automation_event_sources_live aes ON aes.id = ao.event_source_id
+     LEFT JOIN automation_integration_bindings_live aib ON aib.id = aes.integration_binding_id
      WHERE ao.id = $1::uuid
      LIMIT 1`,
     [occurrenceId]
@@ -1206,9 +1199,9 @@ export async function listAutomationExecutionRows(params: {
             ao.dedupe_key,
             ao.created_at AS occurrence_created_at
      FROM automation_executions ae
-     LEFT JOIN automation_rules ar ON ar.id = ae.rule_id
+     LEFT JOIN automation_rules_live ar ON ar.id = ae.rule_id
      LEFT JOIN automation_occurrences ao ON ao.id = ae.occurrence_id
-     LEFT JOIN automation_event_sources aes ON aes.id = ao.event_source_id
+     LEFT JOIN automation_event_sources_live aes ON aes.id = ao.event_source_id
      WHERE ae.workspace_id = $1::uuid
        AND ae.rule_id = $2::uuid
      ORDER BY ae.created_at DESC
@@ -1425,12 +1418,11 @@ export async function selectActiveAutomationRuleEventMatchers(params: {
 }): Promise<AutomationRuleEventMatcherRecord[]> {
   const result = await runQuery<{ id: string; matcher: unknown }>(
     `SELECT ar.id, at.matcher
-     FROM automation_rules ar
+     FROM automation_rules_live ar
      JOIN automation_triggers at ON at.rule_id = ar.id
      JOIN automation_policies ap ON ap.rule_id = ar.id
      WHERE ar.workspace_id = $1
        AND ar.status = 'active'
-       AND ar.deleted_at IS NULL
        AND at.trigger_kind = 'event'
        AND at.event_source_id = $2
        AND (ap.active_from IS NULL OR ap.active_from <= $3)
@@ -1623,11 +1615,10 @@ export async function lockDueAutomationScheduleRows(
     `SELECT at.rule_id, ar.name AS rule_name, ar.workspace_id, at.schedule_kind, at.schedule_expr, at.schedule_timezone,
             at.interval_seconds, at.starts_at, ap.active_from, ap.active_until, at.next_fire_at, at.last_fired_at
      FROM automation_triggers at
-     JOIN automation_rules ar ON ar.id = at.rule_id
+     JOIN automation_rules_live ar ON ar.id = at.rule_id
      JOIN automation_policies ap ON ap.rule_id = ar.id
      WHERE at.trigger_kind = 'schedule'
        AND ar.status = 'active'
-       AND ar.deleted_at IS NULL
        AND at.next_fire_at IS NOT NULL
        AND at.next_fire_at <= NOW()
        AND (ap.active_from IS NULL OR ap.active_from <= at.next_fire_at)
@@ -1869,7 +1860,7 @@ export async function selectAutomationIntegrationBindingRow(
     executor
   ).run<AutomationIntegrationBindingRawRow>(
     `SELECT *
-     FROM automation_integration_bindings
+     FROM automation_integration_bindings_live
      WHERE id = $1::uuid
      LIMIT 1`,
     [bindingId]
@@ -1891,7 +1882,7 @@ export async function selectExistingAutomationIntegrationBindingRow(params: {
     params.executor
   ).run<AutomationIntegrationBindingRawRow>(
     `SELECT *
-     FROM automation_integration_bindings
+     FROM automation_integration_bindings_live
      WHERE workspace_id = $1::uuid
        AND installation_id = $2::uuid
        AND provider = $3::automation_integration_bindings_provider
@@ -2031,7 +2022,7 @@ export async function selectAutomationWebhookEndpointRow(
     executor
   ).run<AutomationWebhookEndpointRawRow>(
     `SELECT *
-     FROM automation_webhook_endpoints
+     FROM automation_webhook_endpoints_live
      WHERE id = $1::uuid
      LIMIT 1`,
     [endpointId]
@@ -2048,9 +2039,8 @@ export async function listAutomationWebhookEndpointRows(
     executor
   ).run<AutomationWebhookEndpointRawRow>(
     `SELECT *
-     FROM automation_webhook_endpoints
+     FROM automation_webhook_endpoints_live
      WHERE workspace_id = $1::uuid
-       AND deleted_at IS NULL
      ORDER BY created_at DESC`,
     [workspaceId]
   )
