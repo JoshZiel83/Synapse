@@ -6,14 +6,12 @@ import {
   releaseLock,
   type AcquiredLock,
 } from "../infrastructure/redis/lock.js"
-import { db, type TableInsert } from "../infrastructure/database/kysely.js"
 import { emitEvent } from "../infrastructure/events/index.js"
 import {
   ACTOR_RUNTIME_HEALTH,
   QUEUE_NAMES,
   SESSION_LOCK_TTL,
   REDIS_CHANNELS,
-  DEFAULT_MAX_CONCURRENT_SESSIONS,
   CONVERSATION_MESSAGE_SUBTYPE,
   isThreadConversationKind,
   textBlocks,
@@ -90,8 +88,12 @@ import { resolveActorCapabilitySurface } from "../modules/capabilities/surface.j
 import { sessionThinkingQueue } from "./queues.js"
 import { registerWorker } from "./registry.js"
 import { getAssistantSessionMessagePersistence } from "./session-message-persistence.js"
-import { sql } from "kysely"
 import { createLogger } from "../infrastructure/logger/index.js"
+import {
+  getActorMaxSessions,
+  insertSessionThinkAuditLog,
+  markSessionMemoryBootstrapCompleted,
+} from "./session-thinking-repo.js"
 
 const log = createLogger("session-thinking")
 
@@ -654,13 +656,7 @@ export function startSessionThinkingWorker() {
           ]
         }
         if (recallType === "bootstrap" && !session.memoryBootstrapCompleted) {
-          await db
-            .updateTable("sessions")
-            .set({
-              memoryBootstrapCompleted: true,
-            })
-            .where("id", "=", sessionId)
-            .execute()
+          await markSessionMemoryBootstrapCompleted(sessionId)
         }
 
         const resolvedModelPlan = await resolveModelPlan(actorId, workspaceId, {
@@ -1388,23 +1384,16 @@ export function startSessionThinkingWorker() {
         await markTurnWakeupsProcessed(turn.id)
         await updateTurnStatus(turn.id, "completed")
 
-        await db
-          .insertInto("auditLogs")
-          .values({
-            workspaceId: workspaceId,
-            actorId: actorId,
-            action: "ai.think",
-            resourceType: "session",
-            resourceId: sessionId,
-            details: {
-              trigger,
-              tokensUsed: result.tokensUsed,
-              actionsCount: result.actions.length,
-              reasoning: result.reasoning,
-              turnId: turn.id,
-            } as TableInsert<"auditLogs">["details"],
-          })
-          .execute()
+        await insertSessionThinkAuditLog({
+          workspaceId,
+          actorId,
+          sessionId,
+          trigger,
+          tokensUsed: result.tokensUsed,
+          actionsCount: result.actions.length,
+          reasoning: result.reasoning,
+          turnId: turn.id,
+        })
 
         await emitEvent({
           type: "actor.action",
@@ -1718,19 +1707,4 @@ export function startSessionThinkingWorker() {
 
   registerWorker(worker)
   return worker
-}
-
-async function getActorMaxSessions(actorId: string): Promise<number> {
-  const row = await db
-    .selectFrom("actors")
-    .select(
-      sql<number>`CASE
-        WHEN COALESCE(config->>'maxConcurrentSessions', '') ~ '^[0-9]+$'
-          THEN GREATEST((config->>'maxConcurrentSessions')::int, 1)
-        ELSE ${DEFAULT_MAX_CONCURRENT_SESSIONS}
-      END`.as("max_concurrent_sessions")
-    )
-    .where("id", "=", actorId)
-    .executeTakeFirst()
-  return row?.max_concurrent_sessions ?? DEFAULT_MAX_CONCURRENT_SESSIONS
 }
