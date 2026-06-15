@@ -1,6 +1,5 @@
 import {
   buildConversationMessageRef,
-  CHAT_MEMBERSHIP_UPDATE_REASON,
   CONVERSATION_ITEM_SCOPE,
   CONVERSATION_ITEM_SCOPES,
   CONVERSATION_ITEM_ROLE,
@@ -66,10 +65,7 @@ import {
   canonicalContentBlocksToDraftParts,
   itemPartsToCanonicalContentBlocks,
 } from "./message-content.js"
-import {
-  requireConversationAccess,
-  requireConversationManagement,
-} from "./conversation-access.js"
+import { requireConversationAccess } from "./conversation-access.js"
 import { ensureClientInstance } from "./client-instances.js"
 export {
   createChatClientInstance,
@@ -113,7 +109,6 @@ import {
   listConversationItemPartRows,
   listConversationItemRowsByIds,
   listConversationItemTargetRows,
-  listConversationParticipantStatesByWorkspaceMember,
   listConversationRealtimeRecipientRows,
   listConversationItemContextTargetRows,
   listTransportDeliveryRowsForItems,
@@ -178,6 +173,11 @@ import {
 export { loadParticipantById } from "./remove-participant.js"
 import { patchChatConversationUseCase } from "./patch-conversation.js"
 import { retryAssistantMessageUseCase } from "./retry-message.js"
+import {
+  addChatConversationParticipantsUseCase,
+  addConversationParticipantsUseCase,
+  type AddChatConversationParticipantsDeps,
+} from "./add-participants.js"
 import { enrichTaskForUser } from "../tasks/service.js"
 import {
   getConversationRuntimeMap,
@@ -1487,6 +1487,16 @@ async function loadRemoteAgentsByIds(
   return listRemoteAgentDisplayNameRows(queryable, workspaceId, remoteAgentIds)
 }
 
+function chatAddParticipantsDeps(): AddChatConversationParticipantsDeps {
+  return {
+    ensureConversationParticipant,
+    listConversationParticipants,
+    loadConversationView,
+    participantToSummary: participantRowToChatParticipantSummary,
+    syncConversationUpsert: syncConversationUpsertForWorkspaceMembers,
+  }
+}
+
 export async function getConversation(
   conversationId: string,
   queryable: Executor = rootQueryable()
@@ -1818,29 +1828,6 @@ export async function ensureConversationParticipant(params: {
   })
 }
 
-/**
- * Map each requested workspace_member_id to its CURRENT participant state in the
- * conversation ('active' | 'left' | 'removed'), or undefined if never a
- * participant. Used by addConversationParticipants to distinguish a true re-add
- * (prior 'removed'/'left' → emit membership.updated{active} to clear the client
- * tombstone) from a no-op (already 'active') or a first-time add.
- */
-async function loadParticipantStatesByMember(
-  queryable: Executor,
-  conversationId: string,
-  workspaceMemberIds: string[]
-): Promise<Map<string, string>> {
-  const rows = await listConversationParticipantStatesByWorkspaceMember(
-    queryable,
-    { conversationId, workspaceMemberIds }
-  )
-  const map = new Map<string, string>()
-  for (const row of rows) {
-    map.set(row.workspaceMemberId, row.state)
-  }
-  return map
-}
-
 export async function addConversationParticipants(params: {
   workspaceId: string
   conversationId: string
@@ -1849,165 +1836,7 @@ export async function addConversationParticipants(params: {
   remoteAgentIds?: string[]
   queryable?: Executor
 }) {
-  const executeAdd = async (queryable: Executor) => {
-    const workspaceMemberIds = [...new Set(params.workspaceMemberIds ?? [])]
-    const actorIds = [...new Set(params.actorIds ?? [])]
-    const remoteAgentIds = [...new Set(params.remoteAgentIds ?? [])]
-    // External participants are not addable through this public path; they are
-    // minted only by the IM ingest path
-    // (syncTransportAddressConversationParticipant).
-
-    if (workspaceMemberIds.length > 0) {
-      const memberRows = await loadWorkspaceMembersByIds(
-        queryable,
-        params.workspaceId,
-        workspaceMemberIds
-      )
-      if (memberRows.length !== workspaceMemberIds.length) {
-        throw createChatError(
-          400,
-          "invalid_workspace_member",
-          "One or more workspace members are invalid"
-        )
-      }
-
-      // Capture each requested member's PRIOR participation state (before the
-      // ensure reactivates them) so we can distinguish a true re-add (was
-      // removed/left) from a no-op (already active) or a brand-new add. A
-      // re-add must emit conversation.membership.updated{active} so the client
-      // clears its tombstone — a plain conversation.upsert would be rejected by
-      // the tombstone guard until then.
-      const priorStateByMember = await loadParticipantStatesByMember(
-        queryable,
-        params.conversationId,
-        workspaceMemberIds
-      )
-      // Pre-existing active members (before this add) — they need a roster
-      // refresh too, not just the newly-added members.
-      const preExistingRecipients = await listConversationRealtimeRecipients(
-        params.conversationId,
-        queryable
-      )
-
-      for (const member of memberRows) {
-        await ensureConversationParticipant({
-          conversationId: params.conversationId,
-          participantType: "workspace_member",
-          workspaceMemberId: member.id,
-          displayName: member.userName,
-          queryable,
-        })
-        await upsertConversationView(queryable, {
-          workspaceMemberId: member.id,
-          conversationId: params.conversationId,
-          unreadCount: 0,
-        })
-      }
-
-      // Refresh the roster for everyone now active (pre-existing ∪ added).
-      const upsertTargets = [
-        ...new Set([
-          ...preExistingRecipients.map((r) => r.workspaceMemberId),
-          ...workspaceMemberIds,
-        ]),
-      ]
-      await syncConversationUpsertForWorkspaceMembers(
-        queryable,
-        params.workspaceId,
-        upsertTargets,
-        params.conversationId
-      )
-
-      // Re-added members (prior state removed/left): clear their tombstone.
-      for (const memberId of workspaceMemberIds) {
-        const prior = priorStateByMember.get(memberId)
-        if (
-          prior === CONVERSATION_PARTICIPANT_STATE.REMOVED ||
-          prior === CONVERSATION_PARTICIPANT_STATE.LEFT
-        ) {
-          const activeParticipants = await listConversationParticipants(
-            params.conversationId,
-            { queryable }
-          )
-          await appendWorkspaceMemberSyncEvent(queryable, {
-            workspaceId: params.workspaceId,
-            workspaceMemberId: memberId,
-            conversationId: params.conversationId,
-            eventType: "conversation.membership.updated",
-            payload: {
-              conversationId: params.conversationId,
-              selfState: CONVERSATION_PARTICIPANT_STATE.ACTIVE,
-              reason: CHAT_MEMBERSHIP_UPDATE_REASON.ADDED,
-              participants: activeParticipants
-                .filter(
-                  (p) => p.state === CONVERSATION_PARTICIPANT_STATE.ACTIVE
-                )
-                .map(participantRowToChatParticipantSummary),
-            },
-          })
-        }
-      }
-    }
-
-    if (actorIds.length > 0) {
-      const actorRows = await loadActorsByIds(
-        queryable,
-        params.workspaceId,
-        actorIds
-      )
-      if (actorRows.length !== actorIds.length) {
-        throw createChatError(
-          400,
-          "invalid_actor",
-          "One or more actors are invalid"
-        )
-      }
-      for (const actor of actorRows) {
-        await ensureConversationParticipant({
-          conversationId: params.conversationId,
-          participantType: "actor",
-          actorId: actor.id,
-          displayName: actor.displayName ?? undefined,
-          queryable,
-        })
-      }
-    }
-
-    if (remoteAgentIds.length > 0) {
-      const remoteAgentRows = await loadRemoteAgentsByIds(
-        queryable,
-        params.workspaceId,
-        remoteAgentIds
-      )
-      if (remoteAgentRows.length !== remoteAgentIds.length) {
-        throw createChatError(
-          400,
-          "invalid_remote_agent",
-          "One or more remote agents are invalid"
-        )
-      }
-      for (const remoteAgent of remoteAgentRows) {
-        await ensureConversationParticipant({
-          conversationId: params.conversationId,
-          participantType: "remote_agent",
-          remoteAgentId: remoteAgent.id,
-          displayName: remoteAgent.displayName ?? undefined,
-          queryable,
-        })
-      }
-    }
-
-    // Note: the conversation.upsert roster refresh for member adds is emitted
-    // inside the workspaceMemberIds block above (union of pre-existing + added),
-    // so it is intentionally NOT repeated here.
-
-    return listConversationParticipants(params.conversationId, { queryable })
-  }
-
-  if (params.queryable) {
-    return executeAdd(params.queryable)
-  }
-  return withChatTransaction((client) => executeAdd(client))
+  return addConversationParticipantsUseCase(params, chatAddParticipantsDeps())
 }
 
 export async function createConversationItem(params: {
@@ -3554,48 +3383,17 @@ export async function addChatConversationParticipants(params: {
     params.workspaceId,
     params.userId
   )
-  return withChatTransaction(async (client) => {
-    await requireConversationManagement(
-      client,
-      params.conversationId,
-      identity.workspaceMemberId
-    )
-
-    await addConversationParticipants({
+  return addChatConversationParticipantsUseCase(
+    {
       workspaceId: params.workspaceId,
+      workspaceMemberId: identity.workspaceMemberId,
       conversationId: params.conversationId,
       workspaceMemberIds: params.workspaceMemberIds,
       actorIds: params.actorIds,
       remoteAgentIds: params.remoteAgentIds,
-      queryable: client,
-    })
-
-    const recipients = await listConversationRealtimeRecipients(
-      params.conversationId,
-      client
-    )
-    await syncConversationUpsertForWorkspaceMembers(
-      client,
-      params.workspaceId,
-      recipients.map((r) => r.workspaceMemberId),
-      params.conversationId
-    )
-
-    const conversation = await loadConversationView(
-      client,
-      params.workspaceId,
-      identity.workspaceMemberId,
-      params.conversationId
-    )
-    if (!conversation) {
-      throw createChatError(
-        404,
-        "conversation_not_found",
-        "Conversation not found"
-      )
-    }
-    return { conversation }
-  })
+    },
+    chatAddParticipantsDeps()
+  )
 }
 
 function chatParticipantRemovalDeps(): RemoveParticipantDeps {
