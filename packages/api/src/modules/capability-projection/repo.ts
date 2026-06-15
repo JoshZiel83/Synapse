@@ -19,40 +19,40 @@ import { upsertAccessSubject } from "../access/subject-registry.js"
 import { upsertAccessSubjectDefault } from "../access/guards.js"
 
 export interface DeviceCapabilityToolRow {
-  device_id: string
-  device_name: string
-  device_service_id: string
-  device_exposure_id: string
-  device_capability_id: string
-  device_tool_id: string
-  device_tool_revision_id: string
-  catalog_revision_id: string
+  deviceId: string
+  deviceName: string
+  deviceServiceId: string
+  deviceExposureId: string
+  deviceCapabilityId: string
+  deviceToolId: string
+  deviceToolRevisionId: string
+  catalogRevisionId: string
   transport: "builtin" | "stdio" | "http" | "sse" | "custom"
-  builtin_kind: "filesystem" | "commandline" | "browser" | "cua" | null
-  visible_tool_name: string
-  visible_description: string
-  input_schema: unknown
+  builtinKind: "filesystem" | "commandline" | "browser" | "cua" | null
+  visibleToolName: string
+  visibleDescription: string
+  inputSchema: unknown
   /** Per-capability mask override (NULL → fall back to workspace policy). */
-  capability_conversation_type_mask_override: number | null
+  capabilityConversationTypeMaskOverride: number | null
   /** Per-device mask override. */
-  device_conversation_type_mask_override: number | null
+  deviceConversationTypeMaskOverride: number | null
   /**
    * v3.1: exposure.stable_key (e.g. "builtin/browser/navigation") + the
    * provider-emitted metadata object. Used by browser preflight to detect
    * disabled exposures and to attach disabledReason to user-facing errors.
    */
-  exposure_stable_key: string
-  exposure_metadata: Record<string, unknown> | null
+  exposureStableKey: string
+  exposureMetadata: Record<string, unknown> | null
   /**
    * Raw devices.platform string ("win32", "darwin", "linux", or other).
    * Caller (capability-projection dispatch) passes this through
    * normalizeDevicePlatform before forwarding to the commandline matcher,
    * which uses it to apply Windows-specific guards (cwd unsupported in v1).
    */
-  device_platform: string | null
+  devicePlatform: string | null
   /** Raw devices.arch string (e.g. "x64", "arm64"). Combined with
    *  platform forms the bundles manifest's platformKey. */
-  device_arch: string | null
+  deviceArch: string | null
 }
 
 export interface LoadDeviceToolsParams {
@@ -82,9 +82,8 @@ export type CapabilityProjectionRuntimeContextDb = KyselyDb
 
 /**
  * Owns the distinctOn multi-join device-tool projection SELECT. Returns
- * the module's stable snake_case-aliased domain rows (the query aliases
- * columns to snake_case explicitly, so these are NOT raw CamelCasePlugin
- * TableRows). Keeps the exposure_metadata normalization map.
+ * the module's stable camelCase domain rows. Keeps the exposureMetadata
+ * normalization map at the repo exit.
  */
 export async function selectDeviceCapabilityToolsForSubjects(
   params: LoadDeviceToolsParams,
@@ -172,13 +171,32 @@ export async function selectDeviceCapabilityToolsForSubjects(
   }
   const rows = await query.orderBy("dt.id").execute()
   return rows.map((row) => ({
-    ...row,
-    exposure_metadata:
+    deviceId: row.device_id,
+    deviceName: row.device_name,
+    deviceServiceId: row.device_service_id,
+    deviceExposureId: row.device_exposure_id,
+    deviceCapabilityId: row.device_capability_id,
+    deviceToolId: row.device_tool_id,
+    deviceToolRevisionId: row.device_tool_revision_id,
+    catalogRevisionId: row.catalog_revision_id,
+    transport: row.transport,
+    builtinKind: row.builtin_kind,
+    visibleToolName: row.visible_tool_name,
+    visibleDescription: row.visible_description,
+    inputSchema: row.input_schema,
+    capabilityConversationTypeMaskOverride:
+      row.capability_conversation_type_mask_override,
+    deviceConversationTypeMaskOverride:
+      row.device_conversation_type_mask_override,
+    exposureStableKey: row.exposure_stable_key,
+    exposureMetadata:
       row.exposure_metadata &&
       typeof row.exposure_metadata === "object" &&
       !Array.isArray(row.exposure_metadata)
         ? (row.exposure_metadata as Record<string, unknown>)
         : null,
+    devicePlatform: row.device_platform,
+    deviceArch: row.device_arch,
   }))
 }
 
