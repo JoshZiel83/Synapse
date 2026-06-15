@@ -313,7 +313,7 @@ async function handleInboundTyping(
 
   try {
     const { broadcastTypingState } =
-      await import("../../modules/chat/service.js")
+      await import("../../modules/chat/typing.js")
     await broadcastTypingState({
       workspaceId: client.workspaceId,
       userId: client.userId,
