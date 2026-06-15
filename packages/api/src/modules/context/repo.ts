@@ -11,7 +11,7 @@
 // planner (buildArchiveFrames) is injected by the service so the strategy logic
 // stays out of the DB layer while the entire sequence remains atomic.
 //
-// Records keep Date columns (created_at) — the presenter (presentArchivePoint)
+// Records keep Date columns (createdAt) — the presenter (presentArchivePoint)
 // serializes for the wire. DB JSON columns are decoded by repo readers before
 // presenter shaping. round-6 P1-6.
 
@@ -53,13 +53,13 @@ export function normalizeArchivePointRow(
 ): ArchivePointRecord {
   return {
     id: row.id,
-    chain_scope: row.chain_scope,
-    conversation_id: row.conversation_id,
-    session_id: row.session_id,
-    parent_archive_point_id: row.parent_archive_point_id,
-    covers_until_sequence: row.covers_until_sequence,
+    chainScope: row.chain_scope,
+    conversationId: row.conversation_id,
+    sessionId: row.session_id,
+    parentArchivePointId: row.parent_archive_point_id,
+    coversUntilSequence: row.covers_until_sequence,
     metadata: parseJsonObject(row.metadata),
-    created_at: row.created_at,
+    createdAt: row.created_at,
   }
 }
 

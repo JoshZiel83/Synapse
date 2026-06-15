@@ -15,5 +15,11 @@ test("normalizeArchivePointRow decodes archive point metadata at repo exit", () 
     created_at: new Date("2026-01-01T00:00:00.000Z"),
   } satisfies ArchivePointRow)
 
+  assert.equal(row.chainScope, "shared")
+  assert.equal(row.conversationId, "conversation-1")
+  assert.equal(row.sessionId, null)
+  assert.equal(row.parentArchivePointId, null)
+  assert.equal(row.coversUntilSequence, "42")
   assert.deepEqual(row.metadata, { reason: "compaction" })
+  assert.equal(row.createdAt.toISOString(), "2026-01-01T00:00:00.000Z")
 })

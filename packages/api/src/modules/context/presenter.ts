@@ -6,19 +6,19 @@ import type {
 import { serializeInstant } from "../../infrastructure/datetime.js"
 
 /**
- * Structural shape of a context_archive_points row needed to present a
+ * Repo-normalized archive point record needed to present a
  * CanonicalArchivePoint. Kept structural (not a TableRow) so this presenter
- * stays free of generated/db imports.
+ * stays free of generated/db imports and DB column names.
  */
 export type ArchivePointRecord = {
   id: string
-  chain_scope: CanonicalArchiveChainScope
-  conversation_id: string
-  session_id: string | null
-  parent_archive_point_id: string | null
-  covers_until_sequence: number | string | null
+  chainScope: CanonicalArchiveChainScope
+  conversationId: string
+  sessionId: string | null
+  parentArchivePointId: string | null
+  coversUntilSequence: number | string | null
   metadata?: Record<string, unknown>
-  created_at: Date
+  createdAt: Date
 }
 
 /**
@@ -31,13 +31,13 @@ export function presentArchivePoint(
 ): CanonicalArchivePoint {
   return {
     archivePointId: record.id,
-    chainScope: record.chain_scope,
-    conversationId: record.conversation_id,
-    sessionId: record.session_id || undefined,
-    parentArchivePointId: record.parent_archive_point_id || undefined,
-    coversUntilSequence: Number(record.covers_until_sequence || 0),
+    chainScope: record.chainScope,
+    conversationId: record.conversationId,
+    sessionId: record.sessionId || undefined,
+    parentArchivePointId: record.parentArchivePointId || undefined,
+    coversUntilSequence: Number(record.coversUntilSequence || 0),
     frames,
     metadata: record.metadata,
-    createdAt: serializeInstant(record.created_at),
+    createdAt: serializeInstant(record.createdAt),
   }
 }
