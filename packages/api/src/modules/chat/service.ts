@@ -171,6 +171,8 @@ import {
   isConversationEventType,
   renderConversationEventTimelineBlocks,
 } from "./event-registry.js"
+import { createChatError } from "./errors.js"
+export { isChatServiceError, type ChatServiceError } from "./errors.js"
 import {
   recordDuplicateClientMessageIdSend,
   recordDuplicateWatermarkPost,
@@ -184,12 +186,6 @@ import {
   getConversationRuntimeMap,
   getSessionRuntimeTurnActivityDetail,
 } from "../session/runtime.js"
-
-export interface ChatServiceError extends Error {
-  code: string
-  statusCode: number
-  details?: Record<string, unknown>
-}
 
 type ConversationKind = (typeof CONVERSATION_KINDS)[number]
 type ParticipantKind = ConversationParticipantType
@@ -310,28 +306,6 @@ type ReadWatermarkInput = {
   clientInstanceId: string
   readUpToSequence: number
   lastVisibleSequence?: number
-}
-
-function createChatError(
-  statusCode: number,
-  code: string,
-  message: string,
-  details?: Record<string, unknown>
-): ChatServiceError {
-  const error = new Error(message) as ChatServiceError
-  error.statusCode = statusCode
-  error.code = code
-  error.details = details
-  return error
-}
-
-export function isChatServiceError(value: unknown): value is ChatServiceError {
-  return Boolean(
-    value &&
-    typeof value === "object" &&
-    "statusCode" in value &&
-    "code" in value
-  )
 }
 
 function toNumber(value: unknown): number {
