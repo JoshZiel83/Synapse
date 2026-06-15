@@ -82,12 +82,41 @@ type TaskResolvedMessage = {
   task: Record<string, unknown>
 }
 
+type AgentStopMessage = {
+  type: "agent:stop"
+  remoteAgentId: string
+}
+
 type ConnectedMessage = {
   type: "connected"
   machineId: string
   sessionId: string
   fencingToken?: string
 }
+
+type AuthErrorMessage = {
+  type: "auth_error"
+  message: string
+}
+
+type FencedMessage = {
+  type: "fenced"
+  reason?: string
+}
+
+type PongMessage = {
+  type: "pong"
+}
+
+type ServerMessage =
+  | ConnectedMessage
+  | AuthErrorMessage
+  | FencedMessage
+  | PongMessage
+  | AgentStartMessage
+  | AgentStopMessage
+  | DeliveryMessage
+  | TaskResolvedMessage
 
 type LogLevel = "error" | "warn" | "info" | "debug"
 
@@ -343,6 +372,140 @@ function runtimeCapabilitiesToWire(
   }
 }
 
+function parseServerMessage(raw: unknown): ServerMessage | null {
+  let json: unknown
+  try {
+    json = JSON.parse(String(raw))
+  } catch {
+    return null
+  }
+  if (!json || typeof json !== "object") {
+    return null
+  }
+  return serverMessageFromWire(json as Record<string, any>)
+}
+
+function serverMessageFromWire(
+  message: Record<string, any>
+): ServerMessage | null {
+  switch (message.type) {
+    case "connected":
+      if (
+        typeof message.machine_id !== "string" ||
+        typeof message.session_id !== "string"
+      ) {
+        return null
+      }
+      return {
+        type: "connected",
+        machineId: message.machine_id,
+        sessionId: message.session_id,
+        fencingToken:
+          typeof message.fencing_token === "string"
+            ? message.fencing_token
+            : undefined,
+      }
+    case "auth_error":
+      return {
+        type: "auth_error",
+        message:
+          typeof message.message === "string"
+            ? message.message
+            : "Authentication failed",
+      }
+    case "fenced":
+      return {
+        type: "fenced",
+        reason: typeof message.reason === "string" ? message.reason : undefined,
+      }
+    case "pong":
+      return { type: "pong" }
+    case "agent:start":
+      if (
+        typeof message.remote_agent_id !== "string" ||
+        typeof message.runtime_kind !== "string"
+      ) {
+        return null
+      }
+      return {
+        type: "agent:start",
+        remoteAgentId: message.remote_agent_id,
+        conversationId:
+          typeof message.conversation_id === "string"
+            ? message.conversation_id
+            : undefined,
+        runtimeKind: message.runtime_kind as RuntimeKind,
+        runtimePath:
+          typeof message.runtime_path === "string"
+            ? message.runtime_path
+            : undefined,
+        localRootPath:
+          typeof message.local_root_path === "string"
+            ? message.local_root_path
+            : undefined,
+        sessionId:
+          typeof message.session_id === "string" ? message.session_id : null,
+        fencingToken:
+          typeof message.fencing_token === "string"
+            ? message.fencing_token
+            : undefined,
+        serverUrl:
+          typeof message.server_url === "string"
+            ? message.server_url
+            : undefined,
+      }
+    case "agent:stop":
+      if (typeof message.remote_agent_id !== "string") {
+        return null
+      }
+      return {
+        type: "agent:stop",
+        remoteAgentId: message.remote_agent_id,
+      }
+    case "agent:deliver":
+      return {
+        type: "agent:deliver",
+        deliveries: Array.isArray(message.deliveries)
+          ? message.deliveries.flatMap((delivery) =>
+              delivery &&
+              typeof delivery === "object" &&
+              typeof delivery.remote_agent_id === "string" &&
+              typeof delivery.delivery_id === "string" &&
+              typeof delivery.conversation_id === "string" &&
+              typeof delivery.item_id === "string"
+                ? [
+                    {
+                      remoteAgentId: delivery.remote_agent_id,
+                      deliveryId: delivery.delivery_id,
+                      conversationId: delivery.conversation_id,
+                      itemId: delivery.item_id,
+                    },
+                  ]
+                : []
+            )
+          : [],
+      }
+    case "agent:task:resolved":
+      if (
+        typeof message.remote_agent_id !== "string" ||
+        typeof message.task_id !== "string" ||
+        !message.task ||
+        typeof message.task !== "object" ||
+        Array.isArray(message.task)
+      ) {
+        return null
+      }
+      return {
+        type: "agent:task:resolved",
+        remoteAgentId: message.remote_agent_id,
+        taskId: message.task_id,
+        task: message.task as Record<string, unknown>,
+      }
+    default:
+      return null
+  }
+}
+
 async function requestJson<T>(
   serverUrl: string,
   machineKey: string,
@@ -463,29 +626,36 @@ class DaemonSupervisor {
       })
 
       ws.on("message", async (raw) => {
-        let message: any
-        try {
-          message = JSON.parse(String(raw))
-        } catch {
+        const message = parseServerMessage(raw)
+        if (!message) {
           return
         }
 
         if (message?.type === "connected") {
-          const connected = message as ConnectedMessage
-          this.machineId = connected.machineId
+          this.machineId = message.machineId
           const runtimeCatalog = [
             (tryGetDriver("claude_code") ?? new ClaudeDriver()).detect(),
             (tryGetDriver("codex") ?? new CodexDriver()).detect(),
           ]
           log("info", "daemon", "Server accepted machine session", {
-            machineId: connected.machineId,
-            sessionId: connected.sessionId,
+            machineId: message.machineId,
+            sessionId: message.sessionId,
           })
           log("info", "daemon", "Runtime catalog detected", { runtimeCatalog })
           this.send({
             type: "ready",
             runtime_catalog: runtimeCatalog.map(runtimeCatalogEntryToWire),
           } satisfies RemoteAgentMachineReadyMessage)
+          return
+        }
+
+        if (message?.type === "auth_error") {
+          log("error", "daemon", "Server rejected machine session", {
+            message: message.message,
+          })
+          try {
+            ws.close(1008, message.message)
+          } catch {}
           return
         }
 
@@ -533,19 +703,15 @@ class DaemonSupervisor {
           return
         }
 
-        if (
-          message?.type === "agent:stop" &&
-          typeof message.remoteAgentId === "string"
-        ) {
+        if (message?.type === "agent:stop") {
           const agent = this.agents.get(message.remoteAgentId)
           if (agent) await agent.stopAll("server stop")
           return
         }
 
         if (message?.type === "agent:deliver") {
-          const deliver = message as DeliveryMessage
           const byAgent = new Map<string, Delivery[]>()
-          for (const delivery of deliver.deliveries ?? []) {
+          for (const delivery of message.deliveries ?? []) {
             const list = byAgent.get(delivery.remoteAgentId) ?? []
             list.push(delivery)
             byAgent.set(delivery.remoteAgentId, list)
@@ -558,9 +724,8 @@ class DaemonSupervisor {
         }
 
         if (message?.type === "agent:task:resolved") {
-          const resolved = message as TaskResolvedMessage
-          const agent = this.agents.get(resolved.remoteAgentId)
-          if (agent) await agent.resolveTask(resolved)
+          const agent = this.agents.get(message.remoteAgentId)
+          if (agent) await agent.resolveTask(message)
           return
         }
       })

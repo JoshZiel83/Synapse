@@ -518,6 +518,107 @@ export type RemoteAgentDaemonToApiWsMessage = z.infer<
   typeof RemoteAgentDaemonToApiWsMessageSchema
 >
 
+export const RemoteAgentApiConnectedMessageSchema = z.strictObject({
+  type: z.literal("connected"),
+  machine_id: z.string().min(1),
+  session_id: z.string().min(1),
+  fencing_token: z.string().optional(),
+})
+export type RemoteAgentApiConnectedMessage = z.infer<
+  typeof RemoteAgentApiConnectedMessageSchema
+>
+
+export const RemoteAgentApiAuthErrorMessageSchema = z.strictObject({
+  type: z.literal("auth_error"),
+  message: z.string().min(1),
+})
+export type RemoteAgentApiAuthErrorMessage = z.infer<
+  typeof RemoteAgentApiAuthErrorMessageSchema
+>
+
+export const RemoteAgentApiFencedMessageSchema = z.strictObject({
+  type: z.literal("fenced"),
+  reason: z.string().optional(),
+})
+export type RemoteAgentApiFencedMessage = z.infer<
+  typeof RemoteAgentApiFencedMessageSchema
+>
+
+export const RemoteAgentApiPongMessageSchema = z.strictObject({
+  type: z.literal("pong"),
+})
+export type RemoteAgentApiPongMessage = z.infer<
+  typeof RemoteAgentApiPongMessageSchema
+>
+
+export const RemoteAgentApiStartMessageSchema = z.strictObject({
+  type: z.literal("agent:start"),
+  remote_agent_id: z.string().min(1),
+  conversation_id: z.string().min(1).nullable().optional(),
+  runtime_kind: RemoteAgentRuntimeKindWireSchema,
+  runtime_path: z.string().nullable().optional(),
+  local_root_path: z.string().nullable().optional(),
+  session_id: z.string().nullable().optional(),
+  fencing_token: z.string().optional(),
+  server_url: z.string().optional(),
+})
+export type RemoteAgentApiStartMessage = z.infer<
+  typeof RemoteAgentApiStartMessageSchema
+>
+
+export const RemoteAgentApiStopMessageSchema = z.strictObject({
+  type: z.literal("agent:stop"),
+  remote_agent_id: z.string().min(1),
+})
+export type RemoteAgentApiStopMessage = z.infer<
+  typeof RemoteAgentApiStopMessageSchema
+>
+
+export const RemoteAgentApiDeliveryWireSchema = z.strictObject({
+  remote_agent_id: z.string().min(1),
+  delivery_id: z.string().min(1),
+  conversation_id: z.string().min(1),
+  item_id: z.string().min(1),
+})
+export type RemoteAgentApiDeliveryWire = z.infer<
+  typeof RemoteAgentApiDeliveryWireSchema
+>
+
+export const RemoteAgentApiDeliverMessageSchema = z.strictObject({
+  type: z.literal("agent:deliver"),
+  deliveries: z.array(RemoteAgentApiDeliveryWireSchema),
+})
+export type RemoteAgentApiDeliverMessage = z.infer<
+  typeof RemoteAgentApiDeliverMessageSchema
+>
+
+export const RemoteAgentApiTaskResolvedMessageSchema = z.strictObject({
+  type: z.literal("agent:task:resolved"),
+  remote_agent_id: z.string().min(1),
+  task_id: z.string().min(1),
+  task: z.record(z.string(), z.unknown()),
+})
+export type RemoteAgentApiTaskResolvedMessage = z.infer<
+  typeof RemoteAgentApiTaskResolvedMessageSchema
+>
+
+export const RemoteAgentApiToDaemonWsMessageSchema = z.discriminatedUnion(
+  "type",
+  [
+    RemoteAgentApiConnectedMessageSchema,
+    RemoteAgentApiAuthErrorMessageSchema,
+    RemoteAgentApiFencedMessageSchema,
+    RemoteAgentApiPongMessageSchema,
+    RemoteAgentApiStartMessageSchema,
+    RemoteAgentApiStopMessageSchema,
+    RemoteAgentApiDeliverMessageSchema,
+    RemoteAgentApiTaskResolvedMessageSchema,
+  ]
+)
+export type RemoteAgentApiToDaemonWsMessage = z.infer<
+  typeof RemoteAgentApiToDaemonWsMessageSchema
+>
+
 // ───────────────────────────── Control Plane messages (§7.1) ────────────────
 
 // JSON-RPC 2.0 framing.

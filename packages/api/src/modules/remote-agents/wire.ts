@@ -1,9 +1,13 @@
 import type {
+  RemoteAgentApiToDaemonWsMessage,
   RemoteAgentDaemonToApiWsMessage,
   RemoteAgentRuntimeCapabilityWire,
   RemoteAgentRuntimeCatalogEntryWire,
 } from "@synapse/device-protocol"
-import { RemoteAgentDaemonToApiWsMessageSchema } from "@synapse/device-protocol"
+import {
+  RemoteAgentApiToDaemonWsMessageSchema,
+  RemoteAgentDaemonToApiWsMessageSchema,
+} from "@synapse/device-protocol"
 import type {
   RemoteAgentRuntimeCatalogStatus,
   RemoteAgentRuntimeKind,
@@ -47,6 +51,44 @@ export type RemoteAgentMachineMessage =
       capabilities?: RemoteAgentRuntimeCapabilityRecord
     }
 
+export type RemoteAgentApiToDaemonMessage =
+  | {
+      type: "connected"
+      machineId: string
+      sessionId: string
+      fencingToken?: string
+    }
+  | { type: "auth_error"; message: string }
+  | { type: "fenced"; reason?: string }
+  | { type: "pong" }
+  | {
+      type: "agent:start"
+      remoteAgentId: string
+      conversationId?: string | null
+      runtimeKind: RemoteAgentRuntimeKind
+      runtimePath?: string | null
+      localRootPath?: string | null
+      sessionId?: string | null
+      fencingToken?: string
+      serverUrl?: string
+    }
+  | { type: "agent:stop"; remoteAgentId: string }
+  | {
+      type: "agent:deliver"
+      deliveries: Array<{
+        remoteAgentId: string
+        deliveryId: string
+        conversationId: string
+        itemId: string
+      }>
+    }
+  | {
+      type: "agent:task:resolved"
+      remoteAgentId: string
+      taskId: string
+      task: Record<string, unknown>
+    }
+
 export function parseRemoteAgentMachineMessage(
   raw: unknown
 ): RemoteAgentMachineMessage | null {
@@ -62,6 +104,14 @@ export function parseRemoteAgentMachineMessage(
     return null
   }
   return fromWireMessage(parsed.data)
+}
+
+export function serializeRemoteAgentApiToDaemonMessage(
+  message: RemoteAgentApiToDaemonMessage
+) {
+  return JSON.stringify(
+    RemoteAgentApiToDaemonWsMessageSchema.parse(toWireApiMessage(message))
+  )
 }
 
 function fromWireMessage(
@@ -102,6 +152,66 @@ function fromWireMessage(
         capabilities: message.capabilities
           ? fromWireCapabilities(message.capabilities)
           : undefined,
+      }
+  }
+}
+
+function toWireApiMessage(
+  message: RemoteAgentApiToDaemonMessage
+): RemoteAgentApiToDaemonWsMessage {
+  switch (message.type) {
+    case "connected":
+      return {
+        type: "connected",
+        machine_id: message.machineId,
+        session_id: message.sessionId,
+        fencing_token: message.fencingToken,
+      }
+    case "auth_error":
+      return {
+        type: "auth_error",
+        message: message.message,
+      }
+    case "fenced":
+      return {
+        type: "fenced",
+        reason: message.reason,
+      }
+    case "pong":
+      return { type: "pong" }
+    case "agent:start":
+      return {
+        type: "agent:start",
+        remote_agent_id: message.remoteAgentId,
+        conversation_id: message.conversationId,
+        runtime_kind: message.runtimeKind,
+        runtime_path: message.runtimePath,
+        local_root_path: message.localRootPath,
+        session_id: message.sessionId,
+        fencing_token: message.fencingToken,
+        server_url: message.serverUrl,
+      }
+    case "agent:stop":
+      return {
+        type: "agent:stop",
+        remote_agent_id: message.remoteAgentId,
+      }
+    case "agent:deliver":
+      return {
+        type: "agent:deliver",
+        deliveries: message.deliveries.map((delivery) => ({
+          remote_agent_id: delivery.remoteAgentId,
+          delivery_id: delivery.deliveryId,
+          conversation_id: delivery.conversationId,
+          item_id: delivery.itemId,
+        })),
+      }
+    case "agent:task:resolved":
+      return {
+        type: "agent:task:resolved",
+        remote_agent_id: message.remoteAgentId,
+        task_id: message.taskId,
+        task: message.task,
       }
   }
 }

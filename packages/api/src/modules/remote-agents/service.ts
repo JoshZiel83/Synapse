@@ -36,6 +36,8 @@ import { requireWorkspaceMemberIdentity } from "../chat/workspace-identity.js"
 import * as repo from "./repo.js"
 import {
   parseRemoteAgentMachineMessage,
+  serializeRemoteAgentApiToDaemonMessage,
+  type RemoteAgentApiToDaemonMessage,
   type RemoteAgentMachineMessage,
   type RemoteAgentRuntimeCatalogRecord,
 } from "./wire.js"
@@ -81,12 +83,15 @@ function buildDaemonOneClick(apiKey: string): OneClickInstallCommands | null {
   })
 }
 
-function safeSend(connection: MachineConnection, payload: unknown) {
+function safeSend(
+  connection: MachineConnection,
+  payload: RemoteAgentApiToDaemonMessage
+) {
   if (!connection.ready || connection.socket.readyState !== 1) {
     return false
   }
   try {
-    connection.socket.send(JSON.stringify(payload))
+    connection.socket.send(serializeRemoteAgentApiToDaemonMessage(payload))
     return true
   } catch {
     return false
@@ -260,7 +265,7 @@ async function replayResolvedRemoteAgentTasks(params: {
       type: "agent:task:resolved",
       remoteAgentId: row.remoteAgentId,
       taskId: row.activeTaskId,
-      task,
+      task: task as unknown as Record<string, unknown>,
     })
   }
 }
@@ -1362,7 +1367,7 @@ export async function notifyRemoteAgentTaskResolved(taskId: string) {
     type: "agent:task:resolved",
     remoteAgentId: task.requester.remoteAgentId,
     taskId,
-    task,
+    task: task as unknown as Record<string, unknown>,
   })
 }
 
@@ -1425,7 +1430,7 @@ export async function handleRemoteAgentDaemonConnection(
   ) {
     try {
       socket.send(
-        JSON.stringify({
+        serializeRemoteAgentApiToDaemonMessage({
           type: "auth_error",
           message: "Invalid machine key",
         })
@@ -1441,7 +1446,7 @@ export async function handleRemoteAgentDaemonConnection(
   if (existing) {
     try {
       existing.socket.send(
-        JSON.stringify({
+        serializeRemoteAgentApiToDaemonMessage({
           type: "fenced",
           reason: "superseded by newer daemon connection",
         })
@@ -1479,7 +1484,7 @@ export async function handleRemoteAgentDaemonConnection(
 
   try {
     socket.send(
-      JSON.stringify({
+      serializeRemoteAgentApiToDaemonMessage({
         type: "connected",
         machineId: machine.id,
         sessionId,
@@ -1508,7 +1513,7 @@ export async function handleRemoteAgentDaemonConnection(
     if (message?.type === "heartbeat") {
       await repo.heartbeatMachineSessionRepo(sessionId)
       try {
-        socket.send(JSON.stringify({ type: "pong" }))
+        socket.send(serializeRemoteAgentApiToDaemonMessage({ type: "pong" }))
       } catch {}
       return
     }

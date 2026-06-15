@@ -1,6 +1,9 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { parseRemoteAgentMachineMessage } from "./wire.js"
+import {
+  parseRemoteAgentMachineMessage,
+  serializeRemoteAgentApiToDaemonMessage,
+} from "./wire.js"
 
 test("parseRemoteAgentMachineMessage maps snake_case ready catalog to internal camelCase", () => {
   const message = parseRemoteAgentMachineMessage(
@@ -91,4 +94,72 @@ test("parseRemoteAgentMachineMessage rejects legacy camelCase machine messages",
 
 test("parseRemoteAgentMachineMessage ignores invalid JSON", () => {
   assert.equal(parseRemoteAgentMachineMessage("{not-json"), null)
+})
+
+test("serializeRemoteAgentApiToDaemonMessage emits snake_case start frames", () => {
+  const serialized = serializeRemoteAgentApiToDaemonMessage({
+    type: "agent:start",
+    remoteAgentId: "agent-1",
+    conversationId: "conversation-1",
+    runtimeKind: "codex",
+    runtimePath: "/usr/bin/codex",
+    localRootPath: "/repo",
+    sessionId: "session-1",
+    fencingToken: "fence-1",
+    serverUrl: "https://synapse.example.com",
+  })
+
+  assert.deepEqual(JSON.parse(serialized), {
+    type: "agent:start",
+    remote_agent_id: "agent-1",
+    conversation_id: "conversation-1",
+    runtime_kind: "codex",
+    runtime_path: "/usr/bin/codex",
+    local_root_path: "/repo",
+    session_id: "session-1",
+    fencing_token: "fence-1",
+    server_url: "https://synapse.example.com",
+  })
+})
+
+test("serializeRemoteAgentApiToDaemonMessage emits snake_case connected frame", () => {
+  const serialized = serializeRemoteAgentApiToDaemonMessage({
+    type: "connected",
+    machineId: "machine-1",
+    sessionId: "session-1",
+    fencingToken: "fence-1",
+  })
+
+  assert.deepEqual(JSON.parse(serialized), {
+    type: "connected",
+    machine_id: "machine-1",
+    session_id: "session-1",
+    fencing_token: "fence-1",
+  })
+})
+
+test("serializeRemoteAgentApiToDaemonMessage emits snake_case deliveries", () => {
+  const serialized = serializeRemoteAgentApiToDaemonMessage({
+    type: "agent:deliver",
+    deliveries: [
+      {
+        remoteAgentId: "agent-1",
+        deliveryId: "delivery-1",
+        conversationId: "conversation-1",
+        itemId: "item-1",
+      },
+    ],
+  })
+
+  assert.deepEqual(JSON.parse(serialized), {
+    type: "agent:deliver",
+    deliveries: [
+      {
+        remote_agent_id: "agent-1",
+        delivery_id: "delivery-1",
+        conversation_id: "conversation-1",
+        item_id: "item-1",
+      },
+    ],
+  })
 })
