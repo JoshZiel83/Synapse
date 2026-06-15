@@ -28,7 +28,7 @@ import {
   type UUID,
   type WorkspaceAppGrantPermission,
 } from "@synapse/shared"
-import { createConversationEvent } from "../chat/service.js"
+import { createConversationEvent } from "../chat/event-write.js"
 import { presentActorPackageRecord, presentActorRow } from "./presenter.js"
 import { sanitizeSpecialties, sortDocs } from "./doc-codec.js"
 import type {

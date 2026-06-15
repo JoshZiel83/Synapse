@@ -17,7 +17,7 @@ import {
   type ActorUpdateSourceInput,
 } from "../organization/service.js"
 import { getSession } from "../session/service.js"
-import { createConversationEvent } from "../chat/service.js"
+import { createConversationEvent } from "../chat/event-write.js"
 import { listConversationParticipantsUseCase as listConversationParticipants } from "../chat/participant-roster.js"
 
 const ACTOR_MEMORY_PRESETS = new Set<MemoryPreset>([
