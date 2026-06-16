@@ -1,7 +1,10 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 
-import { __buildImToolsForTest } from "./mcp-endpoint.js"
+import {
+  __buildImToolsForTest,
+  readMcpToolContentBlocks,
+} from "./mcp-endpoint.js"
 
 const REMOTE_AGENT_ID = "00000000-0000-4000-8000-000000000020"
 const CONVERSATION_ID = "00000000-0000-4000-8000-000000000021"
@@ -69,4 +72,13 @@ test("reverse-MCP list_conversations keeps a strict empty input schema", () => {
   assert.equal(tool.inputSchema.additionalProperties, false)
   assert.equal(tool.zodSchema!.safeParse({}).success, true)
   assert.equal(tool.zodSchema!.safeParse({ limit: 1 }).success, false)
+})
+
+test("readMcpToolContentBlocks accepts only object content arrays", () => {
+  const textContent = [{ type: "text", text: "ok" }]
+  assert.equal(readMcpToolContentBlocks(undefined), null)
+  assert.equal(readMcpToolContentBlocks({ type: "text", text: "bad" }), null)
+  assert.equal(readMcpToolContentBlocks(["bad"]), null)
+  assert.equal(readMcpToolContentBlocks([null]), null)
+  assert.deepEqual(readMcpToolContentBlocks(textContent), textContent)
 })

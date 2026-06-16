@@ -109,6 +109,18 @@ function zodToJsonSchema(schema: z.ZodType): Record<string, unknown> {
   return z.toJSONSchema(schema) as Record<string, unknown>
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value)
+}
+
+export function readMcpToolContentBlocks(
+  content: unknown
+): Array<Record<string, unknown>> | null {
+  if (!Array.isArray(content)) return null
+  if (!content.every(isRecord)) return null
+  return content
+}
+
 // PR #14: surface a [device:<name>] / [plugin:<name>] / [skill:<name>]
 // origin badge in the tool description so reverse-MCP callers can attribute
 // results back to the source. Reads the structured ToolRef (Layer A).
@@ -328,15 +340,14 @@ async function buildResolvedTools(params: {
       inputSchema,
       handler: async (input) => {
         const output = await resolved.executor(toolId, input ?? {})
+        const content = readMcpToolContentBlocks(output.content)
         return {
-          content: Array.isArray(output.content)
-            ? (output.content as unknown as Array<Record<string, unknown>>)
-            : [
-                {
-                  type: "text" as const,
-                  text: JSON.stringify(output, null, 2),
-                },
-              ],
+          content: content ?? [
+            {
+              type: "text" as const,
+              text: JSON.stringify(output, null, 2),
+            },
+          ],
           isError: output.isError ?? undefined,
         }
       },
@@ -564,7 +575,7 @@ export async function handleRemoteAgentMcpRequest(
     if (sessionId) {
       return reply.code(404).send({ error: "Unknown MCP session id" })
     }
-    if (!isInitializeRequest((request as any).body)) {
+    if (!isInitializeRequest(request.body)) {
       return reply
         .code(400)
         .send({ error: "First request must be an MCP initialize" })
@@ -582,11 +593,7 @@ export async function handleRemoteAgentMcpRequest(
 
   reply.hijack()
   try {
-    await active.transport.handleRequest(
-      request.raw,
-      reply.raw,
-      (request as any).body
-    )
+    await active.transport.handleRequest(request.raw, reply.raw, request.body)
   } catch (error) {
     if (!reply.raw.headersSent) {
       try {
