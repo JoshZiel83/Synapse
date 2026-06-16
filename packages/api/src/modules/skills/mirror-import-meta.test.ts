@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import {
   parseClawhubMirrorMetaJson,
   parseGitHubApiJsonObjectText,
-} from "./mirror-import.js"
+} from "./mirror-import-codec.js"
 
 test("parseClawhubMirrorMetaJson accepts archive metadata", () => {
   assert.deepEqual(
