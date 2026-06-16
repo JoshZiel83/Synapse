@@ -12,6 +12,10 @@ import type { Kysely } from "kysely"
 import { withTestDb, withTestDbAndClient } from "../../test/helpers/db.js"
 import { upsertAccessSubjectOn } from "../access/subject-registry.js"
 import { addConversationParticipantsUseCase } from "./add-participants.js"
+import {
+  ensureConversationParticipantUseCase,
+  listConversationParticipantsUseCase,
+} from "./participant-roster.js"
 import type { ChatParticipantRow } from "./repo.js"
 
 type AnyDb = Kysely<any>
@@ -114,6 +118,31 @@ async function seedReaddFixture(db: AnyDb) {
     conversationId: conversation.id as string,
     readdParticipantId: readdParticipant.id as string,
   }
+}
+
+async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
+  const actorId = randomUUID()
+  await db
+    .insertInto("workspaceApps")
+    .values({
+      id: actorId,
+      workspaceId,
+      kind: "actor",
+      displayName: "add participant actor",
+      status: "active",
+    } as never)
+    .execute()
+  const row = await db
+    .insertInto("actors")
+    .values({
+      id: actorId,
+      role: "assistant",
+      title: "add participant actor",
+      currentVersion: 1,
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return row.id as string
 }
 
 test("addConversationParticipantsUseCase re-adds removed member and emits active membership event", async () => {
@@ -285,3 +314,61 @@ test(
     })
   }
 )
+
+test("addConversationParticipantsUseCase actor-only add avoids member sync side effects", async () => {
+  await withTestDb(async (db) => {
+    const fixture = await seedReaddFixture(db as unknown as AnyDb)
+    const actorId = await insertActor(
+      db as unknown as AnyDb,
+      fixture.workspaceId
+    )
+    let syncCalls = 0
+
+    const participants = await addConversationParticipantsUseCase(
+      {
+        workspaceId: fixture.workspaceId,
+        conversationId: fixture.conversationId,
+        actorIds: [actorId],
+        queryable: db as unknown as AnyDb,
+      },
+      {
+        ensureConversationParticipant: ensureConversationParticipantUseCase,
+        listConversationParticipants: listConversationParticipantsUseCase,
+        participantToSummary: () => {
+          throw new Error("membership summary should not run")
+        },
+        syncConversationUpsert: async () => {
+          syncCalls += 1
+          throw new Error("member sync should not run")
+        },
+      }
+    )
+
+    assert.equal(syncCalls, 0)
+    const actorParticipant = participants.find(
+      (participant) => participant.actorId === actorId
+    )
+    assert.equal(
+      actorParticipant?.participantType,
+      CONVERSATION_PARTICIPANT_TYPE.ACTOR
+    )
+    assert.equal(actorParticipant?.state, CONVERSATION_PARTICIPANT_STATE.ACTIVE)
+
+    const views = await (db as unknown as AnyDb)
+      .selectFrom("workspaceMemberConversationViews")
+      .select("workspaceMemberId")
+      .where("conversationId", "=", fixture.conversationId)
+      .execute()
+    assert.deepEqual(
+      views.map((view) => view.workspaceMemberId),
+      [fixture.ownerMemberId]
+    )
+
+    const events = await (db as unknown as AnyDb)
+      .selectFrom("workspaceMemberSyncEvents")
+      .select("eventType")
+      .where("conversationId", "=", fixture.conversationId)
+      .execute()
+    assert.deepEqual(events, [])
+  })
+})
