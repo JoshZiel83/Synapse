@@ -234,9 +234,9 @@ function stableJsonStringify(value: unknown): string {
   if (Array.isArray(value)) {
     return `[${value.map((entry) => stableJsonStringify(entry)).join(",")}]`
   }
-  if (typeof value === "object") {
-    const entries = Object.entries(value as Record<string, unknown>).sort(
-      ([left], [right]) => left.localeCompare(right)
+  if (isJsonObjectRecord(value)) {
+    const entries = Object.entries(value).sort(([left], [right]) =>
+      left.localeCompare(right)
     )
     return `{${entries
       .map(
@@ -245,6 +245,10 @@ function stableJsonStringify(value: unknown): string {
       .join(",")}}`
   }
   return JSON.stringify(value)
+}
+
+function isJsonObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
 }
 
 /**
