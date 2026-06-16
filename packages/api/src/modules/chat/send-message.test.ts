@@ -112,6 +112,48 @@ test("sendChatConversationMessageUseCase sends inside transaction and runs side 
   ])
 })
 
+test("sendChatConversationMessageUseCase does not run side effects when transaction send fails", async () => {
+  const transactionClient = {} as Executor
+  const conversationId = randomUUID()
+  const item = chatItem({ conversationId })
+  const participantId = randomUUID()
+  const calls: string[] = []
+  const failingDeps = deps({
+    item,
+    calls,
+    transactionClient,
+    participantId,
+  })
+  failingDeps.sendConversationMessageFromParticipant = async (input) => {
+    calls.push(`send:${input.queryable === transactionClient}`)
+    throw new Error("send failed")
+  }
+
+  await assert.rejects(
+    () =>
+      sendChatConversationMessageUseCase(
+        {
+          workspaceId: randomUUID(),
+          workspaceMemberId: randomUUID(),
+          conversationId,
+          clientInstanceId: randomUUID(),
+          clientMessageId: randomUUID(),
+          contentBlocks: [{ id: randomUUID(), type: "text", text: "hello" }],
+          metadata: { source: "test" },
+        },
+        failingDeps
+      ),
+    /send failed/
+  )
+
+  assert.deepEqual(calls, [
+    "tx:start",
+    "access:true",
+    "client:true",
+    "send:true",
+  ])
+})
+
 test("sendChatConversationMessageUseCase rejects empty content blocks", async () => {
   const item = chatItem()
 
