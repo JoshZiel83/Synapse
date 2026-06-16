@@ -29,6 +29,8 @@
 
 import type { Redis } from "ioredis"
 import { nowIsoInstant } from "@synapse/shared/datetime"
+import { IsoInstantStringSchema } from "@synapse/shared/schemas"
+import { z } from "zod"
 import { parseInstantString } from "../../../../infrastructure/datetime.js"
 import type {
   QqAnchorKind,
@@ -60,6 +62,16 @@ export interface QqReservation {
 export type ReserveResult =
   | { ok: true; reservation: QqReservation; replayed: boolean }
   | { ok: false; reason: "quota_exhausted" | "no_anchor" }
+
+const qqReservationSchema = z
+  .object({
+    anchorKind: z.enum(["msg_id", "event_id"]),
+    anchorId: z.string().min(1),
+    msgSeq: z.number().int().positive(),
+    reservedAt: IsoInstantStringSchema,
+    expiresAt: z.number().int().positive(),
+  })
+  .strict()
 
 const RESERVE_LUA = `
 local reservationKey = KEYS[1]
@@ -98,6 +110,16 @@ function quotaKey(params: {
   anchorId: string
 }): string {
   return `im:qq:reply-quota:${params.accountId}:${params.endpointType}:${params.endpointExternalId}:${params.anchorKind}:${params.anchorId}`
+}
+
+function parseReservationPayload(raw: string | null): QqReservation | null {
+  if (!raw) return null
+  try {
+    const parsed = qqReservationSchema.safeParse(JSON.parse(raw))
+    return parsed.success ? parsed.data : null
+  } catch {
+    return null
+  }
 }
 
 export async function reserveFirstSend(
@@ -165,7 +187,10 @@ export async function reserveFirstSend(
   if (flag === 0) {
     return { ok: false, reason: payload as "quota_exhausted" | "no_anchor" }
   }
-  const reservation = JSON.parse(payload) as QqReservation
+  const reservation = parseReservationPayload(payload)
+  if (!reservation) {
+    return { ok: false, reason: "no_anchor" }
+  }
   return { ok: true, reservation, replayed: flag === 1 }
 }
 
@@ -174,12 +199,7 @@ export async function getReservation(
   linkId: string
 ): Promise<QqReservation | null> {
   const raw = await redis.get(reservationKey(linkId))
-  if (!raw) return null
-  try {
-    return JSON.parse(raw) as QqReservation
-  } catch {
-    return null
-  }
+  return parseReservationPayload(raw)
 }
 
 /** Test-only: clear a single reservation. Not exported through index.ts. */

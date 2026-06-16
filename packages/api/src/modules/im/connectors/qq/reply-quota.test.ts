@@ -2,6 +2,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { assertIsoInstant } from "@synapse/shared/datetime"
 import {
+  getReservation,
   QQ_C2C_REPLY_WINDOW_SECONDS,
   QQ_GROUP_REPLY_WINDOW_SECONDS,
   reserveFirstSend,
@@ -67,6 +68,12 @@ class FakeRedis {
       expiresAt: Date.now() + quotaTtl * 1000,
     })
     return [2, reservation]
+  }
+  setReservationRaw(linkId: string, value: string): void {
+    this.store.set(`im:qq:reply-reservation:${linkId}`, {
+      value,
+      expiresAt: Date.now() + 60_000,
+    })
   }
 }
 
@@ -181,4 +188,59 @@ test("reserveFirstSend: same linkId hits the existing-reservation early-return (
     assert.equal(first.reservation.msgSeq, second.reservation.msgSeq)
     assert.equal(second.replayed, true)
   }
+})
+
+test("getReservation: malformed or drifted Redis payload returns null", async () => {
+  const fakeRedis = new FakeRedis()
+  const redis = fakeRedis as unknown as import("ioredis").Redis
+
+  fakeRedis.setReservationRaw("link-malformed", "{not-json")
+  assert.equal(await getReservation(redis, "link-malformed"), null)
+
+  fakeRedis.setReservationRaw(
+    "link-drifted",
+    JSON.stringify({
+      anchorKind: "msg_id",
+      anchorId: "MSG-1",
+      msgSeq: "1",
+      reservedAt: assertIsoInstant(new Date().toISOString()),
+      expiresAt: Date.now() + 60_000,
+    })
+  )
+  assert.equal(await getReservation(redis, "link-drifted"), null)
+})
+
+test("reserveFirstSend: corrupt existing reservation fails closed", async () => {
+  const fakeRedis = new FakeRedis()
+  const redis = fakeRedis as unknown as import("ioredis").Redis
+  const anchor = makeAnchor()
+
+  const first = await reserveFirstSend(redis, {
+    linkId: "link-corrupt",
+    accountId: "acc",
+    endpointType: "direct",
+    endpointExternalId: "c2c:U1",
+    anchor,
+  })
+  assert.ok(first.ok)
+
+  fakeRedis.setReservationRaw(
+    "link-corrupt",
+    JSON.stringify({
+      anchorKind: "msg_id",
+      anchorId: "MSG-1",
+      msgSeq: 1,
+      reservedAt: "not-an-instant",
+      expiresAt: Date.now() + 60_000,
+    })
+  )
+
+  const replay = await reserveFirstSend(redis, {
+    linkId: "link-corrupt",
+    accountId: "acc",
+    endpointType: "direct",
+    endpointExternalId: "c2c:U1",
+    anchor,
+  })
+  assert.deepEqual(replay, { ok: false, reason: "no_anchor" })
 })
