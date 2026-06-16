@@ -8,7 +8,7 @@
 // Keyed by the presentation stableKey = `${exposure_stable_key}/${visible_tool_name}`
 // = `builtin/filesystem/<tool name>` (NOT the tool's own `stable_key`).
 
-import type { ToolPresentationDescriptor } from "@synapse/device-protocol/tool-presentation"
+import type { ToolPresentationDescriptor } from "@synapse/shared/tool-presentation"
 
 const EXPOSURE = "builtin/filesystem"
 const k = (name: string) => `${EXPOSURE}/${name}`

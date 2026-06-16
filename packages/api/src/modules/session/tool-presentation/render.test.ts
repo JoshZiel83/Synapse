@@ -9,7 +9,7 @@
 
 import test from "node:test"
 import assert from "node:assert/strict"
-import type { ToolPresentationDescriptor } from "@synapse/device-protocol/tool-presentation"
+import type { ToolPresentationDescriptor } from "@synapse/shared/tool-presentation"
 import {
   genericDescriptor,
   renderToolRequest,

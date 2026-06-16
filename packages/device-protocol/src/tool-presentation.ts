@@ -2,8 +2,13 @@
 // tool ships so the UI can render a friendly title/detail/result instead of a
 // raw tool name + JSON dump.
 //
-// Lives in @synapse/device-protocol (the base package with no @synapse deps) so
-// every layer can import the TYPES without a circular dependency:
+// Legacy compatibility subpath. The in-repo owner is now
+// @synapse/shared/tool-presentation; keep this structural mirror so external or
+// older imports do not break while current API/runtime/shared paths use shared.
+//
+// This file originally lived in @synapse/device-protocol (the base package with
+// no @synapse deps) so every layer could import the TYPES without a circular
+// dependency:
 //   - device-runtime builtin *.presentation.ts files declare descriptor VALUES,
 //   - the API renderer evaluates them,
 //   - @synapse/shared re-exports the tiny FE-facing `PresentationString` so the

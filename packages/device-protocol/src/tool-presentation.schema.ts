@@ -1,4 +1,7 @@
-// Zod schema mirror of the tool-presentation descriptor types.
+// Legacy Zod schema mirror of the tool-presentation descriptor types.
+//
+// The in-repo owner is now @synapse/shared/tool-presentation; keep this
+// compatibility subpath for older imports.
 //
 // Used to VALIDATE descriptors that arrive from an untrusted/external source —
 // chiefly an external MCP plugin's catalog `tool_manifest.synapse.presentation`.

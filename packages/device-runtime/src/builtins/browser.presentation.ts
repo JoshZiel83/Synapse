@@ -2,7 +2,7 @@
 // PURE DATA — see filesystem.presentation.ts for the layering rules.
 // stableKey = `builtin/browser/<tool name>`.
 
-import type { ToolPresentationDescriptor } from "@synapse/device-protocol/tool-presentation"
+import type { ToolPresentationDescriptor } from "@synapse/shared/tool-presentation"
 
 const EXPOSURE = "builtin/browser"
 const k = (name: string) => `${EXPOSURE}/${name}`

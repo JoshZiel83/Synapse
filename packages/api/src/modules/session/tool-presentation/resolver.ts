@@ -13,8 +13,10 @@
 // Returns a descriptor (never throws); a missing/soft-deleted source degrades to
 // the generic descriptor so historical rows render stably.
 
-import type { ToolPresentationDescriptor } from "@synapse/device-protocol/tool-presentation"
-import { parseToolPresentation } from "@synapse/device-protocol/tool-presentation/schema"
+import {
+  parseToolPresentation,
+  type ToolPresentationDescriptor,
+} from "@synapse/shared/tool-presentation"
 import { BUILTIN_PRESENTATION } from "@synapse/device-runtime/builtin-presentation"
 import { parseJsonObjectOrUndefined } from "@synapse/shared"
 import { getToolPlugin } from "../../ai/tool-plugins.js"

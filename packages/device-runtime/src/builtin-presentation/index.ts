@@ -4,13 +4,13 @@
 // by the presentation stableKey (`${exposure_stable_key}/${visible_tool_name}`).
 //
 // PURE DATA — this module imports ONLY the per-builtin *.presentation.ts files
-// (each of which imports only the descriptor TYPE from @synapse/device-protocol).
+// (each of which imports only the descriptor TYPE from @synapse/shared).
 // It deliberately does NOT import any runtime builtin (filesystem.ts, etc.), so
 // the API can import this leaf without pulling in VFS / terminal / sidecar /
 // tunnel / semver. The dependency-purity test in
 // builtin-presentation.test.ts enforces this.
 
-import type { ToolPresentationDescriptor } from "@synapse/device-protocol/tool-presentation"
+import type { ToolPresentationDescriptor } from "@synapse/shared/tool-presentation"
 import { FILESYSTEM_PRESENTATION } from "../builtins/filesystem.presentation.js"
 import { COMMANDLINE_PRESENTATION } from "../builtins/commandline.presentation.js"
 import { BROWSER_PRESENTATION } from "../builtins/browser.presentation.js"
