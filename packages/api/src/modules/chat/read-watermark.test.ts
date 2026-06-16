@@ -276,3 +276,132 @@ test(
     })
   }
 )
+
+test(
+  "read-watermark coordinator rolls back and skips fanout when sync event append fails",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDbAndClient(async ({ db, client }) => {
+      const fixture = await seedReadWatermarkFixture(db as unknown as AnyDb)
+      await (db as unknown as AnyDb)
+        .updateTable("workspaceMemberConversationViews")
+        .set({ unreadCount: 7 })
+        .where("workspaceMemberId", "=", fixture.workspaceMemberId)
+        .where("conversationId", "=", fixture.conversationId)
+        .execute()
+
+      await client.query(`
+        CREATE OR REPLACE FUNCTION fail_read_watermark_sync_event_for_test()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $$
+        BEGIN
+          IF NEW.event_type = 'conversation.read.updated' THEN
+            RAISE EXCEPTION 'sync append failed';
+          END IF;
+          RETURN NEW;
+        END;
+        $$;
+      `)
+      await client.query(`
+        CREATE TRIGGER fail_read_watermark_sync_event_for_test
+        BEFORE INSERT ON workspace_member_sync_events
+        FOR EACH ROW EXECUTE FUNCTION fail_read_watermark_sync_event_for_test();
+      `)
+
+      const syncCalls: Array<{
+        workspaceId: string
+        workspaceMemberIds: string[]
+        conversationId: string
+      }> = []
+      const syncConversationUpsert: SyncConversationUpsert = async (
+        _queryable,
+        workspaceId,
+        workspaceMemberIds,
+        conversationId
+      ) => {
+        syncCalls.push({ workspaceId, workspaceMemberIds, conversationId })
+      }
+      const transactionLike = new Proxy(db as unknown as object, {
+        get(target, prop, receiver) {
+          if (prop === "isTransaction") return true
+          const value = Reflect.get(target, prop, receiver)
+          return typeof value === "function" ? value.bind(target) : value
+        },
+      }) as DatabaseTransaction
+      const withTransaction = async <T>(
+        fn: (trx: DatabaseTransaction) => Promise<T>
+      ) => {
+        await client.query("SAVEPOINT read_watermark_sync_event_rollback")
+        try {
+          const result = await fn(transactionLike)
+          await client.query(
+            "RELEASE SAVEPOINT read_watermark_sync_event_rollback"
+          )
+          return result
+        } catch (error) {
+          await client.query(
+            "ROLLBACK TO SAVEPOINT read_watermark_sync_event_rollback"
+          )
+          throw error
+        }
+      }
+
+      try {
+        await assert.rejects(
+          updateChatConversationReadWatermarkUseCase(
+            {
+              ...fixture,
+              readUpToSequence: 0,
+              lastVisibleSequence: 0,
+            },
+            { syncConversationUpsert, withTransaction }
+          ),
+          /sync append failed/
+        )
+      } finally {
+        await client.query(`
+          DROP TRIGGER IF EXISTS fail_read_watermark_sync_event_for_test
+          ON workspace_member_sync_events;
+        `)
+        await client.query(`
+          DROP FUNCTION IF EXISTS fail_read_watermark_sync_event_for_test();
+        `)
+      }
+
+      assert.deepEqual(syncCalls, [])
+
+      const readState = await (db as unknown as AnyDb)
+        .selectFrom("conversationParticipantStates")
+        .select(["readWatermarkSequence", "lastReadAt"])
+        .where("conversationId", "=", fixture.conversationId)
+        .where("participantId", "=", fixture.participantId)
+        .executeTakeFirstOrThrow()
+      assert.equal(Number(readState.readWatermarkSequence), 0)
+      assert.equal(readState.lastReadAt, null)
+
+      const deviceStates = await (db as unknown as AnyDb)
+        .selectFrom("conversationDeviceStates")
+        .select("clientInstanceId")
+        .where("conversationId", "=", fixture.conversationId)
+        .where("clientInstanceId", "=", fixture.clientInstanceId)
+        .execute()
+      assert.deepEqual(deviceStates, [])
+
+      const view = await (db as unknown as AnyDb)
+        .selectFrom("workspaceMemberConversationViews")
+        .select("unreadCount")
+        .where("workspaceMemberId", "=", fixture.workspaceMemberId)
+        .where("conversationId", "=", fixture.conversationId)
+        .executeTakeFirstOrThrow()
+      assert.equal(Number(view.unreadCount), 7)
+
+      const events = await (db as unknown as AnyDb)
+        .selectFrom("workspaceMemberSyncEvents")
+        .select("eventType")
+        .where("workspaceMemberId", "=", fixture.workspaceMemberId)
+        .execute()
+      assert.deepEqual(events, [])
+    })
+  }
+)
