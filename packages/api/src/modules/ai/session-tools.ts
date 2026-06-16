@@ -154,6 +154,7 @@ const sendToInputSchema = z.strictObject({
 const currentTimeInputSchema = z.strictObject({
   timeZone: z.string().trim().min(1).max(100).optional(),
 })
+const selfEventSubscriptionMatcherSchema = z.record(z.string(), z.unknown())
 
 function getToolContextConversationId(ctx: ToolResolveContext) {
   return ctx.conversationId
@@ -196,6 +197,32 @@ function normalizeRawSendToInput(input: Record<string, unknown>) {
 
 function formatUtcTimestamp(date: Date) {
   return `${dateToIsoInstant(date).slice(0, 19).replace("T", " ")} UTC`
+}
+
+export function parseSelfEventSubscriptionMatcherInput(
+  value: unknown
+): Record<string, unknown> | undefined {
+  const matcherInput = typeof value === "string" ? value.trim() : ""
+  if (!matcherInput) {
+    return undefined
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(matcherInput)
+  } catch {
+    throwToolError("matcher must be valid JSON")
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throwToolError("matcher must be a JSON object string")
+  }
+
+  const result = selfEventSubscriptionMatcherSchema.safeParse(parsed)
+  if (!result.success) {
+    throwToolError("matcher must be a JSON object string")
+  }
+  return result.data
 }
 
 async function requireCurrentAutomationParticipant(params: {
@@ -3120,10 +3147,6 @@ export function registerCallableToolPlugins(): void {
 
       const name = String((input as any).name || "").trim()
       const eventSourceId = String((input as any).eventSourceId || "").trim()
-      const matcherInput =
-        typeof (input as any).matcher === "string"
-          ? String((input as any).matcher).trim()
-          : ""
       const message = String((input as any).message || "").trim()
       const wakeReason =
         typeof (input as any).wakeReason === "string"
@@ -3143,18 +3166,9 @@ export function registerCallableToolPlugins(): void {
         throwToolError("name, eventSourceId, and message are required")
       }
 
-      let matcher: Record<string, unknown> | undefined
-      if (matcherInput) {
-        try {
-          const parsed = JSON.parse(matcherInput) as unknown
-          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-            throwToolError("matcher must be a JSON object string")
-          }
-          matcher = parsed as Record<string, unknown>
-        } catch {
-          throwToolError("matcher must be valid JSON")
-        }
-      }
+      const matcher = parseSelfEventSubscriptionMatcherInput(
+        (input as any).matcher
+      )
 
       try {
         const rule = await createAutomationRule(
