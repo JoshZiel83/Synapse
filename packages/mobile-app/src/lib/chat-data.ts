@@ -16,17 +16,19 @@ import {
   CONVERSATION_KIND,
   CONVERSATION_MESSAGE_SUBTYPE,
   CONVERSATION_PARTICIPANT_TYPE,
-  extractText,
-  summarizeConversationEvent,
-  type CanonicalContentBlock,
-  type ChatConversationItem,
-  type ChatConversationView,
-  type ConversationEntityRef,
-  type ConversationReplyRef,
-  type ChatParticipantSummary,
-  type PendingConversationRead,
-  type PendingOutboxMessage,
-  type Timestamp,
+} from "@shared/constants"
+import { extractText } from "@shared/content"
+import { summarizeConversationEvent } from "@shared/conversation"
+import type {
+  CanonicalContentBlock,
+  ChatConversationItem,
+  ChatConversationView,
+  ConversationEntityRef,
+  ConversationReplyRef,
+  ChatParticipantSummary,
+  PendingConversationRead,
+  PendingOutboxMessage,
+  Timestamp,
 } from "@shared"
 
 // Re-exported under the historical names used across the mobile codebase; the
