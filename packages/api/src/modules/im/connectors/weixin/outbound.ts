@@ -91,7 +91,11 @@ export async function sendWeixinMessage(
   // shapes like { ret, errcode, msg_id?, msg?: { message_id?, items?: [...] } }
   // depending on version. Fall back to the client_id we sent so the row
   // still has a stable key for dedupe.
-  const externalMessageId = parseWeixinSendResponseText(text)?.externalMessageId
+  const parsed = parseWeixinSendResponseText(text)
+  if (!parsed) {
+    throw new Error("Weixin send returned invalid provider response")
+  }
+  const externalMessageId = parsed.externalMessageId
   return {
     externalMessageId: externalMessageId || clientId,
     raw: text,
