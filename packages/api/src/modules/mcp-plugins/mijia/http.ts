@@ -1,4 +1,5 @@
 import { parseJsonObject } from "@synapse/shared"
+import { z } from "zod"
 import type { JsonObject } from "./types.js"
 
 export class MijiaTimeoutError extends Error {
@@ -66,6 +67,8 @@ export const asObject = parseJsonObject
 export function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : []
 }
+
+const MijiaPrefixedJsonSchema = z.object({}).passthrough()
 
 export async function fetchWithTimeout(
   input: string | URL,
@@ -153,5 +156,18 @@ export async function fetchWithCookies(
 
 export function parsePrefixedJson(text: string) {
   const normalized = text.replace(/^&&&START&&&/, "")
-  return JSON.parse(normalized) as JsonObject
+  let value: unknown
+  try {
+    value = JSON.parse(normalized)
+  } catch (error) {
+    throw new Error(
+      `Mijia response is invalid JSON: ${(error as Error).message}`
+    )
+  }
+
+  const parsed = MijiaPrefixedJsonSchema.safeParse(value)
+  if (!parsed.success) {
+    throw new Error("Mijia response JSON must be an object")
+  }
+  return parsed.data as JsonObject
 }
