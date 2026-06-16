@@ -37,6 +37,10 @@ import { getCachedFileInfo, setCachedFileInfo } from "./upload-cache.js"
 import { redis } from "../../../../infrastructure/redis/index.js"
 import { PermanentTransportError, RetryableTransportError } from "../types.js"
 import type { TransportAccountSummary } from "@synapse/shared/types"
+import {
+  extractQqProviderBizCode,
+  parseQqUploadSuccessResponse,
+} from "./response-codec.js"
 
 export interface UploadSource {
   /** Either a URL the platform can pull, or in-memory bytes. */
@@ -154,11 +158,8 @@ export async function uploadQqMedia(
       { code: code ? `qq_${code}` : `qq_http_${res.status}` }
     )
   }
-  const json = (await safeJson(res)) as {
-    file_info?: string
-    file_uuid?: string
-  } | null
-  if (!json?.file_info) {
+  const json = parseQqUploadSuccessResponse(await safeJson(res))
+  if (!json) {
     throw new PermanentTransportError("qq upload returned no file_info", {
       code: "qq_missing_file_info",
     })
@@ -169,9 +170,9 @@ export async function uploadQqMedia(
     targetId: opts.targetId,
     fileType: opts.fileType,
     md5,
-    fileInfo: json.file_info,
+    fileInfo: json.fileInfo,
   })
-  return { fileInfo: json.file_info, fileUuid: json.file_uuid, cached: false }
+  return { fileInfo: json.fileInfo, fileUuid: json.fileUuid, cached: false }
 }
 
 /**
@@ -217,13 +218,5 @@ async function safeJson(res: Response): Promise<unknown> {
 }
 
 function extractBizCode(text: string): number | undefined {
-  if (!text) return undefined
-  try {
-    const parsed = JSON.parse(text) as { code?: number; err_code?: number }
-    if (typeof parsed.code === "number") return parsed.code
-    if (typeof parsed.err_code === "number") return parsed.err_code
-  } catch {
-    // ignore
-  }
-  return undefined
+  return extractQqProviderBizCode(text)
 }
