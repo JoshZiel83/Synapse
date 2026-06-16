@@ -313,6 +313,109 @@ test(
 )
 
 test(
+  "removeChatConversationParticipantUseCase rolls back participant state when remaining-member sync fails",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDbAndClient(async ({ db, client }) => {
+      const ownerUserId = await insertUser(db)
+      const targetUserId = await insertUser(db)
+      const workspaceId = await insertWorkspace(db, ownerUserId)
+      const ownerMemberId = await insertWorkspaceMember(
+        db,
+        workspaceId,
+        ownerUserId
+      )
+      const targetMemberId = await insertWorkspaceMember(
+        db,
+        workspaceId,
+        targetUserId
+      )
+      const conversationId = await insertConversation(db, workspaceId)
+      const ownerParticipantId = await insertConversationParticipant(
+        db,
+        conversationId,
+        "workspace_member",
+        ownerMemberId,
+        "active",
+        "owner"
+      )
+      await insertConversationParticipant(
+        db,
+        conversationId,
+        "workspace_member",
+        targetMemberId
+      )
+      const ownerParticipant = await loadParticipantById(
+        db,
+        conversationId,
+        ownerParticipantId
+      )
+      assert.ok(ownerParticipant)
+
+      await assert.rejects(
+        () =>
+          removeChatConversationParticipantUseCase(
+            {
+              workspaceId,
+              workspaceMemberId: ownerMemberId,
+              conversationId,
+              participantId: ownerParticipantId,
+            },
+            {
+              createRemovalConversationEvent: async () => {},
+              listConversationParticipants: async () => {
+                throw new Error("tombstone should not run after sync failure")
+              },
+              listConversationRealtimeRecipients: async () => [
+                { workspaceMemberId: targetMemberId },
+              ],
+              participantToSummary: () => {
+                throw new Error("unexpected participant summary mapping")
+              },
+              syncConversationUpsert: async () => {
+                throw new Error("sync failed")
+              },
+              requireConversationAccess: async () => ({
+                participant: ownerParticipant,
+              }),
+              withTransaction: async (fn) => {
+                await client.query("SAVEPOINT remove_participant_rollback")
+                try {
+                  const result = await fn(db as unknown as DatabaseTransaction)
+                  await client.query(
+                    "RELEASE SAVEPOINT remove_participant_rollback"
+                  )
+                  return result
+                } catch (error) {
+                  await client.query(
+                    "ROLLBACK TO SAVEPOINT remove_participant_rollback"
+                  )
+                  throw error
+                }
+              },
+            }
+          ),
+        /sync failed/
+      )
+
+      const targetAfter = await loadParticipantById(
+        db,
+        conversationId,
+        ownerParticipantId
+      )
+      assert.equal(targetAfter?.state, "active")
+
+      const events = await db
+        .selectFrom("workspaceMemberSyncEvents")
+        .select(["eventType"])
+        .where("workspaceMemberId", "=", ownerMemberId)
+        .execute()
+      assert.deepEqual(events, [])
+    })
+  }
+)
+
+test(
   "leaveChatConversationUseCase resolves the caller participant before removal",
   { timeout: 5 * 60_000 },
   async () => {
