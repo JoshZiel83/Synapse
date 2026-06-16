@@ -67,6 +67,38 @@ test("CanonicalContentBlockSchema parses each canonical block kind", () => {
   assert.equal(mention.type, "mention")
 })
 
+test("CanonicalContentBlockSchema keeps mention as an open object record", () => {
+  const parsed = CanonicalContentBlockSchema.parse({
+    type: "mention",
+    mention: {
+      participantType: "workspace_member",
+      transportMetadata: { provider: "test" },
+    },
+  })
+  if (parsed.type !== "mention") {
+    assert.fail("expected mention block")
+  }
+  assert.deepEqual(parsed.mention, {
+    participantType: "workspace_member",
+    transportMetadata: { provider: "test" },
+  })
+
+  assert.equal(
+    CanonicalContentBlockSchema.safeParse({
+      type: "mention",
+      mention: ["not", "a", "record"],
+    }).success,
+    false
+  )
+  assert.equal(
+    CanonicalContentBlockSchema.safeParse({
+      type: "mention",
+      mention: "not-a-record",
+    }).success,
+    false
+  )
+})
+
 test("CanonicalContentBlockSchema rejects unknown types", () => {
   const result = CanonicalContentBlockSchema.safeParse({
     type: "weird",

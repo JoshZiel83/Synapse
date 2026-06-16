@@ -1,5 +1,9 @@
 import { z } from "zod"
 import { CANONICAL_FILE_CATEGORIES } from "../constants/enums.js"
+import type {
+  CanonicalContentBlockInput,
+  ConversationEntityRef,
+} from "../types/index.js"
 
 /**
  * Canonical chat content-block zod schemas.
@@ -13,12 +17,15 @@ import { CANONICAL_FILE_CATEGORIES } from "../constants/enums.js"
  * Notes:
  * - `id` is optional on input: clients may omit it and let the server
  *   mint one; persisted form (CanonicalContentBlock) always has it.
- * - `mention.mention` is intentionally a loose `record(z.any())` here
+ * - `mention.mention` is intentionally a loose `record(z.unknown())` here
  *   because ConversationEntityRef carries free-form transport metadata
  *   the server resolves later — tightening it would force callers to
  *   ship internal IDs they shouldn't have to.
  */
 const blockIdSchema = z.uuid().optional()
+const looseConversationEntityRefSchema = z
+  .record(z.string(), z.unknown())
+  .transform((value) => value as unknown as ConversationEntityRef)
 
 export const canonicalTextBlockSchema = z.object({
   id: blockIdSchema,
@@ -42,14 +49,14 @@ export const canonicalFileRefBlockSchema = z.object({
 export const canonicalMentionBlockSchema = z.object({
   id: blockIdSchema,
   type: z.literal("mention"),
-  mention: z.record(z.string(), z.any()),
+  mention: looseConversationEntityRefSchema,
 })
 
 export const CanonicalContentBlockSchema = z.discriminatedUnion("type", [
   canonicalTextBlockSchema,
   canonicalFileRefBlockSchema,
   canonicalMentionBlockSchema,
-])
+]) as z.ZodType<CanonicalContentBlockInput>
 
 export type CanonicalContentBlockParsed = z.infer<
   typeof CanonicalContentBlockSchema
