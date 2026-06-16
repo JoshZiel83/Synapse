@@ -3,6 +3,7 @@ import {
   CONVERSATION_PARTICIPANT_STATE,
   CONVERSATION_PARTICIPANT_TYPE,
 } from "@synapse/shared"
+import type { Executor } from "../../infrastructure/database/kysely.js"
 import { createConversationEvent } from "./event-write.js"
 import {
   ensureConversationParticipantUseCase as ensureConversationParticipant,
@@ -21,6 +22,7 @@ type ParticipantInitiator = {
 async function resolveInitiator(params: {
   conversationId: string
   initiator?: ParticipantInitiator
+  queryable?: Executor
 }) {
   if (!params.initiator) {
     return undefined
@@ -33,6 +35,7 @@ async function resolveInitiator(params: {
     workspaceMemberId: params.initiator.workspaceMemberId,
     actorId: params.initiator.actorId,
     remoteAgentId: params.initiator.remoteAgentId,
+    queryable: params.queryable,
   })
   if (!participant) {
     return params.initiator
@@ -84,6 +87,7 @@ export async function activateConversationParticipant(params: {
   transportAddressId?: string
   initiator?: ParticipantInitiator
   recordJoinEvent?: boolean
+  queryable?: Executor
 }) {
   const existing = await getConversationParticipant({
     conversationId: params.conversationId,
@@ -94,6 +98,7 @@ export async function activateConversationParticipant(params: {
     // by their transport address. Without this an existing external participant
     // is never found, so every IM inbound would re-fire participant_joined.
     transportAddressId: params.transportAddressId,
+    queryable: params.queryable,
   })
   const activated =
     !existing || existing.state !== CONVERSATION_PARTICIPANT_STATE.ACTIVE
@@ -112,6 +117,7 @@ export async function activateConversationParticipant(params: {
     actorJoinVersionId: params.actorJoinVersionId,
     metadata: params.metadata,
     transportAddressId: params.transportAddressId,
+    queryable: params.queryable,
   })
 
   if (!member) {
@@ -122,6 +128,7 @@ export async function activateConversationParticipant(params: {
     const initiator = await resolveInitiator({
       conversationId: params.conversationId,
       initiator: params.initiator,
+      queryable: params.queryable,
     })
     const { name, title } = await loadParticipantDisplay({
       participantType: params.participantType,
@@ -164,6 +171,7 @@ export async function activateConversationParticipant(params: {
             }
           : undefined,
       },
+      queryable: params.queryable,
     })
   }
 

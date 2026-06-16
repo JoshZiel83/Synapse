@@ -11,6 +11,7 @@
  */
 
 import type { TransportKind } from "@synapse/shared/types"
+import type { Executor } from "../../../infrastructure/database/kysely.js"
 import { activateConversationParticipant } from "../../chat/participant-activation.js"
 import {
   detachParticipantAddress,
@@ -26,12 +27,66 @@ import {
   selectReachableTransportAddressForParticipant,
   selectTransportAddressByExternalId,
   selectTransportAddressById,
+  runImServiceTransaction,
   updateConversationParticipantToLeft,
   updateTransportAddressLinkedMember,
   updateTransportAddressMetadataJsonb,
   updateTransportEndpointMetadataJsonb,
   upsertConversationParticipantAddress,
 } from "./repo.js"
+
+type TransportAddressRecord = NonNullable<
+  Awaited<ReturnType<typeof selectTransportAddressById>>
+>
+
+type ActivatedConversationParticipant = Awaited<
+  ReturnType<typeof activateConversationParticipant>
+>["member"]
+
+type SyncTransportAddressConversationParticipantDeps = {
+  getTransportAddressById: (
+    transportAddressId: string,
+    queryable: Executor
+  ) => Promise<TransportAddressRecord | undefined>
+  selectConversationTransportBindingForAddressSync: (
+    conversationId: string,
+    queryable: Executor
+  ) => Promise<{ workspaceId: string; transportAccountId: string } | undefined>
+  activateConversationParticipant: typeof activateConversationParticipant
+  ensureConversationParticipantTransportAddress: (params: {
+    conversationParticipantId: string
+    transportAddressId: string
+    isPrimary?: boolean
+    metadata?: Record<string, unknown>
+    queryable: Executor
+  }) => Promise<unknown>
+  selectAttachedParticipantsForAddress: (params: {
+    conversationId: string
+    transportAddressId: string
+    excludeParticipantId: string
+    queryable: Executor
+  }) => Promise<{ id: string }[]>
+  detachParticipantAddress: (params: {
+    conversationParticipantId: string
+    transportAddressId: string
+    queryable: Executor
+  }) => Promise<void>
+  archiveConversationParticipantIfOrphaned: (
+    conversationParticipantId: string,
+    queryable: Executor
+  ) => Promise<void>
+}
+
+const syncTransportAddressConversationParticipantDeps: SyncTransportAddressConversationParticipantDeps =
+  {
+    getTransportAddressById,
+    selectConversationTransportBindingForAddressSync,
+    activateConversationParticipant,
+    ensureConversationParticipantTransportAddress,
+    selectAttachedParticipantsForAddress,
+    detachParticipantAddress,
+    archiveConversationParticipantIfOrphaned,
+  }
 
 export async function ensureTransportAddress(params: {
   workspaceId: string
@@ -54,8 +109,11 @@ export async function getTransportAddressByExternalId(params: {
   return selectTransportAddressByExternalId(params)
 }
 
-export async function getTransportAddressById(transportAddressId: string) {
-  return selectTransportAddressById(transportAddressId)
+export async function getTransportAddressById(
+  transportAddressId: string,
+  queryable?: Executor
+) {
+  return selectTransportAddressById(transportAddressId, queryable)
 }
 
 export async function getPrimaryTransportAddressForParticipant(params: {
@@ -78,10 +136,12 @@ export async function getReachableTransportAddressForParticipant(params: {
  * the state='left' write live in the repo; the decision stays here.
  */
 async function archiveConversationParticipantIfOrphaned(
-  conversationParticipantId: string
+  conversationParticipantId: string,
+  queryable?: Executor
 ) {
   const row = await selectConversationParticipantOrphanState(
-    conversationParticipantId
+    conversationParticipantId,
+    queryable
   )
   if (!row) return
   if (
@@ -92,7 +152,10 @@ async function archiveConversationParticipantIfOrphaned(
     return
   }
 
-  await updateConversationParticipantToLeft(conversationParticipantId)
+  await updateConversationParticipantToLeft(
+    conversationParticipantId,
+    queryable
+  )
 }
 
 export async function syncTransportAddressConversationParticipant(params: {
@@ -102,21 +165,41 @@ export async function syncTransportAddressConversationParticipant(params: {
   displayName?: string
   recordJoinEvent?: boolean
 }) {
-  const address = await getTransportAddressById(params.transportAddressId)
+  return runImServiceTransaction((queryable) =>
+    syncTransportAddressConversationParticipantUseCase(
+      params,
+      queryable,
+      syncTransportAddressConversationParticipantDeps
+    )
+  )
+}
+
+export async function syncTransportAddressConversationParticipantUseCase(
+  params: {
+    conversationId: string
+    transportAddressId: string
+    workspaceMemberId?: string | null
+    displayName?: string
+    recordJoinEvent?: boolean
+  },
+  queryable: Executor,
+  deps: SyncTransportAddressConversationParticipantDeps
+): Promise<ActivatedConversationParticipant> {
+  const address = await deps.getTransportAddressById(
+    params.transportAddressId,
+    queryable
+  )
   if (!address) {
     throw new Error("Transport external user not found")
   }
 
-  // Preflight (RF3): the DB triggers (tg_conversation_participant_validate /
-  // tg_participant_address_consistency) are the hard backstop, but they fire
-  // mid-write — a rejection AFTER we have already activated the participant (and
-  // possibly cleared an existing primary address) would leave a half-applied
-  // state, since this helper is not wrapped in a single transaction. Validate
-  // the binding + account + workspace up front so a mismatch throws before any
-  // write. participant addresses are IM-only: the conversation MUST be bound,
-  // and the address MUST belong to the binding's account in the same workspace.
-  const binding = await selectConversationTransportBindingForAddressSync(
-    params.conversationId
+  // The DB triggers remain the hard backstop. The service preflight keeps
+  // validation errors deterministic, while the transaction below keeps the
+  // later participant activation, address attach, detach, and archive writes
+  // atomic if a trigger or helper rejects mid-flight.
+  const binding = await deps.selectConversationTransportBindingForAddressSync(
+    params.conversationId,
+    queryable
   )
   if (!binding) {
     throw new Error(
@@ -161,12 +244,13 @@ export async function syncTransportAddressConversationParticipant(params: {
           )
         }
         return (
-          await activateConversationParticipant({
+          await deps.activateConversationParticipant({
             workspaceId: address.workspaceId,
             conversationId: params.conversationId,
             participantType: "workspace_member",
             workspaceMemberId: linkedMemberId,
             recordJoinEvent: params.recordJoinEvent,
+            queryable,
           })
         ).member
       })()
@@ -180,7 +264,7 @@ export async function syncTransportAddressConversationParticipant(params: {
           )
         }
         return (
-          await activateConversationParticipant({
+          await deps.activateConversationParticipant({
             workspaceId: address.workspaceId,
             conversationId: params.conversationId,
             participantType: "external",
@@ -195,28 +279,32 @@ export async function syncTransportAddressConversationParticipant(params: {
             // First-class external subject is keyed by this transport address.
             transportAddressId: address.id,
             recordJoinEvent: params.recordJoinEvent,
+            queryable,
           })
         ).member
       })()
 
-  await ensureConversationParticipantTransportAddress({
+  await deps.ensureConversationParticipantTransportAddress({
     conversationParticipantId: desiredMember.id,
     transportAddressId: address.id,
     isPrimary: true,
+    queryable,
   })
 
-  const attachedMembers = await selectAttachedParticipantsForAddress({
+  const attachedMembers = await deps.selectAttachedParticipantsForAddress({
     conversationId: params.conversationId,
     transportAddressId: address.id,
     excludeParticipantId: desiredMember.id,
+    queryable,
   })
 
   for (const row of attachedMembers) {
-    await detachParticipantAddress({
+    await deps.detachParticipantAddress({
       conversationParticipantId: row.id,
       transportAddressId: address.id,
+      queryable,
     })
-    await archiveConversationParticipantIfOrphaned(row.id)
+    await deps.archiveConversationParticipantIfOrphaned(row.id, queryable)
   }
 
   return desiredMember
@@ -317,6 +405,7 @@ export async function ensureConversationParticipantTransportAddress(params: {
   transportAddressId: string
   isPrimary?: boolean
   metadata?: Record<string, unknown>
+  queryable?: Executor
 }) {
   return upsertConversationParticipantAddress(params)
 }

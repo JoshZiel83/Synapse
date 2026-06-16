@@ -1122,8 +1122,11 @@ export async function selectTransportAddressByExternalId(params: {
   return row ? normalizeTransportAddressRow(row) : undefined
 }
 
-export async function selectTransportAddressById(transportAddressId: string) {
-  const row = await db
+export async function selectTransportAddressById(
+  transportAddressId: string,
+  queryable: Executor = db
+) {
+  const row = await queryable
     .selectFrom("transportAddresses")
     .selectAll()
     .where("id", "=", transportAddressId)
@@ -1208,9 +1211,10 @@ export async function selectReachableTransportAddressForParticipant(params: {
 export async function detachParticipantAddress(params: {
   conversationParticipantId: string
   transportAddressId: string
+  queryable?: Executor
 }): Promise<void> {
   await sql`SELECT sd_detach_participant_address(${params.conversationParticipantId}::uuid, ${params.transportAddressId}::uuid)`.execute(
-    db
+    params.queryable ?? db
   )
 }
 
@@ -1221,12 +1225,13 @@ export async function detachParticipantAddress(params: {
  * in the service.
  */
 export async function selectConversationParticipantOrphanState(
-  conversationParticipantId: string
+  conversationParticipantId: string,
+  queryable: Executor = db
 ): Promise<
   | { subjectKind: string | null; state: string; hasAddresses: boolean }
   | undefined
 > {
-  const row = await db
+  const row = await queryable
     .selectFrom("conversationParticipants as cm")
     .leftJoin("accessSubjects as cmsubj", "cmsubj.id", "cm.subjectId")
     .select([
@@ -1254,9 +1259,10 @@ export async function selectConversationParticipantOrphanState(
  * stamping `leftAt` + a `retiredByTransportLink` metadata marker.
  */
 export async function updateConversationParticipantToLeft(
-  conversationParticipantId: string
+  conversationParticipantId: string,
+  queryable: Executor = db
 ): Promise<void> {
-  await db
+  await queryable
     .updateTable("conversationParticipants")
     .set({
       state: "left",
@@ -1273,9 +1279,10 @@ export async function updateConversationParticipantToLeft(
  * before any write.
  */
 export async function selectConversationTransportBindingForAddressSync(
-  conversationId: string
+  conversationId: string,
+  queryable: Executor = db
 ): Promise<{ workspaceId: string; transportAccountId: string } | undefined> {
-  return db
+  return queryable
     .selectFrom("conversationTransportBindings")
     .select(["workspaceId", "transportAccountId"])
     .where("conversationId", "=", conversationId)
@@ -1292,8 +1299,9 @@ export async function selectAttachedParticipantsForAddress(params: {
   conversationId: string
   transportAddressId: string
   excludeParticipantId: string
+  queryable?: Executor
 }): Promise<{ id: string }[]> {
-  return db
+  return (params.queryable ?? db)
     .selectFrom("conversationParticipantAddresses as cpa")
     .innerJoin(
       "conversationParticipants as cm",
@@ -1394,9 +1402,11 @@ export async function upsertConversationParticipantAddress(params: {
   transportAddressId: string
   isPrimary?: boolean
   metadata?: Record<string, unknown>
+  queryable?: Executor
 }) {
+  const queryable = params.queryable ?? db
   if (params.isPrimary) {
-    await db
+    await queryable
       .updateTable("conversationParticipantAddresses")
       .set({
         isPrimary: false,
@@ -1405,7 +1415,7 @@ export async function upsertConversationParticipantAddress(params: {
       .execute()
   }
 
-  return db
+  return queryable
     .insertInto("conversationParticipantAddresses")
     .values({
       conversationParticipantId: params.conversationParticipantId,
