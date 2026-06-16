@@ -88,4 +88,14 @@ test("parseDingtalkRegistrationSessionPayload: rejects malformed or drifted Redi
     ),
     null
   )
+  assert.equal(
+    parseDingtalkRegistrationSessionPayload(
+      JSON.stringify({
+        ...fresh(),
+        lastProviderError: "timeout",
+        lastProviderErrorAt: "2026-06-16T00:00:00Z",
+      })
+    ),
+    null
+  )
 })

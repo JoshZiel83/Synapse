@@ -26,6 +26,7 @@ import type {
   TransportAccountInboundActorMode,
   TransportAccountOwnerScope,
 } from "@synapse/shared/types"
+import { IsoInstantStringSchema } from "@synapse/shared/schemas"
 import { z } from "zod"
 
 export type RegistrationSessionStatus = DingtalkDeviceFlowStatus
@@ -112,7 +113,7 @@ const dingtalkRegistrationSessionSchema = z
     transportAccountId: z.string().optional(),
     providerFailureCount: z.number().int().nonnegative().optional(),
     lastProviderError: z.string().optional(),
-    lastProviderErrorAt: z.string().optional(),
+    lastProviderErrorAt: IsoInstantStringSchema.optional(),
     pendingForm: dingtalkRegistrationPendingFormSchema.optional(),
   })
   .strict()
