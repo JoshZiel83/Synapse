@@ -5,22 +5,34 @@ import path from "path"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { ToolDefinition } from "@synapse/shared"
+import { z } from "zod"
 import { mapToolDefinitions } from "./mcp-tool-mapper.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
 
 const log = createLogger("mcp.stdio")
 
-type StdioEntryPointSpec = {
+export type StdioEntryPointSpec = {
   command: string
   args?: string[]
   env?: Record<string, string>
   cwd?: string
 }
 
-type ResolveContext = {
+export type StdioEntryPointResolveContext = {
   config: Record<string, unknown>
   instanceKey: string
 }
+
+const StdioEntryPointJsonSchema = z
+  .object({
+    command: z.string().optional(),
+    args: z.array(z.string()).optional(),
+    env: z.record(z.string(), z.string()).optional(),
+    cwd: z.string().optional(),
+  })
+  .passthrough()
+
+type StdioEntryPointJson = z.infer<typeof StdioEntryPointJsonSchema>
 
 function getConfigValue(
   config: Record<string, unknown>,
@@ -50,7 +62,10 @@ function stringifyTemplateValue(value: unknown): string {
   return JSON.stringify(value)
 }
 
-function resolveTemplate(template: string, context: ResolveContext): string {
+function resolveTemplate(
+  template: string,
+  context: StdioEntryPointResolveContext
+): string {
   return template.replace(/\$\{([^}]+)\}/g, (_match, rawExpression: string) => {
     const expression = rawExpression.trim()
     if (expression === "node") {
@@ -74,50 +89,46 @@ function resolveTemplate(template: string, context: ResolveContext): string {
   })
 }
 
-function parseStdioEntryPoint(
-  entryPoint: string,
-  context: ResolveContext
-): StdioEntryPointSpec {
-  let parsed: Record<string, unknown>
+function parseStdioEntryPointJson(entryPoint: string): StdioEntryPointJson {
+  let value: unknown
   try {
-    parsed = JSON.parse(entryPoint) as Record<string, unknown>
+    value = JSON.parse(entryPoint)
   } catch (error) {
     throw new Error(
       `Invalid stdio entry point JSON: ${(error as Error).message}`
     )
   }
 
-  const command =
-    typeof parsed.command === "string"
-      ? resolveTemplate(parsed.command, context)
-      : ""
+  const parsed = StdioEntryPointJsonSchema.safeParse(value)
+  if (!parsed.success) {
+    throw new Error("Stdio entry point JSON has invalid shape")
+  }
+  return parsed.data
+}
+
+export function parseStdioEntryPoint(
+  entryPoint: string,
+  context: StdioEntryPointResolveContext
+): StdioEntryPointSpec {
+  const parsed = parseStdioEntryPointJson(entryPoint)
+  const command = parsed.command ? resolveTemplate(parsed.command, context) : ""
   if (!command) {
     throw new Error("Stdio entry point is missing a command")
   }
 
-  const args = Array.isArray(parsed.args)
-    ? parsed.args
-        .filter((value): value is string => typeof value === "string")
-        .map((value) => resolveTemplate(value, context))
+  const args = parsed.args
+    ? parsed.args.map((value) => resolveTemplate(value, context))
     : []
 
-  const env =
-    parsed.env && typeof parsed.env === "object" && !Array.isArray(parsed.env)
-      ? Object.fromEntries(
-          Object.entries(parsed.env as Record<string, unknown>)
-            .filter(([, value]) => typeof value === "string")
-            .map(([key, value]) => [
-              key,
-              resolveTemplate(value as string, context),
-            ])
-            .filter(([, value]) => value !== "")
-        )
-      : {}
+  const env = parsed.env
+    ? Object.fromEntries(
+        Object.entries(parsed.env)
+          .map(([key, value]) => [key, resolveTemplate(value, context)])
+          .filter(([, value]) => value !== "")
+      )
+    : {}
 
-  const cwd =
-    typeof parsed.cwd === "string"
-      ? resolveTemplate(parsed.cwd, context)
-      : undefined
+  const cwd = parsed.cwd ? resolveTemplate(parsed.cwd, context) : undefined
 
   return { command, args, env, cwd }
 }
@@ -155,7 +166,7 @@ export class McpStdioClient {
     config: Record<string, unknown>,
     instanceKey: string
   ) {
-    const context: ResolveContext = { config, instanceKey }
+    const context: StdioEntryPointResolveContext = { config, instanceKey }
     const spec = parseStdioEntryPoint(entryPoint, context)
     this.dirs = buildInstanceDirs(instanceKey)
 
