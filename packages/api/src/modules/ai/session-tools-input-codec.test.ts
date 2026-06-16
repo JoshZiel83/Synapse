@@ -2,17 +2,23 @@ import assert from "node:assert/strict"
 import test from "node:test"
 
 import {
+  parseCancelAutomationToolInput,
   parseCancelTaskToolInput,
   parseEnterPlanModeToolInput,
   parseExitPlanModeToolInput,
   parseGetTaskStatusToolInput,
+  parseInviteActorToolInput,
   parseListTasksToolInput,
+  parseMemorySearchToolInput,
+  parseReadSkillToolInput,
   parseRequestUserInputToolInput,
   parseScheduleSelfWakeupToolInput,
+  parseSleepToolInput,
   parseSelfEventSubscriptionMatcherInput,
   parseSubscribeEventToolInput,
   parseTailTaskOutputToolInput,
   parseUpdatePlanToolInput,
+  parseViewEventSourceHistoryToolInput,
 } from "./session-tools-input-codec.js"
 import { ToolExecutionError } from "./tool-errors.js"
 
@@ -296,6 +302,109 @@ test("parseSubscribeEventToolInput rejects invalid event subscription input", ()
       error instanceof ToolExecutionError &&
       error.message === "matcher must be valid JSON"
   )
+})
+
+test("parseReadSkillToolInput normalizes skill asset input", () => {
+  assert.deepEqual(
+    parseReadSkillToolInput({
+      skillInstanceId: " skill-1 ",
+      path: " references/checklist.md ",
+    }),
+    {
+      skillInstanceId: "skill-1",
+      path: "references/checklist.md",
+    }
+  )
+  assert.deepEqual(parseReadSkillToolInput({ skillInstanceId: "skill-1" }), {
+    skillInstanceId: "skill-1",
+    path: undefined,
+  })
+  assert.throws(
+    () => parseReadSkillToolInput({ skillInstanceId: " " }),
+    (error) =>
+      error instanceof ToolExecutionError &&
+      error.message === "skillInstanceId is required"
+  )
+})
+
+test("parseInviteActorToolInput normalizes actor ids and names", () => {
+  assert.deepEqual(
+    parseInviteActorToolInput({
+      reason: " Need help ",
+      actorIds: [" actor-1 ", "", null, "actor-2"],
+      actorName: " Alice ",
+      actorNames: [" Bob ", "", null],
+    }),
+    {
+      reason: "Need help",
+      requestedActorIds: ["actor-1", "actor-2"],
+      fallbackNames: ["Alice", "Bob"],
+    }
+  )
+  assert.throws(
+    () => parseInviteActorToolInput({ reason: " " }),
+    (error) =>
+      error instanceof ToolExecutionError &&
+      error.message === "reason is required"
+  )
+})
+
+test("parseMemorySearchToolInput normalizes query and limit", () => {
+  assert.deepEqual(
+    parseMemorySearchToolInput({ queryText: " teaching style ", limit: "9" }),
+    {
+      queryText: "teaching style",
+      limit: 9,
+    }
+  )
+  assert.deepEqual(parseMemorySearchToolInput({ queryText: "q", limit: 100 }), {
+    queryText: "q",
+    limit: 10,
+  })
+  assert.deepEqual(parseMemorySearchToolInput({ queryText: "q", limit: "0" }), {
+    queryText: "q",
+    limit: 5,
+  })
+  assert.throws(
+    () => parseMemorySearchToolInput({ queryText: "" }),
+    (error) =>
+      error instanceof ToolExecutionError &&
+      error.message === "queryText is required"
+  )
+})
+
+test("single-id session tool parsers require trimmed ids", () => {
+  assert.deepEqual(
+    parseViewEventSourceHistoryToolInput({ eventSourceId: " source-1 " }),
+    {
+      eventSourceId: "source-1",
+    }
+  )
+  assert.deepEqual(
+    parseCancelAutomationToolInput({ automationId: " automation-1 " }),
+    {
+      automationId: "automation-1",
+    }
+  )
+  assert.throws(
+    () => parseViewEventSourceHistoryToolInput({ eventSourceId: " " }),
+    (error) =>
+      error instanceof ToolExecutionError &&
+      error.message === "eventSourceId is required"
+  )
+  assert.throws(
+    () => parseCancelAutomationToolInput({ automationId: " " }),
+    (error) =>
+      error instanceof ToolExecutionError &&
+      error.message === "automationId is required"
+  )
+})
+
+test("parseSleepToolInput normalizes optional summary", () => {
+  assert.deepEqual(parseSleepToolInput({ summary: " wait for callback " }), {
+    summary: "wait for callback",
+  })
+  assert.deepEqual(parseSleepToolInput({ summary: 123 }), { summary: "" })
 })
 
 test("parseRequestUserInputToolInput normalizes human task input", () => {

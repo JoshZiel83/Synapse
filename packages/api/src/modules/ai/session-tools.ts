@@ -52,16 +52,22 @@ import {
   type UserTaskTargetCandidate,
 } from "./session-tool-user-task-targets.js"
 import {
+  parseCancelAutomationToolInput,
   parseCancelTaskToolInput,
   parseEnterPlanModeToolInput,
   parseExitPlanModeToolInput,
   parseGetTaskStatusToolInput,
+  parseInviteActorToolInput,
   parseListTasksToolInput,
+  parseMemorySearchToolInput,
+  parseReadSkillToolInput,
   parseRequestUserInputToolInput,
   parseScheduleSelfWakeupToolInput,
+  parseSleepToolInput,
   parseSubscribeEventToolInput,
   parseTailTaskOutputToolInput,
   parseUpdatePlanToolInput,
+  parseViewEventSourceHistoryToolInput,
   taskOutputStreamValues,
   taskStatusFilterValues,
 } from "./session-tools-input-codec.js"
@@ -1070,16 +1076,7 @@ export function registerCallableToolPlugins(): void {
         actorId: context.actorId,
       })
 
-      const skillInstanceId = String(
-        (input as any).skillInstanceId || ""
-      ).trim()
-      const path =
-        typeof (input as any).path === "string"
-          ? String((input as any).path).trim()
-          : undefined
-      if (!skillInstanceId) {
-        throwToolError("skillInstanceId is required")
-      }
+      const { skillInstanceId, path } = parseReadSkillToolInput(input)
 
       try {
         const result = await readVisibleSkill({
@@ -2344,13 +2341,8 @@ export function registerCallableToolPlugins(): void {
         )
       }
 
-      const reason =
-        typeof (input as any).reason === "string"
-          ? String((input as any).reason).trim()
-          : ""
-      if (!reason) {
-        throwToolError("reason is required")
-      }
+      const { reason, requestedActorIds, fallbackNames } =
+        parseInviteActorToolInput(input)
 
       const candidates = await listInviteableActors({
         workspaceId: session.workspaceId,
@@ -2367,22 +2359,6 @@ export function registerCallableToolPlugins(): void {
         matches.push(candidate)
         candidatesByName.set(key, matches)
       }
-
-      const requestedActorIds = Array.isArray((input as any).actorIds)
-        ? (input as any).actorIds
-            .map((value: unknown) => String(value || "").trim())
-            .filter(Boolean)
-        : []
-      const fallbackNames = [
-        typeof (input as any).actorName === "string"
-          ? String((input as any).actorName).trim()
-          : "",
-        ...(Array.isArray((input as any).actorNames)
-          ? (input as any).actorNames.map((value: unknown) =>
-              String(value || "").trim()
-            )
-          : []),
-      ].filter(Boolean)
 
       const resolvedActors: InviteableActor[] = []
       const resolutionErrors: string[] = []
@@ -2575,14 +2551,7 @@ export function registerCallableToolPlugins(): void {
         throwToolError("Session not found")
       }
 
-      const queryText = String((input as any).queryText || "").trim()
-      const limit = Math.max(
-        1,
-        Math.min(10, parseInt(String((input as any).limit || "5"), 10) || 5)
-      )
-      if (!queryText) {
-        throwToolError("queryText is required")
-      }
+      const { queryText, limit } = parseMemorySearchToolInput(input)
 
       const result = await runMemorySearch(context.workspaceId, {
         queryText,
@@ -3131,10 +3100,7 @@ export function registerCallableToolPlugins(): void {
         throwToolError("No session context available")
       }
 
-      const eventSourceId = String((input as any).eventSourceId || "").trim()
-      if (!eventSourceId) {
-        throwToolError("eventSourceId is required")
-      }
+      const { eventSourceId } = parseViewEventSourceHistoryToolInput(input)
 
       const occurrences = await listAutomationOccurrences(context.workspaceId, {
         eventSourceId,
@@ -3286,10 +3252,7 @@ export function registerCallableToolPlugins(): void {
       if (!context?.sessionId) {
         throwToolError("No session context available")
       }
-      const automationId = String((input as any).automationId || "").trim()
-      if (!automationId) {
-        throwToolError("automationId is required")
-      }
+      const { automationId } = parseCancelAutomationToolInput(input)
 
       const rules = await listCurrentSessionAutomationRules({
         workspaceId: context.workspaceId,
@@ -3364,10 +3327,7 @@ export function registerCallableToolPlugins(): void {
         throwToolError("Session not found")
       }
 
-      const summary =
-        typeof (input as any).summary === "string"
-          ? String((input as any).summary).trim()
-          : ""
+      const { summary } = parseSleepToolInput(input)
 
       return textResult(
         JSON.stringify({

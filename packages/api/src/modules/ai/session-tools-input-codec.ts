@@ -253,6 +253,82 @@ export function parseSubscribeEventToolInput(input: unknown): {
   }
 }
 
+export function parseReadSkillToolInput(input: unknown): {
+  skillInstanceId: string
+  path?: string
+} {
+  const record = inputRecord(input)
+  return {
+    skillInstanceId: requiredTrimmedString(
+      record.skillInstanceId,
+      "skillInstanceId"
+    ),
+    path: optionalTrimmedString(record.path) || undefined,
+  }
+}
+
+export function parseInviteActorToolInput(input: unknown): {
+  reason: string
+  requestedActorIds: string[]
+  fallbackNames: string[]
+} {
+  const record = inputRecord(input)
+  const requestedActorIds = Array.isArray(record.actorIds)
+    ? record.actorIds.map((value) => String(value || "").trim()).filter(Boolean)
+    : []
+  const fallbackNames = [
+    optionalTrimmedString(record.actorName) || "",
+    ...(Array.isArray(record.actorNames)
+      ? record.actorNames.map((value) => String(value || "").trim())
+      : []),
+  ].filter(Boolean)
+
+  return {
+    reason: requiredTrimmedString(record.reason, "reason"),
+    requestedActorIds,
+    fallbackNames,
+  }
+}
+
+export function parseMemorySearchToolInput(input: unknown): {
+  queryText: string
+  limit: number
+} {
+  const record = inputRecord(input)
+  const parsedLimit = parseInt(String(record.limit || "5"), 10) || 5
+  return {
+    queryText: requiredTrimmedString(record.queryText, "queryText"),
+    limit: Math.max(1, Math.min(10, parsedLimit)),
+  }
+}
+
+export function parseViewEventSourceHistoryToolInput(input: unknown): {
+  eventSourceId: string
+} {
+  const record = inputRecord(input)
+  return {
+    eventSourceId: requiredTrimmedString(record.eventSourceId, "eventSourceId"),
+  }
+}
+
+export function parseCancelAutomationToolInput(input: unknown): {
+  automationId: string
+} {
+  const record = inputRecord(input)
+  return {
+    automationId: requiredTrimmedString(record.automationId, "automationId"),
+  }
+}
+
+export function parseSleepToolInput(input: unknown): {
+  summary: string
+} {
+  const record = inputRecord(input)
+  return {
+    summary: optionalTrimmedString(record.summary) || "",
+  }
+}
+
 export function parseRequestUserInputToolInput(input: unknown): {
   targetParticipantId?: string
   title: string
