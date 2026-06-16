@@ -29,9 +29,22 @@ test("parseArchiveFrameJsonArray decodes archive frame arrays at repo exit", () 
   assert.deepEqual(parseArchiveFrameJsonArray<number[]>([[1], [2]]), [[1], [2]])
 })
 
-test("parseArchiveFrameJsonArray fails closed for non-array JSON", () => {
-  assert.equal(parseArchiveFrameJsonArray('{"not":"array"}'), undefined)
-  assert.equal(parseArchiveFrameJsonArray('"scalar"'), undefined)
-  assert.equal(parseArchiveFrameJsonArray("{"), undefined)
+test("parseArchiveFrameJsonArray fails closed for malformed or non-array JSON", () => {
+  assert.throws(
+    () => parseArchiveFrameJsonArray('{"not":"array"}'),
+    /must be a JSON array/
+  )
+  assert.throws(
+    () => parseArchiveFrameJsonArray('"scalar"'),
+    /must be a JSON array/
+  )
+  assert.throws(
+    () => parseArchiveFrameJsonArray("{"),
+    /must be a valid JSON array/
+  )
+  assert.throws(
+    () => parseArchiveFrameJsonArray(""),
+    /must be a valid JSON array/
+  )
   assert.equal(parseArchiveFrameJsonArray(null), undefined)
 })

@@ -83,20 +83,29 @@ type ArchiveFrameQueryRow = {
   part_metadata: unknown
 }
 
-export function parseArchiveFrameJsonArray<T>(value: unknown): T[] | undefined {
-  if (!value) return undefined
+export function parseArchiveFrameJsonArray<T>(
+  value: unknown,
+  label = "archive frame JSON array"
+): T[] | undefined {
+  if (value === null || value === undefined) return undefined
+
+  let candidate: unknown = value
   if (typeof value === "string") {
+    if (value.trim().length === 0) {
+      throw new Error(`${label} must be a valid JSON array`)
+    }
     try {
-      const parsed = JSON.parse(value) as unknown
-      return Array.isArray(parsed) ? (parsed as T[]) : undefined
+      candidate = JSON.parse(value) as unknown
     } catch {
-      return undefined
+      throw new Error(`${label} must be a valid JSON array`)
     }
   }
-  if (Array.isArray(value)) {
-    return value as T[]
+
+  if (!Array.isArray(candidate)) {
+    throw new Error(`${label} must be a JSON array`)
   }
-  return undefined
+
+  return candidate as T[]
 }
 
 export async function ensureConversationContextState(conversationId: string) {
@@ -189,8 +198,14 @@ export async function loadArchivePoint(
       role: row.role,
       frameType: row.frame_type,
       parts: parts.length > 0 ? itemPartsToCanonicalBlocks(parts) : undefined,
-      toolCalls: parseArchiveFrameJsonArray(row.tool_calls),
-      toolResults: parseArchiveFrameJsonArray(row.tool_results),
+      toolCalls: parseArchiveFrameJsonArray(
+        row.tool_calls,
+        `Context archive frame ${row.id} tool_calls`
+      ),
+      toolResults: parseArchiveFrameJsonArray(
+        row.tool_results,
+        `Context archive frame ${row.id} tool_results`
+      ),
       sourceItemIds: Array.isArray(row.source_item_ids)
         ? row.source_item_ids
         : undefined,

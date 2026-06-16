@@ -33,7 +33,10 @@ import {
   type UUID,
   type WorkspaceAppGrantPermission,
 } from "@synapse/shared"
-import { ActorVersionDeltaSchema } from "@synapse/shared/schemas"
+import {
+  ActorVersionDeltaSchema,
+  CanonicalContentBlockSchema,
+} from "@synapse/shared/schemas"
 import {
   db,
   withDbTransaction,
@@ -183,18 +186,32 @@ const ACTOR_PACKAGE_SELECT = `
 export function parseActorDocContentBlocks(
   value: unknown
 ): CanonicalContentBlockInput[] {
-  if (!value) return []
+  if (value === null || value === undefined) return []
+
+  let candidate: unknown = value
   if (typeof value === "string") {
+    if (value.trim().length === 0) {
+      throw new Error("actor doc content_blocks must be a valid JSON array")
+    }
     try {
-      const parsed = JSON.parse(value) as unknown
-      return Array.isArray(parsed)
-        ? (parsed as CanonicalContentBlockInput[])
-        : []
+      candidate = JSON.parse(value) as unknown
     } catch {
-      return []
+      throw new Error("actor doc content_blocks must be a valid JSON array")
     }
   }
-  return Array.isArray(value) ? (value as CanonicalContentBlockInput[]) : []
+
+  if (!Array.isArray(candidate)) {
+    throw new Error("actor doc content_blocks must be a JSON array")
+  }
+
+  const parsed = CanonicalContentBlockSchema.array().safeParse(candidate)
+  if (!parsed.success) {
+    throw new Error(
+      "actor doc content_blocks must contain canonical content blocks"
+    )
+  }
+
+  return parsed.data
 }
 
 function parseActorVersionDelta(value: unknown): ActorVersionDelta | null {

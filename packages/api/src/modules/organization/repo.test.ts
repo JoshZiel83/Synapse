@@ -221,13 +221,23 @@ test("parseActorDocContentBlocks decodes content block arrays at repo exit", () 
   ])
 })
 
-test("parseActorDocContentBlocks fails closed for non-array JSON", () => {
-  assert.deepEqual(
-    parseActorDocContentBlocks('{"type":"text","text":"Hi"}'),
-    []
+test("parseActorDocContentBlocks fails closed for malformed or non-array JSON", () => {
+  assert.throws(
+    () => parseActorDocContentBlocks('{"type":"text","text":"Hi"}'),
+    /must be a JSON array/
   )
-  assert.deepEqual(parseActorDocContentBlocks('"text"'), [])
-  assert.deepEqual(parseActorDocContentBlocks("{"), [])
+  assert.throws(
+    () => parseActorDocContentBlocks('"text"'),
+    /must be a JSON array/
+  )
+  assert.throws(
+    () => parseActorDocContentBlocks("{"),
+    /must be a valid JSON array/
+  )
+  assert.throws(
+    () => parseActorDocContentBlocks([{ type: "text" }]),
+    /must contain canonical content blocks/
+  )
   assert.deepEqual(parseActorDocContentBlocks(null), [])
 })
 
