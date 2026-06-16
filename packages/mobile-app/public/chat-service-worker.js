@@ -2547,6 +2547,20 @@
   // ../shared/dist/access/subject.js
   var platformRef = { kind: SUBJECT_KIND.PLATFORM };
 
+  // ../shared/dist/access/browser-operations.js
+  var BROWSER_MANUAL_GRANT_OPERATIONS_BY_EXPOSURE = {
+    navigation: ["page.read", "page.navigate"],
+    read: ["page.read", "screenshot.capture", "console.read"],
+    input: ["page.input"],
+    network: ["network.list", "network.body.read"],
+    performance: ["performance.trace"],
+    script: ["script.evaluate"],
+    // Exposures are advertised as coming soon but have no grantable tools today.
+    extensions: [],
+    webmcp: []
+  };
+  var SUPPORTED_BROWSER_MANUAL_GRANT_OPERATIONS = Array.from(new Set(Object.values(BROWSER_MANUAL_GRANT_OPERATIONS_BY_EXPOSURE).flat()));
+
   // ../shared/dist/chat-queue/index.js
   var import_fast_deep_equal = __toESM(require_fast_deep_equal(), 1);
   var CHAT_QUEUE_DB_NAME = "synapse-chat-queue";
