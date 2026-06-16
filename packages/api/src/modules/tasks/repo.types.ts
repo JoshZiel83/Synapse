@@ -39,6 +39,15 @@ export type ToolCallTasksFinalResultPayload =
 export type ToolCallTaskActionTokensPayload =
   TableInsert<"toolCallTaskActionTokens">["payload"]
 
+export interface ActionTokenPayload {
+  /** One of the option labels we offered (e.g. "allow_once", "deny"). */
+  decision: string
+  /** Optional preset id (runtime-authorization preset selection). */
+  preset?: string
+  /** Optional grant option id when the user picks among grant_options. */
+  selectedGrantOptionId?: string
+}
+
 /**
  * The denormalized task row shape returned by the tasks-module SQL joins
  * (getTaskRowById / getTaskRowByIdForUpdate). This is a hand-written row

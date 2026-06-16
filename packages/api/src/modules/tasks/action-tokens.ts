@@ -26,15 +26,9 @@ import {
   findActionTokenRow,
   deleteExpiredActionTokens,
 } from "./repo.js"
+import type { ActionTokenPayload } from "./repo.types.js"
 
-export interface ActionTokenPayload {
-  /** One of the option labels we offered (e.g. "allow_once", "deny"). */
-  decision: string
-  /** Optional preset id (runtime-authorization preset selection). */
-  preset?: string
-  /** Optional grant option id when the user picks among grant_options. */
-  selectedGrantOptionId?: string
-}
+export type { ActionTokenPayload } from "./repo.types.js"
 
 export interface ActionTokenRecord {
   token: string
@@ -94,7 +88,7 @@ export async function lookupActionToken(
   return {
     token: row.token,
     taskId: row.taskId,
-    payload: (row.payload ?? {}) as unknown as ActionTokenPayload,
+    payload: row.payload,
     expiresAt,
   }
 }

@@ -12,6 +12,7 @@ import { withTestDb } from "../../test/helpers/db.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
 import { presentTaskSummary } from "./presenter.js"
 import {
+  decodeActionTokenPayload,
   decodeTaskPromptPayload,
   decodeTaskResolutionPayload,
   normalizeTaskCommandRow,
@@ -221,6 +222,28 @@ test("decodeTaskResolutionPayload normalizes non-object JSON to an empty object"
       resolution_payload: JSON.stringify(["not", "an", "object"]),
     }),
     {}
+  )
+})
+
+test("decodeActionTokenPayload validates task action token business payloads", () => {
+  assert.deepEqual(
+    decodeActionTokenPayload({
+      payload: JSON.stringify({
+        decision: "approve",
+        preset: "once",
+        selectedGrantOptionId: "primary",
+      }),
+    }),
+    {
+      decision: "approve",
+      preset: "once",
+      selectedGrantOptionId: "primary",
+    }
+  )
+
+  assert.throws(
+    () => decodeActionTokenPayload({ token: "token-1", payload: "{}" }),
+    /Action token token-1 payload is invalid/
   )
 })
 

@@ -11,6 +11,7 @@
  * re-camelCased here.
  */
 
+import { z } from "zod"
 import { CompiledQuery, sql } from "kysely"
 import {
   db,
@@ -31,6 +32,7 @@ import type {
 import { parseJsonObject } from "@synapse/shared"
 import type { ToolCallTaskExecutorKind } from "../tool-call-tasks/service.js"
 import type {
+  ActionTokenPayload,
   RawTaskCommandRow,
   RawTaskDbRow,
   RawTaskRow,
@@ -45,6 +47,14 @@ import type {
   ToolCallTaskRuntimeAuthorizationSourceRequestArgs,
   ToolCallTasksFinalResultPayload,
 } from "./repo.types.js"
+
+const ActionTokenPayloadSchema = z
+  .object({
+    decision: z.string().min(1),
+    preset: z.string().min(1).optional(),
+    selectedGrantOptionId: z.string().min(1).optional(),
+  })
+  .strict()
 
 /**
  * Open a tasks-module transaction. Thin re-export of {@link withDbTransaction}
@@ -222,6 +232,20 @@ export function decodeTaskResolutionPayload(row: {
   return parseJsonObject(row.resolution_payload)
 }
 
+export function decodeActionTokenPayload(row: {
+  token?: string
+  payload: unknown
+}): ActionTokenPayload {
+  const parsed = ActionTokenPayloadSchema.safeParse(
+    parseJsonObject(row.payload)
+  )
+  if (!parsed.success) {
+    const label = row.token ? `Action token ${row.token}` : "Action token"
+    throw new Error(`${label} payload is invalid`)
+  }
+  return parsed.data
+}
+
 export function normalizeTaskRow(row: RawTaskDbRow): RawTaskRow {
   const normalized = {
     ...row,
@@ -291,7 +315,7 @@ export async function insertActionToken(
   row: {
     token: string
     taskId: string
-    payload: unknown
+    payload: ActionTokenPayload
     expiresAt: Date
   }
 ): Promise<void> {
@@ -315,7 +339,7 @@ export async function insertActionToken(
 export async function findActionTokenRow(token: string): Promise<{
   token: string
   taskId: string
-  payload: unknown
+  payload: ActionTokenPayload
   expiresAt: Date
 } | null> {
   const row = await db
@@ -324,7 +348,16 @@ export async function findActionTokenRow(token: string): Promise<{
     .where("token", "=", token)
     .limit(1)
     .executeTakeFirst()
-  return row ?? null
+  if (!row) return null
+  return {
+    token: row.token,
+    taskId: row.taskId,
+    payload: decodeActionTokenPayload({
+      token: row.token,
+      payload: row.payload,
+    }),
+    expiresAt: row.expiresAt,
+  }
 }
 
 /**
