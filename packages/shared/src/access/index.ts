@@ -1,5 +1,6 @@
 export * from "./enums.js"
 export * from "./subject.js"
+export * from "./browser-operations.js"
 // NOTE: ./policies is NOT re-exported on purpose. policies/* imports zod,
 // and the chat service workers (web + mobile) transitively reach this
 // barrel via the root `@synapse/shared` re-export. Including zod in the

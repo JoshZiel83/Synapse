@@ -1105,8 +1105,11 @@ export const RUNTIME_AUTHORIZATION_BROWSER_SCOPE_TYPES = [
 // in lockstep. Import from the enum-only subpath so the shared root does not
 // pull in the browser tool map/descriptors.
 export {
+  BROWSER_OPERATION_REQUIRED_ACTION,
   RUNTIME_AUTHORIZATION_BROWSER_OPERATIONS,
+  browserActionCoversOperations,
   type BrowserOperation,
+  type BrowserOperationRequiredAction,
 } from "@synapse/device-protocol/enums"
 export const RUNTIME_AUTHORIZATION_COMMAND_EXECUTORS = [
   "bash",
