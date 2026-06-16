@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { parseSherpaOnnxConfigJson } from "./audio-fallback.js"
+import { parseSherpaOnnxConfigJson } from "./audio-fallback-config.js"
 
 test("parseSherpaOnnxConfigJson treats blank config as disabled", () => {
   assert.equal(parseSherpaOnnxConfigJson(""), null)
