@@ -212,3 +212,32 @@ test("notifyRemoteAgentTaskResolvedUseCase sends only remote-agent-requested tas
   )
   assert.equal(sent.length, 1)
 })
+
+test("notifyRemoteAgentTaskResolvedUseCase validates task payload before sending", async () => {
+  const remoteAgentId = randomUUID()
+  const invalidTask = {
+    id: randomUUID(),
+    workspaceId: randomUUID(),
+    conversationId: randomUUID(),
+    requester: {
+      participantType: CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT,
+      remoteAgentId,
+    },
+  } as unknown as TaskSummary
+  const sent: Array<{
+    machineId: string
+    message: RemoteAgentApiToDaemonMessage
+  }> = []
+
+  await assert.rejects(
+    notifyRemoteAgentTaskResolvedUseCase(
+      invalidTask.id,
+      deps({
+        tasksById: new Map([[invalidTask.id, invalidTask]]),
+        machineId: randomUUID(),
+        sent,
+      })
+    )
+  )
+  assert.equal(sent.length, 0)
+})
