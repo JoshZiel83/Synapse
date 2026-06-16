@@ -54,6 +54,17 @@ test("parsePairOutput: returns null when no device/service ids present", () => {
   assert.equal(parsePairOutput(""), null)
 })
 
+test("parsePairOutput: rejects drifted pair output shapes", () => {
+  assert.equal(parsePairOutput('{"deviceId":"","serviceId":"s"}'), null)
+  assert.equal(parsePairOutput('{"deviceId":"d","serviceId":1}'), null)
+  assert.equal(
+    parsePairOutput(
+      '{"device_id":"d","service_id":"s","control_plane_url":123}'
+    ),
+    null
+  )
+})
+
 test("parsePairOutput: handles braces inside string values", () => {
   // A controlPlaneUrl containing a brace must not break balance tracking.
   const r = parsePairOutput(
