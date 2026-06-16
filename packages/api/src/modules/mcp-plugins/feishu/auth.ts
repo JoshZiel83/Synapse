@@ -141,7 +141,16 @@ function shouldPoll(lastPollAt: string | undefined, intervalSeconds: number) {
 }
 
 async function readJsonResponse(response: Response) {
-  return asObject(await response.json().catch(() => ({})))
+  let parsed: unknown
+  try {
+    parsed = await response.json()
+  } catch {
+    throw new Error("Feishu auth response must be valid JSON.")
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("Feishu auth response must be a JSON object.")
+  }
+  return parsed as JsonObject
 }
 
 function buildVerificationUrl(baseOpenUrl: string, userCode: string) {
