@@ -44,15 +44,25 @@ function deps(params: {
   enrichError?: Error
   enrichedTask?: TaskSummary
   resolveCalls?: ResolveTaskRequestParams[]
+  calls?: string[]
 }): RespondToChatTaskDeps {
   return {
-    getTaskSummary: async () => params.task ?? null,
-    canUserViewTask: async () => params.canView ?? true,
-    getConversationParticipant: async () =>
-      params.participantId === null
+    getTaskSummary: async () => {
+      params.calls?.push("getTaskSummary")
+      return params.task ?? null
+    },
+    canUserViewTask: async () => {
+      params.calls?.push("canUserViewTask")
+      return params.canView ?? true
+    },
+    getConversationParticipant: async () => {
+      params.calls?.push("getConversationParticipant")
+      return params.participantId === null
         ? null
-        : { id: params.participantId ?? randomUUID() },
+        : { id: params.participantId ?? randomUUID() }
+    },
     resolveTaskRequest: async (input) => {
+      params.calls?.push("resolveTaskRequest")
       params.resolveCalls?.push(input)
       if (params.resolveError) {
         throw params.resolveError
@@ -63,6 +73,7 @@ function deps(params: {
       return params.resolveResult
     },
     enrichTaskForUser: async () => {
+      params.calls?.push("enrichTaskForUser")
       if (params.enrichError) {
         throw params.enrichError
       }
@@ -117,6 +128,7 @@ test("respondToChatTaskUseCase resolves task input and enriches the response tas
 })
 
 test("respondToChatTaskUseCase returns not found for missing or mismatched tasks", async () => {
+  const calls: string[] = []
   const result = await respondToChatTaskUseCase(
     {
       workspaceId: randomUUID(),
@@ -126,7 +138,7 @@ test("respondToChatTaskUseCase returns not found for missing or mismatched tasks
       userId: randomUUID(),
       input: userInputResolveInput(),
     },
-    deps({ task: null })
+    deps({ task: null, calls })
   )
 
   assert.deepEqual(result, {
@@ -136,10 +148,12 @@ test("respondToChatTaskUseCase returns not found for missing or mismatched tasks
       code: "task_not_found",
     },
   })
+  assert.deepEqual(calls, ["getTaskSummary"])
 })
 
 test("respondToChatTaskUseCase returns access errors before resolving", async () => {
   const task = taskSummary()
+  const cannotViewCalls: string[] = []
 
   const cannotView = await respondToChatTaskUseCase(
     {
@@ -150,7 +164,7 @@ test("respondToChatTaskUseCase returns access errors before resolving", async ()
       userId: randomUUID(),
       input: userInputResolveInput(),
     },
-    deps({ task, canView: false })
+    deps({ task, canView: false, calls: cannotViewCalls })
   )
   assert.deepEqual(cannotView, {
     statusCode: 403,
@@ -159,7 +173,9 @@ test("respondToChatTaskUseCase returns access errors before resolving", async ()
       code: "task_access_denied",
     },
   })
+  assert.deepEqual(cannotViewCalls, ["getTaskSummary", "canUserViewTask"])
 
+  const notParticipantCalls: string[] = []
   const notParticipant = await respondToChatTaskUseCase(
     {
       workspaceId: task.workspaceId,
@@ -169,7 +185,7 @@ test("respondToChatTaskUseCase returns access errors before resolving", async ()
       userId: randomUUID(),
       input: userInputResolveInput(),
     },
-    deps({ task, participantId: null })
+    deps({ task, participantId: null, calls: notParticipantCalls })
   )
   assert.deepEqual(notParticipant, {
     statusCode: 403,
@@ -178,6 +194,11 @@ test("respondToChatTaskUseCase returns access errors before resolving", async ()
       code: "task_resolver_not_participant",
     },
   })
+  assert.deepEqual(notParticipantCalls, [
+    "getTaskSummary",
+    "canUserViewTask",
+    "getConversationParticipant",
+  ])
 })
 
 test("respondToChatTaskUseCase maps conflict and resolution failures", async () => {
@@ -216,6 +237,7 @@ test("respondToChatTaskUseCase maps conflict and resolution failures", async () 
     },
   })
 
+  const failedCalls: string[] = []
   const failed = await respondToChatTaskUseCase(
     {
       workspaceId: task.workspaceId,
@@ -228,6 +250,7 @@ test("respondToChatTaskUseCase maps conflict and resolution failures", async () 
     deps({
       task,
       resolveError: new Error("bad resolution"),
+      calls: failedCalls,
     })
   )
 
@@ -238,6 +261,12 @@ test("respondToChatTaskUseCase maps conflict and resolution failures", async () 
       code: "task_resolution_failed",
     },
   })
+  assert.deepEqual(failedCalls, [
+    "getTaskSummary",
+    "canUserViewTask",
+    "getConversationParticipant",
+    "resolveTaskRequest",
+  ])
 })
 
 test("respondToChatTaskUseCase maps response enrichment failures", async () => {
