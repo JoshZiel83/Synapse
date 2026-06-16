@@ -14,6 +14,7 @@ import {
 } from "../../../file-ref.js"
 import {
   normalizeZhipuTransportError,
+  readZhipuJsonObjectResponse,
   throwZhipuApiError,
 } from "./zhipu-errors.js"
 import { buildToolOutputOrigin } from "../../../../files/service.js"
@@ -118,7 +119,7 @@ export const layoutParsingFeature: SubFeature = {
         await throwZhipuApiError("版面解析 API", response)
       }
 
-      const result = (await response.json()) as {
+      const result = await readZhipuJsonObjectResponse<{
         id?: string
         created?: number
         model?: string
@@ -130,7 +131,7 @@ export const layoutParsingFeature: SubFeature = {
           pages?: Array<{ width?: number; height?: number }>
         }
         request_id?: string
-      }
+      }>("版面解析 API", response)
 
       const output: CanonicalContentBlock[] = []
       output.push(

@@ -17,6 +17,7 @@ import {
 } from "../../../file-ref.js"
 import {
   normalizeZhipuTransportError,
+  readZhipuJsonObjectResponse,
   throwZhipuApiError,
 } from "./zhipu-errors.js"
 import { buildToolOutputOrigin } from "../../../../files/service.js"
@@ -164,13 +165,13 @@ export const fileParserSyncFeature: SubFeature = {
         await throwZhipuApiError("文件解析(同步) API", response)
       }
 
-      const result = (await response.json()) as {
+      const result = await readZhipuJsonObjectResponse<{
         status?: string
         message?: string
         task_id?: string
         content?: string | null
         parsing_result_url?: string | null
-      }
+      }>("文件解析(同步) API", response)
 
       const output: CanonicalContentBlock[] = []
       output.push(

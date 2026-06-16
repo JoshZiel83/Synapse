@@ -5,6 +5,7 @@ import { fileToBuffer } from "../../../../../infrastructure/storage/file-io.js"
 import { resolveFileRefRecord, fileRefProperty } from "../../../file-ref.js"
 import {
   normalizeZhipuTransportError,
+  readZhipuJsonObjectResponse,
   throwZhipuApiError,
 } from "./zhipu-errors.js"
 
@@ -143,7 +144,7 @@ export const ocrFeature: SubFeature = {
         await throwZhipuApiError("OCR 服务 API", response)
       }
 
-      const result = (await response.json()) as {
+      const result = await readZhipuJsonObjectResponse<{
         task_id?: string
         status?: string
         message?: string
@@ -152,7 +153,7 @@ export const ocrFeature: SubFeature = {
           words?: string
           probability?: { average?: number; variance?: number; min?: number }
         }>
-      }
+      }>("OCR 服务 API", response)
 
       const lines = (result.words_result || [])
         .map((item, index) => {

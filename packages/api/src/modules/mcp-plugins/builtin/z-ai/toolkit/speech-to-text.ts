@@ -15,6 +15,7 @@ import {
 } from "../../../file-ref.js"
 import {
   normalizeZhipuTransportError,
+  readZhipuJsonObjectResponse,
   throwZhipuApiError,
 } from "./zhipu-errors.js"
 
@@ -114,7 +115,10 @@ export const sttFeature: SubFeature = {
         await throwZhipuApiError("语音转文本 API", response)
       }
 
-      const result = (await response.json()) as { text?: string }
+      const result = await readZhipuJsonObjectResponse<{ text?: string }>(
+        "语音转文本 API",
+        response
+      )
 
       return textBlocks(result.text || "No transcription result")
     } catch (error) {

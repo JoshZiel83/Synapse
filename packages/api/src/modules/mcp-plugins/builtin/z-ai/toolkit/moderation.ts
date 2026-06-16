@@ -8,6 +8,7 @@ import {
 } from "../../../file-ref.js"
 import {
   normalizeZhipuTransportError,
+  readZhipuJsonObjectResponse,
   throwZhipuApiError,
 } from "./zhipu-errors.js"
 
@@ -123,7 +124,7 @@ export const moderationFeature: SubFeature = {
         await throwZhipuApiError("内容安全 API", response)
       }
 
-      const result = (await response.json()) as {
+      const result = await readZhipuJsonObjectResponse<{
         id?: string
         request_id?: string
         result_list?: Array<{
@@ -136,7 +137,7 @@ export const moderationFeature: SubFeature = {
             call_count?: number
           }
         }
-      }
+      }>("内容安全 API", response)
 
       const lines = [
         result.id ? `Task ID: ${result.id}` : null,

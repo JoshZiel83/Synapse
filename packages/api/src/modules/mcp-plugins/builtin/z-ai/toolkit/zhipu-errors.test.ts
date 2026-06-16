@@ -2,6 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import {
   normalizeZhipuTransportError,
+  readZhipuJsonObjectResponse,
   throwZhipuApiError,
 } from "./zhipu-errors.js"
 
@@ -69,4 +70,32 @@ test("normalizeZhipuTransportError keeps timeout and network messages", () => {
       .message,
     /网络错误/
   )
+})
+
+test("readZhipuJsonObjectResponse accepts only JSON object success responses", async () => {
+  assert.deepEqual(
+    await readZhipuJsonObjectResponse(
+      "Zhipu test API",
+      new Response(JSON.stringify({ text: "ok" }), { status: 200 })
+    ),
+    { text: "ok" }
+  )
+
+  await assert.rejects(
+    readZhipuJsonObjectResponse(
+      "Zhipu test API",
+      new Response("{not-json", { status: 200 })
+    ),
+    /Zhipu test API 返回了无效 JSON/
+  )
+
+  for (const body of ["[1,2,3]", "null", '"ok"']) {
+    await assert.rejects(
+      readZhipuJsonObjectResponse(
+        "Zhipu test API",
+        new Response(body, { status: 200 })
+      ),
+      /Zhipu test API 返回体必须是 JSON object/
+    )
+  }
 })

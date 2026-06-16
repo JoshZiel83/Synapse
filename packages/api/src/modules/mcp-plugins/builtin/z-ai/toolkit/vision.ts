@@ -8,6 +8,7 @@ import {
 } from "../../../file-ref.js"
 import {
   normalizeZhipuTransportError,
+  readZhipuJsonObjectResponse,
   throwZhipuApiError,
 } from "./zhipu-errors.js"
 
@@ -298,9 +299,9 @@ async function callGLM4V(
       await throwZhipuApiError("视觉理解 API", response)
     }
 
-    const result = (await response.json()) as {
+    const result = await readZhipuJsonObjectResponse<{
       choices?: Array<{ message?: { content?: string } }>
-    }
+    }>("视觉理解 API", response)
 
     return (
       result.choices?.[0]?.message?.content || "No response from vision model"

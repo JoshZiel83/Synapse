@@ -167,6 +167,24 @@ function parseJson(text: string): unknown {
   }
 }
 
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+export async function readZhipuJsonObjectResponse<
+  T extends object = Record<string, unknown>,
+>(apiName: string, response: Response): Promise<T> {
+  const rawText = await response.text().catch(() => "")
+  const parsed = parseJson(rawText)
+  if (parsed === undefined) {
+    throw new Error(`${apiName} 返回了无效 JSON。`)
+  }
+  if (!isJsonObject(parsed)) {
+    throw new Error(`${apiName} 返回体必须是 JSON object。`)
+  }
+  return parsed as T
+}
+
 const ZhipuErrorBodySchema = z
   .object({
     error: z
