@@ -25,6 +25,9 @@
 //   r5_bare_route_in_mixed       : mixed (Tier C) modules must register routes
 //       via appRoute()/wireRoute() (or split *.app.ts/*.wire.ts), never bare
 //       app.get/post/put/delete/patch(...). §5.3 mechanism.
+//   r6_sql_construction_outside_repo : module SQL/Kysely construction belongs
+//       in repo*.ts / repo.types.ts. This is the broad modules-wide R3
+//       invariant; it replaces the need to keep adding per-service SQL ratchets.
 //   r7_dual_naming               : no `row.foo_bar || row.fooBar` and no
 //       outward `...row` spread.
 //   r8_db_client_outside_repo    : only repo*.ts may import the DB client
@@ -597,6 +600,9 @@ const isPresenter = (p) => /(^|\/)presenter[^/]*\.ts$/.test(p)
 // grandfathered; new ones fail.
 const isTimeSerializationLayer = (p) => !isPresenter(p) && !isRepo(p)
 
+const SQL_CONSTRUCTION_PATTERN =
+  /from\s+["']kysely["']|\b(?:selectFrom|insertInto|updateTable|deleteFrom)\s*\(|\bsql`|\bCompiledQuery\b|\brunBuilder\s*\(|\brunOn(?:Db)?\s*(?:<|\()/
+
 // §7 Tier C mixed modules (app + wire in one module). Their route
 // registrations must go through the §5.3 appRoute()/wireRoute() markers (or a
 // split *.app.ts / *.wire.ts controller), never bare app.<verb>(...).
@@ -915,6 +921,15 @@ const RULES = [
     test: (src) => /\bapp\.(get|post|put|delete|patch)\s*[<(]/.test(src),
   },
   {
+    // r6: module SQL/Kysely construction belongs in repo*.ts companions. This
+    // is intentionally modules-wide and shape-based, not per endpoint/function.
+    // It does not govern infrastructure/database bootstrap/seed/purge adapters,
+    // which are outside packages/api/src/modules/**.
+    id: "r6_sql_construction_outside_repo",
+    appliesTo: (p) => !isRepo(p),
+    test: (src) => SQL_CONSTRUCTION_PATTERN.test(src),
+  },
+  {
     id: "r7_dual_naming",
     appliesTo: () => true,
     test: (src) =>
@@ -951,12 +966,7 @@ const RULES = [
     id: "r9_sql_construction_in_clean_service",
     appliesTo: isSqlCleanServiceFile,
     test: (src) =>
-      /from\s+["']kysely["']/.test(src) ||
-      /\b(?:selectFrom|insertInto|updateTable|deleteFrom)\s*\(/.test(src) ||
-      /\bsql`/.test(src) ||
-      /\bCompiledQuery\b/.test(src) ||
-      /\brunBuilder\s*\(/.test(src) ||
-      /\brunOn(?:Db)?\s*(?:<|\()/.test(src) ||
+      SQL_CONSTRUCTION_PATTERN.test(src) ||
       /\b(?:SELECT|INSERT INTO|UPDATE|DELETE FROM)\b/.test(src),
   },
   {
