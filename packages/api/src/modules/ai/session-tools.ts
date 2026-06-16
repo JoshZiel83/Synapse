@@ -54,6 +54,7 @@ import {
   buildUserTaskTargetCandidatesFromRows,
   type UserTaskTargetCandidate,
 } from "./session-tool-user-task-targets.js"
+import { parseSelfEventSubscriptionMatcherInput } from "./session-tools-input-codec.js"
 import { upsertAccessSubjectDefault } from "../access/guards.js"
 import {
   listInviteableActorRowsDefault,
@@ -154,8 +155,6 @@ const sendToInputSchema = z.strictObject({
 const currentTimeInputSchema = z.strictObject({
   timeZone: z.string().trim().min(1).max(100).optional(),
 })
-const selfEventSubscriptionMatcherSchema = z.record(z.string(), z.unknown())
-
 function getToolContextConversationId(ctx: ToolResolveContext) {
   return ctx.conversationId
 }
@@ -199,32 +198,6 @@ function formatUtcTimestamp(date: Date) {
   return `${dateToIsoInstant(date).slice(0, 19).replace("T", " ")} UTC`
 }
 
-export function parseSelfEventSubscriptionMatcherInput(
-  value: unknown
-): Record<string, unknown> | undefined {
-  const matcherInput = typeof value === "string" ? value.trim() : ""
-  if (!matcherInput) {
-    return undefined
-  }
-
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(matcherInput)
-  } catch {
-    throwToolError("matcher must be valid JSON")
-  }
-
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throwToolError("matcher must be a JSON object string")
-  }
-
-  const result = selfEventSubscriptionMatcherSchema.safeParse(parsed)
-  if (!result.success) {
-    throwToolError("matcher must be a JSON object string")
-  }
-  return result.data
-}
-
 async function requireCurrentAutomationParticipant(params: {
   conversationId: string
   actorId?: string
@@ -244,6 +217,8 @@ async function requireCurrentAutomationParticipant(params: {
   }
   return participant
 }
+
+export { parseSelfEventSubscriptionMatcherInput } from "./session-tools-input-codec.js"
 
 async function listCurrentSessionAutomationRules(params: {
   workspaceId: string

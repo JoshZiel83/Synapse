@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { parseSelfEventSubscriptionMatcherInput } from "./session-tools.js"
+import { parseSelfEventSubscriptionMatcherInput } from "./session-tools-input-codec.js"
 import { ToolExecutionError } from "./tool-errors.js"
 
 test("parseSelfEventSubscriptionMatcherInput accepts absent and object matcher input", () => {
