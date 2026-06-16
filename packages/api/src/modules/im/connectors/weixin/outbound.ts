@@ -20,6 +20,7 @@ import {
   getWeixinCredentialsOrThrow,
   nonEmpty,
 } from "./client.js"
+import { parseWeixinSendResponseText } from "./outbound-codec.js"
 import { renderWeixinMessage } from "./render.js"
 
 export interface WeixinSendInput {
@@ -90,23 +91,7 @@ export async function sendWeixinMessage(
   // shapes like { ret, errcode, msg_id?, msg?: { message_id?, items?: [...] } }
   // depending on version. Fall back to the client_id we sent so the row
   // still has a stable key for dedupe.
-  let externalMessageId: string | undefined
-  try {
-    const parsed = text ? JSON.parse(text) : {}
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      const p = parsed as Record<string, any>
-      externalMessageId =
-        nonEmpty(p.msg_id) ||
-        nonEmpty(p.message_id) ||
-        nonEmpty(p.msg?.message_id) ||
-        nonEmpty(p.msg?.msg_id) ||
-        (Array.isArray(p.msg?.item_list)
-          ? nonEmpty(p.msg.item_list[0]?.msg_id)
-          : undefined)
-    }
-  } catch {
-    // Non-JSON body — fall through to client_id fallback
-  }
+  const externalMessageId = parseWeixinSendResponseText(text)?.externalMessageId
   return {
     externalMessageId: externalMessageId || clientId,
     raw: text,
