@@ -29,6 +29,20 @@ function toNumber(value: unknown): number {
   return 0
 }
 
+function isRecordPayload(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function syncEnvelopePayload<T extends ChatSyncEventType>(
+  envelope: ChatSyncEvent<T>
+): Record<string, unknown> {
+  const payload: unknown = envelope
+  if (!isRecordPayload(payload)) {
+    throw new Error("Chat sync event payload must be an object")
+  }
+  return payload
+}
+
 /**
  * Discriminate a Kysely transaction from the root executor. Kysely exposes
  * `isTransaction` on the instance (true only for a Transaction<DB>); used by the
@@ -91,7 +105,7 @@ export async function appendWorkspaceMemberSyncEventInTransaction<
     type: "chat.sync.event",
     workspaceId: params.workspaceId,
     recipientWorkspaceMemberId: params.workspaceMemberId,
-    payload: envelope as unknown as Record<string, unknown>,
+    payload: syncEnvelopePayload(envelope),
     timestamp: envelope.occurredAt,
   })
 

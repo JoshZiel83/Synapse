@@ -89,7 +89,7 @@ test("replayResolvedRemoteAgentTasksUseCase sends resolved task frames and skips
     type: "agent:task:resolved",
     remoteAgentId,
     taskId: task.id,
-    task: task as unknown as Record<string, unknown>,
+    task,
   })
 })
 
@@ -175,7 +175,7 @@ test("notifyRemoteAgentTaskResolvedUseCase sends only remote-agent-requested tas
         type: "agent:task:resolved",
         remoteAgentId,
         taskId: task.id,
-        task: task as unknown as Record<string, unknown>,
+        task,
       },
     },
   ])

@@ -8,6 +8,7 @@ import {
   type ChatSyncEventPayloadMap,
   type ChatSyncEventType,
 } from "@synapse/shared"
+import { ChatSyncViewSchema } from "@synapse/shared/schemas"
 import type {
   ConversationFeedEventPayloadMap,
   TaskSummary,
@@ -30,6 +31,7 @@ import {
   chatRootExecutor,
   withChatRepeatableRead,
   type ChatConversationItemRow,
+  type ChatWorkspaceMemberSyncEventRow,
 } from "./repo.js"
 import {
   presentChatConversationRecord,
@@ -64,13 +66,6 @@ function toNumber(value: unknown): number {
 
 function rootQueryable(): Executor {
   return chatRootExecutor()
-}
-
-function asChatSyncEventPayload<T extends ChatSyncEventType>(
-  eventType: T,
-  payload: Record<string, unknown>
-): ChatSyncEventPayloadMap[T] {
-  return payload as unknown as ChatSyncEventPayloadMap[T]
 }
 
 async function enrichTaskSummaryForUser(task: TaskSummary, userId: string) {
@@ -156,6 +151,33 @@ async function getCurrentSyncCursor(
   )
 }
 
+export function parseChatSyncEventRow(
+  row: ChatWorkspaceMemberSyncEventRow
+): ChatSyncEvent {
+  const event = {
+    syncSeq: toNumber(row.syncSeq),
+    memberSeq: toNumber(row.memberSeq),
+    workspaceId: row.workspaceId,
+    workspaceMemberId: row.workspaceMemberId,
+    conversationId: row.conversationId ?? undefined,
+    itemId: row.itemId ?? undefined,
+    eventType: row.eventType,
+    payload: row.payload,
+    occurredAt: presentInstant(row.occurredAt),
+  }
+  const parsed = ChatSyncViewSchema.parse({
+    events: [event],
+    nextCursor: event.memberSeq,
+    hasMore: false,
+  })
+  if (!parsed.events[0]) {
+    throw new Error("Chat sync row did not produce an event")
+  }
+  // ChatSyncViewSchema is the runtime proof. The cast bridges current Zod
+  // inference to the hand-written shared ChatSyncEvent type.
+  return event as ChatSyncEvent
+}
+
 export async function listWorkspaceConversationViews(params: {
   workspaceId: string
   workspaceMemberId: string
@@ -223,23 +245,15 @@ export async function getChatSync(params: {
   const rows = hasMore ? result.slice(0, limit) : result
   const events: ChatSyncEvent[] = await Promise.all(
     rows.map(async (row) => {
-      const eventType = row.eventType
-      const payload = asChatSyncEventPayload(eventType, row.payload)
+      const event = parseChatSyncEventRow(row)
       const enrichedPayload = await enrichChatSyncEventPayloadForViewer(
-        eventType,
-        payload,
+        event.eventType,
+        event.payload,
         identity.userId
       )
       return {
-        syncSeq: toNumber(row.syncSeq),
-        memberSeq: toNumber(row.memberSeq),
-        workspaceId: row.workspaceId,
-        workspaceMemberId: row.workspaceMemberId,
-        conversationId: row.conversationId ?? undefined,
-        itemId: row.itemId ?? undefined,
-        eventType,
+        ...event,
         payload: enrichedPayload,
-        occurredAt: presentInstant(row.occurredAt),
       }
     })
   )

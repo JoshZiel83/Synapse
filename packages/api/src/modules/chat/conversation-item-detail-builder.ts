@@ -3,11 +3,10 @@ import {
   CONVERSATION_ITEM_TYPE,
   type ConversationReplyRef,
 } from "@synapse/shared"
+import { parseConversationFeedEventPayload } from "@synapse/shared/schemas"
 import type {
   ConversationEventContextPolicy,
   ConversationEventTimelinePolicy,
-  ConversationFeedEventPayloadMap,
-  ConversationFeedEventType,
 } from "@synapse/shared/types"
 import type { HydratedConversationItemRecord } from "./conversation-item-hydration.js"
 import {
@@ -41,13 +40,6 @@ function toNumber(value: unknown): number {
     }
   }
   return 0
-}
-
-function asConversationFeedEventPayload<T extends ConversationFeedEventType>(
-  eventType: T,
-  payload: Record<string, unknown>
-): ConversationFeedEventPayloadMap[T] {
-  return payload as unknown as ConversationFeedEventPayloadMap[T]
 }
 
 function existingParticipants(
@@ -111,7 +103,7 @@ export function buildConversationItemDetail({
       ...baseItem,
       itemType: CONVERSATION_ITEM_TYPE.EVENT,
       subtype: row.subtype,
-      eventPayload: asConversationFeedEventPayload(
+      eventPayload: parseConversationFeedEventPayload(
         row.subtype,
         row.eventPayload
       ),

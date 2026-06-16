@@ -345,6 +345,62 @@ test("presentTaskSummary consumes normalized task rows without JSON parsing", ()
   assert.equal(summary.userInput.questions[0]?.answer?.text, "ok")
 })
 
+function runtimeAuthorizationTaskRow(
+  overrides: Partial<RawTaskDbRow> = {}
+): ReturnType<typeof normalizeTaskRow> {
+  return normalizeTaskRow(
+    buildTaskDbRow({
+      kind: TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION,
+      lifecycle_status: "auth_required",
+      requested_tool_name: "shell",
+      device_tool_stable_key: "commandline.shell",
+      reason: "Needs command access",
+      request_mode: "blocking",
+      requested_action: {
+        capability: "commandline",
+        toolName: "shell",
+        summary: "Run command",
+      },
+      grant_options: [],
+      available_presets: ["once"],
+      source_request_args: {},
+      device_id: "device-1",
+      device_capability_id: "capability-1",
+      device_exposure_id: "exposure-1",
+      device_display_name: "Laptop",
+      exposure_display_name: "Shell",
+      ...overrides,
+    })
+  )
+}
+
+test("presentTaskSummary validates runtime authorization requested action via shared schema", () => {
+  const summary = presentTaskSummary(runtimeAuthorizationTaskRow())
+
+  assert.equal(summary.kind, TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION)
+  if (summary.kind !== TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION) {
+    throw new Error("Expected runtime authorization task summary")
+  }
+  assert.deepEqual(summary.runtimeAuthorization.requestedAction, {
+    capability: "commandline",
+    toolName: "shell",
+    summary: "Run command",
+  })
+})
+
+test("presentTaskSummary rejects malformed runtime authorization requested action", () => {
+  assert.throws(() =>
+    presentTaskSummary(
+      runtimeAuthorizationTaskRow({
+        requested_action: {
+          capability: "commandline",
+          toolName: "shell",
+        },
+      })
+    )
+  )
+})
+
 test(
   "upsertTaskTransportProjection inserts and re-arms recoverable skipped projections",
   { timeout: 5 * 60_000 },

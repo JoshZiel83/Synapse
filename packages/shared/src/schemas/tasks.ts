@@ -22,6 +22,7 @@ import {
   GrantPolicySchema,
 } from "../access/policies/index.js"
 import { CanonicalContentBlockSchema } from "./chat-content-block.js"
+import type { RuntimeAuthorizationRequestedAction } from "../types/index.js"
 
 const timestampSchema = z.string()
 
@@ -166,6 +167,14 @@ const RuntimeAuthorizationRequestedActionSchema = z.object({
   }).optional(),
   commandline: CommandlinePolicySchema.optional(),
 })
+
+export function parseRuntimeAuthorizationRequestedAction(
+  value: unknown
+): RuntimeAuthorizationRequestedAction {
+  return RuntimeAuthorizationRequestedActionSchema.parse(
+    value
+  ) as RuntimeAuthorizationRequestedAction
+}
 
 const RuntimeAuthorizationTaskDetailsSchema = z.object({
   requestedToolName: z.string(),

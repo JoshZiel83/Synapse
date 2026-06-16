@@ -42,6 +42,10 @@ import {
   TaskNoticeSummarySchema,
   TaskSummarySchema,
 } from "./tasks.js"
+import type {
+  ConversationFeedEventPayloadMap,
+  ConversationFeedEventType,
+} from "../types/index.js"
 
 /**
  * App-facing contracts for the chat module's APP routes (master plan §5.3).
@@ -267,6 +271,22 @@ const MemoryEventPayloadBaseSchema = z.object({
   sourceTurnId: z.string().optional(),
 })
 
+const ActorRenamedEventPayloadSchema = z.object({
+  actor: ConversationEntityRefSchema,
+  oldName: z.string().optional(),
+  newName: z.string(),
+  sourceTurnId: z.string().optional(),
+})
+
+const ActorAvatarChangedEventPayloadSchema = z.object({
+  actor: ConversationEntityRefSchema,
+  oldAvatarEmoji: z.string().optional(),
+  newAvatarEmoji: z.string().optional(),
+  oldAvatarUrl: z.string().optional(),
+  newAvatarUrl: z.string().optional(),
+  sourceTurnId: z.string().optional(),
+})
+
 const AutomationNoticePayloadSchema = z.object({
   automationId: z.string(),
   executionId: z.string(),
@@ -283,6 +303,70 @@ const AutomationNoticePayloadSchema = z.object({
   message: z.string(),
   messageBlocks: z.array(CanonicalContentBlockSchema).optional(),
 })
+
+const TaskRequestedEventPayloadSchema = z.object({
+  task: TaskSummarySchema,
+})
+
+const ConversationFeedEventPayloadEnvelopeSchema = z.discriminatedUnion(
+  "subtype",
+  [
+    z.object({
+      subtype: z.literal(CONVERSATION_FEED_EVENT_TYPE.PARTICIPANT_JOINED),
+      eventPayload: ParticipantEventPayloadSchema,
+    }),
+    z.object({
+      subtype: z.literal(CONVERSATION_FEED_EVENT_TYPE.PARTICIPANT_KICKED),
+      eventPayload: ParticipantEventPayloadSchema.extend({
+        reason: z.string().optional(),
+      }),
+    }),
+    z.object({
+      subtype: z.literal(CONVERSATION_FEED_EVENT_TYPE.PARTICIPANT_LEFT),
+      eventPayload: ParticipantEventPayloadSchema,
+    }),
+    z.object({
+      subtype: z.literal(CONVERSATION_FEED_EVENT_TYPE.MEMORY_SAVED),
+      eventPayload: MemoryEventPayloadBaseSchema,
+    }),
+    z.object({
+      subtype: z.literal(CONVERSATION_FEED_EVENT_TYPE.MEMORY_UPDATED),
+      eventPayload: MemoryEventPayloadBaseSchema.extend({
+        supersedesMemoryId: z.string().optional(),
+      }),
+    }),
+    z.object({
+      subtype: z.literal(CONVERSATION_FEED_EVENT_TYPE.ACTOR_RENAMED),
+      eventPayload: ActorRenamedEventPayloadSchema,
+    }),
+    z.object({
+      subtype: z.literal(CONVERSATION_FEED_EVENT_TYPE.ACTOR_AVATAR_CHANGED),
+      eventPayload: ActorAvatarChangedEventPayloadSchema,
+    }),
+    z.object({
+      subtype: z.literal(CONVERSATION_FEED_EVENT_TYPE.AUTOMATION_NOTICE),
+      eventPayload: AutomationNoticePayloadSchema,
+    }),
+    z.object({
+      subtype: z.literal(CONVERSATION_FEED_EVENT_TYPE.TASK_REQUESTED),
+      eventPayload: TaskRequestedEventPayloadSchema,
+    }),
+    z.object({
+      subtype: z.literal(CONVERSATION_FEED_EVENT_TYPE.TASK_NOTICE),
+      eventPayload: TaskNoticeSummarySchema,
+    }),
+  ]
+)
+
+export function parseConversationFeedEventPayload<
+  T extends ConversationFeedEventType,
+>(subtype: T, eventPayload: unknown): ConversationFeedEventPayloadMap[T] {
+  const parsed = ConversationFeedEventPayloadEnvelopeSchema.parse({
+    subtype,
+    eventPayload,
+  })
+  return parsed.eventPayload as ConversationFeedEventPayloadMap[T]
+}
 
 const ChatConversationEventItemBaseSchema =
   ChatConversationItemBaseSchema.extend({
@@ -320,23 +404,11 @@ const ChatConversationEventItemSchema = z.discriminatedUnion("subtype", [
   }),
   ChatConversationEventItemBaseSchema.extend({
     subtype: z.literal(CONVERSATION_FEED_EVENT_TYPE.ACTOR_RENAMED),
-    eventPayload: z.object({
-      actor: ConversationEntityRefSchema,
-      oldName: z.string().optional(),
-      newName: z.string(),
-      sourceTurnId: z.string().optional(),
-    }),
+    eventPayload: ActorRenamedEventPayloadSchema,
   }),
   ChatConversationEventItemBaseSchema.extend({
     subtype: z.literal(CONVERSATION_FEED_EVENT_TYPE.ACTOR_AVATAR_CHANGED),
-    eventPayload: z.object({
-      actor: ConversationEntityRefSchema,
-      oldAvatarEmoji: z.string().optional(),
-      newAvatarEmoji: z.string().optional(),
-      oldAvatarUrl: z.string().optional(),
-      newAvatarUrl: z.string().optional(),
-      sourceTurnId: z.string().optional(),
-    }),
+    eventPayload: ActorAvatarChangedEventPayloadSchema,
   }),
   ChatConversationEventItemBaseSchema.extend({
     subtype: z.literal(CONVERSATION_FEED_EVENT_TYPE.AUTOMATION_NOTICE),
@@ -344,9 +416,7 @@ const ChatConversationEventItemSchema = z.discriminatedUnion("subtype", [
   }),
   ChatConversationEventItemBaseSchema.extend({
     subtype: z.literal(CONVERSATION_FEED_EVENT_TYPE.TASK_REQUESTED),
-    eventPayload: z.object({
-      task: TaskSummarySchema,
-    }),
+    eventPayload: TaskRequestedEventPayloadSchema,
   }),
   ChatConversationEventItemBaseSchema.extend({
     subtype: z.literal(CONVERSATION_FEED_EVENT_TYPE.TASK_NOTICE),

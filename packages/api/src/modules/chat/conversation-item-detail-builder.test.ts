@@ -247,6 +247,26 @@ test("buildConversationItemDetail maps event payload and policies", () => {
   )
 })
 
+test("buildConversationItemDetail validates event payload by subtype", () => {
+  const row = itemRow({
+    id: randomUUID(),
+    conversationId: randomUUID(),
+    itemType: CONVERSATION_ITEM_TYPE.EVENT,
+    subtype: "participant_joined",
+    eventPayload: { batchId: randomUUID() },
+  })
+
+  assert.throws(() =>
+    buildConversationItemDetail({
+      row,
+      hydrated: hydratedItem(row, { contentBlocks: [] }),
+      participantById: new Map(),
+      contextTargetIdsByItem: new Map(),
+      replyRefById: new Map(),
+    })
+  )
+})
+
 test("buildConversationItemDetail rejects invalid event and summary subtypes", () => {
   const conversationId = randomUUID()
   const eventRow = itemRow({

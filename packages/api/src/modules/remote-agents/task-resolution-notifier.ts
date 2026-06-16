@@ -30,8 +30,16 @@ export type NotifyRemoteAgentTaskResolvedDeps = {
   ) => boolean
 }
 
+function isRecordPayload(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
 function taskAsWirePayload(task: TaskSummary): Record<string, unknown> {
-  return TaskSummarySchema.parse(task) as unknown as Record<string, unknown>
+  const payload: unknown = TaskSummarySchema.parse(task)
+  if (!isRecordPayload(payload)) {
+    throw new Error("Task summary wire payload must be an object")
+  }
+  return payload
 }
 
 export async function replayResolvedRemoteAgentTasksUseCase(

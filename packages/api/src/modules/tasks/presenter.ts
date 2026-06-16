@@ -1,10 +1,10 @@
 import { TASK_INPUT_QUESTION_TYPES, TASK_REQUEST_KIND } from "@synapse/shared"
+import { parseRuntimeAuthorizationRequestedAction } from "@synapse/shared/schemas"
 import type {
   ConversationEntityRef,
   PlanChecklistStep,
   RuntimeAuthorizationPreset,
   RuntimeAuthorizationRequestMode,
-  RuntimeAuthorizationRequestedAction,
   RuntimeAuthorizationTaskDetails,
   TaskInputAnswer,
   TaskInputOption,
@@ -555,7 +555,7 @@ export function presentTaskSummary(row: RawTaskRow): TaskSummary {
   const requestedAction = requireRecord(
     row.requested_action,
     `Task ${row.id} requested_action`
-  ) as unknown as RuntimeAuthorizationRequestedAction
+  )
   const grantOptions = row.grant_options ?? []
   const availablePresets = row.available_presets ?? []
   const runtimeAuthorization: RuntimeAuthorizationTaskDetails = {
@@ -567,7 +567,7 @@ export function presentTaskSummary(row: RawTaskRow): TaskSummary {
       row.device_tool_stable_key,
       `Task ${row.id} device_tool_stable_key`
     ),
-    requestedAction,
+    requestedAction: parseRuntimeAuthorizationRequestedAction(requestedAction),
     reason: requireTrimmedString(
       row.reason,
       `Task ${row.id} runtime_authorization.reason`
