@@ -163,3 +163,25 @@ test("serializeRemoteAgentApiToDaemonMessage emits snake_case deliveries", () =>
     ],
   })
 })
+
+test("serializeRemoteAgentApiToDaemonMessage emits snake_case resolved task frames", () => {
+  const serialized = serializeRemoteAgentApiToDaemonMessage({
+    type: "agent:task:resolved",
+    remoteAgentId: "agent-1",
+    taskId: "task-1",
+    task: {
+      id: "task-1",
+      lifecycleStatus: "completed",
+    },
+  })
+
+  assert.deepEqual(JSON.parse(serialized), {
+    type: "agent:task:resolved",
+    remote_agent_id: "agent-1",
+    task_id: "task-1",
+    task: {
+      id: "task-1",
+      lifecycleStatus: "completed",
+    },
+  })
+})

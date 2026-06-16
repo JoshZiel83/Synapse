@@ -4,6 +4,7 @@ import {
   RemoteAgentApiAuthErrorMessageSchema,
   RemoteAgentApiConnectedMessageSchema,
   RemoteAgentApiStartMessageSchema,
+  RemoteAgentApiTaskResolvedMessageSchema,
   RemoteAgentDaemonToApiWsMessageSchema,
   RemoteAgentMachineReadyMessageSchema,
   RemoteAgentStatusMessageSchema,
@@ -155,4 +156,27 @@ test("RemoteAgentApiStartMessageSchema accepts snake_case start frame", () => {
   })
 
   assert.equal(parsed.runtime_kind, "codex")
+})
+
+test("RemoteAgentApiTaskResolvedMessageSchema accepts snake_case task resolved frame", () => {
+  const parsed = RemoteAgentApiTaskResolvedMessageSchema.parse({
+    type: "agent:task:resolved",
+    remote_agent_id: "agent-1",
+    task_id: "task-1",
+    task: { id: "task-1", lifecycleStatus: "completed" },
+  })
+
+  assert.equal(parsed.remote_agent_id, "agent-1")
+  assert.equal(parsed.task_id, "task-1")
+})
+
+test("RemoteAgentApiTaskResolvedMessageSchema rejects camelCase task resolved fields", () => {
+  assert.throws(() =>
+    RemoteAgentApiTaskResolvedMessageSchema.parse({
+      type: "agent:task:resolved",
+      remoteAgentId: "agent-1",
+      taskId: "task-1",
+      task: { id: "task-1" },
+    })
+  )
 })
