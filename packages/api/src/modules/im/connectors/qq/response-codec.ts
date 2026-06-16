@@ -73,6 +73,13 @@ export async function readQqProviderJsonObjectResponse(
   )
 }
 
+export async function readQqProviderSuccessJsonObjectResponse(
+  response: Response
+): Promise<Record<string, unknown> | null> {
+  const text = await response.text().catch(() => "")
+  return parseQqProviderJsonObjectText(text)
+}
+
 export function parseQqProviderFailureText(
   text: string
 ): QqProviderFailureBody {

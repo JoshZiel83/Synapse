@@ -78,7 +78,7 @@ import {
 import {
   extractQqExternalMessageId,
   parseQqProviderFailureText,
-  readQqProviderJsonObjectResponse,
+  readQqProviderSuccessJsonObjectResponse,
 } from "./response-codec.js"
 import { QQ_MSG_TYPE } from "./types.js"
 
@@ -358,6 +358,12 @@ async function onSendSuccess(
   res: Response
 ): Promise<OutboundSendResult> {
   const json = await safeJson(res)
+  if (!json) {
+    throw new PermanentTransportError(
+      "qq send returned malformed provider success response",
+      { code: "qq_malformed_success_response" }
+    )
+  }
   const externalMessageId = extractQqExternalMessageId(json)
   await input.patchLinkMetadata({
     qq: {
@@ -392,8 +398,10 @@ async function safeText(res: Response): Promise<string> {
   }
 }
 
-async function safeJson(res: Response): Promise<unknown> {
-  return readQqProviderJsonObjectResponse(res)
+async function safeJson(
+  res: Response
+): Promise<Record<string, unknown> | null> {
+  return readQqProviderSuccessJsonObjectResponse(res)
 }
 
 function endpointUrlFor(input: OutboundSendInput): { url: string } {

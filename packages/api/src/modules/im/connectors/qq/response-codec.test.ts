@@ -6,6 +6,8 @@ import {
   parseQqProviderFailureText,
   parseQqSendSuccessResponse,
   parseQqUploadSuccessResponse,
+  readQqProviderJsonObjectResponse,
+  readQqProviderSuccessJsonObjectResponse,
 } from "./response-codec.js"
 
 test("parseQqProviderFailureText: reads code/message aliases", () => {
@@ -30,6 +32,42 @@ test("parseQqProviderFailureText: malformed or drifted payload falls back to raw
   assert.deepEqual(
     parseQqProviderFailureText(JSON.stringify({ code: "304082", message: 42 })),
     { message: '{"code":"304082","message":42}' }
+  )
+})
+
+test("readQqProviderSuccessJsonObjectResponse: rejects malformed success bodies without lenient fallback", async () => {
+  assert.deepEqual(
+    await readQqProviderSuccessJsonObjectResponse(
+      new Response(JSON.stringify({ id: "MSG-1" }), { status: 200 })
+    ),
+    { id: "MSG-1" }
+  )
+  assert.deepEqual(
+    await readQqProviderSuccessJsonObjectResponse(
+      new Response("", { status: 200 })
+    ),
+    {}
+  )
+
+  for (const body of ["{not-json", "[]", "null", JSON.stringify("ok")]) {
+    assert.equal(
+      await readQqProviderSuccessJsonObjectResponse(
+        new Response(body, { status: 200 })
+      ),
+      null
+    )
+  }
+})
+
+test("readQqProviderJsonObjectResponse: keeps malformed_response compatibility for token/config callers", async () => {
+  assert.deepEqual(
+    await readQqProviderJsonObjectResponse(
+      new Response("{not-json", { status: 200 })
+    ),
+    {
+      code: "malformed_response",
+      message: "QQ provider response body is not a JSON object",
+    }
   )
 })
 

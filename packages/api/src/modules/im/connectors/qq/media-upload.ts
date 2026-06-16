@@ -40,7 +40,7 @@ import type { TransportAccountSummary } from "@synapse/shared/types"
 import {
   extractQqProviderBizCode,
   parseQqUploadSuccessResponse,
-  readQqProviderJsonObjectResponse,
+  readQqProviderSuccessJsonObjectResponse,
 } from "./response-codec.js"
 
 export interface UploadSource {
@@ -159,7 +159,14 @@ export async function uploadQqMedia(
       { code: code ? `qq_${code}` : `qq_http_${res.status}` }
     )
   }
-  const json = parseQqUploadSuccessResponse(await safeJson(res))
+  const responseBody = await safeJson(res)
+  if (!responseBody) {
+    throw new PermanentTransportError(
+      "qq upload returned malformed provider success response",
+      { code: "qq_malformed_success_response" }
+    )
+  }
+  const json = parseQqUploadSuccessResponse(responseBody)
   if (!json) {
     throw new PermanentTransportError("qq upload returned no file_info", {
       code: "qq_missing_file_info",
@@ -210,8 +217,10 @@ async function safeText(res: Response): Promise<string> {
   }
 }
 
-async function safeJson(res: Response): Promise<unknown> {
-  return readQqProviderJsonObjectResponse(res)
+async function safeJson(
+  res: Response
+): Promise<Record<string, unknown> | null> {
+  return readQqProviderSuccessJsonObjectResponse(res)
 }
 
 function extractBizCode(text: string): number | undefined {
