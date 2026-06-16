@@ -75,6 +75,23 @@ function rel(file: string): string {
 }
 
 test("R6 package ownership: in-repo code imports tool-presentation from shared", () => {
+  const packageJson = JSON.parse(
+    readFileSync(
+      join(repoRoot, "packages/device-protocol/package.json"),
+      "utf8"
+    )
+  ) as { exports?: Record<string, unknown> }
+  assert.equal(
+    packageJson.exports?.["./tool-presentation"],
+    undefined,
+    "device-protocol should not export the old tool-presentation owner subpath"
+  )
+  assert.equal(
+    packageJson.exports?.["./tool-presentation/schema"],
+    undefined,
+    "device-protocol should not export the old tool-presentation schema subpath"
+  )
+
   const forbidden: string[] = []
   for (const file of productionSourceFiles()) {
     const source = readFileSync(file, "utf8")
@@ -91,7 +108,7 @@ test("R6 package ownership: in-repo code imports tool-presentation from shared",
   assert.deepEqual(
     forbidden,
     [],
-    "in-repo production code should use @synapse/shared/tool-presentation; device-protocol subpaths are compatibility mirrors"
+    "in-repo production code should use @synapse/shared/tool-presentation; device-protocol no longer owns tool-presentation subpaths"
   )
 })
 
