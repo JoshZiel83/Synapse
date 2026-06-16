@@ -93,7 +93,11 @@ import type {
   RunningAccount,
 } from "../types.js"
 import { getDingtalkCredentialsOrThrow } from "./credentials.js"
-import { normalizeDingtalkPayload } from "./normalize.js"
+import {
+  normalizeDingtalkPayload,
+  type DingtalkInboundPayload,
+} from "./normalize.js"
+import { parseDingtalkStreamPayload } from "./stream-codec.js"
 
 // Tuning constants ----------------------------------------------------------
 const BACKOFF_BASE_MS = 1_000
@@ -134,19 +138,6 @@ function checkAndMark(map: Map<string, true>, key: string): boolean {
     if (oldest !== undefined) map.delete(oldest)
   }
   return false
-}
-
-export interface RawRobotPayload {
-  msgId?: string
-  msgtype?: string
-  conversationId?: string
-  conversationType?: string
-  senderId?: string
-  senderStaffId?: string
-  chatbotUserId?: string
-  sessionWebhook?: string
-  sessionWebhookExpiredTime?: number | string
-  [key: string]: unknown
 }
 
 export interface StartDingtalkStreamOptions {
@@ -303,13 +294,13 @@ export async function startDingtalkAccount(
     }
 
     // ─── Step C: JSON parse ───
-    let parsed: RawRobotPayload
-    try {
-      parsed = JSON.parse(msg.data) as RawRobotPayload
-    } catch (err) {
+    const parsed: DingtalkInboundPayload | null = parseDingtalkStreamPayload(
+      msg.data
+    )
+    if (!parsed) {
       ctx.logger.error(
-        "dingtalk: failed to JSON.parse inbound payload (already ACKed, dropping)",
-        err,
+        "dingtalk: invalid inbound payload JSON object (already ACKed, dropping)",
+        undefined,
         { accountId: ctx.account.id }
       )
       return

@@ -244,6 +244,23 @@ test("stream: ACK still sent when JSON.parse fails (poison payload)", async () =
   await running.stop()
 })
 
+test("stream: ACK still sent when inbound JSON is not an object", async () => {
+  const { factory, state } = makeMockClientFactory()
+  const { ctx, abortController, emitted } = makeContext()
+  const running = await startDingtalkAccount(ctx, {
+    clientFactory: factory,
+    minStableConnectionMs: 0,
+  })
+  await nextTick()
+  state.client.__sentInbound(downStream("hdr-array", []))
+  state.client.__sentInbound(downStream("hdr-null", "null"))
+  await nextTick()
+  assert.deepEqual(state.client.__acks, ["hdr-array", "hdr-null"])
+  assert.equal(emitted.length, 0)
+  abortController.abort()
+  await running.stop()
+})
+
 test("stream: ACK still sent when business dedup hits (same msgId twice)", async () => {
   const { factory, state } = makeMockClientFactory()
   const { ctx, abortController, emitted } = makeContext()
