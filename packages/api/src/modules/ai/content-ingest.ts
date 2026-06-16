@@ -12,6 +12,23 @@
 import { type CanonicalContentBlock, type ProviderType } from "@synapse/shared"
 import { ingestToolOutput } from "../files/ingest.js"
 
+function isProviderImageBlock(
+  value: unknown
+): value is Record<string, unknown> {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (value as { type?: unknown }).type === "image"
+  )
+}
+
+export function readProviderImageBlocks(
+  rawBlocks: unknown[]
+): Record<string, unknown>[] {
+  return rawBlocks.filter(isProviderImageBlock)
+}
+
 export async function ingestResponseMedia(
   rawBlocks: unknown[],
   providerType: ProviderType,
@@ -20,10 +37,7 @@ export async function ingestResponseMedia(
   if (!Array.isArray(rawBlocks) || rawBlocks.length === 0) return []
 
   if (providerType === "anthropic") {
-    const imageBlocks = rawBlocks.filter(
-      (block) =>
-        block && typeof block === "object" && (block as any).type === "image"
-    )
+    const imageBlocks = readProviderImageBlocks(rawBlocks)
     if (imageBlocks.length === 0) return []
     return ingestToolOutput(imageBlocks, {
       workspaceId,
