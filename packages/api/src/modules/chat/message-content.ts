@@ -4,6 +4,8 @@ import {
   isCanonicalContentBlock,
   mentionBlock,
   normalizeCanonicalContentBlocks,
+  parseJsonObject,
+  parseJsonObjectOrUndefined,
   textBlock,
   type CanonicalContentBlockInput,
   type CanonicalContentBlock,
@@ -84,28 +86,6 @@ function getCategoryFromMimeType(mimeType: string): CanonicalFileCategory {
   if (mimeType.startsWith("audio/")) return "audio"
   if (mimeType.startsWith("video/")) return "video"
   return "document"
-}
-
-function parseJson(value: unknown): Record<string, unknown> {
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value)
-    } catch {
-      return {}
-    }
-  }
-  return (value || {}) as Record<string, unknown>
-}
-
-function parseJsonValue(value: unknown): unknown {
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value)
-    } catch {
-      return undefined
-    }
-  }
-  return value
 }
 
 function parseSizeBytes(value: unknown): number {
@@ -217,11 +197,11 @@ export function draftPartsToCanonicalContentBlocks(
 
     if (part.type === "json") {
       const payload =
-        part.json ??
-        parseJsonValue(
+        parseJsonObjectOrUndefined(part.json) ??
+        parseJsonObjectOrUndefined(
           (part.metadata as Record<string, unknown> | undefined)?.jsonValue
         )
-      if (!payload || typeof payload !== "object") continue
+      if (!payload) continue
       const normalized = normalizeCanonicalContentBlocks([
         payload as CanonicalContentBlockInput,
       ])
@@ -253,7 +233,7 @@ export function itemPartsToCanonicalContentBlocks(
     }
 
     if (part.partType === "file_ref" && part.refSha256) {
-      const metadata = parseJson(part.metadata)
+      const metadata = parseJsonObject(part.metadata)
       const mimeType =
         part.mimeType ||
         (typeof metadata.mimeType === "string" ? metadata.mimeType : null) ||
@@ -284,8 +264,8 @@ export function itemPartsToCanonicalContentBlocks(
     }
 
     if (part.partType === "json") {
-      const payload = parseJsonValue(part.jsonValue)
-      if (!payload || typeof payload !== "object") continue
+      const payload = parseJsonObjectOrUndefined(part.jsonValue)
+      if (!payload) continue
       const normalized = normalizeCanonicalContentBlocks([
         payload as CanonicalContentBlockInput,
       ])

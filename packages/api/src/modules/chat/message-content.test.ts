@@ -1,7 +1,10 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { extractText } from "@synapse/shared"
-import { itemPartsToCanonicalContentBlocks } from "./message-content.js"
+import {
+  draftPartsToCanonicalContentBlocks,
+  itemPartsToCanonicalContentBlocks,
+} from "./message-content.js"
 
 test("itemPartsToCanonicalContentBlocks reads Kysely camelCase part rows", () => {
   const blocks = itemPartsToCanonicalContentBlocks([
@@ -38,4 +41,108 @@ test("itemPartsToCanonicalContentBlocks keeps legacy snake_case part rows workin
   ])
 
   assert.equal(extractText(blocks), "legacy archive text")
+})
+
+test("itemPartsToCanonicalContentBlocks parses stringified file metadata as object only", () => {
+  const blocks = itemPartsToCanonicalContentBlocks([
+    {
+      partType: "file_ref",
+      refSha256:
+        "0000000000000000000000000000000000000000000000000000000000000002",
+      metadata: JSON.stringify({
+        path: "/tmp/photo.png",
+        mimeType: "image/png",
+        name: "photo.png",
+        sizeBytes: "128",
+        category: "image",
+      }),
+    },
+    {
+      partType: "file_ref",
+      refSha256:
+        "0000000000000000000000000000000000000000000000000000000000000003",
+      metadata: JSON.stringify([{ mimeType: "image/png" }]),
+    },
+  ])
+
+  assert.equal(blocks[0]?.type, "file_ref")
+  if (blocks[0]?.type !== "file_ref") throw new Error("expected file_ref")
+  assert.equal(blocks[0].path, "/tmp/photo.png")
+  assert.equal(blocks[0].mimeType, "image/png")
+  assert.equal(blocks[0].name, "photo.png")
+  assert.equal(blocks[0].sizeBytes, 128)
+  assert.equal(blocks[0].category, "image")
+
+  assert.equal(blocks[1]?.type, "file_ref")
+  if (blocks[1]?.type !== "file_ref") throw new Error("expected file_ref")
+  assert.equal(blocks[1].mimeType, "application/octet-stream")
+  assert.equal(blocks[1].name, "file")
+  assert.equal(blocks[1].sizeBytes, 0)
+  assert.equal(blocks[1].category, "document")
+})
+
+test("itemPartsToCanonicalContentBlocks parses json part payloads as object only", () => {
+  const blocks = itemPartsToCanonicalContentBlocks([
+    {
+      partType: "json",
+      jsonValue: JSON.stringify({
+        type: "mention",
+        mention: {
+          participantType: "user",
+          userId: "user-1",
+          name: "Alice",
+        },
+      }),
+    },
+    {
+      partType: "json",
+      jsonValue: JSON.stringify([
+        {
+          type: "mention",
+          mention: { participantType: "user", name: "Ignored" },
+        },
+      ]),
+    },
+    {
+      partType: "json",
+      jsonValue: JSON.stringify("not a block"),
+    },
+  ])
+
+  assert.equal(blocks.length, 1)
+  assert.equal(blocks[0]?.type, "mention")
+  if (blocks[0]?.type !== "mention") throw new Error("expected mention")
+  assert.equal(blocks[0].mention.name, "Alice")
+})
+
+test("draftPartsToCanonicalContentBlocks parses json payloads as object only", () => {
+  const blocks = draftPartsToCanonicalContentBlocks([
+    {
+      type: "json",
+      json: [
+        {
+          type: "mention",
+          mention: { participantType: "user", name: "Ignored" },
+        },
+      ],
+    },
+    {
+      type: "json",
+      metadata: {
+        jsonValue: JSON.stringify({
+          type: "mention",
+          mention: {
+            participantType: "actor",
+            actorId: "actor-1",
+            name: "Bot",
+          },
+        }),
+      },
+    },
+  ])
+
+  assert.equal(blocks.length, 1)
+  assert.equal(blocks[0]?.type, "mention")
+  if (blocks[0]?.type !== "mention") throw new Error("expected mention")
+  assert.equal(blocks[0].mention.name, "Bot")
 })
