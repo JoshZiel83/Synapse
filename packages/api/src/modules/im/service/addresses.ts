@@ -88,6 +88,44 @@ const syncTransportAddressConversationParticipantDeps: SyncTransportAddressConve
     archiveConversationParticipantIfOrphaned,
   }
 
+type SetTransportAddressLinkedUserDeps = {
+  assertWorkspaceMember: (
+    params: { workspaceId: string; workspaceMemberId: string },
+    queryable: Executor
+  ) => Promise<boolean>
+  updateTransportAddressLinkedMember: (params: {
+    workspaceId: string
+    transportAddressId: string
+    workspaceMemberId: string | null
+    queryable: Executor
+  }) => Promise<{ id: string } | undefined>
+  selectConversationIdsForTransportAddress: (
+    transportAddressId: string,
+    queryable: Executor
+  ) => Promise<string[]>
+  syncTransportAddressConversationParticipant: (
+    params: {
+      conversationId: string
+      transportAddressId: string
+      workspaceMemberId?: string | null
+      recordJoinEvent?: boolean
+    },
+    queryable: Executor
+  ) => Promise<unknown>
+}
+
+const setTransportAddressLinkedUserDeps: SetTransportAddressLinkedUserDeps = {
+  assertWorkspaceMember,
+  updateTransportAddressLinkedMember,
+  selectConversationIdsForTransportAddress,
+  syncTransportAddressConversationParticipant: (params, queryable) =>
+    syncTransportAddressConversationParticipantUseCase(
+      params,
+      queryable,
+      syncTransportAddressConversationParticipantDeps
+    ),
+}
+
 export async function ensureTransportAddress(params: {
   workspaceId: string
   transportAccountId: string
@@ -310,28 +348,66 @@ export async function syncTransportAddressConversationParticipantUseCase(
   return desiredMember
 }
 
-async function syncTransportAddressLinkedUserMemberships(params: {
-  transportAddressId: string
-  workspaceMemberId?: string | null
-}) {
-  const conversationIds = await selectConversationIdsForTransportAddress(
-    params.transportAddressId
-  )
-  for (const conversationId of conversationIds) {
-    await syncTransportAddressConversationParticipant({
-      conversationId,
-      transportAddressId: params.transportAddressId,
-      workspaceMemberId: params.workspaceMemberId || null,
-      recordJoinEvent: false,
-    })
-  }
+export async function assertWorkspaceMember(
+  params: {
+    workspaceId: string
+    workspaceMemberId: string
+  },
+  queryable?: Executor
+) {
+  return existsWorkspaceMember({ ...params, queryable })
 }
 
-export async function assertWorkspaceMember(params: {
-  workspaceId: string
-  workspaceMemberId: string
-}) {
-  return existsWorkspaceMember(params)
+export async function setTransportAddressLinkedUserUseCase(
+  params: {
+    workspaceId: string
+    transportAddressId: string
+    workspaceMemberId?: string | null
+  },
+  queryable: Executor,
+  deps: SetTransportAddressLinkedUserDeps
+) {
+  const nextWorkspaceMemberId = params.workspaceMemberId || null
+  if (nextWorkspaceMemberId) {
+    const isWorkspaceMember = await deps.assertWorkspaceMember(
+      {
+        workspaceId: params.workspaceId,
+        workspaceMemberId: nextWorkspaceMemberId,
+      },
+      queryable
+    )
+    if (!isWorkspaceMember) {
+      throw new Error("Workspace member not found")
+    }
+  }
+
+  const row = await deps.updateTransportAddressLinkedMember({
+    workspaceId: params.workspaceId,
+    transportAddressId: params.transportAddressId,
+    workspaceMemberId: nextWorkspaceMemberId,
+    queryable,
+  })
+  if (!row) {
+    throw new Error("Transport external user not found")
+  }
+
+  const conversationIds = await deps.selectConversationIdsForTransportAddress(
+    params.transportAddressId,
+    queryable
+  )
+  for (const conversationId of conversationIds) {
+    await deps.syncTransportAddressConversationParticipant(
+      {
+        conversationId,
+        transportAddressId: params.transportAddressId,
+        workspaceMemberId: nextWorkspaceMemberId,
+        recordJoinEvent: false,
+      },
+      queryable
+    )
+  }
+
+  return { transportAddressId: row.id }
 }
 
 export async function setConversationExternalParticipantLinkedUser(params: {
@@ -365,34 +441,17 @@ export async function setTransportAddressLinkedUser(params: {
   transportAddressId: string
   workspaceMemberId?: string | null
 }) {
-  const nextWorkspaceMemberId = params.workspaceMemberId || null
-  if (nextWorkspaceMemberId) {
-    const isWorkspaceMember = await assertWorkspaceMember({
-      workspaceId: params.workspaceId,
-      workspaceMemberId: nextWorkspaceMemberId,
-    })
-    if (!isWorkspaceMember) {
-      throw new Error("Workspace member not found")
-    }
-  }
-
-  const row = await updateTransportAddressLinkedMember({
-    workspaceId: params.workspaceId,
-    transportAddressId: params.transportAddressId,
-    workspaceMemberId: nextWorkspaceMemberId,
-  })
-  if (!row) {
-    throw new Error("Transport external user not found")
-  }
-
-  await syncTransportAddressLinkedUserMemberships({
-    transportAddressId: params.transportAddressId,
-    workspaceMemberId: nextWorkspaceMemberId,
-  })
+  const { transportAddressId } = await runImServiceTransaction((queryable) =>
+    setTransportAddressLinkedUserUseCase(
+      params,
+      queryable,
+      setTransportAddressLinkedUserDeps
+    )
+  )
 
   const [externalUser] = await listTransportExternalUsers({
     workspaceId: params.workspaceId,
-    transportAddressId: row.id,
+    transportAddressId,
   })
   if (!externalUser) {
     throw new Error("Transport external user not found")

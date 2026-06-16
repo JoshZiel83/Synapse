@@ -1316,9 +1316,10 @@ export async function selectAttachedParticipantsForAddress(params: {
 }
 
 export async function selectConversationIdsForTransportAddress(
-  transportAddressId: string
+  transportAddressId: string,
+  queryable: Executor = db
 ): Promise<string[]> {
-  const rows = await db
+  const rows = await queryable
     .selectFrom("conversationParticipantAddresses as cpa")
     .innerJoin(
       "conversationParticipants as cm",
@@ -1363,8 +1364,9 @@ export async function selectConversationExternalParticipantPrimaryAddress(params
 export async function existsWorkspaceMember(params: {
   workspaceId: string
   workspaceMemberId: string
+  queryable?: Executor
 }): Promise<boolean> {
-  const row = await db
+  const row = await (params.queryable ?? db)
     .selectFrom("workspaceMembers")
     .select("workspaceId")
     .where("workspaceId", "=", params.workspaceId)
@@ -1378,8 +1380,9 @@ export async function updateTransportAddressLinkedMember(params: {
   workspaceId: string
   transportAddressId: string
   workspaceMemberId: string | null
+  queryable?: Executor
 }) {
-  return db
+  return (params.queryable ?? db)
     .updateTable("transportAddresses")
     .set({
       workspaceMemberId: params.workspaceMemberId,

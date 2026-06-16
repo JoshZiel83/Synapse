@@ -1,10 +1,16 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import type { Executor } from "../../../infrastructure/database/kysely.js"
-import { syncTransportAddressConversationParticipantUseCase } from "./addresses.js"
+import {
+  setTransportAddressLinkedUserUseCase,
+  syncTransportAddressConversationParticipantUseCase,
+} from "./addresses.js"
 
 type SyncDeps = Parameters<
   typeof syncTransportAddressConversationParticipantUseCase
+>[2]
+type SetLinkedUserDeps = Parameters<
+  typeof setTransportAddressLinkedUserUseCase
 >[2]
 
 function testAddress(overrides: Record<string, unknown> = {}) {
@@ -164,4 +170,112 @@ test("syncTransportAddressConversationParticipantUseCase stops stale detach/arch
     /simulated attach failure/
   )
   assert.deepEqual(calls, ["address", "binding", "activate", "attach"])
+})
+
+test("setTransportAddressLinkedUserUseCase threads one executor through ownership update and every conversation sync", async () => {
+  const queryable = { tx: "same" } as unknown as Executor
+  const calls: string[] = []
+  const deps: SetLinkedUserDeps = {
+    assertWorkspaceMember: async (params, tx) => {
+      assert.equal(tx, queryable)
+      assert.equal(params.workspaceId, "ws-1")
+      assert.equal(params.workspaceMemberId, "member-1")
+      calls.push("member")
+      return true
+    },
+    updateTransportAddressLinkedMember: async (params) => {
+      assert.equal(params.queryable, queryable)
+      assert.equal(params.workspaceId, "ws-1")
+      assert.equal(params.transportAddressId, "addr-1")
+      assert.equal(params.workspaceMemberId, "member-1")
+      calls.push("link")
+      return { id: "addr-1" }
+    },
+    selectConversationIdsForTransportAddress: async (
+      transportAddressId,
+      tx
+    ) => {
+      assert.equal(tx, queryable)
+      assert.equal(transportAddressId, "addr-1")
+      calls.push("conversations")
+      return ["conversation-1", "conversation-2"]
+    },
+    syncTransportAddressConversationParticipant: async (params, tx) => {
+      assert.equal(tx, queryable)
+      assert.equal(params.transportAddressId, "addr-1")
+      assert.equal(params.workspaceMemberId, "member-1")
+      assert.equal(params.recordJoinEvent, false)
+      calls.push(`sync:${params.conversationId}`)
+    },
+  }
+
+  const result = await setTransportAddressLinkedUserUseCase(
+    {
+      workspaceId: "ws-1",
+      transportAddressId: "addr-1",
+      workspaceMemberId: "member-1",
+    },
+    queryable,
+    deps
+  )
+
+  assert.deepEqual(result, { transportAddressId: "addr-1" })
+  assert.deepEqual(calls, [
+    "member",
+    "link",
+    "conversations",
+    "sync:conversation-1",
+    "sync:conversation-2",
+  ])
+})
+
+test("setTransportAddressLinkedUserUseCase stops remaining conversation syncs on failure", async () => {
+  const queryable = { tx: "same" } as unknown as Executor
+  const calls: string[] = []
+  const deps: SetLinkedUserDeps = {
+    assertWorkspaceMember: async () => {
+      calls.push("member")
+      return true
+    },
+    updateTransportAddressLinkedMember: async (params) => {
+      assert.equal(params.queryable, queryable)
+      calls.push("link")
+      return { id: "addr-1" }
+    },
+    selectConversationIdsForTransportAddress: async (
+      _transportAddressId,
+      tx
+    ) => {
+      assert.equal(tx, queryable)
+      calls.push("conversations")
+      return ["conversation-1", "conversation-2", "conversation-3"]
+    },
+    syncTransportAddressConversationParticipant: async (params, tx) => {
+      assert.equal(tx, queryable)
+      calls.push(`sync:${params.conversationId}`)
+      if (params.conversationId === "conversation-2") {
+        throw new Error("simulated conversation sync failure")
+      }
+    },
+  }
+
+  await assert.rejects(
+    setTransportAddressLinkedUserUseCase(
+      {
+        workspaceId: "ws-1",
+        transportAddressId: "addr-1",
+        workspaceMemberId: "member-1",
+      },
+      queryable,
+      deps
+    ),
+    /simulated conversation sync failure/
+  )
+  assert.deepEqual(calls, [
+    "member",
+    "link",
+    "conversations",
+    "sync:conversation-1",
+    "sync:conversation-2",
+  ])
 })
