@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import {
   formatRuntimeJsonForPresentation,
   parseCachedActorRuntimeState,
-} from "./runtime.js"
+} from "./runtime-cache-codec.js"
 
 const validRuntimeState = {
   conversationId: "conversation-1",

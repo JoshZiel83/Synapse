@@ -29,11 +29,14 @@ import {
   type SessionWakeupSourceType,
   type SessionWakeupStatus,
 } from "@synapse/shared"
-import { ActorRuntimeStateSchema } from "@synapse/shared/schemas"
 import { itemPartsToCanonicalContentBlocks } from "../chat/message-content.js"
 import { getSession, updateSessionStatus } from "./service.js"
 import * as repo from "./repo.js"
 import { presentInstant, presentOptionalInstant } from "./presenter.js"
+import {
+  formatRuntimeJsonForPresentation,
+  parseCachedActorRuntimeState,
+} from "./runtime-cache-codec.js"
 import { resolveToolPresentation } from "./tool-presentation/resolver.js"
 import {
   renderToolRequest,
@@ -99,25 +102,6 @@ async function loadRuntimeWakeups(
   return rows.map(presentWakeup)
 }
 
-export function parseCachedActorRuntimeState(
-  rawValue: string
-): ActorRuntimeState | null {
-  try {
-    const parsed = ActorRuntimeStateSchema.safeParse(JSON.parse(rawValue))
-    return parsed.success ? parsed.data : null
-  } catch {
-    return null
-  }
-}
-
-export function formatRuntimeJsonForPresentation(value: unknown) {
-  try {
-    return JSON.stringify(parseJsonObjectOrUndefined(value) ?? {}, null, 2)
-  } catch {
-    return JSON.stringify(String(value ?? ""))
-  }
-}
-
 function buildTextBlocksFromLines(...parts: Array<string | null | undefined>) {
   const text = parts
     .map((part) => (typeof part === "string" ? part.trim() : ""))
@@ -126,6 +110,11 @@ function buildTextBlocksFromLines(...parts: Array<string | null | undefined>) {
 
   return text ? [textBlock(text)] : []
 }
+
+export {
+  formatRuntimeJsonForPresentation,
+  parseCachedActorRuntimeState,
+} from "./runtime-cache-codec.js"
 
 function pickLatestTimestamp(
   ...values: Array<import("@synapse/shared").Timestamp | undefined>
