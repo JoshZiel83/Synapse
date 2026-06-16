@@ -429,22 +429,19 @@ function subsetMatch(
   actual: Record<string, unknown>
 ): boolean {
   return Object.entries(expected).every(([key, value]) => {
-    if (value && typeof value === "object" && !Array.isArray(value)) {
+    if (isObjectRecord(value)) {
       const actualValue = actual[key]
-      if (
-        !actualValue ||
-        typeof actualValue !== "object" ||
-        Array.isArray(actualValue)
-      ) {
+      if (!isObjectRecord(actualValue)) {
         return false
       }
-      return subsetMatch(
-        value as Record<string, unknown>,
-        actualValue as Record<string, unknown>
-      )
+      return subsetMatch(value, actualValue)
     }
     return actual[key] === value
   })
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
 }
 
 function normalizePolicyInput(
