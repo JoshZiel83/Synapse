@@ -13,6 +13,7 @@ import { ensureStorageDir } from "../storage/index.js"
 import { sql } from "kysely"
 import type { CatalogVersionFilesFileRole } from "./generated/db.js"
 import { db } from "./kysely.js"
+import { parseSeedSkillMetadataJson } from "./seed-metadata-codec.js"
 import { ensurePublisher } from "./seed-utils.js"
 import {
   seedOfficialActorCatalog,
@@ -492,12 +493,10 @@ async function readImportedSkillPackage(
   const metadataPath = resolve(skillDir, "_meta.json")
   const skillMarkdownPath = resolve(skillDir, "SKILL.md")
 
-  const metadata = JSON.parse(await fs.readFile(metadataPath, "utf8")) as {
-    ownerId?: string
-    slug?: string
-    version?: string
-    publishedAt?: number
-  }
+  const metadata = parseSeedSkillMetadataJson(
+    await fs.readFile(metadataPath, "utf8"),
+    `seed skill metadata in ${metadataPath}`
+  )
 
   const markdown = await fs.readFile(skillMarkdownPath, "utf8")
   const { attributes, body } = parseSimpleFrontmatter(markdown)
