@@ -7,7 +7,7 @@ import { join } from "node:path"
 import type { ChildProcess } from "node:child_process"
 
 import { createLocalFsBackend } from "../vfs.js"
-import { dispatchRipgrep } from "./ripgrep-runner.js"
+import { dispatchRipgrep, parseRipgrepMatchFrame } from "./ripgrep-runner.js"
 
 function fakeSpawn(lines: string[]) {
   return ((..._args: unknown[]) => {
@@ -86,6 +86,112 @@ test("dispatchRipgrep mode=content dedupes (path,line,offset,match) and slices o
     assert.equal(out.hits.length, 2)
     assert.equal(out.hits[0]!.line_no, 2)
     assert.equal(out.hits[1]!.line_no, 3)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("parseRipgrepMatchFrame rejects malformed or drifted rg JSON frames", () => {
+  assert.equal(parseRipgrepMatchFrame("{"), null)
+  assert.equal(
+    parseRipgrepMatchFrame(JSON.stringify({ type: "begin", data: {} })),
+    null
+  )
+  assert.equal(
+    parseRipgrepMatchFrame(
+      JSON.stringify({
+        type: "match",
+        data: {
+          path: {},
+          line_number: 1,
+          absolute_offset: 0,
+          lines: { text: "hello" },
+        },
+      })
+    ),
+    null
+  )
+  assert.equal(
+    parseRipgrepMatchFrame(
+      JSON.stringify({
+        type: "match",
+        data: {
+          path: { text: "/tmp/a.txt" },
+          line_number: "1",
+          absolute_offset: 0,
+          lines: { text: "hello" },
+        },
+      })
+    ),
+    null
+  )
+
+  assert.deepEqual(
+    parseRipgrepMatchFrame(
+      JSON.stringify({
+        type: "match",
+        data: {
+          path: { text: "/tmp/a.txt" },
+          line_number: 1,
+          absolute_offset: 0,
+          lines: { text: "hello" },
+        },
+      })
+    ),
+    {
+      type: "match",
+      data: {
+        path: { text: "/tmp/a.txt" },
+        line_number: 1,
+        absolute_offset: 0,
+        lines: { text: "hello" },
+      },
+    }
+  )
+})
+
+test("dispatchRipgrep mode=content ignores malformed rg JSON frames", async () => {
+  const root = mkdtempSync(join(tmpdir(), "synapse-rg-"))
+  try {
+    writeFileSync(join(root, "a.txt"), "hello")
+    const be = createLocalFsBackend({ rootPath: root })
+    await be.start()
+    const hostA = `${root}/a.txt`
+    const good = JSON.stringify({
+      type: "match",
+      data: {
+        path: { text: hostA },
+        line_number: 1,
+        absolute_offset: 0,
+        lines: { text: "hello" },
+      },
+    })
+    const drifted = JSON.stringify({
+      type: "match",
+      data: {
+        path: { text: hostA },
+        line_number: "1",
+        absolute_offset: 0,
+        lines: { text: "hello" },
+      },
+    })
+    const out = await dispatchRipgrep({
+      mode: "content",
+      query: "hello",
+      regex: false,
+      limit: 10,
+      offset: 0,
+      allowedPrefixes: ["/"],
+      hostRootPath: be.hostRootPath,
+      backend: be,
+      cfg: { maxOffset: 10000 },
+      deps: {
+        spawnImpl: fakeSpawn(["{", drifted, good]),
+        ripgrepPath: "/fake/rg",
+      },
+    })
+    assert.equal(out.hits.length, 1)
+    assert.equal(out.hits[0]!.path, "/a.txt")
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

@@ -9,6 +9,7 @@ import { spawn, type ChildProcess } from "node:child_process"
 import { existsSync } from "node:fs"
 import { delimiter, join, relative, sep } from "node:path"
 import picomatch from "picomatch"
+import { z } from "zod"
 import { INTERNAL_NAMESPACE, pathUnderPrefix } from "../vfs.js"
 import type { ExtendedLocalBackend } from "../vfs.js"
 
@@ -49,6 +50,41 @@ export interface RipgrepDispatchOutput {
 const SEARCH_TIMEOUT_MS = 30_000
 const MAX_OUTPUT_BYTES = 5 * 1024 * 1024
 const INTERNAL_PREFIX = INTERNAL_NAMESPACE + "/"
+
+const RipgrepMatchFrameSchema = z
+  .object({
+    type: z.literal("match"),
+    data: z
+      .object({
+        path: z.object({ text: z.string() }).passthrough(),
+        line_number: z.number().int().optional(),
+        absolute_offset: z.number().int().optional(),
+        lines: z.object({ text: z.string() }).passthrough().optional(),
+      })
+      .passthrough(),
+  })
+  .passthrough()
+
+export function parseRipgrepMatchFrame(line: string): {
+  type: "match"
+  data: {
+    path: { text: string }
+    line_number?: number
+    absolute_offset?: number
+    lines?: { text: string }
+  }
+} | null {
+  let value: unknown
+  try {
+    value = JSON.parse(line)
+  } catch {
+    return null
+  }
+
+  const parsed = RipgrepMatchFrameSchema.safeParse(value)
+  if (!parsed.success) return null
+  return parsed.data
+}
 
 export function detectRipgrep(deps?: RipgrepDeps): string | null {
   if (deps?.ripgrepPath && existsSync(deps.ripgrepPath)) {
@@ -219,23 +255,9 @@ export async function dispatchRipgrep(
     spawnImpl: input.deps?.spawnImpl,
     onLine: (line) => {
       if (input.mode === "content") {
-        let frame: {
-          type?: string
-          data?: {
-            path?: { text?: string }
-            line_number?: number
-            absolute_offset?: number
-            lines?: { text?: string }
-          }
-        }
-        try {
-          frame = JSON.parse(line)
-        } catch {
-          return true
-        }
-        if (frame.type !== "match") return true
-        const p = frame.data?.path?.text
-        if (!p) return true
+        const frame = parseRipgrepMatchFrame(line)
+        if (!frame) return true
+        const p = frame.data.path.text
         const canonical = hostToCanonical(p, hostRootPath, hostRootWithSep)
         if (!canonical) return true
         if (isInternal(canonical)) return true
