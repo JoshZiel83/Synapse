@@ -56,18 +56,21 @@ type ActorActionExecutionContext = {
   conversationId?: UUID
 }
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value))
+}
+
 function parsePixelArtAvatarOptions(
   value: unknown
 ): PixelArtAvatarOptionsInput {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isObjectRecord(value)) {
     return {}
   }
 
-  const source = value as Record<string, unknown>
   const options: Record<string, unknown> = {}
 
   for (const key of PIXEL_ART_OPTION_KEYS) {
-    const nextValue = source[key]
+    const nextValue = value[key]
     if (typeof nextValue === "string") {
       const trimmed = nextValue.trim()
       if (trimmed) {

@@ -75,21 +75,24 @@ function formatZodError(error: z.ZodError) {
   return error.issues.map((issue) => issue.message).join("; ")
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value))
+}
+
 function providerErrorMessage(payload: unknown) {
   if (typeof payload === "string" && payload.trim()) {
     return payload.trim()
   }
 
-  if (!payload || typeof payload !== "object") {
+  if (!isRecord(payload)) {
     return "ASR provider error"
   }
 
-  const record = payload as Record<string, unknown>
-  if (typeof record.message === "string" && record.message.trim()) {
-    return record.message.trim()
+  if (typeof payload.message === "string" && payload.message.trim()) {
+    return payload.message.trim()
   }
-  if (typeof record.error === "string" && record.error.trim()) {
-    return record.error.trim()
+  if (typeof payload.error === "string" && payload.error.trim()) {
+    return payload.error.trim()
   }
 
   return "ASR provider error"

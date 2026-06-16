@@ -490,15 +490,17 @@ async function projectDeviceTools(
   return { tools, handlers, subjects }
 }
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value))
+}
+
 function normalizeInputSchema(raw: unknown): ToolDefinition["parameters"] {
-  if (raw && typeof raw === "object") {
-    const obj = raw as Record<string, unknown>
-    const props =
-      obj["properties"] && typeof obj["properties"] === "object"
-        ? (obj["properties"] as ToolDefinition["parameters"]["properties"])
-        : {}
-    const required = Array.isArray(obj["required"])
-      ? (obj["required"] as string[])
+  if (isObjectRecord(raw)) {
+    const props = isObjectRecord(raw["properties"])
+      ? (raw["properties"] as ToolDefinition["parameters"]["properties"])
+      : {}
+    const required = Array.isArray(raw["required"])
+      ? (raw["required"] as string[])
       : []
     return { type: "object", properties: props, required }
   }
