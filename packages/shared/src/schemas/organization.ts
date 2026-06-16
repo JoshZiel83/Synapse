@@ -284,7 +284,7 @@ const ActorVersionDocChangeSchema = z.object({
   summary: z.array(CanonicalContentBlockSchema),
 })
 
-const ActorVersionDeltaSchema = z.object({
+export const ActorVersionDeltaSchema = z.object({
   fromVersion: z.number().int().nonnegative(),
   toVersion: z.number().int().positive(),
   source: ActorVersionSourceSchema.optional(),

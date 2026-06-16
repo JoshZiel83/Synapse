@@ -184,6 +184,32 @@ test("normalizeActorVersionRow decodes config and delta at repo exit", () => {
   assert.deepEqual(view.delta, delta)
 })
 
+test("normalizeActorVersionRow fails closed on malformed version delta", () => {
+  assert.equal(
+    normalizeActorVersionRow(
+      actorVersionRow({
+        version_delta:
+          "{not json" as unknown as ActorVersionRow["version_delta"],
+      })
+    ).version_delta,
+    null
+  )
+
+  assert.equal(
+    normalizeActorVersionRow(
+      actorVersionRow({
+        version_delta: JSON.stringify({
+          fromVersion: 1,
+          toVersion: "2",
+          changes: "not-an-array",
+          summary: [],
+        }) as unknown as ActorVersionRow["version_delta"],
+      })
+    ).version_delta,
+    null
+  )
+})
+
 test("normalizeActorPackageRow decodes package JSON fields at repo exit", () => {
   const row = normalizeActorPackageRow(
     actorPackageRow({

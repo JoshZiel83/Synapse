@@ -32,6 +32,7 @@ import {
   type UUID,
   type WorkspaceAppGrantPermission,
 } from "@synapse/shared"
+import { ActorVersionDeltaSchema } from "@synapse/shared/schemas"
 import {
   db,
   withDbTransaction,
@@ -190,19 +191,19 @@ function parseJsonArrayLocal<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : []
 }
 
-function parseOptionalJsonRecord(
-  value: unknown
-): Record<string, unknown> | null {
+function parseActorVersionDelta(value: unknown): ActorVersionDelta | null {
   if (value === null || value === undefined) return null
+  let candidate: unknown = value
   if (typeof value === "string") {
-    const parsed = JSON.parse(value) as unknown
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null
+    if (!value.trim()) return null
+    try {
+      candidate = JSON.parse(value) as unknown
+    } catch {
+      return null
+    }
   }
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null
+  const parsed = ActorVersionDeltaSchema.safeParse(candidate)
+  return parsed.success ? (parsed.data as ActorVersionDelta) : null
 }
 
 export function normalizeActorRow<T extends ActorRow>(row: T): T {
@@ -217,9 +218,7 @@ export function normalizeActorVersionRow<T extends ActorVersionRow>(row: T): T {
   const normalized = {
     ...row,
     config: parseJsonObject(row.config),
-    version_delta: parseOptionalJsonRecord(
-      row.version_delta
-    ) as ActorVersionDelta | null,
+    version_delta: parseActorVersionDelta(row.version_delta),
   }
   return normalized
 }
