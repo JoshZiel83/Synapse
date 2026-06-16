@@ -358,6 +358,38 @@ test("processSweepCandidate: skipped recovery flips then enqueues once deliverab
   assert.deepEqual(calls, ["canDeliverNow", "recover", "bump", "enqueue"])
 })
 
+test("processSweepCandidate: skipped recovery stops before enqueue when recover fails", async () => {
+  const calls: string[] = []
+  await assert.rejects(
+    () =>
+      processSweepCandidate(
+        sweepCandidate({
+          reason: "skipped_recoverable",
+        }),
+        {
+          canDeliverNow: async () => {
+            calls.push("canDeliverNow")
+            return { ok: true }
+          },
+          recoverSkippedDisabledLink: async () => {
+            calls.push("recover")
+            throw new Error("recover failed")
+          },
+          bumpRetryStamp: async () => {
+            calls.push("bump")
+          },
+          enqueueOrRetry: async () => {
+            calls.push("enqueue")
+            return { kind: "enqueued", jobId: "job-1" }
+          },
+        }
+      ),
+    /recover failed/
+  )
+
+  assert.deepEqual(calls, ["canDeliverNow", "recover"])
+})
+
 test("processSweepCandidate: retrying candidates still honor dead-letter budget", async () => {
   const calls: string[] = []
   await processSweepCandidate(
