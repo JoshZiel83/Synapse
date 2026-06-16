@@ -99,10 +99,6 @@ async function loadRuntimeWakeups(
   return rows.map(presentWakeup)
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return parseJsonObjectOrUndefined(value) ?? {}
-}
-
 export function parseCachedActorRuntimeState(
   rawValue: string
 ): ActorRuntimeState | null {
@@ -297,7 +293,7 @@ function buildResultBodyBlocks(params: {
   const finalResultPayload = params.task?.finalResultPayload
   if (
     finalErrorPayload &&
-    Object.keys(asRecord(finalErrorPayload)).length > 0
+    Object.keys(parseJsonObjectOrUndefined(finalErrorPayload) ?? {}).length > 0
   ) {
     return buildTextBlocksFromLines(
       formatRuntimeJsonForPresentation(finalErrorPayload)
@@ -305,7 +301,7 @@ function buildResultBodyBlocks(params: {
   }
   if (
     finalResultPayload &&
-    Object.keys(asRecord(finalResultPayload)).length > 0
+    Object.keys(parseJsonObjectOrUndefined(finalResultPayload) ?? {}).length > 0
   ) {
     return buildTextBlocksFromLines(
       formatRuntimeJsonForPresentation(finalResultPayload)
@@ -445,7 +441,7 @@ async function buildToolActivityDetail(turnId: string) {
       sourceSnapshot: toolCall.sourceSnapshot,
       pluginInstallationId: toolCall.pluginInstallationId,
     })
-    const args = asRecord(toolCall.normalizedInput)
+    const args = parseJsonObjectOrUndefined(toolCall.normalizedInput) ?? {}
     const request = renderToolRequest(descriptor, args)
     const resultData: ToolResultData = {
       meta: readToolMeta(latestResult?.metadata),
