@@ -33,24 +33,17 @@ import {
   setQrSession,
   type ActiveWeixinQrLogin,
 } from "./qr-session-store.js"
+import {
+  parseWeixinQrCodeResponseText,
+  parseWeixinQrStatusResponseText,
+  type WeixinQrCodeResponse,
+  type WeixinQrStatusResponse,
+} from "./qr-login-codec.js"
 
 const DEFAULT_WEIXIN_BASE_URL = "https://ilinkai.weixin.qq.com"
 const ACTIVE_LOGIN_TTL_MS = 5 * 60_000
 const QR_LONG_POLL_TIMEOUT_MS = 25_000
 const DEFAULT_BOT_TYPE = "3"
-
-type WeixinQrCodeResponse = {
-  qrcode?: string
-  qrcode_img_content?: string
-}
-
-type WeixinQrStatusResponse = {
-  status?: "wait" | "scaned" | "confirmed" | "expired"
-  bot_token?: string
-  ilink_bot_id?: string
-  baseurl?: string
-  ilink_user_id?: string
-}
 
 function nowIso() {
   return serializeNowInstant()
@@ -68,11 +61,11 @@ function isFresh(session: ActiveWeixinQrLogin) {
   return Date.now() < session.expiresAt
 }
 
-async function fetchWeixinJson<T>(params: {
+async function fetchWeixinText(params: {
   url: string
   timeoutMs: number
   headers?: Record<string, string>
-}): Promise<T> {
+}): Promise<string | null> {
   try {
     const response = await fetch(params.url, {
       headers: params.headers,
@@ -84,10 +77,10 @@ async function fetchWeixinJson<T>(params: {
         `Weixin QR API failed with ${response.status}: ${text || response.statusText}`
       )
     }
-    return (text ? JSON.parse(text) : {}) as T
+    return text
   } catch (error) {
     if (error instanceof Error && error.name === "TimeoutError") {
-      return {} as T
+      return null
     }
     throw error
   }
@@ -98,10 +91,16 @@ async function fetchWeixinQrCode(params: { baseUrl: string; botType: string }) {
     `ilink/bot/get_bot_qrcode?bot_type=${encodeURIComponent(params.botType)}`,
     params.baseUrl.endsWith("/") ? params.baseUrl : `${params.baseUrl}/`
   )
-  return fetchWeixinJson<WeixinQrCodeResponse>({
+  const text = await fetchWeixinText({
     url: url.toString(),
     timeoutMs: 10_000,
   })
+  if (text === null) return {}
+  const parsed = parseWeixinQrCodeResponseText(text)
+  if (!parsed) {
+    throw new Error("Weixin QR API returned invalid QR-code response")
+  }
+  return parsed
 }
 
 async function pollWeixinQrStatus(params: { baseUrl: string; qrcode: string }) {
@@ -109,11 +108,17 @@ async function pollWeixinQrStatus(params: { baseUrl: string; qrcode: string }) {
     `ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(params.qrcode)}`,
     params.baseUrl.endsWith("/") ? params.baseUrl : `${params.baseUrl}/`
   )
-  return fetchWeixinJson<WeixinQrStatusResponse>({
+  const text = await fetchWeixinText({
     url: url.toString(),
     timeoutMs: QR_LONG_POLL_TIMEOUT_MS,
     headers: { "iLink-App-ClientVersion": "1" },
   })
+  if (text === null) return {}
+  const parsed = parseWeixinQrStatusResponseText(text)
+  if (!parsed) {
+    throw new Error("Weixin QR API returned invalid status response")
+  }
+  return parsed
 }
 
 function mapStatus(
