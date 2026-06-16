@@ -536,7 +536,7 @@ const RuntimeLastErrorSchema = z.object({
   at: timestampSchema,
 })
 
-const ActorRuntimeStateSchema = z.object({
+export const ActorRuntimeStateSchema = z.object({
   conversationId: z.string(),
   sessionId: z.string(),
   actorId: z.string(),

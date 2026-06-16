@@ -29,6 +29,7 @@ import {
   type SessionWakeupSourceType,
   type SessionWakeupStatus,
 } from "@synapse/shared"
+import { ActorRuntimeStateSchema } from "@synapse/shared/schemas"
 import { itemPartsToCanonicalContentBlocks } from "../chat/message-content.js"
 import { getSession, updateSessionStatus } from "./service.js"
 import * as repo from "./repo.js"
@@ -111,6 +112,17 @@ function parseJsonValue(value: unknown): unknown {
 
 function asRecord(value: unknown): Record<string, unknown> {
   return parseJsonObjectOrUndefined(value) ?? {}
+}
+
+export function parseCachedActorRuntimeState(
+  rawValue: string
+): ActorRuntimeState | null {
+  try {
+    const parsed = ActorRuntimeStateSchema.safeParse(JSON.parse(rawValue))
+    return parsed.success ? parsed.data : null
+  } catch {
+    return null
+  }
 }
 
 function prettyJson(value: unknown) {
@@ -625,11 +637,8 @@ export async function getConversationRuntimeMap(conversationIds: string[]) {
     for (const [actorId, rawValue] of Object.entries(
       (rawMap || {}) as Record<string, string>
     )) {
-      try {
-        parsed[actorId] = JSON.parse(rawValue)
-      } catch {
-        // ignore malformed cache entry
-      }
+      const runtimeState = parseCachedActorRuntimeState(rawValue)
+      if (runtimeState) parsed[actorId] = runtimeState
     }
     runtimeMap[conversationId] = parsed
   }
@@ -701,13 +710,7 @@ export async function buildSessionRuntimeSnapshot(
     runtimeHashKey(session.conversationId),
     session.actorId
   )
-  if (cachedRaw) {
-    try {
-      cachedRuntime = JSON.parse(cachedRaw) as ActorRuntimeState
-    } catch {
-      cachedRuntime = null
-    }
-  }
+  if (cachedRaw) cachedRuntime = parseCachedActorRuntimeState(cachedRaw)
 
   const rawWakeups = await loadRuntimeWakeups(sessionId, [
     "pending",
