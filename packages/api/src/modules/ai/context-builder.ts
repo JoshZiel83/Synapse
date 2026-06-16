@@ -13,6 +13,7 @@ import {
   CONVERSATION_MESSAGE_SUBTYPE,
   isToolResultOrigin,
   parseJsonObject,
+  parseJsonObjectOrUndefined,
 } from "@synapse/shared"
 import { assertIsoInstant } from "@synapse/shared/datetime"
 import type {
@@ -162,17 +163,6 @@ function parseMetadata(metadata: unknown): Record<string, unknown> {
   return parseJsonObject(metadata)
 }
 
-function parseJsonValue(value: unknown): unknown {
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value)
-    } catch {
-      return undefined
-    }
-  }
-  return value
-}
-
 function parseSizeBytes(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value
@@ -223,8 +213,8 @@ export function itemPartsToCanonicalBlocks(
     }
 
     if (part.part_type === "json") {
-      const payload = parseJsonValue(part.json_value)
-      if (!payload || typeof payload !== "object") continue
+      const payload = parseJsonObjectOrUndefined(part.json_value)
+      if (!payload) continue
       const normalized = normalizeCanonicalContentBlocks([
         payload as CanonicalContentBlockInput,
       ])
