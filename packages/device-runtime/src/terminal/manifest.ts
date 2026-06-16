@@ -193,6 +193,16 @@ export function parseToolchainManifest(raw: unknown): ToolchainManifest {
   return ToolchainManifestSchema.parse(raw)
 }
 
+export function parseToolchainManifestJsonText(raw: string): ToolchainManifest {
+  let value: unknown
+  try {
+    value = JSON.parse(raw)
+  } catch {
+    throw new Error("invalid toolchain manifest JSON")
+  }
+  return parseToolchainManifest(value)
+}
+
 /**
  * Throws if the manifest entry's download.url isn't on the hostname
  * allow-list for its declared trustedSource. Called by both

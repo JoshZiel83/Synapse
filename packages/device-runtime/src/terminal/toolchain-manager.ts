@@ -27,7 +27,7 @@ import {
   joinUnderRoot,
   ManifestPathEscapeError,
 } from "./path-utils.js"
-import { parseToolchainManifest } from "./manifest.js"
+import { parseToolchainManifestJsonText } from "./manifest.js"
 import type { ManifestPlatformEntry, ToolchainManifest } from "./manifest.js"
 import type {
   PathResolver,
@@ -312,7 +312,7 @@ async function tryResolveSystem(
 
 function loadManifest(manifestPath: string): ToolchainManifest {
   const raw = readFileSync(manifestPath, "utf-8")
-  return parseToolchainManifest(JSON.parse(raw))
+  return parseToolchainManifestJsonText(raw)
 }
 
 function defaultArchiveLocator(manifestPath: string): ArchiveLocator {

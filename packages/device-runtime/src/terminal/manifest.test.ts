@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url"
 import {
   assertTrustedDownload,
   parseToolchainManifest,
+  parseToolchainManifestJsonText,
   TRUSTED_SOURCES,
   UntrustedDownloadSourceError,
 } from "./manifest.js"
@@ -190,7 +191,7 @@ test("parseToolchainManifest: production manifest entries declare trustedSource"
   const here = dirname(fileURLToPath(import.meta.url))
   const manifestPath = join(here, "..", "..", "bundles", "manifest.json")
   const raw = readFileSync(manifestPath, "utf-8")
-  const manifest = parseToolchainManifest(JSON.parse(raw))
+  const manifest = parseToolchainManifestJsonText(raw)
   for (const [name, program] of Object.entries(manifest.programs)) {
     for (const [key, entry] of Object.entries(program.platforms)) {
       assertTrustedDownload(
@@ -203,6 +204,13 @@ test("parseToolchainManifest: production manifest entries declare trustedSource"
       )
     }
   }
+})
+
+test("parseToolchainManifestJsonText rejects malformed manifest JSON", () => {
+  assert.throws(
+    () => parseToolchainManifestJsonText("{"),
+    /invalid toolchain manifest JSON/
+  )
 })
 
 test("assertTrustedDownload: github.com URL must start with astral-sh path prefix", () => {
