@@ -1,5 +1,10 @@
 import { z } from "zod"
 
+const qqProviderJsonObjectSchema = z.custom<Record<string, unknown>>(
+  (value) =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+)
+
 const qqProviderErrorResponseSchema = z
   .object({
     code: z.number().optional(),
@@ -43,6 +48,29 @@ function parseJsonText(text: string): unknown | null {
   } catch {
     return null
   }
+}
+
+export function parseQqProviderJsonObjectText(
+  text: string
+): Record<string, unknown> | null {
+  const trimmed = text.trim()
+  if (!trimmed) return {}
+  const json = parseJsonText(trimmed)
+  if (json === null) return null
+  const parsed = qqProviderJsonObjectSchema.safeParse(json)
+  return parsed.success ? parsed.data : null
+}
+
+export async function readQqProviderJsonObjectResponse(
+  response: Response
+): Promise<Record<string, unknown>> {
+  const text = await response.text().catch(() => "")
+  return (
+    parseQqProviderJsonObjectText(text) ?? {
+      code: "malformed_response",
+      message: "QQ provider response body is not a JSON object",
+    }
+  )
 }
 
 export function parseQqProviderFailureText(
