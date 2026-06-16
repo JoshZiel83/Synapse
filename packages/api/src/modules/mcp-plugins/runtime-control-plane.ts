@@ -84,8 +84,22 @@ export function parseRuntimeCommandEnvelopeFields(
   return parsed.success ? parsed.data : null
 }
 
-export function parseRuntimeCommandPayload(raw: string): unknown {
-  return raw ? JSON.parse(raw) : {}
+export function parseRuntimeCommandPayload(
+  raw: string
+): Record<string, unknown> {
+  let value: unknown = {}
+  try {
+    value = raw ? JSON.parse(raw) : {}
+  } catch (error) {
+    throw new Error(
+      `Runtime command payload is invalid JSON: ${(error as Error).message}`
+    )
+  }
+
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Runtime command payload must be a JSON object")
+  }
+  return value as Record<string, unknown>
 }
 
 export function parseRuntimeCommandResult(raw: string): RuntimeCommandResult {

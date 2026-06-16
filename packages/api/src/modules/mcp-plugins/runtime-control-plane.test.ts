@@ -57,6 +57,24 @@ test("parseRuntimeCommandPayload parses payload JSON and treats empty as object"
   )
 })
 
+test("parseRuntimeCommandPayload rejects invalid or non-object payloads", () => {
+  assert.throws(
+    () => parseRuntimeCommandPayload("{"),
+    /Runtime command payload is invalid JSON/
+  )
+  for (const payload of [
+    JSON.stringify(null),
+    JSON.stringify([]),
+    JSON.stringify("command"),
+    JSON.stringify(1),
+  ]) {
+    assert.throws(
+      () => parseRuntimeCommandPayload(payload),
+      /Runtime command payload must be a JSON object/
+    )
+  }
+})
+
 test("parseRuntimeCommandResult validates success and error reply shapes", () => {
   assert.deepEqual(parseRuntimeCommandResult(JSON.stringify({ ok: true })), {
     ok: true,
