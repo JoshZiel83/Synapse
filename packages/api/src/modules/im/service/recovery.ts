@@ -60,6 +60,29 @@ export type CanDeliverNowResult =
         | "endpoint_mismatch"
     }
 
+type CanDeliverNowLinkSnapshot = {
+  workspaceId: string
+  conversationId: string
+  transportAccountId: string
+  transportEndpointId: string
+}
+
+type CanDeliverNowBindingSnapshot = {
+  account: { id: string; status: string }
+  endpoint: { id: string }
+  outboundEnabled: boolean
+}
+
+export type CanDeliverNowDeps = {
+  loadLink: (
+    linkId: string
+  ) => Promise<CanDeliverNowLinkSnapshot | null | undefined>
+  getBinding: (params: {
+    workspaceId: string
+    conversationId: string
+  }) => Promise<CanDeliverNowBindingSnapshot | null | undefined>
+}
+
 /**
  * Is the link's intended (account, endpoint) still the conversation's
  * current binding, and is that binding actually deliverable?
@@ -70,9 +93,19 @@ export type CanDeliverNowResult =
 export async function canDeliverNow(
   linkId: string
 ): Promise<CanDeliverNowResult> {
-  const link = await loadTransportMessageLinkForDelivery(linkId)
+  return canDeliverNowWithDeps(linkId, {
+    loadLink: loadTransportMessageLinkForDelivery,
+    getBinding: getConversationTransportBinding,
+  })
+}
+
+export async function canDeliverNowWithDeps(
+  linkId: string,
+  deps: CanDeliverNowDeps
+): Promise<CanDeliverNowResult> {
+  const link = await deps.loadLink(linkId)
   if (!link) return { ok: false, reason: "link_not_found" }
-  const binding = await getConversationTransportBinding({
+  const binding = await deps.getBinding({
     workspaceId: link.workspaceId,
     conversationId: link.conversationId,
   })
