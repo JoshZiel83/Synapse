@@ -23,20 +23,43 @@ test("parseStoredActorDocs decodes stored actor docs at repo exit", () => {
 })
 
 test("parseStoredActorDocs fails closed on malformed stored docs", () => {
-  assert.deepEqual(parseStoredActorDocs("{not json"), [])
-  assert.deepEqual(parseStoredActorDocs({ docs: [] }), [])
-  assert.deepEqual(
-    parseStoredActorDocs(
-      JSON.stringify([
-        {
-          key: "custom",
-          title: "Invalid",
-          content: "not-an-array",
-          visibility: "always",
-          priority: 1,
-        },
-      ])
-    ),
-    []
+  assert.throws(
+    () => parseStoredActorDocs("{not json"),
+    /must be a valid JSON array/
   )
+  assert.throws(
+    () => parseStoredActorDocs({ docs: [] }),
+    /must be a JSON array/
+  )
+  assert.throws(
+    () =>
+      parseStoredActorDocs(
+        JSON.stringify([
+          {
+            key: "custom",
+            title: "Invalid",
+            content: "not-an-array",
+            visibility: "always",
+            priority: 1,
+          },
+        ])
+      ),
+    /must contain actor doc inputs/
+  )
+  assert.throws(
+    () =>
+      parseStoredActorDocs(
+        JSON.stringify([
+          {
+            key: "custom",
+            title: "Invalid",
+            content: [{ type: "text" }],
+            visibility: "always",
+            priority: 1,
+          },
+        ])
+      ),
+    /must contain actor doc inputs/
+  )
+  assert.deepEqual(parseStoredActorDocs(null), [])
 })

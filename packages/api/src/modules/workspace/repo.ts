@@ -14,6 +14,7 @@ import {
   type ActorDocInput,
   type ActorRole,
 } from "@synapse/shared"
+import { ActorDocInputSchema } from "@synapse/shared/schemas"
 import { seedWorkspaceCapabilityConversationTypePolicies } from "../capabilities/conversation-type-policies.js"
 import { markWorkspaceDeleted } from "../soft-delete/orchestration.js"
 import { insertWorkspaceAppRoot } from "../workspace-apps/repo.js"
@@ -192,17 +193,36 @@ export async function assignOfficialChiefActorPreference(
 }
 
 export function parseStoredActorDocs(value: unknown) {
-  let docsValue = value
+  if (value === null || value === undefined) return []
+
+  let docsValue: unknown = value
   if (typeof value === "string") {
+    if (value.trim().length === 0) {
+      throw new Error(
+        "workspace actor template docs must be a valid JSON array"
+      )
+    }
     try {
       docsValue = JSON.parse(value) as unknown
     } catch {
-      docsValue = []
+      throw new Error(
+        "workspace actor template docs must be a valid JSON array"
+      )
     }
   }
-  return normalizeActorDocs(
-    Array.isArray(docsValue) ? (docsValue as ActorDocInput[]) : []
-  )
+
+  if (!Array.isArray(docsValue)) {
+    throw new Error("workspace actor template docs must be a JSON array")
+  }
+
+  const parsed = ActorDocInputSchema.array().safeParse(docsValue)
+  if (!parsed.success) {
+    throw new Error(
+      "workspace actor template docs must contain actor doc inputs"
+    )
+  }
+
+  return normalizeActorDocs(parsed.data as ActorDocInput[])
 }
 
 function isOfficialChiefTemplate(row: {
