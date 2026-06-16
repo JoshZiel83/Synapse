@@ -35,8 +35,10 @@ function deps(params: {
   targets?: Array<{ remoteAgentId: string; activeTaskId: string }>
   tasksById?: Map<string, TaskSummary>
   machineId?: string | null
+  sendResult?: boolean
   sent?: Array<{ machineId: string; message: RemoteAgentApiToDaemonMessage }>
   loadTargetCalls?: string[]
+  loadBindingCalls?: string[]
 }): ReplayResolvedRemoteAgentTasksDeps & NotifyRemoteAgentTaskResolvedDeps {
   return {
     hasMachineConnection: () => params.hasConnection ?? true,
@@ -45,10 +47,13 @@ function deps(params: {
       return params.targets ?? []
     },
     getTaskSummary: async (taskId) => params.tasksById?.get(taskId) ?? null,
-    loadActiveBindingMachineId: async () => params.machineId ?? null,
+    loadActiveBindingMachineId: async (remoteAgentId) => {
+      params.loadBindingCalls?.push(remoteAgentId)
+      return params.machineId ?? null
+    },
     sendToMachine: (machineId, message) => {
       params.sent?.push({ machineId, message })
-      return true
+      return params.sendResult ?? true
     },
   }
 }
@@ -210,6 +215,102 @@ test("notifyRemoteAgentTaskResolvedUseCase sends only remote-agent-requested tas
     ),
     false
   )
+  assert.equal(sent.length, 1)
+})
+
+test("notifyRemoteAgentTaskResolvedUseCase does not query machines for non remote-agent tasks", async () => {
+  const loadBindingCalls: string[] = []
+  const sent: Array<{
+    machineId: string
+    message: RemoteAgentApiToDaemonMessage
+  }> = []
+  const workspaceMemberTask = taskSummary({
+    requester: {
+      participantType: CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER,
+      workspaceMemberId: randomUUID(),
+    },
+  })
+
+  assert.equal(
+    await notifyRemoteAgentTaskResolvedUseCase(
+      workspaceMemberTask.id,
+      deps({
+        tasksById: new Map([[workspaceMemberTask.id, workspaceMemberTask]]),
+        machineId: randomUUID(),
+        loadBindingCalls,
+        sent,
+      })
+    ),
+    false
+  )
+
+  assert.deepEqual(loadBindingCalls, [])
+  assert.deepEqual(sent, [])
+})
+
+test("notifyRemoteAgentTaskResolvedUseCase validates task payload before machine lookup", async () => {
+  const remoteAgentId = randomUUID()
+  const invalidTask = {
+    id: randomUUID(),
+    workspaceId: randomUUID(),
+    conversationId: randomUUID(),
+    requester: {
+      participantType: CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT,
+      remoteAgentId,
+    },
+  } as unknown as TaskSummary
+  const loadBindingCalls: string[] = []
+  const sent: Array<{
+    machineId: string
+    message: RemoteAgentApiToDaemonMessage
+  }> = []
+
+  await assert.rejects(
+    notifyRemoteAgentTaskResolvedUseCase(
+      invalidTask.id,
+      deps({
+        tasksById: new Map([[invalidTask.id, invalidTask]]),
+        machineId: randomUUID(),
+        loadBindingCalls,
+        sent,
+      })
+    )
+  )
+
+  assert.deepEqual(loadBindingCalls, [])
+  assert.deepEqual(sent, [])
+})
+
+test("notifyRemoteAgentTaskResolvedUseCase returns false when daemon send is unavailable", async () => {
+  const remoteAgentId = randomUUID()
+  const machineId = randomUUID()
+  const task = taskSummary({
+    requester: {
+      participantType: CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT,
+      remoteAgentId,
+    },
+  })
+  const loadBindingCalls: string[] = []
+  const sent: Array<{
+    machineId: string
+    message: RemoteAgentApiToDaemonMessage
+  }> = []
+
+  assert.equal(
+    await notifyRemoteAgentTaskResolvedUseCase(
+      task.id,
+      deps({
+        tasksById: new Map([[task.id, task]]),
+        machineId,
+        sendResult: false,
+        loadBindingCalls,
+        sent,
+      })
+    ),
+    false
+  )
+
+  assert.deepEqual(loadBindingCalls, [remoteAgentId])
   assert.equal(sent.length, 1)
 })
 

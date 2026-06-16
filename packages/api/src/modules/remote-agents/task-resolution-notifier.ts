@@ -88,6 +88,7 @@ export async function notifyRemoteAgentTaskResolvedUseCase(
     return false
   }
 
+  const taskPayload = taskAsWirePayload(task)
   const machineId = await deps.loadActiveBindingMachineId(
     task.requester.remoteAgentId
   )
@@ -98,6 +99,6 @@ export async function notifyRemoteAgentTaskResolvedUseCase(
     type: "agent:task:resolved",
     remoteAgentId: task.requester.remoteAgentId,
     taskId,
-    task: taskAsWirePayload(task),
+    task: taskPayload,
   })
 }
