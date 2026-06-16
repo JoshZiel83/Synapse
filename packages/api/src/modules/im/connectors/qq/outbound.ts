@@ -78,6 +78,7 @@ import {
 import {
   extractQqExternalMessageId,
   parseQqProviderFailureText,
+  readQqProviderJsonObjectResponse,
 } from "./response-codec.js"
 import { QQ_MSG_TYPE } from "./types.js"
 
@@ -392,11 +393,7 @@ async function safeText(res: Response): Promise<string> {
 }
 
 async function safeJson(res: Response): Promise<unknown> {
-  try {
-    return await res.json()
-  } catch {
-    return null
-  }
+  return readQqProviderJsonObjectResponse(res)
 }
 
 function endpointUrlFor(input: OutboundSendInput): { url: string } {

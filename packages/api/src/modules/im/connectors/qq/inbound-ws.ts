@@ -58,6 +58,7 @@ import {
   parseQqGatewayReadyPayload,
   parseQqGatewayUrlResponse,
 } from "./gateway-codec.js"
+import { readQqProviderJsonObjectResponse } from "./response-codec.js"
 
 export interface QqGatewayClientOptions {
   account: AccountStartContext["account"]
@@ -348,7 +349,9 @@ async function fetchGatewayUrl(
       `qq-gateway: /gateway failed ${res.status} ${await res.text().catch(() => "")}`
     )
   }
-  const url = parseQqGatewayUrlResponse(await res.json())
+  const url = parseQqGatewayUrlResponse(
+    await readQqProviderJsonObjectResponse(res)
+  )
   if (!url) {
     throw new Error("qq-gateway: /gateway returned no url")
   }

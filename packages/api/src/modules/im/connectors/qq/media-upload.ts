@@ -40,6 +40,7 @@ import type { TransportAccountSummary } from "@synapse/shared/types"
 import {
   extractQqProviderBizCode,
   parseQqUploadSuccessResponse,
+  readQqProviderJsonObjectResponse,
 } from "./response-codec.js"
 
 export interface UploadSource {
@@ -210,11 +211,7 @@ async function safeText(res: Response): Promise<string> {
 }
 
 async function safeJson(res: Response): Promise<unknown> {
-  try {
-    return await res.json()
-  } catch {
-    return null
-  }
+  return readQqProviderJsonObjectResponse(res)
 }
 
 function extractBizCode(text: string): number | undefined {
