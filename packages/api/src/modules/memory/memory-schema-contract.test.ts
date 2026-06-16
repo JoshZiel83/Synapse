@@ -102,6 +102,31 @@ test("UpdateMemoryInputSchema accepts partial editable memory fields", () => {
   assert.equal(parsed.state, "archived")
 })
 
+test("memory input metadata is an open object record, not array or scalar", () => {
+  const parsed = CreateMemoryInputSchema.parse({
+    category: "fact",
+    content: "Memory with opaque metadata",
+    metadata: { nested: { ok: true }, score: 0.8 },
+  })
+  assert.deepEqual(parsed.metadata, { nested: { ok: true }, score: 0.8 })
+
+  assert.equal(
+    CreateMemoryInputSchema.safeParse({
+      category: "fact",
+      content: "bad",
+      metadata: ["not", "a", "record"],
+    }).success,
+    false
+  )
+  assert.equal(
+    MemorySearchInputSchema.safeParse({
+      queryText: "bad",
+      metadata: "not-a-record",
+    }).success,
+    false
+  )
+})
+
 test("MemoryListQuerySchema parses comma-separated tags and coerced limits", () => {
   const parsed = MemoryListQuerySchema.parse({
     tags: "alpha, beta,,gamma",

@@ -103,7 +103,7 @@ const MemoryPayloadBaseSchema = z.object({
   sourceToolCallId: z.uuid().optional(),
   sourceTurnId: z.uuid().optional(),
   supersedesMemoryId: z.uuid().optional(),
-  metadata: z.record(z.string(), z.any()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 })
 
 export const CreateMemoryInputSchema = MemoryPayloadBaseSchema.extend({
@@ -163,7 +163,7 @@ export const MemorySearchInputSchema = z.object({
   states: z.array(memoryStateEnum).optional(),
   statuses: z.array(memoryStateEnum).optional(),
   limit: z.number().int().min(1).max(50).optional(),
-  metadata: z.record(z.string(), z.any()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 })
 export type MemorySearchInput = z.infer<typeof MemorySearchInputSchema>
 

@@ -792,7 +792,7 @@ export type ChatRealtimeOutboxGcViewSchemaType = z.infer<
 // drifted as independent tracks). `metadata` is a passthrough config record.
 
 const chatUuidSchema = z.uuid()
-const chatJsonRecordSchema = z.record(z.string(), z.any()).optional()
+const chatJsonRecordSchema = z.record(z.string(), z.unknown()).optional()
 
 /** POST /chat/conversations body. strictObject: legacy fields → clean 400. */
 export const ChatConversationCreateInputSchema = z.strictObject({
