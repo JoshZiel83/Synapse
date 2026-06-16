@@ -38,6 +38,11 @@ import {
   type ConversationRuntimeCallbacks,
 } from "./conversation-runtime.js"
 import { buildResolvedPlanTaskFallbackPrompt } from "./resolved-task-fallback.js"
+import {
+  RemoteAgentFailDeliveriesResponseSchema,
+  RemoteAgentTaskCreateResponseSchema,
+  requestJson,
+} from "./api-client.js"
 
 registerDriver(new ClaudeDriver())
 registerDriver(new CodexDriver())
@@ -505,28 +510,6 @@ function serverMessageFromWire(
   }
 }
 
-async function requestJson<T>(
-  serverUrl: string,
-  machineKey: string,
-  pathname: string,
-  init?: RequestInit
-): Promise<T> {
-  const url = new URL(pathname, serverUrl)
-  const headers = new Headers(init?.headers)
-  headers.set("authorization", `Bearer ${machineKey}`)
-  if (init?.body && !headers.has("content-type")) {
-    headers.set("content-type", "application/json")
-  }
-  const response = await fetch(url, { ...init, headers })
-  if (!response.ok) {
-    const bodyText = await response.text().catch(() => "")
-    throw new Error(
-      `Remote-agent request failed (${response.status} ${response.statusText})${bodyText ? `: ${bodyText}` : ""}`
-    )
-  }
-  return (await response.json()) as T
-}
-
 type LatestPlanDraft = {
   title: string
   summary?: string
@@ -823,7 +806,8 @@ class ManagedRemoteAgent {
             delivery_ids: deliveryIds,
             reason: reason.slice(0, 2000),
           } satisfies RemoteAgentFailDeliveriesBody),
-        }
+        },
+        RemoteAgentFailDeliveriesResponseSchema
       )
     } catch (error) {
       log(
@@ -1151,9 +1135,7 @@ class ManagedRemoteAgent {
       onUserInputRequested: async (conversationId, event) => {
         try {
           const runKey = `remote-agent:${this.params.remoteAgentId}:user-input:${randomUUID()}`
-          const result = await requestJson<{
-            task: { id: string }
-          }>(
+          const result = await requestJson(
             this.params.config.serverUrl,
             this.params.config.apiKey,
             `/api/v1/internal/remote-agents/${this.params.remoteAgentId}/tasks/user-input`,
@@ -1165,7 +1147,8 @@ class ManagedRemoteAgent {
                 title: event.title,
                 questions: event.questions,
               } satisfies RemoteAgentUserInputTaskBody),
-            }
+            },
+            RemoteAgentTaskCreateResponseSchema
           )
           this.pendingTasks.set(result.task.id, {
             taskId: result.task.id,
@@ -1195,9 +1178,7 @@ class ManagedRemoteAgent {
       onPlanApprovalRequested: async (conversationId, event) => {
         try {
           const runKey = `remote-agent:${this.params.remoteAgentId}:plan:${randomUUID()}`
-          const result = await requestJson<{
-            task: { id: string }
-          }>(
+          const result = await requestJson(
             this.params.config.serverUrl,
             this.params.config.apiKey,
             `/api/v1/internal/remote-agents/${this.params.remoteAgentId}/tasks/plan-approval`,
@@ -1211,7 +1192,8 @@ class ManagedRemoteAgent {
                 plan_markdown: event.planMarkdown,
                 checklist: event.checklist,
               } satisfies RemoteAgentPlanApprovalTaskBody),
-            }
+            },
+            RemoteAgentTaskCreateResponseSchema
           )
           this.pendingTasks.set(result.task.id, {
             taskId: result.task.id,
