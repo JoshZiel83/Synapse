@@ -1,6 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import {
+  parseDingtalkRegistrationSessionPayload,
   withDeviceCodeRedacted,
   type DingtalkRegistrationSession,
 } from "./registration-session-store.js"
@@ -47,4 +48,44 @@ test("withDeviceCodeRedacted: idempotent when already redacted", () => {
   const out = withDeviceCodeRedacted(src)
   // No need to allocate a new object when there's nothing to change.
   assert.equal(out, src)
+})
+
+test("parseDingtalkRegistrationSessionPayload: accepts valid Redis payload", () => {
+  const session = fresh({
+    providerFailureCount: 2,
+    lastProviderError: "timeout",
+    lastProviderErrorAt: new Date().toISOString(),
+  })
+  assert.deepEqual(
+    parseDingtalkRegistrationSessionPayload(JSON.stringify(session)),
+    session
+  )
+})
+
+test("parseDingtalkRegistrationSessionPayload: rejects malformed or drifted Redis payload", () => {
+  assert.equal(parseDingtalkRegistrationSessionPayload("{not-json"), null)
+  assert.equal(
+    parseDingtalkRegistrationSessionPayload(
+      JSON.stringify({ ...fresh(), status: "done" })
+    ),
+    null
+  )
+  assert.equal(
+    parseDingtalkRegistrationSessionPayload(
+      JSON.stringify({
+        ...fresh(),
+        pendingForm: {
+          ...fresh().pendingForm!,
+          ownerScope: "owner",
+        },
+      })
+    ),
+    null
+  )
+  assert.equal(
+    parseDingtalkRegistrationSessionPayload(
+      JSON.stringify({ ...fresh(), expiresAt: "soon" })
+    ),
+    null
+  )
 })

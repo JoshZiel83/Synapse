@@ -13,11 +13,17 @@
  */
 
 import { redis } from "../../../../infrastructure/redis/index.js"
+import {
+  TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES,
+  TRANSPORT_ACCOUNT_OWNER_SCOPES,
+  WEIXIN_QR_LOGIN_STATUSES,
+} from "@synapse/shared"
 import type {
   TransportAccountInboundActorMode,
   TransportAccountOwnerScope,
   WeixinQrLoginStatus,
 } from "@synapse/shared/types"
+import { z } from "zod"
 
 export interface ActiveWeixinQrLogin {
   sessionId: string
@@ -44,8 +50,44 @@ export interface ActiveWeixinQrLogin {
 const KEY_PREFIX = "im:weixin:qr-session:"
 const SESSION_TTL_SECONDS = 6 * 60 // 6 minutes
 
+const activeWeixinQrLoginSchema = z
+  .object({
+    sessionId: z.string().min(1),
+    workspaceId: z.string().min(1),
+    qrcode: z.string().min(1),
+    qrCodeUrl: z.string().min(1),
+    baseUrl: z.string().min(1),
+    botType: z.string().min(1),
+    displayName: z.string().optional(),
+    ownerScope: z.enum(TRANSPORT_ACCOUNT_OWNER_SCOPES),
+    ownerWorkspaceMemberId: z.string().nullable().optional(),
+    inboundActorMode: z.enum(TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES),
+    inboundActorId: z.string().nullable().optional(),
+    status: z.enum(WEIXIN_QR_LOGIN_STATUSES),
+    message: z.string(),
+    createdAt: z.number().finite(),
+    updatedAt: z.number().finite(),
+    expiresAt: z.number().finite(),
+    transportAccountId: z.string().optional(),
+    botId: z.string().optional(),
+    scannerUserId: z.string().optional(),
+  })
+  .strict()
+
 function key(workspaceId: string, sessionId: string): string {
   return `${KEY_PREFIX}${workspaceId}:${sessionId}`
+}
+
+export function parseWeixinQrSessionPayload(
+  raw: string | null
+): ActiveWeixinQrLogin | null {
+  if (!raw) return null
+  try {
+    const parsed = activeWeixinQrLoginSchema.safeParse(JSON.parse(raw))
+    return parsed.success ? parsed.data : null
+  } catch {
+    return null
+  }
 }
 
 export async function getQrSession(
@@ -53,12 +95,7 @@ export async function getQrSession(
   sessionId: string
 ): Promise<ActiveWeixinQrLogin | null> {
   const raw = await redis.get(key(workspaceId, sessionId))
-  if (!raw) return null
-  try {
-    return JSON.parse(raw) as ActiveWeixinQrLogin
-  } catch {
-    return null
-  }
+  return parseWeixinQrSessionPayload(raw)
 }
 
 export async function setQrSession(
