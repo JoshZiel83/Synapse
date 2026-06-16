@@ -28,6 +28,7 @@ import {
   type ActorRole,
   type ActorUpdateSourceType,
   type ActorVersionDelta,
+  type CanonicalContentBlockInput,
   type CapabilityAccessTarget,
   type UUID,
   type WorkspaceAppGrantPermission,
@@ -179,16 +180,21 @@ const ACTOR_PACKAGE_SELECT = `
     AND item.is_active = TRUE
 `
 
-function parseJsonArrayLocal<T>(value: unknown): T[] {
+export function parseActorDocContentBlocks(
+  value: unknown
+): CanonicalContentBlockInput[] {
   if (!value) return []
   if (typeof value === "string") {
     try {
-      return JSON.parse(value) as T[]
+      const parsed = JSON.parse(value) as unknown
+      return Array.isArray(parsed)
+        ? (parsed as CanonicalContentBlockInput[])
+        : []
     } catch {
       return []
     }
   }
-  return Array.isArray(value) ? (value as T[]) : []
+  return Array.isArray(value) ? (value as CanonicalContentBlockInput[]) : []
 }
 
 function parseActorVersionDelta(value: unknown): ActorVersionDelta | null {
@@ -326,7 +332,7 @@ export async function loadActorDocsMap(
       visibility: row.visibility,
       priority: row.priority,
       content: normalizeCanonicalContentBlocks(
-        parseJsonArrayLocal(row.content_blocks)
+        parseActorDocContentBlocks(row.content_blocks)
       ),
     })
     docsByVersionId.set(row.actor_version_id, docs)

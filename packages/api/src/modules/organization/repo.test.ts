@@ -5,6 +5,7 @@ import {
   normalizeActorPackageRow,
   normalizeActorRow,
   normalizeActorVersionRow,
+  parseActorDocContentBlocks,
 } from "./repo.js"
 import {
   presentActorPackageRecord,
@@ -208,6 +209,26 @@ test("normalizeActorVersionRow fails closed on malformed version delta", () => {
     ).version_delta,
     null
   )
+})
+
+test("parseActorDocContentBlocks decodes content block arrays at repo exit", () => {
+  assert.deepEqual(
+    parseActorDocContentBlocks('[{"type":"text","text":"Hi"}]'),
+    [{ type: "text", text: "Hi" }]
+  )
+  assert.deepEqual(parseActorDocContentBlocks([{ type: "text", text: "Hi" }]), [
+    { type: "text", text: "Hi" },
+  ])
+})
+
+test("parseActorDocContentBlocks fails closed for non-array JSON", () => {
+  assert.deepEqual(
+    parseActorDocContentBlocks('{"type":"text","text":"Hi"}'),
+    []
+  )
+  assert.deepEqual(parseActorDocContentBlocks('"text"'), [])
+  assert.deepEqual(parseActorDocContentBlocks("{"), [])
+  assert.deepEqual(parseActorDocContentBlocks(null), [])
 })
 
 test("normalizeActorPackageRow decodes package JSON fields at repo exit", () => {
