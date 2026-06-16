@@ -51,6 +51,10 @@ import {
   type RemoteAgentMachineMessage,
   type RemoteAgentRuntimeCatalogRecord,
 } from "./wire.js"
+import {
+  normalizeRemoteAgentPlanChecklist,
+  normalizeRemoteAgentUserInputQuestions,
+} from "./task-request-payload.js"
 
 type MachineConnection = {
   machineId: string
@@ -1059,7 +1063,7 @@ export async function createRemoteAgentUserInputTask(params: {
   runKey: string
   title: string
   instructions?: string
-  questions: Array<Record<string, unknown>>
+  questions: unknown[]
   expiresAt?: Timestamp
 }) {
   const access = await authenticateMachineForRemoteAgent(params)
@@ -1084,7 +1088,7 @@ export async function createRemoteAgentUserInputTask(params: {
     requesterParticipantId: conversationAccess.participant.id,
     title: params.title,
     instructions: params.instructions,
-    questions: params.questions as any[],
+    questions: normalizeRemoteAgentUserInputQuestions(params.questions),
     expiresAt: params.expiresAt,
   })
   await updateRemoteAgentRuntimeStatus(access.machineId, {
@@ -1107,7 +1111,7 @@ export async function createRemoteAgentPlanApprovalTask(params: {
   title: string
   summary?: string
   planMarkdown: string
-  checklist?: Array<Record<string, unknown>>
+  checklist?: unknown[]
   collaborationMode?: string
   collaborationState?: Record<string, unknown>
   expiresAt?: Timestamp
@@ -1135,7 +1139,7 @@ export async function createRemoteAgentPlanApprovalTask(params: {
     title: params.title,
     summary: params.summary,
     planMarkdown: params.planMarkdown,
-    checklist: params.checklist as any[],
+    checklist: normalizeRemoteAgentPlanChecklist(params.checklist),
     collaborationMode: params.collaborationMode,
     collaborationState: params.collaborationState,
     expiresAt: params.expiresAt,
