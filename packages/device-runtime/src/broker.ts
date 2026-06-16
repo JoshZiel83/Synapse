@@ -12,17 +12,39 @@ import { generateKeyPairSync, createHash, randomBytes } from "node:crypto"
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { homedir, platform } from "node:os"
+import { DEVICE_SERVICE_KINDS, HOST_KINDS } from "@synapse/device-protocol"
+import { z } from "zod"
 import type {
   DeviceIdentityBroker,
   DeviceIdentityRecord,
   KeyPair,
 } from "./types.js"
 
-interface PersistedKeyEntry {
-  publicKey: string
-  privateKey: string // PEM; v3.0 stores plaintext in a file mode 0o600 keystore
-  publicKeyFingerprint: string
-}
+const PersistedKeyEntrySchema = z.strictObject({
+  publicKey: z.string().min(1),
+  privateKey: z.string().min(1),
+  publicKeyFingerprint: z.string().min(1),
+})
+
+type PersistedKeyEntry = z.infer<typeof PersistedKeyEntrySchema>
+
+const KeystoreSchema = z.record(z.string(), PersistedKeyEntrySchema)
+
+const DeviceIdentityServiceSchema = z.strictObject({
+  serviceKind: z.enum(DEVICE_SERVICE_KINDS),
+  serviceId: z.string().min(1),
+  pubkeyFingerprint: z.string().min(1),
+  privateKeyRef: z.string().min(1),
+})
+
+const DeviceIdentityRecordSchema = z.strictObject({
+  deviceId: z.string().min(1),
+  serverOrigin: z.string().min(1),
+  hostKind: z.enum(HOST_KINDS),
+  services: z.array(DeviceIdentityServiceSchema),
+  devicePubkeyFingerprint: z.string().min(1),
+  devicePrivateKeyRef: z.string().min(1),
+}) satisfies z.ZodType<DeviceIdentityRecord>
 
 function resolveDefaultBrokerDir(): string {
   switch (platform()) {
@@ -46,6 +68,28 @@ export interface FileBackedBrokerOptions {
   brokerDir?: string
 }
 
+function readJsonFile(path: string): unknown {
+  return JSON.parse(readFileSync(path, "utf-8"))
+}
+
+function readKeystoreFromFile(
+  keystorePath: string
+): Record<string, PersistedKeyEntry> {
+  if (!existsSync(keystorePath)) return {}
+  try {
+    return KeystoreSchema.parse(readJsonFile(keystorePath))
+  } catch {
+    return {}
+  }
+}
+
+export function readPrivateKeyPemFromKeystoreFile(
+  keystorePath: string,
+  privateKeyRef: string
+): string | null {
+  return readKeystoreFromFile(keystorePath)[privateKeyRef]?.privateKey ?? null
+}
+
 export function createFileBackedBroker(
   opts: FileBackedBrokerOptions = {}
 ): DeviceIdentityBroker {
@@ -58,15 +102,7 @@ export function createFileBackedBroker(
   }
 
   function readKeystore(): Record<string, PersistedKeyEntry> {
-    if (!existsSync(keystorePath)) return {}
-    try {
-      return JSON.parse(readFileSync(keystorePath, "utf-8")) as Record<
-        string,
-        PersistedKeyEntry
-      >
-    } catch {
-      return {}
-    }
+    return readKeystoreFromFile(keystorePath)
   }
 
   function writeKeystore(entries: Record<string, PersistedKeyEntry>) {
@@ -81,9 +117,7 @@ export function createFileBackedBroker(
     async loadDeviceIdentity(): Promise<DeviceIdentityRecord | null> {
       if (!existsSync(brokerFilePath)) return null
       try {
-        return JSON.parse(
-          readFileSync(brokerFilePath, "utf-8")
-        ) as DeviceIdentityRecord
+        return DeviceIdentityRecordSchema.parse(readJsonFile(brokerFilePath))
       } catch {
         return null
       }
