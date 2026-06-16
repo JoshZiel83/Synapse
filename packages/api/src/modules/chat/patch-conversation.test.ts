@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { SUBJECT_KIND } from "@synapse/shared"
 import type { Kysely } from "kysely"
-import { withTestDb } from "../../test/helpers/db.js"
+import { withTestDb, withTestDbAndClient } from "../../test/helpers/db.js"
 import type { DatabaseTransaction } from "../../infrastructure/database/kysely.js"
 import { upsertAccessSubjectOn } from "../access/subject-registry.js"
 import { patchChatConversationUseCase } from "./patch-conversation.js"
@@ -137,3 +137,61 @@ test("patchChatConversationUseCase updates mutable fields and syncs recipients",
     assert.deepEqual(row.metadata, { topic: "boundary" })
   })
 })
+
+test(
+  "patchChatConversationUseCase rolls back mutable fields when sync fails",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDbAndClient(async ({ db, client }) => {
+      const fixture = await seedPatchConversationFixture(db as unknown as AnyDb)
+
+      const withTransaction = async <T>(
+        fn: (trx: DatabaseTransaction) => Promise<T>
+      ) => {
+        await client.query("SAVEPOINT patch_conversation_rollback")
+        try {
+          const result = await fn(db as unknown as DatabaseTransaction)
+          await client.query("RELEASE SAVEPOINT patch_conversation_rollback")
+          return result
+        } catch (error) {
+          await client.query(
+            "ROLLBACK TO SAVEPOINT patch_conversation_rollback"
+          )
+          throw error
+        }
+      }
+
+      await assert.rejects(
+        () =>
+          patchChatConversationUseCase(
+            {
+              ...fixture,
+              title: "  should rollback  ",
+              metadata: { topic: "rollback" },
+            },
+            {
+              listConversationRealtimeRecipients: async () => [
+                { workspaceMemberId: fixture.workspaceMemberId },
+              ],
+              loadConversationView: async () => {
+                throw new Error("view load should not run after sync failure")
+              },
+              syncConversationUpsert: async () => {
+                throw new Error("sync failed")
+              },
+              withTransaction,
+            }
+          ),
+        /sync failed/
+      )
+
+      const row = await (db as unknown as AnyDb)
+        .selectFrom("conversations")
+        .select(["title", "metadata"])
+        .where("id", "=", fixture.conversationId)
+        .executeTakeFirstOrThrow()
+      assert.equal(row.title, "before patch")
+      assert.deepEqual(row.metadata, {})
+    })
+  }
+)
