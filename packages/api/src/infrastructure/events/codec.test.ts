@@ -40,3 +40,18 @@ test("parseSystemEventRedisFrame rejects invalid JSON separately from invalid pa
     /Invalid system event payload/
   )
 })
+
+test("parseSystemEventRedisFrame rejects non-canonical timestamps", () => {
+  assert.throws(
+    () =>
+      parseSystemEventRedisFrame(
+        JSON.stringify({
+          type: "chat.sync.event",
+          workspaceId: "00000000-0000-4000-8000-000000000001",
+          payload: {},
+          timestamp: "2026-06-16T00:00:00Z",
+        })
+      ),
+    /Invalid system event payload/
+  )
+})
