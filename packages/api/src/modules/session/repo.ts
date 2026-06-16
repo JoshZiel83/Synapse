@@ -13,11 +13,7 @@ import {
   type Executor,
 } from "../../infrastructure/database/kysely.js"
 import { sql } from "kysely"
-import {
-  parseJsonObject,
-  SUBJECT_KIND,
-  THREAD_CONVERSATION_KINDS,
-} from "@synapse/shared"
+import { SUBJECT_KIND, THREAD_CONVERSATION_KINDS } from "@synapse/shared"
 import type {
   UUID,
   SessionStatus,
@@ -116,6 +112,35 @@ export function decodeSessionCollaborationState(value: unknown) {
   return parseSessionCollaborationState(parseCollaborationStateJson(value))
 }
 
+function parseRepoJsonObject(
+  value: unknown,
+  label: string
+): Record<string, unknown> {
+  if (value === null || value === undefined) return {}
+
+  let candidate: unknown = value
+  if (typeof value === "string") {
+    if (value.trim().length === 0) {
+      throw new Error(`${label} must be valid JSON`)
+    }
+    try {
+      candidate = JSON.parse(value) as unknown
+    } catch {
+      throw new Error(`${label} must be valid JSON`)
+    }
+  }
+
+  if (
+    typeof candidate !== "object" ||
+    candidate === null ||
+    Array.isArray(candidate)
+  ) {
+    throw new Error(`${label} must be a JSON object`)
+  }
+
+  return candidate as Record<string, unknown>
+}
+
 export function normalizeSessionRow(row: SessionDbRow): SessionRow {
   const normalized = {
     ...row,
@@ -129,7 +154,7 @@ export function normalizeSessionMessageItemRow(
 ): SessionMessageItemRow {
   const normalized = {
     ...row,
-    metadata: { ...parseJsonObject(row.metadata) },
+    metadata: parseRepoJsonObject(row.metadata, "session message metadata"),
   }
   return normalized
 }
@@ -139,7 +164,7 @@ export function normalizeSessionWakeupRow(
 ): SessionWakeupRow {
   const normalized = {
     ...row,
-    metadata: { ...parseJsonObject(row.metadata) },
+    metadata: parseRepoJsonObject(row.metadata, "session wakeup metadata"),
   }
   return normalized
 }
@@ -147,8 +172,14 @@ export function normalizeSessionWakeupRow(
 export function normalizeRuntimeToolCallRow(row: ToolCallDbRow): ToolCallRow {
   const normalized = {
     ...row,
-    normalizedInput: { ...parseJsonObject(row.normalizedInput) },
-    sourceSnapshot: { ...parseJsonObject(row.sourceSnapshot) },
+    normalizedInput: parseRepoJsonObject(
+      row.normalizedInput,
+      "runtime tool call normalizedInput"
+    ),
+    sourceSnapshot: parseRepoJsonObject(
+      row.sourceSnapshot,
+      "runtime tool call sourceSnapshot"
+    ),
   }
   return normalized
 }
@@ -158,7 +189,7 @@ export function normalizeRuntimeToolResultRow(
 ): ToolResultRow {
   const normalized = {
     ...row,
-    metadata: { ...parseJsonObject(row.metadata) },
+    metadata: parseRepoJsonObject(row.metadata, "runtime tool result metadata"),
   }
   return normalized
 }
@@ -168,8 +199,14 @@ export function normalizeRuntimeToolCallTaskRow(
 ): ToolCallTaskRow {
   const normalized = {
     ...row,
-    finalErrorPayload: parseJsonObject(row.finalErrorPayload),
-    finalResultPayload: parseJsonObject(row.finalResultPayload),
+    finalErrorPayload: parseRepoJsonObject(
+      row.finalErrorPayload,
+      "runtime tool call task finalErrorPayload"
+    ),
+    finalResultPayload: parseRepoJsonObject(
+      row.finalResultPayload,
+      "runtime tool call task finalResultPayload"
+    ),
   }
   return normalized
 }

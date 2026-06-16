@@ -105,11 +105,12 @@ test("normalizeSessionMessageItemRow decodes item metadata at repo exit", () => 
     } as SessionMessageItemDbRow).metadata,
     { silentActions: true }
   )
-  assert.deepEqual(
-    normalizeSessionMessageItemRow({
-      metadata: JSON.stringify(["not-object"]),
-    } as SessionMessageItemDbRow).metadata,
-    {}
+  assert.throws(
+    () =>
+      normalizeSessionMessageItemRow({
+        metadata: JSON.stringify(["not-object"]),
+      } as SessionMessageItemDbRow),
+    /session message metadata must be a JSON object/
   )
 })
 
@@ -127,11 +128,12 @@ test("normalizeSessionWakeupRow decodes wakeup metadata at repo exit", () => {
     }
   )
 
-  assert.deepEqual(
-    normalizeSessionWakeupRow({
-      metadata: JSON.stringify(["not-object"]),
-    } as SessionWakeupDbRow).metadata,
-    {}
+  assert.throws(
+    () =>
+      normalizeSessionWakeupRow({
+        metadata: JSON.stringify(["not-object"]),
+      } as SessionWakeupDbRow),
+    /session wakeup metadata must be a JSON object/
   )
 })
 
@@ -143,6 +145,23 @@ test("normalizeRuntimeToolCallRow decodes tool call JSON at repo exit", () => {
 
   assert.deepEqual(row.normalizedInput, { path: "/tmp/a.txt" })
   assert.deepEqual(row.sourceSnapshot, { kind: "device", stableKey: "tool/a" })
+
+  assert.throws(
+    () =>
+      normalizeRuntimeToolCallRow({
+        normalizedInput: JSON.stringify(["not-object"]),
+        sourceSnapshot: JSON.stringify({ kind: "device" }),
+      } as ToolCallDbRow),
+    /runtime tool call normalizedInput must be a JSON object/
+  )
+  assert.throws(
+    () =>
+      normalizeRuntimeToolCallRow({
+        normalizedInput: JSON.stringify({ path: "/tmp/a.txt" }),
+        sourceSnapshot: "not-json",
+      } as ToolCallDbRow),
+    /runtime tool call sourceSnapshot must be valid JSON/
+  )
 })
 
 test("normalizeRuntimeToolResultRow decodes result metadata at repo exit", () => {
@@ -151,6 +170,14 @@ test("normalizeRuntimeToolResultRow decodes result metadata at repo exit", () =>
   } as ToolResultDbRow)
 
   assert.deepEqual(row.metadata, { toolMeta: { exit_code: 0 } })
+
+  assert.throws(
+    () =>
+      normalizeRuntimeToolResultRow({
+        metadata: JSON.stringify(["not-object"]),
+      } as ToolResultDbRow),
+    /runtime tool result metadata must be a JSON object/
+  )
 })
 
 test("normalizeRuntimeToolCallTaskRow decodes final payloads at repo exit", () => {
@@ -164,11 +191,20 @@ test("normalizeRuntimeToolCallTaskRow decodes final payloads at repo exit", () =
 })
 
 test("normalizeRuntimeToolCallTaskRow rejects non-object final payloads", () => {
-  const row = normalizeRuntimeToolCallTaskRow({
-    finalResultPayload: JSON.stringify(["not-object"]),
-    finalErrorPayload: "not-json",
-  } as ToolCallTaskDbRow)
-
-  assert.deepEqual(row.finalResultPayload, {})
-  assert.deepEqual(row.finalErrorPayload, {})
+  assert.throws(
+    () =>
+      normalizeRuntimeToolCallTaskRow({
+        finalResultPayload: JSON.stringify(["not-object"]),
+        finalErrorPayload: JSON.stringify({ message: "failed" }),
+      } as ToolCallTaskDbRow),
+    /runtime tool call task finalResultPayload must be a JSON object/
+  )
+  assert.throws(
+    () =>
+      normalizeRuntimeToolCallTaskRow({
+        finalResultPayload: JSON.stringify({ ok: true }),
+        finalErrorPayload: "not-json",
+      } as ToolCallTaskDbRow),
+    /runtime tool call task finalErrorPayload must be valid JSON/
+  )
 })
