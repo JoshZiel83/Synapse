@@ -30,6 +30,11 @@ import type {
   Timestamp,
 } from "@synapse/shared/types"
 import { parseJsonObject } from "@synapse/shared"
+import {
+  parseRuntimeAuthorizationGrantOptions,
+  parseRuntimeAuthorizationPresets,
+  parseRuntimeAuthorizationRequestedAction,
+} from "@synapse/shared/schemas"
 import type { ToolCallTaskExecutorKind } from "../tool-call-tasks/service.js"
 import type {
   ActionTokenPayload,
@@ -220,6 +225,51 @@ function parseOptionalJsonArray<T>(value: unknown, label: string): T[] | null {
   return parseJsonArray<T>(value, label)
 }
 
+function parseOptionalRuntimeAuthorizationRequestedAction(
+  value: unknown,
+  label: string
+): RuntimeAuthorizationRequestedAction | null {
+  const parsed = parseOptionalJsonObject(value, label)
+  if (parsed === null) {
+    return null
+  }
+  try {
+    return parseRuntimeAuthorizationRequestedAction(parsed)
+  } catch {
+    throw new Error(`${label} is invalid`)
+  }
+}
+
+function parseOptionalRuntimeAuthorizationGrantOptions(
+  value: unknown,
+  label: string
+): RuntimeAuthorizationGrantOption[] | null {
+  const parsed = parseOptionalJsonArray<unknown>(value, label)
+  if (parsed === null) {
+    return null
+  }
+  try {
+    return parseRuntimeAuthorizationGrantOptions(parsed)
+  } catch {
+    throw new Error(`${label} is invalid`)
+  }
+}
+
+function parseOptionalRuntimeAuthorizationPresets(
+  value: unknown,
+  label: string
+): RuntimeAuthorizationPreset[] | null {
+  const parsed = parseOptionalJsonArray<unknown>(value, label)
+  if (parsed === null) {
+    return null
+  }
+  try {
+    return parseRuntimeAuthorizationPresets(parsed)
+  } catch {
+    throw new Error(`${label} is invalid`)
+  }
+}
+
 export function decodeTaskPromptPayload(row: {
   prompt_payload: unknown
 }): Record<string, unknown> {
@@ -261,15 +311,15 @@ export function normalizeTaskRow(row: RawTaskDbRow): RawTaskRow {
       row.resolution_payload,
       `Task ${row.id} resolution_payload`
     ),
-    requested_action: parseOptionalJsonObject(
+    requested_action: parseOptionalRuntimeAuthorizationRequestedAction(
       row.requested_action,
       `Task ${row.id} requested_action`
-    ) as RuntimeAuthorizationRequestedAction | null,
-    grant_options: parseOptionalJsonArray<RuntimeAuthorizationGrantOption>(
+    ),
+    grant_options: parseOptionalRuntimeAuthorizationGrantOptions(
       row.grant_options,
       `Task ${row.id} grant_options`
     ),
-    available_presets: parseOptionalJsonArray<RuntimeAuthorizationPreset>(
+    available_presets: parseOptionalRuntimeAuthorizationPresets(
       row.available_presets,
       `Task ${row.id} available_presets`
     ),

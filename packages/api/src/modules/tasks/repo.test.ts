@@ -252,7 +252,14 @@ test("normalizeTaskRow decodes task summary JSONB fields at repo exit", () => {
     {
       id: "once",
       summary: "Allow once",
-      grantSpec: { retention: "single_use" },
+      grantSpec: {
+        capability: "commandline",
+        commandline: {
+          executor: "bash",
+          commandMatchType: "exact",
+          commandText: "date",
+        },
+      },
     },
   ]
   const normalized = normalizeTaskRow(
@@ -281,6 +288,11 @@ test("normalizeTaskRow decodes task summary JSONB fields at repo exit", () => {
         capability: "commandline",
         toolName: "shell",
         summary: "Run command",
+        commandline: {
+          executor: "bash",
+          commandMatchType: "exact",
+          commandText: "date",
+        },
       }),
       grant_options: JSON.stringify(grantOptions),
       available_presets: JSON.stringify(["once"]),
@@ -296,10 +308,50 @@ test("normalizeTaskRow decodes task summary JSONB fields at repo exit", () => {
     capability: "commandline",
     toolName: "shell",
     summary: "Run command",
+    commandline: {
+      executor: "bash",
+      commandMatchType: "exact",
+      commandText: "date",
+    },
   })
   assert.deepEqual(normalized.grant_options, grantOptions)
   assert.deepEqual(normalized.available_presets, ["once"])
   assert.deepEqual(normalized.source_request_args, { command: "date" })
+})
+
+test("normalizeTaskRow validates runtime authorization JSONB shape at repo exit", () => {
+  assert.throws(
+    () =>
+      normalizeTaskRow(
+        buildTaskDbRow({
+          requested_action: JSON.stringify({
+            capability: "commandline",
+            toolName: "shell",
+          }),
+        })
+      ),
+    /Task task-1 requested_action is invalid/
+  )
+
+  assert.throws(
+    () =>
+      normalizeTaskRow(
+        buildTaskDbRow({
+          grant_options: JSON.stringify([{ id: "once" }]),
+        })
+      ),
+    /Task task-1 grant_options is invalid/
+  )
+
+  assert.throws(
+    () =>
+      normalizeTaskRow(
+        buildTaskDbRow({
+          available_presets: JSON.stringify(["not-a-preset"]),
+        })
+      ),
+    /Task task-1 available_presets is invalid/
+  )
 })
 
 test("normalizeTaskCommandRow decodes request and response payloads at repo exit", () => {
@@ -374,7 +426,7 @@ function runtimeAuthorizationTaskRow(
   )
 }
 
-test("presentTaskSummary validates runtime authorization requested action via shared schema", () => {
+test("presentTaskSummary consumes repo-validated runtime authorization requested action", () => {
   const summary = presentTaskSummary(runtimeAuthorizationTaskRow())
 
   assert.equal(summary.kind, TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION)
@@ -386,19 +438,6 @@ test("presentTaskSummary validates runtime authorization requested action via sh
     toolName: "shell",
     summary: "Run command",
   })
-})
-
-test("presentTaskSummary rejects malformed runtime authorization requested action", () => {
-  assert.throws(() =>
-    presentTaskSummary(
-      runtimeAuthorizationTaskRow({
-        requested_action: {
-          capability: "commandline",
-          toolName: "shell",
-        },
-      })
-    )
-  )
 })
 
 test(

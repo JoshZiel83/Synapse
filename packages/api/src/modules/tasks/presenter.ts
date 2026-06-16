@@ -1,5 +1,4 @@
 import { TASK_INPUT_QUESTION_TYPES, TASK_REQUEST_KIND } from "@synapse/shared"
-import { parseRuntimeAuthorizationRequestedAction } from "@synapse/shared/schemas"
 import type {
   ConversationEntityRef,
   PlanChecklistStep,
@@ -33,16 +32,6 @@ export function toRevisionNumber(
     }
   }
   throw new Error(`${label} must be a finite revision number`)
-}
-
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || value === undefined) {
-    throw new Error(`${label} is required`)
-  }
-  if (typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${label} must be a JSON object`)
-  }
-  return value as Record<string, unknown>
 }
 
 export function requireTrimmedString(value: unknown, label: string): string {
@@ -552,10 +541,10 @@ export function presentTaskSummary(row: RawTaskRow): TaskSummary {
     }
   }
 
-  const requestedAction = requireRecord(
-    row.requested_action,
-    `Task ${row.id} requested_action`
-  )
+  const requestedAction = row.requested_action
+  if (!requestedAction) {
+    throw new Error(`Task ${row.id} requested_action is required`)
+  }
   const grantOptions = row.grant_options ?? []
   const availablePresets = row.available_presets ?? []
   const runtimeAuthorization: RuntimeAuthorizationTaskDetails = {
@@ -567,7 +556,7 @@ export function presentTaskSummary(row: RawTaskRow): TaskSummary {
       row.device_tool_stable_key,
       `Task ${row.id} device_tool_stable_key`
     ),
-    requestedAction: parseRuntimeAuthorizationRequestedAction(requestedAction),
+    requestedAction,
     reason: requireTrimmedString(
       row.reason,
       `Task ${row.id} runtime_authorization.reason`

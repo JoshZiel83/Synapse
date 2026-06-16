@@ -22,7 +22,11 @@ import {
   GrantPolicySchema,
 } from "../access/policies/index.js"
 import { CanonicalContentBlockSchema } from "./chat-content-block.js"
-import type { RuntimeAuthorizationRequestedAction } from "../types/index.js"
+import type {
+  RuntimeAuthorizationGrantOption,
+  RuntimeAuthorizationPreset,
+  RuntimeAuthorizationRequestedAction,
+} from "../types/index.js"
 
 const timestampSchema = z.string()
 
@@ -174,6 +178,22 @@ export function parseRuntimeAuthorizationRequestedAction(
   return RuntimeAuthorizationRequestedActionSchema.parse(
     value
   ) as RuntimeAuthorizationRequestedAction
+}
+
+export function parseRuntimeAuthorizationGrantOptions(
+  value: unknown
+): RuntimeAuthorizationGrantOption[] {
+  return z
+    .array(RuntimeAuthorizationGrantOptionSchema)
+    .parse(value) as RuntimeAuthorizationGrantOption[]
+}
+
+export function parseRuntimeAuthorizationPresets(
+  value: unknown
+): RuntimeAuthorizationPreset[] {
+  return z
+    .array(z.enum(RUNTIME_AUTHORIZATION_PRESETS))
+    .parse(value) as RuntimeAuthorizationPreset[]
 }
 
 const RuntimeAuthorizationTaskDetailsSchema = z.object({
