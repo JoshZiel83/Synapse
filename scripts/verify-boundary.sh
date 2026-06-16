@@ -35,7 +35,10 @@ npm run build -w packages/remote-agent-daemon
 ok "builds clean"
 
 # ── 2. Boundary guards (machine-checkable layering rules) ───────────────────
-step "guard:layering + guard:datetime"
+step "guard:api + guard:layering + guard:datetime"
+npm run guard:db -w packages/api
+npm run guard:fk-policy -w packages/api
+npm run guard:soft-delete -w packages/api
 npm run guard:layering -w packages/api
 node ./scripts/guard-datetime-boundaries.mjs
 ok "guards clean"
@@ -46,10 +49,17 @@ npm run audit:business-enums
 ok "business-enum audit clean"
 
 # ── 4. Typecheck the clients that consume the shared/wire contracts ─────────
-step "typecheck: web-next + mobile-app"
+step "typecheck: api + web-next + mobile-app"
+npm run typecheck -w packages/api
+# API typecheck runs package lifecycle builds that clean/recreate dependency
+# dist folders. Rebuild the package chain once more before raw API tests below
+# so test workers never observe a transiently missing workspace export.
+npm run build -w packages/device-protocol
+npm run build -w packages/shared
+npm run build -w packages/device-runtime
 npx tsc -p packages/web-next/tsconfig.json --noEmit
 ( cd packages/mobile-app && npm run typecheck )
-ok "client typechecks clean"
+ok "typechecks clean"
 
 # ── 5. Tests across the boundary-bearing packages ───────────────────────────
 if [ "${VERIFY_SKIP_TESTS:-0}" = "1" ]; then
@@ -61,7 +71,7 @@ else
   npm run test -w packages/device-runtime
   npm run test -w packages/device-sdk
   npm run test -w packages/remote-agent-daemon
-  npm run test -w packages/api
+  ( cd packages/api && npx tsx --test --test-concurrency=4 "src/**/*.test.ts" )
   npm run test -w packages/web-next
   ok "test suites pass"
 fi
