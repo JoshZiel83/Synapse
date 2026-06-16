@@ -256,3 +256,81 @@ test("ingestInboundEnvelopeUseCase writes inbound item, link projection, and pos
   assert.equal(account.metadata.pendingAutoLinkMode, undefined)
   assert.equal(account.metadata.pendingAutoLinkConfiguredAt, undefined)
 })
+
+test("ingestInboundEnvelopeUseCase stops projection and notifications when item creation fails", async () => {
+  const callOrder: string[] = []
+
+  await assert.rejects(
+    () =>
+      ingestInboundEnvelopeUseCase(
+        {
+          account: accountFixture(),
+          envelope: inboundEnvelopeFixture(),
+        },
+        depsFixture({
+          createConversationItem: async () => {
+            callOrder.push("create-item")
+            throw new Error("item insert failed")
+          },
+          queueConversationTransportProjection: async () => {
+            callOrder.push("queue-projection")
+            throw new Error("should not run")
+          },
+          updateTransportMessageLinkStatus: async () => {
+            callOrder.push("mark-link-sent")
+            throw new Error("should not run")
+          },
+          enqueueActorWakeupsForConversationMessage: async () => {
+            callOrder.push("enqueue-wakeups")
+            throw new Error("should not run")
+          },
+          notifyRemoteAgentDeliveriesForConversation: async () => {
+            callOrder.push("notify-remote-agents")
+            throw new Error("should not run")
+          },
+        })
+      ),
+    /item insert failed/
+  )
+
+  assert.deepEqual(callOrder, ["create-item"])
+})
+
+test("ingestInboundEnvelopeUseCase stops post-projection side effects when transport projection fails", async () => {
+  const callOrder: string[] = []
+
+  await assert.rejects(
+    () =>
+      ingestInboundEnvelopeUseCase(
+        {
+          account: accountFixture(),
+          envelope: inboundEnvelopeFixture(),
+        },
+        depsFixture({
+          createConversationItem: async () => {
+            callOrder.push("create-item")
+            return { id: "item-1" }
+          },
+          queueConversationTransportProjection: async () => {
+            callOrder.push("queue-projection")
+            throw new Error("projection failed")
+          },
+          updateTransportMessageLinkStatus: async () => {
+            callOrder.push("mark-link-sent")
+            throw new Error("should not run")
+          },
+          enqueueActorWakeupsForConversationMessage: async () => {
+            callOrder.push("enqueue-wakeups")
+            throw new Error("should not run")
+          },
+          notifyRemoteAgentDeliveriesForConversation: async () => {
+            callOrder.push("notify-remote-agents")
+            throw new Error("should not run")
+          },
+        })
+      ),
+    /projection failed/
+  )
+
+  assert.deepEqual(callOrder, ["create-item", "queue-projection"])
+})
