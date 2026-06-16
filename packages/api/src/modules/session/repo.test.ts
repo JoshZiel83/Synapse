@@ -132,3 +132,13 @@ test("normalizeRuntimeToolCallTaskRow decodes final payloads at repo exit", () =
   assert.deepEqual(row.finalResultPayload, { ok: true })
   assert.deepEqual(row.finalErrorPayload, { message: "failed" })
 })
+
+test("normalizeRuntimeToolCallTaskRow rejects non-object final payloads", () => {
+  const row = normalizeRuntimeToolCallTaskRow({
+    finalResultPayload: JSON.stringify(["not-object"]),
+    finalErrorPayload: "not-json",
+  } as ToolCallTaskDbRow)
+
+  assert.deepEqual(row.finalResultPayload, {})
+  assert.deepEqual(row.finalErrorPayload, {})
+})

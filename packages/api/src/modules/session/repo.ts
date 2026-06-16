@@ -101,17 +101,6 @@ export function normalizeSessionWakeupRow(
   return normalized
 }
 
-function parseJsonValue(value: unknown): unknown {
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value) as unknown
-    } catch {
-      return value
-    }
-  }
-  return value
-}
-
 export function normalizeRuntimeToolCallRow(row: ToolCallDbRow): ToolCallRow {
   const normalized = {
     ...row,
@@ -136,8 +125,8 @@ export function normalizeRuntimeToolCallTaskRow(
 ): ToolCallTaskRow {
   const normalized = {
     ...row,
-    finalErrorPayload: parseJsonValue(row.finalErrorPayload),
-    finalResultPayload: parseJsonValue(row.finalResultPayload),
+    finalErrorPayload: parseJsonObject(row.finalErrorPayload),
+    finalResultPayload: parseJsonObject(row.finalResultPayload),
   }
   return normalized
 }

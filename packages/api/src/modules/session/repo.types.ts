@@ -71,8 +71,8 @@ export type ToolCallTaskRow = Omit<
   TableRow<"toolCallTasks">,
   "finalErrorPayload" | "finalResultPayload"
 > & {
-  finalErrorPayload: unknown
-  finalResultPayload: unknown
+  finalErrorPayload: Record<string, unknown>
+  finalResultPayload: Record<string, unknown>
 }
 export type ToolCallTaskDbRow = Omit<
   ToolCallTaskRow,
