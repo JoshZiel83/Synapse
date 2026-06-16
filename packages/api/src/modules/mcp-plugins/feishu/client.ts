@@ -79,7 +79,7 @@ async function readJsonObjectResponse(
 ): Promise<JsonObject> {
   let parsed: unknown
   try {
-    parsed = await response.json()
+    parsed = JSON.parse(await response.text())
   } catch {
     throw new Error(`${label} must be valid JSON.`)
   }
@@ -172,7 +172,13 @@ export function getFeishuConnectionMetadata(config: Record<string, unknown>) {
 async function parseErrorResponse(response: Response) {
   const contentType = response.headers.get("content-type") || ""
   if (contentType.includes("application/json")) {
-    const payload = asObject(await response.json().catch(() => ({})))
+    const payload = await readJsonObjectResponse(
+      response,
+      "Feishu API error response"
+    ).catch(() => null)
+    if (!payload) {
+      return `HTTP ${response.status}`
+    }
     const message =
       asString(payload.msg) ||
       asString(payload.error_description) ||

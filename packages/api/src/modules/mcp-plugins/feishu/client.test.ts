@@ -113,3 +113,33 @@ test("FeishuApiClient.requestJson still surfaces provider business errors", asyn
     }
   )
 })
+
+test("FeishuApiClient.requestJson parses non-2xx provider error objects only", async () => {
+  const client = new FeishuApiClient("https://open.feishu.example", "token")
+
+  await withFetch(
+    (async () =>
+      new Response(JSON.stringify({ code: 999, msg: "scope denied" }), {
+        status: 403,
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch,
+    async () => {
+      await assert.rejects(client.requestJson({ path: "/forbidden" }), {
+        message: "[999] scope denied",
+      })
+    }
+  )
+
+  await withFetch(
+    (async () =>
+      new Response("[1,2,3]", {
+        status: 502,
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch,
+    async () => {
+      await assert.rejects(client.requestJson({ path: "/bad-error" }), {
+        message: "HTTP 502",
+      })
+    }
+  )
+})
