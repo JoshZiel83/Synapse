@@ -116,14 +116,10 @@ export const RuntimeBrowserPolicySchema = z.object({
     .optional(),
 })
 
-// Commandline policy on the wire (snake_case). Mirrors the equivalent
-// shared schema (packages/shared/src/access/policies/commandline.ts —
-// WireCommandlinePolicySchema) but is duplicated here to preserve
-// device-protocol's package-independence (no @synapse/shared dep so we
-// don't invert the dependency graph). A parity test in
-// packages/api/src/modules/capability-projection/commandline-parity.test.ts
-// asserts both copies accept/reject identical sample inputs so a field
-// drift fails CI.
+// Commandline policy on the wire (snake_case). This is the canonical schema for
+// signed envelopes and persisted grant_specs JSON. @synapse/shared exposes a
+// compatibility alias named WireCommandlinePolicySchema, but must not redeclare
+// a second schema copy.
 
 const ShellWireSchema = z.object({
   executor: z.enum(["bash", "powershell"]),
@@ -149,8 +145,7 @@ const ExecFileWireSchema = z.object({
 })
 
 // Sandbox confinement variant — no command/argv matcher (isolation is the
-// boundary). Must stay byte-for-byte aligned with the shared
-// SandboxPolicyWireSchema (enforced by commandline-parity.test.ts).
+// boundary).
 const SandboxWireSchema = z.object({
   executor: z.literal("sandbox"),
   working_directory: z.string().optional(),

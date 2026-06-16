@@ -1,13 +1,16 @@
 // Commandline policy: discriminated union over executor.
 //
-// The wire form (snake_case) is what gets embedded in signed envelopes and
-// stored in the API's grant_specs JSON column. The normalized form
-// (camelCase) is what every TS consumer reads. parseCommandlinePolicyFromWire
-// and serializeCommandlinePolicyToWire are the only places that translate
-// between them — both projection (envelope construction) and auto-retry
-// must use them to avoid double-write drift.
+// The wire form (snake_case) is owned by @synapse/device-protocol because it
+// gets embedded in signed envelopes and stored in the API's grant_specs JSON
+// column. This module owns the normalized camelCase app/runtime shape plus the
+// only translator pair between the two shapes.
 
 import { z } from "zod"
+
+import {
+  RuntimeCommandlinePolicySchema,
+  type RuntimeCommandlinePolicy,
+} from "@synapse/device-protocol/schemas"
 
 import {
   RUNTIME_AUTHORIZATION_COMMAND_EXECUTORS,
@@ -28,15 +31,6 @@ const ShellPolicyCamelSchema = z.object({
   allowedEnv: z.array(z.string()).optional(),
 })
 
-const ShellPolicyWireSchema = z.object({
-  executor: z.enum(SHELL_EXECUTORS),
-  command_match_type: z.enum(SHELL_MATCH_TYPES),
-  command_text: z.string().optional(),
-  working_directory: z.string().optional(),
-  allow_bundled_toolchain: z.boolean().optional(),
-  allowed_env: z.array(z.string()).optional(),
-})
-
 // ─────────────────────────── exec_file branch ────────────────────────────────
 
 const EXEC_FILE_MATCH_TYPES = [
@@ -55,16 +49,6 @@ const ExecFilePolicyCamelSchema = z.object({
   allowedEnv: z.array(z.string()).optional(),
 })
 
-const ExecFilePolicyWireSchema = z.object({
-  executor: z.literal("exec_file"),
-  command_match_type: z.enum(EXEC_FILE_MATCH_TYPES),
-  program: z.string(),
-  argv_prefix: z.array(z.string()).optional(),
-  working_directory: z.string().optional(),
-  allow_bundled_toolchain: z.boolean().optional(),
-  allowed_env: z.array(z.string()).optional(),
-})
-
 // ─────────────────────────── sandbox branch ──────────────────────────────────
 // "Any command inside a bwrap jail" — no command/argv matcher. The grant covers
 // every command whose working directory resolves within the sandbox mount
@@ -77,12 +61,6 @@ const SandboxPolicyCamelSchema = z.object({
   allowedEnv: z.array(z.string()).optional(),
 })
 
-const SandboxPolicyWireSchema = z.object({
-  executor: z.literal("sandbox"),
-  working_directory: z.string().optional(),
-  allowed_env: z.array(z.string()).optional(),
-})
-
 // ─────────────────────────── unions + types ──────────────────────────────────
 
 export const CommandlinePolicySchema = z.discriminatedUnion("executor", [
@@ -92,12 +70,8 @@ export const CommandlinePolicySchema = z.discriminatedUnion("executor", [
 ])
 export type CommandlinePolicy = z.infer<typeof CommandlinePolicySchema>
 
-export const WireCommandlinePolicySchema = z.discriminatedUnion("executor", [
-  ShellPolicyWireSchema,
-  ExecFilePolicyWireSchema,
-  SandboxPolicyWireSchema,
-])
-export type WireCommandlinePolicy = z.infer<typeof WireCommandlinePolicySchema>
+export const WireCommandlinePolicySchema = RuntimeCommandlinePolicySchema
+export type WireCommandlinePolicy = RuntimeCommandlinePolicy
 
 // Discriminator-aware aliases that consumers find useful when narrowing.
 export type CommandlineShellPolicy = Extract<
