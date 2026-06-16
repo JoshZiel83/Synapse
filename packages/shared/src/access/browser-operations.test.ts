@@ -18,14 +18,15 @@ function uniqueSorted(values: readonly string[]) {
   return [...new Set(values)].sort()
 }
 
+const operationsByExposure: Readonly<Record<string, readonly string[]>> =
+  BROWSER_MANUAL_GRANT_OPERATIONS_BY_EXPOSURE
+
 test("manual browser grant operations stay aligned with browser exposure tool map", () => {
   for (const [exposure, tools] of Object.entries(BROWSER_EXPOSURE_TOOLS)) {
     const expected = uniqueSorted(
       tools.map((tool) => BROWSER_TOOL_MAP[tool]?.operation).filter(Boolean)
     )
-    const actual = uniqueSorted(
-      BROWSER_MANUAL_GRANT_OPERATIONS_BY_EXPOSURE[exposure] ?? []
-    )
+    const actual = uniqueSorted(operationsByExposure[exposure] ?? [])
     assert.deepEqual(actual, expected, exposure)
     assert.deepEqual(
       uniqueSorted(
