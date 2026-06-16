@@ -41,3 +41,24 @@ export const RealtimeAsrAudioConfigSchema = z
       })
     }
   })
+
+export const RealtimeAsrClientMessageSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("auth"),
+    token: z.string().optional(),
+    workspaceId: z.string().min(1),
+  }),
+  z.object({
+    type: z.literal("start"),
+    audio: RealtimeAsrAudioConfigSchema,
+  }),
+  z.object({
+    type: z.literal("stop"),
+  }),
+  z.object({
+    type: z.literal("cancel"),
+  }),
+  z.object({
+    type: z.literal("pong"),
+  }),
+])
