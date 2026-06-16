@@ -13,10 +13,6 @@ import type { InitializeParams } from "../codex/generated/InitializeParams.js"
 import type { ThreadStartParams } from "../codex/generated/v2/ThreadStartParams.js"
 import type { ThreadResumeParams } from "../codex/generated/v2/ThreadResumeParams.js"
 import type { TurnStartParams } from "../codex/generated/v2/TurnStartParams.js"
-import type { ToolRequestUserInputParams } from "../codex/generated/v2/ToolRequestUserInputParams.js"
-import type { ToolRequestUserInputResponse } from "../codex/generated/v2/ToolRequestUserInputResponse.js"
-import type { TurnPlanUpdatedNotification } from "../codex/generated/v2/TurnPlanUpdatedNotification.js"
-import type { ThreadStartedNotification } from "../codex/generated/v2/ThreadStartedNotification.js"
 import type {
   AgentDriver,
   AgentSession,
@@ -29,6 +25,17 @@ import type {
 import { RUNTIME_KIND } from "./types.js"
 import { EventQueue as EventQueueBase, whichBinary } from "./async-channel.js"
 import { parseCodexJsonRpcLine } from "./codex-json-rpc-codec.js"
+import {
+  codexTurnStartParamsToRequestParams,
+  parseCodexElicitationRequest,
+  parseCodexPlanUpdated,
+  parseCodexUserInputRequest,
+  readCodexThreadResult,
+  readCodexElicitationContent,
+  readCodexThreadStartedId,
+  readCodexTurnCompletedError,
+  readCodexUserInputAnswers,
+} from "./codex-driver-events.js"
 
 type JsonRpcMethod =
   | "initialize"
@@ -285,7 +292,7 @@ class CodexAgentSession implements AgentSession {
     }
   }
 
-  private handleResult(method: JsonRpcMethod | undefined, result: any) {
+  private handleResult(method: JsonRpcMethod | undefined, result: unknown) {
     switch (method) {
       case "initialize":
         this.sendNotification("initialized")
@@ -311,19 +318,14 @@ class CodexAgentSession implements AgentSession {
         break
       case "thread/start":
       case "thread/resume": {
-        const thread = result?.thread
-        const threadId =
-          typeof thread?.id === "string"
-            ? thread.id
-            : typeof thread?.threadId === "string"
-              ? thread.threadId
-              : this.threadId
+        const parsed = readCodexThreadResult(result, this.threadId)
+        const threadId = parsed.threadId
         if (threadId && threadId !== this.threadId) {
           this.threadId = threadId
           this.eventQueue.push({ kind: "session_started", sessionId: threadId })
         }
-        if (typeof result?.model === "string") {
-          this.currentModel = result.model
+        if (parsed.model) {
+          this.currentModel = parsed.model
         }
         this.startTurn(this.currentPrompt)
         break
@@ -336,13 +338,10 @@ class CodexAgentSession implements AgentSession {
     }
   }
 
-  private handleServerNotification(method: string, params: any) {
+  private handleServerNotification(method: string, params: unknown) {
     switch (method) {
       case "thread/started": {
-        const notification = params as ThreadStartedNotification
-        const threadId =
-          (notification as unknown as { thread?: { id?: string } })?.thread
-            ?.id ?? undefined
+        const threadId = readCodexThreadStartedId(params)
         if (threadId && threadId !== this.threadId) {
           this.threadId = threadId
           this.eventQueue.push({ kind: "session_started", sessionId: threadId })
@@ -350,30 +349,25 @@ class CodexAgentSession implements AgentSession {
         break
       }
       case "turn/plan/updated": {
-        const notification = params as TurnPlanUpdatedNotification
+        const parsed = parseCodexPlanUpdated(params)
         this.eventQueue.push({
           kind: "plan_updated",
-          explanation: notification?.explanation ?? undefined,
-          plan: Array.isArray(notification?.plan)
-            ? notification.plan
-                .map((step) => ({
-                  step: String(step?.step ?? ""),
-                  status: String(step?.status ?? "pending"),
-                }))
-                .filter((step) => Boolean(step.step))
-            : [],
+          explanation: parsed.explanation,
+          plan: parsed.plan,
         })
         break
       }
-      case "turn/completed":
-        if (params?.turn?.error?.message) {
+      case "turn/completed": {
+        const errorMessage = readCodexTurnCompletedError(params)
+        if (errorMessage) {
           this.eventQueue.push({
             kind: "error",
-            message: String(params.turn.error.message),
+            message: errorMessage,
           })
         }
         this.eventQueue.push({ kind: "turn_completed" })
         break
+      }
       default:
         break
     }
@@ -382,21 +376,18 @@ class CodexAgentSession implements AgentSession {
   private handleServerRequest(
     id: string | number,
     method: string,
-    params: any
+    params: unknown
   ) {
     if (method === "item/tool/requestUserInput") {
-      const typed = params as ToolRequestUserInputParams
+      const parsed = parseCodexUserInputRequest(params)
       const requestId = `codex-req-${String(id)}`
       this.pendingPermissions.set(requestId, (decision) => {
         if (decision.behavior === "allow") {
-          const answers =
-            (decision.updatedInput?.answers as
-              | ToolRequestUserInputResponse["answers"]
-              | undefined) ?? {}
+          const answers = readCodexUserInputAnswers(decision)
           writeJsonLine(this.child, {
             jsonrpc: "2.0",
             id,
-            result: { answers } satisfies ToolRequestUserInputResponse,
+            result: { answers },
           })
         } else {
           writeJsonLine(this.child, {
@@ -409,12 +400,8 @@ class CodexAgentSession implements AgentSession {
       this.eventQueue.push({
         kind: "user_input_requested",
         requestId,
-        title:
-          (typed?.questions?.[0]?.question as string | undefined)?.trim() ||
-          "Question from Codex",
-        questions: Array.isArray(typed?.questions)
-          ? (typed.questions as unknown as Array<Record<string, unknown>>)
-          : [],
+        title: parsed.title,
+        questions: parsed.questions,
       })
       return
     }
@@ -447,12 +434,7 @@ class CodexAgentSession implements AgentSession {
       // already use for tool-driven questions so the human can answer in
       // Synapse. The respondPermission roundtrip translates the daemon's
       // PermissionDecision back into the elicitation accept/decline shape.
-      const typed = params as {
-        message?: string
-        mode?: "form" | "url"
-        requestedSchema?: { properties?: Record<string, unknown> }
-        serverName?: string
-      }
+      const parsed = parseCodexElicitationRequest(params)
       const requestId = `codex-elicit-${String(id)}`
       this.pendingPermissions.set(requestId, (decision) => {
         if (decision.behavior === "allow") {
@@ -461,7 +443,7 @@ class CodexAgentSession implements AgentSession {
             id,
             result: {
               action: "accept",
-              content: (decision.updatedInput?.answers as unknown) ?? null,
+              content: readCodexElicitationContent(decision),
               _meta: null,
             },
           })
@@ -477,40 +459,11 @@ class CodexAgentSession implements AgentSession {
           })
         }
       })
-      const schemaProps = typed?.requestedSchema?.properties ?? {}
-      const questions = Object.entries(schemaProps).map(([key, raw], index) => {
-        const prop = (raw ?? {}) as {
-          title?: string
-          description?: string
-          type?: string
-          enum?: unknown[]
-        }
-        return {
-          id: key,
-          header: prop.title ?? `Field ${index + 1}`,
-          type:
-            Array.isArray(prop.enum) && prop.enum.length > 0
-              ? "single_select"
-              : "free_text",
-          prompt: prop.description ?? prop.title ?? key,
-          required: true,
-          ...(Array.isArray(prop.enum)
-            ? {
-                options: prop.enum.map((value, optionIndex) => ({
-                  id: `option-${index + 1}-${optionIndex + 1}`,
-                  label: String(value),
-                })),
-              }
-            : {}),
-        }
-      })
       this.eventQueue.push({
         kind: "user_input_requested",
         requestId,
-        title:
-          typed?.message?.trim() ||
-          `Codex ${typed?.serverName ?? "MCP server"} needs input`,
-        questions,
+        title: parsed.title,
+        questions: parsed.questions,
       })
       return
     }
@@ -551,7 +504,7 @@ class CodexAgentSession implements AgentSession {
       },
       ...(this.currentModel ? { model: this.currentModel } : {}),
     }
-    this.sendRequest("turn/start", params as unknown as Record<string, unknown>)
+    this.sendRequest("turn/start", codexTurnStartParamsToRequestParams(params))
   }
 
   async send(prompt: string, _options?: SendPromptOptions) {
