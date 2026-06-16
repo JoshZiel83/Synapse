@@ -21,7 +21,6 @@ import type {
   ConversationTransportBindingMetadataUpdate,
   ConversationTransportBindingUpdatedAtUpdate,
 } from "../repo.types.js"
-import { removeTransportMessageLinkMetadataKey } from "./repo.js"
 
 export type DbOrTx = KyselyDb | DatabaseTransaction
 
@@ -128,19 +127,19 @@ export function buildReEnableAutoDisabledBindingsSql(params: {
  * does not re-verify.
  */
 export async function recoverSkippedDisabledLink(
-  linkId: string
+  linkId: string,
+  exec: DbOrTx = db
 ): Promise<void> {
-  await db.transaction().execute(async (tx) => {
-    await tx
-      .updateTable("transportMessageLinks")
-      .set({
-        deliveryStatus: "pending",
-      })
-      .where("id", "=", linkId)
-      .where("deliveryStatus", "=", "skipped")
-      .execute()
-    await removeTransportMessageLinkMetadataKey(tx, linkId, "skippedReason")
-  })
+  await exec
+    .updateTable("transportMessageLinks")
+    .set({
+      deliveryStatus: "pending",
+      metadata:
+        sql`metadata - 'skippedReason'` as unknown as TransportMessageLinkMetadataUpdate,
+    })
+    .where("id", "=", linkId)
+    .where("deliveryStatus", "=", "skipped")
+    .execute()
 }
 
 /**
