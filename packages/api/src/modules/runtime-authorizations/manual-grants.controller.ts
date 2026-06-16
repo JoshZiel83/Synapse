@@ -18,47 +18,17 @@ import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { requireRequestAction } from "../access/guards.js"
 import { BrowserGrantPolicyError } from "@synapse/shared/access/policies"
-import { workspaceRef } from "@synapse/shared"
+import {
+  browserOperationsForExposureStableKey,
+  workspaceRef,
+} from "@synapse/shared"
 import {
   CreateManualRuntimeAuthorizationGrantInputSchema,
   RuntimeAuthorizationGrantRecordViewSchema,
 } from "@synapse/shared/schemas"
-import {
-  BROWSER_EXPOSURE_TOOLS,
-  BROWSER_TOOL_MAP,
-} from "@synapse/device-protocol/browser-tools"
 import { appRoute } from "../../infrastructure/http/route.js"
 import { createRuntimeAuthorizationGrant } from "./service.js"
 import { findDeviceCapabilityGrantTarget } from "./repo.js"
-
-/**
- * For a given exposure stable_key (e.g. `builtin/browser/navigation`),
- * return the set of BrowserOperation values that any tool in the exposure
- * would ever request. Used to prevent operators from granting operations
- * the exposure can't actually trigger.
- *
- * Returns `null` for exposures that aren't from the chrome-devtools-mcp
- * provider (legacy `builtin/browser`, custom builtins, etc.) — those
- * fall through to capability-level matching only.
- */
-function allowedBrowserOperationsForExposureStableKey(
-  stableKey: string
-): Set<string> | null {
-  // Stable keys defined by BROWSER_EXPOSURE_STABLE_KEYS:
-  //   builtin/browser/{navigation,read,input,network,performance,script,extensions,webmcp}
-  const suffix = stableKey.startsWith("builtin/browser/")
-    ? stableKey.slice("builtin/browser/".length)
-    : null
-  if (!suffix) return null
-  const tools = (BROWSER_EXPOSURE_TOOLS as Record<string, string[]>)[suffix]
-  if (!tools) return null
-  const ops = new Set<string>()
-  for (const t of tools) {
-    const desc = BROWSER_TOOL_MAP[t]
-    if (desc) ops.add(desc.operation)
-  }
-  return ops
-}
 
 export function registerManualRuntimeAuthorizationGrantRoutes(
   app: FastifyInstance
@@ -166,21 +136,19 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
         policy.browser?.operations &&
         policy.browser.operations.length > 0
       ) {
-        const allowedOps = allowedBrowserOperationsForExposureStableKey(
-          row.exposureStableKey as string
+        const allowedOps = new Set(
+          browserOperationsForExposureStableKey(row.exposureStableKey)
         )
-        if (allowedOps) {
-          const bad = policy.browser.operations.filter(
-            (op) => !allowedOps.has(op)
-          )
-          if (bad.length > 0) {
-            reply.status(400).send({
-              code: "operations_not_allowed_for_exposure",
-              message: `operations not served by exposure ${row.exposureStableKey}: ${bad.join(", ")}`,
-              allowed: [...allowedOps],
-            })
-            return
-          }
+        const bad = policy.browser.operations.filter(
+          (op) => !allowedOps.has(op)
+        )
+        if (bad.length > 0) {
+          reply.status(400).send({
+            code: "operations_not_allowed_for_exposure",
+            message: `operations not served by exposure ${row.exposureStableKey}: ${bad.join(", ")}`,
+            allowed: [...allowedOps],
+          })
+          return
         }
       }
 
