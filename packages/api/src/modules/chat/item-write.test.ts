@@ -9,7 +9,7 @@ import {
   type ChatConversationItem,
 } from "@synapse/shared"
 import type { Kysely } from "kysely"
-import { withTestDb } from "../../test/helpers/db.js"
+import { withTestDb, withTestDbAndClient } from "../../test/helpers/db.js"
 import {
   createConversationItemUseCase,
   sendConversationMessageFromParticipantUseCase,
@@ -169,6 +169,83 @@ test("createConversationItemUseCase inserts details and runs visible side effect
     ])
   })
 })
+
+test(
+  "createConversationItemUseCase rolls back item writes when visible sync fails",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDbAndClient(async ({ db, client }) => {
+      const fixture = await seedItemWriteFixture(db as unknown as AnyDb)
+      const activeParticipant = {
+        id: randomUUID(),
+        conversationId: fixture.conversationId,
+        state: "active",
+        workspaceMemberId: randomUUID(),
+      } as ChatParticipantRow
+      const deliveryCalls: unknown[] = []
+
+      await assert.rejects(async () => {
+        await client.query("SAVEPOINT item_write_rollback")
+        try {
+          await createConversationItemUseCase(
+            {
+              workspaceId: fixture.workspaceId,
+              conversationId: fixture.conversationId,
+              scope: CONVERSATION_ITEM_SCOPE.SHARED,
+              surface: CONVERSATION_ITEM_SURFACE.VISIBLE,
+              itemType: CONVERSATION_ITEM_TYPE.MESSAGE,
+              subtype: CONVERSATION_MESSAGE_SUBTYPE.CHAT_MESSAGE,
+              role: "user",
+              metadata: { source: "rollback" },
+              parts: [{ type: "text", text: "rollback" }],
+              queryable: db as unknown as AnyDb,
+            },
+            {
+              prepareConversationItemWrite: async () => ({
+                activeParticipants: [activeParticipant],
+                parts: [{ type: "text", text: "rollback" }],
+                mentionedParticipants: [],
+                replyToItem: null,
+              }),
+              buildChatConversationItems: async (_queryable, rows) =>
+                rows.map(itemFromRow),
+              syncVisibleSharedItem: async () => {
+                throw new Error("sync failed")
+              },
+              createRemoteAgentDeliveriesForItem: async (params) => {
+                deliveryCalls.push(params)
+              },
+            }
+          )
+          await client.query("RELEASE SAVEPOINT item_write_rollback")
+        } catch (error) {
+          await client.query("ROLLBACK TO SAVEPOINT item_write_rollback")
+          throw error
+        }
+      }, /sync failed/)
+
+      const rows = await (db as unknown as AnyDb)
+        .selectFrom("conversationItems")
+        .select("id")
+        .where("conversationId", "=", fixture.conversationId)
+        .execute()
+      assert.deepEqual(rows, [])
+
+      const parts = await (db as unknown as AnyDb)
+        .selectFrom("conversationItemParts")
+        .innerJoin(
+          "conversationItems",
+          "conversationItems.id",
+          "conversationItemParts.itemId"
+        )
+        .select("itemId")
+        .where("conversationItems.conversationId", "=", fixture.conversationId)
+        .execute()
+      assert.deepEqual(parts, [])
+      assert.deepEqual(deliveryCalls, [])
+    })
+  }
+)
 
 test("sendConversationMessageFromParticipantUseCase defers wakeups inside caller transactions", async () => {
   const item = {
