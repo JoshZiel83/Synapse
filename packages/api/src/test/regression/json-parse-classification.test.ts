@@ -193,8 +193,10 @@ function toRelativeRepoPath(path: string): string {
 }
 
 test("boundary production JSON.parse surfaces stay on the classified finite list", () => {
-  const filesWithJsonParse = scannedSourceRoots
-    .flatMap((sourceRoot) => sourceFiles(join(repoRoot, sourceRoot)))
+  const scannedFiles = scannedSourceRoots.flatMap((sourceRoot) =>
+    sourceFiles(join(repoRoot, sourceRoot))
+  )
+  const filesWithJsonParse = scannedFiles
     .filter((path) =>
       /\bJSON\s*\.\s*parse\s*\(/.test(stripComments(readFileSync(path, "utf8")))
     )
@@ -210,4 +212,18 @@ test("boundary production JSON.parse surfaces stay on the classified finite list
     ),
     []
   )
+})
+
+test("boundary production code does not use unchecked Response.json parsers", () => {
+  const filesWithResponseJson = scannedSourceRoots
+    .flatMap((sourceRoot) => sourceFiles(join(repoRoot, sourceRoot)))
+    .filter((path) =>
+      /\b(?:r|res|resp|response)\s*\.\s*json\s*\(/.test(
+        stripComments(readFileSync(path, "utf8"))
+      )
+    )
+    .map(toRelativeRepoPath)
+    .sort()
+
+  assert.deepEqual(filesWithResponseJson, [])
 })
