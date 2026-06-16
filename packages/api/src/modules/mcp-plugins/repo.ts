@@ -238,16 +238,33 @@ export function normalizeNullablePluginConnectionPublicPayload(
   return parseJsonObject(value)
 }
 
-export function normalizeJsonArray<T = unknown>(value: unknown): T[] {
+export function normalizeJsonArray<T = unknown>(
+  value: unknown,
+  label = "JSON array field"
+): T[] {
+  if (value === null || typeof value === "undefined") return []
   if (typeof value === "string") {
+    if (!value.trim()) return []
     try {
       const parsed = JSON.parse(value) as unknown
-      return Array.isArray(parsed) ? (parsed as T[]) : []
-    } catch {
-      return []
+      if (!Array.isArray(parsed)) {
+        throw new Error(`${label} must be a JSON array`)
+      }
+      return parsed as T[]
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message === `${label} must be a JSON array`
+      ) {
+        throw error
+      }
+      throw new Error(`${label} must be valid JSON`)
     }
   }
-  return Array.isArray(value) ? (value as T[]) : []
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be a JSON array`)
+  }
+  return value as T[]
 }
 
 export function normalizePluginCatalogRow(
@@ -271,17 +288,26 @@ export function normalizePluginCatalogRow(
     ...rest,
     itemMetadata: parseJsonObject(itemMetadata),
     versionMetadata: parseJsonObject(versionMetadata),
-    specToolManifest: normalizeJsonArray(specToolManifest),
+    specToolManifest: normalizeJsonArray(specToolManifest, "spec.toolManifest"),
     specConfigSchema: parseJsonObject(specConfigSchema),
     specDefaultConfig: parseJsonObject(specDefaultConfig),
     specInstallFlow: parseJsonObject(specInstallFlow),
-    specAuthBindings:
-      normalizeJsonArray<PluginAuthBindingDefinition>(specAuthBindings),
-    specSupportedReuseScopes: normalizeJsonArray(specSupportedReuseScopes),
+    specAuthBindings: normalizeJsonArray<PluginAuthBindingDefinition>(
+      specAuthBindings,
+      "spec.authBindings"
+    ),
+    specSupportedReuseScopes: normalizeJsonArray(
+      specSupportedReuseScopes,
+      "spec.supportedReuseScopes"
+    ),
     specMetadata: parseJsonObject(specMetadata),
-    categoriesJson: normalizeJsonArray<JsonObject>(categoriesJson),
+    categoriesJson: normalizeJsonArray<JsonObject>(
+      categoriesJson,
+      "catalog.categories"
+    ),
     runtimePermissionsJson: normalizeJsonArray<JsonObject>(
-      runtimePermissionsJson
+      runtimePermissionsJson,
+      "plugin.runtimePermissions"
     ),
   }
 }
@@ -1440,7 +1466,8 @@ export function normalizeVisiblePluginRow(
     transport: row.transport,
     entryPoint: row.entryPoint,
     toolManifest: normalizeJsonArray<VisiblePluginToolManifestEntry>(
-      row.toolManifest
+      row.toolManifest,
+      "visiblePlugin.toolManifest"
     ),
     reuseScope: row.reuseScope,
     conversationTypeMaskOverride: row.conversationTypeMaskOverride,
@@ -1827,7 +1854,8 @@ export function normalizePluginAuthSpecRow(
     catalogVersionId: row.catalogVersionId,
     defaultConfig: parseJsonObject(row.defaultConfig),
     authBindings: normalizeJsonArray<PluginAuthBindingDefinition>(
-      row.authBindings
+      row.authBindings,
+      "authSpec.authBindings"
     ),
   }
 }

@@ -269,9 +269,22 @@ test("upsertPluginAuthConnectionFromSessionResult owns connection upsert and ses
   })
 })
 
-test("normalizeJsonArray returns an empty array for non-array JSON", () => {
-  assert.deepEqual(normalizeJsonArray('{"not":"array"}'), [])
+test("normalizeJsonArray decodes array JSON and rejects drift", () => {
+  assert.deepEqual(normalizeJsonArray('["conversation"]'), ["conversation"])
   assert.deepEqual(normalizeJsonArray(null), [])
+  assert.deepEqual(normalizeJsonArray(undefined), [])
+  assert.throws(
+    () => normalizeJsonArray('{"not":"array"}', "spec.toolManifest"),
+    /spec\.toolManifest must be a JSON array/
+  )
+  assert.throws(
+    () => normalizeJsonArray("{bad json", "spec.toolManifest"),
+    /spec\.toolManifest must be valid JSON/
+  )
+  assert.throws(
+    () => normalizeJsonArray({ not: "array" }, "spec.toolManifest"),
+    /spec\.toolManifest must be a JSON array/
+  )
 })
 
 test("normalizePluginCatalogRow decodes catalog JSON fields at repo exit", () => {
@@ -301,6 +314,26 @@ test("normalizePluginCatalogRow decodes catalog JSON fields at repo exit", () =>
   assert.deepEqual(row.specMetadata, { configFields: [] })
   assert.equal(row.categoriesJson[0]?.slug, "productivity")
   assert.equal(row.runtimePermissionsJson[0]?.permissionKey, "tool.execute")
+})
+
+test("normalizePluginCatalogRow rejects malformed array payloads at repo exit", () => {
+  assert.throws(
+    () =>
+      normalizePluginCatalogRow({
+        itemMetadata: {},
+        versionMetadata: {},
+        specToolManifest: '{"name":"search"}',
+        specConfigSchema: {},
+        specDefaultConfig: {},
+        specInstallFlow: {},
+        specAuthBindings: [],
+        specSupportedReuseScopes: [],
+        specMetadata: {},
+        categoriesJson: [],
+        runtimePermissionsJson: [],
+      } as PluginCatalogDbRow),
+    /spec\.toolManifest must be a JSON array/
+  )
 })
 
 test("normalizeVisiblePluginRow decodes tool manifest at repo exit", () => {
