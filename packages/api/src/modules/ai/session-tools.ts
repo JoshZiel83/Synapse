@@ -54,7 +54,15 @@ import {
   buildUserTaskTargetCandidatesFromRows,
   type UserTaskTargetCandidate,
 } from "./session-tool-user-task-targets.js"
-import { parseSelfEventSubscriptionMatcherInput } from "./session-tools-input-codec.js"
+import {
+  parseCancelTaskToolInput,
+  parseGetTaskStatusToolInput,
+  parseListTasksToolInput,
+  parseSelfEventSubscriptionMatcherInput,
+  parseTailTaskOutputToolInput,
+  taskOutputStreamValues,
+  taskStatusFilterValues,
+} from "./session-tools-input-codec.js"
 import { upsertAccessSubjectDefault } from "../access/guards.js"
 import {
   listInviteableActorRowsDefault,
@@ -853,21 +861,6 @@ function buildUserInputQuestionDefinition(
 
   return { question }
 }
-
-const taskStatusFilterValues = [
-  "working",
-  "input_required",
-  "completed",
-  "failed",
-  "cancelled",
-] as const
-
-const taskOutputStreamValues = [
-  "combined",
-  "stdout",
-  "stderr",
-  "system",
-] as const
 
 function buildUserInputQuestionDefinitions(rawQuestions: unknown): {
   questions: TaskInputQuestionDefinition[]
@@ -2081,25 +2074,11 @@ export function registerCallableToolPlugins(): void {
         throwToolError("No session context available")
       }
 
-      const statuses = Array.isArray((input as any).statuses)
-        ? (input as any).statuses
-            .map((value: unknown) => String(value || "").trim())
-            .filter(
-              (
-                value: string
-              ): value is (typeof taskStatusFilterValues)[number] =>
-                (taskStatusFilterValues as readonly string[]).includes(value)
-            )
-        : []
-      const limit =
-        typeof (input as any).limit === "number" &&
-        Number.isFinite((input as any).limit)
-          ? Math.max(1, Math.trunc(Number((input as any).limit)))
-          : 20
+      const { statuses, limit } = parseListTasksToolInput(input)
 
       const tasks = await listToolCallTasksForSession({
         sessionId: context.sessionId,
-        statuses: statuses.length > 0 ? statuses : undefined,
+        statuses,
         limit,
       })
 
@@ -2136,10 +2115,7 @@ export function registerCallableToolPlugins(): void {
         throwToolError("No session context available")
       }
 
-      const taskId = String((input as any).taskId || "").trim()
-      if (!taskId) {
-        throwToolError("taskId is required")
-      }
+      const { taskId } = parseGetTaskStatusToolInput(input)
 
       const task = await loadSessionTaskOrThrow(context.sessionId, taskId)
       const requestTask =
@@ -2188,15 +2164,7 @@ export function registerCallableToolPlugins(): void {
         throwToolError("No session context available")
       }
 
-      const taskId = String((input as any).taskId || "").trim()
-      if (!taskId) {
-        throwToolError("taskId is required")
-      }
-
-      const reason =
-        typeof (input as any).reason === "string"
-          ? String((input as any).reason).trim()
-          : undefined
+      const { taskId, reason } = parseCancelTaskToolInput(input)
       const task = await loadSessionTaskOrThrow(context.sessionId, taskId)
 
       if (
@@ -2281,37 +2249,13 @@ export function registerCallableToolPlugins(): void {
         throwToolError("No session context available")
       }
 
-      const taskId = String((input as any).taskId || "").trim()
-      if (!taskId) {
-        throwToolError("taskId is required")
-      }
+      const { taskId, afterSeq, limit, stream } =
+        parseTailTaskOutputToolInput(input)
 
       const task = await loadSessionTaskOrThrow(context.sessionId, taskId)
       if (!task.supportsOutputTail) {
         throwToolError(`Task "${task.id}" does not expose output tailing.`)
       }
-
-      const afterSeq =
-        typeof (input as any).afterSeq === "number" &&
-        Number.isFinite((input as any).afterSeq)
-          ? Math.max(0, Math.trunc(Number((input as any).afterSeq)))
-          : 0
-      const limit =
-        typeof (input as any).limit === "number" &&
-        Number.isFinite((input as any).limit)
-          ? Math.max(1, Math.trunc(Number((input as any).limit)))
-          : 20
-      const stream =
-        typeof (input as any).stream === "string" &&
-        (taskOutputStreamValues as readonly string[]).includes(
-          String((input as any).stream).trim()
-        )
-          ? (String((input as any).stream).trim() as
-              | "combined"
-              | "stdout"
-              | "stderr"
-              | "system")
-          : "combined"
 
       const chunks = await getToolCallTaskOutput({
         taskId: task.id,
