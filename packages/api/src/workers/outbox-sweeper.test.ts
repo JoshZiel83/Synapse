@@ -470,3 +470,60 @@ test("processSweepCandidate: retrying candidates stop before enqueue when retry 
 
   assert.deepEqual(calls, ["checkBudget", "bump"])
 })
+
+test("processSweepCandidate: skipped recovery surfaces enqueue failures after retry stamp", async () => {
+  const calls: string[] = []
+  await assert.rejects(
+    () =>
+      processSweepCandidate(
+        sweepCandidate({
+          reason: "skipped_recoverable",
+        }),
+        {
+          canDeliverNow: async () => {
+            calls.push("canDeliverNow")
+            return { ok: true }
+          },
+          recoverSkippedDisabledLink: async () => {
+            calls.push("recover")
+          },
+          bumpRetryStamp: async () => {
+            calls.push("bump")
+          },
+          enqueueOrRetry: async () => {
+            calls.push("enqueue")
+            throw new Error("enqueue failed")
+          },
+        }
+      ),
+    /enqueue failed/
+  )
+
+  assert.deepEqual(calls, ["canDeliverNow", "recover", "bump", "enqueue"])
+})
+
+test("processSweepCandidate: retrying candidates surface enqueue failures without dead-lettering", async () => {
+  const calls: string[] = []
+  await assert.rejects(
+    () =>
+      processSweepCandidate(sweepCandidate({ reason: "pending_stale" }), {
+        checkBudget() {
+          calls.push("checkBudget")
+          return "ok"
+        },
+        markDeadLetter: async () => {
+          calls.push("markDeadLetter")
+        },
+        bumpRetryStamp: async () => {
+          calls.push("bump")
+        },
+        enqueueOrRetry: async () => {
+          calls.push("enqueue")
+          throw new Error("enqueue failed")
+        },
+      }),
+    /enqueue failed/
+  )
+
+  assert.deepEqual(calls, ["checkBudget", "bump", "enqueue"])
+})
