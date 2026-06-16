@@ -50,8 +50,8 @@ const McpInstanceParamsSchema = z
     scopeId: z.string().min(1),
     config: z.record(z.string(), z.unknown()),
     workspaceId: z.string().optional(),
-    idleTtlMs: z.number().optional(),
-    maxAgeMs: z.number().optional(),
+    idleTtlMs: z.number().int().positive().optional(),
+    maxAgeMs: z.number().int().positive().optional(),
   })
   .strict()
 
@@ -74,7 +74,7 @@ const RuntimeLeaseMetadataSchema = z
     nodeId: z.string().min(1),
     token: z.string().min(1),
     instanceKey: z.string().min(1),
-    updatedAt: z.number(),
+    updatedAt: z.number().int().nonnegative(),
   })
   .strict()
 

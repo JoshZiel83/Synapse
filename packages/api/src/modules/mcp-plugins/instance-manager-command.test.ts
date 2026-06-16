@@ -20,7 +20,11 @@ const baseParams = {
 test("parseRemoteInstanceCommand accepts execute command payloads", () => {
   const command = parseRemoteInstanceCommand({
     command: "execute",
-    params: baseParams,
+    params: {
+      ...baseParams,
+      idleTtlMs: 60_000,
+      maxAgeMs: 120_000,
+    },
     key: "instance-key",
     configHash: "hash-1",
     toolName: "demo.tool",
@@ -30,6 +34,8 @@ test("parseRemoteInstanceCommand accepts execute command payloads", () => {
 
   assert.equal(command.command, "execute")
   assert.equal(command.params.pluginId, "plugin-1")
+  assert.equal(command.params.idleTtlMs, 60_000)
+  assert.equal(command.params.maxAgeMs, 120_000)
   assert.deepEqual(command.input, { query: "hello" })
 })
 
@@ -70,6 +76,28 @@ test("parseRemoteInstanceCommand rejects invalid command payloads", () => {
   )
 })
 
+test("parseRemoteInstanceCommand rejects drifted TTL parameters", () => {
+  for (const { params, field } of [
+    { params: { ...baseParams, idleTtlMs: 0 }, field: "idleTtlMs" },
+    { params: { ...baseParams, idleTtlMs: -1 }, field: "idleTtlMs" },
+    { params: { ...baseParams, idleTtlMs: 1.5 }, field: "idleTtlMs" },
+    { params: { ...baseParams, maxAgeMs: 0 }, field: "maxAgeMs" },
+    { params: { ...baseParams, maxAgeMs: -1 }, field: "maxAgeMs" },
+    { params: { ...baseParams, maxAgeMs: 1.5 }, field: "maxAgeMs" },
+  ]) {
+    assert.throws(
+      () =>
+        parseRemoteInstanceCommand({
+          command: "describe",
+          params,
+          key: "instance-key",
+          configHash: "hash-1",
+        }),
+      (error) => error instanceof Error && error.message.includes(field)
+    )
+  }
+})
+
 test("parseRuntimeLeaseMetadata validates persisted redis lease metadata", () => {
   assert.deepEqual(
     parseRuntimeLeaseMetadata(
@@ -99,4 +127,30 @@ test("parseRuntimeLeaseMetadata validates persisted redis lease metadata", () =>
     ),
     null
   )
+
+  for (const metadata of [
+    [],
+    null,
+    {
+      nodeId: "node-1",
+      token: "token-1",
+      instanceKey: "instance-key",
+      updatedAt: -1,
+    },
+    {
+      nodeId: "node-1",
+      token: "token-1",
+      instanceKey: "instance-key",
+      updatedAt: 1.5,
+    },
+    {
+      nodeId: "node-1",
+      token: "token-1",
+      instanceKey: "instance-key",
+      updatedAt: 123,
+      extra: true,
+    },
+  ]) {
+    assert.equal(parseRuntimeLeaseMetadata(JSON.stringify(metadata)), null)
+  }
 })
