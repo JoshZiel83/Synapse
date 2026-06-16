@@ -32,13 +32,7 @@ import WebSocket from "ws"
 import { computeBackoff } from "@synapse/shared"
 import { nowIsoInstant } from "@synapse/shared/datetime"
 import { sleep } from "../../../../infrastructure/async/index.js"
-import {
-  QQ_CLOSE_CODE,
-  QQ_EVENT,
-  QQ_OP,
-  QQ_V1_INTENTS,
-  type QqEventName,
-} from "./types.js"
+import { QQ_CLOSE_CODE, QQ_EVENT, QQ_OP, QQ_V1_INTENTS } from "./types.js"
 import { qqApiFetch } from "./client.js"
 import { getQqCredentialsOrThrow } from "./credentials.js"
 import { getAccessToken } from "./client.js"
@@ -58,6 +52,12 @@ import {
 } from "./normalize.js"
 import type { InboundEnvelope, AccountStartContext } from "../types.js"
 import type { Redis } from "ioredis"
+import {
+  parseQqGatewayFrame,
+  parseQqGatewayHelloPayload,
+  parseQqGatewayReadyPayload,
+  parseQqGatewayUrlResponse,
+} from "./gateway-codec.js"
 
 export interface QqGatewayClientOptions {
   account: AccountStartContext["account"]
@@ -65,23 +65,6 @@ export interface QqGatewayClientOptions {
   logger: ConnectorLogger
   redis: Redis
   emitInbound: (envelope: InboundEnvelope) => Promise<void>
-}
-
-interface DispatchEnvelope {
-  op: number
-  d?: unknown
-  s?: number
-  t?: string
-}
-
-interface HelloPayload {
-  heartbeat_interval?: number
-}
-
-interface ReadyPayload {
-  version?: number
-  session_id?: string
-  user?: { id?: string; username?: string }
 }
 
 const MAX_RECONNECT_DELAY_MS = 60_000
@@ -209,18 +192,20 @@ async function runOneConnection(
     })
 
     ws.on("message", async (raw) => {
-      let envelope: DispatchEnvelope
-      try {
-        envelope = JSON.parse(raw.toString()) as DispatchEnvelope
-      } catch (err) {
-        logger.warn("qq-gateway: invalid JSON payload", { err: String(err) })
+      const parsedFrame = parseQqGatewayFrame(raw.toString())
+      if (!parsedFrame.ok) {
+        logger.warn("qq-gateway: invalid payload", {
+          reason: parsedFrame.reason,
+        })
         return
       }
+      const envelope = parsedFrame.frame
       try {
         switch (envelope.op) {
           case QQ_OP.HELLO: {
-            const interval = (envelope.d as HelloPayload | undefined)
-              ?.heartbeat_interval
+            const { heartbeatInterval: interval } = parseQqGatewayHelloPayload(
+              envelope.d
+            )
             if (!interval || interval <= 0) {
               logger.warn(
                 "qq-gateway: HELLO missing heartbeat_interval; using 30s"
@@ -293,16 +278,16 @@ async function runOneConnection(
             if (typeof envelope.s === "number" && envelope.s > lastSeq) {
               lastSeq = envelope.s
             }
-            const t = envelope.t as QqEventName | undefined
+            const t = envelope.t
             if (t === QQ_EVENT.READY) {
-              const ready = envelope.d as ReadyPayload | undefined
-              if (ready?.session_id) {
-                sessionId = ready.session_id
+              const ready = parseQqGatewayReadyPayload(envelope.d)
+              if (ready.sessionId) {
+                sessionId = ready.sessionId
               }
               logger.info("qq-gateway: READY", {
                 accountId,
                 sessionId,
-                user: ready?.user?.username,
+                user: ready.username,
               })
             } else if (t === QQ_EVENT.RESUMED) {
               logger.info("qq-gateway: RESUMED", { accountId })
@@ -354,10 +339,6 @@ async function runOneConnection(
   return closeInfo
 }
 
-interface GatewayResponse {
-  url?: string
-}
-
 async function fetchGatewayUrl(
   account: AccountStartContext["account"]
 ): Promise<string> {
@@ -367,15 +348,15 @@ async function fetchGatewayUrl(
       `qq-gateway: /gateway failed ${res.status} ${await res.text().catch(() => "")}`
     )
   }
-  const body = (await res.json()) as GatewayResponse
-  if (!body.url) {
+  const url = parseQqGatewayUrlResponse(await res.json())
+  if (!url) {
     throw new Error("qq-gateway: /gateway returned no url")
   }
-  return body.url
+  return url
 }
 
 async function routeBusinessDispatch(
-  t: QqEventName | undefined,
+  t: string | undefined,
   data: unknown,
   opts: QqGatewayClientOptions,
   logger: ConnectorLogger
@@ -477,7 +458,7 @@ async function recordWsAnchor(
   env: InboundEnvelope,
   anchorKind: "msg_id" | "event_id",
   anchorId: string,
-  eventType: QqEventName
+  eventType: string
 ): Promise<void> {
   await writeLatestInboundAnchor(opts.redis, {
     accountId: opts.account.id,
