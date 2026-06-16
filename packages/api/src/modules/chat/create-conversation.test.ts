@@ -6,11 +6,12 @@ import {
   CONVERSATION_PARTICIPANT_TYPE,
 } from "@synapse/shared"
 import type { Kysely } from "kysely"
-import { withTestDb } from "../../test/helpers/db.js"
+import { withTestDb, withTestDbAndClient } from "../../test/helpers/db.js"
 import {
   createChatConversationUseCase,
   createConversationForWorkspaceMemberUseCase,
 } from "./create-conversation.js"
+import { insertParticipant } from "./participant-roster.js"
 import type { ChatConversationRecord } from "./presenter.js"
 
 type AnyDb = Kysely<any>
@@ -413,3 +414,71 @@ test("createConversationForWorkspaceMemberUseCase validates before insert and sy
     )
   })
 })
+
+test(
+  "createChatConversationUseCase rolls back create side effects when sync fails",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDbAndClient(async ({ db, client }) => {
+      const fixture = await seedCreateFixture(db as unknown as AnyDb)
+      const requestId = randomUUID()
+
+      await assert.rejects(async () => {
+        await client.query("SAVEPOINT create_conversation_rollback")
+        try {
+          await createChatConversationUseCase(
+            {
+              workspaceId: fixture.workspaceId,
+              creatorWorkspaceMemberId: fixture.ownerMemberId,
+              clientRequestId: requestId,
+              kind: "group",
+              title: "Rollback create",
+              workspaceMemberIds: [fixture.invitedMemberId],
+              queryable: db as unknown as AnyDb,
+            },
+            {
+              insertParticipant,
+              loadConversationView: async () => {
+                throw new Error("view load should not run after sync failure")
+              },
+              syncConversationUpsert: async () => {
+                throw new Error("sync failed")
+              },
+            }
+          )
+          await client.query("RELEASE SAVEPOINT create_conversation_rollback")
+        } catch (error) {
+          await client.query(
+            "ROLLBACK TO SAVEPOINT create_conversation_rollback"
+          )
+          throw error
+        }
+      }, /sync failed/)
+
+      const conversations = await (db as unknown as AnyDb)
+        .selectFrom("conversations")
+        .select("id")
+        .where("workspaceId", "=", fixture.workspaceId)
+        .execute()
+      assert.deepEqual(conversations, [])
+
+      const createRequests = await (db as unknown as AnyDb)
+        .selectFrom("chatConversationCreateRequests")
+        .select("clientRequestId")
+        .where("workspaceMemberId", "=", fixture.ownerMemberId)
+        .where("clientRequestId", "=", requestId)
+        .execute()
+      assert.deepEqual(createRequests, [])
+
+      const views = await (db as unknown as AnyDb)
+        .selectFrom("workspaceMemberConversationViews")
+        .select("workspaceMemberId")
+        .where("workspaceMemberId", "in", [
+          fixture.ownerMemberId,
+          fixture.invitedMemberId,
+        ])
+        .execute()
+      assert.deepEqual(views, [])
+    })
+  }
+)
