@@ -106,7 +106,14 @@ function maybeDeserialize(serialization: number, payload: Buffer): unknown {
 
   if (serialization === SERIALIZATION_JSON) {
     const text = payload.toString("utf8")
-    return text.trim() ? JSON.parse(text) : {}
+    if (!text.trim()) return {}
+    const parsed = JSON.parse(text) as unknown
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error(
+        "Malformed Volcengine ASR frame: JSON payload must be an object"
+      )
+    }
+    return parsed
   }
 
   throw new Error(`Unsupported serialization method: ${serialization}`)
