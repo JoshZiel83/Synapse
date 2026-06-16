@@ -152,7 +152,7 @@ export function parseAutomationJsonObjectText(input: string, label: string) {
   const trimmed = input.trim()
   if (!trimmed) return {}
 
-  const parsed = JSON.parse(trimmed) as unknown
+  const parsed: unknown = JSON.parse(trimmed)
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error(`${label} must be a JSON object`)
   }
