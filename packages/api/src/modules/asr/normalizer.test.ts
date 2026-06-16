@@ -96,3 +96,35 @@ test("AsrResultAccumulator emits partial and final utterances without duplicates
     durationMs: 900,
   })
 })
+
+test("AsrResultAccumulator fails closed on drifted provider payload shapes", () => {
+  const accumulator = new AsrResultAccumulator()
+  const receivedAt = assertIsoInstant("2026-04-02T00:00:00.000Z")
+
+  assert.deepEqual(
+    accumulator.ingest(
+      {
+        result: {
+          text: "ignored",
+          utterances: "not-an-array",
+        },
+      },
+      receivedAt,
+      true
+    ),
+    { segmentFinals: [] }
+  )
+
+  assert.deepEqual(
+    accumulator.ingest(
+      {
+        audio_info: {
+          duration: "900",
+        },
+      },
+      receivedAt,
+      true
+    ),
+    { segmentFinals: [] }
+  )
+})
