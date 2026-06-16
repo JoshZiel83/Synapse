@@ -2097,11 +2097,7 @@ export async function resolveTaskRequest(
             sourceRetryNonce: locked.source_retry_nonce || undefined,
             sourceRuntimeSessionId:
               locked.source_runtime_session_id || undefined,
-            sourceRequestArgs:
-              locked.source_request_args &&
-              typeof locked.source_request_args === "object"
-                ? (locked.source_request_args as Record<string, unknown>)
-                : {},
+            sourceRequestArgs: locked.source_request_args ?? {},
             policy: selectedOption.grantSpec,
           },
           client
@@ -2165,11 +2161,7 @@ export async function resolveTaskRequest(
       // notice the approval. Drops to undefined for non-runtime-authorization
       // tasks (these fields are only populated when locked.kind is
       // RUNTIME_AUTHORIZATION).
-      lockedSourceRequestArgs:
-        locked.source_request_args &&
-        typeof locked.source_request_args === "object"
-          ? (locked.source_request_args as Record<string, unknown>)
-          : undefined,
+      lockedSourceRequestArgs: locked.source_request_args ?? undefined,
       lockedSourceRetryNonce: locked.source_retry_nonce ?? undefined,
       lockedSourceTaskId: locked.id ?? undefined,
       // subject-scope-refactor: skip-task gate is now keyed on
