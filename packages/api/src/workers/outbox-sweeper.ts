@@ -308,7 +308,7 @@ export async function runOneSweep(): Promise<void> {
   }
 }
 
-interface SweepCandidate {
+export interface SweepCandidate {
   linkId: string
   reason:
     | "pending_stale"
@@ -367,36 +367,70 @@ async function loadSweepCandidates(): Promise<SweepCandidate[]> {
   return out
 }
 
-async function processCandidate(candidate: SweepCandidate): Promise<void> {
-  const budgetCheck = checkSweeperBudget(candidate)
-  if (budgetCheck === "dead_letter") {
-    await markDeadLetter(candidate.linkId)
-    return
-  }
-  if (budgetCheck === "skip") {
-    return
-  }
+type ProcessSweepCandidateDeps = {
+  checkBudget?: (candidate: SweepCandidate) => BudgetCheck
+  markDeadLetter?: (linkId: string) => Promise<void>
+  canDeliverNow?: (linkId: string) => Promise<{ ok: boolean }>
+  recoverSkippedDisabledLink?: (linkId: string) => Promise<void>
+  bumpRetryStamp?: (linkId: string) => Promise<void>
+  enqueueOrRetry?: (linkId: string) => Promise<EnqueueOrRetryOutcome>
+}
 
-  // For skipped_recoverable we hand off to the recovery helper which
-  // re-applies canDeliverNow and only flips skipped→pending if the
-  // current binding still matches. Other reasons go through the helper
-  // unchanged (`pending_stale` and `failed_*` are already in a state
-  // the enqueue helper can act on).
+async function loadSkippedRecoveryDeps() {
+  const { canDeliverNow, recoverSkippedDisabledLink } =
+    await import("../modules/im/service/recovery.js")
+  return { canDeliverNow, recoverSkippedDisabledLink }
+}
+
+export async function processSweepCandidate(
+  candidate: SweepCandidate,
+  deps: ProcessSweepCandidateDeps = {}
+): Promise<void> {
+  const bumpRetryStamp = deps.bumpRetryStamp ?? bumpSweeperRetryStamp
+  const enqueueOrRetry =
+    deps.enqueueOrRetry ?? enqueueOrRetryTransportDeliveryLink
+
+  // Recoverable skipped links are waiting for an external state change
+  // (account/binding re-enabled). They are not retry-looping while disabled, so
+  // don't burn sweeper age/retry budget or dead-letter them before checking
+  // whether delivery is possible again.
   if (candidate.reason === "skipped_recoverable") {
-    const { canDeliverNow, recoverSkippedDisabledLink } =
-      await import("../modules/im/service/recovery.js")
-    const result = await canDeliverNow(candidate.linkId)
+    const recoveryDeps =
+      deps.canDeliverNow && deps.recoverSkippedDisabledLink
+        ? null
+        : await loadSkippedRecoveryDeps()
+    const canDeliverNowFn = deps.canDeliverNow ?? recoveryDeps!.canDeliverNow
+    const recoverSkippedDisabledLinkFn =
+      deps.recoverSkippedDisabledLink ??
+      recoveryDeps!.recoverSkippedDisabledLink
+    const result = await canDeliverNowFn(candidate.linkId)
     if (!result.ok) {
       // Either matched-but-still-disabled (silent skip; user must re-enable)
       // or endpoint mismatch (binding_changed path handled by delivery
       // worker on next attempt). Nothing to do here.
       return
     }
-    await recoverSkippedDisabledLink(candidate.linkId)
+    await recoverSkippedDisabledLinkFn(candidate.linkId)
+    await bumpRetryStamp(candidate.linkId)
+    await enqueueOrRetry(candidate.linkId)
+    return
   }
 
-  await bumpSweeperRetryStamp(candidate.linkId)
-  await enqueueOrRetryTransportDeliveryLink(candidate.linkId)
+  const budgetCheck = (deps.checkBudget ?? checkSweeperBudget)(candidate)
+  if (budgetCheck === "dead_letter") {
+    await (deps.markDeadLetter ?? markDeadLetter)(candidate.linkId)
+    return
+  }
+  if (budgetCheck === "skip") {
+    return
+  }
+
+  await bumpRetryStamp(candidate.linkId)
+  await enqueueOrRetry(candidate.linkId)
+}
+
+async function processCandidate(candidate: SweepCandidate): Promise<void> {
+  await processSweepCandidate(candidate)
 }
 
 type BudgetCheck = "ok" | "skip" | "dead_letter"

@@ -30,12 +30,14 @@ import assert from "node:assert/strict"
 import {
   canonicalJobId,
   decideSweeperBudget,
+  processSweepCandidate,
   readEnqueueRetryCount,
   readLastSweeperRetryAtMs,
   readSweeperRetryCount,
   SWEEPER_BUDGET_PER_10MIN,
   SWEEPER_BUDGET_PER_LINK,
   SWEEPER_BUDGET_MAX_AGE_HOURS,
+  type SweepCandidate,
 } from "./outbox-sweeper.js"
 // `canonicalTransportDeliveryJobId` is the producer the initial
 // enqueue path (`enqueueTransportDeliveryJobs` in queues.ts) uses
@@ -270,4 +272,113 @@ test("canonicalJobId: format matches the persisted Redis key shape", () => {
   // the format, you also have to plan a migration; this test fails
   // loudly so the decision is explicit.
   assert.equal(canonicalJobId("link-123"), "im-transport-delivery-link-123")
+})
+
+function sweepCandidate(
+  overrides: Partial<SweepCandidate> = {}
+): SweepCandidate {
+  return {
+    linkId: "link-1",
+    reason: "pending_stale",
+    metadata: {},
+    createdAt: new Date(NOW - ONE_HOUR_MS),
+    ...overrides,
+  }
+}
+
+test("processSweepCandidate: skipped recovery waits without budget dead-letter when not deliverable", async () => {
+  const calls: string[] = []
+  await processSweepCandidate(
+    sweepCandidate({
+      reason: "skipped_recoverable",
+      createdAt: new Date(
+        NOW - (SWEEPER_BUDGET_MAX_AGE_HOURS + 1) * ONE_HOUR_MS
+      ),
+      metadata: { delivery: { sweeperRetryCount: SWEEPER_BUDGET_PER_LINK } },
+    }),
+    {
+      checkBudget() {
+        calls.push("checkBudget")
+        return "dead_letter"
+      },
+      markDeadLetter: async () => {
+        calls.push("markDeadLetter")
+      },
+      canDeliverNow: async () => {
+        calls.push("canDeliverNow")
+        return { ok: false }
+      },
+      recoverSkippedDisabledLink: async () => {
+        calls.push("recover")
+      },
+      bumpRetryStamp: async () => {
+        calls.push("bump")
+      },
+      enqueueOrRetry: async () => {
+        calls.push("enqueue")
+        return { kind: "enqueued", jobId: "job-1" }
+      },
+    }
+  )
+
+  assert.deepEqual(calls, ["canDeliverNow"])
+})
+
+test("processSweepCandidate: skipped recovery flips then enqueues once deliverable", async () => {
+  const calls: string[] = []
+  await processSweepCandidate(
+    sweepCandidate({
+      reason: "skipped_recoverable",
+      createdAt: new Date(
+        NOW - (SWEEPER_BUDGET_MAX_AGE_HOURS + 1) * ONE_HOUR_MS
+      ),
+    }),
+    {
+      checkBudget() {
+        calls.push("checkBudget")
+        return "dead_letter"
+      },
+      canDeliverNow: async () => {
+        calls.push("canDeliverNow")
+        return { ok: true }
+      },
+      recoverSkippedDisabledLink: async () => {
+        calls.push("recover")
+      },
+      bumpRetryStamp: async () => {
+        calls.push("bump")
+      },
+      enqueueOrRetry: async () => {
+        calls.push("enqueue")
+        return { kind: "enqueued", jobId: "job-1" }
+      },
+    }
+  )
+
+  assert.deepEqual(calls, ["canDeliverNow", "recover", "bump", "enqueue"])
+})
+
+test("processSweepCandidate: retrying candidates still honor dead-letter budget", async () => {
+  const calls: string[] = []
+  await processSweepCandidate(
+    sweepCandidate({ reason: "failed_retryable_error" }),
+    {
+      checkBudget() {
+        calls.push("checkBudget")
+        return "dead_letter"
+      },
+      markDeadLetter: async () => {
+        calls.push("markDeadLetter")
+      },
+      bumpRetryStamp: async () => {
+        calls.push("bump")
+      },
+      enqueueOrRetry: async () => {
+        calls.push("enqueue")
+        return { kind: "enqueued", jobId: "job-1" }
+      },
+    }
+  )
+
+  assert.deepEqual(calls, ["checkBudget", "markDeadLetter"])
 })
