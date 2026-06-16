@@ -25,7 +25,6 @@ import type {
 
 import { sql } from "kysely"
 import { v4 as uuidv4 } from "uuid"
-import { parseJsonObject } from "@synapse/shared"
 import {
   db,
   withDbTransaction,
@@ -187,25 +186,54 @@ const TRANSPORT_OUTBOX_SKIPPED_RECOVERABLE_INTERVAL = "24 hours"
 export function decodeTransportAccountCredentials(row: {
   credentials: unknown
 }): Record<string, unknown> {
-  return parseJsonObject(row.credentials)
+  return parseRepoJsonObject(row.credentials, "transport account credentials")
 }
 
 export function decodeTransportAccountConfig(row: {
   config: unknown
 }): Record<string, unknown> {
-  return parseJsonObject(row.config)
+  return parseRepoJsonObject(row.config, "transport account config")
 }
 
 export function decodeTransportAccountMetadata(row: {
   metadata: unknown
 }): Record<string, unknown> {
-  return parseJsonObject(row.metadata)
+  return parseRepoJsonObject(row.metadata, "transport account metadata")
 }
 
 export function decodeTransportMessageLinkMetadata(row: {
   metadata: unknown
 }): Record<string, unknown> {
-  return parseJsonObject(row.metadata)
+  return parseRepoJsonObject(row.metadata, "transport message link metadata")
+}
+
+function parseRepoJsonObject(
+  value: unknown,
+  label: string
+): Record<string, unknown> {
+  if (value === null || value === undefined) return {}
+
+  let candidate: unknown = value
+  if (typeof value === "string") {
+    if (value.trim().length === 0) {
+      throw new Error(`${label} must be valid JSON`)
+    }
+    try {
+      candidate = JSON.parse(value) as unknown
+    } catch {
+      throw new Error(`${label} must be valid JSON`)
+    }
+  }
+
+  if (
+    typeof candidate !== "object" ||
+    candidate === null ||
+    Array.isArray(candidate)
+  ) {
+    throw new Error(`${label} must be a JSON object`)
+  }
+
+  return candidate as Record<string, unknown>
 }
 
 export function normalizeTransportAddressRow(
@@ -220,7 +248,7 @@ export function normalizeTransportAddressRow(
     externalId: row.externalId,
     displayName: row.displayName,
     workspaceMemberId: row.workspaceMemberId,
-    metadata: parseJsonObject(row.metadata),
+    metadata: parseRepoJsonObject(row.metadata, "transport address metadata"),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   }
@@ -243,7 +271,7 @@ export function normalizeTransportOutboxSweepCandidateRow(
 export function decodeConversationItemMetadata(row: {
   itemMetadata: unknown
 }): Record<string, unknown> {
-  return parseJsonObject(row.itemMetadata)
+  return parseRepoJsonObject(row.itemMetadata, "conversation item metadata")
 }
 
 function parseJsonArray<T>(value: unknown, label: string): T[] {
@@ -314,7 +342,10 @@ export function normalizeEndpointRow(
     externalId: row.endpointExternalId || row.externalId || "",
     parentExternalId: row.parentExternalId || undefined,
     displayName: row.endpointDisplayName || row.displayName || undefined,
-    metadata: parseJsonObject(row.endpointMetadata || row.metadata),
+    metadata: parseRepoJsonObject(
+      row.endpointMetadata || row.metadata,
+      "transport endpoint metadata"
+    ),
     createdAt: serializeOptionalInstant(
       row.endpointCreatedAt || row.createdAt
     )!,
@@ -339,7 +370,10 @@ export function normalizeBindingRow(
         | TransportConversationInboundActorMode
         | undefined) || "inherit_account",
     inboundActorId: row.inboundActorId || undefined,
-    metadata: parseJsonObject(row.bindingMetadata || row.metadata),
+    metadata: parseRepoJsonObject(
+      row.bindingMetadata || row.metadata,
+      "conversation transport binding metadata"
+    ),
     createdAt: serializeOptionalInstant(row.bindingCreatedAt || row.createdAt)!,
     updatedAt: serializeOptionalInstant(row.bindingUpdatedAt || row.updatedAt)!,
     account,
@@ -362,8 +396,9 @@ export function normalizeTransportSessionRow(
         | TransportConversationInboundActorMode
         | undefined) || "inherit_account",
     inboundActorId: row.inboundActorId || undefined,
-    metadata: parseJsonObject(
-      row.bindingMetadata || row.endpointMetadata || row.metadata
+    metadata: parseRepoJsonObject(
+      row.bindingMetadata || row.endpointMetadata || row.metadata,
+      "transport session metadata"
     ),
     createdAt: serializeOptionalInstant(
       row.bindingCreatedAt || row.endpointCreatedAt || row.createdAt
@@ -393,7 +428,10 @@ export function normalizeTransportExternalUserRow(
     displayName: row.displayName || undefined,
     linkedWorkspaceMemberId: row.linkedWorkspaceMemberId || undefined,
     linkedWorkspaceMemberName: row.linkedWorkspaceMemberName || undefined,
-    metadata: parseJsonObject(row.metadata),
+    metadata: parseRepoJsonObject(
+      row.metadata,
+      "transport external user metadata"
+    ),
     createdAt: serializeInstant(row.createdAt),
     updatedAt: serializeInstant(row.updatedAt),
     sessions: parseJsonArray<any>(
@@ -431,7 +469,10 @@ export function normalizeTransportMessageLinkRow(row: TransportMessageLinkRow) {
     externalReplyToId: row.externalReplyToId || undefined,
     externalThreadId: row.externalThreadId || undefined,
     externalEmojiReactions: reactions,
-    metadata: parseJsonObject(row.metadata),
+    metadata: parseRepoJsonObject(
+      row.metadata,
+      "transport message link metadata"
+    ),
     deliveredAt: serializeOptionalInstant(row.deliveredAt),
     createdAt: serializeOptionalInstant(row.createdAt),
     updatedAt: serializeOptionalInstant(row.updatedAt),

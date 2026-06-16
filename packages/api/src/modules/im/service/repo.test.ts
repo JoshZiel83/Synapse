@@ -33,12 +33,20 @@ test("decodeTransportAccountConfig accepts object config without shape loss", ()
   })
 })
 
-test("decodeTransportAccountMetadata normalizes non-object metadata", () => {
-  assert.deepEqual(
-    decodeTransportAccountMetadata({
-      metadata: JSON.stringify(["not", "an", "object"]),
-    }),
-    {}
+test("decodeTransportAccountMetadata rejects non-object metadata", () => {
+  assert.throws(
+    () =>
+      decodeTransportAccountMetadata({
+        metadata: JSON.stringify(["not", "an", "object"]),
+      }),
+    /transport account metadata must be a JSON object/
+  )
+  assert.throws(
+    () =>
+      decodeTransportAccountMetadata({
+        metadata: "{bad json",
+      }),
+    /transport account metadata must be valid JSON/
   )
 })
 
@@ -48,6 +56,13 @@ test("decodeTransportMessageLinkMetadata decodes link metadata at repo exit", ()
   })
 
   assert.deepEqual(metadata, { delivery: { attempt: 1 } })
+  assert.throws(
+    () =>
+      decodeTransportMessageLinkMetadata({
+        metadata: JSON.stringify(["not-object"]),
+      }),
+    /transport message link metadata must be a JSON object/
+  )
 })
 
 test("normalizeTransportAddressRow decodes address metadata at repo exit", () => {
@@ -80,7 +95,7 @@ test("normalizeTransportAddressRow decodes address metadata at repo exit", () =>
   })
 })
 
-test("normalizeTransportAddressRow normalizes non-object address metadata", () => {
+test("normalizeTransportAddressRow rejects non-object address metadata", () => {
   const base = {
     id: "addr-1",
     workspaceId: "workspace-1",
@@ -94,19 +109,21 @@ test("normalizeTransportAddressRow normalizes non-object address metadata", () =
     updatedAt,
   }
 
-  assert.deepEqual(
-    normalizeTransportAddressRow({
-      ...base,
-      metadata: "not an object",
-    }).metadata,
-    {}
+  assert.throws(
+    () =>
+      normalizeTransportAddressRow({
+        ...base,
+        metadata: "not an object",
+      }),
+    /transport address metadata must be valid JSON/
   )
-  assert.deepEqual(
-    normalizeTransportAddressRow({
-      ...base,
-      metadata: [1, 2, 3],
-    }).metadata,
-    {}
+  assert.throws(
+    () =>
+      normalizeTransportAddressRow({
+        ...base,
+        metadata: [1, 2, 3],
+      }),
+    /transport address metadata must be a JSON object/
   )
 })
 
@@ -128,6 +145,14 @@ test("normalizeTransportExternalUserRow decodes session aggregate arrays at repo
   } as never)
 
   assert.deepEqual(row.sessions, [{ conversationId: "conversation-1" }])
+  assert.throws(
+    () =>
+      normalizeTransportExternalUserRow({
+        ...row,
+        metadata: JSON.stringify(["not-object"]),
+      } as never),
+    /transport external user metadata must be a JSON object/
+  )
 })
 
 test("normalizeTransportExternalUserRow rejects malformed session aggregates", () => {
@@ -195,4 +220,11 @@ test("decodeConversationItemMetadata preserves joined item metadata", () => {
     source: "projection",
     messageId: "m1",
   })
+  assert.throws(
+    () =>
+      decodeConversationItemMetadata({
+        itemMetadata: JSON.stringify(["not-object"]),
+      }),
+    /conversation item metadata must be a JSON object/
+  )
 })
