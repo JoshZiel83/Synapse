@@ -27,6 +27,54 @@ interface PendingRequest {
   reject(e: Error): void
 }
 
+interface SidecarResponseFrame {
+  id: string
+  result?: unknown
+  error?: { code: number; message: string; data?: unknown }
+}
+
+function parseSidecarResponseFrame(line: string): SidecarResponseFrame | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(line)
+  } catch {
+    return null
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null
+  }
+  const frame = parsed as {
+    id?: unknown
+    result?: unknown
+    error?: unknown
+  }
+  if (typeof frame.id !== "string" && typeof frame.id !== "number") {
+    return null
+  }
+  if (frame.error !== undefined) {
+    if (!frame.error || typeof frame.error !== "object") {
+      return null
+    }
+    const error = frame.error as {
+      code?: unknown
+      message?: unknown
+      data?: unknown
+    }
+    if (typeof error.code !== "number" || typeof error.message !== "string") {
+      return null
+    }
+    return {
+      id: String(frame.id),
+      error: {
+        code: error.code,
+        message: error.message,
+        data: error.data,
+      },
+    }
+  }
+  return { id: String(frame.id), result: frame.result }
+}
+
 export function startSidecar(opts: SidecarOptions): SidecarHandle {
   const spawnImpl = opts.spawnImpl ?? spawn
   const child: ChildProcess = spawnImpl(opts.binaryPath, opts.args ?? [], {
@@ -42,20 +90,11 @@ export function startSidecar(opts: SidecarOptions): SidecarHandle {
     const rl = createInterface({ input: child.stdout })
     rl.on("line", (line) => {
       if (!line.trim()) return
-      let frame: {
-        id?: string
-        result?: unknown
-        error?: { code: number; message: string; data?: unknown }
-      }
-      try {
-        frame = JSON.parse(line)
-      } catch {
-        return
-      }
-      if (!frame.id) return
-      const p = pending.get(String(frame.id))
+      const frame = parseSidecarResponseFrame(line)
+      if (!frame) return
+      const p = pending.get(frame.id)
       if (!p) return
-      pending.delete(String(frame.id))
+      pending.delete(frame.id)
       if (frame.error) {
         // Surface the full JSON-RPC error so callers can inspect the
         // structured `data` payload (e.g. cua sidecar's diagnostic block
