@@ -6,6 +6,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { promisify } from "node:util"
 import { LRUCache } from "lru-cache"
+import { z } from "zod"
 import { config } from "../../config/index.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
 import { readContentBufferBySha } from "../files/service.js"
@@ -29,6 +30,7 @@ const localRequire = createRequire(import.meta.url)
 const execFileAsync = promisify(execFile)
 const warnedMessages = new Set<string>()
 const log = createLogger("ai.audio-fallback")
+const SherpaOnnxConfigJsonSchema = z.object({}).passthrough()
 
 type SherpaOnnxModule = {
   OfflineRecognizer: new (config: Record<string, unknown>) => {
@@ -86,20 +88,30 @@ function guessExtension(block: AudioFileBlock): string {
   return "bin"
 }
 
-function getLocalSherpaConfig(): Record<string, unknown> | null {
-  const raw = config.audioFallback.sherpaOnnxConfigJson.trim()
+export function parseSherpaOnnxConfigJson(
+  rawConfig: string
+): Record<string, unknown> | null {
+  const raw = rawConfig.trim()
   if (!raw) return null
 
+  let value: unknown
   try {
-    const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === "object"
-      ? (parsed as Record<string, unknown>)
-      : null
+    value = JSON.parse(raw)
   } catch (err: any) {
     throw new Error(
       `invalid SHERPA_ONNX_CONFIG_JSON: ${err?.message || "parse failed"}`
     )
   }
+
+  const parsed = SherpaOnnxConfigJsonSchema.safeParse(value)
+  if (!parsed.success) {
+    throw new Error("invalid SHERPA_ONNX_CONFIG_JSON: expected a JSON object")
+  }
+  return parsed.data
+}
+
+function getLocalSherpaConfig(): Record<string, unknown> | null {
+  return parseSherpaOnnxConfigJson(config.audioFallback.sherpaOnnxConfigJson)
 }
 
 function pickTranscriptText(payload: unknown): string | null {
