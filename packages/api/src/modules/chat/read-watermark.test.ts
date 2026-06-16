@@ -2,7 +2,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import type { Kysely } from "kysely"
-import { withTestDb } from "../../test/helpers/db.js"
+import { withTestDb, withTestDbAndClient } from "../../test/helpers/db.js"
 import type { DatabaseTransaction } from "../../infrastructure/database/kysely.js"
 import {
   updateChatConversationReadWatermarkUseCase,
@@ -192,3 +192,87 @@ test("read-watermark coordinator preserves duplicate heuristic and sync dependen
     )
   })
 })
+
+test(
+  "read-watermark coordinator rolls back read-state side effects when sync fails",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDbAndClient(async ({ db, client }) => {
+      const fixture = await seedReadWatermarkFixture(db as unknown as AnyDb)
+      await (db as unknown as AnyDb)
+        .updateTable("workspaceMemberConversationViews")
+        .set({ unreadCount: 7 })
+        .where("workspaceMemberId", "=", fixture.workspaceMemberId)
+        .where("conversationId", "=", fixture.conversationId)
+        .execute()
+
+      const syncConversationUpsert: SyncConversationUpsert = async () => {
+        throw new Error("sync failed")
+      }
+      const transactionLike = new Proxy(db as unknown as object, {
+        get(target, prop, receiver) {
+          if (prop === "isTransaction") return true
+          const value = Reflect.get(target, prop, receiver)
+          return typeof value === "function" ? value.bind(target) : value
+        },
+      }) as DatabaseTransaction
+      const withTransaction = async <T>(
+        fn: (trx: DatabaseTransaction) => Promise<T>
+      ) => {
+        await client.query("SAVEPOINT read_watermark_rollback")
+        try {
+          const result = await fn(transactionLike)
+          await client.query("RELEASE SAVEPOINT read_watermark_rollback")
+          return result
+        } catch (error) {
+          await client.query("ROLLBACK TO SAVEPOINT read_watermark_rollback")
+          throw error
+        }
+      }
+
+      await assert.rejects(
+        updateChatConversationReadWatermarkUseCase(
+          {
+            ...fixture,
+            readUpToSequence: 0,
+            lastVisibleSequence: 0,
+          },
+          { syncConversationUpsert, withTransaction }
+        ),
+        /sync failed/
+      )
+
+      const readState = await (db as unknown as AnyDb)
+        .selectFrom("conversationParticipantStates")
+        .select(["readWatermarkSequence", "lastReadAt"])
+        .where("conversationId", "=", fixture.conversationId)
+        .where("participantId", "=", fixture.participantId)
+        .executeTakeFirstOrThrow()
+      assert.equal(Number(readState.readWatermarkSequence), 0)
+      assert.equal(readState.lastReadAt, null)
+
+      const deviceStates = await (db as unknown as AnyDb)
+        .selectFrom("conversationDeviceStates")
+        .select("clientInstanceId")
+        .where("conversationId", "=", fixture.conversationId)
+        .where("clientInstanceId", "=", fixture.clientInstanceId)
+        .execute()
+      assert.deepEqual(deviceStates, [])
+
+      const view = await (db as unknown as AnyDb)
+        .selectFrom("workspaceMemberConversationViews")
+        .select("unreadCount")
+        .where("workspaceMemberId", "=", fixture.workspaceMemberId)
+        .where("conversationId", "=", fixture.conversationId)
+        .executeTakeFirstOrThrow()
+      assert.equal(Number(view.unreadCount), 7)
+
+      const events = await (db as unknown as AnyDb)
+        .selectFrom("workspaceMemberSyncEvents")
+        .select("eventType")
+        .where("workspaceMemberId", "=", fixture.workspaceMemberId)
+        .execute()
+      assert.deepEqual(events, [])
+    })
+  }
+)
