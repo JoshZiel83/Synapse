@@ -20,6 +20,7 @@ import type {
   SendPromptOptions,
   SessionSpec,
 } from "./types.js"
+import { RUNTIME_KIND } from "./types.js"
 import { EventQueue as EventQueueBase, whichBinary } from "./async-channel.js"
 
 function trimFirstLine(value: string) {
@@ -131,7 +132,7 @@ function buildPermissionResultForDecision(
 }
 
 class ClaudeAgentSession implements AgentSession {
-  readonly runtimeKind = "claude_code" as const
+  readonly runtimeKind = RUNTIME_KIND.CLAUDE_CODE
 
   private readonly eventQueue = new EventQueue()
   private readonly prompts = new PromptInputQueue()
@@ -359,7 +360,7 @@ export const __buildPermissionResultForDecisionForTest =
   buildPermissionResultForDecision
 
 export class ClaudeDriver implements AgentDriver {
-  readonly runtimeKind = "claude_code" as const
+  readonly runtimeKind = RUNTIME_KIND.CLAUDE_CODE
 
   detect(): RuntimeCatalogEntry {
     const probe = detectClaudeBinary()

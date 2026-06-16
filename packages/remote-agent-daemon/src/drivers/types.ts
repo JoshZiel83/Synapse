@@ -1,6 +1,17 @@
 import type { McpServerConfig } from "@anthropic-ai/claude-agent-sdk"
+import type { RemoteAgentRuntimeKind } from "@synapse/device-protocol"
 
-export type RuntimeKind = "claude_code" | "codex"
+export type RuntimeKind = RemoteAgentRuntimeKind
+
+export const RUNTIME_KIND = {
+  CLAUDE_CODE: "claude_code",
+  CODEX: "codex",
+} as const satisfies Record<string, RuntimeKind>
+
+export const RUNTIME_KINDS = [
+  RUNTIME_KIND.CLAUDE_CODE,
+  RUNTIME_KIND.CODEX,
+] as const satisfies readonly RuntimeKind[]
 
 export type RuntimeCatalogStatus =
   | "available"

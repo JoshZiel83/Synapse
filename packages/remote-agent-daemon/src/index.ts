@@ -33,6 +33,7 @@ import type {
   RuntimeCatalogEntry,
   RuntimeKind,
 } from "./drivers/types.js"
+import { RUNTIME_KIND } from "./drivers/types.js"
 import {
   ConversationRuntime,
   type ConversationRuntimeCallbacks,
@@ -234,7 +235,7 @@ function buildBootstrapPrompt(params: {
 
 function describeRuntimeCatalogIssue(entry: RuntimeCatalogEntry) {
   const runtimeLabel =
-    entry.runtimeKind === "claude_code" ? "Claude Code" : "Codex CLI"
+    entry.runtimeKind === RUNTIME_KIND.CLAUDE_CODE ? "Claude Code" : "Codex CLI"
   switch (entry.status) {
     case "missing_binary":
       return `${runtimeLabel} is not installed or not on PATH for this machine`
@@ -380,8 +381,10 @@ class DaemonSupervisor {
         if (message?.type === "connected") {
           this.machineId = message.machineId
           const runtimeCatalog = [
-            (tryGetDriver("claude_code") ?? new ClaudeDriver()).detect(),
-            (tryGetDriver("codex") ?? new CodexDriver()).detect(),
+            (
+              tryGetDriver(RUNTIME_KIND.CLAUDE_CODE) ?? new ClaudeDriver()
+            ).detect(),
+            (tryGetDriver(RUNTIME_KIND.CODEX) ?? new CodexDriver()).detect(),
           ]
           log("info", "daemon", "Server accepted machine session", {
             machineId: message.machineId,
@@ -503,7 +506,7 @@ class DaemonSupervisor {
 }
 
 class ManagedRemoteAgent {
-  private runtimeKind: RuntimeKind = "claude_code"
+  private runtimeKind: RuntimeKind = RUNTIME_KIND.CLAUDE_CODE
   private runtimePath?: string
   private localRootPath?: string
   private stateDirectory = ""
@@ -1028,7 +1031,7 @@ class ManagedRemoteAgent {
   }
 
   private runtimeCapabilities(): DaemonRuntimeCapabilities {
-    if (this.runtimeKind === "claude_code") {
+    if (this.runtimeKind === RUNTIME_KIND.CLAUDE_CODE) {
       return {
         supportsRequestUserInput: true,
         supportsPlanMode: true,

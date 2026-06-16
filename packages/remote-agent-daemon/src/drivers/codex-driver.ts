@@ -26,6 +26,7 @@ import type {
   SendPromptOptions,
   SessionSpec,
 } from "./types.js"
+import { RUNTIME_KIND } from "./types.js"
 import { EventQueue as EventQueueBase, whichBinary } from "./async-channel.js"
 import { parseCodexJsonRpcLine } from "./codex-json-rpc-codec.js"
 
@@ -190,7 +191,7 @@ function mcpServerConfigToCodexFlags(
 export const __mcpServerConfigToCodexFlagsForTest = mcpServerConfigToCodexFlags
 
 class CodexAgentSession implements AgentSession {
-  readonly runtimeKind = "codex" as const
+  readonly runtimeKind = RUNTIME_KIND.CODEX
   private child: ChildProcess | null = null
   private threadId: string | undefined
   private currentModel: string | undefined
@@ -602,7 +603,7 @@ class CodexAgentSession implements AgentSession {
 }
 
 export class CodexDriver implements AgentDriver {
-  readonly runtimeKind = "codex" as const
+  readonly runtimeKind = RUNTIME_KIND.CODEX
 
   detect(): RuntimeCatalogEntry {
     const probe = detectCodexBinary()

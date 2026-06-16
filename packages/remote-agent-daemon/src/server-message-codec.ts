@@ -1,5 +1,5 @@
 import { z } from "zod"
-import type { RuntimeKind } from "./drivers/types.js"
+import { RUNTIME_KINDS, type RuntimeKind } from "./drivers/types.js"
 
 export type AgentStartMessage = {
   type: "agent:start"
@@ -68,7 +68,7 @@ export type ServerMessage =
   | DeliveryMessage
   | TaskResolvedMessage
 
-const runtimeKindSchema = z.enum(["claude_code", "codex"])
+const runtimeKindSchema = z.enum(RUNTIME_KINDS)
 
 const connectedSchema = z.strictObject({
   type: z.literal("connected"),
