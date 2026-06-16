@@ -4,10 +4,10 @@ import type {
   FileParseOutputView,
   FileParseRunView,
 } from "@synapse/shared/types"
-import { parseJsonObjectOrUndefined as parseJsonObject } from "@synapse/shared"
 import { fileParsingQueue } from "../../workers/queues.js"
 import { extractImageOcrText } from "../ai/image-fallback.js"
 import { getFileDetail, getFileRecord, readFileBufferById } from "./service.js"
+import { normalizePdfParseMetadata } from "./parse-metadata.js"
 import {
   completeParseRun,
   getLatestParseRun,
@@ -164,12 +164,7 @@ async function extractParsedText(params: {
     const pdfParse = loadPdfParse()
     const parsed = await pdfParse(buffer)
     const text = normalizeExtractedText(String(parsed.text || ""))
-    const metadata = parseJsonObject({
-      info: parseJsonObject(parsed.info),
-      metadata: parseJsonObject(parsed.metadata),
-      numPages:
-        typeof parsed.numpages === "number" ? parsed.numpages : undefined,
-    })
+    const metadata = normalizePdfParseMetadata(parsed)
     return {
       strategy,
       text,
