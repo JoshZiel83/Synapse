@@ -9,6 +9,7 @@ import {
   FILE_STORAGE_BACKENDS,
   USER_UPLOAD_FILE_ORIGIN_SYSTEMS,
 } from "../constants/enums.js"
+import type { FileOriginSummary } from "../types/index.js"
 
 /**
  * App-facing contracts for the files module's APP routes (master plan §5.3).
@@ -28,6 +29,12 @@ const FILE_ORIGIN_SYSTEM_VALUES = Object.values(FILE_ORIGIN_SYSTEMS) as [
   string,
   ...string[],
 ]
+const fileOriginSummaryDetailsSchema = z.custom<
+  NonNullable<FileOriginSummary["details"]>
+>(
+  (value) =>
+    value !== null && typeof value === "object" && !Array.isArray(value)
+)
 
 /** Multipart `origin` field for app-facing user uploads. */
 export const FileUploadOriginInputSchema = z.strictObject({
@@ -47,9 +54,7 @@ export const FileOriginSummaryViewSchema = z.object({
   parentFileId: z.string().nullish(),
   externalResourceKey: z.string().optional(),
   // Genuinely-open: DeviceMcpFileSourceMetadata | Record<string, unknown>.
-  // Modeled as z.unknown() so the typed DeviceMcpFileSourceMetadata interface
-  // (which lacks a string index signature) passes the boundary parse unchanged.
-  details: z.unknown().optional(),
+  details: fileOriginSummaryDetailsSchema.optional(),
 })
 export type FileOriginSummaryView = z.infer<typeof FileOriginSummaryViewSchema>
 

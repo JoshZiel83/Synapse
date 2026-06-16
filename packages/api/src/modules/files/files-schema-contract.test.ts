@@ -86,6 +86,39 @@ test("StoredFileRecordViewSchema validates upload app responses", () => {
   )
 })
 
+test("StoredFileRecordViewSchema keeps origin details as an open object record", () => {
+  assert.ok(
+    StoredFileRecordViewSchema.safeParse({
+      ...storedFileRecordFixture(),
+      originSummary: {
+        ...storedFileRecordFixture().originSummary,
+        details: { nested: { source: "test" }, count: 1 },
+      },
+    }).success
+  )
+
+  assert.equal(
+    StoredFileRecordViewSchema.safeParse({
+      ...storedFileRecordFixture(),
+      originSummary: {
+        ...storedFileRecordFixture().originSummary,
+        details: ["not", "a", "record"],
+      },
+    }).success,
+    false
+  )
+  assert.equal(
+    StoredFileRecordViewSchema.safeParse({
+      ...storedFileRecordFixture(),
+      originSummary: {
+        ...storedFileRecordFixture().originSummary,
+        details: "not-a-record",
+      },
+    }).success,
+    false
+  )
+})
+
 test("FileParseEnqueueResultSchema validates parse enqueue app responses", () => {
   assert.ok(FileParseEnqueueResultSchema.safeParse({ runId }).success)
   assert.equal(
