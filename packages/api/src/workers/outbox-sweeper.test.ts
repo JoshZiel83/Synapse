@@ -80,6 +80,31 @@ test("readEnqueueRetryCount: neutral namespace wins over legacy when both presen
   )
 })
 
+test("metadata namespace readers ignore arrays and continue to fallback", () => {
+  const legacyIso = "2026-05-28T11:00:00.000Z"
+  assert.equal(
+    readEnqueueRetryCount({
+      delivery: [{ deliveryEnqueueRetryCount: 8 }],
+      qq: { deliveryEnqueueRetryCount: 3 },
+    }),
+    3
+  )
+  assert.equal(
+    readSweeperRetryCount({
+      delivery: [{ sweeperRetryCount: 8 }],
+      qq: { sweeperRetryCount: 4 },
+    }),
+    4
+  )
+  assert.equal(
+    readLastSweeperRetryAtMs({
+      delivery: [{ lastSweeperRetryAt: "2026-05-28T10:00:00.000Z" }],
+      qq: { lastSweeperRetryAt: legacyIso },
+    }),
+    Date.parse(legacyIso)
+  )
+})
+
 test("readEnqueueRetryCount: ignores non-number values in either namespace", () => {
   // Defensive: a corrupted JSON column shouldn't produce NaN or
   // bypass the budget.

@@ -201,23 +201,37 @@ export const canonicalJobId = canonicalTransportDeliveryJobId
 export function readEnqueueRetryCount(
   metadata: Record<string, unknown>
 ): number {
-  const delivery = (
-    metadata.delivery && typeof metadata.delivery === "object"
-      ? (metadata.delivery as Record<string, unknown>)
-      : {}
-  ) as Record<string, unknown>
-  if (typeof delivery.deliveryEnqueueRetryCount === "number") {
-    return delivery.deliveryEnqueueRetryCount
-  }
-  const legacyQq = (
-    metadata.qq && typeof metadata.qq === "object"
-      ? (metadata.qq as Record<string, unknown>)
-      : {}
-  ) as Record<string, unknown>
-  if (typeof legacyQq.deliveryEnqueueRetryCount === "number") {
-    return legacyQq.deliveryEnqueueRetryCount
-  }
-  return 0
+  return readNamespacedMetadataNumber(metadata, "deliveryEnqueueRetryCount")
+}
+
+function readMetadataObject(
+  metadata: Record<string, unknown>,
+  key: "delivery" | "qq"
+): Record<string, unknown> {
+  const value = metadata[key]
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
+}
+
+function readNamespacedMetadataNumber(
+  metadata: Record<string, unknown>,
+  key: string
+): number {
+  const deliveryValue = readMetadataObject(metadata, "delivery")[key]
+  if (typeof deliveryValue === "number") return deliveryValue
+  const legacyValue = readMetadataObject(metadata, "qq")[key]
+  return typeof legacyValue === "number" ? legacyValue : 0
+}
+
+function readNamespacedMetadataString(
+  metadata: Record<string, unknown>,
+  key: string
+): string | undefined {
+  const deliveryValue = readMetadataObject(metadata, "delivery")[key]
+  if (typeof deliveryValue === "string") return deliveryValue
+  const legacyValue = readMetadataObject(metadata, "qq")[key]
+  return typeof legacyValue === "string" ? legacyValue : undefined
 }
 
 async function bumpEnqueueRetryCount(linkId: string): Promise<number> {
@@ -446,23 +460,7 @@ type BudgetCheck = "ok" | "skip" | "dead_letter"
 export function readSweeperRetryCount(
   metadata: Record<string, unknown>
 ): number {
-  const delivery = (
-    metadata.delivery && typeof metadata.delivery === "object"
-      ? (metadata.delivery as Record<string, unknown>)
-      : {}
-  ) as Record<string, unknown>
-  if (typeof delivery.sweeperRetryCount === "number") {
-    return delivery.sweeperRetryCount
-  }
-  const legacyQq = (
-    metadata.qq && typeof metadata.qq === "object"
-      ? (metadata.qq as Record<string, unknown>)
-      : {}
-  ) as Record<string, unknown>
-  if (typeof legacyQq.sweeperRetryCount === "number") {
-    return legacyQq.sweeperRetryCount
-  }
-  return 0
+  return readNamespacedMetadataNumber(metadata, "sweeperRetryCount")
 }
 
 /**
@@ -475,26 +473,13 @@ export function readSweeperRetryCount(
 export function readLastSweeperRetryAtMs(
   metadata: Record<string, unknown>
 ): number {
-  const delivery = (
-    metadata.delivery && typeof metadata.delivery === "object"
-      ? (metadata.delivery as Record<string, unknown>)
-      : {}
-  ) as Record<string, unknown>
-  if (typeof delivery.lastSweeperRetryAt === "string") {
+  const lastSweeperRetryAt = readNamespacedMetadataString(
+    metadata,
+    "lastSweeperRetryAt"
+  )
+  if (lastSweeperRetryAt) {
     try {
-      return parseInstantString(delivery.lastSweeperRetryAt).getTime()
-    } catch {
-      return 0
-    }
-  }
-  const legacyQq = (
-    metadata.qq && typeof metadata.qq === "object"
-      ? (metadata.qq as Record<string, unknown>)
-      : {}
-  ) as Record<string, unknown>
-  if (typeof legacyQq.lastSweeperRetryAt === "string") {
-    try {
-      return parseInstantString(legacyQq.lastSweeperRetryAt).getTime()
+      return parseInstantString(lastSweeperRetryAt).getTime()
     } catch {
       return 0
     }
