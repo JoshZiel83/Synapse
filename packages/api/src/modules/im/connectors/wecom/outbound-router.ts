@@ -37,10 +37,19 @@
  */
 
 import { randomUUID } from "node:crypto"
-import type { SendMsgBody, WsFrame } from "@wecom/aibot-node-sdk"
+import type { WsFrame } from "@wecom/aibot-node-sdk"
 import { redisPub, redisSub } from "../../../../infrastructure/redis/index.js"
 import { createLogger } from "../../../../infrastructure/logger/index.js"
 import type { WecomClient } from "./client.js"
+import {
+  parseWecomOutboundRequestPayload,
+  parseWecomOutboundResponsePayload,
+  type FrameBody,
+  type WireRequest,
+  type WireResponse,
+} from "./outbound-router-codec.js"
+
+export type { FrameBody } from "./outbound-router-codec.js"
 
 const REQUEST_CHANNEL_PREFIX = "wecom:outbound:request:"
 const RESPONSE_CHANNEL_PREFIX = "wecom:outbound:response:"
@@ -48,18 +57,6 @@ const RESPONSE_PATTERN = `${RESPONSE_CHANNEL_PREFIX}*`
 const DEFAULT_TIMEOUT_MS = 5_000
 
 const log = createLogger("im.wecom")
-
-export interface FrameBody {
-  chatid: string
-  body: SendMsgBody
-}
-
-interface WireRequest {
-  requestId: string
-  frameBody: FrameBody
-}
-
-type WireResponse = { ok: true; raw: WsFrame } | { ok: false; error: string }
 
 interface PendingRequest {
   resolve: (frame: WsFrame) => void
@@ -101,7 +98,11 @@ function pmessageDispatcher(
 ): void {
   try {
     const requestId = channel.slice(RESPONSE_CHANNEL_PREFIX.length)
-    const wire = JSON.parse(payload) as WireResponse
+    const wire = parseWecomOutboundResponsePayload(payload)
+    if (!wire) {
+      log.warn("[wecom] response payload invalid")
+      return
+    }
     const pending = pendingRequests.get(requestId)
     if (!pending) return
     if (wire.ok) {
@@ -211,18 +212,12 @@ export async function subscribeAccountInboundChannel(
   await ensureMultiplexer()
   const channel = REQUEST_CHANNEL_PREFIX + accountId
   requestHandlersByChannel.set(channel, async (rawPayload: string) => {
-    let req: WireRequest
-    try {
-      req = JSON.parse(rawPayload) as WireRequest
-    } catch (err) {
-      log.warn({ err }, "[wecom] request payload parse failed")
+    const req = parseWecomOutboundRequestPayload(rawPayload)
+    if (!req) {
+      log.warn("[wecom] request payload invalid")
       return
     }
     const { requestId, frameBody } = req
-    if (!requestId || !frameBody) {
-      log.warn("[wecom] request payload missing requestId/frameBody")
-      return
-    }
     const pub =
       transportOverride?.publish ??
       ((ch: string, p: string) => redisPub.publish(ch, p))
