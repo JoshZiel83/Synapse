@@ -4,8 +4,10 @@
 
 import {
   CloudBootstrapInputSchema,
+  CloudBootstrapResultSchema,
   type CloudBootstrapResult,
 } from "@synapse/device-protocol"
+import { readJsonResponse } from "./api-response-codec.js"
 import type { DeviceIdentityBroker, DeviceIdentityRecord } from "./types.js"
 
 export interface BootstrapCloudDeviceOptions {
@@ -48,7 +50,11 @@ export async function bootstrapCloudDevice(
     const text = await res.text().catch(() => "")
     throw new Error(`bootstrap failed: ${res.status} ${text}`)
   }
-  const result = (await res.json()) as CloudBootstrapResult
+  const result: CloudBootstrapResult = await readJsonResponse(
+    res,
+    CloudBootstrapResultSchema,
+    "bootstrap"
+  )
 
   const identity: DeviceIdentityRecord = {
     deviceId: result.device_id,

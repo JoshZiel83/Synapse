@@ -2,14 +2,18 @@
 // by packages/api/src/modules/devices/controller.ts.
 
 import { createHash } from "node:crypto"
+import { z } from "zod"
 import {
   ConsumePairingInputSchema,
+  ConsumePairingResultSchema,
   type ConsumePairingResult,
 } from "@synapse/device-protocol"
-import type {
-  DevicePairingTicketView,
-  StartPairingInput as ApiStartPairingInput,
-} from "@synapse/shared"
+import {
+  DevicePairingTicketViewSchema,
+  type DevicePairingTicketView,
+  type StartPairingInput as ApiStartPairingInput,
+} from "@synapse/shared/schemas"
+import { readJsonResponse } from "./api-response-codec.js"
 import type {
   DeviceIdentityBroker,
   DeviceIdentityRecord,
@@ -23,10 +27,16 @@ function joinUrl(origin: string, path: string): string {
   return `${origin.replace(/\/$/, "")}${path.startsWith("/") ? path : `/${path}`}`
 }
 
-async function postJson<TBody, TResponse>(
+const DevicePairingTicketEnvelopeSchema = z.strictObject({
+  data: DevicePairingTicketViewSchema,
+})
+
+async function postJson<TBody, S extends z.ZodType>(
   url: string,
-  body: TBody
-): Promise<TResponse> {
+  body: TBody,
+  schema: S,
+  label: string
+): Promise<z.output<S>> {
   const res = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -36,7 +46,7 @@ async function postJson<TBody, TResponse>(
     const text = await res.text().catch(() => "")
     throw new Error(`POST ${url} failed: ${res.status} ${text}`)
   }
-  return (await res.json()) as TResponse
+  return readJsonResponse(res, schema, label)
 }
 
 export async function startPairingSession(
@@ -61,7 +71,12 @@ export async function startPairingSession(
     const text = await res.text().catch(() => "")
     throw new Error(`startPairing failed: ${res.status} ${text}`)
   }
-  return (await res.json()) as DevicePairingTicketView
+  const envelope = await readJsonResponse(
+    res,
+    DevicePairingTicketEnvelopeSchema,
+    "startPairing"
+  )
+  return envelope.data
 }
 
 /**
@@ -104,7 +119,12 @@ export async function pair(opts: PairOptions): Promise<PairResult> {
     platform: process.platform,
     arch: process.arch,
   })
-  const result = await postJson<typeof body, ConsumePairingResult>(url, body)
+  const result: ConsumePairingResult = await postJson(
+    url,
+    body,
+    ConsumePairingResultSchema,
+    "consumePairing"
+  )
 
   const identity: DeviceIdentityRecord = {
     deviceId: result.device_id,
