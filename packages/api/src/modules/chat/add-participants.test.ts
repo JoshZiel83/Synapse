@@ -9,7 +9,7 @@ import {
   type ChatParticipantSummary,
 } from "@synapse/shared"
 import type { Kysely } from "kysely"
-import { withTestDb } from "../../test/helpers/db.js"
+import { withTestDb, withTestDbAndClient } from "../../test/helpers/db.js"
 import { upsertAccessSubjectOn } from "../access/subject-registry.js"
 import { addConversationParticipantsUseCase } from "./add-participants.js"
 import type { ChatParticipantRow } from "./repo.js"
@@ -214,3 +214,74 @@ test("addConversationParticipantsUseCase re-adds removed member and emits active
     assert.deepEqual(payload.participants, [participantSummary])
   })
 })
+
+test(
+  "addConversationParticipantsUseCase rolls back re-add side effects when sync fails",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDbAndClient(async ({ db, client }) => {
+      const fixture = await seedReaddFixture(db as unknown as AnyDb)
+
+      await assert.rejects(async () => {
+        await client.query("SAVEPOINT add_participants_rollback")
+        try {
+          await addConversationParticipantsUseCase(
+            {
+              workspaceId: fixture.workspaceId,
+              conversationId: fixture.conversationId,
+              workspaceMemberIds: [fixture.readdMemberId],
+              queryable: db as unknown as AnyDb,
+            },
+            {
+              ensureConversationParticipant: async ({ queryable }) => {
+                await (queryable as unknown as AnyDb)
+                  .updateTable("conversationParticipants")
+                  .set({
+                    state: CONVERSATION_PARTICIPANT_STATE.ACTIVE,
+                    leftAt: null,
+                  })
+                  .where("id", "=", fixture.readdParticipantId)
+                  .execute()
+              },
+              listConversationParticipants: async () => {
+                throw new Error("membership event should not run")
+              },
+              participantToSummary: () => {
+                throw new Error("unexpected participant summary mapping")
+              },
+              syncConversationUpsert: async () => {
+                throw new Error("sync failed")
+              },
+            }
+          )
+          await client.query("RELEASE SAVEPOINT add_participants_rollback")
+        } catch (error) {
+          await client.query("ROLLBACK TO SAVEPOINT add_participants_rollback")
+          throw error
+        }
+      }, /sync failed/)
+
+      const participant = await (db as unknown as AnyDb)
+        .selectFrom("conversationParticipants")
+        .select("state")
+        .where("id", "=", fixture.readdParticipantId)
+        .executeTakeFirstOrThrow()
+      assert.equal(participant.state, CONVERSATION_PARTICIPANT_STATE.REMOVED)
+
+      const views = await (db as unknown as AnyDb)
+        .selectFrom("workspaceMemberConversationViews")
+        .select("workspaceMemberId")
+        .where("workspaceMemberId", "=", fixture.readdMemberId)
+        .where("conversationId", "=", fixture.conversationId)
+        .execute()
+      assert.deepEqual(views, [])
+
+      const events = await (db as unknown as AnyDb)
+        .selectFrom("workspaceMemberSyncEvents")
+        .select("eventType")
+        .where("workspaceMemberId", "=", fixture.readdMemberId)
+        .execute()
+      assert.deepEqual(events, [])
+    })
+  }
+)
