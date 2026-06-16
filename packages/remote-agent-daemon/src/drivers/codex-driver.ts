@@ -27,6 +27,7 @@ import type {
   SessionSpec,
 } from "./types.js"
 import { EventQueue as EventQueueBase, whichBinary } from "./async-channel.js"
+import { parseCodexJsonRpcLine } from "./codex-json-rpc-codec.js"
 
 type JsonRpcMethod =
   | "initialize"
@@ -104,14 +105,6 @@ function detectCodexBinary(): { path?: string; version?: string } {
 }
 
 class EventQueue extends EventQueueBase<AgentSessionEvent> {}
-
-function safeJsonParse<T = unknown>(value: string): T | null {
-  try {
-    return JSON.parse(value) as T
-  } catch {
-    return null
-  }
-}
 
 function writeJsonLine(processRef: ChildProcess | null, payload: unknown) {
   if (!processRef?.stdin?.writable) return false
@@ -259,10 +252,10 @@ class CodexAgentSession implements AgentSession {
   }
 
   private handleStdoutLine(line: string) {
-    const event = safeJsonParse<any>(line)
-    if (!event || typeof event !== "object") return
+    const event = parseCodexJsonRpcLine(line)
+    if (!event) return
 
-    if (event.id && "result" in event) {
+    if (event.id !== undefined && "result" in event) {
       const requestId = String(event.id)
       const method = this.pendingRequests.get(requestId)
       this.pendingRequests.delete(requestId)
@@ -270,7 +263,7 @@ class CodexAgentSession implements AgentSession {
       return
     }
 
-    if (event.id && "error" in event) {
+    if (event.id !== undefined && "error" in event) {
       this.eventQueue.push({
         kind: "error",
         message: String(
@@ -281,7 +274,7 @@ class CodexAgentSession implements AgentSession {
       return
     }
 
-    if (typeof event.method === "string" && "id" in event) {
+    if (typeof event.method === "string" && event.id !== undefined) {
       this.handleServerRequest(event.id, event.method, event.params ?? {})
       return
     }
