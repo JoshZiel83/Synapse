@@ -112,3 +112,42 @@ test("sendRemoteAgentConversationMessageUseCase sends as assistant inside one tr
     "tx:commit",
   ])
 })
+
+test("sendRemoteAgentConversationMessageUseCase does not send when workspace lookup fails", async () => {
+  const transactionClient = {} as Executor
+  const conversationId = randomUUID()
+  const item = chatItem({ conversationId })
+  const calls: string[] = []
+  const failingDeps = deps({
+    calls,
+    transactionClient,
+    participantId: randomUUID(),
+    hostWorkspaceId: randomUUID(),
+    item,
+  })
+  failingDeps.loadConversationHostWorkspaceId = async (
+    receivedConversationId,
+    queryable
+  ) => {
+    calls.push(`workspace:${queryable === transactionClient}`)
+    assert.equal(receivedConversationId, conversationId)
+    throw new Error("workspace lookup failed")
+  }
+
+  await assert.rejects(
+    () =>
+      sendRemoteAgentConversationMessageUseCase(
+        {
+          remoteAgentId: randomUUID(),
+          conversationId,
+          clientMessageId: randomUUID(),
+          contentBlocks: [{ id: randomUUID(), type: "text", text: "hello" }],
+          metadata: { source: "remote-agent" },
+        },
+        failingDeps
+      ),
+    /workspace lookup failed/
+  )
+
+  assert.deepEqual(calls, ["tx:start", "access:true", "workspace:true"])
+})
