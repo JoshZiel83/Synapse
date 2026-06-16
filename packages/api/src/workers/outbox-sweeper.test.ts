@@ -390,6 +390,38 @@ test("processSweepCandidate: skipped recovery stops before enqueue when recover 
   assert.deepEqual(calls, ["canDeliverNow", "recover"])
 })
 
+test("processSweepCandidate: skipped recovery stops before enqueue when retry stamp fails", async () => {
+  const calls: string[] = []
+  await assert.rejects(
+    () =>
+      processSweepCandidate(
+        sweepCandidate({
+          reason: "skipped_recoverable",
+        }),
+        {
+          canDeliverNow: async () => {
+            calls.push("canDeliverNow")
+            return { ok: true }
+          },
+          recoverSkippedDisabledLink: async () => {
+            calls.push("recover")
+          },
+          bumpRetryStamp: async () => {
+            calls.push("bump")
+            throw new Error("stamp failed")
+          },
+          enqueueOrRetry: async () => {
+            calls.push("enqueue")
+            return { kind: "enqueued", jobId: "job-1" }
+          },
+        }
+      ),
+    /stamp failed/
+  )
+
+  assert.deepEqual(calls, ["canDeliverNow", "recover", "bump"])
+})
+
 test("processSweepCandidate: retrying candidates still honor dead-letter budget", async () => {
   const calls: string[] = []
   await processSweepCandidate(
@@ -413,4 +445,28 @@ test("processSweepCandidate: retrying candidates still honor dead-letter budget"
   )
 
   assert.deepEqual(calls, ["checkBudget", "markDeadLetter"])
+})
+
+test("processSweepCandidate: retrying candidates stop before enqueue when retry stamp fails", async () => {
+  const calls: string[] = []
+  await assert.rejects(
+    () =>
+      processSweepCandidate(sweepCandidate({ reason: "pending_stale" }), {
+        checkBudget() {
+          calls.push("checkBudget")
+          return "ok"
+        },
+        bumpRetryStamp: async () => {
+          calls.push("bump")
+          throw new Error("stamp failed")
+        },
+        enqueueOrRetry: async () => {
+          calls.push("enqueue")
+          return { kind: "enqueued", jobId: "job-1" }
+        },
+      }),
+    /stamp failed/
+  )
+
+  assert.deepEqual(calls, ["checkBudget", "bump"])
 })
