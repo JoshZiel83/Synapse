@@ -1,4 +1,5 @@
 import type { RemoteMcpProtocol } from "../mcp-remote-client.js"
+import { z } from "zod"
 import { getAuthSecretSerializer } from "./auth-serializers.js"
 
 /**
@@ -28,6 +29,18 @@ export type ResolvedRemoteEntryPoint = {
 }
 
 export class TemplateResolutionError extends Error {}
+
+const RemoteEntryPointJsonSchema = z
+  .object({
+    url: z.string().optional(),
+    endpoint: z.string().optional(),
+    headers: z.record(z.string(), z.string()).optional(),
+    query: z.record(z.string(), z.string()).optional(),
+    protocol: z.enum(["sse", "streamable-http"]).optional(),
+  })
+  .passthrough()
+
+type RemoteEntryPointJson = z.infer<typeof RemoteEntryPointJsonSchema>
 
 export function getConfigValue(
   config: Record<string, unknown>,
@@ -171,6 +184,34 @@ export function renderTemplate(template: string, ctx: TemplateContext): string {
   })
 }
 
+function parseRemoteEntryPointJson(raw: string): RemoteEntryPointJson {
+  let value: unknown
+  try {
+    value = JSON.parse(raw)
+  } catch (error) {
+    throw new Error(
+      `Invalid remote MCP entry point JSON: ${(error as Error).message}`
+    )
+  }
+
+  const parsed = RemoteEntryPointJsonSchema.safeParse(value)
+  if (!parsed.success) {
+    throw new Error("Remote MCP entry point JSON has invalid shape")
+  }
+  return parsed.data
+}
+
+function isJsonEntryPointValue(raw: string): boolean {
+  return (
+    raw.startsWith("{") ||
+    raw.startsWith("[") ||
+    raw.startsWith('"') ||
+    raw === "null" ||
+    raw === "true" ||
+    raw === "false"
+  )
+}
+
 /**
  * Resolve a remote (http/sse) plugin entryPoint into a concrete URL + headers.
  *
@@ -189,7 +230,7 @@ export function resolveRemoteEntryPoint(
     throw new Error("Remote MCP entry point is required")
   }
 
-  if (!trimmed.startsWith("{")) {
+  if (!isJsonEntryPointValue(trimmed)) {
     return {
       url: renderTemplate(trimmed, ctx),
       headers: {},
@@ -197,46 +238,34 @@ export function resolveRemoteEntryPoint(
     }
   }
 
-  const parsed = JSON.parse(trimmed) as Record<string, unknown>
+  const parsed = parseRemoteEntryPointJson(trimmed)
   const baseUrl =
-    typeof parsed.url === "string"
+    parsed.url !== undefined
       ? renderTemplate(parsed.url, ctx)
-      : typeof parsed.endpoint === "string"
+      : parsed.endpoint !== undefined
         ? renderTemplate(parsed.endpoint, ctx)
         : ""
   if (!baseUrl) {
     throw new Error("Remote MCP entry point JSON is missing url")
   }
 
-  const headers: Record<string, string> =
-    parsed.headers &&
-    typeof parsed.headers === "object" &&
-    !Array.isArray(parsed.headers)
-      ? Object.fromEntries(
-          Object.entries(parsed.headers as Record<string, unknown>)
-            .filter(([, value]) => typeof value === "string")
-            .map(([key, value]) => [key, renderTemplate(value as string, ctx)])
-        )
-      : {}
+  const headers: Record<string, string> = parsed.headers
+    ? Object.fromEntries(
+        Object.entries(parsed.headers).map(([key, value]) => [
+          key,
+          renderTemplate(value, ctx),
+        ])
+      )
+    : {}
 
   const url = new URL(baseUrl)
-  if (
-    parsed.query &&
-    typeof parsed.query === "object" &&
-    !Array.isArray(parsed.query)
-  ) {
-    for (const [key, value] of Object.entries(
-      parsed.query as Record<string, unknown>
-    )) {
-      if (typeof value !== "string") continue
+  if (parsed.query) {
+    for (const [key, value] of Object.entries(parsed.query)) {
       url.searchParams.set(key, renderTemplate(value, ctx))
     }
   }
 
-  const protocol: RemoteMcpProtocol =
-    parsed.protocol === "sse" || parsed.protocol === "streamable-http"
-      ? parsed.protocol
-      : defaultProtocol
+  const protocol: RemoteMcpProtocol = parsed.protocol ?? defaultProtocol
 
   return { url: url.toString(), headers, protocol }
 }
