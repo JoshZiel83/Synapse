@@ -1,11 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 import { z } from "zod"
+import { dateToIsoInstant, nowIsoInstant } from "@synapse/shared/datetime"
 import {
-  assertIsoInstant,
-  dateToIsoInstant,
-  nowIsoInstant,
-} from "@synapse/shared/datetime"
-import {
+  AUTOMATION_SCHEDULE_KINDS,
   CONVERSATION_PARTICIPANT_TYPE,
   CONVERSATION_TYPE_MASK_PRESETS,
   describeAutomationDelivery,
@@ -58,7 +55,8 @@ import {
   parseCancelTaskToolInput,
   parseGetTaskStatusToolInput,
   parseListTasksToolInput,
-  parseSelfEventSubscriptionMatcherInput,
+  parseScheduleSelfWakeupToolInput,
+  parseSubscribeEventToolInput,
   parseTailTaskOutputToolInput,
   taskOutputStreamValues,
   taskStatusFilterValues,
@@ -2648,7 +2646,7 @@ export function registerCallableToolPlugins(): void {
           scheduleKind: {
             type: "string",
             description: "Schedule type.",
-            enum: ["cron", "at", "interval"],
+            enum: [...AUTOMATION_SCHEDULE_KINDS],
           },
           scheduleExpr: {
             type: "string",
@@ -2700,7 +2698,7 @@ export function registerCallableToolPlugins(): void {
             scheduleKind: {
               type: "string",
               description: "Schedule type.",
-              enum: ["cron", "at", "interval"],
+              enum: [...AUTOMATION_SCHEDULE_KINDS],
             },
             scheduleExpr: {
               type: "string",
@@ -2755,37 +2753,18 @@ export function registerCallableToolPlugins(): void {
         actorId: context.actorId,
       })
 
-      const name = String((input as any).name || "").trim()
-      const scheduleKind = String((input as any).scheduleKind || "").trim()
-      const scheduleExpr =
-        typeof (input as any).scheduleExpr === "string"
-          ? String((input as any).scheduleExpr).trim()
-          : ""
-      const intervalSeconds =
-        typeof (input as any).intervalSeconds === "number"
-          ? Number((input as any).intervalSeconds)
-          : undefined
-      const timezone =
-        typeof (input as any).timezone === "string"
-          ? String((input as any).timezone).trim()
-          : undefined
-      const message = String((input as any).message || "").trim()
-      const wakeReason =
-        typeof (input as any).wakeReason === "string"
-          ? String((input as any).wakeReason).trim()
-          : undefined
-      const activeUntil =
-        typeof (input as any).activeUntil === "string"
-          ? String((input as any).activeUntil).trim()
-          : undefined
-      const maxTriggerCount =
-        typeof (input as any).maxTriggerCount === "number"
-          ? Number((input as any).maxTriggerCount)
-          : undefined
-
-      if (!name || !message) {
-        throwToolError("name and message are required")
-      }
+      const {
+        name,
+        scheduleKind,
+        scheduleExpr,
+        intervalSeconds,
+        timezone,
+        message,
+        wakeReason,
+        activeUntil,
+        maxTriggerCount,
+        startsAt,
+      } = parseScheduleSelfWakeupToolInput(input)
 
       try {
         const rule = await createAutomationRule(
@@ -2802,26 +2781,18 @@ export function registerCallableToolPlugins(): void {
             conversationId: session.conversationId,
             trigger: {
               triggerKind: "schedule",
-              scheduleKind: scheduleKind as any,
+              scheduleKind,
               scheduleExpr:
                 scheduleKind === "at"
                   ? scheduleExpr
                   : scheduleExpr || undefined,
               scheduleTimezone: timezone || undefined,
               intervalSeconds,
-              startsAt:
-                scheduleKind === "at" && scheduleExpr
-                  ? assertIsoInstant(scheduleExpr)
-                  : undefined,
+              startsAt,
             },
             policy: {
-              activeUntil: activeUntil
-                ? assertIsoInstant(activeUntil)
-                : undefined,
-              maxTriggerCount:
-                Number.isInteger(maxTriggerCount) && (maxTriggerCount || 0) > 0
-                  ? maxTriggerCount
-                  : undefined,
+              activeUntil,
+              maxTriggerCount,
             },
             delivery: {
               message,
@@ -3064,30 +3035,16 @@ export function registerCallableToolPlugins(): void {
         actorId: context.actorId,
       })
 
-      const name = String((input as any).name || "").trim()
-      const eventSourceId = String((input as any).eventSourceId || "").trim()
-      const message = String((input as any).message || "").trim()
-      const wakeReason =
-        typeof (input as any).wakeReason === "string"
-          ? String((input as any).wakeReason).trim()
-          : undefined
-      const once = Boolean((input as any).once)
-      const activeUntil =
-        typeof (input as any).activeUntil === "string"
-          ? String((input as any).activeUntil).trim()
-          : undefined
-      const maxTriggerCount =
-        typeof (input as any).maxTriggerCount === "number"
-          ? Number((input as any).maxTriggerCount)
-          : undefined
-
-      if (!name || !eventSourceId || !message) {
-        throwToolError("name, eventSourceId, and message are required")
-      }
-
-      const matcher = parseSelfEventSubscriptionMatcherInput(
-        (input as any).matcher
-      )
+      const {
+        name,
+        eventSourceId,
+        matcher,
+        message,
+        wakeReason,
+        once,
+        activeUntil,
+        maxTriggerCount,
+      } = parseSubscribeEventToolInput(input)
 
       try {
         const rule = await createAutomationRule(
@@ -3108,15 +3065,8 @@ export function registerCallableToolPlugins(): void {
               matcher,
             },
             policy: {
-              activeUntil: activeUntil
-                ? assertIsoInstant(activeUntil)
-                : undefined,
-              maxTriggerCount: once
-                ? 1
-                : Number.isInteger(maxTriggerCount) &&
-                    (maxTriggerCount || 0) > 0
-                  ? maxTriggerCount
-                  : undefined,
+              activeUntil,
+              maxTriggerCount: once ? 1 : maxTriggerCount,
             },
             delivery: {
               message,

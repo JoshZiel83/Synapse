@@ -5,7 +5,9 @@ import {
   parseCancelTaskToolInput,
   parseGetTaskStatusToolInput,
   parseListTasksToolInput,
+  parseScheduleSelfWakeupToolInput,
   parseSelfEventSubscriptionMatcherInput,
+  parseSubscribeEventToolInput,
   parseTailTaskOutputToolInput,
 } from "./session-tools-input-codec.js"
 import { ToolExecutionError } from "./tool-errors.js"
@@ -133,5 +135,161 @@ test("parseTailTaskOutputToolInput normalizes cursor, limit, and stream", () => 
       limit: 4,
       stream: "combined",
     }
+  )
+})
+
+test("parseScheduleSelfWakeupToolInput normalizes automation schedule input", () => {
+  assert.deepEqual(
+    parseScheduleSelfWakeupToolInput({
+      name: " Morning wakeup ",
+      scheduleKind: " at ",
+      scheduleExpr: "2026-06-17T10:00:00.000Z",
+      intervalSeconds: 30.5,
+      timezone: " Asia/Shanghai ",
+      message: " check status ",
+      wakeReason: " daily check ",
+      activeUntil: "2026-06-18T10:00:00.000Z",
+      maxTriggerCount: 2,
+    }),
+    {
+      name: "Morning wakeup",
+      scheduleKind: "at",
+      scheduleExpr: "2026-06-17T10:00:00.000Z",
+      intervalSeconds: 30.5,
+      timezone: "Asia/Shanghai",
+      message: "check status",
+      wakeReason: "daily check",
+      activeUntil: "2026-06-18T10:00:00.000Z",
+      maxTriggerCount: 2,
+      startsAt: "2026-06-17T10:00:00.000Z",
+    }
+  )
+  assert.deepEqual(
+    parseScheduleSelfWakeupToolInput({
+      name: " Interval wakeup ",
+      scheduleKind: "interval",
+      message: "ping",
+      maxTriggerCount: 2.5,
+    }),
+    {
+      name: "Interval wakeup",
+      scheduleKind: "interval",
+      scheduleExpr: "",
+      intervalSeconds: undefined,
+      timezone: undefined,
+      message: "ping",
+      wakeReason: undefined,
+      activeUntil: undefined,
+      maxTriggerCount: undefined,
+      startsAt: undefined,
+    }
+  )
+})
+
+test("parseScheduleSelfWakeupToolInput rejects invalid schedule input", () => {
+  assert.throws(
+    () =>
+      parseScheduleSelfWakeupToolInput({
+        name: "",
+        scheduleKind: "at",
+        message: "ping",
+      }),
+    (error) =>
+      error instanceof ToolExecutionError &&
+      error.message === "name and message are required"
+  )
+  assert.throws(
+    () =>
+      parseScheduleSelfWakeupToolInput({
+        name: "wake",
+        scheduleKind: "daily",
+        message: "ping",
+      }),
+    (error) =>
+      error instanceof ToolExecutionError &&
+      error.message === "scheduleKind must be one of: cron, at, interval"
+  )
+  assert.throws(
+    () =>
+      parseScheduleSelfWakeupToolInput({
+        name: "wake",
+        scheduleKind: "at",
+        scheduleExpr: "2026-06-17T10:00:00Z",
+        message: "ping",
+      }),
+    (error) =>
+      error instanceof ToolExecutionError &&
+      error.message ===
+        "scheduleExpr must be a canonical UTC ISO-8601 instant string with millisecond precision"
+  )
+})
+
+test("parseSubscribeEventToolInput normalizes event subscription input", () => {
+  assert.deepEqual(
+    parseSubscribeEventToolInput({
+      name: " Deploy notice ",
+      eventSourceId: " source-1 ",
+      matcher: JSON.stringify({ kind: "deploy", status: "failed" }),
+      message: " wake me ",
+      wakeReason: " deployment failed ",
+      once: true,
+      activeUntil: "2026-06-18T10:00:00.000Z",
+      maxTriggerCount: 3,
+    }),
+    {
+      name: "Deploy notice",
+      eventSourceId: "source-1",
+      matcher: { kind: "deploy", status: "failed" },
+      message: "wake me",
+      wakeReason: "deployment failed",
+      once: true,
+      activeUntil: "2026-06-18T10:00:00.000Z",
+      maxTriggerCount: 3,
+    }
+  )
+  assert.deepEqual(
+    parseSubscribeEventToolInput({
+      name: "Deploy notice",
+      eventSourceId: "source-1",
+      message: "wake me",
+      once: "true",
+      maxTriggerCount: 3.2,
+    }),
+    {
+      name: "Deploy notice",
+      eventSourceId: "source-1",
+      matcher: undefined,
+      message: "wake me",
+      wakeReason: undefined,
+      once: false,
+      activeUntil: undefined,
+      maxTriggerCount: undefined,
+    }
+  )
+})
+
+test("parseSubscribeEventToolInput rejects invalid event subscription input", () => {
+  assert.throws(
+    () =>
+      parseSubscribeEventToolInput({
+        name: "subscription",
+        eventSourceId: "",
+        message: "wake me",
+      }),
+    (error) =>
+      error instanceof ToolExecutionError &&
+      error.message === "name, eventSourceId, and message are required"
+  )
+  assert.throws(
+    () =>
+      parseSubscribeEventToolInput({
+        name: "subscription",
+        eventSourceId: "source-1",
+        matcher: "{",
+        message: "wake me",
+      }),
+    (error) =>
+      error instanceof ToolExecutionError &&
+      error.message === "matcher must be valid JSON"
   )
 })

@@ -1,4 +1,10 @@
 import { z } from "zod"
+import {
+  AUTOMATION_SCHEDULE_KINDS,
+  type AutomationScheduleKind,
+  type Timestamp,
+} from "@synapse/shared"
+import { isIsoInstantString } from "@synapse/shared/datetime"
 
 import { throwToolError } from "./tool-errors.js"
 
@@ -23,6 +29,7 @@ export type TaskOutputStreamValue = (typeof taskOutputStreamValues)[number]
 
 const taskStatusFilterValueSet = new Set<string>(taskStatusFilterValues)
 const taskOutputStreamValueSet = new Set<string>(taskOutputStreamValues)
+const automationScheduleKindSet = new Set<string>(AUTOMATION_SCHEDULE_KINDS)
 const selfEventSubscriptionMatcherSchema = z.record(z.string(), z.unknown())
 
 function inputRecord(input: unknown): Record<string, unknown> {
@@ -53,6 +60,45 @@ function nonNegativeIntegerOrDefault(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value)
     ? Math.max(0, Math.trunc(value))
     : fallback
+}
+
+function finiteNumberOrUndefined(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined
+}
+
+function positiveIntegerOrUndefined(value: unknown): number | undefined {
+  return typeof value === "number" &&
+    Number.isInteger(value) &&
+    Number.isFinite(value) &&
+    value > 0
+    ? value
+    : undefined
+}
+
+function parseAutomationScheduleKind(value: unknown): AutomationScheduleKind {
+  const candidate = optionalTrimmedString(value)
+  if (!candidate || !automationScheduleKindSet.has(candidate)) {
+    throwToolError(
+      `scheduleKind must be one of: ${AUTOMATION_SCHEDULE_KINDS.join(", ")}`
+    )
+  }
+  return candidate as AutomationScheduleKind
+}
+
+function optionalIsoInstant(
+  value: unknown,
+  fieldName: string
+): Timestamp | undefined {
+  const candidate = optionalTrimmedString(value)
+  if (!candidate) {
+    return undefined
+  }
+  if (!isIsoInstantString(candidate)) {
+    throwToolError(
+      `${fieldName} must be a canonical UTC ISO-8601 instant string with millisecond precision`
+    )
+  }
+  return candidate
 }
 
 export function parseSelfEventSubscriptionMatcherInput(
@@ -136,5 +182,73 @@ export function parseTailTaskOutputToolInput(input: unknown): {
       stream && taskOutputStreamValueSet.has(stream)
         ? (stream as TaskOutputStreamValue)
         : "combined",
+  }
+}
+
+export function parseScheduleSelfWakeupToolInput(input: unknown): {
+  name: string
+  scheduleKind: AutomationScheduleKind
+  scheduleExpr: string
+  intervalSeconds?: number
+  timezone?: string
+  message: string
+  wakeReason?: string
+  activeUntil?: Timestamp
+  maxTriggerCount?: number
+  startsAt?: Timestamp
+} {
+  const record = inputRecord(input)
+  const name = optionalTrimmedString(record.name) || ""
+  const message = optionalTrimmedString(record.message) || ""
+  if (!name || !message) {
+    throwToolError("name and message are required")
+  }
+
+  const scheduleKind = parseAutomationScheduleKind(record.scheduleKind)
+  const scheduleExpr = optionalTrimmedString(record.scheduleExpr) || ""
+  return {
+    name,
+    scheduleKind,
+    scheduleExpr,
+    intervalSeconds: finiteNumberOrUndefined(record.intervalSeconds),
+    timezone: optionalTrimmedString(record.timezone),
+    message,
+    wakeReason: optionalTrimmedString(record.wakeReason),
+    activeUntil: optionalIsoInstant(record.activeUntil, "activeUntil"),
+    maxTriggerCount: positiveIntegerOrUndefined(record.maxTriggerCount),
+    startsAt:
+      scheduleKind === "at" && scheduleExpr
+        ? optionalIsoInstant(scheduleExpr, "scheduleExpr")
+        : undefined,
+  }
+}
+
+export function parseSubscribeEventToolInput(input: unknown): {
+  name: string
+  eventSourceId: string
+  matcher?: Record<string, unknown>
+  message: string
+  wakeReason?: string
+  once: boolean
+  activeUntil?: Timestamp
+  maxTriggerCount?: number
+} {
+  const record = inputRecord(input)
+  const name = optionalTrimmedString(record.name) || ""
+  const eventSourceId = optionalTrimmedString(record.eventSourceId) || ""
+  const message = optionalTrimmedString(record.message) || ""
+  if (!name || !eventSourceId || !message) {
+    throwToolError("name, eventSourceId, and message are required")
+  }
+
+  return {
+    name,
+    eventSourceId,
+    matcher: parseSelfEventSubscriptionMatcherInput(record.matcher),
+    message,
+    wakeReason: optionalTrimmedString(record.wakeReason),
+    once: record.once === true,
+    activeUntil: optionalIsoInstant(record.activeUntil, "activeUntil"),
+    maxTriggerCount: positiveIntegerOrUndefined(record.maxTriggerCount),
   }
 }
