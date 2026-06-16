@@ -77,6 +77,8 @@ const classifiedJsonParseFiles = {
       "Weixin outbound HTTP responses are provider payloads.",
     "packages/api/src/modules/im/connectors/weixin/qr-login-codec.ts":
       "Weixin QR login HTTP responses are provider payloads.",
+    "packages/api/src/modules/im/connectors/weixin/client.ts":
+      "Weixin long-poll HTTP provider responses are provider payloads.",
     "packages/api/src/modules/mcp-plugins/builtin/z-ai/toolkit/zhipu-errors.ts":
       "Zhipu provider error responses are provider payloads.",
     "packages/api/src/modules/mcp-plugins/feishu/auth.ts":
