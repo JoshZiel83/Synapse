@@ -7,8 +7,13 @@ import { upsertAccessSubjectOn } from "../access/subject-registry.js"
 import { activateConversationParticipant } from "./participant-activation.js"
 
 type AnyDb = import("kysely").Kysely<any>
+type ConversationParticipantState =
+  (typeof CONVERSATION_PARTICIPANT_STATE)[keyof typeof CONVERSATION_PARTICIPANT_STATE]
 
-async function seedRemovedWorkspaceParticipant(db: AnyDb) {
+async function seedWorkspaceParticipant(
+  db: AnyDb,
+  state: ConversationParticipantState = CONVERSATION_PARTICIPANT_STATE.REMOVED
+) {
   const user = await db
     .insertInto("users")
     .values({
@@ -54,7 +59,7 @@ async function seedRemovedWorkspaceParticipant(db: AnyDb) {
       conversationId: conversation.id as string,
       subjectId,
       roleKey: "member",
-      state: CONVERSATION_PARTICIPANT_STATE.REMOVED,
+      state,
       metadata: {},
     } as never)
     .returning("id")
@@ -73,9 +78,7 @@ test(
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDbAndClient(async ({ db, client }) => {
-      const fixture = await seedRemovedWorkspaceParticipant(
-        db as unknown as AnyDb
-      )
+      const fixture = await seedWorkspaceParticipant(db as unknown as AnyDb)
 
       await client.query(`
         CREATE OR REPLACE FUNCTION fail_participant_activation_event_for_test()
@@ -129,6 +132,76 @@ test(
         .where("id", "=", fixture.participantId)
         .executeTakeFirstOrThrow()
       assert.equal(participant.state, CONVERSATION_PARTICIPANT_STATE.REMOVED)
+
+      const items = await (db as unknown as AnyDb)
+        .selectFrom("conversationItems")
+        .select("id")
+        .where("conversationId", "=", fixture.conversationId)
+        .execute()
+      assert.deepEqual(items, [])
+    })
+  }
+)
+
+test(
+  "activateConversationParticipant does not re-emit join events for active participants",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDbAndClient(async ({ db, client }) => {
+      const fixture = await seedWorkspaceParticipant(
+        db as unknown as AnyDb,
+        CONVERSATION_PARTICIPANT_STATE.ACTIVE
+      )
+
+      await client.query(`
+        CREATE OR REPLACE FUNCTION fail_duplicate_participant_join_for_test()
+        RETURNS trigger AS $$
+        BEGIN
+          RAISE EXCEPTION 'duplicate participant joined event insert';
+        END;
+        $$ LANGUAGE plpgsql;
+      `)
+      await client.query(`
+        CREATE TRIGGER fail_duplicate_participant_join_for_test
+        BEFORE INSERT ON conversation_items
+        FOR EACH ROW EXECUTE FUNCTION fail_duplicate_participant_join_for_test();
+      `)
+
+      let result: Awaited<ReturnType<typeof activateConversationParticipant>>
+      try {
+        await client.query("SAVEPOINT participant_activation_idempotent")
+        try {
+          result = await activateConversationParticipant({
+            workspaceId: fixture.workspaceId,
+            conversationId: fixture.conversationId,
+            participantType: "workspace_member",
+            workspaceMemberId: fixture.workspaceMemberId,
+            displayName: "reactivated user",
+            queryable: db as unknown as AnyDb,
+          })
+          await client.query(
+            "RELEASE SAVEPOINT participant_activation_idempotent"
+          )
+        } catch (error) {
+          await client.query(
+            "ROLLBACK TO SAVEPOINT participant_activation_idempotent"
+          )
+          throw error
+        }
+      } finally {
+        await client.query(`
+          DROP TRIGGER IF EXISTS fail_duplicate_participant_join_for_test
+          ON conversation_items;
+        `)
+        await client.query(
+          "DROP FUNCTION IF EXISTS fail_duplicate_participant_join_for_test();"
+        )
+      }
+
+      assert.equal(result!.activated, false)
+      assert.equal(result!.created, false)
+      assert.equal(result!.revived, false)
+      assert.equal(result!.member?.id, fixture.participantId)
 
       const items = await (db as unknown as AnyDb)
         .selectFrom("conversationItems")
