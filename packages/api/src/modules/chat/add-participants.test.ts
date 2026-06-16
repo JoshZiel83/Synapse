@@ -145,6 +145,33 @@ async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
   return row.id as string
 }
 
+async function insertRemoteAgent(
+  db: AnyDb,
+  workspaceId: string
+): Promise<string> {
+  const remoteAgentId = randomUUID()
+  await db
+    .insertInto("workspaceApps")
+    .values({
+      id: remoteAgentId,
+      workspaceId,
+      kind: "remote_agent",
+      displayName: "add participant remote agent",
+      status: "active",
+    } as never)
+    .execute()
+  const row = await db
+    .insertInto("remoteAgents")
+    .values({
+      id: remoteAgentId,
+      title: "add participant remote agent",
+      runtimeKind: "codex",
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return row.id as string
+}
+
 test("addConversationParticipantsUseCase re-adds removed member and emits active membership event", async () => {
   await withTestDb(async (db) => {
     const fixture = await seedReaddFixture(db as unknown as AnyDb)
@@ -353,6 +380,67 @@ test("addConversationParticipantsUseCase actor-only add avoids member sync side 
       CONVERSATION_PARTICIPANT_TYPE.ACTOR
     )
     assert.equal(actorParticipant?.state, CONVERSATION_PARTICIPANT_STATE.ACTIVE)
+
+    const views = await (db as unknown as AnyDb)
+      .selectFrom("workspaceMemberConversationViews")
+      .select("workspaceMemberId")
+      .where("conversationId", "=", fixture.conversationId)
+      .execute()
+    assert.deepEqual(
+      views.map((view) => view.workspaceMemberId),
+      [fixture.ownerMemberId]
+    )
+
+    const events = await (db as unknown as AnyDb)
+      .selectFrom("workspaceMemberSyncEvents")
+      .select("eventType")
+      .where("conversationId", "=", fixture.conversationId)
+      .execute()
+    assert.deepEqual(events, [])
+  })
+})
+
+test("addConversationParticipantsUseCase remote-agent-only add avoids member sync side effects", async () => {
+  await withTestDb(async (db) => {
+    const fixture = await seedReaddFixture(db as unknown as AnyDb)
+    const remoteAgentId = await insertRemoteAgent(
+      db as unknown as AnyDb,
+      fixture.workspaceId
+    )
+    let syncCalls = 0
+
+    const participants = await addConversationParticipantsUseCase(
+      {
+        workspaceId: fixture.workspaceId,
+        conversationId: fixture.conversationId,
+        remoteAgentIds: [remoteAgentId],
+        queryable: db as unknown as AnyDb,
+      },
+      {
+        ensureConversationParticipant: ensureConversationParticipantUseCase,
+        listConversationParticipants: listConversationParticipantsUseCase,
+        participantToSummary: () => {
+          throw new Error("membership summary should not run")
+        },
+        syncConversationUpsert: async () => {
+          syncCalls += 1
+          throw new Error("member sync should not run")
+        },
+      }
+    )
+
+    assert.equal(syncCalls, 0)
+    const remoteAgentParticipant = participants.find(
+      (participant) => participant.remoteAgentId === remoteAgentId
+    )
+    assert.equal(
+      remoteAgentParticipant?.participantType,
+      CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT
+    )
+    assert.equal(
+      remoteAgentParticipant?.state,
+      CONVERSATION_PARTICIPANT_STATE.ACTIVE
+    )
 
     const views = await (db as unknown as AnyDb)
       .selectFrom("workspaceMemberConversationViews")
