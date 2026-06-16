@@ -105,6 +105,7 @@ import {
   assertFeishuScopesForFeatures,
   normalizeFeishuFeatureKeys,
 } from "./feishu/features.js"
+import { parseFeishuAuthConnectionRef } from "./feishu/config.js"
 import {} from "../access/bindings.js"
 import { resolveAccessGrantTarget } from "../access/access-target-resolver.js"
 import {
@@ -635,22 +636,14 @@ export async function installPluginUnified(data: {
       )
     }
 
-    const rawConnection =
-      config.feishuAccount &&
-      typeof config.feishuAccount === "object" &&
-      !Array.isArray(config.feishuAccount)
-        ? (config.feishuAccount as Record<string, unknown>)
-        : {}
-    if (
-      rawConnection.__kind !== "auth_connection_ref" ||
-      typeof rawConnection.connectionId !== "string"
-    ) {
+    const connectionRef = parseFeishuAuthConnectionRef(config.feishuAccount)
+    if (!connectionRef) {
       throw new McpPluginError(400, "Feishu account authorization is required.")
     }
 
     const publicPayload = await getActivePluginConnectionPublicPayload(
       ex,
-      rawConnection.connectionId
+      connectionRef.connectionId
     )
     if (!publicPayload) {
       throw new McpPluginError(400, "Feishu auth connection not found.")
@@ -931,22 +924,14 @@ export async function updateInstallation(
       )
     }
 
-    const rawConnection =
-      config.feishuAccount &&
-      typeof config.feishuAccount === "object" &&
-      !Array.isArray(config.feishuAccount)
-        ? (config.feishuAccount as Record<string, unknown>)
-        : {}
-    if (
-      rawConnection.__kind !== "auth_connection_ref" ||
-      typeof rawConnection.connectionId !== "string"
-    ) {
+    const connectionRef = parseFeishuAuthConnectionRef(config.feishuAccount)
+    if (!connectionRef) {
       throw new McpPluginError(400, "Feishu account authorization is required.")
     }
 
     const publicPayload = await getActivePluginConnectionPublicPayload(
       ex,
-      rawConnection.connectionId
+      connectionRef.connectionId
     )
     if (!publicPayload) {
       throw new McpPluginError(400, "Feishu auth connection not found.")
