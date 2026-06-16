@@ -122,6 +122,28 @@ export class PluginAuthError extends Error {
 // Business JSON decode → shared parseJsonObject (object-only, array-reject). r6 P1-8.
 const asObject = parseJsonObject
 
+export async function readProviderJsonObjectResponse(
+  response: Response,
+  label: string
+): Promise<JsonObject> {
+  let parsed: unknown
+  try {
+    parsed = await response.json()
+  } catch {
+    throw new PluginAuthError(
+      response.ok ? 502 : response.status || 502,
+      `${label} must be valid JSON.`
+    )
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new PluginAuthError(
+      response.ok ? 502 : response.status || 502,
+      `${label} must be a JSON object.`
+    )
+  }
+  return parsed as JsonObject
+}
+
 function asString(value: unknown): string {
   return typeof value === "string" ? value.trim() : ""
 }
@@ -847,7 +869,10 @@ async function exchangeAuthorizationCode(
     body,
   })
 
-  const responseBody = asObject(await response.json().catch(() => ({})))
+  const responseBody = await readProviderJsonObjectResponse(
+    response,
+    "OAuth token response"
+  )
   if (!response.ok) {
     throw new PluginAuthError(
       response.status || 400,
@@ -925,7 +950,10 @@ async function refreshOAuthConnection(
     body,
   })
 
-  const tokenResponse = asObject(await response.json().catch(() => ({})))
+  const tokenResponse = await readProviderJsonObjectResponse(
+    response,
+    "OAuth token refresh response"
+  )
   if (!response.ok) {
     throw new PluginAuthError(
       response.status || 400,
@@ -1475,7 +1503,10 @@ export async function handlePluginAuthCallback(input: {
             "Failed to fetch provider profile"
           )
         }
-        profile = asObject(await response.json().catch(() => ({})))
+        profile = await readProviderJsonObjectResponse(
+          response,
+          "OAuth profile response"
+        )
       }
 
       const externalAccountId =
