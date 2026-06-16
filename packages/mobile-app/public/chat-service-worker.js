@@ -376,6 +376,36 @@
     PLATFORM_ACCESS_SOURCE.CONFIG,
     PLATFORM_ACCESS_SOURCE.MANUAL
   ];
+  var EVENT_TYPE = {
+    WORK_ITEM_CREATED: "work_item.created",
+    WORK_ITEM_UPDATED: "work_item.updated",
+    WORK_ITEM_TRANSITIONED: "work_item.transitioned",
+    MESSAGE_CREATED: "message.created",
+    ACTOR_CREATED: "actor.created",
+    ACTOR_UPDATED: "actor.updated",
+    MEMORY_CREATED: "memory.created",
+    ACTOR_THINKING: "actor.thinking",
+    ACTOR_ACTION: "actor.action",
+    CHAT_SYNC_EVENT: "chat.sync.event",
+    RUNTIME_UPDATED: "runtime.updated",
+    MCP_CONFIG_CHANGED: "mcp.config.changed",
+    CHAT_TYPING: "chat.typing"
+  };
+  var EVENT_TYPES = [
+    EVENT_TYPE.WORK_ITEM_CREATED,
+    EVENT_TYPE.WORK_ITEM_UPDATED,
+    EVENT_TYPE.WORK_ITEM_TRANSITIONED,
+    EVENT_TYPE.MESSAGE_CREATED,
+    EVENT_TYPE.ACTOR_CREATED,
+    EVENT_TYPE.ACTOR_UPDATED,
+    EVENT_TYPE.MEMORY_CREATED,
+    EVENT_TYPE.ACTOR_THINKING,
+    EVENT_TYPE.ACTOR_ACTION,
+    EVENT_TYPE.CHAT_SYNC_EVENT,
+    EVENT_TYPE.RUNTIME_UPDATED,
+    EVENT_TYPE.MCP_CONFIG_CHANGED,
+    EVENT_TYPE.CHAT_TYPING
+  ];
   var RELATIONSHIP_PROFILE_SUBJECT_TYPE = {
     MEMBER: "workspace_member",
     ACTOR: "actor",
