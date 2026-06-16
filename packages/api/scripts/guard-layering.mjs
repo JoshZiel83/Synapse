@@ -30,6 +30,9 @@
 //       invariant; it replaces the need to keep adding per-service SQL ratchets.
 //   r7_dual_naming               : no `row.foo_bar || row.fooBar` and no
 //       outward `...row` spread.
+//   g1_client_facade_no_public_data_envelope : web/mobile API facades may
+//       unwrap appRoute's `{ data }` envelope internally, but their public
+//       return signatures/types must not expose `{ data: ... }` wrappers.
 //   r8_db_client_outside_repo    : only repo*.ts may import the DB client
 //       (`db` / withDbTransaction from infrastructure/database/kysely) or the
 //       `sql` builder from "kysely". Non-repo module files must go through the
@@ -602,6 +605,8 @@ const isTimeSerializationLayer = (p) => !isPresenter(p) && !isRepo(p)
 
 const SQL_CONSTRUCTION_PATTERN =
   /from\s+["']kysely["']|\b(?:selectFrom|insertInto|updateTable|deleteFrom)\s*\(|\bsql`|\bCompiledQuery\b|\brunBuilder\s*\(|\brunOn(?:Db)?\s*(?:<|\()/
+const CLIENT_FACADE_PUBLIC_DATA_ENVELOPE_PATTERN =
+  /\bPromise\s*<\s*\{\s*data\s*:|\breturn\s*\{\s*data\s*:|\binterface\s+\w+\s*\{[^}]*\bdata\s*:|\btype\s+\w+\s*=\s*\{[^}]*\bdata\s*:/
 
 // §7 Tier C mixed modules (app + wire in one module). Their route
 // registrations must go through the §5.3 appRoute()/wireRoute() markers (or a
@@ -822,6 +827,8 @@ const isWebAutomationListFacadeContractFile = (p) => p === WEB_API_CLIENT
 const isWebAuditFacadeContractFile = (p) => p === WEB_API_CLIENT
 const isClientFileUploadFacadeContractFile = (p) =>
   p === WEB_API_CLIENT || p === MOBILE_API_CLIENT
+const isClientFacadeSurfaceFile = (p) =>
+  p === WEB_API_CLIENT || p === MOBILE_API_CLIENT || p === MOBILE_API_TYPES
 const isMcpPluginResponseContainerContractFile = (p) =>
   p === WEB_API_CLIENT || isMcpPluginsControllerFile(p)
 const isOrganizationResponseContainerContractFile = (p) =>
@@ -936,6 +943,16 @@ const RULES = [
       /\brow\.[a-z]+_[a-z_]+\s*\|\|\s*row\.[a-z]+[A-Z]/.test(src) ||
       /\breturn\s*\{\s*\.\.\.row\b/.test(src) ||
       /\bsend\(\s*\{\s*\.\.\.row\b/.test(src),
+  },
+  {
+    // g1: client facades unwrap the appRoute envelope internally; consumers
+    // should see shared app values, not a public `{ data: ... }` compatibility
+    // wrapper. This intentionally allows internal fetch/request generics like
+    // `fetch<{ data: View }>()`, because those model the server envelope before
+    // unwrapping.
+    id: "g1_client_facade_no_public_data_envelope",
+    appliesTo: isClientFacadeSurfaceFile,
+    test: (src) => CLIENT_FACADE_PUBLIC_DATA_ENVELOPE_PATTERN.test(src),
   },
   {
     // r8: only repo*.ts may import the DB CLIENT (`db` / withDbTransaction from

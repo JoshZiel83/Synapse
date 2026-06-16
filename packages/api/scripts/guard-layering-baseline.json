@@ -6,6 +6,7 @@
   "r5_bare_route_in_mixed": [],
   "r6_sql_construction_outside_repo": [],
   "r7_dual_naming": [],
+  "g1_client_facade_no_public_data_envelope": [],
   "r8_db_client_outside_repo": [],
   "r9_sql_construction_in_clean_service": [],
   "r10_clean_service_view_boundary_residuals": [],
