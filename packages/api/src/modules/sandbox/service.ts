@@ -68,6 +68,30 @@ import {
   type SidecarRestoreFailure,
   type SidecarRestoreFailureReason,
 } from "./model.js"
+import {
+  isSidecarPayloadIrrecoverable,
+  parseSidecarRoute,
+} from "./pending-conflicts.js"
+import type {
+  ConflictSidecarRef,
+  PendingCommitConflict,
+  PendingRefreshConflicts,
+} from "./pending-conflicts.js"
+
+export {
+  isSidecarPayloadIrrecoverable,
+  mergePendingConflicts,
+  mergePendingRefreshConflicts,
+  normalizePendingConflicts,
+  normalizePendingRefresh,
+  parseSidecarRoute,
+  SIDECAR_ROUTE_RE,
+} from "./pending-conflicts.js"
+export type {
+  ConflictSidecarRef,
+  PendingCommitConflict,
+  PendingRefreshConflicts,
+} from "./pending-conflicts.js"
 
 export class SandboxServiceError extends Error {
   constructor(
@@ -1186,125 +1210,6 @@ export interface CommitResult {
   sidecarsBySubpath: Record<string, ConflictSidecarRef[]>
 }
 
-/** A conflicting file whose pre-conflict local copy was preserved at a sidecar. */
-export interface ConflictSidecarRef {
-  original: string
-  sidecar: string
-  /** "file" = readable bytes; "symlink" = readable JSON metadata (round-10 #3). */
-  kind: string
-  /**
-   * CAS-durable recovery payload (round-11 #1) so the sidecar survives teardown
-   * (which deletes the live dir; .synapse-conflicts is scan-excluded so never in
-   * CAS via the snapshot path). For a FILE sidecar this is the content sha256
-   * (the bytes are already in CAS from the scan). For a SYMLINK sidecar the
-   * `target` string is the payload (no CAS bytes). On the next provision the
-   * sidecar is re-materialized into the fresh live dir from these.
-   */
-  contentSha?: string
-  /** Symlink target (round-11 #1), present only for kind="symlink". */
-  target?: string
-}
-
-/**
- * The mount-relative directory every conflict sidecar lives under. Must match
- * CONFLICTS_DIRNAME in sidecars/fs-helper/src/manifest.rs.
- */
-const CONFLICTS_DIRNAME = ".synapse-conflicts"
-
-/**
- * The ONLY shape a legitimate sidecar VFS path can take:
- *   /<mount-subpath>/.synapse-conflicts/<flat-leaf>
- * where <mount-subpath> and <flat-leaf> are each a single path segment with no
- * slashes and are not "." or "..". The leaf is a flat hashed name produced by
- * `sidecar_path_for` in the fs-helper (`/.synapse-conflicts/<hex>`), so there is
- * never a nested path or a "normal" tree path here.
- *
- * This is deliberately STRICT (P1): a loose `/<subpath>/<rest>` match would let a
- * corrupt record like `/actor/x.txt` route to a live regular-file path, and
- * restore would then silently OVERWRITE the current head content with the agent's
- * preserved bytes. Restricting to the .synapse-conflicts namespace with a single
- * safe leaf means a restore can only ever (re)create the helper-owned scratch
- * sidecar, never clobber a real tree file. Capture groups: [1]=mount subpath,
- * [2]=flat leaf.
- */
-export const SIDECAR_ROUTE_RE = /^\/([^/]+)\/\.synapse-conflicts\/([^/]+)$/
-
-/** Whether a single path segment is safe (non-empty, not "." or ".."). */
-function isSafeSegment(seg: string): boolean {
-  return seg.length > 0 && seg !== "." && seg !== ".."
-}
-
-/**
- * Parse a sidecar VFS path into its mount subpath + mount-relative leaf, or null
- * if it is not a well-formed `/<mount>/.synapse-conflicts/<flat-leaf>` path with
- * safe segments. The leaf returned is the mount-relative path the fs-helper
- * restores against (e.g. `/.synapse-conflicts/<hex>`).
- */
-export function parseSidecarRoute(
-  sidecar: string
-): { subpath: string; leaf: string } | null {
-  const m = SIDECAR_ROUTE_RE.exec(sidecar)
-  if (!m) return null
-  const [, subpath, leafName] = m
-  if (!isSafeSegment(subpath) || !isSafeSegment(leafName)) return null
-  return { subpath, leaf: `/${CONFLICTS_DIRNAME}/${leafName}` }
-}
-
-/**
- * Whether a sidecar ref is INTRINSICALLY unrecoverable from its own shape — i.e.
- * the durable record can never be rebuilt, regardless of mount state or transient
- * fs conditions. Mount-independent reasons:
- *   - a "file" sidecar with no contentSha (pre-round-11 / corrupt: the CAS
- *     pointer is gone),
- *   - a "symlink" sidecar with no target,
- *   - any OTHER kind (a corrupt record: only "file"/"symlink" are restorable;
- *     fs-helper's restore rejects an unknown kind with InvalidParams), or
- *   - a sidecar PATH that is not a well-formed
- *     `/<mount>/.synapse-conflicts/<flat-leaf>` (per `parseSidecarRoute`): it
- *     either can't route to a mount OR (the dangerous case, P1) points OUTSIDE
- *     the .synapse-conflicts scratch namespace at a real tree file, which restore
- *     must never touch — so it's permanently lost, never retried.
- * Such a ref is PERMANENT in BOTH the normal restore loop and the fail-closed
- * "unknown" partition path, so the agent is never told a corrupt copy "will be
- * retried". Shared by restorePendingSidecarsImpl and partitionSidecars so the two
- * never disagree.
- */
-export function isSidecarPayloadIrrecoverable(
-  ref: ConflictSidecarRef
-): boolean {
-  // Path must be a safe, in-namespace sidecar leaf — else permanently lost (and
-  // never written to a real tree path).
-  if (parseSidecarRoute(ref.sidecar) === null) return true
-  if (ref.kind === "file") return !ref.contentSha
-  if (ref.kind === "symlink") return ref.target === undefined
-  // Unknown/corrupt kind — unrestorable by fs-helper, so permanently lost.
-  return true
-}
-
-/** Per-subpath pending commit conflicts: the lost paths + their sidecars. */
-export interface PendingCommitConflict {
-  paths: string[]
-  sidecars: ConflictSidecarRef[]
-}
-
-/**
- * Durable refresh-conflict state for at-least-once delivery (round-10 #1).
- * refreshSpaces head-wins-resolves conflicts (live path → head, agent's copy →
- * sidecar) and advances base at TURN START — but if the turn is interrupted
- * after that and before the actor consumes the notice, next turn head==base so
- * refresh won't re-report it, and the sidecar becomes an unknown recovery file.
- * So refresh conflicts are persisted on the session (like commit conflicts) and
- * cleared only after actorThink returns.
- */
-export interface PendingRefreshConflicts {
-  /** subpath → deferred conflict paths (head won the live path). */
-  deferredConflictsBySubpath: Record<string, string[]>
-  /** subpath → sidecars preserving the agent's pre-conflict copies. */
-  sidecarsBySubpath: Record<string, ConflictSidecarRef[]>
-  /** subpath → reason the refresh could not fully sync (stale/half-synced view). */
-  syncFailuresBySubpath: Record<string, string>
-}
-
 /**
  * Test seam for the commit path (round-8 follow-up: lets the loss-safety-
  * critical reconcile-failure / head-race branches be driven at the function
@@ -1477,34 +1382,6 @@ export async function commitSpaces(
 }
 
 /**
- * Pure union of an existing pending-conflict map with newly-recorded conflicts:
- * per subpath, dedup paths (Set) and dedup sidecars by SIDECAR path (not by
- * original): a second unconsumed conflict on the same original now lands on a
- * DISTINCT sidecar leaf (round-10 #2 content discriminator), and BOTH preserved
- * copies must persist until consumed — so we key on the unique sidecar path, not
- * the original (which would drop the earlier copy). Extracted for unit coverage;
- * the DB read + FOR UPDATE wrapper lives in recordPendingCommitConflicts.
- */
-export function mergePendingConflicts(
-  prev: Record<string, PendingCommitConflict>,
-  incomingBySubpath: Record<string, PendingCommitConflict>
-): Record<string, PendingCommitConflict> {
-  const merged: Record<string, PendingCommitConflict> = { ...prev }
-  for (const [sub, incoming] of Object.entries(incomingBySubpath)) {
-    const existingEntry = merged[sub] ?? { paths: [], sidecars: [] }
-    const paths = Array.from(
-      new Set([...existingEntry.paths, ...incoming.paths])
-    )
-    const bySidecar = new Map<string, ConflictSidecarRef>()
-    for (const s of [...existingEntry.sidecars, ...incoming.sidecars]) {
-      bySidecar.set(s.sidecar, s)
-    }
-    merged[sub] = { paths, sidecars: Array.from(bySidecar.values()) }
-  }
-  return merged
-}
-
-/**
  * Stash turn-end commit conflicts on the session for the next turn to surface.
  * MERGES with any already-pending conflicts (union by subpath: deduped paths +
  * deduped sidecars) rather than replacing — otherwise a still-undelivered notice
@@ -1514,52 +1391,6 @@ export function mergePendingConflicts(
  * core (FOR UPDATE on the injected runInTx) lives in repo.ts.
  */
 const recordPendingCommitConflicts = repo.recordPendingCommitConflicts
-
-/**
- * Coerce the stored pending-conflicts blob into the current shape. Tolerates the
- * pre-round-7 format (subpath → string[]) so a notice stashed by an older build
- * still surfaces after upgrade. Exported for unit coverage.
- */
-export function normalizePendingConflicts(
-  raw: unknown
-): Record<string, PendingCommitConflict> {
-  if (!raw || typeof raw !== "object") return {}
-  const out: Record<string, PendingCommitConflict> = {}
-  for (const [sub, val] of Object.entries(raw as Record<string, unknown>)) {
-    if (Array.isArray(val)) {
-      // Legacy: a bare path array, no sidecar info.
-      out[sub] = { paths: val as string[], sidecars: [] }
-    } else if (val && typeof val === "object") {
-      const v = val as { paths?: unknown; sidecars?: unknown }
-      out[sub] = {
-        paths: Array.isArray(v.paths) ? (v.paths as string[]) : [],
-        sidecars: Array.isArray(v.sidecars)
-          ? (v.sidecars as unknown[]).map(normalizeSidecarRef)
-          : [],
-      }
-    }
-  }
-  return out
-}
-
-/** Coerce a stored sidecar ref, defaulting a missing `kind` to "file" (a
- * pre-round-10 sidecar was always a readable file). */
-function normalizeSidecarRef(raw: unknown): ConflictSidecarRef {
-  const v = (raw ?? {}) as {
-    original?: unknown
-    sidecar?: unknown
-    kind?: unknown
-    contentSha?: unknown
-    target?: unknown
-  }
-  return {
-    original: typeof v.original === "string" ? v.original : "",
-    sidecar: typeof v.sidecar === "string" ? v.sidecar : "",
-    kind: typeof v.kind === "string" ? v.kind : "file",
-    ...(typeof v.contentSha === "string" ? { contentSha: v.contentSha } : {}),
-    ...(typeof v.target === "string" ? { target: v.target } : {}),
-  }
-}
 
 /**
  * Read (WITHOUT clearing) any commit conflicts stashed by a previous turn's
@@ -1573,84 +1404,6 @@ export const peekPendingCommitConflicts = repo.peekPendingCommitConflicts
 
 /** Clear the stashed commit conflicts (after the agent has consumed them). */
 export const clearPendingCommitConflicts = repo.clearPendingCommitConflicts
-
-/**
- * Pure union of an existing pending-refresh map with newly-recorded refresh
- * conflicts: per subpath, dedup deferred paths (Set) and dedup sidecars by
- * SIDECAR path (round-10 #2 — two unconsumed conflicts on the same original have
- * distinct leaves and both must persist). syncFailures are NOT carried in the
- * durable store (they self-heal next turn). Exported for unit coverage.
- */
-export function mergePendingRefreshConflicts(
-  prev: Pick<
-    PendingRefreshConflicts,
-    "deferredConflictsBySubpath" | "sidecarsBySubpath"
-  >,
-  incoming: Pick<
-    PendingRefreshConflicts,
-    "deferredConflictsBySubpath" | "sidecarsBySubpath"
-  >
-): Pick<
-  PendingRefreshConflicts,
-  "deferredConflictsBySubpath" | "sidecarsBySubpath"
-> {
-  const deferredConflictsBySubpath: Record<string, string[]> = {
-    ...prev.deferredConflictsBySubpath,
-  }
-  for (const [sub, paths] of Object.entries(
-    incoming.deferredConflictsBySubpath
-  )) {
-    deferredConflictsBySubpath[sub] = Array.from(
-      new Set([...(deferredConflictsBySubpath[sub] ?? []), ...paths])
-    )
-  }
-  const sidecarsBySubpath: Record<string, ConflictSidecarRef[]> = {
-    ...prev.sidecarsBySubpath,
-  }
-  for (const [sub, refs] of Object.entries(incoming.sidecarsBySubpath)) {
-    const bySidecar = new Map<string, ConflictSidecarRef>()
-    for (const s of [...(sidecarsBySubpath[sub] ?? []), ...refs]) {
-      bySidecar.set(s.sidecar, s)
-    }
-    sidecarsBySubpath[sub] = Array.from(bySidecar.values())
-  }
-  return { deferredConflictsBySubpath, sidecarsBySubpath }
-}
-
-/** Coerce the stored pending-refresh blob into the current shape. */
-export function normalizePendingRefresh(
-  raw: unknown
-): Pick<
-  PendingRefreshConflicts,
-  "deferredConflictsBySubpath" | "sidecarsBySubpath"
-> {
-  const v = (raw ?? {}) as {
-    deferredConflictsBySubpath?: unknown
-    sidecarsBySubpath?: unknown
-  }
-  const deferredConflictsBySubpath: Record<string, string[]> = {}
-  if (
-    v.deferredConflictsBySubpath &&
-    typeof v.deferredConflictsBySubpath === "object"
-  ) {
-    for (const [sub, paths] of Object.entries(
-      v.deferredConflictsBySubpath as Record<string, unknown>
-    )) {
-      if (Array.isArray(paths))
-        deferredConflictsBySubpath[sub] = paths as string[]
-    }
-  }
-  const sidecarsBySubpath: Record<string, ConflictSidecarRef[]> = {}
-  if (v.sidecarsBySubpath && typeof v.sidecarsBySubpath === "object") {
-    for (const [sub, refs] of Object.entries(
-      v.sidecarsBySubpath as Record<string, unknown>
-    )) {
-      if (Array.isArray(refs))
-        sidecarsBySubpath[sub] = (refs as unknown[]).map(normalizeSidecarRef)
-    }
-  }
-  return { deferredConflictsBySubpath, sidecarsBySubpath }
-}
 
 /**
  * Executor-bound core of the refresh-conflict persist: read-merge-write the

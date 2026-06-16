@@ -18,8 +18,10 @@
 // permanently-unrestored and renders each, so the worker and its tests share one
 // source of truth.
 
-import { isSidecarPayloadIrrecoverable } from "./service.js"
-import type { ConflictSidecarRef } from "./service.js"
+import {
+  isSidecarPayloadIrrecoverable,
+  type ConflictSidecarRef,
+} from "./pending-conflicts.js"
 import type { SidecarRestoreFailureReason } from "./model.js"
 
 export interface PartitionedSidecars {

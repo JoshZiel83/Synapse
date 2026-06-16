@@ -18,7 +18,7 @@ import {
   mergePendingConflicts,
   normalizePendingRefresh,
   mergePendingRefreshConflicts,
-} from "./service.js"
+} from "./pending-conflicts.js"
 
 // Re-export the Executor type so module files (e.g. grants.ts) can accept an
 // injectable executor WITHOUT importing the forbidden kysely.js path.

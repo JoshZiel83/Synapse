@@ -10,11 +10,11 @@ import {
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { scanCommitDir, resolveFsHelperPath } from "./materialize.js"
-import {
-  restorePendingSidecarsImpl,
-  type PendingCommitConflict,
-  type PendingRefreshConflicts,
-} from "./service.js"
+import { restorePendingSidecarsImpl } from "./service.js"
+import type {
+  PendingCommitConflict,
+  PendingRefreshConflicts,
+} from "./pending-conflicts.js"
 
 /**
  * round-11 #1: conflict sidecars are files in the live dir, but teardown deletes

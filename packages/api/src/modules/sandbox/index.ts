@@ -15,17 +15,19 @@ export {
   clearPendingCommitConflicts,
   peekPendingRefreshConflicts,
   clearPendingRefreshConflicts,
-  isSidecarPayloadIrrecoverable,
-  mergePendingRefreshConflicts,
   SandboxServiceError,
   type ProvisionSandboxOptions,
   type CommitResult,
-  type PendingCommitConflict,
-  type PendingRefreshConflicts,
-  type ConflictSidecarRef,
   type TeardownSandboxOptions,
   type RecoverFailedMountsResult,
 } from "./service.js"
+export {
+  isSidecarPayloadIrrecoverable,
+  mergePendingRefreshConflicts,
+  type PendingCommitConflict,
+  type PendingRefreshConflicts,
+  type ConflictSidecarRef,
+} from "./pending-conflicts.js"
 export {
   CONFLICT_SIDECAR_PREFIX,
   type SandboxProvisionResult,

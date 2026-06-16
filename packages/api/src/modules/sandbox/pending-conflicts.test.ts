@@ -1,6 +1,9 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { normalizePendingConflicts, mergePendingConflicts } from "./service.js"
+import {
+  normalizePendingConflicts,
+  mergePendingConflicts,
+} from "./pending-conflicts.js"
 
 /**
  * normalizePendingConflicts coerces the session's stashed pending-commit-conflict
