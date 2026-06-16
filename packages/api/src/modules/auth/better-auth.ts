@@ -41,6 +41,59 @@ type FeishuUserInfo = {
   tenant_key?: string
 }
 
+type FeishuProviderJsonObjectParseResult =
+  | { ok: true; body: Record<string, unknown> }
+  | { ok: false; message: "malformed_response" }
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function optionalString(
+  record: Record<string, unknown>,
+  key: keyof FeishuUserInfo
+): string | undefined {
+  const value = record[key]
+  return typeof value === "string" ? value : undefined
+}
+
+function parseFeishuUserInfo(value: unknown): FeishuUserInfo | undefined {
+  if (!isRecord(value)) {
+    return undefined
+  }
+  return {
+    open_id: optionalString(value, "open_id"),
+    union_id: optionalString(value, "union_id"),
+    name: optionalString(value, "name"),
+    en_name: optionalString(value, "en_name"),
+    avatar_url: optionalString(value, "avatar_url"),
+    email: optionalString(value, "email"),
+    enterprise_email: optionalString(value, "enterprise_email"),
+    tenant_key: optionalString(value, "tenant_key"),
+  }
+}
+
+export function parseFeishuProviderJsonObjectText(
+  text: string
+): FeishuProviderJsonObjectParseResult {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return { ok: false, message: "malformed_response" }
+  }
+  if (!isRecord(parsed)) {
+    return { ok: false, message: "malformed_response" }
+  }
+  return { ok: true, body: parsed }
+}
+
+async function readFeishuProviderJsonObjectResponse(
+  response: Response
+): Promise<FeishuProviderJsonObjectParseResult> {
+  return parseFeishuProviderJsonObjectText(await response.text())
+}
+
 /**
  * Resolve the email to hand Better Auth for a Feishu profile.
  *
@@ -125,11 +178,18 @@ function buildFeishuProvider() {
           ...(data.codeVerifier ? { code_verifier: data.codeVerifier } : {}),
         }),
       })
-      const json = (await response.json()) as Record<string, unknown> & {
-        code?: number
-        msg?: string
-      }
-      if (!response.ok || (typeof json.code === "number" && json.code !== 0)) {
+      const parsed = await readFeishuProviderJsonObjectResponse(response)
+      const json = parsed.ok
+        ? (parsed.body as Record<string, unknown> & {
+            code?: number
+            msg?: string
+          })
+        : { code: undefined, msg: parsed.message }
+      if (
+        !parsed.ok ||
+        !response.ok ||
+        (typeof json.code === "number" && json.code !== 0)
+      ) {
         log.error(
           { status: response.status, code: json.code, msg: json.msg },
           "Feishu token exchange failed"
@@ -154,12 +214,15 @@ function buildFeishuProvider() {
           Accept: "application/json",
         },
       })
-      const body = (await response.json()) as {
-        code?: number
-        msg?: string
-        data?: FeishuUserInfo
-      }
-      const profile = body.data
+      const parsed = await readFeishuProviderJsonObjectResponse(response)
+      const body = parsed.ok
+        ? (parsed.body as {
+            code?: number
+            msg?: string
+            data?: unknown
+          })
+        : { code: undefined, msg: parsed.message, data: undefined }
+      const profile = parseFeishuUserInfo(body.data)
       if (!response.ok || body.code !== 0 || !profile?.union_id) {
         log.error(
           { status: response.status, code: body.code, msg: body.msg },
