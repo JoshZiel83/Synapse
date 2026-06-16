@@ -268,7 +268,32 @@ function gitlabProjectPath(targetId: string) {
   return encodeURIComponent(trimmed)
 }
 
-async function githubRequest<T>(
+export function parseAutomationProviderJsonObjectText(
+  text: string,
+  label: string
+): Record<string, unknown> {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch (error) {
+    throw new Error(`${label} must be valid JSON: ${(error as Error).message}`)
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${label} must be a JSON object`)
+  }
+  return parsed as Record<string, unknown>
+}
+
+async function readProviderJsonObjectResponse<
+  T extends Record<string, unknown>,
+>(response: Response, label: string): Promise<T> {
+  return parseAutomationProviderJsonObjectText(
+    await response.text(),
+    label
+  ) as T
+}
+
+async function githubRequest<T extends Record<string, unknown>>(
   installation: ResolvedIntegrationInstallation,
   path: string,
   init?: RequestInit
@@ -294,13 +319,13 @@ async function githubRequest<T>(
   }
 
   if (response.status === 204) {
-    return undefined as T
+    return undefined as unknown as T
   }
 
-  return response.json() as Promise<T>
+  return readProviderJsonObjectResponse<T>(response, "GitHub API response")
 }
 
-async function gitlabRequest<T>(
+async function gitlabRequest<T extends Record<string, unknown>>(
   installation: ResolvedIntegrationInstallation,
   path: string,
   init?: RequestInit
@@ -328,10 +353,10 @@ async function gitlabRequest<T>(
   }
 
   if (response.status === 204) {
-    return undefined as T
+    return undefined as unknown as T
   }
 
-  return response.json() as Promise<T>
+  return readProviderJsonObjectResponse<T>(response, "GitLab API response")
 }
 
 export function buildIntegrationEventSourceTemplate(input: {
