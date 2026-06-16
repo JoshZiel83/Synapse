@@ -41,6 +41,7 @@ function deps(params: {
   participantId?: string | null
   resolveResult?: ResolveTaskRequestResult
   resolveError?: Error
+  enrichError?: Error
   enrichedTask?: TaskSummary
   resolveCalls?: ResolveTaskRequestParams[]
 }): RespondToChatTaskDeps {
@@ -61,7 +62,12 @@ function deps(params: {
       }
       return params.resolveResult
     },
-    enrichTaskForUser: async () => params.enrichedTask ?? params.task!,
+    enrichTaskForUser: async () => {
+      if (params.enrichError) {
+        throw params.enrichError
+      }
+      return params.enrichedTask ?? params.task!
+    },
   }
 }
 
@@ -229,6 +235,36 @@ test("respondToChatTaskUseCase maps conflict and resolution failures", async () 
     statusCode: 400,
     body: {
       error: "bad resolution",
+      code: "task_resolution_failed",
+    },
+  })
+})
+
+test("respondToChatTaskUseCase maps response enrichment failures", async () => {
+  const task = taskSummary()
+  const result = await respondToChatTaskUseCase(
+    {
+      workspaceId: task.workspaceId,
+      conversationId: task.conversationId,
+      taskId: task.id,
+      workspaceMemberId: randomUUID(),
+      userId: randomUUID(),
+      input: userInputResolveInput(),
+    },
+    deps({
+      task,
+      resolveResult: {
+        outcome: "applied",
+        task,
+      },
+      enrichError: new Error("failed to load viewer task access"),
+    })
+  )
+
+  assert.deepEqual(result, {
+    statusCode: 400,
+    body: {
+      error: "failed to load viewer task access",
       code: "task_resolution_failed",
     },
   })
