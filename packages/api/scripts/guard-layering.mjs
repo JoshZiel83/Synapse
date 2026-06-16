@@ -33,6 +33,9 @@
 //   g1_client_facade_no_public_data_envelope : web/mobile API facades may
 //       unwrap appRoute's `{ data }` envelope internally, but their public
 //       return signatures/types must not expose `{ data: ... }` wrappers.
+//   g2_api_sql_construction_boundary : SQL/Kysely construction across
+//       packages/api/src must live in repo companions or explicit database
+//       bootstrap/seed/purge infrastructure adapters.
 //   r8_db_client_outside_repo    : only repo*.ts may import the DB client
 //       (`db` / withDbTransaction from infrastructure/database/kysely) or the
 //       `sql` builder from "kysely". Non-repo module files must go through the
@@ -413,6 +416,7 @@ import { fileURLToPath } from "node:url"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const MODULES = resolve(here, "../src/modules")
+const API_SRC = resolve(here, "../src")
 const REPO_ROOT = resolve(here, "../../..")
 const BASELINE = resolve(here, "guard-layering-baseline.json")
 const WORKSPACE_APPS_SHARED_SCHEMA = resolve(
@@ -626,6 +630,15 @@ const moduleOf = (p) => {
   return m ? m.split("/")[0] : ""
 }
 const isMixedModuleFile = (p) => MIXED_MODULES.has(moduleOf(p))
+const apiSrcKey = (p) => relative(API_SRC, p).replace(/\\/g, "/")
+const isApiSqlBoundaryFile = (p) => {
+  const key = apiSrcKey(p)
+  if (key.startsWith("infrastructure/database/")) return true
+  if (key.startsWith("modules/")) return isRepo(p)
+  if (key.startsWith("workers/")) return /(^|\/)[^/]+-repo\.ts$/.test(key)
+  if (key.startsWith("infrastructure/")) return /(^|\/)repo\.ts$/.test(key)
+  return false
+}
 
 // r8 allowlist: files that import the DB CLIENT but are the DESIGNATED db-edge /
 // injectable-default DB layer for their module — same role infrastructure/**
@@ -890,6 +903,7 @@ const isImAppResponseControllerFile = (p) => {
 }
 const isRelationshipPresenterFile = (p) =>
   r8Key(p) === "relationship/presenter.ts"
+const apiSourceFiles = walk(API_SRC)
 
 const RULES = [
   {
@@ -953,6 +967,18 @@ const RULES = [
     id: "g1_client_facade_no_public_data_envelope",
     appliesTo: isClientFacadeSurfaceFile,
     test: (src) => CLIENT_FACADE_PUBLIC_DATA_ENVELOPE_PATTERN.test(src),
+  },
+  {
+    // g2: API-wide R3 SQL ownership guard. This intentionally broadens the
+    // modules-only r6 invariant to workers/infra while preserving explicit
+    // adapter boundaries: module repo*.ts companions, worker *-repo.ts helpers,
+    // infrastructure */repo.ts helpers, and infrastructure/database bootstrap /
+    // seed / purge / Kysely adapter files. It is shape-based and does not bind
+    // individual endpoints or function names.
+    id: "g2_api_sql_construction_boundary",
+    files: apiSourceFiles,
+    appliesTo: (p) => !isApiSqlBoundaryFile(p),
+    test: (src) => SQL_CONSTRUCTION_PATTERN.test(src),
   },
   {
     // r8: only repo*.ts may import the DB CLIENT (`db` / withDbTransaction from
@@ -3290,10 +3316,11 @@ function stripComments(src) {
 
 const current = {}
 for (const r of RULES) current[r.id] = []
-for (const p of files) {
-  const src = stripComments(readFileSync(p, "utf8"))
-  const rel = relative(REPO_ROOT, p)
-  for (const r of RULES) {
+for (const r of RULES) {
+  const ruleFiles = r.files ?? files
+  for (const p of ruleFiles) {
+    const src = stripComments(readFileSync(p, "utf8"))
+    const rel = relative(REPO_ROOT, p)
     if (r.appliesTo(p) && r.test(src, p)) current[r.id].push(rel)
   }
 }
