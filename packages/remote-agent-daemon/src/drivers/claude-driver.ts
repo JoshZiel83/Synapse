@@ -22,6 +22,13 @@ import type {
 } from "./types.js"
 import { RUNTIME_KIND } from "./types.js"
 import { EventQueue as EventQueueBase, whichBinary } from "./async-channel.js"
+import {
+  buildPermissionResultForDecision,
+  extractAssistantText,
+  parseAskUserQuestionInput,
+  parsePlanApprovalInput,
+  readClaudeResultErrorMessage,
+} from "./claude-driver-events.js"
 
 function trimFirstLine(value: string) {
   return value
@@ -113,24 +120,6 @@ function userMessage(text: string): SDKUserMessage {
   } as SDKUserMessage
 }
 
-function buildPermissionResultForDecision(
-  decision: PermissionDecision,
-  toolUseID: string
-): PermissionResult {
-  if (decision.behavior === "allow") {
-    return {
-      behavior: "allow",
-      updatedInput: decision.updatedInput ?? {},
-      toolUseID,
-    }
-  }
-  return {
-    behavior: "deny",
-    message: decision.message,
-    toolUseID,
-  }
-}
-
 class ClaudeAgentSession implements AgentSession {
   readonly runtimeKind = RUNTIME_KIND.CLAUDE_CODE
 
@@ -212,18 +201,16 @@ class ClaudeAgentSession implements AgentSession {
       return
     }
     if (message.type === "assistant") {
-      const text = extractAssistantText(message as any)
+      const text = extractAssistantText(message)
       if (text) this.eventQueue.push({ kind: "assistant_message", text })
       return
     }
     if (message.type === "result") {
-      const result = message as any
-      if (result.is_error && result.stop_reason !== "max_tokens") {
+      const errorMessage = readClaudeResultErrorMessage(message)
+      if (errorMessage) {
         this.eventQueue.push({
           kind: "error",
-          message: String(
-            result.result || result.errors?.[0] || "Claude execution failed"
-          ),
+          message: errorMessage,
         })
       }
       this.eventQueue.push({ kind: "turn_completed" })
@@ -289,12 +276,7 @@ class ClaudeAgentSession implements AgentSession {
   buildCanUseTool(): CanUseTool {
     return async (toolName, input, options) => {
       if (toolName === "AskUserQuestion") {
-        const questions = Array.isArray((input as any).questions)
-          ? ((input as any).questions as Array<Record<string, unknown>>)
-          : []
-        const title =
-          (questions[0]?.question as string | undefined)?.trim() ||
-          "Question from Claude"
+        const parsed = parseAskUserQuestionInput(input)
         return new Promise<PermissionResult>((resolve) => {
           this.pendingPermissions.set(options.toolUseID, (decision) =>
             resolve(
@@ -304,18 +286,15 @@ class ClaudeAgentSession implements AgentSession {
           this.eventQueue.push({
             kind: "user_input_requested",
             requestId: options.toolUseID,
-            title,
-            questions,
+            title: parsed.title,
+            questions: parsed.questions,
             toolName,
-            originalInput: input as Record<string, unknown>,
+            originalInput: parsed.originalInput,
           })
         })
       }
       if (toolName === "ExitPlanMode") {
-        const planMarkdown =
-          typeof (input as any).plan === "string"
-            ? ((input as any).plan as string)
-            : "Claude did not include a plan body."
+        const parsed = parsePlanApprovalInput(input)
         return new Promise<PermissionResult>((resolve) => {
           this.pendingPermissions.set(options.toolUseID, (decision) =>
             resolve(
@@ -327,9 +306,9 @@ class ClaudeAgentSession implements AgentSession {
             requestId: options.toolUseID,
             title: "Plan from Claude",
             summary: "Claude wants approval before leaving plan mode.",
-            planMarkdown,
+            planMarkdown: parsed.planMarkdown,
             toolName,
-            originalInput: input as Record<string, unknown>,
+            originalInput: parsed.originalInput,
           })
         })
       }
@@ -341,23 +320,6 @@ class ClaudeAgentSession implements AgentSession {
     }
   }
 }
-
-function extractAssistantText(message: { message?: any }): string {
-  const content = message.message?.content
-  if (!Array.isArray(content)) return ""
-  const parts: string[] = []
-  for (const block of content) {
-    if (block?.type === "text" && typeof block.text === "string") {
-      parts.push(block.text)
-    }
-  }
-  return parts.join("")
-}
-
-/** Test-only re-exports so we can pin the pure helpers without spawning the SDK. */
-export const __extractAssistantTextForTest = extractAssistantText
-export const __buildPermissionResultForDecisionForTest =
-  buildPermissionResultForDecision
 
 export class ClaudeDriver implements AgentDriver {
   readonly runtimeKind = RUNTIME_KIND.CLAUDE_CODE

@@ -1,20 +1,12 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import {
-  __extractAssistantTextForTest,
-  __buildPermissionResultForDecisionForTest,
-} from "./claude-driver.js"
-
-const extractAssistantText = __extractAssistantTextForTest as (msg: {
-  message?: any
-}) => string
-const buildPermissionResultForDecision =
-  __buildPermissionResultForDecisionForTest as (
-    decision:
-      | { behavior: "allow"; updatedInput?: Record<string, unknown> }
-      | { behavior: "deny"; message: string },
-    toolUseID: string
-  ) => any
+  buildPermissionResultForDecision,
+  extractAssistantText,
+  parseAskUserQuestionInput,
+  parsePlanApprovalInput,
+  readClaudeResultErrorMessage,
+} from "./claude-driver-events.js"
 
 test("extractAssistantText concatenates only text content blocks", () => {
   assert.equal(
@@ -51,7 +43,7 @@ test("buildPermissionResultForDecision encodes an allow decision with updatedInp
 
 test("buildPermissionResultForDecision defaults updatedInput to empty when omitted", () => {
   const result = buildPermissionResultForDecision(
-    { behavior: "allow" } as any,
+    { behavior: "allow" },
     "tool-use-1"
   )
   assert.deepEqual(result.updatedInput, {})
@@ -66,5 +58,61 @@ test("buildPermissionResultForDecision propagates deny with the supplied user-vi
     behavior: "deny",
     message: "user asked to revise",
     toolUseID: "tool-use-99",
+  })
+})
+
+test("readClaudeResultErrorMessage maps failed result events", () => {
+  assert.equal(
+    readClaudeResultErrorMessage({
+      is_error: true,
+      stop_reason: "error",
+      errors: ["boom"],
+    }),
+    "boom"
+  )
+  assert.equal(
+    readClaudeResultErrorMessage({
+      is_error: true,
+      stop_reason: "max_tokens",
+      result: "truncated",
+    }),
+    null
+  )
+  assert.equal(readClaudeResultErrorMessage({ is_error: false }), null)
+})
+
+test("parseAskUserQuestionInput normalizes question payloads", () => {
+  assert.deepEqual(
+    parseAskUserQuestionInput({
+      questions: [{ id: "q1", question: "  Need input? " }, "drifted-question"],
+      extra: true,
+    }),
+    {
+      title: "Need input?",
+      questions: [{ id: "q1", question: "  Need input? " }],
+      originalInput: {
+        questions: [
+          { id: "q1", question: "  Need input? " },
+          "drifted-question",
+        ],
+        extra: true,
+      },
+    }
+  )
+  assert.deepEqual(parseAskUserQuestionInput(null), {
+    title: "Question from Claude",
+    questions: [],
+    originalInput: {},
+  })
+})
+
+test("parsePlanApprovalInput normalizes plan payloads", () => {
+  assert.deepEqual(parsePlanApprovalInput({ plan: "ship it" }), {
+    planMarkdown: "ship it",
+    originalInput: { plan: "ship it" },
+  })
+  assert.deepEqual(parsePlanApprovalInput({ plan: 123 }), {
+    planMarkdown: "Claude did not include a plan body.",
+    originalInput: { plan: 123 },
   })
 })
