@@ -191,9 +191,15 @@ export async function assignOfficialChiefActorPreference(
   return chiefActorId
 }
 
-function parseStoredActorDocs(value: unknown) {
-  const docsValue =
-    typeof value === "string" ? (JSON.parse(value) as unknown) : value
+export function parseStoredActorDocs(value: unknown) {
+  let docsValue = value
+  if (typeof value === "string") {
+    try {
+      docsValue = JSON.parse(value) as unknown
+    } catch {
+      docsValue = []
+    }
+  }
   return normalizeActorDocs(
     Array.isArray(docsValue) ? (docsValue as ActorDocInput[]) : []
   )
