@@ -3,6 +3,7 @@ import {
   type ActorRuntimeTurnActivityDetail,
   type ChatConversationItem,
   type ChatDeviceState,
+  type RemoteAgentRuntimeState,
   type ChatSyncEvent,
   type ChatSyncEventPayloadMap,
   type ChatSyncEventType,
@@ -369,7 +370,7 @@ export async function getChatConversationMessages(params: {
     )
     .map((participant) => participant.remoteAgentId)
     .filter((value): value is string => Boolean(value))
-  const runtimeByRemoteAgent: Record<string, any> = {}
+  const runtimeByRemoteAgent: Record<string, RemoteAgentRuntimeState> = {}
   if (remoteAgentIds.length > 0) {
     const { loadRemoteAgentRuntimeSnapshot } =
       await import("../remote-agents/service.js")
