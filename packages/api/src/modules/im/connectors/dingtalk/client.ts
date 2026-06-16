@@ -23,6 +23,10 @@
 import { createHash } from "crypto"
 import type { TransportAccountSummary } from "@synapse/shared/types"
 import { getDingtalkCredentialsOrThrow } from "./credentials.js"
+import {
+  readDingtalkProviderResponse,
+  type DingtalkProviderResponse,
+} from "./response-codec.js"
 
 const ACCESS_TOKEN_URL = "https://api.dingtalk.com/v1.0/oauth2/accessToken"
 const GROUP_MESSAGES_SEND_URL =
@@ -75,11 +79,10 @@ export async function getAccessToken(
       `DingTalk getAccessToken HTTP ${resp.status}: ${body.slice(0, 200)}`
     )
   }
-  const data = (await resp.json()) as {
-    accessToken?: string
-    expireIn?: number
-  }
-  if (!data.accessToken) {
+  const data = await readDingtalkProviderResponse(resp)
+  const accessToken =
+    typeof data.accessToken === "string" ? data.accessToken.trim() : ""
+  if (!accessToken) {
     throw new Error(
       `DingTalk getAccessToken returned no accessToken: ${JSON.stringify(data)}`
     )
@@ -89,10 +92,10 @@ export async function getAccessToken(
       ? data.expireIn
       : DEFAULT_TOKEN_TTL_SECONDS
   tokenCache.set(key, {
-    token: data.accessToken,
+    token: accessToken,
     refreshAfter: Date.now() + ttlSeconds * 1000 - TOKEN_REFRESH_LEAD_MS,
   })
-  return data.accessToken
+  return accessToken
 }
 
 /** Test-only: drop the cache. */
@@ -169,14 +172,7 @@ export interface SessionWebhookBody {
   }
 }
 
-export interface SessionWebhookResponse {
-  errcode?: number
-  errmsg?: string
-  success?: boolean
-  code?: string | number
-  subCode?: string
-  [key: string]: unknown
-}
+export type SessionWebhookResponse = DingtalkProviderResponse
 
 export async function sendViaSessionWebhook(
   webhook: string,
@@ -192,27 +188,13 @@ export async function sendViaSessionWebhook(
     },
     body: JSON.stringify(body),
   })
-  let parsed: SessionWebhookResponse = {}
-  try {
-    parsed = (await resp.json()) as SessionWebhookResponse
-  } catch {
-    // Some 2xx responses come back with an empty body; that's OK and
-    // is_dingtalk_business_success treats no-signal as success.
-  }
+  const parsed = await readDingtalkProviderResponse(resp)
   return { httpOk: resp.ok, status: resp.status, body: parsed }
 }
 
 // ───────────────────────── OpenAPI senders ─────────────────────────
 
-export interface OpenApiSendResponse {
-  processQueryKey?: string
-  errcode?: number
-  errmsg?: string
-  success?: boolean
-  code?: string | number
-  subCode?: string
-  [key: string]: unknown
-}
+export type OpenApiSendResponse = DingtalkProviderResponse
 
 export async function sendGroupOpenApi(input: {
   openConversationId: string
@@ -234,12 +216,7 @@ export async function sendGroupOpenApi(input: {
       ...(input.robotCode ? { robotCode: input.robotCode } : {}),
     }),
   })
-  let parsed: OpenApiSendResponse = {}
-  try {
-    parsed = (await resp.json()) as OpenApiSendResponse
-  } catch {
-    /* tolerate empty body */
-  }
+  const parsed = await readDingtalkProviderResponse(resp)
   return { httpOk: resp.ok, status: resp.status, body: parsed }
 }
 
@@ -263,11 +240,6 @@ export async function sendDirectOpenApi(input: {
       ...(input.robotCode ? { robotCode: input.robotCode } : {}),
     }),
   })
-  let parsed: OpenApiSendResponse = {}
-  try {
-    parsed = (await resp.json()) as OpenApiSendResponse
-  } catch {
-    /* tolerate empty body */
-  }
+  const parsed = await readDingtalkProviderResponse(resp)
   return { httpOk: resp.ok, status: resp.status, body: parsed }
 }

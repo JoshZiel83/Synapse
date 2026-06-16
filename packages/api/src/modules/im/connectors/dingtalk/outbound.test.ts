@@ -322,6 +322,25 @@ test("outbound: OpenAPI success without processQueryKey → synthetic 'dingtalk-
   }
 })
 
+test("outbound: OpenAPI non-object 2xx body fails instead of minting synthetic id", async () => {
+  const mock = installFetchMock({
+    webhook: { status: 200, body: { errcode: 88001 } },
+    group: { status: 200, body: [] },
+  })
+  try {
+    await assert.rejects(
+      sendDingtalkMessage({
+        account: ACCOUNT,
+        endpoint: groupEndpoint(),
+        message: SIMPLE_MSG,
+      }),
+      /groupMessages\/send failed/
+    )
+  } finally {
+    mock.restore()
+  }
+})
+
 test("outbound: OpenAPI 5xx throws (caller maps to failure)", async () => {
   const mock = installFetchMock({
     webhook: { status: 200, body: { errcode: 88001 } },

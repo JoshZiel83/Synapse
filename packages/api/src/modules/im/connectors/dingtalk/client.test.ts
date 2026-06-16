@@ -63,9 +63,13 @@ interface FetchCall {
   body: unknown
 }
 
-function makeMockFetch(
-  responder: (call: FetchCall) => { status: number; body: unknown }
-) {
+interface MockFetchResponse {
+  status: number
+  body?: unknown
+  rawText?: string
+}
+
+function makeMockFetch(responder: (call: FetchCall) => MockFetchResponse) {
   const calls: FetchCall[] = []
   const fn = async (
     input: Parameters<typeof globalThis.fetch>[0],
@@ -85,7 +89,9 @@ function makeMockFetch(
     const call: FetchCall = { url, headers, body }
     calls.push(call)
     const out = responder(call)
-    return new Response(JSON.stringify(out.body), { status: out.status })
+    return new Response(out.rawText ?? JSON.stringify(out.body), {
+      status: out.status,
+    })
   }
   return { fn, calls }
 }
@@ -110,6 +116,49 @@ test("sendViaSessionWebhook: sets x-acs-dingtalk-access-token header", async () 
   }
 })
 
+test("sendViaSessionWebhook: empty 2xx body remains no-signal success-compatible", async () => {
+  const mock = makeMockFetch(() => ({ status: 200, rawText: "" }))
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = mock.fn as unknown as typeof fetch
+  try {
+    const r = await sendViaSessionWebhook(
+      "https://example.com/wh",
+      { msgtype: "text", text: { content: "body" } },
+      "TOKEN-XYZ"
+    )
+    assert.equal(r.httpOk, true)
+    assert.deepEqual(r.body, {})
+    assert.equal(isDingtalkBusinessSuccess(r.body), true)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test("sendViaSessionWebhook: malformed or non-object provider body is business failure", async () => {
+  const originalFetch = globalThis.fetch
+  try {
+    for (const response of [
+      { status: 200, body: [] },
+      { status: 200, body: null },
+      { status: 200, body: "ok" },
+      { status: 200, rawText: "{not-json" },
+    ] satisfies MockFetchResponse[]) {
+      const mock = makeMockFetch(() => response)
+      globalThis.fetch = mock.fn as unknown as typeof fetch
+      const r = await sendViaSessionWebhook(
+        "https://example.com/wh",
+        { msgtype: "text", text: { content: "body" } },
+        "TOKEN-XYZ"
+      )
+      assert.equal(r.httpOk, true)
+      assert.equal(r.body.code, "malformed_response")
+      assert.equal(isDingtalkBusinessSuccess(r.body), false)
+    }
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 test("sendGroupOpenApi: posts to groupMessages/send with token header", async () => {
   const mock = makeMockFetch(() => ({
     status: 200,
@@ -127,6 +176,25 @@ test("sendGroupOpenApi: posts to groupMessages/send with token header", async ()
     assert.equal(r.body.processQueryKey, "pqk-1")
     assert.ok(mock.calls[0].url.includes("groupMessages/send"))
     assert.equal(mock.calls[0].headers["x-acs-dingtalk-access-token"], "TKN")
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test("sendGroupOpenApi: non-object provider body is not treated as success", async () => {
+  const mock = makeMockFetch(() => ({ status: 200, body: [] }))
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = mock.fn as unknown as typeof fetch
+  try {
+    const r = await sendGroupOpenApi({
+      openConversationId: "ocid-1",
+      msgKey: "sampleMarkdown",
+      msgParam: '{"title":"t","text":"body"}',
+      accessToken: "TKN",
+    })
+    assert.equal(r.httpOk, true)
+    assert.equal(r.body.code, "malformed_response")
+    assert.equal(isDingtalkBusinessSuccess(r.body), false)
   } finally {
     globalThis.fetch = originalFetch
   }
@@ -189,6 +257,47 @@ test("getAccessToken: cache key includes secret hash (rotation invalidates token
     // Different secret → cache miss, 2nd token issued.
     assert.equal(issued, 2)
     assert.notEqual(a, c)
+  } finally {
+    globalThis.fetch = originalFetch
+    _resetDingtalkTokenCache()
+  }
+})
+
+test("getAccessToken: malformed provider response fails closed", async () => {
+  _resetDingtalkTokenCache()
+  const mock = makeMockFetch(() => ({ status: 200, body: [] }))
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = mock.fn as unknown as typeof fetch
+  try {
+    await assert.rejects(
+      getAccessToken({
+        id: "acc-1",
+        transportKind: "dingtalk",
+        credentials: { clientId: "ding-1", clientSecret: "secret-old" },
+      } as never),
+      /returned no accessToken/
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+    _resetDingtalkTokenCache()
+  }
+})
+
+test("getAccessToken: non-number expireIn falls back without rejecting valid token", async () => {
+  _resetDingtalkTokenCache()
+  const mock = makeMockFetch(() => ({
+    status: 200,
+    body: { accessToken: "tkn-string-expiry", expireIn: "7200" },
+  }))
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = mock.fn as unknown as typeof fetch
+  try {
+    const token = await getAccessToken({
+      id: "acc-1",
+      transportKind: "dingtalk",
+      credentials: { clientId: "ding-1", clientSecret: "secret-old" },
+    } as never)
+    assert.equal(token, "tkn-string-expiry")
   } finally {
     globalThis.fetch = originalFetch
     _resetDingtalkTokenCache()
