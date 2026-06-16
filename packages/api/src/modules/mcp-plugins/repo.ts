@@ -23,7 +23,6 @@ import {
   PLUGIN_AUTH_CONNECTION_STATUS,
   PLUGIN_AUTH_SESSION_STATUS,
   maskAllowsConversationType,
-  parseJsonObject,
   redactSecrets,
   resolveEffectiveConversationTypeMask,
   resolveNarrowedConversationTypeMask,
@@ -228,14 +227,43 @@ function internalReuseScope(scope: ReuseScope): PluginReuseScopeV2 {
 export function normalizeInstallationConfigData(
   value: unknown
 ): Record<string, unknown> {
-  return parseJsonObject(value)
+  return normalizeJsonObject(value, "installation.configData")
 }
 
 export function normalizeNullablePluginConnectionPublicPayload(
   value: unknown
 ): Record<string, unknown> | null {
   if (value === null || typeof value === "undefined") return null
-  return parseJsonObject(value)
+  return normalizeJsonObject(value, "pluginConnection.publicPayload")
+}
+
+function normalizeJsonObject(
+  value: unknown,
+  label = "JSON object field"
+): Record<string, unknown> {
+  if (value === null || typeof value === "undefined") return {}
+
+  let candidate: unknown = value
+  if (typeof value === "string") {
+    if (!value.trim()) {
+      throw new Error(`${label} must be valid JSON`)
+    }
+    try {
+      candidate = JSON.parse(value) as unknown
+    } catch {
+      throw new Error(`${label} must be valid JSON`)
+    }
+  }
+
+  if (
+    typeof candidate !== "object" ||
+    candidate === null ||
+    Array.isArray(candidate)
+  ) {
+    throw new Error(`${label} must be a JSON object`)
+  }
+
+  return candidate as Record<string, unknown>
 }
 
 export function normalizeJsonArray<T = unknown>(
@@ -286,12 +314,18 @@ export function normalizePluginCatalogRow(
   } = row
   return {
     ...rest,
-    itemMetadata: parseJsonObject(itemMetadata),
-    versionMetadata: parseJsonObject(versionMetadata),
+    itemMetadata: normalizeJsonObject(itemMetadata, "item.metadata"),
+    versionMetadata: normalizeJsonObject(versionMetadata, "version.metadata"),
     specToolManifest: normalizeJsonArray(specToolManifest, "spec.toolManifest"),
-    specConfigSchema: parseJsonObject(specConfigSchema),
-    specDefaultConfig: parseJsonObject(specDefaultConfig),
-    specInstallFlow: parseJsonObject(specInstallFlow),
+    specConfigSchema: normalizeJsonObject(
+      specConfigSchema,
+      "spec.configSchema"
+    ),
+    specDefaultConfig: normalizeJsonObject(
+      specDefaultConfig,
+      "spec.defaultConfig"
+    ),
+    specInstallFlow: normalizeJsonObject(specInstallFlow, "spec.installFlow"),
     specAuthBindings: normalizeJsonArray<PluginAuthBindingDefinition>(
       specAuthBindings,
       "spec.authBindings"
@@ -300,7 +334,7 @@ export function normalizePluginCatalogRow(
       specSupportedReuseScopes,
       "spec.supportedReuseScopes"
     ),
-    specMetadata: parseJsonObject(specMetadata),
+    specMetadata: normalizeJsonObject(specMetadata, "spec.metadata"),
     categoriesJson: normalizeJsonArray<JsonObject>(
       categoriesJson,
       "catalog.categories"
@@ -1138,7 +1172,7 @@ export function normalizePluginCategoryRecord(
     displayName: row.displayName,
     description: row.description,
     sortOrder: row.sortOrder,
-    metadata: parseJsonObject(row.metadata),
+    metadata: normalizeJsonObject(row.metadata, "category.metadata"),
   }
 }
 
@@ -1385,8 +1419,8 @@ export function normalizeInstallationConfigRow(
   return {
     catalogItemId: row.catalogItemId,
     configData: normalizeInstallationConfigData(row.configData),
-    defaultConfig: parseJsonObject(row.defaultConfig),
-    configSchema: parseJsonObject(row.configSchema),
+    defaultConfig: normalizeJsonObject(row.defaultConfig, "spec.defaultConfig"),
+    configSchema: normalizeJsonObject(row.configSchema, "spec.configSchema"),
   }
 }
 
@@ -1852,7 +1886,10 @@ export function normalizePluginAuthSpecRow(
   return {
     catalogItemId: row.catalogItemId,
     catalogVersionId: row.catalogVersionId,
-    defaultConfig: parseJsonObject(row.defaultConfig),
+    defaultConfig: normalizeJsonObject(
+      row.defaultConfig,
+      "authSpec.defaultConfig"
+    ),
     authBindings: normalizeJsonArray<PluginAuthBindingDefinition>(
       row.authBindings,
       "authSpec.authBindings"
@@ -1875,13 +1912,25 @@ export function normalizePluginAuthSessionRow(
     status: row.status,
     phase: row.phase,
     state: row.state,
-    challengePayload: parseJsonObject(row.challengePayload),
-    transientPayload: parseJsonObject(row.transientPayload),
+    challengePayload: normalizeJsonObject(
+      row.challengePayload,
+      "authSession.challengePayload"
+    ),
+    transientPayload: normalizeJsonObject(
+      row.transientPayload,
+      "authSession.transientPayload"
+    ),
     errorCode: row.errorCode,
     errorMessage: row.errorMessage,
-    resultPreview: parseJsonObject(row.resultPreview),
-    resultPayload: parseJsonObject(row.resultPayload),
-    metadata: parseJsonObject(row.metadata),
+    resultPreview: normalizeJsonObject(
+      row.resultPreview,
+      "authSession.resultPreview"
+    ),
+    resultPayload: normalizeJsonObject(
+      row.resultPayload,
+      "authSession.resultPayload"
+    ),
+    metadata: normalizeJsonObject(row.metadata, "authSession.metadata"),
     expiresAt: row.expiresAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -1907,8 +1956,14 @@ export function normalizePluginConnectionRow(
     avatarUrl: row.avatarUrl,
     status: row.status,
     expiresAt: row.expiresAt,
-    publicPayload: parseJsonObject(row.publicPayload),
-    secretPayload: parseJsonObject(row.secretPayload),
+    publicPayload: normalizeJsonObject(
+      row.publicPayload,
+      "pluginConnection.publicPayload"
+    ),
+    secretPayload: normalizeJsonObject(
+      row.secretPayload,
+      "pluginConnection.secretPayload"
+    ),
     deletedAt: row.deletedAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -2032,7 +2087,7 @@ export function normalizePluginInstallationAuthConfigRow(
     catalogItemId: row.catalogItemId,
     catalogVersionId: row.catalogVersionId,
     configData: normalizeInstallationConfigData(row.configData),
-    defaultConfig: parseJsonObject(row.defaultConfig),
+    defaultConfig: normalizeJsonObject(row.defaultConfig, "spec.defaultConfig"),
   }
 }
 

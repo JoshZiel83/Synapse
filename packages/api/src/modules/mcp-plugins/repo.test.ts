@@ -22,14 +22,21 @@ import {
 const createdAt = new Date("2026-06-14T00:00:00.000Z")
 const updatedAt = new Date("2026-06-14T00:01:00.000Z")
 
-test("normalizeInstallationConfigData parses object JSON only", () => {
+test("normalizeInstallationConfigData parses object JSON and rejects drift", () => {
   assert.deepEqual(normalizeInstallationConfigData({ region: "iad" }), {
     region: "iad",
   })
   assert.deepEqual(normalizeInstallationConfigData('{"region":"iad"}'), {
     region: "iad",
   })
-  assert.deepEqual(normalizeInstallationConfigData('["not","object"]'), {})
+  assert.throws(
+    () => normalizeInstallationConfigData('["not","object"]'),
+    /installation\.configData must be a JSON object/
+  )
+  assert.throws(
+    () => normalizeInstallationConfigData("{bad json"),
+    /installation\.configData must be valid JSON/
+  )
 })
 
 test("normalizeInstallationRow decodes configData at repo exit", () => {
@@ -71,7 +78,14 @@ test("normalizeNullablePluginConnectionPublicPayload decodes public payload at r
   )
   assert.equal(normalizeNullablePluginConnectionPublicPayload(null), null)
   assert.equal(normalizeNullablePluginConnectionPublicPayload(undefined), null)
-  assert.deepEqual(normalizeNullablePluginConnectionPublicPayload("[1,2]"), {})
+  assert.throws(
+    () => normalizeNullablePluginConnectionPublicPayload("[1,2]"),
+    /pluginConnection\.publicPayload must be a JSON object/
+  )
+  assert.throws(
+    () => normalizeNullablePluginConnectionPublicPayload("{bad json"),
+    /pluginConnection\.publicPayload must be valid JSON/
+  )
 })
 
 test("normalizeInstallationConfigRow decodes config resolver JSON fields", () => {
@@ -333,6 +347,44 @@ test("normalizePluginCatalogRow rejects malformed array payloads at repo exit", 
         runtimePermissionsJson: [],
       } as PluginCatalogDbRow),
     /spec\.toolManifest must be a JSON array/
+  )
+})
+
+test("normalizePluginCatalogRow rejects malformed object payloads at repo exit", () => {
+  assert.throws(
+    () =>
+      normalizePluginCatalogRow({
+        itemMetadata: {},
+        versionMetadata: {},
+        specToolManifest: [],
+        specConfigSchema: '["not","object"]',
+        specDefaultConfig: {},
+        specInstallFlow: {},
+        specAuthBindings: [],
+        specSupportedReuseScopes: [],
+        specMetadata: {},
+        categoriesJson: [],
+        runtimePermissionsJson: [],
+      } as PluginCatalogDbRow),
+    /spec\.configSchema must be a JSON object/
+  )
+
+  assert.throws(
+    () =>
+      normalizePluginCatalogRow({
+        itemMetadata: "{bad json",
+        versionMetadata: {},
+        specToolManifest: [],
+        specConfigSchema: {},
+        specDefaultConfig: {},
+        specInstallFlow: {},
+        specAuthBindings: [],
+        specSupportedReuseScopes: [],
+        specMetadata: {},
+        categoriesJson: [],
+        runtimePermissionsJson: [],
+      } as PluginCatalogDbRow),
+    /item\.metadata must be valid JSON/
   )
 })
 
