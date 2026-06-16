@@ -25,6 +25,10 @@ import type {
   SessionInterruptType,
   SessionWakeupStatus,
 } from "@synapse/shared"
+import type {
+  SessionCollaborationMode,
+  SessionCollaborationState,
+} from "@synapse/shared/types"
 import { upsertAccessSubjectOn } from "../access/subject-registry.js"
 import type {
   ConversationItemPartRow,
@@ -45,6 +49,45 @@ import type {
 } from "./repo.types.js"
 import type { EnqueueSessionWakeupParams } from "./runtime.js"
 import { parseSessionCollaborationState } from "./collaboration-state.js"
+
+export type SessionCollaborationPatch = {
+  collaborationMode?: SessionCollaborationMode
+  collaborationState?: SessionCollaborationState
+  activePlanApprovalTaskId?: UUID | null
+}
+
+function sessionCollaborationStateToJson(
+  state: SessionCollaborationState
+): Record<string, unknown> {
+  const value: Record<string, unknown> = {}
+  if (state.planDraft) {
+    value.planDraft = {
+      summary: state.planDraft.summary,
+      checklist: state.planDraft.checklist.map((step) => ({ ...step })),
+      explanation: state.planDraft.explanation,
+      enteredAt: state.planDraft.enteredAt,
+    }
+  }
+  return value
+}
+
+export function sessionCollaborationPatchToDbValues(
+  patch: SessionCollaborationPatch
+): Record<string, unknown> {
+  const values: Record<string, unknown> = {}
+  if (patch.collaborationMode !== undefined) {
+    values.collaborationMode = patch.collaborationMode
+  }
+  if (patch.collaborationState !== undefined) {
+    values.collaborationState = sessionCollaborationStateToJson(
+      patch.collaborationState
+    )
+  }
+  if (patch.activePlanApprovalTaskId !== undefined) {
+    values.activePlanApprovalTaskId = patch.activePlanApprovalTaskId
+  }
+  return values
+}
 
 function parseCollaborationStateJson(value: unknown): Record<string, unknown> {
   if (!value) return {}
@@ -267,12 +310,15 @@ export async function updateSessionStatus(
 
 export async function setSessionCollaborationValues(
   sessionId: UUID,
-  values: Record<string, unknown>,
+  values: SessionCollaborationPatch,
   queryable: Executor = db
 ): Promise<void> {
   await runBuilder(
     queryable,
-    db.updateTable("sessions").set(values).where("id", "=", sessionId)
+    db
+      .updateTable("sessions")
+      .set(sessionCollaborationPatchToDbValues(values))
+      .where("id", "=", sessionId)
   )
 }
 

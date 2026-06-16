@@ -171,7 +171,7 @@ export async function updateSessionCollaboration(
   },
   queryable?: Executor
 ): Promise<void> {
-  const values: Record<string, unknown> = {}
+  const values: repo.SessionCollaborationPatch = {}
 
   if (params.collaborationMode) {
     values.collaborationMode = params.collaborationMode
@@ -179,7 +179,7 @@ export async function updateSessionCollaboration(
   if (params.collaborationState) {
     values.collaborationState = parseSessionCollaborationState(
       params.collaborationState
-    ) as Record<string, unknown>
+    )
   }
   if ("activePlanApprovalTaskId" in params) {
     values.activePlanApprovalTaskId = params.activePlanApprovalTaskId ?? null

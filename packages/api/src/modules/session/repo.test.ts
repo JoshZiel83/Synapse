@@ -8,6 +8,7 @@ import {
   normalizeSessionMessageItemRow,
   normalizeSessionRow,
   normalizeSessionWakeupRow,
+  sessionCollaborationPatchToDbValues,
 } from "./repo.js"
 import type {
   SessionDbRow,
@@ -66,6 +67,35 @@ test("normalizeSessionRow decodes collaboration state at repo exit", () => {
       enteredAt: undefined,
     },
   })
+})
+
+test("session collaboration patch serializes typed state at repo write boundary", () => {
+  assert.deepEqual(
+    sessionCollaborationPatchToDbValues({
+      collaborationMode: "plan_drafting",
+      collaborationState: {
+        planDraft: {
+          summary: "Plan",
+          checklist: [{ step: "Review", status: "pending" }],
+          explanation: "Need review",
+          enteredAt: "2026-06-17T00:00:00.000Z",
+        },
+      },
+      activePlanApprovalTaskId: null,
+    }),
+    {
+      collaborationMode: "plan_drafting",
+      collaborationState: {
+        planDraft: {
+          summary: "Plan",
+          checklist: [{ step: "Review", status: "pending" }],
+          explanation: "Need review",
+          enteredAt: "2026-06-17T00:00:00.000Z",
+        },
+      },
+      activePlanApprovalTaskId: null,
+    }
+  )
 })
 
 test("normalizeSessionMessageItemRow decodes item metadata at repo exit", () => {
