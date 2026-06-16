@@ -35,6 +35,10 @@ import type {
   McpHost,
 } from "./types.js"
 import { hashArguments } from "./envelope.js"
+import {
+  parseMcpHostRequestBody,
+  type McpHostJsonRpcRequest,
+} from "./mcp-host-codec.js"
 
 type ExtractEnvelopeResult =
   | { kind: "missing" }
@@ -383,31 +387,12 @@ export function createInMemoryMcpHost(
     return { kind: "ok", envelope: parsed.data }
   }
 
-  async function handleJsonRpc(body: unknown): Promise<{
+  async function handleJsonRpc(request: McpHostJsonRpcRequest): Promise<{
     id: string | number | null
     result?: unknown
     error?: { code: number; message: string }
   }> {
-    if (!body || typeof body !== "object" || Array.isArray(body)) {
-      return {
-        id: null,
-        error: { code: -32600, message: "invalid request" },
-      }
-    }
-    const request = body as {
-      id?: unknown
-      method?: unknown
-      params?: unknown
-    }
-    const id =
-      typeof request.id === "string" ||
-      typeof request.id === "number" ||
-      request.id === null
-        ? request.id
-        : null
-    if (typeof request.method !== "string") {
-      return { id, error: { code: -32600, message: "method required" } }
-    }
+    const { id } = request
     switch (request.method) {
       case "initialize": {
         return {
@@ -466,22 +451,25 @@ export function createInMemoryMcpHost(
       req.on("data", (c: Buffer) => chunks.push(c))
       req.on("end", () => {
         ;(async () => {
-          let body: unknown
-          try {
-            body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")
-          } catch {
-            res.statusCode = 400
+          const parsed = parseMcpHostRequestBody(
+            Buffer.concat(chunks).toString("utf8")
+          )
+          if (!parsed.ok) {
+            res.statusCode = parsed.error.httpStatus
             res.setHeader("content-type", "application/json")
             res.end(
               JSON.stringify({
                 jsonrpc: "2.0",
-                id: null,
-                error: { code: -32700, message: "parse error" },
+                id: parsed.error.id,
+                error: {
+                  code: parsed.error.code,
+                  message: parsed.error.message,
+                },
               })
             )
             return
           }
-          const envelope = await handleJsonRpc(body)
+          const envelope = await handleJsonRpc(parsed.request)
           res.statusCode = 200
           res.setHeader("content-type", "application/json")
           res.end(JSON.stringify({ jsonrpc: "2.0", ...envelope }))
