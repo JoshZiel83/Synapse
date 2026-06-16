@@ -43,17 +43,103 @@ export function normalizeUsage(
   return { input, output }
 }
 
+type ProviderSourceView = {
+  sourceType?: string
+  url?: string
+  title?: string
+}
+
+type ProviderToolCallView = {
+  toolCallId?: string
+  toolName: string
+  input: Record<string, unknown>
+  providerExecuted: boolean
+}
+
+type ProviderToolResultView = {
+  toolCallId?: string
+  providerExecuted: boolean
+  output?: unknown
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value)
+}
+
+function readString(
+  record: Record<string, unknown>,
+  key: string
+): string | undefined {
+  const value = record[key]
+  return typeof value === "string" ? value : undefined
+}
+
+function readRecord(
+  record: Record<string, unknown>,
+  key: string
+): Record<string, unknown> | undefined {
+  const value = record[key]
+  return isRecord(value) ? value : undefined
+}
+
+function readProviderSources(
+  result: GenerateTextResult<ToolSet, never>
+): ProviderSourceView[] {
+  const rawSources = (result as { sources?: unknown }).sources
+  if (!Array.isArray(rawSources)) return []
+  return rawSources.filter(isRecord).map((source) => ({
+    sourceType: readString(source, "sourceType"),
+    url: readString(source, "url"),
+    title: readString(source, "title"),
+  }))
+}
+
+function readProviderToolCalls(
+  result: GenerateTextResult<ToolSet, never>
+): ProviderToolCallView[] {
+  const rawToolCalls = (result as { toolCalls?: unknown }).toolCalls
+  if (!Array.isArray(rawToolCalls)) return []
+  return rawToolCalls.filter(isRecord).map((toolCall) => ({
+    toolCallId: readString(toolCall, "toolCallId"),
+    toolName: readString(toolCall, "toolName") ?? "",
+    input: readRecord(toolCall, "input") ?? {},
+    providerExecuted: toolCall.providerExecuted === true,
+  }))
+}
+
+function readProviderToolResults(
+  result: GenerateTextResult<ToolSet, never>
+): ProviderToolResultView[] {
+  const rawToolResults = (result as { toolResults?: unknown }).toolResults
+  if (!Array.isArray(rawToolResults)) return []
+  return rawToolResults.filter(isRecord).map((toolResult) => ({
+    toolCallId: readString(toolResult, "toolCallId"),
+    providerExecuted: toolResult.providerExecuted === true,
+    output: toolResult.output,
+  }))
+}
+
+function readServerToolOutputItems(output: unknown): Record<string, unknown>[] {
+  if (Array.isArray(output)) return output.filter(isRecord)
+  if (!isRecord(output)) return []
+  const value = output.value
+  if (Array.isArray(value)) return value.filter(isRecord)
+  const content = output.content
+  if (Array.isArray(content)) return content.filter(isRecord)
+  return []
+}
+
 /** Extract URL citations from provider metadata + the SDK sources array. */
 function extractCitations(
   result: GenerateTextResult<ToolSet, never>
 ): Record<string, { url: string; title: string }> | undefined {
   const sources: Record<string, { url: string; title: string }> = {}
   let has = false
-  for (const s of result.sources ?? []) {
-    if ((s as any).sourceType === "url" && (s as any).url) {
-      sources[`src-${(s as any).url}`] = {
-        url: (s as any).url,
-        title: (s as any).title || "",
+  for (const source of readProviderSources(result)) {
+    if (source.sourceType === "url" && source.url) {
+      sources[`src-${source.url}`] = {
+        url: source.url,
+        title: source.title || "",
       }
       has = true
     }
@@ -69,21 +155,21 @@ function extractCitations(
 function extractServerToolCalls(
   result: GenerateTextResult<ToolSet, never>
 ): ServerToolCall[] | undefined {
-  const serverCalls = (result.toolCalls ?? []).filter(
-    (tc: any) => tc.providerExecuted === true
+  const serverCalls = readProviderToolCalls(result).filter(
+    (toolCall) => toolCall.providerExecuted
   )
   if (serverCalls.length === 0) return undefined
 
-  const resultsByCallId = new Map<string, any>()
-  for (const tr of (result.toolResults ?? []) as any[]) {
-    if (tr.providerExecuted === true && tr.toolCallId) {
-      resultsByCallId.set(tr.toolCallId, tr)
+  const resultsByCallId = new Map<string, ProviderToolResultView>()
+  for (const toolResult of readProviderToolResults(result)) {
+    if (toolResult.providerExecuted && toolResult.toolCallId) {
+      resultsByCallId.set(toolResult.toolCallId, toolResult)
     }
   }
 
   const out: ServerToolCall[] = []
-  for (const tc of serverCalls as any[]) {
-    const toolName = typeof tc.toolName === "string" ? tc.toolName : ""
+  for (const toolCall of serverCalls) {
+    const toolName = toolCall.toolName
     // `type` is the coarse bucket; only web_fetch is distinct, everything else
     // (web_search and any other provider-native search tool) buckets as
     // web_search for back-compat — but the authoritative name is preserved so
@@ -94,30 +180,32 @@ function extractServerToolCalls(
         ? MODEL_SERVER_TOOL.WEB_FETCH
         : MODEL_SERVER_TOOL.WEB_SEARCH
     const call: ServerToolCall = { type, ...(toolName ? { toolName } : {}) }
-    const input = (tc.input ?? {}) as Record<string, unknown>
+    const input = toolCall.input
     const query = typeof input.query === "string" ? input.query : undefined
     const url = typeof input.url === "string" ? input.url : undefined
     if (type === MODEL_SERVER_TOOL.WEB_SEARCH && query) call.query = query
     if (type === MODEL_SERVER_TOOL.WEB_FETCH && url) call.url = url
     // Pull search results out of the provider-executed tool output when present.
-    const output = resultsByCallId.get(tc.toolCallId)?.output
-    const items = Array.isArray(output)
-      ? output
-      : Array.isArray(output?.value)
-        ? output.value
-        : Array.isArray(output?.content)
-          ? output.content
-          : []
+    const output = toolCall.toolCallId
+      ? resultsByCallId.get(toolCall.toolCallId)?.output
+      : undefined
+    const items = readServerToolOutputItems(output)
     const results = items
-      .filter((it: any) => it && (it.url || it.type === "web_search_result"))
-      .map((it: any) => ({
-        url: it.url,
-        title: it.title || "",
-        ...(it.pageAge || it.page_age
-          ? { pageAge: it.pageAge || it.page_age }
-          : {}),
-      }))
-      .filter((r: any) => r.url)
+      .filter((item) => item.url || item.type === "web_search_result")
+      .map((item) => {
+        const pageAge =
+          typeof item.pageAge === "string"
+            ? item.pageAge
+            : typeof item.page_age === "string"
+              ? item.page_age
+              : undefined
+        return {
+          url: typeof item.url === "string" ? item.url : "",
+          title: typeof item.title === "string" ? item.title : "",
+          ...(pageAge ? { pageAge } : {}),
+        }
+      })
+      .filter((resultItem) => resultItem.url)
     if (results.length > 0) call.results = results
     call.display = buildServerToolDisplay(call)
     out.push(call)
@@ -172,14 +260,17 @@ export function fromGenerateText(
   // Only model-requested (Synapse-executed) tool calls become canonical tool
   // calls. Provider-EXECUTED server tools (web_search/web_fetch) are handled by
   // the provider and surfaced via serverToolCalls — never run by Synapse's loop.
-  const toolCalls: CanonicalToolCall[] = (result.toolCalls ?? [])
-    .filter((tc: any) => tc.providerExecuted !== true)
-    .map((tc) => ({
-      callId: randomUUID(),
-      providerCallId: tc.toolCallId,
-      toolName: tc.toolName,
-      input: (tc.input ?? {}) as Record<string, unknown>,
-    }))
+  const toolCalls: CanonicalToolCall[] = readProviderToolCalls(result)
+    .filter((toolCall) => !toolCall.providerExecuted && toolCall.toolName)
+    .map((toolCall) => {
+      const call: CanonicalToolCall = {
+        callId: randomUUID(),
+        toolName: toolCall.toolName,
+        input: toolCall.input,
+      }
+      if (toolCall.toolCallId) call.providerCallId = toolCall.toolCallId
+      return call
+    })
 
   const contentBlocks: CanonicalContentBlock[] = []
   if (text) contentBlocks.push(textBlock(text))

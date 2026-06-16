@@ -135,6 +135,73 @@ test("fromGenerateText: web_fetch + unknown provider tool keep their real name",
   assert.equal(unknown!.display?.displayTitle, "code_execution")
 })
 
+test("fromGenerateText normalizes malformed provider payload arrays", () => {
+  const adapted = fromGenerateText({
+    text: "",
+    toolCalls: [
+      null,
+      { toolCallId: "missing_name", input: { ignored: true } },
+      { toolCallId: "toolu_real", toolName: "lookup", input: "bad-input" },
+      {
+        toolCallId: "srv_1",
+        toolName: "web_search",
+        input: { query: "docs" },
+        providerExecuted: true,
+      },
+    ],
+    toolResults: [
+      null,
+      {
+        toolCallId: "srv_1",
+        providerExecuted: true,
+        output: {
+          content: [
+            null,
+            { type: "web_search_result" },
+            { url: "https://docs.example.com", title: 42, pageAge: "1d" },
+          ],
+        },
+      },
+    ],
+    sources: [
+      null,
+      { sourceType: "url", url: "https://source.example.com", title: 42 },
+      { sourceType: "url", url: "https://t.example.com", title: "Title" },
+    ],
+    usage: { inputTokens: 1, outputTokens: 1 },
+    finishReason: "tool-calls",
+    files: [],
+    response: {},
+    request: {},
+  } as any)
+
+  const assistant = adapted.context[0]
+  const calls =
+    assistant.role === "assistant" ? (assistant.toolCalls ?? []) : []
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].toolName, "lookup")
+  assert.equal(calls[0].providerCallId, "toolu_real")
+  assert.deepEqual(calls[0].input, {})
+
+  assert.equal(adapted.serverToolCalls?.length, 1)
+  assert.equal(adapted.serverToolCalls?.[0].results?.length, 1)
+  assert.deepEqual(adapted.serverToolCalls?.[0].results?.[0], {
+    url: "https://docs.example.com",
+    title: "",
+    pageAge: "1d",
+  })
+  assert.deepEqual(adapted.citationSources, {
+    "src-https://source.example.com": {
+      url: "https://source.example.com",
+      title: "",
+    },
+    "src-https://t.example.com": {
+      url: "https://t.example.com",
+      title: "Title",
+    },
+  })
+})
+
 test("bigModelChatBase normalizes all three baseUrl shapes to /paas/v4", () => {
   assert.equal(
     bigModelChatBase("https://open.bigmodel.cn/api"),
