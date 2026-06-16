@@ -143,7 +143,7 @@ function shouldPoll(lastPollAt: string | undefined, intervalSeconds: number) {
 async function readJsonResponse(response: Response) {
   let parsed: unknown
   try {
-    parsed = await response.json()
+    parsed = JSON.parse(await response.text())
   } catch {
     throw new Error("Feishu auth response must be valid JSON.")
   }

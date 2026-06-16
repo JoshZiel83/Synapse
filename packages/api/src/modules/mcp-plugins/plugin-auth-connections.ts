@@ -128,7 +128,7 @@ export async function readProviderJsonObjectResponse(
 ): Promise<JsonObject> {
   let parsed: unknown
   try {
-    parsed = await response.json()
+    parsed = JSON.parse(await response.text())
   } catch {
     throw new PluginAuthError(
       response.ok ? 502 : response.status || 502,
