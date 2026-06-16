@@ -30,6 +30,7 @@ import {
   db,
   withDbTransaction,
   type DatabaseTransaction,
+  type Executor,
 } from "../../../infrastructure/database/kysely.js"
 import type {
   TransportAccountCredentialsInsert,
@@ -688,12 +689,19 @@ async function runWithTransaction<T>(
   return withDbTransaction(fn)
 }
 
+export async function runImServiceTransaction<T>(
+  fn: (tx: DatabaseTransaction) => Promise<T>
+): Promise<T> {
+  return withDbTransaction(fn)
+}
+
 /**
  * Upsert the transport_message_links projection row for a conversation
  * item. Returns the raw inserted/updated row (the direction check +
  * BullMQ enqueue side-effect stay in the service orchestration).
  */
 export async function insertTransportMessageLinkProjection(params: {
+  queryable?: Executor
   workspaceId: string
   conversationId: string
   itemId: string
@@ -706,7 +714,8 @@ export async function insertTransportMessageLinkProjection(params: {
   externalThreadId?: string | null
   metadata: Record<string, unknown>
 }) {
-  return db
+  const queryable = params.queryable ?? db
+  return queryable
     .insertInto("transportMessageLinks")
     .values({
       id: uuidv4(),

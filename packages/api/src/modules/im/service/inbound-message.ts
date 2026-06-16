@@ -9,6 +9,7 @@ import type {
   TransportAccountSummary,
   TransportKind,
 } from "@synapse/shared/types"
+import type { DatabaseTransaction } from "../../../infrastructure/database/kysely.js"
 import type { InboundEnvelope } from "../connectors/types.js"
 import { derivePlainText } from "../messaging/canonical-message.js"
 import { mergeInboundMetadata } from "../ingest-metadata.js"
@@ -31,6 +32,9 @@ type TransportMessageLinkForInbound = {
 }
 
 export type IngestInboundEnvelopeDeps = {
+  runInTransaction: <T>(
+    callback: (queryable: DatabaseTransaction) => Promise<T>
+  ) => Promise<T>
   ensureTransportConversationBinding: (params: {
     account: TransportAccountSummary
     envelope: InboundEnvelope
@@ -87,8 +91,10 @@ export type IngestInboundEnvelopeDeps = {
     authorParticipantId: string
     metadata: Record<string, unknown>
     parts: Array<{ type: "text"; text: string }>
+    queryable?: DatabaseTransaction
   }) => Promise<ConversationItemForInbound>
   queueConversationTransportProjection: (params: {
+    tx?: DatabaseTransaction
     workspaceId: string
     conversationId: string
     itemId: string
@@ -99,6 +105,7 @@ export type IngestInboundEnvelopeDeps = {
     metadata: Record<string, unknown>
   }) => Promise<TransportMessageLinkForInbound | null | undefined>
   updateTransportMessageLinkStatus: (params: {
+    tx?: DatabaseTransaction
     linkId: string
     status: "sent"
     externalMessageId: string
@@ -134,6 +141,20 @@ function readTransportString(
   }
   const value = (transport as Record<string, unknown>)[key]
   return typeof value === "string" ? value : undefined
+}
+
+const INBOUND_EXTERNAL_MESSAGE_UNIQUE_INDEX =
+  "uq_transport_message_links_inbound_external_message"
+
+function isInboundExternalMessageUniqueViolation(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "23505" &&
+    (error as { constraint?: unknown }).constraint ===
+      INBOUND_EXTERNAL_MESSAGE_UNIQUE_INDEX
+  )
 }
 
 export async function ingestInboundEnvelopeUseCase(
@@ -249,52 +270,87 @@ export async function ingestInboundEnvelopeUseCase(
     }
   )
 
-  const item = await deps.createConversationItem({
-    workspaceId: binding.workspaceId,
-    conversationId: binding.conversationId,
-    scope: CONVERSATION_ITEM_SCOPE.SHARED,
-    surface: CONVERSATION_ITEM_SURFACE.VISIBLE,
-    itemType: CONVERSATION_ITEM_TYPE.MESSAGE,
-    subtype: CONVERSATION_MESSAGE_SUBTYPE.CHAT_MESSAGE,
-    role: "user",
-    authorParticipantId: senderParticipant.id,
-    metadata: mergedMetadata,
-    parts: [
-      {
-        type: "text",
-        text: normalizedContent,
-      },
-    ],
-  })
+  let writeResult:
+    | {
+        item: ConversationItemForInbound
+        link: TransportMessageLinkForInbound | null | undefined
+      }
+    | undefined
+  try {
+    writeResult = await deps.runInTransaction(async (queryable) => {
+      const createdItem = await deps.createConversationItem({
+        workspaceId: binding.workspaceId,
+        conversationId: binding.conversationId,
+        scope: CONVERSATION_ITEM_SCOPE.SHARED,
+        surface: CONVERSATION_ITEM_SURFACE.VISIBLE,
+        itemType: CONVERSATION_ITEM_TYPE.MESSAGE,
+        subtype: CONVERSATION_MESSAGE_SUBTYPE.CHAT_MESSAGE,
+        role: "user",
+        authorParticipantId: senderParticipant.id,
+        metadata: mergedMetadata,
+        parts: [
+          {
+            type: "text",
+            text: normalizedContent,
+          },
+        ],
+        queryable,
+      })
 
-  const link = await deps.queueConversationTransportProjection({
-    workspaceId: binding.workspaceId,
-    conversationId: binding.conversationId,
-    itemId: item.id,
-    direction: "inbound",
-    externalMessageId: envelope.externalMessageId,
-    externalReplyToId: readTransportString(mergedMetadata, "externalReplyToId"),
-    externalThreadId: readTransportString(mergedMetadata, "externalThreadId"),
-    metadata: {
-      transportKind: account.transportKind,
-      senderExternalId: envelope.sender.externalId,
-      endpointExternalId: envelope.endpointExternalId,
-    },
-  })
-  if (link?.id) {
-    await deps.updateTransportMessageLinkStatus({
-      linkId: link.id,
-      status: "sent",
-      externalMessageId: envelope.externalMessageId,
+      const projectedLink = await deps.queueConversationTransportProjection({
+        tx: queryable,
+        workspaceId: binding.workspaceId,
+        conversationId: binding.conversationId,
+        itemId: createdItem.id,
+        direction: "inbound",
+        externalMessageId: envelope.externalMessageId,
+        externalReplyToId: readTransportString(
+          mergedMetadata,
+          "externalReplyToId"
+        ),
+        externalThreadId: readTransportString(
+          mergedMetadata,
+          "externalThreadId"
+        ),
+        metadata: {
+          transportKind: account.transportKind,
+          senderExternalId: envelope.sender.externalId,
+          endpointExternalId: envelope.endpointExternalId,
+        },
+      })
+      if (projectedLink?.id) {
+        await deps.updateTransportMessageLinkStatus({
+          tx: queryable,
+          linkId: projectedLink.id,
+          status: "sent",
+          externalMessageId: envelope.externalMessageId,
+        })
+      }
+      return { item: createdItem, link: projectedLink }
     })
+  } catch (error) {
+    if (isInboundExternalMessageUniqueViolation(error)) {
+      const racedLink = await deps.findTransportMessageLinkByExternalMessage({
+        transportAccountId: account.id,
+        transportEndpointId: binding.endpoint.id,
+        externalMessageId: envelope.externalMessageId,
+        direction: "inbound",
+      })
+      if (racedLink) return racedLink
+    }
+    throw error
+  }
+
+  if (!writeResult) {
+    throw new Error("Failed to create inbound conversation item")
   }
 
   await deps.enqueueActorWakeupsForConversationMessage({
     workspaceId: binding.workspaceId,
     conversationId: binding.conversationId,
-    itemId: item.id,
+    itemId: writeResult.item.id,
   })
   await deps.notifyRemoteAgentDeliveriesForConversation(binding.conversationId)
 
-  return link
+  return writeResult.link
 }

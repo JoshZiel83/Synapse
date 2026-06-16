@@ -26,6 +26,7 @@ import type {
 } from "@synapse/shared/types"
 import type { InboundEnvelope } from "../connectors/types.js"
 import { getWorkspaceOwnerId } from "./repo.js"
+import { runImServiceTransaction } from "./repo.js"
 import { enqueueActorWakeupsForConversationMessage } from "../../chat/actor-wakeup.js"
 import { createConversationRecordUseCase } from "../../chat/create-conversation.js"
 import { createConversationItem } from "../../chat/item-write.js"
@@ -142,6 +143,7 @@ async function attachDefaultWakeTarget(
 
 function inboundMessageDeps(): IngestInboundEnvelopeDeps {
   return {
+    runInTransaction: runImServiceTransaction,
     ensureTransportConversationBinding,
     findTransportMessageLinkByExternalMessage,
     ensureTransportAddress,

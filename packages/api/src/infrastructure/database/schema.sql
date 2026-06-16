@@ -2077,6 +2077,10 @@ CREATE INDEX idx_transport_message_links_status
 CREATE INDEX idx_transport_message_links_reply_to
   ON transport_message_links(transport_endpoint_id, external_reply_to_id)
   WHERE external_reply_to_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_transport_message_links_inbound_external_message
+  ON transport_message_links(transport_account_id, transport_endpoint_id, direction, external_message_id)
+  WHERE direction = 'inbound'
+    AND NULLIF(BTRIM(external_message_id), '') IS NOT NULL;
 
 -- ============ Turns ============
 CREATE TABLE turns (

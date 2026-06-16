@@ -5,6 +5,7 @@ import type {
   TransportAccountSummary,
   TransportMessageLink,
 } from "@synapse/shared/types"
+import type { DatabaseTransaction } from "../../../infrastructure/database/kysely.js"
 import { buildCanonicalMessage } from "../messaging/canonical-message.js"
 import {
   ingestInboundEnvelopeUseCase,
@@ -106,6 +107,7 @@ function depsFixture(
 ): IngestInboundEnvelopeDeps {
   const binding = bindingFixture()
   return {
+    runInTransaction: async (callback) => callback({} as DatabaseTransaction),
     ensureTransportConversationBinding: async () => binding,
     findTransportMessageLinkByExternalMessage: async () => null,
     ensureTransportAddress: async () => ({
@@ -255,6 +257,170 @@ test("ingestInboundEnvelopeUseCase writes inbound item, link projection, and pos
   assert.equal(account.metadata.pendingAutoLinkWorkspaceMemberId, undefined)
   assert.equal(account.metadata.pendingAutoLinkMode, undefined)
   assert.equal(account.metadata.pendingAutoLinkConfiguredAt, undefined)
+})
+
+test("ingestInboundEnvelopeUseCase threads one transaction through item projection and status updates", async () => {
+  const tx = {} as DatabaseTransaction
+  const callOrder: string[] = []
+
+  const result = await ingestInboundEnvelopeUseCase(
+    {
+      account: accountFixture(),
+      envelope: inboundEnvelopeFixture(),
+    },
+    depsFixture({
+      runInTransaction: async (callback) => {
+        callOrder.push("begin")
+        const value = await callback(tx)
+        callOrder.push("commit")
+        return value
+      },
+      createConversationItem: async (params) => {
+        callOrder.push("create-item")
+        assert.equal(params.queryable, tx)
+        return { id: "item-1" }
+      },
+      queueConversationTransportProjection: async (params) => {
+        callOrder.push("queue-projection")
+        assert.equal(params.tx, tx)
+        assert.equal(params.itemId, "item-1")
+        return linkFixture()
+      },
+      updateTransportMessageLinkStatus: async (params) => {
+        callOrder.push("mark-link-sent")
+        assert.equal(params.tx, tx)
+        assert.equal(params.linkId, "link-1")
+      },
+      enqueueActorWakeupsForConversationMessage: async () => {
+        callOrder.push("enqueue-wakeups")
+      },
+      notifyRemoteAgentDeliveriesForConversation: async () => {
+        callOrder.push("notify-remote-agents")
+      },
+    })
+  )
+
+  assert.equal(result?.id, "link-1")
+  assert.deepEqual(callOrder, [
+    "begin",
+    "create-item",
+    "queue-projection",
+    "mark-link-sent",
+    "commit",
+    "enqueue-wakeups",
+    "notify-remote-agents",
+  ])
+})
+
+test("ingestInboundEnvelopeUseCase returns raced inbound link after unique conflict and skips notifications", async () => {
+  const existing = linkFixture("existing-link")
+  const uniqueError = Object.assign(new Error("duplicate inbound message"), {
+    code: "23505",
+    constraint: "uq_transport_message_links_inbound_external_message",
+  })
+  const callOrder: string[] = []
+  let dedupeReads = 0
+
+  const result = await ingestInboundEnvelopeUseCase(
+    {
+      account: accountFixture(),
+      envelope: inboundEnvelopeFixture(),
+    },
+    depsFixture({
+      findTransportMessageLinkByExternalMessage: async (params) => {
+        dedupeReads += 1
+        callOrder.push(
+          dedupeReads === 1 ? "dedupe-before" : "dedupe-after-conflict"
+        )
+        assert.equal(params.transportAccountId, "account-1")
+        assert.equal(params.transportEndpointId, "endpoint-1")
+        assert.equal(params.externalMessageId, "external-message-1")
+        assert.equal(params.direction, "inbound")
+        return dedupeReads === 1 ? null : existing
+      },
+      runInTransaction: async (callback) => {
+        callOrder.push("begin")
+        return callback({} as DatabaseTransaction)
+      },
+      createConversationItem: async () => {
+        callOrder.push("create-item")
+        return { id: "raced-item" }
+      },
+      queueConversationTransportProjection: async () => {
+        callOrder.push("queue-projection")
+        throw uniqueError
+      },
+      updateTransportMessageLinkStatus: async () => {
+        callOrder.push("mark-link-sent")
+        throw new Error("should not run")
+      },
+      enqueueActorWakeupsForConversationMessage: async () => {
+        callOrder.push("enqueue-wakeups")
+        throw new Error("should not run")
+      },
+      notifyRemoteAgentDeliveriesForConversation: async () => {
+        callOrder.push("notify-remote-agents")
+        throw new Error("should not run")
+      },
+    })
+  )
+
+  assert.equal(result, existing)
+  assert.deepEqual(callOrder, [
+    "dedupe-before",
+    "begin",
+    "create-item",
+    "queue-projection",
+    "dedupe-after-conflict",
+  ])
+})
+
+test("ingestInboundEnvelopeUseCase rethrows unrelated unique conflicts", async () => {
+  const uniqueError = Object.assign(new Error("other unique conflict"), {
+    code: "23505",
+    constraint: "some_other_unique_index",
+  })
+  const callOrder: string[] = []
+
+  await assert.rejects(
+    () =>
+      ingestInboundEnvelopeUseCase(
+        {
+          account: accountFixture(),
+          envelope: inboundEnvelopeFixture(),
+        },
+        depsFixture({
+          findTransportMessageLinkByExternalMessage: async () => {
+            callOrder.push("dedupe-before")
+            return null
+          },
+          runInTransaction: async (callback) => {
+            callOrder.push("begin")
+            return callback({} as DatabaseTransaction)
+          },
+          createConversationItem: async () => {
+            callOrder.push("create-item")
+            return { id: "raced-item" }
+          },
+          queueConversationTransportProjection: async () => {
+            callOrder.push("queue-projection")
+            throw uniqueError
+          },
+          enqueueActorWakeupsForConversationMessage: async () => {
+            callOrder.push("enqueue-wakeups")
+            throw new Error("should not run")
+          },
+        })
+      ),
+    /other unique conflict/
+  )
+
+  assert.deepEqual(callOrder, [
+    "dedupe-before",
+    "begin",
+    "create-item",
+    "queue-projection",
+  ])
 })
 
 test("ingestInboundEnvelopeUseCase stops projection and notifications when item creation fails", async () => {

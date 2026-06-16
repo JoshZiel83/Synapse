@@ -81,6 +81,7 @@ export function deepMergeJsonObjects(
 }
 
 export async function queueConversationTransportProjection(params: {
+  tx?: DatabaseTransaction
   workspaceId: string
   conversationId: string
   itemId: string
@@ -106,6 +107,7 @@ export async function queueConversationTransportProjection(params: {
   }
 
   const link = await insertTransportMessageLinkProjection({
+    queryable: params.tx,
     workspaceId: params.workspaceId,
     conversationId: params.conversationId,
     itemId: params.itemId,
