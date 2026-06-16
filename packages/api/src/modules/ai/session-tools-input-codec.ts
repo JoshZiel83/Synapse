@@ -252,3 +252,58 @@ export function parseSubscribeEventToolInput(input: unknown): {
     maxTriggerCount: positiveIntegerOrUndefined(record.maxTriggerCount),
   }
 }
+
+export function parseRequestUserInputToolInput(input: unknown): {
+  targetParticipantId?: string
+  title: string
+  instructions: string
+  questions: unknown
+} {
+  const record = inputRecord(input)
+  return {
+    targetParticipantId: optionalTrimmedString(record.targetParticipantId),
+    title: optionalTrimmedString(record.title) || "",
+    instructions: optionalTrimmedString(record.instructions) || "",
+    questions: record.questions,
+  }
+}
+
+export function parseEnterPlanModeToolInput(input: unknown): {
+  summary?: string
+} {
+  const record = inputRecord(input)
+  const summary = optionalTrimmedString(record.summary)
+  return {
+    summary: summary || undefined,
+  }
+}
+
+export function parseUpdatePlanToolInput(input: unknown): {
+  plan: unknown
+  explanation?: string
+} {
+  const record = inputRecord(input)
+  const explanation = optionalTrimmedString(record.explanation)
+  return {
+    plan: record.plan,
+    explanation: explanation || undefined,
+  }
+}
+
+export function parseExitPlanModeToolInput(input: unknown): {
+  targetParticipantId?: string
+  title: string
+  summary?: string
+  planMarkdown: string
+  checklist: unknown
+} {
+  const record = inputRecord(input)
+  const summary = optionalTrimmedString(record.summary)
+  return {
+    targetParticipantId: optionalTrimmedString(record.targetParticipantId),
+    title: optionalTrimmedString(record.title) || "",
+    summary: summary || undefined,
+    planMarkdown: optionalTrimmedString(record.planMarkdown) || "",
+    checklist: record.checklist,
+  }
+}

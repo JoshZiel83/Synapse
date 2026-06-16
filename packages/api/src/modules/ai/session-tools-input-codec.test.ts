@@ -3,12 +3,16 @@ import test from "node:test"
 
 import {
   parseCancelTaskToolInput,
+  parseEnterPlanModeToolInput,
+  parseExitPlanModeToolInput,
   parseGetTaskStatusToolInput,
   parseListTasksToolInput,
+  parseRequestUserInputToolInput,
   parseScheduleSelfWakeupToolInput,
   parseSelfEventSubscriptionMatcherInput,
   parseSubscribeEventToolInput,
   parseTailTaskOutputToolInput,
+  parseUpdatePlanToolInput,
 } from "./session-tools-input-codec.js"
 import { ToolExecutionError } from "./tool-errors.js"
 
@@ -291,5 +295,99 @@ test("parseSubscribeEventToolInput rejects invalid event subscription input", ()
     (error) =>
       error instanceof ToolExecutionError &&
       error.message === "matcher must be valid JSON"
+  )
+})
+
+test("parseRequestUserInputToolInput normalizes human task input", () => {
+  const questions = [{ prompt: "Approve?", type: "select" }]
+  assert.deepEqual(
+    parseRequestUserInputToolInput({
+      targetParticipantId: " participant-1 ",
+      title: " Review plan ",
+      instructions: " choose one ",
+      questions,
+    }),
+    {
+      targetParticipantId: "participant-1",
+      title: "Review plan",
+      instructions: "choose one",
+      questions,
+    }
+  )
+  assert.deepEqual(
+    parseRequestUserInputToolInput({
+      title: "Review plan",
+      questions,
+    }),
+    {
+      targetParticipantId: undefined,
+      title: "Review plan",
+      instructions: "",
+      questions,
+    }
+  )
+  assert.deepEqual(parseRequestUserInputToolInput({ title: " ", questions }), {
+    targetParticipantId: undefined,
+    title: "",
+    instructions: "",
+    questions,
+  })
+})
+
+test("plan mode tool input parsers normalize plan fields", () => {
+  assert.deepEqual(parseEnterPlanModeToolInput({ summary: " Drafting " }), {
+    summary: "Drafting",
+  })
+  assert.deepEqual(parseEnterPlanModeToolInput({ summary: " " }), {
+    summary: undefined,
+  })
+
+  const plan = [{ step: "Check", status: "pending" }]
+  assert.deepEqual(
+    parseUpdatePlanToolInput({
+      plan,
+      explanation: " updated ",
+    }),
+    {
+      plan,
+      explanation: "updated",
+    }
+  )
+  assert.deepEqual(parseUpdatePlanToolInput({ plan }), {
+    plan,
+    explanation: undefined,
+  })
+})
+
+test("parseExitPlanModeToolInput normalizes approval request input", () => {
+  const checklist = [{ step: "Check", status: "completed" }]
+  assert.deepEqual(
+    parseExitPlanModeToolInput({
+      targetParticipantId: " participant-1 ",
+      title: " Approve plan ",
+      summary: " final ",
+      planMarkdown: " # Plan ",
+      checklist,
+    }),
+    {
+      targetParticipantId: "participant-1",
+      title: "Approve plan",
+      summary: "final",
+      planMarkdown: "# Plan",
+      checklist,
+    }
+  )
+  assert.deepEqual(
+    parseExitPlanModeToolInput({
+      title: "Approve plan",
+      planMarkdown: " ",
+    }),
+    {
+      targetParticipantId: undefined,
+      title: "Approve plan",
+      summary: undefined,
+      planMarkdown: "",
+      checklist: undefined,
+    }
   )
 })

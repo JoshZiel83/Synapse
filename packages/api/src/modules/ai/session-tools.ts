@@ -53,11 +53,15 @@ import {
 } from "./session-tool-user-task-targets.js"
 import {
   parseCancelTaskToolInput,
+  parseEnterPlanModeToolInput,
+  parseExitPlanModeToolInput,
   parseGetTaskStatusToolInput,
   parseListTasksToolInput,
+  parseRequestUserInputToolInput,
   parseScheduleSelfWakeupToolInput,
   parseSubscribeEventToolInput,
   parseTailTaskOutputToolInput,
+  parseUpdatePlanToolInput,
   taskOutputStreamValues,
   taskStatusFilterValues,
 } from "./session-tools-input-codec.js"
@@ -1501,11 +1505,9 @@ export function registerCallableToolPlugins(): void {
         )
       }
 
+      const rawInput = parseRequestUserInputToolInput(input)
       const resolution = resolveHumanTaskTarget({
-        requestedParticipantId:
-          typeof (input as any).targetParticipantId === "string"
-            ? String((input as any).targetParticipantId)
-            : undefined,
+        requestedParticipantId: rawInput.targetParticipantId,
         conversationKind: session.conversationKind,
         candidates,
       })
@@ -1513,18 +1515,12 @@ export function registerCallableToolPlugins(): void {
         throwToolError(resolution.error || "Target user not found")
       }
 
-      const title = String((input as any).title || "").trim()
-      if (!title) {
+      if (!rawInput.title) {
         throwToolError("title is required")
       }
 
-      const instructions =
-        typeof (input as any).instructions === "string"
-          ? String((input as any).instructions).trim()
-          : ""
-
       const { questions, error } = buildUserInputQuestionDefinitions(
-        (input as any).questions
+        rawInput.questions
       )
       if (error) {
         throwToolError(error)
@@ -1536,11 +1532,11 @@ export function registerCallableToolPlugins(): void {
         supportsCancel: true,
         requestPayload: {
           targetParticipantId: resolution.candidate.participantId,
-          title,
-          instructions: instructions || undefined,
+          title: rawInput.title,
+          instructions: rawInput.instructions || undefined,
           questions,
         },
-        summary: `Waiting for ${resolution.candidate.name} to complete "${title}".`,
+        summary: `Waiting for ${resolution.candidate.name} to complete "${rawInput.title}".`,
       })
 
       try {
@@ -1550,8 +1546,8 @@ export function registerCallableToolPlugins(): void {
           taskId: task.id,
           requesterParticipantId: requesterMember.id,
           targetParticipantId: resolution.candidate.participantId,
-          title,
-          instructions: instructions || undefined,
+          title: rawInput.title,
+          instructions: rawInput.instructions || undefined,
           questions,
         })
       } catch (error) {
@@ -1634,10 +1630,7 @@ export function registerCallableToolPlugins(): void {
         )
       }
 
-      const summary =
-        typeof (input as any).summary === "string"
-          ? String((input as any).summary).trim() || undefined
-          : undefined
+      const { summary } = parseEnterPlanModeToolInput(input)
 
       await updateSessionCollaboration({
         sessionId: context.sessionId,
@@ -1745,14 +1738,11 @@ export function registerCallableToolPlugins(): void {
         throwToolError("update_plan is only available while drafting a plan.")
       }
 
-      const { checklist, error } = parsePlanChecklist((input as any).plan)
+      const rawInput = parseUpdatePlanToolInput(input)
+      const { checklist, error } = parsePlanChecklist(rawInput.plan)
       if (error) {
         throwToolError(error)
       }
-      const explanation =
-        typeof (input as any).explanation === "string"
-          ? String((input as any).explanation).trim() || undefined
-          : undefined
       const existingDraft = requireSessionPlanDraftState(session)
 
       await updateSessionCollaboration({
@@ -1761,7 +1751,7 @@ export function registerCallableToolPlugins(): void {
           planDraft: buildSessionPlanDraftState({
             summary: existingDraft.summary,
             checklist,
-            explanation,
+            explanation: rawInput.explanation,
             enteredAt: existingDraft.enteredAt,
           }),
         },
@@ -1945,11 +1935,9 @@ export function registerCallableToolPlugins(): void {
         )
       }
 
+      const rawInput = parseExitPlanModeToolInput(input)
       const resolution = resolveHumanTaskTarget({
-        requestedParticipantId:
-          typeof (input as any).targetParticipantId === "string"
-            ? String((input as any).targetParticipantId)
-            : undefined,
+        requestedParticipantId: rawInput.targetParticipantId,
         conversationKind: session.conversationKind,
         candidates,
       })
@@ -1957,22 +1945,16 @@ export function registerCallableToolPlugins(): void {
         throwToolError(resolution.error || "Target user not found")
       }
 
-      const title = String((input as any).title || "").trim()
-      if (!title) {
+      if (!rawInput.title) {
         throwToolError("title is required")
       }
-      const summary =
-        typeof (input as any).summary === "string"
-          ? String((input as any).summary).trim() || undefined
-          : undefined
-      const planMarkdown = String((input as any).planMarkdown || "").trim()
-      if (!planMarkdown) {
+      if (!rawInput.planMarkdown) {
         throwToolError("planMarkdown is required")
       }
 
       let checklist: PlanChecklistStep[] | undefined
-      if (Array.isArray((input as any).checklist)) {
-        const parsed = parsePlanChecklist((input as any).checklist)
+      if (Array.isArray(rawInput.checklist)) {
+        const parsed = parsePlanChecklist(rawInput.checklist)
         if (parsed.error) {
           throwToolError(parsed.error)
         }
@@ -1988,12 +1970,12 @@ export function registerCallableToolPlugins(): void {
         supportsCancel: true,
         requestPayload: {
           targetParticipantId: resolution.candidate.participantId,
-          title,
-          summary,
-          planMarkdown,
+          title: rawInput.title,
+          summary: rawInput.summary,
+          planMarkdown: rawInput.planMarkdown,
           checklist,
         },
-        summary: `Waiting for ${resolution.candidate.name} to review "${title}".`,
+        summary: `Waiting for ${resolution.candidate.name} to review "${rawInput.title}".`,
       })
 
       try {
@@ -2004,9 +1986,9 @@ export function registerCallableToolPlugins(): void {
           taskId: task.id,
           requesterParticipantId: requesterMember.id,
           targetParticipantId: resolution.candidate.participantId,
-          title,
-          summary,
-          planMarkdown,
+          title: rawInput.title,
+          summary: rawInput.summary,
+          planMarkdown: rawInput.planMarkdown,
           checklist,
           collaborationState: {
             planDraft: buildSessionPlanDraftState({
