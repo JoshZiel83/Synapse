@@ -1,11 +1,11 @@
 import type { FastifyInstance, FastifyReply } from "fastify"
 import {
-  FileUploadOriginInputSchema,
   FileParseEnqueueResultSchema,
   FileParseRunViewSchema,
   FileRecordViewSchema,
   StoredFileRecordViewSchema,
 } from "@synapse/shared/schemas"
+import type { FileUploadOriginInput } from "@synapse/shared/schemas"
 import { appRoute, wireRoute } from "../../infrastructure/http/route.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
@@ -24,6 +24,7 @@ import {
   enqueueFileParse,
   getLatestAvailableFileParse,
 } from "./parse-service.js"
+import { parseFileUploadOriginField } from "./upload-origin-codec.js"
 
 async function sendStoredFile(
   reply: FastifyReply,
@@ -66,7 +67,7 @@ export async function filesUploadController(app: FastifyInstance) {
       const userId = (request as any).user!.userId
 
       let filePart: Awaited<ReturnType<typeof request.file>> | null = null
-      let originInput: unknown = null
+      let originInput: FileUploadOriginInput | null = null
       try {
         for await (const part of request.parts()) {
           if (part.type === "file") {
@@ -79,12 +80,12 @@ export async function filesUploadController(app: FastifyInstance) {
           }
 
           if (part.fieldname === "origin" && typeof part.value === "string") {
-            try {
-              originInput = JSON.parse(part.value)
-            } catch {
-              reply.status(400).send({ error: "origin must be valid JSON" })
+            const parsedOrigin = parseFileUploadOriginField(part.value)
+            if (!parsedOrigin.ok) {
+              reply.status(400).send({ error: parsedOrigin.error })
               return
             }
+            originInput = parsedOrigin.origin
           }
         }
       } catch {
@@ -105,11 +106,8 @@ export async function filesUploadController(app: FastifyInstance) {
         return
       }
 
-      const parsedOrigin = FileUploadOriginInputSchema.safeParse(originInput)
-      if (!parsedOrigin.success) {
-        reply.status(400).send({
-          error: `Invalid origin: ${parsedOrigin.error.issues.map((issue) => issue.message).join(" ")}`,
-        })
+      if (!originInput) {
+        reply.status(400).send({ error: "Invalid origin: origin is required" })
         return
       }
 
@@ -120,9 +118,9 @@ export async function filesUploadController(app: FastifyInstance) {
         workspaceId,
         userId,
         buildUserUploadOrigin({
-          system: parsedOrigin.data.system,
+          system: originInput.system,
           initiatorUserId: userId,
-          details: parsedOrigin.data.details,
+          details: originInput.details,
         })
       )
       reply.status(201)
