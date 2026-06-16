@@ -66,6 +66,26 @@ function asStringArray(value: unknown) {
   return []
 }
 
+function parseJsonObjectStrict(value: unknown, label: string): JsonObject {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as JsonObject
+  }
+  throw new Error(`${label} must be a JSON object.`)
+}
+
+async function readJsonObjectResponse(
+  response: Response,
+  label: string
+): Promise<JsonObject> {
+  let parsed: unknown
+  try {
+    parsed = await response.json()
+  } catch {
+    throw new Error(`${label} must be valid JSON.`)
+  }
+  return parseJsonObjectStrict(parsed, label)
+}
+
 export function resolveFeishuOpenBaseUrl(brand: FeishuBrand) {
   return brand === "lark"
     ? "https://open.larksuite.com"
@@ -189,7 +209,10 @@ async function requestTenantAccessToken(input: {
       app_secret: input.appSecret,
     }),
   })
-  const payload = asObject(await response.json().catch(() => ({})))
+  const payload = await readJsonObjectResponse(
+    response,
+    "Feishu tenant access token response"
+  )
   const code = typeof payload.code === "number" ? payload.code : undefined
 
   if (!response.ok || (code !== undefined && code !== 0)) {
@@ -260,7 +283,10 @@ export async function inspectFeishuAppScopeStatus(input: {
         Accept: "application/json",
       },
     })
-    const payload = asObject(await response.json().catch(() => ({})))
+    const payload = await readJsonObjectResponse(
+      response,
+      "Feishu app scope response"
+    )
     const code = typeof payload.code === "number" ? payload.code : undefined
 
     if (!response.ok || (code !== undefined && code !== 0)) {
@@ -384,7 +410,10 @@ export class FeishuApiClient {
       throw new Error(await parseErrorResponse(response))
     }
 
-    const payload = asObject(await response.json().catch(() => ({})))
+    const payload = await readJsonObjectResponse(
+      response,
+      "Feishu API response"
+    )
     if (typeof payload.code === "number" && payload.code !== 0) {
       throw new Error(
         `[${payload.code}] ${
