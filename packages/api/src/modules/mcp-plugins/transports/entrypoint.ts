@@ -212,6 +212,19 @@ function isJsonEntryPointValue(raw: string): boolean {
   )
 }
 
+function parseRemoteEntryPointUrl(rawUrl: string): URL {
+  let url: URL
+  try {
+    url = new URL(rawUrl)
+  } catch {
+    throw new Error("Remote MCP entry point URL is invalid")
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Remote MCP entry point URL must use http or https")
+  }
+  return url
+}
+
 /**
  * Resolve a remote (http/sse) plugin entryPoint into a concrete URL + headers.
  *
@@ -231,8 +244,9 @@ export function resolveRemoteEntryPoint(
   }
 
   if (!isJsonEntryPointValue(trimmed)) {
+    const url = parseRemoteEntryPointUrl(renderTemplate(trimmed, ctx))
     return {
-      url: renderTemplate(trimmed, ctx),
+      url: url.toString(),
       headers: {},
       protocol: defaultProtocol,
     }
@@ -248,6 +262,7 @@ export function resolveRemoteEntryPoint(
   if (!baseUrl) {
     throw new Error("Remote MCP entry point JSON is missing url")
   }
+  const url = parseRemoteEntryPointUrl(baseUrl)
 
   const headers: Record<string, string> = parsed.headers
     ? Object.fromEntries(
@@ -258,7 +273,6 @@ export function resolveRemoteEntryPoint(
       )
     : {}
 
-  const url = new URL(baseUrl)
   if (parsed.query) {
     for (const [key, value] of Object.entries(parsed.query)) {
       url.searchParams.set(key, renderTemplate(value, ctx))

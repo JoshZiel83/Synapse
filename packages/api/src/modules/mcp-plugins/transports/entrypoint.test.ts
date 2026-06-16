@@ -152,6 +152,20 @@ test("resolveRemoteEntryPoint: bare URL string + env templating", () => {
   delete process.env.__EP_URL__
 })
 
+test("resolveRemoteEntryPoint: rejects invalid or non-http URLs", () => {
+  for (const raw of [
+    "not a url",
+    "file:///tmp/mcp.sock",
+    JSON.stringify({ url: "not a url" }),
+    JSON.stringify({ url: "file:///tmp/mcp.sock" }),
+  ]) {
+    assert.throws(
+      () => resolveRemoteEntryPoint(raw, ctx({}), "streamable-http"),
+      /Remote MCP entry point URL/
+    )
+  }
+})
+
 test("resolveRemoteEntryPoint: rejects malformed entryPoint JSON", () => {
   assert.throws(
     () => resolveRemoteEntryPoint('{"url":', ctx({}), "streamable-http"),
