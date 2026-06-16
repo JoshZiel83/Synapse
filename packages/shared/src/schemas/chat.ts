@@ -60,6 +60,46 @@ import {
 
 const timestampSchema = z.string()
 
+export const ChatSocketClientMessageSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("auth"),
+    token: z.string().optional(),
+    workspaceId: z.string().min(1),
+  }),
+  z
+    .object({
+      type: z.literal("subscribe"),
+      key: z.string().min(1),
+      topic: z.enum(["inbox", "conversation"]),
+      conversationId: z.string().min(1).optional(),
+    })
+    .superRefine((value, ctx) => {
+      if (value.topic === "conversation" && !value.conversationId) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["conversationId"],
+          message: "conversation subscriptions require conversationId",
+        })
+      }
+    }),
+  z.object({
+    type: z.literal("unsubscribe"),
+    key: z.string().min(1),
+  }),
+  z.object({
+    type: z.literal("pong"),
+  }),
+  z.object({
+    type: z.literal("typing"),
+    conversationId: z.string().min(1),
+    state: z.enum(CHAT_TYPING_STATES),
+  }),
+])
+
+export type ChatSocketClientMessage = z.infer<
+  typeof ChatSocketClientMessageSchema
+>
+
 const ConversationEntityRefSchema = z.object({
   participantId: z.string().optional(),
   participantType: z.enum(CONVERSATION_PARTICIPANT_TYPES),

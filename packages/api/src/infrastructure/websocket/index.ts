@@ -24,6 +24,7 @@ import {
   unregisterAuthenticatedSocket,
 } from "./auth-session-registry.js"
 import { setupAsrWebSocket, shutdownAsrWebSockets } from "./asr.js"
+import { parseChatSocketClientFrame } from "./client-frame.js"
 
 type InboxSubscription = {
   key: string
@@ -399,7 +400,7 @@ export function setupWebSocket(app: FastifyInstance) {
 
     socket.on("message", async (raw: any) => {
       try {
-        const msg = JSON.parse(raw.toString()) as Record<string, unknown>
+        const msg = parseChatSocketClientFrame(raw.toString())
 
         if (msg.type === "auth") {
           const frameToken =
