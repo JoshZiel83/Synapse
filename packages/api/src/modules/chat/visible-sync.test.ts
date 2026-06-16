@@ -231,3 +231,90 @@ test("syncVisibleSharedItemUseCase without workspace only updates visible views"
   assert.deepEqual(calls.syncEvents, [])
   assert.deepEqual(calls.conversationUpserts, [])
 })
+
+test("syncVisibleSharedItemUseCase stops before view and sync side effects when unread recount fails", async () => {
+  const conversationId = randomUUID()
+  const participantId = randomUUID()
+  const workspaceMemberId = randomUUID()
+  const calls = {
+    unread: [] as string[],
+    upserts: [] as unknown[],
+    syncEvents: [] as unknown[],
+    conversationUpserts: [] as unknown[],
+  }
+
+  await assert.rejects(
+    syncVisibleSharedItemUseCase(
+      {
+        queryable: {} as Executor,
+        workspaceId: randomUUID(),
+        conversationId,
+        item: messageItem({ conversationId }),
+        activeParticipants: [
+          participant({
+            id: participantId,
+            conversationId,
+            workspaceMemberId,
+          }),
+        ],
+      },
+      {
+        ...deps(calls),
+        countUnreadVisibleMessages: async (_queryable, _conversationId, id) => {
+          calls.unread.push(id)
+          throw new Error("unread recount failed")
+        },
+      }
+    ),
+    /unread recount failed/
+  )
+
+  assert.deepEqual(calls.unread, [participantId])
+  assert.deepEqual(calls.upserts, [])
+  assert.deepEqual(calls.syncEvents, [])
+  assert.deepEqual(calls.conversationUpserts, [])
+})
+
+test("syncVisibleSharedItemUseCase stops conversation-upsert fanout when item sync append fails", async () => {
+  const workspaceId = randomUUID()
+  const conversationId = randomUUID()
+  const participantId = randomUUID()
+  const workspaceMemberId = randomUUID()
+  const calls = {
+    unread: [] as string[],
+    upserts: [] as unknown[],
+    syncEvents: [] as unknown[],
+    conversationUpserts: [] as unknown[],
+  }
+
+  await assert.rejects(
+    syncVisibleSharedItemUseCase(
+      {
+        queryable: {} as Executor,
+        workspaceId,
+        conversationId,
+        item: messageItem({ conversationId }),
+        activeParticipants: [
+          participant({
+            id: participantId,
+            conversationId,
+            workspaceMemberId,
+          }),
+        ],
+      },
+      {
+        ...deps(calls),
+        appendWorkspaceMemberSyncEvent: async (_queryable, params) => {
+          calls.syncEvents.push(params)
+          throw new Error("item sync append failed")
+        },
+      }
+    ),
+    /item sync append failed/
+  )
+
+  assert.deepEqual(calls.unread, [participantId])
+  assert.equal(calls.upserts.length, 1)
+  assert.equal(calls.syncEvents.length, 1)
+  assert.deepEqual(calls.conversationUpserts, [])
+})
