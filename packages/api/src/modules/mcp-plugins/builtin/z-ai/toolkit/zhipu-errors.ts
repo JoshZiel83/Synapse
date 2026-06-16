@@ -1,3 +1,5 @@
+import { z } from "zod"
+
 type ErrorHelp = {
   summary: string
   suggestion?: string
@@ -165,16 +167,26 @@ function parseJson(text: string): unknown {
   }
 }
 
+const ZhipuErrorBodySchema = z
+  .object({
+    error: z
+      .object({
+        code: z.string().optional(),
+        message: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough()
+
 function extractErrorBody(body: unknown): { code?: string; message?: string } {
-  if (!body || typeof body !== "object") return {}
-  const record = body as Record<string, unknown>
-  const error = record.error
-  if (!error || typeof error !== "object") return {}
-  const errorRecord = error as Record<string, unknown>
+  const parsed = ZhipuErrorBodySchema.safeParse(body)
+  if (!parsed.success) return {}
+  const error = parsed.data.error
+  if (!error) return {}
   return {
-    code: typeof errorRecord.code === "string" ? errorRecord.code : undefined,
-    message:
-      typeof errorRecord.message === "string" ? errorRecord.message : undefined,
+    code: error.code,
+    message: error.message,
   }
 }
 
