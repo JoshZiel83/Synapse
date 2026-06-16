@@ -1,4 +1,5 @@
 import { CONVERSATION_PARTICIPANT_TYPE } from "@synapse/shared"
+import { TaskSummarySchema } from "@synapse/shared/schemas"
 import type { TaskSummary } from "@synapse/shared/types"
 import type { RemoteAgentApiToDaemonMessage } from "./wire.js"
 
@@ -30,7 +31,7 @@ export type NotifyRemoteAgentTaskResolvedDeps = {
 }
 
 function taskAsWirePayload(task: TaskSummary): Record<string, unknown> {
-  return task as unknown as Record<string, unknown>
+  return TaskSummarySchema.parse(task) as unknown as Record<string, unknown>
 }
 
 export async function replayResolvedRemoteAgentTasksUseCase(

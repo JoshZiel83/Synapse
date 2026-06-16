@@ -88,6 +88,35 @@ test("replayResolvedRemoteAgentTasksUseCase sends resolved task frames and skips
   })
 })
 
+test("replayResolvedRemoteAgentTasksUseCase validates task payload before sending", async () => {
+  const machineId = randomUUID()
+  const remoteAgentId = randomUUID()
+  const invalidTask = {
+    id: randomUUID(),
+    workspaceId: randomUUID(),
+    conversationId: randomUUID(),
+  } as unknown as TaskSummary
+  const sent: Array<{
+    machineId: string
+    message: RemoteAgentApiToDaemonMessage
+  }> = []
+
+  await assert.rejects(
+    replayResolvedRemoteAgentTasksUseCase(
+      {
+        machineId,
+        remoteAgentIds: [remoteAgentId],
+      },
+      deps({
+        targets: [{ remoteAgentId, activeTaskId: invalidTask.id }],
+        tasksById: new Map([[invalidTask.id, invalidTask]]),
+        sent,
+      })
+    )
+  )
+  assert.equal(sent.length, 0)
+})
+
 test("replayResolvedRemoteAgentTasksUseCase does not load targets without ids or connection", async () => {
   const loadTargetCalls: string[] = []
   const withoutIds = await replayResolvedRemoteAgentTasksUseCase(
