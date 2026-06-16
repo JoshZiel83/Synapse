@@ -1,6 +1,7 @@
 import fs from "node:fs/promises"
 import { basename, resolve } from "node:path"
 import * as unzipper from "unzipper"
+import { z } from "zod"
 import {
   FILE_ORIGIN_SYSTEMS,
   textBlocks,
@@ -88,6 +89,47 @@ const TEXT_EXTENSIONS = new Set([
 
 const GITHUB_RAW_FETCH_TIMEOUT_MS = 12_000
 const CLAWHUB_DOWNLOAD_TIMEOUT_MS = 30_000
+
+const ClawhubMirrorMetaSchema = z
+  .object({
+    ownerId: z.string().optional(),
+    owner: z.string().optional(),
+    slug: z.string().optional(),
+    displayName: z.string().optional(),
+    version: z.string().optional(),
+    publishedAt: z.number().optional(),
+    latest: z
+      .object({
+        version: z.string().optional(),
+        publishedAt: z.number().optional(),
+        commit: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough()
+
+type ClawhubMirrorMeta = z.infer<typeof ClawhubMirrorMetaSchema>
+
+export function parseClawhubMirrorMetaJson(
+  metaText: string,
+  sourceLabel = "Clawhub _meta.json"
+): ClawhubMirrorMeta {
+  let value: unknown
+  try {
+    value = JSON.parse(metaText)
+  } catch (error) {
+    throw new Error(
+      `${sourceLabel} is invalid JSON: ${(error as Error).message}`
+    )
+  }
+
+  const parsed = ClawhubMirrorMetaSchema.safeParse(value)
+  if (!parsed.success) {
+    throw new Error(`${sourceLabel} has invalid shape`)
+  }
+  return parsed.data
+}
 const CLAWHUB_OFFICIAL_DOWNLOAD_ORIGIN = "https://skills.volces.com"
 
 function extname(path: string) {
@@ -598,19 +640,7 @@ async function importClawhubArchiveBuffer(params: {
 }): Promise<ImportedMirrorSkillPackage> {
   const entryPaths = await readZipEntries(params.buffer)
   const metaText = await readZipEntryText(params.buffer, "_meta.json")
-  const meta = JSON.parse(metaText) as {
-    ownerId?: string
-    owner?: string
-    slug?: string
-    displayName?: string
-    version?: string
-    publishedAt?: number
-    latest?: {
-      version?: string
-      publishedAt?: number
-      commit?: string
-    }
-  }
+  const meta = parseClawhubMirrorMetaJson(metaText)
 
   if (!meta.slug) {
     throw new Error("Clawhub skill archive is missing _meta.json slug")
@@ -746,13 +776,10 @@ export async function importClawhubSeedSkillPackage(input: {
     resolve(input.skillDir, "_meta.json"),
     "utf8"
   )
-  const meta = JSON.parse(metaText) as {
-    ownerId?: string
-    owner?: string
-    slug?: string
-    version?: string
-    publishedAt?: number
-  }
+  const meta = parseClawhubMirrorMetaJson(
+    metaText,
+    `Clawhub seed metadata in ${input.skillDir}`
+  )
 
   const ownerKey = meta.ownerId?.trim() || meta.owner?.trim()
   if (!ownerKey || !meta.slug) {
