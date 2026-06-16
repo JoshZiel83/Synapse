@@ -246,16 +246,30 @@ export function decodeConversationItemMetadata(row: {
   return parseJsonObject(row.itemMetadata)
 }
 
-function parseJsonArray<T>(value: unknown): T[] {
+function parseJsonArray<T>(value: unknown, label: string): T[] {
+  if (value === null || typeof value === "undefined") return []
   if (typeof value === "string") {
+    if (!value.trim()) return []
     try {
       const parsed = JSON.parse(value) as unknown
-      return Array.isArray(parsed) ? (parsed as T[]) : []
-    } catch {
-      return []
+      if (!Array.isArray(parsed)) {
+        throw new Error(`${label} must be a JSON array`)
+      }
+      return parsed as T[]
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message === `${label} must be a JSON array`
+      ) {
+        throw error
+      }
+      throw new Error(`${label} must be valid JSON`)
     }
   }
-  return Array.isArray(value) ? (value as T[]) : []
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be a JSON array`)
+  }
+  return value as T[]
 }
 
 export function normalizeAccountRow(
@@ -382,7 +396,10 @@ export function normalizeTransportExternalUserRow(
     metadata: parseJsonObject(row.metadata),
     createdAt: serializeInstant(row.createdAt),
     updatedAt: serializeInstant(row.updatedAt),
-    sessions: parseJsonArray<any>(row.sessions),
+    sessions: parseJsonArray<any>(
+      row.sessions,
+      "transportExternalUser.sessions"
+    ),
   }
 }
 

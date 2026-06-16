@@ -7,8 +7,12 @@ import {
   decodeTransportAccountMetadata,
   decodeTransportMessageLinkMetadata,
   normalizeTransportAddressRow,
+  normalizeTransportExternalUserRow,
   normalizeTransportOutboxSweepCandidateRow,
 } from "./repo.js"
+
+const createdAt = new Date("2026-06-15T09:00:00.000Z")
+const updatedAt = new Date("2026-06-15T09:00:01.000Z")
 
 test("decodeTransportAccountCredentials decodes account credentials at repo exit", () => {
   const credentials = decodeTransportAccountCredentials({
@@ -47,8 +51,6 @@ test("decodeTransportMessageLinkMetadata decodes link metadata at repo exit", ()
 })
 
 test("normalizeTransportAddressRow decodes address metadata at repo exit", () => {
-  const createdAt = new Date("2026-06-15T09:00:00.000Z")
-  const updatedAt = new Date("2026-06-15T09:00:01.000Z")
   const row = normalizeTransportAddressRow({
     id: "addr-1",
     workspaceId: "workspace-1",
@@ -79,8 +81,6 @@ test("normalizeTransportAddressRow decodes address metadata at repo exit", () =>
 })
 
 test("normalizeTransportAddressRow normalizes non-object address metadata", () => {
-  const createdAt = new Date("2026-06-15T09:00:00.000Z")
-  const updatedAt = new Date("2026-06-15T09:00:01.000Z")
   const base = {
     id: "addr-1",
     workspaceId: "workspace-1",
@@ -110,8 +110,61 @@ test("normalizeTransportAddressRow normalizes non-object address metadata", () =
   )
 })
 
+test("normalizeTransportExternalUserRow decodes session aggregate arrays at repo exit", () => {
+  const row = normalizeTransportExternalUserRow({
+    id: "external-user-1",
+    workspaceId: "workspace-1",
+    transportAccountId: "account-1",
+    transportKind: "weixin",
+    accountDisplayName: "Weixin",
+    externalId: "openid-1",
+    displayName: "Alice",
+    linkedWorkspaceMemberId: null,
+    linkedWorkspaceMemberName: null,
+    metadata: JSON.stringify({ source: "qr" }),
+    createdAt,
+    updatedAt,
+    sessions: JSON.stringify([{ conversationId: "conversation-1" }]),
+  } as never)
+
+  assert.deepEqual(row.sessions, [{ conversationId: "conversation-1" }])
+})
+
+test("normalizeTransportExternalUserRow rejects malformed session aggregates", () => {
+  const base = {
+    id: "external-user-1",
+    workspaceId: "workspace-1",
+    transportAccountId: "account-1",
+    transportKind: "weixin",
+    accountDisplayName: "Weixin",
+    externalId: "openid-1",
+    displayName: null,
+    linkedWorkspaceMemberId: null,
+    linkedWorkspaceMemberName: null,
+    metadata: {},
+    createdAt,
+    updatedAt,
+  }
+
+  assert.throws(
+    () =>
+      normalizeTransportExternalUserRow({
+        ...base,
+        sessions: '{"conversationId":"conversation-1"}',
+      } as never),
+    /transportExternalUser\.sessions must be a JSON array/
+  )
+  assert.throws(
+    () =>
+      normalizeTransportExternalUserRow({
+        ...base,
+        sessions: "{bad json",
+      } as never),
+    /transportExternalUser\.sessions must be valid JSON/
+  )
+})
+
 test("normalizeTransportOutboxSweepCandidateRow decodes sweep metadata at repo exit", () => {
-  const createdAt = new Date("2026-06-15T09:00:00.000Z")
   const row = normalizeTransportOutboxSweepCandidateRow({
     id: "link-1",
     delivery_status: "failed",
