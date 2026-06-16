@@ -10,7 +10,10 @@ import {
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { withOneShotFsHelper } from "./one-shot-fs-helper.js"
+import {
+  parseOneShotFsHelperFrame,
+  withOneShotFsHelper,
+} from "./one-shot-fs-helper.js"
 import { resolveFsHelperForProfile } from "./fs-helper-resolve.js"
 
 // Locate the built Rust binary via the shared single-source-of-truth resolver
@@ -33,6 +36,57 @@ function findHelperBinary(): string | null {
 
 const HELPER = findHelperBinary()
 const SKIP = HELPER === null
+
+test("parseOneShotFsHelperFrame accepts JSON-RPC result and error frames", () => {
+  assert.deepEqual(
+    parseOneShotFsHelperFrame(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        result: { sha256: "abc" },
+      })
+    ),
+    { id: "1", result: { sha256: "abc" } }
+  )
+
+  assert.deepEqual(
+    parseOneShotFsHelperFrame(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "2",
+        error: { code: -32602, message: "bad params" },
+      })
+    ),
+    { id: "2", error: { code: -32602, message: "bad params" } }
+  )
+})
+
+test("parseOneShotFsHelperFrame rejects malformed helper frames", () => {
+  for (const raw of [
+    "",
+    "{not-json",
+    "[]",
+    "null",
+    JSON.stringify({ jsonrpc: "1.0", id: 1, result: {} }),
+    JSON.stringify({ jsonrpc: "2.0", result: {} }),
+    JSON.stringify({ jsonrpc: "2.0", id: "" }),
+    JSON.stringify({ jsonrpc: "2.0", id: 1 }),
+    JSON.stringify({ jsonrpc: "2.0", id: 1, result: {}, error: null }),
+    JSON.stringify({ jsonrpc: "2.0", id: 1, error: "boom" }),
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      error: { code: "bad", message: "boom" },
+    }),
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      error: { code: -32603 },
+    }),
+  ]) {
+    assert.equal(parseOneShotFsHelperFrame(raw), null)
+  }
+})
 
 test(
   "one-shot helper: cas put/has + manifest scan_commit + materialize roundtrip",
