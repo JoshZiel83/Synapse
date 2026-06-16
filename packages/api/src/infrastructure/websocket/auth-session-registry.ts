@@ -1,28 +1,14 @@
 import { redisPub, redisSub } from "../redis/index.js"
 import { createLogger } from "../logger/index.js"
+import {
+  AUTH_SESSION_CONTROL_CHANNEL,
+  parseAuthSessionControlMessage,
+  serializeAuthSessionControlMessage,
+  type AuthSessionControlMessage,
+  type DisconnectReason,
+} from "./auth-session-control.js"
 
 const log = createLogger("auth-session-registry")
-
-const AUTH_SESSION_CONTROL_CHANNEL = "synapse:auth:sessions"
-
-type DisconnectReason =
-  | "Session logged out"
-  | "All sessions were logged out"
-  | "Session revoked"
-  | "Session invalidated"
-
-type AuthSessionControlMessage =
-  | {
-      type: "session.disconnect"
-      sessionId: string
-      reason: DisconnectReason
-    }
-  | {
-      type: "user.disconnect"
-      userId: string
-      exceptSessionId?: string
-      reason: DisconnectReason
-    }
 
 interface LiveAuthSocket {
   clientId: string
@@ -101,7 +87,7 @@ export async function initAuthSessionRegistry() {
     if (channel !== AUTH_SESSION_CONTROL_CHANNEL) return
 
     try {
-      const message = JSON.parse(rawMessage) as AuthSessionControlMessage
+      const message = parseAuthSessionControlMessage(rawMessage)
       applyControlMessage(message)
     } catch (error) {
       log.error(
@@ -138,11 +124,11 @@ export async function disconnectSocketsForSession(
   applyControlMessage({ type: "session.disconnect", sessionId, reason })
   await redisPub.publish(
     AUTH_SESSION_CONTROL_CHANNEL,
-    JSON.stringify({
+    serializeAuthSessionControlMessage({
       type: "session.disconnect",
       sessionId,
       reason,
-    } satisfies AuthSessionControlMessage)
+    })
   )
 }
 
@@ -159,11 +145,11 @@ export async function disconnectSocketsForUser(
   })
   await redisPub.publish(
     AUTH_SESSION_CONTROL_CHANNEL,
-    JSON.stringify({
+    serializeAuthSessionControlMessage({
       type: "user.disconnect",
       userId,
       exceptSessionId,
       reason,
-    } satisfies AuthSessionControlMessage)
+    })
   )
 }
