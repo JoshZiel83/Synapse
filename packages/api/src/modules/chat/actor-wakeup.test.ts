@@ -265,3 +265,65 @@ test("enqueueActorWakeupsForConversationMessageUseCase enqueues inferred user wa
     trigger: "user_message",
   })
 })
+
+test("enqueueActorWakeupsForConversationMessageUseCase does not enqueue when session context ensure fails", async () => {
+  const queryable = {} as Executor
+  const workspaceId = randomUUID()
+  const conversationId = randomUUID()
+  const authorParticipantId = randomUUID()
+  const actorId = randomUUID()
+  const actorParticipantId = randomUUID()
+  const item = itemRow({
+    id: randomUUID(),
+    conversationId,
+    authorParticipantId,
+  })
+  const sessionCalls: unknown[] = []
+  const wakeupCalls: unknown[] = []
+  const testDeps = deps({
+    item,
+    mentionedParticipantIds: [actorParticipantId],
+    participants: [
+      participant({
+        id: authorParticipantId,
+        conversationId,
+        participantType: CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER,
+        state: "active",
+        workspaceMemberId: randomUUID(),
+        userName: "Alice",
+      }),
+      participant({
+        id: actorParticipantId,
+        conversationId,
+        participantType: CONVERSATION_PARTICIPANT_TYPE.ACTOR,
+        state: "active",
+        actorId,
+        participantName: "Helper",
+      }),
+    ],
+    sessionCalls,
+    wakeupCalls,
+  })
+  testDeps.ensureConversationActorSessionContext = async (input) => {
+    sessionCalls.push(input)
+    throw new Error("session context failed")
+  }
+
+  await assert.rejects(
+    () =>
+      enqueueActorWakeupsForConversationMessageUseCase(
+        {
+          workspaceId,
+          conversationId,
+          itemId: item.id,
+          summary: "Hello actor",
+          queryable,
+        },
+        testDeps
+      ),
+    /session context failed/
+  )
+
+  assert.equal(sessionCalls.length, 1)
+  assert.deepEqual(wakeupCalls, [])
+})
