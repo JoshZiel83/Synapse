@@ -31,6 +31,12 @@ function nonEmptyString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined
 }
 
+function objectField(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined
+}
+
 /**
  * Dependencies injected into processImTransportDeliveryJob.
  *
@@ -220,9 +226,7 @@ export async function processImTransportDeliveryJob(
     const message = deps.decode({
       content: item.content,
       contentBlocks: item.contentBlocks as EncodedContentBlock[],
-      transportMetadata:
-        ((item as unknown as { metadata?: Record<string, unknown> }).metadata
-          ?.transport as Record<string, unknown>) || undefined,
+      transportMetadata: objectField(item.metadata.transport),
     })
     // Resolve mentions to a participantId → ResolvedMention map, then
     // fill `externalId` in place on each mention part. This preserves the
@@ -262,8 +266,7 @@ export async function processImTransportDeliveryJob(
     let replyTo:
       | { externalMessageId: string; endpointExternalId: string }
       | undefined
-    const replyToItemId = (item as unknown as { replyToItemId?: string })
-      .replyToItemId
+    const replyToItemId = item.replyToItemId
     if (replyToItemId) {
       const externalReplyMsgId = await deps.findExternalMessageIdForItem({
         itemId: replyToItemId,
