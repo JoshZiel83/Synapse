@@ -29,7 +29,6 @@ import {
   describeTransportKind,
   extractText,
   formatMentionText,
-  isToolResultOrigin,
   isTransportKind,
   computeWireNames,
   stripForProvider,
@@ -68,6 +67,10 @@ import {
   isCallableTool,
 } from "./tool-plugins.js"
 import { runWithToolContext } from "./session-tools.js"
+import {
+  readToolResultOrigin,
+  readToolResultStructuredContent,
+} from "./tool-result-payload.js"
 import { type McpExecutionContext } from "../mcp-plugins/instance-manager.js"
 import { getMcpVersion } from "../mcp-plugins/runtime-version.js"
 import { ingestResponseMedia } from "./content-ingest.js"
@@ -1332,12 +1335,11 @@ export async function actorThink(
 
           if (executionEnabled && callRow && attempt) {
             const blocks = res.content
+            const structuredContent = readToolResultStructuredContent(res)
             const persistedMetadata: Record<string, unknown> = {
               ...(res.metadata || {}),
               origin: { kind: "system", registryKey: tc.toolName },
-              ...((res as any).structuredContent !== undefined
-                ? { structuredContent: (res as any).structuredContent }
-                : {}),
+              ...(structuredContent !== undefined ? { structuredContent } : {}),
               toolCallId: tc.callId,
               toolName: tc.toolName,
               ...(tc.providerCallId
@@ -1350,7 +1352,7 @@ export async function actorThink(
             // still spread top-level above for back-compat consumers.
             const callableToolMeta = buildToolMeta({
               meta: res.metadata,
-              structuredContent: (res as any).structuredContent,
+              structuredContent,
             })
             if (callableToolMeta) persistedMetadata.toolMeta = callableToolMeta
             // Phase 7b: res.content is strictly CanonicalContentBlock[] post
@@ -1580,16 +1582,13 @@ export async function actorThink(
                   normalizedResult.isError ? "failed" : "completed"
                 )
               }
-            } catch (err: any) {
+            } catch (err: unknown) {
               const classifiedError = classifyMcpExecutionError(err)
               const formattedMessage = formatMcpExecutionErrorMessage(
                 classifiedError.message,
                 classifiedError.requiresReplan
               )
-              const failureOrigin: ToolResultOrigin | undefined =
-                isToolResultOrigin((err as any)?.origin)
-                  ? (err as any).origin
-                  : undefined
+              const failureOrigin = readToolResultOrigin(err)
               await appendMcpFailureResult({
                 tc,
                 callRow,
@@ -1687,7 +1686,6 @@ export async function actorThink(
         )
         const roundToolResults: CanonicalToolResult[] = toolResults.map(
           (tr) => {
-            const trAny = tr as any
             const isCallableEntry = callableResultIds.has(tr.toolCallId)
             const fallbackOrigin: ToolResultOrigin = isCallableEntry
               ? { kind: "system", registryKey: tr.toolName }
@@ -1695,10 +1693,8 @@ export async function actorThink(
                   toolWireRegistry.refByWireName.get(tr.toolName),
                   tr.toolName
                 )
-            const origin = isToolResultOrigin(trAny.origin)
-              ? trAny.origin
-              : fallbackOrigin
-            const structuredContent = trAny.structuredContent
+            const origin = readToolResultOrigin(tr) ?? fallbackOrigin
+            const structuredContent = readToolResultStructuredContent(tr)
             const base: CanonicalToolResult = {
               toolCallId: tr.toolCallId,
               providerCallId: tr.providerCallId,
