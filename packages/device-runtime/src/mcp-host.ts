@@ -383,20 +383,32 @@ export function createInMemoryMcpHost(
     return { kind: "ok", envelope: parsed.data }
   }
 
-  async function handleJsonRpc(body: {
-    id?: string | number | null
-    method?: unknown
-    params?: unknown
-  }): Promise<{
+  async function handleJsonRpc(body: unknown): Promise<{
     id: string | number | null
     result?: unknown
     error?: { code: number; message: string }
   }> {
-    const id = (body.id ?? null) as string | number | null
-    if (typeof body.method !== "string") {
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return {
+        id: null,
+        error: { code: -32600, message: "invalid request" },
+      }
+    }
+    const request = body as {
+      id?: unknown
+      method?: unknown
+      params?: unknown
+    }
+    const id =
+      typeof request.id === "string" ||
+      typeof request.id === "number" ||
+      request.id === null
+        ? request.id
+        : null
+    if (typeof request.method !== "string") {
       return { id, error: { code: -32600, message: "method required" } }
     }
-    switch (body.method) {
+    switch (request.method) {
       case "initialize": {
         return {
           id,
@@ -415,8 +427,8 @@ export function createInMemoryMcpHost(
       }
       case "tools/call": {
         const params =
-          body.params && typeof body.params === "object"
-            ? (body.params as {
+          request.params && typeof request.params === "object"
+            ? (request.params as {
                 name: unknown
                 arguments?: unknown
                 _meta?: unknown
@@ -428,7 +440,10 @@ export function createInMemoryMcpHost(
       default: {
         return {
           id,
-          error: { code: -32601, message: `method not found: ${body.method}` },
+          error: {
+            code: -32601,
+            message: `method not found: ${request.method}`,
+          },
         }
       }
     }
@@ -466,13 +481,7 @@ export function createInMemoryMcpHost(
             )
             return
           }
-          const envelope = await handleJsonRpc(
-            body as {
-              id?: string | number | null
-              method?: unknown
-              params?: unknown
-            }
-          )
+          const envelope = await handleJsonRpc(body)
           res.statusCode = 200
           res.setHeader("content-type", "application/json")
           res.end(JSON.stringify({ jsonrpc: "2.0", ...envelope }))

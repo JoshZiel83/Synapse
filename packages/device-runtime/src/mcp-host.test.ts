@@ -30,6 +30,21 @@ async function rpc(
   return (await res.json()) as JsonRpcResponse
 }
 
+async function rpcRaw(
+  base: string,
+  body: string
+): Promise<{ status: number; payload: JsonRpcResponse }> {
+  const res = await fetch(`${base}/mcp`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body,
+  })
+  return {
+    status: res.status,
+    payload: (await res.json()) as JsonRpcResponse,
+  }
+}
+
 test("mcp host accepts tools/list + tools/call over HTTP", async () => {
   const host = createInMemoryMcpHost()
   await host.start()
@@ -52,6 +67,37 @@ test("mcp host accepts tools/list + tools/call over HTTP", async () => {
     assert.equal(call.error, undefined)
     assert.equal(call.result?.isError, false)
     assert.match(call.result?.content?.[0]?.text ?? "", /hi/)
+  } finally {
+    await host.stop()
+  }
+})
+
+test("mcp host rejects malformed JSON with parse error", async () => {
+  const host = createInMemoryMcpHost()
+  await host.start()
+  try {
+    const base = `http://127.0.0.1:${host.localPort}`
+    const response = await rpcRaw(base, "{not-json")
+    assert.equal(response.status, 400)
+    assert.equal(response.payload.id, null)
+    assert.equal(response.payload.error?.code, -32700)
+  } finally {
+    await host.stop()
+  }
+})
+
+test("mcp host rejects non-object JSON-RPC bodies with invalid request", async () => {
+  const host = createInMemoryMcpHost()
+  await host.start()
+  try {
+    const base = `http://127.0.0.1:${host.localPort}`
+    for (const raw of ["null", "[]", '"method"']) {
+      const response = await rpcRaw(base, raw)
+      assert.equal(response.status, 200)
+      assert.equal(response.payload.id, null)
+      assert.equal(response.payload.error?.code, -32600)
+      assert.equal(response.payload.error?.message, "invalid request")
+    }
   } finally {
     await host.stop()
   }
