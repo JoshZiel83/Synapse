@@ -174,6 +174,36 @@ test("createConversationEventUseCase preserves explicit targeted event audiences
   assert.deepEqual(created[0]!.contextTargetParticipantIds, [contextTarget])
 })
 
+test("createConversationEventUseCase does not create items when participant listing fails", async () => {
+  const queryable = {} as Executor
+  const created: CreateConversationItemInput[] = []
+
+  await assert.rejects(
+    () =>
+      createConversationEventUseCase(
+        {
+          conversationId: randomUUID(),
+          eventType: "automation_notice",
+          eventPayload: automationPayload(),
+          queryable,
+        },
+        {
+          listConversationParticipants: async (receivedQueryable) => {
+            assert.equal(receivedQueryable, queryable)
+            throw new Error("participant listing failed")
+          },
+          createConversationItem: async (input) => {
+            created.push(input)
+            return eventItem(input)
+          },
+        }
+      ),
+    /participant listing failed/
+  )
+
+  assert.deepEqual(created, [])
+})
+
 test("createConversationEventUseCase stores timeline-none events as internal items", async () => {
   const created: CreateConversationItemInput[] = []
 
