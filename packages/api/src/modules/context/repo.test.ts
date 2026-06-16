@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { normalizeArchivePointRow } from "./repo.js"
+import { normalizeArchivePointRow, parseArchiveFrameJsonArray } from "./repo.js"
 import type { ArchivePointRow } from "./repo.js"
 
 test("normalizeArchivePointRow decodes archive point metadata at repo exit", () => {
@@ -22,4 +22,16 @@ test("normalizeArchivePointRow decodes archive point metadata at repo exit", () 
   assert.equal(row.coversUntilSequence, "42")
   assert.deepEqual(row.metadata, { reason: "compaction" })
   assert.equal(row.createdAt.toISOString(), "2026-01-01T00:00:00.000Z")
+})
+
+test("parseArchiveFrameJsonArray decodes archive frame arrays at repo exit", () => {
+  assert.deepEqual(parseArchiveFrameJsonArray<string>('["item-1"]'), ["item-1"])
+  assert.deepEqual(parseArchiveFrameJsonArray<number[]>([[1], [2]]), [[1], [2]])
+})
+
+test("parseArchiveFrameJsonArray fails closed for non-array JSON", () => {
+  assert.equal(parseArchiveFrameJsonArray('{"not":"array"}'), undefined)
+  assert.equal(parseArchiveFrameJsonArray('"scalar"'), undefined)
+  assert.equal(parseArchiveFrameJsonArray("{"), undefined)
+  assert.equal(parseArchiveFrameJsonArray(null), undefined)
 })

@@ -83,11 +83,12 @@ type ArchiveFrameQueryRow = {
   part_metadata: unknown
 }
 
-function parseJsonArray<T>(value: unknown): T[] | undefined {
+export function parseArchiveFrameJsonArray<T>(value: unknown): T[] | undefined {
   if (!value) return undefined
   if (typeof value === "string") {
     try {
-      return JSON.parse(value) as T[]
+      const parsed = JSON.parse(value) as unknown
+      return Array.isArray(parsed) ? (parsed as T[]) : undefined
     } catch {
       return undefined
     }
@@ -188,8 +189,8 @@ export async function loadArchivePoint(
       role: row.role,
       frameType: row.frame_type,
       parts: parts.length > 0 ? itemPartsToCanonicalBlocks(parts) : undefined,
-      toolCalls: parseJsonArray(row.tool_calls),
-      toolResults: parseJsonArray(row.tool_results),
+      toolCalls: parseArchiveFrameJsonArray(row.tool_calls),
+      toolResults: parseArchiveFrameJsonArray(row.tool_results),
       sourceItemIds: Array.isArray(row.source_item_ids)
         ? row.source_item_ids
         : undefined,
