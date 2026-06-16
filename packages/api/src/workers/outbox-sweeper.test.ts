@@ -447,6 +447,28 @@ test("processSweepCandidate: retrying candidates still honor dead-letter budget"
   assert.deepEqual(calls, ["checkBudget", "markDeadLetter"])
 })
 
+test("processSweepCandidate: retrying candidates skip without side effects when burst budget is full", async () => {
+  const calls: string[] = []
+  await processSweepCandidate(sweepCandidate({ reason: "pending_stale" }), {
+    checkBudget() {
+      calls.push("checkBudget")
+      return "skip"
+    },
+    markDeadLetter: async () => {
+      calls.push("markDeadLetter")
+    },
+    bumpRetryStamp: async () => {
+      calls.push("bump")
+    },
+    enqueueOrRetry: async () => {
+      calls.push("enqueue")
+      return { kind: "enqueued", jobId: "job-1" }
+    },
+  })
+
+  assert.deepEqual(calls, ["checkBudget"])
+})
+
 test("processSweepCandidate: retrying candidates stop before enqueue when retry stamp fails", async () => {
   const calls: string[] = []
   await assert.rejects(
