@@ -1,6 +1,9 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { parseClawhubMirrorMetaJson } from "./mirror-import.js"
+import {
+  parseClawhubMirrorMetaJson,
+  parseGitHubApiJsonObjectText,
+} from "./mirror-import.js"
 
 test("parseClawhubMirrorMetaJson accepts archive metadata", () => {
   assert.deepEqual(
@@ -62,4 +65,25 @@ test("parseClawhubMirrorMetaJson includes custom source label in errors", () => 
     () => parseClawhubMirrorMetaJson("[]", "Clawhub seed metadata in /tmp/s"),
     /Clawhub seed metadata in \/tmp\/s has invalid shape/
   )
+})
+
+test("parseGitHubApiJsonObjectText accepts only GitHub API object responses", () => {
+  assert.deepEqual(
+    parseGitHubApiJsonObjectText(
+      JSON.stringify({ default_branch: "main" }),
+      "GitHub repo response"
+    ),
+    { default_branch: "main" }
+  )
+
+  assert.throws(
+    () => parseGitHubApiJsonObjectText("{", "GitHub repo response"),
+    /GitHub repo response is invalid JSON/
+  )
+  for (const raw of ["[]", "null", '"repo"']) {
+    assert.throws(
+      () => parseGitHubApiJsonObjectText(raw, "GitHub repo response"),
+      /GitHub repo response must be a JSON object/
+    )
+  }
 })

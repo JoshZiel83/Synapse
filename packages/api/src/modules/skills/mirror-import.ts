@@ -130,6 +130,25 @@ export function parseClawhubMirrorMetaJson(
   }
   return parsed.data
 }
+
+export function parseGitHubApiJsonObjectText(
+  jsonText: string,
+  sourceLabel = "GitHub API response"
+): JsonObject {
+  let value: unknown
+  try {
+    value = JSON.parse(jsonText)
+  } catch (error) {
+    throw new Error(
+      `${sourceLabel} is invalid JSON: ${(error as Error).message}`
+    )
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${sourceLabel} must be a JSON object`)
+  }
+  return value as JsonObject
+}
+
 const CLAWHUB_OFFICIAL_DOWNLOAD_ORIGIN = "https://skills.volces.com"
 
 function extname(path: string) {
@@ -177,7 +196,10 @@ function buildClawhubLocatorKey(ownerKey: string | undefined, slug: string) {
     : `clawhub:${slug}`
 }
 
-async function fetchJson<T>(url: string, headers?: Record<string, string>) {
+async function fetchJson<T extends JsonObject>(
+  url: string,
+  headers?: Record<string, string>
+) {
   const response = await fetch(url, {
     headers: {
       Accept: "application/vnd.github+json",
@@ -188,7 +210,10 @@ async function fetchJson<T>(url: string, headers?: Record<string, string>) {
   if (!response.ok) {
     throw new Error(`Failed to fetch ${url}: ${response.status}`)
   }
-  return (await response.json()) as T
+  return parseGitHubApiJsonObjectText(
+    await response.text(),
+    `GitHub API response from ${url}`
+  ) as T
 }
 
 async function fetchBuffer(
