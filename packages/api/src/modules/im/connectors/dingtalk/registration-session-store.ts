@@ -95,6 +95,8 @@ const dingtalkRegistrationPendingFormSchema = z
   })
   .strict()
 
+const redisTimestampMsSchema = z.number().int().nonnegative()
+
 const dingtalkRegistrationSessionSchema = z
   .object({
     sessionId: z.string().min(1),
@@ -105,9 +107,9 @@ const dingtalkRegistrationSessionSchema = z
     verificationUriComplete: z.string().min(1),
     expiresInSeconds: z.number().int().positive(),
     intervalSeconds: z.number().positive(),
-    expiresAt: z.number().finite(),
-    createdAt: z.number().finite(),
-    updatedAt: z.number().finite(),
+    expiresAt: redisTimestampMsSchema,
+    createdAt: redisTimestampMsSchema,
+    updatedAt: redisTimestampMsSchema,
     status: z.enum(DINGTALK_DEVICE_FLOW_STATUSES),
     message: z.string().optional(),
     transportAccountId: z.string().optional(),

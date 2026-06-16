@@ -49,6 +49,7 @@ export interface ActiveWeixinQrLogin {
 
 const KEY_PREFIX = "im:weixin:qr-session:"
 const SESSION_TTL_SECONDS = 6 * 60 // 6 minutes
+const redisTimestampMsSchema = z.number().int().nonnegative()
 
 const activeWeixinQrLoginSchema = z
   .object({
@@ -65,9 +66,9 @@ const activeWeixinQrLoginSchema = z
     inboundActorId: z.string().nullable().optional(),
     status: z.enum(WEIXIN_QR_LOGIN_STATUSES),
     message: z.string(),
-    createdAt: z.number().finite(),
-    updatedAt: z.number().finite(),
-    expiresAt: z.number().finite(),
+    createdAt: redisTimestampMsSchema,
+    updatedAt: redisTimestampMsSchema,
+    expiresAt: redisTimestampMsSchema,
     transportAccountId: z.string().optional(),
     botId: z.string().optional(),
     scannerUserId: z.string().optional(),

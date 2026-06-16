@@ -88,6 +88,20 @@ test("parseDingtalkRegistrationSessionPayload: rejects malformed or drifted Redi
     ),
     null
   )
+  for (const field of ["expiresAt", "createdAt", "updatedAt"] as const) {
+    assert.equal(
+      parseDingtalkRegistrationSessionPayload(
+        JSON.stringify({ ...fresh(), [field]: -1 })
+      ),
+      null
+    )
+    assert.equal(
+      parseDingtalkRegistrationSessionPayload(
+        JSON.stringify({ ...fresh(), [field]: 1.5 })
+      ),
+      null
+    )
+  }
   assert.equal(
     parseDingtalkRegistrationSessionPayload(
       JSON.stringify({

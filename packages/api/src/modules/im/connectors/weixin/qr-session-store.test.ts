@@ -58,4 +58,14 @@ test("parseWeixinQrSessionPayload: rejects malformed or drifted Redis payload", 
     ),
     null
   )
+  for (const field of ["createdAt", "updatedAt", "expiresAt"] as const) {
+    assert.equal(
+      parseWeixinQrSessionPayload(JSON.stringify({ ...fresh(), [field]: -1 })),
+      null
+    )
+    assert.equal(
+      parseWeixinQrSessionPayload(JSON.stringify({ ...fresh(), [field]: 1.5 })),
+      null
+    )
+  }
 })
