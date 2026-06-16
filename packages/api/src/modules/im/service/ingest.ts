@@ -37,17 +37,23 @@ import {
 } from "./inbound-message.js"
 import {
   consumeTransportAccountAutoLink,
-  ensureTransportAddress,
-  findConversationTransportBindingByEndpoint,
-  findTransportMessageLinkByExternalMessage,
   getPendingTransportAccountAutoLinkWorkspaceMemberId,
-  queueConversationTransportProjection,
+} from "./accounts.js"
+import {
+  ensureTransportAddress,
   syncTransportAddressConversationParticipant,
   updateTransportAddressMetadata,
   updateTransportEndpointMetadata,
-  updateTransportMessageLinkStatus,
+} from "./addresses.js"
+import {
+  findConversationTransportBindingByEndpoint,
   upsertConversationTransportBinding,
-} from "../service.js"
+} from "./bindings.js"
+import {
+  findTransportMessageLinkByExternalMessage,
+  queueConversationTransportProjection,
+  updateTransportMessageLinkStatus,
+} from "./delivery-links.js"
 
 async function ensureTransportConversationBinding(params: {
   account: TransportAccountSummary

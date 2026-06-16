@@ -28,10 +28,8 @@
  * dynamic import) stay unchanged.
  */
 
-import {
-  getConversationTransportBinding,
-  loadTransportMessageLinkForDelivery,
-} from "../service.js"
+import { getConversationTransportBinding } from "./bindings.js"
+import { loadTransportMessageLinkForDelivery } from "./delivery-links.js"
 
 export type {
   DbOrTx,

@@ -20,7 +20,7 @@ import {
   normalizeEndpointRow,
   normalizeTransportMessageLinkRow,
 } from "./_helpers.js"
-import { getConversationTransportBinding } from "../service.js"
+import { getConversationTransportBinding } from "./bindings.js"
 import {
   decodeConversationItemMetadata,
   insertTransportMessageLinkProjection,
