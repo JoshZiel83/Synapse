@@ -113,6 +113,45 @@ test("sendRemoteAgentConversationMessageUseCase sends as assistant inside one tr
   ])
 })
 
+test("sendRemoteAgentConversationMessageUseCase stops before workspace lookup when access fails", async () => {
+  const transactionClient = {} as Executor
+  const conversationId = randomUUID()
+  const item = chatItem({ conversationId })
+  const calls: string[] = []
+  const failingDeps = deps({
+    calls,
+    transactionClient,
+    participantId: randomUUID(),
+    hostWorkspaceId: randomUUID(),
+    item,
+  })
+  failingDeps.requireRemoteAgentConversationAccess = async (
+    queryable,
+    receivedConversationId
+  ) => {
+    calls.push(`access:${queryable === transactionClient}`)
+    assert.equal(receivedConversationId, conversationId)
+    throw new Error("remote agent access denied")
+  }
+
+  await assert.rejects(
+    () =>
+      sendRemoteAgentConversationMessageUseCase(
+        {
+          remoteAgentId: randomUUID(),
+          conversationId,
+          clientMessageId: randomUUID(),
+          contentBlocks: [{ id: randomUUID(), type: "text", text: "hello" }],
+          metadata: { source: "remote-agent" },
+        },
+        failingDeps
+      ),
+    /remote agent access denied/
+  )
+
+  assert.deepEqual(calls, ["tx:start", "access:true"])
+})
+
 test("sendRemoteAgentConversationMessageUseCase does not send when workspace lookup fails", async () => {
   const transactionClient = {} as Executor
   const conversationId = randomUUID()
