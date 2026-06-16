@@ -39,6 +39,12 @@ import {
 } from "./conversation-runtime.js"
 import { buildResolvedPlanTaskFallbackPrompt } from "./resolved-task-fallback.js"
 import {
+  buildAnswerMap,
+  buildResolvedUserInputPrompt,
+  parseResolvedTaskPayload,
+  type ResolvedTaskPayload,
+} from "./resolved-task-payload.js"
+import {
   RemoteAgentFailDeliveriesResponseSchema,
   RemoteAgentTaskCreateResponseSchema,
   requestJson,
@@ -193,53 +199,6 @@ function buildWakePrompt() {
     "Then use mcp__synapse__read_history for the relevant conversation(s), reply with mcp__synapse__send_message when action is needed, and stop when finished.",
     "If there is nothing actionable, stop without sending any message.",
   ].join(" ")
-}
-
-function buildResolvedUserInputPrompt(task: Record<string, any>) {
-  const title =
-    typeof task.userInput?.title === "string"
-      ? task.userInput.title.trim()
-      : "User input"
-  const questions = Array.isArray(task.userInput?.questions)
-    ? task.userInput.questions
-    : []
-  const answerLines = questions
-    .map((question: Record<string, any>) => {
-      const prompt =
-        typeof question.prompt === "string" && question.prompt.trim()
-          ? question.prompt.trim()
-          : typeof question.title === "string" && question.title.trim()
-            ? question.title.trim()
-            : typeof question.id === "string"
-              ? question.id
-              : "Question"
-      const labels = Array.isArray(question.answer?.selectedOptionLabels)
-        ? question.answer.selectedOptionLabels.filter(
-            (value: unknown): value is string =>
-              typeof value === "string" && value.trim().length > 0
-          )
-        : []
-      const selected = labels.length > 0 ? labels.join(", ") : undefined
-      const text =
-        typeof question.answer?.text === "string" && question.answer.text.trim()
-          ? question.answer.text.trim()
-          : undefined
-      const otherText =
-        typeof question.answer?.otherText === "string" &&
-        question.answer.otherText.trim()
-          ? question.answer.otherText.trim()
-          : undefined
-      const value = [selected, text, otherText].filter(Boolean).join(" | ")
-      return value ? `- ${prompt}: ${value}` : null
-    })
-    .filter((line: string | null): line is string => Boolean(line))
-  return [
-    `The Synapse user answered your input request: ${title}.`,
-    answerLines.length > 0
-      ? answerLines.join("\n")
-      : "Review the latest conversation state for the submitted answers.",
-    "Continue the task using those answers.",
-  ].join("\n")
 }
 
 function buildBootstrapPrompt(params: {
@@ -755,7 +714,7 @@ class ManagedRemoteAgent {
   }
 
   async resolveTask(message: TaskResolvedMessage) {
-    const task = message.task || {}
+    const task = parseResolvedTaskPayload(message.task)
     const pending = this.pendingTasks.get(message.taskId)
     if (!pending) {
       log(
@@ -764,24 +723,15 @@ class ManagedRemoteAgent {
         "Resolved task has no matching pending request; falling back to synthetic prompt",
         { taskId: message.taskId }
       )
-      const conversationId =
-        typeof (task as any).conversationId === "string"
-          ? (task as any).conversationId
-          : undefined
+      const conversationId = task.conversationId
       if (!conversationId) return
-      await this.applyResolvedTaskFallback(
-        conversationId,
-        task as Record<string, any>
-      )
+      await this.applyResolvedTaskFallback(conversationId, task)
       return
     }
     this.pendingTasks.delete(message.taskId)
     const runtime = this.runtimes.get(pending.conversationId)
     if (!runtime) {
-      await this.applyResolvedTaskFallback(
-        pending.conversationId,
-        task as Record<string, any>
-      )
+      await this.applyResolvedTaskFallback(pending.conversationId, task)
       return
     }
 
@@ -790,7 +740,7 @@ class ManagedRemoteAgent {
         behavior: "allow",
         updatedInput: {
           ...(pending.originalInput ?? {}),
-          answers: buildAnswerMap(task as Record<string, any>),
+          answers: buildAnswerMap(task),
         },
       }
       try {
@@ -801,21 +751,14 @@ class ManagedRemoteAgent {
           statusText: "Continuing after user input",
         })
       } catch (error) {
-        await this.applyResolvedTaskFallback(
-          pending.conversationId,
-          task as Record<string, any>
-        )
+        await this.applyResolvedTaskFallback(pending.conversationId, task)
       }
       return
     }
 
     // plan_approval
-    const outcome =
-      typeof (task as any).outcome === "string" ? (task as any).outcome : null
-    const note =
-      typeof (task as any).resolutionNote === "string"
-        ? (task as any).resolutionNote
-        : undefined
+    const outcome = task.outcome ?? null
+    const note = task.resolutionNote
     const decision: PermissionDecision =
       outcome === "approved"
         ? { behavior: "allow", updatedInput: pending.originalInput ?? {} }
@@ -833,21 +776,15 @@ class ManagedRemoteAgent {
       })
     } catch (error) {
       this.latestPlanByConversation.delete(pending.conversationId)
-      await this.applyResolvedTaskFallback(
-        pending.conversationId,
-        task as Record<string, any>
-      )
+      await this.applyResolvedTaskFallback(pending.conversationId, task)
     }
   }
 
   private async applyResolvedTaskFallback(
     conversationId: string,
-    task: Record<string, any>
+    task: ResolvedTaskPayload
   ) {
-    const kind = typeof task.kind === "string" ? task.kind : null
-    const lifecycleStatus =
-      typeof task.lifecycleStatus === "string" ? task.lifecycleStatus : null
-    if (kind === "user_input" && lifecycleStatus === "completed") {
+    if (task.kind === "user_input" && task.lifecycleStatus === "completed") {
       await this.ensureRuntimeForConversation({
         conversationId,
         wake: true,
@@ -1106,30 +1043,6 @@ class ManagedRemoteAgent {
       supportsCodexAppServer: true,
     }
   }
-}
-
-function buildAnswerMap(task: Record<string, any>) {
-  const answers: Record<string, string> = {}
-  const questions = Array.isArray(task.userInput?.questions)
-    ? task.userInput.questions
-    : []
-  for (const question of questions) {
-    const prompt =
-      typeof question?.prompt === "string" ? question.prompt : undefined
-    if (!prompt) continue
-    const answer = question?.answer
-    const parts = [
-      ...(Array.isArray(answer?.selectedOptionLabels)
-        ? answer.selectedOptionLabels.map((value: unknown) => String(value))
-        : []),
-      typeof answer?.otherText === "string" ? answer.otherText : undefined,
-      typeof answer?.text === "string" ? answer.text : undefined,
-    ].filter((value): value is string => Boolean(value))
-    if (parts.length > 0) {
-      answers[prompt] = parts.join(", ")
-    }
-  }
-  return answers
 }
 
 async function main() {

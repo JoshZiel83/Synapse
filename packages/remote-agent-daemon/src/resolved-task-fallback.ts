@@ -1,3 +1,5 @@
+import type { ResolvedTaskPayload } from "./resolved-task-payload.js"
+
 export function buildPlanApprovedPrompt(note?: string) {
   return [
     "The user approved your plan in Synapse.",
@@ -19,7 +21,7 @@ export function buildPlanRevisionPrompt(note?: string) {
 }
 
 export function buildResolvedPlanTaskFallbackPrompt(
-  task: Record<string, unknown>
+  task: ResolvedTaskPayload
 ): string | null {
   const kind = typeof task.kind === "string" ? task.kind : null
   if (kind !== "plan_approval") return null
