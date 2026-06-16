@@ -17,6 +17,7 @@ import {
   selectIntegrationInstallationRow,
   type IntegrationInstallationRow,
 } from "./repo.js"
+import { readAutomationProviderJsonObjectResponse } from "./provider-response-codec.js"
 
 type IntegrationWebhookIngressResult =
   | {
@@ -268,31 +269,6 @@ function gitlabProjectPath(targetId: string) {
   return encodeURIComponent(trimmed)
 }
 
-export function parseAutomationProviderJsonObjectText(
-  text: string,
-  label: string
-): Record<string, unknown> {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(text)
-  } catch (error) {
-    throw new Error(`${label} must be valid JSON: ${(error as Error).message}`)
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`${label} must be a JSON object`)
-  }
-  return parsed as Record<string, unknown>
-}
-
-async function readProviderJsonObjectResponse<
-  T extends Record<string, unknown>,
->(response: Response, label: string): Promise<T> {
-  return parseAutomationProviderJsonObjectText(
-    await response.text(),
-    label
-  ) as T
-}
-
 async function githubRequest<T extends Record<string, unknown>>(
   installation: ResolvedIntegrationInstallation,
   path: string,
@@ -322,7 +298,10 @@ async function githubRequest<T extends Record<string, unknown>>(
     return undefined as unknown as T
   }
 
-  return readProviderJsonObjectResponse<T>(response, "GitHub API response")
+  return readAutomationProviderJsonObjectResponse<T>(
+    response,
+    "GitHub API response"
+  )
 }
 
 async function gitlabRequest<T extends Record<string, unknown>>(
@@ -356,7 +335,10 @@ async function gitlabRequest<T extends Record<string, unknown>>(
     return undefined as unknown as T
   }
 
-  return readProviderJsonObjectResponse<T>(response, "GitLab API response")
+  return readAutomationProviderJsonObjectResponse<T>(
+    response,
+    "GitLab API response"
+  )
 }
 
 export function buildIntegrationEventSourceTemplate(input: {

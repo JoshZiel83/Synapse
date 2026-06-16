@@ -2,10 +2,10 @@ import assert from "node:assert/strict"
 import test from "node:test"
 
 import {
-  parseAutomationProviderJsonObjectText,
   registerIntegrationWebhook,
   type ResolvedIntegrationInstallation,
 } from "./integrations.js"
+import { parseAutomationProviderJsonObjectText } from "./provider-response-codec.js"
 
 function githubInstallation(): ResolvedIntegrationInstallation {
   return {
