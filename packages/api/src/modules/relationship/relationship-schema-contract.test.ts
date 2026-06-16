@@ -337,6 +337,35 @@ test("relationship request views reject unknown request statuses", () => {
   )
 })
 
+test("relationship request views reject non-canonical createdAt instants", () => {
+  const nonCanonical = "2026-06-12T00:00:00Z"
+  assert.equal(
+    FriendRequestViewSchema.safeParse({
+      id: "fr-1",
+      status: RELATIONSHIP_REQUEST_STATUS.PENDING,
+      createdAt: nonCanonical,
+      targetType: CONTACT_TARGET_TYPE.MEMBER,
+    }).success,
+    false
+  )
+  assert.equal(
+    ActorAccessRequestViewSchema.safeParse({
+      id: "ar-1",
+      status: RELATIONSHIP_REQUEST_STATUS.PENDING,
+      createdAt: nonCanonical,
+    }).success,
+    false
+  )
+  assert.equal(
+    RemoteAgentAccessRequestViewSchema.safeParse({
+      id: "rar-1",
+      status: RELATIONSHIP_REQUEST_STATUS.PENDING,
+      createdAt: nonCanonical,
+    }).success,
+    false
+  )
+})
+
 test("relationship member summaries validate finite trust levels", () => {
   assert.equal(
     FriendRequestViewSchema.safeParse({
