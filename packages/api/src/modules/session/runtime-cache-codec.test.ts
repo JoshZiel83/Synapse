@@ -1,6 +1,9 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { parseCachedActorRuntimeState } from "./runtime.js"
+import {
+  formatRuntimeJsonForPresentation,
+  parseCachedActorRuntimeState,
+} from "./runtime.js"
 
 const validRuntimeState = {
   conversationId: "conversation-1",
@@ -37,5 +40,28 @@ test("parseCachedActorRuntimeState fails closed on drifted runtime shape", () =>
       JSON.stringify({ ...validRuntimeState, health: "unknown" })
     ),
     null
+  )
+})
+
+test("formatRuntimeJsonForPresentation formats object JSON only", () => {
+  assert.equal(
+    formatRuntimeJsonForPresentation(JSON.stringify({ error: "boom" })),
+    JSON.stringify({ error: "boom" }, null, 2)
+  )
+  assert.equal(
+    formatRuntimeJsonForPresentation({ result: { ok: true } }),
+    JSON.stringify({ result: { ok: true } }, null, 2)
+  )
+  assert.equal(
+    formatRuntimeJsonForPresentation(JSON.stringify(["not", "object"])),
+    JSON.stringify({}, null, 2)
+  )
+  assert.equal(
+    formatRuntimeJsonForPresentation(JSON.stringify("not object")),
+    JSON.stringify({}, null, 2)
+  )
+  assert.equal(
+    formatRuntimeJsonForPresentation("{"),
+    JSON.stringify({}, null, 2)
   )
 })

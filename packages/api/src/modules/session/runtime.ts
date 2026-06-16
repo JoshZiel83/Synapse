@@ -99,17 +99,6 @@ async function loadRuntimeWakeups(
   return rows.map(presentWakeup)
 }
 
-function parseJsonValue(value: unknown): unknown {
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value)
-    } catch {
-      return value
-    }
-  }
-  return value
-}
-
 function asRecord(value: unknown): Record<string, unknown> {
   return parseJsonObjectOrUndefined(value) ?? {}
 }
@@ -125,9 +114,9 @@ export function parseCachedActorRuntimeState(
   }
 }
 
-function prettyJson(value: unknown) {
+export function formatRuntimeJsonForPresentation(value: unknown) {
   try {
-    return JSON.stringify(parseJsonValue(value) ?? {}, null, 2)
+    return JSON.stringify(parseJsonObjectOrUndefined(value) ?? {}, null, 2)
   } catch {
     return JSON.stringify(String(value ?? ""))
   }
@@ -310,13 +299,17 @@ function buildResultBodyBlocks(params: {
     finalErrorPayload &&
     Object.keys(asRecord(finalErrorPayload)).length > 0
   ) {
-    return buildTextBlocksFromLines(prettyJson(finalErrorPayload))
+    return buildTextBlocksFromLines(
+      formatRuntimeJsonForPresentation(finalErrorPayload)
+    )
   }
   if (
     finalResultPayload &&
     Object.keys(asRecord(finalResultPayload)).length > 0
   ) {
-    return buildTextBlocksFromLines(prettyJson(finalResultPayload))
+    return buildTextBlocksFromLines(
+      formatRuntimeJsonForPresentation(finalResultPayload)
+    )
   }
 
   if (params.latestResult?.errorMessage) {
@@ -440,7 +433,7 @@ async function buildToolActivityDetail(turnId: string) {
       errorMessage:
         latestResult?.errorMessage ||
         (typeof task?.finalErrorPayload === "object"
-          ? prettyJson(task.finalErrorPayload)
+          ? formatRuntimeJsonForPresentation(task.finalErrorPayload)
           : undefined),
     })
 
@@ -460,7 +453,7 @@ async function buildToolActivityDetail(turnId: string) {
       error:
         latestResult?.errorMessage ||
         (typeof task?.finalErrorPayload === "object"
-          ? prettyJson(task.finalErrorPayload)
+          ? formatRuntimeJsonForPresentation(task.finalErrorPayload)
           : undefined) ||
         undefined,
       bodyBlocks: buildResultBodyBlocks({
