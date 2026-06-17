@@ -31,6 +31,7 @@ import type {
 } from "../types.js"
 import { getQqCredentialsOrThrow, getEd25519Seed } from "./credentials.js"
 import { runQqGateway } from "./inbound-ws.js"
+import { enrichInboundQqMedia } from "./inbound-media.js"
 import { writeLatestInboundAnchor } from "./latest-inbound-store.js"
 import {
   normalizeQqC2cMessage,
@@ -258,16 +259,20 @@ async function dispatchBusinessEvent(
         })
         return false
       }
+      const enriched = await enrichInboundQqMedia(e, {
+        account: input.account,
+        logger,
+      })
       await recordInboundAnchor({
         accountId: input.account.id,
-        endpointType: e.endpointType,
-        endpointExternalId: e.endpointExternalId,
+        endpointType: enriched.endpointType,
+        endpointExternalId: enriched.endpointExternalId,
         anchorKind: "msg_id",
-        anchorId: e.externalMessageId,
+        anchorId: enriched.externalMessageId,
         eventType: QQ_EVENT.C2C_MESSAGE_CREATE,
-        receivedAt: e.receivedAt,
+        receivedAt: enriched.receivedAt,
       })
-      await input.emitInbound(e)
+      await input.emitInbound(enriched)
       return true
     }
     case QQ_EVENT.GROUP_AT_MESSAGE_CREATE: {
@@ -281,16 +286,20 @@ async function dispatchBusinessEvent(
         })
         return false
       }
+      const enriched = await enrichInboundQqMedia(e, {
+        account: input.account,
+        logger,
+      })
       await recordInboundAnchor({
         accountId: input.account.id,
-        endpointType: e.endpointType,
-        endpointExternalId: e.endpointExternalId,
+        endpointType: enriched.endpointType,
+        endpointExternalId: enriched.endpointExternalId,
         anchorKind: "msg_id",
-        anchorId: e.externalMessageId,
+        anchorId: enriched.externalMessageId,
         eventType: QQ_EVENT.GROUP_AT_MESSAGE_CREATE,
-        receivedAt: e.receivedAt,
+        receivedAt: enriched.receivedAt,
       })
-      await input.emitInbound(e)
+      await input.emitInbound(enriched)
       return true
     }
     case QQ_EVENT.GROUP_MESSAGE_CREATE:

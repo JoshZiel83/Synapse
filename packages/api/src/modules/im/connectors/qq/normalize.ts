@@ -1,17 +1,23 @@
 /**
- * QQ inbound → CanonicalMessage normalization (Stage 2 — text only).
+ * QQ inbound → CanonicalMessage normalization.
  *
- * Stage 2 handles:
+ * Handles:
  *   - C2C_MESSAGE_CREATE   → endpoint=direct, sender=c2c:{user_openid}
  *   - GROUP_AT_MESSAGE_CREATE → endpoint=group, sender=gm:{group}:{member}
+ *   - attachments[] → media `system_marker` placeholders (image / voice /
+ *     video / file). This module stays PURE: the side-effecting
+ *     `enrichInboundQqMedia` pass (inbound-media.ts) downloads the bytes
+ *     into our content-addressed store and upgrades each placeholder to a
+ *     real image/voice/video/file CanonicalPart carrying a `sha256`
+ *     fileRef — which is what `service/inbound-message.ts` surfaces to the
+ *     agent as a `file_ref` part. Until enrichment runs, the placeholder
+ *     still renders as "[图片]" / "[文件]" in plainText.
+ *   - Quoted/refIdx backfill — prepends a `quote` CanonicalPart by looking
+ *     up cached refIdx state in Redis.
  *
- * Out of scope here (deferred):
- *   - Quoted/refIdx backfill — Stage 7 enriches messages with a `quote`
- *     CanonicalPart by looking up cached refIdx state in Redis.
- *   - Attachments — Stage 5 downloads + ingests to the files service +
- *     emits image/voice/video/file parts.
- *   - INTERACTION_CREATE — Stage 8 handles button clicks; webhook
- *     never carries these (QQ delivers them via WebSocket only).
+ * Out of scope here:
+ *   - INTERACTION_CREATE — button clicks (QQ delivers them over WebSocket
+ *     only; see interaction-handler.ts).
  */
 
 import { redis } from "../../../../infrastructure/redis/index.js"
@@ -23,6 +29,7 @@ import {
   textOnlyMessage,
   type CanonicalMessage,
   type CanonicalPart,
+  type CanonicalSystemMarker,
 } from "../../messaging/canonical-message.js"
 import type { InboundEnvelope } from "../types.js"
 import {
@@ -97,15 +104,15 @@ export async function normalizeQqC2cMessage(
     kind: "c2c",
     userOpenid,
   })
-  const parts = await buildPartsWithQuote({
-    accountId: opts?.accountId,
-    rawText: data.content ?? "",
-    ext: data.message_scene?.ext,
-  })
-  const message =
-    parts.length === 0
-      ? buildCanonicalMessage([])
-      : buildCanonicalMessage(parts)
+  const parts = [
+    ...(await buildPartsWithQuote({
+      accountId: opts?.accountId,
+      rawText: data.content ?? "",
+      ext: data.message_scene?.ext,
+    })),
+    ...attachmentMediaParts(data.attachments),
+  ]
+  const message = buildCanonicalMessage(parts)
 
   // Stash this message in the ref-index cache so a future "user quotes
   // this one" event can recover the original content.
@@ -160,15 +167,15 @@ export async function normalizeQqGroupAtMessage(
     memberOpenid,
   })
   const cleanedText = stripLeadingMention(data.content ?? "")
-  const parts = await buildPartsWithQuote({
-    accountId: opts?.accountId,
-    rawText: cleanedText,
-    ext: data.message_scene?.ext,
-  })
-  const message =
-    parts.length === 0
-      ? buildCanonicalMessage([])
-      : buildCanonicalMessage(parts)
+  const parts = [
+    ...(await buildPartsWithQuote({
+      accountId: opts?.accountId,
+      rawText: cleanedText,
+      ext: data.message_scene?.ext,
+    })),
+    ...attachmentMediaParts(data.attachments),
+  ]
+  const message = buildCanonicalMessage(parts)
 
   await recordSelfRefIndex({
     accountId: opts?.accountId,
@@ -285,4 +292,72 @@ async function recordSelfRefIndex(params: {
  */
 function stripLeadingMention(content: string): string {
   return content.replace(/^\s*<@[^>]+>\s*/u, "")
+}
+
+interface QqInboundAttachment {
+  url?: unknown
+  content_type?: unknown
+  filename?: unknown
+  size?: unknown
+  width?: unknown
+  height?: unknown
+}
+
+/**
+ * Turn QQ inbound `attachments[]` into media `system_marker` placeholders.
+ *
+ * Pure + best-effort: an attachment without a usable `url` is skipped (it
+ * can't be downloaded). The actual bytes are fetched + content-addressed by
+ * the side-effecting `enrichInboundQqMedia` pass, which replaces each
+ * placeholder with a real image/voice/video/file part. Keeping the raw
+ * attachment object in `original` is what lets that pass recover the url +
+ * content_type + filename without re-reading `envelope.raw`.
+ */
+function attachmentMediaParts(attachments: unknown): CanonicalPart[] {
+  if (!Array.isArray(attachments)) return []
+  const parts: CanonicalPart[] = []
+  for (const raw of attachments) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue
+    const a = raw as QqInboundAttachment
+    if (!trimmed(a.url)) continue
+    parts.push({
+      type: "system_marker",
+      marker: markerForAttachment(a),
+      original: raw as Record<string, unknown>,
+    })
+  }
+  return parts
+}
+
+/**
+ * Classify a QQ attachment into a media placeholder marker by its
+ * `content_type` (a MIME-ish string) with a filename-extension fallback.
+ */
+function markerForAttachment(a: QqInboundAttachment): CanonicalSystemMarker {
+  const ct =
+    typeof a.content_type === "string" ? a.content_type.toLowerCase() : ""
+  const name = typeof a.filename === "string" ? a.filename.toLowerCase() : ""
+  if (
+    ct.startsWith("image/") ||
+    ct === "image" ||
+    /\.(png|jpe?g|gif|webp|bmp|heic)$/.test(name)
+  ) {
+    return "image_placeholder"
+  }
+  if (
+    ct.startsWith("video/") ||
+    ct === "video" ||
+    /\.(mp4|mov|avi|mkv|webm)$/.test(name)
+  ) {
+    return "video_placeholder"
+  }
+  if (
+    ct.startsWith("audio/") ||
+    ct.startsWith("voice") ||
+    ct === "audio" ||
+    /\.(silk|amr|mp3|m4a|wav|opus|ogg)$/.test(name)
+  ) {
+    return "voice_placeholder"
+  }
+  return "file_placeholder"
 }

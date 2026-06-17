@@ -39,6 +39,7 @@ import { qqApiFetch } from "./client.js"
 import { getQqCredentialsOrThrow } from "./credentials.js"
 import { getAccessToken } from "./client.js"
 import { handleQqInteractionCreate } from "./interaction-handler.js"
+import { enrichInboundQqMedia } from "./inbound-media.js"
 import { writeLatestInboundAnchor } from "./latest-inbound-store.js"
 import {
   clearQqWsSession,
@@ -417,8 +418,18 @@ async function routeBusinessDispatch(
         logger.warn("qq-gateway: C2C event missing required fields")
         return
       }
-      await recordWsAnchor(opts, env, "msg_id", env.externalMessageId, t)
-      await opts.emitInbound(env)
+      const enriched = await enrichInboundQqMedia(env, {
+        account: opts.account,
+        logger,
+      })
+      await recordWsAnchor(
+        opts,
+        enriched,
+        "msg_id",
+        enriched.externalMessageId,
+        t
+      )
+      await opts.emitInbound(enriched)
       return
     }
     case QQ_EVENT.GROUP_AT_MESSAGE_CREATE: {
@@ -430,8 +441,18 @@ async function routeBusinessDispatch(
         logger.warn("qq-gateway: GROUP_AT event missing required fields")
         return
       }
-      await recordWsAnchor(opts, env, "msg_id", env.externalMessageId, t)
-      await opts.emitInbound(env)
+      const enriched = await enrichInboundQqMedia(env, {
+        account: opts.account,
+        logger,
+      })
+      await recordWsAnchor(
+        opts,
+        enriched,
+        "msg_id",
+        enriched.externalMessageId,
+        t
+      )
+      await opts.emitInbound(enriched)
       return
     }
     case QQ_EVENT.INTERACTION_CREATE: {
