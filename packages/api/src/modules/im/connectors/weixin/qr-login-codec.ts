@@ -9,11 +9,24 @@ const weixinQrCodeResponseSchema = z
 
 const weixinQrStatusResponseSchema = z
   .object({
-    status: z.enum(["wait", "scaned", "confirmed", "expired"]).optional(),
+    status: z
+      .enum([
+        "wait",
+        "scaned",
+        "confirmed",
+        "expired",
+        "need_verifycode",
+        "scaned_but_redirect",
+        "binded_redirect",
+        "verify_code_blocked",
+      ])
+      .optional(),
     bot_token: z.string().optional(),
     ilink_bot_id: z.string().optional(),
     baseurl: z.string().optional(),
     ilink_user_id: z.string().optional(),
+    /** New host to redirect status polling to (status scaned_but_redirect). */
+    redirect_host: z.string().optional(),
   })
   .passthrough()
 

@@ -2179,6 +2179,17 @@ class ApiClient {
     )
     return res.data
   }
+  async submitWeixinQrTransportVerifyCode(
+    wsId: string,
+    sessionId: string,
+    code: string
+  ): Promise<WeixinQrSessionResponseSchemaType> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/accounts/weixin/qr/${sessionId}/verify-code`,
+      { method: "POST", body: JSON.stringify({ code }) }
+    )
+    return res.data
+  }
   async startDingtalkDeviceFlow(
     wsId: string,
     data: DingtalkDeviceFlowStartInput
@@ -2252,6 +2263,17 @@ class ApiClient {
   ): Promise<WeixinQrSessionResponseSchemaType> {
     const res = await this.fetch(
       `/workspaces/${wsId}/im/me/weixin-binding/qr/${sessionId}`
+    )
+    return res.data
+  }
+  async submitCurrentUserWeixinBindingVerifyCode(
+    wsId: string,
+    sessionId: string,
+    code: string
+  ): Promise<WeixinQrSessionResponseSchemaType> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/me/weixin-binding/qr/${sessionId}/verify-code`,
+      { method: "POST", body: JSON.stringify({ code }) }
     )
     return res.data
   }

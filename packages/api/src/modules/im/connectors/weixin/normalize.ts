@@ -11,6 +11,7 @@ import {
   type CanonicalMessage,
   type CanonicalPart,
 } from "../../messaging/canonical-message.js"
+import { WEIXIN_ITEM_TYPE } from "./protocol.js"
 
 export interface WeixinMessageItem {
   type?: number
@@ -75,22 +76,22 @@ export function normalizeWeixinMessage(
       firstText = firstText || `[语音] ${voiceText}`
       continue
     }
-    if (item.type === 2) {
+    if (item.type === WEIXIN_ITEM_TYPE.IMAGE) {
       parts.push({ type: "system_marker", marker: "image_placeholder" })
       firstText = firstText || "[图片]"
       continue
     }
-    if (item.type === 3) {
+    if (item.type === WEIXIN_ITEM_TYPE.VOICE) {
       parts.push({ type: "system_marker", marker: "voice_placeholder" })
       firstText = firstText || "[语音]"
       continue
     }
-    if (item.type === 4) {
+    if (item.type === WEIXIN_ITEM_TYPE.FILE) {
       parts.push({ type: "system_marker", marker: "file_placeholder" })
       firstText = firstText || "[文件]"
       continue
     }
-    if (item.type === 5) {
+    if (item.type === WEIXIN_ITEM_TYPE.VIDEO) {
       parts.push({ type: "system_marker", marker: "video_placeholder" })
       firstText = firstText || "[视频]"
       continue

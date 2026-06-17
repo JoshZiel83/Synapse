@@ -14,6 +14,7 @@ import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { ApiError, api } from "@/lib/api"
 import { useAuthStore } from "@/stores/auth-store"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import {
   Dialog,
   DialogContent,
@@ -39,6 +40,7 @@ function errorMessage(error: unknown, fallback: string) {
 const WEIXIN_QR_POLLING_STATUSES = new Set<WeixinQrLoginStatus>([
   WEIXIN_QR_LOGIN_STATUS.WAITING,
   WEIXIN_QR_LOGIN_STATUS.SCANNED,
+  WEIXIN_QR_LOGIN_STATUS.NEED_VERIFYCODE,
 ])
 
 function isWeixinQrPollingStatus(
@@ -79,6 +81,8 @@ export function SidebarWeixinBinding() {
   const [qrImageUrl, setQrImageUrl] = React.useState<string | null>(null)
   const [starting, setStarting] = React.useState(false)
   const [savingBindingTarget, setSavingBindingTarget] = React.useState(false)
+  const [verifyCode, setVerifyCode] = React.useState("")
+  const [submittingVerifyCode, setSubmittingVerifyCode] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
 
   React.useEffect(() => {
@@ -318,6 +322,27 @@ export function SidebarWeixinBinding() {
     }
   }
 
+  async function handleSubmitVerifyCode() {
+    if (!workspaceId || !session || !verifyCode.trim()) {
+      return
+    }
+    setSubmittingVerifyCode(true)
+    setError(null)
+    try {
+      const result = await api.submitCurrentUserWeixinBindingVerifyCode(
+        workspaceId,
+        session.sessionId,
+        verifyCode.trim()
+      )
+      setSession(result.session)
+      setVerifyCode("")
+    } catch (submitError) {
+      setError(errorMessage(submitError, "Failed to submit verification code"))
+    } finally {
+      setSubmittingVerifyCode(false)
+    }
+  }
+
   const canShowLauncher =
     Boolean(workspaceId) &&
     Boolean(currentWorkspaceMemberId) &&
@@ -421,7 +446,39 @@ export function SidebarWeixinBinding() {
                 </div>
               )}
 
-              {session.status === WEIXIN_QR_LOGIN_STATUS.SCANNED ? (
+              {session.status === WEIXIN_QR_LOGIN_STATUS.NEED_VERIFYCODE ? (
+                <div className="space-y-2 rounded-2xl border bg-muted/20 px-3 py-3">
+                  <p className="text-xs text-muted-foreground">
+                    {session.message ||
+                      "Enter the number shown in WeChat on your phone."}
+                  </p>
+                  <div className="flex gap-2">
+                    <Input
+                      value={verifyCode}
+                      onChange={(event) => setVerifyCode(event.target.value)}
+                      placeholder="Verification code"
+                      inputMode="numeric"
+                      autoFocus
+                      disabled={submittingVerifyCode}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          void handleSubmitVerifyCode()
+                        }
+                      }}
+                    />
+                    <Button
+                      onClick={() => void handleSubmitVerifyCode()}
+                      disabled={submittingVerifyCode || !verifyCode.trim()}
+                    >
+                      {submittingVerifyCode ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        "Submit"
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              ) : session.status === WEIXIN_QR_LOGIN_STATUS.SCANNED ? (
                 <div className="rounded-2xl border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
                   Confirm on your phone.
                 </div>

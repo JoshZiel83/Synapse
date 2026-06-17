@@ -2,13 +2,13 @@
  * Personal-WeChat (ilinkai) HTTP client primitives.
  */
 
-import crypto from "node:crypto"
 import type { TransportAccountSummary } from "@synapse/shared/types"
 import {
   DEFAULT_WEIXIN_BASE_URL,
   extractWeixinCredentials,
   type WeixinCredentials,
 } from "./credentials.js"
+import { buildIlinkCommonHeaders, randomWechatUin } from "./protocol.js"
 
 export function getWeixinCredentialsOrThrow(
   account: TransportAccountSummary
@@ -25,23 +25,25 @@ export function getWeixinCredentialsOrThrow(
   return credentials
 }
 
-export function buildWeixinHeaders(
-  body: string,
-  token?: string
-): Record<string, string> {
+export function buildWeixinHeaders(token?: string): Record<string, string> {
+  // NOTE: Content-Length is intentionally omitted — fetch computes it. The
+  // iLink-App-Id / iLink-App-ClientVersion headers (via buildIlinkCommonHeaders)
+  // are required by the gateway and were previously missing on POST requests.
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     AuthorizationType: "ilink_bot_token",
-    "Content-Length": String(Buffer.byteLength(body, "utf8")),
-    "X-WECHAT-UIN": Buffer.from(
-      String(crypto.randomBytes(4).readUInt32BE(0)),
-      "utf8"
-    ).toString("base64"),
+    "X-WECHAT-UIN": randomWechatUin(),
+    ...buildIlinkCommonHeaders(),
   }
   if (token?.trim()) {
     headers.Authorization = `Bearer ${token.trim()}`
   }
   return headers
+}
+
+/** Headers for authless GET requests (e.g. QR status long-poll). */
+export function buildWeixinGetHeaders(): Record<string, string> {
+  return { ...buildIlinkCommonHeaders() }
 }
 
 function nonEmpty(v: unknown): string | undefined {
@@ -88,7 +90,7 @@ export async function postWeixinJson(params: {
       `${params.baseUrl.replace(/\/+$/, "")}/${params.endpoint.replace(/^\/+/, "")}`,
       {
         method: "POST",
-        headers: buildWeixinHeaders(body, params.token),
+        headers: buildWeixinHeaders(params.token),
         body,
         signal: controller.signal,
       }

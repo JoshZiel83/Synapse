@@ -45,6 +45,8 @@ export interface ActiveWeixinQrLogin {
   transportAccountId?: string
   botId?: string
   scannerUserId?: string
+  /** Pairing code the user submitted, carried into the next status poll. */
+  pendingVerifyCode?: string
 }
 
 const KEY_PREFIX = "im:weixin:qr-session:"
@@ -72,6 +74,7 @@ const activeWeixinQrLoginSchema = z
     transportAccountId: z.string().optional(),
     botId: z.string().optional(),
     scannerUserId: z.string().optional(),
+    pendingVerifyCode: z.string().optional(),
   })
   .strict()
 

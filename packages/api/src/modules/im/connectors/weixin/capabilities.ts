@@ -31,10 +31,13 @@ export const WEIXIN_MESSAGE_CAPABILITIES: MessageCapabilities = {
   supportsGroup: false,
   supportsMention: false,
   supportsReply: false,
-  supportsImage: false,
-  supportsFile: false,
+  // Outbound media is uploaded to the WeChat CDN (AES-128-ECB) and sent as
+  // image/video/file items (see outbound.ts + media-cdn.ts). Voice send stays
+  // off — it would require SILK encoding we don't ship.
+  supportsImage: true,
+  supportsFile: true,
   supportsVoice: false,
-  supportsVideo: false,
+  supportsVideo: true,
   supportsInteractionPrompt: false,
   maxTextBytes: 5_000,
   // Personal WeChat 1:1 chats contain exactly one human; the only

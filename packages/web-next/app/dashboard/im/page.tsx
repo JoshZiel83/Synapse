@@ -63,6 +63,7 @@ import { API_BASE, api, ApiError } from "@/lib/api"
 const WEIXIN_QR_POLLING_STATUSES = new Set<WeixinQrLoginStatus>([
   WEIXIN_QR_LOGIN_STATUS.WAITING,
   WEIXIN_QR_LOGIN_STATUS.SCANNED,
+  WEIXIN_QR_LOGIN_STATUS.NEED_VERIFYCODE,
 ])
 
 const DINGTALK_DEVICE_FLOW_MANUAL_FALLBACK_STATUSES =
@@ -724,6 +725,9 @@ export default function ImPage() {
   const [weixinSession, setWeixinSession] =
     useState<WeixinQrLoginSessionSummary | null>(null)
   const [weixinQrImageUrl, setWeixinQrImageUrl] = useState<string | null>(null)
+  const [weixinVerifyCode, setWeixinVerifyCode] = useState("")
+  const [submittingWeixinVerifyCode, setSubmittingWeixinVerifyCode] =
+    useState(false)
   const [dingtalkForm, setDingtalkForm] =
     useState<DingtalkFormState>(EMPTY_DINGTALK_FORM)
   const [dingtalkSession, setDingtalkSession] =
@@ -1396,6 +1400,29 @@ export default function ImPage() {
       )
     } finally {
       setCreatingWeixin(false)
+    }
+  }
+
+  async function handleSubmitWeixinVerifyCode() {
+    if (!workspaceId || !weixinSession || !weixinVerifyCode.trim()) return
+    setSubmittingWeixinVerifyCode(true)
+    setError(null)
+    try {
+      const result = await api.submitWeixinQrTransportVerifyCode(
+        workspaceId,
+        weixinSession.sessionId,
+        weixinVerifyCode.trim()
+      )
+      setWeixinSession(result?.session || null)
+      setWeixinVerifyCode("")
+    } catch (submitError) {
+      setError(
+        submitError instanceof Error
+          ? submitError.message
+          : "Failed to submit verification code"
+      )
+    } finally {
+      setSubmittingWeixinVerifyCode(false)
     }
   }
 
@@ -2267,6 +2294,33 @@ export default function ImPage() {
                 <div className="text-sm text-muted-foreground">
                   {weixinSession.message}
                 </div>
+                {weixinSession.status ===
+                WEIXIN_QR_LOGIN_STATUS.NEED_VERIFYCODE ? (
+                  <div className="flex gap-2">
+                    <Input
+                      value={weixinVerifyCode}
+                      onChange={(event) =>
+                        setWeixinVerifyCode(event.target.value)
+                      }
+                      placeholder="Verification code"
+                      inputMode="numeric"
+                      disabled={submittingWeixinVerifyCode}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          void handleSubmitWeixinVerifyCode()
+                        }
+                      }}
+                    />
+                    <Button
+                      onClick={() => void handleSubmitWeixinVerifyCode()}
+                      disabled={
+                        submittingWeixinVerifyCode || !weixinVerifyCode.trim()
+                      }
+                    >
+                      Submit
+                    </Button>
+                  </div>
+                ) : null}
                 <div className="text-xs text-muted-foreground">
                   Expires: {formatDateTime(weixinSession.expiresAt)}
                 </div>

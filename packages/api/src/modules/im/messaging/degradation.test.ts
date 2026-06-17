@@ -71,35 +71,32 @@ test("WeChat capabilities flatten mention to text and drop reactions", () => {
   }
 })
 
-test("WeChat capabilities replace image with system_marker", () => {
+test("WeChat capabilities keep image part (media now supported)", () => {
   const msg = buildCanonicalMessage([
     { type: "image", fileRef: { url: "https://x/img.png", mime: "image/png" } },
   ])
   const out = degradeForCapabilities(msg, WEIXIN_CAPABILITIES)
-  assert.equal(out.parts[0].type, "system_marker")
-  if (out.parts[0].type === "system_marker") {
-    assert.equal(out.parts[0].marker, "image_placeholder")
-  }
+  // WeChat now uploads image/video/file to the CDN; the part is kept for the
+  // outbound sender rather than degraded to a placeholder.
+  assert.equal(out.parts[0].type, "image")
 })
 
-test("WeChat capabilities replace file with [文件 name] text", () => {
+test("WeChat capabilities keep file part (media now supported)", () => {
   const msg = buildCanonicalMessage([
     { type: "file", fileRef: { name: "doc.pdf" } },
   ])
   const out = degradeForCapabilities(msg, WEIXIN_CAPABILITIES)
-  assert.equal(out.parts[0].type, "text")
-  if (out.parts[0].type === "text") {
-    assert.equal(out.parts[0].text, "[文件 doc.pdf]")
-  }
+  assert.equal(out.parts[0].type, "file")
 })
 
-test("file without name becomes [文件] under WeChat caps", () => {
-  const msg = buildCanonicalMessage([{ type: "file", fileRef: { name: "" } }])
+test("WeChat still degrades voice to placeholder (no voice send)", () => {
+  const msg = buildCanonicalMessage([
+    { type: "voice", fileRef: { url: "https://x/a.amr" }, transcript: "hi" },
+  ])
   const out = degradeForCapabilities(msg, WEIXIN_CAPABILITIES)
-  if (out.parts[0].type === "text") {
-    assert.equal(out.parts[0].text, "[文件]")
-  } else {
-    assert.fail("expected text part")
+  assert.equal(out.parts[0].type, "system_marker")
+  if (out.parts[0].type === "system_marker") {
+    assert.equal(out.parts[0].marker, "voice_placeholder")
   }
 })
 

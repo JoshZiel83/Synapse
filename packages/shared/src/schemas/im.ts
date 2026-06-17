@@ -742,6 +742,14 @@ export type WeixinQrSessionCreateInput = z.input<
   typeof WeixinQrSessionCreateInputSchema
 >
 
+/** POST weixin QR verify-code (need_verifycode pairing step) → `{ code }`. */
+export const WeixinQrVerifyCodeInputSchema = z
+  .object({ code: z.string().trim().min(1).max(32) })
+  .strict()
+export type WeixinQrVerifyCodeInput = z.input<
+  typeof WeixinQrVerifyCodeInputSchema
+>
+
 export const WeixinBindingAutoLinkInputSchema = z.object({
   workspaceMemberId: z.uuid().nullable(),
 })

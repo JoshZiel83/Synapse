@@ -25,11 +25,13 @@ import {
   getWeixinQrLoginSession,
   getWeixinQrLoginSessionOwner,
   startWeixinQrLoginSession,
+  submitWeixinQrVerifyCode,
 } from "../connectors/weixin/qr-login.js"
 import {
   bindingAutoLinkSchema,
   requireWorkspaceAction,
   weixinQrSessionSchema,
+  weixinQrVerifyCodeSchema,
 } from "./_shared.js"
 
 export default async function imWeixinController(
@@ -152,6 +154,52 @@ export default async function imWeixinController(
       const session = await getWeixinQrLoginSession({
         workspaceId,
         sessionId,
+      })
+      if (!session) {
+        reply.status(404).send({ error: "Weixin QR session not found" })
+        return
+      }
+      return { session }
+    }
+  )
+
+  appRoute(
+    app,
+    "POST",
+    "/api/v1/workspaces/:workspaceId/im/me/weixin-binding/qr/:sessionId/verify-code",
+    { schema: WeixinQrSessionResponseSchema },
+    async (request, reply) => {
+      const allowed = await requireWorkspaceAction(
+        request,
+        reply,
+        "workspace.view",
+        "Not allowed to access WeChat binding in this workspace"
+      )
+      if (!allowed) return
+
+      const { workspaceId, sessionId } = request.params as {
+        workspaceId: string
+        sessionId: string
+      }
+      const workspaceMemberId = (request as any).workspaceMember?.id as string
+      const owner = await getWeixinQrLoginSessionOwner({
+        workspaceId,
+        sessionId,
+      })
+      if (
+        !owner ||
+        owner.ownerScope !== "workspace_member" ||
+        owner.ownerWorkspaceMemberId !== workspaceMemberId
+      ) {
+        reply.status(404).send({ error: "Weixin QR session not found" })
+        return
+      }
+
+      const body = weixinQrVerifyCodeSchema.parse(request.body)
+      const session = await submitWeixinQrVerifyCode({
+        workspaceId,
+        sessionId,
+        code: body.code,
       })
       if (!session) {
         reply.status(404).send({ error: "Weixin QR session not found" })
@@ -299,6 +347,38 @@ export default async function imWeixinController(
       const session = await getWeixinQrLoginSession({
         workspaceId: params.workspaceId,
         sessionId: params.sessionId,
+      })
+      if (!session) {
+        reply.status(404).send({ error: "Weixin QR session not found" })
+        return
+      }
+      return { session }
+    }
+  )
+
+  appRoute(
+    app,
+    "POST",
+    "/api/v1/workspaces/:workspaceId/im/accounts/weixin/qr/:sessionId/verify-code",
+    { schema: WeixinQrSessionResponseSchema },
+    async (request, reply) => {
+      const allowed = await requireWorkspaceAction(
+        request,
+        reply,
+        "workspace.manage",
+        "Not allowed to manage IM accounts in this workspace"
+      )
+      if (!allowed) return
+
+      const params = request.params as {
+        workspaceId: string
+        sessionId: string
+      }
+      const body = weixinQrVerifyCodeSchema.parse(request.body)
+      const session = await submitWeixinQrVerifyCode({
+        workspaceId: params.workspaceId,
+        sessionId: params.sessionId,
+        code: body.code,
       })
       if (!session) {
         reply.status(404).send({ error: "Weixin QR session not found" })

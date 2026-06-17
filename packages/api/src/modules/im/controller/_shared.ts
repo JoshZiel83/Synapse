@@ -24,6 +24,7 @@ import {
   TransportWecomAccountUpdateInputSchema,
   WeixinBindingAutoLinkInputSchema,
   WeixinQrSessionCreateInputSchema,
+  WeixinQrVerifyCodeInputSchema,
   validateTransportAccountInboundActorCreateInput,
   validateTransportAccountInboundActorUpdateInput,
   validateTransportAccountOwnerCreateInput,
@@ -86,6 +87,8 @@ export const transportSessionSettingsSchema =
   TransportSessionSettingsInputSchema
 
 export const weixinQrSessionSchema = WeixinQrSessionCreateInputSchema
+
+export const weixinQrVerifyCodeSchema = WeixinQrVerifyCodeInputSchema
 
 export const linkedUserSchema = TransportExternalUserLinkedMemberInputSchema
 

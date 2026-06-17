@@ -34,11 +34,11 @@ import {
   type ActiveWeixinQrLogin,
 } from "./qr-session-store.js"
 import {
-  parseWeixinQrCodeResponseText,
   parseWeixinQrStatusResponseText,
-  type WeixinQrCodeResponse,
   type WeixinQrStatusResponse,
 } from "./qr-login-codec.js"
+import { buildWeixinGetHeaders, postWeixinJson } from "./client.js"
+import { WEIXIN_ENDPOINTS } from "./protocol.js"
 
 const DEFAULT_WEIXIN_BASE_URL = "https://ilinkai.weixin.qq.com"
 const ACTIVE_LOGIN_TTL_MS = 5 * 60_000
@@ -87,31 +87,38 @@ async function fetchWeixinText(params: {
 }
 
 async function fetchWeixinQrCode(params: { baseUrl: string; botType: string }) {
-  const url = new URL(
-    `ilink/bot/get_bot_qrcode?bot_type=${encodeURIComponent(params.botType)}`,
-    params.baseUrl.endsWith("/") ? params.baseUrl : `${params.baseUrl}/`
-  )
-  const text = await fetchWeixinText({
-    url: url.toString(),
+  // Upstream uses POST with a `local_token_list` body (used by the gateway to
+  // detect an already-bound bot). We have no locally-stored bot tokens in this
+  // multi-tenant server, so we send an empty list.
+  const resp = await postWeixinJson({
+    baseUrl: params.baseUrl,
+    endpoint: `${WEIXIN_ENDPOINTS.GET_BOT_QRCODE}?bot_type=${encodeURIComponent(params.botType)}`,
     timeoutMs: 10_000,
+    body: { local_token_list: [] },
   })
-  if (text === null) return {}
-  const parsed = parseWeixinQrCodeResponseText(text)
-  if (!parsed) {
-    throw new Error("Weixin QR API returned invalid QR-code response")
+  return {
+    qrcode: nonEmptyString(resp.qrcode),
+    qrcode_img_content: nonEmptyString(resp.qrcode_img_content),
   }
-  return parsed
 }
 
-async function pollWeixinQrStatus(params: { baseUrl: string; qrcode: string }) {
+async function pollWeixinQrStatus(params: {
+  baseUrl: string
+  qrcode: string
+  verifyCode?: string
+}) {
+  let endpoint = `${WEIXIN_ENDPOINTS.GET_QRCODE_STATUS}?qrcode=${encodeURIComponent(params.qrcode)}`
+  if (params.verifyCode) {
+    endpoint += `&verify_code=${encodeURIComponent(params.verifyCode)}`
+  }
   const url = new URL(
-    `ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(params.qrcode)}`,
+    endpoint,
     params.baseUrl.endsWith("/") ? params.baseUrl : `${params.baseUrl}/`
   )
   const text = await fetchWeixinText({
     url: url.toString(),
     timeoutMs: QR_LONG_POLL_TIMEOUT_MS,
-    headers: { "iLink-App-ClientVersion": "1" },
+    headers: buildWeixinGetHeaders(),
   })
   if (text === null) return {}
   const parsed = parseWeixinQrStatusResponseText(text)
@@ -127,6 +134,8 @@ function mapStatus(
   switch (status) {
     case "scaned":
       return WEIXIN_QR_LOGIN_STATUS.SCANNED
+    case "need_verifycode":
+      return WEIXIN_QR_LOGIN_STATUS.NEED_VERIFYCODE
     case "confirmed":
       return WEIXIN_QR_LOGIN_STATUS.CONFIRMED
     case "expired":
@@ -362,10 +371,57 @@ export async function getWeixinQrLoginSession(params: {
     const statusResponse = await pollWeixinQrStatus({
       baseUrl: existing.baseUrl,
       qrcode: existing.qrcode,
+      verifyCode: existing.pendingVerifyCode,
     })
-    const nextStatus = mapStatus(statusResponse.status)
+    const raw = statusResponse.status
+
+    // IDC redirect: switch the polling host and keep waiting — not client-visible.
+    if (raw === "scaned_but_redirect") {
+      const redirectHost = nonEmptyString(statusResponse.redirect_host)
+      const redirected: ActiveWeixinQrLogin = {
+        ...existing,
+        baseUrl: redirectHost ? `https://${redirectHost}` : existing.baseUrl,
+        status: WEIXIN_QR_LOGIN_STATUS.SCANNED,
+        message: "QR code scanned. Confirm the login in WeChat.",
+        updatedAt: Date.now(),
+      }
+      await setQrSession(redirected)
+      return buildSummary(redirected)
+    }
+
+    // Bot already bound to this OpenClaw/workspace — no new token is issued.
+    if (raw === "binded_redirect") {
+      const bound: ActiveWeixinQrLogin = {
+        ...existing,
+        status: WEIXIN_QR_LOGIN_STATUS.ERROR,
+        message: "This WeChat is already connected; no need to reconnect.",
+        updatedAt: Date.now(),
+      }
+      await setQrSession(bound)
+      return buildSummary(bound)
+    }
+
+    // Too many wrong pairing codes — make the user restart with a fresh QR.
+    if (raw === "verify_code_blocked") {
+      const blocked: ActiveWeixinQrLogin = {
+        ...existing,
+        status: WEIXIN_QR_LOGIN_STATUS.ERROR,
+        message:
+          "Too many incorrect codes. Generate a new QR code and try again.",
+        pendingVerifyCode: undefined,
+        updatedAt: Date.now(),
+      }
+      await setQrSession(blocked)
+      return buildSummary(blocked)
+    }
+
+    const nextStatus = mapStatus(raw)
     const nextBaseUrl = normalizeBaseUrl(
       nonEmptyString(statusResponse.baseurl) || existing.baseUrl
+    )
+    // A pending code the server has moved past was accepted — drop it.
+    const clearVerifyCode = Boolean(
+      existing.pendingVerifyCode && raw !== "need_verifycode"
     )
     let nextSession: ActiveWeixinQrLogin = {
       ...existing,
@@ -374,13 +430,18 @@ export async function getWeixinQrLoginSession(params: {
       botId: nonEmptyString(statusResponse.ilink_bot_id) || existing.botId,
       scannerUserId:
         nonEmptyString(statusResponse.ilink_user_id) || existing.scannerUserId,
+      pendingVerifyCode: clearVerifyCode
+        ? undefined
+        : existing.pendingVerifyCode,
       updatedAt: Date.now(),
       message:
-        nextStatus === WEIXIN_QR_LOGIN_STATUS.SCANNED
-          ? "QR code scanned. Confirm the login in WeChat."
-          : nextStatus === WEIXIN_QR_LOGIN_STATUS.EXPIRED
-            ? "QR code expired. Generate a new one."
-            : existing.message,
+        nextStatus === WEIXIN_QR_LOGIN_STATUS.NEED_VERIFYCODE
+          ? "Enter the number shown in WeChat on your phone to continue."
+          : nextStatus === WEIXIN_QR_LOGIN_STATUS.SCANNED
+            ? "QR code scanned. Confirm the login in WeChat."
+            : nextStatus === WEIXIN_QR_LOGIN_STATUS.EXPIRED
+              ? "QR code expired. Generate a new one."
+              : existing.message,
     }
 
     const confirmedToken = nonEmptyString(statusResponse.bot_token)
@@ -415,6 +476,28 @@ export async function getWeixinQrLoginSession(params: {
     await setQrSession(failed)
     return buildSummary(failed)
   }
+}
+
+/**
+ * Stash a user-entered pairing code on the session. It is carried into the
+ * next status poll (`get_qrcode_status?verify_code=…`); the server then either
+ * advances the login or returns `need_verifycode` again (wrong code).
+ */
+export async function submitWeixinQrVerifyCode(params: {
+  workspaceId: string
+  sessionId: string
+  code: string
+}): Promise<WeixinQrLoginSessionSummary | null> {
+  const existing = await getQrSession(params.workspaceId, params.sessionId)
+  if (!existing) return null
+  const updated: ActiveWeixinQrLogin = {
+    ...existing,
+    pendingVerifyCode: params.code.trim(),
+    updatedAt: Date.now(),
+    message: "Verifying the code…",
+  }
+  await setQrSession(updated)
+  return buildSummary(updated)
 }
 
 export { deleteQrSession }
