@@ -13,19 +13,17 @@
 // Returns a descriptor (never throws); a missing/soft-deleted source degrades to
 // the generic descriptor so historical rows render stably.
 
-import type { ToolPresentationDescriptor } from "@synapse/device-protocol/tool-presentation"
-import { parseToolPresentation } from "@synapse/device-protocol/tool-presentation/schema"
+import {
+  parseToolPresentation,
+  type ToolPresentationDescriptor,
+} from "@synapse/shared/tool-presentation"
 import { BUILTIN_PRESENTATION } from "@synapse/device-runtime/builtin-presentation"
-import { db } from "../../../infrastructure/database/kysely.js"
-import { livePluginInstallations } from "../../soft-delete/live-reads.js"
+import { parseJsonObjectOrUndefined } from "@synapse/shared"
 import { getToolPlugin } from "../../ai/tool-plugins.js"
+import { selectPluginToolManifest } from "./repo.js"
 import { genericDescriptor } from "./render.js"
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined
-}
+const asRecord = parseJsonObjectOrUndefined
 
 const str = (v: unknown): string | undefined =>
   typeof v === "string" && v.length > 0 ? v : undefined
@@ -69,17 +67,9 @@ async function resolvePluginPresentation(
   if (!installationId) return null
   const upstream = str(snapshot.upstreamToolName)
   if (!upstream) return null
-  const row = await livePluginInstallations(db)
-    .innerJoin(
-      "plugin_package_version_specs as spec",
-      "spec.catalog_version_id",
-      "plugin_installations_live.catalog_version_id"
-    )
-    .select(["spec.tool_manifest as tool_manifest"])
-    .where("plugin_installations_live.id", "=", installationId)
-    .executeTakeFirst()
-  if (!row) return null
-  const manifest = Array.isArray(row.tool_manifest) ? row.tool_manifest : []
+  const toolManifest = await selectPluginToolManifest(installationId)
+  if (toolManifest === null) return null
+  const manifest = Array.isArray(toolManifest) ? toolManifest : []
   for (const entry of manifest) {
     const rec = asRecord(entry)
     if (!rec) continue

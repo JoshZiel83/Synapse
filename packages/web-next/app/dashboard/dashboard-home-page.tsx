@@ -135,10 +135,7 @@ export default function DashboardHomePage() {
       .getActors(workspaceId)
       .then((response) => {
         if (cancelled) return
-        const actors = Array.isArray(response)
-          ? (response as Actor[])
-          : ((response?.actors || []) as Actor[])
-        const nextActors = actors
+        const nextActors = response
           .filter((actor) => actor.isActive !== false)
           .map((actor) => {
             const normalized = normalizeChiefActorOption(actor)

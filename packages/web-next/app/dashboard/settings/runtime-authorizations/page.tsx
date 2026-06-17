@@ -19,48 +19,24 @@ import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { ApiError, api } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import type { DeviceDetailView, DeviceSummaryView } from "@/lib/device-views"
+import {
+  browserActionForOperations,
+  browserOperationsForExposureStableKey,
+  isBrowserWriteOperation,
+} from "@synapse/shared"
+import type {
+  BrowserOperation,
+  CreateManualRuntimeAuthorizationGrantInput,
+  DeviceDetailView,
+  DeviceView,
+} from "@synapse/shared"
 
-// Mirrors the maps in @synapse/device-protocol/browser-tools. Duplicated
-// here intentionally so the settings page doesn't pull the whole protocol
-// package into the web bundle.
-//
-// Keep in lockstep with:
-//   - BROWSER_OPERATION_REQUIRED_ACTION in browser-tools.ts (derives the
-//     minimum action needed for an op)
-//   - BROWSER_EXPOSURE_TOOLS + BROWSER_TOOL_MAP (which ops each exposure
-//     can ever ask for)
-const ALL_BROWSER_OPERATIONS = [
-  "page.read",
-  "page.navigate",
-  "page.input",
-  "screenshot.capture",
-  "console.read",
-  "network.list",
-  "network.body.read",
-  "script.evaluate",
-  "performance.trace",
-] as const
-
-type BrowserOp = (typeof ALL_BROWSER_OPERATIONS)[number]
 type ScopeType = "origin" | "host" | "domain"
-
-const WRITE_OPS: ReadonlySet<BrowserOp> = new Set([
-  "page.navigate",
-  "page.input",
-  "script.evaluate",
-])
-
-/** Maps the exposure stable_key suffix → operations its tools can need. */
-const OPERATIONS_BY_EXPOSURE: Record<string, readonly BrowserOp[]> = {
-  navigation: ["page.read", "page.navigate"],
-  read: ["page.read", "screenshot.capture", "console.read"],
-  input: ["page.input"],
-  network: ["network.list", "network.body.read"],
-  performance: ["performance.trace"],
-  script: ["script.evaluate"],
-  // extensions / webmcp deliberately omitted — MVP-disabled exposures.
-}
+type ManualRuntimeAuthorizationGrantPolicy =
+  CreateManualRuntimeAuthorizationGrantInput["policy"]
+type ManualBrowserPolicy = NonNullable<
+  ManualRuntimeAuthorizationGrantPolicy["browser"]
+>
 
 interface CapabilityRow {
   deviceId: string
@@ -74,7 +50,7 @@ interface CapabilityRow {
 
 export default function RuntimeAuthorizationsSettingsPage() {
   const { workspaceId } = useWorkspace()
-  const [devices, setDevices] = useState<DeviceSummaryView[] | null>(null)
+  const [devices, setDevices] = useState<DeviceView[] | null>(null)
   const [capabilities, setCapabilities] = useState<CapabilityRow[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [errorDetails, setErrorDetails] = useState<unknown>(null)
@@ -85,14 +61,16 @@ export default function RuntimeAuthorizationsSettingsPage() {
   const [capabilityId, setCapabilityId] = useState<string>("")
   const [scopeType, setScopeType] = useState<ScopeType>("origin")
   const [scopeValue, setScopeValue] = useState("")
-  const [selectedOps, setSelectedOps] = useState<Set<BrowserOp>>(new Set())
+  const [selectedOps, setSelectedOps] = useState<Set<BrowserOperation>>(
+    new Set()
+  )
 
   useEffect(() => {
     if (!workspaceId) return
     let cancelled = false
     api
       .listDevices(workspaceId)
-      .then(async ({ devices: deviceList }) => {
+      .then(async (deviceList) => {
         if (cancelled) return
         setDevices(deviceList)
         // Load each device's capabilities so the operator can pick.
@@ -108,9 +86,9 @@ export default function RuntimeAuthorizationsSettingsPage() {
                 deviceId: device.id,
                 deviceTitle: device.title,
                 capabilityId: cap.id,
-                displayName: cap.display_name,
-                builtinKind: cap.builtin_kind ?? null,
-                exposureStableKey: cap.exposure_stable_key ?? null,
+                displayName: cap.displayName,
+                builtinKind: cap.builtinKind ?? null,
+                exposureStableKey: cap.exposureStableKey ?? null,
                 exposureMetadata: cap.metadata ?? null,
               })
             }
@@ -137,21 +115,15 @@ export default function RuntimeAuthorizationsSettingsPage() {
   // exposure can actually request — picking page.input under a "read"
   // exposure would just produce an "operations_not_allowed_for_exposure"
   // 400 from the API.
-  const availableOps: readonly BrowserOp[] = useMemo(() => {
-    if (!selectedCap) return ALL_BROWSER_OPERATIONS
-    // Derive the suffix from `builtin/browser/<key>`. lite-provider
-    // capabilities (`builtin/browser`) fall through to the full list.
-    const stable = selectedCap.exposureStableKey ?? ""
-    const m = stable.match(/^builtin\/browser\/(.+)$/)
-    if (!m) return ALL_BROWSER_OPERATIONS
-    return OPERATIONS_BY_EXPOSURE[m[1]] ?? ALL_BROWSER_OPERATIONS
+  const availableOps: readonly BrowserOperation[] = useMemo(() => {
+    return browserOperationsForExposureStableKey(selectedCap?.exposureStableKey)
   }, [selectedCap])
 
   // Drop ops that are no longer valid for the selected exposure whenever
   // the user switches capability (otherwise stale chips silently survive).
   useEffect(() => {
     setSelectedOps((prev) => {
-      const next = new Set<BrowserOp>()
+      const next = new Set<BrowserOperation>()
       const allow = new Set(availableOps)
       for (const op of prev) if (allow.has(op)) next.add(op)
       return next
@@ -161,13 +133,10 @@ export default function RuntimeAuthorizationsSettingsPage() {
   // Derived action: write covers read. If any selected op is write-only
   // we must request `write`; otherwise `read` is enough.
   const derivedAction: "read" | "write" = useMemo(() => {
-    for (const op of selectedOps) {
-      if (WRITE_OPS.has(op)) return "write"
-    }
-    return "read"
+    return browserActionForOperations(selectedOps)
   }, [selectedOps])
 
-  function toggleOp(op: BrowserOp) {
+  function toggleOp(op: BrowserOperation) {
     setSelectedOps((prev) => {
       const next = new Set(prev)
       if (next.has(op)) next.delete(op)
@@ -199,7 +168,7 @@ export default function RuntimeAuthorizationsSettingsPage() {
       )
       return
     }
-    const browser: Record<string, unknown> = {
+    const browser: ManualBrowserPolicy = {
       action: derivedAction,
       scopeType,
       operations: [...selectedOps],
@@ -208,12 +177,15 @@ export default function RuntimeAuthorizationsSettingsPage() {
     else if (scopeType === "host") browser.host = scopeValue.trim()
     else if (scopeType === "domain")
       browser.registrableDomain = scopeValue.trim()
-    const policy = { capability: "browser", browser }
+    const policy: ManualRuntimeAuthorizationGrantPolicy = {
+      capability: "browser",
+      browser,
+    }
 
     setSubmitting(true)
     try {
       await api.createManualRuntimeAuthorizationGrant(workspaceId, {
-        device_capability_id: capabilityId,
+        deviceCapabilityId: capabilityId,
         policy,
       })
       setSubmittedMsg(
@@ -375,7 +347,7 @@ export default function RuntimeAuthorizationsSettingsPage() {
             <div className="mt-1 flex flex-wrap gap-2">
               {availableOps.map((op) => {
                 const checked = selectedOps.has(op)
-                const isWriteOp = WRITE_OPS.has(op)
+                const isWriteOp = isBrowserWriteOperation(op)
                 return (
                   <button
                     type="button"

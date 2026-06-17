@@ -1,9 +1,31 @@
 import type { FastifyInstance, FastifyReply } from "fastify"
-import { IsoInstantStringSchema } from "@synapse/shared/schemas"
-import { z } from "zod"
-import { REMOTE_AGENT_RUNTIME_KINDS } from "@synapse/shared"
+import {
+  RemoteAgentListResponseSchema,
+  RemoteAgentResponseSchema,
+  RemoteAgentGroupTaskGrantsResponseSchema,
+  RemoteAgentMachinePairingSessionResponseSchema,
+  RemoteAgentMachineListResponseSchema,
+  RemoteAgentMachineDetailResponseSchema,
+  CreateRemoteAgentMachineInputSchema,
+  BindRemoteAgentInputSchema,
+  UpdateRemoteAgentGroupTaskGrantsInputSchema,
+} from "@synapse/shared/schemas"
+// /api/v1/internal/* is the daemon↔API machine RPC surface (wireRoute). Its
+// body/query contracts are single-sourced in @synapse/device-protocol so the
+// API parser and the daemon client reference one definition (round-6 P1-5).
+import {
+  RemoteAgentUserInputTaskBodySchema,
+  RemoteAgentPlanApprovalTaskBodySchema,
+  RemoteAgentSendMessageBodySchema,
+  RemoteAgentCompleteDeliveriesBodySchema,
+  RemoteAgentFailDeliveriesBodySchema,
+  RemoteAgentHistoryQuerySchema,
+  RemoteAgentCheckMessagesQuerySchema,
+  RemoteAgentSearchMessagesQuerySchema,
+} from "@synapse/device-protocol"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
+import { appRoute, wireRoute } from "../../infrastructure/http/route.js"
 import { requireRequestAction } from "../access/guards.js"
 import {
   bindRemoteAgent,
@@ -26,77 +48,33 @@ import {
   updateRemoteAgentGroupTaskGrants,
 } from "./service.js"
 import { handleRemoteAgentMcpRequest } from "./mcp-endpoint.js"
+import {
+  presentGroupTaskGrant,
+  presentMachineBinding,
+  presentMachineFromCamelRow,
+  presentMachineListItem,
+  presentMessageDelivery,
+  presentRemoteAgent,
+  presentRemoteAgentConversation,
+  presentRuntimeCatalogEntry,
+} from "./presenter.js"
 
-const runtimeKindSchema = z.enum(REMOTE_AGENT_RUNTIME_KINDS)
-const createMachineSchema = z.object({
-  title: z.string().trim().min(1).max(255).optional(),
-  description: z.string().trim().max(2000).optional(),
-})
+// App-facing request bodies live in @synapse/shared (§5.1.1) so the API parser
+// and the web/mobile clients share one definition.
+const createMachineSchema = CreateRemoteAgentMachineInputSchema
+const bindRemoteAgentSchema = BindRemoteAgentInputSchema
+const groupTaskGrantsSchema = UpdateRemoteAgentGroupTaskGrantsInputSchema
 
-const bindRemoteAgentSchema = z.object({
-  machineId: z.uuid(),
-  runtimeKind: runtimeKindSchema,
-  runtimePath: z.string().trim().min(1).optional(),
-  localRootPath: z.string().trim().min(1).optional(),
-})
-
-const groupTaskGrantsSchema = z.object({
-  workspaceMemberIds: z.array(z.uuid()).max(200),
-})
-
-const historyQuerySchema = z.object({
-  afterSequence: z.coerce.number().int().min(0).optional(),
-  beforeSequence: z.coerce.number().int().min(0).optional(),
-  limit: z.coerce.number().int().min(1).max(200).optional(),
-})
-
-const checkMessagesQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(500).optional(),
-})
-
-const searchMessagesQuerySchema = z.object({
-  conversationId: z.uuid(),
-  q: z.string().trim().min(1).max(512),
-  limit: z.coerce.number().int().min(1).max(100).optional(),
-})
-
-const sendMessageSchema = z.object({
-  conversationId: z.uuid(),
-  clientMessageId: z.uuid().optional(),
-  contentBlocks: z.array(z.any()).min(1),
-  replyToItemId: z.uuid().optional(),
-  metadata: z.record(z.string(), z.any()).optional(),
-})
-
-const completeDeliveriesSchema = z.object({
-  deliveryIds: z.array(z.uuid()).min(1),
-})
-
-const failDeliveriesSchema = z.object({
-  deliveryIds: z.array(z.uuid()).min(1),
-  reason: z.string().trim().max(2000).optional(),
-})
-
-const internalUserInputTaskSchema = z.object({
-  conversationId: z.uuid(),
-  runKey: z.string().trim().min(1).max(255),
-  title: z.string().trim().min(1).max(255),
-  instructions: z.string().trim().max(5000).optional(),
-  questions: z.array(z.any()).min(1).max(4),
-  expiresAt: IsoInstantStringSchema.optional(),
-})
-
-const internalPlanApprovalTaskSchema = z.object({
-  conversationId: z.uuid(),
-  runKey: z.string().trim().min(1).max(255),
-  title: z.string().trim().min(1).max(255),
-  summary: z.string().trim().max(5000).optional(),
-  planMarkdown: z.string().trim().min(1),
-  checklist: z.array(z.any()).optional(),
-  collaborationMode: z.string().trim().max(120).optional(),
-  collaborationState: z.record(z.string(), z.any()).optional(),
-  expiresAt: IsoInstantStringSchema.optional(),
-})
+// Machine RPC body/query contracts (daemon↔API). Single-sourced in
+// @synapse/device-protocol — these aliases keep the route handlers terse.
+const historyQuerySchema = RemoteAgentHistoryQuerySchema
+const checkMessagesQuerySchema = RemoteAgentCheckMessagesQuerySchema
+const searchMessagesQuerySchema = RemoteAgentSearchMessagesQuerySchema
+const sendMessageSchema = RemoteAgentSendMessageBodySchema
+const completeDeliveriesSchema = RemoteAgentCompleteDeliveriesBodySchema
+const failDeliveriesSchema = RemoteAgentFailDeliveriesBodySchema
+const internalUserInputTaskSchema = RemoteAgentUserInputTaskBodySchema
+const internalPlanApprovalTaskSchema = RemoteAgentPlanApprovalTaskBodySchema
 
 function getRequestUserId(request: any) {
   return (request as any).user!.userId as string
@@ -137,52 +115,67 @@ export default async function remoteAgentsController(app: FastifyInstance) {
   const workspacePreHandler = [authMiddleware, workspaceMiddleware]
   const internalPrefixes = ["/internal", "/api/v1/internal"] as const
 
-  app.get<{
-    Params: { workspaceId: string }
-  }>(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/remote-agents",
-    { preHandler: workspacePreHandler },
-    async (request, reply) => {
+    {
+      schema: RemoteAgentListResponseSchema,
+      options: { preHandler: workspacePreHandler },
+    },
+    async (request: any, reply) => {
       try {
-        return reply.send(
-          await listRemoteAgents({
-            workspaceId: request.params.workspaceId,
-            userId: getRequestUserId(request),
-          })
-        )
+        const { remoteAgents } = await listRemoteAgents({
+          workspaceId: request.params.workspaceId,
+          userId: getRequestUserId(request),
+        })
+        return {
+          remoteAgents: remoteAgents.map((rec) =>
+            presentRemoteAgent(rec, rec.requiresContactApproval)
+          ),
+        }
       } catch (error) {
         return sendServiceError(reply, error)
       }
     }
   )
 
-  app.get<{
-    Params: { workspaceId: string; remoteAgentId: string }
-  }>(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/remote-agents/:remoteAgentId",
-    { preHandler: workspacePreHandler },
-    async (request, reply) => {
+    {
+      schema: RemoteAgentResponseSchema,
+      options: { preHandler: workspacePreHandler },
+    },
+    async (request: any, reply) => {
       try {
-        return reply.send(
-          await getRemoteAgent({
-            workspaceId: request.params.workspaceId,
-            remoteAgentId: request.params.remoteAgentId,
-            userId: getRequestUserId(request),
-          })
-        )
+        const { remoteAgent } = await getRemoteAgent({
+          workspaceId: request.params.workspaceId,
+          remoteAgentId: request.params.remoteAgentId,
+          userId: getRequestUserId(request),
+        })
+        return {
+          remoteAgent: presentRemoteAgent(
+            remoteAgent,
+            remoteAgent.requiresContactApproval
+          ),
+        }
       } catch (error) {
         return sendServiceError(reply, error)
       }
     }
   )
 
-  app.post<{
-    Params: { workspaceId: string; remoteAgentId: string }
-    Body: unknown
-  }>(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/remote-agents/:remoteAgentId/bind",
-    { preHandler: workspacePreHandler },
-    async (request, reply) => {
+    {
+      schema: RemoteAgentResponseSchema,
+      options: { preHandler: workspacePreHandler },
+    },
+    async (request: any, reply) => {
       const allowed = await requireRequestAction(
         request,
         reply,
@@ -193,29 +186,36 @@ export default async function remoteAgentsController(app: FastifyInstance) {
       if (!allowed) return
       try {
         const body = bindRemoteAgentSchema.parse(request.body)
-        return reply.send(
-          await bindRemoteAgent({
-            workspaceId: request.params.workspaceId,
-            remoteAgentId: request.params.remoteAgentId,
-            userId: getRequestUserId(request),
-            machineId: body.machineId,
-            runtimeKind: body.runtimeKind,
-            runtimePath: body.runtimePath,
-            localRootPath: body.localRootPath,
-          })
-        )
+        const { remoteAgent } = await bindRemoteAgent({
+          workspaceId: request.params.workspaceId,
+          remoteAgentId: request.params.remoteAgentId,
+          userId: getRequestUserId(request),
+          machineId: body.machineId,
+          runtimeKind: body.runtimeKind,
+          runtimePath: body.runtimePath,
+          localRootPath: body.localRootPath,
+        })
+        return {
+          remoteAgent: presentRemoteAgent(
+            remoteAgent,
+            remoteAgent.requiresContactApproval
+          ),
+        }
       } catch (error) {
         return sendServiceError(reply, error)
       }
     }
   )
 
-  app.get<{
-    Params: { workspaceId: string; remoteAgentId: string }
-  }>(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/remote-agents/:remoteAgentId/group-task-grants",
-    { preHandler: workspacePreHandler },
-    async (request, reply) => {
+    {
+      schema: RemoteAgentGroupTaskGrantsResponseSchema,
+      options: { preHandler: workspacePreHandler },
+    },
+    async (request: any, reply) => {
       const allowed = await requireRequestAction(
         request,
         reply,
@@ -225,26 +225,31 @@ export default async function remoteAgentsController(app: FastifyInstance) {
       )
       if (!allowed) return
       try {
-        return reply.send(
-          await listRemoteAgentGroupTaskGrants({
-            workspaceId: request.params.workspaceId,
-            remoteAgentId: request.params.remoteAgentId,
-            userId: getRequestUserId(request),
-          })
-        )
+        const { grants } = await listRemoteAgentGroupTaskGrants({
+          workspaceId: request.params.workspaceId,
+          remoteAgentId: request.params.remoteAgentId,
+          userId: getRequestUserId(request),
+        })
+        return {
+          grants: grants.map((grant) =>
+            presentGroupTaskGrant(grant, grant.avatarUrl)
+          ),
+        }
       } catch (error) {
         return sendServiceError(reply, error)
       }
     }
   )
 
-  app.put<{
-    Params: { workspaceId: string; remoteAgentId: string }
-    Body: unknown
-  }>(
+  appRoute(
+    app,
+    "PUT",
     "/api/v1/workspaces/:workspaceId/remote-agents/:remoteAgentId/group-task-grants",
-    { preHandler: workspacePreHandler },
-    async (request, reply) => {
+    {
+      schema: RemoteAgentGroupTaskGrantsResponseSchema,
+      options: { preHandler: workspacePreHandler },
+    },
+    async (request: any, reply) => {
       const allowed = await requireRequestAction(
         request,
         reply,
@@ -255,77 +260,97 @@ export default async function remoteAgentsController(app: FastifyInstance) {
       if (!allowed) return
       try {
         const body = groupTaskGrantsSchema.parse(request.body)
-        return reply.send(
-          await updateRemoteAgentGroupTaskGrants({
-            workspaceId: request.params.workspaceId,
-            remoteAgentId: request.params.remoteAgentId,
-            userId: getRequestUserId(request),
-            workspaceMemberIds: body.workspaceMemberIds,
-          })
-        )
+        const { grants } = await updateRemoteAgentGroupTaskGrants({
+          workspaceId: request.params.workspaceId,
+          remoteAgentId: request.params.remoteAgentId,
+          userId: getRequestUserId(request),
+          workspaceMemberIds: body.workspaceMemberIds,
+        })
+        return {
+          grants: grants.map((grant) =>
+            presentGroupTaskGrant(grant, grant.avatarUrl)
+          ),
+        }
       } catch (error) {
         return sendServiceError(reply, error)
       }
     }
   )
 
-  app.post<{
-    Params: { workspaceId: string }
-    Body: unknown
-  }>(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/remote-agent-machines/pairing-sessions",
-    { preHandler: workspacePreHandler },
-    async (request, reply) => {
+    {
+      schema: RemoteAgentMachinePairingSessionResponseSchema,
+      options: { preHandler: workspacePreHandler },
+    },
+    async (request: any, reply) => {
       if (!(await requireWorkspaceRemoteAgentAdmin(request, reply))) return
       try {
         const body = createMachineSchema.parse(request.body)
-        return reply.status(201).send(
-          await createRemoteAgentMachinePairingSession({
-            workspaceId: request.params.workspaceId,
-            userId: getRequestUserId(request),
-            title: body.title,
-            description: body.description,
-          })
-        )
+        const session = await createRemoteAgentMachinePairingSession({
+          workspaceId: request.params.workspaceId,
+          userId: getRequestUserId(request),
+          title: body.title,
+          description: body.description,
+        })
+        reply.status(201)
+        return {
+          machine: presentMachineFromCamelRow(session.machine),
+          apiKey: session.apiKey,
+          daemonCommand: session.daemonCommand,
+          oneClickCommands: session.oneClickCommands,
+        }
       } catch (error) {
         return sendServiceError(reply, error)
       }
     }
   )
 
-  app.get<{
-    Params: { workspaceId: string }
-  }>(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/remote-agent-machines",
-    { preHandler: workspacePreHandler },
-    async (request, reply) => {
+    {
+      schema: RemoteAgentMachineListResponseSchema,
+      options: { preHandler: workspacePreHandler },
+    },
+    async (request: any, reply) => {
       try {
-        return reply.send(
-          await listRemoteAgentMachines({
-            workspaceId: request.params.workspaceId,
-            userId: getRequestUserId(request),
-          })
-        )
+        const { machines } = await listRemoteAgentMachines({
+          workspaceId: request.params.workspaceId,
+          userId: getRequestUserId(request),
+        })
+        return {
+          machines: machines.map(presentMachineListItem),
+        }
       } catch (error) {
         return sendServiceError(reply, error)
       }
     }
   )
 
-  app.get<{
-    Params: { workspaceId: string; machineId: string }
-  }>(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/remote-agent-machines/:machineId",
-    { preHandler: workspacePreHandler },
-    async (request, reply) => {
+    {
+      schema: RemoteAgentMachineDetailResponseSchema,
+      options: { preHandler: workspacePreHandler },
+    },
+    async (request: any, reply) => {
       try {
-        return reply.send(
-          await getRemoteAgentMachine({
-            workspaceId: request.params.workspaceId,
-            machineId: request.params.machineId,
-            userId: getRequestUserId(request),
-          })
-        )
+        const detail = await getRemoteAgentMachine({
+          workspaceId: request.params.workspaceId,
+          machineId: request.params.machineId,
+          userId: getRequestUserId(request),
+        })
+        return {
+          machine: presentMachineFromCamelRow(detail.machine),
+          runtimeCatalog: detail.runtimeCatalog.map(presentRuntimeCatalogEntry),
+          bindings: detail.bindings.map(presentMachineBinding),
+        }
       } catch (error) {
         return sendServiceError(reply, error)
       }
@@ -334,34 +359,30 @@ export default async function remoteAgentsController(app: FastifyInstance) {
 
   for (const prefix of internalPrefixes) {
     const mcpRoute = `${prefix}/remote-agents/:remoteAgentId/mcp/:conversationId`
-    app.post<{
-      Params: { remoteAgentId: string; conversationId: string }
-    }>(mcpRoute, handleRemoteAgentMcpRequest)
-    app.get<{
-      Params: { remoteAgentId: string; conversationId: string }
-    }>(mcpRoute, handleRemoteAgentMcpRequest)
-    app.delete<{
-      Params: { remoteAgentId: string; conversationId: string }
-    }>(mcpRoute, handleRemoteAgentMcpRequest)
+    const mcpHandler = (request: any, reply: FastifyReply) =>
+      handleRemoteAgentMcpRequest(request, reply)
+    wireRoute(app, "POST", mcpRoute, {}, mcpHandler)
+    wireRoute(app, "GET", mcpRoute, {}, mcpHandler)
+    wireRoute(app, "DELETE", mcpRoute, {}, mcpHandler)
 
-    app.post<{
-      Params: { remoteAgentId: string }
-      Body: unknown
-    }>(
+    wireRoute(
+      app,
+      "POST",
       `${prefix}/remote-agents/:remoteAgentId/tasks/user-input`,
-      async (request, reply) => {
+      {},
+      async (request: any, reply) => {
         try {
           const body = internalUserInputTaskSchema.parse(request.body)
           return reply.send(
             await createRemoteAgentUserInputTask({
               remoteAgentId: request.params.remoteAgentId,
               machineKey: getMachineKeyFromHeaders(request),
-              conversationId: body.conversationId,
-              runKey: body.runKey,
+              conversationId: body.conversation_id,
+              runKey: body.run_key,
               title: body.title,
               instructions: body.instructions,
               questions: body.questions,
-              expiresAt: body.expiresAt,
+              expiresAt: body.expires_at,
             })
           )
         } catch (error) {
@@ -370,27 +391,27 @@ export default async function remoteAgentsController(app: FastifyInstance) {
       }
     )
 
-    app.post<{
-      Params: { remoteAgentId: string }
-      Body: unknown
-    }>(
+    wireRoute(
+      app,
+      "POST",
       `${prefix}/remote-agents/:remoteAgentId/tasks/plan-approval`,
-      async (request, reply) => {
+      {},
+      async (request: any, reply) => {
         try {
           const body = internalPlanApprovalTaskSchema.parse(request.body)
           return reply.send(
             await createRemoteAgentPlanApprovalTask({
               remoteAgentId: request.params.remoteAgentId,
               machineKey: getMachineKeyFromHeaders(request),
-              conversationId: body.conversationId,
-              runKey: body.runKey,
+              conversationId: body.conversation_id,
+              runKey: body.run_key,
               title: body.title,
               summary: body.summary,
-              planMarkdown: body.planMarkdown,
+              planMarkdown: body.plan_markdown,
               checklist: body.checklist,
-              collaborationMode: body.collaborationMode,
-              collaborationState: body.collaborationState,
-              expiresAt: body.expiresAt,
+              collaborationMode: body.collaboration_mode,
+              collaborationState: body.collaboration_state,
+              expiresAt: body.expires_at,
             })
           )
         } catch (error) {
@@ -399,58 +420,61 @@ export default async function remoteAgentsController(app: FastifyInstance) {
       }
     )
 
-    app.get<{
-      Params: { remoteAgentId: string }
-    }>(
+    wireRoute(
+      app,
+      "GET",
       `${prefix}/remote-agents/:remoteAgentId/conversations`,
-      async (request, reply) => {
+      {},
+      async (request: any, reply) => {
         try {
-          return reply.send(
-            await listRemoteAgentConversations({
-              remoteAgentId: request.params.remoteAgentId,
-              machineKey: getMachineKeyFromHeaders(request),
-            })
-          )
+          const { conversations } = await listRemoteAgentConversations({
+            remoteAgentId: request.params.remoteAgentId,
+            machineKey: getMachineKeyFromHeaders(request),
+          })
+          return reply.send({
+            conversations: conversations.map(presentRemoteAgentConversation),
+          })
         } catch (error) {
           return sendServiceError(reply, error)
         }
       }
     )
 
-    app.get<{
-      Params: { remoteAgentId: string }
-      Querystring: unknown
-    }>(
+    wireRoute(
+      app,
+      "GET",
       `${prefix}/remote-agents/:remoteAgentId/check-messages`,
-      async (request, reply) => {
+      {},
+      async (request: any, reply) => {
         try {
           const query = checkMessagesQuerySchema.parse(request.query)
-          return reply.send(
-            await checkRemoteAgentMessages({
-              remoteAgentId: request.params.remoteAgentId,
-              machineKey: getMachineKeyFromHeaders(request),
-              limit: query.limit,
-            })
-          )
+          const { deliveries } = await checkRemoteAgentMessages({
+            remoteAgentId: request.params.remoteAgentId,
+            machineKey: getMachineKeyFromHeaders(request),
+            limit: query.limit,
+          })
+          return reply.send({
+            deliveries: deliveries.map(presentMessageDelivery),
+          })
         } catch (error) {
           return sendServiceError(reply, error)
         }
       }
     )
 
-    app.post<{
-      Params: { remoteAgentId: string }
-      Body: unknown
-    }>(
+    wireRoute(
+      app,
+      "POST",
       `${prefix}/remote-agents/:remoteAgentId/complete-deliveries`,
-      async (request, reply) => {
+      {},
+      async (request: any, reply) => {
         try {
           const body = completeDeliveriesSchema.parse(request.body)
           return reply.send(
             await completeRemoteAgentDeliveries({
               remoteAgentId: request.params.remoteAgentId,
               machineKey: getMachineKeyFromHeaders(request),
-              deliveryIds: body.deliveryIds,
+              deliveryIds: body.delivery_ids,
             })
           )
         } catch (error) {
@@ -459,19 +483,19 @@ export default async function remoteAgentsController(app: FastifyInstance) {
       }
     )
 
-    app.post<{
-      Params: { remoteAgentId: string }
-      Body: unknown
-    }>(
+    wireRoute(
+      app,
+      "POST",
       `${prefix}/remote-agents/:remoteAgentId/fail-deliveries`,
-      async (request, reply) => {
+      {},
+      async (request: any, reply) => {
         try {
           const body = failDeliveriesSchema.parse(request.body)
           return reply.send(
             await failRemoteAgentDeliveries({
               remoteAgentId: request.params.remoteAgentId,
               machineKey: getMachineKeyFromHeaders(request),
-              deliveryIds: body.deliveryIds,
+              deliveryIds: body.delivery_ids,
               reason: body.reason,
             })
           )
@@ -481,12 +505,12 @@ export default async function remoteAgentsController(app: FastifyInstance) {
       }
     )
 
-    app.get<{
-      Params: { remoteAgentId: string; conversationId: string }
-      Querystring: unknown
-    }>(
+    wireRoute(
+      app,
+      "GET",
       `${prefix}/remote-agents/:remoteAgentId/history/:conversationId`,
-      async (request, reply) => {
+      {},
+      async (request: any, reply) => {
         try {
           const query = historyQuerySchema.parse(request.query)
           return reply.send(
@@ -494,8 +518,8 @@ export default async function remoteAgentsController(app: FastifyInstance) {
               remoteAgentId: request.params.remoteAgentId,
               machineKey: getMachineKeyFromHeaders(request),
               conversationId: request.params.conversationId,
-              afterSequence: query.afterSequence,
-              beforeSequence: query.beforeSequence,
+              afterSequence: query.after_sequence,
+              beforeSequence: query.before_sequence,
               limit: query.limit,
             })
           )
@@ -505,22 +529,22 @@ export default async function remoteAgentsController(app: FastifyInstance) {
       }
     )
 
-    app.post<{
-      Params: { remoteAgentId: string }
-      Body: unknown
-    }>(
+    wireRoute(
+      app,
+      "POST",
       `${prefix}/remote-agents/:remoteAgentId/send`,
-      async (request, reply) => {
+      {},
+      async (request: any, reply) => {
         try {
           const body = sendMessageSchema.parse(request.body)
           return reply.send(
             await sendRemoteAgentConversationMessage({
               remoteAgentId: request.params.remoteAgentId,
               machineKey: getMachineKeyFromHeaders(request),
-              conversationId: body.conversationId,
-              clientMessageId: body.clientMessageId,
-              contentBlocks: body.contentBlocks,
-              replyToItemId: body.replyToItemId,
+              conversationId: body.conversation_id,
+              clientMessageId: body.client_message_id,
+              contentBlocks: body.content_blocks,
+              replyToItemId: body.reply_to_item_id,
               metadata: body.metadata,
             })
           )
@@ -530,19 +554,19 @@ export default async function remoteAgentsController(app: FastifyInstance) {
       }
     )
 
-    app.get<{
-      Params: { remoteAgentId: string }
-      Querystring: unknown
-    }>(
+    wireRoute(
+      app,
+      "GET",
       `${prefix}/remote-agents/:remoteAgentId/search`,
-      async (request, reply) => {
+      {},
+      async (request: any, reply) => {
         try {
           const query = searchMessagesQuerySchema.parse(request.query)
           return reply.send(
             await searchRemoteAgentMessages({
               remoteAgentId: request.params.remoteAgentId,
               machineKey: getMachineKeyFromHeaders(request),
-              conversationId: query.conversationId,
+              conversationId: query.conversation_id,
               query: query.q,
               limit: query.limit,
             })

@@ -3,18 +3,23 @@
 import { useDeferredValue, useEffect, useMemo, useState } from "react"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import {
+  MODEL_API_STYLE,
   MODEL_GROUP_GRANT_SCOPE,
   MODEL_GROUP_GRANT_STATUS,
   MODEL_GROUP_OWNER_TYPE,
+  MODEL_SERVER_TOOL,
   getDefaultModelBaseUrl,
   getDefaultModelName,
   getProviderKindForVendor,
   listModelVendorDefinitions,
   vendorSupportsServerTools,
+  type ModelApiStyle,
   type ModelGroupGrantScope,
   type ModelGroupGrantStatus,
   type ModelGroupOwnerType,
   type ModelGroupRoutingStrategy,
+  type ModelServerTool,
+  type ProviderKind,
   type Timestamp,
 } from "@synapse/shared"
 import {
@@ -74,55 +79,63 @@ import {
   resolveModelGroupScope,
   type ModelGroupScope,
 } from "./model-group-shared"
+import type {
+  ActorModelGroupSetInput,
+  ModelBindingFeaturesInput,
+  ModelGroupGrantIssueInput,
+  ModelGroupItemCreateInput,
+  ModelGroupItemUpdateInput,
+  ModelGroupUpdateInput,
+} from "@synapse/shared/schemas"
 
 type GrantScope = ModelGroupGrantScope
 
 type ModelGroupSummary = {
   id: string
-  workspace_id: string | null
-  owner_type?: ModelGroupOwnerType
-  owner_workspace_id?: string | null
-  owner_workspace_member_id?: string | null
+  workspaceId: string | null
+  ownerType?: ModelGroupOwnerType
+  ownerWorkspaceId?: string | null
+  ownerWorkspaceMemberId?: string | null
   name: string
   description: string
-  routing_strategy: ModelGroupRoutingStrategy
-  is_default: boolean
-  is_active?: boolean
-  created_at: Timestamp
+  routingStrategy: ModelGroupRoutingStrategy
+  isDefault: boolean
+  isActive?: boolean
+  createdAt: Timestamp
 }
 
 type ModelGroupGrant = {
   id: string
-  group_id: string
-  grant_scope: ModelGroupGrantScope
-  workspace_id: string | null
-  workspace_member_id: string | null
-  actor_id: string | null
+  groupId: string
+  grantScope: ModelGroupGrantScope
+  workspaceId: string | null
+  workspaceMemberId: string | null
+  actorId: string | null
   status: ModelGroupGrantStatus
   grantedByWorkspaceMemberId?: string | null
   reason?: string | null
-  created_at?: Timestamp | null
-  revoked_at?: Timestamp | null
+  createdAt?: Timestamp | null
+  revokedAt?: Timestamp | null
 }
 
 type ModelItem = {
   id: string
-  group_id: string
-  binding_id: string
-  current_version_id: string | null
-  display_name: string
+  groupId: string | null
+  bindingId: string
+  currentVersionId: string | null
+  displayName: string
   priority: number
   weight: number
-  is_enabled: boolean
-  version: number
-  provider_kind: string
-  vendor: string
-  base_url: string
-  model_name: string
-  max_output_tokens: number
-  capability_tags: string[]
+  isEnabled: boolean
+  version: number | null
+  providerKind: ProviderKind
+  vendor: string | null
+  baseUrl: string | null
+  modelName: string | null
+  maxOutputTokens: number | null
+  capabilityTags: string[]
   features?: Record<string, unknown>
-  provider_options?: Record<string, unknown>
+  providerOptions?: Record<string, unknown>
 }
 
 type GroupDetail = ModelGroupSummary & {
@@ -161,59 +174,82 @@ type ConfigDraft = {
   priority: string
   weight: string
   isEnabled: boolean
-  apiStyle: "chat" | "responses"
-  serverTools: string[]
-  multimodalTypes: string[]
+  apiStyle: ModelApiStyle
+  serverTools: ModelServerTool[]
+  multimodalTypes: NonNullable<
+    NonNullable<ModelBindingFeaturesInput["multimodal"]>["types"]
+  >
   crossTurnToolHistory: boolean
   providerOptionsText: string
 }
 
 const SERVER_TOOLS = [
-  { key: "web_search", label: "Web Search" },
-  { key: "web_fetch", label: "Web Fetch" },
-]
+  { key: MODEL_SERVER_TOOL.WEB_SEARCH, label: "Web Search" },
+  { key: MODEL_SERVER_TOOL.WEB_FETCH, label: "Web Fetch" },
+] as const
 
 const MULTIMODAL_TYPES = [
   { key: "image", label: "Images" },
   { key: "audio", label: "Audio" },
   { key: "video", label: "Video" },
   { key: "document", label: "Documents" },
-]
+] as const
 
 const VENDOR_OPTIONS = listModelVendorDefinitions()
 const DEFAULT_VENDOR = VENDOR_OPTIONS[0]?.vendor || "anthropic"
 const API_STYLE_OPTIONS = [
-  { value: "chat", label: "Chat Completions" },
-  { value: "responses", label: "Responses API" },
+  { value: MODEL_API_STYLE.CHAT, label: "Chat Completions" },
+  { value: MODEL_API_STYLE.RESPONSES, label: "Responses API" },
 ] as const
 
 function createDraft(item?: ModelItem | null): ConfigDraft {
   const features = (item?.features || {}) as Record<string, any>
   const multimodal = features.multimodal || {}
   const vendor = item?.vendor || DEFAULT_VENDOR
+  const serverTools = new Set<ModelServerTool>(
+    SERVER_TOOLS.map((tool) => tool.key)
+  )
+  const multimodalTypes = new Set(MULTIMODAL_TYPES.map((type) => type.key))
 
   return {
-    displayName: item?.display_name || "",
+    displayName: item?.displayName || "",
     vendor,
     apiKey: "",
-    baseUrl: item?.base_url || getDefaultModelBaseUrl(vendor),
-    modelName: item?.model_name || getDefaultModelName(vendor),
-    maxOutputTokens: String(item?.max_output_tokens || 4096),
+    baseUrl: item?.baseUrl || getDefaultModelBaseUrl(vendor),
+    modelName: item?.modelName || getDefaultModelName(vendor),
+    maxOutputTokens: String(item?.maxOutputTokens || 4096),
     priority: String(item?.priority ?? 0),
     weight: String(item?.weight ?? 100),
-    isEnabled: item ? Boolean(item.is_enabled) : true,
-    apiStyle: features.apiStyle === "responses" ? "responses" : "chat",
+    isEnabled: item ? Boolean(item.isEnabled) : true,
+    apiStyle:
+      features.apiStyle === MODEL_API_STYLE.RESPONSES
+        ? MODEL_API_STYLE.RESPONSES
+        : MODEL_API_STYLE.CHAT,
     serverTools: Array.isArray(features.serverTools)
-      ? features.serverTools
+      ? features.serverTools.filter(
+          (value: unknown): value is ModelServerTool =>
+            typeof value === "string" &&
+            serverTools.has(value as ModelServerTool)
+        )
       : [],
     multimodalTypes:
       multimodal.supported && Array.isArray(multimodal.types)
-        ? multimodal.types
+        ? multimodal.types.filter(
+            (
+              value: unknown
+            ): value is NonNullable<
+              NonNullable<ModelBindingFeaturesInput["multimodal"]>["types"]
+            >[number] =>
+              typeof value === "string" &&
+              multimodalTypes.has(
+                value as (typeof MULTIMODAL_TYPES)[number]["key"]
+              )
+          )
         : [],
     crossTurnToolHistory: Boolean(features.crossTurnToolHistory),
     providerOptionsText:
-      item?.provider_options && Object.keys(item.provider_options).length > 0
-        ? JSON.stringify(item.provider_options, null, 2)
+      item?.providerOptions && Object.keys(item.providerOptions).length > 0
+        ? JSON.stringify(item.providerOptions, null, 2)
         : "",
   }
 }
@@ -223,18 +259,16 @@ async function fetchGroupsForScope(
   workspaceId: string | null
 ) {
   if (scope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
-    const response = await api.getPlatformModelGroups()
-    return (response.groups || []) as ModelGroupSummary[]
+    return api.getPlatformModelGroups()
   }
   if (scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
-    const response = await api.getWorkspaceMemberModelGroups(workspaceId!)
-    return (response.groups || []) as ModelGroupSummary[]
+    return api.getWorkspaceMemberModelGroups(workspaceId!)
   }
   if (!workspaceId) {
     return []
   }
-  const response = await api.getModelGroups(workspaceId)
-  return ((response.groups || []) as ModelGroupSummary[]).filter(
+  const groups = await api.getModelGroups(workspaceId)
+  return groups.filter(
     (group) =>
       resolveModelGroupScope(group) === MODEL_GROUP_OWNER_TYPE.WORKSPACE
   )
@@ -261,7 +295,7 @@ async function updateGroupForScope(
   scope: ModelGroupScope,
   groupId: string,
   workspaceId: string | null,
-  data: Record<string, unknown>
+  data: ModelGroupUpdateInput
 ) {
   if (scope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
     return api.updatePlatformModelGroup(groupId, data)
@@ -279,7 +313,7 @@ async function issueGrantForGroup(
   scope: ModelGroupScope,
   groupId: string,
   workspaceId: string | null,
-  data: Record<string, unknown>
+  data: ModelGroupGrantIssueInput
 ) {
   if (scope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
     return api.issuePlatformModelGroupGrant(groupId, data)
@@ -320,36 +354,38 @@ async function saveItemForGroup(
   groupId: string,
   workspaceId: string | null,
   itemId: string | null,
-  payload: Record<string, unknown>
+  payload: ModelGroupItemCreateInput | ModelGroupItemUpdateInput
 ) {
   if (itemId) {
+    const updatePayload = payload as ModelGroupItemUpdateInput
     if (scope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
-      return api.updatePlatformModelItem(groupId, itemId, payload)
+      return api.updatePlatformModelItem(groupId, itemId, updatePayload)
     }
     if (scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
       return api.updateWorkspaceMemberModelItem(
         workspaceId!,
         groupId,
         itemId,
-        payload
+        updatePayload
       )
     }
     if (!workspaceId) {
       throw new Error("Workspace is required")
     }
-    return api.updateModelItem(workspaceId, groupId, itemId, payload)
+    return api.updateModelItem(workspaceId, groupId, itemId, updatePayload)
   }
 
+  const createPayload = payload as ModelGroupItemCreateInput
   if (scope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
-    return api.addPlatformModelItem(groupId, payload)
+    return api.addPlatformModelItem(groupId, createPayload)
   }
   if (scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
-    return api.addWorkspaceMemberModelItem(workspaceId!, groupId, payload)
+    return api.addWorkspaceMemberModelItem(workspaceId!, groupId, createPayload)
   }
   if (!workspaceId) {
     throw new Error("Workspace is required")
   }
-  return api.addModelItem(workspaceId, groupId, payload)
+  return api.addModelItem(workspaceId, groupId, createPayload)
 }
 
 async function deleteItemForGroup(
@@ -378,37 +414,35 @@ function grantTargetLabel(
   currentWorkspaceMemberId: string | null,
   currentUser: WorkbenchUser | null
 ) {
-  switch (grant.grant_scope) {
+  switch (grant.grantScope) {
     case MODEL_GROUP_GRANT_SCOPE.PLATFORM:
       return "Platform"
     case MODEL_GROUP_GRANT_SCOPE.WORKSPACE:
       return (
-        workspaces.find((workspace) => workspace.id === grant.workspace_id)
+        workspaces.find((workspace) => workspace.id === grant.workspaceId)
           ?.name || "Workspace"
       )
     case MODEL_GROUP_GRANT_SCOPE.WORKSPACE_MEMBER: {
       if (
-        grant.workspace_member_id &&
-        currentWorkspaceMemberId === grant.workspace_member_id
+        grant.workspaceMemberId &&
+        currentWorkspaceMemberId === grant.workspaceMemberId
       ) {
         return currentUser?.name || currentUser?.email || "Current member"
       }
-      const member = members.find(
-        (item) => item.id === grant.workspace_member_id
-      )
+      const member = members.find((item) => item.id === grant.workspaceMemberId)
       return (
         member?.userName ||
         member?.userEmail ||
-        grant.workspace_member_id ||
+        grant.workspaceMemberId ||
         "Member"
       )
     }
     case MODEL_GROUP_GRANT_SCOPE.ACTOR: {
-      const actor = actors.find((item) => item.id === grant.actor_id)
+      const actor = actors.find((item) => item.id === grant.actorId)
       return (
         actor?.displayName ||
         actor?.definition?.title ||
-        grant.actor_id ||
+        grant.actorId ||
         "Actor"
       )
     }
@@ -430,7 +464,7 @@ function GrantDialog({
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onSubmit: (payload: Record<string, unknown>) => Promise<void>
+  onSubmit: (payload: ModelGroupGrantIssueInput) => Promise<void>
   groupScope: ModelGroupScope
   workspaces: Array<{ id: string; name: string }>
   members: WorkspaceMember[]
@@ -842,7 +876,9 @@ function ConfigEditor({
                   onChange({
                     ...draft,
                     apiStyle:
-                      event.target.value === "responses" ? "responses" : "chat",
+                      event.target.value === MODEL_API_STYLE.RESPONSES
+                        ? MODEL_API_STYLE.RESPONSES
+                        : MODEL_API_STYLE.CHAT,
                   })
                 }
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none"
@@ -1086,7 +1122,7 @@ export default function ModelSettingsWorkbench() {
         }
         return (
           rank(left) - rank(right) ||
-          Number(right.is_default) - Number(left.is_default) ||
+          Number(right.isDefault) - Number(left.isDefault) ||
           left.name.localeCompare(right.name)
         )
       })
@@ -1103,11 +1139,8 @@ export default function ModelSettingsWorkbench() {
       ])
 
       if (workspacesResult.status === "fulfilled") {
-        const workspaceList = (workspacesResult.value?.data ??
-          workspacesResult.value ??
-          []) as Array<{ id: string; name: string }>
         setAvailableWorkspaces(
-          workspaceList.map((workspace) => ({
+          workspacesResult.value.map((workspace) => ({
             id: workspace.id,
             name: workspace.name,
           }))
@@ -1149,7 +1182,7 @@ export default function ModelSettingsWorkbench() {
         groupId,
         workspaceId
       )
-      setSelectedGroup(response.group as GroupDetail)
+      setSelectedGroup(response as GroupDetail)
       setExpandedItemId(null)
       setDraft(createDraft())
     } catch (error) {
@@ -1193,18 +1226,14 @@ export default function ModelSettingsWorkbench() {
       api.getActors(workspaceId),
     ]).then(([membersResult, actorsResult]) => {
       if (membersResult.status === "fulfilled") {
-        const members = membersResult.value?.data ?? membersResult.value ?? []
+        const members = membersResult.value ?? []
         setWorkspaceMembers(members as WorkspaceMember[])
       } else {
         setWorkspaceMembers([])
       }
 
       if (actorsResult.status === "fulfilled") {
-        const actors =
-          actorsResult.value?.data ??
-          actorsResult.value?.actors ??
-          actorsResult.value ??
-          []
+        const actors = actorsResult.value ?? []
         setWorkspaceActors(actors as WorkspaceActor[])
       } else {
         setWorkspaceActors([])
@@ -1223,7 +1252,7 @@ export default function ModelSettingsWorkbench() {
     if (!needle) return groups
     return groups.filter((group) => {
       const haystack =
-        `${group.name} ${group.description} ${group.routing_strategy}`.toLowerCase()
+        `${group.name} ${group.description} ${group.routingStrategy}`.toLowerCase()
       return haystack.includes(needle)
     })
   }, [deferredGroupSearch, groups])
@@ -1236,7 +1265,7 @@ export default function ModelSettingsWorkbench() {
     }
   }
 
-  async function handleIssueGrant(payload: Record<string, unknown>) {
+  async function handleIssueGrant(payload: ModelGroupGrantIssueInput) {
     if (!selectedGroup) return
     const scope = resolveModelGroupScope(selectedGroup)
     await issueGrantForGroup(scope, selectedGroup.id, workspaceId, payload)
@@ -1289,7 +1318,7 @@ export default function ModelSettingsWorkbench() {
     setSavingConfig(true)
     try {
       const providerKind = getProviderKindForVendor(draft.vendor)
-      const features: Record<string, unknown> = {}
+      const features: ModelBindingFeaturesInput = {}
       if (providerKind === "openai") {
         features.apiStyle = draft.apiStyle
       }
@@ -1309,7 +1338,7 @@ export default function ModelSettingsWorkbench() {
         features.crossTurnToolHistory = true
       }
 
-      const payload: Record<string, unknown> = {
+      const payload: ModelGroupItemUpdateInput = {
         displayName: draft.displayName.trim(),
         priority: parseInt(draft.priority, 10),
         weight: parseInt(draft.weight, 10),
@@ -1325,15 +1354,26 @@ export default function ModelSettingsWorkbench() {
       if (draft.apiKey.trim()) payload.apiKey = draft.apiKey.trim()
       if (itemId) payload.isEnabled = draft.isEnabled
 
+      const requestPayload:
+        | ModelGroupItemCreateInput
+        | ModelGroupItemUpdateInput = itemId
+        ? payload
+        : {
+            ...payload,
+            apiKey: draft.apiKey.trim(),
+            baseUrl: draft.baseUrl.trim(),
+            modelName: draft.modelName.trim(),
+          }
+
       const response = await saveItemForGroup(
         resolveModelGroupScope(selectedGroup),
         selectedGroup.id,
         workspaceId,
         itemId,
-        payload
+        requestPayload
       )
       await reloadCurrentGroup()
-      setExpandedItemId(itemId || response?.item?.id || null)
+      setExpandedItemId(itemId || response?.id || null)
     } catch (error) {
       console.error("Failed to save model config:", error)
       toast.error(getSaveErrorMessage(error, "Failed to save model config."))
@@ -1360,7 +1400,7 @@ export default function ModelSettingsWorkbench() {
   }
 
   async function handleUpdateGroupSettings(
-    patch: Record<string, unknown>,
+    patch: ModelGroupUpdateInput,
     savingKey: "routing" | "default"
   ) {
     if (!selectedGroup) return
@@ -1403,13 +1443,13 @@ export default function ModelSettingsWorkbench() {
 
     setSavingGroupField(field)
     try {
+      const patch: ModelGroupUpdateInput =
+        field === "name" ? { name: nextValue } : { description: nextValue }
       await updateGroupForScope(
         resolveModelGroupScope(selectedGroup),
         selectedGroup.id,
         workspaceId,
-        {
-          [field]: nextValue,
-        }
+        patch
       )
       setGroups((current) =>
         current.map((group) =>
@@ -1607,11 +1647,19 @@ export default function ModelSettingsWorkbench() {
                     Refresh
                   </Button>
                   <Select
-                    value={selectedGroup.routing_strategy}
+                    value={selectedGroup.routingStrategy}
                     onValueChange={(value) => {
-                      if (value === selectedGroup.routing_strategy) return
+                      const nextRouting = MODEL_GROUP_ROUTING_OPTIONS.find(
+                        (strategy) => strategy.value === value
+                      )?.value
+                      if (
+                        !nextRouting ||
+                        nextRouting === selectedGroup.routingStrategy
+                      ) {
+                        return
+                      }
                       void handleUpdateGroupSettings(
-                        { routingStrategy: value },
+                        { routingStrategy: nextRouting },
                         "routing"
                       )
                     }}
@@ -1628,7 +1676,7 @@ export default function ModelSettingsWorkbench() {
                       ))}
                     </SelectContent>
                   </Select>
-                  {selectedGroup.is_default ? (
+                  {selectedGroup.isDefault ? (
                     <Button variant="outline" disabled>
                       Default
                     </Button>
@@ -1746,7 +1794,7 @@ export default function ModelSettingsWorkbench() {
                               <div className="flex min-w-0 items-center gap-3">
                                 <div
                                   className={`flex size-10 shrink-0 items-center justify-center rounded-2xl ${
-                                    item.is_enabled
+                                    item.isEnabled
                                       ? "bg-emerald-500/10 text-emerald-500"
                                       : "bg-muted text-muted-foreground"
                                   }`}
@@ -1756,7 +1804,7 @@ export default function ModelSettingsWorkbench() {
                                 <div className="min-w-0">
                                   <div className="flex flex-wrap items-center gap-2">
                                     <span className="truncate font-medium text-foreground">
-                                      {item.display_name}
+                                      {item.displayName}
                                     </span>
                                     <Badge variant="secondary">
                                       v{item.version || 1}
@@ -1766,18 +1814,18 @@ export default function ModelSettingsWorkbench() {
                                         {item.vendor}
                                       </Badge>
                                     ) : null}
-                                    {item.provider_kind ? (
+                                    {item.providerKind ? (
                                       <Badge variant="outline">
-                                        {item.provider_kind}
+                                        {item.providerKind}
                                       </Badge>
                                     ) : null}
-                                    {!item.is_enabled ? (
+                                    {!item.isEnabled ? (
                                       <Badge variant="outline">Disabled</Badge>
                                     ) : null}
                                   </div>
                                   <div className="mt-1 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
                                     <span>
-                                      {item.model_name || "No model configured"}
+                                      {item.modelName || "No model configured"}
                                     </span>
                                     <span>Priority {item.priority}</span>
                                     <span>Weight {item.weight}</span>
@@ -1856,7 +1904,7 @@ export default function ModelSettingsWorkbench() {
                                 </span>
                                 <Badge variant="outline">
                                   {getModelGroupGrantScopeLabel(
-                                    grant.grant_scope
+                                    grant.grantScope
                                   )}
                                 </Badge>
                               </div>

@@ -6,6 +6,7 @@ import {
   MODEL_GROUP_ROUTING_STRATEGY,
   type ModelGroupOwnerType,
   type ModelGroupRoutingStrategy,
+  type ModelGroupView,
 } from "@synapse/shared"
 import { useWorkspace } from "../workspace-provider"
 import { api } from "@/lib/api"
@@ -30,7 +31,10 @@ interface ModelGroupDialogProps {
   onOpenChange: (open: boolean) => void
   scope?: ModelGroupScope
   availableScopes?: ModelGroupScope[]
-  group: any | null // null = create, object = edit
+  group: Pick<
+    ModelGroupView,
+    "id" | "name" | "description" | "routingStrategy" | "isDefault"
+  > | null // null = create, object = edit
   onSaved: () => void
 }
 
@@ -57,9 +61,9 @@ export default function ModelGroupDialog({
       setName(group.name || "")
       setDescription(group.description || "")
       setStrategy(
-        group.routing_strategy || MODEL_GROUP_ROUTING_STRATEGY.PRIORITY_FAILOVER
+        group.routingStrategy || MODEL_GROUP_ROUTING_STRATEGY.PRIORITY_FAILOVER
       )
-      setIsDefault(group.is_default || false)
+      setIsDefault(group.isDefault || false)
       setSelectedScope(scope)
     } else {
       setName("")

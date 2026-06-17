@@ -3,6 +3,10 @@
 import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Loader2, Plus, Trash2 } from "lucide-react"
+import type {
+  MarketplacePluginView,
+  PluginInstallationDetailView,
+} from "@synapse/shared"
 import {
   AppCard,
   AppCardContent,
@@ -32,13 +36,15 @@ import {
 } from "@/components/ui/card"
 
 interface Props {
-  plugin: any
-  installations: any[]
+  plugin: MarketplacePluginView
+  installations: PluginInstallationDetailView[]
   selectedInstallationId?: string | null
-  initialInstallation?: any | null
+  initialInstallation?: PluginInstallationDetailView | null
   onSelectInstallation: (installationId: string) => void
   onCreateInstallation: () => void
-  onInstallationsChanged?: (installation: any) => void | Promise<void>
+  onInstallationsChanged?: (
+    installation: PluginInstallationDetailView
+  ) => void | Promise<void>
 }
 
 export default function PluginInstallationWorkbench({
@@ -65,11 +71,12 @@ export default function PluginInstallationWorkbench({
     return installations[0]?.id || null
   }, [installations, selectedInstallationId])
 
-  const [selectedInstallation, setSelectedInstallation] = useState<any | null>(
-    initialInstallation?.id === activeInstallationId
-      ? initialInstallation
-      : null
-  )
+  const [selectedInstallation, setSelectedInstallation] =
+    useState<PluginInstallationDetailView | null>(
+      initialInstallation?.id === activeInstallationId
+        ? initialInstallation
+        : null
+    )
   const [loadingInstallation, setLoadingInstallation] = useState(false)
   const [editorVersion, setEditorVersion] = useState(0)
   const [savingSettings, setSavingSettings] = useState(false)
@@ -96,12 +103,12 @@ export default function PluginInstallationWorkbench({
     const load = async () => {
       try {
         setLoadingInstallation(true)
-        const data = await api.getInstallation(
+        const installation = await api.getInstallation(
           workspaceId,
           activeInstallationId
         )
         if (!cancelled) {
-          setSelectedInstallation(data.installation)
+          setSelectedInstallation(installation)
         }
       } finally {
         if (!cancelled) {
@@ -118,8 +125,11 @@ export default function PluginInstallationWorkbench({
 
   const resetSelectedInstallation = async () => {
     if (!workspaceId || !activeInstallationId) return
-    const data = await api.getInstallation(workspaceId, activeInstallationId)
-    setSelectedInstallation(data.installation)
+    const installation = await api.getInstallation(
+      workspaceId,
+      activeInstallationId
+    )
+    setSelectedInstallation(installation)
     setEditorVersion((value) => value + 1)
   }
 
@@ -150,10 +160,9 @@ export default function PluginInstallationWorkbench({
       setRemovingInstallation(true)
       const removedId = selectedInstallation.id as string
       await api.uninstallPlugin(workspaceId, removedId)
-      const remainingInstallations = await api.getInstallations(
-        workspaceId,
-        new URLSearchParams({ pluginId: plugin.id }).toString()
-      )
+      const remainingInstallations = await api.getInstallations(workspaceId, {
+        pluginId: plugin.id,
+      })
 
       if (remainingInstallations.length > 0) {
         onSelectInstallation(remainingInstallations[0].id)
@@ -184,10 +193,10 @@ export default function PluginInstallationWorkbench({
             <>
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <span>
-                  {selectedInstallation.is_enabled ? "Enabled" : "Disabled"}
+                  {selectedInstallation.isEnabled ? "Enabled" : "Disabled"}
                 </span>
                 <Switch
-                  checked={Boolean(selectedInstallation.is_enabled)}
+                  checked={Boolean(selectedInstallation.isEnabled)}
                   onCheckedChange={(checked) =>
                     void handleToggleInstallation(checked)
                   }
@@ -240,7 +249,7 @@ export default function PluginInstallationWorkbench({
                           <div
                             className={cn(
                               "inline-flex items-center gap-2 text-xs whitespace-nowrap",
-                              installation.is_enabled
+                              installation.isEnabled
                                 ? "text-emerald-600 dark:text-emerald-300"
                                 : "text-muted-foreground"
                             )}
@@ -248,21 +257,21 @@ export default function PluginInstallationWorkbench({
                             <span
                               className={cn(
                                 "size-2 rounded-full",
-                                installation.is_enabled
+                                installation.isEnabled
                                   ? "bg-emerald-500"
                                   : "bg-muted-foreground/35"
                               )}
                             />
-                            {installation.is_enabled ? "Enabled" : "Disabled"}
+                            {installation.isEnabled ? "Enabled" : "Disabled"}
                           </div>
                         </div>
                         <p className="text-sm text-muted-foreground">
                           {getPluginInstallationDetails(installation)}
                         </p>
                         <p className="text-xs text-muted-foreground/80">
-                          {installation.org_display_name
-                            ? `${installation.org_display_name} · v${installation.plugin_version}`
-                            : `Version ${installation.plugin_version}`}
+                          {installation.orgDisplayName
+                            ? `${installation.orgDisplayName} · v${installation.pluginVersion}`
+                            : `Version ${installation.pluginVersion}`}
                         </p>
                       </div>
                     </button>

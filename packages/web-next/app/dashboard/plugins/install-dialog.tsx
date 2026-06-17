@@ -5,14 +5,30 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import type {
   AutomationIntegrationProvider,
   CapabilityAccessTargetType,
+  MarketplacePluginView,
+  McpValidationRule,
   PluginAuthBindingDefinition,
   PluginAuthSession,
   PluginConfigFieldDefinition,
+  PluginInstallationDetailView,
   PluginInstallStep,
   ReuseScope,
   LocalizedText,
 } from "@synapse/shared"
-import { REUSE_SCOPES, WORKSPACE_APP_GRANT_PERMISSION } from "@synapse/shared"
+import {
+  MCP_VALIDATION_RULE_KIND,
+  PLUGIN_AUTH_BINDING_DRIVER_KIND,
+  PLUGIN_AUTH_CHALLENGE_KIND,
+  PLUGIN_AUTH_CHALLENGE_OPEN_MODE,
+  PLUGIN_AUTH_SESSION_PHASE,
+  PLUGIN_AUTH_SESSION_STATUS,
+  PLUGIN_CONFIG_FIELD_TYPE,
+  PLUGIN_INSTALL_ACTION_KIND,
+  PLUGIN_INSTALL_STEP_KIND,
+  PLUGIN_INSTALL_STEP_SCOPE,
+  REUSE_SCOPES,
+  WORKSPACE_APP_GRANT_PERMISSION,
+} from "@synapse/shared"
 import { AppCard } from "@/components/app-card"
 import {
   Dialog,
@@ -51,21 +67,20 @@ import {
   getConversationDisplayName,
 } from "@/app/dashboard/access/attachment-visuals"
 
-interface ValidationRule {
-  field: string
-  rule: string
-  value?: string | number | string[]
-  message: string
-}
+type ValidationRule = McpValidationRule
 
 interface Props {
-  plugin: any
+  plugin: MarketplacePluginView
   defaultActorId?: string
-  initialInstallation?: any
+  initialInstallation?: PluginInstallationDetailView | null
   onClose: () => void
   presentation?: "dialog" | "page"
-  onSuccess?: (installation: any) => void | Promise<void>
-  onInstallationSaved?: (installation: any) => void | Promise<void>
+  onSuccess?: (
+    installation: PluginInstallationDetailView
+  ) => void | Promise<void>
+  onInstallationSaved?: (
+    installation: PluginInstallationDetailView
+  ) => void | Promise<void>
   showPluginHeader?: boolean
   pageChrome?: "card" | "plain" | "tab"
   includePlacementSteps?: boolean
@@ -89,7 +104,7 @@ type AccessStep = {
   kind: "access"
   titleI18n: LocalizedText
   descriptionI18n?: LocalizedText
-  scope: "plugin"
+  scope: typeof PLUGIN_INSTALL_STEP_SCOPE.PLUGIN
   fields: []
   optional?: boolean
   helpUrl?: string
@@ -99,10 +114,10 @@ type AccessStep = {
 }
 type IntegrationEventsStep = {
   id: "integration-events"
-  kind: "integration_events"
+  kind: typeof PLUGIN_INSTALL_STEP_KIND.INTEGRATION_EVENTS
   titleI18n: LocalizedText
   descriptionI18n?: LocalizedText
-  scope: "plugin"
+  scope: typeof PLUGIN_INSTALL_STEP_SCOPE.PLUGIN
   fields: []
   optional?: boolean
   helpUrl?: string
@@ -195,10 +210,10 @@ function translate(
 }
 
 function getIntegrationProvider(
-  plugin: any
+  plugin: MarketplacePluginView
 ): AutomationIntegrationProvider | null {
-  const orgSlug = plugin?.org_slug
-  const pluginSlug = plugin?.plugin_slug || plugin?.slug
+  const orgSlug = plugin.orgSlug
+  const pluginSlug = plugin.slug
   if (pluginSlug !== "official-mcp") return null
   if (orgSlug === "github" || orgSlug === "gitlab") {
     return orgSlug
@@ -310,52 +325,67 @@ function getFeishuAppScopeStatus(
   }
 }
 
-function deriveConfigFields(plugin: any): PluginConfigFieldDefinition[] {
-  if (Array.isArray(plugin.config_fields) && plugin.config_fields.length > 0) {
-    return plugin.config_fields
+function deriveConfigFields(
+  plugin: MarketplacePluginView
+): PluginConfigFieldDefinition[] {
+  if (Array.isArray(plugin.configFields) && plugin.configFields.length > 0) {
+    return plugin.configFields
   }
-  const schema = plugin.config_schema || {}
-  const properties = schema.properties || {}
+  const schema = asRecord(plugin.configSchema)
+  const properties = asRecord(schema.properties)
   const requiredFields = new Set<string>(
-    Array.isArray(schema.required) ? schema.required : []
+    Array.isArray(schema.required)
+      ? schema.required.filter((key): key is string => typeof key === "string")
+      : []
   )
-  return Object.entries(properties).map(([key, value]: [string, any]) => ({
-    key,
-    type: value.sensitive
-      ? "secret"
-      : value.type === "boolean"
-        ? "boolean"
-        : "text",
-    titleI18n: { en: value.title || value.description || key },
-    descriptionI18n: value.description ? { en: value.description } : undefined,
-    required: requiredFields.has(key),
-    defaultValue: plugin.default_config?.[key],
-    secret: value.sensitive === true,
-  }))
+  return Object.entries(properties).map(([key, raw]) => {
+    const value = asRecord(raw)
+    return {
+      key,
+      type: value.sensitive
+        ? PLUGIN_CONFIG_FIELD_TYPE.SECRET
+        : value.type === "boolean"
+          ? PLUGIN_CONFIG_FIELD_TYPE.BOOLEAN
+          : PLUGIN_CONFIG_FIELD_TYPE.TEXT,
+      titleI18n: {
+        en:
+          (typeof value.title === "string" && value.title) ||
+          (typeof value.description === "string" && value.description) ||
+          key,
+      },
+      descriptionI18n:
+        typeof value.description === "string"
+          ? { en: value.description }
+          : undefined,
+      required: requiredFields.has(key),
+      defaultValue: plugin.defaultConfig?.[key],
+      secret: value.sensitive === true,
+    }
+  })
 }
 
 function deriveInstallFlow(
-  plugin: any,
+  plugin: MarketplacePluginView,
   configFields: PluginConfigFieldDefinition[],
   locale: string,
   options?: { includePlacementSteps?: boolean }
 ): PluginInstallStep[] {
-  const baseSteps =
-    Array.isArray(plugin.install_flow?.steps) &&
-    plugin.install_flow.steps.length > 0
-      ? plugin.install_flow.steps.filter((step: PluginInstallStep) => {
+  const baseSteps: PluginInstallStep[] =
+    Array.isArray(plugin.installFlow?.steps) &&
+    plugin.installFlow.steps.length > 0
+      ? plugin.installFlow.steps.filter((step: PluginInstallStep) => {
           const kind = step.kind as string
           return kind !== "confirm" && kind !== "attachment_scope"
         })
       : [
           {
             id: "configure",
-            kind: "form" as const,
+            kind: PLUGIN_INSTALL_STEP_KIND.FORM,
             titleI18n: { [locale]: "Configure plugin" },
             descriptionI18n: {
               [locale]: "Provide the required configuration for this plugin.",
             },
-            scope: "plugin",
+            scope: PLUGIN_INSTALL_STEP_SCOPE.PLUGIN,
             fields: configFields.map((field) => field.key),
           },
         ]
@@ -368,34 +398,31 @@ function deriveInstallFlow(
     ...baseSteps,
     {
       id: "reuse-scope",
-      kind: "reuse_scope",
+      kind: PLUGIN_INSTALL_STEP_KIND.REUSE_SCOPE,
       titleI18n: { [locale]: "Choose lifecycle" },
       descriptionI18n: { [locale]: "Decide how runtimes are reused." },
-      scope: "plugin",
+      scope: PLUGIN_INSTALL_STEP_SCOPE.PLUGIN,
       fields: [],
     },
   ]
 }
 
 function buildInitialConfig(
-  plugin: any,
+  plugin: MarketplacePluginView,
   configFields: PluginConfigFieldDefinition[]
 ) {
-  const initial = { ...(plugin.default_config || {}) } as Record<
-    string,
-    unknown
-  >
+  const initial = { ...(plugin.defaultConfig || {}) } as Record<string, unknown>
   for (const field of configFields) {
     if (initial[field.key] !== undefined) continue
     if (field.defaultValue !== undefined) {
       initial[field.key] = field.defaultValue
       continue
     }
-    if (field.type === "boolean") {
+    if (field.type === PLUGIN_CONFIG_FIELD_TYPE.BOOLEAN) {
       initial[field.key] = false
       continue
     }
-    if (field.type === "multiselect") {
+    if (field.type === PLUGIN_CONFIG_FIELD_TYPE.MULTISELECT) {
       initial[field.key] = []
     }
   }
@@ -408,7 +435,7 @@ function buildInitialAuthFields(
 ) {
   const authState: Record<string, AuthFieldState> = {}
   for (const field of configFields) {
-    if (field.type !== "auth_connection") continue
+    if (field.type !== PLUGIN_CONFIG_FIELD_TYPE.AUTH_CONNECTION) continue
     const value = config[field.key]
     if (!value || typeof value !== "object" || Array.isArray(value)) continue
     const ref = value as Record<string, unknown>
@@ -419,7 +446,7 @@ function buildInitialAuthFields(
         typeof ref.bindingKey === "string"
           ? ref.bindingKey
           : field.authBindingKey || "",
-      status: "completed",
+      status: PLUGIN_AUTH_SESSION_STATUS.COMPLETED,
       accountDisplayName:
         typeof ref.accountDisplayName === "string"
           ? ref.accountDisplayName
@@ -439,15 +466,24 @@ function hasStoredAuthConnection(value: unknown) {
   )
 }
 
+function isTerminalAuthSessionStatus(status: PluginAuthSession["status"]) {
+  return (
+    status === PLUGIN_AUTH_SESSION_STATUS.COMPLETED ||
+    status === PLUGIN_AUTH_SESSION_STATUS.FAILED ||
+    status === PLUGIN_AUTH_SESSION_STATUS.EXPIRED ||
+    status === PLUGIN_AUTH_SESSION_STATUS.CONSUMED
+  )
+}
+
 function getAuthPendingMessage(authState: AuthFieldState) {
   const metadata = getAuthChallengeMetadata(authState)
   if (metadata.description) {
     return metadata.description
   }
-  if (authState.phase === "pending_confirm") {
+  if (authState.phase === PLUGIN_AUTH_SESSION_PHASE.PENDING_CONFIRM) {
     return "Authorization scanned. Confirm it in the provider app."
   }
-  if (authState.challenge?.kind === "qr_code") {
+  if (authState.challenge?.kind === PLUGIN_AUTH_CHALLENGE_KIND.QR_CODE) {
     return "Scan the QR code to authorize this account."
   }
   return "Waiting for authorization..."
@@ -517,17 +553,17 @@ function runClientValidation(
     if (allowed && !allowed.has(field.key)) continue
     const value = config[field.key]
     if (field.required) {
-      if (field.type === "auth_connection") {
+      if (field.type === PLUGIN_CONFIG_FIELD_TYPE.AUTH_CONNECTION) {
         const hasSavedConnection = hasStoredAuthConnection(value)
         const authStatus = authFields[field.key]?.status
         if (
           !hasSavedConnection &&
-          authStatus !== "completed" &&
-          authStatus !== "consumed"
+          authStatus !== PLUGIN_AUTH_SESSION_STATUS.COMPLETED &&
+          authStatus !== PLUGIN_AUTH_SESSION_STATUS.CONSUMED
         ) {
           errors[field.key] = "Authorization is required."
         }
-      } else if (field.type === "boolean") {
+      } else if (field.type === PLUGIN_CONFIG_FIELD_TYPE.BOOLEAN) {
         continue
       } else if (isMissingFieldValue(value)) {
         errors[field.key] = "This field is required."
@@ -540,18 +576,18 @@ function runClientValidation(
     const value = config[rule.field]
     if (errors[rule.field]) continue
     switch (rule.rule) {
-      case "required":
+      case MCP_VALIDATION_RULE_KIND.REQUIRED:
         if (isMissingFieldValue(value)) errors[rule.field] = rule.message
         break
-      case "min_length":
+      case MCP_VALIDATION_RULE_KIND.MIN_LENGTH:
         if (typeof value === "string" && value.length < Number(rule.value))
           errors[rule.field] = rule.message
         break
-      case "max_length":
+      case MCP_VALIDATION_RULE_KIND.MAX_LENGTH:
         if (typeof value === "string" && value.length > Number(rule.value))
           errors[rule.field] = rule.message
         break
-      case "pattern":
+      case MCP_VALIDATION_RULE_KIND.PATTERN:
         if (
           typeof value === "string" &&
           rule.value &&
@@ -587,8 +623,8 @@ export default function InstallDialog({
   const { installPlugin, updateInstallation } = usePluginStore()
 
   const locale = useMemo(
-    () => getLocale(plugin.default_locale),
-    [plugin.default_locale]
+    () => getLocale(plugin.defaultLocale),
+    [plugin.defaultLocale]
   )
   const integrationProvider = useMemo(
     () => getIntegrationProvider(plugin),
@@ -610,8 +646,8 @@ export default function InstallDialog({
     [integrationProvider]
   )
   const authBindings = useMemo<PluginAuthBindingDefinition[]>(
-    () => plugin.auth_bindings || [],
-    [plugin.auth_bindings]
+    () => plugin.authBindings || [],
+    [plugin.authBindings]
   )
   const authBindingMap = useMemo(
     () => new Map(authBindings.map((binding) => [binding.key, binding])),
@@ -624,19 +660,21 @@ export default function InstallDialog({
     [defaultActorId, lifecyclePreviewScopeType]
   )
   const [lifecycleScope, setLifecycleScope] = useState<PluginReuseScope>(
-    ((initialInstallation?.lifecycle_scope as PluginReuseScope | undefined) ||
+    ((initialInstallation?.lifecycleScope as PluginReuseScope | undefined) ||
       defaultLifecycleScope ||
-      plugin.lifecycle_scope ||
-      plugin.default_reuse_scope ||
+      plugin.lifecycleScope ||
+      plugin.defaultReuseScope ||
       "conversation") as PluginReuseScope
   )
   const [selectedActorId, setSelectedActorId] = useState(defaultActorId || "")
   const [selectedConversationId, setSelectedConversationId] = useState("")
   const [actors, setActors] = useState<AccessVisualActor[]>([])
-  const [conversations, setConversations] = useState<any[]>([])
+  const [conversations, setConversations] = useState<
+    AccessVisualConversation[]
+  >([])
   const [configData, setConfigData] = useState<Record<string, unknown>>(() => ({
     ...buildInitialConfig(plugin, configFields),
-    ...(initialInstallation?.config_data || {}),
+    ...(initialInstallation?.configData || {}),
   }))
   const [saving, setSaving] = useState(false)
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
@@ -649,14 +687,13 @@ export default function InstallDialog({
       buildInitialAuthFields(
         {
           ...buildInitialConfig(plugin, configFields),
-          ...(initialInstallation?.config_data || {}),
+          ...(initialInstallation?.configData || {}),
         },
         configFields
       )
   )
-  const [currentInstallation, setCurrentInstallation] = useState<any>(
-    initialInstallation || null
-  )
+  const [currentInstallation, setCurrentInstallation] =
+    useState<PluginInstallationDetailView | null>(initialInstallation || null)
   const [setupIntegrationSources, setSetupIntegrationSources] = useState(false)
   const [integrationTargetId, setIntegrationTargetId] = useState("")
   const [integrationTargetLabelValue, setIntegrationTargetLabelValue] =
@@ -667,14 +704,14 @@ export default function InstallDialog({
     useState(false)
   const authPollers = useRef<Record<string, number>>({})
 
-  const validationRules: ValidationRule[] = plugin.validation_rules || []
+  const validationRules: ValidationRule[] = plugin.validationRules || []
   const resolvedIncludeAccessStep = includeAccessStep ?? presentation === "page"
   const installSteps = useMemo<InstallFlowStep[]>(() => {
     const nextSteps: InstallFlowStep[] = [...setupSteps]
     if (integrationProvider) {
       nextSteps.push({
         id: "integration-events",
-        kind: "integration_events",
+        kind: PLUGIN_INSTALL_STEP_KIND.INTEGRATION_EVENTS,
         titleI18n: {
           en: `Create ${integrationProvider === "github" ? "GitHub" : "GitLab"} Event Sources`,
           "zh-CN": `创建 ${integrationProvider === "github" ? "GitHub" : "GitLab"} 事件源`,
@@ -683,7 +720,7 @@ export default function InstallDialog({
           en: "Optionally create durable automation event sources backed by the platform webhook API.",
           "zh-CN": "按需创建通过平台官方 webhook API 接入的自动化事件源。",
         },
-        scope: "plugin",
+        scope: PLUGIN_INSTALL_STEP_SCOPE.PLUGIN,
         fields: [],
         optional: true,
       })
@@ -702,7 +739,7 @@ export default function InstallDialog({
           [locale]:
             "Grant this installation to the users, actors, and conversations that should be able to use it.",
         },
-        scope: "plugin",
+        scope: PLUGIN_INSTALL_STEP_SCOPE.PLUGIN,
         fields: [],
       },
     ]
@@ -713,22 +750,29 @@ export default function InstallDialog({
     [installSteps]
   )
   const integrationStepIndex = useMemo(
-    () => installSteps.findIndex((step) => step.kind === "integration_events"),
+    () =>
+      installSteps.findIndex(
+        (step) => step.kind === PLUGIN_INSTALL_STEP_KIND.INTEGRATION_EVENTS
+      ),
     [installSteps]
   )
   const currentAuthStepField = useMemo(() => {
-    if (currentStep?.kind !== "auth") {
+    if (currentStep?.kind !== PLUGIN_INSTALL_STEP_KIND.AUTH) {
       return null
     }
     const authStepFields = currentStep.fields
       .map((fieldKey) => configFields.find((field) => field.key === fieldKey))
       .filter((field): field is PluginConfigFieldDefinition => Boolean(field))
-      .filter((field) => field.type === "auth_connection")
+      .filter(
+        (field) => field.type === PLUGIN_CONFIG_FIELD_TYPE.AUTH_CONNECTION
+      )
     return authStepFields.length === 1 ? authStepFields[0] : null
   }, [configFields, currentStep])
   const lastSetupStepIndex = useMemo(() => {
     const firstPostInstallStepIndex = installSteps.findIndex(
-      (step) => step.kind === "integration_events" || step.kind === "access"
+      (step) =>
+        step.kind === PLUGIN_INSTALL_STEP_KIND.INTEGRATION_EVENTS ||
+        step.kind === "access"
     )
     return firstPostInstallStepIndex >= 0
       ? firstPostInstallStepIndex - 1
@@ -737,14 +781,14 @@ export default function InstallDialog({
   const installLifecycleOptions = useMemo(
     () =>
       normalizeSupportedReuseScopes(
-        currentInstallation?.supported_reuse_scopes ||
-          currentInstallation?.plugin_supported_reuse_scopes ||
-          plugin.supported_reuse_scopes
+        currentInstallation?.supportedReuseScopes ||
+          currentInstallation?.pluginSupportedReuseScopes ||
+          plugin.supportedReuseScopes
       ),
     [
-      currentInstallation?.plugin_supported_reuse_scopes,
-      currentInstallation?.supported_reuse_scopes,
-      plugin.supported_reuse_scopes,
+      currentInstallation?.pluginSupportedReuseScopes,
+      currentInstallation?.supportedReuseScopes,
+      plugin.supportedReuseScopes,
     ]
   )
   const currentAuthStepState = currentAuthStepField
@@ -760,10 +804,7 @@ export default function InstallDialog({
       api
         .getActors(workspaceId)
         .then((result) => {
-          const actorList = result?.actors ?? result ?? []
-          setActors(
-            Array.isArray(actorList) ? actorList.map(normalizeActorOption) : []
-          )
+          setActors(result.map(normalizeActorOption))
         })
         .catch(() => {})
     }
@@ -808,7 +849,10 @@ export default function InstallDialog({
   }, [configData, configFields])
 
   useEffect(() => {
-    if (!currentAuthStepField || currentStep?.kind !== "auth") {
+    if (
+      !currentAuthStepField ||
+      currentStep?.kind !== PLUGIN_INSTALL_STEP_KIND.AUTH
+    ) {
       autoStartedAuthStepRef.current = ""
       return
     }
@@ -818,9 +862,9 @@ export default function InstallDialog({
     }
 
     if (
-      currentAuthStepState?.status === "pending" ||
-      currentAuthStepState?.status === "completed" ||
-      currentAuthStepState?.status === "consumed"
+      currentAuthStepState?.status === PLUGIN_AUTH_SESSION_STATUS.PENDING ||
+      currentAuthStepState?.status === PLUGIN_AUTH_SESSION_STATUS.COMPLETED ||
+      currentAuthStepState?.status === PLUGIN_AUTH_SESSION_STATUS.CONSUMED
     ) {
       return
     }
@@ -900,9 +944,7 @@ export default function InstallDialog({
       }))
 
       if (
-        ["completed", "failed", "expired", "consumed"].includes(
-          session.status
-        ) &&
+        isTerminalAuthSessionStatus(session.status) &&
         authPollers.current[fieldKey]
       ) {
         window.clearInterval(authPollers.current[fieldKey])
@@ -914,7 +956,7 @@ export default function InstallDialog({
         [fieldKey]: {
           sessionId,
           bindingKey: previous[fieldKey]?.bindingKey || "",
-          status: "failed",
+          status: PLUGIN_AUTH_SESSION_STATUS.FAILED,
           phase: undefined,
           challenge: previous[fieldKey]?.challenge,
           errorMessage: error.message,
@@ -978,8 +1020,13 @@ export default function InstallDialog({
         void refreshAuthField(field.key, session.id)
       }, 2000)
 
-      if (session.challenge?.kind === "redirect" && session.challenge.url) {
-        if (session.challenge.openMode === "replace") {
+      if (
+        session.challenge?.kind === PLUGIN_AUTH_CHALLENGE_KIND.REDIRECT &&
+        session.challenge.url
+      ) {
+        if (
+          session.challenge.openMode === PLUGIN_AUTH_CHALLENGE_OPEN_MODE.REPLACE
+        ) {
           window.location.assign(session.challenge.url)
           return
         }
@@ -997,8 +1044,8 @@ export default function InstallDialog({
         }
       } else if (
         session.challenge?.kind &&
-        session.challenge.kind !== "qr_code" &&
-        session.challenge.kind !== "none"
+        session.challenge.kind !== PLUGIN_AUTH_CHALLENGE_KIND.QR_CODE &&
+        session.challenge.kind !== PLUGIN_AUTH_CHALLENGE_KIND.NONE
       ) {
         setFieldErrors((previous) => ({
           ...previous,
@@ -1110,12 +1157,14 @@ export default function InstallDialog({
       const authSessionIds = Object.fromEntries(
         Object.entries(authFields)
           .filter(
-            ([, state]) => state.status === "completed" && state.sessionId
+            ([, state]) =>
+              state.status === PLUGIN_AUTH_SESSION_STATUS.COMPLETED &&
+              state.sessionId
           )
           .map(([fieldKey, state]) => [fieldKey, state.sessionId])
       )
 
-      let installation: any
+      let installation: PluginInstallationDetailView
       const installationId = currentInstallation?.id || initialInstallation?.id
 
       if (installationId) {
@@ -1237,12 +1286,13 @@ export default function InstallDialog({
       <div className="flex flex-wrap gap-2">
         {installSteps.map((step, index) => {
           const label =
-            translate(step.titleI18n, locale, plugin.default_locale || "en") ||
+            translate(step.titleI18n, locale, plugin.defaultLocale || "en") ||
             step.id
           const isCurrent = index === currentStepIndex
           const isComplete = index < currentStepIndex
           const isLocked =
-            (step.kind === "access" || step.kind === "integration_events") &&
+            (step.kind === "access" ||
+              step.kind === PLUGIN_INSTALL_STEP_KIND.INTEGRATION_EVENTS) &&
             !currentInstallation
 
           return (
@@ -1285,7 +1335,7 @@ export default function InstallDialog({
 
   const renderStepAction = () => {
     if (!currentStep?.action) return null
-    if (currentStep.action.kind === "auth_start") {
+    if (currentStep.action.kind === PLUGIN_INSTALL_ACTION_KIND.AUTH_START) {
       const bindingKey = currentStep.action.bindingKey
       const field = configFields.find(
         (item) => item.authBindingKey === bindingKey || item.key === bindingKey
@@ -1302,13 +1352,16 @@ export default function InstallDialog({
             {translate(
               currentStep.action.buttonLabelI18n,
               locale,
-              plugin.default_locale || "en"
+              plugin.defaultLocale || "en"
             ) || "Authorize"}
           </Button>
         </div>
       )
     }
-    if (currentStep.action.kind === "external_link" && currentStep.action.url) {
+    if (
+      currentStep.action.kind === PLUGIN_INSTALL_ACTION_KIND.EXTERNAL_LINK &&
+      currentStep.action.url
+    ) {
       return (
         <div className="rounded-lg border border-gray-200 p-3 dark:border-white/10">
           <a
@@ -1320,7 +1373,7 @@ export default function InstallDialog({
             {translate(
               currentStep.action.buttonLabelI18n,
               locale,
-              plugin.default_locale || "en"
+              plugin.defaultLocale || "en"
             ) || "Open link"}
             <ExternalLink className="h-3.5 w-3.5" />
           </a>
@@ -1338,20 +1391,20 @@ export default function InstallDialog({
       : undefined
     const authState = authFields[field.key]
     const label =
-      translate(field.titleI18n, locale, plugin.default_locale || "en") ||
+      translate(field.titleI18n, locale, plugin.defaultLocale || "en") ||
       field.key
     const description = translate(
       field.descriptionI18n,
       locale,
-      plugin.default_locale || "en"
+      plugin.defaultLocale || "en"
     )
     const placeholder = translate(
       field.placeholderI18n,
       locale,
-      plugin.default_locale || "en"
+      plugin.defaultLocale || "en"
     )
 
-    if (field.type === "boolean") {
+    if (field.type === PLUGIN_CONFIG_FIELD_TYPE.BOOLEAN) {
       const fieldId = `config-${field.key}`
       const descriptionId = `${fieldId}-description`
       return (
@@ -1394,7 +1447,7 @@ export default function InstallDialog({
       )
     }
 
-    if (field.type === "select") {
+    if (field.type === PLUGIN_CONFIG_FIELD_TYPE.SELECT) {
       return (
         <div key={field.key} className="space-y-1">
           <div className="flex items-center gap-2">
@@ -1426,7 +1479,7 @@ export default function InstallDialog({
                   {translate(
                     option.labelI18n,
                     locale,
-                    plugin.default_locale || "en"
+                    plugin.defaultLocale || "en"
                   ) || option.value}
                 </option>
               ))}
@@ -1447,7 +1500,7 @@ export default function InstallDialog({
       )
     }
 
-    if (field.type === "multiselect") {
+    if (field.type === PLUGIN_CONFIG_FIELD_TYPE.MULTISELECT) {
       const selectedValues = new Set(getStringArrayValue(value))
       return (
         <div key={field.key} className="space-y-3">
@@ -1468,12 +1521,12 @@ export default function InstallDialog({
                 translate(
                   option.labelI18n,
                   locale,
-                  plugin.default_locale || "en"
+                  plugin.defaultLocale || "en"
                 ) || option.value
               const optionDescription = translate(
                 option.descriptionI18n,
                 locale,
-                plugin.default_locale || "en"
+                plugin.defaultLocale || "en"
               )
               const checked = selectedValues.has(option.value)
               return (
@@ -1518,7 +1571,7 @@ export default function InstallDialog({
       )
     }
 
-    if (field.type === "textarea") {
+    if (field.type === PLUGIN_CONFIG_FIELD_TYPE.TEXTAREA) {
       return (
         <div key={field.key} className="space-y-1">
           <div className="flex items-center gap-2">
@@ -1554,22 +1607,22 @@ export default function InstallDialog({
       )
     }
 
-    if (field.type === "auth_connection") {
+    if (field.type === PLUGIN_CONFIG_FIELD_TYPE.AUTH_CONNECTION) {
       const bindingLabel = binding
         ? translate(
             binding.displayNameI18n,
             locale,
-            plugin.default_locale || "en"
+            plugin.defaultLocale || "en"
           ) || binding.key
         : field.authBindingKey || "binding"
       const challengeMetadata = getAuthChallengeMetadata(authState)
       const feishuScopeStatus = getFeishuAppScopeStatus(authState)
       const canInspectFeishuScopes =
-        binding?.driver === "feishu_cli_setup" &&
+        binding?.driver === PLUGIN_AUTH_BINDING_DRIVER_KIND.FEISHU_CLI_SETUP &&
         typeof authState?.sessionId === "string" &&
         authState.sessionId.length > 0
       const scanUrl =
-        authState?.challenge?.kind === "qr_code"
+        authState?.challenge?.kind === PLUGIN_AUTH_CHALLENGE_KIND.QR_CODE
           ? authState.challenge.qrUrl ||
             challengeMetadata.scanUrl ||
             authState.challenge.url
@@ -1625,8 +1678,8 @@ export default function InstallDialog({
                 onClick={() => beginAuth(field)}
                 className="shrink-0"
               >
-                {authState?.status === "completed" ||
-                authState?.status === "consumed"
+                {authState?.status === PLUGIN_AUTH_SESSION_STATUS.COMPLETED ||
+                authState?.status === PLUGIN_AUTH_SESSION_STATUS.CONSUMED
                   ? "Reconnect"
                   : "Connect"}
               </Button>
@@ -1634,7 +1687,7 @@ export default function InstallDialog({
           </div>
           {authState && (
             <div className="text-sm text-gray-500 dark:text-gray-400">
-              {authState.status === "pending" && (
+              {authState.status === PLUGIN_AUTH_SESSION_STATUS.PENDING && (
                 <div className="space-y-3">
                   <span className="inline-flex items-center gap-1">
                     <Loader2 className="h-3 w-3 animate-spin" />
@@ -1678,8 +1731,8 @@ export default function InstallDialog({
                   )}
                 </div>
               )}
-              {(authState.status === "completed" ||
-                authState.status === "consumed") && (
+              {(authState.status === PLUGIN_AUTH_SESSION_STATUS.COMPLETED ||
+                authState.status === PLUGIN_AUTH_SESSION_STATUS.CONSUMED) && (
                 <span>
                   Connected
                   {authState.accountDisplayName
@@ -1688,12 +1741,12 @@ export default function InstallDialog({
                   .
                 </span>
               )}
-              {authState.status === "failed" && (
+              {authState.status === PLUGIN_AUTH_SESSION_STATUS.FAILED && (
                 <span className="text-red-500">
                   {authState.errorMessage || "Authorization failed."}
                 </span>
               )}
-              {authState.status === "expired" && (
+              {authState.status === PLUGIN_AUTH_SESSION_STATUS.EXPIRED && (
                 <span className="text-red-500">
                   Authorization session expired. Start again.
                 </span>
@@ -1793,9 +1846,9 @@ export default function InstallDialog({
     }
 
     const inputType =
-      field.type === "number"
+      field.type === PLUGIN_CONFIG_FIELD_TYPE.NUMBER
         ? "number"
-        : field.type === "secret"
+        : field.type === PLUGIN_CONFIG_FIELD_TYPE.SECRET
           ? "password"
           : "text"
     return (
@@ -1818,7 +1871,7 @@ export default function InstallDialog({
             onChange={(event) =>
               handleFieldChange(
                 field.key,
-                field.type === "number"
+                field.type === PLUGIN_CONFIG_FIELD_TYPE.NUMBER
                   ? Number(event.target.value)
                   : event.target.value
               )
@@ -1854,7 +1907,7 @@ export default function InstallDialog({
               {translate(
                 currentStep.titleI18n,
                 locale,
-                plugin.default_locale || "en"
+                plugin.defaultLocale || "en"
               ) || currentStep.id}
             </h3>
             {currentStep.descriptionI18n && (
@@ -1862,7 +1915,7 @@ export default function InstallDialog({
                 {translate(
                   currentStep.descriptionI18n,
                   locale,
-                  plugin.default_locale || "en"
+                  plugin.defaultLocale || "en"
                 )}
               </p>
             )}
@@ -1878,7 +1931,7 @@ export default function InstallDialog({
               {translate(
                 currentStep.helpTextI18n,
                 locale,
-                plugin.default_locale || "en"
+                plugin.defaultLocale || "en"
               ) || "Open setup guide"}
               <ExternalLink className="h-3 w-3" />
             </a>
@@ -1886,7 +1939,7 @@ export default function InstallDialog({
         </div>
       )}
 
-      {currentStep?.kind === "reuse_scope" && (
+      {currentStep?.kind === PLUGIN_INSTALL_STEP_KIND.REUSE_SCOPE && (
         <AccessReuseScopeStep
           attachmentScopeType={reusePreviewScopeType}
           value={lifecycleScope}
@@ -1903,146 +1956,147 @@ export default function InstallDialog({
         <WorkspaceAppAccessStep installation={currentInstallation} />
       )}
 
-      {currentStep?.kind === "integration_events" && integrationProvider && (
-        <div className="space-y-4 border-t border-gray-200 pt-4 dark:border-white/10">
-          <div className="rounded-[24px] border border-border/70 bg-muted/20 p-4">
-            <div className="flex items-start gap-3">
-              <div className="flex h-6 shrink-0 items-center">
-                <Checkbox
-                  id="create-integration-event-sources"
-                  checked={setupIntegrationSources}
-                  onCheckedChange={(checked) =>
-                    setSetupIntegrationSources(checked === true)
-                  }
-                />
-              </div>
-              <div className="space-y-1">
-                <label
-                  htmlFor="create-integration-event-sources"
-                  className="text-sm font-medium text-gray-900 dark:text-white"
-                >
-                  Create{" "}
-                  {integrationProvider === "github" ? "GitHub" : "GitLab"} event
-                  sources now
-                </label>
-                <p className="text-sm text-muted-foreground">
-                  Synapse will reuse this installation&apos;s token to register
-                  platform webhooks through the official API. The MCP server
-                  remains separate from event ingestion.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {setupIntegrationSources ? (
-            <>
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-1">
-                  <Label
-                    htmlFor="integration-target-id"
-                    className="block text-sm/6 font-medium text-gray-900 dark:text-white"
-                  >
-                    {integrationTargetLabel(integrationProvider)}
-                  </Label>
-                  <Input
-                    id="integration-target-id"
-                    value={integrationTargetId}
-                    onChange={(event) =>
-                      setIntegrationTargetId(event.target.value)
+      {currentStep?.kind === PLUGIN_INSTALL_STEP_KIND.INTEGRATION_EVENTS &&
+        integrationProvider && (
+          <div className="space-y-4 border-t border-gray-200 pt-4 dark:border-white/10">
+            <div className="rounded-[24px] border border-border/70 bg-muted/20 p-4">
+              <div className="flex items-start gap-3">
+                <div className="flex h-6 shrink-0 items-center">
+                  <Checkbox
+                    id="create-integration-event-sources"
+                    checked={setupIntegrationSources}
+                    onCheckedChange={(checked) =>
+                      setSetupIntegrationSources(checked === true)
                     }
-                    placeholder={integrationTargetPlaceholder(
-                      integrationProvider
-                    )}
                   />
+                </div>
+                <div className="space-y-1">
+                  <label
+                    htmlFor="create-integration-event-sources"
+                    className="text-sm font-medium text-gray-900 dark:text-white"
+                  >
+                    Create{" "}
+                    {integrationProvider === "github" ? "GitHub" : "GitLab"}{" "}
+                    event sources now
+                  </label>
                   <p className="text-sm text-muted-foreground">
-                    {integrationProvider === "github"
-                      ? "Use the repository path, for example `owner/repo`."
-                      : "Use the project path, for example `group/project`."}
+                    Synapse will reuse this installation&apos;s token to
+                    register platform webhooks through the official API. The MCP
+                    server remains separate from event ingestion.
                   </p>
                 </div>
-                <div className="space-y-1">
-                  <Label
-                    htmlFor="integration-target-label"
-                    className="block text-sm/6 font-medium text-gray-900 dark:text-white"
-                  >
-                    Display label
-                  </Label>
-                  <Input
-                    id="integration-target-label"
-                    value={integrationTargetLabelValue}
-                    onChange={(event) =>
-                      setIntegrationTargetLabelValue(event.target.value)
-                    }
-                    placeholder="Optional custom label"
-                  />
-                </div>
               </div>
-
-              <div className="space-y-3">
-                <div className="text-sm font-medium text-gray-900 dark:text-white">
-                  Event definitions
-                </div>
-                <div className="space-y-3">
-                  {integrationEventDefinitionOptions.map((definition) => {
-                    const checked = selectedIntegrationSourceKeys.includes(
-                      definition.sourceKey
-                    )
-                    return (
-                      <label
-                        key={definition.sourceKey}
-                        className="flex items-start gap-3 rounded-[24px] border border-border/70 bg-muted/20 px-4 py-4"
-                      >
-                        <Checkbox
-                          checked={checked}
-                          onCheckedChange={(value) =>
-                            setSelectedIntegrationSourceKeys((current) =>
-                              value === true
-                                ? current.includes(definition.sourceKey)
-                                  ? current
-                                  : [...current, definition.sourceKey]
-                                : current.filter(
-                                    (sourceKey) =>
-                                      sourceKey !== definition.sourceKey
-                                  )
-                            )
-                          }
-                        />
-                        <div className="space-y-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-sm font-medium text-gray-900 dark:text-white">
-                              {definition.name}
-                            </span>
-                            <Badge variant="outline">
-                              {definition.sourceKey}
-                            </Badge>
-                          </div>
-                          <p className="text-sm text-muted-foreground">
-                            {definition.description}
-                          </p>
-                          {definition.recommendedUsage ? (
-                            <p className="text-xs text-muted-foreground">
-                              {definition.recommendedUsage}
-                            </p>
-                          ) : null}
-                        </div>
-                      </label>
-                    )
-                  })}
-                </div>
-              </div>
-            </>
-          ) : (
-            <div className="rounded-[24px] border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
-              Skip this step if you only want MCP tools for now. You can add
-              event sources later from the Event Sources page.
             </div>
-          )}
-        </div>
-      )}
 
-      {(currentStep?.kind === "form" ||
-        currentStep?.kind === "auth" ||
-        currentStep?.kind === "check") &&
+            {setupIntegrationSources ? (
+              <>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-1">
+                    <Label
+                      htmlFor="integration-target-id"
+                      className="block text-sm/6 font-medium text-gray-900 dark:text-white"
+                    >
+                      {integrationTargetLabel(integrationProvider)}
+                    </Label>
+                    <Input
+                      id="integration-target-id"
+                      value={integrationTargetId}
+                      onChange={(event) =>
+                        setIntegrationTargetId(event.target.value)
+                      }
+                      placeholder={integrationTargetPlaceholder(
+                        integrationProvider
+                      )}
+                    />
+                    <p className="text-sm text-muted-foreground">
+                      {integrationProvider === "github"
+                        ? "Use the repository path, for example `owner/repo`."
+                        : "Use the project path, for example `group/project`."}
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <Label
+                      htmlFor="integration-target-label"
+                      className="block text-sm/6 font-medium text-gray-900 dark:text-white"
+                    >
+                      Display label
+                    </Label>
+                    <Input
+                      id="integration-target-label"
+                      value={integrationTargetLabelValue}
+                      onChange={(event) =>
+                        setIntegrationTargetLabelValue(event.target.value)
+                      }
+                      placeholder="Optional custom label"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <div className="text-sm font-medium text-gray-900 dark:text-white">
+                    Event definitions
+                  </div>
+                  <div className="space-y-3">
+                    {integrationEventDefinitionOptions.map((definition) => {
+                      const checked = selectedIntegrationSourceKeys.includes(
+                        definition.sourceKey
+                      )
+                      return (
+                        <label
+                          key={definition.sourceKey}
+                          className="flex items-start gap-3 rounded-[24px] border border-border/70 bg-muted/20 px-4 py-4"
+                        >
+                          <Checkbox
+                            checked={checked}
+                            onCheckedChange={(value) =>
+                              setSelectedIntegrationSourceKeys((current) =>
+                                value === true
+                                  ? current.includes(definition.sourceKey)
+                                    ? current
+                                    : [...current, definition.sourceKey]
+                                  : current.filter(
+                                      (sourceKey) =>
+                                        sourceKey !== definition.sourceKey
+                                    )
+                              )
+                            }
+                          />
+                          <div className="space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm font-medium text-gray-900 dark:text-white">
+                                {definition.name}
+                              </span>
+                              <Badge variant="outline">
+                                {definition.sourceKey}
+                              </Badge>
+                            </div>
+                            <p className="text-sm text-muted-foreground">
+                              {definition.description}
+                            </p>
+                            {definition.recommendedUsage ? (
+                              <p className="text-xs text-muted-foreground">
+                                {definition.recommendedUsage}
+                              </p>
+                            ) : null}
+                          </div>
+                        </label>
+                      )
+                    })}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="rounded-[24px] border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
+                Skip this step if you only want MCP tools for now. You can add
+                event sources later from the Event Sources page.
+              </div>
+            )}
+          </div>
+        )}
+
+      {(currentStep?.kind === PLUGIN_INSTALL_STEP_KIND.FORM ||
+        currentStep?.kind === PLUGIN_INSTALL_STEP_KIND.AUTH ||
+        currentStep?.kind === PLUGIN_INSTALL_STEP_KIND.CHECK) &&
         currentStep?.fields.length > 0 && (
           <div className="space-y-4 border-t border-gray-200 pt-4 dark:border-white/10">
             {currentStep.fields.map((fieldKey) => {
@@ -2071,7 +2125,8 @@ export default function InstallDialog({
           <Button onClick={finalizeFlow} disabled={saving}>
             Done
           </Button>
-        ) : currentStep?.kind === "integration_events" ? (
+        ) : currentStep?.kind ===
+          PLUGIN_INSTALL_STEP_KIND.INTEGRATION_EVENTS ? (
           <Button
             onClick={() => void handleIntegrationStepContinue()}
             disabled={saving || creatingIntegrationSources}
@@ -2129,13 +2184,13 @@ export default function InstallDialog({
           <div className="flex">
             <div className="mr-4 shrink-0">
               <PluginIcon
-                iconUrl={plugin.icon_url}
+                iconUrl={plugin.iconUrl}
                 title={
                   translate(
-                    plugin.display_name_i18n,
+                    plugin.displayNameI18n,
                     locale,
-                    plugin.default_locale || "en"
-                  ) || plugin.display_name
+                    plugin.defaultLocale || "en"
+                  ) || plugin.displayName
                 }
                 transport={plugin.transport}
                 className="h-8 w-8"
@@ -2145,16 +2200,16 @@ export default function InstallDialog({
             <div>
               <h2 className="text-lg font-bold text-gray-900 dark:text-white">
                 {translate(
-                  plugin.display_name_i18n,
+                  plugin.displayNameI18n,
                   locale,
-                  plugin.default_locale || "en"
-                ) || plugin.display_name}
+                  plugin.defaultLocale || "en"
+                ) || plugin.displayName}
               </h2>
               <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 {translate(
-                  plugin.description_i18n,
+                  plugin.descriptionI18n,
                   locale,
-                  plugin.default_locale || "en"
+                  plugin.defaultLocale || "en"
                 ) || "Install this plugin by following its guided setup flow."}
               </p>
             </div>
@@ -2217,10 +2272,10 @@ export default function InstallDialog({
         <DialogHeader>
           <DialogTitle>
             {translate(
-              plugin.display_name_i18n,
+              plugin.displayNameI18n,
               locale,
-              plugin.default_locale || "en"
-            ) || plugin.display_name}
+              plugin.defaultLocale || "en"
+            ) || plugin.displayName}
           </DialogTitle>
         </DialogHeader>
         {content}

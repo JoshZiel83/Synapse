@@ -71,6 +71,56 @@ interface Pending {
 }
 
 const DEFAULT_RPC_TIMEOUT_MS = 120_000
+const hasOwn = Object.prototype.hasOwnProperty
+
+type OneShotFsHelperFrame =
+  | { id: string; result: unknown }
+  | { id: string; error: { code: number; message: string } }
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+export function parseOneShotFsHelperFrame(
+  line: string
+): OneShotFsHelperFrame | null {
+  if (!line.trim()) return null
+  let value: unknown
+  try {
+    value = JSON.parse(line)
+  } catch {
+    return null
+  }
+  if (!isRecord(value) || value.jsonrpc !== "2.0") return null
+  const rawId = value.id
+  if (
+    (typeof rawId !== "string" && typeof rawId !== "number") ||
+    rawId === ""
+  ) {
+    return null
+  }
+  const hasResult = hasOwn.call(value, "result")
+  const hasError = hasOwn.call(value, "error")
+  if (hasResult === hasError) return null
+
+  if (hasError) {
+    const error = value.error
+    if (
+      !isRecord(error) ||
+      typeof error.code !== "number" ||
+      !Number.isInteger(error.code) ||
+      typeof error.message !== "string"
+    ) {
+      return null
+    }
+    return {
+      id: String(rawId),
+      error: { code: error.code, message: error.message },
+    }
+  }
+
+  return { id: String(rawId), result: value.result }
+}
 
 /**
  * A handle over a spawned one-shot helper. Call the typed methods, then
@@ -114,23 +164,13 @@ export class OneShotFsHelper {
   }
 
   private onLine(line: string): void {
-    if (!line.trim()) return
-    let frame: {
-      id?: string | number
-      result?: unknown
-      error?: { code: number; message: string }
-    }
-    try {
-      frame = JSON.parse(line)
-    } catch {
-      return
-    }
-    if (frame.id === undefined || frame.id === null) return
-    const key = String(frame.id)
+    const frame = parseOneShotFsHelperFrame(line)
+    if (!frame) return
+    const key = frame.id
     const p = this.pending.get(key)
     if (!p) return
     this.pending.delete(key)
-    if (frame.error) {
+    if ("error" in frame) {
       p.reject(
         new OneShotFsHelperError(
           p.method,

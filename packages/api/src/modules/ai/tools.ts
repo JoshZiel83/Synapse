@@ -7,6 +7,12 @@ import { throwToolError } from "./tool-errors.js"
 import { executeActorActions } from "../orchestrator/service.js"
 import { getToolExecutionContext } from "./session-tools.js"
 import { getActor } from "../organization/service.js"
+import {
+  parseCreateMemoryToolInput,
+  parseRenameSelfToolInput,
+  type CreateMemoryToolInput,
+  type RenameSelfToolInput,
+} from "./actor-state-tools-input-codec.js"
 
 const HEX_COLOR_PATTERN = "^[0-9a-fA-F]{6}$"
 const ACCESSORIES_PATTERN = "^variant0[1-4]$"
@@ -147,32 +153,23 @@ function parseChangeAvatarToolInput(input: Record<string, unknown>) {
   )
 }
 
-function buildCreateMemoryAction(input: Record<string, any>): ActorAction {
-  const tags = input.tags
-    ? String(input.tags)
-        .split(",")
-        .map((t: string) => t.trim())
-        .filter(Boolean)
-    : []
-  const spaceType = input.spaceType || input.scope || "participant_private"
-  const importance = Number(input.importance)
-  const confidence = Number(input.confidence)
+function buildCreateMemoryAction(input: CreateMemoryToolInput): ActorAction {
   return {
     type: "create_memory" as const,
     content: input.content,
     metadata: {
-      category: input.category || "fact",
-      spaceType,
-      scope: spaceType,
-      importance: Number.isFinite(importance) ? importance : 0.5,
-      confidence: Number.isFinite(confidence) ? confidence : 0.8,
-      textDigest: input.textDigest || undefined,
-      tags,
+      category: input.category,
+      spaceType: input.spaceType,
+      scope: input.spaceType,
+      importance: input.importance,
+      confidence: input.confidence,
+      textDigest: input.textDigest,
+      tags: input.tags,
     },
   }
 }
 
-function buildRenameSelfAction(input: Record<string, any>): ActorAction {
+function buildRenameSelfAction(input: RenameSelfToolInput): ActorAction {
   return {
     type: "rename_self" as const,
     content: input.newName,
@@ -277,7 +274,7 @@ export function registerActorStateCallableToolPlugins(): void {
         throwToolError("No session context available")
       }
 
-      const action = buildCreateMemoryAction(input as Record<string, any>)
+      const action = buildCreateMemoryAction(parseCreateMemoryToolInput(input))
       await executeActorActions(
         context.workspaceId,
         context.actorId,
@@ -321,7 +318,7 @@ export function registerActorStateCallableToolPlugins(): void {
         throwToolError("No session context available")
       }
 
-      const action = buildRenameSelfAction(input as Record<string, any>)
+      const action = buildRenameSelfAction(parseRenameSelfToolInput(input))
       await executeActorActions(
         context.workspaceId,
         context.actorId,

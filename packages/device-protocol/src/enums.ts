@@ -81,6 +81,31 @@ export const DEVICE_SYNC_SOURCE_KINDS = [
 ] as const
 export type DeviceSyncSourceKind = (typeof DEVICE_SYNC_SOURCE_KINDS)[number]
 
+export const REMOTE_AGENT_RUNTIME_KINDS = ["claude_code", "codex"] as const
+export type RemoteAgentRuntimeKind = (typeof REMOTE_AGENT_RUNTIME_KINDS)[number]
+
+export const REMOTE_AGENT_RUNTIME_STATES = [
+  "offline",
+  "idle",
+  "running",
+  "waiting_user_input",
+  "plan_drafting",
+  "waiting_plan_approval",
+  "error",
+] as const
+export type RemoteAgentRuntimeState =
+  (typeof REMOTE_AGENT_RUNTIME_STATES)[number]
+
+export const REMOTE_AGENT_RUNTIME_CATALOG_STATUSES = [
+  "available",
+  "missing_binary",
+  "broken_path",
+  "unsupported_platform",
+  "runtime_error",
+] as const
+export type RemoteAgentRuntimeCatalogStatus =
+  (typeof REMOTE_AGENT_RUNTIME_CATALOG_STATUSES)[number]
+
 export const DEVICE_SYNC_MODES = ["snapshot", "follow"] as const
 export type DeviceSyncMode = (typeof DEVICE_SYNC_MODES)[number]
 
@@ -187,6 +212,46 @@ export const RUNTIME_AUTHORIZATION_BROWSER_OPERATIONS = [
 ] as const
 export type BrowserOperation =
   (typeof RUNTIME_AUTHORIZATION_BROWSER_OPERATIONS)[number]
+
+export type BrowserOperationRequiredAction = "read" | "write"
+
+/**
+ * Minimum action level required to grant each browser operation.
+ *
+ * This lives with the browser operation enum so app/shared policy validators can
+ * check action coverage without importing the browser tool map/descriptors.
+ */
+export const BROWSER_OPERATION_REQUIRED_ACTION: Readonly<
+  Record<BrowserOperation, BrowserOperationRequiredAction>
+> = {
+  "page.read": "read",
+  "page.navigate": "write",
+  "page.input": "write",
+  "screenshot.capture": "read",
+  "console.read": "read",
+  "network.list": "read",
+  "network.body.read": "read",
+  "script.evaluate": "write",
+  "performance.trace": "read",
+  // Deferred operations: not in BROWSER_TOOL_MAP today, but listed in the enum
+  // so a grant policy can name them. Each one is write-sensitive.
+  "file.upload": "write",
+  "extension.manage": "write",
+  "webmcp.execute": "write",
+}
+
+export function browserActionCoversOperations(
+  action: BrowserOperationRequiredAction,
+  operations: readonly BrowserOperation[]
+): { ok: true } | { ok: false; offending: BrowserOperation[] } {
+  if (action === "write") return { ok: true }
+  const offending = operations.filter((op) => {
+    const required = BROWSER_OPERATION_REQUIRED_ACTION[op]
+    if (required === undefined) return true
+    return required === "write"
+  })
+  return offending.length === 0 ? { ok: true } : { ok: false, offending }
+}
 
 // Operation lifecycle statuses. awaiting_authorization is new in v3 (§6).
 export const DEVICE_OPERATION_STATUSES = [

@@ -3,29 +3,32 @@
 // execution. Mirrors docs/device-runtime-v3.md §10.3.
 
 import {
-  ClaimDaemonInputSchema,
   ConsumePairingInputSchema,
-  CreateCloudDeviceInputSchema,
-  CreateCloudDeviceResultSchema,
-  DeviceDetailSchema,
-  DeviceServiceSummarySchema,
-  DeviceSummarySchema,
-  PairingTicketSchema,
-  SetActiveDeviceCapabilitiesInputSchema,
-  StartPairingInputSchema,
-  type ClaimDaemonInput,
   type ConsumePairingInput,
   type ConsumePairingResult,
-  type CreateCloudDeviceInput,
-  type CreateCloudDeviceResult,
   type DeviceCapabilityAccessTarget,
-  type DeviceDetail,
-  type DeviceServiceSummary,
-  type DeviceSummary,
-  type PairingTicket,
+} from "@synapse/device-protocol"
+import {
+  DeviceDetailViewSchema,
+  DeviceListViewSchema,
+  DevicePairingTicketViewSchema,
+  DeviceServiceViewSchema,
+  CreateCloudDeviceInputSchema,
+  CreateCloudDeviceResultViewSchema,
+  StartPairingInputSchema,
+  ClaimDaemonServiceInputSchema,
+  SetActiveDeviceCapabilitiesInputSchema,
+  type DeviceDetailView,
+  type DeviceListView,
+  type DevicePairingTicketView,
+  type DeviceServiceView,
+  type DeviceView,
+  type CreateCloudDeviceInput,
+  type CreateCloudDeviceResultView,
+  type ClaimDaemonServiceInput,
   type SetActiveDeviceCapabilitiesInput,
   type StartPairingInput,
-} from "@synapse/device-protocol"
+} from "@synapse/shared/schemas"
 
 /**
  * AccessTarget — re-export of the narrow wire type
@@ -88,23 +91,23 @@ export class DeviceSdk {
 
   // ───────────────────────────── lifecycle ───────────────────────────────────
 
-  async listDevices(workspaceId: string): Promise<DeviceSummary[]> {
-    const result = await this.request<{ devices: unknown[] }>(
+  async listDevices(workspaceId: string): Promise<DeviceListView> {
+    const result = await this.request<{ data: unknown[] }>(
       "GET",
       `/api/v1/workspaces/${workspaceId}/devices`
     )
-    return result.devices.map((d) => DeviceSummarySchema.parse(d))
+    return DeviceListViewSchema.parse(result.data)
   }
 
   async getDevice(
     workspaceId: string,
     deviceId: string
-  ): Promise<DeviceDetail> {
-    const raw = await this.request<unknown>(
+  ): Promise<DeviceDetailView> {
+    const res = await this.request<{ data: unknown }>(
       "GET",
       `/api/v1/workspaces/${workspaceId}/devices/${deviceId}`
     )
-    return DeviceDetailSchema.parse(raw)
+    return DeviceDetailViewSchema.parse(res.data)
   }
 
   async deleteDevice(workspaceId: string, deviceId: string): Promise<void> {
@@ -124,33 +127,42 @@ export class DeviceSdk {
   // the materialized device happens via listDevices once the sandbox is up.
   async createCloudDevice(
     input: CreateCloudDeviceInput
-  ): Promise<CreateCloudDeviceResult> {
+  ): Promise<CreateCloudDeviceResultView> {
     const parsed = CreateCloudDeviceInputSchema.parse(input)
-    const raw = await this.request<unknown>(
+    // workspaceId travels in the URL; the body carries only the app fields
+    // (title/preset/hostProvider). The API route validates the body with
+    // CreateCloudDeviceInputSchema.omit({ workspaceId }) (a strictObject), so
+    // sending workspaceId in the body would be rejected as an unknown key.
+    const { workspaceId, ...body } = parsed
+    const res = await this.request<{ data: unknown }>(
       "POST",
-      `/api/v1/workspaces/${parsed.workspace_id}/devices/cloud`,
-      parsed
+      `/api/v1/workspaces/${workspaceId}/devices/cloud`,
+      body
     )
-    return CreateCloudDeviceResultSchema.parse(raw)
+    return CreateCloudDeviceResultViewSchema.parse(res.data)
   }
 
   // ───────────────────────────── pairing ─────────────────────────────────────
 
-  async startPairing(input: StartPairingInput): Promise<PairingTicket> {
+  async startPairing(
+    input: StartPairingInput
+  ): Promise<DevicePairingTicketView> {
     const parsed = StartPairingInputSchema.parse(input)
-    const raw = await this.request<unknown>(
+    const res = await this.request<{ data: unknown }>(
       "POST",
-      `/api/v1/workspaces/${parsed.workspace_id}/devices/pairing-sessions`,
+      `/api/v1/workspaces/${parsed.workspaceId}/devices/pairing-sessions`,
       {
         mode: parsed.mode,
         title: parsed.title,
-        device_type: parsed.device_type,
-        device_id: parsed.device_id,
-        requested_pubkey_fingerprint: parsed.requested_pubkey_fingerprint,
-        self_challenge: parsed.self_challenge,
+        description: parsed.description,
+        deviceType: parsed.deviceType,
+        context: parsed.context,
+        deviceId: parsed.deviceId,
+        requestedPubkeyFingerprint: parsed.requestedPubkeyFingerprint,
+        selfChallenge: parsed.selfChallenge,
       }
     )
-    return PairingTicketSchema.parse(raw)
+    return DevicePairingTicketViewSchema.parse(res.data)
   }
 
   // Used by the Device Runtime (not the chat client), but exposed here so
@@ -172,18 +184,21 @@ export class DeviceSdk {
   async claimRemoteAgentDaemon(
     workspaceId: string,
     deviceId: string,
-    input: ClaimDaemonInput
-  ): Promise<DeviceServiceSummary> {
-    const parsed = ClaimDaemonInputSchema.parse(input)
-    const raw = await this.request<unknown>(
+    input: { remoteAgentMachineId: string }
+  ): Promise<DeviceServiceView> {
+    const parsed = ClaimDaemonServiceInputSchema.parse({
+      serviceKind: "remote_agent_daemon",
+      remoteAgentMachineId: input.remoteAgentMachineId,
+    })
+    const res = await this.request<{ data: unknown }>(
       "POST",
       `/api/v1/workspaces/${workspaceId}/devices/${deviceId}/services`,
       {
-        service_kind: "remote_agent_daemon",
-        remote_agent_machine_id: parsed.remote_agent_machine_id,
+        serviceKind: parsed.serviceKind,
+        remoteAgentMachineId: parsed.remoteAgentMachineId,
       }
     )
-    return DeviceServiceSummarySchema.parse(raw)
+    return DeviceServiceViewSchema.parse(res.data)
   }
 
   async detachService(
@@ -221,17 +236,20 @@ export class DeviceSdk {
   }
 }
 
-// Re-export protocol types so consumers depend on @synapse/device-sdk only.
+// Re-export the contract types so consumers depend on @synapse/device-sdk only.
+// Device read/management views AND app-facing write inputs are camelCase (from
+// @synapse/shared); only the true wire/handshake types (consume) stay
+// snake_case (from @synapse/device-protocol).
 export type {
-  DeviceSummary,
-  DeviceDetail,
-  DeviceServiceSummary,
-  PairingTicket,
-  ConsumePairingInput,
-  ConsumePairingResult,
+  DeviceView,
+  DeviceListView,
+  DeviceDetailView,
+  DeviceServiceView,
+  DevicePairingTicketView,
   CreateCloudDeviceInput,
-  CreateCloudDeviceResult,
-  ClaimDaemonInput,
+  CreateCloudDeviceResultView,
+  ClaimDaemonServiceInput,
   SetActiveDeviceCapabilitiesInput,
   StartPairingInput,
 }
+export type { ConsumePairingInput, ConsumePairingResult }

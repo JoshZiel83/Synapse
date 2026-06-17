@@ -4,8 +4,12 @@ import Link from "next/link"
 import { useDeferredValue, useEffect, useMemo, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { qk } from "@/lib/query-keys"
-import type { AutomationExecution, AutomationRule } from "@synapse/shared"
+import type {
+  AutomationExecutionSchemaType,
+  AutomationRuleSchemaType,
+} from "@synapse/shared"
 import {
+  AUTOMATION_RULE_CATEGORY,
   describeAutomationDelivery,
   describeAutomationPolicy,
   describeAutomationTrigger,
@@ -44,8 +48,10 @@ import { Separator } from "@/components/ui/separator"
 import { api } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
-type TriggerStatus = AutomationRule["status"]
-type TriggerCategory = AutomationRule["category"]
+type AutomationRuleView = AutomationRuleSchemaType
+type AutomationExecutionView = AutomationExecutionSchemaType
+type TriggerStatus = AutomationRuleView["status"]
+type TriggerCategory = AutomationRuleView["category"]
 
 function formatDateTime(value?: string) {
   if (!value) return "Never"
@@ -69,7 +75,7 @@ function triggerStatusVariant(status: TriggerStatus) {
   }
 }
 
-function executionStatusVariant(status: AutomationExecution["status"]) {
+function executionStatusVariant(status: AutomationExecutionView["status"]) {
   switch (status) {
     case "completed":
       return "secondary"
@@ -88,7 +94,7 @@ function serializeDetails(value: unknown) {
   return JSON.stringify(value || {}, null, 2)
 }
 
-function executionOccurrenceTitle(execution: AutomationExecution) {
+function executionOccurrenceTitle(execution: AutomationExecutionView) {
   return (
     execution.occurrenceTitle ||
     execution.occurrenceEventSourceName ||
@@ -96,7 +102,7 @@ function executionOccurrenceTitle(execution: AutomationExecution) {
   )
 }
 
-function executionOccurrenceSummary(execution: AutomationExecution) {
+function executionOccurrenceSummary(execution: AutomationExecutionView) {
   return execution.occurrenceSummary?.trim() || null
 }
 
@@ -217,7 +223,7 @@ export default function TriggersPage() {
   )
 
   async function handleUpdateRuleStatus(
-    rule: AutomationRule,
+    rule: AutomationRuleView,
     status: TriggerStatus
   ) {
     if (!workspaceId || rule.status === status) return
@@ -240,7 +246,7 @@ export default function TriggersPage() {
     }
   }
 
-  async function handleDeleteRule(rule: AutomationRule) {
+  async function handleDeleteRule(rule: AutomationRuleView) {
     if (!workspaceId) return
     if (
       !window.confirm(`Delete trigger "${rule.name}"? This cannot be undone.`)
@@ -355,8 +361,12 @@ export default function TriggersPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All categories</SelectItem>
-                    <SelectItem value="schedule">Schedule</SelectItem>
-                    <SelectItem value="event_subscription">
+                    <SelectItem value={AUTOMATION_RULE_CATEGORY.SCHEDULE}>
+                      Schedule
+                    </SelectItem>
+                    <SelectItem
+                      value={AUTOMATION_RULE_CATEGORY.EVENT_SUBSCRIPTION}
+                    >
                       Event subscription
                     </SelectItem>
                   </SelectContent>
@@ -404,7 +414,7 @@ export default function TriggersPage() {
                             {rule.status}
                           </Badge>
                           <Badge variant="outline">
-                            {rule.category === "schedule"
+                            {rule.category === AUTOMATION_RULE_CATEGORY.SCHEDULE
                               ? "schedule"
                               : "event"}
                           </Badge>
@@ -416,7 +426,7 @@ export default function TriggersPage() {
                           {policyDisplay.summary}
                         </div>
                       </div>
-                      {rule.category === "schedule" ? (
+                      {rule.category === AUTOMATION_RULE_CATEGORY.SCHEDULE ? (
                         <Clock3 className="size-4 text-muted-foreground" />
                       ) : (
                         <Zap className="size-4 text-muted-foreground" />

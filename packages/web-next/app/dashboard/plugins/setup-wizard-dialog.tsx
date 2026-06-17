@@ -1,7 +1,11 @@
 "use client"
 
 import { useState } from "react"
-import type { ReuseScope } from "@synapse/shared"
+import type {
+  McpSetupStep,
+  MarketplacePluginView,
+  ReuseScope,
+} from "@synapse/shared"
 import {
   Dialog,
   DialogContent,
@@ -16,22 +20,17 @@ import { Check, ChevronRight, ExternalLink, HelpCircle } from "lucide-react"
 import { usePluginStore } from "@/stores/plugin-store"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
 
-interface SetupStep {
-  id: string
-  title: string
-  description: string
-  scope: "workspace" | "plugin"
-  fields: string[]
-  optional?: boolean
-  helpUrl?: string
-  helpText?: string
-}
-
 interface Props {
-  plugin: any
+  plugin: MarketplacePluginView
   lifecycleScope?: ReuseScope
   onClose: () => void
   onComplete: () => void
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
 }
 
 export default function SetupWizardDialog({
@@ -43,7 +42,7 @@ export default function SetupWizardDialog({
   const { workspaceId } = useWorkspace()
   const { installPlugin } = usePluginStore()
 
-  const allSteps: SetupStep[] = plugin.setup_steps || []
+  const allSteps: McpSetupStep[] = plugin.setupSteps || []
 
   const [currentStep, setCurrentStep] = useState(0)
   const [configValues, setConfigValues] = useState<
@@ -61,8 +60,8 @@ export default function SetupWizardDialog({
   const isLastStep = currentStep === allSteps.length - 1
   const stepValues = configValues[step?.id] || {}
 
-  const schema = plugin.config_schema || {}
-  const schemaProperties = schema.properties || {}
+  const schema = asRecord(plugin.configSchema)
+  const schemaProperties = asRecord(schema.properties)
 
   const handleFieldChange = (field: string, value: string) => {
     setConfigValues((prev) => ({
@@ -80,7 +79,7 @@ export default function SetupWizardDialog({
 
   const validateStep = (): boolean => {
     const errors: Record<string, string> = {}
-    const required = schema.required || []
+    const required = Array.isArray(schema.required) ? schema.required : []
     for (const field of step.fields) {
       if (required.includes(field) && !stepValues[field]) {
         errors[field] = `${field} is required`
@@ -143,7 +142,7 @@ export default function SetupWizardDialog({
       <DialogContent className="max-w-md border-gray-200 bg-white ring-1 ring-gray-200 dark:border-white/10 dark:bg-gray-900 dark:ring-white/10">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            Setup {plugin.display_name}
+            Setup {plugin.displayName}
           </DialogTitle>
         </DialogHeader>
 
@@ -193,16 +192,20 @@ export default function SetupWizardDialog({
             )}
 
             {step.fields.map((field) => {
-              const fieldSchema = schemaProperties[field] || {}
+              const fieldSchema = asRecord(schemaProperties[field])
               const isSensitive = fieldSchema.sensitive === true
-              const isRequired = (schema.required || []).includes(field)
+              const isRequired = (
+                Array.isArray(schema.required) ? schema.required : []
+              ).includes(field)
               const error = fieldErrors[field]
 
               return (
                 <div key={field} className="space-y-1.5">
                   <div className="flex items-center gap-2">
                     <Label className="text-sm">
-                      {fieldSchema.description || field}
+                      {typeof fieldSchema.description === "string"
+                        ? fieldSchema.description
+                        : field}
                     </Label>
                     {isRequired && (
                       <span className="text-xs text-red-400">*</span>

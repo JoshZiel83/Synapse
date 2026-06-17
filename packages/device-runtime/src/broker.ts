@@ -17,12 +17,11 @@ import type {
   DeviceIdentityRecord,
   KeyPair,
 } from "./types.js"
-
-interface PersistedKeyEntry {
-  publicKey: string
-  privateKey: string // PEM; v3.0 stores plaintext in a file mode 0o600 keystore
-  publicKeyFingerprint: string
-}
+import {
+  parseDeviceIdentityJsonText,
+  parseKeystoreJsonText,
+  type PersistedKeyEntry,
+} from "./broker-codec.js"
 
 function resolveDefaultBrokerDir(): string {
   switch (platform()) {
@@ -46,6 +45,24 @@ export interface FileBackedBrokerOptions {
   brokerDir?: string
 }
 
+function readKeystoreFromFile(
+  keystorePath: string
+): Record<string, PersistedKeyEntry> {
+  if (!existsSync(keystorePath)) return {}
+  try {
+    return parseKeystoreJsonText(readFileSync(keystorePath, "utf-8"))
+  } catch {
+    return {}
+  }
+}
+
+export function readPrivateKeyPemFromKeystoreFile(
+  keystorePath: string,
+  privateKeyRef: string
+): string | null {
+  return readKeystoreFromFile(keystorePath)[privateKeyRef]?.privateKey ?? null
+}
+
 export function createFileBackedBroker(
   opts: FileBackedBrokerOptions = {}
 ): DeviceIdentityBroker {
@@ -58,15 +75,7 @@ export function createFileBackedBroker(
   }
 
   function readKeystore(): Record<string, PersistedKeyEntry> {
-    if (!existsSync(keystorePath)) return {}
-    try {
-      return JSON.parse(readFileSync(keystorePath, "utf-8")) as Record<
-        string,
-        PersistedKeyEntry
-      >
-    } catch {
-      return {}
-    }
+    return readKeystoreFromFile(keystorePath)
   }
 
   function writeKeystore(entries: Record<string, PersistedKeyEntry>) {
@@ -81,9 +90,9 @@ export function createFileBackedBroker(
     async loadDeviceIdentity(): Promise<DeviceIdentityRecord | null> {
       if (!existsSync(brokerFilePath)) return null
       try {
-        return JSON.parse(
+        return parseDeviceIdentityJsonText(
           readFileSync(brokerFilePath, "utf-8")
-        ) as DeviceIdentityRecord
+        )
       } catch {
         return null
       }

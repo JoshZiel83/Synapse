@@ -9,10 +9,10 @@ export type UserTaskTargetCandidate = {
 
 export type UserTaskTargetParticipantRow = {
   id: string
-  participant_type: string
+  participantType: string
   state: "active" | "left" | "removed"
-  workspace_member_id: string | null
-  user_name: string | null
+  workspaceMemberId: string | null
+  userName: string | null
 }
 
 function createUserTaskTargetCandidate(params: {
@@ -35,14 +35,14 @@ export function buildUserTaskTargetCandidatesFromRows(
 
   for (const participant of participants) {
     if (participant.state !== "active") continue
-    if (participant.participant_type !== "workspace_member") continue
-    if (!participant.workspace_member_id) continue
+    if (participant.participantType !== "workspace_member") continue
+    if (!participant.workspaceMemberId) continue
 
-    const name = participant.user_name?.trim() || "User"
+    const name = participant.userName?.trim() || "User"
     candidates.push(
       createUserTaskTargetCandidate({
         participantId: participant.id,
-        workspaceMemberId: participant.workspace_member_id,
+        workspaceMemberId: participant.workspaceMemberId,
         name,
       })
     )

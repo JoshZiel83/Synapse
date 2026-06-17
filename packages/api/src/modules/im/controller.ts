@@ -14,6 +14,21 @@
 
 import type { FastifyInstance } from "fastify"
 import { z } from "zod"
+import {
+  TransportAccountResponseSchema,
+  TransportAccountsResponseSchema,
+  TransportConnectorsResponseSchema,
+  TransportAccountCreateInputSchema,
+  TransportExternalUserResponseSchema,
+  TransportExternalUserLinkedMemberInputSchema,
+  TransportExternalUsersResponseSchema,
+  TransportExternalUsersListQuerySchema,
+  TransportSessionResponseSchema,
+  TransportSessionSettingsInputSchema,
+  TransportSessionsResponseSchema,
+  TransportAccountUpdateInputSchema,
+} from "@synapse/shared/schemas"
+import { appRoute } from "../../infrastructure/http/route.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import {
@@ -27,18 +42,22 @@ import {
 } from "./service.js"
 import { listTransportConnectorCapabilities } from "./connectors/index.js"
 import {
-  accountSchema,
-  linkedUserSchema,
   refreshTransportRuntimeState,
   requireWorkspaceAction,
-  transportSessionSettingsSchema,
-  updateAccountSchema,
 } from "./controller/_shared.js"
 import imFeishuController from "./controller/feishu.js"
 import imWecomController from "./controller/wecom.js"
 import imQqController from "./controller/qq.js"
 import imWeixinController from "./controller/weixin.js"
 import imDingtalkController from "./controller/dingtalk.js"
+
+// Generic IM app request bodies/queries live in @synapse/shared/schemas; the
+// per-transport credential controllers are migrated separately.
+const accountSchema = TransportAccountCreateInputSchema
+const updateAccountSchema = TransportAccountUpdateInputSchema
+const transportSessionSettingsSchema = TransportSessionSettingsInputSchema
+const linkedUserSchema = TransportExternalUserLinkedMemberInputSchema
+const externalUsersQuerySchema = TransportExternalUsersListQuerySchema
 
 export default async function imController(app: FastifyInstance) {
   app.addHook("onRequest", authMiddleware)
@@ -52,8 +71,11 @@ export default async function imController(app: FastifyInstance) {
   await imDingtalkController(app)
   await imQqController(app)
 
-  app.get<{ Params: { workspaceId: string } }>(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/im/connectors",
+    { schema: TransportConnectorsResponseSchema },
     async (request, reply) => {
       const allowed = await requireWorkspaceAction(
         request,
@@ -62,12 +84,15 @@ export default async function imController(app: FastifyInstance) {
         "Not allowed to view IM connectors in this workspace"
       )
       if (!allowed) return
-      return reply.send({ connectors: listTransportConnectorCapabilities() })
+      return { connectors: listTransportConnectorCapabilities() }
     }
   )
 
-  app.get<{ Params: { workspaceId: string } }>(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/im/accounts",
+    { schema: TransportAccountsResponseSchema },
     async (request, reply) => {
       const allowed = await requireWorkspaceAction(
         request,
@@ -77,14 +102,17 @@ export default async function imController(app: FastifyInstance) {
       )
       if (!allowed) return
 
-      const { workspaceId } = request.params
+      const { workspaceId } = request.params as { workspaceId: string }
       const accounts = await listTransportAccounts(workspaceId)
-      return reply.send({ accounts })
+      return { accounts }
     }
   )
 
-  app.get<{ Params: { workspaceId: string } }>(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/im/sessions",
+    { schema: TransportSessionsResponseSchema },
     async (request, reply) => {
       const allowed = await requireWorkspaceAction(
         request,
@@ -94,17 +122,17 @@ export default async function imController(app: FastifyInstance) {
       )
       if (!allowed) return
 
-      const { workspaceId } = request.params
+      const { workspaceId } = request.params as { workspaceId: string }
       const sessions = await listTransportSessions(workspaceId)
-      return reply.send({ sessions })
+      return { sessions }
     }
   )
 
-  app.get<{
-    Params: { workspaceId: string }
-    Querystring: { transportAccountId?: string }
-  }>(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/im/external-users",
+    { schema: TransportExternalUsersResponseSchema },
     async (request, reply) => {
       const allowed = await requireWorkspaceAction(
         request,
@@ -114,20 +142,21 @@ export default async function imController(app: FastifyInstance) {
       )
       if (!allowed) return
 
-      const { workspaceId } = request.params
+      const { workspaceId } = request.params as { workspaceId: string }
+      const query = externalUsersQuerySchema.parse(request.query || {})
       const externalUsers = await listTransportExternalUsers({
         workspaceId,
-        transportAccountId: request.query.transportAccountId,
+        transportAccountId: query.transportAccountId,
       })
-      return reply.send({ externalUsers })
+      return { externalUsers }
     }
   )
 
-  app.put<{
-    Params: { workspaceId: string; sessionId: string }
-    Body: unknown
-  }>(
+  appRoute(
+    app,
+    "PUT",
     "/api/v1/workspaces/:workspaceId/im/sessions/:sessionId/settings",
+    { schema: TransportSessionResponseSchema },
     async (request, reply) => {
       const allowed = await requireWorkspaceAction(
         request,
@@ -137,7 +166,10 @@ export default async function imController(app: FastifyInstance) {
       )
       if (!allowed) return
 
-      const { workspaceId, sessionId } = request.params
+      const { workspaceId, sessionId } = request.params as {
+        workspaceId: string
+        sessionId: string
+      }
       const body = transportSessionSettingsSchema.parse(request.body)
       const session = await updateTransportSessionSettings({
         workspaceId,
@@ -148,15 +180,15 @@ export default async function imController(app: FastifyInstance) {
           body.inboundActorId === null ? null : body.inboundActorId,
         metadata: body.metadata,
       })
-      return reply.send({ session })
+      return { session }
     }
   )
 
-  app.put<{
-    Params: { workspaceId: string; addressId: string }
-    Body: unknown
-  }>(
+  appRoute(
+    app,
+    "PUT",
     "/api/v1/workspaces/:workspaceId/im/external-users/:addressId/workspace-member",
+    { schema: TransportExternalUserResponseSchema },
     async (request, reply) => {
       const allowed = await requireWorkspaceAction(
         request,
@@ -166,21 +198,27 @@ export default async function imController(app: FastifyInstance) {
       )
       if (!allowed) return
 
-      const { workspaceId, addressId } = request.params
+      const { workspaceId, addressId } = request.params as {
+        workspaceId: string
+        addressId: string
+      }
       const body = linkedUserSchema.parse(request.body)
-      const address = await setTransportAddressLinkedUser({
+      const externalUser = await setTransportAddressLinkedUser({
         workspaceId,
         transportAddressId: addressId,
         workspaceMemberId: body.workspaceMemberId,
       })
-      return reply.send({ address })
+      return { externalUser }
     }
   )
 
   // Generic transport_account CRUD — schema includes transport_kind so the
   // service dispatches to the right connector validateCredentials.
-  app.post<{ Params: { workspaceId: string }; Body: unknown }>(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/im/accounts",
+    { schema: TransportAccountResponseSchema },
     async (request, reply) => {
       const allowed = await requireWorkspaceAction(
         request,
@@ -190,7 +228,7 @@ export default async function imController(app: FastifyInstance) {
       )
       if (!allowed) return
 
-      const { workspaceId } = request.params
+      const { workspaceId } = request.params as { workspaceId: string }
       const body = accountSchema.parse(request.body)
       // Catch the service-layer per-transport config validator's
       // ZodError so a wildcard / IP in `config.configuredUrlDomains`
@@ -216,7 +254,7 @@ export default async function imController(app: FastifyInstance) {
         })
       } catch (err) {
         if (err instanceof z.ZodError) {
-          return reply.status(400).send({
+          reply.status(400).send({
             error: "invalid_account_config",
             issues: err.issues.map((i) => ({
               path: i.path,
@@ -224,19 +262,21 @@ export default async function imController(app: FastifyInstance) {
               message: i.message,
             })),
           })
+          return
         }
         throw err
       }
       await refreshTransportRuntimeState()
-      return reply.status(201).send({ account })
+      reply.status(201)
+      return { account }
     }
   )
 
-  app.put<{
-    Params: { workspaceId: string; accountId: string }
-    Body: unknown
-  }>(
+  appRoute(
+    app,
+    "PUT",
     "/api/v1/workspaces/:workspaceId/im/accounts/:accountId",
+    { schema: TransportAccountResponseSchema },
     async (request, reply) => {
       const allowed = await requireWorkspaceAction(
         request,
@@ -246,7 +286,10 @@ export default async function imController(app: FastifyInstance) {
       )
       if (!allowed) return
 
-      const { workspaceId, accountId } = request.params
+      const { workspaceId, accountId } = request.params as {
+        workspaceId: string
+        accountId: string
+      }
       const body = updateAccountSchema.parse(request.body)
       let account
       try {
@@ -267,7 +310,7 @@ export default async function imController(app: FastifyInstance) {
         })
       } catch (err) {
         if (err instanceof z.ZodError) {
-          return reply.status(400).send({
+          reply.status(400).send({
             error: "invalid_account_config",
             issues: err.issues.map((i) => ({
               path: i.path,
@@ -275,11 +318,12 @@ export default async function imController(app: FastifyInstance) {
               message: i.message,
             })),
           })
+          return
         }
         throw err
       }
       await refreshTransportRuntimeState()
-      return reply.send({ account })
+      return { account }
     }
   )
 }

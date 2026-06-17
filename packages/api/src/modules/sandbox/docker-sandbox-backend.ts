@@ -12,13 +12,16 @@
 // shell string) so untrusted values can't inject.
 
 import { spawn as nodeSpawn } from "node:child_process"
-import { sql } from "kysely"
-import { db } from "../../infrastructure/database/kysely.js"
 import {
   createCloudDevicePairing,
   type CreateCloudDeviceResult,
 } from "../devices/cloud.js"
 import { deleteDevice } from "../devices/service.js"
+import {
+  getPairingSessionBootstrapState,
+  getLatestDeviceRuntimeServiceId,
+  cancelPendingPairingSession,
+} from "./repo.js"
 import {
   SandboxBackendError,
   type SandboxBackend,
@@ -129,8 +132,8 @@ export function createDockerSandboxBackend(
             `createCloudDevicePairing failed: ${errMsg(err)}`
           )
         }
-        pairingSessionId = pairing.pairing_session_id
-        await spec.onPairingCreated?.(pairing.pairing_session_id)
+        pairingSessionId = pairing.pairingSessionId
+        await spec.onPairingCreated?.(pairing.pairingSessionId)
 
         const containerName = `synapse-sbx-${sanitizeName(spec.sessionId)}`
 
@@ -146,7 +149,7 @@ export function createDockerSandboxBackend(
           opts,
           spec,
           containerName,
-          bootstrapToken: pairing.bootstrap_token,
+          bootstrapToken: pairing.bootstrapToken,
         })
 
         try {
@@ -168,7 +171,7 @@ export function createDockerSandboxBackend(
         try {
           resolved = await (
             opts.pollBootstrapConsumed ?? defaultPollBootstrapConsumed
-          )(pairing.pairing_session_id, bootstrapTimeoutMs)
+          )(pairing.pairingSessionId, bootstrapTimeoutMs)
         } catch (err) {
           const logs = await docker(["logs", "--tail", "50", containerId])
             .then((r) => `${r.stdout}\n${r.stderr}`.trim())
@@ -186,7 +189,7 @@ export function createDockerSandboxBackend(
           containerId,
           deviceId: resolved.deviceId,
           deviceServiceId: resolved.deviceServiceId,
-          pairingSessionId: pairing.pairing_session_id,
+          pairingSessionId: pairing.pairingSessionId,
         })
       } catch (err) {
         // Comprehensive self-cleanup of everything created before the failure:
@@ -371,26 +374,17 @@ async function defaultPollBootstrapConsumed(
 ): Promise<{ deviceId: string; deviceServiceId: string }> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
-    const row = await db
-      .selectFrom("device_pairing_sessions")
-      .select(["status", "device_id"])
-      .where("id", "=", pairingSessionId)
-      .executeTakeFirst()
+    const row = await getPairingSessionBootstrapState(pairingSessionId)
     if (row) {
       const status = row.status as string
-      if (status === "consumed" && row.device_id) {
-        const svc = await db
-          .selectFrom("device_services")
-          .select("id")
-          .where("device_id", "=", row.device_id as string)
-          .where("service_kind", "=", "device_runtime")
-          .orderBy("created_at", "desc")
-          .limit(1)
-          .executeTakeFirst()
-        if (svc) {
+      if (status === "consumed" && row.deviceId) {
+        const deviceServiceId = await getLatestDeviceRuntimeServiceId(
+          row.deviceId as string
+        )
+        if (deviceServiceId) {
           return {
-            deviceId: row.device_id as string,
-            deviceServiceId: svc.id as string,
+            deviceId: row.deviceId as string,
+            deviceServiceId,
           }
         }
       } else if (
@@ -440,13 +434,7 @@ async function defaultDockerFailCleanup(
   // Cancel the (still-pending) pairing session so the token can't be reused. A
   // consumed session is left as-is (the device delete already handled its FK).
   if (args.pairingSessionId) {
-    await db
-      .updateTable("device_pairing_sessions")
-      .set({ status: "cancelled" } as never)
-      .where("id", "=", args.pairingSessionId)
-      .where("status", "=", "pending")
-      .execute()
-      .catch(() => {})
+    await cancelPendingPairingSession(args.pairingSessionId).catch(() => {})
   }
   if (args.containerId) {
     await docker(["rm", "-f", args.containerId]).catch(() => {})

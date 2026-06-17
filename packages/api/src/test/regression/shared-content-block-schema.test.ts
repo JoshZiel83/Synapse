@@ -27,6 +27,20 @@ const chatControllerPath = path.resolve(
   "chat",
   "controller.ts"
 )
+// Round-6 P1-2 moved the send-message body schema (which embeds the canonical
+// content-block schema) into the shared package:
+// packages/api/src/test/regression → repo packages/shared/src/schemas/chat.ts.
+const sharedChatSchemaPath = path.resolve(
+  here,
+  "..",
+  "..",
+  "..",
+  "..",
+  "shared",
+  "src",
+  "schemas",
+  "chat.ts"
+)
 
 test("CanonicalContentBlockSchema parses each canonical block kind", () => {
   const text = CanonicalContentBlockSchema.parse({
@@ -53,6 +67,38 @@ test("CanonicalContentBlockSchema parses each canonical block kind", () => {
   assert.equal(mention.type, "mention")
 })
 
+test("CanonicalContentBlockSchema keeps mention as an open object record", () => {
+  const parsed = CanonicalContentBlockSchema.parse({
+    type: "mention",
+    mention: {
+      participantType: "workspace_member",
+      transportMetadata: { provider: "test" },
+    },
+  })
+  if (parsed.type !== "mention") {
+    assert.fail("expected mention block")
+  }
+  assert.deepEqual(parsed.mention, {
+    participantType: "workspace_member",
+    transportMetadata: { provider: "test" },
+  })
+
+  assert.equal(
+    CanonicalContentBlockSchema.safeParse({
+      type: "mention",
+      mention: ["not", "a", "record"],
+    }).success,
+    false
+  )
+  assert.equal(
+    CanonicalContentBlockSchema.safeParse({
+      type: "mention",
+      mention: "not-a-record",
+    }).success,
+    false
+  )
+})
+
 test("CanonicalContentBlockSchema rejects unknown types", () => {
   const result = CanonicalContentBlockSchema.safeParse({
     type: "weird",
@@ -70,12 +116,12 @@ test("CanonicalContentBlockSchema rejects file_ref blocks missing required field
   assert.equal(result.success, false)
 })
 
-test("chat controller sources CanonicalContentBlockSchema from @synapse/shared/schemas", async () => {
-  const body = await readFile(chatControllerPath, "utf8")
+test("shared chat schema sources CanonicalContentBlockSchema from @synapse/shared/schemas", async () => {
+  const body = await readFile(sharedChatSchemaPath, "utf8")
   assert.match(
     body,
-    /import \{[^}]*CanonicalContentBlockSchema[^}]*\}\s+from\s+"@synapse\/shared\/schemas"/s,
-    "controller.ts must pull the canonical content-block schema from @synapse/shared/schemas — the subpath, not the root barrel, so the SW worker bundles don't pull in zod"
+    /import \{[^}]*CanonicalContentBlockSchema[^}]*\}\s+from\s+"\.\/chat-content-block\.js"/s,
+    "schemas/chat.ts must pull the canonical content-block schema from the shared chat-content-block module (single source)"
   )
 })
 

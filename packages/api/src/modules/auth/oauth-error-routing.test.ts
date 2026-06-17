@@ -31,7 +31,7 @@ function futureExpiry(): Date {
 function stateRow(
   state: string,
   payload: Record<string, unknown>
-): { identifier: string; value: string; expires_at: Date } {
+): { identifier: string; value: string; expiresAt: Date } {
   return {
     identifier: state,
     // A valid state carries oauthState + a finite future expiresAt (Better
@@ -42,7 +42,7 @@ function stateRow(
       expiresAt: Date.now() + 600_000,
       ...payload,
     }),
-    expires_at: futureExpiry(),
+    expiresAt: futureExpiry(),
   }
 }
 
@@ -181,7 +181,7 @@ test("expired state (db or payload) -> web fallback", async () => {
           callbackURL: "synapse:///",
           expiresAt: Date.now() - 1000, // payload already expired
         }),
-        expires_at: futureExpiry(),
+        expiresAt: futureExpiry(),
       })
       .execute()
 
@@ -207,7 +207,7 @@ test("oauthState mismatch in stored payload -> web fallback", async () => {
           oauthState: "something-else",
           callbackURL: "synapse:///",
         }),
-        expires_at: futureExpiry(),
+        expiresAt: futureExpiry(),
       })
       .execute()
 
@@ -270,7 +270,7 @@ test("malformed state (missing/non-number expiresAt) -> web fallback, not consum
           oauthState: "st_no_exp",
           callbackURL: "synapse:///",
         }),
-        expires_at: futureExpiry(),
+        expiresAt: futureExpiry(),
       })
       .execute()
     // Non-number expiresAt
@@ -283,7 +283,7 @@ test("malformed state (missing/non-number expiresAt) -> web fallback, not consum
           callbackURL: "synapse:///",
           expiresAt: "soon",
         }),
-        expires_at: futureExpiry(),
+        expiresAt: futureExpiry(),
       })
       .execute()
 

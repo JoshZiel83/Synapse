@@ -7,7 +7,7 @@ import {
   transientUnrestoredSentence,
   permanentUnrestoredSentence,
 } from "./conflict-notice.js"
-import type { ConflictSidecarRef } from "./service.js"
+import type { ConflictSidecarRef } from "./pending-conflicts.js"
 import type { SidecarRestoreFailureReason } from "./model.js"
 
 /**

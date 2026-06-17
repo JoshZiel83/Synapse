@@ -1,122 +1,28 @@
 import { z } from "zod"
 import {
-  CANONICAL_FILE_CATEGORIES,
-  MODEL_GROUP_GRANT_SCOPES,
-  MODEL_GROUP_ROUTING_STRATEGIES,
-  PROVIDER_KINDS,
-  isKnownModelVendor,
-} from "@synapse/shared"
+  ModelGroupCreateInputSchema,
+  ModelGroupUpdateInputSchema,
+  ModelGroupItemCreateInputSchema,
+  ModelGroupItemUpdateInputSchema,
+  ActorModelGroupSetInputSchema,
+  ModelGroupGrantIssueInputSchema,
+} from "@synapse/shared/schemas"
 
 // ===========================================================================
-// Single source of truth for model-group request/config validation.
+// Model-group file-import validation.
 //
-// These schemas were lifted verbatim out of controller.ts so that the HTTP
-// controller AND the declarative YAML importer validate against ONE definition
-// — eliminating the drift that would otherwise creep in between "what the UI
-// can send" and "what a config file may declare". The controller imports these
-// directly; the file-document schemas (further down) build ON TOP of them.
+// HTTP app request body schemas live in @synapse/shared/schemas so API,
+// web/mobile clients, and route tests share one contract. This module keeps the
+// declarative YAML importer's stricter file-only rules and re-exports the app
+// schemas under the historical local names used by controller/importer code.
 // ===========================================================================
 
-export const routingStrategyEnum = z.enum(MODEL_GROUP_ROUTING_STRATEGIES)
-export const providerKindSchema = z.enum(PROVIDER_KINDS)
-export const vendorSchema = z
-  .string()
-  .min(1)
-  .refine(isKnownModelVendor, "Unknown model vendor")
-export const grantScopeEnum = z.enum(MODEL_GROUP_GRANT_SCOPES)
-
-// Typed per-binding feature flags (replaces the old untyped extra_config bag).
-// apiStyle = OpenAI chat-vs-responses selector; serverTools = anthropic server
-// tools; multimodal = capability gate; crossTurnToolHistory = context option.
-export const featuresSchema = z.object({
-  apiStyle: z.enum(["chat", "responses"]).optional(),
-  serverTools: z.array(z.enum(["web_search", "web_fetch"])).optional(),
-  multimodal: z
-    .object({
-      supported: z.boolean(),
-      types: z.array(z.enum(CANONICAL_FILE_CATEGORIES)),
-    })
-    .optional(),
-  crossTurnToolHistory: z.boolean().optional(),
-})
-
-export const attemptPolicySchema = z.looseObject({
-  maxAttemptsTotal: z.number().int().positive().optional(),
-  maxAttemptsPerBinding: z.number().int().positive().optional(),
-  timeoutMsPerAttempt: z.number().int().positive().optional(),
-  continueOn: z.array(z.string()).optional(),
-  stopOn: z.array(z.string()).optional(),
-  retryBackoffMs: z.array(z.number().int().min(0)).optional(),
-})
-
-export const createGroupSchema = z.object({
-  name: z.string().min(1).max(255),
-  description: z.string().optional(),
-  routingStrategy: routingStrategyEnum.optional(),
-  attemptPolicy: attemptPolicySchema.optional(),
-  isDefault: z.boolean().optional(),
-})
-
-export const updateGroupSchema = z.object({
-  name: z.string().min(1).max(255).optional(),
-  description: z.string().optional(),
-  routingStrategy: routingStrategyEnum.optional(),
-  attemptPolicy: attemptPolicySchema.optional(),
-  isDefault: z.boolean().optional(),
-  isActive: z.boolean().optional(),
-})
-
-export const addItemSchema = z.object({
-  displayName: z.string().min(1).max(255),
-  priority: z.number().int().optional(),
-  weight: z.number().int().min(0).max(1000).optional(),
-  providerKind: providerKindSchema.optional(),
-  vendor: vendorSchema,
-  apiKey: z.string().min(1),
-  baseUrl: z.string().min(1),
-  modelName: z.string().min(1),
-  maxOutputTokens: z.number().int().positive().optional(),
-  capabilityTags: z.array(z.string()).optional(),
-  features: featuresSchema.optional(),
-  providerOptions: z.record(z.string(), z.unknown()).optional(),
-  requestTimeoutMs: z.number().int().positive().optional(),
-  maxRetries: z.number().int().min(0).optional(),
-})
-
-export const updateItemSchema = z.object({
-  displayName: z.string().min(1).max(255).optional(),
-  priority: z.number().int().optional(),
-  weight: z.number().int().min(0).max(1000).optional(),
-  isEnabled: z.boolean().optional(),
-  providerKind: providerKindSchema.optional(),
-  vendor: vendorSchema.optional(),
-  apiKey: z.string().min(1).optional(),
-  baseUrl: z.string().min(1).optional(),
-  modelName: z.string().min(1).optional(),
-  maxOutputTokens: z.number().int().positive().optional(),
-  capabilityTags: z.array(z.string()).optional(),
-  features: featuresSchema.optional(),
-  providerOptions: z.record(z.string(), z.unknown()).optional(),
-  requestTimeoutMs: z.number().int().positive().optional(),
-  maxRetries: z.number().int().min(0).optional(),
-})
-
-export const setActorGroupsSchema = z.object({
-  groups: z.array(
-    z.object({
-      groupId: z.uuid(),
-      priority: z.number().int(),
-    })
-  ),
-})
-
-export const issueGrantSchema = z.object({
-  grantScope: grantScopeEnum,
-  workspaceId: z.uuid().optional(),
-  workspaceMemberId: z.uuid().optional(),
-  actorId: z.uuid().optional(),
-  reason: z.string().max(1000).optional(),
-})
+export const createGroupSchema = ModelGroupCreateInputSchema
+export const updateGroupSchema = ModelGroupUpdateInputSchema
+export const addItemSchema = ModelGroupItemCreateInputSchema
+export const updateItemSchema = ModelGroupItemUpdateInputSchema
+export const setActorGroupsSchema = ActorModelGroupSetInputSchema
+export const issueGrantSchema = ModelGroupGrantIssueInputSchema
 
 // ===========================================================================
 // Declarative file-import document schemas.

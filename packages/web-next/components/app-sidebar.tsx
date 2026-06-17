@@ -403,12 +403,12 @@ export function AppSidebar({
     const workspaceNavigationPromise = workspaceId
       ? api
           .getWorkspaceNavigation(workspaceId)
-          .catch(() => ({ data: emptyWorkspaceNavigation }))
-      : Promise.resolve({ data: emptyWorkspaceNavigation })
+          .catch(() => emptyWorkspaceNavigation)
+      : Promise.resolve(emptyWorkspaceNavigation)
 
     const platformNavigationPromise = api
       .getPlatformNavigation()
-      .catch(() => ({ data: emptyPlatformNavigation }))
+      .catch(() => emptyPlatformNavigation)
 
     Promise.all([workspaceNavigationPromise, platformNavigationPromise]).then(
       ([workspaceResponse, platformResponse]) => {
@@ -416,10 +416,8 @@ export function AppSidebar({
           return
         }
 
-        setWorkspaceNavigation(
-          workspaceResponse?.data ?? emptyWorkspaceNavigation
-        )
-        setPlatformNavigation(platformResponse?.data ?? emptyPlatformNavigation)
+        setWorkspaceNavigation(workspaceResponse ?? emptyWorkspaceNavigation)
+        setPlatformNavigation(platformResponse ?? emptyPlatformNavigation)
       }
     )
 

@@ -80,7 +80,7 @@ function ChiefActorPickerDialogBody({
       .getActors(workspaceId)
       .then((response) => {
         if (cancelled) return
-        const nextActors: ActorOption[] = (response?.actors || response || [])
+        const nextActors: ActorOption[] = response
           .map((actor: Actor) => normalizeChiefActorOption(actor))
           .filter((actor: ActorOption) => actor.isActive)
           .sort((left: ActorOption, right: ActorOption) =>

@@ -402,6 +402,33 @@ test("subscribe handler fast-fails when holder was unregistered", async () => {
   assert.match(wire.error, /not registered/)
 })
 
+test("subscribe handler drops malformed internal request payloads", async () => {
+  _internals.clearMultiplexerForTests()
+  const published: Array<{ channel: string; payload: string }> = []
+  _internals.setTransportOverrideForTests({
+    psubscribe: async () => {},
+    subscribe: async () => {},
+    publish: async (channel: string, payload: string) => {
+      published.push({ channel, payload })
+      return 1
+    },
+  })
+  await subscribeAccountInboundChannel("acct-bad")
+  const handler = _internals.requestHandlersByChannel.get(
+    "wecom:outbound:request:acct-bad"
+  )!
+
+  await handler("{not-json")
+  await handler(
+    JSON.stringify({
+      requestId: "REQ-1",
+      frameBody: { chatid: "", body: { msgtype: "markdown" } },
+    })
+  )
+
+  assert.equal(published.length, 0)
+})
+
 test("ensureMultiplexer with transportOverride does NOT touch real redisSub.on (no socket open)", async () => {
   // The lazy `redis` proxy in infrastructure/redis materializes the
   // ioredis client on first property access. Tests must be able to

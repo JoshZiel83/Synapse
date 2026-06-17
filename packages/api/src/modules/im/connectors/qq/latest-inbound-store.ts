@@ -29,6 +29,8 @@
  */
 
 import type { Redis } from "ioredis"
+import { z } from "zod"
+import { IsoInstantStringSchema } from "@synapse/shared/schemas"
 import type { Timestamp, TransportEndpointType } from "@synapse/shared/types"
 
 export type QqAnchorKind = "msg_id" | "event_id"
@@ -50,12 +52,33 @@ export interface QqLatestInboundAnchor {
 const C2C_TTL_SECONDS = 60 * 60
 const GROUP_TTL_SECONDS = 5 * 60
 
+const latestInboundAnchorSchema = z
+  .object({
+    anchorKind: z.enum(["msg_id", "event_id"]),
+    anchorId: z.string().min(1),
+    eventType: z.string().min(1),
+    receivedAt: IsoInstantStringSchema,
+  })
+  .strict()
+
 function key(
   accountId: string,
   endpointType: TransportEndpointType,
   endpointExternalId: string
 ): string {
   return `im:qq:latest-inbound:${accountId}:${endpointType}:${endpointExternalId}`
+}
+
+function parseLatestInboundAnchorPayload(
+  raw: string | null
+): QqLatestInboundAnchor | null {
+  if (!raw) return null
+  try {
+    const parsed = latestInboundAnchorSchema.safeParse(JSON.parse(raw))
+    return parsed.success ? parsed.data : null
+  } catch {
+    return null
+  }
 }
 
 export async function writeLatestInboundAnchor(
@@ -88,12 +111,7 @@ export async function getLatestInboundAnchor(
   const raw = await redis.get(
     key(params.accountId, params.endpointType, params.endpointExternalId)
   )
-  if (!raw) return null
-  try {
-    return JSON.parse(raw) as QqLatestInboundAnchor
-  } catch {
-    return null
-  }
+  return parseLatestInboundAnchorPayload(raw)
 }
 
 /** Test-only: clear a single anchor. Not exported through index.ts. */

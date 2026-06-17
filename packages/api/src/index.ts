@@ -30,6 +30,7 @@ import {
   setupWebSocket,
   shutdownWebSockets,
 } from "./infrastructure/websocket/index.js"
+import { parseJsonBodyWithRawCapture } from "./infrastructure/http/json-body-parser.js"
 
 // Module imports
 import authModule from "./modules/auth/index.js"
@@ -134,15 +135,7 @@ async function main() {
   app.addContentTypeParser(
     "application/json",
     { parseAs: "string" },
-    (request, body, done) => {
-      try {
-        ;(request as any).rawBody = body
-        const trimmed = typeof body === "string" ? body.trim() : ""
-        done(null, trimmed ? JSON.parse(trimmed) : {})
-      } catch (error) {
-        done(error as Error, undefined)
-      }
-    }
+    parseJsonBodyWithRawCapture
   )
 
   app.setErrorHandler((error, request, reply) => {

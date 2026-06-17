@@ -10,7 +10,7 @@ import { existsSync, readFileSync } from "node:fs"
 import { dirname, resolve as pathResolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { parseToolchainManifest } from "../terminal/manifest.js"
+import { parseToolchainManifestJsonText } from "../terminal/manifest.js"
 import type { ToolchainManifest } from "../terminal/manifest.js"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -53,5 +53,5 @@ export function loadManifestFromPath(path: string): ToolchainManifest {
     throw new Error(`toolchain manifest not found at ${path}`)
   }
   const raw = readFileSync(path, "utf-8")
-  return parseToolchainManifest(JSON.parse(raw))
+  return parseToolchainManifestJsonText(raw)
 }

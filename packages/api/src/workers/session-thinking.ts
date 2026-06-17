@@ -6,15 +6,16 @@ import {
   releaseLock,
   type AcquiredLock,
 } from "../infrastructure/redis/lock.js"
-import { db, type TableInsert } from "../infrastructure/database/kysely.js"
 import { emitEvent } from "../infrastructure/events/index.js"
 import {
+  ACTOR_RUNTIME_HEALTH,
   QUEUE_NAMES,
   SESSION_LOCK_TTL,
   REDIS_CHANNELS,
-  DEFAULT_MAX_CONCURRENT_SESSIONS,
+  CONVERSATION_MESSAGE_SUBTYPE,
   isThreadConversationKind,
   textBlocks,
+  CONVERSATION_PARTICIPANT_TYPE,
 } from "@synapse/shared"
 import { nowIsoInstant } from "@synapse/shared/datetime"
 import { isPlanCollaborationMode } from "@synapse/shared/utils"
@@ -64,11 +65,11 @@ import {
   consumeInterrupts,
   hasPendingInterrupt,
 } from "../modules/session/service.js"
+import { getContextConversationItemsForParticipant } from "../modules/chat/conversation-item-read.js"
 import {
-  getConversationParticipant,
-  getContextConversationItemsForParticipant,
-  listConversationParticipants,
-} from "../modules/chat/service.js"
+  getConversationParticipantUseCase as getConversationParticipant,
+  listConversationParticipantsUseCase as listConversationParticipants,
+} from "../modules/chat/participant-roster.js"
 import {
   attachPendingWakeupsToTurn,
   getPendingWakeupCount,
@@ -87,8 +88,12 @@ import { resolveActorCapabilitySurface } from "../modules/capabilities/surface.j
 import { sessionThinkingQueue } from "./queues.js"
 import { registerWorker } from "./registry.js"
 import { getAssistantSessionMessagePersistence } from "./session-message-persistence.js"
-import { sql } from "kysely"
 import { createLogger } from "../infrastructure/logger/index.js"
+import {
+  getActorMaxSessions,
+  insertSessionThinkAuditLog,
+  markSessionMemoryBootstrapCompleted,
+} from "./session-thinking-repo.js"
 
 const log = createLogger("session-thinking")
 
@@ -156,7 +161,7 @@ async function loadNewContextItems(params: {
 
   for (const item of newItems) {
     maxSequence = Math.max(maxSequence, item.sequence)
-    if (item.authorParticipant?.actor_id === params.actorId) continue
+    if (item.authorParticipant?.actorId === params.actorId) continue
     const contextItem = conversationItemToContextItem(item, params.actorId)
     if (contextItem) {
       items.push(contextItem)
@@ -187,7 +192,7 @@ async function putSessionToIdle(sessionId: string) {
   }
 
   await updateSessionStatus(sessionId, "idle", { errorMessage: null })
-  await publishSessionRuntime(session.workspace_id, sessionId, {
+  await publishSessionRuntime(session.workspaceId, sessionId, {
     laneState: "idle",
     phase: "idle",
     // A clean idle transition. Clear any cached statusText/lastError
@@ -369,7 +374,7 @@ export function startSessionThinkingWorker() {
           }
           await publishSessionRuntime(workspaceId, sessionId, {
             laneState: "idle",
-            health: "ok",
+            health: ACTOR_RUNTIME_HEALTH.OK,
             phase: "idle",
             // Idle early-return: another worker already handled the wakeup,
             // or there's nothing to do. Clear any cached statusText/lastError
@@ -385,9 +390,9 @@ export function startSessionThinkingWorker() {
         const previousStatus = session.status
         if (session.status !== "running") {
           const conversationId = isThreadConversationKind(
-            session.conversation_kind
+            session.conversationKind
           )
-            ? session.conversation_id
+            ? session.conversationId
             : undefined
           await updateSessionStatus(sessionId, "running", {
             errorMessage: null,
@@ -403,9 +408,9 @@ export function startSessionThinkingWorker() {
           }
         }
         const conversationId = isThreadConversationKind(
-          session.conversation_kind
+          session.conversationKind
         )
-          ? session.conversation_id
+          ? session.conversationId
           : undefined
         threadConversationId = conversationId
 
@@ -424,15 +429,13 @@ export function startSessionThinkingWorker() {
             sessionId,
             actorId,
             actorDisplayName:
-              thinkingActorDisplayName ||
-              session.actor_display_name ||
-              "Unknown",
+              thinkingActorDisplayName || session.actorDisplayName || "Unknown",
             status,
             phase: currentPhase,
           }
           await publishSessionRuntime(workspaceId, sessionId, {
             laneState: "running",
-            health: "ok",
+            health: ACTOR_RUNTIME_HEALTH.OK,
             phase: currentPhase,
             statusText: status,
             activeTurnId: turn?.id,
@@ -450,7 +453,7 @@ export function startSessionThinkingWorker() {
           void thinkingPayload
         }
 
-        thinkingActorDisplayName = session.actor_display_name || "Unknown"
+        thinkingActorDisplayName = session.actorDisplayName || "Unknown"
         await emitThinkingStatus("Analyzing message...")
 
         const actor = await getActor(actorId, workspaceId)
@@ -483,7 +486,7 @@ export function startSessionThinkingWorker() {
           )
           actorParticipantId = conversationParticipants.find(
             (member: any) =>
-              member.actor_id === actorId && member.state === "active"
+              member.actorId === actorId && member.state === "active"
           )?.id
           if (!actorParticipantId) {
             throw new Error(
@@ -492,7 +495,7 @@ export function startSessionThinkingWorker() {
           }
           const selfParticipant = conversationParticipants.find(
             (member: any) =>
-              member.actor_id === actorId && member.state === "active"
+              member.actorId === actorId && member.state === "active"
           )
           if (selfParticipant) {
             participantEntries.push({
@@ -500,41 +503,41 @@ export function startSessionThinkingWorker() {
               id: actorId,
               participantId: selfParticipant.id,
               name:
-                selfParticipant.participant_name ||
-                selfParticipant.display_name ||
+                selfParticipant.participantName ||
+                selfParticipant.displayName ||
                 actor.displayName ||
-                session.actor_display_name ||
+                session.actorDisplayName ||
                 "Unknown actor",
               title:
-                selfParticipant.participant_title ||
-                selfParticipant.participant_role ||
+                selfParticipant.participantTitle ||
+                selfParticipant.participantRole ||
                 "Actor",
-              role: selfParticipant.participant_role || undefined,
+              role: selfParticipant.participantRole || undefined,
             })
           }
 
           for (const member of conversationParticipants) {
             if (
-              member.actor_id &&
-              member.actor_id !== actorId &&
+              member.actorId &&
+              member.actorId !== actorId &&
               member.state === "active"
             ) {
               participantEntries.push({
                 participantType: "actor",
-                id: member.actor_id,
+                id: member.actorId,
                 participantId: member.id,
                 name:
-                  member.participant_name ||
-                  member.display_name ||
+                  member.participantName ||
+                  member.displayName ||
                   "Unknown actor",
-                title: member.participant_title,
-                role: member.participant_role || undefined,
+                title: member.participantTitle,
+                role: member.participantRole || undefined,
               })
-            } else if (member.user_id && member.state === "active") {
+            } else if (member.userId && member.state === "active") {
               const workspaceMemberId =
-                typeof member.workspace_member_id === "string" &&
-                member.workspace_member_id.trim().length > 0
-                  ? member.workspace_member_id
+                typeof member.workspaceMemberId === "string" &&
+                member.workspaceMemberId.trim().length > 0
+                  ? member.workspaceMemberId
                   : null
               if (!workspaceMemberId) {
                 throw new Error(
@@ -545,42 +548,40 @@ export function startSessionThinkingWorker() {
                 participantType: "workspace_member",
                 id: workspaceMemberId,
                 participantId: member.id,
-                name: member.user_name || "User",
+                name: member.userName || "User",
                 role: "Workspace member",
               })
             } else if (
-              member.participant_type === "external" &&
+              member.participantType ===
+                CONVERSATION_PARTICIPANT_TYPE.EXTERNAL &&
               member.state === "active"
             ) {
-              const linkedUserName =
-                (member.linked_user_name as string | null) || undefined
+              const linkedUserName = member.linkedUserName || undefined
               participantEntries.push({
                 participantType: "external",
                 id:
-                  (member.linked_user_id as string | null) ||
-                  (member.transport_external_id as string | null) ||
-                  (member.id as string),
+                  member.linkedUserId ||
+                  member.transportExternalId ||
+                  member.id,
                 participantId: member.id,
                 name:
-                  (member.transport_display_name as string | null) ||
-                  (member.display_name as string | null) ||
+                  member.transportDisplayName ||
+                  member.displayName ||
                   linkedUserName ||
                   "External participant",
                 title: linkedUserName
                   ? `Linked workspace user: ${linkedUserName}`
                   : "External participant",
                 role: "External participant",
-                linkedWorkspaceMemberId:
-                  (member.linked_user_id as string | null) || undefined,
+                linkedWorkspaceMemberId: member.linkedUserId || undefined,
                 linkedWorkspaceMemberName: linkedUserName,
-                externalUserKey:
-                  (member.transport_external_id as string | null) || undefined,
+                externalUserKey: member.transportExternalId || undefined,
               })
             }
           }
           contextManifest = {
             conversationId,
-            conversationKind: session.conversation_kind,
+            conversationKind: session.conversationKind,
             isImConversation: session.isImConversation,
             selfParticipantId: actorParticipantId,
             selfActorId: actorId,
@@ -618,17 +619,17 @@ export function startSessionThinkingWorker() {
           })
         }
 
-        const recallType = session.memory_bootstrap_completed
+        const recallType = session.memoryBootstrapCompleted
           ? "turn_recall"
           : "bootstrap"
         const recallQuery = buildMemoryRecallQuery({
           actorDisplayName: actor.displayName || actor.definition.displayName,
-          conversationTitle: session.conversation_title,
+          conversationTitle: session.conversationTitle,
           contextItems,
         })
         const recallResult = await recallMemories(workspaceId, {
           actorId,
-          conversationId: session.conversation_id,
+          conversationId: session.conversationId,
           recallType,
           queryText: recallQuery,
           queryBlocks: recallQuery ? textBlocks(recallQuery) : [],
@@ -654,18 +655,12 @@ export function startSessionThinkingWorker() {
             ...contextItems,
           ]
         }
-        if (recallType === "bootstrap" && !session.memory_bootstrap_completed) {
-          await db
-            .updateTable("sessions")
-            .set({
-              memory_bootstrap_completed: true,
-            })
-            .where("id", "=", sessionId)
-            .execute()
+        if (recallType === "bootstrap" && !session.memoryBootstrapCompleted) {
+          await markSessionMemoryBootstrapCompleted(sessionId)
         }
 
         const resolvedModelPlan = await resolveModelPlan(actorId, workspaceId, {
-          conversationId: session.conversation_id,
+          conversationId: session.conversationId,
         })
         const primaryModel = resolvedModelPlan?.candidates[0] || null
 
@@ -1007,7 +1002,7 @@ export function startSessionThinkingWorker() {
         }
 
         contextWindow = await buildProviderContextWindow({
-          conversationId: session.conversation_id,
+          conversationId: session.conversationId,
           sessionId,
           items: finalContextItems,
           manifest: contextManifest,
@@ -1017,8 +1012,8 @@ export function startSessionThinkingWorker() {
           workspaceId,
           actorId,
           sessionId,
-          conversationId: session.conversation_id,
-          conversationKind: session.conversation_kind,
+          conversationId: session.conversationId,
+          conversationKind: session.conversationKind,
           isImConversation: session.isImConversation,
           userId,
         })
@@ -1034,38 +1029,38 @@ export function startSessionThinkingWorker() {
           if (!promptConversationParticipants) return actor
           const selfMember = promptConversationParticipants.find(
             (member: any) =>
-              member.actor_id === actorId && member.state === "active"
+              member.actorId === actorId && member.state === "active"
           )
           if (!selfMember) return actor
           return {
             ...actor,
             currentVersion:
-              selfMember.actor_current_version || actor.currentVersion,
+              selfMember.actorCurrentVersion || actor.currentVersion,
             displayName:
-              selfMember.participant_name ||
-              selfMember.display_name ||
+              selfMember.participantName ||
+              selfMember.displayName ||
               actor.displayName,
             definition: {
               ...actor.definition,
               displayName:
-                selfMember.participant_name ||
-                selfMember.display_name ||
+                selfMember.participantName ||
+                selfMember.displayName ||
                 actor.displayName ||
                 actor.definition.displayName,
-              title: selfMember.participant_title || actor.definition.title,
-              role: selfMember.participant_role || actor.definition.role,
-              docs: selfMember.actor_docs || actor.definition.docs,
+              title: selfMember.participantTitle || actor.definition.title,
+              role: selfMember.participantRole || actor.definition.role,
+              docs: selfMember.actorDocs || actor.definition.docs,
               canRepresentUser:
-                typeof selfMember.actor_can_represent_user === "boolean"
-                  ? selfMember.actor_can_represent_user
+                typeof selfMember.actorCanRepresentUser === "boolean"
+                  ? selfMember.actorCanRepresentUser
                   : actor.definition.canRepresentUser,
-              specialties: Array.isArray(selfMember.actor_specialties)
-                ? selfMember.actor_specialties
+              specialties: Array.isArray(selfMember.actorSpecialties)
+                ? selfMember.actorSpecialties
                 : actor.definition.specialties,
               config:
-                selfMember.actor_config &&
-                typeof selfMember.actor_config === "object"
-                  ? selfMember.actor_config
+                selfMember.actorConfig &&
+                typeof selfMember.actorConfig === "object"
+                  ? selfMember.actorConfig
                   : actor.definition.config,
             },
           }
@@ -1077,27 +1072,23 @@ export function startSessionThinkingWorker() {
             undefined,
             undefined,
             isPlanCollaborationMode(
-              currentSession.collaborationMode ||
-                currentSession.collaboration_mode ||
-                "default"
+              currentSession.collaborationMode || "default"
             )
               ? undefined
               : mcpTools.tools.length > 0
                 ? mcpTools.tools
                 : undefined,
             promptConversationParticipants || conversationParticipants,
-            currentSession.conversation_kind,
+            currentSession.conversationKind,
             availableSkills,
-            currentSession.collaborationMode ||
-              currentSession.collaboration_mode ||
-              "default"
+            currentSession.collaborationMode || "default"
           ).system
 
         const system = buildSystemPrompt(session)
 
         turn = await createTurn({
           sessionId,
-          conversationId: session.conversation_id,
+          conversationId: session.conversationId,
           actorId,
           triggerType: pendingWakeups[0]!.sourceType,
           triggerItemId: pendingWakeups[0]!.sourceItemId,
@@ -1110,7 +1101,7 @@ export function startSessionThinkingWorker() {
         await attachPendingWakeupsToTurn(sessionId, turn.id)
         await publishSessionRuntime(workspaceId, sessionId, {
           laneState: "running",
-          health: "ok",
+          health: ACTOR_RUNTIME_HEALTH.OK,
           phase: currentPhase,
           statusText: currentStatusText,
           activeTurnId: turn.id,
@@ -1158,12 +1149,9 @@ export function startSessionThinkingWorker() {
             {
               sessionId,
               turnId: turn.id,
-              collaborationMode:
-                session.collaborationMode ||
-                session.collaboration_mode ||
-                "default",
-              conversationId: session.conversation_id,
-              conversationKind: session.conversation_kind,
+              collaborationMode: session.collaborationMode || "default",
+              conversationId: session.conversationId,
+              conversationKind: session.conversationKind,
               isImConversation: session.isImConversation,
               conversationParticipants: participantEntries,
               userId,
@@ -1208,7 +1196,7 @@ export function startSessionThinkingWorker() {
                         await attachPendingWakeupsToTurn(sessionId, turn.id)
                         await publishSessionRuntime(workspaceId, sessionId, {
                           laneState: "running",
-                          health: "ok",
+                          health: ACTOR_RUNTIME_HEALTH.OK,
                           phase:
                             currentPhase === "error"
                               ? "thinking"
@@ -1334,7 +1322,7 @@ export function startSessionThinkingWorker() {
           sessionId,
           turnId: turn.id,
           userId,
-          conversationId: session.conversation_id,
+          conversationId: session.conversationId,
         })
 
         assertStillHoldLock()
@@ -1363,7 +1351,7 @@ export function startSessionThinkingWorker() {
         if (messagePersistence.kind === "respond") {
           await publishSessionRuntime(workspaceId, sessionId, {
             laneState: "running",
-            health: "ok",
+            health: ACTOR_RUNTIME_HEALTH.OK,
             phase: "responding",
             statusText: "Responding...",
             activeTurnId: turn.id,
@@ -1396,23 +1384,16 @@ export function startSessionThinkingWorker() {
         await markTurnWakeupsProcessed(turn.id)
         await updateTurnStatus(turn.id, "completed")
 
-        await db
-          .insertInto("audit_logs")
-          .values({
-            workspace_id: workspaceId,
-            actor_id: actorId,
-            action: "ai.think",
-            resource_type: "session",
-            resource_id: sessionId,
-            details: {
-              trigger,
-              tokensUsed: result.tokensUsed,
-              actionsCount: result.actions.length,
-              reasoning: result.reasoning,
-              turnId: turn.id,
-            } as TableInsert<"audit_logs">["details"],
-          })
-          .execute()
+        await insertSessionThinkAuditLog({
+          workspaceId,
+          actorId,
+          sessionId,
+          trigger,
+          tokensUsed: result.tokensUsed,
+          actionsCount: result.actions.length,
+          reasoning: result.reasoning,
+          turnId: turn.id,
+        })
 
         await emitEvent({
           type: "actor.action",
@@ -1435,7 +1416,7 @@ export function startSessionThinkingWorker() {
           await updateSessionStatus(sessionId, "queued", { errorMessage: null })
           await publishSessionRuntime(workspaceId, sessionId, {
             laneState: "queued",
-            health: "ok",
+            health: ACTOR_RUNTIME_HEALTH.OK,
             phase: "idle",
             statusText: "Queued follow-up messages",
           })
@@ -1571,7 +1552,7 @@ export function startSessionThinkingWorker() {
               () =>
                 publishSessionRuntime(workspaceId, sessionId, {
                   laneState: "queued",
-                  health: "ok",
+                  health: ACTOR_RUNTIME_HEALTH.OK,
                   phase: "idle",
                   statusText: "Queued follow-up messages",
                 })
@@ -1602,7 +1583,7 @@ export function startSessionThinkingWorker() {
           () =>
             publishSessionRuntime(workspaceId, sessionId, {
               laneState: "blocked",
-              health: "error",
+              health: ACTOR_RUNTIME_HEALTH.ERROR,
               phase: "error",
               statusText: errorMessage,
               activeTurnId: turn?.id,
@@ -1630,7 +1611,7 @@ export function startSessionThinkingWorker() {
             wakeup.sourceParticipantId
         )
 
-        if (failedSession?.conversation_id && wakeupTargets.length > 0) {
+        if (failedSession?.conversationId && wakeupTargets.length > 0) {
           await runCleanupStep(
             `publish model error notice for session ${sessionId}`,
             async () => {
@@ -1638,20 +1619,20 @@ export function startSessionThinkingWorker() {
                 wakeupTargets.map(async (wakeup) => {
                   if (wakeup.sourceParticipantType === "workspace_member") {
                     return getConversationParticipant({
-                      conversationId: failedSession.conversation_id,
+                      conversationId: failedSession.conversationId,
                       workspaceMemberId: wakeup.sourceParticipantId as string,
                     })
                   }
 
                   if (wakeup.sourceParticipantType === "remote_agent") {
                     return getConversationParticipant({
-                      conversationId: failedSession.conversation_id,
+                      conversationId: failedSession.conversationId,
                       remoteAgentId: wakeup.sourceParticipantId as string,
                     })
                   }
 
                   return getConversationParticipant({
-                    conversationId: failedSession.conversation_id,
+                    conversationId: failedSession.conversationId,
                     participantId: wakeup.sourceParticipantId as string,
                   })
                 })
@@ -1677,7 +1658,7 @@ export function startSessionThinkingWorker() {
                 sessionId,
                 workspaceId,
                 role: "assistant",
-                subtype: "model_error_notice",
+                subtype: CONVERSATION_MESSAGE_SUBTYPE.MODEL_ERROR_NOTICE,
                 visibility: "shared_visible",
                 contentBlocks: textBlocks("出错了"),
                 fromActorId: actorId,
@@ -1726,19 +1707,4 @@ export function startSessionThinkingWorker() {
 
   registerWorker(worker)
   return worker
-}
-
-async function getActorMaxSessions(actorId: string): Promise<number> {
-  const row = await db
-    .selectFrom("actors")
-    .select(
-      sql<number>`CASE
-        WHEN COALESCE(config->>'maxConcurrentSessions', '') ~ '^[0-9]+$'
-          THEN GREATEST((config->>'maxConcurrentSessions')::int, 1)
-        ELSE ${DEFAULT_MAX_CONCURRENT_SESSIONS}
-      END`.as("max_concurrent_sessions")
-    )
-    .where("id", "=", actorId)
-    .executeTakeFirst()
-  return row?.max_concurrent_sessions ?? DEFAULT_MAX_CONCURRENT_SESSIONS
 }

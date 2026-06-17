@@ -12,6 +12,7 @@ import {
   type ConversationTypeKey,
   type InstalledSkill,
   type SkillMarketplaceEntry,
+  type SkillSourceType,
 } from "@synapse/shared"
 import type { CapabilityAccessTarget } from "@synapse/shared/types"
 type AccessTargetInput = CapabilityAccessTarget
@@ -129,8 +130,6 @@ type UploadedFile = {
   url?: string
   fullUrl?: string
 }
-
-type SkillImportSourceType = "github" | "clawhub"
 
 const skillGrantAdapter = {
   loadGrants: (workspaceId: string, resourceId: string) =>
@@ -2616,15 +2615,11 @@ export function WorkspaceSkillCreationPage() {
     ])
       .then(([actorsResponse, conversationsResponse, membersResponse]) => {
         if (cancelled) return
-        setActors(
-          Array.isArray(actorsResponse)
-            ? actorsResponse.map(normalizeActorOption)
-            : []
-        )
+        setActors(actorsResponse.map(normalizeActorOption))
         setConversations(conversationsResponse.map(normalizeConversationOption))
         setMembers(
-          Array.isArray(membersResponse?.data)
-            ? membersResponse.data.map(normalizeMemberOption)
+          Array.isArray(membersResponse)
+            ? membersResponse.map(normalizeMemberOption)
             : []
         )
       })
@@ -3228,14 +3223,12 @@ export function MarketplaceSkillPreviewPage({ skillId }: { skillId: string }) {
         api.getWorkspaceMembers(workspaceId),
       ])
 
-      const nextActors = Array.isArray(actorsResponse)
-        ? actorsResponse.map(normalizeActorOption)
-        : []
+      const nextActors = actorsResponse.map(normalizeActorOption)
       const nextConversations = conversationsResponse.map(
         normalizeConversationOption
       )
-      const nextMembers = Array.isArray(membersResponse?.data)
-        ? membersResponse.data.map(normalizeMemberOption)
+      const nextMembers = Array.isArray(membersResponse)
+        ? membersResponse.map(normalizeMemberOption)
         : []
       setSkill(skillResponse.skill)
       setActors(nextActors)
@@ -3517,7 +3510,7 @@ function MarketplaceImportDialog({
   onOpenChange: (open: boolean) => void
   onImported: (skill: SkillMarketplaceEntry) => Promise<void> | void
 }) {
-  const [sourceType, setSourceType] = useState<SkillImportSourceType>("github")
+  const [sourceType, setSourceType] = useState<SkillSourceType>("github")
   const [githubRepoUrl, setGitHubRepoUrl] = useState("")
   const [githubPath, setGitHubPath] = useState(".")
   const [githubRef, setGitHubRef] = useState("")
@@ -3582,9 +3575,7 @@ function MarketplaceImportDialog({
 
         <Tabs
           value={sourceType}
-          onValueChange={(value) =>
-            setSourceType(value as SkillImportSourceType)
-          }
+          onValueChange={(value) => setSourceType(value as SkillSourceType)}
           className="space-y-4"
         >
           <TabsList className="grid w-full grid-cols-2">
@@ -3844,9 +3835,7 @@ export default function SkillsPage() {
       .getPlatformNavigation()
       .then((response) => {
         if (cancelled) return
-        setCanManagePlatformSkills(
-          Boolean(response?.data?.canAccessPlatformSkills)
-        )
+        setCanManagePlatformSkills(Boolean(response?.canAccessPlatformSkills))
       })
       .catch(() => {
         if (!cancelled) {

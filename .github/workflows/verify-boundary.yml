@@ -1,0 +1,41 @@
+name: verify-boundary
+
+# Enforcing layer for the DB / DTO / Wire boundary refactor
+# (docs/architecture-boundary-refactor-master-plan.md). The root `npm test` /
+# `npm run typecheck` only cover packages/api, and mobile-app is not in the root
+# workspace — so a green root build never proved the boundary-refactor clients +
+# protocol packages were safe (round-6 P2-3). This workflow runs the single
+# `verify:boundary` gate: build the dependency chain, run guard:layering +
+# guard:datetime + audit:business-enums, typecheck web-next + mobile-app, and
+# run the test suites across every boundary-bearing package.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-boundary:
+    runs-on: ubuntu-latest
+    env:
+      # The fs-helper is a Rust sidecar not needed for the boundary contract;
+      # let pretest skip its rebuild so the gate is deterministic in CI. The
+      # helper-backed test cases skip cleanly when the binary is absent.
+      ALLOW_MISSING_FS_HELPER: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - name: Install dependencies
+        run: npm ci
+      - name: Install mobile-app dependencies
+        # mobile-app is outside the root workspace, so npm ci above doesn't
+        # install it; its typecheck (pretypecheck → sync:shared → tsc) needs
+        # its own node_modules.
+        run: npm --prefix packages/mobile-app ci
+      - name: verify:boundary
+        run: npm run verify:boundary

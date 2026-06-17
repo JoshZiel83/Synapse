@@ -2,12 +2,20 @@
 
 import {
   CONVERSATION_TYPE_MASK_PRESETS,
+  PLATFORM_ACCESS_KEY,
+  PLATFORM_ACCESS_SOURCE,
   conversationTypeKeysToMask,
   conversationTypeMaskToKeys,
   type CapabilityConversationTypePolicyResourceFamily,
   type ConversationTypeKey,
 } from "@synapse/shared"
-import type { Timestamp } from "@synapse/shared"
+import type {
+  PlatformAccessBindingView,
+  PlatformAccessGrantInput,
+  WorkspaceAccessBindingView,
+  WorkspaceAccessGrantInput,
+  WorkspaceMemberView,
+} from "@synapse/shared/schemas"
 import { useCallback, useEffect, useState } from "react"
 import { Building2, RefreshCw, ShieldCheck, UserRound, Zap } from "lucide-react"
 import { useWorkspace } from "../workspace-provider"
@@ -35,54 +43,12 @@ import {
   TableRow,
 } from "@/components/ui/table"
 
-type WorkspaceAccessKey =
-  | "model_admin"
-  | "actor_admin"
-  | "skill_admin"
-  | "plugin_admin"
-  | "memory_admin"
-  | "device_admin"
-  | "conversation_admin"
+type WorkspaceAccessKey = WorkspaceAccessGrantInput["accessKey"]
+type PlatformAccessKey = PlatformAccessGrantInput["accessKey"]
 
-type PlatformAccessKey =
-  | "super_admin"
-  | "workspace_admin"
-  | "model_admin"
-  | "support"
-  | "auditor"
-
-type WorkspaceMemberRecord = {
-  id: string
-  userId: string
-  userName?: string
-  userEmail?: string
-  trustLevel: string
-  accessKeys?: string[]
-}
-
-type WorkspaceAccessBinding = {
-  workspaceId: string
-  workspaceMemberId: string
-  userId: string
-  accessKey: WorkspaceAccessKey
-  assignedByWorkspaceMemberId?: string | null
-  createdAt: Timestamp
-  updatedAt: Timestamp
-  trustLevel: string
-  userName?: string
-  userEmail?: string
-}
-
-type PlatformAccessBinding = {
-  userId: string
-  accessKey: PlatformAccessKey
-  source: string
-  assignedByUserId?: string | null
-  createdAt: Timestamp
-  updatedAt: Timestamp
-  userName?: string
-  userEmail?: string
-}
+type WorkspaceMemberRecord = WorkspaceMemberView
+type WorkspaceAccessBinding = WorkspaceAccessBindingView
+type PlatformAccessBinding = PlatformAccessBindingView
 
 const workspaceAccessOptions: Array<{
   value: WorkspaceAccessKey
@@ -134,29 +100,29 @@ const platformAccessOptions: Array<{
   description: string
 }> = [
   {
-    value: "super_admin",
+    value: PLATFORM_ACCESS_KEY.SUPER_ADMIN,
     label: "Super Admin",
     description:
       "Full platform administration across all workspaces and resources.",
   },
   {
-    value: "workspace_admin",
+    value: PLATFORM_ACCESS_KEY.WORKSPACE_ADMIN,
     label: "Workspace Admin",
     description:
       "Can operate workspace-level administration across the platform.",
   },
   {
-    value: "model_admin",
+    value: PLATFORM_ACCESS_KEY.MODEL_ADMIN,
     label: "Model Admin",
     description: "Can manage platform model groups and global model policy.",
   },
   {
-    value: "support",
+    value: PLATFORM_ACCESS_KEY.SUPPORT,
     label: "Support",
     description: "Operational access for troubleshooting and support work.",
   },
   {
-    value: "auditor",
+    value: PLATFORM_ACCESS_KEY.AUDITOR,
     label: "Auditor",
     description: "Read-only access for audit and compliance review.",
   },
@@ -188,8 +154,8 @@ function UserIdentity({
   email,
   userId,
 }: {
-  name?: string
-  email?: string
+  name?: string | null
+  email?: string | null
   userId: string
 }) {
   return (
@@ -426,8 +392,9 @@ export default function AccessManagement({
     useState<WorkspaceAccessKey>("model_admin")
   const [platformSuggestionUserId, setPlatformSuggestionUserId] = useState("")
   const [platformTargetUserId, setPlatformTargetUserId] = useState("")
-  const [platformAccessKey, setPlatformAccessKey] =
-    useState<PlatformAccessKey>("workspace_admin")
+  const [platformAccessKey, setPlatformAccessKey] = useState<PlatformAccessKey>(
+    PLATFORM_ACCESS_KEY.WORKSPACE_ADMIN
+  )
   const [assigningWorkspaceAccess, setAssigningWorkspaceAccess] =
     useState(false)
   const [assigningPlatformAccess, setAssigningPlatformAccess] = useState(false)
@@ -447,8 +414,8 @@ export default function AccessManagement({
         api.getWorkspaceAccess(targetWorkspaceId),
       ])
 
-      const nextMembers = memberResponse?.data ?? []
-      const nextAccessBindings = accessResponse?.data ?? []
+      const nextMembers = memberResponse ?? []
+      const nextAccessBindings = accessResponse ?? []
 
       setMembers(nextMembers)
       setWorkspaceAccessBindings(nextAccessBindings)
@@ -504,8 +471,8 @@ export default function AccessManagement({
   )
 
   const loadPlatformData = useCallback(async () => {
-    const response = await api.getPlatformAccess()
-    setPlatformAccessBindings(response?.data ?? [])
+    const bindings = await api.getPlatformAccess()
+    setPlatformAccessBindings(bindings ?? [])
     setPlatformError(null)
   }, [])
 
@@ -968,7 +935,9 @@ export default function AccessManagement({
                                 </TableCell>
                                 <TableCell>
                                   <Badge variant="outline">
-                                    {titleize(assignment.trustLevel)}
+                                    {titleize(
+                                      assignment.trustLevel ?? "member"
+                                    )}
                                   </Badge>
                                 </TableCell>
                                 <TableCell>
@@ -1149,7 +1118,8 @@ export default function AccessManagement({
                           platformAccessBindings.map((assignment) => {
                             const key = `${assignment.userId}:${assignment.accessKey}`
                             const managedByConfig =
-                              assignment.source === "config"
+                              assignment.source ===
+                              PLATFORM_ACCESS_SOURCE.CONFIG
                             return (
                               <TableRow key={key}>
                                 <TableCell className="max-w-0">
@@ -1252,7 +1222,7 @@ export default function AccessManagement({
                         </TableCell>
                         <TableCell>
                           <Badge variant="outline">
-                            {titleize(member.trustLevel)}
+                            {titleize(member.trustLevel ?? "member")}
                           </Badge>
                         </TableCell>
                         <TableCell>

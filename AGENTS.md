@@ -1,5 +1,63 @@
 当前系统处于初期设计实现阶段，不要考虑兼容旧数据。
 
+## 系统分层架构（DB / DTO / Wire 边界）
+
+> 完整背景与执行计划见 [docs/architecture-boundary-refactor-master-plan.md](./docs/architecture-boundary-refactor-master-plan.md)。
+> 本节是**编码时必须遵守的规范**；guard 脚本会强制其中可机检的条目。
+
+### 三个命名世界，由「层」决定，不由「包」决定
+
+- **PostgreSQL = snake_case**：物理表/列保持 snake_case，是持久化真源。
+- **TypeScript 业务层 = camelCase**：Kysely 装了 `CamelCasePlugin({ maintainNestedObjectKeys: true })`，row 在 TS 侧顶层标识符全部 camelCase（`row.workspaceId`，不是 `row.workspace_id`）。
+- **Wire / machine = snake_case**：`packages/device-protocol` 的签名封套、pairing、control-plane、reverse-MCP 故意保持 snake_case；这些 key 参与 Ed25519 签名规范化，**绝不能改名**。
+
+snake_case 出现在两种地方：(a) DB 物理层与 device-protocol wire 契约——**合法**；(b) `packages/api/src/modules/**` 的 service/controller 或 `packages/web-next` 的组件里——**禁止**，那是 DB row 泄漏。
+
+### 七层职责（modules/<feature>/ 内）
+
+| 层           | 文件                        | 只能做                                                                      | 禁止                                                                   |
+| ------------ | --------------------------- | --------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| repo         | `repo.ts` / `repo.types.ts` | SQL、join、projection、business JSON 解码(Zod)；产出 `XxxRecord`(camelCase) | 输出 app DTO / wire payload                                            |
+| service      | `service.ts`                | 业务流程、用例编排                                                          | import `generated/db`、用 `TableRow`、拼 HTTP envelope、做 wire 序列化 |
+| presenter    | `presenter.ts`              | 域记录 → app DTO；`Date→IsoInstantString`、`fileId→URL`、显示派生           | SQL、事务、业务前置 JSON 校验、wire payload                            |
+| wire-adapter | `wire.ts`                   | 域记录 ↔ snake_case wire；用 device-protocol schema；签名/裸 payload 组装   | SQL、业务流程、app DTO                                                 |
+| controller   | `controller.ts`             | zod parse → service → presenter/wire → 发送                                 | 直接访问 row                                                           |
+| schemas      | `schemas.ts`                | 路由本地 zod（path/query 拼装）                                             | 重新定义对外契约类型——app 请求体/响应 DTO 均 import 自 shared          |
+| index        | `index.ts`                  | `fastify-plugin` + `app.register(controller, { prefix })`                   | 业务逻辑                                                               |
+
+> **service 调 `present*` 的判定（避免被反复误报为"未收口"）**：service 层被禁的是"**拼对外 HTTP 响应 DTO 并交给 controller 裸发**"——即 service 直接产出某个 `XxxView` 作为 HTTP body 的唯一来源。**允许**的 `present*` 调用有三类，它们不是违规：(a) **行→域记录 / 记录装配** 映射（如 `presentFileAsset`→`StoredFileRecord`、`presentActorRow`→`Actor`、`presentUser`→`User`——产出在 api 内部流转的 `XxxRecord` 域记录，被本模块业务逻辑或装配进更大记录使用）；(b) **薄时间包装** `presentInstant` / `presentOptionalInstant`（presenter 拥有的字段级序列化 helper，可在记录装配处调用）；(c) **跨模块消费的记录**（被其它模块或 worker import 并按记录形态读取，如 automation 的 `AutomationRule` 被 ai/session-tools 读、remote-agents 的 runtime snapshot 被 chat 读）。判据：present\* 的产物是否作为 **HTTP body 的唯一来源被 controller 裸发**？是→违规，移到 controller（经 `appRoute`/`sendData`）；否（域记录/跨模块/时间包装）→允许。规范的 app 出口仍是 controller 经 `appRoute`/`sendData(XxxViewSchema, …)`。
+
+`infrastructure/**` 与 `workers/**` **不**强制套这套模板，但必须有明确 adapter 边界，可合法使用 `serializeInstant()` 等 infra helper。
+
+### 硬规则（guard 强制）
+
+1. **只有 `repo*.ts` / `repo.types.ts` 可以 import `generated/db` / `db-types`、可以用 `TableRow` / `TableInsert` / `TableUpdate`。** service / controller 一律禁止。
+2. **`map*Row` / `normalize*Row` 只能写在 `repo*.ts` 内。** 业务层不再手写机械改名（`CamelCasePlugin` 已承担）。
+3. **时间序列化（`serializeInstant` / `serializeOptionalInstant`）只在 presenter 或 infra adapter。** service / controller 禁止直接调用。
+4. **禁止双命名兜底**（`row.foo_bar || row.fooBar`）与**对外 `...row` spread**。
+5. **对外契约真源，按「层/角色」划而非「资源」划**：app-facing camelCase 类型(`XxxView`)定义在 `packages/shared/src/schemas/<feature>.ts`（schema-first + `types/` type-only re-export）；wire snake_case 类型(`XxxWire`)定义在 `packages/device-protocol`。同一资源的"读视图"归 shared、"握手/签名协议"归 device-protocol（如 device）。`packages/api` 只 import 并翻译，**不**私自定义对外契约真源。
+6. **同一对象禁止混用两种命名**（不允许 `{ workspaceId, device_capability_ids }` 这种）。
+7. 依赖方向：`shared → device-protocol`（单向）；`device-protocol` 不得 import `shared`；`shared` 不得 import `api`。
+8. **`packages/shared/src/types/**`禁止`export const|function|class`**（只能 `export type`/`import type`）；runtime 常量/函数归 `constants/` 等子路径。
+9. **`packages/device-protocol` 禁止纯前端展示字段**（如 `one_click_commands` / `verification_uri_complete`，归 shared `DevicePairingTicketView`）；只保留握手/签名 wire 字段。`bootstrap_token` 是合法 wire 握手字段，不在此列。
+
+### 响应封套与 route surface
+
+- **app surface 端点**：有返回体的统一走 `sendData(reply, XxxViewSchema, dto)` → `{ data: ... }`。禁止裸 `reply.send(serviceResult)`。**`/auth/me` 等自定义 app 端点属此类**，不因挂在 `/auth/*` 下就豁免；device 的 list/detail 读视图也属此类（camelCase `DeviceView`）。
+- **无返回体的写端点保留 204 No Content**（如 device 的 delete/detach/set-capabilities），不强行套 `{ data }`；`sendData` 只覆盖有返回体的端点。
+- **app surface 的请求体/查询 DTO 也是 app 契约**：`XxxInput`/`XxxRequest` 定义在 `shared/src/schemas/` camelCase，与 `XxxView` 成对；controller 用它 parse，前端/SDK 发 camelCase body，不再手拼 snake_case（wire 端点请求体仍由 device-protocol snake_case 定义）。
+- **wire/machine surface 端点保持裸 payload，禁止套 `{ data }`**（否则破坏 device-sdk/daemon）。真 wire 仅：device 握手（`/devices/bootstrap`、`/devices/pairing-sessions/consume`、control-plane WSS、signed envelope）、machine-key 路由与 reverse-MCP `/api/v1/internal/*`、`/auth/device/*`(RFC 8628)、`/mcp/auth/callback`、`/im/webhooks/*`、`/automation-webhooks/*`、better-auth wildcard 原生透传、`/install.{sh,ps1}`。
+- **app vs wire 用显式机制判定，不靠路径前缀**：mixed 模块（automation/im/mcp-plugins/remote-agents/runtime-authorizations/files/devices）用 **split-controller**（`controller.app.ts` 只 `sendData`、`controller.wire.ts` 只裸 payload）或 **route marker**（`appRoute()`/`wireRoute()`）；mixed 模块禁止裸 `app.get/post(...)`。guard 据文件名/注册 helper 强制，不维护逐端点白名单。
+- **device-sdk 是 mixed consumer SDK**：管理面方法（list/get/create/pair/claim/detach/set-capabilities）走 app（shared camelCase + `{ data }`/204）；只有 `consumePairing` / cloud bootstrap / control-plane 是 wire。不要把它整体当 wire 侧。
+
+### JSON 列三分类
+
+- **Business JSON**（如 `runtime_authorization_grants.policy`、`sessions.collaboration_state`）：在 **repo 出口用 Zod 解码**，service 拿到即域类型；不要在 service 散装 `JSON.parse`。
+- **Presentation JSON**（如 `*.content_blocks`）：在 presenter / canonical codec 处理。
+- **Wire / 签名 JSON**（如签名封套片段、`*.payload`、`source_snapshot`）：走**显式 wire codec**，绝不隐式改名。
+- **Opaque passthrough**（MCP `_meta`、`provider_options`、`secret_payload`、通用 `metadata`）：原样存取，`maintainNestedObjectKeys:true` 保证 plugin 不递归改写。
+- JSON 解析复用 `@synapse/shared` 的 `parseJsonObject` / `parseJsonObjectOrUndefined`；不要再写 `asObject` / `asRecord` 散装副本（有意抛错的 business 解码器除外）。
+
 ## 业务枚举与分支判断规范
 
 - 跨 `packages/api`、`packages/web-next`、`packages/mobile-app` 共享的业务枚举与协议值，统一定义在 `packages/shared`，禁止在消费端重复声明同义字符串联合或手抄枚举数组。

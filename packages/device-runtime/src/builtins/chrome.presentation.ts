@@ -6,7 +6,7 @@
 // readable default keyed by exposure. Keyed by the presentation stableKey
 // `${exposure_stable_key}/${toolName}` (e.g. builtin/browser/navigation/new_page).
 
-import type { ToolPresentationDescriptor } from "@synapse/device-protocol/tool-presentation"
+import type { ToolPresentationDescriptor } from "@synapse/shared/tool-presentation"
 import {
   BROWSER_TOOL_MAP,
   BROWSER_EXPOSURE_STABLE_KEYS,

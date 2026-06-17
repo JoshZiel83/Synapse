@@ -7,6 +7,7 @@ import {
   type PermissionSubject,
 } from "./evaluator.js"
 import { getAccessActionSpec, type AccessAction } from "./actions.js"
+import { findActiveWorkspaceMemberIdForUser } from "./repo.js"
 
 export type AccessSubject = PermissionSubject & {
   type: "user" | "actor" | "workspace_member"
@@ -34,20 +35,12 @@ export async function resolveWorkspaceAccessSubject(
   workspaceId: string,
   userId: string
 ): Promise<AccessSubject> {
-  const member = await db
-    .selectFrom("workspace_members as wm")
-    .innerJoin("workspaces as w", "w.id", "wm.workspace_id")
-    .select("wm.id")
-    .where("wm.workspace_id", "=", workspaceId)
-    .where("wm.user_id", "=", userId)
-    // Soft delete (§8.4): only an active member of a live workspace resolves to a
-    // workspace_member subject; otherwise fall back to the platform user subject.
-    .where("wm.status", "=", "active")
-    .where("w.deleted_at", "is", null)
-    .limit(1)
-    .executeTakeFirst()
+  const memberId = await findActiveWorkspaceMemberIdForUser(db, {
+    workspaceId,
+    userId,
+  })
 
-  return member ? workspaceMemberSubject(member.id) : userSubject(userId)
+  return memberId ? workspaceMemberSubject(memberId) : userSubject(userId)
 }
 
 export function getRequestUserId(request: FastifyRequest): string {

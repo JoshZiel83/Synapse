@@ -2,18 +2,13 @@ import type { FastifyRequest } from "fastify"
 import { Headers as UndiciHeaders } from "undici"
 import { fromNodeHeaders } from "better-auth/node"
 import type { User } from "@synapse/shared"
-import { db } from "../../infrastructure/database/kysely.js"
-import {
-  requireInstantDate,
-  serializeInstant,
-} from "../../infrastructure/datetime.js"
 import {
   canUserAccessFileWorkspace,
   getFileAccessInfo,
-  getFileUrlById,
 } from "../files/service.js"
-import { sql } from "kysely"
 import { auth } from "./better-auth.js"
+import { presentUser } from "./presenter.js"
+import { selectUserById, updateUserProfileRow, isUserLive } from "./repo.js"
 
 /**
  * Auth service — Better Auth edition.
@@ -43,48 +38,8 @@ export class AuthError extends Error {
   }
 }
 
-type UserRow = {
-  id: string
-  email: string
-  name: string
-  avatar_file_id: string | null
-  created_at: Date | null
-  updated_at: Date | null
-}
-
-const userSelection = [
-  "id",
-  "email",
-  "name",
-  "avatar_file_id",
-  "created_at",
-  "updated_at",
-] as const
-
-function mapUserRow(row: UserRow): User {
-  return {
-    id: row.id,
-    email: row.email,
-    name: row.name,
-    avatarUrl: row.avatar_file_id
-      ? getFileUrlById(row.avatar_file_id)
-      : undefined,
-    createdAt: serializeInstant(
-      requireInstantDate(row.created_at, "user.created_at")
-    ),
-    updatedAt: serializeInstant(
-      requireInstantDate(row.updated_at, "user.updated_at")
-    ),
-  }
-}
-
-async function getUserById(userId: string): Promise<UserRow | null> {
-  const row = await db
-    .selectFrom("users")
-    .select(userSelection)
-    .where("id", "=", userId)
-    .executeTakeFirst()
-  return (row as UserRow | undefined) ?? null
+async function getUserById(userId: string) {
+  return selectUserById(userId)
 }
 
 export async function getProfile(userId: string): Promise<User> {
@@ -92,7 +47,7 @@ export async function getProfile(userId: string): Promise<User> {
   if (!row) {
     throw new AuthError("User not found", 404, "USER_NOT_FOUND")
   }
-  return mapUserRow(row)
+  return presentUser(row)
 }
 
 export async function updateProfile(
@@ -107,7 +62,7 @@ export async function updateProfile(
   const nextName = input.name === undefined ? current.name : input.name.trim()
   const nextAvatarFileId =
     input.avatarFileId === undefined
-      ? (current.avatar_file_id ?? null)
+      ? (current.avatarFileId ?? null)
       : input.avatarFileId
 
   if (nextAvatarFileId) {
@@ -128,20 +83,15 @@ export async function updateProfile(
     }
   }
 
-  const row = await db
-    .updateTable("users")
-    .set({
-      name: nextName,
-      avatar_file_id: nextAvatarFileId ?? null,
-    })
-    .where("id", "=", userId)
-    .returning(userSelection)
-    .executeTakeFirst()
+  const row = await updateUserProfileRow(userId, {
+    name: nextName,
+    avatarFileId: nextAvatarFileId ?? null,
+  })
 
   if (!row) {
     throw new AuthError("User not found", 404, "USER_NOT_FOUND")
   }
-  return mapUserRow(row as UserRow)
+  return presentUser(row)
 }
 
 /**
@@ -178,12 +128,7 @@ async function rejectIfUserDeleted(
   authed: AuthenticatedRequestSession | null
 ): Promise<AuthenticatedRequestSession | null> {
   if (!authed) return null
-  const live = await db
-    .selectFrom("users")
-    .select("id")
-    .where("id", "=", authed.user.id)
-    .where("deleted_at", "is", null)
-    .executeTakeFirst()
+  const live = await isUserLive(authed.user.id)
   return live ? authed : null
 }
 

@@ -32,7 +32,7 @@ async function insertWorkspace(db: AnyDb, ownerId: string): Promise<string> {
   const row = await db
     .insertInto("workspaces")
     .values({
-      owner_id: ownerId,
+      ownerId: ownerId,
       slug: `ws-${Math.random().toString(36).slice(2, 10)}`,
       name: "test workspace",
     })
@@ -47,7 +47,7 @@ async function insertConversation(
 ): Promise<string> {
   const row = await db
     .insertInto("conversations")
-    .values({ kind: "group", workspace_id: workspaceId, title: "c" })
+    .values({ kind: "group", workspaceId: workspaceId, title: "c" })
     .returning("id")
     .executeTakeFirstOrThrow()
   return row.id as string
@@ -55,14 +55,14 @@ async function insertConversation(
 
 async function insertAccount(db: AnyDb, workspaceId: string): Promise<string> {
   const row = await db
-    .insertInto("transport_accounts")
+    .insertInto("transportAccounts")
     .values({
-      workspace_id: workspaceId,
-      transport_kind: "qq",
-      account_key: `acct-${Math.random().toString(36).slice(2, 8)}`,
-      display_name: "acct",
-      connection_mode: "webhook",
-      owner_scope: "workspace",
+      workspaceId: workspaceId,
+      transportKind: "qq",
+      accountKey: `acct-${Math.random().toString(36).slice(2, 8)}`,
+      displayName: "acct",
+      connectionMode: "webhook",
+      ownerScope: "workspace",
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -74,11 +74,11 @@ async function insertEndpoint(
   transportAccountId: string
 ): Promise<string> {
   const row = await db
-    .insertInto("transport_endpoints")
+    .insertInto("transportEndpoints")
     .values({
-      transport_account_id: transportAccountId,
-      endpoint_type: "group",
-      external_id: `ep-${Math.random().toString(36).slice(2, 8)}`,
+      transportAccountId: transportAccountId,
+      endpointType: "group",
+      externalId: `ep-${Math.random().toString(36).slice(2, 8)}`,
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -97,14 +97,14 @@ test(
       const accountId = await insertAccount(db, workspaceId)
       const endpointId = await insertEndpoint(db, accountId)
       await db
-        .insertInto("conversation_transport_bindings")
+        .insertInto("conversationTransportBindings")
         .values({
-          workspace_id: workspaceId,
-          conversation_id: imConv,
-          transport_account_id: accountId,
-          transport_endpoint_id: endpointId,
-          outbound_enabled: true,
-          inbound_actor_mode: "inherit_account",
+          workspaceId: workspaceId,
+          conversationId: imConv,
+          transportAccountId: accountId,
+          transportEndpointId: endpointId,
+          outboundEnabled: true,
+          inboundActorMode: "inherit_account",
         })
         .execute()
 
@@ -118,15 +118,15 @@ test(
             eb
               .exists(
                 eb
-                  .selectFrom("conversation_transport_bindings as b")
+                  .selectFrom("conversationTransportBindings as b")
                   .select("b.id")
-                  .whereRef("b.conversation_id", "=", "c.id")
+                  .whereRef("b.conversationId", "=", "c.id")
               )
-              .as("is_im")
+              .as("isIm")
           )
           .where("c.id", "=", conversationId)
           .executeTakeFirstOrThrow()
-        return Boolean(row.is_im)
+        return Boolean(row.isIm)
       }
 
       assert.equal(await isIm(nativeConv), false)
@@ -154,14 +154,14 @@ test(
 
       await assert.rejects(
         db
-          .insertInto("conversation_transport_bindings")
+          .insertInto("conversationTransportBindings")
           .values({
-            workspace_id: wsB,
-            conversation_id: convA,
-            transport_account_id: accountB,
-            transport_endpoint_id: endpointB,
-            outbound_enabled: true,
-            inbound_actor_mode: "inherit_account",
+            workspaceId: wsB,
+            conversationId: convA,
+            transportAccountId: accountB,
+            transportEndpointId: endpointB,
+            outboundEnabled: true,
+            inboundActorMode: "inherit_account",
           })
           .execute()
       )
@@ -215,14 +215,14 @@ async function insertAddress(
   opts: { addressType?: string; workspaceMemberId?: string } = {}
 ): Promise<string> {
   const row = await db
-    .insertInto("transport_addresses")
+    .insertInto("transportAddresses")
     .values({
-      workspace_id: workspaceId,
-      transport_account_id: transportAccountId,
-      transport_kind: "qq",
-      address_type: opts.addressType ?? "user",
-      external_id: `ext-${Math.random().toString(36).slice(2, 8)}`,
-      workspace_member_id: opts.workspaceMemberId ?? null,
+      workspaceId: workspaceId,
+      transportAccountId: transportAccountId,
+      transportKind: "qq",
+      addressType: opts.addressType ?? "user",
+      externalId: `ext-${Math.random().toString(36).slice(2, 8)}`,
+      workspaceMemberId: opts.workspaceMemberId ?? null,
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -237,14 +237,14 @@ async function bindConversation(
 ): Promise<string> {
   const endpointId = await insertEndpoint(db, accountId)
   await db
-    .insertInto("conversation_transport_bindings")
+    .insertInto("conversationTransportBindings")
     .values({
-      workspace_id: workspaceId,
-      conversation_id: conversationId,
-      transport_account_id: accountId,
-      transport_endpoint_id: endpointId,
-      outbound_enabled: true,
-      inbound_actor_mode: "inherit_account",
+      workspaceId: workspaceId,
+      conversationId: conversationId,
+      transportAccountId: accountId,
+      transportEndpointId: endpointId,
+      outboundEnabled: true,
+      inboundActorMode: "inherit_account",
     })
     .execute()
   return endpointId
@@ -280,13 +280,13 @@ test(
       // address claims workspace A but points at account B (workspace B)
       await assert.rejects(
         db
-          .insertInto("transport_addresses")
+          .insertInto("transportAddresses")
           .values({
-            workspace_id: wsA,
-            transport_account_id: accountB,
-            transport_kind: "qq",
-            address_type: "user",
-            external_id: "x",
+            workspaceId: wsA,
+            transportAccountId: accountB,
+            transportKind: "qq",
+            addressType: "user",
+            externalId: "x",
           })
           .execute()
       )
@@ -314,9 +314,9 @@ test(
       const accountB = await insertAccount(db, workspaceId)
       await assert.rejects(
         db
-          .updateTable("conversation_transport_bindings")
-          .set({ transport_account_id: accountB })
-          .where("conversation_id", "=", conversationId)
+          .updateTable("conversationTransportBindings")
+          .set({ transportAccountId: accountB })
+          .where("conversationId", "=", conversationId)
           .execute(),
         /cannot change transport_account/
       )
@@ -337,11 +337,11 @@ test(
       const memberUser = await insertUser(db)
       const memberId = (
         await db
-          .insertInto("workspace_members")
+          .insertInto("workspaceMembers")
           .values({
-            workspace_id: workspaceId,
-            user_id: memberUser,
-            trust_level: "member",
+            workspaceId: workspaceId,
+            userId: memberUser,
+            trustLevel: "member",
           })
           .returning("id")
           .executeTakeFirstOrThrow()
@@ -367,11 +367,11 @@ test(
 
       await assert.rejects(
         db
-          .insertInto("conversation_participant_addresses")
+          .insertInto("conversationParticipantAddresses")
           .values({
-            conversation_participant_id: participant.id,
-            transport_address_id: addrB,
-            is_primary: true,
+            conversationParticipantId: participant.id,
+            transportAddressId: addrB,
+            isPrimary: true,
           })
           .execute(),
         /does not match conversation .* binding account/
@@ -392,11 +392,11 @@ test(
       const memberUser = await insertUser(db)
       const memberId = (
         await db
-          .insertInto("workspace_members")
+          .insertInto("workspaceMembers")
           .values({
-            workspace_id: workspaceId,
-            user_id: memberUser,
-            trust_level: "member",
+            workspaceId: workspaceId,
+            userId: memberUser,
+            trustLevel: "member",
           })
           .returning("id")
           .executeTakeFirstOrThrow()
@@ -410,17 +410,17 @@ test(
       const addrA = await insertAddress(db, workspaceId, accountA)
       const participantId = (
         await db
-          .insertInto("conversation_participants")
+          .insertInto("conversationParticipants")
           .values({
-            conversation_id: conversationId,
-            subject_id:
+            conversationId: conversationId,
+            subjectId:
               (
                 await db
-                  .insertInto("access_subjects")
+                  .insertInto("accessSubjects")
                   .values({
                     kind: "workspace_member",
-                    workspace_id: workspaceId,
-                    workspace_member_id: memberId,
+                    workspaceId: workspaceId,
+                    workspaceMemberId: memberId,
                   })
                   .onConflict((oc) => oc.doNothing())
                   .returning("id")
@@ -428,32 +428,32 @@ test(
               )?.id ??
               (
                 await db
-                  .selectFrom("access_subjects")
+                  .selectFrom("accessSubjects")
                   .select("id")
-                  .where("workspace_member_id", "=", memberId)
+                  .where("workspaceMemberId", "=", memberId)
                   .executeTakeFirstOrThrow()
               ).id,
-            role_key: "member",
+            roleKey: "member",
             state: "active",
           })
           .returning("id")
           .executeTakeFirstOrThrow()
       ).id as string
       await db
-        .insertInto("conversation_participant_addresses")
+        .insertInto("conversationParticipantAddresses")
         .values({
-          conversation_participant_id: participantId,
-          transport_address_id: addrA,
-          is_primary: true,
+          conversationParticipantId: participantId,
+          transportAddressId: addrA,
+          isPrimary: true,
         })
         .execute()
 
       const accountB = await insertAccount(db, workspaceId)
       await assert.rejects(
         db
-          .updateTable("conversation_transport_bindings")
-          .set({ transport_account_id: accountB })
-          .where("conversation_id", "=", conversationId)
+          .updateTable("conversationTransportBindings")
+          .set({ transportAccountId: accountB })
+          .where("conversationId", "=", conversationId)
           .execute(),
         /participant addresses from another account/
       )
@@ -481,8 +481,8 @@ test(
 
       await assert.rejects(
         db
-          .deleteFrom("conversation_transport_bindings")
-          .where("conversation_id", "=", conversationId)
+          .deleteFrom("conversationTransportBindings")
+          .where("conversationId", "=", conversationId)
           .execute(),
         /hard delete of conversation_transport_bindings is forbidden/
       )
@@ -520,11 +520,11 @@ test(
 
       await db
         .updateTable("conversations")
-        .set({ deleted_at: new Date() })
+        .set({ deletedAt: new Date() })
         .where("id", "=", conversationId)
         .execute()
       const live = await db
-        .selectFrom("conversations_live")
+        .selectFrom("conversationsLive")
         .select("id")
         .where("id", "=", conversationId)
         .executeTakeFirst()
@@ -535,9 +535,9 @@ test(
       )
       // binding row preserved (no cascade)
       const binding = await db
-        .selectFrom("conversation_transport_bindings")
+        .selectFrom("conversationTransportBindings")
         .select("id")
-        .where("conversation_id", "=", conversationId)
+        .where("conversationId", "=", conversationId)
         .executeTakeFirst()
       assert.ok(binding, "binding row preserved (no hard cascade)")
     })
@@ -555,11 +555,11 @@ test(
       const memberUser = await insertUser(db)
       const memberId = (
         await db
-          .insertInto("workspace_members")
+          .insertInto("workspaceMembers")
           .values({
-            workspace_id: workspaceId,
-            user_id: memberUser,
-            trust_level: "member",
+            workspaceId: workspaceId,
+            userId: memberUser,
+            trustLevel: "member",
           })
           .returning("id")
           .executeTakeFirstOrThrow()
@@ -580,11 +580,11 @@ test(
 
       await assert.rejects(
         db
-          .insertInto("conversation_participant_addresses")
+          .insertInto("conversationParticipantAddresses")
           .values({
-            conversation_participant_id: participant.id,
-            transport_address_id: addrA,
-            is_primary: true,
+            conversationParticipantId: participant.id,
+            transportAddressId: addrA,
+            isPrimary: true,
           })
           .execute(),
         /has no transport binding/
@@ -628,11 +628,11 @@ test(
       // Soft delete succeeds; the subject row is preserved (immutable registry).
       await db
         .updateTable("conversations")
-        .set({ deleted_at: new Date() })
+        .set({ deletedAt: new Date() })
         .where("id", "=", conversationId)
         .execute()
       const subj = await db
-        .selectFrom("access_subjects")
+        .selectFrom("accessSubjects")
         .select("id")
         .where("id", "=", subjectId)
         .executeTakeFirst()

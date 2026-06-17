@@ -16,6 +16,7 @@ import {
   buildSystemGeneratedOrigin,
   mimeToFileContentKind,
 } from "../files/service.js"
+import { insertAvatarFileAsset, upsertAvatarContentBlob } from "./repo.js"
 
 type DatabaseExecutor = Executor
 
@@ -296,38 +297,25 @@ async function saveSvgAvatarFile(
     details: params.metadata,
   })
 
-  await executor
-    .insertInto("content_blobs")
-    .values({
-      sha256: blobRef.sha256,
-      size_bytes: String(blobRef.sizeBytes),
-      backend: "local_cas",
-      locator_json: {} as any,
-    })
-    .onConflict((oc) => oc.column("sha256").doNothing())
-    .execute()
+  await upsertAvatarContentBlob(executor, {
+    sha256: blobRef.sha256,
+    sizeBytes: blobRef.sizeBytes,
+  })
 
-  const row = await executor
-    .insertInto("file_assets")
-    .values({
-      workspace_id: params.workspaceId,
-      content_sha256: blobRef.sha256,
-      original_name: normalizedOriginalName,
-      mime_type: SVG_MIME_TYPE,
-      content_kind: mimeToFileContentKind(SVG_MIME_TYPE),
-      size_bytes: String(blobRef.sizeBytes),
-      uploader_user_id: params.uploaderUserId,
-      initiator_actor_id: origin.initiatorActorId ?? null,
-      source_family: origin.family,
-      source_system: origin.system,
-      parent_asset_id: origin.parentFileId ?? null,
-      details_json: (origin.details || {}) as any,
-    })
-    .returning("id")
-    .executeTakeFirst()
-  if (!row) {
-    throw new Error("Failed to persist avatar file")
-  }
+  const row = await insertAvatarFileAsset(executor, {
+    workspaceId: params.workspaceId,
+    contentSha256: blobRef.sha256,
+    originalName: normalizedOriginalName,
+    mimeType: SVG_MIME_TYPE,
+    contentKind: mimeToFileContentKind(SVG_MIME_TYPE),
+    sizeBytes: blobRef.sizeBytes,
+    uploaderUserId: params.uploaderUserId,
+    initiatorActorId: origin.initiatorActorId ?? null,
+    sourceFamily: origin.family,
+    sourceSystem: origin.system,
+    parentAssetId: origin.parentFileId ?? null,
+    details: origin.details || {},
+  })
 
   return {
     fileId: row.id,

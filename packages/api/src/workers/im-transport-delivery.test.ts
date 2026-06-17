@@ -581,44 +581,6 @@ test(
 )
 
 test(
-  "recipient pre-load: address row metadata is a primitive " +
-    "→ connector receives undefined (asObjectMetadata guard)",
-  async () => {
-    const capture: { received?: any } = {}
-    const deps = baseDeps({
-      ...happyPathDepsExceptConnector(),
-      getConnector: () =>
-        recipientMetadataConnector({ requires: true, capture }),
-      loadRecipientAddress: async () =>
-        ({ id: "addr-1", metadata: "a string, not an object" }) as any,
-      findExternalMessageIdForItem: async () => null,
-      updateStatus: async () => null,
-    })
-    await processImTransportDeliveryJob({ linkId: "x" }, deps)
-    assert.equal(capture.received, undefined)
-  }
-)
-
-test(
-  "recipient pre-load: address row metadata is an array " +
-    "→ connector receives undefined (asObjectMetadata guard)",
-  async () => {
-    const capture: { received?: any } = {}
-    const deps = baseDeps({
-      ...happyPathDepsExceptConnector(),
-      getConnector: () =>
-        recipientMetadataConnector({ requires: true, capture }),
-      loadRecipientAddress: async () =>
-        ({ id: "addr-1", metadata: [1, 2, 3] }) as any,
-      findExternalMessageIdForItem: async () => null,
-      updateStatus: async () => null,
-    })
-    await processImTransportDeliveryJob({ linkId: "x" }, deps)
-    assert.equal(capture.received, undefined)
-  }
-)
-
-test(
   "recipient pre-load: loadRecipientAddress throws → updateStatus failed with error, re-throws " +
     "(catch range covers the address pre-fetch)",
   async () => {

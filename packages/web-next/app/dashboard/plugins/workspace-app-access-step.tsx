@@ -231,6 +231,10 @@ type ActorRecord = {
 
 type WorkspaceAppAccessOwner = {
   id?: string | null
+  sourceDefaultConversationTypeMask?: number | null
+  workspaceConversationTypeMask?: number | null
+  conversationTypeMaskOverride?: number | null
+  effectiveConversationTypeMask?: number | null
 }
 
 function readOwnerNumber(input: unknown): number | null {
@@ -243,21 +247,15 @@ function buildWorkspaceAppGrantSummary(
 ): WorkspaceAppGrantSummary | null {
   if (!installation) return null
   const sourceDefaultConversationTypeMask = readOwnerNumber(
-    (installation as any).sourceDefaultConversationTypeMask ??
-      (installation as any).source_default_conversation_type_mask
+    installation.sourceDefaultConversationTypeMask
   )
   const workspaceConversationTypeMask = readOwnerNumber(
-    (installation as any).workspaceConversationTypeMask ??
-      (installation as any).workspace_conversation_type_mask
+    installation.workspaceConversationTypeMask
   )
   const conversationTypeMaskOverride =
-    readOwnerNumber(
-      (installation as any).conversationTypeMaskOverride ??
-        (installation as any).conversation_type_mask_override
-    ) ?? null
+    readOwnerNumber(installation.conversationTypeMaskOverride) ?? null
   const effectiveConversationTypeMask = readOwnerNumber(
-    (installation as any).effectiveConversationTypeMask ??
-      (installation as any).effective_conversation_type_mask
+    installation.effectiveConversationTypeMask
   )
 
   if (
@@ -1382,10 +1380,7 @@ export default function WorkspaceAppAccessStep({
     setLoadingActors(true)
     setActorsError(null)
     try {
-      const actorData = await api.getActors(workspaceId)
-      const nextActors = Array.isArray(actorData)
-        ? actorData
-        : actorData?.actors || []
+      const nextActors = await api.getActors(workspaceId)
       setActors(nextActors)
       setActorsLoaded(true)
       return nextActors

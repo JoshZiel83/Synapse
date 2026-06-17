@@ -14,7 +14,11 @@
 // SDK client costs ~150KB on the API side, which we don't want to pay
 // until we've validated the envelope + target-id + grant flow end-to-end.
 
-import type { OperationEnvelope, SynapseError } from "@synapse/device-protocol"
+import {
+  SynapseErrorSchema,
+  type OperationEnvelope,
+  type SynapseError,
+} from "@synapse/device-protocol"
 import { getDeviceTunnelRegistry } from "./tunnel-registry.js"
 
 export interface McpDispatchResult {
@@ -39,6 +43,88 @@ interface CallToolResult {
   content?: unknown[]
   isError?: boolean
   _meta?: Record<string, unknown>
+}
+
+interface JsonRpcToolError {
+  message: string
+  data?: unknown
+}
+
+interface JsonRpcToolResponse {
+  result?: CallToolResult
+  error?: JsonRpcToolError
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function parseJsonRpcToolResponseText(
+  text: string
+): { ok: true; body: JsonRpcToolResponse } | { ok: false; message: string } {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return { ok: false, message: "dispatch response must be valid JSON" }
+  }
+  if (!isRecord(parsed)) {
+    return { ok: false, message: "dispatch response must be a JSON object" }
+  }
+
+  const body: JsonRpcToolResponse = {}
+  const error = parsed.error
+  if (error !== undefined) {
+    if (!isRecord(error) || typeof error.message !== "string") {
+      return {
+        ok: false,
+        message: "dispatch response error must be a JSON-RPC error object",
+      }
+    }
+    body.error = {
+      message: error.message,
+      data: error.data,
+    }
+  }
+
+  const result = parsed.result
+  if (result !== undefined) {
+    if (!isCallToolResult(result)) {
+      return {
+        ok: false,
+        message: "dispatch response result must be a CallToolResult object",
+      }
+    }
+    body.result = result
+  }
+
+  return { ok: true, body }
+}
+
+function isCallToolResult(value: unknown): value is CallToolResult {
+  if (!isRecord(value)) {
+    return false
+  }
+  if (value.content !== undefined && !Array.isArray(value.content)) {
+    return false
+  }
+  if (value.isError !== undefined && typeof value.isError !== "boolean") {
+    return false
+  }
+  if (value._meta !== undefined && !isRecord(value._meta)) {
+    return false
+  }
+  return true
+}
+
+function malformedDispatchResponse(message: string): McpDispatchResult {
+  return {
+    ok: false,
+    error: {
+      code: "runtime_constraint",
+      message,
+    },
+  }
 }
 
 export async function dispatchSyncTool(
@@ -87,10 +173,11 @@ export async function dispatchSyncTool(
         },
       }
     }
-    const body = (await res.json()) as {
-      result?: CallToolResult
-      error?: { code: number; message: string; data?: unknown }
+    const parsed = parseJsonRpcToolResponseText(await res.text())
+    if (!parsed.ok) {
+      return malformedDispatchResponse(parsed.message)
     }
+    const body = parsed.body
     if (body.error) {
       // Preserve `body.error.data` (JSON-RPC structured data) as
       // SynapseError.details so upstream details (e.g. sidecar diagnostic
@@ -113,11 +200,15 @@ export async function dispatchSyncTool(
       }
     }
     const result = body.result ?? {}
-    const synapseError = result._meta?.["synapse_error"] as
-      | SynapseError
-      | undefined
-    if (synapseError) {
-      return { ok: false, error: synapseError }
+    const synapseErrorCandidate = result._meta?.["synapse_error"]
+    if (synapseErrorCandidate !== undefined) {
+      const synapseError = SynapseErrorSchema.safeParse(synapseErrorCandidate)
+      if (!synapseError.success) {
+        return malformedDispatchResponse(
+          "dispatch response synapse_error must match SynapseError"
+        )
+      }
+      return { ok: false, error: synapseError.data }
     }
     return { ok: true, result }
   } catch (err) {

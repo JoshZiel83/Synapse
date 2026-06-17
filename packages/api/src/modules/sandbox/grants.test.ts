@@ -28,24 +28,24 @@ async function seedDeviceWithBuiltins(
     .executeTakeFirstOrThrow()
   const ws = await db
     .insertInto("workspaces")
-    .values({ owner_id: user.id, slug: `ws-${rid()}`, name: `${NS} ws` })
+    .values({ ownerId: user.id, slug: `ws-${rid()}`, name: `${NS} ws` })
     .returning("id")
     .executeTakeFirstOrThrow()
   const device = await db
     .insertInto("devices")
     .values({
-      workspace_id: ws.id,
+      workspaceId: ws.id,
       title: "sandbox-dev",
-      public_key: `pk-${rid()}`,
-      public_key_fingerprint: `fp-${rid()}`,
+      publicKey: `pk-${rid()}`,
+      publicKeyFingerprint: `fp-${rid()}`,
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   const service = await db
-    .insertInto("device_services")
+    .insertInto("deviceServices")
     .values({
-      device_id: device.id,
-      service_kind: "device_runtime",
+      deviceId: device.id,
+      serviceKind: "device_runtime",
       status: "online",
     } as any)
     .returning("id")
@@ -53,33 +53,33 @@ async function seedDeviceWithBuiltins(
 
   async function addBuiltin(kind: "filesystem" | "commandline") {
     const exposure = await db
-      .insertInto("device_exposures")
+      .insertInto("deviceExposures")
       .values({
-        device_id: device.id,
-        service_id: service.id,
-        stable_key: `synapse.builtin.${kind}.v1`,
-        display_name: kind,
+        deviceId: device.id,
+        serviceId: service.id,
+        stableKey: `synapse.builtin.${kind}.v1`,
+        displayName: kind,
         transport: "builtin",
-        builtin_kind: kind,
-        runtime_status: "healthy",
+        builtinKind: kind,
+        runtimeStatus: "healthy",
       } as any)
       .returning("id")
       .executeTakeFirstOrThrow()
     const capabilityRoot = await db
-      .insertInto("workspace_apps")
+      .insertInto("workspaceApps")
       .values({
-        workspace_id: ws.id,
+        workspaceId: ws.id,
         kind: "device_capability",
-        display_name: kind,
+        displayName: kind,
         status: "active",
       } as any)
       .returning("id")
       .executeTakeFirstOrThrow()
     const capability = await db
-      .insertInto("device_capabilities")
+      .insertInto("deviceCapabilities")
       .values({
         id: capabilityRoot.id as string,
-        exposure_id: exposure.id,
+        exposureId: exposure.id,
       } as any)
       .returning("id")
       .executeTakeFirstOrThrow()
@@ -129,16 +129,16 @@ test("grants.ts: resolveDeviceBuiltinIds throws when filesystem capability is ab
       .executeTakeFirstOrThrow()
     const ws = await db
       .insertInto("workspaces")
-      .values({ owner_id: user.id, slug: `ws-${rid()}`, name: `${NS} ws` })
+      .values({ ownerId: user.id, slug: `ws-${rid()}`, name: `${NS} ws` })
       .returning("id")
       .executeTakeFirstOrThrow()
     const device = await db
       .insertInto("devices")
       .values({
-        workspace_id: ws.id,
+        workspaceId: ws.id,
         title: "bare",
-        public_key: `pk-${rid()}`,
-        public_key_fingerprint: `fp-${rid()}`,
+        publicKey: `pk-${rid()}`,
+        publicKeyFingerprint: `fp-${rid()}`,
       } as any)
       .returning("id")
       .executeTakeFirstOrThrow()

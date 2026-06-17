@@ -3,6 +3,10 @@
 import { useEffect, useState } from "react"
 import { useParams, useRouter, useSearchParams } from "next/navigation"
 import { ArrowLeft } from "lucide-react"
+import type {
+  MarketplacePluginView,
+  PluginInstallationDetailView,
+} from "@synapse/shared"
 import {
   AppCard,
   AppCardContent,
@@ -21,8 +25,9 @@ export default function PluginInstallPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { workspaceId } = useWorkspace()
-  const [plugin, setPlugin] = useState<any>(null)
-  const [installation, setInstallation] = useState<any>(null)
+  const [plugin, setPlugin] = useState<MarketplacePluginView | null>(null)
+  const [installation, setInstallation] =
+    useState<PluginInstallationDetailView | null>(null)
   const [loading, setLoading] = useState(true)
   const pluginId = params.pluginId
   const reconfigureInstallationId = searchParams.get("reconfigure")
@@ -42,7 +47,7 @@ export default function PluginInstallPage() {
         ])
         if (cancelled) return
         setPlugin(pluginData)
-        setInstallation(installationData?.installation || null)
+        setInstallation(installationData || null)
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -70,7 +75,7 @@ export default function PluginInstallPage() {
     )
   }
 
-  const isBuiltinInitialInstall = Boolean(plugin.is_builtin && !installation)
+  const isBuiltinInitialInstall = Boolean(plugin.isBuiltin && !installation)
 
   return (
     <div className="flex flex-col gap-6 px-4 pt-6 pb-6 lg:px-6">

@@ -1,7 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { getSharedTestDb } from "../../test/helpers/db.js"
-import { appendWorkspaceMemberSyncEventInTransaction } from "./service.js"
+import { appendWorkspaceMemberSyncEventInTransaction } from "./sync-events.js"
 
 type AnyDb = import("kysely").Kysely<any>
 
@@ -20,18 +20,18 @@ async function seedMember(db: AnyDb): Promise<{
   const workspace = await db
     .insertInto("workspaces")
     .values({
-      owner_id: user.id as string,
+      ownerId: user.id as string,
       slug: `ws-${Math.random().toString(36).slice(2, 10)}`,
       name: "member-seq workspace",
     })
     .returning("id")
     .executeTakeFirstOrThrow()
   const member = await db
-    .insertInto("workspace_members")
+    .insertInto("workspaceMembers")
     .values({
-      workspace_id: workspace.id as string,
-      user_id: user.id as string,
-      trust_level: "member",
+      workspaceId: workspace.id as string,
+      userId: user.id as string,
+      trustLevel: "member",
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -69,13 +69,13 @@ test(
     }
 
     const rows = await db
-      .selectFrom("workspace_member_sync_events")
-      .select(["member_seq"])
-      .where("workspace_member_id", "=", workspaceMemberId)
-      .orderBy("member_seq", "asc")
+      .selectFrom("workspaceMemberSyncEvents")
+      .select(["memberSeq"])
+      .where("workspaceMemberId", "=", workspaceMemberId)
+      .orderBy("memberSeq", "asc")
       .execute()
 
-    const seqs = rows.map((r) => Number(r.member_seq))
+    const seqs = rows.map((r) => Number(r.memberSeq))
     assert.deepEqual(
       seqs,
       Array.from({ length: N }, (_, i) => i + 1),
@@ -109,13 +109,13 @@ test(
     )
 
     const rows = await db
-      .selectFrom("workspace_member_sync_events")
-      .select(["member_seq"])
-      .where("workspace_member_id", "=", seeded.workspaceMemberId)
-      .orderBy("member_seq", "asc")
+      .selectFrom("workspaceMemberSyncEvents")
+      .select(["memberSeq"])
+      .where("workspaceMemberId", "=", seeded.workspaceMemberId)
+      .orderBy("memberSeq", "asc")
       .execute()
 
-    const seqs = rows.map((r) => Number(r.member_seq))
+    const seqs = rows.map((r) => Number(r.memberSeq))
     assert.equal(seqs.length, N, "should have N rows")
     assert.deepEqual(
       seqs,
@@ -153,13 +153,13 @@ test(
 
     for (const m of [a, b]) {
       const rows = await db
-        .selectFrom("workspace_member_sync_events")
-        .select(["member_seq"])
-        .where("workspace_member_id", "=", m.workspaceMemberId)
-        .orderBy("member_seq", "asc")
+        .selectFrom("workspaceMemberSyncEvents")
+        .select(["memberSeq"])
+        .where("workspaceMemberId", "=", m.workspaceMemberId)
+        .orderBy("memberSeq", "asc")
         .execute()
       assert.deepEqual(
-        rows.map((r) => Number(r.member_seq)),
+        rows.map((r) => Number(r.memberSeq)),
         [1, 2, 3],
         "each member has its own contiguous sequence"
       )

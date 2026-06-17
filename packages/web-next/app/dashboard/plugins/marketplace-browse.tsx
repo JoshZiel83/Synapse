@@ -42,7 +42,7 @@ export default function MarketplaceBrowse({
 
   const installedCount = (pluginId: string) => {
     return installations.filter(
-      (installation: any) => installation.plugin_id === pluginId
+      (installation) => installation.pluginId === pluginId
     ).length
   }
 
@@ -58,7 +58,7 @@ export default function MarketplaceBrowse({
     <div className="space-y-6">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
         <div className="min-w-0 flex-1">
-          <div className="overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="[scrollbar-width:none] overflow-x-auto [&::-webkit-scrollbar]:hidden">
             <div className="flex min-w-max items-end gap-6 border-b border-gray-100 pb-px">
               <button
                 type="button"
@@ -74,7 +74,7 @@ export default function MarketplaceBrowse({
                   <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-blue-600" />
                 ) : null}
               </button>
-              {categories.map((category: any) => {
+              {categories.map((category) => {
                 const active = selectedCategorySlug === category.slug
                 return (
                   <button
@@ -135,19 +135,19 @@ export default function MarketplaceBrowse({
               "repeat(auto-fit, minmax(min(100%, 420px), 1fr))",
           }}
         >
-          {marketplace.map((plugin: any) => {
+          {marketplace.map((plugin) => {
             const count = installedCount(plugin.id)
             const title =
               translate(
-                plugin.display_name_i18n,
+                plugin.displayNameI18n,
                 locale,
-                plugin.default_locale || "en"
-              ) || plugin.display_name
+                plugin.defaultLocale || "en"
+              ) || plugin.displayName
             const summary =
               translate(
-                plugin.summary_i18n || plugin.description_i18n,
+                plugin.summaryI18n || plugin.descriptionI18n,
                 locale,
-                plugin.default_locale || "en"
+                plugin.defaultLocale || "en"
               ) || plugin.description
             const primaryCategory = plugin.categories?.[0]
             const primaryCategoryLabel = primaryCategory
@@ -165,7 +165,7 @@ export default function MarketplaceBrowse({
                 onClick={() => openPlugin(plugin.id)}
               >
                 <PluginIcon
-                  iconUrl={plugin.icon_url}
+                  iconUrl={plugin.iconUrl}
                   title={title}
                   transport={plugin.transport}
                 />
@@ -180,8 +180,8 @@ export default function MarketplaceBrowse({
                   <div className="mt-0.5 flex flex-col">
                     <span className="text-[12px] text-gray-500">
                       {primaryCategoryLabel}
-                      {plugin.org_display_name
-                        ? ` · ${plugin.org_display_name}`
+                      {plugin.orgDisplayName
+                        ? ` · ${plugin.orgDisplayName}`
                         : ""}
                     </span>
                     {summary ? (
@@ -192,21 +192,19 @@ export default function MarketplaceBrowse({
                   </div>
 
                   <div className="mt-2 flex flex-wrap gap-1.5">
-                    {(plugin.categories || [])
-                      .slice(1, 3)
-                      .map((category: any) => (
-                        <Badge
-                          key={category.slug}
-                          variant="secondary"
-                          className="bg-gray-50 text-[11px] text-gray-600"
-                        >
-                          {translate(
-                            category.displayNameI18n,
-                            locale,
-                            category.defaultLocale || "en"
-                          ) || category.displayName}
-                        </Badge>
-                      ))}
+                    {(plugin.categories || []).slice(1, 3).map((category) => (
+                      <Badge
+                        key={category.slug}
+                        variant="secondary"
+                        className="bg-gray-50 text-[11px] text-gray-600"
+                      >
+                        {translate(
+                          category.displayNameI18n,
+                          locale,
+                          category.defaultLocale || "en"
+                        ) || category.displayName}
+                      </Badge>
+                    ))}
                     {(plugin.tags || []).slice(0, 2).map((tag: string) => (
                       <Badge
                         key={tag}

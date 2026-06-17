@@ -26,7 +26,7 @@ async function insertWorkspace(db: AnyDb, ownerId: string): Promise<string> {
   const row = await db
     .insertInto("workspaces")
     .values({
-      owner_id: ownerId,
+      ownerId: ownerId,
       slug: `ws-${Math.random().toString(36).slice(2, 10)}`,
       name: "test workspace",
     })
@@ -41,11 +41,11 @@ async function insertWorkspaceMember(
   userId: string
 ): Promise<string> {
   const row = await db
-    .insertInto("workspace_members")
+    .insertInto("workspaceMembers")
     .values({
-      workspace_id: workspaceId,
-      user_id: userId,
-      trust_level: "member",
+      workspaceId: workspaceId,
+      userId: userId,
+      trustLevel: "member",
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -55,12 +55,12 @@ async function insertWorkspaceMember(
 async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
   const id = crypto.randomUUID()
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id,
-      workspace_id: workspaceId,
+      workspaceId: workspaceId,
       kind: "actor",
-      display_name: "test actor",
+      displayName: "test actor",
       status: "active",
     } as any)
     .execute()
@@ -70,7 +70,7 @@ async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
       id,
       role: "assistant",
       title: "test",
-      current_version: 1,
+      currentVersion: 1,
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -546,7 +546,7 @@ test(
       const { workspaceId, guestMemberId } = await seedOwnerMemberAndGuest(db)
       const skillId = await insertInstalledSkill(db, workspaceId, guestMemberId)
       await db
-        .updateTable("workspace_apps")
+        .updateTable("workspaceApps")
         .set({ status: "disabled" } as any)
         .where("id", "=", skillId)
         .execute()
@@ -578,7 +578,7 @@ test(
         attachmentScopeSkillId: scopeSkillId,
       })
       await db
-        .updateTable("workspace_apps")
+        .updateTable("workspaceApps")
         .set({ status: "disabled" } as any)
         .where("id", "=", installationId)
         .execute()
@@ -864,7 +864,7 @@ test(
         source: "manual",
       })
       await db
-        .updateTable("workspace_apps")
+        .updateTable("workspaceApps")
         .set({ status: "disabled" } as any)
         .where("id", "in", [owned, managed])
         .execute()
@@ -919,7 +919,7 @@ test(
         source: "manual",
       })
       await db
-        .updateTable("workspace_apps")
+        .updateTable("workspaceApps")
         .set({ status: "disabled" } as any)
         .where("id", "in", [owned, managed])
         .execute()
@@ -1022,19 +1022,19 @@ test(
         workspaceId,
       } as any)
       const spaceRow = await db
-        .insertInto("memory_spaces")
+        .insertInto("memorySpaces")
         .values({
-          workspace_id: workspaceId,
-          owner_subject_id: workspaceSubjectId,
-          namespace_key: "default",
+          workspaceId: workspaceId,
+          ownerSubjectId: workspaceSubjectId,
+          namespaceKey: "default",
         })
         .returning("id")
         .executeTakeFirstOrThrow()
       const itemRow = await db
-        .insertInto("memory_items")
+        .insertInto("memoryItems")
         .values({
-          workspace_id: workspaceId,
-          memory_space_id: spaceRow.id,
+          workspaceId: workspaceId,
+          memorySpaceId: spaceRow.id,
           category: "fact",
         })
         .returning("id")
@@ -1064,8 +1064,8 @@ test(
     await withTestDb(async (db) => {
       const userId = await insertUser(db)
       await db
-        .insertInto("platform_access_bindings")
-        .values({ user_id: userId, access_key: "super_admin" })
+        .insertInto("platformAccessBindings")
+        .values({ userId: userId, accessKey: "super_admin" })
         .execute()
       const ok = await checkPermission(db, {
         resourceType: "platform",
@@ -1120,13 +1120,13 @@ test(
         await seedOwnerMemberAndGuest(db)
       const owned = crypto.randomUUID()
       await db
-        .insertInto("workspace_apps")
+        .insertInto("workspaceApps")
         .values({
           id: owned,
-          workspace_id: workspaceId,
+          workspaceId: workspaceId,
           kind: "actor",
-          display_name: "owned actor",
-          owner_workspace_member_id: ownerMemberId,
+          displayName: "owned actor",
+          ownerWorkspaceMemberId: ownerMemberId,
           status: "active",
         } as any)
         .execute()
@@ -1136,18 +1136,18 @@ test(
           id: owned,
           role: "assistant",
           title: "owned",
-          current_version: 1,
+          currentVersion: 1,
         })
         .execute()
       const guestOwned = crypto.randomUUID()
       await db
-        .insertInto("workspace_apps")
+        .insertInto("workspaceApps")
         .values({
           id: guestOwned,
-          workspace_id: workspaceId,
+          workspaceId: workspaceId,
           kind: "actor",
-          display_name: "guest actor",
-          owner_workspace_member_id: guestMemberId,
+          displayName: "guest actor",
+          ownerWorkspaceMemberId: guestMemberId,
           status: "active",
         } as any)
         .execute()
@@ -1157,7 +1157,7 @@ test(
           id: guestOwned,
           role: "assistant",
           title: "guest",
-          current_version: 1,
+          currentVersion: 1,
         })
         .execute()
       const ids = await lookupResources(db, {
@@ -1215,22 +1215,22 @@ async function insertRemoteAgent(
 ): Promise<string> {
   const id = crypto.randomUUID()
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id,
-      workspace_id: workspaceId,
+      workspaceId: workspaceId,
       kind: "remote_agent",
-      display_name: "test agent",
-      owner_workspace_member_id: params.createdByWorkspaceMemberId ?? null,
+      displayName: "test agent",
+      ownerWorkspaceMemberId: params.createdByWorkspaceMemberId ?? null,
       status: "active",
     } as any)
     .execute()
   const row = await db
-    .insertInto("remote_agents")
+    .insertInto("remoteAgents")
     .values({
       id,
       title: "test",
-      runtime_kind: "claude_code",
+      runtimeKind: "claude_code",
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -1245,9 +1245,9 @@ async function insertConversation(
     .insertInto("conversations")
     .values({
       kind: "group",
-      workspace_id: params.workspaceId,
+      workspaceId: params.workspaceId,
       title: "test conversation",
-      created_by_workspace_member_id: params.createdByMemberId ?? null,
+      createdByWorkspaceMemberId: params.createdByMemberId ?? null,
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -1265,11 +1265,11 @@ async function addMemberParticipant(
     memberId,
   })
   await db
-    .insertInto("conversation_participants")
+    .insertInto("conversationParticipants")
     .values({
-      conversation_id: conversationId,
-      subject_id: subjectId,
-      role_key: roleKey,
+      conversationId: conversationId,
+      subjectId: subjectId,
+      roleKey: roleKey,
       state: "active",
     })
     .execute()
@@ -1285,11 +1285,11 @@ async function addActorParticipant(
     actorId,
   })
   await db
-    .insertInto("conversation_participants")
+    .insertInto("conversationParticipants")
     .values({
-      conversation_id: conversationId,
-      subject_id: subjectId,
-      role_key: "member",
+      conversationId: conversationId,
+      subjectId: subjectId,
+      roleKey: "member",
       state: "active",
     })
     .execute()
@@ -1301,31 +1301,31 @@ async function insertInstalledSkill(
   createdByMemberId: string
 ): Promise<string> {
   const snapshot = await db
-    .insertInto("skill_snapshots")
+    .insertInto("skillSnapshots")
     .values({
       name: "test-skill",
       description: "",
-      content_hash: `hash-${Math.random().toString(36).slice(2, 10)}`,
+      contentHash: `hash-${Math.random().toString(36).slice(2, 10)}`,
     })
     .returning("id")
     .executeTakeFirstOrThrow()
   const id = crypto.randomUUID()
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id,
-      workspace_id: workspaceId,
+      workspaceId: workspaceId,
       kind: "installed_skill",
-      display_name: "skill",
-      owner_workspace_member_id: createdByMemberId,
+      displayName: "skill",
+      ownerWorkspaceMemberId: createdByMemberId,
       status: "active",
     } as any)
     .execute()
   const row = await db
-    .insertInto("installed_skills")
+    .insertInto("installedSkills")
     .values({
       id,
-      current_snapshot_id: snapshot.id,
+      currentSnapshotId: snapshot.id,
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -1344,24 +1344,24 @@ async function insertPluginInstallation(
     .insertInto("publishers")
     .values({
       slug: `pub-${Math.random().toString(36).slice(2, 8)}`,
-      display_name: "pub",
+      displayName: "pub",
     })
     .returning("id")
     .executeTakeFirstOrThrow()
   const item = await db
-    .insertInto("catalog_items")
+    .insertInto("catalogItems")
     .values({
-      publisher_id: publisher.id,
-      item_kind: "plugin_package",
+      publisherId: publisher.id,
+      itemKind: "plugin_package",
       slug: `plg-${Math.random().toString(36).slice(2, 8)}`,
-      display_name: "plg",
+      displayName: "plg",
     })
     .returning("id")
     .executeTakeFirstOrThrow()
   const version = await db
-    .insertInto("catalog_versions")
+    .insertInto("catalogVersions")
     .values({
-      catalog_item_id: item.id,
+      catalogItemId: item.id,
       version: "1.0.0",
     })
     .returning("id")
@@ -1369,22 +1369,22 @@ async function insertPluginInstallation(
   void params.attachmentScopeSkillId
   const id = crypto.randomUUID()
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id,
-      workspace_id: params.workspaceId,
+      workspaceId: params.workspaceId,
       kind: "plugin_installation",
-      display_name: "plg",
-      owner_workspace_member_id: params.installedByMemberId,
+      displayName: "plg",
+      ownerWorkspaceMemberId: params.installedByMemberId,
       status: "active",
     } as any)
     .execute()
   const row = await db
-    .insertInto("plugin_installations")
+    .insertInto("pluginInstallations")
     .values({
       id,
-      catalog_item_id: item.id,
-      catalog_version_id: version.id,
+      catalogItemId: item.id,
+      catalogVersionId: version.id,
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -1397,14 +1397,14 @@ async function insertAutomationEventSource(
   createdByMemberId: string
 ): Promise<string> {
   const row = await db
-    .insertInto("automation_event_sources")
+    .insertInto("automationEventSources")
     .values({
-      workspace_id: workspaceId,
-      provider_kind: "internal",
-      source_key: `src-${Math.random().toString(36).slice(2, 10)}`,
+      workspaceId: workspaceId,
+      providerKind: "internal",
+      sourceKey: `src-${Math.random().toString(36).slice(2, 10)}`,
       name: "src",
-      created_by_kind: "workspace_member",
-      created_by_workspace_member_id: createdByMemberId,
+      createdByKind: "workspace_member",
+      createdByWorkspaceMemberId: createdByMemberId,
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -1421,13 +1421,13 @@ async function insertModelGroup(
   }
 ): Promise<string> {
   const row = await db
-    .insertInto("model_groups")
+    .insertInto("modelGroups")
     .values({
-      owner_type: params.ownerType,
-      owner_workspace_id: params.ownerWorkspaceId ?? null,
-      owner_workspace_member_id: params.ownerWorkspaceMemberId ?? null,
+      ownerType: params.ownerType,
+      ownerWorkspaceId: params.ownerWorkspaceId ?? null,
+      ownerWorkspaceMemberId: params.ownerWorkspaceMemberId ?? null,
       name: "grp",
-      is_enabled: params.isEnabled ?? true,
+      isEnabled: params.isEnabled ?? true,
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -1519,15 +1519,15 @@ async function insertBinding(
     return
   }
   await db
-    .insertInto("resource_access_bindings")
+    .insertInto("resourceAccessBindings")
     .values({
-      workspace_id: params.workspaceId,
-      resource_type: params.resourceType,
-      automation_event_source_id:
+      workspaceId: params.workspaceId,
+      resourceType: params.resourceType,
+      automationEventSourceId:
         params.resourceType === "automation_event_source"
           ? params.resourceId
           : null,
-      subject_id: subjectId,
+      subjectId: subjectId,
       status: "active",
       source: "manual",
     })
@@ -1579,51 +1579,51 @@ async function insertDevice(
   const dev = await db
     .insertInto("devices")
     .values({
-      workspace_id: workspaceId,
-      owner_workspace_member_id: ownerWorkspaceMemberId,
+      workspaceId: workspaceId,
+      ownerWorkspaceMemberId: ownerWorkspaceMemberId,
       title: "regression device",
-      public_key: `pk-${suffix}`,
-      public_key_fingerprint: `fp-${suffix}`,
-      trust_status: "trusted",
+      publicKey: `pk-${suffix}`,
+      publicKeyFingerprint: `fp-${suffix}`,
+      trustStatus: "trusted",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   const svc = await db
-    .insertInto("device_services")
+    .insertInto("deviceServices")
     .values({
-      device_id: dev.id as string,
-      service_kind: "device_runtime",
+      deviceId: dev.id as string,
+      serviceKind: "device_runtime",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   const exp = await db
-    .insertInto("device_exposures")
+    .insertInto("deviceExposures")
     .values({
-      device_id: dev.id as string,
-      service_id: svc.id as string,
-      stable_key: `exp-${suffix}`,
-      display_name: "regression exposure",
+      deviceId: dev.id as string,
+      serviceId: svc.id as string,
+      stableKey: `exp-${suffix}`,
+      displayName: "regression exposure",
       transport: "stdio",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   const cap = await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id: crypto.randomUUID(),
-      workspace_id: workspaceId,
+      workspaceId: workspaceId,
       kind: "device_capability",
-      display_name: "regression exposure",
-      owner_workspace_member_id: ownerWorkspaceMemberId,
+      displayName: "regression exposure",
+      ownerWorkspaceMemberId: ownerWorkspaceMemberId,
       status: "active",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   await db
-    .insertInto("device_capabilities")
+    .insertInto("deviceCapabilities")
     .values({
       id: cap.id as string,
-      exposure_id: exp.id as string,
+      exposureId: exp.id as string,
     } as any)
     .execute()
   return {
@@ -1639,8 +1639,8 @@ async function grantWorkspaceAccessKey(
   accessKey: string
 ): Promise<void> {
   await db
-    .insertInto("workspace_access_bindings")
-    .values({ workspace_member_id: workspaceMemberId, access_key: accessKey })
+    .insertInto("workspaceAccessBindings")
+    .values({ workspaceMemberId: workspaceMemberId, accessKey: accessKey })
     .execute()
 }
 
@@ -1753,7 +1753,7 @@ test(
         guestMemberId
       )
       await db
-        .updateTable("workspace_apps")
+        .updateTable("workspaceApps")
         .set({ status: "deprecated" } as any)
         .where("id", "=", capabilityId)
         .execute()

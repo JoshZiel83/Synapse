@@ -1,27 +1,44 @@
 import { FILE_ORIGIN_SYSTEMS } from "@synapse/shared/constants"
-import { WORKSPACE_APP_KIND } from "@synapse/shared"
+import {
+  WORKSPACE_APP_GRANT_PERMISSION,
+  WORKSPACE_APP_KIND,
+} from "@synapse/shared"
 import type {
-  DeviceCapabilitySummaryView,
+  DeviceListView,
   DeviceDetailView,
+  DeviceServiceView,
+  DeviceCapabilityView,
   DevicePairingTicketView,
-  DeviceServiceSummaryView,
-  DeviceSummaryView,
-} from "./device-views"
-import type {
+  MarketplacePluginView,
+  PluginAuditLogList,
+  ModelGroupView,
+  ModelGroupListView,
+  ModelGroupDetailView,
+  ModelGroupGrantView,
+  ModelGroupGrantListView,
+  ModelGroupItemView,
+  ModelGroupItemVersionListView,
+  ActorModelGroupAssignmentListView,
+  WorkspaceInviteView,
+  WorkspaceInviteListView,
+  WorkspaceInvitePublicView,
+  WorkspaceInviteRedeemResult,
+  WorkspaceNavigationView,
+  WorkspaceMemberListView,
+  WorkspaceAccessBindingListView,
+  WorkspaceAccessBindingView,
   Actor,
-  ActorDoc,
-  ActorRole,
-  ActorPackageInstallResult,
   ActorRuntimeTurnActivityDetail,
   CapabilityAccessTarget,
   AuthResponse,
-  ActorPackageRecord,
   AutomationEventSource,
+  AutomationEventSourceListSchemaType,
   AutomationExecution,
+  AutomationExecutionListSchemaType,
   AutomationOccurrence,
+  AutomationOccurrenceListSchemaType,
   AutomationRule,
-  AutomationRuleCreatePayload,
-  AutomationRuleUpdatePayload,
+  AutomationRuleListSchemaType,
   CanonicalContentBlock,
   ChatBootstrapResponse,
   ChatClientInstanceCreateInput,
@@ -38,8 +55,6 @@ import type {
   ChatTaskResolveInput,
   ChatTaskResolveResponse,
   ChatSyncResponse,
-  CurrentUserWeixinBindingSummary,
-  InstalledSkill,
   TaskSummary,
   ContactHubDetailResponse,
   ContactHubEntryView,
@@ -67,27 +82,132 @@ import type {
   RemoteAgentView,
   ActorAccessRequestListResponse,
   FriendRequestListResponse,
-  TransportAccountSummary,
-  TransportConnectorCapability,
-  TransportExternalUserSummary,
-  TransportSessionSummary,
-  WeixinQrLoginSessionSummary,
-  DingtalkDeviceFlowStartResponse,
-  DingtalkDeviceFlowPollResponse,
   WorkspaceChiefActorPreference,
+  WorkspaceListView,
   WorkspaceAppGrant,
-  SkillMarketplaceEntry,
   WorkspaceCapabilityConversationTypePoliciesView,
+  UpdateMeInput,
+  UpdateMemberRelationshipProfileInput,
+  UpdateActorRelationshipProfileInput,
+  BindRemoteAgentInput,
+  CreateRemoteAgentMachineInput,
+  UpdateRemoteAgentGroupTaskGrantsInput,
+  StartPluginAuthInput,
+  TrustLevel,
+  WorkspaceAppSuccessViewSchemaType,
 } from "@synapse/shared"
 import {
   normalizeConversationCatalogEntry,
   type ConversationCatalogEntry,
 } from "@synapse/shared"
+import { isChatTaskResolveConflictResponse } from "@synapse/shared"
 import {
-  isChatTaskResolveConflictResponse,
   type ChatTaskResolvePayload,
   type FileRecordView,
 } from "@synapse/shared/types"
+import type {
+  ActorPackageInstallInput,
+  AuditLogListQuery,
+  AuditLogListView,
+  AutomationEventSourceCreateInput,
+  AutomationEventSourceListQuery,
+  AutomationEventSourceUpdateInput,
+  AutomationRuleCreateInput,
+  AutomationRuleListQuery,
+  AutomationRuleUpdateInput,
+  AutomationSuccessSchemaType,
+  ActorModelGroupSetInput,
+  ActorPackageInstallResultView,
+  ActorPackageListView,
+  ActorPackageListQuery,
+  ActorPackageRecordView,
+  ActorTreeView,
+  ActorVersionListView,
+  CreateManualRuntimeAuthorizationGrantInput,
+  CreateMemoryInputBody,
+  CreateWorkspaceAppInput,
+  CreateWorkspaceInviteInput,
+  DingtalkDeviceFlowStartInput,
+  DingtalkDeviceFlowStartResponseSchemaType,
+  DingtalkDeviceFlowPollResponseSchemaType,
+  DingtalkManualAccountCreateInput,
+  FileUploadOriginInput,
+  ImportMarketplaceSkillInput,
+  InstalledSkillItemView,
+  InstalledSkillListQuery,
+  InstalledSkillListView,
+  McpMarketplaceListQuery,
+  McpPluginEventAuditLogListQuery,
+  McpPluginInstallationListQuery,
+  McpPluginToolCallAuditLogListQuery,
+  MemoryItemEnvelopeView,
+  MemoryListQuery,
+  MemoryListView,
+  MemoryMoveResultView,
+  MarketplacePluginListView,
+  MarketplacePublisherDetailView,
+  MarketplacePublisherListView,
+  ModelGroupCreateInput,
+  ModelGroupGrantIssueInput,
+  ModelGroupItemCreateInput,
+  ModelGroupItemUpdateInput,
+  ModelGroupUpdateInput,
+  MoveMemoryInput,
+  PublishMarketplaceSkillInput,
+  PlatformAccessBindingListView,
+  PlatformAccessBindingView,
+  PlatformAccessGrantInput,
+  PlatformNavigationView,
+  PluginCategoryListView,
+  PluginInstallationDetailView,
+  PluginInstallationListView,
+  ReplaceWorkspaceAppGrantsInput,
+  RemoteAgentGroupTaskGrantsResponseSchemaType,
+  RemoteAgentListResponseSchemaType,
+  RemoteAgentMachineListResponseSchemaType,
+  RemoteAgentResponseSchemaType,
+  RuntimeAuthorizationGrantRecordView,
+  SkillMarketplaceItemView,
+  SkillMarketplaceItemQuery,
+  SkillMarketplaceListView,
+  SkillMarketplaceListQuery,
+  StartPairingInput,
+  TransportAccountResponseSchemaType,
+  TransportAccountCreateInput,
+  TransportAccountUpdateInput,
+  TransportAccountsResponseSchemaType,
+  TransportConnectorsResponseSchemaType,
+  TransportExternalUserResponseSchemaType,
+  TransportExternalUserLinkedMemberInput,
+  TransportExternalUsersResponseSchemaType,
+  TransportExternalUsersListQuery,
+  TransportFeishuAccountCreateInput,
+  TransportFeishuAccountUpdateInput,
+  TransportQqAccountCreateInput,
+  TransportQqAccountUpdateInput,
+  TransportSessionResponseSchemaType,
+  TransportSessionsResponseSchemaType,
+  TransportSessionSettingsInput,
+  TransportWecomAccountCreateInput,
+  TransportWecomAccountUpdateInput,
+  WeixinBindingAutoLinkInput,
+  WeixinBindingCandidatesResponseSchemaType,
+  WeixinBindingResponseSchemaType,
+  WeixinQrSessionCreateInput,
+  WeixinQrSessionResponseSchemaType,
+  UpdateMemoryInputBody,
+  WorkspaceAccessGrantInput,
+  WorkspaceAppGrantListViewSchemaType,
+  WorkspaceCapabilityConversationTypePolicyUpdateInput,
+  WorkspaceChiefActorPreferenceInput,
+  WorkspaceCreateInput,
+  UpdateWorkspaceAppInput,
+} from "@synapse/shared/schemas"
+import {
+  StoredFileRecordViewSchema,
+  type StoredFileRecordView,
+  WorkspaceAppGrantEntrySchema,
+} from "@synapse/shared/schemas"
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api/v1"
 
@@ -109,16 +229,20 @@ export type {
   RemoteAgentAccessRequestListResponse,
   RemoteAgentBindingView,
   RemoteAgentGroupTaskGrantView,
+  RemoteAgentGroupTaskGrantsResponseSchemaType,
   RemoteAgentLifecycleState,
   RemoteAgentMachineDetailView,
+  RemoteAgentMachineListResponseSchemaType,
   RemoteAgentMachinePairingSessionView,
   RemoteAgentMachineTrustStatus,
   RemoteAgentMachineView,
+  RemoteAgentResponseSchemaType,
   RemoteAgentRuntimeCapabilityView,
   RemoteAgentRuntimeCatalogEntryView,
   RemoteAgentRuntimeKind,
   RemoteAgentRuntimeSummaryView,
   RemoteAgentView,
+  TrustLevel,
 }
 
 export class ApiError extends Error {
@@ -141,22 +265,108 @@ export interface AuthMutationOptions {
   temporary?: boolean
 }
 
-export interface WorkspaceListResponse {
-  data: Array<{
-    id: string
-    name: string
-    slug: string
-    isTrusted?: boolean
-    currentWorkspaceMemberId?: string
-    trustLevel?: string
-  }>
-}
-
 export type ContactHubEntryKind = ContactHubKind
 export type RemoteAgentRuntimeStatus = RemoteAgentRuntimeCatalogStatus
 
+type WorkspaceAppGrantEntryInput =
+  ReplaceWorkspaceAppGrantsInput["grants"][number]
+type WorkspaceAppGrantEntryLike = Omit<
+  WorkspaceAppGrantEntryInput,
+  "target" | "permissions"
+> & {
+  target: CapabilityAccessTarget
+  permissions: string[]
+}
+
+type WorkspaceAppCreateActorInput = Omit<
+  Extract<CreateWorkspaceAppInput, { kind: typeof WORKSPACE_APP_KIND.ACTOR }>,
+  "kind" | "grants"
+> & { grants?: WorkspaceAppGrantEntryLike[] }
+type WorkspaceAppUpdateActorInput = Omit<
+  Extract<UpdateWorkspaceAppInput, { kind: typeof WORKSPACE_APP_KIND.ACTOR }>,
+  "kind"
+>
+type WorkspaceAppCreateRemoteAgentInput = Omit<
+  Extract<
+    CreateWorkspaceAppInput,
+    { kind: typeof WORKSPACE_APP_KIND.REMOTE_AGENT }
+  >,
+  "kind" | "grants"
+> & { grants?: WorkspaceAppGrantEntryLike[] }
+type WorkspaceAppUpdateRemoteAgentInput = Omit<
+  Extract<
+    UpdateWorkspaceAppInput,
+    { kind: typeof WORKSPACE_APP_KIND.REMOTE_AGENT }
+  >,
+  "kind"
+>
+type WorkspaceAppCreatePluginInstallationInput = Omit<
+  Extract<
+    CreateWorkspaceAppInput,
+    { kind: typeof WORKSPACE_APP_KIND.PLUGIN_INSTALLATION }
+  >,
+  "kind" | "grants"
+> & { grants?: WorkspaceAppGrantEntryLike[] }
+type WorkspaceAppUpdatePluginInstallationInput = Omit<
+  Extract<
+    UpdateWorkspaceAppInput,
+    { kind: typeof WORKSPACE_APP_KIND.PLUGIN_INSTALLATION }
+  >,
+  "kind"
+>
+
+function parseWorkspaceAppGrantEntry(
+  grant: WorkspaceAppGrantEntryLike
+): WorkspaceAppGrantEntryInput {
+  return WorkspaceAppGrantEntrySchema.parse(grant)
+}
+
+function parseWorkspaceAppGrantEntries(
+  grants: WorkspaceAppGrantEntryLike[] | undefined
+) {
+  return grants?.map(parseWorkspaceAppGrantEntry)
+}
+
+function parseFileUploadResponseData(value: unknown): StoredFileRecordView {
+  if (!value || typeof value !== "object" || !("data" in value)) {
+    throw new Error("Malformed upload response")
+  }
+  return StoredFileRecordViewSchema.parse((value as { data: unknown }).data)
+}
+
+type QueryValue = string | number | readonly string[] | undefined | null
+type MemoryListQueryParams = Omit<MemoryListQuery, "owner" | "scope">
+
+function withQuery<TQuery extends Record<string, QueryValue>>(
+  path: string,
+  query?: TQuery
+) {
+  if (!query) return path
+
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(query)) {
+    if (value === undefined || value === null) continue
+    if (Array.isArray(value)) {
+      const joined = value
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .join(",")
+      if (joined) params.set(key, joined)
+      continue
+    }
+    const text = String(value).trim()
+    if (text) params.set(key, text)
+  }
+
+  const queryString = params.toString()
+  return queryString ? `${path}?${queryString}` : path
+}
+
 class ApiClient {
-  private async fetch(path: string, options: RequestInit = {}) {
+  private async fetch<T = any>(
+    path: string,
+    options: RequestInit = {}
+  ): Promise<T> {
     const body = options.body
     const isFormData =
       typeof FormData !== "undefined" && body instanceof FormData
@@ -171,7 +381,7 @@ class ApiClient {
       credentials: "include",
     })
 
-    if (res.status === 204) return null
+    if (res.status === 204) return null as T
 
     const data = await res.json().catch(() => null)
     if (!res.ok) {
@@ -199,7 +409,7 @@ class ApiClient {
       throw new ApiError(candidate, res.status, code, data)
     }
 
-    return data
+    return data as T
   }
 
   // Auth — Better Auth native endpoints (mounted under /api/v1/auth).
@@ -331,141 +541,133 @@ class ApiClient {
     })
     return { url: res.url }
   }
-  getMe() {
-    return this.fetch("/auth/me")
+  async getMe() {
+    const res = await this.fetch("/auth/me")
+    return res.data
   }
-  updateMe(data: { name?: string; avatarFileId?: string | null }) {
-    return this.fetch("/auth/me", { method: "PUT", body: JSON.stringify(data) })
-  }
-
-  // Workspaces
-  getWorkspaces(): Promise<WorkspaceListResponse> {
-    return this.fetch("/workspaces")
-  }
-  createWorkspace(name: string, description?: string) {
-    return this.fetch("/workspaces", {
-      method: "POST",
-      body: JSON.stringify({ name, description }),
-    })
-  }
-  getWorkspace(id: string) {
-    return this.fetch(`/workspaces/${id}`)
-  }
-  getWorkspaceMembers(wsId: string) {
-    return this.fetch(`/workspaces/${wsId}/members`)
-  }
-  getWorkspaceNavigation(wsId: string) {
-    return this.fetch(`/workspaces/${wsId}/navigation`)
-  }
-  getWorkspaceChiefActorPreference(
-    wsId: string
-  ): Promise<WorkspaceChiefActorPreference> {
-    return this.fetch(`/workspaces/${wsId}/preferences/chief-actor`)
-  }
-  updateWorkspaceChiefActorPreference(
-    wsId: string,
-    data: { chiefActorId: string | null }
-  ): Promise<WorkspaceChiefActorPreference> {
-    return this.fetch(`/workspaces/${wsId}/preferences/chief-actor`, {
+  async updateMe(data: UpdateMeInput) {
+    const res = await this.fetch("/auth/me", {
       method: "PUT",
       body: JSON.stringify(data),
     })
+    return res.data
   }
-  getWorkspaceAccess(wsId: string) {
-    return this.fetch(`/workspaces/${wsId}/access`)
+
+  // Workspaces
+  async getWorkspaces(): Promise<WorkspaceListView> {
+    const res = await this.fetch("/workspaces")
+    return res.data
   }
-  getWorkspaceCapabilityConversationTypePolicies(
+  async createWorkspace(name: string, description?: string) {
+    const body: WorkspaceCreateInput =
+      description === undefined ? { name } : { name, description }
+    const res = await this.fetch("/workspaces", {
+      method: "POST",
+      body: JSON.stringify(body),
+    })
+    return res.data
+  }
+  async getWorkspace(id: string) {
+    const res = await this.fetch(`/workspaces/${id}`)
+    return res.data
+  }
+  async getWorkspaceMembers(wsId: string): Promise<WorkspaceMemberListView> {
+    const res = await this.fetch(`/workspaces/${wsId}/members`)
+    return res.data
+  }
+  async getWorkspaceNavigation(wsId: string): Promise<WorkspaceNavigationView> {
+    const res = await this.fetch(`/workspaces/${wsId}/navigation`)
+    return res.data
+  }
+  async getWorkspaceChiefActorPreference(
+    wsId: string
+  ): Promise<WorkspaceChiefActorPreference> {
+    const res = await this.fetch(`/workspaces/${wsId}/preferences/chief-actor`)
+    return res.data
+  }
+  async updateWorkspaceChiefActorPreference(
+    wsId: string,
+    data: WorkspaceChiefActorPreferenceInput
+  ): Promise<WorkspaceChiefActorPreference> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/preferences/chief-actor`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    )
+    return res.data
+  }
+  async getWorkspaceAccess(
+    wsId: string
+  ): Promise<WorkspaceAccessBindingListView> {
+    const res = await this.fetch(`/workspaces/${wsId}/access`)
+    return res.data
+  }
+  async getWorkspaceCapabilityConversationTypePolicies(
     wsId: string
   ): Promise<WorkspaceCapabilityConversationTypePoliciesView> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/capability-conversation-type-policies`
     )
+    return res.data
   }
-  updateWorkspaceCapabilityConversationTypePolicies(
+  async updateWorkspaceCapabilityConversationTypePolicies(
     wsId: string,
-    data: {
-      policies: Partial<
-        Record<
-          "plugin_installation" | "installed_skill" | "device_capability",
-          number
-        >
-      >
-    }
+    data: WorkspaceCapabilityConversationTypePolicyUpdateInput
   ): Promise<WorkspaceCapabilityConversationTypePoliciesView> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/capability-conversation-type-policies`,
       {
         method: "PUT",
         body: JSON.stringify(data),
       }
     )
+    return res.data
   }
-  grantWorkspaceAccess(
+  async grantWorkspaceAccess(
     wsId: string,
-    data: {
-      workspaceMemberId: string
-      accessKey:
-        | "model_admin"
-        | "actor_admin"
-        | "skill_admin"
-        | "plugin_admin"
-        | "memory_admin"
-        | "device_admin"
-        | "conversation_admin"
-    }
-  ) {
-    return this.fetch(`/workspaces/${wsId}/access`, {
+    data: WorkspaceAccessGrantInput
+  ): Promise<WorkspaceAccessBindingView> {
+    const res = await this.fetch(`/workspaces/${wsId}/access`, {
       method: "POST",
       body: JSON.stringify(data),
     })
+    return res.data
   }
-  revokeWorkspaceAccess(
+  async revokeWorkspaceAccess(
     wsId: string,
     workspaceMemberId: string,
-    accessKey:
-      | "model_admin"
-      | "actor_admin"
-      | "skill_admin"
-      | "plugin_admin"
-      | "memory_admin"
-      | "device_admin"
-      | "conversation_admin"
-  ) {
-    return this.fetch(
+    accessKey: WorkspaceAccessGrantInput["accessKey"]
+  ): Promise<WorkspaceAccessBindingView> {
+    const res = await this.fetch(
       `/workspaces/${wsId}/access/${accessKey}/members/${workspaceMemberId}/revoke`,
       { method: "POST", body: "{}" }
     )
+    return res.data
   }
 
   // Platform Access
-  getPlatformNavigation() {
-    return this.fetch("/platform/navigation")
+  async getPlatformNavigation(): Promise<PlatformNavigationView> {
+    const res = await this.fetch("/platform/navigation")
+    return res.data
   }
-  getPlatformAccess() {
-    return this.fetch("/platform/access")
+  async getPlatformAccess(): Promise<PlatformAccessBindingListView> {
+    const res = await this.fetch("/platform/access")
+    return res.data
   }
-  grantPlatformAccess(data: {
-    userId: string
-    accessKey:
-      | "super_admin"
-      | "workspace_admin"
-      | "model_admin"
-      | "support"
-      | "auditor"
-  }) {
-    return this.fetch("/platform/access", {
+  async grantPlatformAccess(
+    data: PlatformAccessGrantInput
+  ): Promise<PlatformAccessBindingView> {
+    const res = await this.fetch("/platform/access", {
       method: "POST",
       body: JSON.stringify(data),
     })
+    return res.data
   }
   revokePlatformAccess(
     userId: string,
-    accessKey:
-      | "super_admin"
-      | "workspace_admin"
-      | "model_admin"
-      | "support"
-      | "auditor"
+    accessKey: PlatformAccessGrantInput["accessKey"]
   ) {
     return this.fetch(`/platform/access/${accessKey}/users/${userId}/revoke`, {
       method: "POST",
@@ -474,77 +676,54 @@ class ApiClient {
   }
 
   // Skills Marketplace
-  getSkillMarketplace(options?: {
-    search?: string
-    tags?: string[]
-    workspaceId?: string
-  }): Promise<{ skills: SkillMarketplaceEntry[] }> {
+  getSkillMarketplace(
+    options?: SkillMarketplaceListQuery
+  ): Promise<SkillMarketplaceListView> {
     const params = new URLSearchParams()
     if (options?.search) params.set("search", options.search)
-    if (options?.tags?.length) params.set("tags", options.tags.join(","))
+    if (typeof options?.tags === "string") {
+      params.set("tags", options.tags)
+    } else if (options?.tags?.length) {
+      params.set("tags", options.tags.join(","))
+    }
     if (options?.workspaceId) params.set("workspaceId", options.workspaceId)
     const qs = params.toString()
-    return this.fetch(`/skills/marketplace${qs ? "?" + qs : ""}`)
+    return this.fetch(`/skills/marketplace${qs ? "?" + qs : ""}`).then(
+      (res) => res.data
+    )
   }
   getSkillMarketplaceItem(
     skillId: string,
-    workspaceId?: string
-  ): Promise<{ skill: SkillMarketplaceEntry }> {
+    workspaceId?: SkillMarketplaceItemQuery["workspaceId"]
+  ): Promise<SkillMarketplaceItemView> {
     const params = new URLSearchParams()
     if (workspaceId) params.set("workspaceId", workspaceId)
     const qs = params.toString()
-    return this.fetch(`/skills/marketplace/${skillId}${qs ? "?" + qs : ""}`)
+    return this.fetch(
+      `/skills/marketplace/${skillId}${qs ? "?" + qs : ""}`
+    ).then((res) => res.data)
   }
-  publishMarketplaceSkill(data: {
-    skillId?: string
-    slug: string
-    name: string
-    description?: CanonicalContentBlock
-    iconFileId?: string | null
-    tags?: string[]
-    version: string
-    changelog?: string
-    defaultConversationTypeMask?: number
-    isActive?: boolean
-    metadata?: Record<string, unknown>
-    attachmentFiles?: Array<{
-      path: string
-      contentBlocks: CanonicalContentBlock[]
-      mediaType?: string
-    }>
-  }): Promise<{ skill: SkillMarketplaceEntry }> {
+  publishMarketplaceSkill(
+    data: PublishMarketplaceSkillInput
+  ): Promise<SkillMarketplaceItemView> {
     return this.fetch("/skills/marketplace", {
       method: "POST",
       body: JSON.stringify(data),
-    })
+    }).then((res) => res.data)
   }
   importMarketplaceSkill(
-    data:
-      | {
-          sourceType: "github"
-          repoUrl: string
-          path: string
-          ref?: string
-        }
-      | {
-          sourceType: "clawhub"
-          ownerId?: string
-          slug: string
-          version?: string
-        }
-  ): Promise<{ skill: SkillMarketplaceEntry }> {
+    data: ImportMarketplaceSkillInput
+  ): Promise<SkillMarketplaceItemView> {
     return this.fetch("/skills/marketplace/import", {
       method: "POST",
       body: JSON.stringify(data),
-    })
+    }).then((res) => res.data)
   }
-  refreshMarketplaceSkill(
-    skillId: string
-  ): Promise<{ skill: SkillMarketplaceEntry }> {
+  refreshMarketplaceSkill(skillId: string): Promise<SkillMarketplaceItemView> {
     return this.fetch(`/skills/marketplace/${skillId}/refresh`, {
       method: "POST",
       body: "{}",
-    })
+    }).then((res) => res.data)
   }
   async createWorkspaceSkill(
     wsId: string,
@@ -560,27 +739,28 @@ class ApiClient {
       }>
       accessTarget: CapabilityAccessTarget
     }
-  ): Promise<{ skill: InstalledSkill }> {
+  ): Promise<InstalledSkillItemView> {
+    const body: CreateWorkspaceAppInput = {
+      kind: WORKSPACE_APP_KIND.INSTALLED_SKILL,
+      sourceType: "custom",
+      displayName: data.name,
+      description: data.description,
+      iconFileId: data.iconFileId,
+      tags: data.tags,
+      attachmentFiles: data.attachmentFiles,
+      grants: [
+        parseWorkspaceAppGrantEntry({
+          target: data.accessTarget,
+          permissions: [WORKSPACE_APP_GRANT_PERMISSION.USE],
+        }),
+      ],
+    }
     const created = await this.fetch(`/workspaces/${wsId}/workspace-apps`, {
       method: "POST",
-      body: JSON.stringify({
-        kind: WORKSPACE_APP_KIND.INSTALLED_SKILL,
-        sourceType: "custom",
-        displayName: data.name,
-        description: data.description,
-        iconFileId: data.iconFileId,
-        tags: data.tags,
-        attachmentFiles: data.attachmentFiles,
-        grants: [
-          {
-            target: data.accessTarget,
-            permissions: ["use"],
-          },
-        ],
-      }),
+      body: JSON.stringify(body),
     })
     return {
-      skill: await this.getInstalledSkill(wsId, created.app.id).then(
+      skill: await this.getInstalledSkill(wsId, created.data.app.id).then(
         (res) => res.skill
       ),
     }
@@ -589,15 +769,19 @@ class ApiClient {
   // Skills
   getInstalledSkills(
     wsId: string,
-    params?: string
-  ): Promise<{ skills: InstalledSkill[] }> {
-    return this.fetch(`/workspaces/${wsId}/skills${params ? "?" + params : ""}`)
+    query?: InstalledSkillListQuery
+  ): Promise<InstalledSkillListView> {
+    return this.fetch(withQuery(`/workspaces/${wsId}/skills`, query)).then(
+      (res) => res.data
+    )
   }
   getInstalledSkill(
     wsId: string,
     installedSkillId: string
-  ): Promise<{ skill: InstalledSkill }> {
-    return this.fetch(`/workspaces/${wsId}/skills/${installedSkillId}`)
+  ): Promise<InstalledSkillItemView> {
+    return this.fetch(`/workspaces/${wsId}/skills/${installedSkillId}`).then(
+      (res) => res.data
+    )
   }
   async installSkill(
     wsId: string,
@@ -605,23 +789,24 @@ class ApiClient {
       marketSkillId: string
       accessTarget: CapabilityAccessTarget
     }
-  ): Promise<{ skill: InstalledSkill }> {
+  ): Promise<InstalledSkillItemView> {
+    const body: CreateWorkspaceAppInput = {
+      kind: WORKSPACE_APP_KIND.INSTALLED_SKILL,
+      sourceType: "marketplace",
+      marketSkillId: data.marketSkillId,
+      grants: [
+        parseWorkspaceAppGrantEntry({
+          target: data.accessTarget,
+          permissions: [WORKSPACE_APP_GRANT_PERMISSION.USE],
+        }),
+      ],
+    }
     const created = await this.fetch(`/workspaces/${wsId}/workspace-apps`, {
       method: "POST",
-      body: JSON.stringify({
-        kind: WORKSPACE_APP_KIND.INSTALLED_SKILL,
-        sourceType: "marketplace",
-        marketSkillId: data.marketSkillId,
-        grants: [
-          {
-            target: data.accessTarget,
-            permissions: ["use"],
-          },
-        ],
-      }),
+      body: JSON.stringify(body),
     })
     return {
-      skill: await this.getInstalledSkill(wsId, created.app.id).then(
+      skill: await this.getInstalledSkill(wsId, created.data.app.id).then(
         (res) => res.skill
       ),
     }
@@ -642,19 +827,20 @@ class ApiClient {
         mediaType?: string
       }>
     }
-  ): Promise<{ skill: InstalledSkill }> {
+  ): Promise<InstalledSkillItemView> {
+    const body: UpdateWorkspaceAppInput = {
+      kind: WORKSPACE_APP_KIND.INSTALLED_SKILL,
+      displayName: data.name,
+      description: data.description,
+      iconFileId: data.iconFileId,
+      tags: data.tags,
+      isEnabled: data.isEnabled,
+      conversationTypeMaskOverride: data.conversationTypeMaskOverride,
+      attachmentFiles: data.attachmentFiles,
+    }
     await this.fetch(`/workspaces/${wsId}/workspace-apps/${installedSkillId}`, {
       method: "PUT",
-      body: JSON.stringify({
-        kind: WORKSPACE_APP_KIND.INSTALLED_SKILL,
-        displayName: data.name,
-        description: data.description,
-        iconFileId: data.iconFileId,
-        tags: data.tags,
-        isEnabled: data.isEnabled,
-        conversationTypeMaskOverride: data.conversationTypeMaskOverride,
-        attachmentFiles: data.attachmentFiles,
-      }),
+      body: JSON.stringify(body),
     })
     return {
       skill: await this.getInstalledSkill(wsId, installedSkillId).then(
@@ -665,262 +851,311 @@ class ApiClient {
   upgradeInstalledSkill(
     wsId: string,
     installedSkillId: string
-  ): Promise<{ skill: InstalledSkill }> {
+  ): Promise<InstalledSkillItemView> {
     return this.fetch(
       `/workspaces/${wsId}/skills/${installedSkillId}/upgrade`,
       {
         method: "POST",
         body: "{}",
       }
-    )
+    ).then((res) => res.data)
   }
-  uninstallInstalledSkill(wsId: string, installedSkillId: string) {
-    return this.fetch(
+  async uninstallInstalledSkill(
+    wsId: string,
+    installedSkillId: string
+  ): Promise<WorkspaceAppSuccessViewSchemaType> {
+    const res = await this.fetch(
       `/workspaces/${wsId}/workspace-apps/${installedSkillId}`,
       {
         method: "DELETE",
       }
     )
+    return res.data
   }
-  getWorkspaceAppGrants(
+  async getWorkspaceAppGrants(
     wsId: string,
     appId: string
-  ): Promise<{ grants: WorkspaceAppGrant[] }> {
-    return this.fetch(`/workspaces/${wsId}/workspace-apps/${appId}/grants`)
+  ): Promise<WorkspaceAppGrantListViewSchemaType> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/workspace-apps/${appId}/grants`
+    )
+    return res.data
   }
-  replaceWorkspaceAppGrants(
+  async replaceWorkspaceAppGrants(
     wsId: string,
     appId: string,
-    data: {
-      grants: Array<{
-        target: CapabilityAccessTarget
-        permissions: string[]
-        conversationTypeMaskOverride?: number | null
-        reason?: string
-      }>
+    data: { grants: WorkspaceAppGrantEntryLike[] }
+  ): Promise<WorkspaceAppGrantListViewSchemaType> {
+    const body: ReplaceWorkspaceAppGrantsInput = {
+      grants: data.grants.map(parseWorkspaceAppGrantEntry),
     }
-  ) {
-    return this.fetch(`/workspaces/${wsId}/workspace-apps/${appId}/grants`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    })
+    const res = await this.fetch(
+      `/workspaces/${wsId}/workspace-apps/${appId}/grants`,
+      {
+        method: "PUT",
+        body: JSON.stringify(body),
+      }
+    )
+    return res.data
   }
 
   // Workspace Invites
-  getInviteInfo(token: string) {
-    return this.fetch(`/invites/${token}`)
+  async getInviteInfo(token: string): Promise<WorkspaceInvitePublicView> {
+    const res = await this.fetch(`/invites/${token}`)
+    return res.data
   }
-  redeemInvite(token: string) {
-    return this.fetch(`/invites/${token}/redeem`, {
+  async redeemInvite(token: string): Promise<WorkspaceInviteRedeemResult> {
+    const res = await this.fetch(`/invites/${token}/redeem`, {
       method: "POST",
       body: "{}",
     })
+    return res.data
   }
-  createInvite(
+  async createInvite(
     wsId: string,
-    data: {
-      trustLevel?: string
-      maxUses?: number
-      expiresAt?: import("@synapse/shared").Timestamp
-    }
-  ) {
-    return this.fetch(`/workspaces/${wsId}/invites`, {
+    data: CreateWorkspaceInviteInput
+  ): Promise<WorkspaceInviteView> {
+    const res = await this.fetch(`/workspaces/${wsId}/invites`, {
       method: "POST",
       body: JSON.stringify(data),
     })
+    return res.data
   }
-  listInvites(wsId: string) {
-    return this.fetch(`/workspaces/${wsId}/invites`)
+  async listInvites(wsId: string): Promise<WorkspaceInviteListView> {
+    const res = await this.fetch(`/workspaces/${wsId}/invites`)
+    return res.data
   }
-  revokeInvite(wsId: string, inviteId: string) {
-    return this.fetch(`/workspaces/${wsId}/invites/${inviteId}`, {
+  async revokeInvite(
+    wsId: string,
+    inviteId: string
+  ): Promise<WorkspaceInviteView> {
+    const res = await this.fetch(`/workspaces/${wsId}/invites/${inviteId}`, {
       method: "DELETE",
     })
+    return res.data
   }
 
   // Actors
-  getActors(wsId: string) {
-    return this.fetch(`/workspaces/${wsId}/actors`)
+  async getActors(wsId: string): Promise<Actor[]> {
+    const res = (await this.fetch(`/workspaces/${wsId}/actors`)) as {
+      data: Actor[]
+    }
+    return res.data
   }
-  getActor(wsId: string, actorId: string) {
-    return this.fetch(`/workspaces/${wsId}/actors/${actorId}`)
+  async getActor(wsId: string, actorId: string) {
+    const res = await this.fetch(`/workspaces/${wsId}/actors/${actorId}`)
+    return res.data
   }
-  getActorVersions(wsId: string, actorId: string) {
-    return this.fetch(`/workspaces/${wsId}/actors/${actorId}/versions`)
-  }
-  getActorPackages(
+  async getActorVersions(
     wsId: string,
-    search?: string
-  ): Promise<ActorPackageRecord[]> {
-    const params = search ? `?search=${encodeURIComponent(search)}` : ""
-    return this.fetch(`/workspaces/${wsId}/actors/packages${params}`)
+    actorId: string
+  ): Promise<ActorVersionListView> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/actors/${actorId}/versions`
+    )
+    return res.data
   }
-  getActorPackage(
+  async getActorPackages(
+    wsId: string,
+    search?: ActorPackageListQuery["search"]
+  ): Promise<ActorPackageListView> {
+    const params = search ? `?search=${encodeURIComponent(search)}` : ""
+    const res = await this.fetch(`/workspaces/${wsId}/actors/packages${params}`)
+    return res.data
+  }
+  async getActorPackage(
     wsId: string,
     packageId: string
-  ): Promise<ActorPackageRecord> {
-    return this.fetch(`/workspaces/${wsId}/actors/packages/${packageId}`)
+  ): Promise<ActorPackageRecordView> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/actors/packages/${packageId}`
+    )
+    return res.data
   }
-  installActorPackage(
+  async installActorPackage(
     wsId: string,
     packageId: string,
-    data?: {
-      displayName?: string
-      title?: string
-      parentId?: string | null
-      syncMode?: "notify" | "manual_merge"
-      grants?: Array<{
-        target: CapabilityAccessTarget
-        permissions: string[]
-        conversationTypeMaskOverride?: number | null
-        reason?: string
-      }>
-    }
-  ): Promise<ActorPackageInstallResult> {
-    return this.fetch(
+    data?: ActorPackageInstallInput
+  ): Promise<ActorPackageInstallResultView> {
+    const res = await this.fetch(
       `/workspaces/${wsId}/actors/packages/${packageId}/install`,
       {
         method: "POST",
         body: JSON.stringify(data || {}),
       }
     )
+    return res.data
   }
-  getOrgTree(wsId: string) {
-    return this.fetch(`/workspaces/${wsId}/actors/tree`)
+  async getOrgTree(wsId: string): Promise<ActorTreeView> {
+    const res = await this.fetch(`/workspaces/${wsId}/actors/tree`)
+    return res.data
   }
   async createActor(
     wsId: string,
-    data: {
-      displayName: string
-      role: ActorRole
-      title?: string
-      avatarFileId?: string
-      avatarEmoji?: string
-      canRepresentUser?: boolean
-      docs?: ActorDoc[]
-      parentId?: string
-      specialties?: string[]
-      config?: Record<string, unknown>
-      grants?: Array<{
-        target: CapabilityAccessTarget
-        permissions: string[]
-        conversationTypeMaskOverride?: number | null
-        reason?: string
-      }>
-    }
+    data: WorkspaceAppCreateActorInput
   ): Promise<Actor> {
+    const { grants, ...rest } = data
+    const body: CreateWorkspaceAppInput = {
+      kind: WORKSPACE_APP_KIND.ACTOR,
+      ...rest,
+      grants: parseWorkspaceAppGrantEntries(grants),
+    }
     const created = await this.fetch(`/workspaces/${wsId}/workspace-apps`, {
       method: "POST",
-      body: JSON.stringify({
-        kind: WORKSPACE_APP_KIND.ACTOR,
-        ...data,
-      }),
+      body: JSON.stringify(body),
     })
-    return this.getActor(wsId, created.app.id)
+    return this.getActor(wsId, created.data.app.id)
   }
   async updateActor(
     wsId: string,
     actorId: string,
-    data: {
-      displayName?: string
-      role?: ActorRole
-      title?: string
-      avatarFileId?: string | null
-      avatarEmoji?: string | null
-      canRepresentUser?: boolean
-      docs?: ActorDoc[]
-      parentId?: string | null
-      specialties?: string[]
-      config?: Record<string, unknown>
-    }
+    data: WorkspaceAppUpdateActorInput
   ): Promise<Actor> {
+    const body: UpdateWorkspaceAppInput = {
+      kind: WORKSPACE_APP_KIND.ACTOR,
+      ...data,
+    }
     await this.fetch(`/workspaces/${wsId}/workspace-apps/${actorId}`, {
       method: "PUT",
-      body: JSON.stringify({
-        kind: WORKSPACE_APP_KIND.ACTOR,
-        ...data,
-      }),
+      body: JSON.stringify(body),
     })
     return this.getActor(wsId, actorId)
   }
-  deleteActor(wsId: string, actorId: string) {
-    return this.fetch(`/workspaces/${wsId}/workspace-apps/${actorId}`, {
-      method: "DELETE",
-    })
+  async deleteActor(
+    wsId: string,
+    actorId: string
+  ): Promise<WorkspaceAppSuccessViewSchemaType> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/workspace-apps/${actorId}`,
+      {
+        method: "DELETE",
+      }
+    )
+    return res.data
   }
 
   // Memories
-  getMemories(wsId: string, params?: string) {
-    return this.fetch(
-      `/workspaces/${wsId}/memories${params ? "?" + params : ""}`
+  getMemories(
+    wsId: string,
+    query?: MemoryListQueryParams
+  ): Promise<MemoryListView> {
+    return this.fetch(withQuery(`/workspaces/${wsId}/memories`, query)).then(
+      (res) => res.data
     )
   }
-  getMemory(wsId: string, id: string) {
-    return this.fetch(`/workspaces/${wsId}/memories/${id}`)
+  getMemory(wsId: string, id: string): Promise<MemoryItemEnvelopeView> {
+    return this.fetch(`/workspaces/${wsId}/memories/${id}`).then(
+      (res) => res.data
+    )
   }
-  createMemory(wsId: string, data: any) {
+  createMemory(
+    wsId: string,
+    data: CreateMemoryInputBody
+  ): Promise<MemoryItemEnvelopeView> {
     return this.fetch(`/workspaces/${wsId}/memories`, {
       method: "POST",
       body: JSON.stringify(data),
-    })
+    }).then((res) => res.data)
   }
-  updateMemory(wsId: string, id: string, data: any) {
+  updateMemory(
+    wsId: string,
+    id: string,
+    data: UpdateMemoryInputBody
+  ): Promise<MemoryItemEnvelopeView> {
     return this.fetch(`/workspaces/${wsId}/memories/${id}`, {
       method: "PUT",
       body: JSON.stringify(data),
-    })
+    }).then((res) => res.data)
   }
   deleteMemory(wsId: string, id: string) {
     return this.fetch(`/workspaces/${wsId}/memories/${id}`, {
       method: "DELETE",
     })
   }
-  moveMemory(wsId: string, id: string, data: any) {
+  moveMemory(
+    wsId: string,
+    id: string,
+    data: MoveMemoryInput
+  ): Promise<MemoryMoveResultView> {
     return this.fetch(`/workspaces/${wsId}/memories/${id}/move`, {
       method: "POST",
       body: JSON.stringify(data),
-    })
+    }).then((res) => res.data)
   }
 
   // Audit
-  getAuditLogs(wsId: string, params?: string) {
-    return this.fetch(
-      `/workspaces/${wsId}/audit-logs${params ? "?" + params : ""}`
-    )
+  getAuditLogs(
+    wsId: string,
+    query?: AuditLogListQuery
+  ): Promise<AuditLogListView> {
+    return this.fetch<{ data: AuditLogListView }>(
+      withQuery(`/workspaces/${wsId}/audit-logs`, query)
+    ).then((res) => res.data)
   }
 
   // Model Groups - Workspace
-  getModelGroups(wsId: string) {
-    return this.fetch(`/workspaces/${wsId}/model-groups`)
+  async getModelGroups(wsId: string): Promise<ModelGroupListView> {
+    const res = await this.fetch(`/workspaces/${wsId}/model-groups`)
+    return res.data
   }
-  createModelGroup(wsId: string, data: any) {
-    return this.fetch(`/workspaces/${wsId}/model-groups`, {
+  async createModelGroup(
+    wsId: string,
+    data: ModelGroupCreateInput
+  ): Promise<ModelGroupView> {
+    const res = await this.fetch(`/workspaces/${wsId}/model-groups`, {
       method: "POST",
       body: JSON.stringify(data),
     })
+    return res.data
   }
-  getModelGroup(wsId: string, groupId: string) {
-    return this.fetch(`/workspaces/${wsId}/model-groups/${groupId}`)
+  async getModelGroup(
+    wsId: string,
+    groupId: string
+  ): Promise<ModelGroupDetailView> {
+    const res = await this.fetch(`/workspaces/${wsId}/model-groups/${groupId}`)
+    return res.data
   }
-  updateModelGroup(wsId: string, groupId: string, data: any) {
-    return this.fetch(`/workspaces/${wsId}/model-groups/${groupId}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    })
+  async updateModelGroup(
+    wsId: string,
+    groupId: string,
+    data: ModelGroupUpdateInput
+  ): Promise<ModelGroupDetailView> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/model-groups/${groupId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    )
+    return res.data
   }
   deleteModelGroup(wsId: string, groupId: string) {
     return this.fetch(`/workspaces/${wsId}/model-groups/${groupId}`, {
       method: "DELETE",
     })
   }
-  getModelGroupGrants(wsId: string, groupId: string) {
-    return this.fetch(`/workspaces/${wsId}/model-groups/${groupId}/grants`)
+  async getModelGroupGrants(
+    wsId: string,
+    groupId: string
+  ): Promise<ModelGroupGrantListView> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/model-groups/${groupId}/grants`
+    )
+    return res.data
   }
-  issueModelGroupGrant(wsId: string, groupId: string, data: any) {
-    return this.fetch(`/workspaces/${wsId}/model-groups/${groupId}/grants`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    })
+  async issueModelGroupGrant(
+    wsId: string,
+    groupId: string,
+    data: ModelGroupGrantIssueInput
+  ): Promise<ModelGroupGrantView> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/model-groups/${groupId}/grants`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      }
+    )
+    return res.data
   }
   revokeModelGroupGrant(wsId: string, groupId: string, grantId: string) {
     return this.fetch(
@@ -928,17 +1163,31 @@ class ApiClient {
       { method: "POST", body: "{}" }
     )
   }
-  addModelItem(wsId: string, groupId: string, data: any) {
-    return this.fetch(`/workspaces/${wsId}/model-groups/${groupId}/items`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    })
+  async addModelItem(
+    wsId: string,
+    groupId: string,
+    data: ModelGroupItemCreateInput
+  ): Promise<ModelGroupItemView> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/model-groups/${groupId}/items`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      }
+    )
+    return res.data
   }
-  updateModelItem(wsId: string, groupId: string, itemId: string, data: any) {
-    return this.fetch(
+  async updateModelItem(
+    wsId: string,
+    groupId: string,
+    itemId: string,
+    data: ModelGroupItemUpdateInput
+  ): Promise<ModelGroupItemView> {
+    const res = await this.fetch(
       `/workspaces/${wsId}/model-groups/${groupId}/items/${itemId}`,
       { method: "PUT", body: JSON.stringify(data) }
     )
+    return res.data
   }
   deleteModelItem(wsId: string, groupId: string, itemId: string) {
     return this.fetch(
@@ -946,42 +1195,63 @@ class ApiClient {
       { method: "DELETE" }
     )
   }
-  getItemVersions(wsId: string, groupId: string, itemId: string) {
-    return this.fetch(
+  async getItemVersions(
+    wsId: string,
+    groupId: string,
+    itemId: string
+  ): Promise<ModelGroupItemVersionListView> {
+    const res = await this.fetch(
       `/workspaces/${wsId}/model-groups/${groupId}/items/${itemId}/versions`
     )
+    return res.data
   }
 
   // Model Groups - Platform
-  getPlatformModelGroups() {
-    return this.fetch("/platform/model-groups")
+  async getPlatformModelGroups(): Promise<ModelGroupListView> {
+    const res = await this.fetch("/platform/model-groups")
+    return res.data
   }
-  createPlatformModelGroup(data: any) {
-    return this.fetch("/platform/model-groups", {
+  async createPlatformModelGroup(
+    data: ModelGroupCreateInput
+  ): Promise<ModelGroupView> {
+    const res = await this.fetch("/platform/model-groups", {
       method: "POST",
       body: JSON.stringify(data),
     })
+    return res.data
   }
-  getPlatformModelGroup(groupId: string) {
-    return this.fetch(`/platform/model-groups/${groupId}`)
+  async getPlatformModelGroup(groupId: string): Promise<ModelGroupDetailView> {
+    const res = await this.fetch(`/platform/model-groups/${groupId}`)
+    return res.data
   }
-  updatePlatformModelGroup(groupId: string, data: any) {
-    return this.fetch(`/platform/model-groups/${groupId}`, {
+  async updatePlatformModelGroup(
+    groupId: string,
+    data: ModelGroupUpdateInput
+  ): Promise<ModelGroupDetailView> {
+    const res = await this.fetch(`/platform/model-groups/${groupId}`, {
       method: "PUT",
       body: JSON.stringify(data),
     })
+    return res.data
   }
   deletePlatformModelGroup(groupId: string) {
     return this.fetch(`/platform/model-groups/${groupId}`, { method: "DELETE" })
   }
-  getPlatformModelGroupGrants(groupId: string) {
-    return this.fetch(`/platform/model-groups/${groupId}/grants`)
+  async getPlatformModelGroupGrants(
+    groupId: string
+  ): Promise<ModelGroupGrantListView> {
+    const res = await this.fetch(`/platform/model-groups/${groupId}/grants`)
+    return res.data
   }
-  issuePlatformModelGroupGrant(groupId: string, data: any) {
-    return this.fetch(`/platform/model-groups/${groupId}/grants`, {
+  async issuePlatformModelGroupGrant(
+    groupId: string,
+    data: ModelGroupGrantIssueInput
+  ): Promise<ModelGroupGrantView> {
+    const res = await this.fetch(`/platform/model-groups/${groupId}/grants`, {
       method: "POST",
       body: JSON.stringify(data),
     })
+    return res.data
   }
   revokePlatformModelGroupGrant(groupId: string, grantId: string) {
     return this.fetch(
@@ -989,65 +1259,112 @@ class ApiClient {
       { method: "POST", body: "{}" }
     )
   }
-  addPlatformModelItem(groupId: string, data: any) {
-    return this.fetch(`/platform/model-groups/${groupId}/items`, {
+  async addPlatformModelItem(
+    groupId: string,
+    data: ModelGroupItemCreateInput
+  ): Promise<ModelGroupItemView> {
+    const res = await this.fetch(`/platform/model-groups/${groupId}/items`, {
       method: "POST",
       body: JSON.stringify(data),
     })
+    return res.data
   }
-  updatePlatformModelItem(groupId: string, itemId: string, data: any) {
-    return this.fetch(`/platform/model-groups/${groupId}/items/${itemId}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    })
+  async updatePlatformModelItem(
+    groupId: string,
+    itemId: string,
+    data: ModelGroupItemUpdateInput
+  ): Promise<ModelGroupItemView> {
+    const res = await this.fetch(
+      `/platform/model-groups/${groupId}/items/${itemId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    )
+    return res.data
   }
   deletePlatformModelItem(groupId: string, itemId: string) {
     return this.fetch(`/platform/model-groups/${groupId}/items/${itemId}`, {
       method: "DELETE",
     })
   }
-  getPlatformItemVersions(groupId: string, itemId: string) {
-    return this.fetch(
+  async getPlatformItemVersions(
+    groupId: string,
+    itemId: string
+  ): Promise<ModelGroupItemVersionListView> {
+    const res = await this.fetch(
       `/platform/model-groups/${groupId}/items/${itemId}/versions`
     )
+    return res.data
   }
 
   // Model Groups - Workspace Member
-  getWorkspaceMemberModelGroups(wsId: string) {
-    return this.fetch(`/workspaces/${wsId}/me/model-groups`)
+  async getWorkspaceMemberModelGroups(
+    wsId: string
+  ): Promise<ModelGroupListView> {
+    const res = await this.fetch(`/workspaces/${wsId}/me/model-groups`)
+    return res.data
   }
-  createWorkspaceMemberModelGroup(wsId: string, data: any) {
-    return this.fetch(`/workspaces/${wsId}/me/model-groups`, {
+  async createWorkspaceMemberModelGroup(
+    wsId: string,
+    data: ModelGroupCreateInput
+  ): Promise<ModelGroupView> {
+    const res = await this.fetch(`/workspaces/${wsId}/me/model-groups`, {
       method: "POST",
       body: JSON.stringify(data),
     })
+    return res.data
   }
-  getWorkspaceMemberModelGroup(wsId: string, groupId: string) {
-    return this.fetch(`/workspaces/${wsId}/me/model-groups/${groupId}`)
+  async getWorkspaceMemberModelGroup(
+    wsId: string,
+    groupId: string
+  ): Promise<ModelGroupDetailView> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/me/model-groups/${groupId}`
+    )
+    return res.data
   }
-  updateWorkspaceMemberModelGroup(wsId: string, groupId: string, data: any) {
-    return this.fetch(`/workspaces/${wsId}/me/model-groups/${groupId}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    })
+  async updateWorkspaceMemberModelGroup(
+    wsId: string,
+    groupId: string,
+    data: ModelGroupUpdateInput
+  ): Promise<ModelGroupDetailView> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/me/model-groups/${groupId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    )
+    return res.data
   }
   deleteWorkspaceMemberModelGroup(wsId: string, groupId: string) {
     return this.fetch(`/workspaces/${wsId}/me/model-groups/${groupId}`, {
       method: "DELETE",
     })
   }
-  getWorkspaceMemberModelGroupGrants(wsId: string, groupId: string) {
-    return this.fetch(`/workspaces/${wsId}/me/model-groups/${groupId}/grants`)
+  async getWorkspaceMemberModelGroupGrants(
+    wsId: string,
+    groupId: string
+  ): Promise<ModelGroupGrantListView> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/me/model-groups/${groupId}/grants`
+    )
+    return res.data
   }
-  issueWorkspaceMemberModelGroupGrant(
+  async issueWorkspaceMemberModelGroupGrant(
     wsId: string,
     groupId: string,
-    data: any
-  ) {
-    return this.fetch(`/workspaces/${wsId}/me/model-groups/${groupId}/grants`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    })
+    data: ModelGroupGrantIssueInput
+  ): Promise<ModelGroupGrantView> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/me/model-groups/${groupId}/grants`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      }
+    )
+    return res.data
   }
   revokeWorkspaceMemberModelGroupGrant(
     wsId: string,
@@ -1062,25 +1379,34 @@ class ApiClient {
       }
     )
   }
-  addWorkspaceMemberModelItem(wsId: string, groupId: string, data: any) {
-    return this.fetch(`/workspaces/${wsId}/me/model-groups/${groupId}/items`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    })
+  async addWorkspaceMemberModelItem(
+    wsId: string,
+    groupId: string,
+    data: ModelGroupItemCreateInput
+  ): Promise<ModelGroupItemView> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/me/model-groups/${groupId}/items`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      }
+    )
+    return res.data
   }
-  updateWorkspaceMemberModelItem(
+  async updateWorkspaceMemberModelItem(
     wsId: string,
     groupId: string,
     itemId: string,
-    data: any
-  ) {
-    return this.fetch(
+    data: ModelGroupItemUpdateInput
+  ): Promise<ModelGroupItemView> {
+    const res = await this.fetch(
       `/workspaces/${wsId}/me/model-groups/${groupId}/items/${itemId}`,
       {
         method: "PUT",
         body: JSON.stringify(data),
       }
     )
+    return res.data
   }
   deleteWorkspaceMemberModelItem(
     wsId: string,
@@ -1094,262 +1420,294 @@ class ApiClient {
       }
     )
   }
-  getWorkspaceMemberItemVersions(
+  async getWorkspaceMemberItemVersions(
     wsId: string,
     groupId: string,
     itemId: string
-  ) {
-    return this.fetch(
+  ): Promise<ModelGroupItemVersionListView> {
+    const res = await this.fetch(
       `/workspaces/${wsId}/me/model-groups/${groupId}/items/${itemId}/versions`
     )
+    return res.data
   }
 
   // Actor Model Group Assignment
-  getActorModelGroups(wsId: string, actorId: string) {
-    return this.fetch(`/workspaces/${wsId}/actors/${actorId}/model-groups`)
+  async getActorModelGroups(
+    wsId: string,
+    actorId: string
+  ): Promise<ActorModelGroupAssignmentListView> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/actors/${actorId}/model-groups`
+    )
+    return res.data
   }
-  getVisibleActorModelGroups(wsId: string, actorId: string) {
-    return this.fetch(
+  async getVisibleActorModelGroups(
+    wsId: string,
+    actorId: string
+  ): Promise<ModelGroupListView> {
+    const res = await this.fetch(
       `/workspaces/${wsId}/actors/${actorId}/model-groups/visible`
     )
+    return res.data
   }
-  setActorModelGroups(
+  async setActorModelGroups(
     wsId: string,
     actorId: string,
-    groups: { groupId: string; priority: number }[]
-  ) {
-    return this.fetch(`/workspaces/${wsId}/actors/${actorId}/model-groups`, {
-      method: "PUT",
-      body: JSON.stringify({ groups }),
-    })
+    groups: ActorModelGroupSetInput["groups"]
+  ): Promise<ActorModelGroupAssignmentListView> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/actors/${actorId}/model-groups`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ groups }),
+      }
+    )
+    return res.data
   }
 
-  getMyRelationshipProfile(wsId: string): Promise<RelationshipProfileView> {
-    return this.fetch(`/workspaces/${wsId}/me/relationship-profile`)
-  }
-  updateMyRelationshipProfile(
-    wsId: string,
-    input: {
-      approvalMode: "auto" | "manual"
-      identityId?: string
-      identitySearchEnabled?: boolean
-    }
+  async getMyRelationshipProfile(
+    wsId: string
   ): Promise<RelationshipProfileView> {
-    return this.fetch(`/workspaces/${wsId}/me/relationship-profile`, {
-      method: "PUT",
-      body: JSON.stringify(input),
-    })
+    const res = await this.fetch(`/workspaces/${wsId}/me/relationship-profile`)
+    return res.data
   }
-  getActorRelationshipProfile(
+  async updateMyRelationshipProfile(
+    wsId: string,
+    input: UpdateMemberRelationshipProfileInput
+  ): Promise<RelationshipProfileView> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/me/relationship-profile`,
+      {
+        method: "PUT",
+        body: JSON.stringify(input),
+      }
+    )
+    return res.data
+  }
+  async getActorRelationshipProfile(
     wsId: string,
     actorId: string
   ): Promise<RelationshipProfileView> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/actors/${actorId}/relationship-profile`
     )
+    return res.data
   }
-  updateActorRelationshipProfile(
+  async updateActorRelationshipProfile(
     wsId: string,
     actorId: string,
-    input: {
-      approvalMode: "auto" | "manual"
-      identityId?: string
-      identitySearchEnabled?: boolean
-      isPublicShared?: boolean
-    }
+    input: UpdateActorRelationshipProfileInput
   ): Promise<RelationshipProfileView> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/actors/${actorId}/relationship-profile`,
       {
         method: "PUT",
         body: JSON.stringify(input),
       }
     )
+    return res.data
   }
-  getRemoteAgentRelationshipProfile(
+  async getRemoteAgentRelationshipProfile(
     wsId: string,
     remoteAgentId: string
   ): Promise<RelationshipProfileView> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/remote-agents/${remoteAgentId}/relationship-profile`
     )
+    return res.data
   }
-  updateRemoteAgentRelationshipProfile(
+  async updateRemoteAgentRelationshipProfile(
     wsId: string,
     remoteAgentId: string,
-    input: {
-      approvalMode: "auto" | "manual"
-      identityId?: string
-      identitySearchEnabled?: boolean
-      isPublicShared?: boolean
-    }
+    input: UpdateActorRelationshipProfileInput
   ): Promise<RelationshipProfileView> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/remote-agents/${remoteAgentId}/relationship-profile`,
       {
         method: "PUT",
         body: JSON.stringify(input),
       }
     )
+    return res.data
   }
-  scanRelationshipQr(
+  async scanRelationshipQr(
     wsId: string,
     token: string
   ): Promise<RelationshipScanResponse> {
-    return this.fetch(`/workspaces/${wsId}/relationship-qr/scan`, {
+    const res = await this.fetch(`/workspaces/${wsId}/relationship-qr/scan`, {
       method: "POST",
       body: JSON.stringify({ token }),
     })
+    return res.data
   }
-  searchIdentity(wsId: string, query: string): Promise<IdentitySearchResponse> {
+  async searchIdentity(
+    wsId: string,
+    query: string
+  ): Promise<IdentitySearchResponse> {
     const params = new URLSearchParams()
     if (query.trim()) {
       params.set("q", query.trim())
     }
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/identity-search${
         params.size > 0 ? `?${params.toString()}` : ""
       }`
     )
+    return res.data
   }
-  requestRelationshipByIdentityProfile(
+  async requestRelationshipByIdentityProfile(
     wsId: string,
     profileId: string
   ): Promise<RelationshipScanResponse> {
-    return this.fetch(`/workspaces/${wsId}/identity-search/request`, {
-      method: "POST",
-      body: JSON.stringify({ profileId }),
-    })
+    const res = await this.fetch(
+      `/workspaces/${wsId}/identity-search/request`,
+      {
+        method: "POST",
+        body: JSON.stringify({ profileId }),
+      }
+    )
+    return res.data
   }
-  getContactHub(wsId: string): Promise<ContactHubResponse> {
-    return this.fetch(`/workspaces/${wsId}/contact-hub`)
+  async getContactHub(wsId: string): Promise<ContactHubResponse> {
+    const res = await this.fetch(`/workspaces/${wsId}/contact-hub`)
+    return res.data
   }
-  getContactHubDetail(
+  async getContactHubDetail(
     wsId: string,
     contactKind: ContactHubEntryKind,
     contactId: string
   ): Promise<ContactHubDetailResponse> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/contact-hub/${contactKind}/${contactId}`
     )
+    return res.data
   }
-  getFriendRequests(wsId: string): Promise<FriendRequestListResponse> {
-    return this.fetch(`/workspaces/${wsId}/friend-requests`)
+  async getFriendRequests(wsId: string): Promise<FriendRequestListResponse> {
+    const res = await this.fetch(`/workspaces/${wsId}/friend-requests`)
+    return res.data
   }
-  approveFriendRequest(wsId: string, requestId: string) {
-    return this.fetch(
+  async approveFriendRequest(wsId: string, requestId: string) {
+    const res = await this.fetch(
       `/workspaces/${wsId}/friend-requests/${requestId}/approve`,
       {
         method: "POST",
         body: "{}",
       }
     )
+    return res.data
   }
-  rejectFriendRequest(wsId: string, requestId: string) {
-    return this.fetch(
+  async rejectFriendRequest(wsId: string, requestId: string) {
+    const res = await this.fetch(
       `/workspaces/${wsId}/friend-requests/${requestId}/reject`,
       {
         method: "POST",
         body: "{}",
       }
     )
+    return res.data
   }
-  getActorAccessRequests(
+  async getActorAccessRequests(
     wsId: string
   ): Promise<ActorAccessRequestListResponse> {
-    return this.fetch(`/workspaces/${wsId}/actor-access-requests`)
+    const res = await this.fetch(`/workspaces/${wsId}/actor-access-requests`)
+    return res.data
   }
-  getRemoteAgentAccessRequests(
+  async getRemoteAgentAccessRequests(
     wsId: string
   ): Promise<RemoteAgentAccessRequestListResponse> {
-    return this.fetch(`/workspaces/${wsId}/remote-agent-access-requests`)
+    const res = await this.fetch(
+      `/workspaces/${wsId}/remote-agent-access-requests`
+    )
+    return res.data
   }
-  approveActorAccessRequest(wsId: string, requestId: string) {
-    return this.fetch(
+  async approveActorAccessRequest(wsId: string, requestId: string) {
+    const res = await this.fetch(
       `/workspaces/${wsId}/actor-access-requests/${requestId}/approve`,
       {
         method: "POST",
         body: "{}",
       }
     )
+    return res.data
   }
-  rejectActorAccessRequest(wsId: string, requestId: string) {
-    return this.fetch(
+  async rejectActorAccessRequest(wsId: string, requestId: string) {
+    const res = await this.fetch(
       `/workspaces/${wsId}/actor-access-requests/${requestId}/reject`,
       {
         method: "POST",
         body: "{}",
       }
     )
+    return res.data
   }
-  approveRemoteAgentAccessRequest(wsId: string, requestId: string) {
-    return this.fetch(
+  async approveRemoteAgentAccessRequest(wsId: string, requestId: string) {
+    const res = await this.fetch(
       `/workspaces/${wsId}/remote-agent-access-requests/${requestId}/approve`,
       {
         method: "POST",
         body: "{}",
       }
     )
+    return res.data
   }
-  rejectRemoteAgentAccessRequest(wsId: string, requestId: string) {
-    return this.fetch(
+  async rejectRemoteAgentAccessRequest(wsId: string, requestId: string) {
+    const res = await this.fetch(
       `/workspaces/${wsId}/remote-agent-access-requests/${requestId}/reject`,
       {
         method: "POST",
         body: "{}",
       }
     )
+    return res.data
   }
-  openDirectConversation(
+  async openDirectConversation(
     wsId: string,
     input: {
       contactKind: ContactHubEntryKind
       contactId: string
     }
   ): Promise<DirectConversationOpenResponse> {
-    return this.fetch(`/workspaces/${wsId}/chat/direct-conversations/open`, {
-      method: "POST",
-      body: JSON.stringify(input),
-    })
+    const res = await this.fetch(
+      `/workspaces/${wsId}/chat/direct-conversations/open`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      }
+    )
+    return res.data
   }
 
-  getRemoteAgents(wsId: string): Promise<{ remoteAgents: RemoteAgentView[] }> {
-    return this.fetch(`/workspaces/${wsId}/remote-agents`)
+  async getRemoteAgents(
+    wsId: string
+  ): Promise<RemoteAgentListResponseSchemaType> {
+    const res = await this.fetch(`/workspaces/${wsId}/remote-agents`)
+    return res.data
   }
-  getRemoteAgent(
+  async getRemoteAgent(
     wsId: string,
     remoteAgentId: string
-  ): Promise<{ remoteAgent: RemoteAgentView }> {
-    return this.fetch(`/workspaces/${wsId}/remote-agents/${remoteAgentId}`)
+  ): Promise<RemoteAgentResponseSchemaType> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/remote-agents/${remoteAgentId}`
+    )
+    return res.data
   }
   async createRemoteAgent(
     wsId: string,
-    input: {
-      displayName: string
-      title: string
-      description?: string
-      runtimeKind: RemoteAgentRuntimeKind
-      avatarFileId?: string
-      avatarEmoji?: string
-      isPublicShared?: boolean
-      metadata?: Record<string, unknown>
-      grants?: Array<{
-        target: CapabilityAccessTarget
-        permissions: string[]
-        conversationTypeMaskOverride?: number | null
-        reason?: string
-      }>
+    input: WorkspaceAppCreateRemoteAgentInput
+  ): Promise<RemoteAgentResponseSchemaType> {
+    const { grants, ...rest } = input
+    const body: CreateWorkspaceAppInput = {
+      kind: WORKSPACE_APP_KIND.REMOTE_AGENT,
+      ...rest,
+      grants: parseWorkspaceAppGrantEntries(grants),
     }
-  ): Promise<{ remoteAgent: RemoteAgentView }> {
     const created = await this.fetch(`/workspaces/${wsId}/workspace-apps`, {
       method: "POST",
-      body: JSON.stringify({
-        kind: WORKSPACE_APP_KIND.REMOTE_AGENT,
-        ...input,
-      }),
+      body: JSON.stringify(body),
     })
     return {
-      remoteAgent: await this.getRemoteAgent(wsId, created.app.id).then(
+      remoteAgent: await this.getRemoteAgent(wsId, created.data.app.id).then(
         (res) => res.remoteAgent
       ),
     }
@@ -1357,23 +1715,15 @@ class ApiClient {
   async updateRemoteAgent(
     wsId: string,
     remoteAgentId: string,
-    input: {
-      displayName?: string
-      title?: string
-      description?: string | null
-      avatarFileId?: string | null
-      avatarEmoji?: string | null
-      isPublicShared?: boolean
-      isActive?: boolean
-      metadata?: Record<string, unknown>
+    input: WorkspaceAppUpdateRemoteAgentInput
+  ): Promise<RemoteAgentResponseSchemaType> {
+    const body: UpdateWorkspaceAppInput = {
+      kind: WORKSPACE_APP_KIND.REMOTE_AGENT,
+      ...input,
     }
-  ): Promise<{ remoteAgent: RemoteAgentView }> {
     await this.fetch(`/workspaces/${wsId}/workspace-apps/${remoteAgentId}`, {
       method: "PUT",
-      body: JSON.stringify({
-        kind: WORKSPACE_APP_KIND.REMOTE_AGENT,
-        ...input,
-      }),
+      body: JSON.stringify(body),
     })
     return {
       remoteAgent: await this.getRemoteAgent(wsId, remoteAgentId).then(
@@ -1381,98 +1731,102 @@ class ApiClient {
       ),
     }
   }
-  deleteRemoteAgent(
+  async deleteRemoteAgent(
     wsId: string,
     remoteAgentId: string
-  ): Promise<{ deleted: boolean }> {
-    return this.fetch(`/workspaces/${wsId}/workspace-apps/${remoteAgentId}`, {
-      method: "DELETE",
-    })
+  ): Promise<WorkspaceAppSuccessViewSchemaType> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/workspace-apps/${remoteAgentId}`,
+      {
+        method: "DELETE",
+      }
+    )
+    return res.data
   }
-  bindRemoteAgent(
+  async bindRemoteAgent(
     wsId: string,
     remoteAgentId: string,
-    input: {
-      machineId: string
-      runtimeKind: RemoteAgentRuntimeKind
-      runtimePath?: string
-      localRootPath?: string
-    }
-  ): Promise<{ remoteAgent: RemoteAgentView }> {
-    return this.fetch(
+    input: BindRemoteAgentInput
+  ): Promise<RemoteAgentResponseSchemaType> {
+    const res = await this.fetch(
       `/workspaces/${wsId}/remote-agents/${remoteAgentId}/bind`,
       {
         method: "POST",
         body: JSON.stringify(input),
       }
     )
+    return res.data
   }
-  createRemoteAgentMachinePairingSession(
+  async createRemoteAgentMachinePairingSession(
     wsId: string,
-    input: {
-      title?: string
-      description?: string
-    }
+    input: CreateRemoteAgentMachineInput
   ): Promise<RemoteAgentMachinePairingSessionView> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/remote-agent-machines/pairing-sessions`,
       {
         method: "POST",
         body: JSON.stringify(input),
       }
     )
+    return res.data
   }
-  getRemoteAgentMachines(
+  async getRemoteAgentMachines(
     wsId: string
-  ): Promise<{ machines: RemoteAgentMachineView[] }> {
-    return this.fetch(`/workspaces/${wsId}/remote-agent-machines`)
+  ): Promise<RemoteAgentMachineListResponseSchemaType> {
+    const res = await this.fetch(`/workspaces/${wsId}/remote-agent-machines`)
+    return res.data
   }
-  getRemoteAgentMachine(
+  async getRemoteAgentMachine(
     wsId: string,
     machineId: string
   ): Promise<RemoteAgentMachineDetailView> {
-    return this.fetch(`/workspaces/${wsId}/remote-agent-machines/${machineId}`)
+    const res = await this.fetch(
+      `/workspaces/${wsId}/remote-agent-machines/${machineId}`
+    )
+    return res.data
   }
-  getRemoteAgentGroupTaskGrants(
+  async getRemoteAgentGroupTaskGrants(
     wsId: string,
     remoteAgentId: string
-  ): Promise<{ grants: RemoteAgentGroupTaskGrantView[] }> {
-    return this.fetch(
+  ): Promise<RemoteAgentGroupTaskGrantsResponseSchemaType> {
+    const res = await this.fetch(
       `/workspaces/${wsId}/remote-agents/${remoteAgentId}/group-task-grants`
     )
+    return res.data
   }
-  updateRemoteAgentGroupTaskGrants(
+  async updateRemoteAgentGroupTaskGrants(
     wsId: string,
     remoteAgentId: string,
-    input: {
-      workspaceMemberIds: string[]
-    }
-  ): Promise<{ grants: RemoteAgentGroupTaskGrantView[] }> {
-    return this.fetch(
+    input: UpdateRemoteAgentGroupTaskGrantsInput
+  ): Promise<RemoteAgentGroupTaskGrantsResponseSchemaType> {
+    const res = await this.fetch(
       `/workspaces/${wsId}/remote-agents/${remoteAgentId}/group-task-grants`,
       {
         method: "PUT",
         body: JSON.stringify(input),
       }
     )
+    return res.data
   }
 
   // Actor lanes
-  retryConversationMessage(
+  async retryConversationMessage(
     workspaceId: string,
     threadId: string,
     itemId: string
   ) {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${workspaceId}/chat/conversations/${threadId}/messages/${itemId}/retry`,
       {
         method: "POST",
       }
     )
+    return res.data
   }
 
-  getChatBootstrap(workspaceId: string): Promise<ChatBootstrapResponse> {
-    return this.fetch(`/workspaces/${workspaceId}/chat/bootstrap`)
+  async getChatBootstrap(workspaceId: string): Promise<ChatBootstrapResponse> {
+    const res = await this.fetch(`/workspaces/${workspaceId}/chat/bootstrap`)
+    return res.data
   }
 
   async loadConversationCatalog(
@@ -1482,7 +1836,7 @@ class ApiClient {
     return bootstrap.conversations.map(normalizeConversationCatalogEntry)
   }
 
-  getChatSync(
+  async getChatSync(
     workspaceId: string,
     input?: { cursor?: number; limit?: number }
   ): Promise<ChatSyncResponse> {
@@ -1495,31 +1849,36 @@ class ApiClient {
     }
     const query = params.toString()
 
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${workspaceId}/chat/sync${query ? `?${query}` : ""}`
     )
+    return res.data
   }
 
-  createChatClientInstance(
+  async createChatClientInstance(
     workspaceId: string,
     input?: ChatClientInstanceCreateInput
   ): Promise<ChatClientInstanceRegistrationResponse> {
-    return this.fetch(`/workspaces/${workspaceId}/chat/client-instances`, {
-      method: "POST",
-      body: JSON.stringify({
-        platform: input?.platform,
-        deviceLabel: input?.deviceLabel,
-        metadata: input?.metadata,
-      }),
-    })
+    const res = await this.fetch(
+      `/workspaces/${workspaceId}/chat/client-instances`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          platform: input?.platform,
+          deviceLabel: input?.deviceLabel,
+          metadata: input?.metadata,
+        }),
+      }
+    )
+    return res.data
   }
 
-  touchChatClientInstance(
+  async touchChatClientInstance(
     workspaceId: string,
     clientInstanceId: string,
     input?: ChatClientInstanceTouchInput
   ): Promise<ChatClientInstanceRegistrationResponse> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${workspaceId}/chat/client-instances/${clientInstanceId}`,
       {
         method: "PUT",
@@ -1530,27 +1889,32 @@ class ApiClient {
         }),
       }
     )
+    return res.data
   }
 
-  createChatConversation(
+  async createChatConversation(
     workspaceId: string,
     input: ChatConversationCreateInput
   ): Promise<ChatConversationCreateResponse> {
-    return this.fetch(`/workspaces/${workspaceId}/chat/conversations`, {
-      method: "POST",
-      body: JSON.stringify({
-        clientRequestId: input.clientRequestId,
-        kind: input.kind,
-        title: input.title,
-        workspaceMemberIds: input.workspaceMemberIds ?? [],
-        actorIds: input.actorIds ?? [],
-        remoteAgentIds: input.remoteAgentIds ?? [],
-        metadata: input.metadata,
-      }),
-    })
+    const res = await this.fetch(
+      `/workspaces/${workspaceId}/chat/conversations`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          clientRequestId: input.clientRequestId,
+          kind: input.kind,
+          title: input.title,
+          workspaceMemberIds: input.workspaceMemberIds ?? [],
+          actorIds: input.actorIds ?? [],
+          remoteAgentIds: input.remoteAgentIds ?? [],
+          metadata: input.metadata,
+        }),
+      }
+    )
+    return res.data
   }
 
-  getChatConversationMessages(
+  async getChatConversationMessages(
     workspaceId: string,
     conversationId: string,
     input: ChatConversationMessagesQuery
@@ -1568,28 +1932,30 @@ class ApiClient {
     params.set("clientInstanceId", input.clientInstanceId)
     const query = params.toString()
 
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${workspaceId}/chat/conversations/${conversationId}/messages${query ? `?${query}` : ""}`
     )
+    return res.data
   }
 
-  getChatConversationRuntimeTurnDetail(
+  async getChatConversationRuntimeTurnDetail(
     workspaceId: string,
     conversationId: string,
     actorId: string,
     turnId: string
   ): Promise<ActorRuntimeTurnActivityDetail> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${workspaceId}/chat/conversations/${conversationId}/actors/${actorId}/runtime-turns/${turnId}`
     )
+    return res.data
   }
 
-  sendChatConversationMessage(
+  async sendChatConversationMessage(
     workspaceId: string,
     conversationId: string,
     input: ChatConversationSendMessageInput
   ): Promise<ChatConversationSendMessageResponse> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${workspaceId}/chat/conversations/${conversationId}/messages`,
       {
         method: "POST",
@@ -1602,14 +1968,15 @@ class ApiClient {
         }),
       }
     )
+    return res.data
   }
 
-  updateChatConversationReadWatermark(
+  async updateChatConversationReadWatermark(
     workspaceId: string,
     conversationId: string,
     input: ChatConversationReadWatermarkInput
   ): Promise<ChatConversationReadWatermarkResponse> {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${workspaceId}/chat/conversations/${conversationId}/read-watermark`,
       {
         method: "POST",
@@ -1620,20 +1987,22 @@ class ApiClient {
         }),
       }
     )
+    return res.data
   }
 
-  sendChatTypingState(
+  async sendChatTypingState(
     workspaceId: string,
     conversationId: string,
     state: "started" | "stopped"
   ) {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${workspaceId}/chat/conversations/${conversationId}/typing`,
       { method: "POST", body: JSON.stringify({ state }) }
     )
+    return res.data
   }
 
-  registerChatPushToken(
+  async registerChatPushToken(
     workspaceId: string,
     input: {
       platform: "ios" | "android" | "web"
@@ -1642,21 +2011,27 @@ class ApiClient {
       metadata?: Record<string, unknown>
     }
   ) {
-    return this.fetch(`/workspaces/${workspaceId}/chat/push-tokens`, {
-      method: "POST",
-      body: JSON.stringify(input),
-    })
+    const res = await this.fetch(
+      `/workspaces/${workspaceId}/chat/push-tokens`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      }
+    )
+    return res.data
   }
 
-  listChatPushTokens(workspaceId: string) {
-    return this.fetch(`/workspaces/${workspaceId}/chat/push-tokens`)
+  async listChatPushTokens(workspaceId: string) {
+    const res = await this.fetch(`/workspaces/${workspaceId}/chat/push-tokens`)
+    return res.data
   }
 
-  deleteChatPushToken(workspaceId: string, tokenId: string) {
-    return this.fetch(
+  async deleteChatPushToken(workspaceId: string, tokenId: string) {
+    const res = await this.fetch(
       `/workspaces/${workspaceId}/chat/push-tokens/${tokenId}`,
       { method: "DELETE" }
     )
+    return res.data
   }
 
   resolveChatTask(
@@ -1671,133 +2046,160 @@ class ApiClient {
         method: "POST",
         body: JSON.stringify(data),
       }
-    ).catch((error) => {
-      if (
-        error instanceof ApiError &&
-        error.status === 409 &&
-        isChatTaskResolveConflictResponse(error.details)
-      ) {
-        return error.details
-      }
-      throw error
-    })
+    )
+      .then((res) => res.data)
+      .catch((error) => {
+        if (
+          error instanceof ApiError &&
+          error.status === 409 &&
+          isChatTaskResolveConflictResponse(error.details)
+        ) {
+          return error.details
+        }
+        throw error
+      })
   }
-  getTransportConnectors(
+  async getTransportConnectors(
     wsId: string
-  ): Promise<{ connectors: TransportConnectorCapability[] }> {
-    return this.fetch(`/workspaces/${wsId}/im/connectors`)
+  ): Promise<TransportConnectorsResponseSchemaType> {
+    const res = await this.fetch(`/workspaces/${wsId}/im/connectors`)
+    return res.data
   }
-  getTransportAccounts(
+  async getTransportAccounts(
     wsId: string
-  ): Promise<{ accounts: TransportAccountSummary[] }> {
-    return this.fetch(`/workspaces/${wsId}/im/accounts`)
+  ): Promise<TransportAccountsResponseSchemaType> {
+    const res = await this.fetch(`/workspaces/${wsId}/im/accounts`)
+    return res.data
   }
-  getTransportSessions(
+  async getTransportSessions(
     wsId: string
-  ): Promise<{ sessions: TransportSessionSummary[] }> {
-    return this.fetch(`/workspaces/${wsId}/im/sessions`)
+  ): Promise<TransportSessionsResponseSchemaType> {
+    const res = await this.fetch(`/workspaces/${wsId}/im/sessions`)
+    return res.data
   }
-  getTransportExternalUsers(
+  async getTransportExternalUsers(
     wsId: string,
-    transportAccountId?: string
-  ): Promise<{ externalUsers: TransportExternalUserSummary[] }> {
+    transportAccountId?: TransportExternalUsersListQuery["transportAccountId"]
+  ): Promise<TransportExternalUsersResponseSchemaType> {
     const params = new URLSearchParams()
     if (transportAccountId) params.set("transportAccountId", transportAccountId)
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/im/external-users${params.size ? `?${params.toString()}` : ""}`
     )
+    return res.data
   }
-  createFeishuTransportAccount(
+  async createFeishuTransportAccount(
     wsId: string,
-    data: Record<string, unknown>
-  ): Promise<{ account: TransportAccountSummary }> {
-    return this.fetch(`/workspaces/${wsId}/im/accounts/feishu`, {
+    data: TransportFeishuAccountCreateInput
+  ): Promise<TransportAccountResponseSchemaType> {
+    const res = await this.fetch(`/workspaces/${wsId}/im/accounts/feishu`, {
       method: "POST",
       body: JSON.stringify(data),
     })
+    return res.data
   }
-  updateFeishuTransportAccount(
+  async updateFeishuTransportAccount(
     wsId: string,
     accountId: string,
-    data: Record<string, unknown>
-  ): Promise<{ account: TransportAccountSummary }> {
-    return this.fetch(`/workspaces/${wsId}/im/accounts/feishu/${accountId}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    })
+    data: TransportFeishuAccountUpdateInput
+  ): Promise<TransportAccountResponseSchemaType> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/accounts/feishu/${accountId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    )
+    return res.data
   }
-  createWecomTransportAccount(
+  async createWecomTransportAccount(
     wsId: string,
-    data: Record<string, unknown>
-  ): Promise<{ account: TransportAccountSummary }> {
-    return this.fetch(`/workspaces/${wsId}/im/accounts/wecom`, {
+    data: TransportWecomAccountCreateInput
+  ): Promise<TransportAccountResponseSchemaType> {
+    const res = await this.fetch(`/workspaces/${wsId}/im/accounts/wecom`, {
       method: "POST",
       body: JSON.stringify(data),
     })
+    return res.data
   }
-  updateWecomTransportAccount(
+  async updateWecomTransportAccount(
     wsId: string,
     accountId: string,
-    data: Record<string, unknown>
-  ): Promise<{ account: TransportAccountSummary }> {
-    return this.fetch(`/workspaces/${wsId}/im/accounts/wecom/${accountId}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    })
+    data: TransportWecomAccountUpdateInput
+  ): Promise<TransportAccountResponseSchemaType> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/accounts/wecom/${accountId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    )
+    return res.data
   }
-  createQqTransportAccount(
+  async createQqTransportAccount(
     wsId: string,
-    data: Record<string, unknown>
-  ): Promise<{ account: TransportAccountSummary }> {
-    return this.fetch(`/workspaces/${wsId}/im/accounts/qq`, {
+    data: TransportQqAccountCreateInput
+  ): Promise<TransportAccountResponseSchemaType> {
+    const res = await this.fetch(`/workspaces/${wsId}/im/accounts/qq`, {
       method: "POST",
       body: JSON.stringify(data),
     })
+    return res.data
   }
-  updateQqTransportAccount(
+  async updateQqTransportAccount(
     wsId: string,
     accountId: string,
-    data: Record<string, unknown>
-  ): Promise<{ account: TransportAccountSummary }> {
-    return this.fetch(`/workspaces/${wsId}/im/accounts/qq/${accountId}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    })
+    data: TransportQqAccountUpdateInput
+  ): Promise<TransportAccountResponseSchemaType> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/accounts/qq/${accountId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    )
+    return res.data
   }
-  startWeixinQrTransportSession(
+  async startWeixinQrTransportSession(
     wsId: string,
-    data: Record<string, unknown>
-  ): Promise<{ session: WeixinQrLoginSessionSummary }> {
-    return this.fetch(`/workspaces/${wsId}/im/accounts/weixin/qr`, {
+    data: WeixinQrSessionCreateInput
+  ): Promise<WeixinQrSessionResponseSchemaType> {
+    const res = await this.fetch(`/workspaces/${wsId}/im/accounts/weixin/qr`, {
       method: "POST",
       body: JSON.stringify(data),
     })
+    return res.data
   }
-  getWeixinQrTransportSession(
+  async getWeixinQrTransportSession(
     wsId: string,
     sessionId: string
-  ): Promise<{ session: WeixinQrLoginSessionSummary }> {
-    return this.fetch(`/workspaces/${wsId}/im/accounts/weixin/qr/${sessionId}`)
+  ): Promise<WeixinQrSessionResponseSchemaType> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/accounts/weixin/qr/${sessionId}`
+    )
+    return res.data
   }
-  startDingtalkDeviceFlow(
+  async startDingtalkDeviceFlow(
     wsId: string,
-    data: Record<string, unknown>
-  ): Promise<DingtalkDeviceFlowStartResponse> {
-    return this.fetch(
+    data: DingtalkDeviceFlowStartInput
+  ): Promise<DingtalkDeviceFlowStartResponseSchemaType> {
+    const res = await this.fetch(
       `/workspaces/${wsId}/im/accounts/dingtalk/device-registration/start`,
       {
         method: "POST",
         body: JSON.stringify(data),
       }
     )
+    return res.data
   }
-  pollDingtalkDeviceFlow(
+  async pollDingtalkDeviceFlow(
     wsId: string,
     sessionId: string
-  ): Promise<DingtalkDeviceFlowPollResponse> {
-    return this.fetch(
+  ): Promise<DingtalkDeviceFlowPollResponseSchemaType> {
+    const res = await this.fetch(
       `/workspaces/${wsId}/im/accounts/dingtalk/device-registration/${sessionId}`
     )
+    return res.data
   }
   cancelDingtalkDeviceFlow(wsId: string, sessionId: string): Promise<void> {
     return this.fetch(
@@ -1805,249 +2207,311 @@ class ApiClient {
       { method: "DELETE" }
     )
   }
-  createDingtalkAccountManual(
+  async createDingtalkAccountManual(
     wsId: string,
-    data: Record<string, unknown>
-  ): Promise<{ account: TransportAccountSummary }> {
-    return this.fetch(`/workspaces/${wsId}/im/accounts/dingtalk/manual`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    })
+    data: DingtalkManualAccountCreateInput
+  ): Promise<TransportAccountResponseSchemaType> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/accounts/dingtalk/manual`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      }
+    )
+    return res.data
   }
-  getCurrentUserWeixinBinding(
+  async getCurrentUserWeixinBinding(
     wsId: string
-  ): Promise<{ binding: CurrentUserWeixinBindingSummary | null }> {
-    return this.fetch(`/workspaces/${wsId}/im/me/weixin-binding`)
+  ): Promise<WeixinBindingResponseSchemaType> {
+    const res = await this.fetch(`/workspaces/${wsId}/im/me/weixin-binding`)
+    return res.data
   }
-  getCurrentUserWeixinBindingCandidates(
+  async getCurrentUserWeixinBindingCandidates(
     wsId: string
-  ): Promise<{ data: Array<Record<string, unknown>> }> {
-    return this.fetch(`/workspaces/${wsId}/im/me/weixin-binding/candidates`)
+  ): Promise<WeixinBindingCandidatesResponseSchemaType> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/me/weixin-binding/candidates`
+    )
+    return res.data
   }
-  startCurrentUserWeixinBindingQr(
+  async startCurrentUserWeixinBindingQr(
     wsId: string
-  ): Promise<{ session: WeixinQrLoginSessionSummary }> {
-    return this.fetch(`/workspaces/${wsId}/im/me/weixin-binding/qr`, {
-      method: "POST",
-      body: "{}",
-    })
+  ): Promise<WeixinQrSessionResponseSchemaType> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/me/weixin-binding/qr`,
+      {
+        method: "POST",
+        body: "{}",
+      }
+    )
+    return res.data
   }
-  getCurrentUserWeixinBindingQr(
+  async getCurrentUserWeixinBindingQr(
     wsId: string,
     sessionId: string
-  ): Promise<{ session: WeixinQrLoginSessionSummary }> {
-    return this.fetch(
+  ): Promise<WeixinQrSessionResponseSchemaType> {
+    const res = await this.fetch(
       `/workspaces/${wsId}/im/me/weixin-binding/qr/${sessionId}`
     )
+    return res.data
   }
-  linkCurrentUserWeixinBinding(
+  async linkCurrentUserWeixinBinding(
     wsId: string
-  ): Promise<{ binding: CurrentUserWeixinBindingSummary }> {
-    return this.fetch(`/workspaces/${wsId}/im/me/weixin-binding/link`, {
-      method: "POST",
-      body: "{}",
-    })
+  ): Promise<WeixinBindingResponseSchemaType> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/me/weixin-binding/link`,
+      {
+        method: "POST",
+        body: "{}",
+      }
+    )
+    return res.data
   }
-  setCurrentUserWeixinBindingAutoLink(
+  async setCurrentUserWeixinBindingAutoLink(
     wsId: string,
-    workspaceMemberId: string | null
-  ): Promise<{ binding: CurrentUserWeixinBindingSummary }> {
-    return this.fetch(`/workspaces/${wsId}/im/me/weixin-binding/auto-link`, {
-      method: "PUT",
-      body: JSON.stringify({ workspaceMemberId }),
-    })
+    workspaceMemberId: WeixinBindingAutoLinkInput["workspaceMemberId"]
+  ): Promise<WeixinBindingResponseSchemaType> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/me/weixin-binding/auto-link`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ workspaceMemberId }),
+      }
+    )
+    return res.data
   }
-  createTransportAccount(
+  async createTransportAccount(
     wsId: string,
-    data: Record<string, unknown>
-  ): Promise<{ account: TransportAccountSummary }> {
-    return this.fetch(`/workspaces/${wsId}/im/accounts`, {
+    data: TransportAccountCreateInput
+  ): Promise<TransportAccountResponseSchemaType> {
+    const res = await this.fetch(`/workspaces/${wsId}/im/accounts`, {
       method: "POST",
       body: JSON.stringify(data),
     })
+    return res.data
   }
-  updateTransportAccount(
+  async updateTransportAccount(
     wsId: string,
     accountId: string,
-    data: Record<string, unknown>
-  ): Promise<{ account: TransportAccountSummary }> {
-    return this.fetch(`/workspaces/${wsId}/im/accounts/${accountId}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    })
+    data: TransportAccountUpdateInput
+  ): Promise<TransportAccountResponseSchemaType> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/accounts/${accountId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    )
+    return res.data
   }
-  updateTransportSessionSettings(
+  async updateTransportSessionSettings(
     wsId: string,
     sessionId: string,
-    data: Record<string, unknown>
-  ): Promise<{ session: TransportSessionSummary | null }> {
-    return this.fetch(`/workspaces/${wsId}/im/sessions/${sessionId}/settings`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    })
+    data: TransportSessionSettingsInput
+  ): Promise<TransportSessionResponseSchemaType> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/sessions/${sessionId}/settings`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    )
+    return res.data
   }
-  setTransportExternalUserWorkspaceMember(
+  async setTransportExternalUserWorkspaceMember(
     wsId: string,
     addressId: string,
-    workspaceMemberId: string | null
-  ): Promise<{ externalUser: TransportExternalUserSummary }> {
-    return this.fetch(
+    workspaceMemberId: TransportExternalUserLinkedMemberInput["workspaceMemberId"]
+  ): Promise<TransportExternalUserResponseSchemaType> {
+    const res = await this.fetch(
       `/workspaces/${wsId}/im/external-users/${addressId}/workspace-member`,
       {
         method: "PUT",
         body: JSON.stringify({ workspaceMemberId }),
       }
     )
+    return res.data
   }
   // MCP Marketplace
-  getMarketplace(params?: string) {
-    return this.fetch(`/mcp/marketplace${params ? "?" + params : ""}`)
+  async getMarketplace(
+    query?: McpMarketplaceListQuery
+  ): Promise<MarketplacePluginListView> {
+    const res = await this.fetch(withQuery("/mcp/marketplace", query))
+    return res.data
   }
-  getMarketplacePlugin(pluginId: string) {
-    return this.fetch(`/mcp/marketplace/${pluginId}`)
+  async getMarketplacePlugin(pluginId: string): Promise<MarketplacePluginView> {
+    const res = await this.fetch(`/mcp/marketplace/${pluginId}`)
+    return res.data
   }
-  getPluginCategories() {
-    return this.fetch("/mcp/categories")
+  async getPluginCategories(): Promise<PluginCategoryListView> {
+    const res = await this.fetch("/mcp/categories")
+    return res.data
   }
-  getMcpOrganizations() {
-    return this.fetch("/mcp/organizations")
+  async getMcpOrganizations(): Promise<MarketplacePublisherListView> {
+    const res = await this.fetch("/mcp/organizations")
+    return res.data
   }
-  getMcpOrganization(orgId: string) {
-    return this.fetch(`/mcp/organizations/${orgId}`)
+  async getMcpOrganization(
+    orgId: string
+  ): Promise<MarketplacePublisherDetailView> {
+    const res = await this.fetch(`/mcp/organizations/${orgId}`)
+    return res.data
   }
 
   // MCP Unified Installations
-  getInstallations(wsId: string, params?: string) {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/installations${params ? "?" + params : ""}`
+  async getInstallations(
+    wsId: string,
+    query?: McpPluginInstallationListQuery
+  ): Promise<PluginInstallationListView> {
+    const res = await this.fetch(
+      withQuery(`/workspaces/${wsId}/mcp/installations`, query)
     )
+    return res.data
   }
-  getInstallation(wsId: string, installId: string) {
-    return this.fetch(`/workspaces/${wsId}/mcp/installations/${installId}`)
+  async getInstallation(
+    wsId: string,
+    installId: string
+  ): Promise<PluginInstallationDetailView> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/mcp/installations/${installId}`
+    )
+    return res.data
   }
   async installPlugin(
     wsId: string,
-    data: {
-      pluginId: string
-      lifecycleScope?:
-        | "turn"
-        | "session"
-        | "workspace"
-        | "conversation"
-        | "actor"
-      configData?: Record<string, unknown>
-      authSessionIds?: Record<string, string>
-      grants?: Array<{
-        target: CapabilityAccessTarget
-        permissions: string[]
-        conversationTypeMaskOverride?: number | null
-        reason?: string
-      }>
+    data: WorkspaceAppCreatePluginInstallationInput
+  ): Promise<PluginInstallationDetailView> {
+    const { grants, ...rest } = data
+    const body: CreateWorkspaceAppInput = {
+      kind: WORKSPACE_APP_KIND.PLUGIN_INSTALLATION,
+      ...rest,
+      grants: parseWorkspaceAppGrantEntries(grants),
     }
-  ) {
     const created = await this.fetch(`/workspaces/${wsId}/workspace-apps`, {
       method: "POST",
-      body: JSON.stringify({
-        kind: WORKSPACE_APP_KIND.PLUGIN_INSTALLATION,
-        ...data,
-      }),
+      body: JSON.stringify(body),
     })
-    return this.getInstallation(wsId, created.app.id)
+    return this.getInstallation(wsId, created.data.app.id)
   }
-  async updateInstallation(wsId: string, installId: string, data: any) {
+  async updateInstallation(
+    wsId: string,
+    installId: string,
+    data: WorkspaceAppUpdatePluginInstallationInput
+  ): Promise<PluginInstallationDetailView> {
+    const body: UpdateWorkspaceAppInput = {
+      kind: WORKSPACE_APP_KIND.PLUGIN_INSTALLATION,
+      ...data,
+    }
     await this.fetch(`/workspaces/${wsId}/workspace-apps/${installId}`, {
       method: "PUT",
-      body: JSON.stringify({
-        kind: WORKSPACE_APP_KIND.PLUGIN_INSTALLATION,
-        ...data,
-      }),
+      body: JSON.stringify(body),
     })
     return this.getInstallation(wsId, installId)
   }
-  uninstallPlugin(wsId: string, installId: string) {
-    return this.fetch(`/workspaces/${wsId}/workspace-apps/${installId}`, {
-      method: "DELETE",
-    })
+  async uninstallPlugin(
+    wsId: string,
+    installId: string
+  ): Promise<WorkspaceAppSuccessViewSchemaType> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/workspace-apps/${installId}`,
+      {
+        method: "DELETE",
+      }
+    )
+    return res.data
   }
-  startPluginAuth(
+  async startPluginAuth(
     wsId: string,
     pluginId: string,
     bindingKey: string,
-    data?: {
-      installationId?: string
-      draftConfig?: Record<string, unknown>
-      metadata?: Record<string, unknown>
-    }
+    data?: StartPluginAuthInput
   ) {
-    return this.fetch(
+    const res = await this.fetch(
       `/workspaces/${wsId}/mcp/plugins/${pluginId}/auth/${bindingKey}/start`,
       { method: "POST", body: JSON.stringify(data || {}) }
     )
+    return res.data
   }
-  getPluginAuthSession(wsId: string, sessionId: string) {
-    return this.fetch(`/workspaces/${wsId}/mcp/auth/sessions/${sessionId}`)
+  async getPluginAuthSession(wsId: string, sessionId: string) {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/mcp/auth/sessions/${sessionId}`
+    )
+    return res.data
   }
-  inspectPluginAuthSession(wsId: string, sessionId: string) {
-    return this.fetch(
+  async inspectPluginAuthSession(wsId: string, sessionId: string) {
+    const res = await this.fetch(
       `/workspaces/${wsId}/mcp/auth/sessions/${sessionId}/inspect`,
       {
         method: "POST",
         body: "{}",
       }
     )
+    return res.data
   }
 
   // MCP Audit
-  getMcpToolCallLogs(wsId: string, params?: string) {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/audit/tool-calls${params ? "?" + params : ""}`
+  async getMcpToolCallLogs(
+    wsId: string,
+    query?: McpPluginToolCallAuditLogListQuery
+  ): Promise<PluginAuditLogList> {
+    const res = await this.fetch(
+      withQuery(`/workspaces/${wsId}/mcp/audit/tool-calls`, query)
     )
+    return res.data
   }
-  getMcpEventLogs(wsId: string, params?: string) {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/audit/events${params ? "?" + params : ""}`
+  async getMcpEventLogs(
+    wsId: string,
+    query?: McpPluginEventAuditLogListQuery
+  ): Promise<PluginAuditLogList> {
+    const res = await this.fetch(
+      withQuery(`/workspaces/${wsId}/mcp/audit/events`, query)
     )
+    return res.data
   }
 
   // Devices (v3)
-  listDevices(wsId: string): Promise<{ devices: DeviceSummaryView[] }> {
-    return this.fetch(`/workspaces/${wsId}/devices`)
+  async listDevices(wsId: string): Promise<DeviceListView> {
+    const res = await this.fetch(`/workspaces/${wsId}/devices`)
+    return res.data
   }
-  getDevice(wsId: string, deviceId: string): Promise<DeviceDetailView> {
-    return this.fetch(`/workspaces/${wsId}/devices/${deviceId}`)
+  async getDevice(wsId: string, deviceId: string): Promise<DeviceDetailView> {
+    const res = await this.fetch(`/workspaces/${wsId}/devices/${deviceId}`)
+    return res.data
   }
   deleteDevice(wsId: string, deviceId: string): Promise<void> {
     return this.fetch(`/workspaces/${wsId}/devices/${deviceId}`, {
       method: "DELETE",
     })
   }
-  startDevicePairingSession(
+  async startDevicePairingSession(
     wsId: string,
-    body: {
-      mode: "local_qr" | "cloud_bootstrap" | "service_join"
-      title?: string
-      device_type?: string
-      device_id?: string
-      context?: Record<string, unknown>
-    }
+    body: Omit<StartPairingInput, "workspaceId">
   ): Promise<DevicePairingTicketView> {
-    return this.fetch(`/workspaces/${wsId}/devices/pairing-sessions`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    })
+    const res = await this.fetch(
+      `/workspaces/${wsId}/devices/pairing-sessions`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      }
+    )
+    return res.data
   }
-  claimRemoteAgentDaemon(
+  async claimRemoteAgentDaemon(
     wsId: string,
     deviceId: string,
     remoteAgentMachineId: string
-  ): Promise<DeviceServiceSummaryView> {
-    return this.fetch(`/workspaces/${wsId}/devices/${deviceId}/services`, {
-      method: "POST",
-      body: JSON.stringify({
-        service_kind: "remote_agent_daemon",
-        remote_agent_machine_id: remoteAgentMachineId,
-      }),
-    })
+  ): Promise<DeviceServiceView> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/devices/${deviceId}/services`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          serviceKind: "remote_agent_daemon",
+          remoteAgentMachineId,
+        }),
+      }
+    )
+    return res.data
   }
   detachDeviceService(
     wsId: string,
@@ -2062,157 +2526,163 @@ class ApiClient {
   // v3.1: manual runtime-authorization grant endpoint. The chat card for
   // active-page / page_id / all_pages browser tools renders "Manual grant
   // required" — this is the endpoint that backs the Settings page.
-  createManualRuntimeAuthorizationGrant(
+  async createManualRuntimeAuthorizationGrant(
     wsId: string,
-    body: {
-      device_capability_id: string
-      policy: Record<string, unknown>
-    }
-  ): Promise<{ grant: Record<string, unknown> }> {
-    return this.fetch(`/workspaces/${wsId}/runtime-authorization-grants`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    })
+    body: CreateManualRuntimeAuthorizationGrantInput
+  ): Promise<RuntimeAuthorizationGrantRecordView> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/runtime-authorization-grants`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      }
+    )
+    return res.data
   }
 
   // Automation Event Sources
-  getAutomationEventSources(
+  async getAutomationEventSources(
     wsId: string,
-    filters?: {
-      status?: "active" | "deprecated" | "disabled" | "archived"
-      providerKind?: "device" | "webhook" | "internal" | "integration"
-      providerRef?: string
-      sourceKey?: string
-    }
-  ): Promise<AutomationEventSource[]> {
+    filters?: AutomationEventSourceListQuery
+  ): Promise<AutomationEventSourceListSchemaType> {
     const params = new URLSearchParams()
     if (filters?.status) params.set("status", filters.status)
     if (filters?.providerKind) params.set("providerKind", filters.providerKind)
     if (filters?.providerRef) params.set("providerRef", filters.providerRef)
     if (filters?.sourceKey) params.set("sourceKey", filters.sourceKey)
     const qs = params.toString()
-    return this.fetch(
+    // §5.3 APP route: unwrap the { data } envelope.
+    const res = await this.fetch(
       `/workspaces/${wsId}/automation-event-sources${qs ? `?${qs}` : ""}`
     )
+    return res.data
   }
-  createAutomationEventSource(
+  async createAutomationEventSource(
     wsId: string,
-    data: {
-      providerKind: "device" | "webhook" | "internal" | "integration"
-      providerRef?: string
-      integration?: {
-        installationId: string
-        provider: "github" | "gitlab"
-        ingressKind?: "webhook" | "polling"
-        targetKind: "repository" | "project"
-        targetId: string
-        targetLabel?: string
-      }
-      sourceKey?: string
-      name?: string
-      description?: string
-      recommendedUsage?: string
-      payloadSchema?: Record<string, unknown>
-      examplePayload?: Record<string, unknown>
-      status?: "active" | "deprecated" | "disabled" | "archived"
-      metadata?: Record<string, unknown>
-    }
+    data: AutomationEventSourceCreateInput
   ): Promise<AutomationEventSource> {
-    return this.fetch(`/workspaces/${wsId}/automation-event-sources`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    })
+    // §5.3 APP route: unwrap the { data } envelope.
+    const res = await this.fetch(
+      `/workspaces/${wsId}/automation-event-sources`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      }
+    )
+    return res.data
   }
-  updateAutomationEventSource(
+  async updateAutomationEventSource(
     wsId: string,
     eventSourceId: string,
-    data: {
-      providerRef?: string
-      name?: string
-      description?: string
-      recommendedUsage?: string
-      payloadSchema?: Record<string, unknown>
-      examplePayload?: Record<string, unknown>
-      status?: "active" | "deprecated" | "disabled" | "archived"
-      metadata?: Record<string, unknown>
-    }
+    data: AutomationEventSourceUpdateInput
   ): Promise<AutomationEventSource> {
-    return this.fetch(
+    // §5.3 APP route: unwrap the { data } envelope.
+    const res = await this.fetch(
       `/workspaces/${wsId}/automation-event-sources/${eventSourceId}`,
       {
         method: "PUT",
         body: JSON.stringify(data),
       }
     )
+    return res.data
   }
-  archiveAutomationEventSource(wsId: string, eventSourceId: string) {
-    return this.fetch(
+  async archiveAutomationEventSource(
+    wsId: string,
+    eventSourceId: string
+  ): Promise<AutomationSuccessSchemaType> {
+    const res = await this.fetch(
       `/workspaces/${wsId}/automation-event-sources/${eventSourceId}`,
       {
         method: "DELETE",
       }
     )
+    return res.data
   }
-  getAutomationEventSourceOccurrences(
+  async getAutomationEventSourceOccurrences(
     wsId: string,
     eventSourceId: string
-  ): Promise<AutomationOccurrence[]> {
-    return this.fetch(
+  ): Promise<AutomationOccurrenceListSchemaType> {
+    // §5.3 APP route: unwrap the { data } envelope.
+    const res = await this.fetch(
       `/workspaces/${wsId}/automation-event-sources/${eventSourceId}/occurrences`
     )
+    return res.data
   }
 
   // Automation Rules / Triggers
-  getAutomations(
+  async getAutomations(
     wsId: string,
-    filters?: {
-      status?: "active" | "paused" | "error" | "archived"
-      category?: "schedule" | "event_subscription"
-      conversationId?: string
-    }
-  ): Promise<AutomationRule[]> {
+    filters?: AutomationRuleListQuery
+  ): Promise<AutomationRuleListSchemaType> {
     const params = new URLSearchParams()
     if (filters?.status) params.set("status", filters.status)
     if (filters?.category) params.set("category", filters.category)
     if (filters?.conversationId)
       params.set("conversationId", filters.conversationId)
     const qs = params.toString()
-    return this.fetch(`/workspaces/${wsId}/automations${qs ? `?${qs}` : ""}`)
+    // §5.3 APP route: unwrap the { data } envelope.
+    const res = await this.fetch(
+      `/workspaces/${wsId}/automations${qs ? `?${qs}` : ""}`
+    )
+    return res.data
   }
-  getAutomation(wsId: string, automationId: string): Promise<AutomationRule> {
-    return this.fetch(`/workspaces/${wsId}/automations/${automationId}`)
-  }
-  createAutomation(
+  async getAutomation(
     wsId: string,
-    data: AutomationRuleCreatePayload
+    automationId: string
   ): Promise<AutomationRule> {
-    return this.fetch(`/workspaces/${wsId}/automations`, {
+    // §5.3 APP route: unwrap the { data } envelope.
+    const res = await this.fetch(
+      `/workspaces/${wsId}/automations/${automationId}`
+    )
+    return res.data
+  }
+  async createAutomation(
+    wsId: string,
+    data: AutomationRuleCreateInput
+  ): Promise<AutomationRule> {
+    // §5.3 APP route: unwrap the { data } envelope.
+    const res = await this.fetch(`/workspaces/${wsId}/automations`, {
       method: "POST",
       body: JSON.stringify(data),
     })
+    return res.data
   }
-  updateAutomation(
+  async updateAutomation(
     wsId: string,
     automationId: string,
-    data: AutomationRuleUpdatePayload
+    data: AutomationRuleUpdateInput
   ): Promise<AutomationRule> {
-    return this.fetch(`/workspaces/${wsId}/automations/${automationId}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    })
+    // §5.3 APP route: unwrap the { data } envelope.
+    const res = await this.fetch(
+      `/workspaces/${wsId}/automations/${automationId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    )
+    return res.data
   }
-  deleteAutomation(wsId: string, automationId: string) {
-    return this.fetch(`/workspaces/${wsId}/automations/${automationId}`, {
-      method: "DELETE",
-    })
-  }
-  getAutomationExecutions(
+  async deleteAutomation(
     wsId: string,
     automationId: string
-  ): Promise<AutomationExecution[]> {
-    return this.fetch(
+  ): Promise<AutomationSuccessSchemaType> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/automations/${automationId}`,
+      {
+        method: "DELETE",
+      }
+    )
+    return res.data
+  }
+  async getAutomationExecutions(
+    wsId: string,
+    automationId: string
+  ): Promise<AutomationExecutionListSchemaType> {
+    // §5.3 APP route: unwrap the { data } envelope.
+    const res = await this.fetch(
       `/workspaces/${wsId}/automations/${automationId}/executions`
     )
+    return res.data
   }
 
   // File Upload
@@ -2223,18 +2693,16 @@ class ApiClient {
       signal?: AbortSignal
       onProgress?: (progress: number) => void
     }
-  ): Promise<FileRecordView> {
+  ): Promise<StoredFileRecordView> {
     const formData = new FormData()
     formData.append("file", file)
-    formData.append(
-      "origin",
-      JSON.stringify({
-        family: "user_upload",
-        system: FILE_ORIGIN_SYSTEMS.WORKSPACE_WEB_UPLOAD,
-      })
-    )
+    const origin: FileUploadOriginInput = {
+      family: "user_upload",
+      system: FILE_ORIGIN_SYSTEMS.WORKSPACE_WEB_UPLOAD,
+    }
+    formData.append("origin", JSON.stringify(origin))
 
-    return new Promise<FileRecordView>((resolve, reject) => {
+    return new Promise<StoredFileRecordView>((resolve, reject) => {
       const request = new XMLHttpRequest()
       let completed = false
 
@@ -2268,13 +2736,28 @@ class ApiClient {
 
       request.addEventListener("load", () => {
         if (completed) return
-        completed = true
-        cleanup()
 
         if (request.status >= 200 && request.status < 300) {
-          resolve(request.response as FileRecordView)
+          // §5.3 APP route: upload returns the { data } envelope.
+          let file: StoredFileRecordView
+          try {
+            file = parseFileUploadResponseData(request.response)
+          } catch (error) {
+            finalizeReject(
+              error instanceof Error
+                ? error
+                : new Error("Malformed upload response")
+            )
+            return
+          }
+          completed = true
+          cleanup()
+          resolve(file)
           return
         }
+
+        completed = true
+        cleanup()
 
         const response =
           request.response && typeof request.response === "object"
@@ -2302,8 +2785,10 @@ class ApiClient {
       request.send(formData)
     })
   }
-  getFileInfo(fileId: string): Promise<FileRecordView> {
-    return this.fetch(`/files/${fileId}/info`)
+  async getFileInfo(fileId: string): Promise<FileRecordView> {
+    // §5.3 APP route: unwrap the { data } envelope, preserve public shape.
+    const res = await this.fetch(`/files/${fileId}/info`)
+    return res.data
   }
 }
 

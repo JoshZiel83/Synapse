@@ -16,16 +16,20 @@
  */
 
 import { redis } from "../../../../infrastructure/redis/index.js"
+import {
+  DINGTALK_DEVICE_FLOW_STATUSES,
+  TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES,
+  TRANSPORT_ACCOUNT_OWNER_SCOPES,
+} from "@synapse/shared"
 import type {
+  DingtalkDeviceFlowStatus,
   TransportAccountInboundActorMode,
   TransportAccountOwnerScope,
 } from "@synapse/shared/types"
+import { IsoInstantStringSchema } from "@synapse/shared/schemas"
+import { z } from "zod"
 
-export type RegistrationSessionStatus =
-  | "waiting"
-  | "success"
-  | "fail"
-  | "expired"
+export type RegistrationSessionStatus = DingtalkDeviceFlowStatus
 
 /**
  * Form fields supplied to /device-registration/start that need to survive
@@ -81,6 +85,41 @@ const KEY_PREFIX = "im:dingtalk:device-flow:"
 const GRACE_SECONDS = 5 * 60
 const MIN_TTL_SECONDS = 60
 
+const dingtalkRegistrationPendingFormSchema = z
+  .object({
+    displayName: z.string(),
+    ownerScope: z.enum(TRANSPORT_ACCOUNT_OWNER_SCOPES),
+    ownerWorkspaceMemberId: z.string().nullable(),
+    inboundActorMode: z.enum(TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES),
+    inboundActorId: z.string().nullable(),
+  })
+  .strict()
+
+const redisTimestampMsSchema = z.number().int().nonnegative()
+
+const dingtalkRegistrationSessionSchema = z
+  .object({
+    sessionId: z.string().min(1),
+    workspaceId: z.string().min(1),
+    deviceCode: z.string(),
+    userCode: z.string().optional(),
+    verificationUri: z.string().optional(),
+    verificationUriComplete: z.string().min(1),
+    expiresInSeconds: z.number().int().positive(),
+    intervalSeconds: z.number().positive(),
+    expiresAt: redisTimestampMsSchema,
+    createdAt: redisTimestampMsSchema,
+    updatedAt: redisTimestampMsSchema,
+    status: z.enum(DINGTALK_DEVICE_FLOW_STATUSES),
+    message: z.string().optional(),
+    transportAccountId: z.string().optional(),
+    providerFailureCount: z.number().int().nonnegative().optional(),
+    lastProviderError: z.string().optional(),
+    lastProviderErrorAt: IsoInstantStringSchema.optional(),
+    pendingForm: dingtalkRegistrationPendingFormSchema.optional(),
+  })
+  .strict()
+
 function key(workspaceId: string, sessionId: string): string {
   return `${KEY_PREFIX}${workspaceId}:${sessionId}`
 }
@@ -121,17 +160,24 @@ export function withDeviceCodeRedacted(
   return { ...session, deviceCode: "" }
 }
 
+export function parseDingtalkRegistrationSessionPayload(
+  raw: string | null
+): DingtalkRegistrationSession | null {
+  if (!raw) return null
+  try {
+    const parsed = dingtalkRegistrationSessionSchema.safeParse(JSON.parse(raw))
+    return parsed.success ? parsed.data : null
+  } catch {
+    return null
+  }
+}
+
 export async function getDingtalkRegistrationSession(
   workspaceId: string,
   sessionId: string
 ): Promise<DingtalkRegistrationSession | null> {
   const raw = await redis.get(key(workspaceId, sessionId))
-  if (!raw) return null
-  try {
-    return JSON.parse(raw) as DingtalkRegistrationSession
-  } catch {
-    return null
-  }
+  return parseDingtalkRegistrationSessionPayload(raw)
 }
 
 export async function setDingtalkRegistrationSession(

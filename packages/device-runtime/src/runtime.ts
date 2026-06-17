@@ -4,6 +4,8 @@ import { EventEmitter } from "node:events"
 import type {
   DeviceCatalogSyncParams,
   DeviceHelloParams,
+  DeviceTunnelDownParams,
+  DeviceTunnelUpParams,
   TunnelHandle,
 } from "@synapse/device-protocol"
 import { TransportClient } from "./transport.js"
@@ -11,6 +13,7 @@ import {
   createInMemoryMcpHost,
   type InMemoryMcpHostHandle,
 } from "./mcp-host.js"
+import { readPrivateKeyPemFromKeystoreFile } from "./broker.js"
 import { createInMemoryEnvelopeVerifier } from "./envelope.js"
 import { createFilesystemBuiltin } from "./builtins/filesystem.js"
 import type {
@@ -126,24 +129,14 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
           `device-runtime: missing service private key for ref ${runtimeService.privateKeyRef}`
         )
       }
-      // The broker only exposes the public PEM + a ref; we need the private
-      // PEM to sign. Re-read the keystore directly. For Ed25519 the digest
-      // argument MUST be null.
-      const { readFileSync, existsSync } = await import("node:fs")
+      // The broker only exposes the public PEM + a ref; this file-backed
+      // runtime reads the private PEM through the broker's local keystore codec.
       const { join } = await import("node:path")
       const keystorePath = join(broker.brokerFilePath, "..", "device-keys.json")
-      let privateKeyPem: string | null = null
-      if (existsSync(keystorePath)) {
-        try {
-          const ks = JSON.parse(readFileSync(keystorePath, "utf-8")) as Record<
-            string,
-            { privateKey?: string }
-          >
-          privateKeyPem = ks[runtimeService.privateKeyRef]?.privateKey ?? null
-        } catch {
-          /* fall through */
-        }
-      }
+      const privateKeyPem = readPrivateKeyPemFromKeystoreFile(
+        keystorePath,
+        runtimeService.privateKeyRef
+      )
       if (!privateKeyPem) {
         throw new Error(
           `device-runtime: cannot read private PEM for ref ${runtimeService.privateKeyRef}`
@@ -256,9 +249,10 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
         // call returns no_tunnel_endpoint. Throws on failure for the same
         // fail-closed reason as pushCatalog above.
         if (this.tunnelHandle) {
-          await this.transport!.request("device.tunnel.up", {
+          const params: DeviceTunnelUpParams = {
             internal_url: this.tunnelHandle.internalUrl,
-          })
+          }
+          await this.transport!.request("device.tunnel.up", params)
           logger.info("device.tunnel.up registered with server", {
             internalUrl: this.tunnelHandle.internalUrl,
           })
@@ -336,7 +330,8 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
     this.updateStatus("degraded")
     if (!this.transport) return
     try {
-      this.transport.notify("device.tunnel.down", { reason })
+      const params: DeviceTunnelDownParams = { reason }
+      this.transport.notify("device.tunnel.down", params)
     } catch {
       /* best-effort: WSS may already be gone */
     }

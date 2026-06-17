@@ -14,18 +14,21 @@ import {
   CONVERSATION_ITEM_SURFACE,
   CONVERSATION_ITEM_TYPE,
   CONVERSATION_KIND,
+  CONVERSATION_MESSAGE_SUBTYPE,
   CONVERSATION_PARTICIPANT_TYPE,
-  extractText,
-  summarizeConversationEvent,
-  type CanonicalContentBlock,
-  type ChatConversationItem,
-  type ChatConversationView,
-  type ConversationEntityRef,
-  type ConversationReplyRef,
-  type ChatParticipantSummary,
-  type PendingConversationRead,
-  type PendingOutboxMessage,
-  type Timestamp,
+} from "@shared/constants"
+import { extractText } from "@shared/content"
+import { summarizeConversationEvent } from "@shared/conversation"
+import type {
+  CanonicalContentBlock,
+  ChatConversationItem,
+  ChatConversationView,
+  ConversationEntityRef,
+  ConversationReplyRef,
+  ChatParticipantSummary,
+  PendingConversationRead,
+  PendingOutboxMessage,
+  Timestamp,
 } from "@shared"
 
 // Re-exported under the historical names used across the mobile codebase; the
@@ -728,7 +731,7 @@ export function buildOptimisticChatItem(
     clientMessageId: outbox.clientMessageId,
     itemType: CONVERSATION_ITEM_TYPE.MESSAGE,
     role: "user",
-    subtype: "chat.message",
+    subtype: CONVERSATION_MESSAGE_SUBTYPE.CHAT_MESSAGE,
     scope: CONVERSATION_ITEM_SCOPE.SHARED,
     surface: CONVERSATION_ITEM_SURFACE.VISIBLE,
     authorParticipantId: viewerParticipantId?.participantId,

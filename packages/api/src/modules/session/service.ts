@@ -1,20 +1,9 @@
-import {
-  db,
-  runBuilder,
-  takeFirstOn,
-  type Executor,
-  type TableRow,
-} from "../../infrastructure/database/kysely.js"
+import { type Executor } from "../../infrastructure/database/kysely.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
 import { queueConversationTransportProjection } from "../im/service.js"
-import {
-  createConversationItem,
-  ensureConversationParticipant,
-} from "../chat/service.js"
-import {
-  buildNormalizedMessageContent,
-  itemPartsToCanonicalContentBlocks,
-} from "../chat/message-content.js"
+import { createConversationItem } from "../chat/item-write.js"
+import { ensureConversationParticipantUseCase as ensureConversationParticipant } from "../chat/participant-roster.js"
+import { buildNormalizedMessageContent } from "../chat/message-content.js"
 import type {
   UUID,
   ConversationMessageSubtype,
@@ -26,19 +15,15 @@ import type {
   SessionCollaborationState,
 } from "@synapse/shared/types"
 import {
+  CONVERSATION_MESSAGE_SUBTYPE,
   type SessionInterruptType,
   type SessionStatus,
   type SessionTrigger,
   isGroupConversationKind,
-  isThreadConversationKind,
 } from "@synapse/shared"
-import { sql } from "kysely"
-import { SUBJECT_KIND } from "@synapse/shared"
 import { parseSessionCollaborationState } from "./collaboration-state.js"
-import {
-  upsertAccessSubject,
-  upsertAccessSubjectOn,
-} from "../access/subject-registry.js"
+import * as repo from "./repo.js"
+import { presentSession, presentSessionMessage } from "./presenter.js"
 
 type SessionConversationMessageRole =
   | "user"
@@ -48,170 +33,15 @@ type SessionConversationMessageRole =
 
 type SessionConversationMessageSubtype = Exclude<
   ConversationMessageSubtype,
-  "chat.message"
+  typeof CONVERSATION_MESSAGE_SUBTYPE.CHAT_MESSAGE
 >
 import { v4 as uuidv4 } from "uuid"
 
 const log = createLogger("session")
 
-type SessionRow = TableRow<"sessions"> & {
-  actor_display_name?: string | null
-  conversation_kind?: string | null
-  conversation_is_im?: unknown
-  conversation_title?: string | null
-}
-
-type SessionMessageItemRow = {
-  id: string
-  session_id: string | null
-  conversation_id: string
-  sequence: number | string
-  workspace_id: string
-  subtype: string
-  role: TableRow<"conversation_items">["role"]
-  from_actor_id: string | null
-  from_workspace_member_id: string | null
-  created_at: Date
-  metadata: unknown
-}
-
-function parseJsonObject(value: unknown): Record<string, unknown> {
-  if (!value) return {}
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value)
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error("collaboration_state must be a JSON object")
-      }
-      return parsed as Record<string, unknown>
-    } catch (error) {
-      throw new Error(
-        `collaboration_state must be valid JSON: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      )
-    }
-  }
-  if (typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("collaboration_state must be an object")
-  }
-  return value as Record<string, unknown>
-}
-
-function normalizeSessionRow(row: SessionRow | null) {
-  if (!row) return null
-  return {
-    ...row,
-    conversationId: row.conversation_id,
-    conversationKind: row.conversation_kind,
-    isImConversation: Boolean(row.conversation_is_im),
-    conversationTitle: row.conversation_title,
-    collaborationMode: row.collaboration_mode || "default",
-    activePlanApprovalTaskId: row.active_plan_approval_task_id || undefined,
-    collaborationState: parseSessionCollaborationState(
-      parseJsonObject(row.collaboration_state)
-    ),
-    isGroupConversation: isGroupConversationKind(row.conversation_kind),
-    hasThreadContext: isThreadConversationKind(row.conversation_kind),
-  }
-}
-
-function normalizeSessionMessageRole(
-  row: Pick<SessionMessageItemRow, "role" | "subtype">
-): SessionMessage["role"] {
-  if (row.subtype === "tool_result" || row.role === "tool") {
-    return "tool_result"
-  }
-  return row.role
-}
-
-async function getActorJoinVersionId(actorId: UUID) {
-  const row = await db
-    .selectFrom("actors as a")
-    .innerJoin("workspace_apps as app", "app.id", "a.id")
-    .innerJoin("actor_versions as current_version", (join) =>
-      join
-        .onRef("current_version.actor_id", "=", "a.id")
-        .onRef("current_version.version", "=", "a.current_version")
-    )
-    .select("current_version.id as actor_version_id")
-    .where("a.id", "=", actorId)
-    .where("app.deleted_at", "is", null)
-    .limit(1)
-    .executeTakeFirst()
-  return row?.actor_version_id || undefined
-}
-
-async function loadSession(
-  sessionId: UUID
-): Promise<ReturnType<typeof normalizeSessionRow>> {
-  const row = await db
-    .selectFrom("sessions as s")
-    .innerJoin("actors as a", "a.id", "s.actor_id")
-    .innerJoin("workspace_apps as app", "app.id", "a.id")
-    .innerJoin("conversations as c", "c.id", "s.conversation_id")
-    .selectAll("s")
-    .select((eb) => [
-      "app.display_name as actor_display_name",
-      "c.kind as conversation_kind",
-      eb
-        .exists(
-          eb
-            .selectFrom("conversation_transport_bindings as b")
-            .select("b.id")
-            .whereRef("b.conversation_id", "=", "c.id")
-        )
-        .as("conversation_is_im"),
-      "c.title as conversation_title",
-    ])
-    .where("s.id", "=", sessionId)
-    .executeTakeFirst()
-  return normalizeSessionRow(row ?? null)
-}
-
-async function getConversationActorSessionRow(
-  conversationId: UUID,
-  actorId: UUID,
-  queryable: Executor = db
-) {
-  return takeFirstOn(
-    queryable,
-    db
-      .selectFrom("sessions")
-      .selectAll()
-      .where("conversation_id", "=", conversationId)
-      .where("actor_id", "=", actorId)
-      .limit(1)
-  )
-}
-
-async function requireActiveActorConversationParticipant(
-  conversationId: UUID,
-  actorId: UUID,
-  queryable: Executor = db
-) {
-  // P1b: upsert the actor's subject_id (on the same queryable for trx safety),
-  // then filter conversation_participants by subject_id.
-  const actorSubjectId = await upsertAccessSubjectOn(queryable, {
-    kind: SUBJECT_KIND.ACTOR,
-    actorId,
-  })
-  const participant = await takeFirstOn(
-    queryable,
-    db
-      .selectFrom("conversation_participants")
-      .select("id")
-      .where("conversation_id", "=", conversationId)
-      .where("subject_id", "=", actorSubjectId)
-      .where("state", "=", "active")
-      .limit(1)
-  )
-
-  if (!participant) {
-    throw new Error(
-      `Actor ${actorId} is not an active participant of conversation ${conversationId}`
-    )
-  }
+async function loadSession(sessionId: UUID) {
+  const row = await repo.loadSessionRow(sessionId)
+  return presentSession(row)
 }
 
 export async function ensureConversationActorSessionContext(
@@ -221,15 +51,15 @@ export async function ensureConversationActorSessionContext(
     conversationId: UUID
     trigger?: SessionTrigger
   },
-  queryable: Executor = db
+  queryable?: Executor
 ) {
-  await requireActiveActorConversationParticipant(
+  await repo.requireActiveActorConversationParticipant(
     params.conversationId,
     params.actorId,
     queryable
   )
 
-  let session = await getConversationActorSessionRow(
+  let session = await repo.getConversationActorSessionRow(
     params.conversationId,
     params.actorId,
     queryable
@@ -243,25 +73,18 @@ export async function ensureConversationActorSessionContext(
       )
     }
 
-    const insertedSession = await takeFirstOn<{ id: string }>(
-      queryable,
-      db
-        .insertInto("sessions")
-        .values({
-          id: uuidv4(),
-          workspace_id: params.workspaceId,
-          actor_id: params.actorId,
-          conversation_id: params.conversationId,
-          trigger: params.trigger || "user_message",
-          status: "idle",
-        })
-        .onConflict((oc) =>
-          oc.columns(["conversation_id", "actor_id"]).doNothing()
-        )
-        .returning("id")
+    const insertedSession = await repo.insertSessionIfAbsent(
+      {
+        id: uuidv4(),
+        workspaceId: params.workspaceId,
+        actorId: params.actorId,
+        conversationId: params.conversationId,
+        trigger: params.trigger,
+      },
+      queryable
     )
     sessionCreated = Boolean(insertedSession)
-    session = await getConversationActorSessionRow(
+    session = await repo.getConversationActorSessionRow(
       params.conversationId,
       params.actorId,
       queryable
@@ -288,7 +111,9 @@ async function resolveSessionMessageAuthor(params: {
   fromWorkspaceMemberId?: UUID
 }) {
   if (params.fromActorId) {
-    const actorJoinVersionId = await getActorJoinVersionId(params.fromActorId)
+    const actorJoinVersionId = await repo.getActorJoinVersionId(
+      params.fromActorId
+    )
     return ensureConversationParticipant({
       conversationId: params.conversationId,
       participantType: "actor",
@@ -323,12 +148,6 @@ function getSurfaceForSessionMessage(
   return { scope: "shared" as const, surface: "visible" as const }
 }
 
-function buildMetadataFromItem(item: any) {
-  return typeof item.metadata === "string"
-    ? JSON.parse(item.metadata)
-    : { ...(item.metadata || {}) }
-}
-
 // ============ Session CRUD ============
 
 export async function getSession(sessionId: UUID): Promise<any | null> {
@@ -340,17 +159,7 @@ export async function updateSessionStatus(
   status: SessionStatus,
   extra?: { errorMessage?: string | null }
 ): Promise<void> {
-  await db
-    .updateTable("sessions")
-    .set({
-      status,
-      completed_at: status === "closed" ? sql`NOW()` : null,
-      ...(extra?.errorMessage !== undefined
-        ? { error_message: extra.errorMessage }
-        : {}),
-    })
-    .where("id", "=", sessionId)
-    .execute()
+  await repo.updateSessionStatus(sessionId, status, extra)
 }
 
 export async function updateSessionCollaboration(
@@ -360,27 +169,23 @@ export async function updateSessionCollaboration(
     collaborationState?: SessionCollaborationState
     activePlanApprovalTaskId?: UUID | null
   },
-  queryable: Executor = db
+  queryable?: Executor
 ): Promise<void> {
-  const values: Record<string, unknown> = {}
+  const values: repo.SessionCollaborationPatch = {}
 
   if (params.collaborationMode) {
-    values.collaboration_mode = params.collaborationMode
+    values.collaborationMode = params.collaborationMode
   }
   if (params.collaborationState) {
-    values.collaboration_state = parseSessionCollaborationState(
+    values.collaborationState = parseSessionCollaborationState(
       params.collaborationState
-    ) as Record<string, unknown>
+    )
   }
   if ("activePlanApprovalTaskId" in params) {
-    values.active_plan_approval_task_id =
-      params.activePlanApprovalTaskId ?? null
+    values.activePlanApprovalTaskId = params.activePlanApprovalTaskId ?? null
   }
 
-  await runBuilder(
-    queryable,
-    db.updateTable("sessions").set(values).where("id", "=", params.sessionId)
-  )
+  await repo.setSessionCollaborationValues(params.sessionId, values, queryable)
 }
 
 // ============ Session Messages ============
@@ -425,7 +230,7 @@ export async function addSessionMessage(params: {
   })
 
   const authorMember = await resolveSessionMessageAuthor({
-    conversationId: session.conversation_id,
+    conversationId: session.conversationId,
     workspaceId,
     fromActorId,
     fromWorkspaceMemberId,
@@ -433,13 +238,13 @@ export async function addSessionMessage(params: {
   const { scope, surface } =
     visibility === "shared_visible"
       ? { scope: "shared" as const, surface: "visible" as const }
-      : getSurfaceForSessionMessage(session.conversation_kind, role)
+      : getSurfaceForSessionMessage(session.conversationKind, role)
   const itemType = role === "tool_result" ? "control" : "message"
   const resolvedSubtype = subtype || role
 
   const item = await createConversationItem({
     workspaceId,
-    conversationId: session.conversation_id,
+    conversationId: session.conversationId,
     sessionId,
     scope,
     surface,
@@ -463,7 +268,7 @@ export async function addSessionMessage(params: {
   if (projectTransportOutbound && scope === "shared" && surface === "visible") {
     await queueConversationTransportProjection({
       workspaceId,
-      conversationId: session.conversation_id,
+      conversationId: session.conversationId,
       itemId: item.id,
       direction: "outbound",
       metadata: {
@@ -487,26 +292,18 @@ export async function addSessionMessage(params: {
   if (scope === "shared" && surface === "visible") {
     const { notifyRemoteAgentDeliveriesForConversation } =
       await import("../remote-agents/service.js")
-    await notifyRemoteAgentDeliveriesForConversation(session.conversation_id)
+    await notifyRemoteAgentDeliveriesForConversation(session.conversationId)
   }
 
   if (
     scope === "shared" &&
     surface === "visible" &&
-    !isGroupConversationKind(session.conversation_kind) &&
+    !isGroupConversationKind(session.conversationKind) &&
     (role === "user" || role === "assistant")
   ) {
     let actorDisplayName: string | undefined
     if (fromActorId) {
-      actorDisplayName = (
-        await db
-          .selectFrom("actors as actor")
-          .innerJoin("workspace_apps as app", "app.id", "actor.id")
-          .select("app.display_name as display_name")
-          .where("actor.id", "=", fromActorId)
-          .where("app.deleted_at", "is", null)
-          .executeTakeFirst()
-      )?.display_name
+      actorDisplayName = await repo.getActorDisplayName(fromActorId)
     }
     // session.message.new event emit removed (S13): no subscribers remain.
     void normalizedMessage
@@ -532,119 +329,33 @@ export async function addSessionMessage(params: {
 export async function getSessionMessages(
   sessionId: UUID
 ): Promise<SessionMessage[]> {
-  const items = await db
-    .selectFrom("conversation_items as ci")
-    .innerJoin("sessions as s", "s.id", "ci.session_id")
-    .leftJoin(
-      "conversation_participants as cp",
-      "cp.id",
-      "ci.author_participant_id"
-    )
-    .leftJoin("access_subjects as cpsubj", "cpsubj.id", "cp.subject_id")
-    .leftJoin("actors as a", "a.id", "cpsubj.actor_id")
-    .leftJoin("workspace_apps as actor_app", "actor_app.id", "a.id")
-    .leftJoin("workspace_members as wm", "wm.id", "cpsubj.workspace_member_id")
-    .leftJoin("users as u", "u.id", "wm.user_id")
-    .select([
-      "ci.id",
-      "ci.session_id",
-      "ci.conversation_id",
-      "ci.sequence",
-      "ci.role",
-      "ci.subtype",
-      "ci.metadata",
-      "ci.event_payload",
-      "ci.author_participant_id",
-      "ci.created_at",
-      "s.workspace_id",
-      "cpsubj.actor_id as from_actor_id",
-      "cpsubj.workspace_member_id as from_workspace_member_id",
-      sql<
-        string | null
-      >`COALESCE(actor_app.display_name, u.name, cp.display_name)`.as(
-        "author_name"
-      ),
-    ])
-    .where("ci.session_id", "=", sessionId)
-    .orderBy("ci.created_at", "asc")
-    .orderBy("ci.sequence", "asc")
-    .execute()
+  const items = await repo.getSessionMessageItemRows(sessionId)
 
   if (items.length === 0) return []
 
   const itemIds = items.map((row) => row.id)
-  const partRows = await db
-    .selectFrom("conversation_item_parts as cip")
-    .select([
-      "cip.id",
-      "cip.item_id",
-      "cip.ordinal",
-      "cip.part_type",
-      "cip.mime_type",
-      "cip.text_value",
-      "cip.json_value",
-      "cip.ref_path",
-      "cip.ref_sha256",
-      "cip.name",
-      "cip.metadata",
-    ])
-    .where("cip.item_id", "in", itemIds)
-    .orderBy("cip.item_id", "asc")
-    .orderBy("cip.ordinal", "asc")
-    .execute()
+  const partRows = await repo.getSessionMessagePartRows(itemIds)
 
-  const partsByItem = new Map<string, TableRow<"conversation_item_parts">[]>()
+  const partsByItem = new Map<string, (typeof partRows)[number][]>()
   for (const row of partRows) {
-    if (!partsByItem.has(row.item_id)) partsByItem.set(row.item_id, [])
-    partsByItem.get(row.item_id)!.push(row)
+    if (!partsByItem.has(row.itemId)) partsByItem.set(row.itemId, [])
+    partsByItem.get(row.itemId)!.push(row)
   }
 
-  return items.map((row: SessionMessageItemRow) => {
-    const item = { ...row, parts: partsByItem.get(row.id) || [] }
-    return {
-      id: row.id,
-      sessionId,
-      conversationId: row.conversation_id,
-      sequence: row.sequence,
-      workspaceId: row.workspace_id,
-      role: normalizeSessionMessageRole(row),
-      contentBlocks: itemPartsToCanonicalContentBlocks(item.parts || []),
-      fromActorId: row.from_actor_id || undefined,
-      fromWorkspaceMemberId: row.from_workspace_member_id || undefined,
-      metadata: buildMetadataFromItem(item),
-      createdAt: row.created_at.toISOString() as SessionMessage["createdAt"],
-    }
-  })
+  return items.map((row) =>
+    presentSessionMessage(row, sessionId, partsByItem.get(row.id) || [])
+  )
 }
 
 // ============ Session Interrupts ============
 
 export async function consumeInterrupts(sessionId: UUID): Promise<any[]> {
-  return db
-    .updateTable("session_interrupts")
-    .set({
-      is_consumed: true,
-    })
-    .where("target_session_id", "=", sessionId)
-    .where("is_consumed", "=", false)
-    .returningAll()
-    .execute()
+  return repo.consumeSessionInterrupts(sessionId)
 }
 
 export async function hasPendingInterrupt(
   sessionId: UUID,
   type?: SessionInterruptType
 ): Promise<boolean> {
-  let query = db
-    .selectFrom("session_interrupts")
-    .select("id")
-    .where("target_session_id", "=", sessionId)
-    .where("is_consumed", "=", false)
-
-  if (type) {
-    query = query.where("type", "=", type)
-  }
-
-  const row = await query.limit(1).executeTakeFirst()
-  return Boolean(row?.id)
+  return repo.hasPendingSessionInterrupt(sessionId, type)
 }

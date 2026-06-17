@@ -15,7 +15,7 @@ import {
   type PendingConversationRead,
   type PendingOutboxMessage,
   type StoredChatQueueState,
-} from "@synapse/shared"
+} from "@synapse/shared/chat-queue"
 
 export {
   CHAT_QUEUE_DB_NAME,

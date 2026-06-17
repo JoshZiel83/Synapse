@@ -1,8 +1,6 @@
 import {
   CONVERSATION_PARTICIPANT_TYPE,
-  TASK_INPUT_QUESTION_TYPES,
   TASK_REQUEST_KIND,
-  parseJsonObject,
   textBlocks,
   type SubjectRef,
 } from "@synapse/shared"
@@ -17,60 +15,40 @@ import type {
   ChatTaskResolveOutcome,
   ConversationFeedItem,
   ConversationFeedEventPayloadMap,
-  ConversationEntityRef,
   TaskDecision,
   TaskInputAnswer,
   TaskInputOption,
   TaskInputQuestionDefinition,
-  TaskInputQuestionSummary,
   TaskRequestKind,
   TaskSummary,
   PlanApprovalDecision,
   PlanChecklistStep,
   RuntimeAuthorizationGrantOption,
   SharedRuntimeAuthorizationGrantSpec,
-  RuntimeAuthorizationTaskDetails,
   RuntimeAuthorizationPreset,
   RuntimeAuthorizationRequestMode,
   RuntimeAuthorizationRequestedAction,
   SessionCollaborationState,
   Timestamp,
 } from "@synapse/shared/types"
-import {
-  db,
-  runBuilder,
-  takeFirstOn,
-  withDbTransaction,
-  type Executor,
-  type TableInsert,
-} from "../../infrastructure/database/kysely.js"
-import {
-  serializeInstant,
-  serializeOptionalInstant,
-} from "../../infrastructure/datetime.js"
+import type { Executor } from "../../infrastructure/database/kysely.js"
 import {
   deliverResolvedToolCallTask,
   recoverUndeliveredResolvedTask,
   insertToolCallTaskDeduped,
   findLiveToolCallTaskByRequestKey,
-  type ToolCallTaskExecutorKind,
   type ToolCallTaskLifecycleStatus,
   type ToolCallTaskOutcome,
 } from "../tool-call-tasks/service.js"
 import { updateSessionCollaboration } from "../session/service.js"
+import { userSubject, workspaceMemberSubject } from "../access/service.js"
+import { authorizeActionDefault } from "../access/guards.js"
 import {
-  authorizeAction,
-  userSubject,
-  workspaceMemberSubject,
-} from "../access/service.js"
-import {
-  appendWorkspaceMemberSyncEvent,
   createConversationEvent,
-  listConversationRealtimeRecipients,
   updateConversationItemEventPayload,
-} from "../chat/service.js"
-import { getFileUrlById } from "../files/service.js"
-import { CompiledQuery, sql, type RawBuilder } from "kysely"
+} from "../chat/event-write.js"
+import { listConversationRealtimeRecipients } from "../chat/realtime-recipients.js"
+import { appendWorkspaceMemberSyncEvent } from "../chat/sync-events.js"
 import {
   createRuntimeAuthorizationGrant,
   type RuntimeAuthorizationGrantRecord,
@@ -80,163 +58,40 @@ import {
   buildSessionPlanDraftState,
   parseSessionCollaborationState,
 } from "../session/collaboration-state.js"
-import { upsertTaskTransportProjection } from "./transport-projections.js"
-
-/** Run raw SQL (text+params) on db / trx. */
-async function runOn<T extends object = Record<string, unknown>>(
-  executor: Executor,
-  text: string,
-  params: readonly unknown[] = []
-): Promise<{ rows: T[]; rowCount?: number | null }> {
-  const result = await executor.executeQuery<T>(
-    CompiledQuery.raw(text, [...params])
-  )
-  return {
-    rows: result.rows as T[],
-    rowCount:
-      result.numAffectedRows === undefined
-        ? null
-        : Number(result.numAffectedRows),
-  }
-}
-
-/** `runOn` bound to the top-level db. */
-function runOnDb<T extends object = Record<string, unknown>>(
-  text: string,
-  params: readonly unknown[] = []
-): Promise<{ rows: T[]; rowCount?: number | null }> {
-  return runOn<T>(db, text, params)
-}
-
-/**
- * Run a pre-compiled query on an optional executor: native executeQuery for
- * Kysely executors / top-level db (when undefined).
- */
-async function runCompiledOn<T = any>(
-  executor: Executor | undefined,
-  compiled: CompiledQuery<T>
-): Promise<{ rows: T[]; rowCount?: number | null }> {
-  const result = await (executor ?? db).executeQuery(compiled)
-  return {
-    rows: result.rows as T[],
-    rowCount:
-      result.numAffectedRows === undefined
-        ? null
-        : Number(result.numAffectedRows),
-  }
-}
-
-type RawTaskRow = {
-  id: string
-  workspace_id: string
-  conversation_id: string
-  // Task unification: the row IS the task. session_id lives on it (nullable for
-  // remote_agent_channel delivery). The legacy task_id pointer is gone.
-  session_id: string | null
-  remote_agent_run_id: string | null
-  conversation_item_id: string | null
-  kind: TaskRequestKind
-  lifecycle_status: ToolCallTaskLifecycleStatus
-  outcome: ToolCallTaskOutcome | null
-  revision: string | number
-  prompt_payload: unknown
-  plan_payload: unknown
-  requested_tool_name: string | null
-  reason: string | null
-  request_mode: string | null
-  requested_action: unknown
-  grant_options: unknown
-  available_presets: unknown
-  source_request_args: unknown
-  source_runtime_session_id: string | null
-  source_retry_nonce: string | null
-  // subject-scope-refactor: principal_remote_agent_id is derived from
-  // principal_subject_id rather than stored on the runtime authorization detail.
-  // principal_subject_id (NOT NULL) + principal_scope_subject_id (nullable),
-  // both FK to access_subjects with ON DELETE RESTRICT (durable audit).
-  principal_subject_id: string
-  principal_scope_subject_id: string | null
-  // Derived alias for dashboard consumers.
-  principal_remote_agent_id: string | null
-  principal_subject_kind: string | null
-  resolution_payload: unknown
-  resolved_at: Date | null
-  expires_at: Date | null
-  created_at: Date
-  updated_at: Date
-  requester_participant_id: string | null
-  requester_workspace_member_id: string | null
-  requester_actor_id: string | null
-  requester_remote_agent_id: string | null
-  target_actor_id: string | null
-  target_workspace_member_id: string | null
-  target_remote_agent_id: string | null
-  target_participant_id: string | null
-  resolved_by_actor_id: string | null
-  resolved_by_workspace_member_id: string | null
-  resolved_by_remote_agent_id: string | null
-  resolved_by_participant_id: string | null
-  device_capability_id: string | null
-  device_id: string | null
-  device_exposure_id: string | null
-  device_tool_stable_key: string | null
-  device_display_name: string | null
-  exposure_display_name: string | null
-  exposure_stable_key: string | null
-  requester_participant_type: string | null
-  requester_name: string | null
-  requester_title: string | null
-  requester_role: string | null
-  requester_actor_avatar_file_id: string | null
-  requester_user_avatar_file_id: string | null
-  requester_remote_agent_avatar_file_id: string | null
-  requester_avatar_emoji: string | null
-  target_participant_type: string | null
-  target_name: string | null
-  target_title: string | null
-  target_role: string | null
-  target_actor_avatar_file_id: string | null
-  target_user_avatar_file_id: string | null
-  target_remote_agent_avatar_file_id: string | null
-  target_avatar_emoji: string | null
-  resolved_by_participant_type: string | null
-  resolved_by_name: string | null
-  resolved_by_title: string | null
-  resolved_by_role: string | null
-  resolved_by_actor_avatar_file_id: string | null
-  resolved_by_user_avatar_file_id: string | null
-  resolved_by_remote_agent_avatar_file_id: string | null
-  resolved_by_avatar_emoji: string | null
-}
-
-type RawTaskCommandRow = {
-  id: string
-  task_id: string
-  command_id: string
-  base_revision: string | number
-  outcome: ChatTaskResolveOutcome
-  request_payload: unknown
-  response_payload: unknown
-  created_by_workspace_member_id: string | null
-  created_at: Date
-  updated_at: Date
-}
-
-function toRevisionNumber(
-  value: string | number | null | undefined,
-  label: string
-) {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return Math.trunc(value)
-  }
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value)
-    if (Number.isFinite(parsed)) {
-      return Math.trunc(parsed)
-    }
-  }
-  throw new Error(`${label} must be a finite revision number`)
-}
+import {
+  parseUserInputQuestionDefinitions,
+  presentTaskSummary,
+  requireTrimmedString,
+  toRevisionNumber,
+} from "./presenter.js"
+import {
+  findConversationKindOn,
+  findOpenRuntimeAuthorizationTaskId,
+  findPendingTaskIdByRequestKey,
+  findRemoteAgentGroupTaskGrant,
+  findSessionPlanRowOn,
+  findTaskIdByTaskId,
+  findViewerConversationMembership,
+  getTaskCommandRow,
+  getTaskRowById,
+  getTaskRowByIdForUpdate,
+  insertRuntimeAuthorizationTaskDetails,
+  insertTaskCommandRow,
+  insertTaskRequest,
+  isActiveTargetParticipantForUser,
+  buildRuntimePrincipalContextDefault,
+  clearRemoteAgentConversationContextOnResolve,
+  decodeTaskPromptPayload,
+  decodeTaskResolutionPayload,
+  resolveParticipantSubjectId,
+  taskViewableByUser,
+  updateTaskConversationItemId,
+  updateResolvedTaskRequestRow,
+  updateTaskResolutionPayload,
+  upsertTaskTransportProjection,
+  upsertRemoteAgentConversationContextForPlan,
+  withTaskTransaction,
+} from "./repo.js"
 
 export interface CreateUserInputTaskParams {
   workspaceId: string
@@ -372,73 +227,6 @@ export interface FindOpenRuntimeAuthorizationTaskParams {
   runtimeSessionId: string
 }
 
-function requireJsonObject(
-  value: unknown,
-  label: string
-): Record<string, unknown> {
-  if (value === null || value === undefined) {
-    throw new Error(`${label} is required`)
-  }
-  if (typeof value === "string") {
-    if (value.trim().length === 0) {
-      throw new Error(`${label} is required`)
-    }
-    try {
-      const parsed = JSON.parse(value)
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error(`${label} must be a JSON object`)
-      }
-      return parsed as Record<string, unknown>
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message === `${label} must be a JSON object`
-      ) {
-        throw error
-      }
-      throw new Error(`${label} must be a valid JSON object`)
-    }
-  }
-  if (typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${label} must be a JSON object`)
-  }
-  return value as Record<string, unknown>
-}
-
-function parseJsonArray<T>(value: unknown, label: string): T[] {
-  if (value === null || value === undefined) {
-    return []
-  }
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value)
-      if (!Array.isArray(parsed)) {
-        throw new Error(`${label} must be a JSON array`)
-      }
-      return parsed as T[]
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message === `${label} must be a JSON array`
-      ) {
-        throw error
-      }
-      throw new Error(`${label} must be a valid JSON array`)
-    }
-  }
-  if (!Array.isArray(value)) {
-    throw new Error(`${label} must be a JSON array`)
-  }
-  return value as T[]
-}
-
-function requireTrimmedString(value: unknown, label: string): string {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw new Error(`${label} is required`)
-  }
-  return value.trim()
-}
-
 function stableJsonStringify(value: unknown): string {
   if (value === null || value === undefined) {
     return "null"
@@ -446,9 +234,9 @@ function stableJsonStringify(value: unknown): string {
   if (Array.isArray(value)) {
     return `[${value.map((entry) => stableJsonStringify(entry)).join(",")}]`
   }
-  if (typeof value === "object") {
-    const entries = Object.entries(value as Record<string, unknown>).sort(
-      ([left], [right]) => left.localeCompare(right)
+  if (isJsonObjectRecord(value)) {
+    const entries = Object.entries(value).sort(([left], [right]) =>
+      left.localeCompare(right)
     )
     return `{${entries
       .map(
@@ -459,8 +247,8 @@ function stableJsonStringify(value: unknown): string {
   return JSON.stringify(value)
 }
 
-function jsonbValue<T>(value: T) {
-  return sql<T>`${JSON.stringify(value ?? null)}::jsonb`
+function isJsonObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
 }
 
 /**
@@ -531,349 +319,6 @@ export function buildRuntimeAuthorizationRequestKey(params: {
   })
 }
 
-function entityAvatarUrl(
-  primaryAvatarFileId?: string | null,
-  secondaryAvatarFileId?: string | null,
-  tertiaryAvatarFileId?: string | null
-) {
-  if (primaryAvatarFileId) return getFileUrlById(primaryAvatarFileId)
-  if (secondaryAvatarFileId) return getFileUrlById(secondaryAvatarFileId)
-  if (tertiaryAvatarFileId) return getFileUrlById(tertiaryAvatarFileId)
-  return undefined
-}
-
-function parseInputOptions(
-  value: unknown,
-  optionListLabel = "options"
-): TaskInputOption[] {
-  if (!Array.isArray(value)) {
-    return []
-  }
-
-  const options: TaskInputOption[] = []
-  const usedIds = new Set<string>()
-  for (const [index, item] of value.entries()) {
-    if (!item || typeof item !== "object") {
-      throw new Error(
-        `Option ${index + 1} in ${optionListLabel} must be an object`
-      )
-    }
-    const rawId = requireTrimmedString(
-      (item as { id?: unknown }).id,
-      `Option ${index + 1} id in ${optionListLabel}`
-    )
-    const optionLabel = requireTrimmedString(
-      (item as { label?: unknown }).label,
-      `Option ${index + 1} label in ${optionListLabel}`
-    )
-    const description =
-      typeof (item as { description?: unknown }).description === "string"
-        ? (item as { description: string }).description.trim()
-        : undefined
-    const preview =
-      typeof (item as { preview?: unknown }).preview === "string"
-        ? (item as { preview: string }).preview.trim()
-        : undefined
-    const id = rawId
-    if (usedIds.has(id)) {
-      throw new Error(`Duplicate option id "${id}" in ${optionListLabel}`)
-    }
-    usedIds.add(id)
-    options.push({
-      id,
-      label: optionLabel,
-      description: description || undefined,
-      preview: preview || undefined,
-    })
-  }
-  return options
-}
-
-function normalizeInputQuestionType(
-  value: unknown
-): TaskInputQuestionDefinition["type"] {
-  if (
-    typeof value === "string" &&
-    (TASK_INPUT_QUESTION_TYPES as readonly string[]).includes(value)
-  ) {
-    return value as TaskInputQuestionDefinition["type"]
-  }
-  throw new Error(`Unsupported user input question type: ${String(value)}`)
-}
-
-function parseUserInputQuestionDefinitions(
-  promptPayload: Record<string, unknown>
-): TaskInputQuestionDefinition[] {
-  const rawQuestions = promptPayload.questions
-  if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) {
-    throw new Error(
-      "user_input prompt_payload.questions must be a non-empty array"
-    )
-  }
-  const definitions: TaskInputQuestionDefinition[] = []
-  const usedIds = new Set<string>()
-
-  for (const [index, question] of rawQuestions.entries()) {
-    if (!question || typeof question !== "object") {
-      throw new Error(`Question ${index + 1} must be an object`)
-    }
-    const id = requireTrimmedString(
-      (question as { id?: unknown }).id,
-      `Question ${index + 1} id`
-    )
-    if (usedIds.has(id)) {
-      throw new Error(`Duplicate question id "${id}"`)
-    }
-    usedIds.add(id)
-
-    const type = normalizeInputQuestionType(
-      (question as { type?: unknown }).type
-    )
-    const definition: TaskInputQuestionDefinition = {
-      id,
-      header: requireTrimmedString(
-        (question as { header?: unknown }).header,
-        `Question ${index + 1} header`
-      ),
-      type,
-      prompt: requireTrimmedString(
-        (question as { prompt?: unknown }).prompt,
-        `Question ${index + 1} prompt`
-      ),
-      description:
-        typeof (question as { description?: unknown }).description === "string"
-          ? (question as { description: string }).description.trim() ||
-            undefined
-          : undefined,
-      required: (() => {
-        if (
-          typeof (question as { required?: unknown }).required !== "boolean"
-        ) {
-          throw new Error(`Question "${id}" required must be a boolean`)
-        }
-        return Boolean((question as { required: boolean }).required)
-      })(),
-    }
-
-    if (type === "text") {
-      definition.placeholder =
-        typeof (question as { placeholder?: unknown }).placeholder === "string"
-          ? (question as { placeholder: string }).placeholder.trim() ||
-            undefined
-          : undefined
-      if (typeof (question as { secret?: unknown }).secret !== "boolean") {
-        throw new Error(`Question "${id}" secret must be a boolean`)
-      }
-      definition.secret = Boolean((question as { secret: boolean }).secret)
-    } else {
-      definition.options = parseInputOptions(
-        (question as { options?: unknown }).options,
-        `question "${id}" options`
-      )
-      if (definition.options.length === 0) {
-        throw new Error(`Question "${id}" requires at least one option`)
-      }
-      if (
-        typeof (question as { allowOther?: unknown }).allowOther !== "boolean"
-      ) {
-        throw new Error(`Question "${id}" allowOther must be a boolean`)
-      }
-      definition.allowOther = Boolean(
-        (question as { allowOther: boolean }).allowOther
-      )
-      if (
-        (question as { minSelections?: unknown }).minSelections !== undefined &&
-        (typeof (question as { minSelections?: unknown }).minSelections !==
-          "number" ||
-          !Number.isFinite(
-            (question as { minSelections: number }).minSelections
-          ))
-      ) {
-        throw new Error(
-          `Question "${id}" minSelections must be a finite number`
-        )
-      }
-      if (
-        (question as { maxSelections?: unknown }).maxSelections !== undefined &&
-        (typeof (question as { maxSelections?: unknown }).maxSelections !==
-          "number" ||
-          !Number.isFinite(
-            (question as { maxSelections: number }).maxSelections
-          ))
-      ) {
-        throw new Error(
-          `Question "${id}" maxSelections must be a finite number`
-        )
-      }
-      definition.minSelections =
-        typeof (question as { minSelections?: unknown }).minSelections ===
-        "number"
-          ? Math.max(
-              0,
-              Math.trunc((question as { minSelections: number }).minSelections)
-            )
-          : undefined
-      definition.maxSelections =
-        typeof (question as { maxSelections?: unknown }).maxSelections ===
-        "number"
-          ? Math.max(
-              1,
-              Math.trunc((question as { maxSelections: number }).maxSelections)
-            )
-          : undefined
-    }
-
-    definitions.push(definition)
-  }
-
-  return definitions
-}
-
-function parseUserInputAnswers(
-  resolutionPayload: Record<string, unknown>,
-  questions: TaskInputQuestionDefinition[]
-): TaskInputAnswer[] {
-  const answers: TaskInputAnswer[] = []
-  const seenQuestionIds = new Set<string>()
-
-  if (resolutionPayload.answers === undefined) {
-    return answers
-  }
-  if (!Array.isArray(resolutionPayload.answers)) {
-    throw new Error("task resolution_payload.answers must be an array")
-  }
-
-  for (const [index, answer] of resolutionPayload.answers.entries()) {
-    if (!answer || typeof answer !== "object") {
-      throw new Error(`Answer ${index + 1} must be an object`)
-    }
-    const questionId = requireTrimmedString(
-      (answer as { questionId?: unknown }).questionId,
-      `Answer ${index + 1} questionId`
-    )
-    if (!questions.some((question) => question.id === questionId)) {
-      throw new Error(`Answer references unknown question "${questionId}"`)
-    }
-    if (seenQuestionIds.has(questionId)) {
-      throw new Error(`Duplicate answer for question "${questionId}"`)
-    }
-    seenQuestionIds.add(questionId)
-    const selectedOptionIds = Array.isArray(
-      (answer as { selectedOptionIds?: unknown }).selectedOptionIds
-    )
-      ? Array.from(
-          new Set(
-            (
-              (answer as { selectedOptionIds: unknown[] }).selectedOptionIds ||
-              []
-            )
-              .map((optionId) =>
-                typeof optionId === "string" ? optionId.trim() : ""
-              )
-              .filter((optionId) => optionId.length > 0)
-          )
-        )
-      : undefined
-    if (
-      (answer as { selectedOptionIds?: unknown }).selectedOptionIds !==
-        undefined &&
-      !Array.isArray(
-        (answer as { selectedOptionIds?: unknown }).selectedOptionIds
-      )
-    ) {
-      throw new Error(
-        `Answer "${questionId}" selectedOptionIds must be an array`
-      )
-    }
-    const selectedOptionLabels = Array.isArray(
-      (answer as { selectedOptionLabels?: unknown }).selectedOptionLabels
-    )
-      ? (
-          (answer as { selectedOptionLabels: unknown[] })
-            .selectedOptionLabels || []
-        )
-          .map((label) => (typeof label === "string" ? label.trim() : ""))
-          .filter((label) => label.length > 0)
-      : undefined
-    if (
-      (answer as { selectedOptionLabels?: unknown }).selectedOptionLabels !==
-        undefined &&
-      !Array.isArray(
-        (answer as { selectedOptionLabels?: unknown }).selectedOptionLabels
-      )
-    ) {
-      throw new Error(
-        `Answer "${questionId}" selectedOptionLabels must be an array`
-      )
-    }
-    const otherText =
-      typeof (answer as { otherText?: unknown }).otherText === "string"
-        ? (answer as { otherText: string }).otherText.trim() || undefined
-        : undefined
-    if (
-      (answer as { otherText?: unknown }).otherText !== undefined &&
-      typeof (answer as { otherText?: unknown }).otherText !== "string"
-    ) {
-      throw new Error(`Answer "${questionId}" otherText must be a string`)
-    }
-    const text =
-      typeof (answer as { text?: unknown }).text === "string"
-        ? (answer as { text: string }).text.trim() || undefined
-        : undefined
-    if (
-      (answer as { text?: unknown }).text !== undefined &&
-      typeof (answer as { text?: unknown }).text !== "string"
-    ) {
-      throw new Error(`Answer "${questionId}" text must be a string`)
-    }
-    answers.push({
-      questionId,
-      selectedOptionIds,
-      selectedOptionLabels,
-      otherText,
-      text,
-    })
-  }
-  return answers
-}
-
-function buildUserInputQuestionSummaries(
-  promptPayload: Record<string, unknown>,
-  resolutionPayload: Record<string, unknown>
-): TaskInputQuestionSummary[] {
-  const definitions = parseUserInputQuestionDefinitions(promptPayload)
-  const answers = parseUserInputAnswers(resolutionPayload, definitions)
-  const answerMap = new Map<string, TaskInputAnswer>()
-  for (const answer of answers) {
-    answerMap.set(answer.questionId, answer)
-  }
-
-  return definitions.map((question) => {
-    const answer = answerMap.get(question.id)
-    const labels =
-      answer?.selectedOptionIds?.map(
-        (selectedId: string) =>
-          (question.options || []).find(
-            (option: TaskInputOption) => option.id === selectedId
-          )?.label || selectedId
-      ) || undefined
-    return {
-      ...question,
-      required: question.required === true,
-      answer: answer
-        ? {
-            ...answer,
-            selectedOptionLabels:
-              answer.selectedOptionLabels &&
-              answer.selectedOptionLabels.length > 0
-                ? answer.selectedOptionLabels
-                : labels,
-          }
-        : undefined,
-    }
-  })
-}
-
 function summarizeUserInputAnswers(
   userInput: TaskSummary["userInput"]
 ): string {
@@ -911,78 +356,6 @@ function summarizeUserInputAnswers(
   return parts.join(" | ")
 }
 
-function mapEntityRefFromRow(
-  prefix: "requester" | "target" | "resolved_by",
-  row: RawTaskRow
-): ConversationEntityRef | undefined {
-  const participantType = row[`${prefix}_participant_type` as keyof RawTaskRow]
-  if (typeof participantType !== "string" || !participantType.trim()) {
-    return undefined
-  }
-  const participantId = row[`${prefix}_participant_id` as keyof RawTaskRow]
-  const workspaceMemberId =
-    prefix === "requester"
-      ? row.requester_workspace_member_id
-      : prefix === "target"
-        ? row.target_workspace_member_id
-        : row.resolved_by_workspace_member_id
-  const actorId =
-    prefix === "requester"
-      ? row.requester_actor_id
-      : prefix === "target"
-        ? row.target_actor_id
-        : row.resolved_by_actor_id
-  const remoteAgentId =
-    prefix === "requester"
-      ? row.requester_remote_agent_id
-      : prefix === "target"
-        ? row.target_remote_agent_id
-        : row.resolved_by_remote_agent_id
-  const name = row[`${prefix}_name` as keyof RawTaskRow]
-  const title = row[`${prefix}_title` as keyof RawTaskRow]
-  const role = row[`${prefix}_role` as keyof RawTaskRow]
-  const actorAvatarFileId =
-    row[`${prefix}_actor_avatar_file_id` as keyof RawTaskRow]
-  const userAvatarFileId =
-    row[`${prefix}_user_avatar_file_id` as keyof RawTaskRow]
-  const remoteAgentAvatarFileId =
-    row[`${prefix}_remote_agent_avatar_file_id` as keyof RawTaskRow]
-  const avatarEmoji = row[`${prefix}_avatar_emoji` as keyof RawTaskRow]
-
-  return {
-    participantId:
-      typeof participantId === "string" ? participantId : undefined,
-    participantType:
-      participantType as ConversationEntityRef["participantType"],
-    actorId: typeof actorId === "string" ? actorId : undefined,
-    remoteAgentId:
-      typeof remoteAgentId === "string" ? remoteAgentId : undefined,
-    workspaceMemberId:
-      typeof workspaceMemberId === "string" ? workspaceMemberId : undefined,
-    name: typeof name === "string" ? name : undefined,
-    title: typeof title === "string" ? title : undefined,
-    role: typeof role === "string" ? role : undefined,
-    avatarUrl: entityAvatarUrl(
-      typeof remoteAgentAvatarFileId === "string"
-        ? remoteAgentAvatarFileId
-        : null,
-      typeof actorAvatarFileId === "string" ? actorAvatarFileId : null,
-      typeof userAvatarFileId === "string" ? userAvatarFileId : null
-    ),
-    avatarEmoji: typeof avatarEmoji === "string" ? avatarEmoji : undefined,
-  }
-}
-
-function requireEntityRef(
-  entity: ConversationEntityRef | undefined,
-  label: string
-): ConversationEntityRef {
-  if (!entity?.participantId || !entity.participantType) {
-    throw new Error(`${label} is missing a participant entity`)
-  }
-  return entity
-}
-
 type TaskResolutionStatus =
   | "answered"
   | "approved"
@@ -1006,323 +379,7 @@ function isOpenTaskLifecycle(lifecycle: ToolCallTaskLifecycleStatus): boolean {
   }
 }
 
-/**
- * Resolve a conversation participant to its access_subjects id (the task
- * delivery key). Used by the remote-agent task paths that mint their own
- * task (the principal is the requesting remote_agent's participant subject).
- */
-async function resolveParticipantSubjectId(
-  client: Executor,
-  participantId: string
-): Promise<string> {
-  const row = await client
-    .selectFrom("conversation_participants")
-    .select("subject_id")
-    .where("id", "=", participantId)
-    .limit(1)
-    .executeTakeFirst()
-  if (!row?.subject_id) {
-    throw new Error(`Participant ${participantId} has no subject`)
-  }
-  return row.subject_id
-}
-
-function buildTaskSummary(row: RawTaskRow): TaskSummary {
-  const requester = requireEntityRef(
-    mapEntityRefFromRow("requester", row),
-    `Task ${row.id} requester`
-  )
-  const target = mapEntityRefFromRow("target", row)
-  const resolvedBy = row.resolved_by_participant_id
-    ? requireEntityRef(
-        mapEntityRefFromRow("resolved_by", row),
-        `Task ${row.id} resolved_by`
-      )
-    : undefined
-  const resolutionPayload = requireJsonObject(
-    row.resolution_payload,
-    `Task ${row.id} resolution_payload`
-  )
-
-  const baseTask = {
-    id: row.id,
-    remoteAgentRunId: row.remote_agent_run_id || undefined,
-    workspaceId: row.workspace_id,
-    conversationId: row.conversation_id,
-    itemId: row.conversation_item_id || undefined,
-    lifecycleStatus: row.lifecycle_status,
-    outcome: row.outcome || undefined,
-    revision: toRevisionNumber(row.revision, `Task ${row.id} revision`),
-    requester,
-    resolvedBy,
-    resolutionNote:
-      typeof resolutionPayload.note === "string"
-        ? resolutionPayload.note.trim() || undefined
-        : undefined,
-    createdAt: serializeInstant(row.created_at),
-    updatedAt: serializeInstant(row.updated_at),
-    resolvedAt: serializeOptionalInstant(row.resolved_at),
-    expiresAt: serializeOptionalInstant(row.expires_at),
-    viewerCanResolve: false,
-  }
-
-  if (row.kind === TASK_REQUEST_KIND.USER_INPUT) {
-    const promptPayload = requireJsonObject(
-      row.prompt_payload,
-      `Task ${row.id} prompt_payload`
-    )
-    return {
-      ...baseTask,
-      kind: TASK_REQUEST_KIND.USER_INPUT,
-      target,
-      userInput: {
-        title: requireTrimmedString(
-          promptPayload.title,
-          `Task ${row.id} user_input.title`
-        ),
-        instructions:
-          typeof promptPayload.instructions === "string"
-            ? promptPayload.instructions.trim() || undefined
-            : undefined,
-        questions: buildUserInputQuestionSummaries(
-          promptPayload,
-          resolutionPayload
-        ),
-      },
-    }
-  }
-
-  if (row.kind === TASK_REQUEST_KIND.PLAN_APPROVAL) {
-    const planPayload = requireJsonObject(
-      row.plan_payload,
-      `Task ${row.id} plan_payload`
-    )
-    return {
-      ...baseTask,
-      kind: TASK_REQUEST_KIND.PLAN_APPROVAL,
-      target,
-      planApproval: {
-        title: requireTrimmedString(
-          planPayload.title,
-          `Task ${row.id} plan_approval.title`
-        ),
-        summary:
-          typeof planPayload.summary === "string"
-            ? planPayload.summary.trim() || undefined
-            : undefined,
-        planMarkdown: requireTrimmedString(
-          planPayload.planMarkdown,
-          `Task ${row.id} plan_approval.planMarkdown`
-        ),
-        checklist: Array.isArray(planPayload.checklist)
-          ? (planPayload.checklist as PlanChecklistStep[])
-          : undefined,
-      },
-    }
-  }
-
-  const requestedAction = requireJsonObject(
-    row.requested_action,
-    `Task ${row.id} requested_action`
-  ) as unknown as RuntimeAuthorizationRequestedAction
-  const grantOptions = parseJsonArray<RuntimeAuthorizationGrantOption>(
-    row.grant_options,
-    `Task ${row.id} grant_options`
-  )
-  const availablePresets = parseJsonArray<RuntimeAuthorizationPreset>(
-    row.available_presets,
-    `Task ${row.id} available_presets`
-  )
-  const runtimeAuthorization: RuntimeAuthorizationTaskDetails = {
-    requestedToolName: requireTrimmedString(
-      row.requested_tool_name,
-      `Task ${row.id} requested_tool_name`
-    ),
-    deviceToolStableKey: requireTrimmedString(
-      row.device_tool_stable_key,
-      `Task ${row.id} device_tool_stable_key`
-    ),
-    requestedAction,
-    reason: requireTrimmedString(
-      row.reason,
-      `Task ${row.id} runtime_authorization.reason`
-    ),
-    deviceId: requireTrimmedString(row.device_id, `Task ${row.id} device_id`),
-    deviceDisplayName: requireTrimmedString(
-      row.device_display_name,
-      `Task ${row.id} device_display_name`
-    ),
-    deviceCapabilityId: requireTrimmedString(
-      row.device_capability_id,
-      `Task ${row.id} device_capability_id`
-    ),
-    exposureId: requireTrimmedString(
-      row.device_exposure_id,
-      `Task ${row.id} device_exposure_id`
-    ),
-    exposureDisplayName: requireTrimmedString(
-      row.exposure_display_name,
-      `Task ${row.id} exposure_display_name`
-    ),
-    grantOptions,
-    availablePresets,
-    approvedPreset:
-      typeof resolutionPayload.approvedPreset === "string"
-        ? (resolutionPayload.approvedPreset as RuntimeAuthorizationPreset)
-        : undefined,
-    approvedGrant:
-      resolutionPayload.approvedGrant &&
-      typeof resolutionPayload.approvedGrant === "object" &&
-      !Array.isArray(resolutionPayload.approvedGrant)
-        ? (resolutionPayload.approvedGrant as RuntimeAuthorizationTaskDetails["approvedGrant"])
-        : undefined,
-    requestMode:
-      row.request_mode === "blocking" || row.request_mode === "background"
-        ? (row.request_mode as RuntimeAuthorizationRequestMode)
-        : (() => {
-            throw new Error(
-              `Task ${row.id} runtime_authorization.requestMode is invalid`
-            )
-          })(),
-    // Surface the persisted retry_nonce so the dedupe-reuse path in
-    // runtime-authorizations/requests.ts can return the row's actual nonce
-    // (the one that will match source_retry_nonce on the eventual grant)
-    // instead of the freshly-generated nonce that no grant will ever match.
-    sourceRetryNonce: row.source_retry_nonce ?? undefined,
-  }
-
-  return {
-    ...baseTask,
-    kind: TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION,
-    runtimeAuthorization,
-  }
-}
-
-async function getTaskRowById(taskId: string, queryable?: Executor) {
-  const compiled = sql<RawTaskRow>`
-    SELECT ir.*,
-            ir.executor_kind AS kind,
-            ir.request_payload AS prompt_payload,
-            ir.request_payload AS plan_payload,
-            auth.requested_tool_name AS requested_tool_name,
-            auth.reason AS reason,
-            auth.request_mode AS request_mode,
-            auth.requested_action AS requested_action,
-            auth.grant_options AS grant_options,
-            auth.available_presets AS available_presets,
-            auth.source_request_args AS source_request_args,
-            auth.source_runtime_session_id AS source_runtime_session_id,
-            auth.source_retry_nonce AS source_retry_nonce,
-            auth.principal_subject_id AS principal_subject_id,
-            auth.principal_scope_subject_id AS principal_scope_subject_id,
-            principal_subj.kind AS principal_subject_kind,
-            principal_subj.remote_agent_id AS principal_remote_agent_id,
-            ir.final_result_payload AS resolution_payload,
-            auth.device_id,
-            auth.device_capability_id,
-            auth.device_exposure_id,
-            auth.device_tool_stable_key,
-            requester_subj.workspace_member_id AS requester_workspace_member_id,
-            requester_subj.actor_id AS requester_actor_id,
-            requester_subj.remote_agent_id AS requester_remote_agent_id,
-            requester_subj.kind AS requester_participant_type,
-            COALESCE(requester_remote_agent_app.display_name, requester_actor_app.display_name, requester_user.name, requester.display_name) AS requester_name,
-            COALESCE(requester_remote_agent.title, requester_actor.title) AS requester_title,
-            COALESCE(CASE WHEN requester_remote_agent.id IS NOT NULL THEN 'remote_agent' END, requester_actor.role::text) AS requester_role,
-            requester_actor.avatar_file_id AS requester_actor_avatar_file_id,
-            requester_user.avatar_file_id AS requester_user_avatar_file_id,
-            requester_remote_agent.avatar_file_id AS requester_remote_agent_avatar_file_id,
-            COALESCE(requester_remote_agent.avatar_emoji, requester_actor.avatar_emoji) AS requester_avatar_emoji,
-            target_subj.workspace_member_id AS target_workspace_member_id,
-            target_subj.actor_id AS target_actor_id,
-            target_subj.remote_agent_id AS target_remote_agent_id,
-            target_subj.kind AS target_participant_type,
-            COALESCE(target_remote_agent_app.display_name, target_actor_app.display_name, target_user.name, target.display_name) AS target_name,
-            COALESCE(target_remote_agent.title, target_actor.title) AS target_title,
-            COALESCE(CASE WHEN target_remote_agent.id IS NOT NULL THEN 'remote_agent' END, target_actor.role::text) AS target_role,
-            target_actor.avatar_file_id AS target_actor_avatar_file_id,
-            target_user.avatar_file_id AS target_user_avatar_file_id,
-            target_remote_agent.avatar_file_id AS target_remote_agent_avatar_file_id,
-            COALESCE(target_remote_agent.avatar_emoji, target_actor.avatar_emoji) AS target_avatar_emoji,
-            resolver_subj.workspace_member_id AS resolved_by_workspace_member_id,
-            resolver_subj.actor_id AS resolved_by_actor_id,
-            resolver_subj.remote_agent_id AS resolved_by_remote_agent_id,
-            resolver_subj.kind AS resolved_by_participant_type,
-            COALESCE(resolver_remote_agent_app.display_name, resolver_actor_app.display_name, resolver_user.name, resolver.display_name) AS resolved_by_name,
-            COALESCE(resolver_remote_agent.title, resolver_actor.title) AS resolved_by_title,
-            COALESCE(CASE WHEN resolver_remote_agent.id IS NOT NULL THEN 'remote_agent' END, resolver_actor.role::text) AS resolved_by_role,
-            resolver_actor.avatar_file_id AS resolved_by_actor_avatar_file_id,
-            resolver_user.avatar_file_id AS resolved_by_user_avatar_file_id,
-            resolver_remote_agent.avatar_file_id AS resolved_by_remote_agent_avatar_file_id,
-            COALESCE(resolver_remote_agent.avatar_emoji, resolver_actor.avatar_emoji) AS resolved_by_avatar_emoji,
-            device.title AS device_display_name,
-            exposure.display_name AS exposure_display_name,
-            exposure.stable_key AS exposure_stable_key
-     FROM tool_call_tasks ir
-     LEFT JOIN tool_call_task_runtime_authorization auth
-       ON auth.task_id = ir.id
-     LEFT JOIN access_subjects principal_subj
-       ON principal_subj.id = auth.principal_subject_id
-     LEFT JOIN conversation_participants requester
-       ON requester.id = ir.requester_participant_id
-     LEFT JOIN access_subjects requester_subj
-       ON requester_subj.id = requester.subject_id
-     LEFT JOIN actors requester_actor
-       ON requester_actor.id = requester_subj.actor_id
-     LEFT JOIN workspace_apps_live requester_actor_app
-       ON requester_actor_app.id = requester_actor.id
-     LEFT JOIN remote_agents requester_remote_agent
-       ON requester_remote_agent.id = requester_subj.remote_agent_id
-     LEFT JOIN workspace_apps_live requester_remote_agent_app
-       ON requester_remote_agent_app.id = requester_remote_agent.id
-     LEFT JOIN workspace_members requester_wm
-       ON requester_wm.id = requester_subj.workspace_member_id
-     LEFT JOIN users requester_user
-       ON requester_user.id = requester_wm.user_id
-     LEFT JOIN conversation_participants target
-       ON target.id = ir.target_participant_id
-     LEFT JOIN access_subjects target_subj
-       ON target_subj.id = target.subject_id
-     LEFT JOIN actors target_actor
-       ON target_actor.id = target_subj.actor_id
-     LEFT JOIN workspace_apps_live target_actor_app
-       ON target_actor_app.id = target_actor.id
-     LEFT JOIN remote_agents target_remote_agent
-       ON target_remote_agent.id = target_subj.remote_agent_id
-     LEFT JOIN workspace_apps_live target_remote_agent_app
-       ON target_remote_agent_app.id = target_remote_agent.id
-     LEFT JOIN workspace_members target_wm
-       ON target_wm.id = target_subj.workspace_member_id
-     LEFT JOIN users target_user
-       ON target_user.id = target_wm.user_id
-     LEFT JOIN conversation_participants resolver
-       ON resolver.id = ir.resolved_by_participant_id
-     LEFT JOIN access_subjects resolver_subj
-       ON resolver_subj.id = resolver.subject_id
-     LEFT JOIN actors resolver_actor
-       ON resolver_actor.id = resolver_subj.actor_id
-     LEFT JOIN workspace_apps_live resolver_actor_app
-       ON resolver_actor_app.id = resolver_actor.id
-     LEFT JOIN remote_agents resolver_remote_agent
-       ON resolver_remote_agent.id = resolver_subj.remote_agent_id
-     LEFT JOIN workspace_apps_live resolver_remote_agent_app
-       ON resolver_remote_agent_app.id = resolver_remote_agent.id
-     LEFT JOIN workspace_members resolver_wm
-       ON resolver_wm.id = resolver_subj.workspace_member_id
-     LEFT JOIN users resolver_user
-       ON resolver_user.id = resolver_wm.user_id
-     LEFT JOIN devices device
-       ON device.id = auth.device_id
-     LEFT JOIN device_exposures exposure
-       ON exposure.id = auth.device_exposure_id
-     WHERE ir.id = ${taskId}
-     LIMIT 1
-  `.compile(db)
-  const result = await runCompiledOn<RawTaskRow>(queryable, compiled)
-  return result.rows[0] || null
-}
-
-type StoredTaskResolveResponse = {
+type StoredTaskResolvePayload = {
   outcome: ChatTaskResolveOutcome
   task: TaskSummary
 }
@@ -1337,11 +394,10 @@ function requireTaskResolveOutcome(
   throw new Error(`${label} is invalid`)
 }
 
-function parseStoredTaskResolveResponse(
-  value: unknown,
+function parseStoredTaskResolvePayload(
+  payload: Record<string, unknown>,
   label: string
-): StoredTaskResolveResponse {
-  const payload = requireJsonObject(value, label)
+): StoredTaskResolvePayload {
   const outcome = requireTaskResolveOutcome(payload.outcome, `${label}.outcome`)
   if (!payload.task || typeof payload.task !== "object") {
     throw new Error(`${label}.task is required`)
@@ -1350,178 +406,6 @@ function parseStoredTaskResolveResponse(
     outcome,
     task: payload.task as TaskSummary,
   }
-}
-
-async function getTaskCommandRow(
-  taskId: string,
-  commandId: string,
-  queryable?: Executor
-) {
-  const compiled = db
-    .selectFrom("tool_call_task_response_commands")
-    .selectAll()
-    .where("task_id", "=", taskId)
-    .where("command_id", "=", commandId)
-    .limit(1)
-    .compile()
-  const result = await runCompiledOn<RawTaskCommandRow>(queryable, compiled)
-  return result.rows[0] || null
-}
-
-async function getTaskRowByIdForUpdate(taskId: string, queryable: Executor) {
-  const compiled = sql<RawTaskRow>`
-    SELECT ir.*,
-            ir.executor_kind AS kind,
-            ir.request_payload AS prompt_payload,
-            ir.request_payload AS plan_payload,
-            auth.requested_tool_name AS requested_tool_name,
-            auth.reason AS reason,
-            auth.request_mode AS request_mode,
-            auth.requested_action AS requested_action,
-            auth.grant_options AS grant_options,
-            auth.available_presets AS available_presets,
-            auth.source_request_args AS source_request_args,
-            auth.source_runtime_session_id AS source_runtime_session_id,
-            auth.source_retry_nonce AS source_retry_nonce,
-            auth.principal_subject_id AS principal_subject_id,
-            auth.principal_scope_subject_id AS principal_scope_subject_id,
-            principal_subj.kind AS principal_subject_kind,
-            principal_subj.remote_agent_id AS principal_remote_agent_id,
-            ir.final_result_payload AS resolution_payload,
-            auth.device_id,
-            auth.device_capability_id,
-            auth.device_exposure_id,
-            auth.device_tool_stable_key,
-            requester_subj.workspace_member_id AS requester_workspace_member_id,
-            requester_subj.actor_id AS requester_actor_id,
-            requester_subj.remote_agent_id AS requester_remote_agent_id,
-            requester_subj.kind AS requester_participant_type,
-            COALESCE(requester_remote_agent_app.display_name, requester_actor_app.display_name, requester_user.name, requester.display_name) AS requester_name,
-            COALESCE(requester_remote_agent.title, requester_actor.title) AS requester_title,
-            COALESCE(CASE WHEN requester_remote_agent.id IS NOT NULL THEN 'remote_agent' END, requester_actor.role::text) AS requester_role,
-            requester_actor.avatar_file_id AS requester_actor_avatar_file_id,
-            requester_user.avatar_file_id AS requester_user_avatar_file_id,
-            requester_remote_agent.avatar_file_id AS requester_remote_agent_avatar_file_id,
-            COALESCE(requester_remote_agent.avatar_emoji, requester_actor.avatar_emoji) AS requester_avatar_emoji,
-            target_subj.workspace_member_id AS target_workspace_member_id,
-            target_subj.actor_id AS target_actor_id,
-            target_subj.remote_agent_id AS target_remote_agent_id,
-            target_subj.kind AS target_participant_type,
-            COALESCE(target_remote_agent_app.display_name, target_actor_app.display_name, target_user.name, target.display_name) AS target_name,
-            COALESCE(target_remote_agent.title, target_actor.title) AS target_title,
-            COALESCE(CASE WHEN target_remote_agent.id IS NOT NULL THEN 'remote_agent' END, target_actor.role::text) AS target_role,
-            target_actor.avatar_file_id AS target_actor_avatar_file_id,
-            target_user.avatar_file_id AS target_user_avatar_file_id,
-            target_remote_agent.avatar_file_id AS target_remote_agent_avatar_file_id,
-            COALESCE(target_remote_agent.avatar_emoji, target_actor.avatar_emoji) AS target_avatar_emoji,
-            resolver_subj.workspace_member_id AS resolved_by_workspace_member_id,
-            resolver_subj.actor_id AS resolved_by_actor_id,
-            resolver_subj.remote_agent_id AS resolved_by_remote_agent_id,
-            resolver_subj.kind AS resolved_by_participant_type,
-            COALESCE(resolver_remote_agent_app.display_name, resolver_actor_app.display_name, resolver_user.name, resolver.display_name) AS resolved_by_name,
-            COALESCE(resolver_remote_agent.title, resolver_actor.title) AS resolved_by_title,
-            COALESCE(CASE WHEN resolver_remote_agent.id IS NOT NULL THEN 'remote_agent' END, resolver_actor.role::text) AS resolved_by_role,
-            resolver_actor.avatar_file_id AS resolved_by_actor_avatar_file_id,
-            resolver_user.avatar_file_id AS resolved_by_user_avatar_file_id,
-            resolver_remote_agent.avatar_file_id AS resolved_by_remote_agent_avatar_file_id,
-            COALESCE(resolver_remote_agent.avatar_emoji, resolver_actor.avatar_emoji) AS resolved_by_avatar_emoji,
-            device.title AS device_display_name,
-            exposure.display_name AS exposure_display_name,
-            exposure.stable_key AS exposure_stable_key
-     FROM tool_call_tasks ir
-     LEFT JOIN tool_call_task_runtime_authorization auth
-       ON auth.task_id = ir.id
-     LEFT JOIN access_subjects principal_subj
-       ON principal_subj.id = auth.principal_subject_id
-     LEFT JOIN conversation_participants requester
-       ON requester.id = ir.requester_participant_id
-     LEFT JOIN access_subjects requester_subj
-       ON requester_subj.id = requester.subject_id
-     LEFT JOIN actors requester_actor
-       ON requester_actor.id = requester_subj.actor_id
-     LEFT JOIN workspace_apps_live requester_actor_app
-       ON requester_actor_app.id = requester_actor.id
-     LEFT JOIN remote_agents requester_remote_agent
-       ON requester_remote_agent.id = requester_subj.remote_agent_id
-     LEFT JOIN workspace_apps_live requester_remote_agent_app
-       ON requester_remote_agent_app.id = requester_remote_agent.id
-     LEFT JOIN workspace_members requester_wm
-       ON requester_wm.id = requester_subj.workspace_member_id
-     LEFT JOIN users requester_user
-       ON requester_user.id = requester_wm.user_id
-     LEFT JOIN conversation_participants target
-       ON target.id = ir.target_participant_id
-     LEFT JOIN access_subjects target_subj
-       ON target_subj.id = target.subject_id
-     LEFT JOIN actors target_actor
-       ON target_actor.id = target_subj.actor_id
-     LEFT JOIN workspace_apps_live target_actor_app
-       ON target_actor_app.id = target_actor.id
-     LEFT JOIN remote_agents target_remote_agent
-       ON target_remote_agent.id = target_subj.remote_agent_id
-     LEFT JOIN workspace_apps_live target_remote_agent_app
-       ON target_remote_agent_app.id = target_remote_agent.id
-     LEFT JOIN workspace_members target_wm
-       ON target_wm.id = target_subj.workspace_member_id
-     LEFT JOIN users target_user
-       ON target_user.id = target_wm.user_id
-     LEFT JOIN conversation_participants resolver
-       ON resolver.id = ir.resolved_by_participant_id
-     LEFT JOIN access_subjects resolver_subj
-       ON resolver_subj.id = resolver.subject_id
-     LEFT JOIN actors resolver_actor
-       ON resolver_actor.id = resolver_subj.actor_id
-     LEFT JOIN workspace_apps_live resolver_actor_app
-       ON resolver_actor_app.id = resolver_actor.id
-     LEFT JOIN remote_agents resolver_remote_agent
-       ON resolver_remote_agent.id = resolver_subj.remote_agent_id
-     LEFT JOIN workspace_apps_live resolver_remote_agent_app
-       ON resolver_remote_agent_app.id = resolver_remote_agent.id
-     LEFT JOIN workspace_members resolver_wm
-       ON resolver_wm.id = resolver_subj.workspace_member_id
-     LEFT JOIN users resolver_user
-       ON resolver_user.id = resolver_wm.user_id
-     LEFT JOIN devices device
-       ON device.id = auth.device_id
-     LEFT JOIN device_exposures exposure
-       ON exposure.id = auth.device_exposure_id
-     WHERE ir.id = ${taskId}
-     LIMIT 1
-     FOR UPDATE OF ir
-  `.compile(db)
-  const result = await runCompiledOn<RawTaskRow>(queryable, compiled)
-  return result.rows[0] || null
-}
-
-async function insertTaskCommandRow(
-  client: Executor,
-  params: {
-    taskId: string
-    commandId: string
-    baseRevision: number
-    outcome: ChatTaskResolveOutcome
-    requestPayload: Record<string, unknown>
-    responsePayload: StoredTaskResolveResponse
-    createdByWorkspaceMemberId: string
-  }
-) {
-  await runBuilder(
-    client,
-    db.insertInto("tool_call_task_response_commands").values({
-      task_id: params.taskId,
-      command_id: params.commandId,
-      base_revision:
-        params.baseRevision as unknown as TableInsert<"tool_call_task_response_commands">["base_revision"],
-      outcome: params.outcome,
-      request_payload: jsonbValue(
-        params.requestPayload
-      ) as unknown as TableInsert<"tool_call_task_response_commands">["request_payload"],
-      response_payload: jsonbValue(
-        params.responsePayload
-      ) as unknown as TableInsert<"tool_call_task_response_commands">["response_payload"],
-      created_by_workspace_member_id: params.createdByWorkspaceMemberId,
-    })
-  )
 }
 
 async function appendTaskUpdatedSyncEvent(
@@ -1776,13 +660,11 @@ async function maybeAutoRetryAfterApproval(args: {
   // — selectAndClaimRuntimeAuthorizationGrant then refuses to claim any
   // scoped grant and the auto-retry skips (best-effort semantics, not an
   // approval failure since the grant is already in the DB).
-  const { buildRuntimePrincipalContext } =
-    await import("../access/subject-resolution.js")
   const { deriveOperationPrincipalAudit } =
     await import("../devices/operations.js")
   let ctx
   try {
-    ctx = await buildRuntimePrincipalContext(db, {
+    ctx = await buildRuntimePrincipalContextDefault({
       principal: args.lockedPrincipalSubject,
       workspaceId: args.task.workspaceId,
       conversationId: args.task.conversationId ?? null,
@@ -1902,43 +784,6 @@ function buildRuntimeAuthorizationSupersededNotice(task: TaskSummary) {
   }
 }
 
-async function insertTaskRequest(
-  client: Executor,
-  params: {
-    workspaceId: string
-    conversationId: string
-    taskId?: string
-    remoteAgentRunId?: string
-    requesterParticipantId: string
-    kind: TaskRequestKind
-    requestKey: string
-    targetParticipantId?: string
-    expiresAt?: Timestamp
-  }
-): Promise<string | null> {
-  // The caller already created the tool_call_tasks row with its request_key and
-  // dedupe metadata. Here we attach the human-facing participant fields and
-  // return the parent id. The dedupe ON CONFLICT lives at task creation; this
-  // UPDATE only succeeds while the task is still non-terminal.
-  if (!params.taskId) {
-    throw new Error("insertTaskRequest requires a taskId")
-  }
-  const updated = await runCompiledOn<{ id: string }>(
-    client,
-    sql<{ id: string }>`
-      UPDATE tool_call_tasks
-      SET requester_participant_id = ${params.requesterParticipantId},
-          target_participant_id = ${params.targetParticipantId || null},
-          remote_agent_run_id = COALESCE(${params.remoteAgentRunId || null}, remote_agent_run_id),
-          expires_at = COALESCE(${params.expiresAt || null}, expires_at)
-      WHERE id = ${params.taskId}
-        AND lifecycle_status IN ('submitted', 'working', 'input_required', 'auth_required')
-      RETURNING id
-    `.compile(db)
-  )
-  return updated.rows[0]?.id ?? null
-}
-
 /**
  * Resolve the existing-pending-task id that won an INSERT race
  * against `insertTaskRequest` (which returned null on conflict).
@@ -1966,41 +811,6 @@ async function resolveInsertConflictWinner(
   )
 }
 
-async function findTaskIdByTaskId(taskId: string, queryable?: Executor) {
-  // Confirm the task exists and is non-terminal so dedupe-reuse only returns a
-  // live row.
-  const compiled = db
-    .selectFrom("tool_call_tasks")
-    .select("id")
-    .where("id", "=", taskId)
-    .limit(1)
-    .compile()
-  const result = await runCompiledOn<{ id: string }>(queryable, compiled)
-  return result.rows[0]?.id || null
-}
-
-async function findPendingTaskIdByRequestKey(
-  workspaceId: string,
-  requestKey: string,
-  queryable?: Executor
-) {
-  const compiled = db
-    .selectFrom("tool_call_tasks")
-    .select("id")
-    .where("workspace_id", "=", workspaceId)
-    .where("request_key", "=", requestKey)
-    .where("lifecycle_status", "in", [
-      "submitted",
-      "working",
-      "input_required",
-      "auth_required",
-    ])
-    .limit(1)
-    .compile()
-  const result = await runCompiledOn<{ id: string }>(queryable, compiled)
-  return result.rows[0]?.id || null
-}
-
 async function insertUserInputTaskDetails(
   _client: Executor,
   _params: {
@@ -2022,71 +832,6 @@ async function insertPlanApprovalTaskDetails(
 ) {
   // No-op under the task unification: the plan payload lives in
   // tool_call_tasks.request_payload. plan_approval has no CTI detail table.
-}
-
-async function insertRuntimeAuthorizationTaskDetails(
-  client: Executor,
-  params: {
-    taskId: string
-    deviceId: string
-    deviceCapabilityId: string
-    deviceExposureId: string
-    requestedToolName: string
-    deviceToolStableKey: string
-    reason: string
-    requestMode: RuntimeAuthorizationRequestMode
-    sourceRuntimeSessionId?: string
-    sourceRetryNonce?: string
-    sourceRequestArgs: Record<string, unknown>
-    requestedAction: RuntimeAuthorizationRequestedAction
-    grantOptions: RuntimeAuthorizationGrantOption[]
-    availablePresets: RuntimeAuthorizationPreset[]
-    dedupeKey: string
-    /** subject-scope-refactor: principal subject_id (NOT NULL on
-     * tool_call_task_runtime_authorization). Caller resolves the
-     * triggering principal (actor / remote_agent / conversation) to an
-     * access_subjects row via upsertAccessSubjectOn(client, ...) and passes
-     * the id here. */
-    principalSubjectId: string
-    /** subject-scope-refactor: optional principal scope subject_id (the
-     * conversation subject when the triggering principal was active in a
-     * conversation; null otherwise). */
-    principalScopeSubjectId?: string | null
-    /** @deprecated retained for transitional caller compatibility; not
-     * written to the DB. */
-    principalRemoteAgentId?: string
-  }
-) {
-  await runBuilder(
-    client,
-    db.insertInto("tool_call_task_runtime_authorization").values({
-      task_id: params.taskId,
-      device_id: params.deviceId,
-      device_capability_id: params.deviceCapabilityId,
-      device_exposure_id: params.deviceExposureId,
-      requested_tool_name: params.requestedToolName,
-      device_tool_stable_key: params.deviceToolStableKey,
-      reason: params.reason,
-      request_mode: params.requestMode,
-      source_runtime_session_id: params.sourceRuntimeSessionId || null,
-      source_retry_nonce: params.sourceRetryNonce || null,
-      source_request_args: jsonbValue(
-        params.sourceRequestArgs
-      ) as unknown as TableInsert<"tool_call_task_runtime_authorization">["source_request_args"],
-      principal_subject_id: params.principalSubjectId,
-      principal_scope_subject_id: params.principalScopeSubjectId || null,
-      requested_action: jsonbValue(
-        params.requestedAction
-      ) as unknown as TableInsert<"tool_call_task_runtime_authorization">["requested_action"],
-      grant_options: jsonbValue(
-        params.grantOptions
-      ) as unknown as TableInsert<"tool_call_task_runtime_authorization">["grant_options"],
-      available_presets: jsonbValue(
-        params.availablePresets
-      ) as unknown as TableInsert<"tool_call_task_runtime_authorization">["available_presets"],
-      dedupe_key: params.dedupeKey,
-    })
-  )
 }
 
 /**
@@ -2150,27 +895,6 @@ export async function writeRuntimeAuthorizationTaskDetailInTx(
   })
 }
 
-async function updateTaskConversationItemId(
-  client: Executor,
-  taskId: string,
-  conversationItemId: string
-) {
-  const result = await runBuilder(
-    client,
-    db
-      .updateTable("tool_call_tasks")
-      .set({
-        conversation_item_id: conversationItemId,
-      })
-      .where("id", "=", taskId)
-  )
-  if (result.rowCount !== 1) {
-    throw new Error(
-      `Expected to update conversation item for task ${taskId}, but affected ${result.rowCount ?? 0} rows`
-    )
-  }
-}
-
 /**
  * Translate a resolver's business decision into the task lifecycle/outcome
  * fields stored on tool_call_tasks.
@@ -2179,15 +903,15 @@ function taskResolutionStatusToFields(
   status: TaskResolutionStatus,
   kind: TaskRequestKind
 ): {
-  lifecycle_status: ToolCallTaskLifecycleStatus
+  lifecycleStatus: ToolCallTaskLifecycleStatus
   outcome: ToolCallTaskOutcome | null
 } {
   switch (status) {
     case "answered":
-      return { lifecycle_status: "completed", outcome: "answered" }
+      return { lifecycleStatus: "completed", outcome: "answered" }
     case "approved":
       return {
-        lifecycle_status: "completed",
+        lifecycleStatus: "completed",
         outcome:
           kind === TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION
             ? "granted"
@@ -2195,66 +919,25 @@ function taskResolutionStatusToFields(
       }
     case "rejected":
       return {
-        lifecycle_status: "completed",
+        lifecycleStatus: "completed",
         outcome:
           kind === TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION
             ? "denied"
             : "revision_requested",
       }
     case "cancelled":
-      return { lifecycle_status: "cancelled", outcome: null }
+      return { lifecycleStatus: "cancelled", outcome: null }
     case "superseded":
-      return { lifecycle_status: "cancelled", outcome: null }
+      return { lifecycleStatus: "cancelled", outcome: null }
     case "expired":
-      return { lifecycle_status: "expired", outcome: null }
-  }
-}
-
-async function updateTaskRequestRow(
-  client: Executor,
-  taskId: string,
-  values: Record<string, unknown>
-) {
-  const result = await runBuilder(
-    client,
-    db.updateTable("tool_call_tasks").set(values).where("id", "=", taskId)
-  )
-  if (result.rowCount !== 1) {
-    throw new Error(
-      `Expected to update task ${taskId}, but affected ${result.rowCount ?? 0} rows`
-    )
-  }
-}
-
-async function updateTaskResolutionPayload(
-  client: Executor,
-  taskId: string,
-  payload: Record<string, unknown>
-) {
-  // Task unification: resolution payload lives on the task (final_result_payload)
-  // for all kinds — no per-kind detail-table write.
-  const result = await runBuilder(
-    client,
-    db
-      .updateTable("tool_call_tasks")
-      .set({
-        final_result_payload: jsonbValue(
-          payload
-        ) as unknown as TableInsert<"tool_call_tasks">["final_result_payload"],
-      })
-      .where("id", "=", taskId)
-  )
-  if (result.rowCount !== 1) {
-    throw new Error(
-      `Expected to update task ${taskId} resolution payload, but affected ${result.rowCount ?? 0} rows`
-    )
+      return { lifecycleStatus: "expired", outcome: null }
   }
 }
 
 export async function createUserInputTaskRequest(
   params: CreateUserInputTaskParams
 ) {
-  return withDbTransaction(async (client) => {
+  return withTaskTransaction(async (client) => {
     // Task unification: the caller (session-tools createGovernedToolCallTask)
     // already minted the fresh task (deduped at the task layer). Attach the
     // participant fields and create the feed item — no second dedupe.
@@ -2320,7 +1003,7 @@ export async function createUserInputTaskRequest(
 export async function createRemoteAgentUserInputTaskRequest(
   params: CreateRemoteAgentUserInputTaskParams
 ) {
-  return withDbTransaction(async (client) => {
+  return withTaskTransaction(async (client) => {
     const requestKey = buildRemoteAgentTaskRequestKey({
       remoteAgentRunId: params.remoteAgentRunId,
       kind: TASK_REQUEST_KIND.USER_INPUT,
@@ -2417,7 +1100,7 @@ export async function createRemoteAgentUserInputTaskRequest(
 export async function createPlanApprovalTaskRequest(
   params: CreatePlanApprovalTaskParams
 ) {
-  return withDbTransaction(async (client) => {
+  return withTaskTransaction(async (client) => {
     // Task unification: caller already minted the fresh deduped task.
     const taskId = await insertTaskRequest(client, {
       workspaceId: params.workspaceId,
@@ -2499,7 +1182,7 @@ export async function createPlanApprovalTaskRequest(
 export async function createRemoteAgentPlanApprovalTaskRequest(
   params: CreateRemoteAgentPlanApprovalTaskParams
 ) {
-  return withDbTransaction(async (client) => {
+  return withTaskTransaction(async (client) => {
     const requestKey = buildRemoteAgentTaskRequestKey({
       remoteAgentRunId: params.remoteAgentRunId,
       kind: TASK_REQUEST_KIND.PLAN_APPROVAL,
@@ -2582,41 +1265,14 @@ export async function createRemoteAgentPlanApprovalTaskRequest(
     })
 
     await updateTaskConversationItemId(client, taskId, created.item.id)
-    const contextUpsert = await runOn<{ remote_agent_id: string }>(
-      client,
-      `
-        INSERT INTO remote_agent_conversation_contexts (
-          remote_agent_id,
-          conversation_id,
-          collaboration_mode,
-          collaboration_state,
-          active_plan_approval_task_id
-        )
-        SELECT
-          cpsubj.remote_agent_id,
-          $1,
-          'plan_awaiting_approval',
-          $2::jsonb,
-          $3
-        FROM conversation_participants cp
-        INNER JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
-        WHERE cp.id = $4
-          AND cpsubj.remote_agent_id IS NOT NULL
-        ON CONFLICT (remote_agent_id, conversation_id)
-        DO UPDATE SET
-          collaboration_mode = EXCLUDED.collaboration_mode,
-          collaboration_state = EXCLUDED.collaboration_state,
-          active_plan_approval_task_id = EXCLUDED.active_plan_approval_task_id
-        RETURNING remote_agent_id
-      `,
-      [
-        params.conversationId,
-        JSON.stringify(params.collaborationState || {}),
+    const upsertedRemoteAgentId =
+      await upsertRemoteAgentConversationContextForPlan(client, {
+        conversationId: params.conversationId,
+        collaborationState: params.collaborationState,
         taskId,
-        params.requesterParticipantId,
-      ]
-    )
-    if (!contextUpsert.rows[0]?.remote_agent_id) {
+        requesterParticipantId: params.requesterParticipantId,
+      })
+    if (!upsertedRemoteAgentId) {
       throw new Error("Remote agent requester participant is invalid")
     }
 
@@ -2633,7 +1289,7 @@ export async function createRemoteAgentPlanApprovalTaskRequest(
 export async function createRuntimeAuthorizationTaskRequest(
   params: CreateRuntimeAuthorizationTaskParams
 ) {
-  return withDbTransaction(async (client) => {
+  return withTaskTransaction(async (client) => {
     // Task unification: the caller (runtime-authorizations/requests.ts) minted
     // the tool_call_tasks parent AND wrote the runtime_authorization CTI detail
     // row in ONE transaction (createToolCallTaskDeduped's onCreatedInTx
@@ -2718,46 +1374,18 @@ export async function findOpenRuntimeAuthorizationTask(
     availablePresets: params.availablePresets,
     runtimeSessionId: params.runtimeSessionId,
   })
-  const row = await db
-    .selectFrom("tool_call_tasks as ir")
-    .innerJoin(
-      "tool_call_task_runtime_authorization as auth",
-      "auth.task_id",
-      "ir.id"
-    )
-    .select("ir.id")
-    .where("ir.workspace_id", "=", params.workspaceId)
-    .where("ir.conversation_id", "=", params.conversationId)
-    .where(
-      sql<boolean>`ir.requester_participant_id = ${params.requesterParticipantId}`
-    )
-    .where("ir.executor_kind", "=", "runtime_authorization")
-    .where("ir.lifecycle_status", "in", [
-      "submitted",
-      "working",
-      "input_required",
-      "auth_required",
-    ])
-    .where((eb) =>
-      eb.or([
-        eb("ir.expires_at", "is", null),
-        eb("ir.expires_at", ">", new Date()),
-      ])
-    )
-    .where("auth.device_id", "=", params.deviceId)
-    .where("auth.device_capability_id", "=", params.deviceCapabilityId)
-    .where("auth.device_exposure_id", "=", params.deviceExposureId)
-    .where("auth.requested_tool_name", "=", params.requestedToolName)
-    .where(
-      sql<boolean>`auth.device_tool_stable_key = ${params.deviceToolStableKey}`
-    )
-    .where("auth.request_mode", "=", params.requestMode)
-    .where("auth.dedupe_key", "=", dedupeKey)
-    .orderBy("ir.updated_at", "desc")
-    .limit(1)
-    .executeTakeFirst()
-
-  const taskId = row?.id
+  const taskId = await findOpenRuntimeAuthorizationTaskId({
+    workspaceId: params.workspaceId,
+    conversationId: params.conversationId,
+    requesterParticipantId: params.requesterParticipantId,
+    deviceId: params.deviceId,
+    deviceCapabilityId: params.deviceCapabilityId,
+    deviceExposureId: params.deviceExposureId,
+    requestedToolName: params.requestedToolName,
+    deviceToolStableKey: params.deviceToolStableKey,
+    requestMode: params.requestMode,
+    dedupeKey,
+  })
   if (!taskId) {
     return null
   }
@@ -2766,7 +1394,7 @@ export async function findOpenRuntimeAuthorizationTask(
 
 export async function getTaskSummary(taskId: string, queryable?: Executor) {
   const row = await getTaskRowById(taskId, queryable)
-  return row ? buildTaskSummary(row) : null
+  return row ? presentTaskSummary(row) : null
 }
 
 export async function getTaskSummaryByTaskId(taskId: string) {
@@ -2795,12 +1423,10 @@ export async function cancelTaskRequest(taskId: string, note?: string) {
     return current
   }
 
-  const resolutionPayload = parseJsonObject(existing.resolution_payload)
-  const task = await withDbTransaction(async (client) => {
-    await updateTaskRequestRow(client, taskId, {
-      lifecycle_status: "cancelled",
-      revision: sql`revision + 1`,
-      resolved_at: sql`NOW()`,
+  const resolutionPayload = decodeTaskResolutionPayload(existing)
+  const task = await withTaskTransaction(async (client) => {
+    await updateResolvedTaskRequestRow(client, taskId, {
+      lifecycleStatus: "cancelled",
     })
 
     const payload = {
@@ -2826,71 +1452,7 @@ export async function canUserViewTask(params: {
   taskId: string
   userId: string
 }) {
-  const row = await db
-    .selectFrom("tool_call_tasks as ir")
-    .select("ir.id")
-    .where("ir.id", "=", params.taskId)
-    .where((eb) =>
-      eb.or([
-        sql<boolean>`EXISTS (
-          SELECT 1
-          FROM conversation_participants cp
-          JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
-          JOIN workspace_members wm
-            ON wm.id = cpsubj.workspace_member_id
-          WHERE cp.id = ir.requester_participant_id
-            AND wm.user_id = ${params.userId}
-        )`,
-        eb.and([
-          eb("ir.executor_kind", "in", [
-            "user_input",
-            "plan_approval",
-          ] satisfies ToolCallTaskExecutorKind[]),
-          eb.or([
-            sql<boolean>`EXISTS (
-              SELECT 1
-              FROM conversation_participants cp
-              JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
-              JOIN workspace_members wm
-                ON wm.id = cpsubj.workspace_member_id
-              WHERE cp.id = ir.target_participant_id
-                AND wm.user_id = ${params.userId}
-            )`,
-            sql<boolean>`EXISTS (
-              SELECT 1
-              FROM conversation_participants requester_cp
-              JOIN access_subjects requester_subj ON requester_subj.id = requester_cp.subject_id
-              JOIN conversation_participants viewer_cp
-                ON viewer_cp.conversation_id = requester_cp.conversation_id
-               AND viewer_cp.state = 'active'
-              JOIN access_subjects viewer_subj ON viewer_subj.id = viewer_cp.subject_id
-              JOIN workspace_members viewer_wm
-                ON viewer_wm.id = viewer_subj.workspace_member_id
-              WHERE requester_cp.id = ir.requester_participant_id
-                AND requester_subj.remote_agent_id IS NOT NULL
-                AND ir.remote_agent_run_id IS NOT NULL
-                AND viewer_wm.user_id = ${params.userId}
-            )`,
-          ]),
-        ]),
-        eb.and([
-          eb("ir.executor_kind", "=", TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION),
-          sql<boolean>`EXISTS (
-            SELECT 1
-            FROM conversation_participants cm
-            JOIN access_subjects cm_subj ON cm_subj.id = cm.subject_id
-            JOIN workspace_members wm
-              ON wm.id = cm_subj.workspace_member_id
-            WHERE cm.conversation_id = ir.conversation_id
-              AND wm.user_id = ${params.userId}
-              AND cm.state = 'active'
-          )`,
-        ]),
-      ])
-    )
-    .limit(1)
-    .executeTakeFirst()
-  return Boolean(row)
+  return taskViewableByUser(params)
 }
 
 export async function canUserResolveTask(params: {
@@ -2907,18 +1469,10 @@ export async function canUserResolveTask(params: {
     task.target?.participantId
   ) {
     const targetParticipantId = task.target?.participantId
-    const viewerParticipant = await db
-      .selectFrom("conversation_participants as cp")
-      .innerJoin("access_subjects as subj", "subj.id", "cp.subject_id")
-      .innerJoin("workspace_members as wm", "wm.id", "subj.workspace_member_id")
-      .select("cp.id")
-      .where("cp.id", "=", targetParticipantId)
-      .where("cp.state", "=", "active")
-      .where("wm.user_id", "=", userId)
-      .limit(1)
-      .executeTakeFirst()
-
-    return Boolean(viewerParticipant?.id)
+    return isActiveTargetParticipantForUser({
+      targetParticipantId,
+      userId,
+    })
   }
 
   if (
@@ -2927,40 +1481,23 @@ export async function canUserResolveTask(params: {
       CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT &&
     task.requester.remoteAgentId
   ) {
-    const viewerMembership = await db
-      .selectFrom("conversation_participants as cp")
-      .innerJoin("access_subjects as subj", "subj.id", "cp.subject_id")
-      .innerJoin("workspace_members as wm", "wm.id", "subj.workspace_member_id")
-      .innerJoin("conversations as c", "c.id", "cp.conversation_id")
-      .select([
-        "subj.workspace_member_id as workspace_member_id",
-        "c.kind as conversation_kind",
-      ])
-      .where("cp.conversation_id", "=", task.conversationId)
-      .where("cp.state", "=", "active")
-      .where("wm.user_id", "=", userId)
-      .limit(1)
-      .executeTakeFirst()
+    const viewerMembership = await findViewerConversationMembership({
+      conversationId: task.conversationId,
+      userId,
+    })
 
-    if (!viewerMembership?.workspace_member_id) {
+    if (!viewerMembership?.workspaceMemberId) {
       return false
     }
 
-    if (viewerMembership.conversation_kind === "direct") {
+    if (viewerMembership.conversationKind === "direct") {
       return true
     }
 
-    const grant = await runBuilder(
-      db,
-      db
-        .selectFrom("remote_agent_group_task_grants")
-        .select("workspace_member_id")
-        .where("remote_agent_id", "=", task.requester.remoteAgentId)
-        .where("workspace_member_id", "=", viewerMembership.workspace_member_id)
-        .limit(1)
-    )
-
-    return Boolean(grant.rows[0]?.workspace_member_id)
+    return findRemoteAgentGroupTaskGrant({
+      remoteAgentId: task.requester.remoteAgentId,
+      workspaceMemberId: viewerMembership.workspaceMemberId,
+    })
   }
 
   const deviceId = task.runtimeAuthorization?.deviceId
@@ -2969,7 +1506,7 @@ export async function canUserResolveTask(params: {
     return false
   }
 
-  return authorizeAction(db, {
+  return authorizeActionDefault({
     subject: userSubject(userId),
     action: "device_capability.request_runtime_authorization",
     resourceId: deviceCapabilityId,
@@ -3217,7 +1754,7 @@ export async function resolveTaskRequest(
 ): Promise<ResolveTaskRequestResult> {
   const normalizedCommandPayload = buildNormalizedTaskCommandPayload(params)
 
-  const result = await withDbTransaction(async (client) => {
+  const result = await withTaskTransaction(async (client) => {
     const locked = await getTaskRowByIdForUpdate(params.taskId, client)
     if (!locked) {
       throw new Error("Task request not found")
@@ -3229,12 +1766,8 @@ export async function resolveTaskRequest(
       client
     )
     if (existingCommand) {
-      const storedRequestPayload = requireJsonObject(
-        existingCommand.request_payload,
-        `Task command ${existingCommand.id} request_payload`
-      )
       if (
-        stableJsonStringify(storedRequestPayload) !==
+        stableJsonStringify(existingCommand.request_payload) !==
         stableJsonStringify(normalizedCommandPayload)
       ) {
         throw new Error(
@@ -3242,16 +1775,16 @@ export async function resolveTaskRequest(
         )
       }
 
-      const storedResponse = parseStoredTaskResolveResponse(
+      const storedPayload = parseStoredTaskResolvePayload(
         existingCommand.response_payload,
         `Task command ${existingCommand.id} response_payload`
       )
       return {
         outcome:
-          storedResponse.outcome === "applied"
+          storedPayload.outcome === "applied"
             ? ("duplicate" as const)
-            : storedResponse.outcome,
-        task: storedResponse.task,
+            : storedPayload.outcome,
+        task: storedPayload.task,
         createdGrant: undefined,
       }
     }
@@ -3269,28 +1802,22 @@ export async function resolveTaskRequest(
       !locked.target_participant_id &&
       locked.requester_remote_agent_id
     ) {
-      const conversationRow = await takeFirstOn(
+      const conversationRow = await findConversationKindOn(
         client,
-        db
-          .selectFrom("conversations")
-          .select("kind")
-          .where("id", "=", locked.conversation_id)
-          .limit(1)
+        locked.conversation_id
       )
       if (!conversationRow) {
         throw new Error(`Conversation ${locked.conversation_id} not found`)
       }
       if (conversationRow.kind !== "direct") {
-        const grantRow = await runBuilder(
-          client,
-          db
-            .selectFrom("remote_agent_group_task_grants")
-            .select("workspace_member_id")
-            .where("remote_agent_id", "=", locked.requester_remote_agent_id)
-            .where("workspace_member_id", "=", params.resolverWorkspaceMemberId)
-            .limit(1)
+        const hasGrant = await findRemoteAgentGroupTaskGrant(
+          {
+            remoteAgentId: locked.requester_remote_agent_id,
+            workspaceMemberId: params.resolverWorkspaceMemberId,
+          },
+          client
         )
-        if (!grantRow.rows[0]?.workspace_member_id) {
+        if (!hasGrant) {
           throw new Error(
             "You are not allowed to resolve this remote agent task"
           )
@@ -3307,7 +1834,7 @@ export async function resolveTaskRequest(
       if (!deviceCapabilityId) {
         throw new Error(`Task ${locked.id} is missing device_capability_id`)
       }
-      const canResolveRuntimeAuthorization = await authorizeAction(db, {
+      const canResolveRuntimeAuthorization = await authorizeActionDefault({
         subject: workspaceMemberSubject(params.resolverWorkspaceMemberId),
         action: "device_capability.request_runtime_authorization",
         resourceId: deviceCapabilityId,
@@ -3327,8 +1854,8 @@ export async function resolveTaskRequest(
       !isOpenTaskLifecycle(locked.lifecycle_status) ||
       lockedRevision !== params.baseRevision
     ) {
-      const currentTask = buildTaskSummary(locked)
-      const responsePayload: StoredTaskResolveResponse = {
+      const currentTask = presentTaskSummary(locked)
+      const responsePayload: StoredTaskResolvePayload = {
         outcome: "conflict",
         task: currentTask,
       }
@@ -3354,7 +1881,7 @@ export async function resolveTaskRequest(
     let lockedPrincipalSubjectForReturn: SubjectRef | undefined
 
     if (locked.kind === TASK_REQUEST_KIND.USER_INPUT) {
-      const promptPayload = parseJsonObject(locked.prompt_payload)
+      const promptPayload = decodeTaskPromptPayload(locked)
       const questions = parseUserInputQuestionDefinitions(promptPayload)
       if (questions.length === 0) {
         throw new Error("User input request is invalid")
@@ -3382,72 +1909,49 @@ export async function resolveTaskRequest(
       }
 
       if (locked.remote_agent_run_id && locked.requester_remote_agent_id) {
-        await client
-          .updateTable("remote_agent_conversation_contexts")
-          .set({
-            collaboration_mode:
-              nextStatus === "approved" ? "default" : "plan_drafting",
-            collaboration_state: jsonbValue({}),
-            active_plan_approval_task_id: null,
-          })
-          .where("remote_agent_id", "=", locked.requester_remote_agent_id)
-          .where("conversation_id", "=", locked.conversation_id)
-          .execute()
+        await clearRemoteAgentConversationContextOnResolve(client, {
+          remoteAgentId: locked.requester_remote_agent_id,
+          conversationId: locked.conversation_id,
+          approved: nextStatus === "approved",
+        })
       } else {
         // Task unification: locked IS the task row, so session_id is on it.
         if (!locked.session_id) {
           throw new Error(`Task ${locked.id} is missing task governance`)
         }
         const taskRow = { session_id: locked.session_id }
-        const sessionRow = await takeFirstOn(
+        const sessionRow = await findSessionPlanRowOn(
           client,
-          db
-            .selectFrom("sessions as s")
-            .innerJoin("conversations as c", "c.id", "s.conversation_id")
-            .select([
-              "s.collaboration_state",
-              "s.collaboration_mode",
-              "s.active_plan_approval_task_id",
-              "c.kind as conversation_kind",
-            ])
-            .where("s.id", "=", taskRow.session_id)
-            .limit(1)
+          taskRow.session_id
         )
         if (!sessionRow) {
           throw new Error(`Session ${taskRow.session_id} not found`)
         }
-        if (isGroupConversationKind(sessionRow.conversation_kind)) {
+        if (isGroupConversationKind(sessionRow.conversationKind)) {
           throw new Error(
             "Plan mode is only available in direct conversations."
           )
         }
         if (
-          !isPlanAwaitingApprovalCollaborationMode(
-            sessionRow.collaboration_mode
-          )
+          !isPlanAwaitingApprovalCollaborationMode(sessionRow.collaborationMode)
         ) {
           throw new Error(
             `Session ${taskRow.session_id} must be in plan_awaiting_approval before resolving plan approval.`
           )
         }
-        if (!sessionRow.active_plan_approval_task_id) {
+        if (!sessionRow.activePlanApprovalTaskId) {
           throw new Error(
             `Session ${taskRow.session_id} is missing active_plan_approval_task_id`
           )
         }
-        if (sessionRow.active_plan_approval_task_id !== locked.id) {
+        if (sessionRow.activePlanApprovalTaskId !== locked.id) {
           throw new Error(
-            `Session ${taskRow.session_id} points to ${sessionRow.active_plan_approval_task_id}, not ${locked.id}`
+            `Session ${taskRow.session_id} points to ${sessionRow.activePlanApprovalTaskId}, not ${locked.id}`
           )
         }
 
         const collaborationState = parseSessionCollaborationState(
-          sessionRow.collaboration_state == null
-            ? {}
-            : requireJsonObject(
-                sessionRow.collaboration_state,
-                `Session ${taskRow.session_id} collaboration_state`
-              )
+          sessionRow.collaborationState
         )
         const existingDraft = collaborationState.planDraft
         if (!existingDraft) {
@@ -3512,14 +2016,8 @@ export async function resolveTaskRequest(
           )
         }
 
-        const grantOptions = parseJsonArray<RuntimeAuthorizationGrantOption>(
-          locked.grant_options,
-          `Task ${locked.id} grant_options`
-        )
-        const availablePresets = parseJsonArray<RuntimeAuthorizationPreset>(
-          locked.available_presets,
-          `Task ${locked.id} available_presets`
-        )
+        const grantOptions = locked.grant_options ?? []
+        const availablePresets = locked.available_presets ?? []
         if (!availablePresets.includes(params.preset || "once")) {
           throw new Error(
             `preset ${params.preset || "once"} is not allowed for this runtime authorization request`
@@ -3603,11 +2101,7 @@ export async function resolveTaskRequest(
             sourceRetryNonce: locked.source_retry_nonce || undefined,
             sourceRuntimeSessionId:
               locked.source_runtime_session_id || undefined,
-            sourceRequestArgs:
-              locked.source_request_args &&
-              typeof locked.source_request_args === "object"
-                ? (locked.source_request_args as Record<string, unknown>)
-                : {},
+            sourceRequestArgs: locked.source_request_args ?? {},
             policy: selectedOption.grantSpec,
           },
           client
@@ -3632,12 +2126,10 @@ export async function resolveTaskRequest(
     // (auto-retry writes only final_result_payload, which is NOT terminal-
     // guarded, so it lands on the already-terminal row).
     const taskFields = taskResolutionStatusToFields(nextStatus, locked.kind)
-    await updateTaskRequestRow(client, params.taskId, {
-      lifecycle_status: taskFields.lifecycle_status,
+    await updateResolvedTaskRequestRow(client, params.taskId, {
+      lifecycleStatus: taskFields.lifecycleStatus,
       outcome: taskFields.outcome,
-      revision: sql`revision + 1`,
-      resolved_by_participant_id: params.resolverParticipantId,
-      resolved_at: sql`NOW()`,
+      resolvedByParticipantId: params.resolverParticipantId,
     })
 
     await updateTaskResolutionPayload(client, params.taskId, resolutionPayload)
@@ -3673,11 +2165,7 @@ export async function resolveTaskRequest(
       // notice the approval. Drops to undefined for non-runtime-authorization
       // tasks (these fields are only populated when locked.kind is
       // RUNTIME_AUTHORIZATION).
-      lockedSourceRequestArgs:
-        locked.source_request_args &&
-        typeof locked.source_request_args === "object"
-          ? (locked.source_request_args as Record<string, unknown>)
-          : undefined,
+      lockedSourceRequestArgs: locked.source_request_args ?? undefined,
       lockedSourceRetryNonce: locked.source_retry_nonce ?? undefined,
       lockedSourceTaskId: locked.id ?? undefined,
       // subject-scope-refactor: skip-task gate is now keyed on
@@ -3799,12 +2287,10 @@ export async function markRuntimeAuthorizationTaskSuperseded(
     return current
   }
 
-  const resolutionPayload = parseJsonObject(existing.resolution_payload)
-  const task = await withDbTransaction(async (client) => {
-    await updateTaskRequestRow(client, taskId, {
-      lifecycle_status: "cancelled",
-      revision: sql`revision + 1`,
-      resolved_at: sql`NOW()`,
+  const resolutionPayload = decodeTaskResolutionPayload(existing)
+  const task = await withTaskTransaction(async (client) => {
+    await updateResolvedTaskRequestRow(client, taskId, {
+      lifecycleStatus: "cancelled",
     })
     await updateTaskResolutionPayload(client, taskId, {
       ...resolutionPayload,

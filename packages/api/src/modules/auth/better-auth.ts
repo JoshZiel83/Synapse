@@ -5,9 +5,8 @@ import { getOAuth2Tokens } from "better-auth/oauth2"
 import { expo } from "@better-auth/expo"
 import { config } from "../../config/index.js"
 import { createBetterAuthDialect } from "../../infrastructure/database/kysely.js"
-import { db } from "../../infrastructure/database/kysely.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
-import { createGeneratedUserAvatarFile } from "../avatar/service.js"
+import { backfillGeneratedUserAvatar, selectUserDeletedState } from "./repo.js"
 import { AUTH_SESSION_MAX_AGE_SECONDS } from "@synapse/shared"
 import { disconnectSocketsForSession } from "../../infrastructure/websocket/auth-session-registry.js"
 import { deviceSessionCookie } from "./device-session-cookie.js"
@@ -40,6 +39,59 @@ type FeishuUserInfo = {
   email?: string
   enterprise_email?: string
   tenant_key?: string
+}
+
+type FeishuProviderJsonObjectParseResult =
+  | { ok: true; body: Record<string, unknown> }
+  | { ok: false; message: "malformed_response" }
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function optionalString(
+  record: Record<string, unknown>,
+  key: keyof FeishuUserInfo
+): string | undefined {
+  const value = record[key]
+  return typeof value === "string" ? value : undefined
+}
+
+function parseFeishuUserInfo(value: unknown): FeishuUserInfo | undefined {
+  if (!isRecord(value)) {
+    return undefined
+  }
+  return {
+    open_id: optionalString(value, "open_id"),
+    union_id: optionalString(value, "union_id"),
+    name: optionalString(value, "name"),
+    en_name: optionalString(value, "en_name"),
+    avatar_url: optionalString(value, "avatar_url"),
+    email: optionalString(value, "email"),
+    enterprise_email: optionalString(value, "enterprise_email"),
+    tenant_key: optionalString(value, "tenant_key"),
+  }
+}
+
+export function parseFeishuProviderJsonObjectText(
+  text: string
+): FeishuProviderJsonObjectParseResult {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return { ok: false, message: "malformed_response" }
+  }
+  if (!isRecord(parsed)) {
+    return { ok: false, message: "malformed_response" }
+  }
+  return { ok: true, body: parsed }
+}
+
+async function readFeishuProviderJsonObjectResponse(
+  response: Response
+): Promise<FeishuProviderJsonObjectParseResult> {
+  return parseFeishuProviderJsonObjectText(await response.text())
 }
 
 /**
@@ -126,11 +178,18 @@ function buildFeishuProvider() {
           ...(data.codeVerifier ? { code_verifier: data.codeVerifier } : {}),
         }),
       })
-      const json = (await response.json()) as Record<string, unknown> & {
-        code?: number
-        msg?: string
-      }
-      if (!response.ok || (typeof json.code === "number" && json.code !== 0)) {
+      const parsed = await readFeishuProviderJsonObjectResponse(response)
+      const json = parsed.ok
+        ? (parsed.body as Record<string, unknown> & {
+            code?: number
+            msg?: string
+          })
+        : { code: undefined, msg: parsed.message }
+      if (
+        !parsed.ok ||
+        !response.ok ||
+        (typeof json.code === "number" && json.code !== 0)
+      ) {
         log.error(
           { status: response.status, code: json.code, msg: json.msg },
           "Feishu token exchange failed"
@@ -155,12 +214,15 @@ function buildFeishuProvider() {
           Accept: "application/json",
         },
       })
-      const body = (await response.json()) as {
-        code?: number
-        msg?: string
-        data?: FeishuUserInfo
-      }
-      const profile = body.data
+      const parsed = await readFeishuProviderJsonObjectResponse(response)
+      const body = parsed.ok
+        ? (parsed.body as {
+            code?: number
+            msg?: string
+            data?: unknown
+          })
+        : { code: undefined, msg: parsed.message, data: undefined }
+      const profile = parseFeishuUserInfo(body.data)
       if (!response.ok || body.code !== 0 || !profile?.union_id) {
         log.error(
           { status: response.status, code: body.code, msg: body.msg },
@@ -376,22 +438,7 @@ export const auth = betterAuth({
           // this hook is awaited, so a throw would fail the (already-committed)
           // sign-up/OAuth — log and move on instead.
           try {
-            const existing = await db
-              .selectFrom("users")
-              .select("avatar_file_id")
-              .where("id", "=", user.id)
-              .executeTakeFirst()
-            if (existing?.avatar_file_id) return
-            const avatar = await createGeneratedUserAvatarFile(db, {
-              userId: user.id,
-              name: user.name,
-              email: user.email,
-            })
-            await db
-              .updateTable("users")
-              .set({ avatar_file_id: avatar.fileId })
-              .where("id", "=", user.id)
-              .execute()
+            await backfillGeneratedUserAvatar(user)
           } catch (error) {
             log.error(
               { err: error, userId: user.id },
@@ -416,12 +463,8 @@ export const auth = betterAuth({
           // exist, the downstream FK / adapter write will fail anyway.
           const userId = session.userId as string | undefined
           if (!userId) return undefined
-          const userRow = await db
-            .selectFrom("users")
-            .select(["id", "deleted_at"])
-            .where("id", "=", userId)
-            .executeTakeFirst()
-          if (userRow && userRow.deleted_at !== null) {
+          const userRow = await selectUserDeletedState(userId)
+          if (userRow && userRow.deletedAt !== null) {
             throw new Error("Cannot create a session for a deleted user")
           }
           return undefined

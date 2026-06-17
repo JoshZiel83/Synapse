@@ -31,7 +31,7 @@ async function insertWorkspace(db: AnyDb, ownerId: string): Promise<string> {
   const row = await db
     .insertInto("workspaces")
     .values({
-      owner_id: ownerId,
+      ownerId: ownerId,
       slug: `ws-${Math.random().toString(36).slice(2, 10)}`,
       name: "test workspace",
     })
@@ -46,11 +46,11 @@ async function insertWorkspaceMember(
   userId: string
 ): Promise<string> {
   const row = await db
-    .insertInto("workspace_members")
+    .insertInto("workspaceMembers")
     .values({
-      workspace_id: workspaceId,
-      user_id: userId,
-      trust_level: "member",
+      workspaceId: workspaceId,
+      userId: userId,
+      trustLevel: "member",
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -60,12 +60,12 @@ async function insertWorkspaceMember(
 async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
   const actorId = crypto.randomUUID()
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id: actorId,
-      workspace_id: workspaceId,
+      workspaceId: workspaceId,
       kind: "actor",
-      display_name: "test actor",
+      displayName: "test actor",
       status: "active",
     } as any)
     .execute()
@@ -75,7 +75,7 @@ async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
       id: actorId,
       role: "assistant",
       title: "test",
-      current_version: 1,
+      currentVersion: 1,
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -87,16 +87,16 @@ async function insertModelGroup(
   workspaceId: string
 ): Promise<string> {
   const row = await db
-    .insertInto("model_groups")
+    .insertInto("modelGroups")
     .values({
-      owner_type: "workspace",
-      owner_workspace_id: workspaceId,
+      ownerType: "workspace",
+      ownerWorkspaceId: workspaceId,
       name: `g-${Math.random().toString(36).slice(2, 8)}`,
       description: "",
-      routing_strategy: "priority_failover",
-      attempt_policy: {} as any,
-      is_default: false,
-      is_enabled: true,
+      routingStrategy: "priority_failover",
+      attemptPolicy: {} as any,
+      isDefault: false,
+      isEnabled: true,
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -115,21 +115,21 @@ test(
         kind: SUBJECT_KIND.PLATFORM,
       })
       await db
-        .insertInto("model_group_grants")
+        .insertInto("modelGroupGrants")
         .values({
-          group_id: groupId,
-          subject_id: subjectId,
+          groupId: groupId,
+          subjectId: subjectId,
           status: "active",
         })
         .execute()
       const row = await db
-        .selectFrom("model_group_grants as mgg")
-        .innerJoin("access_subjects as mgs", "mgs.id", "mgg.subject_id")
-        .select(["mgs.kind", "mgs.workspace_id"])
-        .where("mgg.group_id", "=", groupId)
+        .selectFrom("modelGroupGrants as mgg")
+        .innerJoin("accessSubjects as mgs", "mgs.id", "mgg.subjectId")
+        .select(["mgs.kind", "mgs.workspaceId"])
+        .where("mgg.groupId", "=", groupId)
         .executeTakeFirstOrThrow()
       assert.equal(row.kind, "platform")
-      assert.equal(row.workspace_id, null)
+      assert.equal(row.workspaceId, null)
     })
   }
 )
@@ -147,21 +147,21 @@ test(
         workspaceId,
       })
       await db
-        .insertInto("model_group_grants")
+        .insertInto("modelGroupGrants")
         .values({
-          group_id: groupId,
-          subject_id: subjectId,
+          groupId: groupId,
+          subjectId: subjectId,
           status: "active",
         })
         .execute()
       const row = await db
-        .selectFrom("model_group_grants as mgg")
-        .innerJoin("access_subjects as mgs", "mgs.id", "mgg.subject_id")
-        .select(["mgs.kind", "mgs.workspace_id"])
-        .where("mgg.group_id", "=", groupId)
+        .selectFrom("modelGroupGrants as mgg")
+        .innerJoin("accessSubjects as mgs", "mgs.id", "mgg.subjectId")
+        .select(["mgs.kind", "mgs.workspaceId"])
+        .where("mgg.groupId", "=", groupId)
         .executeTakeFirstOrThrow()
       assert.equal(row.kind, "workspace")
-      assert.equal(row.workspace_id, workspaceId)
+      assert.equal(row.workspaceId, workspaceId)
     })
   }
 )
@@ -180,23 +180,23 @@ test(
         memberId,
       })
       await db
-        .insertInto("model_group_grants")
+        .insertInto("modelGroupGrants")
         .values({
-          group_id: groupId,
-          subject_id: subjectId,
+          groupId: groupId,
+          subjectId: subjectId,
           status: "active",
         })
         .execute()
       const row = await db
-        .selectFrom("model_group_grants as mgg")
-        .innerJoin("access_subjects as mgs", "mgs.id", "mgg.subject_id")
-        .select(["mgs.kind", "mgs.workspace_id", "mgs.workspace_member_id"])
-        .where("mgg.group_id", "=", groupId)
+        .selectFrom("modelGroupGrants as mgg")
+        .innerJoin("accessSubjects as mgs", "mgs.id", "mgg.subjectId")
+        .select(["mgs.kind", "mgs.workspaceId", "mgs.workspaceMemberId"])
+        .where("mgg.groupId", "=", groupId)
         .executeTakeFirstOrThrow()
       assert.equal(row.kind, "workspace_member")
-      assert.equal(row.workspace_member_id, memberId)
+      assert.equal(row.workspaceMemberId, memberId)
       // Denormalized — should equal the member's owning workspace.
-      assert.equal(row.workspace_id, workspaceId)
+      assert.equal(row.workspaceId, workspaceId)
     })
   }
 )
@@ -215,22 +215,22 @@ test(
         actorId,
       })
       await db
-        .insertInto("model_group_grants")
+        .insertInto("modelGroupGrants")
         .values({
-          group_id: groupId,
-          subject_id: subjectId,
+          groupId: groupId,
+          subjectId: subjectId,
           status: "active",
         })
         .execute()
       const row = await db
-        .selectFrom("model_group_grants as mgg")
-        .innerJoin("access_subjects as mgs", "mgs.id", "mgg.subject_id")
-        .select(["mgs.kind", "mgs.actor_id", "mgs.workspace_id"])
-        .where("mgg.group_id", "=", groupId)
+        .selectFrom("modelGroupGrants as mgg")
+        .innerJoin("accessSubjects as mgs", "mgs.id", "mgg.subjectId")
+        .select(["mgs.kind", "mgs.actorId", "mgs.workspaceId"])
+        .where("mgg.groupId", "=", groupId)
         .executeTakeFirstOrThrow()
       assert.equal(row.kind, "actor")
-      assert.equal(row.actor_id, actorId)
-      assert.equal(row.workspace_id, workspaceId)
+      assert.equal(row.actorId, actorId)
+      assert.equal(row.workspaceId, workspaceId)
     })
   }
 )
@@ -249,10 +249,10 @@ test(
         memberId,
       })
       await db
-        .insertInto("model_group_grants")
+        .insertInto("modelGroupGrants")
         .values({
-          group_id: groupId,
-          subject_id: subjectId,
+          groupId: groupId,
+          subjectId: subjectId,
           status: "active",
         })
         .execute()
@@ -265,7 +265,7 @@ test(
       await assert.rejects(
         () =>
           db
-            .deleteFrom("workspace_members")
+            .deleteFrom("workspaceMembers")
             .where("id", "=", memberId)
             .execute(),
         /hard delete of workspace_members is forbidden/
@@ -277,13 +277,13 @@ test(
       // and the grant row stays too (no cascade). Availability is derived from
       // the underlying member's status, not from row deletion.
       await db
-        .updateTable("workspace_members")
-        .set({ status: "removed", removed_at: new Date() })
+        .updateTable("workspaceMembers")
+        .set({ status: "removed", removedAt: new Date() })
         .where("id", "=", memberId)
         .execute()
 
       const subjectAfter = await db
-        .selectFrom("access_subjects")
+        .selectFrom("accessSubjects")
         .select("id")
         .where("id", "=", subjectId)
         .execute()
@@ -294,9 +294,9 @@ test(
       )
 
       const grantAfter = await db
-        .selectFrom("model_group_grants")
+        .selectFrom("modelGroupGrants")
         .select(["id", "status"])
-        .where("group_id", "=", groupId)
+        .where("groupId", "=", groupId)
         .execute()
       assert.equal(grantAfter.length, 1, "grant row is preserved (no cascade)")
     })
@@ -320,10 +320,10 @@ test(
         workspaceId,
       })
       await db
-        .insertInto("model_group_grants")
+        .insertInto("modelGroupGrants")
         .values({
-          group_id: groupId,
-          subject_id: subjectId,
+          groupId: groupId,
+          subjectId: subjectId,
           status: "active",
         })
         .execute()
@@ -335,10 +335,10 @@ test(
       await sql`SAVEPOINT dup_attempt`.execute(db)
       try {
         await db
-          .insertInto("model_group_grants")
+          .insertInto("modelGroupGrants")
           .values({
-            group_id: groupId,
-            subject_id: subjectId,
+            groupId: groupId,
+            subjectId: subjectId,
             status: "active",
           })
           .execute()
@@ -371,30 +371,30 @@ test(
         workspaceId,
       })
       await db
-        .insertInto("model_group_grants")
+        .insertInto("modelGroupGrants")
         .values({
-          group_id: groupId,
-          subject_id: subjectId,
+          groupId: groupId,
+          subjectId: subjectId,
           status: "active",
         })
         .execute()
       await db
-        .updateTable("model_group_grants")
-        .set({ status: "revoked", revoked_at: new Date() } as any)
-        .where("group_id", "=", groupId)
+        .updateTable("modelGroupGrants")
+        .set({ status: "revoked", revokedAt: new Date() } as any)
+        .where("groupId", "=", groupId)
         .execute()
       await db
-        .insertInto("model_group_grants")
+        .insertInto("modelGroupGrants")
         .values({
-          group_id: groupId,
-          subject_id: subjectId,
+          groupId: groupId,
+          subjectId: subjectId,
           status: "active",
         })
         .execute()
       const active = await db
-        .selectFrom("model_group_grants")
+        .selectFrom("modelGroupGrants")
         .select("id")
-        .where("group_id", "=", groupId)
+        .where("groupId", "=", groupId)
         .where("status", "=", "active")
         .execute()
       assert.equal(active.length, 1)

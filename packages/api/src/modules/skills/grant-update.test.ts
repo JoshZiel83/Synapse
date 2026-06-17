@@ -35,7 +35,7 @@ async function newWorkspace(db: Kysely<any>): Promise<string> {
   const ws = await db
     .insertInto("workspaces")
     .values({
-      owner_id: user.id as string,
+      ownerId: user.id as string,
       slug: `ws-${rid()}`,
       name: `${NS} ws`,
     })
@@ -47,21 +47,21 @@ async function newWorkspace(db: Kysely<any>): Promise<string> {
 async function newRemoteAgent(db: Kysely<any>, wsId: string): Promise<string> {
   const remoteAgentId = crypto.randomUUID()
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id: remoteAgentId,
-      workspace_id: wsId,
+      workspaceId: wsId,
       kind: "remote_agent",
-      display_name: `${NS} agent`,
+      displayName: `${NS} agent`,
       status: "active",
     } as any)
     .execute()
   const row = await db
-    .insertInto("remote_agents")
+    .insertInto("remoteAgents")
     .values({
       id: remoteAgentId,
       title: `${NS} agent`,
-      runtime_kind: "claude_code",
+      runtimeKind: "claude_code",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -73,7 +73,7 @@ async function newConversation(db: Kysely<any>, wsId: string): Promise<string> {
     .insertInto("conversations")
     .values({
       kind: "group",
-      workspace_id: wsId,
+      workspaceId: wsId,
       title: `${NS} conv`,
     })
     .returning("id")
@@ -117,10 +117,10 @@ test(
         remoteAgentId,
       })
       await db
-        .insertInto("conversation_participants")
+        .insertInto("conversationParticipants")
         .values({
-          conversation_id: conversationId,
-          subject_id: remoteAgentSubjectId,
+          conversationId: conversationId,
+          subjectId: remoteAgentSubjectId,
           state: "active",
         } as any)
         .execute()
@@ -142,53 +142,39 @@ test(
   async () => {
     const rowA = buildSkillAccessRow({
       id: "grant-a",
-      workspace_id: "ws-1",
-      resource_type: "installed_skill",
-      resource_id: "skill-1",
-      installed_skill_id: "skill-1",
-      plugin_installation_id: null,
-      automation_event_source_id: null,
-      actor_id: null,
-      remote_agent_id: null,
-      relation: "use_workspace_member",
-      subject_id: "subject-a",
-      scope_subject_id: null,
-      subject_kind: "workspace_member",
-      subject_workspace_id_via_join: "ws-1",
-      subject_workspace_member_id_via_join: "member-a",
-      conversation_type_mask_override: null,
+      workspaceId: "ws-1",
+      skillId: "skill-1",
+      bindScope: "workspace_member",
+      conversationId: null,
+      actorId: null,
+      remoteAgentId: null,
+      workspaceMemberId: "member-a",
+      conversationTypeMaskOverride: null,
       status: "active",
       source: "manual",
-      created_by_workspace_member_id: null,
+      createdByWorkspaceMemberId: null,
       reason: null,
-      created_at: new Date().toISOString(),
-      revoked_at: null,
-    } as any)
+      createdAt: new Date(),
+      revokedAt: null,
+    })
 
     const rowB = buildSkillAccessRow({
       id: "grant-b",
-      workspace_id: "ws-1",
-      resource_type: "installed_skill",
-      resource_id: "skill-1",
-      installed_skill_id: "skill-1",
-      plugin_installation_id: null,
-      automation_event_source_id: null,
-      actor_id: null,
-      remote_agent_id: null,
-      relation: "use_workspace_member",
-      subject_id: "subject-b",
-      scope_subject_id: null,
-      subject_kind: "workspace_member",
-      subject_workspace_id_via_join: "ws-1",
-      subject_workspace_member_id_via_join: "member-b",
-      conversation_type_mask_override: null,
+      workspaceId: "ws-1",
+      skillId: "skill-1",
+      bindScope: "workspace_member",
+      conversationId: null,
+      actorId: null,
+      remoteAgentId: null,
+      workspaceMemberId: "member-b",
+      conversationTypeMaskOverride: null,
       status: "active",
       source: "manual",
-      created_by_workspace_member_id: null,
+      createdByWorkspaceMemberId: null,
       reason: null,
-      created_at: new Date().toISOString(),
-      revoked_at: null,
-    } as any)
+      createdAt: new Date(),
+      revokedAt: null,
+    })
 
     const filterA: SkillScopeTarget = {
       bindScope: "workspace_member",

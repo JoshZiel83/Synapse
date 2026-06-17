@@ -27,6 +27,7 @@ import {
   QQ_TOKEN_URL,
 } from "./types.js"
 import { getQqCredentialsOrThrow, type QqCredentials } from "./credentials.js"
+import { readQqProviderJsonObjectResponse } from "./response-codec.js"
 
 interface AccessTokenEntry {
   token: string
@@ -40,13 +41,12 @@ const tokenInflight = new Map<string, Promise<AccessTokenEntry>>()
 const TOKEN_FETCH_TIMEOUT_MS = 10_000
 const DEFAULT_API_TIMEOUT_MS = 30_000
 
-interface TokenResponse {
-  access_token?: string
-  expires_in?: string | number
-  /** Some error responses include `code`/`message`/`err_code`. */
-  code?: number
-  message?: string
-  err_code?: number
+interface TokenResponse extends Record<string, unknown> {
+  access_token?: unknown
+  expires_in?: unknown
+  code?: unknown
+  message?: unknown
+  err_code?: unknown
 }
 
 /**
@@ -91,8 +91,10 @@ async function fetchAccessToken(
       `QQ getAppAccessToken HTTP ${res.status}: ${await safeText(res)}`
     )
   }
-  const json = (await res.json()) as TokenResponse
-  if (!json.access_token) {
+  const json = (await readQqProviderJsonObjectResponse(res)) as TokenResponse
+  const accessToken =
+    typeof json.access_token === "string" ? json.access_token.trim() : ""
+  if (!accessToken) {
     throw new Error(
       `QQ getAppAccessToken returned no token: code=${json.code} message=${json.message}`
     )
@@ -109,7 +111,7 @@ async function fetchAccessToken(
   // For 7200s tokens this is 5 minutes' headroom.
   const headroomSec = Math.min(300, Math.floor(ttlSeconds / 3))
   const refreshAtMs = Date.now() + (ttlSeconds - headroomSec) * 1000
-  return { token: json.access_token, refreshAtMs }
+  return { token: accessToken, refreshAtMs }
 }
 
 async function safeText(res: Response): Promise<string> {

@@ -3,6 +3,7 @@ import type { SubFeature } from "./types.js"
 import type { BuiltinPluginExecuteResult } from "../../index.js"
 import {
   normalizeZhipuTransportError,
+  readZhipuJsonObjectResponse,
   throwZhipuApiError,
 } from "./zhipu-errors.js"
 
@@ -116,7 +117,7 @@ export const readerFeature: SubFeature = {
         await throwZhipuApiError("网页阅读 API", response)
       }
 
-      const result = (await response.json()) as {
+      const result = await readZhipuJsonObjectResponse<{
         request_id?: string
         model?: string
         reader_result?: {
@@ -127,7 +128,7 @@ export const readerFeature: SubFeature = {
           external?: { stylesheet?: Record<string, { type?: string }> }
           metadata?: Record<string, string>
         }
-      }
+      }>("网页阅读 API", response)
 
       const reader = result.reader_result || {}
       const sections = [

@@ -35,6 +35,12 @@ class FakeRedis {
   async del(key: string): Promise<number> {
     return this.store.delete(key) ? 1 : 0
   }
+  setSessionRaw(accountId: string, value: string): void {
+    this.store.set(`im:qq:ws-session:${accountId}`, {
+      value,
+      expiresAt: Date.now() + 60_000,
+    })
+  }
 }
 
 test("save + load roundtrips with the original session state", async () => {
@@ -69,6 +75,32 @@ test("loadQqWsSession returns null when appId mismatches and clears the row", as
 test("loadQqWsSession returns null on absent key", async () => {
   const redis = new FakeRedis() as unknown as import("ioredis").Redis
   const loaded = await loadQqWsSession(redis, "acc-missing", "APPID")
+  assert.equal(loaded, null)
+})
+
+test("loadQqWsSession returns null for malformed Redis payload", async () => {
+  const fakeRedis = new FakeRedis()
+  const redis = fakeRedis as unknown as import("ioredis").Redis
+
+  fakeRedis.setSessionRaw("acc-malformed", "{not-json")
+  const loaded = await loadQqWsSession(redis, "acc-malformed", "APPID")
+  assert.equal(loaded, null)
+})
+
+test("loadQqWsSession returns null for drifted Redis payload", async () => {
+  const fakeRedis = new FakeRedis()
+  const redis = fakeRedis as unknown as import("ioredis").Redis
+
+  fakeRedis.setSessionRaw(
+    "acc-drifted",
+    JSON.stringify({
+      sessionId: "sess-drifted",
+      lastSeq: "42",
+      appId: "APPID",
+      savedAt: "not-an-instant",
+    })
+  )
+  const loaded = await loadQqWsSession(redis, "acc-drifted", "APPID")
   assert.equal(loaded, null)
 })
 

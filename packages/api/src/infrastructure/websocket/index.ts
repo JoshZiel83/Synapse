@@ -15,7 +15,7 @@ import {
   authenticateSessionFromHeaders,
   authenticateSessionToken,
 } from "../../modules/auth/service.js"
-import { getConversationParticipant } from "../../modules/chat/service.js"
+import { getConversationParticipantUseCase as getConversationParticipant } from "../../modules/chat/participant-roster.js"
 import { getWorkspaceMemberIdentity } from "../../modules/chat/workspace-identity.js"
 import { enrichTaskForUser } from "../../modules/tasks/service.js"
 import {
@@ -24,6 +24,7 @@ import {
   unregisterAuthenticatedSocket,
 } from "./auth-session-registry.js"
 import { setupAsrWebSocket, shutdownAsrWebSockets } from "./asr.js"
+import { parseChatSocketClientFrame } from "./client-frame.js"
 
 type InboxSubscription = {
   key: string
@@ -313,7 +314,7 @@ async function handleInboundTyping(
 
   try {
     const { broadcastTypingState } =
-      await import("../../modules/chat/service.js")
+      await import("../../modules/chat/typing.js")
     await broadcastTypingState({
       workspaceId: client.workspaceId,
       userId: client.userId,
@@ -399,7 +400,7 @@ export function setupWebSocket(app: FastifyInstance) {
 
     socket.on("message", async (raw: any) => {
       try {
-        const msg = JSON.parse(raw.toString()) as Record<string, unknown>
+        const msg = parseChatSocketClientFrame(raw.toString())
 
         if (msg.type === "auth") {
           const frameToken =

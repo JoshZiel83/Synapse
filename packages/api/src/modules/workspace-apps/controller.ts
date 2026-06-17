@@ -1,21 +1,15 @@
 import { z } from "zod"
 import type { FastifyInstance, FastifyReply } from "fastify"
 import {
-  ACTOR_ROLES,
   actorRef,
   CAPABILITY_ACCESS_TARGET_TYPES,
   conversationRef,
-  REMOTE_AGENT_RUNTIME_KINDS,
-  REUSE_SCOPES,
   remoteAgentRef,
   SUBJECT_KIND,
   WORKSPACE_APP_KIND,
   WORKSPACE_APP_GRANT_REQUEST_DIRECTION,
   workspaceMemberRef,
   workspaceRef,
-  WORKSPACE_APP_GRANT_PERMISSIONS,
-  WORKSPACE_APP_GRANT_REQUEST_DIRECTIONS,
-  WORKSPACE_APP_KINDS,
   type CapabilityAccessTarget,
   type WorkspaceAppGrantPermission,
   type WorkspaceAppKind,
@@ -30,234 +24,55 @@ import {
   deleteWorkspaceApp,
   discoverWorkspaceAppsForMember,
   getWorkspaceAppInventoryDetail,
-  listWorkspaceAppGrantRequestsView,
-  listWorkspaceAppGrantsView,
+  listWorkspaceAppGrantRecords,
+  listWorkspaceAppGrantRequestRecords,
   listWorkspaceAppsInventory,
   rejectWorkspaceAppGrantRequest,
   replaceWorkspaceAppGrants,
   submitWorkspaceAppGrantRequest,
   updateWorkspaceApp,
 } from "./service.js"
+import {
+  presentGrant,
+  presentGrantRequest,
+  presentWorkspaceApp,
+} from "./presenter.js"
+import { appRoute } from "../../infrastructure/http/route.js"
+import {
+  WorkspaceAppGrantTargetSchema,
+  ReplaceWorkspaceAppGrantsInputSchema,
+  CreateWorkspaceAppGrantRequestInputSchema,
+  CreateWorkspaceAppInputSchema,
+  UpdateWorkspaceAppInputSchema,
+  WorkspaceAppDiscoverQuerySchema,
+  WorkspaceAppEnvelopeViewSchema,
+  WorkspaceAppGrantRequestListQuerySchema,
+  WorkspaceAppListQuerySchema,
+  WorkspaceAppListViewSchema,
+  WorkspaceAppGrantListViewSchema,
+  WorkspaceAppGrantRequestListViewSchema,
+  WorkspaceAppGrantRequestEnvelopeViewSchema,
+  WorkspaceAppSuccessViewSchema,
+} from "@synapse/shared/schemas"
 
-const workspaceAppKindSchema = z.enum(WORKSPACE_APP_KINDS)
-const workspaceAppGrantPermissionSchema = z.enum(
-  WORKSPACE_APP_GRANT_PERMISSIONS
-)
-const conversationTypeMaskSchema = z.number().int().min(1).max(15)
-const targetSubjectSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal(SUBJECT_KIND.WORKSPACE),
-    workspaceId: z.uuid(),
-  }),
-  z.object({
-    kind: z.literal(SUBJECT_KIND.WORKSPACE_MEMBER),
-    memberId: z.uuid(),
-  }),
-  z.object({
-    kind: z.literal(SUBJECT_KIND.CONVERSATION),
-    conversationId: z.uuid(),
-  }),
-  z.object({
-    kind: z.literal(SUBJECT_KIND.ACTOR),
-    actorId: z.uuid(),
-  }),
-  z.object({
-    kind: z.literal(SUBJECT_KIND.REMOTE_AGENT),
-    remoteAgentId: z.uuid(),
-  }),
-])
+const workspaceAppEnvelopeSchema = WorkspaceAppEnvelopeViewSchema
+const workspaceAppsEnvelopeSchema = WorkspaceAppListViewSchema
+const grantsEnvelopeSchema = WorkspaceAppGrantListViewSchema
+const grantRequestsEnvelopeSchema = WorkspaceAppGrantRequestListViewSchema
+const grantRequestEnvelopeSchema = WorkspaceAppGrantRequestEnvelopeViewSchema
+const successEnvelopeSchema = WorkspaceAppSuccessViewSchema
 
-const targetSchema = z.object({
-  subject: targetSubjectSchema,
-  scope: z
-    .object({
-      kind: z.literal(SUBJECT_KIND.CONVERSATION),
-      conversationId: z.uuid(),
-    })
-    .optional(),
-})
-
-const replaceGrantsSchema = z.object({
-  grants: z.array(
-    z.object({
-      target: targetSchema,
-      permissions: z.array(workspaceAppGrantPermissionSchema).min(1),
-      conversationTypeMaskOverride: conversationTypeMaskSchema
-        .nullable()
-        .optional(),
-      reason: z.string().trim().min(1).optional(),
-    })
-  ),
-})
-
-const requestDirectionSchema = z
-  .enum(WORKSPACE_APP_GRANT_REQUEST_DIRECTIONS)
-  .default(WORKSPACE_APP_GRANT_REQUEST_DIRECTIONS[0])
-const createGrantRequestSchema = z.object({
-  reason: z.string().trim().min(1).optional(),
-})
-const createWorkspaceAppSchema = z.union([
-  z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.ACTOR),
-    displayName: z.string().trim().min(1).max(255),
-    role: z.enum(ACTOR_ROLES),
-    title: z.string().trim().max(255).optional(),
-    avatarFileId: z.uuid().optional(),
-    avatarEmoji: z.string().trim().max(32).optional(),
-    canRepresentUser: z.boolean().optional(),
-    docs: z.array(z.any()).optional(),
-    parentId: z.uuid().optional(),
-    specialties: z.array(z.string()).optional(),
-    config: z.record(z.string(), z.unknown()).optional(),
-    grants: z
-      .array(
-        z.object({
-          target: targetSchema,
-          permissions: z.array(workspaceAppGrantPermissionSchema).min(1),
-          conversationTypeMaskOverride: conversationTypeMaskSchema
-            .nullable()
-            .optional(),
-          reason: z.string().trim().min(1).optional(),
-        })
-      )
-      .optional(),
-  }),
-  z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.INSTALLED_SKILL),
-    sourceType: z.literal("custom"),
-    displayName: z.string().trim().min(1).max(255),
-    description: z.any().optional(),
-    iconFileId: z.uuid().optional(),
-    tags: z.array(z.string()).optional(),
-    attachmentFiles: z.array(z.any()).optional(),
-    grants: z
-      .array(
-        z.object({
-          target: targetSchema,
-          permissions: z.array(workspaceAppGrantPermissionSchema).min(1),
-          conversationTypeMaskOverride: conversationTypeMaskSchema
-            .nullable()
-            .optional(),
-          reason: z.string().trim().min(1).optional(),
-        })
-      )
-      .optional(),
-  }),
-  z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.INSTALLED_SKILL),
-    sourceType: z.literal("marketplace"),
-    marketSkillId: z.uuid(),
-    grants: z
-      .array(
-        z.object({
-          target: targetSchema,
-          permissions: z.array(workspaceAppGrantPermissionSchema).min(1),
-          conversationTypeMaskOverride: conversationTypeMaskSchema
-            .nullable()
-            .optional(),
-          reason: z.string().trim().min(1).optional(),
-        })
-      )
-      .optional(),
-  }),
-  z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.REMOTE_AGENT),
-    displayName: z.string().trim().min(1).max(255),
-    title: z.string().trim().min(1).max(255),
-    description: z.string().trim().max(5000).optional(),
-    runtimeKind: z.enum(REMOTE_AGENT_RUNTIME_KINDS),
-    avatarFileId: z.uuid().optional(),
-    avatarEmoji: z.string().trim().max(32).optional(),
-    isPublicShared: z.boolean().optional(),
-    metadata: z.record(z.string(), z.unknown()).optional(),
-    grants: z
-      .array(
-        z.object({
-          target: targetSchema,
-          permissions: z.array(workspaceAppGrantPermissionSchema).min(1),
-          conversationTypeMaskOverride: conversationTypeMaskSchema
-            .nullable()
-            .optional(),
-          reason: z.string().trim().min(1).optional(),
-        })
-      )
-      .optional(),
-  }),
-  z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.PLUGIN_INSTALLATION),
-    pluginId: z.uuid(),
-    lifecycleScope: z.enum(REUSE_SCOPES).optional(),
-    configData: z.record(z.string(), z.unknown()).optional(),
-    authSessionIds: z.record(z.string(), z.uuid()).optional(),
-    grants: z
-      .array(
-        z.object({
-          target: targetSchema,
-          permissions: z.array(workspaceAppGrantPermissionSchema).min(1),
-          conversationTypeMaskOverride: conversationTypeMaskSchema
-            .nullable()
-            .optional(),
-          reason: z.string().trim().min(1).optional(),
-        })
-      )
-      .optional(),
-  }),
-])
-const updateWorkspaceAppSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.ACTOR),
-    displayName: z.string().trim().min(1).max(255).optional(),
-    role: z.enum(ACTOR_ROLES).optional(),
-    title: z.string().trim().max(255).optional(),
-    avatarFileId: z.uuid().nullable().optional(),
-    avatarEmoji: z.string().trim().max(32).nullable().optional(),
-    canRepresentUser: z.boolean().optional(),
-    docs: z.array(z.any()).optional(),
-    parentId: z.uuid().nullable().optional(),
-    specialties: z.array(z.string()).optional(),
-    config: z.record(z.string(), z.unknown()).optional(),
-  }),
-  z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.REMOTE_AGENT),
-    displayName: z.string().trim().min(1).max(255).optional(),
-    title: z.string().trim().min(1).max(255).optional(),
-    description: z.string().trim().max(5000).nullable().optional(),
-    avatarFileId: z.uuid().nullable().optional(),
-    avatarEmoji: z.string().trim().max(32).nullable().optional(),
-    isPublicShared: z.boolean().optional(),
-    isActive: z.boolean().optional(),
-    metadata: z.record(z.string(), z.unknown()).optional(),
-  }),
-  z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.INSTALLED_SKILL),
-    displayName: z.string().trim().min(1).max(255).optional(),
-    description: z.any().optional(),
-    iconFileId: z.uuid().nullable().optional(),
-    tags: z.array(z.string()).optional(),
-    isEnabled: z.boolean().optional(),
-    conversationTypeMaskOverride: conversationTypeMaskSchema
-      .nullable()
-      .optional(),
-    attachmentFiles: z.array(z.any()).optional(),
-  }),
-  z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.DEVICE_CAPABILITY),
-    displayName: z.string().trim().min(1).max(255).optional(),
-    conversationTypeMaskOverride: conversationTypeMaskSchema
-      .nullable()
-      .optional(),
-  }),
-  z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.PLUGIN_INSTALLATION),
-    isEnabled: z.boolean().optional(),
-    configData: z.record(z.string(), z.unknown()).optional(),
-    authSessionIds: z.record(z.string(), z.uuid()).optional(),
-    lifecycleScope: z.enum(REUSE_SCOPES).optional(),
-    conversationTypeMaskOverride: conversationTypeMaskSchema
-      .nullable()
-      .optional(),
-  }),
-])
+// App-facing request bodies / queries live in @synapse/shared (§5.1.1) so the
+// API parser and the web/mobile clients share one definition. The grant target
+// schema feeds toCapabilityAccessTarget below (typed via z.infer).
+const targetSchema = WorkspaceAppGrantTargetSchema
+const replaceGrantsSchema = ReplaceWorkspaceAppGrantsInputSchema
+const createGrantRequestSchema = CreateWorkspaceAppGrantRequestInputSchema
+const createWorkspaceAppSchema = CreateWorkspaceAppInputSchema
+const updateWorkspaceAppSchema = UpdateWorkspaceAppInputSchema
+const workspaceAppListQuerySchema = WorkspaceAppListQuerySchema
+const workspaceAppDiscoverQuerySchema = WorkspaceAppDiscoverQuerySchema
+const grantRequestListQuerySchema = WorkspaceAppGrantRequestListQuerySchema
 
 function toCapabilityAccessTarget(
   input: z.infer<typeof targetSchema>
@@ -306,9 +121,11 @@ function handleError(reply: FastifyReply, error: unknown) {
 export function registerWorkspaceAppRoutes(app: FastifyInstance) {
   const workspaceHook = { preHandler: [authMiddleware, workspaceMiddleware] }
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/workspace-apps",
-    workspaceHook,
+    { schema: workspaceAppEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       try {
@@ -329,7 +146,7 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
           "Not allowed to create this workspace app"
         )
         if (!allowed) return
-        const appView = await createWorkspaceApp({
+        const appRecord = await createWorkspaceApp({
           workspaceId,
           userId: (request as any).user.userId,
           input: {
@@ -343,16 +160,20 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
             })),
           } as any,
         })
-        reply.status(201).send({ app: appView })
+        reply.status(201)
+        return { app: presentWorkspaceApp(appRecord) }
       } catch (error) {
         handleError(reply, error)
+        return
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/workspace-apps",
-    workspaceHook,
+    { schema: workspaceAppsEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       const allowed = await requireRequestAction(
@@ -364,26 +185,25 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
       )
       if (!allowed) return
       try {
-        const query = z
-          .object({
-            kind: workspaceAppKindSchema.optional(),
-          })
-          .parse(request.query || {})
+        const query = workspaceAppListQuerySchema.parse(request.query || {})
         const apps = await listWorkspaceAppsInventory({
           workspaceId,
           userId: (request as any).user.userId,
           kind: query.kind as WorkspaceAppKind | undefined,
         })
-        reply.send({ apps })
+        return { apps: apps.map(presentWorkspaceApp) }
       } catch (error) {
         handleError(reply, error)
+        return
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/workspace-apps/discover",
-    workspaceHook,
+    { schema: workspaceAppsEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       const allowed = await requireRequestAction(
@@ -395,26 +215,25 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
       )
       if (!allowed) return
       try {
-        const query = z
-          .object({
-            conversationId: z.uuid().optional(),
-          })
-          .parse(request.query || {})
+        const query = workspaceAppDiscoverQuerySchema.parse(request.query || {})
         const apps = await discoverWorkspaceAppsForMember({
           workspaceId,
           userId: (request as any).user.userId,
           conversationId: query.conversationId,
         })
-        reply.send({ apps })
+        return { apps: apps.map(presentWorkspaceApp) }
       } catch (error) {
         handleError(reply, error)
+        return
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/workspace-apps/:appId",
-    workspaceHook,
+    { schema: workspaceAppEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId, appId } = request.params as {
         workspaceId: string
@@ -429,21 +248,24 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
       )
       if (!allowed) return
       try {
-        const appView = await getWorkspaceAppInventoryDetail({
+        const appRecord = await getWorkspaceAppInventoryDetail({
           workspaceId,
           appId,
           userId: (request as any).user.userId,
         })
-        reply.send({ app: appView })
+        return { app: presentWorkspaceApp(appRecord) }
       } catch (error) {
         handleError(reply, error)
+        return
       }
     }
   )
 
-  app.put(
+  appRoute(
+    app,
+    "PUT",
     "/api/v1/workspaces/:workspaceId/workspace-apps/:appId",
-    workspaceHook,
+    { schema: workspaceAppEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId, appId } = request.params as {
         workspaceId: string
@@ -451,22 +273,25 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
       }
       try {
         const body = updateWorkspaceAppSchema.parse(request.body)
-        const appView = await updateWorkspaceApp({
+        const appRecord = await updateWorkspaceApp({
           workspaceId,
           appId,
           userId: (request as any).user.userId,
           input: body as any,
         })
-        reply.send({ app: appView })
+        return { app: presentWorkspaceApp(appRecord) }
       } catch (error) {
         handleError(reply, error)
+        return
       }
     }
   )
 
-  app.delete(
+  appRoute(
+    app,
+    "DELETE",
     "/api/v1/workspaces/:workspaceId/workspace-apps/:appId",
-    workspaceHook,
+    { schema: successEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId, appId } = request.params as {
         workspaceId: string
@@ -478,16 +303,19 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
           appId,
           userId: (request as any).user.userId,
         })
-        reply.send({ success: deleted })
+        return { success: deleted }
       } catch (error) {
         handleError(reply, error)
+        return
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/workspace-apps/:appId/grants",
-    workspaceHook,
+    { schema: grantsEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId, appId } = request.params as {
         workspaceId: string
@@ -502,21 +330,24 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
       )
       if (!allowed) return
       try {
-        const grants = await listWorkspaceAppGrantsView({
+        const grants = await listWorkspaceAppGrantRecords({
           workspaceId,
           appId,
           userId: (request as any).user.userId,
         })
-        reply.send({ grants })
+        return { grants: grants.map(presentGrant) }
       } catch (error) {
         handleError(reply, error)
+        return
       }
     }
   )
 
-  app.put(
+  appRoute(
+    app,
+    "PUT",
     "/api/v1/workspaces/:workspaceId/workspace-apps/:appId/grants",
-    workspaceHook,
+    { schema: grantsEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId, appId } = request.params as {
         workspaceId: string
@@ -544,16 +375,19 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
             reason: grant.reason,
           })),
         })
-        reply.send({ grants })
+        return { grants: grants.map(presentGrant) }
       } catch (error) {
         handleError(reply, error)
+        return
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/workspace-apps/:appId/grant-requests",
-    workspaceHook,
+    { schema: grantRequestsEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId, appId } = request.params as {
         workspaceId: string
@@ -568,26 +402,27 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
       )
       if (!allowed) return
       try {
-        const query = z
-          .object({ direction: requestDirectionSchema.optional() })
-          .parse(request.query || {})
-        const requests = await listWorkspaceAppGrantRequestsView({
+        const query = grantRequestListQuerySchema.parse(request.query || {})
+        const requests = await listWorkspaceAppGrantRequestRecords({
           workspaceId,
           appId,
           userId: (request as any).user.userId,
           direction:
             query.direction || WORKSPACE_APP_GRANT_REQUEST_DIRECTION.INCOMING,
         })
-        reply.send({ requests })
+        return { requests: requests.map(presentGrantRequest) }
       } catch (error) {
         handleError(reply, error)
+        return
       }
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/workspace-apps/:appId/grant-requests",
-    workspaceHook,
+    { schema: grantRequestEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId, appId } = request.params as {
         workspaceId: string
@@ -609,16 +444,20 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
           userId: (request as any).user.userId,
           reason: body.reason,
         })
-        reply.status(201).send({ request: grantRequest })
+        reply.status(201)
+        return { request: presentGrantRequest(grantRequest) }
       } catch (error) {
         handleError(reply, error)
+        return
       }
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/workspace-apps/:appId/grant-requests/:requestId/approve",
-    workspaceHook,
+    { schema: grantRequestEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId, appId, requestId } = request.params as {
         workspaceId: string
@@ -640,16 +479,19 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
           requestId,
           userId: (request as any).user.userId,
         })
-        reply.send({ request: grantRequest })
+        return { request: presentGrantRequest(grantRequest) }
       } catch (error) {
         handleError(reply, error)
+        return
       }
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/workspace-apps/:appId/grant-requests/:requestId/reject",
-    workspaceHook,
+    { schema: grantRequestEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId, appId, requestId } = request.params as {
         workspaceId: string
@@ -671,16 +513,19 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
           requestId,
           userId: (request as any).user.userId,
         })
-        reply.send({ request: grantRequest })
+        return { request: presentGrantRequest(grantRequest) }
       } catch (error) {
         handleError(reply, error)
+        return
       }
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/workspace-apps/:appId/grant-requests/:requestId/cancel",
-    workspaceHook,
+    { schema: successEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId, appId, requestId } = request.params as {
         workspaceId: string
@@ -702,9 +547,10 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
           requestId,
           userId: (request as any).user.userId,
         })
-        reply.send({ success: cancelled })
+        return { success: cancelled }
       } catch (error) {
         handleError(reply, error)
+        return
       }
     }
   )

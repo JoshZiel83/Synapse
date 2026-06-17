@@ -35,6 +35,10 @@ import type {
   McpHost,
 } from "./types.js"
 import { hashArguments } from "./envelope.js"
+import {
+  parseMcpHostRequestBody,
+  type McpHostJsonRpcRequest,
+} from "./mcp-host-codec.js"
 
 type ExtractEnvelopeResult =
   | { kind: "missing" }
@@ -383,20 +387,13 @@ export function createInMemoryMcpHost(
     return { kind: "ok", envelope: parsed.data }
   }
 
-  async function handleJsonRpc(body: {
-    id?: string | number | null
-    method?: unknown
-    params?: unknown
-  }): Promise<{
+  async function handleJsonRpc(request: McpHostJsonRpcRequest): Promise<{
     id: string | number | null
     result?: unknown
     error?: { code: number; message: string }
   }> {
-    const id = (body.id ?? null) as string | number | null
-    if (typeof body.method !== "string") {
-      return { id, error: { code: -32600, message: "method required" } }
-    }
-    switch (body.method) {
+    const { id } = request
+    switch (request.method) {
       case "initialize": {
         return {
           id,
@@ -415,8 +412,8 @@ export function createInMemoryMcpHost(
       }
       case "tools/call": {
         const params =
-          body.params && typeof body.params === "object"
-            ? (body.params as {
+          request.params && typeof request.params === "object"
+            ? (request.params as {
                 name: unknown
                 arguments?: unknown
                 _meta?: unknown
@@ -428,7 +425,10 @@ export function createInMemoryMcpHost(
       default: {
         return {
           id,
-          error: { code: -32601, message: `method not found: ${body.method}` },
+          error: {
+            code: -32601,
+            message: `method not found: ${request.method}`,
+          },
         }
       }
     }
@@ -451,28 +451,25 @@ export function createInMemoryMcpHost(
       req.on("data", (c: Buffer) => chunks.push(c))
       req.on("end", () => {
         ;(async () => {
-          let body: unknown
-          try {
-            body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")
-          } catch {
-            res.statusCode = 400
+          const parsed = parseMcpHostRequestBody(
+            Buffer.concat(chunks).toString("utf8")
+          )
+          if (!parsed.ok) {
+            res.statusCode = parsed.error.httpStatus
             res.setHeader("content-type", "application/json")
             res.end(
               JSON.stringify({
                 jsonrpc: "2.0",
-                id: null,
-                error: { code: -32700, message: "parse error" },
+                id: parsed.error.id,
+                error: {
+                  code: parsed.error.code,
+                  message: parsed.error.message,
+                },
               })
             )
             return
           }
-          const envelope = await handleJsonRpc(
-            body as {
-              id?: string | number | null
-              method?: unknown
-              params?: unknown
-            }
-          )
+          const envelope = await handleJsonRpc(parsed.request)
           res.statusCode = 200
           res.setHeader("content-type", "application/json")
           res.end(JSON.stringify({ jsonrpc: "2.0", ...envelope }))

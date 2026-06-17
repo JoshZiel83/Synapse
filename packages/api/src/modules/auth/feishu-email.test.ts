@@ -1,6 +1,9 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { resolveFeishuEmail } from "./better-auth.js"
+import {
+  parseFeishuProviderJsonObjectText,
+  resolveFeishuEmail,
+} from "./better-auth.js"
 
 // Regression for the production `email_is_missing` failure: Feishu returns an
 // EMPTY STRING email (not null), `??` does not fall through on "", so the blank
@@ -46,4 +49,18 @@ test("resolveFeishuEmail: falls back to enterprise_email when personal email bla
     union_id: "on_xyz",
   })
   assert.equal(email, "user@enterprise.com")
+})
+
+test("parseFeishuProviderJsonObjectText accepts only JSON object responses", () => {
+  assert.deepEqual(parseFeishuProviderJsonObjectText('{"code":0}'), {
+    ok: true,
+    body: { code: 0 },
+  })
+
+  for (const text of ["{not-json", "[1,2,3]", "null", '"ok"', ""]) {
+    assert.deepEqual(parseFeishuProviderJsonObjectText(text), {
+      ok: false,
+      message: "malformed_response",
+    })
+  }
 })

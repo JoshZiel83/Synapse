@@ -1,5 +1,4 @@
 import type {
-  CanonicalContentBlock,
   CanonicalContentBlockInput,
   CanonicalContextItem,
   Memory,
@@ -8,6 +7,7 @@ import type {
   MemoryRecallResult,
   MemoryRecallRun,
   MemoryRecallType,
+  MemorySpaceType,
   MemoryStability,
   SubjectRef,
   UUID,
@@ -16,25 +16,12 @@ import {
   extractText,
   MEMORY_PERMISSION,
   normalizeCanonicalContentBlocks,
-  parseJsonObject,
   SUBJECT_KIND,
   textBlocks,
 } from "@synapse/shared"
 import { nowIsoInstant } from "@synapse/shared/datetime"
-import { CompiledQuery, sql, type RawBuilder } from "kysely"
 import { v4 as uuidv4 } from "uuid"
-import { upsertAccessSubject } from "../access/subject-registry.js"
-import {
-  db,
-  withDbTransaction,
-  type Executor,
-  type TableInsert,
-} from "../../infrastructure/database/kysely.js"
-import {
-  parseInstantString,
-  serializeInstant,
-  serializeOptionalInstant,
-} from "../../infrastructure/datetime.js"
+import { parseInstantString } from "../../infrastructure/datetime.js"
 import { emitEvent } from "../../infrastructure/events/index.js"
 import { config } from "../../config/index.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
@@ -53,20 +40,48 @@ import {
 import {
   buildNormalizedMessageContent,
   itemPartsToCanonicalContentBlocks,
-  type DraftConversationPart,
 } from "../chat/message-content.js"
 import {
   actorSubject,
-  authorizePermission,
-  filterAuthorizedPermissionResourceIds,
   type AccessSubject,
   workspaceMemberSubject,
 } from "../access/service.js"
-import { hasMemorySpaceOwnerImplicitPermissionForTuple } from "../access/evaluator.js"
-import { buildRuntimePrincipalContext } from "../access/subject-resolution.js"
-import { listSpaceLevelGrantSpaceIds } from "./access-grant-storage.js"
+import { presentMemoryRow } from "./presenter.js"
+import { MemoryError } from "./errors.js"
+import {
+  authorizePermissionDefault,
+  buildRuntimePrincipalContextDefault,
+  createMemoryItemTx,
+  filterAuthorizedPermissionResourceIdsDefault,
+  findExistingMemorySpace,
+  getMemoryRow,
+  hasMemorySpaceOwnerImplicitPermissionForTupleDefault,
+  insertMemoryRecallRunTx,
+  listMemoryCandidateRowsForInput,
+  listMemoryItemPartRows,
+  listSpaceLevelGrantSpaceIdsDefault,
+  loadAccessSubjectRows,
+  loadOwnerImplicitSpaceIds as loadOwnerImplicitSpaceIdsRepo,
+  moveMemoryItemToSpaceTx,
+  searchLexicalMemoryCandidateRows,
+  searchVectorMemoryCandidateRows,
+  softDeleteMemoryItemTx,
+  updateMemoryItemTx,
+  upsertMemorySubject,
+} from "./repo.js"
+import type { SearchCandidateRow } from "./repo.js"
+import type {
+  MemoryItemsMetadata,
+  MemoryRecallRunResultsMatchedTerms,
+  MemoryRecallRunResultsMetadata,
+  MemoryRow,
+} from "./repo.types.js"
 
-const DEFAULT_NAMESPACE = "default"
+// Re-export so existing importers (controller.ts) keep their import path.
+// `MemoryError` and `findExistingMemorySpace` are also imported locally above;
+// these statements simply surface them under their original module path.
+export { MemoryError }
+export { findExistingMemorySpace }
 
 const log = createLogger("memory")
 
@@ -83,80 +98,19 @@ const log = createLogger("memory")
  * with controller / orchestrator / AI tool surfaces that still accept the
  * literal preset strings.
  */
-export type MemoryPreset =
-  | "workspace_shared"
-  | "conversation_shared"
-  | "actor_private"
-  | "participant_private"
-  | "user_private"
-
-type MemoryRow = {
-  id: string
-  workspace_id: string
-  memory_space_id: string
-  space_owner_subject_id: string
-  space_scope_subject_id: string | null
-  space_namespace_key: string
-  owner_kind: string
-  owner_workspace_id: string | null
-  owner_workspace_member_id: string | null
-  owner_actor_id: string | null
-  owner_remote_agent_id: string | null
-  owner_conversation_id: string | null
-  scope_kind: string | null
-  scope_workspace_id_via_join: string | null
-  scope_conversation_id_via_join: string | null
-  category: MemoryCategory
-  state: MemoryItemState
-  importance: number
-  confidence: number
-  tags: string[]
-  text_digest: string
-  search_text: string
-  index_status: "lexical_ready" | "ready" | "failed"
-  embedding_model: string
-  embedding_dim: number | null
-  indexed_at: Date | null
-  index_error: string | null
-  source_item_id: string | null
-  source_tool_call_id: string | null
-  source_turn_id: string | null
-  supersedes_item_id: string | null
-  metadata: Record<string, unknown> | string | null
-  created_at: Date
-  updated_at: Date
-  owner_label: string | null
-  scope_label: string | null
-}
-
-type MemorySpaceRow = {
-  id: string
-  workspace_id: string
-  owner_subject_id: string
-  scope_subject_id: string | null
-  namespace_key: string
-}
+export type MemoryPreset = MemorySpaceType
 
 type MemoryPartRow = {
-  memory_item_id: string
-  part_type: string
-  text_value?: string | null
-  ref_path?: string | null
-  ref_sha256?: string | null
-  json_value?: unknown
-  mime_type?: string | null
+  memoryItemId: string
+  partType: string
+  textValue?: string | null
+  refPath?: string | null
+  refSha256?: string | null
+  jsonValue?: unknown
+  mimeType?: string | null
   name?: string | null
   metadata?: Record<string, unknown> | string | null
-  size_bytes?: number | null
-}
-
-type SearchCandidateRow = MemoryRow & {
-  matched_chunk_id: string
-  chunk_search_text: string
-  text_score?: number | null
-  similarity_score?: number | null
-  vector_score?: number | null
-  rrf_score?: number | null
+  sizeBytes?: number | null
 }
 
 /**
@@ -305,50 +259,6 @@ export function inferMemoryPreset(
   return null
 }
 
-function buildSubjectRefFromJoin(params: {
-  kind: string | null
-  workspaceId: string | null
-  workspaceMemberId: string | null
-  actorId: string | null
-  remoteAgentId: string | null
-  conversationId: string | null
-}): SubjectRef | undefined {
-  if (!params.kind) return undefined
-  switch (params.kind) {
-    case SUBJECT_KIND.WORKSPACE:
-      return params.workspaceId
-        ? { kind: SUBJECT_KIND.WORKSPACE, workspaceId: params.workspaceId }
-        : undefined
-    case SUBJECT_KIND.WORKSPACE_MEMBER:
-      return params.workspaceMemberId
-        ? {
-            kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-            memberId: params.workspaceMemberId,
-          }
-        : undefined
-    case SUBJECT_KIND.ACTOR:
-      return params.actorId
-        ? { kind: SUBJECT_KIND.ACTOR, actorId: params.actorId }
-        : undefined
-    case SUBJECT_KIND.REMOTE_AGENT:
-      return params.remoteAgentId
-        ? {
-            kind: SUBJECT_KIND.REMOTE_AGENT,
-            remoteAgentId: params.remoteAgentId,
-          }
-        : undefined
-    case SUBJECT_KIND.CONVERSATION:
-      return params.conversationId
-        ? {
-            kind: SUBJECT_KIND.CONVERSATION,
-            conversationId: params.conversationId,
-          }
-        : undefined
-    default:
-      return undefined
-  }
-}
-
 function buildMemoryOwnerLabel(memory: {
   owner: SubjectRef
   ownerName?: string | null
@@ -453,10 +363,10 @@ function computeBaseScore(
   memory: Memory,
   target: MemoryAccessTarget
 ) {
-  const rrfScore = clamp01((row.rrf_score ?? 0) * 18)
-  const vectorScore = Math.max(0, row.vector_score ?? 0)
-  const textScore = clamp01(row.text_score ?? 0)
-  const similarityScore = clamp01(row.similarity_score ?? 0)
+  const rrfScore = clamp01((row.rrfScore ?? 0) * 18)
+  const vectorScore = Math.max(0, row.vectorScore ?? 0)
+  const textScore = clamp01(row.textScore ?? 0)
+  const similarityScore = clamp01(row.similarityScore ?? 0)
   const importanceScore = clamp01(row.importance ?? 0)
   const confidenceScore = clamp01(row.confidence ?? 0)
   const baseScore =
@@ -539,98 +449,22 @@ function applyMmrRerank<
   return [...selected, ...tail]
 }
 
-function mapMemoryRow(
-  row: MemoryRow,
-  contentBlocks: CanonicalContentBlock[]
-): Memory {
-  const owner = buildSubjectRefFromJoin({
-    kind: row.owner_kind,
-    workspaceId: row.owner_workspace_id,
-    workspaceMemberId: row.owner_workspace_member_id,
-    actorId: row.owner_actor_id,
-    remoteAgentId: row.owner_remote_agent_id,
-    conversationId: row.owner_conversation_id,
-  })
-  if (!owner) {
-    throw new Error(
-      `memory_items ${row.id}: could not decode owner subject (kind=${row.owner_kind})`
-    )
-  }
-  const scope = buildSubjectRefFromJoin({
-    kind: row.scope_kind,
-    workspaceId: row.scope_workspace_id_via_join,
-    workspaceMemberId: null,
-    actorId: null,
-    remoteAgentId: null,
-    conversationId: row.scope_conversation_id_via_join,
-  })
-  const state = row.state
-  return {
-    id: row.id,
-    workspaceId: row.workspace_id,
-    spaceId: row.memory_space_id,
-    owner,
-    scope,
-    namespaceKey: row.space_namespace_key,
-    category: row.category,
-    state,
-    status: state,
-    stability: "durable",
-    importance: Number(row.importance ?? 0),
-    confidence: Number(row.confidence ?? 0),
-    tags: row.tags ?? [],
-    textDigest: row.text_digest || "",
-    searchText: row.search_text || "",
-    contentBlocks,
-    sourceItemId: row.source_item_id ?? undefined,
-    sourceToolCallId: row.source_tool_call_id ?? undefined,
-    sourceTurnId: row.source_turn_id ?? undefined,
-    supersedesMemoryId: row.supersedes_item_id ?? undefined,
-    metadata: parseJsonObject(row.metadata),
-    indexStatus: row.index_status,
-    embeddingModel: row.embedding_model || undefined,
-    embeddingDim: row.embedding_dim ?? undefined,
-    indexedAt: serializeOptionalInstant(row.indexed_at),
-    indexError: row.index_error ?? undefined,
-    createdAt: serializeInstant(row.created_at),
-    updatedAt: serializeInstant(row.updated_at),
-    ownerLabel: row.owner_label ?? undefined,
-    scopeLabel: row.scope_label ?? undefined,
-  }
-}
-
 async function loadMemoryItemsFromRows(rows: MemoryRow[]) {
   if (rows.length === 0) return []
 
   const memoryIds = rows.map((row) => row.id)
-  const partsResult = await db
-    .selectFrom("memory_item_parts as mip")
-    .select([
-      "mip.memory_item_id",
-      "mip.part_type",
-      "mip.text_value",
-      "mip.ref_path",
-      "mip.ref_sha256",
-      "mip.json_value",
-      "mip.mime_type",
-      "mip.name",
-      "mip.metadata",
-    ])
-    .where("mip.memory_item_id", "in", memoryIds)
-    .orderBy("mip.memory_item_id", "asc")
-    .orderBy("mip.ordinal", "asc")
-    .execute()
+  const partsResult = await listMemoryItemPartRows(memoryIds)
 
   const partsByMemoryId = new Map<string, MemoryPartRow[]>()
   for (const row of partsResult as MemoryPartRow[]) {
-    if (!partsByMemoryId.has(row.memory_item_id)) {
-      partsByMemoryId.set(row.memory_item_id, [])
+    if (!partsByMemoryId.has(row.memoryItemId)) {
+      partsByMemoryId.set(row.memoryItemId, [])
     }
-    partsByMemoryId.get(row.memory_item_id)!.push(row)
+    partsByMemoryId.get(row.memoryItemId)!.push(row)
   }
 
   return rows.map((row) =>
-    mapMemoryRow(
+    presentMemoryRow(
       row,
       itemPartsToCanonicalContentBlocks(partsByMemoryId.get(row.id) || [])
     )
@@ -638,86 +472,34 @@ async function loadMemoryItemsFromRows(rows: MemoryRow[]) {
 }
 
 /**
- * Raw SQL projecting a memory_items row plus its memory_spaces owner / scope
- * subject decomposition. Used by both the get/list paths (via Kysely
- * .selectFrom) and by the raw-SQL search candidate queries. The SELECT body
- * is duplicated rather than shared as a string template so that Kysely-side
- * paths keep their aliases.
+ * Pure owner-kind / scope-kind allowlist check (no DB). Rejects
+ * user/external/platform owners and non-workspace|conversation scopes with a
+ * friendly 400. Used up-front by createMemory (the check formerly lived inside
+ * resolveOrCreateMemorySpace's transaction, but it always threw before any
+ * write) and reused inside validateMemorySpaceTuple.
  */
-function memoryRowSelectSql(itemAlias = "mi", spaceAlias = "ms") {
-  const item = sql.raw(itemAlias)
-  const space = sql.raw(spaceAlias)
-  return sql`
-    ${item}.id AS id,
-    ${item}.workspace_id AS workspace_id,
-    ${item}.memory_space_id AS memory_space_id,
-    ${space}.owner_subject_id AS space_owner_subject_id,
-    ${space}.scope_subject_id AS space_scope_subject_id,
-    ${space}.namespace_key AS space_namespace_key,
-    owner_subj.kind AS owner_kind,
-    owner_subj.workspace_id AS owner_workspace_id,
-    owner_subj.workspace_member_id AS owner_workspace_member_id,
-    owner_subj.actor_id AS owner_actor_id,
-    owner_subj.remote_agent_id AS owner_remote_agent_id,
-    owner_subj.conversation_id AS owner_conversation_id,
-    scope_subj.kind AS scope_kind,
-    scope_subj.workspace_id AS scope_workspace_id_via_join,
-    scope_subj.conversation_id AS scope_conversation_id_via_join,
-    ${item}.category AS category,
-    ${item}.state AS state,
-    ${item}.importance AS importance,
-    ${item}.confidence AS confidence,
-    ${item}.tags AS tags,
-    ${item}.text_digest AS text_digest,
-    ${item}.search_text AS search_text,
-    ${item}.index_status AS index_status,
-    ${item}.embedding_model AS embedding_model,
-    ${item}.embedding_dim AS embedding_dim,
-    ${item}.indexed_at AS indexed_at,
-    ${item}.index_error AS index_error,
-    ${item}.source_item_id AS source_item_id,
-    ${item}.source_tool_call_id AS source_tool_call_id,
-    ${item}.source_turn_id AS source_turn_id,
-    ${item}.supersedes_item_id AS supersedes_item_id,
-    ${item}.metadata AS metadata,
-    ${item}.created_at AS created_at,
-    ${item}.updated_at AS updated_at,
-    COALESCE(owner_actor_app.display_name, owner_remote_agent_app.display_name, owner_conv.title, owner_user.name) AS owner_label,
-    COALESCE(scope_conv.title) AS scope_label
-  `
-}
-
-function memoryRowFromSql(itemAlias = "mi", spaceAlias = "ms") {
-  const item = sql.raw(itemAlias)
-  const space = sql.raw(spaceAlias)
-  return sql`
-    ${item}
-      JOIN memory_spaces ${space} ON ${space}.id = ${item}.memory_space_id
-      JOIN access_subjects owner_subj ON owner_subj.id = ${space}.owner_subject_id
-      LEFT JOIN access_subjects scope_subj ON scope_subj.id = ${space}.scope_subject_id
-      LEFT JOIN actors owner_actor ON owner_actor.id = owner_subj.actor_id
-      LEFT JOIN workspace_apps_live owner_actor_app ON owner_actor_app.id = owner_actor.id
-      LEFT JOIN remote_agents owner_remote_agent ON owner_remote_agent.id = owner_subj.remote_agent_id
-      LEFT JOIN workspace_apps_live owner_remote_agent_app ON owner_remote_agent_app.id = owner_remote_agent.id
-      LEFT JOIN conversations owner_conv ON owner_conv.id = owner_subj.conversation_id
-      LEFT JOIN workspace_members owner_wm ON owner_wm.id = owner_subj.workspace_member_id
-      LEFT JOIN users owner_user ON owner_user.id = owner_wm.user_id
-      LEFT JOIN conversations scope_conv ON scope_conv.id = scope_subj.conversation_id
-  `
-}
-
-async function getMemoryRow(
-  workspaceId: string,
-  memoryId: string
-): Promise<MemoryRow | undefined> {
-  const select = memoryRowSelectSql("mi", "ms")
-  const from = memoryRowFromSql("mi", "ms")
-  const result = await db.executeQuery(
-    sql<MemoryRow>`SELECT ${select} FROM memory_items ${from}
-       WHERE mi.workspace_id = ${workspaceId} AND mi.id = ${memoryId}
-       LIMIT 1`.compile(db)
-  )
-  return result.rows[0]
+function assertMemorySpaceTupleKinds(owner: SubjectRef, scope?: SubjectRef) {
+  const ownerKind = owner.kind
+  if (
+    ownerKind === SUBJECT_KIND.USER ||
+    ownerKind === SUBJECT_KIND.EXTERNAL ||
+    ownerKind === SUBJECT_KIND.PLATFORM
+  ) {
+    throw new MemoryError(
+      `Memory space owner kind '${ownerKind}' is not permitted`,
+      400
+    )
+  }
+  if (
+    scope &&
+    scope.kind !== SUBJECT_KIND.WORKSPACE &&
+    scope.kind !== SUBJECT_KIND.CONVERSATION
+  ) {
+    throw new MemoryError(
+      `Memory space scope kind '${scope.kind}' must be workspace|conversation`,
+      400
+    )
+  }
 }
 
 /**
@@ -740,27 +522,7 @@ export async function validateMemorySpaceTuple(
   ownerSubjectId: string
   scopeSubjectId: string | null
 }> {
-  const ownerKind = owner.kind
-  if (
-    ownerKind === SUBJECT_KIND.USER ||
-    ownerKind === SUBJECT_KIND.EXTERNAL ||
-    ownerKind === SUBJECT_KIND.PLATFORM
-  ) {
-    throw new MemoryError(
-      `Memory space owner kind '${ownerKind}' is not permitted`,
-      400
-    )
-  }
-  if (
-    scope &&
-    scope.kind !== SUBJECT_KIND.WORKSPACE &&
-    scope.kind !== SUBJECT_KIND.CONVERSATION
-  ) {
-    throw new MemoryError(
-      `Memory space scope kind '${scope.kind}' must be workspace|conversation`,
-      400
-    )
-  }
+  assertMemorySpaceTupleKinds(owner, scope)
 
   // Workspace consistency: the subject upsert resolves the canonical
   // workspace_id stored on the access_subjects row. We compare against
@@ -777,7 +539,7 @@ export async function validateMemorySpaceTuple(
     label: "owner" | "scope"
   ): Promise<string> => {
     try {
-      return await upsertAccessSubject(db, ref)
+      return await upsertMemorySubject(ref)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       if (/not found/i.test(message)) {
@@ -792,23 +554,17 @@ export async function validateMemorySpaceTuple(
   const ownerSubjectId = await safeUpsert(owner, "owner")
   const scopeSubjectId = scope ? await safeUpsert(scope, "scope") : null
 
-  const subjectRows = await db
-    .selectFrom("access_subjects")
-    .select(["id", "workspace_id", "kind"])
-    .where(
-      "id",
-      "in",
-      scopeSubjectId ? [ownerSubjectId, scopeSubjectId] : [ownerSubjectId]
-    )
-    .execute()
+  const subjectRows = await loadAccessSubjectRows(
+    scopeSubjectId ? [ownerSubjectId, scopeSubjectId] : [ownerSubjectId]
+  )
   const byId = new Map(subjectRows.map((r) => [r.id, r]))
   const ownerRow = byId.get(ownerSubjectId)
   const scopeRow = scopeSubjectId ? byId.get(scopeSubjectId) : null
 
   if (
     !ownerRow ||
-    !ownerRow.workspace_id ||
-    ownerRow.workspace_id !== workspaceId
+    !ownerRow.workspaceId ||
+    ownerRow.workspaceId !== workspaceId
   ) {
     throw new MemoryError(
       `Memory space owner does not belong to workspace ${workspaceId}`,
@@ -817,7 +573,7 @@ export async function validateMemorySpaceTuple(
   }
   if (
     scopeRow &&
-    (!scopeRow.workspace_id || scopeRow.workspace_id !== workspaceId)
+    (!scopeRow.workspaceId || scopeRow.workspaceId !== workspaceId)
   ) {
     throw new MemoryError(
       `Memory space scope does not belong to workspace ${workspaceId}`,
@@ -828,124 +584,9 @@ export async function validateMemorySpaceTuple(
   return { ownerSubjectId, scopeSubjectId }
 }
 
-/**
- * Post-D4 round 3 review: pure read — look up the memory_space row keyed
- * by (workspace_id, owner_subject_id, scope_subject_id?, namespace_key)
- * WITHOUT writing. Used by the auth gate so we can decide allowance
- * without first creating a placeholder space row that would orphan on
- * denial.
- */
-export async function findExistingMemorySpace(input: {
-  workspaceId: string
-  ownerSubjectId: string
-  scopeSubjectId: string | null
-  namespaceKey?: string
-}): Promise<MemorySpaceRow | null> {
-  const namespaceKey =
-    (input.namespaceKey || DEFAULT_NAMESPACE).trim() || DEFAULT_NAMESPACE
-  let query = db
-    .selectFrom("memory_spaces")
-    .selectAll()
-    .where("workspace_id", "=", input.workspaceId)
-    .where("owner_subject_id", "=", input.ownerSubjectId)
-    .where("namespace_key", "=", namespaceKey)
-  query = input.scopeSubjectId
-    ? query.where("scope_subject_id", "=", input.scopeSubjectId)
-    : query.where("scope_subject_id", "is", null)
-  const row = (await query.limit(1).executeTakeFirst()) as
-    | MemorySpaceRow
-    | undefined
-  return row ?? null
-}
-
-/**
- * D4 helper: resolve-or-create a memory_spaces row. The owner kind is checked
- * up-front (rejects user/external/system) so the failure message is friendly;
- * the trigger enforces the same invariant in case anyone bypasses this path.
- */
-export async function resolveOrCreateMemorySpace(
-  executor: Executor,
-  input: {
-    workspaceId: string
-    owner: SubjectRef
-    scope?: SubjectRef
-    namespaceKey?: string
-  }
-): Promise<MemorySpaceRow> {
-  const ownerKind = input.owner.kind
-  if (
-    ownerKind === SUBJECT_KIND.USER ||
-    ownerKind === SUBJECT_KIND.EXTERNAL ||
-    ownerKind === SUBJECT_KIND.PLATFORM
-  ) {
-    throw new MemoryError(
-      `Memory space owner kind '${ownerKind}' is not permitted`,
-      400
-    )
-  }
-  if (
-    input.scope &&
-    input.scope.kind !== SUBJECT_KIND.WORKSPACE &&
-    input.scope.kind !== SUBJECT_KIND.CONVERSATION
-  ) {
-    throw new MemoryError(
-      `Memory space scope kind '${input.scope.kind}' must be workspace|conversation`,
-      400
-    )
-  }
-
-  const ownerSubjectId = await upsertAccessSubject(executor, input.owner)
-  const scopeSubjectId = input.scope
-    ? await upsertAccessSubject(executor, input.scope)
-    : null
-  const namespaceKey =
-    (input.namespaceKey || DEFAULT_NAMESPACE).trim() || DEFAULT_NAMESPACE
-
-  // P3 fix (post-D4): single-statement transactional upsert via
-  // INSERT ... ON CONFLICT ... DO UPDATE ... RETURNING. Replaces the
-  // earlier select-then-insert path (which races under concurrent
-  // createMemory calls for the same owner/scope/namespace) and pins both
-  // subject upserts to the caller's transaction client so they roll back
-  // together with the outer txn.
-  //
-  // ON CONFLICT targets one of the two partial unique indexes on
-  // memory_spaces:
-  //   uq_memory_spaces_scoped   (workspace_id, owner_subject_id,
-  //                              scope_subject_id, namespace_key)
-  //                              WHERE scope_subject_id IS NOT NULL
-  //   uq_memory_spaces_unscoped (workspace_id, owner_subject_id,
-  //                              namespace_key)
-  //                              WHERE scope_subject_id IS NULL
-  // We pick the right index by branching on scopeSubjectId. DO UPDATE
-  // (no-op) is required for RETURNING on the conflicting row (DO NOTHING
-  // would skip the RETURNING).
-  // The two indexes are soft-delete-aware (… AND deleted_at IS NULL), so the
-  // ON CONFLICT predicate must match exactly (design §8.3).
-  const conflictClause = scopeSubjectId
-    ? `(workspace_id, owner_subject_id, scope_subject_id, namespace_key) WHERE scope_subject_id IS NOT NULL AND deleted_at IS NULL`
-    : `(workspace_id, owner_subject_id, namespace_key) WHERE scope_subject_id IS NULL AND deleted_at IS NULL`
-  const result = await executor.executeQuery<MemorySpaceRow>(
-    CompiledQuery.raw(
-      `INSERT INTO memory_spaces (id, workspace_id, owner_subject_id, scope_subject_id, namespace_key, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
-     ON CONFLICT ${conflictClause}
-       DO UPDATE SET updated_at = memory_spaces.updated_at
-     RETURNING id, workspace_id, owner_subject_id, scope_subject_id, namespace_key`,
-      [
-        uuidv4(),
-        input.workspaceId,
-        ownerSubjectId,
-        scopeSubjectId,
-        namespaceKey,
-      ]
-    )
-  )
-  const row = result.rows[0]
-  if (!row) {
-    throw new MemoryError("Failed to resolve or create memory_space", 500)
-  }
-  return row
-}
+// `findExistingMemorySpace` and `resolveOrCreateMemorySpace` moved to repo.ts
+// (guard r8 — they own DB access / a raw ON CONFLICT upsert) and are
+// re-exported from this module above so existing importers stay unchanged.
 
 async function normalizeMemoryContent(input: {
   content?: string
@@ -987,46 +628,8 @@ async function normalizeMemoryContent(input: {
   }
 }
 
-async function insertMemoryParts(
-  executor: Executor,
-  memoryItemId: string,
-  parts: DraftConversationPart[]
-) {
-  for (let ordinal = 0; ordinal < parts.length; ordinal += 1) {
-    const part = parts[ordinal]
-    await executor.executeQuery(
-      db.insertInto("memory_item_parts").values({
-        id: uuidv4(),
-        memory_item_id: memoryItemId,
-        ordinal,
-        part_type: part.type,
-        text_value: part.type === "text" ? part.text || "" : null,
-        ref_path: part.type === "file_ref" ? (part.refPath ?? null) : null,
-        ref_sha256: part.type === "file_ref" ? (part.refSha256 ?? null) : null,
-        json_value:
-          part.type === "json"
-            ? sql`${JSON.stringify(part.json ?? {})}::jsonb`
-            : null,
-        mime_type: part.mimeType || null,
-        name: part.name || null,
-        metadata: (part.metadata ||
-          {}) as TableInsert<"memory_item_parts">["metadata"],
-      })
-    )
-  }
-}
-
-async function maybeMarkSuperseded(executor: Executor, memoryItemId?: string) {
-  if (!memoryItemId) return
-  await executor.executeQuery(
-    db
-      .updateTable("memory_items")
-      .set({
-        state: "superseded",
-      })
-      .where("id", "=", memoryItemId)
-  )
-}
+// `insertMemoryParts` / `maybeMarkSuperseded` moved into repo.ts (they run on
+// the transaction executor inside createMemoryItemTx / updateMemoryItemTx).
 
 export interface CreateMemoryInput {
   owner: SubjectRef
@@ -1109,257 +712,12 @@ export interface RecallMemoriesInput extends SearchMemoriesInput {
  * legacy unauthenticated list path, which keeps the wide-open candidate
  * set so the post-fetch filter still has a chance to work.
  */
-function hasPrincipalSearchContext(
-  input: Pick<
-    SearchMemoriesInput,
-    "actorId" | "workspaceMemberId" | "accessSubject"
-  >
-) {
-  if (input.accessSubject) {
-    return (
-      input.accessSubject.type === "actor" ||
-      input.accessSubject.type === "workspace_member"
-    )
-  }
-  return Boolean(input.actorId || input.workspaceMemberId)
-}
-
-function isActorSearchContext(
-  input: Pick<
-    SearchMemoriesInput,
-    "actorId" | "workspaceMemberId" | "accessSubject"
-  >
-) {
-  if (input.accessSubject?.type === "actor") {
-    return true
-  }
-  if (
-    input.accessSubject?.type === "workspace_member" ||
-    input.accessSubject?.type === "user"
-  ) {
-    return false
-  }
-  return Boolean(input.actorId && !input.workspaceMemberId)
-}
-
-function buildOwnerScopeFilter(params: {
-  spaceAlias: string
-  owners?: SubjectRef[]
-  scopes?: SubjectRef[]
-  namespaceKeys?: string[]
-}) {
-  const conditions: RawBuilder<unknown>[] = []
-  const space = sql.raw(params.spaceAlias)
-
-  if (params.namespaceKeys && params.namespaceKeys.length > 0) {
-    conditions.push(
-      sql`${space}.namespace_key = ANY(${params.namespaceKeys}::text[])`
-    )
-  }
-
-  // owner / scope filtering operates via the joined access_subjects rows.
-  // For each owner SubjectRef we accept any subject_id matching the requested
-  // kind+id; for scope similarly.
-  return conditions
-}
-
 async function subjectIdsForRefs(refs: SubjectRef[]): Promise<string[]> {
   const ids: string[] = []
   for (const ref of refs) {
-    ids.push(await upsertAccessSubject(db, ref))
+    ids.push(await upsertMemorySubject(ref))
   }
   return Array.from(new Set(ids))
-}
-
-function buildSearchFilters(
-  workspaceId: string,
-  input: SearchMemoriesInput,
-  itemAlias = "mi",
-  spaceAlias = "ms",
-  /**
-   * Space-level grant-reachable memory_space ids — these widen the visibility
-   * filter so a granted space (where the principal isn't the owner) still
-   * shows up in list/search/recall candidate SQL.
-   */
-  grantSpaceIds: readonly string[] = [],
-  /** Owner-implicit reachable memory_space ids derived from runtimeSubjectIds. */
-  ownerSpaceIds: readonly string[] = [],
-  /**
-   * P2 fix (post-D4): caller-supplied owner / scope filters from
-   * `SearchMemoriesInput.owners` and `.scopes`. The schema accepted them but
-   * the SQL ignored them, so a UI filter like "only actor X's memories"
-   * silently degraded to "every reachable memory". When provided we restrict
-   * the candidate set by intersecting with the corresponding access_subjects
-   * ids (resolved once by the caller and passed through here).
-   */
-  ownerSubjectIdFilters: readonly string[] = [],
-  scopeSubjectIdFilters: readonly string[] = [],
-  scopeFilterIncludesUnscoped = false
-) {
-  const item = sql.raw(itemAlias)
-  const space = sql.raw(spaceAlias)
-  const conditions: RawBuilder<unknown>[] = [
-    sql`${item}.workspace_id = ${workspaceId}`,
-  ]
-
-  if (input.namespaceKeys && input.namespaceKeys.length > 0) {
-    conditions.push(
-      sql`${space}.namespace_key = ANY(${input.namespaceKeys}::text[])`
-    )
-  }
-
-  if (ownerSubjectIdFilters.length > 0) {
-    conditions.push(
-      sql`${space}.owner_subject_id = ANY(${[...ownerSubjectIdFilters]}::uuid[])`
-    )
-  }
-
-  if (scopeSubjectIdFilters.length > 0) {
-    if (scopeFilterIncludesUnscoped) {
-      conditions.push(
-        sql`(${space}.scope_subject_id IS NULL OR ${space}.scope_subject_id = ANY(${[...scopeSubjectIdFilters]}::uuid[]))`
-      )
-    } else {
-      conditions.push(
-        sql`${space}.scope_subject_id = ANY(${[...scopeSubjectIdFilters]}::uuid[])`
-      )
-    }
-  }
-
-  if (input.categories && input.categories.length > 0) {
-    conditions.push(
-      sql`${item}.category::text = ANY(${input.categories}::text[])`
-    )
-  }
-
-  const states =
-    input.states && input.states.length > 0
-      ? input.states
-      : input.statuses && input.statuses.length > 0
-        ? input.statuses
-        : ["active"]
-  conditions.push(sql`${item}.state::text = ANY(${states}::text[])`)
-
-  // Reachability gate: any workspace-bound principal (actor OR
-  // workspace_member) is restricted to spaces they have implicit owner
-  // access to plus spaces with active space-level grants. The union of
-  // (ownerSpaceIds, grantSpaceIds) bounds the candidate set so the SQL
-  // LIMIT doesn't push authorized rows out of the window before the
-  // post-fetch authz filter runs.
-  //
-  // Round-7 review fix: the old `isActorSearchContext` check excluded
-  // `workspace_member` from this gate, so dashboard search/recall hit
-  // the workspace's full memory_items, scored unreachable rows alongside
-  // authorized ones, and lost the latter to LIMIT. Broadened to any
-  // resolved principal context.
-  if (hasPrincipalSearchContext(input)) {
-    const reachable = Array.from(new Set([...ownerSpaceIds, ...grantSpaceIds]))
-    if (reachable.length === 0) {
-      conditions.push(sql`FALSE`)
-    } else {
-      conditions.push(sql`${space}.id = ANY(${reachable}::uuid[])`)
-    }
-  }
-
-  return sql`${sql.join(conditions, sql` AND `)}`
-}
-
-async function searchLexicalCandidates(
-  workspaceId: string,
-  input: SearchMemoriesInput,
-  candidateLimit: number,
-  queryText: string,
-  grantSpaceIds: readonly string[] = [],
-  ownerSpaceIds: readonly string[] = [],
-  ownerSubjectIdFilters: readonly string[] = [],
-  scopeSubjectIdFilters: readonly string[] = [],
-  scopeFilterIncludesUnscoped = false
-) {
-  const whereClause = buildSearchFilters(
-    workspaceId,
-    input,
-    "mi",
-    "ms",
-    grantSpaceIds,
-    ownerSpaceIds,
-    ownerSubjectIdFilters,
-    scopeSubjectIdFilters,
-    scopeFilterIncludesUnscoped
-  )
-  if (!queryText) return []
-  const normalizedQueryText = normalizeWhitespace(queryText).toLowerCase()
-  const select = memoryRowSelectSql("mi", "ms")
-  const from = memoryRowFromSql("mi", "ms")
-  const result = await db.executeQuery(
-    sql<SearchCandidateRow>`SELECT ${select},
-        mic.id AS matched_chunk_id,
-        mic.search_text AS chunk_search_text,
-        GREATEST(
-          ts_rank_cd(to_tsvector('simple', mic.search_text), websearch_to_tsquery('simple', ${queryText})),
-          CASE WHEN POSITION(${normalizedQueryText} IN lower(mic.search_text)) > 0 THEN 0.2 ELSE 0 END
-        ) AS text_score,
-        similarity(mic.search_text, ${queryText}) AS similarity_score,
-        NULL::real AS vector_score,
-        NULL::real AS rrf_score
-      FROM memory_item_chunks mic
-      JOIN memory_items ${from} ON mi.id = mic.memory_item_id
-      WHERE ${whereClause}
-        AND mic.index_version = mi.active_index_version
-        AND (
-          to_tsvector('simple', mic.search_text) @@ websearch_to_tsquery('simple', ${queryText})
-          OR POSITION(${normalizedQueryText} IN lower(mic.search_text)) > 0
-          OR similarity(mic.search_text, ${queryText}) > 0.08
-        )
-      ORDER BY text_score DESC, similarity_score DESC, mi.importance DESC, mi.updated_at DESC
-      LIMIT ${candidateLimit}`.compile(db)
-  )
-
-  return result.rows
-}
-
-async function searchVectorCandidates(
-  workspaceId: string,
-  input: SearchMemoriesInput,
-  embedding: number[],
-  candidateLimit: number,
-  grantSpaceIds: readonly string[] = [],
-  ownerSpaceIds: readonly string[] = [],
-  ownerSubjectIdFilters: readonly string[] = [],
-  scopeSubjectIdFilters: readonly string[] = [],
-  scopeFilterIncludesUnscoped = false
-) {
-  const whereClause = buildSearchFilters(
-    workspaceId,
-    input,
-    "mi",
-    "ms",
-    grantSpaceIds,
-    ownerSpaceIds,
-    ownerSubjectIdFilters,
-    scopeSubjectIdFilters,
-    scopeFilterIncludesUnscoped
-  )
-  const formattedEmbedding = `[${embedding.map((value) => (Number.isFinite(value) ? value.toFixed(8) : "0")).join(",")}]`
-  const select = memoryRowSelectSql("mi", "ms")
-  const from = memoryRowFromSql("mi", "ms")
-  const result = await db.executeQuery(
-    sql<SearchCandidateRow>`SELECT ${select},
-        mic.id AS matched_chunk_id,
-        mic.search_text AS chunk_search_text,
-        NULL::real AS text_score,
-        NULL::real AS similarity_score,
-        (1 - (mic.embedding <=> ${formattedEmbedding}::vector))::real AS vector_score,
-        NULL::real AS rrf_score
-      FROM memory_item_chunks mic
-      JOIN memory_items ${from} ON mi.id = mic.memory_item_id
-      WHERE ${whereClause}
-        AND mic.index_version = mi.active_index_version
-        AND mic.embedding IS NOT NULL
-      ORDER BY mic.embedding <=> ${formattedEmbedding}::vector ASC
-      LIMIT ${candidateLimit}`.compile(db)
-  )
-
-  return result.rows
 }
 
 function fuseCandidateRows(sources: Array<{ rows: SearchCandidateRow[] }>) {
@@ -1367,36 +725,33 @@ function fuseCandidateRows(sources: Array<{ rows: SearchCandidateRow[] }>) {
 
   for (const source of sources) {
     source.rows.forEach((row, index) => {
-      const key = `${row.id}:${row.matched_chunk_id}`
+      const key = `${row.id}:${row.matchedChunkId}`
       const contribution = 1 / (MEMORY_RRF_K + index + 1)
       const existing = byChunkKey.get(key)
 
       if (!existing) {
         byChunkKey.set(key, {
           ...row,
-          rrf_score: contribution,
+          rrfScore: contribution,
         })
         return
       }
 
-      existing.rrf_score = (existing.rrf_score ?? 0) + contribution
-      existing.text_score = Math.max(
-        existing.text_score ?? 0,
-        row.text_score ?? 0
+      existing.rrfScore = (existing.rrfScore ?? 0) + contribution
+      existing.textScore = Math.max(existing.textScore ?? 0, row.textScore ?? 0)
+      existing.similarityScore = Math.max(
+        existing.similarityScore ?? 0,
+        row.similarityScore ?? 0
       )
-      existing.similarity_score = Math.max(
-        existing.similarity_score ?? 0,
-        row.similarity_score ?? 0
-      )
-      existing.vector_score = Math.max(
-        existing.vector_score ?? 0,
-        row.vector_score ?? 0
+      existing.vectorScore = Math.max(
+        existing.vectorScore ?? 0,
+        row.vectorScore ?? 0
       )
     })
   }
 
   return Array.from(byChunkKey.values()).sort(
-    (left, right) => (right.rrf_score ?? 0) - (left.rrf_score ?? 0)
+    (left, right) => (right.rrfScore ?? 0) - (left.rrfScore ?? 0)
   )
 }
 
@@ -1429,7 +784,7 @@ async function buildMemoryRuntimeContext(
   const principal = resolveSubjectRef(subject)
   if (!principal) return null
   try {
-    return await buildRuntimePrincipalContext(db, {
+    return await buildRuntimePrincipalContextDefault({
       principal,
       workspaceId,
       conversationId: target.conversationId ?? null,
@@ -1444,7 +799,7 @@ async function loadSpaceLevelGrantSpaceIds(
   ctx: NonNullable<Awaited<ReturnType<typeof buildMemoryRuntimeContext>>>,
   permission: "read" | "recall"
 ): Promise<string[]> {
-  return listSpaceLevelGrantSpaceIds(db, {
+  return listSpaceLevelGrantSpaceIdsDefault({
     workspaceId,
     permission:
       permission === "recall"
@@ -1459,31 +814,18 @@ async function loadSpaceLevelGrantSpaceIds(
  * D4: spaces the principal can read by owner-implicit permission. The
  * implicit-permission rule is: `owner_subject_id ∈ runtimeSubjectIds AND
  * (scope_subject_id IS NULL OR scope_subject_id ∈ runtimeScopeSubjectIds)`.
- * Used as a SQL-side filter to widen the candidate set.
+ * Used as a SQL-side filter to widen the candidate set. The query lives in
+ * repo.ts; this wrapper keeps the runtime-context-shaped call signature.
  */
 async function loadOwnerImplicitSpaceIds(
   workspaceId: string,
   ctx: NonNullable<Awaited<ReturnType<typeof buildMemoryRuntimeContext>>>
 ): Promise<string[]> {
-  if (ctx.runtimeSubjectIds.length === 0) return []
-  let query = db
-    .selectFrom("memory_spaces")
-    .select("id")
-    .where("workspace_id", "=", workspaceId)
-    .where("owner_subject_id", "in", [...ctx.runtimeSubjectIds])
-  if (ctx.runtimeScopeSubjectIds.length > 0) {
-    const scopes = [...ctx.runtimeScopeSubjectIds]
-    query = query.where((eb) =>
-      eb.or([
-        eb("scope_subject_id", "is", null),
-        eb("scope_subject_id", "in", scopes),
-      ])
-    )
-  } else {
-    query = query.where("scope_subject_id", "is", null)
-  }
-  const rows = await query.execute()
-  return rows.map((row) => row.id)
+  return loadOwnerImplicitSpaceIdsRepo(
+    workspaceId,
+    ctx.runtimeSubjectIds,
+    ctx.runtimeScopeSubjectIds
+  )
 }
 
 /**
@@ -1522,7 +864,7 @@ async function buildSearchHits(params: {
     // about reachability of the space; the item-level overlay only widens
     // permission within a space the principal can already see.
     const allowedIds = new Set(
-      await filterAuthorizedPermissionResourceIds(db, {
+      await filterAuthorizedPermissionResourceIdsDefault({
         subject,
         resourceType: "memory_item",
         permission: params.permission,
@@ -1537,7 +879,7 @@ async function buildSearchHits(params: {
   const bestByMemoryId = new Map<string, SearchCandidateRow>()
   for (const row of rows) {
     const existing = bestByMemoryId.get(row.id)
-    if (!existing || (existing.rrf_score ?? 0) < (row.rrf_score ?? 0)) {
+    if (!existing || (existing.rrfScore ?? 0) < (row.rrfScore ?? 0)) {
       bestByMemoryId.set(row.id, row)
     }
   }
@@ -1555,7 +897,7 @@ async function buildSearchHits(params: {
         baseScore: computeBaseScore(row, memory, params.target),
         mmrTokens: new Set(
           tokenizeMemorySearchText(
-            row.chunk_search_text || memory.textDigest || memory.searchText
+            row.chunkSearchText || memory.textDigest || memory.searchText
           )
         ),
       }
@@ -1571,15 +913,15 @@ async function buildSearchHits(params: {
     ({ row, memory, baseScore }, index) =>
       ({
         ...memory,
-        matchedChunkId: row.matched_chunk_id,
+        matchedChunkId: row.matchedChunkId,
         rank: index + 1,
         finalScore: baseScore,
-        vectorScore: row.vector_score ?? undefined,
-        textScore: row.text_score ?? undefined,
-        similarityScore: row.similarity_score ?? undefined,
+        vectorScore: row.vectorScore ?? undefined,
+        textScore: row.textScore ?? undefined,
+        similarityScore: row.similarityScore ?? undefined,
         matchedTerms: computeMatchedTerms(
           params.queryText,
-          row.chunk_search_text
+          row.chunkSearchText
         ),
       }) satisfies MemoryRecallResult
   )
@@ -1600,60 +942,34 @@ async function recordMemoryRecallRun(params: {
     params.queryBlocks || []
   )
   const runId = uuidv4()
-  await withDbTransaction(async (trx) => {
-    await trx.executeQuery(
-      CompiledQuery.raw(
-        `INSERT INTO memory_recall_runs (
-         id,
-         workspace_id,
-         actor_id,
-         conversation_id,
-         workspace_member_id,
-         recall_type,
-         query_text,
-         query_blocks,
-         metadata,
-         created_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, NOW())`,
-        [
-          runId,
-          params.workspaceId,
-          params.actorId || null,
-          params.conversationId || null,
-          params.workspaceMemberId || null,
-          params.recallType,
-          params.queryText,
-          JSON.stringify(normalizedQueryBlocks),
-          JSON.stringify(params.metadata || {}),
-        ]
-      )
-    )
-
-    for (const result of params.results) {
-      await trx.executeQuery(
-        db.insertInto("memory_recall_run_results").values({
-          id: uuidv4(),
-          run_id: runId,
-          memory_item_id: result.id,
-          matched_chunk_id: result.matchedChunkId || null,
-          rank: result.rank,
-          final_score: result.finalScore,
-          vector_score: result.vectorScore ?? null,
-          text_score: result.textScore ?? null,
-          similarity_score: result.similarityScore ?? null,
-          matched_terms: (result.matchedTerms ??
-            []) as TableInsert<"memory_recall_run_results">["matched_terms"],
-          recall_reason: result.recallReason || null,
-          metadata: {
-            ownerKind: result.owner.kind,
-            scopeKind: result.scope?.kind,
-            namespaceKey: result.namespaceKey,
-            category: result.category,
-          } as TableInsert<"memory_recall_run_results">["metadata"],
-          created_at: sql`NOW()`,
-        })
-      )
-    }
+  await insertMemoryRecallRunTx({
+    runId,
+    workspaceId: params.workspaceId,
+    actorId: params.actorId || null,
+    conversationId: params.conversationId || null,
+    workspaceMemberId: params.workspaceMemberId || null,
+    recallType: params.recallType,
+    queryText: params.queryText,
+    queryBlocksJson: JSON.stringify(normalizedQueryBlocks),
+    metadataJson: JSON.stringify(params.metadata || {}),
+    results: params.results.map((result) => ({
+      memoryItemId: result.id,
+      matchedChunkId: result.matchedChunkId || null,
+      rank: result.rank,
+      finalScore: result.finalScore,
+      vectorScore: result.vectorScore ?? null,
+      textScore: result.textScore ?? null,
+      similarityScore: result.similarityScore ?? null,
+      matchedTerms: (result.matchedTerms ??
+        []) as MemoryRecallRunResultsMatchedTerms,
+      recallReason: result.recallReason || null,
+      metadata: {
+        ownerKind: result.owner.kind,
+        scopeKind: result.scope?.kind,
+        namespaceKey: result.namespaceKey,
+        category: result.category,
+      } as MemoryRecallRunResultsMetadata,
+    })),
   })
 
   return {
@@ -1696,47 +1012,33 @@ export async function createMemory(
   workspaceId: UUID,
   input: CreateMemoryInput
 ) {
+  // Owner-kind / scope-kind allowlist check up-front (was inside
+  // resolveOrCreateMemorySpace's transaction; it threw before any write, so
+  // hoisting it preserves behavior). Keeps the friendly 400 in the service.
+  assertMemorySpaceTupleKinds(input.owner, input.scope)
   const normalizedContent = await normalizeMemoryContent(input)
   const memoryItemId = uuidv4()
 
-  await withDbTransaction(async (trx) => {
-    const space = await resolveOrCreateMemorySpace(trx, {
-      workspaceId,
-      owner: input.owner,
-      scope: input.scope,
-      namespaceKey: input.namespaceKey,
-    })
-    await trx.executeQuery(
-      db.insertInto("memory_items").values({
-        id: memoryItemId,
-        workspace_id: workspaceId,
-        memory_space_id: space.id,
-        category: input.category,
-        state: input.state || input.status || "active",
-        importance: input.importance ?? 0.5,
-        confidence: input.confidence ?? 0.8,
-        tags: input.tags || [],
-        text_digest: normalizedContent.textDigest,
-        search_text: normalizedContent.searchText,
-        index_status: "lexical_ready",
-        active_index_version: 0,
-        staged_index_version: null,
-        embedding_model: "",
-        embedding_dim: null,
-        indexed_at: null,
-        index_error: null,
-        source_kind: "manual",
-        source_item_id: input.sourceItemId || null,
-        source_tool_call_id: input.sourceToolCallId || null,
-        source_turn_id: input.sourceTurnId || null,
-        supersedes_item_id: input.supersedesMemoryId || null,
-        metadata: (input.metadata ||
-          {}) as TableInsert<"memory_items">["metadata"],
-        created_at: sql`NOW()`,
-      })
-    )
-    await insertMemoryParts(trx, memoryItemId, normalizedContent.parts)
-    await maybeMarkSuperseded(trx, input.supersedesMemoryId)
+  await createMemoryItemTx({
+    workspaceId,
+    memoryItemId,
+    owner: input.owner,
+    scope: input.scope,
+    namespaceKey: input.namespaceKey,
+    category: input.category,
+    state: input.state || input.status || "active",
+    importance: input.importance ?? 0.5,
+    confidence: input.confidence ?? 0.8,
+    tags: input.tags || [],
+    textDigest: normalizedContent.textDigest,
+    searchText: normalizedContent.searchText,
+    sourceItemId: input.sourceItemId || null,
+    sourceToolCallId: input.sourceToolCallId || null,
+    sourceTurnId: input.sourceTurnId || null,
+    supersedesItemId: input.supersedesMemoryId || null,
+    metadata: (input.metadata || {}) as MemoryItemsMetadata,
+    parts: normalizedContent.parts,
+    supersedesMemoryId: input.supersedesMemoryId,
   })
 
   const lexicalIndex = await rebuildMemoryItemLexicalIndex(memoryItemId)
@@ -1800,50 +1102,37 @@ export async function updateMemory(
     category: input.category || existing.category,
   })
 
-  await withDbTransaction(async (trx) => {
-    await trx.executeQuery(
-      db
-        .updateTable("memory_items")
-        .set({
-          category: input.category || existing.category,
-          state: input.state || input.status || existing.state,
-          importance: input.importance ?? existing.importance,
-          confidence: input.confidence ?? existing.confidence,
-          tags: input.tags || existing.tags,
-          text_digest: normalizedContent.textDigest,
-          search_text: normalizedContent.searchText,
-          source_item_id:
-            input.sourceItemId !== undefined
-              ? input.sourceItemId
-              : existing.sourceItemId || null,
-          source_tool_call_id:
-            input.sourceToolCallId !== undefined
-              ? input.sourceToolCallId
-              : existing.sourceToolCallId || null,
-          source_turn_id:
-            input.sourceTurnId !== undefined
-              ? input.sourceTurnId
-              : existing.sourceTurnId || null,
-          supersedes_item_id:
-            input.supersedesMemoryId !== undefined
-              ? input.supersedesMemoryId
-              : existing.supersedesMemoryId || null,
-          metadata: (input.metadata ||
-            existing.metadata ||
-            {}) as TableInsert<"memory_items">["metadata"],
-        })
-        .where("id", "=", memoryId)
-        .where("workspace_id", "=", workspaceId)
-    )
-
-    // Content set-replace: memory_item_parts is aggregate-internal detail; the
-    // physical delete goes through the SECURITY DEFINER fn (sd_reject_delete
-    // forbids a naked DELETE on this persistent child table). Design §7.5/§11.
-    await sql`SELECT sd_replace_memory_item_parts(${memoryId}::uuid)`.execute(
-      trx
-    )
-    await insertMemoryParts(trx, memoryId, normalizedContent.parts)
-    await maybeMarkSuperseded(trx, input.supersedesMemoryId)
+  await updateMemoryItemTx({
+    workspaceId,
+    memoryId,
+    category: input.category || existing.category,
+    state: input.state || input.status || existing.state,
+    importance: input.importance ?? existing.importance,
+    confidence: input.confidence ?? existing.confidence,
+    tags: input.tags || existing.tags,
+    textDigest: normalizedContent.textDigest,
+    searchText: normalizedContent.searchText,
+    sourceItemId:
+      input.sourceItemId !== undefined
+        ? input.sourceItemId
+        : existing.sourceItemId || null,
+    sourceToolCallId:
+      input.sourceToolCallId !== undefined
+        ? input.sourceToolCallId
+        : existing.sourceToolCallId || null,
+    sourceTurnId:
+      input.sourceTurnId !== undefined
+        ? input.sourceTurnId
+        : existing.sourceTurnId || null,
+    supersedesItemId:
+      input.supersedesMemoryId !== undefined
+        ? input.supersedesMemoryId
+        : existing.supersedesMemoryId || null,
+    metadata: (input.metadata ||
+      existing.metadata ||
+      {}) as MemoryItemsMetadata,
+    parts: normalizedContent.parts,
+    supersedesMemoryId: input.supersedesMemoryId,
   })
 
   const lexicalIndex = await rebuildMemoryItemLexicalIndex(memoryId)
@@ -1859,21 +1148,13 @@ export async function deleteMemory(workspaceId: UUID, memoryId: UUID) {
   if (!existingRow) {
     throw new MemoryError("Memory not found", 404)
   }
-  await withDbTransaction(async (trx) => {
-    // Soft delete (design §7.4): flip deleted_at. memory_item_parts/chunks stay
-    // as aggregate-internal detail until offline purge; hard delete is forbidden
-    // by sd_reject_delete.
-    const deleted = await trx
-      .updateTable("memory_items")
-      .set({ deleted_at: new Date() })
-      .where("workspace_id", "=", workspaceId)
-      .where("id", "=", memoryId)
-      .where("deleted_at", "is", null)
-      .executeTakeFirst()
-    if (!deleted.numUpdatedRows) {
-      throw new MemoryError("Memory not found", 404)
-    }
-  })
+  // Soft delete (design §7.4): flip deleted_at. memory_item_parts/chunks stay
+  // as aggregate-internal detail until offline purge; hard delete is forbidden
+  // by sd_reject_delete.
+  const deleted = await softDeleteMemoryItemTx(workspaceId, memoryId)
+  if (!deleted) {
+    throw new MemoryError("Memory not found", 404)
+  }
 }
 
 /**
@@ -1951,7 +1232,7 @@ export async function moveMemoryToSpace(
 
   // No-op move: source and target are the same space. Skip the permission
   // dance and the UPDATE; report the unchanged memory.
-  if (existingTarget && existingTarget.id === existingRow.memory_space_id) {
+  if (existingTarget && existingTarget.id === existingRow.memorySpaceId) {
     const same = await getMemory(workspaceId, memoryId)
     if (!same) {
       throw new MemoryError("Memory disappeared during move (unexpected)", 500)
@@ -1962,7 +1243,7 @@ export async function moveMemoryToSpace(
   // Phase 3: target write permission gate.
   let writeAllowed = false
   if (existingTarget) {
-    writeAllowed = await authorizePermission(db, {
+    writeAllowed = await authorizePermissionDefault({
       subject: authContext.accessSubject,
       resourceType: "memory_space",
       resourceId: existingTarget.id,
@@ -1971,8 +1252,7 @@ export async function moveMemoryToSpace(
       runtimeScopeSubjectIds: authContext.runtimeScopeSubjectIds,
     })
   } else {
-    writeAllowed = await hasMemorySpaceOwnerImplicitPermissionForTuple(
-      db,
+    writeAllowed = await hasMemorySpaceOwnerImplicitPermissionForTupleDefault(
       authContext.accessSubject,
       {
         workspaceId,
@@ -1999,35 +1279,13 @@ export async function moveMemoryToSpace(
   // already exist) and UPDATE the memory row in one transaction. The
   // source-exists re-check inside the txn turns a racing delete into a
   // clean 404 instead of a silent 0-row UPDATE.
-  await withDbTransaction(async (trx) => {
-    const stillThere = await trx
-      .selectFrom("memory_items")
-      .select("id")
-      .where("id", "=", memoryId)
-      .where("workspace_id", "=", workspaceId)
-      .limit(1)
-      .executeTakeFirst()
-    if (!stillThere) {
-      throw new MemoryError("Memory not found", 404)
-    }
-    const targetSpace = await resolveOrCreateMemorySpace(trx, {
-      workspaceId,
-      owner: target.owner,
-      scope: target.scope,
-      namespaceKey: target.namespaceKey,
-    })
-    if (targetSpace.id === existingRow.memory_space_id) {
-      return // raced into a no-op
-    }
-    await trx.executeQuery(
-      db
-        .updateTable("memory_items")
-        .set({
-          memory_space_id: targetSpace.id,
-        })
-        .where("id", "=", memoryId)
-        .where("workspace_id", "=", workspaceId)
-    )
+  await moveMemoryItemToSpaceTx({
+    workspaceId,
+    memoryId,
+    sourceMemorySpaceId: existingRow.memorySpaceId,
+    owner: target.owner,
+    scope: target.scope,
+    namespaceKey: target.namespaceKey,
   })
   const moved = await getMemory(workspaceId, memoryId)
   if (!moved) {
@@ -2054,58 +1312,41 @@ export async function listMemories(
     ? await loadSpaceLevelGrantSpaceIds(workspaceId, runtimeContext, "read")
     : []
 
-  const conditions: RawBuilder<unknown>[] = [
-    sql`mi.workspace_id = ${workspaceId}`,
-  ]
-  if (input.category) conditions.push(sql`mi.category = ${input.category}`)
-  if (input.state || input.status) {
-    conditions.push(sql`mi.state = ${(input.state || input.status)!}`)
-  }
-  if (input.tags && input.tags.length > 0) {
-    conditions.push(sql`mi.tags && ${input.tags}`)
-  }
-  if (input.namespaceKey) {
-    conditions.push(sql`ms.namespace_key = ${input.namespaceKey}`)
-  }
-  if (input.owner) {
-    const ownerSubjectId = await upsertAccessSubject(db, input.owner)
-    conditions.push(sql`ms.owner_subject_id = ${ownerSubjectId}`)
-  }
-  if (input.scope) {
-    const scopeSubjectId = await upsertAccessSubject(db, input.scope)
-    conditions.push(sql`ms.scope_subject_id = ${scopeSubjectId}`)
-  }
-
+  const ownerSubjectId = input.owner
+    ? await upsertMemorySubject(input.owner)
+    : undefined
+  const scopeSubjectId = input.scope
+    ? await upsertMemorySubject(input.scope)
+    : undefined
+  const reachableSpaceIds = subject
+    ? Array.from(new Set([...ownerSpaceIds, ...grantSpaceIds]))
+    : undefined
   if (subject) {
     // Subject-based reachability gate: owner-implicit + space-grant. The
     // workspace-admin manage_memories override only unlocks manage/delete on
     // private spaces (not read/recall — see hasMemorySpaceOwnerImplicitPermission)
     // so it is NOT added here; surfacing those rows would only push authorized
     // ones out of the SQL LIMIT window before the post-fetch authz filter ran.
-    const reachable = Array.from(new Set([...ownerSpaceIds, ...grantSpaceIds]))
-    if (reachable.length === 0) {
+    if (!reachableSpaceIds || reachableSpaceIds.length === 0) {
       // No reachable spaces — bail early; nothing to fetch.
       return []
     }
-    conditions.push(sql`ms.id = ANY(${reachable}::uuid[])`)
   }
 
-  const whereClause = sql`${sql.join(conditions, sql` AND `)}`
   // Oversample so post-fetch authz (item-level grants) has room to swap rows.
   const candidateOversample = Math.min(2000, requestedLimit * 5)
-  const select = memoryRowSelectSql("mi", "ms")
-  const from = memoryRowFromSql("mi", "ms")
-  const result = await db.executeQuery(
-    sql<MemoryRow>`SELECT ${select} FROM memory_items ${from}
-       WHERE ${whereClause}
-       ORDER BY mi.updated_at DESC
-       LIMIT ${candidateOversample}`.compile(db)
-  )
-  let rows = result.rows
+  let rows = await listMemoryCandidateRowsForInput({
+    workspaceId,
+    input,
+    ownerSubjectId,
+    scopeSubjectId,
+    reachableSpaceIds,
+    candidateOversample,
+  })
 
   if (subject && rows.length > 0) {
     const allowedIds = new Set(
-      await filterAuthorizedPermissionResourceIds(db, {
+      await filterAuthorizedPermissionResourceIdsDefault({
         subject,
         resourceType: "memory_item",
         permission: "read",
@@ -2163,16 +1404,16 @@ export async function searchMemories(
     for (const variant of buildLexicalVariants(queryText)) {
       try {
         lexicalSources.push({
-          rows: await searchLexicalCandidates(
+          rows: await searchLexicalMemoryCandidateRows({
             workspaceId,
             input,
             candidateLimit,
-            variant,
+            queryText: variant,
             grantSpaceIds,
             ownerSpaceIds,
             ownerSubjectIdFilters,
-            scopeSubjectIdFilters
-          ),
+            scopeSubjectIdFilters,
+          }),
         })
       } catch (error) {
         if (!isTsqueryStackOverflow(error)) throw error
@@ -2194,7 +1435,7 @@ export async function searchMemories(
     try {
       const embedding = await embedMemoryQueryCached(queryText)
       if (embedding) {
-        vectorRows = await searchVectorCandidates(
+        vectorRows = await searchVectorMemoryCandidateRows({
           workspaceId,
           input,
           embedding,
@@ -2202,8 +1443,8 @@ export async function searchMemories(
           grantSpaceIds,
           ownerSpaceIds,
           ownerSubjectIdFilters,
-          scopeSubjectIdFilters
-        )
+          scopeSubjectIdFilters,
+        })
       }
     } catch (error) {
       log.warn(
@@ -2314,14 +1555,4 @@ export function buildMemoryRecallQuery(params: {
   }
 
   return truncateText(snippets.join("\n").trim(), MEMORY_RECALL_QUERY_MAX_CHARS)
-}
-
-export class MemoryError extends Error {
-  constructor(
-    message: string,
-    public readonly statusCode: number
-  ) {
-    super(message)
-    this.name = "MemoryError"
-  }
 }

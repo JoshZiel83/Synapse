@@ -2,6 +2,7 @@
 
 import Link from "next/link"
 import { useRouter } from "next/navigation"
+import type { PluginInstallationDetailView } from "@synapse/shared"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -28,7 +29,10 @@ export default function InstalledList() {
   const { workspaceId } = useWorkspace()
   const locale = getLocale()
 
-  const handleToggle = async (install: any, enabled: boolean) => {
+  const handleToggle = async (
+    install: PluginInstallationDetailView,
+    enabled: boolean
+  ) => {
     if (!workspaceId) return
     await updateInstallation(workspaceId, install.id, { isEnabled: enabled })
   }
@@ -39,15 +43,17 @@ export default function InstalledList() {
     await uninstallPlugin(workspaceId, installId)
   }
 
-  const hasRequiredConfigMissing = (install: any): boolean => {
-    const fields: any[] = install.config_fields || []
+  const hasRequiredConfigMissing = (
+    install: PluginInstallationDetailView
+  ): boolean => {
+    const fields = install.configFields || []
     const required = fields.filter((field) => field.required)
     if (required.length === 0) return false
-    const configData = install.config_data || {}
-    const configState = new Map<string, { isConfigured?: boolean }>(
-      (install.config_state || []).map((state: any) => [state.key, state])
+    const configData = install.configData || {}
+    const configState = new Map(
+      (install.configState || []).map((state) => [state.key, state])
     )
-    return required.some((field: any) => {
+    return required.some((field) => {
       if (field.type === "auth_connection") {
         return !configState.get(field.key)?.isConfigured
       }
@@ -79,7 +85,7 @@ export default function InstalledList() {
 
   return (
     <div className="space-y-3">
-      {installations.map((install: any) => {
+      {installations.map((install) => {
         const configMissing = hasRequiredConfigMissing(install)
         return (
           <Card
@@ -89,13 +95,13 @@ export default function InstalledList() {
             <CardContent className="flex items-center justify-between p-4">
               <div className="flex items-center gap-3">
                 <PluginIcon
-                  iconUrl={install.plugin_icon_url}
+                  iconUrl={install.pluginIconUrl}
                   title={
                     translate(
-                      install.plugin_display_name_i18n,
+                      install.pluginDisplayNameI18n,
                       locale,
-                      install.default_locale || "en"
-                    ) || install.plugin_display_name
+                      install.defaultLocale || "en"
+                    ) || install.pluginDisplayName
                   }
                   transport={install.transport}
                   containerClassName="h-10 w-10 rounded-lg bg-blue-500/10"
@@ -104,14 +110,14 @@ export default function InstalledList() {
                 <div className="space-y-1.5">
                   <div className="flex flex-wrap items-center gap-2">
                     <Link
-                      href={`/dashboard/plugins/${install.plugin_id}`}
+                      href={`/dashboard/plugins/${install.pluginId}`}
                       className="text-sm font-medium hover:text-blue-600"
                     >
                       {translate(
-                        install.plugin_display_name_i18n,
+                        install.pluginDisplayNameI18n,
                         locale,
-                        install.default_locale || "en"
-                      ) || install.plugin_display_name}
+                        install.defaultLocale || "en"
+                      ) || install.pluginDisplayName}
                     </Link>
                     {configMissing && (
                       <Badge
@@ -130,16 +136,16 @@ export default function InstalledList() {
                     {getPluginInstallationDetails(install)}
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    {install.org_display_name
-                      ? `${install.org_display_name} · v${install.plugin_version}`
-                      : `Version ${install.plugin_version}`}
+                    {install.orgDisplayName
+                      ? `${install.orgDisplayName} · v${install.pluginVersion}`
+                      : `Version ${install.pluginVersion}`}
                   </p>
                 </div>
               </div>
 
               <div className="flex items-center gap-3">
                 <Switch
-                  checked={install.is_enabled}
+                  checked={install.isEnabled}
                   onCheckedChange={(checked) => handleToggle(install, checked)}
                 />
                 <Button

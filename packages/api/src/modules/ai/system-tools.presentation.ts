@@ -10,7 +10,7 @@
 // the rest. Result summaries are mostly omitted (these tools return varied
 // shapes); titles give the friendly "verb + object" the UI needs.
 
-import type { ToolPresentationDescriptor } from "@synapse/device-protocol/tool-presentation"
+import type { ToolPresentationDescriptor } from "@synapse/shared/tool-presentation"
 
 const title = (
   key: string,

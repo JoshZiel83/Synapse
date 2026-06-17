@@ -12,18 +12,12 @@ import type {
   Timestamp,
 } from "@synapse/shared"
 import { config } from "../../config/index.js"
-import { db } from "../../infrastructure/database/kysely.js"
 import { decryptSensitiveFields } from "../../infrastructure/crypto/index.js"
-
-type IntegrationInstallationRow = {
-  installation_id: string
-  workspace_id: string
-  installation_status: "active" | "disabled" | "error" | "archived"
-  config_data: unknown
-  org_slug: string
-  item_slug: string
-  spec_metadata: unknown
-}
+import {
+  selectIntegrationInstallationRow,
+  type IntegrationInstallationRow,
+} from "./repo.js"
+import { readAutomationProviderJsonObjectResponse } from "./provider-response-codec.js"
 
 type IntegrationWebhookIngressResult =
   | {
@@ -101,28 +95,25 @@ const INTEGRATION_EVENT_SPECS: Record<string, IntegrationEventSpec> = {
   },
 }
 
-function asObject(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {}
-  }
-  return value as Record<string, unknown>
-}
-
 function readString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null
+}
+
+function readObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
 }
 
 function integrationProviderFromRow(
   row: IntegrationInstallationRow
 ): AutomationIntegrationProvider | null {
-  const metadataProvider = readString(
-    asObject(row.spec_metadata).integrationProvider
-  )
+  const metadataProvider = readString(row.specMetadata.integrationProvider)
   if (metadataProvider === "github" || metadataProvider === "gitlab") {
     return metadataProvider
   }
-  if (row.org_slug === "github" || row.org_slug === "gitlab") {
-    return row.org_slug
+  if (row.orgSlug === "github" || row.orgSlug === "gitlab") {
+    return row.orgSlug
   }
   return null
 }
@@ -278,7 +269,7 @@ function gitlabProjectPath(targetId: string) {
   return encodeURIComponent(trimmed)
 }
 
-async function githubRequest<T>(
+async function githubRequest<T extends Record<string, unknown>>(
   installation: ResolvedIntegrationInstallation,
   path: string,
   init?: RequestInit
@@ -304,13 +295,16 @@ async function githubRequest<T>(
   }
 
   if (response.status === 204) {
-    return undefined as T
+    return undefined as unknown as T
   }
 
-  return response.json() as Promise<T>
+  return readAutomationProviderJsonObjectResponse<T>(
+    response,
+    "GitHub API response"
+  )
 }
 
-async function gitlabRequest<T>(
+async function gitlabRequest<T extends Record<string, unknown>>(
   installation: ResolvedIntegrationInstallation,
   path: string,
   init?: RequestInit
@@ -338,10 +332,13 @@ async function gitlabRequest<T>(
   }
 
   if (response.status === 204) {
-    return undefined as T
+    return undefined as unknown as T
   }
 
-  return response.json() as Promise<T>
+  return readAutomationProviderJsonObjectResponse<T>(
+    response,
+    "GitLab API response"
+  )
 }
 
 export function buildIntegrationEventSourceTemplate(input: {
@@ -386,39 +383,15 @@ export async function getIntegrationInstallation(
   expectedProvider?: AutomationIntegrationProvider,
   options?: { allowInactive?: boolean }
 ): Promise<ResolvedIntegrationInstallation> {
-  const row = (await db
-    .selectFrom("plugin_installations as installation")
-    .innerJoin("workspace_apps as app", "app.id", "installation.id")
-    .innerJoin(
-      "catalog_items as item",
-      "item.id",
-      "installation.catalog_item_id"
-    )
-    .innerJoin("publishers as publisher", "publisher.id", "item.publisher_id")
-    .innerJoin(
-      "plugin_package_version_specs as spec",
-      "spec.catalog_version_id",
-      "installation.catalog_version_id"
-    )
-    .select([
-      "installation.id as installation_id",
-      "app.workspace_id as workspace_id",
-      "app.status as installation_status",
-      "installation.config_data",
-      "publisher.slug as org_slug",
-      "item.slug as item_slug",
-      "spec.metadata as spec_metadata",
-    ])
-    .where("installation.id", "=", installationId)
-    .where("app.workspace_id", "=", workspaceId)
-    .where("app.deleted_at", "is", null)
-    .limit(1)
-    .executeTakeFirst()) as IntegrationInstallationRow | undefined
+  const row = await selectIntegrationInstallationRow(
+    workspaceId,
+    installationId
+  )
 
   if (!row) {
     throw new Error(`Integration installation ${installationId} was not found`)
   }
-  if (row.installation_status !== "active" && !options?.allowInactive) {
+  if (row.installationStatus !== "active" && !options?.allowInactive) {
     throw new Error(`Integration installation ${installationId} is not active`)
   }
 
@@ -435,12 +408,12 @@ export async function getIntegrationInstallation(
   }
 
   return {
-    id: row.installation_id,
-    workspaceId: row.workspace_id,
+    id: row.installationId,
+    workspaceId: row.workspaceId,
     provider,
-    orgSlug: row.org_slug,
-    itemSlug: row.item_slug,
-    configData: decryptSensitiveFields(asObject(row.config_data)),
+    orgSlug: row.orgSlug,
+    itemSlug: row.itemSlug,
+    configData: decryptSensitiveFields(row.configData),
   }
 }
 
@@ -699,7 +672,7 @@ export function normalizeIntegrationWebhookIngress(input: {
         githubEvent: eventName,
         githubDeliveryId: headerValue(input.headers, "x-github-delivery"),
         repositoryFullName:
-          readString(asObject(payload.repository).full_name) ||
+          readString(readObject(payload.repository).full_name) ||
           input.integration.targetLabel,
       },
     }
@@ -730,7 +703,7 @@ export function normalizeIntegrationWebhookIngress(input: {
       gitlabEventUuid: headerValue(input.headers, "x-gitlab-event-uuid"),
       gitlabWebhookUuid: headerValue(input.headers, "x-gitlab-webhook-uuid"),
       projectPathWithNamespace:
-        readString(asObject(payload.project).path_with_namespace) ||
+        readString(readObject(payload.project).path_with_namespace) ||
         input.integration.targetLabel,
     },
   }

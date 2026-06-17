@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from "crypto"
 import type { ToolDefinition } from "@synapse/shared"
 import type { CapabilityInvocationContext } from "@synapse/shared/types"
+import { z } from "zod"
 import { redis } from "../../infrastructure/redis/index.js"
-import { db } from "../../infrastructure/database/kysely.js"
 import { McpRemoteClient, type RemoteMcpProtocol } from "./mcp-remote-client.js"
 import { McpStdioClient } from "./mcp-stdio-client.js"
 import { getBuiltinHandler } from "./builtin/index.js"
@@ -38,19 +38,25 @@ const MCP_INSTANCE_TTL_WORKSPACE = 24 * 60 * 60 * 1000
 
 type InstanceTransport = "builtin" | "stdio" | "http" | "sse" | string
 
-export type McpInstanceParams = {
-  pluginId: string
-  installationId: string
-  pluginSlug: string
-  orgSlug: string
+const McpInstanceParamsSchema = z
+  .object({
+    pluginId: z.string().min(1),
+    installationId: z.string().min(1),
+    pluginSlug: z.string().min(1),
+    orgSlug: z.string().min(1),
+    transport: z.string().min(1),
+    entryPoint: z.string(),
+    scope: z.string().min(1),
+    scopeId: z.string().min(1),
+    config: z.record(z.string(), z.unknown()),
+    workspaceId: z.string().optional(),
+    idleTtlMs: z.number().int().positive().optional(),
+    maxAgeMs: z.number().int().positive().optional(),
+  })
+  .strict()
+
+export type McpInstanceParams = z.infer<typeof McpInstanceParamsSchema> & {
   transport: InstanceTransport
-  entryPoint: string
-  scope: string
-  scopeId: string
-  config: Record<string, unknown>
-  workspaceId?: string
-  idleTtlMs?: number
-  maxAgeMs?: number
 }
 
 type InstanceState = {
@@ -63,47 +69,70 @@ type InstanceState = {
   leaseHeartbeatTimer?: NodeJS.Timeout
 }
 
-type RuntimeLeaseMetadata = {
-  nodeId: string
-  token: string
-  instanceKey: string
-  updatedAt: number
+const RuntimeLeaseMetadataSchema = z
+  .object({
+    nodeId: z.string().min(1),
+    token: z.string().min(1),
+    instanceKey: z.string().min(1),
+    updatedAt: z.number().int().nonnegative(),
+  })
+  .strict()
+
+type RuntimeLeaseMetadata = z.infer<typeof RuntimeLeaseMetadataSchema>
+
+const RemoteInstanceCommandBaseSchema = z.object({
+  params: McpInstanceParamsSchema,
+  key: z.string().min(1),
+  configHash: z.string().min(1),
+})
+
+const RemoteInstanceCommandSchema = z.discriminatedUnion("command", [
+  RemoteInstanceCommandBaseSchema.extend({
+    command: z.literal("execute"),
+    toolName: z.string().min(1),
+    input: z.record(z.string(), z.unknown()),
+    executionContext: z.unknown().optional(),
+  }).strict(),
+  RemoteInstanceCommandBaseSchema.extend({
+    command: z.literal("execute_with_binding"),
+    toolName: z.string().min(1),
+    input: z.record(z.string(), z.unknown()),
+    binding: z.unknown(),
+    executionContext: z.unknown().optional(),
+  }).strict(),
+  RemoteInstanceCommandBaseSchema.extend({
+    command: z.literal("ensure_runtime_session"),
+  }).strict(),
+  RemoteInstanceCommandBaseSchema.extend({
+    command: z.literal("describe"),
+  }).strict(),
+])
+
+type RemoteInstanceCommand = z.infer<typeof RemoteInstanceCommandSchema> & {
+  params: McpInstanceParams
+  executionContext?: McpExecutionContext
 }
 
-type RemoteInstanceCommand =
-  | {
-      command: "execute"
-      params: McpInstanceParams
-      key: string
-      configHash: string
-      toolName: string
-      input: Record<string, unknown>
-      executionContext?: McpExecutionContext
-    }
-  | {
-      command: "execute_with_binding"
-      params: McpInstanceParams
-      key: string
-      configHash: string
-      toolName: string
-      input: Record<string, unknown>
-      binding: unknown
-      executionContext?: McpExecutionContext
-    }
-  | {
-      command: "ensure_runtime_session"
-      params: McpInstanceParams
-      key: string
-      configHash: string
-    }
-  | {
-      command: "describe"
-      params: McpInstanceParams
-      key: string
-      configHash: string
-    }
-
 export type McpExecutionContext = CapabilityInvocationContext
+
+export function parseRemoteInstanceCommand(
+  payload: unknown
+): RemoteInstanceCommand {
+  return RemoteInstanceCommandSchema.parse(payload) as RemoteInstanceCommand
+}
+
+export function parseRuntimeLeaseMetadata(
+  raw: string
+): RuntimeLeaseMetadata | null {
+  let value: unknown
+  try {
+    value = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  const parsed = RuntimeLeaseMetadataSchema.safeParse(value)
+  return parsed.success ? parsed.data : null
+}
 
 export interface McpInstance {
   pluginId: string
@@ -291,15 +320,7 @@ async function readRuntimeLease(
   if (!raw) {
     return null
   }
-  try {
-    const parsed = JSON.parse(raw) as RuntimeLeaseMetadata
-    if (!parsed.nodeId || !parsed.token) {
-      return null
-    }
-    return parsed
-  } catch {
-    return null
-  }
+  return parseRuntimeLeaseMetadata(raw)
 }
 
 function resetTTL(key: string, ttl: number) {
@@ -1038,7 +1059,7 @@ export function initInstanceManagerListeners() {
   }
   instanceManagerInitialized = true
   registerRuntimeCommandHandler("mcp.instance.command", async (payload) => {
-    return handleLocalInstanceCommand(payload as RemoteInstanceCommand)
+    return handleLocalInstanceCommand(parseRemoteInstanceCommand(payload))
   })
   void initRuntimeControlPlane()
 }

@@ -3,7 +3,6 @@
  */
 
 import crypto from "node:crypto"
-import { parseJsonObject } from "@synapse/shared"
 import type { TransportAccountSummary } from "@synapse/shared/types"
 import {
   DEFAULT_WEIXIN_BASE_URL,
@@ -49,6 +48,27 @@ function nonEmpty(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() ? v.trim() : undefined
 }
 
+function parseWeixinProviderJsonObjectText(
+  text: string,
+  endpoint: string
+): Record<string, unknown> {
+  const trimmed = text.trim()
+  if (!trimmed) return {}
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(trimmed)
+  } catch {
+    throw new Error(`Weixin API ${endpoint} returned invalid JSON`)
+  }
+
+  if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+    return parsed as Record<string, unknown>
+  }
+
+  throw new Error(`Weixin API ${endpoint} returned non-object JSON`)
+}
+
 export async function postWeixinJson(params: {
   baseUrl: string
   endpoint: string
@@ -79,7 +99,7 @@ export async function postWeixinJson(params: {
         `Weixin API ${params.endpoint} failed with ${response.status}: ${text}`
       )
     }
-    return text ? parseJsonObject(text) : {}
+    return parseWeixinProviderJsonObjectText(text, params.endpoint)
   } finally {
     clearTimeout(timer)
     if (externalAbort) externalAbort.removeEventListener("abort", onAbort)

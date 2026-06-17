@@ -1,10 +1,10 @@
 import { encrypt } from "../../../infrastructure/crypto/index.js"
-import {
-  db,
-  type TableInsert,
-} from "../../../infrastructure/database/kysely.js"
-import { sql } from "kysely"
 import type { MijiaAuthState } from "./types.js"
+import { updateMijiaConnectionState } from "./repo.js"
+
+// DB writes live in repo.ts (guard r8). Re-export to keep the public surface
+// unchanged for any importer of markMijiaConnectionExpired.
+export { markMijiaConnectionExpired } from "./repo.js"
 
 function encryptDeep(value: unknown): unknown {
   if (typeof value === "string") {
@@ -27,28 +27,12 @@ export async function persistMijiaConnectionState(
   connectionId: string,
   authState: MijiaAuthState
 ) {
-  await db
-    .updateTable("plugin_connections")
-    .set({
-      secret_payload: encryptDeep(
-        authState
-      ) as TableInsert<"plugin_connections">["secret_payload"],
-      expires_at:
-        typeof authState.expireTime === "number"
-          ? new Date(authState.expireTime)
-          : null,
-      status: "active",
-    })
-    .where("id", "=", connectionId)
-    .execute()
-}
-
-export async function markMijiaConnectionExpired(connectionId: string) {
-  await db
-    .updateTable("plugin_connections")
-    .set({
-      status: "expired",
-    })
-    .where("id", "=", connectionId)
-    .execute()
+  await updateMijiaConnectionState(connectionId, {
+    secretPayload: encryptDeep(authState),
+    expiresAt:
+      typeof authState.expireTime === "number"
+        ? new Date(authState.expireTime)
+        : null,
+    status: "active",
+  })
 }

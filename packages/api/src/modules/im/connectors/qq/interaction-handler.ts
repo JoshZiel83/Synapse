@@ -162,7 +162,7 @@ export async function handleQqInteractionCreate(params: {
     externalId: clickerExternalId,
     addressType: "user",
   })
-  if (!clickerAddress?.workspace_member_id) {
+  if (!clickerAddress?.workspaceMemberId) {
     logger.info("qq-interaction: clicker not bound to a workspace member", {
       eventId,
       clickerExternalId,
@@ -193,7 +193,7 @@ export async function handleQqInteractionCreate(params: {
     const participant = await deps.syncTransportAddressConversationParticipant({
       conversationId: task.conversationId,
       transportAddressId: clickerAddress.id,
-      workspaceMemberId: clickerAddress.workspace_member_id,
+      workspaceMemberId: clickerAddress.workspaceMemberId,
       recordJoinEvent: true,
     })
     participantId = participant.id
@@ -224,7 +224,7 @@ export async function handleQqInteractionCreate(params: {
           taskId: tokenRecord.taskId,
           commandId,
           baseRevision,
-          resolverWorkspaceMemberId: clickerAddress.workspace_member_id,
+          resolverWorkspaceMemberId: clickerAddress.workspaceMemberId,
           resolverParticipantId: participantId,
           decision: "reject",
         }
@@ -232,7 +232,7 @@ export async function handleQqInteractionCreate(params: {
           taskId: tokenRecord.taskId,
           commandId,
           baseRevision,
-          resolverWorkspaceMemberId: clickerAddress.workspace_member_id,
+          resolverWorkspaceMemberId: clickerAddress.workspaceMemberId,
           resolverParticipantId: participantId,
           decision: "approve",
           // Runtime-authorization approves carry preset + grant option.

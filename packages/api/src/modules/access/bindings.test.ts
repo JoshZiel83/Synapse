@@ -56,10 +56,10 @@ test("automationEventSourceAccessBindingHasTarget compares decoded subject + sco
   assert.equal(
     automationEventSourceAccessBindingHasTarget(
       {
-        subject_id: "subj-1",
-        scope_subject_id: null,
-        subject_kind: "actor",
-        subject_actor_id_via_join: "actor-7",
+        subjectId: "subj-1",
+        scopeSubjectId: null,
+        subjectKind: "actor",
+        subjectActorIdViaJoin: "actor-7",
       },
       target
     ),
@@ -68,10 +68,10 @@ test("automationEventSourceAccessBindingHasTarget compares decoded subject + sco
   assert.equal(
     automationEventSourceAccessBindingHasTarget(
       {
-        subject_id: "subj-2",
-        scope_subject_id: null,
-        subject_kind: "actor",
-        subject_actor_id_via_join: "actor-8",
+        subjectId: "subj-2",
+        scopeSubjectId: null,
+        subjectKind: "actor",
+        subjectActorIdViaJoin: "actor-8",
       },
       target
     ),
@@ -80,10 +80,10 @@ test("automationEventSourceAccessBindingHasTarget compares decoded subject + sco
   assert.equal(
     automationEventSourceAccessBindingHasTarget(
       {
-        subject_id: "subj-3",
-        scope_subject_id: null,
-        subject_kind: "workspace",
-        subject_workspace_id_via_join: "ws-1",
+        subjectId: "subj-3",
+        scopeSubjectId: null,
+        subjectKind: "workspace",
+        subjectWorkspaceIdViaJoin: "ws-1",
       },
       target
     ),
@@ -94,8 +94,8 @@ test("automationEventSourceAccessBindingHasTarget compares decoded subject + sco
 test("readAutomationEventSourceAccessBindingResourceId returns the automation event source id", () => {
   assert.equal(
     readAutomationEventSourceAccessBindingResourceId({
-      resource_type: "automation_event_source",
-      automation_event_source_id: "a-1",
+      resourceType: "automation_event_source",
+      automationEventSourceId: "a-1",
     }),
     "a-1"
   )
@@ -104,8 +104,8 @@ test("readAutomationEventSourceAccessBindingResourceId returns the automation ev
 test("readAutomationEventSourceAccessBindingResourceId throws when the matching id is missing", () => {
   assert.throws(() =>
     readAutomationEventSourceAccessBindingResourceId({
-      resource_type: "automation_event_source",
-      automation_event_source_id: null,
+      resourceType: "automation_event_source",
+      automationEventSourceId: null,
     })
   )
 })
@@ -117,8 +117,8 @@ test("buildAutomationEventSourceAccessBindingRef populates only the automation e
       resourceId: "evt-1",
     }),
     {
-      resource_type: "automation_event_source",
-      automation_event_source_id: "evt-1",
+      resourceType: "automation_event_source",
+      automationEventSourceId: "evt-1",
     }
   )
 })
@@ -160,8 +160,8 @@ test("relationForAutomationEventSourceAccessBindingTarget maps every subject + s
 test("readAutomationEventSourceAccessBindingTarget decodes a workspace-subject row", () => {
   assert.deepEqual(
     readAutomationEventSourceAccessBindingTarget({
-      subject_kind: "workspace",
-      subject_workspace_id_via_join: "ws-1",
+      subjectKind: "workspace",
+      subjectWorkspaceIdViaJoin: "ws-1",
     }),
     { subject: { kind: SUBJECT_KIND.WORKSPACE, workspaceId: "ws-1" } }
   )
@@ -170,8 +170,8 @@ test("readAutomationEventSourceAccessBindingTarget decodes a workspace-subject r
 test("readAutomationEventSourceAccessBindingTarget decodes a workspace_member subject row", () => {
   assert.deepEqual(
     readAutomationEventSourceAccessBindingTarget({
-      subject_kind: "workspace_member",
-      subject_workspace_member_id_via_join: "m-1",
+      subjectKind: "workspace_member",
+      subjectWorkspaceMemberIdViaJoin: "m-1",
     }),
     {
       subject: { kind: SUBJECT_KIND.WORKSPACE_MEMBER, memberId: "m-1" },
@@ -182,10 +182,10 @@ test("readAutomationEventSourceAccessBindingTarget decodes a workspace_member su
 test("readAutomationEventSourceAccessBindingTarget decodes actor + scope=conversation", () => {
   assert.deepEqual(
     readAutomationEventSourceAccessBindingTarget({
-      subject_kind: "actor",
-      subject_actor_id_via_join: "a-1",
-      scope_kind: "conversation",
-      scope_conversation_id_via_join: "c-1",
+      subjectKind: "actor",
+      subjectActorIdViaJoin: "a-1",
+      scopeKind: "conversation",
+      scopeConversationIdViaJoin: "c-1",
     }),
     {
       subject: { kind: SUBJECT_KIND.ACTOR, actorId: "a-1" },
@@ -197,23 +197,23 @@ test("readAutomationEventSourceAccessBindingTarget decodes actor + scope=convers
 test("readAutomationEventSourceAccessBindingTarget throws on missing required id", () => {
   assert.throws(() =>
     readAutomationEventSourceAccessBindingTarget({
-      subject_kind: "actor",
-      subject_actor_id_via_join: null,
+      subjectKind: "actor",
+      subjectActorIdViaJoin: null,
     })
   )
 })
 
 test("normalizeAutomationEventSourceAccessBindingRow attaches derived resource_id and relation", () => {
   const normalized = normalizeAutomationEventSourceAccessBindingRow({
-    resource_type: "automation_event_source",
-    installed_skill_id: null,
-    plugin_installation_id: null,
-    automation_event_source_id: "evt-1",
-    actor_id: null,
-    remote_agent_id: null,
-    subject_kind: "actor",
+    resourceType: "automation_event_source",
+    installedSkillId: null,
+    pluginInstallationId: null,
+    automationEventSourceId: "evt-1",
+    actorId: null,
+    remoteAgentId: null,
+    subjectKind: "actor",
   })
-  assert.equal(normalized.resource_id, "evt-1")
+  assert.equal(normalized.resourceId, "evt-1")
   assert.equal(normalized.relation, "use_actor")
 })
 
@@ -221,24 +221,24 @@ test("mapAutomationEventSourceAccessBindingToGrant projects a full automation ev
   const grant = mapAutomationEventSourceAccessBindingToGrant(
     normalizeAutomationEventSourceAccessBindingRow({
       id: "binding-1",
-      workspace_id: "ws-1",
-      resource_type: "automation_event_source",
-      installed_skill_id: null,
-      plugin_installation_id: null,
-      automation_event_source_id: "evt-1",
-      actor_id: null,
-      remote_agent_id: null,
-      subject_id: "subj-1",
-      scope_subject_id: null,
-      subject_kind: "workspace",
-      subject_workspace_id_via_join: "ws-1",
-      conversation_type_mask_override: null,
+      workspaceId: "ws-1",
+      resourceType: "automation_event_source",
+      installedSkillId: null,
+      pluginInstallationId: null,
+      automationEventSourceId: "evt-1",
+      actorId: null,
+      remoteAgentId: null,
+      subjectId: "subj-1",
+      scopeSubjectId: null,
+      subjectKind: "workspace",
+      subjectWorkspaceIdViaJoin: "ws-1",
+      conversationTypeMaskOverride: null,
       status: "active",
       source: "manual",
-      created_by_workspace_member_id: null,
+      createdByWorkspaceMemberId: null,
       reason: null,
-      created_at: new Date("2026-05-23T00:00:00Z"),
-      revoked_at: null,
+      createdAt: new Date("2026-05-23T00:00:00Z"),
+      revokedAt: null,
     } as any)
   )
   assert.equal(grant.id, "binding-1")

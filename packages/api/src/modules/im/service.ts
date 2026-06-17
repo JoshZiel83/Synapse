@@ -8,8 +8,8 @@
  *
  * Layout:
  *
- * - _helpers.ts            — JSON parsers + row normalizers used by every
- *                            domain. Pure, no DB calls.
+ * - _helpers.ts            — row normalizer compatibility exports + small
+ *                            string helpers used by multiple domains.
  * - accounts.ts            — transport_accounts CRUD + the joined session
  *                            row loader the dashboard renders.
  * - addresses.ts           — transport_addresses + the join table that
@@ -35,8 +35,6 @@ export {
   normalizeTransportExternalUserRow,
   normalizeTransportMessageLinkRow,
   normalizeTransportSessionRow,
-  parseJsonArray,
-  parseJsonObject,
   readTrimmedString,
 } from "./service/_helpers.js"
 

@@ -10,7 +10,10 @@ import type {
 } from "@synapse/shared"
 import {
   buildConversationMessageRef,
+  CONVERSATION_MESSAGE_SUBTYPE,
   isToolResultOrigin,
+  parseJsonObject,
+  parseJsonObjectOrUndefined,
 } from "@synapse/shared"
 import { assertIsoInstant } from "@synapse/shared/datetime"
 import type {
@@ -26,7 +29,11 @@ import {
   textBlocks,
 } from "@synapse/shared"
 import { renderConversationEventContextBlocks } from "../chat/event-registry.js"
-import { db } from "../../infrastructure/database/kysely.js"
+import {
+  getToolCallsForSession,
+  getToolResultsByToolCallIds,
+  getToolResultPartsByResultIds,
+} from "./repo.js"
 import { itemPartsToCanonicalContentBlocks } from "../chat/message-content.js"
 
 /**
@@ -50,16 +57,12 @@ export async function loadExecutionToolResultsForSession(
   const out = new Map<string, CanonicalToolResult>()
   if (!sessionId) return out
 
-  const toolCalls = await db
-    .selectFrom("tool_calls")
-    .select(["id", "provider_call_id", "tool_name"])
-    .where("session_id", "=", sessionId)
-    .execute()
+  const toolCalls = await getToolCallsForSession(sessionId)
   if (toolCalls.length === 0) return out
 
   const callsById = new Map<
     string,
-    { id: string; provider_call_id: string | null; tool_name: string }
+    { id: string; providerCallId: string | null; toolName: string }
   >()
   for (const row of toolCalls) {
     callsById.set(row.id, row)
@@ -67,45 +70,32 @@ export async function loadExecutionToolResultsForSession(
   const toolCallIds = [...callsById.keys()]
 
   // Take the latest tool_results row per tool_call (highest result_index).
-  const results = await db
-    .selectFrom("tool_results")
-    .selectAll()
-    .where("tool_call_id", "in", toolCallIds)
-    .orderBy("tool_call_id", "asc")
-    .orderBy("result_index", "desc")
-    .execute()
+  const results = await getToolResultsByToolCallIds(toolCallIds)
   const latestByCall = new Map<string, (typeof results)[number]>()
   for (const row of results) {
-    if (!latestByCall.has(row.tool_call_id))
-      latestByCall.set(row.tool_call_id, row)
+    if (!latestByCall.has(row.toolCallId)) latestByCall.set(row.toolCallId, row)
   }
   if (latestByCall.size === 0) return out
 
   const resultIds = [...latestByCall.values()].map((r) => r.id)
-  const parts = await db
-    .selectFrom("tool_result_parts")
-    .selectAll()
-    .where("tool_result_id", "in", resultIds)
-    .orderBy("tool_result_id", "asc")
-    .orderBy("ordinal", "asc")
-    .execute()
+  const parts = await getToolResultPartsByResultIds(resultIds)
   const partsByResult = new Map<string, any[]>()
   for (const row of parts) {
-    const arr = partsByResult.get(row.tool_result_id) || []
+    const arr = partsByResult.get(row.toolResultId) || []
     arr.push(row)
-    partsByResult.set(row.tool_result_id, arr)
+    partsByResult.set(row.toolResultId, arr)
   }
 
   for (const [toolCallId, resultRow] of latestByCall.entries()) {
     const call = callsById.get(toolCallId)
     if (!call) continue
-    const meta = parseMetadata(resultRow.metadata)
+    const meta = resultRow.metadata
     const contentBlocks = itemPartsToCanonicalContentBlocks(
       partsByResult.get(resultRow.id) || []
     )
     const origin: ToolResultOrigin = isToolResultOrigin(meta.origin)
       ? meta.origin
-      : { kind: "system", registryKey: call.tool_name }
+      : { kind: "system", registryKey: call.toolName }
     const structuredContent =
       meta.structuredContent && typeof meta.structuredContent === "object"
         ? (meta.structuredContent as Record<string, unknown>)
@@ -119,13 +109,11 @@ export async function loadExecutionToolResultsForSession(
       // the provider-native id on the result while the assistant tool-call uses
       // the UUID, breaking reconcileToolPairing's exact match.
       toolCallId: call.id,
-      toolName: call.tool_name,
+      toolName: call.toolName,
       content: contentBlocks,
-      ...(call.provider_call_id
-        ? { providerCallId: call.provider_call_id }
-        : {}),
-      ...(resultRow.is_error !== null && resultRow.is_error !== undefined
-        ? { isError: resultRow.is_error }
+      ...(call.providerCallId ? { providerCallId: call.providerCallId } : {}),
+      ...(resultRow.isError !== null && resultRow.isError !== undefined
+        ? { isError: resultRow.isError }
         : {}),
       ...(structuredContent !== undefined ? { structuredContent } : {}),
       origin,
@@ -134,7 +122,7 @@ export async function loadExecutionToolResultsForSession(
 
     // Index by BOTH provider_call_id and the DB row id so callers that
     // wrote either to session_message.metadata.toolCallId can hit.
-    if (call.provider_call_id) out.set(call.provider_call_id, canonical)
+    if (call.providerCallId) out.set(call.providerCallId, canonical)
     out.set(call.id, canonical)
   }
 
@@ -172,25 +160,7 @@ function mimeToCategory(mimeType: string): CanonicalFileCategory {
 }
 
 function parseMetadata(metadata: unknown): Record<string, unknown> {
-  if (typeof metadata === "string") {
-    try {
-      return JSON.parse(metadata)
-    } catch {
-      return {}
-    }
-  }
-  return (metadata || {}) as Record<string, unknown>
-}
-
-function parseJsonValue(value: unknown): unknown {
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value)
-    } catch {
-      return undefined
-    }
-  }
-  return value
+  return parseJsonObject(metadata)
 }
 
 function parseSizeBytes(value: unknown): number {
@@ -243,8 +213,8 @@ export function itemPartsToCanonicalBlocks(
     }
 
     if (part.part_type === "json") {
-      const payload = parseJsonValue(part.json_value)
-      if (!payload || typeof payload !== "object") continue
+      const payload = parseJsonObjectOrUndefined(part.json_value)
+      if (!payload) continue
       const normalized = normalizeCanonicalContentBlocks([
         payload as CanonicalContentBlockInput,
       ])
@@ -396,7 +366,10 @@ export function conversationItemToContextItem(
     return null
   }
 
-  if (itemType === "message" && item.subtype === "model_error_notice") {
+  if (
+    itemType === "message" &&
+    item.subtype === CONVERSATION_MESSAGE_SUBTYPE.MODEL_ERROR_NOTICE
+  ) {
     return null
   }
 

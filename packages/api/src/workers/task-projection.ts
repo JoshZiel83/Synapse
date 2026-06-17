@@ -29,16 +29,11 @@
  * delivery AFTER the tx commits.
  */
 
-import { CompiledQuery, sql } from "kysely"
 import {
+  CONVERSATION_MESSAGE_SUBTYPE,
   TASK_REQUEST_KIND,
   type RuntimeAuthorizationPreset,
 } from "@synapse/shared"
-import {
-  db,
-  withDbTransaction,
-  type Executor,
-} from "../infrastructure/database/kysely.js"
 import { parseInstantString } from "../infrastructure/datetime.js"
 import {
   mintActionToken,
@@ -49,11 +44,8 @@ import { getTaskSummary } from "../modules/tasks/service.js"
 import {
   createConversationItem,
   type ConversationItemPartInput,
-} from "../modules/chat/service.js"
-import {
-  enqueueOutboundDelivery,
-  persistOutboundLinkRowRaw,
-} from "../modules/im/service/delivery-links.js"
+} from "../modules/chat/item-write.js"
+import { enqueueOutboundDelivery } from "../modules/im/service/delivery-links.js"
 import { getConversationTransportBinding } from "../modules/im/service.js"
 import { encodeForConversationItem } from "../modules/im/messaging/canonical-encoding.js"
 import { tryGetConnector } from "../modules/im/connectors/registry.js"
@@ -63,6 +55,21 @@ import {
   type CanonicalPart,
 } from "../modules/im/messaging/canonical-message.js"
 import { createLogger } from "../infrastructure/logger/index.js"
+import {
+  beginProjectionBusinessSavepoint,
+  insertTaskProjectionOutboundLink,
+  listPendingTaskProjectionRows,
+  lockTaskProjectionTask,
+  markTaskProjectionFailed,
+  markTaskProjectionProjected,
+  releaseProjectionBusinessSavepoint,
+  rollbackProjectionBusinessSavepoint,
+  runTaskProjectionBatch,
+  scheduleTaskProjectionRetry,
+  skipTaskProjectionRow,
+  type PendingTaskProjectionRecord,
+  type TaskProjectionExecutor,
+} from "./task-projection-repo.js"
 
 const log = createLogger("task-projection")
 
@@ -70,18 +77,6 @@ const TICK_INTERVAL_MS = 5_000
 const BATCH_SIZE = 10
 const MAX_ATTEMPTS = 5
 const TOKEN_SWEEP_EVERY_TICKS = 60 // ≈ every 5 min
-
-/** Run raw SQL (text+params) on the transaction/db executor. */
-async function runOn<T extends object = Record<string, unknown>>(
-  executor: Executor,
-  text: string,
-  params: readonly unknown[] = []
-): Promise<{ rows: T[]; rowCount?: number | null }> {
-  const result = await executor.executeQuery<T>(
-    CompiledQuery.raw(text, [...params])
-  )
-  return { rows: result.rows as T[] }
-}
 
 /**
  * Why this list and not a more general gate: the projection layer is the
@@ -95,15 +90,6 @@ async function runOn<T extends object = Record<string, unknown>>(
  */
 
 const FALLBACK_TEXT_DEFAULT = "需要审批，请回到 Synapse dashboard 处理"
-
-interface PendingRow {
-  id: string
-  task_id: string
-  workspace_id: string
-  conversation_id: string
-  transport_message_link_id: string | null
-  attempts: number
-}
 
 interface ProjectionTickStats {
   picked: number
@@ -192,22 +178,10 @@ export async function runOneTick(): Promise<ProjectionTickStats> {
 
   // One outer tx per batch; FOR UPDATE SKIP LOCKED gives us isolation
   // across worker replicas.
-  await withDbTransaction(async (client) => {
-    const result = await runOn<PendingRow>(
-      client,
-      `
-        SELECT id, task_id, workspace_id, conversation_id,
-               transport_message_link_id, attempts
-        FROM tool_call_task_transport_projections
-        WHERE status = 'pending' AND next_attempt_at <= NOW()
-        ORDER BY next_attempt_at
-        LIMIT $1
-        FOR UPDATE SKIP LOCKED
-      `,
-      [BATCH_SIZE]
-    )
-    stats.picked = result.rows.length
-    for (const row of result.rows) {
+  await runTaskProjectionBatch(async (client) => {
+    const rows = await listPendingTaskProjectionRows(client, BATCH_SIZE)
+    stats.picked = rows.length
+    for (const row of rows) {
       try {
         const outcome = await processOne(client, row, linkIdsToEnqueue)
         if (outcome === "projected") stats.projected += 1
@@ -253,36 +227,26 @@ export async function runOneTick(): Promise<ProjectionTickStats> {
  * picked up by the worker before the link row is visible.
  */
 async function processOne(
-  client: Executor,
-  row: PendingRow,
+  client: TaskProjectionExecutor,
+  row: PendingTaskProjectionRecord,
   linkIdsToEnqueue: string[]
 ): Promise<"projected" | "skipped" | "failed"> {
   // Idempotence: if a previous run wrote a link, just enqueue and mark
   // projected. Don't rebuild item/link/token.
-  if (row.transport_message_link_id) {
-    await markRowProjected(client, row.id, row.transport_message_link_id)
-    linkIdsToEnqueue.push(row.transport_message_link_id)
+  if (row.transportMessageLinkId) {
+    await markTaskProjectionProjected(
+      client,
+      row.id,
+      row.transportMessageLinkId
+    )
+    linkIdsToEnqueue.push(row.transportMessageLinkId)
     return "projected"
   }
 
   // Verify the task is still pending + not expired.
-  const lockedTask = await runOn<{
-    id: string
-    status: string
-    expires_at: Date | null
-  }>(
-    client,
-    `
-      SELECT id, lifecycle_status AS status, expires_at
-      FROM tool_call_tasks
-      WHERE id = $1
-      FOR UPDATE
-    `,
-    [row.task_id]
-  )
-  const lock = lockedTask.rows[0]
+  const lock = await lockTaskProjectionTask(client, row.taskId)
   if (!lock) {
-    await skipRow(client, row.id, "task_missing")
+    await skipTaskProjectionRow(client, row.id, "task_missing")
     return "skipped"
   }
   if (
@@ -291,12 +255,20 @@ async function processOne(
     lock.status !== "auth_required" &&
     lock.status !== "submitted"
   ) {
-    await skipRow(client, row.id, "task_already_resolved_or_expired")
+    await skipTaskProjectionRow(
+      client,
+      row.id,
+      "task_already_resolved_or_expired"
+    )
     return "skipped"
   }
-  if (lock.expires_at) {
-    if (lock.expires_at.getTime() < Date.now()) {
-      await skipRow(client, row.id, "task_already_resolved_or_expired")
+  if (lock.expiresAt) {
+    if (lock.expiresAt.getTime() < Date.now()) {
+      await skipTaskProjectionRow(
+        client,
+        row.id,
+        "task_already_resolved_or_expired"
+      )
       return "skipped"
     }
   }
@@ -315,11 +287,11 @@ async function processOne(
   // `outbound_disabled`, and the recovery hook for
   // `webhook_inbound_unavailable` would never see anything to re-arm.
   const binding = await getConversationTransportBinding({
-    workspaceId: row.workspace_id,
-    conversationId: row.conversation_id,
+    workspaceId: row.workspaceId,
+    conversationId: row.conversationId,
   })
   if (!binding) {
-    await skipRow(client, row.id, "no_binding")
+    await skipTaskProjectionRow(client, row.id, "no_binding")
     return "skipped"
   }
   // Eligibility goes through capability + per-account readiness hook:
@@ -331,7 +303,7 @@ async function processOne(
   //       precondition flips.
   const connector = tryGetConnector(binding.transportKind)
   if (!connector?.messageCapabilities.supportsInteractionPrompt) {
-    await skipRow(client, row.id, "not_supported_in_v1")
+    await skipTaskProjectionRow(client, row.id, "not_supported_in_v1")
     return "skipped"
   }
 
@@ -340,20 +312,20 @@ async function processOne(
     ok: true,
   }
   if (!readiness.ok) {
-    await skipRow(client, row.id, readiness.reason)
+    await skipTaskProjectionRow(client, row.id, readiness.reason)
     return "skipped"
   }
 
   if (account.status !== "active" || !binding.outboundEnabled) {
-    await skipRow(client, row.id, "outbound_disabled")
+    await skipTaskProjectionRow(client, row.id, "outbound_disabled")
     return "skipped"
   }
 
   // Load the full task summary so we know what grant options /
   // presets to mint tokens for.
-  const task = await getTaskSummary(row.task_id, client)
+  const task = await getTaskSummary(row.taskId, client)
   if (!task || task.kind !== TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION) {
-    await skipRow(client, row.id, "task_unsupported_kind")
+    await skipTaskProjectionRow(client, row.id, "task_unsupported_kind")
     return "skipped"
   }
 
@@ -372,7 +344,7 @@ async function processOne(
   let savepointFailed = false
   let savepointError: string | null = null
   try {
-    await runOn(client, "SAVEPOINT projection_business", [])
+    await beginProjectionBusinessSavepoint(client)
     const mintedOptions = await mintOptionsAndTokens(client, {
       taskId: task.id,
       taskExpiresAt: task.expiresAt ? parseInstantString(task.expiresAt) : null,
@@ -396,42 +368,37 @@ async function processOne(
         })
     const encoded = encodeForConversationItem(message)
     const item = await createConversationItem({
-      workspaceId: row.workspace_id,
-      conversationId: row.conversation_id,
+      workspaceId: row.workspaceId,
+      conversationId: row.conversationId,
       scope: "shared",
       surface: "internal",
       itemType: "message",
-      subtype: "system",
+      subtype: CONVERSATION_MESSAGE_SUBTYPE.SYSTEM,
       role: "system",
       metadata: { transport: encoded.transportMetadata },
       parts: buildItemParts(message),
       queryable: client,
     })
-    const persisted = await persistOutboundLinkRowRaw({
-      workspaceId: row.workspace_id,
-      conversationId: row.conversation_id,
+    const persisted = await insertTaskProjectionOutboundLink(client, {
+      workspaceId: row.workspaceId,
+      conversationId: row.conversationId,
       itemId: item.id,
       transportAccountId: binding.account.id,
       transportEndpointId: binding.endpoint.id,
       transportKind: binding.transportKind,
     })
-    await markRowProjected(client, row.id, persisted.id)
+    await markTaskProjectionProjected(client, row.id, persisted.id)
     projectionLinkId = persisted.id
-    await runOn(client, "RELEASE SAVEPOINT projection_business", [])
+    await releaseProjectionBusinessSavepoint(client)
   } catch (err) {
     savepointFailed = true
     savepointError = errorMessage(err)
-    await runOn(client, "ROLLBACK TO SAVEPOINT projection_business", []).catch(
-      () => undefined
-    )
-    await runOn(client, "RELEASE SAVEPOINT projection_business", []).catch(
-      () => undefined
-    )
+    await rollbackProjectionBusinessSavepoint(client).catch(() => undefined)
+    await releaseProjectionBusinessSavepoint(client).catch(() => undefined)
   }
 
   if (savepointFailed) {
-    await bumpAttemptsOnRow(client, row, savepointError ?? "savepoint_failed")
-    return row.attempts + 1 >= MAX_ATTEMPTS ? "failed" : "skipped"
+    return bumpAttemptsOnRow(client, row, savepointError ?? "savepoint_failed")
   }
 
   // Outer tx commits after this function returns; the caller flushes
@@ -443,74 +410,26 @@ async function processOne(
   return "projected"
 }
 
-async function markRowProjected(
-  client: Executor,
-  rowId: string,
-  linkId: string
-): Promise<void> {
-  await runOn(
-    client,
-    `
-      UPDATE tool_call_task_transport_projections
-      SET status = 'projected',
-          transport_message_link_id = $2,
-          error = NULL
-      WHERE id = $1
-    `,
-    [rowId, linkId]
-  )
-}
-
-async function skipRow(
-  client: Executor,
-  rowId: string,
-  error: string
-): Promise<void> {
-  await runOn(
-    client,
-    `
-      UPDATE tool_call_task_transport_projections
-      SET status = 'skipped',
-          error = $2
-      WHERE id = $1
-    `,
-    [rowId, error]
-  )
-}
-
 async function bumpAttemptsOnRow(
-  client: Executor,
-  row: PendingRow,
+  client: TaskProjectionExecutor,
+  row: PendingTaskProjectionRecord,
   error: string
-): Promise<void> {
+): Promise<"failed" | "skipped"> {
   const nextAttempts = row.attempts + 1
   if (nextAttempts >= MAX_ATTEMPTS) {
-    await runOn(
-      client,
-      `
-        UPDATE tool_call_task_transport_projections
-        SET status = 'failed',
-            attempts = $2,
-            error = $3
-        WHERE id = $1
-      `,
-      [row.id, nextAttempts, error]
-    )
-    return
+    await markTaskProjectionFailed(client, row.id, nextAttempts, error)
+    return "failed"
   }
   // Exponential backoff: 5s, 30s, 2min, 10min, 30min
   const backoffSeconds = [5, 30, 120, 600, 1800][Math.min(nextAttempts - 1, 4)]
-  await runOn(
+  await scheduleTaskProjectionRetry(
     client,
-    `
-      UPDATE tool_call_task_transport_projections
-      SET attempts = $2,
-          next_attempt_at = NOW() + ($3 || ' seconds')::interval,
-          error = $4
-      WHERE id = $1
-    `,
-    [row.id, nextAttempts, String(backoffSeconds), error]
+    row.id,
+    nextAttempts,
+    backoffSeconds,
+    error
   )
+  return "skipped"
 }
 
 interface MintedOption {
@@ -530,7 +449,7 @@ interface MintedOption {
  * decoder uses the token to recover the full payload server-side).
  */
 async function mintOptionsAndTokens(
-  client: Executor,
+  client: TaskProjectionExecutor,
   params: {
     taskId: string
     taskExpiresAt?: Date | null

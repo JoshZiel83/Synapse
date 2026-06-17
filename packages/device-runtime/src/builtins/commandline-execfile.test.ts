@@ -23,7 +23,7 @@ import type {
 } from "../terminal/types.js"
 import type {
   OperationEnvelope,
-  RuntimeAuthorizationGrantSpec,
+  RuntimeAuthorizationGrantWireSpec,
 } from "@synapse/device-protocol"
 
 const HERE = new URL(".", import.meta.url).pathname
@@ -41,7 +41,7 @@ function makeTmp(prefix: string): string {
 }
 
 function fakeEnvelope(
-  grantSpecs: RuntimeAuthorizationGrantSpec[]
+  grantSpecs: RuntimeAuthorizationGrantWireSpec[]
 ): OperationEnvelope {
   return {
     operation_id: randomUUID(),

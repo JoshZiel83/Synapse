@@ -53,6 +53,12 @@ interface AccountResponse {
   }
 }
 
+// IM account routes are §5.3 APP routes whose handler value is wrapped in a
+// uniform `{ data }` envelope. The harness `json()` auto-unwraps that single-key
+// envelope, so success bodies are read directly (e.g. `body.account`). Error
+// bodies (4xx) stay bare and are read off the raw `res.json()` (which bypasses
+// the unwrapping helper).
+
 test("PUT /im/accounts/wecom/:id against a Feishu account → 404, no row mutation", async () => {
   const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
@@ -106,7 +112,11 @@ test("PUT /im/accounts/wecom/:id against a Feishu account → 404, no row mutati
   //     without the service-layer guard, the UPDATE would have run and
   //     the displayName would now read "Hijacked by WeCom endpoint".
   const refreshed = await ctx.client.json<{
-    accounts: Array<{ id: string; transportKind: string; displayName: string }>
+    accounts: Array<{
+      id: string
+      transportKind: string
+      displayName: string
+    }>
   }>(`/workspaces/${ws.id}/im/accounts`)
   const stillFeishu = refreshed.accounts.find((a) => a.id === feishuId)
   assert.ok(stillFeishu, "feishu account should still exist")

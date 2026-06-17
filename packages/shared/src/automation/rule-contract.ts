@@ -6,7 +6,7 @@ import type {
   AutomationStatus,
   AutomationTargetPolicy,
   AutomationTriggerKind,
-  CanonicalContentBlock,
+  CanonicalContentBlockInput,
   Timestamp,
 } from "../types/index.js"
 import { dateToIsoInstant } from "../datetime/instant.js"
@@ -35,7 +35,7 @@ export interface AutomationRuleCreatePolicyPayload {
 export interface AutomationRuleCreateDeliveryPayload {
   message?: string
   wakeReason?: string
-  messageBlocks?: CanonicalContentBlock[]
+  messageBlocks?: CanonicalContentBlockInput[]
   targetPolicy?: AutomationTargetPolicy
   targetParticipantIds?: string[]
 }
@@ -106,7 +106,7 @@ function cloneRecord(value: Record<string, unknown> | undefined) {
   return value ? { ...value } : undefined
 }
 
-function cloneContentBlocks(value: CanonicalContentBlock[] | undefined) {
+function cloneContentBlocks(value: CanonicalContentBlockInput[] | undefined) {
   return value ? [...value] : undefined
 }
 
@@ -152,7 +152,7 @@ export function parseAutomationJsonObjectText(input: string, label: string) {
   const trimmed = input.trim()
   if (!trimmed) return {}
 
-  const parsed = JSON.parse(trimmed) as unknown
+  const parsed: unknown = JSON.parse(trimmed)
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error(`${label} must be a JSON object`)
   }

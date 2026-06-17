@@ -221,14 +221,12 @@ test("messages endpoint accepts beforeSequence pagination param", async () => {
     beforeSequence: "10",
     limit: "20",
   })
-  const res = await ctx.client.fetch(
-    `/workspaces/${ws.id}/chat/conversations/${created.conversation.conversationId}/messages?${params}`
-  )
-  assert.equal(res.status, 200)
-  const body = (await res.json()) as {
+  const body = await ctx.client.json<{
     items: unknown[]
     hasMoreBefore: boolean
-  }
+  }>(
+    `/workspaces/${ws.id}/chat/conversations/${created.conversation.conversationId}/messages?${params}`
+  )
   assert.ok(Array.isArray(body.items))
   assert.equal(typeof body.hasMoreBefore, "boolean")
 })

@@ -1,10 +1,18 @@
 import {
   CONVERSATION_KIND,
+  CONVERSATION_PARTICIPANT_STATE,
   CONVERSATION_PARTICIPANT_TYPE,
+  CONVERSATION_STATUS,
+  isTransportKind,
 } from "@synapse/shared"
+import type { Timestamp, TransportKind } from "@synapse/shared"
 import { assertIsoInstant } from "@synapse/shared/datetime"
 import { getFileUrlById } from "../files/service.js"
-import { listConversationParticipants } from "./service.js"
+import { listConversationParticipantsUseCase as listConversationParticipants } from "./participant-roster.js"
+import {
+  canManageConversationRole,
+  normalizeConversationParticipantRoleKey,
+} from "./roles.js"
 
 type ConversationParticipantRow = Awaited<
   ReturnType<typeof listConversationParticipants>
@@ -21,55 +29,61 @@ type ConversationSummaryRow = {
   last_message?: string | null
   last_message_sender_type?: string | null
   last_message_sender_name?: string | null
-  last_message_at?: string | null
+  lastMessageAt?: Timestamp | null
   unread_count?: number | null
-  created_at: string
+  createdAt: Timestamp
+}
+
+function asOptionalTransportKind(
+  value: string | null | undefined
+): TransportKind | undefined {
+  if (!value) return undefined
+  if (isTransportKind(value)) return value
+  throw new Error(`Unexpected conversation transport kind: ${value}`)
 }
 
 export function mapConversationParticipant(row: ConversationParticipantRow) {
-  if (row.remote_agent_id) {
+  if (row.remoteAgentId) {
     return {
       participantId: row.id,
       participantType: CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT,
-      remoteAgentId: row.remote_agent_id,
-      id: row.remote_agent_id,
-      name: row.participant_name || "Remote Agent",
-      title: row.participant_title || undefined,
-      role: row.participant_role || "remote_agent",
-      avatarEmoji: row.participant_avatar_emoji || undefined,
-      avatarUrl: row.participant_avatar_file_id
-        ? getFileUrlById(row.participant_avatar_file_id)
+      remoteAgentId: row.remoteAgentId,
+      id: row.remoteAgentId,
+      name: row.participantName || "Remote Agent",
+      title: row.participantTitle || undefined,
+      role: row.participantRole || "remote_agent",
+      avatarEmoji: row.participantAvatarEmoji || undefined,
+      avatarUrl: row.participantAvatarFileId
+        ? getFileUrlById(row.participantAvatarFileId)
         : undefined,
       state: row.state,
     }
   }
 
-  if (row.actor_id) {
+  if (row.actorId) {
     return {
       participantId: row.id,
       participantType: CONVERSATION_PARTICIPANT_TYPE.ACTOR,
-      actorId: row.actor_id,
-      id: row.actor_id,
-      name: row.participant_name || "Unknown",
-      title: row.participant_title || undefined,
-      role: row.participant_role || "specialist",
-      avatarEmoji: row.participant_avatar_emoji || undefined,
-      avatarUrl: row.participant_avatar_file_id
-        ? getFileUrlById(row.participant_avatar_file_id)
+      actorId: row.actorId,
+      id: row.actorId,
+      name: row.participantName || "Unknown",
+      title: row.participantTitle || undefined,
+      role: row.participantRole || "specialist",
+      avatarEmoji: row.participantAvatarEmoji || undefined,
+      avatarUrl: row.participantAvatarFileId
+        ? getFileUrlById(row.participantAvatarFileId)
         : undefined,
       state: row.state,
     }
   }
 
-  if (row.participant_type === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL) {
+  if (row.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL) {
     return {
       participantId: row.id,
       participantType: CONVERSATION_PARTICIPANT_TYPE.EXTERNAL,
       id: row.id,
       name:
-        row.transport_display_name ||
-        row.display_name ||
-        "External participant",
+        row.transportDisplayName || row.displayName || "External participant",
       state: row.state,
     }
   }
@@ -77,13 +91,13 @@ export function mapConversationParticipant(row: ConversationParticipantRow) {
   return {
     participantId: row.id,
     participantType: CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER,
-    workspaceMemberId: row.workspace_member_id || undefined,
-    id: row.workspace_member_id || undefined,
-    name: row.user_name || "User",
-    avatarUrl: row.user_avatar_file_id
-      ? getFileUrlById(row.user_avatar_file_id)
+    workspaceMemberId: row.workspaceMemberId || undefined,
+    id: row.workspaceMemberId || undefined,
+    name: row.userName || "User",
+    avatarUrl: row.userAvatarFileId
+      ? getFileUrlById(row.userAvatarFileId)
       : undefined,
-    conversationRole: row.role_key || undefined,
+    conversationRole: row.roleKey || undefined,
     state: row.state,
   }
 }
@@ -103,7 +117,7 @@ function buildConversationPresentation(params: {
     canManageParticipants,
   } = params
   const activeParticipants = participants.filter(
-    (participant) => participant.state === "active"
+    (participant) => participant.state === CONVERSATION_PARTICIPANT_STATE.ACTIVE
   )
   const peer =
     row.kind === CONVERSATION_KIND.DIRECT
@@ -182,7 +196,9 @@ export async function mapConversationSummaryView(
     typeof viewer === "string" ? viewer : viewer.workspaceMemberId
   const conversationParticipants = (
     await listConversationParticipants(row.id)
-  ).filter((participant) => participant.state === "active")
+  ).filter(
+    (participant) => participant.state === CONVERSATION_PARTICIPANT_STATE.ACTIVE
+  )
   const mappedParticipants = conversationParticipants.map(
     mapConversationParticipant
   )
@@ -192,23 +208,21 @@ export async function mapConversationSummaryView(
   )
   const hasOpenLane = conversationParticipants.some(
     (participant) =>
-      participant.actor_id && participant.session_status !== "closed"
+      participant.actorId && participant.sessionStatus !== "closed"
   )
   const viewerMembership = conversationParticipants.find(
     (participant) =>
-      participant.state === "active" &&
-      participant.participant_type === "workspace_member" &&
-      participant.workspace_member_id === viewerWorkspaceMemberId
+      participant.state === CONVERSATION_PARTICIPANT_STATE.ACTIVE &&
+      participant.participantType ===
+        CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
+      participant.workspaceMemberId === viewerWorkspaceMemberId
   )
-  const viewerConversationRole =
-    viewerMembership?.role_key === "owner" ||
-    viewerMembership?.role_key === "admin" ||
-    viewerMembership?.role_key === "member"
-      ? viewerMembership.role_key
-      : "member"
+  const viewerConversationRole = normalizeConversationParticipantRoleKey(
+    viewerMembership?.roleKey
+  )
   const canManageConversation =
     row.kind !== CONVERSATION_KIND.DIRECT &&
-    (viewerConversationRole === "owner" || viewerConversationRole === "admin")
+    canManageConversationRole(viewerConversationRole)
   const canManageParticipants = canManageConversation
   const presentation = buildConversationPresentation({
     row,
@@ -222,13 +236,15 @@ export async function mapConversationSummaryView(
     id: row.id,
     kind: row.kind,
     isIm: Boolean(row.is_im ?? row.isIm),
-    status: hasOpenLane ? ("active" as const) : ("completed" as const),
-    transportKind: row.transport_kind || undefined,
+    status: hasOpenLane
+      ? CONVERSATION_STATUS.ACTIVE
+      : CONVERSATION_STATUS.COMPLETED,
+    transportKind: asOptionalTransportKind(row.transport_kind),
     participants: mappedParticipants,
     members: mappedParticipants,
     actorParticipants,
     lastMessage:
-      row.last_message && row.last_message_at
+      row.last_message && row.lastMessageAt
         ? {
             content: row.last_message,
             role:
@@ -236,11 +252,11 @@ export async function mapConversationSummaryView(
                 ? ("user" as const)
                 : ("assistant" as const),
             actorName: row.last_message_sender_name || undefined,
-            createdAt: assertIsoInstant(row.last_message_at),
+            createdAt: assertIsoInstant(row.lastMessageAt),
           }
         : undefined,
     unreadCount: row.unread_count || 0,
-    createdAt: assertIsoInstant(row.created_at),
+    createdAt: assertIsoInstant(row.createdAt),
     title: presentation.title,
     name: presentation.title,
     avatarUrl: presentation.avatarUrl,

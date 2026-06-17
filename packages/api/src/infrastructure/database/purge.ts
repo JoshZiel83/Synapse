@@ -37,10 +37,10 @@ function parseArgs(argv: string[]) {
 async function retention(beforeDays: number) {
   const before = new Date(Date.now() - beforeDays * 24 * 60 * 60 * 1000)
   const beforeIso = serializeInstant(before)
-  const res = await sql<{ sd_purge_expired_soft_deleted: number }>`
+  const res = await sql<{ sdPurgeExpiredSoftDeleted: number }>`
     SELECT sd_purge_expired_soft_deleted(${beforeIso}::timestamptz)
   `.execute(db)
-  const n = res.rows[0]?.sd_purge_expired_soft_deleted ?? 0
+  const n = res.rows[0]?.sdPurgeExpiredSoftDeleted ?? 0
   console.log(
     `retention purge: removed ${n} row(s) soft-deleted before ${beforeIso}`
   )

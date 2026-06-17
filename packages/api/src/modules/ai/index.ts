@@ -25,10 +25,10 @@ import type {
 } from "@synapse/shared/types"
 import {
   CONVERSATION_PARTICIPANT_TYPE,
+  MODEL_SERVER_TOOL,
   describeTransportKind,
   extractText,
   formatMentionText,
-  isToolResultOrigin,
   isTransportKind,
   computeWireNames,
   stripForProvider,
@@ -67,6 +67,10 @@ import {
   isCallableTool,
 } from "./tool-plugins.js"
 import { runWithToolContext } from "./session-tools.js"
+import {
+  readToolResultOrigin,
+  readToolResultStructuredContent,
+} from "./tool-result-payload.js"
 import { type McpExecutionContext } from "../mcp-plugins/instance-manager.js"
 import { getMcpVersion } from "../mcp-plugins/runtime-version.js"
 import { ingestResponseMedia } from "./content-ingest.js"
@@ -80,7 +84,7 @@ import {
 import { buildAdHocContextItems } from "./context-builder.js"
 import { buildAdHocProviderContextWindow } from "../context/service.js"
 import { DEFAULT_MODEL_ATTEMPT_POLICY } from "../model-groups/defaults.js"
-import { listConversationParticipants as getLiveConversationParticipants } from "../chat/service.js"
+import { listConversationParticipantsUseCase as getLiveConversationParticipants } from "../chat/participant-roster.js"
 import {
   createToolCall,
   createToolExecutionAttempt,
@@ -303,36 +307,36 @@ async function loadToolResolveConversationParticipants(params: {
 
   for (const member of members) {
     if (member.state !== "active") continue
-    if (member.actor_id) {
+    if (member.actorId) {
       entries.push({
         participantType: "actor",
-        id: member.actor_id,
+        id: member.actorId,
         participantId: member.id,
-        name: member.participant_name || "Unknown actor",
-        title: member.participant_title || member.participant_role || "Actor",
-        role: member.participant_role || undefined,
+        name: member.participantName || "Unknown actor",
+        title: member.participantTitle || member.participantRole || "Actor",
+        role: member.participantRole || undefined,
       })
       continue
     }
-    if (member.user_id) {
+    if (member.userId) {
       const workspaceMemberId =
-        typeof member.workspace_member_id === "string" &&
-        member.workspace_member_id.trim().length > 0
-          ? member.workspace_member_id
+        typeof member.workspaceMemberId === "string" &&
+        member.workspaceMemberId.trim().length > 0
+          ? member.workspaceMemberId
           : null
       if (!workspaceMemberId) {
         throw new Error(
           `Conversation ${params.conversationId} has workspace participant ${member.id} without workspace_member_id`
         )
       }
-      const transportKind = isTransportKind(member.transport_kind)
-        ? member.transport_kind
+      const transportKind = isTransportKind(member.transportKind)
+        ? member.transportKind
         : undefined
       entries.push({
         participantType: "workspace_member",
         id: workspaceMemberId,
         participantId: member.id,
-        name: member.user_name || "User",
+        name: member.userName || "User",
         title: transportKind
           ? `Workspace member · reachable via ${
               getTransportConnectorCapability(transportKind)?.displayName ??
@@ -343,30 +347,24 @@ async function loadToolResolveConversationParticipants(params: {
       })
       continue
     }
-    if (member.participant_type === "external") {
-      const linkedWorkspaceMemberName =
-        (member.linked_user_name as string | null) || undefined
+    if (member.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL) {
+      const linkedWorkspaceMemberName = member.linkedUserName || undefined
       entries.push({
         participantType: "external",
-        id:
-          (member.linked_user_id as string | null) ||
-          (member.transport_external_id as string | null) ||
-          (member.id as string),
-        participantId: member.id as string,
+        id: member.linkedUserId || member.transportExternalId || member.id,
+        participantId: member.id,
         name:
-          (member.transport_display_name as string | null) ||
-          (member.display_name as string | null) ||
+          member.transportDisplayName ||
+          member.displayName ||
           linkedWorkspaceMemberName ||
           "External participant",
         title: linkedWorkspaceMemberName
           ? `Linked workspace user: ${linkedWorkspaceMemberName}`
           : "External participant",
         role: "External participant",
-        linkedWorkspaceMemberId:
-          (member.linked_user_id as string | null) || undefined,
+        linkedWorkspaceMemberId: member.linkedUserId || undefined,
         linkedWorkspaceMemberName,
-        externalUserKey:
-          (member.transport_external_id as string | null) || undefined,
+        externalUserKey: member.transportExternalId || undefined,
       })
     }
   }
@@ -1201,9 +1199,10 @@ export async function actorThink(
         allServerToolCalls.push(...serverCalls)
         if (onStatus) {
           const labels = serverCalls.map((sc) => {
-            if (sc.type === "web_search")
+            if (sc.type === MODEL_SERVER_TOOL.WEB_SEARCH)
               return `Searching "${sc.query || "..."}"`
-            if (sc.type === "web_fetch") return `Fetching ${sc.url || "..."}`
+            if (sc.type === MODEL_SERVER_TOOL.WEB_FETCH)
+              return `Fetching ${sc.url || "..."}`
             return sc.type
           })
           await onStatus(labels.join(", "))
@@ -1336,12 +1335,11 @@ export async function actorThink(
 
           if (executionEnabled && callRow && attempt) {
             const blocks = res.content
+            const structuredContent = readToolResultStructuredContent(res)
             const persistedMetadata: Record<string, unknown> = {
               ...(res.metadata || {}),
               origin: { kind: "system", registryKey: tc.toolName },
-              ...((res as any).structuredContent !== undefined
-                ? { structuredContent: (res as any).structuredContent }
-                : {}),
+              ...(structuredContent !== undefined ? { structuredContent } : {}),
               toolCallId: tc.callId,
               toolName: tc.toolName,
               ...(tc.providerCallId
@@ -1354,7 +1352,7 @@ export async function actorThink(
             // still spread top-level above for back-compat consumers.
             const callableToolMeta = buildToolMeta({
               meta: res.metadata,
-              structuredContent: (res as any).structuredContent,
+              structuredContent,
             })
             if (callableToolMeta) persistedMetadata.toolMeta = callableToolMeta
             // Phase 7b: res.content is strictly CanonicalContentBlock[] post
@@ -1584,16 +1582,13 @@ export async function actorThink(
                   normalizedResult.isError ? "failed" : "completed"
                 )
               }
-            } catch (err: any) {
+            } catch (err: unknown) {
               const classifiedError = classifyMcpExecutionError(err)
               const formattedMessage = formatMcpExecutionErrorMessage(
                 classifiedError.message,
                 classifiedError.requiresReplan
               )
-              const failureOrigin: ToolResultOrigin | undefined =
-                isToolResultOrigin((err as any)?.origin)
-                  ? (err as any).origin
-                  : undefined
+              const failureOrigin = readToolResultOrigin(err)
               await appendMcpFailureResult({
                 tc,
                 callRow,
@@ -1691,7 +1686,6 @@ export async function actorThink(
         )
         const roundToolResults: CanonicalToolResult[] = toolResults.map(
           (tr) => {
-            const trAny = tr as any
             const isCallableEntry = callableResultIds.has(tr.toolCallId)
             const fallbackOrigin: ToolResultOrigin = isCallableEntry
               ? { kind: "system", registryKey: tr.toolName }
@@ -1699,10 +1693,8 @@ export async function actorThink(
                   toolWireRegistry.refByWireName.get(tr.toolName),
                   tr.toolName
                 )
-            const origin = isToolResultOrigin(trAny.origin)
-              ? trAny.origin
-              : fallbackOrigin
-            const structuredContent = trAny.structuredContent
+            const origin = readToolResultOrigin(tr) ?? fallbackOrigin
+            const structuredContent = readToolResultStructuredContent(tr)
             const base: CanonicalToolResult = {
               toolCallId: tr.toolCallId,
               providerCallId: tr.providerCallId,

@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify"
+import { wireRoute } from "../../infrastructure/http/route.js"
 import { getTransportAccountById } from "./service.js"
 import { tryGetConnector } from "./connectors/registry.js"
 import { ingestInboundEnvelope } from "./service/ingest.js"
@@ -7,15 +8,23 @@ export default async function imPublicController(app: FastifyInstance) {
   /**
    * Generic IM webhook entry point — dispatches to the registered
    * TransportConnector for the given transport_kind.
+   *
+   * WIRE route (machine/webhook-facing): the connector dictates the exact
+   * status code + bare body the external platform expects (e.g. echo
+   * challenges, ack payloads), so it is never wrapped in `{ data }`.
    */
-  app.post<{
-    Params: { transportKind: string; accountId: string }
-    Body: unknown
-  }>(
+  wireRoute(
+    app,
+    "POST",
     "/api/v1/im/webhooks/:transportKind/:accountId",
+    {},
     async (request, reply) => {
-      const account = await getTransportAccountById(request.params.accountId)
-      if (!account || account.transportKind !== request.params.transportKind) {
+      const params = request.params as {
+        transportKind: string
+        accountId: string
+      }
+      const account = await getTransportAccountById(params.accountId)
+      if (!account || account.transportKind !== params.transportKind) {
         return reply
           .status(404)
           .send({ error: "transport account not found for that kind" })

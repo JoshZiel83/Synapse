@@ -152,6 +152,49 @@ test("resolveRemoteEntryPoint: bare URL string + env templating", () => {
   delete process.env.__EP_URL__
 })
 
+test("resolveRemoteEntryPoint: rejects invalid or non-http URLs", () => {
+  for (const raw of [
+    "not a url",
+    "file:///tmp/mcp.sock",
+    JSON.stringify({ url: "not a url" }),
+    JSON.stringify({ url: "file:///tmp/mcp.sock" }),
+  ]) {
+    assert.throws(
+      () => resolveRemoteEntryPoint(raw, ctx({}), "streamable-http"),
+      /Remote MCP entry point URL/
+    )
+  }
+})
+
+test("resolveRemoteEntryPoint: rejects malformed entryPoint JSON", () => {
+  assert.throws(
+    () => resolveRemoteEntryPoint('{"url":', ctx({}), "streamable-http"),
+    /Invalid remote MCP entry point JSON/
+  )
+})
+
+test("resolveRemoteEntryPoint: rejects non-object JSON entryPoint values", () => {
+  for (const raw of ["[]", '"https://example.com/mcp"', "null", "true"]) {
+    assert.throws(
+      () => resolveRemoteEntryPoint(raw, ctx({}), "streamable-http"),
+      /Remote MCP entry point JSON has invalid shape/
+    )
+  }
+})
+
+test("resolveRemoteEntryPoint: rejects drifted JSON entryPoint fields", () => {
+  for (const raw of [
+    JSON.stringify({ url: "https://example.com/mcp", headers: { X: 1 } }),
+    JSON.stringify({ url: "https://example.com/mcp", query: { key: 1 } }),
+    JSON.stringify({ url: "https://example.com/mcp", protocol: "ws" }),
+  ]) {
+    assert.throws(
+      () => resolveRemoteEntryPoint(raw, ctx({}), "streamable-http"),
+      /Remote MCP entry point JSON has invalid shape/
+    )
+  }
+})
+
 test("redactUrlForLog masks secret query params, leaves others", () => {
   assert.equal(
     redactUrlForLog("https://mcp.amap.com/mcp?key=SECRET&x=1"),

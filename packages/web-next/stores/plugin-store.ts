@@ -1,14 +1,20 @@
 "use client"
 import { create } from "zustand"
-import type { ReuseScope } from "@synapse/shared"
+import type {
+  MarketplacePluginView,
+  MarketplacePublisherView,
+  PluginCategoryView,
+  PluginInstallationDetailView,
+  ReuseScope,
+} from "@synapse/shared"
 import type { CapabilityAccessTarget } from "@synapse/shared/types"
 import { api } from "@/lib/api"
 
 interface PluginState {
-  marketplace: any[]
-  categories: any[]
-  installations: any[]
-  organizations: any[]
+  marketplace: MarketplacePluginView[]
+  categories: PluginCategoryView[]
+  installations: PluginInstallationDetailView[]
+  organizations: MarketplacePublisherView[]
   loadingMarketplace: boolean
   loadingInstalled: boolean
 
@@ -30,13 +36,19 @@ interface PluginState {
         reason?: string
       }>
     }
-  ) => Promise<any>
+  ) => Promise<PluginInstallationDetailView>
   uninstallPlugin: (wsId: string, installId: string) => Promise<void>
   updateInstallation: (
     wsId: string,
     installId: string,
-    data: any
-  ) => Promise<any>
+    data: {
+      isEnabled?: boolean
+      configData?: Record<string, unknown>
+      authSessionIds?: Record<string, string>
+      lifecycleScope?: ReuseScope
+      conversationTypeMaskOverride?: number | null
+    }
+  ) => Promise<PluginInstallationDetailView>
 }
 
 export const usePluginStore = create<PluginState>((set, get) => ({
@@ -50,11 +62,10 @@ export const usePluginStore = create<PluginState>((set, get) => ({
   loadMarketplace: async (search?: string, categorySlugs?: string[]) => {
     set({ loadingMarketplace: true })
     try {
-      const params = new URLSearchParams()
-      if (search) params.set("search", search)
-      if (categorySlugs && categorySlugs.length > 0)
-        params.set("categories", categorySlugs.join(","))
-      const data = await api.getMarketplace(params.toString() || undefined)
+      const data = await api.getMarketplace({
+        search,
+        categories: categorySlugs,
+      })
       set({ marketplace: data })
     } catch (err) {
       console.error("Failed to load marketplace:", err)
@@ -104,7 +115,7 @@ export const usePluginStore = create<PluginState>((set, get) => ({
     await get().loadInstallations(wsId)
   },
 
-  updateInstallation: async (wsId: string, installId: string, data: any) => {
+  updateInstallation: async (wsId, installId, data) => {
     const installation = await api.updateInstallation(wsId, installId, data)
     await get().loadInstallations(wsId)
     return installation

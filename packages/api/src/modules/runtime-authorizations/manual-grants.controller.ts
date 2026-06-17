@@ -13,70 +13,43 @@
 // MVP. The chat approval path remains for those.
 
 import type { FastifyInstance } from "fastify"
-import { z } from "zod"
 import { formatValidationDetails } from "../../infrastructure/validation-error.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { requireRequestAction } from "../access/guards.js"
-import { db } from "../../infrastructure/database/kysely.js"
+import { BrowserGrantPolicyError } from "@synapse/shared/access/policies"
 import {
-  BrowserGrantPolicyError,
-  GrantPolicySchema,
-} from "@synapse/shared/access/policies"
-import { workspaceRef } from "@synapse/shared"
+  browserOperationsForExposureStableKey,
+  workspaceRef,
+} from "@synapse/shared"
 import {
-  BROWSER_EXPOSURE_TOOLS,
-  BROWSER_TOOL_MAP,
-} from "@synapse/device-protocol/browser-tools"
+  CreateManualRuntimeAuthorizationGrantInputSchema,
+  RuntimeAuthorizationGrantRecordViewSchema,
+} from "@synapse/shared/schemas"
+import { appRoute } from "../../infrastructure/http/route.js"
 import { createRuntimeAuthorizationGrant } from "./service.js"
-
-const manualGrantBodySchema = z.object({
-  device_capability_id: z.uuid(),
-  policy: z.unknown(), // validated below via GrantPolicySchema
-})
-
-/**
- * For a given exposure stable_key (e.g. `builtin/browser/navigation`),
- * return the set of BrowserOperation values that any tool in the exposure
- * would ever request. Used to prevent operators from granting operations
- * the exposure can't actually trigger.
- *
- * Returns `null` for exposures that aren't from the chrome-devtools-mcp
- * provider (legacy `builtin/browser`, custom builtins, etc.) — those
- * fall through to capability-level matching only.
- */
-function allowedBrowserOperationsForExposureStableKey(
-  stableKey: string
-): Set<string> | null {
-  // Stable keys defined by BROWSER_EXPOSURE_STABLE_KEYS:
-  //   builtin/browser/{navigation,read,input,network,performance,script,extensions,webmcp}
-  const suffix = stableKey.startsWith("builtin/browser/")
-    ? stableKey.slice("builtin/browser/".length)
-    : null
-  if (!suffix) return null
-  const tools = (BROWSER_EXPOSURE_TOOLS as Record<string, string[]>)[suffix]
-  if (!tools) return null
-  const ops = new Set<string>()
-  for (const t of tools) {
-    const desc = BROWSER_TOOL_MAP[t]
-    if (desc) ops.add(desc.operation)
-  }
-  return ops
-}
+import { findDeviceCapabilityGrantTarget } from "./repo.js"
 
 export function registerManualRuntimeAuthorizationGrantRoutes(
   app: FastifyInstance
 ): void {
   const workspaceHook = { preHandler: [authMiddleware, workspaceMiddleware] }
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/runtime-authorization-grants",
-    workspaceHook,
+    {
+      schema: RuntimeAuthorizationGrantRecordViewSchema,
+      options: workspaceHook,
+    },
     async (request, reply) => {
       const { workspaceId: pathWorkspaceId } = request.params as {
         workspaceId: string
       }
-      const parsed = manualGrantBodySchema.safeParse(request.body)
+      const parsed = CreateManualRuntimeAuthorizationGrantInputSchema.safeParse(
+        request.body
+      )
       if (!parsed.success) {
         reply.status(400).send({
           code: "invalid_request",
@@ -85,18 +58,9 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
         return
       }
 
-      // Validate GrantPolicy shape (BrowserPolicy.strip() drops any stray
-      // scopeSource on the way in — see plan §clarification #10).
-      const policyParse = GrantPolicySchema.safeParse(parsed.data.policy)
-      if (!policyParse.success) {
-        reply.status(400).send({
-          code: "invalid_request",
-          message: "policy did not match GrantPolicySchema",
-          details: formatValidationDetails(policyParse.error),
-        })
-        return
-      }
-      const policy = policyParse.data
+      // The shared app input schema validates the grant policy and strips
+      // browser-only request fields such as scopeSource at the app boundary.
+      const policy = parsed.data.policy
 
       // Permission: workspace.manage_devices + device_capability.grant on
       // the target capability. Mirrors access-bindings.ts.
@@ -115,7 +79,7 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
           request,
           reply,
           "device_capability.grant",
-          parsed.data.device_capability_id,
+          parsed.data.deviceCapabilityId,
           "Cannot grant runtime authorization on this device capability"
         ))
       )
@@ -123,31 +87,17 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
 
       // JOIN reverse-lookup: pull device_id / exposure_id / builtin_kind /
       // workspace_id / status. Verify they line up before the write.
-      const row = await db
-        .selectFrom("device_capabilities as dc")
-        .innerJoin("workspace_apps as app", "app.id", "dc.id")
-        .innerJoin("device_exposures as dx", "dx.id", "dc.exposure_id")
-        .innerJoin("devices as d", "d.id", "dx.device_id")
-        .select([
-          "d.id as device_id",
-          "app.workspace_id as workspace_id",
-          "dx.id as exposure_id",
-          "dx.stable_key as exposure_stable_key",
-          "dx.builtin_kind as builtin_kind",
-          "dx.runtime_status as runtime_status",
-          "app.status as status",
-        ])
-        .where("dc.id", "=", parsed.data.device_capability_id)
-        .where("app.deleted_at", "is", null)
-        .executeTakeFirst()
+      const row = await findDeviceCapabilityGrantTarget(
+        parsed.data.deviceCapabilityId
+      )
       if (!row) {
         reply.status(404).send({
           code: "device_capability_not_found",
-          message: `device_capability ${parsed.data.device_capability_id} not found`,
+          message: `device capability ${parsed.data.deviceCapabilityId} not found`,
         })
         return
       }
-      if (row.workspace_id !== pathWorkspaceId) {
+      if (row.workspaceId !== pathWorkspaceId) {
         reply.status(400).send({
           code: "workspace_id_mismatch",
           message: "device_capability does not belong to this workspace",
@@ -161,17 +111,17 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
         })
         return
       }
-      if (row.runtime_status === "offline") {
+      if (row.runtimeStatus === "offline") {
         reply.status(409).send({
           code: "device_exposure_offline",
           message: "underlying device exposure is offline",
         })
         return
       }
-      if (policy.capability !== row.builtin_kind) {
+      if (policy.capability !== row.builtinKind) {
         reply.status(400).send({
           code: "capability_mismatch",
-          message: `policy.capability=${policy.capability} but exposure.builtin_kind=${row.builtin_kind}`,
+          message: `policy.capability=${policy.capability} but exposure.builtin_kind=${row.builtinKind}`,
         })
         return
       }
@@ -186,21 +136,19 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
         policy.browser?.operations &&
         policy.browser.operations.length > 0
       ) {
-        const allowedOps = allowedBrowserOperationsForExposureStableKey(
-          row.exposure_stable_key as string
+        const allowedOps = new Set(
+          browserOperationsForExposureStableKey(row.exposureStableKey)
         )
-        if (allowedOps) {
-          const bad = policy.browser.operations.filter(
-            (op) => !allowedOps.has(op)
-          )
-          if (bad.length > 0) {
-            reply.status(400).send({
-              code: "operations_not_allowed_for_exposure",
-              message: `operations not served by exposure ${row.exposure_stable_key}: ${bad.join(", ")}`,
-              allowed: [...allowedOps],
-            })
-            return
-          }
+        const bad = policy.browser.operations.filter(
+          (op) => !allowedOps.has(op)
+        )
+        if (bad.length > 0) {
+          reply.status(400).send({
+            code: "operations_not_allowed_for_exposure",
+            message: `operations not served by exposure ${row.exposureStableKey}: ${bad.join(", ")}`,
+            allowed: [...allowedOps],
+          })
+          return
         }
       }
 
@@ -214,15 +162,16 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
           // maps to subject=workspace + retention=until_revoked + the parsed
           // policy. No scope (workspace grants are unscoped).
           workspaceId: pathWorkspaceId,
-          deviceId: row.device_id,
-          deviceCapabilityId: parsed.data.device_capability_id,
-          deviceExposureId: row.exposure_id,
+          deviceId: row.deviceId,
+          deviceCapabilityId: parsed.data.deviceCapabilityId,
+          deviceExposureId: row.exposureId,
           subject: workspaceRef(pathWorkspaceId),
           retention: "until_revoked",
           policy,
           createdByWorkspaceMemberId: session?.workspaceMemberId ?? undefined,
         })
-        reply.status(201).send({ grant })
+        reply.status(201)
+        return grant
       } catch (err) {
         if (err instanceof BrowserGrantPolicyError) {
           reply.status(400).send({
@@ -236,6 +185,7 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
           code: "internal_error",
           message: (err as Error).message,
         })
+        return
       }
     }
   )

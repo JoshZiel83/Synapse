@@ -37,7 +37,7 @@ async function newUser(db: Kysely<any>): Promise<string> {
 async function newWorkspace(db: Kysely<any>, ownerId: string): Promise<string> {
   const ws = await db
     .insertInto("workspaces")
-    .values({ owner_id: ownerId, slug: `ws-${rid()}`, name: `${NS} ws` })
+    .values({ ownerId: ownerId, slug: `ws-${rid()}`, name: `${NS} ws` })
     .returning("id")
     .executeTakeFirstOrThrow()
   return ws.id as string
@@ -49,11 +49,11 @@ async function addMember(
   userId: string
 ): Promise<string> {
   const m = await db
-    .insertInto("workspace_members")
+    .insertInto("workspaceMembers")
     .values({
-      workspace_id: wsId,
-      user_id: userId,
-      trust_level: "member",
+      workspaceId: wsId,
+      userId: userId,
+      trustLevel: "member",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -62,8 +62,8 @@ async function addMember(
 
 async function putContentBlob(db: Kysely<any>, sha: string): Promise<void> {
   await db
-    .insertInto("content_blobs")
-    .values({ sha256: sha, size_bytes: 3, backend: "local_cas" } as any)
+    .insertInto("contentBlobs")
+    .values({ sha256: sha, sizeBytes: 3, backend: "local_cas" } as any)
     .onConflict((oc: any) => oc.doNothing())
     .execute()
 }
@@ -75,16 +75,16 @@ test("contentAccessResolver", async (t) => {
       const ws = await newWorkspace(db, owner)
       await putContentBlob(db, SHA_A)
       await db
-        .insertInto("file_assets")
+        .insertInto("fileAssets")
         .values({
-          workspace_id: ws,
-          content_sha256: SHA_A,
-          original_name: "x.png",
-          mime_type: "image/png",
-          content_kind: "image",
-          size_bytes: 3,
-          source_family: "user_upload",
-          source_system: "web",
+          workspaceId: ws,
+          contentSha256: SHA_A,
+          originalName: "x.png",
+          mimeType: "image/png",
+          contentKind: "image",
+          sizeBytes: 3,
+          sourceFamily: "user_upload",
+          sourceSystem: "web",
         } as any)
         .execute()
 
@@ -100,16 +100,16 @@ test("contentAccessResolver", async (t) => {
       const ws = await newWorkspace(db, owner)
       await putContentBlob(db, SHA_A)
       await db
-        .insertInto("file_assets")
+        .insertInto("fileAssets")
         .values({
-          workspace_id: ws,
-          content_sha256: SHA_A,
-          original_name: "x.png",
-          mime_type: "image/png",
-          content_kind: "image",
-          size_bytes: 3,
-          source_family: "user_upload",
-          source_system: "web",
+          workspaceId: ws,
+          contentSha256: SHA_A,
+          originalName: "x.png",
+          mimeType: "image/png",
+          contentKind: "image",
+          sizeBytes: 3,
+          sourceFamily: "user_upload",
+          sourceSystem: "web",
         } as any)
         .execute()
 
@@ -130,10 +130,10 @@ test("contentAccessResolver", async (t) => {
         const conv = await db
           .insertInto("conversations")
           .values({
-            workspace_id: ws,
+            workspaceId: ws,
             kind: "direct",
             title: "t",
-            created_by_workspace_member_id: memberId,
+            createdByWorkspaceMemberId: memberId,
           } as any)
           .returning("id")
           .executeTakeFirstOrThrow()
@@ -143,36 +143,36 @@ test("contentAccessResolver", async (t) => {
           memberId,
         })
         await db
-          .insertInto("conversation_participants")
+          .insertInto("conversationParticipants")
           .values({
-            conversation_id: conv.id,
-            subject_id: subjId,
-            role_key: "member",
+            conversationId: conv.id,
+            subjectId: subjId,
+            roleKey: "member",
             state: "active",
           } as any)
           .execute()
 
         const item = await db
-          .insertInto("conversation_items")
+          .insertInto("conversationItems")
           .values({
-            conversation_id: conv.id,
+            conversationId: conv.id,
             scope: "shared",
             surface: "visible",
-            item_type: "message",
+            itemType: "message",
             subtype: "user_message",
             role: "user",
           } as any)
           .returning("id")
           .executeTakeFirstOrThrow()
         await db
-          .insertInto("conversation_item_parts")
+          .insertInto("conversationItemParts")
           .values({
-            item_id: item.id,
+            itemId: item.id,
             ordinal: 0,
-            part_type: "file_ref",
-            ref_sha256: SHA_B,
-            ref_path: "/conversation/x.png",
-            mime_type: "image/png",
+            partType: "file_ref",
+            refSha256: SHA_B,
+            refPath: "/conversation/x.png",
+            mimeType: "image/png",
             name: "x.png",
           } as any)
           .execute()
@@ -194,10 +194,10 @@ test("contentAccessResolver", async (t) => {
       const conv = await db
         .insertInto("conversations")
         .values({
-          workspace_id: ws,
+          workspaceId: ws,
           kind: "direct",
           title: "t",
-          created_by_workspace_member_id: memberId,
+          createdByWorkspaceMemberId: memberId,
         } as any)
         .returning("id")
         .executeTakeFirstOrThrow()
@@ -207,36 +207,36 @@ test("contentAccessResolver", async (t) => {
         memberId,
       })
       await db
-        .insertInto("conversation_participants")
+        .insertInto("conversationParticipants")
         .values({
-          conversation_id: conv.id,
-          subject_id: subjId,
-          role_key: "member",
+          conversationId: conv.id,
+          subjectId: subjId,
+          roleKey: "member",
           state: "active",
         } as any)
         .execute()
 
       const item = await db
-        .insertInto("conversation_items")
+        .insertInto("conversationItems")
         .values({
-          conversation_id: conv.id,
+          conversationId: conv.id,
           scope: "shared",
           surface: "visible",
-          item_type: "message",
+          itemType: "message",
           subtype: "user_message",
           role: "user",
         } as any)
         .returning("id")
         .executeTakeFirstOrThrow()
       await db
-        .insertInto("conversation_item_parts")
+        .insertInto("conversationItemParts")
         .values({
-          item_id: item.id,
+          itemId: item.id,
           ordinal: 0,
-          part_type: "file_ref",
-          ref_sha256: SHA_B,
-          ref_path: "/conversation/x.png",
-          mime_type: "image/png",
+          partType: "file_ref",
+          refSha256: SHA_B,
+          refPath: "/conversation/x.png",
+          mimeType: "image/png",
           name: "x.png",
         } as any)
         .execute()
@@ -257,18 +257,18 @@ test("contentAccessResolver", async (t) => {
         const memberA = await addMember(db, ws, userA)
         // memberB: a second workspace member + active participant.
         await db
-          .insertInto("workspace_members")
+          .insertInto("workspaceMembers")
           .values({
-            workspace_id: ws,
-            user_id: userB,
-            trust_level: "member",
+            workspaceId: ws,
+            userId: userB,
+            trustLevel: "member",
           } as any)
           .execute()
         const memberBRow = await db
-          .selectFrom("workspace_members")
+          .selectFrom("workspaceMembers")
           .select("id")
-          .where("workspace_id", "=", ws)
-          .where("user_id", "=", userB)
+          .where("workspaceId", "=", ws)
+          .where("userId", "=", userB)
           .executeTakeFirstOrThrow()
         const memberB = memberBRow.id as string
         await putContentBlob(db, SHA_B)
@@ -276,10 +276,10 @@ test("contentAccessResolver", async (t) => {
         const conv = await db
           .insertInto("conversations")
           .values({
-            workspace_id: ws,
+            workspaceId: ws,
             kind: "group",
             title: "t",
-            created_by_workspace_member_id: memberA,
+            createdByWorkspaceMemberId: memberA,
           } as any)
           .returning("id")
           .executeTakeFirstOrThrow()
@@ -293,57 +293,57 @@ test("contentAccessResolver", async (t) => {
           memberId: memberB,
         })
         const partA = await db
-          .insertInto("conversation_participants")
+          .insertInto("conversationParticipants")
           .values({
-            conversation_id: conv.id,
-            subject_id: subjA,
-            role_key: "member",
+            conversationId: conv.id,
+            subjectId: subjA,
+            roleKey: "member",
             state: "active",
           } as any)
           .returning("id")
           .executeTakeFirstOrThrow()
         await db
-          .insertInto("conversation_participants")
+          .insertInto("conversationParticipants")
           .values({
-            conversation_id: conv.id,
-            subject_id: subjB,
-            role_key: "member",
+            conversationId: conv.id,
+            subjectId: subjB,
+            roleKey: "member",
             state: "active",
           } as any)
           .execute()
 
         // A directed (audience-restricted) item authored by A, targeting A only.
         const item = await db
-          .insertInto("conversation_items")
+          .insertInto("conversationItems")
           .values({
-            conversation_id: conv.id,
+            conversationId: conv.id,
             scope: "shared",
             surface: "visible",
-            item_type: "message",
+            itemType: "message",
             subtype: "user_message",
             role: "user",
-            author_participant_id: partA.id,
+            authorParticipantId: partA.id,
           } as any)
           .returning("id")
           .executeTakeFirstOrThrow()
         await db
-          .insertInto("conversation_item_parts")
+          .insertInto("conversationItemParts")
           .values({
-            item_id: item.id,
+            itemId: item.id,
             ordinal: 0,
-            part_type: "file_ref",
-            ref_sha256: SHA_B,
-            ref_path: "/conversation/secret.png",
-            mime_type: "image/png",
+            partType: "file_ref",
+            refSha256: SHA_B,
+            refPath: "/conversation/secret.png",
+            mimeType: "image/png",
             name: "secret.png",
           } as any)
           .execute()
         await db
-          .insertInto("conversation_item_targets")
+          .insertInto("conversationItemTargets")
           .values({
-            item_id: item.id,
-            target_participant_id: partA.id,
-            target_kind: "to",
+            itemId: item.id,
+            targetParticipantId: partA.id,
+            targetKind: "to",
           } as any)
           .execute()
 
@@ -373,7 +373,7 @@ async function seedPrivateMemoryRef(db: Kysely<any>) {
     .executeTakeFirstOrThrow()
   const ws = await db
     .insertInto("workspaces")
-    .values({ owner_id: owner.id, slug: `ws-${rid()}`, name: "mem ws" })
+    .values({ ownerId: owner.id, slug: `ws-${rid()}`, name: "mem ws" })
     .returning("id")
     .executeTakeFirstOrThrow()
   // A workspace MEMBER who is not the memory owner.
@@ -383,11 +383,11 @@ async function seedPrivateMemoryRef(db: Kysely<any>) {
     .returning("id")
     .executeTakeFirstOrThrow()
   const member = await db
-    .insertInto("workspace_members")
+    .insertInto("workspaceMembers")
     .values({
-      workspace_id: ws.id,
-      user_id: memberUser.id,
-      trust_level: "member",
+      workspaceId: ws.id,
+      userId: memberUser.id,
+      trustLevel: "member",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -397,12 +397,12 @@ async function seedPrivateMemoryRef(db: Kysely<any>) {
   })
   // The memory space is owned by an ACTOR (private to that actor).
   const actorRoot = await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id: crypto.randomUUID(),
-      workspace_id: ws.id,
+      workspaceId: ws.id,
       kind: "actor",
-      display_name: `a-${rid()}`,
+      displayName: `a-${rid()}`,
       status: "active",
     } as any)
     .returning("id")
@@ -413,7 +413,7 @@ async function seedPrivateMemoryRef(db: Kysely<any>) {
       id: actorRoot.id as string,
       role: "assistant",
       title: "t",
-      current_version: 1,
+      currentVersion: 1,
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -422,36 +422,36 @@ async function seedPrivateMemoryRef(db: Kysely<any>) {
     actorId: actor.id,
   })
   const space = await db
-    .insertInto("memory_spaces")
+    .insertInto("memorySpaces")
     .values({
-      workspace_id: ws.id,
-      owner_subject_id: actorSubjectId,
-      namespace_key: "default",
+      workspaceId: ws.id,
+      ownerSubjectId: actorSubjectId,
+      namespaceKey: "default",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   const item = await db
-    .insertInto("memory_items")
+    .insertInto("memoryItems")
     .values({
-      workspace_id: ws.id,
-      memory_space_id: space.id,
+      workspaceId: ws.id,
+      memorySpaceId: space.id,
       category: "fact",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   await db
-    .insertInto("content_blobs")
-    .values({ sha256: SHA_M, size_bytes: 3, backend: "local_cas" } as any)
+    .insertInto("contentBlobs")
+    .values({ sha256: SHA_M, sizeBytes: 3, backend: "local_cas" } as any)
     .onConflict((oc: any) => oc.doNothing())
     .execute()
   await db
-    .insertInto("memory_item_parts")
+    .insertInto("memoryItemParts")
     .values({
-      memory_item_id: item.id,
+      memoryItemId: item.id,
       ordinal: 0,
-      part_type: "file_ref",
-      ref_sha256: SHA_M,
-      mime_type: "image/png",
+      partType: "file_ref",
+      refSha256: SHA_M,
+      mimeType: "image/png",
       name: "m.png",
     } as any)
     .execute()
@@ -486,11 +486,11 @@ test("contentAccessResolver memory ACL", async (t) => {
         const { workspaceId, memberUserId, memberSubjectId, spaceId } =
           await seedPrivateMemoryRef(db)
         await db
-          .insertInto("memory_access_grants")
+          .insertInto("memoryAccessGrants")
           .values({
-            workspace_id: workspaceId,
-            memory_space_id: spaceId,
-            subject_id: memberSubjectId,
+            workspaceId: workspaceId,
+            memorySpaceId: spaceId,
+            subjectId: memberSubjectId,
             permissions: ["read"],
             status: "active",
           } as any)
@@ -510,11 +510,11 @@ test("contentAccessResolver memory ACL", async (t) => {
         const { workspaceId, memberUserId, memberSubjectId, spaceId } =
           await seedPrivateMemoryRef(db)
         await db
-          .insertInto("memory_access_grants")
+          .insertInto("memoryAccessGrants")
           .values({
-            workspace_id: workspaceId,
-            memory_space_id: spaceId,
-            subject_id: memberSubjectId,
+            workspaceId: workspaceId,
+            memorySpaceId: spaceId,
+            subjectId: memberSubjectId,
             permissions: ["read"],
             status: "revoked",
           } as any)
@@ -544,7 +544,7 @@ async function seedFileSpaceRef(
     .executeTakeFirstOrThrow()
   const ws = await db
     .insertInto("workspaces")
-    .values({ owner_id: owner.id, slug: `ws-${rid()}`, name: "fs ws" })
+    .values({ ownerId: owner.id, slug: `ws-${rid()}`, name: "fs ws" })
     .returning("id")
     .executeTakeFirstOrThrow()
   const memberUser = await db
@@ -553,11 +553,11 @@ async function seedFileSpaceRef(
     .returning("id")
     .executeTakeFirstOrThrow()
   const member = await db
-    .insertInto("workspace_members")
+    .insertInto("workspaceMembers")
     .values({
-      workspace_id: ws.id,
-      user_id: memberUser.id,
-      trust_level: "member",
+      workspaceId: ws.id,
+      userId: memberUser.id,
+      trustLevel: "member",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -567,12 +567,12 @@ async function seedFileSpaceRef(
   })
   // The space is owned by an actor (so the member isn't owner-implicit).
   const actorRoot = await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id: crypto.randomUUID(),
-      workspace_id: ws.id,
+      workspaceId: ws.id,
       kind: "actor",
-      display_name: `a-${rid()}`,
+      displayName: `a-${rid()}`,
       status: "active",
     } as any)
     .returning("id")
@@ -583,7 +583,7 @@ async function seedFileSpaceRef(
       id: actorRoot.id as string,
       role: "assistant",
       title: "t",
-      current_version: 1,
+      currentVersion: 1,
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -592,36 +592,36 @@ async function seedFileSpaceRef(
     actorId: actor.id,
   })
   const space = await db
-    .insertInto("file_spaces")
+    .insertInto("fileSpaces")
     .values({
-      workspace_id: ws.id,
-      owner_subject_id: actorSubjectId,
-      namespace_key: "default",
+      workspaceId: ws.id,
+      ownerSubjectId: actorSubjectId,
+      namespaceKey: "default",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   // content_blob for the manifest sha + a snapshot whose manifest IS SHA_FS.
   await db
-    .insertInto("content_blobs")
-    .values({ sha256: SHA_FS, size_bytes: 1, backend: "local_cas" } as any)
+    .insertInto("contentBlobs")
+    .values({ sha256: SHA_FS, sizeBytes: 1, backend: "local_cas" } as any)
     .onConflict((oc: any) => oc.doNothing())
     .execute()
   const snap = await db
-    .insertInto("file_snapshots")
+    .insertInto("fileSnapshots")
     .values({
-      workspace_id: ws.id,
-      file_space_id: space.id,
+      workspaceId: ws.id,
+      fileSpaceId: space.id,
       version: 1,
-      manifest_sha256: SHA_FS,
+      manifestSha256: SHA_FS,
       reason: "manual",
-      entry_count: 0,
-      total_bytes: 0,
+      entryCount: 0,
+      totalBytes: 0,
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   await db
-    .updateTable("file_spaces")
-    .set({ current_snapshot_id: snap.id } as any)
+    .updateTable("fileSpaces")
+    .set({ currentSnapshotId: snap.id } as any)
     .where("id", "=", space.id)
     .execute()
   void opts
@@ -649,11 +649,11 @@ test("contentAccessResolver file-space ACL", async (t) => {
       const { workspaceId, memberUserId, memberSubjectId, spaceId } =
         await seedFileSpaceRef(db)
       await db
-        .insertInto("file_access_grants")
+        .insertInto("fileAccessGrants")
         .values({
-          workspace_id: workspaceId,
-          file_space_id: spaceId,
-          subject_id: memberSubjectId,
+          workspaceId: workspaceId,
+          fileSpaceId: spaceId,
+          subjectId: memberSubjectId,
           permissions: ["read"],
           status: "active",
         } as any)
@@ -672,11 +672,11 @@ test("contentAccessResolver file-space ACL", async (t) => {
         const { workspaceId, memberUserId, memberSubjectId, spaceId } =
           await seedFileSpaceRef(db)
         await db
-          .insertInto("file_access_grants")
+          .insertInto("fileAccessGrants")
           .values({
-            workspace_id: workspaceId,
-            file_space_id: spaceId,
-            subject_id: memberSubjectId,
+            workspaceId: workspaceId,
+            fileSpaceId: spaceId,
+            subjectId: memberSubjectId,
             permissions: ["write"],
             status: "active",
           } as any)
@@ -694,11 +694,11 @@ test("contentAccessResolver file-space ACL", async (t) => {
       const { workspaceId, memberUserId, memberSubjectId, spaceId } =
         await seedFileSpaceRef(db)
       await db
-        .insertInto("file_access_grants")
+        .insertInto("fileAccessGrants")
         .values({
-          workspace_id: workspaceId,
-          file_space_id: spaceId,
-          subject_id: memberSubjectId,
+          workspaceId: workspaceId,
+          fileSpaceId: spaceId,
+          subjectId: memberSubjectId,
           permissions: ["admin"],
           status: "active",
         } as any)
@@ -721,7 +721,7 @@ test("contentAccessResolver file-space ACL", async (t) => {
         const otherConv = await db
           .insertInto("conversations")
           .values({
-            workspace_id: workspaceId,
+            workspaceId: workspaceId,
             kind: "direct",
             title: "x",
           } as any)
@@ -732,12 +732,12 @@ test("contentAccessResolver file-space ACL", async (t) => {
           conversationId: otherConv.id,
         })
         await db
-          .insertInto("file_access_grants")
+          .insertInto("fileAccessGrants")
           .values({
-            workspace_id: workspaceId,
-            file_space_id: spaceId,
-            subject_id: memberSubjectId,
-            scope_subject_id: otherConvSubject,
+            workspaceId: workspaceId,
+            fileSpaceId: spaceId,
+            subjectId: memberSubjectId,
+            scopeSubjectId: otherConvSubject,
             permissions: ["read"],
             status: "active",
           } as any)
@@ -760,21 +760,21 @@ test("contentAccessResolver: library-global (workspace_id NULL) asset is readabl
       .executeTakeFirstOrThrow()
     const SHA_G = "1234".repeat(16)
     await db
-      .insertInto("content_blobs")
-      .values({ sha256: SHA_G, size_bytes: 3, backend: "local_cas" } as any)
+      .insertInto("contentBlobs")
+      .values({ sha256: SHA_G, sizeBytes: 3, backend: "local_cas" } as any)
       .onConflict((oc: any) => oc.doNothing())
       .execute()
     await db
-      .insertInto("file_assets")
+      .insertInto("fileAssets")
       .values({
-        workspace_id: null,
-        content_sha256: SHA_G,
-        original_name: "icon.png",
-        mime_type: "image/png",
-        content_kind: "image",
-        size_bytes: 3,
-        source_family: "package_import",
-        source_system: "catalog",
+        workspaceId: null,
+        contentSha256: SHA_G,
+        originalName: "icon.png",
+        mimeType: "image/png",
+        contentKind: "image",
+        sizeBytes: 3,
+        sourceFamily: "package_import",
+        sourceSystem: "catalog",
       } as any)
       .execute()
     assert.equal(
@@ -799,7 +799,7 @@ async function seedTwoConvUserWithFileSpace(db: Kysely<any>) {
     .executeTakeFirstOrThrow()
   const ws = await db
     .insertInto("workspaces")
-    .values({ owner_id: owner.id, slug: `ws-${rid()}`, name: "cs ws" })
+    .values({ ownerId: owner.id, slug: `ws-${rid()}`, name: "cs ws" })
     .returning("id")
     .executeTakeFirstOrThrow()
   const memberUser = await db
@@ -808,11 +808,11 @@ async function seedTwoConvUserWithFileSpace(db: Kysely<any>) {
     .returning("id")
     .executeTakeFirstOrThrow()
   const member = await db
-    .insertInto("workspace_members")
+    .insertInto("workspaceMembers")
     .values({
-      workspace_id: ws.id,
-      user_id: memberUser.id,
-      trust_level: "member",
+      workspaceId: ws.id,
+      userId: memberUser.id,
+      trustLevel: "member",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -828,15 +828,15 @@ async function seedTwoConvUserWithFileSpace(db: Kysely<any>) {
   async function newConvWithMember() {
     const conv = await db
       .insertInto("conversations")
-      .values({ workspace_id: ws.id, kind: "group", title: "t" } as any)
+      .values({ workspaceId: ws.id, kind: "group", title: "t" } as any)
       .returning("id")
       .executeTakeFirstOrThrow()
     await db
-      .insertInto("conversation_participants")
+      .insertInto("conversationParticipants")
       .values({
-        conversation_id: conv.id,
-        subject_id: memberConvSubject,
-        role_key: "member",
+        conversationId: conv.id,
+        subjectId: memberConvSubject,
+        roleKey: "member",
         state: "active",
       } as any)
       .execute()
@@ -850,12 +850,12 @@ async function seedTwoConvUserWithFileSpace(db: Kysely<any>) {
   const convB = await newConvWithMember()
   // An actor-owned file space + a snapshot whose manifest IS SHA_CS.
   const actorRoot = await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id: crypto.randomUUID(),
-      workspace_id: ws.id,
+      workspaceId: ws.id,
       kind: "actor",
-      display_name: `a-${rid()}`,
+      displayName: `a-${rid()}`,
       status: "active",
     } as any)
     .returning("id")
@@ -866,7 +866,7 @@ async function seedTwoConvUserWithFileSpace(db: Kysely<any>) {
       id: actorRoot.id as string,
       role: "assistant",
       title: "t",
-      current_version: 1,
+      currentVersion: 1,
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -875,35 +875,35 @@ async function seedTwoConvUserWithFileSpace(db: Kysely<any>) {
     actorId: actor.id,
   })
   const space = await db
-    .insertInto("file_spaces")
+    .insertInto("fileSpaces")
     .values({
-      workspace_id: ws.id,
-      owner_subject_id: actorSubjectId,
-      namespace_key: "default",
+      workspaceId: ws.id,
+      ownerSubjectId: actorSubjectId,
+      namespaceKey: "default",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   await db
-    .insertInto("content_blobs")
-    .values({ sha256: SHA_CS, size_bytes: 1, backend: "local_cas" } as any)
+    .insertInto("contentBlobs")
+    .values({ sha256: SHA_CS, sizeBytes: 1, backend: "local_cas" } as any)
     .onConflict((oc: any) => oc.doNothing())
     .execute()
   const snap = await db
-    .insertInto("file_snapshots")
+    .insertInto("fileSnapshots")
     .values({
-      workspace_id: ws.id,
-      file_space_id: space.id,
+      workspaceId: ws.id,
+      fileSpaceId: space.id,
       version: 1,
-      manifest_sha256: SHA_CS,
+      manifestSha256: SHA_CS,
       reason: "manual",
-      entry_count: 0,
-      total_bytes: 0,
+      entryCount: 0,
+      totalBytes: 0,
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   await db
-    .updateTable("file_spaces")
-    .set({ current_snapshot_id: snap.id } as any)
+    .updateTable("fileSpaces")
+    .set({ currentSnapshotId: snap.id } as any)
     .where("id", "=", space.id)
     .execute()
   return {
@@ -921,12 +921,12 @@ test("contentAccessResolver: conv-A-scoped file grant is NOT usable from ?conv=B
     const s = await seedTwoConvUserWithFileSpace(db)
     // Grant scoped to conversation A.
     await db
-      .insertInto("file_access_grants")
+      .insertInto("fileAccessGrants")
       .values({
-        workspace_id: s.workspaceId,
-        file_space_id: s.spaceId,
-        subject_id: s.memberSubjectId,
-        scope_subject_id: s.convA.convSubject,
+        workspaceId: s.workspaceId,
+        fileSpaceId: s.spaceId,
+        subjectId: s.memberSubjectId,
+        scopeSubjectId: s.convA.convSubject,
         permissions: ["read"],
         status: "active",
       } as any)
@@ -966,15 +966,15 @@ test("contentAccessResolver: scope=A memory space is NOT owner-readable from ?co
       .executeTakeFirstOrThrow()
     const ws = await db
       .insertInto("workspaces")
-      .values({ owner_id: ownerUser.id, slug: `ws-${rid()}`, name: "cm ws" })
+      .values({ ownerId: ownerUser.id, slug: `ws-${rid()}`, name: "cm ws" })
       .returning("id")
       .executeTakeFirstOrThrow()
     const member = await db
-      .insertInto("workspace_members")
+      .insertInto("workspaceMembers")
       .values({
-        workspace_id: ws.id,
-        user_id: ownerUser.id,
-        trust_level: "member",
+        workspaceId: ws.id,
+        userId: ownerUser.id,
+        trustLevel: "member",
       } as any)
       .returning("id")
       .executeTakeFirstOrThrow()
@@ -985,15 +985,15 @@ test("contentAccessResolver: scope=A memory space is NOT owner-readable from ?co
     async function convWithMember() {
       const conv = await db
         .insertInto("conversations")
-        .values({ workspace_id: ws.id, kind: "group", title: "t" } as any)
+        .values({ workspaceId: ws.id, kind: "group", title: "t" } as any)
         .returning("id")
         .executeTakeFirstOrThrow()
       await db
-        .insertInto("conversation_participants")
+        .insertInto("conversationParticipants")
         .values({
-          conversation_id: conv.id,
-          subject_id: memberSubject,
-          role_key: "member",
+          conversationId: conv.id,
+          subjectId: memberSubject,
+          roleKey: "member",
           state: "active",
         } as any)
         .execute()
@@ -1007,37 +1007,37 @@ test("contentAccessResolver: scope=A memory space is NOT owner-readable from ?co
     const convB = await convWithMember()
     // member-owned space SCOPED to conv A.
     const space = await db
-      .insertInto("memory_spaces")
+      .insertInto("memorySpaces")
       .values({
-        workspace_id: ws.id,
-        owner_subject_id: memberSubject,
-        scope_subject_id: convA.cs,
-        namespace_key: "default",
+        workspaceId: ws.id,
+        ownerSubjectId: memberSubject,
+        scopeSubjectId: convA.cs,
+        namespaceKey: "default",
       } as any)
       .returning("id")
       .executeTakeFirstOrThrow()
     const item = await db
-      .insertInto("memory_items")
+      .insertInto("memoryItems")
       .values({
-        workspace_id: ws.id,
-        memory_space_id: space.id,
+        workspaceId: ws.id,
+        memorySpaceId: space.id,
         category: "fact",
       } as any)
       .returning("id")
       .executeTakeFirstOrThrow()
     await db
-      .insertInto("content_blobs")
-      .values({ sha256: SHA_M, size_bytes: 3, backend: "local_cas" } as any)
+      .insertInto("contentBlobs")
+      .values({ sha256: SHA_M, sizeBytes: 3, backend: "local_cas" } as any)
       .onConflict((oc: any) => oc.doNothing())
       .execute()
     await db
-      .insertInto("memory_item_parts")
+      .insertInto("memoryItemParts")
       .values({
-        memory_item_id: item.id,
+        memoryItemId: item.id,
         ordinal: 0,
-        part_type: "file_ref",
-        ref_sha256: SHA_M,
-        mime_type: "image/png",
+        partType: "file_ref",
+        refSha256: SHA_M,
+        mimeType: "image/png",
         name: "m.png",
       } as any)
       .execute()
@@ -1071,15 +1071,15 @@ test("contentAccessResolver: context-archive ref is narrowed by ?conv=", async (
       .executeTakeFirstOrThrow()
     const ws = await db
       .insertInto("workspaces")
-      .values({ owner_id: user.id, slug: `ws-${rid()}`, name: "ar ws" })
+      .values({ ownerId: user.id, slug: `ws-${rid()}`, name: "ar ws" })
       .returning("id")
       .executeTakeFirstOrThrow()
     const member = await db
-      .insertInto("workspace_members")
+      .insertInto("workspaceMembers")
       .values({
-        workspace_id: ws.id,
-        user_id: user.id,
-        trust_level: "member",
+        workspaceId: ws.id,
+        userId: user.id,
+        trustLevel: "member",
       } as any)
       .returning("id")
       .executeTakeFirstOrThrow()
@@ -1090,15 +1090,15 @@ test("contentAccessResolver: context-archive ref is narrowed by ?conv=", async (
     async function convWithMember() {
       const conv = await db
         .insertInto("conversations")
-        .values({ workspace_id: ws.id, kind: "group", title: "t" } as any)
+        .values({ workspaceId: ws.id, kind: "group", title: "t" } as any)
         .returning("id")
         .executeTakeFirstOrThrow()
       await db
-        .insertInto("conversation_participants")
+        .insertInto("conversationParticipants")
         .values({
-          conversation_id: conv.id,
-          subject_id: memberSubject,
-          role_key: "member",
+          conversationId: conv.id,
+          subjectId: memberSubject,
+          roleKey: "member",
           state: "active",
         } as any)
         .execute()
@@ -1108,37 +1108,37 @@ test("contentAccessResolver: context-archive ref is narrowed by ?conv=", async (
     const convB = await convWithMember()
     // An archive in conversation A referencing SHA_AR.
     const point = await db
-      .insertInto("context_archive_points")
+      .insertInto("contextArchivePoints")
       .values({
-        conversation_id: convA,
-        chain_scope: "shared",
-        covers_until_sequence: 0,
+        conversationId: convA,
+        chainScope: "shared",
+        coversUntilSequence: 0,
       } as any)
       .returning("id")
       .executeTakeFirstOrThrow()
     const frame = await db
-      .insertInto("context_archive_frames")
+      .insertInto("contextArchiveFrames")
       .values({
-        archive_point_id: point.id,
+        archivePointId: point.id,
         ordinal: 0,
         role: "assistant",
-        frame_type: "message",
+        frameType: "message",
       } as any)
       .returning("id")
       .executeTakeFirstOrThrow()
     await db
-      .insertInto("content_blobs")
-      .values({ sha256: SHA_AR, size_bytes: 3, backend: "local_cas" } as any)
+      .insertInto("contentBlobs")
+      .values({ sha256: SHA_AR, sizeBytes: 3, backend: "local_cas" } as any)
       .onConflict((oc: any) => oc.doNothing())
       .execute()
     await db
-      .insertInto("context_archive_frame_parts")
+      .insertInto("contextArchiveFrameParts")
       .values({
-        archive_frame_id: frame.id,
+        archiveFrameId: frame.id,
         ordinal: 0,
-        part_type: "file_ref",
-        ref_sha256: SHA_AR,
-        mime_type: "image/png",
+        partType: "file_ref",
+        refSha256: SHA_AR,
+        mimeType: "image/png",
         name: "a.png",
       } as any)
       .execute()

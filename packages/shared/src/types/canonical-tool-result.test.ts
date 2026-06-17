@@ -1,14 +1,13 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 
+import { TOOL_RESULT_ORIGIN_KINDS } from "../constants/enums.js"
 import {
-  TOOL_RESULT_ORIGIN_KINDS,
   canonicalToolResult,
   isToolResultOrigin,
   textBlocks,
-  type CanonicalToolResult,
-  type ToolResultOrigin,
-} from "./index.js"
+} from "../content/index.js"
+import type { CanonicalToolResult, ToolResultOrigin } from "./index.js"
 
 test("TOOL_RESULT_ORIGIN_KINDS enumerates all five kinds", () => {
   assert.deepEqual([...TOOL_RESULT_ORIGIN_KINDS].sort(), [

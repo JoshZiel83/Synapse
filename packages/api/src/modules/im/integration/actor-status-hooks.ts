@@ -42,13 +42,7 @@
  * session and released on terminal events / shutdown.
  */
 
-import { sql, type SqlBool } from "kysely"
-import { db } from "../../../infrastructure/database/kysely.js"
-import {
-  type IsoInstantString,
-  serializeInstant,
-  serializeOptionalInstant,
-} from "../../../infrastructure/datetime.js"
+import type { IsoInstantString } from "../../../infrastructure/datetime.js"
 import { onEvent } from "../../../infrastructure/events/index.js"
 import { redis } from "../../../infrastructure/redis/index.js"
 import { createLogger } from "../../../infrastructure/logger/index.js"
@@ -75,6 +69,16 @@ import {
   decideRuntimeUpdateAction,
   resolveActorActionStatus,
 } from "./status-resolver.js"
+import {
+  findInboundLinkForTriggerItem,
+  findRecentInboundLinkForConversation,
+  loadConversationIdForSession,
+  loadCurrentRunningTurnRow,
+  presentStatusInstant,
+  type InboundLinkLookup,
+  type InboundLinkLookupWithCreatedAt,
+  type RunningTurnRow,
+} from "./repo.js"
 
 // One claim client per process, bound to the application-wide Redis.
 // The claim itself is per-(account, externalMessageId), so a single
@@ -96,197 +100,14 @@ const activeSessions = new Map<string, ActiveStatusSession>()
 
 const STARVATION_WINDOW_MS = 5 * 60 * 1000 // 5 min fallback window
 
-interface InboundLinkLookup {
-  externalMessageId: string
-  endpointExternalId: string
-  endpointType: "direct" | "group"
-  transportKind: string
-  transportAccountId: string
-}
-
-interface InboundLinkLookupWithCreatedAt extends InboundLinkLookup {
-  createdAt: IsoInstantString
-}
-
-/**
- * Snapshot of the most recent RUNNING turn for a session. Used by both the
- * primary trigger-item lookup AND the fallback cutoff so the two see the
- * same state.
- *
- * `started_at` is nullable in schema (`turns.started_at`, see
- * generated/db.ts). `createTurn` writes NOW() in practice, but legacy /
- * dirty rows could still be null. We return ISO strings (or null) so
- * downstream string-based comparisons don't go through JS Date coercion.
- */
-interface RunningTurnRow {
-  trigger_item_id: string | null
-  started_at: IsoInstantString | null
-}
-
 // Re-export the types the test file needs to type its fixtures. The
-// underlying interfaces stay module-private so they can evolve without
-// becoming part of a wider public surface.
+// underlying interfaces live in ./repo.js (the module's DB layer) so they
+// can evolve without becoming part of a wider public surface; the aliases
+// keep the test's import path (./actor-status-hooks.js) valid.
 export type {
   InboundLinkLookup as StatusInboundLinkLookup,
   InboundLinkLookupWithCreatedAt as StatusFallbackInboundLink,
   RunningTurnRow as StatusRunningTurnRow,
-}
-
-async function resolveConversationIdForSession(
-  sessionId: string
-): Promise<string | null> {
-  const row = await db
-    .selectFrom("sessions")
-    .select("conversation_id")
-    .where("id", "=", sessionId)
-    .limit(1)
-    .executeTakeFirst()
-  return row?.conversation_id || null
-}
-
-/**
- * Most recent RUNNING turn for a session.
- *
- * Does NOT fall back to completed turns — the prior lookup at this site
- * picked the most recent turn regardless of status, which let a stale
- * completed turn's `started_at` extend the fallback cutoff far into the
- * past.
- *
- * `ORDER BY started_at DESC NULLS LAST, id DESC LIMIT 1`: a dirty row
- * with `started_at = NULL` must not eclipse a real running turn (Postgres
- * default `NULLS FIRST` on DESC would put nulls at the top). `id DESC` is
- * the deterministic tiebreaker. The returned `started_at` is the ISO
- * string form so the decide helper does string-vs-string comparisons.
- *
- * Exported for tests (`im-status-loaders.test.ts`).
- */
-export async function loadCurrentRunningTurnRow(
-  sessionId: string
-): Promise<RunningTurnRow | null> {
-  const row = await db
-    .selectFrom("turns")
-    .select(["trigger_item_id", "started_at", "id"])
-    .where("session_id", "=", sessionId)
-    .where("status", "=", "running")
-    .orderBy(sql`started_at DESC NULLS LAST`)
-    .orderBy("id", "desc")
-    .limit(1)
-    .executeTakeFirst()
-  if (!row) return null
-  return {
-    trigger_item_id: row.trigger_item_id,
-    started_at: serializeOptionalInstant(row.started_at) ?? null,
-  }
-}
-
-/**
- * Resolve the inbound link for a given trigger item id (the conversation
- * item that started the current actor turn).
- *
- * Adds `NULLIF(BTRIM(external_message_id), '') IS NOT NULL` to the SQL so
- * a link row with a null / empty / whitespace external id is treated as
- * "no link" by the loader and the caller falls through to the fallback
- * path. The schema allows empty strings (see schema.sql for
- * transport_message_links) and a `LIMIT 1` without this predicate could
- * silently use a placeholder id downstream.
- *
- * Exported for tests.
- */
-export async function findInboundLinkForTriggerItem(
-  itemId: string
-): Promise<InboundLinkLookup | null> {
-  const row = await db
-    .selectFrom("transport_message_links")
-    .innerJoin(
-      "transport_endpoints",
-      "transport_endpoints.id",
-      "transport_message_links.transport_endpoint_id"
-    )
-    .innerJoin(
-      "transport_accounts",
-      "transport_accounts.id",
-      "transport_message_links.transport_account_id"
-    )
-    .select([
-      "transport_message_links.external_message_id as externalMessageId",
-      "transport_endpoints.external_id as endpointExternalId",
-      "transport_endpoints.endpoint_type as endpointType",
-      "transport_accounts.transport_kind as transportKind",
-      "transport_accounts.id as transportAccountId",
-    ])
-    .where("transport_message_links.item_id", "=", itemId)
-    .where("transport_message_links.direction", "=", "inbound")
-    .where(
-      sql<SqlBool>`NULLIF(BTRIM(transport_message_links.external_message_id), '') IS NOT NULL`
-    )
-    .limit(1)
-    .executeTakeFirst()
-  if (!row || !row.externalMessageId) return null
-  return {
-    externalMessageId: row.externalMessageId,
-    endpointExternalId: row.endpointExternalId,
-    endpointType: row.endpointType as "direct" | "group",
-    transportKind: String(row.transportKind),
-    transportAccountId: String(row.transportAccountId),
-  }
-}
-
-/**
- * Most recent inbound link in the conversation, filtered to rows whose
- * `created_at >= cutoffIso`. Returns `createdAt` alongside the link so
- * the decide helper can verify the cutoff lexicographically.
- *
- * Same `NULLIF(BTRIM(...), '') IS NOT NULL` predicate as the trigger-item
- * loader so a newer row with an empty external_message_id can't hide an
- * older valid row via `ORDER BY created_at DESC LIMIT 1`.
- *
- * Caller supplies the cutoff so all observability flows through one
- * formula (`computeStatusFallbackCutoffIso`).
- *
- * Exported for tests.
- */
-export async function findRecentInboundLinkForConversation(
-  conversationId: string,
-  cutoffIso: string
-): Promise<InboundLinkLookupWithCreatedAt | null> {
-  const row = await db
-    .selectFrom("transport_message_links")
-    .innerJoin(
-      "transport_endpoints",
-      "transport_endpoints.id",
-      "transport_message_links.transport_endpoint_id"
-    )
-    .innerJoin(
-      "transport_accounts",
-      "transport_accounts.id",
-      "transport_message_links.transport_account_id"
-    )
-    .select([
-      "transport_message_links.external_message_id as externalMessageId",
-      "transport_endpoints.external_id as endpointExternalId",
-      "transport_endpoints.endpoint_type as endpointType",
-      "transport_accounts.transport_kind as transportKind",
-      "transport_accounts.id as transportAccountId",
-      "transport_message_links.created_at as createdAt",
-    ])
-    .where("transport_message_links.conversation_id", "=", conversationId)
-    .where("transport_message_links.direction", "=", "inbound")
-    .where(
-      sql<SqlBool>`NULLIF(BTRIM(transport_message_links.external_message_id), '') IS NOT NULL`
-    )
-    .where("transport_message_links.created_at", ">=", cutoffIso as any)
-    .orderBy("transport_message_links.created_at", "desc")
-    .limit(1)
-    .executeTakeFirst()
-  if (!row || !row.externalMessageId) return null
-  return {
-    externalMessageId: row.externalMessageId,
-    endpointExternalId: row.endpointExternalId,
-    endpointType: row.endpointType as "direct" | "group",
-    transportKind: String(row.transportKind),
-    transportAccountId: String(row.transportAccountId),
-    createdAt: serializeInstant(row.createdAt),
-  }
 }
 
 /**
@@ -313,7 +134,7 @@ export function computeStatusFallbackCutoffIso(
 ): IsoInstantString {
   return (
     runningTurn?.started_at ??
-    serializeInstant(new Date(now - starvationWindowMs))
+    presentStatusInstant(new Date(now - starvationWindowMs))
   )
 }
 
@@ -605,7 +426,7 @@ export function installActorStatusHooks(): () => void {
       let conversationId = String(payload.conversationId || "")
       if (!sessionId) return
       if (!conversationId) {
-        const looked = await resolveConversationIdForSession(sessionId)
+        const looked = await loadConversationIdForSession(sessionId)
         if (!looked) return
         conversationId = looked
       }

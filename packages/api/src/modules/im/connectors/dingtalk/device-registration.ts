@@ -23,6 +23,10 @@
  * matching is too fragile when the provider's error catalog evolves.
  */
 
+import { DINGTALK_DEVICE_FLOW_STATUS } from "@synapse/shared"
+import type { DingtalkDeviceFlowStatus } from "@synapse/shared/types"
+import { parseDingtalkProviderResponseText } from "./response-codec.js"
+
 export class RegistrationBusinessError extends Error {
   readonly providerErrcode?: number | string
   constructor(message: string, providerErrcode?: number | string) {
@@ -51,7 +55,7 @@ export interface RegistrationBeginResult {
 }
 
 export interface RegistrationPollResult {
-  status: "waiting" | "success" | "fail" | "expired"
+  status: DingtalkDeviceFlowStatus
   clientId?: string
   clientSecret?: string
   message?: string
@@ -111,13 +115,12 @@ async function postOpenclaw<T extends OpenclawApiResponse>(
       `dingtalk registration ${path} returned HTTP ${resp.status}: ${text.slice(0, 200)}`
     )
   }
-  let data: T
-  try {
-    data = (await resp.json()) as T
-  } catch (err) {
+  const text = await resp.text().catch(() => "")
+  const data = parseDingtalkProviderResponseText(text) as T | null
+  if (!data) {
     throw new RegistrationTransientError(
       `dingtalk registration ${path} returned non-JSON body`,
-      err
+      text
     )
   }
   const errcodeRaw = data.errcode
@@ -231,7 +234,7 @@ export function createOpenclawProvider(
         typeof data.status === "string" ? data.status.trim().toUpperCase() : ""
       switch (statusRaw) {
         case "WAITING":
-          return { status: "waiting" }
+          return { status: DINGTALK_DEVICE_FLOW_STATUS.WAITING }
         case "SUCCESS": {
           const clientId =
             typeof data.client_id === "string" ? data.client_id.trim() : ""
@@ -241,22 +244,26 @@ export function createOpenclawProvider(
               : ""
           if (!clientId || !clientSecret) {
             return {
-              status: "fail",
+              status: DINGTALK_DEVICE_FLOW_STATUS.FAIL,
               message:
                 "provider reported success but did not include credentials",
             }
           }
-          return { status: "success", clientId, clientSecret }
+          return {
+            status: DINGTALK_DEVICE_FLOW_STATUS.SUCCESS,
+            clientId,
+            clientSecret,
+          }
         }
         case "FAIL":
           return {
-            status: "fail",
+            status: DINGTALK_DEVICE_FLOW_STATUS.FAIL,
             message:
               (typeof data.fail_reason === "string" && data.fail_reason) ||
               "registration provider reported failure",
           }
         case "EXPIRED":
-          return { status: "expired" }
+          return { status: DINGTALK_DEVICE_FLOW_STATUS.EXPIRED }
         case "UNKNOWN":
         case "":
         default:
@@ -264,7 +271,7 @@ export function createOpenclawProvider(
           // status leak into the shared lowercase enum, and surface a
           // clear message to drive the UI to manual fallback.
           return {
-            status: "fail",
+            status: DINGTALK_DEVICE_FLOW_STATUS.FAIL,
             message:
               "registration provider returned unknown status; please retry or fall back to manual",
           }

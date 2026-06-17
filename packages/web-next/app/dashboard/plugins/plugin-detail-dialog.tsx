@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import type { MarketplacePluginView } from "@synapse/shared"
 import { Globe, Code, Puzzle, Wrench, Key } from "lucide-react"
 import { resolveFileUrl } from "@/lib/utils"
 
@@ -38,10 +39,16 @@ function translate(
 }
 
 interface Props {
-  plugin: any
+  plugin: MarketplacePluginView
   installedCount: number
   onInstall: () => void
   onClose: () => void
+}
+
+type PluginToolSummary = { name?: string; description?: string }
+
+function asToolSummary(value: unknown): PluginToolSummary {
+  return value && typeof value === "object" ? (value as PluginToolSummary) : {}
 }
 
 const transportLabels: Record<string, string> = {
@@ -64,11 +71,11 @@ export default function PluginDetailDialog({
   onInstall,
   onClose,
 }: Props) {
-  const tools = plugin.tools_manifest || []
-  const configFields = plugin.config_fields || []
-  const hasRequiredConfig = configFields.some((field: any) => field.required)
-  const locale = getLocale(plugin.default_locale)
-  const iconUrl = resolveFileUrl(plugin.icon_url)
+  const tools = plugin.toolsManifest || []
+  const configFields = plugin.configFields || []
+  const hasRequiredConfig = configFields.some((field) => field.required)
+  const locale = getLocale(plugin.defaultLocale)
+  const iconUrl = resolveFileUrl(plugin.iconUrl)
 
   return (
     <Dialog open onOpenChange={() => onClose()}>
@@ -79,7 +86,7 @@ export default function PluginDetailDialog({
               {iconUrl ? (
                 <img
                   src={iconUrl}
-                  alt={plugin.display_name}
+                  alt={plugin.displayName}
                   className="h-8 w-8 rounded-md object-contain"
                 />
               ) : plugin.transport === "http" ? (
@@ -93,13 +100,13 @@ export default function PluginDetailDialog({
             <div>
               <DialogTitle>
                 {translate(
-                  plugin.display_name_i18n,
+                  plugin.displayNameI18n,
                   locale,
-                  plugin.default_locale || "en"
-                ) || plugin.display_name}
+                  plugin.defaultLocale || "en"
+                ) || plugin.displayName}
               </DialogTitle>
               <p className="text-sm text-muted-foreground">
-                {plugin.org_display_name} · v{plugin.version}
+                {plugin.orgDisplayName} · v{plugin.version}
               </p>
             </div>
           </div>
@@ -108,11 +115,11 @@ export default function PluginDetailDialog({
         <div className="mt-2 space-y-4">
           <p className="text-sm text-muted-foreground">
             {translate(
-              plugin.long_description_i18n || plugin.description_i18n,
+              plugin.longDescriptionI18n || plugin.descriptionI18n,
               locale,
-              plugin.default_locale || "en"
+              plugin.defaultLocale || "en"
             ) ||
-              plugin.long_description ||
+              plugin.longDescription ||
               plugin.description}
           </p>
 
@@ -128,10 +135,9 @@ export default function PluginDetailDialog({
               className="border-gray-200 dark:border-white/10"
             >
               Runtime:{" "}
-              {reuseScopeLabels[plugin.lifecycle_scope] ||
-                plugin.lifecycle_scope}
+              {reuseScopeLabels[plugin.lifecycleScope] || plugin.lifecycleScope}
             </Badge>
-            {(plugin.categories || []).map((category: any) => (
+            {(plugin.categories || []).map((category) => (
               <Badge
                 key={category.slug}
                 variant="outline"
@@ -178,19 +184,22 @@ export default function PluginDetailDialog({
                 Tools ({tools.length})
               </h4>
               <div className="space-y-2">
-                {tools.map((tool: any) => (
-                  <div
-                    key={tool.name}
-                    className="rounded border border-gray-200 bg-gray-50 p-2 dark:border-white/10 dark:bg-white/5"
-                  >
-                    <p className="font-mono text-sm font-medium text-blue-400">
-                      {tool.name}
-                    </p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {tool.description}
-                    </p>
-                  </div>
-                ))}
+                {tools.map((rawTool) => {
+                  const tool = asToolSummary(rawTool)
+                  return (
+                    <div
+                      key={tool.name}
+                      className="rounded border border-gray-200 bg-gray-50 p-2 dark:border-white/10 dark:bg-white/5"
+                    >
+                      <p className="font-mono text-sm font-medium text-blue-400">
+                        {tool.name}
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {tool.description}
+                      </p>
+                    </div>
+                  )
+                })}
               </div>
             </div>
           )}

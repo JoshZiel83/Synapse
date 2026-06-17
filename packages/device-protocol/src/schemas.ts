@@ -24,6 +24,9 @@ import {
   DEVICE_TRUST_STATUSES,
   DEVICE_TYPES,
   HOST_KINDS,
+  REMOTE_AGENT_RUNTIME_CATALOG_STATUSES,
+  REMOTE_AGENT_RUNTIME_KINDS,
+  REMOTE_AGENT_RUNTIME_STATES,
   RUNTIME_AUTHORIZATION_BROWSER_OPERATIONS,
   RUNTIME_AUTHORIZATION_CAPABILITIES,
   RUNTIME_AUTHORIZATION_GRANT_RETENTIONS,
@@ -113,14 +116,10 @@ export const RuntimeBrowserPolicySchema = z.object({
     .optional(),
 })
 
-// Commandline policy on the wire (snake_case). Mirrors the equivalent
-// shared schema (packages/shared/src/access/policies/commandline.ts —
-// WireCommandlinePolicySchema) but is duplicated here to preserve
-// device-protocol's package-independence (no @synapse/shared dep so we
-// don't invert the dependency graph). A parity test in
-// packages/api/src/modules/capability-projection/commandline-parity.test.ts
-// asserts both copies accept/reject identical sample inputs so a field
-// drift fails CI.
+// Commandline policy on the wire (snake_case). This is the canonical schema for
+// signed envelopes and persisted grant_specs JSON. @synapse/shared exposes a
+// compatibility alias named WireCommandlinePolicySchema, but must not redeclare
+// a second schema copy.
 
 const ShellWireSchema = z.object({
   executor: z.enum(["bash", "powershell"]),
@@ -146,8 +145,7 @@ const ExecFileWireSchema = z.object({
 })
 
 // Sandbox confinement variant — no command/argv matcher (isolation is the
-// boundary). Must stay byte-for-byte aligned with the shared
-// SandboxPolicyWireSchema (enforced by commandline-parity.test.ts).
+// boundary).
 const SandboxWireSchema = z.object({
   executor: z.literal("sandbox"),
   working_directory: z.string().optional(),
@@ -203,16 +201,10 @@ export const RuntimeAuthorizationGrantSpecSchema = z
       })
     }
   })
-/** @deprecated camelCase API-side spec; wire (snake_case) consumers should use
- * RuntimeAuthorizationGrantWireSpec. API-side camelCase consumers should
- * import SharedRuntimeAuthorizationGrantSpec from @synapse/shared. */
-export type RuntimeAuthorizationGrantSpec = z.infer<
-  typeof RuntimeAuthorizationGrantSpecSchema
->
-// subject-scope-refactor: wire-side snake_case alias. API code MUST disambiguate
-// (Shared* for camelCase, *WireSpec for snake_case). Bare
-// `RuntimeAuthorizationGrantSpec` is forbidden in packages/api/src (residue
-// scan in plan Batch 12).
+// subject-scope-refactor: wire-side snake_case spec. API code MUST disambiguate
+// (Shared* for camelCase from @synapse/shared, *WireSpec for snake_case here).
+// The old bare `RuntimeAuthorizationGrantSpec` alias was removed in round-6 P2-1
+// (it duplicated this type); use RuntimeAuthorizationGrantWireSpec on the wire.
 export type RuntimeAuthorizationGrantWireSpec = z.infer<
   typeof RuntimeAuthorizationGrantSpecSchema
 >
@@ -270,113 +262,33 @@ export type SynapseError = z.infer<typeof SynapseErrorSchema>
 
 // ───────────────────────────── REST DTOs ─────────────────────────────────────
 
-export const DeviceSummarySchema = z.object({
-  id: z.uuid(),
-  workspace_id: z.uuid(),
-  title: z.string(),
-  host_kind: z.enum(HOST_KINDS),
-  host_provider: z.string().nullable(),
-  device_type: z.enum(DEVICE_TYPES),
-  platform: z.string().nullable(),
-  trust_status: z.enum(DEVICE_TRUST_STATUSES),
-  last_seen_at: IsoInstantStringSchema.nullable(),
-  last_connected_at: IsoInstantStringSchema.nullable(),
-})
-export type DeviceSummary = z.infer<typeof DeviceSummarySchema>
+// Device read/management views (list / detail / service / capability) are
+// app-facing camelCase contracts owned by @synapse/shared
+// (schemas/devices.ts), consumed by web-next + the consumer-side device-sdk.
+// They are NOT machine/wire shapes, so they no longer live here (master plan
+// §2.3-6). The MANAGEMENT WRITE inputs (createCloudDevice / startPairing /
+// claimRemoteAgentDaemon / setActiveDeviceCapabilities) + the cloud RESULT
+// view are likewise app-facing camelCase and now live in @synapse/shared
+// (§5.1.1/§8.3). Only the true handshake wire shapes (consume / bootstrap /
+// control-plane) remain below — device-runtime/sandbox are their sole callers.
 
-export const DeviceServiceSummarySchema = z.object({
-  id: z.uuid(),
-  device_id: z.uuid(),
-  service_kind: z.enum(DEVICE_SERVICE_KINDS),
-  version: z.string().nullable(),
-  status: z.enum(DEVICE_SERVICE_STATUSES),
-  last_seen_at: IsoInstantStringSchema.nullable(),
-  remote_agent_machine_id: z.uuid().nullable(),
-})
-export type DeviceServiceSummary = z.infer<typeof DeviceServiceSummarySchema>
-
-export const DeviceCapabilitySummarySchema = z.object({
-  id: z.uuid(),
-  workspace_id: z.uuid(),
-  exposure_id: z.uuid(),
-  // v3.1: stable_key (e.g. "builtin/browser/navigation") so UI can group /
-  // filter without guessing from display_name. Needed by the Settings →
-  // Runtime Authorizations page to scope the operation chip list to
-  // operations the exposure can actually request.
-  exposure_stable_key: z.string(),
-  display_name: z.string(),
-  transport: z.enum(DEVICE_EXPOSURE_TRANSPORTS),
-  builtin_kind: z.enum(DEVICE_BUILTIN_KINDS).nullable(),
-  runtime_status: z.enum(DEVICE_EXPOSURE_RUNTIME_STATUSES),
-  // v3.1: exposure-level metadata pass-through. chrome-devtools-mcp provider
-  // sets metadata.enabled and metadata.disabledReason so the dashboard can
-  // render "Coming soon" / disabled rows without guessing.
-  metadata: z.record(z.string(), z.unknown()).nullable().optional(),
-})
-export type DeviceCapabilitySummary = z.infer<
-  typeof DeviceCapabilitySummarySchema
->
-
-export const DeviceDetailSchema = DeviceSummarySchema.extend({
-  description: z.string().nullable(),
-  owner_workspace_member_id: z.uuid().nullable(),
-  services: z.array(DeviceServiceSummarySchema),
-  capabilities: z.array(DeviceCapabilitySummarySchema),
-})
-export type DeviceDetail = z.infer<typeof DeviceDetailSchema>
-
-export const CreateCloudDeviceInputSchema = z.object({
-  workspace_id: z.uuid(),
-  title: z.string().min(1),
-  host_provider: z.literal("e2b"),
-  preset: z.string().optional(),
-})
-export type CreateCloudDeviceInput = z.infer<
-  typeof CreateCloudDeviceInputSchema
->
-
-// POST /workspaces/:wsId/devices/cloud returns the pending pairing-session
-// info, NOT a DeviceDetail. The sandbox runtime claims the device row via
-// /api/v1/devices/bootstrap with the bootstrap_token.
-export const CreateCloudDeviceResultSchema = z.object({
-  pending_device_id: z.uuid(),
-  bootstrap_token: z.string(),
-  pairing_session_id: z.uuid(),
-  expires_at: IsoInstantStringSchema,
-})
-export type CreateCloudDeviceResult = z.infer<
-  typeof CreateCloudDeviceResultSchema
->
-
-export const StartPairingInputSchema = z.object({
-  workspace_id: z.uuid(),
-  mode: z.enum(DEVICE_PAIRING_MODES),
-  title: z.string().optional(),
-  device_type: z.enum(DEVICE_TYPES).optional(),
-  // service_join only:
-  device_id: z.uuid().optional(),
-  requested_pubkey_fingerprint: z.string().optional(),
-  self_challenge: z.string().optional(),
-})
-export type StartPairingInput = z.infer<typeof StartPairingInputSchema>
-
-export const PairingTicketSchema = z.object({
-  pairing_session_id: z.uuid(),
-  mode: z.enum(DEVICE_PAIRING_MODES),
-  pairing_code: z.string().nullable(),
-  expires_at: IsoInstantStringSchema,
-  verification_uri: z.string().nullable(),
-  verification_uri_complete: z.string().nullable(),
-  status: z.enum(DEVICE_PAIRING_STATUSES),
-})
-export type PairingTicket = z.infer<typeof PairingTicketSchema>
-
+// Local-QR / service-join handshake. The runtime reports its self-describing
+// device facts (title / device_type / platform / arch) up-front so the API can
+// persist platformKey from pairing onwards (see device-runtime/src/pairing.ts:
+// without platform+arch the bundle-eligibility gate falls back to the
+// conservative-permissive branch). These were previously only modelled in the
+// API controller's local body schema — they are wire fields and belong here so
+// the runtime client, SDK, and API parse one source.
 export const ConsumePairingInputSchema = z.object({
   pairing_code: z.string().min(1),
   device_pubkey: z.string(),
   service_pubkey: z.string(),
   service_kind: z.enum(DEVICE_SERVICE_KINDS).default("device_runtime"),
   client_version: z.string().optional(),
+  title: z.string().optional(),
+  device_type: z.enum(DEVICE_TYPES).optional(),
+  platform: z.string().optional(),
+  arch: z.string().optional(),
 })
 export type ConsumePairingInput = z.infer<typeof ConsumePairingInputSchema>
 
@@ -388,23 +300,393 @@ export const ConsumePairingResultSchema = z.object({
 })
 export type ConsumePairingResult = z.infer<typeof ConsumePairingResultSchema>
 
-export const ClaimDaemonInputSchema = z.object({
-  remote_agent_machine_id: z.uuid(),
+// Cloud sandbox bootstrap handshake (§8.2). Runs INSIDE the sandbox on first
+// boot, exchanging the env-injected bootstrap_token for long-term device +
+// service credentials via POST /api/v1/devices/bootstrap. Unauthenticated; the
+// bootstrap_token IS the credential. The result intentionally mirrors
+// ConsumePairingResult (same logical handshake output, different entry path).
+export const CloudBootstrapInputSchema = z.object({
+  bootstrap_token: z.string().min(1),
+  device_pubkey: z.string().min(1),
+  service_pubkey: z.string().min(1),
+  client_version: z.string().optional(),
+  host_provider: z.string().optional(),
+  platform: z.string().optional(),
+  arch: z.string().optional(),
 })
-export type ClaimDaemonInput = z.infer<typeof ClaimDaemonInputSchema>
+export type CloudBootstrapInput = z.infer<typeof CloudBootstrapInputSchema>
 
-// subject-scope-refactor: SetActiveDeviceCapabilitiesInputSchema.target now
-// reuses ScopedSubjectTargetWireSchema — a strict whitelist that rejects
-// `workspace_member` subjects and any scoped combination outside
-// `actor+conversation` / `remote_agent+conversation`. wire field
-// `device_capability_ids` is unchanged (SDK + server protocol stability).
-export const SetActiveDeviceCapabilitiesInputSchema = z.object({
-  workspaceId: z.uuid(),
-  target: ScopedSubjectTargetWireSchema,
-  device_capability_ids: z.array(z.uuid()),
+export const CloudBootstrapResultSchema = z.object({
+  device_id: z.uuid(),
+  service_id: z.uuid(),
+  service_key_id: z.uuid(),
+  control_plane_url: z.string(),
 })
-export type SetActiveDeviceCapabilitiesInput = z.infer<
-  typeof SetActiveDeviceCapabilitiesInputSchema
+export type CloudBootstrapResult = z.infer<typeof CloudBootstrapResultSchema>
+
+// ─────────────── remote-agent daemon internal RPC (machine surface) ──────────
+// The remote-agent daemon (packages/remote-agent-daemon) talks to the API over
+// a machine-key-authenticated REST surface mounted under /api/v1/internal/* .
+// These are NOT app-facing ({ data }) endpoints — they are the daemon↔API
+// machine protocol, registered via wireRoute() and consumed only by the daemon.
+// The field set is snake_case because this is a machine/wire RPC surface. The
+// API maps these payloads to its internal camelCase service parameters at the
+// route boundary, and the daemon builds these same wire shapes before POSTing.
+// They live here so the API route parser and the daemon's request-body
+// construction reference ONE source instead of the previous split (API-local
+// zod schemas + daemon hand-built JSON literals).
+// Open payload arrays/records (questions / content_blocks / checklist /
+// collaboration_state / metadata) are deliberately passthrough — their inner
+// shape is owned by the agent-session/chat layers, not the transport.
+
+export const RemoteAgentUserInputTaskBodySchema = z.strictObject({
+  conversation_id: z.uuid(),
+  run_key: z.string().trim().min(1).max(255),
+  title: z.string().trim().min(1).max(255),
+  instructions: z.string().trim().max(5000).optional(),
+  questions: z.array(z.any()).min(1).max(4),
+  expires_at: IsoInstantStringSchema.optional(),
+})
+export type RemoteAgentUserInputTaskBody = z.infer<
+  typeof RemoteAgentUserInputTaskBodySchema
+>
+
+export const RemoteAgentPlanApprovalTaskBodySchema = z.strictObject({
+  conversation_id: z.uuid(),
+  run_key: z.string().trim().min(1).max(255),
+  title: z.string().trim().min(1).max(255),
+  summary: z.string().trim().max(5000).optional(),
+  plan_markdown: z.string().trim().min(1),
+  checklist: z.array(z.any()).optional(),
+  collaboration_mode: z.string().trim().max(120).optional(),
+  collaboration_state: z.record(z.string(), z.any()).optional(),
+  expires_at: IsoInstantStringSchema.optional(),
+})
+export type RemoteAgentPlanApprovalTaskBody = z.infer<
+  typeof RemoteAgentPlanApprovalTaskBodySchema
+>
+
+export const RemoteAgentSendMessageBodySchema = z.strictObject({
+  conversation_id: z.uuid(),
+  client_message_id: z.uuid().optional(),
+  content_blocks: z.array(z.any()).min(1),
+  reply_to_item_id: z.uuid().optional(),
+  metadata: z.record(z.string(), z.any()).optional(),
+})
+export type RemoteAgentSendMessageBody = z.infer<
+  typeof RemoteAgentSendMessageBodySchema
+>
+
+export const RemoteAgentCompleteDeliveriesBodySchema = z.strictObject({
+  delivery_ids: z.array(z.uuid()).min(1),
+})
+export type RemoteAgentCompleteDeliveriesBody = z.infer<
+  typeof RemoteAgentCompleteDeliveriesBodySchema
+>
+
+export const RemoteAgentFailDeliveriesBodySchema = z.strictObject({
+  delivery_ids: z.array(z.uuid()).min(1),
+  reason: z.string().trim().max(2000).optional(),
+})
+export type RemoteAgentFailDeliveriesBody = z.infer<
+  typeof RemoteAgentFailDeliveriesBodySchema
+>
+
+export const RemoteAgentHistoryQuerySchema = z.strictObject({
+  after_sequence: z.coerce.number().int().min(0).optional(),
+  before_sequence: z.coerce.number().int().min(0).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+})
+export type RemoteAgentHistoryQuery = z.infer<
+  typeof RemoteAgentHistoryQuerySchema
+>
+
+export const RemoteAgentCheckMessagesQuerySchema = z.strictObject({
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+})
+export type RemoteAgentCheckMessagesQuery = z.infer<
+  typeof RemoteAgentCheckMessagesQuerySchema
+>
+
+export const RemoteAgentSearchMessagesQuerySchema = z.strictObject({
+  conversation_id: z.uuid(),
+  q: z.string().trim().min(1).max(512),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+})
+export type RemoteAgentSearchMessagesQuery = z.infer<
+  typeof RemoteAgentSearchMessagesQuerySchema
+>
+
+// Built-in reverse-MCP IM tool inputs. This is also a machine surface: the
+// remote-agent runtime calls the API's MCP endpoint, so these inputs stay
+// snake_case and the API maps them to internal camelCase service parameters.
+// Projected plugin/device tools keep their downstream-owned raw JSON Schema and
+// are intentionally not modeled here.
+export const RemoteAgentMcpListConversationsToolInputSchema = z.strictObject({})
+export type RemoteAgentMcpListConversationsToolInput = z.infer<
+  typeof RemoteAgentMcpListConversationsToolInputSchema
+>
+
+export const RemoteAgentMcpCheckMessagesToolInputSchema = z.strictObject({
+  limit: z.number().int().min(1).max(500).optional(),
+})
+export type RemoteAgentMcpCheckMessagesToolInput = z.infer<
+  typeof RemoteAgentMcpCheckMessagesToolInputSchema
+>
+
+export const RemoteAgentMcpReadHistoryToolInputSchema = z.strictObject({
+  after_sequence: z.number().int().min(0).optional(),
+  before_sequence: z.number().int().min(0).optional(),
+  limit: z.number().int().min(1).max(200).optional(),
+})
+export type RemoteAgentMcpReadHistoryToolInput = z.infer<
+  typeof RemoteAgentMcpReadHistoryToolInputSchema
+>
+
+export const RemoteAgentMcpSendMessageToolInputSchema = z.strictObject({
+  content: z.string().trim().min(1).max(20000),
+  reply_to_item_id: z.uuid().optional(),
+})
+export type RemoteAgentMcpSendMessageToolInput = z.infer<
+  typeof RemoteAgentMcpSendMessageToolInputSchema
+>
+
+export const RemoteAgentMcpSearchMessagesToolInputSchema = z.strictObject({
+  query: z.string().trim().min(1).max(512),
+  limit: z.number().int().min(1).max(100).optional(),
+})
+export type RemoteAgentMcpSearchMessagesToolInput = z.infer<
+  typeof RemoteAgentMcpSearchMessagesToolInputSchema
+>
+
+// Remote-agent daemon -> API WebSocket messages. This is the non-REST machine
+// surface under /ws/remote-agents. It uses snake_case wire keys, and the API
+// converts these to internal camelCase records inside remote-agents/wire.ts.
+const RemoteAgentRuntimeKindWireSchema = z.enum(REMOTE_AGENT_RUNTIME_KINDS)
+const RemoteAgentRuntimeStateWireSchema = z.enum(REMOTE_AGENT_RUNTIME_STATES)
+const RemoteAgentRuntimeCatalogStatusWireSchema = z.enum(
+  REMOTE_AGENT_RUNTIME_CATALOG_STATUSES
+)
+
+export const RemoteAgentRuntimeCapabilityWireSchema = z.strictObject({
+  supports_request_user_input: z.boolean().optional(),
+  supports_plan_mode: z.boolean().optional(),
+  supports_persistent_session: z.boolean().optional(),
+  supports_codex_app_server: z.boolean().optional(),
+  supports_structured_io: z.boolean().optional(),
+})
+export type RemoteAgentRuntimeCapabilityWire = z.infer<
+  typeof RemoteAgentRuntimeCapabilityWireSchema
+>
+
+export const RemoteAgentRuntimeCatalogEntryWireSchema = z.strictObject({
+  runtime_kind: RemoteAgentRuntimeKindWireSchema,
+  executable_path: z.string().optional(),
+  status: RemoteAgentRuntimeCatalogStatusWireSchema,
+  version: z.string().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+  last_error: z.string().optional(),
+})
+export type RemoteAgentRuntimeCatalogEntryWire = z.infer<
+  typeof RemoteAgentRuntimeCatalogEntryWireSchema
+>
+
+export const RemoteAgentMachineHeartbeatMessageSchema = z.strictObject({
+  type: z.literal("heartbeat"),
+})
+export type RemoteAgentMachineHeartbeatMessage = z.infer<
+  typeof RemoteAgentMachineHeartbeatMessageSchema
+>
+
+export const RemoteAgentMachineReadyMessageSchema = z.strictObject({
+  type: z.literal("ready"),
+  runtime_catalog: z.array(RemoteAgentRuntimeCatalogEntryWireSchema),
+})
+export type RemoteAgentMachineReadyMessage = z.infer<
+  typeof RemoteAgentMachineReadyMessageSchema
+>
+
+export const RemoteAgentRuntimeCatalogMessageSchema = z.strictObject({
+  type: z.literal("runtime:catalog"),
+  runtime_catalog: z.array(RemoteAgentRuntimeCatalogEntryWireSchema),
+})
+export type RemoteAgentRuntimeCatalogMessage = z.infer<
+  typeof RemoteAgentRuntimeCatalogMessageSchema
+>
+
+export const RemoteAgentSessionMessageSchema = z.strictObject({
+  type: z.literal("agent:session"),
+  remote_agent_id: z.string().min(1),
+  conversation_id: z.string().min(1),
+  state: RemoteAgentRuntimeStateWireSchema.optional(),
+  session_id: z.string().nullable().optional(),
+})
+export type RemoteAgentSessionMessage = z.infer<
+  typeof RemoteAgentSessionMessageSchema
+>
+
+export const RemoteAgentStatusMessageSchema = z.strictObject({
+  type: z.literal("agent:status"),
+  remote_agent_id: z.string().min(1),
+  state: RemoteAgentRuntimeStateWireSchema,
+  status_text: z.string().nullable().optional(),
+  conversation_id: z.string().nullable().optional(),
+  task_id: z.string().nullable().optional(),
+  session_id: z.string().nullable().optional(),
+  last_error: z.string().nullable().optional(),
+  run_key: z.string().nullable().optional(),
+  capabilities: RemoteAgentRuntimeCapabilityWireSchema.optional(),
+})
+export type RemoteAgentStatusMessage = z.infer<
+  typeof RemoteAgentStatusMessageSchema
+>
+
+export const RemoteAgentDaemonToApiWsMessageSchema = z.discriminatedUnion(
+  "type",
+  [
+    RemoteAgentMachineHeartbeatMessageSchema,
+    RemoteAgentMachineReadyMessageSchema,
+    RemoteAgentRuntimeCatalogMessageSchema,
+    RemoteAgentSessionMessageSchema,
+    RemoteAgentStatusMessageSchema,
+  ]
+)
+export type RemoteAgentDaemonToApiWsMessage = z.infer<
+  typeof RemoteAgentDaemonToApiWsMessageSchema
+>
+
+export type RemoteAgentDaemonToApiWsFrameParseResult =
+  | {
+      ok: true
+      message: RemoteAgentDaemonToApiWsMessage
+    }
+  | {
+      ok: false
+      error: "parse_error" | "invalid_message"
+      details?: z.ZodError
+    }
+
+export function parseRemoteAgentDaemonToApiWsFrame(
+  raw: string
+): RemoteAgentDaemonToApiWsFrameParseResult {
+  let json: unknown
+  try {
+    json = JSON.parse(raw)
+  } catch {
+    return { ok: false, error: "parse_error" }
+  }
+
+  const parsed = RemoteAgentDaemonToApiWsMessageSchema.safeParse(json)
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: "invalid_message",
+      details: parsed.error,
+    }
+  }
+
+  return { ok: true, message: parsed.data }
+}
+
+export const RemoteAgentApiConnectedMessageSchema = z.strictObject({
+  type: z.literal("connected"),
+  machine_id: z.string().min(1),
+  session_id: z.string().min(1),
+  fencing_token: z.string().optional(),
+})
+export type RemoteAgentApiConnectedMessage = z.infer<
+  typeof RemoteAgentApiConnectedMessageSchema
+>
+
+export const RemoteAgentApiAuthErrorMessageSchema = z.strictObject({
+  type: z.literal("auth_error"),
+  message: z.string().min(1),
+})
+export type RemoteAgentApiAuthErrorMessage = z.infer<
+  typeof RemoteAgentApiAuthErrorMessageSchema
+>
+
+export const RemoteAgentApiFencedMessageSchema = z.strictObject({
+  type: z.literal("fenced"),
+  reason: z.string().optional(),
+})
+export type RemoteAgentApiFencedMessage = z.infer<
+  typeof RemoteAgentApiFencedMessageSchema
+>
+
+export const RemoteAgentApiPongMessageSchema = z.strictObject({
+  type: z.literal("pong"),
+})
+export type RemoteAgentApiPongMessage = z.infer<
+  typeof RemoteAgentApiPongMessageSchema
+>
+
+export const RemoteAgentApiStartMessageSchema = z.strictObject({
+  type: z.literal("agent:start"),
+  remote_agent_id: z.string().min(1),
+  conversation_id: z.string().min(1).nullable().optional(),
+  runtime_kind: RemoteAgentRuntimeKindWireSchema,
+  runtime_path: z.string().nullable().optional(),
+  local_root_path: z.string().nullable().optional(),
+  session_id: z.string().nullable().optional(),
+  fencing_token: z.string().optional(),
+  server_url: z.string().optional(),
+})
+export type RemoteAgentApiStartMessage = z.infer<
+  typeof RemoteAgentApiStartMessageSchema
+>
+
+export const RemoteAgentApiStopMessageSchema = z.strictObject({
+  type: z.literal("agent:stop"),
+  remote_agent_id: z.string().min(1),
+})
+export type RemoteAgentApiStopMessage = z.infer<
+  typeof RemoteAgentApiStopMessageSchema
+>
+
+export const RemoteAgentApiDeliveryWireSchema = z.strictObject({
+  remote_agent_id: z.string().min(1),
+  delivery_id: z.string().min(1),
+  conversation_id: z.string().min(1),
+  item_id: z.string().min(1),
+})
+export type RemoteAgentApiDeliveryWire = z.infer<
+  typeof RemoteAgentApiDeliveryWireSchema
+>
+
+export const RemoteAgentApiDeliverMessageSchema = z.strictObject({
+  type: z.literal("agent:deliver"),
+  deliveries: z.array(RemoteAgentApiDeliveryWireSchema),
+})
+export type RemoteAgentApiDeliverMessage = z.infer<
+  typeof RemoteAgentApiDeliverMessageSchema
+>
+
+export const RemoteAgentApiTaskResolvedMessageSchema = z.strictObject({
+  type: z.literal("agent:task:resolved"),
+  remote_agent_id: z.string().min(1),
+  task_id: z.string().min(1),
+  task: z.record(z.string(), z.unknown()),
+})
+export type RemoteAgentApiTaskResolvedMessage = z.infer<
+  typeof RemoteAgentApiTaskResolvedMessageSchema
+>
+
+export const RemoteAgentApiToDaemonWsMessageSchema = z.discriminatedUnion(
+  "type",
+  [
+    RemoteAgentApiConnectedMessageSchema,
+    RemoteAgentApiAuthErrorMessageSchema,
+    RemoteAgentApiFencedMessageSchema,
+    RemoteAgentApiPongMessageSchema,
+    RemoteAgentApiStartMessageSchema,
+    RemoteAgentApiStopMessageSchema,
+    RemoteAgentApiDeliverMessageSchema,
+    RemoteAgentApiTaskResolvedMessageSchema,
+  ]
+)
+export type RemoteAgentApiToDaemonWsMessage = z.infer<
+  typeof RemoteAgentApiToDaemonWsMessageSchema
 >
 
 // ───────────────────────────── Control Plane messages (§7.1) ────────────────
@@ -417,6 +699,39 @@ export const JsonRpcRequestSchema = z.object({
   params: z.unknown().optional(),
 })
 export type JsonRpcRequest = z.infer<typeof JsonRpcRequestSchema>
+
+export type JsonRpcRequestFrameParseResult =
+  | {
+      ok: true
+      request: JsonRpcRequest
+    }
+  | {
+      ok: false
+      error: "parse_error" | "invalid_request"
+      details?: z.ZodError
+    }
+
+export function parseJsonRpcRequestFrame(
+  raw: string
+): JsonRpcRequestFrameParseResult {
+  let json: unknown
+  try {
+    json = JSON.parse(raw)
+  } catch {
+    return { ok: false, error: "parse_error" }
+  }
+
+  const parsed = JsonRpcRequestSchema.safeParse(json)
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: "invalid_request",
+      details: parsed.error,
+    }
+  }
+
+  return { ok: true, request: parsed.data }
+}
 
 export const JsonRpcResponseSchema = z.object({
   jsonrpc: z.literal("2.0"),
@@ -473,6 +788,76 @@ export const DeviceServiceStatusParamsSchema = z.object({
   status: z.enum(DEVICE_SERVICE_STATUSES),
   detail: z.string().optional(),
 })
+export type DeviceServiceStatusParams = z.infer<
+  typeof DeviceServiceStatusParamsSchema
+>
+
+export const DeviceTunnelUpParamsSchema = z.object({
+  internal_url: z.string(),
+})
+export type DeviceTunnelUpParams = z.infer<typeof DeviceTunnelUpParamsSchema>
+
+export const DeviceTunnelDownParamsSchema = z.object({
+  reason: z.string().optional(),
+})
+export type DeviceTunnelDownParams = z.infer<
+  typeof DeviceTunnelDownParamsSchema
+>
+
+export const DeviceRuntimeSessionOpenedParamsSchema = z.object({
+  runtime_session_id: z.uuid(),
+  conversation_id: z.uuid().nullable().optional(),
+  actor_id: z.uuid().nullable().optional(),
+})
+export type DeviceRuntimeSessionOpenedParams = z.infer<
+  typeof DeviceRuntimeSessionOpenedParamsSchema
+>
+
+export const DeviceRuntimeSessionClosedParamsSchema = z.object({
+  runtime_session_id: z.uuid(),
+})
+export type DeviceRuntimeSessionClosedParams = z.infer<
+  typeof DeviceRuntimeSessionClosedParamsSchema
+>
+
+export const DeviceTaskRefParamsSchema = z.object({
+  operation_id: z.uuid(),
+  attempt_id: z.uuid().optional(),
+})
+export type DeviceTaskRefParams = z.infer<typeof DeviceTaskRefParamsSchema>
+
+export const DeviceTaskOutputParamsSchema = DeviceTaskRefParamsSchema.extend({
+  output: z.unknown(),
+})
+export type DeviceTaskOutputParams = z.infer<
+  typeof DeviceTaskOutputParamsSchema
+>
+
+export const DeviceTaskResultParamsSchema = DeviceTaskRefParamsSchema.extend({
+  ok: z.boolean(),
+  error_code: z.string().optional(),
+  error_message: z.string().optional(),
+  result_hash: z.string().optional(),
+})
+export type DeviceTaskResultParams = z.infer<
+  typeof DeviceTaskResultParamsSchema
+>
+
+export const DeviceEventEmitParamsSchema = z.object({
+  event_type: z.string().min(1).max(80),
+  level: z.enum(["debug", "info", "warn", "error"]).optional(),
+  conversation_id: z.uuid().nullable().optional(),
+  payload: z.record(z.string(), z.unknown()).optional(),
+})
+export type DeviceEventEmitParams = z.infer<typeof DeviceEventEmitParamsSchema>
+
+export const DeviceVfsExposureUpsertParamsSchema = z.object({
+  exposure_id: z.uuid(),
+  vfs: z.record(z.string(), z.unknown()),
+})
+export type DeviceVfsExposureUpsertParams = z.infer<
+  typeof DeviceVfsExposureUpsertParamsSchema
+>
 
 // server → device
 export const ServerRuntimeSessionOpenParamsSchema = z.object({

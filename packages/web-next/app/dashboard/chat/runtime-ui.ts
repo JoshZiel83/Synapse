@@ -5,6 +5,7 @@ import type {
   RemoteAgentRuntimeState,
 } from "@synapse/shared"
 import {
+  ACTOR_RUNTIME_HEALTH,
   getActorRuntimeCurrentTool,
   getActorRuntimePriority,
   getActorRuntimeProcessingTargets,
@@ -64,7 +65,10 @@ export function getRuntimeLabel(
         return "Idle"
     }
   }
-  if (runtime.health === "error" || runtime.laneState === "blocked") {
+  if (
+    runtime.health === ACTOR_RUNTIME_HEALTH.ERROR ||
+    runtime.laneState === "blocked"
+  ) {
     return "Error"
   }
   if (runtime.laneState === "running") return "Working"
@@ -125,7 +129,9 @@ export function summarizeRuntimePreview(
   const lead = names.slice(0, 2).join(", ")
   const suffix = names.length > 2 ? ` +${names.length - 2}` : ""
   const blocked = activeRuntimes.find(
-    (runtime) => runtime.health === "error" || runtime.laneState === "blocked"
+    (runtime) =>
+      runtime.health === ACTOR_RUNTIME_HEALTH.ERROR ||
+      runtime.laneState === "blocked"
   )
   if (blocked) {
     return `${lead}${suffix} · ${blocked.lastError?.message || "Needs attention"}`

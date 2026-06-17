@@ -162,8 +162,8 @@ export function WorkspaceEntityPickerScreen({
 
     try {
       if (mode === WORKSPACE_ENTITY_PICKER_MODE.ACTOR) {
-        const response = await api.getActors(workspaceId)
-        setActors(response.actors.filter((actor) => actor.isActive))
+        const actors = await api.getActors(workspaceId)
+        setActors(actors.filter((actor) => actor.isActive))
         setHub(null)
       } else {
         const response = await api.getContactHub(workspaceId)
@@ -311,7 +311,7 @@ export function WorkspaceEntityPickerScreen({
     if (mode === WORKSPACE_ENTITY_PICKER_MODE.ACTOR) {
       return actors.map((actor) => ({
         key: actor.id,
-        title: actor.definition.name,
+        title: actor.definition.displayName,
         subtitle:
           actor.definition.role || actor.definition.title || "工作区 Actor",
         avatarUrl: actor.avatarUrl || null,

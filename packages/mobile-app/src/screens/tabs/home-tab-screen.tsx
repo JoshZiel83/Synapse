@@ -77,14 +77,12 @@ export default function HomeTabScreen() {
     }
 
     try {
-      const [actorsResponse, preferenceResponse] = await Promise.all([
+      const [actors, preferenceResponse] = await Promise.all([
         api.getActors(workspaceId),
         api.getWorkspaceChiefActorPreference(workspaceId).catch(() => null),
       ])
 
-      const activeActors = actorsResponse.actors.filter(
-        (actor) => actor.isActive
-      )
+      const activeActors = actors.filter((actor) => actor.isActive)
 
       setActors(activeActors)
       setSelectedActorId(
@@ -129,7 +127,7 @@ export default function HomeTabScreen() {
       const response = await createConversation({
         kind: "group",
         actorIds: [selectedActor.id],
-        title: selectedActor.definition.name,
+        title: selectedActor.definition.displayName,
       })
       const conversationId = response.conversation.conversationId
 

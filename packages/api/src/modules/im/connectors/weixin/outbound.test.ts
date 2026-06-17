@@ -86,6 +86,34 @@ test(
 )
 
 test(
+  "falls back to client_id when provider success response has no message id",
+  withFetchStub('{"ret":0,"errcode":0}', async (captured) => {
+    const result = await sendWeixinMessage({
+      account: baseAccount(),
+      endpoint: endpoint({ contextToken: "ctx-from-endpoint" }),
+      message: textMessage(),
+    })
+
+    const body = JSON.parse(captured[0].body)
+    assert.equal(result.externalMessageId, body.msg.client_id)
+  })
+)
+
+test(
+  "rejects malformed provider success response instead of falling back to client_id",
+  withFetchStub("{not-json", async () => {
+    await assert.rejects(
+      sendWeixinMessage({
+        account: baseAccount(),
+        endpoint: endpoint({ contextToken: "ctx-from-endpoint" }),
+        message: textMessage(),
+      }),
+      /invalid provider response/
+    )
+  })
+)
+
+test(
   "contextToken falls back to endpoint.metadata when recipientAddressMetadata is missing",
   withFetchStub('{"msg_id":"server_msg_2"}', async (captured) => {
     await sendWeixinMessage({

@@ -23,18 +23,30 @@ import { nowIsoInstant } from "@synapse/shared/datetime"
 import { randomBytes, randomUUID } from "node:crypto"
 import type { FastifyInstance, FastifyRequest } from "fastify"
 import type { WebSocket } from "ws"
-import { sql } from "kysely"
 import { formatValidationDetails } from "../../infrastructure/validation-error.js"
+import { wireRoute } from "../../infrastructure/http/route.js"
 import {
   DeviceCatalogSyncParamsSchema,
   DeviceHelloParamsSchema,
+  DeviceTunnelDownParamsSchema,
+  DeviceTunnelUpParamsSchema,
+  parseJsonRpcRequestFrame,
   type JsonRpcRequest,
 } from "@synapse/device-protocol"
-import { db, type KyselyDb } from "../../infrastructure/database/kysely.js"
+import type { KyselyDb } from "../../infrastructure/database/kysely.js"
 import { persistCatalogSync } from "./catalog-sync.js"
 import { authenticateDeviceHello } from "./control-plane-auth.js"
 import { getEnvelopeServerPublicKey } from "./envelope-signer.js"
 import { getDeviceTunnelRegistry } from "./tunnel-registry.js"
+import {
+  insertControlPlaneSession as insertControlPlaneSessionRow,
+  issueTunnelPathToken,
+  selectControlPlaneSessionDeviceId,
+  closeControlPlaneSessionRows,
+  getDeviceWorkspaceId,
+  selectTunnelPathToken,
+  hasLiveLocalSandboxMount,
+} from "./repo.js"
 import {
   persistDeviceEventEmit,
   persistRuntimeSessionClosed,
@@ -48,29 +60,6 @@ import {
   failInFlightDeviceTasksForDevice,
   type PersistResult,
 } from "./control-plane-events.js"
-
-interface ParsedFrame {
-  raw: string
-  json: unknown
-}
-
-function parseFrame(raw: string): ParsedFrame {
-  return { raw, json: JSON.parse(raw) }
-}
-
-function asJsonRpcRequest(value: unknown): JsonRpcRequest | null {
-  if (
-    value &&
-    typeof value === "object" &&
-    "jsonrpc" in value &&
-    (value as { jsonrpc: unknown }).jsonrpc === "2.0" &&
-    "method" in value &&
-    typeof (value as { method: unknown }).method === "string"
-  ) {
-    return value as JsonRpcRequest
-  }
-  return null
-}
 
 function writeResult(
   socket: WebSocket,
@@ -142,10 +131,11 @@ function writePersistResult(
 export async function validateTunnelInternalUrl(args: {
   candidate: string
   deviceServiceId: string
-  /** Executor seam (defaults to the global db); tests inject a testcontainer db. */
+  /** Executor seam (the repo defaults to the global db); tests inject a
+   *  testcontainer db, threaded down to the repo reads. */
   executor?: KyselyDb
 }): Promise<{ ok: true } | { ok: false; message: string }> {
-  const executor = args.executor ?? db
+  const executor = args.executor
   let candidateUrl: URL
   try {
     candidateUrl = new URL(args.candidate)
@@ -201,7 +191,7 @@ export async function validateTunnelInternalUrl(args: {
 async function validateFrpEdgeUrl(args: {
   candidateUrl: URL
   deviceServiceId: string
-  executor: KyselyDb
+  executor: KyselyDb | undefined
 }): Promise<{ ok: true } | { ok: false; message: string }> {
   const tokenMatch = /\/d\/([^/]+)/.exec(args.candidateUrl.pathname)
   if (!tokenMatch) {
@@ -215,12 +205,10 @@ async function validateFrpEdgeUrl(args: {
   // it on the device_services row. Any mismatch means either the device is
   // out of sync (re-registered without re-reading the ack) or is attempting
   // to claim a peer's route — either way we reject.
-  const row = await args.executor
-    .selectFrom("device_services")
-    .select(["tunnel_path_token"])
-    .where("id", "=", args.deviceServiceId)
-    .executeTakeFirst()
-  const expectedToken = (row?.tunnel_path_token as string | null) ?? null
+  const expectedToken = await selectTunnelPathToken(
+    args.deviceServiceId,
+    args.executor
+  )
   if (!expectedToken) {
     return {
       ok: false,
@@ -249,7 +237,7 @@ async function validateLocalLoopbackUrl(args: {
   candidateUrl: URL
   deviceServiceId: string
   hadTrustedPrefix: boolean
-  executor: KyselyDb
+  executor: KyselyDb | undefined
 }): Promise<{ ok: true } | { ok: false; message: string }> {
   const { candidateUrl } = args
   if (candidateUrl.protocol !== "http:") {
@@ -285,15 +273,10 @@ async function validateLocalLoopbackUrl(args: {
   // file_mounts row with sandbox_backend='local' that isn't closed/failed. Raw
   // status comparison (matching getActiveMountsForSession) so the file_mount_status
   // enum compares against literals without a parameterized-text cast mismatch.
-  const liveLocalMount = await args.executor
-    .selectFrom("file_mounts as m")
-    .innerJoin("device_services as s", "s.device_id", "m.device_id")
-    .select("m.id")
-    .where("s.id", "=", args.deviceServiceId)
-    .where("m.sandbox_backend", "=", "local")
-    .where(sql<boolean>`m.status NOT IN ('closed', 'failed')`)
-    .limit(1)
-    .executeTakeFirst()
+  const liveLocalMount = await hasLiveLocalSandboxMount(
+    args.deviceServiceId,
+    args.executor
+  )
   if (!liveLocalMount) {
     return {
       ok: false,
@@ -337,30 +320,13 @@ async function insertControlPlaneSession(args: {
   remoteAddr: string | null
 }): Promise<string> {
   const sessionId = randomUUID()
-  await db
-    .insertInto("device_control_plane_sessions")
-    .values({
-      id: sessionId,
-      device_id: args.deviceId,
-      service_id: args.serviceId,
-      protocol_version: 1,
-      client_version: args.clientVersion,
-      status: "active",
-      transport: "websocket",
-      remote_addr: args.remoteAddr,
-      last_sequence: 0,
-      last_heartbeat_at: sql`NOW()`,
-      started_at: sql`NOW()`,
-    } as never)
-    .execute()
-  await db
-    .updateTable("device_services")
-    .set({
-      current_session_id: sessionId,
-      last_seen_at: sql`NOW()`,
-    } as never)
-    .where("id", "=", args.serviceId)
-    .execute()
+  await insertControlPlaneSessionRow({
+    sessionId,
+    deviceId: args.deviceId,
+    serviceId: args.serviceId,
+    clientVersion: args.clientVersion,
+    remoteAddr: args.remoteAddr,
+  })
   return sessionId
 }
 
@@ -373,18 +339,7 @@ async function insertControlPlaneSession(args: {
  */
 async function ensureTunnelPathToken(serviceId: string): Promise<string> {
   const fresh = randomBytes(32).toString("hex")
-  await db
-    .updateTable("device_services")
-    .set({ tunnel_path_token: fresh } as never)
-    .where("id", "=", serviceId)
-    .where("tunnel_path_token", "is", null)
-    .execute()
-  const row = await db
-    .selectFrom("device_services")
-    .select(["tunnel_path_token"])
-    .where("id", "=", serviceId)
-    .executeTakeFirst()
-  const token = (row?.tunnel_path_token as string | null) ?? null
+  const token = await issueTunnelPathToken(serviceId, fresh)
   if (!token) {
     throw new Error(
       `device_services ${serviceId} disappeared while issuing tunnel_path_token`
@@ -398,33 +353,12 @@ async function closeControlPlaneSession(
   reason: string
 ): Promise<void> {
   try {
-    const sessionRow = await db
-      .selectFrom("device_control_plane_sessions")
-      .select("device_id")
-      .where("id", "=", sessionId)
-      .executeTakeFirst()
-    await db
-      .updateTable("device_control_plane_sessions")
-      .set({
-        status: "closed",
-        ended_at: sql`NOW()`,
-        close_reason: reason,
-      } as never)
-      .where("id", "=", sessionId)
-      .execute()
-    await db
-      .updateTable("device_services")
-      .set({
-        current_session_id: null,
-      } as never)
-      .where("current_session_id", "=", sessionId)
-      .execute()
+    const deviceId = await selectControlPlaneSessionDeviceId(sessionId)
+    await closeControlPlaneSessionRows(sessionId, reason)
     // Task unification (design §3.6): fail in-flight device_tool tasks so the
     // waiting agent is woken instead of hanging when the device drops.
-    if (sessionRow?.device_id) {
-      await failInFlightDeviceTasksForDevice(sessionRow.device_id).catch(
-        () => undefined
-      )
+    if (deviceId) {
+      await failInFlightDeviceTasksForDevice(deviceId).catch(() => undefined)
     }
   } catch {
     /* best effort; DB unavailability shouldn't block socket teardown */
@@ -432,10 +366,17 @@ async function closeControlPlaneSession(
 }
 
 export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
-  app.get(
+  // WIRE — device control-plane WebSocket (JSON-RPC 2.0 handshake). The
+  // handler owns the socket and sends bare frames; never a { data } envelope.
+  wireRoute(
+    app,
+    "GET",
     "/api/v1/devices/control-plane",
-    { websocket: true },
-    (socket: WebSocket, request: FastifyRequest) => {
+    { options: { websocket: true } },
+    // fastify-websocket invokes this with (socket, request) when
+    // websocket:true; the wireRoute handler type is (request, reply) so the
+    // socket-first arity is bridged via the register() cast.
+    ((socket: WebSocket, request: FastifyRequest) => {
       const state: ConnectionState = {
         challengeNonce: randomBytes(32).toString("hex"),
         helloSeen: false,
@@ -464,18 +405,16 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
       }
 
       socket.on("message", (raw) => {
-        let frame: ParsedFrame
-        try {
-          frame = parseFrame(String(raw))
-        } catch {
-          writeError(socket, null, -32700, "Parse error")
-          return
-        }
-        const req = asJsonRpcRequest(frame.json)
-        if (!req) {
+        const frame = parseJsonRpcRequestFrame(String(raw))
+        if (!frame.ok) {
+          if (frame.error === "parse_error") {
+            writeError(socket, null, -32700, "Parse error")
+            return
+          }
           writeError(socket, null, -32600, "Invalid request")
           return
         }
+        const req = frame.request
         switch (req.method) {
           case "device.hello": {
             if (state.helloSeen) {
@@ -526,13 +465,9 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
                 // Cache the device's workspace_id so per-message event
                 // persistence (runtime_events) doesn't have to re-query it.
                 try {
-                  const deviceRow = await db
-                    .selectFrom("devices")
-                    .select(["workspace_id"])
-                    .where("id", "=", result.deviceId)
-                    .executeTakeFirst()
-                  state.authenticatedWorkspaceId =
-                    (deviceRow?.workspace_id as string | undefined) ?? null
+                  state.authenticatedWorkspaceId = await getDeviceWorkspaceId(
+                    result.deviceId
+                  )
                 } catch {
                   /* workspace lookup is best-effort; event.emit will
                    * surface a structured error if it tries to write without
@@ -652,13 +587,16 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           }
           case "device.tunnel.up": {
             if (!requireAuthenticated(req)) return
-            const params = req.params as { internal_url?: unknown } | undefined
-            if (!params || typeof params.internal_url !== "string") {
+            const parsedTunnel = DeviceTunnelUpParamsSchema.safeParse(
+              req.params
+            )
+            if (!parsedTunnel.success) {
               writeError(
                 socket,
                 req.id ?? null,
                 -32602,
-                "device.tunnel.up: 'internal_url' (string) required"
+                "Invalid device.tunnel.up params",
+                formatValidationDetails(parsedTunnel.error)
               )
               return
             }
@@ -667,7 +605,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
             // present the server-issued tunnel_path_token for its own
             // service so peer devices can't squat on its route.
             validateTunnelInternalUrl({
-              candidate: params.internal_url,
+              candidate: parsedTunnel.data.internal_url,
               deviceServiceId: state.authenticatedServiceId!,
             })
               .then((validation) => {
@@ -682,7 +620,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
                 }
                 getDeviceTunnelRegistry().register({
                   deviceServiceId: state.authenticatedServiceId!,
-                  internalUrl: params.internal_url as string,
+                  internalUrl: parsedTunnel.data.internal_url,
                 })
                 state.registeredTunnelServiceId = state.authenticatedServiceId
                 writeResult(socket, req.id ?? null, { registered: true })
@@ -699,6 +637,19 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           }
           case "device.tunnel.down": {
             if (!requireAuthenticated(req)) return
+            const parsedTunnel = DeviceTunnelDownParamsSchema.safeParse(
+              req.params ?? {}
+            )
+            if (!parsedTunnel.success) {
+              writeError(
+                socket,
+                req.id ?? null,
+                -32602,
+                "Invalid device.tunnel.down params",
+                formatValidationDetails(parsedTunnel.error)
+              )
+              return
+            }
             if (state.registeredTunnelServiceId) {
               getDeviceTunnelRegistry().unregister(
                 state.registeredTunnelServiceId
@@ -906,6 +857,6 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           state.sessionId = null
         }
       })
-    }
+    }) as never
   )
 }

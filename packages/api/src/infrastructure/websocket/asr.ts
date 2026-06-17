@@ -18,6 +18,7 @@ import {
   registerAuthenticatedSocket,
   unregisterAuthenticatedSocket,
 } from "./auth-session-registry.js"
+import { parseRealtimeAsrClientFrame } from "./asr-client-frame.js"
 
 interface AsrWsClient {
   ws: any
@@ -182,7 +183,7 @@ export function setupAsrWebSocket(app: FastifyInstance) {
 
       let message: RealtimeAsrClientMessage
       try {
-        message = JSON.parse(raw.toString()) as RealtimeAsrClientMessage
+        message = parseRealtimeAsrClientFrame(raw.toString())
       } catch {
         return
       }

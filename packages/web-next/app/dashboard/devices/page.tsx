@@ -9,7 +9,7 @@ import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { api } from "@/lib/api"
 import { qk } from "@/lib/query-keys"
 import { Button } from "@/components/ui/button"
-import type { DevicePairingTicketView } from "@/lib/device-views"
+import type { DevicePairingTicketView } from "@synapse/shared"
 
 export default function DevicesIndexPage() {
   const { workspaceId } = useWorkspace()
@@ -20,7 +20,6 @@ export default function DevicesIndexPage() {
     queryKey: workspaceId ? qk.devices(workspaceId) : ["devices", "disabled"],
     queryFn: () => api.listDevices(workspaceId!),
     enabled: !!workspaceId,
-    select: (res) => res.devices,
   })
   const devices = devicesQuery.data ?? null
 
@@ -77,26 +76,26 @@ export default function DevicesIndexPage() {
             Already have the device runtime installed? Run:
           </p>
           <pre className="mt-2 overflow-x-auto rounded bg-muted p-3 text-sm">
-            synapse-device pair --code={pairingTicket.pairing_code} --title=
+            synapse-device pair --code={pairingTicket.pairingCode} --title=
             &quot;My Device&quot;
           </pre>
-          {pairingTicket.one_click_commands ? (
+          {pairingTicket.oneClickCommands ? (
             <div className="mt-4 space-y-2">
               <p className="text-sm text-muted-foreground">
                 Or one-click install (bootstraps Node, no prerequisites) — Linux
                 / macOS:
               </p>
               <pre className="overflow-x-auto rounded bg-muted p-3 text-xs">
-                {pairingTicket.one_click_commands.unix}
+                {pairingTicket.oneClickCommands.unix}
               </pre>
               <p className="text-sm text-muted-foreground">Windows:</p>
               <pre className="overflow-x-auto rounded bg-muted p-3 text-xs">
-                {pairingTicket.one_click_commands.windows}
+                {pairingTicket.oneClickCommands.windows}
               </pre>
             </div>
           ) : null}
           <p className="mt-2 text-xs text-muted-foreground">
-            Expires at {pairingTicket.expires_at}
+            Expires at {pairingTicket.expiresAt}
           </p>
         </div>
       ) : null}
@@ -122,13 +121,13 @@ export default function DevicesIndexPage() {
                   <div>
                     <div className="font-medium">{device.title}</div>
                     <div className="text-xs text-muted-foreground">
-                      {device.host_kind} · {device.device_type} ·{" "}
+                      {device.hostKind} · {device.deviceType} ·{" "}
                       {device.platform ?? "unknown platform"}
                     </div>
                   </div>
                 </div>
                 <span className="text-xs text-muted-foreground">
-                  {device.trust_status}
+                  {device.trustStatus}
                 </span>
               </Link>
             </li>

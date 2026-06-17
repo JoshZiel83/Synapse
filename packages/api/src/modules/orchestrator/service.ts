@@ -7,23 +7,18 @@ import type {
   UUID,
 } from "@synapse/shared"
 import { SUBJECT_KIND } from "@synapse/shared"
-import { db } from "../../infrastructure/database/kysely.js"
 import { createMemory, presetToOwnerScope } from "../memory/service.js"
 import type { MemoryPreset } from "../memory/service.js"
-import {
-  createGeneratedActorPixelArtAvatarFile,
-  type PixelArtAvatarOptionsInput,
-} from "../avatar/service.js"
+import { createGeneratedActorPixelArtAvatarFileDefault } from "../access/guards.js"
+import type { PixelArtAvatarOptionsInput } from "../avatar/service.js"
 import {
   getActor,
   updateActor,
   type ActorUpdateSourceInput,
 } from "../organization/service.js"
 import { getSession } from "../session/service.js"
-import {
-  createConversationEvent,
-  listConversationParticipants,
-} from "../chat/service.js"
+import { createConversationEvent } from "../chat/event-write.js"
+import { listConversationParticipantsUseCase as listConversationParticipants } from "../chat/participant-roster.js"
 
 const ACTOR_MEMORY_PRESETS = new Set<MemoryPreset>([
   "participant_private",
@@ -61,18 +56,21 @@ type ActorActionExecutionContext = {
   conversationId?: UUID
 }
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value))
+}
+
 function parsePixelArtAvatarOptions(
   value: unknown
 ): PixelArtAvatarOptionsInput {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isObjectRecord(value)) {
     return {}
   }
 
-  const source = value as Record<string, unknown>
   const options: Record<string, unknown> = {}
 
   for (const key of PIXEL_ART_OPTION_KEYS) {
-    const nextValue = source[key]
+    const nextValue = value[key]
     if (typeof nextValue === "string") {
       const trimmed = nextValue.trim()
       if (trimmed) {
@@ -330,7 +328,7 @@ async function handleChangeAvatar(
     const pixelArtOptions = parsePixelArtAvatarOptions(
       action.metadata?.pixelArt
     )
-    const avatarFile = await createGeneratedActorPixelArtAvatarFile(db, {
+    const avatarFile = await createGeneratedActorPixelArtAvatarFileDefault({
       workspaceId,
       actorId,
       actorDisplayName: actor.displayName || actor.definition.displayName,

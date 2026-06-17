@@ -3,24 +3,32 @@ import {
   isKnownModelVendor,
   validateModelProviderConfig,
 } from "@synapse/shared"
-import type {
-  ModelGroupsOwnerType,
-  ModelGroupsRoutingStrategy,
-} from "../../infrastructure/database/generated/db.js"
-import { db, type TableInsert } from "../../infrastructure/database/kysely.js"
-import {
-  serializeInstant,
-  serializeOptionalInstant,
-} from "../../infrastructure/datetime.js"
 import { MODEL_GROUP_GRANT_SCOPE } from "@synapse/shared/constants"
-import type { ModelGroupGrantScope } from "@synapse/shared/types"
+import type {
+  ModelGroupGrantScope,
+  ModelGroupOwnerType,
+  ModelGroupRoutingStrategy,
+} from "@synapse/shared/types"
 import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
-import { upsertAccessSubject } from "../access/subject-registry.js"
+import { upsertAccessSubjectDefault } from "../access/guards.js"
 import { logProviderStep, logRuntimeEvent } from "../execution/service.js"
-import { sql } from "kysely"
+import type {
+  ModelBindingVersionsFeatures,
+  ModelBindingVersionsProviderOptions,
+  ModelGroupsAttemptPolicy,
+} from "./repo.types.js"
+import {
+  dbRowToGrantRow,
+  type ActorModelGroupAssignmentRow,
+  type ModelGroupDetailRecord,
+  type ModelGroupGrantRow,
+  type ModelGroupItemRow,
+  type ModelGroupItemVersionRow,
+  type ModelGroupRow,
+} from "./presenter.js"
+import * as repo from "./repo.js"
 
 type JsonMap = Record<string, unknown>
-type ModelGroupOwnerType = ModelGroupsOwnerType
 
 /**
  * P1b helpers: translate (grantScope, ids) ↔ SubjectRef. The dropped
@@ -58,118 +66,6 @@ function buildModelGroupGrantSubjectRef(input: {
   }
 }
 
-function subjectKindToModelGroupGrantScope(
-  kind: SubjectRef["kind"]
-): ModelGroupGrantScope {
-  switch (kind) {
-    case SUBJECT_KIND.PLATFORM:
-      return MODEL_GROUP_GRANT_SCOPE.PLATFORM
-    case SUBJECT_KIND.WORKSPACE:
-      return MODEL_GROUP_GRANT_SCOPE.WORKSPACE
-    case SUBJECT_KIND.WORKSPACE_MEMBER:
-      return MODEL_GROUP_GRANT_SCOPE.WORKSPACE_MEMBER
-    case SUBJECT_KIND.ACTOR:
-      return MODEL_GROUP_GRANT_SCOPE.ACTOR
-    default:
-      throw new Error(
-        `Unsupported subject kind for model_group_grants: ${kind}`
-      )
-  }
-}
-
-type ModelGroupRow = {
-  id: string
-  owner_type: ModelGroupOwnerType
-  owner_workspace_id: string | null
-  owner_workspace_member_id: string | null
-  name: string
-  description: string | null
-  routing_strategy: ModelGroupsRoutingStrategy
-  attempt_policy: Record<string, unknown> | null
-  is_default: boolean
-  is_enabled: boolean
-  created_by_workspace_member_id: string | null
-  created_at: Date | null
-  updated_at: Date | null
-}
-
-type ModelGroupGrantRow = {
-  id?: string
-  group_id?: string
-  // P1b: derived from the joined access_subjects row, not a column.
-  grant_scope: ModelGroupGrantScope
-  workspace_id: string | null
-  workspace_member_id: string | null
-  actor_id: string | null
-  status: "active" | "revoked"
-  granted_by_workspace_member_id?: string | null
-  reason?: string | null
-  created_at?: Date
-  revoked_at?: Date | null
-}
-
-type ModelGroupGrantDbRow = {
-  id: string
-  group_id: string | null
-  status: "active" | "revoked"
-  reason: string | null
-  created_at: Date | null
-  revoked_at: Date | null
-  subject_id: string
-  granted_by_workspace_member_id: string | null
-  // From joined access_subjects (aliased mgs)
-  mgs_kind?: string | null
-  mgs_workspace_id?: string | null
-  mgs_workspace_member_id?: string | null
-  mgs_actor_id?: string | null
-}
-
-type ModelGroupItemRow = {
-  id?: string | null
-  item_id?: string | null
-  group_id: string | null
-  binding_id?: string | null
-  current_version_id?: string | null
-  display_name: string | null
-  priority: number | null
-  weight: number | null
-  item_enabled?: boolean | null
-  is_enabled?: boolean | null
-  version?: number | null
-  provider_kind?: string | null
-  vendor?: string | null
-  base_url?: string | null
-  model_name?: string | null
-  max_output_tokens?: number | null
-  capability_tags?: string[] | null
-  features?: unknown
-  provider_options?: unknown
-  request_timeout_ms?: number | null
-  max_retries?: number | null
-  created_at: Date | null
-  updated_at: Date | null
-}
-
-function dbRowToGrantRow(
-  row: ModelGroupGrantDbRow
-): ModelGroupGrantRow & { id: string; group_id: string } {
-  return {
-    id: row.id,
-    group_id: row.group_id || "",
-    grant_scope: row.mgs_kind
-      ? subjectKindToModelGroupGrantScope(row.mgs_kind as SubjectRef["kind"])
-      : MODEL_GROUP_GRANT_SCOPE.PLATFORM,
-    workspace_id: row.mgs_workspace_id ?? null,
-    workspace_member_id: row.mgs_workspace_member_id ?? null,
-    actor_id: row.mgs_actor_id ?? null,
-    status: row.status,
-    granted_by_workspace_member_id: row.granted_by_workspace_member_id,
-    reason: row.reason,
-    created_at: row.created_at || undefined,
-    revoked_at: row.revoked_at,
-  }
-}
-
 export class ModelGroupError extends Error {
   constructor(
     public statusCode: number,
@@ -177,11 +73,6 @@ export class ModelGroupError extends Error {
   ) {
     super(message)
   }
-}
-
-function asObject(value: unknown): JsonMap {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {}
-  return value as JsonMap
 }
 
 function assertValidModelVersionInput(input: {
@@ -203,230 +94,40 @@ function assertValidModelVersionInput(input: {
   }
 }
 
-function mapGroupRow(row: ModelGroupRow) {
-  return {
-    id: row.id,
-    owner_type: row.owner_type,
-    owner_workspace_id: row.owner_workspace_id,
-    owner_workspace_member_id: row.owner_workspace_member_id,
-    workspace_id: row.owner_workspace_id,
-    scope: row.owner_type,
-    name: row.name,
-    description: row.description || "",
-    routing_strategy: row.routing_strategy,
-    attempt_policy: asObject(row.attempt_policy),
-    is_default: Boolean(row.is_default),
-    is_active: Boolean(row.is_enabled),
-    createdByWorkspaceMemberId: row.created_by_workspace_member_id || null,
-    created_at:
-      serializeOptionalInstant(row.created_at) ||
-      serializeOptionalInstant(row.updated_at) ||
-      serializeInstant(new Date(0)),
-    updated_at:
-      serializeOptionalInstant(row.updated_at) ||
-      serializeOptionalInstant(row.created_at) ||
-      serializeInstant(new Date(0)),
-  }
-}
-
-function mapGroupItem(row: ModelGroupItemRow) {
-  const features = asObject(row.features)
-  const providerKind =
-    row.provider_kind || getProviderKindForVendor(row.vendor || "anthropic")
-
-  return {
-    id: row.item_id ?? row.id ?? "",
-    group_id: row.group_id,
-    binding_id: row.binding_id ?? row.item_id ?? row.id ?? "",
-    current_version_id: row.current_version_id || null,
-    display_name: row.display_name || "",
-    priority: row.priority ?? 0,
-    weight: row.weight ?? 1,
-    is_enabled: Boolean(row.item_enabled ?? row.is_enabled),
-    version: row.version || null,
-    provider_kind: providerKind,
-    vendor: row.vendor || null,
-    base_url: row.base_url || null,
-    model_name: row.model_name || null,
-    max_output_tokens: row.max_output_tokens || null,
-    capability_tags: row.capability_tags || [],
-    features,
-    provider_options: asObject(row.provider_options),
-    request_timeout_ms: row.request_timeout_ms ?? null,
-    max_retries: row.max_retries ?? null,
-    created_at: row.created_at || undefined,
-    updated_at: row.updated_at || undefined,
-  }
-}
-
-function mapGrantRow(
-  row: ModelGroupGrantRow & { id: string; group_id: string }
-) {
-  return {
-    id: row.id,
-    group_id: row.group_id,
-    grant_scope: row.grant_scope,
-    workspace_id: row.workspace_id,
-    workspace_member_id: row.workspace_member_id,
-    actor_id: row.actor_id,
-    status: row.status,
-    grantedByWorkspaceMemberId: row.granted_by_workspace_member_id || null,
-    reason: row.reason || null,
-    created_at: serializeOptionalInstant(row.created_at),
-    revoked_at: serializeOptionalInstant(row.revoked_at),
-  }
-}
-
 async function clearExistingDefault(
   ownerType: ModelGroupOwnerType,
   ownerWorkspaceId?: string | null,
   ownerWorkspaceMemberId?: string | null
 ) {
-  if (ownerType === "platform") {
-    await db
-      .updateTable("model_groups")
-      .set({
-        is_default: false,
-      })
-      .where("owner_type", "=", "platform")
-      .where("is_default", "=", true)
-      .execute()
-    return
+  if (ownerType === "workspace" && !ownerWorkspaceId) {
+    throw new ModelGroupError(
+      400,
+      "ownerWorkspaceId is required for workspace defaults"
+    )
   }
-
-  if (ownerType === "workspace") {
-    if (!ownerWorkspaceId) {
-      throw new ModelGroupError(
-        400,
-        "ownerWorkspaceId is required for workspace defaults"
-      )
-    }
-    await db
-      .updateTable("model_groups")
-      .set({
-        is_default: false,
-      })
-      .where("owner_type", "=", "workspace")
-      .where("owner_workspace_id", "=", ownerWorkspaceId)
-      .where("is_default", "=", true)
-      .execute()
-    return
-  }
-
-  if (!ownerWorkspaceMemberId) {
+  if (ownerType === "workspace_member" && !ownerWorkspaceMemberId) {
     throw new ModelGroupError(
       400,
       "ownerWorkspaceMemberId is required for workspace_member defaults"
     )
   }
-  await db
-    .updateTable("model_groups")
-    .set({
-      is_default: false,
-    })
-    .where("owner_type", "=", "workspace_member")
-    .where("owner_workspace_member_id", "=", ownerWorkspaceMemberId)
-    .where("is_default", "=", true)
-    .execute()
+  await repo.clearDefaultModelGroups(
+    ownerType,
+    ownerWorkspaceId ?? null,
+    ownerWorkspaceMemberId ?? null
+  )
 }
 
-async function getGroupRow(groupId: string) {
-  const row = (await db
-    .selectFrom("model_groups")
-    .selectAll()
-    .where("id", "=", groupId)
-    .limit(1)
-    .executeTakeFirst()) as ModelGroupRow | undefined
+async function getGroupRow(groupId: string): Promise<ModelGroupRow> {
+  const row = await repo.getModelGroupRow(groupId)
   if (!row) {
     throw new ModelGroupError(404, "Model group not found")
   }
   return row
 }
 
-async function createBindingVersion(input: {
-  bindingId: string
-  version: number
-  providerKind: string
-  vendor: string
-  apiKey: string
-  baseUrl: string
-  modelName: string
-  maxOutputTokens?: number
-  capabilityTags?: string[]
-  features?: JsonMap
-  providerOptions?: JsonMap
-  requestTimeoutMs?: number
-  maxRetries?: number
-}) {
-  assertValidModelVersionInput({
-    vendor: input.vendor,
-    modelName: input.modelName,
-    maxOutputTokens: input.maxOutputTokens,
-  })
-  const effectiveMaxTokens = input.maxOutputTokens ?? 4096
-
-  return db
-    .insertInto("model_binding_versions")
-    .values({
-      binding_id: input.bindingId,
-      version: input.version,
-      provider_kind: input.providerKind,
-      vendor: input.vendor,
-      api_key: input.apiKey,
-      base_url: input.baseUrl,
-      model_name: input.modelName,
-      max_output_tokens: effectiveMaxTokens,
-      capability_tags: input.capabilityTags || [],
-      features: (input.features ||
-        {}) as TableInsert<"model_binding_versions">["features"],
-      provider_options: (input.providerOptions ||
-        {}) as TableInsert<"model_binding_versions">["provider_options"],
-      request_timeout_ms: input.requestTimeoutMs ?? null,
-      max_retries: input.maxRetries ?? null,
-    })
-    .returningAll()
-    .executeTakeFirstOrThrow()
-}
-
-async function createDefaultGroupGrant(
-  groupId: string,
-  ownerType: ModelGroupOwnerType,
-  ownerWorkspaceId?: string | null,
-  ownerWorkspaceMemberId?: string | null,
-  grantedByWorkspaceMemberId?: string | null
-) {
-  const subjectRef = buildModelGroupGrantSubjectRef({
-    grantScope:
-      ownerType === "platform"
-        ? MODEL_GROUP_GRANT_SCOPE.PLATFORM
-        : ownerType === "workspace"
-          ? MODEL_GROUP_GRANT_SCOPE.WORKSPACE
-          : MODEL_GROUP_GRANT_SCOPE.WORKSPACE_MEMBER,
-    workspaceId: ownerWorkspaceId,
-    workspaceMemberId: ownerWorkspaceMemberId,
-  })
-  const subjectId = await upsertAccessSubject(db, subjectRef)
-  return (await db
-    .insertInto("model_group_grants")
-    .values({
-      group_id: groupId,
-      subject_id: subjectId,
-      status: "active",
-      granted_by_workspace_member_id: grantedByWorkspaceMemberId || null,
-      reason: "default_group_scope",
-    })
-    .returningAll()
-    .executeTakeFirstOrThrow()) as { id: string }
-}
-
 async function ensureWorkspaceExists(workspaceId: string) {
-  const row = await db
-    .selectFrom("workspaces")
-    .select("id")
-    .where("id", "=", workspaceId)
-    .limit(1)
-    .executeTakeFirst()
-  if (!row) {
+  if (!(await repo.workspaceExists(workspaceId))) {
     throw new ModelGroupError(404, "Workspace not found")
   }
 }
@@ -435,13 +136,8 @@ async function ensureWorkspaceMember(
   workspaceMemberId: string,
   workspaceId?: string
 ) {
-  const row = await db
-    .selectFrom("workspace_members")
-    .select(["id", "workspace_id"])
-    .where("id", "=", workspaceMemberId)
-    .limit(1)
-    .executeTakeFirst()
-  if (!row || (workspaceId && row.workspace_id !== workspaceId)) {
+  const row = await repo.getWorkspaceMemberWorkspaceId(workspaceMemberId)
+  if (!row || (workspaceId && row.workspaceId !== workspaceId)) {
     throw new ModelGroupError(
       400,
       "Workspace member is not valid for the target workspace"
@@ -450,16 +146,7 @@ async function ensureWorkspaceMember(
 }
 
 async function ensureActorInWorkspace(actorId: string, workspaceId: string) {
-  const row = await db
-    .selectFrom("actors as actor")
-    .innerJoin("workspace_apps as app", "app.id", "actor.id")
-    .select("actor.id")
-    .where("actor.id", "=", actorId)
-    .where("app.workspace_id", "=", workspaceId)
-    .where("app.deleted_at", "is", null)
-    .limit(1)
-    .executeTakeFirst()
-  if (!row) {
+  if (!(await repo.actorExistsInWorkspace(actorId, workspaceId))) {
     throw new ModelGroupError(404, "Actor not found")
   }
 }
@@ -523,30 +210,14 @@ async function ensureNoDuplicateActiveGrant(
     workspaceMemberId: input.workspaceMemberId,
     actorId: input.actorId,
   })
-  const subjectId = await upsertAccessSubject(db, subjectRef)
-  const row = await db
-    .selectFrom("model_group_grants")
-    .select("group_id")
-    .where("group_id", "=", groupId)
-    .where("status", "=", "active")
-    .where("subject_id", "=", subjectId)
-    .limit(1)
-    .executeTakeFirst()
-  if (row) {
+  const subjectId = await upsertAccessSubjectDefault(subjectRef)
+  if (await repo.activeGrantExistsForSubject(groupId, subjectId)) {
     throw new ModelGroupError(409, "An identical active grant already exists")
   }
 }
 
-export async function listPlatformModelGroups() {
-  const result = await db
-    .selectFrom("model_groups")
-    .selectAll()
-    .where("owner_type", "=", "platform")
-    .where("is_enabled", "=", true)
-    .orderBy("is_default", "desc")
-    .orderBy("name")
-    .execute()
-  return result.map((row) => mapGroupRow(row as ModelGroupRow))
+export async function listPlatformModelGroups(): Promise<ModelGroupRow[]> {
+  return repo.listPlatformModelGroupRows()
 }
 
 /**
@@ -555,161 +226,53 @@ export async function listPlatformModelGroups() {
  * dedupe table so it never recreates (or revives) a group an operator removed
  * in the UI.
  *
- * Deliberately does NOT reuse mapGroupRow: that mapper renames `is_enabled` to
+ * Deliberately does NOT reuse presentGroupRow: that mapper renames `is_enabled` to
  * `is_active`, which would make the importer's enabled-check read undefined.
  * Returns the raw columns the importer actually needs.
  */
 export async function listPlatformModelGroupsForImport(): Promise<
   Array<{ id: string; name: string; is_default: boolean; is_enabled: boolean }>
 > {
-  const rows = await db
-    .selectFrom("model_groups")
-    .select(["id", "name", "is_default", "is_enabled"])
-    .where("owner_type", "=", "platform")
-    .where("deleted_at", "is", null)
-    .execute()
+  const rows = await repo.listPlatformModelGroupImportRows()
   return rows.map((row) => ({
-    id: row.id as string,
-    name: row.name as string,
-    is_default: Boolean(row.is_default),
-    is_enabled: Boolean(row.is_enabled),
+    id: row.id,
+    name: row.name,
+    is_default: Boolean(row.isDefault),
+    is_enabled: Boolean(row.isEnabled),
   }))
 }
 
-export async function listWorkspaceModelGroups(workspaceId: string) {
-  const result = await db
-    .selectFrom("model_groups as mg")
-    .distinct()
-    .leftJoin("model_group_grants as mgg", (join) =>
-      join.onRef("mgg.group_id", "=", "mg.id").on("mgg.status", "=", "active")
-    )
-    .leftJoin("access_subjects as mgs", "mgs.id", "mgg.subject_id")
-    .selectAll("mg")
-    .select(
-      sql<number>`CASE mg.owner_type
-        WHEN 'workspace' THEN 0
-        WHEN 'platform' THEN 1
-        ELSE 2
-      END`.as("owner_rank")
-    )
-    .where("mg.is_enabled", "=", true)
-    .where((eb) =>
-      eb.or([
-        eb.and([
-          eb("mg.owner_type", "=", "workspace"),
-          eb("mg.owner_workspace_id", "=", workspaceId),
-        ]),
-        eb("mgs.kind", "=", "platform"),
-        eb.and([
-          eb("mgs.kind", "=", "workspace"),
-          eb("mgs.workspace_id", "=", workspaceId),
-        ]),
-        eb.and([
-          eb("mgs.kind", "=", "workspace_member"),
-          sql<boolean>`EXISTS (
-            SELECT 1
-            FROM workspace_members wm
-            WHERE wm.id = mgs.workspace_member_id
-              AND wm.workspace_id = ${workspaceId}
-          )`,
-        ]),
-        eb.and([
-          eb("mgs.kind", "=", "actor"),
-          eb("mgs.workspace_id", "=", workspaceId),
-        ]),
-      ])
-    )
-    .orderBy("owner_rank")
-    .orderBy("mg.is_default", "desc")
-    .orderBy("mg.name")
-    .execute()
-  return result.map((row) => mapGroupRow(row as ModelGroupRow))
+export async function listWorkspaceModelGroups(
+  workspaceId: string
+): Promise<ModelGroupRow[]> {
+  return repo.listWorkspaceModelGroupRows(workspaceId)
 }
 
 export async function listWorkspaceMemberOwnedModelGroups(
   workspaceMemberId: string
-) {
-  const result = await db
-    .selectFrom("model_groups")
-    .selectAll()
-    .where("owner_type", "=", "workspace_member")
-    .where("owner_workspace_member_id", "=", workspaceMemberId)
-    .where("is_enabled", "=", true)
-    .orderBy("is_default", "desc")
-    .orderBy("name")
-    .execute()
-  return result.map((row) => mapGroupRow(row as ModelGroupRow))
+): Promise<ModelGroupRow[]> {
+  return repo.listWorkspaceMemberOwnedModelGroupRows(workspaceMemberId)
 }
 
-export async function listModelGroups(workspaceId: string | null) {
+export async function listModelGroups(
+  workspaceId: string | null
+): Promise<ModelGroupRow[]> {
   return workspaceId
     ? listWorkspaceModelGroups(workspaceId)
     : listPlatformModelGroups()
 }
 
-export async function getModelGroup(groupId: string) {
+export async function getModelGroup(
+  groupId: string
+): Promise<ModelGroupDetailRecord> {
   const group = await getGroupRow(groupId)
 
-  const [itemsResult, grantsResult] = await Promise.all([
-    db
-      .selectFrom("model_bindings_live as mb")
-      .leftJoin("model_binding_versions as v", "v.id", "mb.current_version_id")
-      .select([
-        "mb.id as item_id",
-        "mb.group_id",
-        "mb.priority",
-        "mb.weight",
-        "mb.is_enabled as item_enabled",
-        "mb.created_at",
-        "mb.updated_at",
-        "mb.id as binding_id",
-        "mb.display_name",
-        "mb.current_version_id",
-        "v.version",
-        "v.provider_kind",
-        "v.vendor",
-        "v.base_url",
-        "v.model_name",
-        "v.max_output_tokens",
-        "v.capability_tags",
-        "v.features",
-        "v.provider_options",
-        "v.request_timeout_ms",
-        "v.max_retries",
-      ])
-      .where("mb.group_id", "=", groupId)
-      .where("mb.deleted_at", "is", null)
-      .orderBy("mb.priority", "asc")
-      .orderBy("mb.display_name")
-      .execute(),
-    db
-      .selectFrom("model_group_grants as mgg")
-      .leftJoin("access_subjects as mgs", "mgs.id", "mgg.subject_id")
-      .select([
-        "mgg.id",
-        "mgg.group_id",
-        "mgg.status",
-        "mgg.reason",
-        "mgg.created_at",
-        "mgg.revoked_at",
-        "mgg.subject_id",
-        "mgg.granted_by_workspace_member_id",
-        "mgs.kind as mgs_kind",
-        "mgs.workspace_id as mgs_workspace_id",
-        "mgs.workspace_member_id as mgs_workspace_member_id",
-        "mgs.actor_id as mgs_actor_id",
-      ])
-      .where("mgg.group_id", "=", groupId)
-      .orderBy("mgg.created_at", "desc")
-      .execute(),
-  ])
+  const { items, grants } = await repo.getModelGroupDetailRows(groupId)
 
   return {
-    ...mapGroupRow(group),
-    items: itemsResult.map(mapGroupItem),
-    grants: (grantsResult as ModelGroupGrantDbRow[])
-      .map(dbRowToGrantRow)
-      .map(mapGrantRow),
+    ...group,
+    items: items.map((row) => row as ModelGroupItemRow),
+    grants: grants.map(dbRowToGrantRow),
   }
 }
 
@@ -717,44 +280,7 @@ export async function isModelGroupAvailableInWorkspace(
   groupId: string,
   workspaceId: string
 ) {
-  const row = await db
-    .selectFrom("model_groups as mg")
-    .leftJoin("model_group_grants as mgg", (join) =>
-      join.onRef("mgg.group_id", "=", "mg.id").on("mgg.status", "=", "active")
-    )
-    .leftJoin("access_subjects as mgs", "mgs.id", "mgg.subject_id")
-    .select("mg.id")
-    .where("mg.id", "=", groupId)
-    .where("mg.is_enabled", "=", true)
-    .where((eb) =>
-      eb.or([
-        eb.and([
-          eb("mg.owner_type", "=", "workspace"),
-          eb("mg.owner_workspace_id", "=", workspaceId),
-        ]),
-        eb("mgs.kind", "=", "platform"),
-        eb.and([
-          eb("mgs.kind", "=", "workspace"),
-          eb("mgs.workspace_id", "=", workspaceId),
-        ]),
-        eb.and([
-          eb("mgs.kind", "=", "workspace_member"),
-          sql<boolean>`EXISTS (
-            SELECT 1
-            FROM workspace_members wm
-            WHERE wm.id = mgs.workspace_member_id
-              AND wm.workspace_id = ${workspaceId}
-          )`,
-        ]),
-        eb.and([
-          eb("mgs.kind", "=", "actor"),
-          eb("mgs.workspace_id", "=", workspaceId),
-        ]),
-      ])
-    )
-    .limit(1)
-    .executeTakeFirst()
-  return Boolean(row)
+  return repo.isModelGroupGrantedInWorkspace(groupId, workspaceId)
 }
 
 export async function createModelGroup(data: {
@@ -763,11 +289,11 @@ export async function createModelGroup(data: {
   ownerWorkspaceMemberId?: string
   name: string
   description?: string
-  routingStrategy?: ModelGroupsRoutingStrategy
+  routingStrategy?: ModelGroupRoutingStrategy
   attemptPolicy?: JsonMap
   isDefault?: boolean
   createdByWorkspaceMemberId?: string
-}) {
+}): Promise<ModelGroupRow> {
   const ownerType =
     data.ownerType ||
     (data.workspaceId
@@ -789,44 +315,49 @@ export async function createModelGroup(data: {
     )
   }
 
-  if (data.isDefault) {
-    await clearExistingDefault(
-      ownerType,
-      data.workspaceId || null,
-      data.ownerWorkspaceMemberId || null
-    )
-  }
+  const ownerWorkspaceId =
+    ownerType === "workspace" ? data.workspaceId || null : null
+  const ownerWorkspaceMemberId =
+    ownerType === "workspace_member"
+      ? data.ownerWorkspaceMemberId || null
+      : null
 
-  const row = (await db
-    .insertInto("model_groups")
-    .values({
-      owner_type: ownerType,
-      owner_workspace_id:
-        ownerType === "workspace" ? data.workspaceId || null : null,
-      owner_workspace_member_id:
-        ownerType === "workspace_member"
-          ? data.ownerWorkspaceMemberId || null
-          : null,
+  const defaultGrantSubjectRef = buildModelGroupGrantSubjectRef({
+    grantScope:
+      ownerType === "platform"
+        ? MODEL_GROUP_GRANT_SCOPE.PLATFORM
+        : ownerType === "workspace"
+          ? MODEL_GROUP_GRANT_SCOPE.WORKSPACE
+          : MODEL_GROUP_GRANT_SCOPE.WORKSPACE_MEMBER,
+    workspaceId: ownerWorkspaceId,
+    workspaceMemberId: ownerWorkspaceMemberId,
+  })
+
+  const row = await repo.insertModelGroupWithDefaultGrant({
+    clearDefault: data.isDefault
+      ? {
+          ownerType,
+          ownerWorkspaceId,
+          ownerWorkspaceMemberId,
+        }
+      : null,
+    groupValues: {
+      ownerType,
+      ownerWorkspaceId,
+      ownerWorkspaceMemberId,
       name: data.name,
       description: data.description || "",
-      routing_strategy: data.routingStrategy || "priority_failover",
-      attempt_policy: (data.attemptPolicy ||
-        {}) as TableInsert<"model_groups">["attempt_policy"],
-      is_default: data.isDefault || false,
-      is_enabled: true,
-      created_by_workspace_member_id: data.createdByWorkspaceMemberId || null,
-    })
-    .returningAll()
-    .executeTakeFirstOrThrow()) as ModelGroupRow
-  await createDefaultGroupGrant(
-    row.id,
-    row.owner_type,
-    row.owner_workspace_id,
-    row.owner_workspace_member_id,
-    data.createdByWorkspaceMemberId || null
-  )
+      routingStrategy: data.routingStrategy || "priority_failover",
+      attemptPolicy: (data.attemptPolicy || {}) as ModelGroupsAttemptPolicy,
+      isDefault: data.isDefault || false,
+      isEnabled: true,
+      createdByWorkspaceMemberId: data.createdByWorkspaceMemberId || null,
+    },
+    defaultGrantSubjectRef,
+    grantedByWorkspaceMemberId: data.createdByWorkspaceMemberId || null,
+  })
 
-  return mapGroupRow(row)
+  return row
 }
 
 export async function updateModelGroup(
@@ -834,19 +365,19 @@ export async function updateModelGroup(
   data: {
     name?: string
     description?: string
-    routingStrategy?: ModelGroupsRoutingStrategy
+    routingStrategy?: ModelGroupRoutingStrategy
     attemptPolicy?: JsonMap
     isDefault?: boolean
     isActive?: boolean
   }
-) {
+): Promise<ModelGroupDetailRecord> {
   const group = await getGroupRow(groupId)
 
   if (data.isDefault === true && data.isActive !== false) {
     await clearExistingDefault(
-      group.owner_type,
-      group.owner_workspace_id,
-      group.owner_workspace_member_id
+      group.ownerType,
+      group.ownerWorkspaceId,
+      group.ownerWorkspaceMemberId
     )
   }
 
@@ -859,60 +390,38 @@ export async function updateModelGroup(
     updateData.description = data.description
   }
   if (data.routingStrategy !== undefined) {
-    updateData.routing_strategy = data.routingStrategy
+    updateData.routingStrategy = data.routingStrategy
   }
   if (data.attemptPolicy !== undefined) {
-    updateData.attempt_policy =
-      data.attemptPolicy as TableInsert<"model_groups">["attempt_policy"]
+    updateData.attemptPolicy = data.attemptPolicy
   }
   if (data.isDefault !== undefined) {
-    updateData.is_default = data.isDefault
+    updateData.isDefault = data.isDefault
   }
   if (data.isActive !== undefined) {
-    updateData.is_enabled = data.isActive
+    updateData.isEnabled = data.isActive
   }
   if (data.isActive === false) {
-    updateData.is_default = false
+    updateData.isDefault = false
   }
 
   if (Object.keys(updateData).length === 1) {
     return getModelGroup(groupId)
   }
 
-  const updatedRow = (await db
-    .updateTable("model_groups")
-    .set(updateData as any)
-    .where("id", "=", groupId)
-    .returningAll()
-    .executeTakeFirst()) as ModelGroupRow | undefined
+  const updatedRow = await repo.updateModelGroupRow(groupId, updateData)
   if (!updatedRow) {
     throw new ModelGroupError(404, "Model group not found")
   }
 
-  return mapGroupRow(updatedRow)
+  // Always return the full detail record so the controller can present one shared
+  // detail schema via sendData. Callers ignore the body and reload, so returning
+  // detail vs. plain row is behavior-neutral.
+  return getModelGroup(groupId)
 }
 
 export async function deleteModelGroup(groupId: string) {
-  await db
-    .updateTable("model_groups")
-    .set({
-      is_enabled: false,
-      is_default: false,
-      deleted_at: sql`NOW()`,
-    })
-    .where("id", "=", groupId)
-    .execute()
-  await db
-    .updateTable("model_bindings")
-    .set({
-      is_enabled: false,
-      deleted_at: sql`NOW()`,
-    })
-    .where("group_id", "=", groupId)
-    .execute()
-  await sql`SELECT sd_replace_group_actor_assignments(${groupId}::uuid)`.execute(
-    db
-  )
+  await repo.softDeleteModelGroupCascade(groupId)
 }
 
 export async function addModelItem(
@@ -934,72 +443,67 @@ export async function addModelItem(
     maxRetries?: number
     installedByWorkspaceMemberId?: string
   }
-) {
+): Promise<ModelGroupItemRow> {
   const group = await getGroupRow(groupId)
 
-  const binding = await db
-    .insertInto("model_bindings")
-    .values({
-      group_id: groupId,
-      display_name: data.displayName,
-      priority: data.priority ?? 0,
-      weight: data.weight ?? 100,
-      is_enabled: true,
-      installed_by_workspace_member_id:
-        data.installedByWorkspaceMemberId ||
-        group.created_by_workspace_member_id ||
-        null,
-    })
-    .returningAll()
-    .executeTakeFirstOrThrow()
-
-  const version = await createBindingVersion({
-    bindingId: binding.id as string,
-    version: 1,
-    providerKind: data.providerKind || getProviderKindForVendor(data.vendor),
+  assertValidModelVersionInput({
     vendor: data.vendor,
-    apiKey: data.apiKey,
-    baseUrl: data.baseUrl,
     modelName: data.modelName,
     maxOutputTokens: data.maxOutputTokens,
-    capabilityTags: data.capabilityTags,
-    features: data.features,
-    providerOptions: data.providerOptions,
-    requestTimeoutMs: data.requestTimeoutMs,
-    maxRetries: data.maxRetries,
   })
 
-  await db
-    .updateTable("model_bindings")
-    .set({
-      current_version_id: version.id,
-    })
-    .where("id", "=", binding.id)
-    .execute()
+  const { binding, version } = await repo.insertModelItemWithVersion({
+    groupId,
+    binding: {
+      displayName: data.displayName,
+      priority: data.priority ?? 0,
+      weight: data.weight ?? 100,
+      isEnabled: true,
+      installedByWorkspaceMemberId:
+        data.installedByWorkspaceMemberId ||
+        group.createdByWorkspaceMemberId ||
+        null,
+    },
+    version: {
+      version: 1,
+      providerKind: data.providerKind || getProviderKindForVendor(data.vendor),
+      vendor: data.vendor,
+      apiKey: data.apiKey,
+      baseUrl: data.baseUrl,
+      modelName: data.modelName,
+      maxOutputTokens: data.maxOutputTokens ?? 4096,
+      capabilityTags: data.capabilityTags || [],
+      features: (data.features || {}) as ModelBindingVersionsFeatures,
+      providerOptions: (data.providerOptions ||
+        {}) as ModelBindingVersionsProviderOptions,
+      requestTimeoutMs: data.requestTimeoutMs ?? null,
+      maxRetries: data.maxRetries ?? null,
+    },
+  })
 
-  return mapGroupItem({
-    item_id: binding.id,
-    group_id: groupId,
-    binding_id: binding.id,
-    display_name: binding.display_name,
+  return {
+    itemId: binding.id,
+    groupId: groupId,
+    bindingId: binding.id,
+    displayName: binding.displayName,
     priority: binding.priority,
     weight: binding.weight,
-    item_enabled: binding.is_enabled,
-    current_version_id: version.id,
+    itemEnabled: binding.isEnabled,
+    currentVersionId: version.id,
     version: version.version,
-    provider_kind: version.provider_kind,
+    providerKind: version.providerKind,
     vendor: version.vendor,
-    base_url: version.base_url,
-    model_name: version.model_name,
-    max_output_tokens: version.max_output_tokens,
-    capability_tags: version.capability_tags,
+    baseUrl: version.baseUrl,
+    modelName: version.modelName,
+    maxOutputTokens: version.maxOutputTokens,
+    capabilityTags: version.capabilityTags,
     features: version.features,
-    provider_options: version.provider_options,
-    request_timeout_ms: version.request_timeout_ms,
-    max_retries: version.max_retries,
-    created_at: binding.created_at,
-    updated_at: binding.updated_at,
-  })
+    providerOptions: version.providerOptions,
+    requestTimeoutMs: version.requestTimeoutMs,
+    maxRetries: version.maxRetries,
+    createdAt: binding.createdAt,
+    updatedAt: binding.updatedAt,
+  }
 }
 
 export async function updateModelItem(
@@ -1022,37 +526,9 @@ export async function updateModelItem(
     requestTimeoutMs?: number
     maxRetries?: number
   }
-) {
+): Promise<ModelGroupItemRow> {
   // itemId IS the binding id (the M:N profile/group join is gone).
-  const item = await db
-    .selectFrom("model_bindings_live as mb")
-    .leftJoin("model_binding_versions as v", "v.id", "mb.current_version_id")
-    .select([
-      "mb.id as item_id",
-      "mb.group_id",
-      "mb.priority",
-      "mb.weight",
-      "mb.is_enabled as item_enabled",
-      "mb.display_name",
-      "mb.current_version_id",
-      "v.version",
-      "v.provider_kind",
-      "v.vendor",
-      "v.api_key",
-      "v.base_url",
-      "v.model_name",
-      "v.max_output_tokens",
-      "v.capability_tags",
-      "v.features",
-      "v.provider_options",
-      "v.request_timeout_ms",
-      "v.max_retries",
-    ])
-    .where("mb.id", "=", itemId)
-    .where("mb.group_id", "=", groupId)
-    .where("mb.deleted_at", "is", null)
-    .limit(1)
-    .executeTakeFirst()
+  const item = await repo.getModelGroupItemForUpdate(itemId, groupId)
   if (!item) {
     throw new ModelGroupError(404, "Model group item not found")
   }
@@ -1060,19 +536,9 @@ export async function updateModelItem(
   const bindingUpdate: Record<string, unknown> = {}
   if (data.priority !== undefined) bindingUpdate.priority = data.priority
   if (data.weight !== undefined) bindingUpdate.weight = data.weight
-  if (data.isEnabled !== undefined) bindingUpdate.is_enabled = data.isEnabled
+  if (data.isEnabled !== undefined) bindingUpdate.isEnabled = data.isEnabled
   if (data.displayName !== undefined) {
-    bindingUpdate.display_name = data.displayName
-  }
-
-  if (Object.keys(bindingUpdate).length > 0) {
-    await db
-      .updateTable("model_bindings")
-      .set({
-        ...(bindingUpdate as any),
-      })
-      .where("id", "=", itemId)
-      .execute()
+    bindingUpdate.displayName = data.displayName
   }
 
   const hasConfigChange =
@@ -1088,101 +554,101 @@ export async function updateModelItem(
     data.requestTimeoutMs !== undefined ||
     data.maxRetries !== undefined
 
+  let newVersion: Parameters<
+    typeof repo.applyModelItemUpdate
+  >[0]["newVersion"] = null
+
   if (hasConfigChange) {
     const vendor = data.vendor || (item.vendor as string)
     const providerKind =
       data.providerKind ||
-      (item.provider_kind as string) ||
+      (item.providerKind as string) ||
       getProviderKindForVendor(vendor)
     const nextVersion = Number(item.version || 0) + 1
-    const version = await createBindingVersion({
-      bindingId: itemId,
+    const modelName = data.modelName || (item.modelName as string)
+    const maxOutputTokens =
+      data.maxOutputTokens ??
+      (item.maxOutputTokens as number | null) ??
+      undefined
+    assertValidModelVersionInput({ vendor, modelName, maxOutputTokens })
+    newVersion = {
       version: nextVersion,
       providerKind,
       vendor,
-      apiKey: data.apiKey || (item.api_key as string),
-      baseUrl: data.baseUrl || (item.base_url as string),
-      modelName: data.modelName || (item.model_name as string),
-      maxOutputTokens:
-        data.maxOutputTokens ??
-        (item.max_output_tokens as number | null) ??
-        undefined,
+      apiKey: data.apiKey || (item.apiKey as string),
+      baseUrl: data.baseUrl || (item.baseUrl as string),
+      modelName,
+      maxOutputTokens: maxOutputTokens ?? 4096,
       capabilityTags:
-        data.capabilityTags || (item.capability_tags as string[] | null) || [],
-      features: data.features ?? asObject(item.features),
-      providerOptions: data.providerOptions ?? asObject(item.provider_options),
+        data.capabilityTags || (item.capabilityTags as string[] | null) || [],
+      features: (data.features ??
+        item.features ??
+        {}) as ModelBindingVersionsFeatures,
+      providerOptions: (data.providerOptions ??
+        item.providerOptions ??
+        {}) as ModelBindingVersionsProviderOptions,
       requestTimeoutMs:
         data.requestTimeoutMs ??
-        (item.request_timeout_ms as number | null) ??
-        undefined,
-      maxRetries:
-        data.maxRetries ?? (item.max_retries as number | null) ?? undefined,
-    })
-    await db
-      .updateTable("model_bindings")
-      .set({
-        current_version_id: version.id,
-      })
-      .where("id", "=", itemId)
-      .execute()
+        (item.requestTimeoutMs as number | null) ??
+        null,
+      maxRetries: data.maxRetries ?? (item.maxRetries as number | null) ?? null,
+    }
   }
 
-  const updated = await db
-    .selectFrom("model_bindings_live as mb")
-    .leftJoin("model_binding_versions as v", "v.id", "mb.current_version_id")
-    .select([
-      "mb.id as item_id",
-      "mb.group_id",
-      "mb.priority",
-      "mb.weight",
-      "mb.is_enabled as item_enabled",
-      "mb.created_at",
-      "mb.updated_at",
-      "mb.id as binding_id",
-      "mb.display_name",
-      "mb.current_version_id",
-      "v.version",
-      "v.provider_kind",
-      "v.vendor",
-      "v.base_url",
-      "v.model_name",
-      "v.max_output_tokens",
-      "v.capability_tags",
-      "v.features",
-      "v.provider_options",
-      "v.request_timeout_ms",
-      "v.max_retries",
-    ])
-    .where("mb.id", "=", itemId)
-    .limit(1)
-    .executeTakeFirstOrThrow()
+  const updated = await repo.applyModelItemUpdate({
+    itemId,
+    bindingUpdate: Object.keys(bindingUpdate).length > 0 ? bindingUpdate : null,
+    newVersion,
+  })
 
-  return mapGroupItem(updated)
+  return updated as ModelGroupItemRow
 }
 
 export async function deleteModelItem(groupId: string, itemId: string) {
-  const item = await db
-    .selectFrom("model_bindings_live as mb")
-    .select(["mb.id", "mb.is_enabled as item_enabled"])
-    .where("mb.id", "=", itemId)
-    .where("mb.group_id", "=", groupId)
-    .where("mb.deleted_at", "is", null)
-    .limit(1)
-    .executeTakeFirst()
-  if (!item) {
+  if (!(await repo.modelGroupItemExists(itemId, groupId))) {
     throw new ModelGroupError(404, "Model group item not found")
   }
   // Soft-delete the binding (provider_steps.model_binding_version_id is RESTRICT,
   // so versions are never hard-deleted; the audit chain survives).
-  await db
-    .updateTable("model_bindings")
-    .set({
-      is_enabled: false,
-      deleted_at: sql`NOW()`,
-    })
-    .where("id", "=", itemId)
-    .where("group_id", "=", groupId)
-    .execute()
+  await repo.softDeleteBinding(itemId, groupId)
+}
+
+export async function getItemVersions(
+  itemId: string,
+  groupId?: string
+): Promise<ModelGroupItemVersionRow[]> {
+  // itemId IS the binding id now; verify it exists (and belongs to the group).
+  if (!(await repo.bindingExistsForVersions(itemId, groupId))) {
+    throw new ModelGroupError(404, "Model group item not found")
+  }
+  return repo.listBindingVersionRows(itemId)
+}
+
+export async function getActorModelGroups(
+  actorId: string,
+  workspaceId?: string
+): Promise<ActorModelGroupAssignmentRow[]> {
+  if (workspaceId) {
+    await ensureActorInWorkspace(actorId, workspaceId)
+  }
+
+  return repo.listActorModelGroupAssignmentRows(actorId, workspaceId)
+}
+
+export async function setActorModelGroups(
+  actorId: string,
+  workspaceId: string,
+  groups: { groupId: string; priority: number }[]
+): Promise<ActorModelGroupAssignmentRow[]> {
+  await ensureActorInWorkspace(actorId, workspaceId)
+  await ensureAssignableModelGroups(
+    workspaceId,
+    groups.map((group) => group.groupId),
+    actorId
+  )
+
+  await repo.replaceActorModelGroups(actorId, groups)
+  return getActorModelGroups(actorId, workspaceId)
 }
 
 async function ensureAssignableModelGroups(
@@ -1192,46 +658,13 @@ async function ensureAssignableModelGroups(
 ) {
   if (groupIds.length === 0) return
 
-  const result = await db
-    .selectFrom("model_groups as mg")
-    .distinct()
-    .leftJoin("model_group_grants as mgg", (join) =>
-      join.onRef("mgg.group_id", "=", "mg.id").on("mgg.status", "=", "active")
-    )
-    .leftJoin("access_subjects as mgs", "mgs.id", "mgg.subject_id")
-    .select("mg.id")
-    .where("mg.id", "in", groupIds)
-    .where("mg.is_enabled", "=", true)
-    .where((eb) =>
-      eb.or([
-        eb.and([
-          eb("mg.owner_type", "=", "workspace"),
-          eb("mg.owner_workspace_id", "=", workspaceId),
-        ]),
-        eb("mgs.kind", "=", "platform"),
-        eb.and([
-          eb("mgs.kind", "=", "workspace"),
-          eb("mgs.workspace_id", "=", workspaceId),
-        ]),
-        eb.and([
-          eb("mgs.kind", "=", "workspace_member"),
-          sql<boolean>`EXISTS (
-            SELECT 1
-            FROM workspace_members wm
-            WHERE wm.id = mgs.workspace_member_id
-              AND wm.workspace_id = ${workspaceId}
-          )`,
-        ]),
-        eb.and([
-          eb("mgs.kind", "=", "actor"),
-          eb("mgs.workspace_id", "=", workspaceId),
-          actorId ? eb("mgs.actor_id", "=", actorId) : sql<boolean>`TRUE`,
-        ]),
-      ])
-    )
-    .execute()
+  const matched = await repo.listAssignableModelGroupIds(
+    workspaceId,
+    groupIds,
+    actorId
+  )
 
-  if (result.length !== groupIds.length) {
+  if (matched.length !== groupIds.length) {
     throw new ModelGroupError(
       400,
       "One or more model groups are invalid for this workspace"
@@ -1239,204 +672,20 @@ async function ensureAssignableModelGroups(
   }
 }
 
-export async function getItemVersions(itemId: string, groupId?: string) {
-  // itemId IS the binding id now; verify it exists (and belongs to the group).
-  let bindingLookup = db
-    .selectFrom("model_bindings_live")
-    .select("id")
-    .where("id", "=", itemId)
-    .where("deleted_at", "is", null)
-  if (groupId) {
-    bindingLookup = bindingLookup.where("group_id", "=", groupId)
-  }
-  const bindingRow = await bindingLookup.limit(1).executeTakeFirst()
-  if (!bindingRow) {
-    throw new ModelGroupError(404, "Model group item not found")
-  }
-
-  return db
-    .selectFrom("model_binding_versions as v")
-    .select([
-      "v.id",
-      "v.binding_id",
-      "v.version",
-      "v.provider_kind",
-      "v.vendor",
-      "v.base_url",
-      "v.model_name",
-      "v.max_output_tokens",
-      "v.capability_tags",
-      "v.features",
-      "v.provider_options",
-      "v.request_timeout_ms",
-      "v.max_retries",
-      "v.created_at",
-    ])
-    .where("v.binding_id", "=", itemId)
-    .orderBy("v.version", "desc")
-    .execute()
-}
-
-export async function getActorModelGroups(
-  actorId: string,
-  workspaceId?: string
-) {
-  if (workspaceId) {
-    await ensureActorInWorkspace(actorId, workspaceId)
-  }
-
-  let statement = db
-    .selectFrom("actor_model_group_assignments as amga")
-    .innerJoin("model_groups as mg", "mg.id", "amga.group_id")
-    .select([
-      "amga.actor_id",
-      "amga.group_id",
-      "amga.priority",
-      "amga.created_at",
-      "mg.name as group_name",
-      "mg.routing_strategy",
-      "mg.is_default",
-      "mg.owner_workspace_id as workspace_id",
-      "mg.owner_type",
-      "mg.owner_workspace_member_id",
-    ])
-    .where("amga.actor_id", "=", actorId)
-    .where("mg.is_enabled", "=", true)
-
-  if (workspaceId) {
-    statement = statement.where((eb) =>
-      eb.or([
-        eb.and([
-          eb("mg.owner_type", "=", "workspace"),
-          eb("mg.owner_workspace_id", "=", workspaceId),
-        ]),
-        sql<boolean>`EXISTS (
-          SELECT 1
-          FROM model_group_grants mgg
-          JOIN access_subjects mgs2 ON mgs2.id = mgg.subject_id
-          WHERE mgg.group_id = mg.id
-            AND mgg.status = 'active'
-            AND (
-              mgs2.kind = 'platform'
-              OR (mgs2.kind = 'workspace' AND mgs2.workspace_id = ${workspaceId})
-              OR (
-                mgs2.kind = 'workspace_member'
-                AND EXISTS (
-                  SELECT 1
-                  FROM workspace_members wm
-                  WHERE wm.id = mgs2.workspace_member_id
-                    AND wm.workspace_id = ${workspaceId}
-                )
-              )
-              OR (mgs2.kind = 'actor' AND mgs2.workspace_id = ${workspaceId})
-            )
-        )`,
-      ])
-    )
-  }
-
-  return statement.orderBy("amga.priority", "asc").execute()
-}
-
-export async function setActorModelGroups(
-  actorId: string,
-  workspaceId: string,
-  groups: { groupId: string; priority: number }[]
-) {
-  await ensureActorInWorkspace(actorId, workspaceId)
-  await ensureAssignableModelGroups(
-    workspaceId,
-    groups.map((group) => group.groupId),
-    actorId
-  )
-
-  await sql`SELECT sd_replace_actor_model_groups(${actorId}::uuid)`.execute(db)
-  for (const group of groups) {
-    await db
-      .insertInto("actor_model_group_assignments")
-      .values({
-        actor_id: actorId,
-        group_id: group.groupId,
-        priority: group.priority,
-      })
-      .execute()
-  }
-  return getActorModelGroups(actorId, workspaceId)
-}
-
 export async function listVisibleActorModelGroups(
   actorId: string,
   workspaceId: string
-) {
+): Promise<ModelGroupRow[]> {
   await ensureActorInWorkspace(actorId, workspaceId)
-
-  const result = await db
-    .selectFrom("model_groups as mg")
-    .distinct()
-    .leftJoin("model_group_grants as mgg", (join) =>
-      join.onRef("mgg.group_id", "=", "mg.id").on("mgg.status", "=", "active")
-    )
-    .leftJoin("access_subjects as mgs", "mgs.id", "mgg.subject_id")
-    .selectAll("mg")
-    .select(
-      sql<number>`CASE mg.owner_type
-        WHEN 'workspace' THEN 0
-        WHEN 'platform' THEN 1
-        ELSE 2
-      END`.as("owner_rank")
-    )
-    .where("mg.is_enabled", "=", true)
-    .where((eb) =>
-      eb.or([
-        eb.and([
-          eb("mg.owner_type", "=", "workspace"),
-          eb("mg.owner_workspace_id", "=", workspaceId),
-        ]),
-        eb("mgs.kind", "=", "platform"),
-        eb.and([
-          eb("mgs.kind", "=", "workspace"),
-          eb("mgs.workspace_id", "=", workspaceId),
-        ]),
-        eb.and([
-          eb("mgs.kind", "=", "actor"),
-          eb("mgs.workspace_id", "=", workspaceId),
-          eb("mgs.actor_id", "=", actorId),
-        ]),
-      ])
-    )
-    .orderBy("owner_rank")
-    .orderBy("mg.is_default", "desc")
-    .orderBy("mg.name")
-    .execute()
-
-  return result.map((row) => mapGroupRow(row as ModelGroupRow))
+  return repo.listVisibleActorModelGroupRows(actorId, workspaceId)
 }
 
-export async function listModelGroupGrants(groupId: string) {
+export async function listModelGroupGrants(
+  groupId: string
+): Promise<Array<ModelGroupGrantRow & { id: string; group_id: string }>> {
   await getGroupRow(groupId)
-  const result = await db
-    .selectFrom("model_group_grants as mgg")
-    .leftJoin("access_subjects as mgs", "mgs.id", "mgg.subject_id")
-    .select([
-      "mgg.id",
-      "mgg.group_id",
-      "mgg.status",
-      "mgg.reason",
-      "mgg.created_at",
-      "mgg.revoked_at",
-      "mgg.subject_id",
-      "mgg.granted_by_workspace_member_id",
-      "mgs.kind as mgs_kind",
-      "mgs.workspace_id as mgs_workspace_id",
-      "mgs.workspace_member_id as mgs_workspace_member_id",
-      "mgs.actor_id as mgs_actor_id",
-    ])
-    .where("mgg.group_id", "=", groupId)
-    .orderBy("mgg.created_at", "desc")
-    .execute()
-  return (result as ModelGroupGrantDbRow[])
-    .map(dbRowToGrantRow)
-    .map(mapGrantRow)
+  const result = await repo.listModelGroupGrantDbRows(groupId)
+  return result.map(dbRowToGrantRow)
 }
 
 export async function issueModelGroupGrant(
@@ -1449,7 +698,7 @@ export async function issueModelGroupGrant(
     grantedByWorkspaceMemberId?: string
     reason?: string
   }
-) {
+): Promise<ModelGroupGrantRow & { id: string; group_id: string }> {
   await validateGrantTarget(input)
   await ensureNoDuplicateActiveGrant(groupId, input)
 
@@ -1459,56 +708,18 @@ export async function issueModelGroupGrant(
     workspaceMemberId: input.workspaceMemberId,
     actorId: input.actorId,
   })
-  const subjectId = await upsertAccessSubject(db, subjectRef)
-  const inserted = await db
-    .insertInto("model_group_grants")
-    .values({
-      group_id: groupId,
-      subject_id: subjectId,
-      status: "active",
-      granted_by_workspace_member_id: input.grantedByWorkspaceMemberId || null,
-      reason: input.reason || null,
-    })
-    .returning("id")
-    .executeTakeFirstOrThrow()
 
-  // Re-fetch with the access_subjects JOIN to populate the derived
-  // grant_scope / workspace_id / actor_id / workspace_member_id fields the
-  // mapGrantRow output shape exposes.
-  const full = await db
-    .selectFrom("model_group_grants as mgg")
-    .leftJoin("access_subjects as mgs", "mgs.id", "mgg.subject_id")
-    .select([
-      "mgg.id",
-      "mgg.group_id",
-      "mgg.status",
-      "mgg.reason",
-      "mgg.created_at",
-      "mgg.revoked_at",
-      "mgg.subject_id",
-      "mgg.granted_by_workspace_member_id",
-      "mgs.kind as mgs_kind",
-      "mgs.workspace_id as mgs_workspace_id",
-      "mgs.workspace_member_id as mgs_workspace_member_id",
-      "mgs.actor_id as mgs_actor_id",
-    ])
-    .where("mgg.id", "=", inserted.id)
-    .executeTakeFirstOrThrow()
-  return mapGrantRow(dbRowToGrantRow(full as ModelGroupGrantDbRow))
+  const full = await repo.insertModelGroupGrantAndReadBack({
+    groupId,
+    subjectRef,
+    grantedByWorkspaceMemberId: input.grantedByWorkspaceMemberId || null,
+    reason: input.reason || null,
+  })
+  return dbRowToGrantRow(full)
 }
 
 export async function revokeModelGroupGrant(groupId: string, grantId: string) {
-  const result = await db
-    .updateTable("model_group_grants")
-    .set({
-      status: "revoked",
-      revoked_at: sql`NOW()`,
-    })
-    .where("id", "=", grantId)
-    .where("group_id", "=", groupId)
-    .where("status", "=", "active")
-    .returning("id")
-    .executeTakeFirst()
+  const result = await repo.revokeModelGroupGrantRow(groupId, grantId)
   if (!result) {
     throw new ModelGroupError(404, "Model group grant not found")
   }
@@ -1564,15 +775,12 @@ export async function logAIRequest(data: {
   let vendor = ""
   let modelName = ""
   if (data.bindingVersionId) {
-    const versionRow = await db
-      .selectFrom("model_binding_versions")
-      .select(["vendor", "model_name"])
-      .where("id", "=", data.bindingVersionId)
-      .limit(1)
-      .executeTakeFirst()
+    const versionRow = await repo.getBindingVersionVendorModel(
+      data.bindingVersionId
+    )
     if (versionRow) {
-      vendor = versionRow.vendor as string
-      modelName = versionRow.model_name || modelName
+      vendor = versionRow.vendor ?? ""
+      modelName = versionRow.modelName || modelName
     }
   }
 

@@ -75,6 +75,11 @@ import {
   reserveFirstSend,
   type QqReservation,
 } from "./reply-quota.js"
+import {
+  extractQqExternalMessageId,
+  parseQqProviderFailureText,
+  readQqProviderSuccessJsonObjectResponse,
+} from "./response-codec.js"
 import { QQ_MSG_TYPE } from "./types.js"
 
 type AttemptOutcome =
@@ -348,25 +353,18 @@ async function onSendFailure(
   )
 }
 
-interface QqSuccessResponse {
-  id?: string
-  message_id?: string
-  msg_id?: string
-}
-
 async function onSendSuccess(
   input: OutboundSendInput,
   res: Response
 ): Promise<OutboundSendResult> {
-  const json = (await safeJson(res)) as QqSuccessResponse | null
-  const externalMessageId =
-    typeof json?.id === "string" && json.id
-      ? json.id
-      : typeof json?.message_id === "string" && json.message_id
-        ? json.message_id
-        : typeof json?.msg_id === "string" && json.msg_id
-          ? json.msg_id
-          : undefined
+  const json = await safeJson(res)
+  if (!json) {
+    throw new PermanentTransportError(
+      "qq send returned malformed provider success response",
+      { code: "qq_malformed_success_response" }
+    )
+  }
+  const externalMessageId = extractQqExternalMessageId(json)
   await input.patchLinkMetadata({
     qq: {
       attempts: {
@@ -385,23 +383,9 @@ async function parseFailure(res: Response): Promise<ParsedFailure> {
   let code: number | undefined
   let message = ""
   if (text) {
-    try {
-      const parsed = JSON.parse(text) as {
-        code?: number
-        err_code?: number
-        message?: string
-        msg?: string
-      }
-      code =
-        typeof parsed.code === "number"
-          ? parsed.code
-          : typeof parsed.err_code === "number"
-            ? parsed.err_code
-            : undefined
-      message = parsed.message ?? parsed.msg ?? ""
-    } catch {
-      message = text.slice(0, 200)
-    }
+    const parsed = parseQqProviderFailureText(text)
+    code = parsed.code
+    message = parsed.message
   }
   return { status: res.status, code, message, raw: text }
 }
@@ -414,12 +398,10 @@ async function safeText(res: Response): Promise<string> {
   }
 }
 
-async function safeJson(res: Response): Promise<unknown> {
-  try {
-    return await res.json()
-  } catch {
-    return null
-  }
+async function safeJson(
+  res: Response
+): Promise<Record<string, unknown> | null> {
+  return readQqProviderSuccessJsonObjectResponse(res)
 }
 
 function endpointUrlFor(input: OutboundSendInput): { url: string } {

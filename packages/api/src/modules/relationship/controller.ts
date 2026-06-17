@@ -1,9 +1,37 @@
 import type { FastifyInstance, FastifyReply } from "fastify"
 import { z } from "zod"
-import { CONTACT_HUB_KINDS, RELATIONSHIP_APPROVAL_MODES } from "@synapse/shared"
+import { CONTACT_HUB_KINDS } from "@synapse/shared"
+import {
+  ContactHubDetailResponseSchema,
+  ContactHubResponseSchema,
+  DirectConversationOpenResponseSchema,
+  FriendsListResponseSchema,
+  IdentitySearchResponseSchema,
+  RelationshipProfileViewSchema,
+  RelationshipScanResponseSchema,
+  RequestListResponseSchema,
+  ResolveRequestResponseSchema,
+  RelationshipScanInputSchema,
+  OpenDirectConversationInputSchema,
+  UpdateMemberRelationshipProfileInputSchema,
+  UpdateActorRelationshipProfileInputSchema,
+  IdentitySearchQuerySchema,
+  RequestRelationshipBySearchInputSchema,
+} from "@synapse/shared/schemas"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
+import { appRoute } from "../../infrastructure/http/route.js"
 import { requireRequestAction } from "../access/guards.js"
+import {
+  presentActorAccessRequest,
+  presentContactHub,
+  presentContactHubDetail,
+  presentDirectConversationOpen,
+  presentFriendRequest,
+  presentRelationshipProfile,
+  presentRemoteAgentAccessRequest,
+  presentResolvedRelationshipRequest,
+} from "./presenter.js"
 import {
   getActorRelationshipProfile,
   getContactHub,
@@ -26,38 +54,16 @@ import {
   updateRemoteAgentRelationshipProfile,
 } from "./service.js"
 
-const approvalModeSchema = z.enum(RELATIONSHIP_APPROVAL_MODES)
+// App-facing request bodies / queries live in @synapse/shared (§5.1.1) so the
+// API parser and the web/mobile clients share one definition.
+const scanSchema = RelationshipScanInputSchema
+const openDirectSchema = OpenDirectConversationInputSchema
+const updateMemberProfileSchema = UpdateMemberRelationshipProfileInputSchema
+const identitySearchQuerySchema = IdentitySearchQuerySchema
+const requestRelationshipBySearchSchema = RequestRelationshipBySearchInputSchema
+const updateActorProfileSchema = UpdateActorRelationshipProfileInputSchema
+// Path-param (:kind) validation — not a body DTO, stays local.
 const contactKindSchema = z.enum(CONTACT_HUB_KINDS)
-
-const scanSchema = z.object({
-  token: z.string().trim().min(1).max(256),
-})
-
-const openDirectSchema = z.object({
-  contactKind: contactKindSchema,
-  contactId: z.string().trim().min(1).max(255),
-})
-
-const updateMemberProfileSchema = z.object({
-  approvalMode: approvalModeSchema,
-  identityId: z.string().trim().min(4).max(32).optional(),
-  identitySearchEnabled: z.boolean().optional(),
-})
-
-const identitySearchQuerySchema = z.object({
-  q: z.string().trim().max(64).optional(),
-})
-
-const requestRelationshipBySearchSchema = z.object({
-  profileId: z.uuid(),
-})
-
-const updateActorProfileSchema = z.object({
-  approvalMode: approvalModeSchema,
-  identityId: z.string().trim().min(4).max(32).optional(),
-  identitySearchEnabled: z.boolean().optional(),
-  isPublicShared: z.boolean().optional(),
-})
 
 function sendServiceError(reply: FastifyReply, error: unknown) {
   const message =
@@ -75,32 +81,35 @@ export default async function relationshipController(app: FastifyInstance) {
   app.addHook("onRequest", authMiddleware)
   app.addHook("onRequest", workspaceMiddleware)
 
-  app.get<{
-    Params: { workspaceId: string }
-  }>(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/me/relationship-profile",
-    async (request, reply) => {
+    { schema: RelationshipProfileViewSchema },
+    async (request) => {
+      const params = request.params as { workspaceId: string }
       const userId = (request as any).user!.userId
-      return reply.send(
+      return presentRelationshipProfile(
         await getMemberRelationshipProfile({
-          workspaceId: request.params.workspaceId,
+          workspaceId: params.workspaceId,
           userId,
         })
       )
     }
   )
 
-  app.put<{
-    Params: { workspaceId: string }
-    Body: unknown
-  }>(
+  appRoute(
+    app,
+    "PUT",
     "/api/v1/workspaces/:workspaceId/me/relationship-profile",
-    async (request, reply) => {
+    { schema: RelationshipProfileViewSchema },
+    async (request) => {
+      const params = request.params as { workspaceId: string }
       const userId = (request as any).user!.userId
       const body = updateMemberProfileSchema.parse(request.body)
-      return reply.send(
+      return presentRelationshipProfile(
         await updateMemberRelationshipProfile({
-          workspaceId: request.params.workspaceId,
+          workspaceId: params.workspaceId,
           userId,
           approvalMode: body.approvalMode,
           identityId: body.identityId,
@@ -110,55 +119,59 @@ export default async function relationshipController(app: FastifyInstance) {
     }
   )
 
-  app.get<{
-    Params: { workspaceId: string; actorId: string }
-  }>(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/actors/:actorId/relationship-profile",
+    { schema: RelationshipProfileViewSchema },
     async (request, reply) => {
+      const params = request.params as { workspaceId: string; actorId: string }
       const allowed = await requireRequestAction(
         request,
         reply,
         "actor.grant",
-        request.params.actorId,
+        params.actorId,
         "Not allowed to manage this actor relationship profile"
       )
       if (!allowed) return
       const userId = (request as any).user!.userId
       try {
-        return reply.send(
+        return presentRelationshipProfile(
           await getActorRelationshipProfile({
-            workspaceId: request.params.workspaceId,
-            actorId: request.params.actorId,
+            workspaceId: params.workspaceId,
+            actorId: params.actorId,
             userId,
           })
         )
       } catch (error) {
-        return sendServiceError(reply, error)
+        sendServiceError(reply, error)
+        return
       }
     }
   )
 
-  app.put<{
-    Params: { workspaceId: string; actorId: string }
-    Body: unknown
-  }>(
+  appRoute(
+    app,
+    "PUT",
     "/api/v1/workspaces/:workspaceId/actors/:actorId/relationship-profile",
+    { schema: RelationshipProfileViewSchema },
     async (request, reply) => {
+      const params = request.params as { workspaceId: string; actorId: string }
       const allowed = await requireRequestAction(
         request,
         reply,
         "actor.grant",
-        request.params.actorId,
+        params.actorId,
         "Not allowed to manage this actor relationship profile"
       )
       if (!allowed) return
       const userId = (request as any).user!.userId
       const body = updateActorProfileSchema.parse(request.body)
       try {
-        return reply.send(
+        return presentRelationshipProfile(
           await updateActorRelationshipProfile({
-            workspaceId: request.params.workspaceId,
-            actorId: request.params.actorId,
+            workspaceId: params.workspaceId,
+            actorId: params.actorId,
             userId,
             approvalMode: body.approvalMode,
             identityId: body.identityId,
@@ -167,60 +180,71 @@ export default async function relationshipController(app: FastifyInstance) {
           })
         )
       } catch (error) {
-        return sendServiceError(reply, error)
+        sendServiceError(reply, error)
+        return
       }
     }
   )
 
-  app.get<{
-    Params: { workspaceId: string; remoteAgentId: string }
-  }>(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/remote-agents/:remoteAgentId/relationship-profile",
+    { schema: RelationshipProfileViewSchema },
     async (request, reply) => {
+      const params = request.params as {
+        workspaceId: string
+        remoteAgentId: string
+      }
       const allowed = await requireRequestAction(
         request,
         reply,
         "remote_agent.grant",
-        request.params.remoteAgentId,
+        params.remoteAgentId,
         "Not allowed to manage this remote agent relationship profile"
       )
       if (!allowed) return
       const userId = (request as any).user!.userId
       try {
-        return reply.send(
+        return presentRelationshipProfile(
           await getRemoteAgentRelationshipProfile({
-            workspaceId: request.params.workspaceId,
-            remoteAgentId: request.params.remoteAgentId,
+            workspaceId: params.workspaceId,
+            remoteAgentId: params.remoteAgentId,
             userId,
           })
         )
       } catch (error) {
-        return sendServiceError(reply, error)
+        sendServiceError(reply, error)
+        return
       }
     }
   )
 
-  app.put<{
-    Params: { workspaceId: string; remoteAgentId: string }
-    Body: unknown
-  }>(
+  appRoute(
+    app,
+    "PUT",
     "/api/v1/workspaces/:workspaceId/remote-agents/:remoteAgentId/relationship-profile",
+    { schema: RelationshipProfileViewSchema },
     async (request, reply) => {
+      const params = request.params as {
+        workspaceId: string
+        remoteAgentId: string
+      }
       const allowed = await requireRequestAction(
         request,
         reply,
         "remote_agent.grant",
-        request.params.remoteAgentId,
+        params.remoteAgentId,
         "Not allowed to manage this remote agent relationship profile"
       )
       if (!allowed) return
       const userId = (request as any).user!.userId
       const body = updateActorProfileSchema.parse(request.body)
       try {
-        return reply.send(
+        return presentRelationshipProfile(
           await updateRemoteAgentRelationshipProfile({
-            workspaceId: request.params.workspaceId,
-            remoteAgentId: request.params.remoteAgentId,
+            workspaceId: params.workspaceId,
+            remoteAgentId: params.remoteAgentId,
             userId,
             approvalMode: body.approvalMode,
             identityId: body.identityId,
@@ -229,309 +253,374 @@ export default async function relationshipController(app: FastifyInstance) {
           })
         )
       } catch (error) {
-        return sendServiceError(reply, error)
+        sendServiceError(reply, error)
+        return
       }
     }
   )
 
-  app.post<{
-    Params: { workspaceId: string }
-    Body: unknown
-  }>(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/relationship-qr/scan",
+    { schema: RelationshipScanResponseSchema },
     async (request, reply) => {
+      const params = request.params as { workspaceId: string }
       const userId = (request as any).user!.userId
       const body = scanSchema.parse(request.body)
       try {
-        return reply.send(
-          await scanRelationshipQr({
-            workspaceId: request.params.workspaceId,
-            userId,
-            token: body.token,
-          })
-        )
+        return await scanRelationshipQr({
+          workspaceId: params.workspaceId,
+          userId,
+          token: body.token,
+        })
       } catch (error) {
-        return sendServiceError(reply, error)
+        sendServiceError(reply, error)
+        return
       }
     }
   )
 
-  app.get<{
-    Params: { workspaceId: string }
-    Querystring: { q?: string }
-  }>(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/identity-search",
-    async (request, reply) => {
+    { schema: IdentitySearchResponseSchema },
+    async (request) => {
+      const params = request.params as { workspaceId: string }
       const userId = (request as any).user!.userId
       const query = identitySearchQuerySchema.parse(request.query)
-      return reply.send(
-        await searchRelationshipsByIdentity({
-          workspaceId: request.params.workspaceId,
-          userId,
-          query: query.q || "",
-        })
-      )
+      return searchRelationshipsByIdentity({
+        workspaceId: params.workspaceId,
+        userId,
+        query: query.q || "",
+      })
     }
   )
 
-  app.post<{
-    Params: { workspaceId: string }
-    Body: unknown
-  }>(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/identity-search/request",
+    { schema: RelationshipScanResponseSchema },
     async (request, reply) => {
+      const params = request.params as { workspaceId: string }
       const userId = (request as any).user!.userId
       const body = requestRelationshipBySearchSchema.parse(request.body)
       try {
-        return reply.send(
-          await requestRelationshipByIdentityProfile({
-            workspaceId: request.params.workspaceId,
+        return await requestRelationshipByIdentityProfile({
+          workspaceId: params.workspaceId,
+          userId,
+          profileId: body.profileId,
+        })
+      } catch (error) {
+        sendServiceError(reply, error)
+        return
+      }
+    }
+  )
+
+  appRoute(
+    app,
+    "GET",
+    "/api/v1/workspaces/:workspaceId/friends",
+    { schema: FriendsListResponseSchema },
+    async (request) => {
+      const params = request.params as { workspaceId: string }
+      const userId = (request as any).user!.userId
+      return listFriends({
+        workspaceId: params.workspaceId,
+        userId,
+      })
+    }
+  )
+
+  appRoute(
+    app,
+    "GET",
+    "/api/v1/workspaces/:workspaceId/friend-requests",
+    { schema: RequestListResponseSchema },
+    async (request) => {
+      const params = request.params as { workspaceId: string }
+      const userId = (request as any).user!.userId
+      const requests = await listFriendRequests({
+        workspaceId: params.workspaceId,
+        userId,
+      })
+      return {
+        incoming: requests.incoming.map(presentFriendRequest),
+        outgoing: requests.outgoing.map(presentFriendRequest),
+      }
+    }
+  )
+
+  appRoute(
+    app,
+    "POST",
+    "/api/v1/workspaces/:workspaceId/friend-requests/:requestId/approve",
+    { schema: ResolveRequestResponseSchema },
+    async (request, reply) => {
+      const params = request.params as {
+        workspaceId: string
+        requestId: string
+      }
+      const userId = (request as any).user!.userId
+      try {
+        return presentResolvedRelationshipRequest(
+          await resolveFriendRequest({
+            workspaceId: params.workspaceId,
             userId,
-            profileId: body.profileId,
+            requestId: params.requestId,
+            decision: "approve",
           })
         )
       } catch (error) {
-        return sendServiceError(reply, error)
+        sendServiceError(reply, error)
+        return
       }
     }
   )
 
-  app.get<{
-    Params: { workspaceId: string }
-  }>("/api/v1/workspaces/:workspaceId/friends", async (request, reply) => {
-    const userId = (request as any).user!.userId
-    return reply.send(
-      await listFriends({
-        workspaceId: request.params.workspaceId,
-        userId,
-      })
-    )
-  })
-
-  app.get<{
-    Params: { workspaceId: string }
-  }>(
-    "/api/v1/workspaces/:workspaceId/friend-requests",
-    async (request, reply) => {
-      const userId = (request as any).user!.userId
-      return reply.send(
-        await listFriendRequests({
-          workspaceId: request.params.workspaceId,
-          userId,
-        })
-      )
-    }
-  )
-
-  app.post<{
-    Params: { workspaceId: string; requestId: string }
-  }>(
-    "/api/v1/workspaces/:workspaceId/friend-requests/:requestId/approve",
-    async (request, reply) => {
-      const userId = (request as any).user!.userId
-      try {
-        return reply.send({
-          request: await resolveFriendRequest({
-            workspaceId: request.params.workspaceId,
-            userId,
-            requestId: request.params.requestId,
-            decision: "approve",
-          }),
-        })
-      } catch (error) {
-        return sendServiceError(reply, error)
-      }
-    }
-  )
-
-  app.post<{
-    Params: { workspaceId: string; requestId: string }
-  }>(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/friend-requests/:requestId/reject",
+    { schema: ResolveRequestResponseSchema },
     async (request, reply) => {
+      const params = request.params as {
+        workspaceId: string
+        requestId: string
+      }
       const userId = (request as any).user!.userId
       try {
-        return reply.send({
-          request: await resolveFriendRequest({
-            workspaceId: request.params.workspaceId,
+        return presentResolvedRelationshipRequest(
+          await resolveFriendRequest({
+            workspaceId: params.workspaceId,
             userId,
-            requestId: request.params.requestId,
+            requestId: params.requestId,
             decision: "reject",
-          }),
-        })
+          })
+        )
       } catch (error) {
-        return sendServiceError(reply, error)
+        sendServiceError(reply, error)
+        return
       }
     }
   )
 
-  app.get<{
-    Params: { workspaceId: string }
-  }>(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/actor-access-requests",
-    async (request, reply) => {
+    { schema: RequestListResponseSchema },
+    async (request) => {
+      const params = request.params as { workspaceId: string }
       const userId = (request as any).user!.userId
-      return reply.send(
-        await listActorAccessRequests({
-          workspaceId: request.params.workspaceId,
-          userId,
-        })
-      )
-    }
-  )
-
-  app.get<{
-    Params: { workspaceId: string }
-  }>(
-    "/api/v1/workspaces/:workspaceId/remote-agent-access-requests",
-    async (request, reply) => {
-      const userId = (request as any).user!.userId
-      return reply.send(
-        await listRemoteAgentAccessRequests({
-          workspaceId: request.params.workspaceId,
-          userId,
-        })
-      )
-    }
-  )
-
-  app.post<{
-    Params: { workspaceId: string; requestId: string }
-  }>(
-    "/api/v1/workspaces/:workspaceId/actor-access-requests/:requestId/approve",
-    async (request, reply) => {
-      const userId = (request as any).user!.userId
-      try {
-        return reply.send({
-          request: await resolveActorAccessRequest({
-            workspaceId: request.params.workspaceId,
-            userId,
-            requestId: request.params.requestId,
-            decision: "approve",
-          }),
-        })
-      } catch (error) {
-        return sendServiceError(reply, error)
-      }
-    }
-  )
-
-  app.post<{
-    Params: { workspaceId: string; requestId: string }
-  }>(
-    "/api/v1/workspaces/:workspaceId/actor-access-requests/:requestId/reject",
-    async (request, reply) => {
-      const userId = (request as any).user!.userId
-      try {
-        return reply.send({
-          request: await resolveActorAccessRequest({
-            workspaceId: request.params.workspaceId,
-            userId,
-            requestId: request.params.requestId,
-            decision: "reject",
-          }),
-        })
-      } catch (error) {
-        return sendServiceError(reply, error)
-      }
-    }
-  )
-
-  app.post<{
-    Params: { workspaceId: string; requestId: string }
-  }>(
-    "/api/v1/workspaces/:workspaceId/remote-agent-access-requests/:requestId/approve",
-    async (request, reply) => {
-      const userId = (request as any).user!.userId
-      try {
-        return reply.send({
-          request: await resolveRemoteAgentAccessRequest({
-            workspaceId: request.params.workspaceId,
-            userId,
-            requestId: request.params.requestId,
-            decision: "approve",
-          }),
-        })
-      } catch (error) {
-        return sendServiceError(reply, error)
-      }
-    }
-  )
-
-  app.post<{
-    Params: { workspaceId: string; requestId: string }
-  }>(
-    "/api/v1/workspaces/:workspaceId/remote-agent-access-requests/:requestId/reject",
-    async (request, reply) => {
-      const userId = (request as any).user!.userId
-      try {
-        return reply.send({
-          request: await resolveRemoteAgentAccessRequest({
-            workspaceId: request.params.workspaceId,
-            userId,
-            requestId: request.params.requestId,
-            decision: "reject",
-          }),
-        })
-      } catch (error) {
-        return sendServiceError(reply, error)
-      }
-    }
-  )
-
-  app.get<{
-    Params: { workspaceId: string }
-  }>("/api/v1/workspaces/:workspaceId/contact-hub", async (request, reply) => {
-    const userId = (request as any).user!.userId
-    return reply.send(
-      await getContactHub({
-        workspaceId: request.params.workspaceId,
+      const requests = await listActorAccessRequests({
+        workspaceId: params.workspaceId,
         userId,
       })
-    )
-  })
+      return {
+        incoming: requests.incoming.map(presentActorAccessRequest),
+        outgoing: requests.outgoing.map(presentActorAccessRequest),
+      }
+    }
+  )
 
-  app.get<{
-    Params: { workspaceId: string; kind: string; contactId: string }
-  }>(
-    "/api/v1/workspaces/:workspaceId/contact-hub/:kind/:contactId",
-    async (request, reply) => {
+  appRoute(
+    app,
+    "GET",
+    "/api/v1/workspaces/:workspaceId/remote-agent-access-requests",
+    { schema: RequestListResponseSchema },
+    async (request) => {
+      const params = request.params as { workspaceId: string }
       const userId = (request as any).user!.userId
-      const kind = contactKindSchema.parse(request.params.kind)
+      const requests = await listRemoteAgentAccessRequests({
+        workspaceId: params.workspaceId,
+        userId,
+      })
+      return {
+        incoming: requests.incoming.map(presentRemoteAgentAccessRequest),
+        outgoing: requests.outgoing.map(presentRemoteAgentAccessRequest),
+      }
+    }
+  )
+
+  appRoute(
+    app,
+    "POST",
+    "/api/v1/workspaces/:workspaceId/actor-access-requests/:requestId/approve",
+    { schema: ResolveRequestResponseSchema },
+    async (request, reply) => {
+      const params = request.params as {
+        workspaceId: string
+        requestId: string
+      }
+      const userId = (request as any).user!.userId
       try {
-        return reply.send(
+        return presentResolvedRelationshipRequest(
+          await resolveActorAccessRequest({
+            workspaceId: params.workspaceId,
+            userId,
+            requestId: params.requestId,
+            decision: "approve",
+          })
+        )
+      } catch (error) {
+        sendServiceError(reply, error)
+        return
+      }
+    }
+  )
+
+  appRoute(
+    app,
+    "POST",
+    "/api/v1/workspaces/:workspaceId/actor-access-requests/:requestId/reject",
+    { schema: ResolveRequestResponseSchema },
+    async (request, reply) => {
+      const params = request.params as {
+        workspaceId: string
+        requestId: string
+      }
+      const userId = (request as any).user!.userId
+      try {
+        return presentResolvedRelationshipRequest(
+          await resolveActorAccessRequest({
+            workspaceId: params.workspaceId,
+            userId,
+            requestId: params.requestId,
+            decision: "reject",
+          })
+        )
+      } catch (error) {
+        sendServiceError(reply, error)
+        return
+      }
+    }
+  )
+
+  appRoute(
+    app,
+    "POST",
+    "/api/v1/workspaces/:workspaceId/remote-agent-access-requests/:requestId/approve",
+    { schema: ResolveRequestResponseSchema },
+    async (request, reply) => {
+      const params = request.params as {
+        workspaceId: string
+        requestId: string
+      }
+      const userId = (request as any).user!.userId
+      try {
+        return presentResolvedRelationshipRequest(
+          await resolveRemoteAgentAccessRequest({
+            workspaceId: params.workspaceId,
+            userId,
+            requestId: params.requestId,
+            decision: "approve",
+          })
+        )
+      } catch (error) {
+        sendServiceError(reply, error)
+        return
+      }
+    }
+  )
+
+  appRoute(
+    app,
+    "POST",
+    "/api/v1/workspaces/:workspaceId/remote-agent-access-requests/:requestId/reject",
+    { schema: ResolveRequestResponseSchema },
+    async (request, reply) => {
+      const params = request.params as {
+        workspaceId: string
+        requestId: string
+      }
+      const userId = (request as any).user!.userId
+      try {
+        return presentResolvedRelationshipRequest(
+          await resolveRemoteAgentAccessRequest({
+            workspaceId: params.workspaceId,
+            userId,
+            requestId: params.requestId,
+            decision: "reject",
+          })
+        )
+      } catch (error) {
+        sendServiceError(reply, error)
+        return
+      }
+    }
+  )
+
+  appRoute(
+    app,
+    "GET",
+    "/api/v1/workspaces/:workspaceId/contact-hub",
+    { schema: ContactHubResponseSchema },
+    async (request) => {
+      const params = request.params as { workspaceId: string }
+      const userId = (request as any).user!.userId
+      return presentContactHub(
+        await getContactHub({
+          workspaceId: params.workspaceId,
+          userId,
+        })
+      )
+    }
+  )
+
+  appRoute(
+    app,
+    "GET",
+    "/api/v1/workspaces/:workspaceId/contact-hub/:kind/:contactId",
+    { schema: ContactHubDetailResponseSchema },
+    async (request, reply) => {
+      const params = request.params as {
+        workspaceId: string
+        kind: string
+        contactId: string
+      }
+      const userId = (request as any).user!.userId
+      const kind = contactKindSchema.parse(params.kind)
+      try {
+        return presentContactHubDetail(
           await getContactHubDetail({
-            workspaceId: request.params.workspaceId,
+            workspaceId: params.workspaceId,
             userId,
             contactKind: kind,
-            contactId: request.params.contactId,
+            contactId: params.contactId,
           })
         )
       } catch (error) {
-        return sendServiceError(reply, error)
+        sendServiceError(reply, error)
+        return
       }
     }
   )
 
-  app.post<{
-    Params: { workspaceId: string }
-    Body: unknown
-  }>(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/chat/direct-conversations/open",
+    { schema: DirectConversationOpenResponseSchema },
     async (request, reply) => {
+      const params = request.params as { workspaceId: string }
       const userId = (request as any).user!.userId
       const body = openDirectSchema.parse(request.body)
       try {
-        return reply.send(
+        return presentDirectConversationOpen(
           await openDirectConversation({
-            workspaceId: request.params.workspaceId,
+            workspaceId: params.workspaceId,
             userId,
             contactKind: body.contactKind,
             contactId: body.contactId,
           })
         )
       } catch (error) {
-        return sendServiceError(reply, error)
+        sendServiceError(reply, error)
+        return
       }
     }
   )

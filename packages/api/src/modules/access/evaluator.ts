@@ -1,12 +1,9 @@
-import { sql } from "kysely"
 import {
-  ACCESS_BINDING_STATUS,
+  CONVERSATION_PARTICIPANT_ROLE_KEY,
   MEMORY_PERMISSION,
   SUBJECT_KIND,
   WORKSPACE_APP_GRANT_PERMISSION,
-  WORKSPACE_APP_KIND,
   WORKSPACE_APP_STATUS,
-  type WorkspaceAppStatus,
 } from "@synapse/shared"
 import type { MemoryPermission, SubjectRef } from "@synapse/shared"
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
@@ -15,8 +12,37 @@ import {
   evaluatePlatformPermission,
   evaluateWorkspacePermission,
 } from "./rbac-rules.js"
-import { upsertAccessSubject } from "./subject-registry.js"
 import { memoryGrantMatches } from "../memory/access-grant-storage.js"
+import {
+  hasActiveConversationMembership,
+  listActorModelGroupIds,
+  listOwnedActorIds,
+  listOwnedRemoteAgentIds,
+  listOwnedWorkspaceAppAccessRows,
+  listResourceGrantRows,
+  listWorkspaceAppAccessRows,
+  listWorkspaceAppAccessRowsByIds,
+  listWorkspaceAppGrantRows,
+  listWorkspaceMemberModelGroupIds,
+  loadDeviceAccessRow,
+  loadDeviceCapabilityAccessRow,
+  loadDeviceExposureDeviceId,
+  loadActorRow,
+  loadConversationRow,
+  loadInstalledSkillAccessRow,
+  loadMemoryItemSpaceRef,
+  loadMemorySpaceWithSubjects,
+  loadModelGroupAccessRow,
+  loadPluginInstallationAccessRow,
+  loadPlatformAccessKeysForUser,
+  loadRemoteAgentRow,
+  loadWorkspaceMemberAccess,
+  type MemorySpaceLoadedRow,
+  type WorkspaceMemberAccess,
+  type WorkspaceAppBindableResourceType,
+  type WorkspaceAppAccessRow,
+  type LegacyBindableResourceType,
+} from "./repo-evaluator.js"
 
 type AccessResourceType =
   | "platform"
@@ -48,147 +74,6 @@ type PermissionSubject = {
 export type { RuntimePrincipalContext } from "./subject-resolution.js"
 
 const PLATFORM_RESOURCE_ID = "synapse"
-
-type WorkspaceMemberAccess = {
-  id: string
-  workspaceId: string
-  userId: string
-  trustLevel: string
-  ownerId: string | null
-  accessKeys: string[]
-}
-
-type ActorRow = {
-  id: string
-  workspace_id: string
-  owner_workspace_member_id: string | null
-  is_active: boolean
-}
-
-type RemoteAgentRow = {
-  id: string
-  workspace_id: string
-  owner_workspace_member_id: string | null
-  is_active: boolean
-  is_public_shared: boolean
-}
-
-type ConversationRow = {
-  id: string
-  workspace_id: string
-  kind: "direct" | "group"
-}
-
-type ResourceGrantMatch = {
-  resource_id: string
-}
-
-async function loadWorkspaceMemberAccess(
-  db: KyselyDb,
-  workspaceMemberId: string
-): Promise<WorkspaceMemberAccess | null> {
-  const row = await db
-    .selectFrom("workspace_members as wm")
-    .innerJoin("workspaces as w", "w.id", "wm.workspace_id")
-    .select([
-      "wm.id",
-      "wm.workspace_id",
-      "wm.user_id",
-      "wm.trust_level",
-      "w.owner_id",
-    ])
-    .where("wm.id", "=", workspaceMemberId)
-    // Soft delete (§8.4): a left/removed member or a soft-deleted workspace
-    // grants no access.
-    .where("wm.status", "=", "active")
-    .where("w.deleted_at", "is", null)
-    .limit(1)
-    .executeTakeFirst()
-  if (!row) return null
-
-  const accessRows = await db
-    .selectFrom("workspace_access_bindings")
-    .select("access_key")
-    .where("workspace_member_id", "=", workspaceMemberId)
-    .where("status", "=", ACCESS_BINDING_STATUS.ACTIVE)
-    .execute()
-
-  return {
-    id: row.id,
-    workspaceId: row.workspace_id,
-    userId: row.user_id,
-    trustLevel: row.trust_level,
-    ownerId: row.owner_id,
-    accessKeys: accessRows.map((entry) => entry.access_key),
-  }
-}
-
-async function loadActorRow(
-  db: KyselyDb,
-  actorId: string
-): Promise<ActorRow | null> {
-  return (await db
-    .selectFrom("actors as actor")
-    .innerJoin("workspace_apps as app", "app.id", "actor.id")
-    .select([
-      "actor.id",
-      "app.workspace_id",
-      "app.owner_workspace_member_id",
-      sql<boolean>`app.status = 'active'`.as("is_active"),
-    ])
-    .where("actor.id", "=", actorId)
-    .where("app.deleted_at", "is", null)
-    .limit(1)
-    .executeTakeFirst()) as ActorRow | null
-}
-
-async function loadRemoteAgentRow(
-  db: KyselyDb,
-  remoteAgentId: string
-): Promise<RemoteAgentRow | null> {
-  const result = await sql<RemoteAgentRow>`
-    SELECT
-      agent.id,
-      app.workspace_id,
-      app.owner_workspace_member_id,
-      (app.status = 'active') AS is_active,
-      agent.is_public_shared
-    FROM remote_agents agent
-    INNER JOIN workspace_apps_live app
-      ON app.id = agent.id
-    WHERE agent.id = ${remoteAgentId}
-      AND app.deleted_at IS NULL
-    LIMIT 1
-  `.execute(db)
-  return result.rows[0] ?? null
-}
-
-async function loadConversationRow(
-  db: KyselyDb,
-  conversationId: string
-): Promise<ConversationRow | null> {
-  const row = await db
-    .selectFrom("conversations as conversation")
-    .select([
-      "conversation.id as id",
-      "conversation.workspace_id as workspace_id",
-      "conversation.kind as kind",
-    ])
-    .where("conversation.id", "=", conversationId)
-    .limit(1)
-    .executeTakeFirst()
-  return row ?? null
-}
-
-async function loadPlatformAccessKeysForUser(db: KyselyDb, userId: string) {
-  const rows = await db
-    .selectFrom("platform_access_bindings")
-    .select("access_key")
-    .where("user_id", "=", userId)
-    .where("status", "=", "active")
-    .execute()
-  return rows.map((row) => row.access_key)
-}
 
 function isWorkspaceOwnerOrAdmin(access: WorkspaceMemberAccess) {
   return access.ownerId === access.userId || access.trustLevel === "admin"
@@ -255,40 +140,6 @@ async function hasWorkspacePermission(
   return workspacePermissionFromAccess(access, permission)
 }
 
-async function hasActiveConversationMembership(
-  db: KyselyDb,
-  params: {
-    conversationId: string
-    workspaceMemberId?: string | null
-    actorId?: string | null
-  }
-) {
-  // P1b: conversation_participants now stores subject_id; resolve the lookup
-  // subject and filter by that id.
-  let subjectId: string | null = null
-  if (params.workspaceMemberId) {
-    subjectId = await upsertAccessSubject(db, {
-      kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-      memberId: params.workspaceMemberId,
-    })
-  } else if (params.actorId) {
-    subjectId = await upsertAccessSubject(db, {
-      kind: SUBJECT_KIND.ACTOR,
-      actorId: params.actorId,
-    })
-  } else {
-    return null
-  }
-  return db
-    .selectFrom("conversation_participants")
-    .select(["id", "role_key"])
-    .where("conversation_id", "=", params.conversationId)
-    .where("state", "=", "active")
-    .where("subject_id", "=", subjectId)
-    .limit(1)
-    .executeTakeFirst()
-}
-
 async function hasConversationPermission(
   db: KyselyDb,
   subject: PermissionSubject,
@@ -310,10 +161,11 @@ async function hasConversationPermission(
       workspaceMemberId: subject.id,
     })
     const sameWorkspace =
-      Boolean(conversation.workspace_id) &&
-      access.workspaceId === conversation.workspace_id
+      Boolean(conversation.workspaceId) &&
+      access.workspaceId === conversation.workspaceId
     const isConversationAdmin =
-      membership?.role_key === "owner" || membership?.role_key === "admin"
+      membership?.roleKey === CONVERSATION_PARTICIPANT_ROLE_KEY.OWNER ||
+      membership?.roleKey === CONVERSATION_PARTICIPANT_ROLE_KEY.ADMIN
     const isWorkspaceConversationAdmin =
       sameWorkspace &&
       workspacePermissionFromAccess(access, "manage_conversations")
@@ -369,7 +221,7 @@ async function hasActorPermission(
   runtimeSubjectIds?: readonly string[]
 ): Promise<boolean> {
   const actor = await loadActorRow(db, actorId)
-  if (!actor || !actor.is_active) {
+  if (!actor || !actor.isActive) {
     return false
   }
 
@@ -397,14 +249,14 @@ async function hasActorPermission(
   }
 
   const access = await loadWorkspaceMemberAccess(db, subject.id)
-  if (!access || access.workspaceId !== actor.workspace_id) {
+  if (!access || access.workspaceId !== actor.workspaceId) {
     return false
   }
 
   const canManage =
     isWorkspaceOwnerOrAdmin(access) ||
     hasWorkspaceAccessKey(access, "actor_admin") ||
-    actor.owner_workspace_member_id === access.id ||
+    actor.ownerWorkspaceMemberId === access.id ||
     (await hasWorkspaceAppGrant(db, {
       resourceType: "actor",
       resourceId: actorId,
@@ -422,7 +274,7 @@ async function hasActorPermission(
   //   - owners stay implicitly visible to themselves, and
   //   - everyone else needs an explicit contact_visible grant.
   const canUse =
-    actor.owner_workspace_member_id === access.id ||
+    actor.ownerWorkspaceMemberId === access.id ||
     (await hasWorkspaceAppGrant(db, {
       resourceType: "actor",
       resourceId: actorId,
@@ -463,7 +315,7 @@ async function hasRemoteAgentPermission(
   runtimeSubjectIds?: readonly string[]
 ): Promise<boolean> {
   const remoteAgent = await loadRemoteAgentRow(db, remoteAgentId)
-  if (!remoteAgent || !remoteAgent.is_active) {
+  if (!remoteAgent || !remoteAgent.isActive) {
     return false
   }
 
@@ -476,12 +328,12 @@ async function hasRemoteAgentPermission(
     return false
   }
 
-  const sameWorkspace = access.workspaceId === remoteAgent.workspace_id
+  const sameWorkspace = access.workspaceId === remoteAgent.workspaceId
   const canManage =
     sameWorkspace &&
     (isWorkspaceOwnerOrAdmin(access) ||
       hasWorkspaceAccessKey(access, "remote_agent_admin") ||
-      remoteAgent.owner_workspace_member_id === access.id ||
+      remoteAgent.ownerWorkspaceMemberId === access.id ||
       (await hasWorkspaceAppGrant(db, {
         resourceType: "remote_agent",
         resourceId: remoteAgentId,
@@ -497,7 +349,7 @@ async function hasRemoteAgentPermission(
   // Cross-workspace `is_public_shared` still requires an explicit binding to
   // be granted; the publishing workspace's auto-write happens on create.
   const canUse =
-    (sameWorkspace && remoteAgent.owner_workspace_member_id === access.id) ||
+    (sameWorkspace && remoteAgent.ownerWorkspaceMemberId === access.id) ||
     (await hasWorkspaceAppGrant(db, {
       resourceType: "remote_agent",
       resourceId: remoteAgentId,
@@ -525,308 +377,9 @@ async function hasRemoteAgentPermission(
   }
 }
 
-type ResourceGrantRow = {
-  resource_id: string
-  subject_kind: string
-  subject_workspace_id_via_join: string | null
-  subject_workspace_member_id_via_join: string | null
-  subject_actor_id_via_join: string | null
-  subject_conversation_id_via_join: string | null
-}
-
-type LegacyBindableResourceTypeLocal = "automation_event_source"
-
-type WorkspaceAppBindableResourceTypeLocal =
-  | "installed_skill"
-  | "plugin_installation"
-  | "device_capability"
-
-const BINDABLE_WORKSPACE_APP_KIND: Record<
-  WorkspaceAppBindableResourceTypeLocal,
-  (typeof WORKSPACE_APP_KIND)[keyof typeof WORKSPACE_APP_KIND]
-> = {
-  installed_skill: WORKSPACE_APP_KIND.INSTALLED_SKILL,
-  plugin_installation: WORKSPACE_APP_KIND.PLUGIN_INSTALLATION,
-  device_capability: WORKSPACE_APP_KIND.DEVICE_CAPABILITY,
-}
-
-function bindableResourceIdColumn(
-  resourceType: LegacyBindableResourceTypeLocal
-) {
-  return "automation_event_source_id"
-}
-
-async function listResourceGrantRows(
-  db: KyselyDb,
-  resourceType: LegacyBindableResourceTypeLocal,
-  resourceId: string | null,
-  subject: PermissionSubject,
-  // PR3: optional scope context. When undefined → filter to scope_subject_id IS NULL
-  // (legacy callers don't see scoped-subject grants). When non-null → filter
-  // scope_subject_id IS NULL OR scope_subject_id ∈ runtimeScopeSubjectIds.
-  runtimeScopeSubjectIds?: readonly string[],
-  // P1 fix (post-D4): the per-principal `subject.type` branches below only
-  // match bindings whose `subject_id` points at the principal itself
-  // (workspace / actor / remote_agent / workspace_member subjects). They
-  // don't surface grants written against group subjects the principal is
-  // currently *inside* — most notably `subject=conversation C` grants when
-  // the principal is an active participant of C. `runtimeSubjectIds` is the
-  // full set of subject_ids the principal can claim under right now (from
-  // `RuntimePrincipalContext`); we OR it into the matcher so those group
-  // grants are surfaced. Without this parameter the function preserves the
-  // legacy per-principal-only matching (which is still correct, just narrower).
-  runtimeSubjectIds?: readonly string[]
-): Promise<ResourceGrantRow[]> {
-  const resourceIdColumn = bindableResourceIdColumn(resourceType)
-
-  let query = db
-    .selectFrom("resource_access_bindings as binding")
-    .innerJoin("access_subjects as subj", "subj.id", "binding.subject_id")
-    .select([
-      sql<string>`binding.automation_event_source_id::text`.as("resource_id"),
-      sql<string>`subj.kind`.as("subject_kind"),
-      sql<string | null>`subj.workspace_id`.as("subject_workspace_id_via_join"),
-      sql<string | null>`subj.workspace_member_id`.as(
-        "subject_workspace_member_id_via_join"
-      ),
-      sql<string | null>`subj.actor_id`.as("subject_actor_id_via_join"),
-      sql<string | null>`subj.conversation_id`.as(
-        "subject_conversation_id_via_join"
-      ),
-    ])
-    .where("binding.status", "=", "active")
-
-  // PR3: scope filter — `subject_id ∈ runtime AND (scope_subject_id IS NULL OR
-  // scope_subject_id ∈ runtimeScopeSubjectIds)`. When no scope context is
-  // provided we keep the conservative "NULL scope only" filter so legacy
-  // callers don't accidentally see scoped grants.
-  if (runtimeScopeSubjectIds && runtimeScopeSubjectIds.length > 0) {
-    query = query.where((eb) =>
-      eb.or([
-        eb("binding.scope_subject_id", "is", null),
-        eb("binding.scope_subject_id", "in", [...runtimeScopeSubjectIds]),
-      ])
-    )
-  } else {
-    query = query.where("binding.scope_subject_id", "is", null)
-  }
-
-  if (resourceId) {
-    query = query.where(`binding.${resourceIdColumn}` as any, "=", resourceId)
-  }
-
-  // P1 fix: combine the per-principal matcher (legacy) with a runtime-subject
-  // matcher (post-D4) so group-subject bindings — most notably
-  // `subject=conversation C` — match active participants.
-  const extraRuntimeSubjectIds =
-    runtimeSubjectIds && runtimeSubjectIds.length > 0
-      ? [...runtimeSubjectIds]
-      : null
-
-  if (subject.type === "workspace") {
-    query = query.where((eb) =>
-      eb.or([
-        eb.and([
-          eb("subj.kind", "=", "workspace"),
-          eb("subj.workspace_id", "=", subject.id),
-        ]),
-        ...(extraRuntimeSubjectIds
-          ? [eb("binding.subject_id", "in", extraRuntimeSubjectIds)]
-          : []),
-      ])
-    )
-  } else if (subject.type === "actor") {
-    query = query.where((eb) =>
-      eb.or([
-        eb.and([
-          eb("subj.kind", "=", "actor"),
-          eb("subj.actor_id", "=", subject.id),
-        ]),
-        ...(extraRuntimeSubjectIds
-          ? [eb("binding.subject_id", "in", extraRuntimeSubjectIds)]
-          : []),
-      ])
-    )
-  } else if (subject.type === "remote_agent") {
-    // PR4 fix: previously fell through to the `return []` below, which meant
-    // a remote_agent principal never matched any binding even when the
-    // binding's subject_id pointed at exactly that remote_agent.
-    query = query.where((eb) =>
-      eb.or([
-        eb.and([
-          eb("subj.kind", "=", "remote_agent"),
-          eb("subj.remote_agent_id", "=", subject.id),
-        ]),
-        ...(extraRuntimeSubjectIds
-          ? [eb("binding.subject_id", "in", extraRuntimeSubjectIds)]
-          : []),
-      ])
-    )
-  } else if (subject.type === "workspace_member") {
-    const access = await loadWorkspaceMemberAccess(db, subject.id)
-    if (!access) {
-      return []
-    }
-    // P2 fix: a workspace_member subject matches BOTH
-    //   (a) grants targeting the workspace they belong to (default workspace
-    //       visibility + workspace-wide grants), AND
-    //   (b) grants targeting them specifically (workspace_member-scoped
-    //       approval grants — written by grantApprovedContactVisibility).
-    // Missing (b) was the bug: approval grants would silently fail because the
-    // member would never match the workspace_member-scoped binding.
-    query = query.where((eb) =>
-      eb.or([
-        eb.and([
-          eb("subj.kind", "=", "workspace"),
-          eb("subj.workspace_id", "=", access.workspaceId),
-        ]),
-        eb.and([
-          eb("subj.kind", "=", "workspace_member"),
-          eb("subj.workspace_member_id", "=", subject.id),
-        ]),
-        ...(extraRuntimeSubjectIds
-          ? [eb("binding.subject_id", "in", extraRuntimeSubjectIds)]
-          : []),
-      ])
-    )
-  } else {
-    return []
-  }
-
-  return await query.execute()
-}
-
-async function listWorkspaceAppGrantRows(
-  db: KyselyDb,
-  params: {
-    resourceType:
-      | "installed_skill"
-      | "plugin_installation"
-      | "device_capability"
-      | "actor"
-      | "remote_agent"
-    resourceId: string | null
-    requiredGrantPermission: "use" | "contact_visible" | "manage"
-    subject: PermissionSubject
-    runtimeScopeSubjectIds?: readonly string[]
-    runtimeSubjectIds?: readonly string[]
-  }
-): Promise<ResourceGrantRow[]> {
-  let query = db
-    .selectFrom("workspace_app_grants as app_grant")
-    .innerJoin("workspace_apps as app", "app.id", "app_grant.workspace_app_id")
-    .innerJoin("access_subjects as subj", "subj.id", "app_grant.subject_id")
-    .select([
-      "app_grant.workspace_app_id as resource_id",
-      sql<string>`subj.kind`.as("subject_kind"),
-      sql<string | null>`subj.workspace_id`.as("subject_workspace_id_via_join"),
-      sql<string | null>`subj.workspace_member_id`.as(
-        "subject_workspace_member_id_via_join"
-      ),
-      sql<string | null>`subj.actor_id`.as("subject_actor_id_via_join"),
-      sql<string | null>`subj.conversation_id`.as(
-        "subject_conversation_id_via_join"
-      ),
-    ])
-    .where("app_grant.status", "=", "active")
-    .where("app.kind", "=", params.resourceType)
-    .where("app.deleted_at", "is", null)
-    .where(
-      sql<boolean>`${params.requiredGrantPermission}::workspace_app_grant_permission = ANY(app_grant.permissions)`
-    )
-
-  query =
-    params.requiredGrantPermission === WORKSPACE_APP_GRANT_PERMISSION.MANAGE
-      ? query.where("app.status", "!=", WORKSPACE_APP_STATUS.ARCHIVED)
-      : query.where("app.status", "=", WORKSPACE_APP_STATUS.ACTIVE)
-
-  const runtimeScopeSubjectIds = params.runtimeScopeSubjectIds ?? []
-  if (runtimeScopeSubjectIds.length > 0) {
-    query = query.where((eb) =>
-      eb.or([
-        eb("app_grant.scope_subject_id", "is", null),
-        eb("app_grant.scope_subject_id", "in", [...runtimeScopeSubjectIds]),
-      ])
-    )
-  } else {
-    query = query.where("app_grant.scope_subject_id", "is", null)
-  }
-
-  if (params.resourceId) {
-    query = query.where("app_grant.workspace_app_id", "=", params.resourceId)
-  }
-
-  const extraRuntimeSubjectIds =
-    params.runtimeSubjectIds && params.runtimeSubjectIds.length > 0
-      ? [...params.runtimeSubjectIds]
-      : null
-
-  if (params.subject.type === "workspace") {
-    query = query.where((eb) =>
-      eb.or([
-        eb.and([
-          eb("subj.kind", "=", "workspace"),
-          eb("subj.workspace_id", "=", params.subject.id),
-        ]),
-        ...(extraRuntimeSubjectIds
-          ? [eb("app_grant.subject_id", "in", extraRuntimeSubjectIds)]
-          : []),
-      ])
-    )
-  } else if (params.subject.type === "actor") {
-    query = query.where((eb) =>
-      eb.or([
-        eb.and([
-          eb("subj.kind", "=", "actor"),
-          eb("subj.actor_id", "=", params.subject.id),
-        ]),
-        ...(extraRuntimeSubjectIds
-          ? [eb("app_grant.subject_id", "in", extraRuntimeSubjectIds)]
-          : []),
-      ])
-    )
-  } else if (params.subject.type === "remote_agent") {
-    query = query.where((eb) =>
-      eb.or([
-        eb.and([
-          eb("subj.kind", "=", "remote_agent"),
-          eb("subj.remote_agent_id", "=", params.subject.id),
-        ]),
-        ...(extraRuntimeSubjectIds
-          ? [eb("app_grant.subject_id", "in", extraRuntimeSubjectIds)]
-          : []),
-      ])
-    )
-  } else if (params.subject.type === "workspace_member") {
-    const access = await loadWorkspaceMemberAccess(db, params.subject.id)
-    if (!access) {
-      return []
-    }
-    query = query.where((eb) =>
-      eb.or([
-        eb.and([
-          eb("subj.kind", "=", "workspace"),
-          eb("subj.workspace_id", "=", access.workspaceId),
-        ]),
-        eb.and([
-          eb("subj.kind", "=", "workspace_member"),
-          eb("subj.workspace_member_id", "=", params.subject.id),
-        ]),
-        ...(extraRuntimeSubjectIds
-          ? [eb("app_grant.subject_id", "in", extraRuntimeSubjectIds)]
-          : []),
-      ])
-    )
-  } else {
-    return []
-  }
-
-  return await query.execute()
-}
-
 async function hasResourceGrant(
   db: KyselyDb,
-  resourceType: LegacyBindableResourceTypeLocal,
+  resourceType: LegacyBindableResourceType,
   resourceId: string,
   subject: PermissionSubject,
   runtimeScopeSubjectIds?: readonly string[],
@@ -872,7 +425,7 @@ async function hasWorkspaceAppGrant(
 
 async function listGrantedResourceIds(
   db: KyselyDb,
-  resourceType: LegacyBindableResourceTypeLocal,
+  resourceType: LegacyBindableResourceType,
   subject: PermissionSubject,
   limit?: number,
   runtimeScopeSubjectIds?: readonly string[],
@@ -886,7 +439,7 @@ async function listGrantedResourceIds(
     runtimeScopeSubjectIds,
     runtimeSubjectIds
   )
-  const ids = Array.from(new Set(rows.map((row) => row.resource_id)))
+  const ids = Array.from(new Set(rows.map((row) => row.resourceId)))
   return typeof limit === "number" && limit > 0 ? ids.slice(0, limit) : ids
 }
 
@@ -914,7 +467,7 @@ async function listGrantedWorkspaceAppIds(
     runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
     runtimeSubjectIds: params.runtimeSubjectIds,
   })
-  const ids = Array.from(new Set(rows.map((row) => row.resource_id)))
+  const ids = Array.from(new Set(rows.map((row) => row.resourceId)))
   return typeof params.limit === "number" && params.limit > 0
     ? ids.slice(0, params.limit)
     : ids
@@ -927,7 +480,7 @@ function isBindableWorkspaceAppManagementVisible(status: string) {
 async function listManageableWorkspaceAppIds(
   db: KyselyDb,
   params: {
-    resourceType: WorkspaceAppBindableResourceTypeLocal
+    resourceType: WorkspaceAppBindableResourceType
     manageAccessKey: string
     subject: PermissionSubject
     limit?: number
@@ -944,10 +497,7 @@ async function listManageableWorkspaceAppIds(
     return []
   }
 
-  const appKind = BINDABLE_WORKSPACE_APP_KIND[params.resourceType]
-  const manageableIds = (
-    rows: Array<{ id: string | null; status: WorkspaceAppStatus | null }>
-  ) =>
+  const manageableIds = (rows: WorkspaceAppAccessRow[]) =>
     rows.flatMap((row) =>
       typeof row.id === "string" &&
       typeof row.status === "string" &&
@@ -956,27 +506,19 @@ async function listManageableWorkspaceAppIds(
         : []
     )
   if (workspacePermissionFromAccess(access, params.manageAccessKey)) {
-    const rows = await db
-      .selectFrom("workspace_apps_live as app")
-      .select(["app.id", "app.status"])
-      .where("app.workspace_id", "=", access.workspaceId)
-      .where("app.kind", "=", appKind)
-      .where("app.deleted_at", "is", null)
-      .orderBy("app.created_at", "desc")
-      .execute()
+    const rows = await listWorkspaceAppAccessRows(db, {
+      workspaceId: access.workspaceId,
+      resourceType: params.resourceType,
+    })
     return finalizeResourceIdList([manageableIds(rows)], params.limit)
   }
 
   const [ownRows, grantRows] = await Promise.all([
-    db
-      .selectFrom("workspace_apps_live as app")
-      .select(["app.id", "app.status"])
-      .where("app.workspace_id", "=", access.workspaceId)
-      .where("app.kind", "=", appKind)
-      .where("app.deleted_at", "is", null)
-      .where("app.owner_workspace_member_id", "=", access.id)
-      .orderBy("app.created_at", "desc")
-      .execute(),
+    listOwnedWorkspaceAppAccessRows(db, {
+      workspaceId: access.workspaceId,
+      resourceType: params.resourceType,
+      ownerWorkspaceMemberId: access.id,
+    }),
     listWorkspaceAppGrantRows(db, {
       resourceType: params.resourceType,
       resourceId: null,
@@ -987,21 +529,15 @@ async function listManageableWorkspaceAppIds(
     }),
   ])
 
-  const grantedIds = Array.from(
-    new Set(grantRows.map((row) => row.resource_id))
-  )
+  const grantedIds = Array.from(new Set(grantRows.map((row) => row.resourceId)))
   const grantedRows =
     grantedIds.length === 0
       ? []
-      : await db
-          .selectFrom("workspace_apps_live as app")
-          .select(["app.id", "app.status"])
-          .where("app.id", "in", grantedIds)
-          .where("app.workspace_id", "=", access.workspaceId)
-          .where("app.kind", "=", appKind)
-          .where("app.deleted_at", "is", null)
-          .orderBy("app.created_at", "desc")
-          .execute()
+      : await listWorkspaceAppAccessRowsByIds(db, {
+          ids: grantedIds,
+          workspaceId: access.workspaceId,
+          resourceType: params.resourceType,
+        })
 
   return finalizeResourceIdList(
     [manageableIds(ownRows), manageableIds(grantedRows)],
@@ -1012,7 +548,7 @@ async function listManageableWorkspaceAppIds(
 async function listBindableWorkspaceAppIdsForPermission(
   db: KyselyDb,
   params: {
-    resourceType: WorkspaceAppBindableResourceTypeLocal
+    resourceType: WorkspaceAppBindableResourceType
     permission: string
     manageAccessKey: string
     subject: PermissionSubject
@@ -1127,7 +663,7 @@ function finalizeResourceIdList(groups: readonly string[][], limit?: number) {
 async function resolveBindableResourceAccess(
   db: KyselyDb,
   params: {
-    resourceType: WorkspaceAppBindableResourceTypeLocal
+    resourceType: WorkspaceAppBindableResourceType
     resourceId: string
     workspaceId: string
     ownerWorkspaceMemberId: string | null
@@ -1207,14 +743,7 @@ async function hasInstalledSkillPermission(
 ): Promise<boolean> {
   const managementVisiblePermissions = ["edit", "grant", "delete"] as const
   const manageablePermissions = ["view", "edit", "grant", "delete"] as const
-  const row = await db
-    .selectFrom("installed_skills as skill")
-    .innerJoin("workspace_apps as app", "app.id", "skill.id")
-    .select(["app.workspace_id", "app.owner_workspace_member_id", "app.status"])
-    .where("skill.id", "=", skillId)
-    .where("app.deleted_at", "is", null)
-    .limit(1)
-    .executeTakeFirst()
+  const row = await loadInstalledSkillAccessRow(db, skillId)
   if (!row) {
     return false
   }
@@ -1233,8 +762,8 @@ async function hasInstalledSkillPermission(
   return resolveBindableResourceAccess(db, {
     resourceType: "installed_skill",
     resourceId: skillId,
-    workspaceId: row.workspace_id,
-    ownerWorkspaceMemberId: row.owner_workspace_member_id,
+    workspaceId: row.workspaceId,
+    ownerWorkspaceMemberId: row.ownerWorkspaceMemberId,
     manageAccessKey: "manage_skills",
     grantablePermissions: ["use", "view"],
     manageablePermissions,
@@ -1256,14 +785,7 @@ async function hasPluginInstallationPermission(
 ): Promise<boolean> {
   const managementVisiblePermissions = ["edit", "grant", "delete"] as const
   const manageablePermissions = ["view", "edit", "grant", "delete"] as const
-  const row = await db
-    .selectFrom("plugin_installations as installation")
-    .innerJoin("workspace_apps as app", "app.id", "installation.id")
-    .select(["app.workspace_id", "app.owner_workspace_member_id", "app.status"])
-    .where("installation.id", "=", installationId)
-    .where("app.deleted_at", "is", null)
-    .limit(1)
-    .executeTakeFirst()
+  const row = await loadPluginInstallationAccessRow(db, installationId)
   if (!row) {
     return false
   }
@@ -1282,8 +804,8 @@ async function hasPluginInstallationPermission(
   return resolveBindableResourceAccess(db, {
     resourceType: "plugin_installation",
     resourceId: installationId,
-    workspaceId: row.workspace_id,
-    ownerWorkspaceMemberId: row.owner_workspace_member_id,
+    workspaceId: row.workspaceId,
+    ownerWorkspaceMemberId: row.ownerWorkspaceMemberId,
     manageAccessKey: "manage_plugins",
     grantablePermissions: ["use", "view"],
     manageablePermissions,
@@ -1302,14 +824,7 @@ async function hasDevicePermission(
   permission: string
 ): Promise<boolean> {
   const managementVisiblePermissions = ["edit", "grant", "delete"] as const
-  const row = await db
-    .selectFrom("devices")
-    .select(["workspace_id", "owner_workspace_member_id"])
-    .where("id", "=", deviceId)
-    // Soft delete (§8): a soft-deleted/closed device is never authorizable.
-    .where("deleted_at", "is", null)
-    .limit(1)
-    .executeTakeFirst()
+  const row = await loadDeviceAccessRow(db, deviceId)
   if (!row) {
     return false
   }
@@ -1326,13 +841,13 @@ async function hasDevicePermission(
   }
 
   const access = await loadWorkspaceMemberAccess(db, subject.id)
-  if (!access || access.workspaceId !== row.workspace_id) {
+  if (!access || access.workspaceId !== row.workspaceId) {
     return false
   }
 
   const canManage =
     workspacePermissionFromAccess(access, "manage_devices") ||
-    row.owner_workspace_member_id === access.id
+    row.ownerWorkspaceMemberId === access.id
 
   switch (permission) {
     case "view":
@@ -1352,20 +867,14 @@ async function hasExposurePermission(
   permission: string
 ): Promise<boolean> {
   const managementVisiblePermissions = ["edit", "grant", "delete"] as const
-  const row = await db
-    .selectFrom("device_exposures as exposure")
-    .innerJoin("devices as device", "device.id", "exposure.device_id")
-    .select(["device.id as device_id"])
-    .where("exposure.id", "=", exposureId)
-    .limit(1)
-    .executeTakeFirst()
-  if (!row?.device_id) {
+  const deviceId = await loadDeviceExposureDeviceId(db, exposureId)
+  if (!deviceId) {
     return false
   }
   return hasDevicePermission(
     db,
     subject,
-    row.device_id,
+    deviceId,
     permission === "view" ? "view" : "manage"
   )
 }
@@ -1379,25 +888,7 @@ async function hasCapabilityPermission(
   runtimeSubjectIds?: readonly string[]
 ): Promise<boolean> {
   const managementVisiblePermissions = ["edit", "grant", "delete"] as const
-  const row = await db
-    .selectFrom("device_capabilities as capability")
-    .innerJoin("workspace_apps as app", "app.id", "capability.id")
-    .innerJoin(
-      "device_exposures as exposure",
-      "exposure.id",
-      "capability.exposure_id"
-    )
-    .innerJoin("devices as device", "device.id", "exposure.device_id")
-    .select([
-      "app.workspace_id",
-      "app.status",
-      "device.id as device_id",
-      "device.owner_workspace_member_id",
-    ])
-    .where("capability.id", "=", capabilityId)
-    .where("app.deleted_at", "is", null)
-    .limit(1)
-    .executeTakeFirst()
+  const row = await loadDeviceCapabilityAccessRow(db, capabilityId)
   if (!row) {
     return false
   }
@@ -1416,8 +907,8 @@ async function hasCapabilityPermission(
   return resolveBindableResourceAccess(db, {
     resourceType: "device_capability",
     resourceId: capabilityId,
-    workspaceId: row.workspace_id,
-    ownerWorkspaceMemberId: row.owner_workspace_member_id,
+    workspaceId: row.workspaceId,
+    ownerWorkspaceMemberId: row.ownerWorkspaceMemberId,
     manageAccessKey: "manage_devices",
     grantablePermissions: ["use", "view", "request_runtime_authorization"],
     manageablePermissions: [
@@ -1457,17 +948,11 @@ async function listActorIds(
   //   (a) workspace-scoped grants, and
   //   (b) workspace_member-scoped approval grants for this specific member.
   // Passing the member subject directly is what makes (b) visible here.
-  const [ownActors, grantedIds] = await Promise.all([
-    db
-      .selectFrom("actors as a")
-      .innerJoin("workspace_apps as app", "app.id", "a.id")
-      .select("a.id")
-      .where("app.workspace_id", "=", access.workspaceId)
-      .where("app.deleted_at", "is", null)
-      .where("app.status", "=", "active")
-      .where("app.owner_workspace_member_id", "=", access.id)
-      .orderBy("a.created_at", "desc")
-      .execute(),
+  const [ownActorIds, grantedIds] = await Promise.all([
+    listOwnedActorIds(db, {
+      workspaceId: access.workspaceId,
+      ownerWorkspaceMemberId: access.id,
+    }),
     listGrantedWorkspaceAppIds(db, {
       resourceType: "actor",
       requiredGrantPermission: "contact_visible",
@@ -1476,10 +961,7 @@ async function listActorIds(
       runtimeSubjectIds,
     }),
   ])
-  return finalizeResourceIdList(
-    [ownActors.map((row) => row.id), grantedIds],
-    limit
-  )
+  return finalizeResourceIdList([ownActorIds, grantedIds], limit)
 }
 
 async function listRemoteAgentIds(
@@ -1501,17 +983,11 @@ async function listRemoteAgentIds(
   // P2: same-workspace remote-agent visibility now comes from
   // workspace_app_grants. Cross-workspace public-shared discovery remains in
   // the relationship/friend model and is handled outside this grant lookup.
-  const [ownAgents, grantedIds] = await Promise.all([
-    db
-      .selectFrom("remote_agents as agent")
-      .innerJoin("workspace_apps as app", "app.id", "agent.id")
-      .select("agent.id")
-      .where("app.status", "=", "active")
-      .where("app.deleted_at", "is", null)
-      .where("app.workspace_id", "=", access.workspaceId)
-      .where("app.owner_workspace_member_id", "=", access.id)
-      .orderBy("agent.created_at", "desc")
-      .execute(),
+  const [ownAgentIds, grantedIds] = await Promise.all([
+    listOwnedRemoteAgentIds(db, {
+      workspaceId: access.workspaceId,
+      ownerWorkspaceMemberId: access.id,
+    }),
     listGrantedWorkspaceAppIds(db, {
       resourceType: "remote_agent",
       requiredGrantPermission: "contact_visible",
@@ -1520,10 +996,7 @@ async function listRemoteAgentIds(
       runtimeSubjectIds,
     }),
   ])
-  return finalizeResourceIdList(
-    [ownAgents.map((row) => row.id), grantedIds],
-    limit
-  )
+  return finalizeResourceIdList([ownAgentIds, grantedIds], limit)
 }
 
 async function listModelGroupIds(
@@ -1536,36 +1009,11 @@ async function listModelGroupIds(
     if (!actor) {
       return []
     }
-    const rows = await db
-      .selectFrom("model_groups as mg")
-      .distinct()
-      .leftJoin("model_group_grants as mgg", (join) =>
-        join.onRef("mgg.group_id", "=", "mg.id").on("mgg.status", "=", "active")
-      )
-      .leftJoin("access_subjects as mgs", "mgs.id", "mgg.subject_id")
-      .select("mg.id")
-      .where("mg.is_enabled", "=", true)
-      .where((eb) =>
-        eb.or([
-          eb.and([
-            eb("mg.owner_type", "=", "workspace"),
-            eb("mg.owner_workspace_id", "=", actor.workspace_id),
-          ]),
-          eb("mgs.kind", "=", "platform"),
-          eb.and([
-            eb("mgs.kind", "=", "workspace"),
-            eb("mgs.workspace_id", "=", actor.workspace_id),
-          ]),
-          eb.and([
-            eb("mgs.kind", "=", "actor"),
-            eb("mgs.workspace_id", "=", actor.workspace_id),
-            eb("mgs.actor_id", "=", subject.id),
-          ]),
-        ])
-      )
-      .limit(limit && limit > 0 ? limit : 1000)
-      .execute()
-    return rows.map((row) => row.id)
+    return listActorModelGroupIds(db, {
+      workspaceId: actor.workspaceId,
+      actorId: subject.id,
+      limit,
+    })
   }
 
   if (subject.type !== "workspace_member") {
@@ -1577,39 +1025,11 @@ async function listModelGroupIds(
     return []
   }
 
-  const rows = await db
-    .selectFrom("model_groups as mg")
-    .distinct()
-    .leftJoin("model_group_grants as mgg", (join) =>
-      join.onRef("mgg.group_id", "=", "mg.id").on("mgg.status", "=", "active")
-    )
-    .leftJoin("access_subjects as mgs", "mgs.id", "mgg.subject_id")
-    .select("mg.id")
-    .where("mg.is_enabled", "=", true)
-    .where((eb) =>
-      eb.or([
-        eb.and([
-          eb("mg.owner_type", "=", "workspace"),
-          eb("mg.owner_workspace_id", "=", access.workspaceId),
-        ]),
-        eb.and([
-          eb("mg.owner_type", "=", "workspace_member"),
-          eb("mg.owner_workspace_member_id", "=", access.id),
-        ]),
-        eb("mgs.kind", "=", "platform"),
-        eb.and([
-          eb("mgs.kind", "=", "workspace"),
-          eb("mgs.workspace_id", "=", access.workspaceId),
-        ]),
-        eb.and([
-          eb("mgs.kind", "=", "workspace_member"),
-          eb("mgs.workspace_member_id", "=", access.id),
-        ]),
-      ])
-    )
-    .limit(limit && limit > 0 ? limit : 1000)
-    .execute()
-  return rows.map((row) => row.id)
+  return listWorkspaceMemberModelGroupIds(db, {
+    workspaceId: access.workspaceId,
+    workspaceMemberId: access.id,
+    limit,
+  })
 }
 
 async function hasModelGroupPermission(
@@ -1618,19 +1038,8 @@ async function hasModelGroupPermission(
   groupId: string,
   permission: string
 ): Promise<boolean> {
-  const row = await db
-    .selectFrom("model_groups")
-    .select([
-      "id",
-      "owner_type",
-      "owner_workspace_id",
-      "owner_workspace_member_id",
-      "is_enabled",
-    ])
-    .where("id", "=", groupId)
-    .limit(1)
-    .executeTakeFirst()
-  if (!row || !row.is_enabled) {
+  const row = await loadModelGroupAccessRow(db, groupId)
+  if (!row || !row.isEnabled) {
     return false
   }
 
@@ -1648,21 +1057,21 @@ async function hasModelGroupPermission(
     }
 
     if (
-      row.owner_type === "workspace_member" &&
-      row.owner_workspace_member_id === access.id
+      row.ownerType === "workspace_member" &&
+      row.ownerWorkspaceMemberId === access.id
     ) {
       return true
     }
 
     if (
-      row.owner_type === "workspace" &&
-      row.owner_workspace_id === access.workspaceId &&
+      row.ownerType === "workspace" &&
+      row.ownerWorkspaceId === access.workspaceId &&
       workspacePermissionFromAccess(access, "manage_models")
     ) {
       return true
     }
 
-    if (row.owner_type === "platform") {
+    if (row.ownerType === "platform") {
       return hasPlatformPermission(
         db,
         { type: "workspace_member", id: access.id },
@@ -1672,59 +1081,6 @@ async function hasModelGroupPermission(
   }
 
   return false
-}
-
-type MemorySpaceLoadedRow = {
-  id: string
-  workspace_id: string
-  owner_subject_id: string
-  scope_subject_id: string | null
-  namespace_key: string
-  owner_kind: string
-  owner_workspace_id: string | null
-  owner_actor_id: string | null
-  owner_remote_agent_id: string | null
-  owner_workspace_member_id: string | null
-  owner_conversation_id: string | null
-  scope_kind: string | null
-  scope_conversation_id: string | null
-}
-
-async function loadMemorySpaceWithSubjects(
-  db: KyselyDb,
-  memorySpaceId: string
-): Promise<MemorySpaceLoadedRow | null> {
-  const row = await db
-    .selectFrom("memory_spaces as ms")
-    .innerJoin(
-      "access_subjects as owner_subj",
-      "owner_subj.id",
-      "ms.owner_subject_id"
-    )
-    .leftJoin(
-      "access_subjects as scope_subj",
-      "scope_subj.id",
-      "ms.scope_subject_id"
-    )
-    .select([
-      "ms.id as id",
-      "ms.workspace_id as workspace_id",
-      "ms.owner_subject_id as owner_subject_id",
-      "ms.scope_subject_id as scope_subject_id",
-      "ms.namespace_key as namespace_key",
-      "owner_subj.kind as owner_kind",
-      "owner_subj.workspace_id as owner_workspace_id",
-      "owner_subj.actor_id as owner_actor_id",
-      "owner_subj.remote_agent_id as owner_remote_agent_id",
-      "owner_subj.workspace_member_id as owner_workspace_member_id",
-      "owner_subj.conversation_id as owner_conversation_id",
-      "scope_subj.kind as scope_kind",
-      "scope_subj.conversation_id as scope_conversation_id",
-    ])
-    .where("ms.id", "=", memorySpaceId)
-    .limit(1)
-    .executeTakeFirst()
-  return row ?? null
 }
 
 /**
@@ -1773,8 +1129,8 @@ async function hasMemorySpaceOwnerImplicitPermission(
     runtimeContext?.runtimeSubjectIds?.includes(subjectId) ?? false
 
   const scopeOk =
-    !space.scope_subject_id ||
-    (runtimeContext?.runtimeScopeSubjectIds?.includes(space.scope_subject_id) ??
+    !space.scopeSubjectId ||
+    (runtimeContext?.runtimeScopeSubjectIds?.includes(space.scopeSubjectId) ??
       false)
 
   const adminManageOverride = async (): Promise<boolean> => {
@@ -1782,7 +1138,7 @@ async function hasMemorySpaceOwnerImplicitPermission(
     return hasWorkspacePermission(
       db,
       subject,
-      space.workspace_id,
+      space.workspaceId,
       "manage_memories"
     )
   }
@@ -1791,14 +1147,14 @@ async function hasMemorySpaceOwnerImplicitPermission(
     return adminManageOverride()
   }
 
-  switch (space.owner_kind) {
+  switch (space.ownerKind) {
     case "workspace_member":
-      if (inRuntime(space.owner_subject_id)) {
+      if (inRuntime(space.ownerSubjectId)) {
         return true // all permissions
       }
       return adminManageOverride()
     case "actor":
-      if (inRuntime(space.owner_subject_id)) {
+      if (inRuntime(space.ownerSubjectId)) {
         return permission !== "manage"
       }
       // Curation path (post-D4 round 4 narrowing): admins / actor_admin /
@@ -1812,15 +1168,15 @@ async function hasMemorySpaceOwnerImplicitPermission(
       // (admin/*_admin/creator) — not `canUse`, which would have admitted
       // anyone with an `actor.memory_edit` grant.
       if (
-        space.owner_actor_id &&
+        space.ownerActorId &&
         permission === "write" &&
-        (await hasActorPermission(db, subject, space.owner_actor_id, "edit"))
+        (await hasActorPermission(db, subject, space.ownerActorId, "edit"))
       ) {
         return true
       }
       return adminManageOverride()
     case "remote_agent":
-      if (inRuntime(space.owner_subject_id)) {
+      if (inRuntime(space.ownerSubjectId)) {
         return (
           permission === "read" ||
           permission === "recall" ||
@@ -1830,12 +1186,12 @@ async function hasMemorySpaceOwnerImplicitPermission(
       }
       // Same write-only curation pattern as actor — see comment above.
       if (
-        space.owner_remote_agent_id &&
+        space.ownerRemoteAgentId &&
         permission === "write" &&
         (await hasRemoteAgentPermission(
           db,
           subject,
-          space.owner_remote_agent_id,
+          space.ownerRemoteAgentId,
           "edit"
         ))
       ) {
@@ -1847,33 +1203,31 @@ async function hasMemorySpaceOwnerImplicitPermission(
         if (subject.type === "actor") {
           const actor = await loadActorRow(db, subject.id)
           return Boolean(
-            actor &&
-            actor.workspace_id === space.workspace_id &&
-            actor.is_active
+            actor && actor.workspaceId === space.workspaceId && actor.isActive
           )
         }
-        return hasWorkspacePermission(db, subject, space.workspace_id, "view")
+        return hasWorkspacePermission(db, subject, space.workspaceId, "view")
       }
       return hasWorkspacePermission(
         db,
         subject,
-        space.workspace_id,
+        space.workspaceId,
         "manage_memories"
       )
     case "conversation":
-      if (!space.owner_conversation_id) return false
+      if (!space.ownerConversationId) return false
       if (permission === "manage" || permission === "delete") {
         return hasConversationPermission(
           db,
           subject,
-          space.owner_conversation_id,
+          space.ownerConversationId,
           permission === "manage" ? "manage" : "memory_delete"
         )
       }
       return hasConversationPermission(
         db,
         subject,
-        space.owner_conversation_id,
+        space.ownerConversationId,
         permission === "read" || permission === "recall"
           ? "memory_read"
           : "memory_edit"
@@ -1893,15 +1247,7 @@ async function hasMemoryItemPermission(
     runtimeScopeSubjectIds?: readonly string[]
   }
 ): Promise<boolean> {
-  const row = await db
-    .selectFrom("memory_items as mi")
-    .select([
-      "mi.id as memory_item_id",
-      "mi.memory_space_id as memory_space_id",
-    ])
-    .where("mi.id", "=", memoryItemId)
-    .limit(1)
-    .executeTakeFirst()
+  const row = await loadMemoryItemSpaceRef(db, memoryItemId)
   if (!row) return false
 
   // Space-level permission (owner-implicit OR space-level grant).
@@ -1909,7 +1255,7 @@ async function hasMemoryItemPermission(
     await hasMemorySpacePermission(
       db,
       subject,
-      row.memory_space_id,
+      row.memorySpaceId,
       permission,
       runtimeContext
     )
@@ -1926,8 +1272,8 @@ async function hasMemoryItemPermission(
     const grantPermission = mapEvaluatorPermissionToMemoryPermission(permission)
     if (grantPermission) {
       const granted = await memoryGrantMatches(db, {
-        memorySpaceId: row.memory_space_id,
-        memoryItemId: row.memory_item_id,
+        memorySpaceId: row.memorySpaceId,
+        memoryItemId: row.memoryItemId,
         permission: grantPermission,
         runtimeSubjectIds: runtimeContext.runtimeSubjectIds,
         runtimeScopeSubjectIds: runtimeContext.runtimeScopeSubjectIds ?? [],
@@ -2053,31 +1399,31 @@ export async function hasMemorySpaceOwnerImplicitPermissionForTuple(
   // (admin/creator) paths can resolve the underlying resource.
   const synthetic: MemorySpaceLoadedRow = {
     id: "(synthetic-not-in-db)",
-    workspace_id: tuple.workspaceId,
-    owner_subject_id: tuple.ownerSubjectId,
-    scope_subject_id: tuple.scopeSubjectId,
-    namespace_key: "(synthetic)",
-    owner_kind: tuple.owner.kind,
-    owner_workspace_id:
+    workspaceId: tuple.workspaceId,
+    ownerSubjectId: tuple.ownerSubjectId,
+    scopeSubjectId: tuple.scopeSubjectId,
+    namespaceKey: "(synthetic)",
+    ownerKind: tuple.owner.kind,
+    ownerWorkspaceId:
       tuple.owner.kind === SUBJECT_KIND.WORKSPACE
         ? tuple.owner.workspaceId
         : null,
-    owner_actor_id:
+    ownerActorId:
       tuple.owner.kind === SUBJECT_KIND.ACTOR ? tuple.owner.actorId : null,
-    owner_remote_agent_id:
+    ownerRemoteAgentId:
       tuple.owner.kind === SUBJECT_KIND.REMOTE_AGENT
         ? tuple.owner.remoteAgentId
         : null,
-    owner_workspace_member_id:
+    ownerWorkspaceMemberId:
       tuple.owner.kind === SUBJECT_KIND.WORKSPACE_MEMBER
         ? tuple.owner.memberId
         : null,
-    owner_conversation_id:
+    ownerConversationId:
       tuple.owner.kind === SUBJECT_KIND.CONVERSATION
         ? tuple.owner.conversationId
         : null,
-    scope_kind: tuple.scope?.kind ?? null,
-    scope_conversation_id:
+    scopeKind: tuple.scope?.kind ?? null,
+    scopeConversationId:
       tuple.scope?.kind === SUBJECT_KIND.CONVERSATION
         ? tuple.scope.conversationId
         : null,

@@ -1,7 +1,7 @@
 // Phase 3 gate for the builtin-presentation leaf:
-//  1. Dependency purity — the leaf and every *.presentation.ts must import ONLY
-//     the descriptor type from @synapse/device-protocol, never a runtime builtin
-//     (filesystem.ts / commandline.ts / …) or any heavy module. This is what
+//  1. Dependency purity — the leaf and every *.presentation.ts must import only
+//     lightweight descriptor/browser-map metadata, never a runtime builtin
+//     (filesystem.ts / commandline.ts / ...) or any heavy module. This is what
 //     lets the API import the leaf without pulling VFS/terminal/sidecar/semver.
 //  2. Key shape — every descriptor key is a presentation stableKey
 //     `${exposure_stable_key}/${visible_tool_name}` (e.g. builtin/filesystem/fs_edit),
@@ -18,7 +18,10 @@ import { BUILTIN_PRESENTATION, getBuiltinPresentation } from "./index.js"
 const here = path.dirname(fileURLToPath(import.meta.url))
 const builtinsDir = path.join(here, "..", "builtins")
 
-test("purity: *.presentation.ts import only the device-protocol descriptor type", () => {
+const PRESENTATION_TYPE_SUBPATH = "@synapse/shared/tool-presentation"
+const BROWSER_TOOL_MAP_SUBPATH = "@synapse/device-protocol/browser-tools"
+
+test("purity: *.presentation.ts import only lightweight metadata", () => {
   const files = readdirSync(builtinsDir).filter((f) =>
     f.endsWith(".presentation.ts")
   )
@@ -32,10 +35,12 @@ test("purity: *.presentation.ts import only the device-protocol descriptor type"
     let m: RegExpExecArray | null
     while ((m = importRe.exec(src))) {
       const spec = m[1]
+      const ok =
+        spec === PRESENTATION_TYPE_SUBPATH || spec === BROWSER_TOOL_MAP_SUBPATH
       assert.ok(
-        spec.startsWith("@synapse/device-protocol"),
+        ok,
         `${file} imports forbidden module "${spec}" — presentation data files must` +
-          ` import only @synapse/device-protocol (no runtime builtins)`
+          ` import only lightweight metadata (no runtime builtins)`
       )
     }
   }
@@ -48,8 +53,7 @@ test("purity: the leaf index imports only sibling *.presentation files + the typ
   while ((m = importRe.exec(src))) {
     const spec = m[1]
     const ok =
-      spec.startsWith("@synapse/device-protocol") ||
-      spec.includes(".presentation.js")
+      spec === PRESENTATION_TYPE_SUBPATH || spec.includes(".presentation.js")
     assert.ok(ok, `leaf index imports forbidden module "${spec}"`)
   }
 })

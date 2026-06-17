@@ -9,7 +9,7 @@ import type { ProjectedToolDefinition, ToolSourceKind } from "@synapse/shared"
 import { type ResolvedMcpTools } from "../mcp-plugins/tool-resolver.js"
 import { projectToolsForPrincipal } from "../capability-projection/service.js"
 import { listVisibleSkills } from "../skills/service.js"
-import { db } from "../../infrastructure/database/kysely.js"
+import { selectWorkspaceMemberId } from "./repo.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
 
 const log = createLogger("capabilities")
@@ -72,15 +72,12 @@ export async function resolveActorCapabilitySurface(
     ...runtimeContext,
   }
   if (!resolved.workspaceMemberId && resolved.userId) {
-    const member = await db
-      .selectFrom("workspace_members")
-      .select("id")
-      .where("workspace_id", "=", resolved.workspaceId)
-      .where("user_id", "=", resolved.userId)
-      .limit(1)
-      .executeTakeFirst()
-    if (member) {
-      resolved.workspaceMemberId = member.id
+    const memberId = await selectWorkspaceMemberId(
+      resolved.workspaceId,
+      resolved.userId
+    )
+    if (memberId) {
+      resolved.workspaceMemberId = memberId
     }
   }
 

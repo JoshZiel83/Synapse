@@ -9,17 +9,17 @@ test("buildUserTaskTargetCandidatesFromRows uses workspace_member_id for partici
   const candidates = buildUserTaskTargetCandidatesFromRows([
     {
       id: "participant-1",
-      participant_type: "workspace_member",
+      participantType: "workspace_member",
       state: "active",
-      user_name: "Demo User",
-      workspace_member_id: "workspace-member-1",
+      userName: "Demo User",
+      workspaceMemberId: "workspace-member-1",
     },
     {
       id: "participant-ignored",
-      participant_type: "actor",
+      participantType: "actor",
       state: "active",
-      user_name: null,
-      workspace_member_id: null,
+      userName: null,
+      workspaceMemberId: null,
     },
   ])
 

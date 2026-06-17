@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { dateToIsoInstant } from "@synapse/shared/datetime"
 import {
   FILE_ORIGIN_SYSTEMS,
+  parseJsonObject,
   textBlock,
   textBlocks,
   type ToolDefinition,
@@ -71,12 +72,8 @@ function asString(value: unknown) {
   return typeof value === "string" ? value.trim() : ""
 }
 
-function asObject(value: unknown): JsonObject {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {}
-  }
-  return value as JsonObject
-}
+// Business JSON decode → shared parseJsonObject (object-only, array-reject). r6 P1-8.
+const asObject = parseJsonObject
 
 function asNumber(value: unknown, fallback = 0) {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -373,18 +370,15 @@ function serializeUnixTimestampToInstant(value: unknown) {
 
 function addIsoTimeFieldsToDocSearchResults(results: unknown[]) {
   return results.map((item) => {
-    const row = asObject(item)
-    const resultMeta = { ...asObject(row.result_meta) }
+    const unit = asObject(item)
+    const resultMeta = { ...asObject(unit.result_meta) }
     for (const field of ["create_time", "open_time", "update_time"] as const) {
       const iso = serializeUnixTimestampToInstant(resultMeta[field])
       if (iso) {
         resultMeta[`${field}_iso`] = iso
       }
     }
-    return {
-      ...row,
-      result_meta: resultMeta,
-    }
+    return Object.assign({}, unit, { result_meta: resultMeta })
   })
 }
 

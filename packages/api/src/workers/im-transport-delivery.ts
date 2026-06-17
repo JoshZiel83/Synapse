@@ -2,7 +2,7 @@ import { UnrecoverableError, Worker } from "bullmq"
 import { CONVERSATION_PARTICIPANT_TYPE, QUEUE_NAMES } from "@synapse/shared"
 import type { TransportKind } from "@synapse/shared/types"
 import { redis } from "../infrastructure/redis/index.js"
-import { getConversationFeedItemById } from "../modules/chat/service.js"
+import { getConversationFeedItemById } from "../modules/chat/conversation-item-read.js"
 import {
   findExternalMessageIdForItem,
   getConversationTransportBinding,
@@ -31,14 +31,7 @@ function nonEmptyString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined
 }
 
-/**
- * The transport_address row's `metadata` JSONB column is typed as
- * Kysely's `JsonValue`, which permits primitives and arrays. Connectors
- * always want `Record<string, unknown> | undefined` here, so normalize
- * once at the worker boundary instead of asking every connector to
- * re-validate.
- */
-function asObjectMetadata(value: unknown): Record<string, unknown> | undefined {
+function objectField(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined
@@ -70,9 +63,8 @@ export interface ImTransportDeliveryDeps {
   findExternalMessageIdForItem: typeof findExternalMessageIdForItem
   /**
    * Looks up the recipient transport_address row when the connector
-   * declares `requiresRecipientAddressMetadata = true`. The result's
-   * `metadata` is normalized to a plain object before being passed to
-   * `connector.sendMessage` (see `asObjectMetadata`).
+   * declares `requiresRecipientAddressMetadata = true`. The repo normalizes
+   * `metadata` to a plain object before this worker sees the row.
    */
   loadRecipientAddress: typeof getTransportAddressByExternalId
   /**
@@ -234,9 +226,7 @@ export async function processImTransportDeliveryJob(
     const message = deps.decode({
       content: item.content,
       contentBlocks: item.contentBlocks as EncodedContentBlock[],
-      transportMetadata:
-        ((item as unknown as { metadata?: Record<string, unknown> }).metadata
-          ?.transport as Record<string, unknown>) || undefined,
+      transportMetadata: objectField(item.metadata.transport),
     })
     // Resolve mentions to a participantId → ResolvedMention map, then
     // fill `externalId` in place on each mention part. This preserves the
@@ -276,8 +266,7 @@ export async function processImTransportDeliveryJob(
     let replyTo:
       | { externalMessageId: string; endpointExternalId: string }
       | undefined
-    const replyToItemId = (item as unknown as { replyToItemId?: string })
-      .replyToItemId
+    const replyToItemId = item.replyToItemId
     if (replyToItemId) {
       const externalReplyMsgId = await deps.findExternalMessageIdForItem({
         itemId: replyToItemId,
@@ -303,7 +292,7 @@ export async function processImTransportDeliveryJob(
         addressType: "user",
         externalId: link.endpoint.externalId,
       })
-      recipientAddressMetadata = asObjectMetadata(addressRow?.metadata)
+      recipientAddressMetadata = addressRow?.metadata
     }
 
     const deliveryResult = await connector.sendMessage({
@@ -394,8 +383,8 @@ export function defaultImTransportDeliveryDeps(): ImTransportDeliveryDeps {
           })
           return row
             ? {
-                externalId: String(row.external_id),
-                displayName: row.display_name ?? undefined,
+                externalId: String(row.externalId),
+                displayName: row.displayName ?? undefined,
               }
             : null
         },

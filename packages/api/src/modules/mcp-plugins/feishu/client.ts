@@ -4,6 +4,7 @@ import {
   resolveFeishuFeatureScopes,
 } from "./features.js"
 import { nowIsoInstant } from "@synapse/shared/datetime"
+import { parseJsonObject } from "@synapse/shared"
 
 type JsonObject = Record<string, unknown>
 type RequestBody =
@@ -40,12 +41,8 @@ type FeishuResolvedConnection = {
   secretPayload?: JsonObject
 }
 
-function asObject(value: unknown): JsonObject {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {}
-  }
-  return value as JsonObject
-}
+// Business JSON decode → shared parseJsonObject (object-only, array-reject). r6 P1-8.
+const asObject = parseJsonObject
 
 function asString(value: unknown) {
   return typeof value === "string" ? value.trim() : ""
@@ -67,6 +64,26 @@ function asStringArray(value: unknown) {
   }
 
   return []
+}
+
+function parseJsonObjectStrict(value: unknown, label: string): JsonObject {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as JsonObject
+  }
+  throw new Error(`${label} must be a JSON object.`)
+}
+
+async function readJsonObjectResponse(
+  response: Response,
+  label: string
+): Promise<JsonObject> {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(await response.text())
+  } catch {
+    throw new Error(`${label} must be valid JSON.`)
+  }
+  return parseJsonObjectStrict(parsed, label)
 }
 
 export function resolveFeishuOpenBaseUrl(brand: FeishuBrand) {
@@ -155,7 +172,13 @@ export function getFeishuConnectionMetadata(config: Record<string, unknown>) {
 async function parseErrorResponse(response: Response) {
   const contentType = response.headers.get("content-type") || ""
   if (contentType.includes("application/json")) {
-    const payload = asObject(await response.json().catch(() => ({})))
+    const payload = await readJsonObjectResponse(
+      response,
+      "Feishu API error response"
+    ).catch(() => null)
+    if (!payload) {
+      return `HTTP ${response.status}`
+    }
     const message =
       asString(payload.msg) ||
       asString(payload.error_description) ||
@@ -192,7 +215,10 @@ async function requestTenantAccessToken(input: {
       app_secret: input.appSecret,
     }),
   })
-  const payload = asObject(await response.json().catch(() => ({})))
+  const payload = await readJsonObjectResponse(
+    response,
+    "Feishu tenant access token response"
+  )
   const code = typeof payload.code === "number" ? payload.code : undefined
 
   if (!response.ok || (code !== undefined && code !== 0)) {
@@ -263,7 +289,10 @@ export async function inspectFeishuAppScopeStatus(input: {
         Accept: "application/json",
       },
     })
-    const payload = asObject(await response.json().catch(() => ({})))
+    const payload = await readJsonObjectResponse(
+      response,
+      "Feishu app scope response"
+    )
     const code = typeof payload.code === "number" ? payload.code : undefined
 
     if (!response.ok || (code !== undefined && code !== 0)) {
@@ -387,7 +416,10 @@ export class FeishuApiClient {
       throw new Error(await parseErrorResponse(response))
     }
 
-    const payload = asObject(await response.json().catch(() => ({})))
+    const payload = await readJsonObjectResponse(
+      response,
+      "Feishu API response"
+    )
     if (typeof payload.code === "number" && payload.code !== 0) {
       throw new Error(
         `[${payload.code}] ${

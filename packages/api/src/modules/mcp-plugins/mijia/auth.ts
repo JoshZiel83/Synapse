@@ -1,4 +1,9 @@
 import { randomBytes } from "node:crypto"
+import {
+  PLUGIN_AUTH_CHALLENGE_KIND,
+  PLUGIN_AUTH_SESSION_PHASE,
+  PLUGIN_AUTH_SESSION_STATUS,
+} from "@synapse/shared"
 import { dateToIsoInstant } from "@synapse/shared/datetime"
 import {
   CookieJar,
@@ -311,7 +316,7 @@ export async function startMijiaQrLoginSession(input: {
 
   return {
     challengePayload: {
-      kind: "qr_code",
+      kind: PLUGIN_AUTH_CHALLENGE_KIND.QR_CODE,
       qrUrl,
       expiresAt,
       metadata: {
@@ -343,21 +348,21 @@ function classifyLoginFailure(message: string): MijiaQrLoginProgress {
   const lower = message.toLowerCase()
   if (lower.includes("expired")) {
     return {
-      status: "expired",
+      status: PLUGIN_AUTH_SESSION_STATUS.EXPIRED,
       errorCode: "MIJIA_QR_EXPIRED",
       errorMessage: message,
     }
   }
   if (lower.includes("cancel") || lower.includes("reject")) {
     return {
-      status: "failed",
+      status: PLUGIN_AUTH_SESSION_STATUS.FAILED,
       errorCode: "MIJIA_QR_REJECTED",
       errorMessage: message,
     }
   }
   return {
-    status: "pending",
-    phase: "pending_scan",
+    status: PLUGIN_AUTH_SESSION_STATUS.PENDING,
+    phase: PLUGIN_AUTH_SESSION_PHASE.PENDING_SCAN,
   }
 }
 
@@ -408,8 +413,8 @@ export async function progressMijiaQrLoginSession(input: {
   } catch (error) {
     if (isTimeoutLikeError(error)) {
       return {
-        status: "pending",
-        phase: "pending_scan",
+        status: PLUGIN_AUTH_SESSION_STATUS.PENDING,
+        phase: PLUGIN_AUTH_SESSION_PHASE.PENDING_SCAN,
       }
     }
     throw error
@@ -518,7 +523,7 @@ export async function progressMijiaQrLoginSession(input: {
   }
 
   return {
-    status: "completed",
+    status: PLUGIN_AUTH_SESSION_STATUS.COMPLETED,
     authState,
   }
 }

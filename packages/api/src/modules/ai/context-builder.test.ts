@@ -10,6 +10,7 @@ import assert from "node:assert/strict"
 import {
   buildSessionContextItems,
   conversationItemToContextItem,
+  itemPartsToCanonicalBlocks,
 } from "./context-builder.js"
 import {
   extractText,
@@ -232,6 +233,72 @@ test("buildSessionContextItems: child_result becomes tool_result_batch with chil
   assert.equal(tr.origin.kind, "system")
   assert.equal(tr.origin.registryKey, "child_actor")
   assert.equal(extractText(tr.content), "child agent reply")
+})
+
+test("conversationItemToContextItem parses only object metadata", () => {
+  assert.equal(
+    conversationItemToContextItem(
+      {
+        id: "hidden-msg",
+        role: "user",
+        contentBlocks: textBlocks("hidden"),
+        metadata: JSON.stringify({ excludeFromContext: true }),
+      },
+      "actor-1"
+    ),
+    null
+  )
+
+  const item = conversationItemToContextItem(
+    {
+      id: "visible-msg",
+      role: "user",
+      contentBlocks: textBlocks("visible"),
+      metadata: JSON.stringify(["not", "an", "object"]),
+    },
+    "actor-1"
+  )
+
+  assert.equal(item?.kind, "message")
+  assert.deepEqual((item as any).metadata, {})
+})
+
+test("itemPartsToCanonicalBlocks parses json part payloads as object only", () => {
+  const blocks = itemPartsToCanonicalBlocks([
+    {
+      part_type: "json",
+      json_value: JSON.stringify({
+        type: "mention",
+        mention: {
+          participantType: "actor",
+          actorId: "actor-1",
+          name: "Assistant",
+        },
+      }),
+    },
+    {
+      part_type: "json",
+      json_value: JSON.stringify([
+        {
+          type: "mention",
+          mention: { participantType: "actor", name: "Ignored" },
+        },
+      ]),
+    },
+    {
+      part_type: "json",
+      json_value: JSON.stringify("not a block"),
+    },
+    {
+      part_type: "json",
+      json_value: "{",
+    },
+  ])
+
+  assert.equal(blocks.length, 1)
+  assert.equal(blocks[0]?.type, "mention")
+  if (blocks[0]?.type !== "mention") throw new Error("expected mention")
+  assert.equal(blocks[0].mention.name, "Assistant")
 })
 
 test("buildSessionContextItems: interrupt body has no [System Interrupt - X] prefix", () => {

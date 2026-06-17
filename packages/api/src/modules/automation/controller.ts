@@ -1,19 +1,7 @@
 import type { FastifyInstance } from "fastify"
 import { validateAutomationRuleCreatePayload } from "@synapse/shared/automation"
 import {
-  AUTOMATION_COMPLETION_STATUSES,
-  AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS,
-  AUTOMATION_EVENT_SOURCE_STATUSES,
-  AUTOMATION_INTEGRATION_INGRESS_KINDS,
-  AUTOMATION_INTEGRATION_PROVIDERS,
-  AUTOMATION_INTEGRATION_TARGET_KINDS,
-  AUTOMATION_RULE_STATUSES,
-  AUTOMATION_SCHEDULE_KINDS,
-  AUTOMATION_TARGET_POLICIES,
-  AUTOMATION_TRIGGER_KINDS,
-  AUTOMATION_TRIGGER_SOURCE_KINDS,
-} from "@synapse/shared/constants"
-import {
+  AUTOMATION_ACCESS_TARGET_TYPE,
   actorRef,
   conversationRef,
   workspaceMemberRef,
@@ -21,9 +9,35 @@ import {
   type CapabilityAccessTarget,
 } from "@synapse/shared"
 import { IsoInstantStringSchema } from "@synapse/shared/schemas"
+import {
+  AutomationAccessGrantEnvelopeSchema,
+  AutomationAccessGrantInputSchema,
+  AutomationAccessGrantUpdateInputSchema,
+  AutomationEventIngestInputSchema,
+  AutomationEventIngestResultSchema,
+  AutomationEventSourceAccessStateSchema,
+  AutomationEventSourceCreateInputSchema,
+  AutomationEventSourceListSchema,
+  AutomationEventSourceListQuerySchema,
+  AutomationEventSourceSchema,
+  AutomationEventSourceUpdateInputSchema,
+  AutomationExecutionListSchema,
+  AutomationOccurrenceListSchema,
+  AutomationRuleCreateInputSchema,
+  AutomationRuleListSchema,
+  AutomationRuleListQuerySchema,
+  AutomationRuleSchema,
+  AutomationRuleUpdateInputSchema,
+  AutomationSuccessSchema,
+  AutomationWebhookEndpointCreateInputSchema,
+  AutomationWebhookEndpointCreateResultSchema,
+  AutomationWebhookEndpointListSchema,
+  type AutomationAccessTargetInput,
+} from "@synapse/shared/schemas"
 import { z } from "zod"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
+import { appRoute, wireRoute } from "../../infrastructure/http/route.js"
 import { requireRequestAction } from "../access/guards.js"
 import {
   archiveAutomationEventSource,
@@ -48,221 +62,49 @@ import {
   updateAutomationEventSourceAccessGrant,
   updateAutomationRule,
 } from "./service.js"
+import {
+  presentExecutionWithOccurrence,
+  presentWebhookEndpoint,
+} from "./presenter.js"
 import { enqueueAutomationExecutionJobs } from "../../workers/queues.js"
 
-const contentBlocksSchema = z.array(z.any()).optional()
-
-const triggerSchema = z.object({
-  triggerKind: z.enum(AUTOMATION_TRIGGER_KINDS),
-  eventSourceId: z.uuid().optional(),
-  sourceKind: z.enum(AUTOMATION_TRIGGER_SOURCE_KINDS).optional(),
-  sourceLocator: z.string().trim().min(1).max(255).optional(),
-  matchKey: z.string().trim().min(1).max(255).optional(),
-  matcher: z.record(z.string(), z.unknown()).optional(),
-  scheduleKind: z.enum(AUTOMATION_SCHEDULE_KINDS).optional(),
-  scheduleExpr: z.string().trim().min(1).max(255).optional(),
-  scheduleTimezone: z.string().trim().min(1).max(64).optional(),
-  intervalSeconds: z.number().int().positive().optional(),
-  startsAt: IsoInstantStringSchema.optional(),
-})
-
-const policySchema = z.object({
-  activeFrom: IsoInstantStringSchema.optional(),
-  activeUntil: IsoInstantStringSchema.optional(),
-  maxTriggerCount: z.number().int().positive().optional(),
-  completionStatus: z.enum(AUTOMATION_COMPLETION_STATUSES).optional(),
-})
-
-const deliverySchema = z.object({
-  message: z.string().default(""),
-  wakeReason: z.string().optional(),
-  messageBlocks: contentBlocksSchema,
-  targetPolicy: z.enum(AUTOMATION_TARGET_POLICIES).optional(),
-  targetParticipantIds: z.array(z.uuid()).optional(),
-})
-
-const updateDeliverySchema = z.object({
-  message: z.string().optional(),
-  wakeReason: z.string().optional(),
-  messageBlocks: contentBlocksSchema,
-  targetPolicy: z.enum(AUTOMATION_TARGET_POLICIES).optional(),
-  targetParticipantIds: z.array(z.uuid()).optional(),
-})
-
-const createAutomationSchema = z.object({
-  name: z.string().trim().min(1).max(255),
-  description: z.string().default(""),
-  status: z.enum(AUTOMATION_RULE_STATUSES).optional(),
-  conversationId: z.uuid(),
-  trigger: triggerSchema,
-  policy: policySchema.optional(),
-  delivery: deliverySchema,
-  metadata: z.record(z.string(), z.unknown()).optional(),
-})
-
-const updateAutomationSchema = z.object({
-  name: z.string().trim().min(1).max(255).optional(),
-  description: z.string().optional(),
-  status: z.enum(AUTOMATION_RULE_STATUSES).optional(),
-  conversationId: z.uuid().optional(),
-  trigger: triggerSchema.partial().optional(),
-  policy: policySchema.partial().optional(),
-  delivery: updateDeliverySchema.optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-})
-
-const conversationTypeMaskSchema = z.number().int().min(1).max(15)
-const accessTargetSchema = z
-  .object({
-    type: z.enum(["workspace", "workspace_member", "conversation", "actor"]),
-    conversationId: z.uuid().optional(),
-    actorId: z.uuid().optional(),
-    workspaceMemberId: z.uuid().optional(),
-  })
-  .superRefine((value, ctx) => {
-    if (value.type === "conversation" && !value.conversationId) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["conversationId"],
-        message: "conversationId is required for this access target",
-      })
-    }
-    if (value.type === "actor" && !value.actorId) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["actorId"],
-        message: "actorId is required for this access target",
-      })
-    }
-    if (value.type === "workspace_member" && !value.workspaceMemberId) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["workspaceMemberId"],
-        message: "workspaceMemberId is required for this access target",
-      })
-    }
-  })
-const accessGrantSchema = z.object({
-  accessTarget: accessTargetSchema.optional(),
-  conversationTypeMaskOverride: conversationTypeMaskSchema
-    .nullable()
-    .optional(),
-  reason: z.string().trim().min(1).max(500).optional(),
-})
+// App-facing request bodies / queries live in @synapse/shared (§5.1.1) so the
+// API parser and the web/mobile clients share one definition.
+const sharedEventSourceListQuerySchema = AutomationEventSourceListQuerySchema
+const sharedEventSourceCreateInputSchema =
+  AutomationEventSourceCreateInputSchema
+const sharedEventSourceUpdateInputSchema =
+  AutomationEventSourceUpdateInputSchema
+const sharedAccessGrantInputSchema = AutomationAccessGrantInputSchema
+const sharedAccessGrantUpdateInputSchema =
+  AutomationAccessGrantUpdateInputSchema
+const sharedEventIngestInputSchema = AutomationEventIngestInputSchema
+const sharedAutomationListQuerySchema = AutomationRuleListQuerySchema
+const sharedAutomationCreateInputSchema = AutomationRuleCreateInputSchema
+const sharedAutomationUpdateInputSchema = AutomationRuleUpdateInputSchema
+const sharedWebhookEndpointCreateInputSchema =
+  AutomationWebhookEndpointCreateInputSchema
 
 function inputToCapabilityAccessTarget(
   workspaceId: string,
-  input: z.infer<typeof accessTargetSchema>
+  input: AutomationAccessTargetInput
 ): CapabilityAccessTarget {
   switch (input.type) {
-    case "workspace":
+    case AUTOMATION_ACCESS_TARGET_TYPE.WORKSPACE:
       return { subject: workspaceRef(workspaceId) }
-    case "workspace_member":
+    case AUTOMATION_ACCESS_TARGET_TYPE.WORKSPACE_MEMBER:
       return { subject: workspaceMemberRef(input.workspaceMemberId!) }
-    case "actor":
+    case AUTOMATION_ACCESS_TARGET_TYPE.ACTOR:
       return {
         subject: actorRef(input.actorId!),
         ...(input.conversationId
           ? { scope: conversationRef(input.conversationId) }
           : {}),
       }
-    case "conversation":
+    case AUTOMATION_ACCESS_TARGET_TYPE.CONVERSATION:
       return { subject: conversationRef(input.conversationId!) }
   }
 }
-const accessGrantUpdateSchema = z.object({
-  conversationTypeMaskOverride: conversationTypeMaskSchema
-    .nullable()
-    .optional(),
-})
-
-const createWebhookEndpointSchema = z.object({
-  name: z.string().trim().min(1).max(255),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-})
-
-const integrationEventSourceSchema = z.object({
-  installationId: z.uuid(),
-  provider: z.enum(AUTOMATION_INTEGRATION_PROVIDERS),
-  ingressKind: z.enum(AUTOMATION_INTEGRATION_INGRESS_KINDS).optional(),
-  targetKind: z.enum(AUTOMATION_INTEGRATION_TARGET_KINDS),
-  targetId: z.string().trim().min(1).max(255),
-  targetLabel: z.string().trim().min(1).max(255).optional(),
-})
-
-const eventSourceSchema = z
-  .object({
-    providerKind: z.enum(AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS),
-    providerRef: z.string().trim().min(1).max(255).optional(),
-    integration: integrationEventSourceSchema.optional(),
-    sourceKey: z.string().trim().min(1).max(255).optional(),
-    name: z.string().trim().min(1).max(255).optional(),
-    description: z.string().trim().min(1).optional(),
-    recommendedUsage: z.string().trim().min(1).optional(),
-    payloadSchema: z.record(z.string(), z.unknown()).optional(),
-    examplePayload: z.record(z.string(), z.unknown()).optional(),
-    status: z.enum(AUTOMATION_EVENT_SOURCE_STATUSES).optional(),
-    metadata: z.record(z.string(), z.unknown()).optional(),
-  })
-  .superRefine((value, ctx) => {
-    if (value.providerKind === "integration") {
-      if (!value.integration) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["integration"],
-          message: "integration is required",
-        })
-      }
-      if (!value.sourceKey) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["sourceKey"],
-          message: "sourceKey is required",
-        })
-      }
-      return
-    }
-
-    if (!value.name?.trim()) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["name"],
-        message: "name is required",
-      })
-    }
-    if (!value.description?.trim()) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["description"],
-        message: "description is required",
-      })
-    }
-    if (value.providerKind === "webhook" && !value.providerRef?.trim()) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["providerRef"],
-        message: "providerRef is required",
-      })
-    }
-  })
-
-const updateEventSourceSchema = z.object({
-  providerRef: z.string().trim().min(1).max(255).optional(),
-  name: z.string().trim().min(1).max(255).optional(),
-  description: z.string().trim().min(1).optional(),
-  recommendedUsage: z.string().trim().min(1).optional(),
-  payloadSchema: z.record(z.string(), z.unknown()).optional(),
-  examplePayload: z.record(z.string(), z.unknown()).optional(),
-  status: z.enum(AUTOMATION_EVENT_SOURCE_STATUSES).optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-})
-
-const ingestEventSchema = z.object({
-  payload: z.record(z.string(), z.unknown()).optional(),
-  sourceSnapshot: z.record(z.string(), z.unknown()).optional(),
-  dedupeKey: z.string().trim().min(1).max(255).optional(),
-  occurredAt: IsoInstantStringSchema.optional(),
-})
 
 const webhookIngressSchema = z.looseObject({
   payload: z.record(z.string(), z.unknown()).optional(),
@@ -297,9 +139,14 @@ async function enqueueAutomationExecutions(executionIds: string[]) {
 export default async function automationController(app: FastifyInstance) {
   const protectedPreHandler = [authMiddleware, workspaceMiddleware]
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/automation-event-sources",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationEventSourceListSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       const allowed = await requireRequestAction(
@@ -311,12 +158,7 @@ export default async function automationController(app: FastifyInstance) {
       )
       if (!allowed) return
 
-      const query = request.query as {
-        status?: "active" | "deprecated" | "disabled" | "archived"
-        providerKind?: "device" | "webhook" | "internal" | "integration"
-        providerRef?: string
-        sourceKey?: string
-      }
+      const query = sharedEventSourceListQuerySchema.parse(request.query || {})
       return listAutomationEventSources(workspaceId, {
         status: query.status,
         providerKind: query.providerKind,
@@ -326,9 +168,14 @@ export default async function automationController(app: FastifyInstance) {
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/automation-event-sources",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationEventSourceSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       const allowed = await requireRequestAction(
@@ -340,20 +187,26 @@ export default async function automationController(app: FastifyInstance) {
       )
       if (!allowed) return
 
-      const body = eventSourceSchema.parse(request.body)
+      const body = sharedEventSourceCreateInputSchema.parse(request.body)
       const workspaceMemberId = (request as any).workspaceMember!.id as string
       const source = await createAutomationEventSource(
         workspaceId,
         { kind: "workspace_member", workspaceMemberId },
         body
       )
-      return reply.status(201).send(source)
+      reply.status(201)
+      return source
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationEventSourceSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId, eventSourceId } = request.params as {
         workspaceId: string
@@ -370,17 +223,21 @@ export default async function automationController(app: FastifyInstance) {
 
       const source = await getAutomationEventSource(workspaceId, eventSourceId)
       if (!source) {
-        return reply
-          .status(404)
-          .send({ error: "Automation event source not found" })
+        reply.status(404).send({ error: "Automation event source not found" })
+        return
       }
       return source
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId/access",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationEventSourceAccessStateSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId, eventSourceId } = request.params as {
         workspaceId: string
@@ -399,9 +256,14 @@ export default async function automationController(app: FastifyInstance) {
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId/access",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationAccessGrantEnvelopeSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId, eventSourceId } = request.params as {
         workspaceId: string
@@ -416,7 +278,7 @@ export default async function automationController(app: FastifyInstance) {
       )
       if (!allowed) return
 
-      const body = accessGrantSchema.parse(request.body || {})
+      const body = sharedAccessGrantInputSchema.parse(request.body || {})
       const workspaceMemberId = (request as any).workspaceMember!.id as string
       const grant = await grantAutomationEventSourceAccess({
         workspaceId,
@@ -428,13 +290,19 @@ export default async function automationController(app: FastifyInstance) {
         grantedByWorkspaceMemberId: workspaceMemberId,
         reason: body.reason,
       })
-      return reply.status(201).send({ grant })
+      reply.status(201)
+      return { grant }
     }
   )
 
-  app.put(
+  appRoute(
+    app,
+    "PUT",
     "/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId/access/:bindingId",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationAccessGrantEnvelopeSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId, eventSourceId, bindingId } = request.params as {
         workspaceId: string
@@ -450,7 +318,7 @@ export default async function automationController(app: FastifyInstance) {
       )
       if (!allowed) return
 
-      const body = accessGrantUpdateSchema.parse(request.body || {})
+      const body = sharedAccessGrantUpdateInputSchema.parse(request.body || {})
       const grant = await updateAutomationEventSourceAccessGrant({
         workspaceId,
         eventSourceId,
@@ -461,9 +329,14 @@ export default async function automationController(app: FastifyInstance) {
     }
   )
 
-  app.delete(
+  appRoute(
+    app,
+    "DELETE",
     "/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId/access/:bindingId",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationSuccessSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId, eventSourceId, bindingId } = request.params as {
         workspaceId: string
@@ -490,9 +363,14 @@ export default async function automationController(app: FastifyInstance) {
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId/occurrences",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationOccurrenceListSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId, eventSourceId } = request.params as {
         workspaceId: string
@@ -513,9 +391,14 @@ export default async function automationController(app: FastifyInstance) {
     }
   )
 
-  app.put(
+  appRoute(
+    app,
+    "PUT",
     "/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationEventSourceSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId, eventSourceId } = request.params as {
         workspaceId: string
@@ -530,7 +413,7 @@ export default async function automationController(app: FastifyInstance) {
       )
       if (!allowed) return
 
-      const body = updateEventSourceSchema.parse(request.body)
+      const body = sharedEventSourceUpdateInputSchema.parse(request.body)
       const workspaceMemberId = (request as any).workspaceMember!.id as string
       return updateAutomationEventSource(
         workspaceId,
@@ -541,9 +424,14 @@ export default async function automationController(app: FastifyInstance) {
     }
   )
 
-  app.delete(
+  appRoute(
+    app,
+    "DELETE",
     "/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationSuccessSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId, eventSourceId } = request.params as {
         workspaceId: string
@@ -566,9 +454,14 @@ export default async function automationController(app: FastifyInstance) {
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId/events",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationEventIngestResultSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId, eventSourceId } = request.params as {
         workspaceId: string
@@ -583,7 +476,7 @@ export default async function automationController(app: FastifyInstance) {
       )
       if (!allowed) return
 
-      const body = ingestEventSchema.parse(request.body)
+      const body = sharedEventIngestInputSchema.parse(request.body)
       const result = await ingestAutomationEvent({
         workspaceId,
         eventSourceId,
@@ -595,16 +488,23 @@ export default async function automationController(app: FastifyInstance) {
       await enqueueAutomationExecutions(
         result.executions.map((execution) => execution.id)
       )
-      return reply.status(202).send({
+      const value = {
         occurrence: result.occurrence,
         executions: result.executions,
-      })
+      }
+      reply.status(202)
+      return value
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/automations",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationRuleListSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       const allowed = await requireRequestAction(
@@ -616,17 +516,7 @@ export default async function automationController(app: FastifyInstance) {
       )
       if (!allowed) return
 
-      const query = request.query as {
-        status?:
-          | "active"
-          | "paused"
-          | "error"
-          | "archived"
-          | "completed"
-          | "expired"
-        category?: "schedule" | "event_subscription"
-        conversationId?: string
-      }
+      const query = sharedAutomationListQuerySchema.parse(request.query || {})
       return listAutomationRules(workspaceId, {
         status: query.status,
         category: query.category,
@@ -635,9 +525,14 @@ export default async function automationController(app: FastifyInstance) {
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/automations",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationRuleSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       const allowed = await requireRequestAction(
@@ -649,13 +544,14 @@ export default async function automationController(app: FastifyInstance) {
       )
       if (!allowed) return
 
-      const body = createAutomationSchema.parse(request.body)
+      const body = sharedAutomationCreateInputSchema.parse(request.body)
       const issues = validateAutomationRuleCreatePayload(body)
       if (issues.length > 0) {
-        return reply.status(400).send({
+        reply.status(400).send({
           error: issues[0]!.message,
           issues,
         })
+        return
       }
       const workspaceMemberId = (request as any).workspaceMember!.id as string
       const automation = await createAutomationRule(
@@ -663,13 +559,19 @@ export default async function automationController(app: FastifyInstance) {
         { kind: "workspace_member", workspaceMemberId },
         body
       )
-      return reply.status(201).send(automation)
+      reply.status(201)
+      return automation
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/automations/:automationId",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationRuleSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId, automationId } = request.params as {
         workspaceId: string
@@ -686,15 +588,21 @@ export default async function automationController(app: FastifyInstance) {
 
       const automation = await getAutomationRule(workspaceId, automationId)
       if (!automation) {
-        return reply.status(404).send({ error: "Automation not found" })
+        reply.status(404).send({ error: "Automation not found" })
+        return
       }
       return automation
     }
   )
 
-  app.put(
+  appRoute(
+    app,
+    "PUT",
     "/api/v1/workspaces/:workspaceId/automations/:automationId",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationRuleSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId, automationId } = request.params as {
         workspaceId: string
@@ -709,7 +617,7 @@ export default async function automationController(app: FastifyInstance) {
       )
       if (!allowed) return
 
-      const body = updateAutomationSchema.parse(request.body)
+      const body = sharedAutomationUpdateInputSchema.parse(request.body)
       const workspaceMemberId = (request as any).workspaceMember!.id as string
       try {
         const automation = await updateAutomationRule(
@@ -724,19 +632,25 @@ export default async function automationController(app: FastifyInstance) {
           error instanceof Error &&
           (error as Error & { statusCode?: number }).statusCode === 400
         ) {
-          return reply.status(400).send({
+          reply.status(400).send({
             error: error.message,
             issues: (error as Error & { issues?: unknown }).issues || [],
           })
+          return
         }
         throw error
       }
     }
   )
 
-  app.delete(
+  appRoute(
+    app,
+    "DELETE",
     "/api/v1/workspaces/:workspaceId/automations/:automationId",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationSuccessSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId, automationId } = request.params as {
         workspaceId: string
@@ -759,9 +673,14 @@ export default async function automationController(app: FastifyInstance) {
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/automations/:automationId/executions",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationExecutionListSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId, automationId } = request.params as {
         workspaceId: string
@@ -776,13 +695,22 @@ export default async function automationController(app: FastifyInstance) {
       )
       if (!allowed) return
 
-      return listAutomationExecutions(workspaceId, automationId)
+      const executions = await listAutomationExecutions(
+        workspaceId,
+        automationId
+      )
+      return executions.map(presentExecutionWithOccurrence)
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/automation-webhooks",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationWebhookEndpointListSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       const allowed = await requireRequestAction(
@@ -794,13 +722,19 @@ export default async function automationController(app: FastifyInstance) {
       )
       if (!allowed) return
 
-      return listAutomationWebhookEndpoints(workspaceId)
+      const endpoints = await listAutomationWebhookEndpoints(workspaceId)
+      return endpoints.map(presentWebhookEndpoint)
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/automation-webhooks",
-    { preHandler: protectedPreHandler },
+    {
+      schema: AutomationWebhookEndpointCreateResultSchema,
+      options: { preHandler: protectedPreHandler },
+    },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       const allowed = await requireRequestAction(
@@ -812,19 +746,23 @@ export default async function automationController(app: FastifyInstance) {
       )
       if (!allowed) return
 
-      const body = createWebhookEndpointSchema.parse(request.body)
+      const body = sharedWebhookEndpointCreateInputSchema.parse(request.body)
       const workspaceMemberId = (request as any).workspaceMember!.id as string
       const created = await createAutomationWebhookEndpoint(
         workspaceId,
         workspaceMemberId,
         body
       )
-      return reply.status(201).send(created)
+      reply.status(201)
+      return created
     }
   )
 
-  app.post(
+  wireRoute(
+    app,
+    "POST",
     "/api/v1/automation-webhooks/:pathToken/sources/:sourceKey/events",
+    {},
     async (request, reply) => {
       const { pathToken, sourceKey } = request.params as {
         pathToken: string
@@ -874,8 +812,11 @@ export default async function automationController(app: FastifyInstance) {
     }
   )
 
-  app.post(
+  wireRoute(
+    app,
+    "POST",
     "/api/v1/automation-webhooks/:pathToken/events",
+    {},
     async (request, reply) => {
       const { pathToken } = request.params as { pathToken: string }
       const payload =

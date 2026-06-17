@@ -24,6 +24,14 @@
       "types": "./dist/constants/index.d.ts",
       "default": "./dist/constants/index.js"
     },
+    "./content": {
+      "types": "./dist/content/index.d.ts",
+      "default": "./dist/content/index.js"
+    },
+    "./conversation": {
+      "types": "./dist/conversation/index.d.ts",
+      "default": "./dist/conversation/index.js"
+    },
     "./utils": {
       "types": "./dist/utils/index.d.ts",
       "default": "./dist/utils/index.js"
@@ -67,6 +75,10 @@
     "./tool-source": {
       "types": "./dist/tool-source/index.d.ts",
       "default": "./dist/tool-source/index.js"
+    },
+    "./tool-presentation": {
+      "types": "./dist/tool-presentation/index.d.ts",
+      "default": "./dist/tool-presentation/index.js"
     }
   },
   "scripts": {

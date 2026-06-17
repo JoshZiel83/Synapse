@@ -7,6 +7,23 @@ import path from "node:path"
 import process from "node:process"
 import { setTimeout as sleep } from "node:timers/promises"
 import WebSocket from "ws"
+// Type-only binding to the single source for the daemon↔API machine RPC
+// contract. These are `import type` so they erase at build — the daemon takes
+// NO runtime dependency on device-protocol (its published shrinkwrap stays
+// unchanged); tsc statically checks every outbound snake_case body against the
+// same schema the API parses inbound. The API is the runtime validator
+// (separate trust domain).
+import type {
+  RemoteAgentMachineHeartbeatMessage,
+  RemoteAgentMachineReadyMessage,
+  RemoteAgentRuntimeCatalogEntryWire,
+  RemoteAgentRuntimeCapabilityWire,
+  RemoteAgentSessionMessage,
+  RemoteAgentStatusMessage,
+  RemoteAgentUserInputTaskBody,
+  RemoteAgentPlanApprovalTaskBody,
+  RemoteAgentFailDeliveriesBody,
+} from "@synapse/device-protocol"
 import { ClaudeDriver } from "./drivers/claude-driver.js"
 import { CodexDriver } from "./drivers/codex-driver.js"
 import { registerDriver, tryGetDriver } from "./drivers/registry.js"
@@ -16,12 +33,29 @@ import type {
   RuntimeCatalogEntry,
   RuntimeKind,
 } from "./drivers/types.js"
+import { RUNTIME_KIND } from "./drivers/types.js"
 import {
   ConversationRuntime,
-  readBridgeState,
   type ConversationRuntimeCallbacks,
 } from "./conversation-runtime.js"
 import { buildResolvedPlanTaskFallbackPrompt } from "./resolved-task-fallback.js"
+import {
+  buildAnswerMap,
+  buildResolvedUserInputPrompt,
+  parseResolvedTaskPayload,
+  type ResolvedTaskPayload,
+} from "./resolved-task-payload.js"
+import {
+  RemoteAgentFailDeliveriesResponseSchema,
+  RemoteAgentTaskCreateResponseSchema,
+  requestJson,
+} from "./api-client.js"
+import {
+  parseServerMessage,
+  type AgentStartMessage,
+  type Delivery,
+  type TaskResolvedMessage,
+} from "./server-message-codec.js"
 
 registerDriver(new ClaudeDriver())
 registerDriver(new CodexDriver())
@@ -34,45 +68,15 @@ type DaemonConfig = {
   proxyUrl?: string
 }
 
-type AgentStartMessage = {
-  type: "agent:start"
-  remoteAgentId: string
-  conversationId?: string
-  runtimeKind: RuntimeKind
-  runtimePath?: string | null
-  localRootPath?: string | null
-  sessionId?: string | null
-  fencingToken?: string
-  serverUrl?: string
-}
-
-type Delivery = {
-  remoteAgentId: string
-  deliveryId: string
-  conversationId: string
-  itemId: string
-}
-
-type DeliveryMessage = {
-  type: "agent:deliver"
-  deliveries: Delivery[]
-}
-
-type TaskResolvedMessage = {
-  type: "agent:task:resolved"
-  remoteAgentId: string
-  taskId: string
-  task: Record<string, unknown>
-}
-
-type ConnectedMessage = {
-  type: "connected"
-  machineId: string
-  sessionId: string
-  fencingToken?: string
-}
-
 type LogLevel = "error" | "warn" | "info" | "debug"
+
+type DaemonRuntimeCapabilities = {
+  supportsRequestUserInput?: boolean
+  supportsPlanMode?: boolean
+  supportsPersistentSession?: boolean
+  supportsCodexAppServer?: boolean
+  supportsStructuredIo?: boolean
+}
 
 const DEFAULT_HEARTBEAT_MS = 30_000
 const DEFAULT_RECONNECT_MS = 3_000
@@ -198,53 +202,6 @@ function buildWakePrompt() {
   ].join(" ")
 }
 
-function buildResolvedUserInputPrompt(task: Record<string, any>) {
-  const title =
-    typeof task.userInput?.title === "string"
-      ? task.userInput.title.trim()
-      : "User input"
-  const questions = Array.isArray(task.userInput?.questions)
-    ? task.userInput.questions
-    : []
-  const answerLines = questions
-    .map((question: Record<string, any>) => {
-      const prompt =
-        typeof question.prompt === "string" && question.prompt.trim()
-          ? question.prompt.trim()
-          : typeof question.title === "string" && question.title.trim()
-            ? question.title.trim()
-            : typeof question.id === "string"
-              ? question.id
-              : "Question"
-      const labels = Array.isArray(question.answer?.selectedOptionLabels)
-        ? question.answer.selectedOptionLabels.filter(
-            (value: unknown): value is string =>
-              typeof value === "string" && value.trim().length > 0
-          )
-        : []
-      const selected = labels.length > 0 ? labels.join(", ") : undefined
-      const text =
-        typeof question.answer?.text === "string" && question.answer.text.trim()
-          ? question.answer.text.trim()
-          : undefined
-      const otherText =
-        typeof question.answer?.otherText === "string" &&
-        question.answer.otherText.trim()
-          ? question.answer.otherText.trim()
-          : undefined
-      const value = [selected, text, otherText].filter(Boolean).join(" | ")
-      return value ? `- ${prompt}: ${value}` : null
-    })
-    .filter((line: string | null): line is string => Boolean(line))
-  return [
-    `The Synapse user answered your input request: ${title}.`,
-    answerLines.length > 0
-      ? answerLines.join("\n")
-      : "Review the latest conversation state for the submitted answers.",
-    "Continue the task using those answers.",
-  ].join("\n")
-}
-
 function buildBootstrapPrompt(params: {
   remoteAgentId: string
   runtimeKind: RuntimeKind
@@ -278,7 +235,7 @@ function buildBootstrapPrompt(params: {
 
 function describeRuntimeCatalogIssue(entry: RuntimeCatalogEntry) {
   const runtimeLabel =
-    entry.runtimeKind === "claude_code" ? "Claude Code" : "Codex CLI"
+    entry.runtimeKind === RUNTIME_KIND.CLAUDE_CODE ? "Claude Code" : "Codex CLI"
   switch (entry.status) {
     case "missing_binary":
       return `${runtimeLabel} is not installed or not on PATH for this machine`
@@ -293,26 +250,29 @@ function describeRuntimeCatalogIssue(entry: RuntimeCatalogEntry) {
   }
 }
 
-async function requestJson<T>(
-  serverUrl: string,
-  machineKey: string,
-  pathname: string,
-  init?: RequestInit
-): Promise<T> {
-  const url = new URL(pathname, serverUrl)
-  const headers = new Headers(init?.headers)
-  headers.set("authorization", `Bearer ${machineKey}`)
-  if (init?.body && !headers.has("content-type")) {
-    headers.set("content-type", "application/json")
+function runtimeCatalogEntryToWire(
+  entry: RuntimeCatalogEntry
+): RemoteAgentRuntimeCatalogEntryWire {
+  return {
+    runtime_kind: entry.runtimeKind,
+    executable_path: entry.executablePath,
+    status: entry.status,
+    version: entry.version,
+    metadata: entry.metadata,
+    last_error: entry.lastError,
   }
-  const response = await fetch(url, { ...init, headers })
-  if (!response.ok) {
-    const bodyText = await response.text().catch(() => "")
-    throw new Error(
-      `Remote-agent request failed (${response.status} ${response.statusText})${bodyText ? `: ${bodyText}` : ""}`
-    )
+}
+
+function runtimeCapabilitiesToWire(
+  capabilities: DaemonRuntimeCapabilities
+): RemoteAgentRuntimeCapabilityWire {
+  return {
+    supports_request_user_input: capabilities.supportsRequestUserInput,
+    supports_plan_mode: capabilities.supportsPlanMode,
+    supports_persistent_session: capabilities.supportsPersistentSession,
+    supports_codex_app_server: capabilities.supportsCodexAppServer,
+    supports_structured_io: capabilities.supportsStructuredIo,
   }
-  return (await response.json()) as T
 }
 
 type LatestPlanDraft = {
@@ -400,7 +360,9 @@ class DaemonSupervisor {
       ws.once("open", () => {
         log("info", "daemon", "WebSocket connected")
         heartbeatTimer = setInterval(() => {
-          this.send({ type: "heartbeat" })
+          this.send({
+            type: "heartbeat",
+          } satisfies RemoteAgentMachineHeartbeatMessage)
         }, this.config.heartbeatMs)
       })
 
@@ -411,26 +373,38 @@ class DaemonSupervisor {
       })
 
       ws.on("message", async (raw) => {
-        let message: any
-        try {
-          message = JSON.parse(String(raw))
-        } catch {
+        const message = parseServerMessage(raw)
+        if (!message) {
           return
         }
 
         if (message?.type === "connected") {
-          const connected = message as ConnectedMessage
-          this.machineId = connected.machineId
+          this.machineId = message.machineId
           const runtimeCatalog = [
-            (tryGetDriver("claude_code") ?? new ClaudeDriver()).detect(),
-            (tryGetDriver("codex") ?? new CodexDriver()).detect(),
+            (
+              tryGetDriver(RUNTIME_KIND.CLAUDE_CODE) ?? new ClaudeDriver()
+            ).detect(),
+            (tryGetDriver(RUNTIME_KIND.CODEX) ?? new CodexDriver()).detect(),
           ]
           log("info", "daemon", "Server accepted machine session", {
-            machineId: connected.machineId,
-            sessionId: connected.sessionId,
+            machineId: message.machineId,
+            sessionId: message.sessionId,
           })
           log("info", "daemon", "Runtime catalog detected", { runtimeCatalog })
-          this.send({ type: "ready", runtimeCatalog })
+          this.send({
+            type: "ready",
+            runtime_catalog: runtimeCatalog.map(runtimeCatalogEntryToWire),
+          } satisfies RemoteAgentMachineReadyMessage)
+          return
+        }
+
+        if (message?.type === "auth_error") {
+          log("error", "daemon", "Server rejected machine session", {
+            message: message.message,
+          })
+          try {
+            ws.close(1008, message.message)
+          } catch {}
           return
         }
 
@@ -450,7 +424,7 @@ class DaemonSupervisor {
         }
 
         if (message?.type === "agent:start") {
-          const start = message as AgentStartMessage
+          const start = message
           log(
             "info",
             `remote-agent:${start.remoteAgentId}`,
@@ -478,19 +452,15 @@ class DaemonSupervisor {
           return
         }
 
-        if (
-          message?.type === "agent:stop" &&
-          typeof message.remoteAgentId === "string"
-        ) {
+        if (message?.type === "agent:stop") {
           const agent = this.agents.get(message.remoteAgentId)
           if (agent) await agent.stopAll("server stop")
           return
         }
 
         if (message?.type === "agent:deliver") {
-          const deliver = message as DeliveryMessage
           const byAgent = new Map<string, Delivery[]>()
-          for (const delivery of deliver.deliveries ?? []) {
+          for (const delivery of message.deliveries ?? []) {
             const list = byAgent.get(delivery.remoteAgentId) ?? []
             list.push(delivery)
             byAgent.set(delivery.remoteAgentId, list)
@@ -503,9 +473,8 @@ class DaemonSupervisor {
         }
 
         if (message?.type === "agent:task:resolved") {
-          const resolved = message as TaskResolvedMessage
-          const agent = this.agents.get(resolved.remoteAgentId)
-          if (agent) await agent.resolveTask(resolved)
+          const agent = this.agents.get(message.remoteAgentId)
+          if (agent) await agent.resolveTask(message)
           return
         }
       })
@@ -537,7 +506,7 @@ class DaemonSupervisor {
 }
 
 class ManagedRemoteAgent {
-  private runtimeKind: RuntimeKind = "claude_code"
+  private runtimeKind: RuntimeKind = RUNTIME_KIND.CLAUDE_CODE
   private runtimePath?: string
   private localRootPath?: string
   private stateDirectory = ""
@@ -600,8 +569,12 @@ class ManagedRemoteAgent {
         `/api/v1/internal/remote-agents/${this.params.remoteAgentId}/fail-deliveries`,
         {
           method: "POST",
-          body: JSON.stringify({ deliveryIds, reason: reason.slice(0, 2000) }),
-        }
+          body: JSON.stringify({
+            delivery_ids: deliveryIds,
+            reason: reason.slice(0, 2000),
+          } satisfies RemoteAgentFailDeliveriesBody),
+        },
+        RemoteAgentFailDeliveriesResponseSchema
       )
     } catch (error) {
       log(
@@ -744,7 +717,7 @@ class ManagedRemoteAgent {
   }
 
   async resolveTask(message: TaskResolvedMessage) {
-    const task = message.task || {}
+    const task = parseResolvedTaskPayload(message.task)
     const pending = this.pendingTasks.get(message.taskId)
     if (!pending) {
       log(
@@ -753,24 +726,15 @@ class ManagedRemoteAgent {
         "Resolved task has no matching pending request; falling back to synthetic prompt",
         { taskId: message.taskId }
       )
-      const conversationId =
-        typeof (task as any).conversationId === "string"
-          ? (task as any).conversationId
-          : undefined
+      const conversationId = task.conversationId
       if (!conversationId) return
-      await this.applyResolvedTaskFallback(
-        conversationId,
-        task as Record<string, any>
-      )
+      await this.applyResolvedTaskFallback(conversationId, task)
       return
     }
     this.pendingTasks.delete(message.taskId)
     const runtime = this.runtimes.get(pending.conversationId)
     if (!runtime) {
-      await this.applyResolvedTaskFallback(
-        pending.conversationId,
-        task as Record<string, any>
-      )
+      await this.applyResolvedTaskFallback(pending.conversationId, task)
       return
     }
 
@@ -779,7 +743,7 @@ class ManagedRemoteAgent {
         behavior: "allow",
         updatedInput: {
           ...(pending.originalInput ?? {}),
-          answers: buildAnswerMap(task as Record<string, any>),
+          answers: buildAnswerMap(task),
         },
       }
       try {
@@ -790,21 +754,14 @@ class ManagedRemoteAgent {
           statusText: "Continuing after user input",
         })
       } catch (error) {
-        await this.applyResolvedTaskFallback(
-          pending.conversationId,
-          task as Record<string, any>
-        )
+        await this.applyResolvedTaskFallback(pending.conversationId, task)
       }
       return
     }
 
     // plan_approval
-    const outcome =
-      typeof (task as any).outcome === "string" ? (task as any).outcome : null
-    const note =
-      typeof (task as any).resolutionNote === "string"
-        ? (task as any).resolutionNote
-        : undefined
+    const outcome = task.outcome ?? null
+    const note = task.resolutionNote
     const decision: PermissionDecision =
       outcome === "approved"
         ? { behavior: "allow", updatedInput: pending.originalInput ?? {} }
@@ -822,21 +779,15 @@ class ManagedRemoteAgent {
       })
     } catch (error) {
       this.latestPlanByConversation.delete(pending.conversationId)
-      await this.applyResolvedTaskFallback(
-        pending.conversationId,
-        task as Record<string, any>
-      )
+      await this.applyResolvedTaskFallback(pending.conversationId, task)
     }
   }
 
   private async applyResolvedTaskFallback(
     conversationId: string,
-    task: Record<string, any>
+    task: ResolvedTaskPayload
   ) {
-    const kind = typeof task.kind === "string" ? task.kind : null
-    const lifecycleStatus =
-      typeof task.lifecycleStatus === "string" ? task.lifecycleStatus : null
-    if (kind === "user_input" && lifecycleStatus === "completed") {
+    if (task.kind === "user_input" && task.lifecycleStatus === "completed") {
       await this.ensureRuntimeForConversation({
         conversationId,
         wake: true,
@@ -877,10 +828,10 @@ class ManagedRemoteAgent {
       onSessionStarted: (conversationId, sessionId) => {
         this.params.daemon.send({
           type: "agent:session",
-          remoteAgentId: this.params.remoteAgentId,
-          conversationId,
-          sessionId,
-        })
+          remote_agent_id: this.params.remoteAgentId,
+          conversation_id: conversationId,
+          session_id: sessionId,
+        } satisfies RemoteAgentSessionMessage)
         // A fresh session means we're starting clean — any error from the
         // previous lifecycle is stale by definition. Use the empty-string
         // sentinel so the server clears last_error instead of preserving
@@ -929,21 +880,20 @@ class ManagedRemoteAgent {
       onUserInputRequested: async (conversationId, event) => {
         try {
           const runKey = `remote-agent:${this.params.remoteAgentId}:user-input:${randomUUID()}`
-          const result = await requestJson<{
-            task: { id: string }
-          }>(
+          const result = await requestJson(
             this.params.config.serverUrl,
             this.params.config.apiKey,
             `/api/v1/internal/remote-agents/${this.params.remoteAgentId}/tasks/user-input`,
             {
               method: "POST",
               body: JSON.stringify({
-                conversationId,
-                runKey,
+                conversation_id: conversationId,
+                run_key: runKey,
                 title: event.title,
                 questions: event.questions,
-              }),
-            }
+              } satisfies RemoteAgentUserInputTaskBody),
+            },
+            RemoteAgentTaskCreateResponseSchema
           )
           this.pendingTasks.set(result.task.id, {
             taskId: result.task.id,
@@ -973,23 +923,22 @@ class ManagedRemoteAgent {
       onPlanApprovalRequested: async (conversationId, event) => {
         try {
           const runKey = `remote-agent:${this.params.remoteAgentId}:plan:${randomUUID()}`
-          const result = await requestJson<{
-            task: { id: string }
-          }>(
+          const result = await requestJson(
             this.params.config.serverUrl,
             this.params.config.apiKey,
             `/api/v1/internal/remote-agents/${this.params.remoteAgentId}/tasks/plan-approval`,
             {
               method: "POST",
               body: JSON.stringify({
-                conversationId,
-                runKey,
+                conversation_id: conversationId,
+                run_key: runKey,
                 title: event.title,
                 summary: event.summary,
-                planMarkdown: event.planMarkdown,
+                plan_markdown: event.planMarkdown,
                 checklist: event.checklist,
-              }),
-            }
+              } satisfies RemoteAgentPlanApprovalTaskBody),
+            },
+            RemoteAgentTaskCreateResponseSchema
           )
           this.pendingTasks.set(result.task.id, {
             taskId: result.task.id,
@@ -1067,32 +1016,22 @@ class ManagedRemoteAgent {
     lastError?: string | null
   }) {
     const conversationId = params.conversationId ?? undefined
-    const bridgeLast = conversationId
-      ? readBridgeState(
-          path.join(
-            this.stateDirectory,
-            "conversations",
-            conversationId,
-            "bridge-state.json"
-          )
-        ).lastConversationId
-      : undefined
     this.params.daemon.send({
       type: "agent:status",
-      remoteAgentId: this.params.remoteAgentId,
+      remote_agent_id: this.params.remoteAgentId,
       state: params.state,
-      statusText: params.statusText,
-      conversationId: conversationId ?? bridgeLast ?? null,
-      taskId: params.taskId ?? null,
-      sessionId: params.sessionId ?? null,
-      lastError: params.lastError ?? null,
-      runKey: params.runKey ?? null,
-      capabilities: this.runtimeCapabilities(),
-    })
+      status_text: params.statusText,
+      conversation_id: conversationId ?? null,
+      task_id: params.taskId ?? null,
+      session_id: params.sessionId ?? null,
+      last_error: params.lastError ?? null,
+      run_key: params.runKey ?? null,
+      capabilities: runtimeCapabilitiesToWire(this.runtimeCapabilities()),
+    } satisfies RemoteAgentStatusMessage)
   }
 
-  private runtimeCapabilities() {
-    if (this.runtimeKind === "claude_code") {
+  private runtimeCapabilities(): DaemonRuntimeCapabilities {
+    if (this.runtimeKind === RUNTIME_KIND.CLAUDE_CODE) {
       return {
         supportsRequestUserInput: true,
         supportsPlanMode: true,
@@ -1107,30 +1046,6 @@ class ManagedRemoteAgent {
       supportsCodexAppServer: true,
     }
   }
-}
-
-function buildAnswerMap(task: Record<string, any>) {
-  const answers: Record<string, string> = {}
-  const questions = Array.isArray(task.userInput?.questions)
-    ? task.userInput.questions
-    : []
-  for (const question of questions) {
-    const prompt =
-      typeof question?.prompt === "string" ? question.prompt : undefined
-    if (!prompt) continue
-    const answer = question?.answer
-    const parts = [
-      ...(Array.isArray(answer?.selectedOptionLabels)
-        ? answer.selectedOptionLabels.map((value: unknown) => String(value))
-        : []),
-      typeof answer?.otherText === "string" ? answer.otherText : undefined,
-      typeof answer?.text === "string" ? answer.text : undefined,
-    ].filter((value): value is string => Boolean(value))
-    if (parts.length > 0) {
-      answers[prompt] = parts.join(", ")
-    }
-  }
-  return answers
 }
 
 async function main() {

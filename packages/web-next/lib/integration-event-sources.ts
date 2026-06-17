@@ -2,16 +2,9 @@ import { listAutomationEventDefinitions } from "@synapse/shared/automation"
 import type {
   AutomationIntegrationProvider,
   AutomationIntegrationTargetKind,
+  PluginInstallationDetailView,
 } from "@synapse/shared"
 import { api } from "./api"
-
-export type IntegrationInstallationView = {
-  id: string
-  org_slug?: string
-  plugin_slug?: string
-  plugin_display_name?: string
-  status?: string
-}
 
 export type IntegrationEventDefinitionOption = {
   sourceKey: string
@@ -51,13 +44,13 @@ export function listIntegrationEventDefinitionOptions(
 }
 
 export function listIntegrationInstallations(
-  installations: IntegrationInstallationView[],
+  installations: PluginInstallationDetailView[],
   provider: AutomationIntegrationProvider
 ) {
   return installations.filter(
     (installation) =>
-      installation.org_slug === provider &&
-      installation.plugin_slug === "official-mcp" &&
+      installation.orgSlug === provider &&
+      installation.pluginSlug === "official-mcp" &&
       installation.status === "active"
   )
 }

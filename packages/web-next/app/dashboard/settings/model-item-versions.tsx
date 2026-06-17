@@ -7,19 +7,23 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ArrowLeft, History, Clock } from "lucide-react"
-import { MODEL_GROUP_GRANT_SCOPE, type Timestamp } from "@synapse/shared"
+import {
+  MODEL_GROUP_GRANT_SCOPE,
+  type ProviderKind,
+  type Timestamp,
+} from "@synapse/shared"
 
 interface ConfigVersion {
   id: string
-  binding_id: string
+  bindingId: string
   version: number
-  provider_kind: string
+  providerKind: ProviderKind
   vendor: string
-  base_url: string
-  model_name: string
-  max_output_tokens: number
-  capability_tags: string[]
-  created_at: Timestamp
+  baseUrl: string
+  modelName: string | null
+  maxOutputTokens: number | null
+  capabilityTags: string[]
+  createdAt: Timestamp | null
 }
 
 export default function ModelItemVersions({
@@ -47,7 +51,7 @@ export default function ModelItemVersions({
           ? api.getWorkspaceMemberItemVersions(workspaceId!, groupId, itemId)
           : api.getItemVersions(workspaceId!, groupId, itemId)
     request
-      .then((res) => setVersions(res.versions || []))
+      .then((versions) => setVersions(versions))
       .catch((err) => console.error("Failed to load versions:", err))
       .finally(() => setLoading(false))
   }, [workspaceId, groupId, itemId, scope])
@@ -104,15 +108,15 @@ export default function ModelItemVersions({
                     <Badge className="border-violet-500/20 bg-violet-500/10 text-xs text-violet-400">
                       {v.vendor}
                     </Badge>
-                    {v.provider_kind ? (
+                    {v.providerKind ? (
                       <Badge className="border-slate-500/20 bg-slate-500/10 text-xs text-slate-300">
-                        {v.provider_kind}
+                        {v.providerKind}
                       </Badge>
                     ) : null}
                   </div>
                   <div className="flex items-center gap-1 text-xs text-muted-foreground">
                     <Clock className="h-3 w-3" />
-                    {new Date(v.created_at).toLocaleString()}
+                    {v.createdAt ? new Date(v.createdAt).toLocaleString() : ""}
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
@@ -120,31 +124,29 @@ export default function ModelItemVersions({
                     <span className="block text-xs text-muted-foreground">
                       Model
                     </span>
-                    <span className="text-foreground">{v.model_name}</span>
+                    <span className="text-foreground">{v.modelName}</span>
                   </div>
                   <div>
                     <span className="block text-xs text-muted-foreground">
                       Base URL
                     </span>
                     <span className="block truncate text-foreground">
-                      {v.base_url}
+                      {v.baseUrl}
                     </span>
                   </div>
                   <div>
                     <span className="block text-xs text-muted-foreground">
                       Max Output Tokens
                     </span>
-                    <span className="text-foreground">
-                      {v.max_output_tokens}
-                    </span>
+                    <span className="text-foreground">{v.maxOutputTokens}</span>
                   </div>
                   <div>
                     <span className="block text-xs text-muted-foreground">
                       Capabilities
                     </span>
                     <span className="text-foreground">
-                      {v.capability_tags?.length
-                        ? v.capability_tags.join(", ")
+                      {v.capabilityTags?.length
+                        ? v.capabilityTags.join(", ")
                         : "None"}
                     </span>
                   </div>

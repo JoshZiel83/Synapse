@@ -10,7 +10,10 @@
 // device_operation_attempts row pair (see devices/operations.ts).
 
 import { randomUUID } from "node:crypto"
-import { dateToIsoInstant, nowIsoInstant } from "@synapse/shared/datetime"
+import {
+  dateToIsoInstant as dateToWireIsoInstant,
+  nowIsoInstant as nowWireIsoInstant,
+} from "@synapse/device-protocol/instant"
 import type {
   ToolDefinition,
   NormalizedMcpToolResult,
@@ -26,7 +29,7 @@ import {
   type ProjectedToolDefinition,
   type ToolRef,
 } from "@synapse/shared"
-import type { RuntimeAuthorizationGrantSpec as RuntimeAuthorizationGrantWireSpec } from "@synapse/device-protocol"
+import type { RuntimeAuthorizationGrantWireSpec } from "@synapse/device-protocol"
 // subject-scope-refactor: Renamed alias to disambiguate from the API-side
 // SharedRuntimeAuthorizationGrantSpec; envelope payloads use the snake_case
 // wire spec.
@@ -36,8 +39,6 @@ import {
   resolveMcpToolsForRemoteAgent,
   type ResolvedMcpTools,
 } from "../mcp-plugins/tool-resolver.js"
-import { db } from "../../infrastructure/database/kysely.js"
-import { buildRuntimePrincipalContext } from "../access/subject-resolution.js"
 import { dispatchSyncTool } from "../devices/dispatch.js"
 import { signEnvelopeForDispatch } from "../devices/envelope-signer.js"
 import {
@@ -74,6 +75,10 @@ import {
   loadDeviceCapabilityToolsForSubjects,
   type DeviceCapabilityToolRow,
 } from "./device-capabilities.js"
+import {
+  loadRuntimePrincipalContextForCapabilityProjection,
+  type CapabilityProjectionRuntimeContextDb,
+} from "./repo.js"
 import { getWorkspaceCapabilityConversationTypePolicyMap } from "../capabilities/conversation-type-policies.js"
 import {
   maskAllowsConversationTypeKey,
@@ -248,25 +253,25 @@ interface DeviceToolBundle {
 /** Build a device ToolRef from a projected capability row. */
 function buildDeviceToolRef(row: DeviceCapabilityToolRow): ToolRef {
   return {
-    toolId: makeDeviceToolId(row.device_tool_id),
+    toolId: makeDeviceToolId(row.deviceToolId),
     source: {
       kind: "device",
-      deviceToolId: row.device_tool_id,
-      exposureStableKey: row.exposure_stable_key,
-      deviceName: row.device_name,
-      visibleToolName: row.visible_tool_name,
+      deviceToolId: row.deviceToolId,
+      exposureStableKey: row.exposureStableKey,
+      deviceName: row.deviceName,
+      visibleToolName: row.visibleToolName,
     },
     binding: {
       transport: "device_tunnel",
-      deviceId: row.device_id,
-      deviceServiceId: row.device_service_id,
-      deviceCapabilityId: row.device_capability_id,
-      deviceExposureId: row.device_exposure_id,
-      deviceToolRevisionId: row.device_tool_revision_id,
+      deviceId: row.deviceId,
+      deviceServiceId: row.deviceServiceId,
+      deviceCapabilityId: row.deviceCapabilityId,
+      deviceExposureId: row.deviceExposureId,
+      deviceToolRevisionId: row.deviceToolRevisionId,
     },
     identity: {
-      stableKey: `${row.exposure_stable_key}/${row.visible_tool_name}`,
-      revisionId: row.device_tool_revision_id,
+      stableKey: `${row.exposureStableKey}/${row.visibleToolName}`,
+      revisionId: row.deviceToolRevisionId,
     },
   }
 }
@@ -274,10 +279,10 @@ function buildDeviceToolRef(row: DeviceCapabilityToolRow): ToolRef {
 function deviceToolOrigin(row: DeviceCapabilityToolRow): ToolResultOrigin {
   return {
     kind: "device",
-    deviceToolId: row.device_tool_id,
-    deviceName: row.device_name,
-    exposureStableKey: row.exposure_stable_key,
-    visibleToolName: row.visible_tool_name,
+    deviceToolId: row.deviceToolId,
+    deviceName: row.deviceName,
+    exposureStableKey: row.exposureStableKey,
+    visibleToolName: row.visibleToolName,
   }
 }
 
@@ -370,9 +375,8 @@ function devicePrincipalToSubjectRef(
  */
 export async function principalSubjectIds(
   input: ProjectToolsInput,
-  options?: { db?: typeof db }
+  options?: { db?: CapabilityProjectionRuntimeContextDb }
 ): Promise<ResolvedPrincipalSubjects> {
-  const dbHandle = options?.db ?? db
   const subjectRef = devicePrincipalToSubjectRef(input.principal)
   if (!subjectRef) {
     return {
@@ -395,7 +399,8 @@ export async function principalSubjectIds(
         : input.principal.kind === "remote_agent"
           ? input.principal.conversationId
           : undefined
-  const ctx = await buildRuntimePrincipalContext(dbHandle, {
+  const ctx = await loadRuntimePrincipalContextForCapabilityProjection({
+    db: options?.db,
     principal: subjectRef,
     workspaceId: input.workspaceId,
     conversationId: conversationId ?? null,
@@ -457,9 +462,9 @@ async function projectDeviceTools(
     const effectiveMask = resolveNarrowedConversationTypeMask(
       resolveNarrowedConversationTypeMask(
         workspaceDefault,
-        row.device_conversation_type_mask_override
+        row.deviceConversationTypeMaskOverride
       ),
-      row.capability_conversation_type_mask_override
+      row.capabilityConversationTypeMaskOverride
     )
     return maskAllowsConversationTypeKey(effectiveMask, conversationTypeKey)
   })
@@ -474,26 +479,28 @@ async function projectDeviceTools(
     tools.push({
       // `name` carries the visible (leaf) tool name; the surface rewrites it
       // to the collision-safe wire name. Routing keys on ref.toolId.
-      name: row.visible_tool_name,
+      name: row.visibleToolName,
       description:
-        row.visible_description ||
-        `Device tool: ${row.visible_tool_name} on ${row.device_name}`,
-      parameters: normalizeInputSchema(row.input_schema),
+        row.visibleDescription ||
+        `Device tool: ${row.visibleToolName} on ${row.deviceName}`,
+      parameters: normalizeInputSchema(row.inputSchema),
       ref,
     })
   }
   return { tools, handlers, subjects }
 }
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value))
+}
+
 function normalizeInputSchema(raw: unknown): ToolDefinition["parameters"] {
-  if (raw && typeof raw === "object") {
-    const obj = raw as Record<string, unknown>
-    const props =
-      obj["properties"] && typeof obj["properties"] === "object"
-        ? (obj["properties"] as ToolDefinition["parameters"]["properties"])
-        : {}
-    const required = Array.isArray(obj["required"])
-      ? (obj["required"] as string[])
+  if (isObjectRecord(raw)) {
+    const props = isObjectRecord(raw["properties"])
+      ? (raw["properties"] as ToolDefinition["parameters"]["properties"])
+      : {}
+    const required = Array.isArray(raw["required"])
+      ? (raw["required"] as string[])
       : []
     return { type: "object", properties: props, required }
   }
@@ -520,8 +527,8 @@ function unionWithDevice(
     // declaring this inside one of them would make it invisible to the
     // other. Both fields hoisted together since they're always used as
     // a pair.
-    const devicePlatform = normalizeDevicePlatform(row.device_platform)
-    const deviceArch = row.device_arch
+    const devicePlatform = normalizeDevicePlatform(row.devicePlatform)
+    const deviceArch = row.deviceArch
     // Build the unsigned payload first so we can compute input_hash from the
     // Strip the planner-injected retry-nonce hint before everything that
     // operates on tool args, so the device never sees it and the input_hash
@@ -534,10 +541,10 @@ function unionWithDevice(
     // (code, details) is surfaced via synapseErrorBlock so the downstream UI /
     // model can distinguish capability-disabled from invalid-request from
     // scheme-violation without parsing bracketed text.
-    if (row.builtin_kind === "browser") {
+    if (row.builtinKind === "browser") {
       const denial = browserPreflightDeny(
         row,
-        row.visible_tool_name,
+        row.visibleToolName,
         sanitizedInput
       )
       if (denial) {
@@ -574,9 +581,9 @@ function unionWithDevice(
     let requestedAction
     try {
       requestedAction = buildRequestedAction({
-        capability: row.builtin_kind,
-        toolName: row.visible_tool_name,
-        visibleToolName: row.visible_tool_name,
+        capability: row.builtinKind,
+        toolName: row.visibleToolName,
+        visibleToolName: row.visibleToolName,
         args: sanitizedInput,
         devicePlatform,
         deviceArch,
@@ -619,9 +626,9 @@ function unionWithDevice(
     try {
       claim = await selectAndClaimRuntimeAuthorizationGrant({
         workspaceId: projectInput.workspaceId,
-        deviceId: row.device_id,
-        deviceCapabilityId: row.device_capability_id,
-        deviceExposureId: row.device_exposure_id,
+        deviceId: row.deviceId,
+        deviceCapabilityId: row.deviceCapabilityId,
+        deviceExposureId: row.deviceExposureId,
         runtimeSubjectIds: device.subjects.allIds,
         runtimeScopeSubjectIds: device.subjects.scopeSubjectIds,
         retryNonce: envelopeRetryNonce,
@@ -638,7 +645,7 @@ function unionWithDevice(
             // state. Other tool kinds don't need it — leaving the field
             // undefined keeps non-cua envelopes byte-identical to v2.
             const cuaFocusScopeId =
-              row.builtin_kind === "cua"
+              row.builtinKind === "cua"
                 ? deriveCuaFocusScopeId({
                     sessionId: projectInput.sessionId,
                     workspaceId: projectInput.workspaceId,
@@ -649,10 +656,10 @@ function unionWithDevice(
               operation_id: randomUUID(),
               attempt_id: randomUUID(),
               device_runtime_session_id: randomUUID(),
-              device_capability_id: row.device_capability_id,
-              device_exposure_id: row.device_exposure_id,
-              device_tool_id: row.device_tool_id,
-              device_tool_revision_id: row.device_tool_revision_id,
+              device_capability_id: row.deviceCapabilityId,
+              device_exposure_id: row.deviceExposureId,
+              device_tool_id: row.deviceToolId,
+              device_tool_revision_id: row.deviceToolRevisionId,
               input_hash: inputHash,
               task_mode: "sync" as const,
               runtime_authorization: {
@@ -664,25 +671,25 @@ function unionWithDevice(
               ...(cuaFocusScopeId
                 ? { cua_focus_scope_id: cuaFocusScopeId }
                 : {}),
-              issued_at: nowIsoInstant(),
+              issued_at: nowWireIsoInstant(),
               expires_at: serializeGrantEnvelopeExpiresAt(),
             })
             return {
               ok: true,
               prepared: {
                 envelope,
-                toolId: row.device_tool_id,
-                toolRevisionId: row.device_tool_revision_id,
+                toolId: row.deviceToolId,
+                toolRevisionId: row.deviceToolRevisionId,
                 beginInput: {
                   workspaceId: projectInput.workspaceId,
                   conversationId: projectInput.conversationId ?? null,
                   envelope,
                   args: sanitizedInput,
-                  toolName: row.visible_tool_name,
-                  deviceId: row.device_id,
-                  deviceServiceId: row.device_service_id,
+                  toolName: row.visibleToolName,
+                  deviceId: row.deviceId,
+                  deviceServiceId: row.deviceServiceId,
                   tunnelInternalUrl:
-                    getDeviceTunnelRegistry().resolve(row.device_service_id)
+                    getDeviceTunnelRegistry().resolve(row.deviceServiceId)
                       ?.internalUrl ?? null,
                   principalKind: principalKindFor(projectInput.principal),
                   principalSubjectId: device.subjects.principalSubjectId ?? "",
@@ -710,7 +717,7 @@ function unionWithDevice(
     } catch (err) {
       return withDeviceToolOrigin(
         mcpErrorBlock(
-          `grant claim failed for capability ${row.device_capability_id}: ${(err as Error).message}`
+          `grant claim failed for capability ${row.deviceCapabilityId}: ${(err as Error).message}`
         ),
         origin
       )
@@ -721,7 +728,7 @@ function unionWithDevice(
         await requestAuthorizationOrDeny({
           projectInput,
           row,
-          toolName: row.visible_tool_name,
+          toolName: row.visibleToolName,
           input,
           sanitizedInput,
           requestedAction,
@@ -761,13 +768,13 @@ function unionWithDevice(
 
     // dispatchSyncTool resolves the tunnel endpoint by deviceServiceId, which
     // is the device_services row id (what the runtime registered its tunnel
-    // under). We use row.device_service_id from the catalog projection — NOT
+    // under). We use row.deviceServiceId from the catalog projection — NOT
     // device_exposure_id, which would never match a registered endpoint.
     const result = await dispatchSyncTool({
-      deviceServiceId: row.device_service_id,
+      deviceServiceId: row.deviceServiceId,
       envelope,
       args: sanitizedInput,
-      toolName: row.visible_tool_name,
+      toolName: row.visibleToolName,
     })
     await completeDeviceOperation({
       operationId,
@@ -865,7 +872,7 @@ function unionWithDevice(
 }
 
 function serializeGrantEnvelopeExpiresAt() {
-  return dateToIsoInstant(new Date(Date.now() + 60_000))
+  return dateToWireIsoInstant(new Date(Date.now() + 60_000))
 }
 
 function mcpErrorBlock(
@@ -905,7 +912,7 @@ function browserPreflightDeny(
   visibleToolName: string,
   args: Record<string, unknown>
 ): BrowserPreflightDenial | null {
-  const metadata = row.exposure_metadata
+  const metadata = row.exposureMetadata
   if (
     metadata &&
     typeof metadata === "object" &&
@@ -918,9 +925,9 @@ function browserPreflightDeny(
         : undefined
     return {
       code: "runtime_constraint",
-      message: `capability disabled${disabledReason ? ` (${disabledReason})` : ""}: ${row.exposure_stable_key}`,
+      message: `capability disabled${disabledReason ? ` (${disabledReason})` : ""}: ${row.exposureStableKey}`,
       details: {
-        exposureStableKey: row.exposure_stable_key,
+        exposureStableKey: row.exposureStableKey,
         ...(disabledReason ? { disabledReason } : {}),
       },
     }
@@ -1036,11 +1043,11 @@ export function buildRuntimeAuthorizationRequestParams(args: {
       workspaceMemberId: projectInput.workspaceMemberId,
     },
     runtimeTarget: {
-      deviceCapabilityId: row.device_capability_id,
-      deviceId: row.device_id,
-      deviceExposureId: row.device_exposure_id,
+      deviceCapabilityId: row.deviceCapabilityId,
+      deviceId: row.deviceId,
+      deviceExposureId: row.deviceExposureId,
       requestedToolName: toolName,
-      deviceToolStableKey: row.visible_tool_name,
+      deviceToolStableKey: row.visibleToolName,
       // Persist the source Agent session id so the post-approval auto-retry
       // path can stamp the same cua_focus_scope_id this dispatch would have
       // used (session:<sessionId>). Without it the device cua builtin
@@ -1049,7 +1056,7 @@ export function buildRuntimeAuthorizationRequestParams(args: {
       // tool_call_task_runtime_authorization.source_runtime_session_id (TEXT)
       // — the chat-runtime session.id.
       runtimeSessionId: projectInput.sessionId ?? "",
-      deviceDisplayName: row.device_name,
+      deviceDisplayName: row.deviceName,
     },
     authorizationPlan: {
       requestedAction,
@@ -1064,7 +1071,7 @@ export function buildRuntimeAuthorizationRequestParams(args: {
       principal.kind === "remote_agent"
         ? ["once", "remote_agent", "conversation", "workspace"]
         : ["once", "actor", "conversation", "workspace"],
-    reason: `Tool ${toolName} requires authorization for device capability ${row.device_capability_id}`,
+    reason: `Tool ${toolName} requires authorization for device capability ${row.deviceCapabilityId}`,
     sourceRequestArgs: args.sanitizedInput,
   }
 }
@@ -1115,7 +1122,7 @@ async function requestAuthorizationOrDeny(args: {
     projectInput.principal.kind === "remote_agent"
   if (!supportsAuthRequest) {
     return mcpErrorBlock(
-      `permission_denied: no active grant covers device capability ${row.device_capability_id} for this ${projectInput.principal.kind} principal`,
+      `permission_denied: no active grant covers device capability ${row.deviceCapabilityId} for this ${projectInput.principal.kind} principal`,
       undefined,
       origin
     )

@@ -2,7 +2,7 @@ import {
   CHAT_QUEUE_BROADCAST_CHANNEL,
   CHAT_SERVICE_WORKER_PERIODIC_SYNC_TAG,
   CHAT_SERVICE_WORKER_SYNC_TAG,
-} from "@shared"
+} from "@shared/chat-queue"
 
 export const SESSION_TOKEN_KEY = "synapse.mobile.sessionToken"
 export const WORKSPACE_KEY = "synapse.mobile.workspaceId"

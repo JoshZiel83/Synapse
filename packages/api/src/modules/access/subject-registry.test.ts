@@ -129,13 +129,13 @@ test(
       })
 
       const enriched = await db
-        .selectFrom("access_subjects")
-        .select(["id", "kind", "workspace_id"])
+        .selectFrom("accessSubjects")
+        .select(["id", "kind", "workspaceId"])
         .where("id", "in", [actorSubject, memberSubject])
         .execute()
       for (const row of enriched) {
         assert.equal(
-          row.workspace_id,
+          row.workspaceId,
           workspaceId,
           `${row.kind} subject must denormalize the owning workspace`
         )
@@ -188,13 +188,13 @@ test(
         remoteAgentId,
       })
       const row = await db
-        .selectFrom("access_subjects")
-        .select(["kind", "workspace_id", "remote_agent_id"])
+        .selectFrom("accessSubjects")
+        .select(["kind", "workspaceId", "remoteAgentId"])
         .where("id", "=", id)
         .executeTakeFirstOrThrow()
       assert.equal(row.kind, "remote_agent")
-      assert.equal(row.workspace_id, workspaceId)
-      assert.equal(row.remote_agent_id, remoteAgentId)
+      assert.equal(row.workspaceId, workspaceId)
+      assert.equal(row.remoteAgentId, remoteAgentId)
     })
   }
 )
@@ -216,12 +216,12 @@ test(
       })
 
       const row = await db
-        .selectFrom("access_subjects")
-        .select(["workspace_id", "conversation_id"])
+        .selectFrom("accessSubjects")
+        .select(["workspaceId", "conversationId"])
         .where("id", "=", subjectId)
         .executeTakeFirstOrThrow()
-      assert.equal(row.workspace_id, workspaceId)
-      assert.equal(row.conversation_id, convo)
+      assert.equal(row.workspaceId, workspaceId)
+      assert.equal(row.conversationId, convo)
     })
   }
 )
@@ -248,17 +248,17 @@ test(
         transportAddressId,
       })
       const rows = await db
-        .selectFrom("access_subjects")
-        .select(["id", "kind", "workspace_id", "transport_address_id"])
+        .selectFrom("accessSubjects")
+        .select(["id", "kind", "workspaceId", "transportAddressId"])
         .where("id", "in", [userSubject, externalSubject])
         .execute()
       for (const row of rows) {
         if (row.kind === "user") {
-          assert.equal(row.workspace_id, null)
+          assert.equal(row.workspaceId, null)
         } else {
           assert.equal(row.kind, "external")
-          assert.equal(row.workspace_id, workspaceId)
-          assert.equal(row.transport_address_id, transportAddressId)
+          assert.equal(row.workspaceId, workspaceId)
+          assert.equal(row.transportAddressId, transportAddressId)
         }
       }
     })
@@ -503,21 +503,21 @@ async function insertRemoteAgent(
 ): Promise<string> {
   const remoteAgentId = crypto.randomUUID()
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id: remoteAgentId,
-      workspace_id: workspaceId,
+      workspaceId: workspaceId,
       kind: "remote_agent",
-      display_name: "test agent",
+      displayName: "test agent",
       status: "active",
     } as any)
     .execute()
   const row = await db
-    .insertInto("remote_agents")
+    .insertInto("remoteAgents")
     .values({
       id: remoteAgentId,
       title: "test",
-      runtime_kind: "claude_code",
+      runtimeKind: "claude_code",
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -532,7 +532,7 @@ async function insertConversation(
     .insertInto("conversations")
     .values({
       kind: "group",
-      workspace_id: params.workspaceId,
+      workspaceId: params.workspaceId,
       title: "test conversation",
     })
     .returning("id")
@@ -545,25 +545,25 @@ async function insertTransportAddress(
   workspaceId: string
 ): Promise<string> {
   const account = await db
-    .insertInto("transport_accounts")
+    .insertInto("transportAccounts")
     .values({
-      workspace_id: workspaceId,
-      transport_kind: "qq",
-      account_key: `acct-${Math.random().toString(36).slice(2, 8)}`,
-      display_name: "Test account",
-      connection_mode: "webhook",
-      owner_scope: "workspace",
+      workspaceId: workspaceId,
+      transportKind: "qq",
+      accountKey: `acct-${Math.random().toString(36).slice(2, 8)}`,
+      displayName: "Test account",
+      connectionMode: "webhook",
+      ownerScope: "workspace",
     })
     .returning("id")
     .executeTakeFirstOrThrow()
   const addr = await db
-    .insertInto("transport_addresses")
+    .insertInto("transportAddresses")
     .values({
-      workspace_id: workspaceId,
-      transport_account_id: account.id as string,
-      transport_kind: "qq",
-      address_type: "user",
-      external_id: `ext-${Math.random().toString(36).slice(2, 8)}`,
+      workspaceId: workspaceId,
+      transportAccountId: account.id as string,
+      transportKind: "qq",
+      addressType: "user",
+      externalId: `ext-${Math.random().toString(36).slice(2, 8)}`,
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -576,12 +576,12 @@ async function insertActor(
 ): Promise<string> {
   const actorId = crypto.randomUUID()
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id: actorId,
-      workspace_id: workspaceId,
+      workspaceId: workspaceId,
       kind: "actor",
-      display_name: "test actor",
+      displayName: "test actor",
       status: "active",
     } as any)
     .execute()
@@ -591,7 +591,7 @@ async function insertActor(
       id: actorId,
       role: "assistant",
       title: "test",
-      current_version: 1,
+      currentVersion: 1,
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -607,7 +607,7 @@ async function insertWorkspace(
   const row = await db
     .insertInto("workspaces")
     .values({
-      owner_id: userId,
+      ownerId: userId,
       slug: `ws-${Math.random().toString(36).slice(2, 10)}`,
       name: "test workspace",
     })
@@ -637,11 +637,11 @@ async function insertWorkspaceMember(
   userId: string
 ): Promise<string> {
   const row = await db
-    .insertInto("workspace_members")
+    .insertInto("workspaceMembers")
     .values({
-      workspace_id: workspaceId,
-      user_id: userId,
-      trust_level: "member",
+      workspaceId: workspaceId,
+      userId: userId,
+      trustLevel: "member",
     })
     .returning("id")
     .executeTakeFirstOrThrow()

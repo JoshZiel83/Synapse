@@ -5,6 +5,7 @@
 import { spawn, type ChildProcess } from "node:child_process"
 import { EventEmitter } from "node:events"
 import { createInterface } from "node:readline"
+import { parseSidecarResponseFrame } from "./sidecar-codec.js"
 
 export interface SidecarOptions {
   /** Absolute path to the synapse-device-cua-helper binary. */
@@ -42,20 +43,11 @@ export function startSidecar(opts: SidecarOptions): SidecarHandle {
     const rl = createInterface({ input: child.stdout })
     rl.on("line", (line) => {
       if (!line.trim()) return
-      let frame: {
-        id?: string
-        result?: unknown
-        error?: { code: number; message: string; data?: unknown }
-      }
-      try {
-        frame = JSON.parse(line)
-      } catch {
-        return
-      }
-      if (!frame.id) return
-      const p = pending.get(String(frame.id))
+      const frame = parseSidecarResponseFrame(line)
+      if (!frame) return
+      const p = pending.get(frame.id)
       if (!p) return
-      pending.delete(String(frame.id))
+      pending.delete(frame.id)
       if (frame.error) {
         // Surface the full JSON-RPC error so callers can inspect the
         // structured `data` payload (e.g. cua sidecar's diagnostic block

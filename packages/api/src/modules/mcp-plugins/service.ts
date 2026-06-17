@@ -1,10 +1,15 @@
 import crypto from "node:crypto"
 import fs from "node:fs/promises"
-import type pg from "pg"
 import {
   DEFAULT_CONVERSATION_TYPE_MASK,
   FILE_ORIGIN_SYSTEMS,
+  ACCESS_BINDING_STATUS,
+  MARKETPLACE_ITEM_KIND,
+  MCP_VALIDATION_RULE_KIND,
+  PLUGIN_INSTALLATION_STATUS,
+  WORKSPACE_APP_KIND,
   WORKSPACE_APP_GRANT_PERMISSION,
+  WORKSPACE_APP_STATUS,
   actorRef,
   conversationRef,
   normalizeConversationTypeMask,
@@ -18,15 +23,16 @@ import {
   workspaceRef,
   type WorkspaceAppGrantPermission,
 } from "@synapse/shared"
-import { assertIsoInstant, nowIsoInstant } from "@synapse/shared/datetime"
+import { nowIsoInstant } from "@synapse/shared/datetime"
 import type {
   CapabilityAccessTarget,
   WorkspaceAppGrant,
+  WorkspaceAppGrantTargetInput,
 } from "@synapse/shared/types"
 import type {
+  AccessBindingStatus,
   PluginAuthBindingDefinition,
   PluginConfigFieldDefinition,
-  PluginConfigFieldState,
   PluginInstallFlow,
   PluginSpecTransport,
   ReuseScope,
@@ -34,32 +40,64 @@ import type {
   McpValidationRule,
   PluginReuseScopeV2,
   RuntimeBindingScope,
+  WorkspaceAppGrantSource,
 } from "@synapse/shared"
-import { CompiledQuery, sql, type RawBuilder, type SqlBool } from "kysely"
-import {
-  encryptSensitiveFields,
-  isEncrypted,
-} from "../../infrastructure/crypto/index.js"
+import { encryptSensitiveFields } from "../../infrastructure/crypto/index.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
 import { getWorkspaceCapabilityConversationTypeMask } from "../capabilities/conversation-type-policies.js"
+import { type Executor } from "../../infrastructure/database/kysely.js"
 import {
-  db,
-  runBuilder,
-  takeFirstOn,
-  withDbTransaction,
-  type Executor,
-  type TableInsert,
-} from "../../infrastructure/database/kysely.js"
+  presentInstant,
+  presentOptionalInstant,
+  presentInstallationAccessGrant,
+  presentPluginCatalogRecord,
+  type PluginCatalogRecord,
+  type PluginInstallationDetailRecord,
+} from "./presenter.js"
 import {
-  serializeInstant,
-  serializeOptionalInstant,
-} from "../../infrastructure/datetime.js"
+  createMcpPluginQueryRunner,
+  createPluginPublisherRecord,
+  assignPluginCategories,
+  ensureCatalogItem,
+  findBuiltinPluginIconFileAsset,
+  findPluginInstallationWorkspace,
+  getPluginCatalogRowByItemId,
+  getPluginPublisherRecord,
+  getPluginPublisherRecordBySlug,
+  getActivePluginConnectionPublicPayload,
+  hasBuiltinPluginFilesTable,
+  incrementPluginCatalogDownloadCount,
+  insertPluginInstallationRecord,
+  insertPluginSourceRefRecord,
+  listPluginCategoryRecords,
+  listPluginCatalogRowsByVersionIds,
+  listPluginInstallationAccessRows as listAccessRows,
+  listPluginPublisherRecords,
+  listPublicPluginCatalogRows,
+  loadInstallationRows,
+  revokePluginConnectionsForInstallation,
+  revokePluginWorkspaceAppGrant,
+  updatePluginInstallationConfigData,
+  updatePluginInstallationGrantConversationTypeMask,
+  updatePluginInstallationReuseScope,
+  upsertBuiltinPluginCategory,
+  upsertPluginVersion,
+  validateMcpPluginConversationScopedAccessTarget,
+  withMcpPluginTransaction,
+  type InstallationAccessRow,
+  type InstallationRow,
+  type PluginCatalogRow,
+} from "./repo.js"
+import type {
+  CatalogCategoriesMetadata,
+  PluginCategoryRecord,
+  PublisherRecord,
+} from "./repo.types.js"
 import { emitEvent } from "../../infrastructure/events/index.js"
 import { saveFromBuffer } from "../../infrastructure/storage/file-io.js"
-import { buildPlatformAssetOrigin, getFileUrlById } from "../files/service.js"
+import { buildPlatformAssetOrigin } from "../files/service.js"
 import { attachAuthConnectionsToConfig } from "./plugin-auth-connections.js"
 import { incrementMcpVersion } from "./runtime-version.js"
-import { PLUGIN_CONNECTION_LIVE_STATUSES } from "./live-status.js"
 import { builtinCapabilityCategories } from "./builtin-plugins/categories.js"
 import { builtinSeeds } from "./builtin-plugins/index.js"
 import {
@@ -67,245 +105,24 @@ import {
   assertFeishuScopesForFeatures,
   normalizeFeishuFeatureKeys,
 } from "./feishu/features.js"
+import { parseFeishuAuthConnectionRef } from "./feishu/config.js"
 import {} from "../access/bindings.js"
 import { resolveAccessGrantTarget } from "../access/access-target-resolver.js"
 import {
   insertWorkspaceAppRoot,
   updateWorkspaceAppRoot,
-} from "../workspace-apps/root-storage.js"
+} from "../workspace-apps/repo.js"
 import {
   insertWorkspaceAppGrant,
-  revokeWorkspaceAppGrant,
   revokeWorkspaceAppGrantsForApp,
 } from "../workspace-apps/grant-storage.js"
 import {} from "../access/binding-storage.js"
 import {
   assertConversationTypeMaskWithinParent,
   assertGrantConversationTypeOverrideAllowed,
-  validateConversationScopedAccessTarget,
 } from "../access/policy.js"
 
-type QueryRow = pg.QueryResultRow
-type QueryResultLike<T extends QueryRow> = { rows: T[] }
-type QueryRunner = <T extends QueryRow>(
-  text: string,
-  params?: unknown[]
-) => Promise<QueryResultLike<T>>
-
-/** Build a {@link QueryRunner} backed by an {@link Executor} (db/trx). */
-function runnerFn(executor: Executor): QueryRunner {
-  return <T extends QueryRow>(text: string, params?: unknown[]) =>
-    executor
-      .executeQuery<T>(CompiledQuery.raw(text, params ? [...params] : []))
-      .then((r) => ({ rows: r.rows as T[] })) as Promise<QueryResultLike<T>>
-}
-
-type JsonObject = Record<string, unknown>
-type JsonArray = unknown[]
-
-type PluginCatalogRow = {
-  item_id: string
-  item_workspace_id: string | null
-  item_slug: string
-  item_display_name: string
-  item_summary: string
-  item_long_description: string
-  item_source_kind: "builtin" | "official" | "workspace" | "user"
-  item_visibility: "public" | "workspace" | "private"
-  item_tags: string[] | null
-  item_is_active: boolean
-  item_download_count: number
-  item_icon_file_id: string | null
-  item_metadata: unknown
-  item_created_at: Date
-  item_updated_at: Date
-  version_id: string | null
-  version_value: string | null
-  version_status: "draft" | "active" | "deprecated" | "archived" | null
-  version_changelog: string | null
-  version_metadata: unknown
-  version_created_by_user_id: string | null
-  version_created_at: Date | null
-  spec_transport: PluginSpecTransport | null
-  spec_entry_point: string | null
-  spec_tool_manifest: unknown
-  spec_config_schema: unknown
-  spec_default_config: unknown
-  spec_install_flow: unknown
-  spec_auth_bindings: unknown
-  spec_default_reuse_scope: PluginReuseScopeV2 | null
-  spec_default_conversation_type_mask: number | null
-  spec_supported_reuse_scopes: unknown
-  spec_requires_handshake: boolean | null
-  spec_metadata: unknown
-  publisher_id: string
-  publisher_slug: string
-  publisher_display_name: string
-  publisher_description: string
-  publisher_workspace_id: string | null
-  publisher_is_builtin: boolean
-  publisher_is_verified: boolean
-  publisher_owner_user_id: string | null
-  publisher_logo_file_id: string | null
-  categories_json: unknown
-  runtime_permissions_json: unknown
-}
-
-type PluginCategoryRow = {
-  id: string
-  slug: string
-  display_name: string
-  description: string
-  sort_order: number
-  metadata: unknown
-}
-
-type PublisherRow = {
-  id: string
-  slug: string
-  display_name: string
-  description: string | null
-  logo_file_id: string | null
-  owner_user_id: string | null
-  workspace_id: string | null
-  is_builtin: boolean | null
-  is_verified: boolean | null
-  created_at: Date
-  updated_at: Date
-  plugin_count?: string | number | null
-}
-
-type InstallationRow = {
-  installation_id: string
-  root_workspace_id: string
-  catalog_item_id: string
-  catalog_version_id: string
-  root_display_name: string
-  config_data: unknown
-  approved_runtime_permissions: string[] | null
-  reuse_scope: PluginReuseScopeV2
-  root_conversation_type_mask_override: number | null
-  root_status: "active" | "disabled" | "error" | "archived"
-  root_owner_workspace_member_id: string | null
-  installation_created_at: Date
-  installation_updated_at: Date
-  source_catalog_item_id: string | null
-  source_catalog_version_id: string | null
-  source_sync_mode:
-    | "notify"
-    | "manual_merge"
-    | "follow_upstream"
-    | "detached"
-    | null
-}
-
-type InstallationAccessRow = {
-  id: string
-  workspace_id: string
-  installation_id: string
-  access_target_type: RuntimeBindingScope
-  conversation_id: string | null
-  actor_id: string | null
-  // Round 9 review (P2): include remote_agent_id so dedup discriminates
-  // remote_agent targets from workspace/actor.
-  remote_agent_id: string | null
-  workspace_member_id: string | null
-  conversation_type_mask_override: number | null
-  status: "active" | "revoked"
-  source: "manual" | "approval" | "system"
-  created_by_workspace_member_id: string | null
-  reason: string | null
-  created_at: Date
-  revoked_at: Date | null
-}
-
-const PLUGIN_CATALOG_SELECT = `
-  SELECT
-    item.id AS item_id,
-    item.workspace_id AS item_workspace_id,
-    item.slug AS item_slug,
-    item.display_name AS item_display_name,
-    item.summary AS item_summary,
-    item.long_description AS item_long_description,
-    item.source_kind AS item_source_kind,
-    item.visibility AS item_visibility,
-    item.tags AS item_tags,
-    item.is_active AS item_is_active,
-    item.download_count AS item_download_count,
-    item.icon_file_id AS item_icon_file_id,
-    item.metadata AS item_metadata,
-    item.created_at AS item_created_at,
-    item.updated_at AS item_updated_at,
-    version.id AS version_id,
-    version.version AS version_value,
-    version.status AS version_status,
-    version.changelog AS version_changelog,
-    version.metadata AS version_metadata,
-    version.created_by_user_id AS version_created_by_user_id,
-    version.created_at AS version_created_at,
-    spec.transport AS spec_transport,
-    spec.entry_point AS spec_entry_point,
-    spec.tool_manifest AS spec_tool_manifest,
-    spec.config_schema AS spec_config_schema,
-    spec.default_config AS spec_default_config,
-    spec.install_flow AS spec_install_flow,
-    spec.auth_bindings AS spec_auth_bindings,
-    spec.default_reuse_scope AS spec_default_reuse_scope,
-    spec.default_conversation_type_mask AS spec_default_conversation_type_mask,
-    spec.supported_reuse_scopes AS spec_supported_reuse_scopes,
-    spec.requires_handshake AS spec_requires_handshake,
-    spec.metadata AS spec_metadata,
-    publisher.id AS publisher_id,
-    publisher.slug AS publisher_slug,
-    publisher.display_name AS publisher_display_name,
-    publisher.description AS publisher_description,
-    publisher.workspace_id AS publisher_workspace_id,
-    publisher.is_builtin AS publisher_is_builtin,
-    publisher.is_verified AS publisher_is_verified,
-    publisher.owner_user_id AS publisher_owner_user_id,
-    publisher.logo_file_id AS publisher_logo_file_id,
-    COALESCE(categories.categories_json, '[]'::jsonb) AS categories_json,
-    COALESCE(runtime_permissions.runtime_permissions_json, '[]'::jsonb) AS runtime_permissions_json
-  FROM catalog_items item
-  JOIN publishers publisher
-    ON publisher.id = item.publisher_id
-  JOIN catalog_versions version
-    ON version.catalog_item_id = item.id
-  LEFT JOIN plugin_package_version_specs spec
-    ON spec.catalog_version_id = version.id
-  LEFT JOIN LATERAL (
-    SELECT jsonb_agg(
-      jsonb_build_object(
-        'id', category.id,
-        'slug', category.slug,
-        'display_name', category.display_name,
-        'description', category.description,
-        'display_name_i18n', COALESCE(category.metadata->'displayNameI18n', '{}'::jsonb),
-        'description_i18n', COALESCE(category.metadata->'descriptionI18n', '{}'::jsonb),
-        'default_locale', COALESCE(category.metadata->>'defaultLocale', 'en')
-      )
-      ORDER BY category.sort_order ASC, category.display_name ASC
-    ) AS categories_json
-    FROM catalog_item_categories item_category
-    JOIN catalog_categories category
-      ON category.id = item_category.category_id
-    WHERE item_category.catalog_item_id = item.id
-      AND category.item_kind = 'plugin_package'
-  ) categories ON TRUE
-  LEFT JOIN LATERAL (
-    SELECT jsonb_agg(
-      jsonb_build_object(
-        'permissionKey', permission_key,
-        'isRequired', is_required,
-        'rationale', rationale
-      )
-      ORDER BY permission_key ASC
-    ) AS runtime_permissions_json
-    FROM plugin_version_runtime_permissions permission_row
-    WHERE permission_row.catalog_version_id = version.id
-  ) runtime_permissions ON TRUE
-  WHERE item.item_kind = 'plugin_package'
-`
+export type { InstallationAccessRow } from "./repo.js"
 
 export class McpPluginError extends Error {
   constructor(
@@ -322,29 +139,7 @@ function sanitizeSlug(value: string) {
   return slugify(value, { maxLength: 120 })
 }
 
-function asObject(value: unknown): JsonObject {
-  if (!value) return {}
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value) as JsonObject
-    } catch {
-      return {}
-    }
-  }
-  return typeof value === "object" && !Array.isArray(value)
-    ? (value as JsonObject)
-    : {}
-}
-
 function asArray<T>(value: unknown): T[] {
-  if (!value) return []
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value) as T[]
-    } catch {
-      return []
-    }
-  }
   return Array.isArray(value) ? (value as T[]) : []
 }
 
@@ -362,11 +157,6 @@ function isConfigValueMissing(value: unknown) {
     (typeof value === "string" && value.trim() === "") ||
     (Array.isArray(value) && value.length === 0)
   )
-}
-
-function parseBoolean(value: unknown, fallback = false) {
-  if (typeof value === "boolean") return value
-  return fallback
 }
 
 function isReuseScope(value: unknown): value is ReuseScope {
@@ -420,26 +210,6 @@ function inferMimeTypeForAsset(assetPath: string) {
   return "application/octet-stream"
 }
 
-let builtinPluginIconFilesTableAvailable: boolean | null = null
-
-async function hasBuiltinPluginFilesTable() {
-  if (builtinPluginIconFilesTableAvailable !== null) {
-    return builtinPluginIconFilesTableAvailable
-  }
-
-  const result = await db.executeQuery(
-    sql<{ exists: boolean }>`SELECT EXISTS (
-      SELECT 1
-      FROM information_schema.tables
-      WHERE table_schema = 'public'
-        AND table_name = 'files'
-    ) AS exists`.compile(db)
-  )
-
-  builtinPluginIconFilesTableAvailable = result.rows[0]?.exists === true
-  return builtinPluginIconFilesTableAvailable
-}
-
 async function ensureBuiltinPluginIcon(
   seedSlug: string,
   pluginSlug: string,
@@ -457,17 +227,7 @@ async function ensureBuiltinPluginIcon(
   const sha256 = crypto.createHash("sha256").update(buffer).digest("hex")
   const key = `${seedSlug}/${pluginSlug}`
 
-  const existing = await db
-    .selectFrom("file_assets as f")
-    .select("f.id")
-    .where("f.workspace_id", "is", null)
-    .where("f.source_family", "=", "platform_asset")
-    .where("f.source_system", "=", FILE_ORIGIN_SYSTEMS.BUILTIN_PLUGIN_ICON)
-    .where(sql<boolean>`f.details_json->>'builtinPluginIconKey' = ${key}`)
-    .where("f.content_sha256", "=", sha256)
-    .limit(1)
-    .executeTakeFirst()
-
+  const existing = await findBuiltinPluginIconFileAsset({ key, sha256 })
   if (existing) {
     return {
       id: existing.id,
@@ -493,264 +253,6 @@ async function ensureBuiltinPluginIcon(
 
   return {
     id: file.id,
-  }
-}
-
-function authorizationFromRuntimePermissions(
-  runtimePermissions: unknown,
-  specMetadata: JsonObject
-) {
-  const rows = asArray<JsonObject>(runtimePermissions)
-  const metadataAuthorization = asObject(specMetadata.authorization)
-
-  return {
-    requiredPermissions: rows
-      .filter((row) => row.isRequired !== false)
-      .map((row) => String(row.permissionKey || ""))
-      .filter(Boolean),
-    reason:
-      typeof metadataAuthorization.reason === "string"
-        ? metadataAuthorization.reason
-        : undefined,
-  }
-}
-
-function mapPluginView(row: PluginCatalogRow) {
-  const itemMetadata = asObject(row.item_metadata)
-  const specMetadata = asObject(row.spec_metadata)
-  const defaultReuseScope = publicReuseScope(row.spec_default_reuse_scope)
-  const defaultConversationTypeMask = resolveEffectiveConversationTypeMask({
-    defaultMask: row.spec_default_conversation_type_mask,
-    overrideMask: null,
-  })
-  const supportedReuseScopes = normalizeSupportedReuseScopes(
-    row.spec_supported_reuse_scopes,
-    defaultReuseScope
-  )
-  const authorization = authorizationFromRuntimePermissions(
-    row.runtime_permissions_json,
-    specMetadata
-  )
-  const configFields = asArray<PluginConfigFieldDefinition>(
-    specMetadata.configFields
-  )
-  const validationRules = asArray<McpValidationRule>(
-    specMetadata.validationRules
-  )
-  const setupSteps = asArray<McpSetupStep>(specMetadata.setupSteps)
-  const installFlow = asObject(row.spec_install_flow)
-  const categories = asArray<JsonObject>(row.categories_json).map(
-    (category) => ({
-      id: String(category.id || ""),
-      slug: String(category.slug || ""),
-      display_name: String(category.display_name || ""),
-      description: String(category.description || ""),
-      display_name_i18n: asObject(category.display_name_i18n),
-      description_i18n: asObject(category.description_i18n),
-      default_locale:
-        typeof category.default_locale === "string"
-          ? category.default_locale
-          : "en",
-    })
-  )
-
-  return {
-    id: row.item_id,
-    org_id: row.publisher_id,
-    slug: row.item_slug,
-    display_name: row.item_display_name,
-    display_name_i18n: asObject(itemMetadata.displayNameI18n),
-    description: row.item_summary,
-    description_i18n: asObject(itemMetadata.descriptionI18n),
-    long_description: row.item_long_description,
-    long_description_i18n: asObject(itemMetadata.longDescriptionI18n),
-    summary_i18n: asObject(itemMetadata.summaryI18n),
-    default_locale:
-      typeof itemMetadata.defaultLocale === "string"
-        ? itemMetadata.defaultLocale
-        : "en",
-    icon_url: row.item_icon_file_id
-      ? getFileUrlById(row.item_icon_file_id)
-      : null,
-    version: row.version_value || "1.0.0",
-    transport: row.spec_transport || "builtin",
-    entry_point: row.spec_entry_point || "",
-    lifecycle_scope: defaultReuseScope,
-    default_reuse_scope: defaultReuseScope,
-    default_conversation_type_mask: defaultConversationTypeMask,
-    supported_reuse_scopes: supportedReuseScopes,
-    config_schema: asObject(row.spec_config_schema),
-    config_fields: configFields,
-    default_config: asObject(row.spec_default_config),
-    tools_manifest: asArray(row.spec_tool_manifest),
-    validation_rules: validationRules,
-    setup_steps: setupSteps,
-    install_flow:
-      Object.keys(installFlow).length > 0 ? installFlow : { steps: setupSteps },
-    auth_bindings: asArray<PluginAuthBindingDefinition>(row.spec_auth_bindings),
-    authorization,
-    tags: row.item_tags || [],
-    categories,
-    category_slugs: categories.map((category) => category.slug),
-    is_active: row.item_is_active,
-    is_builtin: row.item_source_kind === "builtin" || row.publisher_is_builtin,
-    download_count: row.item_download_count || 0,
-    created_at: serializeInstant(row.item_created_at),
-    updated_at: serializeInstant(row.item_updated_at),
-    org_slug: row.publisher_slug,
-    org_display_name: row.publisher_display_name,
-    publisher: {
-      id: row.publisher_id,
-      slug: row.publisher_slug,
-      display_name: row.publisher_display_name,
-      description: row.publisher_description,
-      is_verified: row.publisher_is_verified,
-    },
-    requires_handshake: parseBoolean(row.spec_requires_handshake),
-    metadata: specMetadata,
-  }
-}
-
-function mapPublisherView(row: PublisherRow) {
-  return {
-    id: row.id,
-    slug: row.slug,
-    display_name: row.display_name,
-    description: row.description || "",
-    logo_url: row.logo_file_id ? getFileUrlById(row.logo_file_id) : null,
-    is_builtin: Boolean(row.is_builtin),
-    is_verified: Boolean(row.is_verified),
-    owner_user_id: row.owner_user_id,
-    workspace_id: row.workspace_id,
-    plugin_count:
-      typeof row.plugin_count === "number"
-        ? row.plugin_count
-        : Number(row.plugin_count || 0),
-    created_at: serializeInstant(row.created_at),
-    updated_at: serializeInstant(row.updated_at),
-  }
-}
-
-function isSecretConfigField(
-  field: PluginConfigFieldDefinition | undefined,
-  schemaProperties: Record<string, unknown>,
-  key: string
-) {
-  const property = asObject(schemaProperties[key])
-  return Boolean(
-    field?.secret || field?.type === "secret" || property.sensitive === true
-  )
-}
-
-function sanitizeInstallationConfig(
-  installation: { config_data: unknown; updated_at: Date },
-  configSchema: Record<string, unknown>,
-  configFields: PluginConfigFieldDefinition[],
-  authBindings: PluginAuthBindingDefinition[]
-) {
-  const rawConfig = asObject(installation.config_data)
-  const schemaProperties = asObject(configSchema.properties)
-  const fieldMap = new Map(configFields.map((field) => [field.key, field]))
-  const bindingMap = new Map(
-    authBindings.map((binding) => [binding.key, binding])
-  )
-  const sanitizedConfig: Record<string, unknown> = {}
-  const configState: PluginConfigFieldState[] = []
-
-  for (const [key, value] of Object.entries(rawConfig)) {
-    const field = fieldMap.get(key)
-
-    if (
-      field?.type === "auth_connection" &&
-      value &&
-      typeof value === "object" &&
-      !Array.isArray(value)
-    ) {
-      const ref = value as Record<string, unknown>
-      configState.push({
-        key,
-        isConfigured: Boolean(ref.connectionId),
-        authConnectionId:
-          typeof ref.connectionId === "string" ? ref.connectionId : undefined,
-        accountDisplayName:
-          typeof ref.accountDisplayName === "string"
-            ? ref.accountDisplayName
-            : undefined,
-        updatedAt:
-          typeof ref.updatedAt === "string"
-            ? assertIsoInstant(ref.updatedAt)
-            : serializeInstant(installation.updated_at),
-      })
-      sanitizedConfig[key] = {
-        bindingKey:
-          typeof ref.bindingKey === "string"
-            ? ref.bindingKey
-            : field.authBindingKey,
-        accountDisplayName:
-          typeof ref.accountDisplayName === "string"
-            ? ref.accountDisplayName
-            : undefined,
-        connectionId:
-          typeof ref.connectionId === "string" ? ref.connectionId : undefined,
-      }
-      continue
-    }
-
-    if (isSecretConfigField(field, schemaProperties, key)) {
-      const masked =
-        typeof value === "string"
-          ? isEncrypted(value)
-            ? "••••configured"
-            : value.length > 4
-              ? `${"•".repeat(Math.max(4, value.length - 4))}${value.slice(-4)}`
-              : "••••"
-          : undefined
-      configState.push({
-        key,
-        isConfigured: value !== undefined && value !== null && value !== "",
-        maskedValue: masked,
-        updatedAt: serializeInstant(installation.updated_at),
-      })
-      continue
-    }
-
-    if (field?.serverManaged) {
-      configState.push({
-        key,
-        isConfigured: value !== undefined && value !== null && value !== "",
-        updatedAt: serializeInstant(installation.updated_at),
-      })
-      continue
-    }
-
-    sanitizedConfig[key] = value
-  }
-
-  for (const field of configFields) {
-    if (
-      configState.find((state) => state.key === field.key) ||
-      (!field.secret &&
-        field.type !== "auth_connection" &&
-        !field.serverManaged)
-    ) {
-      continue
-    }
-
-    const binding = field.authBindingKey
-      ? bindingMap.get(field.authBindingKey)
-      : undefined
-    configState.push({
-      key: field.key,
-      isConfigured: false,
-      accountDisplayName: binding
-        ? Object.values(binding.displayNameI18n || {})[0]
-        : undefined,
-    })
-  }
-
-  return {
-    sanitizedConfig,
-    configState,
   }
 }
 
@@ -785,9 +287,9 @@ function mergeConfigForUpdate(
  * Decode the plugin-installation grant row back into a canonical
  * ScopedSubjectTarget-like shape for policy validation and UI mapping.
  */
-function installationAccessRowToTarget(
+export function installationAccessRowToTarget(
   row: InstallationAccessRow
-): CapabilityAccessTarget {
+): WorkspaceAppGrantTargetInput {
   switch (row.access_target_type) {
     case "workspace":
       return { subject: workspaceRef(row.workspace_id) }
@@ -826,8 +328,8 @@ function buildInstallationAccessRow(input: {
   installationId: string
   target: CapabilityAccessTarget
   conversationTypeMaskOverride: number | null
-  status: "active" | "revoked"
-  source: "manual" | "approval" | "system"
+  status: AccessBindingStatus
+  source: WorkspaceAppGrantSource
   createdByWorkspaceMemberId: string | null
   reason: string | null
   createdAt: Date
@@ -884,146 +386,11 @@ function buildInstallationAccessRow(input: {
   }
 }
 
-async function loadPluginCatalogRows(whereClause: RawBuilder<unknown>) {
-  const result = await db.executeQuery(
-    sql<PluginCatalogRow>`
-      ${sql.raw(PLUGIN_CATALOG_SELECT)}
-      ${whereClause}
-    `.compile(db)
-  )
-  return result.rows
-}
-
 async function loadPluginCatalogMapByVersionIds(versionIds: string[]) {
-  if (versionIds.length === 0) {
-    return new Map<string, ReturnType<typeof mapPluginView>>()
-  }
-
-  const rows = await loadPluginCatalogRows(
-    sql`AND version.id = ANY(${versionIds}::uuid[])`
+  const rows = await listPluginCatalogRowsByVersionIds(versionIds)
+  return new Map(
+    rows.map((row) => [row.versionId!, presentPluginCatalogRecord(row)])
   )
-
-  return new Map(rows.map((row) => [row.version_id!, mapPluginView(row)]))
-}
-
-async function getPluginCatalogRowByItemId(itemId: string) {
-  const rows = await loadPluginCatalogRows(
-    sql`AND item.id = ${itemId}
-       AND version.id = item.latest_version_id
-       LIMIT 1`
-  )
-
-  return rows[0] || null
-}
-
-async function loadInstallationRows(
-  workspaceId: string,
-  filters?: {
-    installationIds?: string[]
-    pluginId?: string
-    installationId?: string
-  }
-) {
-  const conditions: RawBuilder<unknown>[] = [
-    sql`app.workspace_id = ${workspaceId}`,
-  ]
-
-  if (filters?.pluginId) {
-    conditions.push(sql`installation.catalog_item_id = ${filters.pluginId}`)
-  }
-
-  if (filters?.installationId) {
-    conditions.push(sql`installation.id = ${filters.installationId}`)
-  }
-  if (filters?.installationIds?.length) {
-    conditions.push(
-      sql`installation.id = ANY(${filters.installationIds}::uuid[])`
-    )
-  }
-
-  const result = await db.executeQuery(
-    sql<InstallationRow>`SELECT
-        installation.id AS installation_id,
-        app.workspace_id AS root_workspace_id,
-        installation.catalog_item_id,
-        installation.catalog_version_id,
-        app.display_name AS root_display_name,
-        installation.config_data,
-        installation.approved_runtime_permissions,
-        installation.reuse_scope,
-        app.conversation_type_mask_override AS root_conversation_type_mask_override,
-        app.status AS root_status,
-        app.owner_workspace_member_id AS root_owner_workspace_member_id,
-        app.created_at AS root_created_at,
-        app.updated_at AS root_updated_at,
-        source_ref.source_catalog_item_id,
-        source_ref.source_catalog_version_id,
-        source_ref.sync_mode AS source_sync_mode
-      -- Soft-delete (review F9/F16): read the live surface — excludes both
-      -- tombstoned (deleted_at) AND non-live status (archived) installations,
-      -- the same definition as plugin_installations manifest liveValues.
-      FROM plugin_installations installation
-      INNER JOIN workspace_apps_live app
-        ON app.id = installation.id
-      LEFT JOIN plugin_source_refs source_ref
-        ON source_ref.installation_id = installation.id
-      WHERE app.deleted_at IS NULL
-        AND app.status IN ('active', 'disabled', 'error')
-        AND ${sql.join(conditions, sql` AND `)}
-      ORDER BY installation.created_at DESC`.compile(db)
-  )
-
-  return result.rows
-}
-
-async function listAccessRows(installationId: string, includeRevoked = false) {
-  let query = db
-    .selectFrom("workspace_app_grants as app_grant")
-    .innerJoin("access_subjects as subj", "subj.id", "app_grant.subject_id")
-    .leftJoin(
-      "access_subjects as scope",
-      "scope.id",
-      "app_grant.scope_subject_id"
-    )
-    .select([
-      "app_grant.id",
-      "app_grant.workspace_id",
-      "app_grant.workspace_app_id as installation_id",
-      sql<RuntimeBindingScope>`
-        CASE subj.kind
-          WHEN 'workspace' THEN 'workspace'
-          WHEN 'workspace_member' THEN 'workspace_member'
-          WHEN 'conversation' THEN 'conversation'
-          WHEN 'actor' THEN 'actor'
-          WHEN 'remote_agent' THEN 'remote_agent'
-        END
-      `.as("access_target_type"),
-      "subj.actor_id as actor_id",
-      "subj.remote_agent_id as remote_agent_id",
-      "subj.workspace_member_id as workspace_member_id",
-      "scope.conversation_id as conversation_id",
-      "app_grant.conversation_type_mask_override",
-      "app_grant.status",
-      "app_grant.source",
-      "app_grant.created_by_workspace_member_id",
-      "app_grant.reason",
-      "app_grant.created_at",
-      "app_grant.revoked_at",
-    ])
-    .where("app_grant.workspace_app_id", "=", installationId)
-    .where(
-      sql<boolean>`'use'::workspace_app_grant_permission = ANY(app_grant.permissions)`
-    )
-    .orderBy("app_grant.created_at", "desc")
-
-  if (!includeRevoked) {
-    query = query.where("app_grant.status", "=", "active")
-  }
-
-  return (await query.execute()).map((row) => ({
-    ...row,
-    created_at: row.created_at || new Date(0),
-  }))
 }
 
 function buildPluginGrantPlan(input: {
@@ -1065,124 +432,15 @@ function suggestedAccessTargetType(
   return subjectScopeLabel(target) as RuntimeBindingScope
 }
 
-function mapAccessRowToGrant(
-  mount: InstallationAccessRow,
-  options?: {
-    workspaceConversationTypeMask: number
-    instanceConversationTypeMaskOverride: number | null
-  }
-): WorkspaceAppGrant {
-  const effectiveConversationTypeMask = options
-    ? resolveNarrowedConversationTypeMask(
-        resolveNarrowedConversationTypeMask(
-          options.workspaceConversationTypeMask,
-          options.instanceConversationTypeMaskOverride
-        ),
-        mount.conversation_type_mask_override
-      )
-    : undefined
-  return {
-    id: mount.id,
-    workspaceAppId: mount.installation_id,
-    workspaceId: mount.workspace_id,
-    target: installationAccessRowToTarget(mount),
-    permissions: [WORKSPACE_APP_GRANT_PERMISSION.USE],
-    status: mount.status,
-    source: mount.source,
-    grantedByWorkspaceMemberId:
-      mount.created_by_workspace_member_id || undefined,
-    reason: mount.reason || undefined,
-    conversationTypeMaskOverride: mount.conversation_type_mask_override ?? null,
-    effectiveConversationTypeMask,
-    createdAt: serializeInstant(mount.created_at),
-    revokedAt: serializeOptionalInstant(mount.revoked_at),
-  }
-}
-
-function buildInstallationPayload(
-  row: InstallationRow,
-  plugin: ReturnType<typeof mapPluginView>,
-  workspaceConversationTypeMask: number
-) {
-  const sourceDefaultConversationTypeMask = normalizeConversationTypeMask(
-    plugin.default_conversation_type_mask,
-    DEFAULT_CONVERSATION_TYPE_MASK
-  )
-  const effectiveConversationTypeMask = resolveNarrowedConversationTypeMask(
-    workspaceConversationTypeMask,
-    row.root_conversation_type_mask_override
-  )
-  const { sanitizedConfig, configState } = sanitizeInstallationConfig(
-    {
-      config_data: row.config_data,
-      updated_at: row.installation_updated_at,
-    },
-    plugin.config_schema || {},
-    plugin.config_fields || [],
-    plugin.auth_bindings || []
-  )
-
-  return {
-    id: row.installation_id,
-    workspace_id: row.root_workspace_id,
-    plugin_id: row.catalog_item_id,
-    lifecycle_scope: publicReuseScope(row.reuse_scope),
-    default_reuse_scope: plugin.default_reuse_scope,
-    source_default_conversation_type_mask: sourceDefaultConversationTypeMask,
-    workspace_conversation_type_mask: workspaceConversationTypeMask,
-    conversation_type_mask_override:
-      row.root_conversation_type_mask_override ?? null,
-    effective_conversation_type_mask: effectiveConversationTypeMask,
-    supported_reuse_scopes: plugin.supported_reuse_scopes || [],
-    is_enabled: row.root_status === "active",
-    status: row.root_status,
-    config_data: sanitizedConfig,
-    config_state: configState,
-    approved_runtime_permissions: row.approved_runtime_permissions || [],
-    ownerWorkspaceMemberId: row.root_owner_workspace_member_id,
-    created_at: serializeInstant(row.installation_created_at),
-    updated_at: serializeInstant(row.installation_updated_at),
-    source_catalog_item_id: row.source_catalog_item_id,
-    source_catalog_version_id: row.source_catalog_version_id,
-    source_sync_mode: row.source_sync_mode,
-    plugin_slug: plugin.slug,
-    plugin_display_name: plugin.display_name,
-    plugin_description: plugin.description,
-    plugin_display_name_i18n: plugin.display_name_i18n,
-    plugin_description_i18n: plugin.description_i18n,
-    plugin_long_description_i18n: plugin.long_description_i18n,
-    plugin_summary_i18n: plugin.summary_i18n,
-    default_locale: plugin.default_locale,
-    transport: plugin.transport,
-    plugin_lifecycle_scope: plugin.lifecycle_scope,
-    plugin_default_reuse_scope: plugin.default_reuse_scope,
-    plugin_supported_reuse_scopes: plugin.supported_reuse_scopes || [],
-    tools_manifest: plugin.tools_manifest,
-    plugin_icon_url: plugin.icon_url,
-    plugin_categories: plugin.categories || [],
-    plugin_category_slugs: plugin.category_slugs || [],
-    plugin_version: plugin.version,
-    config_schema: plugin.config_schema,
-    config_fields: plugin.config_fields,
-    install_flow: plugin.install_flow,
-    auth_bindings: plugin.auth_bindings,
-    is_builtin: plugin.is_builtin,
-    plugin_validation_rules: plugin.validation_rules,
-    plugin_setup_steps: plugin.setup_steps,
-    org_id: plugin.org_id,
-    org_slug: plugin.org_slug,
-    org_display_name: plugin.org_display_name,
-    authorization: plugin.authorization,
-    revision: {
-      authorization: plugin.authorization,
-    },
-  }
-}
+// Row→WorkspaceAppGrant View builder lives in ./presenter.ts as
+// presentInstallationAccessGrant (it serializes Date→ISO + is a row→DTO mapper —
+// guard r3/r4 confine that to the presenter); called directly at its 6 sites
+// below. round-6 P1-7.
 
 async function getInstallationPayload(
   workspaceId: string,
   installationId: string
-) {
+): Promise<PluginInstallationDetailRecord> {
   const rows = await loadInstallationRows(workspaceId, {
     installationId,
   })
@@ -1192,286 +450,22 @@ async function getInstallationPayload(
   }
 
   const pluginsByVersionId = await loadPluginCatalogMapByVersionIds([
-    row.catalog_version_id,
+    row.catalogVersionId,
   ])
-  const plugin = pluginsByVersionId.get(row.catalog_version_id)
+  const plugin = pluginsByVersionId.get(row.catalogVersionId)
   if (!plugin) {
     throw new McpPluginError(404, "Plugin not found")
   }
   const workspaceConversationTypeMask =
     await getWorkspaceCapabilityConversationTypeMask(
-      row.root_workspace_id,
-      "plugin_installation"
+      row.rootWorkspaceId,
+      WORKSPACE_APP_KIND.PLUGIN_INSTALLATION
     )
 
   return {
     row,
     plugin,
     workspaceConversationTypeMask,
-    installation: buildInstallationPayload(
-      row,
-      plugin,
-      workspaceConversationTypeMask
-    ),
-  }
-}
-
-async function ensureCatalogItem(
-  ex: Executor,
-  input: {
-    orgId: string
-    workspaceId?: string
-    slug: string
-    displayName: string
-    description?: string
-    longDescription?: string
-    iconFileId?: string
-    tags?: string[]
-    isBuiltin?: boolean
-    transport: PluginSpecTransport
-    displayNameI18n?: Record<string, string>
-    descriptionI18n?: Record<string, string>
-    longDescriptionI18n?: Record<string, string>
-    summaryI18n?: Record<string, string>
-    defaultLocale?: string
-  }
-) {
-  const normalizedSlug = sanitizeSlug(input.slug)
-  const existing = await runBuilder(
-    ex,
-    ex
-      .selectFrom("catalog_items")
-      .select("id")
-      .where("publisher_id", "=", input.orgId)
-      .where("item_kind", "=", "plugin_package")
-      .where("slug", "=", normalizedSlug)
-      .where(
-        sql<SqlBool>`${sql.ref("workspace_id")} is not distinct from ${
-          input.workspaceId || null
-        }`
-      )
-      .limit(1)
-  )
-
-  const metadata = {
-    displayNameI18n: input.displayNameI18n || { en: input.displayName },
-    descriptionI18n: input.descriptionI18n || { en: input.description || "" },
-    longDescriptionI18n:
-      input.longDescriptionI18n ||
-      (input.longDescription ? { en: input.longDescription } : undefined),
-    summaryI18n: input.summaryI18n,
-    defaultLocale: input.defaultLocale || "en",
-  }
-
-  if (existing.rows.length > 0) {
-    const itemId = existing.rows[0]!.id
-    await ex
-      .updateTable("catalog_items")
-      .set({
-        display_name: input.displayName,
-        summary: input.description || "",
-        long_description: input.longDescription || "",
-        source_kind: input.isBuiltin ? "builtin" : "official",
-        visibility: "public",
-        tags: input.tags || [],
-        is_active: true,
-        icon_file_id: input.iconFileId || null,
-        metadata: sql`${JSON.stringify(metadata)}::jsonb`,
-      })
-      .where("id", "=", itemId)
-      .execute()
-    return itemId
-  }
-
-  const inserted = await runBuilder(
-    ex,
-    ex
-      .insertInto("catalog_items")
-      .values({
-        publisher_id: input.orgId,
-        workspace_id: input.workspaceId || null,
-        item_kind: "plugin_package",
-        slug: normalizedSlug,
-        display_name: input.displayName,
-        summary: input.description || "",
-        long_description: input.longDescription || "",
-        icon_file_id: input.iconFileId || null,
-        source_kind: input.isBuiltin ? "builtin" : "official",
-        visibility: "public",
-        tags: input.tags || [],
-        is_active: true,
-        metadata: sql`${JSON.stringify(metadata)}::jsonb`,
-      })
-      .returning("id")
-  )
-
-  return inserted.rows[0]!.id
-}
-
-async function upsertPluginVersion(
-  ex: Executor,
-  itemId: string,
-  input: {
-    version?: string
-    transport: PluginSpecTransport
-    entryPoint?: string
-    lifecycleScope?: ReuseScope
-    supportedReuseScopes?: ReuseScope[]
-    defaultConversationTypeMask?: number
-    requiresHandshake?: boolean
-    toolsManifest?: unknown[]
-    configSchema?: Record<string, unknown>
-    defaultConfig?: Record<string, unknown>
-    installFlow?: PluginInstallFlow
-    authBindings?: PluginAuthBindingDefinition[]
-    configFields?: PluginConfigFieldDefinition[]
-    validationRules?: McpValidationRule[]
-    setupSteps?: McpSetupStep[]
-    authorization?: {
-      requiredPermissions?: string[]
-      reason?: string
-    }
-  }
-) {
-  const versionValue = input.version || "1.0.0"
-  const upsertedVersion = await runBuilder(
-    ex,
-    ex
-      .insertInto("catalog_versions")
-      .values({
-        catalog_item_id: itemId,
-        version: versionValue,
-        status: "active",
-        changelog: "",
-        metadata: sql`'{}'::jsonb`,
-      })
-      .onConflict((oc) =>
-        oc.columns(["catalog_item_id", "version"]).doUpdateSet({
-          status: "active",
-        })
-      )
-      .returning("id")
-  )
-  const versionId = upsertedVersion.rows[0]!.id
-
-  const metadata = {
-    configFields: input.configFields || [],
-    validationRules: input.validationRules || [],
-    setupSteps: input.setupSteps || [],
-    authorization: {
-      reason: input.authorization?.reason || undefined,
-    },
-  }
-  const defaultReuseScope = input.lifecycleScope || "conversation"
-  const defaultConversationTypeMask = resolveEffectiveConversationTypeMask({
-    defaultMask: input.defaultConversationTypeMask,
-    overrideMask: null,
-  })
-  const supportedReuseScopes = normalizeSupportedReuseScopes(
-    input.supportedReuseScopes,
-    defaultReuseScope
-  )
-
-  await ex
-    .insertInto("plugin_package_version_specs")
-    .values({
-      catalog_version_id: versionId,
-      transport:
-        input.transport as TableInsert<"plugin_package_version_specs">["transport"],
-      entry_point: input.entryPoint || null,
-      tool_manifest: sql`${JSON.stringify(input.toolsManifest || [])}::jsonb`,
-      config_schema: sql`${JSON.stringify(input.configSchema || {})}::jsonb`,
-      default_config: sql`${JSON.stringify(input.defaultConfig || {})}::jsonb`,
-      install_flow: sql`${JSON.stringify(
-        input.installFlow || { steps: input.setupSteps || [] }
-      )}::jsonb`,
-      auth_bindings: sql`${JSON.stringify(input.authBindings || [])}::jsonb`,
-      default_reuse_scope: internalReuseScope(defaultReuseScope),
-      default_conversation_type_mask: defaultConversationTypeMask,
-      supported_reuse_scopes: supportedReuseScopes.map((scope) =>
-        internalReuseScope(scope)
-      ),
-      requires_handshake:
-        input.requiresHandshake ?? input.transport !== "builtin",
-      metadata: sql`${JSON.stringify(metadata)}::jsonb`,
-    })
-    .onConflict((oc) =>
-      oc.column("catalog_version_id").doUpdateSet({
-        transport: sql`excluded.transport`,
-        entry_point: sql`excluded.entry_point`,
-        tool_manifest: sql`excluded.tool_manifest`,
-        config_schema: sql`excluded.config_schema`,
-        default_config: sql`excluded.default_config`,
-        install_flow: sql`excluded.install_flow`,
-        auth_bindings: sql`excluded.auth_bindings`,
-        default_reuse_scope: sql`excluded.default_reuse_scope`,
-        default_conversation_type_mask: sql`excluded.default_conversation_type_mask`,
-        supported_reuse_scopes: sql`excluded.supported_reuse_scopes`,
-        requires_handshake: sql`excluded.requires_handshake`,
-        metadata: sql`excluded.metadata`,
-      })
-    )
-    .execute()
-
-  // set-replace of a derived config table → SECURITY DEFINER fn (naked DELETE
-  // forbidden by sd_reject_delete; design §7.5).
-  await sql`SELECT sd_replace_plugin_runtime_permissions(${versionId}::uuid)`.execute(
-    ex
-  )
-
-  for (const permissionKey of input.authorization?.requiredPermissions || []) {
-    await ex
-      .insertInto("plugin_version_runtime_permissions")
-      .values({
-        catalog_version_id: versionId,
-        permission_key: permissionKey,
-        is_required: true,
-        rationale: "",
-      })
-      .execute()
-  }
-
-  await ex
-    .updateTable("catalog_items")
-    .set({
-      latest_version_id: versionId,
-    })
-    .where("id", "=", itemId)
-    .execute()
-
-  return versionId
-}
-
-async function assignPluginCategories(
-  ex: Executor,
-  itemId: string,
-  categorySlugs: string[]
-) {
-  // set-replace of a derived join table → SECURITY DEFINER fn (design §7.5).
-  await sql`SELECT sd_replace_catalog_item_categories(${itemId}::uuid)`.execute(
-    ex
-  )
-
-  if (categorySlugs.length === 0) return
-
-  const result = await runBuilder(
-    ex,
-    ex
-      .selectFrom("catalog_categories")
-      .select("id")
-      .where("item_kind", "=", "plugin_package")
-      .where("slug", "in", categorySlugs)
-  )
-
-  for (const row of result.rows) {
-    await ex
-      .insertInto("catalog_item_categories")
-      .values({
-        catalog_item_id: itemId,
-        category_id: row.id,
-      })
-      .onConflict((oc) => oc.doNothing())
-      .execute()
   }
 }
 
@@ -1483,85 +477,33 @@ export async function createOrganization(data: {
   isBuiltin?: boolean
   isVerified?: boolean
   ownerUserId?: string
-}) {
+}): Promise<PublisherRecord> {
   const normalizedSlug = sanitizeSlug(data.slug)
-  const row = await db
-    .insertInto("publishers")
-    .values({
-      slug: normalizedSlug,
-      display_name: data.displayName,
-      description: data.description || "",
-      logo_file_id: data.logoFileId || null,
-      owner_user_id: data.ownerUserId || null,
-      workspace_id: null,
-      is_builtin: data.isBuiltin === true,
-      is_verified: data.isVerified === true,
-    })
-    .onConflict((oc) =>
-      oc
-        .column("slug")
-        .where("deleted_at", "is", null)
-        .doUpdateSet({
-          display_name: data.displayName,
-          description: data.description || "",
-          logo_file_id: data.logoFileId || null,
-          owner_user_id: sql`COALESCE(publishers.owner_user_id, excluded.owner_user_id)`,
-          is_builtin: data.isBuiltin === true,
-          is_verified: data.isVerified === true,
-        })
-    )
-    .returningAll()
-    .executeTakeFirstOrThrow()
-
-  return mapPublisherView(row)
+  return createPluginPublisherRecord({
+    ...data,
+    slug: normalizedSlug,
+  })
 }
 
-export async function listOrganizations() {
-  const rows = await db
-    .selectFrom("publishers as publisher")
-    .leftJoin("catalog_items as item", (join) =>
-      join
-        .onRef("item.publisher_id", "=", "publisher.id")
-        .on("item.item_kind", "=", "plugin_package")
-        .on("item.is_active", "=", true)
-        .on("item.workspace_id", "is", null)
-    )
-    .selectAll("publisher")
-    .select(sql<number>`COUNT(item.id)::int`.as("plugin_count"))
-    .groupBy("publisher.id")
-    .orderBy("publisher.is_verified", "desc")
-    .orderBy("publisher.display_name", "asc")
-    .execute()
-
-  return rows.map((row) => mapPublisherView(row))
+export async function listOrganizations(): Promise<PublisherRecord[]> {
+  return listPluginPublisherRecords()
 }
 
-export async function getOrganization(id: string) {
-  const row = await db
-    .selectFrom("publishers")
-    .selectAll()
-    .select(sql<number>`0::int`.as("plugin_count"))
-    .where("id", "=", id)
-    .limit(1)
-    .executeTakeFirst()
-
+export async function getOrganization(
+  id: string
+): Promise<PublisherRecord | null> {
+  const row = await getPluginPublisherRecord(id)
   if (!row) {
     throw new McpPluginError(404, "Publisher not found")
   }
 
-  return mapPublisherView(row)
+  return row
 }
 
-export async function getOrganizationBySlug(slug: string) {
-  const row = await db
-    .selectFrom("publishers")
-    .selectAll()
-    .select(sql<number>`0::int`.as("plugin_count"))
-    .where("slug", "=", sanitizeSlug(slug))
-    .limit(1)
-    .executeTakeFirst()
-
-  return row ? mapPublisherView(row) : null
+export async function getOrganizationBySlug(
+  slug: string
+): Promise<PublisherRecord | null> {
+  return getPluginPublisherRecordBySlug(sanitizeSlug(slug))
 }
 
 export async function createPlugin(data: {
@@ -1598,8 +540,8 @@ export async function createPlugin(data: {
     requiredPermissions?: string[]
     reason?: string
   }
-}) {
-  const itemId = await withDbTransaction(async (client) => {
+}): Promise<PluginCatalogRow> {
+  const itemId = await withMcpPluginTransaction(async (client) => {
     const catalogItemId = await ensureCatalogItem(client, data)
     await upsertPluginVersion(client, catalogItemId, data)
     await assignPluginCategories(
@@ -1610,100 +552,36 @@ export async function createPlugin(data: {
     return catalogItemId
   })
 
-  return getPlugin(itemId)
+  return getPluginRecord(itemId)
 }
 
-export async function listPlugins(filters?: {
+export async function listPluginRecords(filters?: {
   orgId?: string
   transport?: string
   search?: string
   tags?: string[]
   categorySlugs?: string[]
-}) {
-  const conditions: RawBuilder<unknown>[] = [
-    sql`version.id = item.latest_version_id`,
-    sql`item.is_active = TRUE`,
-    sql`item.workspace_id IS NULL`,
-  ]
-
-  if (filters?.orgId) {
-    conditions.push(sql`item.publisher_id = ${filters.orgId}`)
-  }
-
-  if (filters?.transport) {
-    conditions.push(sql`spec.transport = ${filters.transport}`)
-  }
-
-  if (filters?.search) {
-    conditions.push(
-      sql`(item.display_name ILIKE ${`%${filters.search.trim()}%`} OR item.summary ILIKE ${`%${filters.search.trim()}%`} OR item.long_description ILIKE ${`%${filters.search.trim()}%`} OR EXISTS (
-         SELECT 1
-         FROM unnest(COALESCE(item.tags, ARRAY[]::text[])) tag
-         WHERE tag ILIKE ${`%${filters.search.trim()}%`}
-       ))`
-    )
-  }
-
-  if (filters?.tags && filters.tags.length > 0) {
-    conditions.push(sql`item.tags && ${filters.tags}::text[]`)
-  }
-
-  if (filters?.categorySlugs && filters.categorySlugs.length > 0) {
-    conditions.push(
-      sql`EXISTS (
-         SELECT 1
-         FROM catalog_item_categories item_category
-         JOIN catalog_categories category
-           ON category.id = item_category.category_id
-         WHERE item_category.catalog_item_id = item.id
-           AND category.item_kind = 'plugin_package'
-           AND category.slug = ANY(${filters.categorySlugs}::text[])
-       )`
-    )
-  }
-
-  const rows = await loadPluginCatalogRows(
-    sql`AND ${sql.join(conditions, sql` AND `)}
-       ORDER BY item.download_count DESC, item.created_at DESC`
-  )
-
-  return rows.map(mapPluginView)
+}): Promise<PluginCatalogRow[]> {
+  return listPublicPluginCatalogRows(filters)
 }
 
-export async function listPluginCategories() {
-  const rows = await db
-    .selectFrom("catalog_categories")
-    .selectAll()
-    .where("item_kind", "=", "plugin_package")
-    .orderBy("sort_order", "asc")
-    .orderBy("display_name", "asc")
-    .execute()
-
-  return rows.map((row) => {
-    const metadata = asObject(row.metadata)
-    return {
-      id: row.id,
-      slug: row.slug,
-      display_name: row.display_name,
-      description: row.description,
-      display_name_i18n: asObject(metadata.displayNameI18n),
-      description_i18n: asObject(metadata.descriptionI18n),
-      default_locale:
-        typeof metadata.defaultLocale === "string"
-          ? metadata.defaultLocale
-          : "en",
-      sort_order: row.sort_order,
-    }
-  })
+export async function listPluginCategories(): Promise<PluginCategoryRecord[]> {
+  return listPluginCategoryRecords()
 }
 
-export async function getPlugin(id: string) {
+export async function getPluginRecord(id: string): Promise<PluginCatalogRow> {
   const row = await getPluginCatalogRowByItemId(id)
   if (!row) {
     throw new McpPluginError(404, "Plugin not found")
   }
 
-  return mapPluginView(row)
+  return row
+}
+
+async function getPluginCatalogRecordForService(
+  id: string
+): Promise<PluginCatalogRecord> {
+  return presentPluginCatalogRecord(await getPluginRecord(id))
 }
 
 export function validateSupportedLifecycleScope(
@@ -1726,14 +604,14 @@ export async function installPluginUnified(data: {
     conversationTypeMaskOverride?: number | null
     reason?: string
   }>
-}) {
-  const plugin = await getPlugin(data.pluginId)
+}): Promise<PluginInstallationDetailRecord> {
+  const plugin = await getPluginCatalogRecordForService(data.pluginId)
   const supportedReuseScopes = normalizeSupportedReuseScopes(
-    plugin.supported_reuse_scopes,
-    plugin.default_reuse_scope || "conversation"
+    plugin.supportedReuseScopes,
+    plugin.defaultReuseScope || "conversation"
   )
   const lifecycleScope =
-    data.lifecycleScope || plugin.default_reuse_scope || "conversation"
+    data.lifecycleScope || plugin.defaultReuseScope || "conversation"
   assertSupportedReuseScope(supportedReuseScopes, lifecycleScope, plugin.slug)
   const approvedRuntimePermissions =
     plugin.authorization?.requiredPermissions || []
@@ -1742,7 +620,7 @@ export async function installPluginUnified(data: {
     config: Record<string, unknown>,
     ex: Executor
   ) {
-    if (plugin.entry_point !== "feishu/app") {
+    if (plugin.entryPoint !== "feishu/app") {
       return
     }
 
@@ -1758,33 +636,21 @@ export async function installPluginUnified(data: {
       )
     }
 
-    const rawConnection = asObject(config.feishuAccount)
-    if (
-      rawConnection.__kind !== "auth_connection_ref" ||
-      typeof rawConnection.connectionId !== "string"
-    ) {
+    const connectionRef = parseFeishuAuthConnectionRef(config.feishuAccount)
+    if (!connectionRef) {
       throw new McpPluginError(400, "Feishu account authorization is required.")
     }
 
-    const connectionResult = await runBuilder(
+    const publicPayload = await getActivePluginConnectionPublicPayload(
       ex,
-      ex
-        .selectFrom("plugin_connections")
-        .select("public_payload")
-        .where("id", "=", rawConnection.connectionId)
-        .where("deleted_at", "is", null)
-        .where("status", "in", PLUGIN_CONNECTION_LIVE_STATUSES)
-        .limit(1)
+      connectionRef.connectionId
     )
-    if (connectionResult.rows.length === 0) {
+    if (!publicPayload) {
       throw new McpPluginError(400, "Feishu auth connection not found.")
     }
 
     try {
-      assertFeishuScopesForFeatures(
-        features,
-        asObject(connectionResult.rows[0]!.public_payload).scopes
-      )
+      assertFeishuScopesForFeatures(features, publicPayload.scopes)
     } catch (error) {
       throw new McpPluginError(
         400,
@@ -1795,9 +661,9 @@ export async function installPluginUnified(data: {
     }
   }
 
-  const result = await withDbTransaction(async (client) => {
+  const result = await withMcpPluginTransaction(async (client) => {
     const catalogRow = await getPluginCatalogRowByItemId(plugin.id)
-    const catalogVersionId = catalogRow?.version_id
+    const catalogVersionId = catalogRow?.versionId
     if (!catalogVersionId) {
       throw new McpPluginError(
         500,
@@ -1809,28 +675,23 @@ export async function installPluginUnified(data: {
     await insertWorkspaceAppRoot(client, {
       id: installationId,
       workspaceId: data.workspaceId,
-      kind: "plugin_installation",
-      displayName: plugin.display_name,
+      kind: WORKSPACE_APP_KIND.PLUGIN_INSTALLATION,
+      displayName: plugin.displayName,
       ownerWorkspaceMemberId: data.installedByWorkspaceMemberId || null,
-      status: "active",
-      conversationTypeMaskOverride:
-        plugin.default_conversation_type_mask ?? null,
+      status: WORKSPACE_APP_STATUS.ACTIVE,
+      conversationTypeMaskOverride: plugin.defaultConversationTypeMask ?? null,
     })
-    const insertedInstallation = await takeFirstOn<{ id: string }>(
+    const insertedInstallationId = await insertPluginInstallationRecord(
       client,
-      db
-        .insertInto("plugin_installations")
-        .values({
-          id: installationId,
-          catalog_item_id: plugin.id,
-          catalog_version_id: catalogVersionId,
-          config_data: {} as TableInsert<"plugin_installations">["config_data"],
-          approved_runtime_permissions: approvedRuntimePermissions,
-          reuse_scope: internalReuseScope(lifecycleScope),
-        })
-        .returning("id")
+      {
+        id: installationId,
+        catalogItemId: plugin.id,
+        catalogVersionId: catalogVersionId,
+        configData: {},
+        approvedRuntimePermissions,
+        reuseScope: internalReuseScope(lifecycleScope),
+      }
     )
-    const insertedInstallationId = insertedInstallation!.id
     if (insertedInstallationId !== installationId) {
       throw new McpPluginError(500, "Plugin installation id mismatch")
     }
@@ -1840,15 +701,15 @@ export async function installPluginUnified(data: {
       installationId,
       workspaceId: data.workspaceId,
       workspaceMemberId: data.installedByWorkspaceMemberId || "",
-      configFields: plugin.config_fields || [],
-      authBindings: plugin.auth_bindings || [],
+      configFields: plugin.configFields || [],
+      authBindings: plugin.authBindings || [],
       configData: resolvedConfigBase,
       authSessionIds: data.authSessionIds,
-      run: runnerFn(client),
+      run: createMcpPluginQueryRunner(client),
     })
     const validation = validateConfig(
       resolvedConfig,
-      plugin.validation_rules || []
+      plugin.validationRules || []
     )
     if (!validation.valid) {
       throw new McpPluginError(
@@ -1859,39 +720,23 @@ export async function installPluginUnified(data: {
     await validateResolvedConfigForInstall(resolvedConfig, client)
     const encryptedConfig = encryptSensitiveFields(
       resolvedConfig,
-      plugin.config_schema || {}
+      plugin.configSchema || {}
     )
 
-    await runBuilder(
+    await updatePluginInstallationConfigData(
       client,
-      db
-        .updateTable("plugin_installations")
-        .set({
-          config_data:
-            encryptedConfig as TableInsert<"plugin_installations">["config_data"],
-        })
-        .where("id", "=", installationId)
+      installationId,
+      encryptedConfig
     )
 
-    await runBuilder(
-      client,
-      db.insertInto("plugin_source_refs").values({
-        installation_id: installationId,
-        source_catalog_item_id: plugin.id,
-        source_catalog_version_id: catalogVersionId,
-        sync_mode: "manual_merge",
-      })
-    )
+    await insertPluginSourceRefRecord(client, {
+      installationId: installationId,
+      sourceCatalogItemId: plugin.id,
+      sourceCatalogVersionId: catalogVersionId,
+      syncMode: "manual_merge",
+    })
 
-    await runBuilder(
-      client,
-      db
-        .updateTable("catalog_items")
-        .set({
-          download_count: sql`download_count + 1`,
-        })
-        .where("id", "=", plugin.id)
-    )
+    await incrementPluginCatalogDownloadCount(client, plugin.id)
 
     for (const grant of data.grants || []) {
       await insertWorkspaceAppGrant(client as any, {
@@ -1943,20 +788,10 @@ export async function tearDownPluginInstallationOn(
   // resolvable. Flip both deleted_at and status so status-aware reads also drop
   // them. Done before the parent flip (a child deleted_at flip is always allowed
   // by the FK-liveness trigger).
-  await runBuilder(
-    client,
-    db
-      .updateTable("plugin_connections")
-      .set({
-        deleted_at: sql`NOW()`,
-        status: "revoked",
-      })
-      .where("installation_id", "=", installId)
-      .where("deleted_at", "is", null)
-  )
+  await revokePluginConnectionsForInstallation(client, installId)
   await updateWorkspaceAppRoot(client, {
     id: installId,
-    status: "archived",
+    status: WORKSPACE_APP_STATUS.ARCHIVED,
     deletedAt: new Date(),
   })
 
@@ -1964,29 +799,19 @@ export async function tearDownPluginInstallationOn(
 }
 
 export async function uninstallPluginUnified(installId: string) {
-  const installation = await db
-    .selectFrom("plugin_installations as installation")
-    .innerJoin("workspace_apps as app", "app.id", "installation.id")
-    .select([
-      "installation.id as installation_id",
-      "app.workspace_id as workspace_id",
-    ])
-    .where("installation.id", "=", installId)
-    .where("app.deleted_at", "is", null)
-    .limit(1)
-    .executeTakeFirst()
+  const installation = await findPluginInstallationWorkspace(installId)
   if (!installation) {
     throw new McpPluginError(404, "Installation not found")
   }
-  await withDbTransaction((client) =>
+  await withMcpPluginTransaction((client) =>
     tearDownPluginInstallationOn(client, installId)
   )
 
-  await incrementMcpVersion(installation.workspace_id)
+  await incrementMcpVersion(installation.workspaceId)
 
   return {
     id: installId,
-    workspace_id: installation.workspace_id,
+    workspace_id: installation.workspaceId,
   }
 }
 
@@ -1996,30 +821,28 @@ export async function getInstallations(
     installationIds?: string[]
     pluginId?: string
   }
-) {
+): Promise<PluginInstallationDetailRecord[]> {
   const rows = await loadInstallationRows(workspaceId, filters)
   const pluginsByVersionId = await loadPluginCatalogMapByVersionIds(
-    Array.from(new Set(rows.map((row) => row.catalog_version_id)))
+    Array.from(new Set(rows.map((row) => row.catalogVersionId)))
   )
   const workspaceConversationTypeMask =
     await getWorkspaceCapabilityConversationTypeMask(
       workspaceId,
-      "plugin_installation"
+      WORKSPACE_APP_KIND.PLUGIN_INSTALLATION
     )
 
-  return rows
-    .map((row) => {
-      const plugin = pluginsByVersionId.get(row.catalog_version_id)
-      return plugin
-        ? buildInstallationPayload(row, plugin, workspaceConversationTypeMask)
-        : null
-    })
-    .filter(Boolean)
+  return rows.flatMap((row) => {
+    const plugin = pluginsByVersionId.get(row.catalogVersionId)
+    return plugin ? [{ row, plugin, workspaceConversationTypeMask }] : []
+  })
 }
 
-export async function getInstallation(workspaceId: string, installId: string) {
-  const { installation } = await getInstallationPayload(workspaceId, installId)
-  return installation
+export async function getInstallation(
+  workspaceId: string,
+  installId: string
+): Promise<PluginInstallationDetailRecord> {
+  return getInstallationPayload(workspaceId, installId)
 }
 
 export async function updateInstallation(
@@ -2032,28 +855,21 @@ export async function updateInstallation(
     conversationTypeMaskOverride?: number | null
     updatedByWorkspaceMemberId?: string
   }
-) {
-  const currentRow = await db
-    .selectFrom("plugin_installations as installation")
-    .innerJoin("workspace_apps as app", "app.id", "installation.id")
-    .select("app.workspace_id as workspace_id")
-    .where("installation.id", "=", installId)
-    .where("app.deleted_at", "is", null)
-    .limit(1)
-    .executeTakeFirst()
+): Promise<PluginInstallationDetailRecord> {
+  const currentRow = await findPluginInstallationWorkspace(installId)
   if (!currentRow) {
     throw new McpPluginError(404, "Installation not found")
   }
 
-  const workspaceId = currentRow.workspace_id
+  const workspaceId = currentRow.workspaceId
   const { row, plugin, workspaceConversationTypeMask } =
     await getInstallationPayload(workspaceId, installId)
 
   const nextLifecycleScope =
-    data.lifecycleScope || publicReuseScope(row.reuse_scope)
+    data.lifecycleScope || publicReuseScope(row.reuseScope)
   const supportedReuseScopes = normalizeSupportedReuseScopes(
-    plugin.supported_reuse_scopes,
-    plugin.default_reuse_scope || "conversation"
+    plugin.supportedReuseScopes,
+    plugin.defaultReuseScope || "conversation"
   )
   assertSupportedReuseScope(
     supportedReuseScopes,
@@ -2063,11 +879,11 @@ export async function updateInstallation(
 
   const mergedConfig = data.configData
     ? mergeConfigForUpdate(
-        asObject(row.config_data),
+        row.configData,
         data.configData,
-        plugin.config_fields || []
+        plugin.configFields || []
       )
-    : asObject(row.config_data)
+    : row.configData
 
   if (data.conversationTypeMaskOverride !== undefined) {
     const nextInstanceConversationTypeMask =
@@ -2080,8 +896,7 @@ export async function updateInstallation(
       })
     const accessRows = await listAccessRows(installId)
     for (const accessRow of accessRows) {
-      await validateConversationScopedAccessTarget({
-        db,
+      await validateMcpPluginConversationScopedAccessTarget({
         target: installationAccessRowToTarget(accessRow),
         effectiveConversationTypeMask: nextInstanceConversationTypeMask,
         buildError: (message) => new McpPluginError(400, message),
@@ -2093,7 +908,7 @@ export async function updateInstallation(
     config: Record<string, unknown>,
     ex: Executor
   ) {
-    if (plugin.entry_point !== "feishu/app") {
+    if (plugin.entryPoint !== "feishu/app") {
       return
     }
 
@@ -2109,33 +924,21 @@ export async function updateInstallation(
       )
     }
 
-    const rawConnection = asObject(config.feishuAccount)
-    if (
-      rawConnection.__kind !== "auth_connection_ref" ||
-      typeof rawConnection.connectionId !== "string"
-    ) {
+    const connectionRef = parseFeishuAuthConnectionRef(config.feishuAccount)
+    if (!connectionRef) {
       throw new McpPluginError(400, "Feishu account authorization is required.")
     }
 
-    const connectionResult = await runBuilder(
+    const publicPayload = await getActivePluginConnectionPublicPayload(
       ex,
-      ex
-        .selectFrom("plugin_connections")
-        .select("public_payload")
-        .where("id", "=", rawConnection.connectionId)
-        .where("deleted_at", "is", null)
-        .where("status", "in", PLUGIN_CONNECTION_LIVE_STATUSES)
-        .limit(1)
+      connectionRef.connectionId
     )
-    if (connectionResult.rows.length === 0) {
+    if (!publicPayload) {
       throw new McpPluginError(400, "Feishu auth connection not found.")
     }
 
     try {
-      assertFeishuScopesForFeatures(
-        features,
-        asObject(connectionResult.rows[0]!.public_payload).scopes
-      )
+      assertFeishuScopesForFeatures(features, publicPayload.scopes)
     } catch (error) {
       throw new McpPluginError(
         400,
@@ -2146,8 +949,8 @@ export async function updateInstallation(
     }
   }
 
-  await withDbTransaction(async (client) => {
-    const run = runnerFn(client)
+  await withMcpPluginTransaction(async (client) => {
+    const run = createMcpPluginQueryRunner(client)
 
     const resolvedConfig =
       data.configData || data.authSessionIds
@@ -2156,10 +959,10 @@ export async function updateInstallation(
             workspaceId,
             workspaceMemberId:
               data.updatedByWorkspaceMemberId ||
-              row.root_owner_workspace_member_id ||
+              row.rootOwnerWorkspaceMemberId ||
               "",
-            configFields: plugin.config_fields || [],
-            authBindings: plugin.auth_bindings || [],
+            configFields: plugin.configFields || [],
+            authBindings: plugin.authBindings || [],
             configData: mergedConfig,
             authSessionIds: data.authSessionIds,
             run,
@@ -2169,7 +972,7 @@ export async function updateInstallation(
     if (data.configData || data.authSessionIds) {
       const validation = validateConfig(
         resolvedConfig,
-        plugin.validation_rules || []
+        plugin.validationRules || []
       )
       if (!validation.valid) {
         throw new McpPluginError(
@@ -2186,15 +989,13 @@ export async function updateInstallation(
     if (data.configData || data.authSessionIds) {
       const encryptedConfig = encryptSensitiveFields(
         resolvedConfig,
-        plugin.config_schema || {}
+        plugin.configSchema || {}
       )
-      await client
-        .updateTable("plugin_installations")
-        .set({
-          config_data: sql`${JSON.stringify(encryptedConfig)}::jsonb`,
-        })
-        .where("id", "=", installId)
-        .execute()
+      await updatePluginInstallationConfigData(
+        client,
+        installId,
+        encryptedConfig
+      )
     }
 
     if (data.isEnabled !== undefined) {
@@ -2202,13 +1003,11 @@ export async function updateInstallation(
     }
 
     if (data.lifecycleScope) {
-      await client
-        .updateTable("plugin_installations")
-        .set({
-          reuse_scope: internalReuseScope(nextLifecycleScope),
-        })
-        .where("id", "=", installId)
-        .execute()
+      await updatePluginInstallationReuseScope(
+        client,
+        installId,
+        internalReuseScope(nextLifecycleScope)
+      )
     }
 
     if (data.conversationTypeMaskOverride !== undefined) {
@@ -2217,20 +1016,20 @@ export async function updateInstallation(
 
     await updateWorkspaceAppRoot(client, {
       id: installId,
-      displayName: row.root_display_name,
+      displayName: row.rootDisplayName,
       status:
         data.isEnabled === undefined
-          ? row.root_status === "active"
-            ? "active"
-            : row.root_status === "disabled"
-              ? "disabled"
-              : "error"
+          ? row.rootStatus === PLUGIN_INSTALLATION_STATUS.ACTIVE
+            ? WORKSPACE_APP_STATUS.ACTIVE
+            : row.rootStatus === PLUGIN_INSTALLATION_STATUS.DISABLED
+              ? WORKSPACE_APP_STATUS.DISABLED
+              : WORKSPACE_APP_STATUS.ERROR
           : data.isEnabled
-            ? "active"
-            : "disabled",
+            ? WORKSPACE_APP_STATUS.ACTIVE
+            : WORKSPACE_APP_STATUS.DISABLED,
       conversationTypeMaskOverride:
         data.conversationTypeMaskOverride === undefined
-          ? row.root_conversation_type_mask_override
+          ? row.rootConversationTypeMaskOverride
           : data.conversationTypeMaskOverride,
     })
   })
@@ -2241,7 +1040,7 @@ export async function updateInstallation(
     await emitEvent({
       type: "mcp.config.changed",
       workspaceId,
-      payload: { pluginId: row.catalog_item_id, workspaceId },
+      payload: { pluginId: row.catalogItemId, workspaceId },
       timestamp: nowIsoInstant(),
     })
   }
@@ -2253,16 +1052,25 @@ export async function getPluginInstallationGrantState(
   workspaceId: string,
   installationId: string
 ) {
-  const { installation, plugin, workspaceConversationTypeMask } =
+  const { row, plugin, workspaceConversationTypeMask } =
     await getInstallationPayload(workspaceId, installationId)
+  const conversationTypeMaskOverride =
+    row.rootConversationTypeMaskOverride ?? null
+  const sourceDefaultConversationTypeMask = normalizeConversationTypeMask(
+    plugin.defaultConversationTypeMask,
+    DEFAULT_CONVERSATION_TYPE_MASK
+  )
+  const effectiveConversationTypeMask = resolveNarrowedConversationTypeMask(
+    workspaceConversationTypeMask,
+    conversationTypeMaskOverride
+  )
   const accessRows = await listAccessRows(installationId)
   const grants = accessRows
-    .filter((binding) => binding.status === "active")
+    .filter((binding) => binding.status === ACCESS_BINDING_STATUS.ACTIVE)
     .map((binding) =>
-      mapAccessRowToGrant(binding, {
+      presentInstallationAccessGrant(binding, {
         workspaceConversationTypeMask,
-        instanceConversationTypeMaskOverride:
-          installation.conversation_type_mask_override ?? null,
+        instanceConversationTypeMaskOverride: conversationTypeMaskOverride,
       })
     )
 
@@ -2271,14 +1079,10 @@ export async function getPluginInstallationGrantState(
     summary: {
       requiredPermissions: plugin.authorization?.requiredPermissions || [],
       suggestedAccessTargetType: "workspace",
-      sourceDefaultConversationTypeMask:
-        installation.source_default_conversation_type_mask ||
-        DEFAULT_CONVERSATION_TYPE_MASK,
+      sourceDefaultConversationTypeMask,
       workspaceConversationTypeMask,
-      conversationTypeMaskOverride:
-        installation.conversation_type_mask_override ?? null,
-      effectiveConversationTypeMask:
-        installation.effective_conversation_type_mask,
+      conversationTypeMaskOverride,
+      effectiveConversationTypeMask,
       reason: plugin.authorization?.reason,
       effectivePermissions:
         grants.length > 0
@@ -2299,8 +1103,10 @@ export async function createPluginInstallationGrant(input: {
   grantedByWorkspaceMemberId?: string
   reason?: string
 }) {
-  const { plugin, installation, workspaceConversationTypeMask } =
+  const { row, plugin, workspaceConversationTypeMask } =
     await getInstallationPayload(input.workspaceId, input.installationId)
+  const conversationTypeMaskOverride =
+    row.rootConversationTypeMaskOverride ?? null
   const accessRows = await listAccessRows(input.installationId)
 
   const resolvedAccessTarget = input.accessTarget || {
@@ -2312,7 +1118,7 @@ export async function createPluginInstallationGrant(input: {
   })
   const instanceConversationTypeMask = resolveNarrowedConversationTypeMask(
     workspaceConversationTypeMask,
-    installation.conversation_type_mask_override ?? null
+    conversationTypeMaskOverride
   )
   const effectiveConversationTypeMask =
     assertGrantConversationTypeOverrideAllowed({
@@ -2323,8 +1129,7 @@ export async function createPluginInstallationGrant(input: {
       invalidMaskMessage:
         "Plugin access grant conversation policy must allow at least one conversation type from the installation policy.",
     })
-  await validateConversationScopedAccessTarget({
-    db,
+  await validateMcpPluginConversationScopedAccessTarget({
     target: accessTarget,
     effectiveConversationTypeMask,
     buildError: (message) => new McpPluginError(400, message),
@@ -2355,7 +1160,7 @@ export async function createPluginInstallationGrant(input: {
       : null
   const existing = accessRows.find(
     (entry) =>
-      entry.status === "active" &&
+      entry.status === ACCESS_BINDING_STATUS.ACTIVE &&
       entry.access_target_type === accessTargetLabel &&
       entry.actor_id === accessTargetActorId &&
       entry.remote_agent_id === accessTargetRemoteAgentId &&
@@ -2363,14 +1168,13 @@ export async function createPluginInstallationGrant(input: {
       entry.workspace_member_id === accessTargetWorkspaceMemberId
   )
   if (existing) {
-    return mapAccessRowToGrant(existing, {
+    return presentInstallationAccessGrant(existing, {
       workspaceConversationTypeMask,
-      instanceConversationTypeMaskOverride:
-        installation.conversation_type_mask_override ?? null,
+      instanceConversationTypeMaskOverride: conversationTypeMaskOverride,
     })
   }
 
-  const result = await withDbTransaction(async (client) => {
+  const result = await withMcpPluginTransaction(async (client) => {
     const inserted = await insertWorkspaceAppGrant(client as any, {
       workspaceId: input.workspaceId,
       workspaceAppId: input.installationId,
@@ -2383,16 +1187,16 @@ export async function createPluginInstallationGrant(input: {
 
     const accessRow = buildInstallationAccessRow({
       id: inserted.id,
-      workspaceId: inserted.workspace_id,
-      installationId: inserted.workspace_app_id,
+      workspaceId: inserted.workspaceId,
+      installationId: inserted.workspaceAppId,
       target: accessTarget,
-      conversationTypeMaskOverride: inserted.conversation_type_mask_override,
+      conversationTypeMaskOverride: inserted.conversationTypeMaskOverride,
       status: inserted.status,
       source: inserted.source,
-      createdByWorkspaceMemberId: inserted.created_by_workspace_member_id,
+      createdByWorkspaceMemberId: inserted.createdByWorkspaceMemberId,
       reason: inserted.reason,
-      createdAt: inserted.created_at || new Date(0),
-      revokedAt: inserted.revoked_at,
+      createdAt: inserted.createdAt || new Date(0),
+      revokedAt: inserted.revokedAt,
     })
     return {
       accessRow,
@@ -2401,10 +1205,9 @@ export async function createPluginInstallationGrant(input: {
 
   await incrementMcpVersion(input.workspaceId)
 
-  return mapAccessRowToGrant(result.accessRow, {
+  return presentInstallationAccessGrant(result.accessRow, {
     workspaceConversationTypeMask,
-    instanceConversationTypeMaskOverride:
-      installation.conversation_type_mask_override ?? null,
+    instanceConversationTypeMaskOverride: conversationTypeMaskOverride,
   })
 }
 
@@ -2415,22 +1218,29 @@ export async function updatePluginInstallationGrant(input: {
   conversationTypeMaskOverride?: number | null
 }) {
   if (input.conversationTypeMaskOverride === undefined) {
-    const { plugin, installation, workspaceConversationTypeMask } =
-      await getInstallationPayload(input.workspaceId, input.installationId)
+    const { row, workspaceConversationTypeMask } = await getInstallationPayload(
+      input.workspaceId,
+      input.installationId
+    )
+    const conversationTypeMaskOverride =
+      row.rootConversationTypeMaskOverride ?? null
     const accessRows = await listAccessRows(input.installationId)
     const accessRow = accessRows.find((entry) => entry.id === input.grantId)
     if (!accessRow || accessRow.workspace_id !== input.workspaceId) {
       throw new McpPluginError(404, "Access grant not found")
     }
-    return mapAccessRowToGrant(accessRow, {
+    return presentInstallationAccessGrant(accessRow, {
       workspaceConversationTypeMask,
-      instanceConversationTypeMaskOverride:
-        installation.conversation_type_mask_override ?? null,
+      instanceConversationTypeMaskOverride: conversationTypeMaskOverride,
     })
   }
 
-  const { plugin, installation, workspaceConversationTypeMask } =
-    await getInstallationPayload(input.workspaceId, input.installationId)
+  const { row, workspaceConversationTypeMask } = await getInstallationPayload(
+    input.workspaceId,
+    input.installationId
+  )
+  const conversationTypeMaskOverride =
+    row.rootConversationTypeMaskOverride ?? null
   const accessRows = await listAccessRows(input.installationId, true)
   const accessRow = accessRows.find((entry) => entry.id === input.grantId)
   if (!accessRow || accessRow.workspace_id !== input.workspaceId) {
@@ -2438,7 +1248,7 @@ export async function updatePluginInstallationGrant(input: {
   }
   const instanceConversationTypeMask = resolveNarrowedConversationTypeMask(
     workspaceConversationTypeMask,
-    installation.conversation_type_mask_override ?? null
+    conversationTypeMaskOverride
   )
   const accessRowTarget = installationAccessRowToTarget(accessRow)
   const effectiveConversationTypeMask =
@@ -2450,22 +1260,17 @@ export async function updatePluginInstallationGrant(input: {
       invalidMaskMessage:
         "Plugin access grant conversation policy must allow at least one conversation type from the installation policy.",
     })
-  await validateConversationScopedAccessTarget({
-    db,
+  await validateMcpPluginConversationScopedAccessTarget({
     target: accessRowTarget,
     effectiveConversationTypeMask,
     buildError: (message) => new McpPluginError(400, message),
   })
 
-  await db
-    .updateTable("workspace_app_grants")
-    .set({
-      conversation_type_mask_override:
-        input.conversationTypeMaskOverride ?? null,
-    } as any)
-    .where("id", "=", input.grantId)
-    .where("workspace_id", "=", input.workspaceId)
-    .execute()
+  await updatePluginInstallationGrantConversationTypeMask({
+    workspaceId: input.workspaceId,
+    grantId: input.grantId,
+    conversationTypeMaskOverride: input.conversationTypeMaskOverride ?? null,
+  })
 
   const updatedAccessRows = await listAccessRows(input.installationId)
   const updatedAccessRow = updatedAccessRows.find(
@@ -2475,10 +1280,9 @@ export async function updatePluginInstallationGrant(input: {
     throw new McpPluginError(404, "Access grant not found")
   }
 
-  return mapAccessRowToGrant(updatedAccessRow, {
+  return presentInstallationAccessGrant(updatedAccessRow, {
     workspaceConversationTypeMask,
-    instanceConversationTypeMaskOverride:
-      installation.conversation_type_mask_override ?? null,
+    instanceConversationTypeMaskOverride: conversationTypeMaskOverride,
   })
 }
 
@@ -2492,11 +1296,11 @@ export async function revokePluginInstallationGrant(input: {
   if (!accessRow || accessRow.workspace_id !== input.workspaceId) {
     throw new McpPluginError(404, "Access grant not found")
   }
-  if (accessRow.status === "revoked") {
-    return mapAccessRowToGrant(accessRow)
+  if (accessRow.status === ACCESS_BINDING_STATUS.REVOKED) {
+    return presentInstallationAccessGrant(accessRow)
   }
 
-  await revokeWorkspaceAppGrant(db as any, accessRow.id)
+  await revokePluginWorkspaceAppGrant(accessRow.id)
 
   await incrementMcpVersion(input.workspaceId)
 
@@ -2510,10 +1314,10 @@ export async function createPluginInstallPlan(input: {
   workspaceId: string
   pluginId: string
 }) {
-  const plugin = await getPlugin(input.pluginId)
+  const plugin = await getPluginCatalogRecordForService(input.pluginId)
   return {
     packageId: plugin.id,
-    revisionId: (await getPluginCatalogRowByItemId(plugin.id))!.version_id,
+    revisionId: (await getPluginCatalogRowByItemId(plugin.id))!.versionId,
     workspaceId: input.workspaceId,
     checks: [],
     grantPlan: buildPluginGrantPlan({
@@ -2531,12 +1335,12 @@ export function validateConfig(
   for (const rule of rules) {
     const value = config[rule.field]
     switch (rule.rule) {
-      case "required":
+      case MCP_VALIDATION_RULE_KIND.REQUIRED:
         if (isConfigValueMissing(value)) {
           errors.push({ field: rule.field, message: rule.message })
         }
         break
-      case "pattern":
+      case MCP_VALIDATION_RULE_KIND.PATTERN:
         if (
           typeof value === "string" &&
           rule.value &&
@@ -2545,7 +1349,7 @@ export function validateConfig(
           errors.push({ field: rule.field, message: rule.message })
         }
         break
-      case "url":
+      case MCP_VALIDATION_RULE_KIND.URL:
         if (typeof value === "string" && value) {
           try {
             new URL(value)
@@ -2554,17 +1358,17 @@ export function validateConfig(
           }
         }
         break
-      case "min_length":
+      case MCP_VALIDATION_RULE_KIND.MIN_LENGTH:
         if (typeof value === "string" && value.length < Number(rule.value)) {
           errors.push({ field: rule.field, message: rule.message })
         }
         break
-      case "max_length":
+      case MCP_VALIDATION_RULE_KIND.MAX_LENGTH:
         if (typeof value === "string" && value.length > Number(rule.value)) {
           errors.push({ field: rule.field, message: rule.message })
         }
         break
-      case "prefix":
+      case MCP_VALIDATION_RULE_KIND.PREFIX:
         if (
           typeof value === "string" &&
           !value.startsWith(String(rule.value || ""))
@@ -2572,7 +1376,7 @@ export function validateConfig(
           errors.push({ field: rule.field, message: rule.message })
         }
         break
-      case "enum":
+      case MCP_VALIDATION_RULE_KIND.ENUM:
         if (
           Array.isArray(rule.value) &&
           !rule.value.includes(value as string)
@@ -2651,41 +1455,22 @@ export async function seedBuiltinMcpPlugins() {
 
 export async function seedBuiltinPluginCategories() {
   for (const category of builtinCapabilityCategories) {
-    if (category.targetKind !== "plugin") continue
-    await db
-      .insertInto("catalog_categories")
-      .values({
-        slug: category.slug,
-        item_kind: "plugin_package",
-        display_name: category.displayName,
-        description: category.description || "",
-        sort_order: category.sortOrder,
-        metadata: {
-          displayNameI18n: category.displayNameI18n || {
-            en: category.displayName,
-          },
-          descriptionI18n: category.descriptionI18n || {
-            en: category.description || "",
-          },
-          defaultLocale: category.defaultLocale || "en",
-        } as TableInsert<"catalog_categories">["metadata"],
-      })
-      .onConflict((oc) =>
-        oc.columns(["item_kind", "slug"]).doUpdateSet({
-          display_name: category.displayName,
-          description: category.description || "",
-          sort_order: category.sortOrder,
-          metadata: {
-            displayNameI18n: category.displayNameI18n || {
-              en: category.displayName,
-            },
-            descriptionI18n: category.descriptionI18n || {
-              en: category.description || "",
-            },
-            defaultLocale: category.defaultLocale || "en",
-          } as TableInsert<"catalog_categories">["metadata"],
-        })
-      )
-      .execute()
+    if (category.targetKind !== MARKETPLACE_ITEM_KIND.PLUGIN) continue
+    const metadata = {
+      displayNameI18n: category.displayNameI18n || {
+        en: category.displayName,
+      },
+      descriptionI18n: category.descriptionI18n || {
+        en: category.description || "",
+      },
+      defaultLocale: category.defaultLocale || "en",
+    } as CatalogCategoriesMetadata
+    await upsertBuiltinPluginCategory({
+      slug: category.slug,
+      displayName: category.displayName,
+      description: category.description,
+      sortOrder: category.sortOrder,
+      metadata,
+    })
   }
 }

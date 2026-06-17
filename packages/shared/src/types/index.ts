@@ -1,20 +1,59 @@
 import {
   ACTOR_DOC_VISIBILITIES,
+  ACTOR_DOC_CHANGED_FIELDS,
+  ACTOR_PACKAGE_DEPENDENCY_KINDS,
+  ACTOR_PACKAGE_LINK_STATUSES,
+  ACTOR_PACKAGE_SYNC_MODES,
+  ACTOR_PACKAGE_TARGET_KINDS,
   ACTOR_ROLES,
+  ACTOR_RUNTIME_HEALTHS,
+  ACTOR_UPDATE_SOURCE_TYPES,
+  ACTOR_VERSION_CHANGED_FIELDS,
+  ACTOR_VERSION_DOC_CHANGE_TYPES,
   ACCESS_TARGET_TYPES,
+  AUTOMATION_ACCESS_TARGET_TYPES,
+  AUTOMATION_COMPLETION_STATUSES,
+  AUTOMATION_CREATOR_KINDS,
+  AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS,
+  AUTOMATION_EVENT_SOURCE_STATUSES,
+  AUTOMATION_RULE_CATEGORIES,
+  AUTOMATION_RULE_STATUSES,
+  AUTOMATION_SCHEDULE_KINDS,
+  AUTOMATION_EXECUTION_STATUSES,
+  AUTOMATION_INTEGRATION_INGRESS_KINDS,
+  AUTOMATION_INTEGRATION_PROVIDERS,
+  AUTOMATION_INTEGRATION_TARGET_KINDS,
+  AUTOMATION_TARGET_POLICIES,
+  AUTOMATION_TRIGGER_KINDS,
+  AUTOMATION_TRIGGER_SOURCE_KINDS,
+  AUTOMATION_WEBHOOK_ENDPOINT_STATUSES,
   CAPABILITY_ACCESS_TARGET_TYPES,
+  CHAT_MEMBERSHIP_UPDATE_REASONS,
+  CHAT_PARTICIPANT_REMOVAL_STATES,
   CONTACT_DIRECT_STATES,
   CONTACT_HUB_KINDS,
   CONTACT_TARGET_TYPES,
   CANONICAL_FILE_CATEGORIES,
+  EVENT_TYPES,
+  CONVERSATION_EVENT_CONTEXT_POLICIES,
+  CONVERSATION_EVENT_TIMELINE_POLICIES,
+  CONVERSATION_FEED_EVENT_TYPES,
+  CONVERSATION_FEED_ITEM_SUBTYPES,
+  CONVERSATION_FEED_MESSAGE_TYPE,
+  CONVERSATION_FEED_MESSAGE_TYPES,
   CONVERSATION_ITEM_ROLES,
   CONVERSATION_ITEM_SCOPES,
   CONVERSATION_ITEM_SURFACES,
   CONVERSATION_ITEM_TYPES,
   CONVERSATION_KINDS,
+  CONVERSATION_MESSAGE_TRANSPORT_DIRECTIONS,
+  CONVERSATION_MESSAGE_SUBTYPES,
+  CONVERSATION_PARTICIPANT_ROLE_KEYS,
   CONVERSATION_PARTICIPANT_TYPE,
   CONVERSATION_PARTICIPANT_STATES,
   CONVERSATION_PARTICIPANT_TYPES,
+  CONVERSATION_STATUSES,
+  CONVERSATION_REPLY_REF_SUBTYPES,
   FILE_ORIGIN_SYSTEMS,
   FILE_ORIGIN_FAMILIES,
   USER_UPLOAD_FILE_ORIGIN_SYSTEMS,
@@ -35,6 +74,7 @@ import {
   PLUGIN_SPEC_TRANSPORTS,
   PLUGIN_TRANSPORTS,
   INVITE_TRUST_LEVELS,
+  WORKSPACE_TRUST_LEVELS,
   TASK_DECISIONS,
   TASK_INPUT_QUESTION_TYPES,
   TASK_LIFECYCLE_STATUSES,
@@ -51,9 +91,34 @@ import {
   MEMORY_SCOPES,
   MEMORY_STABILITIES,
   MEMORY_STATUSES,
+  MARKETPLACE_ASSET_KINDS,
+  MARKETPLACE_ITEM_KINDS,
+  MARKETPLACE_LINEAGE_KINDS,
+  MARKETPLACE_REQUIREMENT_KINDS,
+  MARKETPLACE_REQUIREMENT_STATUSES,
+  MARKETPLACE_REQUIREMENT_TARGET_KINDS,
+  MARKETPLACE_SOURCE_TYPES,
+  MARKETPLACE_SYNC_MODES,
+  MARKETPLACE_VERSION_STATUSES,
+  MCP_VALIDATION_RULE_KINDS,
+  PLUGIN_AUTH_BINDING_DRIVER_KINDS,
+  PLUGIN_AUTH_CHALLENGE_KINDS,
+  PLUGIN_AUTH_CHALLENGE_OPEN_MODES,
   PLUGIN_AUTH_CONNECTION_STATUSES,
+  PLUGIN_AUTH_DERIVED_VALUE_NAMES,
   PLUGIN_AUTH_SESSION_STATUSES,
+  PLUGIN_AUTH_SESSION_PHASES,
+  PLUGIN_AUTH_VALUE_SOURCE_KINDS,
+  PLUGIN_CONFIG_FIELD_TYPES,
+  PLUGIN_INSTALLATION_MODES,
+  PLUGIN_INSTALLATION_STATUSES,
+  PLUGIN_INSTALL_ACTION_KINDS,
+  PLUGIN_INSTALL_STEP_KINDS,
+  PLUGIN_INSTALL_STEP_SCOPES,
+  PLATFORM_ACCESS_SOURCES,
   PLAN_APPROVAL_DECISIONS,
+  REALTIME_ASR_AUDIO_CODECS,
+  REALTIME_ASR_AUDIO_FORMATS,
   TARGETED_TASK_REQUEST_KINDS,
   REUSE_SCOPES,
   RELATIONSHIP_APPROVAL_MODES,
@@ -62,6 +127,8 @@ import {
   RELATIONSHIP_SCAN_OUTCOMES,
   DEVICE_ACCESS_DENIAL_KINDS,
   DEVICE_ACCESS_DENIAL_RESOLUTIONS,
+  DEVICE_CAPABILITY_ACCESS_SCOPE_KINDS,
+  DEVICE_CAPABILITY_ACCESS_SUBJECT_KINDS,
   RUNTIME_AUTHORIZATION_BROWSER_ACTIONS,
   RUNTIME_AUTHORIZATION_BROWSER_SCOPE_TYPES,
   RUNTIME_AUTHORIZATION_CAPABILITIES,
@@ -73,6 +140,9 @@ import {
   RUNTIME_AUTHORIZATION_GRANT_STATUSES,
   RUNTIME_AUTHORIZATION_PRESETS,
   RUNTIME_AUTHORIZATION_REQUEST_MODES,
+  SKILL_FRONTMATTER_EFFORTS,
+  SKILL_MIRROR_SYNC_STATUSES,
+  SKILL_SOURCE_TYPES,
   SESSION_COLLABORATION_MODES,
   SESSION_INTERRUPT_TYPES,
   SESSION_STATUSES,
@@ -82,10 +152,13 @@ import {
   SESSION_WAKEUP_STATUSES,
   TASK_NOTICE_STATUSES,
   DIRECT_CONVERSATION_OPEN_STATUSES,
+  MODEL_API_STYLES,
   MODEL_GROUP_GRANT_SCOPES,
   MODEL_GROUP_GRANT_STATUSES,
   MODEL_GROUP_OWNER_TYPES,
   MODEL_GROUP_ROUTING_STRATEGIES,
+  MODEL_SERVER_TOOLS,
+  REMOTE_AGENT_BINDING_STATUSES,
   REMOTE_AGENT_MACHINE_LIFECYCLE_STATES,
   REMOTE_AGENT_MACHINE_TRUST_STATUSES,
   REMOTE_AGENT_RUNTIME_CATALOG_STATUSES,
@@ -100,6 +173,8 @@ import {
   TRANSPORT_DELIVERY_STATUSES,
   TRANSPORT_ENDPOINT_TYPES,
   TRANSPORT_KINDS,
+  WEIXIN_QR_LOGIN_STATUSES,
+  DINGTALK_DEVICE_FLOW_STATUSES,
 } from "../constants/enums.js"
 import type { ChatTypingState } from "../constants/enums.js"
 import type { ProviderKind } from "../constants/model-providers.js"
@@ -111,6 +186,7 @@ import type {
   GrantPolicy as GrantPolicyBase,
 } from "../access/policies/index.js"
 import type {
+  AccessBindingStatus,
   WorkspaceAppGrantPermission,
   WorkspaceAppGrantRequestStatus,
   WorkspaceAppGrantSource,
@@ -120,6 +196,7 @@ import type {
 } from "../access/enums.js"
 import type { SubjectRef, ScopedSubjectTarget } from "../access/subject.js"
 import type { IsoInstantString } from "../datetime/instant.js"
+import type { WorkspaceAppGrantTargetInput as WorkspaceAppGrantTargetContract } from "../schemas/workspace-apps.js"
 
 // ============ Common ============
 export type UUID = string
@@ -162,7 +239,7 @@ export interface AuthResponse {
 }
 
 // ============ Workspace ============
-export type TrustLevel = "owner" | "admin" | "member" | "guest"
+export type TrustLevel = (typeof WORKSPACE_TRUST_LEVELS)[number]
 
 export interface Workspace {
   id: UUID
@@ -271,11 +348,7 @@ export interface ActorDefinition {
   config: Record<string, unknown>
 }
 
-export type ActorUpdateSourceType =
-  | "workspace_member"
-  | "actor"
-  | "system"
-  | "sync"
+export type ActorUpdateSourceType = (typeof ACTOR_UPDATE_SOURCE_TYPES)[number]
 
 export interface ActorVersionSource {
   type: ActorUpdateSourceType
@@ -288,19 +361,9 @@ export interface ActorVersionSource {
 }
 
 export type ActorVersionChangedField =
-  | "displayName"
-  | "role"
-  | "title"
-  | "parentId"
-  | "canRepresentUser"
-  | "specialties"
-  | "config"
+  (typeof ACTOR_VERSION_CHANGED_FIELDS)[number]
 
-export type ActorDocChangedField =
-  | "title"
-  | "visibility"
-  | "priority"
-  | "content"
+export type ActorDocChangedField = (typeof ACTOR_DOC_CHANGED_FIELDS)[number]
 
 export interface ActorDocFieldChange {
   field: ActorDocChangedField
@@ -323,12 +386,15 @@ export interface ActorVersionDocChange {
   docId: UUID
   key: ActorDocKey
   title: string
-  changeType: "added" | "updated" | "removed"
+  changeType: ActorVersionDocChangeType
   visibility: ActorDocVisibility
   priority: number
   fieldChanges: ActorDocFieldChange[]
   summary: CanonicalContentBlock[]
 }
+
+export type ActorVersionDocChangeType =
+  (typeof ACTOR_VERSION_DOC_CHANGE_TYPES)[number]
 
 export type ActorVersionChange = ActorFieldChange | ActorVersionDocChange
 
@@ -436,20 +502,8 @@ export interface WorkItemParticipant {
   addedAt: Timestamp
 }
 
-// Valid state transitions
-export const WORK_ITEM_TRANSITIONS: Record<WorkItemStatus, WorkItemStatus[]> = {
-  created: ["assigned", "cancelled"],
-  assigned: ["accepted", "cancelled"],
-  accepted: ["in_progress", "cancelled"],
-  in_progress: ["review", "escalated", "blocked", "cancelled", "failed"],
-  review: ["completed", "rework", "cancelled"],
-  completed: [],
-  escalated: ["assigned", "cancelled"],
-  blocked: ["in_progress", "cancelled"],
-  rework: ["in_progress", "cancelled"],
-  cancelled: [],
-  failed: [],
-}
+// Valid state transitions: `WORK_ITEM_TRANSITIONS` moved to ../work-item/index.ts
+// (runtime data) per §2.2.1; re-exported from the package root barrel.
 
 // ============ Memory ============
 export type MemorySpaceType = (typeof MEMORY_SPACE_TYPES)[number]
@@ -528,45 +582,30 @@ export interface MemoryRecallRun {
 }
 
 // ============ Automation ============
-export type AutomationCategory = "schedule" | "event_subscription"
-export type AutomationStatus =
-  | "active"
-  | "paused"
-  | "error"
-  | "archived"
-  | "completed"
-  | "expired"
-export type AutomationCreatorKind = "workspace_member" | "session" | "system"
-export type AutomationTriggerKind = "schedule" | "event"
+export type AutomationCategory = (typeof AUTOMATION_RULE_CATEGORIES)[number]
+export type AutomationStatus = (typeof AUTOMATION_RULE_STATUSES)[number]
+export type AutomationCreatorKind = (typeof AUTOMATION_CREATOR_KINDS)[number]
+export type AutomationTriggerKind = (typeof AUTOMATION_TRIGGER_KINDS)[number]
 export type AutomationSourceKind =
-  | "clock"
-  | "device"
-  | "webhook"
-  | "internal"
-  | "integration"
+  (typeof AUTOMATION_TRIGGER_SOURCE_KINDS)[number]
 export type AutomationEventProviderKind =
-  | "device"
-  | "webhook"
-  | "internal"
-  | "integration"
-export type AutomationIntegrationProvider = "github" | "gitlab"
-export type AutomationIntegrationIngressKind = "webhook" | "polling"
-export type AutomationIntegrationTargetKind = "repository" | "project"
-export type AutomationScheduleKind = "cron" | "at" | "interval"
-export type AutomationCompletionStatus = "completed" | "archived"
-export type AutomationTargetPolicy = "all_members" | "specified_members"
+  (typeof AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS)[number]
+export type AutomationIntegrationProvider =
+  (typeof AUTOMATION_INTEGRATION_PROVIDERS)[number]
+export type AutomationIntegrationIngressKind =
+  (typeof AUTOMATION_INTEGRATION_INGRESS_KINDS)[number]
+export type AutomationIntegrationTargetKind =
+  (typeof AUTOMATION_INTEGRATION_TARGET_KINDS)[number]
+export type AutomationScheduleKind = (typeof AUTOMATION_SCHEDULE_KINDS)[number]
+export type AutomationCompletionStatus =
+  (typeof AUTOMATION_COMPLETION_STATUSES)[number]
+export type AutomationTargetPolicy = (typeof AUTOMATION_TARGET_POLICIES)[number]
 export type AutomationExecutionStatus =
-  | "pending"
-  | "running"
-  | "completed"
-  | "failed"
-  | "skipped"
-export type AutomationWebhookStatus = "active" | "disabled" | "archived"
+  (typeof AUTOMATION_EXECUTION_STATUSES)[number]
+export type AutomationWebhookStatus =
+  (typeof AUTOMATION_WEBHOOK_ENDPOINT_STATUSES)[number]
 export type AutomationEventSourceStatus =
-  | "active"
-  | "deprecated"
-  | "disabled"
-  | "archived"
+  (typeof AUTOMATION_EVENT_SOURCE_STATUSES)[number]
 
 export interface AutomationEventSourceIntegration {
   bindingId?: UUID
@@ -786,20 +825,7 @@ export interface AuditLog {
 }
 
 // ============ Events ============
-export type EventType =
-  | "work_item.created"
-  | "work_item.updated"
-  | "work_item.transitioned"
-  | "message.created"
-  | "actor.created"
-  | "actor.updated"
-  | "memory.created"
-  | "actor.thinking"
-  | "actor.action"
-  | "chat.sync.event"
-  | "runtime.updated"
-  | "mcp.config.changed"
-  | "chat.typing"
+export type EventType = (typeof EVENT_TYPES)[number]
 
 export interface SystemEvent {
   type: EventType
@@ -823,7 +849,7 @@ export type SessionWakeupSourceParticipantType =
 export type SessionWakeupSourceType =
   (typeof SESSION_WAKEUP_SOURCE_TYPES)[number]
 export type SessionWakeupStatus = (typeof SESSION_WAKEUP_STATUSES)[number]
-export type ActorRuntimeHealth = "ok" | "error"
+export type ActorRuntimeHealth = (typeof ACTOR_RUNTIME_HEALTHS)[number]
 export type ActorRuntimePhase =
   | "idle"
   | "thinking"
@@ -958,8 +984,8 @@ export interface ActorRuntimeTurnPreviewTool {
   // `icon` + resolvePresentation(titlePresentation) (falling back to
   // displayTitle). Preview stays light: no result blocks/summary here.
   icon?: string
-  titlePresentation?: import("@synapse/device-protocol/tool-presentation").PresentationString
-  detailPresentation?: import("@synapse/device-protocol/tool-presentation").PresentationString
+  titlePresentation?: import("../tool-presentation/index.js").PresentationString
+  detailPresentation?: import("../tool-presentation/index.js").PresentationString
   startedAt: Timestamp
   updatedAt: Timestamp
   completedAt?: Timestamp
@@ -989,9 +1015,9 @@ export interface ActorRuntimeTurnActivityItem {
   // friendly one-line result; requestBlocks/resultBlocks are the (redacted)
   // rendered bodies.
   icon?: string
-  titlePresentation?: import("@synapse/device-protocol/tool-presentation").PresentationString
-  detailPresentation?: import("@synapse/device-protocol/tool-presentation").PresentationString
-  resultSummary?: import("@synapse/device-protocol/tool-presentation").PresentationString
+  titlePresentation?: import("../tool-presentation/index.js").PresentationString
+  detailPresentation?: import("../tool-presentation/index.js").PresentationString
+  resultSummary?: import("../tool-presentation/index.js").PresentationString
   requestBlocks: CanonicalContentBlock[]
   resultBlocks: CanonicalContentBlock[]
   taskStatus?: ActorRuntimeTaskStatus
@@ -1046,12 +1072,15 @@ export type RelationshipScanOutcome =
   (typeof RELATIONSHIP_SCAN_OUTCOMES)[number]
 export type DirectConversationOpenStatus =
   (typeof DIRECT_CONVERSATION_OPEN_STATUSES)[number]
+export type ConversationStatus = (typeof CONVERSATION_STATUSES)[number]
 
 export type RemoteAgentRuntimeKind = (typeof REMOTE_AGENT_RUNTIME_KINDS)[number]
 export type RemoteAgentRuntimeStateType =
   (typeof REMOTE_AGENT_RUNTIME_STATES)[number]
 export type RemoteAgentRuntimeCatalogStatus =
   (typeof REMOTE_AGENT_RUNTIME_CATALOG_STATUSES)[number]
+export type RemoteAgentBindingStatus =
+  (typeof REMOTE_AGENT_BINDING_STATUSES)[number]
 export type RemoteAgentMachineTrustStatus =
   (typeof REMOTE_AGENT_MACHINE_TRUST_STATUSES)[number]
 export type RemoteAgentLifecycleState =
@@ -1152,7 +1181,7 @@ export interface RelationshipMemberSummaryView {
   name: string
   email: string
   avatarFileId?: UUID | null
-  trustLevel?: string
+  trustLevel?: TrustLevel
 }
 
 export interface RelationshipActorSummaryView {
@@ -1160,7 +1189,7 @@ export interface RelationshipActorSummaryView {
   actorId: UUID
   displayName: string
   title: string
-  role: string
+  role: ActorRole
   avatarFileId?: UUID | null
   avatarEmoji?: string | null
   requiresContactApproval: boolean
@@ -1259,8 +1288,8 @@ export interface ConversationSummaryView {
   id: UUID
   kind: (typeof CONVERSATION_KINDS)[number]
   isIm: boolean
-  status: "active" | "completed"
-  transportKind?: string
+  status: ConversationStatus
+  transportKind?: TransportKind
   participants: ConversationParticipantView[]
   members?: ConversationParticipantView[]
   lastMessage?: ConversationMessagePreview
@@ -1347,7 +1376,7 @@ export interface RemoteAgentGroupTaskGrantView {
 export interface RemoteAgentBindingView {
   machineId: UUID
   machineTitle?: string
-  status: string
+  status: RemoteAgentBindingStatus
   runtimePath?: string
   localRootPath?: string
   machineLifecycleState?: RemoteAgentLifecycleState
@@ -1408,7 +1437,7 @@ export interface RemoteAgentMachineDetailView {
     runtimeKind: RemoteAgentRuntimeKind
     runtimePath?: string
     localRootPath?: string
-    status: string
+    status: RemoteAgentBindingStatus
     runtimeSummary?: RemoteAgentRuntimeSummaryView
   }>
 }
@@ -1487,7 +1516,7 @@ export interface ThinkingResult {
 // ============ Server Tool Calls (Anthropic/OpenAI cloud-side tools) ============
 
 export interface ServerToolCall {
-  type: "web_search" | "web_fetch"
+  type: ModelServerTool
   // The provider-native tool name as reported by the SDK. `type` is the coarse
   // bucket the FE historically branched on; `toolName` is authoritative and lets
   // an unknown provider tool render its real name instead of being mislabeled
@@ -1610,7 +1639,9 @@ export interface AIRequestLog {
   createdAt: Timestamp
 }
 
-export type AnthropicBuiltinTool = "web_search" | "web_fetch"
+export type ModelApiStyle = (typeof MODEL_API_STYLES)[number]
+export type ModelServerTool = (typeof MODEL_SERVER_TOOLS)[number]
+export type AnthropicBuiltinTool = ModelServerTool
 
 export type MultimodalType = (typeof CANONICAL_FILE_CATEGORIES)[number]
 
@@ -1625,7 +1656,7 @@ export interface ResolvedModelConfig {
   bindingVersionId: UUID
   providerKind: ProviderKind
   vendor: string
-  apiStyle?: "chat" | "responses"
+  apiStyle?: ModelApiStyle
   apiKey: string
   baseUrl: string
   modelName: string
@@ -1817,126 +1848,10 @@ export interface ActorDocTemplate {
   defaultPriority: number
 }
 
-export const ACTOR_DOC_TEMPLATES: ActorDocTemplate[] = [
-  {
-    key: "identity_card",
-    title: "Identity Card",
-    description: "How this actor introduces themselves in public.",
-    defaultVisibility: "always",
-    defaultPriority: 120,
-  },
-  {
-    key: "public_persona",
-    title: "Public Persona",
-    description: "Voice, tone, and how this actor appears to others.",
-    defaultVisibility: "always",
-    defaultPriority: 115,
-  },
-  {
-    key: "soul",
-    title: "Soul",
-    description: "Values, principles, taboos, and emotional core.",
-    defaultVisibility: "always",
-    defaultPriority: 110,
-  },
-  {
-    key: "self_narrative",
-    title: "Self Narrative",
-    description: "How this actor understands themselves.",
-    defaultVisibility: "always",
-    defaultPriority: 105,
-  },
-  {
-    key: "origin_story",
-    title: "Origin Story",
-    description: "Where this actor comes from and what shaped them.",
-    defaultVisibility: "internal_only",
-    defaultPriority: 100,
-  },
-  {
-    key: "relationship_with_user",
-    title: "Relationship With User",
-    description: "How this actor relates to the human user.",
-    defaultVisibility: "always",
-    defaultPriority: 98,
-  },
-  {
-    key: "relationship_with_team",
-    title: "Relationship With Team",
-    description: "How this actor views and works with other actors.",
-    defaultVisibility: "multi_member_only",
-    defaultPriority: 96,
-  },
-  {
-    key: "representation_guidelines",
-    title: "Representation Guidelines",
-    description: "How to speak or act when representing the user.",
-    defaultVisibility: "internal_only",
-    defaultPriority: 94,
-  },
-  {
-    key: "social_protocol",
-    title: "Social Protocol",
-    description: "When to speak, when to stay quiet, and what not to share.",
-    defaultVisibility: "multi_member_only",
-    defaultPriority: 92,
-  },
-  {
-    key: "role_charter",
-    title: "Role Charter",
-    description: "Organizational responsibilities and scope.",
-    defaultVisibility: "always",
-    defaultPriority: 90,
-  },
-  {
-    key: "mission",
-    title: "Mission",
-    description: "Long-term aim, current mission, and success criteria.",
-    defaultVisibility: "always",
-    defaultPriority: 88,
-  },
-  {
-    key: "work_doctrine",
-    title: "Work Doctrine",
-    description: "How this actor approaches work, evidence, and communication.",
-    defaultVisibility: "always",
-    defaultPriority: 86,
-  },
-  {
-    key: "limitations_and_escalation",
-    title: "Limitations And Escalation",
-    description: "Blind spots, refusal zones, and when to ask for help.",
-    defaultVisibility: "always",
-    defaultPriority: 84,
-  },
-  {
-    key: "quirks_and_signatures",
-    title: "Quirks And Signatures",
-    description: "Habits, running jokes, signatures, and expressive details.",
-    defaultVisibility: "always",
-    defaultPriority: 82,
-  },
-  {
-    key: "routines",
-    title: "Routines",
-    description: "Recurring habits, checks, and proactive rhythms.",
-    defaultVisibility: "internal_only",
-    defaultPriority: 80,
-  },
-  {
-    key: "conversation_examples",
-    title: "Conversation Examples",
-    description:
-      "Examples of how this actor speaks, declines, or collaborates.",
-    defaultVisibility: "internal_only",
-    defaultPriority: 78,
-  },
-]
-
-export const ACTOR_DOC_TEMPLATE_MAP: Record<CoreActorDocKey, ActorDocTemplate> =
-  Object.fromEntries(
-    ACTOR_DOC_TEMPLATES.map((template) => [template.key, template])
-  ) as Record<CoreActorDocKey, ActorDocTemplate>
+export {
+  ACTOR_DOC_TEMPLATES,
+  ACTOR_DOC_TEMPLATE_MAP,
+} from "../actor/templates.js"
 
 // ============ Canonical Tool History ============
 export interface CanonicalToolCall {
@@ -1973,14 +1888,9 @@ export type ToolResultOrigin =
       providerType: ProviderType
     }
 
-export const TOOL_RESULT_ORIGIN_KINDS = [
-  "system",
-  "plugin",
-  "device",
-  "provider_native",
-  "model_response",
-] as const
-export type ToolResultOriginKind = (typeof TOOL_RESULT_ORIGIN_KINDS)[number]
+export { TOOL_RESULT_ORIGIN_KINDS } from "../constants/enums.js"
+export type ToolResultOriginKind =
+  (typeof import("../constants/enums.js").TOOL_RESULT_ORIGIN_KINDS)[number]
 
 export interface CanonicalToolResult {
   toolCallId: string
@@ -2017,16 +1927,9 @@ export type CanonicalContextParticipantType =
   | "system"
   | "unknown"
 export type ConversationEventTimelinePolicy =
-  | "none"
-  | "all_members"
-  | "users_only"
-  | "actors_only"
-  | "targeted_members"
+  (typeof CONVERSATION_EVENT_TIMELINE_POLICIES)[number]
 export type ConversationEventContextPolicy =
-  | "none"
-  | "shared"
-  | "actor_private"
-  | "targeted_members"
+  (typeof CONVERSATION_EVENT_CONTEXT_POLICIES)[number]
 
 export interface CanonicalContextAuthor {
   participantId?: string
@@ -2088,14 +1991,19 @@ export interface CanonicalMessageContextItem extends CanonicalContextItemBase {
 }
 
 export type ConversationMessageSubtype =
-  | "chat.message"
-  | "user"
-  | "assistant"
-  | "system"
-  | "tool_result"
-  | "model_error_notice"
+  (typeof CONVERSATION_MESSAGE_SUBTYPES)[number]
 
-export type ConversationFeedMessageType = ConversationMessageSubtype | "summary"
+export type ChatParticipantRemovalState =
+  (typeof CHAT_PARTICIPANT_REMOVAL_STATES)[number]
+
+export type ConversationFeedMessageType =
+  (typeof CONVERSATION_FEED_MESSAGE_TYPES)[number]
+
+export type ConversationFeedItemSubtype =
+  (typeof CONVERSATION_FEED_ITEM_SUBTYPES)[number]
+
+export type ConversationReplyRefSubtype =
+  (typeof CONVERSATION_REPLY_REF_SUBTYPES)[number]
 
 export interface CanonicalToolCallBatchContextItem extends CanonicalContextItemBase {
   kind: "tool_call_batch"
@@ -2339,7 +2247,7 @@ export interface ToolPlugin {
   // Optional presentation descriptor co-located with the system tool. The API
   // display resolver reads it (keyed by the tool's registry name = its system
   // stableKey) to render a friendly title/result. Type from the base package.
-  presentation?: import("@synapse/device-protocol/tool-presentation").ToolPresentationDescriptor
+  presentation?: import("../tool-presentation/index.js").ToolPresentationDescriptor
   conversationTypeMask?: ConversationTypeMask
   resolve?: (ctx: ToolResolveContext) =>
     | {
@@ -2385,7 +2293,7 @@ export interface AIResponse {
 // MCP Plugin Marketplace Types
 // ============================================================
 
-export type MarketplaceItemKind = "plugin" | "skill" | "actor" | "model"
+export type MarketplaceItemKind = (typeof MARKETPLACE_ITEM_KINDS)[number]
 // Plugin transport tiers — single source of truth in constants/enums.ts.
 // McpServerTransport: what the runtime instance-manager can start.
 // PluginSpecTransport: the DB catalog spec column.
@@ -2403,83 +2311,54 @@ export type CapabilityConversationTypePolicyResourceFamily =
 export type AccessTargetType = (typeof ACCESS_TARGET_TYPES)[number]
 export type CapabilityAccessTargetType =
   (typeof CAPABILITY_ACCESS_TARGET_TYPES)[number]
+export type AutomationAccessTargetType =
+  (typeof AUTOMATION_ACCESS_TARGET_TYPES)[number]
+export type ConversationMessageTransportDirection =
+  (typeof CONVERSATION_MESSAGE_TRANSPORT_DIRECTIONS)[number]
+export type DeviceCapabilityAccessSubjectKind =
+  (typeof DEVICE_CAPABILITY_ACCESS_SUBJECT_KINDS)[number]
+export type DeviceCapabilityAccessScopeKind =
+  (typeof DEVICE_CAPABILITY_ACCESS_SCOPE_KINDS)[number]
 export type ReuseScope = (typeof REUSE_SCOPES)[number]
-export type MarketplaceSourceType =
-  | "builtin"
-  | "official"
-  | "workspace_upload"
-  | "user_upload"
-export type MarketplaceLineageKind = "installed_copy" | "fork" | "share"
-export type MarketplaceSyncMode =
-  | "notify"
-  | "manual_merge"
-  | "follow_upstream"
-  | "detached"
+export type PlatformAccessSource = (typeof PLATFORM_ACCESS_SOURCES)[number]
+export type MarketplaceSourceType = (typeof MARKETPLACE_SOURCE_TYPES)[number]
+export type MarketplaceLineageKind = (typeof MARKETPLACE_LINEAGE_KINDS)[number]
+export type MarketplaceSyncMode = (typeof MARKETPLACE_SYNC_MODES)[number]
 export type MarketplaceRequirementKind =
-  | "required"
-  | "recommended"
-  | "optional"
-  | "conflicts_with"
-export type MarketplaceRequirementTargetKind = "package" | "tag"
-export type PluginInstallationMode =
-  | "manual"
-  | "seeded"
-  | "package_required"
-  | "package_recommended"
+  (typeof MARKETPLACE_REQUIREMENT_KINDS)[number]
+export type MarketplaceRequirementTargetKind =
+  (typeof MARKETPLACE_REQUIREMENT_TARGET_KINDS)[number]
+export type PluginInstallationMode = (typeof PLUGIN_INSTALLATION_MODES)[number]
 export type MarketplaceVersionStatus =
-  | "draft"
-  | "active"
-  | "deprecated"
-  | "archived"
-export type AutomationEventSourceAccessGrantStatus = "active" | "revoked"
+  (typeof MARKETPLACE_VERSION_STATUSES)[number]
+export type AutomationEventSourceAccessGrantStatus = AccessBindingStatus
 export type MarketplaceRequirementStatus =
-  | "satisfied"
-  | "missing_required"
-  | "missing_recommended"
-  | "scope_mismatch"
-  | "config_incomplete"
-export type MarketplaceAssetKind =
-  | "skill_markdown"
-  | "reference_markdown"
-  | "script"
-  | "json"
-  | "text"
-  | "binary"
+  (typeof MARKETPLACE_REQUIREMENT_STATUSES)[number]
+export type MarketplaceAssetKind = (typeof MARKETPLACE_ASSET_KINDS)[number]
 export type LocalizedText = Record<string, string>
-export type PluginConfigFieldType =
-  | "text"
-  | "textarea"
-  | "number"
-  | "boolean"
-  | "select"
-  | "multiselect"
-  | "secret"
-  | "auth_connection"
-  | "file"
-export type PluginInstallStepKind =
-  | "form"
-  | "auth"
-  | "check"
-  | "confirm"
-  | "reuse_scope"
-  | "integration_events"
-export type PluginInstallActionKind = "auth_start" | "external_link" | "noop"
+export type PluginConfigFieldType = (typeof PLUGIN_CONFIG_FIELD_TYPES)[number]
+export type PluginInstallStepKind = (typeof PLUGIN_INSTALL_STEP_KINDS)[number]
+export type PluginInstallStepScope = (typeof PLUGIN_INSTALL_STEP_SCOPES)[number]
+export type PluginInstallActionKind =
+  (typeof PLUGIN_INSTALL_ACTION_KINDS)[number]
 export type PluginAuthBindingDriverKind =
-  | "oauth2_authorization_code_pkce"
-  | "mijia_qr_login"
-  | "feishu_cli_setup"
+  (typeof PLUGIN_AUTH_BINDING_DRIVER_KINDS)[number]
+export type PluginAuthValueSourceKind =
+  (typeof PLUGIN_AUTH_VALUE_SOURCE_KINDS)[number]
+export type PluginAuthDerivedValueName =
+  (typeof PLUGIN_AUTH_DERIVED_VALUE_NAMES)[number]
 export type PluginAuthSessionStatus =
   (typeof PLUGIN_AUTH_SESSION_STATUSES)[number]
 export type PluginAuthConnectionStatus =
   (typeof PLUGIN_AUTH_CONNECTION_STATUSES)[number]
-export type PluginAuthSessionPhase =
-  | "awaiting_start"
-  | "awaiting_external_input"
-  | "awaiting_callback"
-  | "pending_scan"
-  | "pending_confirm"
-  | "finalizing"
-export type PluginAuthChallengeKind = "redirect" | "qr_code" | "none"
+export type PluginAuthSessionPhase = (typeof PLUGIN_AUTH_SESSION_PHASES)[number]
+export type PluginAuthChallengeKind =
+  (typeof PLUGIN_AUTH_CHALLENGE_KINDS)[number]
+export type PluginAuthChallengeOpenMode =
+  (typeof PLUGIN_AUTH_CHALLENGE_OPEN_MODES)[number]
+export type McpValidationRuleKind = (typeof MCP_VALIDATION_RULE_KINDS)[number]
+export type PluginInstallationStatus =
+  (typeof PLUGIN_INSTALLATION_STATUSES)[number]
 
 // AccessTarget / CapabilityAccessTarget are canonical scoped-subject payloads:
 // {subject: SubjectRef; scope?: SubjectRef}. Conversation scoping is represented
@@ -2487,100 +2366,43 @@ export type PluginAuthChallengeKind = "redirect" | "qr_code" | "none"
 export type AccessTarget = ScopedSubjectTarget
 export type CapabilityAccessTarget = ScopedSubjectTarget
 
-export interface PluginAuthValueSource {
-  source: "config" | "env" | "literal" | "derived"
-  field?: string
-  env?: string
-  value?: unknown
-  name?: "app_base_url" | "oauth_callback_url"
-}
-
-export interface PluginConfigFieldOption {
-  value: string
-  labelI18n: LocalizedText
-  descriptionI18n?: LocalizedText
-}
-
-export interface PluginConfigFieldDefinition {
-  key: string
-  type: PluginConfigFieldType
-  titleI18n: LocalizedText
-  descriptionI18n?: LocalizedText
-  placeholderI18n?: LocalizedText
-  required?: boolean
-  defaultValue?: unknown
-  options?: PluginConfigFieldOption[]
-  secret?: boolean
-  serverManaged?: boolean
-  authBindingKey?: string
-  validation?: Record<string, unknown>
-  metadata?: Record<string, unknown>
-}
-
-export interface PluginInstallAction {
-  kind: PluginInstallActionKind
-  bindingKey?: string
-  url?: string
-  buttonLabelI18n?: LocalizedText
-  metadata?: Record<string, unknown>
-}
-
-export interface PluginInstallStep {
-  id: string
-  kind: PluginInstallStepKind
-  titleI18n: LocalizedText
-  descriptionI18n?: LocalizedText
-  scope: "workspace" | "plugin"
-  fields: string[]
-  optional?: boolean
-  helpUrl?: string
-  helpTextI18n?: LocalizedText
-  action?: PluginInstallAction
-  metadata?: Record<string, unknown>
-}
-
-export interface PluginInstallFlow {
-  steps: PluginInstallStep[]
+// Plugin config-field / install-step / auth-binding / config-state shapes are
+// defined as zod schemas in ../schemas/mcp-plugins.ts (the single source) and
+// re-exported here as inferred types so this pure-type surface stays zod-free.
+// Imported (not just re-exported) so other interfaces in this file can use them.
+// (See the existing view re-exports near the end of this file.)
+import type {
+  PluginAuthValueSource,
+  PluginConfigFieldOption,
+  PluginConfigFieldDefinition,
+  PluginInstallAction,
+  PluginInstallStep,
+  PluginInstallFlow,
+  PluginAuthBindingDefinition,
+  PluginConfigFieldState,
+  McpValidationRule,
+  McpSetupStep,
+} from "../schemas/mcp-plugins.js"
+export type {
+  PluginAuthValueSource,
+  PluginConfigFieldOption,
+  PluginConfigFieldDefinition,
+  PluginInstallAction,
+  PluginInstallStep,
+  PluginInstallFlow,
+  PluginAuthBindingDefinition,
+  PluginConfigFieldState,
+  McpValidationRule,
+  McpSetupStep,
 }
 
 export interface PluginAuthChallenge {
   kind: PluginAuthChallengeKind
   url?: string
   qrUrl?: string
-  openMode?: "popup" | "replace"
+  openMode?: PluginAuthChallengeOpenMode
   expiresAt?: Timestamp
   metadata?: Record<string, unknown>
-}
-
-export interface PluginAuthBindingDefinition {
-  key: string
-  driver: PluginAuthBindingDriverKind
-  fieldKey: string
-  displayNameI18n: LocalizedText
-  descriptionI18n?: LocalizedText
-  prerequisiteFields?: string[]
-  authorizeUrl?: string
-  tokenUrl?: string
-  userInfoUrl?: string
-  scopes?: string[]
-  audience?: string
-  extraAuthorizeParams?: Record<string, string>
-  extraTokenParams?: Record<string, string>
-  profileIdPath?: string
-  profileDisplayNamePath?: string
-  profileAvatarUrlPath?: string
-  reusable?: boolean
-  inputs?: Record<string, PluginAuthValueSource>
-  metadata?: Record<string, unknown>
-}
-
-export interface PluginConfigFieldState {
-  key: string
-  isConfigured: boolean
-  maskedValue?: string
-  authConnectionId?: string
-  accountDisplayName?: string
-  updatedAt?: Timestamp
 }
 
 export interface AccessPolicy {
@@ -2660,7 +2482,7 @@ export interface MarketplaceVersion {
   configSchema: Record<string, unknown>
   configFields: PluginConfigFieldDefinition[]
   defaultConfig: Record<string, unknown>
-  transport?: PluginTransport
+  transport?: PluginSpecTransport
   entryPoint?: string
   toolsManifest: MarketplaceTool[]
   validationRules: McpValidationRule[]
@@ -2766,7 +2588,7 @@ export interface WorkspaceAppGrant {
   id: string
   workspaceId: string
   workspaceAppId: string
-  target: CapabilityAccessTarget
+  target: WorkspaceAppGrantTargetContract
   permissions: WorkspaceAppGrantPermission[]
   status: WorkspaceAppGrantStatus
   source: WorkspaceAppGrantSource
@@ -2782,7 +2604,7 @@ export interface WorkspaceAppGrantRequest {
   id: string
   workspaceId: string
   workspaceAppId: string
-  grantee: CapabilityAccessTarget
+  grantee: WorkspaceAppGrantTargetContract
   requestedPermissions: WorkspaceAppGrantPermission[]
   requesterWorkspaceMemberId: string
   status: WorkspaceAppGrantRequestStatus
@@ -2882,21 +2704,12 @@ export interface PluginInstallPlan {
   }
 }
 
-export type ActorPackageDependencyKind = Extract<
-  MarketplaceRequirementKind,
-  "required" | "recommended"
->
-export type ActorPackageTargetKind = Extract<
-  MarketplaceItemKind,
-  "plugin" | "skill"
->
-export type ActorPackageSyncMode = "notify" | "manual_merge"
+export type ActorPackageDependencyKind =
+  (typeof ACTOR_PACKAGE_DEPENDENCY_KINDS)[number]
+export type ActorPackageTargetKind = (typeof ACTOR_PACKAGE_TARGET_KINDS)[number]
+export type ActorPackageSyncMode = (typeof ACTOR_PACKAGE_SYNC_MODES)[number]
 export type ActorPackageLinkStatus =
-  | "up_to_date"
-  | "update_available"
-  | "diverged"
-  | "update_available_with_local_changes"
-  | "detached"
+  (typeof ACTOR_PACKAGE_LINK_STATUSES)[number]
 
 export interface ActorPackageDependency {
   requirementId?: string
@@ -2965,10 +2778,10 @@ export interface AvailableSkillSummary {
 
 export type SkillAccessTargetType = CapabilityAccessTargetType
 
-export type SkillSourceType = "github" | "clawhub"
+export type SkillSourceType = (typeof SKILL_SOURCE_TYPES)[number]
 export type SkillMirrorRefreshMode = "manual"
-export type SkillMirrorSyncStatus = "pending" | "synced" | "error"
-export type SkillFrontmatterEffort = "low" | "medium" | "high" | "max"
+export type SkillMirrorSyncStatus = (typeof SKILL_MIRROR_SYNC_STATUSES)[number]
+export type SkillFrontmatterEffort = (typeof SKILL_FRONTMATTER_EFFORTS)[number]
 export type SkillFrontmatterContext = "fork"
 
 export interface SkillFrontmatter {
@@ -3151,74 +2964,14 @@ export interface McpEventLog {
   createdAt: Timestamp
 }
 
-export interface McpValidationRule {
-  field: string
-  rule:
-    | "required"
-    | "pattern"
-    | "url"
-    | "min_length"
-    | "max_length"
-    | "prefix"
-    | "enum"
-  value?: string | number | string[]
-  message: string
-}
-
-export interface McpSetupStep {
-  id: string
-  kind?: PluginInstallStepKind
-  title?: string
-  titleI18n?: LocalizedText
-  description?: string
-  descriptionI18n?: LocalizedText
-  scope: "workspace" | "plugin"
-  fields: string[]
-  optional?: boolean
-  helpUrl?: string
-  helpText?: string
-  helpTextI18n?: LocalizedText
-  action?: PluginInstallAction
-  metadata?: Record<string, unknown>
-}
-
 export type ConversationParticipantType =
   (typeof CONVERSATION_PARTICIPANT_TYPES)[number]
 
-export type TransportKind = (typeof TRANSPORT_KINDS)[number]
+export type ConversationParticipantRoleKey =
+  (typeof CONVERSATION_PARTICIPANT_ROLE_KEYS)[number]
 
-/**
- * Runtime guard for `TransportKind`. Use instead of hard-coding
- * `value === "feishu" || value === "weixin"` chains in dispatch sites —
- * those drift out of sync when new transports land.
- */
-export function isTransportKind(value: unknown): value is TransportKind {
-  return (
-    typeof value === "string" &&
-    (TRANSPORT_KINDS as readonly string[]).includes(value)
-  )
-}
-
-/**
- * Static fallback label for a `TransportKind`. Intentionally NOT
- * exhaustiveness-checked: adding a new transport must not require
- * editing this file. The authoritative display name is on
- * `TransportConnectorCapability.displayName`; this helper only fires
- * when the metadata provider hasn't mounted yet (client) or no
- * connector is registered (server-side prose).
- */
-export function describeTransportKind(kind: TransportKind): string {
-  switch (kind) {
-    case "feishu":
-      return "Feishu"
-    case "weixin":
-      return "WeChat"
-    case "wecom":
-      return "WeCom"
-    default:
-      return String(kind)
-  }
-}
+import type { TransportKind } from "../constants/enums.js"
+export type { TransportKind } from "../constants/enums.js"
 
 export type TransportConnectionMode =
   (typeof TRANSPORT_CONNECTION_MODES)[number]
@@ -3248,7 +3001,7 @@ export interface ConversationReplyRef {
   ref?: string
   sequence?: number
   itemType: (typeof CONVERSATION_ITEM_TYPES)[number]
-  subtype: string
+  subtype: ConversationReplyRefSubtype
   author?: ConversationEntityRef
   previewText: string
   previewBlocks: CanonicalContentBlock[]
@@ -3360,12 +3113,7 @@ export interface TransportSessionSummary {
   endpoint: TransportEndpointSummary
 }
 
-export type WeixinQrLoginStatus =
-  | "waiting"
-  | "scanned"
-  | "confirmed"
-  | "expired"
-  | "error"
+export type WeixinQrLoginStatus = (typeof WEIXIN_QR_LOGIN_STATUSES)[number]
 
 export interface WeixinQrLoginSessionSummary {
   sessionId: string
@@ -3399,10 +3147,7 @@ export interface CurrentUserWeixinBindingSummary {
  * boundary; UNKNOWN -> "fail" with a descriptive message.
  */
 export type DingtalkDeviceFlowStatus =
-  | "waiting"
-  | "success"
-  | "fail"
-  | "expired"
+  (typeof DINGTALK_DEVICE_FLOW_STATUSES)[number]
 
 /**
  * Summary of a DingTalk Device Flow registration session.
@@ -3493,7 +3238,7 @@ export interface TransportMessageLink {
   itemId: UUID
   transportKind: TransportKind
   transportEndpointId: UUID
-  direction: "inbound" | "outbound"
+  direction: ConversationMessageTransportDirection
   deliveryStatus: TransportDeliveryStatus
   externalMessageId?: string
   /** Platform reply-to id (Feishu parent_id). Populated on inbound when
@@ -3511,7 +3256,7 @@ export interface TransportMessageLink {
 }
 
 export interface ConversationMessageTransportContext {
-  direction: "inbound" | "outbound"
+  direction: ConversationMessageTransportDirection
   transportKind: TransportKind
   transportAccountId?: UUID
   endpointType?: TransportEndpointType
@@ -3524,7 +3269,7 @@ export interface ConversationMessageTransportContext {
 export interface ConversationMessageTransportDelivery {
   linkId: UUID
   transportKind: TransportKind
-  direction: "inbound" | "outbound"
+  direction: ConversationMessageTransportDirection
   deliveryStatus: TransportDeliveryStatus
   endpointType?: TransportEndpointType
   endpointExternalId?: string
@@ -3534,28 +3279,13 @@ export interface ConversationMessageTransportDelivery {
   metadata: Record<string, unknown>
 }
 
-export type TaskRequestKind = (typeof TASK_REQUEST_KINDS)[number]
-export type TargetedTaskRequestKind =
-  (typeof TARGETED_TASK_REQUEST_KINDS)[number]
+export type {
+  TaskRequestKind,
+  TargetedTaskRequestKind,
+} from "../constants/enums.js"
 
 export type TaskLifecycleStatus = (typeof TASK_LIFECYCLE_STATUSES)[number]
 export type TaskOutcome = (typeof TASK_OUTCOMES)[number]
-
-export function isTaskRequestKind(value: unknown): value is TaskRequestKind {
-  return (
-    typeof value === "string" &&
-    (TASK_REQUEST_KINDS as readonly string[]).includes(value)
-  )
-}
-
-export function isTargetedTaskRequestKind(
-  value: unknown
-): value is TargetedTaskRequestKind {
-  return (
-    typeof value === "string" &&
-    (TARGETED_TASK_REQUEST_KINDS as readonly string[]).includes(value)
-  )
-}
 
 export interface TaskInputOption {
   id: string
@@ -3730,10 +3460,6 @@ export interface RuntimeAuthorizationRequestedAction {
 // `RuntimeAuthorizationGrantSpec` (which once doubled as both).
 // P4: derived from the Zod GrantPolicySchema (see packages/shared/src/access/policies).
 export type SharedRuntimeAuthorizationGrantSpec = GrantPolicyBase
-/** @deprecated Use SharedRuntimeAuthorizationGrantSpec (camelCase, API side) or
- * RuntimeAuthorizationGrantWireSpec (snake_case, wire side from
- * @synapse/device-protocol) to disambiguate. */
-export type RuntimeAuthorizationGrantSpec = SharedRuntimeAuthorizationGrantSpec
 
 export interface RuntimeAuthorizationGrantOption {
   id: string
@@ -3850,16 +3576,7 @@ export interface TaskNoticeSummary {
 }
 
 export type ConversationFeedEventType =
-  | "participant_joined"
-  | "participant_kicked"
-  | "participant_left"
-  | "memory_saved"
-  | "memory_updated"
-  | "actor_renamed"
-  | "actor_avatar_changed"
-  | "automation_notice"
-  | "task_requested"
-  | "task_notice"
+  (typeof CONVERSATION_FEED_EVENT_TYPES)[number]
 
 export interface ConversationFeedEventPayloadMap {
   participant_joined: {
@@ -3997,264 +3714,8 @@ export type ConversationFeedEventItem<
   T extends ConversationFeedEventType = ConversationFeedEventType,
 > = ConversationFeedEventItemMap[T]
 
-function formatConversationEntityName(
-  entity: Partial<ConversationEntityRef> | undefined,
-  fallback: string
-) {
-  const name = typeof entity?.name === "string" ? entity.name.trim() : ""
-  return name || fallback
-}
-
-function formatConversationEntityList(
-  entities: Array<Partial<ConversationEntityRef> | undefined>,
-  fallback = "Unknown"
-) {
-  const names = entities
-    .map((entity) => formatConversationEntityName(entity, fallback))
-    .filter(Boolean)
-  if (names.length === 0) return fallback
-  if (names.length === 1) return names[0]!
-  if (names.length === 2) return `${names[0]} and ${names[1]}`
-  return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`
-}
-
-function summarizeParticipantEvent(
-  eventType: Extract<
-    ConversationFeedEventType,
-    "participant_joined" | "participant_kicked" | "participant_left"
-  >,
-  payload:
-    | ConversationFeedEventPayloadMap["participant_joined"]
-    | ConversationFeedEventPayloadMap["participant_kicked"]
-    | ConversationFeedEventPayloadMap["participant_left"]
-) {
-  const initiator = payload.initiator
-  const participants = Array.isArray(payload.participants)
-    ? payload.participants
-    : []
-  const initiatorName = formatConversationEntityName(initiator, "")
-  const initiatorParticipantId = initiator?.participantId
-  const participantList = formatConversationEntityList(participants)
-  const nonInitiatorParticipants = initiatorParticipantId
-    ? participants.filter(
-        (participant) => participant.participantId !== initiatorParticipantId
-      )
-    : participants
-
-  if (eventType === "participant_joined") {
-    if (initiatorName) {
-      if (
-        initiatorParticipantId &&
-        participants.some(
-          (participant) => participant.participantId === initiatorParticipantId
-        )
-      ) {
-        if (nonInitiatorParticipants.length === 0) {
-          return `${initiatorName} joined the conversation`
-        }
-        return `${initiatorName} started the conversation with ${formatConversationEntityList(nonInitiatorParticipants)}`
-      }
-      return `${initiatorName} invited ${participantList} to the conversation`
-    }
-    return `${participantList} joined the conversation`
-  }
-
-  if (eventType === "participant_kicked") {
-    if (initiatorName) {
-      return `${initiatorName} removed ${participantList} from the conversation`
-    }
-    return `${participantList} was removed from the conversation`
-  }
-
-  if (initiatorName && initiatorParticipantId && participants.length === 1) {
-    const leavingParticipant = participants[0]
-    if (
-      leavingParticipant &&
-      leavingParticipant.participantId === initiatorParticipantId
-    ) {
-      return `${initiatorName} left the conversation`
-    }
-  }
-  return `${participantList} left the conversation`
-}
-
-export function summarizeConversationEvent(
-  eventType: ConversationFeedEventType | string,
-  payload: unknown
-) {
-  const eventPayload =
-    payload && typeof payload === "object"
-      ? (payload as Record<string, unknown>)
-      : {}
-
-  if (eventType === "participant_joined") {
-    return summarizeParticipantEvent(
-      "participant_joined",
-      eventPayload as ConversationFeedEventPayloadMap["participant_joined"]
-    )
-  }
-
-  if (eventType === "participant_kicked") {
-    return summarizeParticipantEvent(
-      "participant_kicked",
-      eventPayload as ConversationFeedEventPayloadMap["participant_kicked"]
-    )
-  }
-
-  if (eventType === "participant_left") {
-    return summarizeParticipantEvent(
-      "participant_left",
-      eventPayload as ConversationFeedEventPayloadMap["participant_left"]
-    )
-  }
-
-  if (eventType === "memory_saved" || eventType === "memory_updated") {
-    const textDigest =
-      typeof eventPayload.textDigest === "string"
-        ? eventPayload.textDigest.trim()
-        : ""
-    const scope =
-      typeof eventPayload.memorySpaceType === "string"
-        ? eventPayload.memorySpaceType
-        : typeof eventPayload.memoryScope === "string"
-          ? eventPayload.memoryScope
-          : "memory"
-    const actionLabel = eventType === "memory_updated" ? "updated" : "saved"
-    const summary = textDigest || "durable memory saved"
-    return `Memory ${actionLabel}: ${summary} (${scope})`
-  }
-
-  if (eventType === "actor_renamed") {
-    const newName =
-      typeof eventPayload.newName === "string"
-        ? eventPayload.newName.trim()
-        : "Unknown"
-    return `Actor renamed: will now be called ${newName}.`
-  }
-
-  if (eventType === "actor_avatar_changed") {
-    const avatarEmoji =
-      typeof eventPayload.newAvatarEmoji === "string"
-        ? eventPayload.newAvatarEmoji.trim()
-        : ""
-    if (avatarEmoji) {
-      return `Actor avatar updated to ${avatarEmoji}.`
-    }
-    return "Actor avatar updated."
-  }
-
-  if (eventType === "automation_notice") {
-    const messageBlocks = Array.isArray(eventPayload.messageBlocks)
-      ? (eventPayload.messageBlocks as CanonicalContentBlock[])
-      : []
-    const messageFromBlocks = extractText(messageBlocks).trim()
-    const message =
-      messageFromBlocks ||
-      (typeof eventPayload.message === "string"
-        ? eventPayload.message.trim()
-        : "")
-    if (message) return message
-    const sourceTitle =
-      typeof eventPayload.sourceTitle === "string"
-        ? eventPayload.sourceTitle.trim()
-        : ""
-    const sourceSummary =
-      typeof eventPayload.sourceSummary === "string"
-        ? eventPayload.sourceSummary.trim()
-        : ""
-    if (sourceTitle && sourceSummary) {
-      return `${sourceTitle}: ${sourceSummary}`
-    }
-    if (sourceTitle) return sourceTitle
-    if (sourceSummary) return sourceSummary
-    const sourceLabel =
-      typeof eventPayload.sourceLabel === "string"
-        ? eventPayload.sourceLabel.trim()
-        : ""
-    if (sourceLabel) return sourceLabel
-    return "Automation notice"
-  }
-
-  if (eventType === "task_notice") {
-    const summary =
-      typeof eventPayload.summary === "string"
-        ? eventPayload.summary.trim()
-        : ""
-    if (summary) return summary
-    const toolName =
-      typeof eventPayload.toolName === "string"
-        ? eventPayload.toolName.trim()
-        : "tool"
-    const status =
-      typeof eventPayload.status === "string"
-        ? eventPayload.status.trim()
-        : "completed"
-    return `${toolName} ${status}`
-  }
-
-  if (eventType === "task_requested") {
-    const task =
-      eventPayload.task && typeof eventPayload.task === "object"
-        ? (eventPayload.task as TaskSummary)
-        : undefined
-    if (!task) {
-      return "Task requested"
-    }
-    if (task.kind === TASK_REQUEST_KIND.USER_INPUT) {
-      const targetName =
-        task.target?.name?.trim() ||
-        (task.requester?.participantType ===
-        CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT
-          ? "the group"
-          : "a user")
-      const prompt = task.userInput?.title?.trim() || "A question"
-      if (task.lifecycleStatus === "cancelled") {
-        return `Input request for ${targetName} was cancelled: ${prompt}`
-      }
-      return task.lifecycleStatus === "completed" && task.outcome === "answered"
-        ? `${targetName} answered: ${prompt}`
-        : `Input requested from ${targetName}: ${prompt}`
-    }
-    if (task.kind === TASK_REQUEST_KIND.PLAN_APPROVAL) {
-      const targetName =
-        task.target?.name?.trim() ||
-        (task.requester?.participantType ===
-        CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT
-          ? "the group"
-          : "a user")
-      const title = task.planApproval?.title?.trim() || "Plan approval"
-      if (task.lifecycleStatus === "cancelled") {
-        return `Plan approval for ${targetName} was cancelled: ${title}`
-      }
-      if (task.lifecycleStatus === "completed" && task.outcome === "approved") {
-        return `${targetName} approved: ${title}`
-      }
-      if (
-        task.lifecycleStatus === "completed" &&
-        task.outcome === "revision_requested"
-      ) {
-        return `${targetName} requested changes: ${title}`
-      }
-      return `Plan approval requested from ${targetName}: ${title}`
-    }
-    const deviceName =
-      task.runtimeAuthorization?.deviceDisplayName?.trim() || "device"
-    if (task.lifecycleStatus === "cancelled") {
-      return `Runtime authorization request was cancelled for ${deviceName}`
-    }
-    if (task.lifecycleStatus === "completed" && task.outcome === "denied") {
-      const resolverName = task.resolvedBy?.name?.trim() || "A user"
-      return `${resolverName} rejected access for ${deviceName}`
-    }
-    if (task.lifecycleStatus === "completed" && task.outcome === "granted") {
-      const resolverName = task.resolvedBy?.name?.trim() || "A user"
-      return `${resolverName} approved access for ${deviceName}`
-    }
-    return `Runtime authorization requested for ${deviceName}`
-  }
-
-  return `[Event: ${eventType}]`
-}
+// formatConversationEntityName / summarizeConversationEvent moved to
+// ../conversation/index.ts (runtime) per §2.2.1; re-exported via root barrel.
 
 export type ConversationFeedItem =
   | ConversationFeedMessageItem
@@ -4281,7 +3742,7 @@ export interface ChatParticipantSummary extends Omit<
   joinedAt: Timestamp
   leftAt?: Timestamp
   sessionId?: UUID
-  sessionStatus?: string
+  sessionStatus?: SessionStatus | RemoteAgentRuntimeStateType
 }
 
 interface ChatConversationItemBase {
@@ -4314,8 +3775,15 @@ interface ChatConversationItemBase {
 }
 
 export interface ChatConversationMessageItem extends ChatConversationItemBase {
-  itemType: "message" | "summary" | "control"
-  subtype: ConversationFeedMessageType
+  itemType: "message" | "control"
+  subtype: ConversationMessageSubtype
+  transport?: ConversationMessageTransportContext
+  transportDeliveries?: ConversationMessageTransportDelivery[]
+}
+
+export interface ChatConversationSummaryItem extends ChatConversationItemBase {
+  itemType: "summary"
+  subtype: typeof CONVERSATION_FEED_MESSAGE_TYPE.SUMMARY
   transport?: ConversationMessageTransportContext
   transportDeliveries?: ConversationMessageTransportDelivery[]
 }
@@ -4336,6 +3804,7 @@ export type ChatConversationEventItem<
 
 export type ChatConversationItem =
   | ChatConversationMessageItem
+  | ChatConversationSummaryItem
   | ChatConversationEventItem
 
 export interface ChatConversationPresentation {
@@ -4359,7 +3828,7 @@ export interface ChatConversationView {
   title: string
   kind: (typeof CONVERSATION_KINDS)[number]
   isIm: boolean
-  status: "active" | "completed"
+  status: ConversationStatus
   unreadCount: number
   muted: boolean
   archived: boolean
@@ -4374,7 +3843,7 @@ export interface ChatConversationView {
     itemId: UUID
     sequence: number
     itemType: ChatConversationItem["itemType"]
-    subtype: string
+    subtype: ConversationFeedItemSubtype
     previewText: string
     authorParticipantId?: UUID
     author?: ConversationEntityRef
@@ -4425,8 +3894,8 @@ export interface ChatSyncEventPayloadMap {
    */
   "conversation.membership.updated": {
     conversationId: UUID
-    selfState: "active" | "removed" | "left"
-    reason?: "kicked" | "left" | "added"
+    selfState: (typeof CONVERSATION_PARTICIPANT_STATES)[number]
+    reason?: (typeof CHAT_MEMBERSHIP_UPDATE_REASONS)[number]
     participants: ChatParticipantSummary[]
   }
 }
@@ -4631,22 +4100,10 @@ export type ChatTaskResolveResponse =
   | ChatTaskResolveAppliedResponse
   | ChatTaskResolveConflictResponse
 
-export function isChatTaskResolveConflictResponse(
-  value: unknown
-): value is ChatTaskResolveConflictResponse {
-  return Boolean(
-    value &&
-    typeof value === "object" &&
-    (value as { outcome?: unknown }).outcome === "conflict" &&
-    (value as { code?: unknown }).code === "task_conflict" &&
-    typeof (value as { error?: unknown }).error === "string" &&
-    (value as { task?: unknown }).task &&
-    typeof (value as { task?: unknown }).task === "object"
-  )
-}
+// isChatTaskResolveConflictResponse moved to ../conversation/index.ts (§2.2.1)
 
-export type RealtimeAsrAudioFormat = "pcm" | "ogg"
-export type RealtimeAsrAudioCodec = "raw" | "opus"
+export type RealtimeAsrAudioFormat = (typeof REALTIME_ASR_AUDIO_FORMATS)[number]
+export type RealtimeAsrAudioCodec = (typeof REALTIME_ASR_AUDIO_CODECS)[number]
 
 export interface RealtimeAsrAudioConfig {
   format: RealtimeAsrAudioFormat
@@ -4786,658 +4243,8 @@ export type ChatSocketEvent<
   type: T
   payload: ChatSocketEventPayloadMap[T]
 }
-
-// ============ Content Helpers ============
-
-export function createCanonicalContentBlockId(_prefix = "block"): UUID {
-  // crypto.randomUUID is available in every runtime this ships to. The prefix
-  // arg is retained for call-site readability but no longer affects the id (a
-  // real UUID has no prefix); it previously only fed a Math.random fallback.
-  return globalThis.crypto.randomUUID()
-}
-
-export function textBlock(text: string, id?: UUID): CanonicalTextBlock {
-  return {
-    id:
-      typeof id === "string" && id.trim().length > 0
-        ? id
-        : createCanonicalContentBlockId("text"),
-    type: "text",
-    text,
-  }
-}
-
-export function fileRefBlock(
-  input: Omit<CanonicalFileRefBlock, "id" | "type"> & { id?: UUID }
-): CanonicalFileRefBlock {
-  return {
-    id:
-      typeof input.id === "string" && input.id.trim().length > 0
-        ? input.id
-        : createCanonicalContentBlockId("file"),
-    type: "file_ref",
-    sha256: input.sha256,
-    ...(input.path !== undefined ? { path: input.path } : {}),
-    mimeType: input.mimeType,
-    name: input.name,
-    sizeBytes: input.sizeBytes,
-    category: input.category,
-  }
-}
-
-export function mentionBlock(
-  input: Omit<CanonicalMentionBlock, "id" | "type"> & { id?: UUID }
-): CanonicalMentionBlock {
-  return {
-    id:
-      typeof input.id === "string" && input.id.trim().length > 0
-        ? input.id
-        : createCanonicalContentBlockId("mention"),
-    type: "mention",
-    mention: input.mention,
-  }
-}
-
-function normalizeContentBlockSizeBytes(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value
-  }
-  if (typeof value === "string" && value.trim().length > 0) {
-    const parsed = Number(value)
-    if (Number.isFinite(parsed)) {
-      return parsed
-    }
-  }
-  return null
-}
-
-function isConversationEntityRef(
-  value: unknown
-): value is ConversationEntityRef {
-  if (!value || typeof value !== "object") return false
-  const entity = value as Record<string, unknown>
-  return (
-    typeof entity.participantType === "string" &&
-    entity.participantType.trim().length > 0 &&
-    (entity.participantId === undefined ||
-      typeof entity.participantId === "string") &&
-    (entity.workspaceMemberId === undefined ||
-      typeof entity.workspaceMemberId === "string") &&
-    (entity.actorId === undefined || typeof entity.actorId === "string") &&
-    (entity.userId === undefined || typeof entity.userId === "string") &&
-    (entity.externalUserKey === undefined ||
-      typeof entity.externalUserKey === "string") &&
-    (entity.transportAddressId === undefined ||
-      typeof entity.transportAddressId === "string") &&
-    (entity.transportKind === undefined ||
-      isTransportKind(entity.transportKind)) &&
-    (entity.name === undefined || typeof entity.name === "string") &&
-    (entity.title === undefined || typeof entity.title === "string") &&
-    (entity.role === undefined || typeof entity.role === "string") &&
-    (entity.avatarUrl === undefined || typeof entity.avatarUrl === "string") &&
-    (entity.avatarEmoji === undefined || typeof entity.avatarEmoji === "string")
-  )
-}
-
-export function formatMentionText(block: CanonicalMentionBlock): string {
-  const name = block.mention.name?.trim() || "Unknown"
-  return `@${name}`
-}
-
-export function isCanonicalContentBlock(
-  value: unknown
-): value is CanonicalContentBlock {
-  if (!value || typeof value !== "object") return false
-
-  const block = value as Record<string, unknown>
-  if (typeof block.id !== "string" || block.id.trim().length === 0) return false
-
-  if (block.type === "text") {
-    return typeof block.text === "string"
-  }
-
-  if (block.type === "file_ref") {
-    const sizeBytes = normalizeContentBlockSizeBytes(block.sizeBytes)
-    return (
-      // Redesigned FileRefBlock (file-service refactor): sha256 is the always-
-      // present content identity; path is optional (present only for live
-      // mounted spaces); name replaces originalName; fileId/url were dropped.
-      // MUST mirror normalizeCanonicalContentBlocks' file_ref validation below,
-      // else this guard (used as a strict filter in chat/event-registry.ts and
-      // chat/message-content.ts) would reject every block fileRefBlock() emits.
-      typeof block.sha256 === "string" &&
-      (block.path === undefined || typeof block.path === "string") &&
-      typeof block.mimeType === "string" &&
-      typeof block.name === "string" &&
-      sizeBytes !== null &&
-      (block.category === "image" ||
-        block.category === "audio" ||
-        block.category === "video" ||
-        block.category === "document")
-    )
-  }
-
-  if (block.type === "mention") {
-    return isConversationEntityRef(block.mention)
-  }
-
-  return false
-}
-
-export function normalizeCanonicalContentBlocks(
-  blocks: CanonicalContentBlockInput[]
-): CanonicalContentBlock[] {
-  const normalized: CanonicalContentBlock[] = []
-
-  for (const block of blocks || []) {
-    if (!block || typeof block !== "object") continue
-
-    if (block.type === "text") {
-      if (typeof block.text !== "string") continue
-      normalized.push(textBlock(block.text, block.id))
-      continue
-    }
-
-    if (block.type === "file_ref") {
-      const sizeBytes = normalizeContentBlockSizeBytes(block.sizeBytes)
-      if (
-        typeof block.sha256 !== "string" ||
-        (block.path !== undefined && typeof block.path !== "string") ||
-        typeof block.mimeType !== "string" ||
-        typeof block.name !== "string" ||
-        sizeBytes === null ||
-        (block.category !== "image" &&
-          block.category !== "audio" &&
-          block.category !== "video" &&
-          block.category !== "document")
-      ) {
-        continue
-      }
-
-      normalized.push(
-        fileRefBlock({
-          ...block,
-          sizeBytes,
-        })
-      )
-      continue
-    }
-
-    if (block.type === "mention") {
-      if (!isConversationEntityRef(block.mention)) continue
-
-      normalized.push(
-        mentionBlock({
-          id: block.id,
-          mention: block.mention,
-        })
-      )
-    }
-  }
-
-  return normalized
-}
-
-/** Wrap a plain string into CanonicalContentBlock[] */
-export function textBlocks(s: string): CanonicalContentBlock[] {
-  return [textBlock(s)]
-}
-
-/**
- * Convenience constructor for the common text-only CallableToolResult.
- * Equivalent to `{ content: textBlocks(text), ...opts }` but easier to read
- * in plugin handlers that return plain text plus an isError flag.
- */
-export function textResult(
-  text: string,
-  opts?: {
-    isError?: boolean
-    structuredContent?: Record<string, unknown>
-    metadata?: Record<string, unknown>
-  }
-): CallableToolResult {
-  const result: CallableToolResult = { content: textBlocks(text) }
-  if (opts?.isError !== undefined) result.isError = opts.isError
-  if (opts?.structuredContent !== undefined)
-    result.structuredContent = opts.structuredContent
-  if (opts?.metadata !== undefined) result.metadata = opts.metadata
-  return result
-}
-
-/**
- * Format a CanonicalToolResult.structuredContent payload as an XML-tagged
- * JSON suffix suitable for inclusion in provider tool_result content.
- *
- * Returns empty string when there is nothing to emit. Otherwise wraps the
- * JSON in `<structured_content>...</structured_content>` so the LLM has a
- * clear, parseable marker around the sidecar payload (distinct from the
- * primary text output). The XML tag matches the wrapping convention
- * context-compiler.ts uses for system_notice / event items.
- *
- * Callers append this to whatever string they're about to send to the
- * provider — Anthropic appends as a tool_result content text block,
- * OpenAI / OpenAI-Responses / BigModel append as a string suffix.
- */
-export function formatStructuredContentForProvider(
-  structuredContent: unknown
-): string {
-  if (!structuredContent || typeof structuredContent !== "object") return ""
-  try {
-    const json = JSON.stringify(structuredContent, null, 2)
-    if (!json || json === "{}" || json === "null") return ""
-    return `\n\n<structured_content>\n${json}\n</structured_content>`
-  } catch {
-    return ""
-  }
-}
-
-/**
- * Type guard for ToolResultOrigin. Validates the discriminator and the
- * required fields per kind. Use at trust boundaries (e.g., when reading
- * a metadata column from the DB) before passing to downstream code that
- * relies on origin being correctly shaped.
- */
-export function isToolResultOrigin(value: unknown): value is ToolResultOrigin {
-  if (!value || typeof value !== "object") return false
-  const v = value as Record<string, unknown>
-  switch (v.kind) {
-    case "system":
-      return typeof v.registryKey === "string"
-    case "plugin":
-      return (
-        typeof v.installationId === "string" &&
-        typeof v.upstreamToolName === "string"
-      )
-    case "device":
-      return (
-        typeof v.deviceToolId === "string" &&
-        typeof v.exposureStableKey === "string"
-      )
-    case "provider_native":
-      return (
-        typeof v.providerType === "string" && typeof v.toolName === "string"
-      )
-    case "model_response":
-      return typeof v.providerType === "string"
-    default:
-      return false
-  }
-}
-
-/**
- * Convenience constructor for CanonicalToolResult. Defaults isError=false
- * when not provided; leaves optional fields undefined when not provided
- * (do not store empty objects/arrays — keeps DB JSONB small).
- */
-export function canonicalToolResult(input: {
-  toolCallId: string
-  providerCallId?: string
-  toolName: string
-  content: CanonicalContentBlock[]
-  structuredContent?: Record<string, unknown>
-  isError?: boolean
-  origin: ToolResultOrigin
-  metadata?: Record<string, unknown>
-}): CanonicalToolResult {
-  const result: CanonicalToolResult = {
-    toolCallId: input.toolCallId,
-    toolName: input.toolName,
-    content: input.content,
-    origin: input.origin,
-  }
-  if (input.providerCallId !== undefined)
-    result.providerCallId = input.providerCallId
-  if (input.structuredContent !== undefined)
-    result.structuredContent = input.structuredContent
-  if (input.isError !== undefined) result.isError = input.isError
-  if (input.metadata !== undefined) result.metadata = input.metadata
-  return result
-}
-
-function createActorDocId(): UUID {
-  return globalThis.crypto.randomUUID()
-}
-
-export const SECRETARY_DEFAULT_NAME = "统筹秘书 / Command Secretary"
-export const SECRETARY_DEFAULT_TITLE = "统筹秘书 / Command Secretary"
-export const SECRETARY_DEFAULT_CAN_REPRESENT_USER = true
-export const SECRETARY_DEFAULT_SPECIALTIES = [
-  "需求收口 / task intake",
-  "任务分发 / delegation design",
-  "进度跟进 / follow-through",
-  "结果汇总 / synthesis",
-  "用户回报 / user-facing updates",
-]
-
-export const SECRETARY_DEFAULT_DOCS: ActorDoc[] = normalizeActorDocs([
-  {
-    id: createActorDocId(),
-    key: "identity_card",
-    title: "Identity Card",
-    content: textBlocks(
-      "你是统筹秘书，是 Synapse 数字团队的默认前台角色。你把模糊输入收成可执行动作，决定哪些事应该自己做、哪些事值得拉人协作，并负责把结果真正收回来。\n\nYou are the Command Secretary, the default front-of-house role for a Synapse team. You turn rough requests into executable work, decide what to handle yourself, decide what deserves collaboration, and make sure the result actually comes back."
-    ),
-    visibility: "always",
-    priority: 120,
-  },
-  {
-    id: createActorDocId(),
-    key: "public_persona",
-    title: "Public Persona",
-    content: textBlocks(
-      "稳、清楚、推进感强，不靠声量靠收口。\n\nCalm, explicit, and relentlessly follow-through oriented."
-    ),
-    visibility: "always",
-    priority: 115,
-  },
-  {
-    id: createActorDocId(),
-    key: "soul",
-    title: "Soul",
-    content: textBlocks(
-      [
-        "- 中文：保护用户注意力，不把内部协作噪音直接倒回给用户。",
-        "  English: Protect the user's attention instead of dumping internal coordination noise back onto them.",
-        "- 中文：任务一旦被接住，就不能在转发后失踪。",
-        "  English: Once a task is accepted, it does not disappear after being forwarded.",
-        "- 中文：模糊不等于复杂，先压缩歧义再决定阵仗大小。",
-        "  English: Fuzzy does not automatically mean complex; compress ambiguity before scaling up the team.",
-      ].join("\n")
-    ),
-    visibility: "always",
-    priority: 110,
-  },
-  {
-    id: createActorDocId(),
-    key: "relationship_with_user",
-    title: "Relationship With User",
-    content: textBlocks(
-      "用户可以把零散想法、模糊需求、临时任务和跨职能问题先扔给你。你先整理、先判断、先推进，只有真正影响承诺或方向的点才返还给用户确认。\n\nUsers can hand you rough ideas, fuzzy asks, ad hoc tasks, and cross-functional problems first. You clean them up, decide the next move, and return only the decisions that truly require user authority."
-    ),
-    visibility: "always",
-    priority: 98,
-  },
-  {
-    id: createActorDocId(),
-    key: "relationship_with_team",
-    title: "Relationship With Team",
-    content: textBlocks(
-      "你在群聊里的职责不是抢专业判断，而是给每个参与者一个清楚的任务边界、交付口径和回合节奏，并在结果分散时做统一汇总。\n\nInside group threads, you do not steal specialist judgment. You define clean task boundaries, delivery expectations, and turn-taking rhythm, then synthesize scattered outputs into one usable answer."
-    ),
-    visibility: "multi_member_only",
-    priority: 96,
-  },
-  {
-    id: createActorDocId(),
-    key: "representation_guidelines",
-    title: "Representation Guidelines",
-    content: textBlocks(
-      "你可以代表用户复述已确认的目标、约束、优先级和下一步安排，但不能替用户虚构预算、排期、承诺或立场。任何新的承诺都必须明确回到用户确认。\n\nYou may restate confirmed goals, constraints, priorities, and next actions on the user's behalf, but you may not invent budget, schedule, commitments, or positions. Any new commitment must go back to the user."
-    ),
-    visibility: "internal_only",
-    priority: 94,
-  },
-  {
-    id: createActorDocId(),
-    key: "social_protocol",
-    title: "Social Protocol",
-    content: textBlocks(
-      "在多人线程里，优先说清楚谁负责什么、为什么现在需要他发言，以及这轮讨论要产出什么；不要让群聊变成模糊的围观现场。\n\nIn multi-party threads, state who owns what, why they are needed now, and what this round is meant to produce. Do not let the conversation turn into vague spectatorship."
-    ),
-    visibility: "multi_member_only",
-    priority: 92,
-  },
-  {
-    id: createActorDocId(),
-    key: "role_charter",
-    title: "Role Charter",
-    content: textBlocks(
-      "负责需求受理、任务分流、进度追踪、风险显性化和结果收口，是默认的 chief actor 候选。\n\nOwns intake, routing, progress tracking, visible risk surfacing, and final synthesis, and serves as the default chief-actor candidate."
-    ),
-    visibility: "always",
-    priority: 90,
-  },
-  {
-    id: createActorDocId(),
-    key: "mission",
-    title: "Mission",
-    content: textBlocks(
-      "让用户只面对一个稳定入口，也能驱动一整个数字团队有效完成工作。\n\nGive the user one stable point of contact while still unlocking an effective digital team behind the scenes."
-    ),
-    visibility: "always",
-    priority: 88,
-  },
-  {
-    id: createActorDocId(),
-    key: "work_doctrine",
-    title: "Work Doctrine",
-    content: textBlocks(
-      [
-        "- 中文：先把任务说清楚，再决定是直接处理还是组织协作。",
-        "  English: Clarify the ask before deciding whether to solve it directly or coordinate others.",
-        "- 中文：只有当专业分工能明显提高质量、速度或风险控制时，才发起委派。",
-        "  English: Delegate only when specialization clearly improves quality, speed, or risk control.",
-        "- 中文：每次委派都要带上目标、上下文、完成标准和下一次回报码点。",
-        "  English: Every handoff needs a goal, context, done condition, and explicit return point.",
-        "- 中文：对用户汇报时先给结论、当前状态、主要风险和下一步。",
-        "  English: Report to the user with conclusion, current state, main risk, and next step in that order.",
-      ].join("\n\n")
-    ),
-    visibility: "always",
-    priority: 86,
-  },
-  {
-    id: createActorDocId(),
-    key: "limitations_and_escalation",
-    title: "Limitations And Escalation",
-    content: textBlocks(
-      "你不是最终的领域权威。遇到深度实现、专业判断、创作定稿或高风险决定时，要把任务交给更合适的角色，并在必要时把决定权交还给用户。\n\nYou are not the ultimate domain authority. When the work needs deep implementation, specialist judgment, final creative approval, or high-risk decisions, route it to the right actor and return authority to the user when needed."
-    ),
-    visibility: "always",
-    priority: 84,
-  },
-  {
-    id: createActorDocId(),
-    key: "routines",
-    title: "Routines",
-    content: textBlocks(
-      [
-        "- 中文：收件时默认检查四件事：目标是否清楚、是否缺上下文、是否需要分工、何时回报。",
-        "  English: On intake, default to four checks: goal clarity, missing context, delegation need, and expected return time.",
-        "- 中文：每轮协作结束前，都刷新一次“谁在做、做到哪、下一步是什么”的状态摘要。",
-        "  English: Before ending a collaboration round, refresh a compact status view of owner, progress, and next step.",
-      ].join("\n")
-    ),
-    visibility: "internal_only",
-    priority: 80,
-  },
-  {
-    id: createActorDocId(),
-    key: "conversation_examples",
-    title: "Conversation Examples",
-    content: textBlocks(
-      "先把任务交给我。我会先判断哪些部分我能直接完成，哪些部分值得拉人协作，然后给你一个清楚的推进口径。\n\nHand the task to me first. I will decide what I should handle directly, what deserves additional participants, and then give you a clear path forward."
-    ),
-    visibility: "internal_only",
-    priority: 78,
-  },
-])
-
-/** Extract concatenated text from CanonicalContentBlock[] */
-export function extractText(blocks: CanonicalContentBlock[]): string {
-  let result = ""
-  let previousKind: "text" | "mention" | null = null
-
-  for (const block of blocks) {
-    const chunk =
-      block.type === "text"
-        ? block.text
-        : block.type === "mention"
-          ? formatMentionText(block)
-          : ""
-
-    if (!chunk) continue
-
-    if (!result) {
-      result = chunk
-      previousKind = block.type === "mention" ? "mention" : "text"
-      continue
-    }
-
-    const nextKind = block.type === "mention" ? "mention" : "text"
-    const separator =
-      previousKind === "mention" ||
-      nextKind === "mention" ||
-      /\s$/.test(result) ||
-      /^\s/.test(chunk)
-        ? ""
-        : "\n\n"
-
-    result += `${separator}${chunk}`
-    previousKind = nextKind
-  }
-
-  return result
-}
-
-export function getActorDocTemplate(
-  key: ActorDocKey
-): ActorDocTemplate | undefined {
-  if (key === "custom") return undefined
-  return ACTOR_DOC_TEMPLATE_MAP[key as CoreActorDocKey]
-}
-
-function isNonEmptyActorDoc(doc: ActorDoc): boolean {
-  return doc.content.some((block) => {
-    if (block.type === "text") return block.text.trim().length > 0
-    return true
-  })
-}
-
-export function normalizeActorDocVisibility(
-  value: unknown
-): ActorDocVisibility {
-  if (
-    value === "always" ||
-    value === "direct_only" ||
-    value === "multi_member_only" ||
-    value === "internal_only"
-  ) {
-    return value
-  }
-  return "always"
-}
-
-export function normalizeActorDocs(docs: ActorDocInput[]): ActorDoc[] {
-  const standardDocs = new Map<CoreActorDocKey, ActorDoc>()
-  const customDocs = new Map<UUID, ActorDoc>()
-
-  for (const doc of docs || []) {
-    if (
-      !doc ||
-      typeof doc !== "object" ||
-      !doc.key ||
-      !Array.isArray(doc.content)
-    )
-      continue
-    if (doc.key !== "custom" && !(doc.key in ACTOR_DOC_TEMPLATE_MAP)) continue
-    const template = getActorDocTemplate(doc.key)
-    const normalizedDoc: ActorDoc = {
-      id:
-        typeof doc.id === "string" && doc.id.trim().length > 0
-          ? doc.id
-          : createActorDocId(),
-      key: doc.key,
-      title:
-        doc.title?.trim() ||
-        template?.title ||
-        (doc.key === "custom" ? "Custom section" : doc.key),
-      content: normalizeCanonicalContentBlocks(doc.content),
-      visibility: normalizeActorDocVisibility(
-        doc.visibility || template?.defaultVisibility || "always"
-      ),
-      priority: Number.isFinite(doc.priority)
-        ? doc.priority
-        : template?.defaultPriority || 0,
-    }
-
-    if (!isNonEmptyActorDoc(normalizedDoc)) continue
-    if (normalizedDoc.key === "custom") {
-      customDocs.set(normalizedDoc.id, normalizedDoc)
-    } else {
-      standardDocs.set(normalizedDoc.key as CoreActorDocKey, normalizedDoc)
-    }
-  }
-
-  return [...standardDocs.values(), ...customDocs.values()].sort(
-    (left, right) => {
-      if (right.priority !== left.priority)
-        return right.priority - left.priority
-      return left.title.localeCompare(right.title)
-    }
-  )
-}
-
-export function summarizeActorDoc(doc: ActorDoc, maxLength = 200): string {
-  const text = extractText(doc.content).replace(/\s+/g, " ").trim()
-  if (text.length > 0) {
-    return text.length > maxLength ? `${text.slice(0, maxLength - 1)}...` : text
-  }
-
-  const fileBlock = doc.content.find(
-    (
-      block
-    ): block is Extract<ActorDoc["content"][number], { type: "file_ref" }> =>
-      block.type === "file_ref"
-  )
-  return fileBlock ? `Attached file: ${fileBlock.name}` : ""
-}
-
-export function pickActorDocSummary(
-  docs: ActorDoc[],
-  keys: ActorDocKey[],
-  maxLength = 500,
-  fallback = ""
-): string {
-  const fragments = keys
-    .map((key) => docs.find((doc) => doc.key === key))
-    .filter((doc): doc is ActorDoc => Boolean(doc))
-    .map((doc) => summarizeActorDoc(doc, maxLength))
-    .filter(Boolean)
-
-  if (fragments.length > 0) {
-    return fragments.join("\n\n")
-  }
-
-  return fallback
-}
-
-export function summarizeActorForRole(
-  docs: ActorDoc[],
-  fallbackTitle = ""
-): string {
-  return pickActorDocSummary(
-    docs,
-    ["role_charter", "mission", "limitations_and_escalation"],
-    500,
-    fallbackTitle || "No role summary provided."
-  )
-}
-
-export function summarizeActorForPrompt(docs: ActorDoc[]): string {
-  return pickActorDocSummary(
-    docs,
-    [
-      "soul",
-      "self_narrative",
-      "work_doctrine",
-      "social_protocol",
-      "representation_guidelines",
-      "quirks_and_signatures",
-    ],
-    700
-  )
-}
+// Content-block + tool-result helpers moved to ../content/index.ts;
+// actor-doc helpers + SECRETARY_DEFAULT_* moved to ../actor/index.ts (§2.2.1).
 
 // ============================================================
 // Domain Model V2
@@ -5683,13 +4490,213 @@ export interface PluginInstallationRecord {
   updatedAt: Timestamp
 }
 
-export function buildConversationMessageRef(sequence: number): string {
-  return `m_${Math.trunc(sequence)}`
-}
+// buildConversationMessageRef / parseConversationMessageRef moved to
+// ../conversation/index.ts (§2.2.1); re-exported via the package root barrel.
 
-export function parseConversationMessageRef(ref: string): number | null {
-  const match = /^m_(\d+)$/.exec(ref.trim())
-  if (!match) return null
-  const parsed = Number(match[1])
-  return Number.isFinite(parsed) ? parsed : null
-}
+// ── Schema-first app contracts (type-only re-export, §2.2 / §5.1) ──
+// The runtime zod schemas live under ../schemas/* and are reachable via the
+// `@synapse/shared/schemas` subpath; here we surface only the inferred types so
+// the root barrel stays zod-free.
+export type {
+  WorkspaceInviteView,
+  WorkspaceInviteListView,
+  WorkspaceInvitePublicView,
+  WorkspaceInviteRedeemResult,
+} from "../schemas/workspace-invites.js"
+export type {
+  WorkspaceView,
+  WorkspaceListView,
+  WorkspaceListItemView,
+  WorkspaceCreateResultView,
+  WorkspaceMemberListView,
+  WorkspaceMemberView,
+  WorkspaceAccessBindingListView,
+  WorkspaceAccessBindingView,
+  WorkspaceNavigationView,
+  WorkspaceChiefActorPreferenceView,
+  WorkspaceCapabilityConversationTypePoliciesViewSchemaType,
+} from "../schemas/workspace.js"
+export type {
+  UserProfileView,
+  AuthSessionSummaryView,
+  AuthMeView,
+  UpdateMeInput,
+  UnlinkAccountInput,
+} from "../schemas/auth.js"
+export type {
+  AutomationEventSourceSchemaType,
+  AutomationEventSourceListSchemaType,
+  AutomationRuleSchemaType,
+  AutomationRuleListSchemaType,
+  AutomationOccurrenceSchemaType,
+  AutomationOccurrenceListSchemaType,
+  AutomationExecutionSchemaType,
+  AutomationExecutionListSchemaType,
+  AutomationWebhookEndpointSchemaType,
+  AutomationWebhookEndpointListSchemaType,
+  AutomationWebhookEndpointCreateResultSchemaType,
+  AutomationEventSourceAccessGrantSchemaType,
+  AutomationEventSourceAccessStateSchemaType,
+  AutomationAccessGrantEnvelopeSchemaType,
+  AutomationSuccessSchemaType,
+  AutomationEventIngestResultSchemaType,
+} from "../schemas/automation.js"
+export type {
+  ModelGroupView,
+  ModelGroupItemView,
+  ModelGroupGrantView,
+  ModelGroupDetailView,
+  ActorModelGroupAssignmentView,
+  ModelGroupItemVersionView,
+  ModelGroupListView,
+  ModelGroupGrantListView,
+  ModelGroupItemVersionListView,
+  ActorModelGroupAssignmentListView,
+} from "../schemas/model-groups.js"
+export type {
+  ActorListView,
+  ActorView,
+  ActorTreeView,
+  ActorTreeNodeView,
+  ActorVersionListView,
+  ActorVersionView,
+  ActorPackageListView,
+  ActorPackageRecordView,
+  ActorPackageInstallResultView,
+} from "../schemas/organization.js"
+export type {
+  PluginAuthorizationView,
+  MarketplacePluginCategoryView,
+  MarketplacePluginPublisherSummary,
+  MarketplacePluginView,
+  MarketplacePublisherView,
+  PluginCategoryView,
+  PluginInstallationDetailView,
+  PluginAuthSessionView,
+  PluginAuthSessionEnvelope,
+  PluginInstallPlanView,
+  PluginInstallPlanEnvelope,
+  PluginAuditLogList,
+  PluginInstallPlanInput,
+  StartPluginAuthInput,
+} from "../schemas/mcp-plugins.js"
+export type {
+  SkillFrontmatterView,
+  SkillMirrorSourceSummaryView,
+  SkillAttachmentFileView,
+  SkillMarketplaceVersionView,
+  SkillMarketplaceWorkspaceInstallationView,
+  SkillMarketplaceEntryView,
+  InstalledSkillView,
+  SkillMarketplaceListView,
+  SkillMarketplaceItemView,
+  InstalledSkillListView,
+  InstalledSkillItemView,
+  SkillAttachmentInput,
+  PublishMarketplaceSkillInput,
+  ImportMarketplaceSkillInput,
+  InstalledSkillListQuery,
+} from "../schemas/skills.js"
+export type {
+  DeviceView,
+  DeviceListView,
+  DeviceServiceView,
+  DeviceCapabilityView,
+  DeviceDetailView,
+  DevicePairingTicketView,
+  CreateCloudDeviceInput,
+  CreateCloudDeviceResultView,
+  StartPairingInput,
+  ClaimDaemonServiceInput,
+  DeviceCapabilityAccessTargetInput,
+  SetActiveDeviceCapabilitiesInput,
+  ActiveDeviceCapabilitiesView,
+} from "../schemas/devices.js"
+export type {
+  RuntimeAuthorizationGrantRecordView,
+  CreateManualRuntimeAuthorizationGrantInput,
+} from "../schemas/runtime-authorizations.js"
+export type {
+  FileOriginSummaryView,
+  StoredFileRecordView,
+  FileParseEnqueueResult,
+} from "../schemas/files.js"
+export type {
+  RelationshipProfileViewSchemaType,
+  IdentitySearchResponseSchemaType,
+  RelationshipScanResponseSchemaType,
+  FriendsListResponseSchemaType,
+  RequestListResponseSchemaType,
+  ResolveRequestResponseSchemaType,
+  ContactHubResponseSchemaType,
+  ContactHubDetailResponseSchemaType,
+  DirectConversationOpenResponseSchemaType,
+  RelationshipScanInput,
+  OpenDirectConversationInput,
+  UpdateMemberRelationshipProfileInput,
+  UpdateActorRelationshipProfileInput,
+  IdentitySearchQuery,
+  RequestRelationshipBySearchInput,
+} from "../schemas/relationship.js"
+export type {
+  RemoteAgentListResponseSchemaType,
+  RemoteAgentResponseSchemaType,
+  RemoteAgentGroupTaskGrantsResponseSchemaType,
+  RemoteAgentMachinePairingSessionResponseSchemaType,
+  RemoteAgentMachineListResponseSchemaType,
+  RemoteAgentMachineDetailResponseSchemaType,
+  CreateRemoteAgentMachineInput,
+  BindRemoteAgentInput,
+  UpdateRemoteAgentGroupTaskGrantsInput,
+} from "../schemas/remote-agents.js"
+export type {
+  TransportConnectorsResponseSchemaType,
+  TransportAccountsResponseSchemaType,
+  TransportSessionsResponseSchemaType,
+  TransportExternalUsersResponseSchemaType,
+  TransportAccountResponseSchemaType,
+  TransportSessionResponseSchemaType,
+  TransportAddressResponseSchemaType,
+  WeixinBindingCandidatesResponseSchemaType,
+  WeixinQrSessionResponseSchemaType,
+  WeixinBindingResponseSchemaType,
+  DingtalkDeviceFlowStartResponseSchemaType,
+  DingtalkDeviceFlowPollResponseSchemaType,
+} from "../schemas/im.js"
+export type {
+  WorkspaceAppViewSchemaType,
+  WorkspaceAppEnvelopeViewSchemaType,
+  WorkspaceAppListViewSchemaType,
+  WorkspaceAppGrantViewSchemaType,
+  WorkspaceAppGrantListViewSchemaType,
+  WorkspaceAppGrantRequestViewSchemaType,
+  WorkspaceAppGrantRequestListViewSchemaType,
+  WorkspaceAppGrantRequestEnvelopeViewSchemaType,
+  WorkspaceAppSuccessViewSchemaType,
+  WorkspaceAppGrantTargetInput,
+  WorkspaceAppGrantEntryInput,
+  ReplaceWorkspaceAppGrantsInput,
+  CreateWorkspaceAppGrantRequestInput,
+  CreateWorkspaceAppInput,
+  UpdateWorkspaceAppInput,
+} from "../schemas/workspace-apps.js"
+export type {
+  ChatBootstrapViewSchemaType,
+  ChatSyncViewSchemaType,
+  ChatClientInstanceViewSchemaType,
+  ChatConversationEnvelopeViewSchemaType,
+  ChatConversationListViewSchemaType,
+  ChatConversationMessagesViewSchemaType,
+  ChatRuntimeTurnDetailViewSchemaType,
+  ChatSendMessageViewSchemaType,
+  ChatReadWatermarkViewSchemaType,
+  ChatParticipantRemovalViewSchemaType,
+  ChatPushTokenRegistrationViewSchemaType,
+  ChatPushTokenListViewSchemaType,
+  ChatPushTokenDeleteViewSchemaType,
+  ChatTypingBroadcastViewSchemaType,
+  ChatMessageRetryViewSchemaType,
+  ChatTaskRespondViewSchemaType,
+  ChatDedupCountersViewSchemaType,
+  ChatRealtimeOutboxGcViewSchemaType,
+} from "../schemas/chat.js"

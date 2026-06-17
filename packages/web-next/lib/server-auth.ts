@@ -47,14 +47,16 @@ export const getServerAuthState = cache(async (): Promise<ServerAuthState> => {
     }
 
     const payload = (await response.json()) as {
-      user?: User
-      session?: AuthSessionSummary
+      data?: {
+        user?: User
+        session?: AuthSessionSummary
+      }
     }
 
     return {
       status: "authenticated",
-      user: payload.user ?? null,
-      session: payload.session ?? null,
+      user: payload.data?.user ?? null,
+      session: payload.data?.session ?? null,
     }
   } catch {
     return { status: "unavailable", user: null, session: null }

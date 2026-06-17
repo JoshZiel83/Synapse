@@ -8,6 +8,7 @@
 // --remote-debugging-port=NNNN.
 
 import WebSocket from "ws"
+import { z } from "zod"
 import type { CatalogProvider, CatalogToolInvocationResult } from "../types.js"
 import type {
   DeviceCatalogExposure,
@@ -255,6 +256,68 @@ export interface CdpTarget {
   webSocketDebuggerUrl: string
 }
 
+const CdpTargetSchema = z.strictObject({
+  id: z.string(),
+  type: z.string(),
+  url: z.string(),
+  webSocketDebuggerUrl: z.string(),
+})
+
+const CdpTargetListSchema = z.array(CdpTargetSchema)
+
+const CdpResponseFrameSchema = z
+  .object({
+    id: z.number().int().optional(),
+    result: z.unknown().optional(),
+    error: z
+      .strictObject({
+        code: z.number().int(),
+        message: z.string(),
+      })
+      .optional(),
+  })
+  .passthrough()
+  .refine(
+    (frame) =>
+      ("result" in frame || "error" in frame) &&
+      !("result" in frame && "error" in frame),
+    "CDP response frame must contain exactly one of result or error"
+  )
+
+export function parseCdpTargetList(text: string): CdpTarget[] {
+  let value: unknown
+  try {
+    value = text.trim() ? JSON.parse(text) : undefined
+  } catch (err) {
+    throw new Error("CDP /json returned malformed JSON", { cause: err })
+  }
+
+  const parsed = CdpTargetListSchema.safeParse(value)
+  if (!parsed.success) {
+    throw new Error("CDP /json response shape invalid", {
+      cause: parsed.error,
+    })
+  }
+  return parsed.data
+}
+
+export function parseCdpResponseFrame(raw: string): {
+  id?: number
+  result?: unknown
+  error?: { code: number; message: string }
+} | null {
+  let value: unknown
+  try {
+    value = JSON.parse(raw)
+  } catch {
+    return null
+  }
+
+  const parsed = CdpResponseFrameSchema.safeParse(value)
+  if (!parsed.success) return null
+  return parsed.data
+}
+
 /**
  * Check whether a browser grant_spec policy covers a given URL. The policy
  * pins either an exact origin, a host, or a registrable domain; an empty
@@ -307,7 +370,7 @@ export async function listCdpTargets(
   const url = `${cdpEndpoint.replace(/\/$/, "")}/json`
   const res = await fetchImpl(url, { method: "GET" })
   if (!res.ok) throw new Error(`CDP /json HTTP ${res.status}`)
-  const data = (await res.json()) as CdpTarget[]
+  const data = parseCdpTargetList(await res.text())
   return data.filter((t) => t.type === "page")
 }
 
@@ -343,16 +406,8 @@ function invokeCdpCommand<T>(
       ws.send(JSON.stringify({ id, method, params }))
     })
     ws.on("message", (raw) => {
-      let frame: {
-        id?: number
-        result?: T
-        error?: { code: number; message: string }
-      }
-      try {
-        frame = JSON.parse(raw.toString())
-      } catch {
-        return
-      }
+      const frame = parseCdpResponseFrame(raw.toString())
+      if (!frame) return
       if (frame.id !== id) return
       clearTimeout(timer)
       if (frame.error) {

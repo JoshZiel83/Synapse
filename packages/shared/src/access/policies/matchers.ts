@@ -7,7 +7,7 @@
 // Bundle-safe: no node: imports so this module compiles into the web
 // service-worker bundle without polyfills.
 
-import type { BrowserOperation } from "@synapse/device-protocol/browser-tools"
+import type { BrowserOperation } from "@synapse/device-protocol/enums"
 
 /**
  * Resolve + normalize a POSIX path. Handles leading slash, "..", ".",

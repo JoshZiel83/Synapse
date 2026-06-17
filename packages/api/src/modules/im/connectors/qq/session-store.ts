@@ -18,7 +18,9 @@
  */
 
 import { nowIsoInstant } from "@synapse/shared/datetime"
+import { IsoInstantStringSchema } from "@synapse/shared/schemas"
 import type { Redis } from "ioredis"
+import { z } from "zod"
 
 export interface QqWsSessionState {
   sessionId: string
@@ -32,6 +34,15 @@ const SAVE_THROTTLE_MS = 1000 // don't pound Redis on every dispatch tick
 
 const lastSaveAt = new Map<string, number>()
 
+const qqWsSessionStateSchema = z
+  .object({
+    sessionId: z.string().min(1),
+    lastSeq: z.number().int().nonnegative(),
+    appId: z.string().min(1),
+    savedAt: IsoInstantStringSchema,
+  })
+  .strict()
+
 function key(accountId: string): string {
   return `im:qq:ws-session:${accountId}`
 }
@@ -43,12 +54,14 @@ export async function loadQqWsSession(
 ): Promise<QqWsSessionState | null> {
   const raw = await redis.get(key(accountId))
   if (!raw) return null
-  let parsed: QqWsSessionState
+  let parsed: QqWsSessionState | null
   try {
-    parsed = JSON.parse(raw) as QqWsSessionState
+    const result = qqWsSessionStateSchema.safeParse(JSON.parse(raw))
+    parsed = result.success ? result.data : null
   } catch {
     return null
   }
+  if (!parsed) return null
   if (parsed.appId !== currentAppId) {
     // App identity changed — saved session_id is for a different bot.
     // Drop it explicitly so we don't try to resume against the new bot's

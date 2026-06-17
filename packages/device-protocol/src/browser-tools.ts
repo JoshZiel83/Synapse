@@ -4,11 +4,16 @@
 // authz + sidecar forwarding). Keep these in lockstep. See plan §Phase 1 and
 // docs/device-runtime-v3.md §Browser capability v3.1.
 
-import type { BrowserOperation } from "./enums.js"
+import {
+  BROWSER_OPERATION_REQUIRED_ACTION,
+  type BrowserOperation,
+} from "./enums.js"
 // Re-export so consumers importing from the `./browser-tools` subpath get
 // both the operation enum and the descriptor types in one place.
 export {
+  BROWSER_OPERATION_REQUIRED_ACTION,
   RUNTIME_AUTHORIZATION_BROWSER_OPERATIONS,
+  browserActionCoversOperations,
   type BrowserOperation,
 } from "./enums.js"
 
@@ -304,89 +309,26 @@ export const BROWSER_EXPOSURE_TOOLS: Record<BrowserExposureKey, string[]> = {
   webmcp: [],
 }
 
-// ────────────────────────────── operation→action lookup ─────────────────────
+// ────────────────────────────── operation→action invariant ──────────────────
 
-/**
- * Minimum action level required to invoke each browser operation.
- *
- * Exhaustive over `RUNTIME_AUTHORIZATION_BROWSER_OPERATIONS` — every enum
- * member MUST appear so `browserActionCoversOperations` never silently
- * falls into a fail-open path on a deferred-but-defined operation
- * (file.upload / extension.manage / webmcp.execute are not in
- * BROWSER_TOOL_MAP today but the enum still lets a caller request them).
- *
- * The TypeScript compiler enforces exhaustiveness at this site:
- * `Record<BrowserOperation, ...>` will fail to typecheck if a new
- * operation lands without an entry here.
- *
- * Runtime extra safety: the per-op table is also cross-checked against
- * BROWSER_TOOL_MAP — if a tool there demands action="write" for an
- * operation we listed here as "read" the constructor escalates.
- */
-const BROWSER_OPERATION_REQUIRED_ACTION_BASE: Record<
-  BrowserOperation,
-  "read" | "write"
-> = {
-  "page.read": "read",
-  "page.navigate": "write",
-  "page.input": "write",
-  "screenshot.capture": "read",
-  "console.read": "read",
-  "network.list": "read",
-  "network.body.read": "read",
-  "script.evaluate": "write",
-  "performance.trace": "read",
-  // Deferred operations: not in BROWSER_TOOL_MAP today, but listed in the
-  // enum so a grant policy can name them. Each one is write-sensitive
-  // (uploads files, manages extensions, executes WebMCP tools), so
-  // explicit "write" prevents an action=read grant from covering them
-  // if/when the deferred exposure ships.
-  "file.upload": "write",
-  "extension.manage": "write",
-  "webmcp.execute": "write",
-}
-
-export const BROWSER_OPERATION_REQUIRED_ACTION: Readonly<
-  Record<BrowserOperation, "read" | "write">
-> = (() => {
-  const out: Record<BrowserOperation, "read" | "write"> = {
-    ...BROWSER_OPERATION_REQUIRED_ACTION_BASE,
-  }
-  // Cross-check / escalate from BROWSER_TOOL_MAP. If a tool surfaces an
-  // operation as write, force it even if the table above marked it read.
+function assertBrowserToolMapActionCoverage(): void {
+  const mismatches: string[] = []
   for (const desc of Object.values(BROWSER_TOOL_MAP)) {
-    if (desc.action === "write") {
-      out[desc.operation] = "write"
+    const required = BROWSER_OPERATION_REQUIRED_ACTION[desc.operation]
+    if (required === undefined) {
+      mismatches.push(`${desc.operation}: missing required action`)
+    } else if (desc.action === "write" && required !== "write") {
+      mismatches.push(`${desc.operation}: tool is write but enum table is read`)
     }
   }
-  return out
-})()
-
-/**
- * True iff the supplied (action, operations[]) combination is internally
- * consistent — i.e. `action` covers the minimum required action for every
- * operation. Used by the manual-grant endpoint and the Settings UI to
- * reject "action:read + operations:[page.input]" type misconfigurations
- * that would silently produce a dead grant.
- *
- * Fail-closed on unknown operations: if a caller smuggles in a string
- * that isn't in `RUNTIME_AUTHORIZATION_BROWSER_OPERATIONS` (e.g. via an
- * older deployment talking to a newer one), it counts as offending so
- * action=read can never cover it. Zod usually catches this upstream but
- * direct callers of `browserActionCoversOperations` need the defence.
- */
-export function browserActionCoversOperations(
-  action: "read" | "write",
-  operations: readonly BrowserOperation[]
-): { ok: true } | { ok: false; offending: BrowserOperation[] } {
-  if (action === "write") return { ok: true }
-  const offending = operations.filter((op) => {
-    const required = BROWSER_OPERATION_REQUIRED_ACTION[op]
-    if (required === undefined) return true // unknown op → deny
-    return required === "write"
-  })
-  return offending.length === 0 ? { ok: true } : { ok: false, offending }
+  if (mismatches.length > 0) {
+    throw new Error(
+      `Browser tool map action table is inconsistent: ${mismatches.join(", ")}`
+    )
+  }
 }
+
+assertBrowserToolMapActionCoverage()
 
 // ────────────────────────────── effective target resolver ───────────────────
 

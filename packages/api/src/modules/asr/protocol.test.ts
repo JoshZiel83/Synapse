@@ -100,3 +100,12 @@ test("decodeProviderFrame parses provider error frames", () => {
     message: "server busy",
   })
 })
+
+test("decodeProviderFrame rejects non-object JSON provider payloads", () => {
+  for (const payload of [["not", "object"], "not-object", 123, null]) {
+    assert.throws(
+      () => decodeProviderFrame(buildServerResponseFrame(payload)),
+      /JSON payload must be an object/
+    )
+  }
+})

@@ -1,36 +1,52 @@
 import {
   extractText,
-  parseJsonObject,
   textBlocks,
   type CanonicalContentBlock,
   type Timestamp,
   type TaskNoticeStatus,
 } from "@synapse/shared"
-import type {
-  ToolCallTasksDeliveryKind,
-  ToolCallTasksExecutorKind,
-  ToolCallTasksHumanSurface,
-  ToolCallTasksLifecycleStatus,
-  ToolCallTasksOutcome,
-} from "../../infrastructure/database/generated/db.js"
+import type { Executor } from "../../infrastructure/database/kysely.js"
+import { serializeNowInstant } from "../../infrastructure/datetime.js"
 import {
-  db,
+  presentToolCallTask,
+  presentToolCallTaskOutputChunk,
+  type ToolCallTaskOutputChunk,
+  type ToolCallTaskRecord,
+} from "./presenter.js"
+import {
+  appendToolCallTaskOutputChunkAtomicDefault,
+  flipToolCallTaskTerminalDefault,
+  insertToolCallTaskOutputChunkExplicitDefault,
+  insertToolCallTaskRow,
+  insertToolCallTaskRowDeduped,
+  selectLiveToolCallTaskByRequestKey,
+  selectPrincipalSubjectForDeliveryDefault,
+  selectSessionStatusRow,
+  selectToolCallTaskByIdDefault,
+  selectToolCallTaskForSessionDefault,
+  selectToolCallTaskOutputChunksDefault,
+  selectToolCallTasksForSessionDefault,
+  setToolCallTaskCompletionItem,
+  updateToolCallTaskRowDefault,
   withDbTransaction,
-  type Executor,
-  type TableInsert,
-  type TableRow,
-} from "../../infrastructure/database/kysely.js"
-import {
-  requireInstantDate,
-  serializeInstant,
-  serializeNowInstant,
-  serializeOptionalInstant,
-} from "../../infrastructure/datetime.js"
-import { sql } from "kysely"
-import {
-  createConversationEvent,
-  getConversationParticipant,
-} from "../chat/service.js"
+} from "./repo.js"
+import type {
+  ToolCallTaskDeliveryKind,
+  ToolCallTaskExecutorKind,
+  ToolCallTaskFinalErrorPayload,
+  ToolCallTaskFinalResultPayload,
+  ToolCallTaskHumanSurface,
+  ToolCallTaskImmediateResultPayload,
+  ToolCallTaskInsert,
+  ToolCallTaskLifecycleStatus,
+  ToolCallTaskMetadata,
+  ToolCallTaskOutcome,
+  ToolCallTaskOutputChunkInsert,
+  ToolCallTaskOutputChunkMetadata,
+  ToolCallTaskRequestPayload,
+} from "./repo.types.js"
+import { createConversationEvent } from "../chat/event-write.js"
+import { getConversationParticipantUseCase as getConversationParticipant } from "../chat/participant-roster.js"
 import {
   insertSessionWakeupRow,
   nudgeSessionAfterWakeup,
@@ -40,70 +56,20 @@ import {
 } from "../session/runtime.js"
 import { getSession } from "../session/service.js"
 
-export type ToolCallTaskLifecycleStatus = ToolCallTasksLifecycleStatus
-export type ToolCallTaskOutcome = ToolCallTasksOutcome
-export type ToolCallTaskDeliveryKind = ToolCallTasksDeliveryKind
-export type ToolCallTaskHumanSurface = ToolCallTasksHumanSurface
-export type ToolCallTaskExecutorKind = ToolCallTasksExecutorKind
-
-type ToolCallTaskRow = TableRow<"tool_call_tasks">
-type ToolCallTaskOutputChunkRow = Pick<
-  TableRow<"tool_call_task_output_chunks">,
-  "created_at" | "metadata" | "seq" | "stream" | "text_value"
->
-
-export interface ToolCallTaskRecord {
-  id: string
-  workspaceId: string
-  conversationId: string
-  /** Axis 1: where the result comes from. */
-  executorKind: ToolCallTaskExecutorKind
-  /** Axis 2: how the blocked waiter (agent) is woken. */
-  deliveryKind: ToolCallTaskDeliveryKind
-  /** Axis 3: does a human see/answer this? */
-  humanSurface: ToolCallTaskHumanSurface
-  /** THE delivery key (actor OR remote_agent subject). */
-  principalSubjectId: string
-  /** Present iff delivery_kind=session_wakeup. */
-  sessionId?: string
-  /** Optional associative col (ask/plan have it, runtime_auth doesn't). */
-  remoteAgentRunId?: string
-  turnId?: string
-  sourceToolCallId?: string
-  sourceToolName: string
-  /** Pure lifecycle state machine. */
-  lifecycleStatus: ToolCallTaskLifecycleStatus
-  /** Business verdict, set only when lifecycleStatus='completed'. */
-  outcome?: ToolCallTaskOutcome
-  statusMessage?: string
-  supportsCancel: boolean
-  supportsOutputTail: boolean
-  /** Optimistic-concurrency token for human resolution. */
-  revision: number
-  requestKey: string
-  requesterParticipantId?: string
-  targetParticipantId?: string
-  resolvedByParticipantId?: string
-  resolvedAt?: Timestamp
-  requestPayload: Record<string, unknown>
-  immediateResultPayload: Record<string, unknown>
-  finalResultPayload: Record<string, unknown>
-  finalErrorPayload: Record<string, unknown>
-  metadata: Record<string, unknown>
-  conversationItemId?: string
-  completionItemId?: string
-  deadlineAt?: Timestamp
-  expiresAt?: Timestamp
-  retentionTtlMs?: number
-  retainUntil?: Timestamp
-  cancelRequestedAt?: Timestamp
-  cancelReason?: string
-  lastOutputSeq: number
-  lastOutputAt?: Timestamp
-  completedAt?: Timestamp
-  createdAt: Timestamp
-  updatedAt: Timestamp
-}
+// Stable re-exports: external modules import these enum aliases + the DTO from
+// `tool-call-tasks/service.js`. DB-touching definitions now live in repo.types /
+// presenter (guard-layering r1/r2/r3/r4).
+export type {
+  ToolCallTaskDeliveryKind,
+  ToolCallTaskExecutorKind,
+  ToolCallTaskHumanSurface,
+  ToolCallTaskLifecycleStatus,
+  ToolCallTaskOutcome,
+} from "./repo.types.js"
+export type {
+  ToolCallTaskOutputChunk,
+  ToolCallTaskRecord,
+} from "./presenter.js"
 
 export interface CreateToolCallTaskParams {
   workspaceId: string
@@ -144,27 +110,12 @@ interface ToolCallTaskTerminalNoticeParams {
   notifyActor?: boolean
 }
 
-export interface ToolCallTaskOutputChunk {
-  seq: number
-  stream: "stdout" | "stderr" | "system"
-  text: string
-  createdAt: Timestamp
-  metadata: Record<string, unknown>
-}
-
 const TERMINAL_TOOL_CALL_TASK_STATUSES = new Set<ToolCallTaskLifecycleStatus>([
   "completed",
   "failed",
   "cancelled",
   "expired",
 ])
-
-const NON_TERMINAL_TOOL_CALL_TASK_STATUSES: ToolCallTaskLifecycleStatus[] = [
-  "submitted",
-  "working",
-  "input_required",
-  "auth_required",
-]
 
 /** Map a TaskNoticeStatus (terminal) to its lifecycle_status. */
 function noticeStatusToLifecycle(
@@ -178,81 +129,11 @@ function toDate(value: string | null | undefined) {
   return new Date(value)
 }
 
-function mapToolCallTaskRow(
-  row: ToolCallTaskRow | null
-): ToolCallTaskRecord | null {
-  if (!row) {
-    return null
-  }
-
-  return {
-    id: row.id,
-    workspaceId: row.workspace_id,
-    conversationId: row.conversation_id,
-    executorKind: row.executor_kind as ToolCallTaskExecutorKind,
-    deliveryKind: row.delivery_kind as ToolCallTaskDeliveryKind,
-    humanSurface: row.human_surface as ToolCallTaskHumanSurface,
-    principalSubjectId: row.principal_subject_id,
-    sessionId: row.session_id || undefined,
-    remoteAgentRunId: row.remote_agent_run_id || undefined,
-    turnId: row.turn_id || undefined,
-    sourceToolCallId: row.source_tool_call_id || undefined,
-    sourceToolName: row.source_tool_name,
-    lifecycleStatus: row.lifecycle_status as ToolCallTaskLifecycleStatus,
-    outcome: (row.outcome as ToolCallTaskOutcome | null) || undefined,
-    statusMessage: row.status_message || undefined,
-    supportsCancel: row.supports_cancel === true,
-    supportsOutputTail: row.supports_output_tail === true,
-    revision:
-      typeof row.revision === "number"
-        ? row.revision
-        : Number(row.revision || 1),
-    requestKey: row.request_key,
-    requesterParticipantId: row.requester_participant_id || undefined,
-    targetParticipantId: row.target_participant_id || undefined,
-    resolvedByParticipantId: row.resolved_by_participant_id || undefined,
-    resolvedAt: serializeOptionalInstant(row.resolved_at),
-    requestPayload: parseJsonObject(row.request_payload),
-    immediateResultPayload: parseJsonObject(row.immediate_result_payload),
-    finalResultPayload: parseJsonObject(row.final_result_payload),
-    finalErrorPayload: parseJsonObject(row.final_error_payload),
-    metadata: parseJsonObject(row.metadata),
-    conversationItemId: row.conversation_item_id || undefined,
-    completionItemId: row.completion_item_id || undefined,
-    deadlineAt: serializeOptionalInstant(row.deadline_at),
-    expiresAt: serializeOptionalInstant(row.expires_at),
-    retentionTtlMs:
-      typeof row.retention_ttl_ms === "number"
-        ? row.retention_ttl_ms
-        : undefined,
-    retainUntil: serializeOptionalInstant(row.retain_until),
-    cancelRequestedAt: serializeOptionalInstant(row.cancel_requested_at),
-    cancelReason: row.cancel_reason || undefined,
-    lastOutputSeq:
-      typeof row.last_output_seq === "number"
-        ? row.last_output_seq
-        : Number(row.last_output_seq || 0),
-    lastOutputAt: serializeOptionalInstant(row.last_output_at),
-    completedAt: serializeOptionalInstant(row.completed_at),
-    createdAt: serializeInstant(
-      requireInstantDate(row.created_at, `Tool-call task ${row.id} created_at`)
-    ),
-    updatedAt: serializeInstant(
-      requireInstantDate(row.updated_at, `Tool-call task ${row.id} updated_at`)
-    ),
-  } satisfies ToolCallTaskRecord
-}
-
 async function assertSessionAllowsToolCallTasks(
   executor: Executor,
   sessionId: string
 ) {
-  const row = await executor
-    .selectFrom("sessions")
-    .select(["id", "status"])
-    .where("id", "=", sessionId)
-    .limit(1)
-    .executeTakeFirst()
+  const row = await selectSessionStatusRow(executor, sessionId)
   if (!row) {
     throw new Error(`Session ${sessionId} not found`)
   }
@@ -272,44 +153,38 @@ export async function insertToolCallTask(
     await assertSessionAllowsToolCallTasks(executor, params.sessionId)
   }
 
-  const row: TableInsert<"tool_call_tasks"> = {
-    workspace_id: params.workspaceId,
-    conversation_id: params.conversationId,
-    executor_kind: params.executorKind,
-    delivery_kind: params.deliveryKind,
-    human_surface: params.humanSurface,
-    principal_subject_id: params.principalSubjectId,
-    session_id: params.sessionId || null,
-    remote_agent_run_id: params.remoteAgentRunId || null,
-    turn_id: params.turnId || null,
-    source_tool_call_id: params.sourceToolCallId || null,
-    source_tool_name: params.sourceToolName,
-    lifecycle_status: params.lifecycleStatus || "working",
-    status_message: params.statusMessage || null,
-    supports_cancel: params.supportsCancel === true,
-    supports_output_tail: params.supportsOutputTail === true,
-    request_key: params.requestKey,
-    requester_participant_id: params.requesterParticipantId || null,
-    target_participant_id: params.targetParticipantId || null,
-    request_payload: (params.requestPayload ||
-      {}) as TableInsert<"tool_call_tasks">["request_payload"],
-    immediate_result_payload: (params.immediateResultPayload ||
-      {}) as TableInsert<"tool_call_tasks">["immediate_result_payload"],
-    metadata: (params.metadata ||
-      {}) as TableInsert<"tool_call_tasks">["metadata"],
-    deadline_at: toDate(params.deadlineAt),
-    expires_at: toDate(params.expiresAt),
-    retention_ttl_ms: params.retentionTtlMs ?? null,
-    retain_until: toDate(params.retainUntil),
+  const row: ToolCallTaskInsert = {
+    workspaceId: params.workspaceId,
+    conversationId: params.conversationId,
+    executorKind: params.executorKind,
+    deliveryKind: params.deliveryKind,
+    humanSurface: params.humanSurface,
+    principalSubjectId: params.principalSubjectId,
+    sessionId: params.sessionId || null,
+    remoteAgentRunId: params.remoteAgentRunId || null,
+    turnId: params.turnId || null,
+    sourceToolCallId: params.sourceToolCallId || null,
+    sourceToolName: params.sourceToolName,
+    lifecycleStatus: params.lifecycleStatus || "working",
+    statusMessage: params.statusMessage || null,
+    supportsCancel: params.supportsCancel === true,
+    supportsOutputTail: params.supportsOutputTail === true,
+    requestKey: params.requestKey,
+    requesterParticipantId: params.requesterParticipantId || null,
+    targetParticipantId: params.targetParticipantId || null,
+    requestPayload: (params.requestPayload || {}) as ToolCallTaskRequestPayload,
+    immediateResultPayload: (params.immediateResultPayload ||
+      {}) as ToolCallTaskImmediateResultPayload,
+    metadata: (params.metadata || {}) as ToolCallTaskMetadata,
+    deadlineAt: toDate(params.deadlineAt),
+    expiresAt: toDate(params.expiresAt),
+    retentionTtlMs: params.retentionTtlMs ?? null,
+    retainUntil: toDate(params.retainUntil),
   }
 
-  const createdRow = await executor
-    .insertInto("tool_call_tasks")
-    .values(row)
-    .returningAll()
-    .executeTakeFirst()
+  const createdRow = await insertToolCallTaskRow(executor, row)
 
-  const record = mapToolCallTaskRow(createdRow ?? null)
+  const record = presentToolCallTask(createdRow ?? null)
   if (!record) {
     throw new Error("Failed to create tool-call task")
   }
@@ -334,53 +209,38 @@ export async function insertToolCallTaskDeduped(
     await assertSessionAllowsToolCallTasks(executor, params.sessionId)
   }
 
-  const createdRow = await executor
-    .insertInto("tool_call_tasks")
-    .values({
-      workspace_id: params.workspaceId,
-      conversation_id: params.conversationId,
-      executor_kind: params.executorKind,
-      delivery_kind: params.deliveryKind,
-      human_surface: params.humanSurface,
-      principal_subject_id: params.principalSubjectId,
-      session_id: params.sessionId || null,
-      remote_agent_run_id: params.remoteAgentRunId || null,
-      turn_id: params.turnId || null,
-      source_tool_call_id: params.sourceToolCallId || null,
-      source_tool_name: params.sourceToolName,
-      lifecycle_status: params.lifecycleStatus || "working",
-      status_message: params.statusMessage || null,
-      supports_cancel: params.supportsCancel === true,
-      supports_output_tail: params.supportsOutputTail === true,
-      request_key: params.requestKey,
-      requester_participant_id: params.requesterParticipantId || null,
-      target_participant_id: params.targetParticipantId || null,
-      request_payload: (params.requestPayload ||
-        {}) as TableInsert<"tool_call_tasks">["request_payload"],
-      immediate_result_payload: (params.immediateResultPayload ||
-        {}) as TableInsert<"tool_call_tasks">["immediate_result_payload"],
-      metadata: (params.metadata ||
-        {}) as TableInsert<"tool_call_tasks">["metadata"],
-      deadline_at: toDate(params.deadlineAt),
-      expires_at: toDate(params.expiresAt),
-      retention_ttl_ms: params.retentionTtlMs ?? null,
-      retain_until: toDate(params.retainUntil),
-    })
-    .onConflict((oc) =>
-      oc
-        .columns(["workspace_id", "request_key"])
-        .where("lifecycle_status", "in", [
-          "submitted",
-          "working",
-          "input_required",
-          "auth_required",
-        ])
-        .doNothing()
-    )
-    .returningAll()
-    .executeTakeFirst()
+  const row: ToolCallTaskInsert = {
+    workspaceId: params.workspaceId,
+    conversationId: params.conversationId,
+    executorKind: params.executorKind,
+    deliveryKind: params.deliveryKind,
+    humanSurface: params.humanSurface,
+    principalSubjectId: params.principalSubjectId,
+    sessionId: params.sessionId || null,
+    remoteAgentRunId: params.remoteAgentRunId || null,
+    turnId: params.turnId || null,
+    sourceToolCallId: params.sourceToolCallId || null,
+    sourceToolName: params.sourceToolName,
+    lifecycleStatus: params.lifecycleStatus || "working",
+    statusMessage: params.statusMessage || null,
+    supportsCancel: params.supportsCancel === true,
+    supportsOutputTail: params.supportsOutputTail === true,
+    requestKey: params.requestKey,
+    requesterParticipantId: params.requesterParticipantId || null,
+    targetParticipantId: params.targetParticipantId || null,
+    requestPayload: (params.requestPayload || {}) as ToolCallTaskRequestPayload,
+    immediateResultPayload: (params.immediateResultPayload ||
+      {}) as ToolCallTaskImmediateResultPayload,
+    metadata: (params.metadata || {}) as ToolCallTaskMetadata,
+    deadlineAt: toDate(params.deadlineAt),
+    expiresAt: toDate(params.expiresAt),
+    retentionTtlMs: params.retentionTtlMs ?? null,
+    retainUntil: toDate(params.retainUntil),
+  }
 
-  return mapToolCallTaskRow(createdRow ?? null)
+  const createdRow = await insertToolCallTaskRowDeduped(executor, row)
+
+  return presentToolCallTask(createdRow ?? null)
 }
 
 /**
@@ -391,20 +251,12 @@ export async function findLiveToolCallTaskByRequestKey(
   workspaceId: string,
   requestKey: string
 ): Promise<ToolCallTaskRecord | null> {
-  const row = await executor
-    .selectFrom("tool_call_tasks")
-    .selectAll()
-    .where("workspace_id", "=", workspaceId)
-    .where("request_key", "=", requestKey)
-    .where("lifecycle_status", "in", [
-      "submitted",
-      "working",
-      "input_required",
-      "auth_required",
-    ])
-    .limit(1)
-    .executeTakeFirst()
-  return mapToolCallTaskRow(row || null)
+  const row = await selectLiveToolCallTaskByRequestKey(
+    executor,
+    workspaceId,
+    requestKey
+  )
+  return presentToolCallTask(row || null)
 }
 
 export async function createToolCallTask(params: CreateToolCallTaskParams) {
@@ -458,14 +310,9 @@ export async function createToolCallTaskDeduped(
 }
 
 export async function getToolCallTask(taskId: string) {
-  const row = await db
-    .selectFrom("tool_call_tasks")
-    .selectAll()
-    .where("id", "=", taskId)
-    .limit(1)
-    .executeTakeFirst()
+  const row = await selectToolCallTaskByIdDefault(taskId)
 
-  return mapToolCallTaskRow(row || null)
+  return presentToolCallTask(row || null)
 }
 
 export async function appendToolCallTaskOutput(
@@ -487,57 +334,26 @@ export async function appendToolCallTaskOutput(
 
   let appendedSeq: number
   if (typeof chunk.seq === "number") {
-    const row: TableInsert<"tool_call_task_output_chunks"> = {
-      task_id: taskId,
+    const row: ToolCallTaskOutputChunkInsert = {
+      taskId: taskId,
       seq: chunk.seq,
       stream: chunk.stream,
-      text_value: text,
-      metadata: (chunk.metadata ||
-        {}) as TableInsert<"tool_call_task_output_chunks">["metadata"],
-      created_at: toDate(chunk.createdAt) ?? undefined,
+      textValue: text,
+      metadata: (chunk.metadata || {}) as ToolCallTaskOutputChunkMetadata,
+      createdAt: toDate(chunk.createdAt) ?? undefined,
     }
-    await db
-      .insertInto("tool_call_task_output_chunks")
-      .values(row)
-      .onConflict((oc) => oc.columns(["task_id", "seq"]).doNothing())
-      .execute()
+    await insertToolCallTaskOutputChunkExplicitDefault(row)
     appendedSeq = Math.max(0, chunk.seq)
   } else {
-    // Atomic-ish seq allocation: COALESCE(MAX(seq),0)+1 computed inside the
-    // INSERT. Under READ COMMITTED two concurrent appends can still read the
-    // same MAX and collide on the (task_id, seq) unique constraint — so retry on
-    // unique-violation (23505) until we win a distinct seq, rather than silently
-    // dropping the chunk (which onConflict-doNothing would). Bounded retries.
-    let appended: number | null = null
-    for (let attempt = 0; attempt < 8 && appended === null; attempt++) {
-      try {
-        const inserted = await sql<{ seq: number | string }>`
-          INSERT INTO tool_call_task_output_chunks (task_id, seq, stream, text_value, metadata, created_at)
-          SELECT
-            ${taskId}::uuid,
-            COALESCE(MAX(seq), 0) + 1,
-            ${chunk.stream},
-            ${text},
-            ${JSON.stringify(chunk.metadata || {})}::jsonb,
-            ${toDate(chunk.createdAt)}
-          FROM tool_call_task_output_chunks
-          WHERE task_id = ${taskId}::uuid
-          RETURNING seq
-        `.execute(db)
-        const raw = inserted.rows[0]?.seq
-        appended = typeof raw === "number" ? raw : Number(raw || 0)
-      } catch (err) {
-        // 23505 = unique_violation: a concurrent append took our seq. Retry.
-        if ((err as { code?: string })?.code === "23505") continue
-        throw err
-      }
-    }
-    if (appended === null) {
-      throw new Error(
-        `Failed to allocate output seq for task ${taskId} after retries`
-      )
-    }
-    appendedSeq = appended
+    // Atomic-ish seq allocation lives in repo (COALESCE(MAX(seq),0)+1 inside the
+    // INSERT + bounded 23505 retry). It returns the allocated seq.
+    appendedSeq = await appendToolCallTaskOutputChunkAtomicDefault({
+      taskId,
+      stream: chunk.stream,
+      text,
+      metadata: chunk.metadata || {},
+      createdAt: toDate(chunk.createdAt),
+    })
   }
 
   return updateToolCallTaskRecord(taskId, {
@@ -569,15 +385,9 @@ export async function getToolCallTaskForSession(
   sessionId: string,
   taskId: string
 ) {
-  const row = await db
-    .selectFrom("tool_call_tasks")
-    .selectAll()
-    .where("id", "=", taskId)
-    .where("session_id", "=", sessionId)
-    .limit(1)
-    .executeTakeFirst()
+  const row = await selectToolCallTaskForSessionDefault(sessionId, taskId)
 
-  return mapToolCallTaskRow(row || null)
+  return presentToolCallTask(row || null)
 }
 
 export async function listToolCallTasksForSession(params: {
@@ -585,22 +395,14 @@ export async function listToolCallTasksForSession(params: {
   statuses?: ToolCallTaskLifecycleStatus[]
   limit?: number
 }) {
-  let statement = db
-    .selectFrom("tool_call_tasks")
-    .selectAll()
-    .where("session_id", "=", params.sessionId)
-
-  if (params.statuses && params.statuses.length > 0) {
-    statement = statement.where("lifecycle_status", "in", params.statuses)
-  }
-
-  const result = await statement
-    .orderBy("created_at", "desc")
-    .limit(Math.min(Math.max(params.limit || 20, 1), 100))
-    .execute()
+  const result = await selectToolCallTasksForSessionDefault({
+    sessionId: params.sessionId,
+    statuses: params.statuses,
+    limit: Math.min(Math.max(params.limit || 20, 1), 100),
+  })
 
   return result
-    .map((row) => mapToolCallTaskRow(row))
+    .map((row) => presentToolCallTask(row))
     .filter((row): row is ToolCallTaskRecord => row !== null)
 }
 
@@ -615,38 +417,18 @@ export async function getToolCallTaskOutput(params: {
   const stream =
     params.stream && params.stream !== "combined" ? params.stream : null
 
-  let statement = db
-    .selectFrom("tool_call_task_output_chunks")
-    .select(["seq", "stream", "text_value", "metadata", "created_at"])
-    .where("task_id", "=", params.taskId)
+  const rows = await selectToolCallTaskOutputChunksDefault({
+    taskId: params.taskId,
+    afterSeq,
+    stream,
+    limit: normalizedLimit,
+  })
 
-  if (afterSeq > 0) {
-    statement = statement.where("seq", ">", String(afterSeq))
-  }
-  if (stream) {
-    statement = statement.where("stream", "=", stream)
-  }
+  const orderedRows = afterSeq > 0 ? rows : [...rows].reverse()
 
-  const rows = await statement
-    .orderBy("seq", afterSeq > 0 ? "asc" : "desc")
-    .limit(normalizedLimit)
-    .execute()
-
-  const orderedRows =
-    afterSeq > 0 ? rows : ([...rows].reverse() as ToolCallTaskOutputChunkRow[])
-
-  return orderedRows.map((row) => ({
-    seq: typeof row.seq === "number" ? row.seq : Number(row.seq || 0),
-    stream: row.stream as ToolCallTaskOutputChunk["stream"],
-    text: row.text_value,
-    createdAt: serializeInstant(
-      requireInstantDate(
-        row.created_at,
-        "Tool-call task output chunk created_at"
-      )
-    ),
-    metadata: parseJsonObject(row.metadata),
-  })) satisfies ToolCallTaskOutputChunk[]
+  return orderedRows.map((row) =>
+    presentToolCallTaskOutputChunk(row)
+  ) satisfies ToolCallTaskOutputChunk[]
 }
 
 async function updateToolCallTaskRecord(
@@ -700,69 +482,60 @@ async function updateToolCallTaskRecord(
   // Terminal guard as a SQL predicate: only mutate a task that is NOT already
   // terminal. Zero rows back = idempotent no-op (concurrent resolve / cancel /
   // TTL sweep already finished it). This is what makes terminalization safe to
-  // retry after the task has already reached a terminal lifecycle.
-  let update = db
-    .updateTable("tool_call_tasks")
-    .set({
-      lifecycle_status: nextStatus,
+  // retry after the task has already reached a terminal lifecycle. The guard is
+  // applied by the repo writer when `requireNonTerminal` is true — any
+  // status-changing write must not touch an already-terminal row.
+  const row = await updateToolCallTaskRowDefault(
+    taskId,
+    {
+      lifecycleStatus: nextStatus,
       outcome:
         params.outcome ??
         (existing.outcome as ToolCallTaskOutcome | undefined) ??
         null,
-      status_message: params.statusMessage ?? existing.statusMessage ?? null,
-      supports_cancel: params.supportsCancel ?? existing.supportsCancel,
-      supports_output_tail:
+      statusMessage: params.statusMessage ?? existing.statusMessage ?? null,
+      supportsCancel: params.supportsCancel ?? existing.supportsCancel,
+      supportsOutputTail:
         params.supportsOutputTail ?? existing.supportsOutputTail,
-      immediate_result_payload: (params.immediateResultPayload ??
+      immediateResultPayload: (params.immediateResultPayload ??
         existing.immediateResultPayload ??
-        {}) as TableInsert<"tool_call_tasks">["immediate_result_payload"],
-      final_result_payload: (params.finalResultPayload ??
+        {}) as ToolCallTaskImmediateResultPayload,
+      finalResultPayload: (params.finalResultPayload ??
         existing.finalResultPayload ??
-        {}) as TableInsert<"tool_call_tasks">["final_result_payload"],
-      final_error_payload: (params.finalErrorPayload ??
+        {}) as ToolCallTaskFinalResultPayload,
+      finalErrorPayload: (params.finalErrorPayload ??
         existing.finalErrorPayload ??
-        {}) as TableInsert<"tool_call_tasks">["final_error_payload"],
-      metadata: nextMetadata as TableInsert<"tool_call_tasks">["metadata"],
-      conversation_item_id:
+        {}) as ToolCallTaskFinalErrorPayload,
+      metadata: nextMetadata as ToolCallTaskMetadata,
+      conversationItemId:
         params.conversationItemId ?? existing.conversationItemId ?? null,
-      completion_item_id:
+      completionItemId:
         params.completionItemId ?? existing.completionItemId ?? null,
-      resolved_by_participant_id:
+      resolvedByParticipantId:
         params.resolvedByParticipantId ??
         existing.resolvedByParticipantId ??
         null,
-      resolved_at: toDate(params.resolvedAt ?? existing.resolvedAt ?? null),
-      deadline_at: toDate(params.deadlineAt ?? existing.deadlineAt ?? null),
-      expires_at: toDate(params.expiresAt ?? existing.expiresAt ?? null),
-      retention_ttl_ms:
-        params.retentionTtlMs ?? existing.retentionTtlMs ?? null,
-      retain_until: toDate(params.retainUntil ?? existing.retainUntil ?? null),
-      cancel_requested_at: toDate(
+      resolvedAt: toDate(params.resolvedAt ?? existing.resolvedAt ?? null),
+      deadlineAt: toDate(params.deadlineAt ?? existing.deadlineAt ?? null),
+      expiresAt: toDate(params.expiresAt ?? existing.expiresAt ?? null),
+      retentionTtlMs: params.retentionTtlMs ?? existing.retentionTtlMs ?? null,
+      retainUntil: toDate(params.retainUntil ?? existing.retainUntil ?? null),
+      cancelRequestedAt: toDate(
         params.cancelRequestedAt ?? existing.cancelRequestedAt ?? null
       ),
-      cancel_reason: params.cancelReason ?? existing.cancelReason ?? null,
-      last_output_seq: params.lastOutputSeq ?? existing.lastOutputSeq ?? 0,
-      last_output_at: toDate(
+      cancelReason: params.cancelReason ?? existing.cancelReason ?? null,
+      lastOutputSeq: params.lastOutputSeq ?? existing.lastOutputSeq ?? 0,
+      lastOutputAt: toDate(
         params.lastOutputAt ?? existing.lastOutputAt ?? null
       ),
-      completed_at: nextCompletedAt,
-      updated_at: new Date(),
-    })
-    .where("id", "=", taskId)
-
-  // Guard: any status-changing write must not touch an already-terminal row.
-  if (params.lifecycleStatus !== undefined) {
-    update = update.where(
-      "lifecycle_status",
-      "in",
-      NON_TERMINAL_TOOL_CALL_TASK_STATUSES
-    )
-  }
-
-  const row = await update.returningAll().executeTakeFirst()
+      completedAt: nextCompletedAt,
+      updatedAt: new Date(),
+    },
+    { requireNonTerminal: params.lifecycleStatus !== undefined }
+  )
 
   // Zero rows = the guard rejected a terminal-row mutation; return current state.
-  const updated = mapToolCallTaskRow(row || null) ?? existing
+  const updated = presentToolCallTask(row || null) ?? existing
   if (!row) {
     return updated
   }
@@ -809,16 +582,11 @@ async function resolvePrincipalForDelivery(subjectId: string): Promise<{
   actorId?: string
   remoteAgentId?: string
 }> {
-  const row = await db
-    .selectFrom("access_subjects")
-    .select(["kind", "actor_id", "remote_agent_id"])
-    .where("id", "=", subjectId)
-    .limit(1)
-    .executeTakeFirst()
+  const row = await selectPrincipalSubjectForDeliveryDefault(subjectId)
   if (!row) return {}
   return {
-    actorId: row.actor_id || undefined,
-    remoteAgentId: row.remote_agent_id || undefined,
+    actorId: row.actorId || undefined,
+    remoteAgentId: row.remoteAgentId || undefined,
   }
 }
 
@@ -840,38 +608,33 @@ async function emitTaskNotice(
   // Atomically flip to terminal ONLY if still non-terminal — RETURNING tells us
   // whether THIS call won the transition. Concurrent terminal callers (e.g.
   // device result vs socket-close fail vs TTL sweep) thus deliver exactly once;
-  // the losers see zero rows and skip delivery (no duplicate wakeup).
-  const flipRow = await db
-    .updateTable("tool_call_tasks")
-    .set({
-      lifecycle_status: lifecycleStatus,
-      outcome:
-        params.outcome ??
-        (record.outcome as ToolCallTaskOutcome | undefined) ??
-        null,
-      status_message: params.summary ?? record.statusMessage ?? null,
-      final_result_payload: (params.finalResultPayload ??
-        record.finalResultPayload ??
-        {}) as TableInsert<"tool_call_tasks">["final_result_payload"],
-      final_error_payload: (params.finalErrorPayload ??
-        record.finalErrorPayload ??
-        {}) as TableInsert<"tool_call_tasks">["final_error_payload"],
-      metadata: (params.metadata
-        ? { ...record.metadata, ...params.metadata }
-        : record.metadata) as TableInsert<"tool_call_tasks">["metadata"],
-      completed_at: new Date(),
-      updated_at: new Date(),
-    })
-    .where("id", "=", record.id)
-    .where("lifecycle_status", "in", NON_TERMINAL_TOOL_CALL_TASK_STATUSES)
-    .returningAll()
-    .executeTakeFirst()
+  // the losers see zero rows and skip delivery (no duplicate wakeup). The
+  // non-terminal guard lives in the repo writer.
+  const flipRow = await flipToolCallTaskTerminalDefault(record.id, {
+    lifecycleStatus: lifecycleStatus,
+    outcome:
+      params.outcome ??
+      (record.outcome as ToolCallTaskOutcome | undefined) ??
+      null,
+    statusMessage: params.summary ?? record.statusMessage ?? null,
+    finalResultPayload: (params.finalResultPayload ??
+      record.finalResultPayload ??
+      {}) as ToolCallTaskFinalResultPayload,
+    finalErrorPayload: (params.finalErrorPayload ??
+      record.finalErrorPayload ??
+      {}) as ToolCallTaskFinalErrorPayload,
+    metadata: (params.metadata
+      ? { ...record.metadata, ...params.metadata }
+      : record.metadata) as ToolCallTaskMetadata,
+    completedAt: new Date(),
+    updatedAt: new Date(),
+  })
 
   // Zero rows = another caller already terminalized; do not re-deliver.
   if (!flipRow) {
     return (await getToolCallTask(record.id)) ?? record
   }
-  const flipped = mapToolCallTaskRow(flipRow) ?? record
+  const flipped = presentToolCallTask(flipRow) ?? record
   if (flipped.sessionId) {
     await publishSessionRuntime(flipped.workspaceId, flipped.sessionId)
   }
@@ -1000,17 +763,15 @@ async function deliverTaskNotice(
 
         // Persist the completion-item pointer LAST in the tx (payload-only;
         // the row is already terminal so no terminal guard). On commit, marker
-        // set ⟺ wakeup row durably present.
+        // set ⟺ wakeup row durably present. The write runs on `trx` so it stays
+        // atomic with the notice + wakeup row above.
         const updatedRecord = completionItemId
-          ? (mapToolCallTaskRow(
-              (await trx
-                .updateTable("tool_call_tasks")
-                .set({
-                  completion_item_id: completionItemId,
-                })
-                .where("id", "=", record.id)
-                .returningAll()
-                .executeTakeFirst()) ?? null
+          ? (presentToolCallTask(
+              (await setToolCallTaskCompletionItem(
+                trx,
+                record.id,
+                completionItemId
+              )) ?? null
             ) ?? record)
           : record
 

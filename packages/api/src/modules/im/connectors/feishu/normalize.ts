@@ -12,6 +12,10 @@ import {
   type CanonicalMessage,
   type CanonicalPart,
 } from "../../messaging/canonical-message.js"
+import {
+  extractFeishuRawText,
+  parseFeishuContentObject,
+} from "./content-codec.js"
 import { parseFeishuMentions, type RawFeishuMention } from "./mentions.js"
 
 export interface FeishuMessageEvent {
@@ -67,7 +71,7 @@ export function normalizeFeishuMessageEvent(
   const endpointType: "direct" | "group" =
     msg.chat_type === "p2p" ? "direct" : "group"
 
-  const rawText = extractRawText(msg.message_type, msg.content)
+  const rawText = extractFeishuRawText(msg.message_type, msg.content)
   const { text } = parseFeishuMentions({
     rawText,
     rawMentions: msg.mentions,
@@ -115,34 +119,11 @@ export function normalizeFeishuMessageEvent(
   }
 }
 
-function extractRawText(messageType: string, content: string): string {
-  try {
-    const parsed = JSON.parse(content)
-    if (messageType === "text") {
-      return nonEmpty(parsed?.text) || ""
-    }
-    if (messageType === "post") {
-      return nonEmpty(content) || "[富文本消息]"
-    }
-    if (messageType === "image") return "[图片]"
-    if (messageType === "audio") return "[语音]"
-    if (messageType === "video") return "[视频]"
-    if (messageType === "file") {
-      return nonEmpty(parsed?.file_name)
-        ? `[文件 ${parsed.file_name}]`
-        : "[文件]"
-    }
-  } catch {
-    if (nonEmpty(content)) return content
-  }
-  return nonEmpty(content) || `[${messageType || "message"}]`
-}
-
 function messageTypeToMarker(
   messageType: string,
   content: string
 ): CanonicalPart {
-  const original = safeParseObject(content)
+  const original = parseFeishuContentObject(content)
   switch (messageType) {
     case "image":
       return { type: "system_marker", marker: "image_placeholder", original }
@@ -160,16 +141,4 @@ function messageTypeToMarker(
         original,
       }
   }
-}
-
-function safeParseObject(s: string): Record<string, unknown> | undefined {
-  try {
-    const v = JSON.parse(s)
-    if (v && typeof v === "object" && !Array.isArray(v)) {
-      return v as Record<string, unknown>
-    }
-  } catch {
-    return undefined
-  }
-  return undefined
 }

@@ -14,10 +14,18 @@ import type {
   TransportExternalUserSummary,
   TransportSessionSummary,
   WeixinQrLoginSessionSummary,
+  WeixinQrLoginStatus,
   DingtalkDeviceFlowSessionSummary,
+  DingtalkDeviceFlowStatus,
   DingtalkDeviceFlowStartResponse,
+  TrustLevel,
 } from "@synapse/shared"
-import { describeTransportKind } from "@synapse/shared"
+import {
+  DINGTALK_DEVICE_FLOW_STATUS,
+  MODEL_GROUP_GRANT_SCOPE,
+  WEIXIN_QR_LOGIN_STATUS,
+  describeTransportKind,
+} from "@synapse/shared"
 import { useConnectorMetadata } from "@/lib/im-connector-metadata"
 import {
   ArrowUpRight,
@@ -51,7 +59,31 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { API_BASE, api, ApiError } from "@/lib/api"
-import { MODEL_GROUP_GRANT_SCOPE } from "@synapse/shared"
+
+const WEIXIN_QR_POLLING_STATUSES = new Set<WeixinQrLoginStatus>([
+  WEIXIN_QR_LOGIN_STATUS.WAITING,
+  WEIXIN_QR_LOGIN_STATUS.SCANNED,
+])
+
+const DINGTALK_DEVICE_FLOW_MANUAL_FALLBACK_STATUSES =
+  new Set<DingtalkDeviceFlowStatus>([
+    DINGTALK_DEVICE_FLOW_STATUS.FAIL,
+    DINGTALK_DEVICE_FLOW_STATUS.EXPIRED,
+  ])
+
+function isWeixinQrPollingStatus(
+  status: WeixinQrLoginStatus | null | undefined
+) {
+  return status != null && WEIXIN_QR_POLLING_STATUSES.has(status)
+}
+
+function shouldShowDingtalkManualFallback(
+  status: DingtalkDeviceFlowStatus | null | undefined
+) {
+  return (
+    status != null && DINGTALK_DEVICE_FLOW_MANUAL_FALLBACK_STATUSES.has(status)
+  )
+}
 
 type TransportAccountOwnerFormState = {
   ownerScope: TransportAccountOwnerScope
@@ -118,7 +150,7 @@ type WorkspaceDirectoryMember = {
   userName?: string
   userEmail?: string
   avatarUrl?: string | null
-  trustLevel?: string
+  trustLevel?: TrustLevel
 }
 
 type WorkspaceActorOption = {
@@ -892,11 +924,8 @@ export default function ImPage() {
       const nextAccounts = accountsRes?.accounts || []
       const nextSessions = sessionsRes?.sessions || []
       const nextExternalUsers = externalUsersRes?.externalUsers || []
-      const nextWorkspaceMembers = Array.isArray(
-        (workspaceMembersRes as any)?.data
-      )
-        ? ((workspaceMembersRes as any).data as WorkspaceDirectoryMember[]) ||
-          []
+      const nextWorkspaceMembers = Array.isArray(workspaceMembersRes)
+        ? (workspaceMembersRes as WorkspaceDirectoryMember[])
         : []
       const nextActors = Array.isArray(actorsRes) ? (actorsRes as Actor[]) : []
 
@@ -929,7 +958,7 @@ export default function ImPage() {
     if (!workspaceId || !weixinSession) return
     const activeWorkspaceId = workspaceId
     const activeSessionId = weixinSession.sessionId
-    if (!["waiting", "scanned"].includes(weixinSession.status)) {
+    if (!isWeixinQrPollingStatus(weixinSession.status)) {
       if (weixinSession.transportAccount) {
         void loadData(true)
       }
@@ -951,7 +980,10 @@ export default function ImPage() {
           await loadData(true)
           return
         }
-        if (["expired", "error"].includes(result?.session?.status || "")) {
+        if (
+          result?.session?.status === WEIXIN_QR_LOGIN_STATUS.EXPIRED ||
+          result?.session?.status === WEIXIN_QR_LOGIN_STATUS.ERROR
+        ) {
           return
         }
       } catch (pollError) {
@@ -988,14 +1020,11 @@ export default function ImPage() {
     const intervalSeconds = dingtalkSession.intervalSeconds || 5
     // Stop polling on terminal states. Reload accounts on success so the
     // newly-connected DingTalk row shows up in the bottom list.
-    if (dingtalkSession.status !== "waiting") {
-      if (dingtalkSession.status === "success") {
+    if (dingtalkSession.status !== DINGTALK_DEVICE_FLOW_STATUS.WAITING) {
+      if (dingtalkSession.status === DINGTALK_DEVICE_FLOW_STATUS.SUCCESS) {
         void loadData(true)
       }
-      if (
-        dingtalkSession.status === "fail" ||
-        dingtalkSession.status === "expired"
-      ) {
+      if (shouldShowDingtalkManualFallback(dingtalkSession.status)) {
         setDingtalkManualMode(true)
       }
       return
@@ -1035,10 +1064,7 @@ export default function ImPage() {
           await loadData(true)
           return
         }
-        if (
-          result?.session?.status === "fail" ||
-          result?.session?.status === "expired"
-        ) {
+        if (shouldShowDingtalkManualFallback(result?.session?.status)) {
           setDingtalkManualMode(true)
           return
         }

@@ -1,3 +1,5 @@
+import { z } from "zod"
+
 type ErrorHelp = {
   summary: string
   suggestion?: string
@@ -165,16 +167,44 @@ function parseJson(text: string): unknown {
   }
 }
 
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+export async function readZhipuJsonObjectResponse<
+  T extends object = Record<string, unknown>,
+>(apiName: string, response: Response): Promise<T> {
+  const rawText = await response.text().catch(() => "")
+  const parsed = parseJson(rawText)
+  if (parsed === undefined) {
+    throw new Error(`${apiName} 返回了无效 JSON。`)
+  }
+  if (!isJsonObject(parsed)) {
+    throw new Error(`${apiName} 返回体必须是 JSON object。`)
+  }
+  return parsed as T
+}
+
+const ZhipuErrorBodySchema = z
+  .object({
+    error: z
+      .object({
+        code: z.string().optional(),
+        message: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough()
+
 function extractErrorBody(body: unknown): { code?: string; message?: string } {
-  if (!body || typeof body !== "object") return {}
-  const record = body as Record<string, unknown>
-  const error = record.error
-  if (!error || typeof error !== "object") return {}
-  const errorRecord = error as Record<string, unknown>
+  const parsed = ZhipuErrorBodySchema.safeParse(body)
+  if (!parsed.success) return {}
+  const error = parsed.data.error
+  if (!error) return {}
   return {
-    code: typeof errorRecord.code === "string" ? errorRecord.code : undefined,
-    message:
-      typeof errorRecord.message === "string" ? errorRecord.message : undefined,
+    code: error.code,
+    message: error.message,
   }
 }
 

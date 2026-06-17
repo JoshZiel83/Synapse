@@ -19,6 +19,7 @@ import { saveFromUrl } from "../../../../../infrastructure/storage/file-io.js"
 import { pluginOutputFileRef } from "../../../file-ref.js"
 import {
   normalizeZhipuTransportError,
+  readZhipuJsonObjectResponse,
   throwZhipuApiError,
 } from "./zhipu-errors.js"
 import { buildToolOutputOrigin } from "../../../../files/service.js"
@@ -148,9 +149,9 @@ export const imageGenFeature: SubFeature = {
         await throwZhipuApiError("图像生成 API", response)
       }
 
-      const result = (await response.json()) as {
+      const result = await readZhipuJsonObjectResponse<{
         data?: Array<{ url?: string; b64_json?: string }>
-      }
+      }>("图像生成 API", response)
 
       const imageData = result.data?.[0]
       if (!imageData?.url) {

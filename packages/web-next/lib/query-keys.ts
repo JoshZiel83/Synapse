@@ -1,3 +1,5 @@
+import type { AuditLogListQuery } from "@synapse/shared/schemas"
+
 /**
  * Centralized React Query key factory.
  *
@@ -23,8 +25,8 @@ export const qk = {
   device: (workspaceId: string, deviceId: string) =>
     [...qk.workspace(workspaceId), "devices", deviceId] as const,
 
-  auditLogs: (workspaceId: string, params?: string) =>
-    [...qk.workspace(workspaceId), "audit-logs", params ?? ""] as const,
+  auditLogs: (workspaceId: string, query?: AuditLogListQuery) =>
+    [...qk.workspace(workspaceId), "audit-logs", query ?? {}] as const,
 
   remoteAgents: (workspaceId: string) =>
     [...qk.workspace(workspaceId), "remote-agents"] as const,

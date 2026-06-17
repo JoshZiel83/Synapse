@@ -4,6 +4,7 @@ import type {
   RealtimeAsrSocketEventPayloadMap,
 } from "@synapse/shared"
 import { nowIsoInstant } from "@synapse/shared/datetime"
+import { RealtimeAsrAudioConfigSchema } from "@synapse/shared/schemas"
 import type { IncomingMessage } from "node:http"
 import type { FastifyBaseLogger } from "fastify"
 import { z } from "zod"
@@ -16,30 +17,6 @@ import {
   encodeFullClientRequest,
   type VolcengineAsrFullClientRequest,
 } from "./protocol.js"
-
-const realtimeAsrAudioConfigSchema = z
-  .object({
-    format: z.enum(["pcm", "ogg"]),
-    codec: z.enum(["raw", "opus"]),
-    rate: z.literal(16000),
-    bits: z.literal(16),
-    channel: z.literal(1),
-  })
-  .superRefine((value, ctx) => {
-    if (value.format === "pcm" && value.codec !== "raw") {
-      ctx.addIssue({
-        code: "custom",
-        message: "PCM audio must use the raw codec",
-      })
-    }
-
-    if (value.format === "ogg" && value.codec !== "opus") {
-      ctx.addIssue({
-        code: "custom",
-        message: "OGG audio must use the opus codec",
-      })
-    }
-  })
 
 type AsrSocketSender = (event: RealtimeAsrSocketEvent) => boolean
 
@@ -98,28 +75,31 @@ function formatZodError(error: z.ZodError) {
   return error.issues.map((issue) => issue.message).join("; ")
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value))
+}
+
 function providerErrorMessage(payload: unknown) {
   if (typeof payload === "string" && payload.trim()) {
     return payload.trim()
   }
 
-  if (!payload || typeof payload !== "object") {
+  if (!isRecord(payload)) {
     return "ASR provider error"
   }
 
-  const record = payload as Record<string, unknown>
-  if (typeof record.message === "string" && record.message.trim()) {
-    return record.message.trim()
+  if (typeof payload.message === "string" && payload.message.trim()) {
+    return payload.message.trim()
   }
-  if (typeof record.error === "string" && record.error.trim()) {
-    return record.error.trim()
+  if (typeof payload.error === "string" && payload.error.trim()) {
+    return payload.error.trim()
   }
 
   return "ASR provider error"
 }
 
 export function validateRealtimeAsrAudioConfig(input: unknown) {
-  return realtimeAsrAudioConfigSchema.parse(input) as RealtimeAsrAudioConfig
+  return RealtimeAsrAudioConfigSchema.parse(input) as RealtimeAsrAudioConfig
 }
 
 export function mapProviderError(

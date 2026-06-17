@@ -3,6 +3,10 @@
 import { useEffect, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { ArrowLeft } from "lucide-react"
+import type {
+  MarketplacePluginView,
+  PluginInstallationDetailView,
+} from "@synapse/shared"
 import { Button } from "@/components/ui/button"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { api } from "@/lib/api"
@@ -13,9 +17,12 @@ export default function PluginInstallationPage() {
   const params = useParams<{ installationId: string }>()
   const router = useRouter()
   const { workspaceId } = useWorkspace()
-  const [plugin, setPlugin] = useState<any>(null)
-  const [installations, setInstallations] = useState<any[]>([])
-  const [installation, setInstallation] = useState<any>(null)
+  const [plugin, setPlugin] = useState<MarketplacePluginView | null>(null)
+  const [installations, setInstallations] = useState<
+    PluginInstallationDetailView[]
+  >([])
+  const [installation, setInstallation] =
+    useState<PluginInstallationDetailView | null>(null)
   const [loading, setLoading] = useState(true)
   const installationId = params.installationId
 
@@ -26,18 +33,17 @@ export default function PluginInstallationPage() {
     const load = async () => {
       try {
         setLoading(true)
-        const data = await api.getInstallation(workspaceId, installationId)
+        const currentInstallation = await api.getInstallation(
+          workspaceId,
+          installationId
+        )
         if (cancelled) return
 
-        const currentInstallation = data.installation
         const [pluginData, installData] = await Promise.all([
-          api.getMarketplacePlugin(currentInstallation.plugin_id),
-          api.getInstallations(
-            workspaceId,
-            new URLSearchParams({
-              pluginId: currentInstallation.plugin_id,
-            }).toString()
-          ),
+          api.getMarketplacePlugin(currentInstallation.pluginId),
+          api.getInstallations(workspaceId, {
+            pluginId: currentInstallation.pluginId,
+          }),
         ])
 
         if (!cancelled) {
@@ -81,7 +87,7 @@ export default function PluginInstallationPage() {
           size="sm"
           onClick={() =>
             router.push(
-              `/dashboard/plugins/${installation.plugin_id}?installationId=${installation.id}`
+              `/dashboard/plugins/${installation.pluginId}?installationId=${installation.id}`
             )
           }
         >
@@ -105,20 +111,17 @@ export default function PluginInstallationPage() {
             )
           }
           onCreateInstallation={() =>
-            router.push(`/dashboard/plugins/${installation.plugin_id}/install`)
+            router.push(`/dashboard/plugins/${installation.pluginId}/install`)
           }
           onInstallationsChanged={async (updatedInstallation) => {
             if (!workspaceId) return
             const [freshInstallation, freshInstallations] = await Promise.all([
               api.getInstallation(workspaceId, updatedInstallation.id),
-              api.getInstallations(
-                workspaceId,
-                new URLSearchParams({
-                  pluginId: installation.plugin_id,
-                }).toString()
-              ),
+              api.getInstallations(workspaceId, {
+                pluginId: installation.pluginId,
+              }),
             ])
-            setInstallation(freshInstallation.installation)
+            setInstallation(freshInstallation)
             setInstallations(freshInstallations)
           }}
         />

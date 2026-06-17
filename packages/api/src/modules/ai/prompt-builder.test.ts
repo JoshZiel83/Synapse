@@ -5,7 +5,7 @@ import {
   buildPlanModeGuidance,
   buildRequestUserInputGuidance,
 } from "./prompt-builder.js"
-import type { ToolDefinition } from "@synapse/shared"
+import type { ActorDoc, ToolDefinition } from "@synapse/shared"
 
 test("buildRequestUserInputGuidance includes exploration and approval rules", () => {
   const guidance = buildRequestUserInputGuidance(false)
@@ -107,6 +107,69 @@ test("buildActorPrompt teaches direct threads not to overuse replyToRef", () => 
 
   assert.match(prompt.system, /omit `replyToRef` by default/i)
   assert.match(prompt.system, /Do not add `replyToRef` mechanically/i)
+})
+
+test("buildActorPrompt only consumes decoded actor doc and specialty arrays", () => {
+  const decodedDoc: ActorDoc = {
+    id: "00000000-0000-4000-8000-000000000111",
+    key: "custom",
+    title: "Decoded guidance",
+    content: [
+      {
+        id: "00000000-0000-4000-8000-000000000112",
+        type: "text",
+        text: "Use the decoded docs.",
+      },
+    ],
+    visibility: "always",
+    priority: 1,
+  }
+
+  const decodedPrompt = buildActorPrompt(
+    {
+      definition: {
+        name: "Planner",
+        title: "Engineer",
+        docs: [decodedDoc],
+        specialties: ["planning"],
+      },
+      currentVersion: 1,
+    },
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    "direct",
+    undefined,
+    "default"
+  )
+
+  assert.match(decodedPrompt.system, /Decoded guidance/)
+  assert.match(decodedPrompt.system, /Use the decoded docs/)
+  assert.match(decodedPrompt.system, /`planning`/)
+
+  const stringPrompt = buildActorPrompt(
+    {
+      definition: {
+        name: "Planner",
+        title: "Engineer",
+        docs: JSON.stringify([decodedDoc]),
+        specialties: JSON.stringify(["planning"]),
+      },
+      currentVersion: 1,
+    },
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    "direct",
+    undefined,
+    "default"
+  )
+
+  assert.doesNotMatch(stringPrompt.system, /Decoded guidance/)
+  assert.doesNotMatch(stringPrompt.system, /Use the decoded docs/)
+  assert.doesNotMatch(stringPrompt.system, /`planning`/)
 })
 
 test("buildActorPrompt rejects plan mode in group conversations", () => {

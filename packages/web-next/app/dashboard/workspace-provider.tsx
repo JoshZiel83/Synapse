@@ -12,14 +12,9 @@ import {
 import { api } from "@/lib/api"
 import { ConnectorMetadataProvider } from "@/lib/im-connector-metadata"
 import { useClearWorkspaceQueries } from "@/hooks/use-logout"
+import type { WorkspaceListItemView } from "@synapse/shared"
 
-interface WorkspaceInfo {
-  id: string
-  name: string
-  slug: string
-  currentWorkspaceMemberId?: string
-  trustLevel?: string
-}
+type WorkspaceInfo = WorkspaceListItemView
 
 interface WorkspaceContextType {
   workspaceId: string | null
@@ -74,8 +69,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       : Promise.resolve()
 
     try {
-      const res = await api.getWorkspaces()
-      const list: WorkspaceInfo[] = res?.data ?? res ?? []
+      const list: WorkspaceInfo[] = await api.getWorkspaces()
       setWorkspaces(list)
 
       if (list.length === 0) {

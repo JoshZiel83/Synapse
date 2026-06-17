@@ -1,10 +1,12 @@
 import type { FastifyInstance, FastifyReply } from "fastify"
-import { z } from "zod"
-import { USER_UPLOAD_FILE_ORIGIN_SYSTEMS } from "@synapse/shared/constants"
-import type {
-  FileCreateOriginInput,
-  UserUploadFileOriginSystem,
-} from "@synapse/shared/types"
+import {
+  FileParseEnqueueResultSchema,
+  FileParseRunViewSchema,
+  FileRecordViewSchema,
+  StoredFileRecordViewSchema,
+} from "@synapse/shared/schemas"
+import type { FileUploadOriginInput } from "@synapse/shared/schemas"
+import { appRoute, wireRoute } from "../../infrastructure/http/route.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import {
@@ -22,12 +24,7 @@ import {
   enqueueFileParse,
   getLatestAvailableFileParse,
 } from "./parse-service.js"
-
-const fileUploadOriginSchema = z.strictObject({
-  family: z.literal("user_upload"),
-  system: z.enum(USER_UPLOAD_FILE_ORIGIN_SYSTEMS),
-  details: z.record(z.string(), z.unknown()).optional(),
-})
+import { parseFileUploadOriginField } from "./upload-origin-codec.js"
 
 async function sendStoredFile(
   reply: FastifyReply,
@@ -60,156 +57,184 @@ export async function filesUploadController(app: FastifyInstance) {
   app.addHook("onRequest", authMiddleware)
   app.addHook("onRequest", workspaceMiddleware)
 
-  app.post<{
-    Params: { workspaceId: string }
-  }>("/workspaces/:workspaceId/files", async (request, reply) => {
-    const { workspaceId } = request.params
-    const userId = (request as any).user!.userId
+  appRoute(
+    app,
+    "POST",
+    "/workspaces/:workspaceId/files",
+    { schema: StoredFileRecordViewSchema },
+    async (request, reply) => {
+      const { workspaceId } = request.params as { workspaceId: string }
+      const userId = (request as any).user!.userId
 
-    let filePart: Awaited<ReturnType<typeof request.file>> | null = null
-    let originInput: FileCreateOriginInput | null = null
-    try {
-      for await (const part of request.parts()) {
-        if (part.type === "file") {
-          if (!filePart) {
-            filePart = part
-          } else {
-            part.file.resume()
+      let filePart: Awaited<ReturnType<typeof request.file>> | null = null
+      let originInput: FileUploadOriginInput | null = null
+      try {
+        for await (const part of request.parts()) {
+          if (part.type === "file") {
+            if (!filePart) {
+              filePart = part
+            } else {
+              part.file.resume()
+            }
+            continue
           }
-          continue
-        }
 
-        if (part.fieldname === "origin" && typeof part.value === "string") {
-          try {
-            originInput = JSON.parse(part.value) as FileCreateOriginInput
-          } catch {
-            return reply
-              .status(400)
-              .send({ error: "origin must be valid JSON" })
+          if (part.fieldname === "origin" && typeof part.value === "string") {
+            const parsedOrigin = parseFileUploadOriginField(part.value)
+            if (!parsedOrigin.ok) {
+              reply.status(400).send({ error: parsedOrigin.error })
+              return
+            }
+            originInput = parsedOrigin.origin
           }
         }
+      } catch {
+        reply.status(413).send({ error: "File too large (max 25MB)" })
+        return
       }
-    } catch {
-      return reply.status(413).send({ error: "File too large (max 25MB)" })
-    }
 
-    if (!filePart) {
-      return reply.status(400).send({ error: "No file provided" })
-    }
+      if (!filePart) {
+        reply.status(400).send({ error: "No file provided" })
+        return
+      }
 
-    let buffer
-    try {
-      buffer = await filePart.toBuffer()
-    } catch {
-      return reply.status(413).send({ error: "File too large (max 25MB)" })
-    }
+      let buffer
+      try {
+        buffer = await filePart.toBuffer()
+      } catch {
+        reply.status(413).send({ error: "File too large (max 25MB)" })
+        return
+      }
 
-    const parsedOrigin = fileUploadOriginSchema.safeParse(originInput)
-    if (!parsedOrigin.success) {
-      return reply.status(400).send({
-        error: `Invalid origin: ${parsedOrigin.error.issues.map((issue) => issue.message).join(" ")}`,
-      })
-    }
+      if (!originInput) {
+        reply.status(400).send({ error: "Invalid origin: origin is required" })
+        return
+      }
 
-    const record = await uploadFile(
-      buffer,
-      filePart.filename,
-      filePart.mimetype,
-      workspaceId,
-      userId,
-      buildUserUploadOrigin({
-        system: parsedOrigin.data.system as UserUploadFileOriginSystem,
-        initiatorUserId: userId,
-        details: parsedOrigin.data.details,
-      })
-    )
-    return reply.status(201).send(record)
-  })
+      const record = await uploadFile(
+        buffer,
+        filePart.filename,
+        filePart.mimetype,
+        workspaceId,
+        userId,
+        buildUserUploadOrigin({
+          system: originInput.system,
+          initiatorUserId: userId,
+          details: originInput.details,
+        })
+      )
+      reply.status(201)
+      return record
+    }
+  )
 }
 
 export async function filesReadController(app: FastifyInstance) {
   app.addHook("onRequest", authMiddleware)
 
-  app.get<{
-    Params: { fileId: string }
-  }>("/files/:fileId/info", async (request, reply) => {
+  appRoute(
+    app,
+    "GET",
+    "/files/:fileId/info",
+    { schema: FileRecordViewSchema },
+    async (request, reply) => {
+      const userId = (request as any).user!.userId
+      const { fileId } = request.params as { fileId: string }
+      const detail = await getFileDetail(fileId)
+      if (!detail) {
+        reply.status(404).send({ error: "File not found" })
+        return
+      }
+
+      const allowed = await canUserAccessFileWorkspace(
+        detail.workspaceId ?? null,
+        userId
+      )
+      if (!allowed) {
+        reply.status(403).send({ error: "Forbidden" })
+        return
+      }
+
+      return detail
+    }
+  )
+
+  appRoute(
+    app,
+    "GET",
+    "/files/:fileId/parses/latest",
+    { schema: FileParseRunViewSchema },
+    async (request, reply) => {
+      const userId = (request as any).user!.userId
+      const { fileId } = request.params as { fileId: string }
+      const detail = await getFileDetail(fileId)
+      if (!detail) {
+        reply.status(404).send({ error: "File not found" })
+        return
+      }
+
+      const allowed = await canUserAccessFileWorkspace(
+        detail.workspaceId ?? null,
+        userId
+      )
+      if (!allowed) {
+        reply.status(403).send({ error: "Forbidden" })
+        return
+      }
+
+      const parse = await getLatestAvailableFileParse(fileId)
+      if (!parse) {
+        reply.status(404).send({ error: "No parse found" })
+        return
+      }
+
+      return parse
+    }
+  )
+
+  appRoute(
+    app,
+    "POST",
+    "/files/:fileId/parses",
+    { schema: FileParseEnqueueResultSchema },
+    async (request, reply) => {
+      const userId = (request as any).user!.userId
+      const { fileId } = request.params as { fileId: string }
+      const detail = await getFileDetail(fileId)
+      if (!detail) {
+        reply.status(404).send({ error: "File not found" })
+        return
+      }
+
+      const allowed = await canUserAccessFileWorkspace(
+        detail.workspaceId ?? null,
+        userId
+      )
+      if (!allowed) {
+        reply.status(403).send({ error: "Forbidden" })
+        return
+      }
+
+      const runId = await enqueueFileParse({
+        fileId,
+        trigger: "manual",
+      })
+      if (!runId) {
+        reply
+          .status(400)
+          .send({ error: "File type is not supported for default parsing" })
+        return
+      }
+
+      reply.status(202)
+      return { runId }
+    }
+  )
+
+  wireRoute(app, "GET", "/files/:fileId", {}, async (request, reply) => {
     const userId = (request as any).user!.userId
-    const detail = await getFileDetail(request.params.fileId)
-    if (!detail) {
-      return reply.status(404).send({ error: "File not found" })
-    }
-
-    const allowed = await canUserAccessFileWorkspace(
-      detail.workspaceId ?? null,
-      userId
-    )
-    if (!allowed) {
-      return reply.status(403).send({ error: "Forbidden" })
-    }
-
-    return detail
-  })
-
-  app.get<{
-    Params: { fileId: string }
-  }>("/files/:fileId/parses/latest", async (request, reply) => {
-    const userId = (request as any).user!.userId
-    const detail = await getFileDetail(request.params.fileId)
-    if (!detail) {
-      return reply.status(404).send({ error: "File not found" })
-    }
-
-    const allowed = await canUserAccessFileWorkspace(
-      detail.workspaceId ?? null,
-      userId
-    )
-    if (!allowed) {
-      return reply.status(403).send({ error: "Forbidden" })
-    }
-
-    const parse = await getLatestAvailableFileParse(request.params.fileId)
-    if (!parse) {
-      return reply.status(404).send({ error: "No parse found" })
-    }
-
-    return parse
-  })
-
-  app.post<{
-    Params: { fileId: string }
-  }>("/files/:fileId/parses", async (request, reply) => {
-    const userId = (request as any).user!.userId
-    const detail = await getFileDetail(request.params.fileId)
-    if (!detail) {
-      return reply.status(404).send({ error: "File not found" })
-    }
-
-    const allowed = await canUserAccessFileWorkspace(
-      detail.workspaceId ?? null,
-      userId
-    )
-    if (!allowed) {
-      return reply.status(403).send({ error: "Forbidden" })
-    }
-
-    const runId = await enqueueFileParse({
-      fileId: request.params.fileId,
-      trigger: "manual",
-    })
-    if (!runId) {
-      return reply
-        .status(400)
-        .send({ error: "File type is not supported for default parsing" })
-    }
-
-    return reply.status(202).send({ runId })
-  })
-
-  app.get<{
-    Params: { fileId: string }
-  }>("/files/:fileId", async (request, reply) => {
-    const userId = (request as any).user!.userId
-    const info = await getFileRecord(request.params.fileId)
+    const { fileId } = request.params as { fileId: string }
+    const info = await getFileRecord(fileId)
     if (!info) {
       return reply.status(404).send({ error: "File not found" })
     }
@@ -234,19 +259,17 @@ export async function filesReadController(app: FastifyInstance) {
   // authorization token, so contentAccessResolver checks every reference path
   // the caller could legitimately reach the bytes through (message / memory /
   // file-space grant / asset). Optional ?conv= and ?space= narrow the search.
-  app.get<{
-    Params: { sha256: string }
-    Querystring: { conv?: string; space?: string }
-  }>("/content/:sha256", async (request, reply) => {
+  wireRoute(app, "GET", "/content/:sha256", {}, async (request, reply) => {
     const userId = (request as any).user!.userId as string
-    const sha256 = request.params.sha256
+    const { sha256 } = request.params as { sha256: string }
+    const query = request.query as { conv?: string; space?: string }
     if (!/^[a-f0-9]{64}$/.test(sha256)) {
       return reply.status(400).send({ error: "Invalid content hash" })
     }
 
     const allowed = await canUserAccessContent(sha256, userId, {
-      conversationId: request.query.conv ?? null,
-      fileSpaceId: request.query.space ?? null,
+      conversationId: query.conv ?? null,
+      fileSpaceId: query.space ?? null,
     })
     if (!allowed) {
       return reply.status(403).send({ error: "Forbidden" })

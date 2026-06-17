@@ -1,30 +1,35 @@
-// Devices module — service layer. SQL queries against the device_* tables
-// added in PR #1. v3.0 skeleton: covers list/get/delete + pairing session
-// create/consume. Full lifecycle (claim daemon, cloud bootstrap, re-key)
-// lands across later PRs.
+// Devices module — service layer. Business logic + error-code mapping for
+// list/get/delete + pairing session create/consume + daemon claim/detach. All
+// direct DB access lives in repo.ts (guard r8); this file calls those repo fns
+// and maps their domain results / discriminated outcomes to DeviceModuleError
+// codes and the wire-facing result shapes.
 
 import { randomUUID, randomBytes, createHash } from "node:crypto"
-import { sql } from "kysely"
 import {
   DEVICE_PAIRING_MODES,
-  DEVICE_PAIRING_STATUSES,
   DEVICE_SERVICE_KINDS,
   DEVICE_TYPES,
-  type DeviceCapabilitySummary,
-  type DeviceDetail,
   type DevicePairingMode,
   type DeviceServiceKind,
-  type DeviceServiceSummary,
-  type DeviceSummary,
   type DeviceType,
-  type HostKind,
 } from "@synapse/device-protocol"
-import {
-  dateToIsoInstant,
-  type IsoInstantString,
-} from "@synapse/shared/datetime"
 import type { OneClickInstallCommands } from "@synapse/shared"
-import { db } from "../../infrastructure/database/kysely.js"
+import type {
+  DeviceDetailRecord,
+  DevicePairingTicketRecord,
+  DeviceServiceRecord,
+  DeviceSummaryRecord,
+} from "./repo.types.js"
+import {
+  claimRemoteAgentDaemonTx,
+  consumeLocalPairingTx,
+  detachDeviceServiceRpc,
+  findDeviceDetail,
+  insertLocalPairingSession,
+  isDeviceServiceOwnedByWorkspace,
+  listDeviceSummaries,
+  softDeleteDevice,
+} from "./repo.js"
 import { config } from "../../config/index.js"
 import {
   buildDeviceInstallCommands,
@@ -60,151 +65,25 @@ export class DeviceModuleError extends Error {
   }
 }
 
-function toIsoInstant(value: Date | null | undefined): IsoInstantString | null {
-  if (!value) return null
-  return dateToIsoInstant(value)
-}
-
-function serializeDeviceSummary(row: {
-  id: string
-  workspace_id: string
-  title: string
-  host_kind: HostKind
-  host_provider: string | null
-  device_type: DeviceType
-  platform: string | null
-  trust_status: "pending" | "trusted" | "revoked"
-  last_seen_at: Date | null
-  last_connected_at: Date | null
-}): DeviceSummary {
-  return {
-    id: row.id,
-    workspace_id: row.workspace_id,
-    title: row.title,
-    host_kind: row.host_kind,
-    host_provider: row.host_provider,
-    device_type: row.device_type,
-    platform: row.platform,
-    trust_status: row.trust_status,
-    last_seen_at: toIsoInstant(row.last_seen_at),
-    last_connected_at: toIsoInstant(row.last_connected_at),
-  }
-}
-
 export async function listDevices(
   workspaceId: string
-): Promise<DeviceSummary[]> {
-  const rows = await db
-    .selectFrom("devices")
-    .selectAll()
-    .where("workspace_id", "=", workspaceId)
-    .where("deleted_at", "is", null)
-    .orderBy("created_at", "desc")
-    .execute()
-  return rows.map((row) =>
-    serializeDeviceSummary({
-      id: row.id as string,
-      workspace_id: row.workspace_id as string,
-      title: row.title as string,
-      host_kind: row.host_kind as HostKind,
-      host_provider: row.host_provider as string | null,
-      device_type: row.device_type as DeviceType,
-      platform: row.platform as string | null,
-      trust_status: row.trust_status as "pending" | "trusted" | "revoked",
-      last_seen_at: row.last_seen_at as Date | null,
-      last_connected_at: row.last_connected_at as Date | null,
-    })
-  )
+): Promise<DeviceSummaryRecord[]> {
+  return listDeviceSummaries(workspaceId)
 }
 
 export async function getDevice(
   workspaceId: string,
   deviceId: string
-): Promise<DeviceDetail> {
-  const deviceRow = await db
-    .selectFrom("devices")
-    .selectAll()
-    .where("workspace_id", "=", workspaceId)
-    .where("id", "=", deviceId)
-    .where("deleted_at", "is", null)
-    .executeTakeFirst()
-  if (!deviceRow) {
+): Promise<DeviceDetailRecord> {
+  const detail = await findDeviceDetail(workspaceId, deviceId)
+  if (!detail) {
     throw new DeviceModuleError({
       statusCode: 404,
       code: "device_not_found",
       message: `device ${deviceId} not found in workspace ${workspaceId}`,
     })
   }
-
-  const serviceRows = await db
-    .selectFrom("device_services")
-    .selectAll()
-    .where("device_id", "=", deviceId)
-    .orderBy("created_at", "asc")
-    .execute()
-  const services: DeviceServiceSummary[] = serviceRows.map((row) => ({
-    id: row.id as string,
-    device_id: row.device_id as string,
-    service_kind: row.service_kind as DeviceServiceKind,
-    version: (row.version as string | null) ?? null,
-    status: row.status as "starting" | "online" | "degraded" | "offline",
-    last_seen_at: toIsoInstant(row.last_seen_at as Date | null),
-    remote_agent_machine_id:
-      (row.remote_agent_machine_id as string | null) ?? null,
-  }))
-
-  const capabilityRows = await db
-    .selectFrom("device_capabilities as dc")
-    .innerJoin("workspace_apps as app", "app.id", "dc.id")
-    .innerJoin("device_exposures as dx", "dx.id", "dc.exposure_id")
-    .select([
-      "dc.id as id",
-      "app.workspace_id as workspace_id",
-      "dc.exposure_id as exposure_id",
-      "dx.stable_key as exposure_stable_key",
-      "app.display_name as display_name",
-      "dx.transport as transport",
-      "dx.builtin_kind as builtin_kind",
-      "dx.runtime_status as runtime_status",
-      "dx.metadata as exposure_metadata",
-    ])
-    .where("dx.device_id", "=", deviceId)
-    .where("app.deleted_at", "is", null)
-    .where("app.status", "=", "active")
-    .execute()
-  const capabilities: DeviceCapabilitySummary[] = capabilityRows.map((row) => ({
-    id: row.id as string,
-    workspace_id: row.workspace_id as string,
-    exposure_id: row.exposure_id as string,
-    exposure_stable_key: row.exposure_stable_key as string,
-    display_name: row.display_name as string,
-    transport: row.transport as DeviceCapabilitySummary["transport"],
-    builtin_kind:
-      (row.builtin_kind as DeviceCapabilitySummary["builtin_kind"]) ?? null,
-    runtime_status:
-      row.runtime_status as DeviceCapabilitySummary["runtime_status"],
-    metadata: (row.exposure_metadata as Record<string, unknown> | null) ?? null,
-  }))
-
-  return {
-    ...serializeDeviceSummary({
-      id: deviceRow.id as string,
-      workspace_id: deviceRow.workspace_id as string,
-      title: deviceRow.title as string,
-      host_kind: deviceRow.host_kind as HostKind,
-      host_provider: deviceRow.host_provider as string | null,
-      device_type: deviceRow.device_type as DeviceType,
-      platform: deviceRow.platform as string | null,
-      trust_status: deviceRow.trust_status as "pending" | "trusted" | "revoked",
-      last_seen_at: deviceRow.last_seen_at as Date | null,
-      last_connected_at: deviceRow.last_connected_at as Date | null,
-    }),
-    description: (deviceRow.description as string | null) ?? null,
-    owner_workspace_member_id:
-      (deviceRow.owner_workspace_member_id as string | null) ?? null,
-    services,
-    capabilities,
-  }
+  return detail
 }
 
 export async function deleteDevice(
@@ -217,14 +96,8 @@ export async function deleteDevice(
   // audit. Child rows are hidden from projection via the device-liveness filter
   // and the *_live views (§8.6). Hard delete is forbidden by sd_reject_delete;
   // physical removal happens only via offline purge.
-  const result = await db
-    .updateTable("devices")
-    .set({ deleted_at: new Date() })
-    .where("workspace_id", "=", workspaceId)
-    .where("id", "=", deviceId)
-    .where("deleted_at", "is", null)
-    .executeTakeFirst()
-  if (Number(result.numUpdatedRows ?? 0) === 0) {
+  const updated = await softDeleteDevice(workspaceId, deviceId)
+  if (updated === 0) {
     throw new DeviceModuleError({
       statusCode: 404,
       code: "device_not_found",
@@ -248,27 +121,7 @@ function generateBootstrapToken(): { token: string; hash: Buffer } {
   return { token, hash }
 }
 
-export interface StartPairingResult {
-  pairing_session_id: string
-  mode: DevicePairingMode
-  pairing_code: string | null
-  /**
-   * For cloud_bootstrap mode only: the one-time token to inject into the
-   * sandbox env. NOT persisted server-side (only its hash is). Caller MUST
-   * relay it to the sandbox in the same request.
-   */
-  bootstrap_token: string | null
-  expires_at: IsoInstantString
-  verification_uri: string | null
-  verification_uri_complete: string | null
-  status: (typeof DEVICE_PAIRING_STATUSES)[number]
-  /**
-   * One-click bootstrap installer commands ({unix, windows}) embedding the
-   * pairing code. Present for local_qr (code) pairings when a private registry
-   * is configured; null otherwise.
-   */
-  one_click_commands: OneClickInstallCommands | null
-}
+export type StartPairingResult = DevicePairingTicketRecord
 
 export interface StartPairingInput {
   workspaceId: string
@@ -323,41 +176,34 @@ export async function startPairing(
   }
 
   const sessionId = randomUUID()
-  await db
-    .insertInto("device_pairing_sessions")
-    .values({
-      id: sessionId,
-      workspace_id: input.workspaceId,
-      requested_by_workspace_member_id:
-        input.requestedByWorkspaceMemberId ?? null,
-      device_id: input.deviceId ?? null,
-      mode: input.mode,
-      server_base_url: input.serverBaseUrl,
-      requested_title: input.title ?? null,
-      requested_description: input.description ?? null,
-      requested_device_type: input.deviceType ?? null,
-      pairing_code: pairingCode,
-      bootstrap_token_hash: bootstrapTokenHash,
-      verification_uri: null,
-      verification_uri_complete: null,
-      expires_at: expiresAt,
-      status: "pending",
-      context: sql`${JSON.stringify(input.context ?? {})}::jsonb`,
-    } as never)
-    .execute()
+  await insertLocalPairingSession({
+    sessionId,
+    workspaceId: input.workspaceId,
+    requestedByWorkspaceMemberId: input.requestedByWorkspaceMemberId ?? null,
+    deviceId: input.deviceId ?? null,
+    mode: input.mode,
+    serverBaseUrl: input.serverBaseUrl,
+    requestedTitle: input.title ?? null,
+    requestedDescription: input.description ?? null,
+    requestedDeviceType: input.deviceType ?? null,
+    pairingCode,
+    bootstrapTokenHash,
+    expiresAt,
+    contextJson: JSON.stringify(input.context ?? {}),
+  })
 
   return {
-    pairing_session_id: sessionId,
+    pairingSessionId: sessionId,
     mode: input.mode,
-    pairing_code: pairingCode,
-    bootstrap_token: bootstrapToken,
-    expires_at: dateToIsoInstant(expiresAt),
-    verification_uri: null,
-    verification_uri_complete: null,
+    pairingCode: pairingCode,
+    bootstrapToken: bootstrapToken,
+    expiresAt: expiresAt,
+    verificationUri: null,
+    verificationUriComplete: null,
     status: "pending",
     // One-click bootstrap only applies to the local_qr code flow (pairingCode
     // present). cloud_bootstrap / service_join don't use the device installer.
-    one_click_commands:
+    oneClickCommands:
       pairingCode !== null ? buildDeviceOneClick(pairingCode) : null,
   }
 }
@@ -387,8 +233,11 @@ export interface ConsumePairingResult {
 
 /**
  * Local-pairing claim handler. The runtime exchanges its short pairing_code
- * for long-term credentials. Atomically INSERTs devices + device_services +
- * device_service_keys and marks the pairing session consumed.
+ * for long-term credentials. The atomic consume (claim UPDATE + diagnostic
+ * SELECT + devices/device_services/device_service_keys INSERTs + FK backfill)
+ * is owned by repo.consumeLocalPairingTx as ONE transaction; this fn does the
+ * pre-flight validation, fingerprint hashing, and maps the discriminated
+ * failure outcomes to DeviceModuleError codes.
  *
  * Cloud bootstrap consumption is a separate endpoint (PR #12) because it
  * authenticates with the bootstrap_token instead of a pairing_code.
@@ -422,145 +271,63 @@ export async function consumePairing(
     .update(input.servicePubkey)
     .digest("hex")
 
-  return db.transaction().execute(async (trx) => {
-    // Atomic single-shot consume: UPDATE the pairing session with status
-    // change conditioned on it still being pending + matching mode + not
-    // expired. RETURNING gives us the full row on success; nothing on any
-    // race-loss or invalid state. Two concurrent claim attempts can no
-    // longer both produce a trusted device.
-    const claimedRows = await trx
-      .updateTable("device_pairing_sessions")
-      .set({
-        status: "consumed",
-        confirmed_at: sql`NOW()`,
-        consumed_at: sql`NOW()`,
-      } as never)
-      .where("pairing_code", "=", input.pairingCode)
-      .where("status", "=", "pending")
-      .where("mode", "=", "local_qr")
-      .where("expires_at", ">", sql<Date>`NOW()`)
-      .returningAll()
-      .execute()
-    const session = claimedRows[0]
-    if (!session) {
-      // Distinguish the failure mode for a better error code so the
-      // operator/runtime can react. We do a follow-up SELECT (still inside
-      // the transaction) to figure out which precondition failed.
-      const existing = await trx
-        .selectFrom("device_pairing_sessions")
-        .selectAll()
-        .where("pairing_code", "=", input.pairingCode)
-        .executeTakeFirst()
-      if (!existing) {
+  const result = await consumeLocalPairingTx({
+    pairingCode: input.pairingCode,
+    pubkeyFingerprint,
+    serviceFingerprint,
+    devicePubkey: input.devicePubkey,
+    servicePubkey: input.servicePubkey,
+    clientVersion: input.clientVersion ?? null,
+    title: input.title,
+    deviceType: input.deviceType,
+    platform: input.platform,
+    arch: input.arch,
+  })
+
+  if (result.outcome !== "ok") {
+    switch (result.outcome) {
+      case "not_found":
         throw new DeviceModuleError({
           statusCode: 404,
           code: "pairing_code_not_found",
           message: "pairing code not found or already consumed",
         })
-      }
-      if ((existing.status as string) !== "pending") {
+      case "not_pending":
         throw new DeviceModuleError({
           statusCode: 409,
           code: "pairing_session_not_pending",
-          message: `pairing session is ${existing.status as string}`,
+          message: `pairing session is ${result.existingStatus ?? "unknown"}`,
         })
-      }
-      const expiresAt = new Date(
-        existing.expires_at as unknown as string
-      ).getTime()
-      if (Number.isFinite(expiresAt) && expiresAt < Date.now()) {
+      case "expired":
         throw new DeviceModuleError({
           statusCode: 410,
           code: "pairing_session_expired",
           message: "pairing session expired",
         })
-      }
-      if ((existing.mode as string) !== "local_qr") {
+      case "mode_mismatch":
         throw new DeviceModuleError({
           statusCode: 400,
           code: "pairing_mode_mismatch",
-          message: `consumePairing only handles local_qr; got ${existing.mode as string}`,
+          message: `consumePairing only handles local_qr; got ${result.existingMode ?? "unknown"}`,
         })
-      }
-      // Should not happen — race with another worker that claimed it between
-      // our UPDATE and our diagnostic SELECT.
-      throw new DeviceModuleError({
-        statusCode: 409,
-        code: "pairing_session_race",
-        message:
-          "pairing session was claimed by another consumer; retry not allowed",
-      })
+      case "race":
+        // Should not happen — race with another worker that claimed it between
+        // our UPDATE and our diagnostic SELECT.
+        throw new DeviceModuleError({
+          statusCode: 409,
+          code: "pairing_session_race",
+          message:
+            "pairing session was claimed by another consumer; retry not allowed",
+        })
     }
+  }
 
-    const deviceId = randomUUID()
-    const serviceId = randomUUID()
-    const serviceKeyId = randomUUID()
-    const title = input.title ?? session.requested_title ?? "Device"
-    const deviceType =
-      input.deviceType ??
-      (session.requested_device_type as DeviceType | null) ??
-      ("desktop_computer" as DeviceType)
-
-    await trx
-      .insertInto("devices")
-      .values({
-        id: deviceId,
-        workspace_id: session.workspace_id as string,
-        owner_workspace_member_id:
-          session.requested_by_workspace_member_id ?? null,
-        title,
-        description: (session.requested_description as string | null) ?? null,
-        host_kind: "local",
-        host_provider: null,
-        device_type: deviceType,
-        platform: input.platform ?? null,
-        arch: input.arch ?? null,
-        public_key: input.devicePubkey,
-        public_key_fingerprint: pubkeyFingerprint,
-        trust_status: "trusted",
-      } as never)
-      .execute()
-
-    await trx
-      .insertInto("device_services")
-      .values({
-        id: serviceId,
-        device_id: deviceId,
-        service_kind: "device_runtime",
-        version: input.clientVersion ?? null,
-        status: "starting",
-        metadata: sql`'{}'::jsonb`,
-      } as never)
-      .execute()
-
-    await trx
-      .insertInto("device_service_keys")
-      .values({
-        id: serviceKeyId,
-        service_id: serviceId,
-        pubkey: input.servicePubkey,
-        pubkey_fingerprint: serviceFingerprint,
-      } as never)
-      .execute()
-
-    // Backfill device_id on the already-consumed pairing session row. The
-    // earlier atomic UPDATE flipped status/timestamps; we just need the FK
-    // wired now that the device row exists.
-    await trx
-      .updateTable("device_pairing_sessions")
-      .set({
-        device_id: deviceId,
-      } as never)
-      .where("id", "=", session.id as string)
-      .execute()
-
-    return {
-      device_id: deviceId,
-      service_id: serviceId,
-      service_key_id: serviceKeyId,
-      control_plane_url: opts.controlPlaneUrl,
-    }
-  })
+  return {
+    device_id: result.deviceId,
+    service_id: result.serviceId,
+    service_key_id: result.serviceKeyId,
+    control_plane_url: opts.controlPlaneUrl,
+  }
 }
 
 // ───────────────────────────── daemon claim (§5.4) ──────────────────────────
@@ -573,88 +340,38 @@ export interface ClaimDaemonInput {
 
 export async function claimRemoteAgentDaemon(
   input: ClaimDaemonInput
-): Promise<DeviceServiceSummary> {
-  return db.transaction().execute(async (trx) => {
-    const device = await trx
-      .selectFrom("devices")
-      .selectAll()
-      .where("workspace_id", "=", input.workspaceId)
-      .where("id", "=", input.deviceId)
-      .executeTakeFirst()
-    if (!device) {
-      throw new DeviceModuleError({
-        statusCode: 404,
-        code: "device_not_found",
-        message: `device ${input.deviceId} not found in workspace ${input.workspaceId}`,
-      })
+): Promise<DeviceServiceRecord> {
+  const result = await claimRemoteAgentDaemonTx(input)
+  if (result.outcome !== "ok") {
+    switch (result.outcome) {
+      case "device_not_found":
+        throw new DeviceModuleError({
+          statusCode: 404,
+          code: "device_not_found",
+          message: `device ${input.deviceId} not found in workspace ${input.workspaceId}`,
+        })
+      case "machine_not_found":
+        throw new DeviceModuleError({
+          statusCode: 404,
+          code: "remote_agent_machine_not_found",
+          message: `remote agent machine ${input.remoteAgentMachineId} not found`,
+        })
+      case "workspace_mismatch":
+        throw new DeviceModuleError({
+          statusCode: 400,
+          code: "remote_agent_machine_workspace_mismatch",
+          message:
+            "remote agent machine must belong to the same workspace as the device",
+        })
+      case "already_claimed":
+        throw new DeviceModuleError({
+          statusCode: 409,
+          code: "remote_agent_machine_already_claimed",
+          message: `remote_agent_machine ${input.remoteAgentMachineId} is already attached to a device`,
+        })
     }
-
-    const machine = await trx
-      .selectFrom("remote_agent_machines")
-      .select(["id", "workspace_id"])
-      .where("id", "=", input.remoteAgentMachineId)
-      .executeTakeFirst()
-    if (!machine) {
-      throw new DeviceModuleError({
-        statusCode: 404,
-        code: "remote_agent_machine_not_found",
-        message: `remote agent machine ${input.remoteAgentMachineId} not found`,
-      })
-    }
-    if (machine.workspace_id !== input.workspaceId) {
-      throw new DeviceModuleError({
-        statusCode: 400,
-        code: "remote_agent_machine_workspace_mismatch",
-        message:
-          "remote agent machine must belong to the same workspace as the device",
-      })
-    }
-
-    const existing = await trx
-      .selectFrom("device_services")
-      .selectAll()
-      .where("remote_agent_machine_id", "=", input.remoteAgentMachineId)
-      .where("service_kind", "=", "remote_agent_daemon")
-      .executeTakeFirst()
-    if (existing) {
-      throw new DeviceModuleError({
-        statusCode: 409,
-        code: "remote_agent_machine_already_claimed",
-        message: `remote_agent_machine ${input.remoteAgentMachineId} is already attached to a device`,
-      })
-    }
-
-    const serviceId = randomUUID()
-    await trx
-      .insertInto("device_services")
-      .values({
-        id: serviceId,
-        device_id: input.deviceId,
-        service_kind: "remote_agent_daemon",
-        version: null,
-        status: "online",
-        metadata: sql`'{}'::jsonb`,
-        remote_agent_machine_id: input.remoteAgentMachineId,
-      } as never)
-      .execute()
-
-    const row = await trx
-      .selectFrom("device_services")
-      .selectAll()
-      .where("id", "=", serviceId)
-      .executeTakeFirstOrThrow()
-
-    return {
-      id: row.id as string,
-      device_id: row.device_id as string,
-      service_kind: row.service_kind as DeviceServiceKind,
-      version: (row.version as string | null) ?? null,
-      status: row.status as "starting" | "online" | "degraded" | "offline",
-      last_seen_at: toIsoInstant(row.last_seen_at as Date | null),
-      remote_agent_machine_id:
-        (row.remote_agent_machine_id as string | null) ?? null,
-    }
-  })
+  }
+  return result.service
 }
 
 export async function detachDeviceService(
@@ -663,14 +380,11 @@ export async function detachDeviceService(
   serviceId: string
 ): Promise<void> {
   // Verify the service belongs to a device in this workspace before detaching.
-  const owned = await db
-    .selectFrom("device_services as ds")
-    .innerJoin("devices as d", "d.id", "ds.device_id")
-    .select("ds.id")
-    .where("ds.id", "=", serviceId)
-    .where("ds.device_id", "=", deviceId)
-    .where("d.workspace_id", "=", workspaceId)
-    .executeTakeFirst()
+  const owned = await isDeviceServiceOwnedByWorkspace(
+    workspaceId,
+    deviceId,
+    serviceId
+  )
   if (!owned) {
     throw new DeviceModuleError({
       statusCode: 404,
@@ -680,7 +394,5 @@ export async function detachDeviceService(
   }
   // device_services is a persistent child guarded by sd_reject_delete; the
   // physical detach goes through the SECURITY DEFINER fn (design §7.5/§11).
-  await sql`SELECT sd_detach_device_service(${serviceId}::uuid, ${deviceId}::uuid)`.execute(
-    db
-  )
+  await detachDeviceServiceRpc(serviceId, deviceId)
 }

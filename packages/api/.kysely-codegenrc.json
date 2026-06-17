@@ -1,4 +1,5 @@
 {
+  "camelCase": true,
   "defaultSchemas": ["public"],
   "dateParser": "timestamp",
   "dialect": "postgres",

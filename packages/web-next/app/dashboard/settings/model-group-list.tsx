@@ -26,16 +26,16 @@ import {
 
 interface ModelGroup {
   id: string
-  workspace_id: string | null
-  owner_type?: ModelGroupOwnerType
-  owner_workspace_id?: string | null
-  owner_workspace_member_id?: string | null
+  workspaceId: string | null
+  ownerType?: ModelGroupOwnerType
+  ownerWorkspaceId?: string | null
+  ownerWorkspaceMemberId?: string | null
   name: string
   description: string
-  routing_strategy: ModelGroupRoutingStrategy
-  is_default: boolean
-  is_active?: boolean
-  created_at: Timestamp
+  routingStrategy: ModelGroupRoutingStrategy
+  isDefault: boolean
+  isActive?: boolean
+  createdAt: Timestamp
 }
 
 export default function ModelGroupList({
@@ -65,14 +65,11 @@ export default function ModelGroupList({
       let nextGroups: ModelGroup[] = []
 
       if (scope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
-        const response = await api.getPlatformModelGroups()
-        nextGroups = response.groups || []
+        nextGroups = await api.getPlatformModelGroups()
       } else if (scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
-        const response = await api.getWorkspaceMemberModelGroups(workspaceId!)
-        nextGroups = response.groups || []
+        nextGroups = await api.getWorkspaceMemberModelGroups(workspaceId!)
       } else {
-        const response = await api.getModelGroups(workspaceId!)
-        nextGroups = response.groups || []
+        nextGroups = await api.getModelGroups(workspaceId!)
       }
 
       if (scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE) {
@@ -240,7 +237,7 @@ function GroupCard({
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-medium text-foreground">{group.name}</span>
-              {group.is_default ? (
+              {group.isDefault ? (
                 <Badge className="border-amber-500/20 bg-amber-500/10 text-xs text-amber-400">
                   <Star className="mr-1 h-3 w-3" /> Default
                 </Badge>
@@ -251,7 +248,7 @@ function GroupCard({
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-3">
               <span className="text-xs text-muted-foreground">
-                {getModelGroupStrategyLabel(group.routing_strategy)}
+                {getModelGroupStrategyLabel(group.routingStrategy)}
               </span>
               {group.description ? (
                 <span className="max-w-xs truncate text-xs text-muted-foreground/60">

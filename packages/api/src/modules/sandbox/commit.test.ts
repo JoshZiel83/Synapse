@@ -235,15 +235,15 @@ test(
       // THE KEY ASSERTION: base must NOT have advanced (reconcile failed), so the
       // next turn's refresh (head != base) will re-run and self-heal.
       const mounts = await getActiveMountsForSession(db, sessionId)
-      const actorMount = mounts.find((m) => m.mount_subpath === "actor")
+      const actorMount = mounts.find((m) => m.mountSubpath === "actor")
       assert.ok(actorMount, "actor mount still active")
       assert.equal(
-        actorMount!.base_snapshot_id,
+        actorMount!.baseSnapshotId,
         baseSnap.id,
         "base must stay at the OLD base after a failed reconcile (not advanced)"
       )
       assert.notEqual(
-        actorMount!.base_snapshot_id,
+        actorMount!.baseSnapshotId,
         headSnap.id,
         "base must NOT be the head/new snapshot"
       )
@@ -349,14 +349,14 @@ test(
         "x.txt reported as a commit conflict"
       )
       const mounts = await getActiveMountsForSession(db, sessionId)
-      const actorMount = mounts.find((m) => m.mount_subpath === "actor")
+      const actorMount = mounts.find((m) => m.mountSubpath === "actor")
       // base ADVANCED to the new snapshot (reconcile succeeded → live==committed).
       assert.notEqual(
-        actorMount!.base_snapshot_id,
+        actorMount!.baseSnapshotId,
         baseSnap.id,
         "base advanced past the old base on a successful reconcile"
       )
-      assert.ok(actorMount!.base_snapshot_id, "base set to the new snapshot")
+      assert.ok(actorMount!.baseSnapshotId, "base set to the new snapshot")
 
       // The pending conflict was recorded WITH its sidecar (round-7 #C).
       const stateRow = await client.query(
@@ -479,23 +479,23 @@ test(
       )
 
       const mounts = await getActiveMountsForSession(db, sessionId)
-      const actorMount = mounts.find((m) => m.mount_subpath === "actor")!
+      const actorMount = mounts.find((m) => m.mountSubpath === "actor")!
       // base NOT advanced (reconcile failed) — round-7 #A self-heal …
       assert.equal(
-        actorMount.base_snapshot_id,
+        actorMount.baseSnapshotId,
         baseSnap.id,
         "base must stay at the OLD base after a failed reconcile in the append branch"
       )
       // … but result_snapshot WAS recorded for audit (the snapshot exists).
       assert.equal(
-        actorMount.result_snapshot_id,
+        actorMount.resultSnapshotId,
         newSnapId,
         "result_snapshot records the appended snapshot even when base lags"
       )
       // Space head advanced to the new snapshot (the append committed).
       const headNow = await getFileSpace(db, space.id)
       assert.equal(
-        headNow?.current_snapshot_id,
+        headNow?.currentSnapshotId,
         newSnapId,
         "space head advanced to the appended snapshot"
       )
@@ -712,9 +712,9 @@ test(
       )
       // base did not advance.
       const mounts = await getActiveMountsForSession(db, sessionId)
-      const actorMount = mounts.find((m) => m.mount_subpath === "actor")!
+      const actorMount = mounts.find((m) => m.mountSubpath === "actor")!
       assert.equal(
-        actorMount.base_snapshot_id,
+        actorMount.baseSnapshotId,
         baseSnap.id,
         "base must stay at the OLD base when the pending persist failed"
       )
@@ -805,9 +805,9 @@ test(
       assert.ok(sc?.contentSha, "sidecar carries the CAS-durable content sha")
       // base advanced to latest (equals-latest branch).
       const mounts = await getActiveMountsForSession(db, sessionId)
-      const actorMount = mounts.find((m) => m.mount_subpath === "actor")!
+      const actorMount = mounts.find((m) => m.mountSubpath === "actor")!
       assert.equal(
-        actorMount.base_snapshot_id,
+        actorMount.baseSnapshotId,
         headSnap.id,
         "base advanced to head once the live dir == committed"
       )

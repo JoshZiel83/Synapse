@@ -3,8 +3,8 @@
  * by a crashed dispatcher (which otherwise are never re-claimed and the event
  * is silently never delivered).
  *
- * recoverStuckProcessingRealtimeOutboxEntries operates on the GLOBAL db
- * (events/index.ts binds db to DATABASE_URL), so this seeds + asserts via that
+ * recoverStuckProcessingRealtimeOutboxEntries delegates to the realtime outbox
+ * repo adapter, which operates on the GLOBAL db. This seeds + asserts via that
  * same global handle and is skipped when DATABASE_URL is unset.
  */
 
@@ -37,17 +37,17 @@ maybe(
     const workspaceId = (
       await db
         .insertInto("workspaces")
-        .values({ owner_id: user, slug: `ws-${rid()}`, name: "sweeper ws" })
+        .values({ ownerId: user, slug: `ws-${rid()}`, name: "sweeper ws" })
         .returning("id")
         .executeTakeFirstOrThrow()
     ).id as string
     const workspaceMemberId = (
       await db
-        .insertInto("workspace_members")
+        .insertInto("workspaceMembers")
         .values({
-          workspace_id: workspaceId,
-          user_id: user,
-          trust_level: "member",
+          workspaceId: workspaceId,
+          userId: user,
+          trustLevel: "member",
         })
         .returning("id")
         .executeTakeFirstOrThrow()
@@ -55,15 +55,15 @@ maybe(
 
     const stuck = (
       await db
-        .insertInto("realtime_event_outbox")
+        .insertInto("realtimeEventOutbox")
         .values({
-          event_type: "chat.sync.event",
-          workspace_id: workspaceId,
-          recipient_workspace_member_id: workspaceMemberId,
+          eventType: "chat.sync.event",
+          workspaceId: workspaceId,
+          recipientWorkspaceMemberId: workspaceMemberId,
           payload: sql`'{}'::jsonb`,
-          event_timestamp: sql`NOW()`,
+          eventTimestamp: sql`NOW()`,
           status: "processing",
-          processing_started_at: sql`NOW() - INTERVAL '10 minutes'`,
+          processingStartedAt: sql`NOW() - INTERVAL '10 minutes'`,
         })
         .returning("id")
         .executeTakeFirstOrThrow()
@@ -71,15 +71,15 @@ maybe(
 
     const fresh = (
       await db
-        .insertInto("realtime_event_outbox")
+        .insertInto("realtimeEventOutbox")
         .values({
-          event_type: "chat.sync.event",
-          workspace_id: workspaceId,
-          recipient_workspace_member_id: workspaceMemberId,
+          eventType: "chat.sync.event",
+          workspaceId: workspaceId,
+          recipientWorkspaceMemberId: workspaceMemberId,
           payload: sql`'{}'::jsonb`,
-          event_timestamp: sql`NOW()`,
+          eventTimestamp: sql`NOW()`,
           status: "processing",
-          processing_started_at: sql`NOW()`,
+          processingStartedAt: sql`NOW()`,
         })
         .returning("id")
         .executeTakeFirstOrThrow()
@@ -89,14 +89,14 @@ maybe(
     assert.ok(recovered >= 1, "the stuck row was recovered")
 
     const stuckRow = await db
-      .selectFrom("realtime_event_outbox")
+      .selectFrom("realtimeEventOutbox")
       .select(["status"])
       .where("id", "=", stuck)
       .executeTakeFirstOrThrow()
     assert.equal(stuckRow.status, "failed", "stuck row reset to failed")
 
     const freshRow = await db
-      .selectFrom("realtime_event_outbox")
+      .selectFrom("realtimeEventOutbox")
       .select(["status"])
       .where("id", "=", fresh)
       .executeTakeFirstOrThrow()

@@ -11,6 +11,8 @@
 // This helper is the single producer of that namespace. It MUST be additive:
 // callers keep writing their existing top-level metadata fields unchanged.
 
+import { parseJsonObjectOrUndefined } from "@synapse/shared"
+
 /** Reserved top-level metadata keys that are NOT tool result data. */
 const RESERVED_TOP_LEVEL = new Set([
   "origin",
@@ -23,11 +25,9 @@ const RESERVED_TOP_LEVEL = new Set([
   "toolMeta",
 ])
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined
-}
+// Business JSON decode → shared parseJsonObjectOrUndefined (object-only,
+// array-reject, undefined fallback). r6 P1-8: replaces a local copy.
+const asRecord = parseJsonObjectOrUndefined
 
 /**
  * Build the `toolMeta` object from a tool family's structured outputs.

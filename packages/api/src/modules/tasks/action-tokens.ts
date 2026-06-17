@@ -20,22 +20,15 @@
  */
 
 import { v4 as uuidv4 } from "uuid"
-import { sql } from "kysely"
+import { type Executor } from "../../infrastructure/database/kysely.js"
 import {
-  db,
-  runBuilder,
-  type Executor,
-  type TableInsert,
-} from "../../infrastructure/database/kysely.js"
+  insertActionToken,
+  findActionTokenRow,
+  deleteExpiredActionTokens,
+} from "./repo.js"
+import type { ActionTokenPayload } from "./repo.types.js"
 
-export interface ActionTokenPayload {
-  /** One of the option labels we offered (e.g. "allow_once", "deny"). */
-  decision: string
-  /** Optional preset id (runtime-authorization preset selection). */
-  preset?: string
-  /** Optional grant option id when the user picks among grant_options. */
-  selectedGrantOptionId?: string
-}
+export type { ActionTokenPayload } from "./repo.types.js"
 
 export interface ActionTokenRecord {
   token: string
@@ -70,17 +63,12 @@ export async function mintActionToken(
     twentyFourHours
   )
   const expiresAt = new Date(expiresAtMs)
-  await runBuilder(
-    executor,
-    db.insertInto("tool_call_task_action_tokens").values({
-      token,
-      task_id: params.taskId,
-      payload: sql`${JSON.stringify(
-        params.payload
-      )}::jsonb` as unknown as TableInsert<"tool_call_task_action_tokens">["payload"],
-      expires_at: expiresAt,
-    })
-  )
+  await insertActionToken(executor, {
+    token,
+    taskId: params.taskId,
+    payload: params.payload,
+    expiresAt,
+  })
   return {
     token,
     taskId: params.taskId,
@@ -93,19 +81,14 @@ export async function lookupActionToken(
   token: string
 ): Promise<ActionTokenRecord | null> {
   if (!token || typeof token !== "string") return null
-  const row = await db
-    .selectFrom("tool_call_task_action_tokens")
-    .select(["token", "task_id", "payload", "expires_at"])
-    .where("token", "=", token)
-    .limit(1)
-    .executeTakeFirst()
+  const row = await findActionTokenRow(token)
   if (!row) return null
-  const expiresAt = row.expires_at
+  const expiresAt = row.expiresAt
   if (expiresAt.getTime() < Date.now()) return null
   return {
     token: row.token,
-    taskId: row.task_id,
-    payload: (row.payload ?? {}) as unknown as ActionTokenPayload,
+    taskId: row.taskId,
+    payload: row.payload,
     expiresAt,
   }
 }
@@ -116,11 +99,7 @@ export async function lookupActionToken(
  * separate cron because the volume is small.
  */
 export async function sweepExpiredActionTokens(): Promise<number> {
-  const result = await db
-    .deleteFrom("tool_call_task_action_tokens")
-    .where("expires_at", "<", sql<Date>`NOW()`)
-    .executeTakeFirst()
-  return Number(result.numDeletedRows ?? 0)
+  return deleteExpiredActionTokens()
 }
 
 function parseTimestamp(value: Date | null | undefined): number | null {

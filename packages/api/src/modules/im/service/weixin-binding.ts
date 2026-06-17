@@ -11,9 +11,7 @@
  * Extracted from service.ts. service.ts re-exports for back-compat.
  */
 
-import { sql } from "kysely"
 import { nowIsoInstant } from "@synapse/shared/datetime"
-import { db } from "../../../infrastructure/database/kysely.js"
 import type {
   CurrentUserWeixinBindingSummary,
   TransportExternalUserSummary,
@@ -24,11 +22,12 @@ import {
   setTransportAddressLinkedUser,
 } from "./addresses.js"
 import { listTransportExternalUsers } from "./external-users.js"
+import { normalizeAccountRow, readTrimmedString } from "./_helpers.js"
 import {
-  normalizeAccountRow,
-  parseJsonObject,
-  readTrimmedString,
-} from "./_helpers.js"
+  findWeixinWorkspaceMemberIdByUser,
+  findWorkspaceMemberDisplayName,
+  findWorkspaceMemberWeixinAccountRow,
+} from "./repo.js"
 import { updateTransportAccount } from "./accounts.js"
 
 function pickCurrentWeixinExternalUser(params: {
@@ -51,64 +50,21 @@ function readPendingAutoLinkWorkspaceMemberId(
   return readTrimmedString(metadata, "pendingAutoLinkWorkspaceMemberId")
 }
 
-async function loadWorkspaceMemberTransportAccountRow(params: {
-  workspaceId: string
-  workspaceMemberId: string
-  transportKind: "weixin"
-}) {
-  return db
-    .selectFrom("transport_accounts")
-    .selectAll()
-    .where("workspace_id", "=", params.workspaceId)
-    .where("transport_kind", "=", params.transportKind)
-    .where("owner_scope", "=", "workspace_member")
-    .where("owner_workspace_member_id", "=", params.workspaceMemberId)
-    .orderBy(
-      sql<number>`CASE
-        WHEN status = 'active' THEN 0
-        WHEN status = 'error' THEN 1
-        ELSE 2
-      END`
-    )
-    .orderBy("updated_at", "desc")
-    .orderBy("created_at", "desc")
-    .limit(1)
-    .executeTakeFirst()
-}
-
-async function loadWorkspaceMemberDisplayName(params: {
-  workspaceId: string
-  workspaceMemberId: string
-}) {
-  const row = await db
-    .selectFrom("workspace_members as wm")
-    .innerJoin("users as u", "u.id", "wm.user_id")
-    .select("u.name as name")
-    .where("wm.workspace_id", "=", params.workspaceId)
-    .where("wm.id", "=", params.workspaceMemberId)
-    .limit(1)
-    .executeTakeFirst()
-  return readTrimmedString((row || {}) as Record<string, unknown>, "name")
-}
-
 export async function getCurrentUserWeixinBinding(params: {
   workspaceId: string
   userId: string
 }): Promise<CurrentUserWeixinBindingSummary | null> {
-  const workspaceMember = await db
-    .selectFrom("workspace_members")
-    .select("id")
-    .where("workspace_id", "=", params.workspaceId)
-    .where("user_id", "=", params.userId)
-    .limit(1)
-    .executeTakeFirst()
-  if (!workspaceMember?.id) {
+  const workspaceMemberId = await findWeixinWorkspaceMemberIdByUser({
+    workspaceId: params.workspaceId,
+    userId: params.userId,
+  })
+  if (!workspaceMemberId) {
     return null
   }
 
-  const row = await loadWorkspaceMemberTransportAccountRow({
+  const row = await findWorkspaceMemberWeixinAccountRow({
     workspaceId: params.workspaceId,
-    workspaceMemberId: workspaceMember.id,
+    workspaceMemberId,
     transportKind: "weixin",
   })
   if (!row) {
@@ -119,7 +75,7 @@ export async function getCurrentUserWeixinBinding(params: {
   if (account.status !== "active") {
     return null
   }
-  const metadata = parseJsonObject(row.metadata)
+  const metadata = account.metadata
   const scannerUserId = readTrimmedString(metadata, "scannerUserId")
   const pendingAutoLinkWorkspaceMemberId =
     readPendingAutoLinkWorkspaceMemberId(metadata)
@@ -128,7 +84,7 @@ export async function getCurrentUserWeixinBinding(params: {
     transportAccountId: account.id,
   })
   const pendingAutoLinkWorkspaceMemberName = pendingAutoLinkWorkspaceMemberId
-    ? await loadWorkspaceMemberDisplayName({
+    ? await findWorkspaceMemberDisplayName({
         workspaceId: params.workspaceId,
         workspaceMemberId: pendingAutoLinkWorkspaceMemberId,
       })
@@ -205,14 +161,11 @@ export async function linkCurrentUserWeixinBinding(params: {
   workspaceId: string
   userId: string
 }): Promise<CurrentUserWeixinBindingSummary> {
-  const currentWorkspaceMember = await db
-    .selectFrom("workspace_members")
-    .select("id")
-    .where("workspace_id", "=", params.workspaceId)
-    .where("user_id", "=", params.userId)
-    .limit(1)
-    .executeTakeFirst()
-  if (!currentWorkspaceMember?.id) {
+  const currentWorkspaceMemberId = await findWeixinWorkspaceMemberIdByUser({
+    workspaceId: params.workspaceId,
+    userId: params.userId,
+  })
+  if (!currentWorkspaceMemberId) {
     throw new Error("Workspace member not found")
   }
 
@@ -251,7 +204,7 @@ export async function linkCurrentUserWeixinBinding(params: {
   }
   if (
     externalUser.linkedWorkspaceMemberId &&
-    externalUser.linkedWorkspaceMemberId !== currentWorkspaceMember.id
+    externalUser.linkedWorkspaceMemberId !== currentWorkspaceMemberId
   ) {
     throw new Error("WeChat user is already linked to another workspace member")
   }
@@ -259,7 +212,7 @@ export async function linkCurrentUserWeixinBinding(params: {
   await setTransportAddressLinkedUser({
     workspaceId: params.workspaceId,
     transportAddressId: externalUser.id,
-    workspaceMemberId: currentWorkspaceMember.id,
+    workspaceMemberId: currentWorkspaceMemberId,
   })
 
   const updatedBinding = await getCurrentUserWeixinBinding(params)

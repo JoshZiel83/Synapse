@@ -33,7 +33,7 @@ async function insertWorkspace(
 ): Promise<string> {
   const row = await db
     .insertInto("workspaces")
-    .values({ owner_id: ownerId, slug: slug ?? uniq("ws"), name: "w" })
+    .values({ ownerId: ownerId, slug: slug ?? uniq("ws"), name: "w" })
     .returning("id")
     .executeTakeFirstOrThrow()
   return row.id as string
@@ -45,8 +45,8 @@ async function insertMember(
   trust = "member"
 ): Promise<string> {
   const row = await db
-    .insertInto("workspace_members")
-    .values({ workspace_id: ws, user_id: user, trust_level: trust })
+    .insertInto("workspaceMembers")
+    .values({ workspaceId: ws, userId: user, trustLevel: trust })
     .returning("id")
     .executeTakeFirstOrThrow()
   return row.id as string
@@ -54,12 +54,12 @@ async function insertMember(
 async function insertActor(db: AnyDb, ws: string): Promise<string> {
   const actorId = crypto.randomUUID()
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id: actorId,
-      workspace_id: ws,
+      workspaceId: ws,
       kind: "actor",
-      display_name: "a",
+      displayName: "a",
       status: "active",
     } as any)
     .execute()
@@ -69,7 +69,7 @@ async function insertActor(db: AnyDb, ws: string): Promise<string> {
       id: actorId,
       role: "assistant",
       title: "t",
-      current_version: 1,
+      currentVersion: 1,
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -78,7 +78,7 @@ async function insertActor(db: AnyDb, ws: string): Promise<string> {
 async function insertConversation(db: AnyDb, ws: string): Promise<string> {
   const row = await db
     .insertInto("conversations")
-    .values({ workspace_id: ws, kind: "group", title: "soft-delete conv" })
+    .values({ workspaceId: ws, kind: "group", title: "soft-delete conv" })
     .returning("id")
     .executeTakeFirstOrThrow()
   return row.id as string
@@ -120,19 +120,19 @@ test(
       const ws = await insertWorkspace(db, u)
       await db
         .updateTable("workspaces")
-        .set({ deleted_at: new Date() })
+        .set({ deletedAt: new Date() })
         .where("id", "=", ws)
         .execute()
       await rejects(
         db,
         () =>
           db
-            .insertInto("workspace_apps")
+            .insertInto("workspaceApps")
             .values({
               id: crypto.randomUUID(),
-              workspace_id: ws,
+              workspaceId: ws,
               kind: "actor",
-              display_name: "x",
+              displayName: "x",
               status: "active",
             } as any)
             .execute(),
@@ -154,11 +154,11 @@ test(
       // children — none of those UPDATEs may be blocked by the FK-liveness trigger.
       await markWorkspaceDeleted(db, ws)
       const liveActors = await db
-        .selectFrom("workspace_apps")
+        .selectFrom("workspaceApps")
         .select("id")
-        .where("workspace_id", "=", ws)
+        .where("workspaceId", "=", ws)
         .where("kind", "=", "actor")
-        .where("deleted_at", "is", null)
+        .where("deletedAt", "is", null)
         .execute()
       assert.equal(liveActors.length, 0, "all workspace actors soft-deleted")
     })
@@ -181,7 +181,7 @@ test(
         .selectFrom("users")
         .select("id")
         .where("email", "=", email)
-        .where("deleted_at", "is", null)
+        .where("deletedAt", "is", null)
         .execute()
       assert.equal(live.length, 1, "exactly one live user holds the email")
     })
@@ -197,7 +197,7 @@ test(
       const ws = await insertWorkspace(db, u)
       await db
         .updateTable("workspaces")
-        .set({ deleted_at: new Date() })
+        .set({ deletedAt: new Date() })
         .where("id", "=", ws)
         .execute()
       const base = await db
@@ -206,7 +206,7 @@ test(
         .where("id", "=", ws)
         .execute()
       const live = await db
-        .selectFrom("workspaces_live")
+        .selectFrom("workspacesLive")
         .select("id")
         .where("id", "=", ws)
         .execute()
@@ -227,18 +227,18 @@ test(
       await db
         .insertInto("account")
         .values({
-          account_id: u,
-          provider_id: "credential",
-          user_id: u,
+          accountId: u,
+          providerId: "credential",
+          userId: u,
           password: "x",
         })
         .execute()
       await db
         .insertInto("session")
         .values({
-          user_id: u,
+          userId: u,
           token: uniq("tok"),
-          expires_at: new Date(Date.now() + 3600_000),
+          expiresAt: new Date(Date.now() + 3600_000),
         })
         .execute()
 
@@ -249,7 +249,7 @@ test(
         .selectAll()
         .where("id", "=", u)
         .executeTakeFirstOrThrow()
-      assert.ok(userRow.deleted_at, "user tombstoned")
+      assert.ok(userRow.deletedAt, "user tombstoned")
       assert.match(
         userRow.email as string,
         /@deleted\.invalid$/,
@@ -258,11 +258,11 @@ test(
       const acct = await db
         .selectFrom("account")
         .selectAll()
-        .where("user_id", "=", u)
+        .where("userId", "=", u)
         .executeTakeFirstOrThrow()
-      assert.ok(acct.deleted_at, "account soft-deleted")
+      assert.ok(acct.deletedAt, "account soft-deleted")
       assert.match(
-        acct.account_id as string,
+        acct.accountId as string,
         /^deleted:/,
         "account_id anonymized"
       )
@@ -270,13 +270,13 @@ test(
       const sessions = await db
         .selectFrom("session")
         .select("id")
-        .where("user_id", "=", u)
+        .where("userId", "=", u)
         .execute()
       assert.equal(sessions.length, 0, "sessions revoked")
       const member = await db
-        .selectFrom("workspace_members")
+        .selectFrom("workspaceMembers")
         .selectAll()
-        .where("user_id", "=", u)
+        .where("userId", "=", u)
         .executeTakeFirstOrThrow()
       assert.equal(member.status, "removed", "membership removed")
     })
@@ -302,12 +302,12 @@ test(
         .where("id", "=", ws)
         .executeTakeFirstOrThrow()
       assert.equal(
-        wsRow.deleted_at,
+        wsRow.deletedAt,
         null,
         "workspace survives (owner transferred)"
       )
       assert.equal(
-        wsRow.owner_id,
+        wsRow.ownerId,
         heir,
         "ownership transferred to surviving admin"
       )
@@ -331,7 +331,7 @@ test(
         .selectAll()
         .where("id", "=", ws)
         .executeTakeFirstOrThrow()
-      assert.ok(wsRow.deleted_at, "workspace soft-deleted (no heir)")
+      assert.ok(wsRow.deletedAt, "workspace soft-deleted (no heir)")
     })
   }
 )
@@ -345,18 +345,18 @@ test(
       await db
         .insertInto("session")
         .values({
-          user_id: u,
+          userId: u,
           token: uniq("tok"),
-          expires_at: new Date(Date.now() + 3600_000),
+          expiresAt: new Date(Date.now() + 3600_000),
         })
         .execute()
       await db
-        .insertInto("device_code")
+        .insertInto("deviceCode")
         .values({
-          device_code: uniq("dc"),
-          user_code: uniq("uc"),
-          user_id: u,
-          expires_at: new Date(Date.now() + 3600_000),
+          deviceCode: uniq("dc"),
+          userCode: uniq("uc"),
+          userId: u,
+          expiresAt: new Date(Date.now() + 3600_000),
           status: "approved",
         })
         .execute()
@@ -368,7 +368,7 @@ test(
           await db
             .selectFrom("session")
             .select("id")
-            .where("user_id", "=", u)
+            .where("userId", "=", u)
             .execute()
         ).length,
         0
@@ -376,9 +376,9 @@ test(
       assert.equal(
         (
           await db
-            .selectFrom("device_code")
+            .selectFrom("deviceCode")
             .select("id")
-            .where("user_id", "=", u)
+            .where("userId", "=", u)
             .execute()
         ).length,
         0
@@ -442,26 +442,26 @@ test(
       const u = await insertUser(db)
       const ws = await insertWorkspace(db, u)
       const subj = await db
-        .insertInto("access_subjects")
-        .values({ kind: "workspace", workspace_id: ws })
+        .insertInto("accessSubjects")
+        .values({ kind: "workspace", workspaceId: ws })
         .returning("id")
         .executeTakeFirstOrThrow()
       // one old soft-deleted, one live memory_space
       await db
-        .insertInto("memory_spaces")
+        .insertInto("memorySpaces")
         .values({
-          workspace_id: ws,
-          owner_subject_id: subj.id,
-          namespace_key: "old",
-          deleted_at: new Date(Date.now() - 100 * 864e5),
+          workspaceId: ws,
+          ownerSubjectId: subj.id,
+          namespaceKey: "old",
+          deletedAt: new Date(Date.now() - 100 * 864e5),
         })
         .execute()
       await db
-        .insertInto("memory_spaces")
+        .insertInto("memorySpaces")
         .values({
-          workspace_id: ws,
-          owner_subject_id: subj.id,
-          namespace_key: "live",
+          workspaceId: ws,
+          ownerSubjectId: subj.id,
+          namespaceKey: "live",
         })
         .execute()
 
@@ -470,11 +470,11 @@ test(
       )
 
       const rows = await db
-        .selectFrom("memory_spaces")
-        .select(["namespace_key"])
-        .where("workspace_id", "=", ws)
+        .selectFrom("memorySpaces")
+        .select(["namespaceKey"])
+        .where("workspaceId", "=", ws)
         .execute()
-      const keys = rows.map((r) => r.namespace_key).sort()
+      const keys = rows.map((r) => r.namespaceKey).sort()
       assert.deepEqual(
         keys,
         ["live"],
@@ -510,8 +510,8 @@ test(
         "admin no longer gets actor visibility implicitly"
       )
       await db
-        .updateTable("workspace_apps")
-        .set({ deleted_at: new Date() })
+        .updateTable("workspaceApps")
+        .set({ deletedAt: new Date() })
         .where("id", "=", actorId)
         .execute()
       const after = await checkPermission(db as never, {
@@ -540,10 +540,10 @@ test(
         "active member resolves to workspace_member"
       )
       await db
-        .updateTable("workspace_members")
-        .set({ status: "removed", removed_at: new Date() })
-        .where("workspace_id", "=", ws)
-        .where("user_id", "=", u)
+        .updateTable("workspaceMembers")
+        .set({ status: "removed", removedAt: new Date() })
+        .where("workspaceId", "=", ws)
+        .where("userId", "=", u)
         .execute()
       const s2 = await resolveWorkspaceAccessSubject(db as never, ws, u)
       assert.equal(
@@ -566,10 +566,10 @@ test(
       const dev = await db
         .insertInto("devices")
         .values({
-          workspace_id: ws,
+          workspaceId: ws,
           title: "d",
-          public_key: "k",
-          public_key_fingerprint: `fp-${uniq("d")}`,
+          publicKey: "k",
+          publicKeyFingerprint: `fp-${uniq("d")}`,
         })
         .returning("id")
         .executeTakeFirstOrThrow()
@@ -583,7 +583,7 @@ test(
       assert.equal(before, true, "live device is viewable by admin")
       await db
         .updateTable("devices")
-        .set({ deleted_at: new Date() })
+        .set({ deletedAt: new Date() })
         .where("id", "=", dev.id)
         .execute()
       const after = await checkPermission(db as never, {
@@ -617,21 +617,21 @@ test(
         .selectFrom("workspaces")
         .select("id")
         .where("id", "=", ws)
-        .where("deleted_at", "is", null)
+        .where("deletedAt", "is", null)
         .executeTakeFirst()
       assert.ok(live, "workspace live before delete")
       await markWorkspaceDeleted(db, ws)
       const after = await db
         .selectFrom("workspaces")
-        .select("deleted_at")
+        .select("deletedAt")
         .where("id", "=", ws)
         .executeTakeFirstOrThrow()
-      assert.ok(after.deleted_at, "workspace soft-deleted")
+      assert.ok(after.deletedAt, "workspace soft-deleted")
       const actorLive = await db
-        .selectFrom("workspace_apps")
+        .selectFrom("workspaceApps")
         .select("id")
         .where("id", "=", actorId)
-        .where("deleted_at", "is", null)
+        .where("deletedAt", "is", null)
         .executeTakeFirst()
       assert.equal(actorLive, undefined, "workspace app root soft-deleted too")
       // deleteWorkspace is exported and importable (wired to the route)
@@ -648,11 +648,11 @@ async function insertAccessSubjectForMember(
   memberId: string
 ): Promise<string> {
   const row = await db
-    .insertInto("access_subjects")
+    .insertInto("accessSubjects")
     .values({
       kind: "workspace_member",
-      workspace_id: ws,
-      workspace_member_id: memberId,
+      workspaceId: ws,
+      workspaceMemberId: memberId,
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -668,18 +668,18 @@ test(
       const ws = await insertWorkspace(db, u)
       const mid = await insertMember(db, ws, u, "admin")
       const before = await db
-        .selectFrom("workspace_members_live")
+        .selectFrom("workspaceMembersLive")
         .select("id")
         .where("id", "=", mid)
         .execute()
       assert.equal(before.length, 1, "active member live before ws delete")
       await db
         .updateTable("workspaces")
-        .set({ deleted_at: new Date() })
+        .set({ deletedAt: new Date() })
         .where("id", "=", ws)
         .execute()
       const after = await db
-        .selectFrom("workspace_members_live")
+        .selectFrom("workspaceMembersLive")
         .select("id")
         .where("id", "=", mid)
         .execute()
@@ -701,25 +701,25 @@ test(
       const ws = await insertWorkspace(db, u)
       const mid = await insertMember(db, ws, u, "admin")
       await db
-        .insertInto("workspace_access_bindings")
-        .values({ workspace_member_id: mid, access_key: "model_admin" })
+        .insertInto("workspaceAccessBindings")
+        .values({ workspaceMemberId: mid, accessKey: "model_admin" })
         .execute()
       const before = await db
-        .selectFrom("workspace_access_bindings_live")
-        .select("access_key")
-        .where("workspace_member_id", "=", mid)
+        .selectFrom("workspaceAccessBindingsLive")
+        .select("accessKey")
+        .where("workspaceMemberId", "=", mid)
         .execute()
       assert.equal(before.length, 1, "binding live while member is live")
       // remove the member (status flip) — the binding must vanish from _live
       await db
-        .updateTable("workspace_members")
-        .set({ status: "removed", removed_at: new Date() })
+        .updateTable("workspaceMembers")
+        .set({ status: "removed", removedAt: new Date() })
         .where("id", "=", mid)
         .execute()
       const after = await db
-        .selectFrom("workspace_access_bindings_live")
-        .select("access_key")
-        .where("workspace_member_id", "=", mid)
+        .selectFrom("workspaceAccessBindingsLive")
+        .select("accessKey")
+        .where("workspaceMemberId", "=", mid)
         .execute()
       assert.equal(after.length, 0, "binding hidden once member is removed")
     })
@@ -736,13 +736,13 @@ test(
       const mid = await insertMember(db, ws, u, "member")
       // soft-delete the member, then soft-delete the workspace
       await db
-        .updateTable("workspace_members")
-        .set({ status: "removed", removed_at: new Date() })
+        .updateTable("workspaceMembers")
+        .set({ status: "removed", removedAt: new Date() })
         .where("id", "=", mid)
         .execute()
       await db
         .updateTable("workspaces")
-        .set({ deleted_at: new Date() })
+        .set({ deletedAt: new Date() })
         .where("id", "=", ws)
         .execute()
       // attempting to re-activate the member (status revive) must be blocked by
@@ -751,8 +751,8 @@ test(
         db,
         () =>
           db
-            .updateTable("workspace_members")
-            .set({ status: "active", removed_at: null })
+            .updateTable("workspaceMembers")
+            .set({ status: "active", removedAt: null })
             .where("id", "=", mid)
             .execute(),
         /(?:not live|non-live)/
@@ -787,9 +787,9 @@ test(
       )
       // and the _live view exists (status IN ('active') + parent liveness)
       const rows = await db
-        .selectFrom("runtime_authorization_grants_live")
+        .selectFrom("runtimeAuthorizationGrantsLive")
         .select("id")
-        .where("workspace_id", "=", ws)
+        .where("workspaceId", "=", ws)
         .execute()
       assert.equal(rows.length, 0)
     })
@@ -807,20 +807,20 @@ test(
       const subj = await insertAccessSubjectForMember(db, ws, mid)
       // a memory space + a memory access grant to the member subject
       const space = await db
-        .insertInto("memory_spaces")
+        .insertInto("memorySpaces")
         .values({
-          workspace_id: ws,
-          owner_subject_id: subj,
-          namespace_key: uniq("ns"),
+          workspaceId: ws,
+          ownerSubjectId: subj,
+          namespaceKey: uniq("ns"),
         })
         .returning("id")
         .executeTakeFirstOrThrow()
       await db
-        .insertInto("memory_access_grants")
+        .insertInto("memoryAccessGrants")
         .values({
-          workspace_id: ws,
-          memory_space_id: space.id,
-          subject_id: subj,
+          workspaceId: ws,
+          memorySpaceId: space.id,
+          subjectId: subj,
           permissions: sql`ARRAY['read']::memory_permission[]`,
           status: "active",
         })
@@ -829,12 +829,12 @@ test(
       await markUserDeleted(db, u)
 
       const grant = await db
-        .selectFrom("memory_access_grants")
-        .select(["status", "revoked_at"])
-        .where("subject_id", "=", subj)
+        .selectFrom("memoryAccessGrants")
+        .select(["status", "revokedAt"])
+        .where("subjectId", "=", subj)
         .executeTakeFirstOrThrow()
       assert.equal(grant.status, "revoked", "member-subject grant revoked")
-      assert.ok(grant.revoked_at, "revoked_at stamped")
+      assert.ok(grant.revokedAt, "revoked_at stamped")
     })
   }
 )
@@ -849,59 +849,59 @@ test(
       // minimal publisher/catalog item/version to satisfy installation FKs
       const pub = await db
         .insertInto("publishers")
-        .values({ slug: uniq("pub"), display_name: "p" })
+        .values({ slug: uniq("pub"), displayName: "p" })
         .returning("id")
         .executeTakeFirstOrThrow()
       const item = await db
-        .insertInto("catalog_items")
+        .insertInto("catalogItems")
         .values({
-          publisher_id: pub.id,
-          item_kind: "plugin_package",
+          publisherId: pub.id,
+          itemKind: "plugin_package",
           slug: uniq("it"),
-          display_name: "i",
+          displayName: "i",
         })
         .returning("id")
         .executeTakeFirstOrThrow()
       const ver = await db
-        .insertInto("catalog_versions")
+        .insertInto("catalogVersions")
         .values({
-          catalog_item_id: item.id,
+          catalogItemId: item.id,
           version: "1.0.0",
           status: "active",
         })
         .returning("id")
         .executeTakeFirstOrThrow()
       const wsSubject = await db
-        .insertInto("access_subjects")
-        .values({ kind: "workspace", workspace_id: ws })
+        .insertInto("accessSubjects")
+        .values({ kind: "workspace", workspaceId: ws })
         .returning("id")
         .executeTakeFirstOrThrow()
       const instId = crypto.randomUUID()
       await db
-        .insertInto("workspace_apps")
+        .insertInto("workspaceApps")
         .values({
           id: instId,
-          workspace_id: ws,
+          workspaceId: ws,
           kind: "plugin_installation",
-          display_name: "i",
+          displayName: "i",
           status: "active",
         } as any)
         .execute()
       const inst = await db
-        .insertInto("plugin_installations")
+        .insertInto("pluginInstallations")
         .values({
           id: instId,
-          catalog_item_id: item.id,
-          catalog_version_id: ver.id,
+          catalogItemId: item.id,
+          catalogVersionId: ver.id,
         })
         .returning("id")
         .executeTakeFirstOrThrow()
       await db
-        .insertInto("plugin_connections")
+        .insertInto("pluginConnections")
         .values({
-          installation_id: inst.id,
-          workspace_id: ws,
-          binding_key: "default",
+          installationId: inst.id,
+          workspaceId: ws,
+          bindingKey: "default",
           driver: "oauth2",
           status: "active",
         })
@@ -912,13 +912,13 @@ test(
       await tearDownPluginInstallationOn(db as never, inst.id as string)
 
       const live = await db
-        .selectFrom("plugin_connections_live")
+        .selectFrom("pluginConnectionsLive")
         .select("id")
-        .where("installation_id", "=", inst.id)
+        .where("installationId", "=", inst.id)
         .execute()
       assert.equal(live.length, 0, "connections hidden after uninstall")
       const instLive = await db
-        .selectFrom("plugin_installations_live")
+        .selectFrom("pluginInstallationsLive")
         .select("id")
         .where("id", "=", inst.id)
         .execute()
@@ -940,59 +940,59 @@ test(
       const ws = await insertWorkspace(db, u)
       const pub = await db
         .insertInto("publishers")
-        .values({ slug: uniq("pub"), display_name: "p" })
+        .values({ slug: uniq("pub"), displayName: "p" })
         .returning("id")
         .executeTakeFirstOrThrow()
       const item = await db
-        .insertInto("catalog_items")
+        .insertInto("catalogItems")
         .values({
-          publisher_id: pub.id,
-          item_kind: "plugin_package",
+          publisherId: pub.id,
+          itemKind: "plugin_package",
           slug: uniq("it"),
-          display_name: "i",
+          displayName: "i",
         })
         .returning("id")
         .executeTakeFirstOrThrow()
       const ver = await db
-        .insertInto("catalog_versions")
+        .insertInto("catalogVersions")
         .values({
-          catalog_item_id: item.id,
+          catalogItemId: item.id,
           version: "1.0.0",
           status: "active",
         })
         .returning("id")
         .executeTakeFirstOrThrow()
       const wsSubject = await db
-        .insertInto("access_subjects")
-        .values({ kind: "workspace", workspace_id: ws })
+        .insertInto("accessSubjects")
+        .values({ kind: "workspace", workspaceId: ws })
         .returning("id")
         .executeTakeFirstOrThrow()
       const instId = crypto.randomUUID()
       await db
-        .insertInto("workspace_apps")
+        .insertInto("workspaceApps")
         .values({
           id: instId,
-          workspace_id: ws,
+          workspaceId: ws,
           kind: "plugin_installation",
-          display_name: "i",
+          displayName: "i",
           status: "active",
         } as any)
         .execute()
       const inst = await db
-        .insertInto("plugin_installations")
+        .insertInto("pluginInstallations")
         .values({
           id: instId,
-          catalog_item_id: item.id,
-          catalog_version_id: ver.id,
+          catalogItemId: item.id,
+          catalogVersionId: ver.id,
         })
         .returning("id")
         .executeTakeFirstOrThrow()
       const conn = await db
-        .insertInto("plugin_connections")
+        .insertInto("pluginConnections")
         .values({
-          installation_id: inst.id,
-          workspace_id: ws,
-          binding_key: "default",
+          installationId: inst.id,
+          workspaceId: ws,
+          bindingKey: "default",
           driver: "oauth2",
           status: "active",
         })
@@ -1000,17 +1000,17 @@ test(
         .executeTakeFirstOrThrow()
       // expire it WITHOUT tombstoning — deleted_at stays NULL, only status flips.
       await db
-        .updateTable("plugin_connections")
+        .updateTable("pluginConnections")
         .set({ status: "expired" })
         .where("id", "=", conn.id)
         .execute()
       const base = await db
-        .selectFrom("plugin_connections")
+        .selectFrom("pluginConnections")
         .select("id")
         .where("id", "=", conn.id)
         .execute()
       const live = await db
-        .selectFrom("plugin_connections_live")
+        .selectFrom("pluginConnectionsLive")
         .select("id")
         .where("id", "=", conn.id)
         .execute()
@@ -1036,13 +1036,13 @@ test(
       // membership was NOT closed (e.g. an aborted prior run / ops repair).
       await db
         .updateTable("users")
-        .set({ deleted_at: new Date() })
+        .set({ deletedAt: new Date() })
         .where("id", "=", u)
         .execute()
       const before = await db
-        .selectFrom("workspace_members")
+        .selectFrom("workspaceMembers")
         .select("status")
-        .where("user_id", "=", u)
+        .where("userId", "=", u)
         .executeTakeFirstOrThrow()
       assert.equal(
         before.status,
@@ -1052,9 +1052,9 @@ test(
       // replay must drive the closure even though deleted_at is already set
       await markUserDeleted(db, u)
       const after = await db
-        .selectFrom("workspace_members")
+        .selectFrom("workspaceMembers")
         .select("status")
-        .where("user_id", "=", u)
+        .where("userId", "=", u)
         .executeTakeFirstOrThrow()
       assert.equal(after.status, "removed", "replay closed the membership")
     })
@@ -1070,9 +1070,9 @@ test(
       await db
         .insertInto("account")
         .values({
-          account_id: "cred-" + u,
-          provider_id: "credential",
-          user_id: u,
+          accountId: "cred-" + u,
+          providerId: "credential",
+          userId: u,
           password: "x",
         })
         .execute()
@@ -1085,9 +1085,9 @@ test(
       await db
         .insertInto("account")
         .values({
-          account_id: "oauth-" + u,
-          provider_id: "feishu",
-          user_id: u,
+          accountId: "oauth-" + u,
+          providerId: "feishu",
+          userId: u,
         })
         .execute()
       const ok = await markAccountUnlinked(
@@ -1100,12 +1100,12 @@ test(
       const oauth = await db
         .selectFrom("account")
         .selectAll()
-        .where("user_id", "=", u)
-        .where("provider_id", "=", "feishu")
+        .where("userId", "=", u)
+        .where("providerId", "=", "feishu")
         .executeTakeFirstOrThrow()
-      assert.ok(oauth.deleted_at, "oauth account soft-deleted")
+      assert.ok(oauth.deletedAt, "oauth account soft-deleted")
       assert.match(
-        oauth.account_id as string,
+        oauth.accountId as string,
         /^deleted:/,
         "account_id released"
       )
@@ -1130,46 +1130,46 @@ async function insertInstallation(
 ): Promise<{ instId: string; itemId: string; verId: string }> {
   const pub = await db
     .insertInto("publishers")
-    .values({ slug: uniq("pub"), display_name: "p" })
+    .values({ slug: uniq("pub"), displayName: "p" })
     .returning("id")
     .executeTakeFirstOrThrow()
   const item = await db
-    .insertInto("catalog_items")
+    .insertInto("catalogItems")
     .values({
-      publisher_id: pub.id,
-      item_kind: "plugin_package",
+      publisherId: pub.id,
+      itemKind: "plugin_package",
       slug: uniq("it"),
-      display_name: "i",
+      displayName: "i",
     })
     .returning("id")
     .executeTakeFirstOrThrow()
   const ver = await db
-    .insertInto("catalog_versions")
-    .values({ catalog_item_id: item.id, version: "1.0.0", status: "active" })
+    .insertInto("catalogVersions")
+    .values({ catalogItemId: item.id, version: "1.0.0", status: "active" })
     .returning("id")
     .executeTakeFirstOrThrow()
   const wsSubject = await db
-    .insertInto("access_subjects")
-    .values({ kind: "workspace", workspace_id: ws })
+    .insertInto("accessSubjects")
+    .values({ kind: "workspace", workspaceId: ws })
     .returning("id")
     .executeTakeFirstOrThrow()
   const instId = crypto.randomUUID()
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id: instId,
-      workspace_id: ws,
+      workspaceId: ws,
       kind: "plugin_installation",
-      display_name: "i",
+      displayName: "i",
       status: "active",
     } as any)
     .execute()
   const inst = await db
-    .insertInto("plugin_installations")
+    .insertInto("pluginInstallations")
     .values({
       id: instId,
-      catalog_item_id: item.id,
-      catalog_version_id: ver.id,
+      catalogItemId: item.id,
+      catalogVersionId: ver.id,
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -1184,11 +1184,11 @@ async function insertDevice(db: AnyDb, ws: string): Promise<string> {
   const row = await db
     .insertInto("devices")
     .values({
-      workspace_id: ws,
+      workspaceId: ws,
       title: "soft-delete-device",
-      public_key: uniq("device-pk"),
-      public_key_fingerprint: uniq("device-fp"),
-      trust_status: "trusted",
+      publicKey: uniq("device-pk"),
+      publicKeyFingerprint: uniq("device-fp"),
+      trustStatus: "trusted",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -1201,41 +1201,41 @@ async function insertDeviceCapability(
 ): Promise<{ capabilityId: string; exposureId: string; serviceId: string }> {
   const deviceId = await insertDevice(db, ws)
   const service = await db
-    .insertInto("device_services")
+    .insertInto("deviceServices")
     .values({
-      device_id: deviceId,
-      service_kind: "device_runtime",
+      deviceId: deviceId,
+      serviceKind: "device_runtime",
       status: "online",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   const exposure = await db
-    .insertInto("device_exposures")
+    .insertInto("deviceExposures")
     .values({
-      device_id: deviceId,
-      service_id: service.id as string,
-      stable_key: uniq("device-exposure"),
-      display_name: "soft-delete exposure",
+      deviceId: deviceId,
+      serviceId: service.id as string,
+      stableKey: uniq("device-exposure"),
+      displayName: "soft-delete exposure",
       transport: "stdio",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   const capabilityId = crypto.randomUUID()
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id: capabilityId,
-      workspace_id: ws,
+      workspaceId: ws,
       kind: "device_capability",
-      display_name: "soft-delete exposure",
+      displayName: "soft-delete exposure",
       status: "active",
     } as any)
     .execute()
   const capability = await db
-    .insertInto("device_capabilities")
+    .insertInto("deviceCapabilities")
     .values({
       id: capabilityId,
-      exposure_id: exposure.id as string,
+      exposureId: exposure.id as string,
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -1256,18 +1256,18 @@ test(
       const { instId } = await insertInstallation(db, ws)
       // a connection under the live installation is fine
       await db
-        .insertInto("plugin_connections")
+        .insertInto("pluginConnections")
         .values({
-          installation_id: instId,
-          workspace_id: ws,
-          binding_key: "default",
+          installationId: instId,
+          workspaceId: ws,
+          bindingKey: "default",
           driver: "oauth2",
           status: "active",
         })
         .execute()
       // archive the installation WITHOUT tombstoning (status -> non-live)
       await db
-        .updateTable("workspace_apps")
+        .updateTable("workspaceApps")
         .set({ status: "archived" })
         .where("id", "=", instId)
         .execute()
@@ -1277,16 +1277,16 @@ test(
         db,
         () =>
           db
-            .insertInto("plugin_connections")
+            .insertInto("pluginConnections")
             .values({
-              installation_id: instId,
-              workspace_id: ws,
-              binding_key: "second",
+              installationId: instId,
+              workspaceId: ws,
+              bindingKey: "second",
               driver: "oauth2",
               status: "active",
             })
             .execute(),
-        /references non-live workspace_apps/
+        /references non-live (workspace_apps|plugin_installations)/
       )
     })
   }
@@ -1302,30 +1302,30 @@ test(
       const { instId } = await insertInstallation(db, ws)
       // disabled is still LIVE (in liveValues) — must remain visible
       await db
-        .updateTable("workspace_apps")
+        .updateTable("workspaceApps")
         .set({ status: "disabled" })
         .where("id", "=", instId)
         .execute()
       let live = await db
-        .selectFrom("plugin_installations_live")
+        .selectFrom("pluginInstallationsLive")
         .select("id")
         .where("id", "=", instId)
         .execute()
       assert.equal(live.length, 1, "disabled install is still live")
       // archived is NOT in liveValues — must drop from the live surface
       await db
-        .updateTable("workspace_apps")
+        .updateTable("workspaceApps")
         .set({ status: "archived" })
         .where("id", "=", instId)
         .execute()
       live = await db
-        .selectFrom("plugin_installations_live")
+        .selectFrom("pluginInstallationsLive")
         .select("id")
         .where("id", "=", instId)
         .execute()
       assert.equal(live.length, 0, "archived install excluded from _live")
       const base = await db
-        .selectFrom("plugin_installations")
+        .selectFrom("pluginInstallations")
         .select("id")
         .where("id", "=", instId)
         .execute()
@@ -1343,11 +1343,11 @@ test(
       const ws = await insertWorkspace(db, u)
       const { instId } = await insertInstallation(db, ws)
       const conn = await db
-        .insertInto("plugin_connections")
+        .insertInto("pluginConnections")
         .values({
-          installation_id: instId,
-          workspace_id: ws,
-          binding_key: "default",
+          installationId: instId,
+          workspaceId: ws,
+          bindingKey: "default",
           driver: "oauth2",
           status: "active",
         })
@@ -1355,13 +1355,13 @@ test(
         .executeTakeFirstOrThrow()
 
       await db
-        .updateTable("workspace_apps")
+        .updateTable("workspaceApps")
         .set({ status: "archived" })
         .where("id", "=", instId)
         .execute()
 
       const live = await db
-        .selectFrom("plugin_connections_live")
+        .selectFrom("pluginConnectionsLive")
         .select("id")
         .where("id", "=", conn.id)
         .execute()
@@ -1383,11 +1383,11 @@ test(
       const ws = await insertWorkspace(db, u)
       const { instId } = await insertInstallation(db, ws)
       const conn = await db
-        .insertInto("plugin_connections")
+        .insertInto("pluginConnections")
         .values({
-          installation_id: instId,
-          workspace_id: ws,
-          binding_key: "default",
+          installationId: instId,
+          workspaceId: ws,
+          bindingKey: "default",
           driver: "oauth2",
           status: "expired",
         })
@@ -1395,7 +1395,7 @@ test(
         .executeTakeFirstOrThrow()
 
       await db
-        .updateTable("workspace_apps")
+        .updateTable("workspaceApps")
         .set({ status: "archived" })
         .where("id", "=", instId)
         .execute()
@@ -1404,11 +1404,11 @@ test(
         db,
         () =>
           db
-            .updateTable("plugin_connections")
+            .updateTable("pluginConnections")
             .set({ status: "active" })
             .where("id", "=", conn.id)
             .execute(),
-        /references non-live workspace_apps/
+        /references non-live (workspace_apps|plugin_installations)/
       )
     })
   }
@@ -1423,23 +1423,23 @@ test(
       const ws = await insertWorkspace(db, u)
       const member = await insertMember(db, ws, u)
       const group = await db
-        .insertInto("model_groups")
+        .insertInto("modelGroups")
         .values({
-          owner_type: "workspace_member",
-          owner_workspace_member_id: member,
+          ownerType: "workspace_member",
+          ownerWorkspaceMemberId: member,
           name: "member-owned",
         })
         .returning("id")
         .executeTakeFirstOrThrow()
 
       await db
-        .updateTable("workspace_members")
+        .updateTable("workspaceMembers")
         .set({ status: "removed" })
         .where("id", "=", member)
         .execute()
 
       const live = await db
-        .selectFrom("model_groups_live")
+        .selectFrom("modelGroupsLive")
         .select("id")
         .where("id", "=", group.id)
         .execute()
@@ -1453,10 +1453,10 @@ test(
         db,
         () =>
           db
-            .insertInto("model_groups")
+            .insertInto("modelGroups")
             .values({
-              owner_type: "workspace_member",
-              owner_workspace_member_id: member,
+              ownerType: "workspace_member",
+              ownerWorkspaceMemberId: member,
               name: "late-member-owned",
             })
             .execute(),
@@ -1474,42 +1474,42 @@ test(
       const u = await insertUser(db)
       const ws = await insertWorkspace(db, u)
       const subject = await db
-        .insertInto("access_subjects")
-        .values({ kind: "workspace", workspace_id: ws })
+        .insertInto("accessSubjects")
+        .values({ kind: "workspace", workspaceId: ws })
         .returning("id")
         .executeTakeFirstOrThrow()
       const source = await db
-        .insertInto("automation_event_sources")
+        .insertInto("automationEventSources")
         .values({
-          workspace_id: ws,
-          provider_kind: "internal",
-          source_key: uniq("event-source"),
+          workspaceId: ws,
+          providerKind: "internal",
+          sourceKey: uniq("event-source"),
           name: "internal event source",
-          created_by_kind: "system",
+          createdByKind: "system",
           status: "active",
         } as any)
         .returning("id")
         .executeTakeFirstOrThrow()
       const binding = await db
-        .insertInto("resource_access_bindings")
+        .insertInto("resourceAccessBindings")
         .values({
-          workspace_id: ws,
-          resource_type: "automation_event_source",
-          automation_event_source_id: source.id as string,
-          subject_id: subject.id,
+          workspaceId: ws,
+          resourceType: "automation_event_source",
+          automationEventSourceId: source.id as string,
+          subjectId: subject.id,
           status: "active",
         })
         .returning("id")
         .executeTakeFirstOrThrow()
 
       await db
-        .updateTable("automation_event_sources")
+        .updateTable("automationEventSources")
         .set({ status: "archived" })
         .where("id", "=", source.id)
         .execute()
 
       const sourceLive = await db
-        .selectFrom("automation_event_sources_live")
+        .selectFrom("automationEventSourcesLive")
         .select("id")
         .where("id", "=", source.id)
         .execute()
@@ -1520,7 +1520,7 @@ test(
       )
 
       const bindingLive = await db
-        .selectFrom("resource_access_bindings_live")
+        .selectFrom("resourceAccessBindingsLive")
         .select("id")
         .where("id", "=", binding.id)
         .execute()
@@ -1531,7 +1531,7 @@ test(
       )
 
       await db
-        .updateTable("resource_access_bindings")
+        .updateTable("resourceAccessBindings")
         .set({ status: "revoked" })
         .where("id", "=", binding.id)
         .execute()
@@ -1539,7 +1539,7 @@ test(
         db,
         () =>
           db
-            .updateTable("resource_access_bindings")
+            .updateTable("resourceAccessBindings")
             .set({ status: "active" })
             .where("id", "=", binding.id)
             .execute(),
@@ -1558,17 +1558,17 @@ test(
       const ws = await insertWorkspace(db, u)
       const offlineDeviceId = await insertDevice(db, ws)
       const offlineService = await db
-        .insertInto("device_services")
+        .insertInto("deviceServices")
         .values({
-          device_id: offlineDeviceId,
-          service_kind: "device_runtime",
+          deviceId: offlineDeviceId,
+          serviceKind: "device_runtime",
           status: "offline",
         } as any)
         .returning("id")
         .executeTakeFirstOrThrow()
 
       const offlineServiceLive = await db
-        .selectFrom("device_services_live")
+        .selectFrom("deviceServicesLive")
         .select("id")
         .where("id", "=", offlineService.id)
         .execute()
@@ -1581,12 +1581,12 @@ test(
         db,
         () =>
           db
-            .insertInto("device_exposures")
+            .insertInto("deviceExposures")
             .values({
-              device_id: offlineDeviceId,
-              service_id: offlineService.id as string,
-              stable_key: uniq("offline-exposure"),
-              display_name: "offline exposure",
+              deviceId: offlineDeviceId,
+              serviceId: offlineService.id as string,
+              stableKey: uniq("offline-exposure"),
+              displayName: "offline exposure",
               transport: "stdio",
             } as any)
             .execute(),
@@ -1595,27 +1595,27 @@ test(
 
       const { capabilityId, exposureId } = await insertDeviceCapability(db, ws)
       const hiddenTool = await db
-        .insertInto("device_tools")
+        .insertInto("deviceTools")
         .values({
-          exposure_id: exposureId,
-          stable_key: uniq("hidden-tool"),
-          current_name: "hidden_tool",
+          exposureId: exposureId,
+          stableKey: uniq("hidden-tool"),
+          currentName: "hidden_tool",
           status: "hidden",
         } as any)
         .returning("id")
         .executeTakeFirstOrThrow()
       const removedTool = await db
-        .insertInto("device_tools")
+        .insertInto("deviceTools")
         .values({
-          exposure_id: exposureId,
-          stable_key: uniq("removed-tool"),
-          current_name: "removed_tool",
+          exposureId: exposureId,
+          stableKey: uniq("removed-tool"),
+          currentName: "removed_tool",
           status: "removed",
         } as any)
         .returning("id")
         .executeTakeFirstOrThrow()
       const hiddenRemovedToolsLive = await db
-        .selectFrom("device_tools_live")
+        .selectFrom("deviceToolsLive")
         .select("id")
         .where("id", "in", [hiddenTool.id, removedTool.id])
         .execute()
@@ -1626,11 +1626,11 @@ test(
       )
 
       const catalogRevision = await db
-        .insertInto("device_catalog_revisions")
+        .insertInto("deviceCatalogRevisions")
         .values({
-          exposure_id: exposureId,
-          revision_seq: 1,
-          schema_hash: uniq("schema-hash"),
+          exposureId: exposureId,
+          revisionSeq: 1,
+          schemaHash: uniq("schema-hash"),
           status: "active",
         } as any)
         .returning("id")
@@ -1639,36 +1639,36 @@ test(
         db,
         () =>
           db
-            .insertInto("device_tool_revisions")
+            .insertInto("deviceToolRevisions")
             .values({
-              tool_id: removedTool.id as string,
-              catalog_revision_id: catalogRevision.id as string,
-              tool_name: "removed_tool",
+              toolId: removedTool.id as string,
+              catalogRevisionId: catalogRevision.id as string,
+              toolName: "removed_tool",
             } as any)
             .execute(),
         /references non-live device_tools/
       )
 
       const subject = await db
-        .insertInto("workspace_members")
-        .values({ workspace_id: ws, user_id: u, trust_level: "admin" })
+        .insertInto("workspaceMembers")
+        .values({ workspaceId: ws, userId: u, trustLevel: "admin" })
         .returning("id")
         .executeTakeFirstOrThrow()
       const subjectRef = await db
-        .insertInto("access_subjects")
+        .insertInto("accessSubjects")
         .values({
           kind: "workspace_member",
-          workspace_id: ws,
-          workspace_member_id: subject.id,
+          workspaceId: ws,
+          workspaceMemberId: subject.id,
         })
         .returning("id")
         .executeTakeFirstOrThrow()
       const binding = await db
-        .insertInto("workspace_app_grants")
+        .insertInto("workspaceAppGrants")
         .values({
-          workspace_id: ws,
-          workspace_app_id: capabilityId,
-          subject_id: subjectRef.id,
+          workspaceId: ws,
+          workspaceAppId: capabilityId,
+          subjectId: subjectRef.id,
           permissions: ["use"],
           status: "active",
         })
@@ -1676,13 +1676,13 @@ test(
         .executeTakeFirstOrThrow()
 
       await db
-        .updateTable("workspace_apps")
+        .updateTable("workspaceApps")
         .set({ status: "archived" })
         .where("id", "=", capabilityId)
         .execute()
 
       const archivedCapabilityLive = await db
-        .selectFrom("device_capabilities_live")
+        .selectFrom("deviceCapabilitiesLive")
         .select("id")
         .where("id", "=", capabilityId)
         .execute()
@@ -1717,26 +1717,26 @@ test(
       const actorId = await insertActor(db, ws)
       const conversationId = await insertConversation(db, ws)
       const actorSubject = await db
-        .insertInto("access_subjects")
+        .insertInto("accessSubjects")
         .values({
           kind: "actor",
-          workspace_id: ws,
-          actor_id: actorId,
+          workspaceId: ws,
+          actorId: actorId,
         })
         .returning("id")
         .executeTakeFirstOrThrow()
       const participant = await db
-        .insertInto("conversation_participants")
+        .insertInto("conversationParticipants")
         .values({
-          conversation_id: conversationId,
-          subject_id: actorSubject.id,
+          conversationId: conversationId,
+          subjectId: actorSubject.id,
           state: "active",
         })
         .returning("id")
         .executeTakeFirstOrThrow()
 
       let participantLive = await db
-        .selectFrom("conversation_participants_live")
+        .selectFrom("conversationParticipantsLive")
         .select("id")
         .where("id", "=", participant.id)
         .execute()
@@ -1746,26 +1746,26 @@ test(
         "active participant appears in canonical _live view"
       )
       const rule = await db
-        .insertInto("automation_rules")
+        .insertInto("automationRules")
         .values({
-          workspace_id: ws,
-          conversation_id: conversationId,
+          workspaceId: ws,
+          conversationId: conversationId,
           category: "event_subscription",
           name: "participant provenance rule",
-          created_by_participant_id: participant.id as string,
+          createdByParticipantId: participant.id as string,
           status: "active",
         } as any)
         .returning("id")
         .executeTakeFirstOrThrow()
 
       await db
-        .updateTable("conversation_participants")
+        .updateTable("conversationParticipants")
         .set({ state: "left" })
         .where("id", "=", participant.id)
         .execute()
 
       participantLive = await db
-        .selectFrom("conversation_participants_live")
+        .selectFrom("conversationParticipantsLive")
         .select("id")
         .where("id", "=", participant.id)
         .execute()
@@ -1776,18 +1776,18 @@ test(
       )
 
       await db
-        .updateTable("automation_rules")
+        .updateTable("automationRules")
         .set({ status: "archived" })
         .where("id", "=", rule.id)
         .execute()
       await db
-        .updateTable("automation_rules")
+        .updateTable("automationRules")
         .set({ status: "active" })
         .where("id", "=", rule.id)
         .execute()
 
       const ruleLive = await db
-        .selectFrom("automation_rules_live")
+        .selectFrom("automationRulesLive")
         .select("id")
         .where("id", "=", rule.id)
         .execute()
@@ -1799,14 +1799,14 @@ test(
 
       await db
         .updateTable("conversations")
-        .set({ deleted_at: new Date() })
+        .set({ deletedAt: new Date() })
         .where("id", "=", conversationId)
         .execute()
       await rejects(
         db,
         () =>
           db
-            .updateTable("conversation_participants")
+            .updateTable("conversationParticipants")
             .set({ state: "active" })
             .where("id", "=", participant.id)
             .execute(),

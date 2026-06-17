@@ -1,16 +1,20 @@
-import crypto from "node:crypto"
 import { extractText, type CanonicalContentBlock } from "@synapse/shared"
-import { sql } from "kysely"
-import {
-  db,
-  type TableInsert,
-  withDbTransaction,
-} from "../../infrastructure/database/kysely.js"
 import { config } from "../../config/index.js"
 import { itemPartsToCanonicalContentBlocks } from "../chat/message-content.js"
 import { embedMemoryPassages } from "./embedding-runtime.js"
 import { memoryIndexingQueue } from "../../workers/queues.js"
 import { hashMemoryEmbeddingText } from "./embedding-input.js"
+import {
+  commitMemoryItemEmbeddingReady,
+  commitMemoryItemLexicalRebuild,
+  loadMemoryItemChunksForVersion,
+  loadMemoryItemIndexSourceRows,
+  loadMemoryItemIndexVersions,
+  loadMemoryPassageEmbeddingCacheRows,
+  markMemoryItemEmbeddingFailed,
+  setMemoryItemChunkEmbedding,
+  upsertMemoryPassageEmbeddingCache,
+} from "./repo.js"
 
 const MEMORY_VECTOR_DIMENSIONS = 384
 const TARGET_CHUNK_CHARS = 800
@@ -233,19 +237,16 @@ async function loadCachedPassageEmbeddings(searchTexts: string[]) {
   )
   if (hashes.length === 0) return new Map<string, number[]>()
 
-  const rows = await db
-    .selectFrom("memory_embedding_cache")
-    .select(["content_hash", sql<string>`embedding::text`.as("embedding_text")])
-    .where("model_id", "=", config.memory.modelId)
-    .where("input_type", "=", "passage")
-    .where("content_hash", "in", hashes)
-    .execute()
+  const rows = await loadMemoryPassageEmbeddingCacheRows(
+    hashes,
+    config.memory.modelId
+  )
 
   const cache = new Map<string, number[]>()
   for (const row of rows) {
-    const embedding = parseEmbeddingVector(row.embedding_text)
+    const embedding = parseEmbeddingVector(row.embeddingText)
     if (embedding && embedding.length > 0) {
-      cache.set(row.content_hash, embedding)
+      cache.set(row.contentHash, embedding)
     }
   }
   return cache
@@ -256,36 +257,22 @@ async function upsertCachedPassageEmbeddings(
 ) {
   if (entries.length === 0) return
 
-  await withDbTransaction(async (trx) => {
-    for (const entry of entries) {
-      if (entry.embedding.length === 0) continue
-      const contentHash = hashMemoryEmbeddingText(entry.searchText, "passage")
-      await trx
-        .insertInto("memory_embedding_cache")
-        .values({
-          model_id: config.memory.modelId,
-          input_type: "passage",
-          content_hash: contentHash,
-          embedding: sql`${formatEmbeddingVector(entry.embedding)}::vector`,
-          embedding_dim: entry.embedding.length,
-          created_at: sql`NOW()`,
-        })
-        .onConflict((oc) =>
-          oc.columns(["model_id", "input_type", "content_hash"]).doUpdateSet({
-            embedding: sql`${formatEmbeddingVector(entry.embedding)}::vector`,
-            embedding_dim: entry.embedding.length,
-          })
-        )
-        .execute()
-    }
-  })
+  const rows = entries
+    .filter((entry) => entry.embedding.length > 0)
+    .map((entry) => ({
+      contentHash: hashMemoryEmbeddingText(entry.searchText, "passage"),
+      embeddingLiteral: formatEmbeddingVector(entry.embedding),
+      embeddingDim: entry.embedding.length,
+    }))
+
+  await upsertMemoryPassageEmbeddingCache(rows, config.memory.modelId)
 }
 
 async function embedPassageBatchWithCache(
-  batch: Array<{ id: string; search_text: string }>
+  batch: Array<{ id: string; searchText: string }>
 ) {
   const cached = await loadCachedPassageEmbeddings(
-    batch.map((chunk) => chunk.search_text)
+    batch.map((chunk) => chunk.searchText)
   )
   const embeddings: Array<number[] | null> = Array.from(
     { length: batch.length },
@@ -295,7 +282,7 @@ async function embedPassageBatchWithCache(
 
   for (let index = 0; index < batch.length; index += 1) {
     const contentHash = hashMemoryEmbeddingText(
-      batch[index].search_text,
+      batch[index].searchText,
       "passage"
     )
     const embedding = cached.get(contentHash)
@@ -304,7 +291,7 @@ async function embedPassageBatchWithCache(
     } else {
       missing.push({
         index,
-        searchText: batch[index].search_text,
+        searchText: batch[index].searchText,
       })
     }
   }
@@ -333,35 +320,11 @@ async function embedPassageBatchWithCache(
 }
 
 async function loadMemoryItemIndexSource(memoryItemId: string) {
-  const item = await db
-    .selectFrom("memory_items as mi")
-    .selectAll("mi")
-    .where("mi.id", "=", memoryItemId)
-    .limit(1)
-    .executeTakeFirst()
-  if (!item) return null
+  const source = await loadMemoryItemIndexSourceRows(memoryItemId)
+  if (!source) return null
 
-  const partsResult = await db
-    .selectFrom("memory_item_parts as mip")
-    .select([
-      "mip.id",
-      "mip.memory_item_id",
-      "mip.ordinal",
-      "mip.part_type",
-      "mip.text_value",
-      "mip.ref_path",
-      "mip.ref_sha256",
-      "mip.json_value",
-      "mip.mime_type",
-      "mip.name",
-      "mip.metadata",
-    ])
-    .where("mip.memory_item_id", "=", memoryItemId)
-    .orderBy("mip.ordinal", "asc")
-    .execute()
-
-  const contentBlocks = itemPartsToCanonicalContentBlocks(partsResult)
-  return { item, contentBlocks }
+  const contentBlocks = itemPartsToCanonicalContentBlocks(source.parts)
+  return { item: source.item, contentBlocks }
 }
 
 export async function rebuildMemoryItemLexicalIndex(memoryItemId: string) {
@@ -370,18 +333,18 @@ export async function rebuildMemoryItemLexicalIndex(memoryItemId: string) {
 
   const searchText = buildMemorySearchText({
     contentBlocks: source.contentBlocks,
-    textDigest: source.item.text_digest,
+    textDigest: source.item.textDigest,
     tags: source.item.tags || [],
     category: source.item.category,
   })
   const specs = buildMemoryChunkSpecs({
     contentBlocks: source.contentBlocks,
-    textDigest: source.item.text_digest,
+    textDigest: source.item.textDigest,
     tags: source.item.tags || [],
     category: source.item.category,
   })
-  const currentActiveVersion = Number(source.item.active_index_version || 0)
-  const currentStagedVersion = Number(source.item.staged_index_version || 0)
+  const currentActiveVersion = Number(source.item.activeIndexVersion || 0)
+  const currentStagedVersion = Number(source.item.stagedIndexVersion || 0)
   const nextIndexVersion =
     Math.max(currentActiveVersion, currentStagedVersion) + 1
   const shouldStageNextVersion = currentActiveVersion > 0
@@ -390,51 +353,17 @@ export async function rebuildMemoryItemLexicalIndex(memoryItemId: string) {
     : nextIndexVersion
   const nextStagedVersion = shouldStageNextVersion ? nextIndexVersion : null
 
-  await withDbTransaction(async (trx) => {
-    if (currentStagedVersion > 0) {
-      // Index churn: route the physical delete through the SECURITY DEFINER fn
-      // (sd_reject_delete forbids a naked DELETE on this persistent child table).
-      await sql`SELECT sd_replace_memory_item_chunks(${memoryItemId}::uuid, ${currentStagedVersion}::int)`.execute(
-        trx
-      )
-    }
-
-    for (const spec of specs) {
-      await trx
-        .insertInto("memory_item_chunks")
-        .values({
-          id: crypto.randomUUID(),
-          memory_item_id: memoryItemId,
-          workspace_id: source.item.workspace_id,
-          index_version: nextIndexVersion,
-          chunk_index: spec.chunkIndex,
-          chunk_kind: spec.chunkKind,
-          search_text: spec.searchText,
-          embedding: null,
-          token_count: Math.ceil(spec.searchText.length / 4),
-          metadata: {
-            textDigest: source.item.text_digest,
-            state: source.item.state,
-          } as TableInsert<"memory_item_chunks">["metadata"],
-          created_at: sql`NOW()`,
-        })
-        .execute()
-    }
-
-    await trx
-      .updateTable("memory_items")
-      .set({
-        search_text: searchText,
-        index_status: "lexical_ready",
-        active_index_version: nextActiveVersion,
-        staged_index_version: nextStagedVersion,
-        embedding_model: "",
-        embedding_dim: null,
-        indexed_at: null,
-        index_error: null,
-      })
-      .where("id", "=", memoryItemId)
-      .execute()
+  await commitMemoryItemLexicalRebuild({
+    memoryItemId,
+    workspaceId: source.item.workspaceId,
+    searchText,
+    textDigest: source.item.textDigest,
+    state: source.item.state,
+    nextIndexVersion,
+    nextActiveVersion,
+    nextStagedVersion,
+    currentStagedVersion,
+    specs,
   })
 
   return {
@@ -471,16 +400,11 @@ export async function reindexMemoryItemEmbeddings(
   memoryItemId: string,
   expectedIndexVersion?: number
 ) {
-  const item = await db
-    .selectFrom("memory_items")
-    .select(["id", "active_index_version", "staged_index_version"])
-    .where("id", "=", memoryItemId)
-    .limit(1)
-    .executeTakeFirst()
+  const item = await loadMemoryItemIndexVersions(memoryItemId)
   if (!item) return { status: "missing" as const }
 
-  const activeIndexVersion = Number(item.active_index_version || 0)
-  const stagedIndexVersion = Number(item.staged_index_version || 0)
+  const activeIndexVersion = Number(item.activeIndexVersion || 0)
+  const stagedIndexVersion = Number(item.stagedIndexVersion || 0)
   const targetIndexVersion =
     stagedIndexVersion > 0 ? stagedIndexVersion : activeIndexVersion
 
@@ -494,39 +418,19 @@ export async function reindexMemoryItemEmbeddings(
     return { status: "stale" as const }
   }
 
-  const chunks = await db
-    .selectFrom("memory_item_chunks")
-    .select(["id", "search_text", "index_version"])
-    .where("memory_item_id", "=", memoryItemId)
-    .where("index_version", "=", targetIndexVersion)
-    .orderBy("chunk_index", "asc")
-    .execute()
+  const chunks = await loadMemoryItemChunksForVersion(
+    memoryItemId,
+    targetIndexVersion
+  )
 
   if (chunks.length === 0) {
-    await withDbTransaction(async (trx) => {
-      await trx
-        .updateTable("memory_items")
-        .set({
-          active_index_version: targetIndexVersion,
-          staged_index_version: null,
-          index_status: "ready",
-          embedding_model: config.memory.modelId,
-          embedding_dim: MEMORY_VECTOR_DIMENSIONS,
-          indexed_at: sql`NOW()`,
-          index_error: null,
-        })
-        .where("id", "=", memoryItemId)
-        .execute()
-
-      if (
-        stagedIndexVersion > 0 &&
-        activeIndexVersion > 0 &&
-        activeIndexVersion !== targetIndexVersion
-      ) {
-        await sql`SELECT sd_replace_memory_item_chunks(${memoryItemId}::uuid, ${activeIndexVersion}::int)`.execute(
-          trx
-        )
-      }
+    await commitMemoryItemEmbeddingReady({
+      memoryItemId,
+      targetIndexVersion,
+      activeIndexVersion,
+      stagedIndexVersion,
+      embeddingModel: config.memory.modelId,
+      embeddingDim: MEMORY_VECTOR_DIMENSIONS,
     })
     return { status: "ready" as const, chunkCount: 0 }
   }
@@ -540,44 +444,23 @@ export async function reindexMemoryItemEmbeddings(
       for (let index = 0; index < batch.length; index += 1) {
         const chunk = batch[index]
         const embedding = embeddings[index]
-        await db
-          .updateTable("memory_item_chunks")
-          .set({
-            embedding:
-              embedding && embedding.length > 0
-                ? sql`${formatEmbeddingVector(embedding)}::vector`
-                : null,
-          })
-          .where("id", "=", chunk.id)
-          .where("index_version", "=", targetIndexVersion)
-          .execute()
+        await setMemoryItemChunkEmbedding(
+          chunk.id,
+          targetIndexVersion,
+          embedding && embedding.length > 0
+            ? formatEmbeddingVector(embedding)
+            : null
+        )
       }
     }
 
-    await withDbTransaction(async (trx) => {
-      await trx
-        .updateTable("memory_items")
-        .set({
-          active_index_version: targetIndexVersion,
-          staged_index_version: null,
-          index_status: "ready",
-          embedding_model: config.memory.modelId,
-          embedding_dim: MEMORY_VECTOR_DIMENSIONS,
-          indexed_at: sql`NOW()`,
-          index_error: null,
-        })
-        .where("id", "=", memoryItemId)
-        .execute()
-
-      if (
-        stagedIndexVersion > 0 &&
-        activeIndexVersion > 0 &&
-        activeIndexVersion !== targetIndexVersion
-      ) {
-        await sql`SELECT sd_replace_memory_item_chunks(${memoryItemId}::uuid, ${activeIndexVersion}::int)`.execute(
-          trx
-        )
-      }
+    await commitMemoryItemEmbeddingReady({
+      memoryItemId,
+      targetIndexVersion,
+      activeIndexVersion,
+      stagedIndexVersion,
+      embeddingModel: config.memory.modelId,
+      embeddingDim: MEMORY_VECTOR_DIMENSIONS,
     })
 
     return {
@@ -586,16 +469,12 @@ export async function reindexMemoryItemEmbeddings(
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    await db
-      .updateTable("memory_items")
-      .set({
-        index_status: "failed",
-        embedding_model: config.memory.modelId,
-        embedding_dim: MEMORY_VECTOR_DIMENSIONS,
-        index_error: message,
-      })
-      .where("id", "=", memoryItemId)
-      .execute()
+    await markMemoryItemEmbeddingFailed({
+      memoryItemId,
+      embeddingModel: config.memory.modelId,
+      embeddingDim: MEMORY_VECTOR_DIMENSIONS,
+      indexError: message,
+    })
     return {
       status: "failed" as const,
       error: message,

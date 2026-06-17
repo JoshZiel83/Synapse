@@ -3,6 +3,7 @@ import type { SubFeature } from "./types.js"
 import type { BuiltinPluginExecuteResult } from "../../index.js"
 import {
   normalizeZhipuTransportError,
+  readZhipuJsonObjectResponse,
   throwZhipuApiError,
 } from "./zhipu-errors.js"
 
@@ -148,7 +149,7 @@ export const searchFeature: SubFeature = {
         await throwZhipuApiError("网络搜索 API", response)
       }
 
-      const result = (await response.json()) as {
+      const result = await readZhipuJsonObjectResponse<{
         request_id?: string
         search_intent?: Array<{
           query?: string
@@ -164,7 +165,7 @@ export const searchFeature: SubFeature = {
           refer?: string
           publish_date?: string
         }>
-      }
+      }>("网络搜索 API", response)
 
       const sections: string[] = []
       if (result.request_id) {

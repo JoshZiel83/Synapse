@@ -53,8 +53,8 @@ export const transportLabels: Record<string, string> = {
 
 type PluginInstallationSummaryShape = {
   ownerWorkspaceMemberId?: string | null
-  lifecycle_scope?: string | null
-  is_enabled?: boolean | null
+  lifecycleScope?: string | null
+  isEnabled?: boolean | null
 }
 
 const lifecycleSummaryByScope: Record<string, string> = {
@@ -78,9 +78,9 @@ export function getPluginInstallationDetails(
     ? "Owned by one workspace member"
     : "Owned by the workspace"
   const lifecycleSummary =
-    lifecycleSummaryByScope[installation.lifecycle_scope || ""] ||
-    `reuse: ${installation.lifecycle_scope || "turn"}`
-  const statusSummary = installation.is_enabled ? "enabled" : "disabled"
+    lifecycleSummaryByScope[installation.lifecycleScope || ""] ||
+    `reuse: ${installation.lifecycleScope || "turn"}`
+  const statusSummary = installation.isEnabled ? "enabled" : "disabled"
   return `${ownershipSummary}, ${lifecycleSummary}, ${statusSummary}.`
 }
 

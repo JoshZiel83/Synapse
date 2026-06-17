@@ -1,14 +1,37 @@
 import type { FastifyInstance } from "fastify"
 import { ZodError, z } from "zod"
 import {
-  CHAT_TYPING_STATES,
-  CONVERSATION_KINDS,
-  TASK_DECISIONS,
-  PLAN_APPROVAL_DECISIONS,
-  PUSH_TOKEN_PLATFORMS,
-  RUNTIME_AUTHORIZATION_PRESETS,
-} from "@synapse/shared"
-import { CanonicalContentBlockSchema } from "@synapse/shared/schemas"
+  ChatBootstrapViewSchema,
+  ChatClientInstanceViewSchema,
+  ChatConversationEnvelopeViewSchema,
+  ChatConversationListViewSchema,
+  ChatConversationMessagesViewSchema,
+  ChatDedupCountersViewSchema,
+  ChatMessageRetryViewSchema,
+  ChatParticipantRemovalViewSchema,
+  ChatPushTokenDeleteViewSchema,
+  ChatPushTokenListViewSchema,
+  ChatPushTokenRegistrationViewSchema,
+  ChatReadWatermarkViewSchema,
+  ChatRealtimeOutboxGcViewSchema,
+  ChatRuntimeTurnDetailViewSchema,
+  ChatSendMessageViewSchema,
+  ChatSyncViewSchema,
+  ChatTaskRespondViewSchema,
+  ChatTypingBroadcastViewSchema,
+  ChatConversationCreateInputSchema,
+  ChatClientInstanceRegistrationInputSchema,
+  ChatConversationMessagesQuerySchema,
+  ChatConversationPatchInputSchema,
+  ChatAddParticipantsInputSchema,
+  ChatPushTokenRegistrationInputSchema,
+  ChatTypingInputSchema,
+  ChatSyncQuerySchema,
+  ChatSendMessageInputSchema,
+  ChatReadWatermarkInputSchema,
+  ChatTaskResolveInputSchema,
+} from "@synapse/shared/schemas"
+import { appRoute } from "../../infrastructure/http/route.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { requireWorkspaceMemberIdentity } from "./workspace-identity.js"
 import {
@@ -22,17 +45,10 @@ import {
 import {
   createChatClientInstance,
   createChatConversation,
-  getChatConversationActorRuntimeTurnDetail,
-  getConversationParticipant,
-  getChatBootstrap,
-  getChatConversationMessages,
-  getChatSync,
   isChatServiceError,
   sendChatConversationMessage,
   touchChatClientInstance,
   updateChatConversationReadWatermark,
-  listChatConversations,
-  getChatConversationDetail,
   patchChatConversation,
   addChatConversationParticipants,
   removeChatConversationParticipant,
@@ -44,172 +60,55 @@ import {
   retryAssistantMessage,
 } from "./service.js"
 import {
-  canUserViewTask,
-  enrichTaskForUser,
-  getTaskSummary,
-  resolveTaskRequest,
-} from "../tasks/service.js"
+  getChatBootstrap,
+  getChatConversationActorRuntimeTurnDetail,
+  getChatConversationDetail,
+  getChatConversationMessages,
+  getChatSync,
+  listChatConversations,
+} from "./app-read.js"
+import { respondToChatTask } from "./task-response.js"
+import {
+  presentChatBootstrap,
+  presentChatClientInstanceRegistration,
+  presentChatConversationCreate,
+  presentChatConversationEnvelope,
+  presentChatConversationList,
+  presentChatConversationMessages,
+  presentChatConversationReadWatermark,
+  presentChatConversationSendMessage,
+  presentChatSync,
+} from "./presenter.js"
 import { getChatDedupCountersSnapshot } from "./observability.js"
 import { gcRealtimeEventOutbox } from "../../infrastructure/events/index.js"
 import { isPlatformSuperAdmin } from "../platform/admin-service.js"
 
 const CHAT_BASE_PATH = "/api/v1/workspaces/:workspaceId/chat"
 
-const jsonRecordSchema = z.record(z.string(), z.any()).optional()
+// App-facing request bodies / queries live in @synapse/shared (§5.1.1) so the
+// API parser and the web/mobile clients share one definition (this replaced the
+// controller-local zod schemas + the hand-written ChatXxxRequest interfaces
+// that had drifted as two tracks). The strictObject create/add-participants
+// schemas keep their legacy-field-rejecting behavior in the shared definition.
+const createConversationSchema = ChatConversationCreateInputSchema
+const registerClientInstanceSchema = ChatClientInstanceRegistrationInputSchema
+const conversationMessagesQuerySchema = ChatConversationMessagesQuerySchema
+const patchConversationSchema = ChatConversationPatchInputSchema
+const addParticipantsSchema = ChatAddParticipantsInputSchema
+const pushTokenSchema = ChatPushTokenRegistrationInputSchema
+const typingSchema = ChatTypingInputSchema
+const syncQuerySchema = ChatSyncQuerySchema
+const sendMessageSchema = ChatSendMessageInputSchema
+const readWatermarkSchema = ChatReadWatermarkInputSchema
+const resolveTaskSchema = ChatTaskResolveInputSchema
 
-// CanonicalContentBlock zod is owned by @synapse/shared so any future
-// consumer (ingest CLI, device-runtime, etc.) validates against the same
-// shape the chat HTTP API enforces here.
-const canonicalContentBlockSchema = CanonicalContentBlockSchema
-
-// strictObject so legacy clients sending the removed `boundary` /
-// `externalParticipants` fields get a clean 400 instead of having them silently
-// stripped (zod's default object strips unknown keys). External participants are
-// created only by the IM ingest path now; IM-ness is derived from the transport
-// binding, never passed at create time.
-const createConversationSchema = z.strictObject({
-  clientRequestId: chatUuidSchema,
-  kind: z.enum(CONVERSATION_KINDS),
-  title: z.string().trim().min(1).max(255).optional(),
-  workspaceMemberIds: z.array(chatUuidSchema).optional().default([]),
-  actorIds: z.array(chatUuidSchema).optional().default([]),
-  remoteAgentIds: z.array(chatUuidSchema).optional().default([]),
-  metadata: jsonRecordSchema,
-})
-
-const registerClientInstanceSchema = z.object({
-  platform: z.string().trim().min(1).max(64).optional(),
-  deviceLabel: z.string().trim().min(1).max(255).optional(),
-  metadata: jsonRecordSchema,
-})
-
-const conversationMessagesQuerySchema = z
-  .object({
-    afterSequence: z.coerce.number().int().min(0).optional(),
-    beforeSequence: z.coerce.number().int().min(0).optional(),
-    limit: z.coerce.number().int().min(1).max(200).optional(),
-    clientInstanceId: chatUuidSchema,
-  })
-  .refine(
-    (value) =>
-      !(
-        typeof value.afterSequence === "number" &&
-        typeof value.beforeSequence === "number"
-      ),
-    {
-      message: "afterSequence and beforeSequence cannot both be provided",
-    }
-  )
-
-const patchConversationSchema = z
-  .object({
-    title: z.string().trim().min(1).max(255).nullable().optional(),
-    metadata: jsonRecordSchema,
-  })
-  .refine(
-    (value) => value.title !== undefined || value.metadata !== undefined,
-    { message: "At least one of title or metadata must be provided" }
-  )
-
-const addParticipantsSchema = z
-  .strictObject({
-    workspaceMemberIds: z.array(chatUuidSchema).optional().default([]),
-    actorIds: z.array(chatUuidSchema).optional().default([]),
-    remoteAgentIds: z.array(chatUuidSchema).optional().default([]),
-  })
-  .refine(
-    (value) =>
-      value.workspaceMemberIds.length +
-        value.actorIds.length +
-        value.remoteAgentIds.length >
-      0,
-    { message: "At least one participant identifier is required" }
-  )
-
+// Path-param validator (:workspaceId/:conversationId/:participantId) — not a
+// body DTO, stays local.
 const removeParticipantParamsSchema = z.object({
   workspaceId: chatUuidSchema,
   conversationId: chatUuidSchema,
   participantId: chatUuidSchema,
 })
-
-const pushTokenSchema = z.object({
-  platform: z.enum(PUSH_TOKEN_PLATFORMS),
-  token: z.string().trim().min(1).max(2048),
-  deviceLabel: z.string().trim().min(1).max(255).optional(),
-  metadata: jsonRecordSchema,
-})
-
-const typingSchema = z.object({
-  state: z.enum(CHAT_TYPING_STATES),
-})
-
-const syncQuerySchema = z.object({
-  cursor: z.coerce.number().int().min(0).optional(),
-  limit: z.coerce.number().int().min(1).max(500).optional(),
-})
-
-const sendMessageSchema = z.object({
-  contentBlocks: z.array(canonicalContentBlockSchema).min(1),
-  clientMessageId: chatUuidSchema,
-  replyToItemId: chatUuidSchema.optional(),
-  clientInstanceId: chatUuidSchema,
-  metadata: jsonRecordSchema,
-})
-
-const readWatermarkSchema = z.object({
-  readUpToSequence: z.number().int().min(0),
-  lastVisibleSequence: z.number().int().min(0).optional(),
-  clientInstanceId: chatUuidSchema,
-})
-
-const taskAnswerSchema = z.object({
-  questionId: z.string().trim().min(1),
-  selectedOptionIds: z.array(z.string().trim().min(1)).optional(),
-  otherText: z.string().trim().optional(),
-  text: z.string().trim().optional(),
-})
-
-const resolveTaskCommandSchema = z.object({
-  commandId: chatUuidSchema,
-  baseRevision: z.number().int().min(1),
-})
-
-const resolveTaskUserInputSchema = resolveTaskCommandSchema
-  .extend({
-    answers: z.array(taskAnswerSchema).min(1),
-    note: z.string().trim().optional(),
-  })
-  .strict()
-
-const resolveTaskPlanApprovalSchema = resolveTaskCommandSchema
-  .extend({
-    decision: z.enum(PLAN_APPROVAL_DECISIONS),
-    note: z.string().trim().optional(),
-  })
-  .strict()
-
-const resolveTaskRuntimeAuthorizationApproveSchema = resolveTaskCommandSchema
-  .extend({
-    decision: z.literal(TASK_DECISIONS[0]),
-    preset: z.enum(RUNTIME_AUTHORIZATION_PRESETS),
-    selectedGrantOptionId: z.string().trim().min(1),
-    note: z.string().trim().optional(),
-  })
-  .strict()
-
-const resolveTaskRuntimeAuthorizationRejectSchema = resolveTaskCommandSchema
-  .extend({
-    decision: z.literal(TASK_DECISIONS[1]),
-    note: z.string().trim().optional(),
-  })
-  .strict()
-
-const resolveTaskSchema = z.union([
-  resolveTaskUserInputSchema,
-  resolveTaskPlanApprovalSchema,
-  resolveTaskRuntimeAuthorizationApproveSchema,
-  resolveTaskRuntimeAuthorizationRejectSchema,
-])
 
 function getRequestUserId(request: any) {
   return (request as any).user!.userId as string
@@ -263,9 +162,13 @@ export default async function chatController(app: FastifyInstance) {
   // for the S6 dedup integration tests and for an ops dashboard. Auth
   // is required (via the onRequest hook above) so anonymous callers
   // can't probe the counter; no per-workspace data is exposed.
-  app.get("/api/v1/_debug/chat/dedup-counters", async (_request, reply) => {
-    return reply.send(getChatDedupCountersSnapshot())
-  })
+  appRoute(
+    app,
+    "GET",
+    "/api/v1/_debug/chat/dedup-counters",
+    { schema: ChatDedupCountersViewSchema },
+    async () => getChatDedupCountersSnapshot()
+  )
 
   // Platform-super-admin-only debug endpoint that forces a
   // realtime_event_outbox GC pass and returns the number of pruned
@@ -281,177 +184,209 @@ export default async function chatController(app: FastifyInstance) {
   // The GC only ever deletes status='dispatched' rows, never 'failed'
   // (which is a retryable state in claimPendingRealtimeOutboxEntries),
   // so even hours=0 won't cause realtime event loss.
-  app.post<{
-    Querystring: { hours?: string }
-  }>("/api/v1/_debug/chat/realtime-outbox-gc", async (request, reply) => {
-    const userId = getRequestUserId(request)
-    if (!(await isPlatformSuperAdmin(userId))) {
-      return reply.status(403).send({
-        error: "Platform super_admin required to run realtime outbox GC.",
-        code: "platform_super_admin_required",
-      })
+  appRoute(
+    app,
+    "POST",
+    "/api/v1/_debug/chat/realtime-outbox-gc",
+    { schema: ChatRealtimeOutboxGcViewSchema },
+    async (request, reply) => {
+      const userId = getRequestUserId(request)
+      if (!(await isPlatformSuperAdmin(userId))) {
+        reply.status(403).send({
+          error: "Platform super_admin required to run realtime outbox GC.",
+          code: "platform_super_admin_required",
+        })
+        return undefined
+      }
+      const query = (request.query ?? {}) as { hours?: string }
+      const hours = query.hours ? Number.parseInt(query.hours, 10) : undefined
+      const deleted = await gcRealtimeEventOutbox(
+        Number.isFinite(hours) ? (hours as number) : undefined
+      )
+      return { deleted }
     }
-    const hours = request.query?.hours
-      ? Number.parseInt(request.query.hours, 10)
-      : undefined
-    const deleted = await gcRealtimeEventOutbox(
-      Number.isFinite(hours) ? (hours as number) : undefined
-    )
-    return reply.send({ deleted })
-  })
+  )
 
-  app.get<{
-    Params: { workspaceId: string }
-  }>(`${CHAT_BASE_PATH}/bootstrap`, async (request, reply) => {
-    try {
-      const params = chatWorkspaceParamsSchema.parse(request.params)
-      const response = await getChatBootstrap({
-        workspaceId: params.workspaceId,
-        userId: getRequestUserId(request),
-      })
-      return reply.send(response)
-    } catch (error) {
-      return replyChatError(reply, error)
+  appRoute(
+    app,
+    "GET",
+    `${CHAT_BASE_PATH}/bootstrap`,
+    { schema: ChatBootstrapViewSchema },
+    async (request, reply) => {
+      try {
+        const params = chatWorkspaceParamsSchema.parse(request.params)
+        return presentChatBootstrap(
+          await getChatBootstrap({
+            workspaceId: params.workspaceId,
+            userId: getRequestUserId(request),
+          })
+        )
+      } catch (error) {
+        replyChatError(reply, error)
+        return undefined
+      }
     }
-  })
+  )
 
-  app.get<{
-    Params: { workspaceId: string }
-  }>(`${CHAT_BASE_PATH}/sync`, async (request, reply) => {
-    try {
-      const params = chatWorkspaceParamsSchema.parse(request.params)
-      const query = syncQuerySchema.parse(request.query)
-      const response = await getChatSync({
-        workspaceId: params.workspaceId,
-        userId: getRequestUserId(request),
-        cursor: query.cursor,
-        limit: query.limit,
-      })
-      return reply.send(response)
-    } catch (error) {
-      return replyChatError(reply, error)
+  appRoute(
+    app,
+    "GET",
+    `${CHAT_BASE_PATH}/sync`,
+    { schema: ChatSyncViewSchema },
+    async (request, reply) => {
+      try {
+        const params = chatWorkspaceParamsSchema.parse(request.params)
+        const query = syncQuerySchema.parse(request.query)
+        return presentChatSync(
+          await getChatSync({
+            workspaceId: params.workspaceId,
+            userId: getRequestUserId(request),
+            cursor: query.cursor,
+            limit: query.limit,
+          })
+        )
+      } catch (error) {
+        replyChatError(reply, error)
+        return undefined
+      }
     }
-  })
+  )
 
-  app.post<{
-    Params: { workspaceId: string }
-  }>(`${CHAT_BASE_PATH}/client-instances`, async (request, reply) => {
-    try {
-      const params = chatWorkspaceParamsSchema.parse(request.params)
-      const body = registerClientInstanceSchema.parse(request.body)
-      const response = await createChatClientInstance({
-        workspaceId: params.workspaceId,
-        userId: getRequestUserId(request),
-        platform: body.platform,
-        deviceLabel: body.deviceLabel,
-        metadata: body.metadata,
-      })
-      return reply.status(201).send(response)
-    } catch (error) {
-      return replyChatError(reply, error)
+  appRoute(
+    app,
+    "POST",
+    `${CHAT_BASE_PATH}/client-instances`,
+    { schema: ChatClientInstanceViewSchema },
+    async (request, reply) => {
+      try {
+        const params = chatWorkspaceParamsSchema.parse(request.params)
+        const body = registerClientInstanceSchema.parse(request.body)
+        reply.status(201)
+        return presentChatClientInstanceRegistration(
+          await createChatClientInstance({
+            workspaceId: params.workspaceId,
+            userId: getRequestUserId(request),
+            platform: body.platform,
+            deviceLabel: body.deviceLabel,
+            metadata: body.metadata,
+          })
+        )
+      } catch (error) {
+        replyChatError(reply, error)
+        return undefined
+      }
     }
-  })
+  )
 
-  app.put<{
-    Params: { workspaceId: string; clientInstanceId: string }
-  }>(
+  appRoute(
+    app,
+    "PUT",
     `${CHAT_BASE_PATH}/client-instances/:clientInstanceId`,
+    { schema: ChatClientInstanceViewSchema },
     async (request, reply) => {
       try {
         const params = chatClientInstanceParamsSchema.parse(request.params)
         const body = registerClientInstanceSchema.parse(request.body)
-        const response = await touchChatClientInstance({
-          workspaceId: params.workspaceId,
-          userId: getRequestUserId(request),
-          clientInstanceId: params.clientInstanceId,
-          platform: body.platform,
-          deviceLabel: body.deviceLabel,
-          metadata: body.metadata,
-        })
-        return reply.send(response)
+        return presentChatClientInstanceRegistration(
+          await touchChatClientInstance({
+            workspaceId: params.workspaceId,
+            userId: getRequestUserId(request),
+            clientInstanceId: params.clientInstanceId,
+            platform: body.platform,
+            deviceLabel: body.deviceLabel,
+            metadata: body.metadata,
+          })
+        )
       } catch (error) {
-        return replyChatError(reply, error)
+        replyChatError(reply, error)
+        return undefined
       }
     }
   )
 
-  app.post<{
-    Params: { workspaceId: string }
-  }>(`${CHAT_BASE_PATH}/conversations`, async (request, reply) => {
-    try {
-      const params = chatWorkspaceParamsSchema.parse(request.params)
-      const body = createConversationSchema.parse(request.body)
-      const response = await createChatConversation({
-        workspaceId: params.workspaceId,
-        userId: getRequestUserId(request),
-        clientRequestId: body.clientRequestId,
-        kind: body.kind,
-        title: body.title,
-        workspaceMemberIds: body.workspaceMemberIds,
-        actorIds: body.actorIds,
-        remoteAgentIds: body.remoteAgentIds,
-        metadata: body.metadata,
-      })
-      return reply.send(response)
-    } catch (error) {
-      return replyChatError(reply, error)
+  appRoute(
+    app,
+    "POST",
+    `${CHAT_BASE_PATH}/conversations`,
+    { schema: ChatConversationEnvelopeViewSchema },
+    async (request, reply) => {
+      try {
+        const params = chatWorkspaceParamsSchema.parse(request.params)
+        const body = createConversationSchema.parse(request.body)
+        return presentChatConversationCreate(
+          await createChatConversation({
+            workspaceId: params.workspaceId,
+            userId: getRequestUserId(request),
+            clientRequestId: body.clientRequestId,
+            kind: body.kind,
+            title: body.title,
+            workspaceMemberIds: body.workspaceMemberIds,
+            actorIds: body.actorIds,
+            remoteAgentIds: body.remoteAgentIds,
+            metadata: body.metadata,
+          })
+        )
+      } catch (error) {
+        replyChatError(reply, error)
+        return undefined
+      }
     }
-  })
+  )
 
-  app.get<{
-    Params: { workspaceId: string; conversationId: string }
-  }>(
+  appRoute(
+    app,
+    "GET",
     `${CHAT_BASE_PATH}/conversations/:conversationId/messages`,
+    { schema: ChatConversationMessagesViewSchema },
     async (request, reply) => {
       try {
         const params = chatConversationParamsSchema.parse(request.params)
         const query = conversationMessagesQuerySchema.parse(request.query)
-        const response = await getChatConversationMessages({
-          workspaceId: params.workspaceId,
-          userId: getRequestUserId(request),
-          conversationId: params.conversationId,
-          afterSequence: query.afterSequence,
-          beforeSequence: query.beforeSequence,
-          limit: query.limit,
-          clientInstanceId: query.clientInstanceId,
-        })
-        return reply.send(response)
+        return presentChatConversationMessages(
+          await getChatConversationMessages({
+            workspaceId: params.workspaceId,
+            userId: getRequestUserId(request),
+            conversationId: params.conversationId,
+            afterSequence: query.afterSequence,
+            beforeSequence: query.beforeSequence,
+            limit: query.limit,
+            clientInstanceId: query.clientInstanceId,
+          })
+        )
       } catch (error) {
-        return replyChatError(reply, error)
+        replyChatError(reply, error)
+        return undefined
       }
     }
   )
 
-  app.get<{
-    Params: {
-      workspaceId: string
-      conversationId: string
-      actorId: string
-      turnId: string
-    }
-  }>(
+  appRoute(
+    app,
+    "GET",
     `${CHAT_BASE_PATH}/conversations/:conversationId/actors/:actorId/runtime-turns/:turnId`,
+    { schema: ChatRuntimeTurnDetailViewSchema },
     async (request, reply) => {
       try {
         const params = chatActorRuntimeParamsSchema.parse(request.params)
-        const response = await getChatConversationActorRuntimeTurnDetail({
+        return await getChatConversationActorRuntimeTurnDetail({
           workspaceId: params.workspaceId,
           userId: getRequestUserId(request),
           conversationId: params.conversationId,
           actorId: params.actorId,
           turnId: params.turnId,
         })
-        return reply.send(response)
       } catch (error) {
-        return replyChatError(reply, error)
+        replyChatError(reply, error)
+        return undefined
       }
     }
   )
 
-  app.post<{
-    Params: { workspaceId: string; conversationId: string }
-  }>(
+  appRoute(
+    app,
+    "POST",
     `${CHAT_BASE_PATH}/conversations/:conversationId/messages`,
+    { schema: ChatSendMessageViewSchema },
     async (request, reply) => {
       try {
         const params = chatConversationParamsSchema.parse(request.params)
@@ -461,28 +396,31 @@ export default async function chatController(app: FastifyInstance) {
           request,
           reply
         )
-        if (!workspaceMemberId) return
-        const response = await sendChatConversationMessage({
-          workspaceId: params.workspaceId,
-          workspaceMemberId,
-          conversationId: params.conversationId,
-          clientInstanceId: body.clientInstanceId,
-          clientMessageId: body.clientMessageId,
-          contentBlocks: body.contentBlocks as never,
-          replyToItemId: body.replyToItemId,
-          metadata: body.metadata,
-        })
-        return reply.send(response)
+        if (!workspaceMemberId) return undefined
+        return presentChatConversationSendMessage(
+          await sendChatConversationMessage({
+            workspaceId: params.workspaceId,
+            workspaceMemberId,
+            conversationId: params.conversationId,
+            clientInstanceId: body.clientInstanceId,
+            clientMessageId: body.clientMessageId,
+            contentBlocks: body.contentBlocks as never,
+            replyToItemId: body.replyToItemId,
+            metadata: body.metadata,
+          })
+        )
       } catch (error) {
-        return replyChatError(reply, error)
+        replyChatError(reply, error)
+        return undefined
       }
     }
   )
 
-  app.post<{
-    Params: { workspaceId: string; conversationId: string }
-  }>(
+  appRoute(
+    app,
+    "POST",
     `${CHAT_BASE_PATH}/conversations/:conversationId/read-watermark`,
+    { schema: ChatReadWatermarkViewSchema },
     async (request, reply) => {
       try {
         const params = chatConversationParamsSchema.parse(request.params)
@@ -492,30 +430,29 @@ export default async function chatController(app: FastifyInstance) {
           request,
           reply
         )
-        if (!workspaceMemberId) return
-        const response = await updateChatConversationReadWatermark({
-          workspaceId: params.workspaceId,
-          workspaceMemberId,
-          conversationId: params.conversationId,
-          clientInstanceId: body.clientInstanceId,
-          readUpToSequence: body.readUpToSequence,
-          lastVisibleSequence: body.lastVisibleSequence,
-        })
-        return reply.send(response)
+        if (!workspaceMemberId) return undefined
+        return presentChatConversationReadWatermark(
+          await updateChatConversationReadWatermark({
+            workspaceId: params.workspaceId,
+            workspaceMemberId,
+            conversationId: params.conversationId,
+            clientInstanceId: body.clientInstanceId,
+            readUpToSequence: body.readUpToSequence,
+            lastVisibleSequence: body.lastVisibleSequence,
+          })
+        )
       } catch (error) {
-        return replyChatError(reply, error)
+        replyChatError(reply, error)
+        return undefined
       }
     }
   )
 
-  app.post<{
-    Params: {
-      workspaceId: string
-      conversationId: string
-      taskId: string
-    }
-  }>(
+  appRoute(
+    app,
+    "POST",
     `${CHAT_BASE_PATH}/conversations/:conversationId/tasks/:taskId/respond`,
+    { schema: ChatTaskRespondViewSchema },
     async (request, reply) => {
       try {
         const params = chatTaskParamsSchema.parse(request.params)
@@ -525,316 +462,264 @@ export default async function chatController(app: FastifyInstance) {
           request,
           reply
         )
-        if (!workspaceMemberId) return
+        if (!workspaceMemberId) return undefined
 
-        const task = await getTaskSummary(params.taskId)
-        if (
-          !task ||
-          task.workspaceId !== params.workspaceId ||
-          task.conversationId !== params.conversationId
-        ) {
-          return reply.status(404).send({
-            error: "Task not found",
-            code: "task_not_found",
-          })
-        }
-
-        const canView = await canUserViewTask({
-          taskId: task.id,
-          userId: getRequestUserId(request),
-        })
-        if (!canView) {
-          return reply.status(403).send({
-            error: "You cannot access this task",
-            code: "task_access_denied",
-          })
-        }
-
-        const resolverParticipant = await getConversationParticipant({
+        const result = await respondToChatTask({
+          workspaceId: params.workspaceId,
           conversationId: params.conversationId,
+          taskId: params.taskId,
           workspaceMemberId,
+          userId: getRequestUserId(request),
+          input: body,
         })
-        if (!resolverParticipant?.id) {
-          return reply.status(403).send({
-            error: "You are not an active participant in this conversation",
-            code: "task_resolver_not_participant",
-          })
+        if (result.statusCode !== 200) {
+          reply.status(result.statusCode).send(result.body)
+          return undefined
         }
-
-        try {
-          const resolveParamsBase = {
-            taskId: task.id,
-            resolverWorkspaceMemberId: workspaceMemberId,
-            resolverParticipantId: resolverParticipant.id,
-            commandId: body.commandId,
-            baseRevision: body.baseRevision,
-          }
-          const resolveParams =
-            "answers" in body
-              ? {
-                  ...resolveParamsBase,
-                  answers: body.answers,
-                  note: body.note,
-                }
-              : body.decision === TASK_DECISIONS[1]
-                ? {
-                    ...resolveParamsBase,
-                    decision: body.decision,
-                    note: body.note,
-                  }
-                : "preset" in body && "selectedGrantOptionId" in body
-                  ? {
-                      ...resolveParamsBase,
-                      decision: body.decision,
-                      preset: body.preset,
-                      selectedGrantOptionId: body.selectedGrantOptionId,
-                      note: body.note,
-                    }
-                  : {
-                      ...resolveParamsBase,
-                      decision: body.decision,
-                      note: body.note,
-                    }
-
-          const result = await resolveTaskRequest(resolveParams)
-          const taskForViewer = await enrichTaskForUser(
-            result.task,
-            getRequestUserId(request)
-          )
-          if (result.outcome === "conflict") {
-            return reply.status(409).send({
-              error: "Task state changed before this submission was applied",
-              code: "task_conflict",
-              outcome: result.outcome,
-              task: taskForViewer,
-            })
-          }
-          return reply.send({
-            outcome: result.outcome,
-            task: taskForViewer,
-          })
-        } catch (error) {
-          const message =
-            error instanceof Error ? error.message : "Failed to resolve task"
-          return reply.status(400).send({
-            error: message,
-            code: "task_resolution_failed",
-          })
-        }
+        return result.body
       } catch (error) {
-        return replyChatError(reply, error)
+        replyChatError(reply, error)
+        return undefined
       }
     }
   )
 
   // ====== Stage 3: conversation CRUD ======
 
-  app.get<{
-    Params: { workspaceId: string }
-  }>(`${CHAT_BASE_PATH}/conversations`, async (request, reply) => {
-    try {
-      const params = chatWorkspaceParamsSchema.parse(request.params)
-      const response = await listChatConversations({
-        workspaceId: params.workspaceId,
-        userId: getRequestUserId(request),
-      })
-      return reply.send(response)
-    } catch (error) {
-      return replyChatError(reply, error)
-    }
-  })
-
-  app.get<{
-    Params: { workspaceId: string; conversationId: string }
-  }>(
-    `${CHAT_BASE_PATH}/conversations/:conversationId`,
+  appRoute(
+    app,
+    "GET",
+    `${CHAT_BASE_PATH}/conversations`,
+    { schema: ChatConversationListViewSchema },
     async (request, reply) => {
       try {
-        const params = chatConversationParamsSchema.parse(request.params)
-        const response = await getChatConversationDetail({
-          workspaceId: params.workspaceId,
-          userId: getRequestUserId(request),
-          conversationId: params.conversationId,
-        })
-        return reply.send(response)
+        const params = chatWorkspaceParamsSchema.parse(request.params)
+        return presentChatConversationList(
+          await listChatConversations({
+            workspaceId: params.workspaceId,
+            userId: getRequestUserId(request),
+          })
+        )
       } catch (error) {
-        return replyChatError(reply, error)
+        replyChatError(reply, error)
+        return undefined
       }
     }
   )
 
-  app.patch<{
-    Params: { workspaceId: string; conversationId: string }
-  }>(
+  appRoute(
+    app,
+    "GET",
     `${CHAT_BASE_PATH}/conversations/:conversationId`,
+    { schema: ChatConversationEnvelopeViewSchema },
+    async (request, reply) => {
+      try {
+        const params = chatConversationParamsSchema.parse(request.params)
+        return presentChatConversationEnvelope(
+          await getChatConversationDetail({
+            workspaceId: params.workspaceId,
+            userId: getRequestUserId(request),
+            conversationId: params.conversationId,
+          })
+        )
+      } catch (error) {
+        replyChatError(reply, error)
+        return undefined
+      }
+    }
+  )
+
+  appRoute(
+    app,
+    "PATCH",
+    `${CHAT_BASE_PATH}/conversations/:conversationId`,
+    { schema: ChatConversationEnvelopeViewSchema },
     async (request, reply) => {
       try {
         const params = chatConversationParamsSchema.parse(request.params)
         const body = patchConversationSchema.parse(request.body)
-        const response = await patchChatConversation({
+        const record = await patchChatConversation({
           workspaceId: params.workspaceId,
           userId: getRequestUserId(request),
           conversationId: params.conversationId,
           title: body.title,
           metadata: body.metadata,
         })
-        return reply.send(response)
+        return record ? presentChatConversationEnvelope(record) : undefined
       } catch (error) {
-        return replyChatError(reply, error)
+        replyChatError(reply, error)
+        return undefined
       }
     }
   )
 
-  app.post<{
-    Params: { workspaceId: string; conversationId: string }
-  }>(
+  appRoute(
+    app,
+    "POST",
     `${CHAT_BASE_PATH}/conversations/:conversationId/participants`,
+    { schema: ChatConversationEnvelopeViewSchema },
     async (request, reply) => {
       try {
         const params = chatConversationParamsSchema.parse(request.params)
         const body = addParticipantsSchema.parse(request.body)
-        const response = await addChatConversationParticipants({
-          workspaceId: params.workspaceId,
-          userId: getRequestUserId(request),
-          conversationId: params.conversationId,
-          workspaceMemberIds: body.workspaceMemberIds,
-          actorIds: body.actorIds,
-          remoteAgentIds: body.remoteAgentIds,
-        })
-        return reply.status(201).send(response)
+        reply.status(201)
+        return presentChatConversationEnvelope(
+          await addChatConversationParticipants({
+            workspaceId: params.workspaceId,
+            userId: getRequestUserId(request),
+            conversationId: params.conversationId,
+            workspaceMemberIds: body.workspaceMemberIds,
+            actorIds: body.actorIds,
+            remoteAgentIds: body.remoteAgentIds,
+          })
+        )
       } catch (error) {
-        return replyChatError(reply, error)
+        replyChatError(reply, error)
+        return undefined
       }
     }
   )
 
-  app.delete<{
-    Params: {
-      workspaceId: string
-      conversationId: string
-      participantId: string
-    }
-  }>(
+  appRoute(
+    app,
+    "DELETE",
     `${CHAT_BASE_PATH}/conversations/:conversationId/participants/:participantId`,
+    { schema: ChatParticipantRemovalViewSchema },
     async (request, reply) => {
       try {
         const params = removeParticipantParamsSchema.parse(request.params)
-        const response = await removeChatConversationParticipant({
+        return await removeChatConversationParticipant({
           workspaceId: params.workspaceId,
           userId: getRequestUserId(request),
           conversationId: params.conversationId,
           participantId: params.participantId,
         })
-        return reply.send(response)
       } catch (error) {
-        return replyChatError(reply, error)
+        replyChatError(reply, error)
+        return undefined
       }
     }
   )
 
-  app.post<{
-    Params: { workspaceId: string; conversationId: string }
-  }>(
+  appRoute(
+    app,
+    "POST",
     `${CHAT_BASE_PATH}/conversations/:conversationId/leave`,
+    { schema: ChatParticipantRemovalViewSchema },
     async (request, reply) => {
       try {
         const params = chatConversationParamsSchema.parse(request.params)
-        const response = await leaveChatConversation({
+        return await leaveChatConversation({
           workspaceId: params.workspaceId,
           userId: getRequestUserId(request),
           conversationId: params.conversationId,
         })
-        return reply.send(response)
       } catch (error) {
-        return replyChatError(reply, error)
+        replyChatError(reply, error)
+        return undefined
       }
     }
   )
 
   // ====== Stage 7: typing + push token registration ======
 
-  app.post<{
-    Params: { workspaceId: string; conversationId: string }
-  }>(
+  appRoute(
+    app,
+    "POST",
     `${CHAT_BASE_PATH}/conversations/:conversationId/typing`,
+    { schema: ChatTypingBroadcastViewSchema },
     async (request, reply) => {
       try {
         const params = chatConversationParamsSchema.parse(request.params)
         const body = typingSchema.parse(request.body)
-        const response = await broadcastTypingState({
+        return await broadcastTypingState({
           workspaceId: params.workspaceId,
           userId: getRequestUserId(request),
           conversationId: params.conversationId,
           state: body.state,
         })
-        return reply.send(response)
       } catch (error) {
-        return replyChatError(reply, error)
+        replyChatError(reply, error)
+        return undefined
       }
     }
   )
 
-  app.post<{
-    Params: { workspaceId: string }
-  }>(`${CHAT_BASE_PATH}/push-tokens`, async (request, reply) => {
-    try {
-      const params = chatWorkspaceParamsSchema.parse(request.params)
-      const body = pushTokenSchema.parse(request.body)
-      const response = await registerChatPushToken({
-        workspaceId: params.workspaceId,
-        userId: getRequestUserId(request),
-        platform: body.platform,
-        token: body.token,
-        deviceLabel: body.deviceLabel,
-        metadata: body.metadata,
-      })
-      return reply.status(201).send(response)
-    } catch (error) {
-      return replyChatError(reply, error)
-    }
-  })
-
-  app.get<{
-    Params: { workspaceId: string }
-  }>(`${CHAT_BASE_PATH}/push-tokens`, async (request, reply) => {
-    try {
-      const params = chatWorkspaceParamsSchema.parse(request.params)
-      const response = await listChatPushTokens({
-        workspaceId: params.workspaceId,
-        userId: getRequestUserId(request),
-      })
-      return reply.send(response)
-    } catch (error) {
-      return replyChatError(reply, error)
-    }
-  })
-
-  app.delete<{
-    Params: { workspaceId: string; tokenId: string }
-  }>(`${CHAT_BASE_PATH}/push-tokens/:tokenId`, async (request, reply) => {
-    try {
-      const params = z
-        .object({
-          workspaceId: chatUuidSchema,
-          tokenId: chatUuidSchema,
+  appRoute(
+    app,
+    "POST",
+    `${CHAT_BASE_PATH}/push-tokens`,
+    { schema: ChatPushTokenRegistrationViewSchema },
+    async (request, reply) => {
+      try {
+        const params = chatWorkspaceParamsSchema.parse(request.params)
+        const body = pushTokenSchema.parse(request.body)
+        reply.status(201)
+        return await registerChatPushToken({
+          workspaceId: params.workspaceId,
+          userId: getRequestUserId(request),
+          platform: body.platform,
+          token: body.token,
+          deviceLabel: body.deviceLabel,
+          metadata: body.metadata,
         })
-        .parse(request.params)
-      const response = await deleteChatPushToken({
-        workspaceId: params.workspaceId,
-        userId: getRequestUserId(request),
-        tokenId: params.tokenId,
-      })
-      return reply.send(response)
-    } catch (error) {
-      return replyChatError(reply, error)
+      } catch (error) {
+        replyChatError(reply, error)
+        return undefined
+      }
     }
-  })
+  )
+
+  appRoute(
+    app,
+    "GET",
+    `${CHAT_BASE_PATH}/push-tokens`,
+    { schema: ChatPushTokenListViewSchema },
+    async (request, reply) => {
+      try {
+        const params = chatWorkspaceParamsSchema.parse(request.params)
+        return await listChatPushTokens({
+          workspaceId: params.workspaceId,
+          userId: getRequestUserId(request),
+        })
+      } catch (error) {
+        replyChatError(reply, error)
+        return undefined
+      }
+    }
+  )
+
+  appRoute(
+    app,
+    "DELETE",
+    `${CHAT_BASE_PATH}/push-tokens/:tokenId`,
+    { schema: ChatPushTokenDeleteViewSchema },
+    async (request, reply) => {
+      try {
+        const params = z
+          .object({
+            workspaceId: chatUuidSchema,
+            tokenId: chatUuidSchema,
+          })
+          .parse(request.params)
+        return await deleteChatPushToken({
+          workspaceId: params.workspaceId,
+          userId: getRequestUserId(request),
+          tokenId: params.tokenId,
+        })
+      } catch (error) {
+        replyChatError(reply, error)
+        return undefined
+      }
+    }
+  )
 
   // Retry a failed assistant turn (e.g. after a model_error_notice).
-  app.post<{
-    Params: { workspaceId: string; conversationId: string; itemId: string }
-  }>(
+  appRoute(
+    app,
+    "POST",
     `${CHAT_BASE_PATH}/conversations/:conversationId/messages/:itemId/retry`,
+    { schema: ChatMessageRetryViewSchema },
     async (request, reply) => {
       try {
         const params = z
@@ -844,15 +729,15 @@ export default async function chatController(app: FastifyInstance) {
             itemId: chatUuidSchema,
           })
           .parse(request.params)
-        const response = await retryAssistantMessage({
+        return await retryAssistantMessage({
           workspaceId: params.workspaceId,
           userId: getRequestUserId(request),
           conversationId: params.conversationId,
           itemId: params.itemId,
         })
-        return reply.send(response)
       } catch (error) {
-        return replyChatError(reply, error)
+        replyChatError(reply, error)
+        return undefined
       }
     }
   )

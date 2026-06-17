@@ -4,6 +4,7 @@ import Link from "next/link"
 import { useEffect, useState } from "react"
 import {
   MODEL_GROUP_OWNER_TYPE,
+  type ModelGroupItemView,
   type ModelGroupOwnerType,
   type ModelGroupRoutingStrategy,
 } from "@synapse/shared"
@@ -32,34 +33,18 @@ import {
   type ModelGroupScopeAuto,
 } from "./model-group-shared"
 
-interface ModelItem {
-  id: string
-  group_id: string
-  binding_id: string
-  display_name: string
-  priority: number
-  weight: number
-  is_enabled: boolean
-  current_version_id: string | null
-  version: number
-  provider_kind: string
-  vendor: string
-  base_url: string
-  model_name: string
-  max_output_tokens: number
-  capability_tags: string[]
-}
+type ModelItem = ModelGroupItemView
 
 interface GroupDetail {
   id: string
   name: string
   description: string
-  routing_strategy: ModelGroupRoutingStrategy
-  is_default: boolean
-  workspace_id: string | null
-  owner_type?: ModelGroupOwnerType
-  owner_workspace_id?: string | null
-  owner_workspace_member_id?: string | null
+  routingStrategy: ModelGroupRoutingStrategy
+  isDefault: boolean
+  workspaceId: string | null
+  ownerType?: ModelGroupOwnerType
+  ownerWorkspaceId?: string | null
+  ownerWorkspaceMemberId?: string | null
   items: ModelItem[]
 }
 
@@ -108,42 +93,42 @@ export default function ModelGroupDetail({
     setLoading(true)
     try {
       if (scope !== "auto") {
-        const response = await fetchGroupByScope(scope, groupId, workspaceId)
-        setGroup(response.group)
+        const group = await fetchGroupByScope(scope, groupId, workspaceId)
+        setGroup(group)
         setResolvedScope(scope)
         return
       }
 
       if (workspaceId) {
         try {
-          const response = await fetchGroupByScope(
+          const group = await fetchGroupByScope(
             MODEL_GROUP_OWNER_TYPE.WORKSPACE,
             groupId,
             workspaceId
           )
-          setGroup(response.group)
+          setGroup(group)
           setResolvedScope(MODEL_GROUP_OWNER_TYPE.WORKSPACE)
           return
         } catch {}
       }
 
       try {
-        const response = await fetchGroupByScope(
+        const group = await fetchGroupByScope(
           MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER,
           groupId,
           workspaceId
         )
-        setGroup(response.group)
+        setGroup(group)
         setResolvedScope(MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER)
         return
       } catch {}
 
-      const response = await fetchGroupByScope(
+      const group = await fetchGroupByScope(
         MODEL_GROUP_OWNER_TYPE.PLATFORM,
         groupId,
         workspaceId
       )
-      setGroup(response.group)
+      setGroup(group)
       setResolvedScope(MODEL_GROUP_OWNER_TYPE.PLATFORM)
     } catch (err) {
       console.error("Failed to load model group:", err)
@@ -161,7 +146,7 @@ export default function ModelGroupDetail({
     try {
       if (resolvedScope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
         await api.updatePlatformModelItem(groupId, item.id, {
-          isEnabled: !item.is_enabled,
+          isEnabled: !item.isEnabled,
         })
       } else if (resolvedScope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
         await api.updateWorkspaceMemberModelItem(
@@ -169,12 +154,12 @@ export default function ModelGroupDetail({
           groupId,
           item.id,
           {
-            isEnabled: !item.is_enabled,
+            isEnabled: !item.isEnabled,
           }
         )
       } else if (workspaceId) {
         await api.updateModelItem(workspaceId, groupId, item.id, {
-          isEnabled: !item.is_enabled,
+          isEnabled: !item.isEnabled,
         })
       }
       await loadGroup()
@@ -249,13 +234,13 @@ export default function ModelGroupDetail({
             </h2>
             <div className="flex flex-wrap items-center gap-2">
               <Badge className="border-blue-500/20 bg-blue-500/10 text-xs text-blue-400">
-                {getModelGroupStrategyLabel(group.routing_strategy)}
+                {getModelGroupStrategyLabel(group.routingStrategy)}
               </Badge>
               <Badge variant="outline" className="text-xs">
                 <ScopeIcon className="mr-1 h-3 w-3" />
                 {getModelGroupScopeLabel(resolvedScope)}
               </Badge>
-              {group.is_default ? (
+              {group.isDefault ? (
                 <Badge className="border-amber-500/20 bg-amber-500/10 text-xs text-amber-400">
                   Default
                 </Badge>
@@ -315,25 +300,25 @@ export default function ModelGroupDetail({
               {group.items.map((item) => (
                 <Card
                   key={item.id}
-                  className={`border-gray-200 bg-white ring-1 ring-gray-200 transition-all dark:border-white/10 dark:bg-gray-900 dark:ring-white/10 ${!item.is_enabled ? "opacity-50" : ""}`}
+                  className={`border-gray-200 bg-white ring-1 ring-gray-200 transition-all dark:border-white/10 dark:bg-gray-900 dark:ring-white/10 ${!item.isEnabled ? "opacity-50" : ""}`}
                 >
                   <CardContent className="flex items-center justify-between p-4">
                     <div className="flex items-center gap-4">
                       <div
                         className={`flex h-10 w-10 items-center justify-center rounded-lg border ${
-                          item.is_enabled
+                          item.isEnabled
                             ? "border-emerald-500/10 bg-gradient-to-br from-emerald-500/20 to-blue-500/20"
                             : "border-red-500/10 bg-red-500/10"
                         }`}
                       >
                         <Cpu
-                          className={`h-5 w-5 ${item.is_enabled ? "text-emerald-400" : "text-red-400"}`}
+                          className={`h-5 w-5 ${item.isEnabled ? "text-emerald-400" : "text-red-400"}`}
                         />
                       </div>
                       <div>
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="font-medium text-foreground">
-                            {item.display_name}
+                            {item.displayName}
                           </span>
                           <Badge className="border-violet-500/20 bg-violet-500/10 text-xs text-violet-400">
                             v{item.version || 1}
@@ -343,21 +328,19 @@ export default function ModelGroupDetail({
                               {item.vendor}
                             </Badge>
                           ) : null}
-                          {item.provider_kind ? (
+                          {item.providerKind ? (
                             <Badge className="border-slate-500/20 bg-slate-500/10 text-xs text-slate-300">
-                              {item.provider_kind}
+                              {item.providerKind}
                             </Badge>
                           ) : null}
                         </div>
                         <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                          <span>
-                            {item.model_name || "No model configured"}
-                          </span>
+                          <span>{item.modelName || "No model configured"}</span>
                           <span>Priority: {item.priority}</span>
                           <span>Weight: {item.weight}</span>
-                          {item.max_output_tokens ? (
+                          {item.maxOutputTokens ? (
                             <span>
-                              Max output tokens: {item.max_output_tokens}
+                              Max output tokens: {item.maxOutputTokens}
                             </span>
                           ) : null}
                         </div>
@@ -389,14 +372,14 @@ export default function ModelGroupDetail({
                         variant="ghost"
                         size="icon"
                         onClick={() => void handleToggleItem(item)}
-                        title={item.is_enabled ? "Disable" : "Enable"}
+                        title={item.isEnabled ? "Disable" : "Enable"}
                         className={
-                          item.is_enabled
+                          item.isEnabled
                             ? "text-emerald-400 hover:text-red-400"
                             : "text-red-400 hover:text-emerald-400"
                         }
                       >
-                        {item.is_enabled ? (
+                        {item.isEnabled ? (
                           <Power className="h-4 w-4" />
                         ) : (
                           <PowerOff className="h-4 w-4" />

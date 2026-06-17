@@ -11,6 +11,7 @@ interface MockFetchOptions {
   responses: Array<{
     status: number
     body?: unknown
+    rawText?: string
     throws?: Error
   }>
 }
@@ -24,7 +25,10 @@ function makeMockFetch(opts: MockFetchOptions) {
     const r = opts.responses[i++]
     if (!r) throw new Error("mock fetch ran out of responses")
     if (r.throws) throw r.throws
-    return new Response(JSON.stringify(r.body ?? {}), { status: r.status })
+    const responseText = r.rawText ?? JSON.stringify("body" in r ? r.body : {})
+    return new Response(responseText, {
+      status: r.status,
+    })
   }
   return fn as unknown as typeof fetch
 }
@@ -65,6 +69,25 @@ test("openclawProvider.init: 5xx throws RegistrationTransientError", async () =>
     provider.init(),
     (err: unknown) => err instanceof RegistrationTransientError
   )
+})
+
+test("openclawProvider.init: malformed or non-object 2xx body throws RegistrationTransientError", async () => {
+  for (const response of [
+    { status: 200, body: [] },
+    { status: 200, body: null },
+    { status: 200, body: "ok" },
+    { status: 200, rawText: "{not-json" },
+  ]) {
+    const provider = createOpenclawProvider({
+      fetch: makeMockFetch({ responses: [response] }),
+    })
+    await assert.rejects(
+      provider.init(),
+      (err: unknown) =>
+        err instanceof RegistrationTransientError &&
+        /returned non-JSON body/.test((err as Error).message)
+    )
+  }
 })
 
 test("openclawProvider.init: network error throws RegistrationTransientError", async () => {

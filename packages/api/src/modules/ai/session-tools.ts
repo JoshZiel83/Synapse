@@ -1,11 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 import { z } from "zod"
+import { dateToIsoInstant, nowIsoInstant } from "@synapse/shared/datetime"
 import {
-  assertIsoInstant,
-  dateToIsoInstant,
-  nowIsoInstant,
-} from "@synapse/shared/datetime"
-import {
+  AUTOMATION_SCHEDULE_KINDS,
   CONVERSATION_PARTICIPANT_TYPE,
   CONVERSATION_TYPE_MASK_PRESETS,
   describeAutomationDelivery,
@@ -16,15 +13,12 @@ import {
   isGroupConversationKind,
   isThreadConversationKind,
   isTransportKind,
-  normalizeActorDocs,
   resolveThreadSemantics,
   SEND_TO_INTENTS,
-  summarizeActorForRole,
   mentionBlock,
   textBlock,
   textBlocks,
   textResult,
-  type ActorDoc,
   type ToolDefinition,
   type ToolResolveContext,
 } from "@synapse/shared"
@@ -57,22 +51,45 @@ import {
   buildUserTaskTargetCandidatesFromRows,
   type UserTaskTargetCandidate,
 } from "./session-tool-user-task-targets.js"
-import { db } from "../../infrastructure/database/kysely.js"
-import { upsertAccessSubject } from "../access/subject-registry.js"
-import { sql } from "kysely"
+import {
+  parseCancelAutomationToolInput,
+  parseCancelTaskToolInput,
+  parseEnterPlanModeToolInput,
+  parseExitPlanModeToolInput,
+  parseGetTaskStatusToolInput,
+  parseInviteActorToolInput,
+  parseListTasksToolInput,
+  parseMemorySearchToolInput,
+  parseReadSkillToolInput,
+  parseRequestUserInputToolInput,
+  parseScheduleSelfWakeupToolInput,
+  parseSleepToolInput,
+  parseSubscribeEventToolInput,
+  parseTailTaskOutputToolInput,
+  parseUpdatePlanToolInput,
+  parseViewEventSourceHistoryToolInput,
+  taskOutputStreamValues,
+  taskStatusFilterValues,
+} from "./session-tools-input-codec.js"
+import { upsertAccessSubjectDefault } from "../access/guards.js"
+import {
+  listInviteableActorRowsDefault,
+  isActorActiveConversationParticipantDefault,
+  type InviteableActor,
+} from "./repo.js"
 import { getSession, updateSessionCollaboration } from "../session/service.js"
 import { getTransportConnectorCapability } from "../im/connectors/index.js"
 import {
   buildSessionPlanDraftState,
   requireSessionPlanDraftState,
 } from "../session/collaboration-state.js"
+import { addConversationParticipants } from "../chat/add-participants.js"
+import { resolveConversationReplyRef } from "../chat/conversation-reply-ref.js"
+import { sendConversationMessageFromParticipant } from "../chat/item-write.js"
 import {
-  addConversationParticipants,
-  getConversationParticipant,
-  listConversationParticipants,
-  resolveConversationReplyRef,
-  sendConversationMessageFromParticipant,
-} from "../chat/service.js"
+  getConversationParticipantUseCase as getConversationParticipant,
+  listConversationParticipantsUseCase as listConversationParticipants,
+} from "../chat/participant-roster.js"
 import { buildNormalizedMessageContent } from "../chat/message-content.js"
 import { buildDefaultUserMention } from "./inline-ref-resolver.js"
 import { runMemorySearch } from "../memory/service.js"
@@ -85,7 +102,6 @@ import {
   deleteAutomationRule,
   listAutomationRules,
 } from "../automation/service.js"
-import { isActorActiveConversationParticipant } from "../access/subject-resolution.js"
 import {
   cancelToolCallTask,
   createToolCallTaskDeduped,
@@ -101,14 +117,6 @@ import {
   createUserInputTaskRequest,
   getTaskSummaryByTaskId,
 } from "../tasks/service.js"
-
-type InviteableActor = {
-  id: string
-  displayName: string
-  title?: string
-  role?: string
-  summary?: string
-}
 
 type SendToCandidate = {
   participantType: "actor" | "workspace_member" | "external"
@@ -163,7 +171,6 @@ const sendToInputSchema = z.strictObject({
 const currentTimeInputSchema = z.strictObject({
   timeZone: z.string().trim().min(1).max(100).optional(),
 })
-
 function getToolContextConversationId(ctx: ToolResolveContext) {
   return ctx.conversationId
 }
@@ -183,14 +190,14 @@ function getToolContextConversationParticipants(ctx: ToolResolveContext) {
 function getThreadConversationId(
   session:
     | {
-        conversation_id?: string
-        conversation_kind?: string
+        conversationId?: string
+        conversationKind?: string
       }
     | null
     | undefined
 ) {
-  return isThreadConversationKind(session?.conversation_kind)
-    ? session?.conversation_id || null
+  return isThreadConversationKind(session?.conversationKind)
+    ? session?.conversationId || null
     : null
 }
 
@@ -227,6 +234,8 @@ async function requireCurrentAutomationParticipant(params: {
   return participant
 }
 
+export { parseSelfEventSubscriptionMatcherInput } from "./session-tools-input-codec.js"
+
 async function listCurrentSessionAutomationRules(params: {
   workspaceId: string
   sessionId: string
@@ -237,11 +246,11 @@ async function listCurrentSessionAutomationRules(params: {
     throwToolError("Session not found")
   }
   const participant = await requireCurrentAutomationParticipant({
-    conversationId: session.conversation_id,
+    conversationId: session.conversationId,
     actorId: params.actorId,
   })
   const rules = await listAutomationRules(params.workspaceId, {
-    conversationId: session.conversation_id,
+    conversationId: session.conversationId,
   })
   return rules.filter((rule) => rule.createdByParticipantId === participant.id)
 }
@@ -370,38 +379,6 @@ function buildSendToMention(candidate: SendToCandidate): ConversationEntityRef {
   }
 }
 
-function parseActorDocs(value: unknown): ActorDoc[] {
-  if (!value) return []
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value)
-      return Array.isArray(parsed)
-        ? normalizeActorDocs(parsed as ActorDoc[])
-        : []
-    } catch {
-      return []
-    }
-  }
-  return Array.isArray(value) ? normalizeActorDocs(value as ActorDoc[]) : []
-}
-
-function isGroupVisibleDoc(doc: ActorDoc): boolean {
-  return doc.visibility === "always" || doc.visibility === "multi_member_only"
-}
-
-function summarizeInviteableActor(row: {
-  title?: string | null
-  role?: string | null
-  actor_docs?: unknown
-}): string | undefined {
-  const docs = parseActorDocs(row.actor_docs).filter(isGroupVisibleDoc)
-  const summary = summarizeActorForRole(docs, row.title || row.role || "Actor")
-    .replace(/\s+/g, " ")
-    .trim()
-
-  return summary || undefined
-}
-
 function formatInviteableActor(actor: InviteableActor): string {
   const title = actor.title || actor.role || "Actor"
   return `${actor.displayName} (${title}) [${actor.id}]${actor.summary ? ` - ${actor.summary}` : ""}`
@@ -420,20 +397,20 @@ function buildSendToCandidates(
   for (const participant of participants) {
     if (participant.state !== "active") continue
 
-    if (participant.actor_id) {
-      if (participant.actor_id === currentActorId) continue
+    if (participant.actorId) {
+      if (participant.actorId === currentActorId) continue
       const name =
-        participant.participant_name ||
-        participant.display_name ||
+        participant.participantName ||
+        participant.displayName ||
         "Unknown actor"
       const title =
-        participant.participant_title || participant.participant_role || "Actor"
+        participant.participantTitle || participant.participantRole || "Actor"
       candidates.push({
         participantType: "actor",
         participantId: participant.id,
-        actorId: participant.actor_id,
-        title: participant.participant_title || undefined,
-        role: participant.participant_role || undefined,
+        actorId: participant.actorId,
+        title: participant.participantTitle || undefined,
+        role: participant.participantRole || undefined,
         name,
         label: `"${name}" (actor${title ? `, ${title}` : ""})`,
         aliases: [name],
@@ -441,10 +418,10 @@ function buildSendToCandidates(
       continue
     }
 
-    if (participant.user_id) {
-      const name = participant.user_name || "User"
-      const transportKind = isTransportKind(participant.transport_kind)
-        ? participant.transport_kind
+    if (participant.userId) {
+      const name = participant.userName || "User"
+      const transportKind = isTransportKind(participant.transportKind)
+        ? participant.transportKind
         : undefined
       const transportLabel = transportKind
         ? `, reachable via ${
@@ -455,7 +432,7 @@ function buildSendToCandidates(
       candidates.push({
         participantType: "workspace_member",
         participantId: participant.id,
-        workspaceMemberId: participant.workspace_member_id,
+        workspaceMemberId: participant.workspaceMemberId,
         name,
         title: "Workspace member",
         label: `"${name}" (workspace member${transportLabel})`,
@@ -464,12 +441,13 @@ function buildSendToCandidates(
       continue
     }
 
-    if (participant.participant_type === "external") {
-      const linkedWorkspaceMemberName =
-        (participant.linked_user_name as string | null) || undefined
+    if (
+      participant.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL
+    ) {
+      const linkedWorkspaceMemberName = participant.linkedUserName || undefined
       const name =
-        (participant.transport_display_name as string | null) ||
-        (participant.display_name as string | null) ||
+        participant.transportDisplayName ||
+        participant.displayName ||
         linkedWorkspaceMemberName ||
         "External participant"
       const aliases = Array.from(
@@ -483,8 +461,7 @@ function buildSendToCandidates(
       candidates.push({
         participantType: "external",
         participantId: participant.id,
-        externalUserKey:
-          (participant.transport_external_id as string | null) || undefined,
+        externalUserKey: participant.transportExternalId || undefined,
         name,
         title: linkedWorkspaceMemberName
           ? `Linked workspace user: ${linkedWorkspaceMemberName}`
@@ -642,7 +619,7 @@ async function createGovernedToolCallTask(params: {
     // are all human-answerable → needs_response. The principal subject is the
     // actor's access_subjects row (the delivery key). request_key is derived
     // from the originating tool call so a retried turn dedupes onto one task.
-    const principalSubjectId = await upsertAccessSubject(db, {
+    const principalSubjectId = await upsertAccessSubjectDefault({
       kind: "actor",
       actorId: context.actorId,
     })
@@ -893,21 +870,6 @@ function buildUserInputQuestionDefinition(
   return { question }
 }
 
-const taskStatusFilterValues = [
-  "working",
-  "input_required",
-  "completed",
-  "failed",
-  "cancelled",
-] as const
-
-const taskOutputStreamValues = [
-  "combined",
-  "stdout",
-  "stderr",
-  "system",
-] as const
-
 function buildUserInputQuestionDefinitions(rawQuestions: unknown): {
   questions: TaskInputQuestionDefinition[]
   error?: string
@@ -960,62 +922,7 @@ async function listInviteableActors(params: {
   conversationId: string
   actorId: string
 }): Promise<InviteableActor[]> {
-  const result = await db
-    .selectFrom("actors as a")
-    .innerJoin("workspace_apps as app", "app.id", "a.id")
-    .leftJoin("actor_versions as current_version", (join) =>
-      join
-        .onRef("current_version.actor_id", "=", "a.id")
-        .onRef("current_version.version", "=", "a.current_version")
-    )
-    .select([
-      "a.id",
-      "app.display_name",
-      "a.title",
-      "a.role",
-      sql`COALESCE(
-        (
-          SELECT jsonb_agg(
-            jsonb_build_object(
-              'key', avd.doc_key,
-              'title', avd.title,
-              'visibility', avd.visibility,
-              'priority', avd.priority,
-              'content', avd.content_blocks
-            )
-            ORDER BY avd.priority DESC, avd.created_at ASC
-          )
-          FROM actor_version_docs avd
-          WHERE avd.actor_version_id = current_version.id
-        ),
-        '[]'::jsonb
-      )`.as("actor_docs"),
-    ])
-    .where("app.workspace_id", "=", params.workspaceId)
-    .where("app.deleted_at", "is", null)
-    .where("app.status", "=", "active")
-    .where("a.id", "<>", params.actorId)
-    .where(
-      sql<boolean>`NOT EXISTS (
-      SELECT 1
-      FROM conversation_participants cp
-      JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
-      WHERE cp.conversation_id = ${params.conversationId}
-        AND cpsubj.actor_id = a.id
-        AND cp.state = 'active'
-    )`
-    )
-    .orderBy("app.display_name", "asc")
-    .orderBy("a.id", "asc")
-    .execute()
-
-  return result.map((row) => ({
-    id: row.id as string,
-    displayName: row.display_name as string,
-    title: (row.title as string | null) || undefined,
-    role: (row.role as string | null) || undefined,
-    summary: summarizeInviteableActor(row),
-  }))
+  return listInviteableActorRowsDefault(params)
 }
 
 async function canActorUseInviteActorTool(params: {
@@ -1036,8 +943,7 @@ async function canActorUseInviteActorTool(params: {
     return false
   }
 
-  return isActorActiveConversationParticipant(
-    db,
+  return isActorActiveConversationParticipantDefault(
     params.conversationId,
     params.actorId
   )
@@ -1166,28 +1072,19 @@ export function registerCallableToolPlugins(): void {
         throwToolError("Session not found")
       }
       const actorParticipant = await requireCurrentAutomationParticipant({
-        conversationId: session.conversation_id,
+        conversationId: session.conversationId,
         actorId: context.actorId,
       })
 
-      const skillInstanceId = String(
-        (input as any).skillInstanceId || ""
-      ).trim()
-      const path =
-        typeof (input as any).path === "string"
-          ? String((input as any).path).trim()
-          : undefined
-      if (!skillInstanceId) {
-        throwToolError("skillInstanceId is required")
-      }
+      const { skillInstanceId, path } = parseReadSkillToolInput(input)
 
       try {
         const result = await readVisibleSkill({
           workspaceId: context.workspaceId,
           actorId: context.actorId,
           sessionId: context.sessionId,
-          conversationId: session.conversation_id,
-          conversationKind: session.conversation_kind,
+          conversationId: session.conversationId,
+          conversationKind: session.conversationKind,
           isImConversation: session.isImConversation,
           skillInstanceId,
           assetPath: path || undefined,
@@ -1349,7 +1246,7 @@ export function registerCallableToolPlugins(): void {
       const allMembers = await listConversationParticipants(conversationId)
       const senderParticipant = allMembers.find(
         (member: any) =>
-          member.actor_id === context.actorId && member.state === "active"
+          member.actorId === context.actorId && member.state === "active"
       )
       if (!senderParticipant?.id) {
         throwToolError(
@@ -1379,7 +1276,7 @@ export function registerCallableToolPlugins(): void {
       })
 
       await sendConversationMessageFromParticipant({
-        workspaceId: session.workspace_id,
+        workspaceId: session.workspaceId,
         conversationId,
         senderParticipantId: senderParticipant.id,
         sessionId: context.sessionId,
@@ -1590,7 +1487,7 @@ export function registerCallableToolPlugins(): void {
       const allMembers = await listConversationParticipants(conversationId)
       const requesterMember = allMembers.find(
         (member) =>
-          member.actor_id === context.actorId && member.state === "active"
+          member.actorId === context.actorId && member.state === "active"
       )
       if (!requesterMember) {
         throwToolError(
@@ -1605,30 +1502,22 @@ export function registerCallableToolPlugins(): void {
         )
       }
 
+      const rawInput = parseRequestUserInputToolInput(input)
       const resolution = resolveHumanTaskTarget({
-        requestedParticipantId:
-          typeof (input as any).targetParticipantId === "string"
-            ? String((input as any).targetParticipantId)
-            : undefined,
-        conversationKind: session.conversation_kind,
+        requestedParticipantId: rawInput.targetParticipantId,
+        conversationKind: session.conversationKind,
         candidates,
       })
       if (!resolution.candidate) {
         throwToolError(resolution.error || "Target user not found")
       }
 
-      const title = String((input as any).title || "").trim()
-      if (!title) {
+      if (!rawInput.title) {
         throwToolError("title is required")
       }
 
-      const instructions =
-        typeof (input as any).instructions === "string"
-          ? String((input as any).instructions).trim()
-          : ""
-
       const { questions, error } = buildUserInputQuestionDefinitions(
-        (input as any).questions
+        rawInput.questions
       )
       if (error) {
         throwToolError(error)
@@ -1640,11 +1529,11 @@ export function registerCallableToolPlugins(): void {
         supportsCancel: true,
         requestPayload: {
           targetParticipantId: resolution.candidate.participantId,
-          title,
-          instructions: instructions || undefined,
+          title: rawInput.title,
+          instructions: rawInput.instructions || undefined,
           questions,
         },
-        summary: `Waiting for ${resolution.candidate.name} to complete "${title}".`,
+        summary: `Waiting for ${resolution.candidate.name} to complete "${rawInput.title}".`,
       })
 
       try {
@@ -1654,8 +1543,8 @@ export function registerCallableToolPlugins(): void {
           taskId: task.id,
           requesterParticipantId: requesterMember.id,
           targetParticipantId: resolution.candidate.participantId,
-          title,
-          instructions: instructions || undefined,
+          title: rawInput.title,
+          instructions: rawInput.instructions || undefined,
           questions,
         })
       } catch (error) {
@@ -1731,17 +1620,14 @@ export function registerCallableToolPlugins(): void {
           "Current session is not attached to a thread conversation"
         )
       }
-      assertPlanModeConversationKind(session.conversation_kind)
+      assertPlanModeConversationKind(session.conversationKind)
       if (session.collaborationMode !== "default") {
         throwToolError(
           "enter_plan_mode is only available when the session is in default mode."
         )
       }
 
-      const summary =
-        typeof (input as any).summary === "string"
-          ? String((input as any).summary).trim() || undefined
-          : undefined
+      const { summary } = parseEnterPlanModeToolInput(input)
 
       await updateSessionCollaboration({
         sessionId: context.sessionId,
@@ -1844,19 +1730,16 @@ export function registerCallableToolPlugins(): void {
       if (!session) {
         throwToolError("Session not found")
       }
-      assertPlanModeConversationKind(session.conversation_kind)
+      assertPlanModeConversationKind(session.conversationKind)
       if (session.collaborationMode !== "plan_drafting") {
         throwToolError("update_plan is only available while drafting a plan.")
       }
 
-      const { checklist, error } = parsePlanChecklist((input as any).plan)
+      const rawInput = parseUpdatePlanToolInput(input)
+      const { checklist, error } = parsePlanChecklist(rawInput.plan)
       if (error) {
         throwToolError(error)
       }
-      const explanation =
-        typeof (input as any).explanation === "string"
-          ? String((input as any).explanation).trim() || undefined
-          : undefined
       const existingDraft = requireSessionPlanDraftState(session)
 
       await updateSessionCollaboration({
@@ -1865,7 +1748,7 @@ export function registerCallableToolPlugins(): void {
           planDraft: buildSessionPlanDraftState({
             summary: existingDraft.summary,
             checklist,
-            explanation,
+            explanation: rawInput.explanation,
             enteredAt: existingDraft.enteredAt,
           }),
         },
@@ -2024,7 +1907,7 @@ export function registerCallableToolPlugins(): void {
           "Current session is not attached to a thread conversation"
         )
       }
-      assertPlanModeConversationKind(session.conversation_kind)
+      assertPlanModeConversationKind(session.conversationKind)
       if (session.collaborationMode !== "plan_drafting") {
         throwToolError(
           "exit_plan_mode is only available while drafting a plan."
@@ -2034,7 +1917,7 @@ export function registerCallableToolPlugins(): void {
       const allMembers = await listConversationParticipants(conversationId)
       const requesterMember = allMembers.find(
         (member) =>
-          member.actor_id === context.actorId && member.state === "active"
+          member.actorId === context.actorId && member.state === "active"
       )
       if (!requesterMember) {
         throwToolError(
@@ -2049,34 +1932,26 @@ export function registerCallableToolPlugins(): void {
         )
       }
 
+      const rawInput = parseExitPlanModeToolInput(input)
       const resolution = resolveHumanTaskTarget({
-        requestedParticipantId:
-          typeof (input as any).targetParticipantId === "string"
-            ? String((input as any).targetParticipantId)
-            : undefined,
-        conversationKind: session.conversation_kind,
+        requestedParticipantId: rawInput.targetParticipantId,
+        conversationKind: session.conversationKind,
         candidates,
       })
       if (!resolution.candidate) {
         throwToolError(resolution.error || "Target user not found")
       }
 
-      const title = String((input as any).title || "").trim()
-      if (!title) {
+      if (!rawInput.title) {
         throwToolError("title is required")
       }
-      const summary =
-        typeof (input as any).summary === "string"
-          ? String((input as any).summary).trim() || undefined
-          : undefined
-      const planMarkdown = String((input as any).planMarkdown || "").trim()
-      if (!planMarkdown) {
+      if (!rawInput.planMarkdown) {
         throwToolError("planMarkdown is required")
       }
 
       let checklist: PlanChecklistStep[] | undefined
-      if (Array.isArray((input as any).checklist)) {
-        const parsed = parsePlanChecklist((input as any).checklist)
+      if (Array.isArray(rawInput.checklist)) {
+        const parsed = parsePlanChecklist(rawInput.checklist)
         if (parsed.error) {
           throwToolError(parsed.error)
         }
@@ -2092,12 +1967,12 @@ export function registerCallableToolPlugins(): void {
         supportsCancel: true,
         requestPayload: {
           targetParticipantId: resolution.candidate.participantId,
-          title,
-          summary,
-          planMarkdown,
+          title: rawInput.title,
+          summary: rawInput.summary,
+          planMarkdown: rawInput.planMarkdown,
           checklist,
         },
-        summary: `Waiting for ${resolution.candidate.name} to review "${title}".`,
+        summary: `Waiting for ${resolution.candidate.name} to review "${rawInput.title}".`,
       })
 
       try {
@@ -2108,9 +1983,9 @@ export function registerCallableToolPlugins(): void {
           taskId: task.id,
           requesterParticipantId: requesterMember.id,
           targetParticipantId: resolution.candidate.participantId,
-          title,
-          summary,
-          planMarkdown,
+          title: rawInput.title,
+          summary: rawInput.summary,
+          planMarkdown: rawInput.planMarkdown,
           checklist,
           collaborationState: {
             planDraft: buildSessionPlanDraftState({
@@ -2176,25 +2051,11 @@ export function registerCallableToolPlugins(): void {
         throwToolError("No session context available")
       }
 
-      const statuses = Array.isArray((input as any).statuses)
-        ? (input as any).statuses
-            .map((value: unknown) => String(value || "").trim())
-            .filter(
-              (
-                value: string
-              ): value is (typeof taskStatusFilterValues)[number] =>
-                (taskStatusFilterValues as readonly string[]).includes(value)
-            )
-        : []
-      const limit =
-        typeof (input as any).limit === "number" &&
-        Number.isFinite((input as any).limit)
-          ? Math.max(1, Math.trunc(Number((input as any).limit)))
-          : 20
+      const { statuses, limit } = parseListTasksToolInput(input)
 
       const tasks = await listToolCallTasksForSession({
         sessionId: context.sessionId,
-        statuses: statuses.length > 0 ? statuses : undefined,
+        statuses,
         limit,
       })
 
@@ -2231,10 +2092,7 @@ export function registerCallableToolPlugins(): void {
         throwToolError("No session context available")
       }
 
-      const taskId = String((input as any).taskId || "").trim()
-      if (!taskId) {
-        throwToolError("taskId is required")
-      }
+      const { taskId } = parseGetTaskStatusToolInput(input)
 
       const task = await loadSessionTaskOrThrow(context.sessionId, taskId)
       const requestTask =
@@ -2283,15 +2141,7 @@ export function registerCallableToolPlugins(): void {
         throwToolError("No session context available")
       }
 
-      const taskId = String((input as any).taskId || "").trim()
-      if (!taskId) {
-        throwToolError("taskId is required")
-      }
-
-      const reason =
-        typeof (input as any).reason === "string"
-          ? String((input as any).reason).trim()
-          : undefined
+      const { taskId, reason } = parseCancelTaskToolInput(input)
       const task = await loadSessionTaskOrThrow(context.sessionId, taskId)
 
       if (
@@ -2376,37 +2226,13 @@ export function registerCallableToolPlugins(): void {
         throwToolError("No session context available")
       }
 
-      const taskId = String((input as any).taskId || "").trim()
-      if (!taskId) {
-        throwToolError("taskId is required")
-      }
+      const { taskId, afterSeq, limit, stream } =
+        parseTailTaskOutputToolInput(input)
 
       const task = await loadSessionTaskOrThrow(context.sessionId, taskId)
       if (!task.supportsOutputTail) {
         throwToolError(`Task "${task.id}" does not expose output tailing.`)
       }
-
-      const afterSeq =
-        typeof (input as any).afterSeq === "number" &&
-        Number.isFinite((input as any).afterSeq)
-          ? Math.max(0, Math.trunc(Number((input as any).afterSeq)))
-          : 0
-      const limit =
-        typeof (input as any).limit === "number" &&
-        Number.isFinite((input as any).limit)
-          ? Math.max(1, Math.trunc(Number((input as any).limit)))
-          : 20
-      const stream =
-        typeof (input as any).stream === "string" &&
-        (taskOutputStreamValues as readonly string[]).includes(
-          String((input as any).stream).trim()
-        )
-          ? (String((input as any).stream).trim() as
-              | "combined"
-              | "stdout"
-              | "stderr"
-              | "system")
-          : "combined"
 
       const chunks = await getToolCallTaskOutput({
         taskId: task.id,
@@ -2495,7 +2321,7 @@ export function registerCallableToolPlugins(): void {
           "Current session is not attached to a thread conversation"
         )
       }
-      if (!isGroupConversationKind(session.conversation_kind)) {
+      if (!isGroupConversationKind(session.conversationKind)) {
         throwToolError("invite_actor is only available in group conversations.")
       }
       if (session.isImConversation) {
@@ -2506,7 +2332,7 @@ export function registerCallableToolPlugins(): void {
       const requesterAllowed = await canActorUseInviteActorTool({
         actorId: context.actorId,
         conversationId,
-        conversationKind: session.conversation_kind,
+        conversationKind: session.conversationKind,
         isImConversation: session.isImConversation,
       })
       if (!requesterAllowed) {
@@ -2515,16 +2341,11 @@ export function registerCallableToolPlugins(): void {
         )
       }
 
-      const reason =
-        typeof (input as any).reason === "string"
-          ? String((input as any).reason).trim()
-          : ""
-      if (!reason) {
-        throwToolError("reason is required")
-      }
+      const { reason, requestedActorIds, fallbackNames } =
+        parseInviteActorToolInput(input)
 
       const candidates = await listInviteableActors({
-        workspaceId: session.workspace_id,
+        workspaceId: session.workspaceId,
         conversationId,
         actorId: context.actorId,
       })
@@ -2538,22 +2359,6 @@ export function registerCallableToolPlugins(): void {
         matches.push(candidate)
         candidatesByName.set(key, matches)
       }
-
-      const requestedActorIds = Array.isArray((input as any).actorIds)
-        ? (input as any).actorIds
-            .map((value: unknown) => String(value || "").trim())
-            .filter(Boolean)
-        : []
-      const fallbackNames = [
-        typeof (input as any).actorName === "string"
-          ? String((input as any).actorName).trim()
-          : "",
-        ...(Array.isArray((input as any).actorNames)
-          ? (input as any).actorNames.map((value: unknown) =>
-              String(value || "").trim()
-            )
-          : []),
-      ].filter(Boolean)
 
       const resolvedActors: InviteableActor[] = []
       const resolutionErrors: string[] = []
@@ -2625,7 +2430,7 @@ export function registerCallableToolPlugins(): void {
           await listConversationParticipants(conversationId)
         ).find(
           (member: any) =>
-            member.actor_id === context.actorId && member.state === "active"
+            member.actorId === context.actorId && member.state === "active"
         )
         if (!inviterMember?.id) {
           throwToolError(
@@ -2634,13 +2439,13 @@ export function registerCallableToolPlugins(): void {
         }
         const addResult = await addConversationParticipants({
           conversationId,
-          workspaceId: session.workspace_id,
+          workspaceId: session.workspaceId,
           actorIds: uniqueActors.map((candidate) => candidate.id),
         })
         const invitedActorIds = new Set(
           addResult
-            .filter((member: any) => member.actor_id)
-            .map((member: any) => member.actor_id as string)
+            .filter((member: any) => member.actorId)
+            .map((member: any) => member.actorId as string)
         )
         const invitedActors = uniqueActors.filter((candidate) =>
           invitedActorIds.has(candidate.id)
@@ -2660,7 +2465,7 @@ export function registerCallableToolPlugins(): void {
         }
 
         await sendConversationMessageFromParticipant({
-          workspaceId: session.workspace_id,
+          workspaceId: session.workspaceId,
           conversationId,
           senderParticipantId: inviterMember?.id,
           sessionId: context.sessionId,
@@ -2668,7 +2473,7 @@ export function registerCallableToolPlugins(): void {
           contentBlocks: [
             ...invitedActors.flatMap((candidate, index) => {
               const participant = addResult.find(
-                (member: any) => member.actor_id === candidate.id
+                (member: any) => member.actorId === candidate.id
               )
               if (!participant?.id) {
                 return []
@@ -2746,19 +2551,12 @@ export function registerCallableToolPlugins(): void {
         throwToolError("Session not found")
       }
 
-      const queryText = String((input as any).queryText || "").trim()
-      const limit = Math.max(
-        1,
-        Math.min(10, parseInt(String((input as any).limit || "5"), 10) || 5)
-      )
-      if (!queryText) {
-        throwToolError("queryText is required")
-      }
+      const { queryText, limit } = parseMemorySearchToolInput(input)
 
       const result = await runMemorySearch(context.workspaceId, {
         queryText,
         actorId: context.actorId,
-        conversationId: session.conversation_id,
+        conversationId: session.conversationId,
         limit,
         metadata: {
           sessionId: context.sessionId,
@@ -2799,7 +2597,7 @@ export function registerCallableToolPlugins(): void {
           scheduleKind: {
             type: "string",
             description: "Schedule type.",
-            enum: ["cron", "at", "interval"],
+            enum: [...AUTOMATION_SCHEDULE_KINDS],
           },
           scheduleExpr: {
             type: "string",
@@ -2851,7 +2649,7 @@ export function registerCallableToolPlugins(): void {
             scheduleKind: {
               type: "string",
               description: "Schedule type.",
-              enum: ["cron", "at", "interval"],
+              enum: [...AUTOMATION_SCHEDULE_KINDS],
             },
             scheduleExpr: {
               type: "string",
@@ -2902,41 +2700,22 @@ export function registerCallableToolPlugins(): void {
         throwToolError("Session not found")
       }
       const actorParticipant = await requireCurrentAutomationParticipant({
-        conversationId: session.conversation_id,
+        conversationId: session.conversationId,
         actorId: context.actorId,
       })
 
-      const name = String((input as any).name || "").trim()
-      const scheduleKind = String((input as any).scheduleKind || "").trim()
-      const scheduleExpr =
-        typeof (input as any).scheduleExpr === "string"
-          ? String((input as any).scheduleExpr).trim()
-          : ""
-      const intervalSeconds =
-        typeof (input as any).intervalSeconds === "number"
-          ? Number((input as any).intervalSeconds)
-          : undefined
-      const timezone =
-        typeof (input as any).timezone === "string"
-          ? String((input as any).timezone).trim()
-          : undefined
-      const message = String((input as any).message || "").trim()
-      const wakeReason =
-        typeof (input as any).wakeReason === "string"
-          ? String((input as any).wakeReason).trim()
-          : undefined
-      const activeUntil =
-        typeof (input as any).activeUntil === "string"
-          ? String((input as any).activeUntil).trim()
-          : undefined
-      const maxTriggerCount =
-        typeof (input as any).maxTriggerCount === "number"
-          ? Number((input as any).maxTriggerCount)
-          : undefined
-
-      if (!name || !message) {
-        throwToolError("name and message are required")
-      }
+      const {
+        name,
+        scheduleKind,
+        scheduleExpr,
+        intervalSeconds,
+        timezone,
+        message,
+        wakeReason,
+        activeUntil,
+        maxTriggerCount,
+        startsAt,
+      } = parseScheduleSelfWakeupToolInput(input)
 
       try {
         const rule = await createAutomationRule(
@@ -2950,29 +2729,21 @@ export function registerCallableToolPlugins(): void {
           {
             name,
             description: `Self-scheduled wakeup for session ${context.sessionId}`,
-            conversationId: session.conversation_id,
+            conversationId: session.conversationId,
             trigger: {
               triggerKind: "schedule",
-              scheduleKind: scheduleKind as any,
+              scheduleKind,
               scheduleExpr:
                 scheduleKind === "at"
                   ? scheduleExpr
                   : scheduleExpr || undefined,
               scheduleTimezone: timezone || undefined,
               intervalSeconds,
-              startsAt:
-                scheduleKind === "at" && scheduleExpr
-                  ? assertIsoInstant(scheduleExpr)
-                  : undefined,
+              startsAt,
             },
             policy: {
-              activeUntil: activeUntil
-                ? assertIsoInstant(activeUntil)
-                : undefined,
-              maxTriggerCount:
-                Number.isInteger(maxTriggerCount) && (maxTriggerCount || 0) > 0
-                  ? maxTriggerCount
-                  : undefined,
+              activeUntil,
+              maxTriggerCount,
             },
             delivery: {
               message,
@@ -3055,7 +2826,7 @@ export function registerCallableToolPlugins(): void {
           status: "active",
         },
         {
-          conversationId: session.conversation_id,
+          conversationId: session.conversationId,
           actorId: context.actorId,
         }
       )
@@ -3211,47 +2982,20 @@ export function registerCallableToolPlugins(): void {
         throwToolError("Session not found")
       }
       const actorParticipant = await requireCurrentAutomationParticipant({
-        conversationId: session.conversation_id,
+        conversationId: session.conversationId,
         actorId: context.actorId,
       })
 
-      const name = String((input as any).name || "").trim()
-      const eventSourceId = String((input as any).eventSourceId || "").trim()
-      const matcherInput =
-        typeof (input as any).matcher === "string"
-          ? String((input as any).matcher).trim()
-          : ""
-      const message = String((input as any).message || "").trim()
-      const wakeReason =
-        typeof (input as any).wakeReason === "string"
-          ? String((input as any).wakeReason).trim()
-          : undefined
-      const once = Boolean((input as any).once)
-      const activeUntil =
-        typeof (input as any).activeUntil === "string"
-          ? String((input as any).activeUntil).trim()
-          : undefined
-      const maxTriggerCount =
-        typeof (input as any).maxTriggerCount === "number"
-          ? Number((input as any).maxTriggerCount)
-          : undefined
-
-      if (!name || !eventSourceId || !message) {
-        throwToolError("name, eventSourceId, and message are required")
-      }
-
-      let matcher: Record<string, unknown> | undefined
-      if (matcherInput) {
-        try {
-          const parsed = JSON.parse(matcherInput) as unknown
-          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-            throwToolError("matcher must be a JSON object string")
-          }
-          matcher = parsed as Record<string, unknown>
-        } catch {
-          throwToolError("matcher must be valid JSON")
-        }
-      }
+      const {
+        name,
+        eventSourceId,
+        matcher,
+        message,
+        wakeReason,
+        once,
+        activeUntil,
+        maxTriggerCount,
+      } = parseSubscribeEventToolInput(input)
 
       try {
         const rule = await createAutomationRule(
@@ -3265,22 +3009,15 @@ export function registerCallableToolPlugins(): void {
           {
             name,
             description: `Self event subscription for session ${context.sessionId}`,
-            conversationId: session.conversation_id,
+            conversationId: session.conversationId,
             trigger: {
               triggerKind: "event",
               eventSourceId,
               matcher,
             },
             policy: {
-              activeUntil: activeUntil
-                ? assertIsoInstant(activeUntil)
-                : undefined,
-              maxTriggerCount: once
-                ? 1
-                : Number.isInteger(maxTriggerCount) &&
-                    (maxTriggerCount || 0) > 0
-                  ? maxTriggerCount
-                  : undefined,
+              activeUntil,
+              maxTriggerCount: once ? 1 : maxTriggerCount,
             },
             delivery: {
               message,
@@ -3363,10 +3100,7 @@ export function registerCallableToolPlugins(): void {
         throwToolError("No session context available")
       }
 
-      const eventSourceId = String((input as any).eventSourceId || "").trim()
-      if (!eventSourceId) {
-        throwToolError("eventSourceId is required")
-      }
+      const { eventSourceId } = parseViewEventSourceHistoryToolInput(input)
 
       const occurrences = await listAutomationOccurrences(context.workspaceId, {
         eventSourceId,
@@ -3518,10 +3252,7 @@ export function registerCallableToolPlugins(): void {
       if (!context?.sessionId) {
         throwToolError("No session context available")
       }
-      const automationId = String((input as any).automationId || "").trim()
-      if (!automationId) {
-        throwToolError("automationId is required")
-      }
+      const { automationId } = parseCancelAutomationToolInput(input)
 
       const rules = await listCurrentSessionAutomationRules({
         workspaceId: context.workspaceId,
@@ -3596,10 +3327,7 @@ export function registerCallableToolPlugins(): void {
         throwToolError("Session not found")
       }
 
-      const summary =
-        typeof (input as any).summary === "string"
-          ? String((input as any).summary).trim()
-          : ""
+      const { summary } = parseSleepToolInput(input)
 
       return textResult(
         JSON.stringify({

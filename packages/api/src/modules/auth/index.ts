@@ -10,32 +10,24 @@ import { z } from "zod"
 import { auth } from "./better-auth.js"
 import { resolveOAuthErrorRedirect } from "./oauth-error-routing.js"
 import { getProfile, updateProfile, AuthError } from "./service.js"
-import { authMiddleware } from "../../infrastructure/middleware/auth.js"
-import { db, withDbTransaction } from "../../infrastructure/database/kysely.js"
 import {
-  markUserDeleted,
-  markAccountUnlinked,
+  AuthMeViewSchema,
+  UpdateMeInputSchema,
+  UnlinkAccountInputSchema,
+} from "@synapse/shared/schemas"
+import { appRoute } from "../../infrastructure/http/route.js"
+import { authMiddleware } from "../../infrastructure/middleware/auth.js"
+import { deleteVerificationByIdentifier } from "./repo.js"
+import {
+  markUserDeletedTx,
+  markAccountUnlinkedTx,
   LastAccountError,
 } from "../soft-delete/orchestration.js"
 
-const updateMeSchema = z
-  .object({
-    name: z.string().min(1).max(100).optional(),
-    avatarFileId: z.uuid().nullable().optional(),
-  })
-  .refine(
-    (body) => body.name !== undefined || body.avatarFileId !== undefined,
-    {
-      message: "At least one field is required",
-    }
-  )
-
-// Body for DELETE /api/v1/auth/me/accounts — identifies the account to unlink by
-// its (providerId, accountId) pair (the same key Better Auth uses).
-const unlinkAccountSchema = z.object({
-  providerId: z.string().min(1).max(100),
-  accountId: z.string().min(1).max(255),
-})
+// App-facing request bodies live in @synapse/shared (§5.1.1) so the API parser
+// and the web/mobile clients share one definition.
+const updateMeSchema = UpdateMeInputSchema
+const unlinkAccountSchema = UnlinkAccountInputSchema
 
 function handleAuthError(error: unknown, reply: FastifyReply) {
   if (error instanceof AuthError) {
@@ -112,7 +104,6 @@ async function tryHandleOAuthCallbackError(
       cookies?.["__Secure-better-auth.state"] ?? cookies?.["better-auth.state"]
 
     const { target, consumed } = await resolveOAuthErrorRedirect({
-      executor: db,
       state,
       stateCookieValue,
       errorCode: url.searchParams.get("error") ?? undefined,
@@ -120,11 +111,7 @@ async function tryHandleOAuthCallbackError(
 
     if (consumed && state) {
       // Early errors never reach Better Auth's own state consumption; clean up.
-      await db
-        .deleteFrom("verification")
-        .where("identifier", "=", state)
-        .execute()
-        .catch(() => {})
+      await deleteVerificationByIdentifier(state).catch(() => {})
     }
 
     reply.status(302).header("location", target)
@@ -189,39 +176,53 @@ async function handleWithBetterAuth(
 }
 
 const authModule: FastifyPluginAsync = async (app: FastifyInstance) => {
+  const noContentResponseSchema = z.undefined()
+
   // Custom profile endpoints. Registered BEFORE the Better Auth wildcard so the
   // explicit paths win; they preserve the legacy `{ user, session }` response
   // shape the web/mobile clients (and the proxy guard) still expect from /me.
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/auth/me",
-    { preHandler: [authMiddleware] },
+    {
+      schema: AuthMeViewSchema,
+      options: { preHandler: [authMiddleware] },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
-        return reply.status(200).send({
+        return {
           user: await getProfile((request as any).user.userId),
           session: (request as any).authSession,
-        })
+        }
       } catch (error) {
-        return handleAuthError(error, reply)
+        handleAuthError(error, reply)
+        return undefined
       }
     }
   )
 
-  app.put(
+  appRoute(
+    app,
+    "PUT",
     "/api/v1/auth/me",
-    { preHandler: [authMiddleware] },
+    {
+      schema: AuthMeViewSchema,
+      options: { preHandler: [authMiddleware] },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const body = updateMeSchema.parse(request.body)
-        return reply.status(200).send({
+        return {
           user: await updateProfile((request as any).user.userId, {
             name: body.name,
             avatarFileId: body.avatarFileId,
           }),
           session: (request as any).authSession,
-        })
+        }
       } catch (error) {
-        return handleAuthError(error, reply)
+        handleAuthError(error, reply)
+        return undefined
       }
     }
   )
@@ -233,16 +234,23 @@ const authModule: FastifyPluginAsync = async (app: FastifyInstance) => {
   // delete users and CASCADE account/session); BA's deleteUser is disabled and
   // account.delete.before is fail-closed. After closure the user's sessions are
   // already revoked inside the transaction, so subsequent requests are rejected.
-  app.delete(
+  appRoute(
+    app,
+    "DELETE",
     "/api/v1/auth/me",
-    { preHandler: [authMiddleware] },
+    {
+      schema: noContentResponseSchema,
+      options: { preHandler: [authMiddleware] },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const userId = (request as any).user.userId as string
-        await withDbTransaction((trx) => markUserDeleted(trx, userId))
-        return reply.status(204).send()
+        await markUserDeletedTx(userId)
+        reply.status(204).send()
+        return undefined
       } catch (error) {
-        return handleAuthError(error, reply)
+        handleAuthError(error, reply)
+        return undefined
       }
     }
   )
@@ -252,29 +260,38 @@ const authModule: FastifyPluginAsync = async (app: FastifyInstance) => {
   // soft-deletes + anonymizes the one account so its provider identity is
   // released, refusing if it is the user's last live login method (423 Locked).
   // BA's own unlink-account endpoint stays fail-closed at the hook.
-  app.delete(
+  appRoute(
+    app,
+    "DELETE",
     "/api/v1/auth/me/accounts",
-    { preHandler: [authMiddleware] },
+    {
+      schema: noContentResponseSchema,
+      options: { preHandler: [authMiddleware] },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const userId = (request as any).user.userId as string
         const body = unlinkAccountSchema.parse(request.body)
-        const unlinked = await withDbTransaction((trx) =>
-          markAccountUnlinked(trx, userId, body.providerId, body.accountId)
+        const unlinked = await markAccountUnlinkedTx(
+          userId,
+          body.providerId,
+          body.accountId
         )
         if (!unlinked) {
-          return reply
+          reply
             .status(404)
             .send({ error: "Account not found", code: "ACCOUNT_NOT_FOUND" })
+          return undefined
         }
-        return reply.status(204).send()
+        reply.status(204).send()
+        return undefined
       } catch (error) {
         if (error instanceof LastAccountError) {
-          return reply
-            .status(423)
-            .send({ error: error.message, code: "LAST_ACCOUNT" })
+          reply.status(423).send({ error: error.message, code: "LAST_ACCOUNT" })
+          return undefined
         }
-        return handleAuthError(error, reply)
+        handleAuthError(error, reply)
+        return undefined
       }
     }
   )

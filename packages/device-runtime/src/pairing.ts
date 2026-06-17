@@ -2,11 +2,18 @@
 // by packages/api/src/modules/devices/controller.ts.
 
 import { createHash } from "node:crypto"
-import type {
-  ConsumePairingResult,
-  PairingTicket,
-  StartPairingInput as ApiStartPairingInput,
+import { z } from "zod"
+import {
+  ConsumePairingInputSchema,
+  ConsumePairingResultSchema,
+  type ConsumePairingResult,
 } from "@synapse/device-protocol"
+import {
+  DevicePairingTicketViewSchema,
+  type DevicePairingTicketView,
+  type StartPairingInput as ApiStartPairingInput,
+} from "@synapse/shared/schemas"
+import { readJsonResponse } from "./api-response-codec.js"
 import type {
   DeviceIdentityBroker,
   DeviceIdentityRecord,
@@ -20,10 +27,16 @@ function joinUrl(origin: string, path: string): string {
   return `${origin.replace(/\/$/, "")}${path.startsWith("/") ? path : `/${path}`}`
 }
 
-async function postJson<TBody, TResponse>(
+const DevicePairingTicketEnvelopeSchema = z.strictObject({
+  data: DevicePairingTicketViewSchema,
+})
+
+async function postJson<TBody, S extends z.ZodType>(
   url: string,
-  body: TBody
-): Promise<TResponse> {
+  body: TBody,
+  schema: S,
+  label: string
+): Promise<z.output<S>> {
   const res = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -33,15 +46,15 @@ async function postJson<TBody, TResponse>(
     const text = await res.text().catch(() => "")
     throw new Error(`POST ${url} failed: ${res.status} ${text}`)
   }
-  return (await res.json()) as TResponse
+  return readJsonResponse(res, schema, label)
 }
 
 export async function startPairingSession(
   serverOrigin: string,
   workspaceId: string,
-  input: Omit<ApiStartPairingInput, "workspace_id">,
+  input: Omit<ApiStartPairingInput, "workspaceId">,
   authToken: string
-): Promise<PairingTicket & { bootstrap_token?: string | null }> {
+): Promise<DevicePairingTicketView> {
   const url = joinUrl(
     serverOrigin,
     `/api/v1/workspaces/${workspaceId}/devices/pairing-sessions`
@@ -58,9 +71,12 @@ export async function startPairingSession(
     const text = await res.text().catch(() => "")
     throw new Error(`startPairing failed: ${res.status} ${text}`)
   }
-  return (await res.json()) as PairingTicket & {
-    bootstrap_token?: string | null
-  }
+  const envelope = await readJsonResponse(
+    res,
+    DevicePairingTicketEnvelopeSchema,
+    "startPairing"
+  )
+  return envelope.data
 }
 
 /**
@@ -84,25 +100,30 @@ export async function pair(opts: PairOptions): Promise<PairResult> {
     opts.serverOrigin,
     "/api/v1/devices/pairing-sessions/consume"
   )
-  const result = await postJson<Record<string, unknown>, ConsumePairingResult>(
+  // Validate the wire body against the device-protocol contract before sending
+  // so a field drift fails here, not silently on the server.
+  const body = ConsumePairingInputSchema.parse({
+    pairing_code: opts.pairingCode,
+    device_pubkey: deviceKey.publicKey,
+    service_pubkey: serviceKey.publicKey,
+    service_kind: "device_runtime",
+    client_version: opts.clientVersion,
+    title: opts.title,
+    // Report platform + arch up-front so the API knows the
+    // device's platformKey from pairing onwards. Without this the
+    // `devices` row is created with platform=NULL/arch=NULL and the
+    // bundle-eligibility gate (isBundleAvailableForPlatform) falls
+    // back to the conservative-permissive branch, defeating the
+    // Windows-no-bundled-fallback guard. cloud-bootstrap already
+    // does this; this brings local_qr to parity.
+    platform: process.platform,
+    arch: process.arch,
+  })
+  const result: ConsumePairingResult = await postJson(
     url,
-    {
-      pairing_code: opts.pairingCode,
-      device_pubkey: deviceKey.publicKey,
-      service_pubkey: serviceKey.publicKey,
-      service_kind: "device_runtime",
-      client_version: opts.clientVersion,
-      title: opts.title,
-      // Report platform + arch up-front so the API knows the
-      // device's platformKey from pairing onwards. Without this the
-      // `devices` row is created with platform=NULL/arch=NULL and the
-      // bundle-eligibility gate (isBundleAvailableForPlatform) falls
-      // back to the conservative-permissive branch, defeating the
-      // Windows-no-bundled-fallback guard. cloud-bootstrap already
-      // does this; this brings local_qr to parity.
-      platform: process.platform,
-      arch: process.arch,
-    }
+    body,
+    ConsumePairingResultSchema,
+    "consumePairing"
   )
 
   const identity: DeviceIdentityRecord = {

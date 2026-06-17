@@ -9,8 +9,8 @@ import {
   CHAT_QUEUE_DB_NAME,
   CHAT_QUEUE_DB_VERSION,
   CHAT_QUEUE_STATE_STORE,
-  type Timestamp,
-} from "@shared"
+} from "@shared/chat-queue"
+import type { Timestamp } from "@shared"
 import { nowIsoInstant } from "@shared/datetime"
 
 // Mobile keeps its historical constant names but derives the actual

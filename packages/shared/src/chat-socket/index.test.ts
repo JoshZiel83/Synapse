@@ -159,6 +159,18 @@ test("non-protocol frames are delivered to onEvent", () => {
   assert.equal(h.events[0]!.type, "conversation.item.created")
 })
 
+test("array websocket frames are ignored", () => {
+  const h = makeHarness({ auth: { workspaceId: "ws1" }, subscriptions: [] })
+  h.handle.start()
+  h.last().open()
+  h.last().receive({ type: "auth.ok" })
+  const before = h.events.length
+
+  h.last().onmessage?.({ data: "[]" })
+
+  assert.equal(h.events.length, before)
+})
+
 test("unexpected close schedules a reconnect (one socket per attempt)", () => {
   const h = makeHarness({ auth: { workspaceId: "ws1" }, subscriptions: [] })
   h.handle.start()
@@ -293,6 +305,65 @@ test("subscription diff: adds new, removes stale, leaves unchanged", () => {
     type: "unsubscribe",
     key: "c:1",
   })
+})
+
+test("subscription diff does not parse custom serialized subscription payloads", () => {
+  const sent: string[] = []
+  let subscriptions: ChatSocketSubscription[] = [
+    { key: "inbox", topic: "inbox" },
+  ]
+
+  class RawSocket implements SocketLike {
+    onopen: ((event?: unknown) => void) | null = null
+    onmessage: ((event: { data: unknown }) => void) | null = null
+    onclose: ((event?: unknown) => void) | null = null
+    onerror: ((event?: unknown) => void) | null = null
+    send(data: string) {
+      sent.push(data)
+    }
+    close() {
+      this.onclose?.()
+    }
+    open() {
+      this.onopen?.()
+    }
+    receive(data: unknown) {
+      this.onmessage?.({ data })
+    }
+  }
+
+  const socket = new RawSocket()
+  const handle = createChatSocket({
+    connect: () => socket,
+    resolveUrl: () => "ws://test/ws",
+    setTimer: () => 0,
+    clearTimer: () => {},
+    getAuth: () => ({ workspaceId: "ws1" }),
+    getSubscriptions: () => subscriptions,
+    onEvent: () => {},
+    onConnected: () => {},
+    serialize: (value) => {
+      const frame = value as Record<string, unknown>
+      return `${String(frame.type)}:${String(frame.key ?? "")}:${String(
+        frame.topic ?? ""
+      )}`
+    },
+    deserialize: (raw) => (raw === "auth.ok" ? { type: "auth.ok" } : null),
+  })
+
+  handle.start()
+  socket.open()
+  socket.receive("auth.ok")
+  assert.equal(sent[0], "auth::")
+  assert.equal(sent[1], "subscribe:inbox:inbox")
+
+  subscriptions = [
+    { key: "inbox", topic: "inbox" },
+    { key: "c:1", topic: "conversation", conversationId: "1" },
+  ]
+  handle.sync()
+
+  assert.equal(sent[sent.length - 1], "subscribe:c:1:conversation")
 })
 
 test("stop tears down and prevents reconnect", () => {

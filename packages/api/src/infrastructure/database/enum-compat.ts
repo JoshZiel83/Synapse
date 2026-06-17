@@ -7,6 +7,7 @@ import type {
   MemoryRecallType,
   MemorySpaceType,
   MemoryItemState,
+  RemoteAgentBindingStatus,
   PluginAuthConnectionStatus,
   PluginAuthSessionStatus,
   SessionInterruptType,
@@ -30,23 +31,32 @@ import {
 } from "@synapse/shared"
 import {
   AUTOMATION_COMPLETION_STATUSES,
+  AUTOMATION_CREATOR_KINDS,
   AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS,
   AUTOMATION_EVENT_SOURCE_STATUSES,
+  AUTOMATION_EXECUTION_STATUSES,
   AUTOMATION_INTEGRATION_INGRESS_KINDS,
   AUTOMATION_INTEGRATION_PROVIDERS,
   AUTOMATION_INTEGRATION_TARGET_KINDS,
+  AUTOMATION_RULE_CATEGORIES,
   AUTOMATION_RULE_STATUSES,
   AUTOMATION_SCHEDULE_KINDS,
   AUTOMATION_TARGET_POLICIES,
   AUTOMATION_TRIGGER_KINDS,
   AUTOMATION_TRIGGER_SOURCE_KINDS,
+  AUTOMATION_WEBHOOK_ENDPOINT_STATUSES,
+  CONVERSATION_EVENT_CONTEXT_POLICIES,
+  CONVERSATION_EVENT_TIMELINE_POLICIES,
   CONTACT_TARGET_TYPES,
   MEMORY_SPACE_TYPES,
   MODEL_GROUP_GRANT_SCOPES,
   MODEL_GROUP_ROUTING_STRATEGIES,
   PLATFORM_ACCESS_KEYS,
+  PLATFORM_ACCESS_SOURCES,
   RELATIONSHIP_APPROVAL_MODES,
   RELATIONSHIP_REQUEST_STATUSES,
+  REMOTE_AGENT_BINDING_STATUSES,
+  REMOTE_AGENT_RUNTIME_STATES,
   RUNTIME_AUTHORIZATION_GRANT_RETENTIONS,
   RUNTIME_AUTHORIZATION_GRANT_STATUSES,
   RUNTIME_AUTHORIZATION_REQUEST_MODES,
@@ -66,24 +76,32 @@ import type {
   ActorsRole,
   ActorVersionDocsVisibility,
   AutomationDeliveriesTargetPolicy,
+  AutomationEventSourcesCreatedByKind,
   AutomationEventSourcesProviderKind,
   AutomationEventSourcesStatus,
+  AutomationExecutionsStatus,
   AutomationIntegrationBindingsIngressKind,
   AutomationIntegrationBindingsProvider,
   AutomationIntegrationBindingsTargetKind,
   AutomationPoliciesCompletionStatus,
+  AutomationRulesCategory,
   AutomationRulesStatus,
   AutomationTriggersScheduleKind,
   AutomationTriggersSourceKind,
   AutomationTriggersTriggerKind,
+  AutomationWebhookEndpointsStatus,
+  ConversationItemsEventContextPolicy,
+  ConversationItemsEventTimelinePolicy,
   MemoryItemsCategory,
   MemoryItemsIndexStatus,
   MemoryItemsState,
   MemoryRecallRunsRecallType,
   ModelGroupsRoutingStrategy,
   PlatformAccessBindingsAccessKey,
+  PlatformAccessBindingsSource,
   PluginAuthSessionsStatus,
   PluginConnectionsStatus,
+  RemoteAgentBindingsRuntimeState,
   RuntimeAuthorizationGrantsRetention,
   RuntimeAuthorizationGrantsStatus,
   RuntimeAuthorizationRequestMode,
@@ -99,6 +117,7 @@ import type {
   SessionWakeupsStatus,
   ToolCallTasksLifecycleStatus,
   PluginPackageVersionSpecsTransport,
+  RemoteAgentBindingsStatus,
   TransportAccountsConnectionMode,
   TransportAccountsInboundActorMode,
   TransportAccountsOwnerScope,
@@ -144,6 +163,12 @@ type _PlatformAccessKeyMatchesDb = Assert<
   IsEqual<
     (typeof PLATFORM_ACCESS_KEYS)[number],
     PlatformAccessBindingsAccessKey
+  >
+>
+type _PlatformAccessSourceMatchesDb = Assert<
+  IsEqual<
+    (typeof PLATFORM_ACCESS_SOURCES)[number],
+    PlatformAccessBindingsSource
   >
 >
 type _WorkspaceAccessKeyMatchesDb = Assert<
@@ -205,8 +230,17 @@ type _AutomationTargetPolicyMatchesDb = Assert<
     AutomationDeliveriesTargetPolicy
   >
 >
+type _AutomationCreatorKindMatchesDb = Assert<
+  IsEqual<
+    (typeof AUTOMATION_CREATOR_KINDS)[number],
+    AutomationEventSourcesCreatedByKind
+  >
+>
 type _AutomationRuleStatusMatchesDb = Assert<
   IsEqual<(typeof AUTOMATION_RULE_STATUSES)[number], AutomationRulesStatus>
+>
+type _AutomationRuleCategoryMatchesDb = Assert<
+  IsEqual<(typeof AUTOMATION_RULE_CATEGORIES)[number], AutomationRulesCategory>
 >
 type _AutomationIntegrationProviderMatchesDb = Assert<
   IsEqual<
@@ -236,6 +270,30 @@ type _AutomationEventSourceStatusMatchesDb = Assert<
   IsEqual<
     (typeof AUTOMATION_EVENT_SOURCE_STATUSES)[number],
     AutomationEventSourcesStatus
+  >
+>
+type _AutomationExecutionStatusMatchesDb = Assert<
+  IsEqual<
+    (typeof AUTOMATION_EXECUTION_STATUSES)[number],
+    AutomationExecutionsStatus
+  >
+>
+type _AutomationWebhookEndpointStatusMatchesDb = Assert<
+  IsEqual<
+    (typeof AUTOMATION_WEBHOOK_ENDPOINT_STATUSES)[number],
+    AutomationWebhookEndpointsStatus
+  >
+>
+type _ConversationEventTimelinePolicyMatchesDb = Assert<
+  IsEqual<
+    (typeof CONVERSATION_EVENT_TIMELINE_POLICIES)[number],
+    ConversationItemsEventTimelinePolicy
+  >
+>
+type _ConversationEventContextPolicyMatchesDb = Assert<
+  IsEqual<
+    (typeof CONVERSATION_EVENT_CONTEXT_POLICIES)[number],
+    ConversationItemsEventContextPolicy
   >
 >
 // type _MemorySpaceTypeMatchesDb removed (see comment above).
@@ -364,6 +422,21 @@ type _RelationshipRequestStatusMatchesDb = Assert<
   IsEqual<
     (typeof RELATIONSHIP_REQUEST_STATUSES)[number],
     RelationshipRequestStatus
+  >
+>
+type _RemoteAgentBindingStatusMatchesDb = Assert<
+  IsEqual<RemoteAgentBindingStatus, RemoteAgentBindingsStatus>
+>
+type _RemoteAgentBindingStatusTupleMatchesDb = Assert<
+  IsEqual<
+    (typeof REMOTE_AGENT_BINDING_STATUSES)[number],
+    RemoteAgentBindingsStatus
+  >
+>
+type _RemoteAgentRuntimeStateMatchesDb = Assert<
+  IsEqual<
+    (typeof REMOTE_AGENT_RUNTIME_STATES)[number],
+    RemoteAgentBindingsRuntimeState
   >
 >
 // subject-scope-refactor: RuntimeAuthorizationGrantsScope DB enum dropped at cutover.

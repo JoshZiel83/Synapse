@@ -132,11 +132,11 @@ const WRITE_ALLOWLIST = new Set([
 // soft-delete module itself, schema/seed/bootstrap, the platform-admin/audit
 // path, content-addressed GC). These are NOT counted toward the read baseline.
 const READ_INFRA_ALLOWLIST = new Set([
-  "modules/soft-delete/live-reads.ts",
-  "modules/soft-delete/orchestration.ts",
+  "modules/soft-delete/repo-live-reads.ts",
+  "modules/soft-delete/repo-orchestration.ts",
   "infrastructure/database/seed.ts",
   "infrastructure/database/seeds/actors/seed-official-actors.ts",
-  "modules/platform/admin-service.ts",
+  "modules/platform/repo.ts",
   "modules/sandbox/gc.ts",
 ])
 // Read rule (review F8): the existing business read-surface is large (~100 naked
@@ -287,7 +287,7 @@ if (warnings.length) {
 //   - CLOSEABLE  -> markUserDeleted MUST status-flip close it (verified below).
 //   - ANCHORED   -> must be on the explicit allowlist (documented exemption).
 //   - NEITHER    -> hard fail (a new principal table can't slip through).
-const ORCH = resolve(SRC, "modules/soft-delete/orchestration.ts")
+const ORCH = resolve(SRC, "modules/soft-delete/repo-orchestration.ts")
 const orchText = readFileSync(ORCH, "utf8")
 for (const [t] of PRINCIPAL_TABLES) {
   if (PRINCIPAL_CLOSEABLE_TABLES.has(t)) {

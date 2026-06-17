@@ -16,6 +16,7 @@ import { spawn, type ChildProcess } from "node:child_process"
 import { existsSync } from "node:fs"
 import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { z } from "zod"
 
 export class HostProviderError extends Error {
   constructor(message: string) {
@@ -68,6 +69,31 @@ export interface HostProvider {
 }
 
 const KILL_GRACE_MS = 2_000
+
+const PairOutputSchema = z.union([
+  z
+    .object({
+      deviceId: z.string().min(1),
+      serviceId: z.string().min(1),
+      controlPlaneUrl: z.string().optional(),
+    })
+    .passthrough()
+    .transform((value): PairResult => value),
+  z
+    .object({
+      device_id: z.string().min(1),
+      service_id: z.string().min(1),
+      control_plane_url: z.string().optional(),
+    })
+    .passthrough()
+    .transform(
+      (value): PairResult => ({
+        deviceId: value.device_id,
+        serviceId: value.service_id,
+        controlPlaneUrl: value.control_plane_url,
+      })
+    ),
+])
 
 /** Resolve the synapse-device CLI entry (dist/bin.js). */
 function resolveDeviceCliPath(): string {
@@ -303,16 +329,8 @@ function parsePairOutput(stdout: string): PairResult | null {
       if (depth === 0) {
         const block = stdout.slice(start, i + 1)
         try {
-          const obj = JSON.parse(block)
-          const deviceId = obj.device_id ?? obj.deviceId
-          const serviceId = obj.service_id ?? obj.serviceId
-          if (typeof deviceId === "string" && typeof serviceId === "string") {
-            return {
-              deviceId,
-              serviceId,
-              controlPlaneUrl: obj.control_plane_url ?? obj.controlPlaneUrl,
-            }
-          }
+          const parsed = PairOutputSchema.safeParse(JSON.parse(block))
+          return parsed.success ? parsed.data : null
         } catch {
           // Not valid JSON — fall through to null.
         }

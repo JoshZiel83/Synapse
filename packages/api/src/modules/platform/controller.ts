@@ -1,8 +1,15 @@
-import { db } from "../../infrastructure/database/kysely.js"
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify"
 import { z } from "zod"
 import { formatValidationDetails } from "../../infrastructure/validation-error.js"
 import { PLATFORM_ACCESS_KEYS } from "@synapse/shared/constants"
+import {
+  PlatformAccessBindingListViewSchema,
+  PlatformAccessBindingViewSchema,
+  PlatformAccessGrantInputSchema,
+  PlatformNavigationViewSchema,
+  PlatformNoContentSchema,
+} from "@synapse/shared/schemas"
+import { appRoute } from "../../infrastructure/http/route.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { PLATFORM_RESOURCE_ID } from "../access/evaluator.js"
 import {
@@ -11,10 +18,17 @@ import {
   revokePlatformAccess,
   type PlatformAccessKey,
 } from "./admin-service.js"
-import { requireRequestAction } from "../access/guards.js"
-import { authorizeAction, userSubject } from "../access/service.js"
+import {
+  requireRequestAction,
+  authorizeActionDefault,
+} from "../access/guards.js"
+import { userSubject } from "../access/service.js"
+import {
+  presentPlatformAccessBinding,
+  presentPlatformNavigation,
+} from "./presenter.js"
 
-const platformAccessSchema = z.object({
+const platformAccessParamsSchema = z.object({
   userId: z.uuid(),
   accessKey: z.enum(PLATFORM_ACCESS_KEYS),
 })
@@ -34,7 +48,7 @@ async function requirePlatformManagePermission(
 }
 
 async function canPlatformPermission(userId: string) {
-  return authorizeAction(db, {
+  return authorizeActionDefault({
     subject: userSubject(userId),
     action: "platform.manage",
     resourceId: PLATFORM_RESOURCE_ID,
@@ -44,71 +58,30 @@ async function canPlatformPermission(userId: string) {
 export function registerPlatformRoutes(app: FastifyInstance) {
   const authHook = { preHandler: [authMiddleware] }
 
-  app.get("/api/v1/platform/navigation", authHook, async (request, reply) => {
-    const userId = (request as any).user!.userId
-    const canManagePlatform = await canPlatformPermission(userId)
+  appRoute(
+    app,
+    "GET",
+    "/api/v1/platform/navigation",
+    {
+      schema: PlatformNavigationViewSchema,
+      options: authHook,
+    },
+    async (request) => {
+      const userId = (request as any).user!.userId
+      const canManagePlatform = await canPlatformPermission(userId)
 
-    return reply.send({
-      data: {
-        canAccessPlatformModels: canManagePlatform,
-        canAccessPlatformAccess: canManagePlatform,
-        canAccessPlatformSkills: canManagePlatform,
-      },
-    })
-  })
-
-  app.get("/api/v1/platform/access", authHook, async (request, reply) => {
-    const allowed = await requirePlatformManagePermission(
-      request,
-      reply,
-      "Not allowed to manage platform access"
-    )
-    if (!allowed) return
-
-    const accessBindings = await listPlatformAccessBindings()
-    return reply.send({ data: accessBindings })
-  })
-
-  app.post("/api/v1/platform/access", authHook, async (request, reply) => {
-    const allowed = await requirePlatformManagePermission(
-      request,
-      reply,
-      "Not allowed to manage platform access"
-    )
-    if (!allowed) return
-
-    const parsed = platformAccessSchema.safeParse(request.body)
-    if (!parsed.success) {
-      return reply.status(400).send({
-        error: "Validation failed",
-        details: formatValidationDetails(parsed.error),
-      })
+      return presentPlatformNavigation({ canManagePlatform })
     }
+  )
 
-    try {
-      const accessBinding = await grantPlatformAccess({
-        userId: parsed.data.userId,
-        accessKey: parsed.data.accessKey as PlatformAccessKey,
-        assignedByUserId: (request as any).user!.userId,
-      })
-      return reply.status(201).send(accessBinding)
-    } catch (err: any) {
-      const msg = err.message || "Failed to grant platform access"
-      if (msg === "User not found") {
-        return reply.status(404).send({ error: msg })
-      }
-      if (msg === "Access already granted") {
-        return reply.status(409).send({ error: msg })
-      }
-      throw err
-    }
-  })
-
-  app.post<{
-    Params: { accessKey: PlatformAccessKey; userId: string }
-  }>(
-    "/api/v1/platform/access/:accessKey/users/:userId/revoke",
-    authHook,
+  appRoute(
+    app,
+    "GET",
+    "/api/v1/platform/access",
+    {
+      schema: PlatformAccessBindingListViewSchema,
+      options: authHook,
+    },
     async (request, reply) => {
       const allowed = await requirePlatformManagePermission(
         request,
@@ -117,19 +90,88 @@ export function registerPlatformRoutes(app: FastifyInstance) {
       )
       if (!allowed) return
 
+      const accessBindings = await listPlatformAccessBindings()
+      return accessBindings.map(presentPlatformAccessBinding)
+    }
+  )
+
+  appRoute(
+    app,
+    "POST",
+    "/api/v1/platform/access",
+    {
+      schema: PlatformAccessBindingViewSchema,
+      options: authHook,
+    },
+    async (request, reply) => {
+      const allowed = await requirePlatformManagePermission(
+        request,
+        reply,
+        "Not allowed to manage platform access"
+      )
+      if (!allowed) return
+
+      const parsed = PlatformAccessGrantInputSchema.safeParse(request.body)
+      if (!parsed.success) {
+        reply.status(400).send({
+          error: "Validation failed",
+          details: formatValidationDetails(parsed.error),
+        })
+        return
+      }
+
       try {
-        await revokePlatformAccess(
-          request.params.userId,
-          request.params.accessKey
-        )
+        const accessBinding = await grantPlatformAccess({
+          userId: parsed.data.userId,
+          accessKey: parsed.data.accessKey as PlatformAccessKey,
+          assignedByUserId: (request as any).user!.userId,
+        })
+        reply.status(201)
+        return presentPlatformAccessBinding(accessBinding)
+      } catch (err: any) {
+        const msg = err.message || "Failed to grant platform access"
+        if (msg === "User not found") {
+          reply.status(404).send({ error: msg })
+          return
+        }
+        if (msg === "Access already granted") {
+          reply.status(409).send({ error: msg })
+          return
+        }
+        throw err
+      }
+    }
+  )
+
+  appRoute(
+    app,
+    "POST",
+    "/api/v1/platform/access/:accessKey/users/:userId/revoke",
+    {
+      schema: PlatformNoContentSchema,
+      options: authHook,
+    },
+    async (request, reply) => {
+      const allowed = await requirePlatformManagePermission(
+        request,
+        reply,
+        "Not allowed to manage platform access"
+      )
+      if (!allowed) return
+
+      const params = platformAccessParamsSchema.parse(request.params)
+      try {
+        await revokePlatformAccess(params.userId, params.accessKey)
         return reply.status(204).send()
       } catch (err: any) {
         const msg = err.message || "Failed to revoke platform access"
         if (msg === "Access grant not found") {
-          return reply.status(404).send({ error: msg })
+          reply.status(404).send({ error: msg })
+          return
         }
         if (msg === "Config-managed access cannot be revoked manually") {
-          return reply.status(409).send({ error: msg })
+          reply.status(409).send({ error: msg })
+          return
         }
         throw err
       }

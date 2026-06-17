@@ -21,7 +21,7 @@ import type {
   PresentationString,
   PresentationTemplate,
   ToolPresentationDescriptor,
-} from "@synapse/device-protocol/tool-presentation"
+} from "@synapse/shared/tool-presentation"
 import { diffLines } from "diff"
 
 // Project default locale for the server-rendered `fallback`. The structured

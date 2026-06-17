@@ -36,7 +36,7 @@ async function insertWorkspace(db: AnyDb, ownerId: string) {
   const row = await db
     .insertInto("workspaces")
     .values({
-      owner_id: ownerId,
+      ownerId: ownerId,
       slug: `ws-${crypto.randomUUID().slice(0, 8)}`,
       name: "test workspace",
     })
@@ -51,11 +51,11 @@ async function insertWorkspaceMember(
   userId: string
 ) {
   const row = await db
-    .insertInto("workspace_members")
+    .insertInto("workspaceMembers")
     .values({
-      workspace_id: workspaceId,
-      user_id: userId,
-      trust_level: "member",
+      workspaceId: workspaceId,
+      userId: userId,
+      trustLevel: "member",
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -64,11 +64,11 @@ async function insertWorkspaceMember(
 
 async function insertSkillSnapshot(db: AnyDb) {
   const row = await db
-    .insertInto("skill_snapshots")
+    .insertInto("skillSnapshots")
     .values({
       name: "test skill",
       description: "test",
-      content_hash: `hash-${crypto.randomUUID()}`,
+      contentHash: `hash-${crypto.randomUUID()}`,
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -91,18 +91,18 @@ async function insertWorkspaceAppDetail(
           id: input.appId,
           role: "assistant",
           title: "actor detail",
-          current_version: 1,
+          currentVersion: 1,
         } as any)
         .execute()
       return
     case WORKSPACE_APP_KIND.INSTALLED_SKILL: {
       const snapshotId = await insertSkillSnapshot(db)
       await db
-        .insertInto("installed_skills")
+        .insertInto("installedSkills")
         .values({
           id: input.appId,
-          current_snapshot_id: snapshotId,
-          current_version: 1,
+          currentSnapshotId: snapshotId,
+          currentVersion: 1,
         } as any)
         .execute()
       return
@@ -112,35 +112,35 @@ async function insertWorkspaceAppDetail(
         .insertInto("publishers")
         .values({
           slug: `pub-${crypto.randomUUID().slice(0, 8)}`,
-          display_name: "test publisher",
+          displayName: "test publisher",
         } as any)
         .returning("id")
         .executeTakeFirstOrThrow()
       const item = await db
-        .insertInto("catalog_items")
+        .insertInto("catalogItems")
         .values({
-          publisher_id: publisher.id,
-          item_kind: "plugin_package",
+          publisherId: publisher.id,
+          itemKind: "plugin_package",
           slug: `plugin-${crypto.randomUUID().slice(0, 8)}`,
-          display_name: "test plugin",
+          displayName: "test plugin",
         } as any)
         .returning("id")
         .executeTakeFirstOrThrow()
       const version = await db
-        .insertInto("catalog_versions")
+        .insertInto("catalogVersions")
         .values({
-          catalog_item_id: item.id,
+          catalogItemId: item.id,
           version: "1.0.0",
           status: "active",
         } as any)
         .returning("id")
         .executeTakeFirstOrThrow()
       await db
-        .insertInto("plugin_installations")
+        .insertInto("pluginInstallations")
         .values({
           id: input.appId,
-          catalog_item_id: item.id,
-          catalog_version_id: version.id,
+          catalogItemId: item.id,
+          catalogVersionId: version.id,
         } as any)
         .execute()
       return
@@ -166,13 +166,13 @@ test(
       await assert.rejects(
         () =>
           db
-            .insertInto("workspace_apps")
+            .insertInto("workspaceApps")
             .values({
               id: crypto.randomUUID(),
-              workspace_id: workspaceA,
+              workspaceId: workspaceA,
               kind: WORKSPACE_APP_KIND.ACTOR,
-              display_name: "bad owner",
-              owner_workspace_member_id: memberB,
+              displayName: "bad owner",
+              ownerWorkspaceMemberId: memberB,
               status: WORKSPACE_APP_STATUS.ACTIVE,
             } as any)
             .execute(),
@@ -194,12 +194,12 @@ test(
         () =>
           (async () => {
             await db
-              .insertInto("workspace_apps")
+              .insertInto("workspaceApps")
               .values({
                 id: crypto.randomUUID(),
-                workspace_id: workspaceId,
+                workspaceId: workspaceId,
                 kind: WORKSPACE_APP_KIND.ACTOR,
-                display_name: "missing detail",
+                displayName: "missing detail",
                 status: WORKSPACE_APP_STATUS.ACTIVE,
               } as any)
               .execute()
@@ -228,23 +228,23 @@ test(
         () =>
           (async () => {
             await db
-              .insertInto("workspace_apps")
+              .insertInto("workspaceApps")
               .values({
                 id: appId,
-                workspace_id: workspaceId,
+                workspaceId: workspaceId,
                 kind: WORKSPACE_APP_KIND.ACTOR,
-                display_name: "wrong detail kind",
+                displayName: "wrong detail kind",
                 status: WORKSPACE_APP_STATUS.ACTIVE,
               } as any)
               .execute()
 
             const snapshotId = await insertSkillSnapshot(db)
             await db
-              .insertInto("installed_skills")
+              .insertInto("installedSkills")
               .values({
                 id: appId,
-                current_snapshot_id: snapshotId,
-                current_version: 1,
+                currentSnapshotId: snapshotId,
+                currentVersion: 1,
               } as any)
               .execute()
             await db.executeQuery(
@@ -269,13 +269,13 @@ test(
       const memberId = await insertWorkspaceMember(db, workspaceId, owner)
       const appId = crypto.randomUUID()
       await db
-        .insertInto("workspace_apps")
+        .insertInto("workspaceApps")
         .values({
           id: appId,
-          workspace_id: workspaceId,
+          workspaceId: workspaceId,
           kind: WORKSPACE_APP_KIND.INSTALLED_SKILL,
-          display_name: "skill app",
-          owner_workspace_member_id: memberId,
+          displayName: "skill app",
+          ownerWorkspaceMemberId: memberId,
           status: WORKSPACE_APP_STATUS.ACTIVE,
         } as any)
         .execute()
@@ -292,11 +292,11 @@ test(
       await assert.rejects(
         () =>
           db
-            .insertInto("workspace_app_grants")
+            .insertInto("workspaceAppGrants")
             .values({
-              workspace_id: workspaceId,
-              workspace_app_id: appId,
-              subject_id: memberSubjectId,
+              workspaceId: workspaceId,
+              workspaceAppId: appId,
+              subjectId: memberSubjectId,
               permissions: [WORKSPACE_APP_GRANT_PERMISSION.CONTACT_VISIBLE],
               status: WORKSPACE_APP_GRANT_STATUS.ACTIVE,
               source: WORKSPACE_APP_GRANT_SOURCE.MANUAL,
@@ -329,12 +329,12 @@ test(
       )
       const appId = crypto.randomUUID()
       await db
-        .insertInto("workspace_apps")
+        .insertInto("workspaceApps")
         .values({
           id: appId,
-          workspace_id: workspaceId,
+          workspaceId: workspaceId,
           kind: WORKSPACE_APP_KIND.ACTOR,
-          display_name: "actor app",
+          displayName: "actor app",
           status: WORKSPACE_APP_STATUS.ACTIVE,
         } as any)
         .execute()
@@ -351,15 +351,15 @@ test(
       await assert.rejects(
         () =>
           db
-            .insertInto("workspace_app_grant_requests")
+            .insertInto("workspaceAppGrantRequests")
             .values({
-              workspace_id: workspaceId,
-              workspace_app_id: appId,
-              grantee_subject_id: otherMemberSubjectId,
-              requested_permissions: [
+              workspaceId: workspaceId,
+              workspaceAppId: appId,
+              granteeSubjectId: otherMemberSubjectId,
+              requestedPermissions: [
                 WORKSPACE_APP_GRANT_PERMISSION.CONTACT_VISIBLE,
               ],
-              requester_workspace_member_id: requesterMemberId,
+              requesterWorkspaceMemberId: requesterMemberId,
               status: WORKSPACE_APP_GRANT_REQUEST_STATUS.PENDING,
             } as any)
             .execute(),
@@ -392,13 +392,13 @@ test(
 
       for (const appId of [appA, appB]) {
         await db
-          .insertInto("workspace_apps")
+          .insertInto("workspaceApps")
           .values({
             id: appId,
-            workspace_id: workspaceId,
+            workspaceId: workspaceId,
             kind: WORKSPACE_APP_KIND.ACTOR,
-            display_name: `actor-${appId.slice(0, 6)}`,
-            owner_workspace_member_id: approverMemberId,
+            displayName: `actor-${appId.slice(0, 6)}`,
+            ownerWorkspaceMemberId: approverMemberId,
             status: WORKSPACE_APP_STATUS.ACTIVE,
           } as any)
           .execute()
@@ -414,15 +414,15 @@ test(
         memberId: requesterMemberId,
       })
       const request = await db
-        .insertInto("workspace_app_grant_requests")
+        .insertInto("workspaceAppGrantRequests")
         .values({
-          workspace_id: workspaceId,
-          workspace_app_id: appB,
-          grantee_subject_id: requesterSubjectId,
-          requested_permissions: [
+          workspaceId: workspaceId,
+          workspaceAppId: appB,
+          granteeSubjectId: requesterSubjectId,
+          requestedPermissions: [
             WORKSPACE_APP_GRANT_PERMISSION.CONTACT_VISIBLE,
           ],
-          requester_workspace_member_id: requesterMemberId,
+          requesterWorkspaceMemberId: requesterMemberId,
           status: WORKSPACE_APP_GRANT_REQUEST_STATUS.PENDING,
         } as any)
         .returning("id")
@@ -464,13 +464,13 @@ test(
       )
       const appId = crypto.randomUUID()
       await db
-        .insertInto("workspace_apps")
+        .insertInto("workspaceApps")
         .values({
           id: appId,
-          workspace_id: workspaceId,
+          workspaceId: workspaceId,
           kind: WORKSPACE_APP_KIND.ACTOR,
-          display_name: "actor app",
-          owner_workspace_member_id: approverMemberId,
+          displayName: "actor app",
+          ownerWorkspaceMemberId: approverMemberId,
           status: WORKSPACE_APP_STATUS.ACTIVE,
         } as any)
         .execute()
@@ -486,28 +486,28 @@ test(
       })
 
       await db
-        .insertInto("workspace_app_grants")
+        .insertInto("workspaceAppGrants")
         .values({
-          workspace_id: workspaceId,
-          workspace_app_id: appId,
-          subject_id: requesterSubjectId,
+          workspaceId: workspaceId,
+          workspaceAppId: appId,
+          subjectId: requesterSubjectId,
           permissions: [WORKSPACE_APP_GRANT_PERMISSION.MANAGE],
           status: WORKSPACE_APP_GRANT_STATUS.ACTIVE,
           source: WORKSPACE_APP_GRANT_SOURCE.MANUAL,
-          created_by_workspace_member_id: approverMemberId,
+          createdByWorkspaceMemberId: approverMemberId,
         } as any)
         .execute()
 
       const request = await db
-        .insertInto("workspace_app_grant_requests")
+        .insertInto("workspaceAppGrantRequests")
         .values({
-          workspace_id: workspaceId,
-          workspace_app_id: appId,
-          grantee_subject_id: requesterSubjectId,
-          requested_permissions: [
+          workspaceId: workspaceId,
+          workspaceAppId: appId,
+          granteeSubjectId: requesterSubjectId,
+          requestedPermissions: [
             WORKSPACE_APP_GRANT_PERMISSION.CONTACT_VISIBLE,
           ],
-          requester_workspace_member_id: requesterMemberId,
+          requesterWorkspaceMemberId: requesterMemberId,
           status: WORKSPACE_APP_GRANT_REQUEST_STATUS.PENDING,
         } as any)
         .returning("id")
@@ -523,10 +523,10 @@ test(
       })
 
       const grants = await db
-        .selectFrom("workspace_app_grants")
+        .selectFrom("workspaceAppGrants")
         .select(["id", "permissions"])
-        .where("workspace_app_id", "=", appId)
-        .where("subject_id", "=", requesterSubjectId)
+        .where("workspaceAppId", "=", appId)
+        .where("subjectId", "=", requesterSubjectId)
         .where("status", "=", WORKSPACE_APP_GRANT_STATUS.ACTIVE)
         .execute()
 
@@ -562,13 +562,13 @@ test(
 
       for (const appId of [appA, appB]) {
         await db
-          .insertInto("workspace_apps")
+          .insertInto("workspaceApps")
           .values({
             id: appId,
-            workspace_id: workspaceId,
+            workspaceId: workspaceId,
             kind: WORKSPACE_APP_KIND.ACTOR,
-            display_name: `actor-${appId.slice(0, 6)}`,
-            owner_workspace_member_id: requesterMemberId,
+            displayName: `actor-${appId.slice(0, 6)}`,
+            ownerWorkspaceMemberId: requesterMemberId,
             status: WORKSPACE_APP_STATUS.ACTIVE,
           } as any)
           .execute()
@@ -584,15 +584,15 @@ test(
         memberId: requesterMemberId,
       })
       const request = await db
-        .insertInto("workspace_app_grant_requests")
+        .insertInto("workspaceAppGrantRequests")
         .values({
-          workspace_id: workspaceId,
-          workspace_app_id: appB,
-          grantee_subject_id: requesterSubjectId,
-          requested_permissions: [
+          workspaceId: workspaceId,
+          workspaceAppId: appB,
+          granteeSubjectId: requesterSubjectId,
+          requestedPermissions: [
             WORKSPACE_APP_GRANT_PERMISSION.CONTACT_VISIBLE,
           ],
-          requester_workspace_member_id: requesterMemberId,
+          requesterWorkspaceMemberId: requesterMemberId,
           status: WORKSPACE_APP_GRANT_REQUEST_STATUS.PENDING,
         } as any)
         .returning("id")
@@ -608,7 +608,7 @@ test(
       assert.equal(cancelled, false)
 
       const row = await db
-        .selectFrom("workspace_app_grant_requests")
+        .selectFrom("workspaceAppGrantRequests")
         .select("status")
         .where("id", "=", request.id as string)
         .executeTakeFirstOrThrow()
@@ -629,12 +629,12 @@ test(
       const appId = crypto.randomUUID()
 
       await db
-        .insertInto("workspace_apps")
+        .insertInto("workspaceApps")
         .values({
           id: appId,
-          workspace_id: workspaceA,
+          workspaceId: workspaceA,
           kind: WORKSPACE_APP_KIND.PLUGIN_INSTALLATION,
-          display_name: "plugin app",
+          displayName: "plugin app",
           status: WORKSPACE_APP_STATUS.ACTIVE,
         } as any)
         .execute()
@@ -648,11 +648,11 @@ test(
         () =>
           (async () => {
             await db
-              .insertInto("plugin_connections")
+              .insertInto("pluginConnections")
               .values({
-                installation_id: appId,
-                workspace_id: workspaceB,
-                binding_key: "default",
+                installationId: appId,
+                workspaceId: workspaceB,
+                bindingKey: "default",
                 driver: "oauth2",
               } as any)
               .execute()

@@ -18,12 +18,12 @@
  * barrel (keeps the service-worker-reachable barrel surface tight).
  */
 
-import {
-  extractText,
-  summarizeConversationEvent,
-  type ChatConversationItem,
-  type ChatConversationView,
-  type Timestamp,
+import { extractText } from "../content/index.js"
+import { summarizeConversationEvent } from "../conversation/index.js"
+import type {
+  ChatConversationItem,
+  ChatConversationView,
+  Timestamp,
 } from "../types/index.js"
 import type {
   PendingConversationRead,

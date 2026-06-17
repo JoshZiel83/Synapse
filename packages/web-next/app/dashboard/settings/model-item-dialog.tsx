@@ -2,12 +2,17 @@
 
 import { useState, useEffect } from "react"
 import {
+  MODEL_API_STYLE,
   MODEL_GROUP_GRANT_SCOPE,
+  MODEL_SERVER_TOOL,
   getDefaultModelBaseUrl,
   getDefaultModelName,
   getProviderKindForVendor,
   listModelVendorDefinitions,
   vendorSupportsServerTools,
+  type ModelApiStyle,
+  type ModelGroupItemView,
+  type ModelServerTool,
 } from "@synapse/shared"
 import { useWorkspace } from "../workspace-provider"
 import { api } from "@/lib/api"
@@ -36,19 +41,19 @@ interface ModelItemDialogProps {
   onOpenChange: (open: boolean) => void
   groupId: string
   scope?: "workspace" | "platform" | "workspace_member"
-  item: any | null
+  item: ModelGroupItemView | null
   onSaved: () => void
 }
 
 const SERVER_TOOLS = [
   {
-    key: "web_search",
+    key: MODEL_SERVER_TOOL.WEB_SEARCH,
     label: "Web Search",
     description: "Allow the model to search the web for real-time information",
     icon: Globe,
   },
   {
-    key: "web_fetch",
+    key: MODEL_SERVER_TOOL.WEB_FETCH,
     label: "Web Fetch",
     description: "Allow the model to fetch and read full web page content",
     icon: FileText,
@@ -85,11 +90,9 @@ const MULTIMODAL_TYPES = [
 const VENDOR_OPTIONS = listModelVendorDefinitions()
 const DEFAULT_VENDOR = VENDOR_OPTIONS[0]?.vendor || "anthropic"
 const API_STYLE_OPTIONS = [
-  { value: "chat", label: "Chat Completions" },
-  { value: "responses", label: "Responses API" },
+  { value: MODEL_API_STYLE.CHAT, label: "Chat Completions" },
+  { value: MODEL_API_STYLE.RESPONSES, label: "Responses API" },
 ] as const
-
-type ServerTool = "web_search" | "web_fetch"
 
 export default function ModelItemDialog({
   open,
@@ -108,8 +111,8 @@ export default function ModelItemDialog({
   const [maxOutputTokens, setMaxOutputTokens] = useState("4096")
   const [priority, setPriority] = useState("0")
   const [weight, setWeight] = useState("100")
-  const [apiStyle, setApiStyle] = useState<"chat" | "responses">("chat")
-  const [serverTools, setServerTools] = useState<ServerTool[]>([])
+  const [apiStyle, setApiStyle] = useState<ModelApiStyle>(MODEL_API_STYLE.CHAT)
+  const [serverTools, setServerTools] = useState<ModelServerTool[]>([])
   const [multimodalTypes, setMultimodalTypes] = useState<string[]>([])
   const [crossTurnToolHistory, setCrossTurnToolHistory] = useState(false)
   const [providerOptionsText, setProviderOptionsText] = useState("")
@@ -146,21 +149,26 @@ export default function ModelItemDialog({
     if (item) {
       const resolvedVendor = item.vendor || DEFAULT_VENDOR
       const features = item.features || {}
-      setDisplayName(item.display_name || "")
+      setDisplayName(item.displayName || "")
       setVendor(resolvedVendor)
       setApiKey("") // Never pre-fill API key for security
-      setBaseUrl(item.base_url || "")
-      setModelName(item.model_name || "")
-      setMaxOutputTokens(String(item.max_output_tokens || 4096))
+      setBaseUrl(item.baseUrl || "")
+      setModelName(item.modelName || "")
+      setMaxOutputTokens(String(item.maxOutputTokens || 4096))
       setPriority(String(item.priority ?? 0))
       setWeight(String(item.weight ?? 100))
-      setApiStyle(features.apiStyle === "responses" ? "responses" : "chat")
+      setApiStyle(
+        features.apiStyle === MODEL_API_STYLE.RESPONSES
+          ? MODEL_API_STYLE.RESPONSES
+          : MODEL_API_STYLE.CHAT
+      )
       setServerTools(
         Array.isArray(features.serverTools)
           ? (features.serverTools.filter(
-              (t: unknown): t is ServerTool =>
-                t === "web_search" || t === "web_fetch"
-            ) as ServerTool[])
+              (t: unknown): t is ModelServerTool =>
+                t === MODEL_SERVER_TOOL.WEB_SEARCH ||
+                t === MODEL_SERVER_TOOL.WEB_FETCH
+            ) as ModelServerTool[])
           : []
       )
       setMultimodalTypes(
@@ -171,8 +179,8 @@ export default function ModelItemDialog({
       )
       setCrossTurnToolHistory(Boolean(features.crossTurnToolHistory))
       setProviderOptionsText(
-        item.provider_options && Object.keys(item.provider_options).length > 0
-          ? JSON.stringify(item.provider_options, null, 2)
+        item.providerOptions && Object.keys(item.providerOptions).length > 0
+          ? JSON.stringify(item.providerOptions, null, 2)
           : ""
       )
     } else {
@@ -184,7 +192,7 @@ export default function ModelItemDialog({
       setMaxOutputTokens("4096")
       setPriority("0")
       setWeight("100")
-      setApiStyle("chat")
+      setApiStyle(MODEL_API_STYLE.CHAT)
       setServerTools([])
       setMultimodalTypes([])
       setCrossTurnToolHistory(false)
@@ -192,7 +200,7 @@ export default function ModelItemDialog({
     }
   }, [item, open])
 
-  const toggleServerTool = (tool: ServerTool) => {
+  const toggleServerTool = (tool: ModelServerTool) => {
     setServerTools((prev) =>
       prev.includes(tool) ? prev.filter((t) => t !== tool) : [...prev, tool]
     )
@@ -242,7 +250,7 @@ export default function ModelItemDialog({
 
       if (item) {
         // Update - only send config fields if they changed
-        const updateData: any = {
+        const updateData: Record<string, unknown> = {
           displayName: displayName.trim(),
           priority: parseInt(priority),
           weight: parseInt(weight),
@@ -468,7 +476,9 @@ export default function ModelItemDialog({
                 value={apiStyle}
                 onChange={(e) =>
                   setApiStyle(
-                    e.target.value === "responses" ? "responses" : "chat"
+                    e.target.value === MODEL_API_STYLE.RESPONSES
+                      ? MODEL_API_STYLE.RESPONSES
+                      : MODEL_API_STYLE.CHAT
                   )
                 }
                 className="h-10 w-full rounded-md border border-gray-200 bg-gray-50 px-3 text-sm text-foreground outline-none focus:border-blue-500/40 dark:border-white/10 dark:bg-white/5"

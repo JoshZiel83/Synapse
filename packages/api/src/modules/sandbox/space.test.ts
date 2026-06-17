@@ -123,7 +123,7 @@ test("space.ts: ensureFileSpace creates 3 runtime spaces and is idempotent", asy
     assert.notEqual(conv1.id, actor1.id)
     assert.notEqual(actor1.id, actorConv1.id)
     assert.notEqual(conv1.id, actorConv1.id)
-    assert.equal(conv1.current_snapshot_id, null)
+    assert.equal(conv1.currentSnapshotId, null)
 
     const conv2 = await ensureFileSpace(db, {
       workspaceId,
@@ -192,7 +192,7 @@ test("space.ts: mount lifecycle + snapshot DAG + head-moved detection", async ()
     assert.equal(String(snap1.version), "1")
 
     const afterV1 = await getFileSpace(db, space.id)
-    assert.equal(afterV1?.current_snapshot_id, snap1.id)
+    assert.equal(afterV1?.currentSnapshotId, snap1.id)
 
     await ensureContentBlob(db, { sha256: SHA("b"), sizeBytes: 20 })
     const snap2 = await appendSnapshot(db, {
@@ -204,7 +204,7 @@ test("space.ts: mount lifecycle + snapshot DAG + head-moved detection", async ()
       totalBytes: 20,
     })
     assert.equal(String(snap2.version), "2")
-    assert.equal(snap2.parent_snapshot_id, snap1.id)
+    assert.equal(snap2.parentSnapshotId, snap1.id)
 
     await ensureContentBlob(db, { sha256: SHA("c"), sizeBytes: 30 })
     await assert.rejects(

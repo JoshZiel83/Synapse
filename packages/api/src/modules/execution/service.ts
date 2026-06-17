@@ -1,67 +1,36 @@
 import { createHash } from "crypto"
-import { sql } from "kysely"
-import { v4 as uuidv4 } from "uuid"
+import { ACTOR_RUNTIME_HEALTH } from "@synapse/shared"
 import { nowIsoInstant } from "@synapse/shared/datetime"
-import type { PayloadBlobsRetentionClass } from "../../infrastructure/database/generated/db.js"
-import { db, type TableInsert } from "../../infrastructure/database/kysely.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
+import type { PayloadBlobsRetentionClass } from "./repo.types.js"
 import { updateSessionStatus } from "../session/service.js"
 import {
   markTurnWakeupsDropped,
   publishSessionRuntime,
 } from "../session/runtime.js"
+import {
+  findExistingToolResult,
+  findPayloadBlobBySha256,
+  getRuntimeTargetByToolCallId,
+  getRuntimeTargetByTurnId,
+  getToolHistoryForSession as getToolHistoryForSessionRow,
+  insertPayloadBlob,
+  insertRuntimeEvent,
+  insertToolCall,
+  insertToolExecutionAttempt,
+  insertToolResult,
+  insertToolResultParts,
+  insertTurn,
+  finalizeToolExecutionAttemptRow,
+  listInterruptedToolCalls,
+  listRunningTurns,
+  markAttemptInterrupted,
+  updateToolCallStatusRow,
+  updateTurnStatusRow,
+  upsertProviderStep,
+} from "./repo.js"
 
 const log = createLogger("execution")
-
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-
-function stableStringify(value: unknown): string {
-  if (typeof value === "string") return value
-  return JSON.stringify(
-    value,
-    Object.keys(value as Record<string, unknown>).sort()
-  )
-}
-
-function asNullableUuid(value: unknown) {
-  return typeof value === "string" && UUID_PATTERN.test(value) ? value : null
-}
-
-async function getRuntimeTargetByTurnId(turnId: string) {
-  const row = await db
-    .selectFrom("turns as t")
-    .innerJoin("sessions as s", "s.id", "t.session_id")
-    .select(["s.workspace_id as workspace_id", "s.id as session_id"])
-    .where("t.id", "=", turnId)
-    .limit(1)
-    .executeTakeFirst()
-
-  return row
-    ? {
-        workspaceId: row.workspace_id,
-        sessionId: row.session_id,
-      }
-    : null
-}
-
-async function getRuntimeTargetByToolCallId(toolCallId: string) {
-  const row = await db
-    .selectFrom("tool_calls as tc")
-    .innerJoin("turns as t", "t.id", "tc.turn_id")
-    .innerJoin("sessions as s", "s.id", "t.session_id")
-    .select(["s.workspace_id as workspace_id", "s.id as session_id"])
-    .where("tc.id", "=", toolCallId)
-    .limit(1)
-    .executeTakeFirst()
-
-  return row
-    ? {
-        workspaceId: row.workspace_id,
-        sessionId: row.session_id,
-      }
-    : null
-}
 
 async function publishRuntimeForTurn(turnId: string) {
   const runtimeTarget = await getRuntimeTargetByTurnId(turnId)
@@ -92,32 +61,19 @@ async function storePayloadBlobInternal(
       : String(payload ?? "")
   const sha256 = createHash("sha256").update(body).digest("hex")
 
-  const existing = await db
-    .selectFrom("payload_blobs")
-    .select("id")
-    .where("sha256", "=", sha256)
-    .limit(1)
-    .executeTakeFirst()
+  const existing = await findPayloadBlobBySha256(sha256)
   if (existing) {
     return existing.id
   }
 
-  const inserted = await db
-    .insertInto("payload_blobs")
-    .values({
-      id: uuidv4(),
-      sha256,
-      content_type: contentType,
-      json_body: (contentType === "json"
-        ? (payload ?? {})
-        : null) as TableInsert<"payload_blobs">["json_body"],
-      text_body: contentType === "text" ? String(payload ?? "") : null,
-      byte_size: Buffer.byteLength(body, "utf8"),
-      retention_class: retentionClass,
-      created_at: sql`NOW()`,
-    })
-    .returning("id")
-    .executeTakeFirst()
+  const inserted = await insertPayloadBlob({
+    sha256,
+    contentType,
+    jsonBody: contentType === "json" ? (payload ?? {}) : null,
+    textBody: contentType === "text" ? String(payload ?? "") : null,
+    byteSize: Buffer.byteLength(body, "utf8"),
+    retentionClass,
+  })
   if (!inserted) {
     throw new Error("Failed to store payload blob")
   }
@@ -148,21 +104,7 @@ export async function createTurn(params: {
   triggerItemId?: string
   metadata?: Record<string, unknown>
 }) {
-  return db
-    .insertInto("turns")
-    .values({
-      id: params.id || uuidv4(),
-      session_id: params.sessionId,
-      conversation_id: params.conversationId,
-      actor_id: params.actorId,
-      trigger_item_id: params.triggerItemId || null,
-      trigger_type: params.triggerType,
-      status: "running",
-      metadata: (params.metadata || {}) as TableInsert<"turns">["metadata"],
-      started_at: sql`NOW()`,
-    })
-    .returningAll()
-    .executeTakeFirst()
+  return insertTurn(params)
 }
 
 export async function updateTurnStatus(
@@ -172,19 +114,7 @@ export async function updateTurnStatus(
     metadata?: Record<string, unknown>
   }
 ) {
-  const update = db
-    .updateTable("turns")
-    .set({
-      status,
-      completed_at: sql`NOW()`,
-      ...(extra?.metadata
-        ? {
-            metadata: sql`COALESCE(metadata, '{}'::jsonb) || ${JSON.stringify(extra.metadata)}::jsonb`,
-          }
-        : {}),
-    })
-    .where("id", "=", turnId)
-  await update.execute()
+  await updateTurnStatusRow(turnId, status, extra?.metadata)
 }
 
 export async function logProviderStep(params: {
@@ -222,54 +152,26 @@ export async function logProviderStep(params: {
         )
       : null
 
-  return db
-    .insertInto("provider_steps")
-    .values({
-      id: uuidv4(),
-      turn_id: params.turnId,
-      step_index: params.stepIndex,
-      provider_type: params.providerType,
-      request_type: params.requestType,
-      model_group_id: asNullableUuid(params.modelGroupId),
-      model_binding_id: asNullableUuid(params.modelBindingId),
-      model_binding_version_id: asNullableUuid(params.modelBindingVersionId),
-      model_name: params.modelName,
-      capabilities_snapshot: (params.capabilitiesSnapshot ||
-        {}) as TableInsert<"provider_steps">["capabilities_snapshot"],
-      request_payload_blob_id: requestPayloadBlobId,
-      response_payload_blob_id: responsePayloadBlobId,
-      stop_reason: params.stopReason || null,
-      input_tokens: params.inputTokens,
-      output_tokens: params.outputTokens,
-      cost_micros: params.costMicros || 0,
-      latency_ms: params.latencyMs,
-      status: params.status,
-      error_message: params.errorMessage || null,
-      created_at: sql`NOW()`,
-    })
-    .onConflict((oc) =>
-      oc.columns(["turn_id", "step_index"]).doUpdateSet({
-        provider_type: params.providerType,
-        request_type: params.requestType,
-        model_group_id: asNullableUuid(params.modelGroupId),
-        model_binding_id: asNullableUuid(params.modelBindingId),
-        model_binding_version_id: asNullableUuid(params.modelBindingVersionId),
-        model_name: params.modelName,
-        capabilities_snapshot: (params.capabilitiesSnapshot ||
-          {}) as TableInsert<"provider_steps">["capabilities_snapshot"],
-        request_payload_blob_id: requestPayloadBlobId,
-        response_payload_blob_id: responsePayloadBlobId,
-        stop_reason: params.stopReason || null,
-        input_tokens: params.inputTokens,
-        output_tokens: params.outputTokens,
-        cost_micros: params.costMicros || 0,
-        latency_ms: params.latencyMs,
-        status: params.status,
-        error_message: params.errorMessage || null,
-      })
-    )
-    .returningAll()
-    .executeTakeFirst()
+  return upsertProviderStep({
+    turnId: params.turnId,
+    stepIndex: params.stepIndex,
+    providerType: params.providerType,
+    requestType: params.requestType,
+    modelGroupId: params.modelGroupId,
+    modelBindingId: params.modelBindingId,
+    modelBindingVersionId: params.modelBindingVersionId,
+    modelName: params.modelName,
+    capabilitiesSnapshot: params.capabilitiesSnapshot,
+    requestPayloadBlobId,
+    responsePayloadBlobId,
+    stopReason: params.stopReason,
+    inputTokens: params.inputTokens,
+    outputTokens: params.outputTokens,
+    costMicros: params.costMicros,
+    latencyMs: params.latencyMs,
+    status: params.status,
+    errorMessage: params.errorMessage,
+  })
 }
 
 export async function createToolCall(params: {
@@ -290,30 +192,7 @@ export async function createToolCall(params: {
   deviceToolId?: string | null
   normalizedInput: Record<string, unknown>
 }) {
-  const row = await db
-    .insertInto("tool_calls")
-    .values({
-      id: params.id || uuidv4(),
-      turn_id: params.turnId,
-      provider_step_id: params.providerStepId || null,
-      conversation_id: params.conversationId,
-      session_id: params.sessionId || null,
-      call_index: params.callIndex,
-      provider_call_id: params.providerCallId || null,
-      bundle_id: params.bundleId,
-      tool_name: params.toolName,
-      source_kind: params.sourceKind,
-      source_snapshot:
-        params.sourceSnapshot as TableInsert<"tool_calls">["source_snapshot"],
-      plugin_installation_id: params.pluginInstallationId || null,
-      device_tool_id: params.deviceToolId || null,
-      normalized_input:
-        params.normalizedInput as TableInsert<"tool_calls">["normalized_input"],
-      status: "pending",
-      created_at: sql`NOW()`,
-    })
-    .returningAll()
-    .executeTakeFirst()
+  const row = await insertToolCall(params)
 
   if (row) {
     await publishRuntimeForTurn(params.turnId)
@@ -326,17 +205,7 @@ export async function updateToolCallStatus(
   toolCallId: string,
   status: "running" | "completed" | "failed" | "skipped"
 ) {
-  await db
-    .updateTable("tool_calls")
-    .set({
-      status,
-      completed_at:
-        status === "completed" || status === "failed" || status === "skipped"
-          ? sql`NOW()`
-          : sql`completed_at`,
-    })
-    .where("id", "=", toolCallId)
-    .execute()
+  await updateToolCallStatusRow(toolCallId, status)
 
   await publishRuntimeForToolCall(toolCallId)
 }
@@ -352,20 +221,12 @@ export async function createToolExecutionAttempt(params: {
       ? await storePayloadBlob(params.requestPayload)
       : null
 
-  return db
-    .insertInto("tool_execution_attempts")
-    .values({
-      id: uuidv4(),
-      tool_call_id: params.toolCallId,
-      attempt_no: params.attemptNo,
-      transport: params.transport || null,
-      request_payload_blob_id: requestPayloadBlobId,
-      status: "success",
-      is_error: false,
-      created_at: sql`NOW()`,
-    })
-    .returningAll()
-    .executeTakeFirst()
+  return insertToolExecutionAttempt({
+    toolCallId: params.toolCallId,
+    attemptNo: params.attemptNo,
+    transport: params.transport,
+    requestPayloadBlobId,
+  })
 }
 
 export async function finalizeToolExecutionAttempt(params: {
@@ -384,19 +245,14 @@ export async function finalizeToolExecutionAttempt(params: {
         )
       : null
 
-  await db
-    .updateTable("tool_execution_attempts")
-    .set({
-      status: params.status,
-      is_error: params.isError || false,
-      error_message: params.errorMessage || null,
-      duration_ms: params.durationMs || null,
-      ...(responsePayloadBlobId
-        ? { response_payload_blob_id: responsePayloadBlobId }
-        : {}),
-    })
-    .where("id", "=", params.attemptId)
-    .execute()
+  await finalizeToolExecutionAttemptRow({
+    attemptId: params.attemptId,
+    status: params.status,
+    isError: params.isError,
+    errorMessage: params.errorMessage,
+    durationMs: params.durationMs,
+    responsePayloadBlobId,
+  })
 }
 
 export async function createToolResult(params: {
@@ -417,50 +273,21 @@ export async function createToolResult(params: {
     metadata?: Record<string, unknown>
   }>
 }) {
-  const result = await db
-    .insertInto("tool_results")
-    .values({
-      id: uuidv4(),
-      tool_call_id: params.toolCallId,
-      attempt_id: params.attemptId || null,
-      result_index: params.resultIndex || 0,
-      is_error: params.isError || false,
-      error_message: params.errorMessage || null,
-      metadata: (params.metadata ||
-        {}) as TableInsert<"tool_results">["metadata"],
-      created_at: sql`NOW()`,
-    })
-    .returningAll()
-    .executeTakeFirst()
+  const result = await insertToolResult({
+    toolCallId: params.toolCallId,
+    attemptId: params.attemptId,
+    resultIndex: params.resultIndex,
+    isError: params.isError,
+    errorMessage: params.errorMessage,
+    metadata: params.metadata,
+  })
 
   if (!result) {
     throw new Error("Failed to create tool result")
   }
 
   if (params.parts.length > 0) {
-    await db
-      .insertInto("tool_result_parts")
-      .values(
-        params.parts.map((part, ordinal) => ({
-          id: uuidv4(),
-          tool_result_id: result.id,
-          ordinal,
-          part_type: part.type,
-          text_value: part.type === "text" ? part.text || "" : null,
-          ref_path: part.type === "file_ref" ? (part.refPath ?? null) : null,
-          ref_sha256:
-            part.type === "file_ref" ? (part.refSha256 ?? null) : null,
-          json_value:
-            part.type === "json"
-              ? sql`${JSON.stringify(part.json ?? {})}::jsonb`
-              : null,
-          mime_type: part.mimeType || null,
-          name: part.name || null,
-          metadata: (part.metadata ||
-            {}) as TableInsert<"tool_result_parts">["metadata"],
-        }))
-      )
-      .execute()
+    await insertToolResultParts(result.id, params.parts)
   }
 
   await publishRuntimeForToolCall(params.toolCallId)
@@ -469,50 +296,7 @@ export async function createToolResult(params: {
 }
 
 export async function getToolHistoryForSession(sessionId: string) {
-  return db
-    .selectFrom("tool_calls as tc")
-    .leftJoin("provider_steps as ps", "ps.id", "tc.provider_step_id")
-    .leftJoin("tool_results as tr", "tr.tool_call_id", "tc.id")
-    .leftJoin("tool_result_parts as trp", "trp.tool_result_id", "tr.id")
-    .select([
-      "tc.id",
-      "tc.turn_id",
-      "tc.provider_step_id",
-      "tc.conversation_id",
-      "tc.session_id",
-      "tc.call_index",
-      "tc.provider_call_id",
-      "tc.bundle_id",
-      "tc.tool_name",
-      "tc.source_kind",
-      "tc.source_snapshot",
-      "tc.plugin_installation_id",
-      "tc.device_tool_id",
-      "tc.normalized_input",
-      "tc.status",
-      "tc.created_at",
-      "tc.completed_at",
-      "tr.id as tool_result_id",
-      "tr.is_error",
-      "tr.error_message",
-      "ps.step_index",
-      "trp.ordinal as result_part_ordinal",
-      "trp.part_type as result_part_type",
-      "trp.text_value as result_text_value",
-      "trp.ref_path as result_ref_path",
-      "trp.ref_sha256 as result_ref_sha256",
-      "trp.json_value as result_json_value",
-      "trp.mime_type as result_mime_type",
-      "trp.name as result_name",
-      "trp.metadata as result_part_metadata",
-    ])
-    .where("tc.session_id", "=", sessionId)
-    .orderBy("tc.created_at", "asc")
-    .orderBy(sql`ps.step_index asc nulls last`)
-    .orderBy("tc.call_index", "asc")
-    .orderBy("tr.result_index", "asc")
-    .orderBy("trp.ordinal", "asc")
-    .execute()
+  return getToolHistoryForSessionRow(sessionId)
 }
 
 export async function logRuntimeEvent(params: {
@@ -530,30 +314,9 @@ export async function logRuntimeEvent(params: {
   eventType: string
   payload?: Record<string, unknown>
 }) {
-  await db
-    .insertInto("runtime_events")
-    .values({
-      id: uuidv4(),
-      workspace_id: params.workspaceId || null,
-      conversation_id: params.conversationId || null,
-      session_id: params.sessionId || null,
-      turn_id: params.turnId || null,
-      provider_step_id: params.providerStepId || null,
-      tool_call_id: params.toolCallId || null,
-      tool_attempt_id: params.toolAttemptId || null,
-      actor_id: params.actorId || null,
-      user_id: params.userId || null,
-      source: params.source,
-      level: params.level || "info",
-      event_type: params.eventType,
-      payload: (params.payload ||
-        {}) as TableInsert<"runtime_events">["payload"],
-      created_at: sql`NOW()`,
-    })
-    .execute()
-    .catch((err) => {
-      log.error({ err }, "[runtime_events] failed")
-    })
+  await insertRuntimeEvent(params).catch((err) => {
+    log.error({ err }, "[runtime_events] failed")
+  })
 }
 
 export async function recoverInterruptedExecutions(params?: {
@@ -562,74 +325,31 @@ export async function recoverInterruptedExecutions(params?: {
   const errorMessage =
     params?.errorMessage || "Interrupted while the turn was still running."
 
-  const interruptedToolCalls = (await db
-    .selectFrom("tool_calls as tc")
-    .innerJoin("turns as t", "t.id", "tc.turn_id")
-    .select([
-      "tc.id as tool_call_id",
-      "tc.session_id",
-      sql<string | null>`(
-         SELECT tea.id
-         FROM tool_execution_attempts tea
-         WHERE tea.tool_call_id = tc.id
-         ORDER BY tea.attempt_no DESC
-         LIMIT 1
-       )`.as("latest_attempt_id"),
-    ])
-    .where("t.status", "=", "running")
-    .where("tc.status", "in", ["pending", "running"])
-    .execute()) as Array<{
-    tool_call_id: string
-    latest_attempt_id: string | null
-    session_id: string | null
-  }>
+  const interruptedToolCalls = await listInterruptedToolCalls()
 
   let recoveredToolCalls = 0
   for (const row of interruptedToolCalls) {
-    if (row.latest_attempt_id) {
-      await db
-        .updateTable("tool_execution_attempts")
-        .set({
-          status: "error",
-          is_error: true,
-          error_message: sql`COALESCE(error_message, ${errorMessage})`,
-        })
-        .where("id", "=", row.latest_attempt_id)
-        .execute()
+    if (row.latestAttemptId) {
+      await markAttemptInterrupted(row.latestAttemptId, errorMessage)
     }
 
-    const existingResult = await db
-      .selectFrom("tool_results")
-      .select("id")
-      .where("tool_call_id", "=", row.tool_call_id)
-      .limit(1)
-      .executeTakeFirst()
+    const existingResult = await findExistingToolResult(row.toolCallId)
 
     if (!existingResult) {
       await createToolResult({
-        toolCallId: row.tool_call_id,
-        attemptId: row.latest_attempt_id || undefined,
+        toolCallId: row.toolCallId,
+        attemptId: row.latestAttemptId || undefined,
         isError: true,
         errorMessage,
         parts: [{ type: "text", text: `Error: ${errorMessage}` }],
       })
     }
 
-    await updateToolCallStatus(row.tool_call_id, "failed")
+    await updateToolCallStatus(row.toolCallId, "failed")
     recoveredToolCalls += 1
   }
 
-  const interruptedTurns = (await db
-    .selectFrom("turns as t")
-    .leftJoin("sessions as s", "s.id", "t.session_id")
-    .leftJoin("conversations as c", "c.id", "s.conversation_id")
-    .select(["t.id", "t.session_id", "s.workspace_id"])
-    .where("t.status", "=", "running")
-    .execute()) as Array<{
-    id: string
-    session_id: string | null
-    workspace_id: string | null
-  }>
+  const interruptedTurns = await listRunningTurns()
 
   const sessionsById = new Map<
     string,
@@ -640,9 +360,9 @@ export async function recoverInterruptedExecutions(params?: {
     await updateTurnStatus(row.id, "failed", {
       metadata: { errorMessage, interruptedByRecovery: true },
     })
-    if (row.session_id) {
-      sessionsById.set(row.session_id, {
-        workspaceId: row.workspace_id,
+    if (row.sessionId) {
+      sessionsById.set(row.sessionId, {
+        workspaceId: row.workspaceId,
         turnId: row.id,
       })
     }
@@ -654,7 +374,7 @@ export async function recoverInterruptedExecutions(params?: {
     if (sessionInfo.workspaceId) {
       await publishSessionRuntime(sessionInfo.workspaceId, sessionId, {
         laneState: "blocked",
-        health: "error",
+        health: ACTOR_RUNTIME_HEALTH.ERROR,
         phase: "error",
         statusText: errorMessage,
         activeTurnId: sessionInfo.turnId,

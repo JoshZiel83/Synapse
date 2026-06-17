@@ -28,8 +28,7 @@ import {
   readStoredValue,
   writeStoredValue,
 } from "@/lib/storage"
-import type { AuthMeResponse } from "@/types/api"
-import type { AuthSessionSummary, User } from "@shared"
+import type { AuthMeView, AuthSessionSummary, User } from "@shared"
 const chatPersistence = createChatPersistence()
 
 type SessionStatus = "loading" | "authenticated" | "unauthenticated"
@@ -73,10 +72,7 @@ async function persistSessionToken(token: string | null) {
 function applySession(
   payload: {
     token: string | null
-    response?:
-      | AuthMeResponse
-      | { user: User; session: AuthSessionSummary }
-      | null
+    response?: AuthMeView | { user: User; session: AuthSessionSummary } | null
   },
   setState: React.Dispatch<
     React.SetStateAction<{

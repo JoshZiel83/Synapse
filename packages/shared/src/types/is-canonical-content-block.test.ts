@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { isCanonicalContentBlock } from "./index.js"
+import { isCanonicalContentBlock } from "../content/index.js"
 import { TRANSPORT_KINDS } from "../constants/index.js"
 
 function mentionBlock(transportKind: string | undefined) {

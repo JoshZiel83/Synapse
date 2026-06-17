@@ -19,8 +19,21 @@
 
 import type { Timestamp } from "@synapse/shared/types"
 import type { Redis } from "ioredis"
+import { z } from "zod"
+import { IsoInstantStringSchema } from "@synapse/shared/schemas"
 
 const TTL_SECONDS = 7 * 24 * 60 * 60
+
+const refIndexEntrySchema = z
+  .object({
+    content: z.string(),
+    senderId: z.string().min(1),
+    senderName: z.string().min(1).optional(),
+    timestamp: IsoInstantStringSchema,
+    isBot: z.boolean().optional(),
+    attachments: z.array(z.string()).optional(),
+  })
+  .strict()
 
 export interface QqRefIndexEntry {
   /** Plain text of the quoted message. */
@@ -65,7 +78,8 @@ export async function getRefIndexEntry(
   const raw = await redis.get(key(params.accountId, params.refIdx))
   if (!raw) return null
   try {
-    return JSON.parse(raw) as QqRefIndexEntry
+    const parsed = refIndexEntrySchema.safeParse(JSON.parse(raw))
+    return parsed.success ? parsed.data : null
   } catch {
     return null
   }

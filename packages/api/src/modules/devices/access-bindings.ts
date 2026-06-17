@@ -2,56 +2,57 @@
 // module so the picker can call setActiveDeviceCapabilitiesForTarget without
 // going through capability-projection's internal module boundary.
 //
-// subject-scope-refactor: the wire shape is `ScopedSubjectTarget` from
-// `@synapse/device-protocol` (`{subject: SubjectRefWire, scope?: SubjectRefWire}`).
-// The SDK sends this shape; the route parses with the protocol schema
-// directly so they cannot drift. The route maps
-// `ScopedSubjectTarget → AccessTargetInput` at the boundary via
-// `wireTargetToInternalAccessTarget`.
+// subject-scope-refactor: the app shape is a shared-owned `ScopedSubjectTarget`
+// (`{subject, scope?}`) nested in SetActiveDeviceCapabilitiesInputSchema. The
+// SDK/web send this app contract; the route maps it to AccessTargetInput at the
+// boundary via appTargetToInternalAccessTarget.
 
-import { z } from "zod"
 import { formatValidationDetails } from "../../infrastructure/validation-error.js"
 import type { FastifyInstance } from "fastify"
+import type { DeviceCapabilityAccessTargetInput } from "@synapse/shared"
 import {
-  ScopedSubjectTargetWireSchema,
-  type DeviceCapabilityAccessTarget,
-} from "@synapse/device-protocol"
+  SetActiveDeviceCapabilitiesInputSchema,
+  ActiveDeviceCapabilitiesViewSchema,
+  ActiveDeviceCapabilitiesListQuerySchema,
+  type ActiveDeviceCapabilitiesListQuery,
+} from "@synapse/shared/schemas"
+import { appRoute } from "../../infrastructure/http/route.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { requireRequestAction } from "../access/guards.js"
-import { db } from "../../infrastructure/database/kysely.js"
+import {
+  findActorWorkspace,
+  findConversationWorkspace,
+  findRemoteAgentWorkspace,
+  findOwnedDeviceCapabilityIds,
+} from "./repo.js"
 import {
   listActiveDeviceCapabilitiesForTarget,
   setActiveDeviceCapabilitiesForTarget,
   type AccessTargetInput,
 } from "../capability-projection/device-capabilities.js"
 
-// Exported for regression tests that pin the wire-vs-server schema
-// contract — the bug pattern under guard is the route accepting a
-// different shape than the SDK sends (which happened pre-Batch-18 when
-// the route used a discriminated union while the SDK migrated to
-// ScopedSubjectTarget).
-export const setActiveBodySchema = z.object({
-  workspaceId: z.uuid(),
-  target: ScopedSubjectTargetWireSchema,
-  device_capability_ids: z.array(z.uuid()),
-  reason: z.string().max(2000).optional(),
-})
+// Exported for regression tests that pin the app-facing input contract — the
+// bug pattern under guard is the route accepting a different shape than the
+// SDK/web sends. Per §5.1.1/§8.3 this management write is app-facing camelCase
+// (shared `SetActiveDeviceCapabilitiesInput`: `deviceCapabilityIds`), with a
+// shared-owned target whitelist.
+export const setActiveBodySchema = SetActiveDeviceCapabilitiesInputSchema
 
 /**
- * Map the wire `(subject, scope?)` shape onto `AccessTargetInput`.
+ * Map the app `(subject, scope?)` shape onto `AccessTargetInput`.
  *
- * The wire schema's `superRefine` already rejects every combination
+ * The shared app schema's `superRefine` already rejects every combination
  * outside the supported whitelist (unscoped any-of-4, or
  * actor/remote_agent + conversation), so we only need to handle those
  * shapes here. Anything else is unreachable.
  */
-// Exported for regression tests that pin the wire→internal mapping —
-// without this lock, the wire schema could keep accepting a shape that
-// then throws at the mapper (which is what happened pre-Batch-19 with
+// Exported for regression tests that pin the app→internal mapping — without
+// this lock, the shared app schema could keep accepting a shape that then throws
+// at the mapper (which is what happened pre-Batch-19 with
 // `(remote_agent, conversation)`).
-export function wireTargetToInternalAccessTarget(
-  target: DeviceCapabilityAccessTarget
+export function appTargetToInternalAccessTarget(
+  target: DeviceCapabilityAccessTargetInput
 ): AccessTargetInput {
   const { subject, scope } = target
   if (scope) {
@@ -69,9 +70,9 @@ export function wireTargetToInternalAccessTarget(
         conversationId: scope.conversationId,
       }
     }
-    // Unreachable — wire schema rejected everything else upstream.
+    // Unreachable — shared app target schema rejected everything else upstream.
     throw new Error(
-      `wireTargetToInternalAccessTarget: unsupported (${subject.kind}, ${scope.kind}) escaped the wire whitelist`
+      `appTargetToInternalAccessTarget: unsupported (${subject.kind}, ${scope.kind}) escaped the app target whitelist`
     )
   }
   switch (subject.kind) {
@@ -90,93 +91,60 @@ export function wireTargetToInternalAccessTarget(
 }
 
 /**
- * GET query params for listing active device-capability bindings. Flat
- * snake_case (query strings prefer flat) but scope-aware:
- *   subject_kind=workspace                    | (no extras needed; workspace id from URL)
- *   subject_kind=actor      + subject_actor_id=<uuid>
- *   subject_kind=conversation + subject_conversation_id=<uuid>
- *   subject_kind=remote_agent + subject_remote_agent_id=<uuid>
+ * GET query params for listing active device-capability bindings. App-facing
+ * query DTO → camelCase (§5.1.1: request body AND query DTOs are app contracts):
+ *   subjectKind=workspace                    | (no extras; workspace id from URL)
+ *   subjectKind=actor      + subjectActorId=<uuid>
+ *   subjectKind=conversation + subjectConversationId=<uuid>
+ *   subjectKind=remote_agent + subjectRemoteAgentId=<uuid>
  * optional scope (only the `conversation` scope is currently allowed):
- *   scope_kind=conversation + scope_conversation_id=<uuid>
+ *   scopeKind=conversation + scopeConversationId=<uuid>
  *
- * Wire schema `scope_kind=workspace` is explicitly rejected — the
- * binding model only supports `actor|remote_agent + conversation`.
+ * `scopeKind=workspace` is explicitly rejected — the binding model only supports
+ * `actor|remote_agent + conversation`.
  */
-const listQuerySchema = z
-  .object({
-    subject_kind: z.enum([
-      "workspace",
-      "actor",
-      "conversation",
-      "remote_agent",
-    ]),
-    subject_workspace_id: z.uuid().optional(),
-    subject_actor_id: z.uuid().optional(),
-    subject_conversation_id: z.uuid().optional(),
-    subject_remote_agent_id: z.uuid().optional(),
-    scope_kind: z.enum(["conversation"]).optional(),
-    scope_conversation_id: z.uuid().optional(),
-  })
-  .superRefine((q, ctx) => {
-    if (q.scope_kind === "conversation") {
-      if (!q.scope_conversation_id) {
-        ctx.addIssue({
-          code: "custom",
-          message:
-            "scope_conversation_id required when scope_kind=conversation",
-          path: ["scope_conversation_id"],
-        })
-      }
-      if (q.subject_kind !== "actor" && q.subject_kind !== "remote_agent") {
-        ctx.addIssue({
-          code: "custom",
-          message: `scope_kind=conversation only allowed with subject_kind=actor|remote_agent (got ${q.subject_kind})`,
-          path: ["scope_kind"],
-        })
-      }
-    }
-  })
+const listQuerySchema = ActiveDeviceCapabilitiesListQuerySchema
 
 function listQueryToInternalAccessTarget(
   workspaceId: string,
-  q: z.infer<typeof listQuerySchema>
+  q: ActiveDeviceCapabilitiesListQuery
 ): AccessTargetInput | null {
-  if (q.scope_kind === "conversation" && q.scope_conversation_id) {
-    if (q.subject_kind === "actor" && q.subject_actor_id) {
+  if (q.scopeKind === "conversation" && q.scopeConversationId) {
+    if (q.subjectKind === "actor" && q.subjectActorId) {
       return {
         kind: "actor",
-        actorId: q.subject_actor_id,
-        conversationId: q.scope_conversation_id,
+        actorId: q.subjectActorId,
+        conversationId: q.scopeConversationId,
       }
     }
-    if (q.subject_kind === "remote_agent" && q.subject_remote_agent_id) {
+    if (q.subjectKind === "remote_agent" && q.subjectRemoteAgentId) {
       return {
         kind: "remote_agent",
-        remoteAgentId: q.subject_remote_agent_id,
-        conversationId: q.scope_conversation_id,
+        remoteAgentId: q.subjectRemoteAgentId,
+        conversationId: q.scopeConversationId,
       }
     }
     return null
   }
-  switch (q.subject_kind) {
+  switch (q.subjectKind) {
     case "workspace":
       return { kind: "workspace", workspaceId }
     case "actor":
-      return q.subject_actor_id
-        ? { kind: "actor", actorId: q.subject_actor_id }
+      return q.subjectActorId
+        ? { kind: "actor", actorId: q.subjectActorId }
         : null
     case "conversation":
-      return q.subject_conversation_id
+      return q.subjectConversationId
         ? {
             kind: "conversation",
-            conversationId: q.subject_conversation_id,
+            conversationId: q.subjectConversationId,
           }
         : null
     case "remote_agent":
-      return q.subject_remote_agent_id
+      return q.subjectRemoteAgentId
         ? {
             kind: "remote_agent",
-            remoteAgentId: q.subject_remote_agent_id,
+            remoteAgentId: q.subjectRemoteAgentId,
           }
         : null
   }
@@ -200,26 +168,18 @@ async function assertTargetInWorkspace(
       return { ok: true }
     case "actor": {
       if (!target.actorId) return { ok: false, reason: "actorId required" }
-      const row = await db
-        .selectFrom("actors as actor")
-        .innerJoin("workspace_apps as app", "app.id", "actor.id")
-        .select("app.workspace_id as workspace_id")
-        .where("actor.id", "=", target.actorId)
-        .where("app.deleted_at", "is", null)
-        .executeTakeFirst()
-      if (!row || row.workspace_id !== workspaceId) {
+      const row = await findActorWorkspace(target.actorId)
+      if (!row || row.workspaceId !== workspaceId) {
         return {
           ok: false,
           reason: "actor not found in this workspace",
         }
       }
       if (target.conversationId) {
-        const conversation = await db
-          .selectFrom("conversations")
-          .select("workspace_id")
-          .where("id", "=", target.conversationId)
-          .executeTakeFirst()
-        if (!conversation || conversation.workspace_id !== workspaceId) {
+        const conversation = await findConversationWorkspace(
+          target.conversationId
+        )
+        if (!conversation || conversation.workspaceId !== workspaceId) {
           return {
             ok: false,
             reason: "conversation not found in this workspace",
@@ -231,12 +191,8 @@ async function assertTargetInWorkspace(
     case "conversation": {
       if (!target.conversationId)
         return { ok: false, reason: "conversationId required" }
-      const row = await db
-        .selectFrom("conversations")
-        .select("workspace_id")
-        .where("id", "=", target.conversationId)
-        .executeTakeFirst()
-      if (!row || row.workspace_id !== workspaceId) {
+      const row = await findConversationWorkspace(target.conversationId)
+      if (!row || row.workspaceId !== workspaceId) {
         return {
           ok: false,
           reason: "conversation not found in this workspace",
@@ -247,26 +203,18 @@ async function assertTargetInWorkspace(
     case "remote_agent": {
       if (!target.remoteAgentId)
         return { ok: false, reason: "remoteAgentId required" }
-      const row = await db
-        .selectFrom("remote_agents as agent")
-        .innerJoin("workspace_apps as app", "app.id", "agent.id")
-        .select("app.workspace_id as workspace_id")
-        .where("agent.id", "=", target.remoteAgentId)
-        .where("app.deleted_at", "is", null)
-        .executeTakeFirst()
-      if (!row || row.workspace_id !== workspaceId) {
+      const row = await findRemoteAgentWorkspace(target.remoteAgentId)
+      if (!row || row.workspaceId !== workspaceId) {
         return {
           ok: false,
           reason: "remote_agent not found in this workspace",
         }
       }
       if (target.conversationId) {
-        const conversation = await db
-          .selectFrom("conversations")
-          .select("workspace_id")
-          .where("id", "=", target.conversationId)
-          .executeTakeFirst()
-        if (!conversation || conversation.workspace_id !== workspaceId) {
+        const conversation = await findConversationWorkspace(
+          target.conversationId
+        )
+        if (!conversation || conversation.workspaceId !== workspaceId) {
           return {
             ok: false,
             reason: "conversation not found in this workspace",
@@ -283,17 +231,9 @@ async function assertCapabilitiesInWorkspace(
   capabilityIds: string[]
 ): Promise<{ ok: true } | { ok: false; missing: string[] }> {
   if (capabilityIds.length === 0) return { ok: true }
-  const rows = await db
-    .selectFrom("device_capabilities as capability")
-    .innerJoin("workspace_apps as app", "app.id", "capability.id")
-    .select(["capability.id as id", "app.workspace_id as workspace_id"])
-    .where("capability.id", "in", capabilityIds)
-    .where("app.deleted_at", "is", null)
-    .execute()
-  const ownedIds = new Set(
-    rows
-      .filter((r) => r.workspace_id === workspaceId)
-      .map((r) => r.id as string)
+  const ownedIds = await findOwnedDeviceCapabilityIds(
+    workspaceId,
+    capabilityIds
   )
   const missing = capabilityIds.filter((id) => !ownedIds.has(id))
   if (missing.length > 0) return { ok: false, missing }
@@ -306,10 +246,12 @@ export function registerDeviceAccessBindingRoutes(app: FastifyInstance): void {
   // workspace member without grant rights can't write bindings.
   const workspaceHook = { preHandler: [authMiddleware, workspaceMiddleware] }
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/devices/access-bindings",
-    workspaceHook,
-    async (request, reply) => {
+    { schema: ActiveDeviceCapabilitiesViewSchema, options: workspaceHook },
+    async (request, reply): Promise<undefined> => {
       const { workspaceId: pathWorkspaceId } = request.params as {
         workspaceId: string
       }
@@ -344,7 +286,7 @@ export function registerDeviceAccessBindingRoutes(app: FastifyInstance): void {
       )
         return
 
-      for (const capId of parsed.data.device_capability_ids) {
+      for (const capId of parsed.data.deviceCapabilityIds) {
         if (
           !(await requireRequestAction(
             request,
@@ -359,7 +301,7 @@ export function registerDeviceAccessBindingRoutes(app: FastifyInstance): void {
 
       let internalTarget: AccessTargetInput
       try {
-        internalTarget = wireTargetToInternalAccessTarget(parsed.data.target)
+        internalTarget = appTargetToInternalAccessTarget(parsed.data.target)
       } catch (err) {
         reply.status(400).send({
           code: "unsupported_target",
@@ -382,12 +324,12 @@ export function registerDeviceAccessBindingRoutes(app: FastifyInstance): void {
 
       const capabilitiesCheck = await assertCapabilitiesInWorkspace(
         pathWorkspaceId,
-        parsed.data.device_capability_ids
+        parsed.data.deviceCapabilityIds
       )
       if (!capabilitiesCheck.ok) {
         reply.status(400).send({
           code: "invalid_capability",
-          message: "one or more device_capability_ids not in this workspace",
+          message: "one or more deviceCapabilityIds not in this workspace",
           missing: capabilitiesCheck.missing,
         })
         return
@@ -399,11 +341,12 @@ export function registerDeviceAccessBindingRoutes(app: FastifyInstance): void {
         await setActiveDeviceCapabilitiesForTarget({
           workspaceId: pathWorkspaceId,
           target: internalTarget,
-          deviceCapabilityIds: parsed.data.device_capability_ids,
+          deviceCapabilityIds: parsed.data.deviceCapabilityIds,
           createdByWorkspaceMemberId: session?.workspaceMemberId ?? null,
           reason: parsed.data.reason,
         })
         reply.status(204).send()
+        return
       } catch (err) {
         reply
           .status(500)
@@ -412,9 +355,11 @@ export function registerDeviceAccessBindingRoutes(app: FastifyInstance): void {
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/devices/access-bindings",
-    workspaceHook,
+    { schema: ActiveDeviceCapabilitiesViewSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       const queryParsed = listQuerySchema.safeParse(request.query)
@@ -461,7 +406,7 @@ export function registerDeviceAccessBindingRoutes(app: FastifyInstance): void {
           workspaceId,
           target,
         })
-        reply.send({ device_capability_ids: ids })
+        return { deviceCapabilityIds: ids }
       } catch (err) {
         reply
           .status(500)

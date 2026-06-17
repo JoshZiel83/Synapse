@@ -12,14 +12,24 @@
 // Bootstrap (cloud), re-key (Case A/B), and the full pairing-session lookup
 // surface land in PR #5 + PR #12.
 
-import { z } from "zod"
 import { formatValidationDetails } from "../../infrastructure/validation-error.js"
 import type { FastifyInstance } from "fastify"
 import {
-  DEVICE_PAIRING_MODES,
-  DEVICE_SERVICE_KINDS,
-  DEVICE_TYPES,
+  ConsumePairingInputSchema,
+  CloudBootstrapInputSchema,
 } from "@synapse/device-protocol"
+import {
+  StartPairingInputSchema,
+  ClaimDaemonServiceInputSchema,
+  CreateCloudDeviceInputSchema,
+  CreateCloudDeviceResultViewSchema,
+  DeviceViewSchema,
+  DeviceListViewSchema,
+  DeviceDetailViewSchema,
+  DevicePairingTicketViewSchema,
+  DeviceServiceViewSchema,
+} from "@synapse/shared/schemas"
+import { appRoute, wireRoute } from "../../infrastructure/http/route.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { requireRequestAction } from "../access/guards.js"
@@ -33,37 +43,26 @@ import {
   listDevices,
   startPairing,
 } from "./service.js"
+import {
+  presentDevice,
+  presentDeviceDetail,
+  presentDevicePairingTicket,
+  presentDeviceService,
+} from "./presenter.js"
 import { consumeCloudBootstrap, createCloudDevicePairing } from "./cloud.js"
 
-const pairingModeSchema = z.enum(DEVICE_PAIRING_MODES)
-const serviceKindSchema = z.enum(DEVICE_SERVICE_KINDS)
-const deviceTypeSchema = z.enum(DEVICE_TYPES)
-
-const startPairingBodySchema = z.object({
-  mode: pairingModeSchema,
-  title: z.string().min(1).max(255).optional(),
-  description: z.string().max(2000).optional(),
-  device_type: deviceTypeSchema.optional(),
-  device_id: z.uuid().optional(),
-  context: z.record(z.string(), z.unknown()).optional(),
+// App-facing request bodies (camelCase, §5.1.1). workspaceId travels in the URL
+// param, so the body schema omits it from the shared logical input contract.
+export const startPairingBodySchema = StartPairingInputSchema.omit({
+  workspaceId: true,
 })
 
-const consumePairingBodySchema = z.object({
-  pairing_code: z.string().min(1),
-  device_pubkey: z.string().min(1),
-  service_pubkey: z.string().min(1),
-  service_kind: serviceKindSchema.default("device_runtime"),
-  client_version: z.string().optional(),
-  title: z.string().optional(),
-  device_type: deviceTypeSchema.optional(),
-  platform: z.string().optional(),
-  arch: z.string().optional(),
-})
+// WIRE — consume/bootstrap handshake bodies are snake_case wire contracts owned
+// by @synapse/device-protocol (single source for runtime client + SDK + API).
+const consumePairingBodySchema = ConsumePairingInputSchema
+const cloudBootstrapBodySchema = CloudBootstrapInputSchema
 
-const claimDaemonBodySchema = z.object({
-  service_kind: z.literal("remote_agent_daemon"),
-  remote_agent_machine_id: z.uuid(),
-})
+const claimDaemonBodySchema = ClaimDaemonServiceInputSchema
 
 function sendModuleError(reply: any, err: unknown) {
   if (err instanceof DeviceModuleError) {
@@ -107,9 +106,11 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
   const workspaceHook = { preHandler: [authMiddleware, workspaceMiddleware] }
   const authHook = { preHandler: [authMiddleware] }
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/devices",
-    workspaceHook,
+    { schema: DeviceListViewSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       if (
@@ -123,8 +124,8 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
       )
         return
       try {
-        const devices = await listDevices(workspaceId)
-        reply.send({ devices })
+        const records = await listDevices(workspaceId)
+        return records.map(presentDevice)
       } catch (err) {
         if (sendModuleError(reply, err)) return
         throw err
@@ -132,9 +133,11 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/devices/:deviceId",
-    workspaceHook,
+    { schema: DeviceDetailViewSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId, deviceId } = request.params as {
         workspaceId: string
@@ -151,7 +154,7 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
       )
         return
       try {
-        reply.send(await getDevice(workspaceId, deviceId))
+        return presentDeviceDetail(await getDevice(workspaceId, deviceId))
       } catch (err) {
         if (sendModuleError(reply, err)) return
         throw err
@@ -159,10 +162,12 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
     }
   )
 
-  app.delete(
+  appRoute(
+    app,
+    "DELETE",
     "/api/v1/workspaces/:workspaceId/devices/:deviceId",
-    workspaceHook,
-    async (request, reply) => {
+    { schema: DeviceDetailViewSchema, options: workspaceHook },
+    async (request, reply): Promise<undefined> => {
       const { workspaceId, deviceId } = request.params as {
         workspaceId: string
         deviceId: string
@@ -180,6 +185,7 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
       try {
         await deleteDevice(workspaceId, deviceId)
         reply.status(204).send()
+        return
       } catch (err) {
         if (sendModuleError(reply, err)) return
         throw err
@@ -187,9 +193,11 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/devices/pairing-sessions",
-    workspaceHook,
+    { schema: DevicePairingTicketViewSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       if (
@@ -222,11 +230,11 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
             `http://${request.headers.host ?? "localhost"}`,
           title: parsed.data.title,
           description: parsed.data.description,
-          deviceType: parsed.data.device_type,
-          deviceId: parsed.data.device_id,
+          deviceType: parsed.data.deviceType,
+          deviceId: parsed.data.deviceId,
           context: parsed.data.context,
         })
-        reply.send(result)
+        return presentDevicePairingTicket(result)
       } catch (err) {
         if (sendModuleError(reply, err)) return
         throw err
@@ -235,9 +243,12 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
   )
 
   // Unauthenticated: pairing_code is the bearer credential (rate-limited at
-  // the edge, not in this handler).
-  app.post(
+  // the edge, not in this handler). WIRE — daemon handshake; bare payload.
+  wireRoute(
+    app,
+    "POST",
     "/api/v1/devices/pairing-sessions/consume",
+    {},
     async (request, reply) => {
       const parsed = consumePairingBodySchema.safeParse(request.body)
       if (!parsed.success) {
@@ -270,9 +281,11 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/devices/:deviceId/services",
-    workspaceHook,
+    { schema: DeviceServiceViewSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId, deviceId } = request.params as {
         workspaceId: string
@@ -300,9 +313,9 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
         const service = await claimRemoteAgentDaemon({
           workspaceId,
           deviceId,
-          remoteAgentMachineId: parsed.data.remote_agent_machine_id,
+          remoteAgentMachineId: parsed.data.remoteAgentMachineId,
         })
-        reply.send(service)
+        return presentDeviceService(service)
       } catch (err) {
         if (sendModuleError(reply, err)) return
         throw err
@@ -310,10 +323,12 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
     }
   )
 
-  app.delete(
+  appRoute(
+    app,
+    "DELETE",
     "/api/v1/workspaces/:workspaceId/devices/:deviceId/services/:serviceId",
-    workspaceHook,
-    async (request, reply) => {
+    { schema: DeviceServiceViewSchema, options: workspaceHook },
+    async (request, reply): Promise<undefined> => {
       const { workspaceId, deviceId, serviceId } = request.params as {
         workspaceId: string
         deviceId: string
@@ -332,6 +347,7 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
       try {
         await detachDeviceService(workspaceId, deviceId, serviceId)
         reply.status(204).send()
+        return
       } catch (err) {
         if (sendModuleError(reply, err)) return
         throw err
@@ -347,9 +363,11 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
   // bootstrap_token for the API server to inject into the sandbox env.
   // The actual sandbox provisioning is the operator's responsibility (or a
   // host_provider plugin); the API just hands back the token.
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/devices/cloud",
-    workspaceHook,
+    { schema: CreateCloudDeviceResultViewSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       if (
@@ -362,22 +380,32 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
         ))
       )
         return
-      const body = request.body as {
-        title?: string
-        preset?: string
-        host_provider?: string
+      // Body carries title/preset/hostProvider (camelCase, §5.1.1); workspaceId
+      // travels in the URL param. title/hostProvider are already optional on the
+      // shared schema (server applies defaults), so the SDK and server validate
+      // the identical body shape.
+      const cloudBodySchema = CreateCloudDeviceInputSchema.omit({
+        workspaceId: true,
+      })
+      const parsedBody = cloudBodySchema.safeParse(request.body)
+      if (!parsedBody.success) {
+        reply.status(400).send({
+          code: "invalid_request",
+          details: formatValidationDetails(parsedBody.error),
+        })
+        return
       }
       const session = (request as { session?: { workspaceMemberId?: string } })
         .session
       try {
         const result = await createCloudDevicePairing({
           workspaceId,
-          title: body.title ?? "Cloud Device",
-          preset: body.preset,
-          hostProvider: body.host_provider,
+          title: parsedBody.data.title ?? "Cloud Device",
+          preset: parsedBody.data.preset,
+          hostProvider: parsedBody.data.hostProvider,
           requestedByWorkspaceMemberId: session?.workspaceMemberId ?? null,
         })
-        reply.send(result)
+        return result
       } catch (err) {
         if (sendModuleError(reply, err)) return
         throw err
@@ -388,40 +416,41 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
   // Sandbox boot handler — runs INSIDE the sandbox. Unauthenticated;
   // bootstrap_token (sha256-hashed and matched against
   // device_pairing_sessions.bootstrap_token_hash) is the credential.
-  app.post("/api/v1/devices/bootstrap", async (request, reply) => {
-    const body = request.body as {
-      bootstrap_token?: string
-      device_pubkey?: string
-      service_pubkey?: string
-      client_version?: string
-      host_provider?: string
-      platform?: string
-      arch?: string
+  // WIRE — machine bootstrap handshake; bare payload.
+  wireRoute(
+    app,
+    "POST",
+    "/api/v1/devices/bootstrap",
+    {},
+    async (request, reply) => {
+      const parsed = cloudBootstrapBodySchema.safeParse(request.body)
+      if (!parsed.success) {
+        reply.status(400).send({
+          code: "invalid_request",
+          message: "bootstrap_token, device_pubkey, service_pubkey required",
+          details: formatValidationDetails(parsed.error),
+        })
+        return
+      }
+      const body = parsed.data
+      try {
+        const result = await consumeCloudBootstrap(
+          {
+            bootstrapToken: body.bootstrap_token,
+            devicePubkey: body.device_pubkey,
+            servicePubkey: body.service_pubkey,
+            clientVersion: body.client_version,
+            hostProvider: body.host_provider,
+            platform: body.platform,
+            arch: body.arch,
+          },
+          { controlPlaneUrl: resolveControlPlaneUrl() }
+        )
+        reply.send(result)
+      } catch (err) {
+        if (sendModuleError(reply, err)) return
+        throw err
+      }
     }
-    if (!body?.bootstrap_token || !body.device_pubkey || !body.service_pubkey) {
-      reply.status(400).send({
-        code: "invalid_request",
-        message: "bootstrap_token, device_pubkey, service_pubkey required",
-      })
-      return
-    }
-    try {
-      const result = await consumeCloudBootstrap(
-        {
-          bootstrapToken: body.bootstrap_token,
-          devicePubkey: body.device_pubkey,
-          servicePubkey: body.service_pubkey,
-          clientVersion: body.client_version,
-          hostProvider: body.host_provider,
-          platform: body.platform,
-          arch: body.arch,
-        },
-        { controlPlaneUrl: resolveControlPlaneUrl() }
-      )
-      reply.send(result)
-    } catch (err) {
-      if (sendModuleError(reply, err)) return
-      throw err
-    }
-  })
+  )
 }

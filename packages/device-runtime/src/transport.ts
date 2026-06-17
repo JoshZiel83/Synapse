@@ -4,11 +4,13 @@
 
 import WebSocket from "ws"
 import { randomUUID } from "node:crypto"
-import type {
-  DeviceHelloParams,
-  DeviceServiceKind,
-  JsonRpcRequest,
-  JsonRpcResponse,
+import {
+  JsonRpcRequestSchema,
+  JsonRpcResponseSchema,
+  type DeviceHelloParams,
+  type DeviceServiceKind,
+  type JsonRpcRequest,
+  type JsonRpcResponse,
 } from "@synapse/device-protocol"
 import { computeBackoff } from "@synapse/shared"
 import type { RuntimeLogger, RuntimeStatus } from "./types.js"
@@ -39,6 +41,36 @@ export interface PendingRequest {
 }
 
 const REQUEST_TIMEOUT_MS = 15_000
+
+export type ControlPlaneInboundFrame =
+  | { type: "request"; request: JsonRpcRequest }
+  | { type: "response"; response: JsonRpcResponse }
+
+export function parseControlPlaneInboundFrame(
+  raw: string
+): ControlPlaneInboundFrame | null {
+  let json: unknown
+  try {
+    json = JSON.parse(raw)
+  } catch {
+    return null
+  }
+
+  const response = JsonRpcResponseSchema.safeParse(json)
+  if (
+    response.success &&
+    (response.data.result !== undefined || response.data.error !== undefined)
+  ) {
+    return { type: "response", response: response.data }
+  }
+
+  const request = JsonRpcRequestSchema.safeParse(json)
+  if (request.success) {
+    return { type: "request", request: request.data }
+  }
+
+  return null
+}
 
 export class TransportClient {
   private socket: WebSocket | null = null
@@ -249,17 +281,10 @@ export class TransportClient {
 
       socket.on("message", (raw) => {
         const text = raw.toString()
-        let parsed: JsonRpcResponse | JsonRpcRequest
-        try {
-          parsed = JSON.parse(text)
-        } catch {
-          return
-        }
-        if (
-          typeof (parsed as JsonRpcResponse).id !== "undefined" &&
-          ("result" in parsed || "error" in parsed)
-        ) {
-          const resp = parsed as JsonRpcResponse
+        const parsed = parseControlPlaneInboundFrame(text)
+        if (!parsed) return
+        if (parsed.type === "response") {
+          const resp = parsed.response
           const id = String(resp.id)
           const pending = this.pending.get(id)
           if (pending) {
@@ -275,7 +300,7 @@ export class TransportClient {
           }
           return
         }
-        const req = parsed as JsonRpcRequest
+        const req = parsed.request
         if (req.method === "server.challenge") {
           const params = req.params as { nonce?: unknown } | undefined
           if (params && typeof params.nonce === "string") {

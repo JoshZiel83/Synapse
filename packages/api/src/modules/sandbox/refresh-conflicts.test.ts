@@ -18,12 +18,11 @@ import {
   resolveFsHelperPath,
   materializeSnapshot,
 } from "./materialize.js"
+import { refreshSpaces, type RefreshDeps } from "./service.js"
 import {
-  refreshSpaces,
   mergePendingRefreshConflicts,
   normalizePendingRefresh,
-  type RefreshDeps,
-} from "./service.js"
+} from "./pending-conflicts.js"
 
 let helperAvailable = true
 try {

@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { describeTransportKind, isTransportKind } from "./index.js"
+import { describeTransportKind, isTransportKind } from "../constants/enums.js"
 import { TRANSPORT_KINDS } from "../constants/enums.js"
 
 test("isTransportKind: accepts every value in TRANSPORT_KINDS", () => {

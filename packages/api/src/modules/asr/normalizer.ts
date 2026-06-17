@@ -3,23 +3,36 @@ import type {
   RealtimeAsrSocketEventPayloadMap,
 } from "@synapse/shared"
 import type { IsoInstantString } from "@synapse/shared/datetime"
+import { z } from "zod"
 
-type ProviderUtterance = {
-  text?: string
-  start_time?: number
-  end_time?: number
-  definite?: boolean
-}
+const ProviderUtteranceSchema = z
+  .object({
+    text: z.string().optional(),
+    start_time: z.number().optional(),
+    end_time: z.number().optional(),
+    definite: z.boolean().optional(),
+  })
+  .passthrough()
 
-type ProviderPayload = {
-  result?: {
-    text?: string
-    utterances?: ProviderUtterance[]
-  }
-  audio_info?: {
-    duration?: number
-  }
-}
+const ProviderPayloadSchema = z
+  .object({
+    result: z
+      .object({
+        text: z.string().optional(),
+        utterances: z.array(ProviderUtteranceSchema).optional(),
+      })
+      .passthrough()
+      .optional(),
+    audio_info: z
+      .object({
+        duration: z.number().optional(),
+      })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough()
+
+type ProviderPayload = z.infer<typeof ProviderPayloadSchema>
 
 export type NormalizedAsrEvents = {
   partial?: RealtimeAsrSocketEventPayloadMap["asr.partial"]
@@ -27,8 +40,9 @@ export type NormalizedAsrEvents = {
   completed?: RealtimeAsrSocketEventPayloadMap["asr.completed"]
 }
 
-function isProviderPayload(value: unknown): value is ProviderPayload {
-  return Boolean(value && typeof value === "object")
+function parseProviderPayload(value: unknown): ProviderPayload | null {
+  const parsed = ProviderPayloadSchema.safeParse(value)
+  return parsed.success ? parsed.data : null
 }
 
 export class AsrResultAccumulator {
@@ -43,17 +57,16 @@ export class AsrResultAccumulator {
     receivedAt: IsoInstantString,
     isFinal: boolean
   ): NormalizedAsrEvents {
-    if (!isProviderPayload(payload)) {
+    const providerPayload = parseProviderPayload(payload)
+    if (!providerPayload) {
       return { segmentFinals: [] }
     }
 
     const segmentFinals: RealtimeAsrFinalSegment[] = []
-    const utterances = Array.isArray(payload.result?.utterances)
-      ? (payload.result?.utterances ?? [])
-      : []
+    const utterances = providerPayload.result?.utterances ?? []
 
-    if (typeof payload.audio_info?.duration === "number") {
-      this.lastDurationMs = payload.audio_info.duration
+    if (typeof providerPayload.audio_info?.duration === "number") {
+      this.lastDurationMs = providerPayload.audio_info.duration
     }
 
     const definiteUtterances = utterances.filter(
@@ -79,8 +92,8 @@ export class AsrResultAccumulator {
     }
 
     const displayText =
-      typeof payload.result?.text === "string"
-        ? payload.result.text
+      typeof providerPayload.result?.text === "string"
+        ? providerPayload.result.text
         : this.lastDisplayText
     const finalizedText = this.finalizedSegments
       .map((segment) => segment.text)

@@ -27,6 +27,10 @@ import {
   type NormalizedSkillFile,
   type SkillFileInput,
 } from "./manifest.js"
+import {
+  parseClawhubMirrorMetaJson,
+  parseGitHubApiJsonObjectText,
+} from "./mirror-import-codec.js"
 
 type JsonObject = Record<string, unknown>
 
@@ -88,7 +92,13 @@ const TEXT_EXTENSIONS = new Set([
 
 const GITHUB_RAW_FETCH_TIMEOUT_MS = 12_000
 const CLAWHUB_DOWNLOAD_TIMEOUT_MS = 30_000
+
 const CLAWHUB_OFFICIAL_DOWNLOAD_ORIGIN = "https://skills.volces.com"
+
+export {
+  parseClawhubMirrorMetaJson,
+  parseGitHubApiJsonObjectText,
+} from "./mirror-import-codec.js"
 
 function extname(path: string) {
   const index = path.lastIndexOf(".")
@@ -135,7 +145,10 @@ function buildClawhubLocatorKey(ownerKey: string | undefined, slug: string) {
     : `clawhub:${slug}`
 }
 
-async function fetchJson<T>(url: string, headers?: Record<string, string>) {
+async function fetchJson<T extends JsonObject>(
+  url: string,
+  headers?: Record<string, string>
+) {
   const response = await fetch(url, {
     headers: {
       Accept: "application/vnd.github+json",
@@ -146,7 +159,10 @@ async function fetchJson<T>(url: string, headers?: Record<string, string>) {
   if (!response.ok) {
     throw new Error(`Failed to fetch ${url}: ${response.status}`)
   }
-  return (await response.json()) as T
+  return parseGitHubApiJsonObjectText(
+    await response.text(),
+    `GitHub API response from ${url}`
+  ) as T
 }
 
 async function fetchBuffer(
@@ -598,19 +614,7 @@ async function importClawhubArchiveBuffer(params: {
 }): Promise<ImportedMirrorSkillPackage> {
   const entryPaths = await readZipEntries(params.buffer)
   const metaText = await readZipEntryText(params.buffer, "_meta.json")
-  const meta = JSON.parse(metaText) as {
-    ownerId?: string
-    owner?: string
-    slug?: string
-    displayName?: string
-    version?: string
-    publishedAt?: number
-    latest?: {
-      version?: string
-      publishedAt?: number
-      commit?: string
-    }
-  }
+  const meta = parseClawhubMirrorMetaJson(metaText)
 
   if (!meta.slug) {
     throw new Error("Clawhub skill archive is missing _meta.json slug")
@@ -746,13 +750,10 @@ export async function importClawhubSeedSkillPackage(input: {
     resolve(input.skillDir, "_meta.json"),
     "utf8"
   )
-  const meta = JSON.parse(metaText) as {
-    ownerId?: string
-    owner?: string
-    slug?: string
-    version?: string
-    publishedAt?: number
-  }
+  const meta = parseClawhubMirrorMetaJson(
+    metaText,
+    `Clawhub seed metadata in ${input.skillDir}`
+  )
 
   const ownerKey = meta.ownerId?.trim() || meta.owner?.trim()
   if (!ownerKey || !meta.slug) {

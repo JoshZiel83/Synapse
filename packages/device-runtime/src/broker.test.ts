@@ -1,10 +1,13 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { createFileBackedBroker } from "./broker.js"
+import {
+  createFileBackedBroker,
+  readPrivateKeyPemFromKeystoreFile,
+} from "./broker.js"
 
 test("file-backed broker round-trips identity + key pair", async () => {
   const dir = mkdtempSync(join(tmpdir(), "synapse-device-broker-"))
@@ -42,6 +45,78 @@ test("file-backed broker round-trips identity + key pair", async () => {
     const reread = await broker.loadKeyPair(deviceKey.privateKeyRef)
     assert.ok(reread)
     assert.equal(reread!.publicKeyFingerprint, deviceKey.publicKeyFingerprint)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("file-backed broker rejects malformed identity state", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "synapse-device-broker-"))
+  try {
+    const broker = createFileBackedBroker({ brokerDir: dir })
+    writeFileSync(
+      join(dir, "device-identity.json"),
+      JSON.stringify({
+        deviceId: "dev-1",
+        serverOrigin: "http://localhost:3001",
+        hostKind: "browser",
+        devicePubkeyFingerprint: "fp",
+        devicePrivateKeyRef: "local:device",
+        services: [],
+      })
+    )
+
+    assert.equal(await broker.loadDeviceIdentity(), null)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("file-backed broker rejects malformed keystore state", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "synapse-device-broker-"))
+  const keystorePath = join(dir, "device-keys.json")
+  try {
+    const broker = createFileBackedBroker({ brokerDir: dir })
+    writeFileSync(
+      keystorePath,
+      JSON.stringify({
+        "local:service": {
+          publicKey: "public-pem",
+          privateKey: 123,
+          publicKeyFingerprint: "fingerprint",
+        },
+      })
+    )
+
+    assert.equal(await broker.loadKeyPair("local:service"), null)
+    assert.equal(
+      readPrivateKeyPemFromKeystoreFile(keystorePath, "local:service"),
+      null
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("file-backed broker reads private PEM through keystore codec", () => {
+  const dir = mkdtempSync(join(tmpdir(), "synapse-device-broker-"))
+  const keystorePath = join(dir, "device-keys.json")
+  try {
+    writeFileSync(
+      keystorePath,
+      JSON.stringify({
+        "local:service": {
+          publicKey: "public-pem",
+          privateKey: "private-pem",
+          publicKeyFingerprint: "fingerprint",
+        },
+      })
+    )
+
+    assert.equal(
+      readPrivateKeyPemFromKeystoreFile(keystorePath, "local:service"),
+      "private-pem"
+    )
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

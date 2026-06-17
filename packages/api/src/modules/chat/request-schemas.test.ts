@@ -5,6 +5,10 @@ import {
   chatConversationParamsSchema,
   chatWorkspaceParamsSchema,
 } from "./request-schemas.js"
+import {
+  ChatClientInstanceRegistrationInputSchema,
+  ChatConversationCreateInputSchema,
+} from "@synapse/shared/schemas"
 
 const workspaceId = "56329471-d496-49df-b839-aecbb0669d9d"
 const clientInstanceId = "0f4b0c78-1d6a-43b9-8e76-0fdbf6fa4e2a"
@@ -60,4 +64,31 @@ test("chat conversation params accept UUID ids", () => {
     workspaceId,
     conversationId,
   })
+})
+
+test("chat app input metadata is an open object record, not array or scalar", () => {
+  const create = ChatConversationCreateInputSchema.parse({
+    clientRequestId: "6d1b7324-5b91-45b8-8d41-a626f575cefb",
+    kind: "group",
+    metadata: { nested: { source: "test" }, pinned: true },
+  })
+  assert.deepEqual(create.metadata, {
+    nested: { source: "test" },
+    pinned: true,
+  })
+
+  assert.equal(
+    ChatConversationCreateInputSchema.safeParse({
+      clientRequestId: "6d1b7324-5b91-45b8-8d41-a626f575cefb",
+      kind: "group",
+      metadata: ["not", "a", "record"],
+    }).success,
+    false
+  )
+  assert.equal(
+    ChatClientInstanceRegistrationInputSchema.safeParse({
+      metadata: "not-a-record",
+    }).success,
+    false
+  )
 })

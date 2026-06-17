@@ -1,4 +1,9 @@
-import { normalizeActorDocs, textBlocks } from "@synapse/shared"
+import {
+  ACTOR_PACKAGE_DEPENDENCY_KIND,
+  ACTOR_PACKAGE_TARGET_KIND,
+  normalizeActorDocs,
+  textBlocks,
+} from "@synapse/shared"
 import type {
   ActorDefinition,
   ActorPackageDependency,
@@ -125,8 +130,8 @@ export const builtinActorPackageSeeds: BuiltinActorPackageSeed[] = [
     releaseNotes: textBlocks("Initial official release."),
     dependencies: [
       {
-        requirementKind: "required",
-        targetPackageKind: "plugin",
+        requirementKind: ACTOR_PACKAGE_DEPENDENCY_KIND.REQUIRED,
+        targetPackageKind: ACTOR_PACKAGE_TARGET_KIND.PLUGIN,
         targetPublisherSlug: "z_ai",
         targetPackageSlug: "toolkit",
         acceptableReuseScopes: ["workspace", "actor", "conversation"],
@@ -245,8 +250,8 @@ export const builtinActorPackageSeeds: BuiltinActorPackageSeed[] = [
     releaseNotes: textBlocks("Initial official release."),
     dependencies: [
       {
-        requirementKind: "recommended",
-        targetPackageKind: "plugin",
+        requirementKind: ACTOR_PACKAGE_DEPENDENCY_KIND.RECOMMENDED,
+        targetPackageKind: ACTOR_PACKAGE_TARGET_KIND.PLUGIN,
         targetPublisherSlug: "z_ai",
         targetPackageSlug: "toolkit",
         acceptableReuseScopes: ["workspace", "actor", "conversation"],

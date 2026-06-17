@@ -1,25 +1,23 @@
 import type { FastifyInstance } from "fastify"
-import { db } from "../../infrastructure/database/kysely.js"
+import {
+  AuditLogListQuerySchema,
+  AuditLogListViewSchema,
+} from "@synapse/shared/schemas"
+import { appRoute } from "../../infrastructure/http/route.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { requireRequestAction } from "../access/guards.js"
-import { z } from "zod"
-
-const querySchema = z.object({
-  workspaceId: z.uuid().optional(),
-  action: z.string().optional(),
-  resourceType: z.string().optional(),
-  resourceId: z.uuid().optional(),
-  page: z.coerce.number().default(1),
-  pageSize: z.coerce.number().default(50),
-})
+import { presentAuditLogList } from "./presenter.js"
+import { countWorkspaceAuditLogs, listWorkspaceAuditLogs } from "./repo.js"
 
 export default async function auditModule(app: FastifyInstance) {
-  // List audit logs for a workspace
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/audit-logs",
     {
-      preHandler: [authMiddleware, workspaceMiddleware],
+      schema: AuditLogListViewSchema,
+      options: { preHandler: [authMiddleware, workspaceMiddleware] },
     },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
@@ -32,61 +30,26 @@ export default async function auditModule(app: FastifyInstance) {
       )
       if (!allowed) return
 
-      const qs = querySchema.parse(request.query)
+      const qs = AuditLogListQuerySchema.parse(request.query)
 
       const offset = (qs.page - 1) * qs.pageSize
-      let countQuery = db
-        .selectFrom("audit_logs as al")
-        .select(({ fn }) => fn.countAll<string>().as("count"))
-        .where("al.workspace_id", "=", workspaceId)
-      let dataQuery = db
-        .selectFrom("audit_logs as al")
-        .leftJoin("users as u", "u.id", "al.user_id")
-        .leftJoin("actors as a", "a.id", "al.actor_id")
-        .leftJoin("workspace_apps as actor_app", "actor_app.id", "a.id")
-        .select([
-          "al.id",
-          "al.action",
-          "al.resource_type as resourceType",
-          "al.resource_id as resourceId",
-          "al.user_id as userId",
-          "al.actor_id as actorId",
-          "al.details",
-          "al.ip_address as ipAddress",
-          "al.created_at as createdAt",
-          "u.email as userName",
-          "actor_app.display_name as actorName",
-        ])
-        .where("al.workspace_id", "=", workspaceId)
-
-      if (qs.action) {
-        countQuery = countQuery.where("al.action", "=", qs.action)
-        dataQuery = dataQuery.where("al.action", "=", qs.action)
-      }
-      if (qs.resourceType) {
-        countQuery = countQuery.where("al.resource_type", "=", qs.resourceType)
-        dataQuery = dataQuery.where("al.resource_type", "=", qs.resourceType)
-      }
-      if (qs.resourceId) {
-        countQuery = countQuery.where("al.resource_id", "=", qs.resourceId)
-        dataQuery = dataQuery.where("al.resource_id", "=", qs.resourceId)
+      const filters = {
+        action: qs.action,
+        resourceType: qs.resourceType,
+        resourceId: qs.resourceId,
       }
 
-      const [countResult, items] = await Promise.all([
-        countQuery.executeTakeFirst(),
-        dataQuery
-          .orderBy("al.created_at", "desc")
-          .limit(qs.pageSize)
-          .offset(offset)
-          .execute(),
+      const [total, items] = await Promise.all([
+        countWorkspaceAuditLogs(workspaceId, filters),
+        listWorkspaceAuditLogs(workspaceId, filters, qs.pageSize, offset),
       ])
 
-      return {
+      return presentAuditLogList({
         items,
-        total: parseInt(countResult?.count || "0", 10),
+        total,
         page: qs.page,
         pageSize: qs.pageSize,
-      }
+      })
     }
   )
 }

@@ -13,11 +13,18 @@
  */
 
 import type { FastifyInstance } from "fastify"
-import { z } from "zod"
+import { DINGTALK_DEVICE_FLOW_STATUS } from "@synapse/shared"
 import {
-  serializeInstant,
-  serializeNowInstant,
-} from "../../../infrastructure/datetime.js"
+  DingtalkDeviceFlowStartInputSchema,
+  DingtalkDeviceFlowPollResponseSchema,
+  DingtalkDeviceFlowStartResponseSchema,
+  DingtalkManualAccountCreateInputSchema,
+  TransportAccountResponseSchema,
+  type DingtalkDeviceFlowStartParsedInput,
+} from "@synapse/shared/schemas"
+import { appRoute } from "../../../infrastructure/http/route.js"
+import { serializeNowInstant } from "../../../infrastructure/datetime.js"
+import { presentDingtalkDeviceFlowSession } from "../presenter.js"
 import type {
   DingtalkDeviceFlowPollResponse,
   DingtalkDeviceFlowSessionSummary,
@@ -42,13 +49,7 @@ import {
   type DingtalkRegistrationSession,
   type RegistrationSessionStatus,
 } from "../connectors/dingtalk/registration-session-store.js"
-import {
-  requireWorkspaceAction,
-  transportAccountInboundActorCreateShape,
-  transportAccountOwnerCreateShape,
-  validateTransportAccountInboundActorCreate,
-  validateTransportAccountOwnerCreate,
-} from "./_shared.js"
+import { requireWorkspaceAction } from "./_shared.js"
 
 // Number of consecutive provider transient failures we tolerate before
 // flipping the session to `fail`. Five matches the plan; the 1-4 fall
@@ -58,28 +59,8 @@ const TRANSIENT_FAILURE_LIMIT = 5
 
 // ───────────────────────── schemas ─────────────────────────
 
-const accountOwnerInboundShape = {
-  ...transportAccountOwnerCreateShape,
-  ...transportAccountInboundActorCreateShape,
-}
-
-const deviceFlowStartSchema = z
-  .object({
-    displayName: z.string().trim().min(1).max(255),
-    ...accountOwnerInboundShape,
-  })
-  .superRefine(validateTransportAccountOwnerCreate)
-  .superRefine(validateTransportAccountInboundActorCreate)
-
-const manualAccountSchema = z
-  .object({
-    clientId: z.string().trim().min(8).max(255),
-    clientSecret: z.string().trim().min(8).max(255),
-    displayName: z.string().trim().min(1).max(255),
-    ...accountOwnerInboundShape,
-  })
-  .superRefine(validateTransportAccountOwnerCreate)
-  .superRefine(validateTransportAccountInboundActorCreate)
+const deviceFlowStartSchema = DingtalkDeviceFlowStartInputSchema
+const manualAccountSchema = DingtalkManualAccountCreateInputSchema
 
 // ───────────────────────── helpers ─────────────────────────
 
@@ -102,21 +83,8 @@ async function buildSummary(
     const account = await getAccountById(session.transportAccountId)
     transportAccount = account ?? undefined
   }
-  return {
-    sessionId: session.sessionId,
-    workspaceId: session.workspaceId,
-    status: session.status,
-    message: session.message,
-    verificationUriComplete: session.verificationUriComplete,
-    verificationUri: session.verificationUri,
-    userCode: session.userCode,
-    expiresInSeconds: session.expiresInSeconds,
-    intervalSeconds: session.intervalSeconds,
-    createdAt: serializeInstant(new Date(session.createdAt)),
-    updatedAt: serializeInstant(new Date(session.updatedAt)),
-    expiresAt: serializeInstant(new Date(session.expiresAt)),
-    transportAccount,
-  }
+  // Pure ms→ISO presentation lives in the presenter (guard-layering r3).
+  return presentDingtalkDeviceFlowSession(session, transportAccount)
 }
 
 function getActiveProvider(): RegistrationProvider | null {
@@ -135,7 +103,7 @@ async function persistSession(
   store: SessionStore,
   session: DingtalkRegistrationSession
 ): Promise<void> {
-  if (session.status === "waiting") {
+  if (session.status === DINGTALK_DEVICE_FLOW_STATUS.WAITING) {
     await store.set(session)
     return
   }
@@ -171,7 +139,7 @@ const defaultSessionStore: SessionStore = {
 
 async function handleStartDeviceFlow(
   workspaceId: string,
-  input: z.infer<typeof deviceFlowStartSchema>,
+  input: DingtalkDeviceFlowStartParsedInput,
   deps: StartRouteDeps
 ): Promise<DingtalkDeviceFlowStartResponse> {
   const provider = deps.provider
@@ -216,7 +184,7 @@ async function handleStartDeviceFlow(
     expiresAt: now + begin.expiresInSeconds * 1000,
     createdAt: now,
     updatedAt: now,
-    status: "waiting",
+    status: DINGTALK_DEVICE_FLOW_STATUS.WAITING,
     providerFailureCount: 0,
     message: "Scan the QR code with the DingTalk mobile app to continue.",
     // pendingForm carries the caller's display/owner/inboundActor choices
@@ -272,7 +240,7 @@ async function handlePollDeviceFlow(
 
   // Terminal-state short-circuit — return summary without re-polling provider
   // or re-running persist. Defends against polling/refresh after success.
-  if (existing.status !== "waiting") {
+  if (existing.status !== DINGTALK_DEVICE_FLOW_STATUS.WAITING) {
     // Special case: status="waiting" in store but past expiry → flip to
     // expired in the grace window before Redis evicts the key.
     return {
@@ -283,7 +251,7 @@ async function handlePollDeviceFlow(
   if (existing.expiresAt <= now) {
     const expired: DingtalkRegistrationSession = {
       ...existing,
-      status: "expired",
+      status: DINGTALK_DEVICE_FLOW_STATUS.EXPIRED,
       message: "Device code expired; please restart the registration flow.",
       updatedAt: now,
     }
@@ -300,7 +268,7 @@ async function handlePollDeviceFlow(
     // re-route to manual.
     const failed: DingtalkRegistrationSession = {
       ...existing,
-      status: "fail",
+      status: DINGTALK_DEVICE_FLOW_STATUS.FAIL,
       message:
         "DingTalk Device Flow is currently disabled; use the manual route",
       updatedAt: now,
@@ -319,7 +287,7 @@ async function handlePollDeviceFlow(
     if (err instanceof RegistrationBusinessError) {
       const failed: DingtalkRegistrationSession = {
         ...existing,
-        status: "fail",
+        status: DINGTALK_DEVICE_FLOW_STATUS.FAIL,
         message: err.message,
         updatedAt: now,
         providerFailureCount: 0,
@@ -335,7 +303,7 @@ async function handlePollDeviceFlow(
       if (nextCount >= TRANSIENT_FAILURE_LIMIT) {
         const failed: DingtalkRegistrationSession = {
           ...existing,
-          status: "fail",
+          status: DINGTALK_DEVICE_FLOW_STATUS.FAIL,
           message: "provider unreachable",
           updatedAt: now,
           providerFailureCount: 0,
@@ -367,7 +335,7 @@ async function handlePollDeviceFlow(
   }
 
   switch (pollResult.status) {
-    case "waiting": {
+    case DINGTALK_DEVICE_FLOW_STATUS.WAITING: {
       const next: DingtalkRegistrationSession = {
         ...existing,
         ...baseUpdate,
@@ -379,8 +347,8 @@ async function handlePollDeviceFlow(
         body: { session: await buildSummary(next, getAccount) },
       }
     }
-    case "fail":
-    case "expired": {
+    case DINGTALK_DEVICE_FLOW_STATUS.FAIL:
+    case DINGTALK_DEVICE_FLOW_STATUS.EXPIRED: {
       const next: DingtalkRegistrationSession = {
         ...existing,
         ...baseUpdate,
@@ -394,12 +362,12 @@ async function handlePollDeviceFlow(
         body: { session: await buildSummary(next, getAccount) },
       }
     }
-    case "success": {
+    case DINGTALK_DEVICE_FLOW_STATUS.SUCCESS: {
       if (!pollResult.clientId || !pollResult.clientSecret) {
         const failed: DingtalkRegistrationSession = {
           ...existing,
           ...baseUpdate,
-          status: "fail",
+          status: DINGTALK_DEVICE_FLOW_STATUS.FAIL,
           message: "provider reported success but did not include credentials",
           updatedAt: now,
         }
@@ -427,7 +395,7 @@ async function handlePollDeviceFlow(
       const next: DingtalkRegistrationSession = {
         ...existing,
         ...baseUpdate,
-        status: "success",
+        status: DINGTALK_DEVICE_FLOW_STATUS.SUCCESS,
         message: "DingTalk account connected.",
         transportAccountId: account.id,
         updatedAt: now,
@@ -442,7 +410,7 @@ async function handlePollDeviceFlow(
       const failed: DingtalkRegistrationSession = {
         ...existing,
         ...baseUpdate,
-        status: "fail",
+        status: DINGTALK_DEVICE_FLOW_STATUS.FAIL,
         message:
           "registration provider returned unrecognized status; please retry or fall back to manual",
         updatedAt: now,
@@ -527,11 +495,11 @@ export default async function imDingtalkController(
 ): Promise<void> {
   installGenericRouteGuard(app)
 
-  app.post<{
-    Params: { workspaceId: string }
-    Body: unknown
-  }>(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/im/accounts/dingtalk/device-registration/start",
+    { schema: DingtalkDeviceFlowStartResponseSchema },
     async (request, reply) => {
       const allowed = await requireWorkspaceAction(
         request,
@@ -540,21 +508,21 @@ export default async function imDingtalkController(
         "Not allowed to manage IM accounts in this workspace"
       )
       if (!allowed) return
+      const params = request.params as { workspaceId: string }
       const body = deviceFlowStartSchema.parse(request.body)
       const provider = getActiveProvider()
-      const result = await handleStartDeviceFlow(
-        request.params.workspaceId,
-        body,
-        { provider }
-      )
-      return reply.status(200).send(result)
+      const result = await handleStartDeviceFlow(params.workspaceId, body, {
+        provider,
+      })
+      return result
     }
   )
 
-  app.get<{
-    Params: { workspaceId: string; sessionId: string }
-  }>(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/im/accounts/dingtalk/device-registration/:sessionId",
+    { schema: DingtalkDeviceFlowPollResponseSchema },
     async (request, reply) => {
       // workspace.manage (not view) — the SUCCESS branch of poll calls
       // persistDingtalkAccountFromRegistration, which writes credentials
@@ -569,21 +537,36 @@ export default async function imDingtalkController(
         "Not allowed to manage IM accounts in this workspace"
       )
       if (!allowed) return
+      const params = request.params as {
+        workspaceId: string
+        sessionId: string
+      }
       const provider = getActiveProvider()
       const outcome = await handlePollDeviceFlow(
-        request.params.workspaceId,
-        request.params.sessionId,
+        params.workspaceId,
+        params.sessionId,
         { provider }
       )
-      return reply.status(outcome.status).send(outcome.body)
+      // Non-200 outcomes (404 missing / 502 transient) carry a bare
+      // `{ error }` body the web client surfaces via ApiError — send it
+      // directly and let appRoute no-op. Only the 200 `{ session }` body
+      // gets the `{ data }` envelope.
+      if (outcome.status !== 200) {
+        reply.status(outcome.status).send(outcome.body)
+        return
+      }
+      // status===200 ⇒ body is the success variant (DingtalkDeviceFlowPollResponse);
+      // status is not a discriminant of the body union, so narrow explicitly.
+      return outcome.body as DingtalkDeviceFlowPollResponse
     }
   )
 
-  app.delete<{
-    Params: { workspaceId: string; sessionId: string }
-  }>(
+  appRoute(
+    app,
+    "DELETE",
     "/api/v1/workspaces/:workspaceId/im/accounts/dingtalk/device-registration/:sessionId",
-    async (request, reply) => {
+    { schema: DingtalkDeviceFlowPollResponseSchema },
+    async (request, reply): Promise<undefined> => {
       const allowed = await requireWorkspaceAction(
         request,
         reply,
@@ -591,19 +574,24 @@ export default async function imDingtalkController(
         "Not allowed to manage IM accounts in this workspace"
       )
       if (!allowed) return
+      const params = request.params as {
+        workspaceId: string
+        sessionId: string
+      }
       await deleteDingtalkRegistrationSession(
-        request.params.workspaceId,
-        request.params.sessionId
+        params.workspaceId,
+        params.sessionId
       )
-      return reply.status(204).send()
+      reply.status(204).send()
+      return
     }
   )
 
-  app.post<{
-    Params: { workspaceId: string }
-    Body: unknown
-  }>(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/im/accounts/dingtalk/manual",
+    { schema: TransportAccountResponseSchema },
     async (request, reply) => {
       const allowed = await requireWorkspaceAction(
         request,
@@ -612,9 +600,10 @@ export default async function imDingtalkController(
         "Not allowed to manage IM accounts in this workspace"
       )
       if (!allowed) return
+      const params = request.params as { workspaceId: string }
       const body = manualAccountSchema.parse(request.body)
       const account = await persistDingtalkAccountFromRegistration({
-        workspaceId: request.params.workspaceId,
+        workspaceId: params.workspaceId,
         clientId: body.clientId,
         clientSecret: body.clientSecret,
         displayName: body.displayName,
@@ -627,7 +616,8 @@ export default async function imDingtalkController(
           dingtalkRegistrationCompletedAt: nowIso(),
         },
       })
-      return reply.status(201).send({ account })
+      reply.status(201)
+      return { account }
     }
   )
 }

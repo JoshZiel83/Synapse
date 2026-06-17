@@ -1,8 +1,19 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { SUBJECT_KIND } from "@synapse/shared"
+import {
+  CHAT_MEMBERSHIP_UPDATE_REASON,
+  CHAT_PARTICIPANT_REMOVAL_STATE,
+  CONVERSATION_FEED_EVENT_TYPE,
+  SUBJECT_KIND,
+} from "@synapse/shared"
 import { withTestDbAndClient } from "../../test/helpers/db.js"
+import type { DatabaseTransaction } from "../../infrastructure/database/kysely.js"
 import { upsertAccessSubjectOn } from "../access/subject-registry.js"
+import {
+  leaveChatConversationUseCase,
+  loadParticipantById,
+  removeChatConversationParticipantUseCase,
+} from "./remove-participant.js"
 
 type AnyDb = import("kysely").Kysely<any>
 
@@ -121,7 +132,8 @@ async function insertConversationParticipant(
   conversationId: string,
   participantType: "workspace_member" | "actor" | "remote_agent",
   entityId: string,
-  state: "active" | "left" | "removed" = "active"
+  state: "active" | "left" | "removed" = "active",
+  roleKey = "member"
 ): Promise<string> {
   const subjectId = await upsertAccessSubjectOn(db, {
     kind:
@@ -142,7 +154,7 @@ async function insertConversationParticipant(
     .values({
       conversation_id: conversationId,
       subject_id: subjectId,
-      role_key: "member",
+      role_key: roleKey,
       state,
     })
     .returning("id")
@@ -170,12 +182,313 @@ test(
       const row = await loadParticipantById(db, conversationId, participantId)
       assert.ok(row, "expected a participant row")
       assert.equal(row.id, participantId)
-      assert.equal(row.conversation_id, conversationId)
-      assert.equal(row.participant_type, "workspace_member")
-      assert.equal(row.workspace_member_id, memberId)
-      assert.equal(row.actor_id, null)
-      assert.equal(row.remote_agent_id, null)
+      assert.equal(row.conversationId, conversationId)
+      assert.equal(row.participantType, "workspace_member")
+      assert.equal(row.workspaceMemberId, memberId)
+      assert.equal(row.actorId, null)
+      assert.equal(row.remoteAgentId, null)
       assert.equal(row.state, "active")
+    })
+  }
+)
+
+test(
+  "removeChatConversationParticipantUseCase updates state and emits membership removal event",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDbAndClient(async ({ db }) => {
+      const ownerUserId = await insertUser(db)
+      const targetUserId = await insertUser(db)
+      const workspaceId = await insertWorkspace(db, ownerUserId)
+      const ownerMemberId = await insertWorkspaceMember(
+        db,
+        workspaceId,
+        ownerUserId
+      )
+      const targetMemberId = await insertWorkspaceMember(
+        db,
+        workspaceId,
+        targetUserId
+      )
+      const conversationId = await insertConversation(db, workspaceId)
+      await insertConversationParticipant(
+        db,
+        conversationId,
+        "workspace_member",
+        ownerMemberId,
+        "active",
+        "owner"
+      )
+      const targetParticipantId = await insertConversationParticipant(
+        db,
+        conversationId,
+        "workspace_member",
+        targetMemberId
+      )
+      await db
+        .insertInto("workspaceMemberConversationViews")
+        .values({
+          workspaceMemberId: ownerMemberId,
+          conversationId,
+          unreadCount: 0,
+        })
+        .execute()
+
+      const removalEvents: unknown[] = []
+      const syncCalls: Array<{
+        workspaceId: string
+        workspaceMemberIds: string[]
+        conversationId: string
+      }> = []
+      const withTransaction = <T>(
+        fn: (trx: DatabaseTransaction) => Promise<T>
+      ) => fn(db as unknown as DatabaseTransaction)
+
+      const result = await removeChatConversationParticipantUseCase(
+        {
+          workspaceId,
+          workspaceMemberId: ownerMemberId,
+          conversationId,
+          participantId: targetParticipantId,
+        },
+        {
+          createRemovalConversationEvent: async (event) => {
+            removalEvents.push(event)
+          },
+          listConversationParticipants: async () => [],
+          listConversationRealtimeRecipients: async () => [
+            { workspaceMemberId: ownerMemberId },
+          ],
+          participantToSummary: () => {
+            throw new Error("unexpected participant summary mapping")
+          },
+          syncConversationUpsert: async (
+            _queryable,
+            workspaceId,
+            workspaceMemberIds,
+            conversationId
+          ) => {
+            syncCalls.push({ workspaceId, workspaceMemberIds, conversationId })
+          },
+          withTransaction,
+        }
+      )
+
+      assert.deepEqual(result, {
+        conversationId,
+        participantId: targetParticipantId,
+        state: CHAT_PARTICIPANT_REMOVAL_STATE.REMOVED,
+      })
+      const targetAfter = await loadParticipantById(
+        db,
+        conversationId,
+        targetParticipantId
+      )
+      assert.equal(targetAfter?.state, CHAT_PARTICIPANT_REMOVAL_STATE.REMOVED)
+      assert.equal(removalEvents.length, 1)
+      assert.equal(
+        (removalEvents[0] as { eventType: string }).eventType,
+        CONVERSATION_FEED_EVENT_TYPE.PARTICIPANT_KICKED
+      )
+      assert.deepEqual(syncCalls, [
+        { workspaceId, workspaceMemberIds: [ownerMemberId], conversationId },
+      ])
+
+      const events = await db
+        .selectFrom("workspaceMemberSyncEvents")
+        .select(["eventType", "memberSeq", "payload"])
+        .where("workspaceMemberId", "=", targetMemberId)
+        .execute()
+      assert.equal(events.length, 1)
+      assert.equal(events[0]!.eventType, "conversation.membership.updated")
+      assert.equal(Number(events[0]!.memberSeq), 1)
+      const payload = events[0]!.payload as {
+        selfState?: string
+        reason?: string
+      }
+      assert.equal(payload.selfState, CHAT_PARTICIPANT_REMOVAL_STATE.REMOVED)
+      assert.equal(payload.reason, CHAT_MEMBERSHIP_UPDATE_REASON.KICKED)
+    })
+  }
+)
+
+test(
+  "removeChatConversationParticipantUseCase rolls back participant state when remaining-member sync fails",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDbAndClient(async ({ db, client }) => {
+      const ownerUserId = await insertUser(db)
+      const targetUserId = await insertUser(db)
+      const workspaceId = await insertWorkspace(db, ownerUserId)
+      const ownerMemberId = await insertWorkspaceMember(
+        db,
+        workspaceId,
+        ownerUserId
+      )
+      const targetMemberId = await insertWorkspaceMember(
+        db,
+        workspaceId,
+        targetUserId
+      )
+      const conversationId = await insertConversation(db, workspaceId)
+      const ownerParticipantId = await insertConversationParticipant(
+        db,
+        conversationId,
+        "workspace_member",
+        ownerMemberId,
+        "active",
+        "owner"
+      )
+      await insertConversationParticipant(
+        db,
+        conversationId,
+        "workspace_member",
+        targetMemberId
+      )
+      const ownerParticipant = await loadParticipantById(
+        db,
+        conversationId,
+        ownerParticipantId
+      )
+      assert.ok(ownerParticipant)
+
+      await assert.rejects(
+        () =>
+          removeChatConversationParticipantUseCase(
+            {
+              workspaceId,
+              workspaceMemberId: ownerMemberId,
+              conversationId,
+              participantId: ownerParticipantId,
+            },
+            {
+              createRemovalConversationEvent: async () => {},
+              listConversationParticipants: async () => {
+                throw new Error("tombstone should not run after sync failure")
+              },
+              listConversationRealtimeRecipients: async () => [
+                { workspaceMemberId: targetMemberId },
+              ],
+              participantToSummary: () => {
+                throw new Error("unexpected participant summary mapping")
+              },
+              syncConversationUpsert: async () => {
+                throw new Error("sync failed")
+              },
+              requireConversationAccess: async () => ({
+                participant: ownerParticipant,
+              }),
+              withTransaction: async (fn) => {
+                await client.query("SAVEPOINT remove_participant_rollback")
+                try {
+                  const result = await fn(db as unknown as DatabaseTransaction)
+                  await client.query(
+                    "RELEASE SAVEPOINT remove_participant_rollback"
+                  )
+                  return result
+                } catch (error) {
+                  await client.query(
+                    "ROLLBACK TO SAVEPOINT remove_participant_rollback"
+                  )
+                  throw error
+                }
+              },
+            }
+          ),
+        /sync failed/
+      )
+
+      const targetAfter = await loadParticipantById(
+        db,
+        conversationId,
+        ownerParticipantId
+      )
+      assert.equal(targetAfter?.state, "active")
+
+      const events = await db
+        .selectFrom("workspaceMemberSyncEvents")
+        .select(["eventType"])
+        .where("workspaceMemberId", "=", ownerMemberId)
+        .execute()
+      assert.deepEqual(events, [])
+    })
+  }
+)
+
+test(
+  "leaveChatConversationUseCase resolves the caller participant before removal",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDbAndClient(async ({ db }) => {
+      const userId = await insertUser(db)
+      const workspaceId = await insertWorkspace(db, userId)
+      const memberId = await insertWorkspaceMember(db, workspaceId, userId)
+      const conversationId = await insertConversation(db, workspaceId)
+      const participantId = await insertConversationParticipant(
+        db,
+        conversationId,
+        "workspace_member",
+        memberId,
+        "active",
+        "owner"
+      )
+      await db
+        .insertInto("workspaceMemberConversationViews")
+        .values({
+          workspaceMemberId: memberId,
+          conversationId,
+          unreadCount: 0,
+        })
+        .execute()
+      const participant = await loadParticipantById(
+        db,
+        conversationId,
+        participantId
+      )
+      assert.ok(participant)
+
+      const removalEvents: unknown[] = []
+      const withTransaction = <T>(
+        fn: (trx: DatabaseTransaction) => Promise<T>
+      ) => fn(db as unknown as DatabaseTransaction)
+
+      const result = await leaveChatConversationUseCase(
+        {
+          workspaceId,
+          workspaceMemberId: memberId,
+          conversationId,
+        },
+        {
+          createRemovalConversationEvent: async (event) => {
+            removalEvents.push(event)
+          },
+          listConversationParticipants: async () => [],
+          listConversationRealtimeRecipients: async () => [],
+          participantToSummary: () => {
+            throw new Error("unexpected participant summary mapping")
+          },
+          requireConversationAccess: async () => ({ participant }),
+          syncConversationUpsert: async () => {},
+          withTransaction,
+        }
+      )
+
+      assert.deepEqual(result, {
+        conversationId,
+        participantId,
+        state: CHAT_PARTICIPANT_REMOVAL_STATE.LEFT,
+      })
+      const participantAfter = await loadParticipantById(
+        db,
+        conversationId,
+        participantId
+      )
+      assert.equal(participantAfter?.state, CHAT_PARTICIPANT_REMOVAL_STATE.LEFT)
+      assert.equal(removalEvents.length, 1)
+      assert.equal(
+        (removalEvents[0] as { eventType: string }).eventType,
+        CONVERSATION_FEED_EVENT_TYPE.PARTICIPANT_LEFT
+      )
     })
   }
 )
@@ -199,10 +512,10 @@ test(
       const { loadParticipantById } = await import("./service.js")
       const row = await loadParticipantById(db, conversationId, participantId)
       assert.ok(row)
-      assert.equal(row.participant_type, "actor")
-      assert.equal(row.actor_id, actorId)
-      assert.equal(row.workspace_member_id, null)
-      assert.equal(row.remote_agent_id, null)
+      assert.equal(row.participantType, "actor")
+      assert.equal(row.actorId, actorId)
+      assert.equal(row.workspaceMemberId, null)
+      assert.equal(row.remoteAgentId, null)
     })
   }
 )
@@ -226,10 +539,10 @@ test(
       const { loadParticipantById } = await import("./service.js")
       const row = await loadParticipantById(db, conversationId, participantId)
       assert.ok(row)
-      assert.equal(row.participant_type, "remote_agent")
-      assert.equal(row.remote_agent_id, remoteAgentId)
-      assert.equal(row.workspace_member_id, null)
-      assert.equal(row.actor_id, null)
+      assert.equal(row.participantType, "remote_agent")
+      assert.equal(row.remoteAgentId, remoteAgentId)
+      assert.equal(row.workspaceMemberId, null)
+      assert.equal(row.actorId, null)
     })
   }
 )

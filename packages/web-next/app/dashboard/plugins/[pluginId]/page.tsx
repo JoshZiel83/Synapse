@@ -3,6 +3,10 @@
 import { useEffect, useState } from "react"
 import { useParams, useRouter, useSearchParams } from "next/navigation"
 import { ArrowLeft } from "lucide-react"
+import type {
+  MarketplacePluginView,
+  PluginInstallationDetailView,
+} from "@synapse/shared"
 import { Button } from "@/components/ui/button"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { api } from "@/lib/api"
@@ -14,8 +18,10 @@ export default function PluginDetailPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { workspaceId } = useWorkspace()
-  const [plugin, setPlugin] = useState<any>(null)
-  const [installations, setInstallations] = useState<any[]>([])
+  const [plugin, setPlugin] = useState<MarketplacePluginView | null>(null)
+  const [installations, setInstallations] = useState<
+    PluginInstallationDetailView[]
+  >([])
   const [loading, setLoading] = useState(true)
   const pluginId = params.pluginId
   const selectedInstallationId = searchParams.get("installationId")
@@ -29,10 +35,7 @@ export default function PluginDetailPage() {
         setLoading(true)
         const [pluginData, installData] = await Promise.all([
           api.getMarketplacePlugin(pluginId),
-          api.getInstallations(
-            workspaceId,
-            new URLSearchParams({ pluginId }).toString()
-          ),
+          api.getInstallations(workspaceId, { pluginId }),
         ])
         if (cancelled) return
         setPlugin(pluginData)
@@ -109,10 +112,9 @@ export default function PluginDetailPage() {
           }
           onInstallationsChanged={async () => {
             if (!workspaceId) return
-            const installData = await api.getInstallations(
-              workspaceId,
-              new URLSearchParams({ pluginId }).toString()
-            )
+            const installData = await api.getInstallations(workspaceId, {
+              pluginId,
+            })
             setInstallations(installData)
           }}
         />

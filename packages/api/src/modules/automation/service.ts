@@ -6,11 +6,7 @@ import {
   dateToIsoInstant,
   nowIsoInstant,
 } from "@synapse/shared/datetime"
-import {
-  parseInstantString,
-  serializeInstant,
-  serializeOptionalInstant,
-} from "../../infrastructure/datetime.js"
+import { parseInstantString } from "../../infrastructure/datetime.js"
 import type {
   AutomationEventSourceAccessGrant,
   CapabilityAccessTarget,
@@ -35,18 +31,15 @@ import type {
   AutomationTargetPolicy,
   AutomationTrigger,
   AutomationTriggerKind,
-  AutomationWebhookEndpoint,
   AutomationWebhookEndpointCreateResult,
-  CanonicalContentBlock,
+  CanonicalContentBlockInput,
   Timestamp,
 } from "@synapse/shared"
 import {
+  AUTOMATION_RULE_CATEGORY,
   DEFAULT_CONVERSATION_TYPE_MASK,
   extractText,
   maskAllowsConversationType,
-  normalizeCanonicalContentBlocks,
-  parseJsonObject,
-  resolveAutomationOccurrenceDisplay,
   resolveNarrowedConversationTypeMask,
   slugify,
   workspaceRef,
@@ -56,19 +49,92 @@ import {
   validateAutomationRuleCreatePayload,
 } from "@synapse/shared/automation"
 import { decrypt, encrypt } from "../../infrastructure/crypto/index.js"
-import { CompiledQuery, sql } from "kysely"
+import { type Executor } from "../../infrastructure/database/kysely.js"
 import {
-  db,
-  runBuilder,
-  withDbTransaction,
-  type Executor,
-} from "../../infrastructure/database/kysely.js"
+  appendAutomationAuditLog,
+  applyAutomationPolicyAfterTrigger as applyAutomationPolicyAfterTriggerRepo,
+  claimPendingAutomationExecutionRow,
+  clearAutomationRuleError,
+  existsAutomationEventSourceKey,
+  existsAutomationExecution,
+  expireAutomationRuleRows,
+  insertAutomationExecutionReturningRow,
+  insertAutomationDeliveryRow,
+  insertAutomationEventSourceRow,
+  insertAutomationOccurrenceReturningRow,
+  insertAutomationTriggerRow,
+  insertAutomationExecutionTarget,
+  insertAutomationPolicyRow,
+  insertAutomationRuleRow,
+  insertAutomationWebhookEndpointReturningRow,
+  insertIntegrationBindingRow,
+  insertWebhookEndpointRow,
+  getAutomationEventSourceRow,
+  listActiveIntegrationSourceKeysForBinding as listActiveIntegrationSourceKeysForBindingRepo,
+  listActiveEventSubscriptionRuleRowsByEventSource,
+  listAutomationExecutionRows,
+  listAutomationEventSourceRows,
+  listAutomationOccurrenceRows,
+  listAutomationRuleIds,
+  listAutomationWebhookEndpointRows,
+  listIntegrationAutomationEventSourceRowsByWebhookPathToken,
+  loadAutomationRuleComponentRows,
+  lockDueAutomationScheduleRows,
+  loadAutomationEventSourceAccessBindingRows,
+  markAutomationExecutionCompleted,
+  markAutomationExecutionFailed,
+  markAutomationExecutionSkipped,
+  markAutomationRuleTriggered,
+  normalizeAutomationDeliveryRow,
+  normalizeAutomationEventSourceRow,
+  normalizeAutomationExecutionWithOccurrenceRow,
+  normalizeAutomationOccurrenceRow,
+  normalizeAutomationPolicyRow,
+  normalizeAutomationRuleRow,
+  normalizeAutomationTriggerRow,
+  normalizeAutomationWebhookEndpointRow,
+  pauseActiveAutomationRule,
+  pauseAutomationRuleRowsForInactiveCreators,
+  pauseAutomationRuleRowsForEventSource,
+  persistAutomationDeliveryTargets,
+  revokeAutomationEventSourceAccessBindingById,
+  selectActiveAutomationEventSourceId,
+  selectActiveAutomationRuleEventMatchers,
+  selectActiveWebhookEndpointId,
+  selectAutomationExecutionRowByRuleOccurrence,
+  selectAutomationOccurrenceRow,
+  selectAutomationOccurrenceRowByDedupeKey,
+  selectAutomationEventSourceReuseRow,
+  selectAutomationIntegrationBindingRow,
+  selectAutomationWebhookEndpointRow,
+  selectExistingAutomationIntegrationBindingRow,
+  selectWebhookAutomationEventSourceByPathToken,
+  selectIntegrationEventSourceReuseRow,
+  selectWorkspaceOwnerId,
+  setAutomationEventSourceStatus,
+  softDeleteAutomationEventSource,
+  softDeleteAutomationRule,
+  touchAutomationEventSourceTriggered,
+  touchWebhookReceived,
+  updateAutomationDeliveryRow,
+  updateAutomationEventSourceAccessBindingMaskOverride,
+  updateAutomationEventSourceRow,
+  updateAutomationPolicyRow,
+  updateAutomationRuleError,
+  updateAutomationRuleRow,
+  updateAutomationTriggerRow,
+  updateAutomationTriggerSchedule,
+  updateIntegrationBindingExternalSubscriptionId,
+  updateIntegrationBindingTargetLabel,
+  updateWebhookEndpointStatus,
+  withAutomationTransaction,
+} from "./repo.js"
+import { getConversation } from "../chat/conversation-record.js"
+import { createConversationEvent } from "../chat/event-write.js"
 import {
-  createConversationEvent,
-  getConversation,
-  getConversationParticipant,
-  listConversationParticipants,
-} from "../chat/service.js"
+  getConversationParticipantUseCase as getConversationParticipant,
+  listConversationParticipantsUseCase as listConversationParticipants,
+} from "../chat/participant-roster.js"
 import { hasConversationTransportBinding } from "../im/service/bindings.js"
 import { buildNormalizedMessageContent } from "../chat/message-content.js"
 import {
@@ -92,163 +158,31 @@ import {
   type AutomationEventSourceBindingJoinedRow,
 } from "../access/bindings.js"
 import { resolveAccessGrantTarget } from "../access/access-target-resolver.js"
-import {
-  insertAutomationEventSourceAccessBindingReturningRowOn,
-  loadAutomationEventSourceAccessBindingRowsForSources,
-  revokeAutomationEventSourceAccessBinding,
-  updateAutomationEventSourceAccessGrantConversationTypeMaskOverride,
-} from "../access/binding-storage.js"
-
-type AutomationRuleRow = {
-  id: string
-  workspace_id: string
-  conversation_id: string
-  category: AutomationCategory
-  status: AutomationStatus
-  name: string
-  description: string
-  created_by_participant_id: string
-  created_by_session_id: string | null
-  last_triggered_at: Date | null
-  last_error_at: Date | null
-  last_error_message: string | null
-  metadata: Record<string, unknown> | string | null
-  created_at: Date
-  updated_at: Date
-}
-
-type AutomationTriggerRow = {
-  rule_id: string
-  trigger_kind: AutomationTriggerKind
-  source_kind: AutomationSourceKind
-  event_source_id: string | null
-  event_source_key?: string | null
-  event_source_name?: string | null
-  event_provider_kind?: AutomationEventProviderKind | null
-  event_provider_ref?: string | null
-  event_webhook_endpoint_id?: string | null
-  event_integration_binding_id?: string | null
-  event_integration_installation_id?: string | null
-  event_integration_provider?: AutomationIntegrationProvider | null
-  event_integration_ingress_kind?: AutomationIntegrationIngressKind | null
-  event_integration_target_kind?: AutomationIntegrationTargetKind | null
-  event_integration_target_id?: string | null
-  event_integration_target_label?: string | null
-  event_integration_webhook_endpoint_id?: string | null
-  event_external_subscription_id?: string | null
-  event_source_status?: AutomationEventSourceStatus | null
-  source_locator: string | null
-  match_key: string | null
-  matcher: Record<string, unknown> | string | null
-  schedule_kind: string | null
-  schedule_expr: string | null
-  schedule_timezone: string | null
-  interval_seconds: number | null
-  starts_at: Date | null
-  next_fire_at: Date | null
-  last_fired_at: Date | null
-  metadata: Record<string, unknown> | string | null
-}
-
-type AutomationPolicyRow = {
-  rule_id: string
-  active_from: Date | null
-  active_until: Date | null
-  max_trigger_count: number | null
-  trigger_count: number
-  completion_status: AutomationCompletionStatus
-  completed_at: Date | null
-  metadata: Record<string, unknown> | string | null
-}
-
-type AutomationDeliveryRow = {
-  rule_id: string
-  message_text: string
-  wake_reason_text: string | null
-  message_blocks: unknown
-  target_policy: AutomationTargetPolicy
-  metadata: Record<string, unknown> | string | null
-}
-
-type AutomationEventSourceRow = {
-  id: string
-  workspace_id: string
-  provider_kind: AutomationEventProviderKind
-  provider_ref: string | null
-  webhook_endpoint_id: string | null
-  integration_binding_id: string | null
-  integration_installation_id?: string | null
-  integration_provider?: AutomationIntegrationProvider | null
-  integration_ingress_kind?: AutomationIntegrationIngressKind | null
-  integration_target_kind?: AutomationIntegrationTargetKind | null
-  integration_target_id?: string | null
-  integration_target_label?: string | null
-  integration_webhook_endpoint_id?: string | null
-  integration_external_subscription_id?: string | null
-  source_key: string
-  name: string
-  description: string
-  recommended_usage: string
-  payload_schema: Record<string, unknown> | string | null
-  example_payload: Record<string, unknown> | string | null
-  status: AutomationEventSourceStatus
-  created_by_kind: AutomationCreatorKind
-  created_by_workspace_member_id: string | null
-  created_by_actor_id: string | null
-  created_by_session_id: string | null
-  last_triggered_at: Date | null
-  metadata: Record<string, unknown> | string | null
-  created_at: Date
-  updated_at: Date
-}
-
-type AutomationOccurrenceRow = {
-  id: string
-  workspace_id: string
-  source_kind: AutomationSourceKind
-  event_source_id: string | null
-  event_source_key?: string | null
-  event_source_name?: string | null
-  event_provider_ref?: string | null
-  event_webhook_endpoint_id?: string | null
-  event_integration_binding_id?: string | null
-  event_integration_installation_id?: string | null
-  event_integration_provider?: AutomationIntegrationProvider | null
-  event_integration_ingress_kind?: AutomationIntegrationIngressKind | null
-  event_integration_target_kind?: AutomationIntegrationTargetKind | null
-  event_integration_target_id?: string | null
-  event_integration_target_label?: string | null
-  event_integration_webhook_endpoint_id?: string | null
-  event_external_subscription_id?: string | null
-  source_locator: string | null
-  match_key: string | null
-  dedupe_key: string | null
-  source_snapshot: Record<string, unknown> | string | null
-  payload: Record<string, unknown> | string | null
-  occurred_at: Date
-  created_at: Date
-}
-
-type AutomationExecutionRow = {
-  id: string
-  workspace_id: string
-  rule_id: string
-  execution_rule_name?: string | null
-  occurrence_id: string
-  occurrence_occurred_at?: Date | null
-  occurrence_source_kind?: AutomationSourceKind | null
-  occurrence_event_source_name?: string | null
-  occurrence_display_title?: string | null
-  occurrence_display_summary?: string | null
-  occurrence_display_description?: string | null
-  status: AutomationExecutionStatus
-  attempt_count: number
-  error_message: string | null
-  started_at: Date | null
-  completed_at: Date | null
-  created_at: Date
-  updated_at: Date
-}
+import { insertAutomationEventSourceAccessBindingReturningRowOn } from "../access/binding-storage.js"
+import type {
+  AutomationDeliveryDbRow,
+  AutomationDeliveryRow,
+  AutomationEventSourceDbRow,
+  AutomationIntegrationBindingRow,
+  AutomationOccurrenceRow,
+  AutomationPolicyDbRow,
+  AutomationPolicyRow,
+  AutomationRuleDbRow,
+  AutomationRuleRow,
+  AutomationTriggerDbRow,
+  AutomationTriggerRow,
+  AutomationWebhookEndpointRow,
+} from "./repo.types.js"
+export type {
+  AutomationDeliveryRow,
+  AutomationEventSourceRow,
+  AutomationExecutionRow,
+  AutomationOccurrenceRow,
+  AutomationPolicyRow,
+  AutomationRuleRow,
+  AutomationTriggerRow,
+  AutomationWebhookEndpointRow,
+} from "./repo.types.js"
 
 type AutomationTargetRow = {
   id: string
@@ -265,11 +199,6 @@ type AutomationTargetRow = {
   updated_at: Date
 }
 
-type TargetParticipantRow = {
-  rule_id: string
-  target_participant_id: string
-}
-
 type AutomationEventSourceAccessRow = AutomationEventSourceBindingJoinedRow
 
 type AutomationEventSourceAccessContext = {
@@ -277,66 +206,10 @@ type AutomationEventSourceAccessContext = {
   actorId?: string | null
 }
 
-type AutomationWebhookEndpointRow = {
-  id: string
-  workspace_id: string
-  name: string
-  status: AutomationWebhookEndpoint["status"]
-  path_token: string
-  secret_ciphertext?: string
-  secret_hint: string
-  metadata: Record<string, unknown> | string | null
-  created_by_workspace_member_id: string | null
-  last_received_at: Date | null
-  created_at: Date
-  updated_at: Date
-}
-
-type AutomationIntegrationBindingRow = {
-  id: string
-  workspace_id: string
-  installation_id: string
-  provider: AutomationIntegrationProvider
-  ingress_kind: AutomationIntegrationIngressKind
-  target_kind: AutomationIntegrationTargetKind
-  target_id: string
-  target_label: string
-  webhook_endpoint_id: string | null
-  external_subscription_id: string | null
-  metadata: Record<string, unknown> | string | null
-  created_at: Date
-  updated_at: Date
-}
-
 type AutomationValidationError = Error & {
   issues: { path: string; message: string }[]
   statusCode: 400
 }
-
-type SqlRunner = <T = any>(
-  text: string,
-  params?: unknown[]
-) => Promise<{ rows: T[]; rowCount?: number | null }>
-
-type QueryRunner = {
-  run: SqlRunner
-}
-
-function runnerFor(executor: Executor): QueryRunner {
-  return {
-    run: <T = any>(text: string, params?: unknown[]) =>
-      executor.executeQuery<T>(
-        CompiledQuery.raw(text, params ? [...params] : [])
-      ) as Promise<{ rows: T[]; rowCount?: number | null }>,
-  }
-}
-
-function resolveQueryRunner(executor?: Executor): QueryRunner {
-  return runnerFor(executor ?? db)
-}
-
-const runQuery: SqlRunner = (text, params) =>
-  resolveQueryRunner().run(text, params)
 
 function createAutomationValidationError(
   issues: { path: string; message: string }[]
@@ -398,7 +271,7 @@ export interface AutomationPolicyInput {
 export interface AutomationDeliveryInput {
   message?: string
   wakeReason?: string
-  messageBlocks?: CanonicalContentBlock[]
+  messageBlocks?: CanonicalContentBlockInput[]
   targetPolicy?: AutomationTargetPolicy
   targetParticipantIds?: string[]
 }
@@ -477,335 +350,20 @@ export interface ProcessAutomationExecutionResult {
 const AUTOMATION_SCHEDULER_INTERVAL_MS = 15_000
 const MAX_SCHEDULER_BATCH_SIZE = 50
 
-function normalizeContentBlocks(value: unknown): CanonicalContentBlock[] {
-  if (!Array.isArray(value)) return []
-  return normalizeCanonicalContentBlocks(value as any[])
-}
-
-function mapEventSourceIntegration(row: {
-  integration_binding_id?: string | null
-  integration_webhook_endpoint_id?: string | null
-  integration_installation_id?: string | null
-  integration_provider?: AutomationIntegrationProvider | null
-  integration_ingress_kind?: AutomationIntegrationIngressKind | null
-  integration_target_kind?: AutomationIntegrationTargetKind | null
-  integration_target_id?: string | null
-  integration_target_label?: string | null
-  integration_external_subscription_id?: string | null
-}): AutomationEventSourceIntegration | undefined {
-  if (
-    !row.integration_installation_id ||
-    !row.integration_provider ||
-    !row.integration_ingress_kind ||
-    !row.integration_target_kind ||
-    !row.integration_target_id ||
-    !row.integration_target_label
-  ) {
-    return undefined
-  }
-
-  return {
-    bindingId: row.integration_binding_id || undefined,
-    installationId: row.integration_installation_id,
-    provider: row.integration_provider,
-    ingressKind: row.integration_ingress_kind,
-    targetKind: row.integration_target_kind,
-    targetId: row.integration_target_id,
-    targetLabel: row.integration_target_label,
-    endpointId: row.integration_webhook_endpoint_id || undefined,
-    externalSubscriptionId:
-      row.integration_external_subscription_id || undefined,
-  }
-}
-
-function mapRuleRow(
-  row: AutomationRuleRow,
-  trigger: AutomationTrigger,
-  policy: AutomationPolicy,
-  delivery: AutomationDelivery
-): AutomationRule {
-  return {
-    id: row.id,
-    workspaceId: row.workspace_id,
-    authorityWorkspaceId: row.workspace_id,
-    conversationId: row.conversation_id,
-    category: row.category,
-    status: row.status,
-    name: row.name,
-    description: row.description,
-    createdByParticipantId: row.created_by_participant_id,
-    createdBySessionId: row.created_by_session_id || undefined,
-    trigger,
-    policy,
-    delivery,
-    lastTriggeredAt: serializeOptionalInstant(row.last_triggered_at),
-    lastErrorAt: serializeOptionalInstant(row.last_error_at),
-    lastErrorMessage: row.last_error_message || undefined,
-    metadata: parseJsonObject(row.metadata),
-    createdAt: serializeInstant(row.created_at),
-    updatedAt: serializeInstant(row.updated_at),
-  }
-}
-
-function mapTriggerRow(row: AutomationTriggerRow): AutomationTrigger {
-  return {
-    ruleId: row.rule_id,
-    triggerKind: row.trigger_kind,
-    sourceKind: row.source_kind,
-    eventSourceId: row.event_source_id || undefined,
-    eventSourceKey:
-      (row as AutomationTriggerRow & { event_source_key?: string | null })
-        .event_source_key || undefined,
-    eventSourceName:
-      (row as AutomationTriggerRow & { event_source_name?: string | null })
-        .event_source_name || undefined,
-    eventProviderKind:
-      (
-        row as AutomationTriggerRow & {
-          event_provider_kind?: AutomationEventProviderKind | null
-        }
-      ).event_provider_kind || undefined,
-    eventProviderRef:
-      (row as AutomationTriggerRow & { event_provider_ref?: string | null })
-        .event_provider_ref || undefined,
-    eventSourceIntegration: mapEventSourceIntegration({
-      integration_binding_id: row.event_integration_binding_id,
-      integration_webhook_endpoint_id:
-        row.event_integration_webhook_endpoint_id,
-      integration_installation_id: row.event_integration_installation_id,
-      integration_provider: row.event_integration_provider,
-      integration_ingress_kind: row.event_integration_ingress_kind,
-      integration_target_kind: row.event_integration_target_kind,
-      integration_target_id: row.event_integration_target_id,
-      integration_target_label: row.event_integration_target_label,
-      integration_external_subscription_id: row.event_external_subscription_id,
-    }),
-    eventSourceStatus:
-      (
-        row as AutomationTriggerRow & {
-          event_source_status?: AutomationEventSourceStatus | null
-        }
-      ).event_source_status || undefined,
-    sourceLocator: row.source_locator || undefined,
-    matchKey: row.match_key || undefined,
-    matcher: parseJsonObject(row.matcher),
-    scheduleKind:
-      (row.schedule_kind as AutomationTrigger["scheduleKind"]) || undefined,
-    scheduleExpr: row.schedule_expr || undefined,
-    scheduleTimezone: row.schedule_timezone || undefined,
-    intervalSeconds: row.interval_seconds || undefined,
-    startsAt: serializeOptionalInstant(row.starts_at),
-    nextFireAt: serializeOptionalInstant(row.next_fire_at),
-    lastFiredAt: serializeOptionalInstant(row.last_fired_at),
-    metadata: parseJsonObject(row.metadata),
-  }
-}
-
-function mapPolicyRow(row: AutomationPolicyRow): AutomationPolicy {
-  return {
-    ruleId: row.rule_id,
-    activeFrom: serializeOptionalInstant(row.active_from),
-    activeUntil: serializeOptionalInstant(row.active_until),
-    maxTriggerCount: row.max_trigger_count || undefined,
-    triggerCount: row.trigger_count,
-    completionStatus: row.completion_status,
-    completedAt: serializeOptionalInstant(row.completed_at),
-    metadata: parseJsonObject(row.metadata),
-  }
-}
-
-function mapDeliveryRow(
-  row: AutomationDeliveryRow,
-  targetParticipantIds: string[]
-): AutomationDelivery {
-  return {
-    ruleId: row.rule_id,
-    messageText: row.message_text || "",
-    wakeReasonText: row.wake_reason_text || undefined,
-    messageBlocks: normalizeContentBlocks(row.message_blocks),
-    targetPolicy: row.target_policy,
-    targetParticipantIds,
-    metadata: parseJsonObject(row.metadata),
-  }
-}
-
-function mapEventSourceRow(
-  row: AutomationEventSourceRow
-): AutomationEventSource {
-  return {
-    id: row.id,
-    workspaceId: row.workspace_id,
-    providerKind: row.provider_kind,
-    providerRef: row.provider_ref || undefined,
-    integration: mapEventSourceIntegration(row),
-    sourceKey: row.source_key,
-    name: row.name,
-    description: row.description,
-    recommendedUsage: row.recommended_usage || undefined,
-    payloadSchema: parseJsonObject(row.payload_schema),
-    examplePayload: parseJsonObject(row.example_payload),
-    status: row.status,
-    createdByKind: row.created_by_kind,
-    createdByWorkspaceMemberId: row.created_by_workspace_member_id || undefined,
-    createdByActorId: row.created_by_actor_id || undefined,
-    createdBySessionId: row.created_by_session_id || undefined,
-    lastTriggeredAt: serializeOptionalInstant(row.last_triggered_at),
-    metadata: parseJsonObject(row.metadata),
-    createdAt: serializeInstant(row.created_at),
-    updatedAt: serializeInstant(row.updated_at),
-  }
-}
-
-function defaultOccurrenceTitle(
-  occurrence: Pick<
-    AutomationOccurrence,
-    "eventSourceName" | "matchKey" | "sourceLocator" | "sourceKind"
-  >
-) {
-  return (
-    occurrence.eventSourceName ||
-    occurrence.matchKey ||
-    occurrence.sourceLocator ||
-    occurrence.sourceKind
-  )
-}
-
-function defaultOccurrenceSummary(payload: Record<string, unknown>) {
-  const payloadKeys = Object.keys(payload || {})
-  if (payloadKeys.length === 0) {
-    return "No payload fields"
-  }
-  return payloadKeys.slice(0, 6).join(", ")
-}
-
-function decorateOccurrenceDisplay(
-  occurrence: AutomationOccurrence,
-  options?: { eventProviderRef?: string }
-): AutomationOccurrence {
-  const display = resolveAutomationOccurrenceDisplay({
-    sourceKind: occurrence.sourceKind,
-    eventDefinitionKey: occurrence.eventSourceKey,
-    sourceName: occurrence.eventSourceName,
-    providerRef: options?.eventProviderRef,
-    sourceSnapshot: occurrence.sourceSnapshot,
-    payload: occurrence.payload,
-    occurredAt: occurrence.occurredAt,
-  })
-
-  return {
-    ...occurrence,
-    displayTitle: display?.title || defaultOccurrenceTitle(occurrence),
-    displaySummary:
-      display?.summary || defaultOccurrenceSummary(occurrence.payload),
-    displayDescription: display?.description || undefined,
-  }
-}
-
-function mapOccurrenceRow(row: AutomationOccurrenceRow): AutomationOccurrence {
-  return decorateOccurrenceDisplay(
-    {
-      id: row.id,
-      workspaceId: row.workspace_id,
-      sourceKind: row.source_kind,
-      eventSourceId: row.event_source_id || undefined,
-      eventSourceKey:
-        (row as AutomationOccurrenceRow & { event_source_key?: string | null })
-          .event_source_key || undefined,
-      eventSourceName:
-        (row as AutomationOccurrenceRow & { event_source_name?: string | null })
-          .event_source_name || undefined,
-      eventSourceIntegration: mapEventSourceIntegration({
-        integration_binding_id: row.event_integration_binding_id,
-        integration_webhook_endpoint_id:
-          row.event_integration_webhook_endpoint_id,
-        integration_installation_id: row.event_integration_installation_id,
-        integration_provider: row.event_integration_provider,
-        integration_ingress_kind: row.event_integration_ingress_kind,
-        integration_target_kind: row.event_integration_target_kind,
-        integration_target_id: row.event_integration_target_id,
-        integration_target_label: row.event_integration_target_label,
-        integration_external_subscription_id:
-          row.event_external_subscription_id,
-      }),
-      sourceLocator: row.source_locator || undefined,
-      matchKey: row.match_key || undefined,
-      dedupeKey: row.dedupe_key || undefined,
-      sourceSnapshot: parseJsonObject(row.source_snapshot),
-      payload: parseJsonObject(row.payload),
-      occurredAt: serializeInstant(row.occurred_at),
-      createdAt: serializeInstant(row.created_at),
-    },
-    {
-      eventProviderRef:
-        (
-          row as AutomationOccurrenceRow & {
-            event_provider_ref?: string | null
-          }
-        ).event_provider_ref || undefined,
-    }
-  )
-}
-
-function mapExecutionRow(row: AutomationExecutionRow): AutomationExecution {
-  return {
-    id: row.id,
-    workspaceId: row.workspace_id,
-    ruleId: row.rule_id,
-    occurrenceId: row.occurrence_id,
-    occurrenceOccurredAt: serializeOptionalInstant(row.occurrence_occurred_at),
-    occurrenceSourceKind: row.occurrence_source_kind || undefined,
-    occurrenceEventSourceName: row.occurrence_event_source_name || undefined,
-    occurrenceTitle: row.occurrence_display_title || undefined,
-    occurrenceSummary: row.occurrence_display_summary || undefined,
-    occurrenceDescription: row.occurrence_display_description || undefined,
-    status: row.status,
-    errorMessage: row.error_message || undefined,
-    startedAt: serializeOptionalInstant(row.started_at),
-    completedAt: serializeOptionalInstant(row.completed_at),
-    createdAt: serializeInstant(row.created_at),
-    updatedAt: serializeInstant(row.updated_at),
-  }
-}
-
-function mapWebhookEndpointRow(
-  row: AutomationWebhookEndpointRow
-): AutomationWebhookEndpoint {
-  return {
-    id: row.id,
-    workspaceId: row.workspace_id,
-    name: row.name,
-    status: row.status,
-    pathToken: row.path_token,
-    secretHint: row.secret_hint,
-    metadata: parseJsonObject(row.metadata),
-    createdByWorkspaceMemberId: row.created_by_workspace_member_id || undefined,
-    lastReceivedAt: serializeOptionalInstant(row.last_received_at),
-    createdAt: serializeInstant(row.created_at),
-    updatedAt: serializeInstant(row.updated_at),
-  }
-}
-
-function automationEventSourceJoinClause(
-  eventSourceAlias = "aes",
-  bindingAlias = "aib"
-) {
-  return `LEFT JOIN automation_integration_bindings ${bindingAlias} ON ${bindingAlias}.id = ${eventSourceAlias}.integration_binding_id`
-}
-
-function automationEventSourceSelectClause(
-  eventSourceAlias = "aes",
-  bindingAlias = "aib"
-) {
-  return `${eventSourceAlias}.*,
-          ${bindingAlias}.installation_id AS integration_installation_id,
-          ${bindingAlias}.provider AS integration_provider,
-          ${bindingAlias}.ingress_kind AS integration_ingress_kind,
-          ${bindingAlias}.target_kind AS integration_target_kind,
-          ${bindingAlias}.target_id AS integration_target_id,
-          ${bindingAlias}.target_label AS integration_target_label,
-          ${bindingAlias}.webhook_endpoint_id AS integration_webhook_endpoint_id,
-          ${bindingAlias}.external_subscription_id AS integration_external_subscription_id`
-}
+// Row -> view presenters live in presenter.ts (guard-layering r3/r4). They
+// are imported here so existing call sites keep working with stable names.
+import {
+  decorateOccurrenceDisplay,
+  presentDelivery,
+  presentDueScheduleRowDates,
+  presentEventSource,
+  presentExecution,
+  presentOccurrence,
+  presentPolicy,
+  presentRule,
+  presentTrigger,
+  presentWebhookEndpoint,
+} from "./presenter.js"
 
 function mergeUniqueIds(values: string[] | undefined) {
   return Array.from(new Set((values || []).filter(Boolean)))
@@ -871,22 +429,19 @@ function subsetMatch(
   actual: Record<string, unknown>
 ): boolean {
   return Object.entries(expected).every(([key, value]) => {
-    if (value && typeof value === "object" && !Array.isArray(value)) {
+    if (isObjectRecord(value)) {
       const actualValue = actual[key]
-      if (
-        !actualValue ||
-        typeof actualValue !== "object" ||
-        Array.isArray(actualValue)
-      ) {
+      if (!isObjectRecord(actualValue)) {
         return false
       }
-      return subsetMatch(
-        value as Record<string, unknown>,
-        actualValue as Record<string, unknown>
-      )
+      return subsetMatch(value, actualValue)
     }
     return actual[key] === value
   })
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
 }
 
 function normalizePolicyInput(
@@ -1079,109 +634,47 @@ async function normalizeDeliveryInput(input: AutomationDeliveryInput): Promise<
   }
 }
 
-async function loadAutomationTargets(
-  tableName: "automation_delivery_targets",
-  ruleIds: string[]
-) {
-  if (ruleIds.length === 0) {
-    return new Map<string, string[]>()
-  }
-  const result = await runQuery<TargetParticipantRow>(
-    `SELECT rule_id, target_participant_id
-     FROM ${tableName}
-     WHERE rule_id = ANY($1)
-     ORDER BY created_at ASC`,
-    [ruleIds]
-  )
-  const mapped = new Map<string, string[]>()
-  for (const row of result.rows) {
-    const existing = mapped.get(row.rule_id) || []
-    existing.push(row.target_participant_id)
-    mapped.set(row.rule_id, existing)
-  }
-  return mapped
-}
-
 async function loadAutomationRulesByIds(
   workspaceId: string,
   ruleIds: string[]
 ) {
   if (ruleIds.length === 0) return [] as AutomationRule[]
-  const [
-    rulesResult,
-    triggersResult,
-    policiesResult,
-    deliveriesResult,
-    targetsByRule,
-  ] = await Promise.all([
-    runQuery<AutomationRuleRow>(
-      `SELECT *
-       FROM automation_rules
-       WHERE workspace_id = $1
-         AND id = ANY($2)
-         AND deleted_at IS NULL
-       ORDER BY created_at DESC`,
-      [workspaceId, ruleIds]
-    ),
-    runQuery<AutomationTriggerRow>(
-      `SELECT at.*,
-              aes.source_key AS event_source_key,
-              aes.name AS event_source_name,
-              aes.provider_kind AS event_provider_kind,
-              aes.provider_ref AS event_provider_ref,
-              aes.webhook_endpoint_id AS event_webhook_endpoint_id,
-              aes.integration_binding_id AS event_integration_binding_id,
-              aib.installation_id AS event_integration_installation_id,
-              aib.provider AS event_integration_provider,
-              aib.ingress_kind AS event_integration_ingress_kind,
-              aib.target_kind AS event_integration_target_kind,
-              aib.target_id AS event_integration_target_id,
-              aib.target_label AS event_integration_target_label,
-              aib.webhook_endpoint_id AS event_integration_webhook_endpoint_id,
-              aib.external_subscription_id AS event_external_subscription_id,
-              aes.status AS event_source_status
-       FROM automation_triggers
-       at
-       LEFT JOIN automation_event_sources aes ON aes.id = at.event_source_id
-       LEFT JOIN automation_integration_bindings aib ON aib.id = aes.integration_binding_id
-       WHERE at.rule_id = ANY($1)`,
-      [ruleIds]
-    ),
-    runQuery<AutomationPolicyRow>(
-      `SELECT *
-       FROM automation_policies
-       WHERE rule_id = ANY($1)`,
-      [ruleIds]
-    ),
-    runQuery<AutomationDeliveryRow>(
-      `SELECT *
-       FROM automation_deliveries
-       WHERE rule_id = ANY($1)`,
-      [ruleIds]
-    ),
-    loadAutomationTargets("automation_delivery_targets", ruleIds),
-  ])
+  const { rules, triggers, policies, deliveries, targetsByRule } =
+    await loadAutomationRuleComponentRows(workspaceId, ruleIds)
 
   const triggerByRule = new Map(
-    triggersResult.rows.map((row) => [row.rule_id, mapTriggerRow(row)])
+    triggers.map((row) => {
+      const triggerRow = normalizeAutomationTriggerRow(row)
+      return [triggerRow.rule_id, presentTrigger(triggerRow)]
+    })
   )
   const policyByRule = new Map(
-    policiesResult.rows.map((row) => [row.rule_id, mapPolicyRow(row)])
+    policies.map((row) => {
+      const policyRow = normalizeAutomationPolicyRow(row)
+      return [policyRow.rule_id, presentPolicy(policyRow)]
+    })
   )
   const deliveryByRule = new Map(
-    deliveriesResult.rows.map((row) => [
-      row.rule_id,
-      mapDeliveryRow(row, targetsByRule.get(row.rule_id) || []),
-    ])
+    deliveries.map((row) => {
+      const deliveryRow = normalizeAutomationDeliveryRow(row)
+      return [
+        deliveryRow.rule_id,
+        presentDelivery(
+          deliveryRow,
+          targetsByRule.get(deliveryRow.rule_id) || []
+        ),
+      ]
+    })
   )
 
-  return rulesResult.rows
+  return rules
     .map((row) => {
-      const trigger = triggerByRule.get(row.id)
-      const policy = policyByRule.get(row.id)
-      const delivery = deliveryByRule.get(row.id)
+      const ruleRow = normalizeAutomationRuleRow(row)
+      const trigger = triggerByRule.get(ruleRow.id)
+      const policy = policyByRule.get(ruleRow.id)
+      const delivery = deliveryByRule.get(ruleRow.id)
       if (!trigger || !policy || !delivery) return null
-      return mapRuleRow(row, trigger, policy, delivery)
+      return presentRule(ruleRow, trigger, policy, delivery)
     })
     .filter((rule): rule is AutomationRule => Boolean(rule))
 }
@@ -1196,17 +689,11 @@ async function validateAutomationEventSourceProvider(
     if (!normalizedRef) {
       throw new Error("webhook event sources require providerRef")
     }
-    const endpointResult = await runBuilder(
-      db,
-      db
-        .selectFrom("automation_webhook_endpoints")
-        .select("id")
-        .where("id", "=", normalizedRef)
-        .where("workspace_id", "=", workspaceId)
-        .where("status", "=", "active")
-        .limit(1)
+    const endpointId = await selectActiveWebhookEndpointId(
+      workspaceId,
+      normalizedRef
     )
-    if (!endpointResult.rows[0]) {
+    if (!endpointId) {
       throw new Error(`Webhook endpoint ${normalizedRef} not found or inactive`)
     }
     return {
@@ -1254,22 +741,13 @@ async function allocateAutomationEventSourceKey(params: {
       attempt === 0
         ? baseKey
         : `${baseKey}.${crypto.randomBytes(2).toString("hex")}`
-    const existing = await runBuilder(
-      db,
-      db
-        .selectFrom("automation_event_sources")
-        .select("id")
-        .where("workspace_id", "=", params.workspaceId)
-        .where("provider_kind", "=", params.providerKind)
-        .where(
-          sql`COALESCE(provider_ref, '')`,
-          "=",
-          sql`COALESCE(${params.providerRef || null}, '')`
-        )
-        .where("source_key", "=", candidate)
-        .limit(1)
-    )
-    if (!existing.rows[0]) {
+    const exists = await existsAutomationEventSourceKey({
+      workspaceId: params.workspaceId,
+      providerKind: params.providerKind,
+      providerRef: params.providerRef,
+      sourceKey: candidate,
+    })
+    if (!exists) {
       return candidate
     }
   }
@@ -1283,37 +761,25 @@ async function pauseAutomationRulesForEventSource(
   reason: string
 ) {
   const auditUserId = await resolveAutomationAuditUserId(operator)
-  const affected = await runQuery<{ id: string; workspace_id: string }>(
-    `UPDATE automation_rules ar
-     SET status = 'paused',
-         last_error_at = NOW(),
-         last_error_message = $2
-     FROM automation_triggers at
-     WHERE at.rule_id = ar.id
-       AND at.event_source_id = $1
-       AND ar.category = 'event_subscription'
-       AND ar.status = 'active'
-       AND ar.deleted_at IS NULL
-     RETURNING ar.id, ar.workspace_id`,
-    [eventSourceId, reason]
-  )
+  const affected = await pauseAutomationRuleRowsForEventSource({
+    eventSourceId,
+    reason,
+    category: AUTOMATION_RULE_CATEGORY.EVENT_SUBSCRIPTION,
+  })
 
-  for (const row of affected.rows) {
-    await db
-      .insertInto("audit_logs")
-      .values({
-        workspace_id: row.workspace_id,
-        user_id: auditUserId,
-        actor_id: operator.actorId || null,
-        action: "automation_rule.pause",
-        resource_type: "automation_rule",
-        resource_id: row.id,
-        details: JSON.stringify({
-          reason,
-          eventSourceId,
-        }),
-      })
-      .execute()
+  for (const row of affected) {
+    await appendAutomationAuditLog({
+      workspaceId: row.workspaceId,
+      userId: auditUserId,
+      actorId: operator.actorId || null,
+      action: "automation_rule.pause",
+      resourceType: "automation_rule",
+      resourceId: row.id,
+      details: {
+        reason,
+        eventSourceId,
+      },
+    })
   }
 }
 
@@ -1368,7 +834,7 @@ async function loadAutomationEventSourceAccessRows(
   // P3: delegate the SELECT-with-access_subjects-JOIN to binding-storage. The
   // helper returns normalized AutomationEventSourceBindingRow rows; this function only has to
   // bucket them by event source.
-  const rows = await loadAutomationEventSourceAccessBindingRowsForSources(db, {
+  const rows = await loadAutomationEventSourceAccessBindingRows({
     resourceType: "automation_event_source",
     resourceIds: uniqueIds,
     workspaceId,
@@ -1377,9 +843,9 @@ async function loadAutomationEventSourceAccessRows(
 
   const rowsBySource = new Map<string, AutomationEventSourceAccessRow[]>()
   for (const row of rows) {
-    const existing = rowsBySource.get(row.resource_id) || []
+    const existing = rowsBySource.get(row.resourceId) || []
     existing.push(row)
-    rowsBySource.set(row.resource_id, existing)
+    rowsBySource.set(row.resourceId, existing)
   }
   return rowsBySource
 }
@@ -1405,7 +871,7 @@ function automationEventSourceGrantApplies(params: {
   if (
     !bindingAllowsConversationType({
       conversation: params.conversation,
-      conversationTypeMaskOverride: params.row.conversation_type_mask_override,
+      conversationTypeMaskOverride: params.row.conversationTypeMaskOverride,
     })
   ) {
     return false
@@ -1421,7 +887,7 @@ function automationEventSourceGrantApplies(params: {
           ((params.conversation.workspace_id as string | null | undefined) ||
             null) ||
         ((subject as { workspaceId: string }).workspaceId || null) ===
-          (params.row.workspace_id || null)
+          (params.row.workspaceId || null)
       )
     case "conversation":
       return (
@@ -1493,7 +959,7 @@ function mapAutomationEventSourceAccessGrant(
     {
       effectiveConversationTypeMask:
         resolveAutomationEventSourceConversationMask(
-          row.conversation_type_mask_override
+          row.conversationTypeMaskOverride
         ),
     }
   )
@@ -1611,7 +1077,7 @@ export async function grantAutomationEventSourceAccess(input: {
     return mapAutomationEventSourceAccessGrant(existing)
   }
 
-  const inserted = await withDbTransaction(async (trx) => {
+  const inserted = await withAutomationTransaction(async (trx) => {
     const binding =
       await insertAutomationEventSourceAccessBindingReturningRowOn(trx, {
         workspaceId: input.workspaceId,
@@ -1663,15 +1129,11 @@ export async function updateAutomationEventSourceAccessGrant(input: {
       })
     }
 
-    await updateAutomationEventSourceAccessGrantConversationTypeMaskOverride(
-      db,
-      {
-        bindingId: input.bindingId,
-        workspaceId: input.workspaceId,
-        conversationTypeMaskOverride:
-          input.conversationTypeMaskOverride ?? null,
-      }
-    )
+    await updateAutomationEventSourceAccessBindingMaskOverride({
+      bindingId: input.bindingId,
+      workspaceId: input.workspaceId,
+      conversationTypeMaskOverride: input.conversationTypeMaskOverride ?? null,
+    })
   }
 
   const updatedRows = await listAutomationEventSourceAccessRows(
@@ -1692,35 +1154,20 @@ async function pauseAutomationRule(params: {
   operator: AutomationOperatorInput
 }) {
   const auditUserId = await resolveAutomationAuditUserId(params.operator)
-  const updated = await runBuilder(
-    db,
-    db
-      .updateTable("automation_rules")
-      .set({
-        status: "paused",
-        last_error_at: sql`NOW()`,
-        last_error_message: params.reason,
-      })
-      .where("id", "=", params.ruleId)
-      .where("status", "=", "active")
-      .returning("id")
-  )
-  if (!updated.rows[0]) {
+  const didPause = await pauseActiveAutomationRule(params.ruleId, params.reason)
+  if (!didPause) {
     return
   }
 
-  await db
-    .insertInto("audit_logs")
-    .values({
-      workspace_id: params.workspaceId,
-      user_id: auditUserId,
-      actor_id: params.operator.actorId || null,
-      action: "automation_rule.pause",
-      resource_type: "automation_rule",
-      resource_id: params.ruleId,
-      details: JSON.stringify({ reason: params.reason }),
-    })
-    .execute()
+  await appendAutomationAuditLog({
+    workspaceId: params.workspaceId,
+    userId: auditUserId,
+    actorId: params.operator.actorId || null,
+    action: "automation_rule.pause",
+    resourceType: "automation_rule",
+    resourceId: params.ruleId,
+    details: { reason: params.reason },
+  })
 }
 
 async function pauseAutomationRulesMissingEventSourceAccess(
@@ -1728,27 +1175,20 @@ async function pauseAutomationRulesMissingEventSourceAccess(
   operator: AutomationOperatorInput,
   reason: string
 ) {
-  const result = await runQuery<AutomationRuleRow>(
-    `SELECT ar.*
-     FROM automation_rules ar
-     JOIN automation_triggers at
-       ON at.rule_id = ar.id
-     WHERE at.event_source_id = $1
-       AND ar.category = 'event_subscription'
-       AND ar.status = 'active'
-       AND ar.deleted_at IS NULL`,
-    [eventSourceId]
-  )
+  const rows = await listActiveEventSubscriptionRuleRowsByEventSource({
+    eventSourceId,
+    category: AUTOMATION_RULE_CATEGORY.EVENT_SUBSCRIPTION,
+  })
 
-  for (const row of result.rows) {
+  for (const row of rows.map(normalizeAutomationRuleRow)) {
     const conversation = await loadConversationWithImFlag(row.conversation_id)
     const creatorParticipant = await getConversationParticipant({
       conversationId: row.conversation_id,
       participantId: row.created_by_participant_id,
     })
     const creatorActorId =
-      creatorParticipant?.actor_id && creatorParticipant.state === "active"
-        ? (creatorParticipant.actor_id as string)
+      creatorParticipant?.actorId && creatorParticipant.state === "active"
+        ? (creatorParticipant.actorId as string)
         : null
     const stillAllowed =
       Boolean(conversation) &&
@@ -1785,7 +1225,7 @@ export async function revokeAutomationEventSourceAccess(input: {
     throw new Error("Automation event source access binding not found")
   }
 
-  await revokeAutomationEventSourceAccessBinding(db, {
+  await revokeAutomationEventSourceAccessBindingById({
     bindingId: input.bindingId,
   })
   await pauseAutomationRulesMissingEventSourceAccess(
@@ -1799,17 +1239,8 @@ export async function getAutomationEventSource(
   workspaceId: string,
   eventSourceId: string
 ) {
-  const result = await runQuery<AutomationEventSourceRow>(
-    `SELECT ${automationEventSourceSelectClause("aes", "aib")}
-     FROM automation_event_sources aes
-     ${automationEventSourceJoinClause("aes", "aib")}
-     WHERE aes.workspace_id = $1
-       AND aes.id = $2
-       AND aes.deleted_at IS NULL
-     LIMIT 1`,
-    [workspaceId, eventSourceId]
-  )
-  return result.rows[0] ? mapEventSourceRow(result.rows[0]) : null
+  const row = await getAutomationEventSourceRow({ workspaceId, eventSourceId })
+  return row ? presentEventSource(normalizeAutomationEventSourceRow(row)) : null
 }
 
 export async function listAutomationEventSources(
@@ -1822,35 +1253,10 @@ export async function listAutomationEventSources(
   },
   accessContext?: AutomationEventSourceAccessContext
 ) {
-  const values: unknown[] = [workspaceId]
-  let where = "aes.workspace_id = $1 AND aes.deleted_at IS NULL"
-
-  if (filters?.status) {
-    values.push(filters.status)
-    where += ` AND aes.status = $${values.length}`
-  }
-  if (filters?.providerKind) {
-    values.push(filters.providerKind)
-    where += ` AND aes.provider_kind = $${values.length}`
-  }
-  if (filters?.providerRef !== undefined) {
-    values.push(filters.providerRef)
-    where += ` AND COALESCE(aes.provider_ref, '') = COALESCE($${values.length}, '')`
-  }
-  if (filters?.sourceKey) {
-    values.push(filters.sourceKey)
-    where += ` AND aes.source_key = $${values.length}`
-  }
-
-  const result = await runQuery<AutomationEventSourceRow>(
-    `SELECT ${automationEventSourceSelectClause("aes", "aib")}
-     FROM automation_event_sources aes
-     ${automationEventSourceJoinClause("aes", "aib")}
-     WHERE ${where}
-     ORDER BY aes.created_at DESC`,
-    values
-  )
-  const sources = result.rows.map(mapEventSourceRow)
+  const rows = await listAutomationEventSourceRows({ workspaceId, filters })
+  const sources = rows
+    .map(normalizeAutomationEventSourceRow)
+    .map(presentEventSource)
   if (!accessContext) {
     return sources
   }
@@ -1878,45 +1284,20 @@ export async function listAutomationEventSources(
 }
 
 async function loadAutomationWebhookEndpointSecret(endpointId: string) {
-  const result = await runQuery<AutomationWebhookEndpointRow>(
-    `SELECT *
-     FROM automation_webhook_endpoints
-     WHERE id = $1
-     LIMIT 1`,
-    [endpointId]
-  )
-  const row = result.rows[0]
+  const row = await selectAutomationWebhookEndpointRow(endpointId)
   if (!row?.secret_ciphertext) {
     throw new Error(`Webhook endpoint ${endpointId} secret was not found`)
   }
   return {
-    endpoint: mapWebhookEndpointRow(row),
+    endpoint: presentWebhookEndpoint(
+      normalizeAutomationWebhookEndpointRow(row)
+    ),
     secret: decrypt(row.secret_ciphertext),
   }
 }
 
-async function updateWebhookEndpointStatus(
-  endpointId: string,
-  status: AutomationWebhookEndpoint["status"]
-) {
-  await db
-    .updateTable("automation_webhook_endpoints")
-    .set({
-      status,
-    })
-    .where("id", "=", endpointId)
-    .execute()
-}
-
 async function getAutomationIntegrationBinding(bindingId: string) {
-  const result = await runQuery<AutomationIntegrationBindingRow>(
-    `SELECT *
-     FROM automation_integration_bindings
-     WHERE id = $1
-     LIMIT 1`,
-    [bindingId]
-  )
-  return result.rows[0] || null
+  return selectAutomationIntegrationBindingRow(bindingId)
 }
 
 function integrationEndpointName(
@@ -1958,35 +1339,17 @@ async function ensureAutomationIntegrationBinding(params: {
   const ingressKind = params.integration.ingressKind || "webhook"
   const targetId = params.integration.targetId.trim()
   const targetLabel = params.integration.targetLabel?.trim() || targetId
-  const existingResult = await runQuery<AutomationIntegrationBindingRow>(
-    `SELECT *
-     FROM automation_integration_bindings
-     WHERE workspace_id = $1
-       AND installation_id = $2
-       AND provider = $3
-       AND ingress_kind = $4
-       AND target_kind = $5
-       AND target_id = $6
-     LIMIT 1`,
-    [
-      params.workspaceId,
-      params.installation.id,
-      params.integration.provider,
-      ingressKind,
-      params.integration.targetKind,
-      targetId,
-    ]
-  )
-  const existing = existingResult.rows[0]
+  const existing = await selectExistingAutomationIntegrationBindingRow({
+    workspaceId: params.workspaceId,
+    installationId: params.installation.id,
+    provider: params.integration.provider,
+    ingressKind,
+    targetKind: params.integration.targetKind,
+    targetId,
+  })
   if (existing) {
     if (existing.target_label !== targetLabel) {
-      await db
-        .updateTable("automation_integration_bindings")
-        .set({
-          target_label: targetLabel,
-        })
-        .where("id", "=", existing.id)
-        .execute()
+      await updateIntegrationBindingTargetLabel(existing.id, targetLabel)
       return getAutomationIntegrationBinding(existing.id)
     }
     return existing
@@ -1998,74 +1361,50 @@ async function ensureAutomationIntegrationBinding(params: {
     ingressKind === "webhook" ? crypto.randomBytes(18).toString("hex") : null
   const secret = ingressKind === "webhook" ? generateSecret() : null
 
-  await withDbTransaction(async (trx) => {
+  await withAutomationTransaction(async (trx) => {
     if (endpointId && pathToken && secret) {
-      await trx
-        .insertInto("automation_webhook_endpoints")
-        .values({
-          id: endpointId,
-          workspace_id: params.workspaceId,
-          name: integrationEndpointName(
-            params.integration.provider,
-            targetLabel
-          ),
-          status: "disabled",
-          path_token: pathToken,
-          secret_ciphertext: encrypt(secret),
-          secret_hint: secretHint(secret),
-          metadata: JSON.stringify({
-            managedBy: "integration_binding",
-            integrationProvider: params.integration.provider,
-            integrationTargetKind: params.integration.targetKind,
-            integrationTargetId: targetId,
-            integrationTargetLabel: targetLabel,
-          }),
-          created_by_workspace_member_id:
-            params.creator.workspaceMemberId || null,
-          created_at: sql`NOW()`,
-        })
-        .execute()
-    }
-
-    await trx
-      .insertInto("automation_integration_bindings")
-      .values({
-        id: bindingId,
-        workspace_id: params.workspaceId,
-        installation_id: params.installation.id,
-        provider: params.integration.provider,
-        ingress_kind: ingressKind,
-        target_kind: params.integration.targetKind,
-        target_id: targetId,
-        target_label: targetLabel,
-        webhook_endpoint_id: endpointId,
-        external_subscription_id: null,
+      await insertWebhookEndpointRow(trx, {
+        id: endpointId,
+        workspaceId: params.workspaceId,
+        name: integrationEndpointName(params.integration.provider, targetLabel),
+        status: "disabled",
+        pathToken: pathToken,
+        secretCiphertext: encrypt(secret),
+        secretHint: secretHint(secret),
         metadata: JSON.stringify({
+          managedBy: "integration_binding",
           integrationProvider: params.integration.provider,
           integrationTargetKind: params.integration.targetKind,
+          integrationTargetId: targetId,
+          integrationTargetLabel: targetLabel,
         }),
-        created_at: sql`NOW()`,
+        createdByWorkspaceMemberId: params.creator.workspaceMemberId || null,
       })
-      .execute()
+    }
+
+    await insertIntegrationBindingRow(trx, {
+      id: bindingId,
+      workspaceId: params.workspaceId,
+      installationId: params.installation.id,
+      provider: params.integration.provider,
+      ingressKind: ingressKind,
+      targetKind: params.integration.targetKind,
+      targetId: targetId,
+      targetLabel: targetLabel,
+      webhookEndpointId: endpointId,
+      externalSubscriptionId: null,
+      metadata: JSON.stringify({
+        integrationProvider: params.integration.provider,
+        integrationTargetKind: params.integration.targetKind,
+      }),
+    })
   })
 
   return getAutomationIntegrationBinding(bindingId)
 }
 
 async function listActiveIntegrationSourceKeysForBinding(bindingId: string) {
-  const result = await runBuilder(
-    db,
-    db
-      .selectFrom("automation_event_sources")
-      .select("source_key")
-      .where("provider_kind", "=", "integration")
-      .where("integration_binding_id", "=", bindingId)
-      .where("status", "in", ["active", "deprecated"])
-      .orderBy("source_key", "asc")
-  )
-  return Array.from(
-    new Set(result.rows.map((row) => row.source_key).filter(Boolean))
-  )
+  return listActiveIntegrationSourceKeysForBindingRepo(bindingId)
 }
 
 async function reconcileIntegrationBindingWebhook(
@@ -2098,13 +1437,7 @@ async function reconcileIntegrationBindingWebhook(
         integration,
       })
     }
-    await db
-      .updateTable("automation_integration_bindings")
-      .set({
-        external_subscription_id: null,
-      })
-      .where("id", "=", binding.id)
-      .execute()
+    await updateIntegrationBindingExternalSubscriptionId(binding.id, null)
     await updateWebhookEndpointStatus(endpoint.id, "disabled")
     return getAutomationIntegrationBinding(binding.id)
   }
@@ -2162,13 +1495,10 @@ async function reconcileIntegrationBindingWebhook(
     })
   }
 
-  await db
-    .updateTable("automation_integration_bindings")
-    .set({
-      external_subscription_id: externalSubscriptionId,
-    })
-    .where("id", "=", binding.id)
-    .execute()
+  await updateIntegrationBindingExternalSubscriptionId(
+    binding.id,
+    externalSubscriptionId
+  )
   await updateWebhookEndpointStatus(endpoint.id, "active")
   return getAutomationIntegrationBinding(binding.id)
 }
@@ -2218,44 +1548,36 @@ async function createIntegrationAutomationEventSource(
     targetLabel,
   })
 
-  const existingResult = await runBuilder(
-    db,
-    db
-      .selectFrom("automation_event_sources")
-      .select(["id", "status", "metadata"])
-      .where("workspace_id", "=", workspaceId)
-      .where("provider_kind", "=", "integration")
-      .where("integration_binding_id", "=", binding.id)
-      .where("source_key", "=", normalizedSourceKey)
-      .limit(1)
-  )
-  const existing = existingResult.rows[0]
+  const existing = await selectIntegrationEventSourceReuseRow({
+    workspaceId,
+    bindingId: binding.id,
+    sourceKey: normalizedSourceKey,
+  })
 
   if (existing) {
     const nextStatus = input.status || "active"
-    await db
-      .updateTable("automation_event_sources")
-      .set({
+    await updateAutomationEventSourceRow({
+      workspaceId,
+      eventSourceId: existing.id,
+      values: {
         name: input.name?.trim() || template.name,
         description: input.description?.trim() || template.description,
-        recommended_usage:
+        recommendedUsage:
           input.recommendedUsage?.trim() || template.recommendedUsage || "",
-        payload_schema: JSON.stringify(
+        payloadSchema: JSON.stringify(
           input.payloadSchema || template.payloadSchema || {}
         ),
-        example_payload: JSON.stringify(
+        examplePayload: JSON.stringify(
           input.examplePayload || template.examplePayload || {}
         ),
         status: input.status || "active",
         metadata: JSON.stringify({
-          ...parseJsonObject(existing.metadata),
+          ...existing.metadata,
           ...(template.metadata || {}),
           ...(input.metadata || {}),
         }),
-      })
-      .where("workspace_id", "=", workspaceId)
-      .where("id", "=", existing.id)
-      .execute()
+      },
+    })
 
     if (
       binding.ingress_kind === "webhook" &&
@@ -2267,32 +1589,29 @@ async function createIntegrationAutomationEventSource(
       await reconcileIntegrationBindingWebhook(binding.id)
     }
 
-    await db
-      .insertInto("audit_logs")
-      .values({
-        workspace_id: workspaceId,
-        user_id: auditUserId,
-        actor_id: creator.actorId || null,
-        action: "automation_event_source.update",
-        resource_type: "automation_event_source",
-        resource_id: existing.id,
-        details: JSON.stringify({
-          providerKind: "integration",
-          sourceKey: normalizedSourceKey,
-          integration: {
-            bindingId: binding.id,
-            installationId: installation.id,
-            provider: integration.provider,
-            ingressKind,
-            targetKind: integration.targetKind,
-            targetId,
-            targetLabel,
-          },
-          reusedExisting: true,
-          status: nextStatus,
-        }),
-      })
-      .execute()
+    await appendAutomationAuditLog({
+      workspaceId: workspaceId,
+      userId: auditUserId,
+      actorId: creator.actorId || null,
+      action: "automation_event_source.update",
+      resourceType: "automation_event_source",
+      resourceId: existing.id,
+      details: {
+        providerKind: "integration",
+        sourceKey: normalizedSourceKey,
+        integration: {
+          bindingId: binding.id,
+          installationId: installation.id,
+          provider: integration.provider,
+          ingressKind,
+          targetKind: integration.targetKind,
+          targetId,
+          targetLabel,
+        },
+        reusedExisting: true,
+        status: nextStatus,
+      },
+    })
     const updated = await getAutomationEventSource(workspaceId, existing.id)
     if (!updated) {
       throw new Error(
@@ -2303,50 +1622,48 @@ async function createIntegrationAutomationEventSource(
   }
 
   const sourceId = uuidv4()
-  await withDbTransaction(async (trx) => {
-    await trx
-      .insertInto("automation_event_sources")
-      .values({
+  await withAutomationTransaction(async (trx) => {
+    await insertAutomationEventSourceRow(
+      {
         id: sourceId,
-        workspace_id: workspaceId,
-        provider_kind: "integration",
-        provider_ref: null,
-        webhook_endpoint_id: null,
-        integration_binding_id: binding.id,
-        source_key: normalizedSourceKey,
+        workspaceId: workspaceId,
+        providerKind: "integration",
+        providerRef: null,
+        webhookEndpointId: null,
+        integrationBindingId: binding.id,
+        sourceKey: normalizedSourceKey,
         name: input.name?.trim() || template.name,
         description: input.description?.trim() || template.description,
-        recommended_usage:
+        recommendedUsage:
           input.recommendedUsage?.trim() || template.recommendedUsage || "",
-        payload_schema: JSON.stringify(
+        payloadSchema: JSON.stringify(
           input.payloadSchema || template.payloadSchema || {}
         ),
-        example_payload: JSON.stringify(
+        examplePayload: JSON.stringify(
           input.examplePayload || template.examplePayload || {}
         ),
         status: initialStatus,
-        created_by_kind: creator.kind,
-        created_by_workspace_member_id: creator.workspaceMemberId || null,
-        created_by_actor_id: creator.actorId || null,
-        created_by_session_id: creator.sessionId || null,
+        createdByKind: creator.kind,
+        createdByWorkspaceMemberId: creator.workspaceMemberId || null,
+        createdByActorId: creator.actorId || null,
+        createdBySessionId: creator.sessionId || null,
         metadata: JSON.stringify({
           ...(template.metadata || {}),
           ...(input.metadata || {}),
         }),
-        created_at: sql`NOW()`,
-      })
-      .execute()
+      },
+      trx
+    )
 
-    await trx
-      .insertInto("audit_logs")
-      .values({
-        workspace_id: workspaceId,
-        user_id: auditUserId,
-        actor_id: creator.actorId || null,
+    await appendAutomationAuditLog(
+      {
+        workspaceId: workspaceId,
+        userId: auditUserId,
+        actorId: creator.actorId || null,
         action: "automation_event_source.create",
-        resource_type: "automation_event_source",
-        resource_id: sourceId,
-        details: JSON.stringify({
+        resourceType: "automation_event_source",
+        resourceId: sourceId,
+        details: {
           providerKind: "integration",
           sourceKey: normalizedSourceKey,
           integration: {
@@ -2359,9 +1676,10 @@ async function createIntegrationAutomationEventSource(
             targetLabel,
           },
           status: initialStatus,
-        }),
-      })
-      .execute()
+        },
+      },
+      trx
+    )
   })
 
   try {
@@ -2376,14 +1694,7 @@ async function createIntegrationAutomationEventSource(
     // Saga compensating rollback: the just-created event source never became
     // usable. Soft-delete it (hard delete forbidden by sd_reject_delete); an
     // offline purge reclaims the tombstone later.
-    await db
-      .updateTable("automation_event_sources")
-      .set({ deleted_at: sql`NOW()` })
-      .where("workspace_id", "=", workspaceId)
-      .where("id", "=", sourceId)
-      .where("deleted_at", "is", null)
-      .execute()
-      .catch(() => undefined)
+    await softDeleteAutomationEventSource(workspaceId, sourceId)
     throw error
   }
 
@@ -2420,60 +1731,46 @@ export async function createAutomationEventSource(
     name: input.name,
     explicitKey: input.sourceKey,
   })
-  const existingResult = await runBuilder(
-    db,
-    db
-      .selectFrom("automation_event_sources")
-      .select(["id", "metadata"])
-      .where("workspace_id", "=", workspaceId)
-      .where("provider_kind", "=", input.providerKind)
-      .where(
-        sql`COALESCE(provider_ref, '')`,
-        "=",
-        sql`COALESCE(${providerBinding.providerRef}, '')`
-      )
-      .where("source_key", "=", normalizedSourceKey)
-      .limit(1)
-  )
-  const existing = existingResult.rows[0]
+  const existing = await selectAutomationEventSourceReuseRow({
+    workspaceId,
+    providerKind: input.providerKind,
+    providerRef: providerBinding.providerRef,
+    sourceKey: normalizedSourceKey,
+  })
 
   if (existing) {
-    await db
-      .updateTable("automation_event_sources")
-      .set({
-        provider_ref: providerBinding.providerRef,
-        webhook_endpoint_id: providerBinding.webhookEndpointId,
+    await updateAutomationEventSourceRow({
+      workspaceId,
+      eventSourceId: existing.id,
+      values: {
+        providerRef: providerBinding.providerRef,
+        webhookEndpointId: providerBinding.webhookEndpointId,
         name: input.name.trim(),
         description: input.description.trim(),
-        recommended_usage: input.recommendedUsage?.trim() || "",
-        payload_schema: JSON.stringify(input.payloadSchema || {}),
-        example_payload: JSON.stringify(input.examplePayload || {}),
+        recommendedUsage: input.recommendedUsage?.trim() || "",
+        payloadSchema: JSON.stringify(input.payloadSchema || {}),
+        examplePayload: JSON.stringify(input.examplePayload || {}),
         status: input.status || "active",
         metadata: JSON.stringify(input.metadata || existing.metadata || {}),
-      })
-      .where("workspace_id", "=", workspaceId)
-      .where("id", "=", existing.id)
-      .execute()
+      },
+    })
 
-    await db
-      .insertInto("audit_logs")
-      .values({
-        workspace_id: workspaceId,
-        user_id: auditUserId,
-        actor_id: creator.actorId || null,
-        action: "automation_event_source.update",
-        resource_type: "automation_event_source",
-        resource_id: existing.id,
-        details: JSON.stringify({
-          providerKind: input.providerKind,
-          providerRef: providerBinding.providerRef,
-          sourceKey: normalizedSourceKey,
-          recommendedUsage: input.recommendedUsage?.trim() || "",
-          status: input.status || "active",
-          reusedExisting: true,
-        }),
-      })
-      .execute()
+    await appendAutomationAuditLog({
+      workspaceId: workspaceId,
+      userId: auditUserId,
+      actorId: creator.actorId || null,
+      action: "automation_event_source.update",
+      resourceType: "automation_event_source",
+      resourceId: existing.id,
+      details: {
+        providerKind: input.providerKind,
+        providerRef: providerBinding.providerRef,
+        sourceKey: normalizedSourceKey,
+        recommendedUsage: input.recommendedUsage?.trim() || "",
+        status: input.status || "active",
+        reusedExisting: true,
+      },
+    })
 
     const updated = await getAutomationEventSource(workspaceId, existing.id)
     if (!updated) {
@@ -2486,48 +1783,41 @@ export async function createAutomationEventSource(
 
   const sourceId = uuidv4()
 
-  await db
-    .insertInto("automation_event_sources")
-    .values({
-      id: sourceId,
-      workspace_id: workspaceId,
-      provider_kind: input.providerKind,
-      provider_ref: providerBinding.providerRef,
-      webhook_endpoint_id: providerBinding.webhookEndpointId,
-      source_key: normalizedSourceKey,
-      name: input.name.trim(),
-      description: input.description.trim(),
-      recommended_usage: input.recommendedUsage?.trim() || "",
-      payload_schema: JSON.stringify(input.payloadSchema || {}),
-      example_payload: JSON.stringify(input.examplePayload || {}),
-      status: input.status || "active",
-      created_by_kind: creator.kind,
-      created_by_workspace_member_id: creator.workspaceMemberId || null,
-      created_by_actor_id: creator.actorId || null,
-      created_by_session_id: creator.sessionId || null,
-      metadata: JSON.stringify(input.metadata || {}),
-      created_at: sql`NOW()`,
-    })
-    .execute()
+  await insertAutomationEventSourceRow({
+    id: sourceId,
+    workspaceId: workspaceId,
+    providerKind: input.providerKind,
+    providerRef: providerBinding.providerRef,
+    webhookEndpointId: providerBinding.webhookEndpointId,
+    sourceKey: normalizedSourceKey,
+    name: input.name.trim(),
+    description: input.description.trim(),
+    recommendedUsage: input.recommendedUsage?.trim() || "",
+    payloadSchema: JSON.stringify(input.payloadSchema || {}),
+    examplePayload: JSON.stringify(input.examplePayload || {}),
+    status: input.status || "active",
+    createdByKind: creator.kind,
+    createdByWorkspaceMemberId: creator.workspaceMemberId || null,
+    createdByActorId: creator.actorId || null,
+    createdBySessionId: creator.sessionId || null,
+    metadata: JSON.stringify(input.metadata || {}),
+  })
 
-  await db
-    .insertInto("audit_logs")
-    .values({
-      workspace_id: workspaceId,
-      user_id: auditUserId,
-      actor_id: creator.actorId || null,
-      action: "automation_event_source.create",
-      resource_type: "automation_event_source",
-      resource_id: sourceId,
-      details: JSON.stringify({
-        providerKind: input.providerKind,
-        providerRef: providerBinding.providerRef,
-        sourceKey: normalizedSourceKey,
-        recommendedUsage: input.recommendedUsage?.trim() || "",
-        status: input.status || "active",
-      }),
-    })
-    .execute()
+  await appendAutomationAuditLog({
+    workspaceId: workspaceId,
+    userId: auditUserId,
+    actorId: creator.actorId || null,
+    action: "automation_event_source.create",
+    resourceType: "automation_event_source",
+    resourceId: sourceId,
+    details: {
+      providerKind: input.providerKind,
+      providerRef: providerBinding.providerRef,
+      sourceKey: normalizedSourceKey,
+      recommendedUsage: input.recommendedUsage?.trim() || "",
+      status: input.status || "active",
+    },
+  })
 
   const created = await getAutomationEventSource(workspaceId, sourceId)
   if (!created) {
@@ -2572,28 +1862,29 @@ export async function updateAutomationEventSource(
         )
   const nextStatus = input.status || existing.status
 
-  await db
-    .updateTable("automation_event_sources")
-    .set({
-      provider_ref: providerBinding.providerRef,
-      webhook_endpoint_id: providerBinding.webhookEndpointId,
-      integration_binding_id: existing.integration?.bindingId || null,
-      source_key: existing.sourceKey,
+  await updateAutomationEventSourceRow({
+    workspaceId,
+    eventSourceId,
+    values: {
+      providerRef: providerBinding.providerRef,
+      webhookEndpointId: providerBinding.webhookEndpointId,
+      integrationBindingId: existing.integration?.bindingId || null,
+      sourceKey: existing.sourceKey,
       name: input.name?.trim() || existing.name,
       description:
         input.description !== undefined
           ? input.description.trim()
           : existing.description,
-      recommended_usage:
+      recommendedUsage:
         input.recommendedUsage !== undefined
           ? input.recommendedUsage.trim()
           : existing.recommendedUsage || "",
-      payload_schema: JSON.stringify(
+      payloadSchema: JSON.stringify(
         input.payloadSchema !== undefined
           ? input.payloadSchema
           : existing.payloadSchema
       ),
-      example_payload: JSON.stringify(
+      examplePayload: JSON.stringify(
         input.examplePayload !== undefined
           ? input.examplePayload
           : existing.examplePayload
@@ -2602,10 +1893,8 @@ export async function updateAutomationEventSource(
       metadata: JSON.stringify(
         input.metadata !== undefined ? input.metadata : existing.metadata
       ),
-    })
-    .where("workspace_id", "=", workspaceId)
-    .where("id", "=", eventSourceId)
-    .execute()
+    },
+  })
 
   const integrationStatusChanged =
     existing.providerKind === "integration" &&
@@ -2632,26 +1921,23 @@ export async function updateAutomationEventSource(
     )
   }
 
-  await db
-    .insertInto("audit_logs")
-    .values({
-      workspace_id: workspaceId,
-      user_id: auditUserId,
-      actor_id: operator.actorId || null,
-      action: "automation_event_source.update",
-      resource_type: "automation_event_source",
-      resource_id: eventSourceId,
-      details: JSON.stringify({
-        status: nextStatus,
-        providerRef: providerBinding.providerRef,
-        sourceKey: existing.sourceKey,
-        recommendedUsage:
-          input.recommendedUsage !== undefined
-            ? input.recommendedUsage.trim()
-            : existing.recommendedUsage || "",
-      }),
-    })
-    .execute()
+  await appendAutomationAuditLog({
+    workspaceId: workspaceId,
+    userId: auditUserId,
+    actorId: operator.actorId || null,
+    action: "automation_event_source.update",
+    resourceType: "automation_event_source",
+    resourceId: eventSourceId,
+    details: {
+      status: nextStatus,
+      providerRef: providerBinding.providerRef,
+      sourceKey: existing.sourceKey,
+      recommendedUsage:
+        input.recommendedUsage !== undefined
+          ? input.recommendedUsage.trim()
+          : existing.recommendedUsage || "",
+    },
+  })
 
   let updated = await getAutomationEventSource(workspaceId, eventSourceId)
   if (!updated) {
@@ -2673,14 +1959,11 @@ export async function archiveAutomationEventSource(
     throw new Error("Automation event source not found")
   }
 
-  await db
-    .updateTable("automation_event_sources")
-    .set({
-      status: "archived",
-    })
-    .where("workspace_id", "=", workspaceId)
-    .where("id", "=", eventSourceId)
-    .execute()
+  await setAutomationEventSourceStatus({
+    workspaceId,
+    eventSourceId,
+    status: "archived",
+  })
 
   if (
     existing.providerKind === "integration" &&
@@ -2696,201 +1979,60 @@ export async function archiveAutomationEventSource(
     `Event source ${eventSourceId} was archived`
   )
 
-  await db
-    .insertInto("audit_logs")
-    .values({
-      workspace_id: workspaceId,
-      user_id: auditUserId,
-      actor_id: operator.actorId || null,
-      action: "automation_event_source.archive",
-      resource_type: "automation_event_source",
-      resource_id: eventSourceId,
-      details: JSON.stringify({ archived: true }),
-    })
-    .execute()
+  await appendAutomationAuditLog({
+    workspaceId: workspaceId,
+    userId: auditUserId,
+    actorId: operator.actorId || null,
+    action: "automation_event_source.archive",
+    resourceType: "automation_event_source",
+    resourceId: eventSourceId,
+    details: { archived: true },
+  })
 }
 
 async function getAutomationEventSourceByWebhookPathToken(
   pathToken: string,
   sourceKey: string
 ) {
-  const result = await runQuery<
-    AutomationEventSourceRow & {
-      endpoint_secret_ciphertext: string
-      endpoint_name: string
-      endpoint_id: string
-    }
-  >(
-    `SELECT aes.*,
-            awe.secret_ciphertext AS endpoint_secret_ciphertext,
-            awe.name AS endpoint_name,
-            awe.id AS endpoint_id
-     FROM automation_event_sources aes
-     JOIN automation_webhook_endpoints awe
-       ON awe.id = aes.webhook_endpoint_id
-     WHERE awe.path_token = $1
-       AND awe.status = 'active'
-       AND awe.deleted_at IS NULL
-       AND aes.provider_kind = 'webhook'
-       AND aes.source_key = $2
-       AND aes.status IN ('active', 'deprecated')
-       AND aes.deleted_at IS NULL
-     LIMIT 1`,
-    [pathToken, sourceKey]
-  )
-  return result.rows[0] || null
+  return selectWebhookAutomationEventSourceByPathToken({
+    pathToken,
+    sourceKey,
+  })
 }
 
 async function listIntegrationEventSourcesByWebhookPathToken(
   pathToken: string
 ) {
-  const result = await runQuery<
-    AutomationEventSourceRow & {
-      endpoint_secret_ciphertext: string
-      endpoint_name: string
-      endpoint_id: string
-    }
-  >(
-    `SELECT ${automationEventSourceSelectClause("aes", "aib")},
-            awe.secret_ciphertext AS endpoint_secret_ciphertext,
-            awe.name AS endpoint_name,
-            awe.id AS endpoint_id
-     FROM automation_integration_bindings aib
-     JOIN automation_webhook_endpoints awe
-       ON awe.id = aib.webhook_endpoint_id
-     JOIN automation_event_sources aes
-       ON aes.integration_binding_id = aib.id
-     WHERE awe.path_token = $1
-       AND awe.status = 'active'
-       AND awe.deleted_at IS NULL
-       AND aib.ingress_kind = 'webhook'
-       AND aib.deleted_at IS NULL
-       AND aes.provider_kind = 'integration'
-       AND aes.status IN ('active', 'deprecated')
-       AND aes.deleted_at IS NULL
-     ORDER BY aes.created_at ASC`,
-    [pathToken]
-  )
-  return result.rows
-}
-
-async function persistAutomationTargets(
-  executor: Executor,
-  tableName: "automation_delivery_targets",
-  ruleId: string,
-  targetParticipantIds: string[]
-) {
-  await runnerFor(executor).run(`DELETE FROM ${tableName} WHERE rule_id = $1`, [
-    ruleId,
-  ])
-  for (const targetParticipantId of targetParticipantIds) {
-    await runnerFor(executor).run(
-      `INSERT INTO ${tableName} (id, rule_id, target_participant_id, created_at)
-       VALUES ($1, $2, $3, NOW())`,
-      [uuidv4(), ruleId, targetParticipantId]
-    )
-  }
-}
-
-async function updateRuleError(ruleId: string, errorMessage: string | null) {
-  await db
-    .updateTable("automation_rules")
-    .set({
-      last_error_at: errorMessage ? new Date() : null,
-      last_error_message: errorMessage,
-    })
-    .where("id", "=", ruleId)
-    .execute()
+  return listIntegrationAutomationEventSourceRowsByWebhookPathToken({
+    pathToken,
+  })
 }
 
 async function expireAutomationRules(params: {
-  referenceTime?: string
+  referenceTime?: Timestamp
   workspaceId?: string
   client?: Executor
 }) {
-  const runner = resolveQueryRunner(params.client)
   const referenceTime = params.referenceTime || nowIsoInstant()
-  const result = await runner.run<{ id: string; workspace_id: string }>(
-    `UPDATE automation_rules ar
-     SET status = 'expired'
-     FROM automation_policies ap
-     WHERE ap.rule_id = ar.id
-       AND ar.status = 'active'
-       AND ar.deleted_at IS NULL
-       AND ap.active_until IS NOT NULL
-       AND ap.active_until < $1
-       ${params.workspaceId ? "AND ar.workspace_id = $2" : ""}
-     RETURNING ar.id, ar.workspace_id`,
-    params.workspaceId ? [referenceTime, params.workspaceId] : [referenceTime]
-  )
-
-  await Promise.all(
-    result.rows.map((row) =>
-      runner.run(
-        `UPDATE automation_policies
-         SET completed_at = COALESCE(completed_at, $2)
-         WHERE rule_id = $1`,
-        [row.id, referenceTime]
-      )
-    )
-  )
-
-  await Promise.all(
-    result.rows.map((row) =>
-      runner.run(
-        `INSERT INTO audit_logs (workspace_id, action, resource_type, resource_id, details)
-         VALUES ($1, 'automation_rule.expire', 'automation_rule', $2, $3)`,
-        [
-          row.workspace_id,
-          row.id,
-          JSON.stringify({
-            referenceTime,
-          }),
-        ]
-      )
-    )
-  )
+  await expireAutomationRuleRows({
+    referenceTime,
+    workspaceId: params.workspaceId,
+    executor: params.client,
+  })
 }
 
 async function pauseAutomationRulesForInactiveCreators(params: {
   workspaceId?: string
   client?: Executor
 }) {
-  const runner = resolveQueryRunner(params.client)
-  const result = await runner.run<{ id: string; workspace_id: string }>(
-    `UPDATE automation_rules ar
-     SET status = 'paused',
-         last_error_at = NOW(),
-         last_error_message = 'Creator participant is no longer active'
-     FROM conversation_participants cp
-     WHERE cp.id = ar.created_by_participant_id
-       AND ar.status = 'active'
-       AND ar.deleted_at IS NULL
-       AND cp.state <> 'active'
-       ${params.workspaceId ? "AND ar.workspace_id = $1" : ""}
-     RETURNING ar.id, ar.workspace_id`,
-    params.workspaceId ? [params.workspaceId] : []
-  )
-
-  await Promise.all(
-    result.rows.map((row) =>
-      runner.run(
-        `INSERT INTO audit_logs (workspace_id, action, resource_type, resource_id, details)
-         VALUES ($1, 'automation_rule.pause', 'automation_rule', $2, $3)`,
-        [
-          row.workspace_id,
-          row.id,
-          JSON.stringify({
-            reason: "Creator participant is no longer active",
-          }),
-        ]
-      )
-    )
-  )
+  await pauseAutomationRuleRowsForInactiveCreators({
+    workspaceId: params.workspaceId,
+    executor: params.client,
+  })
 }
 
 async function syncAutomationRuleLiveness(params: {
-  referenceTime?: string
+  referenceTime?: Timestamp
   workspaceId?: string
   client?: Executor
 }) {
@@ -2901,124 +2043,16 @@ async function syncAutomationRuleLiveness(params: {
   })
 }
 
-async function applyAutomationPolicyAfterTrigger(params: {
-  ruleId: string
-  workspaceId: string
-  occurrenceId: string
-  executionId: string
-  completeNow?: boolean
-  completionReason: "max_trigger_count" | "schedule_exhausted"
-  client?: Executor
-}) {
-  const executor = params.client ?? db
-  const policyResult = await runBuilder(
-    executor,
-    executor
-      .updateTable("automation_policies")
-      .set({
-        trigger_count: sql`${sql.ref("trigger_count")} + 1`,
-      })
-      .where("rule_id", "=", params.ruleId)
-      .returningAll()
-  )
-  const policy = policyResult.rows[0]
-  if (!policy) {
-    throw new Error(`Automation policy for ${params.ruleId} not found`)
-  }
-
-  const reachedMax =
-    policy.max_trigger_count !== null &&
-    policy.trigger_count >= policy.max_trigger_count
-  const shouldComplete = Boolean(params.completeNow || reachedMax)
-  if (!shouldComplete) {
-    return
-  }
-
-  await executor
-    .updateTable("automation_rules")
-    .set({
-      status: policy.completion_status,
-    })
-    .where("id", "=", params.ruleId)
-    .execute()
-  await executor
-    .updateTable("automation_policies")
-    .set({
-      completed_at: sql`COALESCE(${sql.ref("completed_at")}, NOW())`,
-    })
-    .where("rule_id", "=", params.ruleId)
-    .execute()
-  await executor
-    .insertInto("audit_logs")
-    .values({
-      workspace_id: params.workspaceId,
-      action: "automation_rule.complete",
-      resource_type: "automation_rule",
-      resource_id: params.ruleId,
-      details: JSON.stringify({
-        executionId: params.executionId,
-        occurrenceId: params.occurrenceId,
-        triggerCount: policy.trigger_count,
-        maxTriggerCount: policy.max_trigger_count,
-        completionStatus: policy.completion_status,
-        completionReason: reachedMax
-          ? "max_trigger_count"
-          : params.completionReason,
-      }),
-    })
-    .execute()
-}
-
-async function touchWebhookReceived(endpointId: string) {
-  await db
-    .updateTable("automation_webhook_endpoints")
-    .set({
-      last_received_at: sql`NOW()`,
-    })
-    .where("id", "=", endpointId)
-    .execute()
-}
-
-async function touchAutomationEventSourceTriggered(eventSourceId: string) {
-  await db
-    .updateTable("automation_event_sources")
-    .set({
-      last_triggered_at: sql`NOW()`,
-    })
-    .where("id", "=", eventSourceId)
-    .execute()
-}
-
 async function resolveAutomationRulesForEvent(params: {
   workspaceId: string
   eventSourceId: string
   payload: Record<string, unknown>
   occurredAt: Timestamp
 }) {
-  const result = await runQuery<AutomationRuleRow & AutomationTriggerRow>(
-    `SELECT ar.*, at.rule_id, at.trigger_kind, at.source_kind, at.event_source_id, at.source_locator, at.match_key, at.matcher,
-            at.schedule_kind, at.schedule_expr, at.schedule_timezone, at.interval_seconds, at.starts_at,
-            at.next_fire_at, at.last_fired_at, at.metadata AS trigger_metadata
-     FROM automation_rules ar
-     JOIN automation_triggers at ON at.rule_id = ar.id
-     JOIN automation_policies ap ON ap.rule_id = ar.id
-     WHERE ar.workspace_id = $1
-       AND ar.status = 'active'
-       AND ar.deleted_at IS NULL
-       AND at.trigger_kind = 'event'
-       AND at.event_source_id = $2
-       AND (ap.active_from IS NULL OR ap.active_from <= $3)
-       AND (ap.active_until IS NULL OR ap.active_until >= $3)
-       AND (ap.max_trigger_count IS NULL OR ap.trigger_count < ap.max_trigger_count)`,
-    [params.workspaceId, params.eventSourceId, params.occurredAt]
+  const candidates = await selectActiveAutomationRuleEventMatchers(params)
+  return candidates.filter((entry) =>
+    subsetMatch(entry.matcher, params.payload)
   )
-
-  return result.rows
-    .map((row) => ({
-      ruleId: row.id,
-      matcher: parseJsonObject(row.matcher),
-    }))
-    .filter((entry) => subsetMatch(entry.matcher, params.payload))
 }
 
 async function createAutomationOccurrence(params: {
@@ -3035,45 +2069,37 @@ async function createAutomationOccurrence(params: {
   occurredAt?: Timestamp
   client?: Executor
 }) {
-  const runner = resolveQueryRunner(params.client)
   const occurredAt = params.occurredAt || nowIsoInstant()
   const dedupeKey = params.dedupeKey?.trim() || null
 
   if (dedupeKey) {
-    const existing = await runner.run(
-      `SELECT *
-       FROM automation_occurrences
-       WHERE workspace_id = $1
-         AND ${params.eventSourceId ? "event_source_id = $2" : "source_kind = $2"}
-         AND dedupe_key = $3
-       LIMIT 1`,
-      [params.workspaceId, params.eventSourceId || params.sourceKind, dedupeKey]
-    )
-    if (existing.rows[0]) {
-      return mapOccurrenceRow(existing.rows[0])
+    const existing = await selectAutomationOccurrenceRowByDedupeKey({
+      workspaceId: params.workspaceId,
+      sourceKind: params.sourceKind,
+      eventSourceId: params.eventSourceId,
+      dedupeKey,
+      executor: params.client,
+    })
+    if (existing) {
+      return presentOccurrence(normalizeAutomationOccurrenceRow(existing))
     }
   }
 
-  const result = await runner.run(
-    `INSERT INTO automation_occurrences
-       (id, workspace_id, source_kind, event_source_id, source_locator, match_key, dedupe_key, source_snapshot, payload, occurred_at, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
-     RETURNING *`,
-    [
-      uuidv4(),
-      params.workspaceId,
-      params.sourceKind,
-      params.eventSourceId || null,
-      params.sourceLocator || null,
-      params.matchKey || null,
-      dedupeKey,
-      JSON.stringify(params.sourceSnapshot || {}),
-      JSON.stringify(params.payload || {}),
-      occurredAt,
-    ]
-  )
+  const row = await insertAutomationOccurrenceReturningRow({
+    id: uuidv4(),
+    workspaceId: params.workspaceId,
+    sourceKind: params.sourceKind,
+    eventSourceId: params.eventSourceId,
+    sourceLocator: params.sourceLocator,
+    matchKey: params.matchKey,
+    dedupeKey,
+    sourceSnapshot: params.sourceSnapshot || {},
+    payload: params.payload || {},
+    occurredAt,
+    executor: params.client,
+  })
 
-  return mapOccurrenceRow(result.rows[0]!)
+  return presentOccurrence(normalizeAutomationOccurrenceRow(row))
 }
 
 async function createAutomationExecution(params: {
@@ -3082,31 +2108,27 @@ async function createAutomationExecution(params: {
   occurrenceId: string
   client?: Executor
 }) {
-  const runner = resolveQueryRunner(params.client)
-  const existing = await runner.run(
-    `SELECT *
-     FROM automation_executions
-     WHERE rule_id = $1
-       AND occurrence_id = $2
-     LIMIT 1`,
-    [params.ruleId, params.occurrenceId]
-  )
-  if (existing.rows[0]) {
+  const existing = await selectAutomationExecutionRowByRuleOccurrence({
+    ruleId: params.ruleId,
+    occurrenceId: params.occurrenceId,
+    executor: params.client,
+  })
+  if (existing) {
     return {
-      execution: mapExecutionRow(existing.rows[0]),
+      execution: presentExecution(existing),
       isNew: false,
     }
   }
 
-  const result = await runner.run(
-    `INSERT INTO automation_executions
-       (id, workspace_id, rule_id, occurrence_id, status, attempt_count, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, 'pending', 0, NOW(), NOW())
-     RETURNING *`,
-    [uuidv4(), params.workspaceId, params.ruleId, params.occurrenceId]
-  )
+  const row = await insertAutomationExecutionReturningRow({
+    id: uuidv4(),
+    workspaceId: params.workspaceId,
+    ruleId: params.ruleId,
+    occurrenceId: params.occurrenceId,
+    executor: params.client,
+  })
   return {
-    execution: mapExecutionRow(result.rows[0]!),
+    execution: presentExecution(row),
     isNew: true,
   }
 }
@@ -3122,22 +2144,18 @@ async function recordExecutionTarget(params: {
   status: AutomationExecutionStatus
   metadata?: Record<string, unknown>
 }) {
-  await db
-    .insertInto("automation_execution_targets")
-    .values({
-      id: uuidv4(),
-      execution_id: params.executionId,
-      conversation_id: params.conversationId || null,
-      target_participant_id: params.targetParticipantId || null,
-      session_id: params.sessionId || null,
-      target_actor_id: params.targetActorId || null,
-      created_item_id: params.createdItemId || null,
-      wakeup_id: params.wakeupId || null,
-      status: params.status,
-      metadata: JSON.stringify(params.metadata || {}),
-      created_at: sql`NOW()`,
-    })
-    .execute()
+  await insertAutomationExecutionTarget({
+    id: uuidv4(),
+    executionId: params.executionId,
+    conversationId: params.conversationId || null,
+    targetParticipantId: params.targetParticipantId || null,
+    sessionId: params.sessionId || null,
+    targetActorId: params.targetActorId || null,
+    createdItemId: params.createdItemId || null,
+    wakeupId: params.wakeupId || null,
+    status: params.status,
+    metadata: params.metadata || {},
+  })
 }
 
 function buildAutomationNoticePayload(params: {
@@ -3175,35 +2193,27 @@ async function resolveOperatorUserId(rule: AutomationRule) {
     conversationId: rule.conversationId,
     participantId: rule.createdByParticipantId,
   })
-  if (creatorParticipant?.workspace_member_id) {
+  if (creatorParticipant?.workspaceMemberId) {
     const identity = await getWorkspaceMemberIdentityById(
-      creatorParticipant.workspace_member_id as string
+      creatorParticipant.workspaceMemberId as string
     )
     if (identity?.userId) return identity.userId
   }
 
   const members = await listConversationParticipants(rule.conversationId)
   const firstUser = members.find(
-    (member: any) => member.state === "active" && member.workspace_member_id
+    (member: any) => member.state === "active" && member.workspaceMemberId
   )
-  if (firstUser?.workspace_member_id) {
+  if (firstUser?.workspaceMemberId) {
     const workspaceMember = await getWorkspaceMemberIdentityById(
-      firstUser.workspace_member_id as string
+      firstUser.workspaceMemberId as string
     )
     if (workspaceMember) {
       return workspaceMember.userId
     }
   }
 
-  const result = await runBuilder(
-    db,
-    db
-      .selectFrom("workspaces")
-      .select("owner_id")
-      .where("id", "=", rule.workspaceId)
-      .limit(1)
-  )
-  return result.rows[0]?.owner_id || null
+  return selectWorkspaceOwnerId(rule.workspaceId)
 }
 
 async function resolveCreatorParticipant(rule: AutomationRule) {
@@ -3290,10 +2300,10 @@ async function wakeAutomationTargets(params: {
 
   for (const participant of params.targetParticipants) {
     let wakeupId: string | undefined
-    const actorId = participant.actor_id as string | undefined
+    const actorId = participant.actorId as string | undefined
     const sessionId =
-      participant.session_id && participant.state === "active"
-        ? (participant.session_id as string)
+      participant.sessionId && participant.state === "active"
+        ? (participant.sessionId as string)
         : undefined
 
     if (actorId && sessionId) {
@@ -3436,7 +2446,9 @@ export async function createAutomationRule(
   const auditUserId = await resolveAutomationAuditUserId(creator)
   const ruleId = uuidv4()
   const category: AutomationCategory =
-    input.trigger.triggerKind === "schedule" ? "schedule" : "event_subscription"
+    input.trigger.triggerKind === "schedule"
+      ? AUTOMATION_RULE_CATEGORY.SCHEDULE
+      : AUTOMATION_RULE_CATEGORY.EVENT_SUBSCRIPTION
   const normalizedPolicy = normalizePolicyInput(input.policy)
   const normalizedDelivery = await normalizeDeliveryInput(input.delivery)
   await validateAutomationDeliveryTargets({
@@ -3449,96 +2461,60 @@ export async function createAutomationRule(
     input: input.trigger,
     policy: input.policy,
     conversation,
-    creatorActorId: creatorParticipant.actor_id as string | null | undefined,
+    creatorActorId: creatorParticipant.actorId as string | null | undefined,
   })
 
-  await withDbTransaction(async (trx) => {
-    await trx
-      .insertInto("automation_rules")
-      .values({
-        id: ruleId,
-        workspace_id: workspaceId,
-        conversation_id: input.conversationId,
-        category,
-        status: input.status || "active",
-        name: input.name.trim(),
-        description: (input.description || "").trim(),
-        created_by_participant_id: creatorParticipant.id,
-        created_by_session_id: creator.sessionId || null,
-        metadata: JSON.stringify(input.metadata || {}),
-        created_at: sql`NOW()`,
-      })
-      .execute()
+  await withAutomationTransaction(async (trx) => {
+    await insertAutomationRuleRow(trx, {
+      id: ruleId,
+      workspaceId: workspaceId,
+      conversationId: input.conversationId,
+      category,
+      status: input.status || "active",
+      name: input.name.trim(),
+      description: (input.description || "").trim(),
+      createdByParticipantId: creatorParticipant.id,
+      createdBySessionId: creator.sessionId || null,
+      metadata: JSON.stringify(input.metadata || {}),
+    })
 
-    await trx
-      .insertInto("automation_policies")
-      .values({
-        rule_id: ruleId,
-        active_from: normalizedPolicy.active_from,
-        active_until: normalizedPolicy.active_until,
-        max_trigger_count: normalizedPolicy.max_trigger_count,
-        trigger_count: normalizedPolicy.trigger_count,
-        completion_status: normalizedPolicy.completion_status,
-        completed_at: normalizedPolicy.completed_at,
-        metadata: JSON.stringify(normalizedPolicy.metadata),
-        created_at: sql`NOW()`,
-      })
-      .execute()
+    await insertAutomationPolicyRow(trx, {
+      ruleId: ruleId,
+      activeFrom: normalizedPolicy.active_from,
+      activeUntil: normalizedPolicy.active_until,
+      maxTriggerCount: normalizedPolicy.max_trigger_count,
+      triggerCount: normalizedPolicy.trigger_count,
+      completionStatus: normalizedPolicy.completion_status,
+      completedAt: normalizedPolicy.completed_at,
+      metadata: JSON.stringify(normalizedPolicy.metadata),
+    })
 
-    await runnerFor(trx).run(
-      `INSERT INTO automation_triggers
-         (rule_id, trigger_kind, source_kind, event_source_id, source_locator, match_key, matcher, schedule_kind, schedule_expr,
-          schedule_timezone, interval_seconds, starts_at, next_fire_at, last_fired_at, metadata, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), NOW())`,
-      [
-        ruleId,
-        normalizedTrigger.trigger_kind,
-        normalizedTrigger.source_kind,
-        normalizedTrigger.event_source_id,
-        normalizedTrigger.source_locator,
-        normalizedTrigger.match_key,
-        JSON.stringify(normalizedTrigger.matcher),
-        normalizedTrigger.schedule_kind,
-        normalizedTrigger.schedule_expr,
-        normalizedTrigger.schedule_timezone,
-        normalizedTrigger.interval_seconds,
-        normalizedTrigger.starts_at,
-        normalizedTrigger.next_fire_at,
-        normalizedTrigger.last_fired_at,
-        JSON.stringify(normalizedTrigger.metadata),
-      ]
-    )
+    await insertAutomationTriggerRow(trx, ruleId, normalizedTrigger)
 
-    await trx
-      .insertInto("automation_deliveries")
-      .values({
-        rule_id: ruleId,
-        message_text: normalizedDelivery.message_text,
-        wake_reason_text: normalizedDelivery.wake_reason_text,
-        message_blocks: JSON.stringify(normalizedDelivery.message_blocks),
-        target_policy: normalizedDelivery.target_policy,
-        metadata: JSON.stringify(normalizedDelivery.metadata),
-        created_at: sql`NOW()`,
-      })
-      .execute()
+    await insertAutomationDeliveryRow(trx, {
+      ruleId: ruleId,
+      messageText: normalizedDelivery.message_text,
+      wakeReasonText: normalizedDelivery.wake_reason_text,
+      messageBlocks: JSON.stringify(normalizedDelivery.message_blocks),
+      targetPolicy: normalizedDelivery.target_policy,
+      metadata: JSON.stringify(normalizedDelivery.metadata),
+    })
 
-    await persistAutomationTargets(
+    await persistAutomationDeliveryTargets(
       trx,
-      "automation_delivery_targets",
       ruleId,
       normalizedDelivery.targetParticipantIds
     )
 
-    await trx
-      .insertInto("audit_logs")
-      .values({
-        workspace_id: workspaceId,
-        user_id: auditUserId,
-        actor_id: creator.actorId || null,
+    await appendAutomationAuditLog(
+      {
+        workspaceId: workspaceId,
+        userId: auditUserId,
+        actorId: creator.actorId || null,
         action: "automation_rule.create",
-        resource_type: "automation_rule",
-        resource_id: ruleId,
-        details: JSON.stringify({
+        resourceType: "automation_rule",
+        resourceId: ruleId,
+        details: {
           category,
           triggerKind: normalizedTrigger.trigger_kind,
           policy: {
@@ -3552,9 +2528,10 @@ export async function createAutomationRule(
           conversationId: input.conversationId,
           targetPolicy: normalizedDelivery.target_policy,
           targetCount: normalizedDelivery.targetParticipantIds.length,
-        }),
-      })
-      .execute()
+        },
+      },
+      trx
+    )
   })
 
   const [rule] = await loadAutomationRulesByIds(workspaceId, [ruleId])
@@ -3574,33 +2551,8 @@ export async function listAutomationRules(
 ) {
   await syncAutomationRuleLiveness({ workspaceId })
 
-  const values: unknown[] = [workspaceId]
-  let where = "workspace_id = $1 AND deleted_at IS NULL"
-
-  if (filters?.status) {
-    values.push(filters.status)
-    where += ` AND status = $${values.length}`
-  }
-  if (filters?.category) {
-    values.push(filters.category)
-    where += ` AND category = $${values.length}`
-  }
-  if (filters?.conversationId) {
-    values.push(filters.conversationId)
-    where += ` AND conversation_id = $${values.length}`
-  }
-
-  const result = await runQuery<{ id: string }>(
-    `SELECT id
-     FROM automation_rules
-     WHERE ${where}
-     ORDER BY created_at DESC`,
-    values
-  )
-  return loadAutomationRulesByIds(
-    workspaceId,
-    result.rows.map((row) => row.id)
-  )
+  const ruleIds = await listAutomationRuleIds({ workspaceId, filters })
+  return loadAutomationRulesByIds(workspaceId, ruleIds)
 }
 
 export async function getAutomationRule(workspaceId: string, ruleId: string) {
@@ -3658,108 +2610,62 @@ export async function updateAutomationRule(
     input: mergedInput.trigger,
     policy: mergedInput.policy,
     conversation,
-    creatorActorId: creatorParticipant.actor_id as string | null | undefined,
+    creatorActorId: creatorParticipant.actorId as string | null | undefined,
   })
 
-  await withDbTransaction(async (trx) => {
+  await withAutomationTransaction(async (trx) => {
     const nextCategory: AutomationCategory =
       normalizedTrigger.trigger_kind === "schedule"
-        ? "schedule"
-        : "event_subscription"
+        ? AUTOMATION_RULE_CATEGORY.SCHEDULE
+        : AUTOMATION_RULE_CATEGORY.EVENT_SUBSCRIPTION
 
-    await trx
-      .updateTable("automation_rules")
-      .set({
-        status: mergedInput.status || existing.status,
-        category: nextCategory,
-        name: mergedInput.name.trim(),
-        description: (mergedInput.description || "").trim(),
-        metadata: JSON.stringify(mergedInput.metadata || {}),
-      })
-      .where("id", "=", ruleId)
-      .execute()
+    await updateAutomationRuleRow(trx, ruleId, {
+      status: mergedInput.status || existing.status,
+      category: nextCategory,
+      name: mergedInput.name.trim(),
+      description: (mergedInput.description || "").trim(),
+      metadata: JSON.stringify(mergedInput.metadata || {}),
+    })
 
-    await trx
-      .updateTable("automation_policies")
-      .set({
-        active_from: normalizedPolicy.active_from,
-        active_until: normalizedPolicy.active_until,
-        max_trigger_count: normalizedPolicy.max_trigger_count,
-        completion_status: normalizedPolicy.completion_status,
-        completed_at:
-          mergedInput.status === "active"
-            ? null
-            : existing.policy.completedAt
-              ? parseInstantString(existing.policy.completedAt)
-              : null,
-        metadata: JSON.stringify(normalizedPolicy.metadata),
-      })
-      .where("rule_id", "=", ruleId)
-      .execute()
+    await updateAutomationPolicyRow(trx, ruleId, {
+      activeFrom: normalizedPolicy.active_from,
+      activeUntil: normalizedPolicy.active_until,
+      maxTriggerCount: normalizedPolicy.max_trigger_count,
+      completionStatus: normalizedPolicy.completion_status,
+      completedAt:
+        mergedInput.status === "active"
+          ? null
+          : existing.policy.completedAt
+            ? parseInstantString(existing.policy.completedAt)
+            : null,
+      metadata: JSON.stringify(normalizedPolicy.metadata),
+    })
 
-    await runnerFor(trx).run(
-      `UPDATE automation_triggers
-       SET trigger_kind = $2,
-           source_kind = $3,
-           event_source_id = $4,
-           source_locator = $5,
-           match_key = $6,
-           matcher = $7,
-           schedule_kind = $8,
-           schedule_expr = $9,
-           schedule_timezone = $10,
-           interval_seconds = $11,
-           starts_at = $12,
-           next_fire_at = $13,
-           metadata = $14
-       WHERE rule_id = $1`,
-      [
-        ruleId,
-        normalizedTrigger.trigger_kind,
-        normalizedTrigger.source_kind,
-        normalizedTrigger.event_source_id,
-        normalizedTrigger.source_locator,
-        normalizedTrigger.match_key,
-        JSON.stringify(normalizedTrigger.matcher),
-        normalizedTrigger.schedule_kind,
-        normalizedTrigger.schedule_expr,
-        normalizedTrigger.schedule_timezone,
-        normalizedTrigger.interval_seconds,
-        normalizedTrigger.starts_at,
-        normalizedTrigger.next_fire_at,
-        JSON.stringify(normalizedTrigger.metadata),
-      ]
-    )
+    await updateAutomationTriggerRow(trx, ruleId, normalizedTrigger)
 
-    await trx
-      .updateTable("automation_deliveries")
-      .set({
-        message_text: normalizedDelivery.message_text,
-        wake_reason_text: normalizedDelivery.wake_reason_text,
-        message_blocks: JSON.stringify(normalizedDelivery.message_blocks),
-        target_policy: normalizedDelivery.target_policy,
-        metadata: JSON.stringify(normalizedDelivery.metadata),
-      })
-      .where("rule_id", "=", ruleId)
-      .execute()
+    await updateAutomationDeliveryRow(trx, ruleId, {
+      messageText: normalizedDelivery.message_text,
+      wakeReasonText: normalizedDelivery.wake_reason_text,
+      messageBlocks: JSON.stringify(normalizedDelivery.message_blocks),
+      targetPolicy: normalizedDelivery.target_policy,
+      metadata: JSON.stringify(normalizedDelivery.metadata),
+    })
 
-    await persistAutomationTargets(
+    await persistAutomationDeliveryTargets(
       trx,
-      "automation_delivery_targets",
       ruleId,
       normalizedDelivery.targetParticipantIds
     )
 
-    await trx
-      .insertInto("audit_logs")
-      .values({
-        workspace_id: workspaceId,
-        user_id: auditUserId,
-        actor_id: operator.actorId || null,
+    await appendAutomationAuditLog(
+      {
+        workspaceId: workspaceId,
+        userId: auditUserId,
+        actorId: operator.actorId || null,
         action: "automation_rule.update",
-        resource_type: "automation_rule",
-        resource_id: ruleId,
-        details: JSON.stringify({
+        resourceType: "automation_rule",
+        resourceId: ruleId,
+        details: {
           triggerKind: normalizedTrigger.trigger_kind,
           policy: {
             activeFrom: normalizedPolicy.active_from,
@@ -3771,9 +2677,10 @@ export async function updateAutomationRule(
           eventSourceId: normalizedTrigger.event_source_id,
           targetPolicy: normalizedDelivery.target_policy,
           targetCount: normalizedDelivery.targetParticipantIds.length,
-        }),
-      })
-      .execute()
+        },
+      },
+      trx
+    )
   })
 
   const updated = await getAutomationRule(workspaceId, ruleId)
@@ -3789,27 +2696,18 @@ export async function deleteAutomationRule(
   operator: AutomationOperatorInput
 ) {
   const auditUserId = await resolveAutomationAuditUserId(operator)
-  await db
-    .insertInto("audit_logs")
-    .values({
-      workspace_id: workspaceId,
-      user_id: auditUserId,
-      actor_id: operator.actorId || null,
-      action: "automation_rule.delete",
-      resource_type: "automation_rule",
-      resource_id: ruleId,
-      details: JSON.stringify({ deleted: true }),
-    })
-    .execute()
+  await appendAutomationAuditLog({
+    workspaceId: workspaceId,
+    userId: auditUserId,
+    actorId: operator.actorId || null,
+    action: "automation_rule.delete",
+    resourceType: "automation_rule",
+    resourceId: ruleId,
+    details: { deleted: true },
+  })
   // Soft delete (design §7.4): flip deleted_at (hard delete forbidden by
   // sd_reject_delete).
-  await db
-    .updateTable("automation_rules")
-    .set({ deleted_at: sql`NOW()` })
-    .where("id", "=", ruleId)
-    .where("workspace_id", "=", workspaceId)
-    .where("deleted_at", "is", null)
-    .execute()
+  await softDeleteAutomationRule(workspaceId, ruleId)
 }
 
 export async function createAutomationWebhookEndpoint(
@@ -3821,39 +2719,29 @@ export async function createAutomationWebhookEndpoint(
   }
 ): Promise<AutomationWebhookEndpointCreateResult> {
   const secret = generateSecret()
-  const result = await runQuery<AutomationWebhookEndpointRow>(
-    `INSERT INTO automation_webhook_endpoints
-       (id, workspace_id, name, status, path_token, secret_ciphertext, secret_hint, metadata, created_by_workspace_member_id, created_at, updated_at)
-     VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8, NOW(), NOW())
-     RETURNING *`,
-    [
-      uuidv4(),
-      workspaceId,
-      params.name.trim(),
-      crypto.randomBytes(18).toString("hex"),
-      encrypt(secret),
-      secretHint(secret),
-      JSON.stringify(params.metadata || {}),
-      createdByWorkspaceMemberId,
-    ]
-  )
+  const row = await insertAutomationWebhookEndpointReturningRow({
+    id: uuidv4(),
+    workspaceId,
+    name: params.name.trim(),
+    status: "active",
+    pathToken: crypto.randomBytes(18).toString("hex"),
+    secretCiphertext: encrypt(secret),
+    secretHint: secretHint(secret),
+    metadata: params.metadata || {},
+    createdByWorkspaceMemberId,
+  })
 
   return {
-    endpoint: mapWebhookEndpointRow(result.rows[0]!),
+    endpoint: presentWebhookEndpoint(
+      normalizeAutomationWebhookEndpointRow(row)
+    ),
     secret,
   }
 }
 
 export async function listAutomationWebhookEndpoints(workspaceId: string) {
-  const result = await runQuery<AutomationWebhookEndpointRow>(
-    `SELECT *
-     FROM automation_webhook_endpoints
-     WHERE workspace_id = $1
-       AND deleted_at IS NULL
-     ORDER BY created_at DESC`,
-    [workspaceId]
-  )
-  return result.rows.map(mapWebhookEndpointRow)
+  const rows = await listAutomationWebhookEndpointRows(workspaceId)
+  return rows.map(normalizeAutomationWebhookEndpointRow)
 }
 
 export async function listAutomationOccurrences(
@@ -3863,40 +2751,11 @@ export async function listAutomationOccurrences(
     limit?: number
   }
 ) {
-  const values: unknown[] = [workspaceId]
-  let where = "ao.workspace_id = $1"
+  const rows = await listAutomationOccurrenceRows({ workspaceId, filters })
 
-  if (filters?.eventSourceId) {
-    values.push(filters.eventSourceId)
-    where += ` AND ao.event_source_id = $${values.length}`
-  }
-
-  values.push(Math.max(1, Math.min(filters?.limit || 50, 200)))
-  const result = await runQuery<AutomationOccurrenceRow>(
-    `SELECT ao.*,
-            aes.source_key AS event_source_key,
-            aes.name AS event_source_name,
-            aes.provider_ref AS event_provider_ref,
-            aes.webhook_endpoint_id AS event_webhook_endpoint_id,
-            aes.integration_binding_id AS event_integration_binding_id,
-            aib.installation_id AS event_integration_installation_id,
-            aib.provider AS event_integration_provider,
-            aib.ingress_kind AS event_integration_ingress_kind,
-            aib.target_kind AS event_integration_target_kind,
-            aib.target_id AS event_integration_target_id,
-            aib.target_label AS event_integration_target_label,
-            aib.webhook_endpoint_id AS event_integration_webhook_endpoint_id,
-            aib.external_subscription_id AS event_external_subscription_id
-     FROM automation_occurrences ao
-     LEFT JOIN automation_event_sources aes ON aes.id = ao.event_source_id
-     LEFT JOIN automation_integration_bindings aib ON aib.id = aes.integration_binding_id
-     WHERE ${where}
-     ORDER BY ao.created_at DESC
-     LIMIT $${values.length}`,
-    values
+  return rows.map((row) =>
+    presentOccurrence(normalizeAutomationOccurrenceRow(row))
   )
-
-  return result.rows.map(mapOccurrenceRow)
 }
 
 export async function ingestAutomationProviderEvent(params: {
@@ -3909,31 +2768,19 @@ export async function ingestAutomationProviderEvent(params: {
   dedupeKey?: string
   occurredAt?: Timestamp
 }) {
-  const result = await runBuilder(
-    db,
-    db
-      .selectFrom("automation_event_sources")
-      .select("id")
-      .where("workspace_id", "=", params.workspaceId)
-      .where("provider_kind", "=", params.providerKind)
-      .where(
-        sql`COALESCE(provider_ref, '')`,
-        "=",
-        sql`COALESCE(${params.providerRef || null}, '')`
-      )
-      .where("source_key", "=", params.sourceKey)
-      .where("status", "in", ["active", "deprecated"])
-      .where("deleted_at", "is", null)
-      .limit(1)
-  )
-  const eventSource = result.rows[0]
-  if (!eventSource) {
+  const eventSourceId = await selectActiveAutomationEventSourceId({
+    workspaceId: params.workspaceId,
+    providerKind: params.providerKind,
+    providerRef: params.providerRef || null,
+    sourceKey: params.sourceKey,
+  })
+  if (!eventSourceId) {
     return null
   }
 
   return ingestAutomationEvent({
     workspaceId: params.workspaceId,
-    eventSourceId: eventSource.id,
+    eventSourceId: eventSourceId,
     payload: params.payload,
     sourceSnapshot: params.sourceSnapshot,
     dedupeKey: params.dedupeKey,
@@ -4022,20 +2869,17 @@ export async function ingestAutomationEvent(input: AutomationEventEnvelope) {
   }
 
   await touchAutomationEventSourceTriggered(eventSource.id)
-  await db
-    .insertInto("audit_logs")
-    .values({
-      workspace_id: input.workspaceId,
-      action: "automation_event_source.trigger",
-      resource_type: "automation_event_source",
-      resource_id: eventSource.id,
-      details: JSON.stringify({
-        occurrenceId: occurrence.id,
-        occurrenceTitle: decoratedOccurrence.displayTitle,
-        executionCount: executions.length,
-      }),
-    })
-    .execute()
+  await appendAutomationAuditLog({
+    workspaceId: input.workspaceId,
+    action: "automation_event_source.trigger",
+    resourceType: "automation_event_source",
+    resourceId: eventSource.id,
+    details: {
+      occurrenceId: occurrence.id,
+      occurrenceTitle: decoratedOccurrence.displayTitle,
+      executionCount: executions.length,
+    },
+  })
 
   return {
     occurrence: decoratedOccurrence,
@@ -4109,7 +2953,7 @@ export async function ingestIntegrationAutomationWebhookEvent(params: {
   }
 
   const endpointSecret = decrypt(sourceRow.endpoint_secret_ciphertext)
-  const source = mapEventSourceRow(sourceRow)
+  const source = presentEventSource(sourceRow)
   if (!source.integration) {
     throw new Error("Integration webhook ingress requires integration metadata")
   }
@@ -4182,92 +3026,58 @@ export async function scheduleDueAutomationExecutions(
   const scheduledExecutions: string[] = []
   const batchSize = Math.max(1, Math.min(limit, MAX_SCHEDULER_BATCH_SIZE))
 
-  await withDbTransaction(async (trx) => {
+  await withAutomationTransaction(async (trx) => {
     await syncAutomationRuleLiveness({ client: trx })
 
-    const dueResult = await runnerFor(trx).run<{
-      rule_id: string
-      rule_name: string
-      workspace_id: string
-      schedule_kind: "cron" | "at" | "interval"
-      schedule_expr: string | null
-      schedule_timezone: string | null
-      interval_seconds: number | null
-      starts_at: Date | null
-      active_from: Date | null
-      active_until: Date | null
-      next_fire_at: Date
-      last_fired_at: Date | null
-    }>(
-      `SELECT at.rule_id, ar.name AS rule_name, ar.workspace_id, at.schedule_kind, at.schedule_expr, at.schedule_timezone,
-              at.interval_seconds, at.starts_at, ap.active_from, ap.active_until, at.next_fire_at, at.last_fired_at
-       FROM automation_triggers at
-       JOIN automation_rules ar ON ar.id = at.rule_id
-       JOIN automation_policies ap ON ap.rule_id = ar.id
-       WHERE at.trigger_kind = 'schedule'
-         AND ar.status = 'active'
-         AND ar.deleted_at IS NULL
-         AND at.next_fire_at IS NOT NULL
-         AND at.next_fire_at <= NOW()
-         AND (ap.active_from IS NULL OR ap.active_from <= at.next_fire_at)
-         AND (ap.active_until IS NULL OR ap.active_until >= at.next_fire_at)
-         AND (ap.max_trigger_count IS NULL OR ap.trigger_count < ap.max_trigger_count)
-       ORDER BY at.next_fire_at ASC
-       LIMIT $1
-       FOR UPDATE OF at SKIP LOCKED`,
-      [batchSize]
-    )
+    const dueRows = await lockDueAutomationScheduleRows(trx, batchSize)
 
-    for (const row of dueResult.rows) {
+    for (const row of dueRows) {
+      const rowDates = presentDueScheduleRowDates(row)
       const occurrence = await createAutomationOccurrence({
-        workspaceId: row.workspace_id,
+        workspaceId: row.workspaceId,
         sourceKind: "clock",
-        sourceLocator: row.schedule_timezone || "UTC",
-        dedupeKey: `${row.rule_id}:${row.next_fire_at}`,
+        sourceLocator: row.scheduleTimezone || "UTC",
+        dedupeKey: `${row.ruleId}:${row.nextFireAt}`,
         sourceSnapshot: {
-          ruleId: row.rule_id,
-          ruleName: row.rule_name,
-          scheduleKind: row.schedule_kind,
-          scheduleExpr: row.schedule_expr,
-          scheduleTimezone: row.schedule_timezone,
-          intervalSeconds: row.interval_seconds,
-          startsAt: serializeOptionalInstant(row.starts_at),
-          activeFrom: serializeOptionalInstant(row.active_from),
-          activeUntil: serializeOptionalInstant(row.active_until),
-          scheduledAt: serializeInstant(row.next_fire_at),
+          ruleId: row.ruleId,
+          ruleName: row.ruleName,
+          scheduleKind: row.scheduleKind,
+          scheduleExpr: row.scheduleExpr,
+          scheduleTimezone: row.scheduleTimezone,
+          intervalSeconds: row.intervalSeconds,
+          startsAt: rowDates.startsAt,
+          activeFrom: rowDates.activeFrom,
+          activeUntil: rowDates.activeUntil,
+          scheduledAt: rowDates.nextFireAt,
         },
         payload: {},
-        occurredAt: serializeInstant(row.next_fire_at),
+        occurredAt: rowDates.nextFireAt,
         client: trx,
       })
 
       const { execution, isNew } = await createAutomationExecution({
-        workspaceId: row.workspace_id,
-        ruleId: row.rule_id,
+        workspaceId: row.workspaceId,
+        ruleId: row.ruleId,
         occurrenceId: occurrence.id,
         client: trx,
       })
 
       const nextFireAt = computeNextFireAt({
-        scheduleKind: row.schedule_kind,
-        scheduleExpr: row.schedule_expr || undefined,
-        scheduleTimezone: row.schedule_timezone || undefined,
-        intervalSeconds: row.interval_seconds || undefined,
-        startsAt: serializeOptionalInstant(row.starts_at) ?? null,
-        activeFrom: serializeOptionalInstant(row.active_from) ?? null,
-        activeUntil: serializeOptionalInstant(row.active_until) ?? null,
-        baseTime: row.next_fire_at,
-        lastFiredAt: serializeInstant(row.next_fire_at),
+        scheduleKind: row.scheduleKind,
+        scheduleExpr: row.scheduleExpr || undefined,
+        scheduleTimezone: row.scheduleTimezone || undefined,
+        intervalSeconds: row.intervalSeconds || undefined,
+        startsAt: rowDates.startsAt ?? null,
+        activeFrom: rowDates.activeFrom ?? null,
+        activeUntil: rowDates.activeUntil ?? null,
+        baseTime: row.nextFireAt,
+        lastFiredAt: rowDates.nextFireAt,
       })
 
-      await trx
-        .updateTable("automation_triggers")
-        .set({
-          last_fired_at: row.next_fire_at,
-          next_fire_at: nextFireAt ? parseInstantString(nextFireAt) : null,
-        })
-        .where("rule_id", "=", row.rule_id)
-        .execute()
+      await updateAutomationTriggerSchedule(trx, row.ruleId, {
+        lastFiredAt: row.nextFireAt,
+        nextFireAt: nextFireAt ? parseInstantString(nextFireAt) : null,
+      })
       if (isNew) {
         scheduledExecutions.push(execution.id)
       }
@@ -4280,27 +3090,10 @@ export async function scheduleDueAutomationExecutions(
 export async function processAutomationExecution(
   executionId: string
 ): Promise<ProcessAutomationExecutionResult> {
-  const executionResult = await runQuery<AutomationExecutionRow>(
-    `UPDATE automation_executions
-     SET status = 'running',
-         attempt_count = attempt_count + 1,
-         started_at = COALESCE(started_at, NOW())
-     WHERE id = $1
-       AND status = 'pending'
-     RETURNING *`,
-    [executionId]
-  )
-  const executionRow = executionResult.rows[0]
+  const executionRow = await claimPendingAutomationExecutionRow(executionId)
   if (!executionRow) {
-    const existingResult = await runBuilder(
-      db,
-      db
-        .selectFrom("automation_executions")
-        .select("id")
-        .where("id", "=", executionId)
-        .limit(1)
-    )
-    if (!existingResult.rows[0]) {
+    const exists = await existsAutomationExecution(executionId)
+    if (!exists) {
       throw new Error(`Automation execution ${executionId} not found`)
     }
     return {
@@ -4309,21 +3102,12 @@ export async function processAutomationExecution(
     }
   }
 
-  const execution = mapExecutionRow(executionRow)
-  const occurrenceResult = await runQuery<AutomationOccurrenceRow>(
-    `SELECT ao.*,
-            aes.source_key AS event_source_key,
-            aes.name AS event_source_name,
-            aes.provider_ref AS event_provider_ref
-     FROM automation_occurrences
-     ao
-     LEFT JOIN automation_event_sources aes ON aes.id = ao.event_source_id
-     WHERE ao.id = $1
-     LIMIT 1`,
-    [execution.occurrenceId]
+  const execution = presentExecution(executionRow)
+  const occurrenceRow = await selectAutomationOccurrenceRow(
+    execution.occurrenceId
   )
-  const occurrence = occurrenceResult.rows[0]
-    ? mapOccurrenceRow(occurrenceResult.rows[0])
+  const occurrence = occurrenceRow
+    ? presentOccurrence(normalizeAutomationOccurrenceRow(occurrenceRow))
     : null
   if (!occurrence) {
     throw new Error(`Automation occurrence ${execution.occurrenceId} not found`)
@@ -4337,15 +3121,10 @@ export async function processAutomationExecution(
 
   try {
     if (rule.status !== "active") {
-      await db
-        .updateTable("automation_executions")
-        .set({
-          status: "skipped",
-          error_message: `Automation rule is ${rule.status}`,
-          completed_at: sql`NOW()`,
-        })
-        .where("id", "=", executionId)
-        .execute()
+      await markAutomationExecutionSkipped(
+        executionId,
+        `Automation rule is ${rule.status}`
+      )
       return {
         executionId,
         wakeupCount: 0,
@@ -4356,24 +3135,11 @@ export async function processAutomationExecution(
     const { restrictedAudienceParticipantIds, targetParticipants } =
       await resolveDeliveryTargets(rule)
     if (targetParticipants.length === 0) {
-      await db
-        .updateTable("automation_executions")
-        .set({
-          status: "skipped",
-          error_message:
-            "No active target participants matched this automation",
-          completed_at: sql`NOW()`,
-        })
-        .where("id", "=", executionId)
-        .execute()
-      await db
-        .updateTable("automation_rules")
-        .set({
-          last_error_at: null,
-          last_error_message: null,
-        })
-        .where("id", "=", rule.id)
-        .execute()
+      await markAutomationExecutionSkipped(
+        executionId,
+        "No active target participants matched this automation"
+      )
+      await clearAutomationRuleError(rule.id)
       return {
         executionId,
         wakeupCount: 0,
@@ -4395,25 +3161,9 @@ export async function processAutomationExecution(
       targetParticipants,
     })
 
-    await db
-      .updateTable("automation_executions")
-      .set({
-        status: "completed",
-        error_message: null,
-        completed_at: sql`NOW()`,
-      })
-      .where("id", "=", executionId)
-      .execute()
-    await db
-      .updateTable("automation_rules")
-      .set({
-        last_triggered_at: sql`NOW()`,
-        last_error_at: null,
-        last_error_message: null,
-      })
-      .where("id", "=", rule.id)
-      .execute()
-    await applyAutomationPolicyAfterTrigger({
+    await markAutomationExecutionCompleted(executionId)
+    await markAutomationRuleTriggered(rule.id)
+    await applyAutomationPolicyAfterTriggerRepo({
       ruleId: rule.id,
       workspaceId: rule.workspaceId,
       occurrenceId: occurrence.id,
@@ -4425,24 +3175,21 @@ export async function processAutomationExecution(
           ? "schedule_exhausted"
           : "max_trigger_count",
     })
-    await db
-      .insertInto("audit_logs")
-      .values({
-        workspace_id: rule.workspaceId,
-        user_id: (await resolveOperatorUserId(rule)) || null,
-        actor_id: creatorParticipant?.actor_id || null,
-        action: "automation_rule.trigger",
-        resource_type: "automation_rule",
-        resource_id: rule.id,
-        details: JSON.stringify({
-          executionId,
-          occurrenceId: occurrence.id,
-          createdItemId,
-          wakeupCount,
-          targetCount: targetParticipants.length,
-        }),
-      })
-      .execute()
+    await appendAutomationAuditLog({
+      workspaceId: rule.workspaceId,
+      userId: (await resolveOperatorUserId(rule)) || null,
+      actorId: creatorParticipant?.actorId || null,
+      action: "automation_rule.trigger",
+      resourceType: "automation_rule",
+      resourceId: rule.id,
+      details: {
+        executionId,
+        occurrenceId: occurrence.id,
+        createdItemId,
+        wakeupCount,
+        targetCount: targetParticipants.length,
+      },
+    })
 
     return {
       executionId,
@@ -4451,16 +3198,8 @@ export async function processAutomationExecution(
     }
   } catch (error: any) {
     const message = error instanceof Error ? error.message : String(error)
-    await db
-      .updateTable("automation_executions")
-      .set({
-        status: "failed",
-        error_message: message,
-        completed_at: sql`NOW()`,
-      })
-      .where("id", "=", executionId)
-      .execute()
-    await updateRuleError(rule.id, message)
+    await markAutomationExecutionFailed(executionId, message)
+    await updateAutomationRuleError(rule.id, message)
     throw error
   }
 }
@@ -4470,99 +3209,7 @@ export async function listAutomationExecutions(
   ruleId: string,
   limit = 50
 ) {
-  const result = await runQuery<AutomationExecutionRow>(
-    `SELECT ae.*,
-            ar.name AS execution_rule_name,
-            ao.occurred_at AS occurrence_occurred_at,
-            ao.source_kind AS occurrence_source_kind,
-            aes.name AS occurrence_event_source_name,
-            aes.source_key AS event_source_key,
-            aes.provider_ref AS event_provider_ref,
-            ao.source_snapshot,
-            ao.payload,
-            ao.source_locator,
-            ao.match_key,
-            ao.dedupe_key,
-            ao.created_at AS occurrence_created_at
-     FROM automation_executions ae
-     LEFT JOIN automation_rules ar ON ar.id = ae.rule_id
-     LEFT JOIN automation_occurrences ao ON ao.id = ae.occurrence_id
-     LEFT JOIN automation_event_sources aes ON aes.id = ao.event_source_id
-     WHERE ae.workspace_id = $1
-       AND ae.rule_id = $2
-     ORDER BY ae.created_at DESC
-     LIMIT $3`,
-    [workspaceId, ruleId, Math.max(1, Math.min(limit, 200))]
-  )
+  const rows = await listAutomationExecutionRows({ workspaceId, ruleId, limit })
 
-  return result.rows.map((row) => {
-    const execution = mapExecutionRow(row)
-    if (!row.occurrence_id || !row.occurrence_occurred_at) {
-      return execution
-    }
-
-    const rawSourceSnapshot = (
-      row as AutomationExecutionRow & {
-        source_snapshot?: Record<string, unknown> | string | null
-      }
-    ).source_snapshot
-    const parsedSourceSnapshot = parseJsonObject(rawSourceSnapshot)
-    const mergedSourceSnapshot = {
-      ...parsedSourceSnapshot,
-      ruleName:
-        (typeof parsedSourceSnapshot.ruleName === "string" &&
-        parsedSourceSnapshot.ruleName.trim()
-          ? parsedSourceSnapshot.ruleName.trim()
-          : null) ||
-        row.execution_rule_name ||
-        undefined,
-    }
-
-    const occurrence = mapOccurrenceRow({
-      id: row.occurrence_id,
-      workspace_id: row.workspace_id,
-      source_kind: row.occurrence_source_kind || "internal",
-      event_source_id: null,
-      event_source_key:
-        (row as AutomationExecutionRow & { event_source_key?: string | null })
-          .event_source_key || null,
-      event_source_name: row.occurrence_event_source_name || null,
-      event_provider_ref:
-        (row as AutomationExecutionRow & { event_provider_ref?: string | null })
-          .event_provider_ref || null,
-      source_locator:
-        (row as AutomationExecutionRow & { source_locator?: string | null })
-          .source_locator || null,
-      match_key:
-        (row as AutomationExecutionRow & { match_key?: string | null })
-          .match_key || null,
-      dedupe_key:
-        (row as AutomationExecutionRow & { dedupe_key?: string | null })
-          .dedupe_key || null,
-      source_snapshot: mergedSourceSnapshot,
-      payload:
-        (
-          row as AutomationExecutionRow & {
-            payload?: Record<string, unknown> | string | null
-          }
-        ).payload || {},
-      occurred_at: row.occurrence_occurred_at,
-      created_at:
-        (
-          row as AutomationExecutionRow & {
-            occurrence_created_at?: Date | null
-          }
-        ).occurrence_created_at || row.occurrence_occurred_at,
-    })
-
-    return {
-      ...execution,
-      occurrenceOccurredAt: occurrence.occurredAt,
-      occurrenceSourceKind: occurrence.sourceKind,
-      occurrenceEventSourceName: occurrence.eventSourceName,
-      occurrenceTitle: occurrence.displayTitle,
-      occurrenceSummary: occurrence.displaySummary,
-      occurrenceDescription: occurrence.displayDescription,
-    }
-  })
+  return rows.map(normalizeAutomationExecutionWithOccurrenceRow)
 }

@@ -1,11 +1,14 @@
 /**
  * S31 + S34 + S36: web + mobile SW broadcast / IDB / sync-tag constants
- * must come from @synapse/shared. Until S31 each client redeclared its
+ * must come from @synapse/shared/chat-queue. Until S31 each client redeclared its
  * own value (web "synapse.web.chat.worker" / "synapse-web-chat-queue",
  * mobile "synapse.chat.worker" / "synapse-chat-web-queue"), so the two
  * clients literally lived in different IDB databases and broadcast on
  * different channels even though they were doing the same job. Now both
- * are aliased back to the canonical shared values.
+ * are aliased back to the canonical shared values. Worker-reachable runtime
+ * imports use the lightweight chat-queue subpath so the shared root barrel
+ * cannot accidentally pull schema/runtime dependencies such as zod into SW
+ * bundles.
  *
  * Note we don't pin the literal value here — that's deliberate. Pinning
  * "synapse-chat-queue" everywhere would make a future rename a two-test
@@ -24,7 +27,7 @@ import {
   CHAT_QUEUE_DB_NAME,
   CHAT_SERVICE_WORKER_SYNC_TAG,
   CHAT_SERVICE_WORKER_PERIODIC_SYNC_TAG,
-} from "@synapse/shared"
+} from "@synapse/shared/chat-queue"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(here, "..", "..", "..", "..", "..")
@@ -79,12 +82,12 @@ test("shared chat-queue constants are well-formed", () => {
   )
 })
 
-test("web SW constants module re-exports / aliases from @synapse/shared", async () => {
+test("web SW constants module re-exports / aliases from @synapse/shared/chat-queue", async () => {
   const body = await readFile(webSwConstantsPath, "utf8")
   assert.match(
     body,
-    /from\s+"@synapse\/shared"/,
-    "web chat-service-worker-constants.ts must source values from @synapse/shared"
+    /from\s+"@synapse\/shared\/chat-queue"/,
+    "web chat-service-worker-constants.ts must source values from @synapse/shared/chat-queue"
   )
   assert.equal(
     /=\s*"synapse\.web\.chat\.worker"/.test(body),
@@ -98,12 +101,12 @@ test("web SW constants module re-exports / aliases from @synapse/shared", async 
   )
 })
 
-test("web chat-persistence sources CHAT_QUEUE_DB_NAME from @synapse/shared", async () => {
+test("web chat-persistence sources CHAT_QUEUE_DB_NAME from @synapse/shared/chat-queue", async () => {
   const body = await readFile(webPersistencePath, "utf8")
   assert.match(
     body,
-    /import \{[^}]*CHAT_QUEUE_DB_NAME[^}]*\}\s+from\s+"@synapse\/shared"/s,
-    "chat-persistence.ts must import CHAT_QUEUE_DB_NAME from @synapse/shared"
+    /import \{[^}]*CHAT_QUEUE_DB_NAME[^}]*\}\s+from\s+"@synapse\/shared\/chat-queue"/s,
+    "chat-persistence.ts must import CHAT_QUEUE_DB_NAME from @synapse/shared/chat-queue"
   )
   assert.equal(
     /=\s*"synapse-web-chat-queue"/.test(body),
@@ -112,12 +115,12 @@ test("web chat-persistence sources CHAT_QUEUE_DB_NAME from @synapse/shared", asy
   )
 })
 
-test("mobile storage-keys aliases the SW constants to the shared values", async () => {
+test("mobile storage-keys aliases the SW constants to the shared chat-queue values", async () => {
   const body = await readFile(mobileStorageKeysPath, "utf8")
   assert.match(
     body,
-    /import \{[^}]*CHAT_QUEUE_BROADCAST_CHANNEL[^}]*\}\s+from\s+"@shared"/s,
-    "mobile storage-keys.ts must import CHAT_QUEUE_BROADCAST_CHANNEL from @shared"
+    /import \{[^}]*CHAT_QUEUE_BROADCAST_CHANNEL[^}]*\}\s+from\s+"@shared\/chat-queue"/s,
+    "mobile storage-keys.ts must import CHAT_QUEUE_BROADCAST_CHANNEL from @shared/chat-queue"
   )
   assert.equal(
     /=\s*"synapse\.chat\.worker"/.test(body),
@@ -126,11 +129,11 @@ test("mobile storage-keys aliases the SW constants to the shared values", async 
   )
 })
 
-test("mobile chat-web-queue-storage aliases CHAT_QUEUE_DB_NAME from @shared", async () => {
+test("mobile chat-web-queue-storage aliases CHAT_QUEUE_DB_NAME from @shared/chat-queue", async () => {
   const body = await readFile(mobileQueueStoragePath, "utf8")
   assert.match(
     body,
-    /import \{[^}]*CHAT_QUEUE_DB_NAME[^}]*\}\s+from\s+"@shared"/s
+    /import \{[^}]*CHAT_QUEUE_DB_NAME[^}]*\}\s+from\s+"@shared\/chat-queue"/s
   )
   assert.equal(
     /=\s*"synapse-chat-web-queue"/.test(body),

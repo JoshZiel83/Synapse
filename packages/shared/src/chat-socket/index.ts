@@ -124,7 +124,7 @@ function defaultDeserialize(raw: unknown): Record<string, unknown> | null {
   if (typeof raw !== "string") return null
   try {
     const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === "object"
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
       ? (parsed as Record<string, unknown>)
       : null
   } catch {
@@ -255,9 +255,15 @@ export function createChatSocket(deps: ChatSocketDeps): ChatSocketHandle {
   function syncSubscriptions() {
     if (!socket || !authenticated) return
 
-    const desired = new Map<string, string>()
+    const desired = new Map<
+      string,
+      { serialized: string; subscription: ChatSocketSubscription }
+    >()
     for (const subscription of deps.getSubscriptions()) {
-      desired.set(subscription.key, serialize(subscription))
+      desired.set(subscription.key, {
+        serialized: serialize(subscription),
+        subscription,
+      })
     }
 
     for (const [key] of sentSubscriptions) {
@@ -266,9 +272,9 @@ export function createChatSocket(deps: ChatSocketDeps): ChatSocketHandle {
       sentSubscriptions.delete(key)
     }
 
-    for (const [key, serialized] of desired) {
+    for (const [key, { serialized, subscription }] of desired) {
       if (sentSubscriptions.get(key) === serialized) continue
-      socket.send(serialize({ type: "subscribe", ...JSON.parse(serialized) }))
+      socket.send(serialize({ type: "subscribe", ...subscription }))
       sentSubscriptions.set(key, serialized)
     }
   }

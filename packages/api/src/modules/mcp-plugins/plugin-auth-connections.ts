@@ -1,34 +1,43 @@
 import { createHash, randomBytes } from "crypto"
-import type pg from "pg"
 import type {
   PluginAuthBindingDefinition,
   PluginAuthConnection,
-  PluginAuthSession,
   PluginAuthValueSource,
   PluginConfigFieldDefinition,
 } from "@synapse/shared"
-import { assertIsoInstant } from "@synapse/shared/datetime"
-import { CompiledQuery, sql } from "kysely"
-import { config } from "../../config/index.js"
 import {
-  PLUGIN_CONNECTION_LIVE_STATUSES,
-  PLUGIN_INSTALLATION_LIVE_STATUSES,
-} from "./live-status.js"
+  PLUGIN_AUTH_BINDING_DRIVER_KIND,
+  PLUGIN_AUTH_CHALLENGE_KIND,
+  PLUGIN_AUTH_CHALLENGE_OPEN_MODE,
+  PLUGIN_AUTH_CONNECTION_STATUS,
+  PLUGIN_AUTH_DERIVED_VALUE_NAME,
+  PLUGIN_AUTH_SESSION_PHASE,
+  PLUGIN_AUTH_SESSION_STATUS,
+  PLUGIN_AUTH_VALUE_SOURCE_KIND,
+  PLUGIN_CONFIG_FIELD_TYPE,
+  parseJsonObject,
+} from "@synapse/shared"
+import { config } from "../../config/index.js"
 import {
   decrypt,
   decryptSensitiveFields,
   encrypt,
 } from "../../infrastructure/crypto/index.js"
+import { parseInstantString } from "../../infrastructure/datetime.js"
 import {
-  db,
-  type TableInsert,
-  type TableRow,
-} from "../../infrastructure/database/kysely.js"
-import {
-  parseInstantString,
-  serializeInstant,
-  serializeOptionalInstant,
-} from "../../infrastructure/datetime.js"
+  defaultPluginConnectionRunner,
+  findPluginAuthConnectionRow,
+  findPluginAuthSessionRow,
+  findPluginAuthSessionRowByState,
+  findPluginInstallationAuthConfigRow,
+  getPluginAuthSpecRow,
+  insertPluginAuthSession,
+  updatePluginAuthSession,
+  updatePluginAuthSessionNoReturn,
+  updatePluginConnection,
+  upsertPluginAuthConnectionFromSessionResult,
+  type PluginConnectionQueryRunner,
+} from "./repo.js"
 import {
   normalizeMijiaLocale,
   progressMijiaQrLoginSession,
@@ -49,28 +58,26 @@ import {
   resolveFeishuOpenBaseUrl,
 } from "./feishu/client.js"
 import { normalizeFeishuFeatureKeys } from "./feishu/features.js"
+import {
+  presentAuthConnection,
+  presentAuthSession,
+  presentInstant,
+} from "./presenter.js"
 
 type JsonObject = Record<string, unknown>
-type QueryRunner = <T extends pg.QueryResultRow = pg.QueryResultRow>(
-  text: string,
-  params?: any[]
-) => Promise<{ rows: T[] }>
 
-/** Default {@link QueryRunner} backed by the top-level Kysely db. */
-const dbRunner: QueryRunner = <T extends pg.QueryResultRow = pg.QueryResultRow>(
-  text: string,
-  params?: any[]
-) =>
-  db
-    .executeQuery<T>(CompiledQuery.raw(text, params ?? []))
-    .then((r) => ({ rows: r.rows as T[] }))
-
-type PluginAuthSessionRow = TableRow<"plugin_auth_sessions">
-
-type PluginConnectionRow = TableRow<"plugin_connections"> & {
-  catalog_item_id: string
-  catalog_version_id: string | null
-}
+export type { PluginAuthSessionRow, PluginConnectionRow } from "./repo.types.js"
+import type {
+  PluginAuthSessionRow,
+  PluginConnectionRow,
+  PluginAuthSessionsChallengePayload,
+  PluginAuthSessionsMetadata,
+  PluginAuthSessionsResultPayload,
+  PluginAuthSessionsResultPreview,
+  PluginAuthSessionsTransientPayload,
+  PluginConnectionsPublicPayload,
+  PluginConnectionsSecretPayload,
+} from "./repo.types.js"
 
 type PluginAuthSpec = {
   catalogItemId: string
@@ -80,10 +87,10 @@ type PluginAuthSpec = {
 }
 
 type InstallationConfigRow = {
-  catalog_item_id: string
-  catalog_version_id: string
-  config_data: unknown
-  default_config: unknown
+  catalogItemId: string
+  catalogVersionId: string
+  configData: Record<string, unknown>
+  defaultConfig: Record<string, unknown>
 }
 
 type OAuthTransientPayload = {
@@ -112,18 +119,29 @@ export class PluginAuthError extends Error {
   }
 }
 
-function asObject(value: unknown): JsonObject {
-  if (!value) return {}
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value) as JsonObject
-    } catch {
-      return {}
-    }
+// Business JSON decode → shared parseJsonObject (object-only, array-reject). r6 P1-8.
+const asObject = parseJsonObject
+
+export async function readProviderJsonObjectResponse(
+  response: Response,
+  label: string
+): Promise<JsonObject> {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(await response.text())
+  } catch {
+    throw new PluginAuthError(
+      response.ok ? 502 : response.status || 502,
+      `${label} must be valid JSON.`
+    )
   }
-  return typeof value === "object" && !Array.isArray(value)
-    ? (value as JsonObject)
-    : {}
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new PluginAuthError(
+      response.ok ? 502 : response.status || 502,
+      `${label} must be a JSON object.`
+    )
+  }
+  return parsed as JsonObject
 }
 
 function asString(value: unknown): string {
@@ -220,113 +238,21 @@ function encryptDeep(value: unknown): unknown {
   return value
 }
 
-function getAuthChallenge(
-  row: PluginAuthSessionRow
-): PluginAuthSession["challenge"] | undefined {
-  const challenge = asObject(row.challenge_payload)
-  const kind = asString(challenge.kind)
-  if (!kind) return undefined
-  if (kind !== "redirect" && kind !== "qr_code" && kind !== "none") {
-    return undefined
-  }
-  return {
-    kind: kind as NonNullable<PluginAuthSession["challenge"]>["kind"],
-    url: asString(challenge.url) || undefined,
-    qrUrl: asString(challenge.qrUrl) || undefined,
-    openMode:
-      challenge.openMode === "replace" || challenge.openMode === "popup"
-        ? challenge.openMode
-        : undefined,
-    expiresAt: asString(challenge.expiresAt)
-      ? assertIsoInstant(asString(challenge.expiresAt)!)
-      : undefined,
-    metadata: asObject(challenge.metadata),
-  }
-}
-
-function mapConnectionRow(row: PluginConnectionRow): PluginAuthConnection {
-  return {
-    id: row.id,
-    workspaceId: row.workspace_id,
-    packageId: row.catalog_item_id,
-    bindingKey: row.binding_key,
-    driver: row.driver as PluginAuthConnection["driver"],
-    externalAccountId: row.external_account_id || undefined,
-    displayName: row.display_name || undefined,
-    avatarUrl: row.avatar_url || undefined,
-    status: row.status as PluginAuthConnection["status"],
-    expiresAt: serializeOptionalInstant(row.expires_at),
-    publicPayload: asObject(row.public_payload),
-    createdAt: serializeInstant(row.created_at),
-    updatedAt: serializeInstant(row.updated_at),
-  }
-}
-
-function mapSessionRow(row: PluginAuthSessionRow): PluginAuthSession {
-  const metadata = asObject(row.metadata)
-  return {
-    id: row.id,
-    workspaceId: row.workspace_id,
-    packageId: row.catalog_item_id,
-    revisionId: row.catalog_version_id || undefined,
-    bindingKey: row.binding_key,
-    driver: row.driver as PluginAuthSession["driver"],
-    workspaceMemberId: row.workspace_member_id,
-    status: row.status as PluginAuthSession["status"],
-    phase: (row.phase as PluginAuthSession["phase"] | null) || undefined,
-    state: row.state || undefined,
-    challenge: getAuthChallenge(row),
-    errorCode: row.error_code || undefined,
-    errorMessage: row.error_message || undefined,
-    resultPreview: asObject(row.result_preview),
-    authConnectionId:
-      typeof metadata.consumedConnectionId === "string"
-        ? metadata.consumedConnectionId
-        : undefined,
-    metadata,
-    expiresAt: serializeInstant(row.expires_at),
-    createdAt: serializeInstant(row.created_at),
-    updatedAt: serializeInstant(row.updated_at),
-  }
-}
-
 async function getPluginAuthSpec(
   pluginId: string,
   catalogVersionId?: string | null
 ): Promise<PluginAuthSpec> {
-  const result = await db.executeQuery(
-    sql<{
-      catalog_item_id: string
-      catalog_version_id: string | null
-      default_config: unknown
-      auth_bindings: unknown
-    }>`SELECT
-        item.id AS catalog_item_id,
-        version.id AS catalog_version_id,
-        spec.default_config,
-        spec.auth_bindings
-      FROM catalog_items item
-      LEFT JOIN catalog_versions version
-        ON version.id = COALESCE(${catalogVersionId || null}::uuid, item.latest_version_id)
-      LEFT JOIN plugin_package_version_specs spec
-        ON spec.catalog_version_id = version.id
-      WHERE item.id = ${pluginId}
-        AND item.item_kind = 'plugin_package'
-      LIMIT 1`.compile(db)
-  )
+  const row = await getPluginAuthSpecRow(pluginId, catalogVersionId)
 
-  if (result.rows.length === 0) {
+  if (!row) {
     throw new PluginAuthError(404, "Plugin not found")
   }
 
-  const row = result.rows[0]!
   return {
-    catalogItemId: row.catalog_item_id,
-    catalogVersionId: row.catalog_version_id,
-    defaultConfig: asObject(row.default_config),
-    authBindings: Array.isArray(row.auth_bindings)
-      ? (row.auth_bindings as PluginAuthBindingDefinition[])
-      : [],
+    catalogItemId: row.catalogItemId,
+    catalogVersionId: row.catalogVersionId,
+    defaultConfig: row.defaultConfig,
+    authBindings: row.authBindings,
   }
 }
 
@@ -346,14 +272,11 @@ async function getSessionRow(
   workspaceId: string,
   workspaceMemberId: string
 ) {
-  const row = await db
-    .selectFrom("plugin_auth_sessions")
-    .selectAll()
-    .where("id", "=", sessionId)
-    .where("workspace_id", "=", workspaceId)
-    .where("workspace_member_id", "=", workspaceMemberId)
-    .limit(1)
-    .executeTakeFirst()
+  const row = await findPluginAuthSessionRow(
+    sessionId,
+    workspaceId,
+    workspaceMemberId
+  )
   if (!row) {
     throw new PluginAuthError(404, "Auth session not found")
   }
@@ -361,12 +284,7 @@ async function getSessionRow(
 }
 
 async function getSessionRowByState(state: string) {
-  const row = await db
-    .selectFrom("plugin_auth_sessions")
-    .selectAll()
-    .where("state", "=", state)
-    .limit(1)
-    .executeTakeFirst()
+  const row = await findPluginAuthSessionRowByState(state)
   if (!row) {
     throw new PluginAuthError(404, "Auth session not found")
   }
@@ -374,31 +292,7 @@ async function getSessionRowByState(state: string) {
 }
 
 async function getConnectionRow(connectionId: string, workspaceId?: string) {
-  let builder = db
-    // Live predicate (review F5/F16): a connection resolves secrets only when both
-    // it and its parent installation are live (deleted_at IS NULL AND status ∈
-    // liveValues — excludes archived install / expired-revoked connection). Base
-    // tables (not _live views) so NOT NULL column types survive.
-    .selectFrom("plugin_connections as connection")
-    .innerJoin(
-      "plugin_installations as installation",
-      "installation.id",
-      "connection.installation_id"
-    )
-    .innerJoin("workspace_apps as app", "app.id", "installation.id")
-    .selectAll("connection")
-    .select(["installation.catalog_item_id", "installation.catalog_version_id"])
-    .where("connection.id", "=", connectionId)
-    .where("connection.deleted_at", "is", null)
-    .where("connection.status", "in", PLUGIN_CONNECTION_LIVE_STATUSES)
-    .where("app.deleted_at", "is", null)
-    .where("app.status", "in", PLUGIN_INSTALLATION_LIVE_STATUSES)
-
-  if (workspaceId) {
-    builder = builder.where("connection.workspace_id", "=", workspaceId)
-  }
-
-  const row = await builder.limit(1).executeTakeFirst()
+  const row = await findPluginAuthConnectionRow(connectionId, workspaceId)
   if (!row) {
     throw new PluginAuthError(404, "Auth connection not found")
   }
@@ -409,27 +303,10 @@ async function getInstallationConfigRow(
   installationId: string,
   workspaceId: string
 ): Promise<InstallationConfigRow> {
-  const row = await db
-    // Live predicate (review F16): exclude tombstoned + non-live-status installs.
-    .selectFrom("plugin_installations as installation")
-    .innerJoin("workspace_apps as app", "app.id", "installation.id")
-    .innerJoin(
-      "plugin_package_version_specs as spec",
-      "spec.catalog_version_id",
-      "installation.catalog_version_id"
-    )
-    .select([
-      "installation.catalog_item_id",
-      "installation.catalog_version_id",
-      "installation.config_data",
-      "spec.default_config",
-    ])
-    .where("installation.id", "=", installationId)
-    .where("app.workspace_id", "=", workspaceId)
-    .where("app.deleted_at", "is", null)
-    .where("app.status", "in", PLUGIN_INSTALLATION_LIVE_STATUSES)
-    .limit(1)
-    .executeTakeFirst()
+  const row = await findPluginInstallationAuthConfigRow(
+    installationId,
+    workspaceId
+  )
 
   if (!row) {
     throw new PluginAuthError(404, "Installation not found")
@@ -465,7 +342,7 @@ async function buildDraftConfig(input: {
     input.installationId,
     input.workspaceId
   )
-  if (row.catalog_item_id !== input.pluginId) {
+  if (row.catalogItemId !== input.pluginId) {
     throw new PluginAuthError(
       400,
       "Installation does not belong to this plugin"
@@ -474,7 +351,7 @@ async function buildDraftConfig(input: {
 
   return mergeConfigLayers(
     input.defaultConfig,
-    decryptSensitiveFields(asObject(row.config_data)),
+    decryptSensitiveFields(row.configData),
     input.draftConfig || {}
   )
 }
@@ -489,17 +366,17 @@ function resolveAuthValue(
 ) {
   if (!source) return undefined
   switch (source.source) {
-    case "config":
+    case PLUGIN_AUTH_VALUE_SOURCE_KIND.CONFIG:
       return source.field ? configData[source.field] : undefined
-    case "env":
+    case PLUGIN_AUTH_VALUE_SOURCE_KIND.ENV:
       return source.env ? process.env[source.env] : undefined
-    case "literal":
+    case PLUGIN_AUTH_VALUE_SOURCE_KIND.LITERAL:
       return source.value
-    case "derived":
-      if (source.name === "app_base_url") {
+    case PLUGIN_AUTH_VALUE_SOURCE_KIND.DERIVED:
+      if (source.name === PLUGIN_AUTH_DERIVED_VALUE_NAME.APP_BASE_URL) {
         return config.app.baseUrl.replace(/\/$/, "")
       }
-      if (source.name === "oauth_callback_url") {
+      if (source.name === PLUGIN_AUTH_DERIVED_VALUE_NAME.OAUTH_CALLBACK_URL) {
         return defaultOauthCallbackUrl()
       }
       return undefined
@@ -555,7 +432,7 @@ function buildMijiaResultPayload(authState: object) {
   const state = authState as JsonObject
   const expiresAt =
     typeof state.expireTime === "number"
-      ? serializeInstant(new Date(state.expireTime))
+      ? presentInstant(new Date(state.expireTime))
       : null
   const preview = buildMijiaResultPreview(authState)
 
@@ -620,10 +497,10 @@ function buildFeishuResultPayload(input: {
   requestedFeatures: string[]
   appScopeStatus?: FeishuAppScopeInspection
 }) {
-  const expiresAt = serializeInstant(
+  const expiresAt = presentInstant(
     new Date(Date.now() + input.tokenData.expiresIn * 1000)
   )
-  const refreshExpiresAt = serializeInstant(
+  const refreshExpiresAt = presentInstant(
     new Date(Date.now() + input.tokenData.refreshExpiresIn * 1000)
   )
   const preview = buildFeishuResultPreview({
@@ -751,32 +628,27 @@ async function buildFeishuAppScopeInspection(input: {
 }
 
 async function expirePluginAuthSession(sessionId: string) {
-  const expired = await db
-    .updateTable("plugin_auth_sessions")
-    .set({
-      status: "expired",
-      phase: null,
-      error_code: "AUTH_SESSION_EXPIRED",
-      error_message: "Auth session expired",
-    })
-    .where("id", "=", sessionId)
-    .returningAll()
-    .executeTakeFirstOrThrow()
-  return expired
+  return updatePluginAuthSession(sessionId, {
+    status: PLUGIN_AUTH_SESSION_STATUS.EXPIRED,
+    phase: null,
+    errorCode: "AUTH_SESSION_EXPIRED",
+    errorMessage: "Auth session expired",
+  })
 }
 
 async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
-  if (row.driver !== "mijia_qr_login" || row.status !== "pending") {
+  if (
+    row.driver !== PLUGIN_AUTH_BINDING_DRIVER_KIND.MIJIA_QR_LOGIN ||
+    row.status !== PLUGIN_AUTH_SESSION_STATUS.PENDING
+  ) {
     return row
   }
 
-  if (row.expires_at.getTime() <= Date.now()) {
+  if (row.expiresAt.getTime() <= Date.now()) {
     return expirePluginAuthSession(row.id)
   }
 
-  const transientPayload = asObject(
-    decryptDeep(asObject(row.transient_payload))
-  )
+  const transientPayload = asObject(decryptDeep(row.transientPayload))
   const mijiaPayload = asObject(transientPayload.mijia)
 
   try {
@@ -786,67 +658,46 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
     })
 
     switch (progress.status) {
-      case "pending": {
+      case PLUGIN_AUTH_SESSION_STATUS.PENDING: {
         if (!progress.phase || progress.phase === row.phase) {
           return row
         }
 
-        const updated = await db
-          .updateTable("plugin_auth_sessions")
-          .set({
-            phase: progress.phase,
-          })
-          .where("id", "=", row.id)
-          .returningAll()
-          .executeTakeFirstOrThrow()
+        const updated = await updatePluginAuthSession(row.id, {
+          phase: progress.phase,
+        })
         return updated
       }
-      case "completed": {
+      case PLUGIN_AUTH_SESSION_STATUS.COMPLETED: {
         const resultPayload = buildMijiaResultPayload(progress.authState)
-        const updated = await db
-          .updateTable("plugin_auth_sessions")
-          .set({
-            status: "completed",
-            phase: null,
-            result_preview: buildMijiaResultPreview(
-              progress.authState
-            ) as TableInsert<"plugin_auth_sessions">["result_preview"],
-            result_payload:
-              resultPayload as TableInsert<"plugin_auth_sessions">["result_payload"],
-            error_code: null,
-            error_message: null,
-          })
-          .where("id", "=", row.id)
-          .returningAll()
-          .executeTakeFirstOrThrow()
+        const updated = await updatePluginAuthSession(row.id, {
+          status: PLUGIN_AUTH_SESSION_STATUS.COMPLETED,
+          phase: null,
+          resultPreview: buildMijiaResultPreview(
+            progress.authState
+          ) as PluginAuthSessionsResultPreview,
+          resultPayload: resultPayload as PluginAuthSessionsResultPayload,
+          errorCode: null,
+          errorMessage: null,
+        })
         return updated
       }
-      case "expired": {
-        const expired = await db
-          .updateTable("plugin_auth_sessions")
-          .set({
-            status: "expired",
-            phase: null,
-            error_code: progress.errorCode,
-            error_message: progress.errorMessage,
-          })
-          .where("id", "=", row.id)
-          .returningAll()
-          .executeTakeFirstOrThrow()
+      case PLUGIN_AUTH_SESSION_STATUS.EXPIRED: {
+        const expired = await updatePluginAuthSession(row.id, {
+          status: PLUGIN_AUTH_SESSION_STATUS.EXPIRED,
+          phase: null,
+          errorCode: progress.errorCode,
+          errorMessage: progress.errorMessage,
+        })
         return expired
       }
-      case "failed": {
-        const failed = await db
-          .updateTable("plugin_auth_sessions")
-          .set({
-            status: "failed",
-            phase: null,
-            error_code: progress.errorCode,
-            error_message: progress.errorMessage,
-          })
-          .where("id", "=", row.id)
-          .returningAll()
-          .executeTakeFirstOrThrow()
+      case PLUGIN_AUTH_SESSION_STATUS.FAILED: {
+        const failed = await updatePluginAuthSession(row.id, {
+          status: PLUGIN_AUTH_SESSION_STATUS.FAILED,
+          phase: null,
+          errorCode: progress.errorCode,
+          errorMessage: progress.errorMessage,
+        })
         return failed
       }
       default:
@@ -857,64 +708,53 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
       error instanceof Error
         ? error.message
         : "Unable to complete Mijia authorization."
-    const failed = await db
-      .updateTable("plugin_auth_sessions")
-      .set({
-        status: "failed",
-        phase: null,
-        error_code: "MIJIA_AUTH_ERROR",
-        error_message: message,
-      })
-      .where("id", "=", row.id)
-      .returningAll()
-      .executeTakeFirstOrThrow()
+    const failed = await updatePluginAuthSession(row.id, {
+      status: PLUGIN_AUTH_SESSION_STATUS.FAILED,
+      phase: null,
+      errorCode: "MIJIA_AUTH_ERROR",
+      errorMessage: message,
+    })
     return failed
   }
 }
 
 async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
-  if (row.driver !== "feishu_cli_setup" || row.status !== "pending") {
+  if (
+    row.driver !== PLUGIN_AUTH_BINDING_DRIVER_KIND.FEISHU_CLI_SETUP ||
+    row.status !== PLUGIN_AUTH_SESSION_STATUS.PENDING
+  ) {
     return row
   }
 
-  if (row.expires_at.getTime() <= Date.now()) {
+  if (row.expiresAt.getTime() <= Date.now()) {
     return expirePluginAuthSession(row.id)
   }
 
-  const transientPayload = asObject(
-    decryptDeep(asObject(row.transient_payload))
-  )
+  const transientPayload = asObject(decryptDeep(row.transientPayload))
 
   try {
     const progress = await progressFeishuCliSetup(transientPayload as any)
     switch (progress.status) {
-      case "pending": {
+      case PLUGIN_AUTH_SESSION_STATUS.PENDING: {
         const nextTransient =
           progress.transientPayload || (transientPayload as any)
-        const nextChallenge =
-          progress.challengePayload || asObject(row.challenge_payload)
-        const nextExpiresAt = progress.expiresAt || row.expires_at
+        const nextChallenge = progress.challengePayload || row.challengePayload
+        const nextExpiresAt = progress.expiresAt || row.expiresAt
 
-        const updated = await db
-          .updateTable("plugin_auth_sessions")
-          .set({
-            phase: "pending_scan",
-            challenge_payload:
-              nextChallenge as TableInsert<"plugin_auth_sessions">["challenge_payload"],
-            transient_payload: encryptDeep(
-              nextTransient
-            ) as TableInsert<"plugin_auth_sessions">["transient_payload"],
-            expires_at:
-              typeof nextExpiresAt === "string"
-                ? parseInstantString(nextExpiresAt)
-                : nextExpiresAt,
-          })
-          .where("id", "=", row.id)
-          .returningAll()
-          .executeTakeFirstOrThrow()
+        const updated = await updatePluginAuthSession(row.id, {
+          phase: PLUGIN_AUTH_SESSION_PHASE.PENDING_SCAN,
+          challengePayload: nextChallenge as PluginAuthSessionsChallengePayload,
+          transientPayload: encryptDeep(
+            nextTransient
+          ) as PluginAuthSessionsTransientPayload,
+          expiresAt:
+            typeof nextExpiresAt === "string"
+              ? parseInstantString(nextExpiresAt)
+              : nextExpiresAt,
+        })
         return updated
       }
-      case "completed": {
+      case PLUGIN_AUTH_SESSION_STATUS.COMPLETED: {
         const appScopeStatus = await buildFeishuAppScopeInspection({
           transientPayload,
         })
@@ -935,61 +775,44 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
           appScopeStatus,
         })
 
-        const updated = await db
-          .updateTable("plugin_auth_sessions")
-          .set({
-            status: "completed",
-            phase: null,
-            result_preview:
-              resultPreview as TableInsert<"plugin_auth_sessions">["result_preview"],
-            result_payload:
-              resultPayload as TableInsert<"plugin_auth_sessions">["result_payload"],
-            error_code: null,
-            error_message: null,
-          })
-          .where("id", "=", row.id)
-          .returningAll()
-          .executeTakeFirstOrThrow()
+        const updated = await updatePluginAuthSession(row.id, {
+          status: PLUGIN_AUTH_SESSION_STATUS.COMPLETED,
+          phase: null,
+          resultPreview: resultPreview as PluginAuthSessionsResultPreview,
+          resultPayload: resultPayload as PluginAuthSessionsResultPayload,
+          errorCode: null,
+          errorMessage: null,
+        })
         return updated
       }
-      case "expired": {
-        const expired = await db
-          .updateTable("plugin_auth_sessions")
-          .set({
-            status: "expired",
-            phase: null,
-            error_code: progress.errorCode,
-            error_message: progress.errorMessage,
-          })
-          .where("id", "=", row.id)
-          .returningAll()
-          .executeTakeFirstOrThrow()
+      case PLUGIN_AUTH_SESSION_STATUS.EXPIRED: {
+        const expired = await updatePluginAuthSession(row.id, {
+          status: PLUGIN_AUTH_SESSION_STATUS.EXPIRED,
+          phase: null,
+          errorCode: progress.errorCode,
+          errorMessage: progress.errorMessage,
+        })
         return expired
       }
-      case "failed": {
+      case PLUGIN_AUTH_SESSION_STATUS.FAILED: {
         const appScopeStatus = await buildFeishuAppScopeInspection({
           transientPayload,
         })
-        const failed = await db
-          .updateTable("plugin_auth_sessions")
-          .set({
-            status: "failed",
-            phase: null,
-            result_preview: {
-              features: normalizeFeishuFeatureKeys(
-                transientPayload.requestedFeatures
-              ),
-              appScopeStatus,
-            } as TableInsert<"plugin_auth_sessions">["result_preview"],
-            error_code: progress.errorCode,
-            error_message: buildFeishuScopeInspectionErrorMessage({
-              baseMessage: progress.errorMessage,
-              inspection: appScopeStatus,
-            }),
-          })
-          .where("id", "=", row.id)
-          .returningAll()
-          .executeTakeFirstOrThrow()
+        const failed = await updatePluginAuthSession(row.id, {
+          status: PLUGIN_AUTH_SESSION_STATUS.FAILED,
+          phase: null,
+          resultPreview: {
+            features: normalizeFeishuFeatureKeys(
+              transientPayload.requestedFeatures
+            ),
+            appScopeStatus,
+          } as PluginAuthSessionsResultPreview,
+          errorCode: progress.errorCode,
+          errorMessage: buildFeishuScopeInspectionErrorMessage({
+            baseMessage: progress.errorMessage,
+            inspection: appScopeStatus,
+          }),
+        })
         return failed
       }
       default:
@@ -1000,17 +823,12 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
       error instanceof Error
         ? error.message
         : "Unable to complete Feishu authorization."
-    const failed = await db
-      .updateTable("plugin_auth_sessions")
-      .set({
-        status: "failed",
-        phase: null,
-        error_code: "FEISHU_AUTH_ERROR",
-        error_message: message,
-      })
-      .where("id", "=", row.id)
-      .returningAll()
-      .executeTakeFirstOrThrow()
+    const failed = await updatePluginAuthSession(row.id, {
+      status: PLUGIN_AUTH_SESSION_STATUS.FAILED,
+      phase: null,
+      errorCode: "FEISHU_AUTH_ERROR",
+      errorMessage: message,
+    })
     return failed
   }
 }
@@ -1051,7 +869,10 @@ async function exchangeAuthorizationCode(
     body,
   })
 
-  const responseBody = asObject(await response.json().catch(() => ({})))
+  const responseBody = await readProviderJsonObjectResponse(
+    response,
+    "OAuth token response"
+  )
   if (!response.ok) {
     throw new PluginAuthError(
       response.status || 400,
@@ -1079,7 +900,7 @@ async function refreshOAuthConnection(
     )
   }
 
-  const storedSecretPayload = asObject(row.secret_payload)
+  const storedSecretPayload = row.secretPayload
   const secretPayload = asObject(decryptDeep(storedSecretPayload))
   const refreshToken = asString(secretPayload.refreshToken)
   if (!refreshToken) {
@@ -1129,7 +950,10 @@ async function refreshOAuthConnection(
     body,
   })
 
-  const tokenResponse = asObject(await response.json().catch(() => ({})))
+  const tokenResponse = await readProviderJsonObjectResponse(
+    response,
+    "OAuth token refresh response"
+  )
   if (!response.ok) {
     throw new PluginAuthError(
       response.status || 400,
@@ -1148,11 +972,11 @@ async function refreshOAuthConnection(
 
   const expiresAt =
     typeof tokenResponse.expires_in === "number"
-      ? serializeInstant(new Date(Date.now() + tokenResponse.expires_in * 1000))
-      : row.expires_at
+      ? presentInstant(new Date(Date.now() + tokenResponse.expires_in * 1000))
+      : row.expiresAt
 
   const publicPayload = {
-    ...asObject(row.public_payload),
+    ...row.publicPayload,
     ...(typeof tokenResponse.scope === "string"
       ? {
           scopes: tokenResponse.scope.split(/\s+/).filter(Boolean),
@@ -1174,29 +998,21 @@ async function refreshOAuthConnection(
     expiresAt,
   }
 
-  await db
-    .updateTable("plugin_connections")
-    .set({
-      public_payload:
-        publicPayload as TableInsert<"plugin_connections">["public_payload"],
-      secret_payload:
-        nextSecretPayload as TableInsert<"plugin_connections">["secret_payload"],
-      status: "active",
-      expires_at:
-        typeof expiresAt === "string"
-          ? parseInstantString(expiresAt)
-          : expiresAt,
-    })
-    .where("id", "=", row.id)
-    .execute()
+  await updatePluginConnection(row.id, {
+    publicPayload: publicPayload as PluginConnectionsPublicPayload,
+    secretPayload: nextSecretPayload as PluginConnectionsSecretPayload,
+    status: PLUGIN_AUTH_CONNECTION_STATUS.ACTIVE,
+    expiresAt:
+      typeof expiresAt === "string" ? parseInstantString(expiresAt) : expiresAt,
+  })
 
   return getConnectionRow(row.id)
 }
 
 async function refreshFeishuConnection(row: PluginConnectionRow) {
-  const storedSecretPayload = asObject(row.secret_payload)
+  const storedSecretPayload = row.secretPayload
   const secretPayload = asObject(decryptDeep(storedSecretPayload))
-  const publicPayload = asObject(row.public_payload)
+  const publicPayload = row.publicPayload
   const brand = asString(publicPayload.brand) === "lark" ? "lark" : "feishu"
   const appId = asString(secretPayload.appId)
   const appSecret = asString(secretPayload.appSecret)
@@ -1230,22 +1046,16 @@ async function refreshFeishuConnection(row: PluginConnectionRow) {
     accessToken: encrypt(tokenResponse.accessToken),
     refreshToken: encrypt(tokenResponse.refreshToken),
     tokenType: tokenResponse.tokenType,
-    expiresAt: serializeInstant(expiresAt),
-    refreshExpiresAt: serializeInstant(refreshExpiresAt),
+    expiresAt: presentInstant(expiresAt),
+    refreshExpiresAt: presentInstant(refreshExpiresAt),
   }
 
-  await db
-    .updateTable("plugin_connections")
-    .set({
-      public_payload:
-        nextPublicPayload as TableInsert<"plugin_connections">["public_payload"],
-      secret_payload:
-        nextSecretPayload as TableInsert<"plugin_connections">["secret_payload"],
-      status: "active",
-      expires_at: expiresAt,
-    })
-    .where("id", "=", row.id)
-    .execute()
+  await updatePluginConnection(row.id, {
+    publicPayload: nextPublicPayload as PluginConnectionsPublicPayload,
+    secretPayload: nextSecretPayload as PluginConnectionsSecretPayload,
+    status: PLUGIN_AUTH_CONNECTION_STATUS.ACTIVE,
+    expiresAt: expiresAt,
+  })
 
   return getConnectionRow(row.id)
 }
@@ -1256,7 +1066,7 @@ async function refreshFeishuConnection(row: PluginConnectionRow) {
 // connection store) before the credentials are forwarded. The decrypted
 // secret_payload is the internal MijiaAuthState.
 async function refreshMijiaConnection(row: PluginConnectionRow) {
-  const secretPayload = asObject(decryptDeep(asObject(row.secret_payload)))
+  const secretPayload = asObject(decryptDeep(row.secretPayload))
   const nextState = await refreshMijiaSessionTokens(
     secretPayload as unknown as MijiaAuthState
   )
@@ -1266,14 +1076,14 @@ async function refreshMijiaConnection(row: PluginConnectionRow) {
 
 async function ensureFreshPluginConnection(row: PluginConnectionRow) {
   if (
-    row.status !== "active" ||
-    !row.expires_at ||
-    row.expires_at.getTime() > Date.now() + 60_000
+    row.status !== PLUGIN_AUTH_CONNECTION_STATUS.ACTIVE ||
+    !row.expiresAt ||
+    row.expiresAt.getTime() > Date.now() + 60_000
   ) {
     return row
   }
 
-  if (!row.catalog_item_id) {
+  if (!row.catalogItemId) {
     throw new PluginAuthError(
       400,
       "Auth connection is missing its plugin binding"
@@ -1281,26 +1091,26 @@ async function ensureFreshPluginConnection(row: PluginConnectionRow) {
   }
 
   const installationRow = await getInstallationConfigRow(
-    row.installation_id,
-    row.workspace_id
+    row.installationId,
+    row.workspaceId
   )
   const configData = mergeConfigLayers(
-    asObject(installationRow.default_config),
-    decryptSensitiveFields(asObject(installationRow.config_data))
+    installationRow.defaultConfig,
+    decryptSensitiveFields(installationRow.configData)
   )
   const spec = await getPluginAuthSpec(
-    row.catalog_item_id,
-    row.catalog_version_id || installationRow.catalog_version_id
+    row.catalogItemId,
+    row.catalogVersionId || installationRow.catalogVersionId
   )
-  const binding = getBinding(spec.authBindings, row.binding_key)
+  const binding = getBinding(spec.authBindings, row.bindingKey)
 
   try {
     switch (row.driver) {
-      case "oauth2_authorization_code_pkce":
+      case PLUGIN_AUTH_BINDING_DRIVER_KIND.OAUTH2_AUTHORIZATION_CODE_PKCE:
         return await refreshOAuthConnection(binding, row, configData)
-      case "mijia_qr_login":
+      case PLUGIN_AUTH_BINDING_DRIVER_KIND.MIJIA_QR_LOGIN:
         return await refreshMijiaConnection(row)
-      case "feishu_cli_setup":
+      case PLUGIN_AUTH_BINDING_DRIVER_KIND.FEISHU_CLI_SETUP:
         return await refreshFeishuConnection(row)
       default:
         throw new PluginAuthError(
@@ -1309,17 +1119,14 @@ async function ensureFreshPluginConnection(row: PluginConnectionRow) {
         )
     }
   } catch {
-    await db
-      .updateTable("plugin_connections")
-      .set({
-        status: "expired",
-      })
-      .where("id", "=", row.id)
-      .execute()
-    return {
-      ...row,
-      status: "expired",
-    }
+    await updatePluginConnection(row.id, {
+      status: PLUGIN_AUTH_CONNECTION_STATUS.EXPIRED,
+    })
+    // Reflect the just-persisted status on the in-memory row without spreading
+    // the DB row outward (guard-layering r7); the caller reads named fields.
+    const expiredRow: PluginConnectionRow = { ...row }
+    expiredRow.status = PLUGIN_AUTH_CONNECTION_STATUS.EXPIRED
+    return expiredRow
   }
 }
 
@@ -1338,13 +1145,13 @@ export async function startPluginAuthSession(input: {
       input.installationId,
       input.workspaceId
     )
-    if (installationRow.catalog_item_id !== input.pluginId) {
+    if (installationRow.catalogItemId !== input.pluginId) {
       throw new PluginAuthError(
         400,
         "Installation does not belong to this plugin"
       )
     }
-    catalogVersionId = installationRow.catalog_version_id
+    catalogVersionId = installationRow.catalogVersionId
   }
 
   const spec = await getPluginAuthSpec(input.pluginId, catalogVersionId || null)
@@ -1363,7 +1170,7 @@ export async function startPluginAuthSession(input: {
   validatePrerequisiteFields(binding, draftConfig)
 
   switch (binding.driver) {
-    case "oauth2_authorization_code_pkce": {
+    case PLUGIN_AUTH_BINDING_DRIVER_KIND.OAUTH2_AUTHORIZATION_CODE_PKCE: {
       const clientId = getBindingStringInput(binding, "clientId", draftConfig)
       if (!clientId) {
         throw new PluginAuthError(
@@ -1426,71 +1233,65 @@ export async function startPluginAuthSession(input: {
         },
       }
 
-      const inserted = await db
-        .insertInto("plugin_auth_sessions")
-        .values({
-          workspace_id: input.workspaceId,
-          catalog_item_id: spec.catalogItemId,
-          catalog_version_id: spec.catalogVersionId,
-          installation_id: input.installationId || null,
-          binding_key: binding.key,
+      const inserted = await insertPluginAuthSession(
+        {
+          workspaceId: input.workspaceId,
+          catalogItemId: spec.catalogItemId,
+          catalogVersionId: spec.catalogVersionId,
+          installationId: input.installationId || null,
+          bindingKey: binding.key,
           driver: binding.driver,
-          workspace_member_id: input.workspaceMemberId,
-          status: "pending",
-          phase: "awaiting_callback",
+          workspaceMemberId: input.workspaceMemberId,
+          status: PLUGIN_AUTH_SESSION_STATUS.PENDING,
+          phase: PLUGIN_AUTH_SESSION_PHASE.AWAITING_CALLBACK,
           state,
-          challenge_payload: {
-            kind: "redirect",
+          challengePayload: {
+            kind: PLUGIN_AUTH_CHALLENGE_KIND.REDIRECT,
             url: authorizeUrl.toString(),
-            openMode: "popup",
-          } as TableInsert<"plugin_auth_sessions">["challenge_payload"],
-          transient_payload:
-            transientPayload as TableInsert<"plugin_auth_sessions">["transient_payload"],
-          metadata: (input.metadata ||
-            {}) as TableInsert<"plugin_auth_sessions">["metadata"],
-          expires_at: sql`NOW() + INTERVAL '1 hour'`,
-        })
-        .returningAll()
-        .executeTakeFirstOrThrow()
+            openMode: PLUGIN_AUTH_CHALLENGE_OPEN_MODE.POPUP,
+          } as PluginAuthSessionsChallengePayload,
+          transientPayload:
+            transientPayload as PluginAuthSessionsTransientPayload,
+          metadata: (input.metadata || {}) as PluginAuthSessionsMetadata,
+        },
+        { kind: "now_plus_1h" }
+      )
 
       return {
-        session: mapSessionRow(inserted),
+        session: presentAuthSession(inserted),
       }
     }
-    case "mijia_qr_login": {
+    case PLUGIN_AUTH_BINDING_DRIVER_KIND.MIJIA_QR_LOGIN: {
       const result = await startMijiaQrLoginSession({
         locale: draftConfig.locale,
       })
-      const inserted = await db
-        .insertInto("plugin_auth_sessions")
-        .values({
-          workspace_id: input.workspaceId,
-          catalog_item_id: spec.catalogItemId,
-          catalog_version_id: spec.catalogVersionId,
-          installation_id: input.installationId || null,
-          binding_key: binding.key,
+      const inserted = await insertPluginAuthSession(
+        {
+          workspaceId: input.workspaceId,
+          catalogItemId: spec.catalogItemId,
+          catalogVersionId: spec.catalogVersionId,
+          installationId: input.installationId || null,
+          bindingKey: binding.key,
           driver: binding.driver,
-          workspace_member_id: input.workspaceMemberId,
-          status: "pending",
-          phase: "pending_scan",
+          workspaceMemberId: input.workspaceMemberId,
+          status: PLUGIN_AUTH_SESSION_STATUS.PENDING,
+          phase: PLUGIN_AUTH_SESSION_PHASE.PENDING_SCAN,
           state: null,
-          challenge_payload:
-            result.challengePayload as TableInsert<"plugin_auth_sessions">["challenge_payload"],
-          transient_payload: encryptDeep(
+          challengePayload:
+            result.challengePayload as PluginAuthSessionsChallengePayload,
+          transientPayload: encryptDeep(
             result.transientPayload
-          ) as TableInsert<"plugin_auth_sessions">["transient_payload"],
-          metadata: (input.metadata ||
-            {}) as TableInsert<"plugin_auth_sessions">["metadata"],
-          expires_at: parseInstantString(result.expiresAt),
-        })
-        .returningAll()
-        .executeTakeFirstOrThrow()
+          ) as PluginAuthSessionsTransientPayload,
+          metadata: (input.metadata || {}) as PluginAuthSessionsMetadata,
+        },
+        parseInstantString(result.expiresAt)
+      )
 
       return {
-        session: mapSessionRow(inserted),
+        session: presentAuthSession(inserted),
       }
     }
-    case "feishu_cli_setup": {
+    case PLUGIN_AUTH_BINDING_DRIVER_KIND.FEISHU_CLI_SETUP: {
       const selectedFeatures = normalizeFeishuFeatureKeys(draftConfig.features)
       const existingConnectionRef = asObject(draftConfig.feishuAccount)
       let existingAppCredentials:
@@ -1508,10 +1309,8 @@ export async function startPluginAuthSession(input: {
           existingConnectionRef.connectionId,
           input.workspaceId
         )
-        const publicPayload = asObject(connectionRow.public_payload)
-        const secretPayload = asObject(
-          decryptDeep(asObject(connectionRow.secret_payload))
-        )
+        const publicPayload = connectionRow.publicPayload
+        const secretPayload = asObject(decryptDeep(connectionRow.secretPayload))
         const appId = asString(secretPayload.appId)
         const appSecret = asString(secretPayload.appSecret)
         if (appId && appSecret) {
@@ -1527,33 +1326,30 @@ export async function startPluginAuthSession(input: {
         selectedFeatures,
         existingAppCredentials
       )
-      const inserted = await db
-        .insertInto("plugin_auth_sessions")
-        .values({
-          workspace_id: input.workspaceId,
-          catalog_item_id: spec.catalogItemId,
-          catalog_version_id: spec.catalogVersionId,
-          installation_id: input.installationId || null,
-          binding_key: binding.key,
+      const inserted = await insertPluginAuthSession(
+        {
+          workspaceId: input.workspaceId,
+          catalogItemId: spec.catalogItemId,
+          catalogVersionId: spec.catalogVersionId,
+          installationId: input.installationId || null,
+          bindingKey: binding.key,
           driver: binding.driver,
-          workspace_member_id: input.workspaceMemberId,
-          status: "pending",
-          phase: "pending_scan",
+          workspaceMemberId: input.workspaceMemberId,
+          status: PLUGIN_AUTH_SESSION_STATUS.PENDING,
+          phase: PLUGIN_AUTH_SESSION_PHASE.PENDING_SCAN,
           state: null,
-          challenge_payload:
-            result.challengePayload as TableInsert<"plugin_auth_sessions">["challenge_payload"],
-          transient_payload: encryptDeep(
+          challengePayload:
+            result.challengePayload as PluginAuthSessionsChallengePayload,
+          transientPayload: encryptDeep(
             result.transientPayload
-          ) as TableInsert<"plugin_auth_sessions">["transient_payload"],
-          metadata: (input.metadata ||
-            {}) as TableInsert<"plugin_auth_sessions">["metadata"],
-          expires_at: parseInstantString(result.expiresAt),
-        })
-        .returningAll()
-        .executeTakeFirstOrThrow()
+          ) as PluginAuthSessionsTransientPayload,
+          metadata: (input.metadata || {}) as PluginAuthSessionsMetadata,
+        },
+        parseInstantString(result.expiresAt)
+      )
 
       return {
-        session: mapSessionRow(inserted),
+        session: presentAuthSession(inserted),
       }
     }
     default:
@@ -1570,17 +1366,23 @@ export async function getPluginAuthSession(
   workspaceMemberId: string
 ) {
   let row = await getSessionRow(sessionId, workspaceId, workspaceMemberId)
-  if (row.driver === "mijia_qr_login" && row.status === "pending") {
+  if (
+    row.driver === PLUGIN_AUTH_BINDING_DRIVER_KIND.MIJIA_QR_LOGIN &&
+    row.status === PLUGIN_AUTH_SESSION_STATUS.PENDING
+  ) {
     row = await progressMijiaPluginAuthSession(row)
-  } else if (row.driver === "feishu_cli_setup" && row.status === "pending") {
+  } else if (
+    row.driver === PLUGIN_AUTH_BINDING_DRIVER_KIND.FEISHU_CLI_SETUP &&
+    row.status === PLUGIN_AUTH_SESSION_STATUS.PENDING
+  ) {
     row = await progressFeishuPluginAuthSession(row)
   } else if (
-    row.status === "pending" &&
-    row.expires_at.getTime() <= Date.now()
+    row.status === PLUGIN_AUTH_SESSION_STATUS.PENDING &&
+    row.expiresAt.getTime() <= Date.now()
   ) {
     row = await expirePluginAuthSession(row.id)
   }
-  return mapSessionRow(row)
+  return presentAuthSession(row)
 }
 
 export async function inspectPluginAuthSession(input: {
@@ -1593,17 +1395,15 @@ export async function inspectPluginAuthSession(input: {
     input.workspaceId,
     input.workspaceMemberId
   )
-  if (row.driver !== "feishu_cli_setup") {
+  if (row.driver !== PLUGIN_AUTH_BINDING_DRIVER_KIND.FEISHU_CLI_SETUP) {
     throw new PluginAuthError(
       400,
       "Only Feishu auth sessions support app scope inspection."
     )
   }
 
-  const transientPayload = asObject(
-    decryptDeep(asObject(row.transient_payload))
-  )
-  const resultPayload = asObject(row.result_payload)
+  const transientPayload = asObject(decryptDeep(row.transientPayload))
+  const resultPayload = row.resultPayload
   const inspection = await buildFeishuAppScopeInspection({
     transientPayload,
     resultPayload,
@@ -1615,7 +1415,7 @@ export async function inspectPluginAuthSession(input: {
     )
   }
 
-  const previousPreview = asObject(row.result_preview)
+  const previousPreview = row.resultPreview
   const nextPreview = {
     ...previousPreview,
     features:
@@ -1625,18 +1425,12 @@ export async function inspectPluginAuthSession(input: {
         : normalizeFeishuFeatureKeys(transientPayload.requestedFeatures),
     appScopeStatus: inspection,
   }
-  const updated = await db
-    .updateTable("plugin_auth_sessions")
-    .set({
-      result_preview:
-        nextPreview as TableInsert<"plugin_auth_sessions">["result_preview"],
-    })
-    .where("id", "=", row.id)
-    .returningAll()
-    .executeTakeFirstOrThrow()
+  const updated = await updatePluginAuthSession(row.id, {
+    resultPreview: nextPreview as PluginAuthSessionsResultPreview,
+  })
 
   return {
-    session: mapSessionRow(updated),
+    session: presentAuthSession(updated),
   }
 }
 
@@ -1652,41 +1446,30 @@ export async function handlePluginAuthCallback(input: {
 
   const session = await getSessionRowByState(input.state)
 
-  if (session.expires_at.getTime() <= Date.now()) {
-    await db
-      .updateTable("plugin_auth_sessions")
-      .set({
-        status: "expired",
-      })
-      .where("id", "=", session.id)
-      .execute()
+  if (session.expiresAt.getTime() <= Date.now()) {
+    await updatePluginAuthSessionNoReturn(session.id, {
+      status: PLUGIN_AUTH_SESSION_STATUS.EXPIRED,
+    })
     throw new PluginAuthError(410, "Auth session expired")
   }
 
   if (input.error) {
-    const failed = await db
-      .updateTable("plugin_auth_sessions")
-      .set({
-        status: "failed",
-        phase: null,
-        error_code: input.error,
-        error_message: input.errorDescription || input.error,
-      })
-      .where("id", "=", session.id)
-      .returningAll()
-      .executeTakeFirstOrThrow()
-    return mapSessionRow(failed)
+    const failed = await updatePluginAuthSession(session.id, {
+      status: PLUGIN_AUTH_SESSION_STATUS.FAILED,
+      phase: null,
+      errorCode: input.error,
+      errorMessage: input.errorDescription || input.error,
+    })
+    return presentAuthSession(failed)
   }
 
   switch (session.driver) {
-    case "oauth2_authorization_code_pkce": {
+    case PLUGIN_AUTH_BINDING_DRIVER_KIND.OAUTH2_AUTHORIZATION_CODE_PKCE: {
       if (!input.code) {
         throw new PluginAuthError(400, "Missing authorization code")
       }
 
-      const transientPayload = asObject(
-        decryptDeep(asObject(session.transient_payload))
-      )
+      const transientPayload = asObject(decryptDeep(session.transientPayload))
       const oauth = asObject(transientPayload.oauth) as OAuthTransientPayload
       if (
         !oauth.tokenUrl ||
@@ -1720,7 +1503,10 @@ export async function handlePluginAuthCallback(input: {
             "Failed to fetch provider profile"
           )
         }
-        profile = asObject(await response.json().catch(() => ({})))
+        profile = await readProviderJsonObjectResponse(
+          response,
+          "OAuth profile response"
+        )
       }
 
       const externalAccountId =
@@ -1738,7 +1524,7 @@ export async function handlePluginAuthCallback(input: {
           : []
       const expiresAt =
         typeof tokenResponse.expires_in === "number"
-          ? serializeInstant(
+          ? presentInstant(
               new Date(Date.now() + tokenResponse.expires_in * 1000)
             )
           : null
@@ -1774,23 +1560,16 @@ export async function handlePluginAuthCallback(input: {
         },
       }
 
-      const updated = await db
-        .updateTable("plugin_auth_sessions")
-        .set({
-          status: "completed",
-          phase: null,
-          result_preview:
-            resultPreview as TableInsert<"plugin_auth_sessions">["result_preview"],
-          result_payload:
-            resultPayload as TableInsert<"plugin_auth_sessions">["result_payload"],
-          error_code: null,
-          error_message: null,
-        })
-        .where("id", "=", session.id)
-        .returningAll()
-        .executeTakeFirstOrThrow()
+      const updated = await updatePluginAuthSession(session.id, {
+        status: PLUGIN_AUTH_SESSION_STATUS.COMPLETED,
+        phase: null,
+        resultPreview: resultPreview as PluginAuthSessionsResultPreview,
+        resultPayload: resultPayload as PluginAuthSessionsResultPayload,
+        errorCode: null,
+        errorMessage: null,
+      })
 
-      return mapSessionRow(updated)
+      return presentAuthSession(updated)
     }
     default:
       throw new PluginAuthError(
@@ -1804,7 +1583,9 @@ export async function getAuthConnection(
   connectionId: string,
   workspaceId: string
 ) {
-  return mapConnectionRow(await getConnectionRow(connectionId, workspaceId))
+  return presentAuthConnection(
+    await getConnectionRow(connectionId, workspaceId)
+  )
 }
 
 export async function attachAuthConnectionsToConfig(input: {
@@ -1815,16 +1596,16 @@ export async function attachAuthConnectionsToConfig(input: {
   authBindings: PluginAuthBindingDefinition[]
   configData?: Record<string, unknown>
   authSessionIds?: Record<string, string>
-  run?: QueryRunner
+  run?: PluginConnectionQueryRunner
 }) {
-  const run = input.run || dbRunner
+  const run = input.run || defaultPluginConnectionRunner
   const result: Record<string, unknown> = { ...(input.configData || {}) }
   const authSessionIds = input.authSessionIds || {}
   const bindingMap = new Map(
     input.authBindings.map((binding) => [binding.key, binding])
   )
   const authFields = input.configFields.filter(
-    (field) => field.type === "auth_connection"
+    (field) => field.type === PLUGIN_CONFIG_FIELD_TYPE.AUTH_CONNECTION
   )
 
   for (const field of authFields) {
@@ -1836,15 +1617,18 @@ export async function attachAuthConnectionsToConfig(input: {
       input.workspaceId,
       input.workspaceMemberId
     )
-    if (!["completed", "consumed"].includes(session.status)) {
+    if (
+      session.status !== PLUGIN_AUTH_SESSION_STATUS.COMPLETED &&
+      session.status !== PLUGIN_AUTH_SESSION_STATUS.CONSUMED
+    ) {
       throw new PluginAuthError(
         400,
         `Authorization for '${field.key}' is not completed`
       )
     }
 
-    const metadata = asObject(session.metadata)
-    const bindingKey = session.binding_key
+    const metadata = session.metadata
+    const bindingKey = session.bindingKey
     if (field.authBindingKey && bindingKey !== field.authBindingKey) {
       throw new PluginAuthError(
         400,
@@ -1854,7 +1638,7 @@ export async function attachAuthConnectionsToConfig(input: {
 
     let connection: PluginAuthConnection
     if (
-      session.status === "consumed" &&
+      session.status === PLUGIN_AUTH_SESSION_STATUS.CONSUMED &&
       typeof metadata.consumedConnectionId === "string"
     ) {
       connection = await getAuthConnection(
@@ -1862,7 +1646,7 @@ export async function attachAuthConnectionsToConfig(input: {
         input.workspaceId
       )
     } else {
-      const normalizedPayload = asObject(session.result_payload)
+      const normalizedPayload = session.resultPayload
       const publicPayload = asObject(normalizedPayload.publicPayload)
       const secretPayload = asObject(normalizedPayload.secretPayload)
       if (Object.keys(secretPayload).length === 0) {
@@ -1878,106 +1662,25 @@ export async function attachAuthConnectionsToConfig(input: {
       )
       const displayName = asNullableString(normalizedPayload.displayName)
       const avatarUrl = asNullableString(normalizedPayload.avatarUrl)
-      const existing = await run<PluginConnectionRow>(
-        `SELECT
-           connection.*,
-           installation.catalog_item_id,
-           installation.catalog_version_id
-         FROM plugin_connections connection
-         JOIN plugin_installations installation
-           ON installation.id = connection.installation_id
-         WHERE connection.installation_id = $1
-           AND connection.workspace_id = $2
-           AND connection.binding_key = $3
-           AND connection.external_account_id IS NOT DISTINCT FROM $4
-           AND connection.deleted_at IS NULL
-         ORDER BY connection.updated_at DESC
-         LIMIT 1`,
-        [input.installationId, input.workspaceId, bindingKey, externalAccountId]
-      )
-
-      let connectionRow: PluginConnectionRow
-      if (existing.rows.length > 0) {
-        const updated = await run<PluginConnectionRow>(
-          `UPDATE plugin_connections
-           SET display_name = $2,
-               avatar_url = $3,
-               status = 'active',
-               expires_at = $6,
-               public_payload = $7::jsonb,
-               secret_payload = $8::jsonb
-           WHERE id = $1
-           RETURNING *,
-             (
-               SELECT catalog_item_id
-               FROM plugin_installations
-               WHERE id = plugin_connections.installation_id
-             ) AS catalog_item_id`,
-          [
-            existing.rows[0]!.id,
-            displayName,
-            avatarUrl,
-            asNullableString(secretPayload.expiresAt),
-            JSON.stringify(publicPayload),
-            JSON.stringify(secretPayload),
-          ]
-        )
-        connectionRow = updated.rows[0]!
-      } else {
-        const inserted = await run<PluginConnectionRow>(
-          `INSERT INTO plugin_connections (
-             installation_id,
-             workspace_id,
-             binding_key,
-             driver,
-             external_account_id,
-             display_name,
-             avatar_url,
-             status,
-             expires_at,
-             public_payload,
-             secret_payload
-           )
-           VALUES (
-             $1, $2, $3, $4, $5, $6, $7, 'active', $8, $9::jsonb, $10::jsonb
-           )
-           RETURNING *,
-             (
-               SELECT catalog_item_id
-               FROM plugin_installations
-               WHERE id = plugin_connections.installation_id
-             ) AS catalog_item_id`,
-          [
-            input.installationId,
-            input.workspaceId,
-            bindingKey,
-            session.driver,
-            externalAccountId,
-            displayName,
-            avatarUrl,
-            asNullableString(secretPayload.expiresAt),
-            JSON.stringify(publicPayload),
-            JSON.stringify(secretPayload),
-          ]
-        )
-        connectionRow = inserted.rows[0]!
-      }
-
-      connection = mapConnectionRow(connectionRow)
-
-      await run(
-        `UPDATE plugin_auth_sessions
-         SET status = 'consumed',
-             metadata = $2::jsonb
-         WHERE id = $1`,
-        [
-          session.id,
-          JSON.stringify({
-            ...metadata,
-            consumedConnectionId: connection.id,
-          }),
-        ]
-      )
+      const payloadExpiresAt = asNullableString(secretPayload.expiresAt)
+      const connectionRow = await upsertPluginAuthConnectionFromSessionResult({
+        run,
+        installationId: input.installationId,
+        workspaceId: input.workspaceId,
+        bindingKey,
+        driver: session.driver,
+        externalAccountId,
+        displayName,
+        avatarUrl,
+        expiresAt: payloadExpiresAt
+          ? parseInstantString(payloadExpiresAt)
+          : null,
+        publicPayload,
+        secretPayload,
+        sessionId: session.id,
+        sessionMetadata: metadata,
+      })
+      connection = presentAuthConnection(connectionRow)
     }
 
     result[field.key] = {
@@ -2010,8 +1713,8 @@ export async function resolveAuthConnectionRefs(
     const row = await ensureFreshPluginConnection(
       await getConnectionRow(ref.connectionId)
     )
-    let secretPayload = asObject(decryptDeep(asObject(row.secret_payload)))
-    if (row.status !== "active") {
+    let secretPayload = asObject(decryptDeep(row.secretPayload))
+    if (row.status !== PLUGIN_AUTH_CONNECTION_STATUS.ACTIVE) {
       // Fail-closed: never forward a non-active connection's secrets. Clear the
       // whole payload (not just OAuth's accessToken) so drivers like Mijia,
       // whose secret is the full session dict, can't leak a stale serviceToken.
@@ -2020,16 +1723,16 @@ export async function resolveAuthConnectionRefs(
       secretPayload = {}
     }
     resolved[key] = {
-      type: "auth_connection",
+      type: PLUGIN_CONFIG_FIELD_TYPE.AUTH_CONNECTION,
       connectionId: row.id,
-      bindingKey: row.binding_key,
+      bindingKey: row.bindingKey,
       driver: row.driver,
-      externalAccountId: row.external_account_id || undefined,
-      displayName: row.display_name || undefined,
-      avatarUrl: row.avatar_url || undefined,
+      externalAccountId: row.externalAccountId || undefined,
+      displayName: row.displayName || undefined,
+      avatarUrl: row.avatarUrl || undefined,
       status: row.status,
-      expiresAt: row.expires_at || undefined,
-      publicPayload: asObject(row.public_payload),
+      expiresAt: row.expiresAt || undefined,
+      publicPayload: row.publicPayload,
       secretPayload,
     }
   }

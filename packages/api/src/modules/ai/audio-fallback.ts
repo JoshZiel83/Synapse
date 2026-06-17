@@ -9,6 +9,7 @@ import { LRUCache } from "lru-cache"
 import { config } from "../../config/index.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
 import { readContentBufferBySha } from "../files/service.js"
+import { parseSherpaOnnxConfigJson } from "./audio-fallback-config.js"
 
 type FileRefBlock = Extract<CanonicalContentBlock, { type: "file_ref" }>
 type AudioFileBlock = FileRefBlock & { category: "audio" }
@@ -87,20 +88,10 @@ function guessExtension(block: AudioFileBlock): string {
 }
 
 function getLocalSherpaConfig(): Record<string, unknown> | null {
-  const raw = config.audioFallback.sherpaOnnxConfigJson.trim()
-  if (!raw) return null
-
-  try {
-    const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === "object"
-      ? (parsed as Record<string, unknown>)
-      : null
-  } catch (err: any) {
-    throw new Error(
-      `invalid SHERPA_ONNX_CONFIG_JSON: ${err?.message || "parse failed"}`
-    )
-  }
+  return parseSherpaOnnxConfigJson(config.audioFallback.sherpaOnnxConfigJson)
 }
+
+export { parseSherpaOnnxConfigJson } from "./audio-fallback-config.js"
 
 function pickTranscriptText(payload: unknown): string | null {
   if (typeof payload === "string") return payload.trim() || null

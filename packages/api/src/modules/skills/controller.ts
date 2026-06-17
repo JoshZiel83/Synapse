@@ -1,28 +1,36 @@
-import { db } from "../../infrastructure/database/kysely.js"
 import { z } from "zod"
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify"
 import {
   actorRef,
-  CAPABILITY_ACCESS_TARGET_TYPES,
   conversationRef,
   remoteAgentRef,
   SUBJECT_KIND,
   workspaceMemberRef,
   workspaceRef,
   type CapabilityAccessTarget,
-  type SkillAccessTargetType,
 } from "@synapse/shared"
+import {
+  ImportMarketplaceSkillInputSchema,
+  InstalledSkillItemViewSchema,
+  InstalledSkillListQuerySchema,
+  InstalledSkillListViewSchema,
+  PublishMarketplaceSkillInputSchema,
+  SkillMarketplaceItemQuerySchema,
+  SkillMarketplaceItemViewSchema,
+  SkillMarketplaceListQuerySchema,
+  SkillMarketplaceListViewSchema,
+} from "@synapse/shared/schemas"
+import { appRoute } from "../../infrastructure/http/route.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { PLATFORM_RESOURCE_ID } from "../access/evaluator.js"
-import { requireRequestAction } from "../access/guards.js"
 import {
-  authorizeAction,
-  getRequestAccessSubject,
-  getRequestUserId,
-  listAuthorizedResourceIds,
-  resolveWorkspaceAccessSubject,
-} from "../access/service.js"
+  requireRequestAction,
+  authorizeActionDefault,
+  listAuthorizedResourceIdsDefault,
+  resolveWorkspaceAccessSubjectDefault,
+} from "../access/guards.js"
+import { getRequestAccessSubject, getRequestUserId } from "../access/service.js"
 import {
   createWorkspaceSkill,
   SkillError,
@@ -38,63 +46,7 @@ import {
   updateInstalledSkill,
   upgradeInstalledSkill,
 } from "./service.js"
-
-const accessTargetTypeSchema = z.enum([
-  CAPABILITY_ACCESS_TARGET_TYPES[0],
-  CAPABILITY_ACCESS_TARGET_TYPES[1],
-  CAPABILITY_ACCESS_TARGET_TYPES[2],
-  CAPABILITY_ACCESS_TARGET_TYPES[3],
-  CAPABILITY_ACCESS_TARGET_TYPES[4],
-] as const satisfies readonly SkillAccessTargetType[])
-const conversationTypeMaskSchema = z.number().int().min(1).max(15)
-
-const skillAttachmentSchema = z.object({
-  path: z.string().min(1),
-  contentBlocks: z.array(z.any()).default([]),
-  mediaType: z.string().min(1).optional(),
-})
-
-const publishSkillSchema = z.object({
-  skillId: z.uuid().optional(),
-  slug: z.string().min(1),
-  name: z.string().min(1),
-  description: z.any().optional(),
-  iconFileId: z.uuid().nullable().optional(),
-  tags: z.array(z.string()).optional(),
-  version: z.string().min(1),
-  changelog: z.string().optional(),
-  isActive: z.boolean().optional(),
-  defaultConversationTypeMask: conversationTypeMaskSchema.optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-  attachmentFiles: z.array(skillAttachmentSchema).optional(),
-})
-
-const importMarketplaceSkillSchema = z.discriminatedUnion("sourceType", [
-  z.object({
-    sourceType: z.literal("github"),
-    repoUrl: z.url(),
-    path: z.string().min(1),
-    ref: z.string().trim().min(1).optional(),
-  }),
-  z.object({
-    sourceType: z.literal("clawhub"),
-    ownerId: z.string().trim().min(1).optional(),
-    slug: z.string().trim().min(1),
-    version: z.string().trim().min(1).optional(),
-  }),
-])
-
-const listInstalledSkillsQuerySchema = z.object({
-  accessTargetType: accessTargetTypeSchema.optional(),
-  actorId: z.uuid().optional(),
-  // Round 12 review (P3): workspace_member filter mode needs the id
-  // to resolve a SubjectRef. Without it,
-  // scopedTargetFromSkillUseScope("workspace_member") in
-  // findSkillIdsByBindingFilter throws on missing workspaceMemberId.
-  workspaceMemberId: z.uuid().optional(),
-  conversationId: z.uuid().optional(),
-  sourceSkillId: z.uuid().optional(),
-})
+import { presentInstalledSkillRecord } from "./presenter.js"
 
 function handleError(reply: FastifyReply, error: unknown) {
   if (error instanceof SkillError) {
@@ -132,9 +84,8 @@ async function requireWorkspaceQueryView(
   workspaceId: string,
   errorMessage: string
 ) {
-  const allowed = await authorizeAction(db, {
-    subject: await resolveWorkspaceAccessSubject(
-      db,
+  const allowed = await authorizeActionDefault({
+    subject: await resolveWorkspaceAccessSubjectDefault(
       workspaceId,
       getRequestUserId(request)
     ),
@@ -154,45 +105,48 @@ export function registerSkillRoutes(app: FastifyInstance) {
   const authHook = { preHandler: [authMiddleware] }
   const workspaceHook = { preHandler: [authMiddleware, workspaceMiddleware] }
 
-  app.get("/api/v1/skills/marketplace", authHook, async (request, reply) => {
-    try {
-      const { search, tags, workspaceId } = request.query as {
-        search?: string
-        tags?: string
-        workspaceId?: string
-      }
-      if (workspaceId) {
-        const allowed = await requireWorkspaceQueryView(
-          request,
-          reply,
+  appRoute(
+    app,
+    "GET",
+    "/api/v1/skills/marketplace",
+    { schema: SkillMarketplaceListViewSchema, options: authHook },
+    async (request, reply) => {
+      try {
+        const { search, tags, workspaceId } =
+          SkillMarketplaceListQuerySchema.parse(request.query || {})
+        if (workspaceId) {
+          const allowed = await requireWorkspaceQueryView(
+            request,
+            reply,
+            workspaceId,
+            "Not allowed to view skills for this workspace"
+          )
+          if (!allowed) return
+        }
+        const skills = await listMarketplaceSkills({
+          search,
+          tags,
           workspaceId,
-          "Not allowed to view skills for this workspace"
-        )
-        if (!allowed) return
+        })
+        return { skills }
+      } catch (error) {
+        handleError(reply, error)
+        return
       }
-      const skills = await listMarketplaceSkills({
-        search,
-        tags: tags
-          ? tags
-              .split(",")
-              .map((tag) => tag.trim())
-              .filter(Boolean)
-          : undefined,
-        workspaceId,
-      })
-      return reply.status(200).send({ skills })
-    } catch (error) {
-      return handleError(reply, error)
     }
-  })
+  )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/skills/marketplace/:skillId",
-    authHook,
+    { schema: SkillMarketplaceItemViewSchema, options: authHook },
     async (request, reply) => {
       try {
         const { skillId } = request.params as { skillId: string }
-        const { workspaceId } = request.query as { workspaceId?: string }
+        const { workspaceId } = SkillMarketplaceItemQuerySchema.parse(
+          request.query || {}
+        )
         if (workspaceId) {
           const allowed = await requireWorkspaceQueryView(
             request,
@@ -203,37 +157,48 @@ export function registerSkillRoutes(app: FastifyInstance) {
           if (!allowed) return
         }
         const skill = await getMarketplaceSkill(skillId, workspaceId)
-        return reply.status(200).send({ skill })
+        return { skill }
       } catch (error) {
-        return handleError(reply, error)
+        handleError(reply, error)
+        return
       }
     }
   )
 
-  app.post("/api/v1/skills/marketplace", authHook, async (request, reply) => {
-    try {
-      const allowed = await requirePlatformManage(
-        request,
-        reply,
-        "Not allowed to publish marketplace skills"
-      )
-      if (!allowed) return
+  appRoute(
+    app,
+    "POST",
+    "/api/v1/skills/marketplace",
+    { schema: SkillMarketplaceItemViewSchema, options: authHook },
+    async (request, reply) => {
+      try {
+        const allowed = await requirePlatformManage(
+          request,
+          reply,
+          "Not allowed to publish marketplace skills"
+        )
+        if (!allowed) return
 
-      const body = publishSkillSchema.parse(request.body)
-      const user = (request as any).user
-      const skill = await publishMarketplaceSkill({
-        ...body,
-        authorUserId: user?.id || user?.userId,
-      })
-      return reply.status(201).send({ skill })
-    } catch (error) {
-      return handleError(reply, error)
+        const body = PublishMarketplaceSkillInputSchema.parse(request.body)
+        const user = (request as any).user
+        const skill = await publishMarketplaceSkill({
+          ...body,
+          authorUserId: user?.id || user?.userId,
+        })
+        reply.status(201)
+        return { skill }
+      } catch (error) {
+        handleError(reply, error)
+        return
+      }
     }
-  })
+  )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/skills/marketplace/import",
-    authHook,
+    { schema: SkillMarketplaceItemViewSchema, options: authHook },
     async (request, reply) => {
       try {
         const allowed = await requirePlatformManage(
@@ -243,22 +208,26 @@ export function registerSkillRoutes(app: FastifyInstance) {
         )
         if (!allowed) return
 
-        const body = importMarketplaceSkillSchema.parse(request.body)
+        const body = ImportMarketplaceSkillInputSchema.parse(request.body)
         const user = (request as any).user
         const skill = await importMarketplaceMirrorSkill({
           ...body,
           authorUserId: user?.id || user?.userId,
         } as any)
-        return reply.status(201).send({ skill })
+        reply.status(201)
+        return { skill }
       } catch (error) {
-        return handleError(reply, error)
+        handleError(reply, error)
+        return
       }
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/skills/marketplace/:skillId/refresh",
-    authHook,
+    { schema: SkillMarketplaceItemViewSchema, options: authHook },
     async (request, reply) => {
       try {
         const allowed = await requirePlatformManage(
@@ -274,16 +243,19 @@ export function registerSkillRoutes(app: FastifyInstance) {
           skillId,
           authorUserId: user?.id || user?.userId,
         })
-        return reply.status(200).send({ skill })
+        return { skill }
       } catch (error) {
-        return handleError(reply, error)
+        handleError(reply, error)
+        return
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/skills",
-    workspaceHook,
+    { schema: InstalledSkillListViewSchema, options: workspaceHook },
     async (request, reply) => {
       try {
         const { workspaceId } = request.params as { workspaceId: string }
@@ -296,41 +268,47 @@ export function registerSkillRoutes(app: FastifyInstance) {
         )
         if (!allowed) return
 
-        const authorizedSkillIds = await listAuthorizedResourceIds(db, {
+        const authorizedSkillIds = await listAuthorizedResourceIdsDefault({
           subject: getRequestAccessSubject(request),
           action: "installed_skill.edit",
         })
         if (authorizedSkillIds.length === 0) {
-          return reply.status(200).send({ skills: [] })
+          return { skills: [] }
         }
         const {
           accessTargetType,
           actorId,
+          remoteAgentId,
           workspaceMemberId,
           conversationId,
           sourceSkillId,
-        } = listInstalledSkillsQuerySchema.parse(
-          request.query || {}
-        ) as z.infer<typeof listInstalledSkillsQuerySchema>
+        } = InstalledSkillListQuerySchema.parse(request.query || {}) as z.infer<
+          typeof InstalledSkillListQuerySchema
+        >
 
-        const skills = await listInstalledSkills(workspaceId, {
+        const skillRecords = await listInstalledSkills(workspaceId, {
           skillIds: authorizedSkillIds,
           accessTargetType,
           actorId,
+          remoteAgentId,
           workspaceMemberId,
           conversationId,
           sourceSkillId,
         })
-        return reply.status(200).send({ skills })
+        const skills = skillRecords.map(presentInstalledSkillRecord)
+        return { skills }
       } catch (error) {
-        return handleError(reply, error)
+        handleError(reply, error)
+        return
       }
     }
   )
 
-  app.get(
+  appRoute(
+    app,
+    "GET",
     "/api/v1/workspaces/:workspaceId/skills/:installedSkillId",
-    workspaceHook,
+    { schema: InstalledSkillItemViewSchema, options: workspaceHook },
     async (request, reply) => {
       try {
         const { workspaceId, installedSkillId } = request.params as {
@@ -346,17 +324,22 @@ export function registerSkillRoutes(app: FastifyInstance) {
         )
         if (!allowed) return
 
-        const skill = await getInstalledSkill(workspaceId, installedSkillId)
-        return reply.status(200).send({ skill })
+        const skill = presentInstalledSkillRecord(
+          await getInstalledSkill(workspaceId, installedSkillId)
+        )
+        return { skill }
       } catch (error) {
-        return handleError(reply, error)
+        handleError(reply, error)
+        return
       }
     }
   )
 
-  app.post(
+  appRoute(
+    app,
+    "POST",
     "/api/v1/workspaces/:workspaceId/skills/:installedSkillId/upgrade",
-    workspaceHook,
+    { schema: InstalledSkillItemViewSchema, options: workspaceHook },
     async (request, reply) => {
       try {
         const { workspaceId, installedSkillId } = request.params as {
@@ -372,13 +355,16 @@ export function registerSkillRoutes(app: FastifyInstance) {
         )
         if (!allowed) return
 
-        const skill = await upgradeInstalledSkill({
-          workspaceId,
-          installedSkillId,
-        })
-        return reply.status(200).send({ skill })
+        const skill = presentInstalledSkillRecord(
+          await upgradeInstalledSkill({
+            workspaceId,
+            installedSkillId,
+          })
+        )
+        return { skill }
       } catch (error) {
-        return handleError(reply, error)
+        handleError(reply, error)
+        return
       }
     }
   )

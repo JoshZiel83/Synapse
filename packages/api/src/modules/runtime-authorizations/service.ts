@@ -8,47 +8,40 @@ import {
   commandlinePolicyAllows as sharedCommandlinePolicyAllows,
   cuaPolicyAllows as sharedCuaPolicyAllows,
   browserPolicyAllows as sharedBrowserPolicyAllows,
-  parseJsonObject,
   SUBJECT_KIND,
   workspaceRef,
-  workspaceMemberRef,
-  actorRef,
-  remoteAgentRef,
   conversationRef,
-  type Timestamp,
   type SubjectRef,
 } from "@synapse/shared"
 import { serializeCommandlinePolicyToWire } from "@synapse/shared/access/policies"
 import type {
   RuntimeAuthorizationGrantRetention,
-  RuntimeAuthorizationGrantStatus,
   RuntimeAuthorizationRequestedAction,
   RuntimeAuthorizationPreset,
   SharedRuntimeAuthorizationGrantSpec,
 } from "@synapse/shared/types"
 import {
   GrantPolicySchema,
-  validateGrantPolicyForCapability,
   type PolicyValidationFailure,
-  type GrantPolicy,
 } from "@synapse/shared/access/policies"
-import { subjectScopeLabel } from "@synapse/shared"
-import { sql, type Selectable } from "kysely"
-import type { ZodIssue } from "zod"
+import type { Executor } from "../../infrastructure/database/kysely.js"
 import {
-  db,
-  runBuilder,
-  takeFirstOn,
-  type Executor,
-  type KyselyDb,
-  type TableInsert,
-  type TableRow,
-} from "../../infrastructure/database/kysely.js"
-import {
-  requireInstantDate,
-  serializeInstant,
-  serializeOptionalInstant,
-} from "../../infrastructure/datetime.js"
+  consumeRuntimeAuthorizationGrantRow,
+  getRuntimeAuthorizationGrantRow,
+  InvalidGrantSubjectRowError,
+  insertRuntimeAuthorizationGrantRow,
+  listCandidateRowsForDispatch,
+  listDashboardGrantRows,
+  lockActiveGrantForShare,
+  lockDeviceToolLatestRevisionForShare,
+  runtimeAuthorizationGrantPolicyCapability,
+  runtimeAuthorizationGrantRowToCandidate as rowToCandidate,
+  runtimeAuthorizationGrantSubjectFailure,
+  revokeRuntimeAuthorizationGrantRow,
+  runRuntimeAuthorizationGrantTransaction,
+  setLocalLockTimeout,
+  supersedeRuntimeAuthorizationGrantRow,
+} from "./repo.js"
 import {
   BrowserGrantPolicyError,
   normalizeBrowserGrantPolicy,
@@ -80,138 +73,38 @@ function normalizePathPrefixes(values: unknown) {
 }
 
 // ============================================================================
-// subject-scope-refactor: RuntimeAuthorizationGrantRecord — DB row hydrated
-// with subject/scope SubjectRef pair + derived label. Extends the API-side
-// camelCase policy spec so existing readers (auto-retry envelope, UI grant
-// summary) continue to address `grant.filesystem`, `grant.browser`, etc.
+// subject-scope-refactor: RuntimeAuthorizationGrantRecord is the API-side
+// camelCase projection of a grant row. Its definition lives in repo.types.ts
+// (the module's row/projection type owner) so the presenter that builds it
+// depends on the repo layer, not on service. Re-exported here so the module
+// barrel (index.ts `export * from "./service.js"`) keeps exposing it to
+// existing importers (auto-retry, capability-projection, tasks).
 // ============================================================================
 
-export interface RuntimeAuthorizationGrantRecord extends SharedRuntimeAuthorizationGrantSpec {
-  id: string
-  workspaceId: string
-  deviceId: string
-  deviceCapabilityId: string
-  deviceExposureId: string
-  /** Authorization subject (workspace / workspace_member / actor / remote_agent / conversation). */
-  subject: SubjectRef
-  /** Optional runtime-context scope (workspace or conversation). */
-  scope?: SubjectRef
-  /**
-   * Derived display label from subjectScopeLabel({subject, scope?}). Mirrors
-   * the wire envelope's `grant_scope` field for UI / audit. Possible values
-   * include: 'workspace' | 'workspace_member' | 'actor' | 'remote_agent' |
-   * 'conversation' or scoped actor/remote_agent grants.
-   */
-  scopeLabel: string
-  createdByWorkspaceMemberId?: string
-  sourceTaskId?: string
-  sourceRetryNonce?: string
-  sourceRuntimeSessionId?: string
-  sourceRequestArgs: Record<string, unknown>
-  retention: RuntimeAuthorizationGrantRetention
-  status: RuntimeAuthorizationGrantStatus
-  createdAt: Timestamp
-  updatedAt: Timestamp
-  consumedAt?: Timestamp
-  revokedAt?: Timestamp
-  supersededAt?: Timestamp
-}
-
 /**
- * Candidate row pulled by the canonical helper's list step. Carries the raw
- * grant row + already-joined subject/scope SubjectRef + safe-parse result so
- * the matcher (three-state) can distinguish parse_error /
- * missing_branch_payload / schema_mismatch from no_match — without exception
- * propagation that would mask corrupt rows as silent fallbacks.
+ * Candidate row + candidate row-with-joins types live in repo.types.ts (the
+ * DB-row layer that may reference Kysely TableRow). Re-exported here so the
+ * module barrel (index.ts `export * from "./service.js"`) keeps exposing
+ * RuntimeAuthorizationGrantCandidate to existing importers.
  */
-export interface RuntimeAuthorizationGrantCandidate {
-  rawRow: TableRow<"runtime_authorization_grants">
-  rawPolicy: unknown
-  policyValidationResult:
-    | { ok: true; parsed: GrantPolicy }
-    | { ok: false; failure: PolicyValidationFailure }
-  subject: SubjectRef
-  scope?: SubjectRef
-  retention: RuntimeAuthorizationGrantRetention
-  retryNonceOnRow?: string
-  sourceTaskIdOnRow?: string
-}
+export type {
+  RuntimeAuthorizationGrantRecord,
+  RuntimeAuthorizationGrantCandidate,
+} from "./repo.types.js"
+import type {
+  RuntimeAuthorizationGrantRecord,
+  RuntimeAuthorizationGrantCandidate,
+  RuntimeAuthorizationGrantPolicyInsert,
+  RuntimeAuthorizationGrantSourceRequestArgsInsert,
+} from "./repo.types.js"
+import { mapRuntimeAuthorizationGrantCandidate } from "./presenter.js"
 
-type RuntimeAuthorizationGrantCandidateRow =
-  TableRow<"runtime_authorization_grants"> & {
-    subject_kind: string
-    subject_workspace_id: string | null
-    subject_workspace_member_id: string | null
-    subject_actor_id: string | null
-    subject_remote_agent_id: string | null
-    subject_conversation_id: string | null
-    scope_kind: string | null
-    scope_workspace_id: string | null
-    scope_conversation_id: string | null
-  }
+// mapRuntimeAuthorizationGrantCandidate moved to presenter.ts (it calls
+// serializeInstant — banned in service by guard r3). Re-exported here so the
+// module barrel keeps exposing it to existing importers.
+export { mapRuntimeAuthorizationGrantCandidate }
 
-/**
- * Helper: hydrate a candidate row's joined access_subjects view into a typed
- * SubjectRef. Throws InvalidGrantSubjectRowError if the joined columns can't
- * be reconciled with the kind discriminator (data corruption case — should be
- * impossible under tg_runtime_authorization_grant_validate enforcement, but
- * guarded here for defense-in-depth).
- */
-function subjectRowToRef(input: {
-  kind: string
-  workspaceId: string | null
-  workspaceMemberId: string | null
-  actorId: string | null
-  remoteAgentId: string | null
-  conversationId: string | null
-}): SubjectRef {
-  switch (input.kind) {
-    case SUBJECT_KIND.WORKSPACE:
-      if (!input.workspaceId) {
-        throw new InvalidGrantSubjectRowError(
-          "workspace subject missing workspace_id"
-        )
-      }
-      return workspaceRef(input.workspaceId)
-    case SUBJECT_KIND.WORKSPACE_MEMBER:
-      if (!input.workspaceMemberId) {
-        throw new InvalidGrantSubjectRowError(
-          "workspace_member subject missing workspace_member_id"
-        )
-      }
-      return workspaceMemberRef(input.workspaceMemberId)
-    case SUBJECT_KIND.ACTOR:
-      if (!input.actorId) {
-        throw new InvalidGrantSubjectRowError("actor subject missing actor_id")
-      }
-      return actorRef(input.actorId)
-    case SUBJECT_KIND.REMOTE_AGENT:
-      if (!input.remoteAgentId) {
-        throw new InvalidGrantSubjectRowError(
-          "remote_agent subject missing remote_agent_id"
-        )
-      }
-      return remoteAgentRef(input.remoteAgentId)
-    case SUBJECT_KIND.CONVERSATION:
-      if (!input.conversationId) {
-        throw new InvalidGrantSubjectRowError(
-          "conversation subject missing conversation_id"
-        )
-      }
-      return conversationRef(input.conversationId)
-    default:
-      throw new InvalidGrantSubjectRowError(
-        `unsupported subject kind ${input.kind}`
-      )
-  }
-}
-
-export class InvalidGrantSubjectRowError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = "InvalidGrantSubjectRowError"
-  }
-}
+export { InvalidGrantSubjectRowError }
 
 // ============================================================================
 // subject-scope-refactor: presetToOwnerScope — caller-side helper. Translates
@@ -354,128 +247,10 @@ export class UnsupportedGrantTargetError extends Error {
 }
 
 // ============================================================================
-// SELECT column projection
+// Mapping: candidate → record. Candidate hydration and grant-policy business
+// JSON validation live in repo.ts; mapRuntimeAuthorizationGrantCandidate lives
+// in presenter.ts (it shapes the DTO + serializes instants).
 // ============================================================================
-
-function runtimeAuthorizationGrantSelectColumns() {
-  return [
-    "g.id",
-    "g.workspace_id",
-    "g.device_id",
-    "g.device_capability_id",
-    "g.device_exposure_id",
-    "g.subject_id",
-    "g.scope_subject_id",
-    "g.created_by_workspace_member_id",
-    "g.source_task_id",
-    "g.retention",
-    "g.status",
-    "g.policy",
-    "g.source_retry_nonce",
-    "g.source_runtime_session_id",
-    "g.source_request_args",
-    "g.consumed_at",
-    "g.revoked_at",
-    "g.superseded_at",
-    "g.created_at",
-    "g.updated_at",
-    "subj.kind as subject_kind",
-    "subj.workspace_id as subject_workspace_id",
-    "subj.workspace_member_id as subject_workspace_member_id",
-    "subj.actor_id as subject_actor_id",
-    "subj.remote_agent_id as subject_remote_agent_id",
-    "subj.conversation_id as subject_conversation_id",
-    "scope_subj.kind as scope_kind",
-    "scope_subj.workspace_id as scope_workspace_id",
-    "scope_subj.conversation_id as scope_conversation_id",
-  ] as const
-}
-
-// ============================================================================
-// Mapping: candidate → record. Mapper is a pure function — caller must pass
-// parsedPolicy from a successful validateGrantPolicyForCapability call. The
-// canonical helper enforces this contract; sideways callers (dashboard list)
-// produce a parallel "{ valid, corrupt }" split (Batch 7 dashboard API).
-// ============================================================================
-
-export function mapRuntimeAuthorizationGrantCandidate(
-  candidate: RuntimeAuthorizationGrantCandidate,
-  parsedPolicy: GrantPolicy
-): RuntimeAuthorizationGrantRecord {
-  const row = candidate.rawRow
-  const scopeLabel = subjectScopeLabel({
-    subject: candidate.subject,
-    scope: candidate.scope,
-  })
-  return {
-    id: row.id,
-    workspaceId: row.workspace_id,
-    deviceId: row.device_id,
-    deviceCapabilityId: row.device_capability_id,
-    deviceExposureId: row.device_exposure_id,
-    subject: candidate.subject,
-    scope: candidate.scope,
-    scopeLabel,
-    createdByWorkspaceMemberId: row.created_by_workspace_member_id || undefined,
-    sourceTaskId: row.source_task_id || undefined,
-    sourceRetryNonce: row.source_retry_nonce || undefined,
-    sourceRuntimeSessionId: row.source_runtime_session_id || undefined,
-    sourceRequestArgs: parseJsonObject(row.source_request_args),
-    retention: row.retention,
-    status: row.status,
-    ...(parsedPolicy as SharedRuntimeAuthorizationGrantSpec),
-    createdAt: serializeInstant(
-      requireInstantDate(
-        row.created_at,
-        `runtime_authorization_grants.${row.id}.created_at`
-      )
-    ),
-    updatedAt: serializeInstant(
-      requireInstantDate(
-        row.updated_at,
-        `runtime_authorization_grants.${row.id}.updated_at`
-      )
-    ),
-    consumedAt: serializeOptionalInstant(row.consumed_at),
-    revokedAt: serializeOptionalInstant(row.revoked_at),
-    supersededAt: serializeOptionalInstant(row.superseded_at),
-  }
-}
-
-function rowToCandidate(
-  row: RuntimeAuthorizationGrantCandidateRow
-): RuntimeAuthorizationGrantCandidate {
-  const subject = subjectRowToRef({
-    kind: row.subject_kind,
-    workspaceId: row.subject_workspace_id,
-    workspaceMemberId: row.subject_workspace_member_id,
-    actorId: row.subject_actor_id,
-    remoteAgentId: row.subject_remote_agent_id,
-    conversationId: row.subject_conversation_id,
-  })
-  const scope = row.scope_kind
-    ? subjectRowToRef({
-        kind: row.scope_kind,
-        workspaceId: row.scope_workspace_id,
-        workspaceMemberId: null,
-        actorId: null,
-        remoteAgentId: null,
-        conversationId: row.scope_conversation_id,
-      })
-    : undefined
-  const rawPolicy = parseJsonObject(row.policy)
-  const validationResult = validateGrantPolicyForCapability(rawPolicy)
-  return {
-    rawRow: row,
-    rawPolicy,
-    policyValidationResult: validationResult,
-    subject,
-    scope,
-    retention: row.retention,
-    retryNonceOnRow: row.source_retry_nonce || undefined,
-    sourceTaskIdOnRow: row.source_task_id || undefined,
-  }
-}
 
 // ============================================================================
 // CRUD: create, get, revoke, supersede
@@ -608,10 +383,12 @@ export async function createRuntimeAuthorizationGrant(
 
   // No transaction: normalize to a fresh Kysely transaction so we still run
   // subject upsert + grant INSERT + refetch in the same transaction (no
-  // partial state if an unrelated failure rolls back).
-  return db
-    .transaction()
-    .execute((trx) => createGrantInKyselyTx(trx, params, grantSpec))
+  // partial state if an unrelated failure rolls back). The transaction-open
+  // lives in repo.ts (the designated db-client layer); the service threads the
+  // in-flight trx into both the cross-module upsert and the repo row fns.
+  return runRuntimeAuthorizationGrantTransaction((trx) =>
+    createGrantInKyselyTx(trx, params, grantSpec)
+  )
 }
 
 async function createGrantInKyselyTx(
@@ -623,43 +400,26 @@ async function createGrantInKyselyTx(
   const scopeSubjectId = params.scope
     ? await upsertAccessSubject(trx, params.scope)
     : null
-  const inserted = await trx
-    .insertInto("runtime_authorization_grants")
-    .values({
-      workspace_id: params.workspaceId,
-      device_id: params.deviceId,
-      device_capability_id: params.deviceCapabilityId,
-      device_exposure_id: params.deviceExposureId,
-      subject_id: subjectId,
-      scope_subject_id: scopeSubjectId,
-      created_by_workspace_member_id: params.createdByWorkspaceMemberId || null,
-      source_task_id: params.sourceTaskId || null,
-      retention: params.retention,
-      status: "active",
-      policy:
-        grantSpec as unknown as TableInsert<"runtime_authorization_grants">["policy"],
-      source_retry_nonce: params.sourceRetryNonce || null,
-      source_runtime_session_id: params.sourceRuntimeSessionId || null,
-      source_request_args: (params.sourceRequestArgs ||
-        {}) as TableInsert<"runtime_authorization_grants">["source_request_args"],
-    })
-    .returning("id")
-    .executeTakeFirst()
+  const inserted = await insertRuntimeAuthorizationGrantRow(trx, {
+    workspaceId: params.workspaceId,
+    deviceId: params.deviceId,
+    deviceCapabilityId: params.deviceCapabilityId,
+    deviceExposureId: params.deviceExposureId,
+    subjectId: subjectId,
+    scopeSubjectId: scopeSubjectId,
+    createdByWorkspaceMemberId: params.createdByWorkspaceMemberId || null,
+    sourceTaskId: params.sourceTaskId || null,
+    retention: params.retention,
+    policy: grantSpec as unknown as RuntimeAuthorizationGrantPolicyInsert,
+    sourceRetryNonce: params.sourceRetryNonce || null,
+    sourceRuntimeSessionId: params.sourceRuntimeSessionId || null,
+    sourceRequestArgs: (params.sourceRequestArgs ||
+      {}) as RuntimeAuthorizationGrantSourceRequestArgsInsert,
+  })
   if (!inserted) {
     throw new Error("Failed to create runtime authorization grant")
   }
-  const row = await trx
-    .selectFrom("runtime_authorization_grants as g")
-    .innerJoin("access_subjects as subj", "subj.id", "g.subject_id")
-    .leftJoin(
-      "access_subjects as scope_subj",
-      "scope_subj.id",
-      "g.scope_subject_id"
-    )
-    .select(runtimeAuthorizationGrantSelectColumns())
-    .where("g.id", "=", inserted.id)
-    .limit(1)
-    .executeTakeFirst()
+  const row = await getRuntimeAuthorizationGrantRow(inserted.id, trx)
   if (!row) {
     throw new Error("Failed to re-fetch inserted runtime authorization grant")
   }
@@ -679,23 +439,9 @@ export async function getRuntimeAuthorizationGrant(
   id: string,
   queryable?: Executor
 ): Promise<RuntimeAuthorizationGrantRecord | null> {
-  const statement = db
-    .selectFrom("runtime_authorization_grants as g")
-    .innerJoin("access_subjects as subj", "subj.id", "g.subject_id")
-    .leftJoin(
-      "access_subjects as scope_subj",
-      "scope_subj.id",
-      "g.scope_subject_id"
-    )
-    .select(runtimeAuthorizationGrantSelectColumns())
-    .where("g.id", "=", id)
-    .limit(1)
   const row = queryable
-    ? await takeFirstOn<RuntimeAuthorizationGrantCandidateRow>(
-        queryable,
-        statement
-      )
-    : await statement.executeTakeFirst()
+    ? await getRuntimeAuthorizationGrantRow(id, queryable)
+    : await getRuntimeAuthorizationGrantRow(id)
   if (!row) return null
   const candidate = rowToCandidate(row)
   if (!candidate.policyValidationResult.ok) {
@@ -714,38 +460,22 @@ export async function revokeRuntimeAuthorizationGrant(
   id: string,
   queryable?: Executor
 ) {
-  const statement = db
-    .updateTable("runtime_authorization_grants")
-    .set({
-      status: "revoked",
-      revoked_at: sql`NOW()`,
-    })
-    .where("id", "=", id)
-    .where("status", "=", "active")
   if (queryable) {
-    await runBuilder(queryable, statement)
+    await revokeRuntimeAuthorizationGrantRow(id, queryable)
     return
   }
-  await statement.execute()
+  await revokeRuntimeAuthorizationGrantRow(id)
 }
 
 export async function supersedeRuntimeAuthorizationGrant(
   id: string,
   queryable?: Executor
 ) {
-  const statement = db
-    .updateTable("runtime_authorization_grants")
-    .set({
-      status: "superseded",
-      superseded_at: sql`NOW()`,
-    })
-    .where("id", "=", id)
-    .where("status", "=", "active")
   if (queryable) {
-    await runBuilder(queryable, statement)
+    await supersedeRuntimeAuthorizationGrantRow(id, queryable)
     return
   }
-  await statement.execute()
+  await supersedeRuntimeAuthorizationGrantRow(id)
 }
 
 // ============================================================================
@@ -753,27 +483,18 @@ export async function supersedeRuntimeAuthorizationGrant(
 // caller actually flipped the row to 'consumed'; false = another concurrent
 // dispatch won the race, or the row was already non-active). MUST only be
 // called on `consume_once` retention candidates; until_revoked grants are
-// validated separately via FOR SHARE (no state mutation).
+// validated separately via FOR SHARE (no state mutation). The raw FOR UPDATE
+// SKIP LOCKED statement lives in repo.ts (guard r8); this thin wrapper keeps the
+// public service symbol + signature stable for the module barrel.
 // ============================================================================
 
 export async function consumeRuntimeAuthorizationGrant(
   id: string,
   executor?: Executor
 ): Promise<boolean> {
-  // Use raw SQL for SKIP LOCKED semantics — Kysely's updateTable doesn't yet
-  // expose a clean way to nest a FOR UPDATE SKIP LOCKED sub-select.
-  const statement = sql<{ id: string }>`
-    UPDATE runtime_authorization_grants
-    SET status = 'consumed', consumed_at = NOW()
-    WHERE id = (
-      SELECT id FROM runtime_authorization_grants
-      WHERE id = ${id} AND status = 'active'
-      FOR UPDATE SKIP LOCKED
-    )
-    RETURNING id
-  `
-  const result = await statement.execute(executor ?? db)
-  return result.rows.length > 0
+  return executor
+    ? consumeRuntimeAuthorizationGrantRow(id, executor)
+    : consumeRuntimeAuthorizationGrantRow(id)
 }
 
 // ============================================================================
@@ -1130,7 +851,7 @@ export function specificityRank(
 
 export function toRuntimeAuthorizationGrantWireSpec(
   record: RuntimeAuthorizationGrantRecord
-): import("@synapse/device-protocol").RuntimeAuthorizationGrantSpec {
+): import("@synapse/device-protocol").RuntimeAuthorizationGrantWireSpec {
   return {
     capability: record.capability,
     filesystem: record.filesystem
@@ -1351,53 +1072,50 @@ async function tryClaimAndBegin(input: {
   prepared: PreparedDispatch
 }): Promise<TryClaimResult> {
   try {
-    const result = await db.transaction().execute(async (trx) => {
-      // Short lock timeout: a lock_timeout means another connection is
-      // updating device_tools (e.g., catalog sync); abort and surface as a
-      // transient runtime_constraint instead of waiting indefinitely.
-      await sql`SET LOCAL lock_timeout = '500ms'`.execute(trx)
-      // FOR SHARE: blocks catalog UPDATE without blocking other dispatch
-      // share-lockers.
-      const toolRow = await trx
-        .selectFrom("device_tools")
-        .select(["latest_revision_id"])
-        .where("id", "=", input.prepared.toolId)
-        .forShare()
-        .executeTakeFirst()
-      if (
-        !toolRow ||
-        (toolRow.latest_revision_id as string | null) !==
-          input.prepared.toolRevisionId
-      ) {
-        return { kind: "denied_drift" as const }
-      }
-      if (input.record.retention === "consume_once") {
-        const claimed = await consumeRuntimeAuthorizationGrant(
-          input.record.id,
-          trx
-        )
-        if (!claimed) {
-          return { kind: "race_lost" as const }
+    const result =
+      await runRuntimeAuthorizationGrantTransaction<TryClaimResult>(
+        async (trx) => {
+          // Short lock timeout: a lock_timeout means another connection is
+          // updating device_tools (e.g., catalog sync); abort and surface as a
+          // transient runtime_constraint instead of waiting indefinitely.
+          await setLocalLockTimeout(trx)
+          // FOR SHARE: blocks catalog UPDATE without blocking other dispatch
+          // share-lockers.
+          const toolRow = await lockDeviceToolLatestRevisionForShare(
+            trx,
+            input.prepared.toolId
+          )
+          if (
+            !toolRow ||
+            toolRow.latestRevisionId !== input.prepared.toolRevisionId
+          ) {
+            return { kind: "denied_drift" as const }
+          }
+          if (input.record.retention === "consume_once") {
+            const claimed = await consumeRuntimeAuthorizationGrantRow(
+              input.record.id,
+              trx
+            )
+            if (!claimed) {
+              return { kind: "race_lost" as const }
+            }
+          } else {
+            // until_revoked: FOR SHARE re-check of grant status. No state mutation.
+            const stillActive = await lockActiveGrantForShare(
+              trx,
+              input.record.id
+            )
+            if (!stillActive) {
+              return { kind: "race_lost" as const }
+            }
+          }
+          const operation = await beginDeviceOperationOn(
+            trx,
+            input.prepared.beginInput
+          )
+          return { kind: "ok" as const, operation }
         }
-      } else {
-        // until_revoked: FOR SHARE re-check of grant status. No state mutation.
-        const grantRow = await trx
-          .selectFrom("runtime_authorization_grants")
-          .select("id")
-          .where("id", "=", input.record.id)
-          .where("status", "=", "active")
-          .forShare()
-          .executeTakeFirst()
-        if (!grantRow) {
-          return { kind: "race_lost" as const }
-        }
-      }
-      const operation = await beginDeviceOperationOn(
-        trx,
-        input.prepared.beginInput
       )
-      return { kind: "ok" as const, operation }
-    })
     return result
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -1424,51 +1142,16 @@ async function listCandidatesForDispatch(params: {
   sourceTaskId?: string
 }): Promise<RuntimeAuthorizationGrantCandidate[]> {
   if (params.runtimeSubjectIds.length === 0) return []
-  const rows = await db
-    .selectFrom("runtime_authorization_grants as g")
-    .innerJoin("access_subjects as subj", "subj.id", "g.subject_id")
-    .leftJoin(
-      "access_subjects as scope_subj",
-      "scope_subj.id",
-      "g.scope_subject_id"
-    )
-    .select(runtimeAuthorizationGrantSelectColumns())
-    .where("g.workspace_id", "=", params.workspaceId)
-    .where("g.device_id", "=", params.deviceId)
-    .where("g.device_capability_id", "=", params.deviceCapabilityId)
-    .where("g.device_exposure_id", "=", params.deviceExposureId)
-    .where("g.status", "=", "active")
-    .where("g.subject_id", "in", params.runtimeSubjectIds)
-    .where((eb) =>
-      eb.or([
-        eb("g.scope_subject_id", "is", null),
-        ...(params.runtimeScopeSubjectIds.length > 0
-          ? [eb("g.scope_subject_id", "in", params.runtimeScopeSubjectIds)]
-          : []),
-      ])
-    )
-    .where((eb) => {
-      const branches: any[] = [eb("g.retention", "=", "until_revoked")]
-      if (params.retryNonce) {
-        branches.push(
-          eb.and([
-            eb("g.retention", "=", "consume_once"),
-            eb("g.source_retry_nonce", "=", params.retryNonce),
-          ])
-        )
-      }
-      if (params.sourceTaskId) {
-        branches.push(
-          eb.and([
-            eb("g.retention", "=", "consume_once"),
-            eb("g.source_task_id", "=", params.sourceTaskId),
-          ])
-        )
-      }
-      return eb.or(branches)
-    })
-    .orderBy("g.created_at", "desc")
-    .execute()
+  const rows = await listCandidateRowsForDispatch({
+    workspaceId: params.workspaceId,
+    deviceId: params.deviceId,
+    deviceCapabilityId: params.deviceCapabilityId,
+    deviceExposureId: params.deviceExposureId,
+    runtimeSubjectIds: params.runtimeSubjectIds,
+    runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
+    retryNonce: params.retryNonce,
+    sourceTaskId: params.sourceTaskId,
+  })
   return rows
     .map((row) => {
       try {
@@ -1504,22 +1187,11 @@ export async function listDeviceCapabilityRuntimeAuthorizationGrantsForDashboard
   deviceCapabilityId: string
   includeRevoked?: boolean
 }): Promise<DashboardGrantListResult> {
-  let query = db
-    .selectFrom("runtime_authorization_grants as g")
-    .innerJoin("access_subjects as subj", "subj.id", "g.subject_id")
-    .leftJoin(
-      "access_subjects as scope_subj",
-      "scope_subj.id",
-      "g.scope_subject_id"
-    )
-    .select(runtimeAuthorizationGrantSelectColumns())
-    .where("g.workspace_id", "=", input.workspaceId)
-    .where("g.device_capability_id", "=", input.deviceCapabilityId)
-    .orderBy("g.created_at", "desc")
-  if (!input.includeRevoked) {
-    query = query.where("g.status", "=", "active")
-  }
-  const rows = await query.execute()
+  const rows = await listDashboardGrantRows({
+    workspaceId: input.workspaceId,
+    deviceCapabilityId: input.deviceCapabilityId,
+    includeRevoked: input.includeRevoked,
+  })
   const valid: RuntimeAuthorizationGrantRecord[] = []
   const corrupt: CorruptGrantRow[] = []
   for (const row of rows) {
@@ -1530,17 +1202,8 @@ export async function listDeviceCapabilityRuntimeAuthorizationGrantsForDashboard
       // Subject row corruption case (rare, gated by trigger).
       corrupt.push({
         rowId: row.id,
-        capability: parseJsonObject(row.policy)?.capability,
-        validatorFailure: {
-          kind: "parse_error",
-          issues: [
-            {
-              code: "custom" as any,
-              message: err instanceof Error ? err.message : String(err),
-              path: ["subject"],
-            } as ZodIssue,
-          ],
-        },
+        capability: runtimeAuthorizationGrantPolicyCapability(row.policy),
+        validatorFailure: runtimeAuthorizationGrantSubjectFailure(err),
       })
       continue
     }

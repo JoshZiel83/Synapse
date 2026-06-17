@@ -50,3 +50,4 @@ infra/verdaccio/htpasswd
 # out of git; commit only the .example template).
 packages/api/config/model-groups.yaml
 !packages/api/config/model-groups.yaml.example
+.worktrees/
