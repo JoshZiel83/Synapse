@@ -170,34 +170,49 @@ export async function selectDeviceCapabilityToolsForSubjects(
     query = query.where("rab.scopeSubjectId", "is", null)
   }
   const rows = await query.orderBy("dt.id").execute()
-  return rows.map((row) => ({
-    deviceId: row.device_id,
-    deviceName: row.device_name,
-    deviceServiceId: row.device_service_id,
-    deviceExposureId: row.device_exposure_id,
-    deviceCapabilityId: row.device_capability_id,
-    deviceToolId: row.device_tool_id,
-    deviceToolRevisionId: row.device_tool_revision_id,
-    catalogRevisionId: row.catalog_revision_id,
-    transport: row.transport,
-    builtinKind: row.builtin_kind,
-    visibleToolName: row.visible_tool_name,
-    visibleDescription: row.visible_description,
-    inputSchema: row.input_schema,
-    capabilityConversationTypeMaskOverride:
-      row.capability_conversation_type_mask_override,
-    deviceConversationTypeMaskOverride:
-      row.device_conversation_type_mask_override,
-    exposureStableKey: row.exposure_stable_key,
-    exposureMetadata:
-      row.exposure_metadata &&
-      typeof row.exposure_metadata === "object" &&
-      !Array.isArray(row.exposure_metadata)
-        ? (row.exposure_metadata as Record<string, unknown>)
-        : null,
-    devicePlatform: row.device_platform,
-    deviceArch: row.device_arch,
-  }))
+  // The `… as snake_case` select aliases return camelCase at runtime
+  // (CamelCasePlugin.transformResult runs on builder rows too), but this mapper
+  // reads snake_case, so re-snake each row first. Values pass through;
+  // idempotent.
+  return rows.map((rawRow) => {
+    const row = snakeCaseTopLevelKeys(rawRow)
+    return {
+      deviceId: row.device_id,
+      deviceName: row.device_name,
+      deviceServiceId: row.device_service_id,
+      deviceExposureId: row.device_exposure_id,
+      deviceCapabilityId: row.device_capability_id,
+      deviceToolId: row.device_tool_id,
+      deviceToolRevisionId: row.device_tool_revision_id,
+      catalogRevisionId: row.catalog_revision_id,
+      transport: row.transport,
+      builtinKind: row.builtin_kind,
+      visibleToolName: row.visible_tool_name,
+      visibleDescription: row.visible_description,
+      inputSchema: row.input_schema,
+      capabilityConversationTypeMaskOverride:
+        row.capability_conversation_type_mask_override,
+      deviceConversationTypeMaskOverride:
+        row.device_conversation_type_mask_override,
+      exposureStableKey: row.exposure_stable_key,
+      exposureMetadata:
+        row.exposure_metadata &&
+        typeof row.exposure_metadata === "object" &&
+        !Array.isArray(row.exposure_metadata)
+          ? (row.exposure_metadata as Record<string, unknown>)
+          : null,
+      devicePlatform: row.device_platform,
+      deviceArch: row.device_arch,
+    }
+  })
+}
+
+function snakeCaseTopLevelKeys<T extends object>(row: T): T {
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(row)) {
+    out[key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)] = value
+  }
+  return out as T
 }
 
 /**
