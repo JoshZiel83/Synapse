@@ -161,12 +161,12 @@ type TransportMessageLinkRow = {
 
 type TransportOutboxSweepCandidateRaw = {
   id: string
-  delivery_status: TransportDeliveryStatus
+  deliveryStatus: TransportDeliveryStatus
   metadata: unknown
-  created_at: Date
-  skipped_reason: string | null
-  has_unknown_attempt: boolean
-  last_error: string | null
+  createdAt: Date
+  skippedReason: string | null
+  hasUnknownAttempt: boolean
+  lastError: string | null
 }
 
 export type TransportOutboxSweepCandidateRow = {
@@ -255,33 +255,22 @@ export function normalizeTransportAddressRow(
 }
 
 export function normalizeTransportOutboxSweepCandidateRow(
-  rawRow: TransportOutboxSweepCandidateRaw
+  row: TransportOutboxSweepCandidateRaw
 ): TransportOutboxSweepCandidateRow {
   // listTransportOutboxSweepCandidateRows uses sql`...`.execute(), whose rows
-  // pass through CamelCasePlugin's transformResult — the bare `delivery_status`
-  // / `created_at` columns arrive camelCase. This normalizer reads snake_case,
-  // so re-snake the top-level keys first (metadata key is unchanged; values
-  // pass through; idempotent).
-  const row = snakeCaseOutboxSweepRow(rawRow)
+  // pass through CamelCasePlugin's transformResult — every top-level key arrives
+  // camelCase (bare `delivery_status` / `created_at` columns and the
+  // double-quoted `AS "skippedReason"` / `"hasUnknownAttempt"` / `"lastError"`
+  // aliases alike). Read camelCase keys directly; metadata values pass through.
   return {
     id: row.id,
-    deliveryStatus: row.delivery_status,
+    deliveryStatus: row.deliveryStatus,
     metadata: decodeTransportMessageLinkMetadata(row),
-    createdAt: row.created_at,
-    skippedReason: row.skipped_reason,
-    hasUnknownAttempt: row.has_unknown_attempt,
-    lastError: row.last_error,
+    createdAt: row.createdAt,
+    skippedReason: row.skippedReason,
+    hasUnknownAttempt: row.hasUnknownAttempt,
+    lastError: row.lastError,
   }
-}
-
-function snakeCaseOutboxSweepRow(
-  row: TransportOutboxSweepCandidateRaw
-): TransportOutboxSweepCandidateRaw {
-  const out: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(row)) {
-    out[key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)] = value
-  }
-  return out as TransportOutboxSweepCandidateRaw
 }
 
 export function decodeConversationItemMetadata(row: {
@@ -931,12 +920,12 @@ export async function listTransportOutboxSweepCandidateRows(): Promise<
       delivery_status,
       metadata,
       created_at,
-      metadata->>'skippedReason' AS skipped_reason,
+      metadata->>'skippedReason' AS "skippedReason",
       jsonb_path_exists(
         metadata,
         '$.qq.attempts.*.outcome ? (@ == "unknown" || @ == "unknown_assumed")'
-      ) AS has_unknown_attempt,
-      metadata->>'lastError' AS last_error
+      ) AS "hasUnknownAttempt",
+      metadata->>'lastError' AS "lastError"
     FROM transport_message_links
     WHERE direction = 'outbound'
       AND (
@@ -1111,17 +1100,20 @@ export async function insertOutboundLinkRowRaw(params: {
 
 /**
  * The reachable-address candidate row returned by
- * selectReachableTransportAddressForParticipant. The raw UNION ALL
- * selects `ta.*` (snake_case, bypassing the CamelCasePlugin) plus the
- * derived flags, so callers read snake_case column names.
+ * selectReachableTransportAddressForParticipant. The raw UNION ALL selects
+ * `ta.*` plus derived flags. Raw SQL bypasses CamelCasePlugin's *query*
+ * transform, but `transformResult` still runs unconditionally and camelCases
+ * every top-level result key — so callers read camelCase. The derived flags
+ * are aliased to quoted camelCase identifiers to make that explicit, and the
+ * `ta.*` columns (e.g. external_id) arrive camelCased (externalId) too.
  */
 export type ReachableTransportAddressRow = {
   id: string
-  external_id: string
-  display_name: string | null
-  is_attached: boolean
-  is_primary: boolean
-  binding_created_at: Date | null
+  externalId: string
+  displayName: string | null
+  isAttached: boolean
+  isPrimary: boolean
+  bindingCreatedAt: Date | null
   [column: string]: unknown
 }
 
@@ -1230,9 +1222,9 @@ export async function selectReachableTransportAddressForParticipant(params: {
     sql<ReachableTransportAddressRow>`SELECT candidate.*
       FROM (
         SELECT ta.*,
-               TRUE AS is_attached,
-               cpa.is_primary,
-               cpa.created_at AS binding_created_at
+               TRUE AS "isAttached",
+               cpa.is_primary AS "isPrimary",
+               cpa.created_at AS "bindingCreatedAt"
         FROM conversation_participant_addresses cpa
         JOIN transport_addresses ta ON ta.id = cpa.transport_address_id
         WHERE cpa.conversation_participant_id = ${params.conversationParticipantId}
@@ -1241,9 +1233,9 @@ export async function selectReachableTransportAddressForParticipant(params: {
         UNION ALL
 
         SELECT ta.*,
-               FALSE AS is_attached,
-               FALSE AS is_primary,
-               ta.created_at AS binding_created_at
+               FALSE AS "isAttached",
+               FALSE AS "isPrimary",
+               ta.created_at AS "bindingCreatedAt"
         FROM conversation_participants cm
         JOIN access_subjects cm_subj ON cm_subj.id = cm.subject_id
         JOIN transport_addresses ta
@@ -1253,9 +1245,9 @@ export async function selectReachableTransportAddressForParticipant(params: {
           AND cm_subj.workspace_member_id IS NOT NULL
           AND ta.transport_account_id = ${params.transportAccountId}
       ) candidate
-      ORDER BY candidate.is_attached DESC,
-               candidate.is_primary DESC,
-               candidate.binding_created_at ASC
+      ORDER BY candidate."isAttached" DESC,
+               candidate."isPrimary" DESC,
+               candidate."bindingCreatedAt" ASC
       LIMIT 1`.compile(db)
   )
   return result.rows[0] ?? null

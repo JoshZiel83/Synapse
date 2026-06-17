@@ -192,12 +192,12 @@ test("normalizeTransportExternalUserRow rejects malformed session aggregates", (
 test("normalizeTransportOutboxSweepCandidateRow decodes sweep metadata at repo exit", () => {
   const row = normalizeTransportOutboxSweepCandidateRow({
     id: "link-1",
-    delivery_status: "failed",
+    deliveryStatus: "failed",
     metadata: JSON.stringify({ qq: { attempts: { a1: "unknown" } } }),
-    created_at: createdAt,
-    skipped_reason: null,
-    has_unknown_attempt: true,
-    last_error: "qq_5xx: upstream failed",
+    createdAt,
+    skippedReason: null,
+    hasUnknownAttempt: true,
+    lastError: "qq_5xx: upstream failed",
   })
 
   assert.deepEqual(row, {
