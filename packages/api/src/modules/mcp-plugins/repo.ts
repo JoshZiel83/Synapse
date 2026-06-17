@@ -427,7 +427,7 @@ const PLUGIN_CATALOG_SELECT = `
     spec.auth_bindings AS "specAuthBindings",
     spec.default_reuse_scope AS "specDefaultReuseScope",
     spec.default_conversation_type_mask AS "specDefaultConversationTypeMask",
-    spec.supported_reuse_scopes AS "specSupportedReuseScopes",
+    to_jsonb(spec.supported_reuse_scopes) AS "specSupportedReuseScopes",
     spec.requires_handshake AS "specRequiresHandshake",
     spec.metadata AS "specMetadata",
     publisher.id AS "publisherId",
