@@ -981,6 +981,48 @@ const RULES = [
     test: (src) => SQL_CONSTRUCTION_PATTERN.test(src),
   },
   {
+    // g3: raw-SQL result-key contract. CamelCasePlugin.transformResult runs
+    // UNCONDITIONALLY on every query (builder AND raw `sql`), camelCasing every
+    // top-level result key. So a snake_case result ALIAS / inline row-type key
+    // arrives camelCased at runtime, and code that reads the snake key silently
+    // gets undefined — the recurring capabilities / im / mcp-plugins /
+    // session-thinking bug class. In query-owning files (repo*.ts / *-repo.ts)
+    // this flags the high-signal, low-false-positive alias forms:
+    //   A) a raw SQL EXPRESSION aliased to snake_case via Kysely:  `…`.as("snake_case")
+    //   B) a `"table.column as snake_case"` Kysely string select alias (dotted —
+    //      i.e. a COLUMN alias; a `"table as alias"` table alias is not flagged)
+    //   C) an inline snake_case key in a `sql<{ … }>` generic row type
+    // Fix: alias to double-quoted camelCase (`AS "fooBar"`) and read camelCase keys.
+    //
+    // KNOWN STATIC-COVERAGE GAPS (NOT flagged here — defended instead by the
+    // camelCase row-TYPE convention + tsc + code review):
+    //   - inline `AS snake_alias` written as raw TEXT inside a sql`…` block. This
+    //     is the *dominant* historical bug shape (e.g. `TRUE AS is_attached`,
+    //     `… AS skipped_reason`), but it is NOT cleanly separable by regex from
+    //     the ~178 legitimate in-tree raw `AS snake` uses (derived-table aliases,
+    //     inner-CTE columns re-aliased at the top level, and snake aliases that
+    //     round-trip to camelCase and ARE read as camelCase). A guard over them
+    //     would be ~all false positives, and the per-file baseline would make it
+    //     toothless. When the row TYPE is camelCase (the convention), tsc catches
+    //     a snake read; the residual risk is only index-signature rows
+    //     (pg.QueryResultRow / `[k:string]:unknown`) — review those by hand.
+    //   - bare snake columns `SELECT user_id` (safe: arrive camelCased, read camelCase).
+    //   - raw SQL outside repo*.ts / *-repo.ts (out of scope by repo-ownership convention).
+    id: "g3_raw_snake_result_alias",
+    files: apiSourceFiles,
+    appliesTo: (p) =>
+      !/\.test\.ts$/.test(p) && (isRepo(p) || /(^|\/)[^/]+-repo\.ts$/.test(p)),
+    test: (src) =>
+      // A: `expr`.as("snake_case")
+      /`\s*\.as\(\s*["'][a-z][a-z0-9]*_[a-z0-9_]+["']\s*\)/.test(src) ||
+      // C: sql<{ snake_key: ... }>
+      /\bsql<\{[^}]*\b[a-z]+_[a-z0-9_]+\s*:/.test(src) ||
+      // B: "table.column as snake_case" (dotted column alias, not a table alias)
+      /["'][A-Za-z_][A-Za-z0-9_]*\.[A-Za-z0-9_]+\s+as\s+[a-z][a-z0-9]*_[a-z0-9_]+["']/.test(
+        src
+      ),
+  },
+  {
     // r8: only repo*.ts may import the DB CLIENT (`db` / withDbTransaction from
     // infrastructure/database/kysely) — that is the module singleton, and a
     // non-repo file importing it is reaching the DB outside the repo boundary
