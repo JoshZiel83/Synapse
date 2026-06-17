@@ -91,6 +91,25 @@ export async function runOn<T extends object = Record<string, unknown>>(
 }
 
 /**
+ * Re-snake the TOP-LEVEL keys of a raw result row. CamelCasePlugin's
+ * `transformResult` is unconditional and camelCases the top-level keys of raw
+ * (`CompiledQuery.raw`) and `sql`.compile`` result rows too — it only skips the
+ * *query* transform, not the *result* transform. The snake_case `RawTask*Row`
+ * normalizers below therefore receive camelCase keys at runtime and read
+ * `undefined`. Re-snaking at the normalizer boundary fixes that. Values are
+ * passed through untouched (JSONB objects / Dates are never recursed into), and
+ * the transform is idempotent — already-snake keys (e.g. synthetic test rows)
+ * are unchanged.
+ */
+function snakeCaseTopLevelKeys<T extends Record<string, unknown>>(row: T): T {
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(row)) {
+    out[key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)] = value
+  }
+  return out as T
+}
+
+/**
  * Run a pre-compiled query on an optional executor: native executeQuery for
  * Kysely executors / top-level db (when undefined).
  */
@@ -295,7 +314,8 @@ export function decodeActionTokenPayload(row: {
   return parsed.data
 }
 
-export function normalizeTaskRow(row: RawTaskDbRow): RawTaskRow {
+export function normalizeTaskRow(rawRow: RawTaskDbRow): RawTaskRow {
+  const row = snakeCaseTopLevelKeys(rawRow)
   const normalized = {
     ...row,
     prompt_payload: requireJsonObject(
@@ -331,8 +351,9 @@ export function normalizeTaskRow(row: RawTaskDbRow): RawTaskRow {
 }
 
 export function normalizeTaskCommandRow(
-  row: RawTaskCommandRow
+  rawRow: RawTaskCommandRow
 ): TaskCommandRow {
+  const row = snakeCaseTopLevelKeys(rawRow)
   return {
     id: row.id,
     task_id: row.task_id,

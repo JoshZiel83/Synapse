@@ -521,3 +521,29 @@ test(
     })
   }
 )
+
+test("normalizeTaskRow re-snakes camelCase raw rows (CamelCasePlugin regression)", () => {
+  // At runtime, runCompiledOn rows arrive camelCase because CamelCasePlugin's
+  // transformResult rewrites raw / sql.compile result keys too. Feed the
+  // camelCase shape the query actually returns and assert normalizeTaskRow
+  // recovers the snake-cased fields (regression for the GET /actors-class
+  // "Expected a valid Date" / undefined-payload 500s).
+  const snake = buildTaskDbRow({
+    prompt_payload: JSON.stringify({ title: "Need input", questions: [] }),
+    resolution_payload: JSON.stringify({ answers: [] }),
+  })
+  // simulate CamelCasePlugin: camelCase every top-level key
+  const camel: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(snake)) {
+    camel[k.replace(/_([a-z])/g, (_m, c) => c.toUpperCase())] = v
+  }
+
+  const normalized = normalizeTaskRow(camel as unknown as typeof snake)
+
+  assert.equal(normalized.id, "task-1")
+  assert.equal(normalized.workspace_id, "workspace-1")
+  assert.equal(normalized.conversation_id, "conversation-1")
+  assert.equal(normalized.prompt_payload.title, "Need input")
+  assert.ok(normalized.created_at instanceof Date)
+  assert.ok(normalized.updated_at instanceof Date)
+})
