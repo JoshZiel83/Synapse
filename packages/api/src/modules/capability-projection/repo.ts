@@ -113,35 +113,35 @@ export async function selectDeviceCapabilityToolsForSubjects(
     )
     .distinctOn(["dt.id"])
     .select([
-      "d.id as device_id",
-      "d.title as device_name",
-      "dx.serviceId as device_service_id",
-      "dx.id as device_exposure_id",
-      "dc.id as device_capability_id",
-      "dt.id as device_tool_id",
-      "dtr.id as device_tool_revision_id",
-      "dcr.id as catalog_revision_id",
+      "d.id as deviceId",
+      "d.title as deviceName",
+      "dx.serviceId as deviceServiceId",
+      "dx.id as deviceExposureId",
+      "dc.id as deviceCapabilityId",
+      "dt.id as deviceToolId",
+      "dtr.id as deviceToolRevisionId",
+      "dcr.id as catalogRevisionId",
       "dx.transport as transport",
-      "dx.builtinKind as builtin_kind",
-      "dx.stableKey as exposure_stable_key",
-      "dx.metadata as exposure_metadata",
-      "dt.currentName as visible_tool_name",
-      "dtr.description as visible_description",
-      "dtr.inputSchema as input_schema",
-      "app.conversationTypeMaskOverride as capability_conversation_type_mask_override",
-      "d.conversationTypeMaskOverride as device_conversation_type_mask_override",
+      "dx.builtinKind as builtinKind",
+      "dx.stableKey as exposureStableKey",
+      "dx.metadata as exposureMetadata",
+      "dt.currentName as visibleToolName",
+      "dtr.description as visibleDescription",
+      "dtr.inputSchema as inputSchema",
+      "app.conversationTypeMaskOverride as capabilityConversationTypeMaskOverride",
+      "d.conversationTypeMaskOverride as deviceConversationTypeMaskOverride",
       // Commit 8: surface device.platform so the commandline matcher can
       // apply Windows-specific guards (cwd unsupported in v1) at projection
       // time instead of relying solely on device-side bottom-of-stack
       // rejection. normalizeDevicePlatform turns the raw DB string into
       // "win32" | "linux" | "darwin" | undefined.
-      "d.platform as device_platform",
+      "d.platform as devicePlatform",
       // Surface arch alongside platform so isBundleAvailableForPlatform can
       // exact-match against the runtime manifest's platformKey
       // (`<platform>-<arch>`). Without arch the API would have to assume
       // the device's arch matches an entry, which previously caused
       // "approved-but-unrunnable" for arm-only or x64-only manifests.
-      "d.arch as device_arch",
+      "d.arch as deviceArch",
     ])
     .where("app.workspaceId", "=", params.workspaceId)
     .where("app.deletedAt", "is", null)
@@ -170,49 +170,39 @@ export async function selectDeviceCapabilityToolsForSubjects(
     query = query.where("rab.scopeSubjectId", "is", null)
   }
   const rows = await query.orderBy("dt.id").execute()
-  // The `… as snake_case` select aliases return camelCase at runtime
-  // (CamelCasePlugin.transformResult runs on builder rows too), but this mapper
-  // reads snake_case, so re-snake each row first. Values pass through;
-  // idempotent.
-  return rows.map((rawRow) => {
-    const row = snakeCaseTopLevelKeys(rawRow)
+  // CamelCasePlugin.transformResult camelCases every top-level result key
+  // (builder rows included), so the double-quoted/.as aliases arrive camelCase
+  // and we read them directly. JSONB/Date values pass through untouched.
+  return rows.map((row) => {
     return {
-      deviceId: row.device_id,
-      deviceName: row.device_name,
-      deviceServiceId: row.device_service_id,
-      deviceExposureId: row.device_exposure_id,
-      deviceCapabilityId: row.device_capability_id,
-      deviceToolId: row.device_tool_id,
-      deviceToolRevisionId: row.device_tool_revision_id,
-      catalogRevisionId: row.catalog_revision_id,
+      deviceId: row.deviceId,
+      deviceName: row.deviceName,
+      deviceServiceId: row.deviceServiceId,
+      deviceExposureId: row.deviceExposureId,
+      deviceCapabilityId: row.deviceCapabilityId,
+      deviceToolId: row.deviceToolId,
+      deviceToolRevisionId: row.deviceToolRevisionId,
+      catalogRevisionId: row.catalogRevisionId,
       transport: row.transport,
-      builtinKind: row.builtin_kind,
-      visibleToolName: row.visible_tool_name,
-      visibleDescription: row.visible_description,
-      inputSchema: row.input_schema,
+      builtinKind: row.builtinKind,
+      visibleToolName: row.visibleToolName,
+      visibleDescription: row.visibleDescription,
+      inputSchema: row.inputSchema,
       capabilityConversationTypeMaskOverride:
-        row.capability_conversation_type_mask_override,
+        row.capabilityConversationTypeMaskOverride,
       deviceConversationTypeMaskOverride:
-        row.device_conversation_type_mask_override,
-      exposureStableKey: row.exposure_stable_key,
+        row.deviceConversationTypeMaskOverride,
+      exposureStableKey: row.exposureStableKey,
       exposureMetadata:
-        row.exposure_metadata &&
-        typeof row.exposure_metadata === "object" &&
-        !Array.isArray(row.exposure_metadata)
-          ? (row.exposure_metadata as Record<string, unknown>)
+        row.exposureMetadata &&
+        typeof row.exposureMetadata === "object" &&
+        !Array.isArray(row.exposureMetadata)
+          ? (row.exposureMetadata as Record<string, unknown>)
           : null,
-      devicePlatform: row.device_platform,
-      deviceArch: row.device_arch,
+      devicePlatform: row.devicePlatform,
+      deviceArch: row.deviceArch,
     }
   })
-}
-
-function snakeCaseTopLevelKeys<T extends object>(row: T): T {
-  const out: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(row)) {
-    out[key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)] = value
-  }
-  return out as T
 }
 
 /**
