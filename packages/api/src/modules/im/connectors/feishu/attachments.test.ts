@@ -168,6 +168,53 @@ test("uploadFeishuFile: throws when SDK returns no file_key", async () => {
   })
 })
 
+function withFakeFetchHeaders<T>(
+  contentLength: number,
+  bodyBytes: Uint8Array,
+  fn: () => Promise<T>
+): Promise<T> {
+  const original = globalThis.fetch
+  globalThis.fetch = (async () => ({
+    ok: true,
+    headers: {
+      get: (k: string) =>
+        k.toLowerCase() === "content-length"
+          ? String(contentLength)
+          : "application/octet-stream",
+    },
+    body: new Response(bodyBytes).body,
+  })) as unknown as typeof fetch
+  return fn().finally(() => {
+    globalThis.fetch = original
+  })
+}
+
+test("uploadFeishuImage: rejects an image over the 10MB image cap", async () => {
+  // 11MB declared — over the image cap (10MB) but under the file cap (30MB).
+  await withFakeFetchHeaders(11 * 1024 * 1024, new Uint8Array([1, 2, 3]), () =>
+    assert.rejects(
+      uploadFeishuImage({
+        client: fakeClient({ imageKey: "img" }),
+        fileRef: { url: "https://x/big.png" },
+      }),
+      /exceeds 10485760 byte limit/
+    )
+  )
+})
+
+test("uploadFeishuFile: accepts the same 11MB declared size (30MB file cap)", async () => {
+  const key = await withFakeFetchHeaders(
+    11 * 1024 * 1024,
+    new Uint8Array([1, 2, 3]),
+    () =>
+      uploadFeishuFile({
+        client: fakeClient({ fileKey: "file_ok" }),
+        fileRef: { url: "https://x/big.bin", name: "big.bin" },
+      })
+  )
+  assert.equal(key, "file_ok")
+})
+
 test("uploadFeishuImage: empty download body is rejected", async () => {
   await withFakeFetch(new Uint8Array(0), "image/png", async () => {
     await assert.rejects(

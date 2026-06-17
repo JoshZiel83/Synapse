@@ -8,8 +8,9 @@
  *      throw if the ref has no addressable source. (We don't yet talk
  *      to Synapse's internal file service; that integration lands when
  *      the chat layer surfaces local uploads as fileId.)
- *   2. Buffer the response (small enough for messaging: Feishu caps
- *      image at 10 MB, file at 30 MB; we enforce 30 MB to fail fast).
+ *   2. Stream the response, aborting once the per-kind cap is exceeded
+ *      (Feishu caps images at 10 MB and files at 30 MB) so a hostile or
+ *      misdeclared Content-Length can't force an unbounded buffer.
  *   3. POST to im.image.create or im.file.create → `image_key` /
  *      `file_key`.
  *   4. Return the key so the caller can render a `msg_type: image|file`
@@ -23,35 +24,52 @@
 import type * as Lark from "@larksuiteoapi/node-sdk"
 import type { CanonicalFileRef } from "../../messaging/canonical-message.js"
 
-const MAX_ATTACHMENT_BYTES = 30 * 1024 * 1024 // 30 MB, Feishu's file cap
+// Feishu enforces different ceilings per kind: images ≤ 10 MB, files ≤ 30 MB.
+// Using a single 30 MB cap let a 10–30 MB image pass the local guard only to be
+// rejected server-side after a wasted download + upload round-trip.
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024 // Feishu im.image.create cap
+const MAX_FILE_BYTES = 30 * 1024 * 1024 // Feishu im.file.create cap
 
-async function downloadToBuffer(url: string): Promise<{
-  buffer: Buffer
-  mime?: string
-}> {
+async function downloadToBuffer(
+  url: string,
+  maxBytes: number
+): Promise<{ buffer: Buffer; mime?: string }> {
   const res = await fetch(url)
   if (!res.ok) {
     throw new Error(`Failed to download attachment ${url}: HTTP ${res.status}`)
   }
-  const contentLength = Number(res.headers.get("content-length") || "0")
-  if (contentLength > MAX_ATTACHMENT_BYTES) {
+  // Content-Length is only an early-exit hint — it is absent under chunked
+  // Transfer-Encoding and can be understated by a hostile server. The
+  // streaming byte count below is the authoritative guard, and it aborts the
+  // download instead of buffering an unbounded body fully into memory.
+  const declared = Number(res.headers.get("content-length") || "0")
+  if (declared > maxBytes) {
     throw new Error(
-      `Attachment ${url} exceeds ${MAX_ATTACHMENT_BYTES} byte limit (content-length ${contentLength})`
+      `Attachment ${url} exceeds ${maxBytes} byte limit (content-length ${declared})`
     )
   }
-  const arrayBuffer = await res.arrayBuffer()
-  if (arrayBuffer.byteLength === 0) {
+  const mime = res.headers.get("content-type") || undefined
+  if (!res.body) {
     throw new Error(`Attachment ${url} is empty`)
   }
-  if (arrayBuffer.byteLength > MAX_ATTACHMENT_BYTES) {
-    throw new Error(
-      `Attachment ${url} exceeds ${MAX_ATTACHMENT_BYTES} byte limit`
-    )
+  const reader = res.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    if (!value) continue
+    total += value.length
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => undefined)
+      throw new Error(`Attachment ${url} exceeds ${maxBytes} byte limit`)
+    }
+    chunks.push(value)
   }
-  return {
-    buffer: Buffer.from(arrayBuffer),
-    mime: res.headers.get("content-type") || undefined,
+  if (total === 0) {
+    throw new Error(`Attachment ${url} is empty`)
   }
+  return { buffer: Buffer.concat(chunks.map((c) => Buffer.from(c))), mime }
 }
 
 function requireUrl(fileRef: CanonicalFileRef, kind: "image" | "file"): string {
@@ -73,7 +91,7 @@ export async function uploadFeishuImage(input: {
   fileRef: CanonicalFileRef
 }): Promise<string> {
   const url = requireUrl(input.fileRef, "image")
-  const { buffer } = await downloadToBuffer(url)
+  const { buffer } = await downloadToBuffer(url, MAX_IMAGE_BYTES)
   const resp = (await input.client.im.image.create({
     data: {
       image_type: "message",
@@ -137,7 +155,7 @@ export async function uploadFeishuFile(input: {
   fileRef: CanonicalFileRef & { name: string }
 }): Promise<string> {
   const url = requireUrl(input.fileRef, "file")
-  const { buffer } = await downloadToBuffer(url)
+  const { buffer } = await downloadToBuffer(url, MAX_FILE_BYTES)
   const resp = (await input.client.im.file.create({
     data: {
       file_type: feishuFileTypeFor(input.fileRef),
