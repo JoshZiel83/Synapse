@@ -86,7 +86,7 @@ test("image part is NOT inlined as text — it's a separate send (see planFeishu
   const out = renderTextWithMentions(
     buildCanonicalMessage([
       { type: "text", text: "see:" },
-      { type: "image", fileRef: { url: "https://x", mime: "image/png" } },
+      { type: "image", fileRef: { sha256: "x", mimeType: "image/png" } },
     ])
   )
   assert.equal(out, "see:")
@@ -124,7 +124,7 @@ test("plan: card takes the whole message and suppresses other parts", () => {
         payload: { hello: 1 },
         fallbackText: "fallback",
       },
-      { type: "image", fileRef: { url: "https://x/img.png" } },
+      { type: "image", fileRef: { sha256: "img" } },
     ])
   )
   assert.equal(plan.length, 1)
@@ -138,7 +138,7 @@ test("plan: text + single image produces text-first then image", () => {
   const plan = planFeishuSends(
     buildCanonicalMessage([
       { type: "text", text: "see this:" },
-      { type: "image", fileRef: { url: "https://x/img.png" } },
+      { type: "image", fileRef: { sha256: "img" } },
     ])
   )
   assert.equal(plan.length, 2)
@@ -150,7 +150,7 @@ test("plan: text + file produces text-first then file", () => {
   const plan = planFeishuSends(
     buildCanonicalMessage([
       { type: "text", text: "report attached" },
-      { type: "file", fileRef: { name: "q4.pdf", url: "https://x/q4.pdf" } },
+      { type: "file", fileRef: { name: "q4.pdf", sha256: "q4" } },
     ])
   )
   assert.equal(plan.length, 2)
@@ -164,25 +164,23 @@ test("plan: text + file produces text-first then file", () => {
 test("plan: multiple images emitted in order, each as its own send", () => {
   const plan = planFeishuSends(
     buildCanonicalMessage([
-      { type: "image", fileRef: { url: "https://x/1.png" } },
-      { type: "image", fileRef: { url: "https://x/2.png" } },
-      { type: "image", fileRef: { url: "https://x/3.png" } },
+      { type: "image", fileRef: { sha256: "sha1" } },
+      { type: "image", fileRef: { sha256: "sha2" } },
+      { type: "image", fileRef: { sha256: "sha3" } },
     ])
   )
   assert.equal(plan.length, 3)
-  const urls = plan.flatMap((p) => (p.kind === "image" ? [p.fileRef.url] : []))
-  assert.deepEqual(urls, [
-    "https://x/1.png",
-    "https://x/2.png",
-    "https://x/3.png",
-  ])
+  const shas = plan.flatMap((p) =>
+    p.kind === "image" ? [p.fileRef.sha256] : []
+  )
+  assert.deepEqual(shas, ["sha1", "sha2", "sha3"])
 })
 
 test("plan: text + image + file emits (text, image, file) in attachment order", () => {
   const plan = planFeishuSends(
     buildCanonicalMessage([
-      { type: "file", fileRef: { name: "doc.pdf", url: "https://x/doc.pdf" } },
-      { type: "image", fileRef: { url: "https://x/img.png" } },
+      { type: "file", fileRef: { name: "doc.pdf", sha256: "doc" } },
+      { type: "image", fileRef: { sha256: "img" } },
       { type: "text", text: "before file in source, after in plan" },
     ])
   )
@@ -198,7 +196,7 @@ test("plan: mentions inline into the text send (not a separate part)", () => {
     buildCanonicalMessage([
       { type: "text", text: "hello" },
       { type: "mention", displayName: "Alice", externalId: "ou_alice" },
-      { type: "image", fileRef: { url: "https://x/i.png" } },
+      { type: "image", fileRef: { sha256: "i" } },
     ])
   )
   assert.equal(plan.length, 2)

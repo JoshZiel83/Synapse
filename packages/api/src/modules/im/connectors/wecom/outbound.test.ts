@@ -137,7 +137,7 @@ test("degradation strips image/file parts before render", async () => {
     endpoint: { endpointType: "group", externalId: "g-9", metadata: {} },
     message: buildCanonicalMessage([
       { type: "text", text: "before " },
-      { type: "image", fileRef: { url: "x" } },
+      { type: "image", fileRef: { sha256: "x" } },
       { type: "text", text: " after" },
     ]),
     ...deliveryFields(),

@@ -25,8 +25,8 @@ test("Feishu capabilities pass through chat-like part types unchanged", () => {
   const msg = buildCanonicalMessage([
     { type: "text", text: "hi" },
     { type: "mention", displayName: "alice", externalId: "ou_a" },
-    { type: "image", fileRef: { url: "https://x/img.png" } },
-    { type: "file", fileRef: { name: "spec.pdf", url: "https://x/spec.pdf" } },
+    { type: "image", fileRef: { sha256: "img" } },
+    { type: "file", fileRef: { name: "spec.pdf", sha256: "spec" } },
     {
       type: "card",
       schema: "feishu_interactive_v1",
@@ -73,7 +73,7 @@ test("WeChat capabilities flatten mention to text and drop reactions", () => {
 
 test("WeChat capabilities keep image part (media now supported)", () => {
   const msg = buildCanonicalMessage([
-    { type: "image", fileRef: { url: "https://x/img.png", mime: "image/png" } },
+    { type: "image", fileRef: { sha256: "img", mimeType: "image/png" } },
   ])
   const out = degradeForCapabilities(msg, WEIXIN_CAPABILITIES)
   // WeChat now uploads image/video/file to the CDN; the part is kept for the
@@ -91,7 +91,7 @@ test("WeChat capabilities keep file part (media now supported)", () => {
 
 test("WeChat still degrades voice to placeholder (no voice send)", () => {
   const msg = buildCanonicalMessage([
-    { type: "voice", fileRef: { url: "https://x/a.amr" }, transcript: "hi" },
+    { type: "voice", fileRef: { sha256: "a" }, transcript: "hi" },
   ])
   const out = degradeForCapabilities(msg, WEIXIN_CAPABILITIES)
   assert.equal(out.parts[0].type, "system_marker")
@@ -212,7 +212,7 @@ test("adjacent text parts are merged after degradation", () => {
 
 test("plainText is recomputed after degradation", () => {
   const msg = buildCanonicalMessage([
-    { type: "image", fileRef: { url: "x" } },
+    { type: "image", fileRef: { sha256: "x" } },
     { type: "text", text: "hi" },
   ])
   const out = degradeForCapabilities(msg, WEIXIN_CAPABILITIES)

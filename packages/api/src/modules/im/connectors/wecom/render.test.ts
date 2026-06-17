@@ -25,7 +25,7 @@ test("non-text/mention parts are dropped (degradation already ran)", () => {
     { type: "text", text: "before" },
     {
       type: "image",
-      fileRef: { url: "x" },
+      fileRef: { sha256: "x" },
     },
     { type: "text", text: "after" },
   ])

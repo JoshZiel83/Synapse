@@ -19,7 +19,7 @@ import {
 test("voice part roundtrips with transcript and durationMs", () => {
   const part: CanonicalPart = {
     type: "voice",
-    fileRef: { fileId: "f1", url: "https://cdn/v1.silk", mime: "audio/silk" },
+    fileRef: { sha256: "f1", mimeType: "audio/silk" },
     durationMs: 4200,
     transcript: "hello world",
   }
@@ -33,7 +33,7 @@ test("voice part roundtrips with transcript and durationMs", () => {
 test("video part roundtrips with size + duration", () => {
   const part: CanonicalPart = {
     type: "video",
-    fileRef: { fileId: "f2", url: "https://cdn/v.mp4", mime: "video/mp4" },
+    fileRef: { sha256: "f2", mimeType: "video/mp4" },
     durationMs: 12000,
     width: 720,
     height: 1280,
@@ -48,7 +48,7 @@ test("encodes voice as file_ref category=audio", () => {
   const msg = buildCanonicalMessage([
     {
       type: "voice",
-      fileRef: { fileId: "f1", url: "https://cdn/v.wav", mime: "audio/wav" },
+      fileRef: { sha256: "f1", mimeType: "audio/wav" },
       transcript: "hi",
     },
   ])
@@ -58,7 +58,7 @@ test("encodes voice as file_ref category=audio", () => {
   assert.equal(block.type, "file_ref")
   if (block.type === "file_ref") {
     assert.equal(block.category, "audio")
-    assert.equal(block.fileId, "f1")
+    assert.equal(block.sha256, "f1")
   }
 })
 
@@ -66,7 +66,7 @@ test("encodes video as file_ref category=video", () => {
   const msg = buildCanonicalMessage([
     {
       type: "video",
-      fileRef: { fileId: "f2", url: "https://cdn/v.mp4", mime: "video/mp4" },
+      fileRef: { sha256: "f2", mimeType: "video/mp4" },
     },
   ])
   const enc = encodeForConversationItem(msg)
@@ -82,10 +82,9 @@ test("decodes file_ref audio block to voice part", () => {
     contentBlocks: [
       {
         type: "file_ref",
-        fileId: "f1",
-        url: "https://cdn/v.wav",
+        sha256: "f1",
         mimeType: "audio/wav",
-        originalName: "v.wav",
+        name: "v.wav",
         sizeBytes: 100,
         category: "audio",
       },
@@ -101,10 +100,9 @@ test("decodes file_ref video block to video part", () => {
     contentBlocks: [
       {
         type: "file_ref",
-        fileId: "f2",
-        url: "https://cdn/v.mp4",
+        sha256: "f2",
         mimeType: "video/mp4",
-        originalName: "v.mp4",
+        name: "v.mp4",
         sizeBytes: 1000,
         category: "video",
       },
@@ -266,7 +264,7 @@ test("degrade: voice without supportsVoice → system_marker w/ transcript", () 
   const msg = buildCanonicalMessage([
     {
       type: "voice",
-      fileRef: { fileId: "f1", url: "https://cdn/v.wav" },
+      fileRef: { sha256: "f1" },
       transcript: "hi",
     },
   ])
@@ -282,7 +280,7 @@ test("degrade: video without supportsVideo → system_marker", () => {
   const msg = buildCanonicalMessage([
     {
       type: "video",
-      fileRef: { fileId: "f2", url: "https://cdn/v.mp4" },
+      fileRef: { sha256: "f2" },
     },
   ])
   const out = degradeForCapabilities(msg, caps({}))

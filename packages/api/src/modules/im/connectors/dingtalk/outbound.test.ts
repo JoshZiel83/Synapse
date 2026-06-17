@@ -560,7 +560,7 @@ test("outbound: degrade strips image parts to safe shape before render", async (
       { type: "text", text: "look:" },
       {
         type: "image",
-        fileRef: { url: "https://example.com/x.png", mime: "image/png" },
+        fileRef: { sha256: "shaimg", mimeType: "image/png" },
       },
     ])
     await sendDingtalkMessage({
