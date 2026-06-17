@@ -18,20 +18,27 @@ export function getFeishuCredentialsOrThrow(account: TransportAccountSummary) {
   return credentials
 }
 
+function larkDomain(domain: "feishu" | "lark" | undefined): Lark.Domain {
+  // Default to Feishu (open.feishu.cn) so existing China accounts are unchanged.
+  return domain === "lark" ? Lark.Domain.Lark : Lark.Domain.Feishu
+}
+
 export function createFeishuClient(account: TransportAccountSummary) {
-  const { appId, appSecret } = getFeishuCredentialsOrThrow(account)
+  const { appId, appSecret, domain } = getFeishuCredentialsOrThrow(account)
   return new Lark.Client({
     appId,
     appSecret,
+    domain: larkDomain(domain),
     loggerLevel: Lark.LoggerLevel.warn,
   })
 }
 
 export function createFeishuWsClient(account: TransportAccountSummary) {
-  const { appId, appSecret } = getFeishuCredentialsOrThrow(account)
+  const { appId, appSecret, domain } = getFeishuCredentialsOrThrow(account)
   return new Lark.WSClient({
     appId,
     appSecret,
+    domain: larkDomain(domain),
     loggerLevel: Lark.LoggerLevel.warn,
   })
 }

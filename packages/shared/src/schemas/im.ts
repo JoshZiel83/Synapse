@@ -605,6 +605,9 @@ export const TransportFeishuAccountCreateInputSchema = z
     appSecret: z.string().trim().min(1).max(255),
     verificationToken: z.string().trim().max(255).optional(),
     encryptKey: z.string().trim().max(255).optional(),
+    // Which Open Platform the app lives on: "feishu" => open.feishu.cn (China,
+    // default when omitted), "lark" => open.larksuite.com (international).
+    domain: z.enum(["feishu", "lark"]).optional(),
     status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
     ...TransportAccountOwnerCreateShape,
     ...TransportAccountInboundActorCreateShape,
@@ -624,6 +627,7 @@ export const TransportFeishuAccountUpdateInputSchema = z
     appSecret: z.string().trim().min(1).max(255).optional(),
     verificationToken: z.string().trim().max(255).optional(),
     encryptKey: z.string().trim().max(255).optional(),
+    domain: z.enum(["feishu", "lark"]).optional(),
     status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
     ...TransportAccountOwnerUpdateShape,
     ...TransportAccountInboundActorUpdateShape,

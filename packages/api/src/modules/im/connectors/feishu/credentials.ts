@@ -7,6 +7,21 @@ export interface FeishuCredentials {
   appSecret: string
   verificationToken?: string
   encryptKey?: string
+  /**
+   * Which Open Platform the app lives on. "feishu" => open.feishu.cn (China,
+   * the default); "lark" => open.larksuite.com (international). The two are
+   * region-locked: a Lark app authenticated against open.feishu.cn fails. The
+   * SDK defaults to Feishu, so this MUST be threaded into the client for
+   * international tenants.
+   */
+  domain?: "feishu" | "lark"
+}
+
+function normalizeDomain(value: unknown): "feishu" | "lark" | undefined {
+  const v = nonEmpty(value)?.toLowerCase()
+  if (v === "lark" || v === "larksuite") return "lark"
+  if (v === "feishu") return "feishu"
+  return undefined
 }
 
 function nonEmpty(value: unknown): string | undefined {
@@ -22,6 +37,7 @@ export function extractFeishuCredentials(
   const appSecret = nonEmpty(raw.appSecret)
   const verificationToken = nonEmpty(raw.verificationToken)
   const encryptKey = nonEmpty(raw.encryptKey)
+  const domain = normalizeDomain(raw.domain)
 
   if (!appId) errors.push("appId is required")
   if (!appSecret) errors.push("appSecret is required")
@@ -35,6 +51,7 @@ export function extractFeishuCredentials(
       appSecret: appSecret!,
       verificationToken,
       encryptKey,
+      domain,
     },
     errors: [],
   }

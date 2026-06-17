@@ -48,3 +48,35 @@ test("whitespace-only credentials treated as missing", () => {
   const r = extractFeishuCredentials({ appId: "   ", appSecret: "  " })
   assert.equal(r.errors.length, 2)
 })
+
+test("domain defaults to undefined (=> Feishu China) and normalizes lark", () => {
+  assert.equal(
+    extractFeishuCredentials({ appId: "x", appSecret: "y" }).credentials
+      ?.domain,
+    undefined
+  )
+  assert.equal(
+    extractFeishuCredentials({ appId: "x", appSecret: "y", domain: "lark" })
+      .credentials?.domain,
+    "lark"
+  )
+  // Case-insensitive + "larksuite" alias => lark; anything else => undefined.
+  assert.equal(
+    extractFeishuCredentials({
+      appId: "x",
+      appSecret: "y",
+      domain: "LarkSuite",
+    }).credentials?.domain,
+    "lark"
+  )
+  assert.equal(
+    extractFeishuCredentials({ appId: "x", appSecret: "y", domain: "feishu" })
+      .credentials?.domain,
+    "feishu"
+  )
+  assert.equal(
+    extractFeishuCredentials({ appId: "x", appSecret: "y", domain: "bogus" })
+      .credentials?.domain,
+    undefined
+  )
+})

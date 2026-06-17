@@ -49,6 +49,9 @@ export default async function imFeishuController(
           credentials.encryptKey = body.encryptKey
         }
       }
+      if (body.domain) {
+        credentials.domain = body.domain
+      }
 
       const account = await createTransportAccount({
         workspaceId,
@@ -93,7 +96,8 @@ export default async function imFeishuController(
         body.appId ||
         body.appSecret ||
         body.verificationToken ||
-        body.encryptKey
+        body.encryptKey ||
+        body.domain
           ? {
               ...(body.appId ? { appId: body.appId } : {}),
               ...(body.appSecret ? { appSecret: body.appSecret } : {}),
@@ -101,6 +105,7 @@ export default async function imFeishuController(
                 ? { verificationToken: body.verificationToken }
                 : {}),
               ...(body.encryptKey ? { encryptKey: body.encryptKey } : {}),
+              ...(body.domain ? { domain: body.domain } : {}),
             }
           : undefined
 
