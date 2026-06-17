@@ -55,6 +55,7 @@ export const feishuConnector: TransportConnector = {
       endpoint: input.endpoint,
       message: input.message,
       replyTo: input.replyTo,
+      transportMessageLinkId: input.transportMessageLinkId,
     })
   },
 

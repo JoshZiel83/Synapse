@@ -14,6 +14,7 @@
  * what's used for later reply lookups.
  */
 
+import crypto from "node:crypto"
 import type * as Lark from "@larksuiteoapi/node-sdk"
 import type { TransportAccountSummary } from "@synapse/shared/types"
 import type { CanonicalMessage } from "../../messaging/canonical-message.js"
@@ -33,6 +34,25 @@ export interface FeishuSendInput {
   endpoint: OutboundEndpointRef
   message: CanonicalMessage
   replyTo?: MessageRef
+  /**
+   * `transport_message_links.id` for this delivery. Used to derive a stable
+   * per-send `uuid` so a whole-plan worker retry is idempotent on Feishu's
+   * side (already-delivered sends are de-duplicated instead of doubled).
+   */
+  transportMessageLinkId?: string
+}
+
+/**
+ * Deterministic Feishu idempotency key for the Nth send of one delivery.
+ * Feishu de-duplicates identical (chat, uuid) sends within a time window, so
+ * the SAME link + plan-step must always produce the SAME uuid across retries.
+ * sha1 hex is 40 chars — within Feishu's 50-char uuid limit.
+ */
+function stableSendUuid(linkId: string, planIndex: number): string {
+  return crypto
+    .createHash("sha1")
+    .update(`${linkId}:${planIndex}`)
+    .digest("hex")
 }
 
 interface RenderedSend {
@@ -88,6 +108,8 @@ async function postRendered(input: {
   rendered: RenderedSend
   /** When set, the FIRST send uses im.message.reply; later sends ignore it. */
   replyTo?: MessageRef
+  /** Idempotency key forwarded to Feishu (`uuid`); omitted when unavailable. */
+  uuid?: string
 }) {
   let response: any
   if (input.replyTo?.externalMessageId) {
@@ -96,6 +118,7 @@ async function postRendered(input: {
       data: {
         content: input.rendered.content,
         msg_type: input.rendered.msg_type,
+        ...(input.uuid ? { uuid: input.uuid } : {}),
       },
     })
   } else {
@@ -105,6 +128,7 @@ async function postRendered(input: {
         receive_id: input.endpoint.externalId,
         msg_type: input.rendered.msg_type,
         content: input.rendered.content,
+        ...(input.uuid ? { uuid: input.uuid } : {}),
       },
     })
   }
@@ -145,6 +169,9 @@ export async function sendFeishuMessage(
       endpoint: input.endpoint,
       rendered,
       replyTo: i === 0 ? input.replyTo : undefined,
+      uuid: input.transportMessageLinkId
+        ? stableSendUuid(input.transportMessageLinkId, i)
+        : undefined,
     })
     results.push(result)
   }
