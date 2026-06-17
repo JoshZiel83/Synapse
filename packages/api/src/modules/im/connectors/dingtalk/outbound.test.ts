@@ -381,6 +381,63 @@ test("outbound: group fallback prefers metadata.openConversationId over endpoint
   }
 })
 
+test("outbound: group OpenAPI fallback defaults robotCode to account clientId when metadata lacks it", async () => {
+  const mock = installFetchMock({
+    webhook: { status: 200, body: { errcode: 88001 } },
+    group: { status: 200, body: { processQueryKey: "pqk-g" } },
+  })
+  try {
+    await sendDingtalkMessage({
+      account: ACCOUNT,
+      endpoint: groupEndpoint(/* no robotCode in metadata */),
+      message: SIMPLE_MSG,
+    })
+    const groupCall = mock.calls.find((c) => c.kind === "group")!
+    assert.equal((groupCall.body as { robotCode: string }).robotCode, "ding-1")
+  } finally {
+    mock.restore()
+  }
+})
+
+test("outbound: group OpenAPI fallback prefers metadata.robotCode over clientId", async () => {
+  const mock = installFetchMock({
+    webhook: { status: 200, body: { errcode: 88001 } },
+    group: { status: 200, body: { processQueryKey: "pqk-g" } },
+  })
+  try {
+    await sendDingtalkMessage({
+      account: ACCOUNT,
+      endpoint: groupEndpoint({ robotCode: "ding-robot-meta" }),
+      message: SIMPLE_MSG,
+    })
+    const groupCall = mock.calls.find((c) => c.kind === "group")!
+    assert.equal(
+      (groupCall.body as { robotCode: string }).robotCode,
+      "ding-robot-meta"
+    )
+  } finally {
+    mock.restore()
+  }
+})
+
+test("outbound: direct OpenAPI fallback defaults robotCode to account clientId", async () => {
+  const mock = installFetchMock({
+    webhook: { status: 200, body: { errcode: 88001 } },
+    direct: { status: 200, body: { processQueryKey: "pqk-direct" } },
+  })
+  try {
+    await sendDingtalkMessage({
+      account: ACCOUNT,
+      endpoint: directEndpoint({ lastSenderStaffId: "alice" }),
+      message: SIMPLE_MSG,
+    })
+    const directCall = mock.calls.find((c) => c.kind === "direct")!
+    assert.equal((directCall.body as { robotCode: string }).robotCode, "ding-1")
+  } finally {
+    mock.restore()
+  }
+})
+
 // ─────────── single-chat staffId branches (the tricky three) ───────────
 
 test("outbound: direct + webhook succeeds + missing staffId → still succeeds (does NOT throw)", async () => {

@@ -5,11 +5,12 @@
  *   1. sessionWebhook (preferred): POST to the per-message webhook URL
  *      that came in with the inbound payload. Body shape:
  *      {msgtype, markdown:{title,text}, at:{atUserIds, isAtAll}}
- *      Token is sent in the `x-acs-dingtalk-access-token` header — the
- *      DingTalk official Stream tutorial + OpenClaw production references
- *      both confirm this is REQUIRED (omitting it leaves the main path
- *      failing, especially in dev/test where direct OpenAPI fallback also
- *      breaks for lack of staffId).
+ *      The sessionWebhook is a temporary self-authenticating URL, so an
+ *      access token is NOT a protocol requirement here (the official Python
+ *      Stream SDK replies with only Content-Type). We still attach the
+ *      `x-acs-dingtalk-access-token` header when a token is readily available
+ *      — the dominant production pattern (official Node.js sample, OpenClaw,
+ *      LangBot) — but never let acquiring it block this reply path.
  *   2. OpenAPI (fallback): /v1.0/robot/{oToMessages/batchSend |
  *      groupMessages/send}, body shape {robotCode, userIds|openConversationId,
  *      msgKey, msgParam: JSON.stringify(...)}, token in same header.
@@ -177,15 +178,18 @@ export type SessionWebhookResponse = DingtalkProviderResponse
 export async function sendViaSessionWebhook(
   webhook: string,
   body: SessionWebhookBody,
-  accessToken: string
+  accessToken?: string
 ): Promise<{ httpOk: boolean; status: number; body: SessionWebhookResponse }> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  }
+  // The token is optional on this path (the sessionWebhook URL is
+  // self-authenticating). Attach it when available — the dominant production
+  // pattern — but a missing/failed token must not block the reply.
+  if (accessToken) headers["x-acs-dingtalk-access-token"] = accessToken
   const resp = await fetch(webhook, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      // REQUIRED per the official Node.js Stream tutorial.
-      "x-acs-dingtalk-access-token": accessToken,
-    },
+    headers,
     body: JSON.stringify(body),
   })
   const parsed = await readDingtalkProviderResponse(resp)

@@ -69,31 +69,76 @@ function asNumber(value: unknown): number | undefined {
   return undefined
 }
 
+/**
+ * The `content` object on non-text inbound messages (picture/audio/video/
+ * file/richText), narrowed to an object so callers can dig out type-specific
+ * fields (recognition, richText[], downloadCode, …).
+ */
+function asContentObject(
+  payload: DingtalkInboundPayload
+): Record<string, unknown> | undefined {
+  const c = payload.content
+  return typeof c === "object" && c !== null
+    ? (c as Record<string, unknown>)
+    : undefined
+}
+
+/**
+ * richText inbound `content.richText` is an ordered array mixing text
+ * segments (`{text}`) and image segments (`{downloadCode, type:"picture"}`).
+ * Concatenate the user-typed text verbatim (internal spacing preserved);
+ * image segments are surfaced separately as a placeholder marker by
+ * placeholderFor(). Returns "" when no text segment exists (image-only msg).
+ */
+function extractRichTextSegments(payload: DingtalkInboundPayload): string {
+  const arr = asContentObject(payload)?.richText
+  if (!Array.isArray(arr)) return ""
+  let out = ""
+  for (const seg of arr) {
+    if (typeof seg !== "object" || seg === null) continue
+    const t = (seg as { text?: unknown }).text
+    if (typeof t === "string") out += t
+  }
+  return out.trim()
+}
+
+function richTextHasImageSegment(payload: DingtalkInboundPayload): boolean {
+  const arr = asContentObject(payload)?.richText
+  if (!Array.isArray(arr)) return false
+  return arr.some(
+    (seg) =>
+      typeof seg === "object" &&
+      seg !== null &&
+      (nonEmpty((seg as { downloadCode?: unknown }).downloadCode) !==
+        undefined ||
+        (seg as { type?: unknown }).type === "picture")
+  )
+}
+
 function extractRawText(payload: DingtalkInboundPayload): string {
   if (payload.msgtype === "text") {
     return nonEmpty(payload.text?.content) ?? ""
   }
-  if (payload.msgtype === "markdown") {
-    const fromText = nonEmpty(payload.text?.content)
-    if (fromText) return fromText
-    const fromContent = nonEmpty(
-      (payload.content as { text?: string } | undefined)?.text
-    )
-    if (fromContent) return fromContent
-    return "[markdown]"
-  }
+  // NOTE: there is NO inbound "markdown" msgtype — markdown/actionCard/
+  // feedCard/link are OUTBOUND send types only. The inbound receive catalog
+  // is exactly: text, richText, picture, audio, video, file (+ unknown).
   if (!payload.msgtype) return ""
   switch (payload.msgtype) {
     case "picture":
       return "[图片]"
     case "audio":
-      return "[语音]"
+      // DingTalk ships its own speech-to-text transcript in
+      // content.recognition; surface it as the message text rather than an
+      // opaque "[语音]" placeholder.
+      return nonEmpty(asContentObject(payload)?.recognition) ?? "[语音]"
     case "video":
       return "[视频]"
     case "file":
       return "[文件]"
     case "richText":
-      return "[富文本]"
+      // Recover the user-typed text; fall back to a placeholder only for an
+      // image-only rich message.
+      return extractRichTextSegments(payload) || "[富文本]"
     default:
       return `[${payload.msgtype}]`
   }
@@ -126,12 +171,15 @@ function placeholderFor(payload: DingtalkInboundPayload): CanonicalPart | null {
         original: payload.content,
       }
     case "richText":
-      return {
-        type: "system_marker",
-        marker: "unknown_placeholder",
-        label: "[富文本]",
-        original: payload.content,
-      }
+      // The typed text is recovered into the message body by extractRawText;
+      // only emit a marker when the rich message carries an inline image.
+      return richTextHasImageSegment(payload)
+        ? {
+            type: "system_marker",
+            marker: "image_placeholder",
+            original: payload.content,
+          }
+        : null
     default:
       return null
   }

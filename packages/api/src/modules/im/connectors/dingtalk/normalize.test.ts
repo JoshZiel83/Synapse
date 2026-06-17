@@ -140,16 +140,51 @@ test("normalize: picture msgtype emits image_placeholder system_marker", () => {
   )
 })
 
-test("normalize: markdown msgtype reads from text.content or content.text", () => {
-  const fromText = normalizeDingtalkPayload({
+test("normalize: richText extracts the typed text from content.richText[] segments", () => {
+  const env = normalizeDingtalkPayload({
     ...baseGroup,
-    msgtype: "markdown",
-    text: { content: "# heading" },
+    msgtype: "richText",
+    text: undefined,
+    content: {
+      richText: [
+        { text: "hello " },
+        { downloadCode: "dc-1", type: "picture" },
+        { text: "world" },
+      ],
+    },
   })
-  assert.equal(
-    (fromText!.message.parts[0] as { text: string }).text,
-    "# heading"
-  )
+  assert.ok(env)
+  const textPart = env!.message.parts.find((p) => p.type === "text")
+  assert.equal((textPart as { text: string }).text, "hello world")
+  // an inline image segment still surfaces an image_placeholder marker
+  const marker = env!.message.parts.find((p) => p.type === "system_marker")
+  assert.equal((marker as { marker: string }).marker, "image_placeholder")
+})
+
+test("normalize: richText with no text segments falls back to [富文本]", () => {
+  const env = normalizeDingtalkPayload({
+    ...baseGroup,
+    msgtype: "richText",
+    text: undefined,
+    content: { richText: [{ downloadCode: "dc-1", type: "picture" }] },
+  })
+  const textPart = env!.message.parts.find((p) => p.type === "text")
+  assert.equal((textPart as { text: string }).text, "[富文本]")
+})
+
+test("normalize: audio surfaces content.recognition transcript as the message text", () => {
+  const env = normalizeDingtalkPayload({
+    ...baseGroup,
+    msgtype: "audio",
+    text: undefined,
+    content: {
+      duration: 4000,
+      downloadCode: "dc-1",
+      recognition: "open the door",
+    },
+  })
+  const textPart = env!.message.parts.find((p) => p.type === "text")
+  assert.equal((textPart as { text: string }).text, "open the door")
 })
 
 test("normalize: when sessionWebhookExpiredTime absent, the key is written as null (not omitted)", () => {

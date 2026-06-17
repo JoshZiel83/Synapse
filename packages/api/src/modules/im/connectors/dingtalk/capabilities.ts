@@ -44,8 +44,11 @@ export const DINGTALK_MESSAGE_CAPABILITIES: MessageCapabilities = {
   supportsReply: false,
   supportsImage: false,
   supportsFile: false,
-  // v1 DingTalk: no audio/video upload, no interaction-prompt
-  // projection (no inline-button equivalent on the Stream API).
+  // v1 DingTalk: no audio/video upload, and interaction-prompt projection
+  // (interactive-card buttons) is deferred — NOT a protocol limit. DingTalk
+  // cards DO support buttons whose click callbacks arrive over the Stream
+  // connection on TOPIC_CARD (/v1.0/card/instances/callback); the connector
+  // just doesn't send cards or register that topic yet (see canSendCard above).
   supportsVoice: false,
   supportsVideo: false,
   supportsInteractionPrompt: false,

@@ -40,6 +40,7 @@ import type { TransportAccountSummary } from "@synapse/shared/types"
 import type { CanonicalMessage } from "../../messaging/canonical-message.js"
 import { degradeForCapabilities } from "../../messaging/degradation.js"
 import { DINGTALK_MESSAGE_CAPABILITIES } from "./capabilities.js"
+import { getDingtalkCredentialsOrThrow } from "./credentials.js"
 import {
   getAccessToken,
   isDingtalkBusinessSuccess,
@@ -146,7 +147,17 @@ export async function sendDingtalkMessage(
 
   if (webhook && !knownExpired) {
     try {
-      const token = await getToken()
+      // The sessionWebhook self-authenticates; attach a token only if it can
+      // be acquired without error. A token-endpoint failure must NOT defeat
+      // an otherwise-valid reply by forcing the (often-impossible) OpenAPI
+      // fallback — so a token error here degrades to "send without token"
+      // rather than abandoning the preferred path.
+      let token: string | undefined
+      try {
+        token = await getToken()
+      } catch {
+        token = undefined
+      }
       const resp = await sendViaSessionWebhook(webhook, webhookBody, token)
       if (resp.httpOk && isDingtalkBusinessSuccess(resp.body)) {
         return {
@@ -173,7 +184,13 @@ export async function sendDingtalkMessage(
     }
     const openApiPayload = renderOpenApiPayload(degraded)
     const token = await getToken()
-    const robotCode = stringOrUndefined(metadata.robotCode)
+    // robotCode is a REQUIRED field for robot/oToMessages/batchSend. The
+    // inbound payload normally seeds metadata.robotCode; fall back to the
+    // account clientId (== the app AppKey, which is the robotCode for an
+    // org-internal Stream bot) so a missing value never omits a required param.
+    const robotCode =
+      stringOrUndefined(metadata.robotCode) ??
+      getDingtalkCredentialsOrThrow(account).clientId
     const resp = await sendDirectOpenApi({
       userId: lastSenderStaffId,
       msgKey: openApiPayload.msgKey,
@@ -199,7 +216,11 @@ export async function sendDingtalkMessage(
     stringOrUndefined(metadata.openConversationId) ?? endpointId
   const openApiPayload = renderOpenApiPayload(degraded)
   const token = await getToken()
-  const robotCode = stringOrUndefined(metadata.robotCode)
+  // robotCode is a REQUIRED field for robot/groupMessages/send (see the
+  // direct path above); default to the account clientId when metadata lacks it.
+  const robotCode =
+    stringOrUndefined(metadata.robotCode) ??
+    getDingtalkCredentialsOrThrow(account).clientId
   const resp = await sendGroupOpenApi({
     openConversationId,
     msgKey: openApiPayload.msgKey,

@@ -23,6 +23,19 @@ test("renderSessionWebhookPayload: collects mention staffIds into atUserIds", ()
   assert.deepEqual(body.at?.atUserIds, ["alice", "bob"])
 })
 
+test("renderSessionWebhookPayload: inlines highlightable mention as @<staffId> matching atUserIds", () => {
+  const msg = buildCanonicalMessage([
+    { type: "text", text: "ping " },
+    { type: "mention", externalId: "alice", displayName: "Alice" },
+  ])
+  const body = renderSessionWebhookPayload(msg)
+  assert.deepEqual(body.at?.atUserIds, ["alice"])
+  // The inline token MUST be the staffId (alice) — the SAME id in atUserIds —
+  // not the displayName, otherwise DingTalk fires no mention at all.
+  assert.match(body.markdown?.text ?? "", /@alice/)
+  assert.doesNotMatch(body.markdown?.text ?? "", /@Alice/)
+})
+
 test("renderSessionWebhookPayload: filters senderId:-prefixed mentions out of at-array", () => {
   const msg = buildCanonicalMessage([
     { type: "text", text: "ping " },

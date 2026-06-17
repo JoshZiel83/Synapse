@@ -8,12 +8,15 @@
  *
  * Lifecycle split between SDK and outer loop:
  *
- *   - SDK `keepAlive: true` runs the periodic SYSTEM-message ping that
- *     keeps the connection alive across idle periods (inbound robot
- *     messages are NOT a liveness signal — they only flow when a user
- *     actually @s the bot). The SDK's heartbeat watchdog also calls
- *     `socket.terminate()` when ping/pong stops flowing, which fires
- *     `socket.on('close')` and lets our outer loop notice.
+ *   - SDK `keepAlive: true` runs a heartbeat interval (heartbeat_interval,
+ *     8s default) that sends a WebSocket-protocol ping frame each tick and
+ *     terminates the socket if no pong arrived since the previous tick. This
+ *     keeps the connection alive across idle periods (inbound robot messages
+ *     are NOT a liveness signal — they only flow when a user actually @s the
+ *     bot). The watchdog's `socket.terminate()` fires `socket.on('close')`
+ *     and lets our outer loop notice. (The ping/pong live at the WS framing
+ *     layer; the SDK's SYSTEM `ping`/`KEEPALIVE` topic handlers only passively
+ *     respond to server-initiated frames and are NOT this client heartbeat.)
  *
  *   - SDK `autoReconnect: false` keeps the SDK from queueing its own
  *     setTimeout-based reconnect; we control retry cadence in `runLoop`.
@@ -69,6 +72,13 @@
  * acknowledged within ~60s. The exception: when headers.messageId is
  * missing we can't ACK (no id to acknowledge), so we log a warning and
  * still attempt the rest of the pipeline.
+ *
+ * This ACK-first ordering is a DELIBERATE divergence from the official
+ * Node.js sample (which ACKs AFTER the reply succeeds, passing the reply
+ * body as the ACK data). ACK-first trades gateway redelivery-on-crash for
+ * guaranteed ~60s re-push suppression and tolerance of slow downstream
+ * processing — see the `emitInbound` "v1 at-most-once" note below. Do NOT
+ * "fix" it back to ACK-after.
  *
  * ACK is sent on the CLIENT that delivered the message, NOT the
  * ambient `activeClient`. The handler is bound at register time so a
@@ -525,14 +535,15 @@ export function defaultClientFactory(config: {
   clientSecret: string
 }): MinimalDWClient {
   // SDK options:
-  //   keepAlive: true   — SDK sends periodic SYSTEM-message pings so the
-  //                       connection survives idle periods. Without this an
-  //                       otherwise-healthy connection with no robot
-  //                       traffic for ~30s gets cut by the server.
-  //                       (Inbound robot messages are NOT a liveness
-  //                       signal — they go through registerCallbackListener;
-  //                       SDK pings/pongs flow through the internal SYSTEM
-  //                       path that doesn't touch our handler.)
+  //   keepAlive: true   — SDK sends a WebSocket-protocol ping frame every
+  //                       heartbeat_interval (8s) and consumes the matching
+  //                       pong, so the connection survives idle periods.
+  //                       Without this an otherwise-healthy connection with
+  //                       no robot traffic for ~30s gets cut by the server.
+  //                       (Inbound robot messages are NOT a liveness signal —
+  //                       they go through registerCallbackListener; the
+  //                       ping/pong live at the WS framing layer and don't
+  //                       touch our handler.)
   //   autoReconnect: false — we drive reconnect from the outer runLoop.
   //                       Without this the SDK swallows initial connection
   //                       failures, queues its own setTimeout, and leaves
