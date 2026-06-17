@@ -7,10 +7,11 @@
  * pass: download the actual bytes via the message-resource endpoint, persist
  * them through the central file service (content-addressed, deduped), and
  * replace the placeholder with a real `image`/`voice`/`video`/`file`
- * CanonicalPart carrying a `{fileId, url}` fileRef.
+ * CanonicalPart carrying a content-addressed `{ sha256, mimeType, name,
+ * sizeBytes }` fileRef.
  *
  * That fileRef is what `messaging/canonical-encoding.ts` needs to emit a
- * `file_ref` content block (it drops media parts lacking fileId+url), which is
+ * `file_ref` content block (it drops media parts lacking `sha256`), which is
  * how the chat layer surfaces the attachment to the agent. Without this pass
  * the agent only ever sees the "[图片]" / "[文件]" placeholder text.
  *
