@@ -36,31 +36,20 @@ const MIN_COMPACTION_ITEMS = 12
 const SHARED_ARCHIVE_TAIL_TARGET = 24
 const PRIVATE_ARCHIVE_TAIL_TARGET = 32
 
-/**
- * Re-snake the TOP-LEVEL keys of a raw result row. The archive reads below use
- * `sql`...`.execute()`, whose results still pass through CamelCasePlugin's
- * (unconditional) transformResult — so `SELECT *` / `AS part_type` columns
- * arrive camelCase. The ArchivePointRow / ArchiveFrameQueryRow types and their
- * mappers read snake_case, so re-snake at the mapper boundary. Values pass
- * through untouched (JSONB / Dates are never recursed into); idempotent.
- */
-function snakeCaseTopLevelKeys<T extends Record<string, unknown>>(row: T): T {
-  const out: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(row)) {
-    out[key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)] = value
-  }
-  return out as T
-}
-
+// Raw archive reads below use `sql`...`.execute()`, whose results pass through
+// CamelCasePlugin's (unconditional) transformResult — so `SELECT *` columns and
+// double-quoted camelCase aliases (AS "partId") arrive camelCase. The row types
+// and mappers therefore read camelCase directly. JSONB / Date values are never
+// recursed into, so their values pass through untouched.
 export type ArchivePointRow = {
   id: string
-  chain_scope: CanonicalArchiveChainScope
-  conversation_id: string
-  session_id: string | null
-  parent_archive_point_id: string | null
-  covers_until_sequence: number | string | null
+  chainScope: CanonicalArchiveChainScope
+  conversationId: string
+  sessionId: string | null
+  parentArchivePointId: string | null
+  coversUntilSequence: number | string | null
   metadata: unknown
-  created_at: Date
+  createdAt: Date
 }
 
 export function normalizeArchivePointRow(
@@ -68,37 +57,37 @@ export function normalizeArchivePointRow(
 ): ArchivePointRecord {
   return {
     id: row.id,
-    chainScope: row.chain_scope,
-    conversationId: row.conversation_id,
-    sessionId: row.session_id,
-    parentArchivePointId: row.parent_archive_point_id,
-    coversUntilSequence: row.covers_until_sequence,
+    chainScope: row.chainScope,
+    conversationId: row.conversationId,
+    sessionId: row.sessionId,
+    parentArchivePointId: row.parentArchivePointId,
+    coversUntilSequence: row.coversUntilSequence,
     metadata: parseArchiveMetadata(
       row.metadata,
       "context archive point metadata"
     ),
-    createdAt: row.created_at,
+    createdAt: row.createdAt,
   }
 }
 
 type ArchiveFrameQueryRow = {
   id: string
   role: CanonicalArchiveFrameRole
-  frame_type: string
-  tool_calls: unknown
-  tool_results: unknown
-  source_item_ids: unknown
+  frameType: string
+  toolCalls: unknown
+  toolResults: unknown
+  sourceItemIds: unknown
   metadata: unknown
-  part_id: string | null
-  part_ordinal: number | null
-  part_type: string | null
-  text_value: string | null
-  ref_path: string | null
-  ref_sha256: string | null
-  json_value: unknown
-  mime_type: string | null
+  partId: string | null
+  partOrdinal: number | null
+  partType: string | null
+  textValue: string | null
+  refPath: string | null
+  refSha256: string | null
+  jsonValue: unknown
+  mimeType: string | null
   name: string | null
-  part_metadata: unknown
+  partMetadata: unknown
 }
 
 export function parseArchiveFrameJsonArray<T>(
@@ -158,20 +147,19 @@ export async function loadArchivePoint(
 
   const point = pointResult.rows[0]
   if (!point) return null
-  const pointRow = snakeCaseTopLevelKeys(point)
 
   const framesResult = await sql<ArchiveFrameQueryRow>`
     SELECT caf.*,
-           cap.id AS part_id,
-           cap.ordinal AS part_ordinal,
-           cap.part_type,
-           cap.text_value,
-           cap.ref_path,
-           cap.ref_sha256,
-           cap.json_value,
-           cap.mime_type,
+           cap.id AS "partId",
+           cap.ordinal AS "partOrdinal",
+           cap.part_type AS "partType",
+           cap.text_value AS "textValue",
+           cap.ref_path AS "refPath",
+           cap.ref_sha256 AS "refSha256",
+           cap.json_value AS "jsonValue",
+           cap.mime_type AS "mimeType",
            cap.name,
-           cap.metadata AS part_metadata
+           cap.metadata AS "partMetadata"
     FROM context_archive_frames caf
     LEFT JOIN context_archive_frame_parts cap ON cap.archive_frame_id = caf.id
     WHERE caf.archive_point_id = ${archivePointId}
@@ -193,21 +181,20 @@ export async function loadArchivePoint(
       }>
     }
   >()
-  for (const rawFrameRow of framesResult.rows) {
-    const row = snakeCaseTopLevelKeys(rawFrameRow)
+  for (const row of framesResult.rows) {
     if (!frameMap.has(row.id)) {
       frameMap.set(row.id, { row, parts: [] })
     }
-    if (row.part_id) {
+    if (row.partId) {
       frameMap.get(row.id)!.parts.push({
-        part_type: row.part_type,
-        text_value: row.text_value,
-        ref_path: row.ref_path,
-        ref_sha256: row.ref_sha256,
-        json_value: row.json_value,
-        mime_type: row.mime_type,
+        part_type: row.partType,
+        text_value: row.textValue,
+        ref_path: row.refPath,
+        ref_sha256: row.refSha256,
+        json_value: row.jsonValue,
+        mime_type: row.mimeType,
         name: row.name,
-        metadata: row.part_metadata,
+        metadata: row.partMetadata,
       })
     }
   }
@@ -216,18 +203,18 @@ export async function loadArchivePoint(
     ({ row, parts }) => ({
       frameId: row.id,
       role: row.role,
-      frameType: row.frame_type,
+      frameType: row.frameType,
       parts: parts.length > 0 ? itemPartsToCanonicalBlocks(parts) : undefined,
       toolCalls: parseArchiveFrameJsonArray(
-        row.tool_calls,
+        row.toolCalls,
         `Context archive frame ${row.id} tool_calls`
       ),
       toolResults: parseArchiveFrameJsonArray(
-        row.tool_results,
+        row.toolResults,
         `Context archive frame ${row.id} tool_results`
       ),
-      sourceItemIds: Array.isArray(row.source_item_ids)
-        ? row.source_item_ids
+      sourceItemIds: Array.isArray(row.sourceItemIds)
+        ? row.sourceItemIds
         : undefined,
       metadata: parseArchiveMetadata(
         row.metadata,
@@ -236,7 +223,7 @@ export async function loadArchivePoint(
     })
   )
 
-  return presentArchivePoint(normalizeArchivePointRow(pointRow), frames)
+  return presentArchivePoint(normalizeArchivePointRow(point), frames)
 }
 
 function parseArchiveMetadata(
@@ -421,7 +408,7 @@ export async function maybeCompactChain(params: {
 
   await withDbTransaction(async (trx) => {
     const stateResult = await sql<{ archivePointId: string | null }>`
-      SELECT ${sql.ref(archiveIdColumn)} AS archive_point_id
+      SELECT ${sql.ref(archiveIdColumn)} AS "archivePointId"
       FROM ${sql.table(stateTable)}
       WHERE ${sql.ref(stateIdColumn)} = ${stateIdValue}
       FOR UPDATE`.execute(trx)
