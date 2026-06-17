@@ -128,6 +128,9 @@ async function uploadAndBuildMediaItem(params: {
   const { part, baseUrl, token, cdnBaseUrl, toUserId } = params
   const sha256 = requireMediaSha256(part)
   const buffer = await readCasBlob(sha256)
+  if (buffer.length === 0) {
+    throw new Error(`Weixin ${part.type} resource ${sha256} is empty`)
+  }
 
   const mediaType =
     part.type === "image"

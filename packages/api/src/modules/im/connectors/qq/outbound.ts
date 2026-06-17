@@ -811,6 +811,11 @@ async function resolveFileInfo(params: {
     )
   }
   const buffer = await readCasBlob(sha256)
+  if (buffer.length === 0) {
+    throw new PermanentTransportError("qq: media resource is empty", {
+      code: "qq_media_empty",
+    })
+  }
   const result = await uploadQqMedia({
     account: params.account,
     scope,
