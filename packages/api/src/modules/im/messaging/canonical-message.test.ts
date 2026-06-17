@@ -28,7 +28,7 @@ test("derivePlainText joins parts with single space and trims", () => {
 test("derivePlainText renders image part as [图片]", () => {
   const parts: CanonicalPart[] = [
     { type: "text", text: "look:" },
-    { type: "image", fileRef: { url: "https://x" } },
+    { type: "image", fileRef: { sha256: "x" } },
   ]
   assert.equal(derivePlainText(parts), "look: [图片]")
 })

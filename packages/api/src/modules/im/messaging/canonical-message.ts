@@ -12,10 +12,19 @@
 export type CanonicalMessageSchemaVersion = 1
 export const CANONICAL_MESSAGE_SCHEMA_VERSION: CanonicalMessageSchemaVersion = 1
 
+/**
+ * Content-addressed handle for a media attachment. Unified with the chat
+ * layer's `CanonicalFileRefBlock`: the connector reads bytes from our CAS by
+ * `sha256` (outbound) and writes them there (inbound), so the bytes always
+ * flow through our storage rather than via a transient URL. There is exactly
+ * ONE fileRef shape across the IM module.
+ */
 export interface CanonicalFileRef {
-  fileId?: string
-  url?: string
-  mime?: string
+  /** sha256 of the bytes in our content-addressed store. The unified handle. */
+  sha256?: string
+  /** Optional live handle (sandbox space path); connectors ignore it. */
+  path?: string
+  mimeType?: string
   name?: string
   sizeBytes?: number
   width?: number
@@ -441,9 +450,9 @@ function parseFileRef(input: unknown): CanonicalFileRef {
   }
   const raw = input as Record<string, unknown>
   const out: CanonicalFileRef = {}
-  if (typeof raw.fileId === "string") out.fileId = raw.fileId
-  if (typeof raw.url === "string") out.url = raw.url
-  if (typeof raw.mime === "string") out.mime = raw.mime
+  if (typeof raw.sha256 === "string") out.sha256 = raw.sha256
+  if (typeof raw.path === "string") out.path = raw.path
+  if (typeof raw.mimeType === "string") out.mimeType = raw.mimeType
   if (typeof raw.name === "string") out.name = raw.name
   if (typeof raw.sizeBytes === "number") out.sizeBytes = raw.sizeBytes
   if (typeof raw.width === "number") out.width = raw.width

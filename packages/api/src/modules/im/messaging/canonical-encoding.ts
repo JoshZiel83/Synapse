@@ -23,6 +23,7 @@
 import {
   buildCanonicalMessage,
   parseCanonicalMessage,
+  type CanonicalFileRef,
   type CanonicalMessage,
   type CanonicalPart,
 } from "./canonical-message.js"
@@ -36,12 +37,13 @@ export type EncodedContentBlock =
   | { type: "text"; text: string }
   | {
       type: "file_ref"
-      fileId: string
-      url: string
+      // Content-addressed, matching the chat layer's CanonicalFileRefBlock.
+      sha256: string
+      path?: string
       mimeType: string
-      originalName: string
       sizeBytes: number
       category: "image" | "video" | "audio" | "document" | "archive" | "other"
+      name: string
     }
   | {
       type: "mention"
@@ -72,8 +74,8 @@ export interface EncodedConversationItem {
  *     dropped from `contentBlocks` but preserved in `transportMetadata`.
  *   - `mention` with neither externalId nor participantId becomes plain text
  *     (since it has nothing addressable).
- *   - `file` with no fileId is dropped from `contentBlocks` (the chat layer
- *     requires a file_id for file_ref blocks); it's still preserved in
+ *   - a media part with no `sha256` is dropped from `contentBlocks` (a
+ *     content-addressed file_ref requires it); it's still preserved in
  *     `transportMetadata`.
  */
 export function encodeForConversationItem(
@@ -113,55 +115,55 @@ function encodePart(part: CanonicalPart): EncodedContentBlock | null {
       }
     }
     case "image": {
-      const fileRef = part.fileRef
-      if (!fileRef.fileId || !fileRef.url) return null
+      const f = part.fileRef
+      if (!f.sha256) return null
       return {
         type: "file_ref",
-        fileId: fileRef.fileId,
-        url: fileRef.url,
-        mimeType: fileRef.mime || "image/*",
-        originalName: fileRef.name || "image",
-        sizeBytes: fileRef.sizeBytes || 0,
+        sha256: f.sha256,
+        ...(f.path ? { path: f.path } : {}),
+        mimeType: f.mimeType || "image/*",
+        sizeBytes: f.sizeBytes || 0,
         category: "image",
+        name: f.name || "image",
       }
     }
     case "voice": {
-      const fileRef = part.fileRef
-      if (!fileRef.fileId || !fileRef.url) return null
+      const f = part.fileRef
+      if (!f.sha256) return null
       return {
         type: "file_ref",
-        fileId: fileRef.fileId,
-        url: fileRef.url,
-        mimeType: fileRef.mime || "audio/*",
-        originalName: fileRef.name || "voice",
-        sizeBytes: fileRef.sizeBytes || 0,
+        sha256: f.sha256,
+        ...(f.path ? { path: f.path } : {}),
+        mimeType: f.mimeType || "audio/*",
+        sizeBytes: f.sizeBytes || 0,
         category: "audio",
+        name: f.name || "voice",
       }
     }
     case "video": {
-      const fileRef = part.fileRef
-      if (!fileRef.fileId || !fileRef.url) return null
+      const f = part.fileRef
+      if (!f.sha256) return null
       return {
         type: "file_ref",
-        fileId: fileRef.fileId,
-        url: fileRef.url,
-        mimeType: fileRef.mime || "video/*",
-        originalName: fileRef.name || "video",
-        sizeBytes: fileRef.sizeBytes || 0,
+        sha256: f.sha256,
+        ...(f.path ? { path: f.path } : {}),
+        mimeType: f.mimeType || "video/*",
+        sizeBytes: f.sizeBytes || 0,
         category: "video",
+        name: f.name || "video",
       }
     }
     case "file": {
-      const fileRef = part.fileRef
-      if (!fileRef.fileId || !fileRef.url) return null
+      const f = part.fileRef
+      if (!f.sha256) return null
       return {
         type: "file_ref",
-        fileId: fileRef.fileId,
-        url: fileRef.url,
-        mimeType: fileRef.mime || "application/octet-stream",
-        originalName: fileRef.name,
-        sizeBytes: fileRef.sizeBytes || 0,
-        category: classifyMime(fileRef.mime),
+        sha256: f.sha256,
+        ...(f.path ? { path: f.path } : {}),
+        mimeType: f.mimeType || "application/octet-stream",
+        sizeBytes: f.sizeBytes || 0,
+        category: classifyMime(f.mimeType),
+        name: f.name,
       }
     }
     case "card":
@@ -253,52 +255,21 @@ function decodeBlock(block: EncodedContentBlock): CanonicalPart | null {
         participantId: block.mention.participantId,
         displayName: block.mention.name || "",
       }
-    case "file_ref":
-      if (block.category === "image") {
-        return {
-          type: "image",
-          fileRef: {
-            fileId: block.fileId,
-            url: block.url,
-            mime: block.mimeType,
-            name: block.originalName,
-            sizeBytes: block.sizeBytes,
-          },
-        }
+    case "file_ref": {
+      const fileRef: CanonicalFileRef = {
+        sha256: block.sha256,
+        ...(block.path ? { path: block.path } : {}),
+        mimeType: block.mimeType,
+        name: block.name,
+        sizeBytes: block.sizeBytes,
       }
-      if (block.category === "audio") {
-        return {
-          type: "voice",
-          fileRef: {
-            fileId: block.fileId,
-            url: block.url,
-            mime: block.mimeType,
-            name: block.originalName,
-            sizeBytes: block.sizeBytes,
-          },
-        }
-      }
-      if (block.category === "video") {
-        return {
-          type: "video",
-          fileRef: {
-            fileId: block.fileId,
-            url: block.url,
-            mime: block.mimeType,
-            name: block.originalName,
-            sizeBytes: block.sizeBytes,
-          },
-        }
-      }
+      if (block.category === "image") return { type: "image", fileRef }
+      if (block.category === "audio") return { type: "voice", fileRef }
+      if (block.category === "video") return { type: "video", fileRef }
       return {
         type: "file",
-        fileRef: {
-          fileId: block.fileId,
-          url: block.url,
-          mime: block.mimeType,
-          name: block.originalName,
-          sizeBytes: block.sizeBytes,
-        },
+        fileRef: { ...fileRef, name: fileRef.name || "file" },
       }
+    }
   }
 }

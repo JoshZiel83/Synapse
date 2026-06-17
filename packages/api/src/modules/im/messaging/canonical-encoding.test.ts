@@ -48,14 +48,13 @@ test("mention without participantId or externalId becomes plain text", () => {
   }
 })
 
-test("image with fileId+url encodes as file_ref(category=image)", () => {
+test("image with sha256 encodes as file_ref(category=image)", () => {
   const msg = buildCanonicalMessage([
     {
       type: "image",
       fileRef: {
-        fileId: "f1",
-        url: "/files/f1",
-        mime: "image/png",
+        sha256: "abc123",
+        mimeType: "image/png",
         name: "screen.png",
         sizeBytes: 1024,
       },
@@ -65,7 +64,7 @@ test("image with fileId+url encodes as file_ref(category=image)", () => {
   assert.equal(enc.contentBlocks.length, 1)
   if (enc.contentBlocks[0].type === "file_ref") {
     assert.equal(enc.contentBlocks[0].category, "image")
-    assert.equal(enc.contentBlocks[0].fileId, "f1")
+    assert.equal(enc.contentBlocks[0].sha256, "abc123")
   } else {
     assert.fail("expected file_ref")
   }
@@ -76,10 +75,9 @@ test("file with mime application/pdf classifies as document", () => {
     {
       type: "file",
       fileRef: {
-        fileId: "f1",
-        url: "/files/f1",
+        sha256: "pdfsha",
         name: "x.pdf",
-        mime: "application/pdf",
+        mimeType: "application/pdf",
       },
     },
   ])
@@ -91,10 +89,10 @@ test("file with mime application/pdf classifies as document", () => {
   }
 })
 
-test("image without fileId/url is dropped from blocks but preserved in metadata", () => {
+test("image without sha256 is dropped from blocks but preserved in metadata", () => {
   const msg = buildCanonicalMessage([
     { type: "text", text: "see" },
-    { type: "image", fileRef: { url: "ext://x" } }, // missing fileId
+    { type: "image", fileRef: { mimeType: "image/png" } }, // missing sha256
   ])
   const enc = encodeForConversationItem(msg)
   // Only text block remains in contentBlocks
@@ -203,10 +201,9 @@ test("file_ref with image/jpeg mime decodes as image part", () => {
     contentBlocks: [
       {
         type: "file_ref",
-        fileId: "f",
-        url: "/files/f",
+        sha256: "fsha",
         mimeType: "image/jpeg",
-        originalName: "x.jpg",
+        name: "x.jpg",
         sizeBytes: 200,
         category: "image",
       },
