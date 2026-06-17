@@ -7,7 +7,6 @@
 // objects — instant serialization stays at the boundary (guard r3). round-6 P1-6.
 
 import { db } from "../../infrastructure/database/kysely.js"
-import { parseJsonObject } from "@synapse/shared"
 
 export type AuditLogFilters = {
   action?: string
@@ -41,11 +40,28 @@ export function normalizeAuditLogRow(row: AuditLogDbRow): AuditLogRecord {
     resourceId: row.resourceId,
     userId: row.userId,
     actorId: row.actorId,
-    details: parseJsonObject(row.details),
+    details: parseAuditLogDetails(row.details),
     ipAddress: row.ipAddress,
     createdAt: row.createdAt,
     userName: row.userName,
     actorName: row.actorName,
+  }
+}
+
+function parseAuditLogDetails(value: unknown): Record<string, unknown> {
+  if (value === null || value === undefined) return {}
+  const parsed = typeof value === "string" ? parseAuditLogJson(value) : value
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("audit log details must be a JSON object")
+  }
+  return parsed as Record<string, unknown>
+}
+
+function parseAuditLogJson(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown
+  } catch {
+    throw new Error("audit log details must be valid JSON")
   }
 }
 

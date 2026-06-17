@@ -62,7 +62,7 @@ test("AuditLogViewSchema requires details to be a JSON object", () => {
     resourceId: "22222222-2222-4222-8222-222222222222",
     userId: "33333333-3333-4333-8333-333333333333",
     actorId: null,
-    details: JSON.stringify(["not-object"]),
+    details: JSON.stringify({ source: "test" }),
     ipAddress: "127.0.0.1",
     createdAt,
     userName: "owner@example.com",
@@ -75,7 +75,7 @@ test("AuditLogViewSchema requires details to be a JSON object", () => {
     pageSize: 20,
   })
 
-  assert.deepEqual(view.items[0]?.details, {})
+  assert.deepEqual(view.items[0]?.details, { source: "test" })
   assert.deepEqual(AuditLogListViewSchema.parse(view), view)
   assert.equal(
     AuditLogListViewSchema.safeParse({
@@ -83,5 +83,49 @@ test("AuditLogViewSchema requires details to be a JSON object", () => {
       items: [{ ...view.items[0]!, details: ["not-object"] }],
     }).success,
     false
+  )
+})
+
+test("normalizeAuditLogRow rejects malformed details JSON at repo exit", () => {
+  const createdAt = new Date("2026-06-13T08:00:00.000Z")
+
+  assert.throws(
+    () =>
+      normalizeAuditLogRow({
+        id: "11111111-1111-4111-8111-111111111111",
+        action: "workspace.create",
+        resourceType: "workspace",
+        resourceId: "22222222-2222-4222-8222-222222222222",
+        userId: "33333333-3333-4333-8333-333333333333",
+        actorId: null,
+        details: "not json",
+        ipAddress: "127.0.0.1",
+        createdAt,
+        userName: "owner@example.com",
+        actorName: null,
+      }),
+    /audit log details must be valid JSON/
+  )
+})
+
+test("normalizeAuditLogRow rejects non-object details JSON at repo exit", () => {
+  const createdAt = new Date("2026-06-13T08:00:00.000Z")
+
+  assert.throws(
+    () =>
+      normalizeAuditLogRow({
+        id: "11111111-1111-4111-8111-111111111111",
+        action: "workspace.create",
+        resourceType: "workspace",
+        resourceId: "22222222-2222-4222-8222-222222222222",
+        userId: "33333333-3333-4333-8333-333333333333",
+        actorId: null,
+        details: JSON.stringify(["not-object"]),
+        ipAddress: "127.0.0.1",
+        createdAt,
+        userName: "owner@example.com",
+        actorName: null,
+      }),
+    /audit log details must be a JSON object/
   )
 })
