@@ -90,7 +90,17 @@ export type IngestInboundEnvelopeDeps = {
     role: "user"
     authorParticipantId: string
     metadata: Record<string, unknown>
-    parts: Array<{ type: "text"; text: string }>
+    parts: Array<
+      | { type: "text"; text: string }
+      | {
+          type: "file_ref"
+          refSha256: string
+          refPath?: string | null
+          mimeType?: string
+          name?: string
+          metadata?: Record<string, unknown>
+        }
+    >
     queryable?: DatabaseTransaction
   }) => Promise<ConversationItemForInbound>
   queueConversationTransportProjection: (params: {
@@ -249,6 +259,46 @@ export async function ingestInboundEnvelopeUseCase(
   const normalizedContent =
     nonEmptyString(plainText) || `[${account.transportKind} message]`
 
+  // Persist media as content-addressed file_ref parts so the agent actually
+  // sees attachments (image/voice/video/file) instead of only the "[图片]"
+  // placeholder text. The connector has already downloaded the bytes into our
+  // CAS and stamped the sha256 on the part; here we just project each media
+  // part to a file_ref conversation-item part keyed by that sha256.
+  const itemParts: Array<
+    | { type: "text"; text: string }
+    | {
+        type: "file_ref"
+        refSha256: string
+        refPath?: string | null
+        mimeType?: string
+        name?: string
+        metadata?: Record<string, unknown>
+      }
+  > = [{ type: "text", text: normalizedContent }]
+  for (const part of envelope.message.parts) {
+    if (
+      part.type === "image" ||
+      part.type === "voice" ||
+      part.type === "video" ||
+      part.type === "file"
+    ) {
+      const fileRef = part.fileRef
+      if (fileRef.sha256) {
+        itemParts.push({
+          type: "file_ref",
+          refSha256: fileRef.sha256,
+          refPath: fileRef.path ?? null,
+          mimeType: fileRef.mimeType,
+          name: fileRef.name,
+          metadata:
+            fileRef.sizeBytes != null
+              ? { sizeBytes: fileRef.sizeBytes }
+              : undefined,
+        })
+      }
+    }
+  }
+
   const mergedMetadata = mergeInboundMetadata(
     {
       direction: "inbound",
@@ -288,12 +338,7 @@ export async function ingestInboundEnvelopeUseCase(
         role: "user",
         authorParticipantId: senderParticipant.id,
         metadata: mergedMetadata,
-        parts: [
-          {
-            type: "text",
-            text: normalizedContent,
-          },
-        ],
+        parts: itemParts,
         queryable,
       })
 

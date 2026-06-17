@@ -40,7 +40,7 @@ async function defaultStoreInboundMedia(input: {
   mimeType: string
   resourceKey: string
   messageId: string
-}): Promise<{ fileId: string; url: string }> {
+}): Promise<{ sha256: string }> {
   const [{ FILE_ORIGIN_SYSTEMS }, { buildExternalImportOrigin }, fileService] =
     await Promise.all([
       import("@synapse/shared/constants"),
@@ -58,7 +58,9 @@ async function defaultStoreInboundMedia(input: {
       details: { messageId: input.messageId },
     }),
   })
-  return { fileId: record.id, url: fileService.getFileUrlById(record.id) }
+  // The content-addressed sha256 is the unified handle: encode persists it as
+  // a file_ref item part and the chat layer serves bytes by /content/:sha256.
+  return { sha256: record.sha256 }
 }
 
 type ResourceType = "image" | "file"
@@ -169,7 +171,7 @@ export interface FeishuMediaEnrichDeps {
     mimeType: string
     resourceKey: string
     messageId: string
-  }) => Promise<{ fileId: string; url: string }>
+  }) => Promise<{ sha256: string }>
 }
 
 /**
@@ -213,7 +215,7 @@ export async function enrichInboundFeishuMedia(
         type: plan.resourceType,
       })
       const mimeType = mime || plan.defaultMime
-      const { fileId, url } = await store({
+      const { sha256 } = await store({
         buffer,
         workspaceId: deps.account.workspaceId,
         originalName: plan.originalName,
@@ -223,9 +225,8 @@ export async function enrichInboundFeishuMedia(
       })
       out.push(
         plan.toPart({
-          fileId,
-          url,
-          mime: mimeType,
+          sha256,
+          mimeType,
           name: plan.originalName,
           sizeBytes: buffer.length,
         })

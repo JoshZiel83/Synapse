@@ -49,10 +49,7 @@ function fakeDeps(
     },
     store: async (input: any) => {
       stores.push(input)
-      return {
-        fileId: `f_${input.resourceKey}`,
-        url: `/files/f_${input.resourceKey}`,
-      }
+      return { sha256: `sha_${input.resourceKey}` }
     },
     ...overrides,
   }
@@ -107,9 +104,8 @@ test("image placeholder becomes an image part with a stored fileRef", async () =
   const img = env.message.parts.find((p) => p.type === "image")
   assert.ok(img && img.type === "image")
   if (img.type === "image") {
-    assert.equal(img.fileRef.fileId, "f_img_k")
-    assert.equal(img.fileRef.url, "/files/f_img_k")
-    assert.equal(img.fileRef.mime, "image/jpeg") // default when download mime absent
+    assert.equal(img.fileRef.sha256, "sha_img_k")
+    assert.equal(img.fileRef.mimeType, "image/jpeg") // default when download mime absent
     assert.equal(img.fileRef.sizeBytes, 3)
   }
 })
@@ -177,7 +173,7 @@ test("envelope with no media is returned unchanged (no IO)", async () => {
       called = true
       return { buffer: Buffer.alloc(0) }
     },
-    store: async () => ({ fileId: "x", url: "/x" }),
+    store: async () => ({ sha256: "x" }),
   })
   assert.equal(env, original, "same reference — nothing rebuilt")
   assert.equal(called, false, "no download attempted")
