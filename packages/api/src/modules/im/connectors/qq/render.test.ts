@@ -45,18 +45,18 @@ test("planQqSends: quote part becomes leading > preview", () => {
 
 test("planQqSends: media parts produce a media plan item (Stage 5)", () => {
   const msg = buildCanonicalMessage([
-    { type: "image", fileRef: { fileId: "f1", url: "https://x/y" } },
+    { type: "image", fileRef: { sha256: "sha_y" } },
   ])
   const plan = planQqSends(msg)
   assert.equal(plan.length, 1)
   assert.equal(plan[0].kind, "media")
   if (plan[0].kind === "media") {
     assert.equal(plan[0].fileType, 1) // QQ_FILE_TYPE.IMAGE
-    assert.equal(plan[0].fileRef.url, "https://x/y")
+    assert.equal(plan[0].fileRef.sha256, "sha_y")
   }
 })
 
-test("planQqSends: media parts with neither url nor fileId are dropped", () => {
+test("planQqSends: media parts with no sha256 are dropped", () => {
   const msg = buildCanonicalMessage([{ type: "image", fileRef: {} }])
   assert.deepEqual(planQqSends(msg), [])
 })
@@ -64,7 +64,7 @@ test("planQqSends: media parts with neither url nor fileId are dropped", () => {
 test("planQqSends: mixed text + media interleave in canonical order", () => {
   const msg = buildCanonicalMessage([
     { type: "text", text: "before" },
-    { type: "image", fileRef: { url: "https://x/y" } },
+    { type: "image", fileRef: { sha256: "sha_y" } },
     { type: "text", text: "after" },
   ])
   const plan = planQqSends(msg)

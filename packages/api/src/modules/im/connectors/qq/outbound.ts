@@ -63,7 +63,8 @@ import {
   getLatestInboundAnchor,
   type QqLatestInboundAnchor,
 } from "./latest-inbound-store.js"
-import { downloadForQqUpload, uploadQqMedia } from "./media-upload.js"
+import { readCasBlob } from "../../../../infrastructure/storage/index.js"
+import { uploadQqMedia } from "./media-upload.js"
 import { QQ_FILE_TYPE, type QqFileType } from "./media-constants.js"
 import {
   readQqAccountConfig,
@@ -779,19 +780,12 @@ function extractHosts(text: string): string[] {
 }
 
 /**
- * Resolve a media plan item to a QQ `file_info` token. Strategy:
- *   - If fileRef.url is reachable by the QQ CDN: pass the URL through
- *     to upload, let QQ pull it (saves us the download bandwidth).
- *   - If we only have local bytes (fileRef.url is internal, or future
- *     Synapse `files:`/local paths): download via the safe helper +
- *     base64-inline upload.
+ * Resolve a media plan item to a QQ `file_info` token.
  *
- * Cache hits (same content twice within the file_info TTL) skip the
- * upload altogether (see upload-cache.ts).
- *
- * Stage 5 doesn't yet wire local-file paths — `fileRef.url` is the
- * only path tested in v1. Buffers will land when Synapse `files`
- * service integration matures (see plan OQ3).
+ * The bytes live in our content-addressed store (`fileRef.sha256`). QQ's CDN
+ * cannot pull our internal CAS, so we always read the bytes locally and upload
+ * them inline. Cache hits (same content within the file_info TTL) skip the
+ * upload (see upload-cache.ts).
  */
 async function resolveFileInfo(params: {
   account: OutboundSendInput["account"]
@@ -799,11 +793,11 @@ async function resolveFileInfo(params: {
   plan: Extract<QqSendPlanItem, { kind: "media" }>
 }): Promise<string> {
   const { fileRef, fileType } = params.plan
-  if (!fileRef.url) {
-    throw new PermanentTransportError(
-      "qq: media fileRef has no url (local-buffer path not yet wired)",
-      { code: "qq_media_no_url" }
-    )
+  const sha256 = fileRef.sha256?.trim()
+  if (!sha256) {
+    throw new PermanentTransportError("qq: media fileRef has no sha256", {
+      code: "qq_media_no_sha256",
+    })
   }
   const scope = params.endpoint.endpointType === "direct" ? "c2c" : "group"
   const targetId =
@@ -816,37 +810,15 @@ async function resolveFileInfo(params: {
       { code: "qq_invalid_endpoint" }
     )
   }
-
-  // Prefer URL pass-through: the QQ CDN will pull from the source
-  // directly without us downloading anything.
-  try {
-    const result = await uploadQqMedia({
-      account: params.account,
-      scope,
-      targetId,
-      fileType,
-      source: { url: fileRef.url, mime: fileRef.mime },
-    })
-    return result.fileInfo
-  } catch (err) {
-    // If the platform refused to pull from this URL (e.g. private CDN
-    // we serve internally), download via the safe helper and retry
-    // with inline bytes. Only do this for known retryable errors so we
-    // don't spend two upload slots on a permanent failure.
-    if (!(err instanceof RetryableTransportError)) throw err
-    const buffer = await downloadForQqUpload({
-      url: fileRef.url,
-      fileType,
-    })
-    const result = await uploadQqMedia({
-      account: params.account,
-      scope,
-      targetId,
-      fileType,
-      source: { buffer, mime: fileRef.mime },
-    })
-    return result.fileInfo
-  }
+  const buffer = await readCasBlob(sha256)
+  const result = await uploadQqMedia({
+    account: params.account,
+    scope,
+    targetId,
+    fileType,
+    source: { buffer, mime: fileRef.mimeType },
+  })
+  return result.fileInfo
 }
 
 // re-exported for downstream code (Stage 8 keyboard render needs the

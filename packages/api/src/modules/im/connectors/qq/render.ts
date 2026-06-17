@@ -87,7 +87,7 @@ export interface PlanQqSendsOptions {
  * AI emitted.
  *
  * Mentions are flattened to `@name` text by degradation
- * (supportsMention=false in v1); media without fileRef.url/fileId is
+ * (supportsMention=false in v1); media without fileRef.sha256 is
  * dropped silently (canonical-encoding lossy fallback already saved
  * the canonicalParts so a future replay could recover it).
  */
@@ -162,7 +162,7 @@ function mediaPlanForRef(
   fileRef: CanonicalFileRef,
   fileType: QqFileType
 ): QqSendPlanItem | null {
-  if (!fileRef.url && !fileRef.fileId) return null
+  if (!fileRef.sha256) return null
   return {
     kind: "media",
     msgType: QQ_MSG_TYPE.MEDIA,
