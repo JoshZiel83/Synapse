@@ -29,7 +29,6 @@ import type {
   TaskRequestKind,
   Timestamp,
 } from "@synapse/shared/types"
-import { parseJsonObject } from "@synapse/shared"
 import {
   parseRuntimeAuthorizationGrantOptions,
   parseRuntimeAuthorizationPresets,
@@ -273,24 +272,24 @@ function parseOptionalRuntimeAuthorizationPresets(
 export function decodeTaskPromptPayload(row: {
   prompt_payload: unknown
 }): Record<string, unknown> {
-  return parseJsonObject(row.prompt_payload)
+  return requireJsonObject(row.prompt_payload, "Task prompt_payload")
 }
 
 export function decodeTaskResolutionPayload(row: {
   resolution_payload: unknown
 }): Record<string, unknown> {
-  return parseJsonObject(row.resolution_payload)
+  return requireJsonObject(row.resolution_payload, "Task resolution_payload")
 }
 
 export function decodeActionTokenPayload(row: {
   token?: string
   payload: unknown
 }): ActionTokenPayload {
+  const label = row.token ? `Action token ${row.token}` : "Action token"
   const parsed = ActionTokenPayloadSchema.safeParse(
-    parseJsonObject(row.payload)
+    requireJsonObject(row.payload, `${label} payload`)
   )
   if (!parsed.success) {
-    const label = row.token ? `Action token ${row.token}` : "Action token"
     throw new Error(`${label} payload is invalid`)
   }
   return parsed.data

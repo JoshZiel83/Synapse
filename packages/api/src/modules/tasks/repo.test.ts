@@ -216,12 +216,21 @@ test("decodeTaskResolutionPayload accepts object payloads without shape loss", (
   assert.deepEqual(payload.answers, [{ questionId: "q1", text: "ok" }])
 })
 
-test("decodeTaskResolutionPayload normalizes non-object JSON to an empty object", () => {
-  assert.deepEqual(
-    decodeTaskResolutionPayload({
-      resolution_payload: JSON.stringify(["not", "an", "object"]),
-    }),
-    {}
+test("task payload decoders reject non-object JSON at repo exit", () => {
+  assert.throws(
+    () =>
+      decodeTaskPromptPayload({
+        prompt_payload: "[malformed",
+      }),
+    /Task prompt_payload must be a valid JSON object/
+  )
+
+  assert.throws(
+    () =>
+      decodeTaskResolutionPayload({
+        resolution_payload: JSON.stringify(["not", "an", "object"]),
+      }),
+    /Task resolution_payload must be a JSON object/
   )
 })
 
@@ -244,6 +253,15 @@ test("decodeActionTokenPayload validates task action token business payloads", (
   assert.throws(
     () => decodeActionTokenPayload({ token: "token-1", payload: "{}" }),
     /Action token token-1 payload is invalid/
+  )
+
+  assert.throws(
+    () =>
+      decodeActionTokenPayload({
+        token: "token-1",
+        payload: JSON.stringify(["not", "an", "object"]),
+      }),
+    /Action token token-1 payload must be a JSON object/
   )
 })
 
