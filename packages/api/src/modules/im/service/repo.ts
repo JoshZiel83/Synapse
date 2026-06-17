@@ -603,6 +603,7 @@ export async function listTransportExternalUsers(params: {
     .groupBy([
       "ta.id",
       "account.displayName",
+      "linked_wm.id",
       "linked_user.id",
       "linked_user.name",
       "activity.lastSeenAt",
