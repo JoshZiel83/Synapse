@@ -10,12 +10,18 @@ const actorDocShape = {
   priority: z.number(),
 }
 
+// Actor-doc ids are stable string identifiers, NOT necessarily UUIDs: seeded
+// official-template docs use slug-based ids (e.g. "<slug>:identity-card") and
+// normalizeActorDocs preserves any non-empty string id, only minting a UUID
+// when one is absent. Modeling id as z.uuid() rejected those real docs and
+// 400'd every actor-definition-serving endpoint (workspace create, org actor
+// views/versions/snapshots). The id is an opaque identifier here, not a UUID.
 export const ActorDocSchema = z.object({
-  id: z.uuid(),
+  id: z.string().min(1),
   ...actorDocShape,
 })
 
 export const ActorDocInputSchema = z.object({
-  id: z.uuid().optional(),
+  id: z.string().min(1).optional(),
   ...actorDocShape,
 })

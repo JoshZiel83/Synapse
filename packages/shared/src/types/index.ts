@@ -322,7 +322,9 @@ export type CoreActorDocKey =
 export type ActorDocKey = CoreActorDocKey | "custom"
 
 export interface ActorDoc {
-  id: UUID
+  // Stable string identifier, not necessarily a UUID: seeded official-template
+  // docs use slug-based ids (e.g. "<slug>:identity-card"). See ActorDocSchema.
+  id: string
   key: ActorDocKey
   title: string
   content: CanonicalContentBlock[]
@@ -331,7 +333,7 @@ export interface ActorDoc {
 }
 
 export type ActorDocInput = Omit<ActorDoc, "id" | "content"> & {
-  id?: UUID
+  id?: string
   content: CanonicalContentBlockInput[]
 }
 
