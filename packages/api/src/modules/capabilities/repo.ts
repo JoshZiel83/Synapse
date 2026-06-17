@@ -17,10 +17,13 @@ import { db, type Executor } from "../../infrastructure/database/kysely.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
 import { upsertAccessSubjectDefault } from "../access/guards.js"
 
+// camelCase row shape: CamelCasePlugin.transformResult runs unconditionally on
+// raw `sql` results too, so the SELECT aliases the snake_case columns to
+// double-quoted camelCase identifiers and the consumers read camelCase keys.
 export type WorkspaceCapabilityConversationTypePolicyRow = {
-  workspace_id: string
-  resource_family: CapabilityConversationTypePolicyResourceFamily
-  default_conversation_type_mask: number
+  workspaceId: string
+  resourceFamily: CapabilityConversationTypePolicyResourceFamily
+  defaultConversationTypeMask: number
 }
 
 /** All policy rows for one workspace (ordered by resource_family). */
@@ -29,9 +32,9 @@ export async function selectWorkspacePolicyRows(
 ): Promise<WorkspaceCapabilityConversationTypePolicyRow[]> {
   const result = await sql<WorkspaceCapabilityConversationTypePolicyRow>`
     SELECT
-      subj.workspace_id,
-      policy.resource_family,
-      policy.default_conversation_type_mask
+      subj.workspace_id AS "workspaceId",
+      policy.resource_family AS "resourceFamily",
+      policy.default_conversation_type_mask AS "defaultConversationTypeMask"
     FROM workspace_capability_conversation_type_policies policy
     INNER JOIN access_subjects subj ON subj.id = policy.subject_id
     WHERE subj.workspace_id = ${workspaceId}
@@ -46,9 +49,9 @@ export async function selectWorkspacePolicyRowsForIds(
 ): Promise<WorkspaceCapabilityConversationTypePolicyRow[]> {
   const result = await sql<WorkspaceCapabilityConversationTypePolicyRow>`
     SELECT
-      subj.workspace_id,
-      policy.resource_family,
-      policy.default_conversation_type_mask
+      subj.workspace_id AS "workspaceId",
+      policy.resource_family AS "resourceFamily",
+      policy.default_conversation_type_mask AS "defaultConversationTypeMask"
     FROM workspace_capability_conversation_type_policies policy
     INNER JOIN access_subjects subj ON subj.id = policy.subject_id
     WHERE subj.workspace_id = ANY(${workspaceIds}::uuid[])

@@ -27,7 +27,7 @@ function presentWorkspacePolicy(
     workspaceId,
     resourceFamily,
     defaultConversationTypeMask: normalizeConversationTypeMask(
-      row?.default_conversation_type_mask,
+      row?.defaultConversationTypeMask,
       DEFAULT_CONVERSATION_TYPE_MASK
     ),
   }
@@ -38,7 +38,7 @@ function buildWorkspacePoliciesView(
   rows: WorkspaceCapabilityConversationTypePolicyRow[]
 ): WorkspaceCapabilityConversationTypePoliciesView {
   const rowsByFamily = new Map(
-    rows.map((row) => [row.resource_family, row] as const)
+    rows.map((row) => [row.resourceFamily, row] as const)
   )
   return {
     workspaceId,
@@ -115,10 +115,10 @@ export async function getWorkspaceCapabilityConversationTypePolicyMap(
   }
 
   for (const row of rows) {
-    const current = map.get(row.workspace_id)
+    const current = map.get(row.workspaceId)
     if (!current) continue
-    current[row.resource_family] = normalizeConversationTypeMask(
-      row.default_conversation_type_mask,
+    current[row.resourceFamily] = normalizeConversationTypeMask(
+      row.defaultConversationTypeMask,
       DEFAULT_CONVERSATION_TYPE_MASK
     )
   }
