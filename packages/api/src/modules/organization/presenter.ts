@@ -38,7 +38,7 @@ import type {
 } from "./repo.types.js"
 
 function mapCatalogSourceKind(
-  sourceKind: ActorPackageRow["package_source_kind"]
+  sourceKind: ActorPackageRow["packageSourceKind"]
 ): MarketplaceSourceType {
   switch (sourceKind) {
     case "builtin":
@@ -53,17 +53,17 @@ function mapCatalogSourceKind(
 }
 
 function buildActorPackageDefinition(row: ActorPackageRow): ActorDefinition {
-  const docs = normalizeActorDocInputs(row.actor_docs)
+  const docs = normalizeActorDocInputs(row.actorDocs)
   return {
-    displayName: row.actor_display_name,
-    role: row.actor_role,
-    title: row.actor_title,
-    avatarFileId: row.actor_avatar_file_id || undefined,
-    avatarEmoji: row.actor_avatar_emoji || undefined,
-    canRepresentUser: Boolean(row.actor_can_represent_user),
+    displayName: row.actorDisplayName,
+    role: row.actorRole,
+    title: row.actorTitle,
+    avatarFileId: row.actorAvatarFileId || undefined,
+    avatarEmoji: row.actorAvatarEmoji || undefined,
+    canRepresentUser: Boolean(row.actorCanRepresentUser),
     docs,
-    specialties: sanitizeSpecialties(row.actor_specialties || []),
-    config: row.actor_config,
+    specialties: sanitizeSpecialties(row.actorSpecialties || []),
+    config: row.actorConfig,
   }
 }
 
@@ -71,15 +71,15 @@ function buildActorPackagePublisher(
   row: ActorPackageRow
 ): MarketplacePublisher {
   return {
-    id: row.publisher_id,
-    slug: row.publisher_slug,
-    displayName: row.publisher_display_name,
-    description: row.publisher_description,
-    isBuiltin: Boolean(row.publisher_is_builtin),
-    isVerified: Boolean(row.publisher_is_verified),
-    ownerUserId: row.publisher_owner_user_id || undefined,
-    createdAt: serializeInstant(row.publisher_created_at),
-    updatedAt: serializeInstant(row.publisher_updated_at),
+    id: row.publisherId,
+    slug: row.publisherSlug,
+    displayName: row.publisherDisplayName,
+    description: row.publisherDescription,
+    isBuiltin: Boolean(row.publisherIsBuiltin),
+    isVerified: Boolean(row.publisherIsVerified),
+    ownerUserId: row.publisherOwnerUserId || undefined,
+    createdAt: serializeInstant(row.publisherCreatedAt),
+    updatedAt: serializeInstant(row.publisherUpdatedAt),
   }
 }
 
@@ -87,7 +87,7 @@ function buildActorPackageRevision(
   row: ActorPackageRow,
   actor: ActorDefinition
 ): MarketplaceVersion {
-  const versionMetadata = row.version_metadata
+  const versionMetadata = row.versionMetadata
   const setupGuide = normalizeCanonicalContentBlocks(
     readDecodedArray(versionMetadata.setupGuide)
   )
@@ -96,10 +96,10 @@ function buildActorPackageRevision(
   )
 
   return {
-    id: row.version_id,
-    packageId: row.package_id,
-    version: row.version_value,
-    status: row.version_status,
+    id: row.versionId,
+    packageId: row.packageId,
+    version: row.versionValue,
+    status: row.versionStatus,
     manifest: {
       kind: MARKETPLACE_ITEM_KIND.ACTOR,
       actorPackage: {
@@ -116,8 +116,8 @@ function buildActorPackageRevision(
     setupSteps: [],
     authBindings: [],
     metadata: versionMetadata,
-    createdByUserId: row.version_created_by_user_id || undefined,
-    createdAt: serializeInstant(row.version_created_at),
+    createdByUserId: row.versionCreatedByUserId || undefined,
+    createdAt: serializeInstant(row.versionCreatedAt),
     assets: [],
   }
 }
@@ -127,40 +127,39 @@ export function presentActorPackageRecord(
 ): ActorPackageRecord {
   const actor = buildActorPackageDefinition(row)
   const packageDescription =
-    row.package_summary ||
-    summarizeActorForRole(actor.docs, row.actor_title) ||
-    `${row.package_display_name} actor`
+    row.packageSummary ||
+    summarizeActorForRole(actor.docs, row.actorTitle) ||
+    `${row.packageDisplayName} actor`
   const longDescription =
-    row.package_long_description ||
+    row.packageLongDescription ||
     summarizeActorForPrompt(actor.docs) ||
     packageDescription
   const latestRevision = buildActorPackageRevision(row, actor)
   const publisher = buildActorPackagePublisher(row)
   const marketplaceItem: MarketplaceItem = {
-    id: row.package_id,
-    publisherId: row.publisher_id,
-    workspaceId: row.package_workspace_id || undefined,
+    id: row.packageId,
+    publisherId: row.publisherId,
+    workspaceId: row.packageWorkspaceId || undefined,
     kind: MARKETPLACE_ITEM_KIND.ACTOR,
-    slug: row.package_slug,
-    displayName: row.package_display_name,
-    iconUrl: row.package_icon_file_id
-      ? getFileUrlById(row.package_icon_file_id)
+    slug: row.packageSlug,
+    displayName: row.packageDisplayName,
+    iconUrl: row.packageIconFileId
+      ? getFileUrlById(row.packageIconFileId)
       : undefined,
     description: packageDescription,
     longDescription,
-    sourceType: mapCatalogSourceKind(row.package_source_kind),
-    tags: row.package_tags || [],
-    isActive: Boolean(row.package_is_active),
+    sourceType: mapCatalogSourceKind(row.packageSourceKind),
+    tags: row.packageTags || [],
+    isActive: Boolean(row.packageIsActive),
     isBuiltin:
-      row.package_source_kind === "builtin" ||
-      Boolean(row.publisher_is_builtin),
-    downloadCount: row.package_download_count,
-    latestRevisionId: row.version_id,
+      row.packageSourceKind === "builtin" || Boolean(row.publisherIsBuiltin),
+    downloadCount: row.packageDownloadCount,
+    latestRevisionId: row.versionId,
     defaultReuseScope: "workspace",
     requiresHandshake: false,
-    metadata: row.package_metadata,
-    createdAt: serializeInstant(row.package_created_at),
-    updatedAt: serializeInstant(row.package_updated_at),
+    metadata: row.packageMetadata,
+    createdAt: serializeInstant(row.packageCreatedAt),
+    updatedAt: serializeInstant(row.packageUpdatedAt),
     publisher,
     latestRevision,
   }
@@ -170,10 +169,10 @@ export function presentActorPackageRecord(
     manifest: {
       actor,
       setupGuide: normalizeCanonicalContentBlocks(
-        readDecodedArray(row.version_metadata.setupGuide)
+        readDecodedArray(row.versionMetadata.setupGuide)
       ),
       releaseNotes: normalizeCanonicalContentBlocks(
-        readDecodedArray(row.version_metadata.releaseNotes)
+        readDecodedArray(row.versionMetadata.releaseNotes)
       ),
     },
     dependencies: [],
@@ -184,18 +183,18 @@ export function presentActorPackageRecord(
 function buildActorSourceLink(
   row: ActorRow
 ): ActorPackageSourceLink | undefined {
-  if (!row.source_catalog_item_id) return undefined
+  if (!row.sourceCatalogItemId) return undefined
 
-  const baselineActorVersion = row.source_baseline_actor_version || 1
-  const hasLocalChanges = row.current_version > baselineActorVersion
+  const baselineActorVersion = row.sourceBaselineActorVersion || 1
+  const hasLocalChanges = row.currentVersion > baselineActorVersion
   const hasUpstreamUpdate =
-    Boolean(row.source_latest_version_id) &&
-    row.source_catalog_version_id !== row.source_latest_version_id
+    Boolean(row.sourceLatestVersionId) &&
+    row.sourceCatalogVersionId !== row.sourceLatestVersionId
 
   let status: ActorPackageSourceLink["status"] =
     ACTOR_PACKAGE_LINK_STATUS.UP_TO_DATE
   if (
-    (row.source_sync_mode || ACTOR_PACKAGE_SYNC_MODE.NOTIFY) ===
+    (row.sourceSyncMode || ACTOR_PACKAGE_SYNC_MODE.NOTIFY) ===
     MARKETPLACE_SYNC_MODE.DETACHED
   ) {
     status = ACTOR_PACKAGE_LINK_STATUS.DETACHED
@@ -209,57 +208,57 @@ function buildActorSourceLink(
 
   return {
     actorId: row.id,
-    packageId: row.source_catalog_item_id,
+    packageId: row.sourceCatalogItemId,
     importedRevisionId:
-      row.source_catalog_version_id ||
-      row.source_latest_version_id ||
-      row.source_catalog_item_id,
-    packageSlug: row.source_slug || row.source_catalog_item_id,
-    packageDisplayName: row.source_display_name || "Unknown package",
-    packagePublisherSlug: row.source_publisher_slug || undefined,
-    packagePublisherDisplayName: row.source_publisher_display_name || undefined,
-    importedVersion: row.source_imported_version || undefined,
-    latestRevisionId: row.source_latest_version_id || undefined,
-    latestVersion: row.source_latest_version || undefined,
+      row.sourceCatalogVersionId ||
+      row.sourceLatestVersionId ||
+      row.sourceCatalogItemId,
+    packageSlug: row.sourceSlug || row.sourceCatalogItemId,
+    packageDisplayName: row.sourceDisplayName || "Unknown package",
+    packagePublisherSlug: row.sourcePublisherSlug || undefined,
+    packagePublisherDisplayName: row.sourcePublisherDisplayName || undefined,
+    importedVersion: row.sourceImportedVersion || undefined,
+    latestRevisionId: row.sourceLatestVersionId || undefined,
+    latestVersion: row.sourceLatestVersion || undefined,
     baselineActorVersion,
     syncMode:
-      row.source_sync_mode === ACTOR_PACKAGE_SYNC_MODE.MANUAL_MERGE
+      row.sourceSyncMode === ACTOR_PACKAGE_SYNC_MODE.MANUAL_MERGE
         ? ACTOR_PACKAGE_SYNC_MODE.MANUAL_MERGE
         : ACTOR_PACKAGE_SYNC_MODE.NOTIFY,
     hasLocalChanges,
     hasUpstreamUpdate,
     status,
     createdAt:
-      serializeOptionalInstant(row.source_created_at) ||
-      serializeInstant(row.created_at),
+      serializeOptionalInstant(row.sourceCreatedAt) ||
+      serializeInstant(row.createdAt),
     updatedAt:
-      serializeOptionalInstant(row.source_updated_at) ||
-      serializeInstant(row.updated_at),
+      serializeOptionalInstant(row.sourceUpdatedAt) ||
+      serializeInstant(row.updatedAt),
   }
 }
 
 function buildActorDefinition(
   row: {
-    display_name?: string
+    displayName?: string
     role: ActorRole
     title: string
-    avatar_file_id?: string | null
-    avatar_emoji?: string | null
-    parent_id: string | null
-    can_represent_user: boolean
+    avatarFileId?: string | null
+    avatarEmoji?: string | null
+    parentId: string | null
+    canRepresentUser: boolean
     specialties: string[] | null
     config: Record<string, unknown>
   },
   docs: ActorDoc[]
 ): ActorDefinition {
   return {
-    displayName: row.display_name || "",
+    displayName: row.displayName || "",
     role: row.role,
     title: row.title,
-    avatarFileId: row.avatar_file_id || undefined,
-    avatarEmoji: row.avatar_emoji || undefined,
-    parentId: row.parent_id || undefined,
-    canRepresentUser: Boolean(row.can_represent_user),
+    avatarFileId: row.avatarFileId || undefined,
+    avatarEmoji: row.avatarEmoji || undefined,
+    parentId: row.parentId || undefined,
+    canRepresentUser: Boolean(row.canRepresentUser),
     docs: sortDocs(docs),
     specialties: sanitizeSpecialties(row.specialties || []),
     config: row.config,
@@ -269,42 +268,40 @@ function buildActorDefinition(
 function buildActorVersionSourceFromRow(
   row: Pick<
     ActorVersionRow,
-    | "source_type"
-    | "source_workspace_member_id"
-    | "source_actor_id"
-    | "source_session_id"
-    | "source_turn_id"
-    | "source_conversation_id"
-    | "source_reason"
+    | "sourceType"
+    | "sourceWorkspaceMemberId"
+    | "sourceActorId"
+    | "sourceSessionId"
+    | "sourceTurnId"
+    | "sourceConversationId"
+    | "sourceReason"
   >
 ): ActorVersionSource {
   return {
-    type: row.source_type,
-    workspaceMemberId: row.source_workspace_member_id || undefined,
-    actorId: row.source_actor_id || undefined,
-    sessionId: row.source_session_id || undefined,
-    turnId: row.source_turn_id || undefined,
-    conversationId: row.source_conversation_id || undefined,
-    reason: row.source_reason || undefined,
+    type: row.sourceType,
+    workspaceMemberId: row.sourceWorkspaceMemberId || undefined,
+    actorId: row.sourceActorId || undefined,
+    sessionId: row.sourceSessionId || undefined,
+    turnId: row.sourceTurnId || undefined,
+    conversationId: row.sourceConversationId || undefined,
+    reason: row.sourceReason || undefined,
   }
 }
 
 export function presentActorRow(row: ActorRow, docs: ActorDoc[]): Actor {
   return {
     id: row.id,
-    workspaceId: row.workspace_id,
-    displayName: row.display_name,
-    packageId: row.source_catalog_item_id || undefined,
+    workspaceId: row.workspaceId,
+    displayName: row.displayName,
+    packageId: row.sourceCatalogItemId || undefined,
     definition: buildActorDefinition(row, docs),
-    avatarUrl: row.avatar_file_id
-      ? getFileUrlById(row.avatar_file_id)
-      : undefined,
-    currentVersion: row.current_version,
+    avatarUrl: row.avatarFileId ? getFileUrlById(row.avatarFileId) : undefined,
+    currentVersion: row.currentVersion,
     sourceLink: buildActorSourceLink(row),
-    isActive: Boolean(row.is_active),
-    isPublicShared: Boolean(row.is_public_shared),
-    createdAt: serializeInstant(row.created_at),
-    updatedAt: serializeInstant(row.updated_at),
+    isActive: Boolean(row.isActive),
+    isPublicShared: Boolean(row.isPublicShared),
+    createdAt: serializeInstant(row.createdAt),
+    updatedAt: serializeInstant(row.updatedAt),
   }
 }
 
@@ -314,13 +311,13 @@ export function presentActorVersionRow(
 ): ActorVersion {
   return {
     id: row.id,
-    actorId: row.actor_id,
+    actorId: row.actorId,
     version: row.version,
-    previousVersionId: row.previous_version_id || undefined,
+    previousVersionId: row.previousVersionId || undefined,
     snapshot: buildActorDefinition(row, docs),
-    delta: row.version_delta || undefined,
-    createdByWorkspaceMemberId: row.created_by_workspace_member_id || undefined,
+    delta: row.versionDelta || undefined,
+    createdByWorkspaceMemberId: row.createdByWorkspaceMemberId || undefined,
     source: buildActorVersionSourceFromRow(row),
-    createdAt: serializeInstant(row.created_at),
+    createdAt: serializeInstant(row.createdAt),
   }
 }

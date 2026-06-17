@@ -14,10 +14,13 @@
 // db client never leaks into the service; the service passes in already-computed
 // inputs (deltas, normalized docs, etc.).
 //
-// Rows are returned raw (snake_case, Date objects preserved) because raw SQL via
-// CompiledQuery.raw bypasses Kysely's CamelCasePlugin. The presenter owns the
-// snake→camel + serializeInstant mapping; this file never serializes Dates.
-// round-6 P1-6.
+// Rows are returned raw (camelCase keys, Date objects preserved). Raw SQL via
+// CompiledQuery.raw bypasses CamelCasePlugin's *query* transform, but Kysely
+// still runs its *result* transform unconditionally, so top-level result keys
+// arrive camelCase (convention A). Renamed/computed columns are aliased to
+// double-quoted camelCase identifiers so they round-trip; plain physical
+// columns map cleanly on their own. The presenter owns serializeInstant
+// (Date→IsoInstantString); this file never serializes Dates. round-6 P1-6.
 
 import type pg from "pg"
 import { CompiledQuery } from "kysely"
@@ -63,12 +66,12 @@ export type QueryRunner = <T extends QueryRow>(
 
 type ActorDocRow = {
   id: string
-  actor_version_id: string
-  doc_key: ActorDoc["key"]
+  actorVersionId: string
+  docKey: ActorDoc["key"]
   title: string
   visibility: ActorDoc["visibility"]
   priority: number
-  content_blocks: unknown
+  contentBlocks: unknown
 }
 
 /** A normalized actor-doc input ready to be persisted as an actor_version_doc. */
@@ -94,24 +97,24 @@ const ACTOR_SELECT = `
     a.specialties,
     a.config,
     a.current_version,
-    (app.status = 'active') AS is_active,
+    (app.status = 'active') AS "isActive",
     a.is_public_shared,
     a.created_at,
     a.updated_at,
-    current_version.id AS current_actor_version_id,
+    current_version.id AS "currentActorVersionId",
     source_ref.source_catalog_item_id,
     source_ref.source_catalog_version_id,
-    source_ref.sync_mode AS source_sync_mode,
-    source_ref.baseline_actor_version AS source_baseline_actor_version,
-    source_ref.created_at AS source_created_at,
-    source_ref.updated_at AS source_updated_at,
-    source_item.slug AS source_slug,
-    source_item.display_name AS source_display_name,
-    source_item.latest_version_id AS source_latest_version_id,
-    source_publisher.slug AS source_publisher_slug,
-    source_publisher.display_name AS source_publisher_display_name,
-    imported_version.version AS source_imported_version,
-    latest_version.version AS source_latest_version
+    source_ref.sync_mode AS "sourceSyncMode",
+    source_ref.baseline_actor_version AS "sourceBaselineActorVersion",
+    source_ref.created_at AS "sourceCreatedAt",
+    source_ref.updated_at AS "sourceUpdatedAt",
+    source_item.slug AS "sourceSlug",
+    source_item.display_name AS "sourceDisplayName",
+    source_item.latest_version_id AS "sourceLatestVersionId",
+    source_publisher.slug AS "sourcePublisherSlug",
+    source_publisher.display_name AS "sourcePublisherDisplayName",
+    imported_version.version AS "sourceImportedVersion",
+    latest_version.version AS "sourceLatestVersion"
   FROM actors a
   JOIN workspace_apps_live app
     ON app.id = a.id
@@ -132,48 +135,48 @@ const ACTOR_SELECT = `
 
 const ACTOR_PACKAGE_SELECT = `
   SELECT
-    item.id AS package_id,
-    item.workspace_id AS package_workspace_id,
-    item.slug AS package_slug,
-    item.display_name AS package_display_name,
-    item.icon_file_id AS package_icon_file_id,
-    item.summary AS package_summary,
-    item.long_description AS package_long_description,
-    item.source_kind AS package_source_kind,
-    item.visibility AS package_visibility,
-    item.tags AS package_tags,
-    item.download_count AS package_download_count,
-    item.is_active AS package_is_active,
-    item.metadata AS package_metadata,
-    item.created_at AS package_created_at,
-    item.updated_at AS package_updated_at,
-    publisher.id AS publisher_id,
-    publisher.slug AS publisher_slug,
-    publisher.display_name AS publisher_display_name,
-    publisher.description AS publisher_description,
-    publisher.owner_user_id AS publisher_owner_user_id,
-    publisher.workspace_id AS publisher_workspace_id,
-    publisher.is_builtin AS publisher_is_builtin,
-    publisher.is_verified AS publisher_is_verified,
-    publisher.created_at AS publisher_created_at,
-    publisher.updated_at AS publisher_updated_at,
-    version.id AS version_id,
-    version.version AS version_value,
-    version.status AS version_status,
-    version.changelog AS version_changelog,
-    version.metadata AS version_metadata,
-    version.created_by_user_id AS version_created_by_user_id,
-    version.created_at AS version_created_at,
-    spec.role AS actor_role,
-    spec.display_name AS actor_display_name,
-    spec.avatar_file_id AS actor_avatar_file_id,
-    spec.avatar_emoji AS actor_avatar_emoji,
-    spec.title AS actor_title,
-    spec.can_represent_user AS actor_can_represent_user,
-    spec.docs AS actor_docs,
-    spec.specialties AS actor_specialties,
-    spec.config AS actor_config,
-    spec.metadata AS actor_metadata
+    item.id AS "packageId",
+    item.workspace_id AS "packageWorkspaceId",
+    item.slug AS "packageSlug",
+    item.display_name AS "packageDisplayName",
+    item.icon_file_id AS "packageIconFileId",
+    item.summary AS "packageSummary",
+    item.long_description AS "packageLongDescription",
+    item.source_kind AS "packageSourceKind",
+    item.visibility AS "packageVisibility",
+    item.tags AS "packageTags",
+    item.download_count AS "packageDownloadCount",
+    item.is_active AS "packageIsActive",
+    item.metadata AS "packageMetadata",
+    item.created_at AS "packageCreatedAt",
+    item.updated_at AS "packageUpdatedAt",
+    publisher.id AS "publisherId",
+    publisher.slug AS "publisherSlug",
+    publisher.display_name AS "publisherDisplayName",
+    publisher.description AS "publisherDescription",
+    publisher.owner_user_id AS "publisherOwnerUserId",
+    publisher.workspace_id AS "publisherWorkspaceId",
+    publisher.is_builtin AS "publisherIsBuiltin",
+    publisher.is_verified AS "publisherIsVerified",
+    publisher.created_at AS "publisherCreatedAt",
+    publisher.updated_at AS "publisherUpdatedAt",
+    version.id AS "versionId",
+    version.version AS "versionValue",
+    version.status AS "versionStatus",
+    version.changelog AS "versionChangelog",
+    version.metadata AS "versionMetadata",
+    version.created_by_user_id AS "versionCreatedByUserId",
+    version.created_at AS "versionCreatedAt",
+    spec.role AS "actorRole",
+    spec.display_name AS "actorDisplayName",
+    spec.avatar_file_id AS "actorAvatarFileId",
+    spec.avatar_emoji AS "actorAvatarEmoji",
+    spec.title AS "actorTitle",
+    spec.can_represent_user AS "actorCanRepresentUser",
+    spec.docs AS "actorDocs",
+    spec.specialties AS "actorSpecialties",
+    spec.config AS "actorConfig",
+    spec.metadata AS "actorMetadata"
   FROM catalog_items item
   JOIN publishers publisher ON publisher.id = item.publisher_id
   JOIN catalog_versions version ON version.id = item.latest_version_id
@@ -269,7 +272,7 @@ export function normalizeActorVersionRow<T extends ActorVersionRow>(row: T): T {
   const normalized = {
     ...row,
     config: parseRepoJsonObject(row.config, "actor version config"),
-    version_delta: parseActorVersionDelta(row.version_delta),
+    versionDelta: parseActorVersionDelta(row.versionDelta),
   }
   return normalized
 }
@@ -277,20 +280,20 @@ export function normalizeActorVersionRow<T extends ActorVersionRow>(row: T): T {
 export function normalizeActorPackageRow<T extends ActorPackageRow>(row: T): T {
   const normalized = {
     ...row,
-    package_metadata: parseRepoJsonObject(
-      row.package_metadata,
+    packageMetadata: parseRepoJsonObject(
+      row.packageMetadata,
       "actor package metadata"
     ),
-    version_metadata: parseRepoJsonObject(
-      row.version_metadata,
+    versionMetadata: parseRepoJsonObject(
+      row.versionMetadata,
       "actor package version metadata"
     ),
-    actor_config: parseRepoJsonObject(
-      row.actor_config,
+    actorConfig: parseRepoJsonObject(
+      row.actorConfig,
       "actor package actor config"
     ),
-    actor_metadata: parseRepoJsonObject(
-      row.actor_metadata,
+    actorMetadata: parseRepoJsonObject(
+      row.actorMetadata,
       "actor package actor metadata"
     ),
   }
@@ -307,9 +310,9 @@ export function normalizeActorPackageRow<T extends ActorPackageRow>(row: T): T {
  * (input), but Kysely still runs every plugin's `transformResult` hook on the
  * *result* rows — and CamelCasePlugin.transformResult is unconditional, so it
  * camelCases the top-level keys of raw rows too. Every `*Row` type in this
- * module (and the presenter) is snake_case, so we re-snake the top-level keys
- * here to give callers the snake_case rows they're typed for. Without this,
- * e.g. `row.created_at` reads `undefined` and `serializeInstant` throws.
+ * module (and the presenter) is camelCase (convention A), so the plugin output
+ * is exactly what callers are typed for — no re-keying needed. Renamed/computed
+ * columns alias to double-quoted camelCase in the SELECT so they round-trip.
  */
 function runnerFor(executor: Executor): QueryRunner {
   return async <T extends QueryRow>(text: string, params?: unknown[]) => {
@@ -317,32 +320,13 @@ function runnerFor(executor: Executor): QueryRunner {
       CompiledQuery.raw(text, params ? [...params] : [])
     )
     return {
-      rows: result.rows.map((row) => snakeCaseTopLevelKeys(row) as T),
+      rows: result.rows as T[],
     } satisfies QueryResultLike<T>
   }
 }
 
 async function runQuery<T extends QueryRow>(text: string, params?: unknown[]) {
   return runnerFor(db)<T>(text, params)
-}
-
-/**
- * Convert the TOP-LEVEL keys of a raw result row from camelCase back to
- * snake_case. Only the row's own keys are rewritten; values are passed through
- * untouched, so JSONB objects (e.g. `config`) and Date instances are never
- * recursed into or mutated. Mirrors CamelCasePlugin's
- * `maintainNestedObjectKeys` contract in reverse for the raw-SQL path.
- */
-export function snakeCaseTopLevelKeys(row: QueryRow): QueryRow {
-  const out: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(row)) {
-    out[camelToSnake(key)] = value
-  }
-  return out as QueryRow
-}
-
-function camelToSnake(key: string): string {
-  return key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)
 }
 
 /**
@@ -412,18 +396,18 @@ export async function loadActorDocsMap(
 
   const docsByVersionId = new Map<string, ActorDoc[]>()
   for (const row of result.rows) {
-    const docs = docsByVersionId.get(row.actor_version_id) || []
+    const docs = docsByVersionId.get(row.actorVersionId) || []
     docs.push({
       id: row.id,
-      key: row.doc_key,
+      key: row.docKey,
       title: row.title,
       visibility: row.visibility,
       priority: row.priority,
       content: normalizeCanonicalContentBlocks(
-        parseActorDocContentBlocks(row.content_blocks)
+        parseActorDocContentBlocks(row.contentBlocks)
       ),
     })
-    docsByVersionId.set(row.actor_version_id, docs)
+    docsByVersionId.set(row.actorVersionId, docs)
   }
 
   for (const [versionId, docs] of docsByVersionId.entries()) {

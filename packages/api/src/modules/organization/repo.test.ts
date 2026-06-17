@@ -6,7 +6,6 @@ import {
   normalizeActorRow,
   normalizeActorVersionRow,
   parseActorDocContentBlocks,
-  snakeCaseTopLevelKeys,
 } from "./repo.js"
 import {
   presentActorPackageRecord,
@@ -29,35 +28,35 @@ const versionId = "00000000-0000-4000-8000-000000000005"
 function actorRow(overrides: Partial<ActorRow> = {}): ActorRow {
   return {
     id: actorId,
-    workspace_id: workspaceId,
-    display_name: "Planner",
+    workspaceId: workspaceId,
+    displayName: "Planner",
     role: "assistant",
     title: "Project planner",
-    avatar_file_id: null,
-    avatar_emoji: null,
-    parent_id: null,
-    can_represent_user: false,
+    avatarFileId: null,
+    avatarEmoji: null,
+    parentId: null,
+    canRepresentUser: false,
     specialties: ["planning"],
     config: {},
-    current_version: 1,
-    is_active: true,
-    is_public_shared: false,
-    created_at: now,
-    updated_at: now,
-    current_actor_version_id: versionId,
-    source_catalog_item_id: null,
-    source_catalog_version_id: null,
-    source_sync_mode: null,
-    source_baseline_actor_version: null,
-    source_created_at: null,
-    source_updated_at: null,
-    source_slug: null,
-    source_display_name: null,
-    source_latest_version_id: null,
-    source_publisher_slug: null,
-    source_publisher_display_name: null,
-    source_imported_version: null,
-    source_latest_version: null,
+    currentVersion: 1,
+    isActive: true,
+    isPublicShared: false,
+    createdAt: now,
+    updatedAt: now,
+    currentActorVersionId: versionId,
+    sourceCatalogItemId: null,
+    sourceCatalogVersionId: null,
+    sourceSyncMode: null,
+    sourceBaselineActorVersion: null,
+    sourceCreatedAt: null,
+    sourceUpdatedAt: null,
+    sourceSlug: null,
+    sourceDisplayName: null,
+    sourceLatestVersionId: null,
+    sourcePublisherSlug: null,
+    sourcePublisherDisplayName: null,
+    sourceImportedVersion: null,
+    sourceLatestVersion: null,
     ...overrides,
   }
 }
@@ -67,26 +66,26 @@ function actorVersionRow(
 ): ActorVersionRow {
   return {
     id: versionId,
-    actor_id: actorId,
+    actorId: actorId,
     version: 2,
-    previous_version_id: null,
-    display_name: "Planner",
+    previousVersionId: null,
+    displayName: "Planner",
     role: "assistant",
     title: "Project planner",
-    parent_id: null,
-    can_represent_user: false,
+    parentId: null,
+    canRepresentUser: false,
     specialties: ["planning"],
     config: {},
-    version_delta: null,
-    created_by_workspace_member_id: null,
-    source_type: "system",
-    source_workspace_member_id: null,
-    source_actor_id: null,
-    source_session_id: null,
-    source_turn_id: null,
-    source_conversation_id: null,
-    source_reason: null,
-    created_at: now,
+    versionDelta: null,
+    createdByWorkspaceMemberId: null,
+    sourceType: "system",
+    sourceWorkspaceMemberId: null,
+    sourceActorId: null,
+    sourceSessionId: null,
+    sourceTurnId: null,
+    sourceConversationId: null,
+    sourceReason: null,
+    createdAt: now,
     ...overrides,
   }
 }
@@ -95,48 +94,48 @@ function actorPackageRow(
   overrides: Partial<ActorPackageRow> = {}
 ): ActorPackageRow {
   return {
-    package_id: packageId,
-    package_workspace_id: null,
-    package_slug: "planner",
-    package_display_name: "Planner",
-    package_icon_file_id: null,
-    package_summary: "Planner actor",
-    package_long_description: "Planner actor",
-    package_source_kind: "builtin",
-    package_visibility: "public",
-    package_tags: ["planning"],
-    package_download_count: 1,
-    package_is_active: true,
-    package_metadata: {},
-    package_created_at: now,
-    package_updated_at: now,
-    publisher_id: publisherId,
-    publisher_slug: "synapse",
-    publisher_display_name: "Synapse",
-    publisher_description: "Built in packages",
-    publisher_owner_user_id: null,
-    publisher_workspace_id: null,
-    publisher_is_builtin: true,
-    publisher_is_verified: true,
-    publisher_created_at: now,
-    publisher_updated_at: now,
-    version_id: versionId,
-    version_value: "1.0.0",
-    version_status: "active",
-    version_changelog: "",
-    version_metadata: {},
-    version_created_by_user_id: null,
-    version_created_at: now,
-    actor_role: "assistant",
-    actor_display_name: "Planner",
-    actor_avatar_file_id: null,
-    actor_avatar_emoji: null,
-    actor_title: "Project planner",
-    actor_can_represent_user: false,
-    actor_docs: [],
-    actor_specialties: ["planning"],
-    actor_config: {},
-    actor_metadata: {},
+    packageId: packageId,
+    packageWorkspaceId: null,
+    packageSlug: "planner",
+    packageDisplayName: "Planner",
+    packageIconFileId: null,
+    packageSummary: "Planner actor",
+    packageLongDescription: "Planner actor",
+    packageSourceKind: "builtin",
+    packageVisibility: "public",
+    packageTags: ["planning"],
+    packageDownloadCount: 1,
+    packageIsActive: true,
+    packageMetadata: {},
+    packageCreatedAt: now,
+    packageUpdatedAt: now,
+    publisherId: publisherId,
+    publisherSlug: "synapse",
+    publisherDisplayName: "Synapse",
+    publisherDescription: "Built in packages",
+    publisherOwnerUserId: null,
+    publisherWorkspaceId: null,
+    publisherIsBuiltin: true,
+    publisherIsVerified: true,
+    publisherCreatedAt: now,
+    publisherUpdatedAt: now,
+    versionId: versionId,
+    versionValue: "1.0.0",
+    versionStatus: "active",
+    versionChangelog: "",
+    versionMetadata: {},
+    versionCreatedByUserId: null,
+    versionCreatedAt: now,
+    actorRole: "assistant",
+    actorDisplayName: "Planner",
+    actorAvatarFileId: null,
+    actorAvatarEmoji: null,
+    actorTitle: "Project planner",
+    actorCanRepresentUser: false,
+    actorDocs: [],
+    actorSpecialties: ["planning"],
+    actorConfig: {},
+    actorMetadata: {},
     ...overrides,
   }
 }
@@ -196,16 +195,16 @@ test("normalizeActorVersionRow decodes config and delta at repo exit", () => {
       config: JSON.stringify({
         model: "planner-large",
       }) as unknown as ActorVersionRow["config"],
-      version_delta: JSON.stringify(
+      versionDelta: JSON.stringify(
         delta
-      ) as unknown as ActorVersionRow["version_delta"],
+      ) as unknown as ActorVersionRow["versionDelta"],
     })
   )
 
   assert.deepEqual(row.config, {
     model: "planner-large",
   })
-  assert.deepEqual(row.version_delta, delta)
+  assert.deepEqual(row.versionDelta, delta)
 
   const view = presentActorVersionRow(row, [])
   assert.deepEqual(view.snapshot.config, row.config)
@@ -228,24 +227,23 @@ test("normalizeActorVersionRow fails closed on malformed version delta", () => {
   assert.equal(
     normalizeActorVersionRow(
       actorVersionRow({
-        version_delta:
-          "{not json" as unknown as ActorVersionRow["version_delta"],
+        versionDelta: "{not json" as unknown as ActorVersionRow["versionDelta"],
       })
-    ).version_delta,
+    ).versionDelta,
     null
   )
 
   assert.equal(
     normalizeActorVersionRow(
       actorVersionRow({
-        version_delta: JSON.stringify({
+        versionDelta: JSON.stringify({
           fromVersion: 1,
           toVersion: "2",
           changes: "not-an-array",
           summary: [],
-        }) as unknown as ActorVersionRow["version_delta"],
+        }) as unknown as ActorVersionRow["versionDelta"],
       })
-    ).version_delta,
+    ).versionDelta,
     null
   )
 })
@@ -283,45 +281,42 @@ test("parseActorDocContentBlocks fails closed for malformed or non-array JSON", 
 test("normalizeActorPackageRow decodes package JSON fields at repo exit", () => {
   const row = normalizeActorPackageRow(
     actorPackageRow({
-      package_metadata: JSON.stringify({
+      packageMetadata: JSON.stringify({
         featured: true,
-      }) as unknown as ActorPackageRow["package_metadata"],
-      version_metadata: JSON.stringify({
+      }) as unknown as ActorPackageRow["packageMetadata"],
+      versionMetadata: JSON.stringify({
         channel: "stable",
         setupGuide: [],
         releaseNotes: [],
-      }) as unknown as ActorPackageRow["version_metadata"],
-      actor_config: JSON.stringify({
+      }) as unknown as ActorPackageRow["versionMetadata"],
+      actorConfig: JSON.stringify({
         model: "planner-large",
-      }) as unknown as ActorPackageRow["actor_config"],
-      actor_metadata: JSON.stringify({
+      }) as unknown as ActorPackageRow["actorConfig"],
+      actorMetadata: JSON.stringify({
         importedFrom: "seed",
-      }) as unknown as ActorPackageRow["actor_metadata"],
+      }) as unknown as ActorPackageRow["actorMetadata"],
     })
   )
 
-  assert.deepEqual(row.package_metadata, {
+  assert.deepEqual(row.packageMetadata, {
     featured: true,
   })
-  assert.deepEqual(row.version_metadata, {
+  assert.deepEqual(row.versionMetadata, {
     channel: "stable",
     setupGuide: [],
     releaseNotes: [],
   })
-  assert.deepEqual(row.actor_config, {
+  assert.deepEqual(row.actorConfig, {
     model: "planner-large",
   })
-  assert.deepEqual(row.actor_metadata, {
+  assert.deepEqual(row.actorMetadata, {
     importedFrom: "seed",
   })
 
   const record = presentActorPackageRecord(row)
-  assert.deepEqual(record.package.metadata, row.package_metadata)
-  assert.deepEqual(record.manifest.actor.config, row.actor_config)
-  assert.deepEqual(
-    record.package.latestRevision?.metadata,
-    row.version_metadata
-  )
+  assert.deepEqual(record.package.metadata, row.packageMetadata)
+  assert.deepEqual(record.manifest.actor.config, row.actorConfig)
+  assert.deepEqual(record.package.latestRevision?.metadata, row.versionMetadata)
 })
 
 test("normalizeActorPackageRow rejects non-object package JSON drift", () => {
@@ -329,11 +324,11 @@ test("normalizeActorPackageRow rejects non-object package JSON drift", () => {
     () =>
       normalizeActorPackageRow(
         actorPackageRow({
-          package_metadata: JSON.stringify([
+          packageMetadata: JSON.stringify([
             "not",
             "an",
             "object",
-          ]) as unknown as ActorPackageRow["package_metadata"],
+          ]) as unknown as ActorPackageRow["packageMetadata"],
         })
       ),
     /actor package metadata must be a JSON object/
@@ -343,8 +338,8 @@ test("normalizeActorPackageRow rejects non-object package JSON drift", () => {
     () =>
       normalizeActorPackageRow(
         actorPackageRow({
-          version_metadata:
-            "not-json" as unknown as ActorPackageRow["version_metadata"],
+          versionMetadata:
+            "not-json" as unknown as ActorPackageRow["versionMetadata"],
         })
       ),
     /actor package version metadata must be valid JSON/
@@ -354,7 +349,7 @@ test("normalizeActorPackageRow rejects non-object package JSON drift", () => {
     () =>
       normalizeActorPackageRow(
         actorPackageRow({
-          actor_config: "42" as unknown as ActorPackageRow["actor_config"],
+          actorConfig: "42" as unknown as ActorPackageRow["actorConfig"],
         })
       ),
     /actor package actor config must be a JSON object/
@@ -364,47 +359,47 @@ test("normalizeActorPackageRow rejects non-object package JSON drift", () => {
     () =>
       normalizeActorPackageRow(
         actorPackageRow({
-          actor_metadata: JSON.stringify([
+          actorMetadata: JSON.stringify([
             "not",
             "an",
             "object",
-          ]) as unknown as ActorPackageRow["actor_metadata"],
+          ]) as unknown as ActorPackageRow["actorMetadata"],
         })
       ),
     /actor package actor metadata must be a JSON object/
   )
 })
 
-test("snakeCaseTopLevelKeys re-snakes camelCased raw-SQL rows (CamelCasePlugin regression)", () => {
+test("presentActorRow reads camelCase raw-SQL rows directly (convention A)", () => {
   // CamelCasePlugin.transformResult unconditionally camelCases raw
-  // CompiledQuery.raw result rows. The organization repo's *Row types and
-  // presenter read snake_case, so runnerFor re-snakes the top-level keys.
-  // Regression for the GET /workspaces/:id/actors 500 ("Expected a valid Date
-  // when converting to IsoInstantString"): row.created_at was undefined.
-  const camelRow = {
-    id: "a1",
-    workspaceId: "w1",
-    displayName: "Sec",
+  // CompiledQuery.raw result rows, so the organization *Row types and presenter
+  // read camelCase keys directly (no re-snake). Regression for the
+  // GET /workspaces/:id/actors 500 ("Expected a valid Date when converting to
+  // IsoInstantString"): the Date-valued createdAt/updatedAt must arrive under
+  // their camelCase keys and reach serializeInstant intact. Nested JSONB keys
+  // are NOT recursed (maintainNestedObjectKeys), so config keeps snake inner
+  // keys untouched.
+  const camelRow = actorRow({
     createdAt: new Date("2026-01-01T00:00:00.000Z"),
     updatedAt: new Date("2026-01-02T00:00:00.000Z"),
     isPublicShared: true,
-    currentActorVersionId: "v1",
-    config: { is_chief_actor: true, nestedCamel: "keep" },
-  }
+    config: {
+      is_chief_actor: true,
+      nestedCamel: "keep",
+    } as unknown as ActorRow["config"],
+  })
 
-  const snake = snakeCaseTopLevelKeys(camelRow)
+  const actor = presentActorRow(normalizeActorRow(camelRow), [])
 
-  assert.equal(snake.created_at, camelRow.createdAt)
-  assert.equal(snake.updated_at, camelRow.updatedAt)
-  assert.equal(snake.workspace_id, "w1")
-  assert.equal(snake.display_name, "Sec")
-  assert.equal(snake.is_public_shared, true)
-  assert.equal(snake.current_actor_version_id, "v1")
-  assert.equal((snake.created_at as Date) instanceof Date, true)
+  assert.equal(actor.createdAt, "2026-01-01T00:00:00.000Z")
+  assert.equal(actor.updatedAt, "2026-01-02T00:00:00.000Z")
+  assert.equal(actor.workspaceId, workspaceId)
+  assert.equal(actor.displayName, "Planner")
+  assert.equal(actor.isPublicShared, true)
   // top-level only: JSONB value object is passed through untouched (its inner
   // keys are NOT recursed/rewritten).
-  assert.deepEqual(snake.config, { is_chief_actor: true, nestedCamel: "keep" })
-  // no leftover camelCase top-level keys
-  assert.equal("createdAt" in snake, false)
-  assert.equal("workspaceId" in snake, false)
+  assert.deepEqual(actor.definition.config, {
+    is_chief_actor: true,
+    nestedCamel: "keep",
+  })
 })

@@ -329,13 +329,10 @@ function buildActorVersionDelta(
 async function buildActorResponseFromRows(rows: ActorRow[]) {
   if (rows.length === 0) return []
   const docsByVersionId = await loadActorDocsMap(
-    rows.map((row) => row.current_actor_version_id)
+    rows.map((row) => row.currentActorVersionId)
   )
   return rows.map((row) =>
-    presentActorRow(
-      row,
-      docsByVersionId.get(row.current_actor_version_id) || []
-    )
+    presentActorRow(row, docsByVersionId.get(row.currentActorVersionId) || [])
   )
 }
 
@@ -376,10 +373,10 @@ export async function getActor(
 ): Promise<Actor | null> {
   const row = await getActorRow(workspaceId, actorId)
   if (!row) return null
-  const docsByVersionId = await loadActorDocsMap([row.current_actor_version_id])
+  const docsByVersionId = await loadActorDocsMap([row.currentActorVersionId])
   return presentActorRow(
     row,
-    docsByVersionId.get(row.current_actor_version_id) || []
+    docsByVersionId.get(row.currentActorVersionId) || []
   )
 }
 
@@ -544,7 +541,7 @@ export async function updateActor(
     actorId,
     workspaceId,
     nextVersion,
-    previousVersionId: currentActorRow.current_actor_version_id,
+    previousVersionId: currentActorRow.currentActorVersionId,
     displayName: nextDefinition.displayName,
     role: nextDefinition.role,
     title: nextDefinition.title,
