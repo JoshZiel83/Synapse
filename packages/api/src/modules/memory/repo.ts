@@ -22,7 +22,6 @@ import crypto from "node:crypto"
 import { CompiledQuery, sql, type RawBuilder } from "kysely"
 import { v4 as uuidv4 } from "uuid"
 import {
-  parseJsonObject,
   type MemoryCategory,
   type MemoryItemState,
   type SubjectRef,
@@ -565,9 +564,27 @@ export type SearchCandidateRow = MemoryRow & {
 export function normalizeMemoryRow<T extends MemoryRow>(row: T): T {
   const normalized = {
     ...row,
-    metadata: parseJsonObject(row.metadata),
+    metadata: parseMemoryMetadata(row.metadata),
   }
   return normalized
+}
+
+function parseMemoryMetadata(value: unknown): Record<string, unknown> {
+  if (value === null || value === undefined) return {}
+  const parsed =
+    typeof value === "string" ? parseMemoryMetadataJson(value) : value
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("memory item metadata must be a JSON object")
+  }
+  return parsed as Record<string, unknown>
+}
+
+function parseMemoryMetadataJson(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown
+  } catch {
+    throw new Error("memory item metadata must be valid JSON")
+  }
 }
 
 /**

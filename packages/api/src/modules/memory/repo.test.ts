@@ -68,3 +68,29 @@ test("normalizeMemoryRow decodes metadata at repo exit", () => {
     pinned: true,
   })
 })
+
+test("normalizeMemoryRow rejects malformed metadata at repo exit", () => {
+  assert.throws(
+    () =>
+      normalizeMemoryRow(
+        memoryRow({
+          metadata: "not json" as unknown as MemoryRow["metadata"],
+        })
+      ),
+    /memory item metadata must be valid JSON/
+  )
+})
+
+test("normalizeMemoryRow rejects non-object metadata at repo exit", () => {
+  assert.throws(
+    () =>
+      normalizeMemoryRow(
+        memoryRow({
+          metadata: JSON.stringify([
+            "not-object",
+          ]) as unknown as MemoryRow["metadata"],
+        })
+      ),
+    /memory item metadata must be a JSON object/
+  )
+})
