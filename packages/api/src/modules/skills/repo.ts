@@ -9,7 +9,6 @@ import {
 } from "../../infrastructure/database/kysely.js"
 import {
   DEFAULT_CONVERSATION_TYPE_MASK,
-  parseJsonObject,
   type CanonicalContentBlock,
   type RuntimeBindingScope,
   type SkillFrontmatter,
@@ -111,25 +110,49 @@ export function clientRunner(client: Executor): QueryRunner {
 export function decodeSkillSnapshotHooks(row: {
   snapshotHooks: unknown
 }): Record<string, unknown> {
-  return parseJsonObject(row.snapshotHooks)
+  return parseSkillJsonRecord(row.snapshotHooks, "skill snapshot hooks")
 }
 
 export function decodeSkillMirrorLocator(row: {
   mirrorLocator: unknown
 }): Record<string, unknown> {
-  return parseJsonObject(row.mirrorLocator)
+  return parseSkillJsonRecord(row.mirrorLocator, "skill mirror locator")
 }
 
 export function decodeSkillPackageItemMetadata(
   row: { itemMetadata?: unknown } | null | undefined
 ): Record<string, unknown> {
-  return parseJsonObject(row?.itemMetadata)
+  return parseSkillJsonRecord(row?.itemMetadata, "skill package item metadata")
 }
 
 export function decodeInstalledSkillVersionMetadata(row: {
   versionMetadata: unknown
 }): Record<string, unknown> {
-  return parseJsonObject(row.versionMetadata)
+  return parseSkillJsonRecord(
+    row.versionMetadata,
+    "installed skill version metadata"
+  )
+}
+
+function parseSkillJsonRecord(
+  value: unknown,
+  label: string
+): Record<string, unknown> {
+  if (value === null || value === undefined) return {}
+  const parsed =
+    typeof value === "string" ? parseSkillJson(value, label) : value
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`${label} must be a JSON object`)
+  }
+  return parsed as Record<string, unknown>
+}
+
+function parseSkillJson(value: string, label: string): unknown {
+  try {
+    return JSON.parse(value) as unknown
+  } catch {
+    throw new Error(`${label} must be valid JSON`)
+  }
 }
 
 export function normalizeSkillSnapshotJoinRow<T extends SkillSnapshotJoinRow>(

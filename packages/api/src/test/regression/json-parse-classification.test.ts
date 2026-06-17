@@ -37,6 +37,8 @@ const classifiedJsonParseFiles = {
       "Runtime authorization grant policy and source request args DB JSON is decoded at repo exit.",
     "packages/api/src/modules/session/repo.ts":
       "Session runtime read-model DB JSON payloads are decoded at repo exit.",
+    "packages/api/src/modules/skills/repo.ts":
+      "Skill snapshot, mirror, package, and version DB JSON is decoded at repo exit.",
     "packages/api/src/modules/tasks/repo.ts":
       "Task payload and runtime authorization DB JSON is decoded at repo exit.",
     "packages/api/src/modules/tool-call-tasks/repo.ts":

@@ -22,6 +22,13 @@ test("decodeSkillSnapshotHooks decodes snapshot hooks at repo exit", () => {
   assert.deepEqual(hooks, { before: ["prepare"] })
 })
 
+test("decodeSkillSnapshotHooks rejects malformed snapshot hooks at repo exit", () => {
+  assert.throws(
+    () => decodeSkillSnapshotHooks({ snapshotHooks: "not json" }),
+    /skill snapshot hooks must be valid JSON/
+  )
+})
+
 test("decodeSkillMirrorLocator preserves mirror locator fields", () => {
   const locator = decodeSkillMirrorLocator({
     mirrorLocator: {
@@ -36,6 +43,16 @@ test("decodeSkillMirrorLocator preserves mirror locator fields", () => {
   })
 })
 
+test("decodeSkillMirrorLocator rejects non-object mirror locators at repo exit", () => {
+  assert.throws(
+    () =>
+      decodeSkillMirrorLocator({
+        mirrorLocator: JSON.stringify(["not-object"]),
+      }),
+    /skill mirror locator must be a JSON object/
+  )
+})
+
 test("decodeSkillPackageItemMetadata handles absent marketplace metadata", () => {
   assert.deepEqual(decodeSkillPackageItemMetadata(undefined), {})
 })
@@ -46,6 +63,16 @@ test("decodeInstalledSkillVersionMetadata decodes version metadata", () => {
   })
 
   assert.deepEqual(metadata, { importedFrom: "marketplace" })
+})
+
+test("decodeInstalledSkillVersionMetadata rejects scalar version metadata at repo exit", () => {
+  assert.throws(
+    () =>
+      decodeInstalledSkillVersionMetadata({
+        versionMetadata: JSON.stringify(42),
+      }),
+    /installed skill version metadata must be a JSON object/
+  )
 })
 
 test("decodeSkillPackageItemMetadata accepts row-shaped metadata", () => {
