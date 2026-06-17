@@ -26,10 +26,8 @@
 
 import crypto from "node:crypto"
 import { qqApiFetch } from "./client.js"
-import { downloadToBufferWithLimit } from "../../../../infrastructure/storage/index.js"
 import {
   QQ_FILE_TYPE,
-  QQ_INBOUND_MEDIA_HOSTS,
   QQ_UPLOAD_SIZE_LIMITS,
   type QqFileType,
 } from "./media-constants.js"
@@ -181,24 +179,6 @@ export async function uploadQqMedia(
     fileInfo: json.fileInfo,
   })
   return { fileInfo: json.fileInfo, fileUuid: json.fileUuid, cached: false }
-}
-
-/**
- * Download remote media (e.g. an HTTP url from an actor's tool output)
- * into a buffer for inline-base64 upload. Wraps the safe downloader so
- * QQ outbound never silently reads unbounded bytes.
- */
-export async function downloadForQqUpload(params: {
-  url: string
-  fileType: QqFileType
-}): Promise<Buffer> {
-  const downloaded = await downloadToBufferWithLimit({
-    url: params.url,
-    maxBytes: QQ_UPLOAD_SIZE_LIMITS[params.fileType],
-    allowedHosts: QQ_INBOUND_MEDIA_HOSTS,
-    timeoutMs: 60_000,
-  })
-  return downloaded.buffer
 }
 
 function hashBuffer(buf: Buffer): string {
