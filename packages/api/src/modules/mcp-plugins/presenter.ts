@@ -85,24 +85,23 @@ export function presentInstallationAccessGrant(
           options.workspaceConversationTypeMask,
           options.instanceConversationTypeMaskOverride
         ),
-        mount.conversation_type_mask_override
+        mount.conversationTypeMaskOverride
       )
     : undefined
   return {
     id: mount.id,
-    workspaceAppId: mount.installation_id,
-    workspaceId: mount.workspace_id,
+    workspaceAppId: mount.installationId,
+    workspaceId: mount.workspaceId,
     target: installationAccessRowToTarget(mount),
     permissions: [WORKSPACE_APP_GRANT_PERMISSION.USE],
     status: mount.status,
     source: mount.source,
-    grantedByWorkspaceMemberId:
-      mount.created_by_workspace_member_id || undefined,
+    grantedByWorkspaceMemberId: mount.createdByWorkspaceMemberId || undefined,
     reason: mount.reason || undefined,
-    conversationTypeMaskOverride: mount.conversation_type_mask_override ?? null,
+    conversationTypeMaskOverride: mount.conversationTypeMaskOverride ?? null,
     effectiveConversationTypeMask,
-    createdAt: serializeInstant(mount.created_at),
-    revokedAt: serializeOptionalInstant(mount.revoked_at),
+    createdAt: serializeInstant(mount.createdAt),
+    revokedAt: serializeOptionalInstant(mount.revokedAt),
   }
 }
 

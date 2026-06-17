@@ -179,22 +179,27 @@ export type InstallationRowRaw = Omit<InstallationRow, "configData"> & {
   configData: unknown
 }
 
+// camelCase row shape. The producer is a Kysely builder query, but
+// CamelCasePlugin.transformResult camelCases every top-level result key
+// unconditionally — so the SELECT aliases to camelCase and consumers read
+// camelCase. (Aliasing to snake_case would round-trip back to camelCase at
+// runtime and silently break the snake reads.)
 export type InstallationAccessRow = {
   id: string
-  workspace_id: string
-  installation_id: string
-  access_target_type: RuntimeBindingScope
-  conversation_id: string | null
-  actor_id: string | null
-  remote_agent_id: string | null
-  workspace_member_id: string | null
-  conversation_type_mask_override: number | null
+  workspaceId: string
+  installationId: string
+  accessTargetType: RuntimeBindingScope
+  conversationId: string | null
+  actorId: string | null
+  remoteAgentId: string | null
+  workspaceMemberId: string | null
+  conversationTypeMaskOverride: number | null
   status: AccessBindingStatus
   source: WorkspaceAppGrantSource
-  created_by_workspace_member_id: string | null
+  createdByWorkspaceMemberId: string | null
   reason: string | null
-  created_at: Date
-  revoked_at: Date | null
+  createdAt: Date
+  revokedAt: Date | null
 }
 
 function sanitizeSlug(value: string) {
@@ -1040,8 +1045,8 @@ export async function listPluginInstallationAccessRows(
     .leftJoin("accessSubjects as scope", "scope.id", "app_grant.scopeSubjectId")
     .select([
       "app_grant.id",
-      "app_grant.workspaceId as workspace_id",
-      "app_grant.workspaceAppId as installation_id",
+      "app_grant.workspaceId",
+      "app_grant.workspaceAppId as installationId",
       sql<RuntimeBindingScope>`
         CASE subj.kind
           WHEN 'workspace' THEN 'workspace'
@@ -1050,18 +1055,18 @@ export async function listPluginInstallationAccessRows(
           WHEN 'actor' THEN 'actor'
           WHEN 'remote_agent' THEN 'remote_agent'
         END
-      `.as("access_target_type"),
-      "subj.actorId as actor_id",
-      "subj.remoteAgentId as remote_agent_id",
-      "subj.workspaceMemberId as workspace_member_id",
-      "scope.conversationId as conversation_id",
-      "app_grant.conversationTypeMaskOverride as conversation_type_mask_override",
+      `.as("accessTargetType"),
+      "subj.actorId",
+      "subj.remoteAgentId",
+      "subj.workspaceMemberId",
+      "scope.conversationId",
+      "app_grant.conversationTypeMaskOverride",
       "app_grant.status",
       "app_grant.source",
-      "app_grant.createdByWorkspaceMemberId as created_by_workspace_member_id",
+      "app_grant.createdByWorkspaceMemberId",
       "app_grant.reason",
-      "app_grant.createdAt as created_at",
-      "app_grant.revokedAt as revoked_at",
+      "app_grant.createdAt",
+      "app_grant.revokedAt",
     ])
     .where("app_grant.workspaceAppId", "=", installationId)
     .where(
@@ -1073,24 +1078,14 @@ export async function listPluginInstallationAccessRows(
     query = query.where("app_grant.status", "=", ACCESS_BINDING_STATUS.ACTIVE)
   }
 
-  // The `as snake_case` aliases above still come back camelCase: Kysely's
-  // CamelCasePlugin runs transformResult on builder rows too. presentMount (the
-  // consumer) reads snake_case (mount.created_at / created_by_workspace_member_id
-  // / revoked_at / …), so re-snake the top-level keys. Values pass through;
-  // idempotent. (Previously only `created_at` was patched — and incorrectly,
-  // since row.created_at was undefined → silently fell back to new Date(0).)
+  // The builder aliases to camelCase and CamelCasePlugin.transformResult yields
+  // camelCase keys, so the rows already match InstallationAccessRow's shape.
+  // created_at is DEFAULT NOW() but not NOT NULL; coalesce the rare null.
   const rows = await query.execute()
-  return rows.map(
-    (row) => snakeCaseTopLevelKeys(row) as unknown as InstallationAccessRow
-  )
-}
-
-function snakeCaseTopLevelKeys<T extends object>(row: T): T {
-  const out: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(row)) {
-    out[key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)] = value
-  }
-  return out as T
+  return rows.map((row) => ({
+    ...row,
+    createdAt: row.createdAt || new Date(0),
+  }))
 }
 
 export async function createPluginPublisherRecord(data: {

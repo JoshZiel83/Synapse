@@ -290,35 +290,35 @@ function mergeConfigForUpdate(
 export function installationAccessRowToTarget(
   row: InstallationAccessRow
 ): WorkspaceAppGrantTargetInput {
-  switch (row.access_target_type) {
+  switch (row.accessTargetType) {
     case "workspace":
-      return { subject: workspaceRef(row.workspace_id) }
+      return { subject: workspaceRef(row.workspaceId) }
     case "workspace_member":
-      return row.workspace_member_id
-        ? { subject: workspaceMemberRef(row.workspace_member_id) }
-        : { subject: workspaceRef(row.workspace_id) }
+      return row.workspaceMemberId
+        ? { subject: workspaceMemberRef(row.workspaceMemberId) }
+        : { subject: workspaceRef(row.workspaceId) }
     case "conversation":
-      return row.conversation_id
-        ? { subject: conversationRef(row.conversation_id) }
-        : { subject: workspaceRef(row.workspace_id) }
+      return row.conversationId
+        ? { subject: conversationRef(row.conversationId) }
+        : { subject: workspaceRef(row.workspaceId) }
     case "actor":
-      return row.actor_id
+      return row.actorId
         ? {
-            subject: actorRef(row.actor_id),
-            ...(row.conversation_id
-              ? { scope: conversationRef(row.conversation_id) }
+            subject: actorRef(row.actorId),
+            ...(row.conversationId
+              ? { scope: conversationRef(row.conversationId) }
               : {}),
           }
-        : { subject: workspaceRef(row.workspace_id) }
+        : { subject: workspaceRef(row.workspaceId) }
     case "remote_agent":
-      return row.remote_agent_id
+      return row.remoteAgentId
         ? {
-            subject: remoteAgentRef(row.remote_agent_id),
-            ...(row.conversation_id
-              ? { scope: conversationRef(row.conversation_id) }
+            subject: remoteAgentRef(row.remoteAgentId),
+            ...(row.conversationId
+              ? { scope: conversationRef(row.conversationId) }
               : {}),
           }
-        : { subject: workspaceRef(row.workspace_id) }
+        : { subject: workspaceRef(row.workspaceId) }
   }
 }
 
@@ -369,20 +369,20 @@ function buildInstallationAccessRow(input: {
       : null
   return {
     id: input.id,
-    workspace_id: input.workspaceId,
-    installation_id: input.installationId,
-    access_target_type: accessTargetType,
-    actor_id: actorId,
-    remote_agent_id: remoteAgentId,
-    conversation_id: conversationId,
-    workspace_member_id: workspaceMemberId,
-    conversation_type_mask_override: input.conversationTypeMaskOverride,
+    workspaceId: input.workspaceId,
+    installationId: input.installationId,
+    accessTargetType,
+    actorId,
+    remoteAgentId,
+    conversationId,
+    workspaceMemberId,
+    conversationTypeMaskOverride: input.conversationTypeMaskOverride,
     status: input.status,
     source: input.source,
-    created_by_workspace_member_id: input.createdByWorkspaceMemberId,
+    createdByWorkspaceMemberId: input.createdByWorkspaceMemberId,
     reason: input.reason,
-    created_at: input.createdAt,
-    revoked_at: input.revokedAt,
+    createdAt: input.createdAt,
+    revokedAt: input.revokedAt,
   }
 }
 
@@ -1161,11 +1161,11 @@ export async function createPluginInstallationGrant(input: {
   const existing = accessRows.find(
     (entry) =>
       entry.status === ACCESS_BINDING_STATUS.ACTIVE &&
-      entry.access_target_type === accessTargetLabel &&
-      entry.actor_id === accessTargetActorId &&
-      entry.remote_agent_id === accessTargetRemoteAgentId &&
-      entry.conversation_id === accessTargetConversationId &&
-      entry.workspace_member_id === accessTargetWorkspaceMemberId
+      entry.accessTargetType === accessTargetLabel &&
+      entry.actorId === accessTargetActorId &&
+      entry.remoteAgentId === accessTargetRemoteAgentId &&
+      entry.conversationId === accessTargetConversationId &&
+      entry.workspaceMemberId === accessTargetWorkspaceMemberId
   )
   if (existing) {
     return presentInstallationAccessGrant(existing, {
@@ -1226,7 +1226,7 @@ export async function updatePluginInstallationGrant(input: {
       row.rootConversationTypeMaskOverride ?? null
     const accessRows = await listAccessRows(input.installationId)
     const accessRow = accessRows.find((entry) => entry.id === input.grantId)
-    if (!accessRow || accessRow.workspace_id !== input.workspaceId) {
+    if (!accessRow || accessRow.workspaceId !== input.workspaceId) {
       throw new McpPluginError(404, "Access grant not found")
     }
     return presentInstallationAccessGrant(accessRow, {
@@ -1243,7 +1243,7 @@ export async function updatePluginInstallationGrant(input: {
     row.rootConversationTypeMaskOverride ?? null
   const accessRows = await listAccessRows(input.installationId, true)
   const accessRow = accessRows.find((entry) => entry.id === input.grantId)
-  if (!accessRow || accessRow.workspace_id !== input.workspaceId) {
+  if (!accessRow || accessRow.workspaceId !== input.workspaceId) {
     throw new McpPluginError(404, "Access grant not found")
   }
   const instanceConversationTypeMask = resolveNarrowedConversationTypeMask(
@@ -1293,7 +1293,7 @@ export async function revokePluginInstallationGrant(input: {
 }) {
   const accessRows = await listAccessRows(input.installationId, true)
   const accessRow = accessRows.find((entry) => entry.id === input.grantId)
-  if (!accessRow || accessRow.workspace_id !== input.workspaceId) {
+  if (!accessRow || accessRow.workspaceId !== input.workspaceId) {
     throw new McpPluginError(404, "Access grant not found")
   }
   if (accessRow.status === ACCESS_BINDING_STATUS.REVOKED) {
