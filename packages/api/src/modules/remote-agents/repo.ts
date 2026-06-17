@@ -125,7 +125,7 @@ export async function getConversationTypeFacts(
 ): Promise<{ kind: "direct" | "group"; isIm: boolean } | null> {
   const result = await sql<{
     kind: "direct" | "group"
-    is_im: boolean
+    isIm: boolean
   }>`
     SELECT kind, EXISTS (
       SELECT 1 FROM conversation_transport_bindings b
@@ -136,7 +136,10 @@ export async function getConversationTypeFacts(
   if (!row) {
     return null
   }
-  return { kind: row.kind, isIm: Boolean(row.is_im) }
+  // `.execute()` runs through CamelCasePlugin's transformResult, so the
+  // `AS is_im` alias arrives as `isIm`. Reading `row.is_im` here silently
+  // yielded undefined → isIm:false for every IM conversation.
+  return { kind: row.kind, isIm: Boolean(row.isIm) }
 }
 
 export async function loadMachineByApiKeyRepo(
