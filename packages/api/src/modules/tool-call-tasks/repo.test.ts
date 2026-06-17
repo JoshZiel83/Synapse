@@ -79,6 +79,38 @@ test("tool-call task repo normalizer decodes JSONB payload fields before present
   assert.deepEqual(presented?.metadata, { traceId: "trace-1" })
 })
 
+test("tool-call task repo normalizer rejects non-object JSON payload drift", () => {
+  assert.throws(
+    () =>
+      normalizeToolCallTaskRow(
+        rawTaskRow({
+          requestPayload: JSON.stringify(["not", "an", "object"]),
+        })
+      ),
+    /tool-call task requestPayload must be a JSON object/
+  )
+
+  assert.throws(
+    () =>
+      normalizeToolCallTaskRow(
+        rawTaskRow({
+          metadata: "not-json",
+        })
+      ),
+    /tool-call task metadata must be valid JSON/
+  )
+
+  assert.throws(
+    () =>
+      normalizeToolCallTaskRow(
+        rawTaskRow({
+          immediateResultPayload: "42",
+        })
+      ),
+    /tool-call task immediateResultPayload must be a JSON object/
+  )
+})
+
 test("tool-call task output chunk repo normalizer decodes metadata before presentation", () => {
   const rawChunk: ToolCallTaskOutputChunkRawRow = {
     seq: "3",
@@ -95,4 +127,18 @@ test("tool-call task output chunk repo normalizer decodes metadata before presen
   assert.equal(presented.seq, 3)
   assert.equal(presented.createdAt, "2026-06-14T00:00:00.000Z")
   assert.deepEqual(presented.metadata, { line: "first" })
+})
+
+test("tool-call task output chunk repo normalizer rejects non-object metadata", () => {
+  assert.throws(
+    () =>
+      normalizeToolCallTaskOutputChunkRow({
+        seq: "3",
+        stream: "stdout",
+        textValue: "hello",
+        metadata: JSON.stringify(["not", "an", "object"]),
+        createdAt: NOW,
+      }),
+    /tool-call task output chunk metadata must be a JSON object/
+  )
 })

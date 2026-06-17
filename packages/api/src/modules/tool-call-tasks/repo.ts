@@ -5,11 +5,10 @@
 // accessSubjects query the service used to run inline. Each helper takes an
 // injected `run: Executor` (db OR a trx) so the SERVICE keeps owning transaction
 // boundaries (withDbTransaction) and atomicity — repo never opens a transaction
-// and never nests one. Helpers return RAW rows with Date objects intact
-// (presenter.ts does the Date→IsoInstant + JSON decode), so this file never
-// serializes datetimes or parses JSON. round-6 P1-6.
+// and never nests one. Helpers return rows with Date objects intact and decode
+// DB JSON object columns at repo exit; presenters own Date→IsoInstant only.
+// round-6 P1-6.
 
-import { parseJsonObject } from "@synapse/shared"
 import { sql } from "kysely"
 import {
   db,
@@ -51,6 +50,35 @@ const NON_TERMINAL_TOOL_CALL_TASK_STATUSES: ToolCallTaskLifecycleStatus[] = [
   "auth_required",
 ]
 
+function parseRepoJsonObject(
+  value: unknown,
+  label: string
+): Record<string, unknown> {
+  if (value === null || value === undefined) return {}
+
+  let candidate: unknown = value
+  if (typeof value === "string") {
+    if (value.trim().length === 0) {
+      throw new Error(`${label} must be valid JSON`)
+    }
+    try {
+      candidate = JSON.parse(value) as unknown
+    } catch {
+      throw new Error(`${label} must be valid JSON`)
+    }
+  }
+
+  if (
+    typeof candidate !== "object" ||
+    candidate === null ||
+    Array.isArray(candidate)
+  ) {
+    throw new Error(`${label} must be a JSON object`)
+  }
+
+  return candidate as Record<string, unknown>
+}
+
 export function normalizeToolCallTaskRow(
   row: ToolCallTaskRawRow
 ): ToolCallTaskRow {
@@ -78,11 +106,23 @@ export function normalizeToolCallTaskRow(
     targetParticipantId: row.targetParticipantId,
     resolvedByParticipantId: row.resolvedByParticipantId,
     resolvedAt: row.resolvedAt,
-    requestPayload: parseJsonObject(row.requestPayload),
-    immediateResultPayload: parseJsonObject(row.immediateResultPayload),
-    finalResultPayload: parseJsonObject(row.finalResultPayload),
-    finalErrorPayload: parseJsonObject(row.finalErrorPayload),
-    metadata: parseJsonObject(row.metadata),
+    requestPayload: parseRepoJsonObject(
+      row.requestPayload,
+      "tool-call task requestPayload"
+    ),
+    immediateResultPayload: parseRepoJsonObject(
+      row.immediateResultPayload,
+      "tool-call task immediateResultPayload"
+    ),
+    finalResultPayload: parseRepoJsonObject(
+      row.finalResultPayload,
+      "tool-call task finalResultPayload"
+    ),
+    finalErrorPayload: parseRepoJsonObject(
+      row.finalErrorPayload,
+      "tool-call task finalErrorPayload"
+    ),
+    metadata: parseRepoJsonObject(row.metadata, "tool-call task metadata"),
     conversationItemId: row.conversationItemId,
     completionItemId: row.completionItemId,
     deadlineAt: row.deadlineAt,
@@ -107,7 +147,10 @@ export function normalizeToolCallTaskOutputChunkRow(
     stream: row.stream,
     textValue: row.textValue,
     createdAt: row.createdAt,
-    metadata: parseJsonObject(row.metadata),
+    metadata: parseRepoJsonObject(
+      row.metadata,
+      "tool-call task output chunk metadata"
+    ),
   }
 }
 

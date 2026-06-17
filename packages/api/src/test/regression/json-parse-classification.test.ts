@@ -27,6 +27,8 @@ const classifiedJsonParseFiles = {
       "Session runtime read-model DB JSON payloads are decoded at repo exit.",
     "packages/api/src/modules/tasks/repo.ts":
       "Task payload and runtime authorization DB JSON is decoded at repo exit.",
+    "packages/api/src/modules/tool-call-tasks/repo.ts":
+      "Tool-call task payload and output chunk DB JSON is decoded at repo exit.",
     "packages/api/src/modules/workspace/repo.ts":
       "Workspace template docs DB JSON is decoded at repo exit.",
   },
