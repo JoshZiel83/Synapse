@@ -18,6 +18,7 @@ import {
   WEIXIN_LONG_POLL_TIMEOUT_MS,
 } from "./client.js"
 import { clearSyncBuf, getSyncBuf, setSyncBuf } from "./cursor-store.js"
+import { enrichInboundWeixinMedia } from "./inbound-media.js"
 import { normalizeWeixinMessage, type WeixinMessage } from "./normalize.js"
 import {
   buildWeixinBaseInfo,
@@ -61,6 +62,10 @@ export async function startWeixinAccount(
 ): Promise<RunningAccount> {
   const account = ctx.account
   const { token, baseUrl } = getWeixinCredentialsOrThrow(account)
+  const cdnBaseUrl =
+    typeof account.config?.cdnBaseUrl === "string"
+      ? account.config.cdnBaseUrl
+      : ""
 
   // A fresh start means a (re-)login happened — drop any stale pause flag.
   await clearSessionPause(account.id).catch(() => undefined)
@@ -159,7 +164,14 @@ export async function startWeixinAccount(
         try {
           const normalized = normalizeWeixinMessage(message)
           const envelope = envelopeFromNormalized(normalized, account)
-          if (envelope) await ctx.emitInbound(envelope)
+          if (envelope) {
+            const enriched = await enrichInboundWeixinMedia(envelope, {
+              account,
+              cdnBaseUrl,
+              logger: ctx.logger,
+            })
+            await ctx.emitInbound(enriched)
+          }
         } catch (err) {
           ctx.logger.error("weixin inbound dispatch failed", err)
         }

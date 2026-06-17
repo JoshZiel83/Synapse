@@ -13,11 +13,46 @@ import {
 } from "../../messaging/canonical-message.js"
 import { WEIXIN_ITEM_TYPE } from "./protocol.js"
 
+/** ilink CDN media reference (image/voice/file/video item `media` field). */
+export interface WeixinCdnMedia {
+  encrypt_query_param?: string
+  aes_key?: string
+  encrypt_type?: number
+  full_url?: string
+}
+
 export interface WeixinMessageItem {
   type?: number
   msg_id?: string
   text_item?: { text?: string }
-  voice_item?: { text?: string }
+  voice_item?: { text?: string; media?: WeixinCdnMedia }
+  /** `aeskey` (hex) is preferred over media.aes_key for image decryption. */
+  image_item?: { media?: WeixinCdnMedia; aeskey?: string }
+  file_item?: { media?: WeixinCdnMedia; file_name?: string }
+  video_item?: { media?: WeixinCdnMedia }
+}
+
+/**
+ * Build the `original` payload stashed on a media placeholder so the inbound
+ * enrich pass (inbound-media.ts) can download + decrypt the bytes. Returns
+ * undefined when the item has no downloadable CDN reference.
+ */
+function mediaOriginal(
+  kind: "image" | "file" | "video",
+  media: WeixinCdnMedia | undefined,
+  extra?: Record<string, unknown>
+): Record<string, unknown> | undefined {
+  if (!media) return undefined
+  const encryptQueryParam = nonEmpty(media.encrypt_query_param)
+  const fullUrl = nonEmpty(media.full_url)
+  if (!encryptQueryParam && !fullUrl) return undefined
+  return {
+    kind,
+    encrypt_query_param: encryptQueryParam,
+    full_url: fullUrl,
+    aes_key: nonEmpty(media.aes_key),
+    ...extra,
+  }
 }
 
 export interface WeixinMessage {
@@ -77,22 +112,40 @@ export function normalizeWeixinMessage(
       continue
     }
     if (item.type === WEIXIN_ITEM_TYPE.IMAGE) {
-      parts.push({ type: "system_marker", marker: "image_placeholder" })
+      parts.push({
+        type: "system_marker",
+        marker: "image_placeholder",
+        original: mediaOriginal("image", item.image_item?.media, {
+          aeskey_hex: nonEmpty(item.image_item?.aeskey),
+        }),
+      })
       firstText = firstText || "[图片]"
       continue
     }
     if (item.type === WEIXIN_ITEM_TYPE.VOICE) {
+      // Voice audio is SILK-encoded; we surface only the STT transcript (above)
+      // and never download the raw audio. Leave a bare placeholder otherwise.
       parts.push({ type: "system_marker", marker: "voice_placeholder" })
       firstText = firstText || "[语音]"
       continue
     }
     if (item.type === WEIXIN_ITEM_TYPE.FILE) {
-      parts.push({ type: "system_marker", marker: "file_placeholder" })
+      parts.push({
+        type: "system_marker",
+        marker: "file_placeholder",
+        original: mediaOriginal("file", item.file_item?.media, {
+          file_name: nonEmpty(item.file_item?.file_name),
+        }),
+      })
       firstText = firstText || "[文件]"
       continue
     }
     if (item.type === WEIXIN_ITEM_TYPE.VIDEO) {
-      parts.push({ type: "system_marker", marker: "video_placeholder" })
+      parts.push({
+        type: "system_marker",
+        marker: "video_placeholder",
+        original: mediaOriginal("video", item.video_item?.media),
+      })
       firstText = firstText || "[视频]"
       continue
     }

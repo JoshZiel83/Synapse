@@ -23,7 +23,11 @@ import {
 export interface UploadedWeixinMedia {
   /** CDN download token; fill into <item>.media.encrypt_query_param. */
   encryptQueryParam: string
-  /** AES-128 key, base64; fill into <item>.media.aes_key. */
+  /**
+   * Wire value for <item>.media.aes_key. Upstream encodes the key as
+   * base64(hex-string-of-16-bytes) (i.e. a 32-char hex string, base64'd), not
+   * base64(raw 16 bytes) — we match that exactly so the gateway accepts it.
+   */
   aesKeyBase64: string
   /** Plaintext size (bytes). */
   rawSize: number
@@ -181,7 +185,10 @@ export async function uploadWeixinMedia(params: {
   })
   return {
     encryptQueryParam,
-    aesKeyBase64: aeskey.toString("base64"),
+    // base64(hex-string) — matches upstream's wire encoding exactly.
+    aesKeyBase64: Buffer.from(aeskey.toString("hex"), "utf8").toString(
+      "base64"
+    ),
     rawSize: rawsize,
     cipherSize: filesize,
   }
