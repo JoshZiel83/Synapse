@@ -36,6 +36,22 @@ const MIN_COMPACTION_ITEMS = 12
 const SHARED_ARCHIVE_TAIL_TARGET = 24
 const PRIVATE_ARCHIVE_TAIL_TARGET = 32
 
+/**
+ * Re-snake the TOP-LEVEL keys of a raw result row. The archive reads below use
+ * `sql`...`.execute()`, whose results still pass through CamelCasePlugin's
+ * (unconditional) transformResult — so `SELECT *` / `AS part_type` columns
+ * arrive camelCase. The ArchivePointRow / ArchiveFrameQueryRow types and their
+ * mappers read snake_case, so re-snake at the mapper boundary. Values pass
+ * through untouched (JSONB / Dates are never recursed into); idempotent.
+ */
+function snakeCaseTopLevelKeys<T extends Record<string, unknown>>(row: T): T {
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(row)) {
+    out[key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)] = value
+  }
+  return out as T
+}
+
 export type ArchivePointRow = {
   id: string
   chain_scope: CanonicalArchiveChainScope
@@ -142,6 +158,7 @@ export async function loadArchivePoint(
 
   const point = pointResult.rows[0]
   if (!point) return null
+  const pointRow = snakeCaseTopLevelKeys(point)
 
   const framesResult = await sql<ArchiveFrameQueryRow>`
     SELECT caf.*,
@@ -176,7 +193,8 @@ export async function loadArchivePoint(
       }>
     }
   >()
-  for (const row of framesResult.rows) {
+  for (const rawFrameRow of framesResult.rows) {
+    const row = snakeCaseTopLevelKeys(rawFrameRow)
     if (!frameMap.has(row.id)) {
       frameMap.set(row.id, { row, parts: [] })
     }
@@ -218,7 +236,7 @@ export async function loadArchivePoint(
     })
   )
 
-  return presentArchivePoint(normalizeArchivePointRow(point), frames)
+  return presentArchivePoint(normalizeArchivePointRow(pointRow), frames)
 }
 
 function parseArchiveMetadata(
