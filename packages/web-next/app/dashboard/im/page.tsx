@@ -60,6 +60,10 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { API_BASE, api, ApiError } from "@/lib/api"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.dashboard.im")
+
 const WEIXIN_QR_POLLING_STATUSES = new Set<WeixinQrLoginStatus>([
   WEIXIN_QR_LOGIN_STATUS.WAITING,
   WEIXIN_QR_LOGIN_STATUS.SCANNED,
@@ -802,7 +806,7 @@ export default function ImPage() {
           setWeixinQrImageUrl(imageUrl)
         }
       } catch (error) {
-        console.error("Failed to render WeChat QR image:", error)
+        clientLog.error("Failed to render WeChat QR image:", error)
         if (!cancelled) {
           setWeixinQrImageUrl(null)
         }
@@ -835,7 +839,7 @@ export default function ImPage() {
           setDingtalkQrImageUrl(imageUrl)
         }
       } catch (error) {
-        console.error("Failed to render DingTalk QR image:", error)
+        clientLog.error("Failed to render DingTalk QR image:", error)
         if (!cancelled) {
           setDingtalkQrImageUrl(null)
         }
@@ -913,14 +917,14 @@ export default function ImPage() {
         api.getTransportSessions(workspaceId),
         api.getTransportExternalUsers(workspaceId),
         api.getWorkspaceMembers(workspaceId).catch((loadError) => {
-          console.error(
+          clientLog.error(
             "Failed to load workspace members for IM page:",
             loadError
           )
           return null
         }),
         api.getActors(workspaceId).catch((loadError) => {
-          console.error("Failed to load actors for IM page:", loadError)
+          clientLog.error("Failed to load actors for IM page:", loadError)
           return []
         }),
       ])
@@ -942,7 +946,7 @@ export default function ImPage() {
       syncSessionDrafts(nextSessions)
       syncExternalUserDrafts(nextExternalUsers)
     } catch (loadError) {
-      console.error("Failed to load IM workspace state:", loadError)
+      clientLog.error("Failed to load IM workspace state:", loadError)
       setError(
         loadError instanceof Error
           ? loadError.message
@@ -992,7 +996,7 @@ export default function ImPage() {
         }
       } catch (pollError) {
         if (cancelled) return
-        console.error("Failed to poll WeChat QR session:", pollError)
+        clientLog.error("Failed to poll WeChat QR session:", pollError)
         setError(
           pollError instanceof Error
             ? pollError.message
@@ -1086,7 +1090,7 @@ export default function ImPage() {
           )
           // fall through to schedule the next poll
         } else {
-          console.error("Failed to poll DingTalk Device Flow:", pollError)
+          clientLog.error("Failed to poll DingTalk Device Flow:", pollError)
           setError(
             pollError instanceof Error
               ? pollError.message
@@ -1179,7 +1183,7 @@ export default function ImPage() {
         toast.success("Feishu account created")
       }
     } catch (createError) {
-      console.error("Failed to create Feishu account:", createError)
+      clientLog.error("Failed to create Feishu account:", createError)
       setError(
         createError instanceof Error
           ? createError.message
@@ -1254,7 +1258,7 @@ export default function ImPage() {
       await loadData(true)
       toast.success("WeCom account created")
     } catch (createError) {
-      console.error("Failed to create WeCom account:", createError)
+      clientLog.error("Failed to create WeCom account:", createError)
       setError(
         createError instanceof Error
           ? createError.message
@@ -1343,7 +1347,7 @@ export default function ImPage() {
         toast.success("QQ account created")
       }
     } catch (createError) {
-      console.error("Failed to create QQ account:", createError)
+      clientLog.error("Failed to create QQ account:", createError)
       setError(
         createError instanceof Error
           ? createError.message
@@ -1392,7 +1396,7 @@ export default function ImPage() {
       setWeixinSession(result?.session || null)
       toast.success("WeChat QR code ready")
     } catch (createError) {
-      console.error("Failed to start WeChat QR session:", createError)
+      clientLog.error("Failed to start WeChat QR session:", createError)
       setError(
         createError instanceof Error
           ? createError.message
@@ -1481,7 +1485,7 @@ export default function ImPage() {
         toast.success("DingTalk QR ready — scan with the DingTalk mobile app")
       }
     } catch (createError) {
-      console.error("Failed to start DingTalk Device Flow:", createError)
+      clientLog.error("Failed to start DingTalk Device Flow:", createError)
       setError(
         createError instanceof Error
           ? createError.message
@@ -1540,7 +1544,10 @@ export default function ImPage() {
       setDingtalkManualMode(false)
       await loadData(true)
     } catch (createError) {
-      console.error("Failed to create DingTalk account manually:", createError)
+      clientLog.error(
+        "Failed to create DingTalk account manually:",
+        createError
+      )
       setError(
         createError instanceof Error
           ? createError.message
@@ -1593,7 +1600,7 @@ export default function ImPage() {
       }
       toast.success("IM session settings saved")
     } catch (saveError) {
-      console.error("Failed to update IM session settings:", saveError)
+      clientLog.error("Failed to update IM session settings:", saveError)
       setError(
         saveError instanceof Error
           ? saveError.message
@@ -1654,7 +1661,7 @@ export default function ImPage() {
       }
       toast.success("Binding settings saved")
     } catch (saveError) {
-      console.error("Failed to update transport account settings:", saveError)
+      clientLog.error("Failed to update transport account settings:", saveError)
       setError(
         saveError instanceof Error
           ? saveError.message
@@ -1707,7 +1714,7 @@ export default function ImPage() {
       }
       toast.success("QQ account config saved")
     } catch (saveError) {
-      console.error("Failed to update QQ account config:", saveError)
+      clientLog.error("Failed to update QQ account config:", saveError)
       setError(
         saveError instanceof Error
           ? saveError.message
@@ -1741,7 +1748,10 @@ export default function ImPage() {
       }
       toast.success("Account disconnected")
     } catch (disconnectError) {
-      console.error("Failed to disconnect transport account:", disconnectError)
+      clientLog.error(
+        "Failed to disconnect transport account:",
+        disconnectError
+      )
       setError(
         disconnectError instanceof Error
           ? disconnectError.message
@@ -1780,7 +1790,7 @@ export default function ImPage() {
       }
       toast.success("External user mapping updated")
     } catch (linkError) {
-      console.error("Failed to update external user mapping:", linkError)
+      clientLog.error("Failed to update external user mapping:", linkError)
       setError(
         linkError instanceof Error
           ? linkError.message

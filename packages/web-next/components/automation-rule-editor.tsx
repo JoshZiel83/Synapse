@@ -41,6 +41,10 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { api } from "@/lib/api"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.components.automation-rule-editor")
+
 type AutomationRuleEditorProps = {
   workspaceId?: string | null
   workspaceName?: string | null
@@ -209,7 +213,10 @@ export function AutomationRuleEditor({
         eventSourceId: current.eventSourceId || sources[0]?.id || "",
       }))
     } catch (error) {
-      console.error("Failed to load event sources for trigger editing:", error)
+      clientLog.error(
+        "Failed to load event sources for trigger editing:",
+        error
+      )
       toast.error(
         error instanceof Error ? error.message : "Failed to load event sources"
       )
@@ -235,7 +242,7 @@ export function AutomationRuleEditor({
     try {
       await onSubmit(built.data)
     } catch (error) {
-      console.error("Failed to save trigger:", error)
+      clientLog.error("Failed to save trigger:", error)
       toast.error(
         error instanceof Error ? error.message : "Failed to save trigger"
       )

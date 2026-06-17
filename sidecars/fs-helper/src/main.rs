@@ -18,6 +18,7 @@ mod manifest;
 mod path;
 mod rpc;
 mod search;
+mod telemetry;
 
 use rpc::{RpcError, RpcRequest, RpcResponse};
 
@@ -88,8 +89,29 @@ pub struct RebuildTaskState {
     pub error: Option<String>,
 }
 
+/// Structured tracing to STDERR only (stdout is the JSON-RPC protocol channel).
+/// Level via SYNAPSE_DEVICE_LOG_LEVEL (default info). The Node parent drains this
+/// stderr into the device-runtime log stream.
+fn init_logging() {
+    let level =
+        std::env::var("SYNAPSE_DEVICE_LOG_LEVEL").unwrap_or_else(|_| "info".to_string());
+    let filter = tracing_subscriber::EnvFilter::try_new(&level)
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let _ = tracing_subscriber::fmt()
+        .json()
+        .with_writer(std::io::stderr)
+        .with_env_filter(filter)
+        .try_init();
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    init_logging();
+    // OTLP span export (P7) — None unless OTEL_EXPORTER_OTLP_ENDPOINT is set.
+    // Held to the end of main so the batch processor is flushed on a clean
+    // (stdin-close) shutdown.
+    let otel_provider = telemetry::init_tracing();
+    tracing::info!(service = "fs-helper", pid = std::process::id(), "fs-helper sidecar starting");
     let cli = Cli::parse();
     std::fs::create_dir_all(&cli.work_dir)?;
     let history = history::HistoryStore::open(
@@ -136,6 +158,12 @@ async fn main() -> Result<()> {
         stdout.write_all(b"\n").await?;
         stdout.flush().await?;
     }
+    // Clean shutdown (stdin closed by the supervisor): flush buffered spans.
+    // On SIGTERM/SIGKILL this won't run; the parent api/device-runtime spans
+    // still form the trace, with fs-helper leaf spans best-effort.
+    if let Some(provider) = otel_provider {
+        let _ = provider.shutdown();
+    }
     Ok(())
 }
 
@@ -154,6 +182,10 @@ async fn handle_frame(state: &Arc<State>, raw: &str) -> Option<String> {
         }
     };
     let id = req.id.clone().unwrap_or(Value::Null);
+    // Per-RPC span (P7), parented by the device-runtime's inbound traceparent so
+    // this helper's work joins the originating tool call's trace. No-op when
+    // OTEL is disabled. Held across dispatch so its duration is the span's.
+    let _span = telemetry::rpc_span(&req.method, req.traceparent.as_deref());
     let result = dispatch(state.clone(), req.method.as_str(), req.params.unwrap_or(Value::Null)).await;
     if req.id.is_none() {
         return None;

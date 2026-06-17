@@ -1,4 +1,4 @@
-import { Worker } from "bullmq"
+import { tracedWorker } from "./job-tracing.js"
 import { QUEUE_NAMES } from "@synapse/shared"
 import { redis } from "../infrastructure/redis/index.js"
 import {
@@ -26,7 +26,7 @@ export async function ensureAutomationSchedulerJob() {
 }
 
 export function startAutomationSchedulerWorker() {
-  const worker = new Worker(
+  const worker = tracedWorker(
     QUEUE_NAMES.AUTOMATION_SCHEDULER,
     async () => {
       const scheduled = await scheduleDueAutomationExecutions()

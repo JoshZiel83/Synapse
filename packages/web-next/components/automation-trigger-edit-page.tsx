@@ -20,6 +20,10 @@ import {
 } from "@/components/app-card"
 import { api } from "@/lib/api"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.components.automation-trigger-edit-page")
+
 export function AutomationTriggerEditPage({
   triggerId,
 }: {
@@ -48,7 +52,7 @@ export function AutomationTriggerEditPage({
           setRule(nextRule)
         }
       } catch (error) {
-        console.error("Failed to load trigger for editing:", error)
+        clientLog.error("Failed to load trigger for editing:", error)
         if (!cancelled) {
           setRule(null)
           toast.error(

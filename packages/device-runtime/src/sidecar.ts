@@ -6,6 +6,10 @@ import { spawn, type ChildProcess } from "node:child_process"
 import { EventEmitter } from "node:events"
 import { createInterface } from "node:readline"
 import { parseSidecarResponseFrame } from "./sidecar-codec.js"
+import { createDeviceLogger } from "./logger.js"
+import { getTraceparent } from "./trace-context.js"
+
+const sidecarLog = createDeviceLogger("sidecar")
 
 export interface SidecarOptions {
   /** Absolute path to the synapse-device-cua-helper binary. */
@@ -67,6 +71,21 @@ export function startSidecar(opts: SidecarOptions): SidecarHandle {
     })
   }
 
+  // Drain the child's stderr. REQUIRED: stderr is piped, and an undrained pipe
+  // deadlocks the child via OS pipe backpressure the moment it writes anything
+  // (the cua/fs-helper helpers log diagnostics there). Each line is forwarded
+  // into the device-runtime log stream. Also expose the stream on the handle so
+  // callers (e.g. fs-helper-client's helper_log_tail) can observe it too.
+  if (child.stderr) {
+    const errRl = createInterface({ input: child.stderr })
+    errRl.on("line", (line) => {
+      if (!line.trim()) return
+      sidecarLog.error("sidecar stderr", { line, binary: opts.binaryPath })
+    })
+  }
+  ;(emitter as unknown as { stderr?: NodeJS.ReadableStream }).stderr =
+    child.stderr ?? undefined
+
   child.on("exit", (code) => {
     exited = true
     // Fail every in-flight request so callers don't hang forever when the
@@ -86,12 +105,20 @@ export function startSidecar(opts: SidecarOptions): SidecarHandle {
       }
       const id = String(nextId++)
       pending.set(id, { resolve, reject })
-      const frame = { jsonrpc: "2.0", id, method, params }
+      // Stamp the active dispatch traceparent (P7) so the sidecar can continue
+      // the same trace for this RPC.
+      const traceparent = getTraceparent()
+      const frame = traceparent
+        ? { jsonrpc: "2.0", id, method, params, traceparent }
+        : { jsonrpc: "2.0", id, method, params }
       child.stdin?.write(JSON.stringify(frame) + "\n")
     })
   emitter.notify = (method, params) => {
     if (exited) return
-    const frame = { jsonrpc: "2.0", method, params }
+    const traceparent = getTraceparent()
+    const frame = traceparent
+      ? { jsonrpc: "2.0", method, params, traceparent }
+      : { jsonrpc: "2.0", method, params }
     child.stdin?.write(JSON.stringify(frame) + "\n")
   }
   emitter.stop = async () => {

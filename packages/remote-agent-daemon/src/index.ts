@@ -110,15 +110,6 @@ function shouldLog(level: LogLevel) {
   return LOG_LEVEL_WEIGHTS[level] <= LOG_LEVEL_WEIGHTS[activeLogLevel]
 }
 
-function formatLogMeta(meta?: Record<string, unknown>) {
-  if (!meta || Object.keys(meta).length === 0) return ""
-  try {
-    return ` ${JSON.stringify(meta)}`
-  } catch {
-    return ""
-  }
-}
-
 function log(
   level: LogLevel,
   scope: string,
@@ -126,8 +117,37 @@ function log(
   meta?: Record<string, unknown>
 ) {
   if (!shouldLog(level)) return
-  const line = `[${new Date().toISOString()}] [${level}] [${scope}] ${message}${formatLogMeta(meta)}\n`
-  process.stderr.write(line)
+  // Structured NDJSON to stderr (Alloy/Loki-parseable, consistent with the rest
+  // of the system — the daemon's stderr is captured by Docker/Alloy in compose).
+  // `service` identifies the daemon; `scope` is the per-agent tag
+  // (e.g. remote-agent:<id>); a spawn-injected traceparent is echoed for
+  // correlation. stdout is left clean by invariant (claude-driver passthrough).
+  // Caller meta is spread FIRST so the fixed fields below always win — meta
+  // can't clobber level/service/scope/msg/traceparent.
+  const record: Record<string, unknown> = {
+    ...(meta ?? {}),
+    time: new Date().toISOString(),
+    level,
+    service: "remote-agent-daemon",
+    scope,
+    msg: message,
+  }
+  const traceparent = process.env.SYNAPSE_TRACEPARENT || process.env.TRACEPARENT
+  if (traceparent) record.traceparent = traceparent
+  let line: string
+  try {
+    line = JSON.stringify(record)
+  } catch {
+    line = JSON.stringify({
+      time: record.time,
+      level,
+      service: "remote-agent-daemon",
+      scope,
+      msg: message,
+      metaError: "unserializable",
+    })
+  }
+  process.stderr.write(`${line}\n`)
 }
 
 function maskSecret(value: string) {

@@ -1,11 +1,13 @@
 const path = require("path")
-const { getDefaultConfig } = require("expo/metro-config")
+// Sentry's drop-in for getDefaultConfig — adds the Debug ID serializer needed
+// for source-map symbolication. Falls back to expo's default if unavailable.
+const { getSentryExpoConfig } = require("@sentry/react-native/metro")
 const { withNativeWind } = require("nativewind/metro")
 
 const projectRoot = __dirname
 const workspaceRoot = path.resolve(projectRoot, "../..")
 
-const config = getDefaultConfig(projectRoot)
+const config = getSentryExpoConfig(projectRoot)
 
 config.resolver.assetExts = [...(config.resolver.assetExts || []), "wasm"]
 

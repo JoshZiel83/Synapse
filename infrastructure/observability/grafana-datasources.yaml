@@ -1,0 +1,35 @@
+# Grafana datasource provisioning for the Synapse `observability` profile.
+# Loki (logs) + Tempo (traces), wired so a log line's `trace_id` links straight
+# to its trace in Tempo (logs -> traces correlation).
+apiVersion: 1
+
+datasources:
+  - name: Loki
+    type: loki
+    uid: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      # Turn the pino `trace_id` field in each log line into a clickable link to
+      # the Tempo trace. Grafana interpolates `$` in provisioning files, so the
+      # value macro MUST be escaped as `$$` (a single `$` would be read as an
+      # empty env var and the link would be dead).
+      derivedFields:
+        - name: trace_id
+          matcherType: regex
+          matcherRegex: '"trace_id":"(\w+)"'
+          url: "$${__value.raw}"
+          datasourceUid: tempo
+
+  - name: Tempo
+    type: tempo
+    uid: tempo
+    access: proxy
+    url: http://tempo:3200
+    jsonData:
+      # From a trace, jump back to its logs in Loki by trace_id.
+      tracesToLogsV2:
+        datasourceUid: loki
+        filterByTraceID: true
+        spanStartTimeShift: -5m
+        spanEndTimeShift: 5m

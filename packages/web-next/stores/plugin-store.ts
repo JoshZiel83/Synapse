@@ -10,6 +10,10 @@ import type {
 import type { CapabilityAccessTarget } from "@synapse/shared/types"
 import { api } from "@/lib/api"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.stores.plugin-store")
+
 interface PluginState {
   marketplace: MarketplacePluginView[]
   categories: PluginCategoryView[]
@@ -68,7 +72,7 @@ export const usePluginStore = create<PluginState>((set, get) => ({
       })
       set({ marketplace: data })
     } catch (err) {
-      console.error("Failed to load marketplace:", err)
+      clientLog.error("Failed to load marketplace:", err)
     } finally {
       set({ loadingMarketplace: false })
     }
@@ -79,7 +83,7 @@ export const usePluginStore = create<PluginState>((set, get) => ({
       const data = await api.getPluginCategories()
       set({ categories: data })
     } catch (err) {
-      console.error("Failed to load plugin categories:", err)
+      clientLog.error("Failed to load plugin categories:", err)
     }
   },
 
@@ -88,7 +92,7 @@ export const usePluginStore = create<PluginState>((set, get) => ({
       const data = await api.getMcpOrganizations()
       set({ organizations: data })
     } catch (err) {
-      console.error("Failed to load orgs:", err)
+      clientLog.error("Failed to load orgs:", err)
     }
   },
 
@@ -98,7 +102,7 @@ export const usePluginStore = create<PluginState>((set, get) => ({
       const data = await api.getInstallations(wsId)
       set({ installations: data })
     } catch (err) {
-      console.error("Failed to load installations:", err)
+      clientLog.error("Failed to load installations:", err)
     } finally {
       set({ loadingInstalled: false })
     }

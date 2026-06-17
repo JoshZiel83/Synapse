@@ -10,6 +10,10 @@ import NewConversationDialog from "./new-conversation-dialog"
 import type { ChatComposerSubmitPayload } from "@/components/chat-composer"
 import { MessageSquare } from "lucide-react"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.dashboard.chat")
+
 export default function ChatPage() {
   const { workspaceId } = useWorkspace()
   const router = useRouter()
@@ -128,7 +132,7 @@ export default function ChatPage() {
       )
       updateConversationRoute(conversationId)
     } catch (err) {
-      console.error("Failed to create conversation:", err)
+      clientLog.error("Failed to create conversation:", err)
     }
   }
 

@@ -34,6 +34,10 @@ import { Separator } from "@/components/ui/separator"
 import { api } from "@/lib/api"
 import { resolveFileUrl } from "@/lib/utils"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.components.actor-version-history-page")
+
 function buildHistoryHref(actorId: string, version: number) {
   return `/dashboard/actors/${actorId}/history?version=${version}`
 }
@@ -113,7 +117,7 @@ export function ActorVersionHistoryPage({ actorId }: { actorId: string }) {
             : []
         )
       } catch (error) {
-        console.error("Failed to load actor history:", error)
+        clientLog.error("Failed to load actor history:", error)
         if (!cancelled) {
           toast.error(
             error instanceof Error

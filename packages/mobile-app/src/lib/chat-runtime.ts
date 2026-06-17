@@ -1,6 +1,9 @@
 import { Platform } from "react-native"
 
 import { api } from "@/lib/api"
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("mobile.chat-runtime")
 import {
   applyChatWorkspaceQueueState,
   buildPreviewTextFromItem,
@@ -392,7 +395,7 @@ export class ChatRuntime {
       await api.sendChatTypingState(snapshot.workspaceId, conversationId, state)
     } catch (error) {
       // Typing is best-effort.
-      console.debug("Failed to send typing state:", error)
+      clientLog.debug("Failed to send typing state:", error)
     }
   }
 

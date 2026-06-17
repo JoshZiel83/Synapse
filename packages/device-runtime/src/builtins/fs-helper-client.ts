@@ -6,6 +6,7 @@
 import { existsSync } from "node:fs"
 import type { SidecarHandle } from "../sidecar.js"
 import { startSidecar } from "../sidecar.js"
+import { createDeviceLogger } from "../logger.js"
 import {
   FS_HELPER_PROTO_VERSION,
   FsHelperProtoMismatchError,
@@ -175,14 +176,8 @@ export interface FsHelperClient {
 export function createFsHelperClient(
   opts: FsHelperClientOptions
 ): FsHelperClient {
-  const logger = opts.logger ?? {
-    warn(msg, data) {
-      console.warn(`[fs-helper] ${msg}`, data ?? "")
-    },
-    error(msg, data) {
-      console.error(`[fs-helper] ${msg}`, data ?? "")
-    },
-  }
+  // Unified device-runtime logger (structured NDJSON to stderr); see logger.ts.
+  const logger = opts.logger ?? createDeviceLogger("fs-helper")
   const startImpl = opts.startSidecarImpl ?? startSidecar
   const defaultTimeoutMs = opts.defaultRpcTimeoutMs ?? DEFAULT_TIMEOUT_MS
 

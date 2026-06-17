@@ -1,12 +1,23 @@
-import Fastify from "fastify"
+// Tracing/instrumentation MUST initialize before anything that creates HTTP
+// servers or clients, so this is the very first import (its module body sets up
+// OpenTelemetry + optional Sentry as a side effect). It also exports the Fastify
+// OpenTelemetry plugin registered below.
+import {
+  fastifyOtelInstrumentation,
+  setupSentryErrorHandler,
+  shutdownTelemetry,
+} from "./instrumentation.js"
+import { randomUUID } from "node:crypto"
+import Fastify, { type FastifyBaseLogger } from "fastify"
 import cors from "@fastify/cors"
 import cookie from "@fastify/cookie"
 import websocket from "@fastify/websocket"
 import multipart from "@fastify/multipart"
+import rateLimit from "@fastify/rate-limit"
 import { ZodError } from "zod"
 import { nowIsoInstant } from "@synapse/shared/datetime"
 import { config } from "./config/index.js"
-import { createLogger } from "./infrastructure/logger/index.js"
+import { createLogger, logger } from "./infrastructure/logger/index.js"
 import {
   assertRequiredSchema,
   closeDatabasePool,
@@ -52,6 +63,7 @@ import platformModule from "./modules/platform/index.js"
 import auditModule from "./modules/audit/index.js"
 import imModule from "./modules/im/index.js"
 import installerModule from "./modules/installer/index.js"
+import logsModule from "./modules/logs/index.js"
 import {
   startTransportRuntimeManager,
   stopTransportRuntimeManager,
@@ -123,14 +135,29 @@ function isMalformedUuidDatabaseError(error: unknown) {
 }
 
 async function main() {
+  // Single shared pino instance (infrastructure/logger): app logs and request
+  // logs are now one logger, so level/format never drift. Fastify-compatible
+  // req/res/err serializers + pino-pretty-in-dev are baked into the instance
+  // (passing an instance bypasses Fastify's own serializer injection).
+  // Cast to FastifyBaseLogger so Fastify's `Logger` generic resolves to the
+  // default (not the concrete pino Logger type) — otherwise `app` would not be
+  // assignable to helpers typed as FastifyInstance<…, FastifyBaseLogger>.
   const app = Fastify({
-    logger: {
-      transport:
-        config.nodeEnv === "development"
-          ? { target: "pino-pretty", options: { colorize: true } }
-          : undefined,
-    },
+    logger: logger as FastifyBaseLogger,
+    // Stable per-request id. We do NOT derive it from the active span: Fastify
+    // calls genReqId before @fastify/otel's onRequest span exists, so a
+    // span-derived id would never match. Correlation across logs/traces is via
+    // the trace_id that the pino mixin adds to every in-handler log line.
+    genReqId: () => randomUUID(),
   })
+
+  // Fastify route/handler/hook spans (OpenTelemetry). MUST be registered before
+  // routes so it can intercept their definitions.
+  await app.register(fastifyOtelInstrumentation.plugin())
+
+  // Sentry's Fastify error handler — Fastify v4 requires explicit setup or route
+  // errors never reach Sentry. No-op when SENTRY_DSN is unset.
+  setupSentryErrorHandler(app)
 
   app.addContentTypeParser(
     "application/json",
@@ -191,6 +218,18 @@ async function main() {
   await app.register(cookie)
   await app.register(websocket)
   await app.register(multipart, { limits: { fileSize: 25 * 1024 * 1024 } })
+  // Opt-in per-route rate limiting: global:false means a route enables it via
+  // its config.rateLimit (used by POST /api/v1/logs). Key by the real client IP
+  // from X-Forwarded-For (the api runs behind nginx + the Next proxy, so req.ip
+  // is the proxy container — without this every client would share one bucket).
+  await app.register(rateLimit, {
+    global: false,
+    keyGenerator: (req) => {
+      const xff = req.headers["x-forwarded-for"]
+      const first = Array.isArray(xff) ? xff[0] : xff
+      return first?.split(",")[0]?.trim() || req.ip
+    },
+  })
 
   // Ensure storage directory exists
   await ensureStorageDir()
@@ -241,6 +280,7 @@ async function main() {
   await app.register(devicesModule)
   await app.register(runtimeAuthorizationsModule)
   await app.register(modelGroupsModule)
+  await app.register(logsModule)
   await app.register(platformModule)
   await app.register(auditModule)
   await app.register(imModule)
@@ -454,6 +494,13 @@ async function main() {
       ).catch((err) => {
         app.log.error({ err }, "Database pool shutdown timed out")
       })
+      // Flush + close telemetry last so buffered spans/Sentry events from the
+      // shutdown path are not lost.
+      await waitWithTimeout("telemetry flush", shutdownTelemetry(), 3000).catch(
+        (err) => {
+          app.log.error({ err }, "Telemetry flush timed out")
+        }
+      )
       await waitWithTimeout(
         "redis shutdown",
         shutdownRedisConnections(),

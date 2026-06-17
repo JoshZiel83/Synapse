@@ -28,6 +28,12 @@ import {
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger(
+  "web.dashboard.settings.actor-model-assignment-board"
+)
+
 type ActorRecord = {
   id: string
   displayName: string
@@ -246,7 +252,7 @@ export default function ActorModelAssignmentBoard() {
             : nextActors[0]?.id || null
         )
       } catch (error) {
-        console.error("Failed to load actors for model assignment:", error)
+        clientLog.error("Failed to load actors for model assignment:", error)
         setActors([])
         setSelectedActorId(null)
       } finally {
@@ -300,7 +306,7 @@ export default function ActorModelAssignmentBoard() {
         setPersistedGroups(nextAssigned)
         setVisibleGroups(nextVisible)
       } catch (error) {
-        console.error("Failed to load actor assignment detail:", error)
+        clientLog.error("Failed to load actor assignment detail:", error)
         setAssignedGroups([])
         setPersistedGroups([])
         setVisibleGroups([])
@@ -379,7 +385,7 @@ export default function ActorModelAssignmentBoard() {
           setAssignedGroups(nextAssigned)
         }
       } catch (error) {
-        console.error("Failed to save actor model assignment:", error)
+        clientLog.error("Failed to save actor model assignment:", error)
       } finally {
         if (
           workspaceIdRef.current === currentWorkspaceId &&
@@ -447,7 +453,7 @@ export default function ActorModelAssignmentBoard() {
       setPersistedGroups(nextAssigned)
       setVisibleGroups(nextVisible)
     } catch (error) {
-      console.error("Failed to reload actor model assignment:", error)
+      clientLog.error("Failed to reload actor model assignment:", error)
     } finally {
       setLoadingDetail(false)
     }

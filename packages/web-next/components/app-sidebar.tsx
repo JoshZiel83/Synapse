@@ -60,6 +60,10 @@ import { SidebarWeixinBinding } from "@/components/sidebar-weixin-binding"
 import { TeamSwitcher } from "@/components/team-switcher"
 import { toast } from "sonner"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.components.app-sidebar")
+
 const mainItems = [
   { href: "/dashboard", label: "Home", icon: House },
   { href: "/dashboard/chat", label: "Chat", icon: MessageSquare },
@@ -248,7 +252,7 @@ function NavUser({
       setUser(updated?.user || updated)
       toast.success("Avatar updated")
     } catch (error) {
-      console.error("Failed to update user avatar:", error)
+      clientLog.error("Failed to update user avatar:", error)
       toast.error(
         error instanceof Error ? error.message : "Avatar upload failed"
       )

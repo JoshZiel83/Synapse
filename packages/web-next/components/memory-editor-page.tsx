@@ -55,6 +55,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { api } from "@/lib/api"
 import { useAuthStore } from "@/stores/auth-store"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.components.memory-editor-page")
+
 function isMemorySpaceType(value: string | null): value is MemorySpaceType {
   return (
     value === "workspace_shared" ||
@@ -147,7 +151,7 @@ export default function MemoryEditorPage({ memoryId }: { memoryId?: string }) {
         setBaselineSignature(serializeEditorState(nextEditor))
       }
     } catch (error) {
-      console.error("Failed to load memory editor:", error)
+      clientLog.error("Failed to load memory editor:", error)
       toast.error(
         error instanceof Error ? error.message : "Failed to load memory"
       )
@@ -274,7 +278,7 @@ export default function MemoryEditorPage({ memoryId }: { memoryId?: string }) {
       setBaselineSignature(serializeEditorState(nextEditor))
       toast.success("Memory updated")
     } catch (error) {
-      console.error("Failed to save memory:", error)
+      clientLog.error("Failed to save memory:", error)
       toast.error(
         error instanceof Error ? error.message : "Failed to save memory"
       )
@@ -292,7 +296,7 @@ export default function MemoryEditorPage({ memoryId }: { memoryId?: string }) {
       toast.success("Memory deleted")
       router.push(returnTo)
     } catch (error) {
-      console.error("Failed to delete memory:", error)
+      clientLog.error("Failed to delete memory:", error)
       toast.error(
         error instanceof Error ? error.message : "Failed to delete memory"
       )

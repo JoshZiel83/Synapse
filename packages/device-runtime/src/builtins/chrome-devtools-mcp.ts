@@ -46,6 +46,7 @@ import type {
   RuntimeLogger,
 } from "../types.js"
 import { toolErrorResult } from "../mcp-host.js"
+import { createDeviceLogger } from "../logger.js"
 import {
   startMcpStdioSidecar,
   type McpClient,
@@ -124,14 +125,8 @@ interface ExposurePlan {
 // ─────────────────────────── helpers ───────────────────────────────────────
 
 function defaultLogger(): RuntimeLogger {
-  return {
-    info: (msg, data) =>
-      console.log(`[chrome-devtools-mcp] ${msg}`, data ?? ""),
-    warn: (msg, data) =>
-      console.warn(`[chrome-devtools-mcp] ${msg}`, data ?? ""),
-    error: (msg, data) =>
-      console.error(`[chrome-devtools-mcp] ${msg}`, data ?? ""),
-  }
+  // Unified device-runtime logger (structured NDJSON to stderr); see logger.ts.
+  return createDeviceLogger("chrome-devtools-mcp")
 }
 
 function buildExposurePlans(

@@ -24,18 +24,11 @@ import type {
   RuntimeLogger,
   RuntimeStatus,
 } from "./types.js"
+import { configureDeviceLogShipping, createDeviceLogger } from "./logger.js"
 
-const defaultLogger: RuntimeLogger = {
-  info(message, data) {
-    console.log(`[device-runtime] ${message}`, data ?? "")
-  },
-  warn(message, data) {
-    console.warn(`[device-runtime] ${message}`, data ?? "")
-  },
-  error(message, data) {
-    console.error(`[device-runtime] ${message}`, data ?? "")
-  },
-}
+// The single device-runtime logger (structured NDJSON to stderr). Replaces the
+// old console-backed inline shape; see logger.ts.
+const defaultLogger: RuntimeLogger = createDeviceLogger("runtime")
 
 function controlPlaneUrlFor(origin: string): string {
   const trimmed = origin.replace(/\/$/, "")
@@ -185,6 +178,25 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
           logger.info("envelope server pubkey absorbed from hello ack", {
             kid,
           })
+        }
+        // Configure device log回传 with the short-lived ingest token minted in
+        // the hello ack (POST <api>/api/v1/logs, Bearer). Absent token (server's
+        // SYNAPSE_LOG_INGEST_SECRET unset) => shipping stays off; logs remain on
+        // local stderr.
+        const logIngestToken =
+          ack &&
+          typeof ack === "object" &&
+          "log_ingest_token" in ack &&
+          typeof (ack as { log_ingest_token?: unknown }).log_ingest_token ===
+            "string"
+            ? ((ack as { log_ingest_token: string }).log_ingest_token as string)
+            : null
+        if (logIngestToken) {
+          configureDeviceLogShipping({
+            endpoint: `${this.opts.serverOrigin.replace(/\/$/, "")}/api/v1/logs`,
+            token: logIngestToken,
+          })
+          logger.info("device log shipping configured")
         }
         // Pull the per-service tunnel path token the server issued (or
         // re-issued) for this service. Falls back to the env-supplied

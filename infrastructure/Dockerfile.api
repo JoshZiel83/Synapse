@@ -163,4 +163,8 @@ ENV MEMORY_MODEL_CACHE_DIR=/app/models/memory \
     TESSERACT_LANGS=chi_sim+chi_tra+eng+jpn \
     SYNAPSE_DEVICE_FS_HELPER_PATH=/app/sidecars/fs-helper/target/release/synapse-device-fs-helper
 EXPOSE 3001
-CMD ["node", "packages/api/dist/index.js"]
+# `--import` preloads the OpenTelemetry/Sentry instrumentation before app code so
+# the HTTP instrumentation can patch node:http (inbound spans + outbound W3C
+# traceparent propagation) under ESM. instrumentation.js is also imported by
+# index.js (ESM caches it, so it initializes exactly once).
+CMD ["node", "--import", "./packages/api/dist/instrumentation.js", "packages/api/dist/index.js"]

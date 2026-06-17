@@ -10,6 +10,10 @@
 import { spawn, type ChildProcess } from "node:child_process"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
+import { createDeviceLogger } from "./logger.js"
+
+// Unified device-runtime logger (structured NDJSON to stderr); see logger.ts.
+const sidecarLog = createDeviceLogger("mcp-stdio-sidecar")
 
 export interface McpToolDescriptor {
   name: string
@@ -169,7 +173,7 @@ export async function startMcpStdioSidecar(
   ).stderr?.on("data", (chunk) => {
     const message = chunk.toString().trim()
     if (message) {
-      console.error(`[mcp-stdio-sidecar] ${message}`)
+      sidecarLog.error("sidecar stderr", { line: message })
     }
   })
 

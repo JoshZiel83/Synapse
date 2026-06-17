@@ -26,6 +26,10 @@ import {
   type ModelGroupScope,
 } from "./model-group-shared"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.dashboard.settings.model-group-dialog")
+
 interface ModelGroupDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -113,7 +117,7 @@ export default function ModelGroupDialog({
       }
       onSaved()
     } catch (err) {
-      console.error("Failed to save model group:", err)
+      clientLog.error("Failed to save model group:", err)
     } finally {
       setSaving(false)
     }

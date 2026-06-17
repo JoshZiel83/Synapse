@@ -29,6 +29,10 @@ import {
 import { api, ApiError } from "@/lib/api"
 import { useChatStore } from "@/stores/chat-store"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.dashboard.dashboard-home-page")
+
 type PickerMode = "launch"
 type PickerIntent = "submit" | "target"
 type LaunchActor = {
@@ -107,7 +111,7 @@ export default function DashboardHomePage() {
       })
       .catch((error) => {
         if (!cancelled) {
-          console.error("Failed to load chief actor preference:", error)
+          clientLog.error("Failed to load chief actor preference:", error)
           setPreference(emptyPreference(workspaceId))
           setErrorMessage("Failed to load your chief actor preference.")
         }
@@ -157,7 +161,7 @@ export default function DashboardHomePage() {
       })
       .catch((error) => {
         if (cancelled) return
-        console.error("Failed to load available dashboard actors:", error)
+        clientLog.error("Failed to load available dashboard actors:", error)
         setAvailableActors([])
       })
 

@@ -33,6 +33,10 @@ import {
   type ModelGroupScopeAuto,
 } from "./model-group-shared"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.dashboard.settings.model-group-detail")
+
 type ModelItem = ModelGroupItemView
 
 interface GroupDetail {
@@ -131,7 +135,7 @@ export default function ModelGroupDetail({
       setGroup(group)
       setResolvedScope(MODEL_GROUP_OWNER_TYPE.PLATFORM)
     } catch (err) {
-      console.error("Failed to load model group:", err)
+      clientLog.error("Failed to load model group:", err)
       setGroup(null)
     } finally {
       setLoading(false)
@@ -164,7 +168,7 @@ export default function ModelGroupDetail({
       }
       await loadGroup()
     } catch (err) {
-      console.error("Failed to toggle item:", err)
+      clientLog.error("Failed to toggle item:", err)
     }
   }
 
@@ -179,7 +183,7 @@ export default function ModelGroupDetail({
       }
       await loadGroup()
     } catch (err) {
-      console.error("Failed to delete item:", err)
+      clientLog.error("Failed to delete item:", err)
     }
   }
 

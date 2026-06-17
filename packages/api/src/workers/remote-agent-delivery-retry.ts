@@ -1,4 +1,4 @@
-import { Worker } from "bullmq"
+import { tracedWorker } from "./job-tracing.js"
 import { QUEUE_NAMES } from "@synapse/shared"
 import { redis } from "../infrastructure/redis/index.js"
 import { runDueRemoteAgentDeliveryRetries } from "../modules/remote-agents/service.js"
@@ -22,7 +22,7 @@ export async function ensureRemoteAgentDeliveryRetryJob() {
 }
 
 export function startRemoteAgentDeliveryRetryWorker() {
-  const worker = new Worker(
+  const worker = tracedWorker(
     QUEUE_NAMES.REMOTE_AGENT_DELIVERY_RETRY,
     async () => {
       return runDueRemoteAgentDeliveryRetries()

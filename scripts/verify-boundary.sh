@@ -35,12 +35,13 @@ npm run build -w packages/remote-agent-daemon
 ok "builds clean"
 
 # ── 2. Boundary guards (machine-checkable layering rules) ───────────────────
-step "guard:api + guard:layering + guard:datetime"
+step "guard:api + guard:layering + guard:datetime + guard:logging"
 npm run guard:db -w packages/api
 npm run guard:fk-policy -w packages/api
 npm run guard:soft-delete -w packages/api
 npm run guard:layering -w packages/api
 node ./scripts/guard-datetime-boundaries.mjs
+node ./scripts/guard-logging.mjs
 ok "guards clean"
 
 # ── 3. Business-enum audit (no raw protocol literals) ───────────────────────

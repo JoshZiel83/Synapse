@@ -3,7 +3,9 @@
 提供标准化的日志配置和初始化功能，避免多处重复初始化。
 """
 
+import json
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -12,6 +14,31 @@ from typing import Optional
 _loggers = {}
 _initialized = False
 _log_file_path: Optional[Path] = None
+
+
+class _JsonFormatter(logging.Formatter):
+    """结构化 NDJSON 输出（与系统其余日志一致，便于 Alloy/Loki 采集）。
+
+    stdout 留给 MCP/协议，日志一律走 stderr。携带 service 与（若父进程注入）
+    traceparent，使设备侧日志可与发起请求关联。
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "time": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
+            "level": record.levelname.lower(),
+            "service": "mijia-mcp",
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        traceparent = os.environ.get("SYNAPSE_TRACEPARENT") or os.environ.get(
+            "TRACEPARENT"
+        )
+        if traceparent:
+            payload["traceparent"] = traceparent
+        if record.exc_info:
+            payload["exc"] = self.formatException(record.exc_info)
+        return json.dumps(payload, ensure_ascii=False)
 
 def setup_logging(log_level: str = "INFO", log_dir: Optional[Path] = None) -> Path:
     """设置全局日志配置
@@ -44,9 +71,10 @@ def setup_logging(log_level: str = "INFO", log_dir: Optional[Path] = None) -> Pa
     # 清除现有处理器
     root_logger.handlers.clear()
 
-    # 添加stderr处理器（重要：MCP使用stderr而不是stdout）
+    # 添加stderr处理器（重要：MCP使用stderr而不是stdout）。stderr 是被容器/
+    # Alloy 采集的流，输出结构化 JSON；本地 run.log 保留可读文本格式。
     stderr_handler = logging.StreamHandler(sys.stderr)
-    stderr_handler.setFormatter(formatter)
+    stderr_handler.setFormatter(_JsonFormatter())
     root_logger.addHandler(stderr_handler)
 
     # 添加文件处理器

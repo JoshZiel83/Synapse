@@ -1,0 +1,30 @@
+{
+  "generatedAt": "2026-06-17T15:29:05.283Z",
+  "scriptVersion": 1,
+  "scanRoots": [
+    "packages/api/src",
+    "packages/shared/src",
+    "packages/device-protocol/src",
+    "packages/device-runtime/src",
+    "packages/remote-agent-daemon/src",
+    "packages/web-next",
+    "packages/mobile-app/src"
+  ],
+  "note": "Per-file console counts grandfathered. Ratchets DOWN only — new console calls fail CI. Regenerate after migrating a file.",
+  "rawConsoleCounts": {
+    "packages/api/src/index.ts": 3,
+    "packages/api/src/infrastructure/database/bootstrap.ts": 8,
+    "packages/api/src/infrastructure/database/purge.ts": 4,
+    "packages/api/src/infrastructure/database/rebuild.ts": 4,
+    "packages/api/src/infrastructure/database/seed-builtin-mcp-plugins.ts": 3,
+    "packages/api/src/infrastructure/database/seed-model-groups/cli.ts": 3,
+    "packages/api/src/infrastructure/database/seed.ts": 4,
+    "packages/api/src/modules/memory/bootstrap-model.ts": 2,
+    "packages/api/src/modules/sandbox/host-provider.ts": 2,
+    "packages/api/src/modules/sandbox/service.ts": 24,
+    "packages/api/src/workers/session-thinking.ts": 5,
+    "packages/device-runtime/src/bin.ts": 19,
+    "packages/web-next/scripts/build-repo-link-static.mjs": 2
+  },
+  "totalRawConsole": 83
+}

@@ -35,6 +35,10 @@ import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { toast } from "sonner"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.dashboard.contacts.contact-hub-client")
+
 type ConversationSummaryLike = {
   id: string
   title: string
@@ -265,7 +269,7 @@ export function ContactHubClient() {
         setDetail(null)
       }
     } catch (error) {
-      console.error("Failed to load contact hub:", error)
+      clientLog.error("Failed to load contact hub:", error)
       toast.error(
         error instanceof Error ? error.message : "Failed to load contacts"
       )

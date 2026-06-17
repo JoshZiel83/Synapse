@@ -18,6 +18,7 @@ import {
   type DirSyncResult,
 } from "@synapse/device-runtime"
 import { CONTENT_STORE_DIR } from "../../infrastructure/storage/index.js"
+import { activeTraceparent } from "../../infrastructure/observability/traceparent.js"
 
 export class SandboxMaterializeError extends Error {
   constructor(message: string) {
@@ -69,10 +70,19 @@ export function casDir(): string {
 interface HelperContext {
   helperPath: string
   casDir: string
+  /** Active trace context (P7) — the spawned helper's spans parent under it. */
+  traceparent?: string
 }
 
 function helperContext(): HelperContext {
-  return { helperPath: resolveFsHelperPath(), casDir: casDir() }
+  // Captured here so it reflects the api span active at the call site (these
+  // run inside the request/worker span); undefined when OTEL is off → the
+  // helper starts root spans.
+  return {
+    helperPath: resolveFsHelperPath(),
+    casDir: casDir(),
+    traceparent: activeTraceparent(),
+  }
 }
 
 /**

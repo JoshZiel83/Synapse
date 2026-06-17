@@ -16,6 +16,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.dashboard.settings.actor-assignment")
+
 interface Actor {
   id: string
   displayName: string
@@ -70,7 +74,7 @@ export default function ActorAssignment() {
         setActors(actorsRes.map(normalizeActor))
         setGroups(groupsRes)
       })
-      .catch((err) => console.error("Failed to load data:", err))
+      .catch((err) => clientLog.error("Failed to load data:", err))
       .finally(() => setLoading(false))
   }, [workspaceId])
 
@@ -82,7 +86,7 @@ export default function ActorAssignment() {
       setAssignedGroups(groups)
       setDialogOpen(true)
     } catch (err) {
-      console.error("Failed to load actor groups:", err)
+      clientLog.error("Failed to load actor groups:", err)
     }
   }
 
@@ -144,7 +148,7 @@ export default function ActorAssignment() {
       )
       setDialogOpen(false)
     } catch (err) {
-      console.error("Failed to save actor groups:", err)
+      clientLog.error("Failed to save actor groups:", err)
     } finally {
       setSaving(false)
     }

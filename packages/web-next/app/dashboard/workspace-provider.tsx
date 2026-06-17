@@ -14,6 +14,10 @@ import { ConnectorMetadataProvider } from "@/lib/im-connector-metadata"
 import { useClearWorkspaceQueries } from "@/hooks/use-logout"
 import type { WorkspaceListItemView } from "@synapse/shared"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.dashboard.workspace-provider")
+
 type WorkspaceInfo = WorkspaceListItemView
 
 interface WorkspaceContextType {
@@ -94,7 +98,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         }
       }
     } catch (err) {
-      console.error("Failed to load workspaces:", err)
+      clientLog.error("Failed to load workspaces:", err)
     } finally {
       await minimumDelay
       initialLoadPendingRef.current = false

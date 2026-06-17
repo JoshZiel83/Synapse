@@ -27,6 +27,12 @@ nucleo-matcher = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 ureq = { version = "2", default-features = false, features = ["tls"] }
 getrandom = "0.2"
+tracing = "0.1"
+# default-features=false drops the ANSI dep — logs are structured JSON to stderr.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "json", "env-filter"] }
+opentelemetry = "0.32.0"
+opentelemetry_sdk = "0.32.1"
+opentelemetry-otlp = "0.32.0"
 
 [dev-dependencies]
 tempfile = "3"

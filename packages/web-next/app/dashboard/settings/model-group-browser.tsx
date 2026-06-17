@@ -49,6 +49,10 @@ import {
   type ModelGroupScope,
 } from "./model-group-shared"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.dashboard.settings.model-group-browser")
+
 type ModelGroupSummary = {
   id: string
   workspaceId: string | null
@@ -391,7 +395,7 @@ export default function ModelGroupBrowser({
           : nextGroups[0]?.id || null
       )
     } catch (error) {
-      console.error("Failed to load model groups:", error)
+      clientLog.error("Failed to load model groups:", error)
       setGroups([])
       setSelectedGroupId(null)
     } finally {
@@ -422,7 +426,7 @@ export default function ModelGroupBrowser({
         return nextSelectedId
       })
     } catch (error) {
-      console.error("Failed to load model group detail:", error)
+      clientLog.error("Failed to load model group detail:", error)
       setSelectedGroup(null)
       setSelectedItemId(null)
     } finally {
@@ -493,7 +497,7 @@ export default function ModelGroupBrowser({
 
       await loadSelectedGroup(selectedGroup.id)
     } catch (error) {
-      console.error("Failed to delete model config:", error)
+      clientLog.error("Failed to delete model config:", error)
     }
   }
 
@@ -617,7 +621,7 @@ export default function ModelGroupBrowser({
         await loadSelectedGroup(selectedGroup.id, response?.id || null)
       }
     } catch (error) {
-      console.error("Failed to save model config:", error)
+      clientLog.error("Failed to save model config:", error)
       toast.error(getSaveErrorMessage(error, "Failed to save model config."))
     } finally {
       setSavingItem(false)

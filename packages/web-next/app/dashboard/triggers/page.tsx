@@ -48,6 +48,10 @@ import { Separator } from "@/components/ui/separator"
 import { api } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.dashboard.triggers")
+
 type AutomationRuleView = AutomationRuleSchemaType
 type AutomationExecutionView = AutomationExecutionSchemaType
 type TriggerStatus = AutomationRuleView["status"]
@@ -237,7 +241,7 @@ export default function TriggersPage() {
         await reloadExecutions(rule.id)
       }
     } catch (error) {
-      console.error("Failed to update trigger status:", error)
+      clientLog.error("Failed to update trigger status:", error)
       toast.error(
         error instanceof Error ? error.message : "Failed to update trigger"
       )
@@ -260,7 +264,7 @@ export default function TriggersPage() {
       toast.success("Trigger deleted")
       await reloadRules()
     } catch (error) {
-      console.error("Failed to delete trigger:", error)
+      clientLog.error("Failed to delete trigger:", error)
       toast.error(
         error instanceof Error ? error.message : "Failed to delete trigger"
       )

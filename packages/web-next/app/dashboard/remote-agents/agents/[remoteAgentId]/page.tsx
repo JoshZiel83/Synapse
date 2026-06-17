@@ -52,6 +52,12 @@ import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger(
+  "web.dashboard.remote-agents.agents.[remoteAgentId]"
+)
+
 type RemoteAgentDetailView = RemoteAgentResponseSchemaType["remoteAgent"]
 type RemoteAgentMachineListItemView =
   RemoteAgentMachineListResponseSchemaType["machines"][number]
@@ -245,7 +251,7 @@ export default function RemoteAgentDetailPage() {
       setIdentityIdDraft(profileResponse.identityId)
       setIdentitySearchEnabled(profileResponse.identitySearchEnabled)
     } catch (error) {
-      console.error("Failed to load remote agent:", error)
+      clientLog.error("Failed to load remote agent:", error)
       toast.error(
         error instanceof Error ? error.message : "Failed to load remote agent"
       )

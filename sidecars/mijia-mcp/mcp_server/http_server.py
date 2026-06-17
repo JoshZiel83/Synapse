@@ -46,6 +46,7 @@ from starlette.types import Receive, Scope, Send
 
 from adapter.mijia_adapter import MijiaAdapter
 from mcp_server import mcp_server as srv
+from mcp_server.tracing import instrument_app, setup_tracing
 
 import logging
 
@@ -355,6 +356,9 @@ async def _call_tool(name: str, arguments: dict[str, Any]) -> Any:
 
 
 def build_app() -> Starlette:
+    # OTLP tracing (P7): no-op unless OTEL_EXPORTER_OTLP_ENDPOINT is set.
+    setup_tracing()
+
     session_manager = StreamableHTTPSessionManager(
         app=_LOWLEVEL,
         event_store=None,
@@ -380,7 +384,7 @@ def build_app() -> Starlette:
     # "/mcp/" directly (200) and 307-redirects a bare "/mcp"; compliant MCP
     # clients (incl. the official SDK) follow the redirect, and the canonical
     # URL Synapse configures is "/mcp/" so no redirect occurs in practice.
-    return Starlette(
+    app = Starlette(
         debug=False,
         routes=[
             Route("/healthz", healthz, methods=["GET"]),
@@ -388,6 +392,9 @@ def build_app() -> Starlette:
         ],
         lifespan=lifespan,
     )
+    # Each request becomes a span continuing the api-injected traceparent.
+    instrument_app(app)
+    return app
 
 
 def main() -> None:

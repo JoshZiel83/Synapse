@@ -13,6 +13,10 @@ import {
   type Timestamp,
 } from "@synapse/shared"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.dashboard.settings.model-item-versions")
+
 interface ConfigVersion {
   id: string
   bindingId: string
@@ -52,7 +56,7 @@ export default function ModelItemVersions({
           : api.getItemVersions(workspaceId!, groupId, itemId)
     request
       .then((versions) => setVersions(versions))
-      .catch((err) => console.error("Failed to load versions:", err))
+      .catch((err) => clientLog.error("Failed to load versions:", err))
       .finally(() => setLoading(false))
   }, [workspaceId, groupId, itemId, scope])
 

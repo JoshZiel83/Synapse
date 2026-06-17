@@ -72,6 +72,10 @@ import { qk } from "@/lib/query-keys"
 import { cn } from "@/lib/utils"
 import { useAuthStore } from "@/stores/auth-store"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.components.memory-browser")
+
 function buildBrowseHref(
   pathname: string,
   searchParams: URLSearchParams | ReadonlyURLSearchParams,
@@ -406,7 +410,7 @@ export default function MemoryBrowser() {
       )
       toast.success("Memory path updated")
     } catch (error) {
-      console.error("Failed to move memory:", error)
+      clientLog.error("Failed to move memory:", error)
       toast.error(
         error instanceof Error ? error.message : "Failed to move memory"
       )
@@ -455,7 +459,7 @@ export default function MemoryBrowser() {
         returnTo: pendingFileCreate.returnTo,
       })
     } catch (error) {
-      console.error("Failed to create memory from files:", error)
+      clientLog.error("Failed to create memory from files:", error)
       toast.error(
         error instanceof Error
           ? error.message

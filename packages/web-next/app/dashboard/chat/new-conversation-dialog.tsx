@@ -7,6 +7,10 @@ import { api } from "@/lib/api"
 import { Search, X, Bot } from "lucide-react"
 import ChatAvatar from "./chat-avatar"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.dashboard.chat.new-conversation-dialog")
+
 interface Actor {
   id: string
   displayName: string
@@ -107,7 +111,7 @@ export default function NewConversationDialog({
           setSelectedIds(new Set([preselectedActorId]))
         }
       } catch (err) {
-        console.error("Failed to load actors:", err)
+        clientLog.error("Failed to load actors:", err)
       }
     })()
   }, [open, workspaceId, preselectedActorId])

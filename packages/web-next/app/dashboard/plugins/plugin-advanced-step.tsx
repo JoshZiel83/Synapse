@@ -18,6 +18,10 @@ import { Button } from "@/components/ui/button"
 import { api } from "@/lib/api"
 import { toast } from "sonner"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.dashboard.plugins.plugin-advanced-step")
+
 type PluginReuseScope = ReuseScope
 
 function normalizeSupportedReuseScopes(value: unknown): PluginReuseScope[] {
@@ -82,7 +86,7 @@ export default function PluginAdvancedStep({
       await onSaved?.(result)
       toast.success("Advanced settings updated")
     } catch (error) {
-      console.error("Failed to update advanced plugin settings:", error)
+      clientLog.error("Failed to update advanced plugin settings:", error)
       toast.error(
         error instanceof Error
           ? error.message

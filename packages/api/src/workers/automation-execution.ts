@@ -1,4 +1,4 @@
-import { Worker } from "bullmq"
+import { tracedWorker } from "./job-tracing.js"
 import { QUEUE_NAMES } from "@synapse/shared"
 import { redis } from "../infrastructure/redis/index.js"
 import { createLogger } from "../infrastructure/logger/index.js"
@@ -8,7 +8,7 @@ import { registerWorker } from "./registry.js"
 const log = createLogger("automation-execution")
 
 export function startAutomationExecutionWorker() {
-  const worker = new Worker(
+  const worker = tracedWorker(
     QUEUE_NAMES.AUTOMATION_EXECUTION,
     async (job) => {
       const { executionId } = job.data as { executionId?: string }

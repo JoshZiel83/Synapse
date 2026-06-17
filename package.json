@@ -44,6 +44,7 @@
     "test:web": "npm run test -w packages/web-next",
     "test:conformance": "npm run test:conformance -w packages/api",
     "guard:datetime": "node scripts/guard-datetime-boundaries.mjs",
+    "guard:logging": "node scripts/guard-logging.mjs",
     "audit:business-enums": "node ./scripts/audit-business-enum-literals.mjs",
     "verify:boundary": "bash ./scripts/verify-boundary.sh",
     "audit:device-runtime-sidecars": "tsx ./scripts/audit-device-runtime-sidecars.mts",

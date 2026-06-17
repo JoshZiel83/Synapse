@@ -20,6 +20,19 @@ import {
   type SynapseError,
 } from "@synapse/device-protocol"
 import { getDeviceTunnelRegistry } from "./tunnel-registry.js"
+import { SpanKind, SpanStatusCode, trace } from "@opentelemetry/api"
+import { activeTraceparent } from "../../infrastructure/observability/traceparent.js"
+
+/**
+ * Tracer for the api→device dispatch hop (P7). fetch (undici) is NOT
+ * auto-instrumented, so the outbound `tools/call` is wrapped in an explicit
+ * CLIENT span below — this is the api→device edge of the distributed-trace
+ * latency tree, and it is the parent the device-runtime + its sidecars
+ * (cua/fs-helper) attach to via the injected `traceparent` (read inside the
+ * span via `activeTraceparent()` so the device side parents under the dispatch,
+ * not the bare request/job span).
+ */
+const tracer = trace.getTracer("synapse-device-dispatch")
 
 export interface McpDispatchResult {
   ok: boolean
@@ -145,79 +158,129 @@ export async function dispatchSyncTool(
   const fetchImpl = opts.fetchImpl ?? fetch
   const url = `${endpoint.internalUrl.replace(/\/$/, "")}/mcp`
 
-  try {
-    const res = await fetchImpl(url, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        accept: "application/json",
+  // Wrap the outbound tools/call in an explicit CLIENT span — this is the
+  // api→device hop in the trace tree, and the active span the device side
+  // continues via the injected traceparent. No-op when OTEL is disabled.
+  return tracer.startActiveSpan(
+    `device.dispatch ${opts.toolName}`,
+    {
+      kind: SpanKind.CLIENT,
+      attributes: {
+        "synapse.device_service_id": opts.deviceServiceId,
+        "synapse.tool_name": opts.toolName,
+        "synapse.attempt_id": opts.envelope.attempt_id,
       },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: opts.envelope.attempt_id,
-        method: "tools/call",
-        params: {
-          name: opts.toolName,
-          arguments: opts.args,
-          _meta: { synapse_operation: opts.envelope },
-        },
-      }),
-      signal: AbortSignal.timeout(opts.timeoutMs ?? 60_000),
-    })
-    if (!res.ok) {
-      return {
-        ok: false,
-        error: {
-          code: "runtime_constraint",
-          message: `dispatch HTTP ${res.status}`,
-        },
+    },
+    async (span): Promise<McpDispatchResult> => {
+      const traceparent = activeTraceparent()
+      try {
+        const res = await fetchImpl(url, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            accept: "application/json",
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: opts.envelope.attempt_id,
+            method: "tools/call",
+            params: {
+              name: opts.toolName,
+              arguments: opts.args,
+              _meta: traceparent
+                ? { synapse_operation: opts.envelope, traceparent }
+                : { synapse_operation: opts.envelope },
+            },
+          }),
+          signal: AbortSignal.timeout(opts.timeoutMs ?? 60_000),
+        })
+        if (!res.ok) {
+          span.setAttribute("http.response.status_code", res.status)
+          span.setStatus({
+            code: SpanStatusCode.ERROR,
+            message: `dispatch HTTP ${res.status}`,
+          })
+          return {
+            ok: false,
+            error: {
+              code: "runtime_constraint",
+              message: `dispatch HTTP ${res.status}`,
+            },
+          }
+        }
+        const parsed = parseJsonRpcToolResponseText(await res.text())
+        if (!parsed.ok) {
+          span.setStatus({
+            code: SpanStatusCode.ERROR,
+            message: parsed.message,
+          })
+          return malformedDispatchResponse(parsed.message)
+        }
+        const body = parsed.body
+        if (body.error) {
+          // Preserve `body.error.data` (JSON-RPC structured data) as
+          // SynapseError.details so upstream details (e.g. sidecar diagnostic
+          // payloads) survive across the API boundary. Without this the
+          // upper layer only sees the truncated `message` string and any
+          // actionable hints are lost.
+          const data = body.error.data
+          span.setStatus({
+            code: SpanStatusCode.ERROR,
+            message: body.error.message,
+          })
+          return {
+            ok: false,
+            error: {
+              code: "runtime_constraint",
+              message: body.error.message,
+              details:
+                data && typeof data === "object" && !Array.isArray(data)
+                  ? (data as Record<string, unknown>)
+                  : data !== undefined
+                    ? { value: data }
+                    : undefined,
+            },
+          }
+        }
+        const result = body.result ?? {}
+        const synapseErrorCandidate = result._meta?.["synapse_error"]
+        if (synapseErrorCandidate !== undefined) {
+          const synapseError = SynapseErrorSchema.safeParse(
+            synapseErrorCandidate
+          )
+          if (!synapseError.success) {
+            span.setStatus({
+              code: SpanStatusCode.ERROR,
+              message:
+                "dispatch response synapse_error must match SynapseError",
+            })
+            return malformedDispatchResponse(
+              "dispatch response synapse_error must match SynapseError"
+            )
+          }
+          span.setStatus({
+            code: SpanStatusCode.ERROR,
+            message: synapseError.data.code,
+          })
+          return { ok: false, error: synapseError.data }
+        }
+        return { ok: true, result }
+      } catch (err) {
+        span.recordException(err as Error)
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: `dispatch error: ${(err as Error).message}`,
+        })
+        return {
+          ok: false,
+          error: {
+            code: "runtime_constraint",
+            message: `dispatch error: ${(err as Error).message}`,
+          },
+        }
+      } finally {
+        span.end()
       }
     }
-    const parsed = parseJsonRpcToolResponseText(await res.text())
-    if (!parsed.ok) {
-      return malformedDispatchResponse(parsed.message)
-    }
-    const body = parsed.body
-    if (body.error) {
-      // Preserve `body.error.data` (JSON-RPC structured data) as
-      // SynapseError.details so upstream details (e.g. sidecar diagnostic
-      // payloads) survive across the API boundary. Without this the
-      // upper layer only sees the truncated `message` string and any
-      // actionable hints are lost.
-      const data = body.error.data
-      return {
-        ok: false,
-        error: {
-          code: "runtime_constraint",
-          message: body.error.message,
-          details:
-            data && typeof data === "object" && !Array.isArray(data)
-              ? (data as Record<string, unknown>)
-              : data !== undefined
-                ? { value: data }
-                : undefined,
-        },
-      }
-    }
-    const result = body.result ?? {}
-    const synapseErrorCandidate = result._meta?.["synapse_error"]
-    if (synapseErrorCandidate !== undefined) {
-      const synapseError = SynapseErrorSchema.safeParse(synapseErrorCandidate)
-      if (!synapseError.success) {
-        return malformedDispatchResponse(
-          "dispatch response synapse_error must match SynapseError"
-        )
-      }
-      return { ok: false, error: synapseError.data }
-    }
-    return { ok: true, result }
-  } catch (err) {
-    return {
-      ok: false,
-      error: {
-        code: "runtime_constraint",
-        message: `dispatch error: ${(err as Error).message}`,
-      },
-    }
-  }
+  )
 }

@@ -30,6 +30,10 @@ import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { api } from "@/lib/api"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.dashboard.chief-actor-picker-dialog")
+
 type ChiefActorPickerMode = "launch" | "settings"
 
 type ChiefActorPickerDialogProps = {
@@ -94,7 +98,7 @@ function ChiefActorPickerDialogBody({
       })
       .catch((error) => {
         if (cancelled) return
-        console.error("Failed to load chief actor candidates:", error)
+        clientLog.error("Failed to load chief actor candidates:", error)
         setActors([])
         setErrorMessage("Failed to load available actors.")
       })

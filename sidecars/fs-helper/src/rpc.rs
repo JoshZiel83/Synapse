@@ -29,6 +29,10 @@ pub struct RpcRequest {
     pub id: Option<Value>,
     pub method: String,
     pub params: Option<Value>,
+    /// W3C traceparent injected per-RPC by the device-runtime (P7) so this
+    /// helper's span continues the originating request's trace.
+    #[serde(default)]
+    pub traceparent: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

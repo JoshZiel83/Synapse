@@ -36,6 +36,7 @@ import {
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
 import { persistCatalogSync } from "./catalog-sync.js"
 import { authenticateDeviceHello } from "./control-plane-auth.js"
+import { mintDeviceLogToken } from "../logs/device-token.js"
 import { getEnvelopeServerPublicKey } from "./envelope-signer.js"
 import { getDeviceTunnelRegistry } from "./tunnel-registry.js"
 import {
@@ -537,6 +538,14 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
                   tunnel: tunnelPathToken
                     ? { path_token: tunnelPathToken }
                     : null,
+                  // Short-lived bearer token for the device to ship logs to
+                  // POST /api/v1/logs. Null (omitted use) when log ingest is not
+                  // configured (SYNAPSE_LOG_INGEST_SECRET unset).
+                  log_ingest_token: mintDeviceLogToken(
+                    result.deviceId,
+                    result.serviceId,
+                    Date.now()
+                  ),
                 })
               })
               .catch((err) => {

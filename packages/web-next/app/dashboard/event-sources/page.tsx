@@ -55,6 +55,10 @@ import {
 } from "@/lib/integration-event-sources"
 import { cn } from "@/lib/utils"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.dashboard.event-sources")
+
 type EventSourceStatus = AutomationEventSource["status"]
 type EventSourceProvider = AutomationEventSource["providerKind"]
 type EventSourceMode = "internal" | "webhook" | AutomationIntegrationProvider
@@ -363,7 +367,7 @@ export default function EventSourcesPage() {
         setFormState(EMPTY_FORM)
         await reloadSources()
       } catch (error) {
-        console.error("Failed to create integration event sources:", error)
+        clientLog.error("Failed to create integration event sources:", error)
         toast.error(
           error instanceof Error
             ? error.message
@@ -414,7 +418,7 @@ export default function EventSourcesPage() {
       setFormState(EMPTY_FORM)
       await reloadSources()
     } catch (error) {
-      console.error("Failed to create automation event source:", error)
+      clientLog.error("Failed to create automation event source:", error)
       toast.error(
         error instanceof Error ? error.message : "Failed to create event source"
       )
@@ -438,7 +442,7 @@ export default function EventSourcesPage() {
         await reloadOccurrences(source.id)
       }
     } catch (error) {
-      console.error("Failed to update event source:", error)
+      clientLog.error("Failed to update event source:", error)
       toast.error(
         error instanceof Error ? error.message : "Failed to update event source"
       )
@@ -463,7 +467,7 @@ export default function EventSourcesPage() {
       toast.success("Event source archived")
       await reloadSources()
     } catch (error) {
-      console.error("Failed to archive event source:", error)
+      clientLog.error("Failed to archive event source:", error)
       toast.error(
         error instanceof Error
           ? error.message

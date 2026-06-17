@@ -1,6 +1,7 @@
 import { Queue } from "bullmq"
 import { redis } from "../infrastructure/redis/index.js"
 import { QUEUE_NAMES } from "@synapse/shared"
+import { injectTraceContext } from "./job-tracing.js"
 
 // Queues are constructed lazily. BullMQ's Queue constructor immediately
 // touches the connection (uses it to set up listeners) which, with the
@@ -67,6 +68,25 @@ function lazyQueueProxy(handle: LazyQueue): Queue {
   return new Proxy({} as Queue, {
     get(_target, prop) {
       const queue = handle.get()
+      // Inject the active trace context into job data on EVERY enqueue so the
+      // worker can continue the trace across the Redis boundary (see
+      // job-tracing.ts). Centralizing here covers all `.add` callers.
+      if (prop === "add") {
+        return (name: string, data: unknown, opts?: unknown) => {
+          // Do NOT inject a one-shot trace context into a repeatable/cron job
+          // template — BullMQ clones the template for every tick, so each future
+          // run would "continue" one long-dead trace.
+          const isRepeatable =
+            !!opts && typeof opts === "object" && "repeat" in opts
+          return (
+            queue.add as unknown as (
+              n: string,
+              d: unknown,
+              o?: unknown
+            ) => unknown
+          )(name, isRepeatable ? data : injectTraceContext(data), opts)
+        }
+      }
       const value = (queue as unknown as Record<PropertyKey, unknown>)[
         prop as string
       ]

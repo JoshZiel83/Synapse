@@ -1,0 +1,99 @@
+// Grafana Alloy — the single log/trace shipper for the Synapse `observability`
+// profile.
+//   * LOGS: discover compose containers, read their stdout/stderr, promote the
+//     pino `domain` (closed, low-cardinality enum) + `level` to Loki labels, and
+//     push to Loki. All high-cardinality ids (trace_id, reqId, sessionId,
+//     deviceId, …) stay in the JSON body / structured metadata, NEVER labels.
+//   * TRACES: receive OTLP from the api (and later device/sidecars) and forward
+//     to Tempo.
+//
+// The docker socket is mounted READ-ONLY and ONLY on this dedicated shipper —
+// never on the api container (a deliberate repo security rule). If you require
+// that a Loki/Alloy outage can never wedge a container, switch the log source to
+// `loki.source.file` over /var/lib/docker/containers with a positions volume
+// (more resilient, fewer labels) — see docs/logging-refactor/03-decisions.md.
+
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  // Scope to THIS deployment's compose project only — the docker socket exposes
+  // every container on the host (other projects, CI/test fixtures, builders),
+  // and shipping their (often stale) logs both pollutes Loki and triggers
+  // "timestamp too old" rejections. COMPOSE_PROJECT_NAME is passed to the alloy
+  // container; defaults to "synapse" if unset.
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    regex         = sys.env("COMPOSE_PROJECT_NAME")
+    action        = "keep"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+}
+
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.containers.output
+  forward_to = [loki.process.pino.receiver]
+}
+
+loki.process "pino" {
+  // Parse the pino JSON line and promote ONLY low-cardinality business fields to
+  // labels. `domain` is the closed taxonomy enum; everything else stays in the
+  // log body (queryable, not indexed).
+  stage.json {
+    expressions = {
+      domain = "domain",
+      level  = "level",
+    }
+  }
+  stage.labels {
+    values = {
+      domain = "",
+      level  = "",
+    }
+  }
+  forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}
+
+// OTLP trace ingest from the api (OTEL_EXPORTER_OTLP_ENDPOINT=http://alloy:4318)
+// and, later, device-runtime / daemon / sidecars. Forwarded to Tempo.
+otelcol.receiver.otlp "default" {
+  grpc {
+    endpoint = "0.0.0.0:4317"
+  }
+  http {
+    endpoint = "0.0.0.0:4318"
+  }
+  output {
+    traces = [otelcol.exporter.otlphttp.tempo.input]
+  }
+}
+
+otelcol.exporter.otlphttp "tempo" {
+  client {
+    endpoint = "http://tempo:4318"
+  }
+}

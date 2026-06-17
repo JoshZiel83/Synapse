@@ -35,6 +35,7 @@ import type {
   McpHost,
 } from "./types.js"
 import { hashArguments } from "./envelope.js"
+import { runWithTraceparent, traceparentFromMeta } from "./trace-context.js"
 import {
   parseMcpHostRequestBody,
   type McpHostJsonRpcRequest,
@@ -419,7 +420,12 @@ export function createInMemoryMcpHost(
                 _meta?: unknown
               })
             : { name: undefined }
-        const result = await dispatchCallTool(params)
+        // Run the dispatch (and its sidecar RPCs) inside the api-injected
+        // traceparent so cua/fs-helper spans continue the same trace (P7).
+        const result = await runWithTraceparent(
+          traceparentFromMeta(params._meta),
+          () => dispatchCallTool(params)
+        )
         return { id, result }
       }
       default: {

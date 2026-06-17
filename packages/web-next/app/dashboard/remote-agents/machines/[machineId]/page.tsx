@@ -26,6 +26,12 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { toast } from "sonner"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger(
+  "web.dashboard.remote-agents.machines.[machineId]"
+)
+
 function formatDateTime(value?: string) {
   if (!value) return "Never"
   return new Date(value).toLocaleString()
@@ -111,7 +117,7 @@ export default function RemoteAgentMachineDetailPage() {
       const result = await api.getRemoteAgentMachine(workspaceId, machineId)
       setDetail(result)
     } catch (error) {
-      console.error("Failed to load remote machine:", error)
+      clientLog.error("Failed to load remote machine:", error)
       toast.error(
         error instanceof Error ? error.message : "Failed to load remote machine"
       )

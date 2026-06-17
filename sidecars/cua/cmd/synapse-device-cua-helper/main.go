@@ -35,12 +35,14 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"image/png"
 	"io"
+	"log/slog"
 	"os"
 	"runtime"
 	"strconv"
@@ -50,6 +52,13 @@ import (
 	"github.com/PekingSpades/DeskAct/display"
 	"github.com/PekingSpades/DeskAct/keyboard"
 	"github.com/PekingSpades/DeskAct/mouse"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/propagation"
+	sdkresource "go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/attribute"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 const version = "0.2.0-cua-session-focus"
@@ -62,10 +71,13 @@ var store = newFocusStore()
 // ─── JSON-RPC framing ──────────────────────────────────────────────────────
 
 type rpcRequest struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      interface{}     `json:"id,omitempty"`
-	Method  string          `json:"method"`
-	Params  json.RawMessage `json:"params,omitempty"`
+	JSONRPC     string          `json:"jsonrpc"`
+	ID          interface{}     `json:"id,omitempty"`
+	Method      string          `json:"method"`
+	Params      json.RawMessage `json:"params,omitempty"`
+	// W3C traceparent injected per-RPC by the device-runtime (P7) so this
+	// helper's span continues the originating request's trace.
+	Traceparent string `json:"traceparent,omitempty"`
 }
 
 type rpcError struct {
@@ -882,6 +894,18 @@ func handle(line []byte, w io.Writer) {
 		writeResponse(w, nil, nil, &rpcError{Code: -32700, Message: "Parse error"})
 		return
 	}
+	// Per-request span (P7) continuing the device-injected traceparent.
+	if tracer != nil {
+		ctx := context.Background()
+		if req.Traceparent != "" {
+			ctx = propagator.Extract(
+				ctx,
+				propagation.MapCarrier{"traceparent": req.Traceparent},
+			)
+		}
+		_, span := tracer.Start(ctx, "cua "+req.Method)
+		defer span.End()
+	}
 	switch req.Method {
 	case "hello":
 		writeResponse(w, req.ID, map[string]interface{}{
@@ -926,11 +950,85 @@ func handle(line []byte, w io.Writer) {
 	}
 }
 
+// setupLogging configures structured slog output to STDERR only. stdout is the
+// JSON-RPC protocol channel and must never carry logs. Level via
+// SYNAPSE_DEVICE_LOG_LEVEL (debug|info|warn|error, default info). A trace
+// context injected by the parent at spawn (SYNAPSE_TRACEPARENT / TRACEPARENT) is
+// echoed on every line so device logs correlate with the originating request.
+func setupLogging() {
+	level := slog.LevelInfo
+	switch strings.ToLower(os.Getenv("SYNAPSE_DEVICE_LOG_LEVEL")) {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	}
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level})).
+		With("service", "cua")
+	if tp := os.Getenv("SYNAPSE_TRACEPARENT"); tp != "" {
+		logger = logger.With("traceparent", tp)
+	} else if tp := os.Getenv("TRACEPARENT"); tp != "" {
+		logger = logger.With("traceparent", tp)
+	}
+	slog.SetDefault(logger)
+}
+
+var tracer oteltrace.Tracer
+
+var propagator = propagation.TraceContext{}
+
+// setupTracing configures OTLP span export (P7), gated on
+// OTEL_EXPORTER_OTLP_ENDPOINT. Returns a shutdown func (no-op when disabled).
+// stdout stays the JSON-RPC channel; spans go over OTLP/HTTP to the collector.
+func setupTracing(ctx context.Context) func(context.Context) error {
+	noop := func(context.Context) error { return nil }
+	if os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") == "" {
+		return noop
+	}
+	exp, err := otlptracehttp.New(ctx)
+	if err != nil {
+		slog.Error("otlp trace exporter init failed", "err", err.Error())
+		return noop
+	}
+	name := os.Getenv("OTEL_SERVICE_NAME")
+	if name == "" {
+		name = "cua"
+	}
+	res, err := sdkresource.New(
+		ctx,
+		sdkresource.WithAttributes(
+			attribute.String("service.name", name),
+			attribute.String("service.namespace", "synapse"),
+		),
+	)
+	if err != nil {
+		res = sdkresource.Default()
+	}
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exp),
+		sdktrace.WithResource(res),
+	)
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagator)
+	tracer = tp.Tracer("synapse-cua")
+	return tp.Shutdown
+}
+
 func main() {
+	setupLogging()
+	shutdownTracing := setupTracing(context.Background())
+	defer func() { _ = shutdownTracing(context.Background()) }()
+	slog.Info("cua sidecar starting", "pid", os.Getpid())
 	scanner := bufio.NewScanner(os.Stdin)
 	// Allow large frames (screenshot payloads etc.).
 	scanner.Buffer(make([]byte, 1024*1024), 32*1024*1024)
 	for scanner.Scan() {
 		handle(scanner.Bytes(), os.Stdout)
 	}
+	if err := scanner.Err(); err != nil {
+		slog.Error("stdin scanner error", "err", err.Error())
+	}
+	slog.Info("cua sidecar stopping")
 }

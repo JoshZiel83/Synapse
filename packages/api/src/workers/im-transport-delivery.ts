@@ -1,4 +1,5 @@
-import { UnrecoverableError, Worker } from "bullmq"
+import { UnrecoverableError } from "bullmq"
+import { tracedWorker } from "./job-tracing.js"
 import { CONVERSATION_PARTICIPANT_TYPE, QUEUE_NAMES } from "@synapse/shared"
 import type { TransportKind } from "@synapse/shared/types"
 import { redis } from "../infrastructure/redis/index.js"
@@ -423,7 +424,7 @@ export function defaultImTransportDeliveryDeps(): ImTransportDeliveryDeps {
 
 export function startImTransportDeliveryWorker() {
   const deps = defaultImTransportDeliveryDeps()
-  const worker = new Worker(
+  const worker = tracedWorker(
     QUEUE_NAMES.IM_TRANSPORT_DELIVERY,
     async (job) =>
       processImTransportDeliveryJob(job.data, deps, job.attemptsMade),

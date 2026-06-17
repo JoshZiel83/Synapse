@@ -24,6 +24,10 @@ import {
   type ModelGroupScopeFilter,
 } from "./model-group-shared"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.dashboard.settings.model-group-list")
+
 interface ModelGroup {
   id: string
   workspaceId: string | null
@@ -81,7 +85,7 @@ export default function ModelGroupList({
 
       setGroups(nextGroups)
     } catch (err) {
-      console.error("Failed to load model groups:", err)
+      clientLog.error("Failed to load model groups:", err)
     } finally {
       setLoading(false)
     }

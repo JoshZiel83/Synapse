@@ -33,6 +33,10 @@ import {
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { toast } from "sonner"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.components.sidebar-weixin-binding")
+
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback
 }
@@ -105,7 +109,7 @@ export function SidebarWeixinBinding() {
         }
       } catch (loadError) {
         if (!cancelled) {
-          console.error("Failed to load current WeChat binding:", loadError)
+          clientLog.error("Failed to load current WeChat binding:", loadError)
           setBinding(null)
         }
       } finally {
@@ -165,7 +169,7 @@ export function SidebarWeixinBinding() {
           setQrImageUrl(imageUrl)
         }
       } catch (qrError) {
-        console.error("Failed to render WeChat QR image:", qrError)
+        clientLog.error("Failed to render WeChat QR image:", qrError)
         if (!cancelled) {
           setQrImageUrl(null)
         }
@@ -227,7 +231,7 @@ export function SidebarWeixinBinding() {
         if (cancelled) {
           return
         }
-        console.error("Failed to poll current WeChat binding:", pollError)
+        clientLog.error("Failed to poll current WeChat binding:", pollError)
         setError(errorMessage(pollError, "Failed to check WeChat status"))
         return
       }
@@ -281,10 +285,13 @@ export function SidebarWeixinBinding() {
       const result = await api.startCurrentUserWeixinBindingQr(workspaceId)
       setSession(result?.session || null)
     } catch (startError) {
-      console.error("Failed to start current WeChat binding:", startError)
+      clientLog.error("Failed to start current WeChat binding:", startError)
       if (startError instanceof ApiError && startError.status === 409) {
         await refreshBinding(workspaceId).catch((loadError) => {
-          console.error("Failed to refresh existing WeChat binding:", loadError)
+          clientLog.error(
+            "Failed to refresh existing WeChat binding:",
+            loadError
+          )
         })
         closeDialog()
         return
@@ -315,7 +322,7 @@ export function SidebarWeixinBinding() {
       toast.success("已保存", { position: "top-center" })
       closeDialog()
     } catch (saveError) {
-      console.error("Failed to save WeChat binding target:", saveError)
+      clientLog.error("Failed to save WeChat binding target:", saveError)
       setError(errorMessage(saveError, "Failed to save WeChat binding"))
     } finally {
       setSavingBindingTarget(false)

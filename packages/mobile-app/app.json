@@ -58,7 +58,8 @@
       ],
       "expo-audio",
       "expo-video",
-      "expo-background-task"
+      "expo-background-task",
+      "@sentry/react-native"
     ],
     "extra": {
       "appDisplayName": "Synapse Mobile"

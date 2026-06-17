@@ -38,6 +38,10 @@ import { useChatStore } from "@/stores/chat-store"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { isActorRuntimeProcessingWorkspaceMember } from "@synapse/shared"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.dashboard.chat.conversation-chat")
+
 interface ConversationChatProps {
   conversation: ConversationSummary
   messages: FeedMessage[]
@@ -548,7 +552,7 @@ export default function ConversationChat({
       })
       .catch((error) => {
         if (cancelled) return
-        console.error(
+        clientLog.error(
           "Failed to load workspace actors for chat mentions:",
           error
         )

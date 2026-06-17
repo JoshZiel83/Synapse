@@ -1,4 +1,4 @@
-import { Worker } from "bullmq"
+import { tracedWorker } from "./job-tracing.js"
 import { QUEUE_NAMES } from "@synapse/shared"
 import { redis } from "../infrastructure/redis/index.js"
 import { registerWorker } from "./registry.js"
@@ -13,7 +13,7 @@ const DEFAULT_FILE_PARSE_CONCURRENCY = Math.max(
 )
 
 export function startFileParsingWorker() {
-  const worker = new Worker(
+  const worker = tracedWorker(
     QUEUE_NAMES.FILE_PARSING,
     async (job) => {
       const runId =

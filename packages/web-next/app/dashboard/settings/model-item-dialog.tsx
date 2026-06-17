@@ -36,6 +36,10 @@ import {
   getSaveErrorMessage,
 } from "./model-config-utils"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.dashboard.settings.model-item-dialog")
+
 interface ModelItemDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -302,7 +306,7 @@ export default function ModelItemDialog({
       }
       onSaved()
     } catch (err) {
-      console.error("Failed to save model item:", err)
+      clientLog.error("Failed to save model item:", err)
       toast.error(getSaveErrorMessage(err, "Failed to save model item."))
     } finally {
       setSaving(false)

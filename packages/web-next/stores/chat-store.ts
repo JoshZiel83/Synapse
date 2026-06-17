@@ -57,6 +57,10 @@ import {
   upsertConversationWithTombstoneGuard,
 } from "./chat-store-queue"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.stores.chat-store")
+
 export interface ConversationParticipant {
   id: string
   name: string
@@ -1752,7 +1756,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       await get().syncFromServer(workspaceId)
     })()
       .catch((error) => {
-        console.error("Failed to load conversations:", error)
+        clientLog.error("Failed to load conversations:", error)
         set({
           loadingConversations: false,
         })
@@ -1889,7 +1893,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
       })
     } catch (error) {
-      console.error("Failed to load messages:", error)
+      clientLog.error("Failed to load messages:", error)
       set((state) =>
         state.selectedConversationId === conversationId
           ? { loadingMessages: false }
@@ -1934,7 +1938,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         hasMoreBefore: response.hasMoreBefore,
       }
     } catch (error) {
-      console.error("Failed to load older messages:", error)
+      clientLog.error("Failed to load older messages:", error)
       return null
     }
   },
@@ -2216,7 +2220,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
     })()
       .catch((error) => {
-        console.error("Failed to sync chat inbox:", error)
+        clientLog.error("Failed to sync chat inbox:", error)
       })
       .finally(() => {
         syncPromise = null
@@ -2342,7 +2346,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         return createStateFromSnapshot(state, confirmedSnapshot)
       })
     } catch (error) {
-      console.error("Failed to mark conversation read:", error)
+      clientLog.error("Failed to mark conversation read:", error)
     }
   },
 
@@ -2503,7 +2507,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       await api.sendChatTypingState(snapshot.workspaceId, conversationId, state)
     } catch (error) {
       // Typing is best-effort, never throw.
-      console.debug("Failed to send typing state:", error)
+      clientLog.debug("Failed to send typing state:", error)
     }
   },
 

@@ -17,5 +17,12 @@ starlette==1.2.1
 Pillow==12.2.0
 qrcode[pil]==8.2
 
+# OpenTelemetry tracing (logging refactor P7): exports request spans over OTLP
+# when OTEL_EXPORTER_OTLP_ENDPOINT is set, continuing the api-injected
+# traceparent so mijia joins the cross-process trace tree. No-op when unset.
+opentelemetry-sdk==1.42.1
+opentelemetry-exporter-otlp-proto-http==1.42.1
+opentelemetry-instrumentation-starlette==0.63b1
+
 # Build backend.
 setuptools==78.1.1

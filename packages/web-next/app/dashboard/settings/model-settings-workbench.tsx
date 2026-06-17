@@ -88,6 +88,12 @@ import type {
   ModelGroupUpdateInput,
 } from "@synapse/shared/schemas"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger(
+  "web.dashboard.settings.model-settings-workbench"
+)
+
 type GrantScope = ModelGroupGrantScope
 
 type ModelGroupSummary = {
@@ -1161,7 +1167,7 @@ export default function ModelSettingsWorkbench() {
         return nextGroups[0]?.id || null
       })
     } catch (error) {
-      console.error("Failed to load editable model groups:", error)
+      clientLog.error("Failed to load editable model groups:", error)
       setGroups([])
       setSelectedGroupId(null)
     } finally {
@@ -1186,7 +1192,7 @@ export default function ModelSettingsWorkbench() {
       setExpandedItemId(null)
       setDraft(createDraft())
     } catch (error) {
-      console.error("Failed to load model group detail:", error)
+      clientLog.error("Failed to load model group detail:", error)
       setSelectedGroup(null)
     } finally {
       setDetailLoading(false)
@@ -1375,7 +1381,7 @@ export default function ModelSettingsWorkbench() {
       await reloadCurrentGroup()
       setExpandedItemId(itemId || response?.id || null)
     } catch (error) {
-      console.error("Failed to save model config:", error)
+      clientLog.error("Failed to save model config:", error)
       toast.error(getSaveErrorMessage(error, "Failed to save model config."))
     } finally {
       setSavingConfig(false)
@@ -1395,7 +1401,7 @@ export default function ModelSettingsWorkbench() {
       setExpandedItemId(null)
       setDraft(createDraft())
     } catch (error) {
-      console.error("Failed to delete model config:", error)
+      clientLog.error("Failed to delete model config:", error)
     }
   }
 
@@ -1416,7 +1422,7 @@ export default function ModelSettingsWorkbench() {
       await loadGroups()
       await reloadCurrentGroup()
     } catch (error) {
-      console.error("Failed to update model group settings:", error)
+      clientLog.error("Failed to update model group settings:", error)
     } finally {
       setSavingGroupSettings(null)
     }
@@ -1463,7 +1469,7 @@ export default function ModelSettingsWorkbench() {
       )
       setEditingField(null)
     } catch (error) {
-      console.error(`Failed to update model group ${field}:`, error)
+      clientLog.error(`Failed to update model group ${field}:`, error)
       setGroupNameDraft(selectedGroup.name)
       setGroupDescriptionDraft(selectedGroup.description || "")
     } finally {

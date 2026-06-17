@@ -1,4 +1,4 @@
-import { Worker } from "bullmq"
+import { tracedWorker } from "./job-tracing.js"
 import { redis } from "../infrastructure/redis/index.js"
 import {
   acquireLock,
@@ -256,7 +256,7 @@ export function decideLockLossRecovery(params: {
 }
 
 export function startSessionThinkingWorker() {
-  const worker = new Worker(
+  const worker = tracedWorker(
     QUEUE_NAMES.SESSION_THINKING,
     async (job) => {
       const { sessionId, actorId, workspaceId, trigger, userId } = job.data

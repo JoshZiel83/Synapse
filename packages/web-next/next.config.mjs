@@ -1,5 +1,6 @@
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { withSentryConfig } from "@sentry/nextjs"
 
 const publicApiBase = process.env.NEXT_PUBLIC_API_URL || "/api/v1"
 const apiProxyOrigin = (
@@ -86,4 +87,24 @@ const nextConfig = {
   },
 }
 
-export default nextConfig
+// Sentry build plugin (source-map upload + same-origin tunnel) is opt-in via
+// SENTRY_AUTH_TOKEN, so default/open-source builds without Sentry creds are
+// unaffected. The runtime SDK still activates purely from NEXT_PUBLIC_SENTRY_DSN
+// (see instrumentation-client.ts / sentry.*.config.ts). All values env-driven —
+// nothing (DSN, org, project, self-hosted URL) is hardcoded.
+const sentryBuildEnabled = Boolean(process.env.SENTRY_AUTH_TOKEN)
+
+export default sentryBuildEnabled
+  ? withSentryConfig(nextConfig, {
+      org: process.env.SENTRY_ORG,
+      project: process.env.SENTRY_PROJECT,
+      authToken: process.env.SENTRY_AUTH_TOKEN,
+      // Self-hosted Sentry (e.g. https://sentry.example.com) via env.
+      sentryUrl: process.env.SENTRY_URL,
+      silent: !process.env.CI,
+      // Same-origin tunnel so browser events dodge ad-blockers (proxied to the
+      // self-hosted Sentry by the Next server).
+      tunnelRoute: "/monitoring",
+      disableLogger: true,
+    })
+  : nextConfig

@@ -67,6 +67,18 @@ snake_case 出现在两种地方：(a) DB 物理层与 device-protocol wire 契�
 - 数据库已有 enum 的业务值，以 `packages/shared` 为应用层真源，`packages/api/src/infrastructure/database/enum-compat.ts` 负责与 DB 生成类型做编译期对齐。
 - 纯 UI 文案、临时交互状态、展示 label、样式 key 不纳入这一条；但文案选择逻辑里涉及业务枚举时，仍必须使用 shared 常量。
 
+## 日志与可观测性（Logging & Observability）
+
+完整方案见 `docs/logging-refactor/`（00 现状 / 01 方案 / 02 建议 / 03 决策）。核心约定：
+
+- **唯一 logger，禁止两套并行实现**。`packages/api` 用 pino，单例在 `src/infrastructure/logger/index.ts`，并经 `Fastify({ logger })` 同时作请求 logger（app 日志 == 请求日志，绝不再起第二个 pino 实例）。该模块**禁止依赖 config**（它直接读 `process.env.LOG_LEVEL/NODE_ENV`，否则与 config 校验形成启动环）。
+- **业务 domain 标识（可靠日志标识）**。每条日志带结构化 `domain`（封闭枚举 `LOG_DOMAINS`）+ 可选 `component`，由 `createLogger(scope)` 工厂侧查表 `SCOPE_TO_DOMAIN` 派生。调用面保持 `createLogger("im.qq")` 写法不变；**新增 scope 必须在 `SCOPE_TO_DOMAIN` 加一行**，否则 `guard:logging` 失败。`domain` 是 Loki 的低基数 label，所有高基数关联 id（trace_id/reqId/sessionId/…）只进 JSON body，绝不作 label。
+- **关联（correlation）**。OpenTelemetry：`src/instrumentation.ts` 作为 `src/index.ts` 的**第一个 import** 初始化（HTTP 埋点须在建服务器前生效）。trace_id/span_id 由 `infrastructure/logger` 的 pino `mixin` 实时从活动 span 注入每行日志（不依赖模块 patch）。Fastify `genReqId` 对齐 trace_id。**BullMQ 跨 Redis** 用 `workers/job-tracing.ts`：`queues.ts` 在每次 `.add` 注入 trace context，worker 必须用 `tracedWorker(...)`（**禁止 `new Worker`**）以续接 trace。
+- **导出全部 env 驱动、零硬编码**（开源仓库要求）：`OTEL_EXPORTER_OTLP_ENDPOINT`（→ Alloy/Tempo）、`OTEL_SERVICE_NAME`、`SENTRY_DSN`/`SENTRY_ENVIRONMENT`/`SENTRY_TRACES_SAMPLE_RATE`。Sentry 经 `@sentry/opentelemetry` 作为 span processor 融入同一 provider（一个 trace 同时进 Tempo + Sentry）。
+- **stdout 对行协议面神圣**：device-runtime sidecars / daemon / Go·Rust·Python sidecar 的 stdout 专给 JSON-RPC/MCP，所有日志走 **stderr**。
+- **治理**：`scripts/guard-logging.mjs`（`guard:logging`，注册于 `pretest` 与 `verify-boundary.sh`）禁止新增裸 `console.*`（既有按 `scripts/guard-logging-baseline.json` 的 per-file 计数 grandfather，只降不增；迁移某文件后用 `--write-baseline` 重新快照），并强制每个 `createLogger` scope 映射到 domain 分类。
+- **聚合**：自托管 `observability` profile（Loki + Tempo + Alloy + Grafana），docker-compose 每个 service 已配 json-file 轮转。
+
 ## Docker 生产部署约定
 
 - 生产环境以 `docker compose --profile production` 为统一部署入口，不再以宿主机 `systemd` 管理 API、桌面 Web 或移动 Web 进程。

@@ -67,6 +67,10 @@ import { Textarea } from "@/components/ui/textarea"
 import { api } from "@/lib/api"
 import { resolveFileUrl } from "@/lib/utils"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.components.actor-edit-page")
+
 const BASIC_SECTION_KEY = "basic"
 
 function buildSectionHref(actorId: string, sectionKey: string) {
@@ -527,7 +531,7 @@ export function ActorEditPage({ actorId }: { actorId: string }) {
         setActors(actorList)
         setForm(buildInitialState(nextActor))
       } catch (error) {
-        console.error("Failed to load actor editor:", error)
+        clientLog.error("Failed to load actor editor:", error)
         if (!cancelled) {
           toast.error(
             error instanceof Error ? error.message : "Failed to load actor"

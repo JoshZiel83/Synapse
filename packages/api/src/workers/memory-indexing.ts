@@ -1,4 +1,4 @@
-import { Worker } from "bullmq"
+import { tracedWorker } from "./job-tracing.js"
 import { QUEUE_NAMES } from "@synapse/shared"
 import { config } from "../config/index.js"
 import { redis } from "../infrastructure/redis/index.js"
@@ -9,7 +9,7 @@ import { createLogger } from "../infrastructure/logger/index.js"
 const log = createLogger("memory-indexing")
 
 export function startMemoryIndexingWorker() {
-  const worker = new Worker(
+  const worker = tracedWorker(
     QUEUE_NAMES.MEMORY_INDEXING,
     async (job) => {
       const memoryItemId =

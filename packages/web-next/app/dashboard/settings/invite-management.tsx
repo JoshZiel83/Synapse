@@ -19,6 +19,10 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Plus, Copy, Trash2, Check } from "lucide-react"
 
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.dashboard.settings.invite-management")
+
 export default function InviteManagement() {
   const { workspaceId } = useWorkspace()
   const [invites, setInvites] = useState<WorkspaceInviteView[]>([])
@@ -38,7 +42,7 @@ export default function InviteManagement() {
       const invites = await api.listInvites(workspaceId)
       setInvites(invites ?? [])
     } catch (err) {
-      console.error("Failed to load invites:", err)
+      clientLog.error("Failed to load invites:", err)
     } finally {
       setLoading(false)
     }
