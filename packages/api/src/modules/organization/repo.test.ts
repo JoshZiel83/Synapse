@@ -6,6 +6,7 @@ import {
   normalizeActorRow,
   normalizeActorVersionRow,
   parseActorDocContentBlocks,
+  snakeCaseTopLevelKeys,
 } from "./repo.js"
 import {
   presentActorPackageRecord,
@@ -372,4 +373,38 @@ test("normalizeActorPackageRow rejects non-object package JSON drift", () => {
       ),
     /actor package actor metadata must be a JSON object/
   )
+})
+
+test("snakeCaseTopLevelKeys re-snakes camelCased raw-SQL rows (CamelCasePlugin regression)", () => {
+  // CamelCasePlugin.transformResult unconditionally camelCases raw
+  // CompiledQuery.raw result rows. The organization repo's *Row types and
+  // presenter read snake_case, so runnerFor re-snakes the top-level keys.
+  // Regression for the GET /workspaces/:id/actors 500 ("Expected a valid Date
+  // when converting to IsoInstantString"): row.created_at was undefined.
+  const camelRow = {
+    id: "a1",
+    workspaceId: "w1",
+    displayName: "Sec",
+    createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    updatedAt: new Date("2026-01-02T00:00:00.000Z"),
+    isPublicShared: true,
+    currentActorVersionId: "v1",
+    config: { is_chief_actor: true, nestedCamel: "keep" },
+  }
+
+  const snake = snakeCaseTopLevelKeys(camelRow)
+
+  assert.equal(snake.created_at, camelRow.createdAt)
+  assert.equal(snake.updated_at, camelRow.updatedAt)
+  assert.equal(snake.workspace_id, "w1")
+  assert.equal(snake.display_name, "Sec")
+  assert.equal(snake.is_public_shared, true)
+  assert.equal(snake.current_actor_version_id, "v1")
+  assert.equal((snake.created_at as Date) instanceof Date, true)
+  // top-level only: JSONB value object is passed through untouched (its inner
+  // keys are NOT recursed/rewritten).
+  assert.deepEqual(snake.config, { is_chief_actor: true, nestedCamel: "keep" })
+  // no leftover camelCase top-level keys
+  assert.equal("createdAt" in snake, false)
+  assert.equal("workspaceId" in snake, false)
 })

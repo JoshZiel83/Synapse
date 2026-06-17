@@ -302,16 +302,47 @@ export function normalizeActorPackageRow<T extends ActorPackageRow>(row: T): T {
  * `(text, params) => { rows }` runner convention used throughout this module.
  * Routes raw SQL through Kysely's `CompiledQuery.raw` so the same statement
  * runs on whichever executor (pool or trx) the caller holds.
+ *
+ * IMPORTANT: `CompiledQuery.raw` bypasses CamelCasePlugin's *query* transform
+ * (input), but Kysely still runs every plugin's `transformResult` hook on the
+ * *result* rows — and CamelCasePlugin.transformResult is unconditional, so it
+ * camelCases the top-level keys of raw rows too. Every `*Row` type in this
+ * module (and the presenter) is snake_case, so we re-snake the top-level keys
+ * here to give callers the snake_case rows they're typed for. Without this,
+ * e.g. `row.created_at` reads `undefined` and `serializeInstant` throws.
  */
 function runnerFor(executor: Executor): QueryRunner {
-  return async <T extends QueryRow>(text: string, params?: unknown[]) =>
-    executor.executeQuery<T>(
+  return async <T extends QueryRow>(text: string, params?: unknown[]) => {
+    const result = await executor.executeQuery<QueryRow>(
       CompiledQuery.raw(text, params ? [...params] : [])
-    ) as Promise<QueryResultLike<T>>
+    )
+    return {
+      rows: result.rows.map((row) => snakeCaseTopLevelKeys(row) as T),
+    } satisfies QueryResultLike<T>
+  }
 }
 
 async function runQuery<T extends QueryRow>(text: string, params?: unknown[]) {
   return runnerFor(db)<T>(text, params)
+}
+
+/**
+ * Convert the TOP-LEVEL keys of a raw result row from camelCase back to
+ * snake_case. Only the row's own keys are rewritten; values are passed through
+ * untouched, so JSONB objects (e.g. `config`) and Date instances are never
+ * recursed into or mutated. Mirrors CamelCasePlugin's
+ * `maintainNestedObjectKeys` contract in reverse for the raw-SQL path.
+ */
+export function snakeCaseTopLevelKeys(row: QueryRow): QueryRow {
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(row)) {
+    out[camelToSnake(key)] = value
+  }
+  return out as QueryRow
+}
+
+function camelToSnake(key: string): string {
+  return key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)
 }
 
 /**
