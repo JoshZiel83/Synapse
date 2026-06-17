@@ -47,7 +47,21 @@ async function runOn<T extends object = Record<string, unknown>>(
   const result = await executor.executeQuery<T>(
     CompiledQuery.raw(text, [...params])
   )
-  return { rows: result.rows as T[] }
+  // CamelCasePlugin's transformResult camelCases raw result rows too (it only
+  // skips the query transform), so a bare `SELECT task_id, expires_at` comes
+  // back as { taskId, expiresAt }. The readers below are snake_case, so
+  // re-snake the top-level keys. Values pass through; idempotent.
+  return {
+    rows: result.rows.map((row) => snakeCaseTopLevelKeys(row) as T),
+  }
+}
+
+function snakeCaseTopLevelKeys<T extends object>(row: T): T {
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(row)) {
+    out[key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)] = value
+  }
+  return out as T
 }
 
 export async function runTaskProjectionBatch<T>(

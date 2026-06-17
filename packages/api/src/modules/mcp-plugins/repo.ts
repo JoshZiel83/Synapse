@@ -1073,10 +1073,24 @@ export async function listPluginInstallationAccessRows(
     query = query.where("app_grant.status", "=", ACCESS_BINDING_STATUS.ACTIVE)
   }
 
-  return (await query.execute()).map((row) => ({
-    ...row,
-    created_at: row.created_at || new Date(0),
-  }))
+  // The `as snake_case` aliases above still come back camelCase: Kysely's
+  // CamelCasePlugin runs transformResult on builder rows too. presentMount (the
+  // consumer) reads snake_case (mount.created_at / created_by_workspace_member_id
+  // / revoked_at / …), so re-snake the top-level keys. Values pass through;
+  // idempotent. (Previously only `created_at` was patched — and incorrectly,
+  // since row.created_at was undefined → silently fell back to new Date(0).)
+  const rows = await query.execute()
+  return rows.map(
+    (row) => snakeCaseTopLevelKeys(row) as unknown as InstallationAccessRow
+  )
+}
+
+function snakeCaseTopLevelKeys<T extends object>(row: T): T {
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(row)) {
+    out[key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)] = value
+  }
+  return out as T
 }
 
 export async function createPluginPublisherRecord(data: {

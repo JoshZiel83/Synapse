@@ -255,8 +255,14 @@ export function normalizeTransportAddressRow(
 }
 
 export function normalizeTransportOutboxSweepCandidateRow(
-  row: TransportOutboxSweepCandidateRaw
+  rawRow: TransportOutboxSweepCandidateRaw
 ): TransportOutboxSweepCandidateRow {
+  // listTransportOutboxSweepCandidateRows uses sql`...`.execute(), whose rows
+  // pass through CamelCasePlugin's transformResult — the bare `delivery_status`
+  // / `created_at` columns arrive camelCase. This normalizer reads snake_case,
+  // so re-snake the top-level keys first (metadata key is unchanged; values
+  // pass through; idempotent).
+  const row = snakeCaseOutboxSweepRow(rawRow)
   return {
     id: row.id,
     deliveryStatus: row.delivery_status,
@@ -266,6 +272,16 @@ export function normalizeTransportOutboxSweepCandidateRow(
     hasUnknownAttempt: row.has_unknown_attempt,
     lastError: row.last_error,
   }
+}
+
+function snakeCaseOutboxSweepRow(
+  row: TransportOutboxSweepCandidateRaw
+): TransportOutboxSweepCandidateRaw {
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(row)) {
+    out[key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)] = value
+  }
+  return out as TransportOutboxSweepCandidateRaw
 }
 
 export function decodeConversationItemMetadata(row: {
