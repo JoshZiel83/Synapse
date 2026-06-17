@@ -13,11 +13,11 @@ export async function getActorMaxSessions(actorId: string): Promise<number> {
         WHEN COALESCE(config->>'maxConcurrentSessions', '') ~ '^[0-9]+$'
           THEN GREATEST((config->>'maxConcurrentSessions')::int, 1)
         ELSE ${DEFAULT_MAX_CONCURRENT_SESSIONS}
-      END`.as("max_concurrent_sessions")
+      END`.as("maxConcurrentSessions")
     )
     .where("id", "=", actorId)
     .executeTakeFirst()
-  return row?.max_concurrent_sessions ?? DEFAULT_MAX_CONCURRENT_SESSIONS
+  return row?.maxConcurrentSessions ?? DEFAULT_MAX_CONCURRENT_SESSIONS
 }
 
 export async function insertSessionThinkAuditLog(input: {
