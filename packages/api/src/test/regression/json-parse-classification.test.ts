@@ -21,6 +21,8 @@ const classifiedJsonParseFiles = {
       "Automation rule, trigger, source, occurrence, and integration DB JSON is decoded at repo exit.",
     "packages/api/src/modules/context/repo.ts":
       "Context archive-frame DB JSON is decoded at repo exit.",
+    "packages/api/src/modules/files/repo.ts":
+      "File asset origin details DB JSON is decoded at repo exit.",
     "packages/api/src/modules/im/service/repo.ts":
       "IM transport account/link/session DB JSON is decoded at repo exit.",
     "packages/api/src/modules/mcp-plugins/repo.ts":

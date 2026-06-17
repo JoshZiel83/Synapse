@@ -14,12 +14,24 @@ test("normalizeFileAssetJoinRow decodes file origin details at repo exit", () =>
   assert.deepEqual(row.details, { source: "composer" })
 })
 
-test("normalizeFileAssetJoinRow normalizes malformed origin details to an empty object", () => {
-  const row = normalizeFileAssetJoinRow({
-    detailsJson: JSON.stringify(["not-object"]),
-  } as FileAssetDbRow)
+test("normalizeFileAssetJoinRow rejects malformed origin details at repo exit", () => {
+  assert.throws(
+    () =>
+      normalizeFileAssetJoinRow({
+        detailsJson: "not json",
+      } as FileAssetDbRow),
+    /file asset detailsJson must be valid JSON/
+  )
+})
 
-  assert.deepEqual(row.details, {})
+test("normalizeFileAssetJoinRow rejects non-object origin details at repo exit", () => {
+  assert.throws(
+    () =>
+      normalizeFileAssetJoinRow({
+        detailsJson: JSON.stringify(["not-object"]),
+      } as FileAssetDbRow),
+    /file asset detailsJson must be a JSON object/
+  )
 })
 
 test("normalizeFileParseOutputRow decodes structured output JSON at repo exit", () => {

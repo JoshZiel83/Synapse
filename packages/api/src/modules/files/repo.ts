@@ -5,7 +5,6 @@
 // workspace-access check. Returns camelCase domain rows with Date objects KEPT
 // (Date→ISO serialization stays in presenter.ts per r3). round-6 P1-6.
 
-import { parseJsonObject } from "@synapse/shared"
 import { db } from "../../infrastructure/database/kysely.js"
 import type { FileJoinRow } from "./presenter.js"
 
@@ -17,7 +16,24 @@ export function normalizeFileAssetJoinRow(row: FileAssetDbRow): FileJoinRow {
   const { detailsJson, ...rest } = row
   return {
     ...rest,
-    details: parseJsonObject(detailsJson),
+    details: parseFileAssetDetails(detailsJson),
+  }
+}
+
+function parseFileAssetDetails(value: unknown): Record<string, unknown> {
+  if (value === null || value === undefined) return {}
+  const parsed = typeof value === "string" ? parseFileAssetJson(value) : value
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("file asset detailsJson must be a JSON object")
+  }
+  return parsed as Record<string, unknown>
+}
+
+function parseFileAssetJson(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown
+  } catch {
+    throw new Error("file asset detailsJson must be valid JSON")
   }
 }
 
