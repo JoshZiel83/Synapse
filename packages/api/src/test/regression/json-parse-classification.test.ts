@@ -15,6 +15,8 @@ const scannedSourceRoots = [
 
 const classifiedJsonParseFiles = {
   businessJsonRepoExit: {
+    "packages/api/src/modules/automation/repo.ts":
+      "Automation rule, trigger, source, occurrence, and integration DB JSON is decoded at repo exit.",
     "packages/api/src/modules/context/repo.ts":
       "Context archive-frame DB JSON is decoded at repo exit.",
     "packages/api/src/modules/im/service/repo.ts":

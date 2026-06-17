@@ -229,12 +229,21 @@ test("decodeAutomationEventSourceMetadata accepts object metadata without shape 
   })
 })
 
-test("decodeAutomationTriggerMatcher normalizes non-object matcher JSON", () => {
-  assert.deepEqual(
-    decodeAutomationTriggerMatcher({
-      matcher: JSON.stringify(["not", "an", "object"]),
-    }),
-    {}
+test("automation standalone JSON decoders reject non-object JSON drift", () => {
+  assert.throws(
+    () =>
+      decodeAutomationEventSourceMetadata({
+        metadata: "not-json",
+      }),
+    /automation event source metadata must be valid JSON/
+  )
+
+  assert.throws(
+    () =>
+      decodeAutomationTriggerMatcher({
+        matcher: JSON.stringify(["not", "an", "object"]),
+      }),
+    /automation trigger matcher must be a JSON object/
   )
 })
 
@@ -259,6 +268,30 @@ test("automation rule/policy/delivery rows decode metadata at repo exit", () => 
   )
 })
 
+test("automation rule/policy/delivery rows reject non-object metadata drift", () => {
+  assert.throws(
+    () =>
+      normalizeAutomationRuleRow({
+        metadata: JSON.stringify(["not", "an", "object"]),
+      } as AutomationRuleDbRow),
+    /automation rule metadata must be a JSON object/
+  )
+  assert.throws(
+    () =>
+      normalizeAutomationPolicyRow({
+        metadata: "not-json",
+      } as AutomationPolicyDbRow),
+    /automation policy metadata must be valid JSON/
+  )
+  assert.throws(
+    () =>
+      normalizeAutomationDeliveryRow({
+        metadata: "42",
+      } as AutomationDeliveryDbRow),
+    /automation delivery metadata must be a JSON object/
+  )
+})
+
 test("automation trigger rows decode matcher and metadata at repo exit", () => {
   const row = normalizeAutomationTriggerRow({
     matcher: JSON.stringify({ labels: ["incident"] }),
@@ -267,6 +300,25 @@ test("automation trigger rows decode matcher and metadata at repo exit", () => {
 
   assert.deepEqual(row.matcher, { labels: ["incident"] })
   assert.deepEqual(row.metadata, { source: "github" })
+})
+
+test("automation trigger rows reject non-object matcher and metadata drift", () => {
+  assert.throws(
+    () =>
+      normalizeAutomationTriggerRow({
+        matcher: JSON.stringify(["not", "an", "object"]),
+        metadata: JSON.stringify({ source: "github" }),
+      } as AutomationTriggerDbRow),
+    /automation trigger matcher must be a JSON object/
+  )
+  assert.throws(
+    () =>
+      normalizeAutomationTriggerRow({
+        matcher: JSON.stringify({ labels: ["incident"] }),
+        metadata: "not-json",
+      } as AutomationTriggerDbRow),
+    /automation trigger metadata must be valid JSON/
+  )
 })
 
 test("automation event-source rows decode payload records at repo exit", () => {
@@ -281,6 +333,36 @@ test("automation event-source rows decode payload records at repo exit", () => {
   assert.deepEqual(row.metadata, { provider: "github" })
 })
 
+test("automation event-source rows reject non-object payload records", () => {
+  assert.throws(
+    () =>
+      normalizeAutomationEventSourceRow({
+        payload_schema: JSON.stringify(["not", "an", "object"]),
+        example_payload: JSON.stringify({ issue: 123 }),
+        metadata: JSON.stringify({ provider: "github" }),
+      } as AutomationEventSourceDbRow),
+    /automation event source payload_schema must be a JSON object/
+  )
+  assert.throws(
+    () =>
+      normalizeAutomationEventSourceRow({
+        payload_schema: JSON.stringify({ type: "object" }),
+        example_payload: "42",
+        metadata: JSON.stringify({ provider: "github" }),
+      } as AutomationEventSourceDbRow),
+    /automation event source example_payload must be a JSON object/
+  )
+  assert.throws(
+    () =>
+      normalizeAutomationEventSourceRow({
+        payload_schema: JSON.stringify({ type: "object" }),
+        example_payload: JSON.stringify({ issue: 123 }),
+        metadata: "not-json",
+      } as AutomationEventSourceDbRow),
+    /automation event source metadata must be valid JSON/
+  )
+})
+
 test("automation occurrence rows decode source snapshot and payload at repo exit", () => {
   const row = normalizeAutomationOccurrenceRow({
     source_snapshot: JSON.stringify({ ruleName: "Escalate" }),
@@ -289,6 +371,25 @@ test("automation occurrence rows decode source snapshot and payload at repo exit
 
   assert.deepEqual(row.source_snapshot, { ruleName: "Escalate" })
   assert.deepEqual(row.payload, { severity: "critical" })
+})
+
+test("automation occurrence rows reject non-object occurrence JSON", () => {
+  assert.throws(
+    () =>
+      normalizeAutomationOccurrenceRow({
+        source_snapshot: JSON.stringify(["not", "an", "object"]),
+        payload: JSON.stringify({ severity: "critical" }),
+      } as AutomationOccurrenceDbRow),
+    /automation occurrence source_snapshot must be a JSON object/
+  )
+  assert.throws(
+    () =>
+      normalizeAutomationOccurrenceRow({
+        source_snapshot: JSON.stringify({ ruleName: "Escalate" }),
+        payload: "42",
+      } as AutomationOccurrenceDbRow),
+    /automation occurrence payload must be a JSON object/
+  )
 })
 
 test("automation execution joined occurrence rows decode occurrence JSON at repo exit", () => {
@@ -301,12 +402,41 @@ test("automation execution joined occurrence rows decode occurrence JSON at repo
   assert.deepEqual(row.payload, { count: 1 })
 })
 
+test("automation execution joined occurrence rows reject non-object occurrence JSON", () => {
+  assert.throws(
+    () =>
+      normalizeAutomationExecutionWithOccurrenceRow({
+        source_snapshot: "not-json",
+        payload: JSON.stringify({ count: 1 }),
+      } as AutomationExecutionWithOccurrenceDbRow),
+    /automation execution occurrence source_snapshot must be valid JSON/
+  )
+  assert.throws(
+    () =>
+      normalizeAutomationExecutionWithOccurrenceRow({
+        source_snapshot: JSON.stringify({ source: "cron" }),
+        payload: JSON.stringify(["not", "an", "object"]),
+      } as AutomationExecutionWithOccurrenceDbRow),
+    /automation execution occurrence payload must be a JSON object/
+  )
+})
+
 test("automation webhook endpoint rows decode metadata at repo exit", () => {
   assert.deepEqual(
     normalizeAutomationWebhookEndpointRow({
       metadata: JSON.stringify({ channel: "alerts" }),
     } as AutomationWebhookEndpointDbRow).metadata,
     { channel: "alerts" }
+  )
+})
+
+test("automation webhook endpoint rows reject non-object metadata", () => {
+  assert.throws(
+    () =>
+      normalizeAutomationWebhookEndpointRow({
+        metadata: JSON.stringify(["not", "an", "object"]),
+      } as AutomationWebhookEndpointDbRow),
+    /automation webhook endpoint metadata must be a JSON object/
   )
 })
 
@@ -335,6 +465,35 @@ test("integration installation rows decode config and spec metadata at repo exit
     integrationProvider: "gitlab",
     setupSteps: ["connect"],
   })
+})
+
+test("integration installation rows reject non-object config and spec metadata", () => {
+  assert.throws(
+    () =>
+      normalizeIntegrationInstallationRow({
+        installationId: "installation-1",
+        workspaceId: "workspace-1",
+        installationStatus: "active",
+        configData: JSON.stringify(["not", "an", "object"]),
+        orgSlug: "gitlab",
+        itemSlug: "gitlab-plugin",
+        specMetadata: JSON.stringify({ integrationProvider: "gitlab" }),
+      }),
+    /automation integration installation configData must be a JSON object/
+  )
+  assert.throws(
+    () =>
+      normalizeIntegrationInstallationRow({
+        installationId: "installation-1",
+        workspaceId: "workspace-1",
+        installationStatus: "active",
+        configData: JSON.stringify({ apiKey: "secret" }),
+        orgSlug: "gitlab",
+        itemSlug: "gitlab-plugin",
+        specMetadata: "not-json",
+      }),
+    /automation integration installation specMetadata must be valid JSON/
+  )
 })
 
 test("automation repo helpers own webhook endpoint create and list queries", async () => {

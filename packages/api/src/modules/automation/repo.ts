@@ -19,7 +19,6 @@ import {
   withDbTransaction,
   type Executor,
 } from "../../infrastructure/database/kysely.js"
-import { parseJsonObject } from "@synapse/shared"
 import type {
   AutomationEventProviderKind,
   AutomationEventSourceStatus,
@@ -345,6 +344,35 @@ type IntegrationInstallationRawRow = Omit<
   specMetadata: unknown
 }
 
+function parseRepoJsonObject(
+  value: unknown,
+  label: string
+): Record<string, unknown> {
+  if (value === null || value === undefined) return {}
+
+  let candidate: unknown = value
+  if (typeof value === "string") {
+    if (value.trim().length === 0) {
+      throw new Error(`${label} must be valid JSON`)
+    }
+    try {
+      candidate = JSON.parse(value) as unknown
+    } catch {
+      throw new Error(`${label} must be valid JSON`)
+    }
+  }
+
+  if (
+    typeof candidate !== "object" ||
+    candidate === null ||
+    Array.isArray(candidate)
+  ) {
+    throw new Error(`${label} must be a JSON object`)
+  }
+
+  return candidate as Record<string, unknown>
+}
+
 export function normalizeIntegrationInstallationRow(
   row: IntegrationInstallationRawRow
 ): IntegrationInstallationRow {
@@ -354,21 +382,27 @@ export function normalizeIntegrationInstallationRow(
     installationStatus: row.installationStatus,
     orgSlug: row.orgSlug,
     itemSlug: row.itemSlug,
-    configData: parseJsonObject(row.configData),
-    specMetadata: parseJsonObject(row.specMetadata),
+    configData: parseRepoJsonObject(
+      row.configData,
+      "automation integration installation configData"
+    ),
+    specMetadata: parseRepoJsonObject(
+      row.specMetadata,
+      "automation integration installation specMetadata"
+    ),
   }
 }
 
 export function decodeAutomationEventSourceMetadata(row: {
   metadata: unknown
 }): Record<string, unknown> {
-  return parseJsonObject(row.metadata)
+  return parseRepoJsonObject(row.metadata, "automation event source metadata")
 }
 
 export function decodeAutomationTriggerMatcher(row: {
   matcher: unknown
 }): Record<string, unknown> {
-  return parseJsonObject(row.matcher)
+  return parseRepoJsonObject(row.matcher, "automation trigger matcher")
 }
 
 export function normalizeAutomationRuleRow(
@@ -376,7 +410,7 @@ export function normalizeAutomationRuleRow(
 ): AutomationRuleRow {
   const normalized = {
     ...row,
-    metadata: parseJsonObject(row.metadata),
+    metadata: parseRepoJsonObject(row.metadata, "automation rule metadata"),
   }
   return normalized
 }
@@ -386,8 +420,8 @@ export function normalizeAutomationTriggerRow(
 ): AutomationTriggerRow {
   const normalized = {
     ...row,
-    matcher: parseJsonObject(row.matcher),
-    metadata: parseJsonObject(row.metadata),
+    matcher: parseRepoJsonObject(row.matcher, "automation trigger matcher"),
+    metadata: parseRepoJsonObject(row.metadata, "automation trigger metadata"),
   }
   return normalized
 }
@@ -397,7 +431,7 @@ export function normalizeAutomationPolicyRow(
 ): AutomationPolicyRow {
   const normalized = {
     ...row,
-    metadata: parseJsonObject(row.metadata),
+    metadata: parseRepoJsonObject(row.metadata, "automation policy metadata"),
   }
   return normalized
 }
@@ -407,7 +441,7 @@ export function normalizeAutomationDeliveryRow(
 ): AutomationDeliveryRow {
   const normalized = {
     ...row,
-    metadata: parseJsonObject(row.metadata),
+    metadata: parseRepoJsonObject(row.metadata, "automation delivery metadata"),
   }
   return normalized
 }
@@ -417,9 +451,18 @@ export function normalizeAutomationEventSourceRow(
 ): AutomationEventSourceRow {
   const normalized = {
     ...row,
-    payload_schema: parseJsonObject(row.payload_schema),
-    example_payload: parseJsonObject(row.example_payload),
-    metadata: parseJsonObject(row.metadata),
+    payload_schema: parseRepoJsonObject(
+      row.payload_schema,
+      "automation event source payload_schema"
+    ),
+    example_payload: parseRepoJsonObject(
+      row.example_payload,
+      "automation event source example_payload"
+    ),
+    metadata: parseRepoJsonObject(
+      row.metadata,
+      "automation event source metadata"
+    ),
   }
   return normalized
 }
@@ -429,8 +472,11 @@ export function normalizeAutomationOccurrenceRow(
 ): AutomationOccurrenceRow {
   const normalized = {
     ...row,
-    source_snapshot: parseJsonObject(row.source_snapshot),
-    payload: parseJsonObject(row.payload),
+    source_snapshot: parseRepoJsonObject(
+      row.source_snapshot,
+      "automation occurrence source_snapshot"
+    ),
+    payload: parseRepoJsonObject(row.payload, "automation occurrence payload"),
   }
   return normalized
 }
@@ -440,8 +486,14 @@ export function normalizeAutomationExecutionWithOccurrenceRow(
 ): AutomationExecutionWithOccurrenceRow {
   const normalized = {
     ...row,
-    source_snapshot: parseJsonObject(row.source_snapshot),
-    payload: parseJsonObject(row.payload),
+    source_snapshot: parseRepoJsonObject(
+      row.source_snapshot,
+      "automation execution occurrence source_snapshot"
+    ),
+    payload: parseRepoJsonObject(
+      row.payload,
+      "automation execution occurrence payload"
+    ),
   }
   return normalized
 }
@@ -451,7 +503,10 @@ export function normalizeAutomationWebhookEndpointRow(
 ): AutomationWebhookEndpointRow {
   const normalized = {
     ...row,
-    metadata: parseJsonObject(row.metadata),
+    metadata: parseRepoJsonObject(
+      row.metadata,
+      "automation webhook endpoint metadata"
+    ),
   }
   return normalized
 }
