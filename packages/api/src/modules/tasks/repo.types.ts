@@ -53,126 +53,132 @@ export interface ActionTokenPayload {
  * (getTaskRowById / getTaskRowByIdForUpdate). This is a hand-written row
  * projection (column aliases) — not a generated TableRow — so the presenter
  * can consume it structurally via `import type` without touching generated/db.
+ *
+ * Convention A: keys are camelCase. CamelCasePlugin's `transformResult` is
+ * unconditional, so the raw-`sql` join rows arrive camelCase at runtime
+ * (bare physical columns from `ir.*` + double-quoted camelCase aliases for
+ * computed/renamed columns). There is intentionally NO index signature here so
+ * tsc catches any stray snake_case read on this row.
  */
 export type RawTaskRow = {
   id: string
-  workspace_id: string
-  conversation_id: string
-  // Task unification: the row IS the task. session_id lives on it (nullable for
+  workspaceId: string
+  conversationId: string
+  // Task unification: the row IS the task. sessionId lives on it (nullable for
   // remote_agent_channel delivery). The legacy task_id pointer is gone.
-  session_id: string | null
-  remote_agent_run_id: string | null
-  conversation_item_id: string | null
+  sessionId: string | null
+  remoteAgentRunId: string | null
+  conversationItemId: string | null
   kind: TaskRequestKind
-  lifecycle_status: ToolCallTaskLifecycleStatus
+  lifecycleStatus: ToolCallTaskLifecycleStatus
   outcome: ToolCallTaskOutcome | null
   revision: string | number
-  prompt_payload: Record<string, unknown>
-  plan_payload: Record<string, unknown>
-  requested_tool_name: string | null
+  promptPayload: Record<string, unknown>
+  planPayload: Record<string, unknown>
+  requestedToolName: string | null
   reason: string | null
-  request_mode: string | null
-  requested_action: RuntimeAuthorizationRequestedAction | null
-  grant_options: RuntimeAuthorizationGrantOption[] | null
-  available_presets: RuntimeAuthorizationPreset[] | null
-  source_request_args: Record<string, unknown> | null
-  source_runtime_session_id: string | null
-  source_retry_nonce: string | null
-  // subject-scope-refactor: principal_remote_agent_id is derived from
-  // principal_subject_id rather than stored on the runtime authorization detail.
-  // principal_subject_id (NOT NULL) + principal_scope_subject_id (nullable),
+  requestMode: string | null
+  requestedAction: RuntimeAuthorizationRequestedAction | null
+  grantOptions: RuntimeAuthorizationGrantOption[] | null
+  availablePresets: RuntimeAuthorizationPreset[] | null
+  sourceRequestArgs: Record<string, unknown> | null
+  sourceRuntimeSessionId: string | null
+  sourceRetryNonce: string | null
+  // subject-scope-refactor: principalRemoteAgentId is derived from
+  // principalSubjectId rather than stored on the runtime authorization detail.
+  // principalSubjectId (NOT NULL) + principalScopeSubjectId (nullable),
   // both FK to access_subjects with ON DELETE RESTRICT (durable audit).
-  principal_subject_id: string
-  principal_scope_subject_id: string | null
+  principalSubjectId: string
+  principalScopeSubjectId: string | null
   // Derived alias for dashboard consumers.
-  principal_remote_agent_id: string | null
-  principal_subject_kind: string | null
-  resolution_payload: Record<string, unknown>
-  resolved_at: Date | null
-  expires_at: Date | null
-  created_at: Date
-  updated_at: Date
-  requester_participant_id: string | null
-  requester_workspace_member_id: string | null
-  requester_actor_id: string | null
-  requester_remote_agent_id: string | null
-  target_actor_id: string | null
-  target_workspace_member_id: string | null
-  target_remote_agent_id: string | null
-  target_participant_id: string | null
-  resolved_by_actor_id: string | null
-  resolved_by_workspace_member_id: string | null
-  resolved_by_remote_agent_id: string | null
-  resolved_by_participant_id: string | null
-  device_capability_id: string | null
-  device_id: string | null
-  device_exposure_id: string | null
-  device_tool_stable_key: string | null
-  device_display_name: string | null
-  exposure_display_name: string | null
-  exposure_stable_key: string | null
-  requester_participant_type: string | null
-  requester_name: string | null
-  requester_title: string | null
-  requester_role: string | null
-  requester_actor_avatar_file_id: string | null
-  requester_user_avatar_file_id: string | null
-  requester_remote_agent_avatar_file_id: string | null
-  requester_avatar_emoji: string | null
-  target_participant_type: string | null
-  target_name: string | null
-  target_title: string | null
-  target_role: string | null
-  target_actor_avatar_file_id: string | null
-  target_user_avatar_file_id: string | null
-  target_remote_agent_avatar_file_id: string | null
-  target_avatar_emoji: string | null
-  resolved_by_participant_type: string | null
-  resolved_by_name: string | null
-  resolved_by_title: string | null
-  resolved_by_role: string | null
-  resolved_by_actor_avatar_file_id: string | null
-  resolved_by_user_avatar_file_id: string | null
-  resolved_by_remote_agent_avatar_file_id: string | null
-  resolved_by_avatar_emoji: string | null
+  principalRemoteAgentId: string | null
+  principalSubjectKind: string | null
+  resolutionPayload: Record<string, unknown>
+  resolvedAt: Date | null
+  expiresAt: Date | null
+  createdAt: Date
+  updatedAt: Date
+  requesterParticipantId: string | null
+  requesterWorkspaceMemberId: string | null
+  requesterActorId: string | null
+  requesterRemoteAgentId: string | null
+  targetActorId: string | null
+  targetWorkspaceMemberId: string | null
+  targetRemoteAgentId: string | null
+  targetParticipantId: string | null
+  resolvedByActorId: string | null
+  resolvedByWorkspaceMemberId: string | null
+  resolvedByRemoteAgentId: string | null
+  resolvedByParticipantId: string | null
+  deviceCapabilityId: string | null
+  deviceId: string | null
+  deviceExposureId: string | null
+  deviceToolStableKey: string | null
+  deviceDisplayName: string | null
+  exposureDisplayName: string | null
+  exposureStableKey: string | null
+  requesterParticipantType: string | null
+  requesterName: string | null
+  requesterTitle: string | null
+  requesterRole: string | null
+  requesterActorAvatarFileId: string | null
+  requesterUserAvatarFileId: string | null
+  requesterRemoteAgentAvatarFileId: string | null
+  requesterAvatarEmoji: string | null
+  targetParticipantType: string | null
+  targetName: string | null
+  targetTitle: string | null
+  targetRole: string | null
+  targetActorAvatarFileId: string | null
+  targetUserAvatarFileId: string | null
+  targetRemoteAgentAvatarFileId: string | null
+  targetAvatarEmoji: string | null
+  resolvedByParticipantType: string | null
+  resolvedByName: string | null
+  resolvedByTitle: string | null
+  resolvedByRole: string | null
+  resolvedByActorAvatarFileId: string | null
+  resolvedByUserAvatarFileId: string | null
+  resolvedByRemoteAgentAvatarFileId: string | null
+  resolvedByAvatarEmoji: string | null
 }
 
 export type RawTaskDbRow = Omit<
   RawTaskRow,
-  | "prompt_payload"
-  | "plan_payload"
-  | "requested_action"
-  | "grant_options"
-  | "available_presets"
-  | "source_request_args"
-  | "resolution_payload"
+  | "promptPayload"
+  | "planPayload"
+  | "requestedAction"
+  | "grantOptions"
+  | "availablePresets"
+  | "sourceRequestArgs"
+  | "resolutionPayload"
 > & {
-  prompt_payload: unknown
-  plan_payload: unknown
-  requested_action: unknown
-  grant_options: unknown
-  available_presets: unknown
-  source_request_args: unknown
-  resolution_payload: unknown
+  promptPayload: unknown
+  planPayload: unknown
+  requestedAction: unknown
+  grantOptions: unknown
+  availablePresets: unknown
+  sourceRequestArgs: unknown
+  resolutionPayload: unknown
 }
 
 export type RawTaskCommandRow = {
   id: string
-  task_id: string
-  command_id: string
-  base_revision: string | number
+  taskId: string
+  commandId: string
+  baseRevision: string | number
   outcome: ChatTaskResolveOutcome
-  request_payload: unknown
-  response_payload: unknown
-  created_by_workspace_member_id: string | null
-  created_at: Date
-  updated_at: Date
+  requestPayload: unknown
+  responsePayload: unknown
+  createdByWorkspaceMemberId: string | null
+  createdAt: Date
+  updatedAt: Date
 }
 
 export type TaskCommandRow = Omit<
   RawTaskCommandRow,
-  "request_payload" | "response_payload"
+  "requestPayload" | "responsePayload"
 > & {
-  request_payload: Record<string, unknown>
-  response_payload: Record<string, unknown>
+  requestPayload: Record<string, unknown>
+  responsePayload: Record<string, unknown>
 }

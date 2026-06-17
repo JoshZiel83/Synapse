@@ -385,42 +385,41 @@ function buildUserInputQuestionSummaries(
 }
 
 function presentEntityRefFromRow(
-  prefix: "requester" | "target" | "resolved_by",
+  prefix: "requester" | "target" | "resolvedBy",
   row: RawTaskRow
 ): ConversationEntityRef | undefined {
-  const participantType = row[`${prefix}_participant_type` as keyof RawTaskRow]
+  const participantType = row[`${prefix}ParticipantType` as keyof RawTaskRow]
   if (typeof participantType !== "string" || !participantType.trim()) {
     return undefined
   }
-  const participantId = row[`${prefix}_participant_id` as keyof RawTaskRow]
+  const participantId = row[`${prefix}ParticipantId` as keyof RawTaskRow]
   const workspaceMemberId =
     prefix === "requester"
-      ? row.requester_workspace_member_id
+      ? row.requesterWorkspaceMemberId
       : prefix === "target"
-        ? row.target_workspace_member_id
-        : row.resolved_by_workspace_member_id
+        ? row.targetWorkspaceMemberId
+        : row.resolvedByWorkspaceMemberId
   const actorId =
     prefix === "requester"
-      ? row.requester_actor_id
+      ? row.requesterActorId
       : prefix === "target"
-        ? row.target_actor_id
-        : row.resolved_by_actor_id
+        ? row.targetActorId
+        : row.resolvedByActorId
   const remoteAgentId =
     prefix === "requester"
-      ? row.requester_remote_agent_id
+      ? row.requesterRemoteAgentId
       : prefix === "target"
-        ? row.target_remote_agent_id
-        : row.resolved_by_remote_agent_id
-  const name = row[`${prefix}_name` as keyof RawTaskRow]
-  const title = row[`${prefix}_title` as keyof RawTaskRow]
-  const role = row[`${prefix}_role` as keyof RawTaskRow]
+        ? row.targetRemoteAgentId
+        : row.resolvedByRemoteAgentId
+  const name = row[`${prefix}Name` as keyof RawTaskRow]
+  const title = row[`${prefix}Title` as keyof RawTaskRow]
+  const role = row[`${prefix}Role` as keyof RawTaskRow]
   const actorAvatarFileId =
-    row[`${prefix}_actor_avatar_file_id` as keyof RawTaskRow]
-  const userAvatarFileId =
-    row[`${prefix}_user_avatar_file_id` as keyof RawTaskRow]
+    row[`${prefix}ActorAvatarFileId` as keyof RawTaskRow]
+  const userAvatarFileId = row[`${prefix}UserAvatarFileId` as keyof RawTaskRow]
   const remoteAgentAvatarFileId =
-    row[`${prefix}_remote_agent_avatar_file_id` as keyof RawTaskRow]
-  const avatarEmoji = row[`${prefix}_avatar_emoji` as keyof RawTaskRow]
+    row[`${prefix}RemoteAgentAvatarFileId` as keyof RawTaskRow]
+  const avatarEmoji = row[`${prefix}AvatarEmoji` as keyof RawTaskRow]
 
   return {
     participantId:
@@ -462,21 +461,21 @@ export function presentTaskSummary(row: RawTaskRow): TaskSummary {
     `Task ${row.id} requester`
   )
   const target = presentEntityRefFromRow("target", row)
-  const resolvedBy = row.resolved_by_participant_id
+  const resolvedBy = row.resolvedByParticipantId
     ? requireEntityRef(
-        presentEntityRefFromRow("resolved_by", row),
+        presentEntityRefFromRow("resolvedBy", row),
         `Task ${row.id} resolved_by`
       )
     : undefined
-  const resolutionPayload = row.resolution_payload
+  const resolutionPayload = row.resolutionPayload
 
   const baseTask = {
     id: row.id,
-    remoteAgentRunId: row.remote_agent_run_id || undefined,
-    workspaceId: row.workspace_id,
-    conversationId: row.conversation_id,
-    itemId: row.conversation_item_id || undefined,
-    lifecycleStatus: row.lifecycle_status,
+    remoteAgentRunId: row.remoteAgentRunId || undefined,
+    workspaceId: row.workspaceId,
+    conversationId: row.conversationId,
+    itemId: row.conversationItemId || undefined,
+    lifecycleStatus: row.lifecycleStatus,
     outcome: row.outcome || undefined,
     revision: toRevisionNumber(row.revision, `Task ${row.id} revision`),
     requester,
@@ -485,15 +484,15 @@ export function presentTaskSummary(row: RawTaskRow): TaskSummary {
       typeof resolutionPayload.note === "string"
         ? resolutionPayload.note.trim() || undefined
         : undefined,
-    createdAt: serializeInstant(row.created_at),
-    updatedAt: serializeInstant(row.updated_at),
-    resolvedAt: serializeOptionalInstant(row.resolved_at),
-    expiresAt: serializeOptionalInstant(row.expires_at),
+    createdAt: serializeInstant(row.createdAt),
+    updatedAt: serializeInstant(row.updatedAt),
+    resolvedAt: serializeOptionalInstant(row.resolvedAt),
+    expiresAt: serializeOptionalInstant(row.expiresAt),
     viewerCanResolve: false,
   }
 
   if (row.kind === TASK_REQUEST_KIND.USER_INPUT) {
-    const promptPayload = row.prompt_payload
+    const promptPayload = row.promptPayload
     return {
       ...baseTask,
       kind: TASK_REQUEST_KIND.USER_INPUT,
@@ -516,7 +515,7 @@ export function presentTaskSummary(row: RawTaskRow): TaskSummary {
   }
 
   if (row.kind === TASK_REQUEST_KIND.PLAN_APPROVAL) {
-    const planPayload = row.plan_payload
+    const planPayload = row.planPayload
     return {
       ...baseTask,
       kind: TASK_REQUEST_KIND.PLAN_APPROVAL,
@@ -541,19 +540,19 @@ export function presentTaskSummary(row: RawTaskRow): TaskSummary {
     }
   }
 
-  const requestedAction = row.requested_action
+  const requestedAction = row.requestedAction
   if (!requestedAction) {
     throw new Error(`Task ${row.id} requested_action is required`)
   }
-  const grantOptions = row.grant_options ?? []
-  const availablePresets = row.available_presets ?? []
+  const grantOptions = row.grantOptions ?? []
+  const availablePresets = row.availablePresets ?? []
   const runtimeAuthorization: RuntimeAuthorizationTaskDetails = {
     requestedToolName: requireTrimmedString(
-      row.requested_tool_name,
+      row.requestedToolName,
       `Task ${row.id} requested_tool_name`
     ),
     deviceToolStableKey: requireTrimmedString(
-      row.device_tool_stable_key,
+      row.deviceToolStableKey,
       `Task ${row.id} device_tool_stable_key`
     ),
     requestedAction,
@@ -561,21 +560,21 @@ export function presentTaskSummary(row: RawTaskRow): TaskSummary {
       row.reason,
       `Task ${row.id} runtime_authorization.reason`
     ),
-    deviceId: requireTrimmedString(row.device_id, `Task ${row.id} device_id`),
+    deviceId: requireTrimmedString(row.deviceId, `Task ${row.id} device_id`),
     deviceDisplayName: requireTrimmedString(
-      row.device_display_name,
+      row.deviceDisplayName,
       `Task ${row.id} device_display_name`
     ),
     deviceCapabilityId: requireTrimmedString(
-      row.device_capability_id,
+      row.deviceCapabilityId,
       `Task ${row.id} device_capability_id`
     ),
     exposureId: requireTrimmedString(
-      row.device_exposure_id,
+      row.deviceExposureId,
       `Task ${row.id} device_exposure_id`
     ),
     exposureDisplayName: requireTrimmedString(
-      row.exposure_display_name,
+      row.exposureDisplayName,
       `Task ${row.id} exposure_display_name`
     ),
     grantOptions,
@@ -591,8 +590,8 @@ export function presentTaskSummary(row: RawTaskRow): TaskSummary {
         ? (resolutionPayload.approvedGrant as RuntimeAuthorizationTaskDetails["approvedGrant"])
         : undefined,
     requestMode:
-      row.request_mode === "blocking" || row.request_mode === "background"
-        ? (row.request_mode as RuntimeAuthorizationRequestMode)
+      row.requestMode === "blocking" || row.requestMode === "background"
+        ? (row.requestMode as RuntimeAuthorizationRequestMode)
         : (() => {
             throw new Error(
               `Task ${row.id} runtime_authorization.requestMode is invalid`
@@ -602,7 +601,7 @@ export function presentTaskSummary(row: RawTaskRow): TaskSummary {
     // runtime-authorizations/requests.ts can return the row's actual nonce
     // (the one that will match source_retry_nonce on the eventual grant)
     // instead of the freshly-generated nonce that no grant will ever match.
-    sourceRetryNonce: row.source_retry_nonce ?? undefined,
+    sourceRetryNonce: row.sourceRetryNonce ?? undefined,
   }
 
   return {

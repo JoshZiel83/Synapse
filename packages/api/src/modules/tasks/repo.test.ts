@@ -28,16 +28,16 @@ type AnyDb = import("kysely").Kysely<any>
 function buildTaskDbRow(overrides: Partial<RawTaskDbRow> = {}): RawTaskDbRow {
   return {
     id: "task-1",
-    workspace_id: "workspace-1",
-    conversation_id: "conversation-1",
-    session_id: null,
-    remote_agent_run_id: null,
-    conversation_item_id: null,
+    workspaceId: "workspace-1",
+    conversationId: "conversation-1",
+    sessionId: null,
+    remoteAgentRunId: null,
+    conversationItemId: null,
     kind: TASK_REQUEST_KIND.USER_INPUT,
-    lifecycle_status: "input_required",
+    lifecycleStatus: "input_required",
     outcome: null,
     revision: 1,
-    prompt_payload: {
+    promptPayload: {
       title: "Need input",
       questions: [
         {
@@ -50,71 +50,71 @@ function buildTaskDbRow(overrides: Partial<RawTaskDbRow> = {}): RawTaskDbRow {
         },
       ],
     },
-    plan_payload: {
+    planPayload: {
       title: "Plan",
       planMarkdown: "Do it",
     },
-    requested_tool_name: null,
+    requestedToolName: null,
     reason: null,
-    request_mode: null,
-    requested_action: null,
-    grant_options: null,
-    available_presets: null,
-    source_request_args: null,
-    source_runtime_session_id: null,
-    source_retry_nonce: null,
-    principal_subject_id: "subject-1",
-    principal_scope_subject_id: null,
-    principal_remote_agent_id: null,
-    principal_subject_kind: null,
-    resolution_payload: {},
-    resolved_at: null,
-    expires_at: null,
-    created_at: now,
-    updated_at: now,
-    requester_participant_id: "requester-1",
-    requester_workspace_member_id: "member-1",
-    requester_actor_id: null,
-    requester_remote_agent_id: null,
-    target_actor_id: null,
-    target_workspace_member_id: null,
-    target_remote_agent_id: null,
-    target_participant_id: null,
-    resolved_by_actor_id: null,
-    resolved_by_workspace_member_id: null,
-    resolved_by_remote_agent_id: null,
-    resolved_by_participant_id: null,
-    device_capability_id: null,
-    device_id: null,
-    device_exposure_id: null,
-    device_tool_stable_key: null,
-    device_display_name: null,
-    exposure_display_name: null,
-    exposure_stable_key: null,
-    requester_participant_type: CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER,
-    requester_name: "Requester",
-    requester_title: null,
-    requester_role: null,
-    requester_actor_avatar_file_id: null,
-    requester_user_avatar_file_id: null,
-    requester_remote_agent_avatar_file_id: null,
-    requester_avatar_emoji: null,
-    target_participant_type: null,
-    target_name: null,
-    target_title: null,
-    target_role: null,
-    target_actor_avatar_file_id: null,
-    target_user_avatar_file_id: null,
-    target_remote_agent_avatar_file_id: null,
-    target_avatar_emoji: null,
-    resolved_by_participant_type: null,
-    resolved_by_name: null,
-    resolved_by_title: null,
-    resolved_by_role: null,
-    resolved_by_actor_avatar_file_id: null,
-    resolved_by_user_avatar_file_id: null,
-    resolved_by_remote_agent_avatar_file_id: null,
-    resolved_by_avatar_emoji: null,
+    requestMode: null,
+    requestedAction: null,
+    grantOptions: null,
+    availablePresets: null,
+    sourceRequestArgs: null,
+    sourceRuntimeSessionId: null,
+    sourceRetryNonce: null,
+    principalSubjectId: "subject-1",
+    principalScopeSubjectId: null,
+    principalRemoteAgentId: null,
+    principalSubjectKind: null,
+    resolutionPayload: {},
+    resolvedAt: null,
+    expiresAt: null,
+    createdAt: now,
+    updatedAt: now,
+    requesterParticipantId: "requester-1",
+    requesterWorkspaceMemberId: "member-1",
+    requesterActorId: null,
+    requesterRemoteAgentId: null,
+    targetActorId: null,
+    targetWorkspaceMemberId: null,
+    targetRemoteAgentId: null,
+    targetParticipantId: null,
+    resolvedByActorId: null,
+    resolvedByWorkspaceMemberId: null,
+    resolvedByRemoteAgentId: null,
+    resolvedByParticipantId: null,
+    deviceCapabilityId: null,
+    deviceId: null,
+    deviceExposureId: null,
+    deviceToolStableKey: null,
+    deviceDisplayName: null,
+    exposureDisplayName: null,
+    exposureStableKey: null,
+    requesterParticipantType: CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER,
+    requesterName: "Requester",
+    requesterTitle: null,
+    requesterRole: null,
+    requesterActorAvatarFileId: null,
+    requesterUserAvatarFileId: null,
+    requesterRemoteAgentAvatarFileId: null,
+    requesterAvatarEmoji: null,
+    targetParticipantType: null,
+    targetName: null,
+    targetTitle: null,
+    targetRole: null,
+    targetActorAvatarFileId: null,
+    targetUserAvatarFileId: null,
+    targetRemoteAgentAvatarFileId: null,
+    targetAvatarEmoji: null,
+    resolvedByParticipantType: null,
+    resolvedByName: null,
+    resolvedByTitle: null,
+    resolvedByRole: null,
+    resolvedByActorAvatarFileId: null,
+    resolvedByUserAvatarFileId: null,
+    resolvedByRemoteAgentAvatarFileId: null,
+    resolvedByAvatarEmoji: null,
     ...overrides,
   }
 }
@@ -194,7 +194,7 @@ async function insertTaskTransportProjectionFixture(db: AnyDb) {
 
 test("decodeTaskPromptPayload decodes JSONB string payloads at repo exit", () => {
   const payload = decodeTaskPromptPayload({
-    prompt_payload: JSON.stringify({
+    promptPayload: JSON.stringify({
       title: "Need input",
       questions: [{ id: "q1" }],
     }),
@@ -206,7 +206,7 @@ test("decodeTaskPromptPayload decodes JSONB string payloads at repo exit", () =>
 
 test("decodeTaskResolutionPayload accepts object payloads without shape loss", () => {
   const payload = decodeTaskResolutionPayload({
-    resolution_payload: {
+    resolutionPayload: {
       note: "cancelled",
       answers: [{ questionId: "q1", text: "ok" }],
     },
@@ -220,7 +220,7 @@ test("task payload decoders reject non-object JSON at repo exit", () => {
   assert.throws(
     () =>
       decodeTaskPromptPayload({
-        prompt_payload: "[malformed",
+        promptPayload: "[malformed",
       }),
     /Task prompt_payload must be a valid JSON object/
   )
@@ -228,7 +228,7 @@ test("task payload decoders reject non-object JSON at repo exit", () => {
   assert.throws(
     () =>
       decodeTaskResolutionPayload({
-        resolution_payload: JSON.stringify(["not", "an", "object"]),
+        resolutionPayload: JSON.stringify(["not", "an", "object"]),
       }),
     /Task resolution_payload must be a JSON object/
   )
@@ -282,7 +282,7 @@ test("normalizeTaskRow decodes task summary JSONB fields at repo exit", () => {
   ]
   const normalized = normalizeTaskRow(
     buildTaskDbRow({
-      prompt_payload: JSON.stringify({
+      promptPayload: JSON.stringify({
         title: "Need input",
         questions: [
           {
@@ -295,14 +295,14 @@ test("normalizeTaskRow decodes task summary JSONB fields at repo exit", () => {
           },
         ],
       }),
-      plan_payload: JSON.stringify({
+      planPayload: JSON.stringify({
         title: "Plan",
         planMarkdown: "Do it",
       }),
-      resolution_payload: JSON.stringify({
+      resolutionPayload: JSON.stringify({
         answers: [{ questionId: "q1", text: "ok" }],
       }),
-      requested_action: JSON.stringify({
+      requestedAction: JSON.stringify({
         capability: "commandline",
         toolName: "shell",
         summary: "Run command",
@@ -312,17 +312,17 @@ test("normalizeTaskRow decodes task summary JSONB fields at repo exit", () => {
           commandText: "date",
         },
       }),
-      grant_options: JSON.stringify(grantOptions),
-      available_presets: JSON.stringify(["once"]),
-      source_request_args: JSON.stringify({ command: "date" }),
+      grantOptions: JSON.stringify(grantOptions),
+      availablePresets: JSON.stringify(["once"]),
+      sourceRequestArgs: JSON.stringify({ command: "date" }),
     })
   )
 
-  assert.equal(normalized.prompt_payload.title, "Need input")
-  assert.deepEqual(normalized.resolution_payload.answers, [
+  assert.equal(normalized.promptPayload.title, "Need input")
+  assert.deepEqual(normalized.resolutionPayload.answers, [
     { questionId: "q1", text: "ok" },
   ])
-  assert.deepEqual(normalized.requested_action, {
+  assert.deepEqual(normalized.requestedAction, {
     capability: "commandline",
     toolName: "shell",
     summary: "Run command",
@@ -332,9 +332,9 @@ test("normalizeTaskRow decodes task summary JSONB fields at repo exit", () => {
       commandText: "date",
     },
   })
-  assert.deepEqual(normalized.grant_options, grantOptions)
-  assert.deepEqual(normalized.available_presets, ["once"])
-  assert.deepEqual(normalized.source_request_args, { command: "date" })
+  assert.deepEqual(normalized.grantOptions, grantOptions)
+  assert.deepEqual(normalized.availablePresets, ["once"])
+  assert.deepEqual(normalized.sourceRequestArgs, { command: "date" })
 })
 
 test("normalizeTaskRow validates runtime authorization JSONB shape at repo exit", () => {
@@ -342,7 +342,7 @@ test("normalizeTaskRow validates runtime authorization JSONB shape at repo exit"
     () =>
       normalizeTaskRow(
         buildTaskDbRow({
-          requested_action: JSON.stringify({
+          requestedAction: JSON.stringify({
             capability: "commandline",
             toolName: "shell",
           }),
@@ -355,7 +355,7 @@ test("normalizeTaskRow validates runtime authorization JSONB shape at repo exit"
     () =>
       normalizeTaskRow(
         buildTaskDbRow({
-          grant_options: JSON.stringify([{ id: "once" }]),
+          grantOptions: JSON.stringify([{ id: "once" }]),
         })
       ),
     /Task task-1 grant_options is invalid/
@@ -365,7 +365,7 @@ test("normalizeTaskRow validates runtime authorization JSONB shape at repo exit"
     () =>
       normalizeTaskRow(
         buildTaskDbRow({
-          available_presets: JSON.stringify(["not-a-preset"]),
+          availablePresets: JSON.stringify(["not-a-preset"]),
         })
       ),
     /Task task-1 available_presets is invalid/
@@ -375,32 +375,32 @@ test("normalizeTaskRow validates runtime authorization JSONB shape at repo exit"
 test("normalizeTaskCommandRow decodes request and response payloads at repo exit", () => {
   const row = normalizeTaskCommandRow({
     id: "command-1",
-    task_id: "task-1",
-    command_id: "command-idempotency-1",
-    base_revision: 2,
+    taskId: "task-1",
+    commandId: "command-idempotency-1",
+    baseRevision: 2,
     outcome: "applied",
-    request_payload: JSON.stringify({
+    requestPayload: JSON.stringify({
       answers: [{ questionId: "q1", text: "ok" }],
     }),
-    response_payload: JSON.stringify({
+    responsePayload: JSON.stringify({
       outcome: "applied",
       task: { id: "task-1" },
     }),
-    created_by_workspace_member_id: "member-1",
-    created_at: now,
-    updated_at: now,
+    createdByWorkspaceMemberId: "member-1",
+    createdAt: now,
+    updatedAt: now,
   })
 
-  assert.deepEqual(row.request_payload.answers, [
+  assert.deepEqual(row.requestPayload.answers, [
     { questionId: "q1", text: "ok" },
   ])
-  assert.deepEqual(row.response_payload.task, { id: "task-1" })
+  assert.deepEqual(row.responsePayload.task, { id: "task-1" })
 })
 
 test("presentTaskSummary consumes normalized task rows without JSON parsing", () => {
   const row = normalizeTaskRow(
     buildTaskDbRow({
-      resolution_payload: JSON.stringify({
+      resolutionPayload: JSON.stringify({
         answers: [{ questionId: "q1", text: "ok" }],
       }),
     })
@@ -421,24 +421,24 @@ function runtimeAuthorizationTaskRow(
   return normalizeTaskRow(
     buildTaskDbRow({
       kind: TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION,
-      lifecycle_status: "auth_required",
-      requested_tool_name: "shell",
-      device_tool_stable_key: "commandline.shell",
+      lifecycleStatus: "auth_required",
+      requestedToolName: "shell",
+      deviceToolStableKey: "commandline.shell",
       reason: "Needs command access",
-      request_mode: "blocking",
-      requested_action: {
+      requestMode: "blocking",
+      requestedAction: {
         capability: "commandline",
         toolName: "shell",
         summary: "Run command",
       },
-      grant_options: [],
-      available_presets: ["once"],
-      source_request_args: {},
-      device_id: "device-1",
-      device_capability_id: "capability-1",
-      device_exposure_id: "exposure-1",
-      device_display_name: "Laptop",
-      exposure_display_name: "Shell",
+      grantOptions: [],
+      availablePresets: ["once"],
+      sourceRequestArgs: {},
+      deviceId: "device-1",
+      deviceCapabilityId: "capability-1",
+      deviceExposureId: "exposure-1",
+      deviceDisplayName: "Laptop",
+      exposureDisplayName: "Shell",
       ...overrides,
     })
   )
@@ -522,28 +522,25 @@ test(
   }
 )
 
-test("normalizeTaskRow re-snakes camelCase raw rows (CamelCasePlugin regression)", () => {
+test("normalizeTaskRow consumes camelCase raw rows (CamelCasePlugin contract)", () => {
   // At runtime, runCompiledOn rows arrive camelCase because CamelCasePlugin's
-  // transformResult rewrites raw / sql.compile result keys too. Feed the
-  // camelCase shape the query actually returns and assert normalizeTaskRow
-  // recovers the snake-cased fields (regression for the GET /actors-class
-  // "Expected a valid Date" / undefined-payload 500s).
-  const snake = buildTaskDbRow({
-    prompt_payload: JSON.stringify({ title: "Need input", questions: [] }),
-    resolution_payload: JSON.stringify({ answers: [] }),
+  // transformResult rewrites raw / sql.compile result keys too (convention A:
+  // the join's double-quoted camelCase aliases + bare physical columns both
+  // surface as camelCase keys). Feed the camelCase shape the query actually
+  // returns and assert normalizeTaskRow reads it directly — no re-snake —
+  // keeping Date values and decoding JSONB payloads (regression for the
+  // GET /actors-class "Expected a valid Date" / undefined-payload 500s).
+  const row = buildTaskDbRow({
+    promptPayload: JSON.stringify({ title: "Need input", questions: [] }),
+    resolutionPayload: JSON.stringify({ answers: [] }),
   })
-  // simulate CamelCasePlugin: camelCase every top-level key
-  const camel: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(snake)) {
-    camel[k.replace(/_([a-z])/g, (_m, c) => c.toUpperCase())] = v
-  }
 
-  const normalized = normalizeTaskRow(camel as unknown as typeof snake)
+  const normalized = normalizeTaskRow(row)
 
   assert.equal(normalized.id, "task-1")
-  assert.equal(normalized.workspace_id, "workspace-1")
-  assert.equal(normalized.conversation_id, "conversation-1")
-  assert.equal(normalized.prompt_payload.title, "Need input")
-  assert.ok(normalized.created_at instanceof Date)
-  assert.ok(normalized.updated_at instanceof Date)
+  assert.equal(normalized.workspaceId, "workspace-1")
+  assert.equal(normalized.conversationId, "conversation-1")
+  assert.equal(normalized.promptPayload.title, "Need input")
+  assert.ok(normalized.createdAt instanceof Date)
+  assert.ok(normalized.updatedAt instanceof Date)
 })

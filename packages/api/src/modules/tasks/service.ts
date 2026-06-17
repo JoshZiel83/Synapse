@@ -1415,7 +1415,7 @@ export async function cancelTaskRequest(taskId: string, note?: string) {
     throw new Error("Task request not found")
   }
 
-  if (!isOpenTaskLifecycle(existing.lifecycle_status)) {
+  if (!isOpenTaskLifecycle(existing.lifecycleStatus)) {
     const current = await getTaskSummary(taskId)
     if (!current) {
       throw new Error("Failed to reload task request")
@@ -1767,7 +1767,7 @@ export async function resolveTaskRequest(
     )
     if (existingCommand) {
       if (
-        stableJsonStringify(existingCommand.request_payload) !==
+        stableJsonStringify(existingCommand.requestPayload) !==
         stableJsonStringify(normalizedCommandPayload)
       ) {
         throw new Error(
@@ -1776,7 +1776,7 @@ export async function resolveTaskRequest(
       }
 
       const storedPayload = parseStoredTaskResolvePayload(
-        existingCommand.response_payload,
+        existingCommand.responsePayload,
         `Task command ${existingCommand.id} response_payload`
       )
       return {
@@ -1791,28 +1791,28 @@ export async function resolveTaskRequest(
 
     if (
       locked.kind !== TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
-      locked.target_participant_id &&
-      locked.target_participant_id !== params.resolverParticipantId
+      locked.targetParticipantId &&
+      locked.targetParticipantId !== params.resolverParticipantId
     ) {
       throw new Error("Only the targeted user can resolve this task")
     }
 
     if (
       locked.kind !== TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
-      !locked.target_participant_id &&
-      locked.requester_remote_agent_id
+      !locked.targetParticipantId &&
+      locked.requesterRemoteAgentId
     ) {
       const conversationRow = await findConversationKindOn(
         client,
-        locked.conversation_id
+        locked.conversationId
       )
       if (!conversationRow) {
-        throw new Error(`Conversation ${locked.conversation_id} not found`)
+        throw new Error(`Conversation ${locked.conversationId} not found`)
       }
       if (conversationRow.kind !== "direct") {
         const hasGrant = await findRemoteAgentGroupTaskGrant(
           {
-            remoteAgentId: locked.requester_remote_agent_id,
+            remoteAgentId: locked.requesterRemoteAgentId,
             workspaceMemberId: params.resolverWorkspaceMemberId,
           },
           client
@@ -1826,11 +1826,11 @@ export async function resolveTaskRequest(
     }
 
     if (locked.kind === TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION) {
-      const deviceId = locked.device_id || ""
+      const deviceId = locked.deviceId || ""
       if (!deviceId) {
         throw new Error(`Task ${locked.id} is missing device_id`)
       }
-      const deviceCapabilityId = locked.device_capability_id || ""
+      const deviceCapabilityId = locked.deviceCapabilityId || ""
       if (!deviceCapabilityId) {
         throw new Error(`Task ${locked.id} is missing device_capability_id`)
       }
@@ -1851,7 +1851,7 @@ export async function resolveTaskRequest(
       `Task ${locked.id} revision`
     )
     if (
-      !isOpenTaskLifecycle(locked.lifecycle_status) ||
+      !isOpenTaskLifecycle(locked.lifecycleStatus) ||
       lockedRevision !== params.baseRevision
     ) {
       const currentTask = presentTaskSummary(locked)
@@ -1908,24 +1908,21 @@ export async function resolveTaskRequest(
         note: params.note?.trim() || undefined,
       }
 
-      if (locked.remote_agent_run_id && locked.requester_remote_agent_id) {
+      if (locked.remoteAgentRunId && locked.requesterRemoteAgentId) {
         await clearRemoteAgentConversationContextOnResolve(client, {
-          remoteAgentId: locked.requester_remote_agent_id,
-          conversationId: locked.conversation_id,
+          remoteAgentId: locked.requesterRemoteAgentId,
+          conversationId: locked.conversationId,
           approved: nextStatus === "approved",
         })
       } else {
-        // Task unification: locked IS the task row, so session_id is on it.
-        if (!locked.session_id) {
+        // Task unification: locked IS the task row, so sessionId is on it.
+        if (!locked.sessionId) {
           throw new Error(`Task ${locked.id} is missing task governance`)
         }
-        const taskRow = { session_id: locked.session_id }
-        const sessionRow = await findSessionPlanRowOn(
-          client,
-          taskRow.session_id
-        )
+        const taskRow = { sessionId: locked.sessionId }
+        const sessionRow = await findSessionPlanRowOn(client, taskRow.sessionId)
         if (!sessionRow) {
-          throw new Error(`Session ${taskRow.session_id} not found`)
+          throw new Error(`Session ${taskRow.sessionId} not found`)
         }
         if (isGroupConversationKind(sessionRow.conversationKind)) {
           throw new Error(
@@ -1936,17 +1933,17 @@ export async function resolveTaskRequest(
           !isPlanAwaitingApprovalCollaborationMode(sessionRow.collaborationMode)
         ) {
           throw new Error(
-            `Session ${taskRow.session_id} must be in plan_awaiting_approval before resolving plan approval.`
+            `Session ${taskRow.sessionId} must be in plan_awaiting_approval before resolving plan approval.`
           )
         }
         if (!sessionRow.activePlanApprovalTaskId) {
           throw new Error(
-            `Session ${taskRow.session_id} is missing active_plan_approval_task_id`
+            `Session ${taskRow.sessionId} is missing active_plan_approval_task_id`
           )
         }
         if (sessionRow.activePlanApprovalTaskId !== locked.id) {
           throw new Error(
-            `Session ${taskRow.session_id} points to ${sessionRow.activePlanApprovalTaskId}, not ${locked.id}`
+            `Session ${taskRow.sessionId} points to ${sessionRow.activePlanApprovalTaskId}, not ${locked.id}`
           )
         }
 
@@ -1956,13 +1953,13 @@ export async function resolveTaskRequest(
         const existingDraft = collaborationState.planDraft
         if (!existingDraft) {
           throw new Error(
-            `Session ${taskRow.session_id} is missing collaborationState.planDraft`
+            `Session ${taskRow.sessionId} is missing collaborationState.planDraft`
           )
         }
 
         await updateSessionCollaboration(
           {
-            sessionId: taskRow.session_id,
+            sessionId: taskRow.sessionId,
             collaborationMode:
               nextStatus === "approved" ? "default" : "plan_drafting",
             collaborationState:
@@ -2016,8 +2013,8 @@ export async function resolveTaskRequest(
           )
         }
 
-        const grantOptions = locked.grant_options ?? []
-        const availablePresets = locked.available_presets ?? []
+        const grantOptions = locked.grantOptions ?? []
+        const availablePresets = locked.availablePresets ?? []
         if (!availablePresets.includes(params.preset || "once")) {
           throw new Error(
             `preset ${params.preset || "once"} is not allowed for this runtime authorization request`
@@ -2048,11 +2045,11 @@ export async function resolveTaskRequest(
           await import("../access/subject-resolution.js")
         const lockedPrincipalSubject = await loadAccessSubjectOn(
           client,
-          locked.principal_subject_id
+          locked.principalSubjectId
         )
         if (!lockedPrincipalSubject) {
           throw new Error(
-            `task ${locked.id}: principal subject ${locked.principal_subject_id} not found`
+            `task ${locked.id}: principal subject ${locked.principalSubjectId} not found`
           )
         }
         lockedPrincipalSubjectForReturn = lockedPrincipalSubject
@@ -2063,8 +2060,8 @@ export async function resolveTaskRequest(
         // SubjectId === undefined` here, even if the locked row froze one).
         const rebuiltCtx = await buildRuntimePrincipalContextOn(client, {
           principal: lockedPrincipalSubject,
-          workspaceId: locked.workspace_id,
-          conversationId: locked.conversation_id ?? null,
+          workspaceId: locked.workspaceId,
+          conversationId: locked.conversationId ?? null,
         })
         // ScopeRebuildMismatchError — explicit equality check between the
         // locked principal_scope_subject_id (frozen at request time) and the
@@ -2075,7 +2072,7 @@ export async function resolveTaskRequest(
         // Without this gate, an actor that lost their conversation
         // participation between request and approval could still mint a
         // `actor + scope=conversation` grant via the locked snapshot.
-        const lockedScopeId = locked.principal_scope_subject_id ?? null
+        const lockedScopeId = locked.principalScopeSubjectId ?? null
         const rebuiltScopeId = rebuiltCtx.activeConversationSubjectId ?? null
         if (lockedScopeId !== rebuiltScopeId) {
           throw new Error(
@@ -2085,23 +2082,22 @@ export async function resolveTaskRequest(
         const presetTriple = presetToOwnerScope(
           params.preset || "once",
           rebuiltCtx,
-          locked.workspace_id
+          locked.workspaceId
         )
         createdGrant = await createRuntimeAuthorizationGrant(
           {
-            workspaceId: locked.workspace_id,
-            deviceId: locked.device_id || "",
-            deviceCapabilityId: locked.device_capability_id || "",
-            deviceExposureId: locked.device_exposure_id || "",
+            workspaceId: locked.workspaceId,
+            deviceId: locked.deviceId || "",
+            deviceCapabilityId: locked.deviceCapabilityId || "",
+            deviceExposureId: locked.deviceExposureId || "",
             subject: presetTriple.subject,
             scope: presetTriple.scope,
             retention: presetTriple.retention,
             createdByWorkspaceMemberId: params.resolverWorkspaceMemberId,
             sourceTaskId: locked.id || undefined,
-            sourceRetryNonce: locked.source_retry_nonce || undefined,
-            sourceRuntimeSessionId:
-              locked.source_runtime_session_id || undefined,
-            sourceRequestArgs: locked.source_request_args ?? {},
+            sourceRetryNonce: locked.sourceRetryNonce || undefined,
+            sourceRuntimeSessionId: locked.sourceRuntimeSessionId || undefined,
+            sourceRequestArgs: locked.sourceRequestArgs ?? {},
             policy: selectedOption.grantSpec,
           },
           client
@@ -2165,23 +2161,23 @@ export async function resolveTaskRequest(
       // notice the approval. Drops to undefined for non-runtime-authorization
       // tasks (these fields are only populated when locked.kind is
       // RUNTIME_AUTHORIZATION).
-      lockedSourceRequestArgs: locked.source_request_args ?? undefined,
-      lockedSourceRetryNonce: locked.source_retry_nonce ?? undefined,
+      lockedSourceRequestArgs: locked.sourceRequestArgs ?? undefined,
+      lockedSourceRetryNonce: locked.sourceRetryNonce ?? undefined,
       lockedSourceTaskId: locked.id ?? undefined,
       // subject-scope-refactor: skip-task gate is now keyed on
       // principal_subj.kind (resolved via JOIN at SELECT time), not the
       // dropped principal_remote_agent_id column. principal_subject_kind
       // is the legitimate signal; principal_remote_agent_id is kept on
       // the row type only as a derived alias for dashboard consumers.
-      lockedPrincipalSubjectKind: locked.principal_subject_kind ?? undefined,
+      lockedPrincipalSubjectKind: locked.principalSubjectKind ?? undefined,
       // subject-scope-refactor: forward the locked principal triple so the
       // post-commit auto-retry can re-build the RuntimePrincipalContext via
       // buildRuntimePrincipalContext (Kysely-form, since the pg transaction
       // is closed by the time we get there) and pass runtimeSubjectIds /
       // runtimeScopeSubjectIds to selectAndClaimRuntimeAuthorizationGrant.
-      lockedPrincipalSubjectId: locked.principal_subject_id,
+      lockedPrincipalSubjectId: locked.principalSubjectId,
       lockedPrincipalScopeSubjectId:
-        locked.principal_scope_subject_id ?? undefined,
+        locked.principalScopeSubjectId ?? undefined,
       lockedPrincipalSubject: lockedPrincipalSubjectForReturn,
       // Task unification: the decision (task vocabulary) computed in-tx,
       // so the post-commit delivery fan-out can branch on it without relying on
@@ -2278,7 +2274,7 @@ export async function markRuntimeAuthorizationTaskSuperseded(
   }
   if (
     existing.kind !== TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION ||
-    !isOpenTaskLifecycle(existing.lifecycle_status)
+    !isOpenTaskLifecycle(existing.lifecycleStatus)
   ) {
     const current = await getTaskSummary(taskId)
     if (!current) {

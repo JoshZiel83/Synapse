@@ -5,10 +5,10 @@
  * the load-bearing multi-statement transactions in service.ts stay atomic.
  *
  * Repo functions return camelCase DOMAIN records and KEEP Date objects;
- * time serialization belongs to presenters (guard r3). Raw `sql` joins use
- * snake_case aliases (RawTaskRow) that intentionally bypass CamelCasePlugin —
- * the presenter consumes that shape structurally, so the rows are NOT
- * re-camelCased here.
+ * time serialization belongs to presenters (guard r3). Raw `sql` joins alias
+ * their computed/renamed result columns to double-quoted camelCase identifiers
+ * (RawTaskRow) so the rows arrive camelCase under CamelCasePlugin's
+ * unconditional `transformResult`; the presenter consumes that shape directly.
  */
 
 import { z } from "zod"
@@ -88,25 +88,6 @@ export async function runOn<T extends object = Record<string, unknown>>(
         ? null
         : Number(result.numAffectedRows),
   }
-}
-
-/**
- * Re-snake the TOP-LEVEL keys of a raw result row. CamelCasePlugin's
- * `transformResult` is unconditional and camelCases the top-level keys of raw
- * (`CompiledQuery.raw`) and `sql`.compile`` result rows too — it only skips the
- * *query* transform, not the *result* transform. The snake_case `RawTask*Row`
- * normalizers below therefore receive camelCase keys at runtime and read
- * `undefined`. Re-snaking at the normalizer boundary fixes that. Values are
- * passed through untouched (JSONB objects / Dates are never recursed into), and
- * the transform is idempotent — already-snake keys (e.g. synthetic test rows)
- * are unchanged.
- */
-function snakeCaseTopLevelKeys<T extends Record<string, unknown>>(row: T): T {
-  const out: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(row)) {
-    out[key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)] = value
-  }
-  return out as T
 }
 
 /**
@@ -289,15 +270,15 @@ function parseOptionalRuntimeAuthorizationPresets(
 }
 
 export function decodeTaskPromptPayload(row: {
-  prompt_payload: unknown
+  promptPayload: unknown
 }): Record<string, unknown> {
-  return requireJsonObject(row.prompt_payload, "Task prompt_payload")
+  return requireJsonObject(row.promptPayload, "Task prompt_payload")
 }
 
 export function decodeTaskResolutionPayload(row: {
-  resolution_payload: unknown
+  resolutionPayload: unknown
 }): Record<string, unknown> {
-  return requireJsonObject(row.resolution_payload, "Task resolution_payload")
+  return requireJsonObject(row.resolutionPayload, "Task resolution_payload")
 }
 
 export function decodeActionTokenPayload(row: {
@@ -314,36 +295,35 @@ export function decodeActionTokenPayload(row: {
   return parsed.data
 }
 
-export function normalizeTaskRow(rawRow: RawTaskDbRow): RawTaskRow {
-  const row = snakeCaseTopLevelKeys(rawRow)
+export function normalizeTaskRow(row: RawTaskDbRow): RawTaskRow {
   const normalized = {
     ...row,
-    prompt_payload: requireJsonObject(
-      row.prompt_payload,
+    promptPayload: requireJsonObject(
+      row.promptPayload,
       `Task ${row.id} prompt_payload`
     ),
-    plan_payload: requireJsonObject(
-      row.plan_payload,
+    planPayload: requireJsonObject(
+      row.planPayload,
       `Task ${row.id} plan_payload`
     ),
-    resolution_payload: requireJsonObject(
-      row.resolution_payload,
+    resolutionPayload: requireJsonObject(
+      row.resolutionPayload,
       `Task ${row.id} resolution_payload`
     ),
-    requested_action: parseOptionalRuntimeAuthorizationRequestedAction(
-      row.requested_action,
+    requestedAction: parseOptionalRuntimeAuthorizationRequestedAction(
+      row.requestedAction,
       `Task ${row.id} requested_action`
     ),
-    grant_options: parseOptionalRuntimeAuthorizationGrantOptions(
-      row.grant_options,
+    grantOptions: parseOptionalRuntimeAuthorizationGrantOptions(
+      row.grantOptions,
       `Task ${row.id} grant_options`
     ),
-    available_presets: parseOptionalRuntimeAuthorizationPresets(
-      row.available_presets,
+    availablePresets: parseOptionalRuntimeAuthorizationPresets(
+      row.availablePresets,
       `Task ${row.id} available_presets`
     ),
-    source_request_args: parseOptionalJsonObject(
-      row.source_request_args,
+    sourceRequestArgs: parseOptionalJsonObject(
+      row.sourceRequestArgs,
       `Task ${row.id} source_request_args`
     ),
   }
@@ -351,26 +331,25 @@ export function normalizeTaskRow(rawRow: RawTaskDbRow): RawTaskRow {
 }
 
 export function normalizeTaskCommandRow(
-  rawRow: RawTaskCommandRow
+  row: RawTaskCommandRow
 ): TaskCommandRow {
-  const row = snakeCaseTopLevelKeys(rawRow)
   return {
     id: row.id,
-    task_id: row.task_id,
-    command_id: row.command_id,
-    base_revision: row.base_revision,
+    taskId: row.taskId,
+    commandId: row.commandId,
+    baseRevision: row.baseRevision,
     outcome: row.outcome,
-    request_payload: requireJsonObject(
-      row.request_payload,
+    requestPayload: requireJsonObject(
+      row.requestPayload,
       `Task command ${row.id} request_payload`
     ),
-    response_payload: requireJsonObject(
-      row.response_payload,
+    responsePayload: requireJsonObject(
+      row.responsePayload,
       `Task command ${row.id} response_payload`
     ),
-    created_by_workspace_member_id: row.created_by_workspace_member_id,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
+    createdByWorkspaceMemberId: row.createdByWorkspaceMemberId,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
   }
 }
 
@@ -466,63 +445,63 @@ export async function resolveParticipantSubjectId(
 export async function getTaskRowById(taskId: string, queryable?: Executor) {
   const compiled = sql<RawTaskDbRow>`
     SELECT ir.*,
-            ir.executor_kind AS kind,
-            ir.request_payload AS prompt_payload,
-            ir.request_payload AS plan_payload,
-            auth.requested_tool_name AS requested_tool_name,
-            auth.reason AS reason,
-            auth.request_mode AS request_mode,
-            auth.requested_action AS requested_action,
-            auth.grant_options AS grant_options,
-            auth.available_presets AS available_presets,
-            auth.source_request_args AS source_request_args,
-            auth.source_runtime_session_id AS source_runtime_session_id,
-            auth.source_retry_nonce AS source_retry_nonce,
-            auth.principal_subject_id AS principal_subject_id,
-            auth.principal_scope_subject_id AS principal_scope_subject_id,
-            principal_subj.kind AS principal_subject_kind,
-            principal_subj.remote_agent_id AS principal_remote_agent_id,
-            ir.final_result_payload AS resolution_payload,
-            auth.device_id,
-            auth.device_capability_id,
-            auth.device_exposure_id,
-            auth.device_tool_stable_key,
-            requester_subj.workspace_member_id AS requester_workspace_member_id,
-            requester_subj.actor_id AS requester_actor_id,
-            requester_subj.remote_agent_id AS requester_remote_agent_id,
-            requester_subj.kind AS requester_participant_type,
-            COALESCE(requester_remote_agent_app.display_name, requester_actor_app.display_name, requester_user.name, requester.display_name) AS requester_name,
-            COALESCE(requester_remote_agent.title, requester_actor.title) AS requester_title,
-            COALESCE(CASE WHEN requester_remote_agent.id IS NOT NULL THEN 'remote_agent' END, requester_actor.role::text) AS requester_role,
-            requester_actor.avatar_file_id AS requester_actor_avatar_file_id,
-            requester_user.avatar_file_id AS requester_user_avatar_file_id,
-            requester_remote_agent.avatar_file_id AS requester_remote_agent_avatar_file_id,
-            COALESCE(requester_remote_agent.avatar_emoji, requester_actor.avatar_emoji) AS requester_avatar_emoji,
-            target_subj.workspace_member_id AS target_workspace_member_id,
-            target_subj.actor_id AS target_actor_id,
-            target_subj.remote_agent_id AS target_remote_agent_id,
-            target_subj.kind AS target_participant_type,
-            COALESCE(target_remote_agent_app.display_name, target_actor_app.display_name, target_user.name, target.display_name) AS target_name,
-            COALESCE(target_remote_agent.title, target_actor.title) AS target_title,
-            COALESCE(CASE WHEN target_remote_agent.id IS NOT NULL THEN 'remote_agent' END, target_actor.role::text) AS target_role,
-            target_actor.avatar_file_id AS target_actor_avatar_file_id,
-            target_user.avatar_file_id AS target_user_avatar_file_id,
-            target_remote_agent.avatar_file_id AS target_remote_agent_avatar_file_id,
-            COALESCE(target_remote_agent.avatar_emoji, target_actor.avatar_emoji) AS target_avatar_emoji,
-            resolver_subj.workspace_member_id AS resolved_by_workspace_member_id,
-            resolver_subj.actor_id AS resolved_by_actor_id,
-            resolver_subj.remote_agent_id AS resolved_by_remote_agent_id,
-            resolver_subj.kind AS resolved_by_participant_type,
-            COALESCE(resolver_remote_agent_app.display_name, resolver_actor_app.display_name, resolver_user.name, resolver.display_name) AS resolved_by_name,
-            COALESCE(resolver_remote_agent.title, resolver_actor.title) AS resolved_by_title,
-            COALESCE(CASE WHEN resolver_remote_agent.id IS NOT NULL THEN 'remote_agent' END, resolver_actor.role::text) AS resolved_by_role,
-            resolver_actor.avatar_file_id AS resolved_by_actor_avatar_file_id,
-            resolver_user.avatar_file_id AS resolved_by_user_avatar_file_id,
-            resolver_remote_agent.avatar_file_id AS resolved_by_remote_agent_avatar_file_id,
-            COALESCE(resolver_remote_agent.avatar_emoji, resolver_actor.avatar_emoji) AS resolved_by_avatar_emoji,
-            device.title AS device_display_name,
-            exposure.display_name AS exposure_display_name,
-            exposure.stable_key AS exposure_stable_key
+            ir.executor_kind AS "kind",
+            ir.request_payload AS "promptPayload",
+            ir.request_payload AS "planPayload",
+            auth.requested_tool_name AS "requestedToolName",
+            auth.reason AS "reason",
+            auth.request_mode AS "requestMode",
+            auth.requested_action AS "requestedAction",
+            auth.grant_options AS "grantOptions",
+            auth.available_presets AS "availablePresets",
+            auth.source_request_args AS "sourceRequestArgs",
+            auth.source_runtime_session_id AS "sourceRuntimeSessionId",
+            auth.source_retry_nonce AS "sourceRetryNonce",
+            auth.principal_subject_id AS "principalSubjectId",
+            auth.principal_scope_subject_id AS "principalScopeSubjectId",
+            principal_subj.kind AS "principalSubjectKind",
+            principal_subj.remote_agent_id AS "principalRemoteAgentId",
+            ir.final_result_payload AS "resolutionPayload",
+            auth.device_id AS "deviceId",
+            auth.device_capability_id AS "deviceCapabilityId",
+            auth.device_exposure_id AS "deviceExposureId",
+            auth.device_tool_stable_key AS "deviceToolStableKey",
+            requester_subj.workspace_member_id AS "requesterWorkspaceMemberId",
+            requester_subj.actor_id AS "requesterActorId",
+            requester_subj.remote_agent_id AS "requesterRemoteAgentId",
+            requester_subj.kind AS "requesterParticipantType",
+            COALESCE(requester_remote_agent_app.display_name, requester_actor_app.display_name, requester_user.name, requester.display_name) AS "requesterName",
+            COALESCE(requester_remote_agent.title, requester_actor.title) AS "requesterTitle",
+            COALESCE(CASE WHEN requester_remote_agent.id IS NOT NULL THEN 'remote_agent' END, requester_actor.role::text) AS "requesterRole",
+            requester_actor.avatar_file_id AS "requesterActorAvatarFileId",
+            requester_user.avatar_file_id AS "requesterUserAvatarFileId",
+            requester_remote_agent.avatar_file_id AS "requesterRemoteAgentAvatarFileId",
+            COALESCE(requester_remote_agent.avatar_emoji, requester_actor.avatar_emoji) AS "requesterAvatarEmoji",
+            target_subj.workspace_member_id AS "targetWorkspaceMemberId",
+            target_subj.actor_id AS "targetActorId",
+            target_subj.remote_agent_id AS "targetRemoteAgentId",
+            target_subj.kind AS "targetParticipantType",
+            COALESCE(target_remote_agent_app.display_name, target_actor_app.display_name, target_user.name, target.display_name) AS "targetName",
+            COALESCE(target_remote_agent.title, target_actor.title) AS "targetTitle",
+            COALESCE(CASE WHEN target_remote_agent.id IS NOT NULL THEN 'remote_agent' END, target_actor.role::text) AS "targetRole",
+            target_actor.avatar_file_id AS "targetActorAvatarFileId",
+            target_user.avatar_file_id AS "targetUserAvatarFileId",
+            target_remote_agent.avatar_file_id AS "targetRemoteAgentAvatarFileId",
+            COALESCE(target_remote_agent.avatar_emoji, target_actor.avatar_emoji) AS "targetAvatarEmoji",
+            resolver_subj.workspace_member_id AS "resolvedByWorkspaceMemberId",
+            resolver_subj.actor_id AS "resolvedByActorId",
+            resolver_subj.remote_agent_id AS "resolvedByRemoteAgentId",
+            resolver_subj.kind AS "resolvedByParticipantType",
+            COALESCE(resolver_remote_agent_app.display_name, resolver_actor_app.display_name, resolver_user.name, resolver.display_name) AS "resolvedByName",
+            COALESCE(resolver_remote_agent.title, resolver_actor.title) AS "resolvedByTitle",
+            COALESCE(CASE WHEN resolver_remote_agent.id IS NOT NULL THEN 'remote_agent' END, resolver_actor.role::text) AS "resolvedByRole",
+            resolver_actor.avatar_file_id AS "resolvedByActorAvatarFileId",
+            resolver_user.avatar_file_id AS "resolvedByUserAvatarFileId",
+            resolver_remote_agent.avatar_file_id AS "resolvedByRemoteAgentAvatarFileId",
+            COALESCE(resolver_remote_agent.avatar_emoji, resolver_actor.avatar_emoji) AS "resolvedByAvatarEmoji",
+            device.title AS "deviceDisplayName",
+            exposure.display_name AS "exposureDisplayName",
+            exposure.stable_key AS "exposureStableKey"
      FROM tool_call_tasks ir
      LEFT JOIN tool_call_task_runtime_authorization auth
        ON auth.task_id = ir.id
@@ -594,63 +573,63 @@ export async function getTaskRowByIdForUpdate(
 ) {
   const compiled = sql<RawTaskDbRow>`
     SELECT ir.*,
-            ir.executor_kind AS kind,
-            ir.request_payload AS prompt_payload,
-            ir.request_payload AS plan_payload,
-            auth.requested_tool_name AS requested_tool_name,
-            auth.reason AS reason,
-            auth.request_mode AS request_mode,
-            auth.requested_action AS requested_action,
-            auth.grant_options AS grant_options,
-            auth.available_presets AS available_presets,
-            auth.source_request_args AS source_request_args,
-            auth.source_runtime_session_id AS source_runtime_session_id,
-            auth.source_retry_nonce AS source_retry_nonce,
-            auth.principal_subject_id AS principal_subject_id,
-            auth.principal_scope_subject_id AS principal_scope_subject_id,
-            principal_subj.kind AS principal_subject_kind,
-            principal_subj.remote_agent_id AS principal_remote_agent_id,
-            ir.final_result_payload AS resolution_payload,
-            auth.device_id,
-            auth.device_capability_id,
-            auth.device_exposure_id,
-            auth.device_tool_stable_key,
-            requester_subj.workspace_member_id AS requester_workspace_member_id,
-            requester_subj.actor_id AS requester_actor_id,
-            requester_subj.remote_agent_id AS requester_remote_agent_id,
-            requester_subj.kind AS requester_participant_type,
-            COALESCE(requester_remote_agent_app.display_name, requester_actor_app.display_name, requester_user.name, requester.display_name) AS requester_name,
-            COALESCE(requester_remote_agent.title, requester_actor.title) AS requester_title,
-            COALESCE(CASE WHEN requester_remote_agent.id IS NOT NULL THEN 'remote_agent' END, requester_actor.role::text) AS requester_role,
-            requester_actor.avatar_file_id AS requester_actor_avatar_file_id,
-            requester_user.avatar_file_id AS requester_user_avatar_file_id,
-            requester_remote_agent.avatar_file_id AS requester_remote_agent_avatar_file_id,
-            COALESCE(requester_remote_agent.avatar_emoji, requester_actor.avatar_emoji) AS requester_avatar_emoji,
-            target_subj.workspace_member_id AS target_workspace_member_id,
-            target_subj.actor_id AS target_actor_id,
-            target_subj.remote_agent_id AS target_remote_agent_id,
-            target_subj.kind AS target_participant_type,
-            COALESCE(target_remote_agent_app.display_name, target_actor_app.display_name, target_user.name, target.display_name) AS target_name,
-            COALESCE(target_remote_agent.title, target_actor.title) AS target_title,
-            COALESCE(CASE WHEN target_remote_agent.id IS NOT NULL THEN 'remote_agent' END, target_actor.role::text) AS target_role,
-            target_actor.avatar_file_id AS target_actor_avatar_file_id,
-            target_user.avatar_file_id AS target_user_avatar_file_id,
-            target_remote_agent.avatar_file_id AS target_remote_agent_avatar_file_id,
-            COALESCE(target_remote_agent.avatar_emoji, target_actor.avatar_emoji) AS target_avatar_emoji,
-            resolver_subj.workspace_member_id AS resolved_by_workspace_member_id,
-            resolver_subj.actor_id AS resolved_by_actor_id,
-            resolver_subj.remote_agent_id AS resolved_by_remote_agent_id,
-            resolver_subj.kind AS resolved_by_participant_type,
-            COALESCE(resolver_remote_agent_app.display_name, resolver_actor_app.display_name, resolver_user.name, resolver.display_name) AS resolved_by_name,
-            COALESCE(resolver_remote_agent.title, resolver_actor.title) AS resolved_by_title,
-            COALESCE(CASE WHEN resolver_remote_agent.id IS NOT NULL THEN 'remote_agent' END, resolver_actor.role::text) AS resolved_by_role,
-            resolver_actor.avatar_file_id AS resolved_by_actor_avatar_file_id,
-            resolver_user.avatar_file_id AS resolved_by_user_avatar_file_id,
-            resolver_remote_agent.avatar_file_id AS resolved_by_remote_agent_avatar_file_id,
-            COALESCE(resolver_remote_agent.avatar_emoji, resolver_actor.avatar_emoji) AS resolved_by_avatar_emoji,
-            device.title AS device_display_name,
-            exposure.display_name AS exposure_display_name,
-            exposure.stable_key AS exposure_stable_key
+            ir.executor_kind AS "kind",
+            ir.request_payload AS "promptPayload",
+            ir.request_payload AS "planPayload",
+            auth.requested_tool_name AS "requestedToolName",
+            auth.reason AS "reason",
+            auth.request_mode AS "requestMode",
+            auth.requested_action AS "requestedAction",
+            auth.grant_options AS "grantOptions",
+            auth.available_presets AS "availablePresets",
+            auth.source_request_args AS "sourceRequestArgs",
+            auth.source_runtime_session_id AS "sourceRuntimeSessionId",
+            auth.source_retry_nonce AS "sourceRetryNonce",
+            auth.principal_subject_id AS "principalSubjectId",
+            auth.principal_scope_subject_id AS "principalScopeSubjectId",
+            principal_subj.kind AS "principalSubjectKind",
+            principal_subj.remote_agent_id AS "principalRemoteAgentId",
+            ir.final_result_payload AS "resolutionPayload",
+            auth.device_id AS "deviceId",
+            auth.device_capability_id AS "deviceCapabilityId",
+            auth.device_exposure_id AS "deviceExposureId",
+            auth.device_tool_stable_key AS "deviceToolStableKey",
+            requester_subj.workspace_member_id AS "requesterWorkspaceMemberId",
+            requester_subj.actor_id AS "requesterActorId",
+            requester_subj.remote_agent_id AS "requesterRemoteAgentId",
+            requester_subj.kind AS "requesterParticipantType",
+            COALESCE(requester_remote_agent_app.display_name, requester_actor_app.display_name, requester_user.name, requester.display_name) AS "requesterName",
+            COALESCE(requester_remote_agent.title, requester_actor.title) AS "requesterTitle",
+            COALESCE(CASE WHEN requester_remote_agent.id IS NOT NULL THEN 'remote_agent' END, requester_actor.role::text) AS "requesterRole",
+            requester_actor.avatar_file_id AS "requesterActorAvatarFileId",
+            requester_user.avatar_file_id AS "requesterUserAvatarFileId",
+            requester_remote_agent.avatar_file_id AS "requesterRemoteAgentAvatarFileId",
+            COALESCE(requester_remote_agent.avatar_emoji, requester_actor.avatar_emoji) AS "requesterAvatarEmoji",
+            target_subj.workspace_member_id AS "targetWorkspaceMemberId",
+            target_subj.actor_id AS "targetActorId",
+            target_subj.remote_agent_id AS "targetRemoteAgentId",
+            target_subj.kind AS "targetParticipantType",
+            COALESCE(target_remote_agent_app.display_name, target_actor_app.display_name, target_user.name, target.display_name) AS "targetName",
+            COALESCE(target_remote_agent.title, target_actor.title) AS "targetTitle",
+            COALESCE(CASE WHEN target_remote_agent.id IS NOT NULL THEN 'remote_agent' END, target_actor.role::text) AS "targetRole",
+            target_actor.avatar_file_id AS "targetActorAvatarFileId",
+            target_user.avatar_file_id AS "targetUserAvatarFileId",
+            target_remote_agent.avatar_file_id AS "targetRemoteAgentAvatarFileId",
+            COALESCE(target_remote_agent.avatar_emoji, target_actor.avatar_emoji) AS "targetAvatarEmoji",
+            resolver_subj.workspace_member_id AS "resolvedByWorkspaceMemberId",
+            resolver_subj.actor_id AS "resolvedByActorId",
+            resolver_subj.remote_agent_id AS "resolvedByRemoteAgentId",
+            resolver_subj.kind AS "resolvedByParticipantType",
+            COALESCE(resolver_remote_agent_app.display_name, resolver_actor_app.display_name, resolver_user.name, resolver.display_name) AS "resolvedByName",
+            COALESCE(resolver_remote_agent.title, resolver_actor.title) AS "resolvedByTitle",
+            COALESCE(CASE WHEN resolver_remote_agent.id IS NOT NULL THEN 'remote_agent' END, resolver_actor.role::text) AS "resolvedByRole",
+            resolver_actor.avatar_file_id AS "resolvedByActorAvatarFileId",
+            resolver_user.avatar_file_id AS "resolvedByUserAvatarFileId",
+            resolver_remote_agent.avatar_file_id AS "resolvedByRemoteAgentAvatarFileId",
+            COALESCE(resolver_remote_agent.avatar_emoji, resolver_actor.avatar_emoji) AS "resolvedByAvatarEmoji",
+            device.title AS "deviceDisplayName",
+            exposure.display_name AS "exposureDisplayName",
+            exposure.stable_key AS "exposureStableKey"
      FROM tool_call_tasks ir
      LEFT JOIN tool_call_task_runtime_authorization auth
        ON auth.task_id = ir.id
