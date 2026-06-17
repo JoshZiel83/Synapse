@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { parseStoredActorDocs } from "./repo.js"
+import { parseStoredActorDocs, parseWorkspaceJsonRecord } from "./repo.js"
 
 test("parseStoredActorDocs decodes stored actor docs at repo exit", () => {
   const docs = parseStoredActorDocs(
@@ -62,4 +62,38 @@ test("parseStoredActorDocs fails closed on malformed stored docs", () => {
     /must contain actor doc inputs/
   )
   assert.deepEqual(parseStoredActorDocs(null), [])
+})
+
+test("parseWorkspaceJsonRecord decodes workspace DB JSON objects at repo exit", () => {
+  assert.deepEqual(
+    parseWorkspaceJsonRecord(
+      JSON.stringify({ is_chief_actor: true }),
+      "workspace actor template config"
+    ),
+    { is_chief_actor: true }
+  )
+  assert.deepEqual(parseWorkspaceJsonRecord(null, "workspace actor config"), {})
+})
+
+test("parseWorkspaceJsonRecord rejects malformed or non-object workspace DB JSON", () => {
+  assert.throws(
+    () => parseWorkspaceJsonRecord("not json", "workspace actor config"),
+    /workspace actor config must be a valid JSON object/
+  )
+  assert.throws(
+    () =>
+      parseWorkspaceJsonRecord(
+        JSON.stringify(["not-object"]),
+        "workspace actor config"
+      ),
+    /workspace actor config must be a JSON object/
+  )
+  assert.throws(
+    () =>
+      parseWorkspaceJsonRecord(
+        JSON.stringify(42),
+        "workspace actor template config"
+      ),
+    /workspace actor template config must be a JSON object/
+  )
 })

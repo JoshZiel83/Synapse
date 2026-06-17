@@ -44,7 +44,7 @@ const classifiedJsonParseFiles = {
     "packages/api/src/modules/tool-call-tasks/repo.ts":
       "Tool-call task payload and output chunk DB JSON is decoded at repo exit.",
     "packages/api/src/modules/workspace/repo.ts":
-      "Workspace template docs DB JSON is decoded at repo exit.",
+      "Workspace actor template docs and config DB JSON is decoded at repo exit.",
   },
   appPresentationCodec: {
     "packages/api/src/modules/ai/session-tools-input-codec.ts":

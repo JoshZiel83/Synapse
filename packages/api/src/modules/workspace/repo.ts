@@ -8,7 +8,6 @@ import {
 import { DEFAULT_OFFICIAL_ACTOR_TEMPLATE_SLUG } from "../../infrastructure/database/seeds/actors/index.js"
 import {
   normalizeActorDocs,
-  parseJsonObject,
   slugify,
   type ActorDoc,
   type ActorDocInput,
@@ -225,11 +224,43 @@ export function parseStoredActorDocs(value: unknown) {
   return normalizeActorDocs(parsed.data as ActorDocInput[])
 }
 
+export function parseWorkspaceJsonRecord(
+  value: unknown,
+  label: string
+): Record<string, unknown> {
+  if (value === null || value === undefined) return {}
+
+  let candidate: unknown = value
+  if (typeof value === "string") {
+    if (value.trim().length === 0) {
+      throw new Error(`${label} must be a valid JSON object`)
+    }
+    try {
+      candidate = JSON.parse(value) as unknown
+    } catch {
+      throw new Error(`${label} must be a valid JSON object`)
+    }
+  }
+
+  if (
+    typeof candidate !== "object" ||
+    candidate === null ||
+    Array.isArray(candidate)
+  ) {
+    throw new Error(`${label} must be a JSON object`)
+  }
+
+  return candidate as Record<string, unknown>
+}
+
 function isOfficialChiefTemplate(row: {
   packageSlug: string
   actorConfig: unknown
 }) {
-  const config = parseJsonObject(row.actorConfig)
+  const config = parseWorkspaceJsonRecord(
+    row.actorConfig,
+    "workspace actor template config"
+  )
   return (
     config.is_chief_actor === true ||
     row.packageSlug === DEFAULT_OFFICIAL_ACTOR_TEMPLATE_SLUG
@@ -251,7 +282,7 @@ function normalizeActorRecord(row: {
     avatarEmoji: row.avatarEmoji,
     parentId: row.parentId,
     canRepresentUser: row.canRepresentUser,
-    config: parseJsonObject(row.config),
+    config: parseWorkspaceJsonRecord(row.config, "workspace actor config"),
     specialties: Array.isArray(row.specialties) ? row.specialties : [],
     currentVersion: row.currentVersion,
     isPublicShared: row.isPublicShared,
@@ -322,7 +353,10 @@ async function loadOfficialActorTemplates(
         ? row.actorSpecialties
         : [],
       actorConfig: withOfficialChiefActorConfig(
-        parseJsonObject(row.actorConfig),
+        parseWorkspaceJsonRecord(
+          row.actorConfig,
+          "workspace actor template config"
+        ),
         isChiefActor
       ),
       isChiefActor,
