@@ -23,6 +23,8 @@ test("extractFeishuRawText: preserves prior file and media fallbacks", () => {
   assert.equal(extractFeishuRawText("file", "{}"), "[文件]")
   assert.equal(extractFeishuRawText("image", '{"image_key":"img"}'), "[图片]")
   assert.equal(extractFeishuRawText("image", "not-json"), "not-json")
+  // Inbound video arrives as message_type "media" — must not leak raw JSON.
+  assert.equal(extractFeishuRawText("media", '{"file_key":"fk"}'), "[视频]")
 })
 
 test("extractFeishuRawText: treats parsed non-object JSON as provider JSON", () => {

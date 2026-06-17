@@ -122,7 +122,8 @@ export function extractFeishuRawText(
     }
     if (messageType === "image") return "[图片]"
     if (messageType === "audio") return "[语音]"
-    if (messageType === "video") return "[视频]"
+    // Inbound video arrives as message_type "media"; keep "video" as an alias.
+    if (messageType === "video" || messageType === "media") return "[视频]"
     if (messageType === "file") {
       const object = jsonObjectSchema.safeParse(json.value)
       const fileName = object.success ? nonEmpty(object.data.file_name) : ""

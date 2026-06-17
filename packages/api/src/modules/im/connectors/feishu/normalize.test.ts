@@ -69,9 +69,11 @@ test("image message produces image_placeholder system_marker", () => {
   }
 })
 
-test("audio / video / file have correct markers", () => {
+test("audio / media / video / file have correct markers", () => {
   for (const [type, expected] of [
     ["audio", "voice_placeholder"],
+    // "media" is Feishu's real inbound video type; "video" is a kept alias.
+    ["media", "video_placeholder"],
     ["video", "video_placeholder"],
     ["file", "file_placeholder"],
   ] as const) {

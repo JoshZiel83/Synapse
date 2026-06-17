@@ -129,6 +129,9 @@ function messageTypeToMarker(
       return { type: "system_marker", marker: "image_placeholder", original }
     case "audio":
       return { type: "system_marker", marker: "voice_placeholder", original }
+    // Feishu's inbound video message_type is "media"; "video" never arrives
+    // on im.message.receive_v1 but is kept as a harmless alias.
+    case "media":
     case "video":
       return { type: "system_marker", marker: "video_placeholder", original }
     case "file":
