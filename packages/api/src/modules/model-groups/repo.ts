@@ -418,11 +418,11 @@ export async function listWorkspaceModelGroupRows(
         WHEN 'workspace' THEN 0
         WHEN 'platform' THEN 1
         ELSE 2
-      END`.as("owner_rank")
+      END`.as("ownerRank")
     )
     .where("mg.isEnabled", "=", true)
     .where((eb) => applyWorkspaceGroupVisibility(eb, workspaceId, true))
-    .orderBy("owner_rank")
+    .orderBy("ownerRank")
     .orderBy("mg.isDefault", "desc")
     .orderBy("mg.name")
     .execute()
@@ -611,7 +611,7 @@ export async function listVisibleActorModelGroupRows(
         WHEN 'workspace' THEN 0
         WHEN 'platform' THEN 1
         ELSE 2
-      END`.as("owner_rank")
+      END`.as("ownerRank")
     )
     .where("mg.isEnabled", "=", true)
     .where((eb) =>
@@ -632,7 +632,7 @@ export async function listVisibleActorModelGroupRows(
         ]),
       ])
     )
-    .orderBy("owner_rank")
+    .orderBy("ownerRank")
     .orderBy("mg.isDefault", "desc")
     .orderBy("mg.name")
     .execute()

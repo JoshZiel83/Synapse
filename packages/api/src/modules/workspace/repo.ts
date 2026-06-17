@@ -769,9 +769,7 @@ export async function listMembersWithAccess(workspaceId: string) {
     .selectFrom("workspaceAccessBindings")
     .select([
       "workspaceMemberId",
-      sql<string[]>`array_agg(access_key order by access_key)`.as(
-        "access_keys"
-      ),
+      sql<string[]>`array_agg(access_key order by access_key)`.as("accessKeys"),
     ])
     .where("status", "=", "active")
     .groupBy(["workspaceMemberId"])
