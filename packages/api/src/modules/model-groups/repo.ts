@@ -8,7 +8,6 @@
  */
 
 import { sql } from "kysely"
-import { parseJsonObject } from "@synapse/shared"
 import {
   db,
   withDbTransaction,
@@ -87,7 +86,20 @@ export function decodeNullableModelGroupJsonRecord(
   value: unknown
 ): Record<string, unknown> | null {
   if (value === null || typeof value === "undefined") return null
-  return parseJsonObject(value)
+  const parsed =
+    typeof value === "string" ? parseModelGroupJsonRecord(value) : value
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("model group JSON record must be a JSON object")
+  }
+  return parsed as Record<string, unknown>
+}
+
+function parseModelGroupJsonRecord(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown
+  } catch {
+    throw new Error("model group JSON record must be valid JSON")
+  }
 }
 
 export function normalizeModelGroupRowJson<

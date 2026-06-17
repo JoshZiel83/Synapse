@@ -17,8 +17,18 @@ test("decodeNullableModelGroupJsonRecord decodes model-group JSON records at rep
   )
   assert.equal(decodeNullableModelGroupJsonRecord(null), null)
   assert.equal(decodeNullableModelGroupJsonRecord(undefined), null)
-  assert.deepEqual(decodeNullableModelGroupJsonRecord("[1,2,3]"), {})
-  assert.deepEqual(decodeNullableModelGroupJsonRecord("42"), {})
+  assert.throws(
+    () => decodeNullableModelGroupJsonRecord("not json"),
+    /model group JSON record must be valid JSON/
+  )
+  assert.throws(
+    () => decodeNullableModelGroupJsonRecord("[1,2,3]"),
+    /model group JSON record must be a JSON object/
+  )
+  assert.throws(
+    () => decodeNullableModelGroupJsonRecord("42"),
+    /model group JSON record must be a JSON object/
+  )
 })
 
 test("normalizeModelGroupRowJson decodes attemptPolicy at repo exit", () => {
