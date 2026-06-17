@@ -13,7 +13,6 @@ import {
   type ActorDocInput,
   type ActorRole,
 } from "@synapse/shared"
-import { ActorDocInputSchema } from "@synapse/shared/schemas"
 import { seedWorkspaceCapabilityConversationTypePolicies } from "../capabilities/conversation-type-policies.js"
 import { markWorkspaceDeleted } from "../soft-delete/orchestration.js"
 import { insertWorkspaceAppRoot } from "../workspace-apps/repo.js"
@@ -214,14 +213,13 @@ export function parseStoredActorDocs(value: unknown) {
     throw new Error("workspace actor template docs must be a JSON array")
   }
 
-  const parsed = ActorDocInputSchema.array().safeParse(docsValue)
-  if (!parsed.success) {
-    throw new Error(
-      "workspace actor template docs must contain actor doc inputs"
-    )
-  }
-
-  return normalizeActorDocs(parsed.data as ActorDocInput[])
+  // normalizeActorDocs is the canonical, repair-oriented normalizer: it fills
+  // template defaults (title/visibility/priority), normalizes content blocks
+  // and skips malformed entries. Stored official-template docs are partial by
+  // design and rely on it, so feed the raw array straight in. A strict
+  // ActorDocInputSchema.safeParse(...)->throw here is too tight: it rejected
+  // the real seeded official templates and 500'd createWorkspace.
+  return normalizeActorDocs(docsValue as ActorDocInput[])
 }
 
 export function parseWorkspaceJsonRecord(
