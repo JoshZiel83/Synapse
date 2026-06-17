@@ -16,9 +16,13 @@
  *   - WebSocket gateway (Stage 3)
  *
  * The token cache is process-local. Multiple replicas each maintain
- * their own — fine because `getAppAccessToken` is rate-limited per-app
- * with generous headroom (the platform's published cap is roughly 100
- * issues/min/app, and we miss at most once per replica per ~7100s).
+ * their own — fine because `getAppAccessToken` should be cached rather
+ * than fetched per-request, and we refresh ahead of expiry so each
+ * replica issues at most one token per TTL window (~7100s). The official
+ * wiki documents no numeric per-app issuance cap (a "~100/min" figure
+ * appeared in the openclaw reference but is not in the docs), and a token
+ * fetched within ~60s of expiry leaves the previous token valid for that
+ * overlap window.
  */
 
 import {
@@ -43,7 +47,10 @@ const DEFAULT_API_TIMEOUT_MS = 30_000
 
 interface TokenResponse extends Record<string, unknown> {
   access_token?: unknown
-  expires_in?: unknown
+  // On the wire getAppAccessToken returns expires_in as a JSON STRING
+  // ("7200") per the official example; the param table nominally types it
+  // as number. We keep number|string and coerce defensively below.
+  expires_in?: string | number
   code?: unknown
   message?: unknown
   err_code?: unknown
@@ -142,6 +149,9 @@ export async function qqApiFetch(
   const url = path.startsWith("http") ? path : `${QQ_API_BASE}${path}`
   const headers: Record<string, string> = {
     Authorization: `QQBot ${token}`,
+    // X-Union-Appid is required on every OpenAPI v2 call — both official
+    // SDKs (botpy http.py, botgo) send it alongside Authorization.
+    "X-Union-Appid": creds.appId,
     "Content-Type": "application/json",
     "User-Agent": "Synapse-IM-QQ/0.1",
     ...(init.headers ?? {}),

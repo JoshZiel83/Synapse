@@ -394,5 +394,6 @@ test("handleQqInteractionCreate: permanent resolve error → ack + drop", async 
     deps,
   })
   assert.equal(deps.acks.length, 1)
-  assert.equal(deps.acks[0]!.code, 0)
+  // "Task request not found" is a non-permission permanent error → 1 (操作失败)
+  assert.equal(deps.acks[0]!.code, 1)
 })

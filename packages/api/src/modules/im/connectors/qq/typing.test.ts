@@ -64,7 +64,7 @@ test("createQqTypingAdapter: direct endpoint with bad external_id → null", () 
   assert.equal(result, null)
 })
 
-test("createQqTypingAdapter: direct + msg_id → {adapter, config} with 50s heartbeat", () => {
+test("createQqTypingAdapter: direct + msg_id → null (QQ v2 has no typing API)", () => {
   const result = createQqTypingAdapter({
     account,
     endpointRef: {
@@ -77,10 +77,5 @@ test("createQqTypingAdapter: direct + msg_id → {adapter, config} with 50s hear
       endpointExternalId: "c2c:USER1",
     },
   })
-  assert.ok(result)
-  assert.ok(result && "adapter" in result)
-  if (result && "adapter" in result) {
-    assert.equal(result.config?.heartbeatMs, 50_000)
-    assert.ok(result.config?.ttlMs && result.config.ttlMs > 60_000)
-  }
+  assert.equal(result, null)
 })

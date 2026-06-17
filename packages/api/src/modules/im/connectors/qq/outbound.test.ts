@@ -33,12 +33,12 @@ test("304022 (unverified) is NOT in the duplicate allow-list", () => {
   )
 })
 
-test("304023 is NOT in the duplicate allow-list (actually means 推荐子频道超限)", () => {
-  // Sourced from the local openclaw-qqbot clone's SKILL.md
-  // (skills/qqbot-channel/SKILL.md): code 304023 maps to "推荐子频道超限"
-  // (subchannel recommendation limit exceeded), NOT duplicate msg_seq.
-  // Treating this as duplicate would silently mark unsent messages
-  // delivered.
+test("304023 is NOT in the duplicate allow-list (it's PUSH_MSG_ASYNC_OK, not a duplicate)", () => {
+  // Per the official wiki, 304023 = PUSH_MSG_ASYNC_OK and 304024 =
+  // REPLY_MSG_ASYNC_OK ("accepted, awaiting manual audit") — async success
+  // signals, NOT duplicate msg_seq (the earlier "推荐子频道超限" reading
+  // copied from openclaw was wrong). They must be handled via the
+  // audit-pending path, never the duplicate-success path. See audit H5.
   assert.equal(QQ_DUPLICATE_MSG_SEQ_CODES.has(304023), false)
 })
 

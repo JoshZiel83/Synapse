@@ -9,7 +9,9 @@
  *   4. On op:0 Dispatch → bump lastSeq, save (throttled), normalize +
  *      emit. v1 handles C2C_MESSAGE_CREATE and GROUP_AT_MESSAGE_CREATE;
  *      INTERACTION_CREATE handling lands in Stage 8.
- *   5. On op:1 Heartbeat ack → record ts (used to detect zombie conn).
+ *   5. On op:11 Heartbeat ACK → record the ack timestamp. If a heartbeat
+ *      goes un-ACKed for >1.5x the interval, the socket is treated as
+ *      half-open and force-closed (4000) to trigger reconnect+Resume.
  *   6. On op:7 Reconnect or op:9 Invalid Session → close+reconnect; the
  *      close-code handler decides whether to drop the saved session.
  *   7. Periodic op:1 heartbeat every `heartbeat_interval` ms.
@@ -101,10 +103,27 @@ export async function runQqGateway(
         )
         return
       }
+      // 4013/4014 = invalid / unauthorized intents. Re-sending the same
+      // compile-time intent mask can never succeed, so treat as fatal
+      // (operator must fix console authorization) instead of hot-looping
+      // reconnect+Identify and burning the Identify rate budget.
+      const intentsRejected =
+        code === QQ_CLOSE_CODE.INVALID_INTENTS ||
+        code === QQ_CLOSE_CODE.DISALLOWED_INTENTS
+      if (intentsRejected) {
+        opts.logger.error(
+          `qq-gateway: intents rejected (close=${code}); the IDENTIFY intent mask (QQ_V1_INTENTS=${QQ_V1_INTENTS}) is invalid or not authorized in the QQ bot console. Not reconnecting until the console authorization / intent mask is fixed.`,
+          undefined,
+          { accountId: opts.account.id }
+        )
+        return
+      }
+      // 4009 (session timeout) is RESUMABLE per botgo — do NOT clear the
+      // saved session; the next HELLO will op:6 Resume. Only 4006/4007
+      // (session invalid / bad resume seq) and 4004 (token) drop it.
       const sessionInvalidated =
         code === QQ_CLOSE_CODE.SESSION_INVALID ||
         code === QQ_CLOSE_CODE.RESUME_SEQ_INVALID ||
-        code === QQ_CLOSE_CODE.SESSION_TIMEOUT ||
         code === QQ_CLOSE_CODE.TOKEN_INVALID
       if (sessionInvalidated) {
         await clearQqWsSession(opts.redis, opts.account.id).catch(
@@ -164,6 +183,8 @@ async function runOneConnection(
   let lastSeq = 0
   let helloAcked = false
   let sessionId: string | null = null
+  let lastHeartbeatSentAt = 0
+  let lastHeartbeatAckAt = 0
 
   const close = (code = 1000, reason = "abort") => {
     try {
@@ -214,6 +235,25 @@ async function runOneConnection(
             }
             const beatMs = interval ?? 30_000
             heartbeatTimer = setInterval(() => {
+              const now = Date.now()
+              // Half-open detection: if a prior beat went un-ACKed for
+              // >1.5x the interval, treat the socket as dead and force a
+              // reconnect+Resume (close 4000 keeps the saved session)
+              // instead of streaming heartbeats into a void until the OS
+              // TCP timeout fires (minutes), during which inbound events
+              // are silently lost.
+              if (
+                lastHeartbeatSentAt > 0 &&
+                lastHeartbeatAckAt < lastHeartbeatSentAt &&
+                now - lastHeartbeatSentAt > beatMs * 1.5
+              ) {
+                logger.warn("qq-gateway: heartbeat ack timeout; reconnecting", {
+                  accountId,
+                })
+                close(4000, "heartbeat ack timeout")
+                return
+              }
+              lastHeartbeatSentAt = now
               sendJson(ws, {
                 op: QQ_OP.HEARTBEAT,
                 d: lastSeq > 0 ? lastSeq : null,
@@ -254,6 +294,7 @@ async function runOneConnection(
             return
           }
           case QQ_OP.HEARTBEAT_ACK:
+            lastHeartbeatAckAt = Date.now()
             return
           case QQ_OP.RECONNECT:
             // Server-initiated reconnect — keep the session id so we can
@@ -262,7 +303,10 @@ async function runOneConnection(
             close(4000, "server requested reconnect")
             return
           case QQ_OP.INVALID_SESSION: {
-            // d is true if resumable, false if not (we always drop).
+            // envelope.d is a boolean: true = session resumable (keep
+            // sessionId/lastSeq so the next HELLO sends op:6 Resume);
+            // false = drop them so the next HELLO sends op:2 Identify.
+            // Either way we close 4000 to trigger reconnect.
             const resumable = envelope.d === true
             logger.warn("qq-gateway: INVALID_SESSION", { resumable })
             if (!resumable) {

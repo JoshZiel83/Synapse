@@ -15,10 +15,12 @@
  *   - Missing optional keys default to safe values (false / []).
  *
  * Stage 2 fields:
- *   - `webhookInboundConfirmed` (default false) — gate flipped by the
- *     operator after sandbox-verifying that webhook accounts actually
- *     receive C2C/GROUP_AT events (OQ2). When false, the inbound
- *     handler short-circuits op=0 dispatch to log-only.
+ *   - `webhookInboundConfirmed` (default TRUE — OQ2 resolved: webhook
+ *     delivery of C2C/GROUP_AT events is standard/verified per the
+ *     official SDKs, so it must work out of the box). Acts as an operator
+ *     KILL-SWITCH: set it to false to make the inbound handler
+ *     short-circuit op=0 dispatch to log-only (and gate bindings /
+ *     task-projection off) for that account.
  *   - `configuredUrlDomains` (default []) — list of hostnames the
  *     operator has registered in the QQ console's
  *     "消息URL配置" page. Outbound messages whose text contains a URL
@@ -58,7 +60,9 @@ export const QqAccountConfigSchema = z
   // don't fail validation here — only the typed surface is what
   // connector code can trust.
   .looseObject({
-    webhookInboundConfirmed: z.boolean().default(false),
+    // OQ2 resolved → default true (webhook inbound works out of the box);
+    // an explicit false is the operator kill-switch.
+    webhookInboundConfirmed: z.boolean().default(true),
     allowProactiveBestEffort: z.boolean().default(false),
     configuredUrlDomains: z.array(HostnameSchema).default([]),
   })

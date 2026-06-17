@@ -108,6 +108,11 @@ export function verifyEd25519BusinessEvent(input: {
     return false
   }
   if (signature.length !== 64) return false
+  // Reject non-canonical signatures (top 3 bits of the final byte must be
+  // clear), matching botgo `decodeSigBuffer` (`sig[63]&224 != 0`) and the
+  // nonebot adapter. Defense-in-depth alongside crypto.verify's RFC 8032
+  // S-range enforcement.
+  if ((signature[63]! & 0xe0) !== 0) return false
   const { publicKey } = createSigningKeys(input.secret)
   const message = Buffer.from(input.signatureTimestamp + input.rawBody, "utf8")
   try {

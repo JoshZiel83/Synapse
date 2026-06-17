@@ -107,7 +107,9 @@ export default async function imQqController(
       // Normalize + validate at the API boundary so wildcards / IP
       // literals / bad casing are 400'd here, not at outbound-send time.
       const configResult = normalizeOrError({
-        webhookInboundConfirmed: body.webhookInboundConfirmed ?? false,
+        // OQ2 resolved → webhook inbound defaults ON; operators set this
+        // to false explicitly as a kill-switch.
+        webhookInboundConfirmed: body.webhookInboundConfirmed ?? true,
         allowProactiveBestEffort: body.allowProactiveBestEffort ?? false,
         configuredUrlDomains: body.configuredUrlDomains ?? [],
       })

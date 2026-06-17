@@ -25,8 +25,8 @@
  *
  * Why ACK *after* resolve (not before): QQ does NOT replay ACKed events.
  * If we ACK first and crash before persisting the resolution, the
- * approval is lost forever. The durable resolve takes ~tens of ms;
- * QQ's user-side button loader tolerates ≥ 5s so we comfortably fit.
+ * approval is lost forever. The durable resolve takes ~tens of ms, well
+ * within the platform's interaction-ACK window.
  */
 
 import { v5 as uuidv5 } from "uuid"
@@ -96,6 +96,13 @@ const PRESET_FOR_DECISION: Record<string, string> = {
   allow_actor: "actor",
 }
 
+// PUT /interactions/{id} ACK `code` enum — renders the user-facing toast:
+// 0 成功, 1 操作失败, 2 操作频繁, 3 重复操作, 4 没有权限, 5 仅管理员操作.
+const QQ_INTERACTION_ACK_OK = 0
+const QQ_INTERACTION_ACK_FAILED = 1
+const QQ_INTERACTION_ACK_DUPLICATE = 3
+const QQ_INTERACTION_ACK_NO_PERMISSION = 4
+
 export function defaultQqInteractionHandlerDeps(): QqInteractionHandlerDeps {
   return {
     lookupActionToken,
@@ -134,8 +141,8 @@ export async function handleQqInteractionCreate(params: {
     })
     // ACK so the loading state clears on the user's side even though
     // we won't act — leaving it would hang the UI on a button we don't
-    // own.
-    await safeAck(deps, account, eventId, 0, logger)
+    // own. Not our button → report success (just clear the spinner).
+    await safeAck(deps, account, eventId, QQ_INTERACTION_ACK_OK, logger)
     return
   }
 
@@ -146,7 +153,7 @@ export async function handleQqInteractionCreate(params: {
       eventId,
       actionToken: parsed.actionToken,
     })
-    await safeAck(deps, account, eventId, 0, logger)
+    await safeAck(deps, account, eventId, QQ_INTERACTION_ACK_FAILED, logger)
     return
   }
 
@@ -154,7 +161,7 @@ export async function handleQqInteractionCreate(params: {
   const clickerExternalId = deriveClickerExternalId(data)
   if (!clickerExternalId) {
     logger.warn("qq-interaction: missing clicker openid", { eventId })
-    await safeAck(deps, account, eventId, 0, logger)
+    await safeAck(deps, account, eventId, QQ_INTERACTION_ACK_FAILED, logger)
     return
   }
   const clickerAddress = await deps.getTransportAddressByExternalId({
@@ -169,8 +176,14 @@ export async function handleQqInteractionCreate(params: {
     })
     // Ack so loading clears; future revision can also POST a hint
     // message via outbound — but that requires a fresh anchor which we
-    // don't have synchronously here.
-    await safeAck(deps, account, eventId, 0, logger)
+    // don't have synchronously here. Unbound clicker → "no permission".
+    await safeAck(
+      deps,
+      account,
+      eventId,
+      QQ_INTERACTION_ACK_NO_PERMISSION,
+      logger
+    )
     return
   }
 
@@ -183,7 +196,7 @@ export async function handleQqInteractionCreate(params: {
       eventId,
       taskId: tokenRecord.taskId,
     })
-    await safeAck(deps, account, eventId, 0, logger)
+    await safeAck(deps, account, eventId, QQ_INTERACTION_ACK_FAILED, logger)
     return
   }
 
@@ -249,16 +262,32 @@ export async function handleQqInteractionCreate(params: {
       taskId: tokenRecord.taskId,
       outcome: result.outcome,
     })
-    // Step 7 (success / durable outcome): ACK
-    await safeAck(deps, account, eventId, 0, logger)
+    // Step 7 (success / durable outcome): ACK with an outcome-derived
+    // code so the user sees the right toast (already-resolved → 重复操作).
+    const ackCode =
+      result.outcome === "duplicate"
+        ? QQ_INTERACTION_ACK_DUPLICATE
+        : result.outcome === "conflict"
+          ? QQ_INTERACTION_ACK_FAILED
+          : QQ_INTERACTION_ACK_OK
+    await safeAck(deps, account, eventId, ackCode, logger)
   } catch (err) {
     // Distinguish permanent (don't retry) vs transient (let user retry).
     if (isPermanentResolveError(err)) {
+      // Permission-denied permanent errors → "没有权限" toast; other
+      // permanent failures → generic "操作失败".
+      const msg = errorMessage(err).toLowerCase()
+      const permissionDenied =
+        msg.includes("only the targeted user can resolve") ||
+        msg.includes("you are not allowed to resolve")
+      const permAckCode = permissionDenied
+        ? QQ_INTERACTION_ACK_NO_PERMISSION
+        : QQ_INTERACTION_ACK_FAILED
       logger.warn("qq-interaction: permanent resolve error; ACK to clear UI", {
         eventId,
         err: errorMessage(err),
       })
-      await safeAck(deps, account, eventId, 0, logger)
+      await safeAck(deps, account, eventId, permAckCode, logger)
       return
     }
     logger.error(

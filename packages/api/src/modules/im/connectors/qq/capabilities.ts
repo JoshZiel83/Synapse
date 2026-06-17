@@ -74,9 +74,12 @@ export const QQ_MESSAGE_CAPABILITIES: MessageCapabilities = {
   // gate. Feishu / Weixin / Wecom remain false until each gets its own
   // interaction_prompt renderer.
   supportsInteractionPrompt: true,
-  // 5000 is QQ's per-message markdown character cap (per
-  // openclaw-qqbot:src/channel.ts TEXT_CHUNK_LIMIT). Plain text is
-  // softer but using the markdown ceiling keeps a single number.
+  // Defensive client-side cap, enforced as UTF-8 BYTES (degradation.ts
+  // truncateToBytes), NOT characters — a CJK char is 3 bytes so CJK text
+  // truncates well below 5000 chars. The 5000 value is copied from the
+  // openclaw fork's TEXT_CHUNK_LIMIT and is NOT corroborated by the
+  // official QQ OpenAPI v2 docs (which document no per-message length
+  // cap); treat it as a conservative guard, not a verified protocol cap.
   maxTextBytes: 5_000,
   // QQ bots can address any user in a group endpoint they've seen
   // before (the group member_openid is exposed in incoming events);

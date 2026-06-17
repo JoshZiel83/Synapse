@@ -39,7 +39,7 @@ test("buildQqInteractionKeyboard: single option produces msg_type=2 with one but
   assert.ok(btn.action.unsupport_tips)
 })
 
-test("buildQqInteractionKeyboard: danger style maps to 2", () => {
+test("buildQqInteractionKeyboard: danger style maps to 3 (botgo enum; no 2)", () => {
   const payload = buildQqInteractionKeyboard({
     taskId: "ir-1",
     fallbackText: "确认删除",

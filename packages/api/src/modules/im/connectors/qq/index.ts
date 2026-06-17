@@ -9,10 +9,10 @@
  *     shared-prep refactor moved it to the polymorphic hook)
  *   - inbound (Stage 2/3 implement webhook + WS)
  *   - outbound (Stage 4/5/8 implement text/media/keyboard)
- *   - getBindingDefaults (webhook-unconfirmed accounts default
- *     outbound off + autoDisabledReason marker so the shared
- *     re-enable hook can lift the gate when the operator flips
- *     `webhookInboundConfirmed`)
+ *   - getBindingDefaults (a webhook account with the inbound kill-switch
+ *     off defaults outbound off + autoDisabledReason marker so the shared
+ *     re-enable hook can lift the gate when `webhookInboundConfirmed` is
+ *     turned back on; default/true → outbound on)
  *   - planAccountRecoveryActions (returns the closed-enum
  *     AccountRecoveryAction[] for the generic executor)
  *   - getTaskProjectionReadiness (gates QQ webhook accounts
@@ -106,10 +106,8 @@ export const qqConnector: TransportConnector = {
     return null
   },
 
-  // QQ C2C input_notify shows the "typing" bubble for ~60s; group
-  // endpoints have no equivalent (returns null). See typing.ts for
-  // why we hand back {adapter, config:{heartbeatMs:50_000}} so the
-  // controller refreshes inside the 60s expiry window.
+  // QQ Bot OpenAPI v2 has no typing-indicator API, so this always
+  // returns null (see typing.ts). Kept wired for contract symmetry.
   createTypingAdapter(input) {
     return createQqTypingAdapter(input)
   },
@@ -128,11 +126,11 @@ export const qqConnector: TransportConnector = {
     return handleQqWebhook(input)
   },
 
-  // QQ webhook accounts whose operator has NOT yet confirmed
-  // `webhookInboundConfirmed` cannot reliably reply (no inbound
-  // anchor). Default the binding to outbound-off + stable marker so
-  // the shared `reEnableAutoDisabledBindings` action can lift the
-  // gate when the operator flips the flag.
+  // A webhook account with the inbound KILL-SWITCH off
+  // (`webhookInboundConfirmed: false`) cannot reliably reply (no inbound
+  // anchor). Default that binding to outbound-off + stable marker so the
+  // shared `reEnableAutoDisabledBindings` action can lift the gate when
+  // the operator turns inbound back on. Default/true → outbound on.
   getBindingDefaults({ account }) {
     if (account.connectionMode === "webhook") {
       const config = readQqAccountConfig({
@@ -196,13 +194,12 @@ export const qqConnector: TransportConnector = {
     return actions
   },
 
-  // QQ inline-keyboard projection only works when the account has a
-  // confirmed webhook inbound — the projection's button click comes
-  // back as an INTERACTION_CREATE event on the same webhook channel.
-  // Until the operator flips `webhookInboundConfirmed`, the
-  // task-projection worker skips the projection and stamps
-  // the reason on the row so the shared recovery code can re-arm
-  // when the flag flips later.
+  // QQ inline-keyboard projection needs webhook inbound enabled — the
+  // button click comes back as an INTERACTION_CREATE on the same webhook
+  // channel. If the operator turned the inbound kill-switch off
+  // (`webhookInboundConfirmed: false`), the task-projection worker skips
+  // the projection and stamps the reason so the shared recovery code can
+  // re-arm when the flag is turned back on.
   getTaskProjectionReadiness(account) {
     if (account.connectionMode === "long_connection") return { ok: true }
     const config = readQqAccountConfig({

@@ -118,7 +118,7 @@ test("op=0 dispatch with bad signature → 401", async () => {
   assert.equal(res.statusCode, 401)
 })
 
-test("op=0 dispatch with valid signature + webhookInboundConfirmed=false → ack only, no emit", async () => {
+test("op=0 dispatch with valid signature + webhookInboundConfirmed=false (kill-switch) → ack only, no emit", async () => {
   const body = {
     op: QQ_OP.DISPATCH,
     t: "C2C_MESSAGE_CREATE",
@@ -143,16 +143,53 @@ test("op=0 dispatch with valid signature + webhookInboundConfirmed=false → ack
         "x-signature-ed25519": sig,
         "x-signature-timestamp": timestamp,
       },
+      // Explicit kill-switch off (OQ2 default is now on).
+      config: { webhookInboundConfirmed: false },
       emitted,
     })
   )
   assert.equal(res.statusCode, 200)
-  assert.deepEqual(res.body, { op: QQ_OP.HTTP_CALLBACK_ACK })
+  assert.deepEqual(res.body, { op: QQ_OP.HTTP_CALLBACK_ACK, d: 0 })
   assert.equal(
     emitted.length,
     0,
-    "must not emit until webhookInboundConfirmed=true"
+    "explicit webhookInboundConfirmed=false → no emit"
   )
+})
+
+test("op=0 dispatch with valid signature + default config (OQ2 on) → emits", async () => {
+  const body = {
+    op: QQ_OP.DISPATCH,
+    t: "C2C_MESSAGE_CREATE",
+    d: {
+      id: "MSGD",
+      author: { user_openid: "USERD" },
+      content: "hi",
+    },
+  }
+  const rawBody = JSON.stringify(body)
+  const timestamp = "1725442341"
+  const sig = signEd25519UrlVerification({
+    secret: SECRET,
+    plainToken: rawBody,
+    eventTs: timestamp,
+  })
+  const emitted: InboundEnvelope[] = []
+  const res = await handleQqWebhook(
+    // No config override → webhookInboundConfirmed defaults true.
+    buildInput(body, {
+      rawBody,
+      headers: {
+        "x-signature-ed25519": sig,
+        "x-signature-timestamp": timestamp,
+      },
+      emitted,
+    })
+  )
+  assert.equal(res.statusCode, 200)
+  assert.deepEqual(res.body, { op: QQ_OP.HTTP_CALLBACK_ACK, d: 0 })
+  assert.equal(emitted.length, 1)
+  assert.equal(emitted[0].externalMessageId, "MSGD")
 })
 
 test("op=0 dispatch with valid signature + webhookInboundConfirmed=true → emits envelope", async () => {
@@ -185,7 +222,7 @@ test("op=0 dispatch with valid signature + webhookInboundConfirmed=true → emit
     })
   )
   assert.equal(res.statusCode, 200)
-  assert.deepEqual(res.body, { op: QQ_OP.HTTP_CALLBACK_ACK })
+  assert.deepEqual(res.body, { op: QQ_OP.HTTP_CALLBACK_ACK, d: 0 })
   assert.equal(emitted.length, 1)
   assert.equal(emitted[0].externalMessageId, "MSG1")
   assert.equal(emitted[0].endpointExternalId, "c2c:USER1")
@@ -255,9 +292,46 @@ test("op=0 dispatch GROUP_MESSAGE_CREATE (non-@) is silently ignored", async () 
   assert.equal(emitted.length, 0)
 })
 
-test("non-dispatch op (e.g. WS opcodes mis-delivered) → 200 ack, no emit", async () => {
+test("webhook heartbeat (op=1) → 200 heartbeat-ACK (op=11) echoing d", async () => {
   const body = { op: QQ_OP.HEARTBEAT, d: 5 }
   const res = await handleQqWebhook(buildInput(body))
   assert.equal(res.statusCode, 200)
-  assert.deepEqual(res.body, { op: QQ_OP.HTTP_CALLBACK_ACK })
+  assert.deepEqual(res.body, { op: QQ_OP.HEARTBEAT_ACK, d: 5 })
+})
+
+test("other WS-only op mis-delivered to webhook → 200 callback-ACK d:0, no emit", async () => {
+  const body = { op: QQ_OP.RECONNECT, d: {} }
+  const res = await handleQqWebhook(buildInput(body))
+  assert.equal(res.statusCode, 200)
+  assert.deepEqual(res.body, { op: QQ_OP.HTTP_CALLBACK_ACK, d: 0 })
+})
+
+test("dispatch whose emit throws → 200 callback-ACK d:1 (platform retries)", async () => {
+  const body = {
+    op: QQ_OP.DISPATCH,
+    t: "C2C_MESSAGE_CREATE",
+    d: { id: "MSG1", author: { user_openid: "USER1" }, content: "hello" },
+  }
+  const rawBody = JSON.stringify(body)
+  const timestamp = "1725442341"
+  const sig = signEd25519UrlVerification({
+    secret: SECRET,
+    plainToken: rawBody,
+    eventTs: timestamp,
+  })
+  const res = await handleQqWebhook({
+    account: buildAccount({ config: { webhookInboundConfirmed: true } }),
+    headers: {
+      "x-signature-ed25519": sig,
+      "x-signature-timestamp": timestamp,
+    },
+    body,
+    rawBody,
+    emitInbound: async () => {
+      throw new Error("ingest down")
+    },
+    logger: undefined,
+  })
+  assert.equal(res.statusCode, 200)
+  assert.deepEqual(res.body, { op: QQ_OP.HTTP_CALLBACK_ACK, d: 1 })
 })

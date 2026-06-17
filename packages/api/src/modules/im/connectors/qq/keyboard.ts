@@ -9,16 +9,22 @@
  *
  * Each button has:
  *   - id: unique within the keyboard
- *   - render_data: { label, visited_label, style: 0|1|2 (default / primary
- *                    / danger; same numbering openclaw uses) }
+ *   - render_data: { label, visited_label, style } where style is the
+ *                    official botgo RenderData enum: 0 = gray frame,
+ *                    1 = blue frame, 3 = white bg + red font (danger),
+ *                    4 = blue bg + white font. (There is NO style 2 — the
+ *                    old "danger = 2" was an openclaw mis-numbering.)
  *   - action: {
  *       type: 1 (Callback → triggers an INTERACTION_CREATE event),
- *       data: synapse-interaction:{actionToken} (≤ 18 chars hard cap on
- *             QQ side per official docs; the action token is a uuidv4
- *             with hyphens so 36 chars — the prefix + token combined is
- *             well within the 60-char button data limit on group/c2c),
- *       permission: { type: 2 } (everyone can click; type=0 would require
- *             a specify_user_ids allowlist we don't have),
+ *       data: synapse-interaction:{actionToken} (the action token is a
+ *             uuidv4 so the full value is ~56 chars; the QQ wiki/botgo/botpy
+ *             document NO length cap on action.data — the only documented
+ *             100-char limit is on the text-chain command `text` field,
+ *             a different field),
+ *       permission: { type: 2 } (2 = everyone can click; intentional.
+ *             Other enum values: 0 = specified users (needs
+ *             specify_user_ids), 1 = managers, 3 = specified roles
+ *             (channel only)),
  *       click_limit: 1 (legacy field, see plan G5 note — we don't rely
  *             on it for idempotence; the action-token + commandId path
  *             handles that durably),
@@ -41,7 +47,10 @@ export const QQ_BUTTON_ACTION_TYPE_CALLBACK = 1
 export const QQ_BUTTON_PERMISSION_EVERYONE = 2
 export const QQ_BUTTON_STYLE_DEFAULT = 0
 export const QQ_BUTTON_STYLE_PRIMARY = 1
-export const QQ_BUTTON_STYLE_DANGER = 2
+// botgo dto/keyboard RenderData.Style enum is 0/1/3/4 — there is NO 2.
+// danger (white bg + red font) is 3 (the previous value 2 was an openclaw
+// mis-numbering and renders as an undefined style / may be rejected).
+export const QQ_BUTTON_STYLE_DANGER = 3
 
 const ACTION_TOKEN_PREFIX = "synapse-interaction:"
 const DEFAULT_UNSUPPORT_TIPS = "请升级 QQ 版本以使用此功能"

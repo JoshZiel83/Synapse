@@ -72,14 +72,24 @@ export const SWEEPER_BUDGET_PER_10MIN = 3
 export const SWEEPER_BUDGET_MAX_AGE_HOURS = 24
 
 const RETRYABLE_LAST_ERROR_CODES: ReadonlySet<string> = new Set([
-  // QQ retryable business codes (see openclaw-qqbot src/api.ts +
-  // utils/chunked-upload.ts). Extend as new connectors land.
+  // QQ retryable business codes. Extend as new connectors land.
+  // NOTE(audit #44): these match the `qq_<code>` token in metadata.lastError.
+  // Today only PERMANENT failures carry such a code (the retryable send
+  // paths throw with no code), so this set is effective only for
+  // already-permanent rows. The deeper fix — persist error.code on every
+  // attempt — is tracked in docs/qq-connector-integration-audit.md.
   "qq_token_refresh",
   "qq_network_timeout",
   "qq_5xx",
-  "qq_304082", // 富媒体资源拉取失败 (please retry)
+  "qq_304082", // 富媒体上传/转存失败 (SDK/empirical, not in official error table)
   "qq_304083",
-  "qq_40068xxx", // platform-temporary
+  // Frequency / rate-limit conditions — transient throttling, mirrors
+  // QQ_RATE_LIMIT_BUSINESS_CODES in connectors/qq/outbound.ts.
+  "qq_http_429",
+  "qq_610013",
+  "qq_620006",
+  "qq_1100100",
+  "qq_20028",
 ])
 
 // ─────────────────────────────────────────────────────────────────

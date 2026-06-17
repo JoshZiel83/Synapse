@@ -123,15 +123,26 @@ test("qq.getTaskProjectionReadiness: long_connection always ready", () => {
   )
 })
 
-test("qq.getTaskProjectionReadiness: webhook + unconfirmed blocks with stable reason", () => {
+test("qq.getTaskProjectionReadiness: webhook + inbound kill-switch off blocks with stable reason", () => {
   const qq = tryGetConnector("qq")!
   const res = qq.getTaskProjectionReadiness!(
-    summary({ connectionMode: "webhook", config: {} })
+    summary({
+      connectionMode: "webhook",
+      config: { webhookInboundConfirmed: false },
+    })
   )
   assert.deepEqual(res, {
     ok: false,
     reason: "webhook_inbound_unavailable",
   })
+})
+
+test("qq.getTaskProjectionReadiness: webhook + default config (OQ2 on) is ready", () => {
+  const qq = tryGetConnector("qq")!
+  const res = qq.getTaskProjectionReadiness!(
+    summary({ connectionMode: "webhook", config: {} })
+  )
+  assert.deepEqual(res, { ok: true })
 })
 
 test("qq.getTaskProjectionReadiness: webhook + confirmed is ready", () => {
@@ -145,16 +156,28 @@ test("qq.getTaskProjectionReadiness: webhook + confirmed is ready", () => {
   assert.deepEqual(res, { ok: true })
 })
 
-test("qq.getBindingDefaults: webhook + unconfirmed defaults outbound off with marker", () => {
+test("qq.getBindingDefaults: webhook + inbound kill-switch off defaults outbound off with marker", () => {
   const qq = tryGetConnector("qq")!
   const res = qq.getBindingDefaults!({
-    account: summary({ connectionMode: "webhook", config: {} }),
+    account: summary({
+      connectionMode: "webhook",
+      config: { webhookInboundConfirmed: false },
+    }),
     endpoint: { endpointType: "group", externalId: "g-1" },
   })
   assert.equal(res.outboundEnabled, false)
   assert.deepEqual(res.metadata, {
     autoDisabledReason: "webhook_inbound_unavailable",
   })
+})
+
+test("qq.getBindingDefaults: webhook + default config (OQ2 on) leaves outbound on", () => {
+  const qq = tryGetConnector("qq")!
+  const res = qq.getBindingDefaults!({
+    account: summary({ connectionMode: "webhook", config: {} }),
+    endpoint: { endpointType: "group", externalId: "g-1" },
+  })
+  assert.equal(res.outboundEnabled, true)
 })
 
 test("qq.getBindingDefaults: webhook + confirmed leaves outbound on", () => {

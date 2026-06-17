@@ -270,10 +270,9 @@ export interface WebhookHandlerResult {
  * Return shape for `TransportConnector.createTypingAdapter`. A bare
  * `TypingAdapter` works for platforms whose timing fits
  * `DEFAULT_TYPING_CONFIG` (3s heartbeat, 60s TTL — fine for Weixin's
- * sendtyping). Connectors with different platform constraints (e.g.
- * QQ single-chat input_notify expires every 60s and needs ~50s
- * heartbeat) return `{ adapter, config }` to override the controller
- * defaults.
+ * sendtyping). Connectors whose platform indicator expires on a
+ * different cadence return `{ adapter, config }` to override the
+ * controller defaults.
  */
 export type TypingAdapterResult =
   | TypingAdapter
@@ -418,10 +417,9 @@ export interface TransportConnector {
    * typing indicator.
    *
    * `lastInboundMessageRef` is the inbound message that triggered the
-   * current turn. Some platforms (e.g. QQ C2C `input_notify` requires
-   * `msg_id` in the POST body) cannot construct a valid request
-   * without it and should return `null`. Pass undefined for
-   * non-turn-bound callers (idle proactive).
+   * current turn. Some platforms cannot construct a valid typing
+   * request without the originating message id and should return
+   * `null`. Pass undefined for non-turn-bound callers (idle proactive).
    *
    * Return shape:
    *   - `TypingAdapter` — plain adapter; controller uses

@@ -8,7 +8,8 @@ import {
 
 test("normalize: defaults when absent", () => {
   const out = normalizeQqAccountConfig({})
-  assert.equal(out.webhookInboundConfirmed, false)
+  // OQ2 resolved → webhookInboundConfirmed defaults true (kill-switch off).
+  assert.equal(out.webhookInboundConfirmed, true)
   assert.equal(out.allowProactiveBestEffort, false)
   assert.deepEqual(out.configuredUrlDomains, [])
 })
@@ -68,10 +69,10 @@ test("normalize: passthrough preserves unknown keys (forward-compat)", () => {
 })
 
 test("readQqAccountConfig: handles null/undefined config", () => {
-  assert.equal(readQqAccountConfig({}).webhookInboundConfirmed, false)
+  assert.equal(readQqAccountConfig({}).webhookInboundConfirmed, true)
   assert.equal(
     readQqAccountConfig({ config: null }).webhookInboundConfirmed,
-    false
+    true
   )
 })
 

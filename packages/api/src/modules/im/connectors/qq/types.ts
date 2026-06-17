@@ -35,7 +35,6 @@ export const QQ_MSG_TYPE = {
   MARKDOWN: 2,
   ARK: 3,
   EMBED: 4,
-  INPUT_NOTIFY: 6,
   MEDIA: 7,
 } as const
 export type QqMsgType = (typeof QQ_MSG_TYPE)[keyof typeof QQ_MSG_TYPE]
@@ -80,6 +79,10 @@ export const QQ_INTENT = {
   GUILD_MESSAGES: 1 << 9,
   GUILD_MESSAGE_REACTIONS: 1 << 10,
   DIRECT_MESSAGE: 1 << 12,
+  // SDK name: botpy `public_messages` / botgo `IntentGroupMessages`.
+  // Delivers group@ + C2C messages AND the lifecycle events FRIEND_ADD/DEL,
+  // GROUP_ADD_ROBOT/DEL_ROBOT, *_MSG_REJECT/RECEIVE. Public guild @ is the
+  // separate bit 1<<30 (PUBLIC_GUILD_MESSAGES), not this one.
   GROUP_AND_C2C_EVENT: 1 << 25,
   INTERACTION: 1 << 26,
   MESSAGE_AUDIT: 1 << 27,
@@ -108,6 +111,10 @@ export const QQ_CLOSE_CODE = {
   RESUME_SEQ_INVALID: 4007,
   RATE_LIMITED: 4008,
   SESSION_TIMEOUT: 4009,
+  /** Identify sent an illegal intents bitmask (botgo 4013). */
+  INVALID_INTENTS: 4013,
+  /** Identify used intents the bot is not authorized for (botgo 4014). */
+  DISALLOWED_INTENTS: 4014,
   BOT_OFFLINE: 4914,
   BOT_BANNED: 4915,
 } as const

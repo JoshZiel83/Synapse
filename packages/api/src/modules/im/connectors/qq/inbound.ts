@@ -6,17 +6,19 @@
  *     and respond with {plain_token, signature(hex)}.
  *   - op=0  → business event; verify Ed25519 signature over the raw
  *     body bytes, then route by `t` (C2C_MESSAGE_CREATE,
- *     GROUP_AT_MESSAGE_CREATE). On successful normalization, emit
- *     into the IM ingest pipeline; ACK with {op:12} per the wiki.
- *   - Anything else (op=2/6/7/9/10/11) → 200 + ignore (shouldn't reach
+ *     GROUP_AT_MESSAGE_CREATE). ACK with {op:12, d:0} on success and
+ *     {op:12, d:1} on failure — d:1 makes the platform redeliver the
+ *     event (botgo GenDispatchACK).
+ *   - op=1 (heartbeat) ALSO flows over the webhook in HTTP-callback mode
+ *     and must be answered with a heartbeat-ACK {op:11, d:<seq>}.
+ *   - Anything else (op=2/6/7/9/10) → 200 + ignore (shouldn't reach
  *     webhook paths; QQ delivers those over WS).
  *
- * OQ2 gate: when `account.config.webhookInboundConfirmed !== true` we
- * accept op=13 (so the operator can verify the URL signature works) but
- * short-circuit op=0 to log-only. This prevents accidentally consuming
- * webhook-mode messages before the operator has confirmed that QQ
- * actually delivers C2C / GROUP_AT events on this account's webhook
- * endpoint.
+ * OQ2 (resolved): webhook delivery of C2C / GROUP_AT events is standard
+ * and verified, so signature-verified op=0 events dispatch by default.
+ * The `webhookInboundConfirmed` flag (default true) is now an operator
+ * KILL-SWITCH: set it false to ack-only without dispatching for a given
+ * account (op=13 URL verification still works either way).
  */
 
 import { redis } from "../../../../infrastructure/redis/index.js"
@@ -121,12 +123,22 @@ export async function handleQqWebhook(
     })
   }
 
+  // In HTTP-callback mode the platform also sends heartbeat (op=1) over
+  // the webhook; answer with a heartbeat-ACK (op=11) echoing d, NOT the
+  // callback-ACK (op=12).
+  if (envelope.op === QQ_OP.HEARTBEAT) {
+    return {
+      statusCode: 200,
+      body: { op: QQ_OP.HEARTBEAT_ACK, d: envelope.d },
+    }
+  }
+
   if (envelope.op !== QQ_OP.DISPATCH) {
-    // op=2/6/7/9/10/11 only flow over WS; if we see them here it's a
-    // misconfiguration. Ack 200 so the platform doesn't retry the
-    // payload we can't action.
+    // Other WS-only opcodes (op=2/6/7/9/10) shouldn't reach the webhook;
+    // if they do it's a misconfiguration. Ack 200 (d:0 = handled, no
+    // retry) so the platform doesn't redeliver a payload we can't action.
     logger?.warn?.(`qq: unexpected op on webhook`, { op: envelope.op })
-    return { statusCode: 200, body: { op: QQ_OP.HTTP_CALLBACK_ACK } }
+    return { statusCode: 200, body: { op: QQ_OP.HTTP_CALLBACK_ACK, d: 0 } }
   }
 
   // op=0 dispatch — must verify signature against the raw body.
@@ -150,22 +162,35 @@ export async function handleQqWebhook(
     return { statusCode: 401, body: { error: "signature verification failed" } }
   }
 
-  // OQ2 gate. Webhook delivery of message events isn't fully verified;
-  // operator must explicitly opt in by flipping `webhookInboundConfirmed`.
+  // OQ2 resolved: webhook delivery of C2C/GROUP_AT is standard, so this
+  // dispatches by default (webhookInboundConfirmed defaults true). The
+  // flag is an operator KILL-SWITCH — only an explicit false makes us
+  // ack-only without dispatching.
   const config = readQqAccountConfig(input.account)
   if (!config.webhookInboundConfirmed) {
     logger?.info?.(
-      "qq: webhook event received but webhookInboundConfirmed=false; ack-only",
+      "qq: webhook inbound disabled (webhookInboundConfirmed=false); ack-only",
       { t: envelope.t, accountId: input.account.id }
     )
-    return { statusCode: 200, body: { op: QQ_OP.HTTP_CALLBACK_ACK } }
+    return { statusCode: 200, body: { op: QQ_OP.HTTP_CALLBACK_ACK, d: 0 } }
   }
 
-  await dispatchBusinessEvent(envelope, input, logger).catch((err) => {
+  // The HTTP-callback ACK's `d` field controls retry: d:0 = handled OK,
+  // d:1 = handling failed → platform redelivers. Acking success
+  // unconditionally would silently drop events whose normalization
+  // returned null or whose emit threw.
+  let dispatched = false
+  try {
+    dispatched = await dispatchBusinessEvent(envelope, input, logger)
+  } catch (err) {
     logger?.error?.("qq: inbound dispatch failed", err)
-  })
+    dispatched = false
+  }
 
-  return { statusCode: 200, body: { op: QQ_OP.HTTP_CALLBACK_ACK } }
+  return {
+    statusCode: 200,
+    body: { op: QQ_OP.HTTP_CALLBACK_ACK, d: dispatched ? 0 : 1 },
+  }
 }
 
 function parseEnvelope(body: unknown): QqWebhookEnvelope | null {
@@ -209,11 +234,18 @@ function handleUrlVerification(input: {
   }
 }
 
+/**
+ * Returns whether the event was handled successfully. `false` (or a
+ * thrown error) makes the caller ACK with d:1 so the platform redelivers.
+ * Deliberately-ignored events (non-@ group, webhook-side interactions,
+ * unknown `t`) return `true` — they are "handled, nothing to do", not
+ * failures, so we must not ask the platform to retry them.
+ */
 async function dispatchBusinessEvent(
   envelope: QqWebhookEnvelope,
   input: WebhookHandlerInput,
   logger: WebhookHandlerInput["logger"]
-): Promise<void> {
+): Promise<boolean> {
   switch (envelope.t) {
     case QQ_EVENT.C2C_MESSAGE_CREATE: {
       const e = await normalizeQqC2cMessage(
@@ -224,7 +256,7 @@ async function dispatchBusinessEvent(
         logger?.warn?.("qq: C2C event missing required fields", {
           eventId: envelope.id,
         })
-        return
+        return false
       }
       await recordInboundAnchor({
         accountId: input.account.id,
@@ -236,7 +268,7 @@ async function dispatchBusinessEvent(
         receivedAt: e.receivedAt,
       })
       await input.emitInbound(e)
-      return
+      return true
     }
     case QQ_EVENT.GROUP_AT_MESSAGE_CREATE: {
       const e = await normalizeQqGroupAtMessage(
@@ -247,7 +279,7 @@ async function dispatchBusinessEvent(
         logger?.warn?.("qq: GROUP_AT event missing required fields", {
           eventId: envelope.id,
         })
-        return
+        return false
       }
       await recordInboundAnchor({
         accountId: input.account.id,
@@ -259,24 +291,24 @@ async function dispatchBusinessEvent(
         receivedAt: e.receivedAt,
       })
       await input.emitInbound(e)
-      return
+      return true
     }
     case QQ_EVENT.GROUP_MESSAGE_CREATE:
       // v1 ignores non-@ group messages; the bot only responds when
-      // explicitly invoked.
-      return
+      // explicitly invoked. Intentionally handled → no retry.
+      return true
     case QQ_EVENT.INTERACTION_CREATE:
       // QQ button clicks are documented as WebSocket-only delivery; if
       // one shows up on the webhook path we log and drop it (Stage 8
-      // handles INTERACTION_CREATE in the WS path).
+      // handles INTERACTION_CREATE in the WS path). No retry.
       logger?.warn?.(
         "qq: INTERACTION_CREATE on webhook path (expected WS-only)",
         { eventId: envelope.id }
       )
-      return
+      return true
     default:
       logger?.debug?.("qq: ignored event", { t: envelope.t })
-      return
+      return true
   }
 }
 

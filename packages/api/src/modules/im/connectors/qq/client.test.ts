@@ -139,6 +139,7 @@ test("qqApiFetch: adds QQBot bearer token from decoded token response", async ()
     )
     const apiCall = mock.calls.find((call) => call.url.includes("/v2/test"))
     assert.equal(apiCall?.headers.Authorization, "QQBot token-for-api")
+    assert.equal(apiCall?.headers["X-Union-Appid"], "app-1")
   } finally {
     globalThis.fetch = originalFetch
     _resetQqTokenCacheForTests()

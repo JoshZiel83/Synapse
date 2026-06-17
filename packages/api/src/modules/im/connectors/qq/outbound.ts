@@ -30,7 +30,7 @@
  *     crash between POST and result.
  *  Step 4 — POST `/v2/users/{openid}/messages` or
  *     `/v2/groups/{group_openid}/messages` with body {msg_type,
- *     content, msg_id or event_id, msg_seq, msg_reference}.
+ *     content, msg_id or event_id, msg_seq, message_reference}.
  *  Step 5/6 — On 2xx, mark attempt "delivered" + return externalMessageId.
  *     Network error → mark "unknown" + throw RetryableTransportError.
  *  Step 7 — On a QQ "duplicate msg_seq" response, IF the
@@ -119,14 +119,24 @@ const URL_PATTERN = /\bhttps?:\/\/([^\s<>"]+)/gi
  * duplicate response into an ambiguous-success outcome — but only for
  * codes we can ACTUALLY trust.
  *
- * Status: **empty** as of v1. Codes previously listed here (304022 /
- * 304023 / 40034015) came from third-party readings; review against the
- * local openclaw clone found `304023` is actually "推荐子频道超限"
- * (subchannel recommendation limit exceeded), and the other two have no
- * authoritative documentation backing the duplicate interpretation. If
- * we left them in, an actual non-duplicate failure under those codes
- * would be silently re-classified as "likely sent", and the user would
- * see a message marked delivered that QQ never accepted.
+ * Status: **empty** as of v1. Codes previously considered here (304022 /
+ * 304023 / 40034015) came from third-party readings and are NOT duplicate
+ * codes. Per the official wiki `304023` = PUSH_MSG_ASYNC_OK and `304024` =
+ * REPLY_MSG_ASYNC_OK ("accepted, awaiting manual audit") — async SUCCESS
+ * signals whose final result arrives via a MESSAGE_AUDIT event, NOT
+ * duplicates and NOT failures (the earlier "推荐子频道超限" reading copied
+ * from openclaw was wrong). The remaining codes have no authoritative
+ * documentation backing the duplicate interpretation. If we left them in,
+ * an actual non-duplicate failure under those codes would be silently
+ * re-classified as "likely sent", and the user would see a message marked
+ * delivered that QQ never accepted.
+ *
+ * TODO(audit H5): 304023/304024 are still mis-handled as failures today
+ * (they arrive as HTTP 202 with res.ok=true → onSendSuccess → no message
+ * id → permanent failure). Correct handling is a distinct "audit-pending"
+ * state resolved by a MESSAGE_AUDIT gateway event; pending a sandbox
+ * capture of the exact response shape before changing the send-result
+ * classifier. See docs/qq-connector-integration-audit.md.
  *
  * Population rule for v1.x: only add a code here AFTER a sandbox
  * reproduction (force a duplicate msg_seq + capture the actual response
@@ -148,8 +158,35 @@ export const QQ_DUPLICATE_MSG_SEQ_CODES: ReadonlySet<number> = new Set<number>()
  * without re-discovery.
  */
 const QQ_RETRYABLE_BUSINESS_CODES = new Set([
-  304082, // upload media info fail — wiki: "please retry"
-  304083, // convert media info fail — wiki: "please retry"
+  // Rich-media (富媒体) upload/convert failures. SDK/empirical — NOT in the
+  // official OpenAPI v2 error table; the rich-media doc suggests
+  // re-obtaining file_info, so a bounded retry is reasonable.
+  304082, // upload media info fail
+  304083, // convert media info fail
+])
+
+/**
+ * Frequency / rate-limit business codes from the official OpenAPI v2 error
+ * table (https://bot.q.qq.com/wiki/develop/api-v2/openapi/error/error.html)
+ * — transient throttling, should be retried with backoff like HTTP 429.
+ */
+const QQ_RATE_LIMIT_BUSINESS_CODES = new Set([
+  610013, // 已限频
+  620006, // 操作限频
+  1100100, // 安全打击：消息被限频
+  20028, // ChannelHitWriteRateLimit 子频道消息触发限频
+])
+
+/**
+ * Token-check failure codes the official error table marks transient but
+ * "最多只能重试一次" (retry at most once). onSendFailure gates the retry on
+ * the attempt number so they retry exactly once, then become permanent.
+ */
+const QQ_RETRY_ONCE_BUSINESS_CODES = new Set([
+  11242, // ErrorCheckTokenFailed — 校验token失败，系统错误
+  11252,
+  11263,
+  11281,
 ])
 
 export async function sendQqMessage(
@@ -268,6 +305,8 @@ interface ParsedFailure {
   code: number | undefined
   message: string
   raw: string
+  /** X-Tps-trace-ID — platform link-trace id for reporting to QQ. */
+  traceId?: string
 }
 
 async function onSendFailure(
@@ -313,7 +352,9 @@ async function onSendFailure(
 
   if (
     failure.status >= 500 ||
-    (failure.code && QQ_RETRYABLE_BUSINESS_CODES.has(failure.code))
+    failure.status === 429 ||
+    (failure.code && QQ_RETRYABLE_BUSINESS_CODES.has(failure.code)) ||
+    (failure.code && QQ_RATE_LIMIT_BUSINESS_CODES.has(failure.code))
   ) {
     await input.patchLinkMetadata({
       qq: {
@@ -329,6 +370,32 @@ async function onSendFailure(
     throw new RetryableTransportError(
       `qq send retryable: ${failure.status} ${failure.message}${
         failure.code ? ` [${failure.code}]` : ""
+      }${failure.traceId ? ` trace=${failure.traceId}` : ""}`
+    )
+  }
+
+  // Token-check codes are transient but "最多只能重试一次" — gate on the
+  // attempt number so they retry exactly once, then fall through to
+  // permanent.
+  if (
+    failure.code &&
+    QQ_RETRY_ONCE_BUSINESS_CODES.has(failure.code) &&
+    input.attemptNumber <= 1
+  ) {
+    await input.patchLinkMetadata({
+      qq: {
+        attempts: {
+          [String(input.attemptNumber)]: {
+            outcome: "unknown",
+            completedAt: nowIsoInstant(),
+            errorCode: String(failure.code),
+          },
+        },
+      },
+    })
+    throw new RetryableTransportError(
+      `qq send retry-once token-check: ${failure.status} ${failure.message} [${failure.code}]${
+        failure.traceId ? ` trace=${failure.traceId}` : ""
       }`
     )
   }
@@ -348,7 +415,7 @@ async function onSendFailure(
   throw new PermanentTransportError(
     `qq send rejected: ${failure.status} ${failure.message}${
       failure.code ? ` [${failure.code}]` : ""
-    }`,
+    }${failure.traceId ? ` trace=${failure.traceId}` : ""}`,
     { code: failure.code ? `qq_${failure.code}` : `qq_http_${failure.status}` }
   )
 }
@@ -387,7 +454,11 @@ async function parseFailure(res: Response): Promise<ParsedFailure> {
     code = parsed.code
     message = parsed.message
   }
-  return { status: res.status, code, message, raw: text }
+  // X-Tps-trace-ID is the platform link-trace id (header lookup is
+  // case-insensitive) — capture it so metadata.lastError carries the id
+  // we need to report a problem to QQ.
+  const traceId = res.headers.get("X-Tps-trace-ID") ?? undefined
+  return { status: res.status, code, message, raw: text, traceId }
 }
 
 async function safeText(res: Response): Promise<string> {
