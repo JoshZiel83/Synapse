@@ -26,7 +26,7 @@ test("after degradation, mention becomes @name in text", () => {
 
 test("after degradation, image becomes [图片] placeholder", () => {
   const msg = buildCanonicalMessage([
-    { type: "image", fileRef: { url: "x" } },
+    { type: "image", fileRef: { sha256: "x" } },
     { type: "text", text: "see" },
   ])
   const degraded = degradeForCapabilities(msg, WEIXIN_MESSAGE_CAPABILITIES)

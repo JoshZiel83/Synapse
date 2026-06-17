@@ -20,7 +20,7 @@ import {
   type CanonicalPart,
 } from "../../messaging/canonical-message.js"
 import { degradeForCapabilities } from "../../messaging/degradation.js"
-import { downloadToBuffer } from "../../../../infrastructure/storage/index.js"
+import { readCasBlob } from "../../../../infrastructure/storage/index.js"
 import type { OutboundEndpointRef, OutboundSendResult } from "../types.js"
 import { WEIXIN_MESSAGE_CAPABILITIES } from "./capabilities.js"
 import {
@@ -61,14 +61,14 @@ function isWeixinMediaPart(part: CanonicalPart): part is WeixinMediaPart {
   return part.type === "image" || part.type === "video" || part.type === "file"
 }
 
-function requireMediaUrl(part: WeixinMediaPart): string {
-  const url = part.fileRef.url?.trim()
-  if (!url) {
+function requireMediaSha256(part: WeixinMediaPart): string {
+  const sha256 = part.fileRef.sha256?.trim()
+  if (!sha256) {
     throw new Error(
-      `Weixin ${part.type} part requires a CanonicalFileRef.url; got ${JSON.stringify(part.fileRef)}`
+      `Weixin ${part.type} part requires a CanonicalFileRef.sha256; got ${JSON.stringify(part.fileRef)}`
     )
   }
-  return url
+  return sha256
 }
 
 function readCdnBaseUrl(account: TransportAccountSummary): string {
@@ -126,8 +126,8 @@ async function uploadAndBuildMediaItem(params: {
   toUserId: string
 }): Promise<Record<string, unknown>> {
   const { part, baseUrl, token, cdnBaseUrl, toUserId } = params
-  const url = requireMediaUrl(part)
-  const { buffer } = await downloadToBuffer(url)
+  const sha256 = requireMediaSha256(part)
+  const buffer = await readCasBlob(sha256)
 
   const mediaType =
     part.type === "image"
