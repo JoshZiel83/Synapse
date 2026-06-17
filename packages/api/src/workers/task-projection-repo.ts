@@ -26,17 +26,17 @@ export interface LockedTaskProjectionTaskRecord {
 
 type PendingTaskProjectionRow = {
   id: string
-  task_id: string
-  workspace_id: string
-  conversation_id: string
-  transport_message_link_id: string | null
+  taskId: string
+  workspaceId: string
+  conversationId: string
+  transportMessageLinkId: string | null
   attempts: number
 }
 
 type LockedTaskProjectionTaskRow = {
   id: string
   status: string
-  expires_at: Date | null
+  expiresAt: Date | null
 }
 
 async function runOn<T extends object = Record<string, unknown>>(
@@ -49,19 +49,9 @@ async function runOn<T extends object = Record<string, unknown>>(
   )
   // CamelCasePlugin's transformResult camelCases raw result rows too (it only
   // skips the query transform), so a bare `SELECT task_id, expires_at` comes
-  // back as { taskId, expiresAt }. The readers below are snake_case, so
-  // re-snake the top-level keys. Values pass through; idempotent.
-  return {
-    rows: result.rows.map((row) => snakeCaseTopLevelKeys(row) as T),
-  }
-}
-
-function snakeCaseTopLevelKeys<T extends object>(row: T): T {
-  const out: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(row)) {
-    out[key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)] = value
-  }
-  return out as T
+  // back as { taskId, expiresAt }. The row types and readers below are
+  // camelCase to match; values pass through untouched.
+  return { rows: result.rows }
 }
 
 export async function runTaskProjectionBatch<T>(
@@ -89,10 +79,10 @@ export async function listPendingTaskProjectionRows(
   )
   return result.rows.map((row) => ({
     id: row.id,
-    taskId: row.task_id,
-    workspaceId: row.workspace_id,
-    conversationId: row.conversation_id,
-    transportMessageLinkId: row.transport_message_link_id,
+    taskId: row.taskId,
+    workspaceId: row.workspaceId,
+    conversationId: row.conversationId,
+    transportMessageLinkId: row.transportMessageLinkId,
     attempts: row.attempts,
   }))
 }
@@ -116,7 +106,7 @@ export async function lockTaskProjectionTask(
     ? {
         id: row.id,
         status: row.status,
-        expiresAt: row.expires_at,
+        expiresAt: row.expiresAt,
       }
     : undefined
 }
