@@ -33,12 +33,63 @@
  */
 
 import {
+  buildCanonicalMessage,
+  type CanonicalFileRef,
   type CanonicalMessage,
   type CanonicalPart,
   derivePlainText,
 } from "../../messaging/canonical-message.js"
 import type { SessionWebhookBody } from "./client.js"
 import { collectAtUserIdsFromParts } from "./mentions.js"
+
+/**
+ * One DingTalk robot message. A robot message carries exactly ONE msgKey, so a
+ * CanonicalMessage with mixed text + media becomes an ordered sequence: the
+ * text/markdown body first (sessionWebhook-first / OpenAPI fallback), then one
+ * send per media part (upload → robot sample*Msg via OpenAPI). The outbound
+ * dispatcher in outbound.ts executes the plan. Video parts never appear here —
+ * `supportsVideo: false` degrades them to a "[视频]" marker before planning.
+ */
+export type DingtalkSendPlanItem =
+  | { kind: "text"; message: CanonicalMessage }
+  | { kind: "image"; fileRef: CanonicalFileRef }
+  | { kind: "voice"; fileRef: CanonicalFileRef; durationMs?: number }
+  | { kind: "file"; fileRef: CanonicalFileRef & { name: string } }
+
+export function planDingtalkSends(
+  message: CanonicalMessage
+): DingtalkSendPlanItem[] {
+  const textParts: CanonicalPart[] = []
+  const mediaItems: DingtalkSendPlanItem[] = []
+  for (const part of message.parts) {
+    switch (part.type) {
+      case "image":
+        mediaItems.push({ kind: "image", fileRef: part.fileRef })
+        break
+      case "voice":
+        mediaItems.push({
+          kind: "voice",
+          fileRef: part.fileRef,
+          ...(part.durationMs != null ? { durationMs: part.durationMs } : {}),
+        })
+        break
+      case "file":
+        mediaItems.push({ kind: "file", fileRef: part.fileRef })
+        break
+      default:
+        textParts.push(part)
+    }
+  }
+  const items: DingtalkSendPlanItem[] = []
+  const textMessage = buildCanonicalMessage(textParts)
+  // Emit a text send only when there's actual renderable text — avoids an
+  // empty "[消息]" bubble when the message is media-only.
+  if (textMessage.plainText.trim() !== "") {
+    items.push({ kind: "text", message: textMessage })
+  }
+  items.push(...mediaItems)
+  return items
+}
 
 function partsToMarkdown(message: CanonicalMessage): string {
   // The canonical message already carries a derived plainText whose surface

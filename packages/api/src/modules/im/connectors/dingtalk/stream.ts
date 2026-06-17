@@ -103,6 +103,7 @@ import type {
   RunningAccount,
 } from "../types.js"
 import { getDingtalkCredentialsOrThrow } from "./credentials.js"
+import { enrichInboundDingtalkMedia } from "./inbound-media.js"
 import {
   normalizeDingtalkPayload,
   type DingtalkInboundPayload,
@@ -339,16 +340,33 @@ export async function startDingtalkAccount(
       return
     }
 
-    // ─── Step F: emitInbound (failures don't trigger redelivery) ───
-    void ctx
-      .emitInbound(envelope)
-      .catch((err) =>
-        ctx.logger.error(
-          "dingtalk: emitInbound threw; inbound is lost (v1 at-most-once semantics)",
-          err,
+    // ─── Step F: enrich inbound media (downloadCode → bytes → file service),
+    // then emitInbound (failures don't trigger redelivery). The enrich is a
+    // best-effort async pass after the ACK; a failure keeps the placeholders
+    // rather than blocking ingestion.
+    void (async () => {
+      let enriched = envelope
+      try {
+        enriched = await enrichInboundDingtalkMedia(envelope, {
+          account: ctx.account,
+          logger: ctx.logger,
+        })
+      } catch (err) {
+        ctx.logger.warn(
+          `dingtalk: inbound media enrich failed; emitting placeholders: ${(err as Error).message}`,
           { accountId: ctx.account.id }
         )
-      )
+      }
+      await ctx
+        .emitInbound(enriched)
+        .catch((err) =>
+          ctx.logger.error(
+            "dingtalk: emitInbound threw; inbound is lost (v1 at-most-once semantics)",
+            err,
+            { accountId: ctx.account.id }
+          )
+        )
+    })()
   }
 
   async function connectOnce(): Promise<void> {

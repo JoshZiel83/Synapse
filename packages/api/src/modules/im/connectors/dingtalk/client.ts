@@ -30,6 +30,13 @@ import {
 } from "./response-codec.js"
 
 const ACCESS_TOKEN_URL = "https://api.dingtalk.com/v1.0/oauth2/accessToken"
+// Legacy OAPI token endpoint. Needed ONLY by the media-upload path
+// (oapi.dingtalk.com/media/upload), which authenticates via a `?access_token=`
+// QUERY param rather than the v1.0 `x-acs-dingtalk-access-token` header.
+// Minting it via gettoken (rather than reusing the v1.0 token value as the
+// query param) is the proven production choice across the official Python SDK
+// and OpenClaw references.
+const OAPI_ACCESS_TOKEN_URL = "https://oapi.dingtalk.com/gettoken"
 const GROUP_MESSAGES_SEND_URL =
   "https://api.dingtalk.com/v1.0/robot/groupMessages/send"
 const OTO_MESSAGES_BATCH_SEND_URL =
@@ -47,6 +54,9 @@ interface CachedToken {
 }
 
 const tokenCache = new Map<string, CachedToken>()
+// Separate cache for the legacy OAPI (gettoken) token — a different token
+// family from the v1.0 accessToken, used only for /media/upload.
+const oapiTokenCache = new Map<string, CachedToken>()
 
 /**
  * Cache key intentionally derived from BOTH clientId and clientSecret so a
@@ -99,9 +109,55 @@ export async function getAccessToken(
   return accessToken
 }
 
-/** Test-only: drop the cache. */
+/**
+ * Legacy OAPI access token (GET oapi.dingtalk.com/gettoken). Used ONLY as the
+ * `?access_token=` query param for /media/upload — the legacy endpoint does
+ * not accept the v1.0 `x-acs-dingtalk-access-token` header. Cached separately
+ * from the v1.0 token.
+ */
+export async function getOapiAccessToken(
+  account: TransportAccountSummary
+): Promise<string> {
+  const { clientId, clientSecret } = getDingtalkCredentialsOrThrow(account)
+  const key = tokenCacheKey(clientId, clientSecret)
+  const cached = oapiTokenCache.get(key)
+  if (cached && Date.now() < cached.refreshAfter) {
+    return cached.token
+  }
+  const url = `${OAPI_ACCESS_TOKEN_URL}?appkey=${encodeURIComponent(clientId)}&appsecret=${encodeURIComponent(clientSecret)}`
+  const resp = await fetch(url, { method: "GET" })
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "")
+    throw new Error(
+      `DingTalk gettoken HTTP ${resp.status}: ${body.slice(0, 200)}`
+    )
+  }
+  const data = await readDingtalkProviderResponse(resp)
+  if (!isDingtalkBusinessSuccess(data)) {
+    throw new Error(`DingTalk gettoken failed: ${JSON.stringify(data)}`)
+  }
+  const accessToken =
+    typeof data.access_token === "string" ? data.access_token.trim() : ""
+  if (!accessToken) {
+    throw new Error(
+      `DingTalk gettoken returned no access_token: ${JSON.stringify(data)}`
+    )
+  }
+  const ttlSeconds =
+    typeof data.expires_in === "number" && data.expires_in > 0
+      ? data.expires_in
+      : DEFAULT_TOKEN_TTL_SECONDS
+  oapiTokenCache.set(key, {
+    token: accessToken,
+    refreshAfter: Date.now() + ttlSeconds * 1000 - TOKEN_REFRESH_LEAD_MS,
+  })
+  return accessToken
+}
+
+/** Test-only: drop both token caches. */
 export function _resetDingtalkTokenCache(): void {
   tokenCache.clear()
+  oapiTokenCache.clear()
 }
 
 // ───────────────────────── Business success ─────────────────────────

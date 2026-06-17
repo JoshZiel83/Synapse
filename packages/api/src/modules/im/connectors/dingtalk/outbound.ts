@@ -1,36 +1,32 @@
 /**
  * DingTalk outbound dispatcher.
  *
- * Flow:
- *   1. Degrade message for DingTalk capabilities (flatten mention → text
- *      when supportsMention=false; here it's true so mention parts stay).
- *   2. Render the webhook body. Use a lazy access-token helper so token
- *      acquisition only happens when at least one path needs it.
- *   3. If the endpoint has a sessionWebhook URL and it isn't *known* to
- *      have expired, POST it with the x-acs-dingtalk-access-token header.
- *      An HTTP-2xx + business-success response wins.
- *   4. On any sessionWebhook failure (HTTP non-2xx, business-failure body,
- *      or absent webhook), fall back to the OpenAPI sender that matches
- *      the endpoint type — groupMessages/send for groups, oToMessages/
- *      batchSend for direct chats.
- *   5. Direct-chat OpenAPI fallback REQUIRES a staffId, which is only
- *      populated when the bot's DingTalk app has been published. When
- *      missing (dev/test paths), throw a descriptive Error after the
- *      sessionWebhook attempt — the IM delivery worker writes link
- *      `failed`. The shared retry policy
- *      (`IM_TRANSPORT_DELIVERY_JOB_DEFAULTS`: 5 attempts + exponential
- *      backoff) will then re-run, which is the right behavior for the
- *      "app not published yet" case (operator finishes publish → next
- *      retry succeeds). For genuinely terminal failures use
- *      `PermanentTransportError` so the BullMQ wrapper short-circuits
- *      to `UnrecoverableError`.
- *   6. Either path that succeeds returns an externalMessageId. The
- *      sessionWebhook response only carries `{errcode, errmsg}`, so a
- *      synthetic id is generated. OpenAPI returns `processQueryKey`; if
- *      missing, the synthetic id keeps the link consistent.
+ * A robot message carries exactly ONE msgKey, so a CanonicalMessage with mixed
+ * text + media is split by `planDingtalkSends` into an ordered sequence of
+ * sub-sends and dispatched in order (the first send's id is the primary
+ * returned id, matching the Feishu reference). Sub-sends:
+ *
+ *   TEXT/markdown — sessionWebhook-first, OpenAPI fallback:
+ *     1. If the endpoint has a sessionWebhook URL not *known* expired, POST it
+ *        (token attached when available, but never blocking — see below).
+ *     2. On any sessionWebhook failure, fall back to the OpenAPI sender for the
+ *        endpoint type (groupMessages/send | oToMessages/batchSend). Direct
+ *        OpenAPI requires a staffId (only after the app is published); when
+ *        missing we throw so the delivery worker retries.
+ *
+ *   MEDIA (image/voice/file) — always OpenAPI (sessionWebhook cannot carry
+ *     media): read bytes from our CAS by sha256 → upload to /media/upload for a
+ *     mediaId → send the matching robot sample*Msg msgKey via the same OpenAPI
+ *     senders. Errors propagate so BullMQ retries the whole delivery.
+ *
+ *   Known v1 limitation: a mixed text+media message that partially fails (e.g.
+ *   text delivered, media upload fails) re-sends the text on retry — DingTalk's
+ *   robot OpenAPI exposes no idempotency key. Text-only and media-only sends
+ *   (the common cases) are unaffected.
  */
 
 import { createHash } from "crypto"
+import { readCasBlob } from "../../../../infrastructure/storage/index.js"
 import type {
   MessageRef,
   OutboundEndpointRef,
@@ -43,18 +39,32 @@ import { DINGTALK_MESSAGE_CAPABILITIES } from "./capabilities.js"
 import { getDingtalkCredentialsOrThrow } from "./credentials.js"
 import {
   getAccessToken,
+  getOapiAccessToken,
   isDingtalkBusinessSuccess,
   sendDirectOpenApi,
   sendGroupOpenApi,
   sendViaSessionWebhook,
 } from "./client.js"
-import { renderOpenApiPayload, renderSessionWebhookPayload } from "./render.js"
+import {
+  extensionOf,
+  uploadDingtalkMedia,
+  type DingtalkMediaUploadType,
+  type MediaBytesReader,
+} from "./media.js"
+import {
+  planDingtalkSends,
+  renderOpenApiPayload,
+  renderSessionWebhookPayload,
+  type DingtalkSendPlanItem,
+} from "./render.js"
 
 export interface DingtalkSendInput {
   account: TransportAccountSummary
   endpoint: OutboundEndpointRef
   message: CanonicalMessage
   replyTo?: MessageRef
+  /** Test seam — outbound media bytes reader; defaults to our CAS by sha256. */
+  readBytes?: MediaBytesReader
 }
 
 // Bounded synthetic message id helper — `transport_message_links.external_message_id`
@@ -101,67 +111,68 @@ export function parseSessionWebhookExpiry(raw: unknown): number | undefined {
   return undefined
 }
 
-export async function sendDingtalkMessage(
-  input: DingtalkSendInput
-): Promise<OutboundSendResult> {
-  // Step 0: capability-aware degrade. With supportsMention=true mention
-  // parts stay intact; image/file/card/reaction/quote parts (which the v1
-  // capability set disables) get rewritten to safer alternatives so the
-  // renderer never sees an unexpected shape.
-  const degraded = degradeForCapabilities(
-    input.message,
-    DINGTALK_MESSAGE_CAPABILITIES
+function stringOrUndefined(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() !== ""
+    ? value.trim()
+    : undefined
+}
+
+/**
+ * Per-send context shared across sub-sends. The v1.0 token (header auth for
+ * the robot OpenAPI + sessionWebhook) and the legacy OAPI token (query-param
+ * auth for /media/upload) are each memoized once so a multi-part plan doesn't
+ * re-issue them.
+ */
+interface SendContext {
+  account: TransportAccountSummary
+  endpoint: OutboundEndpointRef
+  metadata: Record<string, unknown>
+  endpointId: string
+  /** v1.0 accessToken (x-acs-dingtalk-access-token). */
+  getToken: () => Promise<string>
+  /** Legacy OAPI token for /media/upload (?access_token= query param). */
+  getOapiToken: () => Promise<string>
+  readBytes: MediaBytesReader
+}
+
+/** robotCode is required on every robot OpenAPI send; default to the app key. */
+function robotCodeOf(ctx: SendContext): string {
+  return (
+    stringOrUndefined(ctx.metadata.robotCode) ??
+    getDingtalkCredentialsOrThrow(ctx.account).clientId
   )
+}
 
-  const account = input.account
-  const endpointId = input.endpoint.externalId
-  const metadata = input.endpoint.metadata || {}
+// ───────────────────────── text / markdown sub-send ─────────────────────────
 
-  // Step 0b: lazy token helper. Both reply paths need the access token,
-  // but constructing it for a message that turns out to need none (e.g.
-  // a successful sessionWebhook with cached fetch result) would be
-  // wasteful. Memoize per-send so the second fallback path doesn't
-  // re-issue a token request.
-  let cachedToken: string | undefined
-  const getToken = async (): Promise<string> => {
-    if (cachedToken) return cachedToken
-    cachedToken = await getAccessToken(account)
-    return cachedToken
-  }
+async function sendTextSubsend(
+  message: CanonicalMessage,
+  ctx: SendContext
+): Promise<OutboundSendResult> {
+  const webhookBody = renderSessionWebhookPayload(message)
 
-  // Step 1: render sessionWebhook body up-front. Cheap (just builds the
-  // markdown body + at-array). Reused below if the webhook path attempts.
-  const webhookBody = renderSessionWebhookPayload(degraded)
-
-  // Step 2: sessionWebhook attempt, gated by:
-  //   - presence of a sessionWebhook URL in endpoint metadata, and
-  //   - the *known* expiry — only skip when we have a parseable
-  //     sessionWebhookExpiredTime AND it's already in the past. An
-  //     unparseable value falls through to "still maybe valid" so we
-  //     don't blank-skip the cheaper path for a misshapen metadata field.
-  const webhook = stringOrUndefined(metadata.sessionWebhook)
+  // sessionWebhook attempt, gated by presence + *known* expiry only.
+  const webhook = stringOrUndefined(ctx.metadata.sessionWebhook)
   const expiredAt = parseSessionWebhookExpiry(
-    metadata.sessionWebhookExpiredTime
+    ctx.metadata.sessionWebhookExpiredTime
   )
   const knownExpired = expiredAt != null && expiredAt <= Date.now()
 
   if (webhook && !knownExpired) {
     try {
       // The sessionWebhook self-authenticates; attach a token only if it can
-      // be acquired without error. A token-endpoint failure must NOT defeat
-      // an otherwise-valid reply by forcing the (often-impossible) OpenAPI
-      // fallback — so a token error here degrades to "send without token"
-      // rather than abandoning the preferred path.
+      // be acquired without error. A token-endpoint failure must NOT defeat an
+      // otherwise-valid reply by forcing the (often-impossible) OpenAPI path.
       let token: string | undefined
       try {
-        token = await getToken()
+        token = await ctx.getToken()
       } catch {
         token = undefined
       }
       const resp = await sendViaSessionWebhook(webhook, webhookBody, token)
       if (resp.httpOk && isDingtalkBusinessSuccess(resp.body)) {
         return {
-          externalMessageId: makeSyntheticMessageId("session", endpointId),
+          externalMessageId: makeSyntheticMessageId("session", ctx.endpointId),
           raw: { sessionWebhook: resp.body },
         }
       }
@@ -171,78 +182,221 @@ export async function sendDingtalkMessage(
     }
   }
 
-  // Step 3: OpenAPI fallback. Now is where the direct-chat staffId
-  // requirement gets enforced — we throw BEFORE acquiring a token for
-  // a request we know would 400 server-side.
-  const endpointType = input.endpoint.endpointType
-  if (endpointType === "direct") {
-    const lastSenderStaffId = stringOrUndefined(metadata.lastSenderStaffId)
+  const openApiPayload = renderOpenApiPayload(message)
+  return sendOpenApi(
+    ctx,
+    openApiPayload.msgKey,
+    openApiPayload.msgParam,
+    "text"
+  )
+}
+
+// ───────────────────────── media sub-send ─────────────────────────
+
+function mediaPlan(item: Exclude<DingtalkSendPlanItem, { kind: "text" }>): {
+  uploadType: DingtalkMediaUploadType
+  filename: string
+  defaultMime: string
+  msgKey: string
+  buildMsgParam: (mediaId: string) => string
+} {
+  switch (item.kind) {
+    case "image":
+      return {
+        uploadType: "image",
+        filename: item.fileRef.name || "image",
+        defaultMime: "image/jpeg",
+        msgKey: "sampleImageMsg",
+        // photoURL takes the raw mediaId (with its "@" prefix), NOT a URL.
+        buildMsgParam: (mediaId) => JSON.stringify({ photoURL: mediaId }),
+      }
+    case "voice":
+      return {
+        uploadType: "voice",
+        filename: item.fileRef.name || "voice.amr",
+        defaultMime: "audio/amr",
+        msgKey: "sampleAudio",
+        // duration unit is MILLISECONDS for sampleAudio.
+        buildMsgParam: (mediaId) =>
+          JSON.stringify({
+            mediaId,
+            duration: String(item.durationMs ?? 0),
+          }),
+      }
+    case "file":
+      return {
+        uploadType: "file",
+        filename: item.fileRef.name,
+        defaultMime: "application/octet-stream",
+        msgKey: "sampleFile",
+        buildMsgParam: (mediaId) =>
+          JSON.stringify({
+            mediaId,
+            fileName: item.fileRef.name,
+            fileType: extensionOf(item.fileRef.name),
+          }),
+      }
+  }
+}
+
+async function sendMediaSubsend(
+  item: Exclude<DingtalkSendPlanItem, { kind: "text" }>,
+  ctx: SendContext
+): Promise<OutboundSendResult> {
+  const plan = mediaPlan(item)
+  const sha256 = item.fileRef.sha256?.trim()
+  if (!sha256) {
+    throw new Error(
+      `dingtalk ${item.kind} part requires a CanonicalFileRef.sha256; got ${JSON.stringify(item.fileRef)}`
+    )
+  }
+  const buffer = await ctx.readBytes(sha256)
+  const oapiToken = await ctx.getOapiToken()
+  const mediaId = await uploadDingtalkMedia({
+    oapiToken,
+    type: plan.uploadType,
+    buffer,
+    filename: plan.filename,
+    mime: item.fileRef.mimeType || plan.defaultMime,
+  })
+  return sendOpenApi(ctx, plan.msgKey, plan.buildMsgParam(mediaId), item.kind)
+}
+
+// ───────────────────────── shared OpenAPI send ─────────────────────────
+
+/**
+ * Send a built {msgKey, msgParam} via the robot OpenAPI matching the endpoint
+ * type. `label` is only used for error messages. Direct sends require a
+ * staffId (post-publish only); when missing we throw so the worker retries.
+ */
+async function sendOpenApi(
+  ctx: SendContext,
+  msgKey: string,
+  msgParam: string,
+  label: string
+): Promise<OutboundSendResult> {
+  const robotCode = robotCodeOf(ctx)
+
+  if (ctx.endpoint.endpointType === "direct") {
+    // Guard the staffId requirement BEFORE acquiring a token — a direct send
+    // without a staffId is impossible, and we don't want to issue a token for
+    // a request we know would fail.
+    const lastSenderStaffId = stringOrUndefined(ctx.metadata.lastSenderStaffId)
     if (!lastSenderStaffId) {
       throw new Error(
-        "missing lastSenderStaffId for direct OpenAPI fallback; staffId only available after app published"
+        "missing lastSenderStaffId for direct OpenAPI send; staffId only available after app published"
       )
     }
-    const openApiPayload = renderOpenApiPayload(degraded)
-    const token = await getToken()
-    // robotCode is a REQUIRED field for robot/oToMessages/batchSend. The
-    // inbound payload normally seeds metadata.robotCode; fall back to the
-    // account clientId (== the app AppKey, which is the robotCode for an
-    // org-internal Stream bot) so a missing value never omits a required param.
-    const robotCode =
-      stringOrUndefined(metadata.robotCode) ??
-      getDingtalkCredentialsOrThrow(account).clientId
+    const token = await ctx.getToken()
     const resp = await sendDirectOpenApi({
       userId: lastSenderStaffId,
-      msgKey: openApiPayload.msgKey,
-      msgParam: openApiPayload.msgParam,
+      msgKey,
+      msgParam,
       accessToken: token,
       robotCode,
     })
     if (!resp.httpOk || !isDingtalkBusinessSuccess(resp.body)) {
       throw new Error(
-        `dingtalk oToMessages/batchSend failed: http=${resp.status} body=${JSON.stringify(resp.body).slice(0, 300)}`
+        `dingtalk oToMessages/batchSend failed (${label}): http=${resp.status} body=${JSON.stringify(resp.body).slice(0, 300)}`
       )
     }
     const processQueryKey = stringOrUndefined(resp.body.processQueryKey)
     return {
       externalMessageId:
-        processQueryKey ?? makeSyntheticMessageId("openapi", endpointId),
+        processQueryKey ?? makeSyntheticMessageId("openapi", ctx.endpointId),
       raw: { oToMessages: resp.body },
     }
   }
 
-  // group fallback
   const openConversationId =
-    stringOrUndefined(metadata.openConversationId) ?? endpointId
-  const openApiPayload = renderOpenApiPayload(degraded)
-  const token = await getToken()
-  // robotCode is a REQUIRED field for robot/groupMessages/send (see the
-  // direct path above); default to the account clientId when metadata lacks it.
-  const robotCode =
-    stringOrUndefined(metadata.robotCode) ??
-    getDingtalkCredentialsOrThrow(account).clientId
+    stringOrUndefined(ctx.metadata.openConversationId) ?? ctx.endpointId
+  const token = await ctx.getToken()
   const resp = await sendGroupOpenApi({
     openConversationId,
-    msgKey: openApiPayload.msgKey,
-    msgParam: openApiPayload.msgParam,
+    msgKey,
+    msgParam,
     accessToken: token,
     robotCode,
   })
   if (!resp.httpOk || !isDingtalkBusinessSuccess(resp.body)) {
     throw new Error(
-      `dingtalk groupMessages/send failed: http=${resp.status} body=${JSON.stringify(resp.body).slice(0, 300)}`
+      `dingtalk groupMessages/send failed (${label}): http=${resp.status} body=${JSON.stringify(resp.body).slice(0, 300)}`
     )
   }
   const processQueryKey = stringOrUndefined(resp.body.processQueryKey)
   return {
     externalMessageId:
-      processQueryKey ?? makeSyntheticMessageId("openapi", endpointId),
+      processQueryKey ?? makeSyntheticMessageId("openapi", ctx.endpointId),
     raw: { groupMessages: resp.body },
   }
 }
 
-function stringOrUndefined(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() !== ""
-    ? value.trim()
-    : undefined
+// ───────────────────────── entry point ─────────────────────────
+
+export async function sendDingtalkMessage(
+  input: DingtalkSendInput
+): Promise<OutboundSendResult> {
+  // Capability-aware degrade: mention parts stay (supportsMention=true);
+  // image/voice/file parts stay (now supported) and reach the media path;
+  // video/card/reaction/quote degrade to safe alternatives.
+  const degraded = degradeForCapabilities(
+    input.message,
+    DINGTALK_MESSAGE_CAPABILITIES
+  )
+
+  let cachedToken: string | undefined
+  let cachedOapiToken: string | undefined
+  const ctx: SendContext = {
+    account: input.account,
+    endpoint: input.endpoint,
+    metadata: input.endpoint.metadata || {},
+    endpointId: input.endpoint.externalId,
+    getToken: async () => {
+      if (cachedToken) return cachedToken
+      cachedToken = await getAccessToken(input.account)
+      return cachedToken
+    },
+    getOapiToken: async () => {
+      if (cachedOapiToken) return cachedOapiToken
+      cachedOapiToken = await getOapiAccessToken(input.account)
+      return cachedOapiToken
+    },
+    readBytes: input.readBytes ?? readCasBlob,
+  }
+
+  const plan = planDingtalkSends(degraded)
+  if (plan.length === 0) {
+    // No text and no media (e.g. a reaction-only message that shouldn't have
+    // routed here). Send a visible placeholder rather than a silent no-op.
+    plan.push({
+      kind: "text",
+      message: {
+        ...degraded,
+        parts: [{ type: "text", text: "[消息]" }],
+        plainText: "[消息]",
+      },
+    })
+  }
+
+  // Sequential so ordering is preserved and a single failure aborts the rest
+  // (the worker retries the whole delivery).
+  const results: OutboundSendResult[] = []
+  for (const item of plan) {
+    if (item.kind === "text") {
+      results.push(await sendTextSubsend(item.message, ctx))
+    } else {
+      results.push(await sendMediaSubsend(item, ctx))
+    }
+  }
+
+  const primary = results[0]
+  return {
+    externalMessageId:
+      primary?.externalMessageId ??
+      makeSyntheticMessageId("openapi", ctx.endpointId),
+    raw: {
+      primary: primary?.raw,
+      extras: results.slice(1).map((r) => r.raw),
+    },
+  }
 }

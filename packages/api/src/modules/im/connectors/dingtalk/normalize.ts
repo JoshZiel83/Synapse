@@ -123,23 +123,27 @@ function extractRawText(payload: DingtalkInboundPayload): string {
   // feedCard/link are OUTBOUND send types only. The inbound receive catalog
   // is exactly: text, richText, picture, audio, video, file (+ unknown).
   if (!payload.msgtype) return ""
+  // For media types the system_marker placeholder (and, after the inbound-media
+  // enrich, the real media part) already renders the "[图片]/[语音]/…" label, so
+  // returning that label as text too would double it. Return "" and let the
+  // marker carry the label — EXCEPT audio, where content.recognition is real
+  // speech-to-text transcript that belongs in the body.
   switch (payload.msgtype) {
     case "picture":
-      return "[图片]"
+      return ""
     case "audio":
-      // DingTalk ships its own speech-to-text transcript in
-      // content.recognition; surface it as the message text rather than an
-      // opaque "[语音]" placeholder.
-      return nonEmpty(asContentObject(payload)?.recognition) ?? "[语音]"
+      return nonEmpty(asContentObject(payload)?.recognition) ?? ""
     case "video":
-      return "[视频]"
+      return ""
     case "file":
-      return "[文件]"
+      return ""
     case "richText":
       // Recover the user-typed text; fall back to a placeholder only for an
       // image-only rich message.
       return extractRichTextSegments(payload) || "[富文本]"
     default:
+      // Unknown types have no placeholder marker, so the label must live in the
+      // text here.
       return `[${payload.msgtype}]`
   }
 }

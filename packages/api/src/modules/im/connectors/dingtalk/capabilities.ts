@@ -5,8 +5,13 @@ import type { MessageCapabilities } from "../../messaging/degradation.js"
  * DingTalk capability descriptors.
  *
  * v1 scope: Stream long-connection only, text + markdown send/receive in
- * group and direct chats. No image/file/voice/video upload (these degrade
- * to system_marker placeholders inbound), no reactions, no AI card streaming.
+ * group and direct chats. Native media: inbound image/voice/video/file are
+ * downloaded (downloadCode → bytes → file service) and surfaced as real
+ * media parts; outbound image/voice/file are uploaded (/media/upload →
+ * mediaId) and sent via the robot OpenAPI sample*Msg msgKeys. No reactions,
+ * no AI card streaming. Outbound VIDEO is deferred — sampleVideo requires a
+ * cover-image (picMediaId) we can't synthesize in v1, so video parts still
+ * degrade on send (inbound video is fully supported).
  *
  * `supportsMention: true` is best-effort: only the sessionWebhook reply
  * path will produce real @-highlight UI in DingTalk via `at.atUserIds`.
@@ -42,14 +47,21 @@ export const DINGTALK_MESSAGE_CAPABILITIES: MessageCapabilities = {
   // reply/thread anchor. Leaving false so the degradation layer flattens
   // quote parts to "> preview" text instead of attempting threading.
   supportsReply: false,
-  supportsImage: false,
-  supportsFile: false,
-  // v1 DingTalk: no audio/video upload, and interaction-prompt projection
-  // (interactive-card buttons) is deferred — NOT a protocol limit. DingTalk
-  // cards DO support buttons whose click callbacks arrive over the Stream
-  // connection on TOPIC_CARD (/v1.0/card/instances/callback); the connector
-  // just doesn't send cards or register that topic yet (see canSendCard above).
-  supportsVoice: false,
+  // Native media send: image via sampleImageMsg, file via sampleFile, voice
+  // via sampleAudio. Bytes are read from our CAS by sha256, uploaded to
+  // /media/upload for a mediaId, then sent via the robot OpenAPI.
+  supportsImage: true,
+  supportsFile: true,
+  // Outbound voice via sampleAudio (mediaId + duration). Outbound VIDEO is
+  // NOT supported in v1: sampleVideo requires a cover-image mediaId
+  // (picMediaId) we can't synthesize, so video parts degrade on send.
+  // (Inbound video is still downloaded and surfaced — that path is not
+  // gated by this flag.) interaction-prompt projection (interactive-card
+  // buttons) is deferred — NOT a protocol limit: DingTalk cards DO support
+  // buttons whose click callbacks arrive over the Stream connection on
+  // TOPIC_CARD (/v1.0/card/instances/callback); the connector just doesn't
+  // send cards or register that topic yet (see canSendCard above).
+  supportsVoice: true,
   supportsVideo: false,
   supportsInteractionPrompt: false,
   // DingTalk markdown body roughly 4kB safe ceiling per OpenClaw refs.

@@ -551,27 +551,32 @@ test("outbound: lazy token cache — same send never acquires token twice", asyn
   }
 })
 
-test("outbound: degrade strips image parts to safe shape before render", async () => {
+test("outbound: video part degrades to '[视频]' text (outbound video unsupported in v1)", async () => {
   const mock = installFetchMock({
     webhook: { status: 200, body: { errcode: 0 } },
   })
   try {
-    const msgWithUnsupported = buildCanonicalMessage([
+    const msgWithVideo = buildCanonicalMessage([
       { type: "text", text: "look:" },
       {
-        type: "image",
-        fileRef: { sha256: "shaimg", mimeType: "image/png" },
+        type: "video",
+        fileRef: { sha256: "v".repeat(64), mimeType: "video/mp4" },
       },
     ])
     await sendDingtalkMessage({
       account: ACCOUNT,
       endpoint: groupEndpoint(),
-      message: msgWithUnsupported,
+      message: msgWithVideo,
     })
+    // supportsVideo=false → the video degrades to a "[视频]" marker delivered
+    // as the sessionWebhook text; no media upload is attempted.
     const webhookCall = mock.calls.find((c) => c.kind === "webhook")!
     const body = webhookCall.body as { markdown?: { text: string } }
-    // After degrade, the image is rewritten to a "[图片]" placeholder.
-    assert.match(body.markdown?.text ?? "", /\[图片\]/)
+    assert.match(body.markdown?.text ?? "", /\[视频\]/)
+    assert.equal(
+      mock.calls.find((c) => c.kind === "unknown"),
+      undefined
+    )
   } finally {
     mock.restore()
   }
