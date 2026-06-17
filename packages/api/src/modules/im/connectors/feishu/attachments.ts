@@ -29,6 +29,8 @@ import type { CanonicalFileRef } from "../../messaging/canonical-message.js"
 // rejected server-side after a wasted download + upload round-trip.
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024 // Feishu im.image.create cap
 const MAX_FILE_BYTES = 30 * 1024 * 1024 // Feishu im.file.create cap
+// Feishu caps message-resource downloads at 100 MB (im-v1/message-resource/get).
+const MAX_RESOURCE_BYTES = 100 * 1024 * 1024
 
 async function downloadToBuffer(
   url: string,
@@ -168,4 +170,64 @@ export async function uploadFeishuFile(input: {
     throw new Error(`Feishu im.file.create returned no file_key for ${url}`)
   }
   return key
+}
+
+function headerContentType(headers: unknown): string | undefined {
+  if (!headers || typeof headers !== "object") return undefined
+  const h = headers as Record<string, unknown> & {
+    get?: (k: string) => unknown
+  }
+  const raw =
+    typeof h.get === "function"
+      ? h.get("content-type")
+      : (h["content-type"] ?? h["Content-Type"])
+  if (typeof raw !== "string") return undefined
+  const value = raw.split(";")[0]?.trim()
+  return value || undefined
+}
+
+/**
+ * Download a resource attached to an INBOUND message (image / audio / video /
+ * file) via GET /open-apis/im/v1/messages/:message_id/resources/:file_key.
+ *
+ * `type` MUST be "image" for an image message's image_key and "file" for the
+ * file_key of audio / media(video) / file messages — the endpoint rejects the
+ * wrong pairing (im/v1/images/:image_key only serves bot-uploaded images, not
+ * user-sent ones). Streams the response and aborts past Feishu's 100 MB cap so
+ * a large resource can't be buffered unbounded into memory.
+ */
+export async function downloadFeishuMessageResource(input: {
+  client: Lark.Client
+  messageId: string
+  fileKey: string
+  type: "image" | "file"
+  maxBytes?: number
+}): Promise<{ buffer: Buffer; mime?: string }> {
+  const maxBytes = input.maxBytes ?? MAX_RESOURCE_BYTES
+  const res = await input.client.im.messageResource.get({
+    path: { message_id: input.messageId, file_key: input.fileKey },
+    params: { type: input.type },
+  })
+  const stream = res.getReadableStream()
+  const chunks: Buffer[] = []
+  let total = 0
+  try {
+    for await (const chunk of stream as AsyncIterable<Buffer | Uint8Array>) {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      total += buf.length
+      if (total > maxBytes) {
+        stream.destroy?.()
+        throw new Error(
+          `Feishu resource ${input.fileKey} exceeds ${maxBytes} byte limit`
+        )
+      }
+      chunks.push(buf)
+    }
+  } finally {
+    stream.destroy?.()
+  }
+  if (total === 0) {
+    throw new Error(`Feishu resource ${input.fileKey} is empty`)
+  }
+  return { buffer: Buffer.concat(chunks), mime: headerContentType(res.headers) }
 }

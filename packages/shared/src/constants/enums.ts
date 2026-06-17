@@ -232,6 +232,7 @@ export const FILE_ORIGIN_SYSTEMS = {
   FEISHU_DOCS_DOWNLOAD_MEDIA: "feishu_docs_download_media",
   FEISHU_DRIVE_DOWNLOAD_FILE: "feishu_drive_download_file",
   QQ_INBOUND_MEDIA_INGEST: "qq_inbound_media_ingest",
+  FEISHU_INBOUND_MEDIA_INGEST: "feishu_inbound_media_ingest",
   SKILL_MIRROR_IMPORT: "skill_mirror_import",
   GENERATED_USER_AVATAR: "generated_user_avatar",
   GENERATED_OFFICIAL_ACTOR_AVATAR: "generated_official_actor_avatar",
@@ -263,6 +264,7 @@ export const EXTERNAL_IMPORT_FILE_ORIGIN_SYSTEMS = [
   FILE_ORIGIN_SYSTEMS.FEISHU_DOCS_DOWNLOAD_MEDIA,
   FILE_ORIGIN_SYSTEMS.FEISHU_DRIVE_DOWNLOAD_FILE,
   FILE_ORIGIN_SYSTEMS.QQ_INBOUND_MEDIA_INGEST,
+  FILE_ORIGIN_SYSTEMS.FEISHU_INBOUND_MEDIA_INGEST,
 ] as const
 export const PACKAGE_IMPORT_FILE_ORIGIN_SYSTEMS = [
   FILE_ORIGIN_SYSTEMS.SKILL_MIRROR_IMPORT,
@@ -959,6 +961,8 @@ export const TRANSPORT_ACCOUNT_STATUSES = [
 export const WEIXIN_QR_LOGIN_STATUS = {
   WAITING: "waiting",
   SCANNED: "scanned",
+  // The phone shows a numeric pairing code the user must type back to continue.
+  NEED_VERIFYCODE: "need_verifycode",
   CONFIRMED: "confirmed",
   EXPIRED: "expired",
   ERROR: "error",
@@ -966,6 +970,7 @@ export const WEIXIN_QR_LOGIN_STATUS = {
 export const WEIXIN_QR_LOGIN_STATUSES = [
   WEIXIN_QR_LOGIN_STATUS.WAITING,
   WEIXIN_QR_LOGIN_STATUS.SCANNED,
+  WEIXIN_QR_LOGIN_STATUS.NEED_VERIFYCODE,
   WEIXIN_QR_LOGIN_STATUS.CONFIRMED,
   WEIXIN_QR_LOGIN_STATUS.EXPIRED,
   WEIXIN_QR_LOGIN_STATUS.ERROR,

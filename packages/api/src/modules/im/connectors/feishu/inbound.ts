@@ -20,6 +20,7 @@ import {
   createFeishuWsClient,
   getFeishuCredentialsOrThrow,
 } from "./client.js"
+import { enrichInboundFeishuMedia } from "./inbound-media.js"
 import {
   normalizeFeishuMessageEvent,
   type FeishuMessageEvent,
@@ -68,7 +69,11 @@ export async function startFeishuAccount(
       try {
         const envelope = envelopeFromEvent(account, data as FeishuMessageEvent)
         if (envelope) {
-          await ctx.emitInbound(envelope)
+          const enriched = await enrichInboundFeishuMedia(envelope, {
+            account,
+            logger: ctx.logger,
+          })
+          await ctx.emitInbound(enriched)
         }
       } catch (err) {
         ctx.logger.error("feishu: inbound dispatch failed", err)
@@ -149,7 +154,11 @@ export async function handleFeishuWebhook(
     "im.message.receive_v1": async (data) => {
       const envelope = envelopeFromEvent(account, data as FeishuMessageEvent)
       if (envelope) {
-        await input.emitInbound(envelope)
+        const enriched = await enrichInboundFeishuMedia(envelope, {
+          account,
+          logger: input.logger,
+        })
+        await input.emitInbound(enriched)
       }
     },
   })
