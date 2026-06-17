@@ -9,8 +9,6 @@
 
 import { z } from "zod"
 
-import { parseJsonObject } from "@synapse/shared"
-
 import { db, type Executor } from "../../infrastructure/database/kysely.js"
 import type { UserRow } from "./presenter.js"
 import { createGeneratedUserAvatarFile } from "../avatar/service.js"
@@ -101,9 +99,41 @@ export async function selectOAuthVerificationStateByIdentifier(
     .executeTakeFirst()
   if (!row) return null
 
-  const state = OAuthStoredStateSchema.safeParse(parseJsonObject(row.value))
+  const state = parseOAuthStoredState(row.value)
+  if (!state) return null
+  return { state, expiresAt: row.expiresAt }
+}
+
+function parseOAuthStoredState(value: unknown): OAuthStoredState | null {
+  const raw = parseOAuthJsonObject(value)
+  if (!raw) return null
+  const state = OAuthStoredStateSchema.safeParse(raw)
   if (!state.success) return null
-  return { state: state.data, expiresAt: row.expiresAt }
+  return state.data
+}
+
+function parseOAuthJsonObject(value: unknown): Record<string, unknown> | null {
+  if (value === null || value === undefined) return null
+
+  let candidate: unknown = value
+  if (typeof value === "string") {
+    if (value.trim().length === 0) return null
+    try {
+      candidate = JSON.parse(value) as unknown
+    } catch {
+      return null
+    }
+  }
+
+  if (
+    typeof candidate !== "object" ||
+    candidate === null ||
+    Array.isArray(candidate)
+  ) {
+    return null
+  }
+
+  return candidate as Record<string, unknown>
 }
 
 /**

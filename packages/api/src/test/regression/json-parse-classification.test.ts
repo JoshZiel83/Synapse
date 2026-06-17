@@ -19,6 +19,8 @@ const classifiedJsonParseFiles = {
       "Audit log details DB JSON is decoded at repo exit.",
     "packages/api/src/modules/automation/repo.ts":
       "Automation rule, trigger, source, occurrence, and integration DB JSON is decoded at repo exit.",
+    "packages/api/src/modules/auth/repo.ts":
+      "Auth OAuth verification DB JSON is decoded at repo exit.",
     "packages/api/src/modules/context/repo.ts":
       "Context archive-point/frame DB JSON is decoded at repo exit.",
     "packages/api/src/modules/files/repo.ts":
