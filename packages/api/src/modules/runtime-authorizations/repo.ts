@@ -22,7 +22,6 @@ import type { RuntimeAuthorizationGrantRetention } from "@synapse/shared/types"
 import {
   actorRef,
   conversationRef,
-  parseJsonObject,
   remoteAgentRef,
   SUBJECT_KIND,
   workspaceMemberRef,
@@ -362,11 +361,13 @@ export function runtimeAuthorizationGrantRowToCandidate(
         conversationId: row.scopeConversationId,
       })
     : undefined
-  const rawPolicy = parseJsonObject(row.policy)
-  const validationResult = validateGrantPolicyForCapability(rawPolicy)
+  const policyJson = parseRuntimeAuthorizationGrantPolicy(row.policy)
+  const validationResult = policyJson.failure
+    ? { ok: false as const, failure: policyJson.failure }
+    : validateGrantPolicyForCapability(policyJson.rawPolicy)
   return {
     rawRow: normalizeRuntimeAuthorizationGrantRow(row),
-    rawPolicy,
+    rawPolicy: policyJson.rawPolicy,
     policyValidationResult: validationResult,
     subject,
     scope,
@@ -394,7 +395,10 @@ function normalizeRuntimeAuthorizationGrantRow(
     policy: row.policy,
     sourceRetryNonce: row.sourceRetryNonce,
     sourceRuntimeSessionId: row.sourceRuntimeSessionId,
-    sourceRequestArgs: parseJsonObject(row.sourceRequestArgs),
+    sourceRequestArgs: parseRuntimeAuthorizationGrantJsonObject(
+      row.sourceRequestArgs,
+      "runtime authorization grant sourceRequestArgs"
+    ),
     consumedAt: row.consumedAt,
     revokedAt: row.revokedAt,
     supersededAt: row.supersededAt,
@@ -406,7 +410,9 @@ function normalizeRuntimeAuthorizationGrantRow(
 export function runtimeAuthorizationGrantPolicyCapability(
   policy: unknown
 ): unknown {
-  return parseJsonObject(policy).capability
+  const policyJson = parseRuntimeAuthorizationGrantPolicy(policy)
+  if (policyJson.failure) return undefined
+  return policyJson.rawPolicy.capability
 }
 
 export function runtimeAuthorizationGrantSubjectFailure(
@@ -416,6 +422,62 @@ export function runtimeAuthorizationGrantSubjectFailure(
     code: "custom",
     message: err instanceof Error ? err.message : String(err),
     path: ["subject"],
+  }
+  return {
+    kind: "parse_error",
+    issues: [issue],
+  }
+}
+
+function parseRuntimeAuthorizationGrantPolicy(
+  policy: unknown
+):
+  | { rawPolicy: Record<string, unknown>; failure?: undefined }
+  | { rawPolicy: unknown; failure: PolicyValidationFailure } {
+  try {
+    return {
+      rawPolicy: parseRuntimeAuthorizationGrantJsonObject(
+        policy,
+        "runtime authorization grant policy"
+      ),
+    }
+  } catch (err) {
+    return {
+      rawPolicy: undefined,
+      failure: runtimeAuthorizationGrantJsonFailure(err, "policy"),
+    }
+  }
+}
+
+function parseRuntimeAuthorizationGrantJsonObject(
+  value: unknown,
+  fieldName: string
+): Record<string, unknown> {
+  if (value === null || value === undefined) return {}
+  const parsed =
+    typeof value === "string" ? parseJsonString(value, fieldName) : value
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`${fieldName} must be a JSON object`)
+  }
+  return parsed as Record<string, unknown>
+}
+
+function parseJsonString(value: string, fieldName: string): unknown {
+  try {
+    return JSON.parse(value) as unknown
+  } catch {
+    throw new Error(`${fieldName} must be valid JSON`)
+  }
+}
+
+function runtimeAuthorizationGrantJsonFailure(
+  err: unknown,
+  fieldName: string
+): PolicyValidationFailure {
+  const issue: ZodIssue = {
+    code: "custom",
+    message: err instanceof Error ? err.message : String(err),
+    path: [fieldName],
   }
   return {
     kind: "parse_error",

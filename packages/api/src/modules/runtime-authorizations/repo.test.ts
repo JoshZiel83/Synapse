@@ -122,6 +122,66 @@ test("runtimeAuthorizationGrantRowToCandidate reports branch-level corrupt polic
   )
 })
 
+test("runtimeAuthorizationGrantRowToCandidate reports malformed policy JSON without throwing", () => {
+  const candidate = runtimeAuthorizationGrantRowToCandidate(
+    grantRow({
+      policy: "not json",
+    })
+  )
+
+  assert.equal(candidate.policyValidationResult.ok, false)
+  if (candidate.policyValidationResult.ok) {
+    throw new Error("expected invalid policy")
+  }
+  assert.equal(candidate.policyValidationResult.failure.kind, "parse_error")
+  assert.match(
+    candidate.policyValidationResult.failure.issues[0]?.message ?? "",
+    /runtime authorization grant policy must be valid JSON/
+  )
+})
+
+test("runtimeAuthorizationGrantRowToCandidate reports non-object policy JSON without throwing", () => {
+  const candidate = runtimeAuthorizationGrantRowToCandidate(
+    grantRow({
+      policy: JSON.stringify(["not", "an", "object"]),
+    })
+  )
+
+  assert.equal(candidate.policyValidationResult.ok, false)
+  if (candidate.policyValidationResult.ok) {
+    throw new Error("expected invalid policy")
+  }
+  assert.equal(candidate.policyValidationResult.failure.kind, "parse_error")
+  assert.match(
+    candidate.policyValidationResult.failure.issues[0]?.message ?? "",
+    /runtime authorization grant policy must be a JSON object/
+  )
+})
+
+test("runtimeAuthorizationGrantRowToCandidate rejects malformed source request args at repo exit", () => {
+  assert.throws(
+    () =>
+      runtimeAuthorizationGrantRowToCandidate(
+        grantRow({
+          sourceRequestArgs: "not json",
+        })
+      ),
+    /runtime authorization grant sourceRequestArgs must be valid JSON/
+  )
+})
+
+test("runtimeAuthorizationGrantRowToCandidate rejects non-object source request args at repo exit", () => {
+  assert.throws(
+    () =>
+      runtimeAuthorizationGrantRowToCandidate(
+        grantRow({
+          sourceRequestArgs: JSON.stringify(["not", "an", "object"]),
+        })
+      ),
+    /runtime authorization grant sourceRequestArgs must be a JSON object/
+  )
+})
+
 test("runtimeAuthorizationGrantRowToCandidate rejects corrupt joined subject rows", () => {
   assert.throws(
     () =>
@@ -138,5 +198,10 @@ test("runtimeAuthorizationGrantPolicyCapability reads capability through repo-ow
       JSON.stringify({ capability: filesystemCapability })
     ),
     filesystemCapability
+  )
+  assert.equal(runtimeAuthorizationGrantPolicyCapability("not json"), undefined)
+  assert.equal(
+    runtimeAuthorizationGrantPolicyCapability(JSON.stringify(["array"])),
+    undefined
   )
 })

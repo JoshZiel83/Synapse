@@ -25,6 +25,8 @@ const classifiedJsonParseFiles = {
       "MCP plugin catalog, auth spec, and manifest DB JSON is decoded at repo exit.",
     "packages/api/src/modules/organization/repo.ts":
       "Organization actor docs/package DB JSON is decoded at repo exit.",
+    "packages/api/src/modules/runtime-authorizations/repo.ts":
+      "Runtime authorization grant policy and source request args DB JSON is decoded at repo exit.",
     "packages/api/src/modules/session/repo.ts":
       "Session runtime read-model DB JSON payloads are decoded at repo exit.",
     "packages/api/src/modules/tasks/repo.ts":
