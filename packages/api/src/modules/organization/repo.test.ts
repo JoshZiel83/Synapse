@@ -157,6 +157,32 @@ test("normalizeActorRow decodes actor config at repo exit", () => {
   assert.deepEqual(presentActorRow(row, []).definition.config, row.config)
 })
 
+test("normalizeActorRow rejects non-object actor config drift", () => {
+  assert.throws(
+    () =>
+      normalizeActorRow(
+        actorRow({
+          config: JSON.stringify([
+            "not",
+            "an",
+            "object",
+          ]) as unknown as ActorRow["config"],
+        })
+      ),
+    /actor config must be a JSON object/
+  )
+
+  assert.throws(
+    () =>
+      normalizeActorRow(
+        actorRow({
+          config: "not-json" as unknown as ActorRow["config"],
+        })
+      ),
+    /actor config must be valid JSON/
+  )
+})
+
 test("normalizeActorVersionRow decodes config and delta at repo exit", () => {
   const delta: ActorVersionDelta = {
     fromVersion: 1,
@@ -183,6 +209,18 @@ test("normalizeActorVersionRow decodes config and delta at repo exit", () => {
   const view = presentActorVersionRow(row, [])
   assert.deepEqual(view.snapshot.config, row.config)
   assert.deepEqual(view.delta, delta)
+})
+
+test("normalizeActorVersionRow rejects non-object config drift", () => {
+  assert.throws(
+    () =>
+      normalizeActorVersionRow(
+        actorVersionRow({
+          config: "42" as unknown as ActorVersionRow["config"],
+        })
+      ),
+    /actor version config must be a JSON object/
+  )
 })
 
 test("normalizeActorVersionRow fails closed on malformed version delta", () => {
@@ -282,5 +320,56 @@ test("normalizeActorPackageRow decodes package JSON fields at repo exit", () => 
   assert.deepEqual(
     record.package.latestRevision?.metadata,
     row.version_metadata
+  )
+})
+
+test("normalizeActorPackageRow rejects non-object package JSON drift", () => {
+  assert.throws(
+    () =>
+      normalizeActorPackageRow(
+        actorPackageRow({
+          package_metadata: JSON.stringify([
+            "not",
+            "an",
+            "object",
+          ]) as unknown as ActorPackageRow["package_metadata"],
+        })
+      ),
+    /actor package metadata must be a JSON object/
+  )
+
+  assert.throws(
+    () =>
+      normalizeActorPackageRow(
+        actorPackageRow({
+          version_metadata:
+            "not-json" as unknown as ActorPackageRow["version_metadata"],
+        })
+      ),
+    /actor package version metadata must be valid JSON/
+  )
+
+  assert.throws(
+    () =>
+      normalizeActorPackageRow(
+        actorPackageRow({
+          actor_config: "42" as unknown as ActorPackageRow["actor_config"],
+        })
+      ),
+    /actor package actor config must be a JSON object/
+  )
+
+  assert.throws(
+    () =>
+      normalizeActorPackageRow(
+        actorPackageRow({
+          actor_metadata: JSON.stringify([
+            "not",
+            "an",
+            "object",
+          ]) as unknown as ActorPackageRow["actor_metadata"],
+        })
+      ),
+    /actor package actor metadata must be a JSON object/
   )
 })

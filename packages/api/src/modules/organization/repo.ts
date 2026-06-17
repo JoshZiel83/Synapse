@@ -23,7 +23,6 @@ import type pg from "pg"
 import { CompiledQuery } from "kysely"
 import {
   normalizeCanonicalContentBlocks,
-  parseJsonObject,
   type ActorDoc,
   type ActorRole,
   type ActorUpdateSourceType,
@@ -229,10 +228,39 @@ function parseActorVersionDelta(value: unknown): ActorVersionDelta | null {
   return parsed.success ? (parsed.data as ActorVersionDelta) : null
 }
 
+function parseRepoJsonObject(
+  value: unknown,
+  label: string
+): Record<string, unknown> {
+  if (value === null || value === undefined) return {}
+
+  let candidate: unknown = value
+  if (typeof value === "string") {
+    if (value.trim().length === 0) {
+      throw new Error(`${label} must be valid JSON`)
+    }
+    try {
+      candidate = JSON.parse(value) as unknown
+    } catch {
+      throw new Error(`${label} must be valid JSON`)
+    }
+  }
+
+  if (
+    typeof candidate !== "object" ||
+    candidate === null ||
+    Array.isArray(candidate)
+  ) {
+    throw new Error(`${label} must be a JSON object`)
+  }
+
+  return candidate as Record<string, unknown>
+}
+
 export function normalizeActorRow<T extends ActorRow>(row: T): T {
   const normalized = {
     ...row,
-    config: parseJsonObject(row.config),
+    config: parseRepoJsonObject(row.config, "actor config"),
   }
   return normalized
 }
@@ -240,7 +268,7 @@ export function normalizeActorRow<T extends ActorRow>(row: T): T {
 export function normalizeActorVersionRow<T extends ActorVersionRow>(row: T): T {
   const normalized = {
     ...row,
-    config: parseJsonObject(row.config),
+    config: parseRepoJsonObject(row.config, "actor version config"),
     version_delta: parseActorVersionDelta(row.version_delta),
   }
   return normalized
@@ -249,10 +277,22 @@ export function normalizeActorVersionRow<T extends ActorVersionRow>(row: T): T {
 export function normalizeActorPackageRow<T extends ActorPackageRow>(row: T): T {
   const normalized = {
     ...row,
-    package_metadata: parseJsonObject(row.package_metadata),
-    version_metadata: parseJsonObject(row.version_metadata),
-    actor_config: parseJsonObject(row.actor_config),
-    actor_metadata: parseJsonObject(row.actor_metadata),
+    package_metadata: parseRepoJsonObject(
+      row.package_metadata,
+      "actor package metadata"
+    ),
+    version_metadata: parseRepoJsonObject(
+      row.version_metadata,
+      "actor package version metadata"
+    ),
+    actor_config: parseRepoJsonObject(
+      row.actor_config,
+      "actor package actor config"
+    ),
+    actor_metadata: parseRepoJsonObject(
+      row.actor_metadata,
+      "actor package actor metadata"
+    ),
   }
   return normalized
 }
