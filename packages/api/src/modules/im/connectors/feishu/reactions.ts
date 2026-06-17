@@ -92,17 +92,34 @@ export function createFeishuReactionAdapter(
         return
       }
 
-      // Add new reaction first (so user never sees "no status" gap)
+      // Add the new reaction first (so the user never sees a "no status" gap),
+      // but ONLY advance state / remove the prior reaction once Feishu actually
+      // confirms the new one. Feishu returns business failures (invalid
+      // emoji_type, bot not in chat, recalled message, expired token) as
+      // HTTP 200 with a non-zero `code`; the SDK resolves those rather than
+      // throwing, so a `code` check is mandatory. The old code only checked
+      // `reaction_id`, then unconditionally ran `activeEmoji = emoji` — silently
+      // recording a reaction the API rejected and, on a switch, deleting the
+      // previously-live reaction (leaving the message with no status at all).
       try {
         const resp = await deps.client.im.messageReaction.create({
           path: { message_id: deps.messageRef.externalMessageId },
           data: { reaction_type: { emoji_type: emojiType } },
         })
         const rid = resp?.data?.reaction_id
-        if (rid) {
-          reactionIdsByEmoji.set(emoji, rid)
+        if ((resp?.code != null && resp.code !== 0) || !rid) {
+          logger.error("feishu: messageReaction.create rejected", undefined, {
+            emoji,
+            emojiType,
+            code: resp?.code,
+            msg: resp?.msg,
+          })
+          // Leave the existing live status reaction intact: do not advance
+          // activeEmoji, do not delete the prior reaction, do not notify().
+          return
         }
-        // Then remove previous reaction (if any and different)
+        reactionIdsByEmoji.set(emoji, rid)
+        // Only now that the new reaction is confirmed, remove the previous one.
         if (activeEmoji && activeEmoji !== emoji) {
           const prevRid = reactionIdsByEmoji.get(activeEmoji)
           if (prevRid) {

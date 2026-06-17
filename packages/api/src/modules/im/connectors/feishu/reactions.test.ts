@@ -158,3 +158,72 @@ test("setReaction after seed: previous emoji_id is from seed, gets deleted on sw
   // cleanup before any setReaction.
   assert.deepEqual(deletes, [])
 })
+
+test("setReaction does not advance state on a Feishu business error (code != 0)", async () => {
+  const errors: Array<Record<string, unknown>> = []
+  const tracked: Array<Record<string, string>> = []
+  const adapter = createFeishuReactionAdapter({
+    client: {
+      im: {
+        messageReaction: {
+          // HTTP-200 business error: resolves with a non-zero code, no id.
+          create: async () => ({
+            code: 230002,
+            msg: "bot not in chat",
+            data: {},
+          }),
+          delete: async () => ({ data: {} }),
+        },
+      },
+    } as any,
+    messageRef: { externalMessageId: "om_x", endpointExternalId: "oc_y" },
+    onReactionTracked: ({ reactionIdsByEmoji }) =>
+      tracked.push({ ...reactionIdsByEmoji }),
+    logger: {
+      warn: () => {},
+      error: (_msg, _err, fields) => errors.push(fields || {}),
+    },
+  })
+  await adapter.setReaction("🧠")
+  // The failure must be surfaced, and state must NOT advance (no notify()).
+  assert.equal(errors.length, 1)
+  assert.equal(errors[0].code, 230002)
+  assert.deepEqual(
+    tracked,
+    [],
+    "activeEmoji must not advance / persist on a rejected reaction"
+  )
+})
+
+test("a failed switch does not delete the previously-live reaction", async () => {
+  const deletes: string[] = []
+  let createCalls = 0
+  const adapter = createFeishuReactionAdapter({
+    client: {
+      im: {
+        messageReaction: {
+          create: async () => {
+            createCalls++
+            // First create succeeds; second (the switch) is a business error.
+            return createCalls === 1
+              ? { code: 0, data: { reaction_id: "rid_first" } }
+              : { code: 230002, msg: "invalid emoji_type", data: {} }
+          },
+          delete: async ({ path }: any) => {
+            deletes.push(path.reaction_id)
+            return { data: {} }
+          },
+        },
+      },
+    } as any,
+    messageRef: { externalMessageId: "om_x", endpointExternalId: "oc_y" },
+    logger: { warn: () => {}, error: () => {} },
+  })
+  await adapter.setReaction("👀") // succeeds → activeEmoji = 👀, rid_first
+  await adapter.setReaction("🧠") // create fails → must NOT delete rid_first
+  assert.deepEqual(
+    deletes,
+    [],
+    "prior live reaction must survive a failed switch"
+  )
+})
