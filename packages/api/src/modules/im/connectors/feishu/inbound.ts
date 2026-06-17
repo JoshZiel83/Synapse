@@ -108,16 +108,28 @@ export async function handleFeishuWebhook(
   }
   const payload = input.body as Record<string, unknown>
 
-  // URL challenge first
-  if (typeof payload.challenge === "string") {
-    const challenge = await Lark.generateChallenge(payload, {
+  // URL verification handshake — must run BEFORE signature verification
+  // because Feishu's verification ping may carry no signature header, so an
+  // unconditional reject-on-missing-signature would 401 the ping.
+  //
+  // Detect the challenge STRUCTURALLY so both transport modes work:
+  //   - plaintext:    { type: "url_verification", challenge, token }
+  //   - Encrypt-Key:  { encrypt: "<base64>" }  (decrypts to a url_verification)
+  // The old code gated on a top-level string `challenge`, which is absent in
+  // Encrypt-Key mode, so encrypted apps could never complete verification.
+  const looksLikeChallenge =
+    payload.type === "url_verification" ||
+    (typeof payload.encrypt === "string" && !!encryptKey)
+  if (looksLikeChallenge) {
+    const result = (await Lark.generateChallenge(payload, {
       encryptKey,
-    } as any)
-    if ((challenge as any)?.isChallenge) {
-      return {
-        statusCode: 200,
-        body: { challenge: (challenge as any).challenge },
-      }
+    } as any)) as { isChallenge?: boolean; challenge?: { challenge: string } }
+    if (result?.isChallenge) {
+      // `result.challenge` is ALREADY the exact reply body Feishu expects:
+      // { challenge: "<value>" }. Returning { challenge: result.challenge }
+      // would double-nest it ({ challenge: { challenge: "..." } }) and the
+      // verification would fail. Return it verbatim.
+      return { statusCode: 200, body: result.challenge }
     }
   }
 
