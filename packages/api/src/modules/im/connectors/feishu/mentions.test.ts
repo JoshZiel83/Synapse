@@ -74,3 +74,24 @@ test("renderFeishuMention emits XML-like tag", () => {
     '<at user_id="ou_x">Bob</at>'
   )
 })
+
+test("@_all from mentions[] is normalized to @all and kept out of the mention list", () => {
+  const r = parseFeishuMentions({
+    rawText: "@_all 通知",
+    rawMentions: [{ key: "@_all", id: {}, name: "所有人" }],
+  })
+  assert.equal(r.text, "@all 通知")
+  assert.deepEqual(r.mentions, [])
+})
+
+test("@_all leaks are normalized even when not present in mentions[]", () => {
+  const r = parseFeishuMentions({ rawText: "@_all hi", rawMentions: [] })
+  assert.equal(r.text, "@all hi")
+})
+
+test("renderFeishuMention('all') emits the @everyone tag", () => {
+  assert.equal(
+    renderFeishuMention({ externalId: "all", displayName: "ignored" }),
+    '<at user_id="all"></at>'
+  )
+})

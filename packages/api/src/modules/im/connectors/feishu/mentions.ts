@@ -40,17 +40,22 @@ export interface FeishuParseResult {
 export function parseFeishuMentions(
   input: FeishuParseInput
 ): FeishuParseResult {
-  const text = input.rawText || ""
+  let normalized = input.rawText || ""
   const list = isMentionArray(input.rawMentions) ? input.rawMentions : []
-  if (list.length === 0) return { text: text.trim(), mentions: [] }
-
-  let normalized = text
   const mentions: ParsedInboundMention[] = []
   const seen = new Set<string>()
 
   for (const m of list) {
     const key = nonEmpty(m.key)
     if (!key) continue
+    // @all carries no open_id/user_id. Render it as a stable "@all" token and
+    // keep it OUT of the structured mention list — it is not an addressable
+    // user, and the mention resolver must not try to resolve "all" as a
+    // recipient.
+    if (key === "@_all") {
+      normalized = normalized.replace(new RegExp(escapeRegex(key), "g"), "@all")
+      continue
+    }
     const externalId = nonEmpty(m.id?.open_id) || nonEmpty(m.id?.user_id)
     const displayName = nonEmpty(m.name) || "User"
     const replacement = externalId
@@ -65,6 +70,10 @@ export function parseFeishuMentions(
       mentions.push({ externalId, displayName, key })
     }
   }
+
+  // Belt-and-suspenders: some @all events do not include an `@_all` entry in
+  // mentions[], so the raw placeholder would otherwise leak to the user.
+  normalized = normalized.replace(/@_all\b/g, "@all")
 
   return { text: normalized.trim(), mentions }
 }
@@ -84,5 +93,9 @@ export function renderFeishuMention(input: {
   externalId: string
   displayName: string
 }): string {
+  // Feishu @everyone uses the reserved id "all" with an empty body.
+  if (input.externalId === "all") {
+    return `<at user_id="all"></at>`
+  }
   return `<at user_id="${input.externalId}">${input.displayName}</at>`
 }
