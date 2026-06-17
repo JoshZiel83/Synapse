@@ -24,6 +24,53 @@ test("normalizeArchivePointRow decodes archive point metadata at repo exit", () 
   assert.equal(row.createdAt.toISOString(), "2026-01-01T00:00:00.000Z")
 })
 
+test("normalizeArchivePointRow rejects malformed archive point metadata", () => {
+  assert.throws(
+    () =>
+      normalizeArchivePointRow({
+        id: "archive-1",
+        chain_scope: "shared",
+        conversation_id: "conversation-1",
+        session_id: null,
+        parent_archive_point_id: null,
+        covers_until_sequence: "42",
+        metadata: "not json",
+        created_at: new Date("2026-01-01T00:00:00.000Z"),
+      } satisfies ArchivePointRow),
+    /context archive point metadata must be a valid JSON object/
+  )
+})
+
+test("normalizeArchivePointRow rejects non-object archive point metadata", () => {
+  assert.throws(
+    () =>
+      normalizeArchivePointRow({
+        id: "archive-1",
+        chain_scope: "shared",
+        conversation_id: "conversation-1",
+        session_id: null,
+        parent_archive_point_id: null,
+        covers_until_sequence: "42",
+        metadata: JSON.stringify(["not-object"]),
+        created_at: new Date("2026-01-01T00:00:00.000Z"),
+      } satisfies ArchivePointRow),
+    /context archive point metadata must be a JSON object/
+  )
+  assert.equal(
+    normalizeArchivePointRow({
+      id: "archive-1",
+      chain_scope: "shared",
+      conversation_id: "conversation-1",
+      session_id: null,
+      parent_archive_point_id: null,
+      covers_until_sequence: "42",
+      metadata: null,
+      created_at: new Date("2026-01-01T00:00:00.000Z"),
+    } satisfies ArchivePointRow).metadata,
+    undefined
+  )
+})
+
 test("parseArchiveFrameJsonArray decodes archive frame arrays at repo exit", () => {
   assert.deepEqual(parseArchiveFrameJsonArray<string>('["item-1"]'), ["item-1"])
   assert.deepEqual(parseArchiveFrameJsonArray<number[]>([[1], [2]]), [[1], [2]])

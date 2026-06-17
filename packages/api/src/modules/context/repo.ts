@@ -24,7 +24,6 @@ import type {
   CanonicalContentBlock,
   CanonicalContextItem,
 } from "@synapse/shared"
-import { parseJsonObjectOrUndefined as parseJsonObject } from "@synapse/shared"
 import {
   db,
   withDbTransaction,
@@ -58,7 +57,10 @@ export function normalizeArchivePointRow(
     sessionId: row.session_id,
     parentArchivePointId: row.parent_archive_point_id,
     coversUntilSequence: row.covers_until_sequence,
-    metadata: parseJsonObject(row.metadata),
+    metadata: parseArchiveMetadata(
+      row.metadata,
+      "context archive point metadata"
+    ),
     createdAt: row.created_at,
   }
 }
@@ -209,11 +211,43 @@ export async function loadArchivePoint(
       sourceItemIds: Array.isArray(row.source_item_ids)
         ? row.source_item_ids
         : undefined,
-      metadata: parseJsonObject(row.metadata),
+      metadata: parseArchiveMetadata(
+        row.metadata,
+        `context archive frame ${row.id} metadata`
+      ),
     })
   )
 
   return presentArchivePoint(normalizeArchivePointRow(point), frames)
+}
+
+function parseArchiveMetadata(
+  value: unknown,
+  label: string
+): Record<string, unknown> | undefined {
+  if (value === null || value === undefined) return undefined
+
+  let candidate: unknown = value
+  if (typeof value === "string") {
+    if (value.trim().length === 0) {
+      throw new Error(`${label} must be a valid JSON object`)
+    }
+    try {
+      candidate = JSON.parse(value) as unknown
+    } catch {
+      throw new Error(`${label} must be a valid JSON object`)
+    }
+  }
+
+  if (
+    typeof candidate !== "object" ||
+    candidate === null ||
+    Array.isArray(candidate)
+  ) {
+    throw new Error(`${label} must be a JSON object`)
+  }
+
+  return candidate as Record<string, unknown>
 }
 
 function blockToArchivePart(block: CanonicalContentBlock) {
