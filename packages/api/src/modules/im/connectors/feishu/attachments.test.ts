@@ -1,10 +1,10 @@
 /**
  * Tests for the Feishu attachment upload helpers.
  *
- * Pure logic — file_type derivation from mime/extension, error paths
- * when the CanonicalFileRef lacks a fetchable url. The actual HTTP
- * fetch + Lark SDK upload calls are exercised through fake fetch +
- * fake Lark client objects so the test stays exit-clean.
+ * Pure logic — file_type derivation from mime/extension, and the outbound
+ * upload path which reads bytes from our CAS by sha256. The byte read + Lark
+ * SDK upload calls are exercised through an injected `readBytes` seam + fake
+ * Lark client objects, so the test stays exit-clean (no FS / DB).
  */
 
 import test from "node:test"
@@ -19,7 +19,7 @@ import {
 
 test("feishuFileTypeFor: pdf detected by mime", () => {
   assert.equal(
-    feishuFileTypeFor({ mime: "application/pdf", name: "x.bin" }),
+    feishuFileTypeFor({ mimeType: "application/pdf", name: "x.bin" }),
     "pdf"
   )
 })
@@ -32,7 +32,8 @@ test("feishuFileTypeFor: docx maps to doc bucket", () => {
   assert.equal(feishuFileTypeFor({ name: "spec.docx" }), "doc")
   assert.equal(
     feishuFileTypeFor({
-      mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      mimeType:
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       name: "x.bin",
     }),
     "doc"
@@ -86,42 +87,33 @@ function fakeClient(opts: {
   } as any
 }
 
-function withFakeFetch<T>(
-  bodyBytes: Uint8Array,
-  contentType: string,
-  fn: () => Promise<T>
-): Promise<T> {
-  const original = globalThis.fetch
-  globalThis.fetch = async () =>
-    new Response(bodyBytes, {
-      status: 200,
-      headers: { "content-type": contentType },
-    })
-  return fn().finally(() => {
-    globalThis.fetch = original
-  })
-}
+const reads = (bytes: Uint8Array) => async () => Buffer.from(bytes)
 
-test("uploadFeishuImage: requires url on the fileRef", async () => {
+test("uploadFeishuImage: requires sha256 on the fileRef", async () => {
   await assert.rejects(
     uploadFeishuImage({
       client: fakeClient({ imageKey: "img_v1" }),
-      fileRef: { mime: "image/png" },
+      fileRef: { mimeType: "image/png" },
+      readBytes: reads(new Uint8Array([1])),
     }),
-    /requires a CanonicalFileRef\.url/
+    /requires a CanonicalFileRef\.sha256/
   )
 })
 
-test("uploadFeishuImage: downloads then calls im.image.create with the buffer", async () => {
+test("uploadFeishuImage: reads CAS by sha256 then calls im.image.create with the buffer", async () => {
   const calls: any[] = []
   const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47])
-  const key = await withFakeFetch(bytes, "image/png", () =>
-    uploadFeishuImage({
-      client: fakeClient({ imageKey: "img_v3_xyz", recordImage: calls }),
-      fileRef: { url: "https://x/p.png" },
-    })
-  )
+  const seen: string[] = []
+  const key = await uploadFeishuImage({
+    client: fakeClient({ imageKey: "img_v3_xyz", recordImage: calls }),
+    fileRef: { sha256: "abc123" },
+    readBytes: async (sha) => {
+      seen.push(sha)
+      return Buffer.from(bytes)
+    },
+  })
   assert.equal(key, "img_v3_xyz")
+  assert.deepEqual(seen, ["abc123"])
   assert.equal(calls.length, 1)
   assert.equal(calls[0].data.image_type, "message")
   assert.ok(Buffer.isBuffer(calls[0].data.image))
@@ -129,26 +121,24 @@ test("uploadFeishuImage: downloads then calls im.image.create with the buffer", 
 })
 
 test("uploadFeishuImage: throws when SDK returns no image_key", async () => {
-  await withFakeFetch(new Uint8Array([1, 2, 3]), "image/png", async () => {
-    await assert.rejects(
-      uploadFeishuImage({
-        client: fakeClient({ imageKey: null }),
-        fileRef: { url: "https://x/p.png" },
-      }),
-      /no image_key/
-    )
-  })
+  await assert.rejects(
+    uploadFeishuImage({
+      client: fakeClient({ imageKey: null }),
+      fileRef: { sha256: "abc" },
+      readBytes: reads(new Uint8Array([1, 2, 3])),
+    }),
+    /no image_key/
+  )
 })
 
-test("uploadFeishuFile: requires url and passes file_name + derived file_type", async () => {
+test("uploadFeishuFile: reads by sha256 and passes file_name + derived file_type", async () => {
   const calls: any[] = []
   const bytes = new Uint8Array(Array.from({ length: 100 }, (_, i) => i))
-  const key = await withFakeFetch(bytes, "application/pdf", () =>
-    uploadFeishuFile({
-      client: fakeClient({ fileKey: "file_v3_abc", recordFile: calls }),
-      fileRef: { url: "https://x/q4.pdf", name: "Q4 Report.pdf" },
-    })
-  )
+  const key = await uploadFeishuFile({
+    client: fakeClient({ fileKey: "file_v3_abc", recordFile: calls }),
+    fileRef: { sha256: "pdfsha", name: "Q4 Report.pdf" },
+    readBytes: reads(bytes),
+  })
   assert.equal(key, "file_v3_abc")
   assert.equal(calls.length, 1)
   assert.equal(calls[0].data.file_type, "pdf")
@@ -157,72 +147,60 @@ test("uploadFeishuFile: requires url and passes file_name + derived file_type", 
 })
 
 test("uploadFeishuFile: throws when SDK returns no file_key", async () => {
-  await withFakeFetch(new Uint8Array([1, 2]), "application/pdf", async () => {
-    await assert.rejects(
-      uploadFeishuFile({
-        client: fakeClient({ fileKey: null }),
-        fileRef: { url: "https://x/p.pdf", name: "p.pdf" },
-      }),
-      /no file_key/
-    )
-  })
+  await assert.rejects(
+    uploadFeishuFile({
+      client: fakeClient({ fileKey: null }),
+      fileRef: { sha256: "s", name: "p.pdf" },
+      readBytes: reads(new Uint8Array([1, 2])),
+    }),
+    /no file_key/
+  )
 })
 
-function withFakeFetchHeaders<T>(
-  contentLength: number,
-  bodyBytes: Uint8Array,
-  fn: () => Promise<T>
-): Promise<T> {
-  const original = globalThis.fetch
-  globalThis.fetch = (async () => ({
-    ok: true,
-    headers: {
-      get: (k: string) =>
-        k.toLowerCase() === "content-length"
-          ? String(contentLength)
-          : "application/octet-stream",
-    },
-    body: new Response(bodyBytes).body,
-  })) as unknown as typeof fetch
-  return fn().finally(() => {
-    globalThis.fetch = original
-  })
-}
-
-test("uploadFeishuImage: rejects an image over the 10MB image cap", async () => {
-  // 11MB declared — over the image cap (10MB) but under the file cap (30MB).
-  await withFakeFetchHeaders(11 * 1024 * 1024, new Uint8Array([1, 2, 3]), () =>
-    assert.rejects(
-      uploadFeishuImage({
-        client: fakeClient({ imageKey: "img" }),
-        fileRef: { url: "https://x/big.png" },
-      }),
-      /exceeds 10485760 byte limit/
-    )
+test("uploadFeishuImage: rejects an image over the 10MB cap (declared sizeBytes, fail-fast)", async () => {
+  let read = false
+  await assert.rejects(
+    uploadFeishuImage({
+      client: fakeClient({ imageKey: "img" }),
+      // 11MB declared — over the image cap (10MB) but under the file cap (30MB).
+      fileRef: { sha256: "big", sizeBytes: 11 * 1024 * 1024 },
+      readBytes: async () => {
+        read = true
+        return Buffer.alloc(0)
+      },
+    }),
+    /exceeds 10485760 byte limit/
   )
+  assert.equal(read, false, "must fail fast on sizeBytes before reading bytes")
 })
 
 test("uploadFeishuFile: accepts the same 11MB declared size (30MB file cap)", async () => {
-  const key = await withFakeFetchHeaders(
-    11 * 1024 * 1024,
-    new Uint8Array([1, 2, 3]),
-    () =>
-      uploadFeishuFile({
-        client: fakeClient({ fileKey: "file_ok" }),
-        fileRef: { url: "https://x/big.bin", name: "big.bin" },
-      })
-  )
+  const key = await uploadFeishuFile({
+    client: fakeClient({ fileKey: "file_ok" }),
+    fileRef: { sha256: "big", name: "big.bin", sizeBytes: 11 * 1024 * 1024 },
+    readBytes: reads(new Uint8Array([1, 2, 3])),
+  })
   assert.equal(key, "file_ok")
 })
 
-test("uploadFeishuImage: empty download body is rejected", async () => {
-  await withFakeFetch(new Uint8Array(0), "image/png", async () => {
-    await assert.rejects(
-      uploadFeishuImage({
-        client: fakeClient({ imageKey: "img" }),
-        fileRef: { url: "https://x/p.png" },
-      }),
-      /is empty/
-    )
-  })
+test("uploadFeishuImage: rejects when the actual bytes exceed the cap", async () => {
+  await assert.rejects(
+    uploadFeishuImage({
+      client: fakeClient({ imageKey: "img" }),
+      fileRef: { sha256: "liar" }, // no declared size; actual bytes blow the cap
+      readBytes: async () => Buffer.alloc(10 * 1024 * 1024 + 1),
+    }),
+    /exceeds 10485760 byte limit/
+  )
+})
+
+test("uploadFeishuImage: empty body is rejected", async () => {
+  await assert.rejects(
+    uploadFeishuImage({
+      client: fakeClient({ imageKey: "img" }),
+      fileRef: { sha256: "empty" },
+      readBytes: reads(new Uint8Array(0)),
+    }),
+    /is empty/
+  )
 })

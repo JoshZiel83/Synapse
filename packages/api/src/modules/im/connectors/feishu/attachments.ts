@@ -4,16 +4,14 @@
  * V1 native attachment delivery via Lark's `im.image.create` and
  * `im.file.create`. The flow per attachment:
  *
- *   1. Resolve the source bytes — either fetch CanonicalFileRef.url or
- *      throw if the ref has no addressable source. (We don't yet talk
- *      to Synapse's internal file service; that integration lands when
- *      the chat layer surfaces local uploads as fileId.)
- *   2. Stream the response, aborting once the per-kind cap is exceeded
- *      (Feishu caps images at 10 MB and files at 30 MB) so a hostile or
- *      misdeclared Content-Length can't force an unbounded buffer.
- *   3. POST to im.image.create or im.file.create → `image_key` /
+ *   1. Read the source bytes from OUR content-addressed store by
+ *      `fileRef.sha256` (the unified handle — the connector owns the
+ *      third-party upload; nothing hands it a transient URL). Fail fast
+ *      on a declared `sizeBytes` over the per-kind cap, then verify the
+ *      actual byte length (Feishu caps images at 10 MB, files at 30 MB).
+ *   2. POST to im.image.create or im.file.create → `image_key` /
  *      `file_key`.
- *   4. Return the key so the caller can render a `msg_type: image|file`
+ *   3. Return the key so the caller can render a `msg_type: image|file`
  *      payload and send it via im.message.create / im.message.reply.
  *
  * Errors propagate (no silent fallback to placeholder text) so the
@@ -22,6 +20,7 @@
  */
 
 import type * as Lark from "@larksuiteoapi/node-sdk"
+import { readCasBlob } from "../../../../infrastructure/storage/index.js"
 import type { CanonicalFileRef } from "../../messaging/canonical-message.js"
 
 // Feishu enforces different ceilings per kind: images ≤ 10 MB, files ≤ 30 MB.
@@ -32,56 +31,39 @@ const MAX_FILE_BYTES = 30 * 1024 * 1024 // Feishu im.file.create cap
 // Feishu caps message-resource downloads at 100 MB (im-v1/message-resource/get).
 const MAX_RESOURCE_BYTES = 100 * 1024 * 1024
 
-async function downloadToBuffer(
-  url: string,
-  maxBytes: number
-): Promise<{ buffer: Buffer; mime?: string }> {
-  const res = await fetch(url)
-  if (!res.ok) {
-    throw new Error(`Failed to download attachment ${url}: HTTP ${res.status}`)
-  }
-  // Content-Length is only an early-exit hint — it is absent under chunked
-  // Transfer-Encoding and can be understated by a hostile server. The
-  // streaming byte count below is the authoritative guard, and it aborts the
-  // download instead of buffering an unbounded body fully into memory.
-  const declared = Number(res.headers.get("content-length") || "0")
-  if (declared > maxBytes) {
-    throw new Error(
-      `Attachment ${url} exceeds ${maxBytes} byte limit (content-length ${declared})`
-    )
-  }
-  const mime = res.headers.get("content-type") || undefined
-  if (!res.body) {
-    throw new Error(`Attachment ${url} is empty`)
-  }
-  const reader = res.body.getReader()
-  const chunks: Uint8Array[] = []
-  let total = 0
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    if (!value) continue
-    total += value.length
-    if (total > maxBytes) {
-      await reader.cancel().catch(() => undefined)
-      throw new Error(`Attachment ${url} exceeds ${maxBytes} byte limit`)
-    }
-    chunks.push(value)
-  }
-  if (total === 0) {
-    throw new Error(`Attachment ${url} is empty`)
-  }
-  return { buffer: Buffer.concat(chunks.map((c) => Buffer.from(c))), mime }
-}
+/** Bytes reader for outbound media; defaults to our content-addressed store. */
+export type MediaBytesReader = (sha256: string) => Promise<Buffer>
 
-function requireUrl(fileRef: CanonicalFileRef, kind: "image" | "file"): string {
-  const url = fileRef.url?.trim()
-  if (!url) {
+/**
+ * Read the bytes for an outbound media part from our CAS by `sha256` and
+ * enforce the per-kind size cap. Fails fast on a declared oversize before
+ * touching the bytes, then verifies the actual length.
+ */
+async function resolveMediaBytes(
+  fileRef: CanonicalFileRef,
+  kind: "image" | "file",
+  maxBytes: number,
+  readBytes: MediaBytesReader
+): Promise<Buffer> {
+  const sha256 = fileRef.sha256?.trim()
+  if (!sha256) {
     throw new Error(
-      `Feishu ${kind} part requires a CanonicalFileRef.url; got fileRef=${JSON.stringify(fileRef)}`
+      `Feishu ${kind} part requires a CanonicalFileRef.sha256; got fileRef=${JSON.stringify(fileRef)}`
     )
   }
-  return url
+  if (fileRef.sizeBytes != null && fileRef.sizeBytes > maxBytes) {
+    throw new Error(
+      `Feishu ${kind} exceeds ${maxBytes} byte limit (sizeBytes ${fileRef.sizeBytes})`
+    )
+  }
+  const buffer = await readBytes(sha256)
+  if (buffer.length === 0) {
+    throw new Error(`Feishu ${kind} resource ${sha256} is empty`)
+  }
+  if (buffer.length > maxBytes) {
+    throw new Error(`Feishu ${kind} exceeds ${maxBytes} byte limit`)
+  }
+  return buffer
 }
 
 /**
@@ -91,9 +73,15 @@ function requireUrl(fileRef: CanonicalFileRef, kind: "image" | "file"): string {
 export async function uploadFeishuImage(input: {
   client: Lark.Client
   fileRef: CanonicalFileRef
+  /** Test seam — defaults to reading our CAS by sha256. */
+  readBytes?: MediaBytesReader
 }): Promise<string> {
-  const url = requireUrl(input.fileRef, "image")
-  const { buffer } = await downloadToBuffer(url, MAX_IMAGE_BYTES)
+  const buffer = await resolveMediaBytes(
+    input.fileRef,
+    "image",
+    MAX_IMAGE_BYTES,
+    input.readBytes ?? readCasBlob
+  )
   const resp = (await input.client.im.image.create({
     data: {
       image_type: "message",
@@ -102,7 +90,9 @@ export async function uploadFeishuImage(input: {
   })) as { image_key?: string } | null
   const key = resp?.image_key
   if (!key) {
-    throw new Error(`Feishu im.image.create returned no image_key for ${url}`)
+    throw new Error(
+      `Feishu im.image.create returned no image_key for sha256=${input.fileRef.sha256}`
+    )
   }
   return key
 }
@@ -114,7 +104,7 @@ export async function uploadFeishuImage(input: {
 export function feishuFileTypeFor(
   fileRef: CanonicalFileRef
 ): "opus" | "mp4" | "pdf" | "doc" | "xls" | "ppt" | "stream" {
-  const mime = (fileRef.mime || "").toLowerCase()
+  const mime = (fileRef.mimeType || "").toLowerCase()
   const name = (fileRef.name || "").toLowerCase()
 
   if (mime.includes("pdf") || name.endsWith(".pdf")) return "pdf"
@@ -155,9 +145,15 @@ export function feishuFileTypeFor(
 export async function uploadFeishuFile(input: {
   client: Lark.Client
   fileRef: CanonicalFileRef & { name: string }
+  /** Test seam — defaults to reading our CAS by sha256. */
+  readBytes?: MediaBytesReader
 }): Promise<string> {
-  const url = requireUrl(input.fileRef, "file")
-  const { buffer } = await downloadToBuffer(url, MAX_FILE_BYTES)
+  const buffer = await resolveMediaBytes(
+    input.fileRef,
+    "file",
+    MAX_FILE_BYTES,
+    input.readBytes ?? readCasBlob
+  )
   const resp = (await input.client.im.file.create({
     data: {
       file_type: feishuFileTypeFor(input.fileRef),
@@ -167,7 +163,9 @@ export async function uploadFeishuFile(input: {
   })) as { file_key?: string } | null
   const key = resp?.file_key
   if (!key) {
-    throw new Error(`Feishu im.file.create returned no file_key for ${url}`)
+    throw new Error(
+      `Feishu im.file.create returned no file_key for sha256=${input.fileRef.sha256}`
+    )
   }
   return key
 }
