@@ -10,6 +10,7 @@ import {
   signOperationEnvelope,
   type OperationEnvelope,
 } from "@synapse/device-protocol"
+import { assertIsoInstantString } from "@synapse/device-protocol/instant"
 
 import { createInMemoryMcpHost } from "./mcp-host.js"
 import { createInMemoryEnvelopeVerifier, hashArguments } from "./envelope.js"
@@ -58,8 +59,10 @@ function makeEnvelope(
         grant_scope: "actor",
         grant_specs: grantSpecs,
       },
-      issued_at: new Date().toISOString(),
-      expires_at: new Date(Date.now() + 60_000).toISOString(),
+      issued_at: assertIsoInstantString(new Date().toISOString()),
+      expires_at: assertIsoInstantString(
+        new Date(Date.now() + 60_000).toISOString()
+      ),
       signature_kid: signer.kid,
     },
     signer.privPem
@@ -391,8 +394,12 @@ test("expired envelope is rejected with expired_envelope", async () => {
             },
           ],
         },
-        issued_at: new Date(Date.now() - 120_000).toISOString(),
-        expires_at: new Date(Date.now() - 60_000).toISOString(),
+        issued_at: assertIsoInstantString(
+          new Date(Date.now() - 120_000).toISOString()
+        ),
+        expires_at: assertIsoInstantString(
+          new Date(Date.now() - 60_000).toISOString()
+        ),
         signature_kid: signer.kid,
       },
       signer.privPem

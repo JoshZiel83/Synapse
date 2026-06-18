@@ -14,6 +14,10 @@ import {
   type ChatConversationItem,
   type ChatParticipantSummary,
 } from "@synapse/shared"
+import {
+  assertIsoInstantString,
+  dateToOptionalIsoInstant,
+} from "@synapse/shared/datetime"
 import type { Executor } from "../../infrastructure/database/kysely.js"
 import type {
   ChatConversationBaseRow,
@@ -124,8 +128,8 @@ function participantSummary(row: ChatParticipantRow): ChatParticipantSummary {
     roleKey: row.roleKey,
     state: row.state,
     metadata: row.metadata,
-    joinedAt: "2026-06-16T00:00:00.000Z",
-    leftAt: row.leftAt?.toISOString(),
+    joinedAt: assertIsoInstantString("2026-06-16T00:00:00.000Z"),
+    leftAt: dateToOptionalIsoInstant(row.leftAt),
     sessionId: row.sessionId ?? undefined,
     sessionStatus: row.sessionStatus ?? undefined,
   }

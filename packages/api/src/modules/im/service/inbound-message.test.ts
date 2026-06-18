@@ -5,6 +5,7 @@ import type {
   TransportAccountSummary,
   TransportMessageLink,
 } from "@synapse/shared/types"
+import { assertIsoInstantString } from "@synapse/shared/datetime"
 import type { DatabaseTransaction } from "../../../infrastructure/database/kysely.js"
 import { buildCanonicalMessage } from "../messaging/canonical-message.js"
 import {
@@ -74,7 +75,7 @@ function inboundEnvelopeFixture() {
       displayName: "External User",
       metadata: { department: "R&D" },
     },
-    receivedAt: "2026-06-16T00:00:01.000Z",
+    receivedAt: assertIsoInstantString("2026-06-16T00:00:01.000Z"),
     message: buildCanonicalMessage([{ type: "text", text: "hello" }]),
     endpointMetadata: { topic: "support" },
     raw: {

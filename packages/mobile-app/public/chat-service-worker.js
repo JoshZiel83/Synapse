@@ -303,8 +303,10 @@
     return typeof value === "string" && UUID_PATTERN.test(value);
   }
 
-  // ../shared/dist/datetime/instant.js
+  // ../device-protocol/dist/instant.js
   var ISO_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+  var MIN_PLAUSIBLE_EPOCH_MS = Date.UTC(2e3, 0, 1);
+  var MAX_PLAUSIBLE_EPOCH_MS = Date.UTC(2200, 0, 1);
   function isValidDateInstance(value) {
     return Object.prototype.toString.call(value) === "[object Date]" && !Number.isNaN(value.getTime());
   }
@@ -556,6 +558,9 @@
     FEISHU_DOCS_DOWNLOAD_MEDIA: "feishu_docs_download_media",
     FEISHU_DRIVE_DOWNLOAD_FILE: "feishu_drive_download_file",
     QQ_INBOUND_MEDIA_INGEST: "qq_inbound_media_ingest",
+    FEISHU_INBOUND_MEDIA_INGEST: "feishu_inbound_media_ingest",
+    WEIXIN_INBOUND_MEDIA_INGEST: "weixin_inbound_media_ingest",
+    DINGTALK_INBOUND_MEDIA_INGEST: "dingtalk_inbound_media_ingest",
     SKILL_MIRROR_IMPORT: "skill_mirror_import",
     GENERATED_USER_AVATAR: "generated_user_avatar",
     GENERATED_OFFICIAL_ACTOR_AVATAR: "generated_official_actor_avatar",
@@ -586,7 +591,10 @@
   var EXTERNAL_IMPORT_FILE_ORIGIN_SYSTEMS = [
     FILE_ORIGIN_SYSTEMS.FEISHU_DOCS_DOWNLOAD_MEDIA,
     FILE_ORIGIN_SYSTEMS.FEISHU_DRIVE_DOWNLOAD_FILE,
-    FILE_ORIGIN_SYSTEMS.QQ_INBOUND_MEDIA_INGEST
+    FILE_ORIGIN_SYSTEMS.QQ_INBOUND_MEDIA_INGEST,
+    FILE_ORIGIN_SYSTEMS.FEISHU_INBOUND_MEDIA_INGEST,
+    FILE_ORIGIN_SYSTEMS.WEIXIN_INBOUND_MEDIA_INGEST,
+    FILE_ORIGIN_SYSTEMS.DINGTALK_INBOUND_MEDIA_INGEST
   ];
   var PACKAGE_IMPORT_FILE_ORIGIN_SYSTEMS = [
     FILE_ORIGIN_SYSTEMS.SKILL_MIRROR_IMPORT
@@ -1037,6 +1045,8 @@
   var WEIXIN_QR_LOGIN_STATUS = {
     WAITING: "waiting",
     SCANNED: "scanned",
+    // The phone shows a numeric pairing code the user must type back to continue.
+    NEED_VERIFYCODE: "need_verifycode",
     CONFIRMED: "confirmed",
     EXPIRED: "expired",
     ERROR: "error"
@@ -1044,6 +1054,7 @@
   var WEIXIN_QR_LOGIN_STATUSES = [
     WEIXIN_QR_LOGIN_STATUS.WAITING,
     WEIXIN_QR_LOGIN_STATUS.SCANNED,
+    WEIXIN_QR_LOGIN_STATUS.NEED_VERIFYCODE,
     WEIXIN_QR_LOGIN_STATUS.CONFIRMED,
     WEIXIN_QR_LOGIN_STATUS.EXPIRED,
     WEIXIN_QR_LOGIN_STATUS.ERROR

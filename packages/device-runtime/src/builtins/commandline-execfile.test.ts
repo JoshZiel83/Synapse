@@ -25,6 +25,7 @@ import type {
   OperationEnvelope,
   RuntimeAuthorizationGrantWireSpec,
 } from "@synapse/device-protocol"
+import { assertIsoInstantString } from "@synapse/device-protocol/instant"
 
 const HERE = new URL(".", import.meta.url).pathname
 const FIXTURE_MANIFEST = join(
@@ -58,8 +59,10 @@ function fakeEnvelope(
       grant_scope: "actor",
       grant_specs: grantSpecs,
     },
-    issued_at: new Date().toISOString(),
-    expires_at: new Date(Date.now() + 60_000).toISOString(),
+    issued_at: assertIsoInstantString(new Date().toISOString()),
+    expires_at: assertIsoInstantString(
+      new Date(Date.now() + 60_000).toISOString()
+    ),
     signature_kid: "test-kid",
     signature: "test-sig",
   }

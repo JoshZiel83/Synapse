@@ -20,6 +20,7 @@ import {
   CUA_WRITE_TOOLS,
   type OperationEnvelope,
 } from "@synapse/device-protocol"
+import { assertIsoInstantString } from "@synapse/device-protocol/instant"
 import { createCuaBuiltin, TOOL_META } from "./cua.js"
 import type { SidecarHandle, SidecarOptions } from "../sidecar.js"
 
@@ -88,8 +89,10 @@ function makeEnvelope(
       grant_scope: "conversation",
       grant_specs: [{ capability: "cua", cua: { access: "write" } }],
     },
-    issued_at: new Date().toISOString(),
-    expires_at: new Date(Date.now() + 60_000).toISOString(),
+    issued_at: assertIsoInstantString(new Date().toISOString()),
+    expires_at: assertIsoInstantString(
+      new Date(Date.now() + 60_000).toISOString()
+    ),
     signature_kid: "test",
     signature: "test-signature",
     cua_focus_scope_id: "session:my-session-id",

@@ -8,6 +8,7 @@ import {
   createFilesystemBuiltin,
   type FilesystemBuiltinOptions,
 } from "./filesystem.js"
+import { assertIsoInstantString } from "@synapse/device-protocol/instant"
 import type { FsHelperClient } from "./fs-helper-client.js"
 import type {
   HistoryGetResult,
@@ -1160,8 +1161,8 @@ test("fs_index_task_status returns the task when grant covers its subtree", asyn
       task_id,
       subtree: "/allowed",
       status: "completed" as const,
-      started_at: "2026-01-01T00:00:00.000Z",
-      finished_at: "2026-01-01T00:00:05.000Z",
+      started_at: assertIsoInstantString("2026-01-01T00:00:00.000Z"),
+      finished_at: assertIsoInstantString("2026-01-01T00:00:05.000Z"),
       error: null,
     })
     const r = await builtin.invokeTool!({
@@ -1185,8 +1186,8 @@ test("fs_index_task_status denies with same error as not_found (no side channel)
       task_id,
       subtree: "/secret",
       status: "completed" as const,
-      started_at: "2026-01-01T00:00:00.000Z",
-      finished_at: "2026-01-01T00:00:05.000Z",
+      started_at: assertIsoInstantString("2026-01-01T00:00:00.000Z"),
+      finished_at: assertIsoInstantString("2026-01-01T00:00:05.000Z"),
       error: null,
     })
     const r = await builtin.invokeTool!({

@@ -5,6 +5,7 @@ import {
   CONVERSATION_MESSAGE_SUBTYPE,
   CONVERSATION_PARTICIPANT_TYPE,
 } from "@synapse/shared"
+import { assertIsoInstantString } from "@synapse/shared/datetime"
 import type {
   ConversationEntityRef,
   ConversationFeedEventItem,
@@ -34,7 +35,7 @@ function message(
     content: "hello",
     contentBlocks: [{ id: randomUUID(), type: "text", text: "hello" }],
     metadata: {},
-    createdAt: "2026-06-16T00:00:00.000Z",
+    createdAt: assertIsoInstantString("2026-06-16T00:00:00.000Z"),
     ...values,
   }
 }

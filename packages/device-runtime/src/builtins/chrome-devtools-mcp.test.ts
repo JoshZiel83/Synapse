@@ -14,6 +14,7 @@ import type {
   BrowserOperation,
   OperationEnvelope,
 } from "@synapse/device-protocol"
+import { assertIsoInstantString } from "@synapse/device-protocol/instant"
 import { generateKeyPairSync } from "node:crypto"
 
 // ────────────────────────────── helpers ─────────────────────────────────────
@@ -99,8 +100,10 @@ function envWithGrants(
           browser: g,
         })),
       },
-      issued_at: new Date().toISOString(),
-      expires_at: new Date(Date.now() + 60_000).toISOString(),
+      issued_at: assertIsoInstantString(new Date().toISOString()),
+      expires_at: assertIsoInstantString(
+        new Date(Date.now() + 60_000).toISOString()
+      ),
       signature_kid: "test-kid",
     },
     pem

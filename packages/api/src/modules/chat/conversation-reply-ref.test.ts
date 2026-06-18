@@ -13,6 +13,7 @@ import {
   CONVERSATION_PARTICIPANT_TYPE,
   CONVERSATION_REPLY_REF_SPECIAL_SUBTYPE,
 } from "@synapse/shared"
+import { dateToIsoInstant } from "@synapse/shared/datetime"
 import type { HydratedConversationItemRecord } from "./conversation-item-hydration.js"
 import {
   buildConversationReplyRefs,
@@ -112,7 +113,7 @@ function hydratedItem(
     contentBlocks: [{ id: randomUUID(), type: "text", text: "Reply text" }],
     metadata: row.metadata,
     restrictedAudienceParticipantIds: [],
-    createdAt: row.createdAt.toISOString(),
+    createdAt: dateToIsoInstant(row.createdAt),
     ...values,
   }
 }

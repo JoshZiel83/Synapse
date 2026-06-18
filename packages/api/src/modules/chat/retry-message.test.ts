@@ -4,6 +4,7 @@ import {
   CONVERSATION_MESSAGE_SUBTYPE,
   CONVERSATION_PARTICIPANT_TYPE,
 } from "@synapse/shared"
+import { assertIsoInstantString } from "@synapse/shared/datetime"
 import type { ConversationFeedItem } from "@synapse/shared/types"
 import type { EnqueueSessionWakeupParams } from "../session/runtime.js"
 import { isChatServiceError } from "./errors.js"
@@ -39,7 +40,7 @@ function retryableItem(
     },
     content: "",
     contentBlocks: [],
-    createdAt: "2026-06-15T00:00:00.000Z",
+    createdAt: assertIsoInstantString("2026-06-15T00:00:00.000Z"),
     ...values,
   } satisfies ConversationFeedMessageItem
 }

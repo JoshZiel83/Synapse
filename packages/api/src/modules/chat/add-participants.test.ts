@@ -8,6 +8,7 @@ import {
   SUBJECT_KIND,
   type ChatParticipantSummary,
 } from "@synapse/shared"
+import { assertIsoInstantString } from "@synapse/shared/datetime"
 import type { Kysely } from "kysely"
 import { withTestDb, withTestDbAndClient } from "../../test/helpers/db.js"
 import { upsertAccessSubjectOn } from "../access/subject-registry.js"
@@ -189,7 +190,7 @@ test("addConversationParticipantsUseCase re-adds removed member and emits active
       roleKey: "member",
       state: CONVERSATION_PARTICIPANT_STATE.ACTIVE,
       metadata: {},
-      joinedAt: "2026-06-15T00:00:00.000Z",
+      joinedAt: assertIsoInstantString("2026-06-15T00:00:00.000Z"),
     }
 
     await addConversationParticipantsUseCase(

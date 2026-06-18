@@ -473,8 +473,10 @@
     return next;
   }
 
-  // ../shared/dist/datetime/instant.js
+  // ../device-protocol/dist/instant.js
   var ISO_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+  var MIN_PLAUSIBLE_EPOCH_MS = Date.UTC(2e3, 0, 1);
+  var MAX_PLAUSIBLE_EPOCH_MS = Date.UTC(2200, 0, 1);
   function isValidDateInstance(value) {
     return Object.prototype.toString.call(value) === "[object Date]" && !Number.isNaN(value.getTime());
   }

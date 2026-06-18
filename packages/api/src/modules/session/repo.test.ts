@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import { assertIsoInstantString } from "@synapse/shared/datetime"
 import {
   decodeSessionCollaborationState,
   normalizeRuntimeToolCallRow,
@@ -78,7 +79,7 @@ test("session collaboration patch serializes typed state at repo write boundary"
           summary: "Plan",
           checklist: [{ step: "Review", status: "pending" }],
           explanation: "Need review",
-          enteredAt: "2026-06-17T00:00:00.000Z",
+          enteredAt: assertIsoInstantString("2026-06-17T00:00:00.000Z"),
         },
       },
       activePlanApprovalTaskId: null,

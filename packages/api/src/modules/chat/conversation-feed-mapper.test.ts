@@ -13,6 +13,7 @@ import {
   CONVERSATION_PARTICIPANT_TYPE,
   TRANSPORT_KINDS,
 } from "@synapse/shared"
+import { assertIsoInstantString } from "@synapse/shared/datetime"
 import type { ConversationMessageTransportDelivery } from "@synapse/shared/types"
 import type {
   ConversationEventItemDetail,
@@ -21,7 +22,7 @@ import type {
 import type { ChatParticipantRow } from "./repo.js"
 import { conversationItemDetailToFeedItem } from "./conversation-feed-mapper.js"
 
-const CREATED_AT = "2026-06-16T00:00:00.000Z"
+const CREATED_AT = assertIsoInstantString("2026-06-16T00:00:00.000Z")
 const TRANSPORT_KIND = TRANSPORT_KINDS[0]
 
 function participant(

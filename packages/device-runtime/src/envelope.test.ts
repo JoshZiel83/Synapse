@@ -8,6 +8,7 @@ import {
   hashArguments,
 } from "./envelope.js"
 import type { OperationEnvelope } from "@synapse/device-protocol"
+import { assertIsoInstantString } from "@synapse/device-protocol/instant"
 
 function makeKeys() {
   const { publicKey, privateKey } = generateKeyPairSync("rsa", {
@@ -40,8 +41,8 @@ const baseEnvelope: Omit<OperationEnvelope, "signature"> = {
   device_tool_revision_id: "77777777-7777-4777-8777-777777777777",
   input_hash: hashArguments({ foo: "bar" }),
   task_mode: "sync",
-  issued_at: "2026-05-25T00:00:00.000Z",
-  expires_at: "9999-12-31T00:00:00.000Z",
+  issued_at: assertIsoInstantString("2026-05-25T00:00:00.000Z"),
+  expires_at: assertIsoInstantString("9999-12-31T00:00:00.000Z"),
   signature_kid: "test-kid",
 }
 
@@ -87,7 +88,7 @@ test("envelope verifier rejects expired envelope", async () => {
   const expired = {
     ...baseEnvelope,
     attempt_id: "88888888-8888-4888-8888-888888888888",
-    expires_at: "2020-01-01T00:00:00.000Z",
+    expires_at: assertIsoInstantString("2020-01-01T00:00:00.000Z"),
   }
   const signature = signEnvelope(expired, privatePem)
   const envelope: OperationEnvelope = { ...expired, signature }
