@@ -4,12 +4,20 @@ import { insertMiddlewareAuditLog } from "./repo.js"
 
 const log = createLogger("audit")
 
+// High-volume, unauthenticated telemetry-ingest endpoints that must NOT write an
+// audit row per request — otherwise a browser-report flood (POST /api/v1/reports
+// is unauthenticated by design) amplifies into unbounded audit-table writes.
+const AUDIT_EXCLUDED_PATHS: ReadonlySet<string> = new Set(["/api/v1/reports"])
+
 export function auditMiddleware(app: FastifyInstance) {
   app.addHook(
     "onResponse",
     async (request: FastifyRequest, reply: FastifyReply) => {
       // Only audit mutating requests
       if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return
+
+      // Skip telemetry-ingest endpoints (strip any query string first).
+      if (AUDIT_EXCLUDED_PATHS.has(request.url.split("?")[0])) return
 
       const action = deriveAction(request.method, request.url)
       if (!action) return

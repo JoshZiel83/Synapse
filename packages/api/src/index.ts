@@ -34,6 +34,7 @@ import {
   shutdownEventBus,
 } from "./infrastructure/events/index.js"
 import { auditMiddleware } from "./infrastructure/middleware/audit.js"
+import serverTiming from "./infrastructure/observability/server-timing.js"
 import { beginShutdown } from "./infrastructure/shutdown/state.js"
 import { withTimeout } from "./infrastructure/async/index.js"
 import { ensureStorageDir } from "./infrastructure/storage/index.js"
@@ -64,6 +65,7 @@ import auditModule from "./modules/audit/index.js"
 import imModule from "./modules/im/index.js"
 import installerModule from "./modules/installer/index.js"
 import logsModule from "./modules/logs/index.js"
+import reportsModule from "./modules/reports/index.js"
 import {
   startTransportRuntimeManager,
   stopTransportRuntimeManager,
@@ -234,6 +236,9 @@ async function main() {
   // Ensure storage directory exists
   await ensureStorageDir()
 
+  // Server-Timing response header (per-request timing + gated trace_id -> RUM).
+  await app.register(serverTiming)
+
   // Audit middleware
   auditMiddleware(app)
 
@@ -281,6 +286,7 @@ async function main() {
   await app.register(runtimeAuthorizationsModule)
   await app.register(modelGroupsModule)
   await app.register(logsModule)
+  await app.register(reportsModule)
   await app.register(platformModule)
   await app.register(auditModule)
   await app.register(imModule)

@@ -52,6 +52,25 @@ server {
     add_header Strict-Transport-Security "max-age=31536000" always;
     add_header Alt-Svc 'h3=":443"; ma=86400' always;
 
+    # --- Browser auto-reporting (W3C Reporting API + NEL) -> POST /api/v1/reports
+    # Same-origin endpoint (proxied below under /api/), so no CORS preflight is
+    # needed. NEL still requires the v0 Report-To group today; Reporting-Endpoints
+    # (v1) routes crash/deprecation/intervention to the "default" group.
+    # success_fraction is tiny to bound volume; HTTPS-only; Chromium-only in
+    # practice. See docs/logging-refactor/06-...md §2.
+    # IMPORTANT (add_header inheritance footgun): every location in this block is
+    # currently add_header-free, so these server-level headers are inherited into
+    # all responses. If any location here later adds its own add_header (e.g. a
+    # serve-stale `Cache-Status`), you MUST add `add_header_inherit merge;`
+    # (nginx >= 1.29.3) at server/http level — otherwise nginx silently DROPS all
+    # inherited add_header on that location and these policy headers vanish there.
+    # CSP reporting is intentionally NOT enabled yet (needs a policy baseline);
+    # the routing above is ready for Content-Security-Policy-Report-Only with
+    # `report-to default; report-uri /api/v1/reports` once the team defines it.
+    add_header Reporting-Endpoints 'default="/api/v1/reports"' always;
+    add_header Report-To '{"group":"nel","max_age":31556952,"endpoints":[{"url":"/api/v1/reports"}]}' always;
+    add_header NEL '{"report_to":"nel","max_age":2592000,"success_fraction":0.01,"failure_fraction":1.0}' always;
+
     client_max_body_size 25m;
 
     proxy_http_version 1.1;
@@ -134,6 +153,25 @@ server {
 
     add_header Strict-Transport-Security "max-age=31536000" always;
     add_header Alt-Svc 'h3=":443"; ma=86400' always;
+
+    # --- Browser auto-reporting (W3C Reporting API + NEL) -> POST /api/v1/reports
+    # Same-origin endpoint (proxied below under /api/), so no CORS preflight is
+    # needed. NEL still requires the v0 Report-To group today; Reporting-Endpoints
+    # (v1) routes crash/deprecation/intervention to the "default" group.
+    # success_fraction is tiny to bound volume; HTTPS-only; Chromium-only in
+    # practice. See docs/logging-refactor/06-...md §2.
+    # IMPORTANT (add_header inheritance footgun): every location in this block is
+    # currently add_header-free, so these server-level headers are inherited into
+    # all responses. If any location here later adds its own add_header (e.g. a
+    # serve-stale `Cache-Status`), you MUST add `add_header_inherit merge;`
+    # (nginx >= 1.29.3) at server/http level — otherwise nginx silently DROPS all
+    # inherited add_header on that location and these policy headers vanish there.
+    # CSP reporting is intentionally NOT enabled yet (needs a policy baseline);
+    # the routing above is ready for Content-Security-Policy-Report-Only with
+    # `report-to default; report-uri /api/v1/reports` once the team defines it.
+    add_header Reporting-Endpoints 'default="/api/v1/reports"' always;
+    add_header Report-To '{"group":"nel","max_age":31556952,"endpoints":[{"url":"/api/v1/reports"}]}' always;
+    add_header NEL '{"report_to":"nel","max_age":2592000,"success_fraction":0.01,"failure_fraction":1.0}' always;
 
     client_max_body_size 25m;
 
