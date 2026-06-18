@@ -126,6 +126,8 @@ function log(
   // can't clobber level/service/scope/msg/traceparent.
   const record: Record<string, unknown> = {
     ...(meta ?? {}),
+    // datetime-ok: structured-log timestamp. The daemon intentionally keeps NO
+    // device-protocol runtime dependency, so it cannot use the canonical helper.
     time: new Date().toISOString(),
     level,
     service: "remote-agent-daemon",
