@@ -22,13 +22,15 @@ import {
   GrantPolicySchema,
 } from "../access/policies/index.js"
 import { CanonicalContentBlockSchema } from "./chat-content-block.js"
+import { IsoInstantStringSchema } from "./datetime.js"
 import type {
   RuntimeAuthorizationGrantOption,
   RuntimeAuthorizationPreset,
   RuntimeAuthorizationRequestedAction,
 } from "../types/index.js"
 
-const timestampSchema = z.string()
+// Canonical wire-instant schema (single source of truth — C1): validates + brands.
+const timestampSchema = IsoInstantStringSchema
 
 const ConversationEntityRefSchema = z.object({
   participantId: z.string().optional(),

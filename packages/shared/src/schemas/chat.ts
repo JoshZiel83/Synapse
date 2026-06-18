@@ -36,6 +36,7 @@ import {
   TRANSPORT_KINDS,
 } from "../constants/enums.js"
 import { CanonicalContentBlockSchema } from "./chat-content-block.js"
+import { IsoInstantStringSchema } from "./datetime.js"
 import { RemoteAgentRuntimeCapabilityViewSchema } from "./remote-agents.js"
 import {
   SubjectRefSchema,
@@ -62,7 +63,10 @@ import type {
  * below because web/mobile consume them as stable shared views.
  */
 
-const timestampSchema = z.string()
+// Canonical wire-instant schema (single source of truth — C1). Validates the
+// `…mmmZ` shape and brands the output so these DTO schemas stay branded end to
+// end, matching the `Timestamp` (= IsoInstantString) field types they feed.
+const timestampSchema = IsoInstantStringSchema
 
 export const ChatSocketClientMessageSchema = z.discriminatedUnion("type", [
   z.object({

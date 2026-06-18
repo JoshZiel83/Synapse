@@ -67,6 +67,9 @@ export function formatChatTimestamp(
   }
 
   // style === "relative"
+  // datetime-ok: display-layer "now" reference for relative formatting
+  // ("3m"/"5h"); injectable for tests. Not a wire instant or a value-masking
+  // fallback.
   const now = options.now ?? Date.now()
   const diffMs = now - date.getTime()
   const minutes = Math.floor(diffMs / 60_000)
