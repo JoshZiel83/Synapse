@@ -49,7 +49,11 @@ function clampStr(v: unknown): string | undefined {
 function capBody(body: unknown): Record<string, unknown> {
   if (!isRecord(body)) return {}
   try {
-    if (JSON.stringify(body).length > MAX_BODY_BYTES) return { truncated: true }
+    // Measure UTF-8 bytes (String.length is UTF-16 code units — up to ~3x off
+    // for CJK/emoji, which would let one report's Loki line blow past the cap).
+    if (Buffer.byteLength(JSON.stringify(body), "utf8") > MAX_BODY_BYTES) {
+      return { truncated: true }
+    }
   } catch {
     return { unserializable: true }
   }
@@ -69,7 +73,12 @@ export function parseReportsJson(parsed: unknown): NormalizedReport[] {
     if (typeof type !== "string" || !TYPE_SET.has(type)) continue
     out.push({
       reportType: type as ReportType,
-      age: typeof item.age === "number" ? item.age : undefined,
+      // Reject NaN/Infinity/negative (spec: age is a non-negative ms delta);
+      // a rejected age becomes undefined and pino omits it.
+      age:
+        Number.isFinite(item.age) && (item.age as number) >= 0
+          ? (item.age as number)
+          : undefined,
       url: clampStr(item.url),
       // Reporting API field is `user_agent` (snake_case), not `userAgent`.
       userAgent: clampStr(item.user_agent),

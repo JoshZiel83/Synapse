@@ -221,15 +221,19 @@ async function main() {
   await app.register(websocket)
   await app.register(multipart, { limits: { fileSize: 25 * 1024 * 1024 } })
   // Opt-in per-route rate limiting: global:false means a route enables it via
-  // its config.rateLimit (used by POST /api/v1/logs). Key by the real client IP
-  // from X-Forwarded-For (the api runs behind nginx + the Next proxy, so req.ip
-  // is the proxy container — without this every client would share one bucket).
+  // its config.rateLimit (POST /api/v1/logs, /api/v1/reports). Key by the
+  // nginx-set X-Real-IP — NOT the leftmost X-Forwarded-For token, which is
+  // client-spoofable (nginx APPENDS its peer to the right of any client XFF, so
+  // the left token is attacker-controlled and an unauthenticated endpoint like
+  // /api/v1/reports could rotate it to evade the cap). nginx sets X-Real-IP to
+  // $remote_addr and proxies /api/ straight to the api, so it is the true client
+  // IP here; fall back to req.ip if the header is absent (direct in-network hit).
   await app.register(rateLimit, {
     global: false,
     keyGenerator: (req) => {
-      const xff = req.headers["x-forwarded-for"]
-      const first = Array.isArray(xff) ? xff[0] : xff
-      return first?.split(",")[0]?.trim() || req.ip
+      const realIp = req.headers["x-real-ip"]
+      const real = Array.isArray(realIp) ? realIp[0] : realIp
+      return real?.trim() || req.ip
     },
   })
 

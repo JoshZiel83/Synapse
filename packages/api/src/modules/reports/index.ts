@@ -79,10 +79,11 @@ export default async function reportsModule(app: FastifyInstance) {
     {
       bodyLimit: BODY_LIMIT,
       // Unauthenticated + attacker-controllable -> coarse per-IP cap. v1 sends
-      // more (smaller) requests than v0, so the cap is generous but bounded.
-      // NOTE: the key is the shared X-Forwarded-For-first keyGenerator (index.ts)
-      // which is spoofable without trustProxy — see §7 of the plan; this is
-      // defense-in-depth alongside the body/count caps, not a hard guarantee.
+      // more (smaller) requests than v0, so the cap is generous but bounded. The
+      // shared keyGenerator (index.ts) keys on the nginx-set X-Real-IP (not the
+      // spoofable leftmost X-Forwarded-For), so the cap actually holds per client
+      // here. Per-instance (in-memory store) — see §7 of the plan for the
+      // shared-store follow-up.
       config: { rateLimit: { max: 240, timeWindow: "1 minute" } },
     },
     async (request: FastifyRequest, reply) => {
@@ -97,12 +98,10 @@ export default async function reportsModule(app: FastifyInstance) {
       } else if (contentType === CT_REPORTS) {
         reports = parseReportsJson(request.body)
       } else {
-        return reply
-          .status(415)
-          .send({
-            error: "unsupported_media_type",
-            code: "unsupported_media_type",
-          })
+        return reply.status(415).send({
+          error: "unsupported_media_type",
+          code: "unsupported_media_type",
+        })
       }
 
       for (const r of reports) {
