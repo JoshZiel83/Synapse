@@ -1,6 +1,5 @@
 "use client"
 
-import { dateToIsoInstant } from "@synapse/shared/datetime"
 import type { InviteTrustLevel, WorkspaceInviteView } from "@synapse/shared"
 import { useEffect, useState, useCallback } from "react"
 import { useWorkspace } from "../workspace-provider"
@@ -59,11 +58,11 @@ export default function InviteManagement() {
       const data: Parameters<typeof api.createInvite>[1] = { trustLevel }
       if (maxUses) data.maxUses = parseInt(maxUses, 10)
       if (expiresIn) {
+        // Send a RELATIVE TTL; the server mints the authoritative absolute
+        // expiry from its own clock so a skewed client clock can't forge one.
         const hours = parseInt(expiresIn, 10)
         if (hours > 0) {
-          data.expiresAt = dateToIsoInstant(
-            new Date(Date.now() + hours * 3600000)
-          )
+          data.expiresInHours = hours
         }
       }
       await api.createInvite(workspaceId, data)

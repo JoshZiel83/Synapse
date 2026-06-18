@@ -2,11 +2,23 @@ import { z } from "zod"
 import { INVITE_TRUST_LEVELS } from "../constants/enums.js"
 import { IsoInstantStringSchema } from "./datetime.js"
 
-/** Create-invite request body for workspace invite management. */
+/**
+ * Create-invite request body for workspace invite management.
+ *
+ * Expiry is expressed as a RELATIVE TTL (`expiresInHours`), never an absolute
+ * instant: the client must not be trusted to mint an authoritative expiry from
+ * its own wall clock. The server computes `expires_at` from the server clock.
+ * Max 24 * 366 hours (~1 leap year).
+ */
 export const CreateWorkspaceInviteInputSchema = z.object({
   trustLevel: z.enum(INVITE_TRUST_LEVELS).optional(),
   maxUses: z.number().int().positive().optional(),
-  expiresAt: IsoInstantStringSchema.optional(),
+  expiresInHours: z
+    .number()
+    .int()
+    .positive()
+    .max(24 * 366)
+    .optional(),
 })
 export type CreateWorkspaceInviteInput = z.infer<
   typeof CreateWorkspaceInviteInputSchema

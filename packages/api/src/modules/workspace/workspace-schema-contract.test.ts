@@ -108,7 +108,7 @@ test("workspace app input schemas parse controller request bodies", () => {
     CreateWorkspaceInviteInputSchema.safeParse({
       trustLevel: "guest",
       maxUses: 3,
-      expiresAt: "2026-06-20T00:00:00.000Z",
+      expiresInHours: 48,
     }).success
   )
 })

@@ -60,6 +60,11 @@ export interface ChatRuntimeState {
 
 type ChatRuntimeListener = (state: ChatRuntimeState) => void
 
+// Monotonic floor for optimistic message sort keys. Never decreases, so a
+// backward wall-clock jump can never mint a key below an earlier still-pending
+// message. See ChatRuntime.sendMessage for the full rationale.
+let optimisticSequenceFloor = 0
+
 function patchTaskInConversationItem(
   item: ChatConversationItem,
   payload: ChatSyncEvent<"task.updated">["payload"]
@@ -681,13 +686,20 @@ export class ChatRuntime {
     const existingOutbox = Object.values(current.outbox).filter(
       (entry) => entry.conversationId === conversationId
     )
-    const optimisticSequence =
+    // Monotonic, clock-jump-safe: never decreases even if the wall clock moves
+    // backward. Date.now()*1000 only seeds the high range so optimistic entries
+    // still sort after real server sequences; the floor preserves order among
+    // pending entries regardless of clock skew. (datetime-ok: createdAt below is
+    // a provisional optimistic time, reconciled to the server value by id.)
+    optimisticSequenceFloor =
       Math.max(
+        optimisticSequenceFloor,
         Date.now() * 1000,
         ...existingItems.map((item) => item.sequence),
         ...existingOutbox.map((item) => item.optimisticSequence),
         0
       ) + 1
+    const optimisticSequence = optimisticSequenceFloor
 
     const clientMessageId = createId("message")
     const outboxEntry: PendingChatOutboxMessage = {
@@ -1408,6 +1420,8 @@ export class ChatRuntime {
               [entry.clientMessageId]: {
                 ...queuedEntry,
                 status: "retrying",
+                // datetime-ok: records the FIRST failure instant; the ?? only
+                // preserves the original failure time across retries (catch path).
                 firstFailedAt: queuedEntry.firstFailedAt ?? nowIsoInstant(),
                 lastErrorMessage:
                   error instanceof Error ? error.message : "发送失败",

@@ -264,6 +264,11 @@ let bootstrapWorkspaceId: string | null = null
 let syncPromise: Promise<void> | null = null
 let outboxRetryTimer: ReturnType<typeof setTimeout> | null = null
 
+// Monotonic floor for optimistic message sort keys. Never decreases, so a
+// backward wall-clock jump can never mint a key below an earlier still-pending
+// message. See sendMessage for the full rationale.
+let optimisticSequenceFloor = 0
+
 // In-memory (NOT persisted) per-workspace high-water mark of durable sync
 // frames applied live. Initialized to the persisted inboxCursor on load and
 // refreshed after every sync/bootstrap. Used only for live ordering/gap
@@ -1637,6 +1642,8 @@ async function flushOutboxInternal(
           [entry.clientMessageId]: {
             ...currentEntry,
             status: "retrying",
+            // datetime-ok: records the FIRST failure instant; the || only
+            // preserves the original failure time across retries (catch path).
             firstFailedAt: currentEntry.firstFailedAt || nowIsoInstant(),
             lastErrorMessage:
               error instanceof Error ? error.message : "Failed to send message",
@@ -1964,8 +1971,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
       0,
     ]
 
-    const optimisticSequence =
-      Math.max(Date.now() * 1000, ...existingSequences) + 1
+    // Monotonic, clock-jump-safe: never decreases even if the wall clock moves
+    // backward. Date.now()*1000 only seeds the high range so optimistic entries
+    // still sort after real server sequences; the floor preserves order among
+    // pending entries regardless of clock skew. (datetime-ok: createdAt below is
+    // a provisional optimistic time, reconciled to the server value by id.)
+    optimisticSequenceFloor =
+      Math.max(
+        optimisticSequenceFloor,
+        Date.now() * 1000,
+        ...existingSequences
+      ) + 1
+    const optimisticSequence = optimisticSequenceFloor
 
     const entry: OutboxEntry = {
       clientMessageId: createUuid(),

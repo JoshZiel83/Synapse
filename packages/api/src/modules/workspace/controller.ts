@@ -544,7 +544,7 @@ export async function handleCreateInvite(
     createdByWorkspaceMemberId: (request as any).workspaceMember!.id,
     trustLevel: parsed.data.trustLevel,
     maxUses: parsed.data.maxUses,
-    expiresAt: parsed.data.expiresAt,
+    expiresInHours: parsed.data.expiresInHours,
   })
   if (!invite) {
     reply.status(500).send({ error: "Failed to create invite" })

@@ -1,4 +1,5 @@
 import type { InviteTrustLevel } from "@synapse/shared"
+import { dateToIsoInstant } from "@synapse/shared/datetime"
 import {
   findInviteWithWorkspaceName,
   insertInvite,
@@ -25,9 +26,19 @@ export async function createInvite(input: {
   createdByWorkspaceMemberId: string
   trustLevel?: InviteTrustLevel
   maxUses?: number
-  expiresAt?: import("@synapse/shared").Timestamp
+  /**
+   * Relative TTL in hours. The absolute `expires_at` is derived here from the
+   * SERVER clock — the client clock is never trusted to mint an authoritative
+   * expiry. Omit for a non-expiring invite.
+   */
+  expiresInHours?: number
 }): Promise<WorkspaceInviteRecord | null> {
-  return (await insertInvite(input)) ?? null
+  const { expiresInHours, ...rest } = input
+  const expiresAt =
+    expiresInHours !== undefined
+      ? dateToIsoInstant(new Date(Date.now() + expiresInHours * 3_600_000))
+      : undefined
+  return (await insertInvite({ ...rest, expiresAt })) ?? null
 }
 
 export async function listWorkspaceInvites(
