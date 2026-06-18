@@ -342,6 +342,19 @@ export interface DownloadToBufferWithLimitOpts {
   allowPrivateHosts?: boolean
   timeoutMs?: number
   signal?: AbortSignal
+  /**
+   * Extra request headers sent on the initial request AND on every
+   * redirect hop — e.g. `{ Authorization: "Bearer …" }` for WhatsApp
+   * Cloud media downloads, whose binary CDN GET requires the Graph API
+   * bearer token (the `downloadToBufferWithLimit` callers for Telegram
+   * use unauthenticated file URLs and omit this).
+   *
+   * SECURITY: when these headers carry a credential, the caller MUST
+   * also pass `allowedHosts` so the credential can only ever be sent to
+   * an explicitly-listed host. Without an allowlist a redirect could
+   * forward the credential to an arbitrary public host.
+   */
+  headers?: Record<string, string>
 }
 
 const DEFAULT_DOWNLOAD_TIMEOUT_MS = 60_000
@@ -355,8 +368,15 @@ export async function downloadToBufferWithLimit(
   sizeBytes: number
   originalName: string
 }> {
-  const { url, maxBytes, allowedHosts, allowPrivateHosts, timeoutMs, signal } =
-    opts
+  const {
+    url,
+    maxBytes,
+    allowedHosts,
+    allowPrivateHosts,
+    timeoutMs,
+    signal,
+    headers,
+  } = opts
   if (!Number.isFinite(maxBytes) || maxBytes <= 0) {
     throw new Error("downloadToBufferWithLimit: maxBytes must be > 0")
   }
@@ -419,6 +439,7 @@ export async function downloadToBufferWithLimit(
         signal: controller.signal,
         redirect: "manual",
         dispatcher,
+        ...(headers ? { headers } : {}),
       } as RequestInit & { dispatcher: typeof dispatcher })
       // Manual redirect handling: only follow if explicit Location header
       if (res.status >= 300 && res.status < 400) {

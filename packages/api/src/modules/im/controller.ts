@@ -50,6 +50,9 @@ import imWecomController from "./controller/wecom.js"
 import imQqController from "./controller/qq.js"
 import imWeixinController from "./controller/weixin.js"
 import imDingtalkController from "./controller/dingtalk.js"
+import imTelegramController from "./controller/telegram.js"
+import imWhatsappController from "./controller/whatsapp.js"
+import imWhatsappUnofficialController from "./controller/whatsapp_unofficial.js"
 
 // Generic IM app request bodies/queries live in @synapse/shared/schemas; the
 // per-transport credential controllers are migrated separately.
@@ -70,6 +73,9 @@ export default async function imController(app: FastifyInstance) {
   await imWeixinController(app)
   await imDingtalkController(app)
   await imQqController(app)
+  await imTelegramController(app)
+  await imWhatsappController(app)
+  await imWhatsappUnofficialController(app)
 
   appRoute(
     app,

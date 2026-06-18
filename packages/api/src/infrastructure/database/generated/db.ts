@@ -327,11 +327,11 @@ export type TransportAccountsOwnerScope = "workspace" | "workspace_member";
 
 export type TransportAccountsStatus = "active" | "disabled" | "error";
 
-export type TransportAccountsTransportKind = "dingtalk" | "feishu" | "qq" | "wecom" | "weixin";
+export type TransportAccountsTransportKind = "dingtalk" | "feishu" | "qq" | "telegram" | "wecom" | "weixin" | "whatsapp" | "whatsapp_unofficial";
 
 export type TransportAddressesAddressType = "bot" | "system" | "user";
 
-export type TransportAddressesTransportKind = "dingtalk" | "feishu" | "qq" | "wecom" | "weixin";
+export type TransportAddressesTransportKind = "dingtalk" | "feishu" | "qq" | "telegram" | "wecom" | "weixin" | "whatsapp" | "whatsapp_unofficial";
 
 export type TransportEndpointsEndpointType = "direct" | "group";
 
@@ -339,7 +339,7 @@ export type TransportMessageLinksDeliveryStatus = "failed" | "pending" | "sent" 
 
 export type TransportMessageLinksDirection = "inbound" | "outbound";
 
-export type TransportMessageLinksTransportKind = "dingtalk" | "feishu" | "qq" | "wecom" | "weixin";
+export type TransportMessageLinksTransportKind = "dingtalk" | "feishu" | "qq" | "telegram" | "wecom" | "weixin" | "whatsapp" | "whatsapp_unofficial";
 
 export type TurnsStatus = "cancelled" | "completed" | "failed" | "running";
 

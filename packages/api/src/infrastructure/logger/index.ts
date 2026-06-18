@@ -111,7 +111,13 @@ const SCOPE_TO_DOMAIN: Readonly<Record<string, DomainScope>> = {
   "im.qq": { domain: "im", component: "qq" },
   "im.runtime": { domain: "im", component: "runtime" },
   "im.status": { domain: "im", component: "status" },
+  "im.telegram": { domain: "im", component: "telegram" },
   "im.wecom": { domain: "im", component: "wecom" },
+  "im.whatsapp": { domain: "im", component: "whatsapp" },
+  "im.whatsapp_unofficial": {
+    domain: "im",
+    component: "whatsapp_unofficial",
+  },
   "mcp.controller": { domain: "mcp", component: "controller" },
   "mcp.runtime": { domain: "mcp", component: "runtime" },
   "mcp.service": { domain: "mcp", component: "service" },
