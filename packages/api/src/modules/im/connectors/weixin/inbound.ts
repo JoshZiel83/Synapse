@@ -4,7 +4,11 @@
  * runtime lease.
  */
 
-import { fromUnixMillis, serverReceiveInstant } from "@synapse/shared/datetime"
+import {
+  fromUnixMillis,
+  requireEpochMillis,
+  serverReceiveInstant,
+} from "@synapse/shared/datetime"
 import type { TransportAccountSummary } from "@synapse/shared/types"
 import type {
   AccountStartContext,
@@ -54,11 +58,15 @@ function envelopeFromNormalized(
       externalId: normalized.senderExternalId,
       metadata: { contextToken: normalized.contextToken },
     },
+    // A PRESENT value (incl. a numeric string, which some IM platforms send)
+    // parses via requireEpochMillis and fails loud on garbage (C2) — aligning
+    // weixin with the dingtalk/feishu connectors. Only a genuinely absent value
+    // defaults to the server-receive instant.
     receivedAt:
-      typeof createTimeMs === "number"
-        ? fromUnixMillis(createTimeMs)
-        : // datetime-ok: genuine no-event-time default (create_time_ms absent).
-          serverReceiveInstant(),
+      createTimeMs == null
+        ? // datetime-ok: genuine no-event-time default (create_time_ms absent).
+          serverReceiveInstant()
+        : fromUnixMillis(requireEpochMillis(createTimeMs, "ms")),
     message: normalized.message,
     raw: normalized.raw,
     endpointMetadata: { contextToken: normalized.contextToken },
