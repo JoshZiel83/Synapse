@@ -1,30 +1,44 @@
 {
-  "generatedAt": "2026-06-09T02:30:50.982Z",
-  "scriptVersion": 1,
+  "scriptVersion": 2,
   "scanRoots": [
     "packages/api/src",
     "packages/shared/src",
     "packages/device-protocol/src",
     "packages/device-runtime/src",
+    "packages/device-sdk/src",
+    "packages/remote-agent-daemon/src",
     "packages/web-next",
-    "packages/mobile-app/src"
+    "packages/mobile-app/src",
+    "sidecars/fs-helper/src",
+    "sidecars/mijia-mcp"
   ],
   "allowlist": {
+    "direct_to_iso_string": ["packages/device-protocol/src/instant.ts"],
+    "unknown_as_time_type": ["packages/api/src/infrastructure/storage/ssrf.ts"],
     "camel_time_string": ["packages/shared/src/automation/rule-contract.ts"],
-    "direct_to_iso_string": [
-      "packages/device-protocol/src/instant.ts",
-      "packages/shared/src/datetime/instant.ts"
-    ]
+    "second_iso_regex": ["packages/device-protocol/src/instant.ts"],
+    "second_branded_type": ["packages/device-protocol/src/instant.ts"],
+    "second_instant_schema": ["packages/device-protocol/src/instant.schema.ts"],
+    "date_parse_controlflow": ["packages/device-protocol/src/instant.ts"]
   },
   "countsByRule": {
     "mixed_date_string": 0,
-    "unknown_as_date": 0,
+    "unknown_as_time_type": 0,
     "instanceof_date": 0,
     "legacy_helper": 0,
     "pseudo_row_string": 0,
     "camel_time_string": 0,
     "direct_to_iso_string": 0,
-    "fallback_now_iso": 0
+    "fallback_now": 0,
+    "epoch_zero_fallback": 0,
+    "magnitude_unit_guess": 0,
+    "second_iso_regex": 0,
+    "second_branded_type": 0,
+    "second_instant_schema": 0,
+    "date_parse_controlflow": 0,
+    "blind_iso_cast": 0,
+    "rust_self_invented_instant": 0,
+    "python_naive_isoformat": 0
   },
   "totalViolations": 0,
   "violations": []
