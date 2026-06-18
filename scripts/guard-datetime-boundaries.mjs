@@ -140,7 +140,10 @@ const ruleDefs = [
     langs: ["ts"],
     message:
       "forbidden second ISO-instant regex literal. The ONE canonical pattern lives in device-protocol/src/instant.ts; reuse isIsoInstantString.",
-    pattern: /\\d\{4\}-\\d\{2\}/g,
+    // Matches the date-shape `\d{4}-\d{2}` / `[0-9]{4}-[0-9]{2}` and the ISO
+    // time-portion `T\d{2}:\d{2}` (date-specific, so an OTP `[0-9]{4}` regex
+    // won't trip it).
+    pattern: /\\d\{4\}-\\d\{2\}|\[0-9\]\{4\}-\[0-9\]\{2\}|T\\d\{2\}:\\d\{2\}/g,
   },
   {
     id: "second_branded_type",
@@ -184,8 +187,9 @@ const ruleDefs = [
     id: "python_naive_isoformat",
     langs: ["python"],
     message:
-      "forbidden naive datetime serialization. Use the shared utc_iso_millis() (UTC, millis, Z).",
-    pattern: /datetime\.now\(\)\.isoformat|datetime\.utcnow|\.utcnow\(/g,
+      "forbidden naive/second datetime serialization. Use the shared utc_iso_millis() (UTC, millis, Z).",
+    pattern:
+      /datetime\.now\(\)\.isoformat|datetime\.utcnow|\.utcnow\(|datetime\.fromtimestamp|\btime\.time\(/g,
   },
 ]
 
@@ -264,12 +268,15 @@ function matchInComment(line, matchCol) {
 function isAllowedAtSite(lines, lineIndex) {
   // Inline trailing (or full-line) comment on the flagged line itself.
   if (MARKER_IN_COMMENT.test(lines[lineIndex] ?? "")) return true
-  // Or anywhere in the contiguous comment block directly above the flagged line
-  // (so a multi-line explanation works). Stop at the first non-comment line.
+  // Or in the contiguous comment block directly above. We check the marker
+  // BEFORE the comment-line break so a marker that the formatter has parked on
+  // a non-pure-comment line (e.g. a ternary `? // datetime-ok`) is still
+  // honoured. Stop only at the first line that is neither a comment nor carries
+  // the marker.
   for (let i = lineIndex - 1; i >= 0; i--) {
     const line = lines[i] ?? ""
+    if (MARKER_IN_COMMENT.test(line)) return true
     if (!COMMENT_LINE.test(line)) break
-    if (line.includes(ALLOW_MARKER)) return true
   }
   return false
 }
@@ -309,10 +316,36 @@ function buildViolations() {
   return violations
 }
 
+// Defense-in-depth (B10): assert the kysely-codegen config still maps
+// timestamp/timestamptz -> Date. A silent drift here would reintroduce the
+// `Date | string` boundary the whole refactor removed. Not a source-regex rule
+// — a config invariant.
+function codegenConfigViolations() {
+  const cfgPath = resolve(repoRoot, "packages/api/.kysely-codegenrc.json")
+  let cfg
+  try {
+    cfg = JSON.parse(readFileSync(cfgPath, "utf8"))
+  } catch {
+    return [] // config absent in this checkout — nothing to assert
+  }
+  const tm = cfg.typeMapping ?? {}
+  if (tm.timestamp === "Date" && tm.timestamptz === "Date") return []
+  return [
+    {
+      rule: "codegen_timestamp_mapping",
+      file: "packages/api/.kysely-codegenrc.json",
+      line: 1,
+      snippet: `typeMapping=${JSON.stringify(tm)}`,
+      message:
+        "kysely-codegen typeMapping must map timestamp & timestamptz to Date (drift reintroduces the Date|string boundary).",
+    },
+  ]
+}
+
 function buildReport(violations) {
   const countsByRule = Object.fromEntries(ruleDefs.map((rule) => [rule.id, 0]))
   for (const violation of violations) {
-    countsByRule[violation.rule] += 1
+    countsByRule[violation.rule] = (countsByRule[violation.rule] ?? 0) + 1
   }
 
   return {
@@ -328,7 +361,7 @@ function buildReport(violations) {
 }
 
 const writeBaseline = process.argv.includes("--write-baseline")
-const violations = buildViolations()
+const violations = [...buildViolations(), ...codegenConfigViolations()]
 const report = buildReport(violations)
 
 if (writeBaseline) {
