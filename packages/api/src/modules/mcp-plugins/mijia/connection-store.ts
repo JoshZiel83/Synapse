@@ -1,3 +1,4 @@
+import { requireEpochMillis } from "@synapse/shared/datetime"
 import { encrypt } from "../../../infrastructure/crypto/index.js"
 import type { MijiaAuthState } from "./types.js"
 import { updateMijiaConnectionState } from "./repo.js"
@@ -29,9 +30,13 @@ export async function persistMijiaConnectionState(
 ) {
   await updateMijiaConnectionState(connectionId, {
     secretPayload: encryptDeep(authState),
+    // `expireTime` is documented epoch MILLISECONDS (set as
+    // `Date.now() + SESSION_LIFETIME_MS` in mijia/auth.ts). Route through
+    // requireEpochMillis so a corrupt/seconds value fails loud (C2) rather than
+    // silently persisting a 1970 / far-future token expiry.
     expiresAt:
       typeof authState.expireTime === "number"
-        ? new Date(authState.expireTime)
+        ? new Date(requireEpochMillis(authState.expireTime, "ms"))
         : null,
     status: "active",
   })

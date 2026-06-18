@@ -6,7 +6,11 @@
  */
 
 import * as Lark from "@larksuiteoapi/node-sdk"
-import { nowIsoInstant } from "@synapse/shared/datetime"
+import {
+  fromUnixMillis,
+  requireEpochMillis,
+  serverReceiveInstant,
+} from "@synapse/shared/datetime"
 import type { TransportAccountSummary } from "@synapse/shared/types"
 import type {
   AccountStartContext,
@@ -33,6 +37,12 @@ function envelopeFromEvent(
 ): InboundEnvelope | null {
   const normalized = normalizeFeishuMessageEvent(data)
   if (!normalized) return null
+  // Feishu `im.message.receive_v1` delivers `message.create_time` as a Unix
+  // MILLISECONDS string (13 digits, e.g. "1693834424955") — NOT seconds. Thread
+  // the genuine event time through via the explicit-ms adapter rather than
+  // discarding it for now(); the [2000,2200) plausibility window fails loud (C2)
+  // if the contract ever changes, and we only fall back when it is absent.
+  const createTime = normalized.raw.createTime
   return {
     endpointType: normalized.endpointType,
     endpointExternalId: normalized.endpointExternalId,
@@ -40,7 +50,13 @@ function envelopeFromEvent(
     externalReplyToId: normalized.externalReplyToId,
     externalThreadId: normalized.externalThreadId,
     sender: { externalId: normalized.senderExternalId },
-    receivedAt: nowIsoInstant(),
+    // A PRESENT-but-corrupt create_time fails loud via requireEpochMillis (C2),
+    // NOT silently degrading to "now"; only a genuinely absent value defaults.
+    receivedAt:
+      createTime == null
+        ? // datetime-ok: genuine no-event-time default (create_time absent).
+          serverReceiveInstant()
+        : fromUnixMillis(requireEpochMillis(createTime, "ms")),
     message: normalized.message,
     raw: normalized.raw,
   }

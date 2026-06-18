@@ -26,6 +26,12 @@
  */
 
 import { createHash } from "crypto"
+import {
+  requireEpochMillis,
+  fromExternalRfc3339,
+  parseIsoInstant,
+} from "@synapse/shared/datetime"
+import { createLogger } from "../../../../infrastructure/logger/index.js"
 import { readCasBlob } from "../../../../infrastructure/storage/index.js"
 import type {
   MessageRef,
@@ -82,31 +88,48 @@ export function makeSyntheticMessageId(
   return `dingtalk-${kind}:${hash}:${Date.now()}`
 }
 
+const log = createLogger("im.dingtalk.outbound")
+
 /**
  * Parse a DingTalk sessionWebhookExpiredTime value. The field is documented
- * as a ms timestamp; older payloads / mock responses sometimes use seconds
- * or ISO strings. Returns `undefined` (treat as not-expired) for anything
- * unparseable so we don't accidentally bypass a still-valid webhook.
+ * as a Unix MILLISECONDS timestamp; ISO strings are tolerated. A PRESENT but
+ * unparseable value is logged (not silently swallowed) and returns `undefined`;
+ * the caller treats a present-but-unparsed expiry as corrupt.
  */
 export function parseSessionWebhookExpiry(raw: unknown): number | undefined {
   if (raw == null) return undefined
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    // Heuristic: < 1e12 means seconds (Unix epoch around 33658 AD before
-    // that boundary in ms), >= 1e12 means ms.
-    return raw < 1e12 ? raw * 1000 : raw
+  // DingTalk documents sessionWebhookExpiredTime as Unix MILLISECONDS — route
+  // every shape through the canonical adapters (C1: one parser). The [2000,2200)
+  // plausibility window rejects a seconds value passed as ms, and a present-but-
+  // corrupt value LOGS + returns undefined (C2: never silently fail-open, but do
+  // not crash outbound either).
+  if (typeof raw === "number") {
+    try {
+      return requireEpochMillis(raw, "ms")
+    } catch {
+      log.warn({ raw }, "dingtalk.session_webhook_expiry_unparseable")
+      return undefined
+    }
   }
   if (typeof raw === "string") {
     const trimmed = raw.trim()
     if (trimmed === "") return undefined
-    // Numeric string?
-    const numeric = Number(trimmed)
-    if (Number.isFinite(numeric)) {
-      return numeric < 1e12 ? numeric * 1000 : numeric
+    if (/^[+-]?\d+$/.test(trimmed)) {
+      // numeric string — epoch ms
+      try {
+        return requireEpochMillis(trimmed, "ms")
+      } catch {
+        log.warn({ raw }, "dingtalk.session_webhook_expiry_unparseable")
+        return undefined
+      }
     }
-    // ISO-ish?
-    const parsed = Date.parse(trimmed)
-    if (Number.isFinite(parsed)) return parsed
-    return undefined
+    // ISO string (non-numeric)
+    try {
+      return parseIsoInstant(fromExternalRfc3339(trimmed)).getTime()
+    } catch {
+      log.warn({ raw }, "dingtalk.session_webhook_expiry_unparseable")
+      return undefined
+    }
   }
   return undefined
 }
@@ -153,12 +176,15 @@ async function sendTextSubsend(
 
   // sessionWebhook attempt, gated by presence + *known* expiry only.
   const webhook = stringOrUndefined(ctx.metadata.sessionWebhook)
-  const expiredAt = parseSessionWebhookExpiry(
-    ctx.metadata.sessionWebhookExpiredTime
-  )
+  const rawExpiry = ctx.metadata.sessionWebhookExpiredTime
+  const expiredAt = parseSessionWebhookExpiry(rawExpiry)
   const knownExpired = expiredAt != null && expiredAt <= Date.now()
+  // A PRESENT but unparseable expiry is corrupt — treat it as unsafe and skip
+  // the webhook (do not fail-open on garbage). An ABSENT expiry keeps the
+  // deliberate delivery fail-open (the OpenAPI fallback is often impossible).
+  const expiryCorrupt = rawExpiry != null && expiredAt == null
 
-  if (webhook && !knownExpired) {
+  if (webhook && !knownExpired && !expiryCorrupt) {
     try {
       // The sessionWebhook self-authenticates; attach a token only if it can
       // be acquired without error. A token-endpoint failure must NOT defeat an

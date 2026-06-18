@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto"
-import { dateToIsoInstant } from "@synapse/shared/datetime"
+import {
+  fromUnixSeconds,
+  requireEpochMillis,
+  fromExternalRfc3339,
+  parseIsoInstant,
+} from "@synapse/shared/datetime"
 import {
   FILE_ORIGIN_SYSTEMS,
   parseJsonObject,
@@ -162,10 +167,12 @@ function toUnixTimestampSeconds(value: unknown, label: string) {
     if (/^\d+$/.test(value.trim())) {
       return value.trim()
     }
-    const parsed = Date.parse(value)
-    if (!Number.isNaN(parsed)) {
-      return Math.floor(parsed / 1000).toString()
-    }
+    // ISO/RFC3339 string — route through the canonical parser (C1). A fully
+    // unparseable value makes fromExternalRfc3339 throw, which propagates as the
+    // existing "must be an ISO time string or a unix timestamp" error below.
+    return Math.floor(
+      parseIsoInstant(fromExternalRfc3339(value.trim())).getTime() / 1000
+    ).toString()
   }
   throw new Error(
     `${label} must be an ISO time string or a unix timestamp in seconds.`
@@ -356,16 +363,21 @@ function buildFeishuDocSearchRequest(input: Record<string, unknown>) {
 }
 
 function serializeUnixTimestampToInstant(value: unknown) {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return dateToIsoInstant(new Date(value >= 1e12 ? value : value * 1000))
+  const seconds =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim() !== ""
+        ? Number(value.trim())
+        : Number.NaN
+  if (!Number.isFinite(seconds)) return undefined
+  try {
+    // Feishu drive metadata timestamps are Unix seconds.
+    return fromUnixSeconds(seconds)
+  } catch {
+    // Implausible value -> omit the enriched *_iso field (honest absence, not a
+    // fabricated time). This is display-only search-result enrichment.
+    return undefined
   }
-  if (typeof value === "string" && value.trim().length > 0) {
-    const parsed = Number(value.trim())
-    if (Number.isFinite(parsed)) {
-      return dateToIsoInstant(new Date(parsed >= 1e12 ? parsed : parsed * 1000))
-    }
-  }
-  return ""
 }
 
 function addIsoTimeFieldsToDocSearchResults(results: unknown[]) {
@@ -1789,13 +1801,17 @@ const feishuToolSpecs: FeishuToolSpec[] = [
         ]
       }
       if (asString(input.dueTime)) {
-        const parsed = Date.parse(asString(input.dueTime))
-        body.due = {
-          timestamp: Number.isNaN(parsed)
-            ? asString(input.dueTime)
-            : String(parsed),
-          is_all_day: false,
+        const due = asString(input.dueTime)
+        const numeric = Number(due)
+        const ms = Number.isFinite(numeric)
+          ? requireEpochMillis(numeric, "ms") // already an epoch-ms value
+          : parseIsoInstant(fromExternalRfc3339(due)).getTime() // ISO/RFC3339
+        if (!Number.isFinite(ms)) {
+          throw new Error(
+            `dueTime must be a millisecond epoch or an ISO datetime string: ${due}`
+          )
         }
+        body.due = { timestamp: String(ms), is_all_day: false }
       }
 
       return jsonResult(

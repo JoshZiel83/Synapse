@@ -33,6 +33,10 @@ import { z } from "zod"
 import { IsoInstantStringSchema } from "@synapse/shared/schemas"
 import type { Timestamp, TransportEndpointType } from "@synapse/shared/types"
 
+import { createLogger } from "../../../../infrastructure/logger/index.js"
+
+const log = createLogger("im.qq.latest-inbound")
+
 export type QqAnchorKind = "msg_id" | "event_id"
 
 export interface QqLatestInboundAnchor {
@@ -73,12 +77,25 @@ function parseLatestInboundAnchorPayload(
   raw: string | null
 ): QqLatestInboundAnchor | null {
   if (!raw) return null
+  let json: unknown
   try {
-    const parsed = latestInboundAnchorSchema.safeParse(JSON.parse(raw))
-    return parsed.success ? parsed.data : null
-  } catch {
+    json = JSON.parse(raw)
+  } catch (err) {
+    // Not silent (C2): a corrupt/legacy anchor payload is logged, not swallowed.
+    // null is a legitimate domain outcome (outbound falls back to another anchor
+    // strategy) — we do NOT fabricate a value here.
+    log.warn({ err, raw }, "qq.latest_inbound.parse_failed")
     return null
   }
+  const parsed = latestInboundAnchorSchema.safeParse(json)
+  if (!parsed.success) {
+    log.warn(
+      { issues: parsed.error.issues, raw },
+      "qq.latest_inbound.schema_invalid"
+    )
+    return null
+  }
+  return parsed.data
 }
 
 export async function writeLatestInboundAnchor(

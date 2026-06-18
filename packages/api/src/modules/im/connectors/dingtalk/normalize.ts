@@ -22,7 +22,12 @@ import {
   type CanonicalMessage,
   type CanonicalPart,
 } from "../../messaging/canonical-message.js"
-import { dateToIsoInstant, nowIsoInstant } from "@synapse/shared/datetime"
+import {
+  fromUnixMillis,
+  nowIsoInstant,
+  requireEpochMillis,
+  serverReceiveInstant,
+} from "@synapse/shared/datetime"
 import type { InboundEnvelope } from "../types.js"
 import { parseDingtalkMentions, type DingtalkAtUser } from "./mentions.js"
 
@@ -58,15 +63,6 @@ export interface DingtalkInboundPayload {
 
 function nonEmpty(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined
-}
-
-function asNumber(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) return value
-  if (typeof value === "string" && value.trim() !== "") {
-    const n = Number(value)
-    return Number.isFinite(n) ? n : undefined
-  }
-  return undefined
 }
 
 /**
@@ -309,10 +305,18 @@ export function normalizeDingtalkPayload(
     senderMetadata.staffId = senderStaffId
   }
 
-  const createAtNum = asNumber(payload.createAt)
-  const receivedAt = createAtNum
-    ? dateToIsoInstant(new Date(createAtNum))
-    : nowIsoInstant()
+  // DingTalk `createAt` is documented as Unix MILLISECONDS — convert with the
+  // explicit-unit adapter (fails loud on implausible values, consistent with
+  // wecom). Distinguish ABSENT from PRESENT-but-corrupt: a tolerant numeric
+  // coercion would map a corrupt value to undefined and silently degrade to
+  // now() (C2 violation), so feed the raw value to requireEpochMillis (which
+  // throws on corrupt) and only use the server-receive instant when createAt is
+  // genuinely absent.
+  const receivedAt =
+    payload.createAt == null
+      ? // datetime-ok: genuine no-event-time default (createAt absent).
+        serverReceiveInstant()
+      : fromUnixMillis(requireEpochMillis(payload.createAt, "ms"))
 
   return {
     endpointType,

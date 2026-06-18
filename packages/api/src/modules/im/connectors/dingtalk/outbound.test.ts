@@ -14,8 +14,13 @@ test("parseSessionWebhookExpiry: number ms passes through", () => {
   assert.equal(parseSessionWebhookExpiry(1700003600000), 1700003600000)
 })
 
-test("parseSessionWebhookExpiry: number seconds is scaled to ms", () => {
-  assert.equal(parseSessionWebhookExpiry(1_700_003_600), 1_700_003_600_000)
+test("parseSessionWebhookExpiry: a seconds-magnitude value is rejected (ms-only, no heuristic)", () => {
+  // The field is documented as Unix milliseconds and is now routed through the
+  // canonical `requireEpochMillis(_, "ms")` adapter. There is no seconds-
+  // scaling heuristic; instead the [2000,2200) plausibility window rejects a
+  // seconds-magnitude value passed as ms (1_700_003_600 ms ≈ Jan 1970), so it
+  // is logged and returns undefined rather than minting a 1970 expiry (C2).
+  assert.equal(parseSessionWebhookExpiry(1_700_003_600), undefined)
 })
 
 test("parseSessionWebhookExpiry: numeric string parses", () => {
@@ -283,9 +288,12 @@ test("outbound: expired sessionWebhook → skip webhook, go to OpenAPI", async (
   }
 })
 
-test("outbound: unparseable sessionWebhookExpiredTime → still tries webhook", async () => {
+test("outbound: unparseable sessionWebhookExpiredTime → skip webhook (corrupt = unsafe), go to OpenAPI", async () => {
+  // A PRESENT but unparseable expiry is treated as corrupt: we do NOT fail open
+  // onto a possibly-stale webhook (P3/C2). It falls back to the OpenAPI path,
+  // exactly like a known-expired webhook. (An ABSENT expiry still fails open.)
   const mock = installFetchMock({
-    webhook: { status: 200, body: { errcode: 0 } },
+    group: { status: 200, body: { processQueryKey: "pqk-g" } },
   })
   try {
     await sendDingtalkMessage({
@@ -293,7 +301,12 @@ test("outbound: unparseable sessionWebhookExpiredTime → still tries webhook", 
       endpoint: groupEndpoint({ sessionWebhookExpiredTime: "garbage" }),
       message: SIMPLE_MSG,
     })
-    assert.ok(mock.calls.some((c) => c.kind === "webhook"))
+    const kinds = mock.calls.map((c) => c.kind)
+    assert.deepEqual(kinds, ["token", "group"])
+    assert.equal(
+      mock.calls.find((c) => c.kind === "webhook"),
+      undefined
+    )
   } finally {
     mock.restore()
   }

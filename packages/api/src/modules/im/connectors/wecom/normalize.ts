@@ -22,7 +22,7 @@ import type {
   VoiceMessage,
   WsFrame,
 } from "@wecom/aibot-node-sdk"
-import { dateToIsoInstant, nowIsoInstant } from "@synapse/shared/datetime"
+import { fromUnixSeconds, serverReceiveInstant } from "@synapse/shared/datetime"
 import {
   buildCanonicalMessage,
   type CanonicalPart,
@@ -111,9 +111,12 @@ export function normalizeWecomFrame(
   }
 
   const { parts } = partsFromMessage(body)
+  // WeCom `create_time` is documented as Unix SECONDS — convert with the
+  // explicit-unit adapter (fails loud on implausible values). Only when it is
+  // genuinely absent do we record the server receive instant.
   const receivedAt = body.create_time
-    ? dateToIsoInstant(new Date(body.create_time * 1000))
-    : nowIsoInstant()
+    ? fromUnixSeconds(body.create_time)
+    : serverReceiveInstant()
 
   return {
     endpointType,

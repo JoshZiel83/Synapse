@@ -19,6 +19,9 @@ import {
   parseJsonObject,
 } from "@synapse/shared"
 import type { Timestamp } from "@synapse/shared"
+import { createLogger } from "../../../infrastructure/logger/index.js"
+
+const log = createLogger("mcp.feishu.auth")
 
 type JsonObject = Record<string, unknown>
 
@@ -98,6 +101,37 @@ function asNumber(value: unknown, fallback: number) {
     return value
   }
   return fallback
+}
+
+/**
+ * Resolve an OAuth `expires_in`-style TTL (SECONDS) explicitly (C2):
+ *  - present finite positive number/numeric-string -> use it
+ *  - PRESENT but non-positive / non-numeric (garbage) -> throw (fail loud)
+ *  - ABSENT (null/undefined) -> the explicit, logged default (Feishu always
+ *    returns these fields; the default only guards a malformed response)
+ */
+function resolveTtlSeconds(
+  raw: unknown,
+  defaultSeconds: number,
+  label: string
+): number {
+  if (raw === undefined || raw === null) {
+    log.warn(
+      { label, defaultSeconds },
+      "feishu.oauth.expires_in_absent_using_default"
+    )
+    return defaultSeconds
+  }
+  const n =
+    typeof raw === "number"
+      ? raw
+      : typeof raw === "string" && raw.trim() !== ""
+        ? Number(raw.trim())
+        : Number.NaN
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new Error(`${label}: invalid expires_in value: ${String(raw)}`)
+  }
+  return n
 }
 
 function buildQrChallenge(input: {
@@ -193,7 +227,11 @@ async function beginAppRegistration() {
     deviceCode: asString(payload.device_code),
     interval: asNumber(payload.interval, 5),
     expiresAt: dateToIsoInstant(
-      new Date(Date.now() + asNumber(payload.expires_in, 300) * 1000)
+      new Date(
+        Date.now() +
+          resolveTtlSeconds(payload.expires_in, 300, "device_code.expires_in") *
+            1000
+      )
     ),
     verificationUrl: buildVerificationUrl(
       resolveFeishuOpenBaseUrl("feishu"),
@@ -361,7 +399,11 @@ async function beginUserAuthorization(input: {
     deviceCode: asString(payload.device_code),
     interval: asNumber(payload.interval, 5),
     expiresAt: dateToIsoInstant(
-      new Date(Date.now() + asNumber(payload.expires_in, 240) * 1000)
+      new Date(
+        Date.now() +
+          resolveTtlSeconds(payload.expires_in, 240, "device_code.expires_in") *
+            1000
+      )
     ),
     verificationUrl,
     userCode: asString(payload.user_code),
@@ -425,8 +467,16 @@ async function pollUserAuthorization(input: {
       tokenData: {
         accessToken: asString(payload.access_token),
         refreshToken: asString(payload.refresh_token),
-        expiresIn: asNumber(payload.expires_in, 7200),
-        refreshExpiresIn: asNumber(payload.refresh_token_expires_in, 604800),
+        expiresIn: resolveTtlSeconds(
+          payload.expires_in,
+          7200,
+          "token.expires_in"
+        ),
+        refreshExpiresIn: resolveTtlSeconds(
+          payload.refresh_token_expires_in,
+          604800,
+          "token.refresh_expires_in"
+        ),
         scope: asString(payload.scope),
         tokenType: asString(payload.token_type) || "Bearer",
       },
@@ -544,8 +594,12 @@ export async function refreshFeishuUserAccessToken(input: {
   return {
     accessToken: asString(payload.access_token),
     refreshToken: asString(payload.refresh_token) || input.refreshToken,
-    expiresIn: asNumber(payload.expires_in, 7200),
-    refreshExpiresIn: asNumber(payload.refresh_token_expires_in, 604800),
+    expiresIn: resolveTtlSeconds(payload.expires_in, 7200, "token.expires_in"),
+    refreshExpiresIn: resolveTtlSeconds(
+      payload.refresh_token_expires_in,
+      604800,
+      "token.refresh_expires_in"
+    ),
     scope: asString(payload.scope),
     tokenType: asString(payload.token_type) || "Bearer",
   }

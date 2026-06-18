@@ -1,5 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import { isIsoInstantString } from "@synapse/shared/datetime"
 import {
   normalizeQqC2cMessage,
   normalizeQqGroupAtMessage,
@@ -121,6 +122,23 @@ test("Group: voice attachment classified by content_type → voice_placeholder",
   // leading mention stripped → no text part; just the placeholder.
   assert.equal(parts.length, 1)
   assert.equal((parts[0] as { marker?: string }).marker, "voice_placeholder")
+})
+
+test("C2C: present-but-unparseable timestamp → canonical instant, does NOT throw", async () => {
+  // A poison timestamp must NOT propagate (would make inbound.ts reply d:1 and
+  // make QQ retry the same payload forever). qqEventInstant logs + falls back to
+  // the server-receive instant; the envelope still produces a canonical instant.
+  const env = await normalizeQqC2cMessage({
+    id: "M",
+    author: { user_openid: "U" },
+    content: "hi",
+    timestamp: "not-a-real-timestamp",
+  })
+  assert.ok(env)
+  assert.ok(
+    isIsoInstantString(env!.receivedAt),
+    `receivedAt should be a canonical instant, got ${String(env!.receivedAt)}`
+  )
 })
 
 test("raw + endpointMetadata preserve QQ-specific fields", async () => {

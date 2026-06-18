@@ -4,7 +4,7 @@
  * runtime lease.
  */
 
-import { nowIsoInstant } from "@synapse/shared/datetime"
+import { fromUnixMillis, serverReceiveInstant } from "@synapse/shared/datetime"
 import type { TransportAccountSummary } from "@synapse/shared/types"
 import type {
   AccountStartContext,
@@ -42,6 +42,10 @@ function envelopeFromNormalized(
   account: TransportAccountSummary
 ): InboundEnvelope | null {
   if (!normalized) return null
+  // `create_time_ms` (exposed as raw.createTimeMs) is documented Unix
+  // MILLISECONDS. Thread the genuine event time through when present rather
+  // than discarding it for now(); only fall back to server-receive when absent.
+  const createTimeMs = normalized.raw.createTimeMs
   return {
     endpointType: normalized.endpointType,
     endpointExternalId: normalized.endpointExternalId,
@@ -50,7 +54,11 @@ function envelopeFromNormalized(
       externalId: normalized.senderExternalId,
       metadata: { contextToken: normalized.contextToken },
     },
-    receivedAt: nowIsoInstant(),
+    receivedAt:
+      typeof createTimeMs === "number"
+        ? fromUnixMillis(createTimeMs)
+        : // datetime-ok: genuine no-event-time default (create_time_ms absent).
+          serverReceiveInstant(),
     message: normalized.message,
     raw: normalized.raw,
     endpointMetadata: { contextToken: normalized.contextToken },

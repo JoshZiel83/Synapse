@@ -22,7 +22,11 @@
 
 import { redis } from "../../../../infrastructure/redis/index.js"
 import { createLogger } from "../../../../infrastructure/logger/index.js"
-import { nowIsoInstant } from "@synapse/shared/datetime"
+import {
+  fromExternalRfc3339,
+  fromUnixSeconds,
+  serverReceiveInstant,
+} from "@synapse/shared/datetime"
 import type { Timestamp } from "@synapse/shared/types"
 import {
   buildCanonicalMessage,
@@ -45,6 +49,42 @@ import {
 
 const log = createLogger("im.qq")
 
+/**
+ * Convert a QQ inbound event time to a canonical instant. QQ message events
+ * carry `timestamp` as an RFC3339 string (commonly with a numeric offset);
+ * management events use integer Unix seconds. The value is parsed EXPLICITLY
+ * via the canonical adapters (C1: one parser).
+ *
+ * datetime-ok: receivedAt is only a best-effort window heuristic (it feeds the
+ * reply-quota window). Failing loud on a PRESENT-but-unparseable timestamp would
+ * propagate up to inbound.ts, which replies `d:1` and makes QQ retry the SAME
+ * poison payload forever (a retry storm). So instead of throwing we log and fall
+ * back to the server-receive instant — an explicit, logged default (still C2:
+ * not a silent now()). A genuinely absent timestamp uses server-receive too.
+ */
+function qqEventInstant(raw: unknown): Timestamp {
+  if (raw == null) return serverReceiveInstant()
+  if (typeof raw === "string" && raw.trim() !== "") {
+    try {
+      return fromExternalRfc3339(raw)
+    } catch {
+      log.warn({ raw }, "qq.event_time_unparseable")
+      return serverReceiveInstant()
+    }
+  }
+  if (typeof raw === "number") {
+    try {
+      return fromUnixSeconds(raw)
+    } catch {
+      log.warn({ raw }, "qq.event_time_unparseable")
+      return serverReceiveInstant()
+    }
+  }
+  // Present but neither a non-empty string nor a number (e.g. boolean/object).
+  log.warn({ raw }, "qq.event_time_unparseable")
+  return serverReceiveInstant()
+}
+
 interface QqAuthor {
   user_openid?: string
   member_openid?: string
@@ -61,7 +101,10 @@ export interface QqC2cMessageEventData {
   content?: string
   message_scene?: QqMessageScene
   message_type?: number
-  timestamp?: Timestamp
+  // Raw, untrusted wire value. QQ message events send an RFC3339 string (often
+  // with a numeric offset); not a canonical instant. Converted at the boundary
+  // via qqEventInstant() — never assigned the branded Timestamp directly.
+  timestamp?: unknown
   attachments?: unknown[]
 }
 
@@ -73,7 +116,10 @@ export interface QqGroupAtMessageEventData {
   mentions?: unknown[]
   message_scene?: QqMessageScene
   message_type?: number
-  timestamp?: Timestamp
+  // Raw, untrusted wire value. QQ message events send an RFC3339 string (often
+  // with a numeric offset); not a canonical instant. Converted at the boundary
+  // via qqEventInstant() — never assigned the branded Timestamp directly.
+  timestamp?: unknown
   attachments?: unknown[]
 }
 
@@ -121,7 +167,7 @@ export async function normalizeQqC2cMessage(
     ext: data.message_scene?.ext,
     content: textFromContent(data.content ?? ""),
     senderExternalId,
-    timestamp: data.timestamp ?? nowIsoInstant(),
+    timestamp: qqEventInstant(data.timestamp),
   })
 
   return {
@@ -135,7 +181,7 @@ export async function normalizeQqC2cMessage(
         unionOpenid: trimmed(data.author?.union_openid),
       },
     },
-    receivedAt: data.timestamp ?? nowIsoInstant(),
+    receivedAt: qqEventInstant(data.timestamp),
     message,
     raw: {
       messageType: data.message_type,
@@ -182,7 +228,7 @@ export async function normalizeQqGroupAtMessage(
     ext: data.message_scene?.ext,
     content: textFromContent(cleanedText),
     senderExternalId,
-    timestamp: data.timestamp ?? nowIsoInstant(),
+    timestamp: qqEventInstant(data.timestamp),
   })
 
   return {
@@ -197,7 +243,7 @@ export async function normalizeQqGroupAtMessage(
         unionOpenid: trimmed(data.author?.union_openid),
       },
     },
-    receivedAt: data.timestamp ?? nowIsoInstant(),
+    receivedAt: qqEventInstant(data.timestamp),
     message,
     endpointMetadata: { groupOpenid },
     raw: {

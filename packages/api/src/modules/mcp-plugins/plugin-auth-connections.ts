@@ -17,6 +17,7 @@ import {
   PLUGIN_CONFIG_FIELD_TYPE,
   parseJsonObject,
 } from "@synapse/shared"
+import { requireEpochMillis } from "@synapse/shared/datetime"
 import { config } from "../../config/index.js"
 import {
   decrypt,
@@ -430,9 +431,13 @@ function buildMijiaResultPreview(authState: object) {
 
 function buildMijiaResultPayload(authState: object) {
   const state = authState as JsonObject
+  // Mijia `expireTime` is an UNTRUSTED auth-state value documented as epoch
+  // MILLISECONDS (set as `Date.now() + SESSION_LIFETIME_MS` in mijia/auth.ts).
+  // Route through requireEpochMillis so a seconds-magnitude or otherwise corrupt
+  // value fails loud (C2) rather than minting a 1970/year-55000 token expiry.
   const expiresAt =
     typeof state.expireTime === "number"
-      ? presentInstant(new Date(state.expireTime))
+      ? presentInstant(new Date(requireEpochMillis(state.expireTime, "ms")))
       : null
   const preview = buildMijiaResultPreview(authState)
 
@@ -971,7 +976,9 @@ async function refreshOAuthConnection(
   }
 
   const expiresAt =
-    typeof tokenResponse.expires_in === "number"
+    typeof tokenResponse.expires_in === "number" &&
+    Number.isFinite(tokenResponse.expires_in) &&
+    tokenResponse.expires_in > 0
       ? presentInstant(new Date(Date.now() + tokenResponse.expires_in * 1000))
       : row.expiresAt
 
@@ -1523,7 +1530,9 @@ export async function handlePluginAuthCallback(input: {
           ? tokenResponse.scope.split(/\s+/).filter(Boolean)
           : []
       const expiresAt =
-        typeof tokenResponse.expires_in === "number"
+        typeof tokenResponse.expires_in === "number" &&
+        Number.isFinite(tokenResponse.expires_in) &&
+        tokenResponse.expires_in > 0
           ? presentInstant(
               new Date(Date.now() + tokenResponse.expires_in * 1000)
             )
