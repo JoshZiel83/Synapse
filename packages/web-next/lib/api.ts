@@ -337,6 +337,116 @@ function parseFileUploadResponseData(value: unknown): StoredFileRecordView {
 type QueryValue = string | number | readonly string[] | undefined | null
 type MemoryListQueryParams = Omit<MemoryListQuery, "owner" | "scope">
 
+// ── Inline request/response shapes for the telegram / whatsapp /
+// whatsapp_unofficial connectors. These connectors define their request
+// schemas LOCALLY on the backend (controller/telegram.ts, whatsapp.ts,
+// whatsapp_unofficial.ts) rather than in @synapse/shared, so the client
+// shapes are mirrored here. Owner / inbound-actor fields match the shared
+// TransportAccountOwner/InboundActor shapes used by the other connectors.
+type TransportConnectionModeValue = "webhook" | "long_connection"
+type TransportAccountOwnerScopeValue = "workspace" | "workspace_member"
+type TransportAccountInboundActorModeValue =
+  | "none"
+  | "specified_actor"
+  | "follow_owner_chief_actor"
+type TransportAccountStatusValue = "active" | "disabled" | "error"
+
+type TransportOwnerInboundFields = {
+  ownerScope?: TransportAccountOwnerScopeValue
+  ownerWorkspaceMemberId?: string | null
+  inboundActorMode?: TransportAccountInboundActorModeValue
+  inboundActorId?: string | null
+}
+
+export type TelegramAccountCreateInput = TransportOwnerInboundFields & {
+  displayName: string
+  accountKey?: string
+  connectionMode: TransportConnectionModeValue
+  botToken: string
+  webhookSecretToken?: string
+  apiRoot?: string
+  status?: TransportAccountStatusValue
+}
+
+export type TelegramAccountUpdateInput = TransportOwnerInboundFields & {
+  displayName?: string
+  accountKey?: string
+  connectionMode?: TransportConnectionModeValue
+  botToken?: string
+  webhookSecretToken?: string
+  apiRoot?: string
+  status?: TransportAccountStatusValue
+}
+
+// WhatsApp Cloud API is webhook-only; the backend schema does NOT accept
+// inbound-actor fields (only owner scope), so those are omitted here.
+export type WhatsappAccountCreateInput = {
+  displayName: string
+  accountKey?: string
+  phoneNumberId: string
+  wabaId: string
+  accessToken: string
+  appSecret: string
+  appId: string
+  webhookVerifyToken: string
+  graphApiVersion?: string
+  status?: TransportAccountStatusValue
+  ownerScope?: TransportAccountOwnerScopeValue
+  ownerWorkspaceMemberId?: string | null
+}
+
+export type WhatsappAccountUpdateInput = {
+  displayName?: string
+  phoneNumberId?: string
+  wabaId?: string
+  accessToken?: string
+  appSecret?: string
+  appId?: string
+  webhookVerifyToken?: string
+  graphApiVersion?: string
+  status?: TransportAccountStatusValue
+  ownerScope?: TransportAccountOwnerScopeValue
+  ownerWorkspaceMemberId?: string | null
+}
+
+export type WhatsappUnofficialLoginStartInput = {
+  displayName?: string
+  /** When set, pairing-code login (E.164, with or without +); else QR login. */
+  phoneNumberE164?: string
+  ownerScope?: TransportAccountOwnerScopeValue
+  ownerWorkspaceMemberId?: string | null
+  inboundActorMode?: TransportAccountInboundActorModeValue
+  inboundActorId?: string | null
+}
+
+export type WhatsappUnofficialLoginSession = {
+  sessionId: string
+  status: string
+  qrDataUrl?: string
+  pairingCode?: string
+  transportAccountId?: string
+  errorMessage?: string
+  /** epoch milliseconds */
+  expiresAt: number
+}
+
+export type WhatsappUnofficialLoginSessionResponse = {
+  session: WhatsappUnofficialLoginSession
+}
+
+export type WhatsappUnofficialSessionGuardInput = {
+  accountId: string
+  paused: boolean
+  ttlSeconds?: number
+}
+
+export type WhatsappUnofficialSessionGuardResponse = {
+  accountId: string
+  paused: boolean
+  reason: string | null
+  remainingMs: number
+}
+
 function withQuery<TQuery extends Record<string, QueryValue>>(
   path: string,
   query?: TQuery
@@ -2155,6 +2265,104 @@ class ApiClient {
       `/workspaces/${wsId}/im/accounts/qq/${accountId}`,
       {
         method: "PUT",
+        body: JSON.stringify(data),
+      }
+    )
+    return res.data
+  }
+  // ── Telegram (token-style create, mirrors QQ) ──
+  // The telegram/whatsapp/whatsapp_unofficial connectors use LOCAL zod
+  // schemas on the backend (NOT exported from @synapse/shared), so the
+  // request body shapes are declared inline here.
+  async createTelegramTransportAccount(
+    wsId: string,
+    data: TelegramAccountCreateInput
+  ): Promise<TransportAccountResponseSchemaType> {
+    const res = await this.fetch(`/workspaces/${wsId}/im/accounts/telegram`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+    return res.data
+  }
+  async updateTelegramTransportAccount(
+    wsId: string,
+    accountId: string,
+    data: TelegramAccountUpdateInput
+  ): Promise<TransportAccountResponseSchemaType> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/accounts/telegram/${accountId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    )
+    return res.data
+  }
+  // ── WhatsApp Cloud API (token-style create, webhook only) ──
+  async createWhatsappTransportAccount(
+    wsId: string,
+    data: WhatsappAccountCreateInput
+  ): Promise<TransportAccountResponseSchemaType> {
+    const res = await this.fetch(`/workspaces/${wsId}/im/accounts/whatsapp`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+    return res.data
+  }
+  async updateWhatsappTransportAccount(
+    wsId: string,
+    accountId: string,
+    data: WhatsappAccountUpdateInput
+  ): Promise<TransportAccountResponseSchemaType> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/accounts/whatsapp/${accountId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    )
+    return res.data
+  }
+  // ── WhatsApp unofficial (Baileys) QR / pairing login + kill-switch ──
+  async startWhatsappUnofficialLogin(
+    wsId: string,
+    data: WhatsappUnofficialLoginStartInput
+  ): Promise<WhatsappUnofficialLoginSessionResponse> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/accounts/whatsapp_unofficial/login`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      }
+    )
+    return res.data
+  }
+  async pollWhatsappUnofficialLogin(
+    wsId: string,
+    sessionId: string
+  ): Promise<WhatsappUnofficialLoginSessionResponse> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/accounts/whatsapp_unofficial/login/${sessionId}`
+    )
+    return res.data
+  }
+  cancelWhatsappUnofficialLogin(
+    wsId: string,
+    sessionId: string
+  ): Promise<{ ok: boolean }> {
+    return this.fetch(
+      `/workspaces/${wsId}/im/accounts/whatsapp_unofficial/login/${sessionId}`,
+      { method: "DELETE" }
+    ).then((res) => res.data)
+  }
+  async toggleWhatsappUnofficialSessionGuard(
+    wsId: string,
+    data: WhatsappUnofficialSessionGuardInput
+  ): Promise<WhatsappUnofficialSessionGuardResponse> {
+    const res = await this.fetch(
+      `/workspaces/${wsId}/im/accounts/whatsapp_unofficial/session-guard`,
+      {
+        method: "POST",
         body: JSON.stringify(data),
       }
     )
