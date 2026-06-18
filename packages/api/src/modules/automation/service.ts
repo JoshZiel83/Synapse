@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from "uuid"
 import {
   assertIsoInstant,
   dateToIsoInstant,
+  fromExternalRfc3339,
   nowIsoInstant,
 } from "@synapse/shared/datetime"
 import { parseInstantString } from "../../infrastructure/datetime.js"
@@ -49,6 +50,7 @@ import {
   validateAutomationRuleCreatePayload,
 } from "@synapse/shared/automation"
 import { decrypt, encrypt } from "../../infrastructure/crypto/index.js"
+import { createLogger } from "../../infrastructure/logger/index.js"
 import { type Executor } from "../../infrastructure/database/kysely.js"
 import {
   appendAutomationAuditLog,
@@ -462,6 +464,13 @@ function normalizePolicyInput(
   }
 }
 
+const log = createLogger("automation")
+
+/** Tag an error so the controller maps it to HTTP 400 instead of a 500. */
+function badScheduleInput(message: string): Error & { statusCode: number } {
+  return Object.assign(new Error(message), { statusCode: 400 })
+}
+
 function computeNextFireAt(input: {
   scheduleKind: "cron" | "at" | "interval"
   scheduleExpr?: string
@@ -473,18 +482,33 @@ function computeNextFireAt(input: {
   baseTime?: Date
   lastFiredAt?: Timestamp | null
 }): Timestamp | null {
+  // datetime-ok: schedule base defaults to the evaluation time ("now") when no
+  // explicit baseTime is supplied — a deliberate default, not a bad-value mask.
   const baseTime = input.baseTime || new Date()
-  const startsAt = input.startsAt ? new Date(input.startsAt) : null
-  const activeFrom = input.activeFrom ? new Date(input.activeFrom) : null
-  const activeUntil = input.activeUntil ? new Date(input.activeUntil) : null
+  // startsAt/activeFrom/activeUntil are canonical Timestamps (schema-validated);
+  // parse via the single canonical parser (no second hand-rolled `new Date`).
+  const startsAt = input.startsAt ? parseInstantString(input.startsAt) : null
+  const activeFrom = input.activeFrom
+    ? parseInstantString(input.activeFrom)
+    : null
+  const activeUntil = input.activeUntil
+    ? parseInstantString(input.activeUntil)
+    : null
   const currentBase =
     activeFrom && activeFrom.getTime() > baseTime.getTime()
       ? activeFrom
       : baseTime
 
   if (input.scheduleKind === "at") {
+    // scheduleExpr is a raw, NON-canonical wire string here (schema only checks
+    // length), so parse it through fromExternalRfc3339 — garbage throws and is
+    // mapped to a 400 at create / parks the rule at schedule time, never a
+    // silent null next-fire.
     const candidate =
-      startsAt || (input.scheduleExpr ? new Date(input.scheduleExpr) : null)
+      startsAt ||
+      (input.scheduleExpr
+        ? new Date(fromExternalRfc3339(input.scheduleExpr))
+        : null)
     if (!candidate) return null
     if (candidate.getTime() <= baseTime.getTime()) return null
     if (activeFrom && candidate.getTime() < activeFrom.getTime()) return null
@@ -498,7 +522,7 @@ function computeNextFireAt(input: {
       throw new Error("intervalSeconds must be greater than 0")
     }
     const anchor = input.lastFiredAt
-      ? new Date(input.lastFiredAt)
+      ? parseInstantString(input.lastFiredAt)
       : startsAt ||
         (activeFrom && activeFrom.getTime() > baseTime.getTime()
           ? activeFrom
@@ -535,15 +559,25 @@ async function normalizeTriggerInput(params: {
     const scheduleKind =
       input.scheduleKind ||
       (input.startsAt ? "at" : input.intervalSeconds ? "interval" : "cron")
-    const nextFireAt = computeNextFireAt({
-      scheduleKind,
-      scheduleExpr: input.scheduleExpr,
-      scheduleTimezone: input.scheduleTimezone,
-      intervalSeconds: input.intervalSeconds,
-      startsAt: input.startsAt || null,
-      activeFrom: params.policy?.activeFrom || null,
-      activeUntil: params.policy?.activeUntil || null,
-    })
+    // Bad cron / IANA timezone / interval input must fail as a clean 400 at the
+    // create/update boundary, not as an uncaught 500 (and must never reach the
+    // scheduler as a poison row).
+    let nextFireAt: Timestamp | null
+    try {
+      nextFireAt = computeNextFireAt({
+        scheduleKind,
+        scheduleExpr: input.scheduleExpr,
+        scheduleTimezone: input.scheduleTimezone,
+        intervalSeconds: input.intervalSeconds,
+        startsAt: input.startsAt || null,
+        activeFrom: params.policy?.activeFrom || null,
+        activeUntil: params.policy?.activeUntil || null,
+      })
+    } catch (err) {
+      throw badScheduleInput(
+        err instanceof Error ? err.message : "Invalid schedule configuration"
+      )
+    }
     return {
       trigger_kind: "schedule",
       source_kind: "clock",
@@ -2013,6 +2047,8 @@ async function expireAutomationRules(params: {
   workspaceId?: string
   client?: Executor
 }) {
+  // datetime-ok: liveness evaluation defaults to "now" when no reference time
+  // is supplied — a deliberate evaluation-time default, not a bad-value mask.
   const referenceTime = params.referenceTime || nowIsoInstant()
   await expireAutomationRuleRows({
     referenceTime,
@@ -2069,6 +2105,8 @@ async function createAutomationOccurrence(params: {
   occurredAt?: Timestamp
   client?: Executor
 }) {
+  // datetime-ok: a manually-created occurrence defaults its occurredAt to "now"
+  // when the caller supplies none — a deliberate default, not a bad-value mask.
   const occurredAt = params.occurredAt || nowIsoInstant()
   const dedupeKey = params.dedupeKey?.trim() || null
 
@@ -3024,6 +3062,9 @@ export async function scheduleDueAutomationExecutions(
   limit = MAX_SCHEDULER_BATCH_SIZE
 ): Promise<ScheduleDueRulesResult> {
   const scheduledExecutions: string[] = []
+  // Poison rows (invalid schedule) collected during the batch and parked AFTER
+  // it in independent transactions (MF-8).
+  const poisonRules: { ruleId: string; lastFiredAt: Date | null }[] = []
   const batchSize = Math.max(1, Math.min(limit, MAX_SCHEDULER_BATCH_SIZE))
 
   await withAutomationTransaction(async (trx) => {
@@ -3033,11 +3074,48 @@ export async function scheduleDueAutomationExecutions(
 
     for (const row of dueRows) {
       const rowDates = presentDueScheduleRowDates(row)
+
+      // Compute the next fire time FIRST and isolate per-row failures. A poison
+      // row (invalid cron / IANA tz / interval that slipped past create-time
+      // validation via a migration or direct write) must NOT roll back the
+      // whole batch and then re-fire every cycle (the M3 scheduler deadlock).
+      // Park it: clear next_fire_at so it leaves the due set, log loudly, and
+      // continue with the rest of the batch.
+      let nextFireAt: Timestamp | null
+      try {
+        nextFireAt = computeNextFireAt({
+          scheduleKind: row.scheduleKind,
+          scheduleExpr: row.scheduleExpr || undefined,
+          scheduleTimezone: row.scheduleTimezone || undefined,
+          intervalSeconds: row.intervalSeconds || undefined,
+          startsAt: rowDates.startsAt ?? null,
+          activeFrom: rowDates.activeFrom ?? null,
+          activeUntil: rowDates.activeUntil ?? null,
+          baseTime: row.nextFireAt,
+          lastFiredAt: rowDates.nextFireAt,
+        })
+      } catch (err) {
+        // Poison row (invalid cron/tz/interval that slipped past create-time
+        // validation). Record it for parking in an INDEPENDENT transaction
+        // AFTER this batch (MF-8): parking inside this shared batch txn would be
+        // rolled back if a LATER row in the batch fails, re-arming the poison
+        // loop. Skip it here so the rest of the batch still commits.
+        log.error(
+          { err, ruleId: row.ruleId, workspaceId: row.workspaceId },
+          "automation.scheduler.compute_next_fire_failed_parking_rule"
+        )
+        poisonRules.push({ ruleId: row.ruleId, lastFiredAt: row.nextFireAt })
+        continue
+      }
+
       const occurrence = await createAutomationOccurrence({
         workspaceId: row.workspaceId,
         sourceKind: "clock",
         sourceLocator: row.scheduleTimezone || "UTC",
-        dedupeKey: `${row.ruleId}:${row.nextFireAt}`,
+        // Canonical, timezone-independent idempotency key (M8): the raw Date's
+        // toString() varies with process TZ/locale, so two API replicas could
+        // derive different keys for the same fire and double-create.
+        dedupeKey: `${row.ruleId}:${rowDates.nextFireAt}`,
         sourceSnapshot: {
           ruleId: row.ruleId,
           ruleName: row.ruleName,
@@ -3062,18 +3140,6 @@ export async function scheduleDueAutomationExecutions(
         client: trx,
       })
 
-      const nextFireAt = computeNextFireAt({
-        scheduleKind: row.scheduleKind,
-        scheduleExpr: row.scheduleExpr || undefined,
-        scheduleTimezone: row.scheduleTimezone || undefined,
-        intervalSeconds: row.intervalSeconds || undefined,
-        startsAt: rowDates.startsAt ?? null,
-        activeFrom: rowDates.activeFrom ?? null,
-        activeUntil: rowDates.activeUntil ?? null,
-        baseTime: row.nextFireAt,
-        lastFiredAt: rowDates.nextFireAt,
-      })
-
       await updateAutomationTriggerSchedule(trx, row.ruleId, {
         lastFiredAt: row.nextFireAt,
         nextFireAt: nextFireAt ? parseInstantString(nextFireAt) : null,
@@ -3083,6 +3149,23 @@ export async function scheduleDueAutomationExecutions(
       }
     }
   })
+
+  // Park poison rows out-of-band (MF-8): clear next_fire_at so they leave the
+  // due set even if the batch above partially failed and rolled back. Each park
+  // is its own transaction so one failure can't block the others or re-arm the
+  // poison loop.
+  for (const { ruleId, lastFiredAt } of poisonRules) {
+    try {
+      await withAutomationTransaction((trx) =>
+        updateAutomationTriggerSchedule(trx, ruleId, {
+          lastFiredAt,
+          nextFireAt: null,
+        })
+      )
+    } catch (err) {
+      log.error({ err, ruleId }, "automation.scheduler.park_poison_rule_failed")
+    }
+  }
 
   return { scheduledExecutions }
 }

@@ -1,9 +1,13 @@
 import crypto from "node:crypto"
-import { dateToIsoInstant, nowIsoInstant } from "@synapse/shared/datetime"
+import {
+  fromExternalRfc3339,
+  serverReceiveInstant,
+} from "@synapse/shared/datetime"
 import {
   buildAutomationEventSourceTemplate,
   getAutomationEventDefinition,
 } from "@synapse/shared/automation"
+import { createLogger } from "../../infrastructure/logger/index.js"
 import type {
   AutomationEventSource,
   AutomationEventSourceIntegration,
@@ -147,6 +151,8 @@ function headerValue(headers: Record<string, unknown>, key: string) {
   return null
 }
 
+const log = createLogger("automation.integrations")
+
 function nestedTimestamp(payload: Record<string, unknown>, ...path: string[]) {
   let current: unknown = payload
   for (const segment of path) {
@@ -157,8 +163,18 @@ function nestedTimestamp(payload: Record<string, unknown>, ...path: string[]) {
   }
   const value = readString(current)
   if (!value) return null
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime()) ? null : dateToIsoInstant(parsed)
+  try {
+    return fromExternalRfc3339(value)
+  } catch {
+    // A present-but-unparseable webhook timestamp is logged (not silent) and
+    // treated as "this candidate unusable" → the chain tries the next field,
+    // falling back to serverReceiveInstant only if ALL candidates are absent.
+    // We deliberately do NOT throw: webhook ingestion returns 5xx on an
+    // unhandled error and GitHub/GitLab would then redeliver the same poison
+    // payload forever (retry storm) — the failure mode MF-7 avoids for QQ.
+    log.warn({ path, value }, "automation.webhook.event_time_unparseable")
+    return null
+  }
 }
 
 function githubApiBaseUrl(configData: Record<string, unknown>) {
@@ -663,7 +679,11 @@ export function normalizeIntegrationWebhookIngress(input: {
         nestedTimestamp(payload, "review", "submitted_at") ||
         nestedTimestamp(payload, "workflow_run", "updated_at") ||
         nestedTimestamp(payload, "head_commit", "timestamp") ||
-        nowIsoInstant(),
+        // datetime-ok: no usable event-time field in the webhook payload → fall
+        // back to the server receive instant. A present-but-corrupt value would
+        // already have thrown in nestedTimestamp, so this only fires when every
+        // candidate field is genuinely absent.
+        serverReceiveInstant(),
       sourceSnapshot: {
         integrationProvider: "github",
         integrationTargetKind: input.integration.targetKind,
@@ -693,7 +713,11 @@ export function normalizeIntegrationWebhookIngress(input: {
       nestedTimestamp(payload, "object_attributes", "created_at") ||
       nestedTimestamp(payload, "object_attributes", "updated_at") ||
       nestedTimestamp(payload, "commit", "timestamp") ||
-      nowIsoInstant(),
+      // datetime-ok: no usable event-time field in the webhook payload → fall
+      // back to the server receive instant. A present-but-corrupt value would
+      // already have thrown in nestedTimestamp, so this only fires when every
+      // candidate field is genuinely absent.
+      serverReceiveInstant(),
     sourceSnapshot: {
       integrationProvider: "gitlab",
       integrationTargetKind: input.integration.targetKind,

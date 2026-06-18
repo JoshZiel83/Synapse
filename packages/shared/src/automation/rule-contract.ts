@@ -9,7 +9,7 @@ import type {
   CanonicalContentBlockInput,
   Timestamp,
 } from "../types/index.js"
-import { dateToIsoInstant } from "../datetime/instant.js"
+import { dateToIsoInstant, parseIsoInstant } from "../datetime/instant.js"
 
 export interface AutomationRuleCreateTriggerPayload {
   triggerKind: AutomationTriggerKind
@@ -361,6 +361,29 @@ export function mergeAutomationRuleUpdatePayload(
   }
 }
 
+/** Upper bound for an interval schedule: 1 year in seconds. Keeps `baseTime +
+ *  intervalSeconds*1000` well inside the JS Date range and rejects absurd input. */
+const MAX_INTERVAL_SECONDS = 366 * 24 * 60 * 60
+
+/**
+ * IANA time-zone validity check. Uses the runtime's Intl database. If the
+ * runtime cannot validate zones at all (some Hermes builds), it does NOT reject
+ * — the API re-validates server-side where Intl is always available.
+ */
+function isValidIanaTimeZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: "UTC" })
+  } catch {
+    return true
+  }
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz })
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function validateAutomationRuleCreatePayload(
   payload: AutomationRuleCreatePayload
 ): AutomationRuleContractIssue[] {
@@ -418,6 +441,30 @@ export function validateAutomationRuleCreatePayload(
         message: "Point-in-time schedules require a fire time",
       })
     }
+    // A present interval must be a bounded positive integer (sub-second
+    // fractions and absurdly large values are rejected here instead of failing
+    // deep in / poisoning the scheduler).
+    if (
+      scheduleKind === "interval" &&
+      payload.trigger.intervalSeconds !== undefined &&
+      payload.trigger.intervalSeconds > 0 &&
+      (!Number.isInteger(payload.trigger.intervalSeconds) ||
+        payload.trigger.intervalSeconds > MAX_INTERVAL_SECONDS)
+    ) {
+      issues.push({
+        path: "trigger.intervalSeconds",
+        message: `intervalSeconds must be a whole number of seconds no greater than ${MAX_INTERVAL_SECONDS}`,
+      })
+    }
+    // A present timezone must be a real IANA zone (catches typos like
+    // "Asia/Shangai" that would otherwise throw deep in cron-parser).
+    const tz = trimString(payload.trigger.scheduleTimezone)
+    if (tz && !isValidIanaTimeZone(tz)) {
+      issues.push({
+        path: "trigger.scheduleTimezone",
+        message: `Unknown time zone: ${tz}`,
+      })
+    }
   }
 
   if (
@@ -434,8 +481,8 @@ export function validateAutomationRuleCreatePayload(
   if (
     trimString(payload.policy?.activeFrom) &&
     trimString(payload.policy?.activeUntil) &&
-    new Date(payload.policy!.activeFrom!).getTime() >
-      new Date(payload.policy!.activeUntil!).getTime()
+    parseIsoInstant(payload.policy!.activeFrom!).getTime() >
+      parseIsoInstant(payload.policy!.activeUntil!).getTime()
   ) {
     issues.push({
       path: "policy.activeUntil",
@@ -448,8 +495,8 @@ export function validateAutomationRuleCreatePayload(
     payload.trigger.scheduleKind === "at" &&
     trimString(payload.trigger.startsAt) &&
     trimString(payload.policy?.activeFrom) &&
-    new Date(payload.trigger.startsAt!).getTime() <
-      new Date(payload.policy!.activeFrom!).getTime()
+    parseIsoInstant(payload.trigger.startsAt!).getTime() <
+      parseIsoInstant(payload.policy!.activeFrom!).getTime()
   ) {
     issues.push({
       path: "trigger.startsAt",
@@ -462,8 +509,8 @@ export function validateAutomationRuleCreatePayload(
     payload.trigger.scheduleKind === "at" &&
     trimString(payload.trigger.startsAt) &&
     trimString(payload.policy?.activeUntil) &&
-    new Date(payload.trigger.startsAt!).getTime() >
-      new Date(payload.policy!.activeUntil!).getTime()
+    parseIsoInstant(payload.trigger.startsAt!).getTime() >
+      parseIsoInstant(payload.policy!.activeUntil!).getTime()
   ) {
     issues.push({
       path: "policy.activeUntil",

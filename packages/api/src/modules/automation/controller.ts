@@ -554,13 +554,27 @@ export default async function automationController(app: FastifyInstance) {
         return
       }
       const workspaceMemberId = (request as any).workspaceMember!.id as string
-      const automation = await createAutomationRule(
-        workspaceId,
-        { kind: "workspace_member", workspaceMemberId },
-        body
-      )
-      reply.status(201)
-      return automation
+      try {
+        const automation = await createAutomationRule(
+          workspaceId,
+          { kind: "workspace_member", workspaceMemberId },
+          body
+        )
+        reply.status(201)
+        return automation
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          (error as Error & { statusCode?: number }).statusCode === 400
+        ) {
+          reply.status(400).send({
+            error: error.message,
+            issues: (error as Error & { issues?: unknown }).issues || [],
+          })
+          return
+        }
+        throw error
+      }
     }
   )
 
