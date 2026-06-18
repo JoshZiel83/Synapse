@@ -63,7 +63,7 @@ import {
   getLatestInboundAnchor,
   type QqLatestInboundAnchor,
 } from "./latest-inbound-store.js"
-import { readCasBlob } from "../../../../infrastructure/storage/index.js"
+import { readContentBuffer } from "../../../../infrastructure/storage/content-store.js"
 import { uploadQqMedia } from "./media-upload.js"
 import { QQ_FILE_TYPE, type QqFileType } from "./media-constants.js"
 import {
@@ -810,7 +810,7 @@ async function resolveFileInfo(params: {
       { code: "qq_invalid_endpoint" }
     )
   }
-  const buffer = await readCasBlob(sha256)
+  const buffer = await readContentBuffer(sha256)
   if (buffer.length === 0) {
     throw new PermanentTransportError("qq: media resource is empty", {
       code: "qq_media_empty",

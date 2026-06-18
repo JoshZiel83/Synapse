@@ -1,8 +1,6 @@
 import path from "node:path"
 import os from "node:os"
 import fs from "node:fs/promises"
-import crypto from "node:crypto"
-import type { FileStorageBackend } from "@synapse/shared/types"
 import { assertPublicHost, ssrfSafeDispatcher } from "./ssrf.js"
 import { createLogger } from "../logger/index.js"
 
@@ -38,24 +36,6 @@ const MIME_ALIASES: Record<string, string> = {
   "image/jpg": "image/jpeg",
   "audio/mp3": "audio/mpeg",
 }
-const PREFERRED_EXTENSIONS: Record<string, string> = {
-  "application/pdf": ".pdf",
-  "audio/mpeg": ".mp3",
-  "audio/mp4": ".m4a",
-  "audio/ogg": ".ogg",
-  "audio/wav": ".wav",
-  "image/avif": ".avif",
-  "image/bmp": ".bmp",
-  "image/gif": ".gif",
-  "image/heif": ".heif",
-  "image/jpeg": ".jpg",
-  "image/png": ".png",
-  "image/tiff": ".tiff",
-  "image/webp": ".webp",
-  "video/mp4": ".mp4",
-  "video/quicktime": ".mov",
-  "video/webm": ".webm",
-}
 const MIME_EXTENSIONS: Record<string, string[]> = {
   "application/pdf": [".pdf"],
   "audio/mpeg": [".mp3"],
@@ -89,31 +69,12 @@ export async function ensureStorageDir(): Promise<void> {
   await fs.mkdir(STORAGE_DIR, { recursive: true })
 }
 
-/** Date-partitioned sub-path: YYYY/MM/DD */
-function dateParts(): { year: string; month: string; day: string } {
-  const now = new Date()
-  return {
-    year: String(now.getFullYear()),
-    month: String(now.getMonth() + 1).padStart(2, "0"),
-    day: String(now.getDate()).padStart(2, "0"),
-  }
-}
-
-function extFromName(originalName: string): string {
-  const idx = originalName.lastIndexOf(".")
-  return idx > 0 ? originalName.slice(idx) : ""
-}
-
 export function normalizeMimeType(mimeType: string | null | undefined): string {
   const normalized = (mimeType || "application/octet-stream")
     .split(";", 1)[0]
     .trim()
     .toLowerCase()
   return MIME_ALIASES[normalized] || normalized || "application/octet-stream"
-}
-
-function extensionForMimeType(mimeType: string): string {
-  return PREFERRED_EXTENSIONS[normalizeMimeType(mimeType)] || ""
 }
 
 export function normalizeOriginalNameForMimeType(
@@ -305,123 +266,12 @@ export async function resolveBufferMimeType(
   return detectedMimeType || normalizedClaimedMimeType
 }
 
-/**
- * Save a buffer to disk in the date-partitioned directory.
- * Returns { storedName, sizeBytes }.
- */
-export async function saveBuffer(
-  buffer: Buffer,
-  originalName: string,
-  mimeType: string
-): Promise<{ storedName: string; sizeBytes: number }> {
-  const { year, month, day } = dateParts()
-  const ext = extensionForMimeType(mimeType) || extFromName(originalName)
-  const uuid = crypto.randomUUID()
-  const storedName = path.join(year, month, day, `${uuid}${ext}`)
-  const fullPath = path.join(STORAGE_DIR, storedName)
-
-  await fs.mkdir(path.dirname(fullPath), { recursive: true })
-  await fs.writeFile(fullPath, buffer)
-
-  return { storedName, sizeBytes: buffer.length }
-}
-
-function sha256Hex(buffer: Buffer): string {
-  return crypto.createHash("sha256").update(buffer).digest("hex")
-}
-
-export function resolveLocalStoragePath(storageKey: string): string {
-  return path.join(STORAGE_DIR, storageKey)
-}
-
-// ─────────────────────── content-addressed store ─────────────────────────────
-// <CONTENT_STORE_DIR>/blobs/<aa>/<sha256> — identical layout to the Rust
-// fs-helper BlobStore (which does cas_dir.join("blobs").join(<aa>).join(sha)),
-// so a topology-A deployment shares one CAS volume: blobs the sandbox helper
-// writes are readable here and vice-versa.
-function casBlobPath(sha256: string): string {
-  return path.join(CONTENT_STORE_DIR, "blobs", sha256.slice(0, 2), sha256)
-}
-
-export interface ContentBlobRef {
-  sha256: string
-  sizeBytes: number
-  /** true if the blob already existed (dedup hit) */
-  dedup: boolean
-}
-
-/**
- * Store a buffer in the content-addressed store. Atomic (tmp + rename) and
- * deduplicating: if the sha256 already exists, no rewrite happens and
- * dedup=true. This is the API-side ContentStore writer (the Rust fs-helper
- * is the sandbox-side one; both target the same CAS dir in topology A).
- */
-export async function putBufferCas(buffer: Buffer): Promise<ContentBlobRef> {
-  const sha256 = sha256Hex(buffer)
-  const finalPath = casBlobPath(sha256)
-  try {
-    const stat = await fs.stat(finalPath)
-    return { sha256, sizeBytes: stat.size, dedup: true }
-  } catch {
-    /* not present — write it */
-  }
-  await fs.mkdir(path.dirname(finalPath), { recursive: true })
-  const tmpPath = `${finalPath}.incoming.${crypto.randomUUID()}`
-  await fs.writeFile(tmpPath, buffer, { mode: 0o600 })
-  try {
-    await fs.rename(tmpPath, finalPath)
-  } catch (err) {
-    // Lost a race with a concurrent writer of the same sha — that's fine,
-    // the content is identical. Clean up our tmp and treat as dedup.
-    await fs.rm(tmpPath, { force: true }).catch(() => {})
-    try {
-      const stat = await fs.stat(finalPath)
-      return { sha256, sizeBytes: stat.size, dedup: true }
-    } catch {
-      throw err
-    }
-  }
-  return { sha256, sizeBytes: buffer.length, dedup: false }
-}
-
-/** True if a content blob with this sha256 is present. */
-export async function casBlobExists(sha256: string): Promise<boolean> {
-  try {
-    await fs.access(casBlobPath(sha256))
-    return true
-  } catch {
-    return false
-  }
-}
-
-/** Read a content blob's bytes by sha256. */
-export async function readCasBlob(sha256: string): Promise<Buffer> {
-  return fs.readFile(casBlobPath(sha256))
-}
-
-/** Read a content blob as base64 by sha256. */
-export async function readCasBlobBase64(sha256: string): Promise<string> {
-  return (await readCasBlob(sha256)).toString("base64")
-}
-
 export function getStableFileUrl(fileId: string): string {
   return `${FILE_URL_PREFIX}${fileId}`
 }
 
 export function getStableFullFileUrl(fileId: string): string {
   return `${BASE_URL}${getStableFileUrl(fileId)}`
-}
-
-/** Read a stored file back as a Buffer */
-export async function readAsBuffer(storedName: string): Promise<Buffer> {
-  const fullPath = path.join(STORAGE_DIR, storedName)
-  return fs.readFile(fullPath)
-}
-
-/** Read a stored file back as a base64 string */
-export async function readAsBase64(storedName: string): Promise<string> {
-  const buf = await readAsBuffer(storedName)
-  return buf.toString("base64")
 }
 
 /**
@@ -452,30 +302,6 @@ export async function downloadToBuffer(
     originalName,
     maxBytes: DEFAULT_DOWNLOAD_MAX_BYTES,
   })
-}
-
-/** Download a remote URL, save to disk, return metadata */
-export async function downloadAndSave(
-  url: string,
-  originalName?: string
-): Promise<{
-  storedName: string
-  mimeType: string
-  sizeBytes: number
-  originalName: string
-}> {
-  const downloaded = await downloadToBuffer(url, originalName)
-  const { storedName, sizeBytes } = await saveBuffer(
-    downloaded.buffer,
-    downloaded.originalName,
-    downloaded.mimeType
-  )
-  return {
-    storedName,
-    mimeType: downloaded.mimeType,
-    sizeBytes,
-    originalName: downloaded.originalName,
-  }
 }
 
 /**

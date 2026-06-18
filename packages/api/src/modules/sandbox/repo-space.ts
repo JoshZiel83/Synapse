@@ -354,17 +354,6 @@ export async function appendSnapshot(
   return row
 }
 
-/** Upsert a content_blobs row (sha256 PK; dedup via ON CONFLICT DO NOTHING). */
-export async function ensureContentBlob(
-  client: Executor,
-  input: { sha256: string; sizeBytes: number; backend?: string }
-): Promise<void> {
-  await sql`
-    INSERT INTO content_blobs (sha256, size_bytes, backend, created_at)
-    VALUES (${input.sha256}, ${input.sizeBytes}, ${input.backend ?? "local_cas"}, NOW())
-    ON CONFLICT (sha256) DO NOTHING`.execute(client)
-}
-
 /** Load a snapshot's manifest sha for a given snapshot id (within a space). */
 export async function getSnapshotManifestSha(
   client: Executor,

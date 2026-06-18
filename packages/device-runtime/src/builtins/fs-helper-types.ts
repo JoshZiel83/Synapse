@@ -187,6 +187,41 @@ export interface CasHasResult {
   exists: boolean
 }
 
+// ─── Axis-B remote presigned CAS transfer (host-side direct transfer) ────────
+// The helper streams bytes between an object store (via a supervisor-minted,
+// short-lived presigned URL) and its LOCAL --cas-dir. It holds NO credentials —
+// only the per-call URL. Verify-on-write reuses the existing sha check.
+
+export interface CasImportUrlInput {
+  /** The supervisor-asserted sha256 the fetched bytes MUST hash to. */
+  sha256: string
+  /** Short-lived, single-object presigned GET URL minted by the supervisor. */
+  url: string
+  /** Optional expected size; checked against Content-Length when both present. */
+  expected_size?: number
+}
+export interface CasImportUrlResult {
+  sha256: string
+  size: number
+  dedup: boolean
+}
+
+export interface CasExportUrlInput {
+  /** CAS key of the local blob whose bytes to upload. */
+  sha256: string
+  /** Short-lived, single-object presigned PUT URL minted by the supervisor. */
+  put_url: string
+  /**
+   * Extra headers to attach verbatim (e.g. x-amz-checksum-sha256). The
+   * supervisor — not the helper — constructs + signs these into the URL.
+   */
+  headers?: [string, string][]
+}
+export interface CasExportUrlResult {
+  size: number
+  etag?: string
+}
+
 export interface CasGcInput {
   /** Complete reachable set; any blob NOT in this set is deleted. */
   reachable_sha256: string[]

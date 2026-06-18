@@ -32,7 +32,7 @@ import {
   parseIsoInstant,
 } from "@synapse/shared/datetime"
 import { createLogger } from "../../../../infrastructure/logger/index.js"
-import { readCasBlob } from "../../../../infrastructure/storage/index.js"
+import { readContentBuffer } from "../../../../infrastructure/storage/content-store.js"
 import type {
   MessageRef,
   OutboundEndpointRef,
@@ -387,7 +387,7 @@ export async function sendDingtalkMessage(
       cachedOapiToken = await getOapiAccessToken(input.account)
       return cachedOapiToken
     },
-    readBytes: input.readBytes ?? readCasBlob,
+    readBytes: input.readBytes ?? readContentBuffer,
   }
 
   const plan = planDingtalkSends(degraded)

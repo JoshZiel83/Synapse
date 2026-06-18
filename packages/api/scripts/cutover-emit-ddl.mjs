@@ -582,6 +582,16 @@ function emitSecurityDefinerFns() {
       args: "p_token_id uuid",
       body: "DELETE FROM chat_push_tokens WHERE id = p_token_id;",
     },
+    {
+      // Durable-GC row purge (content storage plan §10#1): the durable sweep
+      // deletes a remote object's bytes, then removes its content_blobs ledger
+      // row through this fn so the sd_reject_delete trigger (which blocks
+      // app-role DELETEs on content_blobs) permits it. Unlike its siblings the
+      // key is the sha256 (varchar), not a uuid.
+      name: "sd_delete_content_blob",
+      args: "p_sha varchar",
+      body: "DELETE FROM content_blobs WHERE sha256 = p_sha;",
+    },
   ]
 
   for (const fn of FNS) {
@@ -633,6 +643,9 @@ $sd_exec_grants$;`)
     "tool_call_task_action_tokens",
     "realtime_event_outbox",
     "chat_push_tokens",
+    // Durable-GC purge target (plan §10#1) — sd_delete_content_blob owner needs
+    // SELECT+DELETE on content_blobs like every other sd_delete_* table.
+    "content_blobs",
   ]
   F.push(
     `GRANT SELECT, DELETE ON ${ownerTables.join(", ")} TO synapse_purge_fn_owner;`

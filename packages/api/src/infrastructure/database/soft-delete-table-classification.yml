@@ -152,6 +152,8 @@ tables:
     class: reference
     softDelete: none
     workspaceScope: none
+    deleteWhitelist:
+      - securityDefinerFn
   context_archive_frame_parts:
     class: append-only
     softDelete: none

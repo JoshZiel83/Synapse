@@ -37,6 +37,14 @@ pub struct Cli {
     /// one-shot helper with --cas-dir to materialize/commit file spaces.
     #[arg(long)]
     pub cas_dir: Option<PathBuf>,
+    /// SSRF allowlist for axis-B presigned-transfer RPCs (fs.cas.import_url /
+    /// fs.cas.export_url): the set of hostnames the helper is permitted to
+    /// GET/PUT against. Repeatable AND comma-separated. When set, a presigned
+    /// URL whose host is not in this list is rejected with invalid_params. When
+    /// unset (None), the host check is skipped — the supervisor mints the URL,
+    /// so this is defence-in-depth, but a deployment SHOULD pin it.
+    #[arg(long, value_delimiter = ',')]
+    pub presign_allow_host: Option<Vec<String>>,
     #[arg(long)]
     pub tika_endpoint: Option<String>,
     #[arg(long, default_value = "")]
@@ -494,6 +502,8 @@ async fn dispatch(
         }
         "fs.cas.put" => cas_put(&state, params).await,
         "fs.cas.has" => cas_has(&state, params).await,
+        "fs.cas.import_url" => cas_import_url(&state, params).await,
+        "fs.cas.export_url" => cas_export_url(&state, params).await,
         "fs.cas.gc" => cas_gc(&state, params).await,
         "fs.manifest.materialize" => manifest_materialize(&state, params).await,
         "fs.manifest.scan_commit" => manifest_scan_commit(&state, params).await,
@@ -541,6 +551,82 @@ async fn cas_has(state: &Arc<State>, params: Value) -> Result<Value, RpcError> {
     let cas = cas_lock(state).await?;
     let exists = cas.exists(&input.sha256);
     Ok(serde_json::to_value(rpc::CasHasResult { exists }).unwrap())
+}
+
+/// Enforce the `--presign-allow-host` SSRF allowlist against a presigned URL.
+/// When the allowlist is unset, the check is skipped (defence-in-depth — the
+/// supervisor mints the URL). When set, the URL must parse and its host must be
+/// a member, else InvalidParams. Mirrors storage/ssrf.ts's host gate (the full
+/// DNS-resolve protection lives in the TS supervisor; the helper only pins the
+/// host since it never minted the URL).
+fn enforce_presign_host(state: &Arc<State>, url: &str) -> Result<(), RpcError> {
+    let Some(allow) = state.cli.presign_allow_host.as_ref() else {
+        return Ok(());
+    };
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|e| RpcError::InvalidParams(format!("invalid presign url: {e}")))?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| RpcError::InvalidParams("presign url has no host".into()))?;
+    // reqwest lowercases the host when it parses the URL, so a byte-exact compare
+    // would fail-closed against an uppercase allowlist entry (e.g.
+    // "S3.example.com"). Compare ASCII-case-insensitively so an uppercase
+    // allowlist entry still matches the lowercased parsed host.
+    if allow.iter().any(|h| h.eq_ignore_ascii_case(host)) {
+        Ok(())
+    } else {
+        Err(RpcError::InvalidParams(format!(
+            "host not in presign-allow-host: {host}"
+        )))
+    }
+}
+
+/// Per-call presigned-transfer HTTP client. Built with `redirect::Policy::none()`
+/// so a 3xx response is surfaced as an error rather than followed: the SSRF
+/// allowlist (`enforce_presign_host`) only checks the ORIGINAL url, so following
+/// a redirect to an arbitrary host would bypass it. Credential-free + short-lived
+/// (the helper holds only the presigned URL), built fresh per call so no long-
+/// lived creds accrue.
+fn presign_http_client() -> Result<reqwest::Client, RpcError> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| RpcError::Internal(format!("http client build failed: {e}")))
+}
+
+async fn cas_import_url(state: &Arc<State>, params: Value) -> Result<Value, RpcError> {
+    let input: rpc::CasImportUrlInput = serde_json::from_value(params)
+        .map_err(|e| RpcError::InvalidParams(e.to_string()))?;
+    // SSRF check BEFORE the transfer; redirect-none client so a 3xx errors
+    // rather than escaping the allowlist by hopping to another host.
+    enforce_presign_host(state, &input.url)?;
+    let client = presign_http_client()?;
+    // Network GET runs WITHOUT cas_lock held (so a slow transfer doesn't
+    // serialize all CAS ops); the lock is taken only for the put_bytes step.
+    let body = blobs::fetch_url_body(&client, &input.url, input.expected_size).await?;
+    let (sha256, size, dedup) = {
+        let cas = cas_lock(state).await?;
+        cas.ingest_imported_bytes(&input.sha256, &body)?
+    };
+    Ok(serde_json::to_value(rpc::CasImportUrlResult { sha256, size, dedup }).unwrap())
+}
+
+async fn cas_export_url(state: &Arc<State>, params: Value) -> Result<Value, RpcError> {
+    let input: rpc::CasExportUrlInput = serde_json::from_value(params)
+        .map_err(|e| RpcError::InvalidParams(e.to_string()))?;
+    // SSRF check BEFORE the transfer; redirect-none client (see import).
+    enforce_presign_host(state, &input.put_url)?;
+    let headers = input.headers.unwrap_or_default();
+    // Read the local blob under cas_lock, then release it before the network PUT
+    // so the transfer doesn't serialize all CAS ops.
+    let bytes = {
+        let cas = cas_lock(state).await?;
+        cas.read_for_export(&input.sha256)?
+    };
+    let client = presign_http_client()?;
+    let (size, etag) =
+        blobs::put_url_body(&client, &input.put_url, bytes, &headers).await?;
+    Ok(serde_json::to_value(rpc::CasExportUrlResult { size, etag }).unwrap())
 }
 
 async fn cas_gc(state: &Arc<State>, params: Value) -> Result<Value, RpcError> {

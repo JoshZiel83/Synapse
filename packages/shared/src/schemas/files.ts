@@ -6,7 +6,6 @@ import {
   FILE_ORIGIN_SYSTEMS,
   FILE_PARSE_OUTPUT_KINDS,
   FILE_PARSE_RUN_STATUSES,
-  FILE_STORAGE_BACKENDS,
   USER_UPLOAD_FILE_ORIGIN_SYSTEMS,
 } from "../constants/enums.js"
 import type { FileOriginSummary } from "../types/index.js"
@@ -70,7 +69,10 @@ export const FileRecordViewSchema = z.object({
   contentKind: z.enum(CANONICAL_FILE_CATEGORIES),
   sizeBytes: z.number(),
   sha256: z.string(),
-  storageBackend: z.enum(FILE_STORAGE_BACKENDS),
+  // Opaque, deployment-config-driven backend id (plan §7#4): the wire carries
+  // it as a plain string, not a frozen enum, so a real non-local backend
+  // serializes without a schema/migration change.
+  storageBackend: z.string(),
   originSummary: FileOriginSummaryViewSchema,
   createdAt: IsoInstantStringSchema,
 })

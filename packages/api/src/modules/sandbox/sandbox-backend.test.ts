@@ -22,6 +22,9 @@ function makeSpec(over: Partial<SandboxSpec> = {}): SandboxSpec {
 
 function stubProvider(over: Partial<HostProvider> = {}): HostProvider {
   return {
+    blobAccess() {
+      return { kind: "local_cas", casDir: "/tmp/cas" }
+    },
     async pair(): Promise<PairResult> {
       return { deviceId: "dev-1", serviceId: "svc-1" }
     },

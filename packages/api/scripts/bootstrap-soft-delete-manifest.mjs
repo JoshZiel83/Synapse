@@ -179,6 +179,11 @@ const REFERENCE = new Set([
   "file_snapshots", // content-addressed snapshots; immutable-ish history
 ])
 
+// Reference tables whose rows are nonetheless hard-deleted via a SECURITY
+// DEFINER fn (content storage plan §10#1). They keep `class: reference` but get a
+// deleteWhitelist:[securityDefinerFn] so regen doesn't drop the purge route.
+const PURGED_REFERENCE = new Set(["content_blobs"])
+
 // Live-status value sets for status/state tables (§7.6 — heterogeneous!).
 const LIVE_VALUES = {
   workspace_members: ["active"],
@@ -365,6 +370,14 @@ for (const [name, tbl] of [...tables].sort()) {
     entry.deleteWhitelist = entry.baOwned
       ? ["ba-kernel", "revokeAuthRuntimeForUser"]
       : ["securityDefinerFn"]
+  } else if (PURGED_REFERENCE.has(name)) {
+    // Special case (content storage plan §10#1): content_blobs is a `reference`
+    // table (append-only ledger) but its rows ARE hard-deleted by the durable GC
+    // sweep through the SECURITY DEFINER fn sd_delete_content_blob. Without this,
+    // regen would drop its deleteWhitelist and the guard would flag the naked
+    // purge path. It is NOT ephemeral/derived, so it falls through the branch
+    // above — whitelist it explicitly here.
+    entry.deleteWhitelist = ["securityDefinerFn"]
   }
 
   outTables[name] = entry

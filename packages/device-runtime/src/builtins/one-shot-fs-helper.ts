@@ -22,6 +22,10 @@ import type {
   CasGcResult,
   CasHasInput,
   CasHasResult,
+  CasImportUrlInput,
+  CasImportUrlResult,
+  CasExportUrlInput,
+  CasExportUrlResult,
   CasPutInput,
   CasPutResult,
   DirSyncInput,
@@ -49,6 +53,13 @@ export interface OneShotFsHelperOptions {
   workDir?: string
   /** Per-RPC timeout (default 120s — big trees take a while to ingest). */
   rpcTimeoutMs?: number
+  /**
+   * Axis-B SSRF allowlist (plan §9.3③): the host(s) the helper is permitted to
+   * GET/PUT against for `casImportUrl`/`casExportUrl`. Threaded to the binary's
+   * `--presign-allow-host` (repeatable AND comma-separated; main.rs:46). Omitted
+   * for the same-host axis-A path, which issues no network presigned transfers.
+   */
+  presignAllowHost?: string[]
   /**
    * W3C `traceparent` (P7). When set, it is stamped onto every outbound
    * JSON-RPC frame so the spawned helper's spans continue the supervisor's
@@ -152,6 +163,11 @@ export class OneShotFsHelper {
     const root = opts.rootPath ?? `${opts.casDir}/.oneshot-root`
     const work = opts.workDir ?? `${opts.casDir}/.oneshot-work`
     const args = ["--root", root, "--work-dir", work, "--cas-dir", opts.casDir]
+    // Axis-B SSRF allowlist (plan §9.3③): pin the hosts the helper may transfer
+    // to/from for presigned import/export. The flag is repeatable.
+    for (const host of opts.presignAllowHost ?? []) {
+      args.push("--presign-allow-host", host)
+    }
     this.child = spawnImpl(opts.helperPath, args, {
       stdio: ["pipe", "pipe", "pipe"],
     })
@@ -264,6 +280,14 @@ export class OneShotFsHelper {
   }
   casGc(input: CasGcInput): Promise<CasGcResult> {
     return this.request("fs.cas.gc", input)
+  }
+  /** Axis-B import: GET a supervisor-minted presigned URL into --cas-dir (plan §8.4). */
+  casImportUrl(input: CasImportUrlInput): Promise<CasImportUrlResult> {
+    return this.request("fs.cas.import_url", input)
+  }
+  /** Axis-B export: PUT a local blob to a supervisor-minted presigned URL (plan §8.4). */
+  casExportUrl(input: CasExportUrlInput): Promise<CasExportUrlResult> {
+    return this.request("fs.cas.export_url", input)
   }
   manifestMaterialize(input: ManifestMaterializeInput): Promise<void> {
     return this.request("fs.manifest.materialize", input)

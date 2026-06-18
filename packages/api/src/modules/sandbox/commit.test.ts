@@ -111,9 +111,14 @@ async function ingest(
   await ensureContentBlob(executor, {
     sha256: scan.manifest_sha256,
     sizeBytes: 0,
+    backend: "local_cas",
   })
   for (const blob of scan.new_blobs) {
-    await ensureContentBlob(executor, { sha256: blob, sizeBytes: 0 })
+    await ensureContentBlob(executor, {
+      sha256: blob,
+      sizeBytes: 0,
+      backend: "local_cas",
+    })
   }
 }
 

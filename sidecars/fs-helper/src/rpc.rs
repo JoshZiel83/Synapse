@@ -11,7 +11,7 @@ use thiserror::Error;
 /// binary class at runtime. BUMP IN LOCKSTEP with the TS constant: any wire-
 /// incompatible change to an existing RPC's params/result is a bump; adding a
 /// new method or an optional field is not.
-pub const PROTO_VERSION: u32 = 1;
+pub const PROTO_VERSION: u32 = 2;
 
 /// `fs.hello` result: the handshake every TS client performs on (re)spawn.
 /// Intentionally requires no State/CAS so it answers even when the helper was
@@ -212,6 +212,30 @@ pub struct CasPutInput {
 #[derive(Debug, Deserialize)]
 pub struct CasHasInput {
     pub sha256: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CasImportUrlInput {
+    /// The supervisor-asserted sha256 the fetched bytes MUST hash to.
+    pub sha256: String,
+    /// Short-lived, single-object presigned GET URL minted by the supervisor.
+    pub url: String,
+    /// Optional expected object size; when set and the response advertises a
+    /// Content-Length, a divergence is rejected up front.
+    #[serde(default)]
+    pub expected_size: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CasExportUrlInput {
+    /// CAS key of the local blob whose bytes to upload.
+    pub sha256: String,
+    /// Short-lived, single-object presigned PUT URL minted by the supervisor.
+    pub put_url: String,
+    /// Extra headers to attach verbatim (e.g. x-amz-checksum-sha256). The
+    /// supervisor — not the helper — constructs + signs these into the URL.
+    #[serde(default)]
+    pub headers: Option<Vec<(String, String)>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -426,6 +450,20 @@ pub struct CasHasResult {
 #[derive(Debug, Serialize)]
 pub struct CasGcResult {
     pub deleted_count: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CasImportUrlResult {
+    pub sha256: String,
+    pub size: u64,
+    pub dedup: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CasExportUrlResult {
+    pub size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub etag: Option<String>,
 }
 
 /// Wire form of a manifest entry returned by scan_commit (so the TS caller

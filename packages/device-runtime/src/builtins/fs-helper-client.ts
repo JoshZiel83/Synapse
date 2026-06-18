@@ -43,6 +43,10 @@ import type {
   CasPutResult,
   CasHasInput,
   CasHasResult,
+  CasImportUrlInput,
+  CasImportUrlResult,
+  CasExportUrlInput,
+  CasExportUrlResult,
   CasGcInput,
   CasGcResult,
   ManifestMaterializeInput,
@@ -125,6 +129,11 @@ const METHOD_TIMEOUT_OVERRIDES: Record<string, number> = {
   "fs.dir.sync": 120_000,
   "fs.manifest.materialize": 120_000,
   "fs.cas.gc": 120_000,
+  // Axis-B host-side direct presigned transfer: a single GET/PUT of one blob
+  // (≤5 GB host presign size class) over the network. Generous ceiling so a
+  // large object on a slow link isn't killed mid-transfer.
+  "fs.cas.import_url": 120_000,
+  "fs.cas.export_url": 120_000,
 }
 
 const STDERR_TAIL_BYTES = 4096
@@ -165,6 +174,16 @@ export interface FsHelperClient {
   // a --cas-dir; otherwise the helper returns invalid_params.
   casPut(input: CasPutInput): Promise<CasPutResult>
   casHas(input: CasHasInput): Promise<CasHasResult>
+  /**
+   * Axis-B remote import: the helper GETs a supervisor-minted presigned URL and
+   * ingests the bytes into its local --cas-dir, verifying the sha on write.
+   */
+  casImportUrl(input: CasImportUrlInput): Promise<CasImportUrlResult>
+  /**
+   * Axis-B remote export: the helper PUTs a local blob's bytes to a
+   * supervisor-minted presigned URL (with supervisor-signed headers).
+   */
+  casExportUrl(input: CasExportUrlInput): Promise<CasExportUrlResult>
   casGc(input: CasGcInput): Promise<CasGcResult>
   manifestMaterialize(input: ManifestMaterializeInput): Promise<void>
   manifestScanCommit(
@@ -467,6 +486,8 @@ export function createFsHelperClient(
     extractText: (input) => request("fs.extract.text", input),
     casPut: (input) => request("fs.cas.put", input),
     casHas: (input) => request("fs.cas.has", input),
+    casImportUrl: (input) => request("fs.cas.import_url", input),
+    casExportUrl: (input) => request("fs.cas.export_url", input),
     casGc: (input) => request("fs.cas.gc", input),
     manifestMaterialize: (input) =>
       request<void>("fs.manifest.materialize", input),

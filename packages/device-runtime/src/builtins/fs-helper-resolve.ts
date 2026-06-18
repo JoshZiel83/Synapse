@@ -29,7 +29,7 @@ export const FS_HELPER_ENV_VAR = "SYNAPSE_DEVICE_FS_HELPER_PATH"
  * spawned binary reports a different value, which catches a stale binary whose
  * CLI args still parse but whose RPC semantics drifted.
  */
-export const FS_HELPER_PROTO_VERSION = 1
+export const FS_HELPER_PROTO_VERSION = 2
 
 /**
  * Thrown when the spawned fs-helper reports a proto_version that doesn't match

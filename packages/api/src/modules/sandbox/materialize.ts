@@ -18,7 +18,22 @@ import {
   type DirSyncResult,
 } from "@synapse/device-runtime"
 import { CONTENT_STORE_DIR } from "../../infrastructure/storage/index.js"
+import {
+  readContentBuffer,
+  listBackends,
+} from "../../infrastructure/storage/content-store.js"
+import type { WriteRoutingContext } from "../../infrastructure/storage/content-store.js"
 import { activeTraceparent } from "../../infrastructure/observability/traceparent.js"
+import { parseManifestShas } from "../files/manifest-parse.js"
+import {
+  ensureBlobsLocal,
+  pushNewBlobsToDurable,
+  hydrateViaPresigned,
+  pushViaPresigned,
+} from "./cas-hydration.js"
+import { selectWriteBackend } from "../../infrastructure/storage/content-store.js"
+import type { BlobAccess } from "./host-provider.js"
+import type { Executor } from "./repo.js"
 
 export class SandboxMaterializeError extends Error {
   constructor(message: string) {
@@ -92,8 +107,59 @@ function helperContext(): HelperContext {
 export async function materializeSnapshot(input: {
   manifestSha256?: string
   targetDir: string
+  /**
+   * How the host reaches blob bytes (plan §8.3). Omitted/`local_cas` (the
+   * default) → axis A: the supervisor fills the SHARED cache directly and the
+   * helper reflinks (byte-identical to today). `presigned` → axis B: the REMOTE
+   * helper streams each supervisor-minted presigned GET into its own --cas-dir.
+   */
+  blobAccess?: BlobAccess
 }): Promise<void> {
   const ctx = helperContext()
+  const access = input.blobAccess
+  const presigned = access?.kind === "presigned" ? access : undefined
+  // Local-only fast path (plan §8.3 axis A default): with NO remote backend
+  // wired AND the host not on the presigned axis, every blob is already in the
+  // shared CAS the helper reflinks from, so the entire hydrate step
+  // (ensureBlobsLocal + manifest read + parseManifestShas + per-sha fs.access)
+  // is a pure no-op. Skip it so a local-only provision does exactly what it did
+  // before the cutover. When a remote backend IS configured (axis A push/pull or
+  // axis B presigned) the full hydrate below runs unchanged.
+  const skipHydrate = listBackends().length === 0 && !presigned
+  // Compute the supervisor-side sha set to hydrate (manifest + its file blobs).
+  // This list is ALWAYS supervisor-derived — never host-supplied — which is the
+  // TOCTOU-free property the presigned minting relies on (plan §9.3).
+  let manifestSha: string | undefined
+  let fileShas: string[] = []
+  if (input.manifestSha256 && !skipHydrate) {
+    manifestSha = input.manifestSha256
+    // Axis A: pull into the shared local cache so the (unchanged) helper can
+    // reflink. For local-only this is a no-op (already cached) → byte-identical.
+    // Axis B: still hydrate the manifest into the SUPERVISOR's cache so we can
+    // read+expand it to enumerate the file shas to mint for the remote host.
+    await ensureBlobsLocal([manifestSha])
+    try {
+      const bytes = await readContentBuffer(manifestSha)
+      fileShas = Array.from(parseManifestShas(bytes))
+    } catch {
+      // Unreadable/missing manifest: skip file-blob hydration; the helper's
+      // manifestMaterialize will surface the same NotFound it does today.
+      fileShas = []
+    }
+    if (fileShas.length > 0 && !presigned) await ensureBlobsLocal(fileShas)
+  }
+  if (presigned) {
+    // Axis B (plan §8.3/§9.2): the remote host has NO shared cache. Drive the
+    // one-shot helper (pinned to --presign-allow-host) to fetch each
+    // supervisor-minted presigned GET into its own --cas-dir before materialize.
+    // TODO(plan §9.3): thread --presign-allow-host through withOneShotFsHelper —
+    // the one-shot driver now accepts presignAllowHost, wired below.
+    const toFetch = [...(manifestSha ? [manifestSha] : []), ...fileShas]
+    await withOneShotFsHelper(
+      { ...ctx, presignAllowHost: [presigned.allowHost] },
+      (helper) => hydrateViaPresigned(toFetch, presigned.backend, helper)
+    )
+  }
   await withOneShotFsHelper(ctx, (helper) =>
     helper.manifestMaterialize({
       manifest_sha256: input.manifestSha256,
@@ -113,15 +179,78 @@ export async function scanCommitDir(input: {
   dir: string
   baseManifestSha256?: string
   latestManifestSha256?: string
+  /**
+   * Write-routing context for the durable push (plan §9.2). The scanned new
+   * blobs are pushed to their routed durable backend BEFORE this returns — i.e.
+   * before the caller makes the snapshot row durable. Omitted/empty → routes to
+   * local_cas (the byte-identical default: bytes already durable in the cache).
+   */
+  routing?: WriteRoutingContext
+  /**
+   * Executor the durable push records content_blobs rows on. Threads the
+   * caller's connection/transaction (and a test's injected executor) so the row
+   * write is NOT issued against the global db singleton — preserving today's
+   * transaction + test-isolation semantics. Defaults to the top-level db.
+   */
+  executor?: Executor
+  /**
+   * How the host reaches blob bytes (plan §8.3). Omitted/`local_cas` (the
+   * default) → axis A: the supervisor reads the SHARED cache and PUTs to the
+   * routed backend (byte-identical to today; local_cas = no-op). `presigned` →
+   * axis B: the REMOTE helper streams each new blob to a supervisor-minted
+   * presigned PUT and the supervisor records the row after a confirmed export.
+   */
+  blobAccess?: BlobAccess
 }): Promise<ManifestScanCommitResult> {
   const ctx = helperContext()
-  return withOneShotFsHelper(ctx, (helper) =>
+  const access = input.blobAccess
+  const presigned = access?.kind === "presigned" ? access : undefined
+  if (presigned) {
+    // Axis B (plan §8.3/§9.2): one one-shot helper (pinned to its allow-host)
+    // scans the live dir into ITS --cas-dir, then exports each new blob via a
+    // supervisor-minted presigned PUT. The push must precede the caller's
+    // snapshot row (caller ordering). The supervisor mints PUT urls for ONLY the
+    // shas the scan returned — never a host-supplied list (plan §9.3 TOCTOU-free).
+    // TODO(plan §9.3): thread --presign-allow-host through withOneShotFsHelper —
+    // the one-shot driver now accepts presignAllowHost, wired below.
+    const pushBackend = selectWriteBackend(input.routing ?? {})
+    return withOneShotFsHelper(
+      { ...ctx, presignAllowHost: [presigned.allowHost] },
+      async (helper) => {
+        const result = await helper.manifestScanCommit({
+          dir: input.dir,
+          base_manifest_sha256: input.baseManifestSha256,
+          latest_manifest_sha256: input.latestManifestSha256,
+        })
+        await pushViaPresigned(
+          result.new_blobs,
+          pushBackend,
+          helper,
+          input.executor
+        )
+        return result
+      }
+    )
+  }
+  const result = await withOneShotFsHelper(ctx, (helper) =>
     helper.manifestScanCommit({
       dir: input.dir,
       base_manifest_sha256: input.baseManifestSha256,
       latest_manifest_sha256: input.latestManifestSha256,
     })
   )
+  // Push-after (plan §9.2): the new blobs were just ingested into the LOCAL
+  // cache; push them to their routed durable backend BEFORE the caller commits
+  // the snapshot row. For a local-only deployment the routed backend is
+  // local_cas → the bytes are already durable and this records local_cas rows on
+  // the caller's executor (byte-identical to today; idempotent with the caller's
+  // own in-txn ensureContentBlob via ON CONFLICT DO NOTHING).
+  await pushNewBlobsToDurable(
+    result.new_blobs,
+    input.routing ?? {},
+    input.executor
+  )
+  return result
 }
 
 /**

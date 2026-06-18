@@ -6,11 +6,13 @@ import {
   getStableFileUrl,
   getStableFullFileUrl,
   normalizeOriginalNameForMimeType,
-  putBufferCas,
-  readCasBlob,
-  readCasBlobBase64,
   resolveBufferMimeType,
 } from "./index.js"
+import {
+  writeContentBlob,
+  readContentBuffer,
+  readContentBase64,
+} from "./content-store.js"
 import {
   mimeToFileContentKind,
   toFileOriginSummary,
@@ -62,9 +64,17 @@ async function createStoredFile(
     params.originalName,
     resolvedMimeType
   )
-  // Content-address the bytes (sha256 dedup). Same sha = one physical blob.
-  const blobRef = await putBufferCas(params.buffer)
   const contentKind = mimeToFileContentKind(resolvedMimeType)
+  // Content-address the bytes (sha256 dedup). Same sha = one physical blob.
+  // The routing context decides the backend; the chosen backend (blobRef.backend)
+  // is what we persist — the vestigial `params.backend` is no longer threaded in.
+  const blobRef = await writeContentBlob(params.buffer, {
+    workspaceId: params.workspaceId,
+    originFamily: params.origin.family,
+    originSystem: params.origin.system,
+    contentKind,
+    sizeBytes: params.buffer.length,
+  })
 
   const asset = await persistLocalCasFileAsset({
     workspaceId: params.workspaceId,
@@ -79,7 +89,7 @@ async function createStoredFile(
     sourceSystem: params.origin.system,
     parentAssetId: params.origin.parentFileId ?? null,
     details: normalizeDetails(params.origin.details),
-    backend: params.backend ?? "local_cas",
+    backend: blobRef.backend,
   })
 
   const record = {
@@ -120,13 +130,13 @@ async function createStoredFile(
 export async function fileToBase64(
   record: Pick<FileRecord, "sha256">
 ): Promise<string> {
-  return readCasBlobBase64(record.sha256)
+  return readContentBase64(record.sha256)
 }
 
 export async function fileToBuffer(
   record: Pick<FileRecord, "sha256">
 ): Promise<Buffer> {
-  return readCasBlob(record.sha256)
+  return readContentBuffer(record.sha256)
 }
 
 export async function saveFromUrl(

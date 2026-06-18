@@ -10,13 +10,14 @@ import {
   getStableFileUrl,
   getStableFullFileUrl,
   normalizeOriginalNameForMimeType,
-  putBufferCas,
 } from "../../infrastructure/storage/index.js"
+import { writeContentBlob } from "../../infrastructure/storage/content-store.js"
+import { ensureContentBlob } from "../../infrastructure/storage/repo.js"
 import {
   buildSystemGeneratedOrigin,
   mimeToFileContentKind,
 } from "../files/service.js"
-import { insertAvatarFileAsset, upsertAvatarContentBlob } from "./repo.js"
+import { insertAvatarFileAsset } from "./repo.js"
 
 type DatabaseExecutor = Executor
 
@@ -290,16 +291,22 @@ async function saveSvgAvatarFile(
   // Content-address the SVG bytes (sha256 dedup) — same CAS as the central
   // writer. This is the second file writer; it must stay consistent with
   // file-io.createStoredFile's content_blobs + file_assets shape.
-  const blobRef = await putBufferCas(buffer)
+  const blobRef = await writeContentBlob(buffer, {
+    workspaceId: params.workspaceId,
+    originSystem: params.originSystem,
+    contentKind: mimeToFileContentKind(SVG_MIME_TYPE),
+    sizeBytes: buffer.length,
+  })
   const origin = buildSystemGeneratedOrigin({
     system: params.originSystem,
     initiatorUserId: params.uploaderUserId,
     details: params.metadata,
   })
 
-  await upsertAvatarContentBlob(executor, {
+  await ensureContentBlob(executor, {
     sha256: blobRef.sha256,
     sizeBytes: blobRef.sizeBytes,
+    backend: blobRef.backend,
   })
 
   const row = await insertAvatarFileAsset(executor, {

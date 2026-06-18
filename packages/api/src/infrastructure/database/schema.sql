@@ -24,9 +24,9 @@ CREATE TYPE file_snapshot_reason AS ENUM ('session_commit', 'manual', 'import', 
 CREATE TYPE file_permission AS ENUM ('read', 'write', 'admin');
 CREATE TYPE file_access_grants_status AS ENUM ('active', 'revoked', 'superseded');
 CREATE TYPE file_mount_status AS ENUM ('provisioning', 'active', 'committing', 'closed', 'failed');
--- NOTE: content_blobs.backend is TEXT + CHECK (not a PG enum) on purpose:
--- adding a future backend (s3, tiered, remote) is then a one-line CHECK
--- loosen rather than an ALTER TYPE. See plan round-9 #10.
+-- NOTE: content_blobs.backend is plain TEXT (no per-backend CHECK) — the backend
+-- set is deployment config, validated at the app write boundary (see the table
+-- def + content-storage-multi-backend-plan §7). key = f(sha), so no per-blob locator.
 CREATE TYPE workspace_apps_kind AS ENUM ('plugin_installation', 'installed_skill', 'actor', 'remote_agent', 'device_capability');
 CREATE TYPE workspace_apps_status AS ENUM ('active', 'disabled', 'error', 'deprecated', 'archived');
 CREATE TYPE workspace_app_grants_status AS ENUM ('active', 'revoked');
@@ -487,20 +487,27 @@ CREATE TABLE content_blobs (
   -- storage_key (that's what makes publish/pull a pure reference change).
   sha256 VARCHAR(64) PRIMARY KEY,
   size_bytes BIGINT NOT NULL,
-  -- TEXT + CHECK rather than a PG enum: a future backend (s3/tiered/remote)
-  -- is a CHECK loosen, not an ALTER TYPE migration (plan round-9 #10).
-  backend TEXT NOT NULL DEFAULT 'local_cas'
-    CHECK (backend IN ('local_cas')),
-  -- Location/backend metadata. Empty for local_cas (path derived from sha);
-  -- a future S3/tier backend stores bucket/key/tier here. Kept so storage
-  -- layering needs no schema change at the app layer.
-  locator_json JSONB NOT NULL DEFAULT '{}',
+  -- TEXT, NO per-backend CHECK: the backend set is DEPLOYMENT CONFIG, validated
+  -- at the app write boundary against the configured registry (plan §7#1) — not a
+  -- schema migration per backend. key is ALWAYS f(sha) (blobs/<aa>/<sha>), so
+  -- there is NO per-blob locator — the old locator_json JSONB was DROPPED;
+  -- bucket/region/endpoint live in the config registry (plan §6.2/§7#2).
+  backend TEXT NOT NULL DEFAULT 'local_cas',
+  -- Set when the bytes are confirmed durable: NOW at landing for local_cas; after
+  -- the remote PUT confirms for remote backends. First-class column (not JSONB)
+  -- that gates durable-GC grace + the persistence check (plan §7#3).
+  durable_confirmed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   -- NOTE: deliberately NO mime_type/name here — the same bytes can be a PDF
   -- named "report.pdf" in one context and an attachment named "q3.pdf" in
   -- another. MIME/name live on the referencing row (file_assets) or are
   -- inferred from the path by the content resolver.
 );
+
+-- Persistent-tier GC enumerates only remote-backed rows (plan §7#5); local_cas
+-- rows are swept by the Rust fs-helper against the local CAS dir, not by SQL.
+CREATE INDEX content_blobs_remote_backend_idx
+  ON content_blobs (backend) WHERE backend <> 'local_cas';
 
 -- The by-id asset library: stable entity assets (avatars, icons, skill
 -- icons) + any "produced file" that needs an addressable id. Folds the old
@@ -6663,6 +6670,14 @@ END;
 $$;
 ALTER FUNCTION sd_delete_chat_push_token(uuid) OWNER TO synapse_purge_fn_owner;
 REVOKE EXECUTE ON FUNCTION sd_delete_chat_push_token(uuid) FROM PUBLIC;
+CREATE OR REPLACE FUNCTION sd_delete_content_blob(p_sha varchar)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+BEGIN
+  DELETE FROM content_blobs WHERE sha256 = p_sha;
+END;
+$$;
+ALTER FUNCTION sd_delete_content_blob(varchar) OWNER TO synapse_purge_fn_owner;
+REVOKE EXECUTE ON FUNCTION sd_delete_content_blob(varchar) FROM PUBLIC;
 DO $sd_exec_grants$
 DECLARE v_app_role text := current_user;
 BEGIN
@@ -6680,10 +6695,11 @@ BEGIN
     EXECUTE format('GRANT EXECUTE ON FUNCTION sd_gc_expired_action_tokens() TO %I', v_app_role);
     EXECUTE format('GRANT EXECUTE ON FUNCTION sd_gc_dispatched_outbox(timestamptz) TO %I', v_app_role);
     EXECUTE format('GRANT EXECUTE ON FUNCTION sd_delete_chat_push_token(uuid) TO %I', v_app_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION sd_delete_content_blob(varchar) TO %I', v_app_role);
   END IF;
 END
 $sd_exec_grants$;
-GRANT SELECT, DELETE ON memory_item_parts, conversation_participant_addresses, device_services, workspace_member_preferences, actor_model_group_assignments, plugin_version_runtime_permissions, catalog_item_categories, remote_agent_group_task_grants, memory_item_chunks, tool_call_task_action_tokens, realtime_event_outbox, chat_push_tokens TO synapse_purge_fn_owner;
+GRANT SELECT, DELETE ON memory_item_parts, conversation_participant_addresses, device_services, workspace_member_preferences, actor_model_group_assignments, plugin_version_runtime_permissions, catalog_item_categories, remote_agent_group_task_grants, memory_item_chunks, tool_call_task_action_tokens, realtime_event_outbox, chat_push_tokens, content_blobs TO synapse_purge_fn_owner;
 
 -- 5. Live views: canonical read surface that hides soft-deleted rows.
 -- Single-table views over a base table are auto-updatable; WITH CASCADED

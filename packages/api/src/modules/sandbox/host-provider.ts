@@ -17,6 +17,24 @@ import { existsSync } from "node:fs"
 import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { z } from "zod"
+import { casDir } from "./materialize.js"
+import type { BackendId } from "../../infrastructure/storage/content-store.js"
+
+/**
+ * How a sandbox host gets at blob bytes (plan §8.3, the materialize/commit seam).
+ *
+ *  - `local_cas`: SAME-HOST (axis A). The supervisor and the device-runtime share
+ *    one CAS volume (`casDir` = the shared cache root), so the supervisor fills/drains
+ *    that shared cache directly and the (unchanged) helper reflinks from it. This
+ *    is the DEFAULT and its behavior is byte-identical to today.
+ *  - `presigned`: REMOTE, untrusted host (axis B). The host holds NO long-term
+ *    credentials; it streams bytes itself over supervisor-minted, short-lived,
+ *    single-object presigned URLs (`backend` = the durable backend to mint
+ *    against; `allowHost` = the SSRF allowlist host the helper is pinned to).
+ */
+export type BlobAccess =
+  | { kind: "local_cas"; casDir: string }
+  | { kind: "presigned"; backend: BackendId; allowHost: string }
 
 export class HostProviderError extends Error {
   constructor(message: string) {
@@ -66,6 +84,13 @@ export interface HostProvider {
   pair(params: SpawnSandboxRuntimeParams): Promise<PairResult>
   /** Run `synapse-device run` as a daemon; resolves once it's spawned. */
   run(params: SpawnSandboxRuntimeParams): Promise<RunHandle>
+  /**
+   * How this host reaches blob bytes (plan §8.3). The local provider is same-host
+   * (`local_cas`); a future e2b/remote provider returns `presigned`. The sandbox
+   * materialize/commit path branches on this to pick axis A (supervisor copy) vs
+   * axis B (host direct presigned transfer).
+   */
+  blobAccess(): BlobAccess
 }
 
 const KILL_GRACE_MS = 2_000
@@ -160,6 +185,15 @@ export function createLocalHostProvider(opts?: {
   const spawnImpl = opts?.spawnImpl ?? spawn
 
   return {
+    blobAccess(): BlobAccess {
+      // Same-host (axis A): the API supervisor and the device-runtime share the
+      // one CAS volume, so the supervisor fills/drains it directly and the helper
+      // reflinks from it. `casDir()` is the shared cache root the one-shot helper
+      // is pointed at (materialize.ts), so BlobAccess.casDir matches exactly what
+      // the helper uses.
+      return { kind: "local_cas", casDir: casDir() }
+    },
+
     async pair(params: SpawnSandboxRuntimeParams): Promise<PairResult> {
       const args = [
         cliPath,

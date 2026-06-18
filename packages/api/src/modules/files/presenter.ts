@@ -27,6 +27,7 @@ export type FileJoinRow = {
   contentKind: FileRecordView["contentKind"]
   sizeBytes: string | number
   contentSha256: string
+  backend: string | null
   createdAt: Date | null
   sourceFamily: FileRecordView["originSummary"]["family"]
   sourceSystem: FileRecordView["originSummary"]["system"]
@@ -56,7 +57,9 @@ export function presentFileAsset(row: FileJoinRow): StoredFileRecord {
     contentKind: row.contentKind,
     sizeBytes: Number(row.sizeBytes),
     sha256: row.contentSha256,
-    storageBackend: "local_cas",
+    // Per-blob storage backend (plan §6.4), joined from content_blobs. Null only
+    // if the blob row is somehow absent → treat as local_cas.
+    storageBackend: row.backend ?? "local_cas",
     originSummary: toFileOriginSummary(origin),
     createdAt: serializeInstant(
       requireInstantDate(row.createdAt, `file_assets.${row.id}.created_at`)

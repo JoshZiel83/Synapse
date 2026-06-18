@@ -179,7 +179,11 @@ test("space.ts: mount lifecycle + snapshot DAG + head-moved detection", async ()
     assert.equal(active.length, 1)
     assert.equal(active[0].id, mount.id)
 
-    await ensureContentBlob(db, { sha256: SHA("a"), sizeBytes: 10 })
+    await ensureContentBlob(db, {
+      sha256: SHA("a"),
+      sizeBytes: 10,
+      backend: "local_cas",
+    })
     const snap1 = await appendSnapshot(db, {
       workspaceId,
       fileSpaceId: space.id,
@@ -194,7 +198,11 @@ test("space.ts: mount lifecycle + snapshot DAG + head-moved detection", async ()
     const afterV1 = await getFileSpace(db, space.id)
     assert.equal(afterV1?.currentSnapshotId, snap1.id)
 
-    await ensureContentBlob(db, { sha256: SHA("b"), sizeBytes: 20 })
+    await ensureContentBlob(db, {
+      sha256: SHA("b"),
+      sizeBytes: 20,
+      backend: "local_cas",
+    })
     const snap2 = await appendSnapshot(db, {
       workspaceId,
       fileSpaceId: space.id,
@@ -206,7 +214,11 @@ test("space.ts: mount lifecycle + snapshot DAG + head-moved detection", async ()
     assert.equal(String(snap2.version), "2")
     assert.equal(snap2.parentSnapshotId, snap1.id)
 
-    await ensureContentBlob(db, { sha256: SHA("c"), sizeBytes: 30 })
+    await ensureContentBlob(db, {
+      sha256: SHA("c"),
+      sizeBytes: 30,
+      backend: "local_cas",
+    })
     await assert.rejects(
       () =>
         appendSnapshot(db, {

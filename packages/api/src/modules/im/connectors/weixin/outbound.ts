@@ -20,7 +20,7 @@ import {
   type CanonicalPart,
 } from "../../messaging/canonical-message.js"
 import { degradeForCapabilities } from "../../messaging/degradation.js"
-import { readCasBlob } from "../../../../infrastructure/storage/index.js"
+import { readContentBuffer } from "../../../../infrastructure/storage/content-store.js"
 import type { OutboundEndpointRef, OutboundSendResult } from "../types.js"
 import { WEIXIN_MESSAGE_CAPABILITIES } from "./capabilities.js"
 import {
@@ -127,7 +127,7 @@ async function uploadAndBuildMediaItem(params: {
 }): Promise<Record<string, unknown>> {
   const { part, baseUrl, token, cdnBaseUrl, toUserId } = params
   const sha256 = requireMediaSha256(part)
-  const buffer = await readCasBlob(sha256)
+  const buffer = await readContentBuffer(sha256)
   if (buffer.length === 0) {
     throw new Error(`Weixin ${part.type} resource ${sha256} is empty`)
   }

@@ -41,9 +41,12 @@ export async function getFileAssetJoinRow(
   fileId: string,
   workspaceId?: string
 ): Promise<FileJoinRow | null> {
-  // file_assets folds in the old file_origins columns, so no join needed.
+  // file_assets folds in the old file_origins columns; join content_blobs only
+  // to surface the per-blob storage backend (plan §6.4) — the blob row always
+  // exists (FK content_sha256 → content_blobs), so the left join never drops f.
   let query = db
     .selectFrom("fileAssets as f")
+    .leftJoin("contentBlobs as cb", "cb.sha256", "f.contentSha256")
     .select([
       "f.id",
       "f.workspaceId",
@@ -59,6 +62,7 @@ export async function getFileAssetJoinRow(
       "f.initiatorActorId",
       "f.parentAssetId",
       "f.detailsJson",
+      "cb.backend",
     ])
     .where("f.id", "=", fileId)
 

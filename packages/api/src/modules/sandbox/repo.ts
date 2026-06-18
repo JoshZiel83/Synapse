@@ -165,6 +165,77 @@ export async function listGcSnapshotManifestShas(
     .filter((sha): sha is string => typeof sha === "string" && sha.length > 0)
 }
 
+/**
+ * Durable-GC bookkeeping (plan §10): for a remote backend's candidate shas,
+ * read each existing content_blobs row's `durable_confirmed_at` so the sweep can
+ * apply the grace window. Returns a Map sha → durableConfirmedAt (Date | null).
+ * Shas with NO row are simply absent from the map (the sweep treats "no row" as
+ * eligible — an orphaned object with no ledger entry).
+ *
+ * Scoped to the given backend so the partial index
+ * (content_blobs_remote_backend_idx) covers it and a stray local_cas row can
+ * never make a remote-keyed object look reachable.
+ */
+export async function listDurableBlobRows(
+  backend: string,
+  shas: string[],
+  run: Executor = db
+): Promise<Map<string, Date | null>> {
+  const out = new Map<string, Date | null>()
+  if (shas.length === 0) return out
+  const rows = await run
+    .selectFrom("contentBlobs")
+    .select(["sha256", "durableConfirmedAt"])
+    .where("backend", "=", backend)
+    .where("sha256", "in", shas)
+    .execute()
+  for (const row of rows) {
+    out.set(
+      row.sha256 as string,
+      (row.durableConfirmedAt as Date | null) ?? null
+    )
+  }
+  return out
+}
+
+/**
+ * Durable-GC safety gate (content storage plan §10#6): is `backend` a write
+ * target — i.e. does AT LEAST ONE content_blobs row reference it? The durable
+ * sweep deletes object bytes, so it must NEVER touch a configured-but-read-only
+ * remote bucket (e.g. a legacy/migration source with WRITE_DEFAULT=local_cas):
+ * that bucket has no rows, so this returns false and the sweep skips it whole.
+ *
+ * Scoped to the backend so the partial index (content_blobs_remote_backend_idx)
+ * covers it; LIMIT 1 makes it an index-existence probe, not a full count.
+ */
+export async function backendHasAnyBlobRow(
+  backend: string,
+  run: Executor = db
+): Promise<boolean> {
+  const row = await run
+    .selectFrom("contentBlobs")
+    .select("sha256")
+    .where("backend", "=", backend)
+    .limit(1)
+    .executeTakeFirst()
+  return row !== undefined
+}
+
+/**
+ * Purge a content_blobs row through the SECURITY DEFINER `sd_delete_content_blob`
+ * fn (plan §10#1). A naked DELETE is blocked by the `sd_reject_delete` BEFORE
+ * DELETE trigger (the row writer is append-only for the app role); the fn runs as
+ * `synapse_purge_fn_owner` so the trigger permits it. The durable GC sweep is the
+ * ONLY caller — it deletes the row only AFTER the object's bytes are gone from
+ * its remote backend.
+ */
+export async function purgeContentBlobRow(
+  sha256: string,
+  run: Executor = db
+): Promise<void> {
+  await sql`SELECT sd_delete_content_blob(${sha256})`.execute(run)
+}
+
 const GC_PART_TABLES = [
   "conversation_item_parts",
   "tool_result_parts",

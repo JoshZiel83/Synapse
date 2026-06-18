@@ -66,7 +66,6 @@ import {
   PLATFORM_ASSET_FILE_ORIGIN_SYSTEMS,
   FILE_PARSE_OUTPUT_KINDS,
   FILE_PARSE_RUN_STATUSES,
-  FILE_STORAGE_BACKENDS,
   CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES,
   CONVERSATION_TYPE_KEYS,
   DEVICE_EXPOSURE_TRANSPORTS,
@@ -1746,7 +1745,11 @@ export type CanonicalContentBlockInput =
 // ============ Files ============
 
 export type FileContentKind = CanonicalFileCategory
-export type FileStorageBackend = (typeof FILE_STORAGE_BACKENDS)[number]
+// An opaque, deployment-config-driven backend id (plan §7#4 option b). The wire
+// carries it as a plain string; `FILE_STORAGE_BACKENDS` lists the built-in
+// default(s) but the valid set is the configured registry, checked at the app
+// write boundary — so the type is open rather than a frozen union.
+export type FileStorageBackend = string
 export type FileOriginFamily = (typeof FILE_ORIGIN_FAMILIES)[number]
 export type FileOriginSystem =
   (typeof FILE_ORIGIN_SYSTEMS)[keyof typeof FILE_ORIGIN_SYSTEMS]

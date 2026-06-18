@@ -8,10 +8,12 @@ import {
 import {
   getStableFileUrl,
   getStableFullFileUrl,
-  readCasBlob,
   CONTENT_URL_PREFIX,
   BASE_URL,
 } from "../../infrastructure/storage/index.js"
+// The single soft byte-read for the /content route lives in content-store.ts;
+// re-export so external importers keep pulling it from this module.
+export { readContentBufferBySha } from "../../infrastructure/storage/content-store.js"
 import {
   buildActorOutputOrigin,
   buildExternalImportOrigin,
@@ -183,15 +185,8 @@ export async function readFileBase64ById(
 
 // Content-addressed read/url helpers. The file-service refactor addresses
 // blobs by sha256; providers read bytes + build native-media URLs by sha.
-export async function readContentBufferBySha(
-  sha256: string
-): Promise<Buffer | null> {
-  try {
-    return await readCasBlob(sha256)
-  } catch {
-    return null
-  }
-}
+// `readContentBufferBySha` is re-exported at the top of this module from
+// content-store.ts (the single soft byte-read).
 
 /**
  * Best-effort MIME for a content blob lives in repo.ts (guard r8) and is

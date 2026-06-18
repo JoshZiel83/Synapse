@@ -1584,11 +1584,16 @@ async function commitOneMount(
     ? await getSnapshotManifestSha(deps.dbh, latestSnapshotId)
     : null
 
-  // Scan + CAS-ingest the live dir (slow; no DB lock held).
+  // Scan + CAS-ingest the live dir (slow; no DB lock held). The routing ctx lets
+  // scanCommitDir push the new blobs to their durable backend BEFORE we commit
+  // the snapshot row (plan §9.2); a {workspaceId, fileSpaceId} is enough for the
+  // default policy (routes to local_cas — byte-identical to today).
   const scan = await scanCommitDir({
     dir: mount.materializedDir!,
     baseManifestSha256: baseManifest ?? undefined,
     latestManifestSha256: latestManifest ?? undefined,
+    routing: { workspaceId, fileSpaceId: mount.fileSpaceId },
+    executor: deps.dbh,
   })
 
   // CRITICAL (round-6 #1): scan_commit only COMPUTES the merged manifest — it
@@ -1669,12 +1674,18 @@ async function commitOneMount(
   try {
     const snapshot = await deps.runInTx(async (txq) => {
       // Ingest the manifest blob + all new file blobs FIRST (FK target).
+      // New sandbox blobs land in the shared local CAS cache (local_cas).
       await ensureContentBlob(txq, {
         sha256: scan.manifest_sha256,
         sizeBytes: 0, // manifest size is not tracked; 0 is a valid placeholder
+        backend: "local_cas",
       })
       for (const blobSha of scan.new_blobs) {
-        await ensureContentBlob(txq, { sha256: blobSha, sizeBytes: 0 })
+        await ensureContentBlob(txq, {
+          sha256: blobSha,
+          sizeBytes: 0,
+          backend: "local_cas",
+        })
       }
       return appendSnapshot(txq, {
         workspaceId,

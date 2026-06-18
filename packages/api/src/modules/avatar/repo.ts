@@ -3,7 +3,6 @@ import type {
   TableInsert,
 } from "../../infrastructure/database/kysely.js"
 
-type ContentBlobLocatorJson = TableInsert<"contentBlobs">["locatorJson"]
 type FileAssetDetailsJson = TableInsert<"fileAssets">["detailsJson"]
 type FileAssetInsert = TableInsert<"fileAssets">
 
@@ -22,35 +21,10 @@ export type AvatarFileAssetInsert = {
   details: Record<string, unknown>
 }
 
-function toContentBlobLocatorJson(
-  value: Record<string, unknown>
-): ContentBlobLocatorJson {
-  return value as ContentBlobLocatorJson
-}
-
 function toFileAssetDetailsJson(
   value: Record<string, unknown>
 ): FileAssetDetailsJson {
   return value as FileAssetDetailsJson
-}
-
-export async function upsertAvatarContentBlob(
-  executor: Executor,
-  params: {
-    sha256: string
-    sizeBytes: number
-  }
-): Promise<void> {
-  await executor
-    .insertInto("contentBlobs")
-    .values({
-      sha256: params.sha256,
-      sizeBytes: String(params.sizeBytes),
-      backend: "local_cas",
-      locatorJson: toContentBlobLocatorJson({}),
-    })
-    .onConflict((oc) => oc.column("sha256").doNothing())
-    .execute()
 }
 
 export async function insertAvatarFileAsset(

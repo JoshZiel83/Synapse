@@ -896,7 +896,7 @@ export interface ChatPushTokens {
 export interface ContentBlobs {
   backend: Generated<string>;
   createdAt: Generated<Date>;
-  locatorJson: Generated<Json>;
+  durableConfirmedAt: Date | null;
   sha256: string;
   sizeBytes: Int8;
 }

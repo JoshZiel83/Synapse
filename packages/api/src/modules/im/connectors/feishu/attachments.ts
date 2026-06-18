@@ -20,7 +20,7 @@
  */
 
 import type * as Lark from "@larksuiteoapi/node-sdk"
-import { readCasBlob } from "../../../../infrastructure/storage/index.js"
+import { readContentBuffer } from "../../../../infrastructure/storage/content-store.js"
 import type { CanonicalFileRef } from "../../messaging/canonical-message.js"
 
 // Feishu enforces different ceilings per kind: images ≤ 10 MB, files ≤ 30 MB.
@@ -80,7 +80,7 @@ export async function uploadFeishuImage(input: {
     input.fileRef,
     "image",
     MAX_IMAGE_BYTES,
-    input.readBytes ?? readCasBlob
+    input.readBytes ?? readContentBuffer
   )
   const resp = (await input.client.im.image.create({
     data: {
@@ -152,7 +152,7 @@ export async function uploadFeishuFile(input: {
     input.fileRef,
     "file",
     MAX_FILE_BYTES,
-    input.readBytes ?? readCasBlob
+    input.readBytes ?? readContentBuffer
   )
   const resp = (await input.client.im.file.create({
     data: {

@@ -17,7 +17,7 @@ import {
 import { scanCommitDir, resolveFsHelperPath } from "./materialize.js"
 import { runContentGc } from "./gc.js"
 import { parseManifestShas } from "../files/manifest-parse.js"
-import { readCasBlob } from "../../infrastructure/storage/index.js"
+import { readContentBuffer } from "../../infrastructure/storage/content-store.js"
 
 /**
  * GC root-set computation (Step 11). The critical invariant (round-9 Blocker 6):
@@ -27,7 +27,7 @@ import { readCasBlob } from "../../infrastructure/storage/index.js"
  *
  * Dry-run only (no CAS deletion), with the test txn injected as the executor so
  * the snapshots we create are visible. Uses the real fs-helper to produce real
- * manifests in the shared CAS so parseManifestShas (via readCasBlob) sees them.
+ * manifests in the shared CAS so parseManifestShas (via readContentBuffer) sees them.
  */
 
 let helperAvailable = true
@@ -101,9 +101,14 @@ async function commitTree(executor: Executor, dir: string) {
   await ensureContentBlob(executor, {
     sha256: scan.manifest_sha256,
     sizeBytes: 0,
+    backend: "local_cas",
   })
   for (const blob of scan.new_blobs) {
-    await ensureContentBlob(executor, { sha256: blob, sizeBytes: 0 })
+    await ensureContentBlob(executor, {
+      sha256: blob,
+      sizeBytes: 0,
+      backend: "local_cas",
+    })
   }
   return scan
 }
@@ -160,10 +165,10 @@ test(
 
       // The v1 content blob is NOT reachable via the v2 head manifest.
       const v1Blobs = parseManifestShas(
-        await readCasBlob(v1scan.manifest_sha256)
+        await readContentBuffer(v1scan.manifest_sha256)
       )
       const v2Blobs = parseManifestShas(
-        await readCasBlob(v2scan.manifest_sha256)
+        await readContentBuffer(v2scan.manifest_sha256)
       )
       const v1Blob = [...v1Blobs][0]
       assert.ok(v1Blob, "v1 has a content blob")

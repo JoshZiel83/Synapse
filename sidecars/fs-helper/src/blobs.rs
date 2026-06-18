@@ -149,6 +149,40 @@ impl BlobStore {
         Ok((sha, bytes.len() as u64, false))
     }
 
+    /// Ingest already-fetched axis-B body bytes into the CAS. Split out of the
+    /// former `import_url` so the network GET (`fetch_url_body`) runs WITHOUT the
+    /// `cas_lock` held — only this content-addressed store step takes the lock.
+    /// The supervisor asserts `sha256`; after storing we re-verify the
+    /// content-addressed sha equals it and reject a mismatch with `CasMismatch`
+    /// (put_bytes is content-addressed so no delete is needed — a mismatched body
+    /// simply landed under a DIFFERENT sha, never overwriting the asserted one).
+    /// Returns (sha, size, dedup).
+    pub fn ingest_imported_bytes(
+        &self,
+        sha256: &str,
+        body: &[u8],
+    ) -> Result<(String, u64, bool), RpcError> {
+        let (sha, size, dedup) = self.put_bytes(body)?;
+        if sha != sha256 {
+            return Err(RpcError::CasMismatch(format!(
+                "imported sha {sha} != supervisor-asserted {sha256}"
+            )));
+        }
+        Ok((sha, size, dedup))
+    }
+
+    /// Read the local blob `sha256`'s bytes for an axis-B export (NotFound if
+    /// absent, mirroring `copy_to`). Split out of the former `export_to_url` so
+    /// the network PUT (`put_url_body`) runs WITHOUT the `cas_lock` held — only
+    /// this read takes the lock.
+    pub fn read_for_export(&self, sha256: &str) -> Result<Vec<u8>, RpcError> {
+        let src = self.blob_path(sha256);
+        if !src.exists() {
+            return Err(RpcError::NotFound(format!("blob {sha256}")));
+        }
+        self.read(sha256)
+    }
+
     /// Materialize a blob's bytes into `dest` as a regular file, creating
     /// parent dirs, then set its permission bits to `mode`. Tries a reflink
     /// (CoW clone — O(1), near-zero space) first on same-fs CoW filesystems
@@ -297,6 +331,113 @@ impl BlobStore {
         }
         Ok((deleted, skipped_young))
     }
+}
+
+/// Absolute ceiling on a buffered axis-B import body. The host presign size
+/// class is ≤5 GiB; cap the in-memory buffer here so a hostile/mis-minted
+/// presigned GET can't OOM the helper by streaming an unbounded body. When the
+/// supervisor supplies `expected_size`, that (smaller) value is the effective
+/// cap; this is the fallback ceiling when it doesn't.
+const MAX_IMPORT_BODY_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+
+/// Axis-B import network step: GET a supervisor-minted presigned `url` with
+/// `client` and return its body bytes. Runs WITHOUT the `cas_lock` held (the
+/// caller takes the lock only for `ingest_imported_bytes`). The helper holds NO
+/// credentials — only the short-lived `url`.
+///
+/// Bounded read: the body is buffered fully (reqwest's `bytes()` is NOT behind
+/// the "stream" feature, so we deliberately avoid that feature), but it is
+/// size-guarded so a hostile presigned GET can't OOM the helper. When
+/// `expected_size` is Some, the advertised Content-Length (when present) must
+/// not exceed it, and the body is capped at it; otherwise the body is capped at
+/// `MAX_IMPORT_BODY_BYTES`. Streaming the body chunk-by-chunk lets us abort as
+/// soon as the cap is crossed, even when the server sends no/forged
+/// Content-Length. Maps reqwest / non-2xx errors to `Internal`.
+pub async fn fetch_url_body(
+    client: &reqwest::Client,
+    url: &str,
+    expected_size: Option<u64>,
+) -> Result<Vec<u8>, RpcError> {
+    let mut resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| RpcError::Internal(format!("import_url GET failed: {e}")))?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(RpcError::Internal(format!(
+            "import_url non-2xx status: {status}"
+        )));
+    }
+    // Effective cap: the supervisor-asserted size when present, else the ceiling.
+    let cap = expected_size
+        .map(|e| e.min(MAX_IMPORT_BODY_BYTES))
+        .unwrap_or(MAX_IMPORT_BODY_BYTES);
+    if let Some(exp) = expected_size {
+        if let Some(len) = resp.content_length() {
+            if len != exp {
+                return Err(RpcError::Internal(format!(
+                    "import_url content-length {len} != expected {exp}"
+                )));
+            }
+        }
+    } else if let Some(len) = resp.content_length() {
+        // No supervisor assertion, but a declared length over the ceiling is a
+        // hard reject up front (don't even start the transfer).
+        if len > MAX_IMPORT_BODY_BYTES {
+            return Err(RpcError::Internal(format!(
+                "import_url content-length {len} exceeds cap {MAX_IMPORT_BODY_BYTES}"
+            )));
+        }
+    }
+    let mut body: Vec<u8> = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(|e| {
+        RpcError::Internal(format!("import_url read body failed: {e}"))
+    })? {
+        if body.len() as u64 + chunk.len() as u64 > cap {
+            return Err(RpcError::Internal(format!(
+                "import_url body exceeds cap {cap}"
+            )));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+/// Axis-B export network step: PUT `bytes` to a supervisor-minted presigned
+/// `put_url` with `client`, attaching the supplied `headers` verbatim (e.g.
+/// `x-amz-checksum-sha256`, which the supervisor — not the helper — constructs
+/// and signs into the URL's signed set). Runs WITHOUT the `cas_lock` held (the
+/// caller takes the lock only for `read_for_export`). The body is buffered
+/// (`.body(Vec<u8>)`; fine for the ≤5 GB host presign size class). Non-2xx →
+/// `Internal`. Returns (size, etag-if-the-response-carries-one).
+pub async fn put_url_body(
+    client: &reqwest::Client,
+    put_url: &str,
+    bytes: Vec<u8>,
+    headers: &[(String, String)],
+) -> Result<(u64, Option<String>), RpcError> {
+    let size = bytes.len() as u64;
+    let mut req = client.put(put_url).body(bytes);
+    for (name, value) in headers {
+        req = req.header(name.as_str(), value.as_str());
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| RpcError::Internal(format!("export_to_url PUT failed: {e}")))?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(RpcError::Internal(format!(
+            "export_to_url non-2xx status: {status}"
+        )));
+    }
+    let etag = resp
+        .headers()
+        .get(reqwest::header::ETAG)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    Ok((size, etag))
 }
 
 /// Open `src` with O_NOFOLLOW so a final-component symlink swap can't

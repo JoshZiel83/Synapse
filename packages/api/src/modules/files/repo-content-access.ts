@@ -26,7 +26,7 @@
 import { sql } from "kysely"
 import { db } from "../../infrastructure/database/kysely.js"
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
-import { readCasBlob } from "../../infrastructure/storage/index.js"
+import { readContentBuffer } from "../../infrastructure/storage/content-store.js"
 import { parseManifestShas } from "./manifest-parse.js"
 
 export interface ContentAccessContext {
@@ -522,7 +522,7 @@ async function hasFileSpaceGrantReach(
   }
   for (const snap of snaps) {
     try {
-      const bytes = await readCasBlob(snap.manifestSha256)
+      const bytes = await readContentBuffer(snap.manifestSha256)
       if (parseManifestShas(bytes).has(sha256)) return true
     } catch {
       // Missing/unreadable manifest blob — treat as no-reach for this snapshot.

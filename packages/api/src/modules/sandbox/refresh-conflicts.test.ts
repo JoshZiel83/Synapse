@@ -224,6 +224,7 @@ test(
       await ensureContentBlob(db, {
         sha256: baseScan.manifest_sha256,
         sizeBytes: 0,
+        backend: "local_cas",
       })
       const space = await ensureFileSpace(db, {
         workspaceId,
@@ -243,6 +244,7 @@ test(
       await ensureContentBlob(db, {
         sha256: headScan.manifest_sha256,
         sizeBytes: 0,
+        backend: "local_cas",
       })
       await appendSnapshot(db, {
         workspaceId,
@@ -325,6 +327,7 @@ test(
       await ensureContentBlob(db, {
         sha256: baseScan.manifest_sha256,
         sizeBytes: 0,
+        backend: "local_cas",
       })
       const space = await ensureFileSpace(db, {
         workspaceId,
@@ -344,6 +347,7 @@ test(
       await ensureContentBlob(db, {
         sha256: headScan.manifest_sha256,
         sizeBytes: 0,
+        backend: "local_cas",
       })
       await appendSnapshot(db, {
         workspaceId,
@@ -431,9 +435,14 @@ test(
       await ensureContentBlob(db, {
         sha256: baseScan.manifest_sha256,
         sizeBytes: 0,
+        backend: "local_cas",
       })
       for (const b of baseScan.new_blobs)
-        await ensureContentBlob(db, { sha256: b, sizeBytes: 0 })
+        await ensureContentBlob(db, {
+          sha256: b,
+          sizeBytes: 0,
+          backend: "local_cas",
+        })
       const space = await ensureFileSpace(db, {
         workspaceId,
         owner: actorRef(actorId),
@@ -455,9 +464,14 @@ test(
       await ensureContentBlob(db, {
         sha256: headScan.manifest_sha256,
         sizeBytes: 0,
+        backend: "local_cas",
       })
       for (const b of headScan.new_blobs)
-        await ensureContentBlob(db, { sha256: b, sizeBytes: 0 })
+        await ensureContentBlob(db, {
+          sha256: b,
+          sizeBytes: 0,
+          backend: "local_cas",
+        })
       await appendSnapshot(db, {
         workspaceId,
         fileSpaceId: space.id,
