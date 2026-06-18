@@ -142,8 +142,10 @@ const ruleDefs = [
       "forbidden second ISO-instant regex literal. The ONE canonical pattern lives in device-protocol/src/instant.ts; reuse isIsoInstantString.",
     // Matches the date-shape `\d{4}-\d{2}` / `[0-9]{4}-[0-9]{2}` and the ISO
     // time-portion `T\d{2}:\d{2}` (date-specific, so an OTP `[0-9]{4}` regex
-    // won't trip it).
-    pattern: /\\d\{4\}-\\d\{2\}|\[0-9\]\{4\}-\[0-9\]\{2\}|T\\d\{2\}:\\d\{2\}/g,
+    // won't trip it). The `\\d{4}-\\d{2}` branch catches the `new RegExp("…")`
+    // double-backslash string form that evades the regex-literal branch.
+    pattern:
+      /\\d\{4\}-\\d\{2\}|\\\\d\{4\}-\\\\d\{2\}|\[0-9\]\{4\}-\[0-9\]\{2\}|T\\d\{2\}:\\d\{2\}/g,
   },
   {
     id: "second_branded_type",
@@ -255,8 +257,13 @@ const MARKER_IN_COMMENT = new RegExp(`(?://|#|\\*).*${ALLOW_MARKER}`)
 // a `*` / `/*` / `#` comment line. Prevents false positives from prose that
 // merely *mentions* a forbidden pattern (e.g. an explanatory comment).
 function matchInComment(line, matchCol) {
+  // Mask string/template literals in the prefix so a `//` INSIDE a string can't
+  // be mistaken for a comment start (which would hide a real same-line match).
+  const prefix = line
+    .slice(0, matchCol)
+    .replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`/g, "")
   // A `//` (not the `://` of a URL) before the match starts a line comment.
-  if (/(?:^|[^:])\/\//.test(line.slice(0, matchCol))) return true
+  if (/(?:^|[^:])\/\//.test(prefix)) return true
   const trimmed = line.trimStart()
   return (
     trimmed.startsWith("*") ||
@@ -359,6 +366,95 @@ function buildReport(violations) {
     violations,
   }
 }
+
+// In-process self-test: asserts each rule fires on its bad form (and skips the
+// known false-positive forms), and that the comment/evasion logic holds. Run in
+// CI before the real scan so a broken rule fails loudly instead of silently
+// passing everything. `node scripts/guard-datetime-boundaries.mjs --self-test`.
+function selfTest() {
+  const ruleById = (id) => ruleDefs.find((r) => r.id === id)
+  const hits = (id, text) => [...text.matchAll(ruleById(id).pattern)].length > 0
+  const checks = []
+  const ok = (name, cond) => checks.push({ name, ok: !!cond })
+
+  ok("fallback_now || new Date()", hits("fallback_now", "a || new Date()"))
+  ok(
+    "fallback_now ?? nowIsoInstant()",
+    hits("fallback_now", "a ?? nowIsoInstant()")
+  )
+  ok(
+    "fallback_now multi-line",
+    hits("fallback_now", "a ||\n  serverReceiveInstant()")
+  )
+  ok(
+    "fallback_now skips new Date(value)",
+    !hits("fallback_now", "a || new Date(x)")
+  )
+  ok("second_iso_regex literal", hits("second_iso_regex", "/\\d{4}-\\d{2}/"))
+  ok(
+    "second_iso_regex new RegExp",
+    hits("second_iso_regex", 'new RegExp("\\\\d{4}-\\\\d{2}")')
+  )
+  ok("second_iso_regex skips OTP", !hits("second_iso_regex", "/[0-9]{4}/"))
+  ok(
+    "second_branded_type",
+    hits("second_branded_type", "type IsoInstantString = string")
+  )
+  ok(
+    "second_instant_schema",
+    hits("second_instant_schema", "z.string().refine(isIsoInstantString)")
+  )
+  ok("date_parse_controlflow", hits("date_parse_controlflow", "Date.parse(x)"))
+  ok("blind_iso_cast", hits("blind_iso_cast", "x as Timestamp"))
+  ok("epoch_zero_fallback", hits("epoch_zero_fallback", "new Date(0)"))
+  ok("magnitude_unit_guess", hits("magnitude_unit_guess", "n >= 1e12"))
+  ok(
+    "unknown_as_time_type",
+    hits("unknown_as_time_type", "x as unknown as string")
+  )
+  ok(
+    "rust_self_invented",
+    hits("rust_self_invented_instant", 'format!("ts:{s}")')
+  )
+  ok(
+    "rust_bare_to_rfc3339",
+    hits("rust_self_invented_instant", "t.to_rfc3339()")
+  )
+  ok(
+    "python_naive",
+    hits("python_naive_isoformat", "datetime.now().isoformat()")
+  )
+  ok(
+    "python_fromtimestamp",
+    hits("python_naive_isoformat", "datetime.fromtimestamp(0)")
+  )
+
+  // matchInComment must mask a `//` that lives inside a string literal.
+  const masked = 'const s = "a // b"; const t = x || new Date()'
+  ok(
+    "matchInComment masks string //",
+    !matchInComment(masked, masked.indexOf("|| new Date()"))
+  )
+  ok("matchInComment honors real //", matchInComment("  // x || new Date()", 7))
+  // isAllowedAtSite must honor a datetime-ok marker the formatter parked on a `? //` line.
+  ok(
+    "isAllowedAtSite ternary marker",
+    isAllowedAtSite(["x", "  ? // datetime-ok: y", "    a || new Date()"], 2)
+  )
+
+  const failed = checks.filter((c) => !c.ok)
+  if (failed.length) {
+    console.error("guard-datetime-boundaries: SELF-TEST FAILED:")
+    for (const f of failed) console.error(`  ✗ ${f.name}`)
+    process.exit(1)
+  }
+  console.log(
+    `guard-datetime-boundaries: self-test OK (${checks.length} assertions).`
+  )
+  process.exit(0)
+}
+
+if (process.argv.includes("--self-test")) selfTest()
 
 const writeBaseline = process.argv.includes("--write-baseline")
 const violations = [...buildViolations(), ...codegenConfigViolations()]
