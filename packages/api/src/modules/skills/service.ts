@@ -552,7 +552,7 @@ function resolvePublicUseScope(row: SkillAccessRow): SkillAccessSuggestion {
 }
 
 function skillAccessCreatedAtMs(row: SkillAccessRow): number {
-  return row.createdAt?.getTime?.() ?? 0
+  return row.createdAt.getTime()
 }
 
 function compareBindingPriority(left: SkillAccessRow, right: SkillAccessRow) {

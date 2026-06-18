@@ -120,8 +120,16 @@ export async function redeemInviteTx(
     if (invite.isRevoked) {
       throw new Error("Invite has been revoked")
     }
-    if (invite.expiresAt && new Date(invite.expiresAt) < new Date()) {
-      throw new Error("Invite has expired")
+    if (invite.expiresAt) {
+      // expiresAt is a DB `Date | null` column. A corrupt (Invalid) Date makes
+      // `NaN < now` false (fail-open); treat unparseable as already expired
+      // (fail-closed) so a garbage expiry can never let a redeem through.
+      const expMs = Number.isNaN(invite.expiresAt.getTime())
+        ? 0
+        : invite.expiresAt.getTime()
+      if (expMs < Date.now()) {
+        throw new Error("Invite has expired")
+      }
     }
     if (invite.maxUses !== null && invite.useCount >= invite.maxUses) {
       throw new Error("Invite has reached maximum uses")

@@ -135,7 +135,7 @@ export type SkillAccessRow = {
   source: "manual" | "approval" | "system"
   createdByWorkspaceMemberId: string | null
   reason: string | null
-  createdAt: Date | null
+  createdAt: Date
   revokedAt: Date | null
 }
 

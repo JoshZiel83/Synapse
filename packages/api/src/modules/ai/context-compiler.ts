@@ -10,7 +10,7 @@ import {
   buildConversationMessageRef,
   textBlock,
 } from "@synapse/shared"
-import { dateToIsoInstant } from "@synapse/shared/datetime"
+import { dateToIsoInstant, parseIsoInstant } from "@synapse/shared/datetime"
 import type {
   CanonicalContextItem,
   CanonicalContextTarget,
@@ -63,8 +63,14 @@ function toXmlTextBlock(value: string) {
 
 function formatContextTimestamp(timeText?: string) {
   if (!timeText) return ""
-  const date = new Date(timeText)
-  if (Number.isNaN(date.getTime())) return ""
+  let date: Date
+  try {
+    date = parseIsoInstant(timeText) // canonical instant from a DTO; one parser (C1)
+  } catch {
+    // datetime-ok: display-only AI-context formatter; an unparseable value is
+    // omitted from context rather than crashing context compilation.
+    return ""
+  }
   return dateToIsoInstant(date)
 }
 

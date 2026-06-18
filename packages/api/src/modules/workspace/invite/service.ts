@@ -63,8 +63,16 @@ export async function getPublicInviteInfo(
 ): Promise<InvitePublicLookup> {
   const record = await findInviteWithWorkspaceName(token)
   if (!record || record.isRevoked) return { ok: false, reason: "not_found" }
-  if (record.expiresAt && new Date(record.expiresAt) < new Date()) {
-    return { ok: false, reason: "expired" }
+  if (record.expiresAt) {
+    // expiresAt is a DB `Date | null` column. A corrupt (Invalid) Date makes
+    // `NaN < now` false (fail-open); treat unparseable as already expired
+    // (fail-closed) so a garbage expiry can never grant access.
+    const expMs = Number.isNaN(record.expiresAt.getTime())
+      ? 0
+      : record.expiresAt.getTime()
+    if (expMs < Date.now()) {
+      return { ok: false, reason: "expired" }
+    }
   }
   if (record.maxUses !== null && record.useCount >= record.maxUses) {
     return { ok: false, reason: "max_uses" }

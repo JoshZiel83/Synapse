@@ -3162,6 +3162,9 @@ export async function scheduleDueAutomationExecutions(
           nextFireAt: null,
         })
       )
+      // Record an error so a parked rule is observable (not a silent zombie
+      // that is still active but never fires). nextFireAt stays null above.
+      await updateAutomationRuleError(ruleId, "schedule compute failed; parked")
     } catch (err) {
       log.error({ err, ruleId }, "automation.scheduler.park_poison_rule_failed")
     }

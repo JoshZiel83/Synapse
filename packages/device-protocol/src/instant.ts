@@ -18,7 +18,7 @@ export type IsoInstantString = string & {
   readonly __synapseIsoInstant: unique symbol
 }
 
-function isValidDateInstance(value: unknown): value is Date {
+export function isValidDateInstance(value: unknown): value is Date {
   return (
     Object.prototype.toString.call(value) === "[object Date]" &&
     !Number.isNaN((value as Date).getTime())

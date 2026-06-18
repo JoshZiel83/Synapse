@@ -2,6 +2,7 @@ import {
   dateToIsoInstant,
   dateToOptionalIsoInstant,
   isIsoInstant,
+  isValidDateInstance,
   nowIsoInstant,
   parseIsoInstant,
   type IsoInstantString,
@@ -35,12 +36,7 @@ export function requireInstantDate(
   value: Date | null | undefined,
   label: string
 ): Date {
-  const isDateObject =
-    typeof value === "object" &&
-    value !== null &&
-    Object.prototype.toString.call(value) === "[object Date]"
-
-  if (!isDateObject || Number.isNaN(value.getTime())) {
+  if (!isValidDateInstance(value)) {
     throw new Error(`${label} is required`)
   }
   return value

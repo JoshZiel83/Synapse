@@ -12,6 +12,7 @@
 export type { IsoInstantString } from "@synapse/device-protocol/instant"
 export {
   isIsoInstantString,
+  isValidDateInstance,
   assertIsoInstantString,
   dateToIsoInstant,
   dateToOptionalIsoInstant,
