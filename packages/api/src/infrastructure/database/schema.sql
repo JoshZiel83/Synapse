@@ -2260,7 +2260,7 @@ CREATE TABLE tool_call_tasks (
   completion_item_id UUID UNIQUE REFERENCES conversation_items(id) ON DELETE SET NULL,
   deadline_at TIMESTAMPTZ,
   expires_at TIMESTAMPTZ,
-  retention_ttl_ms INT,
+  retention_ttl_ms BIGINT CHECK (retention_ttl_ms >= 0),
   retain_until TIMESTAMPTZ,
   cancel_requested_at TIMESTAMPTZ,
   cancel_reason TEXT,
@@ -3257,7 +3257,7 @@ CREATE TABLE workspace_app_grants (
   source workspace_app_grants_source NOT NULL DEFAULT 'manual',
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   reason TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   revoked_at TIMESTAMPTZ
 );
 
@@ -3423,8 +3423,8 @@ CREATE TABLE tool_call_task_external_mcp (
   plugin_installation_id UUID,                      -- FK added at bottom
   upstream_task_id TEXT,
   wire_version TEXT NOT NULL DEFAULT '2026-07-28',
-  poll_interval_ms INT,
-  ttl_ms INT
+  poll_interval_ms BIGINT CHECK (poll_interval_ms >= 0),
+  ttl_ms BIGINT CHECK (ttl_ms >= 0)
 );
 
 -- ── tool_call_task_action_tokens ────────────────────────────────────────────
@@ -6792,7 +6792,7 @@ BEGIN
   -- forbids a new audit_logs row pointing at it; the id is in resource_id.
   INSERT INTO audit_logs (workspace_id, action, resource_type, resource_id, details)
   VALUES (NULL, 'tenant.hard_erase', 'workspace', p_workspace_id,
-          jsonb_build_object('workspace_id', p_workspace_id, 'purged_at', NOW()));
+          jsonb_build_object('workspace_id', p_workspace_id, 'purged_at', to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')));
 
   -- 1. break cycles: null nullable cross-table FKs for in-scope rows
   UPDATE platform_access_bindings t0 SET assigned_by_user_id = NULL WHERE assigned_by_user_id IS NOT NULL AND (EXISTS (SELECT 1 FROM users t1_0 WHERE t1_0.id = t0.user_id AND (EXISTS (SELECT 1 FROM file_assets t2_0 WHERE t2_0.id = t1_0.avatar_file_id AND t2_0.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM users t1_1 WHERE t1_1.id = t0.assigned_by_user_id AND (EXISTS (SELECT 1 FROM file_assets t2_0 WHERE t2_0.id = t1_1.avatar_file_id AND t2_0.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM users t1_2 WHERE t1_2.id = t0.revoked_by_user_id AND (EXISTS (SELECT 1 FROM file_assets t2_0 WHERE t2_0.id = t1_2.avatar_file_id AND t2_0.workspace_id = p_workspace_id))));
@@ -7089,7 +7089,7 @@ BEGIN
 
   INSERT INTO audit_logs (workspace_id, action, resource_type, resource_id, details)
   VALUES (NULL, 'tenant.hard_erase.done', 'workspace', p_workspace_id,
-          jsonb_build_object('rows_deleted', v_total, 'finished_at', NOW()));
+          jsonb_build_object('rows_deleted', v_total, 'finished_at', to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')));
 END;
 $$;
 ALTER FUNCTION sd_purge_workspace(uuid) OWNER TO synapse_purge_fn_owner;
@@ -7245,7 +7245,7 @@ BEGIN
   DELETE FROM workspace_apps WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   INSERT INTO audit_logs (workspace_id, action, resource_type, resource_id, details)
   VALUES (NULL, 'soft_delete.retention_purge', 'system', NULL,
-          jsonb_build_object('before', p_before, 'rows_deleted', v_total, 'finished_at', NOW()));
+          jsonb_build_object('before', p_before, 'rows_deleted', v_total, 'finished_at', to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')));
   RETURN v_total;
 END;
 $$;

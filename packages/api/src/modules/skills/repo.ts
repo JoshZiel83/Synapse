@@ -1120,7 +1120,7 @@ export async function loadAccessBindingsBySkillIds(
   for (const row of rows) {
     const normalizedBinding: SkillAccessRow = {
       ...row,
-      createdAt: row.createdAt || new Date(0),
+      createdAt: row.createdAt,
     }
     const existing = map.get(normalizedBinding.skillId) || []
     existing.push(normalizedBinding)

@@ -35,12 +35,16 @@ export type ToolCallTaskRow = Omit<
   | "finalResultPayload"
   | "finalErrorPayload"
   | "metadata"
+  | "retentionTtlMs"
 > & {
   requestPayload: Record<string, unknown>
   immediateResultPayload: Record<string, unknown>
   finalResultPayload: Record<string, unknown>
   finalErrorPayload: Record<string, unknown>
   metadata: Record<string, unknown>
+  // retention_ttl_ms is BIGINT (Int8 = string at the wire); the repo decodes
+  // it back to a JS number on exit, so the decoded row exposes number | null.
+  retentionTtlMs: number | null
 }
 
 type ToolCallTaskOutputChunkRawRow = Pick<

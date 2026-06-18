@@ -2626,9 +2626,9 @@ export interface ToolCallTaskDeviceTool {
 
 export interface ToolCallTaskExternalMcp {
   pluginInstallationId: string | null;
-  pollIntervalMs: number | null;
+  pollIntervalMs: Int8 | null;
   taskId: string;
-  ttlMs: number | null;
+  ttlMs: Int8 | null;
   upstreamTaskId: string | null;
   wireVersion: Generated<string>;
 }
@@ -2707,7 +2707,7 @@ export interface ToolCallTasks {
   resolvedAt: Date | null;
   resolvedByParticipantId: string | null;
   retainUntil: Date | null;
-  retentionTtlMs: number | null;
+  retentionTtlMs: Int8 | null;
   revision: Generated<Int8>;
   sessionId: string | null;
   sourceToolCallId: string | null;
@@ -2953,7 +2953,7 @@ export interface WorkspaceAppGrantRequests {
 
 export interface WorkspaceAppGrants {
   conversationTypeMaskOverride: number | null;
-  createdAt: Generated<Date | null>;
+  createdAt: Generated<Date>;
   createdByWorkspaceMemberId: string | null;
   id: Generated<string>;
   permissions: ArrayType<WorkspaceAppGrantPermission>;

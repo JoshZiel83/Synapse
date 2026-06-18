@@ -900,7 +900,7 @@ export function buildSkillAccessRow(row: SkillAccessRow): SkillAccessRow {
     source: row.source as SkillAccessRow["source"],
     createdByWorkspaceMemberId: row.createdByWorkspaceMemberId,
     reason: row.reason,
-    createdAt: row.createdAt || new Date(0),
+    createdAt: row.createdAt,
     revokedAt: row.revokedAt,
   }
 }

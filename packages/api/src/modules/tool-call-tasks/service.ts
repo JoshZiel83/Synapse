@@ -6,7 +6,10 @@ import {
   type TaskNoticeStatus,
 } from "@synapse/shared"
 import type { Executor } from "../../infrastructure/database/kysely.js"
-import { serializeNowInstant } from "../../infrastructure/datetime.js"
+import {
+  parseInstantString,
+  serializeNowInstant,
+} from "../../infrastructure/datetime.js"
 import {
   presentToolCallTask,
   presentToolCallTaskOutputChunk,
@@ -126,7 +129,10 @@ function noticeStatusToLifecycle(
 
 function toDate(value: string | null | undefined) {
   if (!value) return null
-  return new Date(value)
+  // `value` is a presented canonical ISO instant string. Parse it fail-loud:
+  // a present-but-unparseable value is a bug, not a reason to silently yield an
+  // Invalid Date that later coalesces to "now".
+  return parseInstantString(value)
 }
 
 async function assertSessionAllowsToolCallTasks(
@@ -476,7 +482,9 @@ async function updateToolCallTaskRecord(
       : existing.metadata
 
   const nextCompletedAt = TERMINAL_TOOL_CALL_TASK_STATUSES.has(nextStatus)
-    ? toDate(existing.completedAt) || new Date()
+    ? // datetime-ok: first terminalization stamps completion = now when no prior
+      // completedAt exists (legitimate domain default, not a value-masking fallback).
+      toDate(existing.completedAt) || new Date()
     : toDate(existing.completedAt)
 
   // Terminal guard as a SQL predicate: only mutate a task that is NOT already

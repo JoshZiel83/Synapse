@@ -1084,7 +1084,7 @@ export async function listPluginInstallationAccessRows(
   const rows = await query.execute()
   return rows.map((row) => ({
     ...row,
-    createdAt: row.createdAt || new Date(0),
+    createdAt: row.createdAt,
   }))
 }
 

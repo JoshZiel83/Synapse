@@ -40,7 +40,7 @@ export type WorkspaceAppGrantRow = {
   source: "manual" | "approval" | "system"
   createdByWorkspaceMemberId: string | null
   reason: string | null
-  createdAt: Date | null
+  createdAt: Date
   revokedAt: Date | null
 }
 

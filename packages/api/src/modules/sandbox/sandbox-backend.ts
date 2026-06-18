@@ -91,7 +91,13 @@ export interface SandboxInfo {
   sandboxId: string
   deviceId: string
   deviceServiceId: string
-  startedAt: Date
+  /**
+   * Wall-clock time the sandbox process was started. Undefined when the handle
+   * was re-attached from a persisted SandboxRef across a process restart — the
+   * real start time is not recoverable there, so we omit it rather than
+   * fabricating an epoch-0 placeholder.
+   */
+  startedAt?: Date
 }
 
 /** A live sandbox handle — mirrors the e2b Sandbox INSTANCE methods we use. */
@@ -333,7 +339,8 @@ function makeLocalRefHandle(ref: SandboxRef): SandboxHandle {
         sandboxId: ref.sandboxId,
         deviceId: ref.deviceId,
         deviceServiceId: ref.deviceServiceId ?? "",
-        startedAt: new Date(0),
+        // Re-attached from a persisted SandboxRef: the real start time is not
+        // recorded in the ref, so leave it undefined rather than fabricating one.
       }
     },
     async kill(): Promise<void> {

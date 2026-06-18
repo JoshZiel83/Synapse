@@ -126,7 +126,7 @@ export function presentToolCallTask(
     deadlineAt: serializeOptionalInstant(row.deadlineAt),
     expiresAt: serializeOptionalInstant(row.expiresAt),
     retentionTtlMs:
-      typeof row.retentionTtlMs === "number" ? row.retentionTtlMs : undefined,
+      row.retentionTtlMs == null ? undefined : Number(row.retentionTtlMs),
     retainUntil: serializeOptionalInstant(row.retainUntil),
     cancelRequestedAt: serializeOptionalInstant(row.cancelRequestedAt),
     cancelReason: row.cancelReason || undefined,

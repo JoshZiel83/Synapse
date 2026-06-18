@@ -1195,7 +1195,7 @@ export async function createPluginInstallationGrant(input: {
       source: inserted.source,
       createdByWorkspaceMemberId: inserted.createdByWorkspaceMemberId,
       reason: inserted.reason,
-      createdAt: inserted.createdAt || new Date(0),
+      createdAt: inserted.createdAt,
       revokedAt: inserted.revokedAt,
     })
     return {

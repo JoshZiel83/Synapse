@@ -224,9 +224,7 @@ export async function consumeCloudBootstrapTx(args: {
           existingStatus: existing.status as string,
         }
       }
-      const existingExpiresAt = new Date(
-        existing.expiresAt as unknown as string
-      ).getTime()
+      const existingExpiresAt = existing.expiresAt.getTime()
       if (
         Number.isFinite(existingExpiresAt) &&
         existingExpiresAt < Date.now()
@@ -1728,9 +1726,7 @@ export async function consumeLocalPairingTx(args: {
           existingStatus: existing.status as string,
         }
       }
-      const expiresAt = new Date(
-        existing.expiresAt as unknown as string
-      ).getTime()
+      const expiresAt = existing.expiresAt.getTime()
       if (Number.isFinite(expiresAt) && expiresAt < Date.now()) {
         return { outcome: "expired" }
       }

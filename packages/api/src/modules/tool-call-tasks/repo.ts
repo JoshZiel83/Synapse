@@ -127,7 +127,12 @@ export function normalizeToolCallTaskRow(
     completionItemId: row.completionItemId,
     deadlineAt: row.deadlineAt,
     expiresAt: row.expiresAt,
-    retentionTtlMs: row.retentionTtlMs,
+    // retention_ttl_ms is BIGINT (durations can exceed INT's ~24.8-day cap);
+    // node-postgres returns BIGINT as a string, so coerce back to the `number`
+    // the generated type and all consumers expect. Safe: ms durations are well
+    // within Number.MAX_SAFE_INTEGER.
+    retentionTtlMs:
+      row.retentionTtlMs == null ? null : Number(row.retentionTtlMs),
     retainUntil: row.retainUntil,
     cancelRequestedAt: row.cancelRequestedAt,
     cancelReason: row.cancelReason,
