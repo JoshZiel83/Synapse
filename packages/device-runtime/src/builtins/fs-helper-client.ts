@@ -4,6 +4,7 @@
 // helper_log_tail in error _meta.
 
 import { existsSync } from "node:fs"
+import { assertIsoInstantString } from "@synapse/shared/datetime"
 import type { SidecarHandle } from "../sidecar.js"
 import { startSidecar } from "../sidecar.js"
 import { createDeviceLogger } from "../logger.js"
@@ -393,6 +394,43 @@ export function createFsHelperClient(
     }
   }
 
+  // ── Targeted time-field validation at the cross-language boundary ──────────
+  // The Rust sidecar emits a single canonical wire instant
+  // (`instant::iso_instant_now()` → `YYYY-MM-DDTHH:MM:SS.mmmZ`). A blind
+  // `result as T` would let a malformed/legacy stamp flow straight to MCP
+  // output. We validate ONLY the known time fields on the few responses that
+  // carry them (Option/undefined/null fields pass through untouched). Hot
+  // paths with zero time fields (search/CAS/dir-sync/manifest) keep the cheap
+  // `return result as T`.
+  function validatedHistoryGet(result: HistoryGetResult): HistoryGetResult {
+    assertIsoInstantString(result.recorded_at)
+    return result
+  }
+  function validatedHistoryList(result: HistoryListResult): HistoryListResult {
+    for (const entry of result.entries) {
+      assertIsoInstantString(entry.recorded_at)
+    }
+    return result
+  }
+  function validatedIndexStatus(result: IndexStatusResult): IndexStatusResult {
+    if (result.last_indexed_at != null) {
+      assertIsoInstantString(result.last_indexed_at)
+    }
+    if (result.rebuild_task) {
+      validatedIndexTaskStatus(result.rebuild_task)
+    }
+    return result
+  }
+  function validatedIndexTaskStatus(
+    result: IndexTaskStatusResult
+  ): IndexTaskStatusResult {
+    assertIsoInstantString(result.started_at)
+    if (result.finished_at != null) {
+      assertIsoInstantString(result.finished_at)
+    }
+    return result
+  }
+
   return {
     isAvailable(): boolean {
       if (stopped) return false
@@ -408,16 +446,20 @@ export function createFsHelperClient(
         await h.stop().catch(() => {})
       }
     },
-    historyGet: (input) => request("fs.history.get", input),
+    historyGet: async (input) =>
+      validatedHistoryGet(await request("fs.history.get", input)),
     historySnapshot: (input) => request("fs.history.snapshot", input),
     historySnapshotDelete: (input) =>
       request("fs.history.snapshot_delete", input),
-    historyList: (input) => request("fs.history.list", input),
+    historyList: async (input) =>
+      validatedHistoryList(await request("fs.history.list", input)),
     historyDiff: (input) => request("fs.history.diff", input),
     historyRestore: (input) => request("fs.history.restore", input),
     indexRebuild: (input) => request("fs.index.rebuild", input),
-    indexStatus: (input) => request("fs.index.status", input),
-    indexTaskStatus: (input) => request("fs.index.task_status", input),
+    indexStatus: async (input) =>
+      validatedIndexStatus(await request("fs.index.status", input)),
+    indexTaskStatus: async (input) =>
+      validatedIndexTaskStatus(await request("fs.index.task_status", input)),
     indexUpsert: (input) => request<void>("fs.index.upsert", input),
     indexRemove: (input) => request<void>("fs.index.remove", input),
     searchContent: (input) => request("fs.search.content", input),

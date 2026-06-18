@@ -6,7 +6,7 @@
 import json
 from pathlib import Path
 from typing import Dict, Any, Optional
-from datetime import datetime, timedelta
+from utils.datetime_utils import utc_iso_millis
 from utils.logger import get_logger
 
 _LOGGER = get_logger(__name__)
@@ -46,7 +46,7 @@ class AuthDataManager:
             auth_data_with_meta = {
                 **auth_data,
                 '_metadata': {
-                    'saved_at': datetime.now().isoformat(),
+                    'saved_at': utc_iso_millis(),
                     'version': '1.0'
                 }
             }

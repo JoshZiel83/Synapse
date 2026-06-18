@@ -5,13 +5,13 @@ from mijiaAPI import mijiaAPI, mijiaDevice
 from config.mijia_config import load_mijia_config, MijiaConfig
 from utils.logger import get_logger
 from utils.auth_manager import AuthDataManager
+from utils.datetime_utils import utc_iso_millis
 import subprocess
 import sys
 import traceback
 import webbrowser
-from datetime import datetime
+from datetime import datetime, timezone
 import threading
-import time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from PIL import Image
@@ -186,7 +186,7 @@ class MijiaAdapter:
             qr_html_path = self._auth_manager.get_file_path().parent / "qr.html"
             qr_path.parent.mkdir(parents=True, exist_ok=True)
             self._last_qr_login_url = loginurl
-            self._last_qr_generated_at = datetime.now().isoformat()
+            self._last_qr_generated_at = utc_iso_millis()
             _LOGGER.info('请使用米家APP扫描二维码')
             _LOGGER.info(f'QR code will be saved as {qr_path}')
             _LOGGER.info(f'QR browser page will be saved as {qr_html_path}')
@@ -1040,12 +1040,16 @@ class MijiaAdapter:
                 "online": getattr(device, 'online', True),
                 "room_id": getattr(device, 'room_id', None),
                 "spec_type": getattr(device, 'spec_type', None),
-                "last_update": datetime.now().isoformat()
+                "last_update": utc_iso_millis()
             }
 
             # Cache status information
             self._device_status_cache[device_id] = status_info
-            self._last_status_update = datetime.now()
+            # Tracks the same instant as status_info["last_update"]. Kept as a
+            # timezone-aware UTC datetime (not naive local) so any future
+            # serialization/comparison stays consistent with the canonical
+            # wire shape.
+            self._last_status_update = datetime.now(timezone.utc)
 
             _LOGGER.debug(f"Successfully retrieved device status: {device.name} ({device_id})")
             return status_info

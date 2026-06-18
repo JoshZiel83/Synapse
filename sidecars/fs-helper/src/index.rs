@@ -53,7 +53,15 @@ impl IndexStore {
         // rows remain searchable until something deletes them. A schema
         // bump forces a full reset on next startup, so the index is
         // re-derived from the current filesystem under the fixed rules.
-        const SCHEMA_VERSION: i32 = 2;
+        //
+        // v3 (datetime P4): the `indexed_at` column previously stored a
+        // bespoke epoch-prefixed string from the old formatter. It now
+        // stores the canonical wire instant `YYYY-MM-DDTHH:MM:SS.mmmZ`
+        // (`instant::iso_instant_now()`). Old `ts:` rows would break the
+        // lexicographic `indexed_at` max comparison (mixed formats) and
+        // fail the TS-boundary `assertIsoInstantString` check, so bump the
+        // version to discard them and re-derive from the filesystem.
+        const SCHEMA_VERSION: i32 = 3;
         let needs_reset = {
             // Open without WAL pragma first so we can inspect user_version
             // cheaply. If the file is missing entirely the open creates a
@@ -122,7 +130,7 @@ impl IndexStore {
         let host_sub = host_path(root, &sub_canon)?;
         if !host_sub.exists() {
             self.delete_subtree(&sub_canon)?;
-            self.last_indexed_at = Some(now_stamp());
+            self.last_indexed_at = Some(crate::instant::iso_instant_now());
             return Ok(IndexRebuildResult { task_id: "rebuild-noop".into() });
         }
         self.delete_subtree(&sub_canon)?;
@@ -167,7 +175,7 @@ impl IndexStore {
             };
             self.upsert_host(p, &canon_path)?;
         }
-        self.last_indexed_at = Some(now_stamp());
+        self.last_indexed_at = Some(crate::instant::iso_instant_now());
         Ok(IndexRebuildResult { task_id: "rebuild-1".into() })
     }
 
@@ -242,7 +250,7 @@ impl IndexStore {
             .essence_str()
             .to_string();
         let (content, source) = self.extract_for_index(host, &mime, &ext, meta.len());
-        let indexed_at = now_stamp();
+        let indexed_at = crate::instant::iso_instant_now();
         let tx = self.conn.transaction()?;
         tx.execute(
             "INSERT INTO docs(path, extension, mime, size, mtime_ms, source, indexed_at) VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -432,12 +440,6 @@ impl IndexStore {
     }
 }
 
-fn now_stamp() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let s = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-    format!("ts:{s}")
-}
-
 fn is_rich_format(mime: &str, ext: &str) -> bool {
     let m = mime.to_ascii_lowercase();
     let e = ext.to_ascii_lowercase();
@@ -589,6 +591,14 @@ pub fn compute_status(conn: &Connection, subtree: &str) -> Result<IndexStatusRes
             }
         }
         if let Some(ts) = indexed_at {
+            // `indexed_at` is now the canonical fixed-width wire instant
+            // `YYYY-MM-DDTHH:MM:SS.mmmZ` (see instant::iso_instant_now).
+            // Because every value has identical width and is UTC, byte-wise
+            // lexicographic order is identical to chronological order, so
+            // this string `>=` comparison correctly finds the newest stamp.
+            // (Under the old `"ts:<epoch>"` format this comparison was buggy
+            // — variable-width epoch digits broke ordering — but the
+            // SCHEMA_VERSION bump discards those rows.)
             match &last_indexed_at {
                 Some(cur) if cur.as_str() >= ts.as_str() => {}
                 _ => last_indexed_at = Some(ts),

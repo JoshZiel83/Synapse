@@ -14,6 +14,7 @@ mod blobs;
 mod extract;
 mod history;
 mod index;
+mod instant;
 mod manifest;
 mod path;
 mod rpc;
@@ -272,7 +273,7 @@ async fn dispatch(
             // synchronously, not silently background a no-op.
             let _ = crate::path::canonical(&subtree)?;
             let task_id = format!("rebuild-{}", new_uuid_like());
-            let started_at = now_rfc3339_like();
+            let started_at = crate::instant::iso_instant_now();
             let task = RebuildTaskState {
                 task_id: task_id.clone(),
                 subtree: subtree.clone(),
@@ -324,7 +325,7 @@ async fn dispatch(
                 .await;
                 let mut tasks = state2.tasks.lock().await;
                 if let Some(t) = tasks.get_mut(&task_id2) {
-                    t.finished_at = Some(now_rfc3339_like());
+                    t.finished_at = Some(crate::instant::iso_instant_now());
                     match join {
                         Ok(Ok(())) => t.status = "completed".into(),
                         Ok(Err(msg)) => {
@@ -722,14 +723,4 @@ fn new_uuid_like() -> String {
         s.push_str(&format!("{b:02x}"));
     }
     s
-}
-
-fn now_rfc3339_like() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let d = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = d.as_secs();
-    let ms = d.subsec_millis();
-    format!("epoch:{secs}.{ms:03}")
 }

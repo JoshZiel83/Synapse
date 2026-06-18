@@ -12,6 +12,10 @@ import {
   OperationEnvelopeSchema,
   type OperationEnvelope,
 } from "@synapse/device-protocol"
+import {
+  fromExternalRfc3339,
+  parseIsoInstant,
+} from "@synapse/device-protocol/instant"
 import type { EnvelopeVerifier, EnvelopeVerifyResult } from "./types.js"
 
 interface ReplayStoreEntry {
@@ -98,8 +102,21 @@ export function createInMemoryEnvelopeVerifier(
           message: `envelope signature error: ${(err as Error).message}`,
         }
       }
-      // 2. expires_at
-      const expiresAt = Date.parse(normalizedEnvelope.expires_at)
+      // 2. expires_at — route through the canonical parser (C1). A present-but-
+      // unparseable expires_at must NOT be treated as "not expired" (C2): map a
+      // thrown parse error to the SAME expired/invalid branch as a past expiry.
+      let expiresAt: number
+      try {
+        expiresAt = parseIsoInstant(
+          fromExternalRfc3339(normalizedEnvelope.expires_at)
+        ).getTime()
+      } catch {
+        return {
+          ok: false,
+          code: "expired_envelope",
+          message: "envelope expired",
+        }
+      }
       if (!Number.isFinite(expiresAt) || expiresAt < now()) {
         return {
           ok: false,

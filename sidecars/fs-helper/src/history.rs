@@ -1,7 +1,6 @@
 //! SQLite-backed history store with GC.
 
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use rusqlite::{params, Connection, OptionalExtension, Row};
@@ -33,10 +32,47 @@ impl HistoryStore {
     pub fn open(work_dir: &Path, limits: HistoryLimits) -> Result<Self, RpcError> {
         let blobs = BlobStore::open(work_dir)?;
         let db_path = work_dir.join("history.sqlite");
+        // Schema migration via PRAGMA user_version. Bumping
+        // HISTORY_SCHEMA_VERSION forces a clean rebuild of the history
+        // table(s). History rows are best-effort (the file content itself is
+        // not lost; only the undo trail), so a destructive reset is the safest
+        // answer for older sidecar versions that wrote an incompatible shape.
+        //
+        // v1 (datetime): the `recorded_at` column previously stored a bespoke
+        // string from the old formatter. It now stores the canonical wire
+        // instant `YYYY-MM-DDTHH:MM:SS.mmmZ` (`instant::iso_instant_now()`).
+        // Old rows would fail the TS-boundary `assertIsoInstantString` check
+        // and 500 the history list, so bump the version to discard them.
+        const HISTORY_SCHEMA_VERSION: i32 = 1;
+        let needs_reset = {
+            // Probe user_version without WAL pragma first. If the file is
+            // missing entirely the open creates a fresh empty db with
+            // user_version 0; we leave needs_reset=false because the
+            // CREATE TABLE IF NOT EXISTS below seeds the schema anyway.
+            if db_path.exists() {
+                let probe = Connection::open(&db_path)?;
+                let cur: i32 = probe
+                    .query_row("PRAGMA user_version", [], |r| r.get(0))
+                    .unwrap_or(0);
+                drop(probe);
+                cur != HISTORY_SCHEMA_VERSION
+            } else {
+                false
+            }
+        };
+        if needs_reset {
+            // Drop the history sidecar files cleanly. WAL / SHM may exist from
+            // prior runs; remove all three so the next open is fresh.
+            for suffix in ["", "-wal", "-shm"] {
+                let p = work_dir.join(format!("history.sqlite{suffix}"));
+                let _ = std::fs::remove_file(&p);
+            }
+        }
         let conn = Connection::open(&db_path)?;
-        conn.execute_batch(
+        conn.execute_batch(&format!(
             "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
+             PRAGMA user_version = {HISTORY_SCHEMA_VERSION};
              CREATE TABLE IF NOT EXISTS versions (
                 version INTEGER PRIMARY KEY AUTOINCREMENT,
                 path TEXT NOT NULL,
@@ -51,8 +87,8 @@ impl HistoryStore {
              CREATE TABLE IF NOT EXISTS blobs_refcount (
                 sha256 TEXT PRIMARY KEY,
                 count INTEGER NOT NULL
-             );",
-        )?;
+             );"
+        ))?;
         Ok(Self { conn, blobs, limits, work_dir: work_dir.to_path_buf() })
     }
 
@@ -94,7 +130,7 @@ impl HistoryStore {
         } else {
             (None, false)
         };
-        let recorded_at = now_rfc3339();
+        let recorded_at = crate::instant::iso_instant_now();
         let tx = self.conn.transaction()?;
         tx.execute(
             "INSERT INTO versions(path, op, prior_exists, blob_sha256, prior_size, prior_mtime_ms, recorded_at) VALUES (?,?,?,?,?,?,?)",
@@ -397,41 +433,11 @@ fn row_to_entry(r: &Row) -> rusqlite::Result<HistoryListEntry> {
     })
 }
 
-fn now_rfc3339() -> String {
-    // Minimal RFC3339-ish stamp without chrono.
-    let dur = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
-    let secs = dur.as_secs();
-    let millis = dur.subsec_millis();
-    // Convert epoch seconds to YYYY-MM-DDTHH:MM:SS.mmmZ.
-    let (year, mon, day, hh, mm, ss) = epoch_to_ymdhms(secs);
-    format!("{year:04}-{mon:02}-{day:02}T{hh:02}:{mm:02}:{ss:02}.{millis:03}Z")
-}
-
-fn epoch_to_ymdhms(secs: u64) -> (i32, u32, u32, u32, u32, u32) {
-    let days = secs / 86_400;
-    let rem = secs % 86_400;
-    let hh = (rem / 3_600) as u32;
-    let mm = ((rem % 3_600) / 60) as u32;
-    let ss = (rem % 60) as u32;
-    // Compute YMD via Howard Hinnant's days-from-civil inverse.
-    let z = days as i64 + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = (z - era * 146_097) as i64;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let mon = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
-    let year = (y + if mon <= 2 { 1 } else { 0 }) as i32;
-    (year, mon, day, hh, mm, ss)
-}
-
 fn make_token() -> String {
     use sha2::Digest;
     let mut h = sha2::Sha256::new();
     h.update(std::process::id().to_be_bytes());
-    h.update(now_rfc3339().as_bytes());
+    h.update(crate::instant::iso_instant_now().as_bytes());
     let bytes = h.finalize();
     hex::encode(&bytes[..16])
 }
