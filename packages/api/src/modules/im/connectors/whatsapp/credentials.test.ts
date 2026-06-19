@@ -5,6 +5,7 @@ import {
   getWhatsappCredentialsOrThrow,
   validateWhatsappCredentialsForMode,
 } from "./credentials.js"
+import { WHATSAPP_DEFAULT_GRAPH_VERSION } from "./types.js"
 
 const FULL = {
   phoneNumberId: "123",
@@ -18,7 +19,7 @@ const FULL = {
 test("validateWhatsappCredentialsForMode: webhook + full creds → ok with default graph version", () => {
   const r = validateWhatsappCredentialsForMode(FULL, "webhook")
   assert.equal(r.ok, true)
-  assert.equal(r.normalized?.graphApiVersion, "v23.0")
+  assert.equal(r.normalized?.graphApiVersion, WHATSAPP_DEFAULT_GRAPH_VERSION)
   assert.equal(r.normalized?.phoneNumberId, "123")
 })
 
@@ -56,7 +57,7 @@ test("extractWhatsappCredentials: normalizes graph version (adds v prefix, valid
   assert.equal(
     extractWhatsappCredentials({ ...FULL, graphApiVersion: "not-a-version" })
       .credentials?.graphApiVersion,
-    "v23.0"
+    WHATSAPP_DEFAULT_GRAPH_VERSION
   )
 })
 

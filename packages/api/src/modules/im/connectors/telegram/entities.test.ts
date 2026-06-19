@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { escapeHtml, splitCaption, splitForLimit } from "./entities.js"
+import { escapeHtml, splitForLimit } from "./entities.js"
 
 test("escapeHtml: escapes < > & only", () => {
   assert.equal(escapeHtml("a < b & c > d"), "a &lt; b &amp; c &gt; d")
@@ -40,16 +40,59 @@ test("splitForLimit: never splits a surrogate pair", () => {
   assert.equal(chunks.join(""), text.replace(/\n/g, ""))
 })
 
-test("splitCaption: <=1024 returns whole as caption", () => {
-  const { caption, overflow } = splitCaption("short")
-  assert.equal(caption, "short")
-  assert.deepEqual(overflow, [])
+/** A chunk is markup-safe iff it has no unterminated `&…;` entity and no
+ *  unbalanced `<…>` tag at its boundary (Telegram parse_mode:HTML would 400). */
+function assertNoBrokenMarkup(chunk: string): void {
+  // No dangling '&' without a following ';' inside the chunk.
+  const lastAmp = chunk.lastIndexOf("&")
+  if (lastAmp !== -1) {
+    assert.ok(
+      chunk.indexOf(";", lastAmp) !== -1,
+      `chunk ends mid-entity: …${chunk.slice(-12)}`
+    )
+  }
+  // No '<' without a matching '>' after it (open tag at the boundary).
+  const lastLt = chunk.lastIndexOf("<")
+  const lastGt = chunk.lastIndexOf(">")
+  assert.ok(lastLt <= lastGt, `chunk ends inside a tag: …${chunk.slice(-16)}`)
+}
+
+test("splitForLimit: never cuts mid-entity on a long newline-free line", () => {
+  // Build a >limit line where the hard cut at `limit` lands inside `&amp;`.
+  // Filler of length limit-2, then "&amp;" so the cut (at limit) is between
+  // '&am' and 'p;'. The OLD splitter sliced raw → "…&am" (broken). The fix
+  // backs the cut off to before '&'.
+  const limit = 20
+  const filler = "a".repeat(limit - 2) // 18 'a's
+  const text = filler + "&amp;" + "b".repeat(limit) // forces a cut inside &amp;
+  const chunks = splitForLimit(text, limit)
+  for (const c of chunks) assertNoBrokenMarkup(c)
+  // Lossless: chunks rejoin to the original (no newline dropping here).
+  assert.equal(chunks.join(""), text)
 })
 
-test("splitCaption: long caption splits off overflow", () => {
-  const text = "x".repeat(1500)
-  const { caption, overflow } = splitCaption(text)
-  assert.equal(caption.length, 1024)
-  assert.ok(overflow.length >= 1)
-  assert.equal(caption + overflow.join(""), text)
+test("splitForLimit: never cuts inside an <a> anchor straddling the cap", () => {
+  const limit = 30
+  // Put the anchor so the raw cut at `limit` lands inside the opening tag.
+  const lead = "x".repeat(limit - 5)
+  const anchor = '<a href="tg://user?id=42">name</a>'
+  const text = lead + anchor + "y".repeat(limit)
+  const chunks = splitForLimit(text, limit)
+  for (const c of chunks) assertNoBrokenMarkup(c)
+  assert.equal(chunks.join(""), text)
+})
+
+test("splitForLimit: real >4096 escaped line with mention at the boundary stays valid", () => {
+  // Mimic render output: escaped text + an anchor whose start sits right at
+  // index 4096 in a single newline-free line.
+  const head = "&lt;".repeat(1024) // 4096 units of escaped '<'
+  const anchor = '<a href="tg://user?id=7">u</a>'
+  const text = head + anchor + "&amp;".repeat(2000)
+  const chunks = splitForLimit(text) // default 4096 cap
+  assert.ok(chunks.length >= 2)
+  for (const c of chunks) {
+    assert.ok(c.length <= 4096)
+    assertNoBrokenMarkup(c)
+  }
+  assert.equal(chunks.join(""), text)
 })

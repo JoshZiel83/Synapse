@@ -96,7 +96,8 @@ async function executeItem(
     prepared.method,
     {
       chat_id: ctx.chatId,
-      caption: item.caption,
+      // No caption: media items are planned as separate sends from their
+      // adjacent text (see render.ts TelegramSendItem note).
       ...prepared.extraFields,
       ...replyFields,
     },

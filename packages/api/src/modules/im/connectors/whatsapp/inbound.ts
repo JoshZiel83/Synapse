@@ -58,6 +58,17 @@ export async function startWhatsappAccount(
 
 export interface HandleWhatsappWebhookDeps {
   windowStore?: WhatsappWindowStore
+  /**
+   * Delivery-status reconcile seam. Defaults to the real
+   * `reconcileWhatsappStatus` (which lazily wires the service layer). Injected
+   * by tests to assert the handler actually routes `value.statuses[]` to the
+   * reconcile path with the right wamid — the only place Cloud-API delivery
+   * failure (131026/131047) is detected, since the send call returns 200.
+   */
+  reconcile?: (input: {
+    accountId: string
+    entry: WhatsappStatusEntry
+  }) => Promise<boolean>
 }
 
 export async function handleWhatsappWebhook(
@@ -103,6 +114,14 @@ export async function handleWhatsappWebhook(
   }
 
   const windowStore = deps.windowStore ?? whatsappWindowStore
+  const reconcile =
+    deps.reconcile ??
+    ((args) =>
+      reconcileWhatsappStatus({
+        accountId: args.accountId,
+        entry: args.entry,
+        ...(input.logger ? { logger: input.logger } : {}),
+      }))
 
   // Process every value across entry[].changes[]. We always answer 200; a
   // per-item failure is logged but never blocks the rest (Meta would
@@ -116,6 +135,7 @@ export async function handleWhatsappWebhook(
         input,
         creds,
         windowStore,
+        reconcile,
       }).catch((err) => {
         log.warn({ err }, "[im:whatsapp] webhook value processing failed")
       })
@@ -135,6 +155,10 @@ interface ProcessValueInput {
   input: WebhookHandlerInput
   creds: ReturnType<typeof getWhatsappCredentialsOrThrow>
   windowStore: WhatsappWindowStore
+  reconcile: (input: {
+    accountId: string
+    entry: WhatsappStatusEntry
+  }) => Promise<boolean>
 }
 
 async function processValue(ctx: ProcessValueInput): Promise<void> {
@@ -222,9 +246,8 @@ async function handleStatus(
   status: WhatsappStatusEntry,
   ctx: ProcessValueInput
 ): Promise<void> {
-  await reconcileWhatsappStatus({
+  await ctx.reconcile({
     accountId: ctx.input.account.id,
     entry: status,
-    ...(ctx.input.logger ? { logger: ctx.input.logger } : {}),
   })
 }

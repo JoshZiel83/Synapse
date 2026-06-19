@@ -2,10 +2,12 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { buildCanonicalMessage } from "../../messaging/canonical-message.js"
 import type { ConnectorLogger } from "../types.js"
+import { PermanentTransportError } from "../types.js"
 import {
   buildOutboundContent,
   enrichInboundWhatsappMedia,
   mapMediaKindWithMimeFallback,
+  WHATSAPP_UNOFFICIAL_INBOUND_SIZE_LIMITS,
 } from "./media.js"
 
 const noopLogger: ConnectorLogger = {
@@ -109,6 +111,97 @@ test("enrich maps an audio-typed document to a voice part (Bad-decrypt fallback)
   const part = out.parts[0]
   assert.ok(part.type === "voice")
   assert.equal(part.durationMs, 5000)
+})
+
+test("enrich SKIPS download when declared fileLength exceeds the per-kind cap (WU-6)", async () => {
+  const tooBig = WHATSAPP_UNOFFICIAL_INBOUND_SIZE_LIMITS.video + 1
+  const message = buildCanonicalMessage([
+    {
+      type: "system_marker",
+      marker: "video_placeholder",
+      original: { kind: "video", mimetype: "video/mp4", fileLength: tooBig },
+    },
+  ])
+  let downloaded = false
+  const out = await enrichInboundWhatsappMedia(
+    message,
+    [{ partIndex: 0, kind: "video" }],
+    {
+      raw: {} as never,
+      workspaceId: "ws1",
+      messageId: "M-big",
+      download: async () => {
+        downloaded = true
+        return Buffer.from("x")
+      },
+      store: async () => ({ sha256: "should-not-happen" }),
+      logger: noopLogger,
+    }
+  )
+  assert.equal(downloaded, false, "oversized media must NOT be downloaded")
+  assert.equal(out.parts[0].type, "system_marker", "placeholder is kept")
+})
+
+test("enrich downloads when declared fileLength is within the cap", async () => {
+  const message = buildCanonicalMessage([
+    {
+      type: "system_marker",
+      marker: "image_placeholder",
+      original: { kind: "image", mimetype: "image/jpeg", fileLength: 1024 },
+    },
+  ])
+  const out = await enrichInboundWhatsappMedia(
+    message,
+    [{ partIndex: 0, kind: "image" }],
+    {
+      raw: {} as never,
+      workspaceId: "ws1",
+      messageId: "M-ok",
+      download: async () => Buffer.from("img"),
+      store: async () => ({ sha256: "sha-ok" }),
+      logger: noopLogger,
+    }
+  )
+  assert.equal(out.parts[0].type, "image")
+})
+
+test("outbound: media part with NO sha256 throws PermanentTransportError (WU-7)", async () => {
+  const msg = buildCanonicalMessage([
+    // sha256 omitted: a media part that lost its bytes must fail loudly.
+    { type: "image", fileRef: { mimeType: "image/png" } as never },
+  ])
+  await assert.rejects(
+    () =>
+      buildOutboundContent(msg, {
+        readContent: async () => Buffer.from("nope"),
+        transcodeVoice: async (b) => b,
+        logger: noopLogger,
+      }),
+    (err: unknown) => {
+      assert.ok(err instanceof PermanentTransportError)
+      return true
+    }
+  )
+})
+
+test("outbound: a voice transcode failure is PERMANENT, not retryable (WU-8)", async () => {
+  const msg = buildCanonicalMessage([
+    { type: "voice", fileRef: { sha256: "sha-v" } },
+  ])
+  await assert.rejects(
+    () =>
+      buildOutboundContent(msg, {
+        readContent: async () => Buffer.from("raw-audio"),
+        transcodeVoice: async () => {
+          throw new Error("ffmpeg not found")
+        },
+        logger: noopLogger,
+      }),
+    (err: unknown) => {
+      assert.ok(err instanceof PermanentTransportError)
+      return true
+    }
+  )
 })
 
 test("outbound: plain text → { text }", async () => {

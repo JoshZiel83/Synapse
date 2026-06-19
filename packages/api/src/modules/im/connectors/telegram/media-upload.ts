@@ -22,7 +22,10 @@ import {
 import { PermanentTransportError } from "../types.js"
 import type { ConnectorLogger } from "../types.js"
 import type { CanonicalFileRef } from "../../messaging/canonical-message.js"
-import { TELEGRAM_CLOUD_UPLOAD_MAX_BYTES } from "./types.js"
+import {
+  TELEGRAM_CLOUD_UPLOAD_MAX_BYTES,
+  TELEGRAM_VOICE_TRANSCODE_MAX_INPUT_BYTES,
+} from "./types.js"
 
 /** A prepared upload: the API method, the file field, and its bytes. */
 export interface PreparedUpload {
@@ -141,9 +144,15 @@ export async function prepareVoiceUpload(
     durationSec?: number
     logger?: ConnectorLogger
     readBytes?: ReadBytes
+    /** DI seams (default to the real ffmpeg helpers) so the transcode branch
+     *  is testable without ffmpeg on PATH. */
+    ffmpegAvailable?: () => Promise<boolean>
+    transcode?: (input: Buffer) => Promise<Buffer>
   } = {}
 ): Promise<PreparedUpload> {
   const buffer = await loadBytes(fileRef, opts.readBytes ?? readContentBuffer)
+  const checkFfmpeg = opts.ffmpegAvailable ?? ffmpegAvailable
+  const transcode = opts.transcode ?? transcodeToOpusVoiceNote
 
   if (isOggOpus(buffer)) {
     assertWithinUploadCap(buffer)
@@ -157,10 +166,21 @@ export async function prepareVoiceUpload(
     }
   }
 
-  const canTranscode = await ffmpegAvailable()
+  // Pre-transcode input cap: a real voice note is small. A huge non-opus
+  // input would buffer + spawn ffmpeg for nothing, so skip straight to a
+  // document send rather than burning CPU / risking OOM on the worker.
+  const tooBigToTranscode =
+    buffer.length > TELEGRAM_VOICE_TRANSCODE_MAX_INPUT_BYTES
+  const canTranscode = !tooBigToTranscode && (await checkFfmpeg())
+  if (tooBigToTranscode) {
+    opts.logger?.warn(
+      "telegram: voice input exceeds transcode cap; sending as document",
+      { bytes: buffer.length, cap: TELEGRAM_VOICE_TRANSCODE_MAX_INPUT_BYTES }
+    )
+  }
   if (canTranscode) {
     try {
-      const ogg = await transcodeToOpusVoiceNote(buffer)
+      const ogg = await transcode(buffer)
       assertWithinUploadCap(ogg)
       return {
         method: "sendVoice",
@@ -176,7 +196,7 @@ export async function prepareVoiceUpload(
         { err: String(err) }
       )
     }
-  } else {
+  } else if (!tooBigToTranscode) {
     opts.logger?.warn("telegram: ffmpeg unavailable; sending voice as document")
   }
 

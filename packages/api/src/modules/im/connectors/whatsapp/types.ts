@@ -4,7 +4,7 @@
  * Sourced from the Meta Graph API docs (Cloud API / WhatsApp Business
  * Platform) and centralized here so:
  *   - connector files import names instead of magic strings/numbers
- *   - the Graph API version bump lives in ONE place (default v23.0; see the
+ *   - the Graph API version bump lives in ONE place (default v25.0; see the
  *     research-uncertainty note in docs plan §8 — re-check currency at build
  *     time)
  *   - tests reference the same constants the runtime uses
@@ -17,8 +17,14 @@
 /** Graph API host. The version segment is supplied per-account. */
 export const WHATSAPP_GRAPH_BASE = "https://graph.facebook.com"
 
-/** Default Graph API version when the credential omits one. */
-export const WHATSAPP_DEFAULT_GRAPH_VERSION = "v23.0"
+/**
+ * Default Graph API version when the credential omits one.
+ *
+ * v25.0 is the current stable release (shipped 2026-02-18), verified against
+ * Meta's Graph API changelog (https://developers.facebook.com/docs/graph-api/changelog).
+ * Meta keeps a version callable for ~2 years; per-account override still works.
+ */
+export const WHATSAPP_DEFAULT_GRAPH_VERSION = "v25.0"
 
 /**
  * Hosts Meta serves inbound media bytes from. The Bearer token is only sent
@@ -43,17 +49,34 @@ export const WHATSAPP_MEDIA_HOSTS: readonly string[] = [
 // ───────────────────────── Per-type size caps (plan §5.1) ─────────────────────────
 
 /**
- * Cloud API outbound media size ceilings (bytes). image jpeg/png 5 MB;
- * audio + video 16 MB; document 100 MB; sticker static ≤100 KB (we cap at
- * 100 KB and require 512² webp at the render layer). Oversize → reject with
- * PermanentTransportError (no upload attempt).
+ * Cloud API media size ceilings (bytes), enforced per `WhatsappMediaCategory`
+ * on both outbound upload (media.ts) and inbound download (media.ts).
+ *
+ *   - image  5 MB  — also the enforced cap for INBOUND stickers, which
+ *                    normalize maps to `image_placeholder` → category `image`
+ *                    (there is no `sticker` category on any enforced path, so
+ *                    the static 100 KB / animated 500 KB split is NOT applied).
+ *   - audio  16 MB — applied to both voice notes and regular audio.
+ *   - video  16 MB
+ *   - document 8 MB — capped well below Meta's 100 MB document ceiling because
+ *                    both outbound upload (`readContentBuffer`) and inbound
+ *                    download read the whole file into memory; on the
+ *                    concurrency-1 worker a 100 MB inline read + copy is an OOM
+ *                    risk. 8 MB keeps a single document send/receive
+ *                    inline-safe. Raise only alongside a streaming upload path.
+ *
+ * Oversize → reject (outbound: PermanentTransportError, no upload attempt;
+ * inbound: keep the placeholder, skip the download).
+ *
+ * NOTE: there is deliberately NO `sticker` cap constant — see the image note
+ * above. Adding one would be dead, since no enforcement path ever resolves to
+ * a `sticker` category.
  */
 export const WHATSAPP_MEDIA_SIZE_LIMITS = {
   image: 5 * 1024 * 1024,
   audio: 16 * 1024 * 1024,
   video: 16 * 1024 * 1024,
-  document: 100 * 1024 * 1024,
-  sticker: 100 * 1024,
+  document: 8 * 1024 * 1024,
 } as const
 
 export type WhatsappMediaCategory = keyof typeof WHATSAPP_MEDIA_SIZE_LIMITS

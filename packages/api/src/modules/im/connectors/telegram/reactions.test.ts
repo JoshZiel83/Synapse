@@ -47,6 +47,29 @@ test("status glyph map: done => 👍, error => 🤬", () => {
   assert.equal(map[DEFAULT_STATUS_EMOJIS.error], "🤬")
 })
 
+test("status glyph map: tool/coding => bare ✍ (U+270D, NO trailing VS16)", () => {
+  const map = defaultStatusGlyphToTelegramReaction()
+  // Real Telegram allowed set is the bare writing-hand U+270D. The VS16 form
+  // "✍️" is REACTION_INVALID (400). Assert the exact codepoints, not just
+  // string equality, so a re-introduced VS16 fails here.
+  const WRITING_HAND = "✍" // bare, no ️
+  assert.equal(map[DEFAULT_STATUS_EMOJIS.tool], WRITING_HAND)
+  assert.equal(map[DEFAULT_STATUS_EMOJIS.coding], WRITING_HAND)
+  assert.equal([...map[DEFAULT_STATUS_EMOJIS.tool]].length, 1)
+  assert.equal(map[DEFAULT_STATUS_EMOJIS.tool].codePointAt(0), 0x270d)
+  assert.equal(map[DEFAULT_STATUS_EMOJIS.coding].codePointAt(0), 0x270d)
+  assert.ok(!map[DEFAULT_STATUS_EMOJIS.tool].includes("️"))
+  assert.ok(!map[DEFAULT_STATUS_EMOJIS.coding].includes("️"))
+})
+
+test("allowed reaction set contains the bare ✍ and no VS16-bearing glyph", () => {
+  assert.ok(TELEGRAM_ALLOWED_REACTIONS.has("✍"))
+  assert.ok(!TELEGRAM_ALLOWED_REACTIONS.has("✍️"))
+  for (const g of TELEGRAM_ALLOWED_REACTIONS) {
+    assert.ok(!g.includes("️"), `${g} must carry no VS16`)
+  }
+})
+
 test("setReaction: maps a status glyph and calls setMessageReaction", async () => {
   const f = stubFetch()
   try {

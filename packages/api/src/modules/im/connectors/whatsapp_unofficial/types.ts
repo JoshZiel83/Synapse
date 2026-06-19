@@ -125,6 +125,13 @@ export function mediaKindForContentType(
 
 /** Connection must survive this long before we reset the backoff counter. */
 export const MIN_STABLE_CONNECTION_MS = 30_000
+
+/**
+ * How often a connected cycle polls the session-guard pause flag so an operator
+ * kill-switch tears down an ALREADY-OPEN socket (not just on the next natural
+ * disconnect). Short enough to be responsive, long enough to be cheap.
+ */
+export const PAUSE_WATCH_INTERVAL_MS = 5_000
 export const BACKOFF_BASE_MS = 1_000
 export const BACKOFF_MAX_MS = 60_000
 export const BACKOFF_JITTER_MS = 1_000

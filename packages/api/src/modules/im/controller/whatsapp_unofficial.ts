@@ -15,6 +15,7 @@
 import type { FastifyInstance } from "fastify"
 import { z } from "zod"
 import { appRoute } from "../../../infrastructure/http/route.js"
+import { getTransportAccountById } from "../service.js"
 import { requireWorkspaceAction } from "./_shared.js"
 import {
   cancelWhatsappLoginSession,
@@ -205,7 +206,24 @@ export default async function imWhatsappUnofficialController(
       )
       if (!allowed) return
 
+      const { workspaceId } = request.params as { workspaceId: string }
       const body = operatorPauseInputSchema.parse(request.body)
+
+      // The pause flag is keyed by accountId alone (no workspace component), so
+      // we MUST verify the account belongs to THIS workspace before toggling —
+      // otherwise workspace.manage on workspace A could pause/unpause any
+      // account in workspace B (cross-workspace IDOR/DoS). getTransportAccountById
+      // is workspace-agnostic, so the explicit workspace + kind check is required.
+      const acct = await getTransportAccountById(body.accountId)
+      if (
+        !acct ||
+        acct.workspaceId !== workspaceId ||
+        acct.transportKind !== "whatsapp_unofficial"
+      ) {
+        reply.status(404).send({ error: "account not found" })
+        return
+      }
+
       if (body.paused) {
         await pauseSessionOperator(body.accountId, body.ttlSeconds)
       } else {

@@ -159,6 +159,88 @@ test("pickContentType returns the first present content key", () => {
   assert.equal(pickContentType(null), undefined)
 })
 
+test("pickContentType skips senderKeyDistributionMessage (group messages)", () => {
+  // Real group messages carry senderKeyDistributionMessage as a sibling BEFORE
+  // the real content; Baileys' getContentType skips it. The old first-non-null
+  // impl returned 'senderKeyDistributionMessage' here → content dropped.
+  assert.equal(
+    pickContentType({
+      senderKeyDistributionMessage: {},
+      conversation: "hi",
+    }),
+    "conversation"
+  )
+})
+
+test("pickContentType skips messageContextInfo (replies/mentions)", () => {
+  // 'messageContextInfo'.includes('Message') === false, so Baileys skips it.
+  // The old impl returned it (first key) → real extended text dropped.
+  assert.equal(
+    pickContentType({
+      messageContextInfo: {},
+      extendedTextMessage: { text: "hey" },
+    }),
+    "extendedTextMessage"
+  )
+})
+
+test("group message with leading senderKeyDistributionMessage still ingests text", () => {
+  const r = normalizeWhatsappMessage(
+    direct({
+      key: {
+        id: "GK1",
+        remoteJid: "111-222@g.us",
+        fromMe: false,
+        participant: "15559998888@s.whatsapp.net",
+      },
+      message: {
+        senderKeyDistributionMessage: {} as never,
+        conversation: "group hello",
+      } as never,
+    })
+  )
+  assert.ok(r)
+  assert.equal(r.envelope.message.plainText, "group hello")
+})
+
+test("ephemeral-wrapped image is unwrapped to the inner image_placeholder", () => {
+  const r = normalizeWhatsappMessage(
+    direct({
+      message: {
+        ephemeralMessage: {
+          message: {
+            imageMessage: {
+              caption: "secret",
+              mimetype: "image/jpeg",
+              fileLength: "1024",
+            },
+          },
+        },
+      } as never,
+    })
+  )
+  assert.ok(r, "wrapped image should not be dropped")
+  assert.equal(r.mediaParts.length, 1)
+  assert.equal(r.mediaParts[0].kind, "image")
+  const ph = r.envelope.message.parts[r.mediaParts[0].partIndex]
+  assert.ok(ph && ph.type === "system_marker")
+  assert.equal(ph.marker, "image_placeholder")
+})
+
+test("viewOnceMessageV2-wrapped image is unwrapped to the inner image", () => {
+  const r = normalizeWhatsappMessage(
+    direct({
+      message: {
+        viewOnceMessageV2: {
+          message: { imageMessage: { mimetype: "image/jpeg" } },
+        },
+      } as never,
+    })
+  )
+  assert.ok(r, "view-once image should not be dropped")
+  assert.equal(r.mediaParts[0]?.kind, "image")
+})
+
 test("renderWhatsappMention uses the number", () => {
   assert.equal(
     renderWhatsappMention({

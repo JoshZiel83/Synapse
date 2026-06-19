@@ -14,6 +14,7 @@
  * QQ don't need it (no GET ping); WhatsApp Cloud is the canonical case.
  */
 
+import crypto from "node:crypto"
 import type {
   WebhookVerificationInput,
   WebhookVerificationResult,
@@ -26,6 +27,27 @@ function queryString(value: unknown): string | undefined {
     return typeof value[0] === "string" ? value[0] : undefined
   }
   return typeof value === "string" ? value : undefined
+}
+
+/**
+ * Length-checked constant-time string compare for the verify-token handshake.
+ * Plain `===` short-circuits on the first differing byte; this matches the
+ * constant-time standard the rest of this connector uses (the HMAC compare in
+ * webhook-signature.ts). Inlined here (not imported from telegram) to keep the
+ * WhatsApp connector self-contained. Returns false on length mismatch or when
+ * either side is missing/empty.
+ */
+function constantTimeEqual(
+  a: string | undefined,
+  b: string | undefined
+): boolean {
+  if (typeof a !== "string" || typeof b !== "string" || !a || !b) return false
+  const ab = Buffer.from(a, "utf8")
+  const bb = Buffer.from(b, "utf8")
+  // crypto.timingSafeEqual throws on unequal lengths, so guard first. The
+  // length itself is not secret (a verify-token's length is not an oracle).
+  if (ab.length !== bb.length) return false
+  return crypto.timingSafeEqual(ab, bb)
 }
 
 export async function handleWhatsappWebhookVerification(
@@ -45,7 +67,8 @@ export async function handleWhatsappWebhookVerification(
   const token = queryString(input.query["hub.verify_token"])
   const challenge = queryString(input.query["hub.challenge"])
 
-  if (mode === "subscribe" && token === creds.webhookVerifyToken) {
+  const tokenMatched = constantTimeEqual(token, creds.webhookVerifyToken)
+  if (mode === "subscribe" && tokenMatched) {
     // Echo the challenge VERBATIM. Meta sends it as a string; return it raw.
     return { statusCode: 200, body: challenge ?? "" }
   }
@@ -53,7 +76,7 @@ export async function handleWhatsappWebhookVerification(
   input.logger?.warn?.("whatsapp: webhook verification rejected", {
     accountId: input.account.id,
     mode,
-    tokenMatched: token === creds.webhookVerifyToken,
+    tokenMatched,
   })
   return { statusCode: 403, body: "" }
 }

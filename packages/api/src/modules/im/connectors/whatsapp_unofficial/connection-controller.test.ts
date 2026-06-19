@@ -36,6 +36,7 @@ type Listener = (arg: unknown) => void
 function makeMockSocket(snapshot: AuthSnapshot) {
   const managedAuth = buildManagedAuthState(snapshot)
   const listeners = new Map<string, Listener[]>()
+  const ended = { count: 0 }
   const socket = {
     ev: {
       on(event: string, cb: Listener) {
@@ -44,14 +45,16 @@ function makeMockSocket(snapshot: AuthSnapshot) {
         listeners.set(event, arr)
       },
     },
-    end() {},
+    end() {
+      ended.count += 1
+    },
     async logout() {},
     sendMessage: async () => ({ key: { id: "x" } }),
   }
   function emit(event: string, arg: unknown) {
     for (const cb of listeners.get(event) ?? []) cb(arg)
   }
-  return { socket, managedAuth, emit }
+  return { socket, managedAuth, emit, ended }
 }
 
 function account(): TransportAccountSummary {
@@ -325,6 +328,203 @@ test("messages.upsert (notify) is normalized + emitted", async () => {
     connection: "close",
     lastDisconnect: { error: undefined, date: new Date() },
   })
+  await running.stop()
+  restore()
+})
+
+test("operator pause on an OPEN socket tears the live connection down (WU-5)", async () => {
+  __resetHandlesForTest()
+  const fake = new FakeRedis()
+  const restore = setRedisForTest(fake)
+  const emitted: InboundEnvelope[] = []
+  const { ctx, abort } = makeCtx(emitted)
+  const box: { current: ReturnType<typeof makeMockSocket> | null } = {
+    current: null,
+  }
+
+  const running = await startWhatsappAccount(ctx, {
+    minStableMs: 0,
+    pauseWatchIntervalMs: 10, // fast watcher for the test
+    persist: (async () => {}) as never,
+    wipe: (async () => {}) as never,
+    socketFactory: ((snap: AuthSnapshot) => {
+      box.current = makeMockSocket(snap)
+      return box.current as never
+    }) as never,
+  })
+
+  await tick()
+  box.current!.emit("connection.update", { connection: "open" })
+  await tick()
+  assert.equal(getHandle("acc-cc")?.connected, true)
+  const endsBefore = box.current!.ended.count
+
+  // An operator engages the kill-switch while the socket is OPEN.
+  await fake.set(
+    "im:whatsapp_unofficial:session-paused:acc-cc",
+    JSON.stringify({ reason: "operator", at: Date.now() }),
+    "EX",
+    3600
+  )
+  // The pause watcher must proactively end() the live socket.
+  await tick(60)
+  assert.ok(
+    box.current!.ended.count > endsBefore,
+    "the live socket was torn down on operator pause"
+  )
+
+  abort()
+  await running.stop()
+  restore()
+})
+
+test("on open, an OPERATOR pause is NOT auto-cleared (WU-9)", async () => {
+  __resetHandlesForTest()
+  const fake = new FakeRedis()
+  const restore = setRedisForTest(fake)
+  const emitted: InboundEnvelope[] = []
+  const { ctx, abort } = makeCtx(emitted)
+  const box: { current: ReturnType<typeof makeMockSocket> | null } = {
+    current: null,
+  }
+
+  const running = await startWhatsappAccount(ctx, {
+    minStableMs: 0,
+    pauseWatchIntervalMs: 100_000, // disable the watcher for this assertion
+    persist: (async () => {}) as never,
+    wipe: (async () => {}) as never,
+    socketFactory: ((snap: AuthSnapshot) => {
+      box.current = makeMockSocket(snap)
+      return box.current as never
+    }) as never,
+  })
+
+  await tick()
+  // An operator pause is set DURING the in-flight connect cycle.
+  await fake.set(
+    "im:whatsapp_unofficial:session-paused:acc-cc",
+    JSON.stringify({ reason: "operator", at: Date.now() }),
+    "EX",
+    3600
+  )
+  box.current!.emit("connection.update", { connection: "open" })
+  await tick(30)
+
+  assert.equal(
+    await fake.exists("im:whatsapp_unofficial:session-paused:acc-cc"),
+    1,
+    "operator pause must survive a reconnect/open"
+  )
+
+  abort()
+  box.current!.emit("connection.update", {
+    connection: "close",
+    lastDisconnect: { error: undefined, date: new Date() },
+  })
+  await running.stop()
+  restore()
+})
+
+test("on open, an AUTO pause IS auto-cleared", async () => {
+  __resetHandlesForTest()
+  const fake = new FakeRedis()
+  const restore = setRedisForTest(fake)
+  const emitted: InboundEnvelope[] = []
+  const { ctx, abort } = makeCtx(emitted)
+  const box: { current: ReturnType<typeof makeMockSocket> | null } = {
+    current: null,
+  }
+
+  const running = await startWhatsappAccount(ctx, {
+    minStableMs: 0,
+    pauseWatchIntervalMs: 100_000,
+    persist: (async () => {}) as never,
+    wipe: (async () => {}) as never,
+    socketFactory: ((snap: AuthSnapshot) => {
+      box.current = makeMockSocket(snap)
+      return box.current as never
+    }) as never,
+  })
+
+  await tick()
+  await fake.set(
+    "im:whatsapp_unofficial:session-paused:acc-cc",
+    JSON.stringify({ reason: "logged_out", at: Date.now() }),
+    "EX",
+    3600
+  )
+  box.current!.emit("connection.update", { connection: "open" })
+  await tick(30)
+
+  assert.equal(
+    await fake.exists("im:whatsapp_unofficial:session-paused:acc-cc"),
+    0,
+    "auto (logged_out) pause is cleared on a successful open"
+  )
+
+  abort()
+  box.current!.emit("connection.update", {
+    connection: "close",
+    lastDisconnect: { error: undefined, date: new Date() },
+  })
+  await running.stop()
+  restore()
+})
+
+test("wipe (loggedOut) sets the pause BEFORE the loop can re-enter connectOnce (WU-10/#22)", async () => {
+  __resetHandlesForTest()
+  // A redis whose SET resolves on a later microtask turn — this is where the
+  // old fire-and-forget pauseSession lost the race to runLoop's pause check.
+  class SlowSetRedis extends FakeRedis {
+    override async set(k: string, v: string, m: "EX", s: number) {
+      await Promise.resolve()
+      await Promise.resolve()
+      return super.set(k, v, m, s)
+    }
+  }
+  const fake = new SlowSetRedis()
+  const restore = setRedisForTest(fake)
+  const emitted: InboundEnvelope[] = []
+  const { ctx, abort } = makeCtx(emitted)
+  let factoryCalls = 0
+  const box: { current: ReturnType<typeof makeMockSocket> | null } = {
+    current: null,
+  }
+
+  const running = await startWhatsappAccount(ctx, {
+    minStableMs: 0,
+    persist: (async () => {}) as never,
+    wipe: (async () => {}) as never,
+    socketFactory: ((snap: AuthSnapshot) => {
+      factoryCalls += 1
+      box.current = makeMockSocket(snap)
+      return box.current as never
+    }) as never,
+  })
+
+  await tick()
+  assert.equal(factoryCalls, 1, "one connect cycle so far")
+  box.current!.emit("connection.update", {
+    connection: "close",
+    lastDisconnect: {
+      error: { output: { statusCode: DisconnectReason.loggedOut } },
+      date: new Date(),
+    },
+  })
+  // Give the loop several turns to (incorrectly) re-enter connectOnce.
+  await tick(80)
+
+  assert.equal(
+    factoryCalls,
+    1,
+    "no second connect cycle — the pause landed before runLoop re-checked"
+  )
+  assert.equal(
+    await fake.exists("im:whatsapp_unofficial:session-paused:acc-cc"),
+    1
+  )
+
+  abort()
   await running.stop()
   restore()
 })

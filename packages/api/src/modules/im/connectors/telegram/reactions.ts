@@ -33,7 +33,7 @@ export const TELEGRAM_ALLOWED_REACTIONS = new Set<string>([
   "🙏",
   "😢",
   "💯",
-  "✍️",
+  "✍",
   "🤬",
 ])
 
@@ -42,15 +42,15 @@ export const TELEGRAM_ALLOWED_REACTIONS = new Set<string>([
  * Telegram reaction. The keys are the repo glyphs; values are guaranteed to
  * be in TELEGRAM_ALLOWED_REACTIONS.
  *
- *   queued 👀 → 👀   thinking 🧠 → 🤔   tool 🛠️ → ✍️   coding 💻 → ✍️
+ *   queued 👀 → 👀   thinking 🧠 → 🤔   tool 🛠️ → ✍   coding 💻 → ✍
  *   web 🌐 → 👀   done ✅ → 👍   error ❌ → 🤬   stall ⏳ → 🤔   stall_hard ⚠️ → 🤯
  */
 export function defaultStatusGlyphToTelegramReaction(): Record<string, string> {
   return {
     [DEFAULT_STATUS_EMOJIS.queued]: "👀",
     [DEFAULT_STATUS_EMOJIS.thinking]: "🤔",
-    [DEFAULT_STATUS_EMOJIS.tool]: "✍️",
-    [DEFAULT_STATUS_EMOJIS.coding]: "✍️",
+    [DEFAULT_STATUS_EMOJIS.tool]: "✍",
+    [DEFAULT_STATUS_EMOJIS.coding]: "✍",
     [DEFAULT_STATUS_EMOJIS.web]: "👀",
     [DEFAULT_STATUS_EMOJIS.done]: "👍",
     [DEFAULT_STATUS_EMOJIS.error]: "🤬",

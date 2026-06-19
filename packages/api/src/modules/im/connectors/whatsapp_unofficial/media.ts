@@ -22,7 +22,26 @@ import type {
   CanonicalMessage,
   CanonicalPart,
 } from "../../messaging/canonical-message.js"
-import type { ConnectorLogger } from "../types.js"
+import { PermanentTransportError, type ConnectorLogger } from "../types.js"
+import { coerceFileLength } from "./types.js"
+
+/**
+ * Per-kind inbound download size caps. A media placeholder whose declared
+ * `fileLength` exceeds its cap is SKIPPED (placeholder kept, nothing downloaded)
+ * so a single large/malicious attachment cannot OOM the concurrency-1 worker.
+ * Mirrors the sibling connectors (whatsapp Cloud / telegram / qq), all of which
+ * cap inbound downloads.
+ */
+export const WHATSAPP_UNOFFICIAL_INBOUND_SIZE_LIMITS: Record<
+  "image" | "video" | "audio" | "document" | "sticker",
+  number
+> = {
+  image: 16 * 1024 * 1024,
+  video: 64 * 1024 * 1024,
+  audio: 16 * 1024 * 1024,
+  document: 64 * 1024 * 1024,
+  sticker: 2 * 1024 * 1024,
+}
 
 // ───────────────────────── inbound ─────────────────────────
 
@@ -122,6 +141,18 @@ export async function enrichInboundWhatsappMedia(
     const fileName =
       typeof original.fileName === "string" ? original.fileName : undefined
     const projected = mapMediaKindWithMimeFallback(kind, declaredMime)
+
+    // Enforce a per-kind size cap from the declared fileLength hint BEFORE the
+    // unbounded `download` so a huge/malicious attachment can't OOM the worker.
+    const declaredLength = coerceFileLength(original.fileLength)
+    const cap = WHATSAPP_UNOFFICIAL_INBOUND_SIZE_LIMITS[kind]
+    if (declaredLength != null && declaredLength > cap) {
+      deps.logger.warn(
+        "whatsapp_unofficial: inbound media exceeds size cap — keeping placeholder",
+        { messageId: deps.messageId, kind, declaredLength, cap }
+      )
+      continue // keep placeholder
+    }
 
     try {
       const buffer = await deps.download(deps.raw)
@@ -318,7 +349,13 @@ async function buildMediaContent(
   }
   const sha256 = part.fileRef.sha256
   if (!sha256) {
-    return { text: caption || "[media]" } as AnyMessageContent
+    // A media part that lost its bytes must FAIL loudly (so it can be inspected),
+    // not silently ship a literal "[media]" placeholder to the recipient. Mirrors
+    // the Cloud-API sibling (whatsapp/outbound.ts).
+    throw new PermanentTransportError(
+      "whatsapp_unofficial: media part missing sha256",
+      { code: "whatsapp_unofficial_media_missing_sha" }
+    )
   }
   const bytes = await deps.readContent(sha256)
 
@@ -334,7 +371,19 @@ async function buildMediaContent(
         ...(caption ? { caption } : {}),
       } as AnyMessageContent
     case "voice": {
-      const opus = await deps.transcodeVoice(bytes)
+      // A permanently un-transcodable file (ffmpeg missing / bad audio) must
+      // fail PERMANENT — otherwise the worker treats the bare TranscodeError as
+      // retryable and burns the full BullMQ attempt budget. Mirrors the Cloud
+      // sibling (whatsapp/outbound.ts).
+      let opus: Buffer
+      try {
+        opus = await deps.transcodeVoice(bytes)
+      } catch (err) {
+        throw new PermanentTransportError(
+          `whatsapp_unofficial: voice transcode failed: ${(err as Error).message}`,
+          { code: "whatsapp_unofficial_voice_transcode_failed", cause: err }
+        )
+      }
       return {
         audio: opus,
         ptt: true,

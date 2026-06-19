@@ -15,6 +15,7 @@
  * DB unique-index dedup; a blank id silently disables dedup, so we drop blanks).
  */
 
+import { getContentType, normalizeMessageContent } from "baileys"
 import { fromUnixSeconds, serverReceiveInstant } from "@synapse/shared/datetime"
 import {
   buildCanonicalMessage,
@@ -86,16 +87,22 @@ export interface WaMessageLike {
   pushName?: string | null
 }
 
-/** Mirror Baileys' `getContentType`: the first message-content key present. */
+/**
+ * The content-type key Baileys would classify this message-content as.
+ *
+ * Delegates to Baileys' own `getContentType` so we track upstream EXACTLY:
+ * `keys.find(k => (k === 'conversation' || k.includes('Message')) && k !==
+ * 'senderKeyDistributionMessage')`. This is load-bearing — the hand-rolled
+ * "first non-null key" version returned `senderKeyDistributionMessage` (group
+ * messages) or `messageContextInfo` (replies/mentions) and silently dropped the
+ * real text/media. NOTE: callers must FIRST run `normalizeMessageContent` to
+ * peel ephemeral/viewOnce/edited wrappers (see `normalizeWhatsappMessage`).
+ */
 export function pickContentType(
   content: WaMessageContentLike | null | undefined
 ): string | undefined {
   if (!content) return undefined
-  for (const k of Object.keys(content)) {
-    const v = content[k]
-    if (v !== undefined && v !== null) return k
-  }
-  return undefined
+  return getContentType(content as never)
 }
 
 function timestampToSeconds(
@@ -181,7 +188,13 @@ export function normalizeWhatsappMessage(
   const jidClass = classifyJid(remoteJid)
   if (jidClass === "broadcast" || jidClass === "other") return null
 
-  const content = raw.message
+  // Peel Baileys wrappers (ephemeral / viewOnce / documentWithCaption / edited,
+  // up to 5 levels) BEFORE classifying, then pick the content type with Baileys'
+  // own `getContentType` semantics (skips senderKeyDistributionMessage /
+  // messageContextInfo). Without this, wrapped or group/context-bearing media is
+  // silently dropped to an `unknown_placeholder`.
+  const content = (normalizeMessageContent(raw.message as never) ??
+    raw.message) as WaMessageContentLike | null | undefined
   if (!content) return null
   const contentType = pickContentType(content)
   if (!contentType) return null

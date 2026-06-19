@@ -15,9 +15,13 @@
  *     handoff resumes correctly. We persist the advanced offset BEFORE
  *     dispatching the batch's messages (and always advance even on a
  *     dispatch error path) to avoid the redelivery loop.
- *   - On stop, a final confirm poll acks the last batch.
- *   - 401 (bad token) / 409 (another getUpdates holder) → FATAL: throw, don't
- *     loop. 429 → honor parameters.retry_after. Else → 3s backoff.
+ *   - On stop, a final confirm poll acks the last batch (SKIPPED after a fatal
+ *     exit — there is nothing to confirm and the token is dead/conflicting).
+ *   - 401 (bad token) / 409 (another getUpdates holder) → FATAL: log.error +
+ *     `return` (graceful exit — this loop is detached and never awaited by the
+ *     runtime, so throwing would only surface as an unhandled rejection + a
+ *     lease-holding zombie). 429 → honor parameters.retry_after. Else → 3s
+ *     backoff.
  */
 
 import { sleep } from "../../../../infrastructure/async/index.js"
@@ -61,6 +65,11 @@ export async function startTelegramLongPoll(
   const readOffset = deps.getOffset ?? getOffset
   const writeOffset = deps.setOffset ?? setOffset
   const enrich = deps.enrich ?? enrichInboundTelegramMedia
+
+  // Set when the loop exits because of a fatal 401/409 so stop() can skip its
+  // best-effort confirm poll (the token is revoked or another holder owns the
+  // poll — a confirm getUpdates would just 401/409 again).
+  let fatal = false
 
   const loop = (async () => {
     let first = true
@@ -106,11 +115,16 @@ export async function startTelegramLongPoll(
             err.errorCode === TELEGRAM_ERROR_CODE.CONFLICT
           ) {
             // FATAL — bad token, or another getUpdates holder. Don't loop.
+            // This loop is DETACHED (the runtime never awaits it), so throwing
+            // would surface only as an unhandled rejection while the revoked
+            // bot keeps renewing its lease. Log + flag + return for a graceful
+            // exit; stop()'s confirm poll is skipped on this flag.
             logger.error("telegram: fatal getUpdates error", err, {
               accountId: account.id,
               code: err.errorCode,
             })
-            throw err
+            fatal = true
+            return
           }
           if (err.errorCode === TELEGRAM_ERROR_CODE.TOO_MANY_REQUESTS) {
             const waitMs = (err.retryAfter ?? 3) * 1_000
@@ -152,8 +166,15 @@ export async function startTelegramLongPoll(
 
   return {
     stop: async () => {
-      // Best-effort final confirm so the last batch isn't redelivered, then
-      // drain the loop. Abort is owned by ctx.signal (the runtime aborts it).
+      // Drain the loop FIRST (abort is owned by ctx.signal — the runtime aborts
+      // it; the loop exits promptly via its signal.aborted checks). Draining
+      // first lets the `fatal` flag settle before we decide on the confirm
+      // poll. THEN best-effort confirm so the last batch isn't redelivered.
+      // Skip the confirm entirely after a fatal exit (401/409): the token is
+      // revoked or another holder owns getUpdates, so a confirm would just
+      // 401/409 again.
+      await loop.catch(() => undefined)
+      if (fatal) return
       try {
         const offset = await readOffset(account.id)
         if (offset > 0) {
@@ -166,7 +187,6 @@ export async function startTelegramLongPoll(
       } catch {
         // ignore — confirm is best-effort
       }
-      await loop.catch(() => undefined)
     },
   }
 }

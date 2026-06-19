@@ -19,24 +19,29 @@ import type {
 import { escapeHtml, splitForLimit } from "./entities.js"
 import { renderTelegramMention } from "./mentions.js"
 
+// NOTE: media items carry NO caption. Telegram captions are intentionally
+// unused: a mixed text+media CanonicalMessage is planned as ordered, separate
+// items (text item then photo item) rather than a captioned photo. The old
+// `caption` field + `splitCaption` helper were dead code (renderMediaPart
+// never set a caption, so outbound always forwarded `undefined`) and were
+// removed. Re-adding captions would mean deciding which adjacent text becomes
+// the caption (≤1024) vs a trailing text item — deferred, not wired.
 export type TelegramSendItem =
   | { kind: "text"; html: string }
-  | { kind: "photo"; fileRef: CanonicalFileRef; caption?: string }
+  | { kind: "photo"; fileRef: CanonicalFileRef }
   | {
       kind: "voice"
       fileRef: CanonicalFileRef
-      caption?: string
       durationSec?: number
     }
   | {
       kind: "video"
       fileRef: CanonicalFileRef
-      caption?: string
       durationSec?: number
       width?: number
       height?: number
     }
-  | { kind: "document"; fileRef: CanonicalFileRef; caption?: string }
+  | { kind: "document"; fileRef: CanonicalFileRef }
 
 /** Plan ordered Telegram sends from a degraded CanonicalMessage. */
 export function planTelegramSends(msg: CanonicalMessage): TelegramSendItem[] {

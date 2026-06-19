@@ -7,7 +7,10 @@ import {
   prepareVideoUpload,
   prepareVoiceUpload,
 } from "./media-upload.js"
-import { TELEGRAM_CLOUD_UPLOAD_MAX_BYTES } from "./types.js"
+import {
+  TELEGRAM_CLOUD_UPLOAD_MAX_BYTES,
+  TELEGRAM_VOICE_TRANSCODE_MAX_INPUT_BYTES,
+} from "./types.js"
 
 const reader = (buf: Buffer) => async () => buf
 
@@ -62,18 +65,90 @@ test("prepareVoiceUpload: already OGG/Opus => sendVoice as-is", async () => {
   assert.equal(p.extraFields.duration, 4)
 })
 
-test("prepareVoiceUpload: non-opus with no ffmpeg => downgrade to document", async () => {
-  // A plain MP3-ish buffer; ffmpeg is not on PATH in CI so it downgrades.
+test("prepareVoiceUpload: ffmpegAvailable=true => sendVoice as audio/ogg (deterministic)", async () => {
+  // Inject the transcode seam so the test never depends on ffmpeg on PATH.
+  const mp3 = Buffer.from("ID3plain-audio-bytes")
+  const ogg = Buffer.from("OGG-TRANSCODED")
+  let transcodeCalls = 0
+  const p = await prepareVoiceUpload(
+    { sha256: "s", mimeType: "audio/mpeg", name: "a.mp3" },
+    {
+      readBytes: reader(mp3),
+      ffmpegAvailable: async () => true,
+      transcode: async () => {
+        transcodeCalls += 1
+        return ogg
+      },
+    }
+  )
+  assert.equal(transcodeCalls, 1)
+  assert.equal(p.method, "sendVoice")
+  assert.equal(p.fileField, "voice")
+  assert.equal(p.contentType, "audio/ogg")
+  assert.equal(p.buffer.toString(), "OGG-TRANSCODED")
+  assert.notEqual(p.voiceDowngradedToDocument, true)
+})
+
+test("prepareVoiceUpload: ffmpegAvailable=false => sendDocument + voiceDowngradedToDocument", async () => {
+  const mp3 = Buffer.from("ID3plain-audio-bytes")
+  let transcodeCalls = 0
+  const p = await prepareVoiceUpload(
+    { sha256: "s", mimeType: "audio/mpeg", name: "a.mp3" },
+    {
+      readBytes: reader(mp3),
+      ffmpegAvailable: async () => false,
+      transcode: async () => {
+        transcodeCalls += 1
+        return Buffer.from("x")
+      },
+    }
+  )
+  assert.equal(transcodeCalls, 0)
+  assert.equal(p.method, "sendDocument")
+  assert.equal(p.fileField, "document")
+  assert.equal(p.voiceDowngradedToDocument, true)
+})
+
+test("prepareVoiceUpload: transcode throws => sendDocument + voiceDowngradedToDocument", async () => {
   const mp3 = Buffer.from("ID3plain-audio-bytes")
   const p = await prepareVoiceUpload(
     { sha256: "s", mimeType: "audio/mpeg", name: "a.mp3" },
-    { readBytes: reader(mp3) }
+    {
+      readBytes: reader(mp3),
+      ffmpegAvailable: async () => true,
+      transcode: async () => {
+        throw new Error("ffmpeg exploded")
+      },
+    }
   )
-  // Either transcoded to voice (if ffmpeg present) or downgraded to document.
-  assert.ok(p.method === "sendVoice" || p.method === "sendDocument")
-  if (p.method === "sendDocument") {
-    assert.equal(p.voiceDowngradedToDocument, true)
-  }
+  assert.equal(p.method, "sendDocument")
+  assert.equal(p.voiceDowngradedToDocument, true)
+})
+
+test("prepareVoiceUpload: oversize non-opus input skips ffmpeg (pre-transcode cap) => document", async () => {
+  // Above the transcode input cap: must NOT spawn ffmpeg, just downgrade.
+  const big = Buffer.alloc(TELEGRAM_VOICE_TRANSCODE_MAX_INPUT_BYTES + 1, 1)
+  let ffmpegChecks = 0
+  let transcodeCalls = 0
+  const p = await prepareVoiceUpload(
+    { sha256: "s", mimeType: "audio/mpeg", name: "a.mp3" },
+    {
+      readBytes: reader(big),
+      ffmpegAvailable: async () => {
+        ffmpegChecks += 1
+        return true
+      },
+      transcode: async () => {
+        transcodeCalls += 1
+        return Buffer.from("x")
+      },
+    }
+  )
+  // Cap short-circuits BEFORE the ffmpeg probe and BEFORE transcode.
+  assert.equal(ffmpegChecks, 0)
+  assert.equal(transcodeCalls, 0)
+  assert.equal(p.method, "sendDocument")
+  assert.equal(p.voiceDowngradedToDocument, true)
 })
 
 test("loadBytes: empty buffer => PermanentTransportError", async () => {

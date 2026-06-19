@@ -44,6 +44,7 @@ import {
 } from "./running-registry.js"
 import {
   clearSessionPause,
+  getSessionPause,
   isSessionPaused,
   pauseSession,
 } from "./session-guard.js"
@@ -53,6 +54,7 @@ import {
   BACKOFF_MAX_MS,
   DEDUP_MAX_ENTRIES,
   MIN_STABLE_CONNECTION_MS,
+  PAUSE_WATCH_INTERVAL_MS,
 } from "./types.js"
 
 /** Minimal slice of the socket surface the driver uses (for DI/mocking). */
@@ -96,6 +98,8 @@ export interface StartWhatsappOptions {
   /** Test seam: download decrypted media bytes from a raw message. */
   downloadMedia?: (raw: WAMessage) => Promise<Buffer>
   minStableMs?: number
+  /** Test seam: how often a connected cycle polls the pause flag. */
+  pauseWatchIntervalMs?: number
 }
 
 function backoffDelay(attempts: number): number {
@@ -148,6 +152,8 @@ export async function startWhatsappAccount(
   const wipe = options.wipe ?? clearAuthSnapshot
   const downloadMedia = options.downloadMedia ?? defaultDownloadMedia
   const minStableMs = options.minStableMs ?? MIN_STABLE_CONNECTION_MS
+  const pauseWatchIntervalMs =
+    options.pauseWatchIntervalMs ?? PAUSE_WATCH_INTERVAL_MS
 
   let stopped = false
   let attempts = 0
@@ -239,15 +245,58 @@ export async function startWhatsappAccount(
       resolveCycle = resolve
     })
 
+    // While the socket is live, watch for a pause appearing (operator
+    // kill-switch on an already-connected account) and proactively drop the
+    // connection. The watcher is owned by THIS cycle and torn down with it.
+    let pauseWatcher: ReturnType<typeof setInterval> | null = null
+    function stopPauseWatcher(): void {
+      if (pauseWatcher) {
+        clearInterval(pauseWatcher)
+        pauseWatcher = null
+      }
+    }
+    function startPauseWatcher(): void {
+      if (pauseWatcher) return
+      pauseWatcher = setInterval(() => {
+        void (async () => {
+          if (await isSessionPaused(accountId).catch(() => false)) {
+            stopPauseWatcher()
+            ctx.logger.warn(
+              "whatsapp_unofficial: session paused while connected — dropping socket",
+              { accountId }
+            )
+            try {
+              ;(socket as WhatsappSocketLike).end(undefined)
+            } catch {
+              /* ignore */
+            }
+            // Force the cycle to end (the close event may not arrive after end()).
+            resolveCycle?.()
+          }
+        })()
+      }, pauseWatchIntervalMs)
+      if (typeof pauseWatcher.unref === "function") pauseWatcher.unref()
+    }
+
     socket.ev.on("connection.update", (arg) => {
       const update = arg as Partial<ConnectionState>
       if (update.connection === "open") {
         establishedAt = Date.now()
         handle.connected = true
         attempts = 0
-        void clearSessionPause(accountId)
+        // Only auto-clear an AUTO (logged_out/forbidden) pause on open. An
+        // operator kill-switch set during an in-flight connect cycle must
+        // SURVIVE the reconnect, otherwise a reconnect silently defeats it.
+        void (async () => {
+          const pause = await getSessionPause(accountId).catch(() => null)
+          if (!pause || pause.reason !== "operator") {
+            await clearSessionPause(accountId).catch(() => undefined)
+          }
+        })()
+        startPauseWatcher()
         ctx.logger.info("whatsapp_unofficial: connection open", { accountId })
       } else if (update.connection === "close") {
+        stopPauseWatcher()
         const statusCode = statusCodeFromError(update.lastDisconnect?.error)
         const decision = decideDisconnect(statusCode, stopped)
         outcome = { action: decision.action }
@@ -259,11 +308,15 @@ export async function startWhatsappAccount(
         if (decision.action === "wipe") {
           // Dead session: drop the in-memory creds so any later re-link starts clean.
           currentSnapshot = freshAuthSnapshot()
+          // Resolve the cycle ONLY AFTER the pause flag is set, so runLoop's
+          // top-of-loop `isSessionPaused` check cannot win the race and re-enter
+          // connectOnce against a session we just declared dead (reconnect storm).
           void (async () => {
             await pauseSession(
               accountId,
               decision.pauseReason ?? "logged_out"
             ).catch(() => undefined)
+            resolveCycle?.()
             await wipe({ workspaceId, accountId }).catch(() => undefined)
             ctx.logger.error(
               "whatsapp_unofficial: session ended — re-link required",
@@ -271,20 +324,23 @@ export async function startWhatsappAccount(
               { accountId, statusCode }
             )
           })()
+        } else {
+          resolveCycle?.()
         }
-        resolveCycle?.()
       }
     })
 
     await cycleDone
 
-    // Tear the socket down before deciding next step.
+    // Tear the socket (and the pause watcher) down before deciding next step.
+    stopPauseWatcher()
     try {
       ;(socket as WhatsappSocketLike).end(undefined)
     } catch {
       /* ignore */
     }
     handle.socket = null
+    handle.connected = false
 
     // Stability gate: only reset attempts if the connection lived long enough.
     if (outcome.action === "reconnect") {

@@ -25,7 +25,7 @@ const DEFAULT_TIMEOUT_MS = 30_000
 
 /**
  * Build the per-account Graph API base, e.g.
- * `https://graph.facebook.com/v23.0`.
+ * `https://graph.facebook.com/v25.0`.
  */
 export function graphApiBase(creds: Pick<Creds, "graphApiVersion">): string {
   return `${WHATSAPP_GRAPH_BASE}/${creds.graphApiVersion}`
@@ -88,13 +88,23 @@ export async function uploadGraphMedia(
   const form = new FormData()
   form.append("messaging_product", "whatsapp")
   form.append("type", input.mimeType)
-  // Node's FormData accepts a Blob for binary parts. Copy into a fresh
-  // Uint8Array so a pooled Buffer's backing ArrayBuffer is not shared (and so
-  // the BlobPart type is a plain ArrayBuffer-backed view).
-  const bytes = Uint8Array.from(input.buffer)
+  // Node's FormData accepts a Blob for binary parts. Wrap the Buffer in a
+  // ZERO-COPY Uint8Array VIEW over the same bytes — NOT `Uint8Array.from`
+  // (or `new Uint8Array(buffer)`), which makes a redundant full second copy,
+  // an OOM risk on a large document send. `new Blob` already copies its parts
+  // into the Blob's own storage exactly once, so a pre-copy is pure waste.
+  // The view is also needed for typing: a Node Buffer (`Buffer<ArrayBufferLike>`)
+  // isn't assignable to BlobPart, while a plain `Uint8Array<ArrayBuffer>` is.
+  // The cast on `.buffer` is sound: bytes read from the local CAS
+  // (`readContentBuffer`) are never backed by a SharedArrayBuffer.
+  const view = new Uint8Array(
+    input.buffer.buffer as ArrayBuffer,
+    input.buffer.byteOffset,
+    input.buffer.byteLength
+  )
   form.append(
     "file",
-    new Blob([bytes], { type: input.mimeType }),
+    new Blob([view], { type: input.mimeType }),
     input.filename ?? "upload"
   )
 

@@ -104,14 +104,25 @@ test("long-poll: first poll deletes webhook + sends allowed_updates; advances of
   assert.equal(emitted[0].externalMessageId, "1")
 })
 
-test("long-poll: 401 is fatal (loop throws, does not spin)", async () => {
+test("long-poll: 401 is fatal — loop returns gracefully and stop() skips the confirm poll", async () => {
+  // The fatal-exit path must NOT throw out of the detached loop (which would
+  // surface as an unhandled rejection) AND stop() must skip its best-effort
+  // confirm getUpdates (the token is dead — confirming would just 401 again).
+  // We pin a NON-ZERO persisted offset (50): without the `fatal` guard, stop()
+  // would issue a confirm getUpdates(offset:50, limit:1) on the dead token.
   const controller = new AbortController()
   const orig = globalThis.fetch
   let getUpdatesCount = 0
-  globalThis.fetch = (async (url: string) => {
+  const getUpdatesBodies: Array<Record<string, unknown>> = []
+  // Surface any unhandled rejection from a stray `throw err` in the loop.
+  const rejections: unknown[] = []
+  const onRejection = (e: unknown) => rejections.push(e)
+  process.on("unhandledRejection", onRejection)
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
     const method = String(url).split("/").pop() ?? ""
     if (method === "getUpdates") {
       getUpdatesCount += 1
+      getUpdatesBodies.push(init?.body ? JSON.parse(String(init.body)) : {})
       return jsonResponse({
         ok: false,
         error_code: 401,
@@ -130,16 +141,107 @@ test("long-poll: 401 is fatal (loop throws, does not spin)", async () => {
         logger: NOOP_LOGGER,
       },
       {
-        getOffset: async () => 0,
+        getOffset: async () => 50,
         setOffset: async () => {},
         enrich: async (e) => e,
       }
     )
-    // stop() drains the loop; the loop rejected on the fatal 401.
+    // stop() drains the loop; the loop returned gracefully on the fatal 401.
+    await running.stop()
+    // Let any (incorrectly) unhandled rejection settle onto the microtask queue.
+    await new Promise((r) => setTimeout(r, 0))
+  } finally {
+    globalThis.fetch = orig
+    process.off("unhandledRejection", onRejection)
+  }
+  // Exactly ONE getUpdates: the fatal poll. No spin-retry, and crucially NO
+  // second confirm-poll from stop() (which the `fatal` flag suppresses).
+  assert.equal(getUpdatesCount, 1)
+  // The single getUpdates is the long-poll (timeout=30), not the confirm
+  // (limit:1, timeout:0) — proving stop() skipped the confirm on fatal exit.
+  assert.notEqual(getUpdatesBodies[0]?.limit, 1)
+  // The detached loop must not have thrown an unhandled rejection.
+  assert.deepEqual(rejections, [])
+})
+
+test("long-poll: a dispatch error still advances+persists the offset (no redelivery) and the batch continues", async () => {
+  // One batch of two updates; dispatch of the FIRST throws (enrich rejects).
+  // The offset must already be persisted to max(update_id)+1 BEFORE dispatch,
+  // so neither update is redelivered, and the second still emits.
+  const controller = new AbortController()
+  const orig = globalThis.fetch
+  let storedOffset = 0
+  const emitted: InboundEnvelope[] = []
+
+  globalThis.fetch = (async (url: string) => {
+    const method = String(url).split("/").pop() ?? ""
+    if (method === "deleteWebhook")
+      return jsonResponse({ ok: true, result: true })
+    if (method === "getUpdates") {
+      const isFirst = emitted.length === 0 && storedOffset === 0
+      if (isFirst) {
+        return jsonResponse({
+          ok: true,
+          result: [
+            {
+              update_id: 10,
+              message: {
+                message_id: 1,
+                date: 1_700_000_000,
+                chat: { id: 5, type: "private", first_name: "A" },
+                from: { id: 7, first_name: "A" },
+                text: "boom",
+              },
+            },
+            {
+              update_id: 11,
+              message: {
+                message_id: 2,
+                date: 1_700_000_001,
+                chat: { id: 5, type: "private", first_name: "A" },
+                from: { id: 7, first_name: "A" },
+                text: "ok",
+              },
+            },
+          ],
+        })
+      }
+      controller.abort()
+      return jsonResponse({ ok: true, result: [] })
+    }
+    return jsonResponse({ ok: true, result: true })
+  }) as typeof fetch
+
+  try {
+    const running = await startTelegramLongPoll(
+      {
+        account: ACCOUNT,
+        signal: controller.signal,
+        emitInbound: async (e) => {
+          emitted.push(e)
+        },
+        logger: NOOP_LOGGER,
+      },
+      {
+        getOffset: async () => storedOffset,
+        setOffset: async (_id, off) => {
+          storedOffset = off
+        },
+        // Enrich throws for the first message (id 1) → dispatch error path.
+        enrich: async (e) => {
+          if (e.externalMessageId === "1") throw new Error("enrich failed")
+          return e
+        },
+      }
+    )
     await running.stop()
   } finally {
     globalThis.fetch = orig
   }
-  // Fatal error means getUpdates was attempted once and not retried in a spin.
-  assert.equal(getUpdatesCount, 1)
+
+  // Offset advanced past BOTH updates even though the first dispatch threw.
+  assert.equal(storedOffset, 12)
+  // The second update still emitted (batch did not abort on the first error).
+  assert.equal(emitted.length, 1)
+  assert.equal(emitted[0].externalMessageId, "2")
 })

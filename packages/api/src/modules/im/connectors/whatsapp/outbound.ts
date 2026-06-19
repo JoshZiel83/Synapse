@@ -92,6 +92,29 @@ export async function sendWhatsappMessage(
   // Any free-form (non-template) send requires an open window. v1 has no
   // template registry, so a closed window is terminal: 131047. A pure
   // reaction also requires the window (reactions outside it 131047 too).
+  //
+  // WC-2: distinguish a GENUINELY-closed window from "we have no positive
+  // evidence the window is open" so a transient Redis blip can't turn a valid
+  // reply into a PERMANENT drop. recordInbound is best-effort (.catch), so a
+  // lost/expired window-key reads back as "absent". If we mapped absent →
+  // permanent-131047, BullMQ would never retry and a legitimate in-window
+  // reply would be dropped forever, never reaching Meta.
+  //   • key present + window elapsed → genuinely closed → permanent 131047
+  //     (Meta would reject it too; no point retrying).
+  //   • key ABSENT → no evidence → RetryableTransportError, so BullMQ retries
+  //     and lets Meta's REAL 131047 (via classifyAndThrow / status-reconcile)
+  //     be the authoritative window verdict.
+  // (A Redis READ outage already throws a bare Error from getLastInboundMs /
+  // isWithin24h, which the worker treats as retryable — that path is left as-is.)
+  const lastInboundMs = await windowStore.getLastInboundMs({
+    accountId: input.account.id,
+    waId: to,
+  })
+  if (lastInboundMs == null) {
+    throw new RetryableTransportError(
+      "whatsapp: no recorded inbound window for recipient (window-store key absent — possibly a lost/expired write); retrying so Meta's real 131047 is authoritative"
+    )
+  }
   const within24h = await windowStore.isWithin24h({
     accountId: input.account.id,
     waId: to,
@@ -105,9 +128,28 @@ export async function sendWhatsappMessage(
   }
 
   // ── Send each item in order; replyTo on the first only ──
+  //
+  // WC-1: idempotency across BullMQ retries. planWhatsappSends commonly yields
+  // 2+ items (coalesced text + one per media part + one per reaction). Without
+  // checkpointing, a mid-batch retryable failure (e.g. 130429 / 5xx on item N)
+  // throws, BullMQ re-runs sendWhatsappMessage FROM SCRATCH, and items 1..N-1
+  // are re-POSTed → duplicate text/media to the recipient.
+  //
+  // Mirror qq/outbound.ts: checkpoint each sent item's wamid into
+  // metadata.whatsapp.items.<index> via patchLinkMetadata, and on retry skip
+  // items already recorded as sent (the plan is deterministic for a given
+  // message, so the item INDEX is a stable key across attempts). The first
+  // item's wamid is returned whether freshly sent or recovered from metadata.
+  const sentItems = readSentItems(input.linkMetadata)
   let firstExternalId: string | undefined
   const replyToId = input.replyTo?.externalMessageId
   for (let i = 0; i < items.length; i += 1) {
+    const prior = sentItems[i]
+    if (prior) {
+      // Already sent on a previous attempt — do NOT re-POST. Recover the id.
+      if (i === 0) firstExternalId = prior.wamid ?? firstExternalId
+      continue
+    }
     const item = items[i]!
     const attachReply = i === 0 && replyToId ? replyToId : undefined
     const externalId = await sendOneItem({
@@ -119,14 +161,62 @@ export async function sendWhatsappMessage(
       transcode,
       ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
     })
+    // Checkpoint BEFORE moving to the next item so a failure on item i+1 (or a
+    // crash) never re-sends item i on the retry. patchLinkMetadata deep-merges,
+    // so each index accumulates independently.
+    await input.patchLinkMetadata({
+      whatsapp: {
+        items: {
+          [String(i)]: {
+            sent: true,
+            ...(externalId ? { wamid: externalId } : {}),
+            attempt: input.attemptNumber,
+          },
+        },
+      },
+    })
     if (i === 0) firstExternalId = externalId
   }
 
   return firstExternalId
     ? { externalMessageId: firstExternalId }
     : // The first item produced no id (only happens if a send unexpectedly
-      // omits messages[0].id); surface ambiguity rather than a bug-throw.
+      // omits messages[0].id, or was recovered from metadata without one);
+      // surface ambiguity rather than a bug-throw.
       { deliveryAmbiguous: true }
+}
+
+/** A per-item send checkpoint persisted under metadata.whatsapp.items.<index>. */
+interface WhatsappSentItem {
+  wamid?: string
+}
+
+/**
+ * Read the per-item send checkpoints written by a prior attempt. Indexed by
+ * the item's position in the (deterministic) send plan. Tolerant of partial /
+ * malformed metadata — anything unrecognized is treated as "not yet sent".
+ */
+function readSentItems(
+  linkMetadata: Record<string, unknown>
+): Record<number, WhatsappSentItem> {
+  const out: Record<number, WhatsappSentItem> = {}
+  const wa = linkMetadata.whatsapp
+  if (!wa || typeof wa !== "object" || Array.isArray(wa)) return out
+  const items = (wa as Record<string, unknown>).items
+  if (!items || typeof items !== "object" || Array.isArray(items)) return out
+  for (const [k, v] of Object.entries(items as Record<string, unknown>)) {
+    const idx = Number(k)
+    if (!Number.isInteger(idx) || idx < 0) continue
+    if (!v || typeof v !== "object" || Array.isArray(v)) continue
+    const rec = v as Record<string, unknown>
+    if (rec.sent !== true) continue
+    out[idx] = {
+      ...(typeof rec.wamid === "string" && rec.wamid
+        ? { wamid: rec.wamid }
+        : {}),
+    }
+  }
+  return out
 }
 
 interface SendOneItemInput {

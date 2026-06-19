@@ -41,6 +41,12 @@ export function telegramFileUrl(
 export const TELEGRAM_CLOUD_DOWNLOAD_MAX_BYTES = 20 * 1024 * 1024 // 20 MB
 /** Multipart upload-on-send cap on the public cloud Bot API. */
 export const TELEGRAM_CLOUD_UPLOAD_MAX_BYTES = 50 * 1024 * 1024 // 50 MB
+/**
+ * Pre-transcode input cap for voice notes. A real OGG/Opus voice note is tiny;
+ * a huge non-opus input would buffer + spawn ffmpeg for nothing (CPU/OOM).
+ * Anything above this is sent as a document instead of transcoded.
+ */
+export const TELEGRAM_VOICE_TRANSCODE_MAX_INPUT_BYTES = 20 * 1024 * 1024 // 20 MB
 
 // ───────────────────────── Text limits ─────────────────────────
 

@@ -4,6 +4,7 @@ import crypto from "node:crypto"
 import type { InboundEnvelope, WebhookHandlerInput } from "../types.js"
 import { handleWhatsappWebhook } from "./inbound.js"
 import type { WhatsappWindowStore } from "./window-store.js"
+import type { WhatsappStatusEntry } from "./types.js"
 
 const APP_SECRET = "sec"
 const account = {
@@ -168,6 +169,97 @@ test("inbound: malformed-but-signed body → 200 ack (no retry storm)", async ()
     windowStore: trackedWindowStore(),
   })
   assert.equal(res.statusCode, 200)
+})
+
+// ── WC-7 (#34): handler-level value.statuses[] → reconcile routing ──
+
+function statusBody(entry: Record<string, unknown>): unknown {
+  return {
+    object: "whatsapp_business_account",
+    entry: [{ changes: [{ value: { statuses: [entry] } }] }],
+  }
+}
+
+/** Capture every reconcile call the handler makes. */
+function captureReconcile(): {
+  reconcile: (input: {
+    accountId: string
+    entry: WhatsappStatusEntry
+  }) => Promise<boolean>
+  calls: Array<{ accountId: string; entry: WhatsappStatusEntry }>
+} {
+  const calls: Array<{ accountId: string; entry: WhatsappStatusEntry }> = []
+  return {
+    calls,
+    reconcile: async (input) => {
+      calls.push(input)
+      // Mirror the real fn: only status:"failed" with a known wamid flips.
+      return input.entry.status === "failed" && !!input.entry.id
+    },
+  }
+}
+
+test("inbound (WC-7): a signed status:'failed' routes to reconcile with the right wamid", async () => {
+  const input = makeInput(
+    statusBody({
+      id: "wamid.OUT",
+      status: "failed",
+      errors: [{ code: 131047, title: "Re-engagement message" }],
+    })
+  )
+  const { reconcile, calls } = captureReconcile()
+  const res = await handleWhatsappWebhook(input, {
+    windowStore: trackedWindowStore(),
+    reconcile,
+  })
+  // Status-only body (no messages[]) still acks 200.
+  assert.equal(res.statusCode, 200)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0]?.entry.id, "wamid.OUT")
+  assert.equal(calls[0]?.entry.status, "failed")
+  assert.equal(calls[0]?.entry.errors?.[0]?.code, 131047)
+  assert.equal(calls[0]?.accountId, "acct-1")
+})
+
+test("inbound (WC-7): a status:'delivered' still reaches reconcile (the fn no-ops it)", async () => {
+  // The handler routes ALL statuses to reconcile; reconcile decides the
+  // delivered receipt is a no-op. The handler must still 200.
+  const input = makeInput(statusBody({ id: "wamid.OUT", status: "delivered" }))
+  const { reconcile, calls } = captureReconcile()
+  const res = await handleWhatsappWebhook(input, {
+    windowStore: trackedWindowStore(),
+    reconcile,
+  })
+  assert.equal(res.statusCode, 200)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0]?.entry.status, "delivered")
+})
+
+test("inbound (WC-7): reconcile is idempotent on a duplicate failed status (handler re-invokes, fn re-asserts terminal)", async () => {
+  // Meta retries the SAME signed status payload (up to 7 days). Each delivery
+  // routes to reconcile; the reconcile fn is idempotent (re-flips to the same
+  // terminal state). The handler must 200 both times.
+  const input = makeInput(
+    statusBody({
+      id: "wamid.OUT",
+      status: "failed",
+      errors: [{ code: 131026 }],
+    })
+  )
+  const { reconcile, calls } = captureReconcile()
+  const a = await handleWhatsappWebhook(input, {
+    windowStore: trackedWindowStore(),
+    reconcile,
+  })
+  const b = await handleWhatsappWebhook(input, {
+    windowStore: trackedWindowStore(),
+    reconcile,
+  })
+  assert.equal(a.statusCode, 200)
+  assert.equal(b.statusCode, 200)
+  assert.equal(calls.length, 2)
+  assert.equal(calls[0]?.entry.id, "wamid.OUT")
+  assert.equal(calls[1]?.entry.id, "wamid.OUT")
 })
 
 test("inbound: missing credentials → 500", async () => {

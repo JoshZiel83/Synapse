@@ -24,7 +24,11 @@
 
 import crypto from "node:crypto"
 import QRCode from "qrcode"
-import makeWASocket, { type ConnectionState, type WASocket } from "baileys"
+import makeWASocket, {
+  DisconnectReason,
+  type ConnectionState,
+  type WASocket,
+} from "baileys"
 import type {
   TransportAccountInboundActorMode,
   TransportAccountOwnerScope,
@@ -45,12 +49,14 @@ import {
   AUTH_BLOB_CREDENTIAL_KEY,
   type AuthSnapshot,
 } from "./creds-persistence.js"
+import { statusCodeFromError } from "./disconnect-policy.js"
 import {
   deleteLoginSession,
   getLoginSession,
   setLoginSession,
   type WhatsappLoginSession,
 } from "./qr-session-store.js"
+import { clearSessionPause } from "./session-guard.js"
 import { e164ForPairing, jidUser, normalizeJid } from "./types.js"
 
 const LOGIN_TTL_MS = 5 * 60_000
@@ -78,7 +84,11 @@ export interface LoginDeps {
   renderQr?: (qr: string) => Promise<string>
   persistAccount?: typeof persistLinkedAccount
   refreshRuntime?: typeof refreshTransportRuntimeManager
+  /** Test seam: how long onPaired waits for the post-pair creds flush (ms). */
+  credsFlushTimeoutMs?: number
 }
+
+const DEFAULT_CREDS_FLUSH_TIMEOUT_MS = 8_000
 
 function defaultLoginSocketFactory(snapshot: AuthSnapshot): {
   socket: WASocket
@@ -107,6 +117,8 @@ export async function startWhatsappLoginSession(
   const renderQr = deps.renderQr ?? ((qr: string) => QRCode.toDataURL(qr))
   const persistAccount = deps.persistAccount ?? persistLinkedAccount
   const refreshRuntime = deps.refreshRuntime ?? refreshTransportRuntimeManager
+  const credsFlushTimeoutMs =
+    deps.credsFlushTimeoutMs ?? DEFAULT_CREDS_FLUSH_TIMEOUT_MS
 
   const now = Date.now()
   const sessionId = crypto.randomUUID()
@@ -144,6 +156,7 @@ export async function startWhatsappLoginSession(
       renderQr,
       persistAccount,
       refreshRuntime,
+      credsFlushTimeoutMs,
     })
 
     // Pairing-code login: request the code once connecting begins (and no QR).
@@ -195,6 +208,7 @@ interface HandleLoginUpdateInput {
   renderQr: (qr: string) => Promise<string>
   persistAccount: typeof persistLinkedAccount
   refreshRuntime: typeof refreshTransportRuntimeManager
+  credsFlushTimeoutMs: number
 }
 
 async function handleLoginUpdate(input: HandleLoginUpdateInput): Promise<void> {
@@ -217,14 +231,37 @@ async function handleLoginUpdate(input: HandleLoginUpdateInput): Promise<void> {
     return
   }
 
+  // First-time pair signal. Baileys' transient login socket does NOT emit
+  // `open` on a fresh pair — it emits `creds.update` (registered+me) and
+  // `{ isNewLogin: true }`, THEN the server forces a restart that arrives as a
+  // `close` with statusCode 515 (restartRequired). So `isNewLogin` is the
+  // earliest pairing-succeeded signal; route it straight to onPaired (which
+  // waits for the creds flush, persists, and refreshes the runtime).
+  if (update.isNewLogin) {
+    await onPaired(input)
+    return
+  }
+
+  // A reconnect after the consumer recreates the socket reaches `open`; treat it
+  // as success too (covers pairing-code flows and any re-link path).
   if (update.connection === "open") {
     await onPaired(input)
     return
   }
 
   if (update.connection === "close") {
-    // A close before "open" during login = expired/failed (e.g. QR lapsed,
-    // restartRequired comes AFTER pair so it's handled by onPaired flow).
+    const statusCode = statusCodeFromError(update.lastDisconnect?.error)
+    const registered = Boolean(input.managedAuth.getSnapshot().creds.registered)
+
+    // A 515 (restartRequired) close AFTER creds are registered is the EXPECTED
+    // first-pair restart, not a failure — pairing already succeeded, so link.
+    if (statusCode === DisconnectReason.restartRequired && registered) {
+      await onPaired(input)
+      return
+    }
+
+    // Any other close before we linked = expired/failed (QR lapsed, a non-515
+    // disconnect, or a close before registration).
     const session2 = await getLoginSession(workspaceId, sessionId)
     if (session2 && session2.status !== "linked") {
       await failSession(workspaceId, sessionId, "login connection closed")
@@ -240,7 +277,10 @@ async function onPaired(input: HandleLoginUpdateInput): Promise<void> {
 
   // Defeat the open-but-not-flushed race: wait until creds are registered + me
   // is present (the snapshot is held by reference, so this re-reads live state).
-  const ok = await waitForRegisteredCreds(managedAuth, 8_000)
+  const ok = await waitForRegisteredCreds(
+    managedAuth,
+    input.credsFlushTimeoutMs
+  )
   if (!ok) {
     await failSession(workspaceId, sessionId, "creds not flushed after pairing")
     closeLoginSocket(sessionId)
@@ -273,6 +313,12 @@ async function onPaired(input: HandleLoginUpdateInput): Promise<void> {
       pairingCode: undefined,
       updatedAt: Date.now(),
     })
+
+    // A fresh QR/pairing link is an EXPLICIT human re-link: drop any stale pause
+    // flag (auto 1h or operator 24h) left over from a prior loggedOut/forbidden
+    // wipe, otherwise the runtime's runLoop sleeps on the pause check and the
+    // re-linked account never connects until the TTL expires.
+    await clearSessionPause(account.id).catch(() => undefined)
 
     // Hand the durable socket to the runtime; close the transient login socket.
     closeLoginSocket(sessionId)
