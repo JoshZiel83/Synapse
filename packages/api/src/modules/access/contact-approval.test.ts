@@ -120,7 +120,7 @@ test(
 )
 
 test(
-  "approved contact visibility writes a workspace_member-scoped app grant for the approved member only",
+  "approved contact visibility writes a workspace_member-scoped resource grant for the approved member only",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {

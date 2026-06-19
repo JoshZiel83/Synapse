@@ -1,4 +1,4 @@
-// Workspace app grant/request repo storage.
+// Workspace resource grant/request repo storage.
 
 import { sql } from "kysely"
 import {
@@ -85,7 +85,7 @@ function normalizePermissions(
 ): WorkspaceResourceGrantPermission[] {
   const unique = Array.from(new Set(permissions))
   if (unique.length === 0) {
-    throw new Error("workspace app grant permissions must be non-empty")
+    throw new Error("workspace resource grant permissions must be non-empty")
   }
   return unique.sort()
 }
@@ -94,7 +94,7 @@ function assertConversationOnlyScope(scope: SubjectRef | undefined) {
   if (!scope) return
   if (scope.kind !== SUBJECT_KIND.CONVERSATION) {
     throw new Error(
-      `workspace app grant scope must be conversation, got ${scope.kind}`
+      `workspace resource grant scope must be conversation, got ${scope.kind}`
     )
   }
 }
@@ -174,7 +174,7 @@ export async function revokeWorkspaceResourceGrant(
   return updated.length > 0
 }
 
-export async function revokeWorkspaceResourceGrantsForApp(
+export async function revokeWorkspaceResourceGrantsForResource(
   run: KyselyDb,
   workspaceResourceId: string
 ): Promise<number> {
@@ -216,17 +216,22 @@ export async function insertWorkspaceResourceGrantRequest(
     input.grantee
   )
 
-  const app = await loadWorkspaceResourceOwner(run, input.workspaceResourceId)
-  if (!app) {
-    throw new Error("workspace app not found")
+  const resource = await loadWorkspaceResourceOwner(
+    run,
+    input.workspaceResourceId
+  )
+  if (!resource) {
+    throw new Error("workspace resource not found")
   }
   const ownerImplicitContactVisible =
-    app.kind === WORKSPACE_RESOURCE_KIND.ACTOR ||
-    app.kind === WORKSPACE_RESOURCE_KIND.REMOTE_AGENT
-      ? app.ownerSubjectId != null && app.ownerSubjectId === subjectId
+    resource.kind === WORKSPACE_RESOURCE_KIND.ACTOR ||
+    resource.kind === WORKSPACE_RESOURCE_KIND.REMOTE_AGENT
+      ? resource.ownerSubjectId != null && resource.ownerSubjectId === subjectId
       : false
   if (ownerImplicitContactVisible) {
-    throw new Error("workspace app grant already satisfied by owner visibility")
+    throw new Error(
+      "workspace resource grant already satisfied by owner visibility"
+    )
   }
 
   const existingGrant = await run
@@ -245,7 +250,7 @@ export async function insertWorkspaceResourceGrantRequest(
     )
     .executeTakeFirst()
   if (existingGrant) {
-    throw new Error("workspace app grant already exists")
+    throw new Error("workspace resource grant already exists")
   }
 
   const existing = await run
@@ -351,7 +356,7 @@ export async function resolveWorkspaceResourceGrantRequest(params: {
       .executeTakeFirst()
 
     if (!request) {
-      throw new Error("workspace app grant request not found")
+      throw new Error("workspace resource grant request not found")
     }
     if (
       request.workspaceId !== params.workspaceId ||
@@ -362,23 +367,23 @@ export async function resolveWorkspaceResourceGrantRequest(params: {
       )
     }
     if (request.status !== WORKSPACE_RESOURCE_GRANT_REQUEST_STATUS.PENDING) {
-      throw new Error("workspace app grant request is no longer pending")
+      throw new Error("workspace resource grant request is no longer pending")
     }
 
     if (params.decision === "approve") {
-      const app = await loadWorkspaceResourceOwner(
+      const resource = await loadWorkspaceResourceOwner(
         trx,
         request.workspaceResourceId
       )
-      if (!app) {
-        throw new Error("workspace app not found")
+      if (!resource) {
+        throw new Error("workspace resource not found")
       }
 
       const ownerImplicitContactVisible =
-        app.kind === WORKSPACE_RESOURCE_KIND.ACTOR ||
-        app.kind === WORKSPACE_RESOURCE_KIND.REMOTE_AGENT
-          ? app.ownerSubjectId != null &&
-            app.ownerSubjectId === request.granteeSubjectId
+        resource.kind === WORKSPACE_RESOURCE_KIND.ACTOR ||
+        resource.kind === WORKSPACE_RESOURCE_KIND.REMOTE_AGENT
+          ? resource.ownerSubjectId != null &&
+            resource.ownerSubjectId === request.granteeSubjectId
           : false
 
       if (!ownerImplicitContactVisible) {

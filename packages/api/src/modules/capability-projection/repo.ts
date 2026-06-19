@@ -57,14 +57,14 @@ export interface DeviceCapabilityToolRow {
 
 export interface LoadDeviceToolsParams {
   workspaceId: string
-  /** subject_ids whose bindings should count. */
+  /** subject_ids whose grants should count. */
   subjectIds: string[]
   /**
    * subject-scope-refactor: the set of scope subject_ids that may pin a
-   * binding. A RAB row with `scope_subject_id = NULL` applies whenever the
+   * grant. A workspace_resource_grants row with `scope_subject_id = NULL` applies whenever the
    * subject matches; a row with non-NULL scope only applies when the scope
    * subject_id is present in this set. Without this filter,
-   * `actor + scope=conversation` bindings leak to the same actor's other
+   * `actor + scope=conversation` grants leak to the same actor's other
    * conversations.
    */
   runtimeScopeSubjectIds: string[]
@@ -90,17 +90,17 @@ export async function selectDeviceCapabilityToolsForSubjects(
   run: Executor = db
 ): Promise<DeviceCapabilityToolRow[]> {
   if (params.subjectIds.length === 0) return []
-  // distinctOn collapses duplicate rows when multiple subject bindings cover
+  // distinctOn collapses duplicate rows when multiple subject grants cover
   // the same capability (e.g. workspace-scope + actor-scope both grant the
   // bash tool — without distinctOn the projection surfaces it twice and the
   // planner sees duplicate names).
   let query = run
     .selectFrom("deviceCapabilities as dc")
     .innerJoin("workspaceResources as resource", "resource.id", "dc.id")
-    .innerJoin("workspaceResourceGrants as rab", (join) =>
+    .innerJoin("workspaceResourceGrants as resource_grant", (join) =>
       join
-        .onRef("rab.workspaceResourceId", "=", "dc.id")
-        .on("rab.status", "=", "active")
+        .onRef("resource_grant.workspaceResourceId", "=", "dc.id")
+        .on("resource_grant.status", "=", "active")
     )
     .innerJoin("deviceExposures as dx", "dx.id", "dc.exposureId")
     .innerJoin("devices as d", "d.id", "dx.deviceId")
@@ -154,20 +154,24 @@ export async function selectDeviceCapabilityToolsForSubjects(
     .where("dt.status", "=", "active")
     .where("dcr.status", "=", "active")
     .where("dx.runtimeStatus", "in", ["healthy", "degraded"])
-    .where("rab.subjectId", "in", params.subjectIds)
+    .where("resource_grant.subjectId", "in", params.subjectIds)
     .where(
-      sql<boolean>`'use'::workspace_resource_grant_permission = ANY(rab.permissions)`
+      sql<boolean>`'use'::workspace_resource_grant_permission = ANY(resource_grant.permissions)`
     )
   if (params.runtimeScopeSubjectIds.length > 0) {
     query = query.where((eb) =>
       eb.or([
-        eb("rab.scopeSubjectId", "is", null),
-        eb("rab.scopeSubjectId", "in", params.runtimeScopeSubjectIds),
+        eb("resource_grant.scopeSubjectId", "is", null),
+        eb(
+          "resource_grant.scopeSubjectId",
+          "in",
+          params.runtimeScopeSubjectIds
+        ),
       ])
     )
   } else {
-    // No scope context — only unscoped bindings apply.
-    query = query.where("rab.scopeSubjectId", "is", null)
+    // No scope context — only unscoped grants apply.
+    query = query.where("resource_grant.scopeSubjectId", "is", null)
   }
   const rows = await query.orderBy("dt.id").execute()
   // CamelCasePlugin.transformResult camelCases every top-level result key
@@ -305,9 +309,9 @@ export async function replaceDeviceCapabilityGrants(
   run: Executor = db
 ): Promise<void> {
   await run.transaction().execute(async (trx) => {
-    // Tuple-precise revoke: a binding under `actor + scope=conversation A` must
+    // Tuple-precise revoke: a grant under `actor + scope=conversation A` must
     // not be torn down by an unrelated `actor + scope=conversation B` write,
-    // and an unscoped binding must not be torn down by any scoped write.
+    // and an unscoped grant must not be torn down by any scoped write.
     let revoke = trx
       .updateTable("workspaceResourceGrants")
       .set({
@@ -358,9 +362,9 @@ export interface MutateDeviceCapabilityGrantsParams {
 }
 
 /**
- * ADDITIVE insert: activate bindings for exactly the given capability ids on
+ * ADDITIVE insert: activate grants for exactly the given capability ids on
  * (subject, scope) via onConflict-doNothing, WITHOUT touching the target's
- * other capability bindings. Idempotent per (capability, subject, scope) via
+ * other capability grants. Idempotent per (capability, subject, scope) via
  * the active partial-unique.
  */
 export async function insertDeviceCapabilityGrants(
@@ -387,7 +391,7 @@ export async function insertDeviceCapabilityGrants(
 }
 
 /**
- * TARGETED revoke: revoke ONLY the given capability ids' active bindings on
+ * TARGETED revoke: revoke ONLY the given capability ids' active grants on
  * (subject, scope), leaving the target's other capabilities intact.
  */
 export async function revokeDeviceCapabilityGrants(
@@ -417,7 +421,7 @@ export async function revokeDeviceCapabilityGrants(
 }
 
 /**
- * Active `use`-permission device-capability bindings for (subject, scope) in a
+ * Active `use`-permission device-capability grants for (subject, scope) in a
  * workspace. Returns the filtered workspace_resource_id string[].
  */
 export async function selectActiveDeviceCapabilityIdsForSubject(

@@ -134,7 +134,7 @@ export async function listAuthorizedResourceIds(
     runtimeScopeSubjectIds?: readonly string[]
     /**
      * Post-D4 P2 fix: also thread runtimeSubjectIds so `subject=conversation C`
-     * RAB grants surface in tool/skill/plugin enumeration the same way
+     * resource grants surface in tool/skill/plugin enumeration the same way
      * they do in checkPermission.
      */
     runtimeSubjectIds?: readonly string[]
@@ -160,7 +160,7 @@ export async function filterAuthorizedPermissionResourceIds(
     resourceIds: string[]
     /**
      * PR5 fix: propagate runtime context so the memory_access_grants
-     * overlay (and the scope-aware RAB filter) sees the same subject set
+     * overlay (and the scope-aware grant filter) sees the same subject set
      * the controller built via buildRuntimePrincipalContext. Without these
      * the explicit grants land in the DB but never affect read paths.
      */

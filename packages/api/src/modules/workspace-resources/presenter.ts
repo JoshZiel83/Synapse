@@ -13,7 +13,7 @@ import {
 } from "../../infrastructure/datetime.js"
 
 /**
- * Workspace-apps presentation layer: DB row → app-facing view. Owns the
+ * Workspace-resources presentation layer: DB row → client-facing view. Owns the
  * outward semantic transforms (Date → IsoInstantString) so the
  * service/controller never call serializeInstant (guard-layering r3), and the
  * row→view shaping lives here rather than under a map*Row name (r4). Row types
@@ -166,7 +166,7 @@ export function presentWorkspaceResource(
   row: WorkspaceResourceRow
 ): WorkspaceResourceView {
   if (!isCompleteWorkspaceResourceRow(row)) {
-    throw new Error("workspace app row is missing required fields")
+    throw new Error("workspace resource row is missing required fields")
   }
   return {
     id: row.id,
@@ -185,7 +185,7 @@ export function presentGrant(
   row: WorkspaceResourceGrantPresentationRow
 ): WorkspaceResourceGrant {
   if (!row.createdAt) {
-    throw new Error("workspace app grant row is missing created_at")
+    throw new Error("workspace resource grant row is missing created_at")
   }
   if (!row.workspaceId) {
     throw new Error(
@@ -216,7 +216,9 @@ export function presentGrantRequest(
   row: WorkspaceResourceGrantRequestPresentationRow
 ): WorkspaceResourceGrantRequest {
   if (!row.granteeKind || !row.createdAt || !row.updatedAt) {
-    throw new Error("workspace app grant request row is missing joined fields")
+    throw new Error(
+      "workspace resource grant request row is missing joined fields"
+    )
   }
   return {
     id: row.id,

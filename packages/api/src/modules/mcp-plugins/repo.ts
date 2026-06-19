@@ -12,7 +12,6 @@
 import type pg from "pg"
 import { CompiledQuery, sql, type RawBuilder, type SqlBool } from "kysely"
 import {
-  ACCESS_BINDING_STATUS,
   DEFAULT_CONVERSATION_TYPE_MASK,
   FILE_ORIGIN_SYSTEMS,
   MARKETPLACE_VERSION_STATUS,
@@ -20,6 +19,7 @@ import {
   SUBJECT_KIND,
   WORKSPACE_RESOURCE_KIND,
   WORKSPACE_RESOURCE_STATUS,
+  WORKSPACE_RESOURCE_GRANT_STATUS,
   PLUGIN_AUTH_CONNECTION_STATUS,
   PLUGIN_AUTH_SESSION_STATUS,
   maskAllowsConversationType,
@@ -27,7 +27,7 @@ import {
   resolveEffectiveConversationTypeMask,
   resolveNarrowedConversationTypeMask,
   slugify,
-  type AccessBindingStatus,
+  type WorkspaceResourceGrantStatus,
   type MarketplaceSyncMode,
   type MarketplaceVersionStatus,
   type McpSetupStep,
@@ -194,7 +194,7 @@ export type InstallationAccessRow = {
   remoteAgentId: string | null
   workspaceMemberId: string | null
   conversationTypeMaskOverride: number | null
-  status: AccessBindingStatus
+  status: WorkspaceResourceGrantStatus
   source: WorkspaceResourceGrantSource
   createdByWorkspaceMemberId: string | null
   reason: string | null
@@ -971,7 +971,7 @@ export async function revokePluginConnectionsForInstallation(
     .updateTable("pluginConnections")
     .set({
       deletedAt: sql`NOW()`,
-      status: ACCESS_BINDING_STATUS.REVOKED,
+      status: PLUGIN_AUTH_CONNECTION_STATUS.REVOKED,
     })
     .where("installationId", "=", installationId)
     .where("deletedAt", "is", null)
@@ -1084,7 +1084,7 @@ export async function listPluginInstallationAccessRows(
     query = query.where(
       "resource_grant.status",
       "=",
-      ACCESS_BINDING_STATUS.ACTIVE
+      WORKSPACE_RESOURCE_GRANT_STATUS.ACTIVE
     )
   }
 
@@ -1552,7 +1552,7 @@ export type VisiblePluginGrantRow = {
   subject_remote_agent_id: string | null
   subject_conversation_id: string | null
   conversation_type_mask_override: number | null
-  status: AccessBindingStatus
+  status: WorkspaceResourceGrantStatus
   created_by_workspace_member_id: string | null
   reason: string | null
   metadata: unknown
@@ -1660,7 +1660,7 @@ async function loadVisiblePluginGrants(params: { resourceIds: string[] }) {
       "scope.conversationId as scopeConversationIdViaJoin",
     ])
     .where("resource_grant.workspaceResourceId", "in", params.resourceIds)
-    .where("resource_grant.status", "=", ACCESS_BINDING_STATUS.ACTIVE)
+    .where("resource_grant.status", "=", WORKSPACE_RESOURCE_GRANT_STATUS.ACTIVE)
     .where(
       sql<boolean>`'use'::workspace_resource_grant_permission = ANY(resource_grant.permissions)`
     )
@@ -1796,7 +1796,7 @@ export async function loadVisiblePluginRows(
     .selectFrom("workspaceResourceGrants as resource_grant")
     .select("resource_grant.workspaceResourceId")
     .distinct()
-    .where("resource_grant.status", "=", ACCESS_BINDING_STATUS.ACTIVE)
+    .where("resource_grant.status", "=", WORKSPACE_RESOURCE_GRANT_STATUS.ACTIVE)
     .where("resource_grant.subjectId", "in", subjectIds)
     .where(
       sql<boolean>`'use'::workspace_resource_grant_permission = ANY(resource_grant.permissions)`

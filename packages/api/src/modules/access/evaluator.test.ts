@@ -1994,7 +1994,7 @@ test(
       })
       assert.equal(beforeKey.includes(capabilityId), false)
 
-      // device_admin alone no longer implies discovery of capability apps.
+      // device_admin alone no longer implies discovery of capability resources.
       await grantWorkspaceAccessKey(db, guestMemberId, "device_admin")
       const afterKey = await lookupResources(db, {
         resourceType: "device_capability",

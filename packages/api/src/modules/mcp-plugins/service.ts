@@ -3,7 +3,7 @@ import fs from "node:fs/promises"
 import {
   DEFAULT_CONVERSATION_TYPE_MASK,
   FILE_ORIGIN_SYSTEMS,
-  ACCESS_BINDING_STATUS,
+  WORKSPACE_RESOURCE_GRANT_STATUS,
   MARKETPLACE_ITEM_KIND,
   MCP_VALIDATION_RULE_KIND,
   PLUGIN_INSTALLATION_STATUS,
@@ -30,7 +30,7 @@ import type {
   WorkspaceResourceGrantTargetInput,
 } from "@synapse/shared/types"
 import type {
-  AccessBindingStatus,
+  WorkspaceResourceGrantStatus,
   PluginAuthBindingDefinition,
   PluginConfigFieldDefinition,
   PluginInstallFlow,
@@ -113,7 +113,7 @@ import {
 } from "../workspace-resources/repo.js"
 import {
   insertWorkspaceResourceGrant,
-  revokeWorkspaceResourceGrantsForApp,
+  revokeWorkspaceResourceGrantsForResource,
 } from "../workspace-resources/grant-storage.js"
 import {
   assertConversationTypeMaskWithinParent,
@@ -326,7 +326,7 @@ function buildInstallationAccessRow(input: {
   installationId: string
   target: CapabilityAccessTarget
   conversationTypeMaskOverride: number | null
-  status: AccessBindingStatus
+  status: WorkspaceResourceGrantStatus
   source: WorkspaceResourceGrantSource
   createdByWorkspaceMemberId: string | null
   reason: string | null
@@ -778,7 +778,7 @@ export async function tearDownPluginInstallationOn(
   client: Executor,
   installId: string
 ): Promise<void> {
-  await revokeWorkspaceResourceGrantsForApp(client as any, installId)
+  await revokeWorkspaceResourceGrantsForResource(client as any, installId)
 
   // Soft delete the installation's connections too (review F5): plugin_connections
   // is its own soft-delete root, so uninstalling the parent must close the child
@@ -1064,9 +1064,9 @@ export async function getPluginInstallationGrantState(
   )
   const accessRows = await listAccessRows(installationId)
   const grants = accessRows
-    .filter((binding) => binding.status === ACCESS_BINDING_STATUS.ACTIVE)
-    .map((binding) =>
-      presentInstallationAccessGrant(binding, {
+    .filter((grant) => grant.status === WORKSPACE_RESOURCE_GRANT_STATUS.ACTIVE)
+    .map((grant) =>
+      presentInstallationAccessGrant(grant, {
         workspaceConversationTypeMask,
         instanceConversationTypeMaskOverride: conversationTypeMaskOverride,
       })
@@ -1158,7 +1158,7 @@ export async function createPluginInstallationGrant(input: {
       : null
   const existing = accessRows.find(
     (entry) =>
-      entry.status === ACCESS_BINDING_STATUS.ACTIVE &&
+      entry.status === WORKSPACE_RESOURCE_GRANT_STATUS.ACTIVE &&
       entry.accessTargetType === accessTargetLabel &&
       entry.actorId === accessTargetActorId &&
       entry.remoteAgentId === accessTargetRemoteAgentId &&
@@ -1294,7 +1294,7 @@ export async function revokePluginInstallationGrant(input: {
   if (!accessRow || accessRow.workspaceId !== input.workspaceId) {
     throw new McpPluginError(404, "Access grant not found")
   }
-  if (accessRow.status === ACCESS_BINDING_STATUS.REVOKED) {
+  if (accessRow.status === WORKSPACE_RESOURCE_GRANT_STATUS.REVOKED) {
     return presentInstallationAccessGrant(accessRow)
   }
 

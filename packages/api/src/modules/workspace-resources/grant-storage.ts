@@ -1,7 +1,7 @@
 export {
   insertWorkspaceResourceGrant,
   revokeWorkspaceResourceGrant,
-  revokeWorkspaceResourceGrantsForApp,
+  revokeWorkspaceResourceGrantsForResource,
   listActiveWorkspaceResourceGrants,
   insertWorkspaceResourceGrantRequest,
   cancelWorkspaceResourceGrantRequest,

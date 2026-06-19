@@ -166,7 +166,7 @@ async function insertWorkspaceResourceDetail(
     }
     default:
       throw new Error(
-        `unsupported workspace app detail kind for test: ${input.kind}`
+        `unsupported workspace resource detail kind for test: ${input.kind}`
       )
   }
 }
@@ -201,7 +201,7 @@ test(
               status: WORKSPACE_RESOURCE_STATUS.ACTIVE,
             } as any)
             .execute(),
-        /owner_subject_id .* does not match app workspace/i
+        /owner_subject_id .* does not match resource workspace/i
       )
     })
   }
@@ -289,7 +289,7 @@ test(
 )
 
 test(
-  "workspace_resource_grants rejects contact_visible on a non-contact app kind",
+  "workspace_resource_grants rejects contact_visible on a non-contact resource kind",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -404,7 +404,7 @@ test(
 )
 
 test(
-  "resolveWorkspaceResourceGrantRequest rejects a request id routed through another workspace app",
+  "resolveWorkspaceResourceGrantRequest rejects a request id routed through another workspace resource",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -421,11 +421,11 @@ test(
         workspaceId,
         requesterUser
       )
-      const appA = crypto.randomUUID()
-      const appB = crypto.randomUUID()
+      const resourceA = crypto.randomUUID()
+      const resourceB = crypto.randomUUID()
       const approverSubject = await memberSubjectFor(db, approverMemberId)
 
-      for (const resourceId of [appA, appB]) {
+      for (const resourceId of [resourceA, resourceB]) {
         await db
           .insertInto("workspaceResources")
           .values({
@@ -453,7 +453,7 @@ test(
         .insertInto("workspaceResourceGrantRequests")
         .values({
           workspaceId: workspaceId,
-          workspaceResourceId: appB,
+          workspaceResourceId: resourceB,
           granteeSubjectId: requesterSubjectId,
           requestedPermissions: [
             WORKSPACE_RESOURCE_GRANT_PERMISSION.CONTACT_VISIBLE,
@@ -468,7 +468,7 @@ test(
         () =>
           resolveWorkspaceResourceGrantRequest({
             workspaceId,
-            workspaceResourceId: appA,
+            workspaceResourceId: resourceA,
             requestId: request.id as string,
             approverWorkspaceMemberId: approverMemberId,
             decision: "approve",
@@ -584,7 +584,7 @@ test(
 )
 
 test(
-  "cancelWorkspaceResourceGrantRequest scopes the request id to the same workspace app",
+  "cancelWorkspaceResourceGrantRequest scopes the request id to the same workspace resource",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -595,11 +595,11 @@ test(
         workspaceId,
         owner
       )
-      const appA = crypto.randomUUID()
-      const appB = crypto.randomUUID()
+      const resourceA = crypto.randomUUID()
+      const resourceB = crypto.randomUUID()
       const requesterSubject = await memberSubjectFor(db, requesterMemberId)
 
-      for (const resourceId of [appA, appB]) {
+      for (const resourceId of [resourceA, resourceB]) {
         await db
           .insertInto("workspaceResources")
           .values({
@@ -627,7 +627,7 @@ test(
         .insertInto("workspaceResourceGrantRequests")
         .values({
           workspaceId: workspaceId,
-          workspaceResourceId: appB,
+          workspaceResourceId: resourceB,
           granteeSubjectId: requesterSubjectId,
           requestedPermissions: [
             WORKSPACE_RESOURCE_GRANT_PERMISSION.CONTACT_VISIBLE,
@@ -640,7 +640,7 @@ test(
 
       const cancelled = await cancelWorkspaceResourceGrantRequest(db as any, {
         workspaceId,
-        workspaceResourceId: appA,
+        workspaceResourceId: resourceA,
         requestId: request.id as string,
         requesterWorkspaceMemberId: requesterMemberId,
       })

@@ -255,7 +255,7 @@ export default async function automationController(app: FastifyInstance) {
 
   // §4.1: automation event-source access is now a `use`-permission grant set on
   // the source's workspace_resources root. The write API is a single atomic
-  // PUT-replace mirroring `PUT /workspace-resources/:appId/grants`; the unified
+  // PUT-replace mirroring `PUT /workspace-resources/:resourceId/grants`; the unified
   // `replaceWorkspaceResourceGrants` performs the manage gate (kind-admin / owner /
   // workspace-admin) and atomic revoke-then-reinsert.
   appRoute(

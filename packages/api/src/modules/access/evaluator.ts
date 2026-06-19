@@ -437,8 +437,8 @@ async function hasRemoteAgentPermission(
         runtimeScopeSubjectIds,
         runtimeSubjectIds,
       })))
-  // P2: same fold as hasActorPermission — bindings are authoritative.
-  // Cross-workspace `is_public_shared` still requires an explicit binding to
+  // P2: same fold as hasActorPermission — grants are authoritative.
+  // Cross-workspace `is_public_shared` still requires an explicit grant to
   // be granted; the publishing workspace's auto-write happens on create.
   const canUse =
     (sameWorkspace && remoteAgent.ownerWorkspaceMemberId === access.id) ||
@@ -775,7 +775,7 @@ async function resolveBindableResourceAccess(
   }
 
   // (2b) manage path — workspace_member in the same workspace, holding the
-  // manage key or being the app owner.
+  // manage key or being the resource owner.
   if (params.subject.type !== "workspace_member") {
     return false
   }

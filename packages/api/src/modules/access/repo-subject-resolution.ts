@@ -103,7 +103,7 @@ export async function isSubjectActiveConversationParticipant(
  * subject_id.
  *
  * Critical security property: `runtimeSubjectIds` MUST NOT auto-include an
- * app owner's `subject=workspace_member` identity — that would let an actor or
+ * resource owner's `subject=workspace_member` identity — that would let an actor or
  * remote agent inherit owner/member grants (including user_private memory).
  * Delegation is an explicit-act-on-behalf contract, surfaced via
  * `delegatedWorkspaceMemberId`.
@@ -671,8 +671,8 @@ export async function computeRuntimeScopeSubjectIds(
 /**
  * P1 fix (post-D4): subject_ids the principal can *claim* under right now —
  * principal own subject + workspace + any group subjects (conversation when
- * active participant). Passed as `runtimeSubjectIds` to the RAB visibility
- * layer so `subject=conversation C` bindings surface for active participants
+ * active participant). Passed as `runtimeSubjectIds` to the workspace_resource_grants visibility
+ * layer so `subject=conversation C` grants surface for active participants
  * (otherwise they'd be writable but never match).
  *
  * Mirrors `buildRuntimePrincipalContext.runtimeSubjectIds` but takes the

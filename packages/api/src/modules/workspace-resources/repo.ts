@@ -3,7 +3,7 @@
 // The only workspace-resources file (besides the *-storage.ts siblings) permitted to
 // import the db client (guard r8). Owns the inline `db` selects that previously
 // lived in service.ts: the workspace-member access load, the manage-grant probe,
-// the manageable-app lookup, the inventory/discover queries, the grant and
+// the manageable-resource lookup, the inventory/discover queries, the grant and
 // grant-request presentation joins, the replace-grants transaction, and default-bound
 // wrappers around the executor-injectable storage helpers the service threads.
 //
@@ -40,7 +40,7 @@ import {
   insertWorkspaceResourceGrantRequest,
   listActiveWorkspaceResourceGrants,
   revokeWorkspaceResourceGrant,
-  revokeWorkspaceResourceGrantsForApp,
+  revokeWorkspaceResourceGrantsForResource,
   type WorkspaceResourceGrantRequestRow,
 } from "./grant-storage.js"
 import type {
@@ -215,7 +215,7 @@ export async function loadWorkspaceMemberAccessRecord(
 }
 
 /**
- * Whether the given workspace-member has an active MANAGE grant on the app.
+ * Whether the given workspace-member has an active MANAGE grant on the resource.
  * Upserts the member subject (so the probe is consistent with the registry)
  * on the same default db the probe runs against.
  */
@@ -267,7 +267,7 @@ function selectWorkspaceResourceLiveRow(builder: any) {
     ])
 }
 
-/** The live (non-deleted) workspace app for (resourceId, workspaceId), if any. */
+/** The live (non-deleted) workspace resource for (resourceId, workspaceId), if any. */
 export async function findManageableWorkspaceResource(
   resourceId: string,
   workspaceId: string
@@ -283,7 +283,7 @@ export async function findManageableWorkspaceResource(
 }
 
 /**
- * The live workspace apps for a workspace (newest first), optionally filtered
+ * The live workspace resources for a workspace (newest first), optionally filtered
  * by kind. Visibility filtering stays in the service.
  */
 export async function listWorkspaceResourcesLive(
@@ -318,7 +318,7 @@ export async function isSubjectActiveConversationParticipantDefault(
 }
 
 /**
- * The granted-app discover query: workspace apps with an active USE or
+ * The granted-resource discover query: workspace resources with an active USE or
  * CONTACT_VISIBLE grant claimable by the given subject ids, optionally scoped
  * to a conversation subject. Preserves the raw permission ANY(...) probe and the
  * scope OR-null predicate verbatim.
@@ -397,7 +397,7 @@ export async function listGrantedWorkspaceResources(
   )
 }
 
-/** Implicit-owner discover query: active apps the member owns of the given kinds. */
+/** Implicit-owner discover query: active resources the member owns of the given kinds. */
 export async function listImplicitOwnerWorkspaceResources(params: {
   workspaceId: string
   ownerWorkspaceMemberId: string
@@ -418,7 +418,7 @@ export async function listImplicitOwnerWorkspaceResources(params: {
     .execute()
 }
 
-/** Active grants for an app joined to subject/scope for presentation. */
+/** Active grants for a resource joined to subject/scope for presentation. */
 export async function listWorkspaceResourceGrantPresentationRows(
   resourceId: string
 ): Promise<WorkspaceResourceGrantPresentationRow[]> {
@@ -459,7 +459,7 @@ export async function listWorkspaceResourceGrantPresentationRows(
 }
 
 /**
- * Atomically replace all active grants for an app: revoke every existing active
+ * Atomically replace all active grants for a resource: revoke every existing active
  * grant, then insert the supplied set, in a single transaction. The
  * revoke-then-reinsert loop runs on one trx executor so the swap is atomic.
  */
@@ -497,7 +497,7 @@ export async function replaceWorkspaceResourceGrantsTx(params: {
   })
 }
 
-/** Grant requests for an app joined to grantee/scope for presentation. */
+/** Grant requests for a resource joined to grantee/scope for presentation. */
 export async function listWorkspaceResourceGrantRequestPresentationRows(params: {
   resourceId: string
   direction: WorkspaceResourceGrantRequestDirection
@@ -599,9 +599,9 @@ export async function updateWorkspaceResourceRootDefault(
   await updateWorkspaceResourceRoot(db, input)
 }
 
-/** Default-db revoke of all active grants for an app (mirrors revokeWorkspaceResourceGrantsForApp(db,...)). */
-export async function revokeWorkspaceResourceGrantsForAppDefault(
+/** Default-db revoke of all active grants for a resource (mirrors revokeWorkspaceResourceGrantsForResource(db,...)). */
+export async function revokeWorkspaceResourceGrantsForResourceDefault(
   workspaceResourceId: string
 ): Promise<number> {
-  return revokeWorkspaceResourceGrantsForApp(db, workspaceResourceId)
+  return revokeWorkspaceResourceGrantsForResource(db, workspaceResourceId)
 }

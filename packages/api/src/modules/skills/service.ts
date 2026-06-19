@@ -34,7 +34,7 @@ import {
 import {
   insertWorkspaceResourceGrant,
   listActiveWorkspaceResourceGrants,
-  revokeWorkspaceResourceGrantsForApp,
+  revokeWorkspaceResourceGrantsForResource,
 } from "../workspace-resources/grant-storage.js"
 import { type Executor } from "../../infrastructure/database/kysely.js"
 import {
@@ -2419,7 +2419,7 @@ export async function uninstallInstalledSkill(
       deletedAt: new Date(),
     })
 
-    await revokeWorkspaceResourceGrantsForApp(client, installedSkillId)
+    await revokeWorkspaceResourceGrantsForResource(client, installedSkillId)
 
     return {
       deleted: true,

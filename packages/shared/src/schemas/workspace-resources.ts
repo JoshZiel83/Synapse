@@ -150,7 +150,7 @@ export type WorkspaceResourceListViewSchemaType = z.infer<
   typeof WorkspaceResourceListViewSchema
 >
 
-/** Workspace-app grant collection response body. */
+/** Workspace-resource grant collection response body. */
 export const WorkspaceResourceGrantListViewSchema = z.object({
   grants: z.array(WorkspaceResourceGrantViewSchema),
 })
@@ -158,7 +158,7 @@ export type WorkspaceResourceGrantListViewSchemaType = z.infer<
   typeof WorkspaceResourceGrantListViewSchema
 >
 
-/** Workspace-app grant-request collection response body. */
+/** Workspace-resource grant-request collection response body. */
 export const WorkspaceResourceGrantRequestListViewSchema = z.object({
   requests: z.array(WorkspaceResourceGrantRequestViewSchema),
 })
@@ -241,7 +241,7 @@ const grantsArraySchema = z.array(WorkspaceResourceGrantEntrySchema).optional()
 const workspaceResourceContentBlockInputSchema =
   CanonicalContentBlockSchema as z.ZodType<CanonicalContentBlockInput>
 
-/** POST workspace-resources body (create) — discriminated by app kind. */
+/** POST workspace-resources body (create) — discriminated by resource kind. */
 export const CreateWorkspaceResourceInputSchema = z.union([
   z.object({
     kind: z.literal(WORKSPACE_RESOURCE_KIND.ACTOR),
@@ -298,7 +298,7 @@ export type CreateWorkspaceResourceInput = z.infer<
   typeof CreateWorkspaceResourceInputSchema
 >
 
-/** PATCH workspace-resources/:id body (update) — discriminated by app kind. */
+/** PATCH workspace-resources/:id body (update) — discriminated by resource kind. */
 export const UpdateWorkspaceResourceInputSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal(WORKSPACE_RESOURCE_KIND.ACTOR),

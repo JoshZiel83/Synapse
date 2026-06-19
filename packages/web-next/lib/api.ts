@@ -889,23 +889,23 @@ class ApiClient {
   }
   async getWorkspaceResourceGrants(
     wsId: string,
-    appId: string
+    resourceId: string
   ): Promise<WorkspaceResourceGrantListViewSchemaType> {
     const res = await this.fetch(
-      `/workspaces/${wsId}/workspace-resources/${appId}/grants`
+      `/workspaces/${wsId}/workspace-resources/${resourceId}/grants`
     )
     return res.data
   }
   async replaceWorkspaceResourceGrants(
     wsId: string,
-    appId: string,
+    resourceId: string,
     data: { grants: WorkspaceResourceGrantEntryLike[] }
   ): Promise<WorkspaceResourceGrantListViewSchemaType> {
     const body: ReplaceWorkspaceResourceGrantsInput = {
       grants: data.grants.map(parseWorkspaceResourceGrantEntry),
     }
     const res = await this.fetch(
-      `/workspaces/${wsId}/workspace-resources/${appId}/grants`,
+      `/workspaces/${wsId}/workspace-resources/${resourceId}/grants`,
       {
         method: "PUT",
         body: JSON.stringify(body),

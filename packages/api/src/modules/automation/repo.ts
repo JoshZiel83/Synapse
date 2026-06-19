@@ -503,7 +503,7 @@ export function normalizeAutomationWebhookEndpointRow(
   return normalized
 }
 
-/** Read one integration installation for a workspace, scoped to non-deleted workspace apps. */
+/** Read one integration installation for a workspace, scoped to non-deleted workspace resources. */
 export async function selectIntegrationInstallationRow(
   workspaceId: string,
   installationId: string

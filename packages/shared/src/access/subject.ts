@@ -53,10 +53,9 @@ export type SubjectRef =
  * Workspace-scoped subjects only — the variants that can be referenced from
  * authorization rows. Maps 1:1 to ACCESS_TARGET_TYPES values plus the
  * `remote_agent` kind which (as of PR2 of the subject-scope refactor) travels
- * exclusively through the new `ScopedSubjectTarget` variant of AccessGrantTarget
- * — it is intentionally NOT in `ACCESS_TARGET_TYPES` / `CAPABILITY_ACCESS_TARGET_TYPES`
- * so the legacy projection layer in `bindings.ts` does not have to grow another
- * column.
+ * exclusively through the `ScopedSubjectTarget` shape used by
+ * `workspace_resource_grants.subject_id` — it is intentionally NOT in
+ * `ACCESS_TARGET_TYPES` / `CAPABILITY_ACCESS_TARGET_TYPES`.
  */
 export type AccessTargetRef = Extract<
   SubjectRef,

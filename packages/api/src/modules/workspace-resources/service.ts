@@ -48,7 +48,7 @@ import {
   listWorkspaceResourcesLive,
   loadWorkspaceMemberAccessRecord,
   replaceWorkspaceResourceGrantsTx,
-  revokeWorkspaceResourceGrantsForAppDefault,
+  revokeWorkspaceResourceGrantsForResourceDefault,
   updateWorkspaceResourceRootDefault,
   upsertWorkspaceResourceSubjectIdDefault,
   type WorkspaceMemberAccessRecord,
@@ -82,7 +82,7 @@ function workspaceResourceKindAdminKey(kind: WorkspaceResourceKind): string {
     case WORKSPACE_RESOURCE_KIND.AUTOMATION_EVENT_SOURCE:
       return "automation_admin"
   }
-  throw new Error(`Unsupported workspace app kind: ${kind}`)
+  throw new Error(`Unsupported workspace resource kind: ${kind}`)
 }
 
 function targetToSubjectRef(target: CapabilityAccessTarget) {
@@ -153,7 +153,7 @@ async function requireManageWorkspaceResource(
     workspaceId
   )
   if (!resource) {
-    throw new Error("Workspace app not found")
+    throw new Error("Workspace resource not found")
   }
 
   // actor / remote_agent caller: authorized iff it owns this resource.
@@ -169,11 +169,11 @@ async function requireManageWorkspaceResource(
       resource.ownerSubjectId === callerSubjectId
     ) {
       if (!isCompleteWorkspaceResourceRow(resource)) {
-        throw new Error("Workspace app row is incomplete")
+        throw new Error("Workspace resource row is incomplete")
       }
       return { access: null, resource }
     }
-    throw new Error("Not allowed to manage this workspace app")
+    throw new Error("Not allowed to manage this workspace resource")
   }
 
   const access = await loadWorkspaceMemberAccess(workspaceId, userId)
@@ -187,11 +187,11 @@ async function requireManageWorkspaceResource(
     (await hasManageGrant(resourceId, access.workspaceMemberId))
   ) {
     if (!isCompleteWorkspaceResourceRow(resource)) {
-      throw new Error("Workspace app row is incomplete")
+      throw new Error("Workspace resource row is incomplete")
     }
     return { access, resource }
   }
-  throw new Error("Not allowed to manage this workspace app")
+  throw new Error("Not allowed to manage this workspace resource")
 }
 
 /**
@@ -484,19 +484,21 @@ export async function cancelWorkspaceResourceGrantRequestByRequester(params: {
   )
   const request = await findGrantRequestById(params.requestId)
   if (!request) {
-    throw new Error("Workspace app grant request not found")
+    throw new Error("Workspace resource grant request not found")
   }
   if (
     request.workspaceId !== params.workspaceId ||
     request.workspaceResourceId !== params.resourceId
   ) {
-    throw new Error("Workspace app grant request not found")
+    throw new Error("Workspace resource grant request not found")
   }
   if (request.requesterWorkspaceMemberId !== identity.workspaceMemberId) {
-    throw new Error("Not allowed to cancel this workspace app grant request")
+    throw new Error(
+      "Not allowed to cancel this workspace resource grant request"
+    )
   }
   if (request.status !== WORKSPACE_RESOURCE_GRANT_REQUEST_STATUS.PENDING) {
-    throw new Error("Workspace app grant request is no longer pending")
+    throw new Error("Workspace resource grant request is no longer pending")
   }
   const cancelled = await cancelWorkspaceResourceGrantRequestDefault({
     workspaceId: params.workspaceId,
@@ -505,7 +507,7 @@ export async function cancelWorkspaceResourceGrantRequestByRequester(params: {
     requesterWorkspaceMemberId: identity.workspaceMemberId,
   })
   if (!cancelled) {
-    throw new Error("Workspace app grant request is no longer pending")
+    throw new Error("Workspace resource grant request is no longer pending")
   }
   return true
 }
@@ -757,7 +759,7 @@ export async function updateWorkspaceResource(params: {
     params.userId
   )
   if (resource.kind !== params.input.kind) {
-    throw new Error("Workspace app kind does not match update payload")
+    throw new Error("Workspace resource kind does not match update payload")
   }
 
   switch (params.input.kind) {
@@ -821,7 +823,9 @@ export async function updateWorkspaceResource(params: {
       })
       break
     default:
-      throw new Error("Workspace app update is not supported for this kind")
+      throw new Error(
+        "Workspace resource update is not supported for this kind"
+      )
   }
 
   return getWorkspaceResourceInventoryDetail({
@@ -863,9 +867,11 @@ export async function deleteWorkspaceResource(params: {
         status: WORKSPACE_RESOURCE_STATUS.ARCHIVED,
         deletedAt: new Date(),
       })
-      await revokeWorkspaceResourceGrantsForAppDefault(params.resourceId)
+      await revokeWorkspaceResourceGrantsForResourceDefault(params.resourceId)
       return true
     default:
-      throw new Error("Workspace app deletion is not supported for this kind")
+      throw new Error(
+        "Workspace resource deletion is not supported for this kind"
+      )
   }
 }

@@ -142,7 +142,7 @@ function summarizeInviteableActor(row: {
 }
 
 /**
- * Owns the inviteable-actors query (active workspace apps whose actor is not
+ * Owns the inviteable-actors query (active workspace resources whose actor is not
  * already an active participant of the conversation) and maps each row to an
  * InviteableActor domain record. The raw `sql` jsonb_agg projection and the
  * `sql<boolean>` NOT EXISTS subquery use hand-written snake_case columns that

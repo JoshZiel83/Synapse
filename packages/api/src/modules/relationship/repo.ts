@@ -736,7 +736,7 @@ export async function selectWorkspaceResourceLiveOwnerKind(
     .executeTakeFirst()
 }
 
-export async function selectPendingAppGrantRequest(input: {
+export async function selectPendingResourceGrantRequest(input: {
   workspaceId: string
   workspaceResourceId: string
   requesterWorkspaceMemberId: string
@@ -751,7 +751,7 @@ export async function selectPendingAppGrantRequest(input: {
     .executeTakeFirst()
 }
 
-export async function selectPendingAppGrantRequestIdsByKind(input: {
+export async function selectPendingResourceGrantRequestIdsByKind(input: {
   workspaceId: string
   requesterWorkspaceMemberId: string
   kind: "actor" | "remote_agent"
@@ -775,7 +775,7 @@ export async function selectPendingAppGrantRequestIdsByKind(input: {
     .execute()
 }
 
-export async function selectPendingActorAppGrantRequestId(input: {
+export async function selectPendingActorResourceGrantRequestId(input: {
   workspaceId: string
   workspaceResourceId: string
   requesterWorkspaceMemberId: string
@@ -790,7 +790,7 @@ export async function selectPendingActorAppGrantRequestId(input: {
     .executeTakeFirst()
 }
 
-export async function selectPendingRemoteAgentAppGrantRequestId(input: {
+export async function selectPendingRemoteAgentResourceGrantRequestId(input: {
   workspaceId: string
   workspaceResourceId: string
   requesterWorkspaceMemberId: string

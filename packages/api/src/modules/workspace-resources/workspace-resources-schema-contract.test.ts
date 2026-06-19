@@ -203,7 +203,7 @@ test("WorkspaceResourceSuccessViewSchema validates boolean outcomes only", () =>
   )
 })
 
-test("workspace app query schemas parse app-facing query DTOs", () => {
+test("workspace resource query schemas parse client-facing query DTOs", () => {
   const conversationId = uuid()
 
   assert.deepEqual(
@@ -246,7 +246,7 @@ test("workspace app query schemas parse app-facing query DTOs", () => {
   )
 })
 
-test("workspace app input schemas validate actor docs and custom skill content", () => {
+test("workspace resource input schemas validate actor docs and custom skill content", () => {
   assert.equal(
     CreateWorkspaceResourceInputSchema.safeParse({
       kind: WORKSPACE_RESOURCE_KIND.ACTOR,
@@ -276,7 +276,7 @@ test("workspace app input schemas validate actor docs and custom skill content",
   )
 })
 
-test("workspace app input schemas reject malformed actor docs and custom skill content", () => {
+test("workspace resource input schemas reject malformed actor docs and custom skill content", () => {
   assert.equal(
     CreateWorkspaceResourceInputSchema.safeParse({
       kind: WORKSPACE_RESOURCE_KIND.ACTOR,

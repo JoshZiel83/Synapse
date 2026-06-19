@@ -515,7 +515,7 @@ export interface DeviceBuiltinExposureRow {
 }
 
 /** Resolve a device's active filesystem/commandline builtin exposures +
- *  capabilities (joined to its workspace apps, soft-delete + active filtered).
+ *  capabilities (joined to its workspace resources, soft-delete + active filtered).
  *  Returns raw rows; the domain shaper (resolveDeviceBuiltinIds) folds them. */
 export async function selectDeviceBuiltinExposures(
   deviceId: string,

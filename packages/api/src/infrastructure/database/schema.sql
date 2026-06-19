@@ -4230,7 +4230,7 @@ CREATE INDEX IF NOT EXISTS idx_chat_push_tokens_workspace_member
 -- ============================================================================
 -- These helpers + triggers enforce the (subject, scope?) two-tuple model that
 -- replaced the polymorphic (kind + N nullable FK + scope enum) shape on
--- resource_access_bindings, runtime_authorization_grants, and (Batch 11)
+-- workspace_resource_grants, runtime_authorization_grants, and (Batch 11)
 -- memory_spaces / memory_access_grants. All triggers are immediate (not
 -- deferred) — callers MUST `upsertAccessSubjectOnTrx(trx, ...)` (Kysely) or
 -- `upsertAccessSubjectOn(qx, ...)` (pg QueryExecutor) BEFORE inserting any row
@@ -4239,7 +4239,7 @@ CREATE INDEX IF NOT EXISTS idx_chat_push_tokens_workspace_member
 -- ============================================================================
 
 -- Predicate: subject kinds that can legitimately anchor a workspace-bound
--- authorization row (resource_access_bindings, runtime_authorization_grants,
+-- authorization row (workspace_resource_grants, runtime_authorization_grants,
 -- memory_access_grants). Excludes user / external / platform. NOTE: external is
 -- workspace-rooted (it carries workspace_id) but is intentionally still excluded
 -- here — first-class external identities are not yet authorization principals;
@@ -4578,7 +4578,7 @@ BEGIN
     v_owner_ws := access_subject_workspace_id(NEW.owner_subject_id);
     IF v_owner_ws IS NULL OR v_owner_ws IS DISTINCT FROM NEW.workspace_id THEN
       RAISE EXCEPTION
-        'workspace_resources.owner_subject_id % workspace % does not match app workspace %',
+        'workspace_resources.owner_subject_id % workspace % does not match resource workspace %',
         NEW.owner_subject_id, v_owner_ws, NEW.workspace_id;
     END IF;
   END IF;
@@ -4588,7 +4588,7 @@ BEGIN
   v_creator_ws := access_subject_workspace_id(NEW.created_by_subject_id);
   IF v_creator_ws IS NOT NULL AND v_creator_ws IS DISTINCT FROM NEW.workspace_id THEN
     RAISE EXCEPTION
-      'workspace_resources.created_by_subject_id % workspace % does not match app workspace %',
+      'workspace_resources.created_by_subject_id % workspace % does not match resource workspace %',
       NEW.created_by_subject_id, v_creator_ws, NEW.workspace_id;
   END IF;
 
@@ -4708,7 +4708,7 @@ BEGIN
 
   IF 'use'::workspace_resource_grant_permission = ANY(NEW.permissions) THEN
     IF v_app_kind NOT IN ('plugin_installation', 'installed_skill', 'device_capability', 'automation_event_source') THEN
-      RAISE EXCEPTION 'workspace_resource_grants.use is not allowed for app kind=%', v_app_kind;
+      RAISE EXCEPTION 'workspace_resource_grants.use is not allowed for resource kind=%', v_app_kind;
     END IF;
     IF NEW.scope_subject_id IS NOT NULL THEN
       IF v_subject_kind NOT IN ('actor', 'remote_agent') OR v_scope_kind <> 'conversation' THEN
@@ -4731,7 +4731,7 @@ BEGIN
   IF 'contact_visible'::workspace_resource_grant_permission = ANY(NEW.permissions) THEN
     IF v_app_kind NOT IN ('actor', 'remote_agent') THEN
       RAISE EXCEPTION
-        'workspace_resource_grants.contact_visible is not allowed for app kind=%', v_app_kind;
+        'workspace_resource_grants.contact_visible is not allowed for resource kind=%', v_app_kind;
     END IF;
     IF NEW.scope_subject_id IS NOT NULL
        OR v_subject_kind NOT IN ('workspace', 'workspace_member') THEN

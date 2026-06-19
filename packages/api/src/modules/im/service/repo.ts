@@ -1524,9 +1524,9 @@ export async function updateTransportEndpointMetadataJsonb(params: {
 // ─────────────────────── queries: accounts ───────────────────────
 
 /**
- * The workspace-member-app actor existence check behind
+ * The workspace-member-owned actor existence check behind
  * `assertWorkspaceActor`: the actor row must join to a non-deleted,
- * active workspace app in the given workspace. Soft-delete predicate
+ * active workspace resource in the given workspace. Soft-delete predicate
  * (`resource.deletedAt is null`) + `resource.status = 'active'` are load-bearing.
  */
 export async function selectActorInWorkspace(params: {

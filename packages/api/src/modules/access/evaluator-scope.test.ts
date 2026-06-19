@@ -187,7 +187,7 @@ test(
       const convA = await newConversation(db, wsId)
       const convB = await newConversation(db, wsId)
 
-      // Current grant model: scoped grants live on capability apps and only
+      // Current grant model: scoped grants live on capability resources and only
       // support subject=actor|remote_agent with scope=conversation. The actor
       // should be able to use the skill only when the runtime context places
       // them inside conv A.

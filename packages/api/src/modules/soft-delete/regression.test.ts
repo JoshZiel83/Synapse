@@ -667,7 +667,11 @@ test(
         .where("id", "=", actorId)
         .where("deletedAt", "is", null)
         .executeTakeFirst()
-      assert.equal(actorLive, undefined, "workspace app root soft-deleted too")
+      assert.equal(
+        actorLive,
+        undefined,
+        "workspace resource root soft-deleted too"
+      )
       // deleteWorkspace is exported and importable (wired to the route)
       assert.equal(typeof deleteWorkspace, "function")
     })

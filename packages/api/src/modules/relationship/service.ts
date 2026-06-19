@@ -617,7 +617,7 @@ async function createActorAccessRequest(params: {
   actorId: string
   requesterWorkspaceMemberId: string
 }) {
-  const existing = await repo.selectPendingAppGrantRequest({
+  const existing = await repo.selectPendingResourceGrantRequest({
     workspaceId: params.workspaceId,
     workspaceResourceId: params.actorId,
     requesterWorkspaceMemberId: params.requesterWorkspaceMemberId,
@@ -650,7 +650,7 @@ async function createActorAccessRequest(params: {
     }
   } catch (error) {
     if (!isUniqueViolation(error)) throw error
-    const retry = await repo.selectPendingAppGrantRequest({
+    const retry = await repo.selectPendingResourceGrantRequest({
       workspaceId: params.workspaceId,
       workspaceResourceId: params.actorId,
       requesterWorkspaceMemberId: params.requesterWorkspaceMemberId,
@@ -668,7 +668,7 @@ async function createRemoteAgentAccessRequest(params: {
   remoteAgentId: string
   requesterWorkspaceMemberId: string
 }) {
-  const existing = await repo.selectPendingAppGrantRequest({
+  const existing = await repo.selectPendingResourceGrantRequest({
     workspaceId: params.workspaceId,
     workspaceResourceId: params.remoteAgentId,
     requesterWorkspaceMemberId: params.requesterWorkspaceMemberId,
@@ -701,7 +701,7 @@ async function createRemoteAgentAccessRequest(params: {
     }
   } catch (error) {
     if (!isUniqueViolation(error)) throw error
-    const retry = await repo.selectPendingAppGrantRequest({
+    const retry = await repo.selectPendingResourceGrantRequest({
       workspaceId: params.workspaceId,
       workspaceResourceId: params.remoteAgentId,
       requesterWorkspaceMemberId: params.requesterWorkspaceMemberId,
@@ -1001,7 +1001,7 @@ async function buildContactHubEntryMap(params: {
         }),
     viewerWorkspaceMember
       ? repo
-          .selectPendingAppGrantRequestIdsByKind({
+          .selectPendingResourceGrantRequestIdsByKind({
             workspaceId: params.workspaceId,
             requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
             kind: "actor",
@@ -1012,7 +1012,7 @@ async function buildContactHubEntryMap(params: {
       : Promise.resolve([] as { actorId: string | null }[]),
     viewerWorkspaceMember
       ? repo
-          .selectPendingAppGrantRequestIdsByKind({
+          .selectPendingResourceGrantRequestIdsByKind({
             workspaceId: params.workspaceId,
             requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
             kind: "remote_agent",
@@ -1519,7 +1519,7 @@ export async function searchRelationshipsByIdentity(params: {
 
     if (remoteAgent.workspace.id === params.workspaceId) {
       const pendingRemoteAgentRequest =
-        await repo.selectPendingRemoteAgentAppGrantRequestId({
+        await repo.selectPendingRemoteAgentResourceGrantRequestId({
           workspaceId: params.workspaceId,
           workspaceResourceId: remoteAgent.remoteAgentId,
           requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
@@ -1641,11 +1641,12 @@ export async function searchRelationshipsByIdentity(params: {
   )
 
   if (actor.workspace.id === params.workspaceId) {
-    const pendingActorRequest = await repo.selectPendingActorAppGrantRequestId({
-      workspaceId: params.workspaceId,
-      workspaceResourceId: actor.actorId,
-      requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
-    })
+    const pendingActorRequest =
+      await repo.selectPendingActorResourceGrantRequestId({
+        workspaceId: params.workspaceId,
+        workspaceResourceId: actor.actorId,
+        requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+      })
     const accessState = await getActorAccessState({
       workspaceId: params.workspaceId,
       userId: params.userId,
