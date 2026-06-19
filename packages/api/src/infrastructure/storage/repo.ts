@@ -1,3 +1,4 @@
+import { sql } from "kysely"
 import type { FileStorageBackend } from "@synapse/shared/types"
 import { db, type Executor, type TableInsert } from "../database/kysely.js"
 
@@ -63,18 +64,23 @@ export async function ensureContentBlob(
     durableConfirmedAt?: Date | null
   }
 ): Promise<void> {
-  // Every CURRENT caller writes synchronously-confirmed-durable bytes (local
-  // landed on disk, or an awaited successful remote PUT), so default to NOW for
-  // any backend. The deferred axis-B push path (plan §9.2) passes NULL explicitly
-  // and sets it after the durable PUT confirms.
-  const durableConfirmedAt = params.durableConfirmedAt ?? new Date()
   await executor
     .insertInto("contentBlobs")
     .values({
       sha256: params.sha256,
       sizeBytes: String(params.sizeBytes),
       backend: params.backend,
-      durableConfirmedAt,
+      // An OMITTED confirmation time means a synchronously-confirmed-durable
+      // write (local bytes landed on disk, or an awaited successful remote PUT),
+      // so stamp the DB eval time. We branch on `undefined`, NOT `??`: an EXPLICIT
+      // `null` is the deferred axis-B push path (plan §9.2) and must be PRESERVED
+      // as not-yet-durable — `??` would wrongly coerce that null to now.
+      // datetime-ok: a deliberate DB-eval-time ("now") default for a confirmed
+      // write; no external/ingested timestamp is silently dropped.
+      durableConfirmedAt:
+        params.durableConfirmedAt === undefined
+          ? sql<Date>`now()`
+          : params.durableConfirmedAt,
     })
     .onConflict((oc) => oc.column("sha256").doNothing())
     .execute()
