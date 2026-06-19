@@ -304,7 +304,7 @@ test(
           id: resourceId,
           workspaceId: workspaceId,
           kind: WORKSPACE_RESOURCE_KIND.INSTALLED_SKILL,
-          displayName: "skill app",
+          displayName: "installed skill",
           ownerSubjectId: memberSubject,
           createdBySubjectId: memberSubject,
           status: WORKSPACE_RESOURCE_STATUS.ACTIVE,
@@ -342,7 +342,7 @@ test(
 )
 
 test(
-  "workspace_resource_grant_requests only allow self workspace_member contact-visible requests for actor/remote_agent apps",
+  "workspace_resource_grant_requests only allow self workspace_member contact-visible requests for actor/remote_agent resources",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -367,7 +367,7 @@ test(
           id: resourceId,
           workspaceId: workspaceId,
           kind: WORKSPACE_RESOURCE_KIND.ACTOR,
-          displayName: "actor app",
+          displayName: "actor resource",
           createdBySubjectId: await memberSubjectFor(db, requesterMemberId),
           status: WORKSPACE_RESOURCE_STATUS.ACTIVE,
         } as any)
@@ -506,7 +506,7 @@ test(
           id: resourceId,
           workspaceId: workspaceId,
           kind: WORKSPACE_RESOURCE_KIND.ACTOR,
-          displayName: "actor app",
+          displayName: "actor resource",
           ownerSubjectId: approverSubject,
           createdBySubjectId: approverSubject,
           status: WORKSPACE_RESOURCE_STATUS.ACTIVE,
@@ -674,7 +674,7 @@ test(
           id: resourceId,
           workspaceId: workspaceA,
           kind: WORKSPACE_RESOURCE_KIND.PLUGIN_INSTALLATION,
-          displayName: "plugin app",
+          displayName: "plugin installation",
           createdBySubjectId: await creatorSubjectForWorkspace(db, workspaceA),
           status: WORKSPACE_RESOURCE_STATUS.ACTIVE,
         } as any)

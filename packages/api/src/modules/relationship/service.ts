@@ -754,14 +754,14 @@ async function hasWorkspaceResourceContactVisible(params: {
     params.userId
   )
   if (!viewer) return false
-  const app = await repo.selectWorkspaceResourceLiveOwnerKind(
+  const resource = await repo.selectWorkspaceResourceLiveOwnerKind(
     params.workspaceResourceId,
     params.workspaceId
   )
-  if (!app) return false
+  if (!resource) return false
   if (
-    (app.kind === "actor" || app.kind === "remote_agent") &&
-    app.ownerWorkspaceMemberId === viewer.workspaceMemberId
+    (resource.kind === "actor" || resource.kind === "remote_agent") &&
+    resource.ownerWorkspaceMemberId === viewer.workspaceMemberId
   ) {
     return true
   }

@@ -3256,7 +3256,7 @@ CREATE TABLE plugin_source_refs (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- ============ Workspace App Grants ============
+-- ============ Workspace Resource Grants ============
 CREATE TABLE workspace_resource_grants (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
@@ -3283,7 +3283,7 @@ CREATE UNIQUE INDEX uq_workspace_resource_grants_active
   WHERE status = 'active';
 CREATE INDEX idx_workspace_resource_grants_workspace
   ON workspace_resource_grants(workspace_id, created_at DESC);
-CREATE INDEX idx_workspace_resource_grants_app
+CREATE INDEX idx_workspace_resource_grants_resource
   ON workspace_resource_grants(workspace_resource_id, status, created_at DESC);
 CREATE INDEX idx_workspace_resource_grants_subject
   ON workspace_resource_grants(subject_id, status, created_at DESC);
@@ -3314,7 +3314,7 @@ CREATE UNIQUE INDEX uq_workspace_resource_grant_requests_pending
   WHERE status = 'pending';
 CREATE INDEX idx_workspace_resource_grant_requests_workspace
   ON workspace_resource_grant_requests(workspace_id, status, created_at DESC);
-CREATE INDEX idx_workspace_resource_grant_requests_app
+CREATE INDEX idx_workspace_resource_grant_requests_resource
   ON workspace_resource_grant_requests(workspace_resource_id, status, created_at DESC);
 CREATE INDEX idx_workspace_resource_grant_requests_requester
   ON workspace_resource_grant_requests(requester_workspace_member_id, status, created_at DESC);
@@ -4484,10 +4484,10 @@ AS $$
 DECLARE v_workspace_id UUID;
 BEGIN
   IF p_capability_id IS NULL THEN RETURN NULL; END IF;
-  SELECT app.workspace_id INTO v_workspace_id
-    FROM workspace_resources app
-    WHERE app.id = p_capability_id
-      AND app.kind = 'device_capability';
+  SELECT wr.workspace_id INTO v_workspace_id
+    FROM workspace_resources wr
+    WHERE wr.id = p_capability_id
+      AND wr.kind = 'device_capability';
   RETURN v_workspace_id;
 END;
 $$;
@@ -4644,8 +4644,8 @@ CREATE OR REPLACE FUNCTION validate_workspace_resource_grant() RETURNS trigger
 DECLARE
   v_subject_ws UUID;
   v_scope_ws UUID;
-  v_app_ws UUID;
-  v_app_kind workspace_resources_kind;
+  v_resource_ws UUID;
+  v_resource_kind workspace_resources_kind;
   v_subject_kind subject_kind;
   v_scope_kind subject_kind;
   v_creator_ws UUID;
@@ -4655,13 +4655,13 @@ BEGIN
     RAISE EXCEPTION 'workspace_resource_grants.permissions must be non-empty';
   END IF;
 
-  SELECT workspace_id, kind INTO v_app_ws, v_app_kind
+  SELECT workspace_id, kind INTO v_resource_ws, v_resource_kind
     FROM workspace_resources
    WHERE id = NEW.workspace_resource_id;
-  IF v_app_ws IS NULL OR v_app_ws IS DISTINCT FROM NEW.workspace_id THEN
+  IF v_resource_ws IS NULL OR v_resource_ws IS DISTINCT FROM NEW.workspace_id THEN
     RAISE EXCEPTION
       'workspace_resource_grants.workspace_resource_id % workspace % does not match grant workspace %',
-      NEW.workspace_resource_id, v_app_ws, NEW.workspace_id;
+      NEW.workspace_resource_id, v_resource_ws, NEW.workspace_id;
   END IF;
 
   IF NEW.created_by_workspace_member_id IS NOT NULL THEN
@@ -4707,8 +4707,8 @@ BEGIN
   END IF;
 
   IF 'use'::workspace_resource_grant_permission = ANY(NEW.permissions) THEN
-    IF v_app_kind NOT IN ('plugin_installation', 'installed_skill', 'device_capability', 'automation_event_source') THEN
-      RAISE EXCEPTION 'workspace_resource_grants.use is not allowed for resource kind=%', v_app_kind;
+    IF v_resource_kind NOT IN ('plugin_installation', 'installed_skill', 'device_capability', 'automation_event_source') THEN
+      RAISE EXCEPTION 'workspace_resource_grants.use is not allowed for resource kind=%', v_resource_kind;
     END IF;
     IF NEW.scope_subject_id IS NOT NULL THEN
       IF v_subject_kind NOT IN ('actor', 'remote_agent') OR v_scope_kind <> 'conversation' THEN
@@ -4729,9 +4729,9 @@ BEGIN
   END IF;
 
   IF 'contact_visible'::workspace_resource_grant_permission = ANY(NEW.permissions) THEN
-    IF v_app_kind NOT IN ('actor', 'remote_agent') THEN
+    IF v_resource_kind NOT IN ('actor', 'remote_agent') THEN
       RAISE EXCEPTION
-        'workspace_resource_grants.contact_visible is not allowed for resource kind=%', v_app_kind;
+        'workspace_resource_grants.contact_visible is not allowed for resource kind=%', v_resource_kind;
     END IF;
     IF NEW.scope_subject_id IS NOT NULL
        OR v_subject_kind NOT IN ('workspace', 'workspace_member') THEN
@@ -4755,8 +4755,8 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
   v_grantee_ws UUID;
-  v_app_ws UUID;
-  v_app_kind workspace_resources_kind;
+  v_resource_ws UUID;
+  v_resource_kind workspace_resources_kind;
   v_grantee_kind subject_kind;
   v_requester_ws UUID;
   v_resolver_ws UUID;
@@ -4769,17 +4769,17 @@ BEGIN
       'workspace_resource_grant_requests.requested_permissions must be exactly [contact_visible] in this phase';
   END IF;
 
-  SELECT workspace_id, kind INTO v_app_ws, v_app_kind
+  SELECT workspace_id, kind INTO v_resource_ws, v_resource_kind
     FROM workspace_resources
    WHERE id = NEW.workspace_resource_id;
-  IF v_app_ws IS NULL OR v_app_ws IS DISTINCT FROM NEW.workspace_id THEN
+  IF v_resource_ws IS NULL OR v_resource_ws IS DISTINCT FROM NEW.workspace_id THEN
     RAISE EXCEPTION
       'workspace_resource_grant_requests.workspace_resource_id % workspace % does not match request workspace %',
-      NEW.workspace_resource_id, v_app_ws, NEW.workspace_id;
+      NEW.workspace_resource_id, v_resource_ws, NEW.workspace_id;
   END IF;
-  IF v_app_kind NOT IN ('actor', 'remote_agent') THEN
+  IF v_resource_kind NOT IN ('actor', 'remote_agent') THEN
     RAISE EXCEPTION
-      'workspace_resource_grant_requests are only allowed for actor|remote_agent apps in this phase';
+      'workspace_resource_grant_requests are only allowed for actor|remote_agent resources in this phase';
   END IF;
 
   v_requester_ws := workspace_member_workspace_id(NEW.requester_workspace_member_id);
