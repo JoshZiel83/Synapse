@@ -4262,7 +4262,6 @@ export type PluginReuseScopeV2 =
   | "workspace"
   | "conversation"
   | "actor"
-export type ResourceAccessBindingResourceType = "automation_event_source"
 
 export interface CatalogPublisherRecord {
   id: string

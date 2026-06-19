@@ -1580,7 +1580,6 @@ async function createIntegrationAutomationEventSource(
       kind: WORKSPACE_RESOURCE_KIND.AUTOMATION_EVENT_SOURCE,
       displayName: eventSourceName,
       status: initialStatus,
-      ownerWorkspaceMemberId: creator.workspaceMemberId ?? null,
       ownerSubjectId,
       createdBySubjectId,
     })
@@ -1756,7 +1755,6 @@ export async function createAutomationEventSource(
       kind: WORKSPACE_RESOURCE_KIND.AUTOMATION_EVENT_SOURCE,
       displayName: sourceName,
       status: initialStatus,
-      ownerWorkspaceMemberId: creator.workspaceMemberId ?? null,
       ownerSubjectId,
       createdBySubjectId,
     })

@@ -528,11 +528,11 @@ test(
       const { workspaceId, ownerMemberId, guestMemberId } =
         await seedOwnerMemberAndGuest(db)
       const skillId = await insertInstalledSkill(db, workspaceId, ownerMemberId)
-      await insertBinding(db, {
+      await insertResourceGrant(db, {
         workspaceId,
         resourceType: "installed_skill",
         resourceId: skillId,
-        target: workspaceTarget(workspaceId),
+        target: workspaceSubjectTarget(workspaceId),
       })
       const ok = await checkPermission(db, {
         resourceType: "installed_skill",
@@ -558,11 +558,11 @@ test(
         installedByMemberId: ownerMemberId,
         attachmentScopeSkillId: skillId,
       })
-      await insertBinding(db, {
+      await insertResourceGrant(db, {
         workspaceId,
         resourceType: "plugin_installation",
         resourceId: installationId,
-        target: workspaceTarget(workspaceId),
+        target: workspaceSubjectTarget(workspaceId),
       })
       const guestOk = await checkPermission(db, {
         resourceType: "plugin_installation",
@@ -843,11 +843,11 @@ test(
         await seedOwnerMemberAndGuest(db)
       const owned = await insertInstalledSkill(db, workspaceId, guestMemberId)
       const granted = await insertInstalledSkill(db, workspaceId, ownerMemberId)
-      await insertBinding(db, {
+      await insertResourceGrant(db, {
         workspaceId,
         resourceType: "installed_skill",
         resourceId: granted,
-        target: workspaceTarget(workspaceId),
+        target: workspaceSubjectTarget(workspaceId),
       })
       const ids = await lookupResources(db, {
         resourceType: "installed_skill",
@@ -887,11 +887,11 @@ test(
         installedByMemberId: ownerMemberId,
         attachmentScopeSkillId: skillForOwner,
       })
-      await insertBinding(db, {
+      await insertResourceGrant(db, {
         workspaceId,
         resourceType: "plugin_installation",
         resourceId: granted,
-        target: workspaceTarget(workspaceId),
+        target: workspaceSubjectTarget(workspaceId),
       })
       const ids = await lookupResources(db, {
         resourceType: "plugin_installation",
@@ -1012,11 +1012,11 @@ test(
       // Post-fold this is an ordinary workspace_resource_grants row (the
       // resource_access_bindings registry was deleted), and the source must
       // still be enumerable to any workspace member for permission=use.
-      await insertBinding(db, {
+      await insertResourceGrant(db, {
         workspaceId,
         resourceType: "automation_event_source",
         resourceId: eventSourceId,
-        target: workspaceTarget(workspaceId),
+        target: workspaceSubjectTarget(workspaceId),
       })
       const ids = await lookupResources(db, {
         resourceType: "automation_event_source",
@@ -1673,7 +1673,7 @@ async function insertModelGroup(
   return row.id as string
 }
 
-async function insertBinding(
+async function insertResourceGrant(
   db: AnyDb,
   params: {
     workspaceId: string
@@ -1686,7 +1686,7 @@ async function insertBinding(
       | "remote_agent"
     resourceId: string
     target: {
-      targetType: "workspace" | "workspace_member" | "actor"
+      subjectKind: "workspace" | "workspace_member" | "actor"
       subjectWorkspaceId: string | null
       subjectWorkspaceMemberId?: string | null
       subjectActorId?: string | null
@@ -1700,12 +1700,12 @@ async function insertBinding(
   // contact_visible grant; everything else (skill / plugin / device_capability /
   // automation_event_source) takes a use grant.
   const subject =
-    params.target.targetType === "workspace"
+    params.target.subjectKind === "workspace"
       ? {
           kind: SUBJECT_KIND.WORKSPACE,
           workspaceId: params.target.subjectWorkspaceId!,
         }
-      : params.target.targetType === "workspace_member"
+      : params.target.subjectKind === "workspace_member"
         ? {
             kind: SUBJECT_KIND.WORKSPACE_MEMBER,
             memberId: params.target.subjectWorkspaceMemberId!,
@@ -1727,9 +1727,9 @@ async function insertBinding(
   })
 }
 
-function workspaceTarget(workspaceId: string) {
+function workspaceSubjectTarget(workspaceId: string) {
   return {
-    targetType: "workspace" as const,
+    subjectKind: "workspace" as const,
     subjectWorkspaceId: workspaceId,
     subjectWorkspaceMemberId: null,
     subjectActorId: null,

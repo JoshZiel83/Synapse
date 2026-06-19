@@ -2071,8 +2071,32 @@ export async function softDeleteAutomationRule(
  * sentinel, etc.) and the repo runs it on the given executor (defaulting to the
  * pool). Keeps the table client in the repo without re-typing every column.
  */
+/**
+ * The closed set of columns the service may write to the automation_event_sources
+ * DETAIL table. After the workspace_resource authz fold, display_name / status /
+ * deleted_at / created_by_* live on the workspace_resources ROOT — they are NOT
+ * on this detail table. Typing the write bag (rather than `Record<string,unknown>`)
+ * makes any future attempt to write a root/dropped column a COMPILE error instead
+ * of the runtime crash that was the fold's headline blocker. JSONB columns
+ * (payloadSchema/examplePayload/metadata) arrive already JSON-stringified.
+ */
+export type AutomationEventSourceDetailWrite = {
+  id?: string
+  workspaceId?: string
+  providerKind?: string
+  providerRef?: string | null
+  webhookEndpointId?: string | null
+  integrationBindingId?: string | null
+  sourceKey?: string
+  description?: string
+  recommendedUsage?: string
+  payloadSchema?: string
+  examplePayload?: string
+  metadata?: string
+}
+
 export async function insertAutomationEventSourceRow(
-  values: Record<string, unknown>,
+  values: AutomationEventSourceDetailWrite,
   run: Executor = db
 ) {
   await run
@@ -2083,14 +2107,17 @@ export async function insertAutomationEventSourceRow(
 
 /**
  * Update an existing event source row (used by reuse + update flows). `values`
- * is the already-encoded set-bag built by the service.
+ * is the already-encoded detail set-bag built by the service.
  */
-export async function updateAutomationEventSourceRow(params: {
-  workspaceId: string
-  eventSourceId: string
-  values: Record<string, unknown>
-}) {
-  await db
+export async function updateAutomationEventSourceRow(
+  params: {
+    workspaceId: string
+    eventSourceId: string
+    values: AutomationEventSourceDetailWrite
+  },
+  run: Executor = db
+) {
+  await run
     .updateTable("automationEventSources")
     .set(params.values as never)
     .where("workspaceId", "=", params.workspaceId)
@@ -2563,11 +2590,20 @@ export async function loadAutomationEventSourceAccessGrantRows(
   return rows as unknown as AutomationEventSourceGrantJoinedRow[]
 }
 
-/** Revoke an automation event-source access grant (pool-bound). */
-export async function revokeAutomationEventSourceAccessGrantById(input: {
-  grantId: string
-}): Promise<boolean> {
-  const updated = await db
+/**
+ * Revoke an automation event-source access grant. Flips the single active row to
+ * `revoked` and returns whether a row was actually flipped — the `status='active'`
+ * predicate makes a second call a no-op (returns false), i.e. the revoke is
+ * idempotent. Defaults to the pool-bound `db`; a transaction executor can be
+ * injected for tests.
+ */
+export async function revokeAutomationEventSourceAccessGrantById(
+  input: {
+    grantId: string
+  },
+  run: Executor = db
+): Promise<boolean> {
+  const updated = await run
     .updateTable("workspaceResourceGrants")
     .set({ status: "revoked", revokedAt: sql`NOW()` })
     .where("id", "=", input.grantId)

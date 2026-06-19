@@ -1,9 +1,6 @@
-import type { CapabilityAccessTarget } from "@synapse/shared/types"
 import {
   SUBJECT_KIND,
-  isScopeEligibleSubject,
   remoteAgentRef,
-  subjectScopeLabel,
   type ScopedSubjectTarget,
   type SubjectRef,
 } from "@synapse/shared"
@@ -39,33 +36,6 @@ export type AutomationEventSourceGrantJoinedRow =
  * there is no `targetType` / legacy `type` field any more.
  */
 export type AutomationEventSourceGrantTarget = ScopedSubjectTarget
-
-/**
- * D3: an AutomationEventSourceGrantTarget IS a SubjectRef-bearing object — extracting the
- * principal SubjectRef is a field read.
- */
-export function accessGrantTargetToSubjectRef(
-  target: AutomationEventSourceGrantTarget
-): SubjectRef {
-  return target.subject
-}
-
-/**
- * Extract the optional scope SubjectRef from a ScopedSubjectTarget. Validates
- * the scope kind so writers fail fast at the resolver boundary rather than at
- * the DB trigger.
- */
-export function accessGrantTargetScopeRef(
-  target: AutomationEventSourceGrantTarget
-): SubjectRef | undefined {
-  if (!target.scope) return undefined
-  if (!isScopeEligibleSubject(target.scope)) {
-    throw new Error(
-      `scope_subject_id must be workspace | conversation, got ${target.scope.kind}`
-    )
-  }
-  return target.scope
-}
 
 export function readAutomationEventSourceAccessGrantTarget(row: {
   subjectKind?: string | null
@@ -158,85 +128,3 @@ function scopeSubjectRefFromRow(row: {
       )
   }
 }
-
-/**
- * D3: matcher used by callers that have a decoded `CapabilityAccessTarget`
- * (always `{subject, scope?}`) and need to check whether it covers the current
- * runtime (workspace, conversation, actor, workspace_member, remote_agent)
- * context.
- */
-export function capabilityTargetMatchesContext(
-  target: CapabilityAccessTarget,
-  context: {
-    grantOwnerWorkspaceId: string
-    contextWorkspaceId: string
-    actorId?: string | null
-    conversationId?: string | null
-    workspaceMemberId?: string | null
-    remoteAgentId?: string | null
-  }
-): boolean {
-  if (!subjectInContext(target.subject, context)) return false
-  if (!target.scope) return true
-  return scopeInContext(target.scope, context)
-}
-
-function subjectInContext(
-  subject: SubjectRef,
-  context: {
-    grantOwnerWorkspaceId: string
-    contextWorkspaceId: string
-    actorId?: string | null
-    conversationId?: string | null
-    workspaceMemberId?: string | null
-    remoteAgentId?: string | null
-  }
-): boolean {
-  switch (subject.kind) {
-    case SUBJECT_KIND.WORKSPACE:
-      return context.contextWorkspaceId === context.grantOwnerWorkspaceId
-    case SUBJECT_KIND.WORKSPACE_MEMBER:
-      return (
-        !!context.workspaceMemberId &&
-        subject.memberId === context.workspaceMemberId
-      )
-    case SUBJECT_KIND.ACTOR:
-      return !!context.actorId && subject.actorId === context.actorId
-    case SUBJECT_KIND.REMOTE_AGENT:
-      return (
-        !!context.remoteAgentId &&
-        subject.remoteAgentId === context.remoteAgentId
-      )
-    case SUBJECT_KIND.CONVERSATION:
-      return (
-        !!context.conversationId &&
-        subject.conversationId === context.conversationId
-      )
-    default:
-      return false
-  }
-}
-
-function scopeInContext(
-  scope: SubjectRef,
-  context: {
-    contextWorkspaceId: string
-    grantOwnerWorkspaceId: string
-    conversationId?: string | null
-  }
-): boolean {
-  switch (scope.kind) {
-    case SUBJECT_KIND.WORKSPACE:
-      return scope.workspaceId === context.contextWorkspaceId
-    case SUBJECT_KIND.CONVERSATION:
-      return (
-        !!context.conversationId &&
-        scope.conversationId === context.conversationId
-      )
-    default:
-      return false
-  }
-}
-
-// Re-export the helper for callers that want the legacy display label.
-export { subjectScopeLabel }
