@@ -216,7 +216,12 @@ async function main() {
   })
 
   // Plugins
-  await app.register(cors, { origin: true, credentials: true })
+  await app.register(cors, {
+    origin: true,
+    credentials: true,
+    // Let cross-origin JS read the trace-id headers (same-origin can already).
+    exposedHeaders: ["server-timing", "traceresponse"],
+  })
   await app.register(cookie)
   await app.register(websocket)
   await app.register(multipart, { limits: { fileSize: 25 * 1024 * 1024 } })

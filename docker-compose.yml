@@ -127,6 +127,9 @@ services:
       # Device log-ingest token secret (POST /api/v1/logs device-bearer path).
       # Empty => device log回传 disabled (browser/mobile session path still works).
       SYNAPSE_LOG_INGEST_SECRET: ${SYNAPSE_LOG_INGEST_SECRET:-}
+      # Expose the OTel trace_id to clients in response headers (Server-Timing
+      # trace;desc + W3C traceresponse). off | errors (default, 5xx only) | on.
+      SYNAPSE_SERVER_TIMING_TRACE: ${SYNAPSE_SERVER_TIMING_TRACE:-errors}
     ports:
       - "127.0.0.1:3001:3001"
     extra_hosts:

@@ -1,17 +1,23 @@
-// Server-Timing response header (W3C Server Timing, Working Draft).
+// Trace-id response exposure + Server-Timing.
 //
-// Pushes per-request server timing into the browser's PerformanceObserver / RUM
-// (`performance.getEntriesByType('navigation')[0].serverTiming`), and OPTIONALLY
-// exposes the active OTel trace_id so a client/operator can jump from a request
-// straight to its trace in Tempo.
+// Always pushes per-request server timing into the browser's PerformanceObserver
+// / RUM (`performance.getEntriesByType('navigation')[0].serverTiming`,
+// `Server-Timing` — W3C Server Timing WD). When trace exposure is enabled it
+// also surfaces the active OTel trace_id to the client in TWO complementary ways
+// so a client/operator can jump straight to the trace in Tempo:
+//   - `Server-Timing: trace;desc="<trace_id>"` — read via the RUM/Performance API.
+//   - `traceresponse: 00-<trace-id>-<span-id>-<flags>` — the W3C Trace Context
+//     Level 2 standard response header (the response-side analogue of
+//     `traceparent`).
 //
 // trace_id is an internal correlation id; exposing it to every client is a small
 // information-disclosure surface (and meaningless for unsampled requests), so it
-// is GATED via env — default = only on 5xx, where it is most useful for triage:
+// is GATED via env — default = only on 5xx, where it is most useful for triage.
+// This deployment sets it to `on` (see .env) to expose on every response:
 //   SYNAPSE_SERVER_TIMING_TRACE = off | errors (default) | on
 //
-// We append to (never clobber) any upstream Server-Timing, and only set the
-// header when there is something to report.
+// We append to (never clobber) any upstream Server-Timing, and only set headers
+// when there is something to report.
 import fp from "fastify-plugin"
 import type { FastifyInstance } from "fastify"
 import { isSpanContextValid, trace } from "@opentelemetry/api"
@@ -40,7 +46,14 @@ export default fp(
       if (exposeTrace) {
         const sc = trace.getActiveSpan()?.spanContext()
         if (sc && isSpanContextValid(sc)) {
+          // RUM-readable trace id.
           parts.push(`trace;desc="${sc.traceId}"`)
+          // W3C Trace Context Level 2 `traceresponse`: 00-<trace>-<span>-<flags>.
+          const flags = sc.traceFlags.toString(16).padStart(2, "0")
+          reply.header(
+            "traceresponse",
+            `00-${sc.traceId}-${sc.spanId}-${flags}`
+          )
         }
       }
 
