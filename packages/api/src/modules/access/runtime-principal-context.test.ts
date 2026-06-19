@@ -75,6 +75,33 @@ async function newWorkspaceMember(
   return row.id as string
 }
 
+async function creatorSubjectIdFor(
+  db: Kysely<any>,
+  workspaceId: string
+): Promise<string> {
+  const user = await db
+    .insertInto("users")
+    .values({
+      email: `${rid()}@runtime-principal`,
+      name: "creator",
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const member = await db
+    .insertInto("workspace_members")
+    .values({
+      workspace_id: workspaceId,
+      user_id: user.id as string,
+      trust_level: "member",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return upsertAccessSubject(db as any, {
+    kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+    memberId: member.id as string,
+  })
+}
+
 async function newActor(
   db: Kysely<any>,
   workspaceId: string,
@@ -82,13 +109,14 @@ async function newActor(
 ): Promise<string> {
   const actorId = crypto.randomUUID()
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspace_resources")
     .values({
       id: actorId,
       workspace_id: workspaceId,
       kind: "actor",
       display_name: `${NS} actor`,
       status: "active",
+      created_by_subject_id: await creatorSubjectIdFor(db, workspaceId),
     } as any)
     .execute()
   const row = await db

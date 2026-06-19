@@ -8,8 +8,8 @@
 //
 // TRANSACTION ATOMICITY: the four write flows (create / update / delete /
 // install) each wrap multiple INSERT/UPDATE statements together with the
-// cross-module workspace-apps storage calls (insertWorkspaceAppRoot,
-// insertWorkspaceAppGrant, updateWorkspaceAppRoot) in a single
+// cross-module workspace-resources storage calls (insertWorkspaceResourceRoot,
+// insertWorkspaceResourceGrant, updateWorkspaceResourceRoot) in a single
 // withDbTransaction. Those whole transactions live here as *Tx functions so the
 // db client never leaks into the service; the service passes in already-computed
 // inputs (deltas, normalized docs, etc.).
@@ -33,7 +33,7 @@ import {
   type CanonicalContentBlockInput,
   type CapabilityAccessTarget,
   type UUID,
-  type WorkspaceAppGrantPermission,
+  type WorkspaceResourceGrantPermission,
 } from "@synapse/shared"
 import {
   ActorVersionDeltaSchema,
@@ -45,10 +45,10 @@ import {
   type Executor,
 } from "../../infrastructure/database/kysely.js"
 import {
-  insertWorkspaceAppRoot,
-  updateWorkspaceAppRoot,
-} from "../workspace-apps/repo.js"
-import { insertWorkspaceAppGrant } from "../workspace-apps/grant-storage.js"
+  insertWorkspaceResourceRoot,
+  updateWorkspaceResourceRoot,
+} from "../workspace-resources/repo.js"
+import { insertWorkspaceResourceGrant } from "../workspace-resources/grant-storage.js"
 import { listAuthorizedResourceIdsDefault } from "../access/guards.js"
 import type { AccessSubject } from "../access/service.js"
 import type {
@@ -86,8 +86,8 @@ export type ActorDocPersistInput = {
 const ACTOR_SELECT = `
   SELECT
     a.id,
-    app.workspace_id,
-    app.display_name,
+    resource.workspace_id,
+    resource.display_name,
     a.role,
     a.title,
     a.avatar_file_id,
@@ -97,7 +97,7 @@ const ACTOR_SELECT = `
     a.specialties,
     a.config,
     a.current_version,
-    (app.status = 'active') AS "isActive",
+    (resource.status = 'active') AS "isActive",
     a.is_public_shared,
     a.created_at,
     a.updated_at,
@@ -116,8 +116,8 @@ const ACTOR_SELECT = `
     imported_version.version AS "sourceImportedVersion",
     latest_version.version AS "sourceLatestVersion"
   FROM actors a
-  JOIN workspace_apps_live app
-    ON app.id = a.id
+  JOIN workspace_resources_live resource
+    ON resource.id = a.id
   JOIN actor_versions current_version
     ON current_version.actor_id = a.id
    AND current_version.version = a.current_version
@@ -349,11 +349,11 @@ async function ensureParentActor(
   const parent = await runner<{ id: string }>(
     `SELECT actor.id
      FROM actors actor
-     INNER JOIN workspace_apps_live app
-       ON app.id = actor.id
+     INNER JOIN workspace_resources_live resource
+       ON resource.id = actor.id
      WHERE actor.id = $1
-       AND app.workspace_id = $2
-       AND app.deleted_at IS NULL
+       AND resource.workspace_id = $2
+       AND resource.deleted_at IS NULL
      LIMIT 1`,
     [parentId, workspaceId]
   )
@@ -434,8 +434,8 @@ export async function getActorRowsByIds(
 
   const result = await runnerFor(executor)<ActorRow>(
     `${ACTOR_SELECT}
-     WHERE app.workspace_id = $1
-       AND app.deleted_at IS NULL
+     WHERE resource.workspace_id = $1
+       AND resource.deleted_at IS NULL
        AND a.id = ANY($2::uuid[])
      ORDER BY a.created_at DESC`,
     [workspaceId, actorIds]
@@ -452,8 +452,8 @@ export async function getActorRow(
 ): Promise<ActorRow | null> {
   const result = await runnerFor(executor)<ActorRow>(
     `${ACTOR_SELECT}
-     WHERE app.workspace_id = $1
-       AND app.deleted_at IS NULL
+     WHERE resource.workspace_id = $1
+       AND resource.deleted_at IS NULL
        AND a.id = $2
      LIMIT 1`,
     [workspaceId, actorId]
@@ -470,11 +470,11 @@ export async function actorExists(
   const result = await runnerFor(executor)<{ id: string }>(
     `SELECT actor.id
      FROM actors actor
-     INNER JOIN workspace_apps_live app
-       ON app.id = actor.id
+     INNER JOIN workspace_resources_live resource
+       ON resource.id = actor.id
      WHERE actor.id = $1
-       AND app.workspace_id = $2
-       AND app.deleted_at IS NULL
+       AND resource.workspace_id = $2
+       AND resource.deleted_at IS NULL
      LIMIT 1`,
     [actorId, workspaceId]
   )
@@ -596,13 +596,13 @@ async function insertActorVersionDoc(
 
 export type ActorGrantInput = {
   target: CapabilityAccessTarget
-  permissions: WorkspaceAppGrantPermission[]
+  permissions: WorkspaceResourceGrantPermission[]
   conversationTypeMaskOverride?: number | null
   reason?: string
 }
 
 /**
- * Create an actor end-to-end in ONE transaction: workspace-apps root row, the
+ * Create an actor end-to-end in ONE transaction: workspace-resources root row, the
  * actors detail row, grants, the v1 actor_version, and its docs. The parent
  * guard runs first (and aborts the tx on failure). Returns the new actor id.
  */
@@ -631,7 +631,7 @@ export async function createActorTx(input: {
     )
 
     const actorId = crypto.randomUUID()
-    await insertWorkspaceAppRoot(trx, {
+    await insertWorkspaceResourceRoot(trx, {
       id: actorId,
       workspaceId: input.workspaceId,
       kind: "actor",
@@ -669,9 +669,9 @@ export async function createActorTx(input: {
     const insertedActorId = actorResult.rows[0]!.id
 
     for (const grant of input.grants || []) {
-      await insertWorkspaceAppGrant(trx, {
+      await insertWorkspaceResourceGrant(trx, {
         workspaceId: input.workspaceId,
-        workspaceAppId: insertedActorId,
+        workspaceResourceId: insertedActorId,
         target: grant.target,
         permissions: grant.permissions,
         conversationTypeMaskOverride:
@@ -727,7 +727,7 @@ export async function createActorTx(input: {
 /**
  * Apply an avatar-only change (no new version) OUTSIDE a transaction, matching
  * the service's pre-existing fast path: a single UPDATE on actors guarded by
- * workspace membership + soft-delete, followed by a workspace-apps root
+ * workspace membership + soft-delete, followed by a workspace-resources root
  * display-name sync. Both run on the singleton db (non-transactional), exactly
  * as before.
  */
@@ -745,14 +745,14 @@ export async function updateActorAvatar(input: {
      WHERE id = $1
        AND EXISTS (
          SELECT 1
-         FROM workspace_apps_live app
-         WHERE app.id = actors.id
-           AND app.workspace_id = $4
-           AND app.deleted_at IS NULL
+         FROM workspace_resources_live resource
+         WHERE resource.id = actors.id
+           AND resource.workspace_id = $4
+           AND resource.deleted_at IS NULL
        )`,
     [input.actorId, input.avatarFileId, input.avatarEmoji, input.workspaceId]
   )
-  await updateWorkspaceAppRoot(db, {
+  await updateWorkspaceResourceRoot(db, {
     id: input.actorId,
     displayName: input.displayName,
   })
@@ -761,7 +761,7 @@ export async function updateActorAvatar(input: {
 /**
  * Persist a full actor update in ONE transaction: a new actor_version (with its
  * version_delta), its docs, the actors detail UPDATE (guarded by workspace +
- * soft-delete), and the workspace-apps root display-name sync. The parent guard
+ * soft-delete), and the workspace-resources root display-name sync. The parent guard
  * runs first and aborts the tx on failure. The delta is pre-computed by the
  * service and serialized here.
  */
@@ -867,10 +867,10 @@ export async function updateActorTx(input: {
        WHERE id = $1
          AND EXISTS (
            SELECT 1
-           FROM workspace_apps_live app
-           WHERE app.id = actors.id
-             AND app.workspace_id = $11
-             AND app.deleted_at IS NULL
+           FROM workspace_resources_live resource
+           WHERE resource.id = actors.id
+             AND resource.workspace_id = $11
+             AND resource.deleted_at IS NULL
          )`,
       [
         input.actorId,
@@ -886,7 +886,7 @@ export async function updateActorTx(input: {
         input.workspaceId,
       ]
     )
-    await updateWorkspaceAppRoot(trx, {
+    await updateWorkspaceResourceRoot(trx, {
       id: input.actorId,
       displayName: input.displayName,
     })
@@ -895,7 +895,7 @@ export async function updateActorTx(input: {
 
 /**
  * Soft-delete an actor in ONE transaction: confirm it exists (in workspace, not
- * deleted) then archive the workspace-apps root row (status archived + deletedAt
+ * deleted) then archive the workspace-resources root row (status archived + deletedAt
  * stamp). The actors detail row stays until purge. Returns whether it was found.
  */
 export async function deleteActorTx(
@@ -907,11 +907,11 @@ export async function deleteActorTx(
     const existing = await runner<{ id: string }>(
       `SELECT actor.id
        FROM actors actor
-       INNER JOIN workspace_apps_live app
-         ON app.id = actor.id
+       INNER JOIN workspace_resources_live resource
+         ON resource.id = actor.id
        WHERE actor.id = $1
-         AND app.workspace_id = $2
-         AND app.deleted_at IS NULL
+         AND resource.workspace_id = $2
+         AND resource.deleted_at IS NULL
        LIMIT 1`,
       [actorId, workspaceId]
     )
@@ -919,8 +919,8 @@ export async function deleteActorTx(
       return { deleted: false }
     }
 
-    // Root lifecycle lives on workspace_apps. The detail row stays until purge.
-    await updateWorkspaceAppRoot(trx, {
+    // Root lifecycle lives on workspace_resources. The detail row stays until purge.
+    await updateWorkspaceResourceRoot(trx, {
       id: actorId,
       status: "archived",
       deletedAt: new Date(),
@@ -931,7 +931,7 @@ export async function deleteActorTx(
 }
 
 /**
- * Install an actor-template package in ONE transaction: workspace-apps root row,
+ * Install an actor-template package in ONE transaction: workspace-resources root row,
  * the actors detail row, grants, the v1 actor_version + docs, the source ref,
  * and the catalog download-count increment. The parent guard runs first and
  * aborts the tx on failure. Returns the new actor id.
@@ -964,7 +964,7 @@ export async function installActorPackageTx(input: {
     )
 
     const actorId = crypto.randomUUID()
-    await insertWorkspaceAppRoot(trx, {
+    await insertWorkspaceResourceRoot(trx, {
       id: actorId,
       workspaceId: input.workspaceId,
       kind: "actor",
@@ -1002,9 +1002,9 @@ export async function installActorPackageTx(input: {
     const insertedActorId = actorResult.rows[0]!.id
 
     for (const grant of input.grants || []) {
-      await insertWorkspaceAppGrant(trx, {
+      await insertWorkspaceResourceGrant(trx, {
         workspaceId: input.workspaceId,
-        workspaceAppId: insertedActorId,
+        workspaceResourceId: insertedActorId,
         target: grant.target,
         permissions: grant.permissions,
         conversationTypeMaskOverride:

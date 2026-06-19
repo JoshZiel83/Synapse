@@ -497,19 +497,32 @@ test(
   }
 )
 
+async function creatorSubjectIdFor(
+  db: import("kysely").Kysely<any>,
+  workspaceId: string
+): Promise<string> {
+  const userId = await insertUser(db, "creator@example.test")
+  const memberId = await insertWorkspaceMember(db, workspaceId, userId)
+  return upsertAccessSubject(db as any, {
+    kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+    memberId,
+  })
+}
+
 async function insertRemoteAgent(
   db: import("kysely").Kysely<any>,
   workspaceId: string
 ): Promise<string> {
   const remoteAgentId = crypto.randomUUID()
   await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id: remoteAgentId,
       workspaceId: workspaceId,
       kind: "remote_agent",
       displayName: "test agent",
       status: "active",
+      createdBySubjectId: await creatorSubjectIdFor(db, workspaceId),
     } as any)
     .execute()
   const row = await db
@@ -576,13 +589,14 @@ async function insertActor(
 ): Promise<string> {
   const actorId = crypto.randomUUID()
   await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id: actorId,
       workspaceId: workspaceId,
       kind: "actor",
       displayName: "test actor",
       status: "active",
+      createdBySubjectId: await creatorSubjectIdFor(db, workspaceId),
     } as any)
     .execute()
   const row = await db

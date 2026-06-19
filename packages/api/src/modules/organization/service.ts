@@ -26,7 +26,7 @@ import {
   type ActorVersionDocChange,
   type ActorUpdateSourceType,
   type UUID,
-  type WorkspaceAppGrantPermission,
+  type WorkspaceResourceGrantPermission,
 } from "@synapse/shared"
 import { createConversationEvent } from "../chat/event-write.js"
 import { presentActorPackageRecord, presentActorRow } from "./presenter.js"
@@ -412,7 +412,7 @@ export async function createActor(input: {
   config?: Record<string, unknown>
   grants?: Array<{
     target: CapabilityAccessTarget
-    permissions: WorkspaceAppGrantPermission[]
+    permissions: WorkspaceResourceGrantPermission[]
     conversationTypeMaskOverride?: number | null
     reason?: string
   }>
@@ -600,7 +600,7 @@ export async function installActorPackage(input: {
   syncMode?: ActorPackageSyncMode
   grants?: Array<{
     target: CapabilityAccessTarget
-    permissions: WorkspaceAppGrantPermission[]
+    permissions: WorkspaceResourceGrantPermission[]
     conversationTypeMaskOverride?: number | null
     reason?: string
   }>

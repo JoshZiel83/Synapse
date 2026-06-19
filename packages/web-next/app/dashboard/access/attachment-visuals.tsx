@@ -911,7 +911,7 @@ export function AccessAttachmentScopeStep({
   )
 }
 
-export function WorkspaceAppGrantScopeStep({
+export function WorkspaceResourceGrantScopeStep({
   value,
   onChange,
   allowedScopes,

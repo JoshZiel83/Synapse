@@ -46,7 +46,7 @@ import { parseJsonBodyWithRawCapture } from "./infrastructure/http/json-body-par
 // Module imports
 import authModule from "./modules/auth/index.js"
 import workspaceModule from "./modules/workspace/index.js"
-import workspaceAppsModule from "./modules/workspace-apps/index.js"
+import workspaceResourcesModule from "./modules/workspace-resources/index.js"
 import organizationModule from "./modules/organization/index.js"
 import skillsModule from "./modules/skills/index.js"
 import chatModule from "./modules/chat/index.js"
@@ -267,7 +267,7 @@ async function main() {
   // Register modules
   await app.register(authModule)
   await app.register(workspaceModule)
-  await app.register(workspaceAppsModule)
+  await app.register(workspaceResourcesModule)
   await app.register(organizationModule)
   await app.register(skillsModule)
   await app.register(chatModule)

@@ -60,14 +60,23 @@ async function seed(db: Kysely<any>) {
     .values({ owner_id: user.id, slug: `ws-${rid()}`, name: `${NS} ws` })
     .returning("id")
     .executeTakeFirstOrThrow()
+  // workspace_resources.created_by_subject_id is NOT NULL; mint a workspace-kind creator subject.
+  const createdBySubjectId = (
+    await db
+      .insertInto("access_subjects")
+      .values({ kind: "workspace", workspace_id: ws.id } as any)
+      .returning("id")
+      .executeTakeFirstOrThrow()
+  ).id as string
   const actorRoot = await db
-    .insertInto("workspace_apps")
+    .insertInto("workspace_resources")
     .values({
       id: crypto.randomUUID(),
       workspace_id: ws.id,
       kind: "actor",
       display_name: `a-${rid()}`,
       status: "active",
+      created_by_subject_id: createdBySubjectId,
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()

@@ -1,7 +1,7 @@
 import { FILE_ORIGIN_SYSTEMS } from "@synapse/shared/constants"
 import {
-  WORKSPACE_APP_GRANT_PERMISSION,
-  WORKSPACE_APP_KIND,
+  WORKSPACE_RESOURCE_GRANT_PERMISSION,
+  WORKSPACE_RESOURCE_KIND,
 } from "@synapse/shared"
 import type {
   DeviceListView,
@@ -84,7 +84,7 @@ import type {
   FriendRequestListResponse,
   WorkspaceChiefActorPreference,
   WorkspaceListView,
-  WorkspaceAppGrant,
+  WorkspaceResourceGrant,
   WorkspaceCapabilityConversationTypePoliciesView,
   UpdateMeInput,
   UpdateMemberRelationshipProfileInput,
@@ -94,7 +94,7 @@ import type {
   UpdateRemoteAgentGroupTaskGrantsInput,
   StartPluginAuthInput,
   TrustLevel,
-  WorkspaceAppSuccessViewSchemaType,
+  WorkspaceResourceSuccessViewSchemaType,
 } from "@synapse/shared"
 import {
   normalizeConversationCatalogEntry,
@@ -125,7 +125,7 @@ import type {
   ActorVersionListView,
   CreateManualRuntimeAuthorizationGrantInput,
   CreateMemoryInputBody,
-  CreateWorkspaceAppInput,
+  CreateWorkspaceResourceInput,
   CreateWorkspaceInviteInput,
   DingtalkDeviceFlowStartInput,
   DingtalkDeviceFlowStartResponseSchemaType,
@@ -161,7 +161,7 @@ import type {
   PluginCategoryListView,
   PluginInstallationDetailView,
   PluginInstallationListView,
-  ReplaceWorkspaceAppGrantsInput,
+  ReplaceWorkspaceResourceGrantsInput,
   RemoteAgentGroupTaskGrantsResponseSchemaType,
   RemoteAgentListResponseSchemaType,
   RemoteAgentMachineListResponseSchemaType,
@@ -197,16 +197,16 @@ import type {
   WeixinQrSessionResponseSchemaType,
   UpdateMemoryInputBody,
   WorkspaceAccessGrantInput,
-  WorkspaceAppGrantListViewSchemaType,
+  WorkspaceResourceGrantListViewSchemaType,
   WorkspaceCapabilityConversationTypePolicyUpdateInput,
   WorkspaceChiefActorPreferenceInput,
   WorkspaceCreateInput,
-  UpdateWorkspaceAppInput,
+  UpdateWorkspaceResourceInput,
 } from "@synapse/shared/schemas"
 import {
   StoredFileRecordViewSchema,
   type StoredFileRecordView,
-  WorkspaceAppGrantEntrySchema,
+  WorkspaceResourceGrantEntrySchema,
 } from "@synapse/shared/schemas"
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api/v1"
@@ -268,63 +268,69 @@ export interface AuthMutationOptions {
 export type ContactHubEntryKind = ContactHubKind
 export type RemoteAgentRuntimeStatus = RemoteAgentRuntimeCatalogStatus
 
-type WorkspaceAppGrantEntryInput =
-  ReplaceWorkspaceAppGrantsInput["grants"][number]
-type WorkspaceAppGrantEntryLike = Omit<
-  WorkspaceAppGrantEntryInput,
+type WorkspaceResourceGrantEntryInput =
+  ReplaceWorkspaceResourceGrantsInput["grants"][number]
+type WorkspaceResourceGrantEntryLike = Omit<
+  WorkspaceResourceGrantEntryInput,
   "target" | "permissions"
 > & {
   target: CapabilityAccessTarget
   permissions: string[]
 }
 
-type WorkspaceAppCreateActorInput = Omit<
-  Extract<CreateWorkspaceAppInput, { kind: typeof WORKSPACE_APP_KIND.ACTOR }>,
-  "kind" | "grants"
-> & { grants?: WorkspaceAppGrantEntryLike[] }
-type WorkspaceAppUpdateActorInput = Omit<
-  Extract<UpdateWorkspaceAppInput, { kind: typeof WORKSPACE_APP_KIND.ACTOR }>,
-  "kind"
->
-type WorkspaceAppCreateRemoteAgentInput = Omit<
+type WorkspaceResourceCreateActorInput = Omit<
   Extract<
-    CreateWorkspaceAppInput,
-    { kind: typeof WORKSPACE_APP_KIND.REMOTE_AGENT }
+    CreateWorkspaceResourceInput,
+    { kind: typeof WORKSPACE_RESOURCE_KIND.ACTOR }
   >,
   "kind" | "grants"
-> & { grants?: WorkspaceAppGrantEntryLike[] }
-type WorkspaceAppUpdateRemoteAgentInput = Omit<
+> & { grants?: WorkspaceResourceGrantEntryLike[] }
+type WorkspaceResourceUpdateActorInput = Omit<
   Extract<
-    UpdateWorkspaceAppInput,
-    { kind: typeof WORKSPACE_APP_KIND.REMOTE_AGENT }
+    UpdateWorkspaceResourceInput,
+    { kind: typeof WORKSPACE_RESOURCE_KIND.ACTOR }
   >,
   "kind"
 >
-type WorkspaceAppCreatePluginInstallationInput = Omit<
+type WorkspaceResourceCreateRemoteAgentInput = Omit<
   Extract<
-    CreateWorkspaceAppInput,
-    { kind: typeof WORKSPACE_APP_KIND.PLUGIN_INSTALLATION }
+    CreateWorkspaceResourceInput,
+    { kind: typeof WORKSPACE_RESOURCE_KIND.REMOTE_AGENT }
   >,
   "kind" | "grants"
-> & { grants?: WorkspaceAppGrantEntryLike[] }
-type WorkspaceAppUpdatePluginInstallationInput = Omit<
+> & { grants?: WorkspaceResourceGrantEntryLike[] }
+type WorkspaceResourceUpdateRemoteAgentInput = Omit<
   Extract<
-    UpdateWorkspaceAppInput,
-    { kind: typeof WORKSPACE_APP_KIND.PLUGIN_INSTALLATION }
+    UpdateWorkspaceResourceInput,
+    { kind: typeof WORKSPACE_RESOURCE_KIND.REMOTE_AGENT }
+  >,
+  "kind"
+>
+type WorkspaceResourceCreatePluginInstallationInput = Omit<
+  Extract<
+    CreateWorkspaceResourceInput,
+    { kind: typeof WORKSPACE_RESOURCE_KIND.PLUGIN_INSTALLATION }
+  >,
+  "kind" | "grants"
+> & { grants?: WorkspaceResourceGrantEntryLike[] }
+type WorkspaceResourceUpdatePluginInstallationInput = Omit<
+  Extract<
+    UpdateWorkspaceResourceInput,
+    { kind: typeof WORKSPACE_RESOURCE_KIND.PLUGIN_INSTALLATION }
   >,
   "kind"
 >
 
-function parseWorkspaceAppGrantEntry(
-  grant: WorkspaceAppGrantEntryLike
-): WorkspaceAppGrantEntryInput {
-  return WorkspaceAppGrantEntrySchema.parse(grant)
+function parseWorkspaceResourceGrantEntry(
+  grant: WorkspaceResourceGrantEntryLike
+): WorkspaceResourceGrantEntryInput {
+  return WorkspaceResourceGrantEntrySchema.parse(grant)
 }
 
-function parseWorkspaceAppGrantEntries(
-  grants: WorkspaceAppGrantEntryLike[] | undefined
+function parseWorkspaceResourceGrantEntries(
+  grants: WorkspaceResourceGrantEntryLike[] | undefined
 ) {
-  return grants?.map(parseWorkspaceAppGrantEntry)
+  return grants?.map(parseWorkspaceResourceGrantEntry)
 }
 
 function parseFileUploadResponseData(value: unknown): StoredFileRecordView {
@@ -740,8 +746,8 @@ class ApiClient {
       accessTarget: CapabilityAccessTarget
     }
   ): Promise<InstalledSkillItemView> {
-    const body: CreateWorkspaceAppInput = {
-      kind: WORKSPACE_APP_KIND.INSTALLED_SKILL,
+    const body: CreateWorkspaceResourceInput = {
+      kind: WORKSPACE_RESOURCE_KIND.INSTALLED_SKILL,
       sourceType: "custom",
       displayName: data.name,
       description: data.description,
@@ -749,18 +755,21 @@ class ApiClient {
       tags: data.tags,
       attachmentFiles: data.attachmentFiles,
       grants: [
-        parseWorkspaceAppGrantEntry({
+        parseWorkspaceResourceGrantEntry({
           target: data.accessTarget,
-          permissions: [WORKSPACE_APP_GRANT_PERMISSION.USE],
+          permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.USE],
         }),
       ],
     }
-    const created = await this.fetch(`/workspaces/${wsId}/workspace-apps`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    })
+    const created = await this.fetch(
+      `/workspaces/${wsId}/workspace-resources`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      }
+    )
     return {
-      skill: await this.getInstalledSkill(wsId, created.data.app.id).then(
+      skill: await this.getInstalledSkill(wsId, created.data.resource.id).then(
         (res) => res.skill
       ),
     }
@@ -790,23 +799,26 @@ class ApiClient {
       accessTarget: CapabilityAccessTarget
     }
   ): Promise<InstalledSkillItemView> {
-    const body: CreateWorkspaceAppInput = {
-      kind: WORKSPACE_APP_KIND.INSTALLED_SKILL,
+    const body: CreateWorkspaceResourceInput = {
+      kind: WORKSPACE_RESOURCE_KIND.INSTALLED_SKILL,
       sourceType: "marketplace",
       marketSkillId: data.marketSkillId,
       grants: [
-        parseWorkspaceAppGrantEntry({
+        parseWorkspaceResourceGrantEntry({
           target: data.accessTarget,
-          permissions: [WORKSPACE_APP_GRANT_PERMISSION.USE],
+          permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.USE],
         }),
       ],
     }
-    const created = await this.fetch(`/workspaces/${wsId}/workspace-apps`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    })
+    const created = await this.fetch(
+      `/workspaces/${wsId}/workspace-resources`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      }
+    )
     return {
-      skill: await this.getInstalledSkill(wsId, created.data.app.id).then(
+      skill: await this.getInstalledSkill(wsId, created.data.resource.id).then(
         (res) => res.skill
       ),
     }
@@ -828,8 +840,8 @@ class ApiClient {
       }>
     }
   ): Promise<InstalledSkillItemView> {
-    const body: UpdateWorkspaceAppInput = {
-      kind: WORKSPACE_APP_KIND.INSTALLED_SKILL,
+    const body: UpdateWorkspaceResourceInput = {
+      kind: WORKSPACE_RESOURCE_KIND.INSTALLED_SKILL,
       displayName: data.name,
       description: data.description,
       iconFileId: data.iconFileId,
@@ -838,10 +850,13 @@ class ApiClient {
       conversationTypeMaskOverride: data.conversationTypeMaskOverride,
       attachmentFiles: data.attachmentFiles,
     }
-    await this.fetch(`/workspaces/${wsId}/workspace-apps/${installedSkillId}`, {
-      method: "PUT",
-      body: JSON.stringify(body),
-    })
+    await this.fetch(
+      `/workspaces/${wsId}/workspace-resources/${installedSkillId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(body),
+      }
+    )
     return {
       skill: await this.getInstalledSkill(wsId, installedSkillId).then(
         (res) => res.skill
@@ -863,34 +878,34 @@ class ApiClient {
   async uninstallInstalledSkill(
     wsId: string,
     installedSkillId: string
-  ): Promise<WorkspaceAppSuccessViewSchemaType> {
+  ): Promise<WorkspaceResourceSuccessViewSchemaType> {
     const res = await this.fetch(
-      `/workspaces/${wsId}/workspace-apps/${installedSkillId}`,
+      `/workspaces/${wsId}/workspace-resources/${installedSkillId}`,
       {
         method: "DELETE",
       }
     )
     return res.data
   }
-  async getWorkspaceAppGrants(
+  async getWorkspaceResourceGrants(
     wsId: string,
     appId: string
-  ): Promise<WorkspaceAppGrantListViewSchemaType> {
+  ): Promise<WorkspaceResourceGrantListViewSchemaType> {
     const res = await this.fetch(
-      `/workspaces/${wsId}/workspace-apps/${appId}/grants`
+      `/workspaces/${wsId}/workspace-resources/${appId}/grants`
     )
     return res.data
   }
-  async replaceWorkspaceAppGrants(
+  async replaceWorkspaceResourceGrants(
     wsId: string,
     appId: string,
-    data: { grants: WorkspaceAppGrantEntryLike[] }
-  ): Promise<WorkspaceAppGrantListViewSchemaType> {
-    const body: ReplaceWorkspaceAppGrantsInput = {
-      grants: data.grants.map(parseWorkspaceAppGrantEntry),
+    data: { grants: WorkspaceResourceGrantEntryLike[] }
+  ): Promise<WorkspaceResourceGrantListViewSchemaType> {
+    const body: ReplaceWorkspaceResourceGrantsInput = {
+      grants: data.grants.map(parseWorkspaceResourceGrantEntry),
     }
     const res = await this.fetch(
-      `/workspaces/${wsId}/workspace-apps/${appId}/grants`,
+      `/workspaces/${wsId}/workspace-resources/${appId}/grants`,
       {
         method: "PUT",
         body: JSON.stringify(body),
@@ -992,30 +1007,33 @@ class ApiClient {
   }
   async createActor(
     wsId: string,
-    data: WorkspaceAppCreateActorInput
+    data: WorkspaceResourceCreateActorInput
   ): Promise<Actor> {
     const { grants, ...rest } = data
-    const body: CreateWorkspaceAppInput = {
-      kind: WORKSPACE_APP_KIND.ACTOR,
+    const body: CreateWorkspaceResourceInput = {
+      kind: WORKSPACE_RESOURCE_KIND.ACTOR,
       ...rest,
-      grants: parseWorkspaceAppGrantEntries(grants),
+      grants: parseWorkspaceResourceGrantEntries(grants),
     }
-    const created = await this.fetch(`/workspaces/${wsId}/workspace-apps`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    })
-    return this.getActor(wsId, created.data.app.id)
+    const created = await this.fetch(
+      `/workspaces/${wsId}/workspace-resources`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      }
+    )
+    return this.getActor(wsId, created.data.resource.id)
   }
   async updateActor(
     wsId: string,
     actorId: string,
-    data: WorkspaceAppUpdateActorInput
+    data: WorkspaceResourceUpdateActorInput
   ): Promise<Actor> {
-    const body: UpdateWorkspaceAppInput = {
-      kind: WORKSPACE_APP_KIND.ACTOR,
+    const body: UpdateWorkspaceResourceInput = {
+      kind: WORKSPACE_RESOURCE_KIND.ACTOR,
       ...data,
     }
-    await this.fetch(`/workspaces/${wsId}/workspace-apps/${actorId}`, {
+    await this.fetch(`/workspaces/${wsId}/workspace-resources/${actorId}`, {
       method: "PUT",
       body: JSON.stringify(body),
     })
@@ -1024,9 +1042,9 @@ class ApiClient {
   async deleteActor(
     wsId: string,
     actorId: string
-  ): Promise<WorkspaceAppSuccessViewSchemaType> {
+  ): Promise<WorkspaceResourceSuccessViewSchemaType> {
     const res = await this.fetch(
-      `/workspaces/${wsId}/workspace-apps/${actorId}`,
+      `/workspaces/${wsId}/workspace-resources/${actorId}`,
       {
         method: "DELETE",
       }
@@ -1694,37 +1712,44 @@ class ApiClient {
   }
   async createRemoteAgent(
     wsId: string,
-    input: WorkspaceAppCreateRemoteAgentInput
+    input: WorkspaceResourceCreateRemoteAgentInput
   ): Promise<RemoteAgentResponseSchemaType> {
     const { grants, ...rest } = input
-    const body: CreateWorkspaceAppInput = {
-      kind: WORKSPACE_APP_KIND.REMOTE_AGENT,
+    const body: CreateWorkspaceResourceInput = {
+      kind: WORKSPACE_RESOURCE_KIND.REMOTE_AGENT,
       ...rest,
-      grants: parseWorkspaceAppGrantEntries(grants),
+      grants: parseWorkspaceResourceGrantEntries(grants),
     }
-    const created = await this.fetch(`/workspaces/${wsId}/workspace-apps`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    })
+    const created = await this.fetch(
+      `/workspaces/${wsId}/workspace-resources`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      }
+    )
     return {
-      remoteAgent: await this.getRemoteAgent(wsId, created.data.app.id).then(
-        (res) => res.remoteAgent
-      ),
+      remoteAgent: await this.getRemoteAgent(
+        wsId,
+        created.data.resource.id
+      ).then((res) => res.remoteAgent),
     }
   }
   async updateRemoteAgent(
     wsId: string,
     remoteAgentId: string,
-    input: WorkspaceAppUpdateRemoteAgentInput
+    input: WorkspaceResourceUpdateRemoteAgentInput
   ): Promise<RemoteAgentResponseSchemaType> {
-    const body: UpdateWorkspaceAppInput = {
-      kind: WORKSPACE_APP_KIND.REMOTE_AGENT,
+    const body: UpdateWorkspaceResourceInput = {
+      kind: WORKSPACE_RESOURCE_KIND.REMOTE_AGENT,
       ...input,
     }
-    await this.fetch(`/workspaces/${wsId}/workspace-apps/${remoteAgentId}`, {
-      method: "PUT",
-      body: JSON.stringify(body),
-    })
+    await this.fetch(
+      `/workspaces/${wsId}/workspace-resources/${remoteAgentId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(body),
+      }
+    )
     return {
       remoteAgent: await this.getRemoteAgent(wsId, remoteAgentId).then(
         (res) => res.remoteAgent
@@ -1734,9 +1759,9 @@ class ApiClient {
   async deleteRemoteAgent(
     wsId: string,
     remoteAgentId: string
-  ): Promise<WorkspaceAppSuccessViewSchemaType> {
+  ): Promise<WorkspaceResourceSuccessViewSchemaType> {
     const res = await this.fetch(
-      `/workspaces/${wsId}/workspace-apps/${remoteAgentId}`,
+      `/workspaces/${wsId}/workspace-resources/${remoteAgentId}`,
       {
         method: "DELETE",
       }
@@ -2401,30 +2426,33 @@ class ApiClient {
   }
   async installPlugin(
     wsId: string,
-    data: WorkspaceAppCreatePluginInstallationInput
+    data: WorkspaceResourceCreatePluginInstallationInput
   ): Promise<PluginInstallationDetailView> {
     const { grants, ...rest } = data
-    const body: CreateWorkspaceAppInput = {
-      kind: WORKSPACE_APP_KIND.PLUGIN_INSTALLATION,
+    const body: CreateWorkspaceResourceInput = {
+      kind: WORKSPACE_RESOURCE_KIND.PLUGIN_INSTALLATION,
       ...rest,
-      grants: parseWorkspaceAppGrantEntries(grants),
+      grants: parseWorkspaceResourceGrantEntries(grants),
     }
-    const created = await this.fetch(`/workspaces/${wsId}/workspace-apps`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    })
-    return this.getInstallation(wsId, created.data.app.id)
+    const created = await this.fetch(
+      `/workspaces/${wsId}/workspace-resources`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      }
+    )
+    return this.getInstallation(wsId, created.data.resource.id)
   }
   async updateInstallation(
     wsId: string,
     installId: string,
-    data: WorkspaceAppUpdatePluginInstallationInput
+    data: WorkspaceResourceUpdatePluginInstallationInput
   ): Promise<PluginInstallationDetailView> {
-    const body: UpdateWorkspaceAppInput = {
-      kind: WORKSPACE_APP_KIND.PLUGIN_INSTALLATION,
+    const body: UpdateWorkspaceResourceInput = {
+      kind: WORKSPACE_RESOURCE_KIND.PLUGIN_INSTALLATION,
       ...data,
     }
-    await this.fetch(`/workspaces/${wsId}/workspace-apps/${installId}`, {
+    await this.fetch(`/workspaces/${wsId}/workspace-resources/${installId}`, {
       method: "PUT",
       body: JSON.stringify(body),
     })
@@ -2433,9 +2461,9 @@ class ApiClient {
   async uninstallPlugin(
     wsId: string,
     installId: string
-  ): Promise<WorkspaceAppSuccessViewSchemaType> {
+  ): Promise<WorkspaceResourceSuccessViewSchemaType> {
     const res = await this.fetch(
-      `/workspaces/${wsId}/workspace-apps/${installId}`,
+      `/workspaces/${wsId}/workspace-resources/${installId}`,
       {
         method: "DELETE",
       }

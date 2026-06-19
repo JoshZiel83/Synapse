@@ -27,7 +27,7 @@ import {
   PLUGIN_INSTALL_STEP_KIND,
   PLUGIN_INSTALL_STEP_SCOPE,
   REUSE_SCOPES,
-  WORKSPACE_APP_GRANT_PERMISSION,
+  WORKSPACE_RESOURCE_GRANT_PERMISSION,
 } from "@synapse/shared"
 import { AppCard } from "@/components/app-card"
 import {
@@ -58,7 +58,7 @@ import {
   createIntegrationEventSources,
   listIntegrationEventDefinitionOptions,
 } from "@/lib/integration-event-sources"
-import WorkspaceAppAccessStep from "./workspace-app-access-step"
+import WorkspaceResourceAccessStep from "./workspace-resource-access-step"
 import { PluginIcon } from "./plugin-ui"
 import {
   AccessReuseScopeStep,
@@ -1187,7 +1187,7 @@ export default function InstallDialog({
                   target: {
                     subject: { kind: "workspace", workspaceId },
                   },
-                  permissions: [WORKSPACE_APP_GRANT_PERMISSION.USE],
+                  permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.USE],
                 },
               ]
             : undefined,
@@ -1953,7 +1953,7 @@ export default function InstallDialog({
       )}
 
       {currentStep?.kind === "access" && (
-        <WorkspaceAppAccessStep installation={currentInstallation} />
+        <WorkspaceResourceAccessStep installation={currentInstallation} />
       )}
 
       {currentStep?.kind === PLUGIN_INSTALL_STEP_KIND.INTEGRATION_EVENTS &&

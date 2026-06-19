@@ -11,9 +11,7 @@ import {
   ACTOR_VERSION_CHANGED_FIELDS,
   ACTOR_VERSION_DOC_CHANGE_TYPES,
   ACCESS_TARGET_TYPES,
-  AUTOMATION_ACCESS_TARGET_TYPES,
   AUTOMATION_COMPLETION_STATUSES,
-  AUTOMATION_CREATOR_KINDS,
   AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS,
   AUTOMATION_EVENT_SOURCE_STATUSES,
   AUTOMATION_RULE_CATEGORIES,
@@ -185,17 +183,16 @@ import type {
   GrantPolicy as GrantPolicyBase,
 } from "../access/policies/index.js"
 import type {
-  AccessBindingStatus,
-  WorkspaceAppGrantPermission,
-  WorkspaceAppGrantRequestStatus,
-  WorkspaceAppGrantSource,
-  WorkspaceAppGrantStatus,
-  WorkspaceAppKind,
-  WorkspaceAppStatus,
+  WorkspaceResourceGrantPermission,
+  WorkspaceResourceGrantRequestStatus,
+  WorkspaceResourceGrantSource,
+  WorkspaceResourceGrantStatus,
+  WorkspaceResourceKind,
+  WorkspaceResourceStatus,
 } from "../access/enums.js"
 import type { SubjectRef, ScopedSubjectTarget } from "../access/subject.js"
 import type { IsoInstantString } from "../datetime/instant.js"
-import type { WorkspaceAppGrantTargetInput as WorkspaceAppGrantTargetContract } from "../schemas/workspace-apps.js"
+import type { WorkspaceResourceGrantTargetInput as WorkspaceResourceGrantTargetContract } from "../schemas/workspace-resources.js"
 
 // ============ Common ============
 export type UUID = string
@@ -585,7 +582,6 @@ export interface MemoryRecallRun {
 // ============ Automation ============
 export type AutomationCategory = (typeof AUTOMATION_RULE_CATEGORIES)[number]
 export type AutomationStatus = (typeof AUTOMATION_RULE_STATUSES)[number]
-export type AutomationCreatorKind = (typeof AUTOMATION_CREATOR_KINDS)[number]
 export type AutomationTriggerKind = (typeof AUTOMATION_TRIGGER_KINDS)[number]
 export type AutomationSourceKind =
   (typeof AUTOMATION_TRIGGER_SOURCE_KINDS)[number]
@@ -633,10 +629,7 @@ export interface AutomationEventSource {
   payloadSchema: Record<string, unknown>
   examplePayload: Record<string, unknown>
   status: AutomationEventSourceStatus
-  createdByKind: AutomationCreatorKind
   createdByWorkspaceMemberId?: UUID
-  createdByActorId?: UUID
-  createdBySessionId?: UUID
   lastTriggeredAt?: Timestamp
   metadata: Record<string, unknown>
   createdAt: Timestamp
@@ -2205,7 +2198,7 @@ export interface RuntimeActorContext {
   isImConversation?: boolean
   userId?: string
   // Carries the workspace_member acting on behalf of `userId` in this workspace.
-  // Needed so that member-scoped workspace_app_grants become visible to the
+  // Needed so that member-scoped workspace_resource_grants become visible to the
   // tool resolver and capability discovery paths.
   workspaceMemberId?: string
 }
@@ -2316,8 +2309,6 @@ export type CapabilityConversationTypePolicyResourceFamily =
 export type AccessTargetType = (typeof ACCESS_TARGET_TYPES)[number]
 export type CapabilityAccessTargetType =
   (typeof CAPABILITY_ACCESS_TARGET_TYPES)[number]
-export type AutomationAccessTargetType =
-  (typeof AUTOMATION_ACCESS_TARGET_TYPES)[number]
 export type ConversationMessageTransportDirection =
   (typeof CONVERSATION_MESSAGE_TRANSPORT_DIRECTIONS)[number]
 export type DeviceCapabilityAccessSubjectKind =
@@ -2336,7 +2327,6 @@ export type MarketplaceRequirementTargetKind =
 export type PluginInstallationMode = (typeof PLUGIN_INSTALLATION_MODES)[number]
 export type MarketplaceVersionStatus =
   (typeof MARKETPLACE_VERSION_STATUSES)[number]
-export type AutomationEventSourceAccessGrantStatus = AccessBindingStatus
 export type MarketplaceRequirementStatus =
   (typeof MARKETPLACE_REQUIREMENT_STATUSES)[number]
 export type MarketplaceAssetKind = (typeof MARKETPLACE_ASSET_KINDS)[number]
@@ -2560,27 +2550,13 @@ export interface PluginInstallationView {
   revision?: MarketplaceVersion
 }
 
-export interface AutomationEventSourceAccessGrant {
-  id: string
-  resourceId: string
-  workspaceId: string
-  target: CapabilityAccessTarget
-  status: AutomationEventSourceAccessGrantStatus
-  grantedByWorkspaceMemberId?: string
-  reason?: string
-  conversationTypeMaskOverride?: ConversationTypeMask | null
-  effectiveConversationTypeMask?: ConversationTypeMask
-  createdAt: Timestamp
-  revokedAt?: Timestamp
-}
-
-export interface WorkspaceAppView {
+export interface WorkspaceResourceView {
   id: string
   workspaceId: string
-  kind: WorkspaceAppKind
+  kind: WorkspaceResourceKind
   displayName: string
   ownerWorkspaceMemberId?: string
-  status: WorkspaceAppStatus
+  status: WorkspaceResourceStatus
   sourceDefaultConversationTypeMask?: ConversationTypeMask
   workspaceConversationTypeMask?: ConversationTypeMask
   conversationTypeMaskOverride?: ConversationTypeMask
@@ -2589,14 +2565,14 @@ export interface WorkspaceAppView {
   updatedAt: Timestamp
 }
 
-export interface WorkspaceAppGrant {
+export interface WorkspaceResourceGrant {
   id: string
   workspaceId: string
-  workspaceAppId: string
-  target: WorkspaceAppGrantTargetContract
-  permissions: WorkspaceAppGrantPermission[]
-  status: WorkspaceAppGrantStatus
-  source: WorkspaceAppGrantSource
+  workspaceResourceId: string
+  target: WorkspaceResourceGrantTargetContract
+  permissions: WorkspaceResourceGrantPermission[]
+  status: WorkspaceResourceGrantStatus
+  source: WorkspaceResourceGrantSource
   grantedByWorkspaceMemberId?: string
   reason?: string
   conversationTypeMaskOverride?: ConversationTypeMask | null
@@ -2605,14 +2581,14 @@ export interface WorkspaceAppGrant {
   revokedAt?: Timestamp
 }
 
-export interface WorkspaceAppGrantRequest {
+export interface WorkspaceResourceGrantRequest {
   id: string
   workspaceId: string
-  workspaceAppId: string
-  grantee: WorkspaceAppGrantTargetContract
-  requestedPermissions: WorkspaceAppGrantPermission[]
+  workspaceResourceId: string
+  grantee: WorkspaceResourceGrantTargetContract
+  requestedPermissions: WorkspaceResourceGrantPermission[]
   requesterWorkspaceMemberId: string
-  status: WorkspaceAppGrantRequestStatus
+  status: WorkspaceResourceGrantRequestStatus
   resolvedByWorkspaceMemberId?: string
   resolvedAt?: Timestamp
   reason?: string
@@ -4540,9 +4516,7 @@ export type {
   AutomationWebhookEndpointSchemaType,
   AutomationWebhookEndpointListSchemaType,
   AutomationWebhookEndpointCreateResultSchemaType,
-  AutomationEventSourceAccessGrantSchemaType,
   AutomationEventSourceAccessStateSchemaType,
-  AutomationAccessGrantEnvelopeSchemaType,
   AutomationSuccessSchemaType,
   AutomationEventIngestResultSchemaType,
 } from "../schemas/automation.js"
@@ -4669,22 +4643,22 @@ export type {
   DingtalkDeviceFlowPollResponseSchemaType,
 } from "../schemas/im.js"
 export type {
-  WorkspaceAppViewSchemaType,
-  WorkspaceAppEnvelopeViewSchemaType,
-  WorkspaceAppListViewSchemaType,
-  WorkspaceAppGrantViewSchemaType,
-  WorkspaceAppGrantListViewSchemaType,
-  WorkspaceAppGrantRequestViewSchemaType,
-  WorkspaceAppGrantRequestListViewSchemaType,
-  WorkspaceAppGrantRequestEnvelopeViewSchemaType,
-  WorkspaceAppSuccessViewSchemaType,
-  WorkspaceAppGrantTargetInput,
-  WorkspaceAppGrantEntryInput,
-  ReplaceWorkspaceAppGrantsInput,
-  CreateWorkspaceAppGrantRequestInput,
-  CreateWorkspaceAppInput,
-  UpdateWorkspaceAppInput,
-} from "../schemas/workspace-apps.js"
+  WorkspaceResourceViewSchemaType,
+  WorkspaceResourceEnvelopeViewSchemaType,
+  WorkspaceResourceListViewSchemaType,
+  WorkspaceResourceGrantViewSchemaType,
+  WorkspaceResourceGrantListViewSchemaType,
+  WorkspaceResourceGrantRequestViewSchemaType,
+  WorkspaceResourceGrantRequestListViewSchemaType,
+  WorkspaceResourceGrantRequestEnvelopeViewSchemaType,
+  WorkspaceResourceSuccessViewSchemaType,
+  WorkspaceResourceGrantTargetInput,
+  WorkspaceResourceGrantEntryInput,
+  ReplaceWorkspaceResourceGrantsInput,
+  CreateWorkspaceResourceGrantRequestInput,
+  CreateWorkspaceResourceInput,
+  UpdateWorkspaceResourceInput,
+} from "../schemas/workspace-resources.js"
 export type {
   ChatBootstrapViewSchemaType,
   ChatSyncViewSchemaType,

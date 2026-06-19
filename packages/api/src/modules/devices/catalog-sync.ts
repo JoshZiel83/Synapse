@@ -17,7 +17,7 @@
 //    device_tools.latest_revision_id.
 //
 // The persistence itself is a single large db.transaction() spanning six
-// tables plus the cross-module workspace_apps writes; atomicity is
+// tables plus the cross-module workspace_resources writes; atomicity is
 // load-bearing, so the whole orchestration lives in the module's repo.ts (the
 // only DB-client owner, guard r8). This file re-exports it unchanged so the
 // `device.catalog.sync` call site (control-plane.ts) is untouched.

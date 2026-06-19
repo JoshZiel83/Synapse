@@ -1,11 +1,11 @@
 import {
   SUBJECT_KIND,
-  type WorkspaceAppGrant,
-  type WorkspaceAppGrantPermission,
-  type WorkspaceAppGrantRequest,
-  type WorkspaceAppGrantTargetInput,
-  type WorkspaceAppKind,
-  type WorkspaceAppView,
+  type WorkspaceResourceGrant,
+  type WorkspaceResourceGrantPermission,
+  type WorkspaceResourceGrantRequest,
+  type WorkspaceResourceGrantTargetInput,
+  type WorkspaceResourceKind,
+  type WorkspaceResourceView,
 } from "@synapse/shared"
 import {
   serializeInstant,
@@ -20,12 +20,13 @@ import {
  * are structural so this file stays free of database-schema imports.
  */
 
-export type WorkspaceAppRow = {
+export type WorkspaceResourceRow = {
   id: string | null
   workspaceId: string | null
-  kind: WorkspaceAppKind | null
+  kind: WorkspaceResourceKind | null
   displayName: string | null
   ownerWorkspaceMemberId: string | null
+  ownerSubjectId?: string | null
   status: string | null
   conversationTypeMaskOverride: number | null
   createdAt: Date | null
@@ -33,12 +34,12 @@ export type WorkspaceAppRow = {
   deletedAt?: Date | null
 }
 
-export type WorkspaceAppGrantPresentationRow = {
+export type WorkspaceResourceGrantPresentationRow = {
   id: string
   kind: string
   workspaceId: string | null
-  workspaceAppId: string
-  permissions: WorkspaceAppGrantPermission[]
+  workspaceResourceId: string
+  permissions: WorkspaceResourceGrantPermission[]
   status: string
   source: string
   createdByWorkspaceMemberId: string | null
@@ -55,11 +56,11 @@ export type WorkspaceAppGrantPresentationRow = {
   scopeConversationIdViaJoin?: string | null
 }
 
-export type WorkspaceAppGrantRequestPresentationRow = {
+export type WorkspaceResourceGrantRequestPresentationRow = {
   id: string
   workspaceId: string
-  workspaceAppId: string
-  requestedPermissions: WorkspaceAppGrantPermission[]
+  workspaceResourceId: string
+  requestedPermissions: WorkspaceResourceGrantPermission[]
   requesterWorkspaceMemberId: string
   status: string
   resolvedByWorkspaceMemberId: string | null
@@ -78,12 +79,12 @@ export type WorkspaceAppGrantRequestPresentationRow = {
   granteeScopeConversationIdViaJoin?: string | null
 }
 
-export function isCompleteWorkspaceAppRow(
-  row: WorkspaceAppRow | null
-): row is WorkspaceAppRow & {
+export function isCompleteWorkspaceResourceRow(
+  row: WorkspaceResourceRow | null
+): row is WorkspaceResourceRow & {
   id: string
   workspaceId: string
-  kind: WorkspaceAppKind
+  kind: WorkspaceResourceKind
   displayName: string
   status: string
   createdAt: Date
@@ -110,7 +111,7 @@ function subjectRefToTarget(input: {
   scopeKind: string | null
   scopeWorkspaceId: string | null
   scopeConversationId: string | null
-}): WorkspaceAppGrantTargetInput {
+}): WorkspaceResourceGrantTargetInput {
   const requireId = (value: string | null, label: string): string => {
     if (!value) {
       throw new Error(`access subject ${input.kind} is missing ${label}`)
@@ -118,7 +119,7 @@ function subjectRefToTarget(input: {
     return value
   }
 
-  const subject: WorkspaceAppGrantTargetInput["subject"] =
+  const subject: WorkspaceResourceGrantTargetInput["subject"] =
     input.kind === SUBJECT_KIND.WORKSPACE
       ? {
           kind: SUBJECT_KIND.WORKSPACE,
@@ -161,8 +162,10 @@ function subjectRefToTarget(input: {
   return scope ? { subject, scope } : { subject }
 }
 
-export function presentWorkspaceApp(row: WorkspaceAppRow): WorkspaceAppView {
-  if (!isCompleteWorkspaceAppRow(row)) {
+export function presentWorkspaceResource(
+  row: WorkspaceResourceRow
+): WorkspaceResourceView {
+  if (!isCompleteWorkspaceResourceRow(row)) {
     throw new Error("workspace app row is missing required fields")
   }
   return {
@@ -171,7 +174,7 @@ export function presentWorkspaceApp(row: WorkspaceAppRow): WorkspaceAppView {
     kind: row.kind,
     displayName: row.displayName,
     ownerWorkspaceMemberId: row.ownerWorkspaceMemberId || undefined,
-    status: row.status as WorkspaceAppView["status"],
+    status: row.status as WorkspaceResourceView["status"],
     conversationTypeMaskOverride: row.conversationTypeMaskOverride || undefined,
     createdAt: serializeInstant(row.createdAt),
     updatedAt: serializeInstant(row.updatedAt),
@@ -179,26 +182,28 @@ export function presentWorkspaceApp(row: WorkspaceAppRow): WorkspaceAppView {
 }
 
 export function presentGrant(
-  row: WorkspaceAppGrantPresentationRow
-): WorkspaceAppGrant {
+  row: WorkspaceResourceGrantPresentationRow
+): WorkspaceResourceGrant {
   if (!row.createdAt) {
     throw new Error("workspace app grant row is missing created_at")
   }
   if (!row.workspaceId) {
-    throw new Error(`workspace_app_grants.${row.id}.workspace_id is missing`)
+    throw new Error(
+      `workspace_resource_grants.${row.id}.workspace_id is missing`
+    )
   }
   return {
     id: row.id,
     workspaceId: row.workspaceId,
-    workspaceAppId: row.workspaceAppId,
+    workspaceResourceId: row.workspaceResourceId,
     target: subjectRefToTarget({
       ...row,
       scopeWorkspaceId: row.scopeWorkspaceIdViaJoin || null,
       scopeConversationId: row.scopeConversationIdViaJoin || null,
     }),
     permissions: row.permissions,
-    status: row.status as WorkspaceAppGrant["status"],
-    source: row.source as WorkspaceAppGrant["source"],
+    status: row.status as WorkspaceResourceGrant["status"],
+    source: row.source as WorkspaceResourceGrant["source"],
     grantedByWorkspaceMemberId: row.createdByWorkspaceMemberId || undefined,
     reason: row.reason || undefined,
     conversationTypeMaskOverride: row.conversationTypeMaskOverride ?? undefined,
@@ -208,15 +213,15 @@ export function presentGrant(
 }
 
 export function presentGrantRequest(
-  row: WorkspaceAppGrantRequestPresentationRow
-): WorkspaceAppGrantRequest {
+  row: WorkspaceResourceGrantRequestPresentationRow
+): WorkspaceResourceGrantRequest {
   if (!row.granteeKind || !row.createdAt || !row.updatedAt) {
     throw new Error("workspace app grant request row is missing joined fields")
   }
   return {
     id: row.id,
     workspaceId: row.workspaceId,
-    workspaceAppId: row.workspaceAppId,
+    workspaceResourceId: row.workspaceResourceId,
     grantee: subjectRefToTarget({
       kind: row.granteeKind,
       workspaceId: row.granteeWorkspaceIdViaJoin || null,
@@ -230,7 +235,7 @@ export function presentGrantRequest(
     }),
     requestedPermissions: row.requestedPermissions,
     requesterWorkspaceMemberId: row.requesterWorkspaceMemberId,
-    status: row.status as WorkspaceAppGrantRequest["status"],
+    status: row.status as WorkspaceResourceGrantRequest["status"],
     resolvedByWorkspaceMemberId: row.resolvedByWorkspaceMemberId || undefined,
     resolvedAt: serializeOptionalInstant(row.resolvedAt),
     reason: row.reason || undefined,

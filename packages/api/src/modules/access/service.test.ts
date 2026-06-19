@@ -13,6 +13,8 @@ import {
   grantApprovedContactVisibility,
   setRequiresContactApproval,
 } from "./contact-approval.js"
+import { upsertAccessSubject } from "./subject-registry.js"
+import { SUBJECT_KIND } from "@synapse/shared"
 
 type AnyDb = import("kysely").Kysely<any>
 
@@ -58,16 +60,32 @@ async function insertWorkspaceMember(
   return row.id as string
 }
 
+async function creatorSubjectId(
+  db: AnyDb,
+  workspaceId: string
+): Promise<string> {
+  const memberId = await insertWorkspaceMember(
+    db,
+    workspaceId,
+    await insertUser(db)
+  )
+  return upsertAccessSubject(db, {
+    kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+    memberId,
+  })
+}
+
 async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
   const actorId = crypto.randomUUID()
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspace_resources")
     .values({
       id: actorId,
       workspace_id: workspaceId,
       kind: "actor",
       display_name: "test actor",
       status: "active",
+      created_by_subject_id: await creatorSubjectId(db, workspaceId),
     })
     .execute()
   const row = await db

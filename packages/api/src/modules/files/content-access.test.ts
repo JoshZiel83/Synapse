@@ -397,12 +397,13 @@ async function seedPrivateMemoryRef(db: Kysely<any>) {
   })
   // The memory space is owned by an ACTOR (private to that actor).
   const actorRoot = await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id: crypto.randomUUID(),
       workspaceId: ws.id,
       kind: "actor",
       displayName: `a-${rid()}`,
+      createdBySubjectId: memberSubjectId,
       status: "active",
     } as any)
     .returning("id")
@@ -567,12 +568,13 @@ async function seedFileSpaceRef(
   })
   // The space is owned by an actor (so the member isn't owner-implicit).
   const actorRoot = await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id: crypto.randomUUID(),
       workspaceId: ws.id,
       kind: "actor",
       displayName: `a-${rid()}`,
+      createdBySubjectId: memberSubjectId,
       status: "active",
     } as any)
     .returning("id")
@@ -850,12 +852,13 @@ async function seedTwoConvUserWithFileSpace(db: Kysely<any>) {
   const convB = await newConvWithMember()
   // An actor-owned file space + a snapshot whose manifest IS SHA_CS.
   const actorRoot = await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id: crypto.randomUUID(),
       workspaceId: ws.id,
       kind: "actor",
       displayName: `a-${rid()}`,
+      createdBySubjectId: memberSubjectId,
       status: "active",
     } as any)
     .returning("id")

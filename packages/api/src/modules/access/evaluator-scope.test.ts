@@ -7,7 +7,7 @@ import { withTestDbAndClient } from "../../test/helpers/db.js"
 import { checkPermission } from "./evaluator.js"
 import { buildRuntimePrincipalContext } from "./subject-resolution.js"
 import { upsertAccessSubject } from "./subject-registry.js"
-import { insertWorkspaceAppGrant } from "../workspace-apps/grant-storage.js"
+import { insertWorkspaceResourceGrant } from "../workspace-resources/grant-storage.js"
 
 /**
  * PR3 — scope-aware checkPermission. Verifies that:
@@ -45,15 +45,29 @@ async function newWorkspace(db: Kysely<any>): Promise<string> {
   return ws.id as string
 }
 
+// workspace_resources.created_by_subject_id is NOT NULL (owner→subject
+// migration). Mint a workspace_member subject to serve as the creator.
+async function newCreatorSubjectId(
+  db: Kysely<any>,
+  workspaceId: string
+): Promise<string> {
+  const memberId = await newWorkspaceMember(db, workspaceId)
+  return upsertAccessSubject(db as any, {
+    kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+    memberId,
+  })
+}
+
 async function newActor(db: Kysely<any>, workspaceId: string): Promise<string> {
   const id = crypto.randomUUID()
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspace_resources")
     .values({
       id,
       workspace_id: workspaceId,
       kind: "actor",
       display_name: `actor-${rid()}`,
+      created_by_subject_id: await newCreatorSubjectId(db, workspaceId),
       status: "active",
     } as any)
     .execute()
@@ -125,12 +139,13 @@ async function newInstalledSkill(
     .executeTakeFirstOrThrow()
   const skillId = crypto.randomUUID()
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspace_resources")
     .values({
       id: skillId,
       workspace_id: workspaceId,
       kind: "installed_skill",
       display_name: `${NS} skill`,
+      created_by_subject_id: await newCreatorSubjectId(db, workspaceId),
       status: "active",
     } as any)
     .execute()
@@ -176,9 +191,9 @@ test(
       // support subject=actor|remote_agent with scope=conversation. The actor
       // should be able to use the skill only when the runtime context places
       // them inside conv A.
-      await insertWorkspaceAppGrant(db, {
+      await insertWorkspaceResourceGrant(db, {
         workspaceId: wsId,
-        workspaceAppId: skillId,
+        workspaceResourceId: skillId,
         target: {
           subject: {
             kind: SUBJECT_KIND.ACTOR,
@@ -248,9 +263,9 @@ test(
       const memberId = await newWorkspaceMember(db, wsId)
       const targetActorId = await newActor(db, wsId)
 
-      await insertWorkspaceAppGrant(db, {
+      await insertWorkspaceResourceGrant(db, {
         workspaceId: wsId,
-        workspaceAppId: targetActorId,
+        workspaceResourceId: targetActorId,
         target: {
           subject: {
             kind: SUBJECT_KIND.WORKSPACE_MEMBER,

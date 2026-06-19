@@ -66,9 +66,9 @@ async function buildDeviceFixture(opts: {
   await client.query("BEGIN")
   try {
     await client.query(
-      `INSERT INTO workspace_apps (id, workspace_id, kind, display_name, owner_workspace_member_id, status)
-       VALUES ($1, $2, 'actor', 'TP Actor', $3, 'active')`,
-      [actorId, seed.workspaceId, seed.workspaceMemberId]
+      `INSERT INTO workspace_resources (id, workspace_id, kind, display_name, owner_subject_id, created_by_subject_id, status)
+       VALUES ($1, $2, 'actor', 'TP Actor', $3, $3, 'active')`,
+      [actorId, seed.workspaceId, seed.memberSubjectId]
     )
     await client.query(
       `INSERT INTO actors (id, role, title)

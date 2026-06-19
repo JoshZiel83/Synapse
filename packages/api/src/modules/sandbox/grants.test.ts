@@ -1,7 +1,9 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import { SUBJECT_KIND } from "@synapse/shared"
 import type { Kysely } from "kysely"
 import { withTestDb } from "../../test/helpers/db.js"
+import { upsertAccessSubject } from "../access/subject-registry.js"
 import { resolveDeviceBuiltinIds, SandboxGrantsError } from "./grants.js"
 
 /**
@@ -65,12 +67,16 @@ async function seedDeviceWithBuiltins(
       } as any)
       .returning("id")
       .executeTakeFirstOrThrow()
+    const createdBySubjectId = await upsertAccessSubject(db, {
+      kind: SUBJECT_KIND.PLATFORM,
+    })
     const capabilityRoot = await db
-      .insertInto("workspaceApps")
+      .insertInto("workspaceResources")
       .values({
         workspaceId: ws.id,
         kind: "device_capability",
         displayName: kind,
+        createdBySubjectId,
         status: "active",
       } as any)
       .returning("id")

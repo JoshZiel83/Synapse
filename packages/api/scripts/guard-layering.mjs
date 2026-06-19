@@ -77,7 +77,7 @@
 //       except explicit installer file endpoints.
 //   r23_chat_selected_json_repo_exit : selected chat row metadata/draft JSONB
 //       fields are decoded in chat/repo.ts, not chat/service.ts.
-//   r24_workspace_app_input_schema_shared_contract : selected workspace app
+//   r24_workspace_resource_input_schema_shared_contract : selected workspace app
 //       request body schemas are shared contracts, not controller-local schemas.
 //   r25_files_upload_origin_schema_shared_contract : the files upload origin
 //       multipart field is a shared app contract, not a controller-local schema.
@@ -95,7 +95,7 @@
 //       controller-local schemas.
 //   r31_im_dingtalk_app_input_schema_shared_contract : DingTalk IM app request
 //       bodies are shared contracts, not controller-local schemas.
-//   r32_workspace_apps_app_query_schema_shared_contract : workspace-apps app
+//   r32_workspace_resources_app_query_schema_shared_contract : workspace-resources app
 //       query DTOs are shared contracts, not controller-local schemas.
 //   r33_skills_marketplace_query_schema_shared_contract : skills marketplace
 //       app query DTOs are shared contracts, not controller-local casts.
@@ -141,7 +141,7 @@
 //       controller self-sent sendData() wrapper.
 //   r51_im_app_response_schema_shared_contract : IM app response DTOs return
 //       through appRoute(), not controller self-sent sendData() wrappers.
-//   r52_workspace_apps_input_schema_depth : workspace-apps app input schemas
+//   r52_workspace_resources_input_schema_depth : workspace-resources app input schemas
 //       validate actor docs and custom skill content structurally, not with
 //       z.any() placeholders.
 //   r53_model_groups_json_repo_exit : selected model-groups business JSON
@@ -360,8 +360,8 @@
 //   r134_web_plugin_installation_detail_contract_shared : web plugin
 //       installation detail clients return shared PluginInstallationDetailView
 //       directly instead of re-wrapping it as `{ installation }`.
-//   r135_web_workspace_app_success_contract_shared : web workspace-app delete
-//       clients return shared WorkspaceAppSuccessView values directly instead
+//   r135_web_workspace_resource_success_contract_shared : web workspace-resource delete
+//       clients return shared WorkspaceResourceSuccessView values directly instead
 //       of exposing the raw fetch envelope or a local `{ deleted }` shape.
 //   r136_web_automation_success_contract_shared : web automation success
 //       clients return shared AutomationSuccess values directly instead of
@@ -369,8 +369,8 @@
 //   r137_web_mcp_audit_contract_shared : web MCP audit facades return shared
 //       PluginAuditLogList arrays directly instead of exposing appRoute's
 //       `{ data }` envelope.
-//   r138_web_workspace_app_grants_contract_shared : web workspace-app grant
-//       facades return shared WorkspaceAppGrantListView values directly instead
+//   r138_web_workspace_resource_grants_contract_shared : web workspace-resource grant
+//       facades return shared WorkspaceResourceGrantListView values directly instead
 //       of exposing appRoute's `{ data }` envelope or local grant arrays.
 //   r139_web_skills_facade_contract_shared : web skills facades use shared
 //       SkillMarketplace*View / InstalledSkill*View response contracts instead
@@ -419,9 +419,9 @@ const MODULES = resolve(here, "../src/modules")
 const API_SRC = resolve(here, "../src")
 const REPO_ROOT = resolve(here, "../../..")
 const BASELINE = resolve(here, "guard-layering-baseline.json")
-const WORKSPACE_APPS_SHARED_SCHEMA = resolve(
+const WORKSPACE_RESOURCES_SHARED_SCHEMA = resolve(
   REPO_ROOT,
-  "packages/shared/src/schemas/workspace-apps.ts"
+  "packages/shared/src/schemas/workspace-resources.ts"
 )
 const WORKSPACE_SHARED_SCHEMA = resolve(
   REPO_ROOT,
@@ -765,10 +765,10 @@ const isWorkspacePresenterFile = (p) => r8Key(p) === "workspace/presenter.ts"
 const isToolCallTasksPresenterFile = (p) =>
   r8Key(p) === "tool-call-tasks/presenter.ts"
 const isWorkspaceSharedSchemaFile = (p) => p === WORKSPACE_SHARED_SCHEMA
-const isWorkspaceAppsControllerFile = (p) =>
-  r8Key(p) === "workspace-apps/controller.ts"
-const isWorkspaceAppsSharedSchemaFile = (p) =>
-  p === WORKSPACE_APPS_SHARED_SCHEMA
+const isWorkspaceResourcesControllerFile = (p) =>
+  r8Key(p) === "workspace-resources/controller.ts"
+const isWorkspaceResourcesSharedSchemaFile = (p) =>
+  p === WORKSPACE_RESOURCES_SHARED_SCHEMA
 const isAutomationSharedSchemaFile = (p) => p === AUTOMATION_SHARED_SCHEMA
 const isChatSharedSchemaFile = (p) => p === CHAT_SHARED_SCHEMA
 const isImSharedSchemaFile = (p) => p === IM_SHARED_SCHEMA
@@ -828,10 +828,10 @@ const isWebPluginInstallationDetailContractFile = (p) =>
   p === WEB_PLUGIN_INSTALLATION_WORKBENCH ||
   p === WEB_PLUGIN_INSTALLATION_DETAIL_PAGE ||
   p === WEB_PLUGIN_INSTALL_PAGE
-const isWebWorkspaceAppSuccessContractFile = (p) => p === WEB_API_CLIENT
+const isWebWorkspaceResourceSuccessContractFile = (p) => p === WEB_API_CLIENT
 const isWebAutomationSuccessContractFile = (p) => p === WEB_API_CLIENT
 const isWebMcpAuditContractFile = (p) => p === WEB_API_CLIENT
-const isWebWorkspaceAppGrantsContractFile = (p) => p === WEB_API_CLIENT
+const isWebWorkspaceResourceGrantsContractFile = (p) => p === WEB_API_CLIENT
 const isWebSkillsFacadeContractFile = (p) => p === WEB_API_CLIENT
 const isWebMemoryFacadeContractFile = (p) => p === WEB_API_CLIENT
 const isWebRemoteAgentsFacadeContractFile = (p) => p === WEB_API_CLIENT
@@ -1459,16 +1459,16 @@ const RULES = [
       ),
   },
   {
-    // r135: workspace-app delete routes return WorkspaceAppSuccessView inside
+    // r135: workspace-resource delete routes return WorkspaceResourceSuccessView inside
     // appRoute's { data } envelope. Keep web facades on the shared success
     // value instead of exposing raw fetch responses or a local { deleted }.
-    id: "r135_web_workspace_app_success_contract_shared",
-    appliesTo: isWebWorkspaceAppSuccessContractFile,
+    id: "r135_web_workspace_resource_success_contract_shared",
+    appliesTo: isWebWorkspaceResourceSuccessContractFile,
     test: (src) =>
       /\b(?:deleteActor|deleteRemoteAgent|uninstallInstalledSkill|uninstallPlugin)\b[\s\S]{0,180}Promise\s*<\s*\{/.test(
         src
       ) ||
-      /\b(?:deleteActor|deleteRemoteAgent|uninstallInstalledSkill|uninstallPlugin)\b[\s\S]{0,320}return\s+this\.fetch\(\s*`\/workspaces\/\$\{wsId\}\/workspace-apps\/\$\{/.test(
+      /\b(?:deleteActor|deleteRemoteAgent|uninstallInstalledSkill|uninstallPlugin)\b[\s\S]{0,320}return\s+this\.fetch\(\s*`\/workspaces\/\$\{wsId\}\/workspace-resources\/\$\{/.test(
         src
       ) ||
       /\b(?:deleteActor|deleteRemoteAgent|uninstallInstalledSkill|uninstallPlugin)\b[\s\S]{0,260}return\s+res\b(?!\.data)/.test(
@@ -1510,20 +1510,20 @@ const RULES = [
       ),
   },
   {
-    // r138: workspace-app grant GET/PUT routes return
-    // WorkspaceAppGrantListView inside appRoute's { data } envelope. Keep web
+    // r138: workspace-resource grant GET/PUT routes return
+    // WorkspaceResourceGrantListView inside appRoute's { data } envelope. Keep web
     // facades on the shared grant-list value instead of exposing raw fetch
-    // envelopes or local { grants: WorkspaceAppGrant[] } return types.
-    id: "r138_web_workspace_app_grants_contract_shared",
-    appliesTo: isWebWorkspaceAppGrantsContractFile,
+    // envelopes or local { grants: WorkspaceResourceGrant[] } return types.
+    id: "r138_web_workspace_resource_grants_contract_shared",
+    appliesTo: isWebWorkspaceResourceGrantsContractFile,
     test: (src) =>
-      /\b(?:getWorkspaceAppGrants|replaceWorkspaceAppGrants)\b[\s\S]{0,180}Promise\s*<\s*\{\s*grants\s*:\s*WorkspaceAppGrant\[\]\s*\}\s*>/.test(
+      /\b(?:getWorkspaceResourceGrants|replaceWorkspaceResourceGrants)\b[\s\S]{0,180}Promise\s*<\s*\{\s*grants\s*:\s*WorkspaceResourceGrant\[\]\s*\}\s*>/.test(
         src
       ) ||
-      /\b(?:getWorkspaceAppGrants|replaceWorkspaceAppGrants)\b[\s\S]{0,320}return\s+this\.fetch\(\s*`\/workspaces\/\$\{wsId\}\/workspace-apps\/\$\{appId\}\/grants`/.test(
+      /\b(?:getWorkspaceResourceGrants|replaceWorkspaceResourceGrants)\b[\s\S]{0,320}return\s+this\.fetch\(\s*`\/workspaces\/\$\{wsId\}\/workspace-resources\/\$\{appId\}\/grants`/.test(
         src
       ) ||
-      /\b(?:getWorkspaceAppGrants|replaceWorkspaceAppGrants)\b[\s\S]{0,280}return\s+(?:res|response)\b(?!\.data)/.test(
+      /\b(?:getWorkspaceResourceGrants|replaceWorkspaceResourceGrants)\b[\s\S]{0,280}return\s+(?:res|response)\b(?!\.data)/.test(
         src
       ),
   },
@@ -1853,7 +1853,7 @@ const RULES = [
     // r24: the reviewed workspace app request body DTOs now live in
     // @synapse/shared/schemas. Keep the exact controller-local schema names from
     // coming back without imposing a global request DTO rule yet.
-    id: "r24_workspace_app_input_schema_shared_contract",
+    id: "r24_workspace_resource_input_schema_shared_contract",
     appliesTo: isWorkspaceControllerFile,
     test: (src) =>
       /\bconst\s+(?:createWorkspace|updateWorkspace|addMember|createInvite|workspaceAccess|chiefActorPreference|workspaceCapabilityConversationTypePolicyUpdate)Schema\b/.test(
@@ -1876,7 +1876,7 @@ const RULES = [
     id: "r26_organization_actor_package_install_input_shared_contract",
     appliesTo: isOrganizationControllerFile,
     test: (src) =>
-      /\bconst\s+(?:installActorPackage|initialGrant|initialGrantTarget|initialGrantSubject|workspaceAppGrantPermission|contentBlock|actorDoc)Schema\b/.test(
+      /\bconst\s+(?:installActorPackage|initialGrant|initialGrantTarget|initialGrantSubject|workspaceResourceGrantPermission|contentBlock|actorDoc)Schema\b/.test(
         src
       ),
   },
@@ -1958,13 +1958,13 @@ const RULES = [
       ),
   },
   {
-    // r32: workspace-apps list/discover/grant-request query DTOs now live in
+    // r32: workspace-resources list/discover/grant-request query DTOs now live in
     // @synapse/shared/schemas. Path params remain route-local, but app query
     // contracts should not be recreated in controller.ts.
-    id: "r32_workspace_apps_app_query_schema_shared_contract",
-    appliesTo: isWorkspaceAppsControllerFile,
+    id: "r32_workspace_resources_app_query_schema_shared_contract",
+    appliesTo: isWorkspaceResourcesControllerFile,
     test: (src) =>
-      /\bconst\s+workspaceAppKindSchema\b/.test(src) ||
+      /\bconst\s+workspaceResourceKindSchema\b/.test(src) ||
       /z\.object\s*\(\s*\{\s*kind\s*:/.test(src) ||
       /z\.object\s*\(\s*\{\s*conversationId\s*:/.test(src) ||
       /z\.object\s*\(\s*\{\s*direction\s*:/.test(src),
@@ -2114,11 +2114,11 @@ const RULES = [
       ),
   },
   {
-    // r52: workspace-apps create/update request bodies are shared app
+    // r52: workspace-resources create/update request bodies are shared app
     // contracts. Actor docs and custom installed-skill content are structured
     // app DTOs, not arbitrary z.any() passthrough fields.
-    id: "r52_workspace_apps_input_schema_depth",
-    appliesTo: isWorkspaceAppsSharedSchemaFile,
+    id: "r52_workspace_resources_input_schema_depth",
+    appliesTo: isWorkspaceResourcesSharedSchemaFile,
     test: (src) =>
       /docs:\s*z\.array\(\s*z\.any\(\s*\)\s*\)\.optional\(\)/.test(src) ||
       /description:\s*z\.any\(\s*\)\.optional\(\)/.test(src) ||
@@ -2217,9 +2217,9 @@ const RULES = [
       ),
   },
   {
-    // r61: automation executions, webhook endpoints, and event-source access
-    // grants are app-facing rows consumed by dashboards and have finite shared
-    // status sets. Keep their response schemas from accepting arbitrary strings.
+    // r61: automation executions and webhook endpoints are app-facing rows
+    // consumed by dashboards and have finite shared status sets. Keep their
+    // response schemas from accepting arbitrary strings.
     id: "r61_automation_response_status_schema_depth",
     appliesTo: isAutomationSharedSchemaFile,
     test: (src) =>
@@ -2227,9 +2227,6 @@ const RULES = [
         src
       ) ||
       /AutomationWebhookEndpointSchema\s*=\s*z\.object\(\s*\{[\s\S]*?status:\s*z\.string\(\)/.test(
-        src
-      ) ||
-      /AutomationEventSourceAccessGrantSchema\s*=\s*z\.object\(\s*\{[\s\S]*?status:\s*z\.string\(\)/.test(
         src
       ),
   },
@@ -3309,7 +3306,7 @@ const RULES = [
 const files = [
   ...walk(MODULES),
   WORKSPACE_SHARED_SCHEMA,
-  WORKSPACE_APPS_SHARED_SCHEMA,
+  WORKSPACE_RESOURCES_SHARED_SCHEMA,
   AUTOMATION_SHARED_SCHEMA,
   CHAT_SHARED_SCHEMA,
   IM_SHARED_SCHEMA,

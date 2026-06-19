@@ -30,6 +30,7 @@ import {
   teardownChatStack,
   registerTestUser,
   createTestWorkspace,
+  ensureWorkspaceMemberSubject,
   TEST_PG_DB,
   TEST_PG_HOST,
   TEST_PG_PASSWORD,
@@ -91,10 +92,15 @@ test("retry succeeds end-to-end and enqueues a session_wakeup with the correct w
 
     await pg.query("BEGIN")
     try {
+      const memberSubjectId = await ensureWorkspaceMemberSubject(
+        pg,
+        ws.id,
+        workspaceMemberId
+      )
       await pg.query(
-        `INSERT INTO workspace_apps (id, workspace_id, kind, display_name, owner_workspace_member_id, status)
-         VALUES ($1, $2, 'actor', 'retry-test-actor', $3, 'active')`,
-        [actorId, ws.id, workspaceMemberId]
+        `INSERT INTO workspace_resources (id, workspace_id, kind, display_name, owner_subject_id, created_by_subject_id, status)
+         VALUES ($1, $2, 'actor', 'retry-test-actor', $3, $3, 'active')`,
+        [actorId, ws.id, memberSubjectId]
       )
       await pg.query(
         `INSERT INTO actors (id, role, title)

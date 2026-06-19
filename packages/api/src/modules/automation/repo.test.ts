@@ -2,7 +2,6 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import {
   AUTOMATION_COMPLETION_STATUSES,
-  AUTOMATION_CREATOR_KIND,
   AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS,
   AUTOMATION_EVENT_SOURCE_STATUSES,
   AUTOMATION_EXECUTION_STATUS,
@@ -46,6 +45,7 @@ import {
   listAutomationRuleIds,
   listAutomationWebhookEndpointRows,
   listIntegrationAutomationEventSourceRowsByWebhookPathToken,
+  loadAutomationEventSourceAccessGrantRows,
   loadAutomationRuleComponentRows,
   lockDueAutomationScheduleRows,
   normalizeIntegrationInstallationRow,
@@ -179,14 +179,19 @@ async function insertPluginInstallationFixture(
     .returning("id")
     .executeTakeFirstOrThrow()
   const installationId = crypto.randomUUID()
+  const ownerSubjectId = await upsertAccessSubject(db, {
+    kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+    memberId: params.memberId,
+  })
   await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id: installationId,
       workspaceId: params.workspaceId,
       kind: "plugin_installation",
       displayName: "automation plugin",
-      ownerWorkspaceMemberId: params.memberId,
+      ownerSubjectId,
+      createdBySubjectId: ownerSubjectId,
       status: "active",
     } as any)
     .execute()
@@ -199,6 +204,63 @@ async function insertPluginInstallationFixture(
     } as any)
     .execute()
   return installationId
+}
+
+// Insert an automation_event_source (6th workspace_resources kind): root row
+// first (carries display_name/status/owner/creator as subjects), then the
+// detail row with only its surviving columns. The detail-consistency trigger is
+// DEFERRABLE INITIALLY DEFERRED, so both are visible to it at the same time.
+async function insertEventSourceWithRoot(
+  db: AnyDb,
+  params: {
+    id: string
+    workspaceId: string
+    memberId: string
+    providerKind: string
+    sourceKey: string
+    webhookEndpointId?: string | null
+    integrationBindingId?: string | null
+    providerRef?: string | null
+    displayName?: string
+    status?: string
+    metadata?: unknown
+    payloadSchema?: unknown
+    examplePayload?: unknown
+  }
+) {
+  const subjectId = await upsertAccessSubject(db, {
+    kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+    memberId: params.memberId,
+  })
+  await db
+    .insertInto("workspaceResources")
+    .values({
+      id: params.id,
+      workspaceId: params.workspaceId,
+      kind: "automation_event_source",
+      displayName: params.displayName ?? "automation source",
+      ownerSubjectId: subjectId,
+      createdBySubjectId: subjectId,
+      status: params.status ?? "active",
+    } as any)
+    .execute()
+  await insertAutomationEventSourceRow(
+    {
+      id: params.id,
+      workspaceId: params.workspaceId,
+      providerKind: params.providerKind,
+      providerRef: params.providerRef ?? null,
+      webhookEndpointId: params.webhookEndpointId ?? null,
+      integrationBindingId: params.integrationBindingId ?? null,
+      sourceKey: params.sourceKey,
+      description: "",
+      recommendedUsage: "",
+      payloadSchema: JSON.stringify(params.payloadSchema ?? {}),
+      examplePayload: JSON.stringify(params.examplePayload ?? {}),
+      metadata: JSON.stringify(params.metadata ?? {}),
+    },
+    db
+  )
 }
 
 test("decodeAutomationEventSourceMetadata decodes JSONB metadata at repo exit", () => {
@@ -601,29 +663,19 @@ test(
         db
       )
 
-      await insertAutomationEventSourceRow(
-        {
-          id: directSourceId,
-          workspaceId,
-          providerKind: AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS[1],
-          providerRef: null,
-          webhookEndpointId: directEndpointId,
-          integrationBindingId: null,
-          sourceKey: directSourceKey,
-          name: "direct source",
-          description: "",
-          recommendedUsage: "",
-          payloadSchema: JSON.stringify({ direct: true }),
-          examplePayload: JSON.stringify({ direct: "event" }),
-          status: AUTOMATION_EVENT_SOURCE_STATUSES[0],
-          createdByKind: AUTOMATION_CREATOR_KIND.WORKSPACE_MEMBER,
-          createdByWorkspaceMemberId: memberId,
-          createdByActorId: null,
-          createdBySessionId: null,
-          metadata: JSON.stringify({ source: "direct" }),
-        },
-        db
-      )
+      await insertEventSourceWithRoot(db, {
+        id: directSourceId,
+        workspaceId,
+        memberId,
+        providerKind: AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS[1],
+        webhookEndpointId: directEndpointId,
+        sourceKey: directSourceKey,
+        displayName: "direct source",
+        status: AUTOMATION_EVENT_SOURCE_STATUSES[0],
+        payloadSchema: { direct: true },
+        examplePayload: { direct: "event" },
+        metadata: { source: "direct" },
+      })
 
       const directSource = await selectWebhookAutomationEventSourceByPathToken({
         pathToken: directPathToken,
@@ -673,29 +725,20 @@ test(
         externalSubscriptionId: "sub-2",
         metadata: JSON.stringify({ binding: "integration" }),
       })
-      await insertAutomationEventSourceRow(
-        {
-          id: integrationSourceId,
-          workspaceId,
-          providerKind: AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS[3],
-          providerRef: AUTOMATION_INTEGRATION_PROVIDERS[0],
-          webhookEndpointId: null,
-          integrationBindingId: bindingId,
-          sourceKey: integrationSourceKey,
-          name: "integration source",
-          description: "",
-          recommendedUsage: "",
-          payloadSchema: JSON.stringify({ integration: true }),
-          examplePayload: JSON.stringify({ integration: "event" }),
-          status: AUTOMATION_EVENT_SOURCE_STATUSES[0],
-          createdByKind: AUTOMATION_CREATOR_KIND.WORKSPACE_MEMBER,
-          createdByWorkspaceMemberId: memberId,
-          createdByActorId: null,
-          createdBySessionId: null,
-          metadata: JSON.stringify({ source: "integration" }),
-        },
-        db
-      )
+      await insertEventSourceWithRoot(db, {
+        id: integrationSourceId,
+        workspaceId,
+        memberId,
+        providerKind: AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS[3],
+        providerRef: AUTOMATION_INTEGRATION_PROVIDERS[0],
+        integrationBindingId: bindingId,
+        sourceKey: integrationSourceKey,
+        displayName: "integration source",
+        status: AUTOMATION_EVENT_SOURCE_STATUSES[0],
+        payloadSchema: { integration: true },
+        examplePayload: { integration: "event" },
+        metadata: { source: "integration" },
+      })
 
       const integrationSources =
         await listIntegrationAutomationEventSourceRowsByWebhookPathToken({
@@ -1196,29 +1239,16 @@ test(
       const ruleId = crypto.randomUUID()
       const pauseReason = "repo helper pause"
 
-      await insertAutomationEventSourceRow(
-        {
-          id: eventSourceId,
-          workspaceId,
-          providerKind: AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS[2],
-          providerRef: null,
-          webhookEndpointId: null,
-          integrationBindingId: null,
-          sourceKey: `repo.${crypto.randomUUID()}`,
-          name: "repo helper source",
-          description: "",
-          recommendedUsage: "",
-          payloadSchema: JSON.stringify({}),
-          examplePayload: JSON.stringify({}),
-          status: AUTOMATION_EVENT_SOURCE_STATUSES[0],
-          createdByKind: AUTOMATION_CREATOR_KIND.WORKSPACE_MEMBER,
-          createdByWorkspaceMemberId: memberId,
-          createdByActorId: null,
-          createdBySessionId: null,
-          metadata: JSON.stringify({ source: true }),
-        },
-        db
-      )
+      await insertEventSourceWithRoot(db, {
+        id: eventSourceId,
+        workspaceId,
+        memberId,
+        providerKind: AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS[2],
+        sourceKey: `repo.${crypto.randomUUID()}`,
+        displayName: "repo helper source",
+        status: AUTOMATION_EVENT_SOURCE_STATUSES[0],
+        metadata: { source: true },
+      })
 
       const loadedSource = await getAutomationEventSourceRow({
         workspaceId,
@@ -1302,6 +1332,135 @@ test(
         .executeTakeFirstOrThrow()
       assert.equal(pausedRule.status, AUTOMATION_RULE_STATUSES[1])
       assert.equal(pausedRule.lastErrorMessage, pauseReason)
+    })
+  }
+)
+
+test(
+  "loadAutomationEventSourceAccessGrantRows returns ONLY active use-grants with subject/scope aliases",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const { workspaceId, memberId, conversationId } =
+        await insertAutomationRuleFixture(db)
+      const sourceId = crypto.randomUUID()
+      await insertEventSourceWithRoot(db, {
+        id: sourceId,
+        workspaceId,
+        memberId,
+        providerKind: "internal",
+        sourceKey: `loader-${crypto.randomUUID().slice(0, 8)}`,
+      })
+
+      const memberSubject = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+        memberId,
+      })
+      const conversationSubject = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.CONVERSATION,
+        conversationId,
+      })
+
+      // (1) active use-grant on the member subject -> MUST be returned.
+      const activeUse = await db
+        .insertInto("workspaceResourceGrants")
+        .values({
+          workspaceId,
+          workspaceResourceId: sourceId,
+          subjectId: memberSubject,
+          permissions: ["use"],
+          status: "active",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+
+      // (2) active manage-grant -> MUST be filtered out (loader is use-only).
+      // manage grants are restricted to an unscoped workspace_member subject by
+      // validate_workspace_resource_grant, so it goes on a SECOND member (a
+      // distinct subject avoids the active-unique collision with the use-grant
+      // on memberSubject).
+      const manageUser = await db
+        .insertInto("users")
+        .values({
+          email: `loader-mgr-${crypto.randomUUID()}@example.test`,
+          name: "loader manage member",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const manageMember = await db
+        .insertInto("workspaceMembers")
+        .values({
+          workspaceId,
+          userId: manageUser.id,
+          trustLevel: INVITE_TRUST_LEVELS[1],
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const manageMemberSubject = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+        memberId: manageMember.id as string,
+      })
+      await db
+        .insertInto("workspaceResourceGrants")
+        .values({
+          workspaceId,
+          workspaceResourceId: sourceId,
+          subjectId: manageMemberSubject,
+          permissions: ["manage"],
+          status: "active",
+        })
+        .execute()
+
+      // (3) REVOKED use-grant -> MUST be filtered out (status != active).
+      const revokedUse = await db
+        .insertInto("workspaceResourceGrants")
+        .values({
+          workspaceId,
+          workspaceResourceId: sourceId,
+          subjectId: conversationSubject,
+          permissions: ["use"],
+          status: "revoked",
+          revokedAt: new Date(),
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+
+      const rows = await loadAutomationEventSourceAccessGrantRows(
+        {
+          resourceType: "automation_event_source",
+          resourceIds: [sourceId],
+          workspaceId,
+        },
+        db
+      )
+
+      assert.deepEqual(
+        rows.map((r) => r.id).sort(),
+        [activeUse.id as string],
+        "only the active use-grant is loaded (manage + revoked excluded)"
+      )
+      const only = rows[0]
+      assert.equal(only.subjectKind, "workspace_member")
+      assert.equal(only.subjectWorkspaceMemberIdViaJoin, memberId)
+      assert.equal(only.scopeKind, null)
+      assert.equal(only.status, "active")
+
+      // includeRevoked still excludes manage, but now surfaces the revoked
+      // use-grant too (and decodes its conversation-subject scope/alias).
+      const withRevoked = await loadAutomationEventSourceAccessGrantRows(
+        {
+          resourceType: "automation_event_source",
+          resourceIds: [sourceId],
+          workspaceId,
+          includeRevoked: true,
+        },
+        db
+      )
+      assert.deepEqual(
+        withRevoked.map((r) => r.id).sort(),
+        [activeUse.id as string, revokedUse.id as string].sort(),
+        "includeRevoked surfaces both use-grants but never the manage grant"
+      )
     })
   }
 )

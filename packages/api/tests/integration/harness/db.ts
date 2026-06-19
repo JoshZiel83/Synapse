@@ -49,7 +49,35 @@ export interface MinimalSeed {
   userEmail: string
   workspaceId: string
   workspaceMemberId: string
+  /**
+   * The `workspace_member`-kind `access_subjects.id` for `workspaceMemberId`.
+   * Use this for `workspace_resources.owner_subject_id` /
+   * `created_by_subject_id` (both reference `access_subjects`, not members).
+   */
+  memberSubjectId: string
   sessionToken: string
+}
+
+/**
+ * Idempotently resolve (creating if absent) the `workspace_member`-kind
+ * `access_subjects` row for a member, returning its subject id. Fixtures that
+ * insert `workspace_resources` need this for `owner_subject_id` /
+ * `created_by_subject_id` (both FK → `access_subjects`).
+ */
+export async function ensureWorkspaceMemberSubject(
+  client: pg.Client | pg.PoolClient,
+  workspaceId: string,
+  workspaceMemberId: string
+): Promise<string> {
+  const row = await client.query<{ id: string }>(
+    `INSERT INTO access_subjects (kind, workspace_id, workspace_member_id)
+     VALUES ('workspace_member', $1, $2)
+     ON CONFLICT (workspace_member_id) WHERE kind = 'workspace_member'
+       DO UPDATE SET workspace_member_id = EXCLUDED.workspace_member_id
+     RETURNING id`,
+    [workspaceId, workspaceMemberId]
+  )
+  return row.rows[0].id
 }
 
 /**
@@ -220,6 +248,12 @@ export async function seedMinimal(
     )
     const workspaceMemberId = memberRow.rows[0].id
 
+    const memberSubjectId = await ensureWorkspaceMemberSubject(
+      client,
+      workspaceId,
+      workspaceMemberId
+    )
+
     // Mint a Better Auth session directly. BA's session table stores the raw
     // token (no hash); the harness client sends it as `Authorization: Bearer
     // <token>`, which the bearer() plugin resolves via a token lookup.
@@ -234,6 +268,7 @@ export async function seedMinimal(
       userEmail: email,
       workspaceId,
       workspaceMemberId,
+      memberSubjectId,
       sessionToken,
     }
   })

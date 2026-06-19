@@ -6,8 +6,8 @@ import {
   type RemoteAgentRuntimeState,
   type RemoteAgentRuntimeStateType,
   type CapabilityAccessTarget,
-  type WorkspaceAppGrantPermission,
-  type WorkspaceAppStatus,
+  type WorkspaceResourceGrantPermission,
+  type WorkspaceResourceStatus,
 } from "@synapse/shared"
 import {
   db,
@@ -27,13 +27,13 @@ import {
 } from "./presenter.js"
 import { deriveRequiresContactApproval } from "../access/contact-approval.js"
 import {
-  insertWorkspaceAppRoot,
-  updateWorkspaceAppRoot,
-} from "../workspace-apps/repo.js"
+  insertWorkspaceResourceRoot,
+  updateWorkspaceResourceRoot,
+} from "../workspace-resources/repo.js"
 import {
-  insertWorkspaceAppGrant,
-  type InsertWorkspaceAppGrantInput,
-} from "../workspace-apps/grant-storage.js"
+  insertWorkspaceResourceGrant,
+  type InsertWorkspaceResourceGrantInput,
+} from "../workspace-resources/grant-storage.js"
 import { appendWorkspaceMemberSyncEvent } from "../chat/sync-events.js"
 import { nextAttemptAt, shouldFailDelivery } from "./delivery-retry.js"
 
@@ -176,12 +176,12 @@ export async function loadBoundRemoteAgentsForMachineRepo(
         binding.local_root_path AS "localRootPath"
       FROM remote_agent_bindings binding
       INNER JOIN remote_agents agent ON agent.id = binding.remote_agent_id
-      INNER JOIN workspace_apps_live app
-        ON app.id = agent.id
+      INNER JOIN workspace_resources_live resource
+        ON resource.id = agent.id
       WHERE binding.machine_id = $1
         AND binding.status = 'active'
-        AND app.deleted_at IS NULL
-        AND app.status = 'active'
+        AND resource.deleted_at IS NULL
+        AND resource.status = 'active'
       ORDER BY agent.created_at ASC, agent.id ASC
     `,
     [machineId]
@@ -356,8 +356,8 @@ export async function loadAgentStartTargetsForMachineRepo(
         ctx.runtime_session_id AS "runtimeSessionId"
       FROM remote_agent_bindings binding
       INNER JOIN remote_agents agent ON agent.id = binding.remote_agent_id
-      INNER JOIN workspace_apps_live app
-        ON app.id = agent.id
+      INNER JOIN workspace_resources_live resource
+        ON resource.id = agent.id
       INNER JOIN (
         SELECT DISTINCT remote_agent_id, conversation_id
         FROM remote_agent_message_deliveries
@@ -370,8 +370,8 @@ export async function loadAgentStartTargetsForMachineRepo(
         AND ctx.conversation_id = delivery.conversation_id
       WHERE binding.machine_id = $1
         AND binding.status = 'active'
-        AND app.deleted_at IS NULL
-        AND app.status = 'active'
+        AND resource.deleted_at IS NULL
+        AND resource.status = 'active'
       ORDER BY ctx.last_activity_at DESC NULLS LAST, delivery.conversation_id ASC
     `,
     [machineId]
@@ -778,17 +778,17 @@ export async function authenticateBindingRepo(
       SELECT
         binding.remote_agent_id AS "remoteAgentId",
         binding.machine_id AS "machineId",
-        app.workspace_id AS "workspaceId",
+        resource.workspace_id AS "workspaceId",
         binding.local_root_path AS "localRootPath"
       FROM remote_agent_bindings binding
       INNER JOIN remote_agents agent ON agent.id = binding.remote_agent_id
-      INNER JOIN workspace_apps_live app
-        ON app.id = agent.id
+      INNER JOIN workspace_resources_live resource
+        ON resource.id = agent.id
       WHERE binding.remote_agent_id = $1
         AND binding.machine_id = $2
         AND binding.status = 'active'
-        AND app.deleted_at IS NULL
-        AND app.status = 'active'
+        AND resource.deleted_at IS NULL
+        AND resource.status = 'active'
       LIMIT 1
     `,
     [remoteAgentId, machineId]
@@ -1188,10 +1188,10 @@ export async function listRemoteAgentRowsRepo(
     `
       SELECT
         agent.*,
-        app.workspace_id AS "workspaceId",
-        app.display_name AS "displayName",
-        app.owner_workspace_member_id AS "ownerWorkspaceMemberId",
-        (app.status = 'active') AS "isActive",
+        resource.workspace_id AS "workspaceId",
+        resource.display_name AS "displayName",
+        owner_subject.workspace_member_id AS "ownerWorkspaceMemberId",
+        (resource.status = 'active') AS "isActive",
         binding.machine_id AS "machineId",
         machine.title AS "machineTitle",
         binding.status AS "bindingStatus",
@@ -1221,15 +1221,17 @@ export async function listRemoteAgentRowsRepo(
             AND delivery.status = 'pending'
         ) AS "unreadDeliveryCount"
       FROM remote_agents agent
-      INNER JOIN workspace_apps_live app
-        ON app.id = agent.id
+      INNER JOIN workspace_resources_live resource
+        ON resource.id = agent.id
+      LEFT JOIN access_subjects owner_subject
+        ON owner_subject.id = resource.owner_subject_id
       LEFT JOIN remote_agent_bindings binding
         ON binding.remote_agent_id = agent.id
       LEFT JOIN remote_agent_machines machine
         ON machine.id = binding.machine_id
       ${LATEST_CONVERSATION_CONTEXT_LATERAL}
-      WHERE app.workspace_id = $1
-        AND app.deleted_at IS NULL
+      WHERE resource.workspace_id = $1
+        AND resource.deleted_at IS NULL
         AND agent.id = ANY($2::uuid[])
       ORDER BY agent.created_at DESC, agent.id DESC
     `,
@@ -1248,10 +1250,10 @@ export async function getRemoteAgentRowRepo(
     `
       SELECT
         agent.*,
-        app.workspace_id AS "workspaceId",
-        app.display_name AS "displayName",
-        app.owner_workspace_member_id AS "ownerWorkspaceMemberId",
-        (app.status = 'active') AS "isActive",
+        resource.workspace_id AS "workspaceId",
+        resource.display_name AS "displayName",
+        owner_subject.workspace_member_id AS "ownerWorkspaceMemberId",
+        (resource.status = 'active') AS "isActive",
         binding.machine_id AS "machineId",
         machine.title AS "machineTitle",
         binding.status AS "bindingStatus",
@@ -1281,15 +1283,17 @@ export async function getRemoteAgentRowRepo(
             AND delivery.status = 'pending'
         ) AS "unreadDeliveryCount"
       FROM remote_agents agent
-      INNER JOIN workspace_apps_live app
-        ON app.id = agent.id
+      INNER JOIN workspace_resources_live resource
+        ON resource.id = agent.id
+      LEFT JOIN access_subjects owner_subject
+        ON owner_subject.id = resource.owner_subject_id
       LEFT JOIN remote_agent_bindings binding
         ON binding.remote_agent_id = agent.id
       LEFT JOIN remote_agent_machines machine
         ON machine.id = binding.machine_id
       ${LATEST_CONVERSATION_CONTEXT_LATERAL}
-      WHERE app.workspace_id = $1
-        AND app.deleted_at IS NULL
+      WHERE resource.workspace_id = $1
+        AND resource.deleted_at IS NULL
         AND agent.id = $2
       LIMIT 1
     `,
@@ -1299,7 +1303,7 @@ export async function getRemoteAgentRowRepo(
 }
 
 /**
- * Whole-transaction create of a remote agent: workspace-app root + detail row
+ * Whole-transaction create of a remote agent: workspace-resource root + detail row
  * + grants are inserted atomically (cross-module storage calls thread the same
  * `client` executor). Returns the raw inserted remote_agents row.
  */
@@ -1317,13 +1321,13 @@ export async function createRemoteAgentTx(params: {
   metadata: Record<string, unknown>
   grants: Array<{
     target: CapabilityAccessTarget
-    permissions: WorkspaceAppGrantPermission[]
+    permissions: WorkspaceResourceGrantPermission[]
     conversationTypeMaskOverride?: number | null
     reason?: string
   }>
 }): Promise<RemoteAgentRow> {
   return withDbTransaction(async (client) => {
-    await insertWorkspaceAppRoot(client, {
+    await insertWorkspaceResourceRoot(client, {
       id: params.remoteAgentId,
       workspaceId: params.workspaceId,
       kind: "remote_agent",
@@ -1362,16 +1366,16 @@ export async function createRemoteAgentTx(params: {
     )
     const row = result.rows[0]!
     for (const grant of params.grants) {
-      await insertWorkspaceAppGrant(client, {
+      await insertWorkspaceResourceGrant(client, {
         workspaceId: params.workspaceId,
-        workspaceAppId: row.id,
+        workspaceResourceId: row.id,
         target: grant.target,
         permissions: grant.permissions,
         conversationTypeMaskOverride:
           grant.conversationTypeMaskOverride ?? null,
         createdByWorkspaceMemberId: params.ownerWorkspaceMemberId,
         reason: grant.reason ?? null,
-      } satisfies InsertWorkspaceAppGrantInput)
+      } satisfies InsertWorkspaceResourceGrantInput)
     }
     return row
   })
@@ -1404,10 +1408,10 @@ export async function updateRemoteAgentRowRepo(
       WHERE id = $2
         AND EXISTS (
           SELECT 1
-          FROM workspace_apps_live app
-          WHERE app.id = remote_agents.id
-            AND app.workspace_id = $1
-            AND app.deleted_at IS NULL
+          FROM workspace_resources_live resource
+          WHERE resource.id = remote_agents.id
+            AND resource.workspace_id = $1
+            AND resource.deleted_at IS NULL
         )
       RETURNING *
     `,
@@ -1517,7 +1521,7 @@ export async function getRemoteAgentMachineDetailRepo(
           latest_ctx.latest_last_run_finished_at AS "latestLastRunFinishedAt",
           binding.last_error AS "lastError",
           binding.capabilities,
-          app.display_name AS "displayName",
+          resource.display_name AS "displayName",
           (
             SELECT COUNT(DISTINCT delivery.conversation_id)
             FROM remote_agent_message_deliveries delivery
@@ -1532,7 +1536,7 @@ export async function getRemoteAgentMachineDetailRepo(
           ) AS "unreadDeliveryCount"
         FROM remote_agent_bindings binding
         INNER JOIN remote_agents agent ON agent.id = binding.remote_agent_id
-        INNER JOIN workspace_apps_live app ON app.id = agent.id
+        INNER JOIN workspace_resources_live resource ON resource.id = agent.id
         ${LATEST_CONVERSATION_CONTEXT_LATERAL}
         WHERE binding.machine_id = $1
         ORDER BY agent.created_at DESC
@@ -2140,18 +2144,18 @@ export async function markMachineSessionActiveRepo(
 }
 
 /**
- * Default-db-bound wrapper around the workspace-apps root update so the
- * service can adjust an agent's workspace-app root (display name / status /
+ * Default-db-bound wrapper around the workspace-resources root update so the
+ * service can adjust an agent's workspace-resource root (display name / status /
  * soft-delete) without importing the db client. The underlying storage fn stays
  * executor-injectable for transactional callers.
  */
-export async function updateWorkspaceAppRootDefault(input: {
+export async function updateWorkspaceResourceRootDefault(input: {
   id: string
   displayName?: string
   ownerWorkspaceMemberId?: string | null
-  status?: WorkspaceAppStatus
+  status?: WorkspaceResourceStatus
   conversationTypeMaskOverride?: number | null
   deletedAt?: Date | null
 }) {
-  await updateWorkspaceAppRoot(db, input)
+  await updateWorkspaceResourceRoot(db, input)
 }

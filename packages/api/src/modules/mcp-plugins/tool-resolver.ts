@@ -252,7 +252,7 @@ export async function resolveMcpToolsForRemoteAgent(
     conversationId: string
   }
 ): Promise<ResolvedMcpTools> {
-  // actorId stays undefined; subject builder + accessBindingMatchesContext
+  // actorId stays undefined; subject builder + pluginGrantMatchesContext
   // already understand this discriminator and route through the workspace +
   // conversation-target grant paths only.
   return resolveMcpToolsCommon({ ...params, actorId: undefined })

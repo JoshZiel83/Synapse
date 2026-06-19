@@ -83,7 +83,7 @@ test("create conversation forwards remoteAgentIds: response participants include
   // Provision a remote agent in this workspace so we have a valid id.
   const agentResponse = await ctx.client.json<{
     app: { id: string }
-  }>(`/workspaces/${ws.id}/workspace-apps`, {
+  }>(`/workspaces/${ws.id}/workspace-resources`, {
     method: "POST",
     json: {
       kind: "remote_agent",

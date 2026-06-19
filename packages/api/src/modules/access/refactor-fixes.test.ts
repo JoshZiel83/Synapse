@@ -8,21 +8,18 @@ import {
   remoteAgentRef,
 } from "@synapse/shared"
 import type { Kysely } from "kysely"
-import { withTestDb, withTestDbAndClient } from "../../test/helpers/db.js"
+import { withTestDb } from "../../test/helpers/db.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
 import { checkPermission } from "../access/evaluator.js"
 import { buildRuntimePrincipalContext } from "../access/subject-resolution.js"
-import {
-  insertAutomationEventSourceAccessBindingReturningIdOn,
-  loadAutomationEventSourceAccessBindingRowsForSourcesAndContext,
-} from "../access/binding-storage.js"
 import { insertMemoryAccessGrant } from "../memory/access-grant-storage.js"
 
 /**
  * Regression suite for the PR1-7 follow-up fixes that still remain relevant
- * after app-resource grants moved onto workspace_app_grants. The remaining
- * legacy binding coverage here is limited to scope filtering on automation-
- * style resource_access_bindings plus unrelated principal / memory behaviors.
+ * after all resource-authz grants (including automation event-source access,
+ * which used to live in the now-deleted `resource_access_bindings` table) moved
+ * onto `workspace_resource_grants`. What survives here is the cross-workspace
+ * principal validation plus the memory-grant overlay behavior.
  */
 
 const NS = "fixes"
@@ -52,15 +49,42 @@ async function newWorkspace(db: Kysely<any>): Promise<string> {
   return ws.id as string
 }
 
+// Owner→subject migration: workspace_resources.created_by_subject_id is NOT
+// NULL. Mint a workspace_member subject in the workspace to serve as creator.
+async function newCreatorSubjectId(
+  db: Kysely<any>,
+  wsId: string
+): Promise<string> {
+  const user = await db
+    .insertInto("users")
+    .values({ email: `creator-${rid()}@${NS}`, name: "creator" })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const member = await db
+    .insertInto("workspace_members")
+    .values({
+      workspace_id: wsId,
+      user_id: user.id as string,
+      trust_level: "member",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return upsertAccessSubject(db as any, {
+    kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+    memberId: member.id as string,
+  })
+}
+
 async function newActor(db: Kysely<any>, wsId: string): Promise<string> {
   const actorId = crypto.randomUUID()
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspace_resources")
     .values({
       id: actorId,
       workspace_id: wsId,
       kind: "actor",
       display_name: `${NS} actor`,
+      created_by_subject_id: await newCreatorSubjectId(db, wsId),
       status: "active",
     } as any)
     .execute()
@@ -81,12 +105,13 @@ async function newRemoteAgent(db: Kysely<any>, wsId: string): Promise<string> {
   const remoteAgentId = crypto.randomUUID()
   const agentName = `agent-${rid()}`
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspace_resources")
     .values({
       id: remoteAgentId,
       workspace_id: wsId,
       kind: "remote_agent",
       display_name: agentName,
+      created_by_subject_id: await newCreatorSubjectId(db, wsId),
       status: "active",
     } as any)
     .execute()
@@ -110,51 +135,6 @@ async function newConversation(db: Kysely<any>, wsId: string): Promise<string> {
       workspace_id: wsId,
       title: `${NS} conv`,
     })
-    .returning("id")
-    .executeTakeFirstOrThrow()
-  return row.id as string
-}
-
-async function newWorkspaceMember(
-  db: Kysely<any>,
-  wsId: string,
-  label: string
-): Promise<string> {
-  const user = await db
-    .insertInto("users")
-    .values({
-      email: `${label}-${rid()}@${NS}`,
-      name: label,
-    })
-    .returning("id")
-    .executeTakeFirstOrThrow()
-  const member = await db
-    .insertInto("workspace_members")
-    .values({
-      workspace_id: wsId,
-      user_id: user.id as string,
-      trust_level: "member",
-    } as any)
-    .returning("id")
-    .executeTakeFirstOrThrow()
-  return member.id as string
-}
-
-async function newAutomationEventSource(
-  db: Kysely<any>,
-  wsId: string
-): Promise<string> {
-  const memberId = await newWorkspaceMember(db, wsId, "creator")
-  const row = await db
-    .insertInto("automation_event_sources")
-    .values({
-      workspace_id: wsId,
-      provider_kind: "internal",
-      source_key: `src-${rid()}`,
-      name: "source",
-      created_by_kind: "workspace_member",
-      created_by_workspace_member_id: memberId,
-    } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   return row.id as string
@@ -237,69 +217,6 @@ test(
           workspaceId: wsB,
         }),
         /does not belong to workspace/
-      )
-    })
-  }
-)
-
-// -------- P1 fix #3: loadAutomationEventSourceAccessBindingRowsForSourcesAndContext scope filter --------
-
-test(
-  "loadAutomationEventSourceAccessBindingRowsForSourcesAndContext: scoped binding hidden in wrong conversation",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDbAndClient(async ({ db }) => {
-      const wsId = await newWorkspace(db)
-      const eventSourceId = await newAutomationEventSource(db, wsId)
-      const subjectActor = await newActor(db, wsId)
-      const convA = await newConversation(db, wsId)
-      const convB = await newConversation(db, wsId)
-
-      // subject=actor + scope=conversation B
-      await insertAutomationEventSourceAccessBindingReturningIdOn(db, {
-        workspaceId: wsId,
-        resourceType: "automation_event_source",
-        resourceId: eventSourceId,
-        target: {
-          subject: actorRef(subjectActor),
-          scope: { kind: SUBJECT_KIND.CONVERSATION, conversationId: convB },
-        },
-      })
-
-      // Asking for the same binding from inside conv A should NOT return it.
-      const rowsInA =
-        await loadAutomationEventSourceAccessBindingRowsForSourcesAndContext(
-          db,
-          {
-            resourceType: "automation_event_source",
-            resourceIds: [eventSourceId],
-            contextWorkspaceId: wsId,
-            actorId: subjectActor,
-            conversationId: convA,
-          }
-        )
-      assert.equal(
-        rowsInA.length,
-        0,
-        "scoped grant must not leak across conversations"
-      )
-
-      // From conv B it should be visible.
-      const rowsInB =
-        await loadAutomationEventSourceAccessBindingRowsForSourcesAndContext(
-          db,
-          {
-            resourceType: "automation_event_source",
-            resourceIds: [eventSourceId],
-            contextWorkspaceId: wsId,
-            actorId: subjectActor,
-            conversationId: convB,
-          }
-        )
-      assert.equal(
-        rowsInB.length,
-        1,
-        "scoped grant visible in its conversation"
       )
     })
   }

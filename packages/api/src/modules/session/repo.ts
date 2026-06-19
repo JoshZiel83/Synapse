@@ -214,7 +214,7 @@ export function normalizeRuntimeToolCallTaskRow(
 export async function getActorJoinVersionId(actorId: UUID) {
   const row = await db
     .selectFrom("actors as a")
-    .innerJoin("workspaceApps as app", "app.id", "a.id")
+    .innerJoin("workspaceResources as resource", "resource.id", "a.id")
     .innerJoin("actorVersions as current_version", (join) =>
       join
         .onRef("current_version.actorId", "=", "a.id")
@@ -222,7 +222,7 @@ export async function getActorJoinVersionId(actorId: UUID) {
     )
     .select("current_version.id as actorVersionId")
     .where("a.id", "=", actorId)
-    .where("app.deletedAt", "is", null)
+    .where("resource.deletedAt", "is", null)
     .limit(1)
     .executeTakeFirst()
   return row?.actorVersionId || undefined
@@ -234,11 +234,11 @@ export async function loadSessionRow(
   const row = await db
     .selectFrom("sessions as s")
     .innerJoin("actors as a", "a.id", "s.actorId")
-    .innerJoin("workspaceApps as app", "app.id", "a.id")
+    .innerJoin("workspaceResources as resource", "resource.id", "a.id")
     .innerJoin("conversations as c", "c.id", "s.conversationId")
     .selectAll("s")
     .select((eb) => [
-      "app.displayName as actorDisplayName",
+      "resource.displayName as actorDisplayName",
       "c.kind as conversationKind",
       eb
         .exists(
@@ -365,10 +365,10 @@ export async function getActorDisplayName(
   return (
     await db
       .selectFrom("actors as actor")
-      .innerJoin("workspaceApps as app", "app.id", "actor.id")
-      .select("app.displayName as displayName")
+      .innerJoin("workspaceResources as resource", "resource.id", "actor.id")
+      .select("resource.displayName as displayName")
       .where("actor.id", "=", actorId)
-      .where("app.deletedAt", "is", null)
+      .where("resource.deletedAt", "is", null)
       .executeTakeFirst()
   )?.displayName
 }
@@ -386,7 +386,7 @@ export async function getSessionMessageItemRows(
     )
     .leftJoin("accessSubjects as cpsubj", "cpsubj.id", "cp.subjectId")
     .leftJoin("actors as a", "a.id", "cpsubj.actorId")
-    .leftJoin("workspaceApps as actor_app", "actor_app.id", "a.id")
+    .leftJoin("workspaceResources as actor_app", "actor_app.id", "a.id")
     .leftJoin("workspaceMembers as wm", "wm.id", "cpsubj.workspaceMemberId")
     .leftJoin("users as u", "u.id", "wm.userId")
     .select([
@@ -577,7 +577,7 @@ export type TurnActivityHeaderRow = {
   actorDisplayName: string | null
 }
 
-/** The turn header (turns ⨝ sessions ⨝ actors ⨝ workspaceApps) for activity detail. */
+/** The turn header (turns ⨝ sessions ⨝ actors ⨝ workspaceResources) for activity detail. */
 export async function getTurnActivityHeader(
   turnId: string
 ): Promise<TurnActivityHeaderRow | undefined> {
@@ -585,7 +585,7 @@ export async function getTurnActivityHeader(
     .selectFrom("turns")
     .innerJoin("sessions as s", "s.id", "turns.sessionId")
     .innerJoin("actors as a", "a.id", "turns.actorId")
-    .innerJoin("workspaceApps as app", "app.id", "a.id")
+    .innerJoin("workspaceResources as resource", "resource.id", "a.id")
     .select([
       "turns.id",
       "turns.sessionId",
@@ -595,7 +595,7 @@ export async function getTurnActivityHeader(
       "turns.updatedAt",
       "turns.completedAt",
       "s.workspaceId",
-      "app.displayName as actorDisplayName",
+      "resource.displayName as actorDisplayName",
     ])
     .where("turns.id", "=", turnId)
     .limit(1)

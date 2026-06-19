@@ -345,7 +345,7 @@ export function isScopeEligibleSubject(ref: SubjectRef): boolean {
 
 /**
  * The kinds legitimate as subjects of a workspace-bound authorization row
- * (resource_access_bindings / runtime_authorization_grants / memory_access_grants).
+ * (workspace_resource_grants / runtime_authorization_grants / memory_access_grants).
  * Excludes user / external / platform. NOTE: external is workspace-rooted now
  * (it carries workspaceId) but is intentionally still excluded — first-class
  * external identities are not yet authorization principals (see plan "后续可选").
@@ -403,10 +403,11 @@ export function isMemoryOwnerSubjectKind(ref: SubjectRef): boolean {
 // ---------- Scoped target types (PR1 additive — not replacing legacy yet) ----------
 
 /**
- * New target shape used by `resource_access_bindings.subject_id +
- * scope_subject_id`. PR2 promotes this to be a variant of the exported
- * `AccessTarget` / `CapabilityAccessTarget` unions; PR7 collapses to this
- * variant only.
+ * The unified target shape `{ subject, scope? }` backing
+ * `workspace_resource_grants.subject_id + scope_subject_id` (and the parallel
+ * memory / runtime-authorization grant rows). This is the single
+ * `AccessTarget` / `CapabilityAccessTarget` variant after the
+ * workspace-resource authz unification.
  */
 export type ScopedSubjectTarget = {
   readonly subject: SubjectRef

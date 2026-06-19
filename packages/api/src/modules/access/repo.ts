@@ -1,71 +1,14 @@
 import {
   resolveConversationTypeKey,
-  SUBJECT_KIND,
-  WORKSPACE_APP_GRANT_PERMISSION,
-  WORKSPACE_APP_GRANT_SOURCE,
-  WORKSPACE_APP_GRANT_STATUS,
+  WORKSPACE_RESOURCE_GRANT_PERMISSION,
+  WORKSPACE_RESOURCE_GRANT_SOURCE,
+  WORKSPACE_RESOURCE_GRANT_STATUS,
   workspaceMemberRef,
   type ConversationTypeKey,
 } from "@synapse/shared"
 import { sql } from "kysely"
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
-import { insertWorkspaceAppGrant } from "../workspace-apps/grant-storage.js"
-import {
-  readAutomationEventSourceAccessBindingResourceId,
-  type AutomationEventSourceBindingRelation,
-  type AutomationEventSourceBindingStorageRow,
-} from "./bindings.js"
-
-/**
- * Access data-access layer. Row-normalization helpers live here so the
- * `normalize*Row` naming + row-spread stay inside a repo file (guard-layering
- * r4/r7). Behavior is identical to the previous `bindings.ts` definition.
- */
-export function normalizeAutomationEventSourceAccessBindingRow<
-  T extends AutomationEventSourceBindingStorageRow & {
-    subjectId?: string | null
-    scopeSubjectId?: string | null
-    subjectKind?: string | null
-    subjectWorkspaceIdViaJoin?: string | null
-    subjectWorkspaceMemberIdViaJoin?: string | null
-    subjectActorIdViaJoin?: string | null
-    subjectRemoteAgentIdViaJoin?: string | null
-    subjectConversationIdViaJoin?: string | null
-    scopeKind?: string | null
-    scopeWorkspaceIdViaJoin?: string | null
-    scopeConversationIdViaJoin?: string | null
-  },
->(
-  row: T
-): T & { resourceId: string; relation: AutomationEventSourceBindingRelation } {
-  // Derive a relation string from subject kind; scope lives in scopeSubjectId.
-  let relation: AutomationEventSourceBindingRelation
-  switch (row.subjectKind) {
-    case SUBJECT_KIND.WORKSPACE:
-      relation = "use_workspace"
-      break
-    case SUBJECT_KIND.WORKSPACE_MEMBER:
-      relation = "use_workspace_member"
-      break
-    case SUBJECT_KIND.CONVERSATION:
-      relation = "use_conversation"
-      break
-    case SUBJECT_KIND.ACTOR:
-      relation = "use_actor"
-      break
-    case SUBJECT_KIND.REMOTE_AGENT:
-      relation = "use_remote_agent"
-      break
-    default:
-      relation = "use_scoped"
-  }
-  const normalized = {
-    ...row,
-    resourceId: readAutomationEventSourceAccessBindingResourceId(row),
-    relation,
-  }
-  return normalized
-}
+import { insertWorkspaceResourceGrant } from "../workspace-resources/grant-storage.js"
 
 export async function findActiveWorkspaceMemberIdForUser(
   db: KyselyDb,
@@ -172,17 +115,21 @@ async function hasWorkspaceDefaultContactVisibilityGrant(
   workspaceId: string
 ): Promise<boolean> {
   const row = await db
-    .selectFrom("workspaceAppGrants as app_grant")
-    .innerJoin("accessSubjects as subj", "subj.id", "app_grant.subjectId")
-    .innerJoin("workspaceApps as app", "app.id", "app_grant.workspaceAppId")
-    .select("app_grant.id")
-    .where("app.kind", "=", resourceType)
-    .where("app_grant.workspaceAppId", "=", resourceId)
+    .selectFrom("workspaceResourceGrants as resource_grant")
+    .innerJoin("accessSubjects as subj", "subj.id", "resource_grant.subjectId")
+    .innerJoin(
+      "workspaceResources as resource",
+      "resource.id",
+      "resource_grant.workspaceResourceId"
+    )
+    .select("resource_grant.id")
+    .where("resource.kind", "=", resourceType)
+    .where("resource_grant.workspaceResourceId", "=", resourceId)
     .where("subj.kind", "=", "workspace")
     .where("subj.workspaceId", "=", workspaceId)
-    .where("app_grant.status", "=", "active")
+    .where("resource_grant.status", "=", "active")
     .where(
-      sql<boolean>`'contact_visible'::workspace_app_grant_permission = ANY(app_grant.permissions)`
+      sql<boolean>`'contact_visible'::workspace_resource_grant_permission = ANY(resource_grant.permissions)`
     )
     .limit(1)
     .executeTakeFirst()
@@ -215,17 +162,21 @@ export async function deriveRequiresContactApprovalMany(
     out.set(id, true)
   }
   const rows = await db
-    .selectFrom("workspaceAppGrants as app_grant")
-    .innerJoin("accessSubjects as subj", "subj.id", "app_grant.subjectId")
-    .innerJoin("workspaceApps as app", "app.id", "app_grant.workspaceAppId")
-    .select(["app_grant.workspaceAppId as resourceId"])
-    .where("app.kind", "=", resourceType)
-    .where("app_grant.workspaceAppId", "in", [...resourceIds])
+    .selectFrom("workspaceResourceGrants as resource_grant")
+    .innerJoin("accessSubjects as subj", "subj.id", "resource_grant.subjectId")
+    .innerJoin(
+      "workspaceResources as resource",
+      "resource.id",
+      "resource_grant.workspaceResourceId"
+    )
+    .select(["resource_grant.workspaceResourceId as resourceId"])
+    .where("resource.kind", "=", resourceType)
+    .where("resource_grant.workspaceResourceId", "in", [...resourceIds])
     .where("subj.kind", "=", "workspace")
     .where("subj.workspaceId", "=", workspaceId)
-    .where("app_grant.status", "=", "active")
+    .where("resource_grant.status", "=", "active")
     .where(
-      sql<boolean>`'contact_visible'::workspace_app_grant_permission = ANY(app_grant.permissions)`
+      sql<boolean>`'contact_visible'::workspace_resource_grant_permission = ANY(resource_grant.permissions)`
     )
     .execute()
   for (const row of rows as Array<{ resourceId: string | null }>) {
@@ -259,14 +210,14 @@ export async function setRequiresContactApproval(
       params.workspaceId
     )
     if (existing) return
-    await insertWorkspaceAppGrant(db, {
+    await insertWorkspaceResourceGrant(db, {
       workspaceId: params.workspaceId,
-      workspaceAppId: params.resourceId,
+      workspaceResourceId: params.resourceId,
       target: {
         subject: { kind: "workspace", workspaceId: params.workspaceId },
       },
-      permissions: [WORKSPACE_APP_GRANT_PERMISSION.CONTACT_VISIBLE],
-      source: WORKSPACE_APP_GRANT_SOURCE.SYSTEM,
+      permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.CONTACT_VISIBLE],
+      source: WORKSPACE_RESOURCE_GRANT_SOURCE.SYSTEM,
       createdByWorkspaceMemberId: params.createdByWorkspaceMemberId ?? null,
       reason: DEFAULT_CONTACT_VISIBILITY_GRANT_REASON,
     })
@@ -274,15 +225,15 @@ export async function setRequiresContactApproval(
   }
 
   await db
-    .updateTable("workspaceAppGrants")
+    .updateTable("workspaceResourceGrants")
     .set({
-      status: WORKSPACE_APP_GRANT_STATUS.REVOKED,
+      status: WORKSPACE_RESOURCE_GRANT_STATUS.REVOKED,
       revokedAt: new Date(),
     } as any)
-    .where("workspaceAppId", "=", params.resourceId)
-    .where("status", "=", WORKSPACE_APP_GRANT_STATUS.ACTIVE)
+    .where("workspaceResourceId", "=", params.resourceId)
+    .where("status", "=", WORKSPACE_RESOURCE_GRANT_STATUS.ACTIVE)
     .where(
-      sql<boolean>`'contact_visible'::workspace_app_grant_permission = ANY(permissions)`
+      sql<boolean>`'contact_visible'::workspace_resource_grant_permission = ANY(permissions)`
     )
     .where("reason", "=", DEFAULT_CONTACT_VISIBILITY_GRANT_REASON)
     .execute()
@@ -307,15 +258,15 @@ export async function grantApprovedContactVisibility(
     .executeTakeFirst()
   if (subjectId) {
     const existing = await db
-      .selectFrom("workspaceAppGrants")
+      .selectFrom("workspaceResourceGrants")
       .select("id")
       .where("workspaceId", "=", params.workspaceId)
-      .where("workspaceAppId", "=", params.resourceId)
+      .where("workspaceResourceId", "=", params.resourceId)
       .where("subjectId", "=", subjectId.id)
-      .where("status", "=", WORKSPACE_APP_GRANT_STATUS.ACTIVE)
+      .where("status", "=", WORKSPACE_RESOURCE_GRANT_STATUS.ACTIVE)
       .where("scopeSubjectId", "is", null)
       .where(
-        sql<boolean>`'contact_visible'::workspace_app_grant_permission = ANY(permissions)`
+        sql<boolean>`'contact_visible'::workspace_resource_grant_permission = ANY(permissions)`
       )
       .executeTakeFirst()
     if (existing?.id) {
@@ -323,12 +274,12 @@ export async function grantApprovedContactVisibility(
     }
   }
 
-  const inserted = await insertWorkspaceAppGrant(db, {
+  const inserted = await insertWorkspaceResourceGrant(db, {
     workspaceId: params.workspaceId,
-    workspaceAppId: params.resourceId,
+    workspaceResourceId: params.resourceId,
     target: { subject: workspaceMemberRef(params.grantedToMemberId) },
-    permissions: [WORKSPACE_APP_GRANT_PERMISSION.CONTACT_VISIBLE],
-    source: WORKSPACE_APP_GRANT_SOURCE.APPROVAL,
+    permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.CONTACT_VISIBLE],
+    source: WORKSPACE_RESOURCE_GRANT_SOURCE.APPROVAL,
     createdByWorkspaceMemberId: params.grantedByWorkspaceMemberId ?? null,
     reason: params.reason ?? "approved contact visibility grant",
   })

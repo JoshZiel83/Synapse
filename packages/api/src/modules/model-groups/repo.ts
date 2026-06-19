@@ -700,11 +700,11 @@ export async function actorExistsInWorkspace(
 ): Promise<boolean> {
   const row = await run
     .selectFrom("actors as actor")
-    .innerJoin("workspaceApps as app", "app.id", "actor.id")
+    .innerJoin("workspaceResources as resource", "resource.id", "actor.id")
     .select("actor.id")
     .where("actor.id", "=", actorId)
-    .where("app.workspaceId", "=", workspaceId)
-    .where("app.deletedAt", "is", null)
+    .where("resource.workspaceId", "=", workspaceId)
+    .where("resource.deletedAt", "is", null)
     .limit(1)
     .executeTakeFirst()
   return Boolean(row)

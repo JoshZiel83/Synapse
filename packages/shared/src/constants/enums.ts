@@ -32,6 +32,7 @@ export const WORKSPACE_ACCESS_KEYS = [
   "memory_admin",
   "device_admin",
   "conversation_admin",
+  "automation_admin",
 ] as const
 
 export const EVENT_TYPE = {
@@ -575,19 +576,6 @@ export const CAPABILITY_ACCESS_TARGET_TYPES = [
   "actor",
   "remote_agent",
 ] as const
-export const AUTOMATION_ACCESS_TARGET_TYPE = {
-  WORKSPACE: "workspace",
-  WORKSPACE_MEMBER: "workspace_member",
-  CONVERSATION: "conversation",
-  ACTOR: "actor",
-} as const
-export const AUTOMATION_ACCESS_TARGET_TYPES = [
-  AUTOMATION_ACCESS_TARGET_TYPE.WORKSPACE,
-  AUTOMATION_ACCESS_TARGET_TYPE.WORKSPACE_MEMBER,
-  AUTOMATION_ACCESS_TARGET_TYPE.CONVERSATION,
-  AUTOMATION_ACCESS_TARGET_TYPE.ACTOR,
-] as const
-
 export const REALTIME_ASR_AUDIO_FORMAT = {
   PCM: "pcm",
   OGG: "ogg",
@@ -1157,16 +1145,6 @@ export const AUTOMATION_RULE_CATEGORY = {
 export const AUTOMATION_RULE_CATEGORIES = [
   AUTOMATION_RULE_CATEGORY.SCHEDULE,
   AUTOMATION_RULE_CATEGORY.EVENT_SUBSCRIPTION,
-] as const
-export const AUTOMATION_CREATOR_KIND = {
-  WORKSPACE_MEMBER: "workspace_member",
-  SESSION: "session",
-  SYSTEM: "system",
-} as const
-export const AUTOMATION_CREATOR_KINDS = [
-  AUTOMATION_CREATOR_KIND.WORKSPACE_MEMBER,
-  AUTOMATION_CREATOR_KIND.SESSION,
-  AUTOMATION_CREATOR_KIND.SYSTEM,
 ] as const
 export const AUTOMATION_TRIGGER_SOURCE_KINDS = [
   "clock",

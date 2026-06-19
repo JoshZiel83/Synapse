@@ -18,8 +18,8 @@ import {
   MARKETPLACE_VERSION_STATUS,
   REUSE_SCOPES,
   SUBJECT_KIND,
-  WORKSPACE_APP_KIND,
-  WORKSPACE_APP_STATUS,
+  WORKSPACE_RESOURCE_KIND,
+  WORKSPACE_RESOURCE_STATUS,
   PLUGIN_AUTH_CONNECTION_STATUS,
   PLUGIN_AUTH_SESSION_STATUS,
   maskAllowsConversationType,
@@ -40,7 +40,7 @@ import {
   type PluginSpecTransport,
   type ReuseScope,
   type RuntimeBindingScope,
-  type WorkspaceAppGrantSource,
+  type WorkspaceResourceGrantSource,
 } from "@synapse/shared"
 import type { CapabilityAccessTarget } from "@synapse/shared/types"
 import {
@@ -53,7 +53,7 @@ import { validateConversationScopedAccessTarget } from "../access/policy.js"
 import { buildConversationCapabilitySubjects } from "../access/subject-resolution.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
 import { getWorkspaceCapabilityConversationTypePolicyMap } from "../capabilities/conversation-type-policies.js"
-import { revokeWorkspaceAppGrant } from "../workspace-apps/grant-storage.js"
+import { revokeWorkspaceResourceGrant } from "../workspace-resources/grant-storage.js"
 import {
   PLUGIN_CONNECTION_LIVE_STATUSES,
   PLUGIN_INSTALLATION_LIVE_STATUSES,
@@ -195,7 +195,7 @@ export type InstallationAccessRow = {
   workspaceMemberId: string | null
   conversationTypeMaskOverride: number | null
   status: AccessBindingStatus
-  source: WorkspaceAppGrantSource
+  source: WorkspaceResourceGrantSource
   createdByWorkspaceMemberId: string | null
   reason: string | null
   createdAt: Date
@@ -987,7 +987,7 @@ export async function loadInstallationRows(
   }
 ): Promise<InstallationRow[]> {
   const conditions: RawBuilder<unknown>[] = [
-    sql`app.workspace_id = ${workspaceId}`,
+    sql`resource.workspace_id = ${workspaceId}`,
   ]
 
   if (filters?.pluginId) {
@@ -1006,28 +1006,30 @@ export async function loadInstallationRows(
   const result = await db.executeQuery(
     sql<InstallationRowRaw>`SELECT
         installation.id AS "installationId",
-        app.workspace_id AS "rootWorkspaceId",
+        resource.workspace_id AS "rootWorkspaceId",
         installation.catalog_item_id AS "catalogItemId",
         installation.catalog_version_id AS "catalogVersionId",
-        app.display_name AS "rootDisplayName",
+        resource.display_name AS "rootDisplayName",
         installation.config_data AS "configData",
         installation.approved_runtime_permissions AS "approvedRuntimePermissions",
         installation.reuse_scope AS "reuseScope",
-        app.conversation_type_mask_override AS "rootConversationTypeMaskOverride",
-        app.status AS "rootStatus",
-        app.owner_workspace_member_id AS "rootOwnerWorkspaceMemberId",
-        app.created_at AS "installationCreatedAt",
-        app.updated_at AS "installationUpdatedAt",
+        resource.conversation_type_mask_override AS "rootConversationTypeMaskOverride",
+        resource.status AS "rootStatus",
+        owner_subject.workspace_member_id AS "rootOwnerWorkspaceMemberId",
+        resource.created_at AS "installationCreatedAt",
+        resource.updated_at AS "installationUpdatedAt",
         source_ref.source_catalog_item_id AS "sourceCatalogItemId",
         source_ref.source_catalog_version_id AS "sourceCatalogVersionId",
         source_ref.sync_mode AS "sourceSyncMode"
       FROM plugin_installations installation
-      INNER JOIN workspace_apps_live app
-        ON app.id = installation.id
+      INNER JOIN workspace_resources_live resource
+        ON resource.id = installation.id
+      LEFT JOIN access_subjects owner_subject
+        ON owner_subject.id = resource.owner_subject_id
       LEFT JOIN plugin_source_refs source_ref
         ON source_ref.installation_id = installation.id
-      WHERE app.deleted_at IS NULL
-        AND app.status IN ('active', 'disabled', 'error')
+      WHERE resource.deleted_at IS NULL
+        AND resource.status IN ('active', 'disabled', 'error')
         AND ${sql.join(conditions, sql` AND `)}
       ORDER BY installation.created_at DESC`.compile(db)
   )
@@ -1040,13 +1042,17 @@ export async function listPluginInstallationAccessRows(
   includeRevoked = false
 ): Promise<InstallationAccessRow[]> {
   let query = db
-    .selectFrom("workspaceAppGrants as app_grant")
-    .innerJoin("accessSubjects as subj", "subj.id", "app_grant.subjectId")
-    .leftJoin("accessSubjects as scope", "scope.id", "app_grant.scopeSubjectId")
+    .selectFrom("workspaceResourceGrants as resource_grant")
+    .innerJoin("accessSubjects as subj", "subj.id", "resource_grant.subjectId")
+    .leftJoin(
+      "accessSubjects as scope",
+      "scope.id",
+      "resource_grant.scopeSubjectId"
+    )
     .select([
-      "app_grant.id",
-      "app_grant.workspaceId",
-      "app_grant.workspaceAppId as installationId",
+      "resource_grant.id",
+      "resource_grant.workspaceId",
+      "resource_grant.workspaceResourceId as installationId",
       sql<RuntimeBindingScope>`
         CASE subj.kind
           WHEN 'workspace' THEN 'workspace'
@@ -1060,22 +1066,26 @@ export async function listPluginInstallationAccessRows(
       "subj.remoteAgentId",
       "subj.workspaceMemberId",
       "scope.conversationId",
-      "app_grant.conversationTypeMaskOverride",
-      "app_grant.status",
-      "app_grant.source",
-      "app_grant.createdByWorkspaceMemberId",
-      "app_grant.reason",
-      "app_grant.createdAt",
-      "app_grant.revokedAt",
+      "resource_grant.conversationTypeMaskOverride",
+      "resource_grant.status",
+      "resource_grant.source",
+      "resource_grant.createdByWorkspaceMemberId",
+      "resource_grant.reason",
+      "resource_grant.createdAt",
+      "resource_grant.revokedAt",
     ])
-    .where("app_grant.workspaceAppId", "=", installationId)
+    .where("resource_grant.workspaceResourceId", "=", installationId)
     .where(
-      sql<boolean>`'use'::workspace_app_grant_permission = ANY(app_grant.permissions)`
+      sql<boolean>`'use'::workspace_resource_grant_permission = ANY(resource_grant.permissions)`
     )
-    .orderBy("app_grant.createdAt", "desc")
+    .orderBy("resource_grant.createdAt", "desc")
 
   if (!includeRevoked) {
-    query = query.where("app_grant.status", "=", ACCESS_BINDING_STATUS.ACTIVE)
+    query = query.where(
+      "resource_grant.status",
+      "=",
+      ACCESS_BINDING_STATUS.ACTIVE
+    )
   }
 
   // The builder aliases to camelCase and CamelCasePlugin.transformResult yields
@@ -1203,13 +1213,17 @@ export async function findPluginInstallationWorkspace(
 ): Promise<{ installationId: string; workspaceId: string } | null> {
   const row = await db
     .selectFrom("pluginInstallations as installation")
-    .innerJoin("workspaceApps as app", "app.id", "installation.id")
+    .innerJoin(
+      "workspaceResources as resource",
+      "resource.id",
+      "installation.id"
+    )
     .select([
       "installation.id as installationId",
-      "app.workspaceId as workspaceId",
+      "resource.workspaceId as workspaceId",
     ])
     .where("installation.id", "=", installId)
-    .where("app.deletedAt", "is", null)
+    .where("resource.deletedAt", "is", null)
     .limit(1)
     .executeTakeFirst()
 
@@ -1235,7 +1249,7 @@ export async function updatePluginInstallationGrantConversationTypeMask(params: 
   conversationTypeMaskOverride: number | null
 }) {
   await db
-    .updateTable("workspaceAppGrants")
+    .updateTable("workspaceResourceGrants")
     .set({
       conversationTypeMaskOverride: params.conversationTypeMaskOverride,
     } as any)
@@ -1244,8 +1258,8 @@ export async function updatePluginInstallationGrantConversationTypeMask(params: 
     .execute()
 }
 
-export async function revokePluginWorkspaceAppGrant(grantId: string) {
-  await revokeWorkspaceAppGrant(db as any, grantId)
+export async function revokePluginWorkspaceResourceGrant(grantId: string) {
+  await revokeWorkspaceResourceGrant(db as any, grantId)
 }
 
 export async function upsertBuiltinPluginCategory(input: {
@@ -1442,7 +1456,11 @@ export async function findInstallationConfigRow(
     // manifest liveValues. Read the base table (not the _live view) so the NOT
     // NULL column types are preserved (views type every column nullable).
     .selectFrom("pluginInstallations as installation")
-    .innerJoin("workspaceApps as app", "app.id", "installation.id")
+    .innerJoin(
+      "workspaceResources as resource",
+      "resource.id",
+      "installation.id"
+    )
     .innerJoin(
       "pluginPackageVersionSpecs as spec",
       "spec.catalogVersionId",
@@ -1455,8 +1473,8 @@ export async function findInstallationConfigRow(
       "spec.configSchema",
     ])
     .where("installation.id", "=", installationId)
-    .where("app.deletedAt", "is", null)
-    .where("app.status", "in", PLUGIN_INSTALLATION_LIVE_STATUSES)
+    .where("resource.deletedAt", "is", null)
+    .where("resource.status", "in", PLUGIN_INSTALLATION_LIVE_STATUSES)
     .limit(1)
     .executeTakeFirst()
 
@@ -1517,10 +1535,10 @@ export function normalizeVisiblePluginRow(
   }
 }
 
-export type VisibleAccessBindingRow = {
+export type VisiblePluginGrantRow = {
   id: string
   workspace_id: string
-  resource_type: typeof WORKSPACE_APP_KIND.PLUGIN_INSTALLATION
+  resource_type: typeof WORKSPACE_RESOURCE_KIND.PLUGIN_INSTALLATION
   resource_id: string
   target_type:
     | "workspace"
@@ -1609,25 +1627,29 @@ export async function buildPluginVisibilitySubjectIds(
   }
 }
 
-async function loadVisibleAccessBindings(params: { resourceIds: string[] }) {
+async function loadVisiblePluginGrants(params: { resourceIds: string[] }) {
   if (params.resourceIds.length === 0) {
-    return new Map<string, VisibleAccessBindingRow[]>()
+    return new Map<string, VisiblePluginGrantRow[]>()
   }
 
   const rows = await db
-    .selectFrom("workspaceAppGrants as app_grant")
-    .innerJoin("accessSubjects as subj", "subj.id", "app_grant.subjectId")
-    .leftJoin("accessSubjects as scope", "scope.id", "app_grant.scopeSubjectId")
+    .selectFrom("workspaceResourceGrants as resource_grant")
+    .innerJoin("accessSubjects as subj", "subj.id", "resource_grant.subjectId")
+    .leftJoin(
+      "accessSubjects as scope",
+      "scope.id",
+      "resource_grant.scopeSubjectId"
+    )
     .select([
-      "app_grant.id",
-      "app_grant.workspaceId",
-      "app_grant.workspaceAppId as resourceId",
-      "app_grant.conversationTypeMaskOverride",
-      "app_grant.status",
-      "app_grant.createdByWorkspaceMemberId",
-      "app_grant.reason",
-      "app_grant.createdAt",
-      "app_grant.revokedAt",
+      "resource_grant.id",
+      "resource_grant.workspaceId",
+      "resource_grant.workspaceResourceId as resourceId",
+      "resource_grant.conversationTypeMaskOverride",
+      "resource_grant.status",
+      "resource_grant.createdByWorkspaceMemberId",
+      "resource_grant.reason",
+      "resource_grant.createdAt",
+      "resource_grant.revokedAt",
       "subj.kind as subjectKind",
       "subj.workspaceId as subjectWorkspaceIdViaJoin",
       "subj.workspaceMemberId as subjectWorkspaceMemberIdViaJoin",
@@ -1637,14 +1659,14 @@ async function loadVisibleAccessBindings(params: { resourceIds: string[] }) {
       "scope.kind as scopeKind",
       "scope.conversationId as scopeConversationIdViaJoin",
     ])
-    .where("app_grant.workspaceAppId", "in", params.resourceIds)
-    .where("app_grant.status", "=", ACCESS_BINDING_STATUS.ACTIVE)
+    .where("resource_grant.workspaceResourceId", "in", params.resourceIds)
+    .where("resource_grant.status", "=", ACCESS_BINDING_STATUS.ACTIVE)
     .where(
-      sql<boolean>`'use'::workspace_app_grant_permission = ANY(app_grant.permissions)`
+      sql<boolean>`'use'::workspace_resource_grant_permission = ANY(resource_grant.permissions)`
     )
     .execute()
 
-  const map = new Map<string, VisibleAccessBindingRow[]>()
+  const map = new Map<string, VisiblePluginGrantRow[]>()
   for (const rawRow of rows) {
     const row = rawRow as typeof rawRow & {
       subjectKind?: string | null
@@ -1656,7 +1678,7 @@ async function loadVisibleAccessBindings(params: { resourceIds: string[] }) {
       scopeKind?: string | null
       scopeConversationIdViaJoin?: string | null
     }
-    let target_type: VisibleAccessBindingRow["target_type"] | null
+    let target_type: VisiblePluginGrantRow["target_type"] | null
     switch (row.subjectKind) {
       case "workspace":
         target_type = "workspace"
@@ -1684,10 +1706,10 @@ async function loadVisibleAccessBindings(params: { resourceIds: string[] }) {
     const subjectRemoteAgentId = row.subjectRemoteAgentIdViaJoin ?? null
     const subjectConversationId =
       row.scopeConversationIdViaJoin ?? row.subjectConversationIdViaJoin ?? null
-    const visible: VisibleAccessBindingRow = {
+    const visible: VisiblePluginGrantRow = {
       id: row.id,
       workspace_id: row.workspaceId,
-      resource_type: WORKSPACE_APP_KIND.PLUGIN_INSTALLATION,
+      resource_type: WORKSPACE_RESOURCE_KIND.PLUGIN_INSTALLATION,
       resource_id: row.resourceId,
       target_type,
       subject_workspace_id: row.subjectWorkspaceIdViaJoin ?? null,
@@ -1724,8 +1746,8 @@ function isConversationTypeAllowed(
   )
 }
 
-function accessBindingMatchesContext(
-  row: VisibleAccessBindingRow,
+function pluginGrantMatchesContext(
+  row: VisiblePluginGrantRow,
   params: {
     actorId?: string | null
     conversationId?: string | null
@@ -1771,26 +1793,26 @@ export async function loadVisiblePluginRows(
     await buildPluginVisibilitySubjectIds(params)
   const visibleInstallationIds = new Set<string>()
   const grantRows = await db
-    .selectFrom("workspaceAppGrants as app_grant")
-    .select("app_grant.workspaceAppId")
+    .selectFrom("workspaceResourceGrants as resource_grant")
+    .select("resource_grant.workspaceResourceId")
     .distinct()
-    .where("app_grant.status", "=", ACCESS_BINDING_STATUS.ACTIVE)
-    .where("app_grant.subjectId", "in", subjectIds)
+    .where("resource_grant.status", "=", ACCESS_BINDING_STATUS.ACTIVE)
+    .where("resource_grant.subjectId", "in", subjectIds)
     .where(
-      sql<boolean>`'use'::workspace_app_grant_permission = ANY(app_grant.permissions)`
+      sql<boolean>`'use'::workspace_resource_grant_permission = ANY(resource_grant.permissions)`
     )
     .where((eb) =>
       runtimeScopeSubjectIds.length > 0
         ? eb.or([
-            eb("app_grant.scopeSubjectId", "is", null),
-            eb("app_grant.scopeSubjectId", "in", runtimeScopeSubjectIds),
+            eb("resource_grant.scopeSubjectId", "is", null),
+            eb("resource_grant.scopeSubjectId", "in", runtimeScopeSubjectIds),
           ])
-        : eb("app_grant.scopeSubjectId", "is", null)
+        : eb("resource_grant.scopeSubjectId", "is", null)
     )
     .execute()
 
   for (const row of grantRows) {
-    visibleInstallationIds.add(row.workspaceAppId)
+    visibleInstallationIds.add(row.workspaceResourceId)
   }
 
   if (visibleInstallationIds.size === 0) {
@@ -1799,7 +1821,11 @@ export async function loadVisiblePluginRows(
 
   const installationRows = await db
     .selectFrom("pluginInstallations as installation")
-    .innerJoin("workspaceApps as app", "app.id", "installation.id")
+    .innerJoin(
+      "workspaceResources as resource",
+      "resource.id",
+      "installation.id"
+    )
     .innerJoin("catalogItems as item", "item.id", "installation.catalogItemId")
     .innerJoin("publishers as publisher", "publisher.id", "item.publisherId")
     .innerJoin(
@@ -1809,27 +1835,27 @@ export async function loadVisiblePluginRows(
     )
     .select([
       "installation.id as installationId",
-      "app.workspaceId as ownerWorkspaceId",
-      "app.status as installationStatus",
+      "resource.workspaceId as ownerWorkspaceId",
+      "resource.status as installationStatus",
       "installation.catalogItemId",
       "item.slug as itemSlug",
       "publisher.slug as publisherSlug",
       "spec.transport",
       "spec.entryPoint",
       "spec.toolManifest",
-      sql<number | null>`app.conversation_type_mask_override`.as(
+      sql<number | null>`resource.conversation_type_mask_override`.as(
         "conversationTypeMaskOverride"
       ),
       "installation.reuseScope",
     ])
     .where("installation.id", "in", Array.from(visibleInstallationIds))
-    .where("app.status", "=", WORKSPACE_APP_STATUS.ACTIVE)
-    .where("app.deletedAt", "is", null)
+    .where("resource.status", "=", WORKSPACE_RESOURCE_STATUS.ACTIVE)
+    .where("resource.deletedAt", "is", null)
     .orderBy("installation.updatedAt", "desc")
     .execute()
 
-  const [bindingsByInstallationId, workspacePolicyMap] = await Promise.all([
-    loadVisibleAccessBindings({
+  const [grantsByInstallationId, workspacePolicyMap] = await Promise.all([
+    loadVisiblePluginGrants({
       resourceIds: installationRows.map((row) => row.installationId),
     }),
     getWorkspaceCapabilityConversationTypePolicyMap(
@@ -1845,20 +1871,20 @@ export async function loadVisiblePluginRows(
       workspaceConversationTypeMask,
       row.conversationTypeMaskOverride
     )
-    const matchingBindings = (
-      bindingsByInstallationId.get(row.installationId) || []
+    const matchingGrants = (
+      grantsByInstallationId.get(row.installationId) || []
     ).filter(
-      (binding) =>
-        accessBindingMatchesContext(binding, params) &&
+      (grant) =>
+        pluginGrantMatchesContext(grant, params) &&
         isConversationTypeAllowed(
           resolveNarrowedConversationTypeMask(
             instanceConversationTypeMask,
-            binding.conversation_type_mask_override
+            grant.conversation_type_mask_override
           ),
           params
         )
     )
-    return matchingBindings.length > 0
+    return matchingGrants.length > 0
   })
   return visibleRows.map(normalizeVisiblePluginRow)
 }
@@ -2057,14 +2083,18 @@ export async function findPluginAuthConnectionRow(
       "installation.id",
       "connection.installationId"
     )
-    .innerJoin("workspaceApps as app", "app.id", "installation.id")
+    .innerJoin(
+      "workspaceResources as resource",
+      "resource.id",
+      "installation.id"
+    )
     .selectAll("connection")
     .select(["installation.catalogItemId", "installation.catalogVersionId"])
     .where("connection.id", "=", connectionId)
     .where("connection.deletedAt", "is", null)
     .where("connection.status", "in", PLUGIN_CONNECTION_LIVE_STATUSES)
-    .where("app.deletedAt", "is", null)
-    .where("app.status", "in", PLUGIN_INSTALLATION_LIVE_STATUSES)
+    .where("resource.deletedAt", "is", null)
+    .where("resource.status", "in", PLUGIN_INSTALLATION_LIVE_STATUSES)
 
   if (workspaceId) {
     builder = builder.where("connection.workspaceId", "=", workspaceId)
@@ -2111,7 +2141,11 @@ export async function findPluginInstallationAuthConfigRow(
 ): Promise<PluginInstallationAuthConfigRow | undefined> {
   const row = await db
     .selectFrom("pluginInstallations as installation")
-    .innerJoin("workspaceApps as app", "app.id", "installation.id")
+    .innerJoin(
+      "workspaceResources as resource",
+      "resource.id",
+      "installation.id"
+    )
     .innerJoin(
       "pluginPackageVersionSpecs as spec",
       "spec.catalogVersionId",
@@ -2124,9 +2158,9 @@ export async function findPluginInstallationAuthConfigRow(
       "spec.defaultConfig",
     ])
     .where("installation.id", "=", installationId)
-    .where("app.workspaceId", "=", workspaceId)
-    .where("app.deletedAt", "is", null)
-    .where("app.status", "in", PLUGIN_INSTALLATION_LIVE_STATUSES)
+    .where("resource.workspaceId", "=", workspaceId)
+    .where("resource.deletedAt", "is", null)
+    .where("resource.status", "in", PLUGIN_INSTALLATION_LIVE_STATUSES)
     .limit(1)
     .executeTakeFirst()
 

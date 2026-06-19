@@ -9,11 +9,9 @@ import {
 } from "@synapse/shared/datetime"
 import { parseInstantString } from "../../infrastructure/datetime.js"
 import type {
-  AutomationEventSourceAccessGrant,
-  CapabilityAccessTarget,
+  AutomationEventSourceAccessStateSchemaType,
   AutomationCategory,
   AutomationCompletionStatus,
-  AutomationCreatorKind,
   AutomationDelivery,
   AutomationExecution,
   AutomationEventProviderKind,
@@ -43,7 +41,6 @@ import {
   maskAllowsConversationType,
   resolveNarrowedConversationTypeMask,
   slugify,
-  workspaceRef,
 } from "@synapse/shared"
 import {
   mergeAutomationRuleUpdatePayload,
@@ -51,7 +48,10 @@ import {
 } from "@synapse/shared/automation"
 import { decrypt, encrypt } from "../../infrastructure/crypto/index.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
-import { type Executor } from "../../infrastructure/database/kysely.js"
+import {
+  type DatabaseTransaction,
+  type Executor,
+} from "../../infrastructure/database/kysely.js"
 import {
   appendAutomationAuditLog,
   applyAutomationPolicyAfterTrigger as applyAutomationPolicyAfterTriggerRepo,
@@ -82,7 +82,7 @@ import {
   listIntegrationAutomationEventSourceRowsByWebhookPathToken,
   loadAutomationRuleComponentRows,
   lockDueAutomationScheduleRows,
-  loadAutomationEventSourceAccessBindingRows,
+  loadAutomationEventSourceAccessGrantRows,
   markAutomationExecutionCompleted,
   markAutomationExecutionFailed,
   markAutomationExecutionSkipped,
@@ -99,7 +99,7 @@ import {
   pauseAutomationRuleRowsForInactiveCreators,
   pauseAutomationRuleRowsForEventSource,
   persistAutomationDeliveryTargets,
-  revokeAutomationEventSourceAccessBindingById,
+  revokeAutomationEventSourceAccessGrantById,
   selectActiveAutomationEventSourceId,
   selectActiveAutomationRuleEventMatchers,
   selectActiveWebhookEndpointId,
@@ -119,7 +119,6 @@ import {
   touchAutomationEventSourceTriggered,
   touchWebhookReceived,
   updateAutomationDeliveryRow,
-  updateAutomationEventSourceAccessBindingMaskOverride,
   updateAutomationEventSourceRow,
   updateAutomationPolicyRow,
   updateAutomationRuleError,
@@ -153,14 +152,22 @@ import { enqueueSessionWakeup } from "../session/runtime.js"
 import { getSession } from "../session/service.js"
 import { getWorkspaceMemberIdentityById } from "../chat/workspace-identity.js"
 import {
-  automationEventSourceAccessBindingHasTarget,
-  mapAutomationEventSourceAccessBindingToGrant,
-  normalizeAutomationEventSourceAccessBindingRow,
-  readAutomationEventSourceAccessBindingTarget,
-  type AutomationEventSourceBindingJoinedRow,
-} from "../access/bindings.js"
-import { resolveAccessGrantTarget } from "../access/access-target-resolver.js"
-import { insertAutomationEventSourceAccessBindingReturningRowOn } from "../access/binding-storage.js"
+  readAutomationEventSourceAccessGrantTarget,
+  type AutomationEventSourceGrantJoinedRow,
+} from "../access/grant-target.js"
+import {
+  insertWorkspaceResourceRoot,
+  listWorkspaceResourceGrantPresentationRows,
+  updateWorkspaceResourceRoot,
+  updateWorkspaceResourceRootDefault,
+} from "../workspace-resources/repo.js"
+import { presentGrant } from "../workspace-resources/presenter.js"
+import { upsertAccessSubjectOnTrx } from "../access/subject-registry.js"
+import {
+  SUBJECT_KIND,
+  WORKSPACE_RESOURCE_GRANT_PERMISSION,
+  WORKSPACE_RESOURCE_KIND,
+} from "@synapse/shared"
 import type {
   AutomationDeliveryDbRow,
   AutomationDeliveryRow,
@@ -201,9 +208,9 @@ type AutomationTargetRow = {
   updated_at: Date
 }
 
-type AutomationEventSourceAccessRow = AutomationEventSourceBindingJoinedRow
+export type AutomationEventSourceAccessRow = AutomationEventSourceGrantJoinedRow
 
-type AutomationEventSourceAccessContext = {
+export type AutomationEventSourceAccessContext = {
   conversationId: string
   actorId?: string | null
 }
@@ -226,7 +233,11 @@ function createAutomationValidationError(
 }
 
 export interface AutomationCreatorInput {
-  kind: AutomationCreatorKind
+  // §4.1: the creator kind is no longer persisted on the detail row — owner /
+  // created_by are derived from workspaceMemberId / actorId and minted as
+  // access_subjects on the workspace_resources root. Kept on the input so existing
+  // callers stay source-compatible.
+  kind: "workspace_member" | "session" | "system"
   workspaceMemberId?: string
   actorId?: string
   sessionId?: string
@@ -414,7 +425,9 @@ function eventSourceMatchKey(source: Pick<AutomationEventSource, "sourceKey">) {
   return source.sourceKey
 }
 
-function ensureEventSourceIsSubscribable(source: AutomationEventSource) {
+// Exported for the D3 runtime-status characterization test: only `active`
+// sources are subscribable (deprecated/disabled/archived stop authorizing).
+export function ensureEventSourceIsSubscribable(source: AutomationEventSource) {
   if (source.status !== "active") {
     throw new Error(`Event source ${source.id} is not active`)
   }
@@ -841,20 +854,6 @@ function bindingAllowsConversationType(params: {
   )
 }
 
-function assertBindingMaskAllowsConversation(params: {
-  conversation: Record<string, unknown>
-  conversationTypeMaskOverride?: number | null
-  errorMessage: string
-}) {
-  if (
-    params.conversationTypeMaskOverride !== undefined &&
-    params.conversationTypeMaskOverride !== null &&
-    !bindingAllowsConversationType(params)
-  ) {
-    throw new Error(params.errorMessage)
-  }
-}
-
 async function loadAutomationEventSourceAccessRows(
   workspaceId: string,
   eventSourceIds: string[],
@@ -865,10 +864,11 @@ async function loadAutomationEventSourceAccessRows(
     return new Map<string, AutomationEventSourceAccessRow[]>()
   }
 
-  // P3: delegate the SELECT-with-access_subjects-JOIN to binding-storage. The
-  // helper returns normalized AutomationEventSourceBindingRow rows; this function only has to
-  // bucket them by event source.
-  const rows = await loadAutomationEventSourceAccessBindingRows({
+  // P3: delegate the SELECT to the repo helper, which reads use-permission rows
+  // from `workspace_resource_grants` joined to `access_subjects`. It returns
+  // normalized AutomationEventSourceGrantJoinedRow rows; this function only has
+  // to bucket them by event source.
+  const rows = await loadAutomationEventSourceAccessGrantRows({
     resourceType: "automation_event_source",
     resourceIds: uniqueIds,
     workspaceId,
@@ -897,7 +897,11 @@ async function listAutomationEventSourceAccessRows(
   return rowsBySource.get(eventSourceId) || []
 }
 
-function automationEventSourceGrantApplies(params: {
+// Exported for characterization tests (plan §5: the matcher is the load-bearing
+// item that must逐位 preserve semantics — actor LIVE, workspace LIVE,
+// workspace_member / remote_agent INERT). Pure predicate over a decoded grant
+// row + runtime context.
+export function automationEventSourceGrantApplies(params: {
   row: AutomationEventSourceAccessRow
   context: AutomationEventSourceAccessContext
   conversation: Record<string, unknown>
@@ -911,7 +915,7 @@ function automationEventSourceGrantApplies(params: {
     return false
   }
 
-  const target = readAutomationEventSourceAccessBindingTarget(params.row)
+  const target = readAutomationEventSourceAccessGrantTarget(params.row)
   const subject = target.subject
   const scope = target.scope
   switch (subject.kind) {
@@ -984,35 +988,31 @@ async function assertAutomationEventSourceAccessible(params: {
   }
 }
 
-function mapAutomationEventSourceAccessGrant(
-  row: AutomationEventSourceAccessRow
-): AutomationEventSourceAccessGrant {
-  return mapAutomationEventSourceAccessBindingToGrant(
-    row,
-    "Automation event sources require explicit use access.",
-    {
-      effectiveConversationTypeMask:
-        resolveAutomationEventSourceConversationMask(
-          row.conversationTypeMaskOverride
-        ),
-    }
-  )
-}
-
 export async function listAutomationEventSourceAccessState(
   workspaceId: string,
   eventSourceId: string
-) {
+): Promise<AutomationEventSourceAccessStateSchemaType> {
   const source = await getAutomationEventSource(workspaceId, eventSourceId)
   if (!source) {
     throw new Error("Automation event source not found")
   }
 
-  const rows = await listAutomationEventSourceAccessRows(
-    workspaceId,
-    eventSourceId
-  )
-  const grants = rows.map(mapAutomationEventSourceAccessGrant)
+  // §4.1: automation event-source access is a `use`-permission grant set on the
+  // source's workspace_resources root (workspaceResourceId == eventSourceId). Reuse the
+  // unified workspace-resources grant presentation path so there is no parallel
+  // resource-authz grant shape.
+  //
+  // The unified presenter returns every grant on the root (use AND manage). The
+  // runtime matcher (`automationEventSourceGrantApplies`) is use-only, so a
+  // `manage` grant must NOT inflate the reported `isAuthorized` /
+  // `effectivePermissions` / `matchingGrantIds`. Filter to `use` grants so this
+  // state mirrors what actually gates subscriptions.
+  const rows = await listWorkspaceResourceGrantPresentationRows(eventSourceId)
+  const grants = rows
+    .map(presentGrant)
+    .filter((grant) =>
+      grant.permissions.includes(WORKSPACE_RESOURCE_GRANT_PERMISSION.USE)
+    )
   const effectiveConversationTypeMask =
     resolveAutomationEventSourceConversationMask(null)
 
@@ -1034,20 +1034,6 @@ export async function listAutomationEventSourceAccessState(
   }
 }
 
-async function getBindingTargetConversation(target: CapabilityAccessTarget) {
-  // D3: only `subject=conversation` or `scope=conversation` targets need a
-  // conversation lookup.
-  let conversationId: string | null = null
-  if (target.scope?.kind === "conversation") {
-    conversationId = (target.scope as { conversationId: string }).conversationId
-  } else if (target.subject.kind === "conversation") {
-    conversationId = (target.subject as { conversationId: string })
-      .conversationId
-  }
-  if (!conversationId) return null
-  return loadConversationWithImFlag(conversationId, { required: true })
-}
-
 /**
  * Load a conversation row and attach `is_im` (derived from the transport
  * binding) so the conversation-type mask check can resolve direct/group vs
@@ -1066,119 +1052,6 @@ async function loadConversationWithImFlag(
   }
   const isIm = await hasConversationTransportBinding({ conversationId })
   return { ...conversation, is_im: isIm }
-}
-
-export async function grantAutomationEventSourceAccess(input: {
-  workspaceId: string
-  eventSourceId: string
-  accessTarget?: CapabilityAccessTarget
-  conversationTypeMaskOverride?: number | null
-  grantedByWorkspaceMemberId?: string
-  reason?: string
-}) {
-  const source = await getAutomationEventSource(
-    input.workspaceId,
-    input.eventSourceId
-  )
-  if (!source) {
-    throw new Error("Automation event source not found")
-  }
-
-  const target = await resolveAccessGrantTarget({
-    workspaceId: input.workspaceId,
-    target: input.accessTarget || { subject: workspaceRef(input.workspaceId) },
-  })
-  const targetConversation = await getBindingTargetConversation(
-    input.accessTarget || { subject: workspaceRef(input.workspaceId) }
-  )
-  if (targetConversation) {
-    assertBindingMaskAllowsConversation({
-      conversation: targetConversation,
-      conversationTypeMaskOverride: input.conversationTypeMaskOverride,
-      errorMessage:
-        "Access grant conversation policy must allow the selected conversation type.",
-    })
-  }
-
-  const existingRows = await listAutomationEventSourceAccessRows(
-    input.workspaceId,
-    input.eventSourceId
-  )
-  const existing = existingRows.find((row) =>
-    automationEventSourceAccessBindingHasTarget(row, target)
-  )
-  if (existing) {
-    return mapAutomationEventSourceAccessGrant(existing)
-  }
-
-  const inserted = await withAutomationTransaction(async (trx) => {
-    const binding =
-      await insertAutomationEventSourceAccessBindingReturningRowOn(trx, {
-        workspaceId: input.workspaceId,
-        resourceType: "automation_event_source",
-        resourceId: input.eventSourceId,
-        target,
-        conversationTypeMaskOverride:
-          input.conversationTypeMaskOverride ?? null,
-        createdByWorkspaceMemberId: input.grantedByWorkspaceMemberId || null,
-        reason: input.reason || "Automation event source access grant",
-      })
-
-    return {
-      binding,
-    }
-  })
-
-  return mapAutomationEventSourceAccessGrant(
-    normalizeAutomationEventSourceAccessBindingRow(inserted.binding)
-  )
-}
-
-export async function updateAutomationEventSourceAccessGrant(input: {
-  workspaceId: string
-  eventSourceId: string
-  bindingId: string
-  conversationTypeMaskOverride?: number | null
-}) {
-  const accessRows = await listAutomationEventSourceAccessRows(
-    input.workspaceId,
-    input.eventSourceId,
-    true
-  )
-  const existing = accessRows.find((row) => row.id === input.bindingId)
-  if (!existing) {
-    throw new Error("Automation event source access binding not found")
-  }
-
-  if (input.conversationTypeMaskOverride !== undefined) {
-    const targetConversation = await getBindingTargetConversation(
-      mapAutomationEventSourceAccessGrant(existing).target
-    )
-    if (targetConversation) {
-      assertBindingMaskAllowsConversation({
-        conversation: targetConversation,
-        conversationTypeMaskOverride: input.conversationTypeMaskOverride,
-        errorMessage:
-          "Access grant conversation policy must allow the selected conversation type.",
-      })
-    }
-
-    await updateAutomationEventSourceAccessBindingMaskOverride({
-      bindingId: input.bindingId,
-      workspaceId: input.workspaceId,
-      conversationTypeMaskOverride: input.conversationTypeMaskOverride ?? null,
-    })
-  }
-
-  const updatedRows = await listAutomationEventSourceAccessRows(
-    input.workspaceId,
-    input.eventSourceId
-  )
-  const updated = updatedRows.find((row) => row.id === input.bindingId)
-  if (!updated) {
-    throw new Error("Automation event source access binding not found")
-  }
-  return mapAutomationEventSourceAccessGrant(updated)
 }
 
 async function pauseAutomationRule(params: {
@@ -1246,7 +1119,7 @@ async function pauseAutomationRulesMissingEventSourceAccess(
 export async function revokeAutomationEventSourceAccess(input: {
   workspaceId: string
   eventSourceId: string
-  bindingId: string
+  grantId: string
   operator: AutomationOperatorInput
 }) {
   const accessRows = await listAutomationEventSourceAccessRows(
@@ -1254,18 +1127,18 @@ export async function revokeAutomationEventSourceAccess(input: {
     input.eventSourceId,
     true
   )
-  const existing = accessRows.find((row) => row.id === input.bindingId)
+  const existing = accessRows.find((row) => row.id === input.grantId)
   if (!existing) {
-    throw new Error("Automation event source access binding not found")
+    throw new Error("Automation event source access grant not found")
   }
 
-  await revokeAutomationEventSourceAccessBindingById({
-    bindingId: input.bindingId,
+  await revokeAutomationEventSourceAccessGrantById({
+    grantId: input.grantId,
   })
   await pauseAutomationRulesMissingEventSourceAccess(
     input.eventSourceId,
     input.operator,
-    `Event source access binding ${input.bindingId} was revoked`
+    `Event source access grant ${input.grantId} was revoked`
   )
 }
 
@@ -1537,6 +1410,39 @@ async function reconcileIntegrationBindingWebhook(
   return getAutomationIntegrationBinding(binding.id)
 }
 
+/**
+ * §4.1: resolve the (ownerSubjectId, createdBySubjectId) pair for a new
+ * automation event-source root row. owner = the creating member's subject when
+ * member-created (else null for actor/session-created sources); creator = the
+ * member subject when present, otherwise the actor subject (NOT NULL — there is
+ * always a member or actor creator). Subjects are minted on the same trx so the
+ * root insert commits atomically with them.
+ */
+async function resolveAutomationEventSourceRootSubjects(
+  trx: DatabaseTransaction,
+  creator: AutomationCreatorInput
+): Promise<{ ownerSubjectId: string | null; createdBySubjectId: string }> {
+  const ownerSubjectId = creator.workspaceMemberId
+    ? await upsertAccessSubjectOnTrx(trx, {
+        kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+        memberId: creator.workspaceMemberId,
+      })
+    : null
+  let createdBySubjectId = ownerSubjectId
+  if (!createdBySubjectId) {
+    if (!creator.actorId) {
+      throw new Error(
+        "automation event source creator must be a workspace member or actor"
+      )
+    }
+    createdBySubjectId = await upsertAccessSubjectOnTrx(trx, {
+      kind: SUBJECT_KIND.ACTOR,
+      actorId: creator.actorId,
+    })
+  }
+  return { ownerSubjectId, createdBySubjectId }
+}
+
 async function createIntegrationAutomationEventSource(
   workspaceId: string,
   creator: AutomationCreatorInput,
@@ -1590,11 +1496,17 @@ async function createIntegrationAutomationEventSource(
 
   if (existing) {
     const nextStatus = input.status || "active"
+    const reusedName = input.name?.trim() || template.name
+    // §4.1: display_name + status live on the workspace_resources root now.
+    await updateWorkspaceResourceRootDefault({
+      id: existing.id,
+      displayName: reusedName,
+      status: nextStatus,
+    })
     await updateAutomationEventSourceRow({
       workspaceId,
       eventSourceId: existing.id,
       values: {
-        name: input.name?.trim() || template.name,
         description: input.description?.trim() || template.description,
         recommendedUsage:
           input.recommendedUsage?.trim() || template.recommendedUsage || "",
@@ -1604,7 +1516,6 @@ async function createIntegrationAutomationEventSource(
         examplePayload: JSON.stringify(
           input.examplePayload || template.examplePayload || {}
         ),
-        status: input.status || "active",
         metadata: JSON.stringify({
           ...existing.metadata,
           ...(template.metadata || {}),
@@ -1656,7 +1567,23 @@ async function createIntegrationAutomationEventSource(
   }
 
   const sourceId = uuidv4()
+  const eventSourceName = input.name?.trim() || template.name
   await withAutomationTransaction(async (trx) => {
+    // §4.1: the source's root row carries display_name/status/owner/creator;
+    // it MUST be inserted first since automation_event_sources.id FK→
+    // workspace_resources.id.
+    const { ownerSubjectId, createdBySubjectId } =
+      await resolveAutomationEventSourceRootSubjects(trx, creator)
+    await insertWorkspaceResourceRoot(trx, {
+      id: sourceId,
+      workspaceId,
+      kind: WORKSPACE_RESOURCE_KIND.AUTOMATION_EVENT_SOURCE,
+      displayName: eventSourceName,
+      status: initialStatus,
+      ownerWorkspaceMemberId: creator.workspaceMemberId ?? null,
+      ownerSubjectId,
+      createdBySubjectId,
+    })
     await insertAutomationEventSourceRow(
       {
         id: sourceId,
@@ -1666,7 +1593,6 @@ async function createIntegrationAutomationEventSource(
         webhookEndpointId: null,
         integrationBindingId: binding.id,
         sourceKey: normalizedSourceKey,
-        name: input.name?.trim() || template.name,
         description: input.description?.trim() || template.description,
         recommendedUsage:
           input.recommendedUsage?.trim() || template.recommendedUsage || "",
@@ -1676,11 +1602,6 @@ async function createIntegrationAutomationEventSource(
         examplePayload: JSON.stringify(
           input.examplePayload || template.examplePayload || {}
         ),
-        status: initialStatus,
-        createdByKind: creator.kind,
-        createdByWorkspaceMemberId: creator.workspaceMemberId || null,
-        createdByActorId: creator.actorId || null,
-        createdBySessionId: creator.sessionId || null,
         metadata: JSON.stringify({
           ...(template.metadata || {}),
           ...(input.metadata || {}),
@@ -1773,18 +1694,22 @@ export async function createAutomationEventSource(
   })
 
   if (existing) {
+    // §4.1: display_name + status live on the workspace_resources root now.
+    await updateWorkspaceResourceRootDefault({
+      id: existing.id,
+      displayName: input.name.trim(),
+      status: input.status || "active",
+    })
     await updateAutomationEventSourceRow({
       workspaceId,
       eventSourceId: existing.id,
       values: {
         providerRef: providerBinding.providerRef,
         webhookEndpointId: providerBinding.webhookEndpointId,
-        name: input.name.trim(),
         description: input.description.trim(),
         recommendedUsage: input.recommendedUsage?.trim() || "",
         payloadSchema: JSON.stringify(input.payloadSchema || {}),
         examplePayload: JSON.stringify(input.examplePayload || {}),
-        status: input.status || "active",
         metadata: JSON.stringify(input.metadata || existing.metadata || {}),
       },
     })
@@ -1816,25 +1741,41 @@ export async function createAutomationEventSource(
   }
 
   const sourceId = uuidv4()
+  const initialStatus = input.status || "active"
+  const sourceName = input.name.trim()
+  const sourceDescription = input.description.trim()
 
-  await insertAutomationEventSourceRow({
-    id: sourceId,
-    workspaceId: workspaceId,
-    providerKind: input.providerKind,
-    providerRef: providerBinding.providerRef,
-    webhookEndpointId: providerBinding.webhookEndpointId,
-    sourceKey: normalizedSourceKey,
-    name: input.name.trim(),
-    description: input.description.trim(),
-    recommendedUsage: input.recommendedUsage?.trim() || "",
-    payloadSchema: JSON.stringify(input.payloadSchema || {}),
-    examplePayload: JSON.stringify(input.examplePayload || {}),
-    status: input.status || "active",
-    createdByKind: creator.kind,
-    createdByWorkspaceMemberId: creator.workspaceMemberId || null,
-    createdByActorId: creator.actorId || null,
-    createdBySessionId: creator.sessionId || null,
-    metadata: JSON.stringify(input.metadata || {}),
+  await withAutomationTransaction(async (trx) => {
+    // §4.1: insert the workspace_resources root first (PK FK target for the detail
+    // row), carrying display_name/status/owner/creator.
+    const { ownerSubjectId, createdBySubjectId } =
+      await resolveAutomationEventSourceRootSubjects(trx, creator)
+    await insertWorkspaceResourceRoot(trx, {
+      id: sourceId,
+      workspaceId,
+      kind: WORKSPACE_RESOURCE_KIND.AUTOMATION_EVENT_SOURCE,
+      displayName: sourceName,
+      status: initialStatus,
+      ownerWorkspaceMemberId: creator.workspaceMemberId ?? null,
+      ownerSubjectId,
+      createdBySubjectId,
+    })
+    await insertAutomationEventSourceRow(
+      {
+        id: sourceId,
+        workspaceId: workspaceId,
+        providerKind: input.providerKind,
+        providerRef: providerBinding.providerRef,
+        webhookEndpointId: providerBinding.webhookEndpointId,
+        sourceKey: normalizedSourceKey,
+        description: sourceDescription,
+        recommendedUsage: input.recommendedUsage?.trim() || "",
+        payloadSchema: JSON.stringify(input.payloadSchema || {}),
+        examplePayload: JSON.stringify(input.examplePayload || {}),
+        metadata: JSON.stringify(input.metadata || {}),
+      },
+      trx
+    )
   })
 
   await appendAutomationAuditLog({
@@ -1896,6 +1837,13 @@ export async function updateAutomationEventSource(
         )
   const nextStatus = input.status || existing.status
 
+  // display_name + status live on the workspace_resources ROOT (the fold moved
+  // them off the automation_event_sources detail table); persist them there.
+  await updateWorkspaceResourceRootDefault({
+    id: eventSourceId,
+    displayName: input.name?.trim() || existing.name,
+    status: nextStatus,
+  })
   await updateAutomationEventSourceRow({
     workspaceId,
     eventSourceId,
@@ -1904,7 +1852,6 @@ export async function updateAutomationEventSource(
       webhookEndpointId: providerBinding.webhookEndpointId,
       integrationBindingId: existing.integration?.bindingId || null,
       sourceKey: existing.sourceKey,
-      name: input.name?.trim() || existing.name,
       description:
         input.description !== undefined
           ? input.description.trim()
@@ -1923,7 +1870,6 @@ export async function updateAutomationEventSource(
           ? input.examplePayload
           : existing.examplePayload
       ),
-      status: nextStatus,
       metadata: JSON.stringify(
         input.metadata !== undefined ? input.metadata : existing.metadata
       ),

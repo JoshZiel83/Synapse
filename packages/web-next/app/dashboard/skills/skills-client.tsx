@@ -44,7 +44,7 @@ import {
 import { toast } from "sonner"
 
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
-import WorkspaceAppAccessStep from "@/app/dashboard/plugins/workspace-app-access-step"
+import WorkspaceResourceAccessStep from "@/app/dashboard/plugins/workspace-resource-access-step"
 import { CanonicalContentEditor } from "@/components/canonical-content-editor"
 import { CanonicalContentRenderer } from "@/components/canonical-content-renderer"
 import { Badge } from "@/components/ui/badge"
@@ -133,7 +133,7 @@ type UploadedFile = {
 
 const skillGrantAdapter = {
   loadGrants: (workspaceId: string, resourceId: string) =>
-    api.getWorkspaceAppGrants(workspaceId, resourceId),
+    api.getWorkspaceResourceGrants(workspaceId, resourceId),
   replaceGrants: (
     workspaceId: string,
     resourceId: string,
@@ -145,7 +145,7 @@ const skillGrantAdapter = {
         reason?: string
       }>
     }
-  ) => api.replaceWorkspaceAppGrants(workspaceId, resourceId, payload),
+  ) => api.replaceWorkspaceResourceGrants(workspaceId, resourceId, payload),
   updatePolicy: (
     workspaceId: string,
     resourceId: string,
@@ -2002,7 +2002,7 @@ export function InstalledSkillConfigurationPage({
                   </div>
                 </div>
 
-                <WorkspaceAppAccessStep
+                <WorkspaceResourceAccessStep
                   installation={skill}
                   grantAdapter={skillGrantAdapter}
                   resourceLabel="skill"

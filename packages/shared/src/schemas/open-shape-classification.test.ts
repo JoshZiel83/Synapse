@@ -33,7 +33,7 @@ const classifiedOpenShapeFiles = {
     "Runtime source request args are machine/tool invocation context.",
   "skills.ts":
     "Skill hooks, locators, and metadata are marketplace/import adapter records.",
-  "workspace-apps.ts":
+  "workspace-resources.ts":
     "Workspace app config and metadata are app/plugin-owned open records.",
 } as const
 

@@ -157,10 +157,10 @@ async function seedDefaultActorDiscoveryProfiles(params: {
     SET is_public_shared = TRUE
     WHERE EXISTS (
       SELECT 1
-      FROM workspace_apps app
-      WHERE app.id = actors.id
-        AND app.workspace_id = ${params.workspaceId}
-        AND app.deleted_at IS NULL
+      FROM workspace_resources resource
+      WHERE resource.id = actors.id
+        AND resource.workspace_id = ${params.workspaceId}
+        AND resource.deleted_at IS NULL
     )
       AND id = ANY(${params.actorIds}::uuid[])`.execute(db)
 }

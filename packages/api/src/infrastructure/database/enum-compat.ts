@@ -15,23 +15,16 @@ import type {
   SessionWakeupSourceType,
   SessionWakeupStatus,
   TaskNoticeStatus,
-  WorkspaceAppGrantPermission,
-  WorkspaceAppGrantRequestStatus,
-  WorkspaceAppGrantSource,
-  WorkspaceAppGrantStatus,
-  WorkspaceAppKind,
-  WorkspaceAppStatus,
+  WorkspaceResourceGrantPermission,
+  WorkspaceResourceGrantRequestStatus,
+  WorkspaceResourceGrantSource,
+  WorkspaceResourceGrantStatus,
+  WorkspaceResourceKind,
+  WorkspaceResourceStatus,
 } from "@synapse/shared"
-import {
-  ACCESS_BINDABLE_RESOURCE_TYPES,
-  ACCESS_BINDING_SOURCES,
-  ACCESS_BINDING_STATUSES,
-  SUBJECT_KINDS,
-  TOOL_SOURCE_KINDS,
-} from "@synapse/shared"
+import { SUBJECT_KINDS, TOOL_SOURCE_KINDS } from "@synapse/shared"
 import {
   AUTOMATION_COMPLETION_STATUSES,
-  AUTOMATION_CREATOR_KINDS,
   AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS,
   AUTOMATION_EVENT_SOURCE_STATUSES,
   AUTOMATION_EXECUTION_STATUSES,
@@ -76,9 +69,7 @@ import type {
   ActorsRole,
   ActorVersionDocsVisibility,
   AutomationDeliveriesTargetPolicy,
-  AutomationEventSourcesCreatedByKind,
   AutomationEventSourcesProviderKind,
-  AutomationEventSourcesStatus,
   AutomationExecutionsStatus,
   AutomationIntegrationBindingsIngressKind,
   AutomationIntegrationBindingsProvider,
@@ -107,9 +98,6 @@ import type {
   RuntimeAuthorizationRequestMode,
   RelationshipApprovalMode,
   RelationshipRequestStatus,
-  ResourceAccessBindingResourceType,
-  ResourceAccessBindingsSource,
-  ResourceAccessBindingsStatus,
   SubjectKind,
   SessionInterruptsType,
   SessionsStatus,
@@ -125,12 +113,12 @@ import type {
   TransportAccountsTransportKind,
   ConversationTransportBindingsInboundActorMode,
   WorkspaceAccessBindingsAccessKey,
-  WorkspaceAppGrantPermission as DbWorkspaceAppGrantPermission,
-  WorkspaceAppGrantRequestsStatus as DbWorkspaceAppGrantRequestsStatus,
-  WorkspaceAppGrantsSource as DbWorkspaceAppGrantsSource,
-  WorkspaceAppGrantsStatus as DbWorkspaceAppGrantsStatus,
-  WorkspaceAppsKind as DbWorkspaceAppsKind,
-  WorkspaceAppsStatus as DbWorkspaceAppsStatus,
+  WorkspaceResourceGrantPermission as DbWorkspaceResourceGrantPermission,
+  WorkspaceResourceGrantRequestsStatus as DbWorkspaceResourceGrantRequestsStatus,
+  WorkspaceResourceGrantsSource as DbWorkspaceResourceGrantsSource,
+  WorkspaceResourceGrantsStatus as DbWorkspaceResourceGrantsStatus,
+  WorkspaceResourcesKind as DbWorkspaceResourcesKind,
+  WorkspaceResourcesStatus as DbWorkspaceResourcesStatus,
   WorkspaceInvitesTrustLevel,
   ToolCallsSourceKind,
 } from "./generated/db.js"
@@ -230,12 +218,8 @@ type _AutomationTargetPolicyMatchesDb = Assert<
     AutomationDeliveriesTargetPolicy
   >
 >
-type _AutomationCreatorKindMatchesDb = Assert<
-  IsEqual<
-    (typeof AUTOMATION_CREATOR_KINDS)[number],
-    AutomationEventSourcesCreatedByKind
-  >
->
+// automation_event_sources_created_by_kind enum dropped: source provenance now
+// lives on workspace_resources.created_by_subject_id (D4). No DB counterpart to assert.
 type _AutomationRuleStatusMatchesDb = Assert<
   IsEqual<(typeof AUTOMATION_RULE_STATUSES)[number], AutomationRulesStatus>
 >
@@ -266,11 +250,15 @@ type _AutomationEventSourceProviderKindMatchesDb = Assert<
     AutomationEventSourcesProviderKind
   >
 >
-type _AutomationEventSourceStatusMatchesDb = Assert<
-  IsEqual<
-    (typeof AUTOMATION_EVENT_SOURCE_STATUSES)[number],
-    AutomationEventSourcesStatus
-  >
+// automation_event_sources_status enum dropped (fold): an event source's
+// status now lives on its workspace_resources root row. The shared tuple is the
+// per-kind status subset; assert it stays a subset of the root status enum.
+type _AutomationEventSourceStatusSubsetOfRootDb = Assert<
+  [(typeof AUTOMATION_EVENT_SOURCE_STATUSES)[number]] extends [
+    DbWorkspaceResourcesStatus,
+  ]
+    ? true
+    : false
 >
 type _AutomationExecutionStatusMatchesDb = Assert<
   IsEqual<
@@ -377,32 +365,29 @@ type _CatalogFileRoleMatchesDb = Assert<
 type _SubjectKindMatchesDb = Assert<
   IsEqual<(typeof SUBJECT_KINDS)[number], SubjectKind>
 >
-type _AccessBindingStatusMatchesDb = Assert<
+// resource_access_bindings table + its status/source enums dropped (automation
+// authz folded into workspace_resource_grants). The grant status/source enums are
+// asserted below via _WorkspaceResourceGrant{Status,Source}MatchesDb.
+type _WorkspaceResourceKindMatchesDb = Assert<
+  IsEqual<WorkspaceResourceKind, DbWorkspaceResourcesKind>
+>
+type _WorkspaceResourceStatusMatchesDb = Assert<
+  IsEqual<WorkspaceResourceStatus, DbWorkspaceResourcesStatus>
+>
+type _WorkspaceResourceGrantPermissionMatchesDb = Assert<
+  IsEqual<WorkspaceResourceGrantPermission, DbWorkspaceResourceGrantPermission>
+>
+type _WorkspaceResourceGrantStatusMatchesDb = Assert<
+  IsEqual<WorkspaceResourceGrantStatus, DbWorkspaceResourceGrantsStatus>
+>
+type _WorkspaceResourceGrantSourceMatchesDb = Assert<
+  IsEqual<WorkspaceResourceGrantSource, DbWorkspaceResourceGrantsSource>
+>
+type _WorkspaceResourceGrantRequestStatusMatchesDb = Assert<
   IsEqual<
-    (typeof ACCESS_BINDING_STATUSES)[number],
-    ResourceAccessBindingsStatus
+    WorkspaceResourceGrantRequestStatus,
+    DbWorkspaceResourceGrantRequestsStatus
   >
->
-type _AccessBindingSourceMatchesDb = Assert<
-  IsEqual<(typeof ACCESS_BINDING_SOURCES)[number], ResourceAccessBindingsSource>
->
-type _WorkspaceAppKindMatchesDb = Assert<
-  IsEqual<WorkspaceAppKind, DbWorkspaceAppsKind>
->
-type _WorkspaceAppStatusMatchesDb = Assert<
-  IsEqual<WorkspaceAppStatus, DbWorkspaceAppsStatus>
->
-type _WorkspaceAppGrantPermissionMatchesDb = Assert<
-  IsEqual<WorkspaceAppGrantPermission, DbWorkspaceAppGrantPermission>
->
-type _WorkspaceAppGrantStatusMatchesDb = Assert<
-  IsEqual<WorkspaceAppGrantStatus, DbWorkspaceAppGrantsStatus>
->
-type _WorkspaceAppGrantSourceMatchesDb = Assert<
-  IsEqual<WorkspaceAppGrantSource, DbWorkspaceAppGrantsSource>
->
-type _WorkspaceAppGrantRequestStatusMatchesDb = Assert<
-  IsEqual<WorkspaceAppGrantRequestStatus, DbWorkspaceAppGrantRequestsStatus>
 >
 // external-first-class-subject: conversation_participants.participant_type
 // column + the conversation_participants_type DB enum have been dropped. The

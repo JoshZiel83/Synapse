@@ -1,7 +1,12 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import crypto from "node:crypto"
-import { actorRef, workspaceMemberRef, type SubjectRef } from "@synapse/shared"
+import {
+  actorRef,
+  workspaceMemberRef,
+  workspaceRef,
+  type SubjectRef,
+} from "@synapse/shared"
 import type { Kysely } from "kysely"
 import { withTestDb } from "../../test/helpers/db.js"
 import { authorizePermission, type AccessSubject } from "../access/service.js"
@@ -119,14 +124,18 @@ async function grantMemoryAdmin(
 
 async function newActor(db: Kysely<any>, wsId: string): Promise<string> {
   const actorId = crypto.randomUUID()
+  // workspace_resources.created_by_subject_id is NOT NULL; mint (idempotently —
+  // one per workspace) a workspace-kind creator subject.
+  const createdBySubjectId = await upsertAccessSubject(db, workspaceRef(wsId))
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspace_resources")
     .values({
       id: actorId,
       workspace_id: wsId,
       kind: "actor",
       display_name: `${NS} actor`,
       status: "active",
+      created_by_subject_id: createdBySubjectId,
     } as any)
     .execute()
   const row = await db

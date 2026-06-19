@@ -31,9 +31,21 @@ async function seedSession(db: any): Promise<{ sessionId: string }> {
       db
     )
   )
+  // workspace_resources.created_by_subject_id is NOT NULL with no default; mint a
+  // workspace-kind access_subject (same workspace) to satisfy it. The fixture has
+  // no owning member, so owner_subject_id stays NULL (a system/actor-created
+  // resource).
+  const creatorSubjectId = randomUUID()
   await db.executeQuery(
-    sql`INSERT INTO workspace_apps (id, workspace_id, kind, display_name, status)
-        VALUES (${actorId}, ${workspaceId}, 'actor', 'A', 'active')`.compile(db)
+    sql`INSERT INTO access_subjects (id, kind, workspace_id) VALUES (${creatorSubjectId}, 'workspace', ${workspaceId})`.compile(
+      db
+    )
+  )
+  await db.executeQuery(
+    sql`INSERT INTO workspace_resources (id, workspace_id, kind, display_name, status, created_by_subject_id)
+        VALUES (${actorId}, ${workspaceId}, 'actor', 'A', 'active', ${creatorSubjectId})`.compile(
+      db
+    )
   )
   await db.executeQuery(
     sql`INSERT INTO actors (id, role, title) VALUES (${actorId}, 'assistant', 'A')`.compile(

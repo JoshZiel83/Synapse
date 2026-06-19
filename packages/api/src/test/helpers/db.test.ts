@@ -8,19 +8,24 @@ test(
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
+      // `resource_access_bindings` was dropped by the workspace-resource authz
+      // unification (automation event-source authz folded into
+      // `workspace_resource_grants`). Probe the tables that survive the fold so
+      // the schema-baseline check stays meaningful without referencing a table
+      // that no longer exists.
       const result = await sql<{ tableName: string }>`
         SELECT table_name
         FROM information_schema.tables
         WHERE table_schema = 'public'
           AND table_type = 'BASE TABLE'
-          AND table_name IN ('workspaces', 'workspace_members', 'resource_access_bindings')
+          AND table_name IN ('workspaces', 'workspace_members', 'workspace_resource_grants')
         ORDER BY table_name
       `.execute(db)
 
       const tableNames = result.rows.map((row) => row.tableName)
       assert.deepEqual(tableNames, [
-        "resource_access_bindings",
         "workspace_members",
+        "workspace_resource_grants",
         "workspaces",
       ])
     })

@@ -9,8 +9,8 @@
  * actor, one member, etc.) reuses the same row.
  *
  * `loadAccessSubject` and `loadAccessSubjectMany` are the *read* counterparts
- * used by binding-storage and the evaluator to reconstruct a SubjectRef from
- * a stored `subject_id`.
+ * used by the workspace_resource_grants repo readers and the evaluator to
+ * reconstruct a SubjectRef from a stored `subject_id`.
  */
 
 import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
@@ -137,10 +137,10 @@ async function resolveOwningWorkspaceId(
     case SUBJECT_KIND.ACTOR: {
       const row = await db
         .selectFrom("actors as actor")
-        .innerJoin("workspaceApps as app", "app.id", "actor.id")
-        .select("app.workspaceId")
+        .innerJoin("workspaceResources as resource", "resource.id", "actor.id")
+        .select("resource.workspaceId")
         .where("actor.id", "=", ref.actorId)
-        .where("app.deletedAt", "is", null)
+        .where("resource.deletedAt", "is", null)
         .executeTakeFirst()
       if (!row) {
         throw new Error(`upsertAccessSubject: actors(${ref.actorId}) not found`)
@@ -150,10 +150,10 @@ async function resolveOwningWorkspaceId(
     case SUBJECT_KIND.REMOTE_AGENT: {
       const row = await db
         .selectFrom("remoteAgents as agent")
-        .innerJoin("workspaceApps as app", "app.id", "agent.id")
-        .select("app.workspaceId")
+        .innerJoin("workspaceResources as resource", "resource.id", "agent.id")
+        .select("resource.workspaceId")
         .where("agent.id", "=", ref.remoteAgentId)
-        .where("app.deletedAt", "is", null)
+        .where("resource.deletedAt", "is", null)
         .executeTakeFirst()
       if (!row) {
         throw new Error(

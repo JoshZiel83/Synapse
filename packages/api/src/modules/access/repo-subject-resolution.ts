@@ -185,10 +185,10 @@ async function assertPrincipalBelongsToWorkspace(
     case SUBJECT_KIND.ACTOR: {
       const row = await db
         .selectFrom("actors as actor")
-        .innerJoin("workspaceApps as app", "app.id", "actor.id")
-        .select(["actor.id", "app.workspaceId"])
+        .innerJoin("workspaceResources as resource", "resource.id", "actor.id")
+        .select(["actor.id", "resource.workspaceId"])
         .where("actor.id", "=", principal.actorId)
-        .where("app.deletedAt", "is", null)
+        .where("resource.deletedAt", "is", null)
         .limit(1)
         .executeTakeFirst()
       if (!row || row.workspaceId !== workspaceId) {
@@ -201,10 +201,10 @@ async function assertPrincipalBelongsToWorkspace(
     case SUBJECT_KIND.REMOTE_AGENT: {
       const row = await db
         .selectFrom("remoteAgents as agent")
-        .innerJoin("workspaceApps as app", "app.id", "agent.id")
-        .select(["agent.id", "app.workspaceId"])
+        .innerJoin("workspaceResources as resource", "resource.id", "agent.id")
+        .select(["agent.id", "resource.workspaceId"])
         .where("agent.id", "=", principal.remoteAgentId)
-        .where("app.deletedAt", "is", null)
+        .where("resource.deletedAt", "is", null)
         .limit(1)
         .executeTakeFirst()
       if (!row || row.workspaceId !== workspaceId) {
@@ -475,12 +475,12 @@ async function assertPrincipalBelongsToWorkspaceOn(
       const row = await runCompilable(
         executor,
         sql<{ workspaceId: string }>`
-          SELECT app.workspace_id
+          SELECT resource.workspace_id
           FROM actors actor
-          INNER JOIN workspace_apps_live app
-            ON app.id = actor.id
+          INNER JOIN workspace_resources_live resource
+            ON resource.id = actor.id
           WHERE actor.id = ${principal.actorId}
-            AND app.deleted_at IS NULL
+            AND resource.deleted_at IS NULL
           LIMIT 1`
       )
       if (row.rows.length === 0 || row.rows[0].workspaceId !== workspaceId) {
@@ -494,12 +494,12 @@ async function assertPrincipalBelongsToWorkspaceOn(
       const row = await runCompilable(
         executor,
         sql<{ workspaceId: string }>`
-          SELECT app.workspace_id
+          SELECT resource.workspace_id
           FROM remote_agents agent
-          INNER JOIN workspace_apps_live app
-            ON app.id = agent.id
+          INNER JOIN workspace_resources_live resource
+            ON resource.id = agent.id
           WHERE agent.id = ${principal.remoteAgentId}
-            AND app.deleted_at IS NULL
+            AND resource.deleted_at IS NULL
           LIMIT 1`
       )
       if (row.rows.length === 0 || row.rows[0].workspaceId !== workspaceId) {
@@ -568,10 +568,10 @@ async function assertVisibilityPrincipalsBelongToWorkspace(
   if (params.actorId) {
     const row = await db
       .selectFrom("actors as actor")
-      .innerJoin("workspaceApps as app", "app.id", "actor.id")
-      .select(["actor.id", "app.workspaceId"])
+      .innerJoin("workspaceResources as resource", "resource.id", "actor.id")
+      .select(["actor.id", "resource.workspaceId"])
       .where("actor.id", "=", params.actorId)
-      .where("app.deletedAt", "is", null)
+      .where("resource.deletedAt", "is", null)
       .limit(1)
       .executeTakeFirst()
     if (!row || row.workspaceId !== params.workspaceId) {
@@ -583,10 +583,10 @@ async function assertVisibilityPrincipalsBelongToWorkspace(
   if (params.remoteAgentId) {
     const row = await db
       .selectFrom("remoteAgents as agent")
-      .innerJoin("workspaceApps as app", "app.id", "agent.id")
-      .select(["agent.id", "app.workspaceId"])
+      .innerJoin("workspaceResources as resource", "resource.id", "agent.id")
+      .select(["agent.id", "resource.workspaceId"])
       .where("agent.id", "=", params.remoteAgentId)
-      .where("app.deletedAt", "is", null)
+      .where("resource.deletedAt", "is", null)
       .limit(1)
       .executeTakeFirst()
     if (!row || row.workspaceId !== params.workspaceId) {

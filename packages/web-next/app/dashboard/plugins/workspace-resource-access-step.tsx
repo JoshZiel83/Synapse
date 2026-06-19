@@ -20,12 +20,12 @@ import {
   MODEL_GROUP_GRANT_SCOPE,
   CONVERSATION_PARTICIPANT_TYPE,
   CONVERSATION_TYPE_MASK_PRESETS,
-  WORKSPACE_APP_GRANT_PERMISSION,
+  WORKSPACE_RESOURCE_GRANT_PERMISSION,
   maskAllowsConversationType,
   conversationTypeKeysToMask,
   conversationTypeMaskToKeys,
   normalizeConversationTypeMask,
-  type WorkspaceAppGrant,
+  type WorkspaceResourceGrant,
 } from "@synapse/shared"
 import {
   Bot,
@@ -177,11 +177,11 @@ type AccessPreviewScenario = {
   footer: string
 }
 
-type WorkspaceAppGrantAdapter = {
+type WorkspaceResourceGrantAdapter = {
   loadGrants: (
     workspaceId: string,
     resourceId: string
-  ) => Promise<WorkspaceAppGrantState>
+  ) => Promise<WorkspaceResourceGrantState>
   replaceGrants: (
     workspaceId: string,
     resourceId: string,
@@ -203,7 +203,7 @@ type WorkspaceAppGrantAdapter = {
   ) => Promise<unknown>
 }
 
-type WorkspaceAppGrantSummary = {
+type WorkspaceResourceGrantSummary = {
   sourceDefaultConversationTypeMask?: number
   workspaceConversationTypeMask?: number
   conversationTypeMaskOverride?: number | null
@@ -215,9 +215,9 @@ type WorkspaceAppGrantSummary = {
   reason?: string
 }
 
-type WorkspaceAppGrantState = {
-  summary?: WorkspaceAppGrantSummary | null
-  grants?: WorkspaceAppGrant[]
+type WorkspaceResourceGrantState = {
+  summary?: WorkspaceResourceGrantSummary | null
+  grants?: WorkspaceResourceGrant[]
 }
 
 type ActorRecord = {
@@ -229,7 +229,7 @@ type ActorRecord = {
   title?: string
 }
 
-type WorkspaceAppAccessOwner = {
+type WorkspaceResourceAccessOwner = {
   id?: string | null
   sourceDefaultConversationTypeMask?: number | null
   workspaceConversationTypeMask?: number | null
@@ -241,10 +241,10 @@ function readOwnerNumber(input: unknown): number | null {
   return typeof input === "number" ? input : null
 }
 
-function buildWorkspaceAppGrantSummary(
-  installation: WorkspaceAppAccessOwner | null,
+function buildWorkspaceResourceGrantSummary(
+  installation: WorkspaceResourceAccessOwner | null,
   resourceLabel: string
-): WorkspaceAppGrantSummary | null {
+): WorkspaceResourceGrantSummary | null {
   if (!installation) return null
   const sourceDefaultConversationTypeMask = readOwnerNumber(
     installation.sourceDefaultConversationTypeMask
@@ -266,7 +266,7 @@ function buildWorkspaceAppGrantSummary(
   }
 
   return {
-    requiredPermissions: [WORKSPACE_APP_GRANT_PERMISSION.USE],
+    requiredPermissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.USE],
     suggestedAccessTargetType: MODEL_GROUP_GRANT_SCOPE.WORKSPACE,
     sourceDefaultConversationTypeMask:
       sourceDefaultConversationTypeMask ?? undefined,
@@ -282,11 +282,11 @@ function buildWorkspaceAppGrantSummary(
   }
 }
 
-const pluginInstallationGrantAdapter: WorkspaceAppGrantAdapter = {
+const pluginInstallationGrantAdapter: WorkspaceResourceGrantAdapter = {
   loadGrants: (workspaceId, resourceId) =>
-    api.getWorkspaceAppGrants(workspaceId, resourceId),
+    api.getWorkspaceResourceGrants(workspaceId, resourceId),
   replaceGrants: (workspaceId, resourceId, payload) =>
-    api.replaceWorkspaceAppGrants(workspaceId, resourceId, payload),
+    api.replaceWorkspaceResourceGrants(workspaceId, resourceId, payload),
   updatePolicy: (workspaceId, resourceId, payload) =>
     api.updateInstallation(workspaceId, resourceId, payload),
 }
@@ -424,7 +424,9 @@ function getScopeLabel(scope: PluginGrantScope) {
 /**
  * Derive the local UI selection from a canonical ScopedSubjectTarget.
  */
-function targetScopeOf(target: WorkspaceAppGrant["target"]): PluginGrantScope {
+function targetScopeOf(
+  target: WorkspaceResourceGrant["target"]
+): PluginGrantScope {
   if (!target) return "workspace"
   if (
     target.subject.kind === "actor" &&
@@ -458,14 +460,16 @@ function targetScopeOf(target: WorkspaceAppGrant["target"]): PluginGrantScope {
  * Pull the actorId / conversationId / workspaceMemberId from a
  * ScopedSubjectTarget for the reader paths below.
  */
-function targetActorId(target: WorkspaceAppGrant["target"]): string | null {
+function targetActorId(
+  target: WorkspaceResourceGrant["target"]
+): string | null {
   if (!target) return null
   return target.subject.kind === "actor"
     ? (target.subject as { actorId: string }).actorId
     : null
 }
 function targetRemoteAgentId(
-  target: WorkspaceAppGrant["target"]
+  target: WorkspaceResourceGrant["target"]
 ): string | null {
   if (!target) return null
   return target.subject.kind === "remote_agent"
@@ -473,7 +477,7 @@ function targetRemoteAgentId(
     : null
 }
 function targetConversationId(
-  target: WorkspaceAppGrant["target"]
+  target: WorkspaceResourceGrant["target"]
 ): string | null {
   if (!target) return null
   if (target.scope?.kind === "conversation") {
@@ -486,7 +490,7 @@ function targetConversationId(
 }
 
 function formatGrantTarget(
-  grant: WorkspaceAppGrant,
+  grant: WorkspaceResourceGrant,
   actorsById: Map<string, string>,
   remoteAgentsById: Map<string, string>,
   conversationsById: Map<string, string>
@@ -704,7 +708,7 @@ function AccessPreviewCard({
   )
 }
 
-export default function WorkspaceAppAccessStep({
+export default function WorkspaceResourceAccessStep({
   installation,
   resourceId,
   grantAdapter = pluginInstallationGrantAdapter,
@@ -717,9 +721,9 @@ export default function WorkspaceAppAccessStep({
   dialogDescription,
   noAccessMessage = "No resource access has been granted yet.",
 }: {
-  installation: WorkspaceAppAccessOwner | null
+  installation: WorkspaceResourceAccessOwner | null
   resourceId?: string | null
-  grantAdapter?: WorkspaceAppGrantAdapter
+  grantAdapter?: WorkspaceResourceGrantAdapter
   resourceLabel?: string
   title?: string
   description?: string
@@ -735,8 +739,10 @@ export default function WorkspaceAppAccessStep({
   const [conversations, setConversations] = useState<
     ConversationCatalogEntry[]
   >([])
-  const [summary, setSummary] = useState<WorkspaceAppGrantSummary | null>(null)
-  const [grants, setGrants] = useState<WorkspaceAppGrant[]>([])
+  const [summary, setSummary] = useState<WorkspaceResourceGrantSummary | null>(
+    null
+  )
+  const [grants, setGrants] = useState<WorkspaceResourceGrant[]>([])
   const [loading, setLoading] = useState(false)
   const [loadingActors, setLoadingActors] = useState(false)
   const [loadingRemoteAgents, setLoadingRemoteAgents] = useState(false)
@@ -746,9 +752,8 @@ export default function WorkspaceAppAccessStep({
   const [savingGrantPolicy, setSavingGrantPolicy] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [grantPolicyDialogOpen, setGrantPolicyDialogOpen] = useState(false)
-  const [editingGrant, setEditingGrant] = useState<WorkspaceAppGrant | null>(
-    null
-  )
+  const [editingGrant, setEditingGrant] =
+    useState<WorkspaceResourceGrant | null>(null)
   const [grantScope, setGrantScope] = useState<PluginGrantScope>("workspace")
   const [conversationId, setConversationId] = useState("")
   const [actorId, setActorId] = useState("")
@@ -1345,7 +1350,7 @@ export default function WorkspaceAppAccessStep({
     setGrants(grantState.grants || [])
     const nextSummary =
       grantState.summary ||
-      buildWorkspaceAppGrantSummary(installation, resourceLabelLower)
+      buildWorkspaceResourceGrantSummary(installation, resourceLabelLower)
     setSummary(nextSummary || null)
     setPolicyError(null)
     setGrantPolicyError(null)
@@ -1764,7 +1769,7 @@ export default function WorkspaceAppAccessStep({
       })()
       const nextGrant = {
         target: accessTarget,
-        permissions: [WORKSPACE_APP_GRANT_PERMISSION.USE] as string[],
+        permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.USE] as string[],
         ...(canGrantConversationTypesForScope
           ? {
               conversationTypeMaskOverride:
@@ -1890,7 +1895,7 @@ export default function WorkspaceAppAccessStep({
     )
   }
 
-  const openGrantConversationTypeDialog = (grant: WorkspaceAppGrant) => {
+  const openGrantConversationTypeDialog = (grant: WorkspaceResourceGrant) => {
     if (!supportsGrantConversationTypeOverride(targetScopeOf(grant.target))) {
       return
     }

@@ -71,9 +71,9 @@ test("createMemory(owner=actor + scope=conversation) does NOT create a sessions 
   await client.query("BEGIN")
   try {
     await client.query(
-      `INSERT INTO workspace_apps (id, workspace_id, kind, display_name, owner_workspace_member_id, status)
-       VALUES ($1, $2, 'actor', 'mem-no-session-actor', $3, 'active')`,
-      [actorId, seed.workspaceId, seed.workspaceMemberId]
+      `INSERT INTO workspace_resources (id, workspace_id, kind, display_name, owner_subject_id, created_by_subject_id, status)
+       VALUES ($1, $2, 'actor', 'mem-no-session-actor', $3, $3, 'active')`,
+      [actorId, seed.workspaceId, seed.memberSubjectId]
     )
     await client.query(
       `INSERT INTO actors (id, role, title)

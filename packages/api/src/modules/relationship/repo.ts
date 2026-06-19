@@ -5,8 +5,8 @@
 // (workspaceRelationshipProfiles, workspaceFriendEntries, workspaceFriendRequests,
 // directConversationBindings) plus the cross-module reads the contact-hub /
 // friend-request / access-request surfaces need (workspaces, workspaceMembers+
-// users, actors, remote_agents via workspace_apps_live, workspaceAppGrants,
-// workspaceAppGrantRequests). service.ts holds the business logic (approval-mode
+// users, actors, remote_agents via workspace_resources_live, workspaceResourceGrants,
+// workspaceResourceGrantRequests). service.ts holds the business logic (approval-mode
 // branching, retry-on-unique-violation, presenter shaping) and calls these; it no
 // longer imports the db client. round-6 P1-6.
 //
@@ -28,9 +28,9 @@ import {
   deriveRequiresContactApprovalMany,
 } from "../access/contact-approval.js"
 import {
-  insertWorkspaceAppGrant,
-  insertWorkspaceAppGrantRequest,
-} from "../workspace-apps/grant-storage.js"
+  insertWorkspaceResourceGrant,
+  insertWorkspaceResourceGrantRequest,
+} from "../workspace-resources/grant-storage.js"
 import {
   directConversationBindingPeer,
   directConversationBindingValues,
@@ -70,16 +70,16 @@ export function deriveRequiresContactApprovalManyDefault(
   )
 }
 
-export function insertWorkspaceAppGrantDefault(
-  input: Parameters<typeof insertWorkspaceAppGrant>[1]
-): ReturnType<typeof insertWorkspaceAppGrant> {
-  return insertWorkspaceAppGrant(db, input)
+export function insertWorkspaceResourceGrantDefault(
+  input: Parameters<typeof insertWorkspaceResourceGrant>[1]
+): ReturnType<typeof insertWorkspaceResourceGrant> {
+  return insertWorkspaceResourceGrant(db, input)
 }
 
-export function insertWorkspaceAppGrantRequestDefault(
-  input: Parameters<typeof insertWorkspaceAppGrantRequest>[1]
-): ReturnType<typeof insertWorkspaceAppGrantRequest> {
-  return insertWorkspaceAppGrantRequest(db, input)
+export function insertWorkspaceResourceGrantRequestDefault(
+  input: Parameters<typeof insertWorkspaceResourceGrantRequest>[1]
+): ReturnType<typeof insertWorkspaceResourceGrantRequest> {
+  return insertWorkspaceResourceGrantRequest(db, input)
 }
 
 export function directConversationBindingValuesDefault(
@@ -148,15 +148,15 @@ export async function selectWorkspaceMemberSummaryById(
 export async function selectActorSummaryRow(actorId: string) {
   return db
     .selectFrom("actors as a")
-    .innerJoin("workspaceApps as app", "app.id", "a.id")
-    .innerJoin("workspaces as w", "w.id", "app.workspaceId")
+    .innerJoin("workspaceResources as resource", "resource.id", "a.id")
+    .innerJoin("workspaces as w", "w.id", "resource.workspaceId")
     .leftJoin("fileAssets as avatar_file", "avatar_file.id", "a.avatarFileId")
     .select([
       "a.id as actorId",
-      "app.workspaceId",
+      "resource.workspaceId",
       "w.name as workspaceName",
       "w.slug as workspaceSlug",
-      "app.displayName",
+      "resource.displayName",
       "a.title",
       "a.role",
       "a.isPublicShared",
@@ -164,8 +164,8 @@ export async function selectActorSummaryRow(actorId: string) {
       "avatar_file.id as avatarFileId",
     ])
     .where("a.id", "=", actorId)
-    .where("app.deletedAt", "is", null)
-    .where("app.status", "=", "active")
+    .where("resource.deletedAt", "is", null)
+    .where("resource.status", "=", "active")
     .executeTakeFirst()
 }
 
@@ -184,22 +184,22 @@ export async function selectRemoteAgentSummaryRow(remoteAgentId: string) {
   }>`
       SELECT
         ra.id AS remote_agent_id,
-        app.workspace_id,
+        resource.workspace_id,
         w.name AS workspace_name,
         w.slug AS workspace_slug,
-        app.display_name,
+        resource.display_name,
         ra.title,
         ra.runtime_kind,
         ra.avatar_file_id,
         ra.avatar_emoji,
         ra.is_public_shared
       FROM remote_agents ra
-      INNER JOIN workspace_apps_live app
-        ON app.id = ra.id
-      INNER JOIN workspaces w ON w.id = app.workspace_id
+      INNER JOIN workspace_resources_live resource
+        ON resource.id = ra.id
+      INNER JOIN workspaces w ON w.id = resource.workspace_id
       WHERE ra.id = ${remoteAgentId}
-        AND app.deleted_at IS NULL
-        AND app.status = 'active'
+        AND resource.deleted_at IS NULL
+        AND resource.status = 'active'
       LIMIT 1
     `.execute(db)
   return result.rows[0] ?? null
@@ -223,25 +223,25 @@ export async function selectWorkspaceMembersForHub(
 export async function selectWorkspaceActorsForHub(workspaceId: string) {
   return db
     .selectFrom("actors as a")
-    .innerJoin("workspaceApps as app", "app.id", "a.id")
-    .innerJoin("workspaces as w", "w.id", "app.workspaceId")
+    .innerJoin("workspaceResources as resource", "resource.id", "a.id")
+    .innerJoin("workspaces as w", "w.id", "resource.workspaceId")
     .leftJoin("fileAssets as avatar_file", "avatar_file.id", "a.avatarFileId")
     .select([
       "a.id as actorId",
-      "app.workspaceId",
+      "resource.workspaceId",
       "w.name as workspaceName",
       "w.slug as workspaceSlug",
-      "app.displayName",
+      "resource.displayName",
       "a.title",
       "a.role",
       "a.isPublicShared",
       "a.avatarEmoji",
       "avatar_file.id as avatarFileId",
     ])
-    .where("app.workspaceId", "=", workspaceId)
-    .where("app.deletedAt", "is", null)
-    .where("app.status", "=", "active")
-    .orderBy("app.displayName", "asc")
+    .where("resource.workspaceId", "=", workspaceId)
+    .where("resource.deletedAt", "is", null)
+    .where("resource.status", "=", "active")
+    .orderBy("resource.displayName", "asc")
     .execute()
 }
 
@@ -260,23 +260,23 @@ export async function selectWorkspaceRemoteAgentsForHub(workspaceId: string) {
   }>`
           SELECT
             ra.id AS remote_agent_id,
-            app.workspace_id,
+            resource.workspace_id,
             w.name AS workspace_name,
             w.slug AS workspace_slug,
-            app.display_name,
+            resource.display_name,
             ra.title,
             ra.runtime_kind,
             ra.is_public_shared,
             ra.avatar_emoji,
             ra.avatar_file_id
           FROM remote_agents ra
-          INNER JOIN workspace_apps_live app
-            ON app.id = ra.id
-          INNER JOIN workspaces w ON w.id = app.workspace_id
-          WHERE app.workspace_id = ${workspaceId}
-            AND app.deleted_at IS NULL
-            AND app.status = 'active'
-          ORDER BY app.display_name ASC, ra.created_at ASC
+          INNER JOIN workspace_resources_live resource
+            ON resource.id = ra.id
+          INNER JOIN workspaces w ON w.id = resource.workspace_id
+          WHERE resource.workspace_id = ${workspaceId}
+            AND resource.deleted_at IS NULL
+            AND resource.status = 'active'
+          ORDER BY resource.display_name ASC, ra.created_at ASC
         `.execute(db)
   return result.rows
 }
@@ -416,11 +416,11 @@ export async function updateActorPublicShared(
     .where((eb) =>
       eb.exists(
         db
-          .selectFrom("workspaceAppsLive as app")
-          .select("app.id")
-          .where("app.id", "=", actorId)
-          .where("app.workspaceId", "=", workspaceId)
-          .where("app.deletedAt", "is", null)
+          .selectFrom("workspaceResourcesLive as resource")
+          .select("resource.id")
+          .where("resource.id", "=", actorId)
+          .where("resource.workspaceId", "=", workspaceId)
+          .where("resource.deletedAt", "is", null)
       )
     )
     .returning(["isPublicShared"])
@@ -439,11 +439,11 @@ export async function updateRemoteAgentPublicShared(
         WHERE id = ${remoteAgentId}
           AND EXISTS (
             SELECT 1
-            FROM workspace_apps_live app
-            WHERE app.id = remote_agents.id
-              AND app.workspace_id = ${workspaceId}
-              AND app.deleted_at IS NULL
-              AND app.status = 'active'
+            FROM workspace_resources_live resource
+            WHERE resource.id = remote_agents.id
+              AND resource.workspace_id = ${workspaceId}
+              AND resource.deleted_at IS NULL
+              AND resource.status = 'active'
           )
         RETURNING is_public_shared
       `.execute(db)
@@ -683,23 +683,23 @@ export async function insertDirectConversationBinding(input: {
 }
 
 // ---------------------------------------------------------------------------
-// workspaceAppGrants / workspaceAppGrantRequests (cross-module reads;
+// workspaceResourceGrants / workspaceResourceGrantRequests (cross-module reads;
 // grant-storage already owns the writes via the *Default binders above)
 // ---------------------------------------------------------------------------
 
-export async function selectWorkspaceAppContactVisibleGrant(input: {
-  workspaceAppId: string
+export async function selectWorkspaceResourceContactVisibleGrant(input: {
+  workspaceResourceId: string
   workspaceSubjectId: string
   memberSubjectId: string
 }) {
   return db
-    .selectFrom("workspaceAppGrants")
+    .selectFrom("workspaceResourceGrants")
     .select("id")
-    .where("workspaceAppId", "=", input.workspaceAppId)
+    .where("workspaceResourceId", "=", input.workspaceResourceId)
     .where("status", "=", "active")
     .where("scopeSubjectId", "is", null)
     .where(
-      sql<boolean>`'contact_visible'::workspace_app_grant_permission = ANY(permissions)`
+      sql<boolean>`'contact_visible'::workspace_resource_grant_permission = ANY(permissions)`
     )
     .where((eb) =>
       eb.or([
@@ -711,29 +711,41 @@ export async function selectWorkspaceAppContactVisibleGrant(input: {
     .executeTakeFirst()
 }
 
-export async function selectWorkspaceAppLiveOwnerKind(
-  workspaceAppId: string,
+export async function selectWorkspaceResourceLiveOwnerKind(
+  workspaceResourceId: string,
   workspaceId: string
 ) {
+  // owner→subject migration: project the owner member id from the joined
+  // access_subjects row so member-owner equality keeps working. Non-member
+  // owners (actor/remote_agent) project null here — their owner-implicit
+  // visibility is computed subject-side in the evaluator, not here.
   return db
-    .selectFrom("workspaceAppsLive")
-    .select(["ownerWorkspaceMemberId", "kind"])
-    .where("id", "=", workspaceAppId)
-    .where("workspaceId", "=", workspaceId)
-    .where("deletedAt", "is", null)
+    .selectFrom("workspaceResourcesLive as resource")
+    .leftJoin(
+      "accessSubjects as owner_subject",
+      "owner_subject.id",
+      "resource.ownerSubjectId"
+    )
+    .select([
+      "owner_subject.workspaceMemberId as ownerWorkspaceMemberId",
+      "resource.kind",
+    ])
+    .where("resource.id", "=", workspaceResourceId)
+    .where("resource.workspaceId", "=", workspaceId)
+    .where("resource.deletedAt", "is", null)
     .executeTakeFirst()
 }
 
 export async function selectPendingAppGrantRequest(input: {
   workspaceId: string
-  workspaceAppId: string
+  workspaceResourceId: string
   requesterWorkspaceMemberId: string
 }) {
   return db
-    .selectFrom("workspaceAppGrantRequests as app_request")
+    .selectFrom("workspaceResourceGrantRequests as app_request")
     .selectAll()
     .where("workspaceId", "=", input.workspaceId)
-    .where("workspaceAppId", "=", input.workspaceAppId)
+    .where("workspaceResourceId", "=", input.workspaceResourceId)
     .where("requesterWorkspaceMemberId", "=", input.requesterWorkspaceMemberId)
     .where("status", "=", "pending")
     .executeTakeFirst()
@@ -743,11 +755,15 @@ export async function selectPendingAppGrantRequestIdsByKind(input: {
   workspaceId: string
   requesterWorkspaceMemberId: string
   kind: "actor" | "remote_agent"
-}): Promise<{ workspaceAppId: string | null }[]> {
+}): Promise<{ workspaceResourceId: string | null }[]> {
   return db
-    .selectFrom("workspaceAppGrantRequests as app_request")
-    .innerJoin("workspaceApps as app", "app.id", "app_request.workspaceAppId")
-    .select(["app_request.workspaceAppId as workspaceAppId"])
+    .selectFrom("workspaceResourceGrantRequests as app_request")
+    .innerJoin(
+      "workspaceResources as resource",
+      "resource.id",
+      "app_request.workspaceResourceId"
+    )
+    .select(["app_request.workspaceResourceId as workspaceResourceId"])
     .where("app_request.workspaceId", "=", input.workspaceId)
     .where(
       "app_request.requesterWorkspaceMemberId",
@@ -755,20 +771,20 @@ export async function selectPendingAppGrantRequestIdsByKind(input: {
       input.requesterWorkspaceMemberId
     )
     .where("app_request.status", "=", "pending")
-    .where("app.kind", "=", input.kind)
+    .where("resource.kind", "=", input.kind)
     .execute()
 }
 
 export async function selectPendingActorAppGrantRequestId(input: {
   workspaceId: string
-  workspaceAppId: string
+  workspaceResourceId: string
   requesterWorkspaceMemberId: string
 }) {
   return db
-    .selectFrom("workspaceAppGrantRequests")
+    .selectFrom("workspaceResourceGrantRequests")
     .select(["id"])
     .where("workspaceId", "=", input.workspaceId)
-    .where("workspaceAppId", "=", input.workspaceAppId)
+    .where("workspaceResourceId", "=", input.workspaceResourceId)
     .where("requesterWorkspaceMemberId", "=", input.requesterWorkspaceMemberId)
     .where("status", "=", "pending")
     .executeTakeFirst()
@@ -776,14 +792,14 @@ export async function selectPendingActorAppGrantRequestId(input: {
 
 export async function selectPendingRemoteAgentAppGrantRequestId(input: {
   workspaceId: string
-  workspaceAppId: string
+  workspaceResourceId: string
   requesterWorkspaceMemberId: string
 }) {
   const result = await sql<{ id: string }>`
           SELECT id
-          FROM workspace_app_grant_requests
+          FROM workspace_resource_grant_requests
           WHERE workspace_id = ${input.workspaceId}
-            AND workspace_app_id = ${input.workspaceAppId}
+            AND workspace_resource_id = ${input.workspaceResourceId}
             AND requester_workspace_member_id = ${input.requesterWorkspaceMemberId}
             AND status = 'pending'
           LIMIT 1
@@ -800,17 +816,21 @@ const actorAccessRequestSelection = [
   "app_request.resolvedAt",
   "app_request.createdAt",
   "app_request.updatedAt",
-  "app_request.workspaceAppId as actorId",
+  "app_request.workspaceResourceId as actorId",
 ] as const
 
 export async function selectIncomingActorAccessRequests(workspaceId: string) {
   return db
-    .selectFrom("workspaceAppGrantRequests as app_request")
-    .innerJoin("workspaceApps as app", "app.id", "app_request.workspaceAppId")
+    .selectFrom("workspaceResourceGrantRequests as app_request")
+    .innerJoin(
+      "workspaceResources as resource",
+      "resource.id",
+      "app_request.workspaceResourceId"
+    )
     .select(actorAccessRequestSelection)
     .where("app_request.workspaceId", "=", workspaceId)
     .where("app_request.status", "=", "pending")
-    .where("app.kind", "=", "actor")
+    .where("resource.kind", "=", "actor")
     .execute()
 }
 
@@ -819,8 +839,12 @@ export async function selectOutgoingActorAccessRequests(input: {
   requesterWorkspaceMemberId: string
 }) {
   return db
-    .selectFrom("workspaceAppGrantRequests as app_request")
-    .innerJoin("workspaceApps as app", "app.id", "app_request.workspaceAppId")
+    .selectFrom("workspaceResourceGrantRequests as app_request")
+    .innerJoin(
+      "workspaceResources as resource",
+      "resource.id",
+      "app_request.workspaceResourceId"
+    )
     .select(actorAccessRequestSelection)
     .where("app_request.workspaceId", "=", input.workspaceId)
     .where(
@@ -829,11 +853,11 @@ export async function selectOutgoingActorAccessRequests(input: {
       input.requesterWorkspaceMemberId
     )
     .where("app_request.status", "=", "pending")
-    .where("app.kind", "=", "actor")
+    .where("resource.kind", "=", "actor")
     .execute()
 }
 
-type WorkspaceAppGrantRequestJoinRow = {
+type WorkspaceResourceGrantRequestJoinRow = {
   id: string
   workspaceId: string
   requesterWorkspaceMemberId: string
@@ -847,17 +871,17 @@ type WorkspaceAppGrantRequestJoinRow = {
 
 export async function selectIncomingRemoteAgentAccessRequests(
   workspaceId: string
-): Promise<WorkspaceAppGrantRequestJoinRow[]> {
-  const result = await sql<WorkspaceAppGrantRequestJoinRow>`
+): Promise<WorkspaceResourceGrantRequestJoinRow[]> {
+  const result = await sql<WorkspaceResourceGrantRequestJoinRow>`
         SELECT request.id, request.workspace_id, request.requester_workspace_member_id,
                request.status, request.resolved_by_workspace_member_id, request.resolved_at,
                request.created_at, request.updated_at,
-               request.workspace_app_id AS remote_agent_id
-        FROM workspace_app_grant_requests request
-        JOIN workspace_apps_live app ON app.id = request.workspace_app_id
+               request.workspace_resource_id AS remote_agent_id
+        FROM workspace_resource_grant_requests request
+        JOIN workspace_resources_live resource ON resource.id = request.workspace_resource_id
         WHERE request.workspace_id = ${workspaceId}
           AND request.status = 'pending'
-          AND app.kind = 'remote_agent'
+          AND resource.kind = 'remote_agent'
         ORDER BY request.created_at DESC
       `.execute(db)
   return result.rows
@@ -866,18 +890,18 @@ export async function selectIncomingRemoteAgentAccessRequests(
 export async function selectOutgoingRemoteAgentAccessRequests(input: {
   workspaceId: string
   requesterWorkspaceMemberId: string
-}): Promise<WorkspaceAppGrantRequestJoinRow[]> {
-  const result = await sql<WorkspaceAppGrantRequestJoinRow>`
+}): Promise<WorkspaceResourceGrantRequestJoinRow[]> {
+  const result = await sql<WorkspaceResourceGrantRequestJoinRow>`
         SELECT request.id, request.workspace_id, request.requester_workspace_member_id,
                request.status, request.resolved_by_workspace_member_id, request.resolved_at,
                request.created_at, request.updated_at,
-               request.workspace_app_id AS remote_agent_id
-        FROM workspace_app_grant_requests request
-        JOIN workspace_apps_live app ON app.id = request.workspace_app_id
+               request.workspace_resource_id AS remote_agent_id
+        FROM workspace_resource_grant_requests request
+        JOIN workspace_resources_live resource ON resource.id = request.workspace_resource_id
         WHERE request.workspace_id = ${input.workspaceId}
           AND request.requester_workspace_member_id = ${input.requesterWorkspaceMemberId}
           AND request.status = 'pending'
-          AND app.kind = 'remote_agent'
+          AND resource.kind = 'remote_agent'
         ORDER BY request.created_at DESC
       `.execute(db)
   return result.rows
@@ -885,15 +909,19 @@ export async function selectOutgoingRemoteAgentAccessRequests(input: {
 
 export async function selectActorAccessRequestForResolve(requestId: string) {
   return db
-    .selectFrom("workspaceAppGrantRequests as app_request")
-    .innerJoin("workspaceApps as app", "app.id", "app_request.workspaceAppId")
+    .selectFrom("workspaceResourceGrantRequests as app_request")
+    .innerJoin(
+      "workspaceResources as resource",
+      "resource.id",
+      "app_request.workspaceResourceId"
+    )
     .select([
       "app_request.id",
       "app_request.workspaceId",
-      "app_request.workspaceAppId as actorId",
+      "app_request.workspaceResourceId as actorId",
       "app_request.requesterWorkspaceMemberId",
       "app_request.status",
-      "app.kind as targetKind",
+      "resource.kind as targetKind",
     ])
     .where("app_request.id", "=", requestId)
     .executeTakeFirst()
@@ -914,9 +942,9 @@ export async function selectRemoteAgentAccessRequestForResolve(
   }>`
       SELECT request.id, request.workspace_id, request.requester_workspace_member_id,
              request.status, request.resolved_at, request.resolved_by_workspace_member_id,
-             request.workspace_app_id AS remote_agent_id, app.kind AS target_kind
-      FROM workspace_app_grant_requests request
-      JOIN workspace_apps_live app ON app.id = request.workspace_app_id
+             request.workspace_resource_id AS remote_agent_id, resource.kind AS target_kind
+      FROM workspace_resource_grant_requests request
+      JOIN workspace_resources_live resource ON resource.id = request.workspace_resource_id
       WHERE request.id = ${requestId}
       LIMIT 1
     `.execute(db)

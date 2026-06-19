@@ -61,14 +61,23 @@ async function insertWorkspaceMember(
 
 async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
   const actorId = crypto.randomUUID()
+  // workspace_resources.created_by_subject_id is NOT NULL; mint a workspace-kind creator subject.
+  const createdBySubjectId = (
+    await db
+      .insertInto("access_subjects")
+      .values({ kind: "workspace", workspace_id: workspaceId } as any)
+      .returning("id")
+      .executeTakeFirstOrThrow()
+  ).id as string
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspace_resources")
     .values({
       id: actorId,
       workspace_id: workspaceId,
       kind: "actor",
       display_name: "test actor",
       status: "active",
+      created_by_subject_id: createdBySubjectId,
     } as any)
     .execute()
   const row = await db
@@ -89,14 +98,23 @@ async function insertRemoteAgent(
   workspaceId: string
 ): Promise<string> {
   const remoteAgentId = crypto.randomUUID()
+  // workspace_resources.created_by_subject_id is NOT NULL; mint a workspace-kind creator subject.
+  const createdBySubjectId = (
+    await db
+      .insertInto("access_subjects")
+      .values({ kind: "workspace", workspace_id: workspaceId } as any)
+      .returning("id")
+      .executeTakeFirstOrThrow()
+  ).id as string
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspace_resources")
     .values({
       id: remoteAgentId,
       workspace_id: workspaceId,
       kind: "remote_agent",
       display_name: "test remote agent",
       status: "active",
+      created_by_subject_id: createdBySubjectId,
     } as any)
     .execute()
   const row = await db

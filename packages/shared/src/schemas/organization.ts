@@ -29,11 +29,11 @@ import {
   PluginInstallStepSchema,
 } from "./mcp-plugins.js"
 import {
-  WorkspaceAppGrantEntrySchema,
-  WorkspaceAppGrantTargetSchema,
-  WorkspaceAppGrantTargetSubjectSchema,
-  type WorkspaceAppGrantTargetInput,
-} from "./workspace-apps.js"
+  WorkspaceResourceGrantEntrySchema,
+  WorkspaceResourceGrantTargetSchema,
+  WorkspaceResourceGrantTargetSubjectSchema,
+  type WorkspaceResourceGrantTargetInput,
+} from "./workspace-resources.js"
 
 /**
  * App-facing contracts for the organization (actor) module's APP routes
@@ -357,15 +357,16 @@ export type ActorPackageListQuery = z.infer<typeof ActorPackageListQuerySchema>
 
 /** Subject ref for an actor-package initial grant target (app input). */
 export const ActorPackageInitialGrantSubjectSchema =
-  WorkspaceAppGrantTargetSubjectSchema
+  WorkspaceResourceGrantTargetSubjectSchema
 
 /** `{ subject, scope? }` target for an actor-package initial grant. */
 export const ActorPackageInitialGrantTargetSchema =
-  WorkspaceAppGrantTargetSchema
-export type ActorPackageInitialGrantTargetInput = WorkspaceAppGrantTargetInput
+  WorkspaceResourceGrantTargetSchema
+export type ActorPackageInitialGrantTargetInput =
+  WorkspaceResourceGrantTargetInput
 
 /** A single initial grant in the actor-package install body. */
-export const ActorPackageInitialGrantSchema = WorkspaceAppGrantEntrySchema
+export const ActorPackageInitialGrantSchema = WorkspaceResourceGrantEntrySchema
 export type ActorPackageInitialGrantInput = z.infer<
   typeof ActorPackageInitialGrantSchema
 >

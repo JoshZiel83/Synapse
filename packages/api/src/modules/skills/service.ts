@@ -16,26 +16,26 @@ import {
   workspaceRef,
   type AvailableSkillSummary,
   type CapabilityAccessTarget,
-  type WorkspaceAppGrantPermission,
+  type WorkspaceResourceGrantPermission,
   type CanonicalContentBlock,
   type CanonicalContentBlockInput,
   normalizeCanonicalContentBlocks,
   type RuntimeBindingScope,
   type ScopedSubjectTarget,
   type SkillFrontmatter,
-  type WorkspaceAppGrantTargetInput,
+  type WorkspaceResourceGrantTargetInput,
   textBlock,
 } from "@synapse/shared"
 import { ACCESS_ACTIONS } from "../access/actions.js"
 import {
-  insertWorkspaceAppRoot,
-  updateWorkspaceAppRoot,
-} from "../workspace-apps/repo.js"
+  insertWorkspaceResourceRoot,
+  updateWorkspaceResourceRoot,
+} from "../workspace-resources/repo.js"
 import {
-  insertWorkspaceAppGrant,
-  listActiveWorkspaceAppGrants,
-  revokeWorkspaceAppGrantsForApp,
-} from "../workspace-apps/grant-storage.js"
+  insertWorkspaceResourceGrant,
+  listActiveWorkspaceResourceGrants,
+  revokeWorkspaceResourceGrantsForApp,
+} from "../workspace-resources/grant-storage.js"
 import { type Executor } from "../../infrastructure/database/kysely.js"
 import {
   withSkillsTransaction,
@@ -69,13 +69,13 @@ import {
   updateCatalogItemLatestVersion,
   loadInstalledSkillRows,
   getInstalledSkillRowForWorkspace,
-  loadAccessBindingsBySkillIds,
+  loadGrantsBySkillIds,
   findSkillIdsByBindingFilter as findSkillIdsByBindingFilterRepo,
   listMarketplaceRows,
   loadVisibleSkillRows,
   loadSkillSnapshotFileByPath,
   updateInstalledSkillGrantConversationTypeMaskOverride,
-  revokeWorkspaceAppGrantDefault,
+  revokeWorkspaceResourceGrantDefault,
   validateConversationScopedAccessTargetDefault,
   buildConversationCapabilitySubjectsDefault,
   computeRuntimeScopeSubjectIdsDefault,
@@ -86,7 +86,7 @@ import {
   getWorkspaceCapabilityConversationTypeMask,
   getWorkspaceCapabilityConversationTypePolicyMap,
 } from "../capabilities/conversation-type-policies.js"
-import { type AutomationEventSourceBindingTarget } from "../access/bindings.js"
+import { type AutomationEventSourceGrantTarget } from "../access/grant-target.js"
 import { resolveAccessGrantTarget } from "../access/access-target-resolver.js"
 import { upsertAccessSubjectOn } from "../access/subject-registry.js"
 import {
@@ -651,7 +651,7 @@ export function resolveInstalledSkillEffectiveConversationTypeMask(row: {
 
 /**
  * Collapse the label switch into a direct
- * call to readAutomationEventSourceAccessBindingTarget. The old switch fell back to
+ * call to readAutomationEventSourceAccessGrantTarget. The old switch fell back to
  * `workspace` for any unrecognized `bind_scope`. The mapper feeds into
  * `validateConversationScopedAccessTarget` and
  * `assertGrantConversationTypeOverrideAllowed` from
@@ -662,14 +662,14 @@ export function resolveInstalledSkillEffectiveConversationTypeMask(row: {
  *
  * The row at runtime carries the bindingRowSelectFor `subject_kind` +
  * `subject_*_via_join` + `scope_kind` + `scope_*_via_join` projection
- * that readAutomationEventSourceAccessBindingTarget needs (loadAccessBindingsBySkillIds runs
+ * that readAutomationEventSourceAccessGrantTarget needs (loadGrantsBySkillIds runs
  * the full SELECT). SkillAccessRow's type doesn't expose those fields,
  * hence the `as any` cast.
  */
 export function skillBindingToAccessTarget(
   binding: SkillAccessRow,
   _fallbackWorkspaceId: string
-): WorkspaceAppGrantTargetInput {
+): WorkspaceResourceGrantTargetInput {
   switch (binding.bindScope) {
     case "workspace":
       return { subject: workspaceRef(binding.workspaceId) }
@@ -726,7 +726,7 @@ function buildAvailableSkillPayload(
 
 export function visibleRowToAccessTarget(
   row: VisibleSkillRow
-): WorkspaceAppGrantTargetInput {
+): WorkspaceResourceGrantTargetInput {
   switch (row.accessBindScope) {
     case "workspace":
       return { subject: workspaceRef(row.workspaceId) }
@@ -905,7 +905,7 @@ export function buildSkillAccessRow(row: SkillAccessRow): SkillAccessRow {
   }
 }
 
-async function loadAccessBindingsBySkillIdsForContext(
+async function loadGrantsBySkillIdsForContext(
   skillIds: string[],
   context: {
     contextWorkspaceId: string
@@ -916,7 +916,7 @@ async function loadAccessBindingsBySkillIdsForContext(
   }
 ) {
   if (skillIds.length === 0) return new Map<string, SkillAccessRow[]>()
-  const bindings = await loadAccessBindingsBySkillIds(skillIds)
+  const bindings = await loadGrantsBySkillIds(skillIds)
 
   const map = new Map<string, SkillAccessRow[]>()
   for (const [skillId, rows] of bindings.entries()) {
@@ -950,7 +950,7 @@ async function loadAccessBindingsBySkillIdsForContext(
 }
 
 async function listSkillAccessRows(skillId: string, includeRevoked = false) {
-  const rows = await loadAccessBindingsBySkillIds([skillId], includeRevoked)
+  const rows = await loadGrantsBySkillIds([skillId], includeRevoked)
   return rows.get(skillId) || []
 }
 
@@ -982,7 +982,7 @@ async function chooseBindingMap(
     conversationId?: string
   }
 ) {
-  const bindingsBySkillId = await loadAccessBindingsBySkillIds(skillIds)
+  const bindingsBySkillId = await loadGrantsBySkillIds(skillIds)
   const preferredTarget = filters?.accessTargetType
     ? normalizeScopeTarget({
         useScope: filters.accessTargetType,
@@ -1072,7 +1072,7 @@ async function ensureSkillBinding(
       conversationId: input.target.conversationId || undefined,
     }),
   })
-  const existingRows = await loadAccessBindingsBySkillIds([input.skillId])
+  const existingRows = await loadGrantsBySkillIds([input.skillId])
   const existingBinding = (existingRows.get(input.skillId) || []).find((row) =>
     matchesScopeTarget(
       row,
@@ -1092,9 +1092,9 @@ async function ensureSkillBinding(
     }
   }
 
-  const inserted = await insertWorkspaceAppGrant(client as any, {
+  const inserted = await insertWorkspaceResourceGrant(client as any, {
     workspaceId: input.workspaceId,
-    workspaceAppId: input.skillId,
+    workspaceResourceId: input.skillId,
     target: grantTarget,
     permissions: ["use"],
     createdByWorkspaceMemberId: input.createdByWorkspaceMemberId || null,
@@ -1558,7 +1558,7 @@ export async function createWorkspaceSkill(input: {
   accessTarget?: CapabilityAccessTarget
   grants?: Array<{
     target: CapabilityAccessTarget
-    permissions: WorkspaceAppGrantPermission[]
+    permissions: WorkspaceResourceGrantPermission[]
     conversationTypeMaskOverride?: number | null
     reason?: string
   }>
@@ -1619,7 +1619,7 @@ export async function createWorkspaceSkill(input: {
   const result = await withSkillsTransaction(async (client) => {
     const snapshotId = await insertSkillSnapshot(client, preparedSnapshot)
     const skillId = crypto.randomUUID()
-    await insertWorkspaceAppRoot(client, {
+    await insertWorkspaceResourceRoot(client, {
       id: skillId,
       workspaceId: input.workspaceId,
       kind: "installed_skill",
@@ -1646,9 +1646,9 @@ export async function createWorkspaceSkill(input: {
 
     if (input.grants?.length) {
       for (const grant of input.grants) {
-        await insertWorkspaceAppGrant(client as any, {
+        await insertWorkspaceResourceGrant(client as any, {
           workspaceId: input.workspaceId,
-          workspaceAppId: insertedSkillId,
+          workspaceResourceId: insertedSkillId,
           target: await resolveAccessGrantTarget({
             workspaceId: input.workspaceId,
             target: grant.target,
@@ -1908,9 +1908,9 @@ export async function createInstalledSkillGrant(input: {
   }
 
   const result = await withSkillsTransaction(async (client) => {
-    const inserted = await insertWorkspaceAppGrant(client as any, {
+    const inserted = await insertWorkspaceResourceGrant(client as any, {
       workspaceId: input.workspaceId,
-      workspaceAppId: input.installedSkillId,
+      workspaceResourceId: input.installedSkillId,
       target: accessTarget,
       permissions: ["use"],
       conversationTypeMaskOverride: input.conversationTypeMaskOverride ?? null,
@@ -1921,7 +1921,7 @@ export async function createInstalledSkillGrant(input: {
       accessRow: {
         id: inserted.id,
         workspaceId: inserted.workspaceId,
-        skillId: inserted.workspaceAppId,
+        skillId: inserted.workspaceResourceId,
         bindScope: accessTarget.subject.kind as RuntimeBindingScope,
         conversationId:
           accessTarget.scope?.kind === "conversation"
@@ -2041,7 +2041,7 @@ export async function revokeInstalledSkillGrant(input: {
     return presentSkillAccessGrant(accessRow)
   }
 
-  await revokeWorkspaceAppGrantDefault(accessRow.id)
+  await revokeWorkspaceResourceGrantDefault(accessRow.id)
 
   return { success: true }
 }
@@ -2052,7 +2052,7 @@ export async function installMarketplaceSkill(input: {
   accessTarget?: CapabilityAccessTarget
   grants?: Array<{
     target: CapabilityAccessTarget
-    permissions: WorkspaceAppGrantPermission[]
+    permissions: WorkspaceResourceGrantPermission[]
     conversationTypeMaskOverride?: number | null
     reason?: string
   }>
@@ -2096,7 +2096,7 @@ export async function installMarketplaceSkill(input: {
 
   const result = await withSkillsTransaction(async (client) => {
     const skillId = crypto.randomUUID()
-    await insertWorkspaceAppRoot(client, {
+    await insertWorkspaceResourceRoot(client, {
       id: skillId,
       workspaceId: input.workspaceId,
       kind: "installed_skill",
@@ -2137,9 +2137,9 @@ export async function installMarketplaceSkill(input: {
 
     if (input.grants?.length) {
       for (const grant of input.grants) {
-        await insertWorkspaceAppGrant(client as any, {
+        await insertWorkspaceResourceGrant(client as any, {
           workspaceId: input.workspaceId,
-          workspaceAppId: insertedSkillId,
+          workspaceResourceId: insertedSkillId,
           target: await resolveAccessGrantTarget({
             workspaceId: input.workspaceId,
             target: grant.target,
@@ -2268,7 +2268,7 @@ export async function updateInstalledSkill(input: {
         currentVersion: nextVersion,
         currentSnapshotId: snapshotId,
       })
-      await updateWorkspaceAppRoot(client, {
+      await updateWorkspaceResourceRoot(client, {
         id: existing.skillId,
         displayName: nextDisplayName,
         status:
@@ -2308,7 +2308,7 @@ export async function updateInstalledSkill(input: {
         iconFileId: nextIconFileId,
         tags: input.tags === undefined ? existing.tags || [] : input.tags,
       })
-      await updateWorkspaceAppRoot(client, {
+      await updateWorkspaceResourceRoot(client, {
         id: existing.skillId,
         status:
           input.isEnabled === undefined
@@ -2380,7 +2380,7 @@ export async function upgradeInstalledSkill(input: {
       currentVersion: existing.currentVersion + 1,
       currentSnapshotId: nextSnapshotId,
     })
-    await updateWorkspaceAppRoot(client, {
+    await updateWorkspaceResourceRoot(client, {
       id: existing.skillId,
       displayName:
         marketplaceSkill.snapshotDisplayName ||
@@ -2412,14 +2412,14 @@ export async function uninstallInstalledSkill(
       }
     }
 
-    // Root lifecycle lives on workspace_apps. The detail row stays until purge.
-    await updateWorkspaceAppRoot(client, {
+    // Root lifecycle lives on workspace_resources. The detail row stays until purge.
+    await updateWorkspaceResourceRoot(client, {
       id: installedSkillId,
       status: "archived",
       deletedAt: new Date(),
     })
 
-    await revokeWorkspaceAppGrantsForApp(client, installedSkillId)
+    await revokeWorkspaceResourceGrantsForApp(client, installedSkillId)
 
     return {
       deleted: true,
@@ -2537,16 +2537,13 @@ export async function listVisibleSkills(input: {
       : await (async () => {
           const [visibleRows, bindingsBySkillId] = await Promise.all([
             loadVisibleSkillRows(Array.from(visibleSkillIds)),
-            loadAccessBindingsBySkillIdsForContext(
-              Array.from(visibleSkillIds),
-              {
-                contextWorkspaceId: input.workspaceId,
-                workspaceMemberId: input.workspaceMemberId,
-                actorId: input.actorId,
-                remoteAgentId: input.remoteAgentId,
-                conversationId: input.conversationId,
-              }
-            ),
+            loadGrantsBySkillIdsForContext(Array.from(visibleSkillIds), {
+              contextWorkspaceId: input.workspaceId,
+              workspaceMemberId: input.workspaceMemberId,
+              actorId: input.actorId,
+              remoteAgentId: input.remoteAgentId,
+              conversationId: input.conversationId,
+            }),
           ])
           const workspacePolicyMap =
             await getWorkspaceCapabilityConversationTypePolicyMap(

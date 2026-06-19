@@ -1,18 +1,17 @@
 import type { FastifyInstance } from "fastify"
 import { validateAutomationRuleCreatePayload } from "@synapse/shared/automation"
 import {
-  AUTOMATION_ACCESS_TARGET_TYPE,
+  SUBJECT_KIND,
   actorRef,
   conversationRef,
+  remoteAgentRef,
   workspaceMemberRef,
   workspaceRef,
   type CapabilityAccessTarget,
+  type WorkspaceResourceGrantPermission,
 } from "@synapse/shared"
 import { IsoInstantStringSchema } from "@synapse/shared/schemas"
 import {
-  AutomationAccessGrantEnvelopeSchema,
-  AutomationAccessGrantInputSchema,
-  AutomationAccessGrantUpdateInputSchema,
   AutomationEventIngestInputSchema,
   AutomationEventIngestResultSchema,
   AutomationEventSourceAccessStateSchema,
@@ -32,7 +31,9 @@ import {
   AutomationWebhookEndpointCreateInputSchema,
   AutomationWebhookEndpointCreateResultSchema,
   AutomationWebhookEndpointListSchema,
-  type AutomationAccessTargetInput,
+  ReplaceWorkspaceResourceGrantsInputSchema,
+  WorkspaceResourceGrantListViewSchema,
+  WorkspaceResourceGrantTargetSchema,
 } from "@synapse/shared/schemas"
 import { z } from "zod"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
@@ -56,16 +57,15 @@ import {
   listAutomationExecutions,
   listAutomationRules,
   listAutomationWebhookEndpoints,
-  grantAutomationEventSourceAccess,
-  revokeAutomationEventSourceAccess,
   updateAutomationEventSource,
-  updateAutomationEventSourceAccessGrant,
   updateAutomationRule,
 } from "./service.js"
 import {
   presentExecutionWithOccurrence,
   presentWebhookEndpoint,
 } from "./presenter.js"
+import { replaceWorkspaceResourceGrants } from "../workspace-resources/service.js"
+import { presentGrant } from "../workspace-resources/presenter.js"
 import { enqueueAutomationExecutionJobs } from "../../workers/queues.js"
 
 // App-facing request bodies / queries live in @synapse/shared (§5.1.1) so the
@@ -75,9 +75,6 @@ const sharedEventSourceCreateInputSchema =
   AutomationEventSourceCreateInputSchema
 const sharedEventSourceUpdateInputSchema =
   AutomationEventSourceUpdateInputSchema
-const sharedAccessGrantInputSchema = AutomationAccessGrantInputSchema
-const sharedAccessGrantUpdateInputSchema =
-  AutomationAccessGrantUpdateInputSchema
 const sharedEventIngestInputSchema = AutomationEventIngestInputSchema
 const sharedAutomationListQuerySchema = AutomationRuleListQuerySchema
 const sharedAutomationCreateInputSchema = AutomationRuleCreateInputSchema
@@ -85,25 +82,25 @@ const sharedAutomationUpdateInputSchema = AutomationRuleUpdateInputSchema
 const sharedWebhookEndpointCreateInputSchema =
   AutomationWebhookEndpointCreateInputSchema
 
-function inputToCapabilityAccessTarget(
-  workspaceId: string,
-  input: AutomationAccessTargetInput
+// §4.1: the unified PUT-replace access API speaks the workspace-resources grant
+// target shape (mirrors workspace-resources/controller.ts toCapabilityAccessTarget).
+function grantTargetToCapabilityAccessTarget(
+  input: z.infer<typeof WorkspaceResourceGrantTargetSchema>
 ): CapabilityAccessTarget {
-  switch (input.type) {
-    case AUTOMATION_ACCESS_TARGET_TYPE.WORKSPACE:
-      return { subject: workspaceRef(workspaceId) }
-    case AUTOMATION_ACCESS_TARGET_TYPE.WORKSPACE_MEMBER:
-      return { subject: workspaceMemberRef(input.workspaceMemberId!) }
-    case AUTOMATION_ACCESS_TARGET_TYPE.ACTOR:
-      return {
-        subject: actorRef(input.actorId!),
-        ...(input.conversationId
-          ? { scope: conversationRef(input.conversationId) }
-          : {}),
-      }
-    case AUTOMATION_ACCESS_TARGET_TYPE.CONVERSATION:
-      return { subject: conversationRef(input.conversationId!) }
-  }
+  const subject =
+    input.subject.kind === SUBJECT_KIND.WORKSPACE
+      ? workspaceRef(input.subject.workspaceId)
+      : input.subject.kind === SUBJECT_KIND.WORKSPACE_MEMBER
+        ? workspaceMemberRef(input.subject.memberId)
+        : input.subject.kind === SUBJECT_KIND.CONVERSATION
+          ? conversationRef(input.subject.conversationId)
+          : input.subject.kind === SUBJECT_KIND.ACTOR
+            ? actorRef(input.subject.actorId)
+            : remoteAgentRef(input.subject.remoteAgentId)
+  const scope = input.scope
+    ? conversationRef(input.scope.conversationId)
+    : undefined
+  return scope ? { subject, scope } : { subject }
 }
 
 const webhookIngressSchema = z.looseObject({
@@ -256,12 +253,17 @@ export default async function automationController(app: FastifyInstance) {
     }
   )
 
+  // §4.1: automation event-source access is now a `use`-permission grant set on
+  // the source's workspace_resources root. The write API is a single atomic
+  // PUT-replace mirroring `PUT /workspace-resources/:appId/grants`; the unified
+  // `replaceWorkspaceResourceGrants` performs the manage gate (kind-admin / owner /
+  // workspace-admin) and atomic revoke-then-reinsert.
   appRoute(
     app,
-    "POST",
+    "PUT",
     "/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId/access",
     {
-      schema: AutomationAccessGrantEnvelopeSchema,
+      schema: WorkspaceResourceGrantListViewSchema,
       options: { preHandler: protectedPreHandler },
     },
     async (request, reply) => {
@@ -269,97 +271,42 @@ export default async function automationController(app: FastifyInstance) {
         workspaceId: string
         eventSourceId: string
       }
-      const allowed = await requireRequestAction(
-        request as any,
-        reply as any,
-        "workspace.manage_devices",
-        workspaceId,
-        "Not allowed to manage automation event source access"
-      )
-      if (!allowed) return
-
-      const body = sharedAccessGrantInputSchema.parse(request.body || {})
-      const workspaceMemberId = (request as any).workspaceMember!.id as string
-      const grant = await grantAutomationEventSourceAccess({
-        workspaceId,
-        eventSourceId,
-        accessTarget: body.accessTarget
-          ? inputToCapabilityAccessTarget(workspaceId, body.accessTarget)
-          : undefined,
-        conversationTypeMaskOverride: body.conversationTypeMaskOverride,
-        grantedByWorkspaceMemberId: workspaceMemberId,
-        reason: body.reason,
-      })
-      reply.status(201)
-      return { grant }
-    }
-  )
-
-  appRoute(
-    app,
-    "PUT",
-    "/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId/access/:bindingId",
-    {
-      schema: AutomationAccessGrantEnvelopeSchema,
-      options: { preHandler: protectedPreHandler },
-    },
-    async (request, reply) => {
-      const { workspaceId, eventSourceId, bindingId } = request.params as {
-        workspaceId: string
-        eventSourceId: string
-        bindingId: string
+      try {
+        const body = ReplaceWorkspaceResourceGrantsInputSchema.parse(
+          request.body || {}
+        )
+        const grants = await replaceWorkspaceResourceGrants({
+          workspaceId,
+          resourceId: eventSourceId,
+          userId: (request as any).user.userId,
+          grants: body.grants.map((grant) => ({
+            target: grantTargetToCapabilityAccessTarget(grant.target),
+            permissions:
+              grant.permissions as WorkspaceResourceGrantPermission[],
+            conversationTypeMaskOverride:
+              grant.conversationTypeMaskOverride ?? null,
+            reason: grant.reason,
+          })),
+        })
+        return { grants: grants.map(presentGrant) }
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Internal server error"
+        if (/not found/i.test(message)) {
+          reply.status(404).send({ error: message })
+          return
+        }
+        if (/not allowed|permission|forbidden/i.test(message)) {
+          reply.status(403).send({ error: message })
+          return
+        }
+        if (/required|must be|invalid/i.test(message)) {
+          reply.status(400).send({ error: message })
+          return
+        }
+        reply.status(500).send({ error: message })
+        return
       }
-      const allowed = await requireRequestAction(
-        request as any,
-        reply as any,
-        "workspace.manage_devices",
-        workspaceId,
-        "Not allowed to manage automation event source access"
-      )
-      if (!allowed) return
-
-      const body = sharedAccessGrantUpdateInputSchema.parse(request.body || {})
-      const grant = await updateAutomationEventSourceAccessGrant({
-        workspaceId,
-        eventSourceId,
-        bindingId,
-        conversationTypeMaskOverride: body.conversationTypeMaskOverride,
-      })
-      return { grant }
-    }
-  )
-
-  appRoute(
-    app,
-    "DELETE",
-    "/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId/access/:bindingId",
-    {
-      schema: AutomationSuccessSchema,
-      options: { preHandler: protectedPreHandler },
-    },
-    async (request, reply) => {
-      const { workspaceId, eventSourceId, bindingId } = request.params as {
-        workspaceId: string
-        eventSourceId: string
-        bindingId: string
-      }
-      const allowed = await requireRequestAction(
-        request as any,
-        reply as any,
-        "workspace.manage_devices",
-        workspaceId,
-        "Not allowed to manage automation event source access"
-      )
-      if (!allowed) return
-
-      const workspaceMemberId = (request as any).workspaceMember!.id as string
-      await revokeAutomationEventSourceAccess({
-        workspaceId,
-        eventSourceId,
-        bindingId,
-        operator: { workspaceMemberId },
-      })
-      return { success: true }
     }
   )
 

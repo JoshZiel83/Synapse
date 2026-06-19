@@ -25,11 +25,7 @@ export type ArrayTypeImpl<T> = T extends ColumnType<infer S, infer I, infer U>
 
 export type AutomationDeliveriesTargetPolicy = "all_members" | "specified_members";
 
-export type AutomationEventSourcesCreatedByKind = "session" | "system" | "workspace_member";
-
 export type AutomationEventSourcesProviderKind = "device" | "integration" | "internal" | "webhook";
-
-export type AutomationEventSourcesStatus = "active" | "archived" | "deprecated" | "disabled";
 
 export type AutomationExecutionsStatus = "completed" | "failed" | "pending" | "running" | "skipped";
 
@@ -261,12 +257,6 @@ export type RemoteAgentRuntimeCatalogStatus = "available" | "broken_path" | "mis
 
 export type RemoteAgentsRuntimeKind = "claude_code" | "codex";
 
-export type ResourceAccessBindingResourceType = "automation_event_source";
-
-export type ResourceAccessBindingsSource = "approval" | "default_open" | "manual" | "system";
-
-export type ResourceAccessBindingsStatus = "active" | "revoked";
-
 export type RuntimeAuthorizationGrantsRetention = "consume_once" | "until_revoked";
 
 export type RuntimeAuthorizationGrantsStatus = "active" | "consumed" | "revoked" | "superseded";
@@ -343,25 +333,25 @@ export type TransportMessageLinksTransportKind = "dingtalk" | "feishu" | "qq" | 
 
 export type TurnsStatus = "cancelled" | "completed" | "failed" | "running";
 
-export type WorkspaceAccessBindingsAccessKey = "actor_admin" | "conversation_admin" | "device_admin" | "memory_admin" | "model_admin" | "plugin_admin" | "remote_agent_admin" | "skill_admin";
-
-export type WorkspaceAppGrantPermission = "contact_visible" | "manage" | "use";
-
-export type WorkspaceAppGrantRequestsStatus = "approved" | "cancelled" | "pending" | "rejected";
-
-export type WorkspaceAppGrantsSource = "approval" | "manual" | "system";
-
-export type WorkspaceAppGrantsStatus = "active" | "revoked";
-
-export type WorkspaceAppsKind = "actor" | "device_capability" | "installed_skill" | "plugin_installation" | "remote_agent";
-
-export type WorkspaceAppsStatus = "active" | "archived" | "deprecated" | "disabled" | "error";
+export type WorkspaceAccessBindingsAccessKey = "actor_admin" | "automation_admin" | "conversation_admin" | "device_admin" | "memory_admin" | "model_admin" | "plugin_admin" | "remote_agent_admin" | "skill_admin";
 
 export type WorkspaceInvitesTrustLevel = "admin" | "guest" | "member";
 
 export type WorkspaceMembersStatus = "active" | "left" | "removed";
 
 export type WorkspaceMembersTrustLevel = "admin" | "guest" | "member";
+
+export type WorkspaceResourceGrantPermission = "contact_visible" | "manage" | "use";
+
+export type WorkspaceResourceGrantRequestsStatus = "approved" | "cancelled" | "pending" | "rejected";
+
+export type WorkspaceResourceGrantsSource = "approval" | "manual" | "system";
+
+export type WorkspaceResourceGrantsStatus = "active" | "revoked";
+
+export type WorkspaceResourcesKind = "actor" | "automation_event_source" | "device_capability" | "installed_skill" | "plugin_installation" | "remote_agent";
+
+export type WorkspaceResourcesStatus = "active" | "archived" | "deprecated" | "disabled" | "error";
 
 export interface AccessSubjects {
   actorId: string | null;
@@ -543,24 +533,17 @@ export interface AutomationDeliveryTargets {
 
 export interface AutomationEventSources {
   createdAt: Generated<Date>;
-  createdByActorId: string | null;
-  createdByKind: AutomationEventSourcesCreatedByKind;
-  createdBySessionId: string | null;
-  createdByWorkspaceMemberId: string | null;
-  deletedAt: Date | null;
   description: Generated<string>;
   examplePayload: Generated<Json>;
   id: Generated<string>;
   integrationBindingId: string | null;
   lastTriggeredAt: Date | null;
   metadata: Generated<Json>;
-  name: string;
   payloadSchema: Generated<Json>;
   providerKind: AutomationEventSourcesProviderKind;
   providerRef: string | null;
   recommendedUsage: Generated<string>;
   sourceKey: string;
-  status: Generated<AutomationEventSourcesStatus>;
   updatedAt: Generated<Date>;
   webhookEndpointId: string | null;
   workspaceId: string;
@@ -568,24 +551,17 @@ export interface AutomationEventSources {
 
 export interface AutomationEventSourcesLive {
   createdAt: Date | null;
-  createdByActorId: string | null;
-  createdByKind: AutomationEventSourcesCreatedByKind | null;
-  createdBySessionId: string | null;
-  createdByWorkspaceMemberId: string | null;
-  deletedAt: Date | null;
   description: string | null;
   examplePayload: Json | null;
   id: string | null;
   integrationBindingId: string | null;
   lastTriggeredAt: Date | null;
   metadata: Json | null;
-  name: string | null;
   payloadSchema: Json | null;
   providerKind: AutomationEventSourcesProviderKind | null;
   providerRef: string | null;
   recommendedUsage: string | null;
   sourceKey: string | null;
-  status: AutomationEventSourcesStatus | null;
   updatedAt: Date | null;
   webhookEndpointId: string | null;
   workspaceId: string | null;
@@ -2338,38 +2314,6 @@ export interface RemoteAgentsLive {
   updatedAt: Date | null;
 }
 
-export interface ResourceAccessBindings {
-  automationEventSourceId: string | null;
-  conversationTypeMaskOverride: number | null;
-  createdAt: Generated<Date>;
-  createdByWorkspaceMemberId: string | null;
-  id: Generated<string>;
-  reason: string | null;
-  resourceType: ResourceAccessBindingResourceType;
-  revokedAt: Date | null;
-  scopeSubjectId: string | null;
-  source: Generated<ResourceAccessBindingsSource>;
-  status: Generated<ResourceAccessBindingsStatus>;
-  subjectId: string;
-  workspaceId: string;
-}
-
-export interface ResourceAccessBindingsLive {
-  automationEventSourceId: string | null;
-  conversationTypeMaskOverride: number | null;
-  createdAt: Date | null;
-  createdByWorkspaceMemberId: string | null;
-  id: string | null;
-  reason: string | null;
-  resourceType: ResourceAccessBindingResourceType | null;
-  revokedAt: Date | null;
-  scopeSubjectId: string | null;
-  source: ResourceAccessBindingsSource | null;
-  status: ResourceAccessBindingsStatus | null;
-  subjectId: string | null;
-  workspaceId: string | null;
-}
-
 export interface RuntimeAuthorizationGrants {
   consumedAt: Date | null;
   createdAt: Generated<Date>;
@@ -2935,80 +2879,6 @@ export interface WorkspaceAccessBindingsLive {
   workspaceMemberId: string | null;
 }
 
-export interface WorkspaceAppGrantRequests {
-  createdAt: Generated<Date | null>;
-  granteeScopeSubjectId: string | null;
-  granteeSubjectId: string;
-  id: Generated<string>;
-  reason: string | null;
-  requestedPermissions: ArrayType<WorkspaceAppGrantPermission>;
-  requesterWorkspaceMemberId: string;
-  resolvedAt: Date | null;
-  resolvedByWorkspaceMemberId: string | null;
-  status: Generated<WorkspaceAppGrantRequestsStatus>;
-  updatedAt: Generated<Date | null>;
-  workspaceAppId: string;
-  workspaceId: string;
-}
-
-export interface WorkspaceAppGrants {
-  conversationTypeMaskOverride: number | null;
-  createdAt: Generated<Date>;
-  createdByWorkspaceMemberId: string | null;
-  id: Generated<string>;
-  permissions: ArrayType<WorkspaceAppGrantPermission>;
-  reason: string | null;
-  revokedAt: Date | null;
-  scopeSubjectId: string | null;
-  source: Generated<WorkspaceAppGrantsSource>;
-  status: Generated<WorkspaceAppGrantsStatus>;
-  subjectId: string;
-  workspaceAppId: string;
-  workspaceId: string;
-}
-
-export interface WorkspaceAppGrantsLive {
-  conversationTypeMaskOverride: number | null;
-  createdAt: Date | null;
-  createdByWorkspaceMemberId: string | null;
-  id: string | null;
-  permissions: ArrayType<WorkspaceAppGrantPermission> | null;
-  reason: string | null;
-  revokedAt: Date | null;
-  scopeSubjectId: string | null;
-  source: WorkspaceAppGrantsSource | null;
-  status: WorkspaceAppGrantsStatus | null;
-  subjectId: string | null;
-  workspaceAppId: string | null;
-  workspaceId: string | null;
-}
-
-export interface WorkspaceApps {
-  conversationTypeMaskOverride: number | null;
-  createdAt: Generated<Date | null>;
-  deletedAt: Date | null;
-  displayName: string;
-  id: Generated<string>;
-  kind: WorkspaceAppsKind;
-  ownerWorkspaceMemberId: string | null;
-  status: Generated<WorkspaceAppsStatus>;
-  updatedAt: Generated<Date | null>;
-  workspaceId: string;
-}
-
-export interface WorkspaceAppsLive {
-  conversationTypeMaskOverride: number | null;
-  createdAt: Date | null;
-  deletedAt: Date | null;
-  displayName: string | null;
-  id: string | null;
-  kind: WorkspaceAppsKind | null;
-  ownerWorkspaceMemberId: string | null;
-  status: WorkspaceAppsStatus | null;
-  updatedAt: Date | null;
-  workspaceId: string | null;
-}
-
 export interface WorkspaceCapabilityConversationTypePolicies {
   createdAt: Generated<Date>;
   defaultConversationTypeMask: number;
@@ -3121,6 +2991,82 @@ export interface WorkspaceRelationshipProfiles {
   subjectId: string;
   updatedAt: Generated<Date>;
   workspaceId: string;
+}
+
+export interface WorkspaceResourceGrantRequests {
+  createdAt: Generated<Date | null>;
+  granteeScopeSubjectId: string | null;
+  granteeSubjectId: string;
+  id: Generated<string>;
+  reason: string | null;
+  requestedPermissions: ArrayType<WorkspaceResourceGrantPermission>;
+  requesterWorkspaceMemberId: string;
+  resolvedAt: Date | null;
+  resolvedByWorkspaceMemberId: string | null;
+  status: Generated<WorkspaceResourceGrantRequestsStatus>;
+  updatedAt: Generated<Date | null>;
+  workspaceId: string;
+  workspaceResourceId: string;
+}
+
+export interface WorkspaceResourceGrants {
+  conversationTypeMaskOverride: number | null;
+  createdAt: Generated<Date>;
+  createdByWorkspaceMemberId: string | null;
+  id: Generated<string>;
+  permissions: ArrayType<WorkspaceResourceGrantPermission>;
+  reason: string | null;
+  revokedAt: Date | null;
+  scopeSubjectId: string | null;
+  source: Generated<WorkspaceResourceGrantsSource>;
+  status: Generated<WorkspaceResourceGrantsStatus>;
+  subjectId: string;
+  workspaceId: string;
+  workspaceResourceId: string;
+}
+
+export interface WorkspaceResourceGrantsLive {
+  conversationTypeMaskOverride: number | null;
+  createdAt: Date | null;
+  createdByWorkspaceMemberId: string | null;
+  id: string | null;
+  permissions: ArrayType<WorkspaceResourceGrantPermission> | null;
+  reason: string | null;
+  revokedAt: Date | null;
+  scopeSubjectId: string | null;
+  source: WorkspaceResourceGrantsSource | null;
+  status: WorkspaceResourceGrantsStatus | null;
+  subjectId: string | null;
+  workspaceId: string | null;
+  workspaceResourceId: string | null;
+}
+
+export interface WorkspaceResources {
+  conversationTypeMaskOverride: number | null;
+  createdAt: Generated<Date | null>;
+  createdBySubjectId: string;
+  deletedAt: Date | null;
+  displayName: string;
+  id: Generated<string>;
+  kind: WorkspaceResourcesKind;
+  ownerSubjectId: string | null;
+  status: Generated<WorkspaceResourcesStatus>;
+  updatedAt: Generated<Date | null>;
+  workspaceId: string;
+}
+
+export interface WorkspaceResourcesLive {
+  conversationTypeMaskOverride: number | null;
+  createdAt: Date | null;
+  createdBySubjectId: string | null;
+  deletedAt: Date | null;
+  displayName: string | null;
+  id: string | null;
+  kind: WorkspaceResourcesKind | null;
+  ownerSubjectId: string | null;
+  status: WorkspaceResourcesStatus | null;
+  updatedAt: Date | null;
+  workspaceId: string | null;
 }
 
 export interface Workspaces {
@@ -3283,8 +3229,6 @@ export interface DB {
   remoteAgentRuntimeCatalog: RemoteAgentRuntimeCatalog;
   remoteAgents: RemoteAgents;
   remoteAgentsLive: RemoteAgentsLive;
-  resourceAccessBindings: ResourceAccessBindings;
-  resourceAccessBindingsLive: ResourceAccessBindingsLive;
   runtimeAuthorizationGrants: RuntimeAuthorizationGrants;
   runtimeAuthorizationGrantsLive: RuntimeAuthorizationGrantsLive;
   runtimeEvents: RuntimeEvents;
@@ -3323,11 +3267,6 @@ export interface DB {
   verification: Verification;
   workspaceAccessBindings: WorkspaceAccessBindings;
   workspaceAccessBindingsLive: WorkspaceAccessBindingsLive;
-  workspaceAppGrantRequests: WorkspaceAppGrantRequests;
-  workspaceAppGrants: WorkspaceAppGrants;
-  workspaceAppGrantsLive: WorkspaceAppGrantsLive;
-  workspaceApps: WorkspaceApps;
-  workspaceAppsLive: WorkspaceAppsLive;
   workspaceCapabilityConversationTypePolicies: WorkspaceCapabilityConversationTypePolicies;
   workspaceFriendEntries: WorkspaceFriendEntries;
   workspaceFriendRequests: WorkspaceFriendRequests;
@@ -3338,6 +3277,11 @@ export interface DB {
   workspaceMembersLive: WorkspaceMembersLive;
   workspaceMemberSyncEvents: WorkspaceMemberSyncEvents;
   workspaceRelationshipProfiles: WorkspaceRelationshipProfiles;
+  workspaceResourceGrantRequests: WorkspaceResourceGrantRequests;
+  workspaceResourceGrants: WorkspaceResourceGrants;
+  workspaceResourceGrantsLive: WorkspaceResourceGrantsLive;
+  workspaceResources: WorkspaceResources;
+  workspaceResourcesLive: WorkspaceResourcesLive;
   workspaces: Workspaces;
   workspacesLive: WorkspacesLive;
 }

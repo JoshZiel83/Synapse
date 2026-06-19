@@ -116,7 +116,7 @@ export async function validateConversationScopedAccessTarget(params: {
   // (subject=conversation, actor + scope=conversation, AND
   // remote_agent + scope=conversation). The runtime visibility layer
   // already matches scoped remote_agent grants (see
-  // loadVisibleAccessBindings in tool-resolver.ts) so the creation path
+  // loadVisiblePluginGrants in mcp-plugins/repo.ts) so the creation path
   // must validate them too, otherwise a remote_agent + scope=conv grant
   // could be written without checking conversation type policy or
   // remote-agent participation.
