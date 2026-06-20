@@ -246,7 +246,7 @@ export async function grantApprovedContactVisibility(
     resourceId: string
     workspaceId: string
     grantedToMemberId: string
-    grantedByWorkspaceMemberId?: string | null
+    createdByWorkspaceMemberId?: string | null
     reason?: string | null
   }
 ) {
@@ -280,7 +280,7 @@ export async function grantApprovedContactVisibility(
     target: { subject: workspaceMemberRef(params.grantedToMemberId) },
     permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.CONTACT_VISIBLE],
     source: WORKSPACE_RESOURCE_GRANT_SOURCE.APPROVAL,
-    createdByWorkspaceMemberId: params.grantedByWorkspaceMemberId ?? null,
+    createdByWorkspaceMemberId: params.createdByWorkspaceMemberId ?? null,
     reason: params.reason ?? "approved contact visibility grant",
   })
   return inserted.id

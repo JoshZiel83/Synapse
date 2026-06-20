@@ -494,7 +494,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         const body = issueGrantSchema.parse(request.body)
         const grant = await issueModelGroupGrant(group.id, {
           ...body,
-          grantedByWorkspaceMemberId: workspaceMemberId,
+          createdByWorkspaceMemberId: workspaceMemberId,
         })
         return created(reply, presentGrantRow(grant))
       } catch (error) {
@@ -1477,7 +1477,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         const body = issueGrantSchema.parse(request.body)
         const grant = await issueModelGroupGrant(group.id, {
           ...body,
-          grantedByWorkspaceMemberId: (request as any).workspaceMember
+          createdByWorkspaceMemberId: (request as any).workspaceMember
             ?.id as string,
         })
         return created(reply, presentGrantRow(grant))

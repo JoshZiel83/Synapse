@@ -96,7 +96,7 @@ export function presentInstallationAccessGrant(
     permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.USE],
     status: mount.status,
     source: mount.source,
-    grantedByWorkspaceMemberId: mount.createdByWorkspaceMemberId || undefined,
+    createdByWorkspaceMemberId: mount.createdByWorkspaceMemberId || undefined,
     reason: mount.reason || undefined,
     conversationTypeMaskOverride: mount.conversationTypeMaskOverride ?? null,
     effectiveConversationTypeMask,

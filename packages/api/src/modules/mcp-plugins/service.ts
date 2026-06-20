@@ -1098,7 +1098,7 @@ export async function createPluginInstallationGrant(input: {
   installationId: string
   accessTarget?: CapabilityAccessTarget
   conversationTypeMaskOverride?: number | null
-  grantedByWorkspaceMemberId?: string
+  createdByWorkspaceMemberId?: string
   reason?: string
 }) {
   const { row, plugin, workspaceConversationTypeMask } =
@@ -1179,7 +1179,7 @@ export async function createPluginInstallationGrant(input: {
       target: accessTarget,
       permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.USE],
       conversationTypeMaskOverride: input.conversationTypeMaskOverride ?? null,
-      createdByWorkspaceMemberId: input.grantedByWorkspaceMemberId || null,
+      createdByWorkspaceMemberId: input.createdByWorkspaceMemberId || null,
       reason: input.reason || plugin.authorization?.reason || null,
     })
 

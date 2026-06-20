@@ -118,7 +118,7 @@ type ModelGroupGrant = {
   workspaceMemberId: string | null
   actorId: string | null
   status: ModelGroupGrantStatus
-  grantedByWorkspaceMemberId?: string | null
+  createdByWorkspaceMemberId?: string | null
   reason?: string | null
   createdAt?: Timestamp | null
   revokedAt?: Timestamp | null

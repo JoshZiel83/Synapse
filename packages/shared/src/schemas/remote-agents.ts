@@ -94,7 +94,7 @@ export const RemoteAgentViewSchema = z.object({
 /** A group-task-grant row (presentGroupTaskGrant). */
 export const RemoteAgentGroupTaskGrantViewSchema = z.object({
   workspaceMemberId: z.string(),
-  grantedByWorkspaceMemberId: z.string().optional(),
+  createdByWorkspaceMemberId: z.string().optional(),
   createdAt: IsoInstantStringSchema.optional(),
   updatedAt: IsoInstantStringSchema.optional(),
   userId: z.string(),

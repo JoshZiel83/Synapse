@@ -463,7 +463,7 @@ async function grantActorContactVisibilityToMember(params: {
   workspaceId: string
   actorId: string
   requesterWorkspaceMemberId: string
-  grantedByWorkspaceMemberId: string
+  createdByWorkspaceMemberId: string
 }) {
   try {
     await repo.insertWorkspaceResourceGrantDefault({
@@ -477,7 +477,7 @@ async function grantActorContactVisibilityToMember(params: {
       },
       permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.CONTACT_VISIBLE],
       source: "approval",
-      createdByWorkspaceMemberId: params.grantedByWorkspaceMemberId,
+      createdByWorkspaceMemberId: params.createdByWorkspaceMemberId,
     })
   } catch (error) {
     if (!isUniqueViolation(error)) throw error
@@ -488,7 +488,7 @@ async function grantRemoteAgentContactVisibilityToMember(params: {
   workspaceId: string
   remoteAgentId: string
   requesterWorkspaceMemberId: string
-  grantedByWorkspaceMemberId?: string
+  createdByWorkspaceMemberId?: string
 }) {
   try {
     await repo.insertWorkspaceResourceGrantDefault({
@@ -502,7 +502,7 @@ async function grantRemoteAgentContactVisibilityToMember(params: {
       },
       permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.CONTACT_VISIBLE],
       source: "approval",
-      createdByWorkspaceMemberId: params.grantedByWorkspaceMemberId ?? null,
+      createdByWorkspaceMemberId: params.createdByWorkspaceMemberId ?? null,
     })
   } catch (error) {
     if (!isUniqueViolation(error)) throw error
@@ -1921,7 +1921,7 @@ export async function requestRelationshipByIdentityProfile(params: {
         workspaceId: params.workspaceId,
         actorId: actor.actorId,
         requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
-        grantedByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+        createdByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
       })
       return {
         outcome: "actor_access_granted" as const,
@@ -2922,7 +2922,7 @@ export async function openDirectConversation(params: {
           actorId: resolved.actor.actorId,
           requesterWorkspaceMemberId:
             requesterWorkspaceMember.workspaceMemberId,
-          grantedByWorkspaceMemberId:
+          createdByWorkspaceMemberId:
             requesterWorkspaceMember.workspaceMemberId,
         })
       } else {

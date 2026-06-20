@@ -1049,7 +1049,7 @@ export async function updateRemoteAgentGroupTaskGrants(params: {
 
   await repo.replaceGroupTaskGrantsTx({
     remoteAgentId: params.remoteAgentId,
-    grantedByWorkspaceMemberId: identity.workspaceMemberId,
+    createdByWorkspaceMemberId: identity.workspaceMemberId,
     workspaceMemberIds: nextIds,
   })
 

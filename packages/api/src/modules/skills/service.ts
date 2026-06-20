@@ -1813,7 +1813,7 @@ export async function createInstalledSkillGrant(input: {
   installedSkillId: string
   accessTarget?: CapabilityAccessTarget
   conversationTypeMaskOverride?: number | null
-  grantedByWorkspaceMemberId?: string
+  createdByWorkspaceMemberId?: string
   reason?: string
 }) {
   const skillRow = await loadInstalledSkillForUpdate(
@@ -1914,7 +1914,7 @@ export async function createInstalledSkillGrant(input: {
       target: accessTarget,
       permissions: ["use"],
       conversationTypeMaskOverride: input.conversationTypeMaskOverride ?? null,
-      createdByWorkspaceMemberId: input.grantedByWorkspaceMemberId || null,
+      createdByWorkspaceMemberId: input.createdByWorkspaceMemberId || null,
       reason: input.reason || null,
     })
     return {

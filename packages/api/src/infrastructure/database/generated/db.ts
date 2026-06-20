@@ -1867,7 +1867,7 @@ export interface ModelBindingVersions {
 
 export interface ModelGroupGrants {
   createdAt: Generated<Date>;
-  grantedByWorkspaceMemberId: string | null;
+  createdByWorkspaceMemberId: string | null;
   groupId: string;
   id: Generated<string>;
   reason: string | null;
@@ -1878,7 +1878,7 @@ export interface ModelGroupGrants {
 
 export interface ModelGroupGrantsLive {
   createdAt: Date | null;
-  grantedByWorkspaceMemberId: string | null;
+  createdByWorkspaceMemberId: string | null;
   groupId: string | null;
   id: string | null;
   reason: string | null;
@@ -2194,7 +2194,7 @@ export interface RemoteAgentConversationViews {
 
 export interface RemoteAgentGroupTaskGrants {
   createdAt: Generated<Date>;
-  grantedByWorkspaceMemberId: string | null;
+  createdByWorkspaceMemberId: string | null;
   remoteAgentId: string;
   updatedAt: Generated<Date>;
   workspaceMemberId: string;

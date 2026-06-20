@@ -354,7 +354,7 @@ export async function createModelGroup(data: {
       createdByWorkspaceMemberId: data.createdByWorkspaceMemberId || null,
     },
     defaultGrantSubjectRef,
-    grantedByWorkspaceMemberId: data.createdByWorkspaceMemberId || null,
+    createdByWorkspaceMemberId: data.createdByWorkspaceMemberId || null,
   })
 
   return row
@@ -695,7 +695,7 @@ export async function issueModelGroupGrant(
     workspaceId?: string
     workspaceMemberId?: string
     actorId?: string
-    grantedByWorkspaceMemberId?: string
+    createdByWorkspaceMemberId?: string
     reason?: string
   }
 ): Promise<ModelGroupGrantRow & { id: string; group_id: string }> {
@@ -712,7 +712,7 @@ export async function issueModelGroupGrant(
   const full = await repo.insertModelGroupGrantAndReadBack({
     groupId,
     subjectRef,
-    grantedByWorkspaceMemberId: input.grantedByWorkspaceMemberId || null,
+    createdByWorkspaceMemberId: input.createdByWorkspaceMemberId || null,
     reason: input.reason || null,
   })
   return dbRowToGrantRow(full)

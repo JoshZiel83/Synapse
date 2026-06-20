@@ -204,7 +204,7 @@ export function presentGrant(
     permissions: row.permissions,
     status: row.status as WorkspaceResourceGrant["status"],
     source: row.source as WorkspaceResourceGrant["source"],
-    grantedByWorkspaceMemberId: row.createdByWorkspaceMemberId || undefined,
+    createdByWorkspaceMemberId: row.createdByWorkspaceMemberId || undefined,
     reason: row.reason || undefined,
     conversationTypeMaskOverride: row.conversationTypeMaskOverride ?? undefined,
     createdAt: serializeInstant(row.createdAt),

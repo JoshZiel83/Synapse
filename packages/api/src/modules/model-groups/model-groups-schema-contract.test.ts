@@ -75,7 +75,7 @@ const grantView = {
   workspaceMemberId: null,
   actorId: null,
   status: "active",
-  grantedByWorkspaceMemberId: workspaceMemberId,
+  createdByWorkspaceMemberId: workspaceMemberId,
   reason: "Workspace default",
   createdAt: isoNow,
   revokedAt: null,

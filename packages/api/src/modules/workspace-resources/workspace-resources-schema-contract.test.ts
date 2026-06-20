@@ -92,7 +92,7 @@ function workspaceResourceGrantView(overrides: Record<string, unknown> = {}) {
     permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.USE],
     status: WORKSPACE_RESOURCE_GRANT_STATUS.ACTIVE,
     source: WORKSPACE_RESOURCE_GRANT_SOURCE.MANUAL,
-    grantedByWorkspaceMemberId: uuid(),
+    createdByWorkspaceMemberId: uuid(),
     reason: "Allowed for this workspace",
     createdAt: NOW,
     ...overrides,
