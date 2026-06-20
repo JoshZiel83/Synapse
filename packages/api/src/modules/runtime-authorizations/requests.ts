@@ -72,7 +72,10 @@ export interface RuntimeAuthorizationRequestTarget {
   deviceExposureId: string
   requestedToolName: string
   deviceToolStableKey: string
-  runtimeSessionId: string
+  // The originating chat-runtime session id (sessions.id) — backs
+  // tool_call_task_runtime_authorization.source_runtime_session_id. Named
+  // distinctly from device_runtime_sessions.id (also a "runtime session").
+  sourceRuntimeSessionId: string
   deviceDisplayName?: string
   exposureDisplayName?: string
 }
@@ -315,7 +318,7 @@ export async function createRuntimeAuthorizationRequest(
       // sessions issuing the same CUA call would reuse one another's
       // pending taskRecord, and the post-approval auto-retry would stamp
       // the wrong cua_focus_scope_id into the dispatched envelope.
-      runtimeSessionId: params.runtimeTarget.runtimeSessionId,
+      runtimeSessionId: params.runtimeTarget.sourceRuntimeSessionId,
     })
 
     if (existing) {
@@ -365,7 +368,7 @@ export async function createRuntimeAuthorizationRequest(
     requestedAction: params.authorizationPlan.requestedAction,
     grantOptions: params.authorizationPlan.grantOptions,
     availablePresets: params.availablePresets,
-    runtimeSessionId: params.runtimeTarget.runtimeSessionId,
+    runtimeSessionId: params.runtimeTarget.sourceRuntimeSessionId,
   })
   const requestKey = buildRuntimeAuthorizationRequestKey({
     conversationId: params.source.conversationId,
@@ -395,7 +398,7 @@ export async function createRuntimeAuthorizationRequest(
         deviceCapabilityId: params.runtimeTarget.deviceCapabilityId,
         deviceId: params.runtimeTarget.deviceId,
         deviceExposureId: params.runtimeTarget.deviceExposureId,
-        runtimeSessionId: params.runtimeTarget.runtimeSessionId,
+        runtimeSessionId: params.runtimeTarget.sourceRuntimeSessionId,
         requestedToolName: params.runtimeTarget.requestedToolName,
         deviceToolStableKey: params.runtimeTarget.deviceToolStableKey,
         reason: params.reason,
@@ -419,7 +422,7 @@ export async function createRuntimeAuthorizationRequest(
         deviceToolStableKey: params.runtimeTarget.deviceToolStableKey,
         reason: params.reason,
         requestMode: params.requestMode,
-        runtimeSessionId: params.runtimeTarget.runtimeSessionId,
+        runtimeSessionId: params.runtimeTarget.sourceRuntimeSessionId,
         sourceRetryNonce: retryNonce,
         sourceRequestArgs: params.sourceRequestArgs,
         principalSubjectId: params.source.principalSubjectId,
@@ -462,7 +465,7 @@ export async function createRuntimeAuthorizationRequest(
       deviceId: params.runtimeTarget.deviceId,
       deviceExposureId: params.runtimeTarget.deviceExposureId,
       requestedToolName: params.runtimeTarget.requestedToolName,
-      runtimeSessionId: params.runtimeTarget.runtimeSessionId,
+      runtimeSessionId: params.runtimeTarget.sourceRuntimeSessionId,
       deviceToolStableKey: params.runtimeTarget.deviceToolStableKey,
       reason: params.reason,
       requestedAction: params.authorizationPlan.requestedAction,

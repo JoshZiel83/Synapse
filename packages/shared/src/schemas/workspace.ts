@@ -139,7 +139,9 @@ export const WorkspaceMemberViewSchema = z.object({
   workspaceId: z.string(),
   userId: z.string(),
   trustLevel: TrustLevelFieldSchema,
-  accessKeys: z.array(z.string()),
+  // The same workspace access-key vocabulary the binding DTO uses (accessKey:
+  // z.enum(WORKSPACE_ACCESS_KEYS)); was a bare string[] here.
+  accessKeys: z.array(z.enum(WORKSPACE_ACCESS_KEYS)),
   joinedAt: IsoInstantStringSchema.optional(),
   userName: z.string().nullable().optional(),
   userEmail: z.string().nullable().optional(),

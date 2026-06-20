@@ -1837,11 +1837,11 @@ class ApiClient {
   // Actor lanes
   async retryConversationMessage(
     workspaceId: string,
-    threadId: string,
+    conversationId: string,
     itemId: string
   ) {
     const res = await this.fetch(
-      `/workspaces/${workspaceId}/chat/conversations/${threadId}/messages/${itemId}/retry`,
+      `/workspaces/${workspaceId}/chat/conversations/${conversationId}/messages/${itemId}/retry`,
       {
         method: "POST",
       }
@@ -2061,12 +2061,12 @@ class ApiClient {
 
   resolveChatTask(
     workspaceId: string,
-    threadId: string,
+    conversationId: string,
     taskId: string,
     data: ChatTaskResolveInput
   ): Promise<ChatTaskResolveResponse> {
     return this.fetch(
-      `/workspaces/${workspaceId}/chat/conversations/${threadId}/tasks/${taskId}/respond`,
+      `/workspaces/${workspaceId}/chat/conversations/${conversationId}/tasks/${taskId}/respond`,
       {
         method: "POST",
         body: JSON.stringify(data),

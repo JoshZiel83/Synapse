@@ -773,7 +773,9 @@ export async function listMembersWithAccess(workspaceId: string) {
     .selectFrom("workspaceAccessBindings")
     .select([
       "workspaceMemberId",
-      sql<string[]>`array_agg(access_key order by access_key)`.as("accessKeys"),
+      sql<WorkspaceAccessKey[]>`array_agg(access_key order by access_key)`.as(
+        "accessKeys"
+      ),
     ])
     .where("status", "=", "active")
     .groupBy(["workspaceMemberId"])
@@ -797,7 +799,7 @@ export async function listMembersWithAccess(workspaceId: string) {
       "u.email as userEmail",
       "u.avatarFileId",
       sql<
-        string[]
+        WorkspaceAccessKey[]
       >`COALESCE(access_map.access_keys, ARRAY[]::workspace_access_bindings_access_key[])`.as(
         "accessKeys"
       ),
