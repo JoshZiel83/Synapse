@@ -26,6 +26,7 @@
 // may contain URLs/referrers — see docs/logging-refactor/06-...md §2.3 (PII).
 import type { FastifyInstance, FastifyRequest } from "fastify"
 import { logger } from "../../infrastructure/logger/index.js"
+import { wireRoute } from "../../infrastructure/http/route.js"
 import {
   parseCspReport,
   parseReportsJson,
@@ -74,17 +75,21 @@ export default async function reportsModule(app: FastifyInstance) {
     parseJsonString
   )
 
-  app.post(
+  wireRoute(
+    app,
+    "POST",
     "/api/v1/reports",
     {
-      bodyLimit: BODY_LIMIT,
-      // Unauthenticated + attacker-controllable -> coarse per-IP cap. v1 sends
-      // more (smaller) requests than v0, so the cap is generous but bounded. The
-      // shared keyGenerator (index.ts) keys on the nginx-set X-Real-IP (not the
-      // spoofable leftmost X-Forwarded-For), so the cap actually holds per client
-      // here. Per-instance (in-memory store) — see §7 of the plan for the
-      // shared-store follow-up.
-      config: { rateLimit: { max: 240, timeWindow: "1 minute" } },
+      options: {
+        bodyLimit: BODY_LIMIT,
+        // Unauthenticated + attacker-controllable -> coarse per-IP cap. v1 sends
+        // more (smaller) requests than v0, so the cap is generous but bounded.
+        // The shared keyGenerator (index.ts) keys on the nginx-set X-Real-IP
+        // (not the spoofable leftmost X-Forwarded-For), so the cap actually
+        // holds per client here. Per-instance (in-memory store) — see §7 of the
+        // plan for the shared-store follow-up.
+        config: { rateLimit: { max: 240, timeWindow: "1 minute" } },
+      },
     },
     async (request: FastifyRequest, reply) => {
       const contentType = (request.headers["content-type"] || "")
