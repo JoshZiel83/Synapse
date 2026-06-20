@@ -239,7 +239,15 @@ services:
       - production
 
   nginx:
-    image: nginx:alpine
+    # Custom pinned image: nginx 1.31.2 (HTTP/3 CVE fix) + brotli + zstd modules
+    # + web /_next/static baked in with RFC 9842 dcb/dcz variants. Build the web
+    # image FIRST (this COPYs its .next/static). See infrastructure/Dockerfile.nginx
+    # + docs/logging-refactor/07-edge-compression-and-cdt-plan.md.
+    build:
+      context: .
+      dockerfile: infrastructure/Dockerfile.nginx
+      args:
+        WEB_IMAGE: ${COMPOSE_PROJECT_NAME:-synapse}-web:latest
     container_name: synapse-nginx
     restart: unless-stopped
     logging: *default-logging

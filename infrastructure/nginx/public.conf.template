@@ -3,6 +3,48 @@ map $http_upgrade $connection_upgrade {
     '' close;
 }
 
+# ─── Edge-owned compression (Next sets compress:false) ──────────────────────
+# brotli + zstd on-the-fly for proxied DYNAMIC responses (SSR HTML, RSC, API),
+# *_static for precompressed /_next/static, gzip as the universal fallback.
+# Module load order (Dockerfile.nginx) makes the body-filter preference
+# brotli > zstd > gzip. (text/html is always compressed implicitly.)
+brotli on;
+brotli_comp_level 5;
+brotli_static on;
+brotli_types text/plain text/css text/xml application/json application/javascript text/javascript application/xml application/rss+xml application/atom+xml image/svg+xml application/manifest+json application/wasm font/ttf font/otf;
+zstd on;
+zstd_comp_level 8;
+zstd_min_length 256;
+zstd_static on;
+zstd_types text/plain text/css text/xml application/json application/javascript text/javascript application/xml application/rss+xml application/atom+xml image/svg+xml application/manifest+json application/wasm font/ttf font/otf;
+gzip on;
+gzip_vary on;
+gzip_proxied any;
+gzip_comp_level 5;
+gzip_min_length 256;
+gzip_types text/plain text/css text/xml application/json application/javascript text/javascript application/xml application/rss+xml application/atom+xml image/svg+xml application/manifest+json application/wasm font/ttf font/otf;
+
+# ─── Performance ────────────────────────────────────────────────────────────
+# (sendfile/keepalive_timeout are already set by the base nginx.conf http{}.)
+tcp_nopush on;
+tcp_nodelay on;
+quic_gso on;
+
+# child locations that add their own add_header (the CDT static block) would
+# otherwise DROP server-level HSTS/Alt-Svc/Reporting/NEL; merge appends instead.
+add_header_inherit merge;
+
+# ─── RFC 9842 Compression Dictionary Transport ──────────────────────────────
+# cdt-generated.conf (baked at build by gen-cdt.sh) defines $cdt_dict_ok (1 when
+# the client advertises THIS build's dictionary) + $cdt_dict_url (its URL).
+include /etc/nginx/cdt-generated.conf;
+js_import cdt from /etc/nginx/cdt.js;
+# The Link: rel=compression-dictionary header value (empty -> add_header skipped).
+map $cdt_dict_url $cdt_link {
+    default "";
+    "~.+" "<$cdt_dict_url>; rel=\"compression-dictionary\"";
+}
+
 # NOTE: no static `upstream {}` blocks for api/web/mobile-web. An upstream block
 # (or a literal proxy_pass hostname) resolves the container name ONCE at config
 # load, so recreating a backend (it gets a new docker IP) strands nginx on the
@@ -111,6 +153,38 @@ server {
         proxy_send_timeout 120s;
     }
 
+    # /_next/static: served from DISK by nginx (precompressed br/zst/gz + RFC
+    # 9842 dcb/dcz deltas), NOT proxied. More specific than /_next/ so it wins.
+    # The njs handler serves a dcb/dcz delta when the client advertises this
+    # build's dictionary + accepts the coding + the variant exists; else it
+    # internal-redirects to @plain_static (which keeps *_static fallback).
+    location /_next/static/ {
+        js_content cdt.serve;
+    }
+    location @plain_static {
+        internal;
+        root /usr/share/nginx/web;
+        brotli_static on;
+        zstd_static on;
+        gzip_static on;
+        gzip_vary on;   # core emits "Vary: Accept-Encoding"; we add the CDT token.
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header Vary "Available-Dictionary" always;
+    }
+    # The shared compression dictionary, declared usable for /_next/static/*.
+    # Served precompressed (gen-cdt emits .br/.zst/.gz next to it) so the one-time
+    # ~1MB dictionary fetch is small. Varies only on Accept-Encoding (core).
+    location /_next/cdt-dict/ {
+        root /usr/share/nginx/web;
+        brotli_static on;
+        zstd_static on;
+        gzip_static on;
+        gzip_vary on;
+        add_header Use-As-Dictionary 'match="/_next/static/*", match-dest=("script" "style")' always;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+    }
+
+    # Everything else under /_next/ (image optimizer, data) is proxied to Next.
     location /_next/ {
         set $web_upstream web;
         proxy_pass http://$web_upstream:3000;
@@ -127,6 +201,8 @@ server {
         proxy_set_header Connection $connection_upgrade;
         proxy_buffering off;
         proxy_read_timeout 86400s;
+        # Advertise the compression dictionary so browsers idle-fetch it (CDT).
+        add_header Link $cdt_link always;
     }
 }
 
