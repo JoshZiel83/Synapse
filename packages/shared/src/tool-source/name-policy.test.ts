@@ -12,7 +12,7 @@ function systemRef(registryKey: string): ToolRef {
   return {
     toolId: systemToolId(registryKey),
     source: { kind: "system", registryKey },
-    binding: { transport: "in_process", dispatch: "callable" },
+    binding: { transport: "in_process" },
     identity: { stableKey: `system/${registryKey}` },
   }
 }
@@ -58,7 +58,10 @@ test("globally unique leaf names stay bare", () => {
   const items: NamePolicyItem[] = [
     { ref: systemRef("send_to"), leafName: "send_to" },
     { ref: pluginRef("inst-a", "create_issue"), leafName: "create_issue" },
-    { ref: deviceRef("dt-1", "builtin/filesystem", "fs_read"), leafName: "fs_read" },
+    {
+      ref: deviceRef("dt-1", "builtin/filesystem", "fs_read"),
+      leafName: "fs_read",
+    },
   ]
   const reg = computeWireNames(items)
   assert.equal(reg.byToolId.get(systemToolId("send_to"))!.wireName, "send_to")

@@ -1647,7 +1647,7 @@ export async function actorThink(
                     // inherit a real origin from a thrown error. Derive the
                     // origin from the routed ToolRef so the audit trail still
                     // attributes correctly and the roundToolResults fallback
-                    // doesn't mis-tag as {kind:"builtin"}.
+                    // doesn't mis-tag as {kind:"system"}.
                     origin: originFromRef(
                       toolWireRegistry.refByWireName.get(skippedTc.toolName),
                       skippedTc.toolName

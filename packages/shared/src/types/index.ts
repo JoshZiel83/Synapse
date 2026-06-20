@@ -2113,7 +2113,7 @@ export interface ToolDefinition {
   // structured ToolRef (`@synapse/shared/tool-source`) carries source + binding
   // on the internal `ProjectedToolDefinition`; a plain ToolDefinition that
   // crosses to the provider/model is intentionally source-free (stripped at the
-  // boundary). See docs/tool-provenance-and-routing.md.
+  // boundary). See docs/design-archive/tool-provenance-and-routing.md.
 }
 
 export interface ToolCall {
@@ -2217,13 +2217,15 @@ export interface CapabilityInvocationContext {
   providerCallId?: string
   namespacedToolName?: string
   toolName?: string
-  sourceType?: "builtin" | "mcp_plugin" | "device_capability"
 }
 
 export interface ToolSurfaceItem {
   id: string
   name: string
-  source: "builtin" | "plugin_installation" | "device_capability"
+  // Canonical routed-source vocabulary (= ToolSourceKind). Was previously a
+  // parallel display vocabulary (builtin/plugin_installation/device_capability);
+  // collapsed onto the one source axis.
+  source: "system" | "plugin" | "device"
 }
 
 export interface SkillSurfaceItem {

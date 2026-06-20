@@ -8,12 +8,17 @@
 //
 // Two halves with two different audiences:
 //   - `source`  = PUBLIC provenance (safe for the model-facing/audit surface).
-//   - `binding` = ROUTE-ONLY coordinates (instanceKey, tunnel, dispatch). NEVER
+//   - `binding` = ROUTE-ONLY coordinates (instanceKey, tunnel). NEVER
 //     leaves the API process — not into provider requests, not into metadata.
 //
-// See docs/tool-provenance-and-routing.md and the plan §1.
+// See docs/design-archive/tool-provenance-and-routing.md (archived design;
+// current truth: docs/tool-source-classification-audit-2026-06-20.md).
 
-import type { ProviderType, ToolDefinition } from "../types/index.js"
+import type {
+  ToolDefinition,
+  ToolResultOrigin,
+  ToolResultOriginKind,
+} from "../types/index.js"
 import { type ToolSourceKind } from "./kinds.js"
 
 // ---------------------------------------------------------------------------
@@ -41,7 +46,7 @@ export type ToolSource =
 
 // Route-only binding coordinates. Never serialized outward.
 export type ToolBinding =
-  | { transport: "in_process"; dispatch: "action" | "callable" }
+  | { transport: "in_process" }
   | { transport: "stdio" | "http" | "sse"; instanceKey: string }
   | {
       transport: "device_tunnel"
@@ -126,46 +131,17 @@ export function stripForAuditSnapshot(ref: ToolRef): SourceSnapshot {
 }
 
 // ---------------------------------------------------------------------------
-// Public result-origin projection. Result origins span the routed families
-// PLUS provider_native (SDK server tools) and model_response (media ingest),
-// which never carry a ToolRef. `toPublicOrigin` covers only the routed three;
-// the union itself admits the extra kinds for the non-ToolRef paths.
-//
-// NOTE: `ToolResultOrigin` in types/index.ts is structurally the same public
-// shape. The alias here keeps the ToolRef layer independent from the large
-// shared types barrel.
+// Public result-origin projection. The public origin of a tool result IS the
+// shared `ToolResultOrigin` (types/index.ts): the routed families PLUS
+// provider_native (SDK server tools) and model_response (media ingest), which
+// never carry a ToolRef. `toPublicOrigin` covers only the routed three; the
+// non-ToolRef kinds are produced directly at their ingest boundaries. There is
+// no separate "PublicToolOrigin" vocabulary — that was a structural duplicate
+// of ToolResultOrigin and has been collapsed to the single canonical type.
 // ---------------------------------------------------------------------------
 
-export const PUBLIC_TOOL_ORIGIN_KINDS = [
-  "system",
-  "plugin",
-  "device",
-  "provider_native",
-  "model_response",
-] as const
-export type PublicToolOriginKind = (typeof PUBLIC_TOOL_ORIGIN_KINDS)[number]
-
-export type PublicToolOrigin =
-  | { kind: "system"; registryKey: string }
-  | {
-      kind: "plugin"
-      installationId: string
-      upstreamToolName: string
-      publisherSlug?: string
-      itemSlug?: string
-    }
-  | {
-      kind: "device"
-      deviceToolId: string
-      exposureStableKey: string
-      deviceName?: string
-      visibleToolName?: string
-    }
-  | { kind: "provider_native"; providerType: ProviderType; toolName: string }
-  | { kind: "model_response"; providerType: ProviderType }
-
 /** Project a routed ToolRef onto its public result origin (no binding). */
-export function toPublicOrigin(ref: ToolRef): PublicToolOrigin {
+export function toPublicOrigin(ref: ToolRef): ToolResultOrigin {
   switch (ref.source.kind) {
     case "system":
       return { kind: "system", registryKey: ref.source.registryKey }
@@ -197,7 +173,7 @@ export function toPublicOrigin(ref: ToolRef): PublicToolOrigin {
 }
 
 export function originKindToSourceKind(
-  kind: PublicToolOriginKind
+  kind: ToolResultOriginKind
 ): ToolSourceKind | null {
   return kind === "system" || kind === "plugin" || kind === "device"
     ? kind
