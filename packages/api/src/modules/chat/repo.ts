@@ -10,6 +10,7 @@ import { CompiledQuery, sql, type RawBuilder } from "kysely"
 import type {
   ChatSyncEventType,
   ConversationMessageTransportDirection,
+  ConversationParticipantState,
   ConversationParticipantType,
   RemoteAgentRuntimeStateType,
   SessionStatus,
@@ -144,7 +145,7 @@ export type ChatParticipantRow = {
   actorJoinVersionId: string | null
   displayName: string | null
   roleKey: string
-  state: "active" | "left" | "removed"
+  state: ConversationParticipantState
   metadata: Record<string, unknown>
   joinedAt: Date
   leftAt: Date | null

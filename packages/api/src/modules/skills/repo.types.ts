@@ -1,4 +1,7 @@
-import type { RuntimeBindingScope } from "@synapse/shared"
+import type {
+  RuntimeBindingScope,
+  WorkspaceResourceStatus,
+} from "@synapse/shared"
 
 /**
  * Skills repo layer record/projection shapes. These describe the raw SQL row
@@ -83,7 +86,9 @@ export type InstalledSkillRow = {
   iconFileId: string | null
   tags: string[] | null
   currentVersion: number
-  skillStatus: "active" | "disabled" | "archived"
+  // Sourced from workspace_resources.status (5-value enum); use the canonical
+  // shared type so it can never drift to a partial inline union.
+  skillStatus: WorkspaceResourceStatus
   conversationTypeMaskOverride: number | null
   ownerWorkspaceMemberId: string | null
   createdAt: Date

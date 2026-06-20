@@ -856,12 +856,7 @@ export interface EnqueueSessionWakeupParams {
   sourceType: SessionWakeupSourceType
   sourceItemId?: string
   sourceSessionId?: string
-  sourceParticipantType?:
-    | "workspace_member"
-    | "actor"
-    | "remote_agent"
-    | "external"
-    | "system"
+  sourceParticipantType?: SessionWakeupSourceParticipantType
   sourceParticipantId?: string
   sourceName?: string
   summary: string

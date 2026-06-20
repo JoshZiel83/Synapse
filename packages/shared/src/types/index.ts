@@ -1359,7 +1359,7 @@ export interface RemoteAgentRuntimeSummaryView {
 
 export interface RemoteAgentGroupTaskGrantView {
   workspaceMemberId: UUID
-  grantedByWorkspaceMemberId?: UUID
+  createdByWorkspaceMemberId?: UUID
   createdAt?: Timestamp
   updatedAt?: Timestamp
   userId: UUID
@@ -1610,7 +1610,7 @@ export interface ModelGroupGrant {
   workspaceMemberId?: UUID | null
   actorId?: UUID | null
   status: ModelGroupGrantStatus
-  grantedByWorkspaceMemberId?: UUID | null
+  createdByWorkspaceMemberId?: UUID | null
   reason?: string | null
   createdAt?: Timestamp | null
   revokedAt?: Timestamp | null
@@ -2573,7 +2573,7 @@ export interface WorkspaceResourceGrant {
   permissions: WorkspaceResourceGrantPermission[]
   status: WorkspaceResourceGrantStatus
   source: WorkspaceResourceGrantSource
-  grantedByWorkspaceMemberId?: string
+  createdByWorkspaceMemberId?: string
   reason?: string
   conversationTypeMaskOverride?: ConversationTypeMask | null
   effectiveConversationTypeMask?: ConversationTypeMask
@@ -2947,6 +2947,9 @@ export interface McpEventLog {
 
 export type ConversationParticipantType =
   (typeof CONVERSATION_PARTICIPANT_TYPES)[number]
+
+export type ConversationParticipantState =
+  (typeof CONVERSATION_PARTICIPANT_STATES)[number]
 
 export type ConversationParticipantRoleKey =
   (typeof CONVERSATION_PARTICIPANT_ROLE_KEYS)[number]

@@ -1737,7 +1737,7 @@ export async function insertTransportAccountRow(params: {
   inboundActorMode: TransportAccountInboundActorMode
   inboundActorId: string | null
   connectionMode: TransportConnectionMode
-  status: "active" | "disabled" | "error"
+  status: TransportAccountStatus
   credentials: Record<string, unknown>
   config: Record<string, unknown>
   metadata: Record<string, unknown>
@@ -1783,7 +1783,7 @@ export async function updateTransportAccountRow(
       inboundActorMode: TransportAccountInboundActorMode
       inboundActorId: string | null
       connectionMode: TransportConnectionMode
-      status: "active" | "disabled" | "error"
+      status: TransportAccountStatus
       credentials: Record<string, unknown>
       config: Record<string, unknown>
       metadata: Record<string, unknown>

@@ -111,7 +111,6 @@ export const ContactHubEntryRefSchema = z.object({
 })
 
 export const ConversationParticipantViewSchema = z.object({
-  memberId: z.string().optional(),
   participantId: z.string().optional(),
   participantType: z.enum(CONVERSATION_PARTICIPANT_TYPES).optional(),
   id: z.string().optional(),

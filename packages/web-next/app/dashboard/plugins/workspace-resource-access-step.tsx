@@ -5,7 +5,7 @@ import type {
   CapabilityAccessTarget,
   ConversationTypeKey,
 } from "@synapse/shared/types"
-import type { Timestamp } from "@synapse/shared"
+import type { ConversationParticipantState, Timestamp } from "@synapse/shared"
 type AccessTargetInput = CapabilityAccessTarget
 
 type PluginGrantScope =
@@ -154,7 +154,7 @@ type ConversationOption = {
     remoteAgentId?: string
     workspaceMemberId?: string
     name: string
-    state: "active" | "left" | "removed"
+    state: ConversationParticipantState
   }>
 }
 
