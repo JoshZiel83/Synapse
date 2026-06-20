@@ -181,7 +181,7 @@ test(
       const groupId = await insertModelGroup(db, workspaceId)
       const subjectId = await upsertAccessSubject(db, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId,
+        workspaceMemberId: memberId,
       })
       await db
         .insertInto("modelGroupGrants")
@@ -250,7 +250,7 @@ test(
       const groupId = await insertModelGroup(db, workspaceId)
       const subjectId = await upsertAccessSubject(db, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId,
+        workspaceMemberId: memberId,
       })
       await db
         .insertInto("modelGroupGrants")

@@ -56,7 +56,7 @@ function buildModelGroupGrantSubjectRef(input: {
       }
       return {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: input.workspaceMemberId,
+        workspaceMemberId: input.workspaceMemberId,
       }
     case MODEL_GROUP_GRANT_SCOPE.ACTOR:
       if (!input.actorId) {

@@ -1609,7 +1609,7 @@ export async function buildPluginVisibilitySubjectIds(
                 : SUBJECT_KIND.REMOTE_AGENT,
         ...(subject.type === "workspace" ? { workspaceId: subject.id } : {}),
         ...(subject.type === "workspace_member"
-          ? { memberId: subject.id }
+          ? { workspaceMemberId: subject.id }
           : {}),
         ...(subject.type === "actor" ? { actorId: subject.id } : {}),
         ...(subject.type === "remote_agent"

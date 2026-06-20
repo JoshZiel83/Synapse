@@ -884,7 +884,7 @@ export function buildSkillAccessRow(row: SkillAccessRow): SkillAccessRow {
         : null
   const workspaceMemberId =
     target.subject.kind === "workspace_member"
-      ? (target.subject as { memberId: string }).memberId
+      ? (target.subject as { workspaceMemberId: string }).workspaceMemberId
       : null
   return {
     id: row.id,
@@ -1603,7 +1603,8 @@ export async function createWorkspaceSkill(input: {
             : null,
         workspaceMemberId:
           input.accessTarget.subject.kind === "workspace_member"
-            ? (input.accessTarget.subject as { memberId: string }).memberId
+            ? (input.accessTarget.subject as { workspaceMemberId: string })
+                .workspaceMemberId
             : null,
         conversationId:
           input.accessTarget.scope?.kind === "conversation"
@@ -1888,7 +1889,8 @@ export async function createInstalledSkillGrant(input: {
         : null
   const accessTargetWorkspaceMemberId =
     accessTarget.subject.kind === "workspace_member"
-      ? (accessTarget.subject as { memberId: string }).memberId
+      ? (accessTarget.subject as { workspaceMemberId: string })
+          .workspaceMemberId
       : null
   const existing = accessRows.find(
     (row) =>
@@ -1939,7 +1941,7 @@ export async function createInstalledSkillGrant(input: {
             : null,
         workspaceMemberId:
           accessTarget.subject.kind === "workspace_member"
-            ? accessTarget.subject.memberId
+            ? accessTarget.subject.workspaceMemberId
             : null,
         conversationTypeMaskOverride: inserted.conversationTypeMaskOverride,
         status: inserted.status,
@@ -2072,7 +2074,8 @@ export async function installMarketplaceSkill(input: {
             : null,
         workspaceMemberId:
           input.accessTarget.subject.kind === "workspace_member"
-            ? (input.accessTarget.subject as { memberId: string }).memberId
+            ? (input.accessTarget.subject as { workspaceMemberId: string })
+                .workspaceMemberId
             : null,
         conversationId:
           input.accessTarget.scope?.kind === "conversation"

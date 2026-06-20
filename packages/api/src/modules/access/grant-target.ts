@@ -74,7 +74,7 @@ function subjectRefFromRow(row: {
         throw new Error("workspace_member subject missing workspace_member_id")
       return {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: row.subjectWorkspaceMemberIdViaJoin,
+        workspaceMemberId: row.subjectWorkspaceMemberIdViaJoin,
       }
     case "actor":
       if (!row.subjectActorIdViaJoin)

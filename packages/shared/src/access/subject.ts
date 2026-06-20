@@ -30,7 +30,7 @@ export type SubjectRef =
     }
   | {
       readonly kind: typeof SUBJECT_KIND.WORKSPACE_MEMBER
-      readonly memberId: string
+      readonly workspaceMemberId: string
     }
   | { readonly kind: typeof SUBJECT_KIND.ACTOR; readonly actorId: string }
   | {
@@ -140,9 +140,9 @@ export function workspaceRef(
   return { kind: SUBJECT_KIND.WORKSPACE, workspaceId }
 }
 export function workspaceMemberRef(
-  memberId: string
+  workspaceMemberId: string
 ): Extract<SubjectRef, { kind: typeof SUBJECT_KIND.WORKSPACE_MEMBER }> {
-  return { kind: SUBJECT_KIND.WORKSPACE_MEMBER, memberId }
+  return { kind: SUBJECT_KIND.WORKSPACE_MEMBER, workspaceMemberId }
 }
 export function actorRef(
   actorId: string
@@ -188,13 +188,13 @@ export function subjectsEqual(a: SubjectRef, b: SubjectRef): boolean {
       )
     case SUBJECT_KIND.WORKSPACE_MEMBER:
       return (
-        a.memberId ===
+        a.workspaceMemberId ===
         (
           b as Extract<
             SubjectRef,
             { kind: typeof SUBJECT_KIND.WORKSPACE_MEMBER }
           >
-        ).memberId
+        ).workspaceMemberId
       )
     case SUBJECT_KIND.ACTOR:
       return (
@@ -242,7 +242,7 @@ export function subjectKey(ref: SubjectRef): string {
     case SUBJECT_KIND.WORKSPACE:
       return `workspace:${ref.workspaceId}`
     case SUBJECT_KIND.WORKSPACE_MEMBER:
-      return `workspace_member:${ref.memberId}`
+      return `workspace_member:${ref.workspaceMemberId}`
     case SUBJECT_KIND.ACTOR:
       return `actor:${ref.actorId}`
     case SUBJECT_KIND.REMOTE_AGENT:

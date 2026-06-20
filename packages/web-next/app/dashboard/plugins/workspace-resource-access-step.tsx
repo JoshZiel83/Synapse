@@ -1724,12 +1724,15 @@ export default function WorkspaceResourceAccessStep({
           case "workspace":
             return { subject: { kind: "workspace", workspaceId } }
           case "workspace_member":
-            return {
-              subject: {
-                kind: "workspace_member",
-                memberId: actorId ?? "",
-              },
-            }
+            // Unreachable in this UI: "workspace_member" is excluded from both
+            // the grant-scope dropdown (buildGrantScopeOptions) and
+            // allowedGrantScopes, and there is no member-picker state here, so
+            // grantScope can never hold it. Kept for PluginGrantScope
+            // exhaustiveness. (Previously mis-built the subject from actorId —
+            // a latent bug in this dead branch; fail loudly instead.)
+            throw new Error(
+              "workspace_member grant scope is not selectable in this UI"
+            )
           case "conversation":
             return {
               subject: {

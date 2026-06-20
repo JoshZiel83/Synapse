@@ -193,7 +193,9 @@ test(
       await insertWorkspaceResourceGrant(db, {
         workspaceId,
         workspaceResourceId: actorId,
-        target: { subject: { kind: "workspace_member", memberId } },
+        target: {
+          subject: { kind: "workspace_member", workspaceMemberId: memberId },
+        },
         permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.CONTACT_VISIBLE],
         source: WORKSPACE_RESOURCE_GRANT_SOURCE.APPROVAL,
       })
@@ -341,7 +343,7 @@ async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
     : await insertWorkspaceMember(db, workspaceId, await insertUser(db))
   const creatorSubjectId = await upsertAccessSubject(db, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId,
+    workspaceMemberId: memberId,
   })
   await db
     .insertInto("workspace_resources")

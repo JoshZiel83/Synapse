@@ -29,7 +29,10 @@ test("readAutomationEventSourceAccessGrantTarget decodes a workspace_member subj
       subjectWorkspaceMemberIdViaJoin: "m-1",
     }),
     {
-      subject: { kind: SUBJECT_KIND.WORKSPACE_MEMBER, memberId: "m-1" },
+      subject: {
+        kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+        workspaceMemberId: "m-1",
+      },
     }
   )
 })

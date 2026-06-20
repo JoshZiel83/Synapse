@@ -83,7 +83,7 @@ function toCapabilityAccessTarget(
     input.subject.kind === SUBJECT_KIND.WORKSPACE
       ? workspaceRef(input.subject.workspaceId)
       : input.subject.kind === SUBJECT_KIND.WORKSPACE_MEMBER
-        ? workspaceMemberRef(input.subject.memberId)
+        ? workspaceMemberRef(input.subject.workspaceMemberId)
         : input.subject.kind === SUBJECT_KIND.CONVERSATION
           ? conversationRef(input.subject.conversationId)
           : input.subject.kind === SUBJECT_KIND.ACTOR

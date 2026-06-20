@@ -161,7 +161,7 @@ async function insertConversationParticipant(
           ? SUBJECT_KIND.ACTOR
           : SUBJECT_KIND.REMOTE_AGENT,
     ...(participantType === "workspace_member"
-      ? { memberId: entityId }
+      ? { workspaceMemberId: entityId }
       : participantType === "actor"
         ? { actorId: entityId }
         : { remoteAgentId: entityId }),

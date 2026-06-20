@@ -128,7 +128,10 @@ function subjectRefToTarget(input: {
       : input.kind === SUBJECT_KIND.WORKSPACE_MEMBER
         ? {
             kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-            memberId: requireId(input.workspaceMemberId, "memberId"),
+            workspaceMemberId: requireId(
+              input.workspaceMemberId,
+              "workspaceMemberId"
+            ),
           }
         : input.kind === SUBJECT_KIND.ACTOR
           ? {

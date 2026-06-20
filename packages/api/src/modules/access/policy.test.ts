@@ -343,7 +343,7 @@ test(
       // Add the participant row → must accept.
       const memberSubjectId = await upsertAccessSubject(db, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId,
+        workspaceMemberId: memberId,
       })
       await db
         .insertInto("conversationParticipants")
@@ -415,7 +415,7 @@ async function creatorSubjectIdFor(
   const memberId = await insertWorkspaceMember(db, workspaceId)
   return upsertAccessSubject(db, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId,
+    workspaceMemberId: memberId,
   })
 }
 

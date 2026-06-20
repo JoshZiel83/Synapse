@@ -125,7 +125,7 @@ async function insertAutomationRuleFixture(db: AnyDb) {
 
   const subjectId = await upsertAccessSubject(db, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: member.id as string,
+    workspaceMemberId: member.id as string,
   })
 
   const participant = await db
@@ -181,7 +181,7 @@ async function insertPluginInstallationFixture(
   const installationId = crypto.randomUUID()
   const ownerSubjectId = await upsertAccessSubject(db, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: params.memberId,
+    workspaceMemberId: params.memberId,
   })
   await db
     .insertInto("workspaceResources")
@@ -230,7 +230,7 @@ async function insertEventSourceWithRoot(
 ) {
   const subjectId = await upsertAccessSubject(db, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: params.memberId,
+    workspaceMemberId: params.memberId,
   })
   await db
     .insertInto("workspaceResources")
@@ -1354,7 +1354,7 @@ test(
 
       const memberSubject = await upsertAccessSubject(db, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId,
+        workspaceMemberId: memberId,
       })
       const conversationSubject = await upsertAccessSubject(db, {
         kind: SUBJECT_KIND.CONVERSATION,
@@ -1398,7 +1398,7 @@ test(
         .executeTakeFirstOrThrow()
       const manageMemberSubject = await upsertAccessSubject(db, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: manageMember.id as string,
+        workspaceMemberId: manageMember.id as string,
       })
       await db
         .insertInto("workspaceResourceGrants")

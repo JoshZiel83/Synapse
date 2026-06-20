@@ -98,7 +98,7 @@ async function creatorSubjectIdFor(
     .executeTakeFirstOrThrow()
   return upsertAccessSubject(db as any, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: member.id as string,
+    workspaceMemberId: member.id as string,
   })
 }
 
@@ -235,7 +235,7 @@ test(
       const actorId = await newActor(db, wsId, memberId)
       const memberSubject = await upsertAccessSubject(db, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId,
+        workspaceMemberId: memberId,
       })
 
       const ctx = await buildRuntimePrincipalContext(db, {
@@ -259,7 +259,7 @@ test(
       const actorId = await newActor(db, wsId)
       const memberSubject = await upsertAccessSubject(db, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId,
+        workspaceMemberId: memberId,
       })
 
       const ctx = await buildRuntimePrincipalContext(db, {

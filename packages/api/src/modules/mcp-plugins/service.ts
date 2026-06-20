@@ -363,7 +363,7 @@ function buildInstallationAccessRow(input: {
         : null
   const workspaceMemberId =
     target.subject.kind === "workspace_member"
-      ? (target.subject as { memberId: string }).memberId
+      ? (target.subject as { workspaceMemberId: string }).workspaceMemberId
       : null
   return {
     id: input.id,
@@ -1154,7 +1154,8 @@ export async function createPluginInstallationGrant(input: {
         : null
   const accessTargetWorkspaceMemberId =
     accessTarget.subject.kind === "workspace_member"
-      ? (accessTarget.subject as { memberId: string }).memberId
+      ? (accessTarget.subject as { workspaceMemberId: string })
+          .workspaceMemberId
       : null
   const existing = accessRows.find(
     (entry) =>

@@ -36,7 +36,7 @@ export function buildSubjectRefFromJoin(params: {
       return params.workspaceMemberId
         ? {
             kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-            memberId: params.workspaceMemberId,
+            workspaceMemberId: params.workspaceMemberId,
           }
         : undefined
     case SUBJECT_KIND.ACTOR:

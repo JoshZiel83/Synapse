@@ -71,7 +71,7 @@ async function creatorSubjectId(
   )
   return upsertAccessSubject(db, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId,
+    workspaceMemberId: memberId,
   })
 }
 

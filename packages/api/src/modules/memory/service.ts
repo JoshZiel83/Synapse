@@ -226,7 +226,7 @@ export function presetToOwnerScope(
       return {
         owner: {
           kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-          memberId: ctx.workspaceMemberId,
+          workspaceMemberId: ctx.workspaceMemberId,
         },
       }
     default:
@@ -316,7 +316,7 @@ function memoryMatchesTarget(memory: Memory, target: MemoryAccessTarget) {
     case SUBJECT_KIND.WORKSPACE_MEMBER:
       return Boolean(
         targetWorkspaceMemberId &&
-        memory.owner.memberId === targetWorkspaceMemberId
+        memory.owner.workspaceMemberId === targetWorkspaceMemberId
       )
     case SUBJECT_KIND.REMOTE_AGENT:
       return false
@@ -769,7 +769,10 @@ function resolveSubjectRef(subject: AccessSubject | null): SubjectRef | null {
     case "actor":
       return { kind: SUBJECT_KIND.ACTOR, actorId: subject.id }
     case "workspace_member":
-      return { kind: SUBJECT_KIND.WORKSPACE_MEMBER, memberId: subject.id }
+      return {
+        kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+        workspaceMemberId: subject.id,
+      }
     default:
       // `user` kind isn't workspace-bound and can't anchor a memory grant.
       return null

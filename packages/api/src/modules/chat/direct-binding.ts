@@ -55,7 +55,7 @@ function directIdentityToSubjectRef(
     case PT.WORKSPACE_MEMBER:
       return {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: identity.workspaceMemberId,
+        workspaceMemberId: identity.workspaceMemberId,
       }
     case PT.ACTOR:
       return { kind: SUBJECT_KIND.ACTOR, actorId: identity.actorId }
@@ -72,7 +72,10 @@ function subjectRefToDirectIdentity(
 ): DirectConversationIdentity | null {
   switch (ref.kind) {
     case SUBJECT_KIND.WORKSPACE_MEMBER:
-      return { kind: PT.WORKSPACE_MEMBER, workspaceMemberId: ref.memberId }
+      return {
+        kind: PT.WORKSPACE_MEMBER,
+        workspaceMemberId: ref.workspaceMemberId,
+      }
     case SUBJECT_KIND.ACTOR:
       return { kind: PT.ACTOR, actorId: ref.actorId }
     case SUBJECT_KIND.REMOTE_AGENT:

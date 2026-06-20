@@ -45,7 +45,7 @@ async function resolveParticipantSubjectId(
   ) {
     return upsertAccessSubjectOn(queryable, {
       kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-      memberId: params.workspaceMemberId,
+      workspaceMemberId: params.workspaceMemberId,
     })
   }
   if (

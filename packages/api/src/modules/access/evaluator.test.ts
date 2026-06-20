@@ -62,7 +62,7 @@ async function insertWorkspaceMember(
 async function memberSubjectId(db: AnyDb, memberId: string): Promise<string> {
   return upsertAccessSubject(db, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId,
+    workspaceMemberId: memberId,
   })
 }
 
@@ -208,7 +208,10 @@ test(
         workspaceId,
         workspaceResourceId: actorId,
         target: {
-          subject: { kind: "workspace_member", memberId: guestMemberId },
+          subject: {
+            kind: "workspace_member",
+            workspaceMemberId: guestMemberId,
+          },
         },
         permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.CONTACT_VISIBLE],
         source: "approval",
@@ -919,7 +922,7 @@ test(
         target: {
           subject: {
             kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-            memberId: guestMemberId,
+            workspaceMemberId: guestMemberId,
           },
         },
         permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.MANAGE],
@@ -974,7 +977,7 @@ test(
         target: {
           subject: {
             kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-            memberId: guestMemberId,
+            workspaceMemberId: guestMemberId,
           },
         },
         permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.MANAGE],
@@ -1476,7 +1479,7 @@ async function addMemberParticipant(
 ) {
   const subjectId = await upsertAccessSubject(db, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId,
+    workspaceMemberId: memberId,
   })
   await db
     .insertInto("conversationParticipants")
@@ -1624,7 +1627,7 @@ async function insertAutomationEventSource(
   const id = crypto.randomUUID()
   const creatorSubjectId = await upsertAccessSubject(db, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: createdByMemberId,
+    workspaceMemberId: createdByMemberId,
   })
   await db
     .insertInto("workspaceResources")
@@ -1708,7 +1711,7 @@ async function insertResourceGrant(
       : params.target.subjectKind === "workspace_member"
         ? {
             kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-            memberId: params.target.subjectWorkspaceMemberId!,
+            workspaceMemberId: params.target.subjectWorkspaceMemberId!,
           }
         : {
             kind: SUBJECT_KIND.ACTOR,

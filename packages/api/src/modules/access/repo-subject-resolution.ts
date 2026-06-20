@@ -172,12 +172,12 @@ async function assertPrincipalBelongsToWorkspace(
       const row = await db
         .selectFrom("workspaceMembers")
         .select(["id", "workspaceId"])
-        .where("id", "=", principal.memberId)
+        .where("id", "=", principal.workspaceMemberId)
         .limit(1)
         .executeTakeFirst()
       if (!row || row.workspaceId !== workspaceId) {
         throw new Error(
-          `workspace_member ${principal.memberId} does not belong to workspace ${workspaceId}`
+          `workspace_member ${principal.workspaceMemberId} does not belong to workspace ${workspaceId}`
         )
       }
       return
@@ -349,7 +349,7 @@ async function buildRuntimePrincipalContextCore(
     }
     const memberSubjectId = await ops.upsertSubject({
       kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-      memberId: params.delegatedWorkspaceMemberId,
+      workspaceMemberId: params.delegatedWorkspaceMemberId,
     })
     runtimeSubjectIds.push(memberSubjectId)
   }
@@ -462,11 +462,11 @@ async function assertPrincipalBelongsToWorkspaceOn(
       const row = await runCompilable(
         executor,
         sql<{ workspaceId: string }>`
-          SELECT workspace_id FROM workspace_members WHERE id = ${principal.memberId} LIMIT 1`
+          SELECT workspace_id FROM workspace_members WHERE id = ${principal.workspaceMemberId} LIMIT 1`
       )
       if (row.rows.length === 0 || row.rows[0].workspaceId !== workspaceId) {
         throw new Error(
-          `workspace_member ${principal.memberId} does not belong to workspace ${workspaceId}`
+          `workspace_member ${principal.workspaceMemberId} does not belong to workspace ${workspaceId}`
         )
       }
       return
@@ -646,7 +646,7 @@ export async function computeRuntimeScopeSubjectIds(
     if (!anyActive && params.workspaceMemberId) {
       const memberSubjectId = await upsertAccessSubject(db, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: params.workspaceMemberId,
+        workspaceMemberId: params.workspaceMemberId,
       })
       anyActive =
         anyActive ||
@@ -702,7 +702,7 @@ export async function computeRuntimeSubjectIdsForVisibility(
     ids.push(
       await upsertAccessSubject(db, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: params.workspaceMemberId,
+        workspaceMemberId: params.workspaceMemberId,
       })
     )
   }
@@ -754,7 +754,7 @@ export async function computeRuntimeSubjectIdsForVisibility(
     if (!anyActive && params.workspaceMemberId) {
       const memberSubjectId = await upsertAccessSubject(db, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: params.workspaceMemberId,
+        workspaceMemberId: params.workspaceMemberId,
       })
       anyActive =
         anyActive ||

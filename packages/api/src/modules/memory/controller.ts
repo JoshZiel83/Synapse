@@ -67,7 +67,10 @@ function accessSubjectToSubjectRef(subject: AccessSubject): SubjectRef | null {
     case "actor":
       return { kind: SUBJECT_KIND.ACTOR, actorId: subject.id }
     case "workspace_member":
-      return { kind: SUBJECT_KIND.WORKSPACE_MEMBER, memberId: subject.id }
+      return {
+        kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+        workspaceMemberId: subject.id,
+      }
     default:
       return null
   }

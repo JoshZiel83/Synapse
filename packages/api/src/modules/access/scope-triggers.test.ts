@@ -51,7 +51,7 @@ async function creatorSubjectIdFor(
   const memberId = await newWorkspaceMember(db, workspaceId, "creator")
   return upsertAccessSubject(db as any, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId,
+    workspaceMemberId: memberId,
   })
 }
 
@@ -189,7 +189,7 @@ test("isScopeEligibleSubject only accepts workspace / conversation", () => {
   assert.equal(
     isScopeEligibleSubject({
       kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-      memberId: "x",
+      workspaceMemberId: "x",
     }),
     false
   )
@@ -200,7 +200,7 @@ test("isWorkspaceBoundSubjectKind excludes user/external/platform", () => {
   for (const ref of [
     { kind: SUBJECT_KIND.ACTOR, actorId: "x" },
     { kind: SUBJECT_KIND.REMOTE_AGENT, remoteAgentId: "x" },
-    { kind: SUBJECT_KIND.WORKSPACE_MEMBER, memberId: "x" },
+    { kind: SUBJECT_KIND.WORKSPACE_MEMBER, workspaceMemberId: "x" },
     { kind: SUBJECT_KIND.WORKSPACE, workspaceId: "x" },
     { kind: SUBJECT_KIND.CONVERSATION, conversationId: "x" },
   ] as SubjectRef[]) {

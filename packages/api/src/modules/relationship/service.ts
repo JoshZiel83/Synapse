@@ -72,7 +72,7 @@ function buildRelationshipPeerSubjectRef(input: {
       }
       return {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: input.peerWorkspaceMemberId,
+        workspaceMemberId: input.peerWorkspaceMemberId,
       }
     case "actor":
       if (!input.peerActorId) {
@@ -208,7 +208,7 @@ async function getWorkspaceMemberSummaryById(
 async function getMemberRelationshipProfileRow(workspaceMemberId: string) {
   const subjectId = await upsertAccessSubjectDefault({
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: workspaceMemberId,
+    workspaceMemberId: workspaceMemberId,
   })
   const row = await repo.selectMemberRelationshipProfileBySubjectId(subjectId)
   if (!row) {
@@ -472,7 +472,7 @@ async function grantActorContactVisibilityToMember(params: {
       target: {
         subject: {
           kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-          memberId: params.requesterWorkspaceMemberId,
+          workspaceMemberId: params.requesterWorkspaceMemberId,
         },
       },
       permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.CONTACT_VISIBLE],
@@ -497,7 +497,7 @@ async function grantRemoteAgentContactVisibilityToMember(params: {
       target: {
         subject: {
           kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-          memberId: params.requesterWorkspaceMemberId,
+          workspaceMemberId: params.requesterWorkspaceMemberId,
         },
       },
       permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.CONTACT_VISIBLE],
@@ -636,7 +636,7 @@ async function createActorAccessRequest(params: {
       grantee: {
         subject: {
           kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-          memberId: params.requesterWorkspaceMemberId,
+          workspaceMemberId: params.requesterWorkspaceMemberId,
         },
       },
       requestedPermissions: [
@@ -687,7 +687,7 @@ async function createRemoteAgentAccessRequest(params: {
       grantee: {
         subject: {
           kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-          memberId: params.requesterWorkspaceMemberId,
+          workspaceMemberId: params.requesterWorkspaceMemberId,
         },
       },
       requestedPermissions: [
@@ -720,7 +720,7 @@ async function loadViewerDirectConversationMap(workspaceMemberId: string) {
   // columns.
   const viewerSubjectId = await upsertAccessSubjectDefault({
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: workspaceMemberId,
+    workspaceMemberId: workspaceMemberId,
   })
   const rows =
     await repo.selectDirectConversationBindingsForSubject(viewerSubjectId)
@@ -771,7 +771,7 @@ async function hasWorkspaceResourceContactVisible(params: {
   })
   const memberSubjectId = await upsertAccessSubjectDefault({
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: viewer.workspaceMemberId,
+    workspaceMemberId: viewer.workspaceMemberId,
   })
   const grant = await repo.selectWorkspaceResourceContactVisibleGrant({
     workspaceResourceId: params.workspaceResourceId,

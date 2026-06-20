@@ -1140,7 +1140,7 @@ export async function findSkillIdsByBindingFilter(params: {
   resolvedTarget: {
     subject:
       | { kind: "workspace" }
-      | { kind: "workspace_member"; memberId: string }
+      | { kind: "workspace_member"; workspaceMemberId: string }
       | { kind: "conversation"; conversationId: string }
       | { kind: "actor"; actorId: string }
       | { kind: "remote_agent"; remoteAgentId: string }
@@ -1189,7 +1189,7 @@ export async function findSkillIdsByBindingFilter(params: {
           .where(
             "subj.workspaceMemberId",
             "=",
-            (target.subject as { memberId: string }).memberId
+            (target.subject as { workspaceMemberId: string }).workspaceMemberId
           )
         break
       case "conversation":

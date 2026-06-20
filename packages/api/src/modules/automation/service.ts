@@ -1425,7 +1425,7 @@ async function resolveAutomationEventSourceRootSubjects(
   const ownerSubjectId = creator.workspaceMemberId
     ? await upsertAccessSubjectOnTrx(trx, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: creator.workspaceMemberId,
+        workspaceMemberId: creator.workspaceMemberId,
       })
     : null
   let createdBySubjectId = ownerSubjectId

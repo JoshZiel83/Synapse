@@ -154,7 +154,8 @@ export async function validateConversationScopedAccessTarget(params: {
       // isn't actually in C.
       activeParticipantCheck = {
         participantType: "workspace_member",
-        principalId: (params.target.subject as { memberId: string }).memberId,
+        principalId: (params.target.subject as { workspaceMemberId: string })
+          .workspaceMemberId,
         principalKind: "workspace_member",
       }
     }
@@ -216,7 +217,7 @@ export async function validateConversationScopedAccessTarget(params: {
     case "workspace_member":
       principalRef = {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: activeParticipantCheck.principalId,
+        workspaceMemberId: activeParticipantCheck.principalId,
       } as const
       break
   }

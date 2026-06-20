@@ -54,7 +54,7 @@ async function newCreatorSubjectId(
   const memberId = await newWorkspaceMember(db, workspaceId)
   return upsertAccessSubject(db as any, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId,
+    workspaceMemberId: memberId,
   })
 }
 
@@ -269,7 +269,7 @@ test(
         target: {
           subject: {
             kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-            memberId,
+            workspaceMemberId: memberId,
           },
           // no scope
         },
