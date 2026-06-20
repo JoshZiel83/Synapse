@@ -209,7 +209,7 @@ export function buildInstalledSkillPayload(
   const effectiveConversationTypeMask =
     resolveInstalledSkillEffectiveConversationTypeMask({
       workspaceConversationTypeMask,
-      conversation_type_mask_override: row.conversationTypeMaskOverride,
+      conversationTypeMaskOverride: row.conversationTypeMaskOverride,
     })
 
   return {

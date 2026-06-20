@@ -161,7 +161,7 @@ function buildConversationPresentation(params: {
     row.kind === CONVERSATION_KIND.DIRECT
       ? ("direct" as const)
       : ("group" as const)
-  const isIm = Boolean(row.is_im ?? row.isIm)
+  const isIm = Boolean(row.is_im)
   const canRename =
     row.kind !== CONVERSATION_KIND.DIRECT && canManageConversation
   const canManageConversationParticipants =
@@ -235,7 +235,7 @@ export async function mapConversationSummaryView(
   return {
     id: row.id,
     kind: row.kind,
-    isIm: Boolean(row.is_im ?? row.isIm),
+    isIm: Boolean(row.is_im),
     status: hasOpenLane
       ? CONVERSATION_STATUS.ACTIVE
       : CONVERSATION_STATUS.COMPLETED,

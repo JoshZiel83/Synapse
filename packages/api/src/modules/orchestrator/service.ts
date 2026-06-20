@@ -106,15 +106,15 @@ async function emitUserVisibleSystemNotice<
   const session = await getSession(params.sessionId)
   if (!session) return
 
-  const members = await listConversationParticipants(session.conversation_id)
+  const members = await listConversationParticipants(session.conversationId)
   const targetUserMembers = members.filter(
-    (member: any) => member.state === "active" && member.user_id
+    (member) => member.state === "active" && member.userId
   )
   if (targetUserMembers.length === 0) return
 
   await createConversationEvent({
     workspaceId: params.workspaceId,
-    conversationId: session.conversation_id,
+    conversationId: session.conversationId,
     sessionId: params.sessionId,
     eventType: params.eventType,
     timelinePolicy: "users_only",
@@ -124,7 +124,7 @@ async function emitUserVisibleSystemNotice<
     },
     eventPayload: params.eventPayload,
     restrictedAudienceParticipantIds: targetUserMembers.map(
-      (member: any) => member.id
+      (member) => member.id
     ),
   })
 }
@@ -199,7 +199,7 @@ async function handleCreateMemory(
     normalizedPreset as MemoryPreset
   )
     ? "participant_private"
-    : !session?.conversation_id &&
+    : !session?.conversationId &&
         (normalizedPreset === "participant_private" ||
           normalizedPreset === "conversation_shared")
       ? "actor_private"
@@ -208,7 +208,7 @@ async function handleCreateMemory(
   const conversationId =
     effectivePreset === "participant_private" ||
     effectivePreset === "conversation_shared"
-      ? session?.conversation_id
+      ? session?.conversationId
       : undefined
 
   const ownerScope = presetToOwnerScope(effectivePreset, {

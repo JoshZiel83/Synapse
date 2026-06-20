@@ -43,7 +43,7 @@ function conversation(
     id: CONVERSATION_ID,
     kind: "group",
     is_im: false,
-    workspace_id: WORKSPACE_ID,
+    workspaceId: WORKSPACE_ID,
     ...overrides,
   }
 }
@@ -176,7 +176,7 @@ test("workspace-subject grant denies when the subject's workspace differs from t
     automationEventSourceGrantApplies({
       row,
       context: context(),
-      conversation: conversation({ workspace_id: crypto.randomUUID() }),
+      conversation: conversation({ workspaceId: crypto.randomUUID() }),
     }),
     false
   )
@@ -192,7 +192,7 @@ test("workspace-subject grant still authorizes a foreign-workspace conversation 
     automationEventSourceGrantApplies({
       row,
       context: context(),
-      conversation: conversation({ workspace_id: crypto.randomUUID() }),
+      conversation: conversation({ workspaceId: crypto.randomUUID() }),
     }),
     true
   )

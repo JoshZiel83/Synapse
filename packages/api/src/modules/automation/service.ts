@@ -922,7 +922,7 @@ export function automationEventSourceGrantApplies(params: {
     case "workspace":
       return (
         ((subject as { workspaceId: string }).workspaceId || null) ===
-          ((params.conversation.workspace_id as string | null | undefined) ||
+          ((params.conversation.workspaceId as string | null | undefined) ||
             null) ||
         ((subject as { workspaceId: string }).workspaceId || null) ===
           (params.row.workspaceId || null)

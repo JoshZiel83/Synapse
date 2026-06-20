@@ -16,24 +16,26 @@ import {
 import { sortAvailableSkillsForDiscovery } from "../skills/discovery-order.js"
 import { buildReplyToRefUsageGuidance } from "./session-tool-guidance.js"
 
+// camelCase structural subset of the producer ChatParticipantRow (chat/repo.ts).
+// Typed so the snake_case reads that broke after the CamelCasePlugin cutover
+// fail to compile. `| null` mirrors ChatParticipantRow so it is assignable here.
 export interface ConversationParticipantInfo {
-  id?: string
-  participant_type?: string
-  actor_id?: string
-  user_id?: string
-  participant_name?: string
-  participant_title?: string
-  participant_role?: string
-  user_name?: string
-  display_name?: string
-  transport_display_name?: string
-  transport_external_id?: string
-  linked_user_name?: string
-  user_id_ref?: string
-  session_status?: string
-  actor_docs?: ActorDoc[]
-  actor_can_represent_user?: boolean
-  actor_current_version?: number
+  id?: string | null
+  participantType?: string | null
+  actorId?: string | null
+  userId?: string | null
+  participantName?: string | null
+  participantTitle?: string | null
+  participantRole?: string | null
+  userName?: string | null
+  displayName?: string | null
+  transportDisplayName?: string | null
+  transportExternalId?: string | null
+  linkedUserName?: string | null
+  sessionStatus?: string | null
+  actorDocs?: unknown
+  actorCanRepresentUser?: boolean | null
+  actorCurrentVersion?: number | string | null
 }
 
 function readDecodedArray<T>(value: unknown): T[] {
@@ -48,7 +50,7 @@ function actorSource(actor: any) {
 function parseActorDocs(actor: any): ActorDoc[] {
   const source = actorSource(actor)
   return normalizeActorDocs(
-    readDecodedArray<ActorDoc>(source.docs ?? actor.actor_docs)
+    readDecodedArray<ActorDoc>(source.docs ?? actor.actorDocs)
   )
 }
 
@@ -112,17 +114,17 @@ function renderDocSections(
 }
 
 function buildRosterEntry(member: ConversationParticipantInfo): string {
-  const title = member.participant_title || member.participant_role || "Actor"
+  const title = member.participantTitle || member.participantRole || "Actor"
   const displayName =
-    member.participant_name || member.display_name || "Unknown actor"
+    member.participantName || member.displayName || "Unknown actor"
   const docs = parseActorDocs(member)
     .filter((doc) => isDocVisible(doc, "multi_member_conversation", false))
     .sort((left, right) => right.priority - left.priority)
 
   const summary = docs.map((doc) => summarizeDoc(doc, 120)).find(Boolean) || ""
 
-  const version = member.actor_current_version
-    ? ` v${member.actor_current_version}`
+  const version = member.actorCurrentVersion
+    ? ` v${member.actorCurrentVersion}`
     : ""
   const participantIdNote = member.id ? ` [participantId=${member.id}]` : ""
   return `- [actor] **${displayName}**${version} — ${title}${participantIdNote}${summary ? ` — ${summary}` : ""}`
@@ -147,9 +149,9 @@ function hasHumanConversationParticipant(
   if (!participants || participants.length === 0) return false
   return participants.some(
     (participant) =>
-      Boolean(participant.user_id) ||
-      participant.participant_type === "external" ||
-      Boolean(participant.transport_external_id)
+      Boolean(participant.userId) ||
+      participant.participantType === "external" ||
+      Boolean(participant.transportExternalId)
   )
 }
 
@@ -230,11 +232,9 @@ export function buildActorPrompt(
     source.displayName || source.name || actor.displayName || "Actor"
   const actorTitle =
     source.title || source.role || actor.title || actor.role || "Actor"
-  const actorVersion = actor.current_version ?? actor.currentVersion ?? 1
+  const actorVersion = actor.currentVersion ?? 1
   const canRepresentUser = Boolean(
-    source.canRepresentUser ??
-    actor.can_represent_user ??
-    actor.canRepresentUser
+    source.canRepresentUser ?? actor.canRepresentUser
   )
 
   parts.push(
@@ -332,15 +332,15 @@ export function buildActorPrompt(
   if (conversationParticipants && conversationParticipants.length > 0) {
     const isDirectThread = threadSemantics.isDirectConversation
     const exampleRecipient =
-      conversationParticipants.find((member) => member.user_id)?.user_name ||
+      conversationParticipants.find((member) => member.userId)?.userName ||
       conversationParticipants.find(
         (member) =>
-          member.participant_type === "external" || member.transport_external_id
-      )?.transport_display_name ||
+          member.participantType === "external" || member.transportExternalId
+      )?.transportDisplayName ||
       conversationParticipants.find(
         (member) =>
-          member.participant_type === "external" || member.transport_external_id
-      )?.display_name ||
+          member.participantType === "external" || member.transportExternalId
+      )?.displayName ||
       "User"
     const roster = [
       "# Conversation Participants",
@@ -351,28 +351,28 @@ export function buildActorPrompt(
       "The XML `<conversation_manifest>` is the authoritative roster. Use `participantId` from that manifest for `<mention .../>`.",
       "",
       ...conversationParticipants.flatMap((member) => {
-        if (member.user_id) {
+        if (member.userId) {
           const participantIdNote = member.id
             ? ` [participantId=${member.id}]`
             : ""
           return [
-            `- [workspace_member] **${member.user_name || "User"}** — workspace member${participantIdNote}`,
+            `- [workspace_member] **${member.userName || "User"}** — workspace member${participantIdNote}`,
           ]
         }
-        if (member.actor_id && member.actor_id !== actor.id) {
+        if (member.actorId && member.actorId !== actor.id) {
           return [buildRosterEntry(member)]
         }
         if (
-          member.participant_type === "external" ||
-          member.transport_external_id
+          member.participantType === "external" ||
+          member.transportExternalId
         ) {
           const externalName =
-            member.transport_display_name ||
-            member.display_name ||
-            member.linked_user_name ||
+            member.transportDisplayName ||
+            member.displayName ||
+            member.linkedUserName ||
             "External participant"
-          const mapping = member.linked_user_name
-            ? `; linked workspace user: ${member.linked_user_name}`
+          const mapping = member.linkedUserName
+            ? `; linked workspace user: ${member.linkedUserName}`
             : ""
           const participantIdNote = member.id
             ? ` [participantId=${member.id}]`

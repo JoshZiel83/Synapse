@@ -1175,10 +1175,7 @@ export function startSessionThinkingWorker() {
                   session = refreshedSession
                 }
                 return {
-                  collaborationMode:
-                    session?.collaborationMode ||
-                    session?.collaboration_mode ||
-                    "default",
+                  collaborationMode: session?.collaborationMode || "default",
                   system: session ? buildSystemPrompt(session) : system,
                 }
               },

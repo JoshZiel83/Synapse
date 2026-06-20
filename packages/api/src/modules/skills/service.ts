@@ -641,11 +641,11 @@ export function resolveInstalledSkillSourceConversationTypeMask(
 
 export function resolveInstalledSkillEffectiveConversationTypeMask(row: {
   workspaceConversationTypeMask: number
-  conversation_type_mask_override: number | null
+  conversationTypeMaskOverride: number | null
 }) {
   return resolveNarrowedConversationTypeMask(
     row.workspaceConversationTypeMask,
-    row.conversation_type_mask_override
+    row.conversationTypeMaskOverride
   )
 }
 
@@ -1794,8 +1794,7 @@ export async function getInstalledSkillGrantState(
       effectiveConversationTypeMask:
         resolveInstalledSkillEffectiveConversationTypeMask({
           workspaceConversationTypeMask,
-          conversation_type_mask_override:
-            skillRow.conversationTypeMaskOverride,
+          conversationTypeMaskOverride: skillRow.conversationTypeMaskOverride,
         }),
       reason: "Choose who can use this installed skill.",
       effectivePermissions:
@@ -2567,8 +2566,7 @@ export async function listVisibleSkills(input: {
             const instanceConversationTypeMask =
               resolveInstalledSkillEffectiveConversationTypeMask({
                 workspaceConversationTypeMask,
-                conversation_type_mask_override:
-                  row.conversationTypeMaskOverride,
+                conversationTypeMaskOverride: row.conversationTypeMaskOverride,
               })
             const bindings = (bindingsBySkillId.get(row.skillId) || []).filter(
               (binding) =>

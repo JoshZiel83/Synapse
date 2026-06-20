@@ -77,7 +77,7 @@ test("PUT wrong-kind account → 404 with correct code, no mutation", async () =
       // simulates `loadTransportAccountRow` returning a Feishu row.
       const existing = {
         id: request.params.accountId,
-        transport_kind: "feishu",
+        transportKind: "feishu" as const,
       }
       assertExpectedTransportKind(existing, "wecom")
       // Production would now run the UPDATE. Flip the flag so we can
@@ -118,7 +118,7 @@ test("PUT matching-kind account → guard does NOT fire (passes through)", async
     async (request: { params: { wid: string; accountId: string } }) => {
       const existing = {
         id: request.params.accountId,
-        transport_kind: "wecom",
+        transportKind: "wecom" as const,
       }
       assertExpectedTransportKind(existing, "wecom")
       updateRan = true
@@ -142,13 +142,10 @@ test("assertExpectedTransportKind: no-op when expectedTransportKind omitted", ()
   // the helper must be a pass-through in that case (otherwise the
   // generic update endpoint would always 404).
   assert.doesNotThrow(() =>
-    assertExpectedTransportKind({ id: "x", transport_kind: "wecom" }, undefined)
+    assertExpectedTransportKind({ id: "x", transportKind: "wecom" }, undefined)
   )
   assert.doesNotThrow(() =>
-    assertExpectedTransportKind(
-      { id: "x", transport_kind: "feishu" },
-      undefined
-    )
+    assertExpectedTransportKind({ id: "x", transportKind: "feishu" }, undefined)
   )
 })
 
@@ -157,7 +154,7 @@ test("assertExpectedTransportKind: error shape carries statusCode + code + messa
   // this is the contract the error handler depends on.
   try {
     assertExpectedTransportKind(
-      { id: "acct-42", transport_kind: "feishu" },
+      { id: "acct-42", transportKind: "feishu" },
       "wecom"
     )
     assert.fail("expected throw")

@@ -42,9 +42,9 @@ test("buildActorPrompt injects request-user-input guidance for human conversatio
     [
       {
         id: "participant-user",
-        participant_type: "workspace_member",
-        user_id: "user-1",
-        user_name: "Ada",
+        participantType: "workspace_member",
+        userId: "user-1",
+        userName: "Ada",
       },
     ],
     "direct",
@@ -65,9 +65,9 @@ test("buildActorPrompt injects stronger plan mode guidance", () => {
     [
       {
         id: "participant-user",
-        participant_type: "workspace_member",
-        user_id: "user-1",
-        user_name: "Ada",
+        participantType: "workspace_member",
+        userId: "user-1",
+        userName: "Ada",
       },
     ],
     "direct",
@@ -95,9 +95,9 @@ test("buildActorPrompt teaches direct threads not to overuse replyToRef", () => 
     [
       {
         id: "participant-user",
-        participant_type: "workspace_member",
-        user_id: "user-1",
-        user_name: "Ada",
+        participantType: "workspace_member",
+        userId: "user-1",
+        userName: "Ada",
       },
     ],
     "direct",
@@ -107,6 +107,54 @@ test("buildActorPrompt teaches direct threads not to overuse replyToRef", () => 
 
   assert.match(prompt.system, /omit `replyToRef` by default/i)
   assert.match(prompt.system, /Do not add `replyToRef` mechanically/i)
+})
+
+// Regression for the CamelCasePlugin-cutover residue (rename-propagation audit):
+// the roster must read camelCase ChatParticipantRow keys for the actor + external
+// branches too (snake reads previously rendered "Unknown actor" / "External
+// participant" with no version/title).
+test("buildActorPrompt renders actor and external roster entries from camelCase participants", () => {
+  const prompt = buildActorPrompt(
+    {
+      id: "actor-1",
+      definition: { name: "Planner", title: "Engineer" },
+      currentVersion: 1,
+    },
+    undefined,
+    undefined,
+    undefined,
+    [
+      {
+        id: "p-actor",
+        participantType: "actor",
+        actorId: "actor-9",
+        participantName: "Helper",
+        participantTitle: "Specialist",
+        actorCurrentVersion: 3,
+      },
+      {
+        id: "p-external",
+        participantType: "external",
+        transportExternalId: "ext-1",
+        transportDisplayName: "Wei",
+      },
+      {
+        id: "p-user",
+        participantType: "workspace_member",
+        userId: "user-2",
+        userName: "Sam",
+      },
+    ],
+    "group",
+    undefined,
+    "default"
+  )
+
+  assert.match(prompt.system, /# Conversation Participants/)
+  assert.match(prompt.system, /\[actor\] \*\*Helper\*\* v3/)
+  assert.match(prompt.system, /Specialist/)
+  assert.match(prompt.system, /\[external\] \*\*Wei\*\*/)
+  assert.match(prompt.system, /\[workspace_member\] \*\*Sam\*\*/)
 })
 
 test("buildActorPrompt only consumes decoded actor doc and specialty arrays", () => {
@@ -186,9 +234,9 @@ test("buildActorPrompt rejects plan mode in group conversations", () => {
         [
           {
             id: "participant-user",
-            participant_type: "workspace_member",
-            user_id: "user-1",
-            user_name: "Ada",
+            participantType: "workspace_member",
+            userId: "user-1",
+            userName: "Ada",
           },
         ],
         "group",
@@ -232,9 +280,9 @@ test("buildActorPrompt no longer emits legacy relay routing guidance for builtin
     [
       {
         id: "participant-user",
-        participant_type: "workspace_member",
-        user_id: "user-1",
-        user_name: "Ada",
+        participantType: "workspace_member",
+        userId: "user-1",
+        userName: "Ada",
       },
     ],
     "direct",
