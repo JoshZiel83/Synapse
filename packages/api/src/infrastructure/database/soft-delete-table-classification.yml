@@ -1300,8 +1300,8 @@ foreignKeys:
     setNull:
       canLose: false
       needsSnapshot: true
-      snapshotColumn: granted_by_workspace_member_id_snapshot
-    _child: remote_agent_group_task_grants(granted_by_workspace_member_id)
+      snapshotColumn: created_by_workspace_member_id_snapshot
+    _child: remote_agent_group_task_grants(created_by_workspace_member_id)
     _parent: workspace_members(id)
     _was: SET NULL
   digest:0fae820b0d5d3fd9:
@@ -1700,8 +1700,8 @@ foreignKeys:
     setNull:
       canLose: false
       needsSnapshot: true
-      snapshotColumn: granted_by_workspace_member_id_snapshot
-    _child: model_group_grants(granted_by_workspace_member_id)
+      snapshotColumn: created_by_workspace_member_id_snapshot
+    _child: model_group_grants(created_by_workspace_member_id)
     _parent: workspace_members(id)
     _was: SET NULL
   digest:37ac1963eda81802:

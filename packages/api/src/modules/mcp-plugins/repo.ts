@@ -1065,7 +1065,16 @@ export async function listPluginInstallationAccessRows(
       "subj.actorId",
       "subj.remoteAgentId",
       "subj.workspaceMemberId",
-      "scope.conversationId",
+      // A conversation can be the grant SUBJECT (subj.conversation_id, scope is
+      // NULL) or the grant SCOPE (scope.conversation_id). Coalesce both so a
+      // conversation-subject grant keeps its bound conversation instead of
+      // null-ing out and being re-targeted workspace-wide downstream. Mirrors
+      // loadVisiblePluginGrants (scopeConversationId ?? subjectConversationId).
+      sql<
+        string | null
+      >`COALESCE(scope.conversation_id, subj.conversation_id)`.as(
+        "conversationId"
+      ),
       "resource_grant.conversationTypeMaskOverride",
       "resource_grant.status",
       "resource_grant.source",
@@ -1501,7 +1510,7 @@ export type VisiblePluginRow = {
   transport: PluginSpecTransport
   entryPoint: string | null
   toolManifest: VisiblePluginToolManifestEntry[]
-  reuseScope: "turn" | "session" | "workspace" | "conversation" | "actor" | null
+  reuseScope: ReuseScope | null
   conversationTypeMaskOverride: number | null
 }
 

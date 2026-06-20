@@ -113,6 +113,7 @@ export async function selectWorkspaceMemberId(
     .select("id")
     .where("workspaceId", "=", workspaceId)
     .where("userId", "=", userId)
+    .where("status", "=", "active")
     .limit(1)
     .executeTakeFirst()
   return member?.id ?? null

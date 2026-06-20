@@ -1498,10 +1498,14 @@ async function createIntegrationAutomationEventSource(
     const nextStatus = input.status || "active"
     const reusedName = input.name?.trim() || template.name
     // §4.1: display_name + status live on the workspace_resources root now.
+    // Clear any soft-delete tombstone: the reuse probe can match a previously
+    // soft-deleted source (its unique slot is still occupied), so resurrecting
+    // it must make it visible to *_live reads again instead of dead-ending.
     await updateWorkspaceResourceRootDefault({
       id: existing.id,
       displayName: reusedName,
       status: nextStatus,
+      deletedAt: null,
     })
     await updateAutomationEventSourceRow({
       workspaceId,
@@ -1694,10 +1698,13 @@ export async function createAutomationEventSource(
 
   if (existing) {
     // §4.1: display_name + status live on the workspace_resources root now.
+    // Clear any soft-delete tombstone so resurrecting a previously soft-deleted
+    // source makes it visible to *_live reads again (see integration path).
     await updateWorkspaceResourceRootDefault({
       id: existing.id,
       displayName: input.name.trim(),
       status: input.status || "active",
+      deletedAt: null,
     })
     await updateAutomationEventSourceRow({
       workspaceId,
