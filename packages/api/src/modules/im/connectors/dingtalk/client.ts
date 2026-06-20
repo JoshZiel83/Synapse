@@ -163,6 +163,18 @@ export function _resetDingtalkTokenCache(): void {
 // ───────────────────────── Business success ─────────────────────────
 
 /**
+ * Normalize a raw `errcode` (which may arrive as a number or a string) to a
+ * number, or `undefined` when it is neither a number nor a non-empty string.
+ */
+function parseErrcodeNum(errcodeRaw: unknown): number | undefined {
+  if (typeof errcodeRaw === "number") return errcodeRaw
+  if (typeof errcodeRaw === "string" && errcodeRaw.trim() !== "") {
+    return Number(errcodeRaw)
+  }
+  return undefined
+}
+
+/**
  * Explicit-failure-first response classifier.
  *
  * Failure signals (any one wins): errcode != 0, success === false,
@@ -180,12 +192,7 @@ export function isDingtalkBusinessSuccess(resp: unknown): boolean {
 
   // Normalize: errcode could be string or number; code is string.
   const errcodeRaw = r.errcode
-  const errcodeNum =
-    typeof errcodeRaw === "number"
-      ? errcodeRaw
-      : typeof errcodeRaw === "string" && errcodeRaw.trim() !== ""
-        ? Number(errcodeRaw)
-        : undefined
+  const errcodeNum = parseErrcodeNum(errcodeRaw)
   const errcode = Number.isFinite(errcodeNum) ? errcodeNum : undefined
 
   const codeRaw = r.code

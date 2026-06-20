@@ -111,7 +111,7 @@ export function startSidecar(opts: SidecarOptions): SidecarHandle {
       const frame = traceparent
         ? { jsonrpc: "2.0", id, method, params, traceparent }
         : { jsonrpc: "2.0", id, method, params }
-      child.stdin?.write(JSON.stringify(frame) + "\n")
+      child.stdin?.write(`${JSON.stringify(frame)}\n`)
     })
   emitter.notify = (method, params) => {
     if (exited) return
@@ -119,7 +119,7 @@ export function startSidecar(opts: SidecarOptions): SidecarHandle {
     const frame = traceparent
       ? { jsonrpc: "2.0", method, params, traceparent }
       : { jsonrpc: "2.0", method, params }
-    child.stdin?.write(JSON.stringify(frame) + "\n")
+    child.stdin?.write(`${JSON.stringify(frame)}\n`)
   }
   emitter.stop = async () => {
     try {

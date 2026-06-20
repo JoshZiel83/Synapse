@@ -469,12 +469,11 @@ export function startSessionThinkingWorker() {
 
         let conversationParticipants: any[] | undefined
         let promptConversationParticipants: any[] | undefined
-        let participantEntries: ConversationParticipantEntry[] = []
+        const participantEntries: ConversationParticipantEntry[] = []
         let contextManifest: ProviderContextManifest | undefined
         let actorParticipantId: string | undefined
         let lastKnownConversationSequence = 0
         let contextItems: CanonicalContextItem[]
-        let contextWindow: ProviderContextWindow
         if (conversationId) {
           conversationParticipants =
             await listConversationParticipants(conversationId)
@@ -1001,7 +1000,7 @@ export function startSessionThinkingWorker() {
           }
         }
 
-        contextWindow = await buildProviderContextWindow({
+        const contextWindow = await buildProviderContextWindow({
           conversationId: session.conversationId,
           sessionId,
           items: finalContextItems,
@@ -1066,23 +1065,23 @@ export function startSessionThinkingWorker() {
           }
         })()
 
-        const buildSystemPrompt = (currentSession: any) =>
-          buildActorPrompt(
+        const buildSystemPrompt = (currentSession: any) => {
+          const planMode = isPlanCollaborationMode(
+            currentSession.collaborationMode || "default"
+          )
+          const promptMcpTools =
+            !planMode && mcpTools.tools.length > 0 ? mcpTools.tools : undefined
+          return buildActorPrompt(
             actorPromptSource,
             undefined,
             undefined,
-            isPlanCollaborationMode(
-              currentSession.collaborationMode || "default"
-            )
-              ? undefined
-              : mcpTools.tools.length > 0
-                ? mcpTools.tools
-                : undefined,
+            promptMcpTools,
             promptConversationParticipants || conversationParticipants,
             currentSession.conversationKind,
             availableSkills,
             currentSession.collaborationMode || "default"
           ).system
+        }
 
         const system = buildSystemPrompt(session)
 
@@ -1282,10 +1281,9 @@ export function startSessionThinkingWorker() {
               const commitConflicts = Object.entries(commit.conflictsBySubpath)
               if (commitConflicts.length > 0) {
                 log.warn(
-                  `[session-thinking] sandbox commit conflicts for ${sessionId}: ` +
-                    commitConflicts
-                      .map(([sp, paths]) => `${sp}: ${paths.join(", ")}`)
-                      .join("; ")
+                  `[session-thinking] sandbox commit conflicts for ${sessionId}: ${commitConflicts
+                    .map(([sp, paths]) => `${sp}: ${paths.join(", ")}`)
+                    .join("; ")}`
                 )
               }
             } catch (err) {

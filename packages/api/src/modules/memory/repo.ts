@@ -1188,6 +1188,14 @@ function hasPrincipalSearchContext(
   return Boolean(input.actorId || input.workspaceMemberId)
 }
 
+function resolveMemorySearchStates(
+  input: Pick<MemorySearchCandidateFilterInput, "states" | "statuses">
+): MemoryItemState[] | string[] {
+  if (input.states && input.states.length > 0) return input.states
+  if (input.statuses && input.statuses.length > 0) return input.statuses
+  return ["active"]
+}
+
 function buildMemorySearchWhereClause(params: {
   workspaceId: string
   input: MemorySearchCandidateFilterInput
@@ -1240,12 +1248,7 @@ function buildMemorySearchWhereClause(params: {
     )
   }
 
-  const states =
-    input.states && input.states.length > 0
-      ? input.states
-      : input.statuses && input.statuses.length > 0
-        ? input.statuses
-        : ["active"]
+  const states = resolveMemorySearchStates(input)
   conditions.push(sql`${item}.state::text = ANY(${states}::text[])`)
 
   if (hasPrincipalSearchContext(input)) {

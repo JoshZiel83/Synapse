@@ -76,5 +76,5 @@ export function getTwemojiUrl(value: string | undefined | null): string | null {
   const codePoint = toCodePoint(trimmed)
   if (!codePoint) return null
 
-  return TWEMOJI_ASSET_BASE + "svg/" + codePoint + ".svg"
+  return `${TWEMOJI_ASSET_BASE}svg/${codePoint}.svg`
 }

@@ -96,15 +96,22 @@ export const moderationFeature: SubFeature = {
       throw new Error("Provide at least one of: text, fileRef, fileRefs")
     }
 
+    const resolveModerationInput = ():
+      | string
+      | ModerationInputBlock
+      | ModerationInputBlock[] => {
+      if (blocks.length === 1 && blocks[0].type === "text") {
+        return blocks[0].text
+      }
+      if (blocks.length === 1) {
+        return blocks[0]
+      }
+      return blocks
+    }
     const moderationInput:
       | string
       | ModerationInputBlock
-      | ModerationInputBlock[] =
-      blocks.length === 1 && blocks[0].type === "text"
-        ? blocks[0].text
-        : blocks.length === 1
-          ? blocks[0]
-          : blocks
+      | ModerationInputBlock[] = resolveModerationInput()
 
     try {
       const response = await fetch(`${ZHIPU_API_BASE}/moderations`, {

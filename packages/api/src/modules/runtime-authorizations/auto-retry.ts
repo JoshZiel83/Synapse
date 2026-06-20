@@ -121,8 +121,7 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
   // re-hash on receive — keep these in lock-step or the device's envelope
   // verifier will reject with "input_hash mismatch".
   const inputCanonical = canonicalizeEnvelopePayload(args.sourceRequestArgs)
-  const inputHash =
-    "sha256:" + createHash("sha256").update(inputCanonical).digest("hex")
+  const inputHash = `sha256:${createHash("sha256").update(inputCanonical).digest("hex")}`
 
   // Build the requested action mirror of the approved grant so the canonical
   // helper's matcher still validates "this grant covers this action". The

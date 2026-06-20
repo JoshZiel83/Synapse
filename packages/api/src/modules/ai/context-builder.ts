@@ -327,12 +327,17 @@ function buildContextItemRef(item: {
   scope?: string
   surface?: string
 }) {
-  const sequence =
-    typeof item.sequence === "number"
-      ? item.sequence
-      : typeof item.sequence === "string"
-        ? Number(item.sequence)
-        : NaN
+  const resolveSequence = (): number => {
+    switch (typeof item.sequence) {
+      case "number":
+        return item.sequence
+      case "string":
+        return Number(item.sequence)
+      default:
+        return NaN
+    }
+  }
+  const sequence = resolveSequence()
   if (
     !Number.isFinite(sequence) ||
     item.scope !== "shared" ||

@@ -583,7 +583,6 @@ export default async function imDingtalkController(
         params.sessionId
       )
       reply.status(204).send()
-      return
     }
   )
 

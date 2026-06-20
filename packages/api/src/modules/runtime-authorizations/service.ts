@@ -826,18 +826,27 @@ export function specificityRank(
   retention: RuntimeAuthorizationGrantRetention
 ): number {
   if (retention === "consume_once") return 0
-  const subjectTier =
-    subjectKind === SUBJECT_KIND.ACTOR ||
-    subjectKind === SUBJECT_KIND.REMOTE_AGENT ||
-    subjectKind === SUBJECT_KIND.WORKSPACE_MEMBER
-      ? 1
-      : subjectKind === SUBJECT_KIND.CONVERSATION
-        ? 3
-        : subjectKind === SUBJECT_KIND.WORKSPACE
-          ? 4
-          : 5
+  const subjectTier = subjectTierOf(subjectKind)
   // Within actor/remote_agent/workspace_member, scoped > unscoped.
-  return subjectTier === 1 ? (scopePresent ? 1 : 2) : subjectTier
+  if (subjectTier === 1) {
+    return scopePresent ? 1 : 2
+  }
+  return subjectTier
+}
+
+function subjectTierOf(subjectKind: string): number {
+  switch (subjectKind) {
+    case SUBJECT_KIND.ACTOR:
+    case SUBJECT_KIND.REMOTE_AGENT:
+    case SUBJECT_KIND.WORKSPACE_MEMBER:
+      return 1
+    case SUBJECT_KIND.CONVERSATION:
+      return 3
+    case SUBJECT_KIND.WORKSPACE:
+      return 4
+    default:
+      return 5
+  }
 }
 
 // ============================================================================

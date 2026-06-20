@@ -52,10 +52,10 @@ const envSet = !!envRaw && existsSync(envRaw)
 const envIsTarget = envSet ? resolve(envRaw!) === resolve(target) : false
 
 process.stdout.write(
-  [
+  `${[
     `RESOLVED=${sh(resolved)}`,
     `TARGET=${sh(target)}`,
     `ENV_SET=${envSet ? "1" : "0"}`,
     `ENV_IS_TARGET=${envIsTarget ? "1" : "0"}`,
-  ].join("\n") + "\n"
+  ].join("\n")}\n`
 )

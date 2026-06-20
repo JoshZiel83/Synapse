@@ -74,20 +74,24 @@ async function buildFixture(opts: {
   const providerCallId =
     opts.providerCallId || `toolu_${uuidv4().replace(/-/g, "").slice(0, 16)}`
   const sourceKind = opts.sourceKind || "plugin"
-  const sourceSnapshot =
-    sourceKind === "device"
-      ? {
+  const sourceSnapshot = (() => {
+    switch (sourceKind) {
+      case "device":
+        return {
           kind: "device",
           deviceToolId: "dev-abc",
           exposureStableKey: "synapse.builtin.filesystem.v1",
         }
-      : sourceKind === "system"
-        ? { kind: "system", registryKey: opts.toolName }
-        : {
-            kind: "plugin",
-            installationId: uuidv4(),
-            upstreamToolName: opts.toolName,
-          }
+      case "system":
+        return { kind: "system", registryKey: opts.toolName }
+      default:
+        return {
+          kind: "plugin",
+          installationId: uuidv4(),
+          upstreamToolName: opts.toolName,
+        }
+    }
+  })()
 
   const actorId = uuidv4()
   await client.query("BEGIN")

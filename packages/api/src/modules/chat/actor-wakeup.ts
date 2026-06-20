@@ -304,13 +304,18 @@ export async function enqueueActorWakeupsForConversationMessageUseCase(
     sourceParticipantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
       ? "actor_message"
       : "user_message"
+  const resolveAuthorSourceParticipantId = (): string | undefined => {
+    switch (sourceParticipantType) {
+      case CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER:
+        return authorParticipant?.workspaceMemberId ?? undefined
+      case CONVERSATION_PARTICIPANT_TYPE.ACTOR:
+        return authorParticipant?.actorId ?? undefined
+      default:
+        return itemRow.authorParticipantId ?? undefined
+    }
+  }
   const sourceParticipantId =
-    params.sourceParticipantId ??
-    (sourceParticipantType === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
-      ? (authorParticipant?.workspaceMemberId ?? undefined)
-      : sourceParticipantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
-        ? (authorParticipant?.actorId ?? undefined)
-        : (itemRow.authorParticipantId ?? undefined))
+    params.sourceParticipantId ?? resolveAuthorSourceParticipantId()
   const sourceName =
     params.sourceName ??
     (authorParticipant ? participantDisplayName(authorParticipant) : undefined)

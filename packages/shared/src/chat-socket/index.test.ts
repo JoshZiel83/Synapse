@@ -19,7 +19,7 @@ function makeHarness(opts: {
   const events: Array<Record<string, unknown>> = []
   const connectedCalls: number[] = []
   const states: string[] = []
-  let sockets: FakeSocket[] = []
+  const sockets: FakeSocket[] = []
   let connectCount = 0
 
   type Timer = { id: number; fn: () => void; ms: number }

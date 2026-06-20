@@ -23,7 +23,7 @@ function buildSigner() {
     format: "pem",
     type: "pkcs8",
   }) as string
-  const kid = "test-kid-" + randomUUID().slice(0, 8)
+  const kid = `test-kid-${randomUUID().slice(0, 8)}`
   return { pubPem, privPem, kid }
 }
 

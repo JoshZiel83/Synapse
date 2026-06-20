@@ -192,12 +192,14 @@ function buildDocChange(
 ): ActorVersionDocChange | null {
   if (!beforeDoc && !afterDoc) return null
   const referenceDoc = afterDoc || beforeDoc!
-  const changeType: ActorVersionDocChange["changeType"] =
-    beforeDoc && afterDoc
-      ? ACTOR_VERSION_DOC_CHANGE_TYPE.UPDATED
-      : afterDoc
-        ? ACTOR_VERSION_DOC_CHANGE_TYPE.ADDED
-        : ACTOR_VERSION_DOC_CHANGE_TYPE.REMOVED
+  let changeType: ActorVersionDocChange["changeType"]
+  if (beforeDoc && afterDoc) {
+    changeType = ACTOR_VERSION_DOC_CHANGE_TYPE.UPDATED
+  } else if (afterDoc) {
+    changeType = ACTOR_VERSION_DOC_CHANGE_TYPE.ADDED
+  } else {
+    changeType = ACTOR_VERSION_DOC_CHANGE_TYPE.REMOVED
+  }
   const summaryText =
     summarizeActorDoc(afterDoc || beforeDoc!, 180) ||
     `${referenceDoc.title} ${changeType}`

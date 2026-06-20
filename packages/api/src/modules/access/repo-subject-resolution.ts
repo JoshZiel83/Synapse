@@ -212,15 +212,14 @@ async function assertPrincipalBelongsToWorkspace(
           `remote_agent ${principal.remoteAgentId} does not belong to workspace ${workspaceId}`
         )
       }
-      return
+      break
     }
     case SUBJECT_KIND.CONVERSATION:
     case SUBJECT_KIND.USER:
     case SUBJECT_KIND.EXTERNAL:
     case SUBJECT_KIND.PLATFORM:
-      // No single-workspace identity; accept and let per-resource helpers
-      // refuse if appropriate.
-      return
+    // No single-workspace identity; accept and let per-resource helpers
+    // refuse if appropriate.
   }
 }
 
@@ -507,13 +506,12 @@ async function assertPrincipalBelongsToWorkspaceOn(
           `remote_agent ${principal.remoteAgentId} does not belong to workspace ${workspaceId}`
         )
       }
-      return
+      break
     }
     case SUBJECT_KIND.CONVERSATION:
     case SUBJECT_KIND.USER:
     case SUBJECT_KIND.EXTERNAL:
     case SUBJECT_KIND.PLATFORM:
-      return
   }
 }
 

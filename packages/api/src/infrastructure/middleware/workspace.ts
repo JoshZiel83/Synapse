@@ -31,6 +31,5 @@ export async function workspaceMiddleware(
     "Not allowed to access this workspace"
   )
   if (!allowed) {
-    return
   }
 }

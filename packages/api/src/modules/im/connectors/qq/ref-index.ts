@@ -102,7 +102,10 @@ export function parseRefIndices(input: { ext?: unknown }): {
 } {
   const ext = input.ext
   if (!ext) return {}
-  const items = Array.isArray(ext) ? ext : typeof ext === "string" ? [ext] : []
+  let items: unknown[]
+  if (Array.isArray(ext)) items = ext
+  else if (typeof ext === "string") items = [ext]
+  else items = []
   const out: { msgIdx?: string; refMsgIdx?: string } = {}
   for (const raw of items) {
     if (typeof raw !== "string") continue

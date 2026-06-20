@@ -94,12 +94,15 @@ function deps(params: {
   wakeupCalls: unknown[]
 }): ActorWakeupDeps {
   return {
-    listItemRowsByIds: async (_queryable, itemIds) =>
-      itemIds[0] === params.item.id
-        ? [params.item]
-        : params.replyItem && itemIds[0] === params.replyItem.id
-          ? [params.replyItem]
-          : [],
+    listItemRowsByIds: async (_queryable, itemIds) => {
+      if (itemIds[0] === params.item.id) {
+        return [params.item]
+      }
+      if (params.replyItem && itemIds[0] === params.replyItem.id) {
+        return [params.replyItem]
+      }
+      return []
+    },
     conversationItemHasTargets: async () => false,
     getConversationKind: async () => "group",
     listConversationParticipants: async () => params.participants,

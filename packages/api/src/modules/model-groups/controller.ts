@@ -139,14 +139,19 @@ async function requireModelGroupPermission(
   errorMessage: string,
   workspaceId?: string
 ) {
-  const action =
-    permission === "view"
-      ? "model_group.view"
-      : permission === "edit"
-        ? "model_group.edit"
-        : permission === "grant"
-          ? "model_group.grant"
-          : "model_group.delete"
+  const resolveAction = () => {
+    switch (permission) {
+      case "view":
+        return "model_group.view"
+      case "edit":
+        return "model_group.edit"
+      case "grant":
+        return "model_group.grant"
+      default:
+        return "model_group.delete"
+    }
+  }
+  const action = resolveAction()
   const allowed = await authorizeActionDefault({
     subject: workspaceId
       ? workspaceMemberSubject(principalId)

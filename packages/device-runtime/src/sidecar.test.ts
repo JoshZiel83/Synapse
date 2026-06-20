@@ -46,7 +46,7 @@ test("sidecar ignores malformed response frames before a valid result", async ()
     fake.child.stdout.write('"scalar"\n')
     fake.child.stdout.write("{not-json\n")
     fake.child.stdout.write(
-      JSON.stringify({ jsonrpc: "2.0", id: "1", result: { pong: true } }) + "\n"
+      `${JSON.stringify({ jsonrpc: "2.0", id: "1", result: { pong: true } })}\n`
     )
     assert.deepEqual(await response, { pong: true })
   } finally {
@@ -63,14 +63,14 @@ test("sidecar ignores malformed error frames before a valid JSON-RPC error", asy
   try {
     const response = handle.request("cua.fail")
     fake.child.stdout.write(
-      JSON.stringify({ jsonrpc: "2.0", id: "1", error: "boom" }) + "\n"
+      `${JSON.stringify({ jsonrpc: "2.0", id: "1", error: "boom" })}\n`
     )
     fake.child.stdout.write(
-      JSON.stringify({
+      `${JSON.stringify({
         jsonrpc: "2.0",
         id: "1",
         error: { code: -32010, message: "boom", data: { reason: "test" } },
-      }) + "\n"
+      })}\n`
     )
     await assert.rejects(response, (err: unknown) => {
       const error = err as Error & {

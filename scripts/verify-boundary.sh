@@ -44,6 +44,14 @@ node ./scripts/guard-datetime-boundaries.mjs
 node ./scripts/guard-logging.mjs
 ok "guards clean"
 
+# ── 2b. Curated ESLint rule set (no-nested-ternary et al.) ──────────────────
+# Per-package eslint.config.mjs across the business-logic packages enforce the
+# Airbnb-aligned control-flow subset (headline: no-nested-ternary). Fast,
+# syntactic, no build needed — runs here so a chained ternary can never land.
+step "lint: curated ESLint rules across business-logic packages"
+npm run lint
+ok "lint clean"
+
 # ── 3. Business-enum audit (no raw protocol literals) ───────────────────────
 step "audit:business-enums"
 npm run audit:business-enums

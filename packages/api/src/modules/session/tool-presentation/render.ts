@@ -61,7 +61,7 @@ function applyPreprocess(
       return 0
     case "truncate60": {
       const s = typeof value === "string" ? value : String(value ?? "")
-      return s.length > TRUNCATE_LEN ? s.slice(0, TRUNCATE_LEN) + "…" : s
+      return s.length > TRUNCATE_LEN ? `${s.slice(0, TRUNCATE_LEN)}…` : s
     }
     case "raw":
     case undefined:
@@ -145,7 +145,14 @@ function buildRequestBlocks(
         const oldText = String(dlv(item, spec.diff.oldField) ?? "")
         const newText = String(dlv(item, spec.diff.newField) ?? "")
         for (const part of diffLines(oldText, newText)) {
-          const prefix = part.added ? "+ " : part.removed ? "- " : "  "
+          let prefix: string
+          if (part.added) {
+            prefix = "+ "
+          } else if (part.removed) {
+            prefix = "- "
+          } else {
+            prefix = "  "
+          }
           chunks.push(
             part.value
               .split("\n")

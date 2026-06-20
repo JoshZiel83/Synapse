@@ -92,7 +92,7 @@ function envWithGrants(
       task_mode: "sync",
       runtime_authorization: {
         grant_ids: grants.map(
-          (_, i) => "00000000-0000-0000-0000-" + String(i).padStart(12, "0")
+          (_, i) => `00000000-0000-0000-0000-${String(i).padStart(12, "0")}`
         ),
         grant_scope: "workspace",
         grant_specs: grants.map((g) => ({

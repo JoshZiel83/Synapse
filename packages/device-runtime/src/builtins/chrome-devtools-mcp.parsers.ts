@@ -143,32 +143,33 @@ function extractPagesSectionFromText(text: string): ChromePageSummary[] {
   return out
 }
 
+function pickPageId(obj: Record<string, unknown>): number {
+  if (typeof obj.pageId === "number") return obj.pageId
+  if (typeof obj.page_id === "number") return obj.page_id
+  if (typeof obj.pageIdx === "number") return obj.pageIdx
+  if (typeof obj.id === "number") return obj.id
+  return NaN
+}
+
+function pickUrl(obj: Record<string, unknown>): string {
+  if (typeof obj.url === "string") return obj.url
+  if (typeof obj.URL === "string") return obj.URL
+  return ""
+}
+
+function pickTitle(obj: Record<string, unknown>): string | undefined {
+  if (typeof obj.title === "string") return obj.title
+  if (typeof obj.name === "string") return obj.name
+  return undefined
+}
+
 function toPageSummary(value: unknown): ChromePageSummary | null {
   if (!value || typeof value !== "object") return null
   const obj = value as Record<string, unknown>
-  const pageId =
-    typeof obj.pageId === "number"
-      ? obj.pageId
-      : typeof obj.page_id === "number"
-        ? obj.page_id
-        : typeof obj.pageIdx === "number"
-          ? obj.pageIdx
-          : typeof obj.id === "number"
-            ? obj.id
-            : NaN
-  const url =
-    typeof obj.url === "string"
-      ? obj.url
-      : typeof obj.URL === "string"
-        ? obj.URL
-        : ""
+  const pageId = pickPageId(obj)
+  const url = pickUrl(obj)
   if (!Number.isFinite(pageId) || !url) return null
-  const title =
-    typeof obj.title === "string"
-      ? obj.title
-      : typeof obj.name === "string"
-        ? obj.name
-        : undefined
+  const title = pickTitle(obj)
   const isActive =
     obj.isActive === true ||
     obj.selected === true ||

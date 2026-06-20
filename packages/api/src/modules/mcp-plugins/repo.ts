@@ -1592,6 +1592,28 @@ async function buildVisibilitySubjects(params: VisibilitySubjectParams) {
   })
 }
 
+type VisibilitySubject = Awaited<
+  ReturnType<typeof buildVisibilitySubjects>
+>[number]
+
+function resolveVisibilitySubjectKind(type: VisibilitySubject["type"]) {
+  // Mirrors the original chained ternary EXACTLY: only "workspace",
+  // "workspace_member" and "actor" map to their own kinds; every other type
+  // (including "remote_agent" AND "user") falls through to REMOTE_AGENT. The
+  // final branch is the `default` case — not assertNever — so a "user" subject
+  // keeps yielding REMOTE_AGENT instead of throwing.
+  switch (type) {
+    case "workspace":
+      return SUBJECT_KIND.WORKSPACE
+    case "workspace_member":
+      return SUBJECT_KIND.WORKSPACE_MEMBER
+    case "actor":
+      return SUBJECT_KIND.ACTOR
+    default:
+      return SUBJECT_KIND.REMOTE_AGENT
+  }
+}
+
 export async function buildPluginVisibilitySubjectIds(
   params: VisibilitySubjectParams
 ) {
@@ -1599,14 +1621,7 @@ export async function buildPluginVisibilitySubjectIds(
   const subjectIds = await Promise.all(
     subjects.map((subject) =>
       upsertAccessSubject(db, {
-        kind:
-          subject.type === "workspace"
-            ? SUBJECT_KIND.WORKSPACE
-            : subject.type === "workspace_member"
-              ? SUBJECT_KIND.WORKSPACE_MEMBER
-              : subject.type === "actor"
-                ? SUBJECT_KIND.ACTOR
-                : SUBJECT_KIND.REMOTE_AGENT,
+        kind: resolveVisibilitySubjectKind(subject.type),
         ...(subject.type === "workspace" ? { workspaceId: subject.id } : {}),
         ...(subject.type === "workspace_member"
           ? { workspaceMemberId: subject.id }

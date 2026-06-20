@@ -2193,7 +2193,7 @@ export async function updateActorRelationshipProfile(params: {
   }
 
   const actorSummary = await getActorSummary(params.actorId)
-  let requiresContactApproval = actorSummary?.requiresContactApproval ?? false
+  const requiresContactApproval = actorSummary?.requiresContactApproval ?? false
   let isPublicShared = actorSummary?.isPublicShared ?? false
   if (typeof params.isPublicShared === "boolean") {
     const actorResult = await repo.updateActorPublicShared(
@@ -2265,7 +2265,7 @@ export async function updateRemoteAgentRelationshipProfile(params: {
   }
 
   const remoteAgentSummary = await getRemoteAgentSummary(params.remoteAgentId)
-  let requiresContactApproval =
+  const requiresContactApproval =
     remoteAgentSummary?.requiresContactApproval ?? false
   let isPublicShared = remoteAgentSummary?.isPublicShared ?? false
 

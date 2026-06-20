@@ -879,14 +879,13 @@ async function exchangeAuthorizationCode(
     "OAuth token response"
   )
   if (!response.ok) {
-    throw new PluginAuthError(
-      response.status || 400,
-      typeof responseBody.error_description === "string"
-        ? responseBody.error_description
-        : typeof responseBody.error === "string"
-          ? responseBody.error
-          : "Token exchange failed"
-    )
+    let message = "Token exchange failed"
+    if (typeof responseBody.error_description === "string") {
+      message = responseBody.error_description
+    } else if (typeof responseBody.error === "string") {
+      message = responseBody.error
+    }
+    throw new PluginAuthError(response.status || 400, message)
   }
 
   return responseBody
@@ -960,14 +959,13 @@ async function refreshOAuthConnection(
     "OAuth token refresh response"
   )
   if (!response.ok) {
-    throw new PluginAuthError(
-      response.status || 400,
-      typeof tokenResponse.error_description === "string"
-        ? tokenResponse.error_description
-        : typeof tokenResponse.error === "string"
-          ? tokenResponse.error
-          : "Token refresh failed"
-    )
+    let message = "Token refresh failed"
+    if (typeof tokenResponse.error_description === "string") {
+      message = tokenResponse.error_description
+    } else if (typeof tokenResponse.error === "string") {
+      message = tokenResponse.error
+    }
+    throw new PluginAuthError(response.status || 400, message)
   }
 
   const accessToken = asString(tokenResponse.access_token)

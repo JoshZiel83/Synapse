@@ -191,16 +191,21 @@ export async function processImTransportDeliveryJob(
     binding.account.status !== "active" ||
     !binding.outboundEnabled
   ) {
+    let skippedReason:
+      | "binding_missing"
+      | "account_disabled"
+      | "binding_disabled"
+    if (!binding) {
+      skippedReason = "binding_missing"
+    } else if (binding.account.status !== "active") {
+      skippedReason = "account_disabled"
+    } else {
+      skippedReason = "binding_disabled"
+    }
     await deps.updateStatus({
       linkId,
       status: "skipped",
-      metadata: {
-        skippedReason: !binding
-          ? "binding_missing"
-          : binding.account.status !== "active"
-            ? "account_disabled"
-            : "binding_disabled",
-      },
+      metadata: { skippedReason },
     })
     return { success: true, reason: "binding unavailable" }
   }

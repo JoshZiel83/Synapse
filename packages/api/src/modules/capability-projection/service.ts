@@ -391,14 +391,20 @@ export async function principalSubjectIds(
   // input level (mirroring projectLegacyTools / requestAuthorizationOrDeny)
   // still activate the scope guard. `remote_agent` / `conversation` carry
   // a mandatory conversationId on the principal itself.
-  const conversationId =
-    input.principal.kind === "conversation"
-      ? input.principal.conversationId
-      : input.principal.kind === "actor"
-        ? (input.principal.conversationId ?? input.conversationId)
-        : input.principal.kind === "remote_agent"
-          ? input.principal.conversationId
-          : undefined
+  let conversationId: string | undefined
+  switch (input.principal.kind) {
+    case "conversation":
+      conversationId = input.principal.conversationId
+      break
+    case "actor":
+      conversationId = input.principal.conversationId ?? input.conversationId
+      break
+    case "remote_agent":
+      conversationId = input.principal.conversationId
+      break
+    default:
+      conversationId = undefined
+  }
   const ctx = await loadRuntimePrincipalContextForCapabilityProjection({
     db: options?.db,
     principal: subjectRef,
@@ -561,8 +567,7 @@ function unionWithDevice(
     // canonicalized arguments — the device verifier rejects envelopes whose
     // input_hash doesn't match the actual `arguments` it received.
     const inputCanonical = canonicalizeEnvelopePayload(sanitizedInput)
-    const inputHash =
-      "sha256:" + createHash("sha256").update(inputCanonical).digest("hex")
+    const inputHash = `sha256:${createHash("sha256").update(inputCanonical).digest("hex")}`
 
     // subject-scope-refactor: dispatch goes through the canonical helper
     // selectAndClaimRuntimeAuthorizationGrant — it does (a) SQL-side filtering
@@ -1494,12 +1499,17 @@ export function buildRequestedAction(args: {
       // active page after envelope verification and runs the URL check
       // there (see chrome-devtools-mcp.ts step 6). scopeSource tells the
       // UI / chat card that this denial needs a manual grant.
-      const scopeSource =
-        effective.ok && effective.target.kind === "page_id"
-          ? "runtime_page_id"
-          : effective.ok && effective.target.kind === "all_pages"
-            ? "runtime_all_pages"
-            : "runtime_active_page"
+      let scopeSource:
+        | "runtime_page_id"
+        | "runtime_all_pages"
+        | "runtime_active_page"
+      if (effective.ok && effective.target.kind === "page_id") {
+        scopeSource = "runtime_page_id"
+      } else if (effective.ok && effective.target.kind === "all_pages") {
+        scopeSource = "runtime_all_pages"
+      } else {
+        scopeSource = "runtime_active_page"
+      }
       return {
         capability: "browser",
         toolName: args.toolName,

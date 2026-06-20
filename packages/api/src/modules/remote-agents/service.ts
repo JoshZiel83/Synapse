@@ -286,14 +286,18 @@ async function updateRemoteAgentRuntimeStatus(
   message: Extract<RemoteAgentMachineMessage, { type: "agent:status" }>,
   queryable?: Executor
 ) {
-  const runStatus =
-    message.state === REMOTE_AGENT_RUNTIME_STATE.OFFLINE
-      ? "cancelled"
-      : message.state === REMOTE_AGENT_RUNTIME_STATE.ERROR
-        ? "failed"
-        : message.state === REMOTE_AGENT_RUNTIME_STATE.IDLE
-          ? "completed"
-          : "running"
+  const runStatus = ((): "running" | "completed" | "failed" | "cancelled" => {
+    switch (message.state) {
+      case REMOTE_AGENT_RUNTIME_STATE.OFFLINE:
+        return "cancelled"
+      case REMOTE_AGENT_RUNTIME_STATE.ERROR:
+        return "failed"
+      case REMOTE_AGENT_RUNTIME_STATE.IDLE:
+        return "completed"
+      default:
+        return "running"
+    }
+  })()
   const runId =
     message.runKey && message.runKey.trim()
       ? await repo.ensureRemoteAgentRunRepo({
@@ -1551,7 +1555,6 @@ export async function handleRemoteAgentDaemonConnection(
 
     if (message?.type === "agent:status") {
       await updateRemoteAgentRuntimeStatus(machine.id, message)
-      return
     }
   })
 

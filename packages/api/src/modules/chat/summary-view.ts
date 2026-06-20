@@ -168,6 +168,12 @@ function buildConversationPresentation(params: {
     row.kind !== CONVERSATION_KIND.DIRECT && canManageParticipants
 
   const isDirect = row.kind === CONVERSATION_KIND.DIRECT
+  const subtitle = (() => {
+    if (isIm) {
+      return isDirect ? "IM direct chat" : "IM group chat"
+    }
+    return isDirect ? "Direct message" : "Group chat"
+  })()
   return {
     chatType,
     title,
@@ -175,13 +181,7 @@ function buildConversationPresentation(params: {
       row.kind === CONVERSATION_KIND.DIRECT
         ? peer?.avatarUrl
         : row.avatar_url || undefined,
-    subtitle: isIm
-      ? isDirect
-        ? "IM direct chat"
-        : "IM group chat"
-      : isDirect
-        ? "Direct message"
-        : "Group chat",
+    subtitle,
     peer,
     canRename,
     canManageParticipants: canManageConversationParticipants,

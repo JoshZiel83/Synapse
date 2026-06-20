@@ -153,18 +153,29 @@ async function insertConversationParticipant(
   state: "active" | "left" | "removed" = "active",
   roleKey = "member"
 ): Promise<string> {
+  function resolveKind() {
+    switch (participantType) {
+      case "workspace_member":
+        return SUBJECT_KIND.WORKSPACE_MEMBER
+      case "actor":
+        return SUBJECT_KIND.ACTOR
+      default:
+        return SUBJECT_KIND.REMOTE_AGENT
+    }
+  }
+  function resolveEntityRef() {
+    switch (participantType) {
+      case "workspace_member":
+        return { workspaceMemberId: entityId }
+      case "actor":
+        return { actorId: entityId }
+      default:
+        return { remoteAgentId: entityId }
+    }
+  }
   const subjectId = await upsertAccessSubjectOn(db, {
-    kind:
-      participantType === "workspace_member"
-        ? SUBJECT_KIND.WORKSPACE_MEMBER
-        : participantType === "actor"
-          ? SUBJECT_KIND.ACTOR
-          : SUBJECT_KIND.REMOTE_AGENT,
-    ...(participantType === "workspace_member"
-      ? { workspaceMemberId: entityId }
-      : participantType === "actor"
-        ? { actorId: entityId }
-        : { remoteAgentId: entityId }),
+    kind: resolveKind(),
+    ...resolveEntityRef(),
   } as Parameters<typeof upsertAccessSubjectOn>[1])
 
   const row = await db

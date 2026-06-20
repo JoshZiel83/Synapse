@@ -228,17 +228,21 @@ export async function dispatchSyncTool(
             code: SpanStatusCode.ERROR,
             message: body.error.message,
           })
+          const details = ((): Record<string, unknown> | undefined => {
+            if (data && typeof data === "object" && !Array.isArray(data)) {
+              return data as Record<string, unknown>
+            }
+            if (data !== undefined) {
+              return { value: data }
+            }
+            return undefined
+          })()
           return {
             ok: false,
             error: {
               code: "runtime_constraint",
               message: body.error.message,
-              details:
-                data && typeof data === "object" && !Array.isArray(data)
-                  ? (data as Record<string, unknown>)
-                  : data !== undefined
-                    ? { value: data }
-                    : undefined,
+              details,
             },
           }
         }

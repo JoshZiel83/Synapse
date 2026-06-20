@@ -876,12 +876,14 @@ export function buildSkillAccessRow(row: SkillAccessRow): SkillAccessRow {
     target.subject.kind === "remote_agent"
       ? (target.subject as { remoteAgentId: string }).remoteAgentId
       : null
+  const conversationIdFromSubject =
+    target.subject.kind === "conversation"
+      ? (target.subject as { conversationId: string }).conversationId
+      : null
   const conversationId =
     target.scope?.kind === "conversation"
       ? (target.scope as { conversationId: string }).conversationId
-      : target.subject.kind === "conversation"
-        ? (target.subject as { conversationId: string }).conversationId
-        : null
+      : conversationIdFromSubject
   const workspaceMemberId =
     target.subject.kind === "workspace_member"
       ? (target.subject as { workspaceMemberId: string }).workspaceMemberId
@@ -1461,15 +1463,17 @@ export async function publishMarketplaceSkill(input: {
       frontmatterName: preparedSnapshot.frontmatter.name,
       ...(input.metadata || {}),
     }
-    const nextIconFileId =
-      input.iconFileId === undefined
-        ? (existing?.itemIconFileId ?? null)
-        : input.iconFileId
-          ? await normalizeMarketplaceSkillIconFileId(
-              input.iconFileId,
-              input.authorUserId
-            )
-          : null
+    let nextIconFileId: string | null
+    if (input.iconFileId === undefined) {
+      nextIconFileId = existing?.itemIconFileId ?? null
+    } else if (input.iconFileId) {
+      nextIconFileId = await normalizeMarketplaceSkillIconFileId(
+        input.iconFileId,
+        input.authorUserId
+      )
+    } else {
+      nextIconFileId = null
+    }
 
     if (existing) {
       await updateMarketplaceCatalogItemRecord(client, {
@@ -1589,6 +1593,11 @@ export async function createWorkspaceSkill(input: {
   // a remote agent.
   // Round 11 review (P2): same for workspace_member — without this the
   // workspace_member skill grant path would crash in ensureSkillBinding.
+  const accessTargetConversationIdFromSubject =
+    input.accessTarget?.subject.kind === "conversation"
+      ? (input.accessTarget.subject as { conversationId: string })
+          .conversationId
+      : null
   const target = input.accessTarget
     ? normalizeScopeTarget({
         useScope: skillUseScopeFromTarget(input.accessTarget),
@@ -1610,10 +1619,7 @@ export async function createWorkspaceSkill(input: {
           input.accessTarget.scope?.kind === "conversation"
             ? (input.accessTarget.scope as { conversationId: string })
                 .conversationId
-            : input.accessTarget.subject.kind === "conversation"
-              ? (input.accessTarget.subject as { conversationId: string })
-                  .conversationId
-              : null,
+            : accessTargetConversationIdFromSubject,
       })
     : null
 
@@ -1880,12 +1886,14 @@ export async function createInstalledSkillGrant(input: {
     accessTarget.subject.kind === "remote_agent"
       ? (accessTarget.subject as { remoteAgentId: string }).remoteAgentId
       : null
+  const accessTargetConversationIdFromSubject =
+    accessTarget.subject.kind === "conversation"
+      ? (accessTarget.subject as { conversationId: string }).conversationId
+      : null
   const accessTargetConversationId =
     accessTarget.scope?.kind === "conversation"
       ? (accessTarget.scope as { conversationId: string }).conversationId
-      : accessTarget.subject.kind === "conversation"
-        ? (accessTarget.subject as { conversationId: string }).conversationId
-        : null
+      : accessTargetConversationIdFromSubject
   const accessTargetWorkspaceMemberId =
     accessTarget.subject.kind === "workspace_member"
       ? (accessTarget.subject as { workspaceMemberId: string })
@@ -1924,12 +1932,7 @@ export async function createInstalledSkillGrant(input: {
         workspaceId: inserted.workspaceId,
         skillId: inserted.workspaceResourceId,
         bindScope: accessTarget.subject.kind as RuntimeBindingScope,
-        conversationId:
-          accessTarget.scope?.kind === "conversation"
-            ? accessTarget.scope.conversationId
-            : accessTarget.subject.kind === "conversation"
-              ? accessTarget.subject.conversationId
-              : null,
+        conversationId: accessTargetConversationId,
         actorId:
           accessTarget.subject.kind === "actor"
             ? accessTarget.subject.actorId
@@ -2059,6 +2062,11 @@ export async function installMarketplaceSkill(input: {
   }>
   installedByWorkspaceMemberId?: string
 }) {
+  const accessTargetConversationIdFromSubject =
+    input.accessTarget?.subject.kind === "conversation"
+      ? (input.accessTarget.subject as { conversationId: string })
+          .conversationId
+      : null
   const target = input.accessTarget
     ? normalizeScopeTarget({
         useScope: skillUseScopeFromTarget(input.accessTarget),
@@ -2080,10 +2088,7 @@ export async function installMarketplaceSkill(input: {
           input.accessTarget.scope?.kind === "conversation"
             ? (input.accessTarget.scope as { conversationId: string })
                 .conversationId
-            : input.accessTarget.subject.kind === "conversation"
-              ? (input.accessTarget.subject as { conversationId: string })
-                  .conversationId
-              : null,
+            : accessTargetConversationIdFromSubject,
       })
     : null
 
@@ -2254,15 +2259,17 @@ export async function updateInstalledSkill(input: {
         createdByWorkspaceMemberId: existing.ownerWorkspaceMemberId || null,
       })
 
-      const nextIconFileId =
-        input.iconFileId === undefined
-          ? existing.iconFileId
-          : input.iconFileId
-            ? await normalizeWorkspaceSkillIconFileId(
-                input.iconFileId,
-                input.workspaceId
-              )
-            : null
+      let nextIconFileId: string | null
+      if (input.iconFileId === undefined) {
+        nextIconFileId = existing.iconFileId
+      } else if (input.iconFileId) {
+        nextIconFileId = await normalizeWorkspaceSkillIconFileId(
+          input.iconFileId,
+          input.workspaceId
+        )
+      } else {
+        nextIconFileId = null
+      }
       await updateInstalledSkillContentState(client, {
         skillId: existing.skillId,
         iconFileId: nextIconFileId,
@@ -2270,17 +2277,17 @@ export async function updateInstalledSkill(input: {
         currentVersion: nextVersion,
         currentSnapshotId: snapshotId,
       })
+      let nextResourceStatus: "active" | "disabled"
+      if (input.isEnabled === undefined) {
+        nextResourceStatus =
+          existing.skillStatus === "active" ? "active" : "disabled"
+      } else {
+        nextResourceStatus = input.isEnabled ? "active" : "disabled"
+      }
       await updateWorkspaceResourceRoot(client, {
         id: existing.skillId,
         displayName: nextDisplayName,
-        status:
-          input.isEnabled === undefined
-            ? existing.skillStatus === "active"
-              ? "active"
-              : "disabled"
-            : input.isEnabled
-              ? "active"
-              : "disabled",
+        status: nextResourceStatus,
       })
 
       if (existing.sourceCatalogItemId) {
@@ -2296,30 +2303,32 @@ export async function updateInstalledSkill(input: {
       input.tags !== undefined ||
       input.conversationTypeMaskOverride !== undefined
     ) {
-      const nextIconFileId =
-        input.iconFileId === undefined
-          ? existing.iconFileId
-          : input.iconFileId
-            ? await normalizeWorkspaceSkillIconFileId(
-                input.iconFileId,
-                input.workspaceId
-              )
-            : null
+      let nextIconFileId: string | null
+      if (input.iconFileId === undefined) {
+        nextIconFileId = existing.iconFileId
+      } else if (input.iconFileId) {
+        nextIconFileId = await normalizeWorkspaceSkillIconFileId(
+          input.iconFileId,
+          input.workspaceId
+        )
+      } else {
+        nextIconFileId = null
+      }
       await updateInstalledSkillProfileState(client, {
         skillId: existing.skillId,
         iconFileId: nextIconFileId,
         tags: input.tags === undefined ? existing.tags || [] : input.tags,
       })
+      let nextResourceStatus: "active" | "disabled"
+      if (input.isEnabled === undefined) {
+        nextResourceStatus =
+          existing.skillStatus === "active" ? "active" : "disabled"
+      } else {
+        nextResourceStatus = input.isEnabled ? "active" : "disabled"
+      }
       await updateWorkspaceResourceRoot(client, {
         id: existing.skillId,
-        status:
-          input.isEnabled === undefined
-            ? existing.skillStatus === "active"
-              ? "active"
-              : "disabled"
-            : input.isEnabled
-              ? "active"
-              : "disabled",
+        status: nextResourceStatus,
         conversationTypeMaskOverride:
           input.conversationTypeMaskOverride === undefined
             ? existing.conversationTypeMaskOverride

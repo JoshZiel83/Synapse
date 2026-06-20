@@ -126,8 +126,9 @@ export async function loadModelGroupsConfig(
   const { value: interpolated, missing } = interpolateEnv(rawResult.data)
   if (missing.length > 0) {
     throw new ModelGroupsConfigError(
-      `Model-groups config at ${path} references unset environment variable(s):\n` +
-        missing.map((name) => `  - ${name}`).join("\n")
+      `Model-groups config at ${path} references unset environment variable(s):\n${missing
+        .map((name) => `  - ${name}`)
+        .join("\n")}`
     )
   }
 
@@ -454,8 +455,9 @@ function assertSemanticallyValid(doc: ModelGroupsFile, path: string): void {
 
   if (issues.length > 0) {
     throw new ModelGroupsConfigError(
-      `Model-groups config at ${path} has invalid model configuration:\n` +
-        issues.map((i) => `  - ${i}`).join("\n")
+      `Model-groups config at ${path} has invalid model configuration:\n${issues
+        .map((i) => `  - ${i}`)
+        .join("\n")}`
     )
   }
 }

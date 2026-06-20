@@ -1011,7 +1011,11 @@ function stableStringify(value: unknown): string {
     return `[${value.map(stableStringify).join(",")}]`
   }
   const entries = Object.entries(value as Record<string, unknown>).sort(
-    ([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)
+    ([a], [b]) => {
+      if (a < b) return -1
+      if (a > b) return 1
+      return 0
+    }
   )
   return `{${entries
     .map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`)
@@ -1289,6 +1293,25 @@ async function ensureCapability(
     .execute()
 }
 
+/**
+ * Coerce a persisted revision_seq (bigint | number | string | undefined/null)
+ * to a JS number. Unknown/absent values fall back to 0 — preserving the prior
+ * ternary's catch-all branch (do NOT throw: `latest?.revisionSeq` is undefined
+ * when there is no prior revision).
+ */
+function revisionSeqToNumber(latestSeqRaw: unknown): number {
+  switch (typeof latestSeqRaw) {
+    case "bigint":
+      return Number(latestSeqRaw)
+    case "number":
+      return latestSeqRaw
+    case "string":
+      return Number(latestSeqRaw)
+    default:
+      return 0
+  }
+}
+
 async function ensureCatalogRevision(
   trx: DatabaseTransaction,
   args: { exposureId: string; schemaHash: string }
@@ -1318,14 +1341,7 @@ async function ensureCatalogRevision(
       .execute()
   }
   const latestSeqRaw = latest?.revisionSeq
-  const latestSeqNumber =
-    typeof latestSeqRaw === "bigint"
-      ? Number(latestSeqRaw)
-      : typeof latestSeqRaw === "number"
-        ? latestSeqRaw
-        : typeof latestSeqRaw === "string"
-          ? Number(latestSeqRaw)
-          : 0
+  const latestSeqNumber = revisionSeqToNumber(latestSeqRaw)
   const nextSeqNumber = latestSeqNumber + 1
   const inserted = await trx
     .insertInto("deviceCatalogRevisions")

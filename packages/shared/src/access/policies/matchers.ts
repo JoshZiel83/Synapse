@@ -35,7 +35,7 @@ export function normalizePathPrefix(value: unknown): string | null {
     stack.push(segment)
   }
   const joined = stack.join("/")
-  if (isAbsolute) return "/" + joined
+  if (isAbsolute) return `/${joined}`
   return joined.length === 0 ? "." : joined
 }
 
@@ -335,8 +335,8 @@ export function commandlinePolicyAllows(
       return null
     }
     if (policy.executor !== request.executor) return null
-  } else {
-    if (policy.executor !== "exec_file") return null
+  } else if (policy.executor !== "exec_file") {
+    return null
   }
 
   // Windows: matcher denies any cwd grant/request until path normalization

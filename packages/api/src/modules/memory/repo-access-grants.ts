@@ -176,17 +176,15 @@ export async function memoryGrantMatches(
 
   if (params.mode === "space-only") {
     query = query.where("memoryItemId", "is", null)
-  } else {
+  } else if (params.memoryItemId == null) {
     // with-item: either a space-level grant OR an item-level grant for the
     // specific memory_item_id.
-    if (params.memoryItemId == null) {
-      query = query.where("memoryItemId", "is", null)
-    } else {
-      const itemId = params.memoryItemId
-      query = query.where((eb) =>
-        eb.or([eb("memoryItemId", "is", null), eb("memoryItemId", "=", itemId)])
-      )
-    }
+    query = query.where("memoryItemId", "is", null)
+  } else {
+    const itemId = params.memoryItemId
+    query = query.where((eb) =>
+      eb.or([eb("memoryItemId", "is", null), eb("memoryItemId", "=", itemId)])
+    )
   }
 
   const row = await query.executeTakeFirst()

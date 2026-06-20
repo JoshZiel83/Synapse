@@ -119,37 +119,39 @@ function subjectRefToTarget(input: {
     return value
   }
 
-  const subject: WorkspaceResourceGrantTargetInput["subject"] =
-    input.kind === SUBJECT_KIND.WORKSPACE
-      ? {
+  const resolveSubject = (): WorkspaceResourceGrantTargetInput["subject"] => {
+    switch (input.kind) {
+      case SUBJECT_KIND.WORKSPACE:
+        return {
           kind: SUBJECT_KIND.WORKSPACE,
           workspaceId: requireId(input.workspaceId, "workspaceId"),
         }
-      : input.kind === SUBJECT_KIND.WORKSPACE_MEMBER
-        ? {
-            kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-            workspaceMemberId: requireId(
-              input.workspaceMemberId,
-              "workspaceMemberId"
-            ),
-          }
-        : input.kind === SUBJECT_KIND.ACTOR
-          ? {
-              kind: SUBJECT_KIND.ACTOR,
-              actorId: requireId(input.actorId, "actorId"),
-            }
-          : input.kind === SUBJECT_KIND.REMOTE_AGENT
-            ? {
-                kind: SUBJECT_KIND.REMOTE_AGENT,
-                remoteAgentId: requireId(input.remoteAgentId, "remoteAgentId"),
-              }
-            : {
-                kind: SUBJECT_KIND.CONVERSATION,
-                conversationId: requireId(
-                  input.conversationId,
-                  "conversationId"
-                ),
-              }
+      case SUBJECT_KIND.WORKSPACE_MEMBER:
+        return {
+          kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+          workspaceMemberId: requireId(
+            input.workspaceMemberId,
+            "workspaceMemberId"
+          ),
+        }
+      case SUBJECT_KIND.ACTOR:
+        return {
+          kind: SUBJECT_KIND.ACTOR,
+          actorId: requireId(input.actorId, "actorId"),
+        }
+      case SUBJECT_KIND.REMOTE_AGENT:
+        return {
+          kind: SUBJECT_KIND.REMOTE_AGENT,
+          remoteAgentId: requireId(input.remoteAgentId, "remoteAgentId"),
+        }
+      default:
+        return {
+          kind: SUBJECT_KIND.CONVERSATION,
+          conversationId: requireId(input.conversationId, "conversationId"),
+        }
+    }
+  }
+  const subject: WorkspaceResourceGrantTargetInput["subject"] = resolveSubject()
 
   const scope =
     input.scopeKind === SUBJECT_KIND.CONVERSATION

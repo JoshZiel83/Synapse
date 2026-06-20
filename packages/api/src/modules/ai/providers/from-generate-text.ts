@@ -193,12 +193,10 @@ function extractServerToolCalls(
     const results = items
       .filter((item) => item.url || item.type === "web_search_result")
       .map((item) => {
-        const pageAge =
-          typeof item.pageAge === "string"
-            ? item.pageAge
-            : typeof item.page_age === "string"
-              ? item.page_age
-              : undefined
+        let pageAge: string | undefined
+        if (typeof item.pageAge === "string") pageAge = item.pageAge
+        else if (typeof item.page_age === "string") pageAge = item.page_age
+        else pageAge = undefined
         return {
           url: typeof item.url === "string" ? item.url : "",
           title: typeof item.title === "string" ? item.title : "",
@@ -233,11 +231,11 @@ function buildServerToolDisplay(
   // Prefer the query; otherwise derive a label from the real tool name so an
   // unknown provider tool isn't mislabeled "网络搜索" (only true web_search with
   // no query falls back to that generic label).
-  const label = call.query
-    ? `搜索 ${truncate(call.query, 60)}`
-    : call.toolName && call.toolName !== MODEL_SERVER_TOOL.WEB_SEARCH
-      ? call.toolName
-      : "网络搜索"
+  let label: string
+  if (call.query) label = `搜索 ${truncate(call.query, 60)}`
+  else if (call.toolName && call.toolName !== MODEL_SERVER_TOOL.WEB_SEARCH)
+    label = call.toolName
+  else label = "网络搜索"
   return {
     icon: "search",
     titleKey: "tool.server.web_search.title",
@@ -250,7 +248,7 @@ function buildServerToolDisplay(
 }
 
 function truncate(s: string, max: number): string {
-  return s.length > max ? s.slice(0, max) + "…" : s
+  return s.length > max ? `${s.slice(0, max)}…` : s
 }
 
 export function fromGenerateText(

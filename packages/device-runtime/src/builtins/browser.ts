@@ -125,12 +125,14 @@ export function createBrowserBuiltin(
           })
         }
         // Origin check: at least one grant must cover the relevant URL.
-        const targetUrl =
-          input.toolName === "browser_navigate"
-            ? typeof input.args["url"] === "string"
-              ? (input.args["url"] as string)
-              : ""
-            : "" // read_text: check at dispatch time below after we have the current target
+        // read_text: check at dispatch time below after we have the current target
+        let targetUrl = ""
+        if (
+          input.toolName === "browser_navigate" &&
+          typeof input.args["url"] === "string"
+        ) {
+          targetUrl = input.args["url"] as string
+        }
         if (input.toolName === "browser_navigate" && targetUrl) {
           const allowed = browserGrants.some(
             (g) =>
@@ -350,7 +352,7 @@ export function browserPolicyCoversUrl(
       // crude eTLD+1 match: hostname equals or ends with ".${registrable_domain}".
       return (
         parsed.hostname === policy.registrable_domain ||
-        parsed.hostname.endsWith("." + policy.registrable_domain)
+        parsed.hostname.endsWith(`.${policy.registrable_domain}`)
       )
     }
     default:

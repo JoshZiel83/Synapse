@@ -330,12 +330,17 @@ export function extractText(blocks: CanonicalContentBlock[]): string {
   let previousKind: "text" | "mention" | null = null
 
   for (const block of blocks) {
-    const chunk =
-      block.type === "text"
-        ? block.text
-        : block.type === "mention"
-          ? formatMentionText(block)
-          : ""
+    let chunk: string
+    switch (block.type) {
+      case "text":
+        chunk = block.text
+        break
+      case "mention":
+        chunk = formatMentionText(block)
+        break
+      default:
+        chunk = ""
+    }
 
     if (!chunk) continue
 

@@ -38,7 +38,9 @@
     "db:purge:workspace": "tsx src/infrastructure/database/purge.ts workspace",
     "gen:cutover-ddl": "node scripts/cutover-emit-ddl.mjs",
     "gen:purge-ddl": "node scripts/cutover-emit-purge.mjs",
-    "memory:bootstrap-model": "tsx src/modules/memory/bootstrap-model.ts"
+    "memory:bootstrap-model": "tsx src/modules/memory/bootstrap-model.ts",
+    "lint": "eslint src tests",
+    "lint:fix": "eslint src tests --fix"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.81",

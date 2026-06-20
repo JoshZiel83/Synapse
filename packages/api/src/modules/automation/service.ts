@@ -569,9 +569,12 @@ async function normalizeTriggerInput(params: {
 }): Promise<Omit<AutomationTriggerRow, "rule_id">> {
   if (params.input.triggerKind === "schedule") {
     const input = params.input
-    const scheduleKind =
-      input.scheduleKind ||
-      (input.startsAt ? "at" : input.intervalSeconds ? "interval" : "cron")
+    const inferredScheduleKind = (() => {
+      if (input.startsAt) return "at"
+      if (input.intervalSeconds) return "interval"
+      return "cron"
+    })()
+    const scheduleKind = input.scheduleKind || inferredScheduleKind
     // Bad cron / IANA timezone / interval input must fail as a clean 400 at the
     // create/update boundary, not as an uncaught 500 (and must never reach the
     // scheduler as a poison row).
@@ -1924,7 +1927,7 @@ export async function updateAutomationEventSource(
     },
   })
 
-  let updated = await getAutomationEventSource(workspaceId, eventSourceId)
+  const updated = await getAutomationEventSource(workspaceId, eventSourceId)
   if (!updated) {
     throw new Error(
       `Automation event source ${eventSourceId} was not found after update`
@@ -2621,12 +2624,12 @@ export async function updateAutomationRule(
       activeUntil: normalizedPolicy.active_until,
       maxTriggerCount: normalizedPolicy.max_trigger_count,
       completionStatus: normalizedPolicy.completion_status,
-      completedAt:
-        mergedInput.status === "active"
-          ? null
-          : existing.policy.completedAt
-            ? parseInstantString(existing.policy.completedAt)
-            : null,
+      completedAt: (() => {
+        if (mergedInput.status === "active") return null
+        if (existing.policy.completedAt)
+          return parseInstantString(existing.policy.completedAt)
+        return null
+      })(),
       metadata: JSON.stringify(normalizedPolicy.metadata),
     })
 
@@ -2899,14 +2902,14 @@ export async function ingestAutomationWebhookEvent(params: {
   }
   const endpointSecret = decrypt(sourceRow.endpoint_secret_ciphertext)
 
-  let payload = params.payload || {}
-  let sourceSnapshot: Record<string, unknown> = {
+  const payload = params.payload || {}
+  const sourceSnapshot: Record<string, unknown> = {
     endpointId: sourceRow.endpoint_id,
     endpointName: sourceRow.endpoint_name,
     ...(params.sourceSnapshot || {}),
   }
-  let dedupeKey = params.dedupeKey
-  let occurredAt = params.occurredAt
+  const dedupeKey = params.dedupeKey
+  const occurredAt = params.occurredAt
 
   if (!params.secret || !verifyPresentedSecret(params.secret, endpointSecret)) {
     throw new Error("Invalid webhook secret")

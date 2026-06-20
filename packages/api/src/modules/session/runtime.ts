@@ -675,6 +675,23 @@ interface SessionRuntimeSnapshotOverrides {
   lastError?: ActorRuntimeState["lastError"] | null
 }
 
+// Default runtime phase derived from the lane state when neither an explicit
+// override nor an inherited cached phase applies. `idle` is the fallback for
+// every lane state other than `running`/`blocked` (i.e. idle/queued/closed),
+// matching the original ternary's final branch — do NOT throw on the default.
+function defaultPhaseForLaneState(
+  laneState: ActorRuntimeState["laneState"]
+): ActorRuntimePhase {
+  switch (laneState) {
+    case "running":
+      return "thinking"
+    case "blocked":
+      return "error"
+    default:
+      return "idle"
+  }
+}
+
 export async function buildSessionRuntimeSnapshot(
   sessionId: string,
   overrides: SessionRuntimeSnapshotOverrides = {}
@@ -723,11 +740,7 @@ export async function buildSessionRuntimeSnapshot(
     laneState === "blocked"
       ? cachedRuntime?.phase
       : undefined) ||
-    (laneState === "running"
-      ? "thinking"
-      : laneState === "blocked"
-        ? "error"
-        : "idle")
+    defaultPhaseForLaneState(laneState)
   const health = overrides.health || (lastError ? "error" : "ok")
   const activeTurnId =
     overrides.activeTurnId ||

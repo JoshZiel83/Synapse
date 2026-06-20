@@ -245,7 +245,6 @@ export default async function imWeixinController(
           return
         }
         reply.status(400).send({ error: message })
-        return
       }
     }
   )
@@ -287,7 +286,6 @@ export default async function imWeixinController(
           return
         }
         reply.status(400).send({ error: message })
-        return
       }
     }
   )

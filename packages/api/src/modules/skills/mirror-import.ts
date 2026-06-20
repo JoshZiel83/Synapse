@@ -523,11 +523,11 @@ export async function importGitHubSkillPackage(input: {
     resolvedRevision,
   })
   const importedFiles = await mapWithConcurrency(blobs, 8, async (entry) => {
-    const relativePath = importRoot
-      ? entry.path === importRoot
-        ? basename(entry.path)
-        : entry.path.slice(prefix.length)
-      : entry.path
+    const relativePath = ((): string => {
+      if (!importRoot) return entry.path
+      if (entry.path === importRoot) return basename(entry.path)
+      return entry.path.slice(prefix.length)
+    })()
     const buffer = await rawFetcher.fetch(entry.path)
     return convertBufferToSkillFile(relativePath, buffer, {
       sourceType: "github",

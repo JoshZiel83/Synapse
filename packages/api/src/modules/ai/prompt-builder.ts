@@ -245,8 +245,7 @@ export function buildActorPrompt(
         canRepresentUser
           ? "You may represent the user only when the permission system allows it, and you must still follow your representation guidelines."
           : "You are not automatically allowed to speak on behalf of the user. If representation would matter, ask or defer."
-      }\n\n` +
-      renderDocSections(actor, mode)
+      }\n\n${renderDocSections(actor, mode)}`
   )
 
   const specialties = readDecodedArray<string>(
@@ -254,8 +253,9 @@ export function buildActorPrompt(
   )
   if (specialties.length > 0) {
     parts.push(
-      `## Your Structured Specialties\n` +
-        specialties.map((specialty: string) => `- \`${specialty}\``).join("\n")
+      `## Your Structured Specialties\n${specialties
+        .map((specialty: string) => `- \`${specialty}\``)
+        .join("\n")}`
     )
   }
 
@@ -287,13 +287,12 @@ export function buildActorPrompt(
     parts.push(
       `# Available Skills\n` +
         `These skills are available on demand. Do not assume their detailed contents are already loaded.\n` +
-        `If one skill clearly matches the task, call \`read_skill\` to read its description or a referenced attachment before using it.\n` +
-        orderedSkills
+        `If one skill clearly matches the task, call \`read_skill\` to read its description or a referenced attachment before using it.\n${orderedSkills
           .map(
             (skill) =>
               `- \`${skill.name}\` (\`${skill.instanceId}\`): ${skill.description}`
           )
-          .join("\n")
+          .join("\n")}`
     )
   }
 
@@ -489,11 +488,11 @@ export function buildActorPrompt(
   if (extraTools && extraTools.length > 0) {
     parts.push(
       `# Available Plugin Tools\n\n` +
-        `You have the following MCP plugin tools:\n` +
-        extraTools
+        `You have the following MCP plugin tools:\n${extraTools
           .map((tool) => `- \`${tool.name}\`: ${tool.description}`)
-          .join("\n") +
-        `\n\nUse these tools when the user's request requires them. Call each tool by exactly the name shown above.`
+          .join(
+            "\n"
+          )}\n\nUse these tools when the user's request requires them. Call each tool by exactly the name shown above.`
     )
   }
 

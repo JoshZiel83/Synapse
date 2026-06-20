@@ -201,17 +201,22 @@ async function main() {
         ? (error as { statusCode: number }).statusCode
         : 500
 
+    const code = (() => {
+      if (statusCode >= 500) {
+        return "internal_server_error"
+      }
+      if (typeof (error as { code?: unknown }).code === "string") {
+        return (error as { code: string }).code
+      }
+      return "request_error"
+    })()
+
     return reply.status(statusCode).send({
       error:
         statusCode >= 500
           ? "Internal Server Error"
           : error.message || "Request failed",
-      code:
-        statusCode >= 500
-          ? "internal_server_error"
-          : typeof (error as { code?: unknown }).code === "string"
-            ? (error as { code: string }).code
-            : "request_error",
+      code,
     })
   })
 

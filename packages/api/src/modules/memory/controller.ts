@@ -76,6 +76,25 @@ function accessSubjectToSubjectRef(subject: AccessSubject): SubjectRef | null {
   }
 }
 
+/**
+ * Resolve the conversation anchor used to build the runtime principal
+ * context: prefer the scope's conversation, fall back to the owner's
+ * conversation, else null. Mirrors the original `scope?.kind === … ? …`
+ * chain exactly (scope checked first, owner second, null otherwise).
+ */
+function resolveConversationAnchor(
+  owner: SubjectRef,
+  scope: SubjectRef | undefined
+): string | null {
+  if (scope?.kind === SUBJECT_KIND.CONVERSATION) {
+    return scope.conversationId
+  }
+  if (owner.kind === SUBJECT_KIND.CONVERSATION) {
+    return owner.conversationId
+  }
+  return null
+}
+
 type CreateBody = CreateMemoryInputBody
 type UpdateBody = UpdateMemoryInputBody
 
@@ -250,12 +269,7 @@ async function requireMemorySpaceWritePermission(
     const ctx = await buildRuntimePrincipalContextDefault({
       principal,
       workspaceId,
-      conversationId:
-        scope?.kind === SUBJECT_KIND.CONVERSATION
-          ? scope.conversationId
-          : owner.kind === SUBJECT_KIND.CONVERSATION
-            ? owner.conversationId
-            : null,
+      conversationId: resolveConversationAnchor(owner, scope),
     })
     runtimeSubjectIds = ctx.runtimeSubjectIds
     runtimeScopeSubjectIds = ctx.runtimeScopeSubjectIds
@@ -411,7 +425,6 @@ export function registerMemoryRoutes(app: FastifyInstance) {
         return { memory }
       } catch (error) {
         handleError(error, reply)
-        return
       }
     }
   )
@@ -440,7 +453,6 @@ export function registerMemoryRoutes(app: FastifyInstance) {
         return { memories }
       } catch (error) {
         handleError(error, reply)
-        return
       }
     }
   )
@@ -476,7 +488,6 @@ export function registerMemoryRoutes(app: FastifyInstance) {
         return { memory }
       } catch (error) {
         handleError(error, reply)
-        return
       }
     }
   )
@@ -536,7 +547,6 @@ export function registerMemoryRoutes(app: FastifyInstance) {
         return { memory }
       } catch (error) {
         handleError(error, reply)
-        return
       }
     }
   )
@@ -639,12 +649,7 @@ export function registerMemoryRoutes(app: FastifyInstance) {
             workspaceId,
             // Surface the target conversation (if any) so write permission
             // on a conversation-owned/scoped target evaluates correctly.
-            conversationId:
-              body.scope?.kind === SUBJECT_KIND.CONVERSATION
-                ? body.scope.conversationId
-                : body.owner.kind === SUBJECT_KIND.CONVERSATION
-                  ? body.owner.conversationId
-                  : null,
+            conversationId: resolveConversationAnchor(body.owner, body.scope),
           })
           runtimeSubjectIds = ctx.runtimeSubjectIds
           runtimeScopeSubjectIds = ctx.runtimeScopeSubjectIds
@@ -688,12 +693,10 @@ export function registerMemoryRoutes(app: FastifyInstance) {
           // the runtime context against the target's conversation
           // anchor (the request-time context may have been tuned for
           // the SOURCE conversation by requireMemoryPermission).
-          const targetConversationId =
-            body.scope?.kind === SUBJECT_KIND.CONVERSATION
-              ? body.scope.conversationId
-              : body.owner.kind === SUBJECT_KIND.CONVERSATION
-                ? body.owner.conversationId
-                : null
+          const targetConversationId = resolveConversationAnchor(
+            body.owner,
+            body.scope
+          )
           const targetCtx = await buildRuntimePrincipalContextDefault({
             principal,
             workspaceId,
@@ -726,7 +729,6 @@ export function registerMemoryRoutes(app: FastifyInstance) {
         return moved
       } catch (error) {
         handleError(error, reply)
-        return
       }
     }
   )
@@ -755,7 +757,6 @@ export function registerMemoryRoutes(app: FastifyInstance) {
         return result
       } catch (error) {
         handleError(error, reply)
-        return
       }
     }
   )
@@ -784,7 +785,6 @@ export function registerMemoryRoutes(app: FastifyInstance) {
         return result
       } catch (error) {
         handleError(error, reply)
-        return
       }
     }
   )
@@ -901,7 +901,6 @@ export function registerMemoryRoutes(app: FastifyInstance) {
         return { grant: presentMemoryAccessGrant(grant) }
       } catch (error) {
         handleError(error, reply)
-        return
       }
     }
   )
@@ -934,7 +933,6 @@ export function registerMemoryRoutes(app: FastifyInstance) {
         return { grants: grants.map(presentMemoryAccessGrant) }
       } catch (error) {
         handleError(error, reply)
-        return
       }
     }
   )
@@ -980,7 +978,6 @@ export function registerMemoryRoutes(app: FastifyInstance) {
         return { revoked }
       } catch (error) {
         handleError(error, reply)
-        return
       }
     }
   )

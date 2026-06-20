@@ -660,17 +660,24 @@ async function emitTaskNotice(
  * emitTaskNotice (after its in-function flip) and by deliverResolvedToolCallTask
  * (where the task resolve tx already flipped the lifecycle in-tx).
  */
+function resolveNoticeMessageBlocks(
+  params: ToolCallTaskTerminalNoticeParams
+): CanonicalContentBlock[] {
+  if (params.messageBlocks && params.messageBlocks.length > 0) {
+    return params.messageBlocks
+  }
+  if (params.message?.trim()) {
+    return textBlocks(params.message.trim())
+  }
+  return textBlocks(params.summary)
+}
+
 async function deliverTaskNotice(
   record: ToolCallTaskRecord,
   status: TaskNoticeStatus,
   params: ToolCallTaskTerminalNoticeParams
 ) {
-  const messageBlocks =
-    params.messageBlocks && params.messageBlocks.length > 0
-      ? params.messageBlocks
-      : params.message?.trim()
-        ? textBlocks(params.message.trim())
-        : textBlocks(params.summary)
+  const messageBlocks = resolveNoticeMessageBlocks(params)
   const message =
     params.message?.trim() ||
     extractText(messageBlocks).trim() ||
@@ -880,6 +887,19 @@ export async function deliverResolvedToolCallTask(
  * and only terminal tasks are delivered. Non-terminal or already-delivered →
  * no-op.
  */
+function mapLifecycleToNoticeStatus(
+  lifecycleStatus: ToolCallTaskLifecycleStatus
+): TaskNoticeStatus {
+  switch (lifecycleStatus) {
+    case "completed":
+      return "completed"
+    case "cancelled":
+      return "cancelled"
+    default:
+      return "failed"
+  }
+}
+
 export async function recoverUndeliveredResolvedTask(taskId: string) {
   const task = await getToolCallTask(taskId)
   if (!task) return null
@@ -889,12 +909,11 @@ export async function recoverUndeliveredResolvedTask(taskId: string) {
     return task
   }
   // Map the terminal lifecycle/outcome back to a TaskNoticeStatus for the notice.
-  const noticeStatus: TaskNoticeStatus =
-    task.lifecycleStatus === "completed"
-      ? "completed"
-      : task.lifecycleStatus === "cancelled"
-        ? "cancelled"
-        : "failed"
+  // The default deliberately catches every other lifecycle (expired/working/…),
+  // mapping it to "failed" — do not narrow it to a throw (would change behavior).
+  const noticeStatus: TaskNoticeStatus = mapLifecycleToNoticeStatus(
+    task.lifecycleStatus
+  )
   const summary =
     task.statusMessage ||
     `${task.sourceToolName.replace(/_/g, " ")} ${noticeStatus}.`

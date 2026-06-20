@@ -153,7 +153,7 @@ test("validateWecomConfig rejects baseWsUrl exceeding length cap", () => {
   // `WECOM_BASE_WS_URL_MAX_BYTES` is the hard cap (currently 255). A
   // pathological multi-kB input must be rejected before it reaches the
   // URL parser to keep validation cost bounded.
-  const huge = "wss://" + "a".repeat(3000)
+  const huge = `wss://${"a".repeat(3000)}`
   const r = validateWecomConfig({ baseWsUrl: huge })
   assert.equal(r.ok, false)
   assert.match(r.errors[0], /exceeds|too long/i)

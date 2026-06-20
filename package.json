@@ -56,7 +56,9 @@
     "db:codegen": "npm run db:codegen -w packages/api",
     "db:seed": "npm run db:seed -w packages/api",
     "db:seed:model-groups": "npm run db:seed:model-groups -w packages/api",
-    "db:rebuild": "npm run db:rebuild -w packages/api"
+    "db:rebuild": "npm run db:rebuild -w packages/api",
+    "lint": "npm run lint -w @synapse/shared -w @synapse/device-protocol -w @synapse/device-sdk -w @synapse/device-runtime -w @synapse/api -w @synapse/remote-agent-daemon",
+    "lint:fix": "npm run lint:fix -w @synapse/shared -w @synapse/device-protocol -w @synapse/device-sdk -w @synapse/device-runtime -w @synapse/api -w @synapse/remote-agent-daemon"
   },
   "overrides": {
     "react": "^19.2.0",
@@ -72,13 +74,15 @@
   "devDependencies": {
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "eslint": "^9.39.4",
     "lint-staged": "^16.4.0",
     "prettier": "^3.8.3",
     "prettier-plugin-tailwindcss": "^0.7.4",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "shadcn": "^4.0.5",
-    "syncpack": "15.3.1"
+    "syncpack": "15.3.1",
+    "typescript-eslint": "^8.60.1"
   },
   "lint-staged": {
     "*.{js,mjs,cjs,jsx,ts,tsx,json,css,md,mdx,yml,yaml,html}": "node scripts/format-files.mjs --formatter=prettier"

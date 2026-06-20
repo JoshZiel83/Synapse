@@ -135,7 +135,7 @@ export function canonicalVfsPath(input: string): string {
       "colon not allowed (ADS marker)"
     )
   }
-  if (input === INTERNAL_NAMESPACE || input === INTERNAL_NAMESPACE + "/") {
+  if (input === INTERNAL_NAMESPACE || input === `${INTERNAL_NAMESPACE}/`) {
     throw new CanonicalPathError("invalid_path", "reserved internal namespace")
   }
   const rawSegments = input.split("/").filter((s) => s.length > 0)
@@ -164,7 +164,7 @@ export function canonicalVfsPath(input: string): string {
     }
     stack.push(seg)
   }
-  const canonical = "/" + stack.join("/")
+  const canonical = `/${stack.join("/")}`
   if (
     canonical === INTERNAL_NAMESPACE ||
     canonical.startsWith(INTERNAL_NAMESPACE_PREFIX)
@@ -177,7 +177,7 @@ export function canonicalVfsPath(input: string): string {
 export function pathUnderPrefix(path: string, prefix: string): boolean {
   if (prefix === "/") return true
   if (path === prefix) return true
-  return path.startsWith(prefix + "/")
+  return path.startsWith(`${prefix}/`)
 }
 
 export function collapsePrefixes(prefixes: readonly string[]): string[] {
@@ -300,11 +300,11 @@ const TMP_TOKEN_RE = /^tmp-[0-9a-f]{32}$/
 const RESTORE_TOKEN_RE = /^restore-[0-9a-f]{32}$/
 
 export function generateTmpToken(): string {
-  return "tmp-" + randomBytes(16).toString("hex")
+  return `tmp-${randomBytes(16).toString("hex")}`
 }
 
 export function generateRestoreToken(): string {
-  return "restore-" + randomBytes(16).toString("hex")
+  return `restore-${randomBytes(16).toString("hex")}`
 }
 
 export interface ExtendedLocalBackend extends VfsBackend {
@@ -406,7 +406,7 @@ export function createLocalFsBackend(
     if (!hostPath.startsWith(hostRootWithSep)) return null
     const rel = relative(hostRootPath, hostPath)
     if (rel.startsWith("..")) return null
-    return "/" + rel.split(sep).join("/")
+    return `/${rel.split(sep).join("/")}`
   }
 
   // Walk back ancestors of a non-existent target until we find one that exists,
@@ -908,14 +908,20 @@ export function createLocalFsBackend(
         // silently filtered (their existence is itself a side channel).
         const st = await fsp.lstat(resolve(target, e.name))
         const isSymlink = st.isSymbolicLink()
+        // Surface symlinks explicitly so the caller knows the entry is a
+        // link, not a regular file/dir. e.isDirectory() is only consulted
+        // for non-symlinks, preserving the original short-circuit order.
+        let kind: VfsNodeKind
+        if (isSymlink) kind = "symlink"
+        else if (e.isDirectory()) kind = "directory"
+        else kind = "file"
         out.push({
           name: e.name,
           path: childCanonical,
-          // Surface symlinks explicitly so the caller knows the entry is
-          // a link, not a regular file/dir. mtime comes from the link
-          // itself; size is left undefined for links (the file size of
-          // a symlink isn't a useful number to expose).
-          kind: isSymlink ? "symlink" : e.isDirectory() ? "directory" : "file",
+          // mtime comes from the link itself; size is left undefined for
+          // links (the file size of a symlink isn't a useful number to
+          // expose).
+          kind,
           size: !isSymlink && e.isFile() ? st.size : undefined,
           writable: true,
           modTime: dateToIsoInstant(st.mtime),

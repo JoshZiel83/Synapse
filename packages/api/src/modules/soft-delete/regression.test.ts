@@ -1110,7 +1110,7 @@ test(
       await db
         .insertInto("account")
         .values({
-          accountId: "cred-" + u,
+          accountId: `cred-${u}`,
           providerId: "credential",
           userId: u,
           password: "x",
@@ -1118,14 +1118,14 @@ test(
         .execute()
       // last remaining account → refuse
       await assert.rejects(
-        () => markAccountUnlinked(db as never, u, "credential", "cred-" + u),
+        () => markAccountUnlinked(db as never, u, "credential", `cred-${u}`),
         (e) => e instanceof LastAccountError
       )
       // add a second (OAuth) account → now the OAuth one can be unlinked
       await db
         .insertInto("account")
         .values({
-          accountId: "oauth-" + u,
+          accountId: `oauth-${u}`,
           providerId: "feishu",
           userId: u,
         })
@@ -1134,7 +1134,7 @@ test(
         db as never,
         u,
         "feishu",
-        "oauth-" + u
+        `oauth-${u}`
       )
       assert.equal(ok, true, "second account unlinked")
       const oauth = await db
@@ -1151,7 +1151,7 @@ test(
       )
       // credential remains live + is now the last account again → re-guarded
       await assert.rejects(
-        () => markAccountUnlinked(db as never, u, "credential", "cred-" + u),
+        () => markAccountUnlinked(db as never, u, "credential", `cred-${u}`),
         (e) => e instanceof LastAccountError
       )
       // unknown account → idempotent false (no throw)

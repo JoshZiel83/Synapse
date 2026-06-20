@@ -187,9 +187,8 @@ async function validateGrantTarget(input: {
       }
       await ensureWorkspaceExists(input.workspaceId)
       await ensureActorInWorkspace(input.actorId, input.workspaceId)
-      return
+      break
     default:
-      return
   }
 }
 
@@ -294,13 +293,16 @@ export async function createModelGroup(data: {
   isDefault?: boolean
   createdByWorkspaceMemberId?: string
 }): Promise<ModelGroupRow> {
-  const ownerType =
-    data.ownerType ||
-    (data.workspaceId
-      ? "workspace"
-      : data.ownerWorkspaceMemberId
-        ? "workspace_member"
-        : "platform")
+  const inferOwnerType = (): ModelGroupOwnerType => {
+    if (data.workspaceId) {
+      return "workspace"
+    }
+    if (data.ownerWorkspaceMemberId) {
+      return "workspace_member"
+    }
+    return "platform"
+  }
+  const ownerType = data.ownerType || inferOwnerType()
 
   if (ownerType === "workspace" && !data.workspaceId) {
     throw new ModelGroupError(
@@ -322,13 +324,19 @@ export async function createModelGroup(data: {
       ? data.ownerWorkspaceMemberId || null
       : null
 
+  const defaultGrantScope = (() => {
+    switch (ownerType) {
+      case "platform":
+        return MODEL_GROUP_GRANT_SCOPE.PLATFORM
+      case "workspace":
+        return MODEL_GROUP_GRANT_SCOPE.WORKSPACE
+      default:
+        return MODEL_GROUP_GRANT_SCOPE.WORKSPACE_MEMBER
+    }
+  })()
+
   const defaultGrantSubjectRef = buildModelGroupGrantSubjectRef({
-    grantScope:
-      ownerType === "platform"
-        ? MODEL_GROUP_GRANT_SCOPE.PLATFORM
-        : ownerType === "workspace"
-          ? MODEL_GROUP_GRANT_SCOPE.WORKSPACE
-          : MODEL_GROUP_GRANT_SCOPE.WORKSPACE_MEMBER,
+    grantScope: defaultGrantScope,
     workspaceId: ownerWorkspaceId,
     workspaceMemberId: ownerWorkspaceMemberId,
   })

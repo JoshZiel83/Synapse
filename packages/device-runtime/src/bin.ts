@@ -800,9 +800,9 @@ async function main() {
 }
 
 function mapHostPlatform(platform: NodeJS.Platform): string {
-  if (platform === "win32") return "win32-" + process.arch
-  if (platform === "darwin") return "darwin-" + process.arch
-  return "linux-" + process.arch
+  if (platform === "win32") return `win32-${process.arch}`
+  if (platform === "darwin") return `darwin-${process.arch}`
+  return `linux-${process.arch}`
 }
 
 /**

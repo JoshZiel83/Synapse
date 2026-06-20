@@ -32,12 +32,16 @@ export function buildReplyToRefUsageGuidance(
 export function buildRequestUserInputToolDescription(
   variant: RequestUserInputDescriptionVariant
 ): string {
-  const intro =
-    variant.kind === "direct"
-      ? `Request structured input from the single user in this direct conversation. The recipient is implicit: ${variant.recipientLabel}.`
-      : variant.kind === "group"
-        ? `Request structured input from exactly one user in this conversation. \`targetParticipantId\` is required. Available \`targetParticipantId\` values: ${variant.candidateDirectory}.`
-        : "Request structured input from one user in the current conversation. In direct conversations the target user is implicit; in group conversations you must provide `targetParticipantId`."
+  const intro = ((): string => {
+    switch (variant.kind) {
+      case "direct":
+        return `Request structured input from the single user in this direct conversation. The recipient is implicit: ${variant.recipientLabel}.`
+      case "group":
+        return `Request structured input from exactly one user in this conversation. \`targetParticipantId\` is required. Available \`targetParticipantId\` values: ${variant.candidateDirectory}.`
+      default:
+        return "Request structured input from one user in the current conversation. In direct conversations the target user is implicit; in group conversations you must provide `targetParticipantId`."
+    }
+  })()
 
   return joinSentences(
     intro,
@@ -71,12 +75,16 @@ type ExitPlanModeDescriptionVariant =
 export function buildExitPlanModeToolDescription(
   variant: ExitPlanModeDescriptionVariant
 ): string {
-  const intro =
-    variant.kind === "direct"
-      ? `Submit the completed implementation plan for approval by the single user in this direct conversation. The recipient is implicit: ${variant.recipientLabel}.`
-      : variant.kind === "group"
-        ? `Submit the completed implementation plan for approval by exactly one user in this conversation. \`targetParticipantId\` is required. Available \`targetParticipantId\` values: ${variant.candidateDirectory}.`
-        : "Submit the completed implementation plan for user approval. In direct conversations the target user is implicit; in group conversations you must provide `targetParticipantId`."
+  const intro = ((): string => {
+    switch (variant.kind) {
+      case "direct":
+        return `Submit the completed implementation plan for approval by the single user in this direct conversation. The recipient is implicit: ${variant.recipientLabel}.`
+      case "group":
+        return `Submit the completed implementation plan for approval by exactly one user in this conversation. \`targetParticipantId\` is required. Available \`targetParticipantId\` values: ${variant.candidateDirectory}.`
+      default:
+        return "Submit the completed implementation plan for user approval. In direct conversations the target user is implicit; in group conversations you must provide `targetParticipantId`."
+    }
+  })()
 
   return joinSentences(
     intro,

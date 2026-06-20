@@ -49,7 +49,7 @@ export interface RipgrepDispatchOutput {
 
 const SEARCH_TIMEOUT_MS = 30_000
 const MAX_OUTPUT_BYTES = 5 * 1024 * 1024
-const INTERNAL_PREFIX = INTERNAL_NAMESPACE + "/"
+const INTERNAL_PREFIX = `${INTERNAL_NAMESPACE}/`
 
 const RipgrepMatchFrameSchema = z
   .object({
@@ -95,7 +95,7 @@ export function detectRipgrep(deps?: RipgrepDeps): string | null {
   for (const dir of pathEnv.split(delimiter)) {
     if (!dir) continue
     for (const e of ext) {
-      const c = join(dir, "rg" + e)
+      const c = join(dir, `rg${e}`)
       if (existsSync(c)) return c
     }
   }
@@ -111,7 +111,7 @@ function hostToCanonical(
   if (!hostPath.startsWith(hostRootWithSep)) return null
   const rel = relative(hostRootPath, hostPath)
   if (rel.startsWith("..")) return null
-  return "/" + rel.split(sep).join("/")
+  return `/${rel.split(sep).join("/")}`
 }
 
 function isInternal(canonical: string): boolean {
@@ -292,8 +292,8 @@ export async function dispatchRipgrep(
       if (input.query.length > 0) {
         if (input.regex) {
           if (!regexFilter || !regexFilter.test(canonical)) return true
-        } else {
-          if (!canonical.includes(input.query)) return true
+        } else if (!canonical.includes(input.query)) {
+          return true
         }
       }
       if (globFilter) {

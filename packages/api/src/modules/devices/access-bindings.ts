@@ -346,7 +346,6 @@ export function registerDeviceAccessBindingRoutes(app: FastifyInstance): void {
           reason: parsed.data.reason,
         })
         reply.status(204).send()
-        return
       } catch (err) {
         reply
           .status(500)

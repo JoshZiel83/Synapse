@@ -46,6 +46,21 @@ async function resolveInitiator(params: {
   }
 }
 
+function defaultParticipantName(
+  participantType: "actor" | "remote_agent" | "workspace_member" | "external"
+) {
+  switch (participantType) {
+    case CONVERSATION_PARTICIPANT_TYPE.ACTOR:
+      return "Actor"
+    case CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT:
+      return "Remote Agent"
+    case CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER:
+      return "User"
+    default:
+      return "External participant"
+  }
+}
+
 async function loadParticipantDisplay(params: {
   participantType: "actor" | "remote_agent" | "workspace_member" | "external"
   actorId?: string
@@ -59,15 +74,7 @@ async function loadParticipantDisplay(params: {
     }
   }
   return {
-    name:
-      params.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
-        ? "Actor"
-        : params.participantType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT
-          ? "Remote Agent"
-          : params.participantType ===
-              CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
-            ? "User"
-            : "External participant",
+    name: defaultParticipantName(params.participantType),
     title: undefined as string | undefined,
   }
 }

@@ -198,11 +198,9 @@ export function createCommandlineBuiltin(
           tools.push(POWERSHELL_TOOL)
           executors.push("powershell")
         }
-      } else {
-        if (env.bash) {
-          tools.push(BASH_TOOL)
-          executors.push("bash")
-        }
+      } else if (env.bash) {
+        tools.push(BASH_TOOL)
+        executors.push("bash")
       }
       tools.push(EXEC_FILE_TOOL)
       executors.push("exec_file")
@@ -229,7 +227,6 @@ export function createCommandlineBuiltin(
       // the matcher so a malformed call returns invalid_request, not
       // permission_denied).
       let request: CommandlineMatchRequest
-      let timeoutMs: number | undefined
       let resolvedWorkingDirectory: string | undefined
 
       const rawWorkingDirectory = input.args["working_directory"]
@@ -264,7 +261,7 @@ export function createCommandlineBuiltin(
           message: "timeout_ms must be a number",
         })
       }
-      timeoutMs = typeof rawTimeout === "number" ? rawTimeout : undefined
+      const timeoutMs = typeof rawTimeout === "number" ? rawTimeout : undefined
 
       switch (input.toolName) {
         case "bash":

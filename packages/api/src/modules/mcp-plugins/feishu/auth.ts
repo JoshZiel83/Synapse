@@ -122,12 +122,14 @@ function resolveTtlSeconds(
     )
     return defaultSeconds
   }
-  const n =
-    typeof raw === "number"
-      ? raw
-      : typeof raw === "string" && raw.trim() !== ""
-        ? Number(raw.trim())
-        : Number.NaN
+  let n: number
+  if (typeof raw === "number") {
+    n = raw
+  } else if (typeof raw === "string" && raw.trim() !== "") {
+    n = Number(raw.trim())
+  } else {
+    n = Number.NaN
+  }
   if (!Number.isFinite(n) || n <= 0) {
     throw new Error(`${label}: invalid expires_in value: ${String(raw)}`)
   }

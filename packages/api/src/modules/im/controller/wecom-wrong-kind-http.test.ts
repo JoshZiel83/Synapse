@@ -49,17 +49,20 @@ function attachProductionErrorHandler(
       typeof error.statusCode === "number" && error.statusCode >= 400
         ? error.statusCode
         : 500
+    let code: string
+    if (statusCode >= 500) {
+      code = "internal_server_error"
+    } else if (typeof error.code === "string") {
+      code = error.code
+    } else {
+      code = "request_error"
+    }
     return reply.status(statusCode).send({
       error:
         statusCode >= 500
           ? "Internal Server Error"
           : error.message || "Request failed",
-      code:
-        statusCode >= 500
-          ? "internal_server_error"
-          : typeof error.code === "string"
-            ? error.code
-            : "request_error",
+      code,
     })
   })
 }

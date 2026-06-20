@@ -231,12 +231,17 @@ export async function validateConversationScopedAccessTarget(params: {
     }
   )
   if (!hasActive) {
-    const label =
-      activeParticipantCheck.principalKind === "actor"
-        ? "actor"
-        : activeParticipantCheck.principalKind === "remote_agent"
-          ? "remote agent"
-          : "workspace member"
+    let label
+    switch (activeParticipantCheck.principalKind) {
+      case "actor":
+        label = "actor"
+        break
+      case "remote_agent":
+        label = "remote agent"
+        break
+      default:
+        label = "workspace member"
+    }
     throw params.buildError(
       `Selected ${label} must already be an active participant in the selected conversation.`
     )

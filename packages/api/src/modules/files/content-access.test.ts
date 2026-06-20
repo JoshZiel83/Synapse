@@ -791,7 +791,7 @@ test("contentAccessResolver: library-global (workspace_id NULL) asset is readabl
 // conversation B, even when the user actively participates in BOTH. Mirrors the
 // main runtime, which only adds the CURRENT active conversation to the scope set.
 
-const SHA_CS = "c0ffee".repeat(10) + "abcd" // 64 hex chars
+const SHA_CS = `${"c0ffee".repeat(10)}abcd` // 64 hex chars
 
 async function seedTwoConvUserWithFileSpace(db: Kysely<any>) {
   const owner = await db
