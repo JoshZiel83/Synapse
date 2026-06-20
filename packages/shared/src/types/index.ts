@@ -1245,7 +1245,6 @@ export interface RemoteAgentAccessRequestListResponse {
 }
 
 export interface ConversationParticipantView {
-  memberId?: UUID
   participantId?: UUID
   participantType?: ConversationParticipantType
   id?: UUID

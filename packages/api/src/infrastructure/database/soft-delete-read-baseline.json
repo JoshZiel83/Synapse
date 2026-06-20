@@ -37,7 +37,6 @@
   "modules/memory/repo.ts": {
     "conversations": 2,
     "memory_items": 4,
-    "memory_spaces": 1,
     "users": 1
   },
   "modules/model-groups/repo.ts": {

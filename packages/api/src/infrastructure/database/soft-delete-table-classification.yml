@@ -1295,7 +1295,7 @@ foreignKeys:
     _child: remote_agent_group_task_grants(workspace_member_id)
     _parent: workspace_members(id)
     _was: CASCADE
-  digest:28ff69af6ec97756:
+  digest:fb830f671eb805da:
     targetAction: SET NULL
     setNull:
       canLose: false
@@ -1694,7 +1694,7 @@ foreignKeys:
     _child: provider_steps(model_binding_version_id)
     _parent: model_binding_versions(id)
     _was: RESTRICT
-  digest:a6095b142e55d57d:
+  digest:a7020e57b07a9c32:
     targetAction: SET NULL
     liveIntegrity: historical
     setNull:

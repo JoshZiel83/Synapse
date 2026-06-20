@@ -68,12 +68,17 @@ export async function getWorkspaceMemberRowByUserId(
 }
 
 export async function getWorkspaceMemberRowById(workspaceMemberId: string) {
-  return db
-    .selectFrom("workspaceMembers")
-    .select(["id", "workspaceId", "userId", "trustLevel", "joinedAt"])
-    .where("id", "=", workspaceMemberId)
-    .limit(1)
-    .executeTakeFirst()
+  return (
+    db
+      .selectFrom("workspaceMembers")
+      .select(["id", "workspaceId", "userId", "trustLevel", "joinedAt"])
+      .where("id", "=", workspaceMemberId)
+      // Validity gate for grant/revoke: resolve only active memberships
+      // (consistent with getWorkspaceMemberRowByUserId).
+      .where("status", "=", "active")
+      .limit(1)
+      .executeTakeFirst()
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -805,6 +810,10 @@ export async function listMembersWithAccess(workspaceId: string) {
       ),
     ])
     .where("wm.workspaceId", "=", workspaceId)
+    // Roster shows only active members; 'left'/'removed' are durable tombstones
+    // and the view carries no status field to distinguish them (matches the
+    // canonical membership gate). The access subquery already filters active.
+    .where("wm.status", "=", "active")
     .orderBy("wm.joinedAt", "asc")
     .execute()
   return rows

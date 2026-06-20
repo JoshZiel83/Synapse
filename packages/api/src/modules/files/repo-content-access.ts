@@ -211,10 +211,13 @@ async function hasVisibleMessageRef(
     )
     .innerJoin("accessSubjects as cpsubj", "cpsubj.id", "cp.subjectId")
     .innerJoin("workspaceMembers as wm", "wm.id", "cpsubj.workspaceMemberId")
+    .innerJoin("conversations as c", "c.id", "ci.conversationId")
     .select("cip.id")
     .where("cip.refSha256", "=", sha256)
     .where("wm.userId", "=", userId)
     .where("cp.state", "=", "active")
+    // A soft-deleted conversation serves no content.
+    .where("c.deletedAt", "is", null)
     .where("ci.scope", "=", "shared")
     .where("ci.surface", "=", "visible")
     .where((eb) =>
@@ -271,10 +274,13 @@ async function hasVisibleMessageRef(
     )
     .innerJoin("accessSubjects as cpsubj", "cpsubj.id", "cp.subjectId")
     .innerJoin("workspaceMembers as wm", "wm.id", "cpsubj.workspaceMemberId")
+    .innerJoin("conversations as c", "c.id", "tc.conversationId")
     .select("trp.id")
     .where("trp.refSha256", "=", sha256)
     .where("wm.userId", "=", userId)
     .where("cp.state", "=", "active")
+    // A soft-deleted conversation serves no content.
+    .where("c.deletedAt", "is", null)
     .$if(Boolean(conversationId), (qb) =>
       qb.where("tc.conversationId", "=", conversationId as string)
     )
@@ -408,10 +414,13 @@ async function hasReadableMemoryRef(
     )
     .innerJoin("accessSubjects as cpsubj", "cpsubj.id", "cp.subjectId")
     .innerJoin("workspaceMembers as wm", "wm.id", "cpsubj.workspaceMemberId")
+    .innerJoin("conversations as c", "c.id", "cpt.conversationId")
     .select("cap.id")
     .where("cap.refSha256", "=", sha256)
     .where("wm.userId", "=", userId)
     .where("cp.state", "=", "active")
+    // A soft-deleted conversation serves no content.
+    .where("c.deletedAt", "is", null)
     .$if(Boolean(currentConversationId), (qb) =>
       qb.where("cpt.conversationId", "=", currentConversationId as string)
     )
