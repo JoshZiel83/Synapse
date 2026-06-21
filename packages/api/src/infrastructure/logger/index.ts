@@ -99,7 +99,6 @@ const SCOPE_TO_DOMAIN: Readonly<Record<string, DomainScope>> = {
   config: { domain: "infra", component: "config" },
   crypto: { domain: "infra", component: "crypto" },
   database: { domain: "infra", component: "database" },
-  "device-cli-grants": { domain: "devices", component: "cli-grants" },
   "device-task-sweeper": { domain: "devices", component: "task-sweeper" },
   events: { domain: "infra", component: "events" },
   execution: { domain: "execution" },

@@ -555,40 +555,6 @@ export async function selectExposureAvailableCliEntryPoints(
   )
 }
 
-/**
- * Active program_only CLI grants on a device's commandline capability (plan P3).
- * Returns {id, program(=entry_point)} for each, so the catalog-sync reconcile can
- * skip-if-exists (no duplicate mint) and revoke grants whose CLI flipped to
- * unavailable. runtime_authorization_grants has no unique index, so this read is
- * the dedup mechanism for the full-replace catalog sync.
- */
-export async function selectActiveProgramOnlyCliGrants(
-  deviceCapabilityId: string,
-  queryable: Executor = db
-): Promise<{ id: string; program: string }[]> {
-  const rows = await queryable
-    .selectFrom("runtimeAuthorizationGrants")
-    .select(["id", "policy"])
-    .where("deviceCapabilityId", "=", deviceCapabilityId)
-    .where("status", "=", "active")
-    .execute()
-  const out: { id: string; program: string }[] = []
-  for (const r of rows) {
-    const commandline = (
-      r.policy as {
-        commandline?: { commandMatchType?: string; program?: string }
-      } | null
-    )?.commandline
-    if (
-      commandline?.commandMatchType === "program_only" &&
-      typeof commandline.program === "string"
-    ) {
-      out.push({ id: r.id as string, program: commandline.program })
-    }
-  }
-  return out
-}
-
 /** INSERT a grant row, RETURNING its id. Caller refetches the joined row. */
 export async function insertRuntimeAuthorizationGrantRow(
   executor: Executor,
