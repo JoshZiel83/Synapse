@@ -31,7 +31,7 @@ test("buildToolMeta: MCP structuredContent merged, wins on collision", () => {
 test("buildToolMeta: reserved top-level keys are NOT pulled into toolMeta", () => {
   const out = buildToolMeta({
     meta: {
-      origin: { kind: "builtin" },
+      origin: { kind: "system" },
       synapse_error: { code: "x" },
       isError: true,
       toolCallId: "id",

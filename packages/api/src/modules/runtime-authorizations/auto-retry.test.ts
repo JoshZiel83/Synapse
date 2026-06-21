@@ -64,7 +64,7 @@ test("cuaFocusScopeForAutoRetry returns undefined when sessionId missing — fai
 
 test("end-to-end wiring: grant record's sourceRuntimeSessionId drives cua_focus_scope_id", () => {
   // Production round-trip:
-  //   1. projection writes runtimeSessionId = projectInput.sessionId
+  //   1. projection writes sourceRuntimeSessionId = projectInput.sessionId
   //      → tool_call_task_runtime_authorization.source_runtime_session_id
   //   2. approval applies it to the new grant
   //      → runtime_authorization_grants.source_runtime_session_id
