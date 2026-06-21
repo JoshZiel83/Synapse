@@ -185,7 +185,6 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
       try {
         await deleteDevice(workspaceId, deviceId)
         reply.status(204).send()
-        return
       } catch (err) {
         if (sendModuleError(reply, err)) return
         throw err
@@ -347,7 +346,6 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
       try {
         await detachDeviceService(workspaceId, deviceId, serviceId)
         reply.status(204).send()
-        return
       } catch (err) {
         if (sendModuleError(reply, err)) return
         throw err

@@ -145,7 +145,6 @@ export default async function relationshipController(app: FastifyInstance) {
         )
       } catch (error) {
         sendServiceError(reply, error)
-        return
       }
     }
   )
@@ -181,7 +180,6 @@ export default async function relationshipController(app: FastifyInstance) {
         )
       } catch (error) {
         sendServiceError(reply, error)
-        return
       }
     }
   )
@@ -215,7 +213,6 @@ export default async function relationshipController(app: FastifyInstance) {
         )
       } catch (error) {
         sendServiceError(reply, error)
-        return
       }
     }
   )
@@ -254,7 +251,6 @@ export default async function relationshipController(app: FastifyInstance) {
         )
       } catch (error) {
         sendServiceError(reply, error)
-        return
       }
     }
   )
@@ -276,7 +272,6 @@ export default async function relationshipController(app: FastifyInstance) {
         })
       } catch (error) {
         sendServiceError(reply, error)
-        return
       }
     }
   )
@@ -315,7 +310,6 @@ export default async function relationshipController(app: FastifyInstance) {
         })
       } catch (error) {
         sendServiceError(reply, error)
-        return
       }
     }
   )
@@ -376,7 +370,6 @@ export default async function relationshipController(app: FastifyInstance) {
         )
       } catch (error) {
         sendServiceError(reply, error)
-        return
       }
     }
   )
@@ -403,7 +396,6 @@ export default async function relationshipController(app: FastifyInstance) {
         )
       } catch (error) {
         sendServiceError(reply, error)
-        return
       }
     }
   )
@@ -468,7 +460,6 @@ export default async function relationshipController(app: FastifyInstance) {
         )
       } catch (error) {
         sendServiceError(reply, error)
-        return
       }
     }
   )
@@ -495,7 +486,6 @@ export default async function relationshipController(app: FastifyInstance) {
         )
       } catch (error) {
         sendServiceError(reply, error)
-        return
       }
     }
   )
@@ -522,7 +512,6 @@ export default async function relationshipController(app: FastifyInstance) {
         )
       } catch (error) {
         sendServiceError(reply, error)
-        return
       }
     }
   )
@@ -549,7 +538,6 @@ export default async function relationshipController(app: FastifyInstance) {
         )
       } catch (error) {
         sendServiceError(reply, error)
-        return
       }
     }
   )
@@ -595,7 +583,6 @@ export default async function relationshipController(app: FastifyInstance) {
         )
       } catch (error) {
         sendServiceError(reply, error)
-        return
       }
     }
   )
@@ -620,7 +607,6 @@ export default async function relationshipController(app: FastifyInstance) {
         )
       } catch (error) {
         sendServiceError(reply, error)
-        return
       }
     }
   )

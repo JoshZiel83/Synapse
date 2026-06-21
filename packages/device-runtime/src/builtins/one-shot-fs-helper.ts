@@ -243,7 +243,7 @@ export class OneShotFsHelper {
       const frame = this.traceparent
         ? { jsonrpc: "2.0", id, method, params, traceparent: this.traceparent }
         : { jsonrpc: "2.0", id, method, params }
-      this.child.stdin?.write(JSON.stringify(frame) + "\n")
+      this.child.stdin?.write(`${JSON.stringify(frame)}\n`)
     })
   }
 

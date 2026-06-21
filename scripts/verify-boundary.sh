@@ -44,6 +44,33 @@ node ./scripts/guard-datetime-boundaries.mjs
 node ./scripts/guard-logging.mjs
 ok "guards clean"
 
+# ── 2b. Curated ESLint rule set (no-nested-ternary et al.) ──────────────────
+# Per-package eslint.config.mjs across the business-logic packages enforce the
+# Airbnb-aligned control-flow subset (headline: no-nested-ternary). Fast,
+# syntactic, no build needed — runs here so a chained ternary can never land.
+step "lint: curated ESLint rules across business-logic packages"
+npm run lint
+ok "lint clean"
+
+# ── 2c. Type-aware lint: api switch-exhaustiveness ──────────────────────────
+# Separate from the fast `npm run lint` because building the api type graph is
+# slow + memory-hungry (the script bumps the Node heap to 8GB). 0 violations
+# today — regression prevention for future discriminated-union switches.
+step "lint:types — @typescript-eslint/switch-exhaustiveness-check (api)"
+npm run lint:types -w @synapse/api
+ok "type-aware lint clean"
+
+# ── 2d. JSX leaked-render gate (crash class) ────────────────────────────────
+# `{count && <X/>}` renders a stray "0"/"NaN" on web and CRASHES React Native.
+# Standalone gate so it covers web-next (whose full lint is not a CI gate) plus
+# mobile-app. mobile-app's own lint is also run for its error-level rules
+# (rules-of-hooks etc.); its react-hooks v7 rules are warnings by design.
+step "lint: react/jsx-no-leaked-render (web-next + mobile-app)"
+node_modules/.bin/eslint --no-config-lookup -c scripts/eslint-jsx-leaked.config.mjs \
+  "packages/web-next/**/*.tsx" "packages/mobile-app/**/*.tsx"
+( cd packages/mobile-app && npm run lint )
+ok "jsx-leaked-render + mobile-app lint clean"
+
 # ── 3. Business-enum audit (no raw protocol literals) ───────────────────────
 step "audit:business-enums"
 npm run audit:business-enums

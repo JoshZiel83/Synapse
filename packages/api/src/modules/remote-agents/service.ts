@@ -11,7 +11,7 @@ import {
   type RemoteAgentMachineTrustStatus,
   type RemoteAgentRuntimeKind,
   type RemoteAgentRuntimeStateType,
-  type WorkspaceAppGrantPermission,
+  type WorkspaceResourceGrantPermission,
   type Timestamp,
 } from "@synapse/shared"
 import { config } from "../../config/index.js"
@@ -286,14 +286,18 @@ async function updateRemoteAgentRuntimeStatus(
   message: Extract<RemoteAgentMachineMessage, { type: "agent:status" }>,
   queryable?: Executor
 ) {
-  const runStatus =
-    message.state === REMOTE_AGENT_RUNTIME_STATE.OFFLINE
-      ? "cancelled"
-      : message.state === REMOTE_AGENT_RUNTIME_STATE.ERROR
-        ? "failed"
-        : message.state === REMOTE_AGENT_RUNTIME_STATE.IDLE
-          ? "completed"
-          : "running"
+  const runStatus = ((): "running" | "completed" | "failed" | "cancelled" => {
+    switch (message.state) {
+      case REMOTE_AGENT_RUNTIME_STATE.OFFLINE:
+        return "cancelled"
+      case REMOTE_AGENT_RUNTIME_STATE.ERROR:
+        return "failed"
+      case REMOTE_AGENT_RUNTIME_STATE.IDLE:
+        return "completed"
+      default:
+        return "running"
+    }
+  })()
   const runId =
     message.runKey && message.runKey.trim()
       ? await repo.ensureRemoteAgentRunRepo({
@@ -760,7 +764,7 @@ export async function createRemoteAgent(params: {
   metadata?: Record<string, unknown>
   grants?: Array<{
     target: CapabilityAccessTarget
-    permissions: WorkspaceAppGrantPermission[]
+    permissions: WorkspaceResourceGrantPermission[]
     conversationTypeMaskOverride?: number | null
     reason?: string
   }>
@@ -840,7 +844,7 @@ export async function updateRemoteAgent(params: {
       params.isPublicShared ?? existing.remoteAgent.isPublicShared,
     metadata: nextMetadata,
   })
-  await repo.updateWorkspaceAppRootDefault({
+  await repo.updateWorkspaceResourceRootDefault({
     id: params.remoteAgentId,
     displayName: params.displayName?.trim() || existing.remoteAgent.displayName,
     status:
@@ -861,8 +865,8 @@ export async function deleteRemoteAgent(params: {
   userId: string
 }) {
   await requireWorkspaceMemberIdentity(params.workspaceId, params.userId)
-  // Root lifecycle lives on workspace_apps. The detail row stays until purge.
-  await repo.updateWorkspaceAppRootDefault({
+  // Root lifecycle lives on workspace_resources. The detail row stays until purge.
+  await repo.updateWorkspaceResourceRootDefault({
     id: params.remoteAgentId,
     status: "archived",
     deletedAt: new Date(),
@@ -1049,7 +1053,7 @@ export async function updateRemoteAgentGroupTaskGrants(params: {
 
   await repo.replaceGroupTaskGrantsTx({
     remoteAgentId: params.remoteAgentId,
-    grantedByWorkspaceMemberId: identity.workspaceMemberId,
+    createdByWorkspaceMemberId: identity.workspaceMemberId,
     workspaceMemberIds: nextIds,
   })
 
@@ -1551,7 +1555,6 @@ export async function handleRemoteAgentDaemonConnection(
 
     if (message?.type === "agent:status") {
       await updateRemoteAgentRuntimeStatus(machine.id, message)
-      return
     }
   })
 

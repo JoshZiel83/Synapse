@@ -10,6 +10,7 @@ import { CompiledQuery, sql, type RawBuilder } from "kysely"
 import type {
   ChatSyncEventType,
   ConversationMessageTransportDirection,
+  ConversationParticipantState,
   ConversationParticipantType,
   RemoteAgentRuntimeStateType,
   SessionStatus,
@@ -144,7 +145,7 @@ export type ChatParticipantRow = {
   actorJoinVersionId: string | null
   displayName: string | null
   roleKey: string
-  state: "active" | "left" | "removed"
+  state: ConversationParticipantState
   metadata: Record<string, unknown>
   joinedAt: Date
   leftAt: Date | null
@@ -927,9 +928,9 @@ export async function listChatConversationParticipantRows(
       LEFT JOIN workspace_members wm ON wm.id = cpsubj.workspace_member_id
       LEFT JOIN users u ON u.id = wm.user_id
       LEFT JOIN actors a ON a.id = cpsubj.actor_id
-      LEFT JOIN workspace_apps_live actor_app ON actor_app.id = a.id
+      LEFT JOIN workspace_resources_live actor_app ON actor_app.id = a.id
       LEFT JOIN remote_agents ra ON ra.id = cpsubj.remote_agent_id
-      LEFT JOIN workspace_apps_live remote_agent_app ON remote_agent_app.id = ra.id
+      LEFT JOIN workspace_resources_live remote_agent_app ON remote_agent_app.id = ra.id
       LEFT JOIN actor_versions current_version
         ON current_version.actor_id = a.id
        AND current_version.version = a.current_version
@@ -1018,9 +1019,9 @@ export async function getChatWorkspaceMemberConversationParticipantRow(
       LEFT JOIN workspace_members wm ON wm.id = cpsubj.workspace_member_id
       LEFT JOIN users u ON u.id = wm.user_id
       LEFT JOIN actors a ON a.id = cpsubj.actor_id
-      LEFT JOIN workspace_apps_live actor_app ON actor_app.id = a.id
+      LEFT JOIN workspace_resources_live actor_app ON actor_app.id = a.id
       LEFT JOIN remote_agents ra ON ra.id = cpsubj.remote_agent_id
-      LEFT JOIN workspace_apps_live remote_agent_app ON remote_agent_app.id = ra.id
+      LEFT JOIN workspace_resources_live remote_agent_app ON remote_agent_app.id = ra.id
       LEFT JOIN LATERAL (
         SELECT
           ta.id,
@@ -1870,11 +1871,11 @@ export async function listActorDisplayNameRows(
 
   return executor
     .selectFrom("actors as actor")
-    .innerJoin("workspaceAppsLive as app", "app.id", "actor.id")
-    .select(["actor.id", "app.displayName"])
-    .where("app.workspaceId", "=", workspaceId)
-    .where("app.deletedAt", "is", null)
-    .where("app.status", "=", "active")
+    .innerJoin("workspaceResourcesLive as resource", "resource.id", "actor.id")
+    .select(["actor.id", "resource.displayName"])
+    .where("resource.workspaceId", "=", workspaceId)
+    .where("resource.deletedAt", "is", null)
+    .where("resource.status", "=", "active")
     .where("actor.id", "in", actorIds)
     .execute()
 }
@@ -1890,11 +1891,11 @@ export async function listRemoteAgentDisplayNameRows(
 
   return executor
     .selectFrom("remoteAgents as agent")
-    .innerJoin("workspaceAppsLive as app", "app.id", "agent.id")
-    .select(["agent.id", "app.displayName"])
-    .where("app.workspaceId", "=", workspaceId)
-    .where("app.deletedAt", "is", null)
-    .where("app.status", "=", "active")
+    .innerJoin("workspaceResourcesLive as resource", "resource.id", "agent.id")
+    .select(["agent.id", "resource.displayName"])
+    .where("resource.workspaceId", "=", workspaceId)
+    .where("resource.deletedAt", "is", null)
+    .where("resource.status", "=", "active")
     .where("agent.id", "in", remoteAgentIds)
     .execute()
 }

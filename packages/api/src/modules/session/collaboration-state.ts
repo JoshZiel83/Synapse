@@ -75,12 +75,15 @@ function parsePlanDraftState(
     typeof value.explanation === "string"
       ? value.explanation.trim() || undefined
       : undefined
-  const enteredAt =
-    typeof value.enteredAt === "string"
-      ? value.enteredAt.trim()
-        ? assertIsoInstant(value.enteredAt.trim())
-        : undefined
+  let enteredAt: SessionPlanDraftState["enteredAt"]
+  if (typeof value.enteredAt === "string") {
+    const trimmedEnteredAt = value.enteredAt.trim()
+    enteredAt = trimmedEnteredAt
+      ? assertIsoInstant(trimmedEnteredAt)
       : undefined
+  } else {
+    enteredAt = undefined
+  }
 
   return {
     summary,

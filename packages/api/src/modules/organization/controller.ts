@@ -30,19 +30,27 @@ import {
   ActorViewSchema,
 } from "@synapse/shared/schemas"
 
+function resolveGrantSubjectRef(
+  subject: ActorPackageInitialGrantTargetInput["subject"]
+) {
+  switch (subject.kind) {
+    case SUBJECT_KIND.WORKSPACE:
+      return workspaceRef(subject.workspaceId)
+    case SUBJECT_KIND.WORKSPACE_MEMBER:
+      return workspaceMemberRef(subject.workspaceMemberId)
+    case SUBJECT_KIND.CONVERSATION:
+      return conversationRef(subject.conversationId)
+    case SUBJECT_KIND.ACTOR:
+      return actorRef(subject.actorId)
+    default:
+      return remoteAgentRef(subject.remoteAgentId)
+  }
+}
+
 function toCapabilityAccessTarget(
   input: ActorPackageInitialGrantTargetInput
 ): CapabilityAccessTarget {
-  const subject =
-    input.subject.kind === SUBJECT_KIND.WORKSPACE
-      ? workspaceRef(input.subject.workspaceId)
-      : input.subject.kind === SUBJECT_KIND.WORKSPACE_MEMBER
-        ? workspaceMemberRef(input.subject.memberId)
-        : input.subject.kind === SUBJECT_KIND.CONVERSATION
-          ? conversationRef(input.subject.conversationId)
-          : input.subject.kind === SUBJECT_KIND.ACTOR
-            ? actorRef(input.subject.actorId)
-            : remoteAgentRef(input.subject.remoteAgentId)
+  const subject = resolveGrantSubjectRef(input.subject)
   const scope = input.scope
     ? conversationRef(input.scope.conversationId)
     : undefined

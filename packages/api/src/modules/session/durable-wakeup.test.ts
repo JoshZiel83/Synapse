@@ -1,8 +1,10 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import crypto from "node:crypto"
+import { SUBJECT_KIND } from "@synapse/shared"
 import type { Kysely } from "kysely"
 import { withTestDb } from "../../test/helpers/db.js"
+import { upsertAccessSubject } from "../access/subject-registry.js"
 import { insertSessionWakeupRow } from "./runtime.js"
 
 /**
@@ -45,13 +47,17 @@ async function buildSessionFixture(db: Kysely<any>) {
     .values({ kind: "group", workspaceId: ws.id as string, title: `${NS} c` })
     .returning("id")
     .executeTakeFirstOrThrow()
+  const createdBySubjectId = await upsertAccessSubject(db, {
+    kind: SUBJECT_KIND.PLATFORM,
+  })
   const actorRoot = await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id: crypto.randomUUID(),
       workspaceId: ws.id as string,
       kind: "actor",
       displayName: `${NS} actor`,
+      createdBySubjectId,
       status: "active",
     } as any)
     .returning("id")

@@ -12,11 +12,11 @@
 
 import type {
   PluginAuthConnectionStatus,
-  WorkspaceAppStatus,
+  WorkspaceResourceStatus,
 } from "@synapse/shared"
 
 /** plugin_installations live statuses (manifest liveValues: active/disabled/error). */
-export const PLUGIN_INSTALLATION_LIVE_STATUSES: readonly WorkspaceAppStatus[] =
+export const PLUGIN_INSTALLATION_LIVE_STATUSES: readonly WorkspaceResourceStatus[] =
   ["active", "disabled", "error"]
 
 /** plugin_connections live statuses (manifest liveValues: active). */

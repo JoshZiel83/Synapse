@@ -6,87 +6,97 @@ import {
   conversationRef,
   remoteAgentRef,
   SUBJECT_KIND,
-  WORKSPACE_APP_KIND,
-  WORKSPACE_APP_GRANT_REQUEST_DIRECTION,
+  WORKSPACE_RESOURCE_KIND,
+  WORKSPACE_RESOURCE_GRANT_REQUEST_DIRECTION,
   workspaceMemberRef,
   workspaceRef,
   type CapabilityAccessTarget,
-  type WorkspaceAppGrantPermission,
-  type WorkspaceAppKind,
+  type WorkspaceResourceGrantPermission,
+  type WorkspaceResourceKind,
 } from "@synapse/shared"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { requireRequestAction } from "../access/guards.js"
 import {
-  approveWorkspaceAppGrantRequest,
-  cancelWorkspaceAppGrantRequestByRequester,
-  createWorkspaceApp,
-  deleteWorkspaceApp,
-  discoverWorkspaceAppsForMember,
-  getWorkspaceAppInventoryDetail,
-  listWorkspaceAppGrantRecords,
-  listWorkspaceAppGrantRequestRecords,
-  listWorkspaceAppsInventory,
-  rejectWorkspaceAppGrantRequest,
-  replaceWorkspaceAppGrants,
-  submitWorkspaceAppGrantRequest,
-  updateWorkspaceApp,
+  approveWorkspaceResourceGrantRequest,
+  cancelWorkspaceResourceGrantRequestByRequester,
+  createWorkspaceResource,
+  deleteWorkspaceResource,
+  discoverWorkspaceResourcesForMember,
+  getWorkspaceResourceInventoryDetail,
+  listWorkspaceResourceGrantRecords,
+  listWorkspaceResourceGrantRequestRecords,
+  listWorkspaceResourcesInventory,
+  rejectWorkspaceResourceGrantRequest,
+  replaceWorkspaceResourceGrants,
+  submitWorkspaceResourceGrantRequest,
+  updateWorkspaceResource,
 } from "./service.js"
 import {
   presentGrant,
   presentGrantRequest,
-  presentWorkspaceApp,
+  presentWorkspaceResource,
 } from "./presenter.js"
 import { appRoute } from "../../infrastructure/http/route.js"
 import {
-  WorkspaceAppGrantTargetSchema,
-  ReplaceWorkspaceAppGrantsInputSchema,
-  CreateWorkspaceAppGrantRequestInputSchema,
-  CreateWorkspaceAppInputSchema,
-  UpdateWorkspaceAppInputSchema,
-  WorkspaceAppDiscoverQuerySchema,
-  WorkspaceAppEnvelopeViewSchema,
-  WorkspaceAppGrantRequestListQuerySchema,
-  WorkspaceAppListQuerySchema,
-  WorkspaceAppListViewSchema,
-  WorkspaceAppGrantListViewSchema,
-  WorkspaceAppGrantRequestListViewSchema,
-  WorkspaceAppGrantRequestEnvelopeViewSchema,
-  WorkspaceAppSuccessViewSchema,
+  WorkspaceResourceGrantTargetSchema,
+  ReplaceWorkspaceResourceGrantsInputSchema,
+  CreateWorkspaceResourceGrantRequestInputSchema,
+  CreateWorkspaceResourceInputSchema,
+  UpdateWorkspaceResourceInputSchema,
+  WorkspaceResourceDiscoverQuerySchema,
+  WorkspaceResourceEnvelopeViewSchema,
+  WorkspaceResourceGrantRequestListQuerySchema,
+  WorkspaceResourceListQuerySchema,
+  WorkspaceResourceListViewSchema,
+  WorkspaceResourceGrantListViewSchema,
+  WorkspaceResourceGrantRequestListViewSchema,
+  WorkspaceResourceGrantRequestEnvelopeViewSchema,
+  WorkspaceResourceSuccessViewSchema,
 } from "@synapse/shared/schemas"
 
-const workspaceAppEnvelopeSchema = WorkspaceAppEnvelopeViewSchema
-const workspaceAppsEnvelopeSchema = WorkspaceAppListViewSchema
-const grantsEnvelopeSchema = WorkspaceAppGrantListViewSchema
-const grantRequestsEnvelopeSchema = WorkspaceAppGrantRequestListViewSchema
-const grantRequestEnvelopeSchema = WorkspaceAppGrantRequestEnvelopeViewSchema
-const successEnvelopeSchema = WorkspaceAppSuccessViewSchema
+const workspaceResourceEnvelopeSchema = WorkspaceResourceEnvelopeViewSchema
+const workspaceResourcesEnvelopeSchema = WorkspaceResourceListViewSchema
+const grantsEnvelopeSchema = WorkspaceResourceGrantListViewSchema
+const grantRequestsEnvelopeSchema = WorkspaceResourceGrantRequestListViewSchema
+const grantRequestEnvelopeSchema =
+  WorkspaceResourceGrantRequestEnvelopeViewSchema
+const successEnvelopeSchema = WorkspaceResourceSuccessViewSchema
 
 // App-facing request bodies / queries live in @synapse/shared (§5.1.1) so the
 // API parser and the web/mobile clients share one definition. The grant target
 // schema feeds toCapabilityAccessTarget below (typed via z.infer).
-const targetSchema = WorkspaceAppGrantTargetSchema
-const replaceGrantsSchema = ReplaceWorkspaceAppGrantsInputSchema
-const createGrantRequestSchema = CreateWorkspaceAppGrantRequestInputSchema
-const createWorkspaceAppSchema = CreateWorkspaceAppInputSchema
-const updateWorkspaceAppSchema = UpdateWorkspaceAppInputSchema
-const workspaceAppListQuerySchema = WorkspaceAppListQuerySchema
-const workspaceAppDiscoverQuerySchema = WorkspaceAppDiscoverQuerySchema
-const grantRequestListQuerySchema = WorkspaceAppGrantRequestListQuerySchema
+const targetSchema = WorkspaceResourceGrantTargetSchema
+const replaceGrantsSchema = ReplaceWorkspaceResourceGrantsInputSchema
+const createGrantRequestSchema = CreateWorkspaceResourceGrantRequestInputSchema
+const createWorkspaceResourceSchema = CreateWorkspaceResourceInputSchema
+const updateWorkspaceResourceSchema = UpdateWorkspaceResourceInputSchema
+const workspaceResourceListQuerySchema = WorkspaceResourceListQuerySchema
+const workspaceResourceDiscoverQuerySchema =
+  WorkspaceResourceDiscoverQuerySchema
+const grantRequestListQuerySchema = WorkspaceResourceGrantRequestListQuerySchema
 
 function toCapabilityAccessTarget(
   input: z.infer<typeof targetSchema>
 ): CapabilityAccessTarget {
-  const subject =
-    input.subject.kind === SUBJECT_KIND.WORKSPACE
-      ? workspaceRef(input.subject.workspaceId)
-      : input.subject.kind === SUBJECT_KIND.WORKSPACE_MEMBER
-        ? workspaceMemberRef(input.subject.memberId)
-        : input.subject.kind === SUBJECT_KIND.CONVERSATION
-          ? conversationRef(input.subject.conversationId)
-          : input.subject.kind === SUBJECT_KIND.ACTOR
-            ? actorRef(input.subject.actorId)
-            : remoteAgentRef(input.subject.remoteAgentId)
+  const subjectInput = input.subject
+  let subject
+  switch (subjectInput.kind) {
+    case SUBJECT_KIND.WORKSPACE:
+      subject = workspaceRef(subjectInput.workspaceId)
+      break
+    case SUBJECT_KIND.WORKSPACE_MEMBER:
+      subject = workspaceMemberRef(subjectInput.workspaceMemberId)
+      break
+    case SUBJECT_KIND.CONVERSATION:
+      subject = conversationRef(subjectInput.conversationId)
+      break
+    case SUBJECT_KIND.ACTOR:
+      subject = actorRef(subjectInput.actorId)
+      break
+    default:
+      subject = remoteAgentRef(subjectInput.remoteAgentId)
+  }
 
   const scope = input.scope
     ? conversationRef(input.scope.conversationId)
@@ -103,7 +113,7 @@ function handleError(reply: FastifyReply, error: unknown) {
   }
   const message =
     error instanceof Error ? error.message : "Internal server error"
-  if (/not found|does not belong to this app/i.test(message)) {
+  if (/not found|does not belong to this workspace resource/i.test(message)) {
     return reply.status(404).send({ error: message })
   }
   if (/not allowed|permission|forbidden/i.test(message)) {
@@ -118,42 +128,47 @@ function handleError(reply: FastifyReply, error: unknown) {
   return reply.status(500).send({ error: message })
 }
 
-export function registerWorkspaceAppRoutes(app: FastifyInstance) {
+export function registerWorkspaceResourceRoutes(app: FastifyInstance) {
   const workspaceHook = { preHandler: [authMiddleware, workspaceMiddleware] }
 
   appRoute(
     app,
     "POST",
-    "/api/v1/workspaces/:workspaceId/workspace-apps",
-    { schema: workspaceAppEnvelopeSchema, options: workspaceHook },
+    "/api/v1/workspaces/:workspaceId/workspace-resources",
+    { schema: workspaceResourceEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       try {
-        const body = createWorkspaceAppSchema.parse(request.body)
-        const createAction =
-          body.kind === WORKSPACE_APP_KIND.ACTOR
-            ? "workspace.manage_actors"
-            : body.kind === WORKSPACE_APP_KIND.REMOTE_AGENT
-              ? "workspace.manage_remote_agents"
-              : body.kind === WORKSPACE_APP_KIND.INSTALLED_SKILL
-                ? "workspace.manage_skills"
-                : "workspace.manage_plugins"
+        const body = createWorkspaceResourceSchema.parse(request.body)
+        const createAction = (() => {
+          switch (body.kind) {
+            case WORKSPACE_RESOURCE_KIND.ACTOR:
+              return "workspace.manage_actors"
+            case WORKSPACE_RESOURCE_KIND.REMOTE_AGENT:
+              return "workspace.manage_remote_agents"
+            case WORKSPACE_RESOURCE_KIND.INSTALLED_SKILL:
+              return "workspace.manage_skills"
+            default:
+              return "workspace.manage_plugins"
+          }
+        })()
         const allowed = await requireRequestAction(
           request,
           reply,
           createAction,
           workspaceId,
-          "Not allowed to create this workspace app"
+          "Not allowed to create this workspace resource"
         )
         if (!allowed) return
-        const appRecord = await createWorkspaceApp({
+        const resource = await createWorkspaceResource({
           workspaceId,
           userId: (request as any).user.userId,
           input: {
             ...body,
             grants: body.grants?.map((grant) => ({
               target: toCapabilityAccessTarget(grant.target),
-              permissions: grant.permissions as WorkspaceAppGrantPermission[],
+              permissions:
+                grant.permissions as WorkspaceResourceGrantPermission[],
               conversationTypeMaskOverride:
                 grant.conversationTypeMaskOverride ?? null,
               reason: grant.reason,
@@ -161,10 +176,9 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
           } as any,
         })
         reply.status(201)
-        return { app: presentWorkspaceApp(appRecord) }
+        return { resource: presentWorkspaceResource(resource) }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -172,8 +186,8 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
   appRoute(
     app,
     "GET",
-    "/api/v1/workspaces/:workspaceId/workspace-apps",
-    { schema: workspaceAppsEnvelopeSchema, options: workspaceHook },
+    "/api/v1/workspaces/:workspaceId/workspace-resources",
+    { schema: workspaceResourcesEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       const allowed = await requireRequestAction(
@@ -181,20 +195,21 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
         reply,
         "workspace.view",
         workspaceId,
-        "Not allowed to view workspace apps in this workspace"
+        "Not allowed to view workspace resources in this workspace"
       )
       if (!allowed) return
       try {
-        const query = workspaceAppListQuerySchema.parse(request.query || {})
-        const apps = await listWorkspaceAppsInventory({
+        const query = workspaceResourceListQuerySchema.parse(
+          request.query || {}
+        )
+        const resources = await listWorkspaceResourcesInventory({
           workspaceId,
           userId: (request as any).user.userId,
-          kind: query.kind as WorkspaceAppKind | undefined,
+          kind: query.kind as WorkspaceResourceKind | undefined,
         })
-        return { apps: apps.map(presentWorkspaceApp) }
+        return { resources: resources.map(presentWorkspaceResource) }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -202,8 +217,8 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
   appRoute(
     app,
     "GET",
-    "/api/v1/workspaces/:workspaceId/workspace-apps/discover",
-    { schema: workspaceAppsEnvelopeSchema, options: workspaceHook },
+    "/api/v1/workspaces/:workspaceId/workspace-resources/discover",
+    { schema: workspaceResourcesEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       const allowed = await requireRequestAction(
@@ -211,20 +226,21 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
         reply,
         "workspace.view",
         workspaceId,
-        "Not allowed to discover workspace apps in this workspace"
+        "Not allowed to discover workspace resources in this workspace"
       )
       if (!allowed) return
       try {
-        const query = workspaceAppDiscoverQuerySchema.parse(request.query || {})
-        const apps = await discoverWorkspaceAppsForMember({
+        const query = workspaceResourceDiscoverQuerySchema.parse(
+          request.query || {}
+        )
+        const resources = await discoverWorkspaceResourcesForMember({
           workspaceId,
           userId: (request as any).user.userId,
           conversationId: query.conversationId,
         })
-        return { apps: apps.map(presentWorkspaceApp) }
+        return { resources: resources.map(presentWorkspaceResource) }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -232,31 +248,30 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
   appRoute(
     app,
     "GET",
-    "/api/v1/workspaces/:workspaceId/workspace-apps/:appId",
-    { schema: workspaceAppEnvelopeSchema, options: workspaceHook },
+    "/api/v1/workspaces/:workspaceId/workspace-resources/:resourceId",
+    { schema: workspaceResourceEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
-      const { workspaceId, appId } = request.params as {
+      const { workspaceId, resourceId } = request.params as {
         workspaceId: string
-        appId: string
+        resourceId: string
       }
       const allowed = await requireRequestAction(
         request,
         reply,
         "workspace.view",
         workspaceId,
-        "Not allowed to view workspace app details in this workspace"
+        "Not allowed to view workspace resource details in this workspace"
       )
       if (!allowed) return
       try {
-        const appRecord = await getWorkspaceAppInventoryDetail({
+        const resource = await getWorkspaceResourceInventoryDetail({
           workspaceId,
-          appId,
+          resourceId,
           userId: (request as any).user.userId,
         })
-        return { app: presentWorkspaceApp(appRecord) }
+        return { resource: presentWorkspaceResource(resource) }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -264,25 +279,24 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
   appRoute(
     app,
     "PUT",
-    "/api/v1/workspaces/:workspaceId/workspace-apps/:appId",
-    { schema: workspaceAppEnvelopeSchema, options: workspaceHook },
+    "/api/v1/workspaces/:workspaceId/workspace-resources/:resourceId",
+    { schema: workspaceResourceEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
-      const { workspaceId, appId } = request.params as {
+      const { workspaceId, resourceId } = request.params as {
         workspaceId: string
-        appId: string
+        resourceId: string
       }
       try {
-        const body = updateWorkspaceAppSchema.parse(request.body)
-        const appRecord = await updateWorkspaceApp({
+        const body = updateWorkspaceResourceSchema.parse(request.body)
+        const resource = await updateWorkspaceResource({
           workspaceId,
-          appId,
+          resourceId,
           userId: (request as any).user.userId,
           input: body as any,
         })
-        return { app: presentWorkspaceApp(appRecord) }
+        return { resource: presentWorkspaceResource(resource) }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -290,23 +304,22 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
   appRoute(
     app,
     "DELETE",
-    "/api/v1/workspaces/:workspaceId/workspace-apps/:appId",
+    "/api/v1/workspaces/:workspaceId/workspace-resources/:resourceId",
     { schema: successEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
-      const { workspaceId, appId } = request.params as {
+      const { workspaceId, resourceId } = request.params as {
         workspaceId: string
-        appId: string
+        resourceId: string
       }
       try {
-        const deleted = await deleteWorkspaceApp({
+        const deleted = await deleteWorkspaceResource({
           workspaceId,
-          appId,
+          resourceId,
           userId: (request as any).user.userId,
         })
         return { success: deleted }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -314,31 +327,30 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
   appRoute(
     app,
     "GET",
-    "/api/v1/workspaces/:workspaceId/workspace-apps/:appId/grants",
+    "/api/v1/workspaces/:workspaceId/workspace-resources/:resourceId/grants",
     { schema: grantsEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
-      const { workspaceId, appId } = request.params as {
+      const { workspaceId, resourceId } = request.params as {
         workspaceId: string
-        appId: string
+        resourceId: string
       }
       const allowed = await requireRequestAction(
         request,
         reply,
         "workspace.view",
         workspaceId,
-        "Not allowed to view workspace app grants in this workspace"
+        "Not allowed to view workspace resource grants in this workspace"
       )
       if (!allowed) return
       try {
-        const grants = await listWorkspaceAppGrantRecords({
+        const grants = await listWorkspaceResourceGrantRecords({
           workspaceId,
-          appId,
+          resourceId,
           userId: (request as any).user.userId,
         })
         return { grants: grants.map(presentGrant) }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -346,30 +358,31 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
   appRoute(
     app,
     "PUT",
-    "/api/v1/workspaces/:workspaceId/workspace-apps/:appId/grants",
+    "/api/v1/workspaces/:workspaceId/workspace-resources/:resourceId/grants",
     { schema: grantsEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
-      const { workspaceId, appId } = request.params as {
+      const { workspaceId, resourceId } = request.params as {
         workspaceId: string
-        appId: string
+        resourceId: string
       }
       const allowed = await requireRequestAction(
         request,
         reply,
         "workspace.view",
         workspaceId,
-        "Not allowed to manage workspace app grants in this workspace"
+        "Not allowed to manage workspace resource grants in this workspace"
       )
       if (!allowed) return
       try {
         const body = replaceGrantsSchema.parse(request.body)
-        const grants = await replaceWorkspaceAppGrants({
+        const grants = await replaceWorkspaceResourceGrants({
           workspaceId,
-          appId,
+          resourceId,
           userId: (request as any).user.userId,
           grants: body.grants.map((grant) => ({
             target: toCapabilityAccessTarget(grant.target),
-            permissions: grant.permissions as WorkspaceAppGrantPermission[],
+            permissions:
+              grant.permissions as WorkspaceResourceGrantPermission[],
             conversationTypeMaskOverride:
               grant.conversationTypeMaskOverride ?? null,
             reason: grant.reason,
@@ -378,7 +391,6 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
         return { grants: grants.map(presentGrant) }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -386,34 +398,34 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
   appRoute(
     app,
     "GET",
-    "/api/v1/workspaces/:workspaceId/workspace-apps/:appId/grant-requests",
+    "/api/v1/workspaces/:workspaceId/workspace-resources/:resourceId/grant-requests",
     { schema: grantRequestsEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
-      const { workspaceId, appId } = request.params as {
+      const { workspaceId, resourceId } = request.params as {
         workspaceId: string
-        appId: string
+        resourceId: string
       }
       const allowed = await requireRequestAction(
         request,
         reply,
         "workspace.view",
         workspaceId,
-        "Not allowed to view workspace app grant requests in this workspace"
+        "Not allowed to view workspace resource grant requests in this workspace"
       )
       if (!allowed) return
       try {
         const query = grantRequestListQuerySchema.parse(request.query || {})
-        const requests = await listWorkspaceAppGrantRequestRecords({
+        const requests = await listWorkspaceResourceGrantRequestRecords({
           workspaceId,
-          appId,
+          resourceId,
           userId: (request as any).user.userId,
           direction:
-            query.direction || WORKSPACE_APP_GRANT_REQUEST_DIRECTION.INCOMING,
+            query.direction ||
+            WORKSPACE_RESOURCE_GRANT_REQUEST_DIRECTION.INCOMING,
         })
         return { requests: requests.map(presentGrantRequest) }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -421,26 +433,26 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
   appRoute(
     app,
     "POST",
-    "/api/v1/workspaces/:workspaceId/workspace-apps/:appId/grant-requests",
+    "/api/v1/workspaces/:workspaceId/workspace-resources/:resourceId/grant-requests",
     { schema: grantRequestEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
-      const { workspaceId, appId } = request.params as {
+      const { workspaceId, resourceId } = request.params as {
         workspaceId: string
-        appId: string
+        resourceId: string
       }
       const allowed = await requireRequestAction(
         request,
         reply,
         "workspace.view",
         workspaceId,
-        "Not allowed to request workspace app access in this workspace"
+        "Not allowed to request workspace resource access in this workspace"
       )
       if (!allowed) return
       try {
         const body = createGrantRequestSchema.parse(request.body || {})
-        const grantRequest = await submitWorkspaceAppGrantRequest({
+        const grantRequest = await submitWorkspaceResourceGrantRequest({
           workspaceId,
-          appId,
+          resourceId,
           userId: (request as any).user.userId,
           reason: body.reason,
         })
@@ -448,7 +460,6 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
         return { request: presentGrantRequest(grantRequest) }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -456,12 +467,12 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
   appRoute(
     app,
     "POST",
-    "/api/v1/workspaces/:workspaceId/workspace-apps/:appId/grant-requests/:requestId/approve",
+    "/api/v1/workspaces/:workspaceId/workspace-resources/:resourceId/grant-requests/:requestId/approve",
     { schema: grantRequestEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
-      const { workspaceId, appId, requestId } = request.params as {
+      const { workspaceId, resourceId, requestId } = request.params as {
         workspaceId: string
-        appId: string
+        resourceId: string
         requestId: string
       }
       const allowed = await requireRequestAction(
@@ -469,20 +480,19 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
         reply,
         "workspace.view",
         workspaceId,
-        "Not allowed to resolve workspace app grant requests in this workspace"
+        "Not allowed to resolve workspace resource grant requests in this workspace"
       )
       if (!allowed) return
       try {
-        const grantRequest = await approveWorkspaceAppGrantRequest({
+        const grantRequest = await approveWorkspaceResourceGrantRequest({
           workspaceId,
-          appId,
+          resourceId,
           requestId,
           userId: (request as any).user.userId,
         })
         return { request: presentGrantRequest(grantRequest) }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -490,12 +500,12 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
   appRoute(
     app,
     "POST",
-    "/api/v1/workspaces/:workspaceId/workspace-apps/:appId/grant-requests/:requestId/reject",
+    "/api/v1/workspaces/:workspaceId/workspace-resources/:resourceId/grant-requests/:requestId/reject",
     { schema: grantRequestEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
-      const { workspaceId, appId, requestId } = request.params as {
+      const { workspaceId, resourceId, requestId } = request.params as {
         workspaceId: string
-        appId: string
+        resourceId: string
         requestId: string
       }
       const allowed = await requireRequestAction(
@@ -503,20 +513,19 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
         reply,
         "workspace.view",
         workspaceId,
-        "Not allowed to resolve workspace app grant requests in this workspace"
+        "Not allowed to resolve workspace resource grant requests in this workspace"
       )
       if (!allowed) return
       try {
-        const grantRequest = await rejectWorkspaceAppGrantRequest({
+        const grantRequest = await rejectWorkspaceResourceGrantRequest({
           workspaceId,
-          appId,
+          resourceId,
           requestId,
           userId: (request as any).user.userId,
         })
         return { request: presentGrantRequest(grantRequest) }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -524,12 +533,12 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
   appRoute(
     app,
     "POST",
-    "/api/v1/workspaces/:workspaceId/workspace-apps/:appId/grant-requests/:requestId/cancel",
+    "/api/v1/workspaces/:workspaceId/workspace-resources/:resourceId/grant-requests/:requestId/cancel",
     { schema: successEnvelopeSchema, options: workspaceHook },
     async (request, reply) => {
-      const { workspaceId, appId, requestId } = request.params as {
+      const { workspaceId, resourceId, requestId } = request.params as {
         workspaceId: string
-        appId: string
+        resourceId: string
         requestId: string
       }
       const allowed = await requireRequestAction(
@@ -537,20 +546,19 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
         reply,
         "workspace.view",
         workspaceId,
-        "Not allowed to cancel workspace app grant requests in this workspace"
+        "Not allowed to cancel workspace resource grant requests in this workspace"
       )
       if (!allowed) return
       try {
-        const cancelled = await cancelWorkspaceAppGrantRequestByRequester({
+        const cancelled = await cancelWorkspaceResourceGrantRequestByRequester({
           workspaceId,
-          appId,
+          resourceId,
           requestId,
           userId: (request as any).user.userId,
         })
         return { success: cancelled }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )

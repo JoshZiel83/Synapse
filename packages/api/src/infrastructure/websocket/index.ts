@@ -502,7 +502,6 @@ export function setupWebSocket(app: FastifyInstance) {
 
         if (msg.type === "typing") {
           await handleInboundTyping(client, msg)
-          return
         }
       } catch {
         // Ignore malformed websocket frames.
@@ -595,12 +594,14 @@ export function setupWebSocket(app: FastifyInstance) {
         // Fast path: inbox subscribers get it on the recipient match alone (no
         // roster query). A conversation-topic-only subscriber (no inbox) still
         // requires the access recheck.
-        const allowed =
-          inboxSubscriptions.length > 0
-            ? true
-            : conversationId && hasConversationTopic
-              ? await isConversationAllowed()
-              : false
+        let allowed: boolean
+        if (inboxSubscriptions.length > 0) {
+          allowed = true
+        } else if (conversationId && hasConversationTopic) {
+          allowed = await isConversationAllowed()
+        } else {
+          allowed = false
+        }
         if (!allowed) {
           continue
         }

@@ -49,7 +49,7 @@ export const MemoryOwnerSubjectRefSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal(SUBJECT_KIND.WORKSPACE_MEMBER),
-    memberId: z.uuid(),
+    workspaceMemberId: z.uuid(),
   }),
   z.object({ kind: z.literal(SUBJECT_KIND.ACTOR), actorId: z.uuid() }),
   z.object({

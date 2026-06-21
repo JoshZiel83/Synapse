@@ -16,26 +16,26 @@ import {
   workspaceRef,
   type AvailableSkillSummary,
   type CapabilityAccessTarget,
-  type WorkspaceAppGrantPermission,
+  type WorkspaceResourceGrantPermission,
   type CanonicalContentBlock,
   type CanonicalContentBlockInput,
   normalizeCanonicalContentBlocks,
   type RuntimeBindingScope,
   type ScopedSubjectTarget,
   type SkillFrontmatter,
-  type WorkspaceAppGrantTargetInput,
+  type WorkspaceResourceGrantTargetInput,
   textBlock,
 } from "@synapse/shared"
 import { ACCESS_ACTIONS } from "../access/actions.js"
 import {
-  insertWorkspaceAppRoot,
-  updateWorkspaceAppRoot,
-} from "../workspace-apps/repo.js"
+  insertWorkspaceResourceRoot,
+  updateWorkspaceResourceRoot,
+} from "../workspace-resources/repo.js"
 import {
-  insertWorkspaceAppGrant,
-  listActiveWorkspaceAppGrants,
-  revokeWorkspaceAppGrantsForApp,
-} from "../workspace-apps/grant-storage.js"
+  insertWorkspaceResourceGrant,
+  listActiveWorkspaceResourceGrants,
+  revokeWorkspaceResourceGrantsForResource,
+} from "../workspace-resources/grant-storage.js"
 import { type Executor } from "../../infrastructure/database/kysely.js"
 import {
   withSkillsTransaction,
@@ -69,13 +69,13 @@ import {
   updateCatalogItemLatestVersion,
   loadInstalledSkillRows,
   getInstalledSkillRowForWorkspace,
-  loadAccessBindingsBySkillIds,
+  loadGrantsBySkillIds,
   findSkillIdsByBindingFilter as findSkillIdsByBindingFilterRepo,
   listMarketplaceRows,
   loadVisibleSkillRows,
   loadSkillSnapshotFileByPath,
   updateInstalledSkillGrantConversationTypeMaskOverride,
-  revokeWorkspaceAppGrantDefault,
+  revokeWorkspaceResourceGrantDefault,
   validateConversationScopedAccessTargetDefault,
   buildConversationCapabilitySubjectsDefault,
   computeRuntimeScopeSubjectIdsDefault,
@@ -86,7 +86,7 @@ import {
   getWorkspaceCapabilityConversationTypeMask,
   getWorkspaceCapabilityConversationTypePolicyMap,
 } from "../capabilities/conversation-type-policies.js"
-import { type AutomationEventSourceBindingTarget } from "../access/bindings.js"
+import { type AutomationEventSourceGrantTarget } from "../access/grant-target.js"
 import { resolveAccessGrantTarget } from "../access/access-target-resolver.js"
 import { upsertAccessSubjectOn } from "../access/subject-registry.js"
 import {
@@ -641,17 +641,17 @@ export function resolveInstalledSkillSourceConversationTypeMask(
 
 export function resolveInstalledSkillEffectiveConversationTypeMask(row: {
   workspaceConversationTypeMask: number
-  conversation_type_mask_override: number | null
+  conversationTypeMaskOverride: number | null
 }) {
   return resolveNarrowedConversationTypeMask(
     row.workspaceConversationTypeMask,
-    row.conversation_type_mask_override
+    row.conversationTypeMaskOverride
   )
 }
 
 /**
  * Collapse the label switch into a direct
- * call to readAutomationEventSourceAccessBindingTarget. The old switch fell back to
+ * call to readAutomationEventSourceAccessGrantTarget. The old switch fell back to
  * `workspace` for any unrecognized `bind_scope`. The mapper feeds into
  * `validateConversationScopedAccessTarget` and
  * `assertGrantConversationTypeOverrideAllowed` from
@@ -662,14 +662,14 @@ export function resolveInstalledSkillEffectiveConversationTypeMask(row: {
  *
  * The row at runtime carries the bindingRowSelectFor `subject_kind` +
  * `subject_*_via_join` + `scope_kind` + `scope_*_via_join` projection
- * that readAutomationEventSourceAccessBindingTarget needs (loadAccessBindingsBySkillIds runs
+ * that readAutomationEventSourceAccessGrantTarget needs (loadGrantsBySkillIds runs
  * the full SELECT). SkillAccessRow's type doesn't expose those fields,
  * hence the `as any` cast.
  */
 export function skillBindingToAccessTarget(
   binding: SkillAccessRow,
   _fallbackWorkspaceId: string
-): WorkspaceAppGrantTargetInput {
+): WorkspaceResourceGrantTargetInput {
   switch (binding.bindScope) {
     case "workspace":
       return { subject: workspaceRef(binding.workspaceId) }
@@ -726,7 +726,7 @@ function buildAvailableSkillPayload(
 
 export function visibleRowToAccessTarget(
   row: VisibleSkillRow
-): WorkspaceAppGrantTargetInput {
+): WorkspaceResourceGrantTargetInput {
   switch (row.accessBindScope) {
     case "workspace":
       return { subject: workspaceRef(row.workspaceId) }
@@ -876,15 +876,17 @@ export function buildSkillAccessRow(row: SkillAccessRow): SkillAccessRow {
     target.subject.kind === "remote_agent"
       ? (target.subject as { remoteAgentId: string }).remoteAgentId
       : null
+  const conversationIdFromSubject =
+    target.subject.kind === "conversation"
+      ? (target.subject as { conversationId: string }).conversationId
+      : null
   const conversationId =
     target.scope?.kind === "conversation"
       ? (target.scope as { conversationId: string }).conversationId
-      : target.subject.kind === "conversation"
-        ? (target.subject as { conversationId: string }).conversationId
-        : null
+      : conversationIdFromSubject
   const workspaceMemberId =
     target.subject.kind === "workspace_member"
-      ? (target.subject as { memberId: string }).memberId
+      ? (target.subject as { workspaceMemberId: string }).workspaceMemberId
       : null
   return {
     id: row.id,
@@ -905,7 +907,7 @@ export function buildSkillAccessRow(row: SkillAccessRow): SkillAccessRow {
   }
 }
 
-async function loadAccessBindingsBySkillIdsForContext(
+async function loadGrantsBySkillIdsForContext(
   skillIds: string[],
   context: {
     contextWorkspaceId: string
@@ -916,7 +918,7 @@ async function loadAccessBindingsBySkillIdsForContext(
   }
 ) {
   if (skillIds.length === 0) return new Map<string, SkillAccessRow[]>()
-  const bindings = await loadAccessBindingsBySkillIds(skillIds)
+  const bindings = await loadGrantsBySkillIds(skillIds)
 
   const map = new Map<string, SkillAccessRow[]>()
   for (const [skillId, rows] of bindings.entries()) {
@@ -950,7 +952,7 @@ async function loadAccessBindingsBySkillIdsForContext(
 }
 
 async function listSkillAccessRows(skillId: string, includeRevoked = false) {
-  const rows = await loadAccessBindingsBySkillIds([skillId], includeRevoked)
+  const rows = await loadGrantsBySkillIds([skillId], includeRevoked)
   return rows.get(skillId) || []
 }
 
@@ -982,7 +984,7 @@ async function chooseBindingMap(
     conversationId?: string
   }
 ) {
-  const bindingsBySkillId = await loadAccessBindingsBySkillIds(skillIds)
+  const bindingsBySkillId = await loadGrantsBySkillIds(skillIds)
   const preferredTarget = filters?.accessTargetType
     ? normalizeScopeTarget({
         useScope: filters.accessTargetType,
@@ -1072,7 +1074,7 @@ async function ensureSkillBinding(
       conversationId: input.target.conversationId || undefined,
     }),
   })
-  const existingRows = await loadAccessBindingsBySkillIds([input.skillId])
+  const existingRows = await loadGrantsBySkillIds([input.skillId])
   const existingBinding = (existingRows.get(input.skillId) || []).find((row) =>
     matchesScopeTarget(
       row,
@@ -1092,9 +1094,9 @@ async function ensureSkillBinding(
     }
   }
 
-  const inserted = await insertWorkspaceAppGrant(client as any, {
+  const inserted = await insertWorkspaceResourceGrant(client as any, {
     workspaceId: input.workspaceId,
-    workspaceAppId: input.skillId,
+    workspaceResourceId: input.skillId,
     target: grantTarget,
     permissions: ["use"],
     createdByWorkspaceMemberId: input.createdByWorkspaceMemberId || null,
@@ -1461,15 +1463,17 @@ export async function publishMarketplaceSkill(input: {
       frontmatterName: preparedSnapshot.frontmatter.name,
       ...(input.metadata || {}),
     }
-    const nextIconFileId =
-      input.iconFileId === undefined
-        ? (existing?.itemIconFileId ?? null)
-        : input.iconFileId
-          ? await normalizeMarketplaceSkillIconFileId(
-              input.iconFileId,
-              input.authorUserId
-            )
-          : null
+    let nextIconFileId: string | null
+    if (input.iconFileId === undefined) {
+      nextIconFileId = existing?.itemIconFileId ?? null
+    } else if (input.iconFileId) {
+      nextIconFileId = await normalizeMarketplaceSkillIconFileId(
+        input.iconFileId,
+        input.authorUserId
+      )
+    } else {
+      nextIconFileId = null
+    }
 
     if (existing) {
       await updateMarketplaceCatalogItemRecord(client, {
@@ -1558,7 +1562,7 @@ export async function createWorkspaceSkill(input: {
   accessTarget?: CapabilityAccessTarget
   grants?: Array<{
     target: CapabilityAccessTarget
-    permissions: WorkspaceAppGrantPermission[]
+    permissions: WorkspaceResourceGrantPermission[]
     conversationTypeMaskOverride?: number | null
     reason?: string
   }>
@@ -1589,6 +1593,11 @@ export async function createWorkspaceSkill(input: {
   // a remote agent.
   // Round 11 review (P2): same for workspace_member — without this the
   // workspace_member skill grant path would crash in ensureSkillBinding.
+  const accessTargetConversationIdFromSubject =
+    input.accessTarget?.subject.kind === "conversation"
+      ? (input.accessTarget.subject as { conversationId: string })
+          .conversationId
+      : null
   const target = input.accessTarget
     ? normalizeScopeTarget({
         useScope: skillUseScopeFromTarget(input.accessTarget),
@@ -1603,23 +1612,21 @@ export async function createWorkspaceSkill(input: {
             : null,
         workspaceMemberId:
           input.accessTarget.subject.kind === "workspace_member"
-            ? (input.accessTarget.subject as { memberId: string }).memberId
+            ? (input.accessTarget.subject as { workspaceMemberId: string })
+                .workspaceMemberId
             : null,
         conversationId:
           input.accessTarget.scope?.kind === "conversation"
             ? (input.accessTarget.scope as { conversationId: string })
                 .conversationId
-            : input.accessTarget.subject.kind === "conversation"
-              ? (input.accessTarget.subject as { conversationId: string })
-                  .conversationId
-              : null,
+            : accessTargetConversationIdFromSubject,
       })
     : null
 
   const result = await withSkillsTransaction(async (client) => {
     const snapshotId = await insertSkillSnapshot(client, preparedSnapshot)
     const skillId = crypto.randomUUID()
-    await insertWorkspaceAppRoot(client, {
+    await insertWorkspaceResourceRoot(client, {
       id: skillId,
       workspaceId: input.workspaceId,
       kind: "installed_skill",
@@ -1646,9 +1653,9 @@ export async function createWorkspaceSkill(input: {
 
     if (input.grants?.length) {
       for (const grant of input.grants) {
-        await insertWorkspaceAppGrant(client as any, {
+        await insertWorkspaceResourceGrant(client as any, {
           workspaceId: input.workspaceId,
-          workspaceAppId: insertedSkillId,
+          workspaceResourceId: insertedSkillId,
           target: await resolveAccessGrantTarget({
             workspaceId: input.workspaceId,
             target: grant.target,
@@ -1793,8 +1800,7 @@ export async function getInstalledSkillGrantState(
       effectiveConversationTypeMask:
         resolveInstalledSkillEffectiveConversationTypeMask({
           workspaceConversationTypeMask,
-          conversation_type_mask_override:
-            skillRow.conversationTypeMaskOverride,
+          conversationTypeMaskOverride: skillRow.conversationTypeMaskOverride,
         }),
       reason: "Choose who can use this installed skill.",
       effectivePermissions:
@@ -1813,7 +1819,7 @@ export async function createInstalledSkillGrant(input: {
   installedSkillId: string
   accessTarget?: CapabilityAccessTarget
   conversationTypeMaskOverride?: number | null
-  grantedByWorkspaceMemberId?: string
+  createdByWorkspaceMemberId?: string
   reason?: string
 }) {
   const skillRow = await loadInstalledSkillForUpdate(
@@ -1880,15 +1886,18 @@ export async function createInstalledSkillGrant(input: {
     accessTarget.subject.kind === "remote_agent"
       ? (accessTarget.subject as { remoteAgentId: string }).remoteAgentId
       : null
+  const accessTargetConversationIdFromSubject =
+    accessTarget.subject.kind === "conversation"
+      ? (accessTarget.subject as { conversationId: string }).conversationId
+      : null
   const accessTargetConversationId =
     accessTarget.scope?.kind === "conversation"
       ? (accessTarget.scope as { conversationId: string }).conversationId
-      : accessTarget.subject.kind === "conversation"
-        ? (accessTarget.subject as { conversationId: string }).conversationId
-        : null
+      : accessTargetConversationIdFromSubject
   const accessTargetWorkspaceMemberId =
     accessTarget.subject.kind === "workspace_member"
-      ? (accessTarget.subject as { memberId: string }).memberId
+      ? (accessTarget.subject as { workspaceMemberId: string })
+          .workspaceMemberId
       : null
   const existing = accessRows.find(
     (row) =>
@@ -1908,27 +1917,22 @@ export async function createInstalledSkillGrant(input: {
   }
 
   const result = await withSkillsTransaction(async (client) => {
-    const inserted = await insertWorkspaceAppGrant(client as any, {
+    const inserted = await insertWorkspaceResourceGrant(client as any, {
       workspaceId: input.workspaceId,
-      workspaceAppId: input.installedSkillId,
+      workspaceResourceId: input.installedSkillId,
       target: accessTarget,
       permissions: ["use"],
       conversationTypeMaskOverride: input.conversationTypeMaskOverride ?? null,
-      createdByWorkspaceMemberId: input.grantedByWorkspaceMemberId || null,
+      createdByWorkspaceMemberId: input.createdByWorkspaceMemberId || null,
       reason: input.reason || null,
     })
     return {
       accessRow: {
         id: inserted.id,
         workspaceId: inserted.workspaceId,
-        skillId: inserted.workspaceAppId,
+        skillId: inserted.workspaceResourceId,
         bindScope: accessTarget.subject.kind as RuntimeBindingScope,
-        conversationId:
-          accessTarget.scope?.kind === "conversation"
-            ? accessTarget.scope.conversationId
-            : accessTarget.subject.kind === "conversation"
-              ? accessTarget.subject.conversationId
-              : null,
+        conversationId: accessTargetConversationId,
         actorId:
           accessTarget.subject.kind === "actor"
             ? accessTarget.subject.actorId
@@ -1939,7 +1943,7 @@ export async function createInstalledSkillGrant(input: {
             : null,
         workspaceMemberId:
           accessTarget.subject.kind === "workspace_member"
-            ? accessTarget.subject.memberId
+            ? accessTarget.subject.workspaceMemberId
             : null,
         conversationTypeMaskOverride: inserted.conversationTypeMaskOverride,
         status: inserted.status,
@@ -2041,7 +2045,7 @@ export async function revokeInstalledSkillGrant(input: {
     return presentSkillAccessGrant(accessRow)
   }
 
-  await revokeWorkspaceAppGrantDefault(accessRow.id)
+  await revokeWorkspaceResourceGrantDefault(accessRow.id)
 
   return { success: true }
 }
@@ -2052,12 +2056,17 @@ export async function installMarketplaceSkill(input: {
   accessTarget?: CapabilityAccessTarget
   grants?: Array<{
     target: CapabilityAccessTarget
-    permissions: WorkspaceAppGrantPermission[]
+    permissions: WorkspaceResourceGrantPermission[]
     conversationTypeMaskOverride?: number | null
     reason?: string
   }>
   installedByWorkspaceMemberId?: string
 }) {
+  const accessTargetConversationIdFromSubject =
+    input.accessTarget?.subject.kind === "conversation"
+      ? (input.accessTarget.subject as { conversationId: string })
+          .conversationId
+      : null
   const target = input.accessTarget
     ? normalizeScopeTarget({
         useScope: skillUseScopeFromTarget(input.accessTarget),
@@ -2072,16 +2081,14 @@ export async function installMarketplaceSkill(input: {
             : null,
         workspaceMemberId:
           input.accessTarget.subject.kind === "workspace_member"
-            ? (input.accessTarget.subject as { memberId: string }).memberId
+            ? (input.accessTarget.subject as { workspaceMemberId: string })
+                .workspaceMemberId
             : null,
         conversationId:
           input.accessTarget.scope?.kind === "conversation"
             ? (input.accessTarget.scope as { conversationId: string })
                 .conversationId
-            : input.accessTarget.subject.kind === "conversation"
-              ? (input.accessTarget.subject as { conversationId: string })
-                  .conversationId
-              : null,
+            : accessTargetConversationIdFromSubject,
       })
     : null
 
@@ -2096,7 +2103,7 @@ export async function installMarketplaceSkill(input: {
 
   const result = await withSkillsTransaction(async (client) => {
     const skillId = crypto.randomUUID()
-    await insertWorkspaceAppRoot(client, {
+    await insertWorkspaceResourceRoot(client, {
       id: skillId,
       workspaceId: input.workspaceId,
       kind: "installed_skill",
@@ -2137,9 +2144,9 @@ export async function installMarketplaceSkill(input: {
 
     if (input.grants?.length) {
       for (const grant of input.grants) {
-        await insertWorkspaceAppGrant(client as any, {
+        await insertWorkspaceResourceGrant(client as any, {
           workspaceId: input.workspaceId,
-          workspaceAppId: insertedSkillId,
+          workspaceResourceId: insertedSkillId,
           target: await resolveAccessGrantTarget({
             workspaceId: input.workspaceId,
             target: grant.target,
@@ -2252,15 +2259,17 @@ export async function updateInstalledSkill(input: {
         createdByWorkspaceMemberId: existing.ownerWorkspaceMemberId || null,
       })
 
-      const nextIconFileId =
-        input.iconFileId === undefined
-          ? existing.iconFileId
-          : input.iconFileId
-            ? await normalizeWorkspaceSkillIconFileId(
-                input.iconFileId,
-                input.workspaceId
-              )
-            : null
+      let nextIconFileId: string | null
+      if (input.iconFileId === undefined) {
+        nextIconFileId = existing.iconFileId
+      } else if (input.iconFileId) {
+        nextIconFileId = await normalizeWorkspaceSkillIconFileId(
+          input.iconFileId,
+          input.workspaceId
+        )
+      } else {
+        nextIconFileId = null
+      }
       await updateInstalledSkillContentState(client, {
         skillId: existing.skillId,
         iconFileId: nextIconFileId,
@@ -2268,17 +2277,17 @@ export async function updateInstalledSkill(input: {
         currentVersion: nextVersion,
         currentSnapshotId: snapshotId,
       })
-      await updateWorkspaceAppRoot(client, {
+      let nextResourceStatus: "active" | "disabled"
+      if (input.isEnabled === undefined) {
+        nextResourceStatus =
+          existing.skillStatus === "active" ? "active" : "disabled"
+      } else {
+        nextResourceStatus = input.isEnabled ? "active" : "disabled"
+      }
+      await updateWorkspaceResourceRoot(client, {
         id: existing.skillId,
         displayName: nextDisplayName,
-        status:
-          input.isEnabled === undefined
-            ? existing.skillStatus === "active"
-              ? "active"
-              : "disabled"
-            : input.isEnabled
-              ? "active"
-              : "disabled",
+        status: nextResourceStatus,
       })
 
       if (existing.sourceCatalogItemId) {
@@ -2294,30 +2303,32 @@ export async function updateInstalledSkill(input: {
       input.tags !== undefined ||
       input.conversationTypeMaskOverride !== undefined
     ) {
-      const nextIconFileId =
-        input.iconFileId === undefined
-          ? existing.iconFileId
-          : input.iconFileId
-            ? await normalizeWorkspaceSkillIconFileId(
-                input.iconFileId,
-                input.workspaceId
-              )
-            : null
+      let nextIconFileId: string | null
+      if (input.iconFileId === undefined) {
+        nextIconFileId = existing.iconFileId
+      } else if (input.iconFileId) {
+        nextIconFileId = await normalizeWorkspaceSkillIconFileId(
+          input.iconFileId,
+          input.workspaceId
+        )
+      } else {
+        nextIconFileId = null
+      }
       await updateInstalledSkillProfileState(client, {
         skillId: existing.skillId,
         iconFileId: nextIconFileId,
         tags: input.tags === undefined ? existing.tags || [] : input.tags,
       })
-      await updateWorkspaceAppRoot(client, {
+      let nextResourceStatus: "active" | "disabled"
+      if (input.isEnabled === undefined) {
+        nextResourceStatus =
+          existing.skillStatus === "active" ? "active" : "disabled"
+      } else {
+        nextResourceStatus = input.isEnabled ? "active" : "disabled"
+      }
+      await updateWorkspaceResourceRoot(client, {
         id: existing.skillId,
-        status:
-          input.isEnabled === undefined
-            ? existing.skillStatus === "active"
-              ? "active"
-              : "disabled"
-            : input.isEnabled
-              ? "active"
-              : "disabled",
+        status: nextResourceStatus,
         conversationTypeMaskOverride:
           input.conversationTypeMaskOverride === undefined
             ? existing.conversationTypeMaskOverride
@@ -2380,7 +2391,7 @@ export async function upgradeInstalledSkill(input: {
       currentVersion: existing.currentVersion + 1,
       currentSnapshotId: nextSnapshotId,
     })
-    await updateWorkspaceAppRoot(client, {
+    await updateWorkspaceResourceRoot(client, {
       id: existing.skillId,
       displayName:
         marketplaceSkill.snapshotDisplayName ||
@@ -2412,14 +2423,14 @@ export async function uninstallInstalledSkill(
       }
     }
 
-    // Root lifecycle lives on workspace_apps. The detail row stays until purge.
-    await updateWorkspaceAppRoot(client, {
+    // Root lifecycle lives on workspace_resources. The detail row stays until purge.
+    await updateWorkspaceResourceRoot(client, {
       id: installedSkillId,
       status: "archived",
       deletedAt: new Date(),
     })
 
-    await revokeWorkspaceAppGrantsForApp(client, installedSkillId)
+    await revokeWorkspaceResourceGrantsForResource(client, installedSkillId)
 
     return {
       deleted: true,
@@ -2537,16 +2548,13 @@ export async function listVisibleSkills(input: {
       : await (async () => {
           const [visibleRows, bindingsBySkillId] = await Promise.all([
             loadVisibleSkillRows(Array.from(visibleSkillIds)),
-            loadAccessBindingsBySkillIdsForContext(
-              Array.from(visibleSkillIds),
-              {
-                contextWorkspaceId: input.workspaceId,
-                workspaceMemberId: input.workspaceMemberId,
-                actorId: input.actorId,
-                remoteAgentId: input.remoteAgentId,
-                conversationId: input.conversationId,
-              }
-            ),
+            loadGrantsBySkillIdsForContext(Array.from(visibleSkillIds), {
+              contextWorkspaceId: input.workspaceId,
+              workspaceMemberId: input.workspaceMemberId,
+              actorId: input.actorId,
+              remoteAgentId: input.remoteAgentId,
+              conversationId: input.conversationId,
+            }),
           ])
           const workspacePolicyMap =
             await getWorkspaceCapabilityConversationTypePolicyMap(
@@ -2567,8 +2575,7 @@ export async function listVisibleSkills(input: {
             const instanceConversationTypeMask =
               resolveInstalledSkillEffectiveConversationTypeMask({
                 workspaceConversationTypeMask,
-                conversation_type_mask_override:
-                  row.conversationTypeMaskOverride,
+                conversationTypeMaskOverride: row.conversationTypeMaskOverride,
               })
             const bindings = (bindingsBySkillId.get(row.skillId) || []).filter(
               (binding) =>

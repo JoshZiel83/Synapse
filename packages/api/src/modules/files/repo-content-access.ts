@@ -65,11 +65,14 @@ async function resolveUserGrantContext(
   currentConversationId: string | null
 ): Promise<{ subjectIds: string[]; scopeIds: string[] } | null> {
   // The user's workspace_member row in THIS workspace (membership gate).
+  // Only an ACTIVE membership grants reach; 'left'/'removed' rows are durable
+  // tombstones (matches the canonical loadWorkspaceMemberAccess gate).
   const member = await dbh
     .selectFrom("workspaceMembers")
     .select("id")
     .where("workspaceId", "=", workspaceId)
     .where("userId", "=", userId)
+    .where("status", "=", "active")
     .limit(1)
     .executeTakeFirst()
   if (!member) return null
@@ -208,10 +211,13 @@ async function hasVisibleMessageRef(
     )
     .innerJoin("accessSubjects as cpsubj", "cpsubj.id", "cp.subjectId")
     .innerJoin("workspaceMembers as wm", "wm.id", "cpsubj.workspaceMemberId")
+    .innerJoin("conversations as c", "c.id", "ci.conversationId")
     .select("cip.id")
     .where("cip.refSha256", "=", sha256)
     .where("wm.userId", "=", userId)
     .where("cp.state", "=", "active")
+    // A soft-deleted conversation serves no content.
+    .where("c.deletedAt", "is", null)
     .where("ci.scope", "=", "shared")
     .where("ci.surface", "=", "visible")
     .where((eb) =>
@@ -268,10 +274,13 @@ async function hasVisibleMessageRef(
     )
     .innerJoin("accessSubjects as cpsubj", "cpsubj.id", "cp.subjectId")
     .innerJoin("workspaceMembers as wm", "wm.id", "cpsubj.workspaceMemberId")
+    .innerJoin("conversations as c", "c.id", "tc.conversationId")
     .select("trp.id")
     .where("trp.refSha256", "=", sha256)
     .where("wm.userId", "=", userId)
     .where("cp.state", "=", "active")
+    // A soft-deleted conversation serves no content.
+    .where("c.deletedAt", "is", null)
     .$if(Boolean(conversationId), (qb) =>
       qb.where("tc.conversationId", "=", conversationId as string)
     )
@@ -321,6 +330,9 @@ async function hasReadableMemoryRef(
       "ms.scopeSubjectId as spaceScopeSubjectId",
     ])
     .where("mip.refSha256", "=", sha256)
+    // Soft-deleted items/spaces must not authorize content reach.
+    .where("mi.deletedAt", "is", null)
+    .where("ms.deletedAt", "is", null)
     .execute()
 
   if (memCandidates.length > 0) {
@@ -402,10 +414,13 @@ async function hasReadableMemoryRef(
     )
     .innerJoin("accessSubjects as cpsubj", "cpsubj.id", "cp.subjectId")
     .innerJoin("workspaceMembers as wm", "wm.id", "cpsubj.workspaceMemberId")
+    .innerJoin("conversations as c", "c.id", "cpt.conversationId")
     .select("cap.id")
     .where("cap.refSha256", "=", sha256)
     .where("wm.userId", "=", userId)
     .where("cp.state", "=", "active")
+    // A soft-deleted conversation serves no content.
+    .where("c.deletedAt", "is", null)
     .$if(Boolean(currentConversationId), (qb) =>
       qb.where("cpt.conversationId", "=", currentConversationId as string)
     )
@@ -445,6 +460,8 @@ async function hasFileSpaceGrantReach(
       "g.scopeSubjectId as scopeSubjectId",
     ])
     .where("g.status", "=", "active")
+    // A soft-deleted file space must not authorize content reach.
+    .where("fs.deletedAt", "is", null)
     .where(
       sql<boolean>`('read'::file_permission = ANY(g.permissions) OR 'admin'::file_permission = ANY(g.permissions))`
     )
@@ -549,6 +566,8 @@ async function hasAssetInUserWorkspace(
       join
         .onRef("wm.workspaceId", "=", "fa.workspaceId")
         .on("wm.userId", "=", userId)
+        // Only an active membership grants reach (not 'left'/'removed').
+        .on("wm.status", "=", "active")
     )
     .select("fa.id")
     .where("fa.contentSha256", "=", sha256)
@@ -561,6 +580,9 @@ async function hasAssetInUserWorkspace(
         eb("wm.userId", "is not", null),
       ])
     )
+    // Soft-deleted workspaces grant no reach. For the library-global branch the
+    // LEFT join leaves w NULL, and NULL IS NULL keeps that row eligible.
+    .where("w.deletedAt", "is", null)
     .limit(1)
     .executeTakeFirst()
   return Boolean(row)

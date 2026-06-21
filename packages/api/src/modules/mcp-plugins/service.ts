@@ -3,13 +3,13 @@ import fs from "node:fs/promises"
 import {
   DEFAULT_CONVERSATION_TYPE_MASK,
   FILE_ORIGIN_SYSTEMS,
-  ACCESS_BINDING_STATUS,
+  WORKSPACE_RESOURCE_GRANT_STATUS,
   MARKETPLACE_ITEM_KIND,
   MCP_VALIDATION_RULE_KIND,
   PLUGIN_INSTALLATION_STATUS,
-  WORKSPACE_APP_KIND,
-  WORKSPACE_APP_GRANT_PERMISSION,
-  WORKSPACE_APP_STATUS,
+  WORKSPACE_RESOURCE_KIND,
+  WORKSPACE_RESOURCE_GRANT_PERMISSION,
+  WORKSPACE_RESOURCE_STATUS,
   actorRef,
   conversationRef,
   normalizeConversationTypeMask,
@@ -21,16 +21,16 @@ import {
   subjectScopeLabel,
   workspaceMemberRef,
   workspaceRef,
-  type WorkspaceAppGrantPermission,
+  type WorkspaceResourceGrantPermission,
 } from "@synapse/shared"
 import { nowIsoInstant } from "@synapse/shared/datetime"
 import type {
   CapabilityAccessTarget,
-  WorkspaceAppGrant,
-  WorkspaceAppGrantTargetInput,
+  WorkspaceResourceGrant,
+  WorkspaceResourceGrantTargetInput,
 } from "@synapse/shared/types"
 import type {
-  AccessBindingStatus,
+  WorkspaceResourceGrantStatus,
   PluginAuthBindingDefinition,
   PluginConfigFieldDefinition,
   PluginInstallFlow,
@@ -40,7 +40,7 @@ import type {
   McpValidationRule,
   PluginReuseScopeV2,
   RuntimeBindingScope,
-  WorkspaceAppGrantSource,
+  WorkspaceResourceGrantSource,
 } from "@synapse/shared"
 import { encryptSensitiveFields } from "../../infrastructure/crypto/index.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
@@ -76,7 +76,7 @@ import {
   listPublicPluginCatalogRows,
   loadInstallationRows,
   revokePluginConnectionsForInstallation,
-  revokePluginWorkspaceAppGrant,
+  revokePluginWorkspaceResourceGrant,
   updatePluginInstallationConfigData,
   updatePluginInstallationGrantConversationTypeMask,
   updatePluginInstallationReuseScope,
@@ -106,17 +106,15 @@ import {
   normalizeFeishuFeatureKeys,
 } from "./feishu/features.js"
 import { parseFeishuAuthConnectionRef } from "./feishu/config.js"
-import {} from "../access/bindings.js"
 import { resolveAccessGrantTarget } from "../access/access-target-resolver.js"
 import {
-  insertWorkspaceAppRoot,
-  updateWorkspaceAppRoot,
-} from "../workspace-apps/repo.js"
+  insertWorkspaceResourceRoot,
+  updateWorkspaceResourceRoot,
+} from "../workspace-resources/repo.js"
 import {
-  insertWorkspaceAppGrant,
-  revokeWorkspaceAppGrantsForApp,
-} from "../workspace-apps/grant-storage.js"
-import {} from "../access/binding-storage.js"
+  insertWorkspaceResourceGrant,
+  revokeWorkspaceResourceGrantsForResource,
+} from "../workspace-resources/grant-storage.js"
 import {
   assertConversationTypeMaskWithinParent,
   assertGrantConversationTypeOverrideAllowed,
@@ -289,7 +287,7 @@ function mergeConfigForUpdate(
  */
 export function installationAccessRowToTarget(
   row: InstallationAccessRow
-): WorkspaceAppGrantTargetInput {
+): WorkspaceResourceGrantTargetInput {
   switch (row.accessTargetType) {
     case "workspace":
       return { subject: workspaceRef(row.workspaceId) }
@@ -328,8 +326,8 @@ function buildInstallationAccessRow(input: {
   installationId: string
   target: CapabilityAccessTarget
   conversationTypeMaskOverride: number | null
-  status: AccessBindingStatus
-  source: WorkspaceAppGrantSource
+  status: WorkspaceResourceGrantStatus
+  source: WorkspaceResourceGrantSource
   createdByWorkspaceMemberId: string | null
   reason: string | null
   createdAt: Date
@@ -357,15 +355,16 @@ function buildInstallationAccessRow(input: {
     target.subject.kind === "remote_agent"
       ? (target.subject as { remoteAgentId: string }).remoteAgentId
       : null
-  const conversationId =
-    target.scope?.kind === "conversation"
-      ? (target.scope as { conversationId: string }).conversationId
-      : target.subject.kind === "conversation"
-        ? (target.subject as { conversationId: string }).conversationId
-        : null
+  let conversationId: string | null = null
+  if (target.scope?.kind === "conversation") {
+    conversationId = (target.scope as { conversationId: string }).conversationId
+  } else if (target.subject.kind === "conversation") {
+    conversationId = (target.subject as { conversationId: string })
+      .conversationId
+  }
   const workspaceMemberId =
     target.subject.kind === "workspace_member"
-      ? (target.subject as { memberId: string }).memberId
+      ? (target.subject as { workspaceMemberId: string }).workspaceMemberId
       : null
   return {
     id: input.id,
@@ -432,7 +431,7 @@ function suggestedAccessTargetType(
   return subjectScopeLabel(target) as RuntimeBindingScope
 }
 
-// Row→WorkspaceAppGrant View builder lives in ./presenter.ts as
+// Row→WorkspaceResourceGrant View builder lives in ./presenter.ts as
 // presentInstallationAccessGrant (it serializes Date→ISO + is a row→DTO mapper —
 // guard r3/r4 confine that to the presenter); called directly at its 6 sites
 // below. round-6 P1-7.
@@ -459,7 +458,7 @@ async function getInstallationPayload(
   const workspaceConversationTypeMask =
     await getWorkspaceCapabilityConversationTypeMask(
       row.rootWorkspaceId,
-      WORKSPACE_APP_KIND.PLUGIN_INSTALLATION
+      WORKSPACE_RESOURCE_KIND.PLUGIN_INSTALLATION
     )
 
   return {
@@ -600,7 +599,7 @@ export async function installPluginUnified(data: {
   installedByWorkspaceMemberId?: string
   grants?: Array<{
     target: CapabilityAccessTarget
-    permissions: WorkspaceAppGrantPermission[]
+    permissions: WorkspaceResourceGrantPermission[]
     conversationTypeMaskOverride?: number | null
     reason?: string
   }>
@@ -672,13 +671,13 @@ export async function installPluginUnified(data: {
     }
 
     const installationId = crypto.randomUUID()
-    await insertWorkspaceAppRoot(client, {
+    await insertWorkspaceResourceRoot(client, {
       id: installationId,
       workspaceId: data.workspaceId,
-      kind: WORKSPACE_APP_KIND.PLUGIN_INSTALLATION,
+      kind: WORKSPACE_RESOURCE_KIND.PLUGIN_INSTALLATION,
       displayName: plugin.displayName,
       ownerWorkspaceMemberId: data.installedByWorkspaceMemberId || null,
-      status: WORKSPACE_APP_STATUS.ACTIVE,
+      status: WORKSPACE_RESOURCE_STATUS.ACTIVE,
       conversationTypeMaskOverride: plugin.defaultConversationTypeMask ?? null,
     })
     const insertedInstallationId = await insertPluginInstallationRecord(
@@ -739,9 +738,9 @@ export async function installPluginUnified(data: {
     await incrementPluginCatalogDownloadCount(client, plugin.id)
 
     for (const grant of data.grants || []) {
-      await insertWorkspaceAppGrant(client as any, {
+      await insertWorkspaceResourceGrant(client as any, {
         workspaceId: data.workspaceId,
-        workspaceAppId: installationId,
+        workspaceResourceId: installationId,
         target: await resolveAccessGrantTarget({
           workspaceId: data.workspaceId,
           target: grant.target,
@@ -771,7 +770,7 @@ export async function installPluginUnified(data: {
 /**
  * Soft-delete teardown for a plugin installation, executor-scoped so it can run
  * inside any transaction (the real service wraps it in withDbTransaction; tests
- * call it on a rolled-back trx). Revokes the installation's access bindings,
+ * call it on a rolled-back trx). Revokes the installation's access grants,
  * soft-deletes its child plugin_connections (review F5), then soft-deletes the
  * installation itself. Idempotent (deleted_at IS NULL guards). Single source of
  * truth for uninstall semantics — do NOT re-implement these SQL flips elsewhere.
@@ -780,7 +779,7 @@ export async function tearDownPluginInstallationOn(
   client: Executor,
   installId: string
 ): Promise<void> {
-  await revokeWorkspaceAppGrantsForApp(client as any, installId)
+  await revokeWorkspaceResourceGrantsForResource(client as any, installId)
 
   // Soft delete the installation's connections too (review F5): plugin_connections
   // is its own soft-delete root, so uninstalling the parent must close the child
@@ -789,13 +788,13 @@ export async function tearDownPluginInstallationOn(
   // them. Done before the parent flip (a child deleted_at flip is always allowed
   // by the FK-liveness trigger).
   await revokePluginConnectionsForInstallation(client, installId)
-  await updateWorkspaceAppRoot(client, {
+  await updateWorkspaceResourceRoot(client, {
     id: installId,
-    status: WORKSPACE_APP_STATUS.ARCHIVED,
+    status: WORKSPACE_RESOURCE_STATUS.ARCHIVED,
     deletedAt: new Date(),
   })
 
-  // Root lifecycle lives on workspace_apps. The detail row stays until purge.
+  // Root lifecycle lives on workspace_resources. The detail row stays until purge.
 }
 
 export async function uninstallPluginUnified(installId: string) {
@@ -829,7 +828,7 @@ export async function getInstallations(
   const workspaceConversationTypeMask =
     await getWorkspaceCapabilityConversationTypeMask(
       workspaceId,
-      WORKSPACE_APP_KIND.PLUGIN_INSTALLATION
+      WORKSPACE_RESOURCE_KIND.PLUGIN_INSTALLATION
     )
 
   return rows.flatMap((row) => {
@@ -1014,19 +1013,27 @@ export async function updateInstallation(
       // root-only conversation-type policy source; no detail-table override update remains
     }
 
-    await updateWorkspaceAppRoot(client, {
+    let nextStatus: (typeof WORKSPACE_RESOURCE_STATUS)[keyof typeof WORKSPACE_RESOURCE_STATUS]
+    if (data.isEnabled === undefined) {
+      switch (row.rootStatus) {
+        case PLUGIN_INSTALLATION_STATUS.ACTIVE:
+          nextStatus = WORKSPACE_RESOURCE_STATUS.ACTIVE
+          break
+        case PLUGIN_INSTALLATION_STATUS.DISABLED:
+          nextStatus = WORKSPACE_RESOURCE_STATUS.DISABLED
+          break
+        default:
+          nextStatus = WORKSPACE_RESOURCE_STATUS.ERROR
+      }
+    } else if (data.isEnabled) {
+      nextStatus = WORKSPACE_RESOURCE_STATUS.ACTIVE
+    } else {
+      nextStatus = WORKSPACE_RESOURCE_STATUS.DISABLED
+    }
+    await updateWorkspaceResourceRoot(client, {
       id: installId,
       displayName: row.rootDisplayName,
-      status:
-        data.isEnabled === undefined
-          ? row.rootStatus === PLUGIN_INSTALLATION_STATUS.ACTIVE
-            ? WORKSPACE_APP_STATUS.ACTIVE
-            : row.rootStatus === PLUGIN_INSTALLATION_STATUS.DISABLED
-              ? WORKSPACE_APP_STATUS.DISABLED
-              : WORKSPACE_APP_STATUS.ERROR
-          : data.isEnabled
-            ? WORKSPACE_APP_STATUS.ACTIVE
-            : WORKSPACE_APP_STATUS.DISABLED,
+      status: nextStatus,
       conversationTypeMaskOverride:
         data.conversationTypeMaskOverride === undefined
           ? row.rootConversationTypeMaskOverride
@@ -1066,9 +1073,9 @@ export async function getPluginInstallationGrantState(
   )
   const accessRows = await listAccessRows(installationId)
   const grants = accessRows
-    .filter((binding) => binding.status === ACCESS_BINDING_STATUS.ACTIVE)
-    .map((binding) =>
-      presentInstallationAccessGrant(binding, {
+    .filter((grant) => grant.status === WORKSPACE_RESOURCE_GRANT_STATUS.ACTIVE)
+    .map((grant) =>
+      presentInstallationAccessGrant(grant, {
         workspaceConversationTypeMask,
         instanceConversationTypeMaskOverride: conversationTypeMaskOverride,
       })
@@ -1100,7 +1107,7 @@ export async function createPluginInstallationGrant(input: {
   installationId: string
   accessTarget?: CapabilityAccessTarget
   conversationTypeMaskOverride?: number | null
-  grantedByWorkspaceMemberId?: string
+  createdByWorkspaceMemberId?: string
   reason?: string
 }) {
   const { row, plugin, workspaceConversationTypeMask } =
@@ -1148,19 +1155,24 @@ export async function createPluginInstallationGrant(input: {
     accessTarget.subject.kind === "remote_agent"
       ? (accessTarget.subject as { remoteAgentId: string }).remoteAgentId
       : null
-  const accessTargetConversationId =
-    accessTarget.scope?.kind === "conversation"
-      ? (accessTarget.scope as { conversationId: string }).conversationId
-      : accessTarget.subject.kind === "conversation"
-        ? (accessTarget.subject as { conversationId: string }).conversationId
-        : null
+  let accessTargetConversationId: string | null = null
+  if (accessTarget.scope?.kind === "conversation") {
+    accessTargetConversationId = (
+      accessTarget.scope as { conversationId: string }
+    ).conversationId
+  } else if (accessTarget.subject.kind === "conversation") {
+    accessTargetConversationId = (
+      accessTarget.subject as { conversationId: string }
+    ).conversationId
+  }
   const accessTargetWorkspaceMemberId =
     accessTarget.subject.kind === "workspace_member"
-      ? (accessTarget.subject as { memberId: string }).memberId
+      ? (accessTarget.subject as { workspaceMemberId: string })
+          .workspaceMemberId
       : null
   const existing = accessRows.find(
     (entry) =>
-      entry.status === ACCESS_BINDING_STATUS.ACTIVE &&
+      entry.status === WORKSPACE_RESOURCE_GRANT_STATUS.ACTIVE &&
       entry.accessTargetType === accessTargetLabel &&
       entry.actorId === accessTargetActorId &&
       entry.remoteAgentId === accessTargetRemoteAgentId &&
@@ -1175,20 +1187,20 @@ export async function createPluginInstallationGrant(input: {
   }
 
   const result = await withMcpPluginTransaction(async (client) => {
-    const inserted = await insertWorkspaceAppGrant(client as any, {
+    const inserted = await insertWorkspaceResourceGrant(client as any, {
       workspaceId: input.workspaceId,
-      workspaceAppId: input.installationId,
+      workspaceResourceId: input.installationId,
       target: accessTarget,
-      permissions: [WORKSPACE_APP_GRANT_PERMISSION.USE],
+      permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.USE],
       conversationTypeMaskOverride: input.conversationTypeMaskOverride ?? null,
-      createdByWorkspaceMemberId: input.grantedByWorkspaceMemberId || null,
+      createdByWorkspaceMemberId: input.createdByWorkspaceMemberId || null,
       reason: input.reason || plugin.authorization?.reason || null,
     })
 
     const accessRow = buildInstallationAccessRow({
       id: inserted.id,
       workspaceId: inserted.workspaceId,
-      installationId: inserted.workspaceAppId,
+      installationId: inserted.workspaceResourceId,
       target: accessTarget,
       conversationTypeMaskOverride: inserted.conversationTypeMaskOverride,
       status: inserted.status,
@@ -1296,11 +1308,11 @@ export async function revokePluginInstallationGrant(input: {
   if (!accessRow || accessRow.workspaceId !== input.workspaceId) {
     throw new McpPluginError(404, "Access grant not found")
   }
-  if (accessRow.status === ACCESS_BINDING_STATUS.REVOKED) {
+  if (accessRow.status === WORKSPACE_RESOURCE_GRANT_STATUS.REVOKED) {
     return presentInstallationAccessGrant(accessRow)
   }
 
-  await revokePluginWorkspaceAppGrant(accessRow.id)
+  await revokePluginWorkspaceResourceGrant(accessRow.id)
 
   await incrementMcpVersion(input.workspaceId)
 

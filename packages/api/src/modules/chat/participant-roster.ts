@@ -45,7 +45,7 @@ async function resolveParticipantSubjectId(
   ) {
     return upsertAccessSubjectOn(queryable, {
       kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-      memberId: params.workspaceMemberId,
+      workspaceMemberId: params.workspaceMemberId,
     })
   }
   if (
@@ -174,19 +174,24 @@ export async function getConversationParticipantUseCase(params: {
     }
   )
   return (
-    participants.find((participant) =>
-      params.participantId
-        ? participant.id === params.participantId
-        : params.actorId
-          ? participant.actorId === params.actorId
-          : params.remoteAgentId
-            ? participant.remoteAgentId === params.remoteAgentId
-            : params.workspaceMemberId
-              ? participant.workspaceMemberId === params.workspaceMemberId
-              : params.transportAddressId
-                ? participant.transportAddressId === params.transportAddressId
-                : false
-    ) ?? null
+    participants.find((participant) => {
+      if (params.participantId) {
+        return participant.id === params.participantId
+      }
+      if (params.actorId) {
+        return participant.actorId === params.actorId
+      }
+      if (params.remoteAgentId) {
+        return participant.remoteAgentId === params.remoteAgentId
+      }
+      if (params.workspaceMemberId) {
+        return participant.workspaceMemberId === params.workspaceMemberId
+      }
+      if (params.transportAddressId) {
+        return participant.transportAddressId === params.transportAddressId
+      }
+      return false
+    }) ?? null
   )
 }
 

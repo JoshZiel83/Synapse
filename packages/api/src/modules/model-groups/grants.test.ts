@@ -59,13 +59,17 @@ async function insertWorkspaceMember(
 
 async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
   const actorId = crypto.randomUUID()
+  const createdBySubjectId = await upsertAccessSubject(db, {
+    kind: SUBJECT_KIND.PLATFORM,
+  })
   await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id: actorId,
       workspaceId: workspaceId,
       kind: "actor",
       displayName: "test actor",
+      createdBySubjectId,
       status: "active",
     } as any)
     .execute()
@@ -177,7 +181,7 @@ test(
       const groupId = await insertModelGroup(db, workspaceId)
       const subjectId = await upsertAccessSubject(db, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId,
+        workspaceMemberId: memberId,
       })
       await db
         .insertInto("modelGroupGrants")
@@ -246,7 +250,7 @@ test(
       const groupId = await insertModelGroup(db, workspaceId)
       const subjectId = await upsertAccessSubject(db, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId,
+        workspaceMemberId: memberId,
       })
       await db
         .insertInto("modelGroupGrants")

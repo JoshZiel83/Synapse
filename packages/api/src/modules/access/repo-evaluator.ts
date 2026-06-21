@@ -2,10 +2,10 @@ import { sql } from "kysely"
 import {
   ACCESS_BINDING_STATUS,
   SUBJECT_KIND,
-  WORKSPACE_APP_GRANT_PERMISSION,
-  WORKSPACE_APP_KIND,
-  WORKSPACE_APP_STATUS,
-  type WorkspaceAppStatus,
+  WORKSPACE_RESOURCE_GRANT_PERMISSION,
+  WORKSPACE_RESOURCE_KIND,
+  WORKSPACE_RESOURCE_STATUS,
+  type WorkspaceResourceStatus,
 } from "@synapse/shared"
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
 import {
@@ -32,6 +32,7 @@ export type ActorRow = {
   id: string
   workspaceId: string
   ownerWorkspaceMemberId: string | null
+  ownerSubjectId: string | null
   isActive: boolean
 }
 
@@ -39,6 +40,7 @@ export type RemoteAgentRow = {
   id: string
   workspaceId: string
   ownerWorkspaceMemberId: string | null
+  ownerSubjectId: string | null
   isActive: boolean
   isPublicShared: boolean
 }
@@ -58,27 +60,27 @@ export type ResourceGrantRow = {
   subjectConversationIdViaJoin: string | null
 }
 
-export type LegacyBindableResourceType = "automation_event_source"
-
-export type WorkspaceAppBindableResourceType =
+export type WorkspaceResourceBindableResourceType =
   | "installed_skill"
   | "plugin_installation"
   | "device_capability"
 
-type WorkspaceAppGrantResourceType =
-  | WorkspaceAppBindableResourceType
+type WorkspaceResourceGrantResourceType =
+  | WorkspaceResourceBindableResourceType
   | "actor"
   | "remote_agent"
+  | "automation_event_source"
 
-export type WorkspaceAppAccessRow = {
+export type WorkspaceResourceAccessRow = {
   id: string | null
-  status: WorkspaceAppStatus | null
+  status: WorkspaceResourceStatus | null
 }
 
-export type WorkspaceAppResourceAccessRow = {
+export type WorkspaceResourceResourceAccessRow = {
   workspaceId: string
   ownerWorkspaceMemberId: string | null
-  status: WorkspaceAppStatus
+  ownerSubjectId: string | null
+  status: WorkspaceResourceStatus
 }
 
 export type DeviceAccessRow = {
@@ -102,17 +104,13 @@ export type MemorySpaceLoadedRow = {
   scopeConversationId: string | null
 }
 
-const BINDABLE_WORKSPACE_APP_KIND: Record<
-  WorkspaceAppBindableResourceType,
-  (typeof WORKSPACE_APP_KIND)[keyof typeof WORKSPACE_APP_KIND]
+const BINDABLE_WORKSPACE_RESOURCE_KIND: Record<
+  WorkspaceResourceBindableResourceType,
+  (typeof WORKSPACE_RESOURCE_KIND)[keyof typeof WORKSPACE_RESOURCE_KIND]
 > = {
-  installed_skill: WORKSPACE_APP_KIND.INSTALLED_SKILL,
-  plugin_installation: WORKSPACE_APP_KIND.PLUGIN_INSTALLATION,
-  device_capability: WORKSPACE_APP_KIND.DEVICE_CAPABILITY,
-}
-
-function bindableResourceIdColumn(resourceType: LegacyBindableResourceType) {
-  return "automationEventSourceId"
+  installed_skill: WORKSPACE_RESOURCE_KIND.INSTALLED_SKILL,
+  plugin_installation: WORKSPACE_RESOURCE_KIND.PLUGIN_INSTALLATION,
+  device_capability: WORKSPACE_RESOURCE_KIND.DEVICE_CAPABILITY,
 }
 
 export async function loadWorkspaceMemberAccess(
@@ -159,15 +157,21 @@ export async function loadActorRow(
 ): Promise<ActorRow | null> {
   return (await db
     .selectFrom("actors as actor")
-    .innerJoin("workspaceApps as app", "app.id", "actor.id")
+    .innerJoin("workspaceResources as resource", "resource.id", "actor.id")
+    .leftJoin(
+      "accessSubjects as owner_subject",
+      "owner_subject.id",
+      "resource.ownerSubjectId"
+    )
     .select([
       "actor.id",
-      "app.workspaceId",
-      "app.ownerWorkspaceMemberId",
-      sql<boolean>`app.status = 'active'`.as("isActive"),
+      "resource.workspaceId",
+      "owner_subject.workspaceMemberId as ownerWorkspaceMemberId",
+      "resource.ownerSubjectId",
+      sql<boolean>`resource.status = 'active'`.as("isActive"),
     ])
     .where("actor.id", "=", actorId)
-    .where("app.deletedAt", "is", null)
+    .where("resource.deletedAt", "is", null)
     .limit(1)
     .executeTakeFirst()) as ActorRow | null
 }
@@ -179,15 +183,18 @@ export async function loadRemoteAgentRow(
   const result = await sql<RemoteAgentRow>`
     SELECT
       agent.id,
-      app.workspace_id,
-      app.owner_workspace_member_id,
-      (app.status = 'active') AS is_active,
+      resource.workspace_id,
+      owner_subject.workspace_member_id AS owner_workspace_member_id,
+      resource.owner_subject_id,
+      (resource.status = 'active') AS is_active,
       agent.is_public_shared
     FROM remote_agents agent
-    INNER JOIN workspace_apps_live app
-      ON app.id = agent.id
+    INNER JOIN workspace_resources_live resource
+      ON resource.id = agent.id
+    LEFT JOIN access_subjects owner_subject
+      ON owner_subject.id = resource.owner_subject_id
     WHERE agent.id = ${remoteAgentId}
-      AND app.deleted_at IS NULL
+      AND resource.deleted_at IS NULL
     LIMIT 1
   `.execute(db)
   return result.rows[0] ?? null
@@ -241,7 +248,7 @@ export async function hasActiveConversationMembership(
   if (params.workspaceMemberId) {
     subjectId = await upsertAccessSubject(db, {
       kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-      memberId: params.workspaceMemberId,
+      workspaceMemberId: params.workspaceMemberId,
     })
   } else if (params.actorId) {
     subjectId = await upsertAccessSubject(db, {
@@ -263,120 +270,10 @@ export async function hasActiveConversationMembership(
   )
 }
 
-export async function listResourceGrantRows(
-  db: KyselyDb,
-  resourceType: LegacyBindableResourceType,
-  resourceId: string | null,
-  subject: PermissionSubject,
-  runtimeScopeSubjectIds?: readonly string[],
-  runtimeSubjectIds?: readonly string[]
-): Promise<ResourceGrantRow[]> {
-  const resourceIdColumn = bindableResourceIdColumn(resourceType)
-
-  let query = db
-    .selectFrom("resourceAccessBindings as binding")
-    .innerJoin("accessSubjects as subj", "subj.id", "binding.subjectId")
-    .select([
-      sql<string>`binding.automation_event_source_id::text`.as("resourceId"),
-      sql<string>`subj.kind`.as("subjectKind"),
-      sql<string | null>`subj.workspace_id`.as("subjectWorkspaceIdViaJoin"),
-      sql<string | null>`subj.workspace_member_id`.as(
-        "subjectWorkspaceMemberIdViaJoin"
-      ),
-      sql<string | null>`subj.actor_id`.as("subjectActorIdViaJoin"),
-      sql<string | null>`subj.conversation_id`.as(
-        "subjectConversationIdViaJoin"
-      ),
-    ])
-    .where("binding.status", "=", "active")
-
-  if (runtimeScopeSubjectIds && runtimeScopeSubjectIds.length > 0) {
-    query = query.where((eb) =>
-      eb.or([
-        eb("binding.scopeSubjectId", "is", null),
-        eb("binding.scopeSubjectId", "in", [...runtimeScopeSubjectIds]),
-      ])
-    )
-  } else {
-    query = query.where("binding.scopeSubjectId", "is", null)
-  }
-
-  if (resourceId) {
-    query = query.where(`binding.${resourceIdColumn}` as any, "=", resourceId)
-  }
-
-  const extraRuntimeSubjectIds =
-    runtimeSubjectIds && runtimeSubjectIds.length > 0
-      ? [...runtimeSubjectIds]
-      : null
-
-  if (subject.type === "workspace") {
-    query = query.where((eb) =>
-      eb.or([
-        eb.and([
-          eb("subj.kind", "=", "workspace"),
-          eb("subj.workspaceId", "=", subject.id),
-        ]),
-        ...(extraRuntimeSubjectIds
-          ? [eb("binding.subjectId", "in", extraRuntimeSubjectIds)]
-          : []),
-      ])
-    )
-  } else if (subject.type === "actor") {
-    query = query.where((eb) =>
-      eb.or([
-        eb.and([
-          eb("subj.kind", "=", "actor"),
-          eb("subj.actorId", "=", subject.id),
-        ]),
-        ...(extraRuntimeSubjectIds
-          ? [eb("binding.subjectId", "in", extraRuntimeSubjectIds)]
-          : []),
-      ])
-    )
-  } else if (subject.type === "remote_agent") {
-    query = query.where((eb) =>
-      eb.or([
-        eb.and([
-          eb("subj.kind", "=", "remote_agent"),
-          eb("subj.remoteAgentId", "=", subject.id),
-        ]),
-        ...(extraRuntimeSubjectIds
-          ? [eb("binding.subjectId", "in", extraRuntimeSubjectIds)]
-          : []),
-      ])
-    )
-  } else if (subject.type === "workspace_member") {
-    const access = await loadWorkspaceMemberAccess(db, subject.id)
-    if (!access) {
-      return []
-    }
-    query = query.where((eb) =>
-      eb.or([
-        eb.and([
-          eb("subj.kind", "=", "workspace"),
-          eb("subj.workspaceId", "=", access.workspaceId),
-        ]),
-        eb.and([
-          eb("subj.kind", "=", "workspace_member"),
-          eb("subj.workspaceMemberId", "=", subject.id),
-        ]),
-        ...(extraRuntimeSubjectIds
-          ? [eb("binding.subjectId", "in", extraRuntimeSubjectIds)]
-          : []),
-      ])
-    )
-  } else {
-    return []
-  }
-
-  return await query.execute()
-}
-
-export async function listWorkspaceAppGrantRows(
+export async function listWorkspaceResourceGrantRows(
   db: KyselyDb,
   params: {
-    resourceType: WorkspaceAppGrantResourceType
+    resourceType: WorkspaceResourceGrantResourceType
     resourceId: string | null
     requiredGrantPermission: "use" | "contact_visible" | "manage"
     subject: PermissionSubject
@@ -385,11 +282,15 @@ export async function listWorkspaceAppGrantRows(
   }
 ): Promise<ResourceGrantRow[]> {
   let query = db
-    .selectFrom("workspaceAppGrants as app_grant")
-    .innerJoin("workspaceApps as app", "app.id", "app_grant.workspaceAppId")
-    .innerJoin("accessSubjects as subj", "subj.id", "app_grant.subjectId")
+    .selectFrom("workspaceResourceGrants as resource_grant")
+    .innerJoin(
+      "workspaceResources as resource",
+      "resource.id",
+      "resource_grant.workspaceResourceId"
+    )
+    .innerJoin("accessSubjects as subj", "subj.id", "resource_grant.subjectId")
     .select([
-      "app_grant.workspaceAppId as resourceId",
+      "resource_grant.workspaceResourceId as resourceId",
       sql<string>`subj.kind`.as("subjectKind"),
       sql<string | null>`subj.workspace_id`.as("subjectWorkspaceIdViaJoin"),
       sql<string | null>`subj.workspace_member_id`.as(
@@ -400,32 +301,37 @@ export async function listWorkspaceAppGrantRows(
         "subjectConversationIdViaJoin"
       ),
     ])
-    .where("app_grant.status", "=", "active")
-    .where("app.kind", "=", params.resourceType)
-    .where("app.deletedAt", "is", null)
+    .where("resource_grant.status", "=", "active")
+    .where("resource.kind", "=", params.resourceType)
+    .where("resource.deletedAt", "is", null)
     .where(
-      sql<boolean>`${params.requiredGrantPermission}::workspace_app_grant_permission = ANY(app_grant.permissions)`
+      sql<boolean>`${params.requiredGrantPermission}::workspace_resource_grant_permission = ANY(resource_grant.permissions)`
     )
 
   query =
-    params.requiredGrantPermission === WORKSPACE_APP_GRANT_PERMISSION.MANAGE
-      ? query.where("app.status", "!=", WORKSPACE_APP_STATUS.ARCHIVED)
-      : query.where("app.status", "=", WORKSPACE_APP_STATUS.ACTIVE)
+    params.requiredGrantPermission ===
+    WORKSPACE_RESOURCE_GRANT_PERMISSION.MANAGE
+      ? query.where("resource.status", "!=", WORKSPACE_RESOURCE_STATUS.ARCHIVED)
+      : query.where("resource.status", "=", WORKSPACE_RESOURCE_STATUS.ACTIVE)
 
   const runtimeScopeSubjectIds = params.runtimeScopeSubjectIds ?? []
   if (runtimeScopeSubjectIds.length > 0) {
     query = query.where((eb) =>
       eb.or([
-        eb("app_grant.scopeSubjectId", "is", null),
-        eb("app_grant.scopeSubjectId", "in", [...runtimeScopeSubjectIds]),
+        eb("resource_grant.scopeSubjectId", "is", null),
+        eb("resource_grant.scopeSubjectId", "in", [...runtimeScopeSubjectIds]),
       ])
     )
   } else {
-    query = query.where("app_grant.scopeSubjectId", "is", null)
+    query = query.where("resource_grant.scopeSubjectId", "is", null)
   }
 
   if (params.resourceId) {
-    query = query.where("app_grant.workspaceAppId", "=", params.resourceId)
+    query = query.where(
+      "resource_grant.workspaceResourceId",
+      "=",
+      params.resourceId
+    )
   }
 
   const extraRuntimeSubjectIds =
@@ -441,7 +347,7 @@ export async function listWorkspaceAppGrantRows(
           eb("subj.workspaceId", "=", params.subject.id),
         ]),
         ...(extraRuntimeSubjectIds
-          ? [eb("app_grant.subjectId", "in", extraRuntimeSubjectIds)]
+          ? [eb("resource_grant.subjectId", "in", extraRuntimeSubjectIds)]
           : []),
       ])
     )
@@ -453,7 +359,7 @@ export async function listWorkspaceAppGrantRows(
           eb("subj.actorId", "=", params.subject.id),
         ]),
         ...(extraRuntimeSubjectIds
-          ? [eb("app_grant.subjectId", "in", extraRuntimeSubjectIds)]
+          ? [eb("resource_grant.subjectId", "in", extraRuntimeSubjectIds)]
           : []),
       ])
     )
@@ -465,7 +371,7 @@ export async function listWorkspaceAppGrantRows(
           eb("subj.remoteAgentId", "=", params.subject.id),
         ]),
         ...(extraRuntimeSubjectIds
-          ? [eb("app_grant.subjectId", "in", extraRuntimeSubjectIds)]
+          ? [eb("resource_grant.subjectId", "in", extraRuntimeSubjectIds)]
           : []),
       ])
     )
@@ -485,7 +391,7 @@ export async function listWorkspaceAppGrantRows(
           eb("subj.workspaceMemberId", "=", params.subject.id),
         ]),
         ...(extraRuntimeSubjectIds
-          ? [eb("app_grant.subjectId", "in", extraRuntimeSubjectIds)]
+          ? [eb("resource_grant.subjectId", "in", extraRuntimeSubjectIds)]
           : []),
       ])
     )
@@ -496,75 +402,101 @@ export async function listWorkspaceAppGrantRows(
   return await query.execute()
 }
 
-export async function listWorkspaceAppAccessRows(
+export async function listWorkspaceResourceAccessRows(
   db: KyselyDb,
   params: {
     workspaceId: string
-    resourceType: WorkspaceAppBindableResourceType
+    resourceType: WorkspaceResourceBindableResourceType
   }
-): Promise<WorkspaceAppAccessRow[]> {
+): Promise<WorkspaceResourceAccessRow[]> {
   return await db
-    .selectFrom("workspaceAppsLive as app")
-    .select(["app.id", "app.status"])
-    .where("app.workspaceId", "=", params.workspaceId)
-    .where("app.kind", "=", BINDABLE_WORKSPACE_APP_KIND[params.resourceType])
-    .where("app.deletedAt", "is", null)
-    .orderBy("app.createdAt", "desc")
+    .selectFrom("workspaceResourcesLive as resource")
+    .select(["resource.id", "resource.status"])
+    .where("resource.workspaceId", "=", params.workspaceId)
+    .where(
+      "resource.kind",
+      "=",
+      BINDABLE_WORKSPACE_RESOURCE_KIND[params.resourceType]
+    )
+    .where("resource.deletedAt", "is", null)
+    .orderBy("resource.createdAt", "desc")
     .execute()
 }
 
-export async function listOwnedWorkspaceAppAccessRows(
+export async function listOwnedWorkspaceResourceAccessRows(
   db: KyselyDb,
   params: {
     workspaceId: string
-    resourceType: WorkspaceAppBindableResourceType
+    resourceType: WorkspaceResourceBindableResourceType
     ownerWorkspaceMemberId: string
   }
-): Promise<WorkspaceAppAccessRow[]> {
+): Promise<WorkspaceResourceAccessRow[]> {
+  const ownerSubjectId = await upsertAccessSubject(db, {
+    kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+    workspaceMemberId: params.ownerWorkspaceMemberId,
+  })
   return await db
-    .selectFrom("workspaceAppsLive as app")
-    .select(["app.id", "app.status"])
-    .where("app.workspaceId", "=", params.workspaceId)
-    .where("app.kind", "=", BINDABLE_WORKSPACE_APP_KIND[params.resourceType])
-    .where("app.deletedAt", "is", null)
-    .where("app.ownerWorkspaceMemberId", "=", params.ownerWorkspaceMemberId)
-    .orderBy("app.createdAt", "desc")
+    .selectFrom("workspaceResourcesLive as resource")
+    .select(["resource.id", "resource.status"])
+    .where("resource.workspaceId", "=", params.workspaceId)
+    .where(
+      "resource.kind",
+      "=",
+      BINDABLE_WORKSPACE_RESOURCE_KIND[params.resourceType]
+    )
+    .where("resource.deletedAt", "is", null)
+    .where("resource.ownerSubjectId", "=", ownerSubjectId)
+    .orderBy("resource.createdAt", "desc")
     .execute()
 }
 
-export async function listWorkspaceAppAccessRowsByIds(
+export async function listWorkspaceResourceAccessRowsByIds(
   db: KyselyDb,
   params: {
     ids: readonly string[]
     workspaceId: string
-    resourceType: WorkspaceAppBindableResourceType
+    resourceType: WorkspaceResourceBindableResourceType
   }
-): Promise<WorkspaceAppAccessRow[]> {
+): Promise<WorkspaceResourceAccessRow[]> {
   if (params.ids.length === 0) {
     return []
   }
   return await db
-    .selectFrom("workspaceAppsLive as app")
-    .select(["app.id", "app.status"])
-    .where("app.id", "in", [...params.ids])
-    .where("app.workspaceId", "=", params.workspaceId)
-    .where("app.kind", "=", BINDABLE_WORKSPACE_APP_KIND[params.resourceType])
-    .where("app.deletedAt", "is", null)
-    .orderBy("app.createdAt", "desc")
+    .selectFrom("workspaceResourcesLive as resource")
+    .select(["resource.id", "resource.status"])
+    .where("resource.id", "in", [...params.ids])
+    .where("resource.workspaceId", "=", params.workspaceId)
+    .where(
+      "resource.kind",
+      "=",
+      BINDABLE_WORKSPACE_RESOURCE_KIND[params.resourceType]
+    )
+    .where("resource.deletedAt", "is", null)
+    .orderBy("resource.createdAt", "desc")
     .execute()
 }
 
 export async function loadInstalledSkillAccessRow(
   db: KyselyDb,
   skillId: string
-): Promise<WorkspaceAppResourceAccessRow | null> {
+): Promise<WorkspaceResourceResourceAccessRow | null> {
   return (
     (await db
       .selectFrom("installedSkills as skill")
-      .innerJoin("workspaceApps as app", "app.id", "skill.id")
-      .select(["app.workspaceId", "app.ownerWorkspaceMemberId", "app.status"])
+      .innerJoin("workspaceResources as resource", "resource.id", "skill.id")
+      .leftJoin(
+        "accessSubjects as owner_subject",
+        "owner_subject.id",
+        "resource.ownerSubjectId"
+      )
+      .select([
+        "resource.workspaceId",
+        "owner_subject.workspaceMemberId as ownerWorkspaceMemberId",
+        "resource.ownerSubjectId",
+        "resource.status",
+      ])
       .where("skill.id", "=", skillId)
-      .where("app.deletedAt", "is", null)
+      .where("resource.deletedAt", "is", null)
       .limit(1)
       .executeTakeFirst()) ?? null
   )
@@ -573,14 +505,28 @@ export async function loadInstalledSkillAccessRow(
 export async function loadPluginInstallationAccessRow(
   db: KyselyDb,
   installationId: string
-): Promise<WorkspaceAppResourceAccessRow | null> {
+): Promise<WorkspaceResourceResourceAccessRow | null> {
   return (
     (await db
       .selectFrom("pluginInstallations as installation")
-      .innerJoin("workspaceApps as app", "app.id", "installation.id")
-      .select(["app.workspaceId", "app.ownerWorkspaceMemberId", "app.status"])
+      .innerJoin(
+        "workspaceResources as resource",
+        "resource.id",
+        "installation.id"
+      )
+      .leftJoin(
+        "accessSubjects as owner_subject",
+        "owner_subject.id",
+        "resource.ownerSubjectId"
+      )
+      .select([
+        "resource.workspaceId",
+        "owner_subject.workspaceMemberId as ownerWorkspaceMemberId",
+        "resource.ownerSubjectId",
+        "resource.status",
+      ])
       .where("installation.id", "=", installationId)
-      .where("app.deletedAt", "is", null)
+      .where("resource.deletedAt", "is", null)
       .limit(1)
       .executeTakeFirst()) ?? null
   )
@@ -621,24 +567,34 @@ export async function loadDeviceExposureDeviceId(
 export async function loadDeviceCapabilityAccessRow(
   db: KyselyDb,
   capabilityId: string
-): Promise<WorkspaceAppResourceAccessRow | null> {
+): Promise<WorkspaceResourceResourceAccessRow | null> {
   return (
     (await db
       .selectFrom("deviceCapabilities as capability")
-      .innerJoin("workspaceApps as app", "app.id", "capability.id")
+      .innerJoin(
+        "workspaceResources as resource",
+        "resource.id",
+        "capability.id"
+      )
       .innerJoin(
         "deviceExposures as exposure",
         "exposure.id",
         "capability.exposureId"
       )
       .innerJoin("devices as device", "device.id", "exposure.deviceId")
+      .leftJoin(
+        "accessSubjects as owner_subject",
+        "owner_subject.id",
+        "resource.ownerSubjectId"
+      )
       .select([
-        "app.workspaceId",
-        "app.status",
-        "device.ownerWorkspaceMemberId",
+        "resource.workspaceId",
+        "resource.status",
+        "owner_subject.workspaceMemberId as ownerWorkspaceMemberId",
+        "resource.ownerSubjectId",
       ])
       .where("capability.id", "=", capabilityId)
-      .where("app.deletedAt", "is", null)
+      .where("resource.deletedAt", "is", null)
       .limit(1)
       .executeTakeFirst()) ?? null
   )
@@ -651,14 +607,18 @@ export async function listOwnedActorIds(
     ownerWorkspaceMemberId: string
   }
 ): Promise<string[]> {
+  const ownerSubjectId = await upsertAccessSubject(db, {
+    kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+    workspaceMemberId: params.ownerWorkspaceMemberId,
+  })
   const rows = await db
     .selectFrom("actors as a")
-    .innerJoin("workspaceApps as app", "app.id", "a.id")
+    .innerJoin("workspaceResources as resource", "resource.id", "a.id")
     .select("a.id")
-    .where("app.workspaceId", "=", params.workspaceId)
-    .where("app.deletedAt", "is", null)
-    .where("app.status", "=", "active")
-    .where("app.ownerWorkspaceMemberId", "=", params.ownerWorkspaceMemberId)
+    .where("resource.workspaceId", "=", params.workspaceId)
+    .where("resource.deletedAt", "is", null)
+    .where("resource.status", "=", "active")
+    .where("resource.ownerSubjectId", "=", ownerSubjectId)
     .orderBy("a.createdAt", "desc")
     .execute()
   return rows.map((row) => row.id)
@@ -671,14 +631,18 @@ export async function listOwnedRemoteAgentIds(
     ownerWorkspaceMemberId: string
   }
 ): Promise<string[]> {
+  const ownerSubjectId = await upsertAccessSubject(db, {
+    kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+    workspaceMemberId: params.ownerWorkspaceMemberId,
+  })
   const rows = await db
     .selectFrom("remoteAgents as agent")
-    .innerJoin("workspaceApps as app", "app.id", "agent.id")
+    .innerJoin("workspaceResources as resource", "resource.id", "agent.id")
     .select("agent.id")
-    .where("app.status", "=", "active")
-    .where("app.deletedAt", "is", null)
-    .where("app.workspaceId", "=", params.workspaceId)
-    .where("app.ownerWorkspaceMemberId", "=", params.ownerWorkspaceMemberId)
+    .where("resource.status", "=", "active")
+    .where("resource.deletedAt", "is", null)
+    .where("resource.workspaceId", "=", params.workspaceId)
+    .where("resource.ownerSubjectId", "=", ownerSubjectId)
     .orderBy("agent.createdAt", "desc")
     .execute()
   return rows.map((row) => row.id)

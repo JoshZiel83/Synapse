@@ -63,6 +63,8 @@ const classifiedJsonParseFiles = {
       "Shared JSON object helpers support boundary codecs with object-only coercion.",
   },
   wireProviderProtocolCodec: {
+    "packages/api/src/modules/logs/device-token.ts":
+      "Device log-ingest bearer token payload (HMAC-signed base64url JSON) is decoded at the token-verification boundary.",
     "packages/api/src/infrastructure/events/codec.ts":
       "Redis system-event frames are internal protocol payloads.",
     "packages/api/src/infrastructure/websocket/asr-client-frame.ts":
@@ -155,6 +157,10 @@ const classifiedJsonParseFiles = {
       "Device identity and keystore files are runtime-local file state.",
   },
   configImportBootstrapAdapter: {
+    "packages/api/src/infrastructure/storage/remote/config.ts":
+      "Remote content-storage backend + credential config from env is bootstrap/config input.",
+    "packages/api/src/modules/reports/index.ts":
+      "Browser NEL/CSP report bodies use a custom Fastify content-type parser (HTTP adapter boundary).",
     "packages/api/src/infrastructure/database/seed-metadata-codec.ts":
       "Seed metadata is bootstrap/config input.",
     "packages/api/src/infrastructure/http/json-body-parser.ts":

@@ -52,16 +52,32 @@ async function insertWorkspaceMember(
   return row.id as string
 }
 
+async function creatorSubjectIdFor(
+  db: AnyDb,
+  workspaceId: string
+): Promise<string> {
+  const memberId = await insertWorkspaceMember(
+    db,
+    workspaceId,
+    await insertUser(db)
+  )
+  return upsertAccessSubject(db, {
+    kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+    workspaceMemberId: memberId,
+  })
+}
+
 async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
   const actorId = crypto.randomUUID()
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspace_resources")
     .values({
       id: actorId,
       workspace_id: workspaceId,
       kind: "actor",
       display_name: "test actor",
       status: "active",
+      created_by_subject_id: await creatorSubjectIdFor(db, workspaceId),
     } as any)
     .execute()
   const row = await db

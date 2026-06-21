@@ -44,16 +44,28 @@ async function newWorkspace(db: Kysely<any>): Promise<string> {
   return ws.id as string
 }
 
+async function creatorSubjectIdFor(
+  db: Kysely<any>,
+  workspaceId: string
+): Promise<string> {
+  const memberId = await newWorkspaceMember(db, workspaceId, "creator")
+  return upsertAccessSubject(db as any, {
+    kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+    workspaceMemberId: memberId,
+  })
+}
+
 async function newActor(db: Kysely<any>, workspaceId: string): Promise<string> {
   const actorId = crypto.randomUUID()
   await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id: actorId,
       workspaceId: workspaceId,
       kind: "actor",
       displayName: `${NS} actor`,
       status: "active",
+      createdBySubjectId: await creatorSubjectIdFor(db, workspaceId),
     } as any)
     .execute()
   const row = await db
@@ -75,13 +87,14 @@ async function newRemoteAgent(
 ): Promise<string> {
   const remoteAgentId = crypto.randomUUID()
   await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id: remoteAgentId,
       workspaceId: workspaceId,
       kind: "remote_agent",
       displayName: `${NS} agent`,
       status: "active",
+      createdBySubjectId: await creatorSubjectIdFor(db, workspaceId),
     } as any)
     .execute()
   const row = await db
@@ -137,29 +150,6 @@ async function newWorkspaceMember(
   return member.id as string
 }
 
-async function newAutomationEventSource(
-  db: Kysely<any>,
-  workspaceId: string
-): Promise<string> {
-  const memberId = await newWorkspaceMember(db, workspaceId, "creator")
-  const row = await db
-    .insertInto("automationEventSources")
-    .values({
-      workspaceId: workspaceId,
-      providerKind: "internal",
-      sourceKey: `src-${rid()}`,
-      name: "source",
-      createdByKind: "workspace_member",
-      createdByWorkspaceMemberId: memberId,
-    } as any)
-    .returning("id")
-    .executeTakeFirstOrThrow()
-  return row.id as string
-}
-
-// The legacy binding table is now being narrowed toward automation-only, so
-// these trigger tests use automation_event_source as the bound resource.
-
 function rid(): string {
   return Math.random().toString(36).slice(2, 10)
 }
@@ -199,7 +189,7 @@ test("isScopeEligibleSubject only accepts workspace / conversation", () => {
   assert.equal(
     isScopeEligibleSubject({
       kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-      memberId: "x",
+      workspaceMemberId: "x",
     }),
     false
   )
@@ -210,7 +200,7 @@ test("isWorkspaceBoundSubjectKind excludes user/external/platform", () => {
   for (const ref of [
     { kind: SUBJECT_KIND.ACTOR, actorId: "x" },
     { kind: SUBJECT_KIND.REMOTE_AGENT, remoteAgentId: "x" },
-    { kind: SUBJECT_KIND.WORKSPACE_MEMBER, memberId: "x" },
+    { kind: SUBJECT_KIND.WORKSPACE_MEMBER, workspaceMemberId: "x" },
     { kind: SUBJECT_KIND.WORKSPACE, workspaceId: "x" },
     { kind: SUBJECT_KIND.CONVERSATION, conversationId: "x" },
   ] as SubjectRef[]) {
@@ -247,229 +237,6 @@ test("isMemoryOwnerSubjectKind accepts workspace-bound kinds", () => {
     false
   )
 })
-
-// ---------- RAB trigger ----------
-
-test(
-  "tg_rab_validate: scope_subject_id pointing at an actor is rejected",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDb(async (db) => {
-      const wsId = await newWorkspace(db)
-      const subjectActor = await newActor(db, wsId)
-      const eventSourceId = await newAutomationEventSource(db, wsId)
-      const subjectSubj = await subj(db, {
-        kind: SUBJECT_KIND.ACTOR,
-        actorId: subjectActor,
-      })
-
-      await expectReject(
-        db
-          .insertInto("resourceAccessBindings")
-          .values({
-            workspaceId: wsId,
-            resourceType: "automation_event_source",
-            automationEventSourceId: eventSourceId,
-            subjectId: subjectSubj,
-            scopeSubjectId: subjectSubj, // actor is NOT scope-eligible
-          })
-          .execute(),
-        /scope_subject_id .* workspace\|conversation/
-      )
-    })
-  }
-)
-
-test(
-  "tg_rab_validate: scope=conversation in different workspace is rejected",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDb(async (db) => {
-      const wsId = await newWorkspace(db)
-      const otherWs = await newWorkspace(db)
-      const otherConv = await newConversation(db, otherWs)
-      const subjectActor = await newActor(db, wsId)
-      const eventSourceId = await newAutomationEventSource(db, wsId)
-      const subjectSubj = await subj(db, {
-        kind: SUBJECT_KIND.ACTOR,
-        actorId: subjectActor,
-      })
-      const otherConvSubj = await subj(db, {
-        kind: SUBJECT_KIND.CONVERSATION,
-        conversationId: otherConv,
-      })
-
-      await expectReject(
-        db
-          .insertInto("resourceAccessBindings")
-          .values({
-            workspaceId: wsId,
-            resourceType: "automation_event_source",
-            automationEventSourceId: eventSourceId,
-            subjectId: subjectSubj,
-            scopeSubjectId: otherConvSubj,
-          })
-          .execute(),
-        /scope_subject_id .* workspace/
-      )
-    })
-  }
-)
-
-test(
-  "tg_rab_validate: scope_subject_id NULL short-circuits eligibility check",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDb(async (db) => {
-      const wsId = await newWorkspace(db)
-      const subjectActor = await newActor(db, wsId)
-      const eventSourceId = await newAutomationEventSource(db, wsId)
-      const subjectSubj = await subj(db, {
-        kind: SUBJECT_KIND.ACTOR,
-        actorId: subjectActor,
-      })
-
-      await db
-        .insertInto("resourceAccessBindings")
-        .values({
-          workspaceId: wsId,
-          resourceType: "automation_event_source",
-          automationEventSourceId: eventSourceId,
-          subjectId: subjectSubj,
-          // scope_subject_id omitted → NULL
-        })
-        .execute()
-    })
-  }
-)
-
-test(
-  "tg_rab_validate: scope=conversation in same workspace is accepted",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDb(async (db) => {
-      const wsId = await newWorkspace(db)
-      const conv = await newConversation(db, wsId)
-      const subjectActor = await newActor(db, wsId)
-      const eventSourceId = await newAutomationEventSource(db, wsId)
-      const subjectSubj = await subj(db, {
-        kind: SUBJECT_KIND.ACTOR,
-        actorId: subjectActor,
-      })
-      const convSubj = await subj(db, {
-        kind: SUBJECT_KIND.CONVERSATION,
-        conversationId: conv,
-      })
-
-      await db
-        .insertInto("resourceAccessBindings")
-        .values({
-          workspaceId: wsId,
-          resourceType: "automation_event_source",
-          automationEventSourceId: eventSourceId,
-          subjectId: subjectSubj,
-          scopeSubjectId: convSubj,
-        })
-        .execute()
-    })
-  }
-)
-
-test(
-  "tg_rab_validate: subject kind=user is rejected (not workspace-bound)",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDb(async (db) => {
-      const wsId = await newWorkspace(db)
-      const eventSourceId = await newAutomationEventSource(db, wsId)
-      const userRow = await db
-        .insertInto("users")
-        .values({
-          email: `u-${rid()}@trigger-test`,
-          name: "u",
-        })
-        .returning("id")
-        .executeTakeFirstOrThrow()
-      const userSubj = await subj(db, {
-        kind: SUBJECT_KIND.USER,
-        userId: userRow.id as string,
-      })
-
-      await expectReject(
-        db
-          .insertInto("resourceAccessBindings")
-          .values({
-            workspaceId: wsId,
-            resourceType: "automation_event_source",
-            automationEventSourceId: eventSourceId,
-            subjectId: userSubj,
-          })
-          .execute(),
-        /not workspace-bound/
-      )
-    })
-  }
-)
-
-test(
-  "tg_rab_validate: subject workspace mismatch is rejected",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDb(async (db) => {
-      const wsA = await newWorkspace(db)
-      const wsB = await newWorkspace(db)
-      const actorB = await newActor(db, wsB)
-      const eventSourceId = await newAutomationEventSource(db, wsA)
-      const actorBSubj = await subj(db, {
-        kind: SUBJECT_KIND.ACTOR,
-        actorId: actorB,
-      })
-
-      await expectReject(
-        db
-          .insertInto("resourceAccessBindings")
-          .values({
-            workspaceId: wsA,
-            resourceType: "automation_event_source",
-            automationEventSourceId: eventSourceId,
-            subjectId: actorBSubj,
-          })
-          .execute(),
-        /subject_id .* workspace .* does not match/
-      )
-    })
-  }
-)
-
-test(
-  "tg_rab_validate: resource workspace mismatch is rejected",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDb(async (db) => {
-      const wsA = await newWorkspace(db)
-      const wsB = await newWorkspace(db)
-      const actorA = await newActor(db, wsA)
-      const eventSourceB = await newAutomationEventSource(db, wsB)
-      const actorASubj = await subj(db, {
-        kind: SUBJECT_KIND.ACTOR,
-        actorId: actorA,
-      })
-
-      await expectReject(
-        db
-          .insertInto("resourceAccessBindings")
-          .values({
-            workspaceId: wsA,
-            resourceType: "automation_event_source",
-            automationEventSourceId: eventSourceB,
-            subjectId: actorASubj,
-          })
-          .execute(),
-        /resource.*workspace mismatch|missing or workspace mismatch/
-      )
-    })
-  }
-)
 
 // D2: the previous runtime-pair subject transitional test is gone — the
 // subject kind was removed from both the TS union and the Postgres ENUM.
@@ -513,13 +280,14 @@ async function newDevice(
     .executeTakeFirstOrThrow()
   const capabilityId = crypto.randomUUID()
   await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id: capabilityId,
       workspaceId: workspaceId,
       kind: "device_capability",
       displayName: `${NS} capability`,
       status: "active",
+      createdBySubjectId: await creatorSubjectIdFor(db, workspaceId),
     } as any)
     .execute()
   const cap = await db

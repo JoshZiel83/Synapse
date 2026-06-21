@@ -119,18 +119,29 @@ async function seedSession(db: any): Promise<string> {
   const conversationId = randomUUID()
   const sessionId = randomUUID()
   await db.executeQuery(
-    sql`INSERT INTO users (id, email, name) VALUES (${userId}, ${userId + "@test"}, 'tester')`.compile(
+    sql`INSERT INTO users (id, email, name) VALUES (${userId}, ${`${userId}@test`}, 'tester')`.compile(
       db
     )
   )
   await db.executeQuery(
-    sql`INSERT INTO workspaces (id, name, slug, owner_id) VALUES (${workspaceId}, 'ws', ${"ws-" + workspaceId.slice(0, 8)}, ${userId})`.compile(
+    sql`INSERT INTO workspaces (id, name, slug, owner_id) VALUES (${workspaceId}, 'ws', ${`ws-${workspaceId.slice(0, 8)}`}, ${userId})`.compile(
+      db
+    )
+  )
+  // workspace_resources.created_by_subject_id is NOT NULL with no default; mint a
+  // workspace-kind access_subject (same workspace) as the creator. The fixture has
+  // no owning member, so owner_subject_id stays NULL.
+  const creatorSubjectId = randomUUID()
+  await db.executeQuery(
+    sql`INSERT INTO access_subjects (id, kind, workspace_id) VALUES (${creatorSubjectId}, 'workspace', ${workspaceId})`.compile(
       db
     )
   )
   await db.executeQuery(
-    sql`INSERT INTO workspace_apps (id, workspace_id, kind, display_name, status)
-        VALUES (${actorId}, ${workspaceId}, 'actor', 'A', 'active')`.compile(db)
+    sql`INSERT INTO workspace_resources (id, workspace_id, kind, display_name, status, created_by_subject_id)
+        VALUES (${actorId}, ${workspaceId}, 'actor', 'A', 'active', ${creatorSubjectId})`.compile(
+      db
+    )
   )
   await db.executeQuery(
     sql`INSERT INTO actors (id, role, title) VALUES (${actorId}, 'assistant', 'A')`.compile(

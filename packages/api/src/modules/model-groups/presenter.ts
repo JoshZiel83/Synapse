@@ -56,7 +56,7 @@ export type ModelGroupGrantRow = {
   workspace_member_id: string | null
   actor_id: string | null
   status: "active" | "revoked"
-  granted_by_workspace_member_id?: string | null
+  created_by_workspace_member_id?: string | null
   reason?: string | null
   created_at?: Date
   revoked_at?: Date | null
@@ -70,7 +70,7 @@ export type ModelGroupGrantDbRow = {
   createdAt: Date | null
   revokedAt: Date | null
   subjectId: string
-  grantedByWorkspaceMemberId: string | null
+  createdByWorkspaceMemberId: string | null
   // From joined access_subjects (aliased mgs)
   mgsKind?: string | null
   mgsWorkspaceId?: string | null
@@ -153,7 +153,7 @@ export function dbRowToGrantRow(
     workspace_member_id: row.mgsWorkspaceMemberId ?? null,
     actor_id: row.mgsActorId ?? null,
     status: row.status,
-    granted_by_workspace_member_id: row.grantedByWorkspaceMemberId,
+    created_by_workspace_member_id: row.createdByWorkspaceMemberId,
     reason: row.reason,
     created_at: row.createdAt || undefined,
     revoked_at: row.revokedAt,
@@ -239,7 +239,7 @@ export function presentGrantRow(
     workspaceMemberId: row.workspace_member_id,
     actorId: row.actor_id,
     status: row.status,
-    grantedByWorkspaceMemberId: row.granted_by_workspace_member_id || null,
+    createdByWorkspaceMemberId: row.created_by_workspace_member_id || null,
     reason: row.reason || null,
     createdAt: serializeOptionalInstant(row.created_at) ?? null,
     revokedAt: serializeOptionalInstant(row.revoked_at) ?? null,

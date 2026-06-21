@@ -124,11 +124,10 @@ export function mergeAccountCredentials(
  * instead of silently rewriting the wrong account's metadata. Generic
  * routes that legitimately span kinds omit the expected kind.
  *
- * Accepts either the camelCase `TransportAccountSummary` shape
- * (`transportKind`) or the snake_case raw DB row shape
- * (`transport_kind`). Production controllers call this from raw
- * `loadTransportAccountRow(...)` results (snake_case); normalized
- * callers pass camelCase. Both must yield the same error.
+ * Takes the camelCase account row (`transportKind`). Production controllers
+ * pass the CamelCasePlugin-camelized `loadTransportAccountRow(...)` result and
+ * normalized callers pass `TransportAccountSummary` — both camelCase (the old
+ * snake_case raw-row shape no longer exists post-cutover).
  *
  * The code is `transport_account_kind_mismatch` (not `_not_found`) so
  * UI can distinguish "you supplied a wrong id under this kind" from
@@ -137,16 +136,11 @@ export function mergeAccountCredentials(
  * can pin the specific row that was almost-modified.
  */
 export function assertExpectedTransportKind(
-  existing:
-    | { id?: string; transportKind: TransportKind }
-    | { id?: string; transport_kind: string },
+  existing: { id?: string; transportKind: TransportKind },
   expectedKind?: TransportKind
 ): void {
   if (!expectedKind) return
-  const actualKind =
-    "transportKind" in existing
-      ? existing.transportKind
-      : (existing.transport_kind as TransportKind)
+  const actualKind = existing.transportKind
   if (actualKind === expectedKind) return
   const id = existing.id ? `${existing.id} ` : ""
   throw Object.assign(

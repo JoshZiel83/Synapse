@@ -293,7 +293,7 @@ async function buildResolvedTools(params: {
    *  plugin/device tools must qualify rather than shadow these. */
   reservedNames?: readonly string[]
 }): Promise<{ tools: RegisteredTool[]; shutdown: () => Promise<void> }> {
-  // The resolver evaluates workspace_app_grants exactly like an actor would
+  // The resolver evaluates workspace_resource_grants exactly like an actor would
   // and returns ready-to-execute plugin + device_capability tools.
   const resolved = await projectToolsForPrincipal({
     workspaceId: params.workspaceId,

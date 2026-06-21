@@ -142,7 +142,7 @@ function summarizeInviteableActor(row: {
 }
 
 /**
- * Owns the inviteable-actors query (active workspace apps whose actor is not
+ * Owns the inviteable-actors query (active workspace resources whose actor is not
  * already an active participant of the conversation) and maps each row to an
  * InviteableActor domain record. The raw `sql` jsonb_agg projection and the
  * `sql<boolean>` NOT EXISTS subquery use hand-written snake_case columns that
@@ -158,7 +158,7 @@ export async function listInviteableActorRows(
 ): Promise<InviteableActor[]> {
   const result = await db
     .selectFrom("actors as a")
-    .innerJoin("workspaceApps as app", "app.id", "a.id")
+    .innerJoin("workspaceResources as resource", "resource.id", "a.id")
     .leftJoin("actorVersions as current_version", (join) =>
       join
         .onRef("current_version.actorId", "=", "a.id")
@@ -166,7 +166,7 @@ export async function listInviteableActorRows(
     )
     .select([
       "a.id",
-      "app.displayName",
+      "resource.displayName",
       "a.title",
       "a.role",
       sql`COALESCE(
@@ -187,9 +187,9 @@ export async function listInviteableActorRows(
         '[]'::jsonb
       )`.as("actorDocs"),
     ])
-    .where("app.workspaceId", "=", params.workspaceId)
-    .where("app.deletedAt", "is", null)
-    .where("app.status", "=", "active")
+    .where("resource.workspaceId", "=", params.workspaceId)
+    .where("resource.deletedAt", "is", null)
+    .where("resource.status", "=", "active")
     .where("a.id", "<>", params.actorId)
     .where(
       sql<boolean>`NOT EXISTS (
@@ -201,7 +201,7 @@ export async function listInviteableActorRows(
         AND cp.state = 'active'
     )`
     )
-    .orderBy("app.displayName", "asc")
+    .orderBy("resource.displayName", "asc")
     .orderBy("a.id", "asc")
     .execute()
 

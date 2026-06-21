@@ -1,13 +1,13 @@
 import { z } from "zod"
 import {
-  WORKSPACE_APP_KINDS,
-  WORKSPACE_APP_STATUSES,
-  WORKSPACE_APP_GRANT_PERMISSIONS,
-  WORKSPACE_APP_GRANT_SOURCES,
-  WORKSPACE_APP_GRANT_STATUSES,
-  WORKSPACE_APP_GRANT_REQUEST_STATUSES,
-  WORKSPACE_APP_GRANT_REQUEST_DIRECTIONS,
-  WORKSPACE_APP_KIND,
+  WORKSPACE_RESOURCE_KINDS,
+  WORKSPACE_RESOURCE_STATUSES,
+  WORKSPACE_RESOURCE_GRANT_PERMISSIONS,
+  WORKSPACE_RESOURCE_GRANT_SOURCES,
+  WORKSPACE_RESOURCE_GRANT_STATUSES,
+  WORKSPACE_RESOURCE_GRANT_REQUEST_STATUSES,
+  WORKSPACE_RESOURCE_GRANT_REQUEST_DIRECTIONS,
+  WORKSPACE_RESOURCE_KIND,
   SUBJECT_KIND,
 } from "../access/enums.js"
 import {
@@ -22,8 +22,8 @@ import { IsoInstantStringSchema } from "./datetime.js"
 import { SkillAttachmentInputSchema } from "./skills.js"
 
 /**
- * App-facing camelCase contracts for the workspace-apps module's APP routes
- * (master plan §5.3). workspace-apps is a Tier-A app-facing module: every route
+ * App-facing camelCase contracts for the workspace-resources module's APP routes
+ * (master plan §5.3). workspace-resources is a Tier-A app-facing module: every route
  * is workspace-scoped + authenticated, so each handler's returned value is
  * wrapped through `appRoute` → `sendData` → `{ data: ... }`. These schemas
  * describe the value each handler returns (the helper wraps it).
@@ -35,8 +35,8 @@ import { SkillAttachmentInputSchema } from "./skills.js"
  * as opaque passthrough.
  */
 
-/** Subject ref for a workspace-app grant target (app contract, camelCase). */
-export const WorkspaceAppGrantTargetSubjectSchema = z.discriminatedUnion(
+/** Subject ref for a workspace-resource grant target (app contract, camelCase). */
+export const WorkspaceResourceGrantTargetSubjectSchema = z.discriminatedUnion(
   "kind",
   [
     z.object({
@@ -45,7 +45,7 @@ export const WorkspaceAppGrantTargetSubjectSchema = z.discriminatedUnion(
     }),
     z.object({
       kind: z.literal(SUBJECT_KIND.WORKSPACE_MEMBER),
-      memberId: z.uuid(),
+      workspaceMemberId: z.uuid(),
     }),
     z.object({
       kind: z.literal(SUBJECT_KIND.CONVERSATION),
@@ -62,9 +62,9 @@ export const WorkspaceAppGrantTargetSubjectSchema = z.discriminatedUnion(
   ]
 )
 
-/** `{ subject, scope? }` target for a workspace-app grant. */
-export const WorkspaceAppGrantTargetSchema = z.object({
-  subject: WorkspaceAppGrantTargetSubjectSchema,
+/** `{ subject, scope? }` target for a workspace-resource grant. */
+export const WorkspaceResourceGrantTargetSchema = z.object({
+  subject: WorkspaceResourceGrantTargetSubjectSchema,
   scope: z
     .object({
       kind: z.literal(SUBJECT_KIND.CONVERSATION),
@@ -72,18 +72,18 @@ export const WorkspaceAppGrantTargetSchema = z.object({
     })
     .optional(),
 })
-export type WorkspaceAppGrantTargetInput = z.infer<
-  typeof WorkspaceAppGrantTargetSchema
+export type WorkspaceResourceGrantTargetInput = z.infer<
+  typeof WorkspaceResourceGrantTargetSchema
 >
 
-/** GET/POST/PUT workspace-app inventory item (presentWorkspaceApp). */
-export const WorkspaceAppViewSchema = z.object({
+/** GET/POST/PUT workspace-resource inventory item (presentWorkspaceResource). */
+export const WorkspaceResourceViewSchema = z.object({
   id: z.uuid(),
   workspaceId: z.uuid(),
-  kind: z.enum(WORKSPACE_APP_KINDS),
+  kind: z.enum(WORKSPACE_RESOURCE_KINDS),
   displayName: z.string(),
   ownerWorkspaceMemberId: z.uuid().optional(),
-  status: z.enum(WORKSPACE_APP_STATUSES),
+  status: z.enum(WORKSPACE_RESOURCE_STATUSES),
   sourceDefaultConversationTypeMask: z.number().int().optional(),
   workspaceConversationTypeMask: z.number().int().optional(),
   conversationTypeMaskOverride: z.number().int().optional(),
@@ -91,156 +91,160 @@ export const WorkspaceAppViewSchema = z.object({
   createdAt: IsoInstantStringSchema,
   updatedAt: IsoInstantStringSchema,
 })
-export type WorkspaceAppViewSchemaType = z.infer<typeof WorkspaceAppViewSchema>
+export type WorkspaceResourceViewSchemaType = z.infer<
+  typeof WorkspaceResourceViewSchema
+>
 
-/** GET/PUT workspace-app grant (presentGrant). */
-export const WorkspaceAppGrantViewSchema = z.object({
+/** GET/PUT workspace-resource grant (presentGrant). */
+export const WorkspaceResourceGrantViewSchema = z.object({
   id: z.uuid(),
   workspaceId: z.uuid(),
-  workspaceAppId: z.uuid(),
-  target: WorkspaceAppGrantTargetSchema,
-  permissions: z.array(z.enum(WORKSPACE_APP_GRANT_PERMISSIONS)),
-  status: z.enum(WORKSPACE_APP_GRANT_STATUSES),
-  source: z.enum(WORKSPACE_APP_GRANT_SOURCES),
-  grantedByWorkspaceMemberId: z.uuid().optional(),
+  workspaceResourceId: z.uuid(),
+  target: WorkspaceResourceGrantTargetSchema,
+  permissions: z.array(z.enum(WORKSPACE_RESOURCE_GRANT_PERMISSIONS)),
+  status: z.enum(WORKSPACE_RESOURCE_GRANT_STATUSES),
+  source: z.enum(WORKSPACE_RESOURCE_GRANT_SOURCES),
+  createdByWorkspaceMemberId: z.uuid().optional(),
   reason: z.string().optional(),
   conversationTypeMaskOverride: z.number().int().nullable().optional(),
   effectiveConversationTypeMask: z.number().int().optional(),
   createdAt: IsoInstantStringSchema,
   revokedAt: IsoInstantStringSchema.optional(),
 })
-export type WorkspaceAppGrantViewSchemaType = z.infer<
-  typeof WorkspaceAppGrantViewSchema
+export type WorkspaceResourceGrantViewSchemaType = z.infer<
+  typeof WorkspaceResourceGrantViewSchema
 >
 
-/** GET/POST workspace-app grant request (presentGrantRequest). */
-export const WorkspaceAppGrantRequestViewSchema = z.object({
+/** GET/POST workspace-resource grant request (presentGrantRequest). */
+export const WorkspaceResourceGrantRequestViewSchema = z.object({
   id: z.uuid(),
   workspaceId: z.uuid(),
-  workspaceAppId: z.uuid(),
-  grantee: WorkspaceAppGrantTargetSchema,
-  requestedPermissions: z.array(z.enum(WORKSPACE_APP_GRANT_PERMISSIONS)),
+  workspaceResourceId: z.uuid(),
+  grantee: WorkspaceResourceGrantTargetSchema,
+  requestedPermissions: z.array(z.enum(WORKSPACE_RESOURCE_GRANT_PERMISSIONS)),
   requesterWorkspaceMemberId: z.uuid(),
-  status: z.enum(WORKSPACE_APP_GRANT_REQUEST_STATUSES),
+  status: z.enum(WORKSPACE_RESOURCE_GRANT_REQUEST_STATUSES),
   resolvedByWorkspaceMemberId: z.uuid().optional(),
   resolvedAt: IsoInstantStringSchema.optional(),
   reason: z.string().optional(),
   createdAt: IsoInstantStringSchema,
   updatedAt: IsoInstantStringSchema,
 })
-export type WorkspaceAppGrantRequestViewSchemaType = z.infer<
-  typeof WorkspaceAppGrantRequestViewSchema
+export type WorkspaceResourceGrantRequestViewSchemaType = z.infer<
+  typeof WorkspaceResourceGrantRequestViewSchema
 >
 
-/** Single workspace-app response body. */
-export const WorkspaceAppEnvelopeViewSchema = z.object({
-  app: WorkspaceAppViewSchema,
+/** Single workspace-resource response body. */
+export const WorkspaceResourceEnvelopeViewSchema = z.object({
+  resource: WorkspaceResourceViewSchema,
 })
-export type WorkspaceAppEnvelopeViewSchemaType = z.infer<
-  typeof WorkspaceAppEnvelopeViewSchema
+export type WorkspaceResourceEnvelopeViewSchemaType = z.infer<
+  typeof WorkspaceResourceEnvelopeViewSchema
 >
 
-/** Workspace-app collection response body. */
-export const WorkspaceAppListViewSchema = z.object({
-  apps: z.array(WorkspaceAppViewSchema),
+/** Workspace-resource collection response body. */
+export const WorkspaceResourceListViewSchema = z.object({
+  resources: z.array(WorkspaceResourceViewSchema),
 })
-export type WorkspaceAppListViewSchemaType = z.infer<
-  typeof WorkspaceAppListViewSchema
+export type WorkspaceResourceListViewSchemaType = z.infer<
+  typeof WorkspaceResourceListViewSchema
 >
 
-/** Workspace-app grant collection response body. */
-export const WorkspaceAppGrantListViewSchema = z.object({
-  grants: z.array(WorkspaceAppGrantViewSchema),
+/** Workspace-resource grant collection response body. */
+export const WorkspaceResourceGrantListViewSchema = z.object({
+  grants: z.array(WorkspaceResourceGrantViewSchema),
 })
-export type WorkspaceAppGrantListViewSchemaType = z.infer<
-  typeof WorkspaceAppGrantListViewSchema
+export type WorkspaceResourceGrantListViewSchemaType = z.infer<
+  typeof WorkspaceResourceGrantListViewSchema
 >
 
-/** Workspace-app grant-request collection response body. */
-export const WorkspaceAppGrantRequestListViewSchema = z.object({
-  requests: z.array(WorkspaceAppGrantRequestViewSchema),
+/** Workspace-resource grant-request collection response body. */
+export const WorkspaceResourceGrantRequestListViewSchema = z.object({
+  requests: z.array(WorkspaceResourceGrantRequestViewSchema),
 })
-export type WorkspaceAppGrantRequestListViewSchemaType = z.infer<
-  typeof WorkspaceAppGrantRequestListViewSchema
+export type WorkspaceResourceGrantRequestListViewSchemaType = z.infer<
+  typeof WorkspaceResourceGrantRequestListViewSchema
 >
 
-/** Single workspace-app grant-request response body. */
-export const WorkspaceAppGrantRequestEnvelopeViewSchema = z.object({
-  request: WorkspaceAppGrantRequestViewSchema,
+/** Single workspace-resource grant-request response body. */
+export const WorkspaceResourceGrantRequestEnvelopeViewSchema = z.object({
+  request: WorkspaceResourceGrantRequestViewSchema,
 })
-export type WorkspaceAppGrantRequestEnvelopeViewSchemaType = z.infer<
-  typeof WorkspaceAppGrantRequestEnvelopeViewSchema
+export type WorkspaceResourceGrantRequestEnvelopeViewSchemaType = z.infer<
+  typeof WorkspaceResourceGrantRequestEnvelopeViewSchema
 >
 
-/** Mutating workspace-app response body for boolean outcomes. */
-export const WorkspaceAppSuccessViewSchema = z.object({
+/** Mutating workspace-resource response body for boolean outcomes. */
+export const WorkspaceResourceSuccessViewSchema = z.object({
   success: z.boolean(),
 })
-export type WorkspaceAppSuccessViewSchemaType = z.infer<
-  typeof WorkspaceAppSuccessViewSchema
+export type WorkspaceResourceSuccessViewSchemaType = z.infer<
+  typeof WorkspaceResourceSuccessViewSchema
 >
 
 // ───────────────────────── request/query DTOs (§5.1.1) ───────────────────────
-// App-facing request bodies and query DTOs for the workspace-apps APP routes.
+// App-facing request bodies and query DTOs for the workspace-resources APP routes.
 // Single-sourced here so the API parser and the web/mobile clients share one
 // definition.
 // The grant `target` is the camelCase app-input subject/scope ref the route
 // maps into a CapabilityAccessTarget; the controller keeps that mapping helper
-// and types it via z.infer<typeof WorkspaceAppGrantTargetSchema>.
+// and types it via z.infer<typeof WorkspaceResourceGrantTargetSchema>.
 
 const conversationTypeMaskSchema = z.number().int().min(1).max(15)
 
-/** GET workspace-apps query. */
-export const WorkspaceAppListQuerySchema = z.object({
-  kind: z.enum(WORKSPACE_APP_KINDS).optional(),
+/** GET workspace-resources query. */
+export const WorkspaceResourceListQuerySchema = z.object({
+  kind: z.enum(WORKSPACE_RESOURCE_KINDS).optional(),
 })
-export type WorkspaceAppListQuery = z.infer<typeof WorkspaceAppListQuerySchema>
+export type WorkspaceResourceListQuery = z.infer<
+  typeof WorkspaceResourceListQuerySchema
+>
 
-/** GET workspace-apps/discover query. */
-export const WorkspaceAppDiscoverQuerySchema = z.object({
+/** GET workspace-resources/discover query. */
+export const WorkspaceResourceDiscoverQuerySchema = z.object({
   conversationId: z.uuid().optional(),
 })
-export type WorkspaceAppDiscoverQuery = z.infer<
-  typeof WorkspaceAppDiscoverQuerySchema
+export type WorkspaceResourceDiscoverQuery = z.infer<
+  typeof WorkspaceResourceDiscoverQuerySchema
 >
 
 /** A single grant entry in create/replace-grants bodies. */
-export const WorkspaceAppGrantEntrySchema = z.object({
-  target: WorkspaceAppGrantTargetSchema,
-  permissions: z.array(z.enum(WORKSPACE_APP_GRANT_PERMISSIONS)).min(1),
+export const WorkspaceResourceGrantEntrySchema = z.object({
+  target: WorkspaceResourceGrantTargetSchema,
+  permissions: z.array(z.enum(WORKSPACE_RESOURCE_GRANT_PERMISSIONS)).min(1),
   conversationTypeMaskOverride: conversationTypeMaskSchema
     .nullable()
     .optional(),
   reason: z.string().trim().min(1).optional(),
 })
-export type WorkspaceAppGrantEntryInput = z.infer<
-  typeof WorkspaceAppGrantEntrySchema
+export type WorkspaceResourceGrantEntryInput = z.infer<
+  typeof WorkspaceResourceGrantEntrySchema
 >
 
-/** PUT workspace-apps/:id/grants body. */
-export const ReplaceWorkspaceAppGrantsInputSchema = z.object({
-  grants: z.array(WorkspaceAppGrantEntrySchema),
+/** PUT workspace-resources/:id/grants body. */
+export const ReplaceWorkspaceResourceGrantsInputSchema = z.object({
+  grants: z.array(WorkspaceResourceGrantEntrySchema),
 })
-export type ReplaceWorkspaceAppGrantsInput = z.infer<
-  typeof ReplaceWorkspaceAppGrantsInputSchema
+export type ReplaceWorkspaceResourceGrantsInput = z.infer<
+  typeof ReplaceWorkspaceResourceGrantsInputSchema
 >
 
-/** POST workspace-apps/:id/grant-requests body. */
-export const CreateWorkspaceAppGrantRequestInputSchema = z.object({
+/** POST workspace-resources/:id/grant-requests body. */
+export const CreateWorkspaceResourceGrantRequestInputSchema = z.object({
   reason: z.string().trim().min(1).optional(),
 })
-export type CreateWorkspaceAppGrantRequestInput = z.infer<
-  typeof CreateWorkspaceAppGrantRequestInputSchema
+export type CreateWorkspaceResourceGrantRequestInput = z.infer<
+  typeof CreateWorkspaceResourceGrantRequestInputSchema
 >
 
-const grantsArraySchema = z.array(WorkspaceAppGrantEntrySchema).optional()
-const workspaceAppContentBlockInputSchema =
+const grantsArraySchema = z.array(WorkspaceResourceGrantEntrySchema).optional()
+const workspaceResourceContentBlockInputSchema =
   CanonicalContentBlockSchema as z.ZodType<CanonicalContentBlockInput>
 
-/** POST workspace-apps body (create) — discriminated by app kind. */
-export const CreateWorkspaceAppInputSchema = z.union([
+/** POST workspace-resources body (create) — discriminated by resource kind. */
+export const CreateWorkspaceResourceInputSchema = z.union([
   z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.ACTOR),
+    kind: z.literal(WORKSPACE_RESOURCE_KIND.ACTOR),
     displayName: z.string().trim().min(1).max(255),
     role: z.enum(ACTOR_ROLES),
     title: z.string().trim().max(255).optional(),
@@ -254,23 +258,23 @@ export const CreateWorkspaceAppInputSchema = z.union([
     grants: grantsArraySchema,
   }),
   z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.INSTALLED_SKILL),
+    kind: z.literal(WORKSPACE_RESOURCE_KIND.INSTALLED_SKILL),
     sourceType: z.literal("custom"),
     displayName: z.string().trim().min(1).max(255),
-    description: workspaceAppContentBlockInputSchema.optional(),
+    description: workspaceResourceContentBlockInputSchema.optional(),
     iconFileId: z.uuid().optional(),
     tags: z.array(z.string()).optional(),
     attachmentFiles: z.array(SkillAttachmentInputSchema).optional(),
     grants: grantsArraySchema,
   }),
   z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.INSTALLED_SKILL),
+    kind: z.literal(WORKSPACE_RESOURCE_KIND.INSTALLED_SKILL),
     sourceType: z.literal("marketplace"),
     marketSkillId: z.uuid(),
     grants: grantsArraySchema,
   }),
   z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.REMOTE_AGENT),
+    kind: z.literal(WORKSPACE_RESOURCE_KIND.REMOTE_AGENT),
     displayName: z.string().trim().min(1).max(255),
     title: z.string().trim().min(1).max(255),
     description: z.string().trim().max(5000).optional(),
@@ -282,7 +286,7 @@ export const CreateWorkspaceAppInputSchema = z.union([
     grants: grantsArraySchema,
   }),
   z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.PLUGIN_INSTALLATION),
+    kind: z.literal(WORKSPACE_RESOURCE_KIND.PLUGIN_INSTALLATION),
     pluginId: z.uuid(),
     lifecycleScope: z.enum(REUSE_SCOPES).optional(),
     configData: z.record(z.string(), z.unknown()).optional(),
@@ -290,14 +294,14 @@ export const CreateWorkspaceAppInputSchema = z.union([
     grants: grantsArraySchema,
   }),
 ])
-export type CreateWorkspaceAppInput = z.infer<
-  typeof CreateWorkspaceAppInputSchema
+export type CreateWorkspaceResourceInput = z.infer<
+  typeof CreateWorkspaceResourceInputSchema
 >
 
-/** PATCH workspace-apps/:id body (update) — discriminated by app kind. */
-export const UpdateWorkspaceAppInputSchema = z.discriminatedUnion("kind", [
+/** PATCH workspace-resources/:id body (update) — discriminated by resource kind. */
+export const UpdateWorkspaceResourceInputSchema = z.discriminatedUnion("kind", [
   z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.ACTOR),
+    kind: z.literal(WORKSPACE_RESOURCE_KIND.ACTOR),
     displayName: z.string().trim().min(1).max(255).optional(),
     role: z.enum(ACTOR_ROLES).optional(),
     title: z.string().trim().max(255).optional(),
@@ -310,7 +314,7 @@ export const UpdateWorkspaceAppInputSchema = z.discriminatedUnion("kind", [
     config: z.record(z.string(), z.unknown()).optional(),
   }),
   z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.REMOTE_AGENT),
+    kind: z.literal(WORKSPACE_RESOURCE_KIND.REMOTE_AGENT),
     displayName: z.string().trim().min(1).max(255).optional(),
     title: z.string().trim().min(1).max(255).optional(),
     description: z.string().trim().max(5000).nullable().optional(),
@@ -321,9 +325,9 @@ export const UpdateWorkspaceAppInputSchema = z.discriminatedUnion("kind", [
     metadata: z.record(z.string(), z.unknown()).optional(),
   }),
   z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.INSTALLED_SKILL),
+    kind: z.literal(WORKSPACE_RESOURCE_KIND.INSTALLED_SKILL),
     displayName: z.string().trim().min(1).max(255).optional(),
-    description: workspaceAppContentBlockInputSchema.optional(),
+    description: workspaceResourceContentBlockInputSchema.optional(),
     iconFileId: z.uuid().nullable().optional(),
     tags: z.array(z.string()).optional(),
     isEnabled: z.boolean().optional(),
@@ -333,14 +337,14 @@ export const UpdateWorkspaceAppInputSchema = z.discriminatedUnion("kind", [
     attachmentFiles: z.array(SkillAttachmentInputSchema).optional(),
   }),
   z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.DEVICE_CAPABILITY),
+    kind: z.literal(WORKSPACE_RESOURCE_KIND.DEVICE_CAPABILITY),
     displayName: z.string().trim().min(1).max(255).optional(),
     conversationTypeMaskOverride: conversationTypeMaskSchema
       .nullable()
       .optional(),
   }),
   z.object({
-    kind: z.literal(WORKSPACE_APP_KIND.PLUGIN_INSTALLATION),
+    kind: z.literal(WORKSPACE_RESOURCE_KIND.PLUGIN_INSTALLATION),
     isEnabled: z.boolean().optional(),
     configData: z.record(z.string(), z.unknown()).optional(),
     authSessionIds: z.record(z.string(), z.uuid()).optional(),
@@ -350,19 +354,19 @@ export const UpdateWorkspaceAppInputSchema = z.discriminatedUnion("kind", [
       .optional(),
   }),
 ])
-export type UpdateWorkspaceAppInput = z.infer<
-  typeof UpdateWorkspaceAppInputSchema
+export type UpdateWorkspaceResourceInput = z.infer<
+  typeof UpdateWorkspaceResourceInputSchema
 >
 
 /** Grant-request direction query (?direction=). */
-export const WorkspaceAppGrantRequestDirectionSchema = z
-  .enum(WORKSPACE_APP_GRANT_REQUEST_DIRECTIONS)
-  .default(WORKSPACE_APP_GRANT_REQUEST_DIRECTIONS[0])
+export const WorkspaceResourceGrantRequestDirectionSchema = z
+  .enum(WORKSPACE_RESOURCE_GRANT_REQUEST_DIRECTIONS)
+  .default(WORKSPACE_RESOURCE_GRANT_REQUEST_DIRECTIONS[0])
 
-/** GET workspace-apps/:id/grant-requests query. */
-export const WorkspaceAppGrantRequestListQuerySchema = z.object({
-  direction: WorkspaceAppGrantRequestDirectionSchema,
+/** GET workspace-resources/:id/grant-requests query. */
+export const WorkspaceResourceGrantRequestListQuerySchema = z.object({
+  direction: WorkspaceResourceGrantRequestDirectionSchema,
 })
-export type WorkspaceAppGrantRequestListQuery = z.infer<
-  typeof WorkspaceAppGrantRequestListQuerySchema
+export type WorkspaceResourceGrantRequestListQuery = z.infer<
+  typeof WorkspaceResourceGrantRequestListQuerySchema
 >

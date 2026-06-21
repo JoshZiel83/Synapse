@@ -126,7 +126,7 @@ test("presentGroupTaskGrant parses RemoteAgentGroupTaskGrantViewSchema", () => {
     presentGroupTaskGrant(
       {
         workspaceMemberId: "wm-1",
-        grantedByWorkspaceMemberId: "wm-2",
+        createdByWorkspaceMemberId: "wm-2",
         createdAt: asDate,
         updatedAt: asDate,
         userId: "u-1",

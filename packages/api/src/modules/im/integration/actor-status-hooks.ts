@@ -486,9 +486,8 @@ export function installActorStatusHooks(): () => void {
           // previews, wakeup count changes) are safe.
           entry.reaction.set(decision.level)
           entry.typing.stop()
-          return
+          break
         case "noop":
-          return
       }
     })
   )

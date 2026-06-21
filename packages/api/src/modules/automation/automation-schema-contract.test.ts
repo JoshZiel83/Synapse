@@ -1,10 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import {
-  ACCESS_BINDING_STATUS,
-  AUTOMATION_ACCESS_TARGET_TYPE,
   AUTOMATION_COMPLETION_STATUSES,
-  AUTOMATION_CREATOR_KIND,
   AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS,
   AUTOMATION_EVENT_SOURCE_STATUSES,
   AUTOMATION_EXECUTION_STATUS,
@@ -20,8 +17,6 @@ import {
   AUTOMATION_WEBHOOK_ENDPOINT_STATUS,
 } from "@synapse/shared"
 import {
-  AutomationAccessGrantEnvelopeSchema,
-  AutomationAccessGrantInputSchema,
   AutomationEventIngestResultSchema,
   AutomationEventSourceSchema,
   AutomationEventSourceCreateInputSchema,
@@ -42,7 +37,6 @@ const authorityWorkspaceId = "00000000-0000-4000-8000-000000000006"
 const participantId = "00000000-0000-4000-8000-000000000007"
 const sessionId = "00000000-0000-4000-8000-000000000008"
 const eventSourceId = "00000000-0000-4000-8000-000000000009"
-const grantId = "00000000-0000-4000-8000-000000000010"
 const occurrenceId = "00000000-0000-4000-8000-000000000011"
 const executionId = "00000000-0000-4000-8000-000000000012"
 const webhookEndpointId = "00000000-0000-4000-8000-000000000013"
@@ -65,7 +59,6 @@ function automationEventSourceFixture() {
     payloadSchema: {},
     examplePayload: {},
     status: "active",
-    createdByKind: AUTOMATION_CREATOR_KIND.WORKSPACE_MEMBER,
     createdByWorkspaceMemberId: workspaceMemberId,
     metadata: {},
     createdAt: isoInstant,
@@ -81,23 +74,6 @@ function automationIntegrationFixture() {
     targetKind: AUTOMATION_INTEGRATION_TARGET_KINDS[0],
     targetId: "openai/synapse",
     targetLabel: "openai/synapse",
-  }
-}
-
-function automationAccessGrantEnvelopeFixture() {
-  return {
-    grant: {
-      id: grantId,
-      resourceId: eventSourceId,
-      workspaceId,
-      target: { subject: { type: "workspace", id: workspaceId } },
-      status: "active",
-      grantedByWorkspaceMemberId: workspaceMemberId,
-      reason: "Allow workspace automation",
-      conversationTypeMaskOverride: null,
-      effectiveConversationTypeMask: 15,
-      createdAt: isoInstant,
-    },
   }
 }
 
@@ -228,48 +204,6 @@ test("AutomationEventSourceCreateInputSchema validates integration requirements"
   })
 
   assert.ok(parsed.success, JSON.stringify(parsed.error?.issues))
-})
-
-test("AutomationAccessGrantInputSchema rejects snake_case access target fields", () => {
-  assert.equal(
-    AutomationAccessGrantInputSchema.safeParse({
-      accessTarget: {
-        type: "workspace_member",
-        workspace_member_id: workspaceMemberId,
-      },
-    }).success,
-    false
-  )
-
-  assert.ok(
-    AutomationAccessGrantInputSchema.safeParse({
-      accessTarget: {
-        type: AUTOMATION_ACCESS_TARGET_TYPE.WORKSPACE_MEMBER,
-        workspaceMemberId,
-      },
-      conversationTypeMaskOverride: null,
-    }).success
-  )
-})
-
-test("AutomationAccessGrantInputSchema validates finite access target type set", () => {
-  assert.ok(
-    AutomationAccessGrantInputSchema.safeParse({
-      accessTarget: {
-        type: AUTOMATION_ACCESS_TARGET_TYPE.WORKSPACE,
-      },
-    }).success
-  )
-
-  assert.equal(
-    AutomationAccessGrantInputSchema.safeParse({
-      accessTarget: {
-        type: "remote_agent",
-        remoteAgentId: "00000000-0000-4000-8000-000000000014",
-      },
-    }).success,
-    false
-  )
 })
 
 test("automation app query schemas validate shared enum values", () => {
@@ -511,23 +445,6 @@ test("automation response schemas validate finite integration enums", () => {
   )
 })
 
-test("automation event-source response schema validates finite creator kinds", () => {
-  assert.ok(
-    AutomationEventSourceSchema.safeParse({
-      ...automationEventSourceFixture(),
-      createdByKind: AUTOMATION_CREATOR_KIND.SYSTEM,
-    }).success
-  )
-
-  assert.equal(
-    AutomationEventSourceSchema.safeParse({
-      ...automationEventSourceFixture(),
-      createdByKind: "robot",
-    }).success,
-    false
-  )
-})
-
 test("automation app create response schemas validate concrete shared payloads", () => {
   assert.ok(
     AutomationEventSourceSchema.safeParse(automationEventSourceFixture())
@@ -536,11 +453,6 @@ test("automation app create response schemas validate concrete shared payloads",
   assert.ok(
     AutomationRuleSchema.safeParse(automationRuleFixture()).success,
     "automation create response should use the shared rule view"
-  )
-  assert.ok(
-    AutomationAccessGrantEnvelopeSchema.safeParse(
-      automationAccessGrantEnvelopeFixture()
-    ).success
   )
   assert.ok(
     AutomationWebhookEndpointCreateResultSchema.safeParse(
@@ -596,21 +508,4 @@ test("automation response schemas reject unknown app statuses", () => {
       .success,
     false
   )
-
-  const grantFixture = automationAccessGrantEnvelopeFixture()
-  const invalidGrant = {
-    ...grantFixture,
-    grant: {
-      ...grantFixture.grant,
-      status: "disabled" as never,
-    },
-  }
-  assert.equal(
-    AutomationAccessGrantEnvelopeSchema.safeParse(invalidGrant).success,
-    false
-  )
-
-  const validGrant = automationAccessGrantEnvelopeFixture()
-  validGrant.grant.status = ACCESS_BINDING_STATUS.ACTIVE
-  assert.ok(AutomationAccessGrantEnvelopeSchema.safeParse(validGrant).success)
 })

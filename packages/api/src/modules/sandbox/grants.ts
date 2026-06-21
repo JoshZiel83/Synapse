@@ -2,7 +2,7 @@
 //
 // A sandbox can only run its fs + commandline tools once BOTH layers exist —
 // either alone results in a local deny:
-//   Layer 1 — capability device grant (resource_access_bindings): binds the
+//   Layer 1 — capability device grant (workspace_resource_grants): binds the
 //     actor (scope=conversation) to the device's filesystem + commandline
 //     capabilities, so projectDeviceTools surfaces the tools at all.
 //   Layer 2 — runtime-authorization grants: a filesystem write grant over the

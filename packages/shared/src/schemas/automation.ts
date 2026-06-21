@@ -1,9 +1,6 @@
 import { z } from "zod"
 import {
   AUTOMATION_COMPLETION_STATUSES,
-  AUTOMATION_ACCESS_TARGET_TYPE,
-  AUTOMATION_ACCESS_TARGET_TYPES,
-  AUTOMATION_CREATOR_KINDS,
   AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS,
   AUTOMATION_EVENT_SOURCE_STATUSES,
   AUTOMATION_EXECUTION_STATUSES,
@@ -18,10 +15,10 @@ import {
   AUTOMATION_TRIGGER_SOURCE_KINDS,
   AUTOMATION_WEBHOOK_ENDPOINT_STATUSES,
 } from "../constants/enums.js"
-import { ACCESS_BINDING_STATUSES } from "../access/enums.js"
 import type { CanonicalContentBlockInput } from "../types/index.js"
 import { CanonicalContentBlockSchema } from "./chat-content-block.js"
 import { IsoInstantStringSchema } from "./datetime.js"
+import { WorkspaceResourceGrantViewSchema } from "./workspace-resources.js"
 
 /**
  * App-facing contracts for the automation module's APP routes (master plan
@@ -66,10 +63,7 @@ export const AutomationEventSourceSchema = z.object({
   payloadSchema: openRecord,
   examplePayload: openRecord,
   status: z.enum(AUTOMATION_EVENT_SOURCE_STATUSES),
-  createdByKind: z.enum(AUTOMATION_CREATOR_KINDS),
   createdByWorkspaceMemberId: z.string().optional(),
-  createdByActorId: z.string().optional(),
-  createdBySessionId: z.string().optional(),
   lastTriggeredAt: IsoInstantStringSchema.optional(),
   metadata: openRecord,
   createdAt: IsoInstantStringSchema,
@@ -261,31 +255,11 @@ export type AutomationWebhookEndpointCreateResultSchemaType = z.infer<
   typeof AutomationWebhookEndpointCreateResultSchema
 >
 
-/**
- * AutomationEventSourceAccessGrant view. `target` is a CapabilityAccessTarget
- * (an open subject/scope ref the access layer owns) so it round-trips as an
- * open record; the mask fields are nullable scalars.
- */
-export const AutomationEventSourceAccessGrantSchema = z.object({
-  id: z.string(),
-  resourceId: z.string(),
-  workspaceId: z.string(),
-  target: openRecord,
-  status: z.enum(ACCESS_BINDING_STATUSES),
-  grantedByWorkspaceMemberId: z.string().optional(),
-  reason: z.string().optional(),
-  conversationTypeMaskOverride: z.number().nullable().optional(),
-  effectiveConversationTypeMask: z.number().optional(),
-  createdAt: IsoInstantStringSchema,
-  revokedAt: IsoInstantStringSchema.optional(),
-})
-export type AutomationEventSourceAccessGrantSchemaType = z.infer<
-  typeof AutomationEventSourceAccessGrantSchema
->
-
-/** GET event-source access state: `{ grants, summary }`. */
+/** GET event-source access state: `{ grants, summary }`. Automation event-source
+ * access is a `use`-permission grant set on the source's workspace_resources root, so
+ * grants are the unified workspace-resource grant view (no parallel grant DTO). */
 export const AutomationEventSourceAccessStateSchema = z.object({
-  grants: z.array(AutomationEventSourceAccessGrantSchema),
+  grants: z.array(WorkspaceResourceGrantViewSchema),
   summary: z
     .object({
       requiredPermissions: z.array(z.string()),
@@ -303,17 +277,6 @@ export const AutomationEventSourceAccessStateSchema = z.object({
 })
 export type AutomationEventSourceAccessStateSchemaType = z.infer<
   typeof AutomationEventSourceAccessStateSchema
->
-
-/**
- * POST grant / PUT update access grant: handler returns `{ grant }`. The grant
- * matches the access-grant view.
- */
-export const AutomationAccessGrantEnvelopeSchema = z.object({
-  grant: AutomationEventSourceAccessGrantSchema,
-})
-export type AutomationAccessGrantEnvelopeSchemaType = z.infer<
-  typeof AutomationAccessGrantEnvelopeSchema
 >
 
 /** DELETE access grant / DELETE event-source / DELETE automation: `{ success }`. */
@@ -422,70 +385,6 @@ export const AutomationRuleUpdateInputSchema = z.object({
 })
 export type AutomationRuleUpdateInput = z.input<
   typeof AutomationRuleUpdateInputSchema
->
-
-export const AutomationConversationTypeMaskSchema = z
-  .number()
-  .int()
-  .min(1)
-  .max(15)
-
-export const AutomationAccessTargetInputSchema = z
-  .object({
-    type: z.enum(AUTOMATION_ACCESS_TARGET_TYPES),
-    conversationId: z.uuid().optional(),
-    actorId: z.uuid().optional(),
-    workspaceMemberId: z.uuid().optional(),
-  })
-  .superRefine((value, ctx) => {
-    if (
-      value.type === AUTOMATION_ACCESS_TARGET_TYPE.CONVERSATION &&
-      !value.conversationId
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["conversationId"],
-        message: "conversationId is required for this access target",
-      })
-    }
-    if (value.type === AUTOMATION_ACCESS_TARGET_TYPE.ACTOR && !value.actorId) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["actorId"],
-        message: "actorId is required for this access target",
-      })
-    }
-    if (
-      value.type === AUTOMATION_ACCESS_TARGET_TYPE.WORKSPACE_MEMBER &&
-      !value.workspaceMemberId
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["workspaceMemberId"],
-        message: "workspaceMemberId is required for this access target",
-      })
-    }
-  })
-export type AutomationAccessTargetInput = z.input<
-  typeof AutomationAccessTargetInputSchema
->
-
-export const AutomationAccessGrantInputSchema = z.object({
-  accessTarget: AutomationAccessTargetInputSchema.optional(),
-  conversationTypeMaskOverride:
-    AutomationConversationTypeMaskSchema.nullable().optional(),
-  reason: z.string().trim().min(1).max(500).optional(),
-})
-export type AutomationAccessGrantInput = z.input<
-  typeof AutomationAccessGrantInputSchema
->
-
-export const AutomationAccessGrantUpdateInputSchema = z.object({
-  conversationTypeMaskOverride:
-    AutomationConversationTypeMaskSchema.nullable().optional(),
-})
-export type AutomationAccessGrantUpdateInput = z.input<
-  typeof AutomationAccessGrantUpdateInputSchema
 >
 
 export const AutomationWebhookEndpointCreateInputSchema = z.object({

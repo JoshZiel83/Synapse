@@ -50,11 +50,40 @@ const nullableEdges = foreignKeys.filter(
     allT.has(fk.referencedTable)
 )
 
+// Never-purge set (tier A retention): immutable registries + audit.
+//   - provider_steps: append-only per-call audit/billing record.
+//   - model_binding_versions: append-only config snapshots that provider_steps
+//     references (model_binding_version_id, RESTRICT) for accurate per-call
+//     config-version traceability. Retention must not delete a version still
+//     anchored by an audit row, so it is audit-anchoring and never retention-purged.
+//   Both are erased only by a tier-B tenant hard-erase (sd_purge_workspace),
+//   which deletes provider_steps before model_binding_versions in topo order.
+const NEVER_PURGE = new Set([
+  "access_subjects",
+  "transport_addresses",
+  "audit_logs",
+  "provider_steps",
+  "model_binding_versions",
+])
+
 // Topological order over the non-nullable, non-self edges (children first).
+// A DEFERRABLE INITIALLY DEFERRED edge whose PARENT is a never-purged immutable
+// registry is EXCLUDED from the order: the registry row is checked only at COMMIT
+// (the purge runs in one transaction), so such an edge imposes no intra-
+// transaction delete-order constraint. This breaks the cycle introduced by the
+// owner/creator→subject provenance FKs —
+//   workspace_resources → access_subjects (owner_subject_id / created_by_subject_id,
+//   now DEFERRABLE) → actors (access_subjects.actor_id, RESTRICT) → workspace_resources
+//   (fk_actors_*_root, DEFERRABLE) —
+// by dropping the two provenance edges into access_subjects, while KEEPING the
+// subtype-root edges (actors→workspace_resources, …) whose child-before-parent
+// ordering the scope predicates depend on. The dropped edges are validated at
+// COMMIT once every row in the cycle has been deleted.
 function topoOrder() {
   const edges = foreignKeys.filter(
     (fk) =>
       fk.onDelete !== "SET NULL" &&
+      !(fk.deferrable && NEVER_PURGE.has(fk.referencedTable)) &&
       fk.childTable !== fk.referencedTable &&
       allT.has(fk.childTable) &&
       allT.has(fk.referencedTable)
@@ -82,22 +111,6 @@ function topoOrder() {
 }
 
 const ORDER = topoOrder() // leaf → root
-
-// Never-purge set (tier A retention): immutable registries + audit.
-//   - provider_steps: append-only per-call audit/billing record.
-//   - model_binding_versions: append-only config snapshots that provider_steps
-//     references (model_binding_version_id, RESTRICT) for accurate per-call
-//     config-version traceability. Retention must not delete a version still
-//     anchored by an audit row, so it is audit-anchoring and never retention-purged.
-//   Both are erased only by a tier-B tenant hard-erase (sd_purge_workspace),
-//   which deletes provider_steps before model_binding_versions in topo order.
-const NEVER_PURGE = new Set([
-  "access_subjects",
-  "transport_addresses",
-  "audit_logs",
-  "provider_steps",
-  "model_binding_versions",
-])
 
 // child -> its non-self FKs (for scope-predicate chaining).
 const fksByChild = new Map([...allT].map((t) => [t, []]))

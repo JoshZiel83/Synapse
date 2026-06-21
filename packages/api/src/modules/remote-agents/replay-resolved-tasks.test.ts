@@ -1,8 +1,10 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import { SUBJECT_KIND } from "@synapse/shared"
 import type { Kysely } from "kysely"
 import crypto from "node:crypto"
 import { withTestDb } from "../../test/helpers/db.js"
+import { upsertAccessSubject } from "../access/subject-registry.js"
 import { loadReplayResolvedTaskTargetsRepo } from "./repo.js"
 
 /**
@@ -50,13 +52,17 @@ async function buildAgentMachineFixture(db: Kysely<any>) {
     .returning("id")
     .executeTakeFirstOrThrow()
   const remoteAgentId = crypto.randomUUID()
+  const createdBySubjectId = await upsertAccessSubject(db, {
+    kind: SUBJECT_KIND.PLATFORM,
+  })
   await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id: remoteAgentId,
       workspaceId: ws.id as string,
       kind: "remote_agent",
       displayName: `${NS} agent`,
+      createdBySubjectId,
       status: "active",
     } as any)
     .execute()

@@ -29,13 +29,9 @@ import type {
   AutomationSourceKind,
   AutomationWebhookEndpoint,
   Timestamp,
+  WorkspaceResourceStatus,
 } from "@synapse/shared"
-import {
-  loadAutomationEventSourceAccessBindingRowsForSources,
-  revokeAutomationEventSourceAccessBinding,
-  updateAutomationEventSourceAccessGrantConversationTypeMaskOverride,
-} from "../access/binding-storage.js"
-import type { AutomationEventSourceBindingJoinedRow } from "../access/bindings.js"
+import type { AutomationEventSourceGrantJoinedRow } from "../access/grant-target.js"
 import type {
   AutomationDeliveryDbRow,
   AutomationDeliveryRow,
@@ -83,7 +79,10 @@ export type {
 export type IntegrationInstallationRow = {
   installationId: string
   workspaceId: string
-  installationStatus: "active" | "disabled" | "error" | "archived"
+  // Sourced from workspace_resources.status (5-value enum); use the canonical
+  // shared type so it can never drift to a partial inline union (was missing
+  // 'deprecated').
+  installationStatus: WorkspaceResourceStatus
   configData: Record<string, unknown>
   orgSlug: string
   itemSlug: string
@@ -228,10 +227,7 @@ type AutomationEventSourceComponentRawRow = {
   payloadSchema: unknown
   examplePayload: unknown
   status: AutomationEventSourceDbRow["status"]
-  createdByKind: AutomationEventSourceDbRow["created_by_kind"]
   createdByWorkspaceMemberId: string | null
-  createdByActorId: string | null
-  createdBySessionId: string | null
   lastTriggeredAt: Date | null
   metadata: unknown
   createdAt: Date
@@ -511,14 +507,18 @@ export function normalizeAutomationWebhookEndpointRow(
   return normalized
 }
 
-/** Read one integration installation for a workspace, scoped to non-deleted workspace apps. */
+/** Read one integration installation for a workspace, scoped to non-deleted workspace resources. */
 export async function selectIntegrationInstallationRow(
   workspaceId: string,
   installationId: string
 ): Promise<IntegrationInstallationRow | undefined> {
   const row = (await db
     .selectFrom("pluginInstallations as installation")
-    .innerJoin("workspaceApps as app", "app.id", "installation.id")
+    .innerJoin(
+      "workspaceResources as resource",
+      "resource.id",
+      "installation.id"
+    )
     .innerJoin("catalogItems as item", "item.id", "installation.catalogItemId")
     .innerJoin("publishers as publisher", "publisher.id", "item.publisherId")
     .innerJoin(
@@ -528,16 +528,16 @@ export async function selectIntegrationInstallationRow(
     )
     .select([
       "installation.id as installationId",
-      "app.workspaceId as workspaceId",
-      "app.status as installationStatus",
+      "resource.workspaceId as workspaceId",
+      "resource.status as installationStatus",
       "installation.configData",
       "publisher.slug as orgSlug",
       "item.slug as itemSlug",
       "spec.metadata as specMetadata",
     ])
     .where("installation.id", "=", installationId)
-    .where("app.workspaceId", "=", workspaceId)
-    .where("app.deletedAt", "is", null)
+    .where("resource.workspaceId", "=", workspaceId)
+    .where("resource.deletedAt", "is", null)
     .limit(1)
     .executeTakeFirst()) as IntegrationInstallationRawRow | undefined
 
@@ -682,7 +682,14 @@ function automationEventSourceJoinClause(
   eventSourceAlias = "aes",
   bindingAlias = "aib"
 ) {
-  return `LEFT JOIN automation_integration_bindings_live ${bindingAlias} ON ${bindingAlias}.id = ${eventSourceAlias}.integration_binding_id`
+  // The source's root row (workspace_resources) now carries display_name/status/
+  // deleted_at + created_by_subject_id (post §4.1 fold). `aes.id` IS the
+  // workspace_resources.id, so the root join is a 1:1 PK join. The creator member id
+  // is derived by resolving the created_by_subject_id back to a workspace_member
+  // subject (LEFT JOIN, null for actor/platform creators).
+  return `LEFT JOIN automation_integration_bindings_live ${bindingAlias} ON ${bindingAlias}.id = ${eventSourceAlias}.integration_binding_id
+          JOIN workspace_resources ${eventSourceAlias}_app ON ${eventSourceAlias}_app.id = ${eventSourceAlias}.id
+          LEFT JOIN access_subjects ${eventSourceAlias}_creator ON ${eventSourceAlias}_creator.id = ${eventSourceAlias}_app.created_by_subject_id`
 }
 
 function automationEventSourceSelectClause(
@@ -690,6 +697,10 @@ function automationEventSourceSelectClause(
   bindingAlias = "aib"
 ) {
   return `${eventSourceAlias}.*,
+          ${eventSourceAlias}_app.display_name AS name,
+          ${eventSourceAlias}_app.status AS status,
+          ${eventSourceAlias}_app.deleted_at AS deleted_at,
+          ${eventSourceAlias}_creator.workspace_member_id AS created_by_workspace_member_id,
           ${bindingAlias}.installation_id AS integration_installation_id,
           ${bindingAlias}.provider AS integration_provider,
           ${bindingAlias}.ingress_kind AS integration_ingress_kind,
@@ -725,10 +736,7 @@ function toAutomationEventSourceDbRow(
     payload_schema: row.payloadSchema,
     example_payload: row.examplePayload,
     status: row.status,
-    created_by_kind: row.createdByKind,
     created_by_workspace_member_id: row.createdByWorkspaceMemberId,
-    created_by_actor_id: row.createdByActorId,
-    created_by_session_id: row.createdBySessionId,
     last_triggered_at: row.lastTriggeredAt,
     metadata: row.metadata,
     created_at: row.createdAt,
@@ -901,7 +909,7 @@ export async function loadAutomationRuleComponentRows(
     runner.run<AutomationTriggerComponentRawRow>(
       `SELECT at.*,
               aes.source_key AS event_source_key,
-              aes.name AS event_source_name,
+              aes_app.display_name AS event_source_name,
               aes.provider_kind AS event_provider_kind,
               aes.provider_ref AS event_provider_ref,
               aes.webhook_endpoint_id AS event_webhook_endpoint_id,
@@ -914,10 +922,11 @@ export async function loadAutomationRuleComponentRows(
               aib.target_label AS event_integration_target_label,
               aib.webhook_endpoint_id AS event_integration_webhook_endpoint_id,
               aib.external_subscription_id AS event_external_subscription_id,
-              aes.status AS event_source_status
+              aes_app.status AS event_source_status
        FROM automation_triggers
        at
        LEFT JOIN automation_event_sources_live aes ON aes.id = at.event_source_id
+       LEFT JOIN workspace_resources aes_app ON aes_app.id = aes.id
        LEFT JOIN automation_integration_bindings_live aib ON aib.id = aes.integration_binding_id
        WHERE at.rule_id = ANY($1::uuid[])`,
       [ruleIds]
@@ -1037,7 +1046,7 @@ export async function listAutomationEventSourceRows(params: {
 
   if (params.filters?.status) {
     values.push(params.filters.status)
-    where += ` AND aes.status = $${values.length}::automation_event_sources_status`
+    where += ` AND aes_app.status = $${values.length}::workspace_resources_status`
   }
   if (params.filters?.providerKind) {
     values.push(params.filters.providerKind)
@@ -1085,7 +1094,7 @@ export async function selectWebhookAutomationEventSourceByPathToken(params: {
        AND awe.status = 'active'
        AND aes.provider_kind = 'webhook'
        AND aes.source_key = $2::text
-       AND aes.status IN ('active', 'deprecated')
+       AND aes_app.status IN ('active', 'deprecated')
      LIMIT 1`,
     [params.pathToken, params.sourceKey]
   )
@@ -1109,11 +1118,13 @@ export async function listIntegrationAutomationEventSourceRowsByWebhookPathToken
        ON awe.id = aib.webhook_endpoint_id
      JOIN automation_event_sources_live aes
        ON aes.integration_binding_id = aib.id
+     JOIN workspace_resources aes_app ON aes_app.id = aes.id
+     LEFT JOIN access_subjects aes_creator ON aes_creator.id = aes_app.created_by_subject_id
      WHERE awe.path_token = $1::text
        AND awe.status = 'active'
        AND aib.ingress_kind = 'webhook'
        AND aes.provider_kind = 'integration'
-       AND aes.status IN ('active', 'deprecated')
+       AND aes_app.status IN ('active', 'deprecated')
      ORDER BY aes.created_at ASC`,
     [params.pathToken]
   )
@@ -1177,7 +1188,7 @@ export async function listAutomationOccurrenceRows(params: {
   ).run<AutomationOccurrenceRawRow>(
     `SELECT ao.*,
             aes.source_key AS event_source_key,
-            aes.name AS event_source_name,
+            aes_app.display_name AS event_source_name,
             aes.provider_ref AS event_provider_ref,
             aes.webhook_endpoint_id AS event_webhook_endpoint_id,
             aes.integration_binding_id AS event_integration_binding_id,
@@ -1191,6 +1202,7 @@ export async function listAutomationOccurrenceRows(params: {
             aib.external_subscription_id AS event_external_subscription_id
      FROM automation_occurrences ao
      LEFT JOIN automation_event_sources_live aes ON aes.id = ao.event_source_id
+     LEFT JOIN workspace_resources aes_app ON aes_app.id = aes.id
      LEFT JOIN automation_integration_bindings_live aib ON aib.id = aes.integration_binding_id
      WHERE ${where}
      ORDER BY ao.created_at DESC
@@ -1333,7 +1345,7 @@ export async function selectAutomationOccurrenceRow(
   ).run<AutomationOccurrenceRawRow>(
     `SELECT ao.*,
             aes.source_key AS event_source_key,
-            aes.name AS event_source_name,
+            aes_app.display_name AS event_source_name,
             aes.provider_ref AS event_provider_ref,
             aes.webhook_endpoint_id AS event_webhook_endpoint_id,
             aes.integration_binding_id AS event_integration_binding_id,
@@ -1347,6 +1359,7 @@ export async function selectAutomationOccurrenceRow(
             aib.external_subscription_id AS event_external_subscription_id
      FROM automation_occurrences ao
      LEFT JOIN automation_event_sources_live aes ON aes.id = ao.event_source_id
+     LEFT JOIN workspace_resources aes_app ON aes_app.id = aes.id
      LEFT JOIN automation_integration_bindings_live aib ON aib.id = aes.integration_binding_id
      WHERE ao.id = $1::uuid
      LIMIT 1`,
@@ -1369,7 +1382,7 @@ export async function listAutomationExecutionRows(params: {
             ar.name AS execution_rule_name,
             ao.occurred_at AS occurrence_occurred_at,
             ao.source_kind AS occurrence_source_kind,
-            aes.name AS occurrence_event_source_name,
+            aes_app.display_name AS occurrence_event_source_name,
             aes.source_key AS event_source_key,
             aes.provider_ref AS event_provider_ref,
             ao.source_snapshot,
@@ -1382,6 +1395,7 @@ export async function listAutomationExecutionRows(params: {
      LEFT JOIN automation_rules_live ar ON ar.id = ae.rule_id
      LEFT JOIN automation_occurrences ao ON ao.id = ae.occurrence_id
      LEFT JOIN automation_event_sources_live aes ON aes.id = ao.event_source_id
+     LEFT JOIN workspace_resources aes_app ON aes_app.id = aes.id
      WHERE ae.workspace_id = $1::uuid
        AND ae.rule_id = $2::uuid
      ORDER BY ae.created_at DESC
@@ -1502,24 +1516,29 @@ export async function selectIntegrationEventSourceReuseRow(params: {
 }): Promise<IntegrationAutomationEventSourceReuseRow | undefined> {
   const result = await runBuilder<{
     id: string
-    status: AutomationEventSourceStatus
+    status: string
     metadata: unknown
   }>(
     db,
     db
-      .selectFrom("automationEventSources")
-      .select(["id", "status", "metadata"])
-      .where("workspaceId", "=", params.workspaceId)
-      .where("providerKind", "=", "integration")
-      .where("integrationBindingId", "=", params.bindingId)
-      .where("sourceKey", "=", params.sourceKey)
+      .selectFrom("automationEventSources as aes")
+      .innerJoin("workspaceResources as resource", "resource.id", "aes.id")
+      .select([
+        "aes.id as id",
+        "resource.status as status",
+        "aes.metadata as metadata",
+      ])
+      .where("aes.workspaceId", "=", params.workspaceId)
+      .where("aes.providerKind", "=", "integration")
+      .where("aes.integrationBindingId", "=", params.bindingId)
+      .where("aes.sourceKey", "=", params.sourceKey)
       .limit(1)
   )
   const row = result.rows[0]
   return row
     ? {
         id: row.id,
-        status: row.status,
+        status: row.status as AutomationEventSourceStatus,
         metadata: decodeAutomationEventSourceMetadata(row),
       }
     : undefined
@@ -1569,18 +1588,19 @@ export async function selectActiveAutomationEventSourceId(params: {
   const result = await runBuilder<{ id: string }>(
     db,
     db
-      .selectFrom("automationEventSources")
-      .select("id")
-      .where("workspaceId", "=", params.workspaceId)
-      .where("providerKind", "=", params.providerKind)
+      .selectFrom("automationEventSources as aes")
+      .innerJoin("workspaceResources as resource", "resource.id", "aes.id")
+      .select("aes.id as id")
+      .where("aes.workspaceId", "=", params.workspaceId)
+      .where("aes.providerKind", "=", params.providerKind)
       .where(
-        sql`COALESCE(provider_ref, '')`,
+        sql`COALESCE(aes.provider_ref, '')`,
         "=",
         sql`COALESCE(${params.providerRef || null}, '')`
       )
-      .where("sourceKey", "=", params.sourceKey)
-      .where("status", "in", ["active", "deprecated"])
-      .where("deletedAt", "is", null)
+      .where("aes.sourceKey", "=", params.sourceKey)
+      .where("resource.status", "in", ["active", "deprecated"])
+      .where("resource.deletedAt", "is", null)
       .limit(1)
   )
   return result.rows[0]?.id
@@ -2055,8 +2075,32 @@ export async function softDeleteAutomationRule(
  * sentinel, etc.) and the repo runs it on the given executor (defaulting to the
  * pool). Keeps the table client in the repo without re-typing every column.
  */
+/**
+ * The closed set of columns the service may write to the automation_event_sources
+ * DETAIL table. After the workspace_resource authz fold, display_name / status /
+ * deleted_at / created_by_* live on the workspace_resources ROOT — they are NOT
+ * on this detail table. Typing the write bag (rather than `Record<string,unknown>`)
+ * makes any future attempt to write a root/dropped column a COMPILE error instead
+ * of the runtime crash that was the fold's headline blocker. JSONB columns
+ * (payloadSchema/examplePayload/metadata) arrive already JSON-stringified.
+ */
+export type AutomationEventSourceDetailWrite = {
+  id?: string
+  workspaceId?: string
+  providerKind?: string
+  providerRef?: string | null
+  webhookEndpointId?: string | null
+  integrationBindingId?: string | null
+  sourceKey?: string
+  description?: string
+  recommendedUsage?: string
+  payloadSchema?: string
+  examplePayload?: string
+  metadata?: string
+}
+
 export async function insertAutomationEventSourceRow(
-  values: Record<string, unknown>,
+  values: AutomationEventSourceDetailWrite,
   run: Executor = db
 ) {
   await run
@@ -2067,14 +2111,17 @@ export async function insertAutomationEventSourceRow(
 
 /**
  * Update an existing event source row (used by reuse + update flows). `values`
- * is the already-encoded set-bag built by the service.
+ * is the already-encoded detail set-bag built by the service.
  */
-export async function updateAutomationEventSourceRow(params: {
-  workspaceId: string
-  eventSourceId: string
-  values: Record<string, unknown>
-}) {
-  await db
+export async function updateAutomationEventSourceRow(
+  params: {
+    workspaceId: string
+    eventSourceId: string
+    values: AutomationEventSourceDetailWrite
+  },
+  run: Executor = db
+) {
+  await run
     .updateTable("automationEventSources")
     .set(params.values as never)
     .where("workspaceId", "=", params.workspaceId)
@@ -2082,17 +2129,17 @@ export async function updateAutomationEventSourceRow(params: {
     .execute()
 }
 
-/** Set an event source status to archived for the workspace. */
+/** Set an event source status to archived for the workspace (status lives on the workspace_resources root). */
 export async function setAutomationEventSourceStatus(params: {
   workspaceId: string
   eventSourceId: string
   status: AutomationEventSourceStatus
 }) {
   await db
-    .updateTable("automationEventSources")
-    .set({ status: params.status })
-    .where("workspaceId", "=", params.workspaceId)
+    .updateTable("workspaceResources")
+    .set({ status: params.status, updatedAt: sql`NOW()` })
     .where("id", "=", params.eventSourceId)
+    .where("workspaceId", "=", params.workspaceId)
     .execute()
 }
 
@@ -2107,16 +2154,16 @@ export async function touchAutomationEventSourceTriggered(
     .execute()
 }
 
-/** Saga compensating rollback: soft-delete a just-created event source. */
+/** Saga compensating rollback: soft-delete a just-created event source (deleted_at lives on the workspace_resources root). */
 export async function softDeleteAutomationEventSource(
   workspaceId: string,
   eventSourceId: string
 ) {
   await db
-    .updateTable("automationEventSources")
-    .set({ deletedAt: sql`NOW()` })
-    .where("workspaceId", "=", workspaceId)
+    .updateTable("workspaceResources")
+    .set({ deletedAt: sql`NOW()`, updatedAt: sql`NOW()` })
     .where("id", "=", eventSourceId)
+    .where("workspaceId", "=", workspaceId)
     .where("deletedAt", "is", null)
     .execute()
     .catch(() => undefined)
@@ -2184,12 +2231,13 @@ export async function listActiveIntegrationSourceKeysForBinding(
   const result = await runBuilder<{ sourceKey: string | null }>(
     db,
     db
-      .selectFrom("automationEventSources")
-      .select("sourceKey")
-      .where("providerKind", "=", "integration")
-      .where("integrationBindingId", "=", bindingId)
-      .where("status", "in", ["active", "deprecated"])
-      .orderBy("sourceKey", "asc")
+      .selectFrom("automationEventSources as aes")
+      .innerJoin("workspaceResources as resource", "resource.id", "aes.id")
+      .select("aes.sourceKey as sourceKey")
+      .where("aes.providerKind", "=", "integration")
+      .where("aes.integrationBindingId", "=", bindingId)
+      .where("resource.status", "in", ["active", "deprecated"])
+      .orderBy("aes.sourceKey", "asc")
   )
   return Array.from(
     new Set(result.rows.map((row) => row.sourceKey).filter(Boolean))
@@ -2482,35 +2530,105 @@ export async function selectWorkspaceOwnerId(
 }
 
 // ---------------------------------------------------------------------------
-// Access-binding storage (binding-storage.ts is the access-layer DB edge; the
-// repo binds the pool so the automation service stays db-free)
+// Access-grant storage. §4.1 folds automation_event_source into the 6th
+// workspace_resources kind, so the "access grants" are now `use`-permission rows on
+// workspace_resource_grants whose workspace_resource_id IS the source's id (root id ==
+// workspace_resource_id). Only `use` grants are runtime access rows; `manage` grants
+// are governance and must never be matched by the runtime matcher.
 // ---------------------------------------------------------------------------
 
-/** Load access bindings for a set of automation event sources (pool-bound). */
-export async function loadAutomationEventSourceAccessBindingRows(input: {
-  resourceType: "automation_event_source"
-  resourceIds: string[]
-  workspaceId?: string
-  includeRevoked?: boolean
-}): Promise<AutomationEventSourceBindingJoinedRow[]> {
-  return loadAutomationEventSourceAccessBindingRowsForSources(db, input)
+/** Load `use` access grants for a set of automation event sources (pool-bound). */
+export async function loadAutomationEventSourceAccessGrantRows(
+  input: {
+    resourceType: "automation_event_source"
+    resourceIds: string[]
+    workspaceId?: string
+    includeRevoked?: boolean
+  },
+  executor: Executor = db
+): Promise<AutomationEventSourceGrantJoinedRow[]> {
+  if (input.resourceIds.length === 0) return []
+  let query = executor
+    .selectFrom("workspaceResourceGrants as g")
+    .innerJoin("accessSubjects as subj", "subj.id", "g.subjectId")
+    .leftJoin("accessSubjects as scope", "scope.id", "g.scopeSubjectId")
+    .select([
+      "g.id as id",
+      "g.workspaceResourceId as resourceId",
+      "g.workspaceId as workspaceId",
+      "g.conversationTypeMaskOverride as conversationTypeMaskOverride",
+      "g.status as status",
+      "g.createdByWorkspaceMemberId as createdByWorkspaceMemberId",
+      "g.reason as reason",
+      "g.createdAt as createdAt",
+      "g.revokedAt as revokedAt",
+      sql<string>`subj.kind`.as("subjectKind"),
+      sql<string | null>`subj.workspace_id`.as("subjectWorkspaceIdViaJoin"),
+      sql<string | null>`subj.workspace_member_id`.as(
+        "subjectWorkspaceMemberIdViaJoin"
+      ),
+      sql<string | null>`subj.actor_id`.as("subjectActorIdViaJoin"),
+      sql<string | null>`subj.remote_agent_id`.as(
+        "subjectRemoteAgentIdViaJoin"
+      ),
+      sql<string | null>`subj.conversation_id`.as(
+        "subjectConversationIdViaJoin"
+      ),
+      sql<string | null>`scope.kind`.as("scopeKind"),
+      sql<string | null>`scope.workspace_id`.as("scopeWorkspaceIdViaJoin"),
+      sql<string | null>`scope.conversation_id`.as(
+        "scopeConversationIdViaJoin"
+      ),
+    ])
+    .where("g.workspaceResourceId", "in", input.resourceIds)
+    .where(
+      sql<boolean>`'use'::workspace_resource_grant_permission = ANY(g.permissions)`
+    )
+  if (input.workspaceId) {
+    query = query.where("g.workspaceId", "=", input.workspaceId)
+  }
+  if (!input.includeRevoked) {
+    query = query.where("g.status", "=", "active")
+  }
+  const rows = await query.execute()
+  return rows as unknown as AutomationEventSourceGrantJoinedRow[]
 }
 
-/** Revoke an automation event-source access binding (pool-bound). */
-export async function revokeAutomationEventSourceAccessBindingById(input: {
-  bindingId: string
-}): Promise<boolean> {
-  return revokeAutomationEventSourceAccessBinding(db, input)
+/**
+ * Revoke an automation event-source access grant. Flips the single active row to
+ * `revoked` and returns whether a row was actually flipped — the `status='active'`
+ * predicate makes a second call a no-op (returns false), i.e. the revoke is
+ * idempotent. Defaults to the pool-bound `db`; a transaction executor can be
+ * injected for tests.
+ */
+export async function revokeAutomationEventSourceAccessGrantById(
+  input: {
+    grantId: string
+  },
+  run: Executor = db
+): Promise<boolean> {
+  const updated = await run
+    .updateTable("workspaceResourceGrants")
+    .set({ status: "revoked", revokedAt: sql`NOW()` })
+    .where("id", "=", input.grantId)
+    .where("status", "=", "active")
+    .returning("id")
+    .execute()
+  return updated.length > 0
 }
 
-/** Update an access binding's conversation-type mask override (pool-bound). */
-export async function updateAutomationEventSourceAccessBindingMaskOverride(input: {
-  bindingId: string
+/** Update an access grant's conversation-type mask override (pool-bound). */
+export async function updateAutomationEventSourceAccessGrantMaskOverride(input: {
+  grantId: string
   workspaceId?: string
   conversationTypeMaskOverride: number | null
 }): Promise<void> {
-  return updateAutomationEventSourceAccessGrantConversationTypeMaskOverride(
-    db,
-    input
-  )
+  let query = db
+    .updateTable("workspaceResourceGrants")
+    .set({ conversationTypeMaskOverride: input.conversationTypeMaskOverride })
+    .where("id", "=", input.grantId)
+  if (input.workspaceId) {
+    query = query.where("workspaceId", "=", input.workspaceId)
+  }
+  await query.execute()
 }

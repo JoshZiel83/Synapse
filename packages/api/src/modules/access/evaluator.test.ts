@@ -1,12 +1,15 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import crypto from "node:crypto"
-import { SUBJECT_KIND, WORKSPACE_APP_GRANT_PERMISSION } from "@synapse/shared"
+import {
+  SUBJECT_KIND,
+  WORKSPACE_RESOURCE_GRANT_PERMISSION,
+} from "@synapse/shared"
 import { withTestDb } from "../../test/helpers/db.js"
 import { checkPermission, lookupResources } from "./evaluator.js"
 import { setRequiresContactApproval } from "./contact-approval.js"
 import { upsertAccessSubject } from "./subject-registry.js"
-import { insertWorkspaceAppGrant } from "../workspace-apps/grant-storage.js"
+import { insertWorkspaceResourceGrant } from "../workspace-resources/grant-storage.js"
 
 type AnyDb = import("kysely").Kysely<any>
 
@@ -52,15 +55,45 @@ async function insertWorkspaceMember(
   return row.id as string
 }
 
+// Owner→subject migration (§4.2): workspace_resources no longer has an
+// `owner_workspace_member_id` column — ownership is an access_subjects FK
+// (`owner_subject_id`), and `created_by_subject_id` is NOT NULL. These helpers
+// resolve the subject ids each workspace_resources root row now requires.
+async function memberSubjectId(db: AnyDb, memberId: string): Promise<string> {
+  return upsertAccessSubject(db, {
+    kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+    workspaceMemberId: memberId,
+  })
+}
+
+// A valid NOT-NULL creator subject for a root row when no specific member is
+// supplied: reuse any existing member of the workspace, else mint one.
+async function anyWorkspaceMemberSubjectId(
+  db: AnyDb,
+  workspaceId: string
+): Promise<string> {
+  const existing = await db
+    .selectFrom("workspaceMembers")
+    .select("id")
+    .where("workspaceId", "=", workspaceId)
+    .limit(1)
+    .executeTakeFirst()
+  const memberId = existing
+    ? (existing.id as string)
+    : await insertWorkspaceMember(db, workspaceId, await insertUser(db))
+  return memberSubjectId(db, memberId)
+}
+
 async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
   const id = crypto.randomUUID()
   await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id,
       workspaceId: workspaceId,
       kind: "actor",
       displayName: "test actor",
+      createdBySubjectId: await anyWorkspaceMemberSubjectId(db, workspaceId),
       status: "active",
     } as any)
     .execute()
@@ -75,6 +108,34 @@ async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
     .returning("id")
     .executeTakeFirstOrThrow()
   return row.id as string
+}
+
+// Insert an actor resource whose owner_subject_id is the given subject id
+// (used to exercise the §4.2 owner-kind implicit matrix where a non-member
+// actor/remote_agent owns a resource).
+async function insertActorOwnedBySubject(
+  db: AnyDb,
+  workspaceId: string,
+  ownerSubjectId: string
+): Promise<string> {
+  const id = crypto.randomUUID()
+  await db
+    .insertInto("workspaceResources")
+    .values({
+      id,
+      workspaceId,
+      kind: "actor",
+      displayName: "owned-by-subject actor",
+      ownerSubjectId,
+      createdBySubjectId: await anyWorkspaceMemberSubjectId(db, workspaceId),
+      status: "active",
+    } as any)
+    .execute()
+  await db
+    .insertInto("actors")
+    .values({ id, role: "assistant", title: "owned", currentVersion: 1 })
+    .execute()
+  return id
 }
 
 // Convenience: workspace owner + a separate non-owner member (the owner has
@@ -143,13 +204,16 @@ test(
         await seedOwnerAndGuest(db)
       const unrelatedActorId = await insertActor(db, workspaceId)
 
-      await insertWorkspaceAppGrant(db, {
+      await insertWorkspaceResourceGrant(db, {
         workspaceId,
-        workspaceAppId: actorId,
+        workspaceResourceId: actorId,
         target: {
-          subject: { kind: "workspace_member", memberId: guestMemberId },
+          subject: {
+            kind: "workspace_member",
+            workspaceMemberId: guestMemberId,
+          },
         },
-        permissions: [WORKSPACE_APP_GRANT_PERMISSION.CONTACT_VISIBLE],
+        permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.CONTACT_VISIBLE],
         source: "approval",
       })
 
@@ -467,11 +531,11 @@ test(
       const { workspaceId, ownerMemberId, guestMemberId } =
         await seedOwnerMemberAndGuest(db)
       const skillId = await insertInstalledSkill(db, workspaceId, ownerMemberId)
-      await insertBinding(db, {
+      await insertResourceGrant(db, {
         workspaceId,
         resourceType: "installed_skill",
         resourceId: skillId,
-        target: workspaceTarget(workspaceId),
+        target: workspaceSubjectTarget(workspaceId),
       })
       const ok = await checkPermission(db, {
         resourceType: "installed_skill",
@@ -497,11 +561,11 @@ test(
         installedByMemberId: ownerMemberId,
         attachmentScopeSkillId: skillId,
       })
-      await insertBinding(db, {
+      await insertResourceGrant(db, {
         workspaceId,
         resourceType: "plugin_installation",
         resourceId: installationId,
-        target: workspaceTarget(workspaceId),
+        target: workspaceSubjectTarget(workspaceId),
       })
       const guestOk = await checkPermission(db, {
         resourceType: "plugin_installation",
@@ -546,7 +610,7 @@ test(
       const { workspaceId, guestMemberId } = await seedOwnerMemberAndGuest(db)
       const skillId = await insertInstalledSkill(db, workspaceId, guestMemberId)
       await db
-        .updateTable("workspaceApps")
+        .updateTable("workspaceResources")
         .set({ status: "disabled" } as any)
         .where("id", "=", skillId)
         .execute()
@@ -578,7 +642,7 @@ test(
         attachmentScopeSkillId: scopeSkillId,
       })
       await db
-        .updateTable("workspaceApps")
+        .updateTable("workspaceResources")
         .set({ status: "disabled" } as any)
         .where("id", "=", installationId)
         .execute()
@@ -675,14 +739,15 @@ test(
 )
 
 test(
-  "checkPermission(automation_event_source.*) is denied without a binding (and the route falls through to default false)",
+  "checkPermission(automation_event_source.use) is denied without a grant",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
       const { workspaceId, ownerMemberId, guestMemberId } =
         await seedOwnerMemberAndGuest(db)
-      // automation_event_source does not have its own checkPermission case;
-      // it should fall through to the switch's default and return false.
+      // Post-fold automation_event_source HAS a checkPermission case
+      // (hasAutomationEventSourcePermission → use grant lookup), but with no
+      // grant row for this subject it must deny.
       const denied = await checkPermission(db, {
         resourceType: "automation_event_source",
         resourceId: "00000000-0000-0000-0000-000000000000",
@@ -781,11 +846,11 @@ test(
         await seedOwnerMemberAndGuest(db)
       const owned = await insertInstalledSkill(db, workspaceId, guestMemberId)
       const granted = await insertInstalledSkill(db, workspaceId, ownerMemberId)
-      await insertBinding(db, {
+      await insertResourceGrant(db, {
         workspaceId,
         resourceType: "installed_skill",
         resourceId: granted,
-        target: workspaceTarget(workspaceId),
+        target: workspaceSubjectTarget(workspaceId),
       })
       const ids = await lookupResources(db, {
         resourceType: "installed_skill",
@@ -825,11 +890,11 @@ test(
         installedByMemberId: ownerMemberId,
         attachmentScopeSkillId: skillForOwner,
       })
-      await insertBinding(db, {
+      await insertResourceGrant(db, {
         workspaceId,
         resourceType: "plugin_installation",
         resourceId: granted,
-        target: workspaceTarget(workspaceId),
+        target: workspaceSubjectTarget(workspaceId),
       })
       const ids = await lookupResources(db, {
         resourceType: "plugin_installation",
@@ -851,20 +916,20 @@ test(
         await seedOwnerMemberAndGuest(db)
       const owned = await insertInstalledSkill(db, workspaceId, guestMemberId)
       const managed = await insertInstalledSkill(db, workspaceId, ownerMemberId)
-      await insertWorkspaceAppGrant(db, {
+      await insertWorkspaceResourceGrant(db, {
         workspaceId,
-        workspaceAppId: managed,
+        workspaceResourceId: managed,
         target: {
           subject: {
             kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-            memberId: guestMemberId,
+            workspaceMemberId: guestMemberId,
           },
         },
-        permissions: [WORKSPACE_APP_GRANT_PERMISSION.MANAGE],
+        permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.MANAGE],
         source: "manual",
       })
       await db
-        .updateTable("workspaceApps")
+        .updateTable("workspaceResources")
         .set({ status: "disabled" } as any)
         .where("id", "in", [owned, managed])
         .execute()
@@ -906,20 +971,20 @@ test(
         installedByMemberId: ownerMemberId,
         attachmentScopeSkillId: ownerSkill,
       })
-      await insertWorkspaceAppGrant(db, {
+      await insertWorkspaceResourceGrant(db, {
         workspaceId,
-        workspaceAppId: managed,
+        workspaceResourceId: managed,
         target: {
           subject: {
             kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-            memberId: guestMemberId,
+            workspaceMemberId: guestMemberId,
           },
         },
-        permissions: [WORKSPACE_APP_GRANT_PERMISSION.MANAGE],
+        permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.MANAGE],
         source: "manual",
       })
       await db
-        .updateTable("workspaceApps")
+        .updateTable("workspaceResources")
         .set({ status: "disabled" } as any)
         .where("id", "in", [owned, managed])
         .execute()
@@ -935,7 +1000,7 @@ test(
 )
 
 test(
-  "lookupResources(automation_event_source.use) returns granted ids via the resource_access_bindings registry",
+  "lookupResources(automation_event_source.use) returns granted ids via the unified workspace_resource_grants path",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -946,18 +1011,33 @@ test(
         workspaceId,
         ownerMemberId
       )
-      await insertBinding(db, {
+      // "Open to all" = a workspace-subject `use` grant on the source root.
+      // Post-fold this is an ordinary workspace_resource_grants row (the
+      // resource_access_bindings registry was deleted), and the source must
+      // still be enumerable to any workspace member for permission=use.
+      await insertResourceGrant(db, {
         workspaceId,
         resourceType: "automation_event_source",
         resourceId: eventSourceId,
-        target: workspaceTarget(workspaceId),
+        target: workspaceSubjectTarget(workspaceId),
       })
       const ids = await lookupResources(db, {
         resourceType: "automation_event_source",
         permission: "use",
         subject: { type: "workspace_member", id: guestMemberId },
       })
-      assert.ok(ids.includes(eventSourceId))
+      assert.ok(
+        ids.includes(eventSourceId),
+        "workspace-wide use grant must surface the event source to any member"
+      )
+      // checkPermission(use) must agree with the lookup for the same subject.
+      const allowed = await checkPermission(db, {
+        resourceType: "automation_event_source",
+        resourceId: eventSourceId,
+        permission: "use",
+        subject: { type: "workspace_member", id: guestMemberId },
+      })
+      assert.equal(allowed, true)
     })
   }
 )
@@ -1001,6 +1081,134 @@ test(
         subject: { type: "actor", id: actorId },
       })
       assert.deepEqual(otherPermission, [])
+    })
+  }
+)
+
+// ---- §4.2 owner-kind implicit matrix ----
+//
+// An actor/remote_agent OWNER of a resource gets implicit MANAGE on its OWN
+// resource only (edit/grant/delete), but NO implicit contact_visible (view/
+// invoke) and NO delegation. These pin that asymmetric matrix.
+
+test(
+  "checkPermission: an actor that OWNS another actor resource gets implicit manage (edit/grant/delete) but NOT view/invoke",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const { workspaceId } = await seedOwnerMemberAndGuest(db)
+      const ownerActorId = await insertActor(db, workspaceId)
+      const ownerActorSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.ACTOR,
+        actorId: ownerActorId,
+      })
+      const ownedResourceId = await insertActorOwnedBySubject(
+        db,
+        workspaceId,
+        ownerActorSubjectId
+      )
+
+      for (const permission of ["edit", "grant", "delete"]) {
+        assert.equal(
+          await checkPermission(db, {
+            resourceType: "actor",
+            resourceId: ownedResourceId,
+            permission,
+            subject: { type: "actor", id: ownerActorId },
+          }),
+          true,
+          `owner actor must have implicit manage permission "${permission}"`
+        )
+      }
+      // No implicit contact_visible / use: view + invoke are denied.
+      for (const permission of ["view", "invoke", "discover"]) {
+        assert.equal(
+          await checkPermission(db, {
+            resourceType: "actor",
+            resourceId: ownedResourceId,
+            permission,
+            subject: { type: "actor", id: ownerActorId },
+          }),
+          false,
+          `owner actor must NOT get implicit contact-visibility permission "${permission}"`
+        )
+      }
+    })
+  }
+)
+
+test(
+  "checkPermission: a non-owner actor has NO access to another actor resource (no delegation)",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const { workspaceId } = await seedOwnerMemberAndGuest(db)
+      const ownerActorId = await insertActor(db, workspaceId)
+      const ownerActorSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.ACTOR,
+        actorId: ownerActorId,
+      })
+      const ownedResourceId = await insertActorOwnedBySubject(
+        db,
+        workspaceId,
+        ownerActorSubjectId
+      )
+      const strangerActorId = await insertActor(db, workspaceId)
+      for (const permission of ["edit", "grant", "delete", "view", "invoke"]) {
+        assert.equal(
+          await checkPermission(db, {
+            resourceType: "actor",
+            resourceId: ownedResourceId,
+            permission,
+            subject: { type: "actor", id: strangerActorId },
+          }),
+          false,
+          `a non-owner actor must be denied "${permission}"`
+        )
+      }
+    })
+  }
+)
+
+test(
+  "validate_workspace_resource_grant: a manage grant to an actor subject is rejected (manage stays member-only, no delegation)",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const { workspaceId } = await seedOwnerMemberAndGuest(db)
+      const ownerActorId = await insertActor(db, workspaceId)
+      const ownerActorSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.ACTOR,
+        actorId: ownerActorId,
+      })
+      const resourceId = await insertActorOwnedBySubject(
+        db,
+        workspaceId,
+        ownerActorSubjectId
+      )
+      const granteeActorId = await insertActor(db, workspaceId)
+      const granteeSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.ACTOR,
+        actorId: granteeActorId,
+      })
+      // §4.2: explicit `manage` grants are hard-limited to unscoped
+      // workspace_member subjects — an actor manage grant must be rejected so the
+      // human authorization chain is preserved.
+      await assert.rejects(
+        () =>
+          db
+            .insertInto("workspaceResourceGrants")
+            .values({
+              workspaceId,
+              workspaceResourceId: resourceId,
+              subjectId: granteeSubjectId,
+              permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.MANAGE],
+              status: "active",
+              source: "manual",
+            } as any)
+            .execute(),
+        /manage requires an unscoped workspace_member subject/i
+      )
     })
   }
 )
@@ -1119,14 +1327,16 @@ test(
       const { workspaceId, ownerMemberId, guestMemberId } =
         await seedOwnerMemberAndGuest(db)
       const owned = crypto.randomUUID()
+      const ownerSubjectId = await memberSubjectId(db, ownerMemberId)
       await db
-        .insertInto("workspaceApps")
+        .insertInto("workspaceResources")
         .values({
           id: owned,
           workspaceId: workspaceId,
           kind: "actor",
           displayName: "owned actor",
-          ownerWorkspaceMemberId: ownerMemberId,
+          ownerSubjectId,
+          createdBySubjectId: ownerSubjectId,
           status: "active",
         } as any)
         .execute()
@@ -1140,14 +1350,16 @@ test(
         })
         .execute()
       const guestOwned = crypto.randomUUID()
+      const guestSubjectId = await memberSubjectId(db, guestMemberId)
       await db
-        .insertInto("workspaceApps")
+        .insertInto("workspaceResources")
         .values({
           id: guestOwned,
           workspaceId: workspaceId,
           kind: "actor",
           displayName: "guest actor",
-          ownerWorkspaceMemberId: guestMemberId,
+          ownerSubjectId: guestSubjectId,
+          createdBySubjectId: guestSubjectId,
           status: "active",
         } as any)
         .execute()
@@ -1214,14 +1426,19 @@ async function insertRemoteAgent(
   params: { createdByWorkspaceMemberId?: string } = {}
 ): Promise<string> {
   const id = crypto.randomUUID()
+  const ownerSubjectId = params.createdByWorkspaceMemberId
+    ? await memberSubjectId(db, params.createdByWorkspaceMemberId)
+    : null
   await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id,
       workspaceId: workspaceId,
       kind: "remote_agent",
       displayName: "test agent",
-      ownerWorkspaceMemberId: params.createdByWorkspaceMemberId ?? null,
+      ownerSubjectId,
+      createdBySubjectId:
+        ownerSubjectId ?? (await anyWorkspaceMemberSubjectId(db, workspaceId)),
       status: "active",
     } as any)
     .execute()
@@ -1262,7 +1479,7 @@ async function addMemberParticipant(
 ) {
   const subjectId = await upsertAccessSubject(db, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId,
+    workspaceMemberId: memberId,
   })
   await db
     .insertInto("conversationParticipants")
@@ -1310,14 +1527,16 @@ async function insertInstalledSkill(
     .returning("id")
     .executeTakeFirstOrThrow()
   const id = crypto.randomUUID()
+  const ownerSubjectId = await memberSubjectId(db, createdByMemberId)
   await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id,
       workspaceId: workspaceId,
       kind: "installed_skill",
       displayName: "skill",
-      ownerWorkspaceMemberId: createdByMemberId,
+      ownerSubjectId,
+      createdBySubjectId: ownerSubjectId,
       status: "active",
     } as any)
     .execute()
@@ -1368,14 +1587,16 @@ async function insertPluginInstallation(
     .executeTakeFirstOrThrow()
   void params.attachmentScopeSkillId
   const id = crypto.randomUUID()
+  const ownerSubjectId = await memberSubjectId(db, params.installedByMemberId)
   await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id,
       workspaceId: params.workspaceId,
       kind: "plugin_installation",
       displayName: "plg",
-      ownerWorkspaceMemberId: params.installedByMemberId,
+      ownerSubjectId,
+      createdBySubjectId: ownerSubjectId,
       status: "active",
     } as any)
     .execute()
@@ -1391,24 +1612,45 @@ async function insertPluginInstallation(
   return row.id as string
 }
 
+// Post-fold: an automation_event_source is the 6th workspace_resources kind.
+// Its display_name/status/owner/creator live on the workspace_resources ROOT
+// (owner/creator are now access_subjects, not the dropped created_by_kind /
+// created_by_workspace_member_id columns). Insert root-then-detail in the same
+// (rolled-back) transaction — the detail-consistency trigger is DEFERRABLE
+// INITIALLY DEFERRED so both rows are visible to it together.
 async function insertAutomationEventSource(
   db: AnyDb,
   workspaceId: string,
-  createdByMemberId: string
+  createdByMemberId: string,
+  opts: { status?: string } = {}
 ): Promise<string> {
-  const row = await db
+  const id = crypto.randomUUID()
+  const creatorSubjectId = await upsertAccessSubject(db, {
+    kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+    workspaceMemberId: createdByMemberId,
+  })
+  await db
+    .insertInto("workspaceResources")
+    .values({
+      id,
+      workspaceId: workspaceId,
+      kind: "automation_event_source",
+      displayName: "src",
+      ownerSubjectId: creatorSubjectId,
+      createdBySubjectId: creatorSubjectId,
+      status: opts.status ?? "active",
+    } as any)
+    .execute()
+  await db
     .insertInto("automationEventSources")
     .values({
+      id,
       workspaceId: workspaceId,
       providerKind: "internal",
       sourceKey: `src-${Math.random().toString(36).slice(2, 10)}`,
-      name: "src",
-      createdByKind: "workspace_member",
-      createdByWorkspaceMemberId: createdByMemberId,
-    })
-    .returning("id")
-    .executeTakeFirstOrThrow()
-  return row.id as string
+    } as any)
+    .execute()
+  return id
 }
 
 async function insertModelGroup(
@@ -1434,7 +1676,7 @@ async function insertModelGroup(
   return row.id as string
 }
 
-async function insertBinding(
+async function insertResourceGrant(
   db: AnyDb,
   params: {
     workspaceId: string
@@ -1447,7 +1689,7 @@ async function insertBinding(
       | "remote_agent"
     resourceId: string
     target: {
-      targetType: "workspace" | "workspace_member" | "actor"
+      subjectKind: "workspace" | "workspace_member" | "actor"
       subjectWorkspaceId: string | null
       subjectWorkspaceMemberId?: string | null
       subjectActorId?: string | null
@@ -1456,87 +1698,45 @@ async function insertBinding(
     }
   }
 ) {
-  const subjectKind =
-    params.target.targetType === "workspace"
-      ? SUBJECT_KIND.WORKSPACE
-      : params.target.targetType === "workspace_member"
-        ? SUBJECT_KIND.WORKSPACE_MEMBER
-        : SUBJECT_KIND.ACTOR
-  const ref =
-    subjectKind === SUBJECT_KIND.WORKSPACE
-      ? {
+  // Post-fold: every resource kind — including automation_event_source — is
+  // authorized through workspace_resource_grants. actor/remote_agent take a
+  // contact_visible grant; everything else (skill / plugin / device_capability /
+  // automation_event_source) takes a use grant.
+  const subject = (() => {
+    switch (params.target.subjectKind) {
+      case "workspace":
+        return {
           kind: SUBJECT_KIND.WORKSPACE,
           workspaceId: params.target.subjectWorkspaceId!,
         }
-      : subjectKind === SUBJECT_KIND.WORKSPACE_MEMBER
-        ? {
-            kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-            memberId: params.target.subjectWorkspaceMemberId!,
-          }
-        : {
-            kind: SUBJECT_KIND.ACTOR,
-            actorId: params.target.subjectActorId!,
-          }
-  const subjectId = await upsertAccessSubject(db, ref)
-  if (
-    params.resourceType === "installed_skill" ||
-    params.resourceType === "plugin_installation" ||
-    params.resourceType === "device_capability" ||
-    params.resourceType === "actor" ||
-    params.resourceType === "remote_agent"
-  ) {
-    const permissions =
-      params.resourceType === "actor" || params.resourceType === "remote_agent"
-        ? [WORKSPACE_APP_GRANT_PERMISSION.CONTACT_VISIBLE]
-        : [WORKSPACE_APP_GRANT_PERMISSION.USE]
-    await insertWorkspaceAppGrant(db, {
-      workspaceId: params.workspaceId,
-      workspaceAppId: params.resourceId,
-      target:
-        params.target.targetType === "workspace"
-          ? {
-              subject: {
-                kind: SUBJECT_KIND.WORKSPACE,
-                workspaceId: params.workspaceId,
-              },
-            }
-          : params.target.targetType === "workspace_member"
-            ? {
-                subject: {
-                  kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-                  memberId: params.target.subjectWorkspaceMemberId!,
-                },
-              }
-            : {
-                subject: {
-                  kind: SUBJECT_KIND.ACTOR,
-                  actorId: params.target.subjectActorId!,
-                },
-              },
-      permissions,
-      source: "manual",
-    })
-    return
-  }
-  await db
-    .insertInto("resourceAccessBindings")
-    .values({
-      workspaceId: params.workspaceId,
-      resourceType: params.resourceType,
-      automationEventSourceId:
-        params.resourceType === "automation_event_source"
-          ? params.resourceId
-          : null,
-      subjectId: subjectId,
-      status: "active",
-      source: "manual",
-    })
-    .execute()
+      case "workspace_member":
+        return {
+          kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+          workspaceMemberId: params.target.subjectWorkspaceMemberId!,
+        }
+      default:
+        return {
+          kind: SUBJECT_KIND.ACTOR,
+          actorId: params.target.subjectActorId!,
+        }
+    }
+  })()
+  const permissions =
+    params.resourceType === "actor" || params.resourceType === "remote_agent"
+      ? [WORKSPACE_RESOURCE_GRANT_PERMISSION.CONTACT_VISIBLE]
+      : [WORKSPACE_RESOURCE_GRANT_PERMISSION.USE]
+  await insertWorkspaceResourceGrant(db, {
+    workspaceId: params.workspaceId,
+    workspaceResourceId: params.resourceId,
+    target: { subject } as any,
+    permissions,
+    source: "manual",
+  })
 }
 
-function workspaceTarget(workspaceId: string) {
+function workspaceSubjectTarget(workspaceId: string) {
   return {
-    targetType: "workspace" as const,
+    subjectKind: "workspace" as const,
     subjectWorkspaceId: workspaceId,
     subjectWorkspaceMemberId: null,
     subjectActorId: null,
@@ -1607,14 +1807,20 @@ async function insertDevice(
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
+  const capOwnerSubjectId = ownerWorkspaceMemberId
+    ? await memberSubjectId(db, ownerWorkspaceMemberId)
+    : null
   const cap = await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id: crypto.randomUUID(),
       workspaceId: workspaceId,
       kind: "device_capability",
       displayName: "regression exposure",
-      ownerWorkspaceMemberId: ownerWorkspaceMemberId,
+      ownerSubjectId: capOwnerSubjectId,
+      createdBySubjectId:
+        capOwnerSubjectId ??
+        (await anyWorkspaceMemberSubjectId(db, workspaceId)),
       status: "active",
     } as any)
     .returning("id")
@@ -1753,7 +1959,7 @@ test(
         guestMemberId
       )
       await db
-        .updateTable("workspaceApps")
+        .updateTable("workspaceResources")
         .set({ status: "deprecated" } as any)
         .where("id", "=", capabilityId)
         .execute()
@@ -1795,7 +2001,7 @@ test(
       })
       assert.equal(beforeKey.includes(capabilityId), false)
 
-      // device_admin alone no longer implies discovery of capability apps.
+      // device_admin alone no longer implies discovery of capability resources.
       await grantWorkspaceAccessKey(db, guestMemberId, "device_admin")
       const afterKey = await lookupResources(db, {
         resourceType: "device_capability",

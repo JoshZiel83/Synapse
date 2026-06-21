@@ -1,9 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import {
-  ACCESS_BINDABLE_RESOURCE_TYPES,
-  ACCESS_RESOURCE_TYPES,
-} from "@synapse/shared"
+import { ACCESS_RESOURCE_TYPES } from "@synapse/shared"
 import { ACCESS_ACTIONS, getAccessActionSpec } from "./actions.js"
 
 test("every ACCESS_ACTIONS entry references a known resource type", () => {
@@ -44,18 +41,5 @@ test("getAccessActionSpec returns the same object as ACCESS_ACTIONS[key]", () =>
   for (const [actionKey, expected] of Object.entries(ACCESS_ACTIONS)) {
     const spec = getAccessActionSpec(actionKey as keyof typeof ACCESS_ACTIONS)
     assert.deepEqual(spec, expected)
-  }
-})
-
-test("bindable resource types are all referenced by at least one action", () => {
-  const seen = new Set<string>()
-  for (const spec of Object.values(ACCESS_ACTIONS)) {
-    seen.add(spec.resourceType)
-  }
-  for (const bindable of ACCESS_BINDABLE_RESOURCE_TYPES) {
-    assert.ok(
-      seen.has(bindable),
-      `bindable resource type ${bindable} has no actions defined in ACCESS_ACTIONS`
-    )
   }
 })

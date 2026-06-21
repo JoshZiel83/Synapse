@@ -106,15 +106,15 @@ async function emitUserVisibleSystemNotice<
   const session = await getSession(params.sessionId)
   if (!session) return
 
-  const members = await listConversationParticipants(session.conversation_id)
+  const members = await listConversationParticipants(session.conversationId)
   const targetUserMembers = members.filter(
-    (member: any) => member.state === "active" && member.user_id
+    (member) => member.state === "active" && member.userId
   )
   if (targetUserMembers.length === 0) return
 
   await createConversationEvent({
     workspaceId: params.workspaceId,
-    conversationId: session.conversation_id,
+    conversationId: session.conversationId,
     sessionId: params.sessionId,
     eventType: params.eventType,
     timelinePolicy: "users_only",
@@ -124,7 +124,7 @@ async function emitUserVisibleSystemNotice<
     },
     eventPayload: params.eventPayload,
     restrictedAudienceParticipantIds: targetUserMembers.map(
-      (member: any) => member.id
+      (member) => member.id
     ),
   })
 }
@@ -183,32 +183,43 @@ async function handleCreateMemory(
 ): Promise<void> {
   const metadata = action.metadata ?? {}
   const session = context.sessionId ? await getSession(context.sessionId) : null
-  const requestedPreset =
-    typeof metadata.spaceType === "string"
-      ? metadata.spaceType
-      : typeof metadata.scope === "string"
-        ? metadata.scope
-        : "participant_private"
-  const normalizedPreset =
-    requestedPreset === "conversation"
-      ? "conversation_shared"
-      : requestedPreset === "actor_global"
-        ? "actor_private"
-        : requestedPreset
-  const effectivePreset: MemoryPreset = !ACTOR_MEMORY_PRESETS.has(
-    normalizedPreset as MemoryPreset
-  )
-    ? "participant_private"
-    : !session?.conversation_id &&
-        (normalizedPreset === "participant_private" ||
-          normalizedPreset === "conversation_shared")
-      ? "actor_private"
-      : (normalizedPreset as MemoryPreset)
+  const requestedPreset = ((): string => {
+    if (typeof metadata.spaceType === "string") {
+      return metadata.spaceType
+    }
+    if (typeof metadata.scope === "string") {
+      return metadata.scope
+    }
+    return "participant_private"
+  })()
+  const normalizedPreset = ((): string => {
+    switch (requestedPreset) {
+      case "conversation":
+        return "conversation_shared"
+      case "actor_global":
+        return "actor_private"
+      default:
+        return requestedPreset
+    }
+  })()
+  const effectivePreset: MemoryPreset = ((): MemoryPreset => {
+    if (!ACTOR_MEMORY_PRESETS.has(normalizedPreset as MemoryPreset)) {
+      return "participant_private"
+    }
+    if (
+      !session?.conversationId &&
+      (normalizedPreset === "participant_private" ||
+        normalizedPreset === "conversation_shared")
+    ) {
+      return "actor_private"
+    }
+    return normalizedPreset as MemoryPreset
+  })()
 
   const conversationId =
     effectivePreset === "participant_private" ||
     effectivePreset === "conversation_shared"
-      ? session?.conversation_id
+      ? session?.conversationId
       : undefined
 
   const ownerScope = presetToOwnerScope(effectivePreset, {

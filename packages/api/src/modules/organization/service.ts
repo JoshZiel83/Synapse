@@ -26,7 +26,7 @@ import {
   type ActorVersionDocChange,
   type ActorUpdateSourceType,
   type UUID,
-  type WorkspaceAppGrantPermission,
+  type WorkspaceResourceGrantPermission,
 } from "@synapse/shared"
 import { createConversationEvent } from "../chat/event-write.js"
 import { presentActorPackageRecord, presentActorRow } from "./presenter.js"
@@ -192,12 +192,14 @@ function buildDocChange(
 ): ActorVersionDocChange | null {
   if (!beforeDoc && !afterDoc) return null
   const referenceDoc = afterDoc || beforeDoc!
-  const changeType: ActorVersionDocChange["changeType"] =
-    beforeDoc && afterDoc
-      ? ACTOR_VERSION_DOC_CHANGE_TYPE.UPDATED
-      : afterDoc
-        ? ACTOR_VERSION_DOC_CHANGE_TYPE.ADDED
-        : ACTOR_VERSION_DOC_CHANGE_TYPE.REMOVED
+  let changeType: ActorVersionDocChange["changeType"]
+  if (beforeDoc && afterDoc) {
+    changeType = ACTOR_VERSION_DOC_CHANGE_TYPE.UPDATED
+  } else if (afterDoc) {
+    changeType = ACTOR_VERSION_DOC_CHANGE_TYPE.ADDED
+  } else {
+    changeType = ACTOR_VERSION_DOC_CHANGE_TYPE.REMOVED
+  }
   const summaryText =
     summarizeActorDoc(afterDoc || beforeDoc!, 180) ||
     `${referenceDoc.title} ${changeType}`
@@ -412,7 +414,7 @@ export async function createActor(input: {
   config?: Record<string, unknown>
   grants?: Array<{
     target: CapabilityAccessTarget
-    permissions: WorkspaceAppGrantPermission[]
+    permissions: WorkspaceResourceGrantPermission[]
     conversationTypeMaskOverride?: number | null
     reason?: string
   }>
@@ -600,7 +602,7 @@ export async function installActorPackage(input: {
   syncMode?: ActorPackageSyncMode
   grants?: Array<{
     target: CapabilityAccessTarget
-    permissions: WorkspaceAppGrantPermission[]
+    permissions: WorkspaceResourceGrantPermission[]
     conversationTypeMaskOverride?: number | null
     reason?: string
   }>

@@ -17,7 +17,7 @@ import crypto from "node:crypto"
 import { SKILL_ENTRY_PATH, renderCanonicalBlocksToText } from "./manifest.js"
 import type { PreparedSkillSnapshot } from "./mirror-import.js"
 import { lookupResources } from "../access/evaluator.js"
-import { revokeWorkspaceAppGrant } from "../workspace-apps/grant-storage.js"
+import { revokeWorkspaceResourceGrant } from "../workspace-resources/grant-storage.js"
 import {
   buildConversationCapabilitySubjects,
   computeRuntimeScopeSubjectIds,
@@ -263,17 +263,17 @@ ${SKILL_SNAPSHOT_SELECT},
 export const INSTALLED_SKILL_SELECT = `
   SELECT
     skill.id AS "skillId",
-    app.workspace_id AS "workspaceId",
-    app.display_name AS "displayName",
+    resource.workspace_id AS "workspaceId",
+    resource.display_name AS "displayName",
     skill.icon_file_id AS "iconFileId",
     skill.tags AS "tags",
     skill.current_version AS "currentVersion",
     skill.current_snapshot_id AS "currentSnapshotId",
-    app.status AS "skillStatus",
-    app.conversation_type_mask_override AS "conversationTypeMaskOverride",
-    app.owner_workspace_member_id AS "ownerWorkspaceMemberId",
-    app.created_at AS "createdAt",
-    app.updated_at AS "updatedAt",
+    resource.status AS "skillStatus",
+    resource.conversation_type_mask_override AS "conversationTypeMaskOverride",
+    owner_subject.workspace_member_id AS "ownerWorkspaceMemberId",
+    resource.created_at AS "createdAt",
+    resource.updated_at AS "updatedAt",
     version_row.id AS "currentSkillVersionId",
     version_row.skill_snapshot_id AS "currentSkillSnapshotId",
     version_row.metadata AS "versionMetadata",
@@ -288,8 +288,10 @@ export const INSTALLED_SKILL_SELECT = `
     imported_spec.default_conversation_type_mask AS "sourceDefaultConversationTypeMask",
 ${SKILL_SNAPSHOT_SELECT}
   FROM installed_skills skill
-  JOIN workspace_apps_live app
-    ON app.id = skill.id
+  JOIN workspace_resources_live resource
+    ON resource.id = skill.id
+  LEFT JOIN access_subjects owner_subject
+    ON owner_subject.id = resource.owner_subject_id
   JOIN skill_versions version_row
     ON version_row.skill_id = skill.id
    AND version_row.version = skill.current_version
@@ -719,12 +721,12 @@ export async function buildMarketplaceInstallationMap(workspaceId: string) {
      FROM skill_source_refs source_ref
      JOIN installed_skills skill
        ON skill.id = source_ref.skill_id
-     JOIN workspace_apps_live app
-       ON app.id = skill.id
-     WHERE app.workspace_id = $1
-       AND app.deleted_at IS NULL
+     JOIN workspace_resources_live resource
+       ON resource.id = skill.id
+     WHERE resource.workspace_id = $1
+       AND resource.deleted_at IS NULL
        AND source_ref.source_catalog_item_id IS NOT NULL
-     ORDER BY source_ref.source_catalog_item_id, app.updated_at DESC`,
+     ORDER BY source_ref.source_catalog_item_id, resource.updated_at DESC`,
     [workspaceId]
   )
 
@@ -1029,7 +1031,7 @@ export async function loadInstalledSkillRows(params: {
 
   if (params.workspaceId) {
     values.push(params.workspaceId)
-    conditions.push(`app.workspace_id = $${values.length}`)
+    conditions.push(`resource.workspace_id = $${values.length}`)
   }
 
   if (params.skillIds && params.skillIds.length > 0) {
@@ -1045,7 +1047,7 @@ export async function loadInstalledSkillRows(params: {
   const result = await runQuery<InstalledSkillRow>(
     `${INSTALLED_SKILL_SELECT}
      ${conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : ""}
-     ORDER BY app.updated_at DESC`,
+     ORDER BY resource.updated_at DESC`,
     values
   )
 
@@ -1059,8 +1061,8 @@ export async function getInstalledSkillRowForWorkspace(
   const result = await runOn<InstalledSkillRow>(
     executor,
     `${INSTALLED_SKILL_SELECT}
-     WHERE app.workspace_id = $1
-       AND app.deleted_at IS NULL
+     WHERE resource.workspace_id = $1
+       AND resource.deleted_at IS NULL
        AND skill.id = $2
      LIMIT 1`,
     [params.workspaceId, params.installedSkillId]
@@ -1070,19 +1072,23 @@ export async function getInstalledSkillRowForWorkspace(
   return row ? normalizeInstalledSkillRow(row) : null
 }
 
-export async function loadAccessBindingsBySkillIds(
+export async function loadGrantsBySkillIds(
   skillIds: string[],
   includeRevoked = false
 ) {
   if (skillIds.length === 0) return new Map<string, SkillAccessRow[]>()
   let query = db
-    .selectFrom("workspaceAppGrants as app_grant")
-    .innerJoin("accessSubjects as subj", "subj.id", "app_grant.subjectId")
-    .leftJoin("accessSubjects as scope", "scope.id", "app_grant.scopeSubjectId")
+    .selectFrom("workspaceResourceGrants as resource_grant")
+    .innerJoin("accessSubjects as subj", "subj.id", "resource_grant.subjectId")
+    .leftJoin(
+      "accessSubjects as scope",
+      "scope.id",
+      "resource_grant.scopeSubjectId"
+    )
     .select([
-      "app_grant.id",
-      "app_grant.workspaceId as workspaceId",
-      "app_grant.workspaceAppId as skillId",
+      "resource_grant.id",
+      "resource_grant.workspaceId as workspaceId",
+      "resource_grant.workspaceResourceId as skillId",
       sql<RuntimeBindingScope>`
         CASE subj.kind
           WHEN 'workspace' THEN 'workspace'
@@ -1096,22 +1102,22 @@ export async function loadAccessBindingsBySkillIds(
       "subj.actorId as actorId",
       "subj.remoteAgentId as remoteAgentId",
       "subj.workspaceMemberId as workspaceMemberId",
-      "app_grant.conversationTypeMaskOverride as conversationTypeMaskOverride",
-      "app_grant.status",
-      "app_grant.source",
-      "app_grant.createdByWorkspaceMemberId as createdByWorkspaceMemberId",
-      "app_grant.reason",
-      "app_grant.createdAt as createdAt",
-      "app_grant.revokedAt as revokedAt",
+      "resource_grant.conversationTypeMaskOverride as conversationTypeMaskOverride",
+      "resource_grant.status",
+      "resource_grant.source",
+      "resource_grant.createdByWorkspaceMemberId as createdByWorkspaceMemberId",
+      "resource_grant.reason",
+      "resource_grant.createdAt as createdAt",
+      "resource_grant.revokedAt as revokedAt",
     ])
-    .where("app_grant.workspaceAppId", "in", skillIds)
+    .where("resource_grant.workspaceResourceId", "in", skillIds)
     .where(
-      sql<boolean>`'use'::workspace_app_grant_permission = ANY(app_grant.permissions)`
+      sql<boolean>`'use'::workspace_resource_grant_permission = ANY(resource_grant.permissions)`
     )
-    .orderBy("app_grant.createdAt", "desc")
+    .orderBy("resource_grant.createdAt", "desc")
 
   if (!includeRevoked) {
-    query = query.where("app_grant.status", "=", "active")
+    query = query.where("resource_grant.status", "=", "active")
   }
 
   const rows = await query.execute()
@@ -1134,7 +1140,7 @@ export async function findSkillIdsByBindingFilter(params: {
   resolvedTarget: {
     subject:
       | { kind: "workspace" }
-      | { kind: "workspace_member"; memberId: string }
+      | { kind: "workspace_member"; workspaceMemberId: string }
       | { kind: "conversation"; conversationId: string }
       | { kind: "actor"; actorId: string }
       | { kind: "remote_agent"; remoteAgentId: string }
@@ -1151,17 +1157,25 @@ export async function findSkillIdsByBindingFilter(params: {
 }) {
   const target = params.resolvedTarget
   let query = db
-    .selectFrom("workspaceAppGrants as app_grant")
-    .innerJoin("workspaceApps as app", "app.id", "app_grant.workspaceAppId")
-    .innerJoin("accessSubjects as subj", "subj.id", "app_grant.subjectId")
-    .leftJoin("accessSubjects as scope", "scope.id", "app_grant.scopeSubjectId")
-    .select("app_grant.workspaceAppId as skillId")
+    .selectFrom("workspaceResourceGrants as resource_grant")
+    .innerJoin(
+      "workspaceResources as resource",
+      "resource.id",
+      "resource_grant.workspaceResourceId"
+    )
+    .innerJoin("accessSubjects as subj", "subj.id", "resource_grant.subjectId")
+    .leftJoin(
+      "accessSubjects as scope",
+      "scope.id",
+      "resource_grant.scopeSubjectId"
+    )
+    .select("resource_grant.workspaceResourceId as skillId")
     .distinct()
-    .where("app.workspaceId", "=", params.workspaceId)
-    .where("app.kind", "=", "installed_skill")
-    .where("app_grant.status", "=", "active")
+    .where("resource.workspaceId", "=", params.workspaceId)
+    .where("resource.kind", "=", "installed_skill")
+    .where("resource_grant.status", "=", "active")
     .where(
-      sql<boolean>`'use'::workspace_app_grant_permission = ANY(app_grant.permissions)`
+      sql<boolean>`'use'::workspace_resource_grant_permission = ANY(resource_grant.permissions)`
     )
 
   if (target) {
@@ -1175,7 +1189,7 @@ export async function findSkillIdsByBindingFilter(params: {
           .where(
             "subj.workspaceMemberId",
             "=",
-            (target.subject as { memberId: string }).memberId
+            (target.subject as { workspaceMemberId: string }).workspaceMemberId
           )
         break
       case "conversation":
@@ -1216,7 +1230,7 @@ export async function findSkillIdsByBindingFilter(params: {
         (target.scope as { conversationId: string }).conversationId
       )
     } else {
-      query = query.where("app_grant.scopeSubjectId", "is", null)
+      query = query.where("resource_grant.scopeSubjectId", "is", null)
     }
   } else {
     if (params.workspaceMemberId) {
@@ -1284,24 +1298,24 @@ export async function loadVisibleSkillRows(skillIds: string[]) {
   const result = await runQuery<VisibleSkillRow>(
     `SELECT
        skill.id AS "skillId",
-       app.workspace_id AS "workspaceId",
-       app.display_name AS "displayName",
+       resource.workspace_id AS "workspaceId",
+       resource.display_name AS "displayName",
        skill.current_version AS "currentVersion",
        version_row.id AS "currentSkillVersionId",
        snapshot.description AS "description",
        source_item.slug AS "sourceSlug",
        imported_version.version AS "sourceVersionValue",
-       app.conversation_type_mask_override AS "conversationTypeMaskOverride",
+       resource.conversation_type_mask_override AS "conversationTypeMaskOverride",
        skill.id AS "accessBindingId",
        'workspace'::varchar AS "accessBindScope",
        NULL::uuid AS "conversationId",
        NULL::uuid AS "actorId",
        NULL::uuid AS "remoteAgentId",
        NULL::uuid AS "workspaceMemberId",
-       app.updated_at AS "accessCreatedAt"
+       resource.updated_at AS "accessCreatedAt"
      FROM installed_skills skill
-     JOIN workspace_apps_live app
-       ON app.id = skill.id
+     JOIN workspace_resources_live resource
+       ON resource.id = skill.id
      JOIN skill_versions version_row
        ON version_row.skill_id = skill.id
       AND version_row.version = skill.current_version
@@ -1314,9 +1328,9 @@ export async function loadVisibleSkillRows(skillIds: string[]) {
      LEFT JOIN catalog_versions imported_version
        ON imported_version.id = source_ref.source_catalog_version_id
      WHERE skill.id = ANY($1::uuid[])
-       AND app.deleted_at IS NULL
-       AND app.status = 'active'
-     ORDER BY app.display_name ASC, app.updated_at DESC`,
+       AND resource.deleted_at IS NULL
+       AND resource.status = 'active'
+     ORDER BY resource.display_name ASC, resource.updated_at DESC`,
     [skillIds]
   )
   return result.rows
@@ -1345,7 +1359,7 @@ export async function updateInstalledSkillGrantConversationTypeMaskOverride(
   conversationTypeMaskOverride: number | null
 ) {
   await db
-    .updateTable("workspaceAppGrants")
+    .updateTable("workspaceResourceGrants")
     .set({
       conversationTypeMaskOverride,
     } as any)
@@ -1355,8 +1369,8 @@ export async function updateInstalledSkillGrantConversationTypeMaskOverride(
 }
 
 /** Default-bound revoke so the service revokes without importing the client. */
-export function revokeWorkspaceAppGrantDefault(grantId: string) {
-  return revokeWorkspaceAppGrant(db, grantId)
+export function revokeWorkspaceResourceGrantDefault(grantId: string) {
+  return revokeWorkspaceResourceGrant(db, grantId)
 }
 
 /**

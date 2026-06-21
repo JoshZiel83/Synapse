@@ -515,7 +515,7 @@ export interface DeviceBuiltinExposureRow {
 }
 
 /** Resolve a device's active filesystem/commandline builtin exposures +
- *  capabilities (joined to its workspace apps, soft-delete + active filtered).
+ *  capabilities (joined to its workspace resources, soft-delete + active filtered).
  *  Returns raw rows; the domain shaper (resolveDeviceBuiltinIds) folds them. */
 export async function selectDeviceBuiltinExposures(
   deviceId: string,
@@ -524,11 +524,11 @@ export async function selectDeviceBuiltinExposures(
   return run
     .selectFrom("deviceExposures as e")
     .innerJoin("deviceCapabilities as c", "c.exposureId", "e.id")
-    .innerJoin("workspaceApps as app", "app.id", "c.id")
+    .innerJoin("workspaceResources as resource", "resource.id", "c.id")
     .select(["e.id as exposureId", "c.id as capabilityId", "e.builtinKind"])
     .where("e.deviceId", "=", deviceId)
-    .where("app.deletedAt", "is", null)
-    .where("app.status", "=", "active")
+    .where("resource.deletedAt", "is", null)
+    .where("resource.status", "=", "active")
     .where("e.builtinKind", "in", ["filesystem", "commandline"])
     .execute() as Promise<DeviceBuiltinExposureRow[]>
 }
@@ -541,9 +541,9 @@ export async function selectDeviceCapabilityIds(
 ): Promise<string[]> {
   const rows = await run
     .selectFrom("deviceCapabilities as capability")
-    .innerJoin("workspaceApps as app", "app.id", "capability.id")
+    .innerJoin("workspaceResources as resource", "resource.id", "capability.id")
     .select("capability.id")
-    .where("app.workspaceId", "=", params.workspaceId)
+    .where("resource.workspaceId", "=", params.workspaceId)
     .where(
       "capability.exposureId",
       "in",

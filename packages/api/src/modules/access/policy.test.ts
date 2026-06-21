@@ -343,7 +343,7 @@ test(
       // Add the participant row → must accept.
       const memberSubjectId = await upsertAccessSubject(db, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId,
+        workspaceMemberId: memberId,
       })
       await db
         .insertInto("conversationParticipants")
@@ -408,16 +408,28 @@ async function insertConversation(
   return row.id as string
 }
 
+async function creatorSubjectIdFor(
+  db: AnyDb,
+  workspaceId: string
+): Promise<string> {
+  const memberId = await insertWorkspaceMember(db, workspaceId)
+  return upsertAccessSubject(db, {
+    kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+    workspaceMemberId: memberId,
+  })
+}
+
 async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
   const actorId = crypto.randomUUID()
   await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id: actorId,
       workspaceId: workspaceId,
       kind: "actor",
       displayName: "test actor",
       status: "active",
+      createdBySubjectId: await creatorSubjectIdFor(db, workspaceId),
     } as any)
     .execute()
   const row = await db
@@ -439,13 +451,14 @@ async function insertRemoteAgent(
 ): Promise<string> {
   const remoteAgentId = crypto.randomUUID()
   await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id: remoteAgentId,
       workspaceId: workspaceId,
       kind: "remote_agent",
       displayName: "test remote agent",
       status: "active",
+      createdBySubjectId: await creatorSubjectIdFor(db, workspaceId),
     } as any)
     .execute()
   const row = await db

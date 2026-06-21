@@ -129,7 +129,7 @@ test("done() triggers immediate in_flight (no debounce)", () => {
 })
 
 test("apply_finished after done enters terminal_hold + schedules clear", () => {
-  let s = reduceStatus(
+  const s = reduceStatus(
     INITIAL_STATUS_STATE,
     { type: "request_set", level: "done", at: 0 },
     CFG
@@ -442,7 +442,7 @@ test("apply_failed on a terminal does NOT enter terminal_hold", () => {
   // platform call fails. We must NOT enter terminal_hold (there's no
   // emoji to hold) — drop to idle and clear terminalKind so a fresh
   // done()/error() from the caller can retry.
-  let s = reduceStatus(
+  const s = reduceStatus(
     INITIAL_STATUS_STATE,
     { type: "request_set", level: "done", at: 0 },
     CFG

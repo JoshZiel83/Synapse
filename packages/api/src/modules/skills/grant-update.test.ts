@@ -46,13 +46,17 @@ async function newWorkspace(db: Kysely<any>): Promise<string> {
 
 async function newRemoteAgent(db: Kysely<any>, wsId: string): Promise<string> {
   const remoteAgentId = crypto.randomUUID()
+  const createdBySubjectId = await upsertAccessSubject(db as any, {
+    kind: "platform" as any,
+  })
   await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id: remoteAgentId,
       workspaceId: wsId,
       kind: "remote_agent",
       displayName: `${NS} agent`,
+      createdBySubjectId,
       status: "active",
     } as any)
     .execute()

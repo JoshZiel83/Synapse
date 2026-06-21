@@ -199,28 +199,28 @@ export default function InviteManagement() {
                       <Badge variant="outline" className="text-xs capitalize">
                         {invite.trustLevel}
                       </Badge>
-                      {isExpired && (
+                      {isExpired ? (
                         <Badge variant="destructive" className="text-xs">
                           Expired
                         </Badge>
-                      )}
-                      {isUsedUp && (
+                      ) : null}
+                      {isUsedUp ? (
                         <Badge variant="destructive" className="text-xs">
                           Used up
                         </Badge>
-                      )}
+                      ) : null}
                     </div>
                     <div className="mt-1 text-xs text-muted-foreground">
                       Used {invite.useCount}
                       {invite.maxUses !== null ? `/${invite.maxUses}` : ""}{" "}
                       times
-                      {invite.expiresAt && !isExpired && (
+                      {invite.expiresAt && !isExpired ? (
                         <>
                           {" "}
                           &middot; Expires{" "}
                           {new Date(invite.expiresAt).toLocaleDateString()}
                         </>
-                      )}
+                      ) : null}
                     </div>
                   </div>
                   <div className="flex items-center gap-1">

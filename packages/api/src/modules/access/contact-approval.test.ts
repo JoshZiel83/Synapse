@@ -4,11 +4,12 @@ import crypto from "node:crypto"
 import { sql } from "kysely"
 import {
   SUBJECT_KIND,
-  WORKSPACE_APP_GRANT_PERMISSION,
-  WORKSPACE_APP_GRANT_SOURCE,
+  WORKSPACE_RESOURCE_GRANT_PERMISSION,
+  WORKSPACE_RESOURCE_GRANT_SOURCE,
 } from "@synapse/shared"
 import { withTestDb } from "../../test/helpers/db.js"
-import { insertWorkspaceAppGrant } from "../workspace-apps/grant-storage.js"
+import { insertWorkspaceResourceGrant } from "../workspace-resources/grant-storage.js"
+import { upsertAccessSubject } from "./subject-registry.js"
 import {
   deriveRequiresContactApproval,
   grantApprovedContactVisibility,
@@ -66,14 +67,22 @@ test(
       })
 
       const count = await db
-        .selectFrom("workspaceAppGrants as app_grant")
-        .innerJoin("accessSubjects as subj", "subj.id", "app_grant.subjectId")
+        .selectFrom("workspaceResourceGrants as resource_grant")
+        .innerJoin(
+          "accessSubjects as subj",
+          "subj.id",
+          "resource_grant.subjectId"
+        )
         .select(({ fn }) => fn.countAll<string>().as("count"))
-        .where("app_grant.workspaceAppId", "=", actorId)
-        .where("app_grant.source", "=", WORKSPACE_APP_GRANT_SOURCE.SYSTEM)
-        .where("app_grant.status", "=", "active")
+        .where("resource_grant.workspaceResourceId", "=", actorId)
         .where(
-          sql<boolean>`'contact_visible'::workspace_app_grant_permission = ANY(app_grant.permissions)`
+          "resource_grant.source",
+          "=",
+          WORKSPACE_RESOURCE_GRANT_SOURCE.SYSTEM
+        )
+        .where("resource_grant.status", "=", "active")
+        .where(
+          sql<boolean>`'contact_visible'::workspace_resource_grant_permission = ANY(resource_grant.permissions)`
         )
         .where("subj.kind", "=", SUBJECT_KIND.WORKSPACE)
         .executeTakeFirstOrThrow()
@@ -111,7 +120,7 @@ test(
 )
 
 test(
-  "approved contact visibility writes a workspace_member-scoped app grant for the approved member only",
+  "approved contact visibility writes a workspace_member-scoped resource grant for the approved member only",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -126,14 +135,18 @@ test(
       })
 
       const row = await db
-        .selectFrom("workspaceAppGrants as app_grant")
-        .innerJoin("accessSubjects as subj", "subj.id", "app_grant.subjectId")
+        .selectFrom("workspaceResourceGrants as resource_grant")
+        .innerJoin(
+          "accessSubjects as subj",
+          "subj.id",
+          "resource_grant.subjectId"
+        )
         .select([
-          "app_grant.id",
+          "resource_grant.id",
           "subj.kind as subjectKind",
           "subj.workspaceMemberId as workspaceMemberId",
         ])
-        .where("app_grant.id", "=", grantId)
+        .where("resource_grant.id", "=", grantId)
         .executeTakeFirstOrThrow()
 
       assert.equal(row.id, grantId)
@@ -177,12 +190,14 @@ test(
       const { workspaceId, actorId, memberId } =
         await seedWorkspaceActorAndMember(db)
 
-      await insertWorkspaceAppGrant(db, {
+      await insertWorkspaceResourceGrant(db, {
         workspaceId,
-        workspaceAppId: actorId,
-        target: { subject: { kind: "workspace_member", memberId } },
-        permissions: [WORKSPACE_APP_GRANT_PERMISSION.CONTACT_VISIBLE],
-        source: WORKSPACE_APP_GRANT_SOURCE.APPROVAL,
+        workspaceResourceId: actorId,
+        target: {
+          subject: { kind: "workspace_member", workspaceMemberId: memberId },
+        },
+        permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.CONTACT_VISIBLE],
+        source: WORKSPACE_RESOURCE_GRANT_SOURCE.APPROVAL,
       })
 
       assert.equal(
@@ -315,13 +330,29 @@ async function insertWorkspaceMember(
 
 async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
   const actorId = crypto.randomUUID()
+  // workspace_resources.created_by_subject_id is NOT NULL (owner→subject
+  // migration). Reuse any member of the workspace as creator, else mint one.
+  const existingMember = await db
+    .selectFrom("workspace_members")
+    .select("id")
+    .where("workspace_id", "=", workspaceId)
+    .limit(1)
+    .executeTakeFirst()
+  const memberId = existingMember
+    ? (existingMember.id as string)
+    : await insertWorkspaceMember(db, workspaceId, await insertUser(db))
+  const creatorSubjectId = await upsertAccessSubject(db, {
+    kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+    workspaceMemberId: memberId,
+  })
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspace_resources")
     .values({
       id: actorId,
       workspace_id: workspaceId,
       kind: "actor",
       display_name: "test actor",
+      created_by_subject_id: creatorSubjectId,
       status: "active",
     })
     .execute()

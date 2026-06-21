@@ -129,27 +129,24 @@ export async function loadExecutionToolResultsForSession(
   return out
 }
 
-type ContextAuthorParticipantRow = {
-  id?: string
-  actor_id?: string | null
-  workspace_member_id?: string | null
-  user_id?: string | null
-  participant_name?: string | null
-  user_name?: string | null
-  display_name?: string | null
+// Structural subset of the camelCase ChatParticipantRow / ConversationItemDetail
+// the author resolver needs. Typed (not `any`) so snake_case reads — the source
+// of the pre-CamelCasePlugin-cutover bug — fail to compile.
+type ContextAuthorParticipant = {
+  id?: string | null
+  actorId?: string | null
+  workspaceMemberId?: string | null
+  userId?: string | null
+  userName?: string | null
+  participantName?: string | null
+  displayName?: string | null
 }
 
 type ContextAuthorSourceRow = {
-  authorParticipant?: ContextAuthorParticipantRow | null
-  author_participant?: ContextAuthorParticipantRow | null
+  authorParticipant?: ContextAuthorParticipant | null
   authorParticipantId?: string | null
-  author_participant_id?: string | null
-  author_actor_id?: string | null
-  author_user_id?: string | null
-  author_name?: string | null
-  role?: string | null
   sessionId?: string | null
-  session_id?: string | null
+  role?: string | null
 }
 
 function mimeToCategory(mimeType: string): CanonicalFileCategory {
@@ -231,42 +228,34 @@ function buildAuthor(
   row: ContextAuthorSourceRow,
   actorId?: string
 ): CanonicalContextAuthor | undefined {
-  const authorParticipant = row.authorParticipant || row.author_participant
+  const authorParticipant = row.authorParticipant
+  const participantId =
+    authorParticipant?.id || row.authorParticipantId || undefined
 
-  if (authorParticipant?.actor_id || row.author_actor_id) {
-    const participantId =
-      authorParticipant?.id ||
-      row.authorParticipantId ||
-      row.author_participant_id
-    const resolvedActorId = authorParticipant?.actor_id || row.author_actor_id
+  if (authorParticipant?.actorId) {
+    const resolvedActorId = authorParticipant.actorId
     return {
-      participantId: participantId || undefined,
+      participantId,
       participantType: "actor",
       actorId: resolvedActorId || undefined,
-      sessionId: row.sessionId || row.session_id || undefined,
+      sessionId: row.sessionId || undefined,
       name:
-        authorParticipant?.participant_name ||
-        authorParticipant?.display_name ||
-        row.author_name ||
+        authorParticipant.participantName ||
+        authorParticipant.displayName ||
         undefined,
       isSelf: resolvedActorId === actorId,
     }
   }
 
-  if (authorParticipant?.workspace_member_id || row.author_user_id) {
+  if (authorParticipant?.workspaceMemberId) {
     return {
-      participantId:
-        authorParticipant?.id ||
-        row.authorParticipantId ||
-        row.author_participant_id ||
-        undefined,
+      participantId,
       participantType: "workspace_member",
-      userId: authorParticipant?.user_id || row.author_user_id || undefined,
-      sessionId: row.sessionId || row.session_id || undefined,
+      userId: authorParticipant.userId || undefined,
+      sessionId: row.sessionId || undefined,
       name:
-        authorParticipant?.user_name ||
-        authorParticipant?.display_name ||
-        row.author_name ||
+        authorParticipant.userName ||
+        authorParticipant.displayName ||
         undefined,
       isSelf: false,
     }
@@ -274,14 +263,10 @@ function buildAuthor(
 
   if (row.role === "system") {
     return {
-      participantId:
-        authorParticipant?.id ||
-        row.authorParticipantId ||
-        row.author_participant_id ||
-        undefined,
+      participantId,
       participantType: "system",
-      sessionId: row.sessionId || row.session_id || undefined,
-      name: authorParticipant?.display_name || row.author_name || "System",
+      sessionId: row.sessionId || undefined,
+      name: authorParticipant?.displayName || "System",
       isSelf: false,
     }
   }
@@ -289,19 +274,49 @@ function buildAuthor(
   return undefined
 }
 
-function buildTargets(targets: any[]): CanonicalContextTarget[] | undefined {
+// CanonicalContextTarget["participantType"] does NOT include "remote_agent";
+// map an agent participant to "actor" and anything outside the contract to
+// "system" so an unchecked cast can never emit an out-of-union value.
+function toContextTargetType(
+  value: string | null | undefined
+): CanonicalContextTarget["participantType"] {
+  switch (value) {
+    case "actor":
+    case "workspace_member":
+    case "external":
+    case "system":
+      return value
+    case "remote_agent":
+      return "actor"
+    default:
+      return "system"
+  }
+}
+
+function buildTargets(
+  targets:
+    | {
+        id?: string | null
+        participantType?: string | null
+        actorId?: string | null
+        userId?: string | null
+        userName?: string | null
+        participantName?: string | null
+        displayName?: string | null
+      }[]
+    | null
+    | undefined
+): CanonicalContextTarget[] | undefined {
   if (!targets || targets.length === 0) return undefined
   const built = targets.map((target) => ({
-    participantId:
-      target.participantId || target.participant_id || target.id || undefined,
-    participantType: (target.participant_type ||
-      "system") as CanonicalContextTarget["participantType"],
-    actorId: target.actor_id || target.actorId || undefined,
-    userId: target.user_id || target.userId || undefined,
+    participantId: target.id || undefined,
+    participantType: toContextTargetType(target.participantType),
+    actorId: target.actorId || undefined,
+    userId: target.userId || undefined,
     name:
-      target.user_name ||
-      target.participant_name ||
-      target.display_name ||
+      target.userName ||
+      target.participantName ||
+      target.displayName ||
       undefined,
   }))
   return built.length > 0 ? built : undefined
@@ -312,12 +327,17 @@ function buildContextItemRef(item: {
   scope?: string
   surface?: string
 }) {
-  const sequence =
-    typeof item.sequence === "number"
-      ? item.sequence
-      : typeof item.sequence === "string"
-        ? Number(item.sequence)
-        : NaN
+  const resolveSequence = (): number => {
+    switch (typeof item.sequence) {
+      case "number":
+        return item.sequence
+      case "string":
+        return Number(item.sequence)
+      default:
+        return NaN
+    }
+  }
+  const sequence = resolveSequence()
   if (
     !Number.isFinite(sequence) ||
     item.scope !== "shared" ||
@@ -338,24 +358,18 @@ export function conversationItemToContextItem(
       )
     : itemPartsToCanonicalBlocks(item.parts || [])
   const metadata = parseMetadata(item.metadata)
-  const eventPayload = parseMetadata(item.eventPayload ?? item.event_payload)
+  const eventPayload = parseMetadata(item.eventPayload)
   const author = buildAuthor(item, actorId)
   const targets = buildTargets(
-    item.contextTargets?.length > 0
-      ? item.contextTargets
-      : item.context_targets?.length > 0
-        ? item.context_targets
-        : item.restrictedAudience || item.targets || []
+    item.contextTargets?.length > 0 ? item.contextTargets : item.targets || []
   )
-  const itemType = item.itemType || item.item_type
-  const conversationId = item.conversationId || item.conversation_id
-  const sessionId = item.sessionId || item.session_id
-  const turnId = item.turnId || item.turn_id
-  const createdAt = item.createdAt || item.created_at
-  const eventTimelinePolicy =
-    item.eventTimelinePolicy || item.event_timeline_policy
-  const eventContextPolicy =
-    item.eventContextPolicy || item.event_context_policy
+  const itemType = item.itemType
+  const conversationId = item.conversationId
+  const sessionId = item.sessionId
+  const turnId = item.turnId
+  const createdAt = item.createdAt
+  const eventTimelinePolicy = item.eventTimelinePolicy
+  const eventContextPolicy = item.eventContextPolicy
   const itemRef = buildContextItemRef({
     sequence: item.sequence,
     scope: item.scope || "shared",
@@ -430,7 +444,7 @@ export function conversationItemToContextItem(
     role: item.role || "user",
     author,
     targets,
-    replyTo: item.replyTo || item.reply_to,
+    replyTo: item.replyTo,
     parts: parts.length > 0 ? parts : textBlocks(""),
     metadata,
   }

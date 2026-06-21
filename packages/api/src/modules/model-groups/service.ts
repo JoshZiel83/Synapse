@@ -56,7 +56,7 @@ function buildModelGroupGrantSubjectRef(input: {
       }
       return {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: input.workspaceMemberId,
+        workspaceMemberId: input.workspaceMemberId,
       }
     case MODEL_GROUP_GRANT_SCOPE.ACTOR:
       if (!input.actorId) {
@@ -187,9 +187,8 @@ async function validateGrantTarget(input: {
       }
       await ensureWorkspaceExists(input.workspaceId)
       await ensureActorInWorkspace(input.actorId, input.workspaceId)
-      return
+      break
     default:
-      return
   }
 }
 
@@ -294,13 +293,16 @@ export async function createModelGroup(data: {
   isDefault?: boolean
   createdByWorkspaceMemberId?: string
 }): Promise<ModelGroupRow> {
-  const ownerType =
-    data.ownerType ||
-    (data.workspaceId
-      ? "workspace"
-      : data.ownerWorkspaceMemberId
-        ? "workspace_member"
-        : "platform")
+  const inferOwnerType = (): ModelGroupOwnerType => {
+    if (data.workspaceId) {
+      return "workspace"
+    }
+    if (data.ownerWorkspaceMemberId) {
+      return "workspace_member"
+    }
+    return "platform"
+  }
+  const ownerType = data.ownerType || inferOwnerType()
 
   if (ownerType === "workspace" && !data.workspaceId) {
     throw new ModelGroupError(
@@ -322,13 +324,19 @@ export async function createModelGroup(data: {
       ? data.ownerWorkspaceMemberId || null
       : null
 
+  const defaultGrantScope = (() => {
+    switch (ownerType) {
+      case "platform":
+        return MODEL_GROUP_GRANT_SCOPE.PLATFORM
+      case "workspace":
+        return MODEL_GROUP_GRANT_SCOPE.WORKSPACE
+      default:
+        return MODEL_GROUP_GRANT_SCOPE.WORKSPACE_MEMBER
+    }
+  })()
+
   const defaultGrantSubjectRef = buildModelGroupGrantSubjectRef({
-    grantScope:
-      ownerType === "platform"
-        ? MODEL_GROUP_GRANT_SCOPE.PLATFORM
-        : ownerType === "workspace"
-          ? MODEL_GROUP_GRANT_SCOPE.WORKSPACE
-          : MODEL_GROUP_GRANT_SCOPE.WORKSPACE_MEMBER,
+    grantScope: defaultGrantScope,
     workspaceId: ownerWorkspaceId,
     workspaceMemberId: ownerWorkspaceMemberId,
   })
@@ -354,7 +362,7 @@ export async function createModelGroup(data: {
       createdByWorkspaceMemberId: data.createdByWorkspaceMemberId || null,
     },
     defaultGrantSubjectRef,
-    grantedByWorkspaceMemberId: data.createdByWorkspaceMemberId || null,
+    createdByWorkspaceMemberId: data.createdByWorkspaceMemberId || null,
   })
 
   return row
@@ -695,7 +703,7 @@ export async function issueModelGroupGrant(
     workspaceId?: string
     workspaceMemberId?: string
     actorId?: string
-    grantedByWorkspaceMemberId?: string
+    createdByWorkspaceMemberId?: string
     reason?: string
   }
 ): Promise<ModelGroupGrantRow & { id: string; group_id: string }> {
@@ -712,7 +720,7 @@ export async function issueModelGroupGrant(
   const full = await repo.insertModelGroupGrantAndReadBack({
     groupId,
     subjectRef,
-    grantedByWorkspaceMemberId: input.grantedByWorkspaceMemberId || null,
+    createdByWorkspaceMemberId: input.createdByWorkspaceMemberId || null,
     reason: input.reason || null,
   })
   return dbRowToGrantRow(full)

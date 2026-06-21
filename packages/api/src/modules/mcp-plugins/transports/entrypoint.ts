@@ -253,12 +253,12 @@ export function resolveRemoteEntryPoint(
   }
 
   const parsed = parseRemoteEntryPointJson(trimmed)
-  const baseUrl =
-    parsed.url !== undefined
-      ? renderTemplate(parsed.url, ctx)
-      : parsed.endpoint !== undefined
-        ? renderTemplate(parsed.endpoint, ctx)
-        : ""
+  let baseUrl = ""
+  if (parsed.url !== undefined) {
+    baseUrl = renderTemplate(parsed.url, ctx)
+  } else if (parsed.endpoint !== undefined) {
+    baseUrl = renderTemplate(parsed.endpoint, ctx)
+  }
   if (!baseUrl) {
     throw new Error("Remote MCP entry point JSON is missing url")
   }

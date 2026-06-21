@@ -2,8 +2,8 @@ import {
   CONVERSATION_PARTICIPANT_ROLE_KEY,
   MEMORY_PERMISSION,
   SUBJECT_KIND,
-  WORKSPACE_APP_GRANT_PERMISSION,
-  WORKSPACE_APP_STATUS,
+  WORKSPACE_RESOURCE_GRANT_PERMISSION,
+  WORKSPACE_RESOURCE_STATUS,
 } from "@synapse/shared"
 import type { MemoryPermission, SubjectRef } from "@synapse/shared"
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
@@ -18,11 +18,10 @@ import {
   listActorModelGroupIds,
   listOwnedActorIds,
   listOwnedRemoteAgentIds,
-  listOwnedWorkspaceAppAccessRows,
-  listResourceGrantRows,
-  listWorkspaceAppAccessRows,
-  listWorkspaceAppAccessRowsByIds,
-  listWorkspaceAppGrantRows,
+  listOwnedWorkspaceResourceAccessRows,
+  listWorkspaceResourceAccessRows,
+  listWorkspaceResourceAccessRowsByIds,
+  listWorkspaceResourceGrantRows,
   listWorkspaceMemberModelGroupIds,
   loadDeviceAccessRow,
   loadDeviceCapabilityAccessRow,
@@ -39,10 +38,53 @@ import {
   loadWorkspaceMemberAccess,
   type MemorySpaceLoadedRow,
   type WorkspaceMemberAccess,
-  type WorkspaceAppBindableResourceType,
-  type WorkspaceAppAccessRow,
-  type LegacyBindableResourceType,
+  type WorkspaceResourceBindableResourceType,
+  type WorkspaceResourceAccessRow,
 } from "./repo-evaluator.js"
+import { upsertAccessSubject } from "./subject-registry.js"
+
+/**
+ * Owner→subject migration (plan §4.2): resolve a non-member caller (actor /
+ * remote_agent) to its access_subjects id so owner-equality can be matched BY
+ * SUBJECT KIND against a resource's `owner_subject_id`. Members are matched by
+ * the legacy member-id equality (`ownerWorkspaceMemberId === access.id`), so
+ * this returns null for them. An actor/remote_agent owner gets implicit MANAGE
+ * on its OWN resource only — never implicit contact_visible, never delegation.
+ */
+async function ownerSubjectIdForCaller(
+  db: KyselyDb,
+  subject: PermissionSubject
+): Promise<string | null> {
+  if (subject.type === "actor") {
+    return upsertAccessSubject(db, {
+      kind: SUBJECT_KIND.ACTOR,
+      actorId: subject.id,
+    })
+  }
+  if (subject.type === "remote_agent") {
+    return upsertAccessSubject(db, {
+      kind: SUBJECT_KIND.REMOTE_AGENT,
+      remoteAgentId: subject.id,
+    })
+  }
+  return null
+}
+
+/**
+ * True iff the caller is an actor/remote_agent principal that OWNS the resource
+ * (its subject id equals the resource owner_subject_id). Used to grant the
+ * owner-implicit MANAGE on a self-owned workspace_resource resource.
+ */
+async function isNonMemberResourceOwner(
+  db: KyselyDb,
+  subject: PermissionSubject,
+  ownerSubjectId: string | null
+): Promise<boolean> {
+  if (!ownerSubjectId) return false
+  if (subject.type !== "actor" && subject.type !== "remote_agent") return false
+  const callerSubjectId = await ownerSubjectIdForCaller(db, subject)
+  return callerSubjectId != null && callerSubjectId === ownerSubjectId
+}
 
 type AccessResourceType =
   | "platform"
@@ -227,6 +269,21 @@ async function hasActorPermission(
 
   if (subject.type === "actor") {
     if (subject.id !== actorId) {
+      // A different actor may still be the OWNER of this actor resource (owner→
+      // subject migration §4.2): owner actor gets implicit MANAGE on its own
+      // resource, no contact_visible / delegation.
+      if (await isNonMemberResourceOwner(db, subject, actor.ownerSubjectId)) {
+        switch (permission) {
+          case "edit":
+          case "grant":
+          case "delete":
+          case "memory_retarget":
+          case "memory_delete":
+            return true
+          default:
+            return false
+        }
+      }
       return false
     }
     switch (permission) {
@@ -244,6 +301,23 @@ async function hasActorPermission(
     }
   }
 
+  // remote_agent owner of this actor resource → implicit MANAGE on its own.
+  if (subject.type === "remote_agent") {
+    if (await isNonMemberResourceOwner(db, subject, actor.ownerSubjectId)) {
+      switch (permission) {
+        case "edit":
+        case "grant":
+        case "delete":
+        case "memory_retarget":
+        case "memory_delete":
+          return true
+        default:
+          return false
+      }
+    }
+    return false
+  }
+
   if (subject.type !== "workspace_member") {
     return false
   }
@@ -257,7 +331,7 @@ async function hasActorPermission(
     isWorkspaceOwnerOrAdmin(access) ||
     hasWorkspaceAccessKey(access, "actor_admin") ||
     actor.ownerWorkspaceMemberId === access.id ||
-    (await hasWorkspaceAppGrant(db, {
+    (await hasWorkspaceResourceGrant(db, {
       resourceType: "actor",
       resourceId: actorId,
       requiredGrantPermission: "manage",
@@ -270,12 +344,12 @@ async function hasActorPermission(
     }))
   // P2: `canUse` is now derived purely from grants. The historical
   // actor visibility shortcut and friend_entries join have been replaced by
-  // workspace_app_grants rows:
+  // workspace_resource_grants rows:
   //   - owners stay implicitly visible to themselves, and
   //   - everyone else needs an explicit contact_visible grant.
   const canUse =
     actor.ownerWorkspaceMemberId === access.id ||
-    (await hasWorkspaceAppGrant(db, {
+    (await hasWorkspaceResourceGrant(db, {
       resourceType: "actor",
       resourceId: actorId,
       requiredGrantPermission: "contact_visible",
@@ -319,6 +393,24 @@ async function hasRemoteAgentPermission(
     return false
   }
 
+  // owner→subject migration §4.2: an actor/remote_agent that OWNS this
+  // remote_agent resource gets implicit MANAGE on its own resource only.
+  if (subject.type === "actor" || subject.type === "remote_agent") {
+    if (
+      await isNonMemberResourceOwner(db, subject, remoteAgent.ownerSubjectId)
+    ) {
+      switch (permission) {
+        case "edit":
+        case "grant":
+        case "delete":
+          return true
+        default:
+          return false
+      }
+    }
+    return false
+  }
+
   if (subject.type !== "workspace_member") {
     return false
   }
@@ -334,7 +426,7 @@ async function hasRemoteAgentPermission(
     (isWorkspaceOwnerOrAdmin(access) ||
       hasWorkspaceAccessKey(access, "remote_agent_admin") ||
       remoteAgent.ownerWorkspaceMemberId === access.id ||
-      (await hasWorkspaceAppGrant(db, {
+      (await hasWorkspaceResourceGrant(db, {
         resourceType: "remote_agent",
         resourceId: remoteAgentId,
         requiredGrantPermission: "manage",
@@ -345,12 +437,12 @@ async function hasRemoteAgentPermission(
         runtimeScopeSubjectIds,
         runtimeSubjectIds,
       })))
-  // P2: same fold as hasActorPermission — bindings are authoritative.
-  // Cross-workspace `is_public_shared` still requires an explicit binding to
+  // P2: same fold as hasActorPermission — grants are authoritative.
+  // Cross-workspace `is_public_shared` still requires an explicit grant to
   // be granted; the publishing workspace's auto-write happens on create.
   const canUse =
     (sameWorkspace && remoteAgent.ownerWorkspaceMemberId === access.id) ||
-    (await hasWorkspaceAppGrant(db, {
+    (await hasWorkspaceResourceGrant(db, {
       resourceType: "remote_agent",
       resourceId: remoteAgentId,
       requiredGrantPermission: "contact_visible",
@@ -377,26 +469,7 @@ async function hasRemoteAgentPermission(
   }
 }
 
-async function hasResourceGrant(
-  db: KyselyDb,
-  resourceType: LegacyBindableResourceType,
-  resourceId: string,
-  subject: PermissionSubject,
-  runtimeScopeSubjectIds?: readonly string[],
-  runtimeSubjectIds?: readonly string[]
-) {
-  const rows = await listResourceGrantRows(
-    db,
-    resourceType,
-    resourceId,
-    subject,
-    runtimeScopeSubjectIds,
-    runtimeSubjectIds
-  )
-  return rows.length > 0
-}
-
-async function hasWorkspaceAppGrant(
+async function hasWorkspaceResourceGrant(
   db: KyselyDb,
   params: {
     resourceType:
@@ -405,6 +478,7 @@ async function hasWorkspaceAppGrant(
       | "device_capability"
       | "actor"
       | "remote_agent"
+      | "automation_event_source"
     resourceId: string
     requiredGrantPermission: "use" | "contact_visible" | "manage"
     subject: PermissionSubject
@@ -412,7 +486,7 @@ async function hasWorkspaceAppGrant(
     runtimeSubjectIds?: readonly string[]
   }
 ) {
-  const rows = await listWorkspaceAppGrantRows(db, {
+  const rows = await listWorkspaceResourceGrantRows(db, {
     resourceType: params.resourceType,
     resourceId: params.resourceId,
     requiredGrantPermission: params.requiredGrantPermission,
@@ -423,27 +497,7 @@ async function hasWorkspaceAppGrant(
   return rows.length > 0
 }
 
-async function listGrantedResourceIds(
-  db: KyselyDb,
-  resourceType: LegacyBindableResourceType,
-  subject: PermissionSubject,
-  limit?: number,
-  runtimeScopeSubjectIds?: readonly string[],
-  runtimeSubjectIds?: readonly string[]
-) {
-  const rows = await listResourceGrantRows(
-    db,
-    resourceType,
-    null,
-    subject,
-    runtimeScopeSubjectIds,
-    runtimeSubjectIds
-  )
-  const ids = Array.from(new Set(rows.map((row) => row.resourceId)))
-  return typeof limit === "number" && limit > 0 ? ids.slice(0, limit) : ids
-}
-
-async function listGrantedWorkspaceAppIds(
+async function listGrantedWorkspaceResourceIds(
   db: KyselyDb,
   params: {
     resourceType:
@@ -452,6 +506,7 @@ async function listGrantedWorkspaceAppIds(
       | "device_capability"
       | "actor"
       | "remote_agent"
+      | "automation_event_source"
     requiredGrantPermission: "use" | "contact_visible"
     subject: PermissionSubject
     limit?: number
@@ -459,7 +514,7 @@ async function listGrantedWorkspaceAppIds(
     runtimeSubjectIds?: readonly string[]
   }
 ) {
-  const rows = await listWorkspaceAppGrantRows(db, {
+  const rows = await listWorkspaceResourceGrantRows(db, {
     resourceType: params.resourceType,
     resourceId: null,
     requiredGrantPermission: params.requiredGrantPermission,
@@ -473,14 +528,14 @@ async function listGrantedWorkspaceAppIds(
     : ids
 }
 
-function isBindableWorkspaceAppManagementVisible(status: string) {
-  return status !== WORKSPACE_APP_STATUS.ARCHIVED
+function isBindableWorkspaceResourceManagementVisible(status: string) {
+  return status !== WORKSPACE_RESOURCE_STATUS.ARCHIVED
 }
 
-async function listManageableWorkspaceAppIds(
+async function listManageableWorkspaceResourceIds(
   db: KyselyDb,
   params: {
-    resourceType: WorkspaceAppBindableResourceType
+    resourceType: WorkspaceResourceBindableResourceType
     manageAccessKey: string
     subject: PermissionSubject
     limit?: number
@@ -497,16 +552,16 @@ async function listManageableWorkspaceAppIds(
     return []
   }
 
-  const manageableIds = (rows: WorkspaceAppAccessRow[]) =>
+  const manageableIds = (rows: WorkspaceResourceAccessRow[]) =>
     rows.flatMap((row) =>
       typeof row.id === "string" &&
       typeof row.status === "string" &&
-      isBindableWorkspaceAppManagementVisible(row.status)
+      isBindableWorkspaceResourceManagementVisible(row.status)
         ? [row.id]
         : []
     )
   if (workspacePermissionFromAccess(access, params.manageAccessKey)) {
-    const rows = await listWorkspaceAppAccessRows(db, {
+    const rows = await listWorkspaceResourceAccessRows(db, {
       workspaceId: access.workspaceId,
       resourceType: params.resourceType,
     })
@@ -514,15 +569,15 @@ async function listManageableWorkspaceAppIds(
   }
 
   const [ownRows, grantRows] = await Promise.all([
-    listOwnedWorkspaceAppAccessRows(db, {
+    listOwnedWorkspaceResourceAccessRows(db, {
       workspaceId: access.workspaceId,
       resourceType: params.resourceType,
       ownerWorkspaceMemberId: access.id,
     }),
-    listWorkspaceAppGrantRows(db, {
+    listWorkspaceResourceGrantRows(db, {
       resourceType: params.resourceType,
       resourceId: null,
-      requiredGrantPermission: WORKSPACE_APP_GRANT_PERMISSION.MANAGE,
+      requiredGrantPermission: WORKSPACE_RESOURCE_GRANT_PERMISSION.MANAGE,
       subject: params.subject,
       runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
       runtimeSubjectIds: params.runtimeSubjectIds,
@@ -533,7 +588,7 @@ async function listManageableWorkspaceAppIds(
   const grantedRows =
     grantedIds.length === 0
       ? []
-      : await listWorkspaceAppAccessRowsByIds(db, {
+      : await listWorkspaceResourceAccessRowsByIds(db, {
           ids: grantedIds,
           workspaceId: access.workspaceId,
           resourceType: params.resourceType,
@@ -545,10 +600,10 @@ async function listManageableWorkspaceAppIds(
   )
 }
 
-async function listBindableWorkspaceAppIdsForPermission(
+async function listBindableWorkspaceResourceIdsForPermission(
   db: KyselyDb,
   params: {
-    resourceType: WorkspaceAppBindableResourceType
+    resourceType: WorkspaceResourceBindableResourceType
     permission: string
     manageAccessKey: string
     subject: PermissionSubject
@@ -558,9 +613,9 @@ async function listBindableWorkspaceAppIdsForPermission(
   }
 ) {
   if (params.permission === "use") {
-    return listGrantedWorkspaceAppIds(db, {
+    return listGrantedWorkspaceResourceIds(db, {
       resourceType: params.resourceType,
-      requiredGrantPermission: WORKSPACE_APP_GRANT_PERMISSION.USE,
+      requiredGrantPermission: WORKSPACE_RESOURCE_GRANT_PERMISSION.USE,
       subject: params.subject,
       limit: params.limit,
       runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
@@ -570,9 +625,9 @@ async function listBindableWorkspaceAppIdsForPermission(
 
   if (params.permission === "request_runtime_authorization") {
     return params.resourceType === "device_capability"
-      ? listGrantedWorkspaceAppIds(db, {
+      ? listGrantedWorkspaceResourceIds(db, {
           resourceType: params.resourceType,
-          requiredGrantPermission: WORKSPACE_APP_GRANT_PERMISSION.USE,
+          requiredGrantPermission: WORKSPACE_RESOURCE_GRANT_PERMISSION.USE,
           subject: params.subject,
           limit: params.limit,
           runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
@@ -582,9 +637,9 @@ async function listBindableWorkspaceAppIdsForPermission(
   }
 
   if (params.permission === "view") {
-    return listGrantedWorkspaceAppIds(db, {
+    return listGrantedWorkspaceResourceIds(db, {
       resourceType: params.resourceType,
-      requiredGrantPermission: WORKSPACE_APP_GRANT_PERMISSION.USE,
+      requiredGrantPermission: WORKSPACE_RESOURCE_GRANT_PERMISSION.USE,
       subject: params.subject,
       limit: params.limit,
       runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
@@ -597,7 +652,7 @@ async function listBindableWorkspaceAppIdsForPermission(
     params.permission === "grant" ||
     params.permission === "delete"
   ) {
-    return listManageableWorkspaceAppIds(db, {
+    return listManageableWorkspaceResourceIds(db, {
       resourceType: params.resourceType,
       manageAccessKey: params.manageAccessKey,
       subject: params.subject,
@@ -637,7 +692,7 @@ function finalizeResourceIdList(groups: readonly string[][], limit?: number) {
  * different table / columns / active predicate), all three resolved access
  * identically:
  *   1. for the "use"-like (grantable) permissions, an explicit
- *      workspace_app_grants row short-circuits to allow;
+ *      workspace_resource_grants row short-circuits to allow;
  *   2. for the manage-only permissions, a workspace_member in
  *      the SAME workspace passes iff they hold the manage access key OR created
  *      the resource;
@@ -663,10 +718,11 @@ function finalizeResourceIdList(groups: readonly string[][], limit?: number) {
 async function resolveBindableResourceAccess(
   db: KyselyDb,
   params: {
-    resourceType: WorkspaceAppBindableResourceType
+    resourceType: WorkspaceResourceBindableResourceType
     resourceId: string
     workspaceId: string
     ownerWorkspaceMemberId: string | null
+    ownerSubjectId: string | null
     manageAccessKey: string
     /** Permissions an explicit grant can satisfy (the "use"-like set). */
     grantablePermissions: readonly string[]
@@ -691,7 +747,7 @@ async function resolveBindableResourceAccess(
   // (1) explicit-grant short-circuit for the use-like permissions.
   if (isGrantable) {
     if (
-      await hasWorkspaceAppGrant(db, {
+      await hasWorkspaceResourceGrant(db, {
         resourceType: params.resourceType,
         resourceId: params.resourceId,
         requiredGrantPermission: params.requiredGrantPermission,
@@ -708,8 +764,18 @@ async function resolveBindableResourceAccess(
     return false
   }
 
-  // (2) manage path — workspace_member in the same workspace, holding the
-  // manage key or being the app owner.
+  // (2a) owner→subject migration §4.2: an actor/remote_agent that OWNS this
+  // resource gets implicit MANAGE on its own resource only (no delegation, no
+  // contact_visible). Computed by owner-equality; never written as a grant row.
+  if (
+    params.subject.type === "actor" ||
+    params.subject.type === "remote_agent"
+  ) {
+    return isNonMemberResourceOwner(db, params.subject, params.ownerSubjectId)
+  }
+
+  // (2b) manage path — workspace_member in the same workspace, holding the
+  // manage key or being the resource owner.
   if (params.subject.type !== "workspace_member") {
     return false
   }
@@ -720,7 +786,7 @@ async function resolveBindableResourceAccess(
   }
 
   return (
-    (await hasWorkspaceAppGrant(db, {
+    (await hasWorkspaceResourceGrant(db, {
       resourceType: params.resourceType,
       resourceId: params.resourceId,
       requiredGrantPermission: "manage",
@@ -753,8 +819,8 @@ async function hasInstalledSkillPermission(
   )
   if (
     (isManagementPermission &&
-      !isBindableWorkspaceAppManagementVisible(row.status)) ||
-    (!isManagementPermission && row.status !== WORKSPACE_APP_STATUS.ACTIVE)
+      !isBindableWorkspaceResourceManagementVisible(row.status)) ||
+    (!isManagementPermission && row.status !== WORKSPACE_RESOURCE_STATUS.ACTIVE)
   ) {
     return false
   }
@@ -764,6 +830,7 @@ async function hasInstalledSkillPermission(
     resourceId: skillId,
     workspaceId: row.workspaceId,
     ownerWorkspaceMemberId: row.ownerWorkspaceMemberId,
+    ownerSubjectId: row.ownerSubjectId,
     manageAccessKey: "manage_skills",
     grantablePermissions: ["use", "view"],
     manageablePermissions,
@@ -795,8 +862,8 @@ async function hasPluginInstallationPermission(
   )
   if (
     (isManagementPermission &&
-      !isBindableWorkspaceAppManagementVisible(row.status)) ||
-    (!isManagementPermission && row.status !== WORKSPACE_APP_STATUS.ACTIVE)
+      !isBindableWorkspaceResourceManagementVisible(row.status)) ||
+    (!isManagementPermission && row.status !== WORKSPACE_RESOURCE_STATUS.ACTIVE)
   ) {
     return false
   }
@@ -806,6 +873,7 @@ async function hasPluginInstallationPermission(
     resourceId: installationId,
     workspaceId: row.workspaceId,
     ownerWorkspaceMemberId: row.ownerWorkspaceMemberId,
+    ownerSubjectId: row.ownerSubjectId,
     manageAccessKey: "manage_plugins",
     grantablePermissions: ["use", "view"],
     manageablePermissions,
@@ -898,8 +966,8 @@ async function hasCapabilityPermission(
   )
   if (
     (isManagementPermission &&
-      !isBindableWorkspaceAppManagementVisible(row.status)) ||
-    (!isManagementPermission && row.status !== WORKSPACE_APP_STATUS.ACTIVE)
+      !isBindableWorkspaceResourceManagementVisible(row.status)) ||
+    (!isManagementPermission && row.status !== WORKSPACE_RESOURCE_STATUS.ACTIVE)
   ) {
     return false
   }
@@ -909,6 +977,7 @@ async function hasCapabilityPermission(
     resourceId: capabilityId,
     workspaceId: row.workspaceId,
     ownerWorkspaceMemberId: row.ownerWorkspaceMemberId,
+    ownerSubjectId: row.ownerSubjectId,
     manageAccessKey: "manage_devices",
     grantablePermissions: ["use", "view", "request_runtime_authorization"],
     manageablePermissions: [
@@ -953,7 +1022,7 @@ async function listActorIds(
       workspaceId: access.workspaceId,
       ownerWorkspaceMemberId: access.id,
     }),
-    listGrantedWorkspaceAppIds(db, {
+    listGrantedWorkspaceResourceIds(db, {
       resourceType: "actor",
       requiredGrantPermission: "contact_visible",
       subject,
@@ -981,14 +1050,14 @@ async function listRemoteAgentIds(
   }
 
   // P2: same-workspace remote-agent visibility now comes from
-  // workspace_app_grants. Cross-workspace public-shared discovery remains in
+  // workspace_resource_grants. Cross-workspace public-shared discovery remains in
   // the relationship/friend model and is handled outside this grant lookup.
   const [ownAgentIds, grantedIds] = await Promise.all([
     listOwnedRemoteAgentIds(db, {
       workspaceId: access.workspaceId,
       ownerWorkspaceMemberId: access.id,
     }),
-    listGrantedWorkspaceAppIds(db, {
+    listGrantedWorkspaceResourceIds(db, {
       resourceType: "remote_agent",
       requiredGrantPermission: "contact_visible",
       subject,
@@ -1416,7 +1485,7 @@ export async function hasMemorySpaceOwnerImplicitPermissionForTuple(
         : null,
     ownerWorkspaceMemberId:
       tuple.owner.kind === SUBJECT_KIND.WORKSPACE_MEMBER
-        ? tuple.owner.memberId
+        ? tuple.owner.workspaceMemberId
         : null,
     ownerConversationId:
       tuple.owner.kind === SUBJECT_KIND.CONVERSATION
@@ -1575,9 +1644,46 @@ export async function checkPermission(
         params.resourceId,
         params.permission
       )
+    case "automation_event_source":
+      return hasAutomationEventSourcePermission(
+        db,
+        params.subject,
+        params.resourceId,
+        params.permission,
+        params.runtimeScopeSubjectIds,
+        params.runtimeSubjectIds
+      )
     default:
       return false
   }
+}
+
+/**
+ * Automation event sources are the 6th workspace_resource kind; their authorization
+ * folds into workspace_resource_grants with an implicit `use` permission. This serves
+ * the list/lookup surface (the runtime fire-time matcher stays bespoke in
+ * automation/service.ts and is intentionally NOT a checkPermission call — plan
+ * §13: fire path remains access-free).
+ */
+async function hasAutomationEventSourcePermission(
+  db: KyselyDb,
+  subject: PermissionSubject,
+  eventSourceId: string,
+  permission: string,
+  runtimeScopeSubjectIds?: readonly string[],
+  runtimeSubjectIds?: readonly string[]
+): Promise<boolean> {
+  if (permission !== "use" && permission !== "view") {
+    return false
+  }
+  return hasWorkspaceResourceGrant(db, {
+    resourceType: "automation_event_source",
+    resourceId: eventSourceId,
+    requiredGrantPermission: "use",
+    subject,
+    runtimeScopeSubjectIds,
+    runtimeSubjectIds,
+  })
 }
 
 export async function lookupResources(
@@ -1636,7 +1742,7 @@ export async function lookupResources(
         ? listModelGroupIds(db, params.subject, params.limit)
         : []
     case "installed_skill":
-      return listBindableWorkspaceAppIdsForPermission(db, {
+      return listBindableWorkspaceResourceIdsForPermission(db, {
         resourceType: "installed_skill",
         permission: params.permission,
         manageAccessKey: "manage_skills",
@@ -1646,7 +1752,7 @@ export async function lookupResources(
         runtimeSubjectIds: params.runtimeSubjectIds,
       })
     case "plugin_installation":
-      return listBindableWorkspaceAppIdsForPermission(db, {
+      return listBindableWorkspaceResourceIdsForPermission(db, {
         resourceType: "plugin_installation",
         permission: params.permission,
         manageAccessKey: "manage_plugins",
@@ -1656,7 +1762,7 @@ export async function lookupResources(
         runtimeSubjectIds: params.runtimeSubjectIds,
       })
     case "device_capability":
-      return listBindableWorkspaceAppIdsForPermission(db, {
+      return listBindableWorkspaceResourceIdsForPermission(db, {
         resourceType: "device_capability",
         permission: params.permission,
         manageAccessKey: "manage_devices",
@@ -1666,15 +1772,17 @@ export async function lookupResources(
         runtimeSubjectIds: params.runtimeSubjectIds,
       })
     case "automation_event_source":
+      // Folded into workspace_resource_grants: an event source carries an implicit
+      // `use` permission. List/lookup goes through the unified grant path.
       return params.permission === "use" || params.permission === "view"
-        ? listGrantedResourceIds(
-            db,
-            "automation_event_source",
-            params.subject,
-            params.limit,
-            params.runtimeScopeSubjectIds,
-            params.runtimeSubjectIds
-          )
+        ? listGrantedWorkspaceResourceIds(db, {
+            resourceType: "automation_event_source",
+            requiredGrantPermission: "use",
+            subject: params.subject,
+            limit: params.limit,
+            runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
+            runtimeSubjectIds: params.runtimeSubjectIds,
+          })
         : []
     default:
       return []

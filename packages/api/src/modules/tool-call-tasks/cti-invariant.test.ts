@@ -2,7 +2,9 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { sql } from "kysely"
 import type { Kysely } from "kysely"
+import { SUBJECT_KIND } from "@synapse/shared"
 import { withTestDb } from "../../test/helpers/db.js"
+import { upsertAccessSubject } from "../access/subject-registry.js"
 import { insertToolCallTaskDeduped } from "./service.js"
 import { writeRuntimeAuthorizationTaskDetailInTx } from "../tasks/service.js"
 
@@ -82,12 +84,16 @@ async function buildFixture(db: Kysely<any>): Promise<Fixture> {
     })
     .returning("id")
     .executeTakeFirstOrThrow()
+  const createdBySubjectId = await upsertAccessSubject(db, {
+    kind: SUBJECT_KIND.PLATFORM,
+  })
   const agentRoot = await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       workspaceId: ws.id as string,
       kind: "remote_agent",
       displayName: `${NS} agent`,
+      createdBySubjectId,
       status: "active",
     } as any)
     .returning("id")
@@ -141,11 +147,12 @@ async function buildFixture(db: Kysely<any>): Promise<Fixture> {
     .returning("id")
     .executeTakeFirstOrThrow()
   const capRoot = await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       workspaceId: ws.id as string,
       kind: "device_capability",
       displayName: `${NS} capability`,
+      createdBySubjectId,
       status: "active",
     } as any)
     .returning("id")

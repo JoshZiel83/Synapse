@@ -21,7 +21,7 @@ import {
 
 /** Soft-delete roots that are workspace-scoped via a plain workspace_id column. */
 const WORKSPACE_SCOPED_ROOTS_BY_WORKSPACE_ID = [
-  "workspace_apps",
+  "workspace_resources",
   "remote_agent_machines",
   "conversations",
   "devices",
@@ -30,7 +30,10 @@ const WORKSPACE_SCOPED_ROOTS_BY_WORKSPACE_ID = [
   "memory_items",
   "file_spaces",
   "automation_rules",
-  "automation_event_sources",
+  // NOTE: automation_event_sources is NOT here — after the workspace-resource
+  // authz fold it has no `deleted_at` of its own; its liveness is the root's
+  // (workspace_resources, soft-deleted above) and automation_event_sources_live
+  // folds that in. UPDATE-ing a non-existent deleted_at column would error.
   "automation_webhook_endpoints",
   "automation_integration_bindings",
   "transport_accounts",
@@ -46,8 +49,7 @@ const WORKSPACE_SCOPED_ROOTS_NULLABLE_GLOBAL = [
 
 /** Active grant/binding tables to revoke for a workspace (status flip). */
 const WORKSPACE_GRANT_TABLES = [
-  "workspace_app_grants",
-  "resource_access_bindings",
+  "workspace_resource_grants",
   "runtime_authorization_grants",
   "memory_access_grants",
   "file_access_grants",
@@ -240,12 +242,7 @@ export async function markUserDeleted(
   )`
   // grants keyed by subject_id and/or scope_subject_id
   await sql`
-    UPDATE workspace_app_grants SET status = 'revoked', revoked_at = NOW()
-    WHERE status = 'active'
-      AND (subject_id IN ${subjectSet} OR scope_subject_id IN ${subjectSet})
-  `.execute(db)
-  await sql`
-    UPDATE resource_access_bindings SET status = 'revoked', revoked_at = NOW()
+    UPDATE workspace_resource_grants SET status = 'revoked', revoked_at = NOW()
     WHERE status = 'active'
       AND (subject_id IN ${subjectSet} OR scope_subject_id IN ${subjectSet})
   `.execute(db)

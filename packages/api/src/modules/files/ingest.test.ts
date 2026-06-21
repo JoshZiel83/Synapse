@@ -14,6 +14,15 @@ const PNG_1X1_B64 =
 let saveBase64Calls: any[] = []
 let saveUrlCalls: any[] = []
 
+function categoryForMime(
+  mimeType: string
+): "image" | "audio" | "video" | "document" {
+  if (mimeType.startsWith("image/")) return "image"
+  if (mimeType.startsWith("audio/")) return "audio"
+  if (mimeType.startsWith("video/")) return "video"
+  return "document"
+}
+
 function makeStorage() {
   saveBase64Calls = []
   saveUrlCalls = []
@@ -35,7 +44,7 @@ function makeStorage() {
         origin,
       })
       return {
-        id: "stub-file-" + saveBase64Calls.length,
+        id: `stub-file-${saveBase64Calls.length}`,
         workspaceId: workspaceId || "ws",
         originalName,
         storedName: `2025/01/01/${originalName}`,
@@ -79,13 +88,7 @@ function makeStorage() {
       mimeType: rec.mimeType,
       name: rec.originalName,
       sizeBytes: rec.sizeBytes,
-      category: rec.mimeType.startsWith("image/")
-        ? "image"
-        : rec.mimeType.startsWith("audio/")
-          ? "audio"
-          : rec.mimeType.startsWith("video/")
-            ? "video"
-            : "document",
+      category: categoryForMime(rec.mimeType),
     }),
   }
 }

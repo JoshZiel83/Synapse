@@ -124,12 +124,14 @@ async function postOpenclaw<T extends OpenclawApiResponse>(
     )
   }
   const errcodeRaw = data.errcode
-  const errcodeNum =
-    typeof errcodeRaw === "number"
-      ? errcodeRaw
-      : typeof errcodeRaw === "string" && errcodeRaw.trim() !== ""
-        ? Number(errcodeRaw)
-        : undefined
+  let errcodeNum: number | undefined
+  if (typeof errcodeRaw === "number") {
+    errcodeNum = errcodeRaw
+  } else if (typeof errcodeRaw === "string" && errcodeRaw.trim() !== "") {
+    errcodeNum = Number(errcodeRaw)
+  } else {
+    errcodeNum = undefined
+  }
   if (errcodeNum != null && errcodeNum !== 0) {
     throw new RegistrationBusinessError(
       `dingtalk registration ${path} errcode=${errcodeRaw}: ${data.errmsg ?? "unknown"}`,

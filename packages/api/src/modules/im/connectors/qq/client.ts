@@ -106,19 +106,23 @@ async function fetchAccessToken(
       `QQ getAppAccessToken returned no token: code=${json.code} message=${json.message}`
     )
   }
-  const ttlSeconds = Math.max(
-    60,
-    typeof json.expires_in === "number"
-      ? json.expires_in
-      : typeof json.expires_in === "string"
-        ? Number.parseInt(json.expires_in, 10) || QQ_DEFAULT_TOKEN_TTL_SECONDS
-        : QQ_DEFAULT_TOKEN_TTL_SECONDS
-  )
+  const ttlSeconds = Math.max(60, resolveTtlSeconds(json.expires_in))
   // Refresh 60s before expiry, or 1/3 of TTL whichever is smaller.
   // For 7200s tokens this is 5 minutes' headroom.
   const headroomSec = Math.min(300, Math.floor(ttlSeconds / 3))
   const refreshAtMs = Date.now() + (ttlSeconds - headroomSec) * 1000
   return { token: accessToken, refreshAtMs }
+}
+
+function resolveTtlSeconds(expiresIn: string | number | undefined): number {
+  switch (typeof expiresIn) {
+    case "number":
+      return expiresIn
+    case "string":
+      return Number.parseInt(expiresIn, 10) || QQ_DEFAULT_TOKEN_TTL_SECONDS
+    default:
+      return QQ_DEFAULT_TOKEN_TTL_SECONDS
+  }
 }
 
 async function safeText(res: Response): Promise<string> {

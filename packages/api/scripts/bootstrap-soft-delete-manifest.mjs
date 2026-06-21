@@ -61,7 +61,6 @@ const JUNCTION_STATUS = new Set([
   "workspace_members", // status active|left|removed
   "platform_access_bindings",
   "workspace_access_bindings",
-  "resource_access_bindings",
   "model_group_grants",
   "memory_access_grants",
   "file_access_grants",
@@ -189,7 +188,6 @@ const LIVE_VALUES = {
   workspace_members: ["active"],
   platform_access_bindings: ["active"],
   workspace_access_bindings: ["active"],
-  resource_access_bindings: ["active"],
   model_group_grants: ["active"],
   memory_access_grants: ["active"],
   file_access_grants: ["active"],

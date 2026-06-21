@@ -140,7 +140,7 @@ test("contentAccessResolver", async (t) => {
 
         const subjId = await upsertAccessSubject(db as any, {
           kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-          memberId,
+          workspaceMemberId: memberId,
         })
         await db
           .insertInto("conversationParticipants")
@@ -204,7 +204,7 @@ test("contentAccessResolver", async (t) => {
 
       const subjId = await upsertAccessSubject(db as any, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId,
+        workspaceMemberId: memberId,
       })
       await db
         .insertInto("conversationParticipants")
@@ -286,11 +286,11 @@ test("contentAccessResolver", async (t) => {
 
         const subjA = await upsertAccessSubject(db as any, {
           kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-          memberId: memberA,
+          workspaceMemberId: memberA,
         })
         const subjB = await upsertAccessSubject(db as any, {
           kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-          memberId: memberB,
+          workspaceMemberId: memberB,
         })
         const partA = await db
           .insertInto("conversationParticipants")
@@ -393,16 +393,17 @@ async function seedPrivateMemoryRef(db: Kysely<any>) {
     .executeTakeFirstOrThrow()
   const memberSubjectId = await upsertAccessSubject(db as any, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: member.id,
+    workspaceMemberId: member.id,
   })
   // The memory space is owned by an ACTOR (private to that actor).
   const actorRoot = await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id: crypto.randomUUID(),
       workspaceId: ws.id,
       kind: "actor",
       displayName: `a-${rid()}`,
+      createdBySubjectId: memberSubjectId,
       status: "active",
     } as any)
     .returning("id")
@@ -563,16 +564,17 @@ async function seedFileSpaceRef(
     .executeTakeFirstOrThrow()
   const memberSubjectId = await upsertAccessSubject(db as any, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: member.id,
+    workspaceMemberId: member.id,
   })
   // The space is owned by an actor (so the member isn't owner-implicit).
   const actorRoot = await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id: crypto.randomUUID(),
       workspaceId: ws.id,
       kind: "actor",
       displayName: `a-${rid()}`,
+      createdBySubjectId: memberSubjectId,
       status: "active",
     } as any)
     .returning("id")
@@ -789,7 +791,7 @@ test("contentAccessResolver: library-global (workspace_id NULL) asset is readabl
 // conversation B, even when the user actively participates in BOTH. Mirrors the
 // main runtime, which only adds the CURRENT active conversation to the scope set.
 
-const SHA_CS = "c0ffee".repeat(10) + "abcd" // 64 hex chars
+const SHA_CS = `${"c0ffee".repeat(10)}abcd` // 64 hex chars
 
 async function seedTwoConvUserWithFileSpace(db: Kysely<any>) {
   const owner = await db
@@ -818,11 +820,11 @@ async function seedTwoConvUserWithFileSpace(db: Kysely<any>) {
     .executeTakeFirstOrThrow()
   const memberSubjectId = await upsertAccessSubject(db as any, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: member.id,
+    workspaceMemberId: member.id,
   })
   const memberConvSubject = await upsertAccessSubject(db as any, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: member.id,
+    workspaceMemberId: member.id,
   })
   // Two conversations the member actively participates in.
   async function newConvWithMember() {
@@ -850,12 +852,13 @@ async function seedTwoConvUserWithFileSpace(db: Kysely<any>) {
   const convB = await newConvWithMember()
   // An actor-owned file space + a snapshot whose manifest IS SHA_CS.
   const actorRoot = await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id: crypto.randomUUID(),
       workspaceId: ws.id,
       kind: "actor",
       displayName: `a-${rid()}`,
+      createdBySubjectId: memberSubjectId,
       status: "active",
     } as any)
     .returning("id")
@@ -980,7 +983,7 @@ test("contentAccessResolver: scope=A memory space is NOT owner-readable from ?co
       .executeTakeFirstOrThrow()
     const memberSubject = await upsertAccessSubject(db as any, {
       kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-      memberId: member.id,
+      workspaceMemberId: member.id,
     })
     async function convWithMember() {
       const conv = await db
@@ -1085,7 +1088,7 @@ test("contentAccessResolver: context-archive ref is narrowed by ?conv=", async (
       .executeTakeFirstOrThrow()
     const memberSubject = await upsertAccessSubject(db as any, {
       kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-      memberId: member.id,
+      workspaceMemberId: member.id,
     })
     async function convWithMember() {
       const conv = await db

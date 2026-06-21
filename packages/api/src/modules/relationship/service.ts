@@ -26,8 +26,8 @@ import {
   RELATIONSHIP_PROFILE_SUBJECT_TYPE,
   RELATIONSHIP_REQUEST_STATUS,
   RELATIONSHIP_SCAN_OUTCOME,
-  WORKSPACE_APP_KIND,
-  WORKSPACE_APP_GRANT_PERMISSION,
+  WORKSPACE_RESOURCE_KIND,
+  WORKSPACE_RESOURCE_GRANT_PERMISSION,
   type ContactHubKind,
   type ContactTargetType,
   type ActorRole,
@@ -41,7 +41,7 @@ import {
   resolveWorkspaceAccessSubjectDefault,
   upsertAccessSubjectDefault,
 } from "../access/guards.js"
-import { resolveWorkspaceAppGrantRequest } from "../workspace-apps/grant-storage.js"
+import { resolveWorkspaceResourceGrantRequest } from "../workspace-resources/grant-storage.js"
 import { createChatConversation } from "../chat/create-conversation.js"
 import { listWorkspaceConversationViews } from "../chat/app-read.js"
 import { getWorkspaceMemberIdentity } from "../chat/workspace-identity.js"
@@ -72,7 +72,7 @@ function buildRelationshipPeerSubjectRef(input: {
       }
       return {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: input.peerWorkspaceMemberId,
+        workspaceMemberId: input.peerWorkspaceMemberId,
       }
     case "actor":
       if (!input.peerActorId) {
@@ -208,7 +208,7 @@ async function getWorkspaceMemberSummaryById(
 async function getMemberRelationshipProfileRow(workspaceMemberId: string) {
   const subjectId = await upsertAccessSubjectDefault({
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: workspaceMemberId,
+    workspaceMemberId: workspaceMemberId,
   })
   const row = await repo.selectMemberRelationshipProfileBySubjectId(subjectId)
   if (!row) {
@@ -463,21 +463,21 @@ async function grantActorContactVisibilityToMember(params: {
   workspaceId: string
   actorId: string
   requesterWorkspaceMemberId: string
-  grantedByWorkspaceMemberId: string
+  createdByWorkspaceMemberId: string
 }) {
   try {
-    await repo.insertWorkspaceAppGrantDefault({
+    await repo.insertWorkspaceResourceGrantDefault({
       workspaceId: params.workspaceId,
-      workspaceAppId: params.actorId,
+      workspaceResourceId: params.actorId,
       target: {
         subject: {
           kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-          memberId: params.requesterWorkspaceMemberId,
+          workspaceMemberId: params.requesterWorkspaceMemberId,
         },
       },
-      permissions: [WORKSPACE_APP_GRANT_PERMISSION.CONTACT_VISIBLE],
+      permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.CONTACT_VISIBLE],
       source: "approval",
-      createdByWorkspaceMemberId: params.grantedByWorkspaceMemberId,
+      createdByWorkspaceMemberId: params.createdByWorkspaceMemberId,
     })
   } catch (error) {
     if (!isUniqueViolation(error)) throw error
@@ -488,21 +488,21 @@ async function grantRemoteAgentContactVisibilityToMember(params: {
   workspaceId: string
   remoteAgentId: string
   requesterWorkspaceMemberId: string
-  grantedByWorkspaceMemberId?: string
+  createdByWorkspaceMemberId?: string
 }) {
   try {
-    await repo.insertWorkspaceAppGrantDefault({
+    await repo.insertWorkspaceResourceGrantDefault({
       workspaceId: params.workspaceId,
-      workspaceAppId: params.remoteAgentId,
+      workspaceResourceId: params.remoteAgentId,
       target: {
         subject: {
           kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-          memberId: params.requesterWorkspaceMemberId,
+          workspaceMemberId: params.requesterWorkspaceMemberId,
         },
       },
-      permissions: [WORKSPACE_APP_GRANT_PERMISSION.CONTACT_VISIBLE],
+      permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.CONTACT_VISIBLE],
       source: "approval",
-      createdByWorkspaceMemberId: params.grantedByWorkspaceMemberId ?? null,
+      createdByWorkspaceMemberId: params.createdByWorkspaceMemberId ?? null,
     })
   } catch (error) {
     if (!isUniqueViolation(error)) throw error
@@ -617,9 +617,9 @@ async function createActorAccessRequest(params: {
   actorId: string
   requesterWorkspaceMemberId: string
 }) {
-  const existing = await repo.selectPendingAppGrantRequest({
+  const existing = await repo.selectPendingResourceGrantRequest({
     workspaceId: params.workspaceId,
-    workspaceAppId: params.actorId,
+    workspaceResourceId: params.actorId,
     requesterWorkspaceMemberId: params.requesterWorkspaceMemberId,
   })
   if (existing) {
@@ -630,16 +630,18 @@ async function createActorAccessRequest(params: {
   }
 
   try {
-    const created = await repo.insertWorkspaceAppGrantRequestDefault({
+    const created = await repo.insertWorkspaceResourceGrantRequestDefault({
       workspaceId: params.workspaceId,
-      workspaceAppId: params.actorId,
+      workspaceResourceId: params.actorId,
       grantee: {
         subject: {
           kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-          memberId: params.requesterWorkspaceMemberId,
+          workspaceMemberId: params.requesterWorkspaceMemberId,
         },
       },
-      requestedPermissions: [WORKSPACE_APP_GRANT_PERMISSION.CONTACT_VISIBLE],
+      requestedPermissions: [
+        WORKSPACE_RESOURCE_GRANT_PERMISSION.CONTACT_VISIBLE,
+      ],
       requesterWorkspaceMemberId: params.requesterWorkspaceMemberId,
     })
     return {
@@ -648,9 +650,9 @@ async function createActorAccessRequest(params: {
     }
   } catch (error) {
     if (!isUniqueViolation(error)) throw error
-    const retry = await repo.selectPendingAppGrantRequest({
+    const retry = await repo.selectPendingResourceGrantRequest({
       workspaceId: params.workspaceId,
-      workspaceAppId: params.actorId,
+      workspaceResourceId: params.actorId,
       requesterWorkspaceMemberId: params.requesterWorkspaceMemberId,
     })
     if (!retry) throw error
@@ -666,9 +668,9 @@ async function createRemoteAgentAccessRequest(params: {
   remoteAgentId: string
   requesterWorkspaceMemberId: string
 }) {
-  const existing = await repo.selectPendingAppGrantRequest({
+  const existing = await repo.selectPendingResourceGrantRequest({
     workspaceId: params.workspaceId,
-    workspaceAppId: params.remoteAgentId,
+    workspaceResourceId: params.remoteAgentId,
     requesterWorkspaceMemberId: params.requesterWorkspaceMemberId,
   })
   if (existing) {
@@ -679,16 +681,18 @@ async function createRemoteAgentAccessRequest(params: {
   }
 
   try {
-    const created = await repo.insertWorkspaceAppGrantRequestDefault({
+    const created = await repo.insertWorkspaceResourceGrantRequestDefault({
       workspaceId: params.workspaceId,
-      workspaceAppId: params.remoteAgentId,
+      workspaceResourceId: params.remoteAgentId,
       grantee: {
         subject: {
           kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-          memberId: params.requesterWorkspaceMemberId,
+          workspaceMemberId: params.requesterWorkspaceMemberId,
         },
       },
-      requestedPermissions: [WORKSPACE_APP_GRANT_PERMISSION.CONTACT_VISIBLE],
+      requestedPermissions: [
+        WORKSPACE_RESOURCE_GRANT_PERMISSION.CONTACT_VISIBLE,
+      ],
       requesterWorkspaceMemberId: params.requesterWorkspaceMemberId,
     })
     return {
@@ -697,9 +701,9 @@ async function createRemoteAgentAccessRequest(params: {
     }
   } catch (error) {
     if (!isUniqueViolation(error)) throw error
-    const retry = await repo.selectPendingAppGrantRequest({
+    const retry = await repo.selectPendingResourceGrantRequest({
       workspaceId: params.workspaceId,
-      workspaceAppId: params.remoteAgentId,
+      workspaceResourceId: params.remoteAgentId,
       requesterWorkspaceMemberId: params.requesterWorkspaceMemberId,
     })
     if (!retry) throw error
@@ -716,7 +720,7 @@ async function loadViewerDirectConversationMap(workspaceMemberId: string) {
   // columns.
   const viewerSubjectId = await upsertAccessSubjectDefault({
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: workspaceMemberId,
+    workspaceMemberId: workspaceMemberId,
   })
   const rows =
     await repo.selectDirectConversationBindingsForSubject(viewerSubjectId)
@@ -740,24 +744,24 @@ async function loadViewerDirectConversationMap(workspaceMemberId: string) {
   return map
 }
 
-async function hasWorkspaceAppContactVisible(params: {
+async function hasWorkspaceResourceContactVisible(params: {
   workspaceId: string
   userId: string
-  workspaceAppId: string
+  workspaceResourceId: string
 }): Promise<boolean> {
   const viewer = await getWorkspaceMemberIdentity(
     params.workspaceId,
     params.userId
   )
   if (!viewer) return false
-  const app = await repo.selectWorkspaceAppLiveOwnerKind(
-    params.workspaceAppId,
+  const resource = await repo.selectWorkspaceResourceLiveOwnerKind(
+    params.workspaceResourceId,
     params.workspaceId
   )
-  if (!app) return false
+  if (!resource) return false
   if (
-    (app.kind === "actor" || app.kind === "remote_agent") &&
-    app.ownerWorkspaceMemberId === viewer.workspaceMemberId
+    (resource.kind === "actor" || resource.kind === "remote_agent") &&
+    resource.ownerWorkspaceMemberId === viewer.workspaceMemberId
   ) {
     return true
   }
@@ -767,10 +771,10 @@ async function hasWorkspaceAppContactVisible(params: {
   })
   const memberSubjectId = await upsertAccessSubjectDefault({
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: viewer.workspaceMemberId,
+    workspaceMemberId: viewer.workspaceMemberId,
   })
-  const grant = await repo.selectWorkspaceAppContactVisibleGrant({
-    workspaceAppId: params.workspaceAppId,
+  const grant = await repo.selectWorkspaceResourceContactVisibleGrant({
+    workspaceResourceId: params.workspaceResourceId,
     workspaceSubjectId,
     memberSubjectId,
   })
@@ -795,10 +799,10 @@ async function getActorAccessState(params: {
 }) {
   if (params.conversationId) return CONTACT_DIRECT_STATE.EXISTING
   if (
-    await hasWorkspaceAppContactVisible({
+    await hasWorkspaceResourceContactVisible({
       workspaceId: params.workspaceId,
       userId: params.userId,
-      workspaceAppId: params.actor.actorId,
+      workspaceResourceId: params.actor.actorId,
     })
   ) {
     return CONTACT_DIRECT_STATE.AVAILABLE
@@ -818,10 +822,10 @@ async function getRemoteAgentAccessState(params: {
 }) {
   if (params.conversationId) return CONTACT_DIRECT_STATE.EXISTING
   if (
-    await hasWorkspaceAppContactVisible({
+    await hasWorkspaceResourceContactVisible({
       workspaceId: params.workspaceId,
       userId: params.userId,
-      workspaceAppId: params.remoteAgent.remoteAgentId,
+      workspaceResourceId: params.remoteAgent.remoteAgentId,
     })
   ) {
     return CONTACT_DIRECT_STATE.AVAILABLE
@@ -997,22 +1001,24 @@ async function buildContactHubEntryMap(params: {
         }),
     viewerWorkspaceMember
       ? repo
-          .selectPendingAppGrantRequestIdsByKind({
+          .selectPendingResourceGrantRequestIdsByKind({
             workspaceId: params.workspaceId,
             requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
             kind: "actor",
           })
-          .then((rows) => rows.map((row) => ({ actorId: row.workspaceAppId })))
+          .then((rows) =>
+            rows.map((row) => ({ actorId: row.workspaceResourceId }))
+          )
       : Promise.resolve([] as { actorId: string | null }[]),
     viewerWorkspaceMember
       ? repo
-          .selectPendingAppGrantRequestIdsByKind({
+          .selectPendingResourceGrantRequestIdsByKind({
             workspaceId: params.workspaceId,
             requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
             kind: "remote_agent",
           })
           .then((rows) =>
-            rows.map((row) => ({ remoteAgentId: row.workspaceAppId }))
+            rows.map((row) => ({ remoteAgentId: row.workspaceResourceId }))
           )
       : Promise.resolve([] as { remoteAgentId: string | null }[]),
   ])
@@ -1513,9 +1519,9 @@ export async function searchRelationshipsByIdentity(params: {
 
     if (remoteAgent.workspace.id === params.workspaceId) {
       const pendingRemoteAgentRequest =
-        await repo.selectPendingRemoteAgentAppGrantRequestId({
+        await repo.selectPendingRemoteAgentResourceGrantRequestId({
           workspaceId: params.workspaceId,
-          workspaceAppId: remoteAgent.remoteAgentId,
+          workspaceResourceId: remoteAgent.remoteAgentId,
           requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
         })
       const accessState = await getRemoteAgentAccessState({
@@ -1635,11 +1641,12 @@ export async function searchRelationshipsByIdentity(params: {
   )
 
   if (actor.workspace.id === params.workspaceId) {
-    const pendingActorRequest = await repo.selectPendingActorAppGrantRequestId({
-      workspaceId: params.workspaceId,
-      workspaceAppId: actor.actorId,
-      requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
-    })
+    const pendingActorRequest =
+      await repo.selectPendingActorResourceGrantRequestId({
+        workspaceId: params.workspaceId,
+        workspaceResourceId: actor.actorId,
+        requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+      })
     const accessState = await getActorAccessState({
       workspaceId: params.workspaceId,
       userId: params.userId,
@@ -1784,10 +1791,10 @@ export async function requestRelationshipByIdentityProfile(params: {
     }
 
     if (profile.workspaceId === params.workspaceId) {
-      const canSee = await hasWorkspaceAppContactVisible({
+      const canSee = await hasWorkspaceResourceContactVisible({
         workspaceId: params.workspaceId,
         userId: params.userId,
-        workspaceAppId: remoteAgent.remoteAgentId,
+        workspaceResourceId: remoteAgent.remoteAgentId,
       })
 
       if (canSee) {
@@ -1893,10 +1900,10 @@ export async function requestRelationshipByIdentityProfile(params: {
   }
 
   if (profile.workspaceId === params.workspaceId) {
-    const canSee = await hasWorkspaceAppContactVisible({
+    const canSee = await hasWorkspaceResourceContactVisible({
       workspaceId: params.workspaceId,
       userId: params.userId,
-      workspaceAppId: actor.actorId,
+      workspaceResourceId: actor.actorId,
     })
 
     if (canSee) {
@@ -1914,7 +1921,7 @@ export async function requestRelationshipByIdentityProfile(params: {
         workspaceId: params.workspaceId,
         actorId: actor.actorId,
         requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
-        grantedByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+        createdByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
       })
       return {
         outcome: "actor_access_granted" as const,
@@ -2186,7 +2193,7 @@ export async function updateActorRelationshipProfile(params: {
   }
 
   const actorSummary = await getActorSummary(params.actorId)
-  let requiresContactApproval = actorSummary?.requiresContactApproval ?? false
+  const requiresContactApproval = actorSummary?.requiresContactApproval ?? false
   let isPublicShared = actorSummary?.isPublicShared ?? false
   if (typeof params.isPublicShared === "boolean") {
     const actorResult = await repo.updateActorPublicShared(
@@ -2258,7 +2265,7 @@ export async function updateRemoteAgentRelationshipProfile(params: {
   }
 
   const remoteAgentSummary = await getRemoteAgentSummary(params.remoteAgentId)
-  let requiresContactApproval =
+  const requiresContactApproval =
     remoteAgentSummary?.requiresContactApproval ?? false
   let isPublicShared = remoteAgentSummary?.isPublicShared ?? false
 
@@ -2677,7 +2684,7 @@ export async function resolveActorAccessRequest(params: {
   if (
     !request ||
     request.workspaceId !== params.workspaceId ||
-    request.targetKind !== WORKSPACE_APP_KIND.ACTOR ||
+    request.targetKind !== WORKSPACE_RESOURCE_KIND.ACTOR ||
     !request.actorId
   ) {
     throw new Error("Actor access request not found")
@@ -2697,9 +2704,9 @@ export async function resolveActorAccessRequest(params: {
     throw new Error("Not allowed to resolve this actor access request")
   }
 
-  return resolveWorkspaceAppGrantRequest({
+  return resolveWorkspaceResourceGrantRequest({
     workspaceId: params.workspaceId,
-    workspaceAppId: request.actorId,
+    workspaceResourceId: request.actorId,
     requestId: request.id,
     approverWorkspaceMemberId: approverWorkspaceMember.workspaceMemberId,
     decision: params.decision,
@@ -2726,7 +2733,7 @@ export async function resolveRemoteAgentAccessRequest(params: {
   if (
     !request ||
     request.workspaceId !== params.workspaceId ||
-    request.targetKind !== WORKSPACE_APP_KIND.REMOTE_AGENT ||
+    request.targetKind !== WORKSPACE_RESOURCE_KIND.REMOTE_AGENT ||
     !request.remoteAgentId
   ) {
     throw new Error("Remote agent access request not found")
@@ -2747,9 +2754,9 @@ export async function resolveRemoteAgentAccessRequest(params: {
     throw new Error("Not allowed to resolve this remote agent access request")
   }
 
-  return resolveWorkspaceAppGrantRequest({
+  return resolveWorkspaceResourceGrantRequest({
     workspaceId: params.workspaceId,
-    workspaceAppId: request.remoteAgentId,
+    workspaceResourceId: request.remoteAgentId,
     requestId: request.id,
     approverWorkspaceMemberId: approverWorkspaceMember.workspaceMemberId,
     decision: params.decision,
@@ -2896,10 +2903,10 @@ export async function openDirectConversation(params: {
   }
 
   if (resolved.kind === CONTACT_HUB_KIND.WORKSPACE_ACTOR && resolved.actor) {
-    const canSee = await hasWorkspaceAppContactVisible({
+    const canSee = await hasWorkspaceResourceContactVisible({
       workspaceId: params.workspaceId,
       userId: params.userId,
-      workspaceAppId: resolved.actor.actorId,
+      workspaceResourceId: resolved.actor.actorId,
     })
 
     if (!canSee && resolved.actor.requiresContactApproval) {
@@ -2915,7 +2922,7 @@ export async function openDirectConversation(params: {
           actorId: resolved.actor.actorId,
           requesterWorkspaceMemberId:
             requesterWorkspaceMember.workspaceMemberId,
-          grantedByWorkspaceMemberId:
+          createdByWorkspaceMemberId:
             requesterWorkspaceMember.workspaceMemberId,
         })
       } else {
@@ -2949,10 +2956,10 @@ export async function openDirectConversation(params: {
         "Cannot open a direct conversation with a remote agent from another workspace"
       )
     }
-    const canSee = await hasWorkspaceAppContactVisible({
+    const canSee = await hasWorkspaceResourceContactVisible({
       workspaceId: params.workspaceId,
       userId: params.userId,
-      workspaceAppId: resolved.remoteAgent.remoteAgentId,
+      workspaceResourceId: resolved.remoteAgent.remoteAgentId,
     })
 
     if (!canSee && resolved.remoteAgent.requiresContactApproval) {

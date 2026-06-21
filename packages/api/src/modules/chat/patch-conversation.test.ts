@@ -40,7 +40,7 @@ async function seedPatchConversationFixture(db: AnyDb) {
     .executeTakeFirstOrThrow()
   const subjectId = await upsertAccessSubjectOn(db, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: member.id as string,
+    workspaceMemberId: member.id as string,
   })
   const conversation = await db
     .insertInto("conversations")

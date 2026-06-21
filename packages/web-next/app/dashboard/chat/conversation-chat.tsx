@@ -736,7 +736,7 @@ export default function ConversationChat({
       ) : (
         <div className="sticky top-0 z-20 flex items-center justify-between border-b border-border bg-background px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-4 lg:px-6 lg:py-4">
           <div className="flex min-w-0 items-center gap-3">
-            {onBack && (
+            {onBack ? (
               <Button
                 variant="ghost"
                 size="icon"
@@ -745,7 +745,7 @@ export default function ConversationChat({
               >
                 <ArrowDown className="h-4 w-4 rotate-90" />
               </Button>
-            )}
+            ) : null}
             <div className="relative">
               <ChatAvatar
                 name={title}
@@ -910,7 +910,7 @@ export default function ConversationChat({
             <div ref={bottomRef} />
           </div>
         </div>
-        {showJumpButton && (
+        {showJumpButton ? (
           <div className="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center">
             <button
               onClick={scrollToBottom}
@@ -920,20 +920,20 @@ export default function ConversationChat({
               New messages
             </button>
           </div>
-        )}
+        ) : null}
       </div>
 
       {/* Input area — textarea with toolbar */}
       <div className="sticky bottom-0 z-20 border-t border-border bg-muted/20 px-4 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
         {/* Responding hint */}
-        {workingHint && (
+        {workingHint ? (
           <div className="mb-2 flex items-center gap-2 px-1">
             <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
             <span className="text-xs text-muted-foreground">{workingHint}</span>
           </div>
-        )}
+        ) : null}
         {/* Typing indicator (other participants currently typing) */}
-        {activeTypers.length > 0 && (
+        {activeTypers.length > 0 ? (
           <div className="mb-2 flex items-center gap-2 px-1">
             <div className="flex gap-0.5">
               <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground" />
@@ -946,7 +946,7 @@ export default function ConversationChat({
                 : `${activeTypers.length} people are typing…`}
             </span>
           </div>
-        )}
+        ) : null}
         <ChatComposer
           workspaceId={workspaceId || null}
           participants={mentionableParticipants}

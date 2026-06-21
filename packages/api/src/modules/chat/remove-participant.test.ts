@@ -61,14 +61,23 @@ async function insertWorkspaceMember(
 
 async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
   const actorId = crypto.randomUUID()
+  // workspace_resources.created_by_subject_id is NOT NULL; mint a workspace-kind creator subject.
+  const createdBySubjectId = (
+    await db
+      .insertInto("access_subjects")
+      .values({ kind: "workspace", workspace_id: workspaceId } as any)
+      .returning("id")
+      .executeTakeFirstOrThrow()
+  ).id as string
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspace_resources")
     .values({
       id: actorId,
       workspace_id: workspaceId,
       kind: "actor",
       display_name: "test actor",
       status: "active",
+      created_by_subject_id: createdBySubjectId,
     } as any)
     .execute()
   const row = await db
@@ -89,14 +98,23 @@ async function insertRemoteAgent(
   workspaceId: string
 ): Promise<string> {
   const remoteAgentId = crypto.randomUUID()
+  // workspace_resources.created_by_subject_id is NOT NULL; mint a workspace-kind creator subject.
+  const createdBySubjectId = (
+    await db
+      .insertInto("access_subjects")
+      .values({ kind: "workspace", workspace_id: workspaceId } as any)
+      .returning("id")
+      .executeTakeFirstOrThrow()
+  ).id as string
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspace_resources")
     .values({
       id: remoteAgentId,
       workspace_id: workspaceId,
       kind: "remote_agent",
       display_name: "test remote agent",
       status: "active",
+      created_by_subject_id: createdBySubjectId,
     } as any)
     .execute()
   const row = await db
@@ -135,18 +153,29 @@ async function insertConversationParticipant(
   state: "active" | "left" | "removed" = "active",
   roleKey = "member"
 ): Promise<string> {
+  function resolveKind() {
+    switch (participantType) {
+      case "workspace_member":
+        return SUBJECT_KIND.WORKSPACE_MEMBER
+      case "actor":
+        return SUBJECT_KIND.ACTOR
+      default:
+        return SUBJECT_KIND.REMOTE_AGENT
+    }
+  }
+  function resolveEntityRef() {
+    switch (participantType) {
+      case "workspace_member":
+        return { workspaceMemberId: entityId }
+      case "actor":
+        return { actorId: entityId }
+      default:
+        return { remoteAgentId: entityId }
+    }
+  }
   const subjectId = await upsertAccessSubjectOn(db, {
-    kind:
-      participantType === "workspace_member"
-        ? SUBJECT_KIND.WORKSPACE_MEMBER
-        : participantType === "actor"
-          ? SUBJECT_KIND.ACTOR
-          : SUBJECT_KIND.REMOTE_AGENT,
-    ...(participantType === "workspace_member"
-      ? { memberId: entityId }
-      : participantType === "actor"
-        ? { actorId: entityId }
-        : { remoteAgentId: entityId }),
+    kind: resolveKind(),
+    ...resolveEntityRef(),
   } as Parameters<typeof upsertAccessSubjectOn>[1])
 
   const row = await db

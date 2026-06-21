@@ -76,11 +76,11 @@ async function seedReaddFixture(db: AnyDb) {
     .executeTakeFirstOrThrow()
   const ownerSubjectId = await upsertAccessSubjectOn(db, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: ownerMember.id as string,
+    workspaceMemberId: ownerMember.id as string,
   })
   const readdSubjectId = await upsertAccessSubjectOn(db, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: readdMember.id as string,
+    workspaceMemberId: readdMember.id as string,
   })
   await db
     .insertInto("conversationParticipants")
@@ -123,13 +123,17 @@ async function seedReaddFixture(db: AnyDb) {
 
 async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
   const actorId = randomUUID()
+  const createdBySubjectId = await upsertAccessSubjectOn(db, {
+    kind: SUBJECT_KIND.PLATFORM,
+  })
   await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id: actorId,
       workspaceId,
       kind: "actor",
       displayName: "add participant actor",
+      createdBySubjectId,
       status: "active",
     } as never)
     .execute()
@@ -151,13 +155,17 @@ async function insertRemoteAgent(
   workspaceId: string
 ): Promise<string> {
   const remoteAgentId = randomUUID()
+  const createdBySubjectId = await upsertAccessSubjectOn(db, {
+    kind: SUBJECT_KIND.PLATFORM,
+  })
   await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id: remoteAgentId,
       workspaceId,
       kind: "remote_agent",
       displayName: "add participant remote agent",
+      createdBySubjectId,
       status: "active",
     } as never)
     .execute()

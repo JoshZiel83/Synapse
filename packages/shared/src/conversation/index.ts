@@ -134,12 +134,12 @@ export function summarizeConversationEvent(
       typeof eventPayload.textDigest === "string"
         ? eventPayload.textDigest.trim()
         : ""
-    const scope =
-      typeof eventPayload.memorySpaceType === "string"
-        ? eventPayload.memorySpaceType
-        : typeof eventPayload.memoryScope === "string"
-          ? eventPayload.memoryScope
-          : "memory"
+    let scope = "memory"
+    if (typeof eventPayload.memorySpaceType === "string") {
+      scope = eventPayload.memorySpaceType
+    } else if (typeof eventPayload.memoryScope === "string") {
+      scope = eventPayload.memoryScope
+    }
     const actionLabel = eventType === "memory_updated" ? "updated" : "saved"
     const summary = textDigest || "durable memory saved"
     return `Memory ${actionLabel}: ${summary} (${scope})`

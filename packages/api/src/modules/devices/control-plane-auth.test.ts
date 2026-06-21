@@ -25,12 +25,12 @@ async function seedDeviceWithService(db: any): Promise<Seed> {
   const workspaceId = randomUUID()
   const userId = randomUUID()
   await db.executeQuery(
-    sql`INSERT INTO users (id, email, name) VALUES (${userId}, ${userId + "@test"}, 'tester')`.compile(
+    sql`INSERT INTO users (id, email, name) VALUES (${userId}, ${`${userId}@test`}, 'tester')`.compile(
       db
     )
   )
   await db.executeQuery(
-    sql`INSERT INTO workspaces (id, name, slug, owner_id) VALUES (${workspaceId}, 'test-ws', ${"ws-" + workspaceId.slice(0, 8)}, ${userId})`.compile(
+    sql`INSERT INTO workspaces (id, name, slug, owner_id) VALUES (${workspaceId}, 'test-ws', ${`ws-${workspaceId.slice(0, 8)}`}, ${userId})`.compile(
       db
     )
   )

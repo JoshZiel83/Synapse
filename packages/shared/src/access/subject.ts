@@ -30,7 +30,7 @@ export type SubjectRef =
     }
   | {
       readonly kind: typeof SUBJECT_KIND.WORKSPACE_MEMBER
-      readonly memberId: string
+      readonly workspaceMemberId: string
     }
   | { readonly kind: typeof SUBJECT_KIND.ACTOR; readonly actorId: string }
   | {
@@ -53,10 +53,9 @@ export type SubjectRef =
  * Workspace-scoped subjects only — the variants that can be referenced from
  * authorization rows. Maps 1:1 to ACCESS_TARGET_TYPES values plus the
  * `remote_agent` kind which (as of PR2 of the subject-scope refactor) travels
- * exclusively through the new `ScopedSubjectTarget` variant of AccessGrantTarget
- * — it is intentionally NOT in `ACCESS_TARGET_TYPES` / `CAPABILITY_ACCESS_TARGET_TYPES`
- * so the legacy projection layer in `bindings.ts` does not have to grow another
- * column.
+ * exclusively through the `ScopedSubjectTarget` shape used by
+ * `workspace_resource_grants.subject_id` — it is intentionally NOT in
+ * `ACCESS_TARGET_TYPES` / `CAPABILITY_ACCESS_TARGET_TYPES`.
  */
 export type AccessTargetRef = Extract<
   SubjectRef,
@@ -141,9 +140,9 @@ export function workspaceRef(
   return { kind: SUBJECT_KIND.WORKSPACE, workspaceId }
 }
 export function workspaceMemberRef(
-  memberId: string
+  workspaceMemberId: string
 ): Extract<SubjectRef, { kind: typeof SUBJECT_KIND.WORKSPACE_MEMBER }> {
-  return { kind: SUBJECT_KIND.WORKSPACE_MEMBER, memberId }
+  return { kind: SUBJECT_KIND.WORKSPACE_MEMBER, workspaceMemberId }
 }
 export function actorRef(
   actorId: string
@@ -189,13 +188,13 @@ export function subjectsEqual(a: SubjectRef, b: SubjectRef): boolean {
       )
     case SUBJECT_KIND.WORKSPACE_MEMBER:
       return (
-        a.memberId ===
+        a.workspaceMemberId ===
         (
           b as Extract<
             SubjectRef,
             { kind: typeof SUBJECT_KIND.WORKSPACE_MEMBER }
           >
-        ).memberId
+        ).workspaceMemberId
       )
     case SUBJECT_KIND.ACTOR:
       return (
@@ -243,7 +242,7 @@ export function subjectKey(ref: SubjectRef): string {
     case SUBJECT_KIND.WORKSPACE:
       return `workspace:${ref.workspaceId}`
     case SUBJECT_KIND.WORKSPACE_MEMBER:
-      return `workspace_member:${ref.memberId}`
+      return `workspace_member:${ref.workspaceMemberId}`
     case SUBJECT_KIND.ACTOR:
       return `actor:${ref.actorId}`
     case SUBJECT_KIND.REMOTE_AGENT:
@@ -345,7 +344,7 @@ export function isScopeEligibleSubject(ref: SubjectRef): boolean {
 
 /**
  * The kinds legitimate as subjects of a workspace-bound authorization row
- * (resource_access_bindings / runtime_authorization_grants / memory_access_grants).
+ * (workspace_resource_grants / runtime_authorization_grants / memory_access_grants).
  * Excludes user / external / platform. NOTE: external is workspace-rooted now
  * (it carries workspaceId) but is intentionally still excluded — first-class
  * external identities are not yet authorization principals (see plan "后续可选").
@@ -403,10 +402,11 @@ export function isMemoryOwnerSubjectKind(ref: SubjectRef): boolean {
 // ---------- Scoped target types (PR1 additive — not replacing legacy yet) ----------
 
 /**
- * New target shape used by `resource_access_bindings.subject_id +
- * scope_subject_id`. PR2 promotes this to be a variant of the exported
- * `AccessTarget` / `CapabilityAccessTarget` unions; PR7 collapses to this
- * variant only.
+ * The unified target shape `{ subject, scope? }` backing
+ * `workspace_resource_grants.subject_id + scope_subject_id` (and the parallel
+ * memory / runtime-authorization grant rows). This is the single
+ * `AccessTarget` / `CapabilityAccessTarget` variant after the
+ * workspace-resource authz unification.
  */
 export type ScopedSubjectTarget = {
   readonly subject: SubjectRef

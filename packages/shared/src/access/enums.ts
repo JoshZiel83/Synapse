@@ -30,25 +30,27 @@ export const SUBJECT_KINDS = [
 
 export type SubjectKind = (typeof SUBJECT_KINDS)[number]
 
-export const WORKSPACE_APP_KIND = {
+export const WORKSPACE_RESOURCE_KIND = {
   PLUGIN_INSTALLATION: "plugin_installation",
   INSTALLED_SKILL: "installed_skill",
   ACTOR: "actor",
   REMOTE_AGENT: "remote_agent",
   DEVICE_CAPABILITY: "device_capability",
+  AUTOMATION_EVENT_SOURCE: "automation_event_source",
 } as const
 
-export const WORKSPACE_APP_KINDS = [
-  WORKSPACE_APP_KIND.PLUGIN_INSTALLATION,
-  WORKSPACE_APP_KIND.INSTALLED_SKILL,
-  WORKSPACE_APP_KIND.ACTOR,
-  WORKSPACE_APP_KIND.REMOTE_AGENT,
-  WORKSPACE_APP_KIND.DEVICE_CAPABILITY,
+export const WORKSPACE_RESOURCE_KINDS = [
+  WORKSPACE_RESOURCE_KIND.PLUGIN_INSTALLATION,
+  WORKSPACE_RESOURCE_KIND.INSTALLED_SKILL,
+  WORKSPACE_RESOURCE_KIND.ACTOR,
+  WORKSPACE_RESOURCE_KIND.REMOTE_AGENT,
+  WORKSPACE_RESOURCE_KIND.DEVICE_CAPABILITY,
+  WORKSPACE_RESOURCE_KIND.AUTOMATION_EVENT_SOURCE,
 ] as const
 
-export type WorkspaceAppKind = (typeof WORKSPACE_APP_KINDS)[number]
+export type WorkspaceResourceKind = (typeof WORKSPACE_RESOURCE_KINDS)[number]
 
-export const WORKSPACE_APP_STATUS = {
+export const WORKSPACE_RESOURCE_STATUS = {
   ACTIVE: "active",
   DISABLED: "disabled",
   ERROR: "error",
@@ -56,92 +58,92 @@ export const WORKSPACE_APP_STATUS = {
   ARCHIVED: "archived",
 } as const
 
-export const WORKSPACE_APP_STATUSES = [
-  WORKSPACE_APP_STATUS.ACTIVE,
-  WORKSPACE_APP_STATUS.DISABLED,
-  WORKSPACE_APP_STATUS.ERROR,
-  WORKSPACE_APP_STATUS.DEPRECATED,
-  WORKSPACE_APP_STATUS.ARCHIVED,
+export const WORKSPACE_RESOURCE_STATUSES = [
+  WORKSPACE_RESOURCE_STATUS.ACTIVE,
+  WORKSPACE_RESOURCE_STATUS.DISABLED,
+  WORKSPACE_RESOURCE_STATUS.ERROR,
+  WORKSPACE_RESOURCE_STATUS.DEPRECATED,
+  WORKSPACE_RESOURCE_STATUS.ARCHIVED,
 ] as const
 
-export type WorkspaceAppStatus = (typeof WORKSPACE_APP_STATUSES)[number]
+export type WorkspaceResourceStatus =
+  (typeof WORKSPACE_RESOURCE_STATUSES)[number]
 
-export const WORKSPACE_APP_GRANT_PERMISSION = {
+export const WORKSPACE_RESOURCE_GRANT_PERMISSION = {
   USE: "use",
   MANAGE: "manage",
   CONTACT_VISIBLE: "contact_visible",
 } as const
 
-export const WORKSPACE_APP_GRANT_PERMISSIONS = [
-  WORKSPACE_APP_GRANT_PERMISSION.USE,
-  WORKSPACE_APP_GRANT_PERMISSION.MANAGE,
-  WORKSPACE_APP_GRANT_PERMISSION.CONTACT_VISIBLE,
+export const WORKSPACE_RESOURCE_GRANT_PERMISSIONS = [
+  WORKSPACE_RESOURCE_GRANT_PERMISSION.USE,
+  WORKSPACE_RESOURCE_GRANT_PERMISSION.MANAGE,
+  WORKSPACE_RESOURCE_GRANT_PERMISSION.CONTACT_VISIBLE,
 ] as const
 
-export type WorkspaceAppGrantPermission =
-  (typeof WORKSPACE_APP_GRANT_PERMISSIONS)[number]
+export type WorkspaceResourceGrantPermission =
+  (typeof WORKSPACE_RESOURCE_GRANT_PERMISSIONS)[number]
 
-export const WORKSPACE_APP_GRANT_STATUS = {
+export const WORKSPACE_RESOURCE_GRANT_STATUS = {
   ACTIVE: "active",
   REVOKED: "revoked",
 } as const
 
-export const WORKSPACE_APP_GRANT_STATUSES = [
-  WORKSPACE_APP_GRANT_STATUS.ACTIVE,
-  WORKSPACE_APP_GRANT_STATUS.REVOKED,
+export const WORKSPACE_RESOURCE_GRANT_STATUSES = [
+  WORKSPACE_RESOURCE_GRANT_STATUS.ACTIVE,
+  WORKSPACE_RESOURCE_GRANT_STATUS.REVOKED,
 ] as const
 
-export type WorkspaceAppGrantStatus =
-  (typeof WORKSPACE_APP_GRANT_STATUSES)[number]
+export type WorkspaceResourceGrantStatus =
+  (typeof WORKSPACE_RESOURCE_GRANT_STATUSES)[number]
 
-export const WORKSPACE_APP_GRANT_SOURCE = {
+export const WORKSPACE_RESOURCE_GRANT_SOURCE = {
   MANUAL: "manual",
   APPROVAL: "approval",
   SYSTEM: "system",
 } as const
 
-export const WORKSPACE_APP_GRANT_SOURCES = [
-  WORKSPACE_APP_GRANT_SOURCE.MANUAL,
-  WORKSPACE_APP_GRANT_SOURCE.APPROVAL,
-  WORKSPACE_APP_GRANT_SOURCE.SYSTEM,
+export const WORKSPACE_RESOURCE_GRANT_SOURCES = [
+  WORKSPACE_RESOURCE_GRANT_SOURCE.MANUAL,
+  WORKSPACE_RESOURCE_GRANT_SOURCE.APPROVAL,
+  WORKSPACE_RESOURCE_GRANT_SOURCE.SYSTEM,
 ] as const
 
-export type WorkspaceAppGrantSource =
-  (typeof WORKSPACE_APP_GRANT_SOURCES)[number]
+export type WorkspaceResourceGrantSource =
+  (typeof WORKSPACE_RESOURCE_GRANT_SOURCES)[number]
 
-export const WORKSPACE_APP_GRANT_REQUEST_STATUS = {
+export const WORKSPACE_RESOURCE_GRANT_REQUEST_STATUS = {
   PENDING: "pending",
   APPROVED: "approved",
   REJECTED: "rejected",
   CANCELLED: "cancelled",
 } as const
 
-export const WORKSPACE_APP_GRANT_REQUEST_STATUSES = [
-  WORKSPACE_APP_GRANT_REQUEST_STATUS.PENDING,
-  WORKSPACE_APP_GRANT_REQUEST_STATUS.APPROVED,
-  WORKSPACE_APP_GRANT_REQUEST_STATUS.REJECTED,
-  WORKSPACE_APP_GRANT_REQUEST_STATUS.CANCELLED,
+export const WORKSPACE_RESOURCE_GRANT_REQUEST_STATUSES = [
+  WORKSPACE_RESOURCE_GRANT_REQUEST_STATUS.PENDING,
+  WORKSPACE_RESOURCE_GRANT_REQUEST_STATUS.APPROVED,
+  WORKSPACE_RESOURCE_GRANT_REQUEST_STATUS.REJECTED,
+  WORKSPACE_RESOURCE_GRANT_REQUEST_STATUS.CANCELLED,
 ] as const
 
-export type WorkspaceAppGrantRequestStatus =
-  (typeof WORKSPACE_APP_GRANT_REQUEST_STATUSES)[number]
+export type WorkspaceResourceGrantRequestStatus =
+  (typeof WORKSPACE_RESOURCE_GRANT_REQUEST_STATUSES)[number]
 
-export const WORKSPACE_APP_GRANT_REQUEST_DIRECTION = {
+export const WORKSPACE_RESOURCE_GRANT_REQUEST_DIRECTION = {
   INCOMING: "incoming",
   OUTGOING: "outgoing",
 } as const
 
-export const WORKSPACE_APP_GRANT_REQUEST_DIRECTIONS = [
-  WORKSPACE_APP_GRANT_REQUEST_DIRECTION.INCOMING,
-  WORKSPACE_APP_GRANT_REQUEST_DIRECTION.OUTGOING,
+export const WORKSPACE_RESOURCE_GRANT_REQUEST_DIRECTIONS = [
+  WORKSPACE_RESOURCE_GRANT_REQUEST_DIRECTION.INCOMING,
+  WORKSPACE_RESOURCE_GRANT_REQUEST_DIRECTION.OUTGOING,
 ] as const
 
-export type WorkspaceAppGrantRequestDirection =
-  (typeof WORKSPACE_APP_GRANT_REQUEST_DIRECTIONS)[number]
+export type WorkspaceResourceGrantRequestDirection =
+  (typeof WORKSPACE_RESOURCE_GRANT_REQUEST_DIRECTIONS)[number]
 
 /**
- * Resource types recognized by the access evaluator. A superset of the resources
- * that can be the target of an explicit binding row (see ACCESS_BINDABLE_RESOURCE_TYPES).
+ * Resource types recognized by the access evaluator.
  */
 export const ACCESS_RESOURCE_TYPE = {
   PLATFORM: "platform",
@@ -184,23 +186,7 @@ export const ACCESS_RESOURCE_TYPES = [
 export type AccessResourceType = (typeof ACCESS_RESOURCE_TYPES)[number]
 
 /**
- * Resources that still use the legacy `resource_access_bindings` junction.
- * Workspace-app resources have moved to `workspace_app_grants`; the old table
- * remains only for automation event sources.
- */
-export const ACCESS_BINDABLE_RESOURCE_TYPE = {
-  AUTOMATION_EVENT_SOURCE: "automation_event_source",
-} as const
-
-export const ACCESS_BINDABLE_RESOURCE_TYPES = [
-  ACCESS_BINDABLE_RESOURCE_TYPE.AUTOMATION_EVENT_SOURCE,
-] as const
-
-export type AccessBindableResourceType =
-  (typeof ACCESS_BINDABLE_RESOURCE_TYPES)[number]
-
-/**
- * Lifecycle status of a `resource_access_bindings` row.
+ * Lifecycle status of an access grant row.
  */
 export const ACCESS_BINDING_STATUS = {
   ACTIVE: "active",
@@ -213,26 +199,6 @@ export const ACCESS_BINDING_STATUSES = [
 ] as const
 
 export type AccessBindingStatus = (typeof ACCESS_BINDING_STATUSES)[number]
-
-/**
- * Provenance marker for binding rows — distinguishes manually-granted rows from
- * rows auto-created by lifecycle hooks (e.g. actor-default-open).
- */
-export const ACCESS_BINDING_SOURCE = {
-  MANUAL: "manual",
-  DEFAULT_OPEN: "default_open",
-  APPROVAL: "approval",
-  SYSTEM: "system",
-} as const
-
-export const ACCESS_BINDING_SOURCES = [
-  ACCESS_BINDING_SOURCE.MANUAL,
-  ACCESS_BINDING_SOURCE.DEFAULT_OPEN,
-  ACCESS_BINDING_SOURCE.APPROVAL,
-  ACCESS_BINDING_SOURCE.SYSTEM,
-] as const
-
-export type AccessBindingSource = (typeof ACCESS_BINDING_SOURCES)[number]
 
 /**
  * subject-scope-refactor: memory_access_grants table permissions. Grants can

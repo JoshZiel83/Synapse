@@ -185,7 +185,6 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
           code: "internal_error",
           message: (err as Error).message,
         })
-        return
       }
     }
   )

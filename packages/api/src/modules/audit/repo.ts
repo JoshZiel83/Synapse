@@ -3,7 +3,7 @@
 // The only audit file permitted to import the db client (guard r8). Owns the
 // two read queries behind GET /api/v1/workspaces/:workspaceId/audit-logs: a
 // conditional count query and the paginated data query (leftJoins to
-// users/actors/workspaceApps). Returns camelCase domain records and KEEPS Date
+// users/actors/workspaceResources). Returns camelCase domain records and KEEPS Date
 // objects — instant serialization stays at the boundary (guard r3). round-6 P1-6.
 
 import { db } from "../../infrastructure/database/kysely.js"
@@ -100,7 +100,7 @@ export async function listWorkspaceAuditLogs(
     .selectFrom("auditLogs as al")
     .leftJoin("users as u", "u.id", "al.userId")
     .leftJoin("actors as a", "a.id", "al.actorId")
-    .leftJoin("workspaceApps as actor_app", "actor_app.id", "a.id")
+    .leftJoin("workspaceResources as actor_app", "actor_app.id", "a.id")
     .select([
       "al.id",
       "al.action",

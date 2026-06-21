@@ -116,7 +116,7 @@ export async function validateConversationScopedAccessTarget(params: {
   // (subject=conversation, actor + scope=conversation, AND
   // remote_agent + scope=conversation). The runtime visibility layer
   // already matches scoped remote_agent grants (see
-  // loadVisibleAccessBindings in tool-resolver.ts) so the creation path
+  // loadVisiblePluginGrants in mcp-plugins/repo.ts) so the creation path
   // must validate them too, otherwise a remote_agent + scope=conv grant
   // could be written without checking conversation type policy or
   // remote-agent participation.
@@ -154,7 +154,8 @@ export async function validateConversationScopedAccessTarget(params: {
       // isn't actually in C.
       activeParticipantCheck = {
         participantType: "workspace_member",
-        principalId: (params.target.subject as { memberId: string }).memberId,
+        principalId: (params.target.subject as { workspaceMemberId: string })
+          .workspaceMemberId,
         principalKind: "workspace_member",
       }
     }
@@ -216,7 +217,7 @@ export async function validateConversationScopedAccessTarget(params: {
     case "workspace_member":
       principalRef = {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: activeParticipantCheck.principalId,
+        workspaceMemberId: activeParticipantCheck.principalId,
       } as const
       break
   }
@@ -230,12 +231,17 @@ export async function validateConversationScopedAccessTarget(params: {
     }
   )
   if (!hasActive) {
-    const label =
-      activeParticipantCheck.principalKind === "actor"
-        ? "actor"
-        : activeParticipantCheck.principalKind === "remote_agent"
-          ? "remote agent"
-          : "workspace member"
+    let label
+    switch (activeParticipantCheck.principalKind) {
+      case "actor":
+        label = "actor"
+        break
+      case "remote_agent":
+        label = "remote agent"
+        break
+      default:
+        label = "workspace member"
+    }
     throw params.buildError(
       `Selected ${label} must already be an active participant in the selected conversation.`
     )

@@ -263,6 +263,78 @@ test("conversationItemToContextItem parses only object metadata", () => {
   assert.deepEqual((item as any).metadata, {})
 })
 
+// Regression for the CamelCasePlugin-cutover residue (rename-propagation audit):
+// buildAuthor/buildTargets read camelCase ChatParticipantRow keys. A snake_case
+// read silently resolved author=undefined / target="system" in the LLM context.
+test("conversationItemToContextItem resolves an actor author from a camelCase authorParticipant", () => {
+  const item = conversationItemToContextItem(
+    {
+      id: "msg-actor",
+      role: "user",
+      contentBlocks: textBlocks("hi"),
+      metadata: "{}",
+      authorParticipant: {
+        id: "cp-1",
+        actorId: "actor-1",
+        participantName: "Aria",
+        displayName: "Aria Display",
+      },
+    },
+    "actor-1"
+  )
+  const author = (item as any)?.author
+  assert.equal(author?.participantType, "actor")
+  assert.equal(author?.actorId, "actor-1")
+  assert.equal(author?.name, "Aria")
+  assert.equal(author?.isSelf, true)
+})
+
+test("conversationItemToContextItem resolves a workspace_member author from a camelCase authorParticipant", () => {
+  const item = conversationItemToContextItem(
+    {
+      id: "msg-member",
+      role: "user",
+      contentBlocks: textBlocks("hi"),
+      metadata: "{}",
+      authorParticipant: {
+        id: "cp-2",
+        workspaceMemberId: "wm-1",
+        userId: "user-9",
+        userName: "Sam",
+      },
+    },
+    "actor-1"
+  )
+  const author = (item as any)?.author
+  assert.equal(author?.participantType, "workspace_member")
+  assert.equal(author?.userId, "user-9")
+  assert.equal(author?.name, "Sam")
+})
+
+test("conversationItemToContextItem keeps a camelCase contextTarget's type (not collapsed to system)", () => {
+  const item = conversationItemToContextItem(
+    {
+      id: "msg-targets",
+      role: "user",
+      contentBlocks: textBlocks("hi"),
+      metadata: "{}",
+      contextTargets: [
+        {
+          id: "cp-3",
+          participantType: "actor",
+          actorId: "actor-2",
+          participantName: "Bee",
+        },
+      ],
+    },
+    "actor-1"
+  )
+  const target = (item as any)?.targets?.[0]
+  assert.equal(target?.participantType, "actor")
+  assert.equal(target?.actorId, "actor-2")
+  assert.equal(target?.name, "Bee")
+})
+
 test("itemPartsToCanonicalBlocks parses json part payloads as object only", () => {
   const blocks = itemPartsToCanonicalBlocks([
     {

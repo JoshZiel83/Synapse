@@ -147,14 +147,14 @@ export function WebQrLoginPanel({ redirect }: { redirect: string | null }) {
         ) : (
           <div className="space-y-2 px-4 text-center">
             <p className="text-sm font-medium text-foreground">
-              {deviceState === "approved" && "已确认登录"}
-              {deviceState === "expired" && "二维码已过期"}
-              {deviceState === "error" && "二维码生成失败"}
+              {deviceState === "approved" ? "已确认登录" : null}
+              {deviceState === "expired" ? "二维码已过期" : null}
+              {deviceState === "error" ? "二维码生成失败" : null}
             </p>
             <p className="text-sm text-muted-foreground">
-              {deviceState === "approved" && "正在完成登录，请稍候。"}
-              {deviceState === "expired" && "请重新生成二维码后继续。"}
-              {deviceState === "error" && "请重试以重新生成二维码。"}
+              {deviceState === "approved" ? "正在完成登录，请稍候。" : null}
+              {deviceState === "expired" ? "请重新生成二维码后继续。" : null}
+              {deviceState === "error" ? "请重试以重新生成二维码。" : null}
             </p>
           </div>
         )}

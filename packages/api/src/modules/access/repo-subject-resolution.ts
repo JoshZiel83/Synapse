@@ -103,7 +103,7 @@ export async function isSubjectActiveConversationParticipant(
  * subject_id.
  *
  * Critical security property: `runtimeSubjectIds` MUST NOT auto-include an
- * app owner's `subject=workspace_member` identity — that would let an actor or
+ * resource owner's `subject=workspace_member` identity — that would let an actor or
  * remote agent inherit owner/member grants (including user_private memory).
  * Delegation is an explicit-act-on-behalf contract, surfaced via
  * `delegatedWorkspaceMemberId`.
@@ -172,12 +172,12 @@ async function assertPrincipalBelongsToWorkspace(
       const row = await db
         .selectFrom("workspaceMembers")
         .select(["id", "workspaceId"])
-        .where("id", "=", principal.memberId)
+        .where("id", "=", principal.workspaceMemberId)
         .limit(1)
         .executeTakeFirst()
       if (!row || row.workspaceId !== workspaceId) {
         throw new Error(
-          `workspace_member ${principal.memberId} does not belong to workspace ${workspaceId}`
+          `workspace_member ${principal.workspaceMemberId} does not belong to workspace ${workspaceId}`
         )
       }
       return
@@ -185,10 +185,10 @@ async function assertPrincipalBelongsToWorkspace(
     case SUBJECT_KIND.ACTOR: {
       const row = await db
         .selectFrom("actors as actor")
-        .innerJoin("workspaceApps as app", "app.id", "actor.id")
-        .select(["actor.id", "app.workspaceId"])
+        .innerJoin("workspaceResources as resource", "resource.id", "actor.id")
+        .select(["actor.id", "resource.workspaceId"])
         .where("actor.id", "=", principal.actorId)
-        .where("app.deletedAt", "is", null)
+        .where("resource.deletedAt", "is", null)
         .limit(1)
         .executeTakeFirst()
       if (!row || row.workspaceId !== workspaceId) {
@@ -201,10 +201,10 @@ async function assertPrincipalBelongsToWorkspace(
     case SUBJECT_KIND.REMOTE_AGENT: {
       const row = await db
         .selectFrom("remoteAgents as agent")
-        .innerJoin("workspaceApps as app", "app.id", "agent.id")
-        .select(["agent.id", "app.workspaceId"])
+        .innerJoin("workspaceResources as resource", "resource.id", "agent.id")
+        .select(["agent.id", "resource.workspaceId"])
         .where("agent.id", "=", principal.remoteAgentId)
-        .where("app.deletedAt", "is", null)
+        .where("resource.deletedAt", "is", null)
         .limit(1)
         .executeTakeFirst()
       if (!row || row.workspaceId !== workspaceId) {
@@ -212,15 +212,14 @@ async function assertPrincipalBelongsToWorkspace(
           `remote_agent ${principal.remoteAgentId} does not belong to workspace ${workspaceId}`
         )
       }
-      return
+      break
     }
     case SUBJECT_KIND.CONVERSATION:
     case SUBJECT_KIND.USER:
     case SUBJECT_KIND.EXTERNAL:
     case SUBJECT_KIND.PLATFORM:
-      // No single-workspace identity; accept and let per-resource helpers
-      // refuse if appropriate.
-      return
+    // No single-workspace identity; accept and let per-resource helpers
+    // refuse if appropriate.
   }
 }
 
@@ -349,7 +348,7 @@ async function buildRuntimePrincipalContextCore(
     }
     const memberSubjectId = await ops.upsertSubject({
       kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-      memberId: params.delegatedWorkspaceMemberId,
+      workspaceMemberId: params.delegatedWorkspaceMemberId,
     })
     runtimeSubjectIds.push(memberSubjectId)
   }
@@ -462,11 +461,11 @@ async function assertPrincipalBelongsToWorkspaceOn(
       const row = await runCompilable(
         executor,
         sql<{ workspaceId: string }>`
-          SELECT workspace_id FROM workspace_members WHERE id = ${principal.memberId} LIMIT 1`
+          SELECT workspace_id FROM workspace_members WHERE id = ${principal.workspaceMemberId} LIMIT 1`
       )
       if (row.rows.length === 0 || row.rows[0].workspaceId !== workspaceId) {
         throw new Error(
-          `workspace_member ${principal.memberId} does not belong to workspace ${workspaceId}`
+          `workspace_member ${principal.workspaceMemberId} does not belong to workspace ${workspaceId}`
         )
       }
       return
@@ -475,12 +474,12 @@ async function assertPrincipalBelongsToWorkspaceOn(
       const row = await runCompilable(
         executor,
         sql<{ workspaceId: string }>`
-          SELECT app.workspace_id
+          SELECT resource.workspace_id
           FROM actors actor
-          INNER JOIN workspace_apps_live app
-            ON app.id = actor.id
+          INNER JOIN workspace_resources_live resource
+            ON resource.id = actor.id
           WHERE actor.id = ${principal.actorId}
-            AND app.deleted_at IS NULL
+            AND resource.deleted_at IS NULL
           LIMIT 1`
       )
       if (row.rows.length === 0 || row.rows[0].workspaceId !== workspaceId) {
@@ -494,12 +493,12 @@ async function assertPrincipalBelongsToWorkspaceOn(
       const row = await runCompilable(
         executor,
         sql<{ workspaceId: string }>`
-          SELECT app.workspace_id
+          SELECT resource.workspace_id
           FROM remote_agents agent
-          INNER JOIN workspace_apps_live app
-            ON app.id = agent.id
+          INNER JOIN workspace_resources_live resource
+            ON resource.id = agent.id
           WHERE agent.id = ${principal.remoteAgentId}
-            AND app.deleted_at IS NULL
+            AND resource.deleted_at IS NULL
           LIMIT 1`
       )
       if (row.rows.length === 0 || row.rows[0].workspaceId !== workspaceId) {
@@ -507,13 +506,12 @@ async function assertPrincipalBelongsToWorkspaceOn(
           `remote_agent ${principal.remoteAgentId} does not belong to workspace ${workspaceId}`
         )
       }
-      return
+      break
     }
     case SUBJECT_KIND.CONVERSATION:
     case SUBJECT_KIND.USER:
     case SUBJECT_KIND.EXTERNAL:
     case SUBJECT_KIND.PLATFORM:
-      return
   }
 }
 
@@ -568,10 +566,10 @@ async function assertVisibilityPrincipalsBelongToWorkspace(
   if (params.actorId) {
     const row = await db
       .selectFrom("actors as actor")
-      .innerJoin("workspaceApps as app", "app.id", "actor.id")
-      .select(["actor.id", "app.workspaceId"])
+      .innerJoin("workspaceResources as resource", "resource.id", "actor.id")
+      .select(["actor.id", "resource.workspaceId"])
       .where("actor.id", "=", params.actorId)
-      .where("app.deletedAt", "is", null)
+      .where("resource.deletedAt", "is", null)
       .limit(1)
       .executeTakeFirst()
     if (!row || row.workspaceId !== params.workspaceId) {
@@ -583,10 +581,10 @@ async function assertVisibilityPrincipalsBelongToWorkspace(
   if (params.remoteAgentId) {
     const row = await db
       .selectFrom("remoteAgents as agent")
-      .innerJoin("workspaceApps as app", "app.id", "agent.id")
-      .select(["agent.id", "app.workspaceId"])
+      .innerJoin("workspaceResources as resource", "resource.id", "agent.id")
+      .select(["agent.id", "resource.workspaceId"])
       .where("agent.id", "=", params.remoteAgentId)
-      .where("app.deletedAt", "is", null)
+      .where("resource.deletedAt", "is", null)
       .limit(1)
       .executeTakeFirst()
     if (!row || row.workspaceId !== params.workspaceId) {
@@ -646,7 +644,7 @@ export async function computeRuntimeScopeSubjectIds(
     if (!anyActive && params.workspaceMemberId) {
       const memberSubjectId = await upsertAccessSubject(db, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: params.workspaceMemberId,
+        workspaceMemberId: params.workspaceMemberId,
       })
       anyActive =
         anyActive ||
@@ -671,8 +669,8 @@ export async function computeRuntimeScopeSubjectIds(
 /**
  * P1 fix (post-D4): subject_ids the principal can *claim* under right now —
  * principal own subject + workspace + any group subjects (conversation when
- * active participant). Passed as `runtimeSubjectIds` to the RAB visibility
- * layer so `subject=conversation C` bindings surface for active participants
+ * active participant). Passed as `runtimeSubjectIds` to the workspace_resource_grants visibility
+ * layer so `subject=conversation C` grants surface for active participants
  * (otherwise they'd be writable but never match).
  *
  * Mirrors `buildRuntimePrincipalContext.runtimeSubjectIds` but takes the
@@ -702,7 +700,7 @@ export async function computeRuntimeSubjectIdsForVisibility(
     ids.push(
       await upsertAccessSubject(db, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: params.workspaceMemberId,
+        workspaceMemberId: params.workspaceMemberId,
       })
     )
   }
@@ -754,7 +752,7 @@ export async function computeRuntimeSubjectIdsForVisibility(
     if (!anyActive && params.workspaceMemberId) {
       const memberSubjectId = await upsertAccessSubject(db, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: params.workspaceMemberId,
+        workspaceMemberId: params.workspaceMemberId,
       })
       anyActive =
         anyActive ||

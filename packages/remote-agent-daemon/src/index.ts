@@ -497,7 +497,6 @@ class DaemonSupervisor {
         if (message?.type === "agent:task:resolved") {
           const agent = this.agents.get(message.remoteAgentId)
           if (agent) await agent.resolveTask(message)
-          return
         }
       })
 

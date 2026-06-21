@@ -577,8 +577,9 @@ async function probeRestApi(baseUrl: string): Promise<void> {
     await new Promise((r) => setTimeout(r, 250))
   }
   throw new Error(
-    `MockServer REST API did not respond within ${REST_PROBE_TIMEOUT_MS}ms at ${baseUrl}` +
-      (lastError instanceof Error ? `: ${lastError.message}` : "")
+    `MockServer REST API did not respond within ${REST_PROBE_TIMEOUT_MS}ms at ${baseUrl}${
+      lastError instanceof Error ? `: ${lastError.message}` : ""
+    }`
   )
 }
 

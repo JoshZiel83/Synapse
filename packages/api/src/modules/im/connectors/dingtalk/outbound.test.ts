@@ -39,7 +39,7 @@ test("parseSessionWebhookExpiry: garbage returns undefined", () => {
 })
 
 test("makeSyntheticMessageId: bounded length ≤ 60 (well under VARCHAR(255))", () => {
-  const longId = "cid:" + "x".repeat(1000)
+  const longId = `cid:${"x".repeat(1000)}`
   const session = makeSyntheticMessageId("session", longId)
   const openapi = makeSyntheticMessageId("openapi", longId)
   assert.ok(session.length <= 60)

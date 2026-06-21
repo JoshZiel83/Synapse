@@ -37,7 +37,9 @@
     "dev": "tsc --watch",
     "pretest": "bash ../../scripts/pretest-fs-helper.sh && npm run build -w @synapse/shared",
     "test": "tsx --test \"src/**/*.test.ts\"",
-    "prepublishOnly": "node ../../scripts/prepublish-guard.mjs"
+    "prepublishOnly": "node ../../scripts/prepublish-guard.mjs",
+    "lint": "eslint src",
+    "lint:fix": "eslint src --fix"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
@@ -52,13 +54,13 @@
     "zod": "4.3.6"
   },
   "optionalDependencies": {
-    "chrome-devtools-mcp": "0.7.0",
-    "@synapse/device-runtime-bundles-linux-x64": "0.1.0",
-    "@synapse/device-runtime-bundles-linux-arm64": "0.1.0",
-    "@synapse/device-runtime-bundles-darwin-x64": "0.1.0",
     "@synapse/device-runtime-bundles-darwin-arm64": "0.1.0",
+    "@synapse/device-runtime-bundles-darwin-x64": "0.1.0",
+    "@synapse/device-runtime-bundles-linux-arm64": "0.1.0",
+    "@synapse/device-runtime-bundles-linux-x64": "0.1.0",
+    "@synapse/device-runtime-bundles-win32-arm64": "0.1.0",
     "@synapse/device-runtime-bundles-win32-x64": "0.1.0",
-    "@synapse/device-runtime-bundles-win32-arm64": "0.1.0"
+    "chrome-devtools-mcp": "0.7.0"
   },
   "devDependencies": {
     "@types/node": "^22.7.5",

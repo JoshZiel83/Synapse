@@ -163,7 +163,6 @@ test("dispatchOutbound times out when no holder responds", async () => {
 })
 
 test("late response after timeout is silently dropped", async () => {
-  let pendingRef: { resolve: (f: WsFrame) => void } | undefined
   const dispatch = dispatchOutbound({
     accountId: "remote-acct",
     frameBody: {
@@ -175,7 +174,9 @@ test("late response after timeout is silently dropped", async () => {
   }).catch((err) => err)
   // Grab the pending ref before timer fires
   await new Promise((r) => setImmediate(r))
-  pendingRef = Array.from(_internals.pendingRequests.values())[0]
+  const pendingRef: { resolve: (f: WsFrame) => void } | undefined = Array.from(
+    _internals.pendingRequests.values()
+  )[0]
   // Wait for timeout
   const settled = await dispatch
   assert.match((settled as Error).message, /timeout/)

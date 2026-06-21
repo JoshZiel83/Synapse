@@ -209,19 +209,25 @@ export function getFeishuFeatureTitle(
   return feature.titleI18n[locale] || feature.titleI18n.en || featureKey
 }
 
+function toGrantedScopeSet(grantedScopes: unknown): Set<string> {
+  if (typeof grantedScopes === "string") {
+    return new Set(grantedScopes.split(/\s+/).filter(Boolean))
+  }
+
+  if (Array.isArray(grantedScopes)) {
+    return new Set(
+      grantedScopes.filter((item): item is string => typeof item === "string")
+    )
+  }
+
+  return new Set()
+}
+
 export function getFeishuFeatureScopeCoverage(
   features: FeishuFeatureKey[],
   grantedScopes: unknown
 ) {
-  const granted = new Set(
-    typeof grantedScopes === "string"
-      ? grantedScopes.split(/\s+/).filter(Boolean)
-      : Array.isArray(grantedScopes)
-        ? grantedScopes.filter(
-            (item): item is string => typeof item === "string"
-          )
-        : []
-  )
+  const granted = toGrantedScopeSet(grantedScopes)
 
   return features.map((featureKey) => {
     const feature = featureMap.get(featureKey)
@@ -244,15 +250,7 @@ export function hasFeishuScopesForFeatures(
   features: FeishuFeatureKey[],
   grantedScopes: unknown
 ) {
-  const granted = new Set(
-    typeof grantedScopes === "string"
-      ? grantedScopes.split(/\s+/).filter(Boolean)
-      : Array.isArray(grantedScopes)
-        ? grantedScopes.filter(
-            (item): item is string => typeof item === "string"
-          )
-        : []
-  )
+  const granted = toGrantedScopeSet(grantedScopes)
 
   return resolveFeishuFeatureScopes(features).every((scope) =>
     granted.has(scope)
@@ -263,15 +261,7 @@ export function assertFeishuScopesForFeatures(
   features: FeishuFeatureKey[],
   grantedScopes: unknown
 ) {
-  const granted = new Set(
-    typeof grantedScopes === "string"
-      ? grantedScopes.split(/\s+/).filter(Boolean)
-      : Array.isArray(grantedScopes)
-        ? grantedScopes.filter(
-            (item): item is string => typeof item === "string"
-          )
-        : []
-  )
+  const granted = toGrantedScopeSet(grantedScopes)
   const missing = resolveFeishuFeatureScopes(features).filter(
     (scope) => !granted.has(scope)
   )

@@ -119,10 +119,16 @@ export async function canUserAccessFileWorkspace(
   const row = await db
     .selectFrom("workspaces as w")
     .leftJoin("workspaceMembers as wm", (join) =>
-      join.onRef("wm.workspaceId", "=", "w.id").on("wm.userId", "=", userId)
+      join
+        .onRef("wm.workspaceId", "=", "w.id")
+        .on("wm.userId", "=", userId)
+        // Only an active membership counts (not 'left'/'removed').
+        .on("wm.status", "=", "active")
     )
     .select("w.id")
     .where("w.id", "=", workspaceId)
+    // A soft-deleted workspace grants no access to its files.
+    .where("w.deletedAt", "is", null)
     .where((eb) =>
       eb.or([eb("w.ownerId", "=", userId), eb("wm.userId", "is not", null)])
     )

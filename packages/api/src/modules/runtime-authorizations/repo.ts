@@ -56,7 +56,7 @@ export async function findAutoRetryTarget(args: {
 }): Promise<AutoRetryTarget | null> {
   const row = await db
     .selectFrom("deviceCapabilities as dc")
-    .innerJoin("workspaceApps as app", "app.id", "dc.id")
+    .innerJoin("workspaceResources as resource", "resource.id", "dc.id")
     .innerJoin("deviceExposures as dx", "dx.id", "dc.exposureId")
     .innerJoin("devices as d", "d.id", "dx.deviceId")
     .innerJoin("deviceTools as dt", "dt.exposureId", "dx.id")
@@ -69,8 +69,8 @@ export async function findAutoRetryTarget(args: {
       "dtr.id as deviceToolRevisionId",
     ])
     .where("dc.id", "=", args.deviceCapabilityId)
-    .where("app.deletedAt", "is", null)
-    .where("app.status", "=", "active")
+    .where("resource.deletedAt", "is", null)
+    .where("resource.status", "=", "active")
     .where("dt.currentName", "=", args.visibleToolName)
     .where("dt.status", "=", "active")
     // Soft-delete (§8.6): never auto-retry against a soft-closed device's tool.
@@ -91,7 +91,7 @@ export async function findAutoRetryTarget(args: {
  * Reverse-lookup of a device capability for the manual-grant validation path:
  * pull device_id / workspace_id / exposure_id / stable_key / builtin_kind /
  * runtime_status / status before the write. WHERE clauses (dc.id match +
- * app.deletedAt is null soft-delete guard) preserved verbatim.
+ * resource.deletedAt is null soft-delete guard) preserved verbatim.
  */
 export interface DeviceCapabilityGrantTarget {
   deviceId: string
@@ -109,20 +109,20 @@ export async function findDeviceCapabilityGrantTarget(
 ): Promise<DeviceCapabilityGrantTarget | undefined> {
   return executor
     .selectFrom("deviceCapabilities as dc")
-    .innerJoin("workspaceApps as app", "app.id", "dc.id")
+    .innerJoin("workspaceResources as resource", "resource.id", "dc.id")
     .innerJoin("deviceExposures as dx", "dx.id", "dc.exposureId")
     .innerJoin("devices as d", "d.id", "dx.deviceId")
     .select([
       "d.id as deviceId",
-      "app.workspaceId as workspaceId",
+      "resource.workspaceId as workspaceId",
       "dx.id as exposureId",
       "dx.stableKey as exposureStableKey",
       "dx.builtinKind as builtinKind",
       "dx.runtimeStatus as runtimeStatus",
-      "app.status as status",
+      "resource.status as status",
     ])
     .where("dc.id", "=", deviceCapabilityId)
-    .where("app.deletedAt", "is", null)
+    .where("resource.deletedAt", "is", null)
     .executeTakeFirst() as Promise<DeviceCapabilityGrantTarget | undefined>
 }
 
@@ -147,7 +147,7 @@ export async function loadConversationKindRow(
  * The `hasActiveDeviceSession` field comes from an inline raw `sql<boolean>`
  * EXISTS subquery referencing snake_case columns — that raw fragment is NOT
  * camelCase-rewritten, so it is copied verbatim. WHERE clauses (capability.id
- * match + app.deletedAt is null soft-delete guard) preserved verbatim.
+ * match + resource.deletedAt is null soft-delete guard) preserved verbatim.
  */
 export interface DeviceCapabilityRequestState {
   capabilityId: string
@@ -161,32 +161,40 @@ export interface DeviceCapabilityRequestState {
 export async function loadDeviceCapabilityRequestState(
   capabilityId: string
 ): Promise<DeviceCapabilityRequestState | undefined> {
-  return db
-    .selectFrom("deviceCapabilities as capability")
-    .innerJoin("workspaceApps as app", "app.id", "capability.id")
-    .innerJoin(
-      "deviceExposures as exposure",
-      "exposure.id",
-      "capability.exposureId"
-    )
-    .innerJoin("devices as device", "device.id", "exposure.deviceId")
-    .select([
-      "capability.id as capabilityId",
-      "app.status as capabilityStatus",
-      "exposure.id as exposureId",
-      "exposure.runtimeStatus as exposureRuntimeStatus",
-      "device.workspaceId as ownerWorkspaceId",
-      sql<boolean>`EXISTS (
+  return (
+    db
+      .selectFrom("deviceCapabilities as capability")
+      .innerJoin(
+        "workspaceResources as resource",
+        "resource.id",
+        "capability.id"
+      )
+      .innerJoin(
+        "deviceExposures as exposure",
+        "exposure.id",
+        "capability.exposureId"
+      )
+      .innerJoin("devices as device", "device.id", "exposure.deviceId")
+      .select([
+        "capability.id as capabilityId",
+        "resource.status as capabilityStatus",
+        "exposure.id as exposureId",
+        "exposure.runtimeStatus as exposureRuntimeStatus",
+        "device.workspaceId as ownerWorkspaceId",
+        sql<boolean>`EXISTS (
         SELECT 1
         FROM device_control_plane_sessions session_row
         WHERE session_row.device_id = device.id
           AND session_row.status = 'active'
       )`.as("hasActiveDeviceSession"),
-    ])
-    .where("capability.id", "=", capabilityId)
-    .where("app.deletedAt", "is", null)
-    .limit(1)
-    .executeTakeFirst() as Promise<DeviceCapabilityRequestState | undefined>
+      ])
+      .where("capability.id", "=", capabilityId)
+      .where("resource.deletedAt", "is", null)
+      // A soft-deleted device exposes no capabilities to the request-gating path.
+      .where("device.deletedAt", "is", null)
+      .limit(1)
+      .executeTakeFirst() as Promise<DeviceCapabilityRequestState | undefined>
+  )
 }
 
 /**

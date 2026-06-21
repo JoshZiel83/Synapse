@@ -131,7 +131,6 @@ export function registerSkillRoutes(app: FastifyInstance) {
         return { skills }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -160,7 +159,6 @@ export function registerSkillRoutes(app: FastifyInstance) {
         return { skill }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -189,7 +187,6 @@ export function registerSkillRoutes(app: FastifyInstance) {
         return { skill }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -218,7 +215,6 @@ export function registerSkillRoutes(app: FastifyInstance) {
         return { skill }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -246,7 +242,6 @@ export function registerSkillRoutes(app: FastifyInstance) {
         return { skill }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -299,7 +294,6 @@ export function registerSkillRoutes(app: FastifyInstance) {
         return { skills }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -330,7 +324,6 @@ export function registerSkillRoutes(app: FastifyInstance) {
         return { skill }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -364,7 +357,6 @@ export function registerSkillRoutes(app: FastifyInstance) {
         return { skill }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )

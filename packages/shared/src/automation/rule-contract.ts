@@ -384,6 +384,15 @@ function isValidIanaTimeZone(tz: string): boolean {
   }
 }
 
+function resolveScheduleKind(
+  trigger: AutomationRuleCreateTriggerPayload
+): AutomationScheduleKind {
+  if (trigger.scheduleKind) return trigger.scheduleKind
+  if (trimString(trigger.startsAt)) return "at"
+  if (trigger.intervalSeconds) return "interval"
+  return "cron"
+}
+
 export function validateAutomationRuleCreatePayload(
   payload: AutomationRuleCreatePayload
 ): AutomationRuleContractIssue[] {
@@ -413,13 +422,7 @@ export function validateAutomationRuleCreatePayload(
       })
     }
   } else {
-    const scheduleKind =
-      payload.trigger.scheduleKind ||
-      (trimString(payload.trigger.startsAt)
-        ? "at"
-        : payload.trigger.intervalSeconds
-          ? "interval"
-          : "cron")
+    const scheduleKind = resolveScheduleKind(payload.trigger)
     if (scheduleKind === "cron" && !trimString(payload.trigger.scheduleExpr)) {
       issues.push({
         path: "trigger.scheduleExpr",

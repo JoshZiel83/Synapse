@@ -175,12 +175,14 @@ export function unixSecondsToEpochMillis(value: number): number {
  * "not expired".
  */
 export function requireEpochMillis(value: unknown, unit: "s" | "ms"): number {
-  const n =
-    typeof value === "number"
-      ? value
-      : typeof value === "string" && value.trim() !== ""
-        ? Number(value.trim())
-        : Number.NaN
+  let n: number
+  if (typeof value === "number") {
+    n = value
+  } else if (typeof value === "string" && value.trim() !== "") {
+    n = Number(value.trim())
+  } else {
+    n = Number.NaN
+  }
   if (!Number.isFinite(n)) {
     throw new Error(
       `requireEpochMillis: not a finite numeric value: ${String(value)}`

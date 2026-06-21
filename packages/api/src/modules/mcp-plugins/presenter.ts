@@ -23,7 +23,7 @@ import type {
   PluginCategoryView,
   PluginConfigFieldState,
   PluginInstallationDetailView,
-  WorkspaceAppGrant,
+  WorkspaceResourceGrant,
   PluginAuthBindingDefinition,
   PluginConfigFieldDefinition,
   PluginInstallFlow,
@@ -45,7 +45,7 @@ import {
   resolveEffectiveConversationTypeMask,
   resolveNarrowedConversationTypeMask,
   REUSE_SCOPES,
-  WORKSPACE_APP_GRANT_PERMISSION,
+  WORKSPACE_RESOURCE_GRANT_PERMISSION,
 } from "@synapse/shared"
 import { assertIsoInstant } from "@synapse/shared/datetime"
 import { isEncrypted } from "../../infrastructure/crypto/index.js"
@@ -67,7 +67,7 @@ import type { PluginCategoryRecord, PublisherRecord } from "./repo.types.js"
 import type { InstallationRow, PluginCatalogRow } from "./repo.js"
 
 /**
- * Present a stored installation-access row as a WorkspaceAppGrant View. Row→DTO
+ * Present a stored installation-access row as a WorkspaceResourceGrant View. Row→DTO
  * mapper + Date→ISO serializer, so it lives in the presenter (guard r3/r4). The
  * row decoder installationAccessRowToTarget + the row type stay in service.ts;
  * this imports them (same direction as skills/presenter ← service). round-6 P1-7.
@@ -78,7 +78,7 @@ export function presentInstallationAccessGrant(
     workspaceConversationTypeMask: number
     instanceConversationTypeMaskOverride: number | null
   }
-): WorkspaceAppGrant {
+): WorkspaceResourceGrant {
   const effectiveConversationTypeMask = options
     ? resolveNarrowedConversationTypeMask(
         resolveNarrowedConversationTypeMask(
@@ -90,13 +90,13 @@ export function presentInstallationAccessGrant(
     : undefined
   return {
     id: mount.id,
-    workspaceAppId: mount.installationId,
+    workspaceResourceId: mount.installationId,
     workspaceId: mount.workspaceId,
     target: installationAccessRowToTarget(mount),
-    permissions: [WORKSPACE_APP_GRANT_PERMISSION.USE],
+    permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.USE],
     status: mount.status,
     source: mount.source,
-    grantedByWorkspaceMemberId: mount.createdByWorkspaceMemberId || undefined,
+    createdByWorkspaceMemberId: mount.createdByWorkspaceMemberId || undefined,
     reason: mount.reason || undefined,
     conversationTypeMaskOverride: mount.conversationTypeMaskOverride ?? null,
     effectiveConversationTypeMask,
@@ -362,6 +362,15 @@ function isSecretConfigField(
   )
 }
 
+function maskSecretValue(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined
+  if (isEncrypted(value)) return "••••configured"
+  if (value.length > 4) {
+    return `${"•".repeat(Math.max(4, value.length - 4))}${value.slice(-4)}`
+  }
+  return "••••"
+}
+
 function sanitizeInstallationConfig(
   installation: { configData: Record<string, unknown>; updatedAt: Date },
   configSchema: Record<string, unknown>,
@@ -416,14 +425,7 @@ function sanitizeInstallationConfig(
     }
 
     if (isSecretConfigField(field, schemaProperties, key)) {
-      const masked =
-        typeof value === "string"
-          ? isEncrypted(value)
-            ? "••••configured"
-            : value.length > 4
-              ? `${"•".repeat(Math.max(4, value.length - 4))}${value.slice(-4)}`
-              : "••••"
-          : undefined
+      const masked = maskSecretValue(value)
       configState.push({
         key,
         isConfigured: value !== undefined && value !== null && value !== "",

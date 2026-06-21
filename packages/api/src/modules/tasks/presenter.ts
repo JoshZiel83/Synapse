@@ -393,24 +393,26 @@ function presentEntityRefFromRow(
     return undefined
   }
   const participantId = row[`${prefix}ParticipantId` as keyof RawTaskRow]
-  const workspaceMemberId =
-    prefix === "requester"
-      ? row.requesterWorkspaceMemberId
-      : prefix === "target"
-        ? row.targetWorkspaceMemberId
-        : row.resolvedByWorkspaceMemberId
-  const actorId =
-    prefix === "requester"
-      ? row.requesterActorId
-      : prefix === "target"
-        ? row.targetActorId
-        : row.resolvedByActorId
-  const remoteAgentId =
-    prefix === "requester"
-      ? row.requesterRemoteAgentId
-      : prefix === "target"
-        ? row.targetRemoteAgentId
-        : row.resolvedByRemoteAgentId
+  let workspaceMemberId: RawTaskRow["requesterWorkspaceMemberId"]
+  let actorId: RawTaskRow["requesterActorId"]
+  let remoteAgentId: RawTaskRow["requesterRemoteAgentId"]
+  switch (prefix) {
+    case "requester":
+      workspaceMemberId = row.requesterWorkspaceMemberId
+      actorId = row.requesterActorId
+      remoteAgentId = row.requesterRemoteAgentId
+      break
+    case "target":
+      workspaceMemberId = row.targetWorkspaceMemberId
+      actorId = row.targetActorId
+      remoteAgentId = row.targetRemoteAgentId
+      break
+    case "resolvedBy":
+      workspaceMemberId = row.resolvedByWorkspaceMemberId
+      actorId = row.resolvedByActorId
+      remoteAgentId = row.resolvedByRemoteAgentId
+      break
+  }
   const name = row[`${prefix}Name` as keyof RawTaskRow]
   const title = row[`${prefix}Title` as keyof RawTaskRow]
   const role = row[`${prefix}Role` as keyof RawTaskRow]

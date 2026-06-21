@@ -49,7 +49,7 @@ test(
       })
       const memberSubject = await upsertAccessSubject(db, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId,
+        workspaceMemberId: memberId,
       })
 
       assert.notEqual(wsSubject, memberSubject)
@@ -62,7 +62,7 @@ test(
       const loadedMember = await loadAccessSubject(db, memberSubject)
       assert.deepEqual(loadedMember, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId,
+        workspaceMemberId: memberId,
       })
     })
   }
@@ -111,7 +111,7 @@ test(
       })
       const memberSubject = await upsertAccessSubject(db, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId,
+        workspaceMemberId: memberId,
       })
 
       const rows = await loadAccessSubjectMany(db, [
@@ -125,7 +125,7 @@ test(
       })
       assert.deepEqual(rows.get(memberSubject), {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId,
+        workspaceMemberId: memberId,
       })
 
       const enriched = await db
@@ -291,7 +291,7 @@ test(
         () =>
           upsertAccessSubject(db, {
             kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-            memberId: "00000000-0000-0000-0000-000000000000",
+            workspaceMemberId: "00000000-0000-0000-0000-000000000000",
           }),
         /workspace_members\(/
       )
@@ -389,7 +389,7 @@ test(
       })
       const memId = await upsertAccessSubjectOn(db, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId,
+        workspaceMemberId: memberId,
       })
       const actId = await upsertAccessSubjectOn(db, {
         kind: SUBJECT_KIND.ACTOR,
@@ -448,7 +448,7 @@ test(
         () =>
           upsertAccessSubjectOn(db, {
             kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-            memberId: "00000000-0000-0000-0000-000000000000",
+            workspaceMemberId: "00000000-0000-0000-0000-000000000000",
           }),
         /workspace_members\(/
       )
@@ -497,19 +497,32 @@ test(
   }
 )
 
+async function creatorSubjectIdFor(
+  db: import("kysely").Kysely<any>,
+  workspaceId: string
+): Promise<string> {
+  const userId = await insertUser(db, "creator@example.test")
+  const memberId = await insertWorkspaceMember(db, workspaceId, userId)
+  return upsertAccessSubject(db as any, {
+    kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+    workspaceMemberId: memberId,
+  })
+}
+
 async function insertRemoteAgent(
   db: import("kysely").Kysely<any>,
   workspaceId: string
 ): Promise<string> {
   const remoteAgentId = crypto.randomUUID()
   await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id: remoteAgentId,
       workspaceId: workspaceId,
       kind: "remote_agent",
       displayName: "test agent",
       status: "active",
+      createdBySubjectId: await creatorSubjectIdFor(db, workspaceId),
     } as any)
     .execute()
   const row = await db
@@ -576,13 +589,14 @@ async function insertActor(
 ): Promise<string> {
   const actorId = crypto.randomUUID()
   await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id: actorId,
       workspaceId: workspaceId,
       kind: "actor",
       displayName: "test actor",
       status: "active",
+      createdBySubjectId: await creatorSubjectIdFor(db, workspaceId),
     } as any)
     .execute()
   const row = await db

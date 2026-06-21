@@ -1,6 +1,6 @@
 import {
   DEFAULT_CONVERSATION_TYPE_MASK,
-  WORKSPACE_APP_GRANT_PERMISSION,
+  WORKSPACE_RESOURCE_GRANT_PERMISSION,
   resolveNarrowedConversationTypeMask,
   workspaceRef,
   type CapabilityAccessTarget,
@@ -8,7 +8,7 @@ import {
   type SkillAttachmentFile,
   type SkillMarketplaceEntry,
   type SkillMarketplaceVersion,
-  type WorkspaceAppGrant,
+  type WorkspaceResourceGrant,
 } from "@synapse/shared"
 import { type IsoInstantString } from "@synapse/shared/datetime"
 import {
@@ -209,7 +209,7 @@ export function buildInstalledSkillPayload(
   const effectiveConversationTypeMask =
     resolveInstalledSkillEffectiveConversationTypeMask({
       workspaceConversationTypeMask,
-      conversation_type_mask_override: row.conversationTypeMaskOverride,
+      conversationTypeMaskOverride: row.conversationTypeMaskOverride,
     })
 
   return {
@@ -283,7 +283,7 @@ export function presentSkillAccessGrant(
     workspaceConversationTypeMask: number
     instanceConversationTypeMaskOverride: number | null
   }
-): WorkspaceAppGrant {
+): WorkspaceResourceGrant {
   const effectiveConversationTypeMask = options
     ? resolveNarrowedConversationTypeMask(
         resolveNarrowedConversationTypeMask(
@@ -295,7 +295,7 @@ export function presentSkillAccessGrant(
     : undefined
   return {
     id: row.id,
-    workspaceAppId: row.skillId,
+    workspaceResourceId: row.skillId,
     workspaceId: row.workspaceId,
     target: visibleRowToAccessTarget({
       skillId: row.skillId,
@@ -306,15 +306,15 @@ export function presentSkillAccessGrant(
       remoteAgentId: row.remoteAgentId,
       workspaceMemberId: row.workspaceMemberId,
     } as VisibleSkillRow),
-    permissions: [WORKSPACE_APP_GRANT_PERMISSION.USE],
+    permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.USE],
     status: row.status,
     source: row.source,
-    grantedByWorkspaceMemberId: row.createdByWorkspaceMemberId || undefined,
+    createdByWorkspaceMemberId: row.createdByWorkspaceMemberId || undefined,
     reason: row.reason || undefined,
     conversationTypeMaskOverride: row.conversationTypeMaskOverride ?? null,
     effectiveConversationTypeMask,
     createdAt: serializeInstant(
-      requireInstantDate(row.createdAt, "workspace_app_grant created_at")
+      requireInstantDate(row.createdAt, "workspace_resource_grant created_at")
     ),
     revokedAt: serializeOptionalInstant(row.revokedAt),
   }

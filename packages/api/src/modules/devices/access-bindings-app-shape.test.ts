@@ -225,7 +225,7 @@ test("POST body rejects scoped combinations outside (actor|remote_agent, convers
   const memberBody = {
     workspaceId: wsId,
     target: {
-      subject: { kind: "workspace_member", memberId: actorId },
+      subject: { kind: "workspace_member", workspaceMemberId: actorId },
     },
     deviceCapabilityIds: [capId],
   }
@@ -347,18 +347,29 @@ test(
         })
         .returning("id")
         .executeTakeFirstOrThrow()
-      // workspace_apps.id / remote_agents.id are UUID columns, so the shared
+      // workspace_resources.id / remote_agents.id are UUID columns, so the shared
       // primary key must be a real UUID — rid() (base36) is only valid for the
       // text email/slug/display_name fields below.
       const remoteAgentId = crypto.randomUUID()
+      // workspace_resources.created_by_subject_id is NOT NULL with no default;
+      // mint a workspace-kind access_subject (same workspace) as the creator.
+      const creatorSubject = await db
+        .insertInto("access_subjects")
+        .values({
+          kind: "workspace",
+          workspace_id: ws.id as string,
+        } as any)
+        .returning("id")
+        .executeTakeFirstOrThrow()
       await db
-        .insertInto("workspace_apps")
+        .insertInto("workspace_resources")
         .values({
           id: remoteAgentId,
           workspace_id: ws.id as string,
           kind: "remote_agent",
           display_name: `ra-${rid()}`,
           status: "active",
+          created_by_subject_id: creatorSubject.id as string,
         } as any)
         .execute()
       const agent = await db

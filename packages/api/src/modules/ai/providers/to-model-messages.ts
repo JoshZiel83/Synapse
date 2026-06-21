@@ -97,18 +97,23 @@ async function resolveFileRef(
   const hintPart: TextPart = { type: "text", text: buildFileRefHint(block) }
 
   if (!supported.has(block.category)) {
-    const desc =
-      block.category === "audio"
-        ? await buildAudioFallbackContext(
-            { ...block, category: "audio" },
-            "Audio input is not enabled for this model configuration."
-          )
-        : block.category === "image"
-          ? await buildImageFallbackContext(
-              { ...block, category: "image" },
-              "Image input is not enabled for this model configuration."
-            )
-          : `[${block.category}: ${block.name} (${block.mimeType}, ${formatBytes(block.sizeBytes)})]`
+    let desc: string
+    switch (block.category) {
+      case "audio":
+        desc = await buildAudioFallbackContext(
+          { ...block, category: "audio" },
+          "Audio input is not enabled for this model configuration."
+        )
+        break
+      case "image":
+        desc = await buildImageFallbackContext(
+          { ...block, category: "image" },
+          "Image input is not enabled for this model configuration."
+        )
+        break
+      default:
+        desc = `[${block.category}: ${block.name} (${block.mimeType}, ${formatBytes(block.sizeBytes)})]`
+    }
     return [{ type: "text", text: desc }, hintPart]
   }
 

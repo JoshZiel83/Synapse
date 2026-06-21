@@ -22,9 +22,9 @@ import {
   type KyselyDb,
 } from "../../infrastructure/database/kysely.js"
 import {
-  insertWorkspaceAppRoot,
-  updateWorkspaceAppRoot,
-} from "../workspace-apps/repo.js"
+  insertWorkspaceResourceRoot,
+  updateWorkspaceResourceRoot,
+} from "../workspace-resources/repo.js"
 import { parseInstantString } from "../../infrastructure/datetime.js"
 import type {
   DeviceCapabilityRecord,
@@ -43,16 +43,16 @@ import type {
 // access-bindings.ts — workspace-ownership validation reads
 // ════════════════════════════════════════════════════════════════════════════
 
-/** actor ⋈ workspaceApps: returns the actor's owning workspace (app not deleted). */
+/** actor ⋈ workspaceResources: returns the actor's owning workspace (app not deleted). */
 export async function findActorWorkspace(
   actorId: string
 ): Promise<{ workspaceId: string } | undefined> {
   const row = await db
     .selectFrom("actors as actor")
-    .innerJoin("workspaceApps as app", "app.id", "actor.id")
-    .select("app.workspaceId as workspaceId")
+    .innerJoin("workspaceResources as resource", "resource.id", "actor.id")
+    .select("resource.workspaceId as workspaceId")
     .where("actor.id", "=", actorId)
-    .where("app.deletedAt", "is", null)
+    .where("resource.deletedAt", "is", null)
     .executeTakeFirst()
   return row ? { workspaceId: row.workspaceId as string } : undefined
 }
@@ -69,22 +69,22 @@ export async function findConversationWorkspace(
   return row ? { workspaceId: row.workspaceId as string } : undefined
 }
 
-/** remoteAgents ⋈ workspaceApps: returns the agent's owning workspace (app not deleted). */
+/** remoteAgents ⋈ workspaceResources: returns the agent's owning workspace (app not deleted). */
 export async function findRemoteAgentWorkspace(
   remoteAgentId: string
 ): Promise<{ workspaceId: string } | undefined> {
   const row = await db
     .selectFrom("remoteAgents as agent")
-    .innerJoin("workspaceApps as app", "app.id", "agent.id")
-    .select("app.workspaceId as workspaceId")
+    .innerJoin("workspaceResources as resource", "resource.id", "agent.id")
+    .select("resource.workspaceId as workspaceId")
     .where("agent.id", "=", remoteAgentId)
-    .where("app.deletedAt", "is", null)
+    .where("resource.deletedAt", "is", null)
     .executeTakeFirst()
   return row ? { workspaceId: row.workspaceId as string } : undefined
 }
 
 /**
- * deviceCapabilities ⋈ workspaceApps: of the requested capabilityIds, return
+ * deviceCapabilities ⋈ workspaceResources: of the requested capabilityIds, return
  * the set actually owned by `workspaceId` (app not deleted). The caller derives
  * the `missing` set from this — ownership comparison is validation, not query.
  */
@@ -95,10 +95,10 @@ export async function findOwnedDeviceCapabilityIds(
   if (capabilityIds.length === 0) return new Set()
   const rows = await db
     .selectFrom("deviceCapabilities as capability")
-    .innerJoin("workspaceApps as app", "app.id", "capability.id")
-    .select(["capability.id as id", "app.workspaceId as workspaceId"])
+    .innerJoin("workspaceResources as resource", "resource.id", "capability.id")
+    .select(["capability.id as id", "resource.workspaceId as workspaceId"])
     .where("capability.id", "in", capabilityIds)
-    .where("app.deletedAt", "is", null)
+    .where("resource.deletedAt", "is", null)
     .execute()
   return new Set(
     rows.filter((r) => r.workspaceId === workspaceId).map((r) => r.id as string)
@@ -997,8 +997,8 @@ export async function completeDeviceOperation(
 //
 // The whole sync is ONE db.transaction(): it spans device_exposures,
 // device_capabilities, device_catalog_revisions, device_tools,
-// device_tool_revisions PLUS the cross-module workspace_apps writes
-// (insertWorkspaceAppRoot/updateWorkspaceAppRoot), and the stale-state reap.
+// device_tool_revisions PLUS the cross-module workspace_resources writes
+// (insertWorkspaceResourceRoot/updateWorkspaceResourceRoot), and the stale-state reap.
 // Atomicity is load-bearing (idempotent upserts + revision supersession +
 // stale reaping must not partially commit), so the entire orchestration lives
 // in this single transaction-owning repo fn. The pure hashing helpers
@@ -1011,7 +1011,11 @@ function stableStringify(value: unknown): string {
     return `[${value.map(stableStringify).join(",")}]`
   }
   const entries = Object.entries(value as Record<string, unknown>).sort(
-    ([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)
+    ([a], [b]) => {
+      if (a < b) return -1
+      if (a > b) return 1
+      return 0
+    }
   )
   return `{${entries
     .map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`)
@@ -1257,7 +1261,7 @@ async function ensureCapability(
     .where("exposureId", "=", args.exposureId)
     .executeTakeFirst()
   if (existing) {
-    await updateWorkspaceAppRoot(trx, {
+    await updateWorkspaceResourceRoot(trx, {
       id: existing.id as string,
       displayName:
         (capabilityOwner?.displayName as string | null) || "Device capability",
@@ -1267,14 +1271,17 @@ async function ensureCapability(
     return
   }
   const capabilityId = crypto.randomUUID()
-  await insertWorkspaceAppRoot(trx, {
+  await insertWorkspaceResourceRoot(trx, {
     id: capabilityId,
     workspaceId: args.workspaceId,
     kind: "device_capability",
     displayName:
       (capabilityOwner?.displayName as string | null) || "Device capability",
+    // owner = the backing device's owner member subject (or NULL when the
+    // device has no owner); creator = platform (catalog-sync, no human). §B/§4.1
     ownerWorkspaceMemberId:
       (capabilityOwner?.ownerWorkspaceMemberId as string | null) ?? null,
+    createdByPlatform: true,
     status: "active",
   })
   await trx
@@ -1284,6 +1291,25 @@ async function ensureCapability(
       exposureId: args.exposureId,
     } as never)
     .execute()
+}
+
+/**
+ * Coerce a persisted revision_seq (bigint | number | string | undefined/null)
+ * to a JS number. Unknown/absent values fall back to 0 — preserving the prior
+ * ternary's catch-all branch (do NOT throw: `latest?.revisionSeq` is undefined
+ * when there is no prior revision).
+ */
+function revisionSeqToNumber(latestSeqRaw: unknown): number {
+  switch (typeof latestSeqRaw) {
+    case "bigint":
+      return Number(latestSeqRaw)
+    case "number":
+      return latestSeqRaw
+    case "string":
+      return Number(latestSeqRaw)
+    default:
+      return 0
+  }
 }
 
 async function ensureCatalogRevision(
@@ -1315,14 +1341,7 @@ async function ensureCatalogRevision(
       .execute()
   }
   const latestSeqRaw = latest?.revisionSeq
-  const latestSeqNumber =
-    typeof latestSeqRaw === "bigint"
-      ? Number(latestSeqRaw)
-      : typeof latestSeqRaw === "number"
-        ? latestSeqRaw
-        : typeof latestSeqRaw === "string"
-          ? Number(latestSeqRaw)
-          : 0
+  const latestSeqNumber = revisionSeqToNumber(latestSeqRaw)
   const nextSeqNumber = latestSeqNumber + 1
   const inserted = await trx
     .insertInto("deviceCatalogRevisions")
@@ -1536,22 +1555,22 @@ export async function findDeviceDetail(
 
   const capabilityRows = await db
     .selectFrom("deviceCapabilities as dc")
-    .innerJoin("workspaceApps as app", "app.id", "dc.id")
+    .innerJoin("workspaceResources as resource", "resource.id", "dc.id")
     .innerJoin("deviceExposures as dx", "dx.id", "dc.exposureId")
     .select([
       "dc.id as id",
-      "app.workspaceId as workspaceId",
+      "resource.workspaceId as workspaceId",
       "dc.exposureId as exposureId",
       "dx.stableKey as exposureStableKey",
-      "app.displayName as displayName",
+      "resource.displayName as displayName",
       "dx.transport as transport",
       "dx.builtinKind as builtinKind",
       "dx.runtimeStatus as runtimeStatus",
       "dx.metadata as exposureMetadata",
     ])
     .where("dx.deviceId", "=", deviceId)
-    .where("app.deletedAt", "is", null)
-    .where("app.status", "=", "active")
+    .where("resource.deletedAt", "is", null)
+    .where("resource.status", "=", "active")
     .execute()
   const capabilities: DeviceCapabilityRecord[] = capabilityRows.map((row) => ({
     id: row.id as string,

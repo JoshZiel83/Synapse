@@ -670,9 +670,10 @@ function ScopeConversationCard({
                 label={userName}
                 kind="user"
                 active={
-                  available &&
-                  (conversation.includesCurrentUser ||
-                    userName !== currentUserName)
+                  available
+                    ? conversation.includesCurrentUser ||
+                      userName !== currentUserName
+                    : false
                 }
               />
             ))}
@@ -682,10 +683,11 @@ function ScopeConversationCard({
                 label={actorName}
                 kind="actor"
                 active={
-                  available &&
-                  (actorName === primaryActorName
-                    ? primaryActorActive
-                    : secondaryActorActive)
+                  available
+                    ? actorName === primaryActorName
+                      ? primaryActorActive
+                      : secondaryActorActive
+                    : false
                 }
               />
             ))}
@@ -718,12 +720,12 @@ function ScopeConversationCard({
         <MiniActorBubble
           actorName={primaryActorName}
           text={`${primaryActorName} 会在这里读取工具、连接或技能。`}
-          active={available && primaryActorActive}
+          active={available ? primaryActorActive : false}
         />
         <MiniActorBubble
           actorName={secondaryActorName}
           text={`${secondaryActorName} 代表另一个 Actor，看它是否也能使用。`}
-          active={available && secondaryActorActive}
+          active={available ? secondaryActorActive : false}
         />
       </div>
     </div>
@@ -911,7 +913,7 @@ export function AccessAttachmentScopeStep({
   )
 }
 
-export function WorkspaceAppGrantScopeStep({
+export function WorkspaceResourceGrantScopeStep({
   value,
   onChange,
   allowedScopes,
@@ -1012,7 +1014,7 @@ export function WorkspaceAppGrantScopeStep({
           ))}
       </div>
 
-      {(value === "actor" || value === "actor_conversation") && (
+      {value === "actor" || value === "actor_conversation" ? (
         <div className="space-y-2">
           <Label className="text-xs tracking-[0.16em] text-muted-foreground uppercase">
             Authorized actor
@@ -1037,9 +1039,9 @@ export function WorkspaceAppGrantScopeStep({
             )}
           </div>
         </div>
-      )}
+      ) : null}
 
-      {(value === "conversation" || value === "actor_conversation") && (
+      {value === "conversation" || value === "actor_conversation" ? (
         <div className="space-y-2">
           <Label className="text-xs tracking-[0.16em] text-muted-foreground uppercase">
             Authorized conversation
@@ -1069,7 +1071,7 @@ export function WorkspaceAppGrantScopeStep({
             )}
           </div>
         </div>
-      )}
+      ) : null}
 
       <div className="rounded-[28px] border border-gray-200 bg-gradient-to-br from-white via-gray-50 to-white p-5 shadow-sm dark:border-white/10 dark:from-gray-900 dark:via-gray-950 dark:to-gray-900">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1371,7 +1373,7 @@ export function AccessReuseScopeStep({
                                 ? instanceNumberByKey.get(call.instance.key)
                                 : undefined
                             }
-                            selected={call.available && isSelected}
+                            selected={call.available ? isSelected : false}
                           />
                         </div>
                       </button>

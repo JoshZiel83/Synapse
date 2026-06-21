@@ -10,6 +10,7 @@
   },
   "modules/automation/repo.ts": {
     "automation_rules": 1,
+    "workspace_resources": 6,
     "workspaces": 1
   },
   "modules/chat/repo.ts": {
@@ -36,7 +37,6 @@
   "modules/memory/repo.ts": {
     "conversations": 2,
     "memory_items": 4,
-    "memory_spaces": 1,
     "users": 1
   },
   "modules/model-groups/repo.ts": {

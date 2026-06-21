@@ -1524,10 +1524,10 @@ export async function updateTransportEndpointMetadataJsonb(params: {
 // ─────────────────────── queries: accounts ───────────────────────
 
 /**
- * The workspace-member-app actor existence check behind
+ * The workspace-member-owned actor existence check behind
  * `assertWorkspaceActor`: the actor row must join to a non-deleted,
- * active workspace app in the given workspace. Soft-delete predicate
- * (`app.deletedAt is null`) + `app.status = 'active'` are load-bearing.
+ * active workspace resource in the given workspace. Soft-delete predicate
+ * (`resource.deletedAt is null`) + `resource.status = 'active'` are load-bearing.
  */
 export async function selectActorInWorkspace(params: {
   actorId: string
@@ -1535,12 +1535,12 @@ export async function selectActorInWorkspace(params: {
 }): Promise<{ id: string } | undefined> {
   return db
     .selectFrom("actors as actor")
-    .innerJoin("workspaceApps as app", "app.id", "actor.id")
+    .innerJoin("workspaceResources as resource", "resource.id", "actor.id")
     .select("actor.id")
     .where("actor.id", "=", params.actorId)
-    .where("app.workspaceId", "=", params.workspaceId)
-    .where("app.deletedAt", "is", null)
-    .where("app.status", "=", "active")
+    .where("resource.workspaceId", "=", params.workspaceId)
+    .where("resource.deletedAt", "is", null)
+    .where("resource.status", "=", "active")
     .limit(1)
     .executeTakeFirst()
 }
@@ -1737,7 +1737,7 @@ export async function insertTransportAccountRow(params: {
   inboundActorMode: TransportAccountInboundActorMode
   inboundActorId: string | null
   connectionMode: TransportConnectionMode
-  status: "active" | "disabled" | "error"
+  status: TransportAccountStatus
   credentials: Record<string, unknown>
   config: Record<string, unknown>
   metadata: Record<string, unknown>
@@ -1783,7 +1783,7 @@ export async function updateTransportAccountRow(
       inboundActorMode: TransportAccountInboundActorMode
       inboundActorId: string | null
       connectionMode: TransportConnectionMode
-      status: "active" | "disabled" | "error"
+      status: TransportAccountStatus
       credentials: Record<string, unknown>
       config: Record<string, unknown>
       metadata: Record<string, unknown>

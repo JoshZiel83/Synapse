@@ -15,7 +15,7 @@ import {
 } from "@synapse/shared"
 import { seedWorkspaceCapabilityConversationTypePolicies } from "../capabilities/conversation-type-policies.js"
 import { markWorkspaceDeleted } from "../soft-delete/orchestration.js"
-import { insertWorkspaceAppRoot } from "../workspace-apps/repo.js"
+import { insertWorkspaceResourceRoot } from "../workspace-resources/repo.js"
 import type {
   ActorRecord,
   ActorsConfig,
@@ -68,12 +68,17 @@ export async function getWorkspaceMemberRowByUserId(
 }
 
 export async function getWorkspaceMemberRowById(workspaceMemberId: string) {
-  return db
-    .selectFrom("workspaceMembers")
-    .select(["id", "workspaceId", "userId", "trustLevel", "joinedAt"])
-    .where("id", "=", workspaceMemberId)
-    .limit(1)
-    .executeTakeFirst()
+  return (
+    db
+      .selectFrom("workspaceMembers")
+      .select(["id", "workspaceId", "userId", "trustLevel", "joinedAt"])
+      .where("id", "=", workspaceMemberId)
+      // Validity gate for grant/revoke: resolve only active memberships
+      // (consistent with getWorkspaceMemberRowByUserId).
+      .where("status", "=", "active")
+      .limit(1)
+      .executeTakeFirst()
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -127,7 +132,7 @@ async function findOfficialChiefActorId(
 ) {
   const result = await executor
     .selectFrom("actors as a")
-    .innerJoin("workspaceApps as app", "app.id", "a.id")
+    .innerJoin("workspaceResources as resource", "resource.id", "a.id")
     .leftJoin("actorSourceRefs as source_ref", "source_ref.actorId", "a.id")
     .leftJoin(
       "catalogItems as item",
@@ -135,9 +140,9 @@ async function findOfficialChiefActorId(
       "source_ref.sourceCatalogItemId"
     )
     .select("a.id")
-    .where("app.workspaceId", "=", workspaceId)
-    .where("app.deletedAt", "is", null)
-    .where("app.status", "=", "active")
+    .where("resource.workspaceId", "=", workspaceId)
+    .where("resource.deletedAt", "is", null)
+    .where("resource.status", "=", "active")
     .where((eb) =>
       eb.or([
         sql<boolean>`a.config @> ${OFFICIAL_CHIEF_ACTOR_CONFIG_JSON}::jsonb`,
@@ -413,7 +418,7 @@ export async function createWorkspaceTx(input: CreateWorkspaceInput) {
 
     for (const template of officialActorTemplates) {
       const actorId = crypto.randomUUID()
-      await insertWorkspaceAppRoot(trx, {
+      await insertWorkspaceResourceRoot(trx, {
         id: actorId,
         workspaceId: String(workspace.id),
         kind: "actor",
@@ -687,15 +692,19 @@ export async function getChiefActorPreferenceRow(
       join.onRef("a.id", "=", "pref.chiefActorId").on(
         sql<boolean>`EXISTS (
             SELECT 1
-            FROM workspace_apps_live app
-            WHERE app.id = a.id
-              AND app.workspace_id = wm.workspace_id
-              AND app.deleted_at IS NULL
-              AND app.status = 'active'
+            FROM workspace_resources_live resource
+            WHERE resource.id = a.id
+              AND resource.workspace_id = wm.workspace_id
+              AND resource.deleted_at IS NULL
+              AND resource.status = 'active'
           )`
       )
     )
-    .leftJoin("workspaceApps as chief_actor_app", "chief_actor_app.id", "a.id")
+    .leftJoin(
+      "workspaceResources as chief_actor_app",
+      "chief_actor_app.id",
+      "a.id"
+    )
     .leftJoin("fileAssets as avatar_file", "avatar_file.id", "a.avatarFileId")
     .select([
       "wm.workspaceId",
@@ -731,12 +740,12 @@ export async function findActiveActorInWorkspace(
 ) {
   return db
     .selectFrom("actors as actor")
-    .innerJoin("workspaceApps as app", "app.id", "actor.id")
+    .innerJoin("workspaceResources as resource", "resource.id", "actor.id")
     .select("actor.id")
     .where("actor.id", "=", actorId)
-    .where("app.workspaceId", "=", workspaceId)
-    .where("app.deletedAt", "is", null)
-    .where("app.status", "=", "active")
+    .where("resource.workspaceId", "=", workspaceId)
+    .where("resource.deletedAt", "is", null)
+    .where("resource.status", "=", "active")
     .limit(1)
     .executeTakeFirst()
 }
@@ -769,7 +778,9 @@ export async function listMembersWithAccess(workspaceId: string) {
     .selectFrom("workspaceAccessBindings")
     .select([
       "workspaceMemberId",
-      sql<string[]>`array_agg(access_key order by access_key)`.as("accessKeys"),
+      sql<WorkspaceAccessKey[]>`array_agg(access_key order by access_key)`.as(
+        "accessKeys"
+      ),
     ])
     .where("status", "=", "active")
     .groupBy(["workspaceMemberId"])
@@ -793,12 +804,16 @@ export async function listMembersWithAccess(workspaceId: string) {
       "u.email as userEmail",
       "u.avatarFileId",
       sql<
-        string[]
+        WorkspaceAccessKey[]
       >`COALESCE(access_map.access_keys, ARRAY[]::workspace_access_bindings_access_key[])`.as(
         "accessKeys"
       ),
     ])
     .where("wm.workspaceId", "=", workspaceId)
+    // Roster shows only active members; 'left'/'removed' are durable tombstones
+    // and the view carries no status field to distinguish them (matches the
+    // canonical membership gate). The access subquery already filters active.
+    .where("wm.status", "=", "active")
     .orderBy("wm.joinedAt", "asc")
     .execute()
   return rows

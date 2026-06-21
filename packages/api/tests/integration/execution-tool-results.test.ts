@@ -22,7 +22,7 @@ import {
   buildSessionContextItems,
   loadExecutionToolResultsForSession,
 } from "../../src/modules/ai/context-builder.js"
-import { extractText, textBlocks } from "@synapse/shared"
+import { extractText, textBlocks, type ToolSourceKind } from "@synapse/shared"
 
 import {
   resetDb,
@@ -60,7 +60,7 @@ after(async () => {
 async function buildFixture(opts: {
   toolName: string
   providerCallId?: string
-  sourceKind?: "plugin" | "device" | "system"
+  sourceKind?: ToolSourceKind
 }): Promise<{
   sessionId: string
   toolCallId: string
@@ -74,28 +74,32 @@ async function buildFixture(opts: {
   const providerCallId =
     opts.providerCallId || `toolu_${uuidv4().replace(/-/g, "").slice(0, 16)}`
   const sourceKind = opts.sourceKind || "plugin"
-  const sourceSnapshot =
-    sourceKind === "device"
-      ? {
+  const sourceSnapshot = (() => {
+    switch (sourceKind) {
+      case "device":
+        return {
           kind: "device",
           deviceToolId: "dev-abc",
           exposureStableKey: "synapse.builtin.filesystem.v1",
         }
-      : sourceKind === "system"
-        ? { kind: "system", registryKey: opts.toolName }
-        : {
-            kind: "plugin",
-            installationId: uuidv4(),
-            upstreamToolName: opts.toolName,
-          }
+      case "system":
+        return { kind: "system", registryKey: opts.toolName }
+      default:
+        return {
+          kind: "plugin",
+          installationId: uuidv4(),
+          upstreamToolName: opts.toolName,
+        }
+    }
+  })()
 
   const actorId = uuidv4()
   await client.query("BEGIN")
   try {
     await client.query(
-      `INSERT INTO workspace_apps (id, workspace_id, kind, display_name, owner_workspace_member_id, status)
-       VALUES ($1, $2, 'actor', 'ExecTR Actor', $3, 'active')`,
-      [actorId, seed.workspaceId, seed.workspaceMemberId]
+      `INSERT INTO workspace_resources (id, workspace_id, kind, display_name, owner_subject_id, created_by_subject_id, status)
+       VALUES ($1, $2, 'actor', 'ExecTR Actor', $3, $3, 'active')`,
+      [actorId, seed.workspaceId, seed.memberSubjectId]
     )
     await client.query(
       `INSERT INTO actors (id, role, title)

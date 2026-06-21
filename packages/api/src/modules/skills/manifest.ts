@@ -409,16 +409,19 @@ export function parseSkillMarkdown(markdown: string, fallbackName: string) {
   } satisfies ParsedSkillManifest
 }
 
+function renderCanonicalBlockToText(block: CanonicalContentBlock) {
+  switch (block.type) {
+    case "text":
+      return block.text
+    case "mention":
+      return `@${block.mention.name || "Unknown"}`
+    default:
+      return `[File: ${block.name} | ${block.mimeType} | ${block.path ?? `sha256:${block.sha256}`}]`
+  }
+}
+
 export function renderCanonicalBlocksToText(blocks: CanonicalContentBlock[]) {
-  return blocks
-    .map((block) =>
-      block.type === "text"
-        ? block.text
-        : block.type === "mention"
-          ? `@${block.mention.name || "Unknown"}`
-          : `[File: ${block.name} | ${block.mimeType} | ${block.path ?? `sha256:${block.sha256}`}]`
-    )
-    .join("\n")
+  return blocks.map((block) => renderCanonicalBlockToText(block)).join("\n")
 }
 
 export function buildSkillMarkdown(
@@ -467,7 +470,7 @@ export function buildSkillMarkdown(
     .trimEnd()
   const body = renderCanonicalBlocksToText(bodyBlocks)
 
-  return `---\n${frontmatterSection}\n---\n\n${body}`.trimEnd() + "\n"
+  return `${`---\n${frontmatterSection}\n---\n\n${body}`.trimEnd()}\n`
 }
 
 export function sha256Hex(value: Buffer | string) {

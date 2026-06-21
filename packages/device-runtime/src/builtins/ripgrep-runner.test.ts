@@ -24,7 +24,7 @@ function fakeSpawn(lines: string[]) {
     ;(proc as unknown as { stderr: typeof stderr }).stderr = stderr
     ;(proc as unknown as { kill: () => void }).kill = () => {}
     setImmediate(() => {
-      stdout.emit("data", lines.join("\n") + "\n")
+      stdout.emit("data", `${lines.join("\n")}\n`)
       proc.emit("close", 0)
     })
     return proc as unknown as ChildProcess

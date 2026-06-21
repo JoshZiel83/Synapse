@@ -162,7 +162,7 @@ export default function PluginDetailDialog({
           </div>
 
           {/* Config requirements notice */}
-          {hasRequiredConfig && (
+          {hasRequiredConfig ? (
             <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
               <div className="mb-1 flex items-center gap-2">
                 <Key className="h-4 w-4 text-amber-400" />
@@ -175,9 +175,9 @@ export default function PluginDetailDialog({
                 function.
               </p>
             </div>
-          )}
+          ) : null}
 
-          {tools.length > 0 && (
+          {tools.length > 0 ? (
             <div>
               <h4 className="mb-2 flex items-center gap-2 text-sm font-medium">
                 <Wrench className="h-4 w-4 text-blue-400" />
@@ -202,7 +202,7 @@ export default function PluginDetailDialog({
                 })}
               </div>
             </div>
-          )}
+          ) : null}
 
           <div className="flex gap-2 pt-2">
             {installedCount > 0 ? (

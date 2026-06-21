@@ -1,6 +1,8 @@
 import { sql } from "kysely"
 import { withDbTransaction, type Executor } from "../../kysely.js"
 import { ensurePublisher } from "../../seed-utils.js"
+import { upsertAccessSubjectOn } from "../../../../modules/access/subject-registry.js"
+import { SUBJECT_KIND } from "@synapse/shared"
 import { createGeneratedOfficialActorAvatarFile } from "../../../../modules/avatar/service.js"
 import { getOfficialActorAvatarTheme } from "./avatar-themes.js"
 import {
@@ -225,16 +227,24 @@ export async function seedOfficialRuntimeActors(
     const actorIds: string[] = []
     let chiefActorId: string | null = null
 
+    // owner→subject migration: the installer member's subject is both the owner
+    // and the creator of these official actor roots.
+    const installerSubjectId = await upsertAccessSubjectOn(client, {
+      kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+      workspaceMemberId: workspaceMemberId,
+    })
+
     for (const refs of refsList) {
       const actorSeed = refs.actor
       const actorId = crypto.randomUUID()
       await sql`
-        INSERT INTO workspace_apps (
+        INSERT INTO workspace_resources (
           id,
           workspace_id,
           kind,
           display_name,
-          owner_workspace_member_id,
+          owner_subject_id,
+          created_by_subject_id,
           status
         )
         VALUES (
@@ -242,7 +252,8 @@ export async function seedOfficialRuntimeActors(
           ${workspaceId},
           'actor',
           ${actorSeed.displayName},
-          ${workspaceMemberId},
+          ${installerSubjectId},
+          ${installerSubjectId},
           'active'
         )`.execute(client)
       const actor = await sql<{ id: string }>`

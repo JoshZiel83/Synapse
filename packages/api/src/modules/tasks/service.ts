@@ -1655,12 +1655,13 @@ function validateUserInputAnswers(
     }
 
     const effectiveCount = selectedOptionIds.length + (otherText ? 1 : 0)
-    const minSelections =
-      question.type === "multi_select"
-        ? (question.minSelections ?? (required ? 1 : 0))
-        : required
-          ? 1
-          : 0
+    const requiredDefaultSelections = required ? 1 : 0
+    let minSelections: number
+    if (question.type === "multi_select") {
+      minSelections = question.minSelections ?? requiredDefaultSelections
+    } else {
+      minSelections = requiredDefaultSelections
+    }
     const maxSelections =
       question.type === "multi_select"
         ? (question.maxSelections ?? Number.MAX_SAFE_INTEGER)

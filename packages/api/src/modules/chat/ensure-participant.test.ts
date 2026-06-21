@@ -1,6 +1,8 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import { SUBJECT_KIND } from "@synapse/shared"
 import { withTestDbAndClient } from "../../test/helpers/db.js"
+import { upsertAccessSubjectOn } from "../access/subject-registry.js"
 
 type AnyDb = import("kysely").Kysely<any>
 
@@ -48,13 +50,17 @@ async function insertWorkspaceMember(
 
 async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
   const actorId = crypto.randomUUID()
+  const createdBySubjectId = await upsertAccessSubjectOn(db, {
+    kind: SUBJECT_KIND.PLATFORM,
+  })
   await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id: actorId,
       workspaceId: workspaceId,
       kind: "actor",
       displayName: "test actor",
+      createdBySubjectId,
       status: "active",
     } as any)
     .execute()
@@ -629,13 +635,17 @@ async function insertRemoteAgent(
   workspaceId: string
 ): Promise<string> {
   const remoteAgentId = crypto.randomUUID()
+  const createdBySubjectId = await upsertAccessSubjectOn(db, {
+    kind: SUBJECT_KIND.PLATFORM,
+  })
   await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id: remoteAgentId,
       workspaceId: workspaceId,
       kind: "remote_agent",
       displayName: "Test agent",
+      createdBySubjectId,
       status: "active",
     } as any)
     .execute()

@@ -1,14 +1,15 @@
 import {
   SUBJECT_KIND,
-  WORKSPACE_APP_KIND,
-  WORKSPACE_APP_GRANT_PERMISSION,
-  WORKSPACE_APP_GRANT_REQUEST_DIRECTION,
-  type WorkspaceAppGrantRequestDirection,
-  WORKSPACE_APP_GRANT_REQUEST_STATUS,
-  WORKSPACE_APP_STATUS,
+  WORKSPACE_RESOURCE_KIND,
+  WORKSPACE_RESOURCE_GRANT_PERMISSION,
+  WORKSPACE_RESOURCE_GRANT_REQUEST_DIRECTION,
+  type WorkspaceResourceGrantRequestDirection,
+  WORKSPACE_RESOURCE_GRANT_REQUEST_STATUS,
+  WORKSPACE_RESOURCE_STATUS,
   type CapabilityAccessTarget,
-  type WorkspaceAppGrantPermission,
-  type WorkspaceAppKind,
+  type SubjectRef,
+  type WorkspaceResourceGrantPermission,
+  type WorkspaceResourceKind,
 } from "@synapse/shared"
 import { requireWorkspaceMemberIdentity } from "../chat/workspace-identity.js"
 import {
@@ -32,54 +33,56 @@ import {
   uninstallPluginUnified,
   updateInstallation,
 } from "../mcp-plugins/service.js"
-import { resolveWorkspaceAppGrantRequest } from "./grant-storage.js"
+import { resolveWorkspaceResourceGrantRequest } from "./grant-storage.js"
 import {
-  cancelWorkspaceAppGrantRequestDefault,
+  cancelWorkspaceResourceGrantRequestDefault,
   findGrantRequestById,
-  findManageableWorkspaceApp,
+  findManageableWorkspaceResource,
   hasManageGrantForSubject,
-  insertWorkspaceAppGrantRequestDefault,
+  insertWorkspaceResourceGrantRequestDefault,
   isSubjectActiveConversationParticipantDefault,
-  listGrantedWorkspaceApps,
-  listImplicitOwnerWorkspaceApps,
-  listWorkspaceAppGrantPresentationRows,
-  listWorkspaceAppGrantRequestPresentationRows,
-  listWorkspaceAppsLive,
+  listGrantedWorkspaceResources,
+  listImplicitOwnerWorkspaceResources,
+  listWorkspaceResourceGrantPresentationRows,
+  listWorkspaceResourceGrantRequestPresentationRows,
+  listWorkspaceResourcesLive,
   loadWorkspaceMemberAccessRecord,
-  replaceWorkspaceAppGrantsTx,
-  revokeWorkspaceAppGrantsForAppDefault,
-  updateWorkspaceAppRootDefault,
-  upsertWorkspaceAppSubjectIdDefault,
+  replaceWorkspaceResourceGrantsTx,
+  revokeWorkspaceResourceGrantsForResourceDefault,
+  updateWorkspaceResourceRootDefault,
+  upsertWorkspaceResourceSubjectIdDefault,
   type WorkspaceMemberAccessRecord,
 } from "./repo.js"
 import {
-  isCompleteWorkspaceAppRow,
-  type WorkspaceAppRow,
-  type WorkspaceAppGrantPresentationRow,
-  type WorkspaceAppGrantRequestPresentationRow,
+  isCompleteWorkspaceResourceRow,
+  type WorkspaceResourceRow,
+  type WorkspaceResourceGrantPresentationRow,
+  type WorkspaceResourceGrantRequestPresentationRow,
 } from "./presenter.js"
 
 type WorkspaceMemberAccess = WorkspaceMemberAccessRecord
 
-const IMPLICIT_OWNER_VISIBLE_WORKSPACE_APP_KINDS = [
-  WORKSPACE_APP_KIND.ACTOR,
-  WORKSPACE_APP_KIND.REMOTE_AGENT,
+const IMPLICIT_OWNER_VISIBLE_WORKSPACE_RESOURCE_KINDS = [
+  WORKSPACE_RESOURCE_KIND.ACTOR,
+  WORKSPACE_RESOURCE_KIND.REMOTE_AGENT,
 ] as const
 
-function workspaceAppKindAdminKey(kind: WorkspaceAppKind): string {
+function workspaceResourceKindAdminKey(kind: WorkspaceResourceKind): string {
   switch (kind) {
-    case WORKSPACE_APP_KIND.PLUGIN_INSTALLATION:
+    case WORKSPACE_RESOURCE_KIND.PLUGIN_INSTALLATION:
       return "plugin_admin"
-    case WORKSPACE_APP_KIND.INSTALLED_SKILL:
+    case WORKSPACE_RESOURCE_KIND.INSTALLED_SKILL:
       return "skill_admin"
-    case WORKSPACE_APP_KIND.ACTOR:
+    case WORKSPACE_RESOURCE_KIND.ACTOR:
       return "actor_admin"
-    case WORKSPACE_APP_KIND.REMOTE_AGENT:
+    case WORKSPACE_RESOURCE_KIND.REMOTE_AGENT:
       return "remote_agent_admin"
-    case WORKSPACE_APP_KIND.DEVICE_CAPABILITY:
+    case WORKSPACE_RESOURCE_KIND.DEVICE_CAPABILITY:
       return "device_admin"
+    case WORKSPACE_RESOURCE_KIND.AUTOMATION_EVENT_SOURCE:
+      return "automation_admin"
   }
-  throw new Error(`Unsupported workspace app kind: ${kind}`)
+  throw new Error(`Unsupported workspace resource kind: ${kind}`)
 }
 
 function targetToSubjectRef(target: CapabilityAccessTarget) {
@@ -101,49 +104,122 @@ function isWorkspaceAdmin(access: WorkspaceMemberAccess) {
   return access.ownerId === access.userId || access.trustLevel === "admin"
 }
 
-function hasKindAdmin(access: WorkspaceMemberAccess, kind: WorkspaceAppKind) {
-  return access.accessKeys.includes(workspaceAppKindAdminKey(kind))
+/**
+ * §6.7 manage gate (kind-admin arm): a workspace member holds management rights
+ * over a resource kind iff their access record carries that kind's admin access
+ * key. This is the arm of `requireManageWorkspaceResource` that authorizes an
+ * ownerless resource (e.g. an automation_event_source with no owner_subject_id)
+ * without owner-equality. Exported for unit coverage; the surrounding gate is
+ * pool-bound and only reachable through the HTTP/service path.
+ */
+export function hasKindAdmin(
+  access: Pick<WorkspaceMemberAccess, "accessKeys">,
+  kind: WorkspaceResourceKind
+) {
+  return access.accessKeys.includes(workspaceResourceKindAdminKey(kind))
 }
 
 async function hasManageGrant(
-  workspaceAppId: string,
+  workspaceResourceId: string,
   workspaceMemberId: string
 ): Promise<boolean> {
-  return hasManageGrantForSubject(workspaceAppId, workspaceMemberId)
+  return hasManageGrantForSubject(workspaceResourceId, workspaceMemberId)
 }
 
-async function requireManageWorkspaceApp(
+/**
+ * Authorize "manage" on a workspace_resource for the calling principal.
+ *
+ * Owner→subject migration (plan §4.2): owner equality is matched BY SUBJECT
+ * KIND, not only by member id. A caller may be:
+ *  - a workspace_member principal (the HTTP path, `userId`): member-admin /
+ *    kind-admin / owner-equality (member subject == owner subject) / manage grant.
+ *  - an actor / remote_agent principal (`callerSubject`): owner of ITS OWN
+ *    resource only — owner-equality (its subject == owner subject). Such an
+ *    owner gets implicit manage but cannot delegate (no manage grant is ever
+ *    written for a non-member subject; see validate_workspace_resource_grant).
+ *
+ * The member access context is still loaded (admins / kind-admin / manage
+ * grants are all member-scoped); an actor/remote_agent caller passes its
+ * SubjectRef as `callerSubject` and is authorized purely by owner-equality.
+ */
+async function requireManageWorkspaceResource(
   workspaceId: string,
-  appId: string,
-  userId: string
+  resourceId: string,
+  userId: string,
+  callerSubject?: SubjectRef
 ) {
+  const resource = await findManageableWorkspaceResource(
+    resourceId,
+    workspaceId
+  )
+  if (!resource) {
+    throw new Error("Workspace resource not found")
+  }
+
+  // actor / remote_agent caller: authorized iff it owns this resource.
+  if (
+    callerSubject &&
+    (callerSubject.kind === SUBJECT_KIND.ACTOR ||
+      callerSubject.kind === SUBJECT_KIND.REMOTE_AGENT)
+  ) {
+    const callerSubjectId =
+      await upsertWorkspaceResourceSubjectIdDefault(callerSubject)
+    if (
+      resource.ownerSubjectId &&
+      resource.ownerSubjectId === callerSubjectId
+    ) {
+      if (!isCompleteWorkspaceResourceRow(resource)) {
+        throw new Error("Workspace resource row is incomplete")
+      }
+      return { access: null, resource }
+    }
+    throw new Error("Not allowed to manage this workspace resource")
+  }
+
   const access = await loadWorkspaceMemberAccess(workspaceId, userId)
   if (!access) {
     throw new Error("Workspace member not found")
   }
-  const app = await findManageableWorkspaceApp(appId, workspaceId)
-  if (!app) {
-    throw new Error("Workspace app not found")
-  }
   if (
     isWorkspaceAdmin(access) ||
-    hasKindAdmin(access, app.kind as WorkspaceAppKind) ||
-    app.ownerWorkspaceMemberId === access.workspaceMemberId ||
-    (await hasManageGrant(appId, access.workspaceMemberId))
+    hasKindAdmin(access, resource.kind as WorkspaceResourceKind) ||
+    resource.ownerWorkspaceMemberId === access.workspaceMemberId ||
+    (await hasManageGrant(resourceId, access.workspaceMemberId))
   ) {
-    if (!isCompleteWorkspaceAppRow(app)) {
-      throw new Error("Workspace app row is incomplete")
+    if (!isCompleteWorkspaceResourceRow(resource)) {
+      throw new Error("Workspace resource row is incomplete")
     }
-    return { access, app }
+    return { access, resource }
   }
-  throw new Error("Not allowed to manage this workspace app")
+  throw new Error("Not allowed to manage this workspace resource")
 }
 
-export async function listWorkspaceAppsInventory(params: {
+/**
+ * Member-only variant: asserts the caller resolved to a workspace_member access
+ * record (the management/grant flows that write a member id need it). Actor /
+ * remote_agent principals never reach these member-scoped flows.
+ */
+async function requireManageWorkspaceResourceAsMember(
+  workspaceId: string,
+  resourceId: string,
+  userId: string
+): Promise<{ access: WorkspaceMemberAccess; resource: WorkspaceResourceRow }> {
+  const result = await requireManageWorkspaceResource(
+    workspaceId,
+    resourceId,
+    userId
+  )
+  if (!result.access) {
+    throw new Error("Workspace member not found")
+  }
+  return { access: result.access, resource: result.resource }
+}
+
+export async function listWorkspaceResourcesInventory(params: {
   workspaceId: string
   userId: string
-  kind?: WorkspaceAppKind
-}): Promise<WorkspaceAppRow[]> {
+  kind?: WorkspaceResourceKind
+}): Promise<WorkspaceResourceRow[]> {
   const access = await loadWorkspaceMemberAccess(
     params.workspaceId,
     params.userId
@@ -153,11 +229,11 @@ export async function listWorkspaceAppsInventory(params: {
   }
 
   const isAdmin = isWorkspaceAdmin(access)
-  const rows = await listWorkspaceAppsLive(params.workspaceId, params.kind)
+  const rows = await listWorkspaceResourcesLive(params.workspaceId, params.kind)
   const filtered = await Promise.all(
     rows.map(async (row) => {
       if (!row?.id || !row.kind) return null
-      const kind = row.kind as WorkspaceAppKind
+      const kind = row.kind as WorkspaceResourceKind
       if (isAdmin || hasKindAdmin(access, kind)) return row
       if (row.ownerWorkspaceMemberId === access.workspaceMemberId) return row
       return (await hasManageGrant(row.id, access.workspaceMemberId))
@@ -165,30 +241,30 @@ export async function listWorkspaceAppsInventory(params: {
         : null
     })
   )
-  const visible: WorkspaceAppRow[] = []
+  const visible: WorkspaceResourceRow[] = []
   for (const row of filtered) {
-    if (!isCompleteWorkspaceAppRow(row)) continue
+    if (!isCompleteWorkspaceResourceRow(row)) continue
     visible.push(row)
   }
   return visible
 }
 
-export async function discoverWorkspaceAppsForMember(params: {
+export async function discoverWorkspaceResourcesForMember(params: {
   workspaceId: string
   userId: string
   conversationId?: string
-}): Promise<WorkspaceAppRow[]> {
+}): Promise<WorkspaceResourceRow[]> {
   const identity = await requireWorkspaceMemberIdentity(
     params.workspaceId,
     params.userId
   )
-  const workspaceSubjectId = await upsertWorkspaceAppSubjectIdDefault({
+  const workspaceSubjectId = await upsertWorkspaceResourceSubjectIdDefault({
     kind: SUBJECT_KIND.WORKSPACE,
     workspaceId: params.workspaceId,
   })
-  const memberSubjectId = await upsertWorkspaceAppSubjectIdDefault({
+  const memberSubjectId = await upsertWorkspaceResourceSubjectIdDefault({
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: identity.workspaceMemberId,
+    workspaceMemberId: identity.workspaceMemberId,
   })
 
   let conversationSubjectId: string | null = null
@@ -198,7 +274,7 @@ export async function discoverWorkspaceAppsForMember(params: {
       memberSubjectId
     )
     if (participant) {
-      conversationSubjectId = await upsertWorkspaceAppSubjectIdDefault({
+      conversationSubjectId = await upsertWorkspaceResourceSubjectIdDefault({
         kind: SUBJECT_KIND.CONVERSATION,
         conversationId: params.conversationId,
       })
@@ -206,128 +282,130 @@ export async function discoverWorkspaceAppsForMember(params: {
   }
 
   const claimSubjectIds = [workspaceSubjectId, memberSubjectId]
-  const grantRows = await listGrantedWorkspaceApps({
+  const grantRows = await listGrantedWorkspaceResources({
     workspaceId: params.workspaceId,
     claimSubjectIds,
     conversationSubjectId,
   })
 
-  const implicitOwnerRows = await listImplicitOwnerWorkspaceApps({
+  const implicitOwnerRows = await listImplicitOwnerWorkspaceResources({
     workspaceId: params.workspaceId,
     ownerWorkspaceMemberId: identity.workspaceMemberId,
-    kinds: IMPLICIT_OWNER_VISIBLE_WORKSPACE_APP_KINDS,
+    kinds: IMPLICIT_OWNER_VISIBLE_WORKSPACE_RESOURCE_KINDS,
   })
 
-  const byId = new Map<string, WorkspaceAppRow>()
+  const byId = new Map<string, WorkspaceResourceRow>()
   for (const row of grantRows) {
     byId.set(row.id, row)
   }
   for (const row of implicitOwnerRows) {
-    if (!isCompleteWorkspaceAppRow(row)) continue
+    if (!isCompleteWorkspaceResourceRow(row)) continue
     byId.set(row.id, row)
   }
   return Array.from(byId.values())
 }
 
-export async function getWorkspaceAppInventoryDetail(params: {
+export async function getWorkspaceResourceInventoryDetail(params: {
   workspaceId: string
-  appId: string
+  resourceId: string
   userId: string
-}): Promise<WorkspaceAppRow> {
-  const { app } = await requireManageWorkspaceApp(
+}): Promise<WorkspaceResourceRow> {
+  const { resource } = await requireManageWorkspaceResource(
     params.workspaceId,
-    params.appId,
+    params.resourceId,
     params.userId
   )
-  return app
+  return resource
 }
 
-export async function listWorkspaceAppGrantRecords(params: {
+export async function listWorkspaceResourceGrantRecords(params: {
   workspaceId: string
-  appId: string
+  resourceId: string
   userId: string
-}): Promise<WorkspaceAppGrantPresentationRow[]> {
-  await requireManageWorkspaceApp(
+}): Promise<WorkspaceResourceGrantPresentationRow[]> {
+  await requireManageWorkspaceResource(
     params.workspaceId,
-    params.appId,
+    params.resourceId,
     params.userId
   )
-  return listWorkspaceAppGrantPresentationRows(params.appId)
+  return listWorkspaceResourceGrantPresentationRows(params.resourceId)
 }
 
-export async function replaceWorkspaceAppGrants(params: {
+export async function replaceWorkspaceResourceGrants(params: {
   workspaceId: string
-  appId: string
+  resourceId: string
   userId: string
   grants: Array<{
     target: CapabilityAccessTarget
-    permissions: WorkspaceAppGrantPermission[]
+    permissions: WorkspaceResourceGrantPermission[]
     conversationTypeMaskOverride?: number | null
     reason?: string
   }>
-}): Promise<WorkspaceAppGrantPresentationRow[]> {
-  const { access } = await requireManageWorkspaceApp(
+}): Promise<WorkspaceResourceGrantPresentationRow[]> {
+  const { access } = await requireManageWorkspaceResourceAsMember(
     params.workspaceId,
-    params.appId,
+    params.resourceId,
     params.userId
   )
-  await replaceWorkspaceAppGrantsTx({
+  await replaceWorkspaceResourceGrantsTx({
     workspaceId: params.workspaceId,
-    appId: params.appId,
+    resourceId: params.resourceId,
     grants: params.grants,
     createdByWorkspaceMemberId: access.workspaceMemberId,
   })
-  return listWorkspaceAppGrantRecords(params)
+  return listWorkspaceResourceGrantRecords(params)
 }
 
-export async function listWorkspaceAppGrantRequestRecords(params: {
+export async function listWorkspaceResourceGrantRequestRecords(params: {
   workspaceId: string
-  appId: string
+  resourceId: string
   userId: string
-  direction: WorkspaceAppGrantRequestDirection
-}): Promise<WorkspaceAppGrantRequestPresentationRow[]> {
+  direction: WorkspaceResourceGrantRequestDirection
+}): Promise<WorkspaceResourceGrantRequestPresentationRow[]> {
   const identity = await requireWorkspaceMemberIdentity(
     params.workspaceId,
     params.userId
   )
-  if (params.direction === WORKSPACE_APP_GRANT_REQUEST_DIRECTION.INCOMING) {
-    await requireManageWorkspaceApp(
+  if (
+    params.direction === WORKSPACE_RESOURCE_GRANT_REQUEST_DIRECTION.INCOMING
+  ) {
+    await requireManageWorkspaceResource(
       params.workspaceId,
-      params.appId,
+      params.resourceId,
       params.userId
     )
   }
-  return listWorkspaceAppGrantRequestPresentationRows({
-    appId: params.appId,
+  return listWorkspaceResourceGrantRequestPresentationRows({
+    resourceId: params.resourceId,
     direction: params.direction,
     requesterWorkspaceMemberId: identity.workspaceMemberId,
   })
 }
 
-export async function submitWorkspaceAppGrantRequest(params: {
+export async function submitWorkspaceResourceGrantRequest(params: {
   workspaceId: string
-  appId: string
+  resourceId: string
   userId: string
   reason?: string
-}): Promise<WorkspaceAppGrantRequestPresentationRow> {
+}): Promise<WorkspaceResourceGrantRequestPresentationRow> {
   const identity = await requireWorkspaceMemberIdentity(
     params.workspaceId,
     params.userId
   )
-  const row = await insertWorkspaceAppGrantRequestDefault({
+  const row = await insertWorkspaceResourceGrantRequestDefault({
     workspaceId: params.workspaceId,
-    workspaceAppId: params.appId,
+    workspaceResourceId: params.resourceId,
     grantee: {
       subject: {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: identity.workspaceMemberId,
+        workspaceMemberId: identity.workspaceMemberId,
       },
     },
-    requestedPermissions: [WORKSPACE_APP_GRANT_PERMISSION.CONTACT_VISIBLE],
+    requestedPermissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.CONTACT_VISIBLE],
     requesterWorkspaceMemberId: identity.workspaceMemberId,
     reason: params.reason ?? null,
   })
-  const record: WorkspaceAppGrantRequestPresentationRow = {
+  const record: WorkspaceResourceGrantRequestPresentationRow = {
     ...row,
     granteeKind: SUBJECT_KIND.WORKSPACE_MEMBER,
     granteeWorkspaceIdViaJoin: params.workspaceId,
@@ -342,61 +420,61 @@ export async function submitWorkspaceAppGrantRequest(params: {
   return record
 }
 
-export async function approveWorkspaceAppGrantRequest(params: {
+export async function approveWorkspaceResourceGrantRequest(params: {
   workspaceId: string
-  appId: string
+  resourceId: string
   requestId: string
   userId: string
-}): Promise<WorkspaceAppGrantRequestPresentationRow> {
-  const { access } = await requireManageWorkspaceApp(
+}): Promise<WorkspaceResourceGrantRequestPresentationRow> {
+  const { access } = await requireManageWorkspaceResourceAsMember(
     params.workspaceId,
-    params.appId,
+    params.resourceId,
     params.userId
   )
-  const row = await resolveWorkspaceAppGrantRequest({
+  const row = await resolveWorkspaceResourceGrantRequest({
     workspaceId: params.workspaceId,
-    workspaceAppId: params.appId,
+    workspaceResourceId: params.resourceId,
     requestId: params.requestId,
     approverWorkspaceMemberId: access.workspaceMemberId,
     decision: "approve",
   })
-  return listWorkspaceAppGrantRequestRecords({
+  return listWorkspaceResourceGrantRequestRecords({
     workspaceId: params.workspaceId,
-    appId: params.appId,
+    resourceId: params.resourceId,
     userId: params.userId,
-    direction: WORKSPACE_APP_GRANT_REQUEST_DIRECTION.INCOMING,
+    direction: WORKSPACE_RESOURCE_GRANT_REQUEST_DIRECTION.INCOMING,
   }).then((rows) => rows.find((item) => item.id === row.id) || row)
 }
 
-export async function rejectWorkspaceAppGrantRequest(params: {
+export async function rejectWorkspaceResourceGrantRequest(params: {
   workspaceId: string
-  appId: string
+  resourceId: string
   requestId: string
   userId: string
-}): Promise<WorkspaceAppGrantRequestPresentationRow> {
-  const { access } = await requireManageWorkspaceApp(
+}): Promise<WorkspaceResourceGrantRequestPresentationRow> {
+  const { access } = await requireManageWorkspaceResourceAsMember(
     params.workspaceId,
-    params.appId,
+    params.resourceId,
     params.userId
   )
-  const row = await resolveWorkspaceAppGrantRequest({
+  const row = await resolveWorkspaceResourceGrantRequest({
     workspaceId: params.workspaceId,
-    workspaceAppId: params.appId,
+    workspaceResourceId: params.resourceId,
     requestId: params.requestId,
     approverWorkspaceMemberId: access.workspaceMemberId,
     decision: "reject",
   })
-  return listWorkspaceAppGrantRequestRecords({
+  return listWorkspaceResourceGrantRequestRecords({
     workspaceId: params.workspaceId,
-    appId: params.appId,
+    resourceId: params.resourceId,
     userId: params.userId,
-    direction: WORKSPACE_APP_GRANT_REQUEST_DIRECTION.INCOMING,
+    direction: WORKSPACE_RESOURCE_GRANT_REQUEST_DIRECTION.INCOMING,
   }).then((rows) => rows.find((item) => item.id === row.id) || row)
 }
 
-export async function cancelWorkspaceAppGrantRequestByRequester(params: {
+export async function cancelWorkspaceResourceGrantRequestByRequester(params: {
   workspaceId: string
-  appId: string
+  resourceId: string
   requestId: string
   userId: string
 }): Promise<boolean> {
@@ -406,38 +484,40 @@ export async function cancelWorkspaceAppGrantRequestByRequester(params: {
   )
   const request = await findGrantRequestById(params.requestId)
   if (!request) {
-    throw new Error("Workspace app grant request not found")
+    throw new Error("Workspace resource grant request not found")
   }
   if (
     request.workspaceId !== params.workspaceId ||
-    request.workspaceAppId !== params.appId
+    request.workspaceResourceId !== params.resourceId
   ) {
-    throw new Error("Workspace app grant request not found")
+    throw new Error("Workspace resource grant request not found")
   }
   if (request.requesterWorkspaceMemberId !== identity.workspaceMemberId) {
-    throw new Error("Not allowed to cancel this workspace app grant request")
+    throw new Error(
+      "Not allowed to cancel this workspace resource grant request"
+    )
   }
-  if (request.status !== WORKSPACE_APP_GRANT_REQUEST_STATUS.PENDING) {
-    throw new Error("Workspace app grant request is no longer pending")
+  if (request.status !== WORKSPACE_RESOURCE_GRANT_REQUEST_STATUS.PENDING) {
+    throw new Error("Workspace resource grant request is no longer pending")
   }
-  const cancelled = await cancelWorkspaceAppGrantRequestDefault({
+  const cancelled = await cancelWorkspaceResourceGrantRequestDefault({
     workspaceId: params.workspaceId,
-    workspaceAppId: params.appId,
+    workspaceResourceId: params.resourceId,
     requestId: params.requestId,
     requesterWorkspaceMemberId: identity.workspaceMemberId,
   })
   if (!cancelled) {
-    throw new Error("Workspace app grant request is no longer pending")
+    throw new Error("Workspace resource grant request is no longer pending")
   }
   return true
 }
 
-export async function createWorkspaceApp(params: {
+export async function createWorkspaceResource(params: {
   workspaceId: string
   userId: string
   input:
     | {
-        kind: typeof WORKSPACE_APP_KIND.ACTOR
+        kind: typeof WORKSPACE_RESOURCE_KIND.ACTOR
         displayName: string
         role: string
         title?: string
@@ -450,13 +530,13 @@ export async function createWorkspaceApp(params: {
         config?: Record<string, unknown>
         grants?: Array<{
           target: CapabilityAccessTarget
-          permissions: WorkspaceAppGrantPermission[]
+          permissions: WorkspaceResourceGrantPermission[]
           conversationTypeMaskOverride?: number | null
           reason?: string
         }>
       }
     | {
-        kind: typeof WORKSPACE_APP_KIND.INSTALLED_SKILL
+        kind: typeof WORKSPACE_RESOURCE_KIND.INSTALLED_SKILL
         sourceType: "custom"
         displayName: string
         description?: unknown
@@ -469,24 +549,24 @@ export async function createWorkspaceApp(params: {
         }>
         grants?: Array<{
           target: CapabilityAccessTarget
-          permissions: WorkspaceAppGrantPermission[]
+          permissions: WorkspaceResourceGrantPermission[]
           conversationTypeMaskOverride?: number | null
           reason?: string
         }>
       }
     | {
-        kind: typeof WORKSPACE_APP_KIND.INSTALLED_SKILL
+        kind: typeof WORKSPACE_RESOURCE_KIND.INSTALLED_SKILL
         sourceType: "marketplace"
         marketSkillId: string
         grants?: Array<{
           target: CapabilityAccessTarget
-          permissions: WorkspaceAppGrantPermission[]
+          permissions: WorkspaceResourceGrantPermission[]
           conversationTypeMaskOverride?: number | null
           reason?: string
         }>
       }
     | {
-        kind: typeof WORKSPACE_APP_KIND.REMOTE_AGENT
+        kind: typeof WORKSPACE_RESOURCE_KIND.REMOTE_AGENT
         displayName: string
         title: string
         description?: string
@@ -497,26 +577,26 @@ export async function createWorkspaceApp(params: {
         metadata?: Record<string, unknown>
         grants?: Array<{
           target: CapabilityAccessTarget
-          permissions: WorkspaceAppGrantPermission[]
+          permissions: WorkspaceResourceGrantPermission[]
           conversationTypeMaskOverride?: number | null
           reason?: string
         }>
       }
     | {
-        kind: typeof WORKSPACE_APP_KIND.PLUGIN_INSTALLATION
+        kind: typeof WORKSPACE_RESOURCE_KIND.PLUGIN_INSTALLATION
         pluginId: string
         lifecycleScope?: string
         configData?: Record<string, unknown>
         authSessionIds?: Record<string, string>
         grants?: Array<{
           target: CapabilityAccessTarget
-          permissions: WorkspaceAppGrantPermission[]
+          permissions: WorkspaceResourceGrantPermission[]
           conversationTypeMaskOverride?: number | null
           reason?: string
         }>
       }
-}): Promise<WorkspaceAppRow> {
-  if (params.input.kind === WORKSPACE_APP_KIND.ACTOR) {
+}): Promise<WorkspaceResourceRow> {
+  if (params.input.kind === WORKSPACE_RESOURCE_KIND.ACTOR) {
     const actor = await createActor({
       workspaceId: params.workspaceId,
       createdByWorkspaceMemberId: (
@@ -534,14 +614,14 @@ export async function createWorkspaceApp(params: {
       config: params.input.config,
       grants: params.input.grants,
     })
-    return getWorkspaceAppInventoryDetail({
+    return getWorkspaceResourceInventoryDetail({
       workspaceId: params.workspaceId,
-      appId: actor.id,
+      resourceId: actor.id,
       userId: params.userId,
     })
   }
 
-  if (params.input.kind === WORKSPACE_APP_KIND.INSTALLED_SKILL) {
+  if (params.input.kind === WORKSPACE_RESOURCE_KIND.INSTALLED_SKILL) {
     const skill =
       params.input.sourceType === "custom"
         ? await createWorkspaceSkill({
@@ -570,14 +650,14 @@ export async function createWorkspaceApp(params: {
               )
             ).workspaceMemberId,
           })
-    return getWorkspaceAppInventoryDetail({
+    return getWorkspaceResourceInventoryDetail({
       workspaceId: params.workspaceId,
-      appId: skill.id,
+      resourceId: skill.id,
       userId: params.userId,
     })
   }
 
-  if (params.input.kind === WORKSPACE_APP_KIND.PLUGIN_INSTALLATION) {
+  if (params.input.kind === WORKSPACE_RESOURCE_KIND.PLUGIN_INSTALLATION) {
     const installation = await installPluginUnified({
       workspaceId: params.workspaceId,
       pluginId: params.input.pluginId,
@@ -589,9 +669,9 @@ export async function createWorkspaceApp(params: {
         await requireWorkspaceMemberIdentity(params.workspaceId, params.userId)
       ).workspaceMemberId,
     })
-    return getWorkspaceAppInventoryDetail({
+    return getWorkspaceResourceInventoryDetail({
       workspaceId: params.workspaceId,
-      appId: installation.row.installationId,
+      resourceId: installation.row.installationId,
       userId: params.userId,
     })
   }
@@ -609,20 +689,20 @@ export async function createWorkspaceApp(params: {
     metadata: params.input.metadata,
     grants: params.input.grants,
   })
-  return getWorkspaceAppInventoryDetail({
+  return getWorkspaceResourceInventoryDetail({
     workspaceId: params.workspaceId,
-    appId: remoteAgent.remoteAgent.id,
+    resourceId: remoteAgent.remoteAgent.id,
     userId: params.userId,
   })
 }
 
-export async function updateWorkspaceApp(params: {
+export async function updateWorkspaceResource(params: {
   workspaceId: string
-  appId: string
+  resourceId: string
   userId: string
   input:
     | {
-        kind: typeof WORKSPACE_APP_KIND.ACTOR
+        kind: typeof WORKSPACE_RESOURCE_KIND.ACTOR
         displayName?: string
         role?: string
         title?: string
@@ -635,7 +715,7 @@ export async function updateWorkspaceApp(params: {
         config?: Record<string, unknown>
       }
     | {
-        kind: typeof WORKSPACE_APP_KIND.REMOTE_AGENT
+        kind: typeof WORKSPACE_RESOURCE_KIND.REMOTE_AGENT
         displayName?: string
         title?: string
         description?: string | null
@@ -646,7 +726,7 @@ export async function updateWorkspaceApp(params: {
         metadata?: Record<string, unknown>
       }
     | {
-        kind: typeof WORKSPACE_APP_KIND.INSTALLED_SKILL
+        kind: typeof WORKSPACE_RESOURCE_KIND.INSTALLED_SKILL
         displayName?: string
         description?: unknown
         iconFileId?: string | null
@@ -660,31 +740,31 @@ export async function updateWorkspaceApp(params: {
         }>
       }
     | {
-        kind: typeof WORKSPACE_APP_KIND.DEVICE_CAPABILITY
+        kind: typeof WORKSPACE_RESOURCE_KIND.DEVICE_CAPABILITY
         displayName?: string
         conversationTypeMaskOverride?: number | null
       }
     | {
-        kind: typeof WORKSPACE_APP_KIND.PLUGIN_INSTALLATION
+        kind: typeof WORKSPACE_RESOURCE_KIND.PLUGIN_INSTALLATION
         isEnabled?: boolean
         configData?: Record<string, unknown>
         authSessionIds?: Record<string, string>
         lifecycleScope?: string
         conversationTypeMaskOverride?: number | null
       }
-}): Promise<WorkspaceAppRow> {
-  const { access, app } = await requireManageWorkspaceApp(
+}): Promise<WorkspaceResourceRow> {
+  const { access, resource } = await requireManageWorkspaceResourceAsMember(
     params.workspaceId,
-    params.appId,
+    params.resourceId,
     params.userId
   )
-  if (app.kind !== params.input.kind) {
-    throw new Error("Workspace app kind does not match update payload")
+  if (resource.kind !== params.input.kind) {
+    throw new Error("Workspace resource kind does not match update payload")
   }
 
   switch (params.input.kind) {
-    case WORKSPACE_APP_KIND.ACTOR:
-      await updateActor(params.appId, params.workspaceId, {
+    case WORKSPACE_RESOURCE_KIND.ACTOR:
+      await updateActor(params.resourceId, params.workspaceId, {
         displayName: params.input.displayName,
         role: params.input.role as any,
         title: params.input.title,
@@ -697,10 +777,10 @@ export async function updateWorkspaceApp(params: {
         config: params.input.config,
       })
       break
-    case WORKSPACE_APP_KIND.REMOTE_AGENT:
+    case WORKSPACE_RESOURCE_KIND.REMOTE_AGENT:
       await updateRemoteAgent({
         workspaceId: params.workspaceId,
-        remoteAgentId: params.appId,
+        remoteAgentId: params.resourceId,
         userId: params.userId,
         displayName: params.input.displayName,
         title: params.input.title,
@@ -712,10 +792,10 @@ export async function updateWorkspaceApp(params: {
         metadata: params.input.metadata,
       })
       break
-    case WORKSPACE_APP_KIND.INSTALLED_SKILL:
+    case WORKSPACE_RESOURCE_KIND.INSTALLED_SKILL:
       await updateInstalledSkill({
         workspaceId: params.workspaceId,
-        installedSkillId: params.appId,
+        installedSkillId: params.resourceId,
         name: params.input.displayName,
         description: params.input.description as any,
         iconFileId: params.input.iconFileId,
@@ -725,8 +805,8 @@ export async function updateWorkspaceApp(params: {
         attachmentFiles: params.input.attachmentFiles as any,
       })
       break
-    case WORKSPACE_APP_KIND.PLUGIN_INSTALLATION:
-      await updateInstallation(params.appId, {
+    case WORKSPACE_RESOURCE_KIND.PLUGIN_INSTALLATION:
+      await updateInstallation(params.resourceId, {
         isEnabled: params.input.isEnabled,
         configData: params.input.configData,
         authSessionIds: params.input.authSessionIds,
@@ -735,59 +815,63 @@ export async function updateWorkspaceApp(params: {
         updatedByWorkspaceMemberId: access.workspaceMemberId,
       })
       break
-    case WORKSPACE_APP_KIND.DEVICE_CAPABILITY:
-      await updateWorkspaceAppRootDefault({
-        id: params.appId,
+    case WORKSPACE_RESOURCE_KIND.DEVICE_CAPABILITY:
+      await updateWorkspaceResourceRootDefault({
+        id: params.resourceId,
         displayName: params.input.displayName,
         conversationTypeMaskOverride: params.input.conversationTypeMaskOverride,
       })
       break
     default:
-      throw new Error("Workspace app update is not supported for this kind")
+      throw new Error(
+        "Workspace resource update is not supported for this kind"
+      )
   }
 
-  return getWorkspaceAppInventoryDetail({
+  return getWorkspaceResourceInventoryDetail({
     workspaceId: params.workspaceId,
-    appId: params.appId,
+    resourceId: params.resourceId,
     userId: params.userId,
   })
 }
 
-export async function deleteWorkspaceApp(params: {
+export async function deleteWorkspaceResource(params: {
   workspaceId: string
-  appId: string
+  resourceId: string
   userId: string
 }): Promise<boolean> {
-  const { app } = await requireManageWorkspaceApp(
+  const { resource } = await requireManageWorkspaceResource(
     params.workspaceId,
-    params.appId,
+    params.resourceId,
     params.userId
   )
-  switch (app.kind) {
-    case WORKSPACE_APP_KIND.ACTOR:
-      return deleteActor(params.appId, params.workspaceId)
-    case WORKSPACE_APP_KIND.REMOTE_AGENT:
+  switch (resource.kind) {
+    case WORKSPACE_RESOURCE_KIND.ACTOR:
+      return deleteActor(params.resourceId, params.workspaceId)
+    case WORKSPACE_RESOURCE_KIND.REMOTE_AGENT:
       return (
         await deleteRemoteAgent({
           workspaceId: params.workspaceId,
-          remoteAgentId: params.appId,
+          remoteAgentId: params.resourceId,
           userId: params.userId,
         })
       ).deleted
-    case WORKSPACE_APP_KIND.INSTALLED_SKILL:
-      return uninstallInstalledSkill(params.workspaceId, params.appId)
-    case WORKSPACE_APP_KIND.PLUGIN_INSTALLATION:
-      await uninstallPluginUnified(params.appId)
+    case WORKSPACE_RESOURCE_KIND.INSTALLED_SKILL:
+      return uninstallInstalledSkill(params.workspaceId, params.resourceId)
+    case WORKSPACE_RESOURCE_KIND.PLUGIN_INSTALLATION:
+      await uninstallPluginUnified(params.resourceId)
       return true
-    case WORKSPACE_APP_KIND.DEVICE_CAPABILITY:
-      await updateWorkspaceAppRootDefault({
-        id: params.appId,
-        status: WORKSPACE_APP_STATUS.ARCHIVED,
+    case WORKSPACE_RESOURCE_KIND.DEVICE_CAPABILITY:
+      await updateWorkspaceResourceRootDefault({
+        id: params.resourceId,
+        status: WORKSPACE_RESOURCE_STATUS.ARCHIVED,
         deletedAt: new Date(),
       })
-      await revokeWorkspaceAppGrantsForAppDefault(params.appId)
+      await revokeWorkspaceResourceGrantsForResourceDefault(params.resourceId)
       return true
     default:
-      throw new Error("Workspace app deletion is not supported for this kind")
+      throw new Error(
+        "Workspace resource deletion is not supported for this kind"
+      )
   }
 }

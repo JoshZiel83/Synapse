@@ -166,9 +166,9 @@ export default function SetupWizardDialog({
                     i + 1
                   )}
                 </div>
-                {i < allSteps.length - 1 && (
+                {i < allSteps.length - 1 ? (
                   <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
-                )}
+                ) : null}
               </div>
             ))}
           </div>
@@ -182,14 +182,14 @@ export default function SetupWizardDialog({
               </p>
             </div>
 
-            {step.optional && (
+            {step.optional ? (
               <Badge
                 variant="outline"
                 className="border-gray-200 text-xs text-muted-foreground dark:border-white/10"
               >
                 Optional
               </Badge>
-            )}
+            ) : null}
 
             {step.fields.map((field) => {
               const fieldSchema = asRecord(schemaProperties[field])
@@ -207,9 +207,9 @@ export default function SetupWizardDialog({
                         ? fieldSchema.description
                         : field}
                     </Label>
-                    {isRequired && (
+                    {isRequired ? (
                       <span className="text-xs text-red-400">*</span>
-                    )}
+                    ) : null}
                   </div>
                   <Input
                     type={isSensitive ? "password" : "text"}
@@ -218,23 +218,25 @@ export default function SetupWizardDialog({
                     onChange={(e) => handleFieldChange(field, e.target.value)}
                     className={`bg-white ring-1 ring-gray-200 dark:bg-gray-900 dark:ring-white/10 ${error ? "border-red-500/50" : "border-gray-200 dark:border-white/10"}`}
                   />
-                  {error && <p className="text-xs text-red-400">{error}</p>}
+                  {error ? (
+                    <p className="text-xs text-red-400">{error}</p>
+                  ) : null}
                 </div>
               )
             })}
 
-            {(step.helpUrl || step.helpText) && (
+            {step.helpUrl || step.helpText ? (
               <div className="space-y-1.5 rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-white/10 dark:bg-white/5">
                 <div className="flex items-center gap-1.5 text-xs font-medium text-blue-400">
                   <HelpCircle className="h-3.5 w-3.5" />
                   Help
                 </div>
-                {step.helpText && (
+                {step.helpText ? (
                   <p className="text-xs text-muted-foreground">
                     {step.helpText}
                   </p>
-                )}
-                {step.helpUrl && (
+                ) : null}
+                {step.helpUrl ? (
                   <a
                     href={step.helpUrl}
                     target="_blank"
@@ -243,9 +245,9 @@ export default function SetupWizardDialog({
                   >
                     Open documentation <ExternalLink className="h-3 w-3" />
                   </a>
-                )}
+                ) : null}
               </div>
-            )}
+            ) : null}
           </div>
 
           {/* Actions */}
@@ -253,11 +255,11 @@ export default function SetupWizardDialog({
             <Button onClick={handleNext} disabled={saving} className="flex-1">
               {saving ? "Saving..." : isLastStep ? "Complete Setup" : "Next"}
             </Button>
-            {step.optional && (
+            {step.optional ? (
               <Button variant="outline" onClick={handleSkip} disabled={saving}>
                 Skip
               </Button>
-            )}
+            ) : null}
             <Button variant="outline" onClick={onClose}>
               Cancel
             </Button>

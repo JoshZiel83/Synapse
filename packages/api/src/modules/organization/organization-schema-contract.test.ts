@@ -1,6 +1,9 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { SUBJECT_KIND, WORKSPACE_APP_GRANT_PERMISSION } from "@synapse/shared"
+import {
+  SUBJECT_KIND,
+  WORKSPACE_RESOURCE_GRANT_PERMISSION,
+} from "@synapse/shared"
 import {
   ActorListViewSchema,
   ActorPackageInitialGrantTargetSchema,
@@ -270,7 +273,7 @@ test("ActorPackageInstallInputSchema accepts the app install request body", () =
             conversationId,
           },
         },
-        permissions: [WORKSPACE_APP_GRANT_PERMISSION.MANAGE],
+        permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.MANAGE],
         conversationTypeMaskOverride: 15,
         reason: "Seed package access",
       },

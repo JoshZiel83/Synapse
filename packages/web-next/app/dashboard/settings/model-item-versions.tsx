@@ -107,7 +107,7 @@ export default function ModelItemVersions({
                           : "border-blue-500/20 bg-blue-500/10 text-blue-400"
                       }`}
                     >
-                      v{v.version} {idx === 0 && "(current)"}
+                      v{v.version} {idx === 0 ? "(current)" : null}
                     </Badge>
                     <Badge className="border-violet-500/20 bg-violet-500/10 text-xs text-violet-400">
                       {v.vendor}

@@ -38,6 +38,34 @@ async function insertWorkspace(
     .executeTakeFirstOrThrow()
   return row.id as string
 }
+// A workspace-kind access_subjects row for `ws`. Used as a workspace-scoped
+// `created_by_subject_id` for resource roots whose only requirement is that the
+// creator subject share the resource's workspace (validate_workspace_resource_root).
+async function insertWorkspaceSubject(db: AnyDb, ws: string): Promise<string> {
+  const row = await db
+    .insertInto("accessSubjects")
+    .values({ kind: "workspace", workspaceId: ws })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return row.id as string
+}
+// The platform singleton subject (access_subjects has a partial unique index on
+// kind='platform'). device_capability roots are catalog-synced — no human
+// creator — so their `created_by_subject_id` is `platform` (plan §4.1).
+async function ensurePlatformSubject(db: AnyDb): Promise<string> {
+  const existing = await db
+    .selectFrom("accessSubjects")
+    .select("id")
+    .where("kind", "=", "platform")
+    .executeTakeFirst()
+  if (existing) return existing.id as string
+  const row = await db
+    .insertInto("accessSubjects")
+    .values({ kind: "platform" } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return row.id as string
+}
 async function insertMember(
   db: AnyDb,
   ws: string,
@@ -53,14 +81,16 @@ async function insertMember(
 }
 async function insertActor(db: AnyDb, ws: string): Promise<string> {
   const actorId = crypto.randomUUID()
+  const creatorSubject = await insertWorkspaceSubject(db, ws)
   await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id: actorId,
       workspaceId: ws,
       kind: "actor",
       displayName: "a",
       status: "active",
+      createdBySubjectId: creatorSubject,
     } as any)
     .execute()
   const row = await db
@@ -118,6 +148,9 @@ test(
     await withTestDb(async (db) => {
       const u = await insertUser(db)
       const ws = await insertWorkspace(db, u)
+      // Mint the (NOT NULL) creator subject while the workspace is still live, so
+      // the only reason the later insert is rejected is the non-live parent.
+      const creatorSubject = await insertWorkspaceSubject(db, ws)
       await db
         .updateTable("workspaces")
         .set({ deletedAt: new Date() })
@@ -127,13 +160,14 @@ test(
         db,
         () =>
           db
-            .insertInto("workspaceApps")
+            .insertInto("workspaceResources")
             .values({
               id: crypto.randomUUID(),
               workspaceId: ws,
               kind: "actor",
               displayName: "x",
               status: "active",
+              createdBySubjectId: creatorSubject,
             } as any)
             .execute(),
         /references non-live workspaces/
@@ -154,7 +188,7 @@ test(
       // children — none of those UPDATEs may be blocked by the FK-liveness trigger.
       await markWorkspaceDeleted(db, ws)
       const liveActors = await db
-        .selectFrom("workspaceApps")
+        .selectFrom("workspaceResources")
         .select("id")
         .where("workspaceId", "=", ws)
         .where("kind", "=", "actor")
@@ -510,7 +544,7 @@ test(
         "admin no longer gets actor visibility implicitly"
       )
       await db
-        .updateTable("workspaceApps")
+        .updateTable("workspaceResources")
         .set({ deletedAt: new Date() })
         .where("id", "=", actorId)
         .execute()
@@ -628,12 +662,16 @@ test(
         .executeTakeFirstOrThrow()
       assert.ok(after.deletedAt, "workspace soft-deleted")
       const actorLive = await db
-        .selectFrom("workspaceApps")
+        .selectFrom("workspaceResources")
         .select("id")
         .where("id", "=", actorId)
         .where("deletedAt", "is", null)
         .executeTakeFirst()
-      assert.equal(actorLive, undefined, "workspace app root soft-deleted too")
+      assert.equal(
+        actorLive,
+        undefined,
+        "workspace resource root soft-deleted too"
+      )
       // deleteWorkspace is exported and importable (wired to the route)
       assert.equal(typeof deleteWorkspace, "function")
     })
@@ -878,13 +916,14 @@ test(
         .executeTakeFirstOrThrow()
       const instId = crypto.randomUUID()
       await db
-        .insertInto("workspaceApps")
+        .insertInto("workspaceResources")
         .values({
           id: instId,
           workspaceId: ws,
           kind: "plugin_installation",
           displayName: "i",
           status: "active",
+          createdBySubjectId: wsSubject.id,
         } as any)
         .execute()
       const inst = await db
@@ -969,13 +1008,14 @@ test(
         .executeTakeFirstOrThrow()
       const instId = crypto.randomUUID()
       await db
-        .insertInto("workspaceApps")
+        .insertInto("workspaceResources")
         .values({
           id: instId,
           workspaceId: ws,
           kind: "plugin_installation",
           displayName: "i",
           status: "active",
+          createdBySubjectId: wsSubject.id,
         } as any)
         .execute()
       const inst = await db
@@ -1070,7 +1110,7 @@ test(
       await db
         .insertInto("account")
         .values({
-          accountId: "cred-" + u,
+          accountId: `cred-${u}`,
           providerId: "credential",
           userId: u,
           password: "x",
@@ -1078,14 +1118,14 @@ test(
         .execute()
       // last remaining account → refuse
       await assert.rejects(
-        () => markAccountUnlinked(db as never, u, "credential", "cred-" + u),
+        () => markAccountUnlinked(db as never, u, "credential", `cred-${u}`),
         (e) => e instanceof LastAccountError
       )
       // add a second (OAuth) account → now the OAuth one can be unlinked
       await db
         .insertInto("account")
         .values({
-          accountId: "oauth-" + u,
+          accountId: `oauth-${u}`,
           providerId: "feishu",
           userId: u,
         })
@@ -1094,7 +1134,7 @@ test(
         db as never,
         u,
         "feishu",
-        "oauth-" + u
+        `oauth-${u}`
       )
       assert.equal(ok, true, "second account unlinked")
       const oauth = await db
@@ -1111,7 +1151,7 @@ test(
       )
       // credential remains live + is now the last account again → re-guarded
       await assert.rejects(
-        () => markAccountUnlinked(db as never, u, "credential", "cred-" + u),
+        () => markAccountUnlinked(db as never, u, "credential", `cred-${u}`),
         (e) => e instanceof LastAccountError
       )
       // unknown account → idempotent false (no throw)
@@ -1155,13 +1195,14 @@ async function insertInstallation(
     .executeTakeFirstOrThrow()
   const instId = crypto.randomUUID()
   await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id: instId,
       workspaceId: ws,
       kind: "plugin_installation",
       displayName: "i",
       status: "active",
+      createdBySubjectId: wsSubject.id,
     } as any)
     .execute()
   const inst = await db
@@ -1221,14 +1262,16 @@ async function insertDeviceCapability(
     .returning("id")
     .executeTakeFirstOrThrow()
   const capabilityId = crypto.randomUUID()
+  const platformSubject = await ensurePlatformSubject(db)
   await db
-    .insertInto("workspaceApps")
+    .insertInto("workspaceResources")
     .values({
       id: capabilityId,
       workspaceId: ws,
       kind: "device_capability",
       displayName: "soft-delete exposure",
       status: "active",
+      createdBySubjectId: platformSubject,
     } as any)
     .execute()
   const capability = await db
@@ -1245,6 +1288,102 @@ async function insertDeviceCapability(
     serviceId: service.id as string,
   }
 }
+
+// Insert an automation_event_source folded into workspace_resources: the root
+// (kind='automation_event_source') + a same-id detail row. Returns the shared id.
+async function insertAutomationEventSource(
+  db: AnyDb,
+  ws: string,
+  status: string = "active"
+): Promise<string> {
+  const sourceId = crypto.randomUUID()
+  const creatorSubject = await insertWorkspaceSubject(db, ws)
+  await db
+    .insertInto("workspaceResources")
+    .values({
+      id: sourceId,
+      workspaceId: ws,
+      kind: "automation_event_source",
+      displayName: "soft-delete event source",
+      status,
+      createdBySubjectId: creatorSubject,
+    } as any)
+    .execute()
+  await db
+    .insertInto("automationEventSources")
+    .values({
+      id: sourceId,
+      workspaceId: ws,
+      providerKind: "internal",
+      sourceKey: uniq("aes"),
+    } as any)
+    .execute()
+  return sourceId
+}
+
+test(
+  "F18: an active grant requires its automation event-source root to be live (parent-liveness)",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      const memberId = await insertMember(db, ws, u, "admin")
+      const memberSubject = await insertAccessSubjectForMember(db, ws, memberId)
+      const sourceId = await insertAutomationEventSource(db, ws, "active")
+
+      // Baseline: a use-grant on a LIVE source root inserts fine.
+      const grant = await db
+        .insertInto("workspaceResourceGrants")
+        .values({
+          workspaceId: ws,
+          workspaceResourceId: sourceId,
+          subjectId: memberSubject,
+          permissions: ["use"],
+          status: "active",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      assert.ok(grant.id, "grant on a live source root is accepted")
+
+      // Archiving the source root drops it from workspace_resources_live; the
+      // automation_event_sources_live view (detail folds in root liveness) hides it.
+      await db
+        .updateTable("workspaceResources")
+        .set({ status: "archived" })
+        .where("id", "=", sourceId)
+        .execute()
+      const liveSource = await db
+        .selectFrom("automationEventSourcesLive")
+        .select("id")
+        .where("id", "=", sourceId)
+        .execute()
+      assert.equal(
+        liveSource.length,
+        0,
+        "an archived source root hides the source from automation_event_sources_live"
+      )
+
+      // A NEW active grant on the now-archived (non-live) source root is rejected
+      // by the sd_fk_live_workspace_resource_grants_workspace_resource_id trigger.
+      await rejects(
+        db,
+        () =>
+          db
+            .insertInto("workspaceResourceGrants")
+            .values({
+              workspaceId: ws,
+              workspaceResourceId: sourceId,
+              subjectId: memberSubject,
+              permissions: ["use"],
+              status: "active",
+            })
+            .execute(),
+        /references non-live workspace_resources/
+      )
+    })
+  }
+)
 
 test(
   "F15: FK-liveness trigger blocks a child under an ARCHIVED (non-live) parent",
@@ -1267,7 +1406,7 @@ test(
         .execute()
       // archive the installation WITHOUT tombstoning (status -> non-live)
       await db
-        .updateTable("workspaceApps")
+        .updateTable("workspaceResources")
         .set({ status: "archived" })
         .where("id", "=", instId)
         .execute()
@@ -1286,7 +1425,7 @@ test(
               status: "active",
             })
             .execute(),
-        /references non-live (workspace_apps|plugin_installations)/
+        /references non-live (workspace_resources|plugin_installations)/
       )
     })
   }
@@ -1302,7 +1441,7 @@ test(
       const { instId } = await insertInstallation(db, ws)
       // disabled is still LIVE (in liveValues) — must remain visible
       await db
-        .updateTable("workspaceApps")
+        .updateTable("workspaceResources")
         .set({ status: "disabled" })
         .where("id", "=", instId)
         .execute()
@@ -1314,7 +1453,7 @@ test(
       assert.equal(live.length, 1, "disabled install is still live")
       // archived is NOT in liveValues — must drop from the live surface
       await db
-        .updateTable("workspaceApps")
+        .updateTable("workspaceResources")
         .set({ status: "archived" })
         .where("id", "=", instId)
         .execute()
@@ -1355,7 +1494,7 @@ test(
         .executeTakeFirstOrThrow()
 
       await db
-        .updateTable("workspaceApps")
+        .updateTable("workspaceResources")
         .set({ status: "archived" })
         .where("id", "=", instId)
         .execute()
@@ -1395,7 +1534,7 @@ test(
         .executeTakeFirstOrThrow()
 
       await db
-        .updateTable("workspaceApps")
+        .updateTable("workspaceResources")
         .set({ status: "archived" })
         .where("id", "=", instId)
         .execute()
@@ -1408,7 +1547,7 @@ test(
             .set({ status: "active" })
             .where("id", "=", conn.id)
             .execute(),
-        /references non-live (workspace_apps|plugin_installations)/
+        /references non-live (workspace_resources|plugin_installations)/
       )
     })
   }
@@ -1461,89 +1600,6 @@ test(
             })
             .execute(),
         /references non-live workspace_members/
-      )
-    })
-  }
-)
-
-test(
-  "F18: automation event source grants fold in resource-parent liveness",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDb(async (db) => {
-      const u = await insertUser(db)
-      const ws = await insertWorkspace(db, u)
-      const subject = await db
-        .insertInto("accessSubjects")
-        .values({ kind: "workspace", workspaceId: ws })
-        .returning("id")
-        .executeTakeFirstOrThrow()
-      const source = await db
-        .insertInto("automationEventSources")
-        .values({
-          workspaceId: ws,
-          providerKind: "internal",
-          sourceKey: uniq("event-source"),
-          name: "internal event source",
-          createdByKind: "system",
-          status: "active",
-        } as any)
-        .returning("id")
-        .executeTakeFirstOrThrow()
-      const binding = await db
-        .insertInto("resourceAccessBindings")
-        .values({
-          workspaceId: ws,
-          resourceType: "automation_event_source",
-          automationEventSourceId: source.id as string,
-          subjectId: subject.id,
-          status: "active",
-        })
-        .returning("id")
-        .executeTakeFirstOrThrow()
-
-      await db
-        .updateTable("automationEventSources")
-        .set({ status: "archived" })
-        .where("id", "=", source.id)
-        .execute()
-
-      const sourceLive = await db
-        .selectFrom("automationEventSourcesLive")
-        .select("id")
-        .where("id", "=", source.id)
-        .execute()
-      assert.equal(
-        sourceLive.length,
-        0,
-        "archived automation event source excluded from _live"
-      )
-
-      const bindingLive = await db
-        .selectFrom("resourceAccessBindingsLive")
-        .select("id")
-        .where("id", "=", binding.id)
-        .execute()
-      assert.equal(
-        bindingLive.length,
-        0,
-        "binding hidden when automation event source is archived"
-      )
-
-      await db
-        .updateTable("resourceAccessBindings")
-        .set({ status: "revoked" })
-        .where("id", "=", binding.id)
-        .execute()
-      await rejects(
-        db,
-        () =>
-          db
-            .updateTable("resourceAccessBindings")
-            .set({ status: "active" })
-            .where("id", "=", binding.id)
-            .execute(),
-        /references non-live automation_event_sources/
       )
     })
   }
@@ -1664,10 +1720,10 @@ test(
         .returning("id")
         .executeTakeFirstOrThrow()
       const binding = await db
-        .insertInto("workspaceAppGrants")
+        .insertInto("workspaceResourceGrants")
         .values({
           workspaceId: ws,
-          workspaceAppId: capabilityId,
+          workspaceResourceId: capabilityId,
           subjectId: subjectRef.id,
           permissions: ["use"],
           status: "active",
@@ -1676,7 +1732,7 @@ test(
         .executeTakeFirstOrThrow()
 
       await db
-        .updateTable("workspaceApps")
+        .updateTable("workspaceResources")
         .set({ status: "archived" })
         .where("id", "=", capabilityId)
         .execute()

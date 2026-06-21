@@ -436,12 +436,12 @@ export async function updateTransportAccount(params: {
     params.ownerScope ||
     (existing.ownerScope as TransportAccountOwnerScope | undefined) ||
     "workspace"
+  const ownerWorkspaceMemberIdForMemberScope =
+    params.ownerWorkspaceMemberId !== undefined
+      ? params.ownerWorkspaceMemberId
+      : (existing.ownerWorkspaceMemberId as string | null | undefined) || null
   const nextOwnerWorkspaceMemberId =
-    nextOwnerScope === "workspace"
-      ? null
-      : params.ownerWorkspaceMemberId !== undefined
-        ? params.ownerWorkspaceMemberId
-        : (existing.ownerWorkspaceMemberId as string | null | undefined) || null
+    nextOwnerScope === "workspace" ? null : ownerWorkspaceMemberIdForMemberScope
   const normalizedCredentials = validateAndNormalizeAccountCredentials({
     transportKind: existing.transportKind as TransportKind,
     connectionMode: nextConnectionMode,
@@ -468,11 +468,13 @@ export async function updateTransportAccount(params: {
       | TransportAccountInboundActorMode
       | undefined) ||
     "none"
+  const inboundActorIdForSpecifiedActor =
+    params.inboundActorId !== undefined
+      ? params.inboundActorId
+      : (existing.inboundActorId as string | null | undefined) || null
   const nextInboundActorId =
     nextInboundActorMode === "specified_actor"
-      ? params.inboundActorId !== undefined
-        ? params.inboundActorId
-        : (existing.inboundActorId as string | null | undefined) || null
+      ? inboundActorIdForSpecifiedActor
       : null
   const resolvedInboundActorId = await assertTransportAccountInboundActor({
     workspaceId: params.workspaceId,

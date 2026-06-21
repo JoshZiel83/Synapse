@@ -46,14 +46,21 @@ async function newWorkspace(db: Kysely<any>): Promise<string> {
 
 async function newActor(db: Kysely<any>, wsId: string): Promise<string> {
   const actorId = crypto.randomUUID()
+  // workspace_resources.created_by_subject_id is NOT NULL; mint (idempotently —
+  // one per workspace) a workspace-kind creator subject.
+  const createdBySubjectId = await upsertAccessSubject(db, {
+    kind: SUBJECT_KIND.WORKSPACE,
+    workspaceId: wsId,
+  })
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspace_resources")
     .values({
       id: actorId,
       workspace_id: wsId,
       kind: "actor",
       display_name: `${NS} actor`,
       status: "active",
+      created_by_subject_id: createdBySubjectId,
     } as any)
     .execute()
   const row = await db
@@ -258,7 +265,7 @@ test(
       const ctx = await buildRuntimePrincipalContext(db, {
         principal: {
           kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-          memberId: outsider,
+          workspaceMemberId: outsider,
         },
         workspaceId: wsId,
         conversationId: conv,

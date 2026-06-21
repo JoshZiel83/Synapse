@@ -55,13 +55,10 @@ tables:
     deleteWhitelist:
       - securityDefinerFn
   automation_event_sources:
-    class: root
-    softDelete: deleted_at
+    class: child
+    softDelete: none
     workspaceScope: workspace_id
-    liveValues:
-      - active
-      - deprecated
-      - disabled
+    livePredicate: TRUE
   automation_execution_targets:
     class: ephemeral
     softDelete: none
@@ -597,22 +594,6 @@ tables:
     softDelete: none
     workspaceScope: none
     livePredicate: TRUE
-  resource_access_bindings:
-    class: junction
-    softDelete: status
-    workspaceScope: workspace_id
-    liveValues:
-      - active
-    liveParents:
-      - column: workspace_id
-        parent: workspaces
-    principalColumns:
-      - column: subject_id
-        resolvesSubject: target
-        action: revoke
-      - column: scope_subject_id
-        resolvesSubject: scope
-        action: revoke
   runtime_authorization_grants:
     class: junction
     softDelete: status
@@ -764,7 +745,7 @@ tables:
       - column: workspace_member_id
         resolvesSubject: member
         action: revoke
-  workspace_app_grant_requests:
+  workspace_resource_grant_requests:
     class: child
     softDelete: none
     workspaceScope: workspace_id
@@ -778,7 +759,7 @@ tables:
       - column: requester_workspace_member_id
         resolvesSubject: member
         action: update
-  workspace_app_grants:
+  workspace_resource_grants:
     class: junction
     softDelete: status
     workspaceScope: workspace_id
@@ -787,8 +768,8 @@ tables:
     liveParents:
       - column: workspace_id
         parent: workspaces
-      - column: workspace_app_id
-        parent: workspace_apps
+      - column: workspace_resource_id
+        parent: workspace_resources
     principalColumns:
       - column: subject_id
         resolvesSubject: target
@@ -796,7 +777,7 @@ tables:
       - column: scope_subject_id
         resolvesSubject: scope
         action: revoke
-  workspace_apps:
+  workspace_resources:
     class: root
     softDelete: deleted_at
     workspaceScope: workspace_id
@@ -1314,13 +1295,13 @@ foreignKeys:
     _child: remote_agent_group_task_grants(workspace_member_id)
     _parent: workspace_members(id)
     _was: CASCADE
-  digest:28ff69af6ec97756:
+  digest:fb830f671eb805da:
     targetAction: SET NULL
     setNull:
       canLose: false
       needsSnapshot: true
-      snapshotColumn: granted_by_workspace_member_id_snapshot
-    _child: remote_agent_group_task_grants(granted_by_workspace_member_id)
+      snapshotColumn: created_by_workspace_member_id_snapshot
+    _child: remote_agent_group_task_grants(created_by_workspace_member_id)
     _parent: workspace_members(id)
     _was: SET NULL
   digest:0fae820b0d5d3fd9:
@@ -1369,153 +1350,160 @@ foreignKeys:
     _child: workspace_friend_entries(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
-  digest:ff0be817cf00049e:
+  digest:2e0dc0754294bfe5:
     targetAction: RESTRICT
     liveIntegrity: enforce
-    _child: workspace_apps(workspace_id)
+    _child: workspace_resources(workspace_id)
     _parent: workspaces(id)
     _was: RESTRICT
-  constraint:fk_actors_workspace_app_root:
+  constraint:fk_actors_workspace_resource_root:
     targetAction: RESTRICT
     liveIntegrity: enforce
     _child: actors(id)
-    _parent: workspace_apps(id)
+    _parent: workspace_resources(id)
     _was: RESTRICT
-  constraint:fk_remote_agents_workspace_app_root:
+  constraint:fk_remote_agents_workspace_resource_root:
     targetAction: RESTRICT
     liveIntegrity: enforce
     _child: remote_agents(id)
-    _parent: workspace_apps(id)
+    _parent: workspace_resources(id)
     _was: RESTRICT
-  constraint:fk_installed_skills_workspace_app_root:
+  constraint:fk_installed_skills_workspace_resource_root:
     targetAction: RESTRICT
     liveIntegrity: enforce
     _child: installed_skills(id)
-    _parent: workspace_apps(id)
+    _parent: workspace_resources(id)
     _was: RESTRICT
-  constraint:fk_plugin_installations_workspace_app_root:
+  constraint:fk_plugin_installations_workspace_resource_root:
     targetAction: RESTRICT
     liveIntegrity: enforce
     _child: plugin_installations(id)
-    _parent: workspace_apps(id)
+    _parent: workspace_resources(id)
     _was: RESTRICT
-  constraint:fk_device_capabilities_workspace_app_root:
+  constraint:fk_device_capabilities_workspace_resource_root:
     targetAction: RESTRICT
     liveIntegrity: enforce
     _child: device_capabilities(id)
-    _parent: workspace_apps(id)
+    _parent: workspace_resources(id)
     _was: RESTRICT
-  digest:16286c3bc69605c0:
-    targetAction: SET NULL
-    liveIntegrity: historical
-    setNull:
-      canLose: true
-      needsSnapshot: false
-    _child: workspace_apps(owner_workspace_member_id)
-    _parent: workspace_members(id)
-    _was: SET NULL
-  digest:70921f79410a733b:
+  constraint:fk_automation_event_sources_workspace_resource_root:
     targetAction: RESTRICT
     liveIntegrity: enforce
-    _child: workspace_app_grants(workspace_id)
+    _child: automation_event_sources(id)
+    _parent: workspace_resources(id)
+    _was: RESTRICT
+  constraint:fk_workspace_resources_owner_subject:
+    targetAction: RESTRICT
+    _child: workspace_resources(owner_subject_id)
+    _parent: access_subjects(id)
+    _was: SET NULL
+  constraint:fk_workspace_resources_created_by_subject:
+    targetAction: RESTRICT
+    _child: workspace_resources(created_by_subject_id)
+    _parent: access_subjects(id)
+    _was: RESTRICT
+  digest:3ad5a69756a03688:
+    targetAction: RESTRICT
+    liveIntegrity: enforce
+    _child: workspace_resource_grants(workspace_id)
     _parent: workspaces(id)
     _was: RESTRICT
-  digest:34de22b2ade2778b:
+  digest:05dc1cc5ba6e8cd9:
     targetAction: RESTRICT
     liveIntegrity: enforce
-    _child: workspace_app_grants(workspace_app_id)
-    _parent: workspace_apps(id)
+    _child: workspace_resource_grants(workspace_resource_id)
+    _parent: workspace_resources(id)
     _was: RESTRICT
-  digest:896ae0a88a320baa:
+  digest:81877d6de66ad795:
     targetAction: RESTRICT
     liveIntegrity: none
-    _child: workspace_app_grants(subject_id)
+    _child: workspace_resource_grants(subject_id)
     _parent: access_subjects(id)
     _was: RESTRICT
-  digest:a02b689def08bb9d:
+  digest:5f2abb6226db944f:
     targetAction: RESTRICT
     liveIntegrity: none
-    _child: workspace_app_grants(scope_subject_id)
+    _child: workspace_resource_grants(scope_subject_id)
     _parent: access_subjects(id)
     _was: RESTRICT
-  digest:291e3b1872812550:
+  digest:8f2ed1728a1b5e8c:
     targetAction: SET NULL
     liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
       snapshotColumn: created_by_workspace_member_id_snapshot
-    _child: workspace_app_grants(created_by_workspace_member_id)
+    _child: workspace_resource_grants(created_by_workspace_member_id)
     _parent: workspace_members(id)
     _was: SET NULL
-  digest:8317694e5ad4b12a:
+  digest:fdd2e5a003a4a2e0:
     targetAction: RESTRICT
     liveIntegrity: enforce
-    _child: workspace_app_grant_requests(workspace_id)
+    _child: workspace_resource_grant_requests(workspace_id)
     _parent: workspaces(id)
     _was: RESTRICT
-  constraint:fk_automation_integration_bindings_workspace_app_root:
+  constraint:fk_automation_integration_bindings_workspace_resource_root:
     targetAction: RESTRICT
     liveIntegrity: none
     _child: automation_integration_bindings(installation_id,workspace_id)
-    _parent: workspace_apps(id,workspace_id)
+    _parent: workspace_resources(id,workspace_id)
     _was: RESTRICT
-  constraint:fk_plugin_auth_sessions_workspace_app_root:
+  constraint:fk_plugin_auth_sessions_workspace_resource_root:
     targetAction: RESTRICT
     liveIntegrity: none
     _child: plugin_auth_sessions(installation_id,workspace_id)
-    _parent: workspace_apps(id,workspace_id)
+    _parent: workspace_resources(id,workspace_id)
     _was: RESTRICT
-  constraint:fk_plugin_connections_workspace_app_root:
+  constraint:fk_plugin_connections_workspace_resource_root:
     targetAction: RESTRICT
     liveIntegrity: none
     _child: plugin_connections(installation_id,workspace_id)
-    _parent: workspace_apps(id,workspace_id)
+    _parent: workspace_resources(id,workspace_id)
     _was: RESTRICT
-  constraint:fk_runtime_authorization_grants_workspace_app_root:
+  constraint:fk_runtime_authorization_grants_workspace_resource_root:
     targetAction: RESTRICT
     liveIntegrity: none
     _child: runtime_authorization_grants(device_capability_id,workspace_id)
-    _parent: workspace_apps(id,workspace_id)
+    _parent: workspace_resources(id,workspace_id)
     _was: RESTRICT
-  constraint:fk_device_operations_workspace_app_root:
+  constraint:fk_device_operations_workspace_resource_root:
     targetAction: RESTRICT
     liveIntegrity: none
     _child: device_operations(device_capability_id,workspace_id)
-    _parent: workspace_apps(id,workspace_id)
+    _parent: workspace_resources(id,workspace_id)
     _was: RESTRICT
-  digest:d39c25269dc6987e:
+  digest:c8fc704a81fa28e1:
     targetAction: RESTRICT
     liveIntegrity: enforce
-    _child: workspace_app_grant_requests(workspace_app_id)
-    _parent: workspace_apps(id)
+    _child: workspace_resource_grant_requests(workspace_resource_id)
+    _parent: workspace_resources(id)
     _was: RESTRICT
-  digest:62f6e0b28cfdbff9:
+  digest:d29f71e3d5f53fff:
     targetAction: RESTRICT
     liveIntegrity: none
-    _child: workspace_app_grant_requests(grantee_subject_id)
+    _child: workspace_resource_grant_requests(grantee_subject_id)
     _parent: access_subjects(id)
     _was: RESTRICT
-  digest:c2e8e93746eab66e:
+  digest:b261ba67fbaa7b15:
     targetAction: RESTRICT
     liveIntegrity: none
-    _child: workspace_app_grant_requests(grantee_scope_subject_id)
+    _child: workspace_resource_grant_requests(grantee_scope_subject_id)
     _parent: access_subjects(id)
     _was: RESTRICT
-  digest:ec46addbe840ea3f:
+  digest:6c4c66b6243a570e:
     targetAction: RESTRICT
     liveIntegrity: historical
-    _child: workspace_app_grant_requests(requester_workspace_member_id)
+    _child: workspace_resource_grant_requests(requester_workspace_member_id)
     _parent: workspace_members(id)
     _was: RESTRICT
-  digest:a98be6d58248dfea:
+  digest:d6dd65b8980547d1:
     targetAction: SET NULL
     liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
       snapshotColumn: resolved_by_workspace_member_id_snapshot
-    _child: workspace_app_grant_requests(resolved_by_workspace_member_id)
+    _child: workspace_resource_grant_requests(resolved_by_workspace_member_id)
     _parent: workspace_members(id)
     _was: SET NULL
   digest:e7ae4d6cf57a26a8:
@@ -1706,14 +1694,14 @@ foreignKeys:
     _child: provider_steps(model_binding_version_id)
     _parent: model_binding_versions(id)
     _was: RESTRICT
-  digest:a6095b142e55d57d:
+  digest:a7020e57b07a9c32:
     targetAction: SET NULL
     liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
-      snapshotColumn: granted_by_workspace_member_id_snapshot
-    _child: model_group_grants(granted_by_workspace_member_id)
+      snapshotColumn: created_by_workspace_member_id_snapshot
+    _child: model_group_grants(created_by_workspace_member_id)
     _parent: workspace_members(id)
     _was: SET NULL
   digest:37ac1963eda81802:
@@ -2351,35 +2339,6 @@ foreignKeys:
     _child: automation_event_sources(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
-  digest:2a8a98a44be808b0:
-    targetAction: SET NULL
-    liveIntegrity: historical
-    setNull:
-      canLose: false
-      needsSnapshot: true
-      snapshotColumn: created_by_workspace_member_id_snapshot
-    _child: automation_event_sources(created_by_workspace_member_id)
-    _parent: workspace_members(id)
-    _was: SET NULL
-  digest:81f0d53b26a56a79:
-    targetAction: SET NULL
-    liveIntegrity: historical
-    setNull:
-      canLose: false
-      needsSnapshot: true
-      snapshotColumn: created_by_actor_id_snapshot
-    _child: automation_event_sources(created_by_actor_id)
-    _parent: actors(id)
-    _was: SET NULL
-  digest:d96841fe1d0b4637:
-    targetAction: SET NULL
-    setNull:
-      canLose: false
-      needsSnapshot: true
-      snapshotColumn: created_by_session_id_snapshot
-    _child: automation_event_sources(created_by_session_id)
-    _parent: sessions(id)
-    _was: SET NULL
   digest:31f9775829a19bb8:
     targetAction: RESTRICT
     _child: automation_triggers(rule_id)
@@ -2949,38 +2908,6 @@ foreignKeys:
       needsSnapshot: false
     _child: plugin_source_refs(source_catalog_version_id)
     _parent: catalog_versions(id)
-    _was: SET NULL
-  digest:29da1546d4b5b30d:
-    targetAction: RESTRICT
-    liveIntegrity: enforce
-    _child: resource_access_bindings(workspace_id)
-    _parent: workspaces(id)
-    _was: CASCADE
-  digest:78a722a54ff2ccb8:
-    targetAction: RESTRICT
-    liveIntegrity: enforce
-    _child: resource_access_bindings(automation_event_source_id)
-    _parent: automation_event_sources(id)
-    _was: CASCADE
-  digest:714cbbffbe0c5318:
-    targetAction: RESTRICT
-    _child: resource_access_bindings(subject_id)
-    _parent: access_subjects(id)
-    _was: CASCADE
-  digest:11a8c52d06b0850c:
-    targetAction: RESTRICT
-    _child: resource_access_bindings(scope_subject_id)
-    _parent: access_subjects(id)
-    _was: CASCADE
-  digest:7ae7b7e8ed9629a0:
-    targetAction: SET NULL
-    liveIntegrity: historical
-    setNull:
-      canLose: false
-      needsSnapshot: true
-      snapshotColumn: created_by_workspace_member_id_snapshot
-    _child: resource_access_bindings(created_by_workspace_member_id)
-    _parent: workspace_members(id)
     _was: SET NULL
   digest:ceb9df2e88119237:
     targetAction: RESTRICT

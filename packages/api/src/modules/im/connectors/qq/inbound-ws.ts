@@ -143,11 +143,14 @@ export async function runQqGateway(
       lastDisconnectAt = now
 
       // Backoff before reconnecting
-      const delay = rateLimited
-        ? RATE_LIMIT_DELAY_MS
-        : quickDisconnectCount >= QUICK_DISCONNECT_MAX
-          ? QUICK_DISCONNECT_COOLDOWN_MS
-          : exponentialDelay(attempt)
+      let delay: number
+      if (rateLimited) {
+        delay = RATE_LIMIT_DELAY_MS
+      } else if (quickDisconnectCount >= QUICK_DISCONNECT_MAX) {
+        delay = QUICK_DISCONNECT_COOLDOWN_MS
+      } else {
+        delay = exponentialDelay(attempt)
+      }
       attempt += 1
       opts.logger.info(
         `qq-gateway: reconnecting after ${delay}ms (close=${code} reason=${closeInfo.reason})`
@@ -356,7 +359,6 @@ async function runOneConnection(
           }
           default:
             logger.debug(`qq-gateway: ignored op=${envelope.op}`)
-            return
         }
       } catch (err) {
         logger.error("qq-gateway: message handler crashed", err)
@@ -517,7 +519,6 @@ async function routeBusinessDispatch(
       return
     default:
       logger.debug(`qq-gateway: ignored dispatch t=${t}`)
-      return
   }
 }
 

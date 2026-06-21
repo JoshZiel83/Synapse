@@ -1,7 +1,6 @@
 import type {
   AutomationCategory,
   AutomationCompletionStatus,
-  AutomationCreatorKind,
   AutomationEventProviderKind,
   AutomationEventSourceStatus,
   AutomationExecutionStatus,
@@ -140,10 +139,7 @@ export type AutomationEventSourceRow = {
   payload_schema: Record<string, unknown>
   example_payload: Record<string, unknown>
   status: AutomationEventSourceStatus
-  created_by_kind: AutomationCreatorKind
   created_by_workspace_member_id: string | null
-  created_by_actor_id: string | null
-  created_by_session_id: string | null
   last_triggered_at: Date | null
   metadata: Record<string, unknown>
   created_at: Date

@@ -260,13 +260,16 @@ function buildSendToDefinition(params: {
   otherParticipants: ConversationParticipantEntry[]
 }): ToolDefinition {
   const rosterDesc = params.otherParticipants
-    .map((member) =>
-      member.participantType === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
-        ? `"${member.name}" (workspace member)`
-        : member.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL
-          ? `"${member.name}" (external${member.linkedWorkspaceMemberName ? `, linked to workspace user ${member.linkedWorkspaceMemberName}` : ""})`
-          : `"${member.name}" (actor${member.title ? ", " + member.title : ""})`
-    )
+    .map((member) => {
+      switch (member.participantType) {
+        case CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER:
+          return `"${member.name}" (workspace member)`
+        case CONVERSATION_PARTICIPANT_TYPE.EXTERNAL:
+          return `"${member.name}" (external${member.linkedWorkspaceMemberName ? `, linked to workspace user ${member.linkedWorkspaceMemberName}` : ""})`
+        default:
+          return `"${member.name}" (actor${member.title ? `, ${member.title}` : ""})`
+      }
+    })
     .join(", ")
   const semantics = resolveThreadSemantics({
     kind: params.conversationKind,

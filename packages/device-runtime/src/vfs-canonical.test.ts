@@ -91,21 +91,21 @@ test("canonicalVfsPath rejects DOS reserved names", () => {
 test("canonicalVfsPath blocks reserved internal namespace (raw + canonical)", () => {
   assert.throws(() => canonicalVfsPath(INTERNAL_NAMESPACE), CanonicalPathError)
   assert.throws(
-    () => canonicalVfsPath(INTERNAL_NAMESPACE + "/"),
+    () => canonicalVfsPath(`${INTERNAL_NAMESPACE}/`),
     CanonicalPathError
   )
   assert.throws(
-    () => canonicalVfsPath(INTERNAL_NAMESPACE + "/tmp/x"),
+    () => canonicalVfsPath(`${INTERNAL_NAMESPACE}/tmp/x`),
     CanonicalPathError
   )
   // Normalize-then-equal exact: `/.synapse-internal/.` → `/.synapse-internal`.
   assert.throws(
-    () => canonicalVfsPath(INTERNAL_NAMESPACE + "/."),
+    () => canonicalVfsPath(`${INTERNAL_NAMESPACE}/.`),
     CanonicalPathError
   )
   // Normalize-then-equal exact: `/.synapse-internal/foo/..` → `/.synapse-internal`.
   assert.throws(
-    () => canonicalVfsPath(INTERNAL_NAMESPACE + "/foo/.."),
+    () => canonicalVfsPath(`${INTERNAL_NAMESPACE}/foo/..`),
     CanonicalPathError
   )
 })

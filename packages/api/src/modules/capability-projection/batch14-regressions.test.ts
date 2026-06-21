@@ -85,14 +85,21 @@ async function newWorkspace(db: Kysely<any>): Promise<string> {
 
 async function newActor(db: Kysely<any>, workspaceId: string): Promise<string> {
   const actorId = crypto.randomUUID()
+  // workspace_resources.created_by_subject_id is NOT NULL with no default; mint a
+  // workspace-kind access_subject (same workspace) as the creator.
+  const createdBySubjectId = await upsertAccessSubject(
+    db,
+    workspaceRef(workspaceId) as any
+  )
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspace_resources")
     .values({
       id: actorId,
       workspace_id: workspaceId,
       kind: "actor",
       display_name: `${NS} actor`,
       status: "active",
+      created_by_subject_id: createdBySubjectId,
     } as any)
     .execute()
   const row = await db

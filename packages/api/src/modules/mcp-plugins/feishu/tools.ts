@@ -363,12 +363,14 @@ function buildFeishuDocSearchRequest(input: Record<string, unknown>) {
 }
 
 function serializeUnixTimestampToInstant(value: unknown) {
-  const seconds =
-    typeof value === "number"
-      ? value
-      : typeof value === "string" && value.trim() !== ""
-        ? Number(value.trim())
-        : Number.NaN
+  let seconds: number
+  if (typeof value === "number") {
+    seconds = value
+  } else if (typeof value === "string" && value.trim() !== "") {
+    seconds = Number(value.trim())
+  } else {
+    seconds = Number.NaN
+  }
   if (!Number.isFinite(seconds)) return undefined
   try {
     // Feishu drive metadata timestamps are Unix seconds.
