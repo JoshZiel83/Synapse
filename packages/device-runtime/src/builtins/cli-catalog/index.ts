@@ -248,7 +248,8 @@ function defaultProbeService(url: string, timeoutMs = 800): Promise<boolean> {
   try {
     const u = new URL(url)
     host = u.hostname
-    port = u.port ? Number(u.port) : u.protocol === "https:" ? 443 : 80
+    const defaultPort = u.protocol === "https:" ? 443 : 80
+    port = u.port ? Number(u.port) : defaultPort
   } catch {
     return Promise.resolve(false)
   }
