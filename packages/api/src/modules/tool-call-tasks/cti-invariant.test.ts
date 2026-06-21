@@ -239,7 +239,7 @@ test(
         deviceToolStableKey: `${NS}-stable-key`,
         reason: "regression-test",
         requestMode: "blocking",
-        runtimeSessionId: `rt-${rid()}`,
+        sourceRuntimeSessionId: `rt-${rid()}`,
         sourceRequestArgs: {},
         principalSubjectId: fx.remoteAgentSubjectId,
         requestedAction: {

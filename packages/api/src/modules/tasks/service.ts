@@ -162,7 +162,7 @@ export interface CreateRuntimeAuthorizationTaskParams {
   deviceId: string
   deviceExposureId: string
   requestedToolName: string
-  runtimeSessionId: string
+  sourceRuntimeSessionId: string
   deviceToolStableKey: string
   reason: string
   requestedAction: RuntimeAuthorizationRequestedAction
@@ -220,11 +220,11 @@ export interface FindOpenRuntimeAuthorizationTaskParams {
   /**
    * Source Agent session id (chat-runtime session.id). Must match the
    * value the caller would write via createRuntimeAuthorizationTaskRequest's
-   * `runtimeSessionId` field so the dedupe key matches a previously-created
+   * `sourceRuntimeSessionId` field so the dedupe key matches a previously-created
    * row. Pass the empty string when the caller has no session context (the
    * dedupe still works within that single bucket).
    */
-  runtimeSessionId: string
+  sourceRuntimeSessionId: string
 }
 
 function stableJsonStringify(value: unknown): string {
@@ -254,7 +254,7 @@ function isJsonObjectRecord(value: unknown): value is Record<string, unknown> {
 /**
  * Build the dedupe key used to merge identical pending runtime-authorization
  * requests. Exported for unit-testing the per-session isolation contract —
- * two callers differing only in runtimeSessionId MUST produce different
+ * two callers differing only in sourceRuntimeSessionId MUST produce different
  * keys so concurrent Agent sessions never share a single pending task
  * (and, post-approval, never inherit each other's source_runtime_session_id).
  */
@@ -279,7 +279,7 @@ export function buildRuntimeAuthorizationDedupeKey(params: {
    * the empty string for legacy callers that don't have it; the dedupe
    * still works within that single "no-session" bucket.
    */
-  runtimeSessionId: string
+  sourceRuntimeSessionId: string
 }) {
   return stableJsonStringify({
     deviceId: params.deviceId,
@@ -291,7 +291,7 @@ export function buildRuntimeAuthorizationDedupeKey(params: {
     requestedAction: params.requestedAction,
     grantOptions: params.grantOptions,
     availablePresets: params.availablePresets,
-    runtimeSessionId: params.runtimeSessionId,
+    sourceRuntimeSessionId: params.sourceRuntimeSessionId,
   })
 }
 
@@ -852,7 +852,7 @@ export async function writeRuntimeAuthorizationTaskDetailInTx(
     deviceToolStableKey: string
     reason: string
     requestMode: RuntimeAuthorizationRequestMode
-    runtimeSessionId: string
+    sourceRuntimeSessionId: string
     sourceRetryNonce?: string
     sourceRequestArgs: Record<string, unknown>
     principalSubjectId: string
@@ -872,7 +872,7 @@ export async function writeRuntimeAuthorizationTaskDetailInTx(
     requestedAction: params.requestedAction,
     grantOptions: params.grantOptions,
     availablePresets: params.availablePresets,
-    runtimeSessionId: params.runtimeSessionId,
+    sourceRuntimeSessionId: params.sourceRuntimeSessionId,
   })
   await insertRuntimeAuthorizationTaskDetails(client, {
     taskId: params.taskId,
@@ -883,7 +883,7 @@ export async function writeRuntimeAuthorizationTaskDetailInTx(
     deviceToolStableKey: params.deviceToolStableKey,
     reason: params.reason,
     requestMode: params.requestMode,
-    sourceRuntimeSessionId: params.runtimeSessionId,
+    sourceRuntimeSessionId: params.sourceRuntimeSessionId,
     sourceRetryNonce: params.sourceRetryNonce,
     sourceRequestArgs: params.sourceRequestArgs || {},
     principalSubjectId: params.principalSubjectId,
@@ -1372,7 +1372,7 @@ export async function findOpenRuntimeAuthorizationTask(
     requestedAction: params.requestedAction,
     grantOptions: params.grantOptions,
     availablePresets: params.availablePresets,
-    runtimeSessionId: params.runtimeSessionId,
+    sourceRuntimeSessionId: params.sourceRuntimeSessionId,
   })
   const taskId = await findOpenRuntimeAuthorizationTaskId({
     workspaceId: params.workspaceId,

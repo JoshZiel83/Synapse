@@ -1,5 +1,5 @@
 // Unit tests for buildRuntimeAuthorizationDedupeKey — the per-session
-// isolation contract is the whole reason runtimeSessionId is in the key.
+// isolation contract is the whole reason sourceRuntimeSessionId is in the key.
 // If a refactor accidentally drops that field, two Agent sessions making
 // the same CUA call would merge into one pending task and the
 // post-approval auto-retry would stamp the wrong cua_focus_scope_id into
@@ -29,17 +29,17 @@ const baseParams = {
 }
 
 test("dedupe key differs for two Agent sessions making the same CUA call", () => {
-  // This is the CUA-isolation regression guard. Without runtimeSessionId in
+  // This is the CUA-isolation regression guard. Without sourceRuntimeSessionId in
   // the key, both calls produce the same key → same pending task →
   // shared source_runtime_session_id → wrong cua_focus_scope_id after
   // approval. With the field, they're independent.
   const sessionA = buildRuntimeAuthorizationDedupeKey({
     ...baseParams,
-    runtimeSessionId: "agent-session-A",
+    sourceRuntimeSessionId: "agent-session-A",
   })
   const sessionB = buildRuntimeAuthorizationDedupeKey({
     ...baseParams,
-    runtimeSessionId: "agent-session-B",
+    sourceRuntimeSessionId: "agent-session-B",
   })
   assert.notEqual(sessionA, sessionB)
 })
@@ -49,42 +49,42 @@ test("dedupe key is stable for repeat calls within the same session", () => {
   // would spam the user with N identical approval requests.
   const first = buildRuntimeAuthorizationDedupeKey({
     ...baseParams,
-    runtimeSessionId: "agent-session-X",
+    sourceRuntimeSessionId: "agent-session-X",
   })
   const second = buildRuntimeAuthorizationDedupeKey({
     ...baseParams,
-    runtimeSessionId: "agent-session-X",
+    sourceRuntimeSessionId: "agent-session-X",
   })
   assert.equal(first, second)
 })
 
-test("dedupe key includes runtimeSessionId in its JSON shape", () => {
+test("dedupe key includes sourceRuntimeSessionId in its JSON shape", () => {
   // Belt-and-suspenders: parse the key to confirm the field is there
   // verbatim, so a renamed field on the dedupe shape can't silently slip.
   const key = buildRuntimeAuthorizationDedupeKey({
     ...baseParams,
-    runtimeSessionId: "agent-session-Y",
+    sourceRuntimeSessionId: "agent-session-Y",
   })
   const parsed = JSON.parse(key) as Record<string, unknown>
-  assert.equal(parsed["runtimeSessionId"], "agent-session-Y")
+  assert.equal(parsed["sourceRuntimeSessionId"], "agent-session-Y")
 })
 
-test("empty-string runtimeSessionId is honored (legacy bucket)", () => {
+test("empty-string sourceRuntimeSessionId is honored (legacy bucket)", () => {
   // Legacy callers that don't have a session pass "". Two such calls still
   // dedupe together — they share the "no-session" bucket. The key only
   // diverges when at least one side has a real id.
   const first = buildRuntimeAuthorizationDedupeKey({
     ...baseParams,
-    runtimeSessionId: "",
+    sourceRuntimeSessionId: "",
   })
   const second = buildRuntimeAuthorizationDedupeKey({
     ...baseParams,
-    runtimeSessionId: "",
+    sourceRuntimeSessionId: "",
   })
   assert.equal(first, second)
   const withId = buildRuntimeAuthorizationDedupeKey({
     ...baseParams,
-    runtimeSessionId: "real-session",
+    sourceRuntimeSessionId: "real-session",
   })
   assert.notEqual(first, withId)
 })
