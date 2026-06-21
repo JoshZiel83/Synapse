@@ -190,7 +190,7 @@ npm run web
 - `packages/device-protocol`：API 与设备运行时共享的 Zod schemas 与枚举
 - `packages/remote-agent-daemon`：运行在机器侧的守护进程，用来桥接 Codex CLI、Claude Code 等外部 Runtime
 - `packages/shared`：共享类型、协议定义、自动化枚举与常量
-- `subprojects/cli-anything`：作为子模块引入的能力包，供设备侧自动加载技能使用
+- `subprojects/cli-anything`：作为子模块引入的 HKUDS/CLI-Anything 目录；device-runtime 的 `cli-catalog` builtin 探测各 CLI 的前置依赖，仅将可运行者通过命令行 builtin 暴露（见 `docs/cli-anything-integration-redesign-plan.md`）
 
 ## 部署
 

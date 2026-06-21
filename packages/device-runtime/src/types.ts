@@ -170,6 +170,12 @@ export interface EmbeddedRuntimeHandle extends RuntimeHandle {
   /** Surface for the host process (desktop client) to observe runtime state. */
   on(event: "status", listener: (status: RuntimeStatus) => void): void
   off(event: "status", listener: (status: RuntimeStatus) => void): void
+  /**
+   * Re-push the catalog snapshot to the server (plan §5.B). Used when an
+   * exposure's metadata changes out-of-band — e.g. after an on-demand
+   * CLI-Anything install flips an entry's availableClis.available. Best-effort.
+   */
+  resyncCatalog(): Promise<void>
 }
 
 export type RuntimeStatus = "starting" | "online" | "degraded" | "offline"

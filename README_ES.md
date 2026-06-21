@@ -190,7 +190,7 @@ Dentro de `packages/mobile-app` también puedes usar `npm run ios` o `npm run an
 - `packages/device-protocol`: schemas Zod y enums compartidos entre la API y el runtime del dispositivo
 - `packages/remote-agent-daemon`: daemon que se ejecuta en la máquina para conectar runtimes externos como Codex CLI o Claude Code
 - `packages/shared`: tipos compartidos, contratos de protocolo, definiciones de automatización y constantes
-- `subprojects/cli-anything`: paquete vendorizado de capacidades usado por las skills cargadas automáticamente desde los dispositivos
+- `subprojects/cli-anything`: catálogo vendorizado de HKUDS/CLI-Anything; el builtin `cli-catalog` del device-runtime evalúa los prerrequisitos de cada CLI y expone los ejecutables a través del builtin de línea de comandos (ver `docs/cli-anything-integration-redesign-plan.md`)
 
 ## Despliegue
 

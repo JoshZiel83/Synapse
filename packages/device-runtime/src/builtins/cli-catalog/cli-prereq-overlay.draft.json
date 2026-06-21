@@ -1,0 +1,700 @@
+{
+  "meta": {
+    "source": "HKUDS/CLI-Anything",
+    "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53",
+    "generator": "generate-cli-catalog.mjs"
+  },
+  "entries": [
+    {
+      "cliName": "3mf",
+      "entryPoint": "cli-anything-3mf",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "Python 3.10+; numpy, scipy, trimesh"
+    },
+    {
+      "cliName": "adguardhome",
+      "entryPoint": "cli-anything-adguardhome",
+      "underlying": {
+        "service": [
+          {
+            "url": null
+          }
+        ]
+      },
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "AdGuardHome instance running"
+    },
+    {
+      "cliName": "arcgis-pro",
+      "entryPoint": "cli-anything-arcgis-pro",
+      "underlying": {
+        "platform": ["win32"]
+      },
+      "credential": false,
+      "reviewed": false,
+      "_src": "public/free-text",
+      "_freeText": "Windows only — ArcGIS Pro is Windows-only. Needs a licensed ArcGIS Pro install with ArcPy (its bundled arcgispro-py3 Python); the optional live-Pro MCP bridge additionally needs the .NET 8 SDK."
+    },
+    {
+      "cliName": "audacity",
+      "entryPoint": "cli-anything-audacity",
+      "underlying": {
+        "binary": ["sox"]
+      },
+      "credential": false,
+      "reviewed": true,
+      "_src": "harness/free-text",
+      "_freeText": "sox (apt install sox)"
+    },
+    {
+      "cliName": "blender",
+      "entryPoint": "cli-anything-blender",
+      "underlying": {
+        "minVersion": {
+          "blender": "4.2"
+        },
+        "binary": ["blender"]
+      },
+      "credential": false,
+      "reviewed": true,
+      "_src": "harness/free-text",
+      "_freeText": "blender >= 4.2"
+    },
+    {
+      "cliName": "browser",
+      "entryPoint": "cli-anything-browser",
+      "underlying": {
+        "binary": ["node"]
+      },
+      "credential": false,
+      "reviewed": true,
+      "_src": "harness/free-text",
+      "_freeText": "Node.js, npx, Chrome + DOMShell extension"
+    },
+    {
+      "cliName": "calibre",
+      "entryPoint": "cli-anything-calibre",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "Calibre (apt install calibre, brew install --cask calibre)"
+    },
+    {
+      "cliName": "cc-switch",
+      "entryPoint": "cli-anything-ccswitch",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "CC Switch installed with active database"
+    },
+    {
+      "cliName": "chromadb",
+      "entryPoint": "cli-anything-chromadb",
+      "underlying": {
+        "service": [
+          {
+            "url": null
+          }
+        ]
+      },
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "ChromaDB server running at localhost:8000"
+    },
+    {
+      "cliName": "cloakbrowser",
+      "entryPoint": "cloak",
+      "underlying": {
+        "minVersion": {
+          "node": "20"
+        },
+        "binary": ["node"]
+      },
+      "credential": false,
+      "reviewed": true,
+      "_src": "public/free-text",
+      "_freeText": "Node.js >= 20, cloakbrowser >= 0.3.0, playwright-core >= 1.40.0"
+    },
+    {
+      "cliName": "cloudanalyzer",
+      "entryPoint": "cli-anything-cloudanalyzer",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "Python 3.10+; cloudanalyzer (`pip install cloudanalyzer`), Open3D for full IO/viewer paths"
+    },
+    {
+      "cliName": "cloudcompare",
+      "entryPoint": "cli-anything-cloudcompare",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "cloudcompare (CloudCompare application installed, e.g. via Flatpak or package manager)"
+    },
+    {
+      "cliName": "comfyui",
+      "entryPoint": "cli-anything-comfyui",
+      "underlying": {
+        "service": [
+          {
+            "url": "http://localhost:8188"
+          }
+        ]
+      },
+      "credential": false,
+      "reviewed": true,
+      "_src": "harness/free-text",
+      "_freeText": "ComfyUI running at http://localhost:8188"
+    },
+    {
+      "cliName": "dify-workflow",
+      "entryPoint": "cli-anything-dify-workflow",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "Upstream dify-workflow CLI installed from https://github.com/Akabane71/dify-workflow-cli"
+    },
+    {
+      "cliName": "drawio",
+      "entryPoint": "cli-anything-drawio",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "draw.io desktop app"
+    },
+    {
+      "cliName": "eez-studio",
+      "entryPoint": "cli-anything-eez-studio",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "EEZ Studio source checkout built with npm run build; Docker for full LVGL simulator builds"
+    },
+    {
+      "cliName": "eth2-quickstart",
+      "entryPoint": "cli-anything-eth2-quickstart",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "local eth2-quickstart checkout with scripts/eth2qs.sh; Linux host required for real install workflows"
+    },
+    {
+      "cliName": "feishu",
+      "entryPoint": "lark-cli",
+      "underlying": {
+        "minVersion": {
+          "node": "16"
+        },
+        "binary": ["node"]
+      },
+      "credential": false,
+      "reviewed": true,
+      "_src": "public/free-text",
+      "_freeText": "Node.js >= 16"
+    },
+    {
+      "cliName": "freecad",
+      "entryPoint": "cli-anything-freecad",
+      "underlying": {
+        "minVersion": {
+          "freecad": "1.1"
+        },
+        "binary": ["freecad"]
+      },
+      "credential": false,
+      "reviewed": true,
+      "_src": "harness/free-text",
+      "_freeText": "FreeCAD >= 1.1 (freecad.org)"
+    },
+    {
+      "cliName": "gimp",
+      "entryPoint": "cli-anything-gimp",
+      "underlying": {
+        "binary": ["gimp"]
+      },
+      "credential": false,
+      "reviewed": true,
+      "_src": "harness/free-text",
+      "_freeText": "gimp (apt install gimp)"
+    },
+    {
+      "cliName": "godot",
+      "entryPoint": "cli-anything-godot",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "Godot 4.x (godotengine.org)"
+    },
+    {
+      "cliName": "hacker-feeds-cli",
+      "entryPoint": "cli-anything-hacker-feeds-cli",
+      "underlying": {
+        "binary": ["node"]
+      },
+      "credential": false,
+      "reviewed": true,
+      "_src": "harness/free-text",
+      "_freeText": "Python 3.10+, Node.js (hf CLI)"
+    },
+    {
+      "cliName": "inkscape",
+      "entryPoint": "cli-anything-inkscape",
+      "underlying": {
+        "binary": ["inkscape"]
+      },
+      "credential": false,
+      "reviewed": true,
+      "_src": "harness/free-text",
+      "_freeText": "inkscape (apt install inkscape)"
+    },
+    {
+      "cliName": "inkstitch",
+      "entryPoint": "cli-anything-inkstitch",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "Ink/Stitch extension installed (https://inkstitch.org/docs/install/)"
+    },
+    {
+      "cliName": "intelwatch",
+      "entryPoint": "cli-anything-intelwatch",
+      "underlying": {
+        "minVersion": {
+          "node": "18"
+        },
+        "binary": ["node"]
+      },
+      "credential": false,
+      "reviewed": true,
+      "_src": "harness/free-text",
+      "_freeText": "Node.js >=18"
+    },
+    {
+      "cliName": "iterm2",
+      "entryPoint": "cli-anything-iterm2",
+      "underlying": {
+        "platform": ["darwin"]
+      },
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "iTerm2.app (macOS only)"
+    },
+    {
+      "cliName": "joplin",
+      "entryPoint": "cli-anything-joplin",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "Joplin terminal CLI installed and available in PATH as `joplin` (npm install -g joplin)"
+    },
+    {
+      "cliName": "jumpserver",
+      "entryPoint": "cli-anything-jumpserver",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "JumpServer v3.0+ instance"
+    },
+    {
+      "cliName": "kdenlive",
+      "entryPoint": "cli-anything-kdenlive",
+      "underlying": {
+        "binary": ["melt"]
+      },
+      "credential": false,
+      "reviewed": true,
+      "_src": "harness/free-text",
+      "_freeText": "melt (apt install melt)"
+    },
+    {
+      "cliName": "krita",
+      "entryPoint": "cli-anything-krita",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "krita (krita.org)"
+    },
+    {
+      "cliName": "libreoffice",
+      "entryPoint": "cli-anything-libreoffice",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "libreoffice"
+    },
+    {
+      "cliName": "live2d",
+      "entryPoint": "cli-anything-live2d",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "Python 3.10+"
+    },
+    {
+      "cliName": "lldb",
+      "entryPoint": "cli-anything-lldb",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "LLDB installation with Python bindings available (for example LLVM.LLVM on Windows)"
+    },
+    {
+      "cliName": "macrocli",
+      "entryPoint": "cli-anything-macrocli",
+      "underlying": {},
+      "credential": false,
+      "reviewed": true,
+      "_src": "harness/free-text",
+      "_freeText": null
+    },
+    {
+      "cliName": "mermaid",
+      "entryPoint": "cli-anything-mermaid",
+      "underlying": {},
+      "credential": false,
+      "reviewed": true,
+      "_src": "harness/free-text",
+      "_freeText": null
+    },
+    {
+      "cliName": "mubu",
+      "entryPoint": "cli-anything-mubu",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "Mubu desktop app"
+    },
+    {
+      "cliName": "musescore",
+      "entryPoint": "cli-anything-musescore",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "MuseScore 4 (musescore.org)"
+    },
+    {
+      "cliName": "n8n",
+      "entryPoint": "cli-anything-n8n",
+      "underlying": {
+        "minVersion": {
+          "n8n": "1.0.0"
+        },
+        "binary": ["n8n"]
+      },
+      "credential": false,
+      "reviewed": true,
+      "_src": "harness/free-text",
+      "_freeText": "n8n >= 1.0.0"
+    },
+    {
+      "cliName": "nsight-graphics",
+      "entryPoint": "cli-anything-nsight-graphics",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "NVIDIA Nsight Graphics installation with ngfx.exe plus optional split capture/replay tools"
+    },
+    {
+      "cliName": "nslogger",
+      "entryPoint": "cli-anything-nslogger",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "macOS for native Bonjour live capture; Python 3.10+"
+    },
+    {
+      "cliName": "obs-studio",
+      "entryPoint": "cli-anything-obs-studio",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "obs-studio"
+    },
+    {
+      "cliName": "obsidian",
+      "entryPoint": "cli-anything-obsidian",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "Obsidian desktop app with Local REST API plugin enabled"
+    },
+    {
+      "cliName": "ollama",
+      "entryPoint": "cli-anything-ollama",
+      "underlying": {
+        "service": [
+          {
+            "url": "http://localhost:11434"
+          }
+        ]
+      },
+      "credential": false,
+      "reviewed": true,
+      "_src": "harness/free-text",
+      "_freeText": "Ollama running at http://localhost:11434"
+    },
+    {
+      "cliName": "openrefine",
+      "entryPoint": "cli-anything-openrefine",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "OpenRefine 3.10.x or newer running as a local web server"
+    },
+    {
+      "cliName": "openscreen",
+      "entryPoint": "cli-anything-openscreen",
+      "underlying": {
+        "binary": ["ffmpeg"]
+      },
+      "credential": false,
+      "reviewed": true,
+      "_src": "harness/free-text",
+      "_freeText": "ffmpeg (apt install ffmpeg)"
+    },
+    {
+      "cliName": "openwebui",
+      "entryPoint": "cli-anything-openwebui",
+      "underlying": {
+        "service": [
+          {
+            "url": null
+          }
+        ]
+      },
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "OpenWebUI instance running"
+    },
+    {
+      "cliName": "pm2",
+      "entryPoint": "cli-anything-pm2",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "PM2 (npm install -g pm2)"
+    },
+    {
+      "cliName": "py4csr",
+      "entryPoint": "tracecsr",
+      "underlying": {
+        "minVersion": {
+          "python": "3.10"
+        },
+        "binary": ["python"]
+      },
+      "credential": false,
+      "reviewed": true,
+      "_src": "public/free-text",
+      "_freeText": "Python >= 3.10"
+    },
+    {
+      "cliName": "qgis",
+      "entryPoint": "cli-anything-qgis",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "QGIS with qgis_process on PATH, PyQGIS importable"
+    },
+    {
+      "cliName": "quietshrink",
+      "entryPoint": "cli-anything-quietshrink",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "ffmpeg with hevc_videotoolbox + the quietshrink bash CLI (curl -fsSL https://raw.githubusercontent.com/achiya-automation/quietshrink/main/install.sh | bash)"
+    },
+    {
+      "cliName": "renderdoc",
+      "entryPoint": "cli-anything-renderdoc",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "renderdoc (Python bindings from RenderDoc installation)"
+    },
+    {
+      "cliName": "safari",
+      "entryPoint": "cli-anything-safari",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "macOS, Safari, safari-mcp (npm install -g safari-mcp)"
+    },
+    {
+      "cliName": "sbox",
+      "entryPoint": "cli-anything-sbox",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "s&box installed via Steam (sbox.game)"
+    },
+    {
+      "cliName": "seaclip",
+      "entryPoint": "cli-anything-seaclip",
+      "underlying": {
+        "service": [
+          {
+            "url": null
+          }
+        ]
+      },
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "SeaClip-Lite running at localhost:5200"
+    },
+    {
+      "cliName": "shotcut",
+      "entryPoint": "cli-anything-shotcut",
+      "underlying": {
+        "binary": ["melt", "ffmpeg"]
+      },
+      "credential": false,
+      "reviewed": true,
+      "_src": "harness/free-text",
+      "_freeText": "melt (apt install melt), ffmpeg (apt install ffmpeg)"
+    },
+    {
+      "cliName": "siyuan",
+      "entryPoint": "cli-anything-siyuan",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "SiYuan running with HTTP API enabled (default http://127.0.0.1:6806)"
+    },
+    {
+      "cliName": "slay_the_spire_ii",
+      "entryPoint": "cli-anything-sts2",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "Slay the Spire 2 (Steam) with STS2_Bridge mod enabled"
+    },
+    {
+      "cliName": "smithue-cli",
+      "entryPoint": "smithue-cli",
+      "underlying": {
+        "minVersion": {
+          "node": "18"
+        },
+        "platform": ["win32"],
+        "binary": ["node"]
+      },
+      "credential": false,
+      "reviewed": true,
+      "_src": "public/free-text",
+      "_freeText": "Node.js >=18; Unreal Engine with SmithUE plugin running (Windows only)"
+    },
+    {
+      "cliName": "stata",
+      "entryPoint": "cli-anything-stata",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "Licensed Stata installation (StataMP/SE/BE 15+), Python 3.10+"
+    },
+    {
+      "cliName": "ueatelier",
+      "entryPoint": "cli-anything-ueatelier",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "Unreal Engine 5.6 or 5.7 with the UEAtelier plugin extracted into <YourProject>/"
+    },
+    {
+      "cliName": "unimol_tools",
+      "entryPoint": "cli-anything-unimol-tools",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "PyTorch 1.12+, Uni-Mol Tools backend"
+    },
+    {
+      "cliName": "unrealinsights",
+      "entryPoint": "cli-anything-unrealinsights",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "Windows + Unreal Engine source or installed build with UnrealEditor and Unreal trace support"
+    },
+    {
+      "cliName": "videocaptioner",
+      "entryPoint": "cli-anything-videocaptioner",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "videocaptioner (pip install videocaptioner), ffmpeg"
+    },
+    {
+      "cliName": "wavetone",
+      "entryPoint": "cli-anything-wavetone",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "WaveTone 2.61 extracted on Windows; set WAVETONE_EXE or WAVETONE_HOME"
+    },
+    {
+      "cliName": "wiremock",
+      "entryPoint": "cli-anything-wiremock",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "WireMock server running (java -jar wiremock-standalone.jar)"
+    },
+    {
+      "cliName": "zotero",
+      "entryPoint": "cli-anything-zotero",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false,
+      "_src": "harness/free-text",
+      "_freeText": "Zotero 7/8 desktop app (running), Python 3.10+"
+    }
+  ]
+}

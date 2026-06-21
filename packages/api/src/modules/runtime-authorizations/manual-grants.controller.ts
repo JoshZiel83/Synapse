@@ -27,7 +27,10 @@ import {
   RuntimeAuthorizationGrantRecordViewSchema,
 } from "@synapse/shared/schemas"
 import { appRoute } from "../../infrastructure/http/route.js"
-import { createRuntimeAuthorizationGrant } from "./service.js"
+import {
+  createRuntimeAuthorizationGrant,
+  ProgramOnlyGrantNotAllowedError,
+} from "./service.js"
 import { findDeviceCapabilityGrantTarget } from "./repo.js"
 
 export function registerManualRuntimeAuthorizationGrantRoutes(
@@ -177,6 +180,14 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
           reply.status(400).send({
             code: "invalid_browser_grant_policy",
             field: err.field,
+            message: err.message,
+          })
+          return
+        }
+        if (err instanceof ProgramOnlyGrantNotAllowedError) {
+          reply.status(400).send({
+            code: "program_only_not_in_available_clis",
+            program: err.program,
             message: err.message,
           })
           return

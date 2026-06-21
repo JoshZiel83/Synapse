@@ -82,6 +82,38 @@ RUN curl -fSL "https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}
   && chmod +x /usr/local/bin/frpc \
   && rm -rf /tmp/frp.tgz "/tmp/frp_${FRP_VERSION}_linux_amd64"
 
+# ── CLI-Anything cloud universe (plan §5.D / P5) ──────────────────────────────
+# Cloud sandboxes have NO exec-time network (egress net is internal + bwrap), so
+# the FIXED universe of headless-feasible CLIs is baked here at image build:
+#   - python3 + pip for the pip harnesses (PEP 668 → --break-system-packages);
+#     git so pip can resolve the git+ harness URLs.
+#   - the headless underlying tools the baked CLIs wrap (no GUI apps).
+# Pinned to the submodule gitlink SHA (the single source of truth, generate-cli-
+# catalog.mjs). Local desktop devices install on demand instead (§5.B), so this
+# is the only place the universe is provisioned.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+       python3 \
+       python3-pip \
+       git \
+       sox \
+       ffmpeg \
+       melt \
+       gimp \
+       inkscape \
+  && rm -rf /var/lib/apt/lists/*
+
+ARG CLI_ANYTHING_SHA=bf3cc39e2edb0be313e395077e4cd3f1f4573c53
+RUN GIT="git+https://github.com/HKUDS/CLI-Anything.git@${CLI_ANYTHING_SHA}#subdirectory" \
+  && pip install --no-cache-dir --break-system-packages \
+       "${GIT}=audacity/agent-harness" \
+       "${GIT}=openscreen/agent-harness" \
+       "${GIT}=shotcut/agent-harness" \
+       "${GIT}=kdenlive/agent-harness" \
+       "${GIT}=gimp/agent-harness" \
+       "${GIT}=inkscape/agent-harness" \
+       "${GIT}=mermaid/agent-harness"
+
 WORKDIR /opt/synapse-device
 
 # Built TS packages (dist + package.json) AND the fully-resolved node_modules

@@ -129,7 +129,11 @@ export interface CommandlineShellPolicyShape {
 
 export interface CommandlineExecFilePolicyShape {
   executor: "exec_file"
-  commandMatchType: "argv_exact" | "argv_prefix" | "argv_exact_preapproved"
+  commandMatchType:
+    | "argv_exact"
+    | "argv_prefix"
+    | "argv_exact_preapproved"
+    | "program_only"
   program: string
   argvPrefix?: string[]
   workingDirectory?: string
@@ -434,6 +438,13 @@ export function commandlinePolicyAllows(
       return argvHasPrefix(execFilePolicy.argvPrefix, request.argv)
         ? execFilePolicy
         : null
+    case "program_only":
+      // Program equality already enforced above (the policyProgram !== requestProgram
+      // guard); authorize ANY argv. Which programs may receive a program_only grant
+      // is restricted SERVER-SIDE at grant-mint (runtime-authorizations) against the
+      // device's reported availableClis — the matcher is bundle-safe and cannot
+      // import the catalog. See plan §5.C.
+      return execFilePolicy
     default:
       return null
   }

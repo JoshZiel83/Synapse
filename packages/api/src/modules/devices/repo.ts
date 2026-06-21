@@ -19,6 +19,7 @@ import type {
 import {
   db,
   type DatabaseTransaction,
+  type Executor,
   type KyselyDb,
 } from "../../infrastructure/database/kysely.js"
 import {
@@ -67,6 +68,61 @@ export async function findConversationWorkspace(
     .where("id", "=", conversationId)
     .executeTakeFirst()
   return row ? { workspaceId: row.workspaceId as string } : undefined
+}
+
+/**
+ * CLI-Anything sync state for a device's builtin/commandline exposure (plan P3):
+ * the exposure+capability ids, owning workspace, and the entry_points the device
+ * currently reports as runnable (metadata.availableClis where available=true).
+ * Null when the device has no active commandline capability (not synced / no bwrap).
+ */
+export async function selectDeviceCommandlineCliState(
+  deviceId: string,
+  run: Executor = db
+): Promise<{
+  workspaceId: string
+  exposureId: string
+  capabilityId: string
+  /** entry_points with available===true (what we mint program_only grants for). */
+  availableEntryPoints: string[]
+  /** ALL entry_points the device manages (incl. available===false) — the revoke
+   *  loop only touches grants for programs in this set, so a non-catalog manual
+   *  program_only grant is never swept. */
+  managedEntryPoints: string[]
+} | null> {
+  const row = await run
+    .selectFrom("deviceExposures as e")
+    .innerJoin("deviceCapabilities as c", "c.exposureId", "e.id")
+    .innerJoin("workspaceResources as resource", "resource.id", "c.id")
+    .select([
+      "e.id as exposureId",
+      "c.id as capabilityId",
+      "e.metadata as metadata",
+      "resource.workspaceId as workspaceId",
+    ])
+    .where("e.deviceId", "=", deviceId)
+    .where("e.builtinKind", "=", "commandline")
+    .where("resource.deletedAt", "is", null)
+    .where("resource.status", "=", "active")
+    .executeTakeFirst()
+  if (!row) return null
+  const metadata = row.metadata as {
+    availableClis?: Record<string, { available?: boolean }>
+  } | null
+  const availableClis = metadata?.availableClis ?? {}
+  const managedEntryPoints = Object.keys(availableClis)
+  const availableEntryPoints = Object.entries(availableClis)
+    .filter(
+      ([, v]) => v != null && typeof v === "object" && v.available === true
+    )
+    .map(([entryPoint]) => entryPoint)
+  return {
+    workspaceId: row.workspaceId as string,
+    exposureId: row.exposureId as string,
+    capabilityId: row.capabilityId as string,
+    availableEntryPoints,
+    managedEntryPoints,
+  }
 }
 
 /** remoteAgents ⋈ workspaceResources: returns the agent's owning workspace (app not deleted). */

@@ -30,6 +30,7 @@ import {
   getRuntimeAuthorizationGrantRow,
   InvalidGrantSubjectRowError,
   insertRuntimeAuthorizationGrantRow,
+  selectExposureAvailableCliEntryPoints,
   listCandidateRowsForDispatch,
   listDashboardGrantRows,
   lockActiveGrantForShare,
@@ -45,6 +46,7 @@ import {
 import {
   BrowserGrantPolicyError,
   normalizeBrowserGrantPolicy,
+  normalizeProgramName,
 } from "@synapse/shared/access/policies"
 import { upsertAccessSubject } from "../access/subject-registry.js"
 import {
@@ -353,6 +355,24 @@ function normalizeCommandlineGrantSpec(
   }
 }
 
+/**
+ * A `program_only` commandline grant was requested for a program that is NOT in
+ * the device exposure's reported availableClis (plan §5.C). The bundle-safe
+ * matcher cannot see the catalog, so this server-side mint gate is the real
+ * control that prevents an over-broad any-argv grant for an unvetted program.
+ */
+export class ProgramOnlyGrantNotAllowedError extends Error {
+  constructor(
+    readonly program: string,
+    readonly deviceExposureId: string
+  ) {
+    super(
+      `program_only grant rejected: '${program}' is not in device exposure ${deviceExposureId} availableClis`
+    )
+    this.name = "ProgramOnlyGrantNotAllowedError"
+  }
+}
+
 export async function createRuntimeAuthorizationGrant(
   params: CreateRuntimeAuthorizationGrantParams,
   executor?: Executor
@@ -396,6 +416,30 @@ async function createGrantInKyselyTx(
   params: CreateRuntimeAuthorizationGrantParams,
   grantSpec: SharedRuntimeAuthorizationGrantSpec
 ): Promise<RuntimeAuthorizationGrantRecord> {
+  // program_only allow-list gate (plan §5.C). The shared matcher is bundle-safe
+  // and cannot read the catalog, so a program_only grant is allowed ONLY for a
+  // program in the device exposure's reported availableClis. program == entry_point;
+  // availableClis is keyed by entry_point. Runs before any side effect. Placed
+  // here so BOTH the transactional and manual-grants.controller callers hit it.
+  const commandline = grantSpec.commandline
+  if (
+    commandline?.executor === "exec_file" &&
+    commandline.commandMatchType === "program_only"
+  ) {
+    const allowed = await selectExposureAvailableCliEntryPoints(
+      params.deviceExposureId,
+      trx
+    )
+    const normalizedAllowed = new Set(
+      Array.from(allowed, (p) => normalizeProgramName(p))
+    )
+    if (!normalizedAllowed.has(normalizeProgramName(commandline.program))) {
+      throw new ProgramOnlyGrantNotAllowedError(
+        commandline.program,
+        params.deviceExposureId
+      )
+    }
+  }
   const subjectId = await upsertAccessSubject(trx, params.subject)
   const scopeSubjectId = params.scope
     ? await upsertAccessSubject(trx, params.scope)

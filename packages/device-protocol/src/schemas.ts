@@ -136,6 +136,7 @@ const ExecFileWireSchema = z.object({
     "argv_exact",
     "argv_prefix",
     "argv_exact_preapproved",
+    "program_only",
   ]),
   program: z.string(),
   argv_prefix: z.array(z.string()).optional(),

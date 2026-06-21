@@ -37,6 +37,9 @@ const EXEC_FILE_MATCH_TYPES = [
   "argv_exact",
   "argv_prefix",
   "argv_exact_preapproved",
+  // program_only: authorize a CLI-Anything entry_point with ANY argv. Restricted
+  // server-side at grant-mint to programs in the device's availableClis. Plan §5.C.
+  "program_only",
 ] as const
 
 const ExecFilePolicyCamelSchema = z.object({

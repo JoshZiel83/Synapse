@@ -35,6 +35,10 @@ import {
 } from "@synapse/device-protocol"
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
 import { persistCatalogSync } from "./catalog-sync.js"
+import { reconcileDeviceCliGrants } from "./cli-grants.js"
+import { createLogger } from "../../infrastructure/logger/index.js"
+
+const cliGrantsLog = createLogger("device-cli-grants")
 import { authenticateDeviceHello } from "./control-plane-auth.js"
 import { mintDeviceLogToken } from "../logs/device-token.js"
 import { getEnvelopeServerPublicKey } from "./envelope-signer.js"
@@ -582,6 +586,19 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
                 writeResult(socket, req.id ?? null, {
                   accepted: true,
                   ...result,
+                })
+                // Reconcile CLI-Anything program_only grants off the freshly-
+                // synced availableClis metadata (plan §4.3/P3). Idempotent +
+                // best-effort: not part of the handshake response (so it never
+                // delays catalog acceptance), and a failure is retried on the
+                // next sync.
+                void reconcileDeviceCliGrants(
+                  state.authenticatedDeviceId!
+                ).catch((err) => {
+                  cliGrantsLog.error(
+                    { err, deviceId: state.authenticatedDeviceId },
+                    "cli-grants reconcile failed"
+                  )
                 })
               })
               .catch((err) => {

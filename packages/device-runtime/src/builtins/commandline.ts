@@ -60,6 +60,7 @@ import type {
   ResolvedToolchain,
   ToolchainManager,
 } from "../terminal/types.js"
+import type { CliCatalog } from "./cli-catalog/index.js"
 
 import { fileURLToPath } from "node:url"
 import { dirname, join, resolve as pathResolve } from "node:path"
@@ -182,6 +183,12 @@ export interface CommandlineBuiltinOptions {
    * false = isolated empty netns. See SandboxConfinement.shareNet.
    */
   sandboxShareNet?: boolean
+  /**
+   * CLI-Anything catalog helper. When set, describeExposures merges an
+   * entryPoint-keyed availableClis map into the exposure metadata so the
+   * server can gate/mint per-CLI program_only grants. See plan §4.2/§5.B.
+   */
+  cliCatalog?: CliCatalog
 }
 
 export function createCommandlineBuiltin(
@@ -206,6 +213,20 @@ export function createCommandlineBuiltin(
       }
       tools.push(EXEC_FILE_TOOL)
       executors.push("exec_file")
+      // CLI-Anything availability rides this exposure's metadata (zero-migration
+      // carrier, plan §4.2). Keyed by entryPoint so the server-side program_only
+      // grant (program=entryPoint) lines up with the matcher's program equality.
+      // FAIL-CLOSED (plan §5.B): a probe error must omit availableClis, never break
+      // the bash/exec_file exposure this metadata rides on. invalidate() so a
+      // rejected memo isn't cached and the next sync re-probes.
+      let availableClis: Record<string, unknown> | undefined
+      if (opts.cliCatalog) {
+        try {
+          availableClis = await opts.cliCatalog.getAvailableClis(env)
+        } catch {
+          opts.cliCatalog.invalidate()
+        }
+      }
       return [
         {
           stable_key: "builtin/commandline",
@@ -216,6 +237,7 @@ export function createCommandlineBuiltin(
             executors,
             asyncTasksSupported: false,
             schemaVersion: 2,
+            ...(availableClis ? { availableClis } : {}),
           },
           tools,
         },

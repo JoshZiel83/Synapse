@@ -346,6 +346,38 @@ test("commandlinePolicyAllows: argv_exact_preapproved hits whitelist (node --ver
   )
 })
 
+test("commandlinePolicyAllows: program_only authorizes ANY argv for the matched program", () => {
+  const policy: CommandlineExecFilePolicyShape = {
+    executor: "exec_file",
+    commandMatchType: "program_only",
+    program: "cli-anything-blender",
+  }
+  // any argv authorized when the program matches
+  assert.ok(
+    commandlinePolicyAllows(policy, {
+      kind: "exec_file",
+      program: "cli-anything-blender",
+      argv: ["render", "-o", "/tmp/out.png", "--json"],
+    })
+  )
+  assert.ok(
+    commandlinePolicyAllows(policy, {
+      kind: "exec_file",
+      program: "cli-anything-blender",
+      argv: [],
+    })
+  )
+  // a DIFFERENT program is not authorized (program-equality precondition holds)
+  assert.equal(
+    commandlinePolicyAllows(policy, {
+      kind: "exec_file",
+      program: "cli-anything-gimp",
+      argv: ["render"],
+    }),
+    null
+  )
+})
+
 test("commandlinePolicyAllows: argv_exact_preapproved does NOT include git", () => {
   const policy: CommandlineExecFilePolicyShape = {
     executor: "exec_file",

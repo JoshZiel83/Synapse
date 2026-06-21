@@ -321,6 +321,20 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
     )
   }
 
+  /**
+   * Public re-sync hook (plan §5.B). Re-pushes the catalog snapshot so updated
+   * builtin/commandline exposure metadata (e.g. availableClis after an on-demand
+   * CLI install) reaches the server. Best-effort: a failed push is swallowed
+   * because the next reconnect's onHelloAck re-pushes the full catalog anyway.
+   */
+  async resyncCatalog(): Promise<void> {
+    try {
+      await this.pushCatalog()
+    } catch {
+      // best-effort; onHelloAck re-syncs on the next (re)connect
+    }
+  }
+
   private updateStatus(status: RuntimeStatus) {
     if (this.status === status) return
     this.status = status
@@ -390,7 +404,7 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
 
 export async function runDeviceRuntime(
   opts: DeviceRuntimeOptions
-): Promise<RuntimeHandle> {
+): Promise<EmbeddedRuntimeHandle> {
   const impl = new RuntimeImpl(opts)
   await impl.start()
   return impl

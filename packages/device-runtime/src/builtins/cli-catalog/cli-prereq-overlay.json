@@ -1,0 +1,607 @@
+{
+  "meta": {
+    "source": "HKUDS/CLI-Anything",
+    "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53",
+    "generator": "generate-cli-catalog.mjs"
+  },
+  "_note": "Curated prereq overlay = authoritative gating source (plan v5 §5.A). reviewed:false ⇒ the runtime gate does NOT expose the CLI (safe default) until a human curates a real prereq. python/node tokens are alias-resolved by the probe (python→python3/python, node→node/nodejs).",
+  "entries": [
+    {
+      "cliName": "3mf",
+      "entryPoint": "cli-anything-3mf",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "adguardhome",
+      "entryPoint": "cli-anything-adguardhome",
+      "underlying": {
+        "service": [
+          {
+            "url": null
+          }
+        ]
+      },
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "arcgis-pro",
+      "entryPoint": "cli-anything-arcgis-pro",
+      "underlying": {
+        "platform": ["win32"]
+      },
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "audacity",
+      "entryPoint": "cli-anything-audacity",
+      "underlying": {
+        "binary": ["sox"]
+      },
+      "credential": false,
+      "reviewed": true
+    },
+    {
+      "cliName": "blender",
+      "entryPoint": "cli-anything-blender",
+      "underlying": {
+        "minVersion": {
+          "blender": "4.2"
+        },
+        "binary": ["blender"]
+      },
+      "credential": false,
+      "reviewed": true
+    },
+    {
+      "cliName": "browser",
+      "entryPoint": "cli-anything-browser",
+      "underlying": {
+        "binary": ["node"]
+      },
+      "credential": false,
+      "reviewed": true
+    },
+    {
+      "cliName": "calibre",
+      "entryPoint": "cli-anything-calibre",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "cc-switch",
+      "entryPoint": "cli-anything-ccswitch",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "chromadb",
+      "entryPoint": "cli-anything-chromadb",
+      "underlying": {
+        "service": [
+          {
+            "url": null
+          }
+        ]
+      },
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "cloakbrowser",
+      "entryPoint": "cloak",
+      "underlying": {
+        "minVersion": {
+          "node": "20"
+        },
+        "binary": ["node"]
+      },
+      "credential": false,
+      "reviewed": true
+    },
+    {
+      "cliName": "cloudanalyzer",
+      "entryPoint": "cli-anything-cloudanalyzer",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "cloudcompare",
+      "entryPoint": "cli-anything-cloudcompare",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "comfyui",
+      "entryPoint": "cli-anything-comfyui",
+      "underlying": {
+        "service": [
+          {
+            "url": "http://localhost:8188"
+          }
+        ]
+      },
+      "credential": false,
+      "reviewed": true
+    },
+    {
+      "cliName": "dify-workflow",
+      "entryPoint": "cli-anything-dify-workflow",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "drawio",
+      "entryPoint": "cli-anything-drawio",
+      "underlying": {
+        "binary": ["drawio"]
+      },
+      "credential": false,
+      "reviewed": true
+    },
+    {
+      "cliName": "eez-studio",
+      "entryPoint": "cli-anything-eez-studio",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "eth2-quickstart",
+      "entryPoint": "cli-anything-eth2-quickstart",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "feishu",
+      "entryPoint": "lark-cli",
+      "underlying": {
+        "minVersion": {
+          "node": "16"
+        },
+        "binary": ["node"]
+      },
+      "credential": false,
+      "reviewed": true
+    },
+    {
+      "cliName": "freecad",
+      "entryPoint": "cli-anything-freecad",
+      "underlying": {
+        "minVersion": {
+          "freecad": "1.1"
+        },
+        "binary": ["freecad"]
+      },
+      "credential": false,
+      "reviewed": true
+    },
+    {
+      "cliName": "gimp",
+      "entryPoint": "cli-anything-gimp",
+      "underlying": {
+        "binary": ["gimp"]
+      },
+      "credential": false,
+      "reviewed": true
+    },
+    {
+      "cliName": "godot",
+      "entryPoint": "cli-anything-godot",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "hacker-feeds-cli",
+      "entryPoint": "cli-anything-hacker-feeds-cli",
+      "underlying": {
+        "binary": ["node"]
+      },
+      "credential": false,
+      "reviewed": true
+    },
+    {
+      "cliName": "inkscape",
+      "entryPoint": "cli-anything-inkscape",
+      "underlying": {
+        "binary": ["inkscape"]
+      },
+      "credential": false,
+      "reviewed": true
+    },
+    {
+      "cliName": "inkstitch",
+      "entryPoint": "cli-anything-inkstitch",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "intelwatch",
+      "entryPoint": "cli-anything-intelwatch",
+      "underlying": {
+        "minVersion": {
+          "node": "18"
+        },
+        "binary": ["node"]
+      },
+      "credential": false,
+      "reviewed": true
+    },
+    {
+      "cliName": "iterm2",
+      "entryPoint": "cli-anything-iterm2",
+      "underlying": {
+        "platform": ["darwin"]
+      },
+      "credential": false,
+      "reviewed": true
+    },
+    {
+      "cliName": "joplin",
+      "entryPoint": "cli-anything-joplin",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "jumpserver",
+      "entryPoint": "cli-anything-jumpserver",
+      "underlying": {
+        "service": [
+          {
+            "url": null
+          }
+        ]
+      },
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "kdenlive",
+      "entryPoint": "cli-anything-kdenlive",
+      "underlying": {
+        "binary": ["melt"]
+      },
+      "credential": false,
+      "reviewed": true
+    },
+    {
+      "cliName": "krita",
+      "entryPoint": "cli-anything-krita",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "libreoffice",
+      "entryPoint": "cli-anything-libreoffice",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "live2d",
+      "entryPoint": "cli-anything-live2d",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "lldb",
+      "entryPoint": "cli-anything-lldb",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "macrocli",
+      "entryPoint": "cli-anything-macrocli",
+      "underlying": {},
+      "credential": false,
+      "reviewed": true
+    },
+    {
+      "cliName": "mermaid",
+      "entryPoint": "cli-anything-mermaid",
+      "underlying": {},
+      "credential": false,
+      "reviewed": true
+    },
+    {
+      "cliName": "mubu",
+      "entryPoint": "cli-anything-mubu",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "musescore",
+      "entryPoint": "cli-anything-musescore",
+      "underlying": {
+        "binary": ["mscore", "musescore"]
+      },
+      "credential": false,
+      "reviewed": true
+    },
+    {
+      "cliName": "n8n",
+      "entryPoint": "cli-anything-n8n",
+      "underlying": {
+        "minVersion": {
+          "n8n": "1.0.0"
+        },
+        "binary": ["n8n"]
+      },
+      "credential": false,
+      "reviewed": true
+    },
+    {
+      "cliName": "nsight-graphics",
+      "entryPoint": "cli-anything-nsight-graphics",
+      "underlying": {
+        "platform": ["win32", "linux"]
+      },
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "nslogger",
+      "entryPoint": "cli-anything-nslogger",
+      "underlying": {
+        "platform": ["darwin"]
+      },
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "obs-studio",
+      "entryPoint": "cli-anything-obs-studio",
+      "underlying": {
+        "binary": ["obs"]
+      },
+      "credential": false,
+      "reviewed": true
+    },
+    {
+      "cliName": "obsidian",
+      "entryPoint": "cli-anything-obsidian",
+      "underlying": {
+        "service": [
+          {
+            "url": null
+          }
+        ]
+      },
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "ollama",
+      "entryPoint": "cli-anything-ollama",
+      "underlying": {
+        "service": [
+          {
+            "url": "http://localhost:11434"
+          }
+        ]
+      },
+      "credential": false,
+      "reviewed": true
+    },
+    {
+      "cliName": "openrefine",
+      "entryPoint": "cli-anything-openrefine",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "openscreen",
+      "entryPoint": "cli-anything-openscreen",
+      "underlying": {
+        "binary": ["ffmpeg"]
+      },
+      "credential": false,
+      "reviewed": true
+    },
+    {
+      "cliName": "openwebui",
+      "entryPoint": "cli-anything-openwebui",
+      "underlying": {
+        "service": [
+          {
+            "url": null
+          }
+        ]
+      },
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "pm2",
+      "entryPoint": "cli-anything-pm2",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "py4csr",
+      "entryPoint": "tracecsr",
+      "underlying": {
+        "minVersion": {
+          "python": "3.10"
+        },
+        "binary": ["python"]
+      },
+      "credential": false,
+      "reviewed": true
+    },
+    {
+      "cliName": "qgis",
+      "entryPoint": "cli-anything-qgis",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "quietshrink",
+      "entryPoint": "cli-anything-quietshrink",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "renderdoc",
+      "entryPoint": "cli-anything-renderdoc",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "safari",
+      "entryPoint": "cli-anything-safari",
+      "underlying": {
+        "platform": ["darwin"]
+      },
+      "credential": false,
+      "reviewed": true
+    },
+    {
+      "cliName": "sbox",
+      "entryPoint": "cli-anything-sbox",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "seaclip",
+      "entryPoint": "cli-anything-seaclip",
+      "underlying": {
+        "service": [
+          {
+            "url": null
+          }
+        ]
+      },
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "shotcut",
+      "entryPoint": "cli-anything-shotcut",
+      "underlying": {
+        "binary": ["melt", "ffmpeg"]
+      },
+      "credential": false,
+      "reviewed": true
+    },
+    {
+      "cliName": "siyuan",
+      "entryPoint": "cli-anything-siyuan",
+      "underlying": {
+        "service": [
+          {
+            "url": null
+          }
+        ]
+      },
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "slay_the_spire_ii",
+      "entryPoint": "cli-anything-sts2",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "smithue-cli",
+      "entryPoint": "smithue-cli",
+      "underlying": {
+        "minVersion": {
+          "node": "18"
+        },
+        "platform": ["win32"],
+        "binary": ["node"]
+      },
+      "credential": false,
+      "reviewed": true
+    },
+    {
+      "cliName": "stata",
+      "entryPoint": "cli-anything-stata",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "ueatelier",
+      "entryPoint": "cli-anything-ueatelier",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "unimol_tools",
+      "entryPoint": "cli-anything-unimol-tools",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "unrealinsights",
+      "entryPoint": "cli-anything-unrealinsights",
+      "underlying": {
+        "platform": ["win32"]
+      },
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "videocaptioner",
+      "entryPoint": "cli-anything-videocaptioner",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "wavetone",
+      "entryPoint": "cli-anything-wavetone",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "wiremock",
+      "entryPoint": "cli-anything-wiremock",
+      "underlying": {
+        "service": [
+          {
+            "url": null
+          }
+        ]
+      },
+      "credential": false,
+      "reviewed": false
+    },
+    {
+      "cliName": "zotero",
+      "entryPoint": "cli-anything-zotero",
+      "underlying": {},
+      "credential": false,
+      "reviewed": false
+    }
+  ]
+}

@@ -4,5 +4,10 @@
     "sourceMap": false,
     "declarationMap": false
   },
-  "exclude": ["**/*.test.ts", "**/__test*__/**", "**/__fixtures__/**"]
+  "exclude": [
+    "**/*.test.ts",
+    "**/__test*__/**",
+    "**/__fixtures__/**",
+    "**/*.draft.json"
+  ]
 }

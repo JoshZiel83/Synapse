@@ -1,0 +1,1274 @@
+{
+  "meta": {
+    "source": "HKUDS/CLI-Anything",
+    "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53",
+    "generator": "generate-cli-catalog.mjs"
+  },
+  "clis": [
+    {
+      "cliName": "3mf",
+      "entryPoint": "cli-anything-3mf",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=3MF/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "3MF/agent-harness/cli_anything/threemf/skills/SKILL.md",
+      "displayName": "3MF",
+      "description": "Mesh geometry editor for 3D printing files — detect and resize cylindrical holes, repair meshes, compare 3MF files",
+      "category": "graphics",
+      "homepage": "https://3mf.io",
+      "version": "1.0.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "adguardhome",
+      "entryPoint": "cli-anything-adguardhome",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=adguardhome/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": null,
+      "displayName": "AdGuardHome",
+      "description": "DNS ad-blocking and network infrastructure management via AdGuardHome REST API",
+      "category": "network",
+      "homepage": "https://adguard.com/adguard-home/overview.html",
+      "version": "1.0.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "arcgis-pro",
+      "entryPoint": "cli-anything-arcgis-pro",
+      "kind": "public-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/Jasper0122/CLI-Anything-Arcgis-Pro.git@v0.1.0",
+        "pin": null,
+        "residual": "third-party-git-pinned"
+      },
+      "skillMd": "https://github.com/Jasper0122/CLI-Anything-Arcgis-Pro/blob/v0.1.0/SKILL.md",
+      "displayName": "ArcGIS Pro",
+      "description": "Agent-native CLI for ArcGIS Pro (ArcPy): professional cartography (layouts + map series), geoprocessing, and feature query/edit — plus a live-Pro MCP bridge that drives the open session.",
+      "category": "scientific",
+      "homepage": "https://www.esri.com/en-us/arcgis/products/arcgis-pro/overview",
+      "version": "0.1.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "audacity",
+      "entryPoint": "cli-anything-audacity",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=audacity/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-audacity/SKILL.md",
+      "displayName": "Audacity",
+      "description": "Audio editing and processing via sox",
+      "category": "audio",
+      "homepage": "https://www.audacityteam.org",
+      "version": "1.0.0",
+      "costTier": "free",
+      "qualityTier": "high",
+      "offline": true
+    },
+    {
+      "cliName": "blender",
+      "entryPoint": "cli-anything-blender",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=blender/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-blender/SKILL.md",
+      "displayName": "Blender",
+      "description": "3D modeling, animation, and rendering via blender --background --python",
+      "category": "3d",
+      "homepage": "https://www.blender.org",
+      "version": "1.0.0",
+      "costTier": "free",
+      "qualityTier": "sota",
+      "offline": true
+    },
+    {
+      "cliName": "browser",
+      "entryPoint": "cli-anything-browser",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=browser/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-browser/SKILL.md",
+      "displayName": "Browser",
+      "description": "Browser automation via DOMShell MCP server. Maps Chrome's Accessibility Tree to a virtual filesystem for agent-native navigation.",
+      "category": "web",
+      "homepage": "https://github.com/apireno/DOMShell",
+      "version": "1.0.0",
+      "costTier": "free",
+      "qualityTier": "high",
+      "offline": false
+    },
+    {
+      "cliName": "calibre",
+      "entryPoint": "cli-anything-calibre",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=calibre/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "calibre/agent-harness/cli_anything/calibre/skills/SKILL.md",
+      "displayName": "Calibre",
+      "description": "E-book library management — list, search, metadata editing, format conversion via calibredb, ebook-convert, ebook-meta",
+      "category": "office",
+      "homepage": "https://calibre-ebook.com",
+      "version": "1.0.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "cc-switch",
+      "entryPoint": "cli-anything-ccswitch",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=cc-switch/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-ccswitch/SKILL.md",
+      "displayName": "CC Switch",
+      "description": "Manage AI coding tool configurations - inspect providers, skills, MCP servers, usage stats, and proxy settings",
+      "category": "devops",
+      "homepage": "https://github.com/HKUDS/CLI-Anything",
+      "version": "1.0.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "chromadb",
+      "entryPoint": "cli-anything-chromadb",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=chromadb/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-chromadb/SKILL.md",
+      "displayName": "ChromaDB",
+      "description": "Vector database operations — collections, documents, semantic search via ChromaDB HTTP API",
+      "category": "database",
+      "homepage": "https://www.trychroma.com",
+      "version": "1.0.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "cloakbrowser",
+      "entryPoint": "cloak",
+      "kind": "public-cli",
+      "install": {
+        "manager": "npm",
+        "cmd": "npm install -g @dreamor/cloakbrowser-cli cloakbrowser playwright-core",
+        "pin": null,
+        "npxCmd": "npx @dreamor/cloakbrowser-cli",
+        "residual": "npm-latest-unpinned"
+      },
+      "skillMd": "https://github.com/dreamor/cloakbrowser-cli/blob/main/SKILL.md",
+      "displayName": "CloakBrowser CLI",
+      "description": "Agent-friendly CLI for CloakBrowser — stealth Chromium that passes every bot detection test. Covers fingerprint flags, humanize behaviors, page operations, content extraction, cookies, storage, network, multi-page sessions, and CDP gateway.",
+      "category": "web",
+      "homepage": "https://github.com/dreamor/cloakbrowser-cli",
+      "version": "latest",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "cloudanalyzer",
+      "entryPoint": "cli-anything-cloudanalyzer",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=cloudanalyzer/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-cloudanalyzer/SKILL.md",
+      "displayName": "CloudAnalyzer",
+      "description": "Point cloud and trajectory QA: Chamfer/AUC/F1, ATE/RPE/drift, ground segmentation metrics, config-driven quality gates, baseline evolution — harness wraps the CloudAnalyzer Python API",
+      "category": "graphics",
+      "homepage": "https://github.com/rsasaki0109/CloudAnalyzer",
+      "version": "1.0.0",
+      "costTier": "free",
+      "qualityTier": "high",
+      "offline": true
+    },
+    {
+      "cliName": "cloudcompare",
+      "entryPoint": "cli-anything-cloudcompare",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=cloudcompare/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-cloudcompare/SKILL.md",
+      "displayName": "CloudCompare",
+      "description": "3D point cloud and mesh processing: load/save, color ops, normal estimation, Delaunay meshing, noise filtering, ICP registration, connected component segmentation",
+      "category": "graphics",
+      "homepage": "https://cloudcompare.org",
+      "version": "1.0.0",
+      "costTier": "free",
+      "qualityTier": "sota",
+      "offline": true
+    },
+    {
+      "cliName": "comfyui",
+      "entryPoint": "cli-anything-comfyui",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=comfyui/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": null,
+      "displayName": "ComfyUI",
+      "description": "AI image generation workflow management via ComfyUI REST API",
+      "category": "ai",
+      "homepage": "https://github.com/comfyanonymous/ComfyUI",
+      "version": "1.0.0",
+      "costTier": "free",
+      "qualityTier": "high",
+      "offline": true
+    },
+    {
+      "cliName": "dify-workflow",
+      "entryPoint": "cli-anything-dify-workflow",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=dify-workflow/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-dify-workflow/SKILL.md",
+      "displayName": "Dify Workflow",
+      "description": "CLI-Anything wrapper for the Dify workflow DSL editor covering create, inspect, validate, edit, export, and layout operations",
+      "category": "ai",
+      "homepage": "https://github.com/Akabane71/dify-workflow-cli",
+      "version": "0.1.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "drawio",
+      "entryPoint": "cli-anything-drawio",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=drawio/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-drawio/SKILL.md",
+      "displayName": "Draw.io",
+      "description": "Diagram creation and export via draw.io CLI",
+      "category": "diagrams",
+      "homepage": "https://www.drawio.com",
+      "version": "1.0.0",
+      "costTier": "free",
+      "qualityTier": "sota",
+      "offline": true
+    },
+    {
+      "cliName": "eez-studio",
+      "entryPoint": "cli-anything-eez-studio",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=eez-studio/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-eez-studio/SKILL.md",
+      "displayName": "EEZ Studio",
+      "description": "EEZ Studio project, LVGL UI, and SCPI command automation via native .eez-project JSON and real EEZ Studio backend hooks",
+      "category": "automation",
+      "homepage": "https://www.envox.eu/studio/studio-introduction/",
+      "version": "0.1.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "eth2-quickstart",
+      "entryPoint": "cli-anything-eth2-quickstart",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=eth2-quickstart/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-eth2-quickstart/SKILL.md",
+      "displayName": "ETH2 QuickStart",
+      "description": "Hardened Ethereum node deployment and operations via the eth2-quickstart automation scripts",
+      "category": "devops",
+      "homepage": "https://github.com/chimera-defi/eth2-quickstart",
+      "version": "1.0.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "feishu",
+      "entryPoint": "lark-cli",
+      "kind": "public-cli",
+      "install": {
+        "manager": "npm",
+        "cmd": "npm install -g @larksuite/cli",
+        "pin": null,
+        "npxCmd": "npx @larksuite/cli",
+        "residual": "npm-latest-unpinned"
+      },
+      "skillMd": "npx skills add larksuite/cli -y -g",
+      "displayName": "Feishu/Lark CLI",
+      "description": "Official Lark (Feishu) CLI for managing Lark apps, bots, and cloud resources from the terminal",
+      "category": "communication",
+      "homepage": "https://github.com/larksuite/cli",
+      "version": "latest",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "freecad",
+      "entryPoint": "cli-anything-freecad",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=freecad/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-freecad/SKILL.md",
+      "displayName": "FreeCAD",
+      "description": "Parametric 3D CAD modeling via FreeCAD CLI (258 commands: Part, Sketcher, PartDesign, Assembly, Mesh, TechDraw, Draft, FEM, CAM, and more)",
+      "category": "3d",
+      "homepage": "https://www.freecad.org",
+      "version": "1.1.0",
+      "costTier": "free",
+      "qualityTier": "sota",
+      "offline": true
+    },
+    {
+      "cliName": "gimp",
+      "entryPoint": "cli-anything-gimp",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=gimp/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-gimp/SKILL.md",
+      "displayName": "GIMP",
+      "description": "Raster image processing via gimp -i -b (batch mode)",
+      "category": "image",
+      "homepage": "https://www.gimp.org",
+      "version": "1.0.0",
+      "costTier": "free",
+      "qualityTier": "high",
+      "offline": true
+    },
+    {
+      "cliName": "godot",
+      "entryPoint": "cli-anything-godot",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=godot/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-godot/SKILL.md",
+      "displayName": "Godot Engine",
+      "description": "Game engine project management, scene editing, export and GDScript execution via Godot 4 headless mode",
+      "category": "gamedev",
+      "homepage": "https://godotengine.org",
+      "version": "1.0.0",
+      "costTier": "free",
+      "qualityTier": "good",
+      "offline": true
+    },
+    {
+      "cliName": "hacker-feeds-cli",
+      "entryPoint": "cli-anything-hacker-feeds-cli",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/collectivewinca/hacker-feeds-cli.git",
+        "pin": null,
+        "residual": "third-party-git-unpinned"
+      },
+      "skillMd": "https://github.com/collectivewinca/hacker-feeds-cli/blob/main/cli_anything/hacker_feeds_cli/skills/SKILL.md",
+      "displayName": "Hacker Feeds CLI",
+      "description": "CLI for GitHub Trending, Hacker News, Reddit, Product Hunt, DEV.to, Lobsters, EchoJS, and V2EX feeds",
+      "category": "search",
+      "homepage": "https://github.com/collectivewinca/hacker-feeds-cli",
+      "version": "1.0.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "inkscape",
+      "entryPoint": "cli-anything-inkscape",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=inkscape/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-inkscape/SKILL.md",
+      "displayName": "Inkscape",
+      "description": "SVG vector graphics with export via inkscape --export-filename",
+      "category": "image",
+      "homepage": "https://inkscape.org",
+      "version": "1.0.0",
+      "costTier": "free",
+      "qualityTier": "high",
+      "offline": true
+    },
+    {
+      "cliName": "inkstitch",
+      "entryPoint": "cli-anything-inkstitch",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install cli-anything-inkstitch",
+        "pin": null
+      },
+      "skillMd": "https://github.com/bobbymarko/cli-anything-inkstitch/blob/main/skills/cli-anything-inkstitch/SKILL.md",
+      "displayName": "Ink/Stitch",
+      "description": "Machine-embroidery digitization — set stitch params, validate, preview, and export to DST/PES/JEF/VP3 via Ink/Stitch",
+      "category": "design",
+      "homepage": "https://inkstitch.org",
+      "version": "0.1.1",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "intelwatch",
+      "entryPoint": "cli-anything-intelwatch",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=intelwatch/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-intelwatch/SKILL.md",
+      "displayName": "Intelwatch",
+      "description": "Competitive intelligence, M&A due diligence, and OSINT directly from your terminal.",
+      "category": "osint",
+      "homepage": "https://github.com/ashroth/intelwatch",
+      "version": "1.0.0",
+      "costTier": "free",
+      "qualityTier": "high",
+      "offline": false
+    },
+    {
+      "cliName": "iterm2",
+      "entryPoint": "cli-anything-iterm2",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=iterm2/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-iterm2/SKILL.md",
+      "displayName": "iTerm2",
+      "description": "Control a running iTerm2 instance — manage windows, tabs, split panes, send text, read output, run tmux -CC, broadcast keystrokes, and configure preferences.",
+      "category": "devops",
+      "homepage": "https://iterm2.com",
+      "version": "1.0.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "joplin",
+      "entryPoint": "cli-anything-joplin",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=joplin/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-joplin/SKILL.md",
+      "displayName": "Joplin",
+      "description": "Note-taking and to-do automation — manage notebooks, notes, to-dos, tags, attachments, search, sync, and import/export via the Joplin terminal CLI",
+      "category": "knowledge",
+      "homepage": "https://joplinapp.org",
+      "version": "1.0.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "jumpserver",
+      "entryPoint": "cli-anything-jumpserver",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=jumpserver/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-jumpserver/SKILL.md",
+      "displayName": "JumpServer",
+      "description": "Bastion host management — manage assets, users, permissions, sessions, accounts, and audit logs via JumpServer REST API",
+      "category": "devops",
+      "homepage": "https://www.jumpserver.org",
+      "version": "0.1.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "kdenlive",
+      "entryPoint": "cli-anything-kdenlive",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=kdenlive/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-kdenlive/SKILL.md",
+      "displayName": "Kdenlive",
+      "description": "Video editing and rendering via melt",
+      "category": "video",
+      "homepage": "https://kdenlive.org",
+      "version": "1.0.0",
+      "costTier": "free",
+      "qualityTier": "high",
+      "offline": true
+    },
+    {
+      "cliName": "krita",
+      "entryPoint": "cli-anything-krita",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=krita/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-krita/SKILL.md",
+      "displayName": "Krita",
+      "description": "Digital painting and raster image editing via Krita CLI export pipeline",
+      "category": "image",
+      "homepage": "https://krita.org",
+      "version": "1.0.0",
+      "costTier": "free",
+      "qualityTier": "high",
+      "offline": true
+    },
+    {
+      "cliName": "libreoffice",
+      "entryPoint": "cli-anything-libreoffice",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=libreoffice/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-libreoffice/SKILL.md",
+      "displayName": "LibreOffice",
+      "description": "Create and manipulate ODF documents, export to PDF/DOCX/XLSX/PPTX via headless mode",
+      "category": "office",
+      "homepage": "https://www.libreoffice.org",
+      "version": "1.0.1",
+      "costTier": "free",
+      "qualityTier": "high",
+      "offline": true
+    },
+    {
+      "cliName": "live2d",
+      "entryPoint": "cli-anything-live2d",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=live2d/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-live2d/SKILL.md",
+      "displayName": "Live2D Cubism",
+      "description": "Inspect, validate, edit, lint, diff, batch-manage, and deploy Live2D Cubism models (.model3.json, .moc3, .motion3.json, .exp3.json) from the command line — 42 commands covering the full model lifecycle",
+      "category": "graphics",
+      "homepage": "https://www.live2d.com",
+      "version": "0.3.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "lldb",
+      "entryPoint": "cli-anything-lldb",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=lldb/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "lldb/agent-harness/cli_anything/lldb/skills/SKILL.md",
+      "displayName": "LLDB",
+      "description": "Stateful native debugging via LLDB with JSON CLI workflows and a stdio Debug Adapter Protocol server",
+      "category": "debugging",
+      "homepage": "https://lldb.llvm.org",
+      "version": "1.0.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "macrocli",
+      "entryPoint": "cli-anything-macrocli",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=macrocli/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "macrocli/agent-harness/cli_anything/macrocli/skills/SKILL.md",
+      "displayName": "MacroCLI",
+      "description": "Layered macro runtime that converts GUI workflows into parameterized, agent-callable macros — record once, run anywhere via CLI with backend routing across native APIs, file transforms, accessibility controls, and visual template matching",
+      "category": "automation",
+      "homepage": "https://github.com/HKUDS/CLI-Anything/tree/main/macrocli",
+      "version": "1.0.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "mermaid",
+      "entryPoint": "cli-anything-mermaid",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=mermaid/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": null,
+      "displayName": "Mermaid",
+      "description": "Mermaid Live Editor state files and renderer URLs",
+      "category": "diagrams",
+      "homepage": "https://mermaid.js.org",
+      "version": "1.0.0",
+      "costTier": "free",
+      "qualityTier": "high",
+      "offline": true
+    },
+    {
+      "cliName": "mubu",
+      "entryPoint": "cli-anything-mubu",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=mubu/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-mubu/SKILL.md",
+      "displayName": "Mubu",
+      "description": "Knowledge management and outlining via local Mubu desktop data",
+      "category": "office",
+      "homepage": "https://mubu.com",
+      "version": "0.1.1",
+      "costTier": "free",
+      "qualityTier": "high",
+      "offline": false
+    },
+    {
+      "cliName": "musescore",
+      "entryPoint": "cli-anything-musescore",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=musescore/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-musescore/SKILL.md",
+      "displayName": "MuseScore",
+      "description": "CLI for music notation — transpose, export PDF/audio/MIDI, extract parts, manage instruments",
+      "category": "music",
+      "homepage": "https://musescore.org",
+      "version": "1.0.0",
+      "costTier": "free",
+      "qualityTier": "sota",
+      "offline": true
+    },
+    {
+      "cliName": "n8n",
+      "entryPoint": "cli-anything-n8n",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=n8n/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-n8n/SKILL.md",
+      "displayName": "n8n",
+      "description": "Workflow automation via n8n REST API — 55+ commands",
+      "category": "automation",
+      "homepage": "https://n8n.io",
+      "version": "2.4.7",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "nsight-graphics",
+      "entryPoint": "cli-anything-nsight-graphics",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=nsight-graphics/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-nsight-graphics/SKILL.md",
+      "displayName": "Nsight Graphics CLI",
+      "description": "Windows-first Nsight Graphics CLI for Graphics/OpenGL capture, GPU Trace summary, Generate C++ Capture, and ngfx-replay analysis",
+      "category": "graphics",
+      "homepage": "https://developer.nvidia.com/nsight-graphics",
+      "version": "0.2.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "nslogger",
+      "entryPoint": "cli-anything-nslogger",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=nslogger/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-nslogger/SKILL.md",
+      "displayName": "NSLogger",
+      "description": "Capture, parse, filter, export, and mirror NSLogger iOS/macOS logs from the CLI",
+      "category": "devops",
+      "homepage": "https://github.com/fpillet/NSLogger",
+      "version": "0.1.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "obs-studio",
+      "entryPoint": "cli-anything-obs-studio",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=obs-studio/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-obs-studio/SKILL.md",
+      "displayName": "OBS Studio",
+      "description": "Create and manage streaming/recording scenes via command line",
+      "category": "streaming",
+      "homepage": "https://obsproject.com",
+      "version": "1.0.0",
+      "costTier": "free",
+      "qualityTier": "high",
+      "offline": true
+    },
+    {
+      "cliName": "obsidian",
+      "entryPoint": "cli-anything-obsidian",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=obsidian/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-obsidian/SKILL.md",
+      "displayName": "Obsidian",
+      "description": "Knowledge management and note-taking — manage notes, search vault, execute commands via Obsidian Local REST API",
+      "category": "knowledge",
+      "homepage": "https://obsidian.md",
+      "version": "1.1.0",
+      "costTier": "free",
+      "qualityTier": "sota",
+      "offline": true
+    },
+    {
+      "cliName": "ollama",
+      "entryPoint": "cli-anything-ollama",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=ollama/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-ollama/SKILL.md",
+      "displayName": "Ollama",
+      "description": "Local LLM inference and model management via Ollama REST API",
+      "category": "ai",
+      "homepage": "https://ollama.com",
+      "version": "1.0.1",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "openrefine",
+      "entryPoint": "cli-anything-openrefine",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=openrefine/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-openrefine/SKILL.md",
+      "displayName": "OpenRefine",
+      "description": "Agent-native CLI for OpenRefine import, operation-history cleaning, row inspection, export, and session undo/redo through the real local HTTP API.",
+      "category": "database",
+      "homepage": "https://openrefine.org/",
+      "version": "1.0.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "openscreen",
+      "entryPoint": "cli-anything-openscreen",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=openscreen/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-openscreen/SKILL.md",
+      "displayName": "Openscreen",
+      "description": "Screen recording editor — zoom, speed ramps, trim, crop, annotations, backgrounds, and polished exports via ffmpeg",
+      "category": "video",
+      "homepage": "https://github.com/siddharthvaddem/openscreen",
+      "version": "1.0.0",
+      "costTier": "free",
+      "qualityTier": "high",
+      "offline": true
+    },
+    {
+      "cliName": "openwebui",
+      "entryPoint": "cli-anything-openwebui",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/ashaiful/cli-anything-openwebui.git",
+        "pin": null,
+        "residual": "third-party-git-unpinned"
+      },
+      "skillMd": "https://github.com/ashaiful/cli-anything-openwebui/blob/main/cli_anything/openwebui/skills/SKILL.md",
+      "displayName": "OpenWebUI",
+      "description": "Operate a running OpenWebUI backend through an agent-friendly CLI",
+      "category": "ai",
+      "homepage": "https://openwebui.com",
+      "version": "1.0.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "pm2",
+      "entryPoint": "cli-anything-pm2",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=pm2/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-pm2/SKILL.md",
+      "displayName": "PM2",
+      "description": "Node.js process management — list, start, stop, restart, logs, and metrics via PM2 CLI",
+      "category": "devops",
+      "homepage": "https://pm2.keymetrics.io",
+      "version": "1.0.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "py4csr",
+      "entryPoint": "tracecsr",
+      "kind": "public-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install py4csr",
+        "pin": null
+      },
+      "skillMd": "https://github.com/yanmingyu92/py4csr",
+      "displayName": "TraceCSR / Py4CSR CLI",
+      "description": "GxP-compliant agent harness for CDISC Clinical Study Report (CSR) and Tables/Figures/Listings (TFL) generation",
+      "category": "data-science",
+      "homepage": "https://github.com/yanmingyu92/py4csr",
+      "version": "latest",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "qgis",
+      "entryPoint": "cli-anything-qgis",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=QGIS/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "QGIS/agent-harness/cli_anything/qgis/skills/SKILL.md",
+      "displayName": "QGIS",
+      "description": "Geospatial project authoring, layout export, and processing via PyQGIS and qgis_process",
+      "category": "scientific",
+      "homepage": "https://qgis.org",
+      "version": "1.0.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "quietshrink",
+      "entryPoint": "cli-anything-quietshrink",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=quietshrink/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-quietshrink/SKILL.md",
+      "displayName": "QuietShrink",
+      "description": "Compress macOS screen recordings on Apple Silicon — 70-90% smaller files at visually lossless quality, hardware-encoded, computer stays silent",
+      "category": "video",
+      "homepage": "https://github.com/achiya-automation/quietshrink",
+      "version": "1.0.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "renderdoc",
+      "entryPoint": "cli-anything-renderdoc",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=renderdoc/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-renderdoc/SKILL.md",
+      "displayName": "RenderDoc",
+      "description": "GPU frame capture analysis: pipeline state, shader export, texture inspection, draw call browsing",
+      "category": "graphics",
+      "homepage": "https://renderdoc.org",
+      "version": "0.1.0",
+      "costTier": "free",
+      "qualityTier": "sota",
+      "offline": true
+    },
+    {
+      "cliName": "safari",
+      "entryPoint": "cli-anything-safari",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=safari/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-safari/SKILL.md",
+      "displayName": "Safari",
+      "description": "Native macOS Safari browser automation via safari-mcp — 84 tools for navigation, DOM, forms, network capture, and screenshots",
+      "category": "web",
+      "homepage": "https://github.com/achiya-automation/safari-mcp",
+      "version": "1.0.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "sbox",
+      "entryPoint": "cli-anything-sbox",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=sbox/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-sbox/SKILL.md",
+      "displayName": "s&box",
+      "description": "Game engine project management for s&box (Source 2): scenes, prefabs, materials, sounds, codegen, asset graph, project validation",
+      "category": "gamedev",
+      "homepage": "https://sbox.game",
+      "version": "1.0.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "seaclip",
+      "entryPoint": "cli-anything-seaclip",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=seaclip/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-seaclip/SKILL.md",
+      "displayName": "SeaClip",
+      "description": "Kanban board, 6-agent AI pipeline, and issue management via SeaClip-Lite FastAPI + SQLite",
+      "category": "project-management",
+      "homepage": "https://github.com/t4tarzan/cli-anything-seaclip",
+      "version": "1.0.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "shotcut",
+      "entryPoint": "cli-anything-shotcut",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=shotcut/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-shotcut/SKILL.md",
+      "displayName": "Shotcut",
+      "description": "Video editing and rendering via melt/ffmpeg",
+      "category": "video",
+      "homepage": "https://shotcut.org",
+      "version": "1.0.0",
+      "costTier": "free",
+      "qualityTier": "high",
+      "offline": true
+    },
+    {
+      "cliName": "siyuan",
+      "entryPoint": "cli-anything-siyuan",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=siyuan/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-siyuan/SKILL.md",
+      "displayName": "SiYuan CLI",
+      "description": "Knowledge management and note-taking via SiYuan HTTP API — manage notebooks, documents, blocks, and search content from the command line",
+      "category": "knowledge-management",
+      "homepage": "https://github.com/siyuan-note/siyuan",
+      "version": "1.0.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "slay_the_spire_ii",
+      "entryPoint": "cli-anything-sts2",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=slay_the_spire_ii/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-slay-the-spire-ii/SKILL.md",
+      "displayName": "Slay the Spire 2",
+      "description": "Control the real Slay the Spire 2 game via local STS2_Bridge HTTP API",
+      "category": "game",
+      "homepage": "https://github.com/HKUDS/CLI-Anything/tree/main/slay_the_spire_ii",
+      "version": "1.0.0",
+      "costTier": "free",
+      "qualityTier": "sota",
+      "offline": true
+    },
+    {
+      "cliName": "smithue-cli",
+      "entryPoint": "smithue-cli",
+      "kind": "public-cli",
+      "install": {
+        "manager": "npm",
+        "cmd": "npm install -g smithue-cli",
+        "pin": null,
+        "npxCmd": "npx smithue-cli",
+        "residual": "npm-latest-unpinned"
+      },
+      "skillMd": "https://raw.githubusercontent.com/123dx-svg/smithue-cli/970f4b86b8b0671728585979b3c974829b4f47d0/skills/SKILL.md",
+      "displayName": "SmithUE CLI",
+      "description": "CLI tool for controlling Unreal Engine editor via SmithUE plugin. Enables AI agents to execute editor commands, list tools, search capabilities, and monitor editor status.",
+      "category": "devtools",
+      "homepage": "https://github.com/123dx-svg/smithue-cli",
+      "version": "0.8.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "stata",
+      "entryPoint": "cli-anything-stata",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/LI-Meng420/stata-cli.git",
+        "pin": null,
+        "residual": "third-party-git-unpinned"
+      },
+      "skillMd": "https://raw.githubusercontent.com/LI-Meng420/stata-cli/main/cli_anything/stata/skills/SKILL.md",
+      "displayName": "Stata",
+      "description": "Run Stata do-files, batch jobs, and reproducible econometric projects from the terminal with JSON output, log parsing, project scaffolding, and security guard",
+      "category": "science",
+      "homepage": "https://www.stata.com",
+      "version": "0.1.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "ueatelier",
+      "entryPoint": "cli-anything-ueatelier",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/edwinmeng163-oss/UEAtelier.git#subdirectory=Tools/UEAtelierCli",
+        "pin": null,
+        "residual": "third-party-git-unpinned"
+      },
+      "skillMd": "https://github.com/edwinmeng163-oss/UEAtelier/blob/main/Tools/UEAtelierCli/SKILL.md",
+      "displayName": "UEAtelier",
+      "description": "Unreal Editor 5.6/5.7 MCP self-extension workbench - editor automation, build diagnostics, Task Atlas workflows, PIE smoke verification, scaffold pipeline",
+      "category": "gamedev",
+      "homepage": "https://github.com/edwinmeng163-oss/UEAtelier",
+      "version": "0.23.1",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "unimol_tools",
+      "entryPoint": "cli-anything-unimol-tools",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=unimol_tools/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-unimol-tools/SKILL.md",
+      "displayName": "Uni-Mol Tools",
+      "description": "Molecular property prediction — train and predict with 5 task types (classification, regression, multiclass, multilabel) for drug discovery",
+      "category": "science",
+      "homepage": "https://github.com/dptech-corp/Uni-Mol/tree/main/unimol_tools",
+      "version": "1.0.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "unrealinsights",
+      "entryPoint": "cli-anything-unrealinsights",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=unrealinsights/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "unrealinsights/agent-harness/cli_anything/unrealinsights/skills/SKILL.md",
+      "displayName": "Unreal Insights",
+      "description": "Windows-first Unreal trace capture, background session control, engine-matched UnrealInsights builds, and headless Timing Insights export workflows",
+      "category": "debugging",
+      "homepage": "https://dev.epicgames.com/documentation/en-us/unreal-engine/unreal-insights-in-unreal-engine",
+      "version": "0.1.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "videocaptioner",
+      "entryPoint": "cli-anything-videocaptioner",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=videocaptioner/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-videocaptioner/SKILL.md",
+      "displayName": "VideoCaptioner",
+      "description": "AI-powered video captioning — transcribe speech, optimize/translate subtitles, burn styled subtitles into video",
+      "category": "video",
+      "homepage": "https://github.com/WEIFENG2333/VideoCaptioner",
+      "version": "1.0.0",
+      "costTier": "free",
+      "qualityTier": "high",
+      "offline": true
+    },
+    {
+      "cliName": "wavetone",
+      "entryPoint": "cli-anything-wavetone",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=wavetone/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-wavetone/SKILL.md",
+      "displayName": "WaveTone",
+      "description": "Prepare WaveTone 2.61 audio transcription manifests, probe audio files, and launch the real Windows WaveTone executable",
+      "category": "audio",
+      "homepage": "http://ackiesound.ifdef.jp/",
+      "version": "1.0.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "wiremock",
+      "entryPoint": "cli-anything-wiremock",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install git+https://github.com/HKUDS/CLI-Anything.git@bf3cc39e2edb0be313e395077e4cd3f1f4573c53#subdirectory=wiremock/agent-harness",
+        "pin": "bf3cc39e2edb0be313e395077e4cd3f1f4573c53"
+      },
+      "skillMd": "skills/cli-anything-wiremock/SKILL.md",
+      "displayName": "WireMock",
+      "description": "HTTP mock server management — create stubs, inspect requests, record traffic, and manage scenarios via WireMock REST API",
+      "category": "testing",
+      "homepage": "https://wiremock.org",
+      "version": "0.1.0",
+      "costTier": null,
+      "qualityTier": null,
+      "offline": null
+    },
+    {
+      "cliName": "zotero",
+      "entryPoint": "cli-anything-zotero",
+      "kind": "harness-cli",
+      "install": {
+        "manager": "pip",
+        "cmd": "pip install cli-anything-zotero",
+        "pin": null
+      },
+      "skillMd": "https://github.com/PiaoyangGuohai1/cli-anything-zotero/blob/main/cli_anything/zotero/skills/SKILL.md",
+      "displayName": "Zotero",
+      "description": "CLI & MCP server for Zotero 7/8 — 52 MCP tools + 70+ CLI commands for search, import, PDF, BibTeX, notes, and more",
+      "category": "office",
+      "homepage": "https://www.zotero.org",
+      "version": "0.4.1",
+      "costTier": "free",
+      "qualityTier": "sota",
+      "offline": true
+    }
+  ]
+}

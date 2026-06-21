@@ -17,6 +17,9 @@ import { runDeviceRuntime } from "./runtime.js"
 import { bootstrapCloudDevice } from "./cloud-bootstrap.js"
 import { createFilesystemBuiltin } from "./builtins/filesystem.js"
 import { createCommandlineBuiltin } from "./builtins/commandline.js"
+import { createCliCatalog } from "./builtins/cli-catalog/index.js"
+import { createCliInstaller } from "./builtins/cli-catalog/install.js"
+import { createDeviceLogger } from "./logger.js"
 import { bwrapAvailable } from "./terminal/sandbox-confinement.js"
 import { createCuaBuiltin } from "./builtins/cua.js"
 import { createBrowserBuiltin } from "./builtins/browser.js"
@@ -395,6 +398,10 @@ async function main() {
       // were only reachable via a later/erroneous capability grant) would turn
       // the sandbox shell into a host shell. Non-sandbox runtimes register the
       // commandline builtin normally (their isolation model is the device itself).
+      // CLI-Anything catalog (plan §5.B). Reports per-CLI availability via the
+      // commandline exposure metadata on both device classes. On-demand install
+      // (P4) is wired only on the local/unconfined path below.
+      const cliCatalog = createCliCatalog()
       if (cmdSandbox) {
         if (bwrapAvailable()) {
           providers.push(
@@ -403,6 +410,7 @@ async function main() {
               toolchainManager,
               sandboxRoot: fsRoot,
               sandboxShareNet: cmdSandboxShareNet,
+              cliCatalog,
             })
           )
         } else {
@@ -413,7 +421,11 @@ async function main() {
         }
       } else {
         providers.push(
-          createCommandlineBuiltin({ environment, toolchainManager })
+          createCommandlineBuiltin({
+            environment,
+            toolchainManager,
+            cliCatalog,
+          })
         )
       }
       const cuaHelperPath =
@@ -651,6 +663,29 @@ async function main() {
       // alongside this wiring (see runtime.ts).
       runtimeRef.handle = handle as unknown as {
         notifyTunnelDown(reason: string): void
+      }
+      // Re-sync the catalog when an on-demand CLI install (P4) flips availability.
+      cliCatalog.onChange(() => {
+        void handle.resyncCatalog()
+      })
+      // Local (unconfined) devices: when explicitly enabled, proactively install
+      // harnesses whose underlying prereq is satisfied (plan §5.B/P4). Fire-and-
+      // forget; the onChange re-sync above publishes the flipped availability and
+      // the server mints the grants. Cloud sandboxes skip this (no exec-time
+      // network; universe baked at image build, §5.D).
+      // OPT-IN: this pip/npm-installs third-party harnesses onto the operator's
+      // host, so it is OFF by default. Enable with SYNAPSE_DEVICE_CLI_INSTALL=on.
+      if (!cmdSandbox && process.env.SYNAPSE_DEVICE_CLI_INSTALL === "on") {
+        const cliInstallLog = createDeviceLogger("cli-install")
+        const installer = createCliInstaller({
+          cliCatalog,
+          logger: (msg) => cliInstallLog.info(msg),
+        })
+        void installer.runOnce(environment).catch((err) => {
+          cliInstallLog.warn("cli-install pass failed", {
+            error: (err as Error).message,
+          })
+        })
       }
       process.on("SIGINT", () => {
         void handle.stop()

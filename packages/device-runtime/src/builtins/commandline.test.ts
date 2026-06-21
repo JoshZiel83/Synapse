@@ -72,3 +72,34 @@ test("regression: executeBash sees the spawn env it built, NOT process.env", asy
   assert.equal(result.exitCode, 0)
   assert.equal(result.stdout, "PROMPT=0|EDITOR=true|PAGER=cat")
 })
+
+test("fail-closed: a throwing cliCatalog keeps bash/exec_file, omits availableClis, invalidates the memo", async () => {
+  type CliCatalog = import("./cli-catalog/index.js").CliCatalog
+  let invalidated = 0
+  const fakeCatalog: CliCatalog = {
+    getAvailableClis: async () => {
+      throw new Error("probe boom")
+    },
+    invalidate: () => {
+      invalidated++
+    },
+    getInstallTargets: async () => [],
+    onChange: () => () => {},
+    emitChange: () => {},
+    entries: () => [],
+  }
+  const builtin = createCommandlineBuiltin({ cliCatalog: fakeCatalog })
+  const exposures = await builtin.describeExposures() // MUST NOT reject
+  assert.equal(exposures.length, 1)
+  const tools = exposures[0]!.tools.map((t) => t.name)
+  assert.ok(
+    tools.includes("exec_file"),
+    "exec_file stays exposed despite probe failure"
+  )
+  assert.equal(
+    (exposures[0]!.metadata as Record<string, unknown>).availableClis,
+    undefined,
+    "availableClis omitted on probe error"
+  )
+  assert.equal(invalidated, 1, "invalidate() clears the poisoned memo")
+})

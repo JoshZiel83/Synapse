@@ -522,6 +522,73 @@ export interface InsertRuntimeAuthorizationGrantValues {
   sourceRequestArgs: RuntimeAuthorizationGrantSourceRequestArgsInsert
 }
 
+/**
+ * The set of CLI-Anything entry_points the device currently reports as runnable,
+ * read from device_exposures.metadata.availableClis on the given exposure (plan
+ * §5.C). Keyed by entry_point (the bare program a program_only grant authorizes).
+ * Empty set when the exposure has no availableClis (no catalog reported).
+ */
+export async function selectExposureAvailableCliEntryPoints(
+  deviceExposureId: string,
+  queryable: Executor = db
+): Promise<Set<string>> {
+  const row = await queryable
+    .selectFrom("deviceExposures")
+    .select("metadata")
+    .where("id", "=", deviceExposureId)
+    .executeTakeFirst()
+  const metadata = row?.metadata as
+    | { availableClis?: Record<string, { available?: boolean }> }
+    | null
+    | undefined
+  const availableClis = metadata?.availableClis
+  if (!availableClis || typeof availableClis !== "object") return new Set()
+  // Only entry_points the device reports as available===true may receive a
+  // program_only grant (matches the reconcile filter — never mint for an
+  // advertised-but-unavailable CLI).
+  return new Set(
+    Object.entries(availableClis)
+      .filter(
+        ([, v]) => v != null && typeof v === "object" && v.available === true
+      )
+      .map(([entryPoint]) => entryPoint)
+  )
+}
+
+/**
+ * Active program_only CLI grants on a device's commandline capability (plan P3).
+ * Returns {id, program(=entry_point)} for each, so the catalog-sync reconcile can
+ * skip-if-exists (no duplicate mint) and revoke grants whose CLI flipped to
+ * unavailable. runtime_authorization_grants has no unique index, so this read is
+ * the dedup mechanism for the full-replace catalog sync.
+ */
+export async function selectActiveProgramOnlyCliGrants(
+  deviceCapabilityId: string,
+  queryable: Executor = db
+): Promise<{ id: string; program: string }[]> {
+  const rows = await queryable
+    .selectFrom("runtimeAuthorizationGrants")
+    .select(["id", "policy"])
+    .where("deviceCapabilityId", "=", deviceCapabilityId)
+    .where("status", "=", "active")
+    .execute()
+  const out: { id: string; program: string }[] = []
+  for (const r of rows) {
+    const commandline = (
+      r.policy as {
+        commandline?: { commandMatchType?: string; program?: string }
+      } | null
+    )?.commandline
+    if (
+      commandline?.commandMatchType === "program_only" &&
+      typeof commandline.program === "string"
+    ) {
+      out.push({ id: r.id as string, program: commandline.program })
+    }
+  }
+  return out
+}
+
 /** INSERT a grant row, RETURNING its id. Caller refetches the joined row. */
 export async function insertRuntimeAuthorizationGrantRow(
   executor: Executor,

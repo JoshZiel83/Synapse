@@ -1125,6 +1125,7 @@ export const RUNTIME_AUTHORIZATION_COMMAND_MATCH_TYPES = [
   "argv_exact",
   "argv_prefix",
   "argv_exact_preapproved",
+  "program_only",
 ] as const
 
 // The fixed mount points a sandbox device-runtime exposes (the materialized
