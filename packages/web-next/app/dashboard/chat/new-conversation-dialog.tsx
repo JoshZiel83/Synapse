@@ -252,21 +252,21 @@ export default function NewConversationDialog({
                         <span className="block truncate text-sm font-medium text-gray-900 dark:text-white">
                           {actor.displayName}
                         </span>
-                        {actor.title && (
+                        {actor.title ? (
                           <span className="block truncate text-xs text-gray-500 dark:text-gray-400">
                             {actor.title}
                           </span>
-                        )}
+                        ) : null}
                       </div>
                     </label>
                   ))}
                 </div>
               ))}
-              {filtered.length === 0 && (
+              {filtered.length === 0 ? (
                 <div className="px-5 py-8 text-center text-sm text-gray-400 dark:text-gray-500">
                   No actors found
                 </div>
-              )}
+              ) : null}
             </div>
           </div>
 
@@ -307,11 +307,11 @@ export default function NewConversationDialog({
                         <span className="block truncate text-sm font-medium text-gray-900 dark:text-white">
                           {actor.displayName}
                         </span>
-                        {actor.title && (
+                        {actor.title ? (
                           <span className="block truncate text-xs text-gray-500 dark:text-gray-400">
                             {actor.title}
                           </span>
-                        )}
+                        ) : null}
                       </div>
                       <button
                         onClick={() => removeActor(actor.id)}

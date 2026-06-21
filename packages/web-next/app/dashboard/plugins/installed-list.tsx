@@ -119,7 +119,7 @@ export default function InstalledList() {
                         install.defaultLocale || "en"
                       ) || install.pluginDisplayName}
                     </Link>
-                    {configMissing && (
+                    {configMissing ? (
                       <Badge
                         variant="outline"
                         className="gap-1 border-amber-500/30 text-xs text-amber-400"
@@ -127,7 +127,7 @@ export default function InstalledList() {
                         <AlertTriangle className="h-3 w-3" />
                         Config Required
                       </Badge>
-                    )}
+                    ) : null}
                   </div>
                   <p className="text-sm font-medium text-foreground">
                     {getPluginInstallationTitle(install)}

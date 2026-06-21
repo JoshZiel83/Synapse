@@ -1426,23 +1426,23 @@ export default function InstallDialog({
                 className="font-medium text-gray-900 dark:text-white"
               >
                 {label}
-                {field.required && (
+                {field.required ? (
                   <span className="ml-1 text-xs text-red-500">*</span>
-                )}
+                ) : null}
               </label>
-              {description && (
+              {description ? (
                 <p
                   id={descriptionId}
                   className="text-gray-500 dark:text-gray-400"
                 >
                   {description}
                 </p>
-              )}
+              ) : null}
             </div>
           </div>
-          {error && (
+          {error ? (
             <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
-          )}
+          ) : null}
         </div>
       )
     }
@@ -1454,13 +1454,15 @@ export default function InstallDialog({
             <Label className="block text-sm/6 font-medium text-gray-900 dark:text-white">
               {label}
             </Label>
-            {field.required && <span className="text-xs text-red-500">*</span>}
+            {field.required ? (
+              <span className="text-xs text-red-500">*</span>
+            ) : null}
           </div>
-          {description && (
+          {description ? (
             <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
               {description}
             </p>
-          )}
+          ) : null}
           <div className="mt-2 grid grid-cols-1">
             <select
               className={`col-start-1 row-start-1 block w-full appearance-none rounded-md bg-white py-1.5 pl-3 text-base outline-1 -outline-offset-1 sm:text-sm/6 dark:bg-white/5 ${
@@ -1484,18 +1486,18 @@ export default function InstallDialog({
                 </option>
               ))}
             </select>
-            {error && (
+            {error ? (
               <AlertCircle
                 aria-hidden="true"
                 className="pointer-events-none col-start-1 row-start-1 mr-3 size-5 self-center justify-self-end text-red-500 sm:size-4 dark:text-red-400"
               />
-            )}
+            ) : null}
           </div>
-          {error && (
+          {error ? (
             <p className="mt-2 text-sm text-red-600 dark:text-red-400">
               {error}
             </p>
-          )}
+          ) : null}
         </div>
       )
     }
@@ -1508,13 +1510,15 @@ export default function InstallDialog({
             <Label className="block text-sm/6 font-medium text-gray-900 dark:text-white">
               {label}
             </Label>
-            {field.required && <span className="text-xs text-red-500">*</span>}
+            {field.required ? (
+              <span className="text-xs text-red-500">*</span>
+            ) : null}
           </div>
-          {description && (
+          {description ? (
             <p className="text-sm text-gray-500 dark:text-gray-400">
               {description}
             </p>
-          )}
+          ) : null}
           <div className="grid gap-3 sm:grid-cols-2">
             {(field.options || []).map((option) => {
               const optionLabel =
@@ -1554,19 +1558,19 @@ export default function InstallDialog({
                     <div className="text-sm font-medium text-foreground">
                       {optionLabel}
                     </div>
-                    {optionDescription && (
+                    {optionDescription ? (
                       <p className="text-sm text-muted-foreground">
                         {optionDescription}
                       </p>
-                    )}
+                    ) : null}
                   </div>
                 </label>
               )
             })}
           </div>
-          {error && (
+          {error ? (
             <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
-          )}
+          ) : null}
         </div>
       )
     }
@@ -1578,13 +1582,15 @@ export default function InstallDialog({
             <Label className="block text-sm/6 font-medium text-gray-900 dark:text-white">
               {label}
             </Label>
-            {field.required && <span className="text-xs text-red-500">*</span>}
+            {field.required ? (
+              <span className="text-xs text-red-500">*</span>
+            ) : null}
           </div>
-          {description && (
+          {description ? (
             <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
               {description}
             </p>
-          )}
+          ) : null}
           <Textarea
             value={typeof value === "string" ? value : ""}
             onChange={(event) =>
@@ -1598,11 +1604,11 @@ export default function InstallDialog({
                 : "outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-ring dark:outline-white/10 dark:focus:outline-ring"
             }`}
           />
-          {error && (
+          {error ? (
             <p className="mt-2 text-sm text-red-600 dark:text-red-400">
               {error}
             </p>
-          )}
+          ) : null}
         </div>
       )
     }
@@ -1642,19 +1648,19 @@ export default function InstallDialog({
                 <Label className="block text-sm/6 font-medium text-gray-900 dark:text-white">
                   {label}
                 </Label>
-                {field.required && (
+                {field.required ? (
                   <span className="text-xs text-red-500">*</span>
-                )}
+                ) : null}
                 <Badge variant="outline">{bindingLabel}</Badge>
               </div>
-              {description && (
+              {description ? (
                 <p className="text-sm text-gray-500 dark:text-gray-400">
                   {description}
                 </p>
-              )}
+              ) : null}
             </div>
             <div className="flex items-center gap-2">
-              {canInspectFeishuScopes && (
+              {canInspectFeishuScopes ? (
                 <Button
                   type="button"
                   variant="outline"
@@ -1671,7 +1677,7 @@ export default function InstallDialog({
                     "Refresh app scopes"
                   )}
                 </Button>
-              )}
+              ) : null}
               <Button
                 type="button"
                 variant="outline"
@@ -1685,15 +1691,15 @@ export default function InstallDialog({
               </Button>
             </div>
           </div>
-          {authState && (
+          {authState ? (
             <div className="text-sm text-gray-500 dark:text-gray-400">
-              {authState.status === PLUGIN_AUTH_SESSION_STATUS.PENDING && (
+              {authState.status === PLUGIN_AUTH_SESSION_STATUS.PENDING ? (
                 <div className="space-y-3">
                   <span className="inline-flex items-center gap-1">
                     <Loader2 className="h-3 w-3 animate-spin" />
                     {getAuthPendingMessage(authState)}
                   </span>
-                  {scanUrl && (
+                  {scanUrl ? (
                     <div className="flex flex-col gap-3 rounded-lg border border-dashed border-gray-300 bg-muted/20 p-3 dark:border-white/10">
                       <div className="flex items-start gap-3">
                         <AuthQrCodeImage value={scanUrl} label={label} />
@@ -1702,14 +1708,14 @@ export default function InstallDialog({
                             {challengeTitle}
                           </p>
                           <p>{getAuthPendingMessage(authState)}</p>
-                          {challengeMetadata.userCode && (
+                          {challengeMetadata.userCode ? (
                             <p className="text-xs text-muted-foreground">
                               User code:{" "}
                               <span className="font-mono text-foreground">
                                 {challengeMetadata.userCode}
                               </span>
                             </p>
-                          )}
+                          ) : null}
                           <a
                             href={scanUrl}
                             target="_blank"
@@ -1719,20 +1725,20 @@ export default function InstallDialog({
                             {challengeActionLabel}
                             <ExternalLink className="h-3.5 w-3.5" />
                           </a>
-                          {challengeExpiresAt && (
+                          {challengeExpiresAt ? (
                             <p className="text-xs text-muted-foreground">
                               Expires at{" "}
                               {new Date(challengeExpiresAt).toLocaleString()}.
                             </p>
-                          )}
+                          ) : null}
                         </div>
                       </div>
                     </div>
-                  )}
+                  ) : null}
                 </div>
-              )}
-              {(authState.status === PLUGIN_AUTH_SESSION_STATUS.COMPLETED ||
-                authState.status === PLUGIN_AUTH_SESSION_STATUS.CONSUMED) && (
+              ) : null}
+              {authState.status === PLUGIN_AUTH_SESSION_STATUS.COMPLETED ||
+              authState.status === PLUGIN_AUTH_SESSION_STATUS.CONSUMED ? (
                 <span>
                   Connected
                   {authState.accountDisplayName
@@ -1740,18 +1746,18 @@ export default function InstallDialog({
                     : ""}
                   .
                 </span>
-              )}
-              {authState.status === PLUGIN_AUTH_SESSION_STATUS.FAILED && (
+              ) : null}
+              {authState.status === PLUGIN_AUTH_SESSION_STATUS.FAILED ? (
                 <span className="text-red-500">
                   {authState.errorMessage || "Authorization failed."}
                 </span>
-              )}
-              {authState.status === PLUGIN_AUTH_SESSION_STATUS.EXPIRED && (
+              ) : null}
+              {authState.status === PLUGIN_AUTH_SESSION_STATUS.EXPIRED ? (
                 <span className="text-red-500">
                   Authorization session expired. Start again.
                 </span>
-              )}
-              {feishuScopeStatus && (
+              ) : null}
+              {feishuScopeStatus ? (
                 <div
                   className={`mt-3 space-y-3 rounded-lg border p-3 ${
                     feishuScopeStatus.status === "ready"
@@ -1769,20 +1775,20 @@ export default function InstallDialog({
                           ? "More app scopes still need review"
                           : "App scope status is unavailable"}
                     </p>
-                    {feishuScopeStatus.message && (
+                    {feishuScopeStatus.message ? (
                       <p className="text-current/80">
                         {feishuScopeStatus.message}
                       </p>
-                    )}
-                    {feishuScopeStatus.checkedAt && (
+                    ) : null}
+                    {feishuScopeStatus.checkedAt ? (
                       <p className="text-xs text-current/70">
                         Checked at{" "}
                         {new Date(feishuScopeStatus.checkedAt).toLocaleString()}
                         .
                       </p>
-                    )}
+                    ) : null}
                   </div>
-                  {feishuScopeStatus.missingFeatures.length > 0 && (
+                  {feishuScopeStatus.missingFeatures.length > 0 ? (
                     <div className="space-y-2">
                       <p className="font-medium text-current">
                         Missing feature scopes
@@ -1806,15 +1812,15 @@ export default function InstallDialog({
                         ))}
                       </div>
                     </div>
-                  )}
+                  ) : null}
                   {feishuScopeStatus.queryError &&
-                    feishuScopeStatus.status === "unavailable" && (
-                      <p className="text-xs text-current/80">
-                        {feishuScopeStatus.queryError}
-                      </p>
-                    )}
+                  feishuScopeStatus.status === "unavailable" ? (
+                    <p className="text-xs text-current/80">
+                      {feishuScopeStatus.queryError}
+                    </p>
+                  ) : null}
                   <div className="flex flex-wrap items-center gap-2">
-                    {feishuScopeStatus.consoleUrl && (
+                    {feishuScopeStatus.consoleUrl ? (
                       <a
                         href={feishuScopeStatus.consoleUrl}
                         target="_blank"
@@ -1824,23 +1830,23 @@ export default function InstallDialog({
                         Open Feishu scope console
                         <ExternalLink className="h-3.5 w-3.5" />
                       </a>
-                    )}
-                    {feishuScopeStatus.enabledScopes.length > 0 && (
+                    ) : null}
+                    {feishuScopeStatus.enabledScopes.length > 0 ? (
                       <span className="text-xs text-current/70">
                         Enabled user scopes:{" "}
                         {feishuScopeStatus.enabledScopes.length}
                       </span>
-                    )}
+                    ) : null}
                   </div>
                 </div>
-              )}
+              ) : null}
             </div>
-          )}
-          {error && (
+          ) : null}
+          {error ? (
             <p className="mt-2 text-sm text-red-600 dark:text-red-400">
               {error}
             </p>
-          )}
+          ) : null}
         </div>
       )
     }
@@ -1857,13 +1863,15 @@ export default function InstallDialog({
           <Label className="block text-sm/6 font-medium text-gray-900 dark:text-white">
             {label}
           </Label>
-          {field.required && <span className="text-xs text-red-500">*</span>}
+          {field.required ? (
+            <span className="text-xs text-red-500">*</span>
+          ) : null}
         </div>
-        {description && (
+        {description ? (
           <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
             {description}
           </p>
-        )}
+        ) : null}
         <div className="mt-2 grid grid-cols-1">
           <Input
             type={inputType}
@@ -1884,23 +1892,23 @@ export default function InstallDialog({
                 : "pr-10"
             }`}
           />
-          {error && (
+          {error ? (
             <AlertCircle
               aria-hidden="true"
               className="pointer-events-none col-start-1 row-start-1 mr-3 size-5 self-center justify-self-end text-red-500 sm:size-4 dark:text-red-400"
             />
-          )}
+          ) : null}
         </div>
-        {error && (
+        {error ? (
           <p className="mt-2 text-sm text-red-600 dark:text-red-400">{error}</p>
-        )}
+        ) : null}
       </div>
     )
   }
 
   const renderStepBody = () => (
     <div className="space-y-5">
-      {currentStep && (
+      {currentStep ? (
         <div className="space-y-3">
           <div className="space-y-1">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
@@ -1910,7 +1918,7 @@ export default function InstallDialog({
                 plugin.defaultLocale || "en"
               ) || currentStep.id}
             </h3>
-            {currentStep.descriptionI18n && (
+            {currentStep.descriptionI18n ? (
               <p className="text-sm text-gray-500 dark:text-gray-400">
                 {translate(
                   currentStep.descriptionI18n,
@@ -1918,9 +1926,9 @@ export default function InstallDialog({
                   plugin.defaultLocale || "en"
                 )}
               </p>
-            )}
+            ) : null}
           </div>
-          {currentStep.helpUrl && (
+          {currentStep.helpUrl ? (
             <a
               href={currentStep.helpUrl}
               target="_blank"
@@ -1935,11 +1943,11 @@ export default function InstallDialog({
               ) || "Open setup guide"}
               <ExternalLink className="h-3 w-3" />
             </a>
-          )}
+          ) : null}
         </div>
-      )}
+      ) : null}
 
-      {currentStep?.kind === PLUGIN_INSTALL_STEP_KIND.REUSE_SCOPE && (
+      {currentStep?.kind === PLUGIN_INSTALL_STEP_KIND.REUSE_SCOPE ? (
         <AccessReuseScopeStep
           attachmentScopeType={reusePreviewScopeType}
           value={lifecycleScope}
@@ -1950,161 +1958,161 @@ export default function InstallDialog({
           selectedConversationId={selectedConversationId}
           allowedReuseScopes={installLifecycleOptions}
         />
-      )}
+      ) : null}
 
-      {currentStep?.kind === "access" && (
+      {currentStep?.kind === "access" ? (
         <WorkspaceResourceAccessStep installation={currentInstallation} />
-      )}
+      ) : null}
 
       {currentStep?.kind === PLUGIN_INSTALL_STEP_KIND.INTEGRATION_EVENTS &&
-        integrationProvider && (
-          <div className="space-y-4 border-t border-gray-200 pt-4 dark:border-white/10">
-            <div className="rounded-[24px] border border-border/70 bg-muted/20 p-4">
-              <div className="flex items-start gap-3">
-                <div className="flex h-6 shrink-0 items-center">
-                  <Checkbox
-                    id="create-integration-event-sources"
-                    checked={setupIntegrationSources}
-                    onCheckedChange={(checked) =>
-                      setSetupIntegrationSources(checked === true)
-                    }
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label
-                    htmlFor="create-integration-event-sources"
-                    className="text-sm font-medium text-gray-900 dark:text-white"
-                  >
-                    Create{" "}
-                    {integrationProvider === "github" ? "GitHub" : "GitLab"}{" "}
-                    event sources now
-                  </label>
-                  <p className="text-sm text-muted-foreground">
-                    Synapse will reuse this installation&apos;s token to
-                    register platform webhooks through the official API. The MCP
-                    server remains separate from event ingestion.
-                  </p>
-                </div>
+      integrationProvider ? (
+        <div className="space-y-4 border-t border-gray-200 pt-4 dark:border-white/10">
+          <div className="rounded-[24px] border border-border/70 bg-muted/20 p-4">
+            <div className="flex items-start gap-3">
+              <div className="flex h-6 shrink-0 items-center">
+                <Checkbox
+                  id="create-integration-event-sources"
+                  checked={setupIntegrationSources}
+                  onCheckedChange={(checked) =>
+                    setSetupIntegrationSources(checked === true)
+                  }
+                />
+              </div>
+              <div className="space-y-1">
+                <label
+                  htmlFor="create-integration-event-sources"
+                  className="text-sm font-medium text-gray-900 dark:text-white"
+                >
+                  Create{" "}
+                  {integrationProvider === "github" ? "GitHub" : "GitLab"} event
+                  sources now
+                </label>
+                <p className="text-sm text-muted-foreground">
+                  Synapse will reuse this installation&apos;s token to register
+                  platform webhooks through the official API. The MCP server
+                  remains separate from event ingestion.
+                </p>
               </div>
             </div>
-
-            {setupIntegrationSources ? (
-              <>
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-1">
-                    <Label
-                      htmlFor="integration-target-id"
-                      className="block text-sm/6 font-medium text-gray-900 dark:text-white"
-                    >
-                      {integrationTargetLabel(integrationProvider)}
-                    </Label>
-                    <Input
-                      id="integration-target-id"
-                      value={integrationTargetId}
-                      onChange={(event) =>
-                        setIntegrationTargetId(event.target.value)
-                      }
-                      placeholder={integrationTargetPlaceholder(
-                        integrationProvider
-                      )}
-                    />
-                    <p className="text-sm text-muted-foreground">
-                      {integrationProvider === "github"
-                        ? "Use the repository path, for example `owner/repo`."
-                        : "Use the project path, for example `group/project`."}
-                    </p>
-                  </div>
-                  <div className="space-y-1">
-                    <Label
-                      htmlFor="integration-target-label"
-                      className="block text-sm/6 font-medium text-gray-900 dark:text-white"
-                    >
-                      Display label
-                    </Label>
-                    <Input
-                      id="integration-target-label"
-                      value={integrationTargetLabelValue}
-                      onChange={(event) =>
-                        setIntegrationTargetLabelValue(event.target.value)
-                      }
-                      placeholder="Optional custom label"
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  <div className="text-sm font-medium text-gray-900 dark:text-white">
-                    Event definitions
-                  </div>
-                  <div className="space-y-3">
-                    {integrationEventDefinitionOptions.map((definition) => {
-                      const checked = selectedIntegrationSourceKeys.includes(
-                        definition.sourceKey
-                      )
-                      return (
-                        <label
-                          key={definition.sourceKey}
-                          className="flex items-start gap-3 rounded-[24px] border border-border/70 bg-muted/20 px-4 py-4"
-                        >
-                          <Checkbox
-                            checked={checked}
-                            onCheckedChange={(value) =>
-                              setSelectedIntegrationSourceKeys((current) =>
-                                value === true
-                                  ? current.includes(definition.sourceKey)
-                                    ? current
-                                    : [...current, definition.sourceKey]
-                                  : current.filter(
-                                      (sourceKey) =>
-                                        sourceKey !== definition.sourceKey
-                                    )
-                              )
-                            }
-                          />
-                          <div className="space-y-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="text-sm font-medium text-gray-900 dark:text-white">
-                                {definition.name}
-                              </span>
-                              <Badge variant="outline">
-                                {definition.sourceKey}
-                              </Badge>
-                            </div>
-                            <p className="text-sm text-muted-foreground">
-                              {definition.description}
-                            </p>
-                            {definition.recommendedUsage ? (
-                              <p className="text-xs text-muted-foreground">
-                                {definition.recommendedUsage}
-                              </p>
-                            ) : null}
-                          </div>
-                        </label>
-                      )
-                    })}
-                  </div>
-                </div>
-              </>
-            ) : (
-              <div className="rounded-[24px] border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
-                Skip this step if you only want MCP tools for now. You can add
-                event sources later from the Event Sources page.
-              </div>
-            )}
           </div>
-        )}
+
+          {setupIntegrationSources ? (
+            <>
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-1">
+                  <Label
+                    htmlFor="integration-target-id"
+                    className="block text-sm/6 font-medium text-gray-900 dark:text-white"
+                  >
+                    {integrationTargetLabel(integrationProvider)}
+                  </Label>
+                  <Input
+                    id="integration-target-id"
+                    value={integrationTargetId}
+                    onChange={(event) =>
+                      setIntegrationTargetId(event.target.value)
+                    }
+                    placeholder={integrationTargetPlaceholder(
+                      integrationProvider
+                    )}
+                  />
+                  <p className="text-sm text-muted-foreground">
+                    {integrationProvider === "github"
+                      ? "Use the repository path, for example `owner/repo`."
+                      : "Use the project path, for example `group/project`."}
+                  </p>
+                </div>
+                <div className="space-y-1">
+                  <Label
+                    htmlFor="integration-target-label"
+                    className="block text-sm/6 font-medium text-gray-900 dark:text-white"
+                  >
+                    Display label
+                  </Label>
+                  <Input
+                    id="integration-target-label"
+                    value={integrationTargetLabelValue}
+                    onChange={(event) =>
+                      setIntegrationTargetLabelValue(event.target.value)
+                    }
+                    placeholder="Optional custom label"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="text-sm font-medium text-gray-900 dark:text-white">
+                  Event definitions
+                </div>
+                <div className="space-y-3">
+                  {integrationEventDefinitionOptions.map((definition) => {
+                    const checked = selectedIntegrationSourceKeys.includes(
+                      definition.sourceKey
+                    )
+                    return (
+                      <label
+                        key={definition.sourceKey}
+                        className="flex items-start gap-3 rounded-[24px] border border-border/70 bg-muted/20 px-4 py-4"
+                      >
+                        <Checkbox
+                          checked={checked}
+                          onCheckedChange={(value) =>
+                            setSelectedIntegrationSourceKeys((current) =>
+                              value === true
+                                ? current.includes(definition.sourceKey)
+                                  ? current
+                                  : [...current, definition.sourceKey]
+                                : current.filter(
+                                    (sourceKey) =>
+                                      sourceKey !== definition.sourceKey
+                                  )
+                            )
+                          }
+                        />
+                        <div className="space-y-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-medium text-gray-900 dark:text-white">
+                              {definition.name}
+                            </span>
+                            <Badge variant="outline">
+                              {definition.sourceKey}
+                            </Badge>
+                          </div>
+                          <p className="text-sm text-muted-foreground">
+                            {definition.description}
+                          </p>
+                          {definition.recommendedUsage ? (
+                            <p className="text-xs text-muted-foreground">
+                              {definition.recommendedUsage}
+                            </p>
+                          ) : null}
+                        </div>
+                      </label>
+                    )
+                  })}
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="rounded-[24px] border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
+              Skip this step if you only want MCP tools for now. You can add
+              event sources later from the Event Sources page.
+            </div>
+          )}
+        </div>
+      ) : null}
 
       {(currentStep?.kind === PLUGIN_INSTALL_STEP_KIND.FORM ||
         currentStep?.kind === PLUGIN_INSTALL_STEP_KIND.AUTH ||
         currentStep?.kind === PLUGIN_INSTALL_STEP_KIND.CHECK) &&
-        currentStep?.fields.length > 0 && (
-          <div className="space-y-4 border-t border-gray-200 pt-4 dark:border-white/10">
-            {currentStep.fields.map((fieldKey) => {
-              const field = configFields.find((item) => item.key === fieldKey)
-              return field ? renderField(field) : null
-            })}
-          </div>
-        )}
+      currentStep?.fields.length > 0 ? (
+        <div className="space-y-4 border-t border-gray-200 pt-4 dark:border-white/10">
+          {currentStep.fields.map((fieldKey) => {
+            const field = configFields.find((item) => item.key === fieldKey)
+            return field ? renderField(field) : null
+          })}
+        </div>
+      ) : null}
     </div>
   )
 

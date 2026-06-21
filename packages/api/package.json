@@ -40,7 +40,8 @@
     "gen:purge-ddl": "node scripts/cutover-emit-purge.mjs",
     "memory:bootstrap-model": "tsx src/modules/memory/bootstrap-model.ts",
     "lint": "eslint src tests",
-    "lint:fix": "eslint src tests --fix"
+    "lint:fix": "eslint src tests --fix",
+    "lint:types": "NODE_OPTIONS=--max-old-space-size=8192 eslint --no-config-lookup -c eslint.config.types.mjs src tests"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.81",

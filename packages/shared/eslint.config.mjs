@@ -18,7 +18,15 @@ export default [
     files: ["src/**/*.ts"],
     languageOptions: {
       parser: tseslint.parser,
-      parserOptions: { ecmaVersion: "latest", sourceType: "module" },
+      parserOptions: {
+        ecmaVersion: "latest",
+        sourceType: "module",
+        // Type-aware parsing, for @typescript-eslint/switch-exhaustiveness-check.
+        // shared/tsconfig.json includes all of src/ (tests included), so every
+        // linted file resolves to a project. Adds ~a few seconds to this lint.
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
     },
     // Register the typescript-eslint plugin so inline
     // `eslint-disable @typescript-eslint/...` directives in the source resolve.
@@ -35,6 +43,13 @@ export default [
       // ── switch hygiene ──
       "default-case-last": "error",
       "no-fallthrough": "error",
+      // Type-aware: a switch over a union must handle every member OR have a
+      // default (considerDefaultExhaustiveForUnions). Catches a forgotten case
+      // with no fallback. 0 current violations — pure regression prevention.
+      "@typescript-eslint/switch-exhaustiveness-check": [
+        "error",
+        { considerDefaultExhaustiveForUnions: true },
+      ],
       // ── correctness / modern syntax ──
       eqeqeq: ["error", "always", { null: "ignore" }],
       "no-var": "error",

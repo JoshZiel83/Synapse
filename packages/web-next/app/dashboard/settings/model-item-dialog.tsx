@@ -473,7 +473,7 @@ export default function ModelItemDialog({
           </div>
 
           {/* API Style (OpenAI providerKind only) */}
-          {providerKind === "openai" && (
+          {providerKind === "openai" ? (
             <div className="space-y-2 pt-1">
               <Label className="text-sm">API Style</Label>
               <select
@@ -497,10 +497,10 @@ export default function ModelItemDialog({
                 Wire format used when calling this OpenAI-style endpoint.
               </p>
             </div>
-          )}
+          ) : null}
 
           {/* Server Tools */}
-          {vendorSupportsServerTools(vendor) && (
+          {vendorSupportsServerTools(vendor) ? (
             <div className="space-y-3 pt-1">
               <Label className="text-sm">Server Tools</Label>
               <div className="space-y-2">
@@ -538,11 +538,11 @@ export default function ModelItemDialog({
                           >
                             {tool.label}
                           </span>
-                          {checked && (
+                          {checked ? (
                             <span className="rounded-full border border-blue-500/20 bg-blue-500/10 px-1.5 py-0.5 text-[10px] text-blue-400">
                               Enabled
                             </span>
-                          )}
+                          ) : null}
                         </div>
                         <p className="mt-0.5 text-xs text-muted-foreground/80">
                           {tool.description}
@@ -555,7 +555,7 @@ export default function ModelItemDialog({
                             : "border-muted-foreground/30"
                         }`}
                       >
-                        {checked && (
+                        {checked ? (
                           <svg
                             className="h-3 w-3 text-white"
                             viewBox="0 0 12 12"
@@ -569,7 +569,7 @@ export default function ModelItemDialog({
                               strokeLinejoin="round"
                             />
                           </svg>
-                        )}
+                        ) : null}
                       </div>
                     </label>
                   )
@@ -580,7 +580,7 @@ export default function ModelItemDialog({
                 supported.
               </p>
             </div>
-          )}
+          ) : null}
 
           {/* Multimodal Capabilities */}
           <div className="space-y-3 pt-1">
@@ -620,11 +620,11 @@ export default function ModelItemDialog({
                         >
                           {type.label}
                         </span>
-                        {checked && (
+                        {checked ? (
                           <span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-1.5 py-0.5 text-[10px] text-violet-400">
                             Enabled
                           </span>
-                        )}
+                        ) : null}
                       </div>
                       <p className="mt-0.5 text-xs text-muted-foreground/80">
                         {type.description}
@@ -637,7 +637,7 @@ export default function ModelItemDialog({
                           : "border-muted-foreground/30"
                       }`}
                     >
-                      {checked && (
+                      {checked ? (
                         <svg
                           className="h-3 w-3 text-white"
                           viewBox="0 0 12 12"
@@ -651,7 +651,7 @@ export default function ModelItemDialog({
                             strokeLinejoin="round"
                           />
                         </svg>
-                      )}
+                      ) : null}
                     </div>
                   </label>
                 )

@@ -76,9 +76,9 @@ function OrgTreeNode({ actor, depth = 0, onAddChild }: OrgTreeNodeProps) {
   return (
     <div className="relative">
       {/* Connector lines */}
-      {depth > 0 && (
+      {depth > 0 ? (
         <div className="absolute top-0 left-0 h-6 w-6 -translate-x-4 rounded-bl-xl border-b-2 border-l-2 border-blue-500/15" />
-      )}
+      ) : null}
 
       <Card className="group mb-3 border-gray-200 bg-white ring-1 ring-gray-200 transition-all duration-300 hover:border-blue-500/15 dark:border-white/10 dark:bg-gray-900 dark:ring-white/10">
         <CardContent className="p-4">
@@ -109,7 +109,7 @@ function OrgTreeNode({ actor, depth = 0, onAddChild }: OrgTreeNodeProps) {
                 >
                   {actor.role}
                 </Badge>
-                {actor.status && (
+                {actor.status ? (
                   <div className="flex items-center gap-1">
                     <div
                       className={`h-1.5 w-1.5 rounded-full ${actor.status === "active" ? "bg-emerald-400" : "bg-muted-foreground"}`}
@@ -118,14 +118,14 @@ function OrgTreeNode({ actor, depth = 0, onAddChild }: OrgTreeNodeProps) {
                       {actor.status}
                     </span>
                   </div>
-                )}
+                ) : null}
               </div>
-              {actor.title && (
+              {actor.title ? (
                 <p className="mt-0.5 text-xs text-muted-foreground">
                   {actor.title}
                 </p>
-              )}
-              {actor.specialties && actor.specialties.length > 0 && (
+              ) : null}
+              {actor.specialties && actor.specialties.length > 0 ? (
                 <div className="mt-2 flex flex-wrap gap-1">
                   {actor.specialties.map((specialty, i) => (
                     <Badge
@@ -137,7 +137,7 @@ function OrgTreeNode({ actor, depth = 0, onAddChild }: OrgTreeNodeProps) {
                     </Badge>
                   ))}
                 </div>
-              )}
+              ) : null}
             </div>
 
             {/* Actions */}
@@ -152,7 +152,7 @@ function OrgTreeNode({ actor, depth = 0, onAddChild }: OrgTreeNodeProps) {
                   <MessageSquare className="h-3.5 w-3.5" />
                 </Button>
               </Link>
-              {onAddChild && (
+              {onAddChild ? (
                 <Button
                   variant="ghost"
                   size="icon"
@@ -161,8 +161,8 @@ function OrgTreeNode({ actor, depth = 0, onAddChild }: OrgTreeNodeProps) {
                 >
                   <Plus className="h-3.5 w-3.5" />
                 </Button>
-              )}
-              {hasChildren && (
+              ) : null}
+              {hasChildren ? (
                 <Button
                   variant="ghost"
                   size="icon"
@@ -175,14 +175,14 @@ function OrgTreeNode({ actor, depth = 0, onAddChild }: OrgTreeNodeProps) {
                     <ChevronRight className="h-4 w-4" />
                   )}
                 </Button>
-              )}
+              ) : null}
             </div>
           </div>
         </CardContent>
       </Card>
 
       {/* Children */}
-      {hasChildren && expanded && (
+      {hasChildren && expanded ? (
         <div className="ml-8 space-y-0 border-l-2 border-gray-200 pl-4 dark:border-white/10">
           {actor.children!.map((child) => (
             <OrgTreeNode
@@ -193,7 +193,7 @@ function OrgTreeNode({ actor, depth = 0, onAddChild }: OrgTreeNodeProps) {
             />
           ))}
         </div>
-      )}
+      ) : null}
     </div>
   )
 }

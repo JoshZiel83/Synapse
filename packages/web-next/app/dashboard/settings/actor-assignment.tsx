@@ -280,11 +280,11 @@ export default function ActorAssignment() {
                         <span className="text-sm font-medium">
                           {g.groupName}
                         </span>
-                        {g.isDefault && (
+                        {g.isDefault ? (
                           <Badge className="border-amber-500/20 bg-amber-500/10 text-xs text-amber-400">
                             Default
                           </Badge>
-                        )}
+                        ) : null}
                       </div>
                     </div>
                     <Button
@@ -300,7 +300,7 @@ export default function ActorAssignment() {
               </div>
             )}
 
-            {availableGroups.length > 0 && (
+            {availableGroups.length > 0 ? (
               <div className="space-y-2">
                 <span className="text-xs font-medium text-muted-foreground">
                   Add group:
@@ -319,7 +319,7 @@ export default function ActorAssignment() {
                   ))}
                 </div>
               </div>
-            )}
+            ) : null}
           </div>
 
           <DialogFooter>
