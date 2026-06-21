@@ -20,6 +20,17 @@ import {
 } from "../messaging/status-emojis.js"
 
 /**
+ * Pick the first string-valued name field on an action object, in priority
+ * order (tool → name → kind), falling back to "" when none is present.
+ */
+function pickActionName(obj: Record<string, unknown>): string {
+  if (typeof obj.tool === "string") return obj.tool
+  if (typeof obj.name === "string") return obj.name
+  if (typeof obj.kind === "string") return obj.kind
+  return ""
+}
+
+/**
  * Inspect an `actor.action` payload's `actions` array and pick the dominant
  * status level. Returns null when no actions are present (caller likely
  * wants to interpret as done).
@@ -33,14 +44,7 @@ export function resolveActorActionStatus(
   for (const a of actions) {
     if (!a || typeof a !== "object") continue
     const obj = a as Record<string, unknown>
-    const candidate =
-      typeof obj.tool === "string"
-        ? obj.tool
-        : typeof obj.name === "string"
-          ? obj.name
-          : typeof obj.kind === "string"
-            ? obj.kind
-            : ""
+    const candidate = pickActionName(obj)
     if (candidate) names.push(candidate)
   }
   if (names.length === 0) return null

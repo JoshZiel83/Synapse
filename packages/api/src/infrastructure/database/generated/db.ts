@@ -317,11 +317,11 @@ export type TransportAccountsOwnerScope = "workspace" | "workspace_member";
 
 export type TransportAccountsStatus = "active" | "disabled" | "error";
 
-export type TransportAccountsTransportKind = "dingtalk" | "feishu" | "qq" | "wecom" | "weixin";
+export type TransportAccountsTransportKind = "dingtalk" | "feishu" | "qq" | "telegram" | "wecom" | "weixin" | "whatsapp" | "whatsapp_unofficial";
 
 export type TransportAddressesAddressType = "bot" | "system" | "user";
 
-export type TransportAddressesTransportKind = "dingtalk" | "feishu" | "qq" | "wecom" | "weixin";
+export type TransportAddressesTransportKind = "dingtalk" | "feishu" | "qq" | "telegram" | "wecom" | "weixin" | "whatsapp" | "whatsapp_unofficial";
 
 export type TransportEndpointsEndpointType = "direct" | "group";
 
@@ -329,7 +329,7 @@ export type TransportMessageLinksDeliveryStatus = "failed" | "pending" | "sent" 
 
 export type TransportMessageLinksDirection = "inbound" | "outbound";
 
-export type TransportMessageLinksTransportKind = "dingtalk" | "feishu" | "qq" | "wecom" | "weixin";
+export type TransportMessageLinksTransportKind = "dingtalk" | "feishu" | "qq" | "telegram" | "wecom" | "weixin" | "whatsapp" | "whatsapp_unofficial";
 
 export type TurnsStatus = "cancelled" | "completed" | "failed" | "running";
 
@@ -1867,7 +1867,7 @@ export interface ModelBindingVersions {
 
 export interface ModelGroupGrants {
   createdAt: Generated<Date>;
-  grantedByWorkspaceMemberId: string | null;
+  createdByWorkspaceMemberId: string | null;
   groupId: string;
   id: Generated<string>;
   reason: string | null;
@@ -1878,7 +1878,7 @@ export interface ModelGroupGrants {
 
 export interface ModelGroupGrantsLive {
   createdAt: Date | null;
-  grantedByWorkspaceMemberId: string | null;
+  createdByWorkspaceMemberId: string | null;
   groupId: string | null;
   id: string | null;
   reason: string | null;
@@ -2194,7 +2194,7 @@ export interface RemoteAgentConversationViews {
 
 export interface RemoteAgentGroupTaskGrants {
   createdAt: Generated<Date>;
-  grantedByWorkspaceMemberId: string | null;
+  createdByWorkspaceMemberId: string | null;
   remoteAgentId: string;
   updatedAt: Generated<Date>;
   workspaceMemberId: string;

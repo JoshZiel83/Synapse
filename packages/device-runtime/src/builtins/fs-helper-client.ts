@@ -204,7 +204,7 @@ export function createFsHelperClient(
   let handle: SidecarHandle | null = null
   let stderrTail = ""
   let stopped = false
-  let history: RestartHistory = { lastRestartAt: null, parked: false }
+  const history: RestartHistory = { lastRestartAt: null, parked: false }
   let helperMissing = false
   // Handles that have completed the fs.hello handshake. A WeakSet (not a bool)
   // so a respawned handle is naturally treated as un-handshaked — the old

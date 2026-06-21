@@ -36,12 +36,12 @@ export function readCodexThreadResult(
 ): { threadId: string | undefined; model: string | undefined } {
   const record = asRecord(result)
   const thread = asRecord(record.thread)
-  const threadId =
-    typeof thread.id === "string"
-      ? thread.id
-      : typeof thread.threadId === "string"
-        ? thread.threadId
-        : fallbackThreadId
+  const resolveThreadId = (): string | undefined => {
+    if (typeof thread.id === "string") return thread.id
+    if (typeof thread.threadId === "string") return thread.threadId
+    return fallbackThreadId
+  }
+  const threadId = resolveThreadId()
   return {
     threadId,
     model: typeof record.model === "string" ? record.model : undefined,

@@ -39,7 +39,7 @@ export type WorkspaceMemberViewRow = Pick<
   "id" | "workspaceId" | "userId" | "trustLevel" | "joinedAt"
 > & {
   ownerId?: string | null
-  accessKeys?: string[] | null
+  accessKeys?: WorkspaceAccessKey[] | null
 }
 
 export type ActorRecord = Omit<TableRow<"actors">, "config" | "specialties"> & {

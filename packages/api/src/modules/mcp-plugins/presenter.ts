@@ -96,7 +96,7 @@ export function presentInstallationAccessGrant(
     permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.USE],
     status: mount.status,
     source: mount.source,
-    grantedByWorkspaceMemberId: mount.createdByWorkspaceMemberId || undefined,
+    createdByWorkspaceMemberId: mount.createdByWorkspaceMemberId || undefined,
     reason: mount.reason || undefined,
     conversationTypeMaskOverride: mount.conversationTypeMaskOverride ?? null,
     effectiveConversationTypeMask,
@@ -362,6 +362,15 @@ function isSecretConfigField(
   )
 }
 
+function maskSecretValue(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined
+  if (isEncrypted(value)) return "••••configured"
+  if (value.length > 4) {
+    return `${"•".repeat(Math.max(4, value.length - 4))}${value.slice(-4)}`
+  }
+  return "••••"
+}
+
 function sanitizeInstallationConfig(
   installation: { configData: Record<string, unknown>; updatedAt: Date },
   configSchema: Record<string, unknown>,
@@ -416,14 +425,7 @@ function sanitizeInstallationConfig(
     }
 
     if (isSecretConfigField(field, schemaProperties, key)) {
-      const masked =
-        typeof value === "string"
-          ? isEncrypted(value)
-            ? "••••configured"
-            : value.length > 4
-              ? `${"•".repeat(Math.max(4, value.length - 4))}${value.slice(-4)}`
-              : "••••"
-          : undefined
+      const masked = maskSecretValue(value)
       configState.push({
         key,
         isConfigured: value !== undefined && value !== null && value !== "",

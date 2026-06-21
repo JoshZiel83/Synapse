@@ -184,16 +184,21 @@ export const RuntimeAuthorizationGrantSpecSchema = z
     cua: RuntimeCuaPolicySchema.optional(),
   })
   .superRefine((spec, ctx) => {
-    const branch =
-      spec.capability === "filesystem"
-        ? spec.filesystem
-        : spec.capability === "browser"
-          ? spec.browser
-          : spec.capability === "commandline"
-            ? spec.commandline
-            : spec.capability === "cua"
-              ? spec.cua
-              : undefined
+    const selectBranch = () => {
+      switch (spec.capability) {
+        case "filesystem":
+          return spec.filesystem
+        case "browser":
+          return spec.browser
+        case "commandline":
+          return spec.commandline
+        case "cua":
+          return spec.cua
+        default:
+          return undefined
+      }
+    }
+    const branch = selectBranch()
     if (!branch) {
       ctx.addIssue({
         code: "custom",

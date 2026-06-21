@@ -59,6 +59,7 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { API_BASE, api, ApiError } from "@/lib/api"
+import type { WhatsappUnofficialLoginSession } from "@/lib/api"
 
 import { createLogger } from "@/lib/client-logger"
 
@@ -149,6 +150,36 @@ type QqFormState = TransportAccountOwnerFormState & {
   configuredUrlDomains: string
 }
 
+type TelegramFormState = TransportAccountOwnerFormState & {
+  displayName: string
+  connectionMode: TransportConnectionMode
+  botToken: string
+  /** Required only for webhook mode. */
+  webhookSecretToken: string
+  apiRoot: string
+}
+
+type WhatsappFormState = {
+  // WhatsApp Cloud API only accepts owner scope (no inbound-actor fields).
+  ownerScope: TransportAccountOwnerScope
+  ownerWorkspaceMemberId: string
+  displayName: string
+  phoneNumberId: string
+  wabaId: string
+  accessToken: string
+  appSecret: string
+  appId: string
+  webhookVerifyToken: string
+  graphApiVersion: string
+}
+
+type WhatsappUnofficialFormState = TransportAccountOwnerFormState & {
+  displayName: string
+  /** "qr" → QR scan login; "pairing" → pairing-code via phone number. */
+  loginMethod: "qr" | "pairing"
+  phoneNumberE164: string
+}
+
 type WorkspaceDirectoryMember = {
   id: string
   userId: string
@@ -237,6 +268,57 @@ const EMPTY_QQ_FORM: QqFormState = {
   configuredUrlDomains: "",
 }
 
+const EMPTY_TELEGRAM_FORM: TelegramFormState = {
+  displayName: "",
+  connectionMode: "long_connection",
+  botToken: "",
+  webhookSecretToken: "",
+  apiRoot: "",
+  ownerScope: "workspace",
+  ownerWorkspaceMemberId: "",
+  inboundActorMode: "none",
+  inboundActorId: "",
+}
+
+const EMPTY_WHATSAPP_FORM: WhatsappFormState = {
+  ownerScope: "workspace",
+  ownerWorkspaceMemberId: "",
+  displayName: "",
+  phoneNumberId: "",
+  wabaId: "",
+  accessToken: "",
+  appSecret: "",
+  appId: "",
+  webhookVerifyToken: "",
+  graphApiVersion: "v23.0",
+}
+
+const EMPTY_WHATSAPP_UNOFFICIAL_FORM: WhatsappUnofficialFormState = {
+  displayName: "",
+  loginMethod: "qr",
+  phoneNumberE164: "",
+  ownerScope: "workspace",
+  ownerWorkspaceMemberId: "",
+  inboundActorMode: "none",
+  inboundActorId: "",
+}
+
+/**
+ * Statuses that mean the whatsapp_unofficial login session is still in
+ * progress and should keep being polled. The backend status strings come
+ * straight from the Baileys login machine (qr_pending / pairing_pending /
+ * connecting / ...); a session is considered "settled" once it has a
+ * transportAccountId (linked) or carries an errorMessage / has expired.
+ */
+function isWhatsappUnofficialPollingStatus(
+  session: { transportAccountId?: string; errorMessage?: string } | null
+): boolean {
+  if (!session) return false
+  if (session.transportAccountId) return false
+  if (session.errorMessage) return false
+  return true
+}
+
 function prettyTransportAccountOwnerScope(scope: TransportAccountOwnerScope) {
   return scope === MODEL_GROUP_GRANT_SCOPE.WORKSPACE
     ? "Workspace-owned"
@@ -275,7 +357,7 @@ function prettySessionInboundActorMode(
   }
 }
 
-function formatDateTime(value?: string) {
+function formatDateTime(value?: string | number) {
   if (!value) return "Never"
   try {
     return new Date(value).toLocaleString()
@@ -748,6 +830,32 @@ export default function ImPage() {
   >(null)
   const [creatingDingtalk, setCreatingDingtalk] = useState(false)
   const [creatingDingtalkManual, setCreatingDingtalkManual] = useState(false)
+  const [telegramForm, setTelegramForm] =
+    useState<TelegramFormState>(EMPTY_TELEGRAM_FORM)
+  const [creatingTelegram, setCreatingTelegram] = useState(false)
+  const [whatsappForm, setWhatsappForm] =
+    useState<WhatsappFormState>(EMPTY_WHATSAPP_FORM)
+  const [creatingWhatsapp, setCreatingWhatsapp] = useState(false)
+  // After a WhatsApp Cloud account is created, surface the webhook callback
+  // URL + verify token the operator must register in the Meta App dashboard.
+  const [whatsappWebhookInfo, setWhatsappWebhookInfo] = useState<{
+    callbackUrl: string
+    verifyToken: string
+  } | null>(null)
+  const [whatsappUnofficialForm, setWhatsappUnofficialForm] =
+    useState<WhatsappUnofficialFormState>(EMPTY_WHATSAPP_UNOFFICIAL_FORM)
+  const [startingWhatsappUnofficial, setStartingWhatsappUnofficial] =
+    useState(false)
+  const [whatsappUnofficialSession, setWhatsappUnofficialSession] =
+    useState<WhatsappUnofficialLoginSession | null>(null)
+  // Per-account operator kill-switch (session-guard) state for
+  // whatsapp_unofficial rows. Keyed by accountId.
+  const [whatsappGuardState, setWhatsappGuardState] = useState<
+    Record<string, { paused: boolean; remainingMs: number }>
+  >({})
+  const [togglingGuardAccountId, setTogglingGuardAccountId] = useState<
+    string | null
+  >(null)
 
   const sortedWorkspaceMembers = useMemo(
     () =>
@@ -1116,6 +1224,70 @@ export default function ImPage() {
     }
   }, [workspaceId, dingtalkSession])
 
+  // Poll the whatsapp_unofficial (Baileys) login session until it links
+  // (carries transportAccountId) or settles (errorMessage / expiry). Mirrors
+  // the weixin QR poll loop but the session shape already carries a ready
+  // qrDataUrl so no client-side QR rasterization is needed.
+  useEffect(() => {
+    if (!workspaceId || !whatsappUnofficialSession) return
+    const activeWorkspaceId = workspaceId
+    const activeSessionId = whatsappUnofficialSession.sessionId
+    if (!isWhatsappUnofficialPollingStatus(whatsappUnofficialSession)) {
+      if (whatsappUnofficialSession.transportAccountId) {
+        void loadData(true)
+      }
+      return
+    }
+
+    let cancelled = false
+
+    async function poll() {
+      try {
+        const result = await api.pollWhatsappUnofficialLogin(
+          activeWorkspaceId,
+          activeSessionId
+        )
+        if (cancelled) return
+        const next = result?.session || null
+        setWhatsappUnofficialSession(next)
+        if (next?.transportAccountId) {
+          toast.success("WhatsApp account linked")
+          await loadData(true)
+          return
+        }
+        if (next?.errorMessage) {
+          return
+        }
+      } catch (pollError) {
+        if (cancelled) return
+        clientLog.error(
+          "Failed to poll WhatsApp unofficial login session:",
+          pollError
+        )
+        setError(
+          pollError instanceof Error
+            ? pollError.message
+            : "Failed to poll WhatsApp login session"
+        )
+        return
+      }
+
+      if (!cancelled) {
+        setTimeout(() => {
+          if (!cancelled) {
+            void poll()
+          }
+        }, 2000)
+      }
+    }
+
+    void poll()
+
+    return () => {
+      cancelled = true
+    }
+  }, [workspaceId, whatsappUnofficialSession])
+
   async function handleCreateFeishuAccount() {
     if (!workspaceId) return
     setCreatingFeishu(true)
@@ -1355,6 +1527,288 @@ export default function ImPage() {
       )
     } finally {
       setCreatingQq(false)
+    }
+  }
+
+  async function handleCreateTelegramAccount() {
+    if (!workspaceId) return
+    setCreatingTelegram(true)
+    setError(null)
+    if (!telegramForm.botToken.trim()) {
+      setError("Bot token is required for Telegram accounts.")
+      setCreatingTelegram(false)
+      return
+    }
+    if (
+      telegramForm.connectionMode === "webhook" &&
+      !telegramForm.webhookSecretToken.trim()
+    ) {
+      setError("Webhook secret token is required for webhook mode.")
+      setCreatingTelegram(false)
+      return
+    }
+    if (
+      telegramForm.ownerScope === "workspace_member" &&
+      !telegramForm.ownerWorkspaceMemberId
+    ) {
+      setError("Select a workspace member owner for the Telegram account.")
+      setCreatingTelegram(false)
+      return
+    }
+    if (
+      telegramForm.inboundActorMode === "specified_actor" &&
+      !telegramForm.inboundActorId
+    ) {
+      setError("Select an actor for inbound routing.")
+      setCreatingTelegram(false)
+      return
+    }
+    try {
+      const result = await api.createTelegramTransportAccount(workspaceId, {
+        displayName: telegramForm.displayName.trim() || "Telegram Bot",
+        connectionMode: telegramForm.connectionMode,
+        botToken: telegramForm.botToken.trim(),
+        webhookSecretToken:
+          telegramForm.connectionMode === "webhook"
+            ? telegramForm.webhookSecretToken.trim()
+            : undefined,
+        apiRoot: telegramForm.apiRoot.trim() || undefined,
+        ownerScope: telegramForm.ownerScope,
+        ownerWorkspaceMemberId:
+          telegramForm.ownerScope === "workspace_member"
+            ? telegramForm.ownerWorkspaceMemberId
+            : null,
+        inboundActorMode: telegramForm.inboundActorMode,
+        inboundActorId:
+          telegramForm.inboundActorMode === "specified_actor"
+            ? telegramForm.inboundActorId
+            : null,
+      })
+      setTelegramForm((current) => ({
+        ...EMPTY_TELEGRAM_FORM,
+        connectionMode: current.connectionMode,
+        ownerScope: current.ownerScope,
+        ownerWorkspaceMemberId:
+          current.ownerScope === "workspace_member"
+            ? current.ownerWorkspaceMemberId
+            : "",
+        inboundActorMode:
+          current.ownerScope === "workspace_member"
+            ? current.inboundActorMode
+            : current.inboundActorMode === "follow_owner_chief_actor"
+              ? "none"
+              : current.inboundActorMode,
+        inboundActorId:
+          current.inboundActorMode === "specified_actor"
+            ? current.inboundActorId
+            : "",
+      }))
+      await loadData(true)
+      if (result?.account?.connectionMode === "webhook") {
+        toast.success(
+          "Telegram account created. Webhook registered with BotFather token."
+        )
+      } else {
+        toast.success("Telegram account created")
+      }
+    } catch (createError) {
+      clientLog.error("Failed to create Telegram account:", createError)
+      setError(
+        createError instanceof Error
+          ? createError.message
+          : "Failed to create Telegram account"
+      )
+    } finally {
+      setCreatingTelegram(false)
+    }
+  }
+
+  async function handleCreateWhatsappAccount() {
+    if (!workspaceId) return
+    setCreatingWhatsapp(true)
+    setError(null)
+    const required: Array<[keyof WhatsappFormState, string]> = [
+      ["phoneNumberId", "Phone number ID"],
+      ["wabaId", "WABA ID"],
+      ["accessToken", "Access token"],
+      ["appSecret", "App secret"],
+      ["appId", "App ID"],
+      ["webhookVerifyToken", "Webhook verify token"],
+    ]
+    const missing = required.find(([key]) => !whatsappForm[key].trim())
+    if (missing) {
+      setError(`${missing[1]} is required for WhatsApp Cloud accounts.`)
+      setCreatingWhatsapp(false)
+      return
+    }
+    if (
+      whatsappForm.ownerScope === "workspace_member" &&
+      !whatsappForm.ownerWorkspaceMemberId
+    ) {
+      setError("Select a workspace member owner for the WhatsApp account.")
+      setCreatingWhatsapp(false)
+      return
+    }
+    try {
+      const result = await api.createWhatsappTransportAccount(workspaceId, {
+        displayName: whatsappForm.displayName.trim() || "WhatsApp Cloud",
+        phoneNumberId: whatsappForm.phoneNumberId.trim(),
+        wabaId: whatsappForm.wabaId.trim(),
+        accessToken: whatsappForm.accessToken.trim(),
+        appSecret: whatsappForm.appSecret.trim(),
+        appId: whatsappForm.appId.trim(),
+        webhookVerifyToken: whatsappForm.webhookVerifyToken.trim(),
+        graphApiVersion: whatsappForm.graphApiVersion.trim() || undefined,
+        ownerScope: whatsappForm.ownerScope,
+        ownerWorkspaceMemberId:
+          whatsappForm.ownerScope === "workspace_member"
+            ? whatsappForm.ownerWorkspaceMemberId
+            : null,
+      })
+      // Surface the webhook URL + verify token the operator must register in
+      // the Meta App dashboard. The webhook URL convention matches
+      // buildWebhookUrl (/api/v1/im/webhooks/whatsapp/:accountId).
+      if (result?.account) {
+        setWhatsappWebhookInfo({
+          callbackUrl: buildWebhookUrl(result.account),
+          verifyToken: whatsappForm.webhookVerifyToken.trim(),
+        })
+      }
+      setWhatsappForm((current) => ({
+        ...EMPTY_WHATSAPP_FORM,
+        ownerScope: current.ownerScope,
+        ownerWorkspaceMemberId:
+          current.ownerScope === "workspace_member"
+            ? current.ownerWorkspaceMemberId
+            : "",
+      }))
+      await loadData(true)
+      toast.success(
+        "WhatsApp account created. Configure the Meta webhook next."
+      )
+    } catch (createError) {
+      clientLog.error("Failed to create WhatsApp account:", createError)
+      setError(
+        createError instanceof Error
+          ? createError.message
+          : "Failed to create WhatsApp account"
+      )
+    } finally {
+      setCreatingWhatsapp(false)
+    }
+  }
+
+  async function handleStartWhatsappUnofficialLogin() {
+    if (!workspaceId) return
+    setStartingWhatsappUnofficial(true)
+    setError(null)
+    if (
+      whatsappUnofficialForm.ownerScope === "workspace_member" &&
+      !whatsappUnofficialForm.ownerWorkspaceMemberId
+    ) {
+      setError("Select a workspace member owner for the WhatsApp account.")
+      setStartingWhatsappUnofficial(false)
+      return
+    }
+    if (
+      whatsappUnofficialForm.inboundActorMode === "specified_actor" &&
+      !whatsappUnofficialForm.inboundActorId
+    ) {
+      setError("Select an actor for inbound routing.")
+      setStartingWhatsappUnofficial(false)
+      return
+    }
+    if (
+      whatsappUnofficialForm.loginMethod === "pairing" &&
+      !whatsappUnofficialForm.phoneNumberE164.trim()
+    ) {
+      setError("Enter a phone number for pairing-code login.")
+      setStartingWhatsappUnofficial(false)
+      return
+    }
+    try {
+      const result = await api.startWhatsappUnofficialLogin(workspaceId, {
+        displayName: whatsappUnofficialForm.displayName.trim() || undefined,
+        phoneNumberE164:
+          whatsappUnofficialForm.loginMethod === "pairing"
+            ? whatsappUnofficialForm.phoneNumberE164.trim()
+            : undefined,
+        ownerScope: whatsappUnofficialForm.ownerScope,
+        ownerWorkspaceMemberId:
+          whatsappUnofficialForm.ownerScope === "workspace_member"
+            ? whatsappUnofficialForm.ownerWorkspaceMemberId
+            : null,
+        inboundActorMode: whatsappUnofficialForm.inboundActorMode,
+        inboundActorId:
+          whatsappUnofficialForm.inboundActorMode === "specified_actor"
+            ? whatsappUnofficialForm.inboundActorId
+            : null,
+      })
+      setWhatsappUnofficialSession(result?.session || null)
+      toast.success(
+        whatsappUnofficialForm.loginMethod === "pairing"
+          ? "Pairing code ready"
+          : "WhatsApp QR code ready"
+      )
+    } catch (createError) {
+      clientLog.error("Failed to start WhatsApp unofficial login:", createError)
+      setError(
+        createError instanceof Error
+          ? createError.message
+          : "Failed to start WhatsApp login session"
+      )
+    } finally {
+      setStartingWhatsappUnofficial(false)
+    }
+  }
+
+  async function handleCancelWhatsappUnofficialLogin() {
+    if (!workspaceId || !whatsappUnofficialSession) return
+    const sessionId = whatsappUnofficialSession.sessionId
+    setWhatsappUnofficialSession(null)
+    try {
+      await api.cancelWhatsappUnofficialLogin(workspaceId, sessionId)
+    } catch (cancelError) {
+      clientLog.error(
+        "Failed to cancel WhatsApp unofficial login:",
+        cancelError
+      )
+    }
+  }
+
+  async function handleToggleWhatsappGuard(
+    account: TransportAccountSummary,
+    paused: boolean
+  ) {
+    if (!workspaceId) return
+    setTogglingGuardAccountId(account.id)
+    setError(null)
+    try {
+      const result = await api.toggleWhatsappUnofficialSessionGuard(
+        workspaceId,
+        { accountId: account.id, paused }
+      )
+      setWhatsappGuardState((current) => ({
+        ...current,
+        [account.id]: {
+          paused: result.paused,
+          remainingMs: result.remainingMs,
+        },
+      }))
+      toast.success(
+        result.paused
+          ? "Session paused (operator kill-switch engaged)"
+          : "Session resumed"
+      )
+    } catch (guardError) {
+      clientLog.error("Failed to toggle WhatsApp session guard:", guardError)
+      setError(
+        guardError instanceof Error
+          ? guardError.message
+          : "Failed to toggle session guard"
+      )
+    } finally {
+      setTogglingGuardAccountId(null)
     }
   }
 
@@ -1817,11 +2271,12 @@ export default function ImPage() {
             <div>
               <CardTitle className="text-2xl">IM</CardTitle>
               <CardDescription className="mt-1 max-w-3xl">
-                Connect Feishu, WeChat, and WeCom as shared workspace accounts
-                or bind the login to a specific workspace member. Each external
-                direct chat or group chat still creates its own workspace
-                conversation automatically. Session routing and address
-                ownership mapping are managed here, not in the chat page.
+                Connect Feishu, WeChat, WeCom, DingTalk, QQ, Telegram, and
+                WhatsApp as shared workspace accounts or bind the login to a
+                specific workspace member. Each external direct chat or group
+                chat still creates its own workspace conversation automatically.
+                Session routing and address ownership mapping are managed here,
+                not in the chat page.
               </CardDescription>
             </div>
             <Button
@@ -2785,6 +3240,604 @@ export default function ImPage() {
 
       <Card>
         <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Bot className="size-4" />
+            Add Telegram Bot
+          </CardTitle>
+          <CardDescription>
+            Connect a Telegram bot via a BotFather token. Long connection
+            (getUpdates long-poll) needs no public URL; webhook mode registers a
+            callback with a secret token. Synapse probes the token with getMe on
+            create.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="telegram-display-name">Display name</Label>
+              <Input
+                id="telegram-display-name"
+                value={telegramForm.displayName}
+                onChange={(event) =>
+                  setTelegramForm((current) => ({
+                    ...current,
+                    displayName: event.target.value,
+                  }))
+                }
+                placeholder="Telegram Support Bot"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="telegram-connection-mode">Connection mode</Label>
+              <Select
+                value={telegramForm.connectionMode}
+                onValueChange={(value) =>
+                  setTelegramForm((current) => ({
+                    ...current,
+                    connectionMode: value as TransportConnectionMode,
+                  }))
+                }
+              >
+                <SelectTrigger id="telegram-connection-mode">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="long_connection">
+                    Long connection (recommended)
+                  </SelectItem>
+                  <SelectItem value="webhook">Webhook</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="telegram-bot-token">Bot token</Label>
+            <Input
+              id="telegram-bot-token"
+              type="password"
+              value={telegramForm.botToken}
+              onChange={(event) =>
+                setTelegramForm((current) => ({
+                  ...current,
+                  botToken: event.target.value,
+                }))
+              }
+              placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+            />
+            <p className="text-xs text-muted-foreground">
+              The token issued by @BotFather. Validated live with getMe on
+              create.
+            </p>
+          </div>
+
+          {telegramForm.connectionMode === "webhook" ? (
+            <div className="space-y-2">
+              <Label htmlFor="telegram-webhook-secret">
+                Webhook secret token
+              </Label>
+              <Input
+                id="telegram-webhook-secret"
+                type="password"
+                value={telegramForm.webhookSecretToken}
+                onChange={(event) =>
+                  setTelegramForm((current) => ({
+                    ...current,
+                    webhookSecretToken: event.target.value,
+                  }))
+                }
+                placeholder="Required for webhook mode"
+              />
+              <p className="text-xs text-muted-foreground">
+                Sent as the X-Telegram-Bot-Api-Secret-Token header. Synapse
+                registers the webhook for you with setWebhook.
+              </p>
+            </div>
+          ) : null}
+
+          <div className="space-y-2">
+            <Label htmlFor="telegram-api-root">API root (optional)</Label>
+            <Input
+              id="telegram-api-root"
+              value={telegramForm.apiRoot}
+              onChange={(event) =>
+                setTelegramForm((current) => ({
+                  ...current,
+                  apiRoot: event.target.value,
+                }))
+              }
+              placeholder="https://api.telegram.org"
+            />
+            <p className="text-xs text-muted-foreground">
+              Override only for a self-hosted Bot API server. Leave empty for
+              the public Telegram API.
+            </p>
+          </div>
+
+          <TransportAccountOwnerFields
+            idPrefix="telegram"
+            ownerScope={telegramForm.ownerScope}
+            ownerWorkspaceMemberId={telegramForm.ownerWorkspaceMemberId}
+            workspaceMembers={sortedWorkspaceMembers}
+            onOwnerScopeChange={(value) =>
+              setTelegramForm((current) => ({
+                ...current,
+                ownerScope: value,
+                ownerWorkspaceMemberId:
+                  value === "workspace" ? "" : current.ownerWorkspaceMemberId,
+                inboundActorMode:
+                  value === "workspace" &&
+                  current.inboundActorMode === "follow_owner_chief_actor"
+                    ? "none"
+                    : current.inboundActorMode,
+              }))
+            }
+            onOwnerWorkspaceMemberIdChange={(value) =>
+              setTelegramForm((current) => ({
+                ...current,
+                ownerWorkspaceMemberId: value,
+              }))
+            }
+          />
+
+          <TransportAccountInboundActorFields
+            idPrefix="telegram"
+            ownerScope={telegramForm.ownerScope}
+            inboundActorMode={telegramForm.inboundActorMode}
+            inboundActorId={telegramForm.inboundActorId}
+            actors={actorOptions}
+            onInboundActorModeChange={(value) =>
+              setTelegramForm((current) => ({
+                ...current,
+                inboundActorMode: value,
+                inboundActorId:
+                  value === "specified_actor" ? current.inboundActorId : "",
+              }))
+            }
+            onInboundActorIdChange={(value) =>
+              setTelegramForm((current) => ({
+                ...current,
+                inboundActorId: value,
+              }))
+            }
+          />
+
+          <div className="flex justify-end">
+            <Button
+              onClick={() => void handleCreateTelegramAccount()}
+              disabled={creatingTelegram}
+            >
+              {creatingTelegram ? "Creating..." : "Create Telegram account"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Bot className="size-4" />
+            Add WhatsApp (Cloud API)
+          </CardTitle>
+          <CardDescription>
+            Connect an official WhatsApp Business Cloud number. Webhook-only.
+            After creating the account, register the callback URL + verify token
+            shown below in the Meta App dashboard (WhatsApp &gt; Configuration).
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="whatsapp-display-name">Display name</Label>
+              <Input
+                id="whatsapp-display-name"
+                value={whatsappForm.displayName}
+                onChange={(event) =>
+                  setWhatsappForm((current) => ({
+                    ...current,
+                    displayName: event.target.value,
+                  }))
+                }
+                placeholder="WhatsApp Cloud"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="whatsapp-graph-version">Graph API version</Label>
+              <Input
+                id="whatsapp-graph-version"
+                value={whatsappForm.graphApiVersion}
+                onChange={(event) =>
+                  setWhatsappForm((current) => ({
+                    ...current,
+                    graphApiVersion: event.target.value,
+                  }))
+                }
+                placeholder="v23.0"
+              />
+            </div>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="whatsapp-phone-number-id">Phone number ID</Label>
+              <Input
+                id="whatsapp-phone-number-id"
+                value={whatsappForm.phoneNumberId}
+                onChange={(event) =>
+                  setWhatsappForm((current) => ({
+                    ...current,
+                    phoneNumberId: event.target.value,
+                  }))
+                }
+                placeholder="1234567890"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="whatsapp-waba-id">WABA ID</Label>
+              <Input
+                id="whatsapp-waba-id"
+                value={whatsappForm.wabaId}
+                onChange={(event) =>
+                  setWhatsappForm((current) => ({
+                    ...current,
+                    wabaId: event.target.value,
+                  }))
+                }
+                placeholder="WhatsApp Business Account ID"
+              />
+            </div>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="whatsapp-app-id">App ID</Label>
+              <Input
+                id="whatsapp-app-id"
+                value={whatsappForm.appId}
+                onChange={(event) =>
+                  setWhatsappForm((current) => ({
+                    ...current,
+                    appId: event.target.value,
+                  }))
+                }
+                placeholder="Meta App ID"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="whatsapp-app-secret">App secret</Label>
+              <Input
+                id="whatsapp-app-secret"
+                type="password"
+                value={whatsappForm.appSecret}
+                onChange={(event) =>
+                  setWhatsappForm((current) => ({
+                    ...current,
+                    appSecret: event.target.value,
+                  }))
+                }
+                placeholder="Meta App secret"
+              />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="whatsapp-access-token">Access token</Label>
+            <Input
+              id="whatsapp-access-token"
+              type="password"
+              value={whatsappForm.accessToken}
+              onChange={(event) =>
+                setWhatsappForm((current) => ({
+                  ...current,
+                  accessToken: event.target.value,
+                }))
+              }
+              placeholder="System-user permanent access token"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="whatsapp-verify-token">Webhook verify token</Label>
+            <Input
+              id="whatsapp-verify-token"
+              value={whatsappForm.webhookVerifyToken}
+              onChange={(event) =>
+                setWhatsappForm((current) => ({
+                  ...current,
+                  webhookVerifyToken: event.target.value,
+                }))
+              }
+              placeholder="A token you choose; Meta echoes it on GET verify"
+            />
+            <p className="text-xs text-muted-foreground">
+              You choose this value. Enter the SAME token in the Meta webhook
+              configuration so the GET verification handshake succeeds.
+            </p>
+          </div>
+
+          <TransportAccountOwnerFields
+            idPrefix="whatsapp"
+            ownerScope={whatsappForm.ownerScope}
+            ownerWorkspaceMemberId={whatsappForm.ownerWorkspaceMemberId}
+            workspaceMembers={sortedWorkspaceMembers}
+            onOwnerScopeChange={(value) =>
+              setWhatsappForm((current) => ({
+                ...current,
+                ownerScope: value,
+                ownerWorkspaceMemberId:
+                  value === "workspace" ? "" : current.ownerWorkspaceMemberId,
+              }))
+            }
+            onOwnerWorkspaceMemberIdChange={(value) =>
+              setWhatsappForm((current) => ({
+                ...current,
+                ownerWorkspaceMemberId: value,
+              }))
+            }
+          />
+
+          {whatsappWebhookInfo ? (
+            <div className="space-y-2 rounded-2xl border border-dashed bg-muted/20 p-4">
+              <div className="text-sm font-medium text-foreground">
+                Configure the Meta webhook next
+              </div>
+              <p className="text-xs text-muted-foreground">
+                In the Meta App dashboard (WhatsApp &gt; Configuration) set the
+                callback URL and verify token below, then subscribe to the{" "}
+                <span className="font-mono">messages</span> field.
+              </p>
+              <div className="rounded-xl bg-background px-3 py-2 text-xs">
+                <div className="text-muted-foreground">Callback URL</div>
+                <div className="font-mono break-all text-foreground">
+                  {whatsappWebhookInfo.callbackUrl || "(set app.baseUrl)"}
+                </div>
+              </div>
+              <div className="rounded-xl bg-background px-3 py-2 text-xs">
+                <div className="text-muted-foreground">Verify token</div>
+                <div className="font-mono break-all text-foreground">
+                  {whatsappWebhookInfo.verifyToken}
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="flex justify-end">
+            <Button
+              onClick={() => void handleCreateWhatsappAccount()}
+              disabled={creatingWhatsapp}
+            >
+              {creatingWhatsapp ? "Creating..." : "Create WhatsApp account"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <ScanLine className="size-4" />
+            Connect WhatsApp (unofficial)
+          </CardTitle>
+          <CardDescription>
+            Link a personal WhatsApp account over an unofficial Baileys socket
+            by scanning a QR code or entering a pairing code. No Meta business
+            verification required.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2 rounded-2xl border border-amber-300 bg-amber-50/70 p-4 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+            <div className="text-sm font-semibold">
+              Unofficial connector — use at your own risk
+            </div>
+            <p className="text-xs">
+              This links a real WhatsApp account through an unofficial protocol
+              that is <strong>not sanctioned by WhatsApp/Meta</strong> and
+              violates the WhatsApp Terms of Service. The linked number can be{" "}
+              <strong>rate-limited, suspended, or permanently banned</strong> at
+              any time without warning. Do not use a primary/personal number,
+              keep automated send volume low, and engage the operator
+              kill-switch immediately if you suspect a protocol break. Synapse
+              cannot recover a banned account.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="whatsapp-unofficial-display-name">
+              Display name
+            </Label>
+            <Input
+              id="whatsapp-unofficial-display-name"
+              value={whatsappUnofficialForm.displayName}
+              onChange={(event) =>
+                setWhatsappUnofficialForm((current) => ({
+                  ...current,
+                  displayName: event.target.value,
+                }))
+              }
+              placeholder="WhatsApp Personal"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="whatsapp-unofficial-login-method">
+              Login method
+            </Label>
+            <Select
+              value={whatsappUnofficialForm.loginMethod}
+              onValueChange={(value) =>
+                setWhatsappUnofficialForm((current) => ({
+                  ...current,
+                  loginMethod: value as "qr" | "pairing",
+                }))
+              }
+            >
+              <SelectTrigger id="whatsapp-unofficial-login-method">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="qr">QR scan</SelectItem>
+                <SelectItem value="pairing">Pairing code (phone)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {whatsappUnofficialForm.loginMethod === "pairing" ? (
+            <div className="space-y-2">
+              <Label htmlFor="whatsapp-unofficial-phone">
+                Phone number (E.164)
+              </Label>
+              <Input
+                id="whatsapp-unofficial-phone"
+                value={whatsappUnofficialForm.phoneNumberE164}
+                onChange={(event) =>
+                  setWhatsappUnofficialForm((current) => ({
+                    ...current,
+                    phoneNumberE164: event.target.value,
+                  }))
+                }
+                placeholder="+14155552671"
+                inputMode="tel"
+              />
+            </div>
+          ) : null}
+
+          <TransportAccountOwnerFields
+            idPrefix="whatsapp-unofficial"
+            ownerScope={whatsappUnofficialForm.ownerScope}
+            ownerWorkspaceMemberId={
+              whatsappUnofficialForm.ownerWorkspaceMemberId
+            }
+            workspaceMembers={sortedWorkspaceMembers}
+            onOwnerScopeChange={(value) =>
+              setWhatsappUnofficialForm((current) => ({
+                ...current,
+                ownerScope: value,
+                ownerWorkspaceMemberId:
+                  value === "workspace" ? "" : current.ownerWorkspaceMemberId,
+                inboundActorMode:
+                  value === "workspace" &&
+                  current.inboundActorMode === "follow_owner_chief_actor"
+                    ? "none"
+                    : current.inboundActorMode,
+              }))
+            }
+            onOwnerWorkspaceMemberIdChange={(value) =>
+              setWhatsappUnofficialForm((current) => ({
+                ...current,
+                ownerWorkspaceMemberId: value,
+              }))
+            }
+          />
+
+          <TransportAccountInboundActorFields
+            idPrefix="whatsapp-unofficial"
+            ownerScope={whatsappUnofficialForm.ownerScope}
+            inboundActorMode={whatsappUnofficialForm.inboundActorMode}
+            inboundActorId={whatsappUnofficialForm.inboundActorId}
+            actors={actorOptions}
+            onInboundActorModeChange={(value) =>
+              setWhatsappUnofficialForm((current) => ({
+                ...current,
+                inboundActorMode: value,
+                inboundActorId:
+                  value === "specified_actor" ? current.inboundActorId : "",
+              }))
+            }
+            onInboundActorIdChange={(value) =>
+              setWhatsappUnofficialForm((current) => ({
+                ...current,
+                inboundActorId: value,
+              }))
+            }
+          />
+
+          <Button
+            className="w-full"
+            onClick={() => void handleStartWhatsappUnofficialLogin()}
+            disabled={startingWhatsappUnofficial}
+          >
+            {startingWhatsappUnofficial
+              ? "Starting..."
+              : whatsappUnofficialForm.loginMethod === "pairing"
+                ? "Get pairing code"
+                : "Generate WhatsApp QR"}
+          </Button>
+
+          {whatsappUnofficialSession ? (
+            <div className="space-y-3 rounded-2xl border bg-muted/20 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium text-foreground">
+                    Login session
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    Status: {whatsappUnofficialSession.status}
+                  </div>
+                </div>
+                <Badge variant="outline">
+                  {whatsappUnofficialSession.status}
+                </Badge>
+              </div>
+
+              {whatsappUnofficialSession.qrDataUrl ? (
+                <div className="overflow-hidden rounded-2xl border bg-white p-3">
+                  <Image
+                    src={whatsappUnofficialSession.qrDataUrl}
+                    alt="WhatsApp QR"
+                    width={288}
+                    height={288}
+                    unoptimized
+                    className="mx-auto max-h-72 w-full max-w-72 rounded-xl object-contain"
+                  />
+                </div>
+              ) : null}
+
+              {whatsappUnofficialSession.pairingCode ? (
+                <div className="rounded-xl bg-background px-3 py-2 text-sm">
+                  Pairing code:{" "}
+                  <span className="font-mono text-lg font-semibold tracking-widest">
+                    {whatsappUnofficialSession.pairingCode}
+                  </span>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    Enter this on your phone: WhatsApp &gt; Linked devices &gt;
+                    Link with phone number.
+                  </div>
+                </div>
+              ) : null}
+
+              {whatsappUnofficialSession.errorMessage ? (
+                <div className="text-xs text-destructive">
+                  {whatsappUnofficialSession.errorMessage}
+                </div>
+              ) : null}
+
+              <div className="text-xs text-muted-foreground">
+                Expires: {formatDateTime(whatsappUnofficialSession.expiresAt)}
+              </div>
+
+              {whatsappUnofficialSession.transportAccountId ? (
+                <div className="rounded-xl bg-background px-3 py-3 text-sm">
+                  Linked account ID:{" "}
+                  <span className="font-mono text-foreground">
+                    {whatsappUnofficialSession.transportAccountId}
+                  </span>
+                </div>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void handleCancelWhatsappUnofficialLogin()}
+                >
+                  Cancel login
+                </Button>
+              )}
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>Connected Accounts</CardTitle>
           <CardDescription>
             Accounts can be owned by the workspace or by a specific workspace
@@ -3019,6 +4072,42 @@ export default function ImPage() {
                           }
                           onSave={() => void handleSaveQqConfig(account)}
                         />
+                      ) : null}
+                      {account.transportKind === "whatsapp_unofficial" ? (
+                        <div className="space-y-2 rounded-2xl border border-dashed bg-muted/20 p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <div className="text-sm font-medium text-foreground">
+                                Operator kill-switch
+                              </div>
+                              <div className="text-xs text-muted-foreground">
+                                Pause this unofficial session immediately if you
+                                suspect a protocol break or ban risk. Outbound
+                                and inbound stop until resumed.
+                              </div>
+                            </div>
+                            <Switch
+                              checked={
+                                whatsappGuardState[account.id]?.paused ?? false
+                              }
+                              disabled={togglingGuardAccountId === account.id}
+                              onCheckedChange={(checked) =>
+                                void handleToggleWhatsappGuard(account, checked)
+                              }
+                            />
+                          </div>
+                          {whatsappGuardState[account.id]?.paused ? (
+                            <div className="text-xs text-amber-600 dark:text-amber-400">
+                              Session paused
+                              {whatsappGuardState[account.id].remainingMs > 0
+                                ? ` — auto-resumes in ~${Math.ceil(
+                                    whatsappGuardState[account.id].remainingMs /
+                                      1000
+                                  )}s`
+                                : ""}
+                            </div>
+                          ) : null}
+                        </div>
                       ) : null}
                       <div className="flex items-center justify-between gap-3">
                         <div className="space-y-1 text-xs text-muted-foreground">

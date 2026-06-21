@@ -67,7 +67,7 @@ async function insertWorkspaceMember(
 async function memberSubject(db: AnyDb, memberId: string): Promise<string> {
   return upsertAccessSubject(db, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId,
+    workspaceMemberId: memberId,
   })
 }
 

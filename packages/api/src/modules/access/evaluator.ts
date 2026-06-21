@@ -1485,7 +1485,7 @@ export async function hasMemorySpaceOwnerImplicitPermissionForTuple(
         : null,
     ownerWorkspaceMemberId:
       tuple.owner.kind === SUBJECT_KIND.WORKSPACE_MEMBER
-        ? tuple.owner.memberId
+        ? tuple.owner.workspaceMemberId
         : null,
     ownerConversationId:
       tuple.owner.kind === SUBJECT_KIND.CONVERSATION

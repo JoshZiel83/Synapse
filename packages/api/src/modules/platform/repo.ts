@@ -73,6 +73,10 @@ export async function listAccessBindings(): Promise<
       "u.email as userEmail",
       "u.avatarFileId",
     ])
+    // Only active bindings are live grants; revoked rows are tombstones and the
+    // mapped DTO drops `status`, so they must not leak in (matches every other
+    // read in this file + the platform_access_bindings_live view contract).
+    .where("pab.status", "=", "active")
     .orderBy("pab.accessKey", "asc")
     .orderBy("pab.createdAt", "asc")
     .execute()

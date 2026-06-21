@@ -231,7 +231,7 @@ export async function seedOfficialRuntimeActors(
     // and the creator of these official actor roots.
     const installerSubjectId = await upsertAccessSubjectOn(client, {
       kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-      memberId: workspaceMemberId,
+      workspaceMemberId: workspaceMemberId,
     })
 
     for (const refs of refsList) {

@@ -98,7 +98,7 @@ export const ModelGroupGrantViewSchema = z.strictObject({
   workspaceMemberId: z.string().nullable(),
   actorId: z.string().nullable(),
   status: z.enum(MODEL_GROUP_GRANT_STATUSES),
-  grantedByWorkspaceMemberId: z.string().nullable(),
+  createdByWorkspaceMemberId: z.string().nullable(),
   reason: z.string().nullable(),
   createdAt: IsoInstantStringSchema.nullable(),
   revokedAt: IsoInstantStringSchema.nullable(),

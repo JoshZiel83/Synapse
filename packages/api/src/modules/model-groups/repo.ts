@@ -505,7 +505,7 @@ export async function getModelGroupDetailRows(
         "mgg.createdAt",
         "mgg.revokedAt",
         "mgg.subjectId",
-        "mgg.grantedByWorkspaceMemberId",
+        "mgg.createdByWorkspaceMemberId",
         "mgs.kind as mgsKind",
         "mgs.workspaceId as mgsWorkspaceId",
         "mgs.workspaceMemberId as mgsWorkspaceMemberId",
@@ -654,7 +654,7 @@ export async function listModelGroupGrantDbRows(
       "mgg.createdAt",
       "mgg.revokedAt",
       "mgg.subjectId",
-      "mgg.grantedByWorkspaceMemberId",
+      "mgg.createdByWorkspaceMemberId",
       "mgs.kind as mgsKind",
       "mgs.workspaceId as mgsWorkspaceId",
       "mgs.workspaceMemberId as mgsWorkspaceMemberId",
@@ -1034,7 +1034,7 @@ export async function insertModelGroupWithDefaultGrant(params: {
     createdByWorkspaceMemberId: string | null
   }
   defaultGrantSubjectRef: SubjectRef
-  grantedByWorkspaceMemberId: string | null
+  createdByWorkspaceMemberId: string | null
 }): Promise<ModelGroupRow> {
   return await withDbTransaction(async (trx) => {
     if (params.clearDefault) {
@@ -1073,7 +1073,7 @@ export async function insertModelGroupWithDefaultGrant(params: {
         groupId: row.id,
         subjectId: subjectId,
         status: "active",
-        grantedByWorkspaceMemberId: params.grantedByWorkspaceMemberId || null,
+        createdByWorkspaceMemberId: params.createdByWorkspaceMemberId || null,
         reason: "default_group_scope",
       })
       .returningAll()
@@ -1295,7 +1295,7 @@ export async function softDeleteBinding(
 export async function insertModelGroupGrantAndReadBack(params: {
   groupId: string
   subjectRef: SubjectRef
-  grantedByWorkspaceMemberId: string | null
+  createdByWorkspaceMemberId: string | null
   reason: string | null
 }): Promise<ModelGroupGrantDbRow> {
   return await withDbTransaction(async (trx) => {
@@ -1306,7 +1306,7 @@ export async function insertModelGroupGrantAndReadBack(params: {
         groupId: params.groupId,
         subjectId: subjectId,
         status: "active",
-        grantedByWorkspaceMemberId: params.grantedByWorkspaceMemberId,
+        createdByWorkspaceMemberId: params.createdByWorkspaceMemberId,
         reason: params.reason,
       })
       .returning("id")
@@ -1323,7 +1323,7 @@ export async function insertModelGroupGrantAndReadBack(params: {
         "mgg.createdAt",
         "mgg.revokedAt",
         "mgg.subjectId",
-        "mgg.grantedByWorkspaceMemberId",
+        "mgg.createdByWorkspaceMemberId",
         "mgs.kind as mgsKind",
         "mgs.workspaceId as mgsWorkspaceId",
         "mgs.workspaceMemberId as mgsWorkspaceMemberId",

@@ -39,12 +39,14 @@ function makeFetchResponse(responseText: string, status = 200) {
     input: Parameters<typeof fetch>[0],
     init?: RequestInit
   ): Promise<Response> => {
-    const url =
-      typeof input === "string"
-        ? input
-        : input instanceof URL
-          ? input.toString()
-          : input.url
+    let url: string
+    if (typeof input === "string") {
+      url = input
+    } else if (input instanceof URL) {
+      url = input.toString()
+    } else {
+      url = input.url
+    }
     calls.push({
       url,
       body: JSON.parse(String(init?.body)),

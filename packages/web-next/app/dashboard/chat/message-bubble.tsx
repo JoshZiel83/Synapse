@@ -2012,7 +2012,7 @@ function FileBlockPreview({ blocks }: { blocks: FileRefBlock[] }) {
       </div>
 
       {/* Image lightbox */}
-      {expandedImage && (
+      {expandedImage ? (
         <div
           className="fixed inset-0 z-50 flex cursor-pointer items-center justify-center bg-black/80 p-4"
           onClick={() => setExpandedImage(null)}
@@ -2023,7 +2023,7 @@ function FileBlockPreview({ blocks }: { blocks: FileRefBlock[] }) {
             className="max-h-full max-w-full rounded-lg object-contain"
           />
         </div>
-      )}
+      ) : null}
     </>
   )
 }
@@ -2397,7 +2397,7 @@ function ExpandableImage({
         onClick={() => setExpanded(true)}
         {...props}
       />
-      {expanded && (
+      {expanded ? (
         <div
           className="fixed inset-0 z-50 flex cursor-pointer items-center justify-center bg-black/80 p-4"
           onClick={() => setExpanded(false)}
@@ -2408,7 +2408,7 @@ function ExpandableImage({
             className="max-h-full max-w-full rounded-lg object-contain"
           />
         </div>
-      )}
+      ) : null}
     </>
   )
 }
@@ -2444,7 +2444,7 @@ function ServerToolCallDisplay({ calls }: { calls: ServerToolCall[] }) {
         <span className="font-medium">{summary}</span>
       </button>
 
-      {expanded && (
+      {expanded ? (
         <div className="mt-2 space-y-2">
           {calls.map((call, i) => {
             const links = call.display?.resultLinks ?? call.results ?? []
@@ -2458,13 +2458,13 @@ function ServerToolCallDisplay({ calls }: { calls: ServerToolCall[] }) {
                   <span className="font-medium">
                     {call.display?.displayTitle ?? call.toolName ?? call.type}
                   </span>
-                  {call.display?.displayDetail && (
+                  {call.display?.displayDetail ? (
                     <span className="text-muted-foreground/60">
                       · {call.display.displayDetail}
                     </span>
-                  )}
+                  ) : null}
                 </div>
-                {links.length > 0 && (
+                {links.length > 0 ? (
                   <div className="mt-1.5 space-y-1">
                     {links.slice(0, 5).map((r, j) => (
                       <a
@@ -2479,22 +2479,22 @@ function ServerToolCallDisplay({ calls }: { calls: ServerToolCall[] }) {
                           <span className="text-foreground/60 group-hover/link:text-primary">
                             {r.title || r.url}
                           </span>
-                          {r.pageAge && (
+                          {r.pageAge ? (
                             <span className="ml-1 text-muted-foreground/40">
                               · {r.pageAge}
                             </span>
-                          )}
+                          ) : null}
                         </span>
                       </a>
                     ))}
-                    {links.length > 5 && (
+                    {links.length > 5 ? (
                       <span className="ml-4 text-[10px] text-muted-foreground/40">
                         +{links.length - 5} 更多结果
                       </span>
-                    )}
+                    ) : null}
                   </div>
-                )}
-                {call.url && links.length === 0 && (
+                ) : null}
+                {call.url && links.length === 0 ? (
                   <a
                     href={call.url}
                     target="_blank"
@@ -2503,12 +2503,12 @@ function ServerToolCallDisplay({ calls }: { calls: ServerToolCall[] }) {
                   >
                     {call.url}
                   </a>
-                )}
+                ) : null}
               </div>
             )
           })}
         </div>
-      )}
+      ) : null}
     </div>
   )
 }
@@ -2894,14 +2894,14 @@ export default function MessageBubble({
               {textContent}
             </TwemojiScope>
           </div>
-          {timestamp && (
+          {timestamp ? (
             <span className="mt-1 text-[10px] text-muted-foreground/50">
               {new Date(timestamp).toLocaleTimeString([], {
                 hour: "2-digit",
                 minute: "2-digit",
               })}
             </span>
-          )}
+          ) : null}
         </div>
       </div>
     )
@@ -3151,7 +3151,7 @@ export default function MessageBubble({
         <div
           className={`flex w-full max-w-[75%] min-w-0 flex-col ${isUser ? "items-end" : "items-start"}`}
         >
-          {!isUser && resolvedAuthorName && (
+          {!isUser && resolvedAuthorName ? (
             <div className="mb-1 ml-1 self-start text-xs text-muted-foreground/70">
               {authorMember && !isMobile ? (
                 <ChatParticipantHoverCard
@@ -3190,7 +3190,7 @@ export default function MessageBubble({
                 </span>
               ) : null}
             </div>
-          )}
+          ) : null}
           <div
             className={`flex w-full max-w-full min-w-0 items-end gap-2 ${isUser ? "justify-end" : "justify-start"}`}
           >
@@ -3230,25 +3230,27 @@ export default function MessageBubble({
               )}
 
               {/* Citation sources footer */}
-              {!task && hasCitations && <CitationFooter sources={sources} />}
+              {!task && hasCitations ? (
+                <CitationFooter sources={sources} />
+              ) : null}
 
               {/* Server tool calls (web_search / web_fetch) — inside the bubble */}
-              {!task && hasServerToolCalls && (
+              {!task && hasServerToolCalls ? (
                 <ServerToolCallDisplay calls={serverToolCalls} />
-              )}
+              ) : null}
             </div>
           </div>
           <div
             className={`mt-1 inline-flex max-w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-1 ${isUser ? "flex-row-reverse justify-start self-end" : "justify-start self-start"}`}
           >
-            {timestamp && (
+            {timestamp ? (
               <span className="text-[10px] text-muted-foreground/50">
                 {new Date(timestamp).toLocaleTimeString([], {
                   hour: "2-digit",
                   minute: "2-digit",
                 })}
               </span>
-            )}
+            ) : null}
             {canRetryModelError ? (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -3279,22 +3281,22 @@ export default function MessageBubble({
               transport={transport}
               transportDeliveries={transportDeliveries}
             />
-            {status === "sending" && (
+            {status === "sending" ? (
               <span className="text-[10px] text-muted-foreground/40">
                 Sending...
               </span>
-            )}
-            {status === "retrying" && (
+            ) : null}
+            {status === "retrying" ? (
               <span className="text-[10px] text-destructive/80">
                 Retrying...
               </span>
-            )}
-            {hasToolsUsed && !hasServerToolCalls && (
+            ) : null}
+            {hasToolsUsed && !hasServerToolCalls ? (
               <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground/50">
                 <Wrench className="h-2.5 w-2.5" />
                 {formatToolsUsed(toolsUsed)}
               </span>
-            )}
+            ) : null}
           </div>
         </div>
       </div>

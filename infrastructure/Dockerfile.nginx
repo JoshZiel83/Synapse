@@ -1,0 +1,102 @@
+# Custom, version-PINNED nginx ingress image:
+#   * nginx 1.31.2 (fixes the active HTTP/3 UAF CVE-2026-42530; we run h3).
+#   * ngx_brotli + zstd dynamic modules compiled against the EXACT nginx source
+#     with --with-compat (binary-compatible with the official 1.31.2 binary).
+#   * web's /_next/static baked in + RFC 9842 dcb/dcz + plain br/zst/gz variants
+#     generated at build time (gen-cdt.sh) so CDT serving needs no manual step.
+#
+# Build order matters: the web image must be built FIRST (this image COPYs its
+# .next/static). docker compose builds them; deploy does `build web` then
+# `build nginx`. See docs/logging-refactor/07-edge-compression-and-cdt-plan.md.
+# Uses only classic-builder-compatible features (ARG-before-FROM, multi-stage
+# COPY --from) so it builds with or without BuildKit.
+
+ARG NGINX_VERSION=1.31.2
+# The already-built web image to pull .next/static from (same repo/commit).
+# REQUIRED — docker-compose supplies it as <compose-project>-web:latest. A bare
+# `docker build` MUST pass --build-arg WEB_IMAGE=...; an empty value fails fast
+# at the FROM below rather than chasing a phantom default tag.
+ARG WEB_IMAGE
+
+FROM ${WEB_IMAGE} AS web
+
+# ── Compile brotli + zstd as DYNAMIC modules against the exact nginx source ──
+FROM nginx:${NGINX_VERSION} AS modules
+ARG NGINX_VERSION
+# Verified pins (do not float). brotli: google/ngx_brotli HEAD + brotli submodule
+# v1.1.0. zstd: eilandert's maintained tokers fork (has the 131072 truncation fix
+# via ZSTD_compressStream2 + module-order fix).
+ARG NGX_BROTLI_SHA=a71f9312c2deb28875acc7bacfdd5695a111aa53
+ARG ZSTD_MODULE_REPO=https://github.com/eilandert/zstd-nginx-module.git
+ARG ZSTD_MODULE_SHA=1ec9e33ee30ee98a81926e863deffe194c1b56b4
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        build-essential ca-certificates git wget cmake \
+        libpcre2-dev zlib1g-dev libssl-dev libzstd-dev; \
+    wget -q "https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz"; \
+    tar xf "nginx-${NGINX_VERSION}.tar.gz"; \
+    git clone https://github.com/google/ngx_brotli.git; \
+    git -C ngx_brotli checkout "${NGX_BROTLI_SHA}"; \
+    git -C ngx_brotli submodule update --init --recursive; \
+    # Upstream brotli dropped makefile support, so ngx_brotli's bundled lib must
+    # be cmake-built with -fPIC BEFORE `make modules` or the .so link fails.
+    # Subshell keeps the outer cwd unchanged regardless of the base WORKDIR.
+    ( cd ngx_brotli/deps/brotli && mkdir -p out && cd out && \
+      cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_C_FLAGS="-fPIC" -DCMAKE_INSTALL_PREFIX=./installed .. && \
+      cmake --build . --config Release --target brotlienc brotlidec brotlicommon ); \
+    git clone "${ZSTD_MODULE_REPO}" zstd-nginx-module; \
+    git -C zstd-nginx-module checkout "${ZSTD_MODULE_SHA}"; \
+    cd "nginx-${NGINX_VERSION}"; \
+    ./configure --with-compat \
+        --add-dynamic-module=../ngx_brotli \
+        --add-dynamic-module=../zstd-nginx-module; \
+    make -j"$(nproc)" modules; \
+    mkdir -p /modules; \
+    cp objs/ngx_http_brotli_filter_module.so \
+       objs/ngx_http_brotli_static_module.so \
+       objs/ngx_http_zstd_filter_module.so \
+       objs/ngx_http_zstd_static_module.so /modules/
+
+# ── Generate CDT (dcb/dcz) + plain precompressed variants from the web static ──
+FROM debian:trixie-slim AS cdt
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        brotli zstd openssl coreutils findutils bash gzip; \
+    rm -rf /var/lib/apt/lists/*
+COPY --from=web /app/packages/web-next/.next/static /web/_next/static
+COPY infrastructure/nginx/gen-cdt.sh /usr/local/bin/gen-cdt.sh
+RUN set -eux; chmod +x /usr/local/bin/gen-cdt.sh; \
+    /usr/local/bin/gen-cdt.sh /web /cdt-generated.conf
+
+# ── Final image ──
+FROM nginx:${NGINX_VERSION}
+# libzstd1: runtime lib for the zstd module. nginx-module-njs (version-matched
+# from the nginx.org repo already configured in the official image): used for the
+# RFC 9842 dcb/dcz static selection (infrastructure/nginx/cdt.js).
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends libzstd1 nginx-module-njs; \
+    rm -rf /var/lib/apt/lists/*
+COPY --from=modules /modules/ /etc/nginx/modules/
+COPY --from=cdt /web /usr/share/nginx/web
+COPY --from=cdt /cdt-generated.conf /etc/nginx/cdt-generated.conf
+COPY infrastructure/nginx/cdt.js /etc/nginx/cdt.js
+# load_module must be in the MAIN context. nginx body filters run in REVERSE of
+# load order, so load gzip(builtin) -> zstd -> brotli LAST => preference
+# brotli > zstd > gzip. njs is not a body filter (order irrelevant). Inject an
+# include at the top of nginx.conf (main ctx).
+RUN set -eux; \
+    { \
+      echo 'load_module modules/ngx_http_js_module.so;'; \
+      echo 'load_module modules/ngx_http_zstd_filter_module.so;'; \
+      echo 'load_module modules/ngx_http_zstd_static_module.so;'; \
+      echo 'load_module modules/ngx_http_brotli_filter_module.so;'; \
+      echo 'load_module modules/ngx_http_brotli_static_module.so;'; \
+    } > /etc/nginx/load-modules.conf; \
+    sed -i '1i include /etc/nginx/load-modules.conf;' /etc/nginx/nginx.conf; \
+    # Verify the zstd module is dynamically linked against the runtime libzstd.
+    ldd /etc/nginx/modules/ngx_http_zstd_filter_module.so | grep -q 'libzstd\.so'; \
+    nginx -t

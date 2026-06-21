@@ -22,12 +22,12 @@ async function seedSession(db: any): Promise<{ sessionId: string }> {
   const sessionId = randomUUID()
 
   await db.executeQuery(
-    sql`INSERT INTO users (id, email, name) VALUES (${userId}, ${userId + "@test"}, 'tester')`.compile(
+    sql`INSERT INTO users (id, email, name) VALUES (${userId}, ${`${userId}@test`}, 'tester')`.compile(
       db
     )
   )
   await db.executeQuery(
-    sql`INSERT INTO workspaces (id, name, slug, owner_id) VALUES (${workspaceId}, 'ws', ${"ws-" + workspaceId.slice(0, 8)}, ${userId})`.compile(
+    sql`INSERT INTO workspaces (id, name, slug, owner_id) VALUES (${workspaceId}, 'ws', ${`ws-${workspaceId.slice(0, 8)}`}, ${userId})`.compile(
       db
     )
   )

@@ -45,7 +45,7 @@ export const WorkspaceResourceGrantTargetSubjectSchema = z.discriminatedUnion(
     }),
     z.object({
       kind: z.literal(SUBJECT_KIND.WORKSPACE_MEMBER),
-      memberId: z.uuid(),
+      workspaceMemberId: z.uuid(),
     }),
     z.object({
       kind: z.literal(SUBJECT_KIND.CONVERSATION),
@@ -104,7 +104,7 @@ export const WorkspaceResourceGrantViewSchema = z.object({
   permissions: z.array(z.enum(WORKSPACE_RESOURCE_GRANT_PERMISSIONS)),
   status: z.enum(WORKSPACE_RESOURCE_GRANT_STATUSES),
   source: z.enum(WORKSPACE_RESOURCE_GRANT_SOURCES),
-  grantedByWorkspaceMemberId: z.uuid().optional(),
+  createdByWorkspaceMemberId: z.uuid().optional(),
   reason: z.string().optional(),
   conversationTypeMaskOverride: z.number().int().nullable().optional(),
   effectiveConversationTypeMask: z.number().int().optional(),

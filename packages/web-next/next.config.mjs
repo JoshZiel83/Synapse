@@ -70,6 +70,14 @@ const allowedDevOrigins = resolveAllowedDevOrigins()
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   allowedDevOrigins,
+  // Hand compression to the nginx edge. `next start` can only emit gzip; the
+  // edge does brotli + zstd on every response class (SSR HTML, RSC payloads,
+  // API), and serves /_next/static from disk with precompressed br/zst + RFC
+  // 9842 dcb/dcz. Per Next docs: "you're using nginx and want to switch to
+  // brotli, set the compress option to false to allow nginx to handle
+  // compression." Keeps standalone-friendly `next start` (no custom server).
+  // See docs/logging-refactor/07-edge-compression-and-cdt-plan.md.
+  compress: false,
   experimental: {
     webpackBuildWorker: false,
   },

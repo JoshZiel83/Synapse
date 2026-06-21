@@ -87,7 +87,9 @@
     "dev": "tsc --watch",
     "pretest": "npm run build -w @synapse/device-protocol",
     "test": "tsx --test \"src/**/*.test.ts\"",
-    "prepublishOnly": "node ../../scripts/prepublish-guard.mjs"
+    "prepublishOnly": "node ../../scripts/prepublish-guard.mjs",
+    "lint": "eslint src",
+    "lint:fix": "eslint src --fix"
   },
   "files": [
     "dist"

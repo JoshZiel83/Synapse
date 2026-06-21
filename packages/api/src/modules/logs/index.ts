@@ -19,6 +19,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify"
 import fp from "fastify-plugin"
 import { z } from "zod"
 import { logger } from "../../infrastructure/logger/index.js"
+import { wireRoute } from "../../infrastructure/http/route.js"
 import { authenticateRequestSession } from "../auth/service.js"
 import { verifyDeviceLogToken } from "./device-token.js"
 
@@ -55,15 +56,19 @@ function clampLevel(level: Level): Level {
 
 export default fp(
   async function logsModule(app: FastifyInstance) {
-    app.post(
+    wireRoute(
+      app,
+      "POST",
       "/api/v1/logs",
       {
-        // Bound body size defensively (the global multipart limit doesn't cover
-        // JSON); a batch over this is rejected before parsing.
-        bodyLimit: 512 * 1024,
-        // Coarse per-IP rate limit to bound log-ingest abuse (per-request auth
-        // is enforced in the handler below).
-        config: { rateLimit: { max: 120, timeWindow: "1 minute" } },
+        options: {
+          // Bound body size defensively (the global multipart limit doesn't
+          // cover JSON); a batch over this is rejected before parsing.
+          bodyLimit: 512 * 1024,
+          // Coarse per-IP rate limit to bound log-ingest abuse (per-request
+          // auth is enforced in the handler below).
+          config: { rateLimit: { max: 120, timeWindow: "1 minute" } },
+        },
       },
       async (request: FastifyRequest, reply) => {
         // Auth: a user session (browser / mobile-web) OR a device log-ingest

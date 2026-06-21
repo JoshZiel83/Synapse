@@ -34,6 +34,7 @@ import {
   shutdownEventBus,
 } from "./infrastructure/events/index.js"
 import { auditMiddleware } from "./infrastructure/middleware/audit.js"
+import serverTiming from "./infrastructure/observability/server-timing.js"
 import { beginShutdown } from "./infrastructure/shutdown/state.js"
 import { withTimeout } from "./infrastructure/async/index.js"
 import { ensureStorageDir } from "./infrastructure/storage/index.js"
@@ -64,6 +65,7 @@ import auditModule from "./modules/audit/index.js"
 import imModule from "./modules/im/index.js"
 import installerModule from "./modules/installer/index.js"
 import logsModule from "./modules/logs/index.js"
+import reportsModule from "./modules/reports/index.js"
 import {
   startTransportRuntimeManager,
   stopTransportRuntimeManager,
@@ -199,40 +201,57 @@ async function main() {
         ? (error as { statusCode: number }).statusCode
         : 500
 
+    const code = (() => {
+      if (statusCode >= 500) {
+        return "internal_server_error"
+      }
+      if (typeof (error as { code?: unknown }).code === "string") {
+        return (error as { code: string }).code
+      }
+      return "request_error"
+    })()
+
     return reply.status(statusCode).send({
       error:
         statusCode >= 500
           ? "Internal Server Error"
           : error.message || "Request failed",
-      code:
-        statusCode >= 500
-          ? "internal_server_error"
-          : typeof (error as { code?: unknown }).code === "string"
-            ? (error as { code: string }).code
-            : "request_error",
+      code,
     })
   })
 
   // Plugins
-  await app.register(cors, { origin: true, credentials: true })
+  await app.register(cors, {
+    origin: true,
+    credentials: true,
+    // Let cross-origin JS read the trace-id headers (same-origin can already).
+    exposedHeaders: ["server-timing", "traceresponse"],
+  })
   await app.register(cookie)
   await app.register(websocket)
   await app.register(multipart, { limits: { fileSize: 25 * 1024 * 1024 } })
   // Opt-in per-route rate limiting: global:false means a route enables it via
-  // its config.rateLimit (used by POST /api/v1/logs). Key by the real client IP
-  // from X-Forwarded-For (the api runs behind nginx + the Next proxy, so req.ip
-  // is the proxy container — without this every client would share one bucket).
+  // its config.rateLimit (POST /api/v1/logs, /api/v1/reports). Key by the
+  // nginx-set X-Real-IP — NOT the leftmost X-Forwarded-For token, which is
+  // client-spoofable (nginx APPENDS its peer to the right of any client XFF, so
+  // the left token is attacker-controlled and an unauthenticated endpoint like
+  // /api/v1/reports could rotate it to evade the cap). nginx sets X-Real-IP to
+  // $remote_addr and proxies /api/ straight to the api, so it is the true client
+  // IP here; fall back to req.ip if the header is absent (direct in-network hit).
   await app.register(rateLimit, {
     global: false,
     keyGenerator: (req) => {
-      const xff = req.headers["x-forwarded-for"]
-      const first = Array.isArray(xff) ? xff[0] : xff
-      return first?.split(",")[0]?.trim() || req.ip
+      const realIp = req.headers["x-real-ip"]
+      const real = Array.isArray(realIp) ? realIp[0] : realIp
+      return real?.trim() || req.ip
     },
   })
 
   // Ensure storage directory exists
   await ensureStorageDir()
+
+  // Server-Timing response header (per-request timing + gated trace_id -> RUM).
+  await app.register(serverTiming)
 
   // Audit middleware
   auditMiddleware(app)
@@ -281,6 +300,7 @@ async function main() {
   await app.register(runtimeAuthorizationsModule)
   await app.register(modelGroupsModule)
   await app.register(logsModule)
+  await app.register(reportsModule)
   await app.register(platformModule)
   await app.register(auditModule)
   await app.register(imModule)

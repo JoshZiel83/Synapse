@@ -130,7 +130,6 @@ export function createStatusReactionController(
           dispatch({ type: "tick", at: clock.now() })
         }, effect.afterMs)
         timers.add(handle)
-        return
       }
     }
   }

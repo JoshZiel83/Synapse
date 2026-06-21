@@ -30,6 +30,7 @@ import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
 import { v4 as uuidv4 } from "uuid"
 import pg from "pg"
+import type { ToolSourceKind } from "@synapse/shared"
 
 import { createToolResult } from "../../src/modules/execution/service.js"
 
@@ -72,7 +73,7 @@ after(async () => {
 // Set up minimal session+turn+conversation+tool_call rows so we can write
 // to tool_results without going through the full actor pipeline.
 async function buildToolCall(opts: {
-  sourceKind: "system" | "plugin" | "device"
+  sourceKind: ToolSourceKind
   toolName: string
 }): Promise<string> {
   if (!seed || !client) throw new Error("test fixtures missing")
@@ -82,20 +83,24 @@ async function buildToolCall(opts: {
   const toolCallId = uuidv4()
   // Tool provenance & routing: tool_calls requires source_kind + source_snapshot
   // (NOT NULL, CHECK-consistent).
-  const sourceSnapshot =
-    opts.sourceKind === "device"
-      ? {
+  const sourceSnapshot = (() => {
+    switch (opts.sourceKind) {
+      case "device":
+        return {
           kind: "device",
           deviceToolId: uuidv4(),
           exposureStableKey: "synapse.builtin.filesystem.v1",
         }
-      : opts.sourceKind === "plugin"
-        ? {
-            kind: "plugin",
-            installationId: uuidv4(),
-            upstreamToolName: opts.toolName,
-          }
-        : { kind: "system", registryKey: opts.toolName }
+      case "plugin":
+        return {
+          kind: "plugin",
+          installationId: uuidv4(),
+          upstreamToolName: opts.toolName,
+        }
+      default:
+        return { kind: "system", registryKey: opts.toolName }
+    }
+  })()
 
   // We need an actor for the session to satisfy NOT NULL constraints —
   // seed an inline actor row directly.
@@ -244,13 +249,9 @@ test("Origin survives all 5 ToolResultOrigin kinds through the JSONB column", as
   ]
 
   for (const origin of kinds) {
+    const mappedSourceKind = origin.kind === "plugin" ? "plugin" : "system"
     const toolCallId = await buildToolCall({
-      sourceKind:
-        origin.kind === "device"
-          ? "device"
-          : origin.kind === "plugin"
-            ? "plugin"
-            : "system",
+      sourceKind: origin.kind === "device" ? "device" : mappedSourceKind,
       toolName: `probe_${origin.kind}`,
     })
     await createToolResult({

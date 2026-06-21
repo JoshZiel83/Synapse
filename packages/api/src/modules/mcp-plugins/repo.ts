@@ -40,6 +40,7 @@ import {
   type PluginSpecTransport,
   type ReuseScope,
   type RuntimeBindingScope,
+  type ToolSourceKind,
   type WorkspaceResourceGrantSource,
 } from "@synapse/shared"
 import type { CapabilityAccessTarget } from "@synapse/shared/types"
@@ -1065,7 +1066,16 @@ export async function listPluginInstallationAccessRows(
       "subj.actorId",
       "subj.remoteAgentId",
       "subj.workspaceMemberId",
-      "scope.conversationId",
+      // A conversation can be the grant SUBJECT (subj.conversation_id, scope is
+      // NULL) or the grant SCOPE (scope.conversation_id). Coalesce both so a
+      // conversation-subject grant keeps its bound conversation instead of
+      // null-ing out and being re-targeted workspace-wide downstream. Mirrors
+      // loadVisiblePluginGrants (scopeConversationId ?? subjectConversationId).
+      sql<
+        string | null
+      >`COALESCE(scope.conversation_id, subj.conversation_id)`.as(
+        "conversationId"
+      ),
       "resource_grant.conversationTypeMaskOverride",
       "resource_grant.status",
       "resource_grant.source",
@@ -1302,7 +1312,7 @@ export type ToolCallAuditLogRecord = {
   actorId: string | null
   providerCallId: string | null
   toolName: string
-  sourceKind: string
+  sourceKind: ToolSourceKind
   sourceSnapshot: unknown
   pluginInstallationId: string | null
   deviceToolId: string | null
@@ -1501,7 +1511,7 @@ export type VisiblePluginRow = {
   transport: PluginSpecTransport
   entryPoint: string | null
   toolManifest: VisiblePluginToolManifestEntry[]
-  reuseScope: "turn" | "session" | "workspace" | "conversation" | "actor" | null
+  reuseScope: ReuseScope | null
   conversationTypeMaskOverride: number | null
 }
 
@@ -1583,6 +1593,28 @@ async function buildVisibilitySubjects(params: VisibilitySubjectParams) {
   })
 }
 
+type VisibilitySubject = Awaited<
+  ReturnType<typeof buildVisibilitySubjects>
+>[number]
+
+function resolveVisibilitySubjectKind(type: VisibilitySubject["type"]) {
+  // Mirrors the original chained ternary EXACTLY: only "workspace",
+  // "workspace_member" and "actor" map to their own kinds; every other type
+  // (including "remote_agent" AND "user") falls through to REMOTE_AGENT. The
+  // final branch is the `default` case — not assertNever — so a "user" subject
+  // keeps yielding REMOTE_AGENT instead of throwing.
+  switch (type) {
+    case "workspace":
+      return SUBJECT_KIND.WORKSPACE
+    case "workspace_member":
+      return SUBJECT_KIND.WORKSPACE_MEMBER
+    case "actor":
+      return SUBJECT_KIND.ACTOR
+    default:
+      return SUBJECT_KIND.REMOTE_AGENT
+  }
+}
+
 export async function buildPluginVisibilitySubjectIds(
   params: VisibilitySubjectParams
 ) {
@@ -1590,17 +1622,10 @@ export async function buildPluginVisibilitySubjectIds(
   const subjectIds = await Promise.all(
     subjects.map((subject) =>
       upsertAccessSubject(db, {
-        kind:
-          subject.type === "workspace"
-            ? SUBJECT_KIND.WORKSPACE
-            : subject.type === "workspace_member"
-              ? SUBJECT_KIND.WORKSPACE_MEMBER
-              : subject.type === "actor"
-                ? SUBJECT_KIND.ACTOR
-                : SUBJECT_KIND.REMOTE_AGENT,
+        kind: resolveVisibilitySubjectKind(subject.type),
         ...(subject.type === "workspace" ? { workspaceId: subject.id } : {}),
         ...(subject.type === "workspace_member"
-          ? { memberId: subject.id }
+          ? { workspaceMemberId: subject.id }
           : {}),
         ...(subject.type === "actor" ? { actorId: subject.id } : {}),
         ...(subject.type === "remote_agent"

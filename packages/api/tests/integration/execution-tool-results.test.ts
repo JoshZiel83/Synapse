@@ -22,7 +22,7 @@ import {
   buildSessionContextItems,
   loadExecutionToolResultsForSession,
 } from "../../src/modules/ai/context-builder.js"
-import { extractText, textBlocks } from "@synapse/shared"
+import { extractText, textBlocks, type ToolSourceKind } from "@synapse/shared"
 
 import {
   resetDb,
@@ -60,7 +60,7 @@ after(async () => {
 async function buildFixture(opts: {
   toolName: string
   providerCallId?: string
-  sourceKind?: "plugin" | "device" | "system"
+  sourceKind?: ToolSourceKind
 }): Promise<{
   sessionId: string
   toolCallId: string
@@ -74,20 +74,24 @@ async function buildFixture(opts: {
   const providerCallId =
     opts.providerCallId || `toolu_${uuidv4().replace(/-/g, "").slice(0, 16)}`
   const sourceKind = opts.sourceKind || "plugin"
-  const sourceSnapshot =
-    sourceKind === "device"
-      ? {
+  const sourceSnapshot = (() => {
+    switch (sourceKind) {
+      case "device":
+        return {
           kind: "device",
           deviceToolId: "dev-abc",
           exposureStableKey: "synapse.builtin.filesystem.v1",
         }
-      : sourceKind === "system"
-        ? { kind: "system", registryKey: opts.toolName }
-        : {
-            kind: "plugin",
-            installationId: uuidv4(),
-            upstreamToolName: opts.toolName,
-          }
+      case "system":
+        return { kind: "system", registryKey: opts.toolName }
+      default:
+        return {
+          kind: "plugin",
+          installationId: uuidv4(),
+          upstreamToolName: opts.toolName,
+        }
+    }
+  })()
 
   const actorId = uuidv4()
   await client.query("BEGIN")

@@ -225,7 +225,7 @@ test("POST body rejects scoped combinations outside (actor|remote_agent, convers
   const memberBody = {
     workspaceId: wsId,
     target: {
-      subject: { kind: "workspace_member", memberId: actorId },
+      subject: { kind: "workspace_member", workspaceMemberId: actorId },
     },
     deviceCapabilityIds: [capId],
   }

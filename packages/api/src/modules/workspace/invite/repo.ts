@@ -135,13 +135,16 @@ export async function redeemInviteTx(
       throw new Error("Invite has reached maximum uses")
     }
 
+    // Single durable membership row (UNIQUE(workspace_id,user_id)): only an
+    // ACTIVE member is "already a member"; a previously 'left'/'removed' row is
+    // revived on redeem rather than blocking re-join. Mirrors addMemberTx.
     const memberCheck = await trx
       .selectFrom("workspaceMembers")
-      .select("id")
+      .select(["id", "status"])
       .where("workspaceId", "=", invite.workspaceId)
       .where("userId", "=", userId)
       .executeTakeFirst()
-    if (memberCheck) {
+    if (memberCheck?.status === "active") {
       throw new Error("Already a member of this workspace")
     }
 
@@ -152,6 +155,14 @@ export async function redeemInviteTx(
         userId: userId,
         trustLevel: invite.trustLevel,
       })
+      .onConflict((oc) =>
+        oc.columns(["workspaceId", "userId"]).doUpdateSet({
+          status: "active",
+          trustLevel: invite.trustLevel,
+          leftAt: null,
+          removedAt: null,
+        })
+      )
       .returning("id")
       .executeTakeFirst()
     if (!memberRow) {

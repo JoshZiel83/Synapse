@@ -42,7 +42,9 @@
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsc --watch",
     "test": "tsx --test \"src/**/*.test.ts\"",
-    "prepublishOnly": "node ../../scripts/prepublish-guard.mjs"
+    "prepublishOnly": "node ../../scripts/prepublish-guard.mjs",
+    "lint": "eslint src",
+    "lint:fix": "eslint src --fix"
   },
   "files": [
     "dist"

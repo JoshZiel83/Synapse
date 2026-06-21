@@ -3488,7 +3488,9 @@ export function MarketplaceSkillPreviewPage({ skillId }: { skillId: string }) {
         </CardContent>
       </Card>
       <InstallSkillDialog
-        open={installDialogOpen && !skill?.workspaceInstallation?.installed}
+        open={
+          installDialogOpen ? !skill?.workspaceInstallation?.installed : false
+        }
         skill={skill}
         actors={actors}
         conversations={conversations}

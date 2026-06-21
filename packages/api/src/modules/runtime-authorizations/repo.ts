@@ -161,32 +161,40 @@ export interface DeviceCapabilityRequestState {
 export async function loadDeviceCapabilityRequestState(
   capabilityId: string
 ): Promise<DeviceCapabilityRequestState | undefined> {
-  return db
-    .selectFrom("deviceCapabilities as capability")
-    .innerJoin("workspaceResources as resource", "resource.id", "capability.id")
-    .innerJoin(
-      "deviceExposures as exposure",
-      "exposure.id",
-      "capability.exposureId"
-    )
-    .innerJoin("devices as device", "device.id", "exposure.deviceId")
-    .select([
-      "capability.id as capabilityId",
-      "resource.status as capabilityStatus",
-      "exposure.id as exposureId",
-      "exposure.runtimeStatus as exposureRuntimeStatus",
-      "device.workspaceId as ownerWorkspaceId",
-      sql<boolean>`EXISTS (
+  return (
+    db
+      .selectFrom("deviceCapabilities as capability")
+      .innerJoin(
+        "workspaceResources as resource",
+        "resource.id",
+        "capability.id"
+      )
+      .innerJoin(
+        "deviceExposures as exposure",
+        "exposure.id",
+        "capability.exposureId"
+      )
+      .innerJoin("devices as device", "device.id", "exposure.deviceId")
+      .select([
+        "capability.id as capabilityId",
+        "resource.status as capabilityStatus",
+        "exposure.id as exposureId",
+        "exposure.runtimeStatus as exposureRuntimeStatus",
+        "device.workspaceId as ownerWorkspaceId",
+        sql<boolean>`EXISTS (
         SELECT 1
         FROM device_control_plane_sessions session_row
         WHERE session_row.device_id = device.id
           AND session_row.status = 'active'
       )`.as("hasActiveDeviceSession"),
-    ])
-    .where("capability.id", "=", capabilityId)
-    .where("resource.deletedAt", "is", null)
-    .limit(1)
-    .executeTakeFirst() as Promise<DeviceCapabilityRequestState | undefined>
+      ])
+      .where("capability.id", "=", capabilityId)
+      .where("resource.deletedAt", "is", null)
+      // A soft-deleted device exposes no capabilities to the request-gating path.
+      .where("device.deletedAt", "is", null)
+      .limit(1)
+      .executeTakeFirst() as Promise<DeviceCapabilityRequestState | undefined>
+  )
 }
 
 /**

@@ -198,12 +198,12 @@ export async function updateConversationTransportSettings(params: {
 
   const nextInboundActorMode =
     params.inboundActorMode || existing.inboundActorMode
+  const specifiedActorId =
+    params.inboundActorId !== undefined
+      ? params.inboundActorId
+      : existing.inboundActorId || null
   const nextInboundActorId =
-    nextInboundActorMode === "specified_actor"
-      ? params.inboundActorId !== undefined
-        ? params.inboundActorId
-        : existing.inboundActorId || null
-      : null
+    nextInboundActorMode === "specified_actor" ? specifiedActorId : null
   const resolvedInboundActorId = await assertConversationInboundActor({
     workspaceId: params.workspaceId,
     inboundActorMode: nextInboundActorMode,

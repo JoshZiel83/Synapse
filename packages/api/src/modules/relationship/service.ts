@@ -72,7 +72,7 @@ function buildRelationshipPeerSubjectRef(input: {
       }
       return {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: input.peerWorkspaceMemberId,
+        workspaceMemberId: input.peerWorkspaceMemberId,
       }
     case "actor":
       if (!input.peerActorId) {
@@ -208,7 +208,7 @@ async function getWorkspaceMemberSummaryById(
 async function getMemberRelationshipProfileRow(workspaceMemberId: string) {
   const subjectId = await upsertAccessSubjectDefault({
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: workspaceMemberId,
+    workspaceMemberId: workspaceMemberId,
   })
   const row = await repo.selectMemberRelationshipProfileBySubjectId(subjectId)
   if (!row) {
@@ -463,7 +463,7 @@ async function grantActorContactVisibilityToMember(params: {
   workspaceId: string
   actorId: string
   requesterWorkspaceMemberId: string
-  grantedByWorkspaceMemberId: string
+  createdByWorkspaceMemberId: string
 }) {
   try {
     await repo.insertWorkspaceResourceGrantDefault({
@@ -472,12 +472,12 @@ async function grantActorContactVisibilityToMember(params: {
       target: {
         subject: {
           kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-          memberId: params.requesterWorkspaceMemberId,
+          workspaceMemberId: params.requesterWorkspaceMemberId,
         },
       },
       permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.CONTACT_VISIBLE],
       source: "approval",
-      createdByWorkspaceMemberId: params.grantedByWorkspaceMemberId,
+      createdByWorkspaceMemberId: params.createdByWorkspaceMemberId,
     })
   } catch (error) {
     if (!isUniqueViolation(error)) throw error
@@ -488,7 +488,7 @@ async function grantRemoteAgentContactVisibilityToMember(params: {
   workspaceId: string
   remoteAgentId: string
   requesterWorkspaceMemberId: string
-  grantedByWorkspaceMemberId?: string
+  createdByWorkspaceMemberId?: string
 }) {
   try {
     await repo.insertWorkspaceResourceGrantDefault({
@@ -497,12 +497,12 @@ async function grantRemoteAgentContactVisibilityToMember(params: {
       target: {
         subject: {
           kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-          memberId: params.requesterWorkspaceMemberId,
+          workspaceMemberId: params.requesterWorkspaceMemberId,
         },
       },
       permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.CONTACT_VISIBLE],
       source: "approval",
-      createdByWorkspaceMemberId: params.grantedByWorkspaceMemberId ?? null,
+      createdByWorkspaceMemberId: params.createdByWorkspaceMemberId ?? null,
     })
   } catch (error) {
     if (!isUniqueViolation(error)) throw error
@@ -636,7 +636,7 @@ async function createActorAccessRequest(params: {
       grantee: {
         subject: {
           kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-          memberId: params.requesterWorkspaceMemberId,
+          workspaceMemberId: params.requesterWorkspaceMemberId,
         },
       },
       requestedPermissions: [
@@ -687,7 +687,7 @@ async function createRemoteAgentAccessRequest(params: {
       grantee: {
         subject: {
           kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-          memberId: params.requesterWorkspaceMemberId,
+          workspaceMemberId: params.requesterWorkspaceMemberId,
         },
       },
       requestedPermissions: [
@@ -720,7 +720,7 @@ async function loadViewerDirectConversationMap(workspaceMemberId: string) {
   // columns.
   const viewerSubjectId = await upsertAccessSubjectDefault({
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: workspaceMemberId,
+    workspaceMemberId: workspaceMemberId,
   })
   const rows =
     await repo.selectDirectConversationBindingsForSubject(viewerSubjectId)
@@ -771,7 +771,7 @@ async function hasWorkspaceResourceContactVisible(params: {
   })
   const memberSubjectId = await upsertAccessSubjectDefault({
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: viewer.workspaceMemberId,
+    workspaceMemberId: viewer.workspaceMemberId,
   })
   const grant = await repo.selectWorkspaceResourceContactVisibleGrant({
     workspaceResourceId: params.workspaceResourceId,
@@ -1921,7 +1921,7 @@ export async function requestRelationshipByIdentityProfile(params: {
         workspaceId: params.workspaceId,
         actorId: actor.actorId,
         requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
-        grantedByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+        createdByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
       })
       return {
         outcome: "actor_access_granted" as const,
@@ -2193,7 +2193,7 @@ export async function updateActorRelationshipProfile(params: {
   }
 
   const actorSummary = await getActorSummary(params.actorId)
-  let requiresContactApproval = actorSummary?.requiresContactApproval ?? false
+  const requiresContactApproval = actorSummary?.requiresContactApproval ?? false
   let isPublicShared = actorSummary?.isPublicShared ?? false
   if (typeof params.isPublicShared === "boolean") {
     const actorResult = await repo.updateActorPublicShared(
@@ -2265,7 +2265,7 @@ export async function updateRemoteAgentRelationshipProfile(params: {
   }
 
   const remoteAgentSummary = await getRemoteAgentSummary(params.remoteAgentId)
-  let requiresContactApproval =
+  const requiresContactApproval =
     remoteAgentSummary?.requiresContactApproval ?? false
   let isPublicShared = remoteAgentSummary?.isPublicShared ?? false
 
@@ -2922,7 +2922,7 @@ export async function openDirectConversation(params: {
           actorId: resolved.actor.actorId,
           requesterWorkspaceMemberId:
             requesterWorkspaceMember.workspaceMemberId,
-          grantedByWorkspaceMemberId:
+          createdByWorkspaceMemberId:
             requesterWorkspaceMember.workspaceMemberId,
         })
       } else {

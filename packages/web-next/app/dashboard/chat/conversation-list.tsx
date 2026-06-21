@@ -170,9 +170,9 @@ export default function ConversationList({
                   isSelected ? "bg-accent" : "hover:bg-accent/70"
                 } `}
               >
-                {isSelected && (
+                {isSelected ? (
                   <div className="absolute top-1/2 left-0 h-8 w-1 -translate-y-1/2 rounded-r-full bg-primary" />
-                )}
+                ) : null}
 
                 <div className="flex items-center gap-3">
                   {/* Avatar */}
@@ -188,13 +188,13 @@ export default function ConversationList({
                       size={14}
                       className="absolute -right-1 -bottom-1 size-5 p-0.5"
                     />
-                    {conversation.unreadCount > 0 && (
+                    {conversation.unreadCount > 0 ? (
                       <span className="absolute -top-1 -right-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
                         {conversation.unreadCount > 99
                           ? "99+"
                           : conversation.unreadCount}
                       </span>
-                    )}
+                    ) : null}
                   </div>
 
                   {/* Content */}
@@ -221,7 +221,7 @@ export default function ConversationList({
           })
         )}
 
-        {!loading && filtered.length === 0 && (
+        {!loading && filtered.length === 0 ? (
           <div className="py-8 text-center">
             <p className="text-xs text-muted-foreground">
               {search
@@ -229,7 +229,7 @@ export default function ConversationList({
                 : "No conversations yet"}
             </p>
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   )

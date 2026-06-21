@@ -540,12 +540,15 @@ function classifyMcpExecutionError(error: unknown) {
     raw?.requiresReplan === true ||
     code === "tool_definition_changed" ||
     code === "tool_removed"
-  const message =
-    typeof raw?.message === "string" && raw.message.trim().length > 0
-      ? raw.message
-      : error instanceof Error
-        ? error.message
-        : String(error || "MCP tool execution failed")
+  const message = ((): string => {
+    if (typeof raw?.message === "string" && raw.message.trim().length > 0) {
+      return raw.message
+    }
+    if (error instanceof Error) {
+      return error.message
+    }
+    return String(error || "MCP tool execution failed")
+  })()
 
   return {
     code,
@@ -825,7 +828,7 @@ export async function actorThink(
 
   const turnId = options?.turnId || randomUUID()
   const executionEnabled = !!options?.turnId && !!options?.conversationId
-  let totalTokens = { input: 0, output: 0 }
+  const totalTokens = { input: 0, output: 0 }
   let providerStepIndex = 0
 
   const allToolsUsed: string[] = [] // track executable tools invoked
@@ -1214,7 +1217,7 @@ export async function actorThink(
         allCitationSources = { ...allCitationSources, ...citations }
       }
 
-      let finalTextContent = textContent
+      const finalTextContent = textContent
       if (finalTextContent.trim().length > 0 || roundMediaBlocks.length > 0) {
         finalDraftText = finalTextContent
         usedDraftProvider = true
@@ -1509,12 +1512,12 @@ export async function actorThink(
                   namespacedToolName: tc.toolName,
                 }
               )
-              let normalizedContent = normalizedResult.content
+              const normalizedContent = normalizedResult.content
               // metadata persisted to tool_results.metadata JSONB carries
               // origin + structuredContent so we can rehydrate them when the
               // session is later replayed. The CanonicalToolResult also gets
               // origin/structuredContent as first-class fields below.
-              let metadata: Record<string, unknown> = {
+              const metadata: Record<string, unknown> = {
                 ...(normalizedResult.metadata || {}),
                 toolCallId: tc.callId,
                 toolName: tc.toolName,
@@ -1644,7 +1647,7 @@ export async function actorThink(
                     // inherit a real origin from a thrown error. Derive the
                     // origin from the routed ToolRef so the audit trail still
                     // attributes correctly and the roundToolResults fallback
-                    // doesn't mis-tag as {kind:"builtin"}.
+                    // doesn't mis-tag as {kind:"system"}.
                     origin: originFromRef(
                       toolWireRegistry.refByWireName.get(skippedTc.toolName),
                       skippedTc.toolName

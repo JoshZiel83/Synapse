@@ -209,7 +209,7 @@ export function buildInstalledSkillPayload(
   const effectiveConversationTypeMask =
     resolveInstalledSkillEffectiveConversationTypeMask({
       workspaceConversationTypeMask,
-      conversation_type_mask_override: row.conversationTypeMaskOverride,
+      conversationTypeMaskOverride: row.conversationTypeMaskOverride,
     })
 
   return {
@@ -309,7 +309,7 @@ export function presentSkillAccessGrant(
     permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.USE],
     status: row.status,
     source: row.source,
-    grantedByWorkspaceMemberId: row.createdByWorkspaceMemberId || undefined,
+    createdByWorkspaceMemberId: row.createdByWorkspaceMemberId || undefined,
     reason: row.reason || undefined,
     conversationTypeMaskOverride: row.conversationTypeMaskOverride ?? null,
     effectiveConversationTypeMask,

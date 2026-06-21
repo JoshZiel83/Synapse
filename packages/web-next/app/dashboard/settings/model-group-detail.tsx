@@ -231,7 +231,7 @@ export default function ModelGroupDetail({
             </Link>
           </Button>
         ) : null}
-        {group && (
+        {group ? (
           <div className="flex flex-col gap-2">
             <h2 className="text-lg font-semibold text-foreground">
               {group.name}
@@ -251,7 +251,7 @@ export default function ModelGroupDetail({
               ) : null}
             </div>
           </div>
-        )}
+        ) : null}
       </div>
 
       {loading ? (

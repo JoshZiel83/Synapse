@@ -71,9 +71,9 @@ export function MobileLandingEvents() {
               <Icon className="size-[14px]" />
             </div>
             <div className="text-[12.5px] leading-5 text-slate-700">
-              {idx === 0 && "人、服务、消息、系统信号都能成为入口"}
-              {idx === 1 && "事件进来后，群聊、角色、资源自动就位"}
-              {idx === 2 && "定时、Webhook、状态变化都能长期值守"}
+              {idx === 0 ? "人、服务、消息、系统信号都能成为入口" : null}
+              {idx === 1 ? "事件进来后，群聊、角色、资源自动就位" : null}
+              {idx === 2 ? "定时、Webhook、状态变化都能长期值守" : null}
             </div>
           </MobileReveal>
         ))}

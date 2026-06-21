@@ -264,7 +264,7 @@ export async function discoverWorkspaceResourcesForMember(params: {
   })
   const memberSubjectId = await upsertWorkspaceResourceSubjectIdDefault({
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: identity.workspaceMemberId,
+    workspaceMemberId: identity.workspaceMemberId,
   })
 
   let conversationSubjectId: string | null = null
@@ -398,7 +398,7 @@ export async function submitWorkspaceResourceGrantRequest(params: {
     grantee: {
       subject: {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: identity.workspaceMemberId,
+        workspaceMemberId: identity.workspaceMemberId,
       },
     },
     requestedPermissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.CONTACT_VISIBLE],

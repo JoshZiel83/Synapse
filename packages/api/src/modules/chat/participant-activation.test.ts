@@ -51,7 +51,7 @@ async function seedWorkspaceParticipant(
     .executeTakeFirstOrThrow()
   const subjectId = await upsertAccessSubjectOn(db, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: member.id as string,
+    workspaceMemberId: member.id as string,
   })
   const participant = await db
     .insertInto("conversationParticipants")

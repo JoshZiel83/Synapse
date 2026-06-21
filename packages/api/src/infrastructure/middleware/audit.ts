@@ -4,12 +4,31 @@ import { insertMiddlewareAuditLog } from "./repo.js"
 
 const log = createLogger("audit")
 
+// High-volume telemetry-ingest endpoints that must NOT write an audit row per
+// request — otherwise a flood (POST /api/v1/reports is unauthenticated by
+// design; /api/v1/logs is the same high-volume class) amplifies into unbounded
+// audit-table writes.
+const AUDIT_EXCLUDED_PATHS: ReadonlySet<string> = new Set([
+  "/api/v1/reports",
+  "/api/v1/logs",
+])
+
 export function auditMiddleware(app: FastifyInstance) {
   app.addHook(
     "onResponse",
     async (request: FastifyRequest, reply: FastifyReply) => {
       // Only audit mutating requests
       if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return
+
+      // Never audit unmatched routes — a 404 is not a real mutation, and a
+      // trailing path segment (e.g. /api/v1/reports/x) would otherwise both
+      // dodge the exclusion below AND audit-amplify on 404s.
+      if (reply.statusCode === 404) return
+
+      // Skip telemetry-ingest endpoints. Strip the query string and any trailing
+      // slash so /api/v1/reports/ and ?x= variants are covered too.
+      const path = request.url.split("?")[0].replace(/\/+$/, "")
+      if (AUDIT_EXCLUDED_PATHS.has(path)) return
 
       const action = deriveAction(request.method, request.url)
       if (!action) return

@@ -272,6 +272,9 @@ export function MessageItem({
   /** Invoked when the user taps "Retry" on a failed outbox entry. */
   onRetry?: (clientMessageId: string) => void
 }) {
+  // Hooks must run unconditionally and in a stable order, so this must precede
+  // the `item.itemType === "event"` early return below (react-hooks/rules-of-hooks).
+  const router = useRouter()
   if (item.itemType === "event") {
     const task =
       item.subtype === "task_requested" &&
@@ -301,7 +304,6 @@ export function MessageItem({
   }
 
   const mine = isMine(item, viewerParticipantId)
-  const router = useRouter()
   const localDeliveryStatus = item.localDeliveryStatus
   const author = item.author
   const authorName = getEntityDisplayName(author)

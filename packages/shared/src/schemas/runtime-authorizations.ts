@@ -34,7 +34,7 @@ const SubjectRefViewSchema = z.discriminatedUnion("kind", [
   }),
   z.strictObject({
     kind: z.literal(SUBJECT_KIND.WORKSPACE_MEMBER),
-    memberId: z.string(),
+    workspaceMemberId: z.string(),
   }),
   z.strictObject({
     kind: z.literal(SUBJECT_KIND.ACTOR),

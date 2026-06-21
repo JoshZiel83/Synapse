@@ -69,7 +69,7 @@ export async function resolveWorkspaceResourceRootSubjects(
   const ownerSubjectId = input.ownerWorkspaceMemberId
     ? await upsertAccessSubjectOn(run, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: input.ownerWorkspaceMemberId,
+        workspaceMemberId: input.ownerWorkspaceMemberId,
       })
     : null
   let createdBySubjectId = input.createdBySubjectId ?? null
@@ -140,7 +140,7 @@ export async function updateWorkspaceResourceRoot(
     patch.ownerSubjectId = input.ownerWorkspaceMemberId
       ? await upsertAccessSubjectOn(run, {
           kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-          memberId: input.ownerWorkspaceMemberId,
+          workspaceMemberId: input.ownerWorkspaceMemberId,
         })
       : null
   }
@@ -225,7 +225,7 @@ export async function hasManageGrantForSubject(
 ): Promise<boolean> {
   const memberSubjectId = await upsertAccessSubjectDefault({
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: workspaceMemberId,
+    workspaceMemberId: workspaceMemberId,
   })
   const row = await db
     .selectFrom("workspaceResourceGrants")
@@ -405,7 +405,7 @@ export async function listImplicitOwnerWorkspaceResources(params: {
 }): Promise<WorkspaceResourceRow[]> {
   const ownerSubjectId = await upsertAccessSubjectOn(db, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: params.ownerWorkspaceMemberId,
+    workspaceMemberId: params.ownerWorkspaceMemberId,
   })
   return selectWorkspaceResourceLiveRow(
     db.selectFrom("workspaceResourcesLive as resource")

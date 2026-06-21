@@ -85,15 +85,19 @@ export function describeAutomationPolicy(
     details.push({ label: "Completed at", value: completedAt })
   }
 
+  let description: string
+  if (maxTriggerCount && maxTriggerCount > 0) {
+    description = `Stops after ${maxTriggerCount} matched trigger${maxTriggerCount === 1 ? "" : "s"} and transitions to ${completionStatus}.`
+  } else if (activeUntil) {
+    description = `Remains active until ${activeUntil}.`
+  } else {
+    description = "Runs until paused, archived, or expired by policy."
+  }
+
   return {
     title: "Policy",
     summary,
-    description:
-      maxTriggerCount && maxTriggerCount > 0
-        ? `Stops after ${maxTriggerCount} matched trigger${maxTriggerCount === 1 ? "" : "s"} and transitions to ${completionStatus}.`
-        : activeUntil
-          ? `Remains active until ${activeUntil}.`
-          : "Runs until paused, archived, or expired by policy.",
+    description,
     details,
   }
 }

@@ -264,12 +264,7 @@ export async function handleQqInteractionCreate(params: {
     })
     // Step 7 (success / durable outcome): ACK with an outcome-derived
     // code so the user sees the right toast (already-resolved → 重复操作).
-    const ackCode =
-      result.outcome === "duplicate"
-        ? QQ_INTERACTION_ACK_DUPLICATE
-        : result.outcome === "conflict"
-          ? QQ_INTERACTION_ACK_FAILED
-          : QQ_INTERACTION_ACK_OK
+    const ackCode = ackCodeForOutcome(result.outcome)
     await safeAck(deps, account, eventId, ackCode, logger)
   } catch (err) {
     // Distinguish permanent (don't retry) vs transient (let user retry).
@@ -320,6 +315,19 @@ function deriveCommandId(params: {
 }): string {
   const name = `qq-interaction:${params.qqEventId}:${params.actionToken}:${params.clickerExternalId}`
   return uuidv5(name, SYNAPSE_INTERACTION_NAMESPACE)
+}
+
+function ackCodeForOutcome(outcome: string): number {
+  // Default (every non-duplicate, non-conflict outcome — e.g. "applied")
+  // maps to the success toast, preserving the original ternary fallback.
+  switch (outcome) {
+    case "duplicate":
+      return QQ_INTERACTION_ACK_DUPLICATE
+    case "conflict":
+      return QQ_INTERACTION_ACK_FAILED
+    default:
+      return QQ_INTERACTION_ACK_OK
+  }
 }
 
 function isPermanentResolveError(err: unknown): boolean {

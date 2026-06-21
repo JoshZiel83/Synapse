@@ -161,7 +161,7 @@ async function insertTaskTransportProjectionFixture(db: AnyDb) {
 
   const subjectId = await upsertAccessSubject(db, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: member.id as string,
+    workspaceMemberId: member.id as string,
   })
 
   const task = await db

@@ -133,6 +133,30 @@ async function resolveSessionMessageAuthor(params: {
   return null
 }
 
+function resolveSessionItemRole(
+  role: SessionConversationMessageRole
+): "tool" | "system" | "assistant" | "user" {
+  switch (role) {
+    case "tool_result":
+      return "tool"
+    case "system":
+      return "system"
+    case "assistant":
+      return "assistant"
+    default:
+      return "user"
+  }
+}
+
+function resolveSessionMessageSenderType(params: {
+  fromActorId?: UUID
+  fromWorkspaceMemberId?: UUID
+}): "actor" | "workspace_member" | "system" {
+  if (params.fromActorId) return "actor"
+  if (params.fromWorkspaceMemberId) return "workspace_member"
+  return "system"
+}
+
 function getSurfaceForSessionMessage(
   conversationKind: string,
   role: SessionConversationMessageRole | "child_result"
@@ -250,14 +274,7 @@ export async function addSessionMessage(params: {
     surface,
     itemType,
     subtype: resolvedSubtype,
-    role:
-      role === "tool_result"
-        ? "tool"
-        : role === "system"
-          ? "system"
-          : role === "assistant"
-            ? "assistant"
-            : "user",
+    role: resolveSessionItemRole(role),
     authorParticipantId: authorMember?.id,
     replyToItemId,
     metadata: normalizedMessage.normalizedMetadata,
@@ -272,11 +289,10 @@ export async function addSessionMessage(params: {
       itemId: item.id,
       direction: "outbound",
       metadata: {
-        senderType: fromActorId
-          ? "actor"
-          : fromWorkspaceMemberId
-            ? "workspace_member"
-            : "system",
+        senderType: resolveSessionMessageSenderType({
+          fromActorId,
+          fromWorkspaceMemberId,
+        }),
         senderActorId: fromActorId || undefined,
         senderWorkspaceMemberId: fromWorkspaceMemberId || undefined,
         restrictedAudienceParticipantIds,

@@ -82,7 +82,7 @@ export function projectMemory(memory: SharedMemory): Memory {
         : undefined
   const workspaceMemberId =
     memory.owner.kind === SUBJECT_KIND.WORKSPACE_MEMBER
-      ? memory.owner.memberId
+      ? memory.owner.workspaceMemberId
       : undefined
   return {
     ...memory,
@@ -390,7 +390,9 @@ export function buildMemoryMovePayloadFromPreset(
       const memberId =
         preset.workspaceMemberId || currentWorkspaceMemberId || ""
       if (!memberId) return null
-      return { owner: { kind: "workspace_member", memberId } }
+      return {
+        owner: { kind: "workspace_member", workspaceMemberId: memberId },
+      }
     }
     default:
       return null

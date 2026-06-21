@@ -118,7 +118,7 @@ type ModelGroupGrant = {
   workspaceMemberId: string | null
   actorId: string | null
   status: ModelGroupGrantStatus
-  grantedByWorkspaceMemberId?: string | null
+  createdByWorkspaceMemberId?: string | null
   reason?: string | null
   createdAt?: Timestamp | null
   revokedAt?: Timestamp | null
@@ -551,9 +551,9 @@ function GrantDialog({
             </select>
           </div>
 
-          {(grantScope === MODEL_GROUP_GRANT_SCOPE.WORKSPACE ||
-            grantScope === MODEL_GROUP_GRANT_SCOPE.WORKSPACE_MEMBER ||
-            grantScope === MODEL_GROUP_GRANT_SCOPE.ACTOR) && (
+          {grantScope === MODEL_GROUP_GRANT_SCOPE.WORKSPACE ||
+          grantScope === MODEL_GROUP_GRANT_SCOPE.WORKSPACE_MEMBER ||
+          grantScope === MODEL_GROUP_GRANT_SCOPE.ACTOR ? (
             <div className="space-y-2">
               <Label>Workspace</Label>
               <select
@@ -568,9 +568,9 @@ function GrantDialog({
                 ))}
               </select>
             </div>
-          )}
+          ) : null}
 
-          {grantScope === MODEL_GROUP_GRANT_SCOPE.WORKSPACE_MEMBER && (
+          {grantScope === MODEL_GROUP_GRANT_SCOPE.WORKSPACE_MEMBER ? (
             <div className="space-y-2">
               <Label>Workspace Member</Label>
               <select
@@ -585,9 +585,9 @@ function GrantDialog({
                 ))}
               </select>
             </div>
-          )}
+          ) : null}
 
-          {grantScope === MODEL_GROUP_GRANT_SCOPE.ACTOR && (
+          {grantScope === MODEL_GROUP_GRANT_SCOPE.ACTOR ? (
             <div className="space-y-2">
               <Label>Actor</Label>
               <select
@@ -602,7 +602,7 @@ function GrantDialog({
                 ))}
               </select>
             </div>
-          )}
+          ) : null}
 
           <div className="space-y-2">
             <Label>Reason</Label>

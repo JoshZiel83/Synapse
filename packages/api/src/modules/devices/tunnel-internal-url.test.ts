@@ -51,19 +51,19 @@ async function seedService(
   const workspaceId = randomUUID()
   const userId = randomUUID()
   await db.executeQuery(
-    sql`INSERT INTO users (id, email, name) VALUES (${userId}, ${userId + "@test"}, 'tester')`.compile(
+    sql`INSERT INTO users (id, email, name) VALUES (${userId}, ${`${userId}@test`}, 'tester')`.compile(
       db
     )
   )
   await db.executeQuery(
-    sql`INSERT INTO workspaces (id, name, slug, owner_id) VALUES (${workspaceId}, 'ws', ${"ws-" + workspaceId.slice(0, 8)}, ${userId})`.compile(
+    sql`INSERT INTO workspaces (id, name, slug, owner_id) VALUES (${workspaceId}, 'ws', ${`ws-${workspaceId.slice(0, 8)}`}, ${userId})`.compile(
       db
     )
   )
   const deviceId = randomUUID()
   await db.executeQuery(
     sql`INSERT INTO devices (id, workspace_id, title, host_kind, device_type, public_key, public_key_fingerprint, trust_status)
-        VALUES (${deviceId}, ${workspaceId}, 'd', 'local', 'desktop_computer', ${"pk-" + deviceId}, ${"fp-" + deviceId}, 'trusted')`.compile(
+        VALUES (${deviceId}, ${workspaceId}, 'd', 'local', 'desktop_computer', ${`pk-${deviceId}`}, ${`fp-${deviceId}`}, 'trusted')`.compile(
       db
     )
   )

@@ -907,7 +907,7 @@ async function waitForCatalog(
 ): Promise<void> {
   const pollMs = opts.pollMs ?? 250
   const deadline = Date.now() + opts.timeoutMs
-  // eslint-disable-next-line no-constant-condition
+
   while (true) {
     const ready = await repo.isFilesystemExposureHealthy(deviceId)
     if (ready) return
@@ -937,7 +937,7 @@ export async function waitForTunnelEndpoint(
   const pollMs = opts.pollMs ?? 250
   const deadline = Date.now() + opts.timeoutMs
   const registry = getDeviceTunnelRegistry()
-  // eslint-disable-next-line no-constant-condition
+
   while (true) {
     if (deviceServiceId && registry.resolve(deviceServiceId)) return
     if (Date.now() >= deadline) {

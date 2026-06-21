@@ -76,11 +76,11 @@ async function seedReaddFixture(db: AnyDb) {
     .executeTakeFirstOrThrow()
   const ownerSubjectId = await upsertAccessSubjectOn(db, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: ownerMember.id as string,
+    workspaceMemberId: ownerMember.id as string,
   })
   const readdSubjectId = await upsertAccessSubjectOn(db, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: readdMember.id as string,
+    workspaceMemberId: readdMember.id as string,
   })
   await db
     .insertInto("conversationParticipants")

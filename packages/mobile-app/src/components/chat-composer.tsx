@@ -1005,7 +1005,7 @@ export function ChatComposer({
       ) : null}
 
       <AttachmentListSheet
-        open={attachmentSheetOpen && attachments.length > 1}
+        open={attachmentSheetOpen ? attachments.length > 1 : false}
         attachments={attachments}
         onClose={() => setAttachmentSheetOpen(false)}
         onRemove={removeAttachment}

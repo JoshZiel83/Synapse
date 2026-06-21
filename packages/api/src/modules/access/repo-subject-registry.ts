@@ -74,7 +74,7 @@ function subjectColumns(ref: SubjectRef): {
       return {
         ...base,
         kind: "workspace_member",
-        workspaceMemberId: ref.memberId,
+        workspaceMemberId: ref.workspaceMemberId,
       }
     case SUBJECT_KIND.ACTOR:
       return { ...base, kind: "actor", actorId: ref.actorId }
@@ -125,11 +125,11 @@ async function resolveOwningWorkspaceId(
       const row = await db
         .selectFrom("workspaceMembers")
         .select("workspaceId")
-        .where("id", "=", ref.memberId)
+        .where("id", "=", ref.workspaceMemberId)
         .executeTakeFirst()
       if (!row) {
         throw new Error(
-          `upsertAccessSubject: workspace_members(${ref.memberId}) not found`
+          `upsertAccessSubject: workspace_members(${ref.workspaceMemberId}) not found`
         )
       }
       return row.workspaceId
@@ -195,7 +195,7 @@ export function rowToSubjectRef(row: AccessSubjectRow): SubjectRef {
     case "workspace_member":
       return {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: row.workspaceMemberId!,
+        workspaceMemberId: row.workspaceMemberId!,
       }
     case "actor":
       return { kind: SUBJECT_KIND.ACTOR, actorId: row.actorId! }
@@ -246,7 +246,7 @@ export async function upsertAccessSubject(
       lookup = lookup.where("workspaceId", "=", ref.workspaceId)
       break
     case SUBJECT_KIND.WORKSPACE_MEMBER:
-      lookup = lookup.where("workspaceMemberId", "=", ref.memberId)
+      lookup = lookup.where("workspaceMemberId", "=", ref.workspaceMemberId)
       break
     case SUBJECT_KIND.ACTOR:
       lookup = lookup.where("actorId", "=", ref.actorId)
@@ -367,7 +367,7 @@ export async function findAccessSubjectId(
       lookup = lookup.where("workspaceId", "=", ref.workspaceId)
       break
     case SUBJECT_KIND.WORKSPACE_MEMBER:
-      lookup = lookup.where("workspaceMemberId", "=", ref.memberId)
+      lookup = lookup.where("workspaceMemberId", "=", ref.workspaceMemberId)
       break
     case SUBJECT_KIND.ACTOR:
       lookup = lookup.where("actorId", "=", ref.actorId)

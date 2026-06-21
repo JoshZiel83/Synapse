@@ -84,19 +84,27 @@ const sharedWebhookEndpointCreateInputSchema =
 
 // §4.1: the unified PUT-replace access API speaks the workspace-resources grant
 // target shape (mirrors workspace-resources/controller.ts toCapabilityAccessTarget).
+function grantSubjectToRef(
+  subject: z.infer<typeof WorkspaceResourceGrantTargetSchema>["subject"]
+) {
+  switch (subject.kind) {
+    case SUBJECT_KIND.WORKSPACE:
+      return workspaceRef(subject.workspaceId)
+    case SUBJECT_KIND.WORKSPACE_MEMBER:
+      return workspaceMemberRef(subject.workspaceMemberId)
+    case SUBJECT_KIND.CONVERSATION:
+      return conversationRef(subject.conversationId)
+    case SUBJECT_KIND.ACTOR:
+      return actorRef(subject.actorId)
+    default:
+      return remoteAgentRef(subject.remoteAgentId)
+  }
+}
+
 function grantTargetToCapabilityAccessTarget(
   input: z.infer<typeof WorkspaceResourceGrantTargetSchema>
 ): CapabilityAccessTarget {
-  const subject =
-    input.subject.kind === SUBJECT_KIND.WORKSPACE
-      ? workspaceRef(input.subject.workspaceId)
-      : input.subject.kind === SUBJECT_KIND.WORKSPACE_MEMBER
-        ? workspaceMemberRef(input.subject.memberId)
-        : input.subject.kind === SUBJECT_KIND.CONVERSATION
-          ? conversationRef(input.subject.conversationId)
-          : input.subject.kind === SUBJECT_KIND.ACTOR
-            ? actorRef(input.subject.actorId)
-            : remoteAgentRef(input.subject.remoteAgentId)
+  const subject = grantSubjectToRef(input.subject)
   const scope = input.scope
     ? conversationRef(input.scope.conversationId)
     : undefined
@@ -111,12 +119,12 @@ const webhookIngressSchema = z.looseObject({
 })
 
 function extractWebhookSecret(headers: Record<string, unknown>) {
-  const direct =
-    typeof headers["x-synapse-automation-secret"] === "string"
-      ? headers["x-synapse-automation-secret"]
-      : typeof headers["x-synapse-webhook-secret"] === "string"
-        ? headers["x-synapse-webhook-secret"]
-        : ""
+  let direct = ""
+  if (typeof headers["x-synapse-automation-secret"] === "string") {
+    direct = headers["x-synapse-automation-secret"]
+  } else if (typeof headers["x-synapse-webhook-secret"] === "string") {
+    direct = headers["x-synapse-webhook-secret"]
+  }
   if (direct) return direct
 
   const authorization =
@@ -305,7 +313,6 @@ export default async function automationController(app: FastifyInstance) {
           return
         }
         reply.status(500).send({ error: message })
-        return
       }
     }
   )

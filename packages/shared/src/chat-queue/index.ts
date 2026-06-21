@@ -211,14 +211,20 @@ export function mergeStoredQueueTransition(
   previousState: StoredChatQueueState | null,
   nextState: StoredChatQueueState
 ): StoredChatQueueState {
-  const nextWorkspaceState =
-    currentState.workspaceMemberId &&
-    nextState.workspaceMemberId &&
-    currentState.workspaceMemberId !== nextState.workspaceMemberId
-      ? createEmptyStoredChatQueueState(nextState.workspaceId)
-      : currentState.workspaceId === nextState.workspaceId
-        ? currentState
-        : createEmptyStoredChatQueueState(nextState.workspaceId)
+  const resolveNextWorkspaceState = (): StoredChatQueueState => {
+    if (
+      currentState.workspaceMemberId &&
+      nextState.workspaceMemberId &&
+      currentState.workspaceMemberId !== nextState.workspaceMemberId
+    ) {
+      return createEmptyStoredChatQueueState(nextState.workspaceId)
+    }
+    if (currentState.workspaceId === nextState.workspaceId) {
+      return currentState
+    }
+    return createEmptyStoredChatQueueState(nextState.workspaceId)
+  }
+  const nextWorkspaceState = resolveNextWorkspaceState()
 
   const previousOutbox = previousState?.outbox ?? {}
   const previousPendingReads = previousState?.pendingReads ?? {}
@@ -337,6 +343,19 @@ function sameEntry(left: unknown, right: unknown) {
   return deepEqual(left ?? null, right ?? null)
 }
 
+function resolveMergedTombstones(
+  latestQueueState: ChatQueueStateLike,
+  processedQueueState: ChatQueueStateLike
+): Record<string, unknown> | undefined {
+  if (latestQueueState.tombstones) {
+    return { ...latestQueueState.tombstones }
+  }
+  if (processedQueueState.tombstones) {
+    return { ...processedQueueState.tombstones }
+  }
+  return undefined
+}
+
 export function mergeQueueStateForSave<T extends ChatQueueStateLike>(
   baseQueueState: T,
   latestQueueState: T,
@@ -362,11 +381,7 @@ export function mergeQueueStateForSave<T extends ChatQueueStateLike>(
     // The SW never mutates tombstones (it only flushes outbox/reads), so
     // preserve whatever the latest UI-thread state holds. Carried through so the
     // round-trip save doesn't strip the field.
-    tombstones: latestQueueState.tombstones
-      ? { ...latestQueueState.tombstones }
-      : processedQueueState.tombstones
-        ? { ...processedQueueState.tombstones }
-        : undefined,
+    tombstones: resolveMergedTombstones(latestQueueState, processedQueueState),
   } as T
 
   for (const conversationId of Object.keys(baseQueueState.pendingReads)) {

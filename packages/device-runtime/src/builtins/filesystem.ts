@@ -1871,7 +1871,7 @@ async function handleSearch(
     if (mode === "content") {
       indexed = ctx.avail.liveAvailable ? false : ctx.avail.indexAvailable
     } else {
-      indexed = ctx.avail.indexAvailable ? true : false
+      indexed = !!ctx.avail.indexAvailable
     }
   }
   const grants = getFsGrants(envelope)

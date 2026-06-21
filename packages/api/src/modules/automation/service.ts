@@ -569,9 +569,12 @@ async function normalizeTriggerInput(params: {
 }): Promise<Omit<AutomationTriggerRow, "rule_id">> {
   if (params.input.triggerKind === "schedule") {
     const input = params.input
-    const scheduleKind =
-      input.scheduleKind ||
-      (input.startsAt ? "at" : input.intervalSeconds ? "interval" : "cron")
+    const inferredScheduleKind = (() => {
+      if (input.startsAt) return "at"
+      if (input.intervalSeconds) return "interval"
+      return "cron"
+    })()
+    const scheduleKind = input.scheduleKind || inferredScheduleKind
     // Bad cron / IANA timezone / interval input must fail as a clean 400 at the
     // create/update boundary, not as an uncaught 500 (and must never reach the
     // scheduler as a poison row).
@@ -922,7 +925,7 @@ export function automationEventSourceGrantApplies(params: {
     case "workspace":
       return (
         ((subject as { workspaceId: string }).workspaceId || null) ===
-          ((params.conversation.workspace_id as string | null | undefined) ||
+          ((params.conversation.workspaceId as string | null | undefined) ||
             null) ||
         ((subject as { workspaceId: string }).workspaceId || null) ===
           (params.row.workspaceId || null)
@@ -1425,7 +1428,7 @@ async function resolveAutomationEventSourceRootSubjects(
   const ownerSubjectId = creator.workspaceMemberId
     ? await upsertAccessSubjectOnTrx(trx, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: creator.workspaceMemberId,
+        workspaceMemberId: creator.workspaceMemberId,
       })
     : null
   let createdBySubjectId = ownerSubjectId
@@ -1498,10 +1501,14 @@ async function createIntegrationAutomationEventSource(
     const nextStatus = input.status || "active"
     const reusedName = input.name?.trim() || template.name
     // §4.1: display_name + status live on the workspace_resources root now.
+    // Clear any soft-delete tombstone: the reuse probe can match a previously
+    // soft-deleted source (its unique slot is still occupied), so resurrecting
+    // it must make it visible to *_live reads again instead of dead-ending.
     await updateWorkspaceResourceRootDefault({
       id: existing.id,
       displayName: reusedName,
       status: nextStatus,
+      deletedAt: null,
     })
     await updateAutomationEventSourceRow({
       workspaceId,
@@ -1694,10 +1701,13 @@ export async function createAutomationEventSource(
 
   if (existing) {
     // §4.1: display_name + status live on the workspace_resources root now.
+    // Clear any soft-delete tombstone so resurrecting a previously soft-deleted
+    // source makes it visible to *_live reads again (see integration path).
     await updateWorkspaceResourceRootDefault({
       id: existing.id,
       displayName: input.name.trim(),
       status: input.status || "active",
+      deletedAt: null,
     })
     await updateAutomationEventSourceRow({
       workspaceId,
@@ -1917,7 +1927,7 @@ export async function updateAutomationEventSource(
     },
   })
 
-  let updated = await getAutomationEventSource(workspaceId, eventSourceId)
+  const updated = await getAutomationEventSource(workspaceId, eventSourceId)
   if (!updated) {
     throw new Error(
       `Automation event source ${eventSourceId} was not found after update`
@@ -2614,12 +2624,12 @@ export async function updateAutomationRule(
       activeUntil: normalizedPolicy.active_until,
       maxTriggerCount: normalizedPolicy.max_trigger_count,
       completionStatus: normalizedPolicy.completion_status,
-      completedAt:
-        mergedInput.status === "active"
-          ? null
-          : existing.policy.completedAt
-            ? parseInstantString(existing.policy.completedAt)
-            : null,
+      completedAt: (() => {
+        if (mergedInput.status === "active") return null
+        if (existing.policy.completedAt)
+          return parseInstantString(existing.policy.completedAt)
+        return null
+      })(),
       metadata: JSON.stringify(normalizedPolicy.metadata),
     })
 
@@ -2892,14 +2902,14 @@ export async function ingestAutomationWebhookEvent(params: {
   }
   const endpointSecret = decrypt(sourceRow.endpoint_secret_ciphertext)
 
-  let payload = params.payload || {}
-  let sourceSnapshot: Record<string, unknown> = {
+  const payload = params.payload || {}
+  const sourceSnapshot: Record<string, unknown> = {
     endpointId: sourceRow.endpoint_id,
     endpointName: sourceRow.endpoint_name,
     ...(params.sourceSnapshot || {}),
   }
-  let dedupeKey = params.dedupeKey
-  let occurredAt = params.occurredAt
+  const dedupeKey = params.dedupeKey
+  const occurredAt = params.occurredAt
 
   if (!params.secret || !verifyPresentedSecret(params.secret, endpointSecret)) {
     throw new Error("Invalid webhook secret")

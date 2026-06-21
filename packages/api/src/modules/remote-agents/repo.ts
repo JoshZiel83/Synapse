@@ -1623,7 +1623,7 @@ export async function listGroupTaskGrantsRepo(
 ) {
   const result = await runOn<{
     workspaceMemberId: string
-    grantedByWorkspaceMemberId: string | null
+    createdByWorkspaceMemberId: string | null
     createdAt: Date
     updatedAt: Date
     userId: string
@@ -1634,7 +1634,7 @@ export async function listGroupTaskGrantsRepo(
     `
       SELECT
         grant_row.workspace_member_id AS "workspaceMemberId",
-        grant_row.granted_by_workspace_member_id AS "grantedByWorkspaceMemberId",
+        grant_row.created_by_workspace_member_id AS "createdByWorkspaceMemberId",
         grant_row.created_at AS "createdAt",
         grant_row.updated_at AS "updatedAt",
         wm.user_id AS "userId",
@@ -1675,7 +1675,7 @@ export async function loadValidWorkspaceMemberIdsRepo(
  */
 export async function replaceGroupTaskGrantsTx(params: {
   remoteAgentId: string
-  grantedByWorkspaceMemberId: string
+  createdByWorkspaceMemberId: string
   workspaceMemberIds: string[]
 }) {
   await withDbTransaction(async (client) => {
@@ -1689,7 +1689,7 @@ export async function replaceGroupTaskGrantsTx(params: {
         .values({
           remoteAgentId: params.remoteAgentId,
           workspaceMemberId: workspaceMemberId,
-          grantedByWorkspaceMemberId: params.grantedByWorkspaceMemberId,
+          createdByWorkspaceMemberId: params.createdByWorkspaceMemberId,
           createdAt: sql`NOW()`,
         })
         .execute()

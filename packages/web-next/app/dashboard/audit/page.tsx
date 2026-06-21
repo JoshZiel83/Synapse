@@ -280,11 +280,11 @@ export default function AuditPage() {
                           <span className="text-foreground">
                             {log.resourceType}
                           </span>
-                          {log.resourceId && (
+                          {log.resourceId ? (
                             <span className="ml-1 text-xs text-muted-foreground/50">
                               #{log.resourceId.slice(0, 8)}
                             </span>
-                          )}
+                          ) : null}
                         </span>
                       ) : (
                         "-"
@@ -300,7 +300,7 @@ export default function AuditPage() {
       </Card>
 
       {/* Pagination */}
-      {totalPages > 1 && (
+      {totalPages > 1 ? (
         <div className="flex items-center justify-center gap-4">
           <Button
             variant="outline"
@@ -326,7 +326,7 @@ export default function AuditPage() {
             <ChevronRight className="ml-1 h-4 w-4" />
           </Button>
         </div>
-      )}
+      ) : null}
 
       {/* Detail Dialog */}
       <Dialog
@@ -337,21 +337,21 @@ export default function AuditPage() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-3">
               <span>Audit Detail</span>
-              {selected && (
+              {selected ? (
                 <Badge
                   variant="outline"
                   className={`text-xs ${getActionBadge(selected.action)}`}
                 >
                   {selected.action}
                 </Badge>
-              )}
+              ) : null}
             </DialogTitle>
             <DialogDescription className="sr-only">
               Audit log entry details
             </DialogDescription>
           </DialogHeader>
 
-          {selected && (
+          {selected ? (
             <div className="space-y-4 pt-2">
               {/* Time */}
               <DetailRow label="Timestamp">
@@ -369,21 +369,21 @@ export default function AuditPage() {
                   <div className="flex items-center gap-2">
                     <Bot className="h-4 w-4 text-violet-400" />
                     <span>{selected.actorName}</span>
-                    {selected.actorId && (
+                    {selected.actorId ? (
                       <span className="font-mono text-xs text-muted-foreground/50">
                         {selected.actorId.slice(0, 8)}
                       </span>
-                    )}
+                    ) : null}
                   </div>
                 ) : selected.userName ? (
                   <div className="flex items-center gap-2">
                     <User className="h-4 w-4 text-blue-400" />
                     <span>{selected.userName}</span>
-                    {selected.userId && (
+                    {selected.userId ? (
                       <span className="font-mono text-xs text-muted-foreground/50">
                         {selected.userId.slice(0, 8)}
                       </span>
-                    )}
+                    ) : null}
                   </div>
                 ) : (
                   <span className="text-muted-foreground">System</span>
@@ -391,22 +391,22 @@ export default function AuditPage() {
               </DetailRow>
 
               {/* Resource */}
-              {selected.resourceType && (
+              {selected.resourceType ? (
                 <DetailRow label="Resource">
                   <div className="flex items-center gap-2">
                     <Hash className="h-3.5 w-3.5 text-muted-foreground/60" />
                     <span className="font-medium">{selected.resourceType}</span>
-                    {selected.resourceId && (
+                    {selected.resourceId ? (
                       <span className="rounded bg-muted/30 px-1.5 py-0.5 font-mono text-xs text-muted-foreground">
                         {selected.resourceId}
                       </span>
-                    )}
+                    ) : null}
                   </div>
                 </DetailRow>
-              )}
+              ) : null}
 
               {/* IP */}
-              {selected.ipAddress && (
+              {selected.ipAddress ? (
                 <DetailRow label="IP Address">
                   <div className="flex items-center gap-2">
                     <Globe className="h-3.5 w-3.5 text-muted-foreground/60" />
@@ -415,7 +415,7 @@ export default function AuditPage() {
                     </span>
                   </div>
                 </DetailRow>
-              )}
+              ) : null}
 
               {/* ID */}
               <DetailRow label="Log ID">
@@ -425,15 +425,15 @@ export default function AuditPage() {
               </DetailRow>
 
               {/* Details JSON */}
-              {selected.details != null && (
+              {selected.details != null ? (
                 <DetailRow label="Details">
                   <pre className="max-h-48 overflow-x-auto rounded-lg border border-border/30 bg-muted/20 p-3 font-mono text-xs break-all whitespace-pre-wrap">
                     {formatDetails(selected.details)}
                   </pre>
                 </DetailRow>
-              )}
+              ) : null}
             </div>
-          )}
+          ) : null}
         </DialogContent>
       </Dialog>
     </div>

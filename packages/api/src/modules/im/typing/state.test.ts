@@ -20,7 +20,7 @@ test("request_start transitions idle → starting and emits send start", () => {
 })
 
 test("send_ok in starting → active and schedules heartbeat", () => {
-  let s = reduceTyping(
+  const s = reduceTyping(
     INITIAL_TYPING_STATE,
     { type: "request_start", at: 0 },
     CFG

@@ -176,23 +176,24 @@ function buildConversationPresentation(record: ChatConversationRecord) {
             )
         ) ?? activeParticipants[0])
       : undefined
-  const avatarParticipants =
-    record.kind === CONVERSATION_KIND.DIRECT
-      ? peer
-        ? [peer]
-        : activeParticipants.slice(0, 1)
-      : activeParticipants.slice(0, 4)
+  let avatarParticipants: ChatParticipantSummary[]
+  if (record.kind === CONVERSATION_KIND.DIRECT) {
+    avatarParticipants = peer ? [peer] : activeParticipants.slice(0, 1)
+  } else {
+    avatarParticipants = activeParticipants.slice(0, 4)
+  }
   const isDirect = record.kind === CONVERSATION_KIND.DIRECT
+
+  let subtitle: string
+  if (record.isIm) {
+    subtitle = isDirect ? "IM direct chat" : "IM group chat"
+  } else {
+    subtitle = isDirect ? "Direct message" : "Group chat"
+  }
 
   return {
     chatType: isDirect ? "direct" : "group",
-    subtitle: record.isIm
-      ? isDirect
-        ? "IM direct chat"
-        : "IM group chat"
-      : isDirect
-        ? "Direct message"
-        : "Group chat",
+    subtitle,
     avatarParticipantIds: avatarParticipants.map(
       (participant) => participant.participantId
     ),

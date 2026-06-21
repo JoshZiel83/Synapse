@@ -62,7 +62,7 @@ async function insertWorkspaceMember(
 async function memberSubjectId(db: AnyDb, memberId: string): Promise<string> {
   return upsertAccessSubject(db, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId,
+    workspaceMemberId: memberId,
   })
 }
 
@@ -208,7 +208,10 @@ test(
         workspaceId,
         workspaceResourceId: actorId,
         target: {
-          subject: { kind: "workspace_member", memberId: guestMemberId },
+          subject: {
+            kind: "workspace_member",
+            workspaceMemberId: guestMemberId,
+          },
         },
         permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.CONTACT_VISIBLE],
         source: "approval",
@@ -919,7 +922,7 @@ test(
         target: {
           subject: {
             kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-            memberId: guestMemberId,
+            workspaceMemberId: guestMemberId,
           },
         },
         permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.MANAGE],
@@ -974,7 +977,7 @@ test(
         target: {
           subject: {
             kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-            memberId: guestMemberId,
+            workspaceMemberId: guestMemberId,
           },
         },
         permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.MANAGE],
@@ -1476,7 +1479,7 @@ async function addMemberParticipant(
 ) {
   const subjectId = await upsertAccessSubject(db, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId,
+    workspaceMemberId: memberId,
   })
   await db
     .insertInto("conversationParticipants")
@@ -1624,7 +1627,7 @@ async function insertAutomationEventSource(
   const id = crypto.randomUUID()
   const creatorSubjectId = await upsertAccessSubject(db, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: createdByMemberId,
+    workspaceMemberId: createdByMemberId,
   })
   await db
     .insertInto("workspaceResources")
@@ -1699,21 +1702,25 @@ async function insertResourceGrant(
   // authorized through workspace_resource_grants. actor/remote_agent take a
   // contact_visible grant; everything else (skill / plugin / device_capability /
   // automation_event_source) takes a use grant.
-  const subject =
-    params.target.subjectKind === "workspace"
-      ? {
+  const subject = (() => {
+    switch (params.target.subjectKind) {
+      case "workspace":
+        return {
           kind: SUBJECT_KIND.WORKSPACE,
           workspaceId: params.target.subjectWorkspaceId!,
         }
-      : params.target.subjectKind === "workspace_member"
-        ? {
-            kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-            memberId: params.target.subjectWorkspaceMemberId!,
-          }
-        : {
-            kind: SUBJECT_KIND.ACTOR,
-            actorId: params.target.subjectActorId!,
-          }
+      case "workspace_member":
+        return {
+          kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+          workspaceMemberId: params.target.subjectWorkspaceMemberId!,
+        }
+      default:
+        return {
+          kind: SUBJECT_KIND.ACTOR,
+          actorId: params.target.subjectActorId!,
+        }
+    }
+  })()
   const permissions =
     params.resourceType === "actor" || params.resourceType === "remote_agent"
       ? [WORKSPACE_RESOURCE_GRANT_PERMISSION.CONTACT_VISIBLE]

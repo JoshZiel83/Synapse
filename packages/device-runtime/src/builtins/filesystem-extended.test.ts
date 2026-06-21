@@ -33,7 +33,7 @@ interface FakeHistoryRow {
 function boundaryUnder(path: string, prefix: string): boolean {
   if (prefix === "/") return true
   if (path === prefix) return true
-  return path.startsWith(prefix + "/")
+  return path.startsWith(`${prefix}/`)
 }
 
 function makeFakeHelper() {

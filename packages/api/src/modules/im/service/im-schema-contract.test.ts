@@ -139,7 +139,9 @@ test("WeixinBindingCandidatesResponseSchema parses workspace member views", () =
         workspaceId: "ws-1",
         userId: "user-1",
         trustLevel: "member",
-        accessKeys: ["workspace.view"],
+        // A real workspace_access_bindings_access_key value (the DTO now enforces
+        // the WORKSPACE_ACCESS_KEYS enum, not a free-form action string).
+        accessKeys: ["model_admin"],
         joinedAt: ISO,
         userName: "Member",
         userEmail: "member@example.com",

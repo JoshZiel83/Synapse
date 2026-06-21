@@ -264,6 +264,34 @@ export interface WebhookHandlerResult {
   body: unknown
 }
 
+/**
+ * Input for `handleWebhookVerification` — the HTTP **GET** subscription
+ * handshake some platforms require before they will POST events. The
+ * canonical case is WhatsApp Cloud, whose webhook is registered by Meta
+ * issuing a one-time
+ * `GET …?hub.mode=subscribe&hub.verify_token=…&hub.challenge=…`; the
+ * server must echo `hub.challenge` verbatim (status 200) when the token
+ * matches, else reply 403. Telegram does NOT need this (its webhook is
+ * registered via the `setWebhook` Bot API call, not an inbound GET ping).
+ */
+export interface WebhookVerificationInput {
+  account: TransportAccountSummary
+  /** Parsed query string of the GET request (e.g. `hub.*` params). */
+  query: Record<string, unknown>
+  headers: Record<string, unknown>
+  logger?: ConnectorLogger
+}
+
+export interface WebhookVerificationResult {
+  statusCode: number
+  /**
+   * Bare response body the platform expects. For WhatsApp Cloud this is
+   * the raw `hub.challenge` string echoed back on success — never wrapped
+   * in `{ data }` (the WIRE route sends it verbatim).
+   */
+  body: unknown
+}
+
 // ───────────────────────── Typing adapter result ─────────────────────────
 
 /**
@@ -451,6 +479,16 @@ export interface TransportConnector {
 
   /** Optional: handle a raw webhook HTTP body (Feishu signature etc.). */
   handleWebhook?(input: WebhookHandlerInput): Promise<WebhookHandlerResult>
+
+  /**
+   * Optional: respond to the platform's HTTP **GET** webhook-verification
+   * handshake (WhatsApp Cloud `hub.challenge`). Connectors that register
+   * their webhook out-of-band (Telegram `setWebhook`) or run no webhook
+   * at all omit this; the public GET route then replies 501.
+   */
+  handleWebhookVerification?(
+    input: WebhookVerificationInput
+  ): Promise<WebhookVerificationResult>
 
   // ─────────── Optional service-layer hooks (anti-dispatch-drift) ───────────
   //

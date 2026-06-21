@@ -102,6 +102,29 @@ export function validateRealtimeAsrAudioConfig(input: unknown) {
   return RealtimeAsrAudioConfigSchema.parse(input) as RealtimeAsrAudioConfig
 }
 
+function startErrorCode(error: unknown): AsrErrorPayload["code"] {
+  if (error instanceof z.ZodError) {
+    return "ASR_INVALID_AUDIO_CONFIG"
+  }
+  if (
+    error instanceof Error &&
+    error.message === "ASR concurrency limit reached"
+  ) {
+    return "ASR_CONCURRENCY_LIMIT_REACHED"
+  }
+  return "ASR_UPSTREAM_CONNECT_FAILED"
+}
+
+function startErrorMessage(error: unknown): string {
+  if (error instanceof z.ZodError) {
+    return formatZodError(error)
+  }
+  if (error instanceof Error) {
+    return error.message
+  }
+  return "Failed to connect to the ASR provider"
+}
+
 export function mapProviderError(
   code: number,
   payload: unknown,
@@ -391,19 +414,8 @@ export class VolcengineRealtimeAsrSession {
     } catch (error) {
       this.startInFlight = false
       this.emitErrorAndClose({
-        code:
-          error instanceof z.ZodError
-            ? "ASR_INVALID_AUDIO_CONFIG"
-            : error instanceof Error &&
-                error.message === "ASR concurrency limit reached"
-              ? "ASR_CONCURRENCY_LIMIT_REACHED"
-              : "ASR_UPSTREAM_CONNECT_FAILED",
-        message:
-          error instanceof z.ZodError
-            ? formatZodError(error)
-            : error instanceof Error
-              ? error.message
-              : "Failed to connect to the ASR provider",
+        code: startErrorCode(error),
+        message: startErrorMessage(error),
         retryable:
           !(error instanceof z.ZodError) &&
           !(

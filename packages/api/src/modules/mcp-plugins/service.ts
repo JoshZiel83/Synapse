@@ -355,15 +355,16 @@ function buildInstallationAccessRow(input: {
     target.subject.kind === "remote_agent"
       ? (target.subject as { remoteAgentId: string }).remoteAgentId
       : null
-  const conversationId =
-    target.scope?.kind === "conversation"
-      ? (target.scope as { conversationId: string }).conversationId
-      : target.subject.kind === "conversation"
-        ? (target.subject as { conversationId: string }).conversationId
-        : null
+  let conversationId: string | null = null
+  if (target.scope?.kind === "conversation") {
+    conversationId = (target.scope as { conversationId: string }).conversationId
+  } else if (target.subject.kind === "conversation") {
+    conversationId = (target.subject as { conversationId: string })
+      .conversationId
+  }
   const workspaceMemberId =
     target.subject.kind === "workspace_member"
-      ? (target.subject as { memberId: string }).memberId
+      ? (target.subject as { workspaceMemberId: string }).workspaceMemberId
       : null
   return {
     id: input.id,
@@ -1012,19 +1013,27 @@ export async function updateInstallation(
       // root-only conversation-type policy source; no detail-table override update remains
     }
 
+    let nextStatus: (typeof WORKSPACE_RESOURCE_STATUS)[keyof typeof WORKSPACE_RESOURCE_STATUS]
+    if (data.isEnabled === undefined) {
+      switch (row.rootStatus) {
+        case PLUGIN_INSTALLATION_STATUS.ACTIVE:
+          nextStatus = WORKSPACE_RESOURCE_STATUS.ACTIVE
+          break
+        case PLUGIN_INSTALLATION_STATUS.DISABLED:
+          nextStatus = WORKSPACE_RESOURCE_STATUS.DISABLED
+          break
+        default:
+          nextStatus = WORKSPACE_RESOURCE_STATUS.ERROR
+      }
+    } else if (data.isEnabled) {
+      nextStatus = WORKSPACE_RESOURCE_STATUS.ACTIVE
+    } else {
+      nextStatus = WORKSPACE_RESOURCE_STATUS.DISABLED
+    }
     await updateWorkspaceResourceRoot(client, {
       id: installId,
       displayName: row.rootDisplayName,
-      status:
-        data.isEnabled === undefined
-          ? row.rootStatus === PLUGIN_INSTALLATION_STATUS.ACTIVE
-            ? WORKSPACE_RESOURCE_STATUS.ACTIVE
-            : row.rootStatus === PLUGIN_INSTALLATION_STATUS.DISABLED
-              ? WORKSPACE_RESOURCE_STATUS.DISABLED
-              : WORKSPACE_RESOURCE_STATUS.ERROR
-          : data.isEnabled
-            ? WORKSPACE_RESOURCE_STATUS.ACTIVE
-            : WORKSPACE_RESOURCE_STATUS.DISABLED,
+      status: nextStatus,
       conversationTypeMaskOverride:
         data.conversationTypeMaskOverride === undefined
           ? row.rootConversationTypeMaskOverride
@@ -1098,7 +1107,7 @@ export async function createPluginInstallationGrant(input: {
   installationId: string
   accessTarget?: CapabilityAccessTarget
   conversationTypeMaskOverride?: number | null
-  grantedByWorkspaceMemberId?: string
+  createdByWorkspaceMemberId?: string
   reason?: string
 }) {
   const { row, plugin, workspaceConversationTypeMask } =
@@ -1146,15 +1155,20 @@ export async function createPluginInstallationGrant(input: {
     accessTarget.subject.kind === "remote_agent"
       ? (accessTarget.subject as { remoteAgentId: string }).remoteAgentId
       : null
-  const accessTargetConversationId =
-    accessTarget.scope?.kind === "conversation"
-      ? (accessTarget.scope as { conversationId: string }).conversationId
-      : accessTarget.subject.kind === "conversation"
-        ? (accessTarget.subject as { conversationId: string }).conversationId
-        : null
+  let accessTargetConversationId: string | null = null
+  if (accessTarget.scope?.kind === "conversation") {
+    accessTargetConversationId = (
+      accessTarget.scope as { conversationId: string }
+    ).conversationId
+  } else if (accessTarget.subject.kind === "conversation") {
+    accessTargetConversationId = (
+      accessTarget.subject as { conversationId: string }
+    ).conversationId
+  }
   const accessTargetWorkspaceMemberId =
     accessTarget.subject.kind === "workspace_member"
-      ? (accessTarget.subject as { memberId: string }).memberId
+      ? (accessTarget.subject as { workspaceMemberId: string })
+          .workspaceMemberId
       : null
   const existing = accessRows.find(
     (entry) =>
@@ -1179,7 +1193,7 @@ export async function createPluginInstallationGrant(input: {
       target: accessTarget,
       permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.USE],
       conversationTypeMaskOverride: input.conversationTypeMaskOverride ?? null,
-      createdByWorkspaceMemberId: input.grantedByWorkspaceMemberId || null,
+      createdByWorkspaceMemberId: input.createdByWorkspaceMemberId || null,
       reason: input.reason || plugin.authorization?.reason || null,
     })
 

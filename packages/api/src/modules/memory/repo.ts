@@ -641,7 +641,7 @@ function memoryRowFromSql(itemAlias = "mi", spaceAlias = "ms") {
   const space = sql.raw(spaceAlias)
   return sql`
     ${item}
-      JOIN memory_spaces ${space} ON ${space}.id = ${item}.memory_space_id
+      JOIN memory_spaces_live ${space} ON ${space}.id = ${item}.memory_space_id
       JOIN access_subjects owner_subj ON owner_subj.id = ${space}.owner_subject_id
       LEFT JOIN access_subjects scope_subj ON scope_subj.id = ${space}.scope_subject_id
       LEFT JOIN actors owner_actor ON owner_actor.id = owner_subj.actor_id
@@ -664,6 +664,7 @@ export async function getMemoryRow(
   const result = await db.executeQuery(
     sql<MemoryRow>`SELECT ${select} FROM memory_items ${from}
        WHERE mi.workspace_id = ${workspaceId} AND mi.id = ${memoryId}
+         AND mi.deleted_at IS NULL
        LIMIT 1`.compile(db)
   )
   const row = result.rows[0]
@@ -955,6 +956,8 @@ export async function updateMemoryItemTx(params: {
         })
         .where("id", "=", params.memoryId)
         .where("workspaceId", "=", params.workspaceId)
+        // Never resurrect / mutate a soft-deleted item.
+        .where("deletedAt", "is", null)
     )
 
     // Content set-replace: memory_item_parts is aggregate-internal detail; the
@@ -1008,6 +1011,7 @@ export async function moveMemoryItemToSpaceTx(params: {
       .select("id")
       .where("id", "=", params.memoryId)
       .where("workspaceId", "=", params.workspaceId)
+      .where("deletedAt", "is", null)
       .limit(1)
       .executeTakeFirst()
     if (!stillThere) {
@@ -1030,6 +1034,8 @@ export async function moveMemoryItemToSpaceTx(params: {
         })
         .where("id", "=", params.memoryId)
         .where("workspaceId", "=", params.workspaceId)
+        // Never move a soft-deleted item.
+        .where("deletedAt", "is", null)
     )
     return "moved"
   })
@@ -1182,6 +1188,14 @@ function hasPrincipalSearchContext(
   return Boolean(input.actorId || input.workspaceMemberId)
 }
 
+function resolveMemorySearchStates(
+  input: Pick<MemorySearchCandidateFilterInput, "states" | "statuses">
+): MemoryItemState[] | string[] {
+  if (input.states && input.states.length > 0) return input.states
+  if (input.statuses && input.statuses.length > 0) return input.statuses
+  return ["active"]
+}
+
 function buildMemorySearchWhereClause(params: {
   workspaceId: string
   input: MemorySearchCandidateFilterInput
@@ -1198,6 +1212,8 @@ function buildMemorySearchWhereClause(params: {
   const input = params.input
   const conditions: RawBuilder<unknown>[] = [
     sql`${item}.workspace_id = ${params.workspaceId}`,
+    // Soft-deleted items must never surface in search results.
+    sql`${item}.deleted_at IS NULL`,
   ]
 
   if (input.namespaceKeys && input.namespaceKeys.length > 0) {
@@ -1232,12 +1248,7 @@ function buildMemorySearchWhereClause(params: {
     )
   }
 
-  const states =
-    input.states && input.states.length > 0
-      ? input.states
-      : input.statuses && input.statuses.length > 0
-        ? input.statuses
-        : ["active"]
+  const states = resolveMemorySearchStates(input)
   conditions.push(sql`${item}.state::text = ANY(${states}::text[])`)
 
   if (hasPrincipalSearchContext(input)) {
@@ -1266,6 +1277,8 @@ function buildMemoryListWhereClause(params: {
 }) {
   const conditions: RawBuilder<unknown>[] = [
     sql`mi.workspace_id = ${params.workspaceId}`,
+    // Soft-deleted items must never surface in list results.
+    sql`mi.deleted_at IS NULL`,
   ]
   const input = params.input
 

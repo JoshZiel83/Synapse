@@ -560,10 +560,9 @@ export function createChromeDevtoolsMcpBuiltin(
           ok: false,
           result: toolErrorResult({
             code: "permission_denied",
-            message:
-              "browser tools may not access local filesystem in v1 (field rejected: " +
-              key +
-              ")",
+            message: `browser tools may not access local filesystem in v1 (field rejected: ${
+              key
+            })`,
           }),
         }
       }
@@ -843,12 +842,17 @@ export function createChromeDevtoolsMcpBuiltin(
     const scopeCheck = checkScope(grants, descriptor, targetUrl)
     if (!scopeCheck.ok) {
       const scope = resolveUrlScope(targetUrl)
-      const scopeSource =
-        effective.kind === "argument_url"
-          ? "args"
-          : effective.kind === "page_id"
-            ? "runtime_page_id"
-            : "runtime_active_page"
+      let scopeSource: "args" | "runtime_page_id" | "runtime_active_page"
+      switch (effective.kind) {
+        case "argument_url":
+          scopeSource = "args"
+          break
+        case "page_id":
+          scopeSource = "runtime_page_id"
+          break
+        default:
+          scopeSource = "runtime_active_page"
+      }
       // Page enumeration defence: when the caller chose a page by index
       // (`close_page` / `select_page` / etc.), do NOT echo that page's
       // URL or origin back on denial — that would let any caller with
@@ -1067,13 +1071,12 @@ export function createChromeDevtoolsMcpBuiltin(
           text:
             allowed.length === 0
               ? "## Pages\n(no authorized pages)"
-              : "## Pages\n" +
-                allowed
+              : `## Pages\n${allowed
                   .map(
                     (p) =>
                       `${p.pageId}: ${p.url}${p.isActive ? " [selected]" : ""}`
                   )
-                  .join("\n"),
+                  .join("\n")}`,
         },
       ],
       _meta: {

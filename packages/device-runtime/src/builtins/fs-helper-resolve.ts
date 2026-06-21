@@ -45,9 +45,9 @@ export class FsHelperProtoMismatchError extends Error {
   ) {
     super(
       `fs-helper protocol mismatch: client expects proto_version=${expected}, ` +
-        `helper reports ${got ?? "none (pre-handshake binary)"}` +
-        (crateVersion ? ` (crate ${crateVersion})` : "") +
-        `. Rebuild the sidecar (build:fs-helper).`
+        `helper reports ${got ?? "none (pre-handshake binary)"}${
+          crateVersion ? ` (crate ${crateVersion})` : ""
+        }. Rebuild the sidecar (build:fs-helper).`
     )
     this.name = "FsHelperProtoMismatchError"
   }

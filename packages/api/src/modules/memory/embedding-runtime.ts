@@ -74,18 +74,20 @@ class MemoryEmbeddingRuntime {
       `./embedding-worker.${sourceExt}`,
       import.meta.url
     )
+    let execArgv: string[] | undefined
+    if (sourceExt === "ts") {
+      execArgv =
+        process.execArgv.length > 0 ? process.execArgv : ["--import", "tsx"]
+    } else {
+      execArgv = undefined
+    }
     const worker = new Worker(workerUrl, {
       workerData: {
         modelId: config.memory.modelId,
         modelCacheDir: config.memory.modelCacheDir,
         allowRemoteModels: this.allowRemoteModels,
       },
-      execArgv:
-        sourceExt === "ts"
-          ? process.execArgv.length > 0
-            ? process.execArgv
-            : ["--import", "tsx"]
-          : undefined,
+      execArgv,
     })
 
     worker.on("message", (response: WorkerResponse) => {

@@ -265,7 +265,7 @@ test(
       const ctx = await buildRuntimePrincipalContext(db, {
         principal: {
           kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-          memberId: outsider,
+          workspaceMemberId: outsider,
         },
         workspaceId: wsId,
         conversationId: conv,

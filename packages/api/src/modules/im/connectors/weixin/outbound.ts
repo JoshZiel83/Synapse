@@ -118,6 +118,17 @@ async function sendWeixinItem(params: {
   return { externalMessageId: parsed.externalMessageId || clientId, raw: text }
 }
 
+function resolveWeixinMediaType(type: WeixinMediaPart["type"]) {
+  switch (type) {
+    case "image":
+      return WEIXIN_UPLOAD_MEDIA_TYPE.IMAGE
+    case "video":
+      return WEIXIN_UPLOAD_MEDIA_TYPE.VIDEO
+    default:
+      return WEIXIN_UPLOAD_MEDIA_TYPE.FILE
+  }
+}
+
 async function uploadAndBuildMediaItem(params: {
   part: WeixinMediaPart
   baseUrl: string
@@ -132,12 +143,7 @@ async function uploadAndBuildMediaItem(params: {
     throw new Error(`Weixin ${part.type} resource ${sha256} is empty`)
   }
 
-  const mediaType =
-    part.type === "image"
-      ? WEIXIN_UPLOAD_MEDIA_TYPE.IMAGE
-      : part.type === "video"
-        ? WEIXIN_UPLOAD_MEDIA_TYPE.VIDEO
-        : WEIXIN_UPLOAD_MEDIA_TYPE.FILE
+  const mediaType = resolveWeixinMediaType(part.type)
   const uploaded = await uploadWeixinMedia({
     buffer,
     toUserId,

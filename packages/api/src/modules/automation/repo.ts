@@ -29,6 +29,7 @@ import type {
   AutomationSourceKind,
   AutomationWebhookEndpoint,
   Timestamp,
+  WorkspaceResourceStatus,
 } from "@synapse/shared"
 import type { AutomationEventSourceGrantJoinedRow } from "../access/grant-target.js"
 import type {
@@ -78,7 +79,10 @@ export type {
 export type IntegrationInstallationRow = {
   installationId: string
   workspaceId: string
-  installationStatus: "active" | "disabled" | "error" | "archived"
+  // Sourced from workspace_resources.status (5-value enum); use the canonical
+  // shared type so it can never drift to a partial inline union (was missing
+  // 'deprecated').
+  installationStatus: WorkspaceResourceStatus
   configData: Record<string, unknown>
   orgSlug: string
   itemSlug: string

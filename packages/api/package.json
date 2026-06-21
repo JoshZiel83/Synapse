@@ -38,7 +38,10 @@
     "db:purge:workspace": "tsx src/infrastructure/database/purge.ts workspace",
     "gen:cutover-ddl": "node scripts/cutover-emit-ddl.mjs",
     "gen:purge-ddl": "node scripts/cutover-emit-purge.mjs",
-    "memory:bootstrap-model": "tsx src/modules/memory/bootstrap-model.ts"
+    "memory:bootstrap-model": "tsx src/modules/memory/bootstrap-model.ts",
+    "lint": "eslint src tests",
+    "lint:fix": "eslint src tests --fix",
+    "lint:types": "NODE_OPTIONS=--max-old-space-size=8192 eslint --no-config-lookup -c eslint.config.types.mjs src tests"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.81",
@@ -78,6 +81,7 @@
     "@synapse/shared": "*",
     "@wecom/aibot-node-sdk": "1.0.6",
     "ai": "^6.0.197",
+    "baileys": "6.7.23",
     "better-auth": "1.6.13",
     "bullmq": "^5.8.0",
     "cron-parser": "^4.9.0",
@@ -99,6 +103,7 @@
     "pg": "^8.12.0",
     "pino": "^9.0.0",
     "pino-pretty": "^11.0.0",
+    "qrcode": "^1.5.4",
     "sharp": "^0.34.5",
     "tesseract.js": "^7.0.0",
     "undici": "^5.29.0",
@@ -113,6 +118,7 @@
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^25.1.0",
     "@types/pg": "^8.11.0",
+    "@types/qrcode": "^1.5.6",
     "@types/unzipper": "^0.10.11",
     "@types/uuid": "^10.0.0",
     "@types/ws": "^8.18.1",

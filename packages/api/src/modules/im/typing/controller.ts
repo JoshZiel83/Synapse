@@ -92,7 +92,6 @@ export function createTypingController(
           )
         }, effect.afterMs)
         timers.add(handle)
-        return
       }
     }
   }

@@ -154,7 +154,8 @@ export async function validateConversationScopedAccessTarget(params: {
       // isn't actually in C.
       activeParticipantCheck = {
         participantType: "workspace_member",
-        principalId: (params.target.subject as { memberId: string }).memberId,
+        principalId: (params.target.subject as { workspaceMemberId: string })
+          .workspaceMemberId,
         principalKind: "workspace_member",
       }
     }
@@ -216,7 +217,7 @@ export async function validateConversationScopedAccessTarget(params: {
     case "workspace_member":
       principalRef = {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: activeParticipantCheck.principalId,
+        workspaceMemberId: activeParticipantCheck.principalId,
       } as const
       break
   }
@@ -230,12 +231,17 @@ export async function validateConversationScopedAccessTarget(params: {
     }
   )
   if (!hasActive) {
-    const label =
-      activeParticipantCheck.principalKind === "actor"
-        ? "actor"
-        : activeParticipantCheck.principalKind === "remote_agent"
-          ? "remote agent"
-          : "workspace member"
+    let label
+    switch (activeParticipantCheck.principalKind) {
+      case "actor":
+        label = "actor"
+        break
+      case "remote_agent":
+        label = "remote agent"
+        break
+      default:
+        label = "workspace member"
+    }
     throw params.buildError(
       `Selected ${label} must already be an active participant in the selected conversation.`
     )

@@ -79,16 +79,24 @@ const grantRequestListQuerySchema = WorkspaceResourceGrantRequestListQuerySchema
 function toCapabilityAccessTarget(
   input: z.infer<typeof targetSchema>
 ): CapabilityAccessTarget {
-  const subject =
-    input.subject.kind === SUBJECT_KIND.WORKSPACE
-      ? workspaceRef(input.subject.workspaceId)
-      : input.subject.kind === SUBJECT_KIND.WORKSPACE_MEMBER
-        ? workspaceMemberRef(input.subject.memberId)
-        : input.subject.kind === SUBJECT_KIND.CONVERSATION
-          ? conversationRef(input.subject.conversationId)
-          : input.subject.kind === SUBJECT_KIND.ACTOR
-            ? actorRef(input.subject.actorId)
-            : remoteAgentRef(input.subject.remoteAgentId)
+  const subjectInput = input.subject
+  let subject
+  switch (subjectInput.kind) {
+    case SUBJECT_KIND.WORKSPACE:
+      subject = workspaceRef(subjectInput.workspaceId)
+      break
+    case SUBJECT_KIND.WORKSPACE_MEMBER:
+      subject = workspaceMemberRef(subjectInput.workspaceMemberId)
+      break
+    case SUBJECT_KIND.CONVERSATION:
+      subject = conversationRef(subjectInput.conversationId)
+      break
+    case SUBJECT_KIND.ACTOR:
+      subject = actorRef(subjectInput.actorId)
+      break
+    default:
+      subject = remoteAgentRef(subjectInput.remoteAgentId)
+  }
 
   const scope = input.scope
     ? conversationRef(input.scope.conversationId)
@@ -132,14 +140,18 @@ export function registerWorkspaceResourceRoutes(app: FastifyInstance) {
       const { workspaceId } = request.params as { workspaceId: string }
       try {
         const body = createWorkspaceResourceSchema.parse(request.body)
-        const createAction =
-          body.kind === WORKSPACE_RESOURCE_KIND.ACTOR
-            ? "workspace.manage_actors"
-            : body.kind === WORKSPACE_RESOURCE_KIND.REMOTE_AGENT
-              ? "workspace.manage_remote_agents"
-              : body.kind === WORKSPACE_RESOURCE_KIND.INSTALLED_SKILL
-                ? "workspace.manage_skills"
-                : "workspace.manage_plugins"
+        const createAction = (() => {
+          switch (body.kind) {
+            case WORKSPACE_RESOURCE_KIND.ACTOR:
+              return "workspace.manage_actors"
+            case WORKSPACE_RESOURCE_KIND.REMOTE_AGENT:
+              return "workspace.manage_remote_agents"
+            case WORKSPACE_RESOURCE_KIND.INSTALLED_SKILL:
+              return "workspace.manage_skills"
+            default:
+              return "workspace.manage_plugins"
+          }
+        })()
         const allowed = await requireRequestAction(
           request,
           reply,
@@ -167,7 +179,6 @@ export function registerWorkspaceResourceRoutes(app: FastifyInstance) {
         return { resource: presentWorkspaceResource(resource) }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -199,7 +210,6 @@ export function registerWorkspaceResourceRoutes(app: FastifyInstance) {
         return { resources: resources.map(presentWorkspaceResource) }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -231,7 +241,6 @@ export function registerWorkspaceResourceRoutes(app: FastifyInstance) {
         return { resources: resources.map(presentWorkspaceResource) }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -263,7 +272,6 @@ export function registerWorkspaceResourceRoutes(app: FastifyInstance) {
         return { resource: presentWorkspaceResource(resource) }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -289,7 +297,6 @@ export function registerWorkspaceResourceRoutes(app: FastifyInstance) {
         return { resource: presentWorkspaceResource(resource) }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -313,7 +320,6 @@ export function registerWorkspaceResourceRoutes(app: FastifyInstance) {
         return { success: deleted }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -345,7 +351,6 @@ export function registerWorkspaceResourceRoutes(app: FastifyInstance) {
         return { grants: grants.map(presentGrant) }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -386,7 +391,6 @@ export function registerWorkspaceResourceRoutes(app: FastifyInstance) {
         return { grants: grants.map(presentGrant) }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -422,7 +426,6 @@ export function registerWorkspaceResourceRoutes(app: FastifyInstance) {
         return { requests: requests.map(presentGrantRequest) }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -457,7 +460,6 @@ export function registerWorkspaceResourceRoutes(app: FastifyInstance) {
         return { request: presentGrantRequest(grantRequest) }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -491,7 +493,6 @@ export function registerWorkspaceResourceRoutes(app: FastifyInstance) {
         return { request: presentGrantRequest(grantRequest) }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -525,7 +526,6 @@ export function registerWorkspaceResourceRoutes(app: FastifyInstance) {
         return { request: presentGrantRequest(grantRequest) }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )
@@ -559,7 +559,6 @@ export function registerWorkspaceResourceRoutes(app: FastifyInstance) {
         return { success: cancelled }
       } catch (error) {
         handleError(reply, error)
-        return
       }
     }
   )

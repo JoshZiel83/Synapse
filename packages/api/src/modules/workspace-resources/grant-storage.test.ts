@@ -65,7 +65,7 @@ async function insertWorkspaceMember(
 async function memberSubjectFor(db: AnyDb, memberId: string) {
   return upsertAccessSubject(db, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId,
+    workspaceMemberId: memberId,
   })
 }
 
@@ -317,7 +317,7 @@ test(
       })
       const memberSubjectId = await upsertAccessSubject(db, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId,
+        workspaceMemberId: memberId,
       })
 
       await assert.rejects(
@@ -379,7 +379,7 @@ test(
       })
       const otherMemberSubjectId = await upsertAccessSubject(db, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: otherMemberId,
+        workspaceMemberId: otherMemberId,
       })
 
       await assert.rejects(
@@ -447,7 +447,7 @@ test(
 
       const requesterSubjectId = await upsertAccessSubject(db, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: requesterMemberId,
+        workspaceMemberId: requesterMemberId,
       })
       const request = await db
         .insertInto("workspaceResourceGrantRequests")
@@ -520,7 +520,7 @@ test(
 
       const requesterSubjectId = await upsertAccessSubject(db, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: requesterMemberId,
+        workspaceMemberId: requesterMemberId,
       })
 
       await db
@@ -621,7 +621,7 @@ test(
 
       const requesterSubjectId = await upsertAccessSubject(db, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: requesterMemberId,
+        workspaceMemberId: requesterMemberId,
       })
       const request = await db
         .insertInto("workspaceResourceGrantRequests")

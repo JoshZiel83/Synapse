@@ -55,7 +55,7 @@ export const SubjectRefSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal(SUBJECT_KIND.WORKSPACE_MEMBER),
-    memberId: z.string(),
+    workspaceMemberId: z.string(),
   }),
   z.object({
     kind: z.literal(SUBJECT_KIND.ACTOR),

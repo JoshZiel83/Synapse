@@ -109,7 +109,7 @@ export function computeWireNames(
       // Extremely defensive: if even that collides, spin a counter.
       let n = 1
       while (byWireName.has(wire)) {
-        wire = clampLen(`${candidate}_${shortHash(toolId + ":" + n)}`)
+        wire = clampLen(`${candidate}_${shortHash(`${toolId}:${n}`)}`)
         n++
       }
     }
@@ -120,9 +120,7 @@ export function computeWireNames(
   for (const item of items) {
     const leaf = sanitizedLeaf.get(item.ref.toolId)!
     const collided = (leafCounts.get(leaf) ?? 0) > 1
-    const candidate = collided
-      ? `${qualifierFor(item.ref)}__${leaf}`
-      : leaf
+    const candidate = collided ? `${qualifierFor(item.ref)}__${leaf}` : leaf
     assign(item.ref.toolId, candidate, item.ref)
   }
 

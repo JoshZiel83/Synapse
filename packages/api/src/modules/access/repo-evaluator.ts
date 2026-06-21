@@ -248,7 +248,7 @@ export async function hasActiveConversationMembership(
   if (params.workspaceMemberId) {
     subjectId = await upsertAccessSubject(db, {
       kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-      memberId: params.workspaceMemberId,
+      workspaceMemberId: params.workspaceMemberId,
     })
   } else if (params.actorId) {
     subjectId = await upsertAccessSubject(db, {
@@ -433,7 +433,7 @@ export async function listOwnedWorkspaceResourceAccessRows(
 ): Promise<WorkspaceResourceAccessRow[]> {
   const ownerSubjectId = await upsertAccessSubject(db, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: params.ownerWorkspaceMemberId,
+    workspaceMemberId: params.ownerWorkspaceMemberId,
   })
   return await db
     .selectFrom("workspaceResourcesLive as resource")
@@ -609,7 +609,7 @@ export async function listOwnedActorIds(
 ): Promise<string[]> {
   const ownerSubjectId = await upsertAccessSubject(db, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: params.ownerWorkspaceMemberId,
+    workspaceMemberId: params.ownerWorkspaceMemberId,
   })
   const rows = await db
     .selectFrom("actors as a")
@@ -633,7 +633,7 @@ export async function listOwnedRemoteAgentIds(
 ): Promise<string[]> {
   const ownerSubjectId = await upsertAccessSubject(db, {
     kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-    memberId: params.ownerWorkspaceMemberId,
+    workspaceMemberId: params.ownerWorkspaceMemberId,
   })
   const rows = await db
     .selectFrom("remoteAgents as agent")

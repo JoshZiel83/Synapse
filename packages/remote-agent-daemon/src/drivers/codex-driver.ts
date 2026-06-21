@@ -465,7 +465,6 @@ class CodexAgentSession implements AgentSession {
         title: parsed.title,
         questions: parsed.questions,
       })
-      return
     }
   }
 

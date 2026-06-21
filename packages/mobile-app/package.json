@@ -17,7 +17,9 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "web:export": "npm run sync:shared && npm run build:chat-worker && expo export --platform web",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint app src",
+    "lint:fix": "eslint app src --fix"
   },
   "dependencies": {
     "@better-auth/core": "1.6.13",
@@ -73,6 +75,8 @@
     "@types/markdown-it": "^14.1.2",
     "@types/react": "~19.1.0",
     "esbuild": "^0.28.0",
+    "eslint": "^9.39.4",
+    "eslint-config-expo": "^56.0.4",
     "react-test-renderer": "19.1.0",
     "typescript": "~5.9.2"
   },

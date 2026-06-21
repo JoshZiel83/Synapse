@@ -175,6 +175,7 @@ import {
 } from "../constants/enums.js"
 import type { ChatTypingState } from "../constants/enums.js"
 import type { ProviderKind } from "../constants/model-providers.js"
+import type { ToolSourceKind } from "../tool-source/kinds.js"
 import type {
   FilesystemPolicy as FilesystemPolicyBase,
   CUAPolicy as CUAPolicyBase,
@@ -935,7 +936,7 @@ export type ActorRuntimeActivityState =
   | "skipped"
   | "cancelled"
 
-export type ActorRuntimeToolKind = "system" | "plugin" | "device"
+export type ActorRuntimeToolKind = ToolSourceKind
 
 export type ActorRuntimeTaskStatus =
   | "working"
@@ -959,7 +960,7 @@ export interface ActorRuntimeProcessingTarget {
 // rather than inferring from the wire name. Derived from tool_calls.source_kind
 // + source_snapshot (tool provenance & routing refactor).
 export interface ActorRuntimeToolSource {
-  kind: "system" | "plugin" | "device"
+  kind: ToolSourceKind
   /** Primary label, e.g. plugin "publisher/item" or the device name. */
   displayName?: string
   /** The source-native (visible/upstream) tool name, when distinct from leaf. */
@@ -1245,7 +1246,6 @@ export interface RemoteAgentAccessRequestListResponse {
 }
 
 export interface ConversationParticipantView {
-  memberId?: UUID
   participantId?: UUID
   participantType?: ConversationParticipantType
   id?: UUID
@@ -1359,7 +1359,7 @@ export interface RemoteAgentRuntimeSummaryView {
 
 export interface RemoteAgentGroupTaskGrantView {
   workspaceMemberId: UUID
-  grantedByWorkspaceMemberId?: UUID
+  createdByWorkspaceMemberId?: UUID
   createdAt?: Timestamp
   updatedAt?: Timestamp
   userId: UUID
@@ -1610,7 +1610,7 @@ export interface ModelGroupGrant {
   workspaceMemberId?: UUID | null
   actorId?: UUID | null
   status: ModelGroupGrantStatus
-  grantedByWorkspaceMemberId?: UUID | null
+  createdByWorkspaceMemberId?: UUID | null
   reason?: string | null
   createdAt?: Timestamp | null
   revokedAt?: Timestamp | null
@@ -2114,7 +2114,7 @@ export interface ToolDefinition {
   // structured ToolRef (`@synapse/shared/tool-source`) carries source + binding
   // on the internal `ProjectedToolDefinition`; a plain ToolDefinition that
   // crosses to the provider/model is intentionally source-free (stripped at the
-  // boundary). See docs/tool-provenance-and-routing.md.
+  // boundary). See docs/design-archive/tool-provenance-and-routing.md.
 }
 
 export interface ToolCall {
@@ -2218,13 +2218,15 @@ export interface CapabilityInvocationContext {
   providerCallId?: string
   namespacedToolName?: string
   toolName?: string
-  sourceType?: "builtin" | "mcp_plugin" | "device_capability"
 }
 
 export interface ToolSurfaceItem {
   id: string
   name: string
-  source: "builtin" | "plugin_installation" | "device_capability"
+  // Canonical routed-source vocabulary. Was previously a parallel display
+  // vocabulary (builtin/plugin_installation/device_capability); collapsed onto
+  // the one ToolSourceKind axis.
+  source: ToolSourceKind
 }
 
 export interface SkillSurfaceItem {
@@ -2573,7 +2575,7 @@ export interface WorkspaceResourceGrant {
   permissions: WorkspaceResourceGrantPermission[]
   status: WorkspaceResourceGrantStatus
   source: WorkspaceResourceGrantSource
-  grantedByWorkspaceMemberId?: string
+  createdByWorkspaceMemberId?: string
   reason?: string
   conversationTypeMaskOverride?: ConversationTypeMask | null
   effectiveConversationTypeMask?: ConversationTypeMask
@@ -2947,6 +2949,9 @@ export interface McpEventLog {
 
 export type ConversationParticipantType =
   (typeof CONVERSATION_PARTICIPANT_TYPES)[number]
+
+export type ConversationParticipantState =
+  (typeof CONVERSATION_PARTICIPANT_STATES)[number]
 
 export type ConversationParticipantRoleKey =
   (typeof CONVERSATION_PARTICIPANT_ROLE_KEYS)[number]

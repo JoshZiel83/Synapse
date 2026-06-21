@@ -324,7 +324,7 @@ export function presentMachineBinding(row: MachineBindingRecord) {
 /** Record shape consumed by {@link presentGroupTaskGrant}. */
 export type GroupTaskGrantRecord = {
   workspaceMemberId: string
-  grantedByWorkspaceMemberId: string | null
+  createdByWorkspaceMemberId: string | null
   createdAt: Date
   updatedAt: Date
   userId: string
@@ -338,7 +338,7 @@ export function presentGroupTaskGrant(
 ) {
   return {
     workspaceMemberId: row.workspaceMemberId,
-    grantedByWorkspaceMemberId: row.grantedByWorkspaceMemberId ?? undefined,
+    createdByWorkspaceMemberId: row.createdByWorkspaceMemberId ?? undefined,
     createdAt: serializeInstant(
       requireInstantDate(
         row.createdAt,

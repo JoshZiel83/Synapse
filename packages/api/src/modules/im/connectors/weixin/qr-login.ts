@@ -146,6 +146,24 @@ function mapStatus(
   }
 }
 
+// Status-specific user-facing copy; any status without bespoke copy keeps the
+// session's existing message (WAITING/CONFIRMED/ERROR are handled elsewhere).
+function statusMessage(
+  nextStatus: WeixinQrLoginStatus,
+  fallback: string
+): string {
+  switch (nextStatus) {
+    case WEIXIN_QR_LOGIN_STATUS.NEED_VERIFYCODE:
+      return "Enter the number shown in WeChat on your phone to continue."
+    case WEIXIN_QR_LOGIN_STATUS.SCANNED:
+      return "QR code scanned. Confirm the login in WeChat."
+    case WEIXIN_QR_LOGIN_STATUS.EXPIRED:
+      return "QR code expired. Generate a new one."
+    default:
+      return fallback
+  }
+}
+
 async function persistWeixinAccount(params: {
   session: ActiveWeixinQrLogin
   botToken: string
@@ -434,14 +452,7 @@ export async function getWeixinQrLoginSession(params: {
         ? undefined
         : existing.pendingVerifyCode,
       updatedAt: Date.now(),
-      message:
-        nextStatus === WEIXIN_QR_LOGIN_STATUS.NEED_VERIFYCODE
-          ? "Enter the number shown in WeChat on your phone to continue."
-          : nextStatus === WEIXIN_QR_LOGIN_STATUS.SCANNED
-            ? "QR code scanned. Confirm the login in WeChat."
-            : nextStatus === WEIXIN_QR_LOGIN_STATUS.EXPIRED
-              ? "QR code expired. Generate a new one."
-              : existing.message,
+      message: statusMessage(nextStatus, existing.message),
     }
 
     const confirmedToken = nonEmptyString(statusResponse.bot_token)
