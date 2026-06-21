@@ -552,8 +552,7 @@ export async function selectExposureAvailableCliEntryPoints(
   const availableClis = metadata?.availableClis
   if (!availableClis || typeof availableClis !== "object") return new Set()
   // Only entry_points the device reports as available===true may receive a
-  // program_only grant (matches the reconcile filter — never mint for an
-  // advertised-but-unavailable CLI).
+  // program_only grant — never mint for an advertised-but-unavailable CLI.
   return new Set(
     Object.entries(availableClis)
       .filter(

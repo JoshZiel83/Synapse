@@ -51,7 +51,7 @@ function makeFakeStart(): {
       // behavior (timeout / restart / park) rather than hanging on the
       // unanswered handshake. Keys on method only, matching resolveRequest.
       if (method === "fs.hello") {
-        return Promise.resolve({ proto_version: 1, crate_version: "test" })
+        return Promise.resolve({ proto_version: 2, crate_version: "test" })
       }
       return new Promise((resolve, reject) => {
         const id = String(++nextId)
@@ -253,7 +253,7 @@ test("handshake mismatch tears down the helper; next RPC respawns and recovers",
   // process.
   const fake = makeHelloVaryingStart([
     { proto_version: 999, crate_version: "stale" }, // 1st spawn: mismatch
-    { proto_version: 1, crate_version: "rebuilt" }, // 2nd spawn: good
+    { proto_version: 2, crate_version: "rebuilt" }, // 2nd spawn: good
   ])
   const client = makeClient(fake.start)
 

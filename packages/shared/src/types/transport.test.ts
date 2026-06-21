@@ -10,7 +10,14 @@ test("isTransportKind: accepts every value in TRANSPORT_KINDS", () => {
 })
 
 test("isTransportKind: rejects strings outside the enum", () => {
-  for (const v of ["", "Feishu", "FEISHU", "wechat", "unknown", "telegram"]) {
+  for (const v of [
+    "",
+    "Feishu",
+    "FEISHU",
+    "wechat",
+    "unknown",
+    "telegram_bot",
+  ]) {
     assert.equal(isTransportKind(v), false, `expected ${v} to be rejected`)
   }
 })
