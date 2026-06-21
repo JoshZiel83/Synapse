@@ -357,7 +357,7 @@ function prettySessionInboundActorMode(
   }
 }
 
-function formatDateTime(value?: string) {
+function formatDateTime(value?: string | number) {
   if (!value) return "Never"
   try {
     return new Date(value).toLocaleString()
@@ -3812,10 +3812,7 @@ export default function ImPage() {
               ) : null}
 
               <div className="text-xs text-muted-foreground">
-                Expires:{" "}
-                {formatDateTime(
-                  new Date(whatsappUnofficialSession.expiresAt).toISOString()
-                )}
+                Expires: {formatDateTime(whatsappUnofficialSession.expiresAt)}
               </div>
 
               {whatsappUnofficialSession.transportAccountId ? (

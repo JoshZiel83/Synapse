@@ -140,20 +140,26 @@ function mentionsFromContextInfo(
   }))
 }
 
+/** Canonical placeholder marker for each WhatsApp media kind. */
+const PLACEHOLDER_MARKER_BY_KIND: Record<
+  WaMediaKind,
+  | "image_placeholder"
+  | "video_placeholder"
+  | "voice_placeholder"
+  | "file_placeholder"
+> = {
+  image: "image_placeholder",
+  video: "video_placeholder",
+  audio: "voice_placeholder",
+  document: "file_placeholder",
+  sticker: "image_placeholder",
+}
+
 function placeholderPart(
   kind: WaMediaKind,
   media: WaMediaContentLike
 ): CanonicalPart {
-  const marker =
-    kind === "image"
-      ? "image_placeholder"
-      : kind === "video"
-        ? "video_placeholder"
-        : kind === "audio"
-          ? "voice_placeholder"
-          : kind === "sticker"
-            ? "image_placeholder"
-            : "file_placeholder"
+  const marker = PLACEHOLDER_MARKER_BY_KIND[kind]
   return {
     type: "system_marker",
     marker,

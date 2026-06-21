@@ -22,13 +22,10 @@ const account = {
 } as unknown as WebhookHandlerInput["account"]
 
 function sign(rawBody: string): string {
-  return (
-    "sha256=" +
-    crypto
-      .createHmac("sha256", APP_SECRET)
-      .update(rawBody, "utf8")
-      .digest("hex")
-  )
+  return `sha256=${crypto
+    .createHmac("sha256", APP_SECRET)
+    .update(rawBody, "utf8")
+    .digest("hex")}`
 }
 
 function makeInput(

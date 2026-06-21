@@ -64,7 +64,7 @@ test("splitForLimit: never cuts mid-entity on a long newline-free line", () => {
   // backs the cut off to before '&'.
   const limit = 20
   const filler = "a".repeat(limit - 2) // 18 'a's
-  const text = filler + "&amp;" + "b".repeat(limit) // forces a cut inside &amp;
+  const text = `${filler}&amp;${"b".repeat(limit)}` // forces a cut inside &amp;
   const chunks = splitForLimit(text, limit)
   for (const c of chunks) assertNoBrokenMarkup(c)
   // Lossless: chunks rejoin to the original (no newline dropping here).

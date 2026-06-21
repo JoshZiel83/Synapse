@@ -45,7 +45,7 @@ test("verifyWhatsappSignature: rejects a tampered body", () => {
   assert.equal(
     verifyWhatsappSignature({
       appSecret: SECRET,
-      rawBody: RAW_BODY + " ",
+      rawBody: `${RAW_BODY} `,
       signatureHeader: header,
     }),
     false
@@ -57,7 +57,7 @@ test("verifyWhatsappSignature: rejects missing / malformed headers", () => {
     undefined,
     "",
     "deadbeef", // no prefix
-    "sha1=" + crypto.createHmac("sha1", SECRET).update(RAW_BODY).digest("hex"),
+    `sha1=${crypto.createHmac("sha1", SECRET).update(RAW_BODY).digest("hex")}`,
     "sha256=short",
   ]) {
     assert.equal(
