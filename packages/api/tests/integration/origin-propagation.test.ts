@@ -30,6 +30,7 @@ import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
 import { v4 as uuidv4 } from "uuid"
 import pg from "pg"
+import type { ToolSourceKind } from "@synapse/shared"
 
 import { createToolResult } from "../../src/modules/execution/service.js"
 
@@ -72,7 +73,7 @@ after(async () => {
 // Set up minimal session+turn+conversation+tool_call rows so we can write
 // to tool_results without going through the full actor pipeline.
 async function buildToolCall(opts: {
-  sourceKind: "system" | "plugin" | "device"
+  sourceKind: ToolSourceKind
   toolName: string
 }): Promise<string> {
   if (!seed || !client) throw new Error("test fixtures missing")

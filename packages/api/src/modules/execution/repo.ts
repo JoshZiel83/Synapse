@@ -18,6 +18,7 @@
 
 import { sql } from "kysely"
 import { v4 as uuidv4 } from "uuid"
+import type { ToolSourceKind } from "@synapse/shared"
 import { db } from "../../infrastructure/database/kysely.js"
 import type {
   PayloadBlobsJsonBody,
@@ -243,7 +244,7 @@ export async function insertToolCall(params: {
   providerCallId?: string
   bundleId: string
   toolName: string
-  sourceKind: "system" | "plugin" | "device"
+  sourceKind: ToolSourceKind
   sourceSnapshot: Record<string, unknown>
   pluginInstallationId?: string | null
   deviceToolId?: string | null

@@ -175,6 +175,7 @@ import {
 } from "../constants/enums.js"
 import type { ChatTypingState } from "../constants/enums.js"
 import type { ProviderKind } from "../constants/model-providers.js"
+import type { ToolSourceKind } from "../tool-source/kinds.js"
 import type {
   FilesystemPolicy as FilesystemPolicyBase,
   CUAPolicy as CUAPolicyBase,
@@ -935,7 +936,7 @@ export type ActorRuntimeActivityState =
   | "skipped"
   | "cancelled"
 
-export type ActorRuntimeToolKind = "system" | "plugin" | "device"
+export type ActorRuntimeToolKind = ToolSourceKind
 
 export type ActorRuntimeTaskStatus =
   | "working"
@@ -959,7 +960,7 @@ export interface ActorRuntimeProcessingTarget {
 // rather than inferring from the wire name. Derived from tool_calls.source_kind
 // + source_snapshot (tool provenance & routing refactor).
 export interface ActorRuntimeToolSource {
-  kind: "system" | "plugin" | "device"
+  kind: ToolSourceKind
   /** Primary label, e.g. plugin "publisher/item" or the device name. */
   displayName?: string
   /** The source-native (visible/upstream) tool name, when distinct from leaf. */
@@ -2222,10 +2223,10 @@ export interface CapabilityInvocationContext {
 export interface ToolSurfaceItem {
   id: string
   name: string
-  // Canonical routed-source vocabulary (= ToolSourceKind). Was previously a
-  // parallel display vocabulary (builtin/plugin_installation/device_capability);
-  // collapsed onto the one source axis.
-  source: "system" | "plugin" | "device"
+  // Canonical routed-source vocabulary. Was previously a parallel display
+  // vocabulary (builtin/plugin_installation/device_capability); collapsed onto
+  // the one ToolSourceKind axis.
+  source: ToolSourceKind
 }
 
 export interface SkillSurfaceItem {

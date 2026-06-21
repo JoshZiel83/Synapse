@@ -38,6 +38,7 @@ import {
 import { CanonicalContentBlockSchema } from "./chat-content-block.js"
 import { IsoInstantStringSchema } from "./datetime.js"
 import { RemoteAgentRuntimeCapabilityViewSchema } from "./remote-agents.js"
+import { TOOL_SOURCE_KINDS } from "../tool-source/kinds.js"
 import {
   SubjectRefSchema,
   TaskNoticeSummarySchema,
@@ -516,8 +517,6 @@ const actorRuntimeActivityStates = [
   "cancelled",
 ] as const
 
-const actorRuntimeToolKinds = ["system", "plugin", "device"] as const
-
 const actorRuntimeTaskStatuses = [
   "working",
   "input_required",
@@ -552,14 +551,14 @@ const ActorRuntimeProcessingTargetSchema = z.object({
 })
 
 const ActorRuntimeToolSourceSchema = z.object({
-  kind: z.enum(actorRuntimeToolKinds),
+  kind: z.enum(TOOL_SOURCE_KINDS),
   displayName: z.string().optional(),
   upstreamToolName: z.string().optional(),
 })
 
 const ActorRuntimeTurnActivityItemSchema = z.object({
   toolCallId: z.string(),
-  toolKind: z.enum(actorRuntimeToolKinds),
+  toolKind: z.enum(TOOL_SOURCE_KINDS),
   toolName: z.string(),
   source: ActorRuntimeToolSourceSchema.optional(),
   state: z.enum(actorRuntimeActivityStates),
@@ -579,7 +578,7 @@ const ActorRuntimeTurnActivityItemSchema = z.object({
 
 const ActorRuntimeTurnPreviewToolSchema = z.object({
   toolCallId: z.string(),
-  toolKind: z.enum(actorRuntimeToolKinds),
+  toolKind: z.enum(TOOL_SOURCE_KINDS),
   toolName: z.string(),
   source: ActorRuntimeToolSourceSchema.optional(),
   state: z.enum(actorRuntimeActivityStates),

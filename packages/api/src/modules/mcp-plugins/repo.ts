@@ -40,6 +40,7 @@ import {
   type PluginSpecTransport,
   type ReuseScope,
   type RuntimeBindingScope,
+  type ToolSourceKind,
   type WorkspaceResourceGrantSource,
 } from "@synapse/shared"
 import type { CapabilityAccessTarget } from "@synapse/shared/types"
@@ -1311,7 +1312,7 @@ export type ToolCallAuditLogRecord = {
   actorId: string | null
   providerCallId: string | null
   toolName: string
-  sourceKind: string
+  sourceKind: ToolSourceKind
   sourceSnapshot: unknown
   pluginInstallationId: string | null
   deviceToolId: string | null

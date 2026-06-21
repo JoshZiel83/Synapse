@@ -1,5 +1,5 @@
 import { createHash } from "crypto"
-import { ACTOR_RUNTIME_HEALTH } from "@synapse/shared"
+import { ACTOR_RUNTIME_HEALTH, type ToolSourceKind } from "@synapse/shared"
 import { nowIsoInstant } from "@synapse/shared/datetime"
 import { createLogger } from "../../infrastructure/logger/index.js"
 import type { PayloadBlobsRetentionClass } from "./repo.types.js"
@@ -186,7 +186,7 @@ export async function createToolCall(params: {
   toolName: string
   // Tool provenance & routing: the immutable public source snapshot + its
   // discriminator, plus optional soft pointers to the live source entity.
-  sourceKind: "system" | "plugin" | "device"
+  sourceKind: ToolSourceKind
   sourceSnapshot: Record<string, unknown>
   pluginInstallationId?: string | null
   deviceToolId?: string | null

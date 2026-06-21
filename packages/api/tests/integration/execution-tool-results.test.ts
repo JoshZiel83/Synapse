@@ -22,7 +22,7 @@ import {
   buildSessionContextItems,
   loadExecutionToolResultsForSession,
 } from "../../src/modules/ai/context-builder.js"
-import { extractText, textBlocks } from "@synapse/shared"
+import { extractText, textBlocks, type ToolSourceKind } from "@synapse/shared"
 
 import {
   resetDb,
@@ -60,7 +60,7 @@ after(async () => {
 async function buildFixture(opts: {
   toolName: string
   providerCallId?: string
-  sourceKind?: "plugin" | "device" | "system"
+  sourceKind?: ToolSourceKind
 }): Promise<{
   sessionId: string
   toolCallId: string
