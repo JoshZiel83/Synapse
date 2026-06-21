@@ -115,4 +115,18 @@ export const builtinCapabilityCategories: BuiltinCapabilityCategorySeed[] = [
     defaultLocale: "en",
     sortOrder: 70,
   },
+  {
+    slug: "social-and-content",
+    targetKind: "plugin",
+    displayName: "Social & Content",
+    displayNameI18n: i18n("Social & Content", "社交与内容"),
+    description:
+      "Read and publish to social and content platforms (feeds, notes, comments).",
+    descriptionI18n: i18n(
+      "Read and publish to social and content platforms (feeds, notes, comments).",
+      "读取与发布社交内容平台（信息流、笔记、评论）。"
+    ),
+    defaultLocale: "en",
+    sortOrder: 80,
+  },
 ]

@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools==78.1.1"]
+build-backend = "setuptools.build_meta"
+
+# xhs-mcp is a THIN sidecar: it fills an AdapterConfig (lifecycle="per_tenant")
+# and calls _mcp_base.app.main(). The deployable front end is _mcp_base (E1);
+# the MCP backend is the vendored Go binary (see UPSTREAM.md / vendor/). This
+# package contributes only serve.py + the adapter wiring.
+[project]
+name = "synapse-xhs-mcp"
+version = "0.1.0"
+description = "Synapse 小红书 (Xiaohongshu) MCP sidecar — per-tenant backend pool over the shared _mcp_base front end."
+requires-python = ">=3.12"
+keywords = ["xiaohongshu", "xhs", "rednote", "mcp", "sidecar"]
+
+# The Go source under vendor/ and runtime data dirs are not Python packages.
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["adapter*"]
+exclude = ["vendor*", "tests*"]
+
+# Formatting/lint for this Python sidecar (run `ruff format .` + `ruff check .`).
+[tool.ruff]
+line-length = 100
+extend-exclude = ["vendor"]
+
+[tool.ruff.format]
+# Default ruff formatter; consistent whitespace (no trailing ws).

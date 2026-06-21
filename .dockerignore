@@ -2,6 +2,12 @@
 **/.next
 **/dist
 **/*.tsbuildinfo
+# Python bytecode — the mcp-plugins sidecar Dockerfiles COPY sidecars/_mcp_base
+# (and per-sidecar trees); stale host bytecode must never enter the build
+# context. (Do NOT exclude sidecars/*/vendor — the Go/Node vendor dirs are
+# required by the build stages.)
+**/__pycache__
+**/*.pyc
 .git
 .refer
 coverage

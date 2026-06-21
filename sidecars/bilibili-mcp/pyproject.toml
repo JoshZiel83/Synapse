@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bilibili-mcp"
+version = "0.1.0"
+description = "Bilibili MCP sidecar (LIB-WRAP over Nemo2011/bilibili-api) on the shared _mcp_base multi-tenant Streamable-HTTP front end."
+readme = "UPSTREAM.md"
+requires-python = ">=3.10,<4.0"
+# This sidecar wraps the GPL-3.0 Nemo2011/bilibili-api library and is itself a
+# GPL-3.0 derivative distributed as an arms-length, independently deployed
+# process (see UPSTREAM.md §GPL-3.0 acceptance + LICENSE verbatim).
+license = { text = "GPL-3.0-only" }
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+keywords = ["bilibili", "b站", "video", "danmaku", "dynamic", "mcp", "sidecar"]
+dependencies = [
+    "mcp>=1.27.0",
+    "uvicorn>=0.48.0",
+    "starlette>=1.2.0",
+    "bilibili-api-python>=17.1.0",
+    "curl_cffi>=0.7.0",
+    "brotlicffi>=1.1.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["adapter*"]
+exclude = ["tests*"]
+
+# Formatting/lint for this Python sidecar (the monorepo's prettier/go
+# format:check does not cover .py). Run `ruff format .` + `ruff check .` here.
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.format]
+# Default ruff formatter; the point is consistent whitespace (no trailing ws).

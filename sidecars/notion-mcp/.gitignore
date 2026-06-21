@@ -1,0 +1,12 @@
+# Python scratch
+.venv
+__pycache__/
+*.egg-info/
+build/
+dist/
+.env
+
+# Vendored Node backend: COMMIT package.json + package-lock.json (reproducible
+# `npm ci`), but NEVER commit the installed node_modules tree (rebuilt in the
+# Docker build stage from the lockfile). See UPSTREAM.md.
+vendor/notion-mcp/node_modules/

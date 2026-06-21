@@ -1,0 +1,20 @@
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.vscode
+.idea
+.env
+dist
+build/
+*.egg-info/
+
+# Runtime per-tenant secret material (cookies, tmp, media-tmp) — NEVER commit.
+/data/
+tenants/
+
+# Compiled Go backend binary produced by the Docker build stage.
+bin/
+
+# Go build artifacts if a local `go build` is run inside vendor/.
+vendor/xiaohongshu-mcp/xiaohongshu-mcp

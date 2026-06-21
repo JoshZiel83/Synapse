@@ -1,0 +1,25 @@
+# xhs-mcp sidecar Python deps. The transport/tracing pins are the shared
+# _mcp_base set (copied verbatim so the base + every adapter agree on a single
+# mcp/uvicorn/starlette/OTel version set). xhs is a GENERIC MCP-PROXY backend:
+# the proxy adapter is an MCP *client* of the vendored Go backend, so it needs
+# the mcp SDK's ClientSession + streamable_http client — which the single `mcp`
+# pin below already provides (httpx comes transitively). No vendor Python client
+# library is required; the backend is the compiled Go binary (see UPSTREAM.md).
+
+# MCP Python SDK: low-level Server + StreamableHTTPSessionManager (base front
+# end) AND ClientSession + streamable_http client (the proxy adapter). One pin.
+mcp==1.27.2
+
+# Streamable-HTTP ASGI stack (the one front end, in _mcp_base/app.py).
+uvicorn==0.48.0
+starlette==1.2.1
+
+# OpenTelemetry tracing (logging refactor P7): exports request spans over OTLP
+# when OTEL_EXPORTER_OTLP_ENDPOINT is set, continuing the api-injected
+# traceparent so xhs joins the cross-process trace tree. No-op when unset.
+opentelemetry-sdk==1.42.1
+opentelemetry-exporter-otlp-proto-http==1.42.1
+opentelemetry-instrumentation-starlette==0.63b1
+
+# Build backend.
+setuptools==78.1.1

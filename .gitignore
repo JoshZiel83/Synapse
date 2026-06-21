@@ -1,5 +1,8 @@
 .idea
 node_modules/
+# Also ignore a worktree-root `node_modules` SYMLINK (the trailing-slash rule
+# above matches directories, NOT a symlink to the main tree's node_modules).
+/node_modules
 dist/
 .next/
 .env
@@ -51,3 +54,15 @@ infra/verdaccio/htpasswd
 packages/api/config/model-groups.yaml
 !packages/api/config/model-groups.yaml.example
 .worktrees/
+
+# Python bytecode caches (mcp-plugins sidecars, scripts).
+__pycache__/
+*.pyc
+
+# Vendored 小红书 (xhs) Go backend source: upstream xpzouying/xiaohongshu-mcp
+# declares NO license (license:null) — committing its source is a redistribution
+# risk — and the tree is ~81MB (mostly demo media). It is EXCLUDED from the repo.
+# To build the xhs sidecar locally, clone the pinned SHA (see
+# sidecars/xhs-mcp/UPSTREAM.md) into this path. The upstream license MUST be
+# resolved before shipping xhs.
+sidecars/xhs-mcp/vendor/xiaohongshu-mcp/

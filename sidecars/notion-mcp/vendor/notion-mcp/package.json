@@ -1,0 +1,9 @@
+{
+  "name": "synapse-vendored-notion-mcp",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Pinned vendored install of @notionhq/notion-mcp-server for the Synapse Notion MCP sidecar. npm ci rebuilds node_modules reproducibly from package-lock.json.",
+  "dependencies": {
+    "@notionhq/notion-mcp-server": "2.4.0"
+  }
+}

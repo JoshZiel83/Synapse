@@ -1,0 +1,81 @@
+# Notion MCP sidecar — the shared multi-tenant Streamable-HTTP base (_mcp_base)
+# fronting a vendored Node @notionhq/notion-mcp-server backend (MCP-PROXY,
+# lifecycle="shared"). E1: the Python base is the container's ONLY listener; the
+# Node backend is spawned as a loopback-only (127.0.0.1) child and never exposed.
+#
+# Build context is the repo ROOT (it COPYs both sidecars/_mcp_base/ and
+# sidecars/notion-mcp/):
+#   docker build -f infrastructure/Dockerfile.notion-mcp -t synapse-notion-mcp .
+#
+# Per-request Notion integration tokens arrive in the Notion-Token header from
+# the api; nothing is baked into the image. Runs as a non-root user; tenant
+# scratch lives under an isolated 0700 root (NOTION_TENANT_ROOT).
+
+# ---------------------------------------------------------------------------
+# Stage 1: install the pinned vendored Node backend reproducibly (npm ci).
+# ---------------------------------------------------------------------------
+FROM node:20-slim AS notion-build
+
+WORKDIR /vendor/notion-mcp
+
+# China mirror for resilient installs (matches the repo's other Node images).
+RUN npm config set registry https://registry.npmmirror.com || true
+
+# Lockfile-first for layer caching + reproducibility. `npm ci` reconstructs
+# node_modules byte-for-byte from package-lock.json; --omit=dev drops the
+# upstream test/build toolchain we never run (the CLI ships pre-bundled).
+COPY sidecars/notion-mcp/vendor/notion-mcp/package.json ./package.json
+COPY sidecars/notion-mcp/vendor/notion-mcp/package-lock.json ./package-lock.json
+RUN npm ci --omit=dev --no-audit --no-fund
+
+# ---------------------------------------------------------------------------
+# Stage 2: Python runtime (shared base + adapter) + the Node runtime/artifacts.
+# ---------------------------------------------------------------------------
+FROM python:3.12-slim AS runtime
+
+# China mirror for resilient pip installs (matches the mijia sidecar).
+RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple || true
+
+WORKDIR /app
+
+# The Node runtime is required at run time (the base spawns `node`). Copy the
+# node binary + its bundled libs from the build stage (no apt / no global npm).
+COPY --from=notion-build /usr/local/bin/node /usr/local/bin/node
+COPY --from=notion-build /usr/local/lib/node_modules /usr/local/lib/node_modules
+
+# Install the base's pinned Python transport/tracing deps first (layer caching).
+COPY sidecars/notion-mcp/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# The shared front end (E1) — importable as `_mcp_base`.
+COPY sidecars/_mcp_base/ ./_mcp_base/
+
+# The thin sidecar (serve.py builds the AdapterConfig and calls the base).
+COPY sidecars/notion-mcp/ ./notion-mcp/
+
+# The reproducibly-installed vendored Node backend (node_modules from stage 1).
+COPY --from=notion-build /vendor/notion-mcp/node_modules ./notion-mcp/vendor/notion-mcp/node_modules
+
+# Non-root runtime user; isolated writable tenant root.
+RUN useradd --create-home --uid 10001 notion \
+  && mkdir -p /data/tenants \
+  && chown -R notion:notion /app /data
+USER notion
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app:/app/notion-mcp \
+    NOTION_LOG_LEVEL=info \
+    NOTION_TENANT_ROOT=/data/tenants \
+    FASTMCP_HOST=0.0.0.0 \
+    FASTMCP_PORT=8766
+
+EXPOSE 8766
+
+# Liveness probe against the base's /healthz route (the Python base is the only
+# listener; the inner Node backend on 9766 is loopback-only and never probed
+# from outside).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8766/healthz', timeout=3).status==200 else 1)" || exit 1
+
+# Run the thin sidecar entrypoint (E1: it only imports _mcp_base.app.main).
+CMD ["python", "-m", "serve"]
