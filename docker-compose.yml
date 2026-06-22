@@ -87,6 +87,18 @@ services:
       # set MIJIA_MCP_URL=http://mijia-mcp:8765/mcp/ in .env and start with
       # `--profile production --profile mijia`.
       MIJIA_MCP_URL: ${MIJIA_MCP_URL:-}
+      # Optional mcp-plugins sidecars (overseas-only, opt-in). Each builtin
+      # plugin is only SEEDED when its enable flag is set AND its *_MCP_URL is
+      # populated, so leave these empty unless you run the matching sidecar
+      # (compose `notion` / `xhs` profiles). Firecrawl is a hosted remote MCP
+      # (no sidecar) gated by its flag alone. See .env.example.
+      MCP_ENABLE_FIRECRAWL: ${MCP_ENABLE_FIRECRAWL:-}
+      MCP_ENABLE_NOTION: ${MCP_ENABLE_NOTION:-}
+      NOTION_MCP_URL: ${NOTION_MCP_URL:-}
+      MCP_ENABLE_XHS: ${MCP_ENABLE_XHS:-}
+      XHS_MCP_URL: ${XHS_MCP_URL:-}
+      MCP_ENABLE_BILIBILI: ${MCP_ENABLE_BILIBILI:-}
+      BILIBILI_MCP_URL: ${BILIBILI_MCP_URL:-}
       # --- server-side actor isolation (sandbox) ---
       # Off by default. Set SYNAPSE_SANDBOX_ENABLED=true + SANDBOX_BACKEND=docker
       # (+ run the 'sandbox' build + tunnel-edge) to enable containerized sandboxes.
@@ -195,6 +207,103 @@ services:
       - "8765"
     profiles:
       - mijia
+
+  # Optional Notion MCP sidecar. Multi-tenant: per-request Notion integration
+  # tokens arrive in a header from the API; nothing is stored here long-term.
+  # Internal-only (no host port). Gate with the `notion` profile, e.g.:
+  #   docker compose --profile production --profile notion up -d --build notion-mcp api
+  notion-mcp:
+    build:
+      context: .
+      dockerfile: infrastructure/Dockerfile.notion-mcp
+    container_name: synapse-notion-mcp
+    restart: unless-stopped
+    logging: *default-logging
+    # Explicit env allowlist — deliberately NOT env_file:[.env], so the sidecar
+    # never receives DB/JWT/OAuth/third-party secrets. Notion tokens come per
+    # request via headers, not env.
+    environment:
+      FASTMCP_HOST: "0.0.0.0"
+      FASTMCP_PORT: "8766"
+      NOTION_LOG_LEVEL: ${NOTION_LOG_LEVEL:-info}
+      NOTION_TENANT_ROOT: /data/tenants
+      # OTLP tracing (P7): set to http://alloy:4318 with the observability
+      # profile so notion exports request spans into the cross-process trace tree.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: notion-mcp
+    # Internal network only — reachable by the api container at
+    # http://notion-mcp:8766/mcp/, not exposed to the host.
+    expose:
+      - "8766"
+    profiles:
+      - notion
+
+  # Optional 小红书 (Xiaohongshu) MCP sidecar. Heavier than the others: it runs
+  # a headless browser backend per tenant (capped by XHS_MAX_TENANT_BACKENDS),
+  # so it gets a memory limit + shared-memory size. Per-tenant cookies are set
+  # per-backend by the adapter (COOKIES_PATH is NEVER container-level). Tenant
+  # state persists in the xhs_tenants volume. Gate with the `xhs` profile, e.g.:
+  #   docker compose --profile production --profile xhs up -d --build xhs-mcp api
+  xhs-mcp:
+    build:
+      context: .
+      dockerfile: infrastructure/Dockerfile.xhs-mcp
+    container_name: synapse-xhs-mcp
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: ${XHS_MEM_LIMIT:-6g}
+    shm_size: ${XHS_SHM_SIZE:-1g}
+    # Explicit env allowlist — deliberately NOT env_file:[.env]. Per-tenant
+    # 小红书 cookies are set per-backend by the adapter (COOKIES_PATH), never
+    # at the container level.
+    environment:
+      FASTMCP_HOST: "0.0.0.0"
+      FASTMCP_PORT: "8769"
+      XHS_LOG_LEVEL: ${XHS_LOG_LEVEL:-info}
+      XHS_TENANT_ROOT: /data/tenants
+      XHS_MAX_TENANT_BACKENDS: ${XHS_MAX_TENANT_BACKENDS:-3}
+      XHS_BACKEND_IDLE_TTL_SECONDS: ${XHS_BACKEND_IDLE_TTL_SECONDS:-1800}
+      XHS_STORAGE_HOSTS: ${XHS_STORAGE_HOSTS:-}
+      # OTLP tracing (P7): set to http://alloy:4318 with the observability
+      # profile so xhs exports request spans into the cross-process trace tree.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: xhs-mcp
+    # Internal network only — reachable by the api container at
+    # http://xhs-mcp:8769/mcp/, not exposed to the host.
+    expose:
+      - "8769"
+    volumes:
+      - xhs_tenants:/data/tenants
+    profiles:
+      - xhs
+
+  # Optional Bilibili MCP sidecar (LIB-WRAP over the GPL-3.0 bilibili-api
+  # library). Per-request Bilibili web Cookies arrive in the X-Bili-Cookie
+  # header; nothing is baked in. The Python base on 8768 is the only listener.
+  # Internal-only (no host port). Gate with the `bilibili` profile, e.g.:
+  #   docker compose --profile production --profile bilibili up -d --build bilibili-mcp api
+  bilibili-mcp:
+    build:
+      context: .
+      dockerfile: infrastructure/Dockerfile.bilibili-mcp
+    container_name: synapse-bilibili-mcp
+    restart: unless-stopped
+    logging: *default-logging
+    # Explicit env allowlist — deliberately NOT env_file:[.env]. Bilibili creds
+    # come per request via the X-Bili-Cookie header, not env.
+    environment:
+      FASTMCP_HOST: "0.0.0.0"
+      FASTMCP_PORT: "8768"
+      BILIBILI_LOG_LEVEL: ${BILIBILI_LOG_LEVEL:-info}
+      BILIBILI_TENANT_ROOT: /data/tenants
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: bilibili-mcp
+    # Internal network only — reachable by the api container at
+    # http://bilibili-mcp:8768/mcp/, not exposed to the host.
+    expose:
+      - "8768"
+    profiles:
+      - bilibili
 
   web:
     build:
@@ -474,6 +583,9 @@ volumes:
   certbot_www:
   pgdata:
   redisdata:
+  # Per-tenant 小红书 backend state (browser profiles / cookies) for the
+  # optional xhs-mcp sidecar (compose `xhs` profile).
+  xhs_tenants:
   verdaccio_storage:
   loki_data:
   tempo_data:

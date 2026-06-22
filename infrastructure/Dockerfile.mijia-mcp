@@ -14,11 +14,17 @@ RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple || 
 
 WORKDIR /app
 
-# Install pinned deps first for layer caching.
+# Install pinned deps first for layer caching. mijia's requirements.txt pins the
+# same mcp/uvicorn/starlette/OTel versions the shared base (_mcp_base) needs, so
+# one install covers both.
 COPY sidecars/mijia-mcp/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Vendored fork source.
+# Shared multi-tenant front end (E1: the ONE Streamable-HTTP front end). serve.py
+# imports `_mcp_base.app.main`; PYTHONPATH=/app makes `_mcp_base` importable.
+COPY sidecars/_mcp_base/ ./_mcp_base/
+
+# Vendored fork source (MijiaAdapter + FastMCP tools + the thin serve.py adapter).
 COPY sidecars/mijia-mcp/ ./
 
 # Non-root runtime user; isolated writable tenant root.
@@ -41,4 +47,4 @@ EXPOSE 8765
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8765/healthz', timeout=3).status==200 else 1)" || exit 1
 
-CMD ["python", "-m", "mcp_server.http_server"]
+CMD ["python", "-m", "serve"]

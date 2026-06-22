@@ -1,0 +1,91 @@
+# 小红书 (xhs) MCP sidecar — the shared _mcp_base Streamable-HTTP front end +
+# the generic MCP-PROXY adapter in lifecycle="per_tenant" mode, orchestrating a
+# per-(tenant,cookie) pool of UNMODIFIED vendored Go xpzouying/xiaohongshu-mcp
+# backends bound loopback-only (127.0.0.1:<dynamic port>). The base is the ONLY
+# listener; the Go pool children never expose a host port.
+#
+# Build context is the repo root:
+#   docker build -f infrastructure/Dockerfile.xhs-mcp -t synapse-xhs-mcp .
+#
+# Polyglot multi-stage precedent: packages/device-runtime/docker/Dockerfile
+# (node ts-builder + rust fs-helper-builder -> single runtime, COPY --from).
+#
+# Web-session cookies arrive per request in the X-Xhs-Cookie header and are
+# written to a per-tenant 0700 COOKIES_PATH file by the proxy; nothing is baked
+# into the image. Runs as a non-root user.
+#
+# RESOURCE NOTE (chromium): each per-tenant backend drives a headless Chromium
+# (go-rod). RAM is the binding constraint. Run with mem_limit (default 6g) and
+# shm_size >=1g (chromium needs >64MB /dev/shm or tabs crash "Target closed");
+# both are set on the docker-compose service, not here.
+
+# --- stage 1: build the UNMODIFIED vendored Go backend -----------------------
+# go.mod declares `go 1.24.0` -> golang:1.24 (NOT 1.23).
+FROM golang:1.24-bookworm AS xhs-build
+WORKDIR /src
+# China-friendly module proxy (matches the repo's mirror conventions).
+ENV GOPROXY=https://goproxy.cn,direct \
+    CGO_ENABLED=0 \
+    GOOS=linux
+COPY sidecars/xhs-mcp/vendor/xiaohongshu-mcp/ ./
+RUN go build -trimpath -ldflags="-s -w" -o /out/xiaohongshu-mcp .
+
+# --- stage 2: python:3.12-slim runtime + chromium ----------------------------
+FROM python:3.12-slim AS runtime
+
+# China mirror for resilient installs (matches the Node images' npmmirror use).
+RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple || true
+
+WORKDIR /app
+
+# Chromium + CA certs + CJK/Latin fonts for headless rendering of note previews.
+# Pattern follows packages/device-runtime/docker/Dockerfile apt usage.
+RUN apt-get update \
+  && apt-get install --no-install-recommends -y \
+       chromium \
+       ca-certificates \
+       fonts-noto-cjk \
+       fonts-liberation \
+  && rm -rf /var/lib/apt/lists/*
+
+# Install pinned Python deps first for layer caching.
+COPY sidecars/xhs-mcp/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# The ONE shared front end + this thin sidecar (serve.py + adapter wiring).
+COPY sidecars/_mcp_base/ ./_mcp_base/
+COPY sidecars/xhs-mcp/serve.py ./serve.py
+COPY sidecars/xhs-mcp/__init__.py ./__init__.py
+COPY sidecars/xhs-mcp/adapter/ ./adapter/
+
+# The compiled, UNMODIFIED Go backend binary the proxy pool spawns loopback-only.
+COPY --from=xhs-build /out/xiaohongshu-mcp /app/bin/xiaohongshu-mcp
+
+# Non-root runtime user; isolated writable per-tenant root (0700 cookie/tmp/
+# media-tmp dirs are created under here by the registry at runtime).
+RUN useradd --create-home --uid 10001 xhs \
+  && mkdir -p /data/tenants \
+  && chmod 0700 /data/tenants \
+  && chown -R xhs:xhs /app /data
+USER xhs
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
+    XHS_LOG_LEVEL=info \
+    XHS_TENANT_ROOT=/data/tenants \
+    XHS_BACKEND_BIN=/app/bin/xiaohongshu-mcp \
+    ROD_BROWSER_BIN=/usr/bin/chromium \
+    XHS_MAX_TENANT_BACKENDS=3 \
+    XHS_BACKEND_IDLE_TTL_SECONDS=1800 \
+    FASTMCP_HOST=0.0.0.0 \
+    FASTMCP_PORT=8769
+
+EXPOSE 8769
+
+# Liveness probe against the BASE front end's /healthz route (port 8769). The
+# pool's Go children expose /health on loopback only and are never probed here.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8769/healthz', timeout=3).status==200 else 1)" || exit 1
+
+# serve.py builds the per_tenant AdapterConfig and calls _mcp_base.app.main.
+CMD ["python", "-m", "serve"]

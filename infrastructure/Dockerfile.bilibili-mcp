@@ -1,0 +1,54 @@
+# Bilibili MCP sidecar — multi-tenant Streamable-HTTP server (the shared
+# _mcp_base front end + a LIB-WRAP adapter over the upstream bilibili-api Python
+# library, GPL-3.0; accepted as an arms-length independent sidecar process, F2).
+#
+# Build context is the repo root:
+#   docker build -f infrastructure/Dockerfile.bilibili-mcp -t synapse-bilibili-mcp .
+#
+# Per-request Bilibili Cookie credentials arrive in the X-Bili-Cookie header;
+# nothing is baked into the image. The cookie lives only in the in-memory
+# Credential (no on-disk secret). Runs as a non-root user; ephemeral per-tenant
+# scratch lives under an isolated 0700 root (BILIBILI_TENANT_ROOT).
+
+FROM python:3.12-slim AS base
+
+# China mirror for resilient installs (matches the other sidecar images).
+RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple || true
+
+WORKDIR /app
+
+# Install pinned deps first for layer caching. bilibili's requirements.txt pins
+# the same mcp/uvicorn/starlette/OTel versions the shared base (_mcp_base) needs
+# plus the GPL bilibili-api-python library + curl_cffi (TLS fingerprint) +
+# brotlicffi.
+COPY sidecars/bilibili-mcp/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Shared multi-tenant front end (E1: the ONE Streamable-HTTP front end). serve.py
+# imports `_mcp_base.app.main`; PYTHONPATH=/app makes `_mcp_base` importable.
+COPY sidecars/_mcp_base/ ./_mcp_base/
+
+# The thin serve.py + the LIB-WRAP BilibiliAdapter (wraps the pip-installed
+# bilibili-api library; no vendored source subtree).
+COPY sidecars/bilibili-mcp/ ./
+
+# Non-root runtime user; isolated writable tenant root.
+RUN useradd --create-home --uid 10001 bili \
+  && mkdir -p /data/tenants \
+  && chown -R bili:bili /app /data
+USER bili
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
+    BILIBILI_LOG_LEVEL=info \
+    BILIBILI_TENANT_ROOT=/data/tenants \
+    FASTMCP_HOST=0.0.0.0 \
+    FASTMCP_PORT=8768
+
+EXPOSE 8768
+
+# Lightweight liveness probe against the /healthz route.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8768/healthz', timeout=3).status==200 else 1)" || exit 1
+
+CMD ["python", "-m", "serve"]

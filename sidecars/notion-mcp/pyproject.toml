@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools==78.1.1"]
+build-backend = "setuptools.build_meta"
+
+# The Notion MCP sidecar is a THIN adapter over the shared _mcp_base front end
+# (E1): serve.py builds an AdapterConfig for the generic MCP-PROXY adapter
+# (lifecycle="shared") and calls _mcp_base.app.main(config). The actual Notion
+# backend is a vendored Node server (vendor/notion-mcp/, pinned via npm ci) — not
+# a Python package. This pyproject only declares the sidecar's own Python module.
+[project]
+name = "synapse-notion-mcp"
+version = "0.1.0"
+description = "Notion MCP sidecar: shared base + generic MCP-PROXY adapter over the vendored @notionhq/notion-mcp-server Node backend."
+requires-python = ">=3.12"
+
+[tool.setuptools]
+py-modules = ["serve"]
+
+# Formatting/lint for this Python sidecar (the monorepo's prettier/go
+# format:check does not cover .py). Run `ruff format .` + `ruff check .` here.
+[tool.ruff]
+line-length = 100

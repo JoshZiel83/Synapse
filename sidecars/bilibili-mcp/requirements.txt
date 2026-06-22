@@ -1,0 +1,36 @@
+# Bilibili MCP sidecar deps. The transport/tracing pins are copied verbatim
+# from the shared base (sidecars/_mcp_base/requirements.txt) so the base + this
+# adapter agree on one mcp/uvicorn/starlette/OTel version set. The MCP Python
+# SDK low-level Server + StreamableHTTPSessionManager are version-coupled; keep
+# constrained and re-verify on bump.
+
+# MCP Python SDK: low-level Server + StreamableHTTPSessionManager (the front end
+# lives in _mcp_base; this adapter only contributes tools).
+mcp==1.27.2
+
+# Streamable-HTTP ASGI stack (the one front end, owned by _mcp_base).
+uvicorn==0.48.0
+starlette==1.2.1
+
+# OpenTelemetry tracing (logging refactor P7): exports request spans over OTLP
+# when OTEL_EXPORTER_OTLP_ENDPOINT is set, continuing the api-injected
+# traceparent. No-op when unset.
+opentelemetry-sdk==1.42.1
+opentelemetry-exporter-otlp-proto-http==1.42.1
+opentelemetry-instrumentation-starlette==0.63b1
+
+# Build backend.
+setuptools==78.1.1
+
+# --- Bilibili upstream library (LIB-WRAP, GPL-3.0) ------------------------- #
+# Nemo2011/bilibili-api — the in-process Python client this sidecar wraps. GPL-3.0
+# (see LICENSE + UPSTREAM.md; accepted as an arms-length independent sidecar
+# process, F2). wbi signing + the API surface live here; we do NOT re-implement.
+bilibili-api-python==17.1.1
+
+# curl_cffi HTTP client for TLS/JA3 fingerprint generation (anti-risk-control).
+# Plain aiohttp is far more detectable; select_client("curl_cffi") is set at boot.
+curl_cffi==0.7.4
+
+# brotli decode for aiohttp>=3.13 response bodies (Bilibili serves br-encoded).
+brotlicffi==1.1.0.0

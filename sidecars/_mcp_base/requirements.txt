@@ -1,0 +1,29 @@
+# Shared mcp-sidecar base (_mcp_base) — the transport/tracing pins are copied
+# verbatim from the mijia sidecar so the base + every adapter agree on a single
+# mcp/uvicorn/starlette/OTel version set. The MCP Python SDK's low-level Server,
+# StreamableHTTPSessionManager, AND client API (mcp.client.streamable_http /
+# mcp.client.stdio — used by the generic MCP-PROXY adapter) are all version-
+# coupled; keep these constrained and re-verify on bump.
+
+# MCP Python SDK: low-level Server + StreamableHTTPSessionManager (server side)
+# AND ClientSession + streamable_http/stdio clients (proxy adapter). One pin.
+mcp==1.27.2
+
+# Streamable-HTTP ASGI stack (the one front end).
+uvicorn==0.48.0
+starlette==1.2.1
+
+# OpenTelemetry tracing (logging refactor P7): exports request spans over OTLP
+# when OTEL_EXPORTER_OTLP_ENDPOINT is set, continuing the api-injected
+# traceparent. No-op when unset.
+opentelemetry-sdk==1.42.1
+opentelemetry-exporter-otlp-proto-http==1.42.1
+opentelemetry-instrumentation-starlette==0.63b1
+
+# Build backend.
+setuptools==78.1.1
+
+# NOTE: each concrete sidecar's own requirements.txt installs THIS file's pins
+# plus its vendored client library (LIB-WRAP: e.g. mijiaAPI / bilibili-api;
+# MCP-PROXY: httpx comes transitively with mcp). The base itself needs no
+# vendor client lib.

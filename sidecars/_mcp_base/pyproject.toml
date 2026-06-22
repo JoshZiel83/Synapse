@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools==78.1.1"]
+build-backend = "setuptools.build_meta"
+
+# _mcp_base is the ONE multi-tenant Streamable-HTTP front end imported by every
+# Synapse mcp-plugin sidecar (E1). It is a library, NOT a deployable sidecar:
+# each concrete sidecar COPYs this package into its image and calls
+# `_mcp_base.app.main(config)`.
+[project]
+name = "synapse-mcp-base"
+version = "0.1.0"
+description = "Shared multi-tenant Streamable-HTTP front end for Synapse mcp-plugin sidecars."
+requires-python = ">=3.12"
+
+[tool.setuptools]
+packages = ["_mcp_base"]
+package-dir = { "_mcp_base" = "." }

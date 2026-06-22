@@ -1,0 +1,13 @@
+.venv
+__pycache__
+*.pyc
+.vscode
+.idea
+.env
+dist
+build/
+*.egg-info/
+.pytest_cache/
+# Per-tenant secret root (cookies live only in memory, but the registry's 0700
+# workdir root would be here if BILIBILI_TENANT_ROOT pointed into the tree).
+tenants/
