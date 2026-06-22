@@ -363,7 +363,16 @@
     return (0, import_fast_deep_equal.default)(left, right);
   }
   function mergeStoredQueueTransition(currentState, previousState, nextState) {
-    const nextWorkspaceState = currentState.workspaceMemberId && nextState.workspaceMemberId && currentState.workspaceMemberId !== nextState.workspaceMemberId ? createEmptyStoredChatQueueState(nextState.workspaceId) : currentState.workspaceId === nextState.workspaceId ? currentState : createEmptyStoredChatQueueState(nextState.workspaceId);
+    const resolveNextWorkspaceState = () => {
+      if (currentState.workspaceMemberId && nextState.workspaceMemberId && currentState.workspaceMemberId !== nextState.workspaceMemberId) {
+        return createEmptyStoredChatQueueState(nextState.workspaceId);
+      }
+      if (currentState.workspaceId === nextState.workspaceId) {
+        return currentState;
+      }
+      return createEmptyStoredChatQueueState(nextState.workspaceId);
+    };
+    const nextWorkspaceState = resolveNextWorkspaceState();
     const previousOutbox = previousState?.outbox ?? {};
     const previousPendingReads = previousState?.pendingReads ?? {};
     const nextOutbox = { ...nextWorkspaceState.outbox };

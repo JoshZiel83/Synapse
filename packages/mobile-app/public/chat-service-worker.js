@@ -561,6 +561,9 @@
     FEISHU_INBOUND_MEDIA_INGEST: "feishu_inbound_media_ingest",
     WEIXIN_INBOUND_MEDIA_INGEST: "weixin_inbound_media_ingest",
     DINGTALK_INBOUND_MEDIA_INGEST: "dingtalk_inbound_media_ingest",
+    TELEGRAM_INBOUND_MEDIA_INGEST: "telegram_inbound_media_ingest",
+    WHATSAPP_INBOUND_MEDIA_INGEST: "whatsapp_inbound_media_ingest",
+    WHATSAPP_UNOFFICIAL_INBOUND_MEDIA_INGEST: "whatsapp_unofficial_inbound_media_ingest",
     SKILL_MIRROR_IMPORT: "skill_mirror_import",
     GENERATED_USER_AVATAR: "generated_user_avatar",
     GENERATED_OFFICIAL_ACTOR_AVATAR: "generated_official_actor_avatar",
@@ -594,7 +597,10 @@
     FILE_ORIGIN_SYSTEMS.QQ_INBOUND_MEDIA_INGEST,
     FILE_ORIGIN_SYSTEMS.FEISHU_INBOUND_MEDIA_INGEST,
     FILE_ORIGIN_SYSTEMS.WEIXIN_INBOUND_MEDIA_INGEST,
-    FILE_ORIGIN_SYSTEMS.DINGTALK_INBOUND_MEDIA_INGEST
+    FILE_ORIGIN_SYSTEMS.DINGTALK_INBOUND_MEDIA_INGEST,
+    FILE_ORIGIN_SYSTEMS.TELEGRAM_INBOUND_MEDIA_INGEST,
+    FILE_ORIGIN_SYSTEMS.WHATSAPP_INBOUND_MEDIA_INGEST,
+    FILE_ORIGIN_SYSTEMS.WHATSAPP_UNOFFICIAL_INBOUND_MEDIA_INGEST
   ];
   var PACKAGE_IMPORT_FILE_ORIGIN_SYSTEMS = [
     FILE_ORIGIN_SYSTEMS.SKILL_MIRROR_IMPORT
@@ -1576,6 +1582,15 @@
   function sameEntry(left, right) {
     return (0, import_fast_deep_equal.default)(left ?? null, right ?? null);
   }
+  function resolveMergedTombstones(latestQueueState, processedQueueState) {
+    if (latestQueueState.tombstones) {
+      return { ...latestQueueState.tombstones };
+    }
+    if (processedQueueState.tombstones) {
+      return { ...processedQueueState.tombstones };
+    }
+    return void 0;
+  }
   function mergeQueueStateForSave(baseQueueState, latestQueueState, processedQueueState) {
     const next = {
       ...latestQueueState,
@@ -1589,7 +1604,7 @@
       // The SW never mutates tombstones (it only flushes outbox/reads), so
       // preserve whatever the latest UI-thread state holds. Carried through so the
       // round-trip save doesn't strip the field.
-      tombstones: latestQueueState.tombstones ? { ...latestQueueState.tombstones } : processedQueueState.tombstones ? { ...processedQueueState.tombstones } : void 0
+      tombstones: resolveMergedTombstones(latestQueueState, processedQueueState)
     };
     for (const conversationId of Object.keys(baseQueueState.pendingReads)) {
       const baseEntry = baseQueueState.pendingReads[conversationId];

@@ -350,7 +350,10 @@ export async function uploadWhatsappMediaBytes(
       `whatsapp media upload HTTP ${res.status}: ${text.slice(0, 200)}`
     )
   }
-  const json = (await res.json().catch(() => ({}))) as { id?: unknown }
+  const json = (await res
+    .text()
+    .then((t) => JSON.parse(t))
+    .catch(() => ({}))) as { id?: unknown }
   const mediaId = typeof json.id === "string" ? json.id.trim() : ""
   if (!mediaId) {
     throw new Error("whatsapp media upload returned no id")

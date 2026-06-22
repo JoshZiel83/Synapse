@@ -65,7 +65,7 @@ async function readJson<T>(
   res: Response
 ): Promise<TelegramApiResponse<T> | undefined> {
   try {
-    return (await res.json()) as TelegramApiResponse<T>
+    return JSON.parse(await res.text()) as TelegramApiResponse<T>
   } catch {
     return undefined
   }

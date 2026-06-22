@@ -99,6 +99,12 @@ const classifiedJsonParseFiles = {
       "Weixin QR login HTTP responses are provider payloads.",
     "packages/api/src/modules/im/connectors/weixin/client.ts":
       "Weixin long-poll HTTP provider responses are provider payloads.",
+    "packages/api/src/modules/im/connectors/telegram/client.ts":
+      "Telegram Bot API HTTP responses are provider payloads.",
+    "packages/api/src/modules/im/connectors/whatsapp/media.ts":
+      "WhatsApp Cloud media-upload HTTP responses are provider payloads.",
+    "packages/api/src/modules/im/connectors/whatsapp/outbound.ts":
+      "WhatsApp Cloud Graph send responses/errors are provider payloads.",
     "packages/api/src/modules/mcp-plugins/builtin/z-ai/toolkit/zhipu-errors.ts":
       "Zhipu provider error responses are provider payloads.",
     "packages/api/src/modules/mcp-plugins/feishu/auth.ts":
@@ -147,6 +153,12 @@ const classifiedJsonParseFiles = {
       "QQ websocket session Redis state is connector-local cache.",
     "packages/api/src/modules/im/connectors/weixin/qr-session-store.ts":
       "Weixin QR login Redis state is connector-local cache.",
+    "packages/api/src/modules/im/connectors/whatsapp_unofficial/creds-persistence.ts":
+      "WhatsApp Baileys auth creds are connector-local persisted state.",
+    "packages/api/src/modules/im/connectors/whatsapp_unofficial/qr-session-store.ts":
+      "WhatsApp QR login Redis session state is connector-local cache.",
+    "packages/api/src/modules/im/connectors/whatsapp_unofficial/session-guard.ts":
+      "WhatsApp pause/session-guard Redis state is connector-local cache.",
     "packages/api/src/modules/mcp-plugins/instance-manager.ts":
       "MCP runtime lease metadata is internal Redis/cache state.",
     "packages/api/src/modules/memory/embedding-cache-codec.ts":

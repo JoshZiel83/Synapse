@@ -241,7 +241,10 @@ async function sendOneItem(
   if (!res.ok) {
     await classifyAndThrow(res)
   }
-  const json = (await res.json().catch(() => ({}))) as WhatsappSendResponse
+  const json = (await res
+    .text()
+    .then((t) => JSON.parse(t))
+    .catch(() => ({}))) as WhatsappSendResponse
   const id = json.messages?.[0]?.id
   return typeof id === "string" && id.trim() ? id : undefined
 }
