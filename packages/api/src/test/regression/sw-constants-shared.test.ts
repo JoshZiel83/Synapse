@@ -170,11 +170,11 @@ test("bundled service workers carry the shared chat-queue strings", async () => 
   )
   assert.ok(
     webBundle.includes(CHAT_QUEUE_BROADCAST_CHANNEL),
-    `web SW bundle must contain "${CHAT_QUEUE_BROADCAST_CHANNEL}" — run \`npm run build:chat-worker -w packages/web-next\` and commit`
+    `web SW bundle must contain "${CHAT_QUEUE_BROADCAST_CHANNEL}" — run \`npm run build:chat-worker\` (root, rebuilds both bundles) and commit`
   )
   assert.ok(
     mobileBundle.includes(CHAT_QUEUE_BROADCAST_CHANNEL),
-    `mobile SW bundle must contain "${CHAT_QUEUE_BROADCAST_CHANNEL}" — run \`npm run build:chat-worker\` in packages/mobile-app and commit`
+    `mobile SW bundle must contain "${CHAT_QUEUE_BROADCAST_CHANNEL}" — run \`npm run build:chat-worker\` (root, rebuilds both bundles) and commit`
   )
   // Sanity: the old per-client strings must not survive in either bundle.
   assert.equal(
@@ -273,11 +273,11 @@ test("regenerating the SW bundles produces no diff vs the committed artifacts", 
   assert.equal(
     webAfter,
     webBefore,
-    "web SW bundle drifted from source — run `npm run build:chat-worker -w packages/web-next` and commit"
+    "web SW bundle drifted from source — run `npm run build:chat-worker` (root, rebuilds both bundles) and commit"
   )
   assert.equal(
     mobileAfter,
     mobileBefore,
-    "mobile SW bundle drifted from source — run `npm run build:chat-worker` in packages/mobile-app and commit"
+    "mobile SW bundle drifted from source — run `npm run build:chat-worker` (root, rebuilds both bundles) and commit"
   )
 })
