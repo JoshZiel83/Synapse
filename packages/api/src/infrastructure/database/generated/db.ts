@@ -2994,7 +2994,7 @@ export interface WorkspaceRelationshipProfiles {
 }
 
 export interface WorkspaceResourceGrantRequests {
-  createdAt: Generated<Date | null>;
+  createdAt: Generated<Date>;
   granteeScopeSubjectId: string | null;
   granteeSubjectId: string;
   id: Generated<string>;
@@ -3004,7 +3004,7 @@ export interface WorkspaceResourceGrantRequests {
   resolvedAt: Date | null;
   resolvedByWorkspaceMemberId: string | null;
   status: Generated<WorkspaceResourceGrantRequestsStatus>;
-  updatedAt: Generated<Date | null>;
+  updatedAt: Generated<Date>;
   workspaceId: string;
   workspaceResourceId: string;
 }
@@ -3043,7 +3043,7 @@ export interface WorkspaceResourceGrantsLive {
 
 export interface WorkspaceResources {
   conversationTypeMaskOverride: number | null;
-  createdAt: Generated<Date | null>;
+  createdAt: Generated<Date>;
   createdBySubjectId: string;
   deletedAt: Date | null;
   displayName: string;
@@ -3051,7 +3051,7 @@ export interface WorkspaceResources {
   kind: WorkspaceResourcesKind;
   ownerSubjectId: string | null;
   status: Generated<WorkspaceResourcesStatus>;
-  updatedAt: Generated<Date | null>;
+  updatedAt: Generated<Date>;
   workspaceId: string;
 }
 

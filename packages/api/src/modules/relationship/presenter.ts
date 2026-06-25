@@ -12,7 +12,7 @@ import type {
   RelationshipRequestStatus,
 } from "@synapse/shared"
 import { RELATIONSHIP_REQUEST_STATUS } from "@synapse/shared"
-import { serializeOptionalInstant } from "../../infrastructure/datetime.js"
+import { serializeInstant } from "../../infrastructure/datetime.js"
 
 /**
  * Relationship presentation layer: DB row → app-facing view. Owns the outward
@@ -34,7 +34,7 @@ export type ConversationSummaryRecord = ConversationSummaryView
 export type FriendRequestRecord = {
   id: string
   status: RelationshipRequestStatus
-  createdAt: Date | null | undefined
+  createdAt: Date
   targetType: ContactTargetType
   requester?: RelationshipMemberSummaryRecord | null
   targetMember?: RelationshipMemberSummaryRecord | null
@@ -45,7 +45,7 @@ export type FriendRequestRecord = {
 export type ActorAccessRequestRecord = {
   id: string
   status: RelationshipRequestStatus
-  createdAt: Date | null | undefined
+  createdAt: Date
   requester?: RelationshipMemberSummaryRecord | null
   actor?: RelationshipActorSummaryRecord | null
 }
@@ -53,7 +53,7 @@ export type ActorAccessRequestRecord = {
 export type RemoteAgentAccessRequestRecord = {
   id: string
   status: RelationshipRequestStatus
-  createdAt: Date | null | undefined
+  createdAt: Date
   requester?: RelationshipMemberSummaryRecord | null
   remoteAgent?: RelationshipRemoteAgentSummaryRecord | null
 }
@@ -208,7 +208,7 @@ export function presentFriendRequest(input: FriendRequestRecord) {
   return {
     id: input.id,
     status: input.status,
-    createdAt: serializeOptionalInstant(input.createdAt),
+    createdAt: serializeInstant(input.createdAt),
     requester: presentMemberSummary(input.requester),
     targetType: input.targetType,
     targetMember: presentMemberSummary(input.targetMember),
@@ -221,7 +221,7 @@ export function presentActorAccessRequest(input: ActorAccessRequestRecord) {
   return {
     id: input.id,
     status: input.status,
-    createdAt: serializeOptionalInstant(input.createdAt),
+    createdAt: serializeInstant(input.createdAt),
     requester: presentMemberSummary(input.requester),
     actor: presentActorSummary(input.actor),
   }
@@ -233,7 +233,7 @@ export function presentRemoteAgentAccessRequest(
   return {
     id: input.id,
     status: input.status,
-    createdAt: serializeOptionalInstant(input.createdAt),
+    createdAt: serializeInstant(input.createdAt),
     requester: presentMemberSummary(input.requester),
     remoteAgent: presentRemoteAgentSummary(input.remoteAgent),
   }

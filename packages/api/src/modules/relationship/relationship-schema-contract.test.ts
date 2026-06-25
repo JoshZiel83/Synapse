@@ -156,7 +156,7 @@ test("presentActorAccessRequest output parses ActorAccessRequestViewSchema", () 
   const record: ActorAccessRequestRecord = {
     id: "ar-1",
     status: RELATIONSHIP_REQUEST_STATUS.PENDING,
-    createdAt: null,
+    createdAt: new Date("2026-06-12T00:00:00.000Z"),
     requester: memberSummary,
     actor: actorSummary,
   }
@@ -289,7 +289,7 @@ test("RequestListResponseSchema accepts each request-view kind in its union", ()
       presentActorAccessRequest({
         id: "ar-2",
         status: RELATIONSHIP_REQUEST_STATUS.PENDING,
-        createdAt: null,
+        createdAt: new Date("2026-06-12T00:00:00.000Z"),
         requester: memberSummary,
         actor: actorSummary,
       }),
@@ -298,7 +298,7 @@ test("RequestListResponseSchema accepts each request-view kind in its union", ()
       presentFriendRequest({
         id: "fr-2",
         status: RELATIONSHIP_REQUEST_STATUS.PENDING,
-        createdAt: null,
+        createdAt: new Date("2026-06-12T00:00:00.000Z"),
         targetType: "actor",
         requester: memberSummary,
         targetActor: actorSummary,

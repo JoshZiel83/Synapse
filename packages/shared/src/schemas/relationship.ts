@@ -191,11 +191,11 @@ export const IdentitySearchMatchViewSchema = z.object({
   requestId: z.string().optional(),
 })
 
-/** Friend request (presentFriendRequest) — createdAt may be null. */
+/** Friend request (presentFriendRequest). createdAt is NOT NULL at the source. */
 export const FriendRequestViewSchema = z.object({
   id: z.string(),
   status: z.enum(RELATIONSHIP_REQUEST_STATUSES),
-  createdAt: IsoInstantStringSchema.nullable().optional(),
+  createdAt: IsoInstantStringSchema,
   requester: RelationshipMemberSummaryViewSchema.nullable().optional(),
   targetType: z.enum(CONTACT_TARGET_TYPES),
   targetMember: RelationshipMemberSummaryViewSchema.nullable().optional(),
@@ -208,7 +208,7 @@ export const FriendRequestViewSchema = z.object({
 export const ActorAccessRequestViewSchema = z.object({
   id: z.string(),
   status: z.enum(RELATIONSHIP_REQUEST_STATUSES),
-  createdAt: IsoInstantStringSchema.nullable().optional(),
+  createdAt: IsoInstantStringSchema,
   requester: RelationshipMemberSummaryViewSchema.nullable().optional(),
   actor: RelationshipActorSummaryViewSchema.nullable().optional(),
 })
@@ -217,7 +217,7 @@ export const ActorAccessRequestViewSchema = z.object({
 export const RemoteAgentAccessRequestViewSchema = z.object({
   id: z.string(),
   status: z.enum(RELATIONSHIP_REQUEST_STATUSES),
-  createdAt: IsoInstantStringSchema.nullable().optional(),
+  createdAt: IsoInstantStringSchema,
   requester: RelationshipMemberSummaryViewSchema.nullable().optional(),
   remoteAgent: RelationshipRemoteAgentSummaryViewSchema.nullable().optional(),
 })
