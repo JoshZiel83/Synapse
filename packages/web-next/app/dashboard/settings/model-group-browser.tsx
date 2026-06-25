@@ -11,11 +11,10 @@ import {
   listModelVendorDefinitions,
   vendorSupportsServerTools,
   type ModelApiStyle,
-  type ModelGroupOwnerType,
-  type ModelGroupRoutingStrategy,
+  type ModelGroupDetailView,
+  type ModelGroupItemView,
+  type ModelGroupView,
   type ModelServerTool,
-  type ProviderKind,
-  type Timestamp,
 } from "@synapse/shared"
 import { Cpu, Plus, RefreshCw, Save, Search, Star, Trash2 } from "lucide-react"
 import { toast } from "sonner"
@@ -53,43 +52,11 @@ import { createLogger } from "@/lib/client-logger"
 
 const clientLog = createLogger("web.dashboard.settings.model-group-browser")
 
-type ModelGroupSummary = {
-  id: string
-  workspaceId: string | null
-  ownerType?: ModelGroupOwnerType
-  ownerWorkspaceId?: string | null
-  ownerWorkspaceMemberId?: string | null
-  name: string
-  description: string
-  routingStrategy: ModelGroupRoutingStrategy
-  isDefault: boolean
-  isActive?: boolean
-  createdAt: Timestamp
-}
-
-type ModelItem = {
-  id: string
-  groupId: string | null
-  bindingId: string
-  displayName: string
-  priority: number
-  weight: number
-  isEnabled: boolean
-  currentVersionId: string | null
-  version: number | null
-  providerKind: ProviderKind
-  vendor: string | null
-  baseUrl: string | null
-  modelName: string | null
-  maxOutputTokens: number | null
-  capabilityTags: string[]
-  features?: Record<string, unknown>
-  providerOptions?: Record<string, unknown>
-}
-
-type GroupDetail = ModelGroupSummary & {
-  items: ModelItem[]
-}
+// API contract types are single-sourced from @synapse/shared (zod-derived in
+// packages/shared/src/schemas/model-groups.ts); these aliases keep call sites terse.
+type ModelGroupSummary = ModelGroupView
+type ModelItem = ModelGroupItemView
+type GroupDetail = ModelGroupDetailView
 
 type ModelItemFormState = {
   displayName: string

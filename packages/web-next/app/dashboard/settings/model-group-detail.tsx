@@ -4,9 +4,8 @@ import Link from "next/link"
 import { useEffect, useState } from "react"
 import {
   MODEL_GROUP_OWNER_TYPE,
+  type ModelGroupDetailView,
   type ModelGroupItemView,
-  type ModelGroupOwnerType,
-  type ModelGroupRoutingStrategy,
 } from "@synapse/shared"
 import { useWorkspace } from "../workspace-provider"
 import { api } from "@/lib/api"
@@ -37,20 +36,10 @@ import { createLogger } from "@/lib/client-logger"
 
 const clientLog = createLogger("web.dashboard.settings.model-group-detail")
 
+// API contract types are single-sourced from @synapse/shared (zod-derived in
+// packages/shared/src/schemas/model-groups.ts); these aliases keep call sites terse.
 type ModelItem = ModelGroupItemView
-
-interface GroupDetail {
-  id: string
-  name: string
-  description: string
-  routingStrategy: ModelGroupRoutingStrategy
-  isDefault: boolean
-  workspaceId: string | null
-  ownerType?: ModelGroupOwnerType
-  ownerWorkspaceId?: string | null
-  ownerWorkspaceMemberId?: string | null
-  items: ModelItem[]
-}
+type GroupDetail = ModelGroupDetailView
 
 async function fetchGroupByScope(
   scope: ModelGroupScope,

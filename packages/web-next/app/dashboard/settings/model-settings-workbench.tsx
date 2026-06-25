@@ -14,13 +14,12 @@ import {
   listModelVendorDefinitions,
   vendorSupportsServerTools,
   type ModelApiStyle,
+  type ModelGroupDetailView,
   type ModelGroupGrantScope,
-  type ModelGroupGrantStatus,
-  type ModelGroupOwnerType,
-  type ModelGroupRoutingStrategy,
+  type ModelGroupGrantView,
+  type ModelGroupItemView,
+  type ModelGroupView,
   type ModelServerTool,
-  type ProviderKind,
-  type Timestamp,
 } from "@synapse/shared"
 import {
   ChevronDown,
@@ -96,58 +95,12 @@ const clientLog = createLogger(
 
 type GrantScope = ModelGroupGrantScope
 
-type ModelGroupSummary = {
-  id: string
-  workspaceId: string | null
-  ownerType?: ModelGroupOwnerType
-  ownerWorkspaceId?: string | null
-  ownerWorkspaceMemberId?: string | null
-  name: string
-  description: string
-  routingStrategy: ModelGroupRoutingStrategy
-  isDefault: boolean
-  isActive?: boolean
-  createdAt: Timestamp
-}
-
-type ModelGroupGrant = {
-  id: string
-  groupId: string
-  grantScope: ModelGroupGrantScope
-  workspaceId: string | null
-  workspaceMemberId: string | null
-  actorId: string | null
-  status: ModelGroupGrantStatus
-  createdByWorkspaceMemberId?: string | null
-  reason?: string | null
-  createdAt?: Timestamp | null
-  revokedAt?: Timestamp | null
-}
-
-type ModelItem = {
-  id: string
-  groupId: string | null
-  bindingId: string
-  currentVersionId: string | null
-  displayName: string
-  priority: number
-  weight: number
-  isEnabled: boolean
-  version: number | null
-  providerKind: ProviderKind
-  vendor: string | null
-  baseUrl: string | null
-  modelName: string | null
-  maxOutputTokens: number | null
-  capabilityTags: string[]
-  features?: Record<string, unknown>
-  providerOptions?: Record<string, unknown>
-}
-
-type GroupDetail = ModelGroupSummary & {
-  grants: ModelGroupGrant[]
-  items: ModelItem[]
-}
+// API contract types are single-sourced from @synapse/shared (zod-derived in
+// packages/shared/src/schemas/model-groups.ts); these aliases keep call sites terse.
+type ModelGroupSummary = ModelGroupView
+type ModelGroupGrant = ModelGroupGrantView
+type ModelItem = ModelGroupItemView
+type GroupDetail = ModelGroupDetailView
 
 type WorkspaceMember = {
   id: string
