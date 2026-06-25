@@ -1,9 +1,9 @@
 import { z } from "zod"
-import { ACTOR_DOC_VISIBILITIES } from "../constants/enums.js"
+import { ACTOR_DOC_KEYS, ACTOR_DOC_VISIBILITIES } from "../constants/enums.js"
 import { PersistedCanonicalContentBlockSchema } from "./chat-content-block.js"
 
 const actorDocShape = {
-  key: z.string(),
+  key: z.enum(ACTOR_DOC_KEYS),
   title: z.string(),
   content: z.array(PersistedCanonicalContentBlockSchema),
   visibility: z.enum(ACTOR_DOC_VISIBILITIES),

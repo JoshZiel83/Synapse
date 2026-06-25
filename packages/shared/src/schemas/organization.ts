@@ -17,6 +17,7 @@ import {
   MARKETPLACE_VERSION_STATUSES,
   PLUGIN_SPEC_TRANSPORTS,
   REUSE_SCOPES,
+  ACTOR_DOC_KEYS,
 } from "../constants/enums.js"
 import { ActorDocSchema } from "./actor-docs.js"
 import { PersistedCanonicalContentBlockSchema } from "./chat-content-block.js"
@@ -275,7 +276,7 @@ const ActorVersionDocFieldChangeSchema = z.object({
 const ActorVersionDocChangeSchema = z.object({
   kind: z.literal("doc"),
   docId: z.uuid(),
-  key: z.string(),
+  key: z.enum(ACTOR_DOC_KEYS),
   title: z.string(),
   changeType: z.enum(ACTOR_VERSION_DOC_CHANGE_TYPES),
   visibility: z.enum(ACTOR_DOC_VISIBILITIES),

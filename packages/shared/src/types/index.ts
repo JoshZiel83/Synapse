@@ -172,6 +172,8 @@ import {
   TRANSPORT_KINDS,
   WEIXIN_QR_LOGIN_STATUSES,
   DINGTALK_DEVICE_FLOW_STATUSES,
+  CORE_ACTOR_DOC_KEYS,
+  ACTOR_DOC_KEYS,
 } from "../constants/enums.js"
 import type { ChatTypingState } from "../constants/enums.js"
 import type { ProviderKind } from "../constants/model-providers.js"
@@ -298,25 +300,9 @@ export type ActorRole = (typeof ACTOR_ROLES)[number]
 
 export type ActorDocVisibility = (typeof ACTOR_DOC_VISIBILITIES)[number]
 
-export type CoreActorDocKey =
-  | "identity_card"
-  | "public_persona"
-  | "soul"
-  | "self_narrative"
-  | "origin_story"
-  | "relationship_with_user"
-  | "relationship_with_team"
-  | "representation_guidelines"
-  | "social_protocol"
-  | "role_charter"
-  | "mission"
-  | "work_doctrine"
-  | "limitations_and_escalation"
-  | "quirks_and_signatures"
-  | "routines"
-  | "conversation_examples"
+export type CoreActorDocKey = (typeof CORE_ACTOR_DOC_KEYS)[number]
 
-export type ActorDocKey = CoreActorDocKey | "custom"
+export type ActorDocKey = (typeof ACTOR_DOC_KEYS)[number]
 
 export interface ActorDoc {
   // Stable string identifier, not necessarily a UUID: seeded official-template
@@ -1416,7 +1402,7 @@ export interface RemoteAgentMachineView {
   description?: string
   trustStatus: RemoteAgentMachineTrustStatus
   lifecycleState?: RemoteAgentLifecycleState
-  bindingCount: number
+  bindingCount?: number
   lastSeenAt?: Timestamp
   createdAt?: Timestamp
   updatedAt?: Timestamp

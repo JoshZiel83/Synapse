@@ -815,6 +815,29 @@ export const ACTOR_DOC_VISIBILITIES = [
   "internal_only",
 ] as const
 
+// Single source of truth for actor-doc keys. CoreActorDocKey / ActorDocKey
+// (types/index.ts) derive from these, and the actor-doc schemas z.enum() over
+// them — so the schema's `key` field and the hand-written union can't drift.
+export const CORE_ACTOR_DOC_KEYS = [
+  "identity_card",
+  "public_persona",
+  "soul",
+  "self_narrative",
+  "origin_story",
+  "relationship_with_user",
+  "relationship_with_team",
+  "representation_guidelines",
+  "social_protocol",
+  "role_charter",
+  "mission",
+  "work_doctrine",
+  "limitations_and_escalation",
+  "quirks_and_signatures",
+  "routines",
+  "conversation_examples",
+] as const
+export const ACTOR_DOC_KEYS = [...CORE_ACTOR_DOC_KEYS, "custom"] as const
+
 export const SKILL_SOURCE_TYPES = ["github", "clawhub"] as const
 export const SKILL_MIRROR_SYNC_STATUSES = [
   "pending",

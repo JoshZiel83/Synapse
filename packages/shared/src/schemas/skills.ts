@@ -9,6 +9,7 @@ import { SUBJECT_KIND } from "../access/enums.js"
 import type {
   CanonicalContentBlock,
   CanonicalContentBlockInput,
+  CapabilityAccessTarget,
 } from "../types/index.js"
 import { CanonicalContentBlockSchema } from "./chat-content-block.js"
 import { IsoInstantStringSchema } from "./datetime.js"
@@ -64,10 +65,13 @@ const SkillSubjectRefSchema = z.discriminatedUnion("kind", [
   }),
 ])
 
+// readonly-only diff vs the canonical CapabilityAccessTarget (SubjectRef is
+// all-readonly in access/subject.ts; zod infers mutable). Cast so the inferred
+// view matches the hand type — same pattern as SkillContentBlockSchema above.
 const SkillAccessTargetSchema = z.object({
   subject: SkillSubjectRefSchema,
   scope: SkillSubjectRefSchema.optional(),
-})
+}) as unknown as z.ZodType<CapabilityAccessTarget>
 
 export const SkillFrontmatterSchema = z.object({
   name: z.string(),
