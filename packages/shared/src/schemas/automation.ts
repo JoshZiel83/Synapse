@@ -16,7 +16,10 @@ import {
   AUTOMATION_WEBHOOK_ENDPOINT_STATUSES,
 } from "../constants/enums.js"
 import type { CanonicalContentBlockInput } from "../types/index.js"
-import { CanonicalContentBlockSchema } from "./chat-content-block.js"
+import {
+  CanonicalContentBlockSchema,
+  PersistedCanonicalContentBlockSchema,
+} from "./chat-content-block.js"
 import { IsoInstantStringSchema } from "./datetime.js"
 import { WorkspaceResourceGrantViewSchema } from "./workspace-resources.js"
 
@@ -120,7 +123,7 @@ const automationDeliverySchema = z.object({
   ruleId: z.string(),
   messageText: z.string(),
   wakeReasonText: z.string().optional(),
-  messageBlocks: z.array(CanonicalContentBlockSchema),
+  messageBlocks: z.array(PersistedCanonicalContentBlockSchema),
   targetPolicy: z.enum(AUTOMATION_TARGET_POLICIES),
   targetParticipantIds: z.array(z.string()),
   metadata: openRecord,

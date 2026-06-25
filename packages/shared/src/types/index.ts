@@ -1276,6 +1276,7 @@ export interface ConversationPresentationView {
   peer?: ConversationParticipantView
   canRename?: boolean
   canManageMembers?: boolean
+  canManageParticipants?: boolean
 }
 
 export interface ConversationSummaryView {
@@ -1296,6 +1297,7 @@ export interface ConversationSummaryView {
   permissions?: {
     canManage?: boolean
     canManageMembers?: boolean
+    canManageParticipants?: boolean
   }
   viewerParticipantId?: UUID
   viewerWorkspaceMemberId?: UUID

@@ -19,7 +19,7 @@ import {
   REUSE_SCOPES,
 } from "../constants/enums.js"
 import { ActorDocSchema } from "./actor-docs.js"
-import { CanonicalContentBlockSchema } from "./chat-content-block.js"
+import { PersistedCanonicalContentBlockSchema } from "./chat-content-block.js"
 import {
   MarketplaceRequirementCheckSchema,
   McpValidationRuleSchema,
@@ -80,8 +80,8 @@ export type ActorDefinitionView = z.infer<typeof ActorDefinitionSchema>
 
 export const ActorPackageManifestSchema = z.object({
   actor: ActorDefinitionSchema,
-  setupGuide: z.array(CanonicalContentBlockSchema),
-  releaseNotes: z.array(CanonicalContentBlockSchema),
+  setupGuide: z.array(PersistedCanonicalContentBlockSchema),
+  releaseNotes: z.array(PersistedCanonicalContentBlockSchema),
 })
 export type ActorPackageManifestView = z.infer<
   typeof ActorPackageManifestSchema
@@ -183,7 +183,7 @@ const ActorPackageDependencySchema = z.object({
   targetPackageSlug: z.string(),
   acceptableReuseScopes: z.array(z.enum(REUSE_SCOPES)),
   description: z.string(),
-  notes: z.array(CanonicalContentBlockSchema),
+  notes: z.array(PersistedCanonicalContentBlockSchema),
   metadata: openRecordSchema,
 })
 
@@ -261,7 +261,7 @@ const ActorVersionFieldChangeSchema = z.object({
   field: actorVersionChangedFieldSchema,
   before: z.unknown().optional(),
   after: z.unknown().optional(),
-  summary: z.array(CanonicalContentBlockSchema),
+  summary: z.array(PersistedCanonicalContentBlockSchema),
 })
 
 const ActorVersionDocFieldChangeSchema = z.object({
@@ -281,7 +281,7 @@ const ActorVersionDocChangeSchema = z.object({
   visibility: z.enum(ACTOR_DOC_VISIBILITIES),
   priority: z.number(),
   fieldChanges: z.array(ActorVersionDocFieldChangeSchema),
-  summary: z.array(CanonicalContentBlockSchema),
+  summary: z.array(PersistedCanonicalContentBlockSchema),
 })
 
 export const ActorVersionDeltaSchema = z.object({
@@ -294,7 +294,7 @@ export const ActorVersionDeltaSchema = z.object({
       ActorVersionDocChangeSchema,
     ])
   ),
-  summary: z.array(CanonicalContentBlockSchema),
+  summary: z.array(PersistedCanonicalContentBlockSchema),
 })
 
 /**

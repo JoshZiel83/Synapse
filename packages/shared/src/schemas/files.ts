@@ -8,7 +8,7 @@ import {
   FILE_PARSE_RUN_STATUSES,
   USER_UPLOAD_FILE_ORIGIN_SYSTEMS,
 } from "../constants/enums.js"
-import type { FileOriginSummary } from "../types/index.js"
+import type { FileOriginSummary, FileOriginSystem } from "../types/index.js"
 
 /**
  * App-facing contracts for the files module's APP routes (master plan §5.3).
@@ -24,9 +24,12 @@ import type { FileOriginSummary } from "../types/index.js"
  * `structuredJson`) are modeled as open records.
  */
 
+// Cast to the literal-union tuple (not `[string, ...]`) so `z.enum(...)` below
+// infers the FileOriginSystem union, not `string` — keeping the schema's
+// `originSummary.system` aligned with the hand-written FileOriginSummary.system.
 const FILE_ORIGIN_SYSTEM_VALUES = Object.values(FILE_ORIGIN_SYSTEMS) as [
-  string,
-  ...string[],
+  FileOriginSystem,
+  ...FileOriginSystem[],
 ]
 const fileOriginSummaryDetailsSchema = z.custom<
   NonNullable<FileOriginSummary["details"]>

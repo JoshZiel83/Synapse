@@ -21,7 +21,7 @@ import {
   FilesystemPolicySchema,
   GrantPolicySchema,
 } from "../access/policies/index.js"
-import { CanonicalContentBlockSchema } from "./chat-content-block.js"
+import { PersistedCanonicalContentBlockSchema } from "./chat-content-block.js"
 import { IsoInstantStringSchema } from "./datetime.js"
 import type {
   RuntimeAuthorizationGrantOption,
@@ -222,7 +222,7 @@ export const TaskNoticeSummarySchema = z.object({
   status: z.enum(TASK_NOTICE_STATUSES),
   summary: z.string(),
   message: z.string().optional(),
-  messageBlocks: z.array(CanonicalContentBlockSchema).optional(),
+  messageBlocks: z.array(PersistedCanonicalContentBlockSchema).optional(),
 })
 export type TaskNoticeSummarySchemaType = z.infer<
   typeof TaskNoticeSummarySchema

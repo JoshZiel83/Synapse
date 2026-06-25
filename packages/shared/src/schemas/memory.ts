@@ -18,7 +18,10 @@ import type {
   MemoryRecallResult,
   MemoryRecallRun,
 } from "../types/index.js"
-import { CanonicalContentBlockSchema } from "./chat-content-block.js"
+import {
+  CanonicalContentBlockSchema,
+  PersistedCanonicalContentBlockSchema,
+} from "./chat-content-block.js"
 import { IsoInstantStringSchema } from "./datetime.js"
 
 /**
@@ -212,7 +215,7 @@ const memoryViewShape = {
   tags: z.array(z.string()),
   textDigest: z.string(),
   searchText: z.string(),
-  contentBlocks: z.array(CanonicalContentBlockSchema),
+  contentBlocks: z.array(PersistedCanonicalContentBlockSchema),
   sourceItemId: z.uuid().optional(),
   sourceToolCallId: z.uuid().optional(),
   sourceTurnId: z.uuid().optional(),
@@ -264,7 +267,7 @@ export const MemoryRecallRunViewSchema = z.object({
   workspaceMemberId: z.uuid().optional(),
   recallType: z.enum(MEMORY_RECALL_TYPES),
   queryText: z.string(),
-  queryBlocks: z.array(CanonicalContentBlockSchema),
+  queryBlocks: z.array(PersistedCanonicalContentBlockSchema),
   metadata: z.record(z.string(), z.unknown()),
   createdAt: IsoInstantStringSchema,
   results: z.array(MemoryRecallResultItemViewSchema),

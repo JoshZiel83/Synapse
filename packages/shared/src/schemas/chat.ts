@@ -35,7 +35,10 @@ import {
   TRANSPORT_ENDPOINT_TYPES,
   TRANSPORT_KINDS,
 } from "../constants/enums.js"
-import { CanonicalContentBlockSchema } from "./chat-content-block.js"
+import {
+  CanonicalContentBlockSchema,
+  PersistedCanonicalContentBlockSchema,
+} from "./chat-content-block.js"
 import { IsoInstantStringSchema } from "./datetime.js"
 import { RemoteAgentRuntimeCapabilityViewSchema } from "./remote-agents.js"
 import { TOOL_SOURCE_KINDS } from "../tool-source/kinds.js"
@@ -229,7 +232,7 @@ const ConversationReplyRefSchema = z.object({
   subtype: z.enum(CONVERSATION_REPLY_REF_SUBTYPES),
   author: ConversationEntityRefSchema.optional(),
   previewText: z.string(),
-  previewBlocks: z.array(CanonicalContentBlockSchema),
+  previewBlocks: z.array(PersistedCanonicalContentBlockSchema),
   createdAt: timestampSchema.optional(),
   isUnavailable: z.boolean().optional(),
 })
@@ -250,7 +253,7 @@ const ChatConversationItemBaseSchema = z.object({
   replyTo: ConversationReplyRefSchema.optional(),
   causedByItemId: z.string().optional(),
   content: z.string(),
-  contentBlocks: z.array(CanonicalContentBlockSchema),
+  contentBlocks: z.array(PersistedCanonicalContentBlockSchema),
   metadata: z.record(z.string(), z.unknown()),
   restrictedAudienceParticipantIds: z.array(z.string()).optional(),
   restrictedAudience: z.array(ConversationEntityRefSchema).optional(),
@@ -306,7 +309,7 @@ const AutomationNoticePayloadSchema = z.object({
   sourceDescription: z.string().optional(),
   occurredAt: timestampSchema.optional(),
   message: z.string(),
-  messageBlocks: z.array(CanonicalContentBlockSchema).optional(),
+  messageBlocks: z.array(PersistedCanonicalContentBlockSchema).optional(),
 })
 
 const TaskRequestedEventPayloadSchema = z.object({
@@ -568,8 +571,8 @@ const ActorRuntimeTurnActivityItemSchema = z.object({
   titlePresentation: PresentationStringSchema.optional(),
   detailPresentation: PresentationStringSchema.optional(),
   resultSummary: PresentationStringSchema.optional(),
-  requestBlocks: z.array(CanonicalContentBlockSchema),
-  resultBlocks: z.array(CanonicalContentBlockSchema),
+  requestBlocks: z.array(PersistedCanonicalContentBlockSchema),
+  resultBlocks: z.array(PersistedCanonicalContentBlockSchema),
   taskStatus: z.enum(actorRuntimeTaskStatuses).optional(),
   startedAt: timestampSchema,
   updatedAt: timestampSchema,

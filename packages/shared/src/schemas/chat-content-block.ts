@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { CANONICAL_FILE_CATEGORIES } from "../constants/enums.js"
 import type {
+  CanonicalContentBlock,
   CanonicalContentBlockInput,
   ConversationEntityRef,
 } from "../types/index.js"
@@ -61,3 +62,16 @@ export const CanonicalContentBlockSchema = z.discriminatedUnion("type", [
 export type CanonicalContentBlockParsed = z.infer<
   typeof CanonicalContentBlockSchema
 >
+
+/**
+ * Persisted / response variant. The input schema above makes `id` optional
+ * (clients may omit it and let the server mint one). Every block the server
+ * EMITS, however, carries an id — the content constructors always mint one
+ * (see content/index.ts). Response DTOs embed THIS schema so their inferred
+ * element type matches the persisted `CanonicalContentBlock` (id required)
+ * rather than the input type (id optional), closing the id-optional-vs-required
+ * drift. Same runtime object; the cast only tightens the declared type, which
+ * is sound because output blocks always have ids.
+ */
+export const PersistedCanonicalContentBlockSchema =
+  CanonicalContentBlockSchema as unknown as z.ZodType<CanonicalContentBlock>
