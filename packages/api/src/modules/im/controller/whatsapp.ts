@@ -20,49 +20,19 @@
  */
 
 import type { FastifyInstance } from "fastify"
-import { z } from "zod"
 import { TransportAccountResponseSchema } from "@synapse/shared/schemas"
 import { appRoute } from "../../../infrastructure/http/route.js"
 import { createTransportAccount, updateTransportAccount } from "../service.js"
 import {
   refreshTransportRuntimeState,
   requireWorkspaceAction,
+  updateWhatsappAccountSchema,
+  whatsappAccountSchema,
 } from "./_shared.js"
 
-// ── Local zod schemas (never edit shared/schemas/im.ts from this boundary) ──
-
-const ownerScopeSchema = z.enum(["workspace", "workspace_member"]).optional()
-
-const createSchema = z.object({
-  displayName: z.string().trim().min(1).max(255),
-  accountKey: z.string().trim().min(1).max(120).optional(),
-  // Cloud API is webhook-only.
-  connectionMode: z.literal("webhook").default("webhook"),
-  phoneNumberId: z.string().trim().min(1).max(255),
-  wabaId: z.string().trim().min(1).max(255),
-  accessToken: z.string().trim().min(1).max(4096),
-  appSecret: z.string().trim().min(1).max(512),
-  appId: z.string().trim().min(1).max(255),
-  webhookVerifyToken: z.string().trim().min(1).max(512),
-  graphApiVersion: z.string().trim().min(2).max(16).optional(),
-  status: z.enum(["active", "disabled", "error"]).optional(),
-  ownerScope: ownerScopeSchema,
-  ownerWorkspaceMemberId: z.string().trim().min(1).nullable().optional(),
-})
-
-const updateSchema = z.object({
-  displayName: z.string().trim().min(1).max(255).optional(),
-  phoneNumberId: z.string().trim().min(1).max(255).optional(),
-  wabaId: z.string().trim().min(1).max(255).optional(),
-  accessToken: z.string().trim().min(1).max(4096).optional(),
-  appSecret: z.string().trim().min(1).max(512).optional(),
-  appId: z.string().trim().min(1).max(255).optional(),
-  webhookVerifyToken: z.string().trim().min(1).max(512).optional(),
-  graphApiVersion: z.string().trim().min(2).max(16).optional(),
-  status: z.enum(["active", "disabled", "error"]).optional(),
-  ownerScope: ownerScopeSchema,
-  ownerWorkspaceMemberId: z.string().trim().min(1).nullable().optional(),
-})
+// Request schemas are single-sourced in @synapse/shared/schemas (im.ts) and
+// consumed via the _shared.js aliases, like the other connectors. The
+// credentials-JSON assembly + webhook routes stay here.
 
 export default async function imWhatsappController(
   app: FastifyInstance
@@ -82,7 +52,7 @@ export default async function imWhatsappController(
       if (!allowed) return
 
       const { workspaceId } = request.params as { workspaceId: string }
-      const body = createSchema.parse(request.body)
+      const body = whatsappAccountSchema.parse(request.body)
 
       const credentials: Record<string, unknown> = {
         phoneNumberId: body.phoneNumberId,
@@ -131,7 +101,7 @@ export default async function imWhatsappController(
         workspaceId: string
         accountId: string
       }
-      const body = updateSchema.parse(request.body)
+      const body = updateWhatsappAccountSchema.parse(request.body)
 
       // Only include credentials if at least one field was supplied —
       // otherwise the service treats the JSONB column as a TOTAL replacement

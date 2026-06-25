@@ -20,8 +20,13 @@ import {
   TransportQqAccountCreateInputSchema,
   TransportQqAccountUpdateInputSchema,
   TransportSessionSettingsInputSchema,
+  TransportTelegramAccountCreateInputSchema,
+  TransportTelegramAccountUpdateInputSchema,
   TransportWecomAccountCreateInputSchema,
   TransportWecomAccountUpdateInputSchema,
+  TransportWhatsappAccountCreateInputSchema,
+  TransportWhatsappAccountUpdateInputSchema,
+  WhatsappUnofficialLoginStartInputSchema,
   WeixinBindingAutoLinkInputSchema,
   WeixinQrSessionCreateInputSchema,
   WeixinQrVerifyCodeInputSchema,
@@ -82,6 +87,18 @@ export const updateWecomAccountSchema = TransportWecomAccountUpdateInputSchema
  */
 export const qqAccountSchema = TransportQqAccountCreateInputSchema
 export const updateQqAccountSchema = TransportQqAccountUpdateInputSchema
+
+// Telegram / WhatsApp (Cloud + unofficial) — single-sourced in
+// shared/schemas/im.ts like the other connectors; the controllers consume
+// these aliases and keep their async probe/webhook/login logic local.
+export const telegramAccountSchema = TransportTelegramAccountCreateInputSchema
+export const updateTelegramAccountSchema =
+  TransportTelegramAccountUpdateInputSchema
+export const whatsappAccountSchema = TransportWhatsappAccountCreateInputSchema
+export const updateWhatsappAccountSchema =
+  TransportWhatsappAccountUpdateInputSchema
+export const whatsappUnofficialLoginStartSchema =
+  WhatsappUnofficialLoginStartInputSchema
 
 export const transportSessionSettingsSchema =
   TransportSessionSettingsInputSchema

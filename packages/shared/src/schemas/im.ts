@@ -728,6 +728,113 @@ export type TransportQqAccountUpdateInput = z.input<
   typeof TransportQqAccountUpdateInputSchema
 >
 
+// ── Telegram (Bot API) typed-credentials create/update. Owner + inbound-actor
+// use the shared shapes + validators — byte-identical to the schema the
+// telegram controller defined locally before this was single-sourced. ──
+export const TransportTelegramAccountCreateInputSchema = z
+  .object({
+    displayName: z.string().trim().min(1).max(255),
+    accountKey: z.string().trim().min(1).max(120).optional(),
+    connectionMode: z.enum(TRANSPORT_CONNECTION_MODES),
+    botToken: z.string().trim().min(1).max(255),
+    webhookSecretToken: z.string().trim().min(1).max(255).optional(),
+    apiRoot: z.string().trim().url().max(255).optional(),
+    status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
+    ...TransportAccountOwnerCreateShape,
+    ...TransportAccountInboundActorCreateShape,
+  })
+  .superRefine(validateTransportAccountOwnerCreateInput)
+  .superRefine(validateTransportAccountInboundActorCreateInput)
+export type TransportTelegramAccountCreateInput = z.input<
+  typeof TransportTelegramAccountCreateInputSchema
+>
+
+export const TransportTelegramAccountUpdateInputSchema = z
+  .object({
+    displayName: z.string().trim().min(1).max(255).optional(),
+    accountKey: z.string().trim().min(1).max(120).optional(),
+    connectionMode: z.enum(TRANSPORT_CONNECTION_MODES).optional(),
+    botToken: z.string().trim().min(1).max(255).optional(),
+    webhookSecretToken: z.string().trim().min(1).max(255).optional(),
+    apiRoot: z.string().trim().url().max(255).optional(),
+    status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
+    ...TransportAccountOwnerUpdateShape,
+    ...TransportAccountInboundActorUpdateShape,
+  })
+  .superRefine(validateTransportAccountOwnerUpdateInput)
+  .superRefine(validateTransportAccountInboundActorUpdateInput)
+export type TransportTelegramAccountUpdateInput = z.input<
+  typeof TransportTelegramAccountUpdateInputSchema
+>
+
+// ── WhatsApp Cloud API (webhook-only). Owner fields are INTENTIONALLY inline
+// (plain non-empty string, optional, no default, no owner superRefine) to
+// preserve the controller's exact prior validation — they deliberately differ
+// from TransportAccountOwnerCreateShape (uuid + default + refine). ──
+const whatsappAccountOwnerScopeSchema = z
+  .enum(TRANSPORT_ACCOUNT_OWNER_SCOPES)
+  .optional()
+
+export const TransportWhatsappAccountCreateInputSchema = z.object({
+  displayName: z.string().trim().min(1).max(255),
+  accountKey: z.string().trim().min(1).max(120).optional(),
+  // Cloud API is webhook-only.
+  connectionMode: z.literal("webhook").default("webhook"),
+  phoneNumberId: z.string().trim().min(1).max(255),
+  wabaId: z.string().trim().min(1).max(255),
+  accessToken: z.string().trim().min(1).max(4096),
+  appSecret: z.string().trim().min(1).max(512),
+  appId: z.string().trim().min(1).max(255),
+  webhookVerifyToken: z.string().trim().min(1).max(512),
+  graphApiVersion: z.string().trim().min(2).max(16).optional(),
+  status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
+  ownerScope: whatsappAccountOwnerScopeSchema,
+  ownerWorkspaceMemberId: z.string().trim().min(1).nullable().optional(),
+})
+export type TransportWhatsappAccountCreateInput = z.input<
+  typeof TransportWhatsappAccountCreateInputSchema
+>
+
+export const TransportWhatsappAccountUpdateInputSchema = z.object({
+  displayName: z.string().trim().min(1).max(255).optional(),
+  phoneNumberId: z.string().trim().min(1).max(255).optional(),
+  wabaId: z.string().trim().min(1).max(255).optional(),
+  accessToken: z.string().trim().min(1).max(4096).optional(),
+  appSecret: z.string().trim().min(1).max(512).optional(),
+  appId: z.string().trim().min(1).max(255).optional(),
+  webhookVerifyToken: z.string().trim().min(1).max(512).optional(),
+  graphApiVersion: z.string().trim().min(2).max(16).optional(),
+  status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
+  ownerScope: whatsappAccountOwnerScopeSchema,
+  ownerWorkspaceMemberId: z.string().trim().min(1).nullable().optional(),
+})
+export type TransportWhatsappAccountUpdateInput = z.input<
+  typeof TransportWhatsappAccountUpdateInputSchema
+>
+
+// ── WhatsApp (unofficial / Baileys) QR / pairing-code login START input.
+// Kept verbatim from the controller (inline owner/inbound enums via the shared
+// constants, z.string().uuid(), .strict()). The login-session + session-guard
+// RESPONSES stay controller-local: they carry epoch-ms expiresAt / runtime
+// kill-switch state, which would clash with this module's ISO datetime convention. ──
+export const WhatsappUnofficialLoginStartInputSchema = z
+  .object({
+    displayName: z.string().min(1).max(200).optional(),
+    /** When set, use pairing-code login (else QR). E.164, with or without +. */
+    phoneNumberE164: z
+      .string()
+      .regex(/^\+?[0-9]{6,15}$/)
+      .optional(),
+    ownerScope: z.enum(TRANSPORT_ACCOUNT_OWNER_SCOPES).optional(),
+    ownerWorkspaceMemberId: z.string().uuid().nullable().optional(),
+    inboundActorMode: z.enum(TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES).optional(),
+    inboundActorId: z.string().uuid().nullable().optional(),
+  })
+  .strict()
+export type WhatsappUnofficialLoginStartInput = z.input<
+  typeof WhatsappUnofficialLoginStartInputSchema
+>
+
 export const WeixinQrSessionCreateInputSchema = z
   .object({
     displayName: z.string().trim().max(255).optional(),

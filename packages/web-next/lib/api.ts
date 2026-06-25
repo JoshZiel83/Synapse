@@ -188,8 +188,13 @@ import type {
   TransportSessionResponseSchemaType,
   TransportSessionsResponseSchemaType,
   TransportSessionSettingsInput,
+  TransportTelegramAccountCreateInput,
+  TransportTelegramAccountUpdateInput,
   TransportWecomAccountCreateInput,
   TransportWecomAccountUpdateInput,
+  TransportWhatsappAccountCreateInput,
+  TransportWhatsappAccountUpdateInput,
+  WhatsappUnofficialLoginStartInput,
   WeixinBindingAutoLinkInput,
   WeixinBindingCandidatesResponseSchemaType,
   WeixinBindingResponseSchemaType,
@@ -343,88 +348,11 @@ function parseFileUploadResponseData(value: unknown): StoredFileRecordView {
 type QueryValue = string | number | readonly string[] | undefined | null
 type MemoryListQueryParams = Omit<MemoryListQuery, "owner" | "scope">
 
-// ── Inline request/response shapes for the telegram / whatsapp /
-// whatsapp_unofficial connectors. These connectors define their request
-// schemas LOCALLY on the backend (controller/telegram.ts, whatsapp.ts,
-// whatsapp_unofficial.ts) rather than in @synapse/shared, so the client
-// shapes are mirrored here. Owner / inbound-actor fields match the shared
-// TransportAccountOwner/InboundActor shapes used by the other connectors.
-type TransportConnectionModeValue = "webhook" | "long_connection"
-type TransportAccountOwnerScopeValue = "workspace" | "workspace_member"
-type TransportAccountInboundActorModeValue =
-  | "none"
-  | "specified_actor"
-  | "follow_owner_chief_actor"
-type TransportAccountStatusValue = "active" | "disabled" | "error"
-
-type TransportOwnerInboundFields = {
-  ownerScope?: TransportAccountOwnerScopeValue
-  ownerWorkspaceMemberId?: string | null
-  inboundActorMode?: TransportAccountInboundActorModeValue
-  inboundActorId?: string | null
-}
-
-export type TelegramAccountCreateInput = TransportOwnerInboundFields & {
-  displayName: string
-  accountKey?: string
-  connectionMode: TransportConnectionModeValue
-  botToken: string
-  webhookSecretToken?: string
-  apiRoot?: string
-  status?: TransportAccountStatusValue
-}
-
-export type TelegramAccountUpdateInput = TransportOwnerInboundFields & {
-  displayName?: string
-  accountKey?: string
-  connectionMode?: TransportConnectionModeValue
-  botToken?: string
-  webhookSecretToken?: string
-  apiRoot?: string
-  status?: TransportAccountStatusValue
-}
-
-// WhatsApp Cloud API is webhook-only; the backend schema does NOT accept
-// inbound-actor fields (only owner scope), so those are omitted here.
-export type WhatsappAccountCreateInput = {
-  displayName: string
-  accountKey?: string
-  phoneNumberId: string
-  wabaId: string
-  accessToken: string
-  appSecret: string
-  appId: string
-  webhookVerifyToken: string
-  graphApiVersion?: string
-  status?: TransportAccountStatusValue
-  ownerScope?: TransportAccountOwnerScopeValue
-  ownerWorkspaceMemberId?: string | null
-}
-
-export type WhatsappAccountUpdateInput = {
-  displayName?: string
-  phoneNumberId?: string
-  wabaId?: string
-  accessToken?: string
-  appSecret?: string
-  appId?: string
-  webhookVerifyToken?: string
-  graphApiVersion?: string
-  status?: TransportAccountStatusValue
-  ownerScope?: TransportAccountOwnerScopeValue
-  ownerWorkspaceMemberId?: string | null
-}
-
-export type WhatsappUnofficialLoginStartInput = {
-  displayName?: string
-  /** When set, pairing-code login (E.164, with or without +); else QR login. */
-  phoneNumberE164?: string
-  ownerScope?: TransportAccountOwnerScopeValue
-  ownerWorkspaceMemberId?: string | null
-  inboundActorMode?: TransportAccountInboundActorModeValue
-  inboundActorId?: string | null
-}
-
+// Request input types for the telegram / whatsapp / whatsapp_unofficial
+// connectors are single-sourced from @synapse/shared (imported above), like
+// the other connectors. Only the whatsapp_unofficial login-session + session-
+// guard RESPONSE shapes stay declared here — the backend keeps those schemas
+// controller-local (epoch-ms expiresAt / runtime kill-switch state).
 export type WhatsappUnofficialLoginSession = {
   sessionId: string
   status: string
@@ -2301,7 +2229,7 @@ class ApiClient {
   // request body shapes are declared inline here.
   async createTelegramTransportAccount(
     wsId: string,
-    data: TelegramAccountCreateInput
+    data: TransportTelegramAccountCreateInput
   ): Promise<TransportAccountResponseSchemaType> {
     const res = await this.fetch(`/workspaces/${wsId}/im/accounts/telegram`, {
       method: "POST",
@@ -2312,7 +2240,7 @@ class ApiClient {
   async updateTelegramTransportAccount(
     wsId: string,
     accountId: string,
-    data: TelegramAccountUpdateInput
+    data: TransportTelegramAccountUpdateInput
   ): Promise<TransportAccountResponseSchemaType> {
     const res = await this.fetch(
       `/workspaces/${wsId}/im/accounts/telegram/${accountId}`,
@@ -2326,7 +2254,7 @@ class ApiClient {
   // ── WhatsApp Cloud API (token-style create, webhook only) ──
   async createWhatsappTransportAccount(
     wsId: string,
-    data: WhatsappAccountCreateInput
+    data: TransportWhatsappAccountCreateInput
   ): Promise<TransportAccountResponseSchemaType> {
     const res = await this.fetch(`/workspaces/${wsId}/im/accounts/whatsapp`, {
       method: "POST",
@@ -2337,7 +2265,7 @@ class ApiClient {
   async updateWhatsappTransportAccount(
     wsId: string,
     accountId: string,
-    data: WhatsappAccountUpdateInput
+    data: TransportWhatsappAccountUpdateInput
   ): Promise<TransportAccountResponseSchemaType> {
     const res = await this.fetch(
       `/workspaces/${wsId}/im/accounts/whatsapp/${accountId}`,

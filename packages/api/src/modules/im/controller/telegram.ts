@@ -19,11 +19,6 @@
  */
 
 import type { FastifyInstance } from "fastify"
-import { z } from "zod"
-import {
-  TRANSPORT_ACCOUNT_STATUSES,
-  TRANSPORT_CONNECTION_MODES,
-} from "@synapse/shared/constants"
 import { TransportAccountResponseSchema } from "@synapse/shared/schemas"
 import { appRoute } from "../../../infrastructure/http/route.js"
 import { config } from "../../../config/index.js"
@@ -39,49 +34,11 @@ import type { TelegramBotInfo } from "../connectors/telegram/types.js"
 import {
   refreshTransportRuntimeState,
   requireWorkspaceAction,
-  transportAccountInboundActorCreateShape,
-  transportAccountInboundActorUpdateShape,
-  transportAccountOwnerCreateShape,
-  transportAccountOwnerUpdateShape,
-  validateTransportAccountInboundActorCreate,
-  validateTransportAccountInboundActorUpdate,
-  validateTransportAccountOwnerCreate,
-  validateTransportAccountOwnerUpdate,
+  telegramAccountSchema,
+  updateTelegramAccountSchema,
 } from "./_shared.js"
 
 const log = createLogger("im.telegram")
-
-// ───────────────────────── Local schemas ─────────────────────────
-
-const telegramAccountSchema = z
-  .object({
-    displayName: z.string().trim().min(1).max(255),
-    accountKey: z.string().trim().min(1).max(120).optional(),
-    connectionMode: z.enum(TRANSPORT_CONNECTION_MODES),
-    botToken: z.string().trim().min(1).max(255),
-    webhookSecretToken: z.string().trim().min(1).max(255).optional(),
-    apiRoot: z.string().trim().url().max(255).optional(),
-    status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
-    ...transportAccountOwnerCreateShape,
-    ...transportAccountInboundActorCreateShape,
-  })
-  .superRefine(validateTransportAccountOwnerCreate)
-  .superRefine(validateTransportAccountInboundActorCreate)
-
-const updateTelegramAccountSchema = z
-  .object({
-    displayName: z.string().trim().min(1).max(255).optional(),
-    accountKey: z.string().trim().min(1).max(120).optional(),
-    connectionMode: z.enum(TRANSPORT_CONNECTION_MODES).optional(),
-    botToken: z.string().trim().min(1).max(255).optional(),
-    webhookSecretToken: z.string().trim().min(1).max(255).optional(),
-    apiRoot: z.string().trim().url().max(255).optional(),
-    status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
-    ...transportAccountOwnerUpdateShape,
-    ...transportAccountInboundActorUpdateShape,
-  })
-  .superRefine(validateTransportAccountOwnerUpdate)
-  .superRefine(validateTransportAccountInboundActorUpdate)
 
 // ───────────────────────── Probe + webhook lifecycle ─────────────────────────
 

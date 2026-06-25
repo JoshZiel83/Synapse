@@ -16,7 +16,10 @@ import type { FastifyInstance } from "fastify"
 import { z } from "zod"
 import { appRoute } from "../../../infrastructure/http/route.js"
 import { getTransportAccountById } from "../service.js"
-import { requireWorkspaceAction } from "./_shared.js"
+import {
+  requireWorkspaceAction,
+  whatsappUnofficialLoginStartSchema,
+} from "./_shared.js"
 import {
   cancelWhatsappLoginSession,
   getWhatsappLoginSession,
@@ -29,23 +32,10 @@ import {
 } from "../connectors/whatsapp_unofficial/session-guard.js"
 
 // ───────────────────────── local schemas ─────────────────────────
-
-const startLoginInputSchema = z
-  .object({
-    displayName: z.string().min(1).max(200).optional(),
-    /** When set, use pairing-code login (else QR). E.164, with or without +. */
-    phoneNumberE164: z
-      .string()
-      .regex(/^\+?[0-9]{6,15}$/)
-      .optional(),
-    ownerScope: z.enum(["workspace", "workspace_member"]).optional(),
-    ownerWorkspaceMemberId: z.string().uuid().nullable().optional(),
-    inboundActorMode: z
-      .enum(["none", "specified_actor", "follow_owner_chief_actor"])
-      .optional(),
-    inboundActorId: z.string().uuid().nullable().optional(),
-  })
-  .strict()
+// The login-START request schema is single-sourced in @synapse/shared
+// (consumed via the _shared.js alias). The login-session + session-guard
+// RESPONSE schemas stay local: they carry epoch-ms expiresAt / runtime
+// kill-switch state, which would clash with shared/im.ts's ISO convention.
 
 const loginSessionResponseSchema = z.object({
   session: z.object({
@@ -124,7 +114,7 @@ export default async function imWhatsappUnofficialController(
       if (!allowed) return
 
       const { workspaceId } = request.params as { workspaceId: string }
-      const body = startLoginInputSchema.parse(request.body ?? {})
+      const body = whatsappUnofficialLoginStartSchema.parse(request.body ?? {})
       const session = await startWhatsappLoginSession({
         workspaceId,
         displayName: body.displayName,
