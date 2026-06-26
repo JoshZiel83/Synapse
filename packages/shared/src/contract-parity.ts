@@ -347,4 +347,53 @@ type _WorkspaceResourceView = Expect<
   Equal<z.infer<typeof S.WorkspaceResourceViewSchema>, T.WorkspaceResourceView>
 >
 
+// ── Explicit NAME-MISMATCHED pairs ──────────────────────────────────────────
+// The client's response type name differs from the route schema's name, so the
+// exact-name scan above can't pair them — a route binds schema↔type by PATH,
+// not by name. This was the blind spot behind the chat-method drifts. Each pair
+// below is compiler-verified to hold today. (Pairs with generic-union-vs-
+// discriminatedUnion or union-vs-narrowed-arm representation — chat sync/messages/
+// send, the three relationship request-lists, RemoteAgentMachineDetail — are
+// tracked separately; they need a type restructure, not a one-line assertion.)
+type _ChatBootstrapResponse = Expect<
+  Equal<z.infer<typeof S.ChatBootstrapViewSchema>, T.ChatBootstrapResponse>
+>
+type _ChatClientInstanceRegistrationResponse = Expect<
+  Equal<
+    z.infer<typeof S.ChatClientInstanceViewSchema>,
+    T.ChatClientInstanceRegistrationResponse
+  >
+>
+type _ChatConversationCreateResponse = Expect<
+  Equal<
+    z.infer<typeof S.ChatConversationEnvelopeViewSchema>,
+    T.ChatConversationCreateResponse
+  >
+>
+type _ChatConversationReadWatermarkResponse = Expect<
+  Equal<
+    z.infer<typeof S.ChatReadWatermarkViewSchema>,
+    T.ChatConversationReadWatermarkResponse
+  >
+>
+type _ActorRuntimeTurnActivityDetail = Expect<
+  Equal<
+    z.infer<typeof S.ChatRuntimeTurnDetailViewSchema>,
+    T.ActorRuntimeTurnActivityDetail
+  >
+>
+type _Actor = Expect<Equal<z.infer<typeof S.ActorViewSchema>, T.Actor>>
+type _WorkspaceChiefActorPreference = Expect<
+  Equal<
+    z.infer<typeof S.WorkspaceChiefActorPreferenceViewSchema>,
+    T.WorkspaceChiefActorPreference
+  >
+>
+type _RemoteAgentMachinePairingSessionView = Expect<
+  Equal<
+    z.infer<typeof S.RemoteAgentMachinePairingSessionResponseSchema>,
+    T.RemoteAgentMachinePairingSessionView
+  >
+>
+
 export {}

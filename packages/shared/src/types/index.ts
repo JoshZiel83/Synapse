@@ -1085,6 +1085,7 @@ export interface RemoteAgentRuntimeState {
     at: Timestamp
   }
   updatedAt: Timestamp
+  capabilities?: RemoteAgentRuntimeCapabilityView
 }
 
 export interface RelationshipWorkspaceSummary {
@@ -1430,7 +1431,7 @@ export interface OneClickInstallCommands {
 }
 
 export interface RemoteAgentMachinePairingSessionView {
-  machine: Omit<RemoteAgentMachineView, "bindingCount">
+  machine: RemoteAgentMachineView
   apiKey: string
   daemonCommand: string
   /**
