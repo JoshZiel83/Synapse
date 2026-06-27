@@ -22,19 +22,25 @@ type Equal<A, B> =
   (<G>() => G extends A ? 1 : 2) extends <G>() => G extends B ? 1 : 2
     ? true
     : false
-// Distributive mutual assignability: every concrete shape the server emits
-// (z.infer, distributed over its union arms) is accepted by the client type AND
-// vice versa. Weaker than Equal — it tolerates runtime-equivalent REPRESENTATION
-// differences (a z.discriminatedUnion vs a `?: never` exclusivity union, an
-// Omit-then-re-add intersection, a distributed event union) while STILL catching
-// real drift (a missing/changed/extra field breaks one direction). Used for the
-// few pairs whose hand type is modeled differently from the schema but carries
-// the identical field set per arm.
-type MutualDist<A, B> = (A extends B ? true : never) extends true
-  ? B extends A
-    ? true
-    : false
+// "Every arm of A is assignable to B" — distributive forall that is SAFE against
+// never-absorption (`[A extends B ? never : A]` collects the arms that do NOT
+// extend B; the result is `never` iff all arms extend B). The naive
+// `(A extends B ? true : never) extends true` is vacuously true when an arm
+// fails (`never extends true`), which silently masks drift — do not use it.
+type AllAssignable<A, B> = [A extends B ? never : A] extends [never]
+  ? true
   : false
+// Mutual assignability in BOTH directions, per arm. Weaker than Equal — it
+// tolerates runtime-equivalent REPRESENTATION differences (Omit-then-re-add
+// intersection, a distributed event union) while STILL catching real field drift
+// either way (a field the server emits the client rejects, OR a required field
+// the client expects the server never sends — both break one direction).
+type MutualAssign<A, B> =
+  AllAssignable<A, B> extends true
+    ? AllAssignable<B, A> extends true
+      ? true
+      : false
+    : false
 type Expect<TT extends true> = TT
 
 type _ActorAccessRequestView = Expect<
@@ -431,37 +437,35 @@ type _RemoteAgentAccessRequestListResponse = Expect<
   >
 >
 
-// ── Representational pairs (MutualDist, not Equal) ──────────────────────────
-// Runtime-equivalent but modeled differently from the schema (distributed event
-// union / ChatConversationItem & TaskSummary `?: never` exclusivity / machine
-// Omit-intersection). MutualDist still catches any real field drift.
-type _ChatSyncResponse = Expect<
-  MutualDist<z.infer<typeof S.ChatSyncViewSchema>, T.ChatSyncResponse>
->
-type _ChatConversationMessagesPage = Expect<
-  MutualDist<
-    z.infer<typeof S.ChatConversationMessagesViewSchema>,
-    T.ChatConversationMessagesPage
-  >
->
-type _ChatConversationSendMessageResponse = Expect<
-  MutualDist<
-    z.infer<typeof S.ChatSendMessageViewSchema>,
-    T.ChatConversationSendMessageResponse
-  >
->
-// 200 body ↔ the applied arm of the ChatTaskResolveResponse union (conflict is 409).
-type _ChatTaskResolveAppliedResponse = Expect<
-  MutualDist<
-    z.infer<typeof S.ChatTaskRespondViewSchema>,
-    T.ChatTaskResolveAppliedResponse
-  >
->
+// ── Representational pair (MutualAssign, not Equal) ─────────────────────────
+// machine = Omit<RemoteAgentMachineView,'bindingCount'> & {bindingCount?:number}
+// (re-adds the same field) + inline bindings array vs a named schema — runtime-
+// identical, mutually assignable both directions; MutualAssign still catches real
+// field drift.
 type _RemoteAgentMachineDetailView = Expect<
-  MutualDist<
+  MutualAssign<
     z.infer<typeof S.RemoteAgentMachineDetailResponseSchema>,
     T.RemoteAgentMachineDetailView
   >
 >
+
+// ── KNOWN gap — NOT yet soundly assertable ──────────────────────────────────
+// getChatSync / getChatConversationMessages / sendChatConversationMessage + the
+// chat task-resolve 200 body. These DO bind to a schema (so they're no longer an
+// invisible blind spot — the binding is documented here), but their nested unions
+// — ChatConversationItem (12-arm), TaskSummary, the ChatSyncEvent payloads — do
+// not satisfy Equal OR a SOUND mutual-assignability check against the schema. It
+// is a mix of (a) genuine per-arm field divergence between hand type and schema
+// and (b) TypeScript's non-distributive union-property assignability limits (e.g.
+// `{item: bigUnion}` whole-union checks fail even where each arm is assignable).
+// Asserting the earlier distributive MutualDist here PASSED only by never-
+// absorption masking (the adversarial review caught this) — so they are
+// deliberately NOT asserted rather than masked. They need a focused per-arm
+// reconciliation of ChatConversationItem / TaskSummary / event payloads against
+// their schemas (then each arm becomes Equal-assertable):
+//   ChatSyncViewSchema ↔ ChatSyncResponse
+//   ChatConversationMessagesViewSchema ↔ ChatConversationMessagesPage
+//   ChatSendMessageViewSchema ↔ ChatConversationSendMessageResponse
+//   ChatTaskRespondViewSchema ↔ ChatTaskResolveAppliedResponse
 
 export {}
