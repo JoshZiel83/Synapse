@@ -1,8 +1,4 @@
-import type {
-  ChatTaskResolveInput,
-  ChatTaskResolveOutcome,
-  TaskSummary,
-} from "@synapse/shared/types"
+import type { ChatTaskResolveInput, TaskSummary } from "@synapse/shared/types"
 import {
   canUserViewTask,
   enrichTaskForUser,
@@ -13,8 +9,10 @@ import {
 } from "../tasks/service.js"
 import { getConversationParticipantUseCase as getConversationParticipant } from "./participant-roster.js"
 
+// The 200 success body only ever carries applied/duplicate (the conflict arm
+// is returned as a 409 above), matching ChatTaskResolveAppliedResponse.
 type TaskResponseSuccessBody = {
-  outcome: ChatTaskResolveOutcome
+  outcome: "applied" | "duplicate"
   task: TaskSummary
 }
 

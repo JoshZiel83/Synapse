@@ -3,6 +3,7 @@ export { CUAPolicySchema, type CUAPolicy } from "./cua.js"
 export { BrowserPolicySchema, type BrowserPolicy } from "./browser.js"
 export {
   CommandlinePolicySchema,
+  RuntimeAuthorizationCommandlinePolicySchema,
   WireCommandlinePolicySchema,
   parseCommandlinePolicyFromWire,
   serializeCommandlinePolicyToWire,

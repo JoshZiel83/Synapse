@@ -73,6 +73,26 @@ export const CommandlinePolicySchema = z.discriminatedUnion("executor", [
 ])
 export type CommandlinePolicy = z.infer<typeof CommandlinePolicySchema>
 
+/**
+ * The narrower commandline form carried by a runtime-authorization REQUESTED
+ * ACTION (generated from a tool call): the shell branch ALWAYS carries the exact
+ * commandText being authorized (required, not optional), and there is no sandbox
+ * branch (sandbox is a grant-level "any command in the jail" policy, never a
+ * per-command request). Mirrors RuntimeAuthorizationCommandlinePolicy in
+ * ../../types/index.ts so the requested-action schema's `commandline` field
+ * infers exactly that hand type.
+ */
+export const RuntimeAuthorizationCommandlinePolicySchema = z.discriminatedUnion(
+  "executor",
+  [
+    ShellPolicyCamelSchema.extend({ commandText: z.string() }),
+    ExecFilePolicyCamelSchema,
+  ]
+)
+export type RuntimeAuthorizationCommandlinePolicy = z.infer<
+  typeof RuntimeAuthorizationCommandlinePolicySchema
+>
+
 export const WireCommandlinePolicySchema = RuntimeCommandlinePolicySchema
 export type WireCommandlinePolicy = RuntimeCommandlinePolicy
 

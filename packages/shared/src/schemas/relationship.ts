@@ -283,6 +283,24 @@ export type RequestListResponseSchemaType = z.infer<
   typeof RequestListResponseSchema
 >
 
+// Per-route narrowed forms: each of the three endpoints emits exactly one arm
+// (its own presenter), so its wire schema is the narrowed list — the response
+// schema then infers exactly the per-route client type (FriendRequestListResponse
+// etc.) instead of the shared 3-arm union. Keeps the guard honest AND tightens
+// each route's wire validation to what that route actually returns.
+export const FriendRequestListResponseSchema = z.object({
+  incoming: z.array(FriendRequestViewSchema),
+  outgoing: z.array(FriendRequestViewSchema),
+})
+export const ActorAccessRequestListResponseSchema = z.object({
+  incoming: z.array(ActorAccessRequestViewSchema),
+  outgoing: z.array(ActorAccessRequestViewSchema),
+})
+export const RemoteAgentAccessRequestListResponseSchema = z.object({
+  incoming: z.array(RemoteAgentAccessRequestViewSchema),
+  outgoing: z.array(RemoteAgentAccessRequestViewSchema),
+})
+
 const RESOLVED_RELATIONSHIP_REQUEST_STATUSES = [
   RELATIONSHIP_REQUEST_STATUS.APPROVED,
   RELATIONSHIP_REQUEST_STATUS.REJECTED,

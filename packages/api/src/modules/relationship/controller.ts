@@ -9,7 +9,9 @@ import {
   IdentitySearchResponseSchema,
   RelationshipProfileViewSchema,
   RelationshipScanResponseSchema,
-  RequestListResponseSchema,
+  FriendRequestListResponseSchema,
+  ActorAccessRequestListResponseSchema,
+  RemoteAgentAccessRequestListResponseSchema,
   ResolveRequestResponseSchema,
   RelationshipScanInputSchema,
   OpenDirectConversationInputSchema,
@@ -333,7 +335,7 @@ export default async function relationshipController(app: FastifyInstance) {
     app,
     "GET",
     "/api/v1/workspaces/:workspaceId/friend-requests",
-    { schema: RequestListResponseSchema },
+    { schema: FriendRequestListResponseSchema },
     async (request) => {
       const params = request.params as { workspaceId: string }
       const userId = (request as any).user!.userId
@@ -404,7 +406,7 @@ export default async function relationshipController(app: FastifyInstance) {
     app,
     "GET",
     "/api/v1/workspaces/:workspaceId/actor-access-requests",
-    { schema: RequestListResponseSchema },
+    { schema: ActorAccessRequestListResponseSchema },
     async (request) => {
       const params = request.params as { workspaceId: string }
       const userId = (request as any).user!.userId
@@ -423,7 +425,7 @@ export default async function relationshipController(app: FastifyInstance) {
     app,
     "GET",
     "/api/v1/workspaces/:workspaceId/remote-agent-access-requests",
-    { schema: RequestListResponseSchema },
+    { schema: RemoteAgentAccessRequestListResponseSchema },
     async (request) => {
       const params = request.params as { workspaceId: string }
       const userId = (request as any).user!.userId

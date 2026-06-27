@@ -22,6 +22,19 @@ type Equal<A, B> =
   (<G>() => G extends A ? 1 : 2) extends <G>() => G extends B ? 1 : 2
     ? true
     : false
+// Distributive mutual assignability: every concrete shape the server emits
+// (z.infer, distributed over its union arms) is accepted by the client type AND
+// vice versa. Weaker than Equal — it tolerates runtime-equivalent REPRESENTATION
+// differences (a z.discriminatedUnion vs a `?: never` exclusivity union, an
+// Omit-then-re-add intersection, a distributed event union) while STILL catching
+// real drift (a missing/changed/extra field breaks one direction). Used for the
+// few pairs whose hand type is modeled differently from the schema but carries
+// the identical field set per arm.
+type MutualDist<A, B> = (A extends B ? true : never) extends true
+  ? B extends A
+    ? true
+    : false
+  : false
 type Expect<TT extends true> = TT
 
 type _ActorAccessRequestView = Expect<
@@ -393,6 +406,61 @@ type _RemoteAgentMachinePairingSessionView = Expect<
   Equal<
     z.infer<typeof S.RemoteAgentMachinePairingSessionResponseSchema>,
     T.RemoteAgentMachinePairingSessionView
+  >
+>
+
+// Per-route relationship request-lists: each endpoint emits one arm via its own
+// presenter, so its schema is the narrowed list (not the shared 3-arm union) —
+// exact Equal now holds.
+type _FriendRequestListResponse = Expect<
+  Equal<
+    z.infer<typeof S.FriendRequestListResponseSchema>,
+    T.FriendRequestListResponse
+  >
+>
+type _ActorAccessRequestListResponse = Expect<
+  Equal<
+    z.infer<typeof S.ActorAccessRequestListResponseSchema>,
+    T.ActorAccessRequestListResponse
+  >
+>
+type _RemoteAgentAccessRequestListResponse = Expect<
+  Equal<
+    z.infer<typeof S.RemoteAgentAccessRequestListResponseSchema>,
+    T.RemoteAgentAccessRequestListResponse
+  >
+>
+
+// ── Representational pairs (MutualDist, not Equal) ──────────────────────────
+// Runtime-equivalent but modeled differently from the schema (distributed event
+// union / ChatConversationItem & TaskSummary `?: never` exclusivity / machine
+// Omit-intersection). MutualDist still catches any real field drift.
+type _ChatSyncResponse = Expect<
+  MutualDist<z.infer<typeof S.ChatSyncViewSchema>, T.ChatSyncResponse>
+>
+type _ChatConversationMessagesPage = Expect<
+  MutualDist<
+    z.infer<typeof S.ChatConversationMessagesViewSchema>,
+    T.ChatConversationMessagesPage
+  >
+>
+type _ChatConversationSendMessageResponse = Expect<
+  MutualDist<
+    z.infer<typeof S.ChatSendMessageViewSchema>,
+    T.ChatConversationSendMessageResponse
+  >
+>
+// 200 body ↔ the applied arm of the ChatTaskResolveResponse union (conflict is 409).
+type _ChatTaskResolveAppliedResponse = Expect<
+  MutualDist<
+    z.infer<typeof S.ChatTaskRespondViewSchema>,
+    T.ChatTaskResolveAppliedResponse
+  >
+>
+type _RemoteAgentMachineDetailView = Expect<
+  MutualDist<
+    z.infer<typeof S.RemoteAgentMachineDetailResponseSchema>,
+    T.RemoteAgentMachineDetailView
   >
 >
 

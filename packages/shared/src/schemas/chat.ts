@@ -836,7 +836,9 @@ export type ChatMessageRetryViewSchemaType = z.infer<
  * The enriched `task` is the shared viewer-scoped task summary.
  */
 export const ChatTaskRespondViewSchema = z.object({
-  outcome: z.string(),
+  // 200 body only — applied/duplicate; the 'conflict' arm of
+  // ChatTaskResolveResponse is the 409 error body on a separate channel.
+  outcome: z.enum(["applied", "duplicate"]),
   task: TaskSummarySchema,
 })
 export type ChatTaskRespondViewSchemaType = z.infer<

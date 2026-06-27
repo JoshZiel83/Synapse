@@ -17,6 +17,7 @@ import { SUBJECT_KIND } from "../access/enums.js"
 import {
   BrowserPolicySchema,
   CommandlinePolicySchema,
+  RuntimeAuthorizationCommandlinePolicySchema,
   CUAPolicySchema,
   FilesystemPolicySchema,
   GrantPolicySchema,
@@ -171,7 +172,7 @@ const RuntimeAuthorizationRequestedActionSchema = z.object({
   browser: BrowserPolicySchema.extend({
     scopeSource: z.enum(RuntimeAuthorizationBrowserScopeSources).optional(),
   }).optional(),
-  commandline: CommandlinePolicySchema.optional(),
+  commandline: RuntimeAuthorizationCommandlinePolicySchema.optional(),
 })
 
 export function parseRuntimeAuthorizationRequestedAction(

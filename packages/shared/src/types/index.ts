@@ -3898,6 +3898,18 @@ export type ChatSyncEvent<T extends ChatSyncEventType = ChatSyncEventType> = {
   occurredAt: Timestamp
 }
 
+/**
+ * Discriminated union over ALL event types: each member correlates its
+ * `eventType` with the matching `payload` (so `if (e.eventType === 'task.updated')`
+ * narrows `e.payload` to the task payload). This is what the wire actually
+ * carries and what ChatSyncEventSchema (a z.discriminatedUnion) infers — unlike
+ * the bare `ChatSyncEvent<ChatSyncEventType>`, which decouples eventType from
+ * payload and cannot be discriminated.
+ */
+export type ChatSyncEventUnion = {
+  [K in ChatSyncEventType]: ChatSyncEvent<K>
+}[ChatSyncEventType]
+
 export interface ChatBootstrapResponse {
   workspaceMemberId: UUID
   clientInstanceRequired: true
@@ -3906,7 +3918,7 @@ export interface ChatBootstrapResponse {
 }
 
 export interface ChatSyncResponse {
-  events: ChatSyncEvent[]
+  events: ChatSyncEventUnion[]
   nextCursor: number
   hasMore: boolean
 }
