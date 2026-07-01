@@ -4,6 +4,7 @@ import Link from "next/link"
 import { useDeferredValue, useMemo, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Bot, Copy, Plus, RefreshCcw, SquareTerminal } from "lucide-react"
+import { RuntimeKindIcon } from "@/components/runtime-kind-icon"
 
 import { useWorkspace } from "../workspace-provider"
 import type {
@@ -433,6 +434,7 @@ export default function RemoteAgentsPage() {
                           agent.binding ? "available" : "unsupported_platform"
                         )}
                       >
+                        <RuntimeKindIcon kind={agent.runtimeKind} />
                         {normalizeRuntimeLabel(agent.runtimeKind)}
                       </Badge>
                       {agent.runtimeSummary ? (

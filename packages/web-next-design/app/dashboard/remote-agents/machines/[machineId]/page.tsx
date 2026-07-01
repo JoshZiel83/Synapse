@@ -4,6 +4,7 @@ import Link from "next/link"
 import { useParams } from "next/navigation"
 import { useEffect, useState } from "react"
 import { ArrowLeft, RefreshCcw, Server } from "lucide-react"
+import { RuntimeKindIcon } from "@/components/runtime-kind-icon"
 import { REMOTE_AGENT_BINDING_STATUS } from "@synapse/shared"
 
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
@@ -230,7 +231,11 @@ export default function RemoteAgentMachineDetailPage() {
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="space-y-1">
-                      <div className="text-base font-semibold text-foreground">
+                      <div className="flex items-center gap-1.5 text-base font-semibold text-foreground">
+                        <RuntimeKindIcon
+                          kind={entry.runtimeKind}
+                          className="size-4"
+                        />
                         {runtimeLabel(entry.runtimeKind)}
                       </div>
                       <div className="text-sm text-muted-foreground">
@@ -285,7 +290,11 @@ export default function RemoteAgentMachineDetailPage() {
                     <div className="text-base font-semibold text-foreground">
                       {binding.displayName}
                     </div>
-                    <div className="text-sm text-muted-foreground">
+                    <div className="flex items-center gap-1 text-sm text-muted-foreground">
+                      <RuntimeKindIcon
+                        kind={binding.runtimeKind}
+                        className="size-3.5"
+                      />
                       {runtimeLabel(binding.runtimeKind)}
                     </div>
                   </div>

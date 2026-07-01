@@ -11,6 +11,7 @@ import QRCode from "qrcode"
 import { useParams } from "next/navigation"
 import { useEffect, useState } from "react"
 import { ArrowLeft, Bot, RefreshCcw, Shield, Trash2 } from "lucide-react"
+import { RuntimeKindIcon } from "@/components/runtime-kind-icon"
 
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import type {
@@ -532,6 +533,7 @@ export default function RemoteAgentDetailPage() {
                     {agent.isActive ? "active" : "disabled"}
                   </Badge>
                   <Badge variant="outline">
+                    <RuntimeKindIcon kind={agent.runtimeKind} />
                     {runtimeLabel(agent.runtimeKind)}
                   </Badge>
                   <Badge variant="outline">
