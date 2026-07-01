@@ -437,35 +437,47 @@ type _RemoteAgentAccessRequestListResponse = Expect<
   >
 >
 
-// ── Representational pair (MutualAssign, not Equal) ─────────────────────────
-// machine = Omit<RemoteAgentMachineView,'bindingCount'> & {bindingCount?:number}
-// (re-adds the same field) + inline bindings array vs a named schema — runtime-
-// identical, mutually assignable both directions; MutualAssign still catches real
-// field drift.
+// ── Representational pairs (MutualAssign, not Equal) ────────────────────────
+// The chat response families (ChatConversationItem / TaskSummary / ChatSyncEvent
+// payloads) and RemoteAgentMachineDetail carry runtime-equivalent REPRESENTATION
+// differences vs their schemas — SubjectRef `readonly` (compile-only, wire-
+// irrelevant), TaskSummary `?: never` exclusivity stubs, message/control union
+// fold, ConversationParticipantRef intersection-vs-extend, machine Omit-then-
+// re-add. An exhaustive compiler audit (adversarially verified) found the ONLY
+// genuine field drift was runtimeAuthorization.approvedGrant.id — now fixed at
+// the schema (tasks.ts SubjectScopedGrantPolicySchema). With that fixed, all
+// these pairs are compile-verified MUTUALLY ASSIGNABLE both directions, so
+// MutualAssign soundly guards them: it tolerates the representation but still
+// fails on any real added/removed/retyped field (negative-control-verified).
+// (Strict Equal is not reachable without deleting SubjectRef's deliberate
+// immutable-identity `readonly` invariant across the access-control layer.)
 type _RemoteAgentMachineDetailView = Expect<
   MutualAssign<
     z.infer<typeof S.RemoteAgentMachineDetailResponseSchema>,
     T.RemoteAgentMachineDetailView
   >
 >
-
-// ── KNOWN gap — NOT yet soundly assertable ──────────────────────────────────
-// getChatSync / getChatConversationMessages / sendChatConversationMessage + the
-// chat task-resolve 200 body. These DO bind to a schema (so they're no longer an
-// invisible blind spot — the binding is documented here), but their nested unions
-// — ChatConversationItem (12-arm), TaskSummary, the ChatSyncEvent payloads — do
-// not satisfy Equal OR a SOUND mutual-assignability check against the schema. It
-// is a mix of (a) genuine per-arm field divergence between hand type and schema
-// and (b) TypeScript's non-distributive union-property assignability limits (e.g.
-// `{item: bigUnion}` whole-union checks fail even where each arm is assignable).
-// Asserting the earlier distributive MutualDist here PASSED only by never-
-// absorption masking (the adversarial review caught this) — so they are
-// deliberately NOT asserted rather than masked. They need a focused per-arm
-// reconciliation of ChatConversationItem / TaskSummary / event payloads against
-// their schemas (then each arm becomes Equal-assertable):
-//   ChatSyncViewSchema ↔ ChatSyncResponse
-//   ChatConversationMessagesViewSchema ↔ ChatConversationMessagesPage
-//   ChatSendMessageViewSchema ↔ ChatConversationSendMessageResponse
-//   ChatTaskRespondViewSchema ↔ ChatTaskResolveAppliedResponse
+type _ChatSyncResponse = Expect<
+  MutualAssign<z.infer<typeof S.ChatSyncViewSchema>, T.ChatSyncResponse>
+>
+type _ChatConversationMessagesPage = Expect<
+  MutualAssign<
+    z.infer<typeof S.ChatConversationMessagesViewSchema>,
+    T.ChatConversationMessagesPage
+  >
+>
+type _ChatConversationSendMessageResponse = Expect<
+  MutualAssign<
+    z.infer<typeof S.ChatSendMessageViewSchema>,
+    T.ChatConversationSendMessageResponse
+  >
+>
+// 200 body ↔ the applied arm of the ChatTaskResolveResponse union (conflict is 409).
+type _ChatTaskResolveAppliedResponse = Expect<
+  MutualAssign<
+    z.infer<typeof S.ChatTaskRespondViewSchema>,
+    T.ChatTaskResolveAppliedResponse
+  >
+>
 
 export {}

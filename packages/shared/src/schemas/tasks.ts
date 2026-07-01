@@ -134,6 +134,10 @@ const PlanApprovalTaskDetailsSchema = z.object({
 })
 
 const SubjectScopedGrantPolicySchema = GrantPolicySchema.extend({
+  // A persisted grant (approvedGrant on a resolved runtime-authorization task)
+  // always carries its DB id — the presenter emits it, but the schema used to
+  // omit it, silently stripping id from the task-resolution wire payload.
+  id: z.string(),
   subject: SubjectRefSchema,
   scope: SubjectRefSchema.optional(),
   scopeLabel: z.string(),
