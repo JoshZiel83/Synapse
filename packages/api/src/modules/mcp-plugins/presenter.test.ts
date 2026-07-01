@@ -54,7 +54,6 @@ test("presentPluginInstallationDetail output parses PluginInstallationDetailView
     version: "1.0.0",
     transport: "builtin",
     entryPoint: "",
-    iconUrl: null,
     defaultConfig: {},
     tags: [],
     isActive: true,

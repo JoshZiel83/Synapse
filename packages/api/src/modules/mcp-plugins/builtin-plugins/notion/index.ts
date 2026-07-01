@@ -66,7 +66,6 @@ export const notionSeed: BuiltinOrgSeed = {
         "workspace",
       ],
       requiresHandshake: false,
-      iconAssetPath: "assets/icons/notion.svg",
       categorySlugs: ["integrations-and-automation", "documents-and-reading"],
       tags: [
         "notion",

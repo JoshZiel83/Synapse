@@ -22,7 +22,6 @@ import type { MessageCapabilities } from "../../messaging/degradation.js"
 export const WHATSAPP_CONNECTOR_CAPABILITY: TransportConnectorCapability = {
   transportKind: "whatsapp",
   displayName: "WhatsApp",
-  iconAssetPath: "/icon/whatsapp.svg",
   supportedConnectionModes: ["webhook"],
   supportedEndpointTypes: ["direct"],
   supportsDirectMessages: true,

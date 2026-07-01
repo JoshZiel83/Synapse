@@ -292,7 +292,6 @@ export const zAiSeed: BuiltinOrgSeed = {
       entryPoint: "z_ai/toolkit",
       defaultReuseScope: "workspace",
       requiresHandshake: false,
-      iconAssetPath: "assets/icons/z_ai.svg",
       authorization: {
         requiredPermissions: ["network:outbound", "files:read", "files:write"],
         reason:

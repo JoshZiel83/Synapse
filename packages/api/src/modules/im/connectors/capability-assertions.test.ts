@@ -108,7 +108,6 @@ test("every registered connector populates capability + messageCapabilities full
       "supportsDirectMessages",
       "supportsGroupMessages",
       "displayName",
-      "iconAssetPath",
       // showsBaseUrlConfig is optional — only weixin sets it true; others
       // legitimately leave it undefined.
     ]
@@ -162,7 +161,6 @@ interface TransportConnectorCapabilityShape {
   supportsDirectMessages: unknown
   supportsGroupMessages: unknown
   displayName: unknown
-  iconAssetPath: unknown
   showsBaseUrlConfig?: unknown
 }
 interface MessageCapabilitiesShape {

@@ -28,7 +28,6 @@ export interface BuiltinPluginSeed {
   requiresHandshake?: boolean
   tags: string[]
   categorySlugs?: string[]
-  iconAssetPath?: string
   toolsManifest: unknown[]
   configSchema?: Record<string, unknown>
   configFields?: PluginConfigFieldDefinition[]

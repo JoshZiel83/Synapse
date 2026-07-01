@@ -1,10 +1,10 @@
 "use client"
 
-import Image from "next/image"
 import type { TransportKind } from "@synapse/shared"
 import { describeTransportKind } from "@synapse/shared"
 import { cn } from "@/lib/utils"
 import { useConnectorMetadata } from "@/lib/im-connector-metadata"
+import { TRANSPORT_BRAND_ICONS } from "@/components/im-brand-icons"
 
 interface TransportKindIconProps {
   kind?: TransportKind
@@ -18,36 +18,26 @@ export default function TransportKindIcon({
   size = 16,
 }: TransportKindIconProps) {
   // Pull metadata before any early-return so React's rules-of-hooks
-  // are satisfied. The hook returns undefined when the provider
-  // hasn't loaded yet; fall back to static helpers in that window.
+  // are satisfied. Metadata is only consulted for the a11y label now;
+  // the glyph comes from the static, exhaustive brand-icon map keyed by
+  // the closed TransportKind union.
   const metadata = useConnectorMetadata()
   if (!kind) return null
 
   const cap = metadata?.get(kind)
   const label = cap?.displayName ?? describeTransportKind(kind)
-  // `/icon/${kind}.svg` was the historical convention; new connectors
-  // are encouraged to set `iconAssetPath` explicitly on the
-  // capability, so the path lives in one place. Fall back to the
-  // convention only when metadata isn't loaded yet (or a connector
-  // hasn't set the field, which the contract test would catch).
-  const iconPath = cap?.iconAssetPath ?? `/icon/${kind}.svg`
+  const BrandIcon = TRANSPORT_BRAND_ICONS[kind]
 
   return (
     <span
       className={cn(
-        "inline-flex items-center justify-center rounded-full border border-background bg-white shadow-sm",
+        "inline-flex items-center justify-center rounded-full border border-background bg-white text-slate-700 shadow-sm",
         className
       )}
       aria-label={label}
       title={label}
     >
-      <Image
-        src={iconPath}
-        alt={label}
-        width={size}
-        height={size}
-        className="rounded-full"
-      />
+      <BrandIcon width={size} height={size} />
     </span>
   )
 }

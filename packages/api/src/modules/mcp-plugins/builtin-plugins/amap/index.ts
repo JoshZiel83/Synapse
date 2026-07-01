@@ -39,7 +39,6 @@ export const amapSeed: BuiltinOrgSeed = {
       }),
       defaultReuseScope: "workspace",
       requiresHandshake: false,
-      iconAssetPath: "assets/icons/amap.svg",
       categorySlugs: ["search-and-retrieval"],
       tags: [
         "amap",

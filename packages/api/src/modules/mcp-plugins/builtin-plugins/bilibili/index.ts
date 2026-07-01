@@ -64,7 +64,6 @@ export const bilibiliSeed: BuiltinOrgSeed = {
         "workspace",
       ],
       requiresHandshake: false,
-      iconAssetPath: "assets/icons/bilibili.svg",
       categorySlugs: ["social-and-content"],
       tags: [
         "bilibili",

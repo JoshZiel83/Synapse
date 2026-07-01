@@ -52,7 +52,6 @@ export const mijiaSeed: BuiltinOrgSeed = {
         "workspace",
       ],
       requiresHandshake: false,
-      iconAssetPath: "assets/icons/mijia.svg",
       categorySlugs: ["integrations-and-automation"],
       tags: ["mijia", "mi-home", "xiaomi", "smarthome", "iot", "qr-login"],
       // Tools are discovered live from the sidecar on connect.

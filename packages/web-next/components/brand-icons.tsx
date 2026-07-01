@@ -7,7 +7,8 @@
 // one icon style (impeccable product register: consistent affordances).
 //
 // Feishu / Lark is NOT in Simple Icons (see react-icons #947), so it's defined
-// locally below from the official mark already shipped at public/icon/feishu.svg.
+// locally below from the official monochrome Lark mark. The same FeishuIcon is
+// reused as the Feishu transport glyph in im-brand-icons.tsx.
 export {
   SiApple as AppleIcon,
   SiGoogle as GoogleIcon,

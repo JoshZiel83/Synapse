@@ -4,7 +4,6 @@ import type { MessageCapabilities } from "../../messaging/degradation.js"
 export const FEISHU_CONNECTOR_CAPABILITY: TransportConnectorCapability = {
   transportKind: "feishu",
   displayName: "Feishu",
-  iconAssetPath: "/icon/feishu.svg",
   supportedConnectionModes: ["webhook", "long_connection"],
   supportedEndpointTypes: ["direct", "group"],
   supportsDirectMessages: true,

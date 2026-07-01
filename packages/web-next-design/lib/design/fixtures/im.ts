@@ -1,8 +1,7 @@
-// Curated IM transport-connector metadata. The random mock filled `iconAssetPath`
-// / `displayName` with lorem text, which then blew up `next/image` (an invalid
-// src throws "Failed to construct 'URL'"). These are a small fixed set anyway, so
-// we serve real display names + the real `/icon/<kind>.svg` assets that ship in
-// public/icon/.
+// Curated IM transport-connector metadata. The random mock filled `displayName`
+// with lorem text; these are a small fixed set anyway, so we serve real display
+// names. The connector glyphs come from the static TRANSPORT_BRAND_ICONS map, so
+// no icon path is part of this contract anymore.
 import type { TransportConnectorsResponseSchemaType } from "@synapse/shared/schemas"
 
 type Connector = TransportConnectorsResponseSchemaType["connectors"][number]
@@ -28,6 +27,5 @@ export const designTransportConnectors: TransportConnectorsResponseSchemaType =
       supportsDirectMessages: true,
       supportsGroupMessages: d.group,
       displayName: d.name,
-      iconAssetPath: `/icon/${d.kind}.svg`,
     })),
   }

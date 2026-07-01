@@ -254,7 +254,6 @@ export const MarketplacePluginViewSchema = z.strictObject({
   longDescriptionI18n: localizedTextSchema,
   summaryI18n: localizedTextSchema,
   defaultLocale: z.string(),
-  iconUrl: z.string().nullable(),
   version: z.string(),
   transport: z.enum(PLUGIN_SPEC_TRANSPORTS),
   entryPoint: z.string(),
@@ -398,7 +397,6 @@ export const PluginInstallationDetailViewSchema = z.strictObject({
   pluginSupportedReuseScopes: z.array(z.enum(REUSE_SCOPES)),
   // Raw MCP tool definitions (author-supplied MCP protocol shape) — opaque.
   toolsManifest: z.array(z.unknown()),
-  pluginIconUrl: z.string().nullable(),
   pluginCategories: z.array(MarketplacePluginCategoryViewSchema),
   pluginCategorySlugs: z.array(z.string()),
   pluginVersion: z.string(),

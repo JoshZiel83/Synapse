@@ -30,7 +30,6 @@ import type { MessageCapabilities } from "../../messaging/degradation.js"
 export const QQ_CONNECTOR_CAPABILITY: TransportConnectorCapability = {
   transportKind: "qq",
   displayName: "QQ",
-  iconAssetPath: "/icon/qq.svg",
   supportedConnectionModes: ["webhook", "long_connection"],
   supportedEndpointTypes: ["direct", "group"],
   supportsDirectMessages: true,

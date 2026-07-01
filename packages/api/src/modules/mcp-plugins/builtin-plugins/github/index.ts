@@ -39,7 +39,6 @@ export const githubSeed: BuiltinOrgSeed = {
       defaultReuseScope: "conversation",
       requiresHandshake: false,
       categorySlugs: ["integrations-and-automation"],
-      iconAssetPath: "assets/icons/github.svg",
       tags: [
         "github",
         "official",

@@ -48,7 +48,6 @@ export const firecrawlSeed: BuiltinOrgSeed = {
       // Stateless read tools; reuse across the workspace (amap/aminer precedent).
       defaultReuseScope: "workspace",
       requiresHandshake: false,
-      iconAssetPath: "assets/icons/firecrawl.svg",
       categorySlugs: ["search-and-retrieval", "documents-and-reading"],
       tags: [
         "firecrawl",

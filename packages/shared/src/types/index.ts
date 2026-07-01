@@ -61,7 +61,6 @@ import {
   EXTERNAL_IMPORT_FILE_ORIGIN_SYSTEMS,
   PACKAGE_IMPORT_FILE_ORIGIN_SYSTEMS,
   SYSTEM_GENERATED_FILE_ORIGIN_SYSTEMS,
-  PLATFORM_ASSET_FILE_ORIGIN_SYSTEMS,
   FILE_PARSE_OUTPUT_KINDS,
   FILE_PARSE_RUN_STATUSES,
   CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES,
@@ -1749,8 +1748,6 @@ export type PackageImportFileOriginSystem =
   (typeof PACKAGE_IMPORT_FILE_ORIGIN_SYSTEMS)[number]
 export type SystemGeneratedFileOriginSystem =
   (typeof SYSTEM_GENERATED_FILE_ORIGIN_SYSTEMS)[number]
-export type PlatformAssetFileOriginSystem =
-  (typeof PLATFORM_ASSET_FILE_ORIGIN_SYSTEMS)[number]
 export type FileParseRunStatus = (typeof FILE_PARSE_RUN_STATUSES)[number]
 export type FileParseOutputKind = (typeof FILE_PARSE_OUTPUT_KINDS)[number]
 
@@ -3001,12 +2998,6 @@ export interface TransportConnectorCapability {
    * `describeTransportKind` is only a fallback.
    */
   displayName: string
-  /**
-   * Public asset path for this connector's icon (served from
-   * `web-next/public`). Centralized so frontend doesn't hard-code
-   * `/icon/${kind}.svg` and per-kind UI variants don't drift apart.
-   */
-  iconAssetPath: string
   /**
    * UI feature flag: render the connector-specific base-URL config
    * panel. Currently only Weixin v1 sets this true (gateway base URL).

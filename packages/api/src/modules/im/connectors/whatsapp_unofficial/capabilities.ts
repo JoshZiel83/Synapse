@@ -21,7 +21,6 @@ export const WHATSAPP_UNOFFICIAL_CONNECTOR_CAPABILITY: TransportConnectorCapabil
   {
     transportKind: "whatsapp_unofficial",
     displayName: "WhatsApp (unofficial)",
-    iconAssetPath: "/icon/whatsapp_unofficial.svg",
     supportedConnectionModes: ["long_connection"],
     supportedEndpointTypes: ["direct", "group"],
     supportsDirectMessages: true,

@@ -49,7 +49,7 @@ export default function PluginHeroCard({ plugin, eyebrow, action }: Props) {
         <div className="flex flex-col gap-5 md:flex-row md:items-start md:justify-between">
           <div className="flex min-w-0 items-start gap-4">
             <PluginIcon
-              iconUrl={plugin?.iconUrl}
+              brandSlug={plugin?.orgSlug}
               title={title}
               transport={plugin?.transport}
               containerClassName="h-20 w-20 rounded-[24px]"

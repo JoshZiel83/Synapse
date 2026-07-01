@@ -14,8 +14,8 @@ import type { DesignHandlers } from "./_types"
 // whatsapp_unofficial login/guard methods return inline (non-schema) types and
 // are left to the Proxy catch-all.
 export const imCoreHandlers = {
-  // Curated (real display names + real /icon/<kind>.svg) — random lorem here
-  // crashed next/image in TransportKindIcon.
+  // Curated (real display names) — random lorem crashed TransportKindIcon's
+  // a11y label; connector glyphs now come from the static brand-icon map.
   getTransportConnectors: async () => designTransportConnectors,
   getTransportAccounts: async () => mock(TransportAccountsResponseSchema),
   getTransportSessions: async () => mock(TransportSessionsResponseSchema),

@@ -1,8 +1,6 @@
 import crypto from "node:crypto"
-import fs from "node:fs/promises"
 import {
   DEFAULT_CONVERSATION_TYPE_MASK,
-  FILE_ORIGIN_SYSTEMS,
   WORKSPACE_RESOURCE_GRANT_STATUS,
   MARKETPLACE_ITEM_KIND,
   MCP_VALIDATION_RULE_KIND,
@@ -43,7 +41,6 @@ import type {
   WorkspaceResourceGrantSource,
 } from "@synapse/shared"
 import { encryptSensitiveFields } from "../../infrastructure/crypto/index.js"
-import { createLogger } from "../../infrastructure/logger/index.js"
 import { getWorkspaceCapabilityConversationTypeMask } from "../capabilities/conversation-type-policies.js"
 import { type Executor } from "../../infrastructure/database/kysely.js"
 import {
@@ -59,13 +56,11 @@ import {
   createPluginPublisherRecord,
   assignPluginCategories,
   ensureCatalogItem,
-  findBuiltinPluginIconFileAsset,
   findPluginInstallationWorkspace,
   getPluginCatalogRowByItemId,
   getPluginPublisherRecord,
   getPluginPublisherRecordBySlug,
   getActivePluginConnectionPublicPayload,
-  hasBuiltinPluginFilesTable,
   incrementPluginCatalogDownloadCount,
   insertPluginInstallationRecord,
   insertPluginSourceRefRecord,
@@ -94,8 +89,6 @@ import type {
   PublisherRecord,
 } from "./repo.types.js"
 import { emitEvent } from "../../infrastructure/events/index.js"
-import { saveFromBuffer } from "../../infrastructure/storage/file-io.js"
-import { buildPlatformAssetOrigin } from "../files/service.js"
 import { attachAuthConnectionsToConfig } from "./plugin-auth-connections.js"
 import { incrementMcpVersion } from "./runtime-version.js"
 import { builtinCapabilityCategories } from "./builtin-plugins/categories.js"
@@ -130,8 +123,6 @@ export class McpPluginError extends Error {
     super(message)
   }
 }
-
-const log = createLogger("mcp.service")
 
 function sanitizeSlug(value: string) {
   return slugify(value, { maxLength: 120 })
@@ -197,61 +188,6 @@ function publicReuseScope(
 
 function internalReuseScope(scope: ReuseScope): PluginReuseScopeV2 {
   return scope
-}
-
-function inferMimeTypeForAsset(assetPath: string) {
-  const lower = assetPath.toLowerCase()
-  if (lower.endsWith(".svg")) return "image/svg+xml"
-  if (lower.endsWith(".png")) return "image/png"
-  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg"
-  if (lower.endsWith(".webp")) return "image/webp"
-  return "application/octet-stream"
-}
-
-async function ensureBuiltinPluginIcon(
-  seedSlug: string,
-  pluginSlug: string,
-  relativeAssetPath: string
-) {
-  if (!(await hasBuiltinPluginFilesTable())) {
-    return null
-  }
-
-  const assetUrl = new URL(
-    `./builtin-plugins/${relativeAssetPath}`,
-    import.meta.url
-  )
-  const buffer = await fs.readFile(assetUrl)
-  const sha256 = crypto.createHash("sha256").update(buffer).digest("hex")
-  const key = `${seedSlug}/${pluginSlug}`
-
-  const existing = await findBuiltinPluginIconFileAsset({ key, sha256 })
-  if (existing) {
-    return {
-      id: existing.id,
-    }
-  }
-
-  const originalName = relativeAssetPath.split("/").pop() || `${pluginSlug}.svg`
-  const file = await saveFromBuffer(
-    buffer,
-    originalName,
-    inferMimeTypeForAsset(relativeAssetPath),
-    null,
-    null,
-    buildPlatformAssetOrigin({
-      system: FILE_ORIGIN_SYSTEMS.BUILTIN_PLUGIN_ICON,
-      details: {
-        builtinPluginIconKey: key,
-        sha256,
-        source: "builtin_plugin_icon",
-      },
-    })
-  )
-
-  return {
-    id: file.id,
-  }
 }
 
 function mergeConfigForUpdate(
@@ -512,7 +448,6 @@ export async function createPlugin(data: {
   displayName: string
   description?: string
   longDescription?: string
-  iconFileId?: string
   version?: string
   transport: PluginSpecTransport
   entryPoint?: string
@@ -1415,29 +1350,12 @@ export async function seedBuiltinMcpPlugins() {
     })
 
     for (const pluginSeed of seed.plugins) {
-      let icon: { id: string } | null = null
-      if (pluginSeed.iconAssetPath) {
-        try {
-          icon = await ensureBuiltinPluginIcon(
-            seed.slug,
-            pluginSeed.slug,
-            pluginSeed.iconAssetPath
-          )
-        } catch (error) {
-          log.warn(
-            { err: error },
-            `[builtin-mcp] Failed to persist icon for ${seed.slug}/${pluginSeed.slug}; continuing without icon`
-          )
-        }
-      }
-
       await createPlugin({
         orgId: publisher.id,
         slug: pluginSeed.slug,
         displayName: pluginSeed.displayName,
         description: pluginSeed.description,
         longDescription: pluginSeed.longDescription,
-        iconFileId: icon?.id,
         transport: pluginSeed.transport,
         entryPoint: pluginSeed.entryPoint,
         lifecycleScope: pluginSeed.defaultReuseScope,

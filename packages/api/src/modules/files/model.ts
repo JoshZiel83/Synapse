@@ -11,7 +11,6 @@ import type {
   ExternalImportFileOriginSystem,
   ModelOutputFileOriginSystem,
   PackageImportFileOriginSystem,
-  PlatformAssetFileOriginSystem,
   SystemGeneratedFileOriginSystem,
   ToolOutputFileOriginSystem,
   UserUploadFileOriginSystem,
@@ -31,7 +30,6 @@ export type {
   ExternalImportFileOriginSystem,
   ModelOutputFileOriginSystem,
   PackageImportFileOriginSystem,
-  PlatformAssetFileOriginSystem,
   SystemGeneratedFileOriginSystem,
   ToolOutputFileOriginSystem,
   UserUploadFileOriginSystem,
@@ -181,19 +179,6 @@ export function buildSystemGeneratedOrigin(input: {
     system: input.system,
     initiatorUserId: input.initiatorUserId ?? null,
     initiatorActorId: input.initiatorActorId ?? null,
-    details: input.details,
-  }
-}
-
-export function buildPlatformAssetOrigin(input: {
-  system: PlatformAssetFileOriginSystem
-  providerKey?: string
-  details?: Record<string, unknown>
-}): FileOriginInput {
-  return {
-    family: "platform_asset",
-    system: input.system,
-    providerKey: input.providerKey,
     details: input.details,
   }
 }

@@ -2192,7 +2192,7 @@ export default function InstallDialog({
           <div className="flex">
             <div className="mr-4 shrink-0">
               <PluginIcon
-                iconUrl={plugin.iconUrl}
+                brandSlug={plugin.orgSlug}
                 title={
                   translate(
                     plugin.displayNameI18n,

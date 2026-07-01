@@ -95,7 +95,7 @@ export default function InstalledList() {
             <CardContent className="flex items-center justify-between p-4">
               <div className="flex items-center gap-3">
                 <PluginIcon
-                  iconUrl={install.pluginIconUrl}
+                  brandSlug={install.orgSlug}
                   title={
                     translate(
                       install.pluginDisplayNameI18n,

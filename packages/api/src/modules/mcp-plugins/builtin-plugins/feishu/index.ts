@@ -44,7 +44,6 @@ export const feishuSeed: BuiltinOrgSeed = {
       entryPoint: "feishu/app",
       defaultReuseScope: "conversation",
       requiresHandshake: false,
-      iconAssetPath: "assets/icons/feishu.svg",
       categorySlugs: ["integrations-and-automation", "documents-and-reading"],
       tags: [
         "feishu",

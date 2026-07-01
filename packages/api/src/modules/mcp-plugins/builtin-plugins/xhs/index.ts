@@ -63,7 +63,6 @@ export const xhsSeed: BuiltinOrgSeed = {
         "workspace",
       ],
       requiresHandshake: false,
-      iconAssetPath: "assets/icons/xiaohongshu.svg",
       categorySlugs: ["social-and-content"],
       tags: [
         "xiaohongshu",

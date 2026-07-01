@@ -2,7 +2,8 @@
 
 import { BadgeCheck, Globe, Code, Puzzle } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
-import { resolveFileUrl } from "@/lib/utils"
+import { cn } from "@/lib/utils"
+import { PLUGIN_BRAND_ICONS } from "@/components/plugin-brand-icons"
 
 export function getLocale(defaultLocale?: string) {
   if (typeof navigator !== "undefined") {
@@ -85,37 +86,42 @@ export function getPluginInstallationDetails(
 }
 
 export function PluginIcon({
-  iconUrl,
+  brandSlug,
   title,
   transport,
   verified = false,
   className = "h-7 w-7",
   containerClassName = "h-[60px] w-[60px] rounded-[18px]",
 }: {
-  iconUrl?: string | null
+  /** Publisher org slug — keys the colored brand glyph (builtin plugins). */
+  brandSlug?: string | null
   title: string
   transport?: string
   verified?: boolean
   className?: string
   containerClassName?: string
 }) {
-  const Icon =
+  const BrandIcon = brandSlug ? PLUGIN_BRAND_ICONS[brandSlug] : undefined
+  const FallbackIcon =
     transport === "http" ? Globe : transport === "builtin" ? Code : Puzzle
-  const resolvedIconUrl = resolveFileUrl(iconUrl)
 
   return (
-    <div className="relative flex-shrink-0">
+    <div className="relative flex-shrink-0" title={title}>
       <div
-        className={`flex items-center justify-center overflow-hidden border border-slate-200 bg-slate-100 text-slate-700 shadow-sm dark:border-white/10 dark:bg-white/5 dark:text-slate-200 ${containerClassName}`}
+        className={cn(
+          "flex items-center justify-center overflow-hidden border shadow-sm",
+          // Brand marks (incl. near-black github/notion/z.ai) read on a white
+          // tile in both themes; the generic fallback keeps the slate treatment.
+          BrandIcon
+            ? "border-slate-200 bg-white dark:border-white/10"
+            : "border-slate-200 bg-slate-100 text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-slate-200",
+          containerClassName
+        )}
       >
-        {resolvedIconUrl ? (
-          <img
-            src={resolvedIconUrl}
-            alt={title}
-            className="h-full w-full object-cover"
-          />
+        {BrandIcon ? (
+          <BrandIcon className={className} />
         ) : (
-          <Icon className={className} />
+          <FallbackIcon className={className} />
         )}
       </div>
       {verified ? (

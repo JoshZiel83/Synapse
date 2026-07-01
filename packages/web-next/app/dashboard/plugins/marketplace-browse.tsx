@@ -165,7 +165,7 @@ export default function MarketplaceBrowse({
                 onClick={() => openPlugin(plugin.id)}
               >
                 <PluginIcon
-                  iconUrl={plugin.iconUrl}
+                  brandSlug={plugin.orgSlug}
                   title={title}
                   transport={plugin.transport}
                 />

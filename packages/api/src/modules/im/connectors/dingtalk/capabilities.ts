@@ -22,7 +22,6 @@ import type { MessageCapabilities } from "../../messaging/degradation.js"
 export const DINGTALK_CONNECTOR_CAPABILITY: TransportConnectorCapability = {
   transportKind: "dingtalk",
   displayName: "DingTalk",
-  iconAssetPath: "/icon/dingtalk.svg",
   supportedConnectionModes: ["long_connection"],
   supportedEndpointTypes: ["direct", "group"],
   supportsDirectMessages: true,

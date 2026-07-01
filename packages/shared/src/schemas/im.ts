@@ -48,7 +48,6 @@ export const TransportConnectorCapabilitySchema = z.object({
   supportsDirectMessages: z.boolean(),
   supportsGroupMessages: z.boolean(),
   displayName: z.string(),
-  iconAssetPath: z.string(),
   showsBaseUrlConfig: z.boolean().optional(),
 })
 export type TransportConnectorCapabilitySchemaType = z.infer<

@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import type { MarketplacePluginView } from "@synapse/shared"
 import { Globe, Code, Puzzle, Wrench, Key } from "lucide-react"
-import { resolveFileUrl } from "@/lib/utils"
+import { PLUGIN_BRAND_ICONS } from "@/components/plugin-brand-icons"
 
 function getLocale(defaultLocale?: string) {
   if (typeof navigator !== "undefined") {
@@ -75,20 +75,18 @@ export default function PluginDetailDialog({
   const configFields = plugin.configFields || []
   const hasRequiredConfig = configFields.some((field) => field.required)
   const locale = getLocale(plugin.defaultLocale)
-  const iconUrl = resolveFileUrl(plugin.iconUrl)
+  const BrandIcon = plugin.orgSlug
+    ? PLUGIN_BRAND_ICONS[plugin.orgSlug]
+    : undefined
 
   return (
     <Dialog open onOpenChange={() => onClose()}>
       <DialogContent className="max-h-[85vh] max-w-lg overflow-y-auto border-gray-200 bg-white ring-1 ring-gray-200 dark:border-white/10 dark:bg-gray-900 dark:ring-white/10">
         <DialogHeader>
           <div className="flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-blue-500/10">
-              {iconUrl ? (
-                <img
-                  src={iconUrl}
-                  alt={plugin.displayName}
-                  className="h-8 w-8 rounded-md object-contain"
-                />
+            <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-white ring-1 ring-slate-200 dark:ring-white/10">
+              {BrandIcon ? (
+                <BrandIcon className="h-8 w-8" />
               ) : plugin.transport === "http" ? (
                 <Globe className="h-6 w-6 text-blue-400" />
               ) : plugin.transport === "builtin" ? (

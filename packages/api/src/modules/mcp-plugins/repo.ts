@@ -13,7 +13,6 @@ import type pg from "pg"
 import { CompiledQuery, sql, type RawBuilder, type SqlBool } from "kysely"
 import {
   DEFAULT_CONVERSATION_TYPE_MASK,
-  FILE_ORIGIN_SYSTEMS,
   MARKETPLACE_VERSION_STATUS,
   REUSE_SCOPES,
   SUBJECT_KIND,
@@ -94,7 +93,6 @@ export type PluginCatalogRow = {
   itemTags: string[] | null
   itemIsActive: boolean
   itemDownloadCount: number
-  itemIconFileId: string | null
   itemMetadata: JsonObject
   itemCreatedAt: Date
   itemUpdatedAt: Date
@@ -408,7 +406,6 @@ const PLUGIN_CATALOG_SELECT = `
     item.tags AS "itemTags",
     item.is_active AS "itemIsActive",
     item.download_count AS "itemDownloadCount",
-    item.icon_file_id AS "itemIconFileId",
     item.metadata AS "itemMetadata",
     item.created_at AS "itemCreatedAt",
     item.updated_at AS "itemUpdatedAt",
@@ -483,26 +480,6 @@ const PLUGIN_CATALOG_SELECT = `
   WHERE item.item_kind = 'plugin_package'
 `
 
-let builtinPluginIconFilesTableAvailable: boolean | null = null
-
-export async function hasBuiltinPluginFilesTable() {
-  if (builtinPluginIconFilesTableAvailable !== null) {
-    return builtinPluginIconFilesTableAvailable
-  }
-
-  const result = await db.executeQuery(
-    sql<{ exists: boolean }>`SELECT EXISTS (
-      SELECT 1
-      FROM information_schema.tables
-      WHERE table_schema = 'public'
-        AND table_name = 'files'
-    ) AS exists`.compile(db)
-  )
-
-  builtinPluginIconFilesTableAvailable = result.rows[0]?.exists === true
-  return builtinPluginIconFilesTableAvailable
-}
-
 export async function ensureCatalogItem(
   ex: Executor,
   input: {
@@ -512,7 +489,6 @@ export async function ensureCatalogItem(
     displayName: string
     description?: string
     longDescription?: string
-    iconFileId?: string
     tags?: string[]
     isBuiltin?: boolean
     transport: PluginSpecTransport
@@ -560,7 +536,6 @@ export async function ensureCatalogItem(
         visibility: "public",
         tags: input.tags || [],
         isActive: true,
-        iconFileId: input.iconFileId || null,
         metadata: sql`${JSON.stringify(metadata)}::jsonb`,
       })
       .where("id", "=", itemId)
@@ -578,7 +553,6 @@ export async function ensureCatalogItem(
       displayName: input.displayName,
       summary: input.description || "",
       longDescription: input.longDescription || "",
-      iconFileId: input.iconFileId || null,
       sourceKind: input.isBuiltin ? "builtin" : "official",
       visibility: "public",
       tags: input.tags || [],
@@ -748,26 +722,6 @@ export async function assignPluginCategories(
       .onConflict((oc) => oc.doNothing())
       .execute()
   }
-}
-
-export async function findBuiltinPluginIconFileAsset(params: {
-  key: string
-  sha256: string
-}): Promise<{ id: string } | null> {
-  const existing = await db
-    .selectFrom("fileAssets as f")
-    .select("f.id")
-    .where("f.workspaceId", "is", null)
-    .where("f.sourceFamily", "=", "platform_asset")
-    .where("f.sourceSystem", "=", FILE_ORIGIN_SYSTEMS.BUILTIN_PLUGIN_ICON)
-    .where(
-      sql<boolean>`f.details_json->>'builtinPluginIconKey' = ${params.key}`
-    )
-    .where("f.contentSha256", "=", params.sha256)
-    .limit(1)
-    .executeTakeFirst()
-
-  return existing ?? null
 }
 
 export async function loadPluginCatalogRows(

@@ -41,7 +41,6 @@ export const figmaSeed: BuiltinOrgSeed = {
       }),
       defaultReuseScope: "session",
       requiresHandshake: false,
-      iconAssetPath: "assets/icons/figma.svg",
       categorySlugs: ["integrations-and-automation"],
       tags: ["figma", "design", "oauth", "official", "mcp"],
       // Tools are discovered live from the remote server on connect.

@@ -11,7 +11,6 @@ import type { MessageCapabilities } from "../../messaging/degradation.js"
 export const WEIXIN_CONNECTOR_CAPABILITY: TransportConnectorCapability = {
   transportKind: "weixin",
   displayName: "WeChat",
-  iconAssetPath: "/icon/weixin.svg",
   supportedConnectionModes: ["long_connection"],
   supportedEndpointTypes: ["direct"],
   supportsDirectMessages: true,

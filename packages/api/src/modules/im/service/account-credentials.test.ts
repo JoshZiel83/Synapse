@@ -63,7 +63,6 @@ const stubConnector: TransportConnector = {
   capability: {
     transportKind: STUB_KIND,
     displayName: "Stub WeChat",
-    iconAssetPath: "/icon/weixin.svg",
     supportedConnectionModes: ["long_connection"],
     supportedEndpointTypes: ["direct"],
     supportsDirectMessages: true,
@@ -114,7 +113,6 @@ const passthroughStub: TransportConnector = {
   capability: {
     transportKind: PASSTHROUGH_KIND,
     displayName: "Stub WeCom",
-    iconAssetPath: "/icon/wecom.svg",
     supportedConnectionModes: ["long_connection"],
     supportedEndpointTypes: ["direct"],
     supportsDirectMessages: true,
@@ -309,7 +307,6 @@ test("validateAndNormalizeAccountConfig: connector validateConfig rejection thro
     capability: {
       transportKind: TEST_KIND,
       displayName: "Stub Feishu",
-      iconAssetPath: "/icon/feishu.svg",
       supportedConnectionModes: ["long_connection"],
       supportedEndpointTypes: ["direct"],
       supportsDirectMessages: true,
@@ -373,7 +370,6 @@ test("validateAndNormalizeAccountConfig: disabled status skips validation", () =
     capability: {
       transportKind: TEST_KIND,
       displayName: "Stub Feishu",
-      iconAssetPath: "/icon/feishu.svg",
       supportedConnectionModes: ["long_connection"],
       supportedEndpointTypes: ["direct"],
       supportsDirectMessages: true,
@@ -414,7 +410,6 @@ test("validateAndNormalizeAccountConfig: returns connector normalized form", () 
     capability: {
       transportKind: TEST_KIND,
       displayName: "Stub Feishu",
-      iconAssetPath: "/icon/feishu.svg",
       supportedConnectionModes: ["long_connection"],
       supportedEndpointTypes: ["direct"],
       supportsDirectMessages: true,

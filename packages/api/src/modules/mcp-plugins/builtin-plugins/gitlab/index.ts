@@ -37,7 +37,6 @@ export const gitlabSeed: BuiltinOrgSeed = {
       defaultReuseScope: "conversation",
       requiresHandshake: false,
       categorySlugs: ["integrations-and-automation"],
-      iconAssetPath: "assets/icons/gitlab.svg",
       tags: [
         "gitlab",
         "official",

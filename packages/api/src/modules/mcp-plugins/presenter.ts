@@ -131,7 +131,6 @@ export type PluginCatalogRecord = {
   longDescriptionI18n: Record<string, string>
   summaryI18n: Record<string, string>
   defaultLocale: string
-  iconUrl: string | null
   version: string
   transport: PluginSpecTransport
   entryPoint: string
@@ -296,7 +295,6 @@ export function presentPluginCatalogRecord(
       typeof itemMetadata.defaultLocale === "string"
         ? itemMetadata.defaultLocale
         : "en",
-    iconUrl: row.itemIconFileId ? getFileUrlById(row.itemIconFileId) : null,
     version: row.versionValue || "1.0.0",
     transport: row.specTransport || "builtin",
     entryPoint: row.specEntryPoint || "",
@@ -532,7 +530,6 @@ export function presentPluginInstallationDetail(
     pluginDefaultReuseScope: plugin.defaultReuseScope,
     pluginSupportedReuseScopes: plugin.supportedReuseScopes || [],
     toolsManifest: plugin.toolsManifest,
-    pluginIconUrl: plugin.iconUrl,
     pluginCategories: plugin.categories || [],
     pluginCategorySlugs: plugin.categorySlugs || [],
     pluginVersion: plugin.version,

@@ -24,7 +24,6 @@ import type { MessageCapabilities } from "../../messaging/degradation.js"
 export const TELEGRAM_CONNECTOR_CAPABILITY: TransportConnectorCapability = {
   transportKind: "telegram",
   displayName: "Telegram",
-  iconAssetPath: "/icon/telegram.svg",
   supportedConnectionModes: ["long_connection", "webhook"],
   supportedEndpointTypes: ["direct", "group"],
   supportsDirectMessages: true,

@@ -183,7 +183,7 @@ export default function PluginsPage() {
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex min-w-0 items-start gap-3">
                       <PluginIcon
-                        iconUrl={plugin.iconUrl}
+                        brandSlug={plugin.orgSlug}
                         title={title}
                         transport={plugin.transport}
                         containerClassName="size-14 rounded-[18px]"
