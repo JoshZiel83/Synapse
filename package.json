@@ -15,12 +15,14 @@
     "packages/device-sdk",
     "packages/api",
     "packages/remote-agent-daemon",
-    "packages/web-next"
+    "packages/web-next",
+    "packages/web-next-design"
   ],
   "scripts": {
     "dev:api": "npm run dev -w packages/api",
     "dev:daemon": "npm run dev -w packages/remote-agent-daemon",
     "dev:web": "npm run dev -w packages/web-next",
+    "dev:web-design": "npm run dev -w packages/web-next-design",
     "dev:mock-chat": "node .workbuddy/mock-chat-completions-server.cjs",
     "prepare": "git config core.hooksPath .githooks",
     "format": "node scripts/format-files.mjs --all",

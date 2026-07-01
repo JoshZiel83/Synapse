@@ -1,0 +1,2548 @@
+"use client"
+
+import { create } from "zustand"
+import { nowIsoInstant } from "@synapse/shared/datetime"
+import { api } from "@/lib/api"
+import {
+  createEmptyStoredChatQueueState,
+  loadStoredChatQueueState,
+  mergeStoredQueueTransition,
+  updateStoredChatQueueState,
+  type PendingOutboxMessage as PersistedOutboxEntry,
+  type PendingConversationRead,
+  type StoredChatQueueState,
+} from "@/lib/chat-persistence"
+import type { Timestamp } from "@synapse/shared"
+import {
+  isChatServiceWorkerActive,
+  requestChatServiceWorkerSync,
+} from "@/lib/chat-service-worker"
+import { createUuid } from "@/lib/uuid"
+import type {
+  ActorRuntimeState,
+  CanonicalContentBlock,
+  ChatConversationItem,
+  ChatConversationReadWatermarkResponse,
+  ChatConversationView,
+  ChatSyncEvent,
+  ConversationEntityRef,
+  ConversationFeedItemSubtype,
+  ConversationParticipantType,
+  ServerToolCall,
+  ConversationFeedEventPayloadMap,
+  ConversationFeedEventType,
+  ConversationMessageTransportContext,
+  ConversationMessageTransportDelivery,
+  ConversationReplyRef,
+  TaskSummary,
+  RemoteAgentRuntimeState,
+  TransportKind,
+} from "@synapse/shared"
+import {
+  extractText,
+  normalizeCanonicalContentBlocks,
+  summarizeConversationEvent,
+  textBlocks,
+  ACTOR_RUNTIME_HEALTH,
+  CONVERSATION_STATUS,
+  CONVERSATION_PARTICIPANT_TYPE,
+  CONVERSATION_KIND,
+  CONVERSATION_MESSAGE_SUBTYPE,
+} from "@synapse/shared"
+import {
+  clearConversationTombstone,
+  rebaseQueueFieldsOntoLatest,
+  shouldApplyDrainedSyncEvent,
+  toStoredChatQueueState,
+  upsertConversationWithTombstoneGuard,
+} from "./chat-store-queue"
+
+import { createLogger } from "@/lib/client-logger"
+
+const clientLog = createLogger("web.stores.chat-store")
+
+export interface ConversationParticipant {
+  id: string
+  name: string
+  role: string
+  emoji?: string
+  avatarUrl?: string
+  title?: string
+}
+
+export interface ConversationMember {
+  participantId: string
+  participantType: ConversationParticipantType
+  id: string
+  workspaceMemberId?: string
+  remoteAgentId?: string
+  name: string
+  role?: string
+  title?: string
+  emoji?: string
+  avatarUrl?: string
+  sessionStatus?: string
+  externalUserKey?: string
+  transportKind?: TransportKind
+  transportAddressId?: string
+  linkedWorkspaceMemberId?: string
+  linkedWorkspaceMemberName?: string
+  linkedUserAvatarUrl?: string
+}
+
+export interface ConversationSummary {
+  id: string
+  status: ChatConversationView["status"] | "failed"
+  transportKind?: TransportKind
+  participants: ConversationParticipant[]
+  members: ConversationMember[]
+  lastMessage?: {
+    content: string
+    role: string
+    actorName?: string
+    createdAt: Timestamp
+  }
+  unreadCount: number
+  createdAt: Timestamp
+  title?: string
+  name?: string
+  avatarUrl?: string
+  permissions?: {
+    canManage?: boolean
+    canManageMembers?: boolean
+  }
+}
+
+export interface FeedMessage {
+  id: string
+  kind: "message" | "event"
+  conversationId: string
+  sequence: number
+  sessionId: string
+  role: string
+  messageType?: ConversationFeedItemSubtype
+  content: string
+  contentBlocks: CanonicalContentBlock[]
+  author?: ConversationEntityRef
+  fromActorId?: string
+  fromWorkspaceMemberId?: string
+  actorName?: string
+  actorRole?: string
+  actorEmoji?: string
+  createdAt: Timestamp
+  clientMessageId?: string
+  deliveryStatus?: "sending" | "retrying" | "sent"
+  metadata?: Record<string, unknown>
+  replyToItemId?: string
+  replyTo?: ConversationReplyRef
+  toolsUsed?: string[]
+  serverToolCalls?: ServerToolCall[]
+  citationSources?: Record<string, { url: string; title: string }>
+  coordination?: boolean
+  restrictedAudienceParticipantIds?: string[]
+  transport?: ConversationMessageTransportContext
+  transportDeliveries?: ConversationMessageTransportDelivery[]
+  eventType?: ConversationFeedEventType
+  eventPayload?: ConversationFeedEventPayloadMap[ConversationFeedEventType]
+  task?: TaskSummary
+}
+
+export type ThinkingPhase = "thinking" | "tool" | "responding" | "error"
+export type ActorAvatarStatus = "idle" | ThinkingPhase
+export type RemoteAgentAvatarStatus = RemoteAgentRuntimeState["state"]
+export type ConversationRuntimeMap = Record<
+  string,
+  Record<string, ActorRuntimeState>
+>
+
+export type OutboxEntry = PersistedOutboxEntry
+export interface ChatWorkspaceSnapshot extends StoredChatQueueState {
+  conversations: ChatConversationView[]
+}
+
+interface ChatState {
+  activeWorkspaceId: string | null
+  workspaceMemberId: string | null
+  clientInstanceId: string | null
+  selectedConversationId: string | null
+  visibleConversationId: string | null
+  conversations: ConversationSummary[]
+  messages: FeedMessage[]
+  outbox: Record<string, OutboxEntry>
+  pendingReads: Record<string, PendingConversationRead>
+  loadingConversations: boolean
+  loadingMessages: boolean
+  syncing: boolean
+  runtimeMap: ConversationRuntimeMap
+  remoteAgentRuntimeMap: Record<string, RemoteAgentRuntimeState>
+  runtimeSeqMap: Record<string, number>
+  totalUnread: number
+  /**
+   * Active typing participants per conversation.
+   * key = conversationId; value = { workspaceMemberId: expireAtMs }
+   * Entries auto-expire 5s after the last `started` event with no follow-up
+   * `stopped` — checked at read time, no separate timer.
+   */
+  typingByConversation: Record<string, Record<string, number>>
+
+  snapshot: ChatWorkspaceSnapshot | null
+  loadedMessageItems: ChatConversationItem[]
+
+  deactivate: () => void
+  loadConversations: (
+    workspaceId: string,
+    options?: { silent?: boolean }
+  ) => Promise<void>
+  reloadPersistedSnapshot: (workspaceId: string) => Promise<void>
+  selectConversation: (conversationId: string | null) => void
+  setVisibleConversation: (conversationId: string | null) => void
+  loadMessages: (workspaceId: string, conversationId: string) => Promise<void>
+  loadOlderMessages: (
+    workspaceId: string,
+    conversationId: string,
+    beforeSequence: number,
+    limit?: number
+  ) => Promise<{ items: FeedMessage[]; hasMoreBefore: boolean } | null>
+  sendMessage: (
+    workspaceId: string,
+    conversationId: string,
+    input: {
+      contentBlocks: CanonicalContentBlock[]
+      replyToItemId?: string
+      replyTo?: ConversationReplyRef
+    }
+  ) => Promise<void>
+  hydrateOutbox: (workspaceId: string) => Promise<void>
+  flushOutbox: (workspaceId?: string) => Promise<void>
+  syncFromServer: (workspaceId?: string) => Promise<void>
+  createWorkspaceThread: (
+    workspaceId: string,
+    kind: "direct" | "group",
+    actorIds: string[],
+    options?: {
+      title?: string
+      workspaceMemberIds?: string[]
+      remoteAgentIds?: string[]
+      metadata?: Record<string, unknown>
+    }
+  ) => Promise<string>
+  markConversationRead: (
+    conversationId: string,
+    readUpToSequence: number,
+    lastVisibleSequence?: number
+  ) => Promise<void>
+
+  handleSyncEvent: (event: ChatSyncEvent) => void
+  handleRuntimeUpdated: (payload: {
+    conversationId: string
+    runtimeSeq: number
+    snapshot: ActorRuntimeState
+  }) => void
+  handleTypingEvent: (payload: {
+    conversationId: string
+    fromWorkspaceMemberId: string
+    state: "started" | "stopped"
+    occurredAt: Timestamp
+  }) => void
+  sendTypingState: (
+    conversationId: string,
+    state: "started" | "stopped"
+  ) => Promise<void>
+  handleTaskUpdated: (payload: {
+    conversationId: string
+    taskId: string
+    itemId?: string
+    task: TaskSummary
+  }) => void
+}
+
+const OUTBOX_RETRY_DELAYS_MS = [1500, 3000, 5000, 8000, 12000, 20000, 30000]
+
+let persistPromise: Promise<void> = Promise.resolve()
+let bootstrapPromise: Promise<void> | null = null
+let bootstrapWorkspaceId: string | null = null
+let syncPromise: Promise<void> | null = null
+let outboxRetryTimer: ReturnType<typeof setTimeout> | null = null
+
+// Monotonic floor for optimistic message sort keys. Never decreases, so a
+// backward wall-clock jump can never mint a key below an earlier still-pending
+// message. See sendMessage for the full rationale.
+let optimisticSequenceFloor = 0
+
+// In-memory (NOT persisted) per-workspace high-water mark of durable sync
+// frames applied live. Initialized to the persisted inboxCursor on load and
+// refreshed after every sync/bootstrap. Used only for live ordering/gap
+// detection; the persisted inboxCursor remains the authoritative resume cursor.
+const liveCursorByWorkspace = new Map<string, number>()
+// Set when a live frame arrives with a gap (memberSeq > base+1) while a sync is
+// already in flight — the in-flight sync resumes from a cursor below the gap, so
+// it must run one more time after finishing to backfill. See syncFromServer.
+let needsResync = false
+
+function getLiveCursor(workspaceId: string, persistedCursor: number): number {
+  return Math.max(liveCursorByWorkspace.get(workspaceId) ?? 0, persistedCursor)
+}
+
+function setLiveCursor(workspaceId: string, value: number): void {
+  liveCursorByWorkspace.set(
+    workspaceId,
+    Math.max(liveCursorByWorkspace.get(workspaceId) ?? 0, value)
+  )
+}
+
+function createEmptyWorkspaceSnapshot(
+  workspaceId: string
+): ChatWorkspaceSnapshot {
+  return {
+    ...createEmptyStoredChatQueueState(workspaceId),
+    conversations: [],
+  }
+}
+
+function mergeStoredQueueIntoSnapshot(
+  snapshot: ChatWorkspaceSnapshot | null,
+  queueState: StoredChatQueueState
+): ChatWorkspaceSnapshot {
+  const baseSnapshot =
+    snapshot && snapshot.workspaceId === queueState.workspaceId
+      ? snapshot
+      : createEmptyWorkspaceSnapshot(queueState.workspaceId)
+
+  return {
+    ...baseSnapshot,
+    version: queueState.version,
+    workspaceId: queueState.workspaceId,
+    workspaceMemberId:
+      queueState.workspaceMemberId ?? baseSnapshot.workspaceMemberId,
+    clientInstanceId:
+      queueState.clientInstanceId ?? baseSnapshot.clientInstanceId,
+    inboxCursor: Math.max(baseSnapshot.inboxCursor, queueState.inboxCursor),
+    lastBootstrappedAt: latestIsoTimestamp(
+      baseSnapshot.lastBootstrappedAt,
+      queueState.lastBootstrappedAt
+    ),
+    pendingReads: queueState.pendingReads,
+    outbox: queueState.outbox,
+    tombstones: queueState.tombstones,
+    conversations: baseSnapshot.conversations,
+  }
+}
+
+function latestIsoTimestamp(
+  currentValue?: import("@synapse/shared").Timestamp,
+  nextValue?: import("@synapse/shared").Timestamp
+): import("@synapse/shared").Timestamp | undefined {
+  if (!currentValue) {
+    return nextValue
+  }
+  if (!nextValue) {
+    return currentValue
+  }
+  return new Date(currentValue).getTime() >= new Date(nextValue).getTime()
+    ? currentValue
+    : nextValue
+}
+void latestIsoTimestamp
+
+function queuePersistSnapshot(
+  previousSnapshot: ChatWorkspaceSnapshot | null,
+  nextSnapshot: ChatWorkspaceSnapshot | null
+) {
+  if (!nextSnapshot || typeof window === "undefined") {
+    return Promise.resolve()
+  }
+
+  const previousQueueState = toStoredChatQueueState(previousSnapshot)
+  const nextQueueState = toStoredChatQueueState(nextSnapshot)
+  if (!nextQueueState) {
+    return Promise.resolve()
+  }
+
+  persistPromise = persistPromise
+    .then(() =>
+      updateStoredChatQueueState(nextQueueState.workspaceId, (currentState) =>
+        mergeStoredQueueTransition(
+          currentState,
+          previousQueueState,
+          nextQueueState
+        )
+      )
+    )
+    .catch(() => undefined)
+
+  return persistPromise
+}
+
+function clearOutboxRetryTimer() {
+  if (outboxRetryTimer) {
+    clearTimeout(outboxRetryTimer)
+    outboxRetryTimer = null
+  }
+}
+
+function scheduleOutboxRetry(attemptCount: number) {
+  clearOutboxRetryTimer()
+
+  const index = Math.max(
+    0,
+    Math.min(attemptCount, OUTBOX_RETRY_DELAYS_MS.length - 1)
+  )
+  const baseDelay = OUTBOX_RETRY_DELAYS_MS[index] || 30000
+  const delay = baseDelay + Math.round(Math.random() * 600)
+
+  outboxRetryTimer = setTimeout(() => {
+    outboxRetryTimer = null
+    void useChatStore.getState().flushOutbox()
+  }, delay)
+}
+
+function buildDesktopDeviceLabel() {
+  if (typeof navigator === "undefined") {
+    return "Web Desktop"
+  }
+
+  const platform =
+    (navigator as Navigator & { userAgentData?: { platform?: string } })
+      .userAgentData?.platform ||
+    navigator.platform ||
+    "Desktop"
+
+  return `Web Desktop (${platform})`
+}
+
+function normalizeContentBlocks(blocks: unknown): CanonicalContentBlock[] {
+  if (!Array.isArray(blocks)) {
+    return []
+  }
+  return normalizeCanonicalContentBlocks(blocks)
+}
+
+function sortRawConversations(conversations: ChatConversationView[]) {
+  return [...conversations].sort((left, right) => {
+    const leftPinned = left.pinnedSortKey
+      ? new Date(left.pinnedSortKey).getTime()
+      : 0
+    const rightPinned = right.pinnedSortKey
+      ? new Date(right.pinnedSortKey).getTime()
+      : 0
+
+    if (leftPinned !== rightPinned) {
+      return rightPinned - leftPinned
+    }
+
+    const leftAt = left.lastItem?.createdAt ?? left.updatedAt ?? left.createdAt
+    const rightAt =
+      right.lastItem?.createdAt ?? right.updatedAt ?? right.createdAt
+
+    return new Date(rightAt).getTime() - new Date(leftAt).getTime()
+  })
+}
+
+function upsertRawConversation(
+  conversations: ChatConversationView[],
+  incoming: ChatConversationView
+) {
+  const next = conversations.filter(
+    (conversation) => conversation.conversationId !== incoming.conversationId
+  )
+  next.push(incoming)
+  return sortRawConversations(next)
+}
+
+/**
+ * Remove a conversation from a snapshot and record a tombstone at `removedSeq`.
+ * Pure data helper shared by the membership.updated reducer and the bootstrap
+ * authoritative prune. Also purges the conversation's pendingReads + outbox so
+ * the flusher won't keep POSTing to a conversation the member was removed from
+ * (those would 403/404 forever). selected/visible/loadedMessageItems are NOT in
+ * the snapshot — createStateFromSnapshot clears them automatically once the
+ * conversation leaves snapshot.conversations.
+ *
+ * `removedSeq` is the member_seq boundary: a later but lower-seq stale upsert
+ * (memberSeq <= removedSeq) is refused by upsertConversationWithTombstoneGuard,
+ * so the conversation cannot resurrect until a fresh re-add clears the tombstone.
+ */
+function pruneConversationFromSnapshot(
+  snapshot: ChatWorkspaceSnapshot,
+  conversationId: string,
+  removedSeq: number
+): ChatWorkspaceSnapshot {
+  const nextPendingReads = { ...snapshot.pendingReads }
+  delete nextPendingReads[conversationId]
+  const nextOutbox = Object.fromEntries(
+    Object.entries(snapshot.outbox).filter(
+      ([, entry]) => entry.conversationId !== conversationId
+    )
+  )
+  const existing = snapshot.tombstones[conversationId]
+  const nextTombstones = {
+    ...snapshot.tombstones,
+    [conversationId]: {
+      conversationId,
+      removedSeq: Math.max(removedSeq, existing?.removedSeq ?? 0),
+    },
+  }
+  return {
+    ...snapshot,
+    conversations: snapshot.conversations.filter(
+      (conversation) => conversation.conversationId !== conversationId
+    ),
+    pendingReads: nextPendingReads,
+    outbox: nextOutbox,
+    tombstones: nextTombstones,
+  }
+}
+
+function mergeRawItems(
+  existing: ChatConversationItem[],
+  incoming: ChatConversationItem[]
+) {
+  const byId = new Map<string, ChatConversationItem>()
+
+  for (const item of existing) {
+    byId.set(item.id, item)
+  }
+  for (const item of incoming) {
+    byId.set(item.id, item)
+  }
+
+  return [...byId.values()].sort((left, right) => {
+    if (left.sequence !== right.sequence) {
+      return left.sequence - right.sequence
+    }
+    return (
+      new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+    )
+  })
+}
+
+function patchTaskInRawItem(
+  item: ChatConversationItem,
+  payload: ChatSyncEvent<"task.updated">["payload"]
+) {
+  if (
+    item.itemType !== "event" ||
+    item.subtype !== "task_requested" ||
+    !item.eventPayload ||
+    typeof item.eventPayload !== "object"
+  ) {
+    return item
+  }
+
+  const currentTask =
+    "task" in item.eventPayload
+      ? (item.eventPayload.task as TaskSummary | undefined)
+      : undefined
+
+  if (item.id !== payload.itemId && currentTask?.id !== payload.taskId) {
+    return item
+  }
+
+  return {
+    ...item,
+    eventPayload: {
+      ...(item.eventPayload as ConversationFeedEventPayloadMap["task_requested"]),
+      task: payload.task,
+    },
+  }
+}
+
+function patchTaskInRawItems(
+  items: ChatConversationItem[],
+  payload: ChatSyncEvent<"task.updated">["payload"]
+) {
+  return mergeRawItems(
+    [],
+    items.map((item) => patchTaskInRawItem(item, payload))
+  )
+}
+
+function applyTaskUpdatedToSnapshot(
+  snapshot: ChatWorkspaceSnapshot,
+  payload: ChatSyncEvent<"task.updated">["payload"]
+) {
+  const currentConversation = snapshot.conversations.find(
+    (conversation) => conversation.conversationId === payload.conversationId
+  )
+  if (!currentConversation) {
+    return snapshot
+  }
+
+  const nextLastItem =
+    payload.itemId && currentConversation.lastItem?.itemId === payload.itemId
+      ? {
+          ...currentConversation.lastItem,
+          previewText: summarizeConversationEvent("task_requested", {
+            task: payload.task,
+          }),
+        }
+      : currentConversation.lastItem
+
+  return {
+    ...snapshot,
+    conversations: upsertRawConversation(snapshot.conversations, {
+      ...currentConversation,
+      lastItem: nextLastItem,
+    }),
+  }
+}
+
+function sortMessages(messages: FeedMessage[]) {
+  return [...messages].sort((left, right) => {
+    if (left.sequence !== right.sequence) {
+      return left.sequence - right.sequence
+    }
+    return (
+      new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+    )
+  })
+}
+
+function sumConversationUnread(conversations: ConversationSummary[]) {
+  return conversations.reduce(
+    (sum, conversation) => sum + conversation.unreadCount,
+    0
+  )
+}
+
+function getViewerParticipant(
+  conversation: ChatConversationView | undefined,
+  workspaceMemberId?: string | null
+) {
+  if (!conversation || !workspaceMemberId) {
+    return undefined
+  }
+
+  return conversation.participants.find(
+    (participant) =>
+      participant.participantType ===
+        CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
+      participant.workspaceMemberId === workspaceMemberId
+  )
+}
+
+function getPeerParticipant(
+  conversation: ChatConversationView,
+  workspaceMemberId?: string | null
+) {
+  return (
+    conversation.participants.find(
+      (participant) =>
+        participant.state === "active" &&
+        !(
+          participant.participantType ===
+            CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
+          participant.workspaceMemberId === workspaceMemberId
+        )
+    ) ?? conversation.participants[0]
+  )
+}
+
+function getConversationDisplayName(
+  conversation: ChatConversationView,
+  workspaceMemberId?: string | null
+) {
+  if (conversation.kind === CONVERSATION_KIND.DIRECT) {
+    const peer = getPeerParticipant(conversation, workspaceMemberId)
+    return peer?.name?.trim() || conversation.title?.trim() || "Direct chat"
+  }
+
+  return conversation.title?.trim() || "Group chat"
+}
+
+function resolveConversationAvatarUrl(
+  conversation: ChatConversationView,
+  workspaceMemberId?: string | null
+) {
+  if (conversation.presentation?.avatarUrl) {
+    return conversation.presentation.avatarUrl
+  }
+
+  const peer = getPeerParticipant(conversation, workspaceMemberId)
+  return peer?.avatarUrl
+}
+
+function resolveConversationTransportKind(conversation: ChatConversationView) {
+  return conversation.participants.find(
+    (participant) => participant.transportKind
+  )?.transportKind
+}
+
+function toConversationMember(
+  participant: ChatConversationView["participants"][number]
+): ConversationMember {
+  const id =
+    participant.actorId ||
+    participant.remoteAgentId ||
+    participant.workspaceMemberId ||
+    participant.externalUserKey ||
+    participant.participantId
+
+  return {
+    participantId: participant.participantId,
+    participantType: participant.participantType,
+    id,
+    workspaceMemberId: participant.workspaceMemberId,
+    remoteAgentId: participant.remoteAgentId,
+    name: participant.name || "Unknown",
+    role: participant.role || participant.roleKey,
+    title: participant.title,
+    emoji: participant.avatarEmoji,
+    avatarUrl: participant.avatarUrl,
+    sessionStatus: participant.sessionStatus,
+    externalUserKey: participant.externalUserKey,
+    transportKind: participant.transportKind,
+    transportAddressId: participant.transportAddressId,
+  }
+}
+
+function toConversationParticipant(
+  participant: ChatConversationView["participants"][number]
+): ConversationParticipant {
+  return {
+    id:
+      participant.actorId ||
+      participant.workspaceMemberId ||
+      participant.externalUserKey ||
+      participant.participantId,
+    name: participant.name || "Unknown",
+    role:
+      participant.role || participant.roleKey || participant.participantType,
+    emoji: participant.avatarEmoji,
+    avatarUrl: participant.avatarUrl,
+    title: participant.title,
+  }
+}
+
+function deriveLastMessageRole(
+  author?: ConversationEntityRef,
+  itemType?: "message" | "event" | "summary" | "control"
+) {
+  if (itemType === "event") {
+    return "system"
+  }
+  if (
+    author?.participantType === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
+  ) {
+    return "user"
+  }
+  if (author?.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR) {
+    return "assistant"
+  }
+  if (author?.participantType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT) {
+    return "assistant"
+  }
+  return "system"
+}
+
+function getAdjustedUnreadCount(
+  conversation: ChatConversationView,
+  pendingRead?: PendingConversationRead
+) {
+  if (!pendingRead) {
+    return conversation.unreadCount
+  }
+
+  const latestSequence = conversation.lastItem?.sequence ?? 0
+  if (pendingRead.readUpToSequence >= latestSequence) {
+    return 0
+  }
+
+  return conversation.unreadCount
+}
+
+function rawConversationToSummary(
+  conversation: ChatConversationView,
+  snapshot: ChatWorkspaceSnapshot
+): ConversationSummary {
+  const activeParticipants = conversation.participants.filter(
+    (participant) => participant.state === "active"
+  )
+  const title = getConversationDisplayName(
+    conversation,
+    snapshot.workspaceMemberId ?? null
+  )
+
+  return {
+    id: conversation.conversationId,
+    status: conversation.status,
+    transportKind: resolveConversationTransportKind(conversation),
+    participants: activeParticipants.map(toConversationParticipant),
+    members: activeParticipants.map(toConversationMember),
+    lastMessage: conversation.lastItem
+      ? {
+          content: conversation.lastItem.previewText,
+          role: deriveLastMessageRole(
+            conversation.lastItem.author,
+            conversation.lastItem.itemType
+          ),
+          actorName:
+            conversation.lastItem.author?.participantType ===
+            CONVERSATION_PARTICIPANT_TYPE.ACTOR
+              ? conversation.lastItem.author.name
+              : undefined,
+          createdAt: conversation.lastItem.createdAt,
+        }
+      : undefined,
+    unreadCount: getAdjustedUnreadCount(
+      conversation,
+      snapshot.pendingReads[conversation.conversationId]
+    ),
+    createdAt: conversation.createdAt,
+    title,
+    name: title,
+    avatarUrl: resolveConversationAvatarUrl(
+      conversation,
+      snapshot.workspaceMemberId ?? null
+    ),
+    permissions: {
+      canManage: conversation.permissions.canManageConversation,
+      canManageMembers: conversation.permissions.canManageParticipants,
+    },
+  }
+}
+
+function buildMessagePreview(item: FeedMessage) {
+  const text = item.content.trim()
+  if (text) {
+    return text
+  }
+
+  if (item.contentBlocks.some((block) => block.type === "file_ref")) {
+    return "Attachment"
+  }
+
+  return item.kind === "event" ? "System event" : ""
+}
+
+function outboxEntryToMessage(
+  entry: OutboxEntry,
+  conversation: ChatConversationView | undefined,
+  workspaceMemberId?: string | null
+): FeedMessage {
+  const viewer = getViewerParticipant(conversation, workspaceMemberId)
+  const author = viewer
+    ? ({
+        participantId: viewer.participantId,
+        participantType: viewer.participantType,
+        workspaceMemberId: viewer.workspaceMemberId,
+        actorId: viewer.actorId,
+        externalUserKey: viewer.externalUserKey,
+        transportAddressId: viewer.transportAddressId,
+        transportKind: viewer.transportKind,
+        name: viewer.name,
+        title: viewer.title,
+        role: viewer.role,
+        avatarUrl: viewer.avatarUrl,
+        avatarEmoji: viewer.avatarEmoji,
+      } satisfies ConversationEntityRef)
+    : undefined
+
+  return {
+    id: `local:${entry.clientMessageId}`,
+    kind: "message",
+    conversationId: entry.conversationId,
+    sequence: entry.optimisticSequence,
+    sessionId: "",
+    role: "user",
+    messageType: CONVERSATION_MESSAGE_SUBTYPE.CHAT_MESSAGE,
+    content: extractText(entry.contentBlocks),
+    contentBlocks: entry.contentBlocks,
+    author,
+    fromWorkspaceMemberId: viewer?.workspaceMemberId,
+    createdAt: entry.createdAt,
+    clientMessageId: entry.clientMessageId,
+    deliveryStatus: entry.status,
+    replyToItemId: entry.replyToItemId,
+    replyTo: entry.replyTo,
+  }
+}
+
+function chatItemToFeedMessage(item: ChatConversationItem): FeedMessage {
+  if (item.itemType === "event") {
+    // The API has already rendered authoritative contentBlocks for the
+    // event (see event-registry.ts renderTimeline). Pass them through
+    // verbatim — re-deriving via summarizeConversationEvent loses any
+    // file_ref / mention structure the API attached. The plain `content`
+    // string is kept as a display-only derivation for legacy consumers.
+    const blocks =
+      Array.isArray(item.contentBlocks) && item.contentBlocks.length > 0
+        ? item.contentBlocks
+        : textBlocks(
+            summarizeConversationEvent(item.subtype, item.eventPayload)
+          )
+    const content =
+      typeof item.content === "string" && item.content.length > 0
+        ? item.content
+        : summarizeConversationEvent(item.subtype, item.eventPayload)
+    const task =
+      item.subtype === "task_requested" &&
+      item.eventPayload &&
+      typeof item.eventPayload === "object" &&
+      "task" in item.eventPayload
+        ? (item.eventPayload.task as TaskSummary)
+        : undefined
+
+    return {
+      id: item.id,
+      kind: "event",
+      conversationId: item.conversationId,
+      sequence: item.sequence,
+      sessionId: item.sessionId || "",
+      role: "system",
+      messageType: item.subtype,
+      content,
+      contentBlocks: blocks,
+      author: item.author,
+      fromActorId: item.author?.actorId,
+      fromWorkspaceMemberId: item.author?.workspaceMemberId,
+      actorName:
+        item.author?.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
+          ? item.author.name
+          : undefined,
+      actorRole: item.author?.role,
+      actorEmoji: item.author?.avatarEmoji,
+      createdAt: item.createdAt,
+      deliveryStatus: "sent",
+      eventType: item.subtype,
+      eventPayload: item.eventPayload,
+      task,
+    }
+  }
+
+  const metadata = item.metadata || {}
+
+  return {
+    id: item.id,
+    kind: "message",
+    conversationId: item.conversationId,
+    sequence: item.sequence,
+    sessionId: item.sessionId || "",
+    role: item.role,
+    messageType: item.subtype,
+    content: item.content,
+    contentBlocks: normalizeContentBlocks(item.contentBlocks),
+    author: item.author,
+    fromActorId: item.author?.actorId,
+    fromWorkspaceMemberId: item.author?.workspaceMemberId,
+    actorName:
+      item.author?.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
+        ? item.author.name
+        : undefined,
+    actorRole: item.author?.role,
+    actorEmoji: item.author?.avatarEmoji,
+    createdAt: item.createdAt,
+    clientMessageId: item.clientMessageId,
+    deliveryStatus: "sent",
+    metadata,
+    replyToItemId: item.replyToItemId,
+    replyTo: item.replyTo,
+    toolsUsed: metadata.toolsUsed as string[] | undefined,
+    serverToolCalls: metadata.serverToolCalls as ServerToolCall[] | undefined,
+    citationSources: metadata.citationSources as
+      | Record<string, { url: string; title: string }>
+      | undefined,
+    coordination: Boolean(metadata.coordination),
+    restrictedAudienceParticipantIds: item.restrictedAudienceParticipantIds,
+    transport: item.transport,
+    transportDeliveries: item.transportDeliveries,
+  }
+}
+
+function mergeMessagesWithOutbox(
+  loadedItems: ChatConversationItem[],
+  snapshot: ChatWorkspaceSnapshot,
+  conversationId: string
+) {
+  let nextMessages = sortMessages(loadedItems.map(chatItemToFeedMessage))
+  const conversation = snapshot.conversations.find(
+    (entry) => entry.conversationId === conversationId
+  )
+
+  const pendingEntries = Object.values(snapshot.outbox)
+    .filter((entry) => entry.conversationId === conversationId)
+    .sort((left, right) => left.optimisticSequence - right.optimisticSequence)
+
+  for (const entry of pendingEntries) {
+    const hasServerMessage = nextMessages.some(
+      (message) =>
+        message.clientMessageId &&
+        message.clientMessageId === entry.clientMessageId &&
+        message.id !== `local:${entry.clientMessageId}`
+    )
+
+    if (hasServerMessage) {
+      continue
+    }
+
+    nextMessages = sortMessages([
+      ...nextMessages.filter(
+        (message) => message.clientMessageId !== entry.clientMessageId
+      ),
+      outboxEntryToMessage(
+        entry,
+        conversation,
+        snapshot.workspaceMemberId ?? null
+      ),
+    ])
+  }
+
+  return nextMessages
+}
+
+function applyFeedMessageToConversation(
+  conversation: ConversationSummary,
+  item: FeedMessage
+) {
+  return {
+    ...conversation,
+    lastMessage: {
+      content: buildMessagePreview(item),
+      role: item.role,
+      actorName: item.actorName,
+      createdAt: item.createdAt,
+    },
+  }
+}
+
+function applyOutboxToConversations(
+  conversations: ConversationSummary[],
+  snapshot: ChatWorkspaceSnapshot,
+  runtimeMap: ConversationRuntimeMap
+) {
+  let nextConversations = conversations
+  const pendingEntries = Object.values(snapshot.outbox).sort(
+    (left, right) =>
+      new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+  )
+
+  for (const entry of pendingEntries) {
+    const rawConversation = snapshot.conversations.find(
+      (conversation) => conversation.conversationId === entry.conversationId
+    )
+    const optimisticMessage = outboxEntryToMessage(
+      entry,
+      rawConversation,
+      snapshot.workspaceMemberId ?? null
+    )
+
+    nextConversations = sortConversations(
+      nextConversations.map((conversation) =>
+        conversation.id === entry.conversationId &&
+        (!conversation.lastMessage ||
+          new Date(entry.createdAt).getTime() >=
+            new Date(conversation.lastMessage.createdAt).getTime())
+          ? applyRuntimeMapToConversation(
+              applyFeedMessageToConversation(conversation, optimisticMessage),
+              runtimeMap[conversation.id]
+            )
+          : conversation
+      )
+    )
+  }
+
+  return nextConversations
+}
+
+function sortConversations(conversations: ConversationSummary[]) {
+  return [...conversations].sort((left, right) => {
+    const leftAt = left.lastMessage?.createdAt || left.createdAt
+    const rightAt = right.lastMessage?.createdAt || right.createdAt
+    return new Date(rightAt).getTime() - new Date(leftAt).getTime()
+  })
+}
+
+export function runtimePhaseToBadgePhase(
+  runtime?: ActorRuntimeState
+): ThinkingPhase | undefined {
+  if (!runtime) return undefined
+  if (
+    runtime.health === ACTOR_RUNTIME_HEALTH.ERROR ||
+    runtime.phase === "error"
+  )
+    return "error"
+  if (runtime.phase === "tool") return "tool"
+  if (runtime.phase === "responding") return "responding"
+  if (
+    runtime.phase === "thinking" ||
+    runtime.laneState === "running" ||
+    runtime.laneState === "queued"
+  ) {
+    return "thinking"
+  }
+  return undefined
+}
+
+export function runtimeToAvatarStatus(
+  runtime?: ActorRuntimeState
+): ActorAvatarStatus | undefined {
+  if (!runtime) return undefined
+  return runtimePhaseToBadgePhase(runtime) || "idle"
+}
+
+export function remoteAgentRuntimeToAvatarStatus(
+  runtime?: RemoteAgentRuntimeState
+): RemoteAgentAvatarStatus | undefined {
+  return runtime?.state
+}
+
+function applyRuntimeToConversationMembers(
+  conversation: ConversationSummary,
+  runtime: ActorRuntimeState
+): ConversationSummary {
+  return {
+    ...conversation,
+    members: conversation.members.map((member) =>
+      member.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
+      member.id === runtime.actorId
+        ? { ...member, sessionStatus: runtime.laneState }
+        : member
+    ),
+  }
+}
+
+function deriveConversationStatus(
+  conversation: ConversationSummary,
+  runtimesForConversation?: Record<string, ActorRuntimeState>
+) {
+  const actorMembers = conversation.members.filter(
+    (member) => member.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
+  )
+  if (actorMembers.length === 0) return CONVERSATION_STATUS.COMPLETED
+  const hasOpenLane = actorMembers.some((member) => {
+    const runtime = runtimesForConversation?.[member.id]
+    const laneState = runtime?.laneState || member.sessionStatus
+    return laneState !== "closed"
+  })
+  return hasOpenLane
+    ? CONVERSATION_STATUS.ACTIVE
+    : CONVERSATION_STATUS.COMPLETED
+}
+
+function applyRuntimeMapToConversation(
+  conversation: ConversationSummary,
+  runtimesForConversation?: Record<string, ActorRuntimeState>
+): ConversationSummary {
+  if (!runtimesForConversation) {
+    return {
+      ...conversation,
+      status: deriveConversationStatus(conversation, undefined),
+    }
+  }
+
+  let nextConversation = conversation
+  for (const runtime of Object.values(runtimesForConversation)) {
+    nextConversation = applyRuntimeToConversationMembers(
+      nextConversation,
+      runtime
+    )
+  }
+
+  return {
+    ...nextConversation,
+    status: deriveConversationStatus(nextConversation, runtimesForConversation),
+  }
+}
+
+function deriveConversationSummaries(
+  snapshot: ChatWorkspaceSnapshot,
+  runtimeMap: ConversationRuntimeMap
+) {
+  const base = sortRawConversations(snapshot.conversations).map(
+    (conversation) =>
+      applyRuntimeMapToConversation(
+        rawConversationToSummary(conversation, snapshot),
+        runtimeMap[conversation.conversationId]
+      )
+  )
+
+  return applyOutboxToConversations(base, snapshot, runtimeMap)
+}
+
+function createStateFromSnapshot(
+  currentState: ChatState,
+  snapshot: ChatWorkspaceSnapshot,
+  input?: {
+    selectedConversationId?: string | null
+    visibleConversationId?: string | null
+    loadedMessageItems?: ChatConversationItem[]
+  }
+) {
+  const candidateSelectedConversationId =
+    input?.selectedConversationId === undefined
+      ? currentState.selectedConversationId
+      : input.selectedConversationId
+
+  const selectedConversationId =
+    candidateSelectedConversationId &&
+    snapshot.conversations.some(
+      (conversation) =>
+        conversation.conversationId === candidateSelectedConversationId
+    )
+      ? candidateSelectedConversationId
+      : null
+
+  const loadedMessageItems =
+    input?.loadedMessageItems === undefined
+      ? selectedConversationId === currentState.selectedConversationId
+        ? currentState.loadedMessageItems
+        : []
+      : input.loadedMessageItems
+
+  const visibleConversationId =
+    input?.visibleConversationId === undefined
+      ? currentState.visibleConversationId === selectedConversationId
+        ? currentState.visibleConversationId
+        : null
+      : input.visibleConversationId
+
+  const conversations = deriveConversationSummaries(
+    snapshot,
+    currentState.runtimeMap
+  )
+  const messages =
+    selectedConversationId && loadedMessageItems.length >= 0
+      ? mergeMessagesWithOutbox(
+          loadedMessageItems,
+          snapshot,
+          selectedConversationId
+        )
+      : []
+
+  return {
+    snapshot,
+    activeWorkspaceId: snapshot.workspaceId,
+    workspaceMemberId: snapshot.workspaceMemberId ?? null,
+    clientInstanceId: snapshot.clientInstanceId ?? null,
+    outbox: snapshot.outbox,
+    pendingReads: snapshot.pendingReads,
+    conversations,
+    messages: selectedConversationId ? messages : [],
+    totalUnread: sumConversationUnread(conversations),
+    selectedConversationId,
+    visibleConversationId,
+    loadedMessageItems: selectedConversationId ? loadedMessageItems : [],
+  }
+}
+
+function shouldIncrementUnreadCount(
+  conversation: ChatConversationView,
+  item: ChatConversationItem
+) {
+  return (
+    item.itemType === "message" &&
+    item.scope === "shared" &&
+    item.surface === "visible" &&
+    item.authorParticipantId !== conversation.viewerParticipantId
+  )
+}
+
+function applyReadWatermarkAck(
+  snapshot: ChatWorkspaceSnapshot,
+  response: ChatConversationReadWatermarkResponse
+) {
+  const pendingReads = { ...snapshot.pendingReads }
+  const queued = pendingReads[response.conversationId]
+  if (queued && queued.readUpToSequence <= response.readWatermarkSequence) {
+    delete pendingReads[response.conversationId]
+  }
+
+  return {
+    ...snapshot,
+    pendingReads,
+    conversations: snapshot.conversations.map((conversation) =>
+      conversation.conversationId === response.conversationId
+        ? { ...conversation, unreadCount: 0 }
+        : conversation
+    ),
+  }
+}
+
+function clearDeliveredOutbox(
+  outbox: StoredChatQueueState["outbox"],
+  items: ChatConversationItem[]
+) {
+  const deliveredClientIds = new Set(
+    items
+      .map((item) => item.clientMessageId)
+      .filter((value): value is string => Boolean(value))
+  )
+  if (deliveredClientIds.size === 0) {
+    return outbox
+  }
+
+  const nextOutbox = { ...outbox }
+  for (const clientMessageId of deliveredClientIds) {
+    delete nextOutbox[clientMessageId]
+  }
+  return nextOutbox
+}
+
+function applySyncEventToSnapshot(
+  snapshot: ChatWorkspaceSnapshot,
+  event: ChatSyncEvent,
+  visibleConversationId?: string | null
+) {
+  // NOTE: the persisted inboxCursor is NOT advanced here. It is the authoritative
+  // resume cursor and is advanced ONLY by the contiguous sync drain and by
+  // bootstrap (see syncFromServer / bootstrapWorkspaceSnapshot). Live frames
+  // advance the in-memory liveCursor separately, in handleSyncEvent, after the
+  // ordering check — so a best-effort/out-of-order live frame can never push the
+  // durable resume point past an event that was never applied.
+  let nextSnapshot: ChatWorkspaceSnapshot = snapshot
+
+  switch (event.eventType) {
+    case "conversation.upsert": {
+      const payload =
+        event.payload as ChatSyncEvent<"conversation.upsert">["payload"]
+      nextSnapshot = upsertConversationWithTombstoneGuard(
+        nextSnapshot,
+        payload.conversation,
+        event.memberSeq,
+        upsertRawConversation
+      )
+      break
+    }
+    case "conversation.membership.updated": {
+      const payload =
+        event.payload as ChatSyncEvent<"conversation.membership.updated">["payload"]
+      if (payload.selfState === "active") {
+        // Re-added: clear the tombstone so the accompanying/next
+        // conversation.upsert can re-introduce the conversation. Seq-guarded so
+        // a stale {active} can't clear a newer kick tombstone.
+        nextSnapshot = clearConversationTombstone(
+          nextSnapshot,
+          payload.conversationId,
+          event.memberSeq
+        )
+      } else {
+        // Removed / left: drop the conversation and tombstone it at this seq.
+        nextSnapshot = pruneConversationFromSnapshot(
+          nextSnapshot,
+          payload.conversationId,
+          event.memberSeq
+        )
+      }
+      break
+    }
+    case "conversation.item.created": {
+      const payload =
+        event.payload as ChatSyncEvent<"conversation.item.created">["payload"]
+      const currentConversation = nextSnapshot.conversations.find(
+        (conversation) => conversation.conversationId === payload.conversationId
+      )
+
+      nextSnapshot = {
+        ...nextSnapshot,
+        outbox: clearDeliveredOutbox(nextSnapshot.outbox, [payload.item]),
+      }
+
+      if (!currentConversation) {
+        break
+      }
+
+      // Idempotency guard: replay (every reconnect re-drains confirmed..head)
+      // must not double-count unread or regress lastItem. If this item's
+      // sequence is not newer than what the conversation already reflects, skip
+      // the unread bump and the lastItem/updatedAt overwrite.
+      const isNewerItem =
+        !currentConversation.lastItem ||
+        payload.item.sequence > currentConversation.lastItem.sequence
+      if (!isNewerItem) {
+        break
+      }
+
+      nextSnapshot = {
+        ...nextSnapshot,
+        conversations: upsertRawConversation(nextSnapshot.conversations, {
+          ...currentConversation,
+          unreadCount:
+            visibleConversationId === payload.conversationId
+              ? currentConversation.unreadCount
+              : shouldIncrementUnreadCount(currentConversation, payload.item)
+                ? currentConversation.unreadCount + 1
+                : currentConversation.unreadCount,
+          updatedAt: payload.item.createdAt,
+          lastItem: {
+            itemId: payload.item.id,
+            sequence: payload.item.sequence,
+            itemType: payload.item.itemType,
+            subtype: payload.item.subtype,
+            previewText:
+              extractText(payload.item.contentBlocks).trim() ||
+              payload.item.content ||
+              (payload.item.itemType === "event"
+                ? payload.item.subtype
+                : "Attachment"),
+            authorParticipantId: payload.item.authorParticipantId,
+            author: payload.item.author,
+            createdAt: payload.item.createdAt,
+          },
+        }),
+      }
+      break
+    }
+    case "conversation.read.updated": {
+      const payload =
+        event.payload as ChatSyncEvent<"conversation.read.updated">["payload"]
+      if (payload.workspaceMemberId !== nextSnapshot.workspaceMemberId) {
+        break
+      }
+
+      nextSnapshot = applyReadWatermarkAck(nextSnapshot, {
+        conversationId: payload.conversationId,
+        workspaceMemberId: payload.workspaceMemberId,
+        participantId: payload.participantId,
+        readWatermarkSequence: payload.readWatermarkSequence,
+        lastReadAt: payload.lastReadAt,
+      })
+      break
+    }
+    case "task.updated": {
+      const payload = event.payload as ChatSyncEvent<"task.updated">["payload"]
+      nextSnapshot = applyTaskUpdatedToSnapshot(nextSnapshot, payload)
+      break
+    }
+  }
+
+  return nextSnapshot
+}
+
+async function bootstrapWorkspaceSnapshot(
+  workspaceId: string,
+  snapshot: ChatWorkspaceSnapshot | null
+) {
+  const bootstrap = await api.getChatBootstrap(workspaceId)
+
+  let baseSnapshot = snapshot ?? createEmptyWorkspaceSnapshot(workspaceId)
+  if (
+    baseSnapshot.workspaceMemberId &&
+    baseSnapshot.workspaceMemberId !== bootstrap.workspaceMemberId
+  ) {
+    baseSnapshot = createEmptyWorkspaceSnapshot(workspaceId)
+  }
+
+  const clientInstanceInput = {
+    platform: "web-desktop",
+    deviceLabel: buildDesktopDeviceLabel(),
+    metadata: {
+      workspaceMemberId: bootstrap.workspaceMemberId,
+    },
+  }
+
+  let clientInstanceId = baseSnapshot.clientInstanceId || null
+  if (clientInstanceId) {
+    const response = await api.touchChatClientInstance(
+      workspaceId,
+      clientInstanceId,
+      clientInstanceInput
+    )
+    clientInstanceId = response.clientInstanceId
+  }
+
+  if (!clientInstanceId) {
+    const response = await api.createChatClientInstance(
+      workspaceId,
+      clientInstanceInput
+    )
+    clientInstanceId = response.clientInstanceId
+  }
+
+  // Authoritative prune: the bootstrap conversation set is the member's current
+  // live set. Any locally-known conversation NOT in it (e.g. removed while this
+  // device was offline, so it never saw membership.updated) is pruned and
+  // tombstoned at the bootstrap cursor — guarding against a stale lower-seq
+  // upsert resurrecting it. Conversely, conversations the server returns as live
+  // get their tombstone cleared (legitimate re-add).
+  const liveIds = new Set(
+    bootstrap.conversations.map((conversation) => conversation.conversationId)
+  )
+  let prunedBase: ChatWorkspaceSnapshot = baseSnapshot
+  for (const conversation of baseSnapshot.conversations) {
+    if (!liveIds.has(conversation.conversationId)) {
+      prunedBase = pruneConversationFromSnapshot(
+        prunedBase,
+        conversation.conversationId,
+        bootstrap.nextInboxCursor
+      )
+    }
+  }
+  for (const conversationId of liveIds) {
+    prunedBase = clearConversationTombstone(prunedBase, conversationId)
+  }
+
+  // Bootstrap advances the authoritative resume cursor; refresh the live cursor
+  // to match so the next live frame isn't misjudged as a gap.
+  const nextInboxCursor = Math.max(
+    prunedBase.inboxCursor,
+    bootstrap.nextInboxCursor
+  )
+  setLiveCursor(workspaceId, nextInboxCursor)
+
+  return {
+    ...prunedBase,
+    workspaceId,
+    workspaceMemberId: bootstrap.workspaceMemberId,
+    clientInstanceId,
+    inboxCursor: nextInboxCursor,
+    lastBootstrappedAt: nowIsoInstant(),
+    conversations: bootstrap.conversations.reduce(
+      upsertRawConversation,
+      prunedBase.conversations
+    ),
+  }
+}
+
+async function flushPendingReadsInternal(snapshot: ChatWorkspaceSnapshot) {
+  if (!snapshot.clientInstanceId) {
+    return snapshot
+  }
+
+  // S10: when the service worker is actively controlling the page, it owns
+  // read-watermark flushing exclusively. The main-thread store still tracks
+  // pendingReads optimistically (so the unread badge clears immediately) but
+  // skips the POST — the SW will pick the entries up via the shared IDB
+  // queue and broadcast `chat:queue-updated` when done.
+  if (isChatServiceWorkerActive()) {
+    return snapshot
+  }
+
+  let nextSnapshot = snapshot
+  const pendingReads = Object.values(snapshot.pendingReads).sort(
+    (left, right) => left.readUpToSequence - right.readUpToSequence
+  )
+
+  for (const entry of pendingReads) {
+    try {
+      const response = await api.updateChatConversationReadWatermark(
+        snapshot.workspaceId,
+        entry.conversationId,
+        {
+          clientInstanceId: snapshot.clientInstanceId,
+          readUpToSequence: entry.readUpToSequence,
+          lastVisibleSequence: entry.lastVisibleSequence,
+        }
+      )
+      nextSnapshot = applyReadWatermarkAck(nextSnapshot, response)
+    } catch {
+      break
+    }
+  }
+
+  return nextSnapshot
+}
+
+async function flushOutboxInternal(
+  snapshot: ChatWorkspaceSnapshot,
+  selectedConversationId: string | null,
+  loadedMessageItems: ChatConversationItem[]
+) {
+  if (!snapshot.clientInstanceId) {
+    return {
+      snapshot,
+      loadedMessageItems,
+      retryAttemptCount: null as number | null,
+    }
+  }
+
+  // S10: when the service worker is the active flush owner, the main thread
+  // skips POSTing outbox entries. The SW reads the same IDB queue and
+  // POSTs once per clientMessageId, then broadcasts `chat:queue-updated`.
+  if (isChatServiceWorkerActive()) {
+    return {
+      snapshot,
+      loadedMessageItems,
+      retryAttemptCount: null as number | null,
+    }
+  }
+
+  let nextSnapshot = snapshot
+  let nextLoadedMessageItems = loadedMessageItems
+  let retryAttemptCount: number | null = null
+
+  const entries = Object.values(snapshot.outbox).sort(
+    (left, right) => left.optimisticSequence - right.optimisticSequence
+  )
+
+  for (const entry of entries) {
+    nextSnapshot = {
+      ...nextSnapshot,
+      outbox: {
+        ...nextSnapshot.outbox,
+        [entry.clientMessageId]: {
+          ...nextSnapshot.outbox[entry.clientMessageId]!,
+          attemptCount:
+            nextSnapshot.outbox[entry.clientMessageId]!.attemptCount + 1,
+          lastAttemptAt: nowIsoInstant(),
+        },
+      },
+    }
+
+    try {
+      const response = await api.sendChatConversationMessage(
+        snapshot.workspaceId,
+        entry.conversationId,
+        {
+          clientInstanceId: snapshot.clientInstanceId,
+          clientMessageId: entry.clientMessageId,
+          contentBlocks: entry.contentBlocks,
+          replyToItemId: entry.replyToItemId,
+        }
+      )
+
+      const nextOutbox = { ...nextSnapshot.outbox }
+      delete nextOutbox[entry.clientMessageId]
+
+      const currentConversation = nextSnapshot.conversations.find(
+        (conversation) => conversation.conversationId === entry.conversationId
+      )
+
+      nextSnapshot = {
+        ...nextSnapshot,
+        outbox: nextOutbox,
+        conversations: currentConversation
+          ? upsertRawConversation(nextSnapshot.conversations, {
+              ...currentConversation,
+              updatedAt: response.item.createdAt,
+              lastItem: {
+                itemId: response.item.id,
+                sequence: response.item.sequence,
+                itemType: response.item.itemType,
+                subtype: response.item.subtype,
+                previewText:
+                  extractText(response.item.contentBlocks).trim() ||
+                  response.item.content ||
+                  (response.item.itemType === "event"
+                    ? response.item.subtype
+                    : "Attachment"),
+                authorParticipantId: response.item.authorParticipantId,
+                author: response.item.author,
+                createdAt: response.item.createdAt,
+              },
+            })
+          : nextSnapshot.conversations,
+      }
+
+      if (selectedConversationId === entry.conversationId) {
+        nextLoadedMessageItems = mergeRawItems(nextLoadedMessageItems, [
+          response.item,
+        ])
+      }
+    } catch (error) {
+      const currentEntry = nextSnapshot.outbox[entry.clientMessageId]
+      if (!currentEntry) {
+        break
+      }
+
+      retryAttemptCount = currentEntry.attemptCount
+      nextSnapshot = {
+        ...nextSnapshot,
+        outbox: {
+          ...nextSnapshot.outbox,
+          [entry.clientMessageId]: {
+            ...currentEntry,
+            status: "retrying",
+            // datetime-ok: records the FIRST failure instant; the || only
+            // preserves the original failure time across retries (catch path).
+            firstFailedAt: currentEntry.firstFailedAt || nowIsoInstant(),
+            lastErrorMessage:
+              error instanceof Error ? error.message : "Failed to send message",
+          },
+        },
+      }
+      break
+    }
+  }
+
+  return {
+    snapshot: nextSnapshot,
+    loadedMessageItems: nextLoadedMessageItems,
+    retryAttemptCount,
+  }
+}
+
+export const useChatStore = create<ChatState>((set, get) => ({
+  activeWorkspaceId: null,
+  workspaceMemberId: null,
+  clientInstanceId: null,
+  selectedConversationId: null,
+  visibleConversationId: null,
+  conversations: [],
+  messages: [],
+  outbox: {},
+  pendingReads: {},
+  loadingConversations: false,
+  loadingMessages: false,
+  syncing: false,
+  runtimeMap: {},
+  remoteAgentRuntimeMap: {},
+  runtimeSeqMap: {},
+  totalUnread: 0,
+  typingByConversation: {},
+  snapshot: null,
+  loadedMessageItems: [],
+
+  deactivate: () => {
+    clearOutboxRetryTimer()
+    bootstrapPromise = null
+    bootstrapWorkspaceId = null
+    syncPromise = null
+
+    set({
+      activeWorkspaceId: null,
+      workspaceMemberId: null,
+      clientInstanceId: null,
+      selectedConversationId: null,
+      visibleConversationId: null,
+      conversations: [],
+      messages: [],
+      outbox: {},
+      pendingReads: {},
+      loadingConversations: false,
+      loadingMessages: false,
+      syncing: false,
+      runtimeMap: {},
+      remoteAgentRuntimeMap: {},
+      runtimeSeqMap: {},
+      totalUnread: 0,
+      snapshot: null,
+      loadedMessageItems: [],
+    })
+  },
+
+  loadConversations: async (workspaceId, options) => {
+    const currentState = get()
+    const shouldShowLoading =
+      !options?.silent || currentState.conversations.length === 0
+
+    if (bootstrapPromise && bootstrapWorkspaceId === workspaceId) {
+      return bootstrapPromise
+    }
+
+    bootstrapWorkspaceId = workspaceId
+    bootstrapPromise = (async () => {
+      if (shouldShowLoading) {
+        set({
+          activeWorkspaceId: workspaceId,
+          loadingConversations: true,
+        })
+      } else if (get().activeWorkspaceId !== workspaceId) {
+        set({
+          activeWorkspaceId: workspaceId,
+        })
+      }
+
+      const persistedQueueState =
+        (await loadStoredChatQueueState(workspaceId).catch(() => null)) ||
+        createEmptyStoredChatQueueState(workspaceId)
+
+      if (get().activeWorkspaceId && get().activeWorkspaceId !== workspaceId) {
+        return
+      }
+
+      const currentSnapshot = get().snapshot
+      const baseSnapshot =
+        currentSnapshot?.workspaceId === workspaceId
+          ? mergeStoredQueueIntoSnapshot(currentSnapshot, persistedQueueState)
+          : mergeStoredQueueIntoSnapshot(null, persistedQueueState)
+
+      const nextSnapshot = await bootstrapWorkspaceSnapshot(
+        workspaceId,
+        baseSnapshot
+      )
+
+      if (get().activeWorkspaceId && get().activeWorkspaceId !== workspaceId) {
+        return
+      }
+
+      set((state) => ({
+        ...createStateFromSnapshot(state, nextSnapshot),
+        loadingConversations: false,
+      }))
+      void queuePersistSnapshot(baseSnapshot, nextSnapshot)
+      await get().syncFromServer(workspaceId)
+    })()
+      .catch((error) => {
+        clientLog.error("Failed to load conversations:", error)
+        set({
+          loadingConversations: false,
+        })
+      })
+      .finally(() => {
+        if (bootstrapWorkspaceId === workspaceId) {
+          bootstrapWorkspaceId = null
+          bootstrapPromise = null
+        }
+      })
+
+    return bootstrapPromise
+  },
+
+  reloadPersistedSnapshot: async (workspaceId) => {
+    const persistedQueueState = await loadStoredChatQueueState(
+      workspaceId
+    ).catch(() => null)
+    if (!persistedQueueState) {
+      return
+    }
+
+    if (get().activeWorkspaceId && get().activeWorkspaceId !== workspaceId) {
+      return
+    }
+
+    set((state) => {
+      if (!state.snapshot || state.snapshot.workspaceId !== workspaceId) {
+        return state
+      }
+
+      const mergedSnapshot = mergeStoredQueueIntoSnapshot(
+        state.snapshot,
+        persistedQueueState
+      )
+      return {
+        ...createStateFromSnapshot(state, mergedSnapshot),
+      }
+    })
+  },
+
+  hydrateOutbox: async (workspaceId) => {
+    await get().reloadPersistedSnapshot(workspaceId)
+  },
+
+  selectConversation: (conversationId) => {
+    const currentSelection = get().selectedConversationId
+    if (currentSelection === conversationId) {
+      return
+    }
+
+    set({
+      selectedConversationId: conversationId,
+      loadedMessageItems: [],
+      messages: [],
+      loadingMessages: true,
+    })
+  },
+
+  setVisibleConversation: (conversationId) => {
+    set((state) => ({
+      visibleConversationId: conversationId,
+      ...(state.snapshot
+        ? createStateFromSnapshot(state, state.snapshot, {
+            visibleConversationId: conversationId,
+          })
+        : {}),
+    }))
+  },
+
+  loadMessages: async (workspaceId, conversationId) => {
+    const currentSnapshot = get().snapshot
+    if (!currentSnapshot?.clientInstanceId) {
+      set({ loadingMessages: false })
+      return
+    }
+    set({ loadingMessages: true })
+
+    try {
+      const response = await api.getChatConversationMessages(
+        workspaceId,
+        conversationId,
+        {
+          clientInstanceId: currentSnapshot.clientInstanceId,
+          limit: 100,
+        }
+      )
+
+      set((state) => {
+        const baseSnapshot =
+          state.snapshot ?? createEmptyWorkspaceSnapshot(workspaceId)
+        const nextRuntimeMap = {
+          ...state.runtimeMap,
+          [conversationId]: response.runtimeByActor || {},
+        }
+        const nextRemoteAgentRuntimeMap = {
+          ...state.remoteAgentRuntimeMap,
+          ...(response.runtimeByRemoteAgent || {}),
+        }
+
+        if (state.selectedConversationId !== conversationId) {
+          return {
+            runtimeMap: nextRuntimeMap,
+            remoteAgentRuntimeMap: nextRemoteAgentRuntimeMap,
+          }
+        }
+
+        const nextSnapshot = {
+          ...baseSnapshot,
+          conversations: upsertRawConversation(
+            baseSnapshot.conversations,
+            response.conversation
+          ),
+          outbox: clearDeliveredOutbox(baseSnapshot.outbox, response.items),
+        }
+
+        void queuePersistSnapshot(baseSnapshot, nextSnapshot)
+
+        return {
+          ...createStateFromSnapshot(
+            {
+              ...state,
+              runtimeMap: nextRuntimeMap,
+              remoteAgentRuntimeMap: nextRemoteAgentRuntimeMap,
+            } as ChatState,
+            nextSnapshot,
+            {
+              loadedMessageItems: mergeRawItems([], response.items),
+            }
+          ),
+          runtimeMap: nextRuntimeMap,
+          remoteAgentRuntimeMap: nextRemoteAgentRuntimeMap,
+          loadingMessages: false,
+        }
+      })
+    } catch (error) {
+      clientLog.error("Failed to load messages:", error)
+      set((state) =>
+        state.selectedConversationId === conversationId
+          ? { loadingMessages: false }
+          : state
+      )
+    }
+  },
+
+  loadOlderMessages: async (
+    workspaceId,
+    conversationId,
+    beforeSequence,
+    limit = 100
+  ) => {
+    const currentSnapshot = get().snapshot
+    if (!currentSnapshot?.clientInstanceId) {
+      return null
+    }
+    try {
+      const response = await api.getChatConversationMessages(
+        workspaceId,
+        conversationId,
+        {
+          clientInstanceId: currentSnapshot.clientInstanceId,
+          beforeSequence,
+          limit,
+        }
+      )
+      set((state) => {
+        if (state.selectedConversationId !== conversationId) {
+          return state
+        }
+        return {
+          loadedMessageItems: mergeRawItems(
+            response.items,
+            state.loadedMessageItems
+          ),
+        }
+      })
+      return {
+        items: response.items as never,
+        hasMoreBefore: response.hasMoreBefore,
+      }
+    } catch (error) {
+      clientLog.error("Failed to load older messages:", error)
+      return null
+    }
+  },
+
+  sendMessage: async (workspaceId, conversationId, input) => {
+    const snapshot = get().snapshot
+    if (!snapshot || snapshot.workspaceId !== workspaceId) {
+      throw new Error("No active workspace")
+    }
+    if (!snapshot.clientInstanceId) {
+      throw new Error("Chat is still connecting")
+    }
+
+    const existingSequences = [
+      ...get()
+        .loadedMessageItems.filter(
+          (item) => item.conversationId === conversationId
+        )
+        .map((item) => item.sequence),
+      ...Object.values(snapshot.outbox)
+        .filter((entry) => entry.conversationId === conversationId)
+        .map((entry) => entry.optimisticSequence),
+      0,
+    ]
+
+    // Monotonic, clock-jump-safe: never decreases even if the wall clock moves
+    // backward. Date.now()*1000 only seeds the high range so optimistic entries
+    // still sort after real server sequences; the floor preserves order among
+    // pending entries regardless of clock skew. (datetime-ok: createdAt below is
+    // a provisional optimistic time, reconciled to the server value by id.)
+    optimisticSequenceFloor =
+      Math.max(
+        optimisticSequenceFloor,
+        Date.now() * 1000,
+        ...existingSequences
+      ) + 1
+    const optimisticSequence = optimisticSequenceFloor
+
+    const entry: OutboxEntry = {
+      clientMessageId: createUuid(),
+      conversationId,
+      contentBlocks: input.contentBlocks,
+      replyToItemId: input.replyToItemId,
+      replyTo: input.replyTo,
+      createdAt: nowIsoInstant(),
+      optimisticSequence,
+      status: "sending",
+      attemptCount: 0,
+    }
+
+    set((state) => {
+      const currentSnapshot = state.snapshot
+      if (!currentSnapshot) {
+        return state
+      }
+
+      const nextSnapshot = {
+        ...currentSnapshot,
+        outbox: {
+          ...currentSnapshot.outbox,
+          [entry.clientMessageId]: entry,
+        },
+      }
+
+      void queuePersistSnapshot(currentSnapshot, nextSnapshot)
+      return createStateFromSnapshot(state, nextSnapshot)
+    })
+
+    await get().flushOutbox(workspaceId)
+  },
+
+  flushOutbox: async (workspaceId) => {
+    const snapshot = get().snapshot
+    if (!snapshot) {
+      return
+    }
+    if (workspaceId && snapshot.workspaceId !== workspaceId) {
+      return
+    }
+
+    clearOutboxRetryTimer()
+
+    const base = snapshot
+    const result = await flushOutboxInternal(
+      base,
+      get().selectedConversationId,
+      get().loadedMessageItems
+    )
+
+    // Rebase onto the LATEST snapshot via a base-aware 3-way merge: a kick
+    // (membership.updated) may have pruned/tombstoned a conversation, or the
+    // user may have queued a NEW outbox message, while the POST was in flight.
+    // Writing result.snapshot directly would reinsert removed state or drop the
+    // new message.
+    set((state) => {
+      if (!state.snapshot) {
+        return state
+      }
+      const merged = rebaseQueueFieldsOntoLatest(
+        base,
+        state.snapshot,
+        result.snapshot
+      )
+      void queuePersistSnapshot(state.snapshot, merged)
+      return createStateFromSnapshot(state, merged, {
+        loadedMessageItems:
+          get().selectedConversationId === state.selectedConversationId
+            ? result.loadedMessageItems
+            : state.loadedMessageItems,
+      })
+    })
+
+    if (result.retryAttemptCount !== null) {
+      scheduleOutboxRetry(result.retryAttemptCount)
+    }
+  },
+
+  syncFromServer: async (workspaceId) => {
+    const currentSnapshot = get().snapshot
+    const effectiveWorkspaceId =
+      workspaceId || currentSnapshot?.workspaceId || get().activeWorkspaceId
+
+    if (!effectiveWorkspaceId) {
+      return
+    }
+
+    if (syncPromise) {
+      return syncPromise
+    }
+
+    needsResync = false
+    set({ syncing: true })
+    syncPromise = (async () => {
+      const startSnapshot = get().snapshot
+      if (
+        !startSnapshot ||
+        startSnapshot.workspaceId !== effectiveWorkspaceId
+      ) {
+        return
+      }
+
+      // Apply drained events DIRECTLY onto the live store, page by page (mobile
+      // pattern). We never build an isolated working snapshot and overwrite at
+      // the end — that would clobber any live frame applied during the drain.
+      // Each page's set() reads the LATEST state.snapshot, so live messages /
+      // reads / kicks that landed concurrently are preserved. The reducer is
+      // idempotent (item dedupe by id, read watermark Math.max, upsert
+      // tombstone-guarded, unread sequence-guarded), so re-applying a frame the
+      // live path already applied is a no-op.
+      const runtimeUpdates: Record<string, RemoteAgentRuntimeState> = {}
+      let cursor = startSnapshot.inboxCursor
+      let hasMore = true
+
+      while (hasMore) {
+        if (get().snapshot?.workspaceId !== effectiveWorkspaceId) {
+          return
+        }
+
+        const response = await api.getChatSync(effectiveWorkspaceId, {
+          cursor,
+          limit: 200,
+        })
+
+        const pageCursor = response.nextCursor
+        set((state) => {
+          const live = state.snapshot
+          if (!live || live.workspaceId !== effectiveWorkspaceId) {
+            return state
+          }
+          let nextSnapshot = live
+          let nextLoadedItems = state.loadedMessageItems
+          // Frames the live path already applied (memberSeq <= live cursor) are
+          // skipped: re-applying is mostly idempotent but a stale
+          // membership.updated{active} or upsert could clear/resurrect a newer
+          // kick. The live cursor is the high-water mark of in-order live frames.
+          const liveBase = getLiveCursor(effectiveWorkspaceId, live.inboxCursor)
+          for (const event of response.events) {
+            if (!shouldApplyDrainedSyncEvent(event.memberSeq, liveBase)) {
+              continue
+            }
+            nextSnapshot = applySyncEventToSnapshot(
+              nextSnapshot,
+              event,
+              state.visibleConversationId
+            )
+            if (
+              event.eventType === "conversation.item.created" &&
+              (
+                event.payload as ChatSyncEvent<"conversation.item.created">["payload"]
+              ).conversationId === state.selectedConversationId
+            ) {
+              nextLoadedItems = mergeRawItems(nextLoadedItems, [
+                (
+                  event.payload as ChatSyncEvent<"conversation.item.created">["payload"]
+                ).item,
+              ])
+            } else if (
+              event.eventType === "task.updated" &&
+              (event.payload as ChatSyncEvent<"task.updated">["payload"])
+                .conversationId === state.selectedConversationId
+            ) {
+              nextLoadedItems = patchTaskInRawItems(
+                nextLoadedItems,
+                event.payload as ChatSyncEvent<"task.updated">["payload"]
+              )
+            } else if (event.eventType === "remote_agent.runtime_updated") {
+              const payload =
+                event.payload as ChatSyncEvent<"remote_agent.runtime_updated">["payload"]
+              runtimeUpdates[payload.remoteAgentId] = payload.snapshot
+            }
+          }
+          // Advance the authoritative resume cursor to the drained position
+          // (monotonic — never moves backward vs a concurrent live/bootstrap
+          // advance).
+          nextSnapshot = {
+            ...nextSnapshot,
+            inboxCursor: Math.max(nextSnapshot.inboxCursor, pageCursor),
+          }
+          void queuePersistSnapshot(live, nextSnapshot)
+          return {
+            ...createStateFromSnapshot(state, nextSnapshot, {
+              loadedMessageItems: nextLoadedItems,
+            }),
+            remoteAgentRuntimeMap: {
+              ...state.remoteAgentRuntimeMap,
+              ...runtimeUpdates,
+            },
+          }
+        })
+
+        cursor = pageCursor
+        hasMore = response.hasMore
+      }
+
+      // Refresh the in-memory live cursor so the next live frame isn't
+      // misjudged as a gap (persisted cursor moved; liveCursor must follow).
+      setLiveCursor(effectiveWorkspaceId, cursor)
+
+      // Flush reads + outbox against the LATEST snapshot, and write each result
+      // back with a base-aware 3-way rebase (drop a result if the conversation
+      // was pruned/tombstoned by a live kick during the network round-trip;
+      // preserve a read/message queued concurrently).
+      const readBase = get().snapshot ?? startSnapshot
+      const afterReads = await flushPendingReadsInternal(readBase)
+      set((state) => {
+        if (!state.snapshot) {
+          return state
+        }
+        const previous = state.snapshot
+        const merged = rebaseQueueFieldsOntoLatest(
+          readBase,
+          previous,
+          afterReads
+        )
+        // Persist with previous→merged diff so ACK'd pendingReads are actually
+        // removed from IndexedDB (a same-snapshot diff would be a no-op and the
+        // entry could be restored + re-flushed on reload).
+        void queuePersistSnapshot(previous, merged)
+        return createStateFromSnapshot(state, merged)
+      })
+
+      const outboxBase = get().snapshot ?? startSnapshot
+      const outboxResult = await flushOutboxInternal(
+        outboxBase,
+        get().selectedConversationId,
+        get().loadedMessageItems
+      )
+      set((state) => {
+        if (!state.snapshot) {
+          return state
+        }
+        const previous = state.snapshot
+        const merged = rebaseQueueFieldsOntoLatest(
+          outboxBase,
+          previous,
+          outboxResult.snapshot
+        )
+        void queuePersistSnapshot(previous, merged)
+        return createStateFromSnapshot(state, merged, {
+          loadedMessageItems:
+            get().selectedConversationId === state.selectedConversationId
+              ? outboxResult.loadedMessageItems
+              : state.loadedMessageItems,
+        })
+      })
+
+      if (outboxResult.retryAttemptCount !== null) {
+        scheduleOutboxRetry(outboxResult.retryAttemptCount)
+      }
+    })()
+      .catch((error) => {
+        clientLog.error("Failed to sync chat inbox:", error)
+      })
+      .finally(() => {
+        syncPromise = null
+        set({ syncing: false })
+        // A live gap arrived mid-sync; the drain resumed below it, so run once
+        // more to backfill the gap + the frame that triggered it.
+        if (needsResync) {
+          needsResync = false
+          void get().syncFromServer(effectiveWorkspaceId)
+        }
+      })
+
+    return syncPromise
+  },
+
+  createWorkspaceThread: async (workspaceId, kind, actorIds, options) => {
+    const response = await api.createChatConversation(workspaceId, {
+      clientRequestId: createUuid(),
+      kind,
+      title: options?.title,
+      actorIds,
+      workspaceMemberIds: options?.workspaceMemberIds ?? [],
+      remoteAgentIds: options?.remoteAgentIds ?? [],
+      metadata: options?.metadata,
+    })
+
+    if (get().activeWorkspaceId === workspaceId && get().snapshot) {
+      set((state) => {
+        if (!state.snapshot || state.snapshot.workspaceId !== workspaceId) {
+          return state
+        }
+
+        const nextSnapshot = {
+          ...state.snapshot,
+          conversations: upsertRawConversation(
+            state.snapshot.conversations,
+            response.conversation
+          ),
+        }
+
+        return createStateFromSnapshot(state, nextSnapshot)
+      })
+    }
+
+    return response.conversation.conversationId
+  },
+
+  markConversationRead: async (
+    conversationId,
+    readUpToSequence,
+    lastVisibleSequence
+  ) => {
+    const snapshot = get().snapshot
+    if (!snapshot) {
+      return
+    }
+
+    const normalizedReadUpToSequence = Math.max(0, Math.floor(readUpToSequence))
+    const normalizedLastVisibleSequence = Math.max(
+      normalizedReadUpToSequence,
+      Math.floor(lastVisibleSequence ?? normalizedReadUpToSequence)
+    )
+
+    const nextSnapshot: ChatWorkspaceSnapshot = {
+      ...snapshot,
+      pendingReads: {
+        ...snapshot.pendingReads,
+        [conversationId]: {
+          conversationId,
+          readUpToSequence: Math.max(
+            normalizedReadUpToSequence,
+            snapshot.pendingReads[conversationId]?.readUpToSequence || 0
+          ),
+          lastVisibleSequence: Math.max(
+            normalizedLastVisibleSequence,
+            snapshot.pendingReads[conversationId]?.lastVisibleSequence || 0
+          ),
+          updatedAt: nowIsoInstant(),
+        },
+      },
+      conversations: snapshot.conversations.map((conversation) =>
+        conversation.conversationId === conversationId
+          ? { ...conversation, unreadCount: 0 }
+          : conversation
+      ),
+    }
+
+    set((state) => createStateFromSnapshot(state, nextSnapshot))
+    void queuePersistSnapshot(snapshot, nextSnapshot)
+
+    if (!nextSnapshot.clientInstanceId) {
+      return
+    }
+
+    // S10: when SW is active, it owns the POST. We've already optimistically
+    // updated local state + persisted; the SW will pick the pendingRead up
+    // from the shared IDB queue.
+    if (isChatServiceWorkerActive()) {
+      void requestChatServiceWorkerSync("mark-conversation-read")
+      return
+    }
+
+    try {
+      const response = await api.updateChatConversationReadWatermark(
+        nextSnapshot.workspaceId,
+        conversationId,
+        {
+          clientInstanceId: nextSnapshot.clientInstanceId,
+          readUpToSequence: normalizedReadUpToSequence,
+          lastVisibleSequence: normalizedLastVisibleSequence,
+        }
+      )
+
+      set((state) => {
+        if (!state.snapshot) {
+          return state
+        }
+        const confirmedSnapshot = applyReadWatermarkAck(
+          state.snapshot,
+          response
+        )
+        void queuePersistSnapshot(state.snapshot, confirmedSnapshot)
+        return createStateFromSnapshot(state, confirmedSnapshot)
+      })
+    } catch (error) {
+      clientLog.error("Failed to mark conversation read:", error)
+    }
+  },
+
+  handleSyncEvent: (event) => {
+    const stateBefore = get()
+    const snapshotBefore = stateBefore.snapshot
+    if (!snapshotBefore || snapshotBefore.workspaceId !== event.workspaceId) {
+      return
+    }
+
+    // Live ordering discipline (durable chat.sync.event frames only). base is
+    // the unified high-water mark across the persisted resume cursor and the
+    // in-memory live cursor.
+    const workspaceId = event.workspaceId
+    const base = getLiveCursor(workspaceId, snapshotBefore.inboxCursor)
+
+    if (event.memberSeq <= base) {
+      // Stale: already applied (or superseded by a sync/bootstrap). Drop it —
+      // applying would risk resurrecting a tombstoned conversation or
+      // double-effecting a non-idempotent reducer.
+      return
+    }
+
+    if (event.memberSeq > base + 1) {
+      // Gap: a lower-seq frame was never applied (best-effort delivery /
+      // out-of-order). Do NOT apply this frame (blind apply could clobber/
+      // resurrect). Trigger a contiguous resync from the persisted cursor,
+      // which will backfill the gap AND this frame in order. If a sync is
+      // already running, mark needsResync so it runs once more after.
+      if (syncPromise) {
+        needsResync = true
+      } else {
+        void get().syncFromServer(workspaceId)
+      }
+      return
+    }
+
+    // In order (memberSeq === base + 1): apply and advance the live cursor.
+    setLiveCursor(workspaceId, event.memberSeq)
+
+    set((state) => {
+      if (!state.snapshot || state.snapshot.workspaceId !== event.workspaceId) {
+        return state
+      }
+
+      let nextLoadedItems = state.loadedMessageItems
+      const nextSnapshot = applySyncEventToSnapshot(
+        state.snapshot,
+        event,
+        state.visibleConversationId
+      )
+
+      if (event.eventType === "conversation.item.created") {
+        const payload =
+          event.payload as ChatSyncEvent<"conversation.item.created">["payload"]
+        if (payload.conversationId !== state.selectedConversationId) {
+          void queuePersistSnapshot(state.snapshot, nextSnapshot)
+          return createStateFromSnapshot(state, nextSnapshot, {
+            loadedMessageItems: nextLoadedItems,
+          })
+        }
+        nextLoadedItems = mergeRawItems(state.loadedMessageItems, [
+          payload.item,
+        ])
+      } else if (event.eventType === "task.updated") {
+        const payload =
+          event.payload as ChatSyncEvent<"task.updated">["payload"]
+        if (payload.conversationId === state.selectedConversationId) {
+          nextLoadedItems = patchTaskInRawItems(
+            state.loadedMessageItems,
+            payload
+          )
+        }
+      } else if (event.eventType === "remote_agent.runtime_updated") {
+        const payload =
+          event.payload as ChatSyncEvent<"remote_agent.runtime_updated">["payload"]
+        void queuePersistSnapshot(state.snapshot, nextSnapshot)
+        return {
+          ...createStateFromSnapshot(state, nextSnapshot, {
+            loadedMessageItems: nextLoadedItems,
+          }),
+          remoteAgentRuntimeMap: {
+            ...state.remoteAgentRuntimeMap,
+            [payload.remoteAgentId]: payload.snapshot,
+          },
+        }
+      }
+
+      void queuePersistSnapshot(state.snapshot, nextSnapshot)
+      return createStateFromSnapshot(state, nextSnapshot, {
+        loadedMessageItems: nextLoadedItems,
+      })
+    })
+  },
+
+  handleRuntimeUpdated: (payload) => {
+    set((state) => {
+      const currentSeq = state.runtimeSeqMap[payload.conversationId] || 0
+      if (payload.runtimeSeq <= currentSeq) {
+        return state
+      }
+
+      const nextRuntimeForConversation = {
+        ...(state.runtimeMap[payload.conversationId] || {}),
+        [payload.snapshot.actorId]: payload.snapshot,
+      }
+
+      const runtimeMap = {
+        ...state.runtimeMap,
+        [payload.conversationId]: nextRuntimeForConversation,
+      }
+
+      const conversations = state.snapshot
+        ? deriveConversationSummaries(state.snapshot, runtimeMap)
+        : state.conversations
+
+      return {
+        runtimeMap,
+        runtimeSeqMap: {
+          ...state.runtimeSeqMap,
+          [payload.conversationId]: payload.runtimeSeq,
+        },
+        conversations,
+        totalUnread: sumConversationUnread(conversations),
+      }
+    })
+  },
+
+  handleTypingEvent: (payload) => {
+    const ownMember = get().snapshot?.workspaceMemberId
+    if (payload.fromWorkspaceMemberId === ownMember) {
+      // Don't show our own typing back to ourselves.
+      return
+    }
+    set((state) => {
+      const current = state.typingByConversation[payload.conversationId] || {}
+      const next = { ...current }
+      if (payload.state === "stopped") {
+        delete next[payload.fromWorkspaceMemberId]
+      } else {
+        // expire 5 seconds after the started event
+        next[payload.fromWorkspaceMemberId] = Date.now() + 5_000
+      }
+      return {
+        typingByConversation: {
+          ...state.typingByConversation,
+          [payload.conversationId]:
+            Object.keys(next).length > 0 ? next : (undefined as never),
+        },
+      }
+    })
+  },
+
+  sendTypingState: async (conversationId, state) => {
+    const snapshot = get().snapshot
+    if (!snapshot) return
+    try {
+      await api.sendChatTypingState(snapshot.workspaceId, conversationId, state)
+    } catch (error) {
+      // Typing is best-effort, never throw.
+      clientLog.debug("Failed to send typing state:", error)
+    }
+  },
+
+  handleTaskUpdated: (payload) => {
+    set((state) => {
+      if (!state.snapshot) {
+        return state
+      }
+
+      const nextSnapshot = applyTaskUpdatedToSnapshot(state.snapshot, payload)
+      const nextLoadedItems =
+        payload.conversationId === state.selectedConversationId
+          ? patchTaskInRawItems(state.loadedMessageItems, payload)
+          : state.loadedMessageItems
+
+      return createStateFromSnapshot(state, nextSnapshot, {
+        loadedMessageItems: nextLoadedItems,
+      })
+    })
+  },
+}))
