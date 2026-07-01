@@ -14,7 +14,11 @@ import {
 } from "@/components/ui/hover-card"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { useConnectorMetadata } from "@/lib/im-connector-metadata"
-import type { ConversationMember } from "@/stores/chat-store"
+import type {
+  ActorAvatarStatus,
+  ConversationMember,
+  RemoteAgentAvatarStatus,
+} from "@/stores/chat-store"
 import ChatAvatar from "./chat-avatar"
 import {
   formatTransportKindLabel,
@@ -68,6 +72,11 @@ interface ChatParticipantHoverCardProps {
   contactBasePath?: string
   side?: ComponentProps<typeof HoverCardContent>["side"]
   align?: ComponentProps<typeof HoverCardContent>["align"]
+  // Presence, folded in from the avatar's old status tooltip so there is one
+  // merged card instead of two overlapping popups.
+  statusState?: ActorAvatarStatus | RemoteAgentAvatarStatus
+  statusLabel?: string
+  statusDetail?: string
 }
 
 export default function ChatParticipantHoverCard({
@@ -76,6 +85,9 @@ export default function ChatParticipantHoverCard({
   contactBasePath = "/dashboard/contacts",
   side = "top",
   align = "center",
+  statusState,
+  statusLabel,
+  statusDetail,
 }: ChatParticipantHoverCardProps) {
   const router = useRouter()
   const isMobile = useIsMobile()
@@ -106,6 +118,8 @@ export default function ChatParticipantHoverCard({
                 avatarUrl={member.avatarUrl}
                 emoji={member.emoji}
                 entityType={member.participantType}
+                statusState={statusState}
+                suppressStatusTooltip
                 size="lg"
                 className="size-12"
               />
@@ -127,6 +141,19 @@ export default function ChatParticipantHoverCard({
               <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                 {subtitle}
               </p>
+              {statusLabel || statusDetail ? (
+                <p className="mt-1 text-xs text-foreground/80">
+                  {statusLabel}
+                  {statusLabel && statusDetail ? (
+                    <span className="text-muted-foreground">
+                      {" · "}
+                      {statusDetail}
+                    </span>
+                  ) : (
+                    statusDetail
+                  )}
+                </p>
+              ) : null}
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 {transportLabel ? (
                   <Badge variant="secondary" className="rounded-full">
@@ -145,12 +172,12 @@ export default function ChatParticipantHoverCard({
             </div>
           </div>
 
-          <div className="rounded-2xl border border-border/70 bg-muted/20 p-3">
+          <div className="space-y-1.5 rounded-lg bg-muted/40 px-3 py-2.5">
             <CompactDetail label="Info" value={compactNote} />
             {member.participantType ===
               CONVERSATION_PARTICIPANT_TYPE.EXTERNAL &&
             member.externalUserKey ? (
-              <div className="mt-2 rounded-xl bg-background px-2.5 py-2 font-mono text-[11px] text-muted-foreground ring-1 ring-border/70">
+              <div className="truncate font-mono text-[11px] text-muted-foreground">
                 {member.externalUserKey}
               </div>
             ) : null}

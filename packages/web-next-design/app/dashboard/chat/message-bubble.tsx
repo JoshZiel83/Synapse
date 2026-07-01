@@ -525,6 +525,40 @@ function getTaskStateBadgeClassName(state: TaskDisplayState) {
   }
 }
 
+// Quiet, glanceable state indicator: a colored dot + label. Pending is implied
+// by the action buttons, so it renders nothing (no redundant "Pending" chip).
+function TaskStateChip({
+  task,
+  className,
+}: {
+  task: TaskSummary
+  className?: string
+}) {
+  const state = getTaskDisplayState(task)
+  if (state === "pending") return null
+  const tone =
+    state === "approved" || state === "answered"
+      ? "text-emerald-600"
+      : state === "rejected" ||
+          state === "failed" ||
+          state === "expired" ||
+          state === "cancelled"
+        ? "text-destructive"
+        : "text-muted-foreground"
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5 text-xs font-medium",
+        tone,
+        className
+      )}
+    >
+      <span className="size-1.5 rounded-full bg-current" />
+      {getTaskStateLabel(state)}
+    </span>
+  )
+}
+
 function formatRuntimeAuthorizationPresetLabel(
   preset: RuntimeAuthorizationPreset
 ) {
@@ -958,28 +992,17 @@ function TaskCard({
       !questions[0]?.allowOther
 
     return (
-      <div className="space-y-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge
-            variant="outline"
-            className="rounded-full border-primary/20 bg-primary/5 text-primary"
-          >
-            <MousePointerClick className="mr-1 h-3 w-3" />
-            Input Request
-          </Badge>
-          <Badge
-            variant="outline"
-            className={cn(
-              "rounded-full",
-              getTaskStateBadgeClassName(getTaskDisplayState(task))
-            )}
-          >
-            {getTaskStateLabel(getTaskDisplayState(task))}
-          </Badge>
+      <div className="space-y-2.5">
+        <div className="flex items-center gap-2">
+          <MousePointerClick className="size-4 shrink-0 text-muted-foreground" />
+          <span className="text-sm font-medium text-foreground">
+            Input request
+          </span>
+          <TaskStateChip task={task} className="ml-auto" />
         </div>
 
-        <div className="space-y-1.5">
-          <p className="text-sm leading-6 font-medium text-foreground">
+        <div className="space-y-0.5">
+          <p className="text-sm font-medium text-foreground">
             {userInput.title}
           </p>
           {userInput.instructions ? (
@@ -1258,37 +1281,37 @@ function TaskCard({
         </div>
 
         {canResolveUserInput && !isSimpleSingleSelect ? (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 pt-0.5">
             <Button
               type="button"
+              size="sm"
               disabled={Boolean(submittingAction)}
               onClick={() =>
                 void submitResolution("submit_answers", {
                   answers: buildUserInputAnswerPayload(),
                 })
               }
-              className="rounded-full"
             >
               {submittingAction === "submit_answers" ? (
                 <Loader2 className="mr-1 h-4 w-4 animate-spin" />
               ) : (
                 <CheckCircle2 className="mr-1 h-4 w-4" />
               )}
-              Submit Response
+              Submit response
             </Button>
           </div>
         ) : null}
 
-        <TaskStatusNote task={task} viewerCanResolve={viewerCanResolve} />
+        {!canResolveUserInput ? (
+          <TaskStatusNote task={task} viewerCanResolve={viewerCanResolve} />
+        ) : null}
         {task.resolutionNote ? (
-          <div className="rounded-xl border border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-            {task.resolutionNote}
-          </div>
+          <p className="text-xs text-muted-foreground">
+            “{task.resolutionNote}”
+          </p>
         ) : null}
         {submitError ? (
-          <div className="rounded-xl border border-destructive/20 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-            {submitError}
-          </div>
+          <p className="text-xs text-destructive">{submitError}</p>
         ) : null}
       </div>
     )
@@ -1298,28 +1321,18 @@ function TaskCard({
     const planApproval = task.planApproval
 
     return (
-      <div className="space-y-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge
-            variant="outline"
-            className="rounded-full border-primary/20 bg-primary/5 text-primary"
-          >
-            <GitBranch className="mr-1 h-3 w-3" />
-            Plan Approval
-          </Badge>
-          <Badge
-            variant="outline"
-            className={cn(
-              "rounded-full",
-              getTaskStateBadgeClassName(getTaskDisplayState(task))
-            )}
-          >
-            {getTaskStateLabel(getTaskDisplayState(task))}
-          </Badge>
+      <div className="space-y-2.5">
+        {/* One header line: the type + a quiet state dot. No competing badges. */}
+        <div className="flex items-center gap-2">
+          <GitBranch className="size-4 shrink-0 text-muted-foreground" />
+          <span className="text-sm font-medium text-foreground">
+            Plan approval
+          </span>
+          <TaskStateChip task={task} className="ml-auto" />
         </div>
 
-        <div className="space-y-1.5">
-          <p className="text-sm leading-6 font-medium text-foreground">
+        <div className="space-y-0.5">
+          <p className="text-sm font-medium text-foreground">
             {planApproval.title}
           </p>
           {planApproval.summary ? (
@@ -1329,45 +1342,45 @@ function TaskCard({
           ) : null}
         </div>
 
-        <div className="rounded-2xl border border-border/70 bg-background px-4 py-3">
-          <div className="prose prose-sm prose-p:my-2 prose-li:my-1 prose-ul:my-2 prose-ol:my-2 max-w-none text-foreground">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {planApproval.planMarkdown}
-            </ReactMarkdown>
-          </div>
+        {/* De-nested: the bubble is already a surface, so the plan is a subtle
+            tinted panel, not a bordered card inside a card. */}
+        <div className="prose prose-sm prose-p:my-1.5 prose-li:my-0.5 prose-ul:my-1.5 prose-ol:my-1.5 prose-headings:text-foreground max-w-none rounded-lg bg-muted/40 px-3.5 py-2.5 text-foreground">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {planApproval.planMarkdown}
+          </ReactMarkdown>
         </div>
 
         {planApproval.checklist?.length ? (
-          <div className="space-y-2 rounded-2xl border border-border/70 bg-muted/20 px-4 py-3">
+          <ul className="space-y-1">
             {planApproval.checklist.map((step, index) => (
-              <div
+              <li
                 key={`${step.step}-${index}`}
                 className="flex items-center justify-between gap-3 text-sm"
               >
-                <div className="min-w-0 text-foreground">{step.step}</div>
-                <Badge
-                  variant="outline"
-                  className="rounded-full border-border/70 bg-background/70 text-[10px] text-muted-foreground"
-                >
+                <span className="min-w-0 truncate text-foreground">
+                  {step.step}
+                </span>
+                <span className="shrink-0 text-xs text-muted-foreground">
                   {step.status}
-                </Badge>
-              </div>
+                </span>
+              </li>
             ))}
-          </div>
+          </ul>
         ) : null}
 
         {canResolvePlanApproval ? (
-          <div className="space-y-2">
+          <div className="space-y-2 pt-0.5">
             <Textarea
               value={resolutionNoteDraft}
               onChange={(event) => setResolutionNoteDraft(event.target.value)}
-              placeholder="Optional approval note or revision feedback"
+              placeholder="Add a note (optional)"
               disabled={Boolean(submittingAction)}
-              className="min-h-24 resize-y rounded-2xl bg-background"
+              className="min-h-16 resize-y rounded-lg bg-background text-sm"
             />
             <div className="flex flex-wrap items-center gap-2">
               <Button
                 type="button"
+                size="sm"
                 disabled={Boolean(submittingAction)}
                 onClick={() =>
                   void submitResolution("approve_plan", {
@@ -1375,17 +1388,17 @@ function TaskCard({
                     note: resolutionNoteDraft.trim() || undefined,
                   })
                 }
-                className="rounded-full"
               >
                 {submittingAction === "approve_plan" ? (
                   <Loader2 className="mr-1 h-4 w-4 animate-spin" />
                 ) : (
                   <CheckCircle2 className="mr-1 h-4 w-4" />
                 )}
-                Approve Plan
+                Approve plan
               </Button>
               <Button
                 type="button"
+                size="sm"
                 variant="outline"
                 disabled={Boolean(submittingAction)}
                 onClick={() =>
@@ -1394,29 +1407,29 @@ function TaskCard({
                     note: resolutionNoteDraft.trim() || undefined,
                   })
                 }
-                className="rounded-full"
               >
                 {submittingAction === "revise_plan" ? (
                   <Loader2 className="mr-1 h-4 w-4 animate-spin" />
                 ) : (
                   <RotateCcw className="mr-1 h-4 w-4" />
                 )}
-                Request Changes
+                Request changes
               </Button>
             </div>
           </div>
-        ) : null}
+        ) : (
+          // The action buttons already say what to do, so only surface a status
+          // line when the viewer can't act (resolved, or waiting on someone).
+          <TaskStatusNote task={task} viewerCanResolve={viewerCanResolve} />
+        )}
 
-        <TaskStatusNote task={task} viewerCanResolve={viewerCanResolve} />
         {task.resolutionNote ? (
-          <div className="rounded-xl border border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-            {task.resolutionNote}
-          </div>
+          <p className="text-xs text-muted-foreground">
+            “{task.resolutionNote}”
+          </p>
         ) : null}
         {submitError ? (
-          <div className="rounded-xl border border-destructive/20 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-            {submitError}
-          </div>
+          <p className="text-xs text-destructive">{submitError}</p>
         ) : null}
       </div>
     )
@@ -1433,27 +1446,16 @@ function TaskCard({
 
     return (
       <div className="space-y-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge
-            variant="outline"
-            className="rounded-full border-primary/20 bg-primary/5 text-primary"
-          >
-            <Shield className="mr-1 h-3 w-3" />
-            Runtime Authorization
-          </Badge>
-          <Badge
-            variant="outline"
-            className={cn(
-              "rounded-full",
-              getTaskStateBadgeClassName(getTaskDisplayState(task))
-            )}
-          >
-            {getTaskStateLabel(getTaskDisplayState(task))}
-          </Badge>
+        <div className="flex items-center gap-2">
+          <Shield className="size-4 shrink-0 text-muted-foreground" />
+          <span className="text-sm font-medium text-foreground">
+            Runtime authorization
+          </span>
+          <TaskStateChip task={task} className="ml-auto" />
         </div>
 
-        <div className="space-y-1.5">
-          <p className="text-sm leading-6 font-medium text-foreground">
+        <div className="space-y-0.5">
+          <p className="text-sm font-medium text-foreground">
             {`Authorize ${runtimeAuthorization.deviceToolStableKey} on ${runtimeAuthorization.deviceDisplayName}`}
           </p>
           <p className="text-xs leading-5 text-muted-foreground">
@@ -1461,20 +1463,18 @@ function TaskCard({
           </p>
         </div>
 
-        <div className="grid gap-2">
-          <div className="rounded-2xl border border-border/70 bg-muted/20 px-4 py-3">
-            <div className="text-[11px] font-medium tracking-[0.08em] text-muted-foreground/70 uppercase">
-              Exposure
-            </div>
-            <div className="mt-1 text-sm text-foreground">
+        <div className="grid gap-2 rounded-lg bg-muted/40 px-3.5 py-2.5">
+          <div>
+            <div className="text-xs text-muted-foreground">Exposure</div>
+            <div className="mt-0.5 text-sm text-foreground">
               {runtimeAuthorization.exposureDisplayName}
             </div>
           </div>
-          <div className="rounded-2xl border border-border/70 bg-muted/20 px-4 py-3">
-            <div className="text-[11px] font-medium tracking-[0.08em] text-muted-foreground/70 uppercase">
-              Requested Action
+          <div>
+            <div className="text-xs text-muted-foreground">
+              Requested action
             </div>
-            <div className="mt-2">
+            <div className="mt-1">
               {(() => {
                 const described = describeRuntimeAuthorizationRequestedAction(
                   runtimeAuthorization.requestedAction
@@ -3101,6 +3101,9 @@ export default function MessageBubble({
           <ChatParticipantHoverCard
             member={authorMember}
             contactBasePath={contactBasePath}
+            statusState={authorStatusState}
+            statusLabel={authorStatusLabel}
+            statusDetail={authorStatusDetail}
           >
             <span
               className="mt-1 block shrink-0 rounded-full transition-opacity hover:opacity-90 focus-visible:ring-[3px] focus-visible:ring-ring/40 focus-visible:outline-none"
@@ -3113,8 +3116,7 @@ export default function MessageBubble({
                 emoji={resolvedAuthorEmoji}
                 entityType={authorEntityType}
                 statusState={authorStatusState}
-                statusLabel={authorStatusLabel}
-                statusDetail={authorStatusDetail}
+                suppressStatusTooltip
               />
             </span>
           </ChatParticipantHoverCard>
@@ -3157,6 +3159,9 @@ export default function MessageBubble({
                 <ChatParticipantHoverCard
                   member={authorMember}
                   contactBasePath={contactBasePath}
+                  statusState={authorStatusState}
+                  statusLabel={authorStatusLabel}
+                  statusDetail={authorStatusDetail}
                 >
                   <span
                     className="transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/40 focus-visible:outline-none"

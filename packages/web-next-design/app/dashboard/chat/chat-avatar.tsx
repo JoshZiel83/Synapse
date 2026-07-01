@@ -58,6 +58,10 @@ interface ChatAvatarProps {
   statusPhase?: ThinkingPhase
   statusLabel?: string
   statusDetail?: string
+  // When the avatar already lives inside a richer popover (the participant
+  // hover card), suppress its own status tooltip so hovering shows ONE card,
+  // not two overlapping ones. The status dot on the avatar stays.
+  suppressStatusTooltip?: boolean
   className?: string
 }
 
@@ -71,6 +75,7 @@ export default function ChatAvatar({
   statusPhase,
   statusLabel,
   statusDetail,
+  suppressStatusTooltip,
   className,
 }: ChatAvatarProps) {
   const resolvedAvatarUrl = resolveFileUrl(avatarUrl)
@@ -109,6 +114,7 @@ export default function ChatAvatar({
   )
 
   if (
+    suppressStatusTooltip ||
     (entityType !== "actor" && entityType !== "remote_agent") ||
     !badgeState ||
     (!statusLabel && !statusDetail && !name)

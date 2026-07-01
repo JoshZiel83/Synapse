@@ -13,13 +13,12 @@ import {
 import { useEffect, useMemo, useState } from "react"
 import {
   AlertTriangle,
-  CheckCircle2,
-  ChevronDown,
+  Check,
   ChevronRight,
   FileIcon,
   Loader2,
   UserRound,
-  XCircle,
+  X,
 } from "lucide-react"
 import { api } from "@/lib/api"
 import { cn, resolveContentUrl } from "@/lib/utils"
@@ -32,16 +31,12 @@ import ChatAvatar from "./chat-avatar"
 import { ToolIcon } from "./tool-icon"
 
 function formatTargetsLabel(runtime: ActorRuntimeState) {
-  const targets = getActorRuntimeProcessingTargets(runtime)
-  if (targets.length === 0) {
-    return "Active in the current turn"
-  }
-
-  const names = targets.map((target) => target.name).filter(Boolean)
-  if (names.length <= 2) {
-    return `Processing ${names.join(", ")}`
-  }
-  return `Processing ${names.slice(0, 2).join(", ")} +${names.length - 2}`
+  const names = getActorRuntimeProcessingTargets(runtime)
+    .map((target) => target.name)
+    .filter(Boolean)
+  if (names.length === 0) return "working"
+  if (names.length <= 2) return `for ${names.join(", ")}`
+  return `for ${names.slice(0, 2).join(", ")} +${names.length - 2}`
 }
 
 function formatToolStateLabel(state: string) {
@@ -53,7 +48,7 @@ function formatToolStateLabel(state: string) {
     case "input_required":
       return "Needs input"
     case "completed":
-      return "Completed"
+      return "Done"
     case "failed":
       return "Failed"
     case "cancelled":
@@ -65,51 +60,44 @@ function formatToolStateLabel(state: string) {
   }
 }
 
-function getToolStateTone(state: string) {
+// Restrained status: a single colored glyph, no bordered pill.
+function StatusGlyph({
+  state,
+  className,
+}: {
+  state: string
+  className?: string
+}) {
+  const cls = cn("size-3.5 shrink-0", className)
   switch (state) {
     case "completed":
-      return "text-emerald-600 bg-emerald-500/10 border-emerald-500/20"
+      return <Check className={cn(cls, "text-emerald-600")} />
     case "failed":
     case "cancelled":
-      return "text-destructive bg-destructive/10 border-destructive/20"
+      return <X className={cn(cls, "text-destructive")} />
     case "input_required":
-      return "text-amber-700 bg-amber-500/10 border-amber-500/20"
+      return <AlertTriangle className={cn(cls, "text-amber-600")} />
     default:
-      return "text-sky-700 bg-sky-500/10 border-sky-500/20"
+      return (
+        <Loader2 className={cn(cls, "animate-spin text-muted-foreground")} />
+      )
   }
 }
 
-function ToolStateIcon({ state }: { state: string }) {
-  switch (state) {
-    case "completed":
-      return <CheckCircle2 className="size-3.5" />
-    case "failed":
-    case "cancelled":
-      return <XCircle className="size-3.5" />
-    case "input_required":
-      return <AlertTriangle className="size-3.5" />
-    default:
-      return <Loader2 className="size-3.5 animate-spin" />
-  }
-}
-
+// Call / result payload — a clean monospace block, no nested card chrome.
 function ActivityBlocks({ blocks }: { blocks: CanonicalContentBlock[] }) {
   if (blocks.length === 0) {
-    return (
-      <div className="rounded-2xl border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
-        No detail yet
-      </div>
-    )
+    return <div className="text-xs text-muted-foreground/70 italic">—</div>
   }
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex min-w-0 flex-col gap-1.5">
       {blocks.map((block) => {
         if (block.type === "text") {
           return (
             <pre
               key={block.id}
-              className="rounded-2xl border border-border/70 bg-background px-3 py-2 text-xs break-words whitespace-pre-wrap text-foreground"
+              className="min-w-0 overflow-x-auto rounded-md bg-muted/60 px-2.5 py-1.5 font-mono text-xs break-words whitespace-pre-wrap text-foreground/90"
             >
               {block.text}
             </pre>
@@ -118,13 +106,13 @@ function ActivityBlocks({ blocks }: { blocks: CanonicalContentBlock[] }) {
 
         if (block.type === "mention") {
           return (
-            <div
+            <span
               key={block.id}
-              className="inline-flex w-fit items-center gap-1 rounded-full border border-border bg-background px-2.5 py-1 text-xs text-foreground"
+              className="inline-flex w-fit items-center gap-1 text-xs text-muted-foreground"
             >
               <UserRound className="size-3" />
-              <span>{block.mention.name || block.mention.participantType}</span>
-            </div>
+              {block.mention.name || block.mention.participantType}
+            </span>
           )
         }
 
@@ -134,10 +122,12 @@ function ActivityBlocks({ blocks }: { blocks: CanonicalContentBlock[] }) {
             href={resolveContentUrl(block.sha256)}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex w-fit items-center gap-2 rounded-2xl border border-border bg-background px-3 py-2 text-xs text-foreground transition-colors hover:border-primary/40 hover:text-primary"
+            className="inline-flex w-fit items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
           >
             <FileIcon className="size-3.5" />
-            <span className="truncate">{block.name}</span>
+            <span className="truncate underline-offset-2 hover:underline">
+              {block.name}
+            </span>
           </a>
         )
       })}
@@ -221,17 +211,20 @@ export default function ActorActivityBubble({
 
   const countsLabel = useMemo(() => {
     if (!preview || preview.totalToolCallCount === 0) return null
-    const parts = [
-      `${preview.totalToolCallCount} tool${preview.totalToolCallCount === 1 ? "" : "s"}`,
-    ]
-    if (preview.completedToolCallCount > 0) {
-      parts.push(`${preview.completedToolCallCount} done`)
-    }
-    if (preview.failedToolCallCount > 0) {
-      parts.push(`${preview.failedToolCallCount} failed`)
-    }
-    return parts.join(" · ")
+    const done = preview.completedToolCallCount
+    const total = preview.totalToolCallCount
+    const failed = preview.failedToolCallCount
+    return failed > 0
+      ? `${done}/${total} · ${failed} failed`
+      : `${done}/${total}`
   }, [preview])
+
+  const toolTitle = previewTool
+    ? (resolvePresentation(previewTool.titlePresentation) ??
+      previewTool.displayTitle)
+    : "Working…"
+
+  const canExpand = Boolean(preview?.turnId)
 
   return (
     <div className="flex w-full max-w-full min-w-0 gap-3">
@@ -247,154 +240,109 @@ export default function ActorActivityBubble({
           previewTool ? formatToolStateLabel(previewTool.state) : "Active"
         }
         statusDetail={formatTargetsLabel(runtime)}
-        className="mt-1"
+        className="mt-0.5"
       />
-      <div className="flex max-w-[85%] min-w-0 flex-1 flex-col gap-2">
+
+      <div className="flex min-w-0 flex-1 flex-col gap-1 pt-0.5">
+        {/* Actor name, same as any other message's sender label. */}
+        <div className="ml-1 text-xs text-muted-foreground/70">
+          {runtime.actorDisplayName}
+        </div>
+
+        {/* Compact, collapsed-by-default activity row (Claude/Cursor style). */}
         <button
           type="button"
-          disabled={!preview?.turnId}
+          disabled={!canExpand}
           onClick={() => setExpanded((current) => !current)}
+          aria-expanded={expanded}
           className={cn(
-            "flex min-w-0 flex-col gap-2 rounded-[28px] border border-border bg-background px-4 py-3 text-left shadow-sm transition-colors",
-            preview?.turnId
-              ? "hover:border-primary/35"
-              : "cursor-default opacity-95"
+            "group inline-flex w-fit max-w-full min-w-0 items-center gap-1.5 rounded-lg px-2 py-1 text-left text-xs text-muted-foreground transition-colors",
+            canExpand ? "hover:bg-muted/60" : "cursor-default"
           )}
         >
-          <div className="flex min-w-0 items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="truncate text-sm font-semibold text-foreground">
-                {runtime.actorDisplayName}
-              </div>
-              <div className="mt-1 text-xs text-muted-foreground">
-                {formatTargetsLabel(runtime)}
-              </div>
-            </div>
-            {preview?.turnId ? (
-              expanded ? (
-                <ChevronDown className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-              ) : (
-                <ChevronRight className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-              )
-            ) : null}
-          </div>
-
+          <StatusGlyph state={previewTool?.state ?? "running"} />
           {previewTool ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <div
-                className={cn(
-                  "inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium",
-                  getToolStateTone(previewTool.state)
-                )}
-              >
-                <ToolStateIcon state={previewTool.state} />
-                <span>{formatToolStateLabel(previewTool.state)}</span>
-              </div>
-              <div className="flex min-w-0 items-center gap-1.5 text-xs text-foreground">
-                <ToolIcon
-                  name={previewTool.icon}
-                  className="size-3.5 shrink-0 text-muted-foreground"
-                />
-                <span className="font-medium">
-                  {resolvePresentation(previewTool.titlePresentation) ??
-                    previewTool.displayTitle}
-                </span>
-                {previewTool.source?.displayName ? (
-                  <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                    {previewTool.source.displayName}
-                  </span>
-                ) : null}
-                {previewTool.displayDetail ? (
-                  <span className="text-muted-foreground">
-                    {" "}
-                    · {previewTool.displayDetail}
-                  </span>
-                ) : null}
-              </div>
-            </div>
+            <ToolIcon
+              name={previewTool.icon}
+              className="size-3.5 shrink-0 text-muted-foreground"
+            />
           ) : null}
-
+          <span className="min-w-0 truncate font-medium text-foreground">
+            {toolTitle}
+          </span>
+          {previewTool?.source?.displayName ? (
+            <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">
+              {previewTool.source.displayName}
+            </span>
+          ) : null}
           {countsLabel ? (
-            <div className="text-[11px] text-muted-foreground">
-              {countsLabel}
-            </div>
+            <span className="shrink-0 tabular-nums">· {countsLabel}</span>
+          ) : null}
+          {canExpand ? (
+            <ChevronRight
+              className={cn(
+                "size-3.5 shrink-0 transition-transform",
+                expanded && "rotate-90"
+              )}
+            />
           ) : null}
         </button>
 
         {expanded ? (
-          <div className="rounded-[28px] border border-border/80 bg-background/90 p-3 shadow-sm">
+          <div className="min-w-0">
             {loading && !detail ? (
-              <div className="flex items-center gap-2 px-1 py-2 text-sm text-muted-foreground">
-                <Loader2 className="size-4 animate-spin" />
-                <span>Loading current-turn activity…</span>
+              <div className="flex items-center gap-2 py-1.5 text-xs text-muted-foreground">
+                <Loader2 className="size-3.5 animate-spin" />
+                Loading activity…
               </div>
             ) : error ? (
-              <div className="rounded-2xl border border-destructive/20 bg-destructive/5 px-3 py-2 text-xs text-destructive">
-                {error}
-              </div>
+              <div className="text-xs text-destructive">{error}</div>
             ) : detail && detail.items.length > 0 ? (
-              <div className="flex flex-col gap-3">
+              <ol className="ml-1.5 flex flex-col gap-3 border-l border-border/60 pl-3.5">
                 {detail.items.map((item) => (
-                  <div
-                    key={item.toolCallId}
-                    className="rounded-3xl border border-border/70 bg-muted/20 px-3 py-3"
-                  >
-                    <div className="mb-3 flex flex-wrap items-center gap-2">
-                      <div
-                        className={cn(
-                          "inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium",
-                          getToolStateTone(item.state)
-                        )}
-                      >
-                        <ToolStateIcon state={item.state} />
-                        <span>{formatToolStateLabel(item.state)}</span>
-                      </div>
-                      <div className="flex items-center gap-1.5 text-sm font-medium text-foreground">
-                        <ToolIcon
-                          name={item.icon}
-                          className="size-4 shrink-0 text-muted-foreground"
-                        />
-                        <span>
-                          {resolvePresentation(item.titlePresentation) ??
-                            item.displayTitle}
-                        </span>
-                      </div>
+                  <li key={item.toolCallId} className="relative min-w-0">
+                    {/* node on the timeline rail */}
+                    <span className="absolute top-0.5 -left-[1.375rem] flex size-4 items-center justify-center rounded-full border border-border bg-background">
+                      <StatusGlyph state={item.state} className="size-2.5" />
+                    </span>
+                    <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs">
+                      <ToolIcon
+                        name={item.icon}
+                        className="size-3.5 shrink-0 text-muted-foreground"
+                      />
+                      <span className="font-medium text-foreground">
+                        {resolvePresentation(item.titlePresentation) ??
+                          item.displayTitle}
+                      </span>
                       {item.source?.displayName ? (
-                        <div className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                        <span className="rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">
                           {item.source.displayName}
+                        </span>
+                      ) : null}
+                      <span className="text-muted-foreground">
+                        {formatToolStateLabel(item.state)}
+                      </span>
+                    </div>
+                    {item.displayDetail ? (
+                      <div className="mt-0.5 text-xs text-muted-foreground">
+                        {item.displayDetail}
+                      </div>
+                    ) : null}
+                    <div className="mt-1.5 flex min-w-0 flex-col gap-1.5">
+                      <ActivityBlocks blocks={item.requestBlocks} />
+                      {resolvePresentation(item.resultSummary) ? (
+                        <div className="text-xs text-foreground/90">
+                          {resolvePresentation(item.resultSummary)}
                         </div>
                       ) : null}
-                      {item.displayDetail ? (
-                        <div className="text-xs text-muted-foreground">
-                          {item.displayDetail}
-                        </div>
-                      ) : null}
+                      <ActivityBlocks blocks={item.resultBlocks} />
                     </div>
-                    <div className="flex flex-col gap-3">
-                      <div>
-                        <div className="mb-1 text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">
-                          Call
-                        </div>
-                        <ActivityBlocks blocks={item.requestBlocks} />
-                      </div>
-                      <div>
-                        <div className="mb-1 text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">
-                          Result
-                        </div>
-                        {resolvePresentation(item.resultSummary) ? (
-                          <div className="mb-1.5 text-xs font-medium text-foreground">
-                            {resolvePresentation(item.resultSummary)}
-                          </div>
-                        ) : null}
-                        <ActivityBlocks blocks={item.resultBlocks} />
-                      </div>
-                    </div>
-                  </div>
+                  </li>
                 ))}
-              </div>
+              </ol>
             ) : (
-              <div className="rounded-2xl border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
-                No tool activity in this turn yet
+              <div className="py-1 text-xs text-muted-foreground">
+                No tool activity in this turn yet.
               </div>
             )}
           </div>
