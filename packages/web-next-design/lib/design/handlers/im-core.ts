@@ -1,11 +1,11 @@
 import {
-  TransportConnectorsResponseSchema,
   TransportAccountsResponseSchema,
   TransportSessionsResponseSchema,
   TransportExternalUsersResponseSchema,
   TransportAccountResponseSchema,
 } from "@synapse/shared/schemas"
 import { mock } from "../faker-setup"
+import { designTransportConnectors } from "../fixtures/im"
 import type { DesignHandlers } from "./_types"
 
 // IM transport core: connector capabilities, accounts, sessions, external users,
@@ -14,7 +14,9 @@ import type { DesignHandlers } from "./_types"
 // whatsapp_unofficial login/guard methods return inline (non-schema) types and
 // are left to the Proxy catch-all.
 export const imCoreHandlers = {
-  getTransportConnectors: async () => mock(TransportConnectorsResponseSchema),
+  // Curated (real display names + real /icon/<kind>.svg) — random lorem here
+  // crashed next/image in TransportKindIcon.
+  getTransportConnectors: async () => designTransportConnectors,
   getTransportAccounts: async () => mock(TransportAccountsResponseSchema),
   getTransportSessions: async () => mock(TransportSessionsResponseSchema),
   getTransportExternalUsers: async () =>
