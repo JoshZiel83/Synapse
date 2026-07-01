@@ -61,6 +61,16 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { searchEmojiSuggestions } from "@/lib/emoji"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
+import {
+  EmojiPicker,
+  EmojiPickerContent,
+  EmojiPickerSearch,
+} from "@/components/ui/emoji-picker"
 import { api } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
@@ -634,21 +644,24 @@ const ComposerSuggestionList = forwardRef<
                   size="sm"
                 />
               ) : item.kind === "emoji" ? (
-                <div className="flex size-8 shrink-0 items-center justify-center rounded-2xl border border-border bg-muted/50 text-lg">
+                <span className="w-7 shrink-0 text-center text-xl leading-none">
                   {item.native}
-                </div>
+                </span>
               ) : (
                 <div className="flex size-8 shrink-0 items-center justify-center rounded-2xl border border-border bg-muted/50 text-muted-foreground">
                   <FileText className="size-4" />
                 </div>
               )}
+              {/* Emoji rows follow the Slack/Discord convention: just the glyph
+                  + the :shortcode:, one compact line. @/# rows keep their
+                  name + description. */}
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-medium">
                   {item.kind === "emoji"
-                    ? `${item.native} ${item.label}`
+                    ? item.label
                     : `${item.trigger}${item.label}`}
                 </div>
-                {item.description ? (
+                {item.kind !== "emoji" && item.description ? (
                   <div className="truncate text-xs text-muted-foreground">
                     {item.description}
                   </div>
@@ -845,6 +858,7 @@ export default function ChatComposer({
   const [draftText, setDraftText] = useState("")
   const [mentionCount, setMentionCount] = useState(0)
   const [citedAttachmentIds, setCitedAttachmentIds] = useState<string[]>([])
+  const [emojiOpen, setEmojiOpen] = useState(false)
 
   useEffect(() => {
     participantsRef.current = participants
@@ -1136,6 +1150,12 @@ export default function ChatComposer({
     if (!editor || disabled || submitting) return
 
     editor.chain().focus().insertContent(trigger).run()
+  }
+
+  function insertEmoji(native: string) {
+    if (!editor || disabled || submitting) return
+
+    editor.chain().focus().insertContent(`${native} `).run()
   }
 
   function insertAttachmentCitation(attachmentId: string) {
@@ -1480,17 +1500,36 @@ export default function ChatComposer({
           >
             <Hash className="size-4.5" />
           </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            className="rounded-full text-muted-foreground"
-            onClick={() => insertTrigger(":")}
-            disabled={disabled || submitting}
-            aria-label="Insert an emoji"
-          >
-            <SmilePlus className="size-4.5" />
-          </Button>
+          <Popover open={emojiOpen} onOpenChange={setEmojiOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className="rounded-full text-muted-foreground"
+                disabled={disabled || submitting}
+                aria-label="Insert an emoji"
+              >
+                <SmilePlus className="size-4.5" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent
+              align="start"
+              side="top"
+              className="h-[340px] w-[320px] p-0"
+            >
+              <EmojiPicker
+                className="h-full"
+                onEmojiSelect={({ emoji }) => {
+                  insertEmoji(emoji)
+                  setEmojiOpen(false)
+                }}
+              >
+                <EmojiPickerSearch placeholder="搜索表情…" />
+                <EmojiPickerContent />
+              </EmojiPicker>
+            </PopoverContent>
+          </Popover>
           <Button
             type="button"
             variant="ghost"

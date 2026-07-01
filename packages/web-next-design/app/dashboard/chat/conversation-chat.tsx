@@ -795,20 +795,23 @@ export default function ConversationChat({
             {loading ? (
               <ChatThreadSkeleton />
             ) : messages.length === 0 ? (
-              <div className="flex h-full min-h-[12rem] flex-1 flex-col items-center justify-center gap-4 rounded-[28px] border border-dashed border-border bg-background px-6 py-10 text-center shadow-sm">
+              // Minimal, card-less empty state (Slack/Discord/IM convention):
+              // avatar + name + a "beginning of the conversation" line, centered
+              // on the thread background — no border/box/shadow.
+              <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-12 text-center">
                 <ChatAvatar
                   name={title}
                   avatarUrl={conversation.avatarUrl}
                   entityType="conversation"
                   size="lg"
-                  className="size-20 rounded-3xl"
+                  className="size-16 rounded-2xl"
                 />
-                <div>
-                  <h3 className="mb-2 text-lg font-semibold text-foreground">
-                    Chat in {title}
-                  </h3>
-                  <p className="max-w-md text-sm text-muted-foreground">
-                    No shared messages in this conversation yet.
+                <div className="space-y-1">
+                  <p className="text-base font-semibold text-foreground">
+                    {title}
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    This is the beginning of your conversation.
                   </p>
                 </div>
               </div>

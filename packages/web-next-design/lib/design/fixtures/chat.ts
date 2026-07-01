@@ -392,7 +392,7 @@ function conv(o: {
       canRename: o.kind === "group",
     },
     viewerParticipantId: people.self.pid,
-    lastItem: lastOf(o.items),
+    lastItem: o.items.length > 0 ? lastOf(o.items) : undefined,
   }
 }
 
@@ -896,16 +896,29 @@ const cv8 = conv({
   updatedAt: "2026-06-30T05:01:00Z",
 })
 
+// 9) A brand-new conversation with NO messages — for designing the empty-thread
+// state (no lastItem in the list, empty timeline in the pane).
+const cvEmpty = conv({
+  id: "cv-empty",
+  title: "赵磊",
+  kind: "direct",
+  isIm: false,
+  members: [P.self, P.zhao],
+  items: [],
+  updatedAt: "2026-06-30T12:30:00Z",
+})
+
 // ── Assembled exports ────────────────────────────────────────────────────────
 // Order = most-recently-updated first (matches the inbox sort).
 export const designChatBootstrap: ChatBootstrapViewSchemaType = {
   workspaceMemberId: designViewerMemberId,
   clientInstanceRequired: true,
-  conversations: [cv3, cv1, cv6, cv2, cv4, cv7, cv5, cv8],
+  conversations: [cvEmpty, cv3, cv1, cv6, cv2, cv4, cv7, cv5, cv8],
   nextInboxCursor: 100,
 }
 
 const byId: Record<string, MessagesView> = {
+  "cv-empty": messagesView({ conversation: cvEmpty, items: [] }),
   "cv-colleague": messagesView({ conversation: cv1, items: c1Items }),
   "cv-aria": messagesView({ conversation: cv2, items: c2Items }),
   "cv-atlas": messagesView({
