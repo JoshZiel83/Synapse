@@ -125,6 +125,56 @@ const people = {
     } as EntityRef,
     pid: "pp-li",
   },
+  liu: {
+    ref: {
+      participantType: "external",
+      externalUserKey: "wecom-liuwei",
+      name: "刘伟",
+      transportKind: "wecom",
+      avatarEmoji: "🏢",
+    } as EntityRef,
+    pid: "pp-liu",
+  },
+  zhang: {
+    ref: {
+      participantType: "external",
+      externalUserKey: "dt-zhangmin",
+      name: "张敏",
+      transportKind: "dingtalk",
+      avatarEmoji: "📋",
+    } as EntityRef,
+    pid: "pp-zhang",
+  },
+  laochen: {
+    ref: {
+      participantType: "external",
+      externalUserKey: "qq-100234",
+      name: "老陈",
+      transportKind: "qq",
+      avatarEmoji: "🐧",
+    } as EntityRef,
+    pid: "pp-laochen",
+  },
+  sarah: {
+    ref: {
+      participantType: "external",
+      externalUserKey: "wa-sarah",
+      name: "Sarah Chen",
+      transportKind: "whatsapp",
+      avatarEmoji: "🟢",
+    } as EntityRef,
+    pid: "pp-sarah",
+  },
+  ahmed: {
+    ref: {
+      participantType: "external",
+      externalUserKey: "wau-ahmed",
+      name: "Ahmed",
+      transportKind: "whatsapp_unofficial",
+      avatarEmoji: "📱",
+    } as EntityRef,
+    pid: "pp-ahmed",
+  },
 } as const
 
 type Person = (typeof people)[keyof typeof people]
@@ -557,6 +607,11 @@ const fsIn: TransportCtx = {
   transportKind: "feishu",
   endpointType: "direct",
 }
+const txn = (
+  transportKind: NonNullable<EntityRef["transportKind"]>,
+  direction: TransportCtx["direction"],
+  endpointType: TransportCtx["endpointType"] = "direct"
+): TransportCtx => ({ direction, transportKind, endpointType })
 
 // ── Scenarios ────────────────────────────────────────────────────────────────
 const P = people
@@ -994,7 +1049,177 @@ const cv8 = conv({
   updatedAt: "2026-06-30T05:01:00Z",
 })
 
-// 9) A brand-new conversation with NO messages — for designing the empty-thread
+// 9-13) One IM-linked conversation per remaining connector, so every supported
+// third-party IM appears in the inbox with its brand icon.
+const c9Items: Item[] = [
+  msg({
+    id: "c9-1",
+    conv: "cv-wecom",
+    seq: 1,
+    by: P.liu,
+    text: "林工，Q3 合作方案内部过了，明天发正式版给你。",
+    at: "2026-06-30T04:10:00Z",
+    subtype: "chat.message",
+    transport: txn("wecom", "inbound"),
+  }),
+  msg({
+    id: "c9-2",
+    conv: "cv-wecom",
+    seq: 2,
+    by: P.self,
+    text: "好的刘总，收到后我同步给团队。",
+    at: "2026-06-30T04:14:00Z",
+    subtype: "chat.message",
+    transport: txn("wecom", "outbound"),
+  }),
+]
+const cvWecom = conv({
+  id: "cv-wecom",
+  title: "刘伟",
+  kind: "direct",
+  isIm: true,
+  members: [P.self, P.liu],
+  items: c9Items,
+  unread: 1,
+  transportKind: "wecom",
+  updatedAt: "2026-06-30T04:14:00Z",
+})
+
+const c10Items: Item[] = [
+  msg({
+    id: "c10-1",
+    conv: "cv-dingtalk",
+    seq: 1,
+    by: P.zhang,
+    text: "本月对账单在钉钉审批里，麻烦有空点一下确认。",
+    at: "2026-06-29T10:00:00Z",
+    subtype: "chat.message",
+    transport: txn("dingtalk", "inbound"),
+  }),
+  msg({
+    id: "c10-2",
+    conv: "cv-dingtalk",
+    seq: 2,
+    by: P.self,
+    text: "已确认，辛苦张敏。",
+    at: "2026-06-29T10:20:00Z",
+    subtype: "chat.message",
+    transport: txn("dingtalk", "outbound"),
+  }),
+]
+const cvDingtalk = conv({
+  id: "cv-dingtalk",
+  title: "张敏",
+  kind: "direct",
+  isIm: true,
+  members: [P.self, P.zhang],
+  items: c10Items,
+  transportKind: "dingtalk",
+  updatedAt: "2026-06-29T10:20:00Z",
+})
+
+const c11Items: Item[] = [
+  msg({
+    id: "c11-1",
+    conv: "cv-qq",
+    seq: 1,
+    by: P.laochen,
+    text: "周末聚不聚？老地方～",
+    at: "2026-06-28T15:00:00Z",
+    subtype: "chat.message",
+    transport: txn("qq", "inbound"),
+  }),
+  msg({
+    id: "c11-2",
+    conv: "cv-qq",
+    seq: 2,
+    by: P.self,
+    text: "必须的，周六晚上见！",
+    at: "2026-06-28T15:05:00Z",
+    subtype: "chat.message",
+    transport: txn("qq", "outbound"),
+  }),
+]
+const cvQq = conv({
+  id: "cv-qq",
+  title: "老陈",
+  kind: "direct",
+  isIm: true,
+  members: [P.self, P.laochen],
+  items: c11Items,
+  unread: 2,
+  transportKind: "qq",
+  updatedAt: "2026-06-28T15:05:00Z",
+})
+
+const c12Items: Item[] = [
+  msg({
+    id: "c12-1",
+    conv: "cv-whatsapp",
+    seq: 1,
+    by: P.sarah,
+    text: "Hi! Sent the localized copy for the APAC launch — let me know if it reads well.",
+    at: "2026-06-30T02:30:00Z",
+    subtype: "chat.message",
+    transport: txn("whatsapp", "inbound"),
+  }),
+  msg({
+    id: "c12-2",
+    conv: "cv-whatsapp",
+    seq: 2,
+    by: P.self,
+    text: "Got it, thanks Sarah — reviewing now. 🙌",
+    at: "2026-06-30T02:40:00Z",
+    subtype: "chat.message",
+    transport: txn("whatsapp", "outbound"),
+  }),
+]
+const cvWhatsapp = conv({
+  id: "cv-whatsapp",
+  title: "Sarah Chen",
+  kind: "direct",
+  isIm: true,
+  members: [P.self, P.sarah],
+  items: c12Items,
+  unread: 1,
+  transportKind: "whatsapp",
+  updatedAt: "2026-06-30T02:40:00Z",
+})
+
+const c13Items: Item[] = [
+  msg({
+    id: "c13-1",
+    conv: "cv-wau",
+    seq: 1,
+    by: P.ahmed,
+    text: "Salaam! The supplier confirmed the samples ship Monday.",
+    at: "2026-06-29T18:00:00Z",
+    subtype: "chat.message",
+    transport: txn("whatsapp_unofficial", "inbound"),
+  }),
+  msg({
+    id: "c13-2",
+    conv: "cv-wau",
+    seq: 2,
+    by: P.self,
+    text: "Perfect, appreciate it Ahmed.",
+    at: "2026-06-29T18:12:00Z",
+    subtype: "chat.message",
+    transport: txn("whatsapp_unofficial", "outbound"),
+  }),
+]
+const cvWau = conv({
+  id: "cv-wau",
+  title: "Ahmed",
+  kind: "direct",
+  isIm: true,
+  members: [P.self, P.ahmed],
+  items: c13Items,
+  transportKind: "whatsapp_unofficial",
+  updatedAt: "2026-06-29T18:12:00Z",
+})
+
+// 14) A brand-new conversation with NO messages — for designing the empty-thread
 // state (no lastItem in the list, empty timeline in the pane).
 const cvEmpty = conv({
   id: "cv-empty",
@@ -1011,12 +1236,32 @@ const cvEmpty = conv({
 export const designChatBootstrap: ChatBootstrapViewSchemaType = {
   workspaceMemberId: designViewerMemberId,
   clientInstanceRequired: true,
-  conversations: [cvEmpty, cv3, cv1, cv6, cv2, cv4, cv7, cv5, cv8],
+  conversations: [
+    cvEmpty,
+    cv3,
+    cv1,
+    cv6,
+    cv2,
+    cvWecom,
+    cv4,
+    cvWhatsapp,
+    cv7,
+    cvWau,
+    cvQq,
+    cv5,
+    cvDingtalk,
+    cv8,
+  ],
   nextInboxCursor: 100,
 }
 
 const byId: Record<string, MessagesView> = {
   "cv-empty": messagesView({ conversation: cvEmpty, items: [] }),
+  "cv-wecom": messagesView({ conversation: cvWecom, items: c9Items }),
+  "cv-dingtalk": messagesView({ conversation: cvDingtalk, items: c10Items }),
+  "cv-qq": messagesView({ conversation: cvQq, items: c11Items }),
+  "cv-whatsapp": messagesView({ conversation: cvWhatsapp, items: c12Items }),
+  "cv-wau": messagesView({ conversation: cvWau, items: c13Items }),
   "cv-colleague": messagesView({ conversation: cv1, items: c1Items }),
   "cv-aria": messagesView({ conversation: cv2, items: c2Items }),
   "cv-atlas": messagesView({
