@@ -285,12 +285,45 @@ function planApprovalTask(o: {
   }
 }
 
+type UserInputTask = Extract<TaskSummarySchemaType, { kind: "user_input" }>
+type InputQuestion = UserInputTask["userInput"]["questions"][number]
+type InputOption = NonNullable<InputQuestion["options"]>[number]
+
+// A single- or multi-select question — renders as radio / checkbox options in
+// the input-request card.
+function selectQuestion(o: {
+  id: string
+  type: "single_select" | "multi_select"
+  header: string
+  prompt: string
+  description?: string
+  options: InputOption[]
+  required?: boolean
+  minSelections?: number
+  maxSelections?: number
+  allowOther?: boolean
+}): InputQuestion {
+  return {
+    id: o.id,
+    header: o.header,
+    type: o.type,
+    prompt: o.prompt,
+    description: o.description,
+    required: o.required ?? true,
+    options: o.options,
+    allowOther: o.allowOther,
+    ...(o.minSelections != null ? { minSelections: o.minSelections } : {}),
+    ...(o.maxSelections != null ? { maxSelections: o.maxSelections } : {}),
+  }
+}
+
 function userInputTask(o: {
   id: string
   conv: string
   requester: Person
   title: string
   instructions?: string
+  questions?: InputQuestion[]
 }): TaskSummarySchemaType {
   return {
     kind: "user_input",
@@ -306,7 +339,7 @@ function userInputTask(o: {
     userInput: {
       title: o.title,
       instructions: o.instructions,
-      questions: [],
+      questions: o.questions ?? [],
     },
   }
 }
@@ -870,8 +903,33 @@ const c8Items: Item[] = [
       conv: "cv-feishu",
       requester: P.aria,
       title: "补充周报信息",
-      instructions:
-        "请确认：本周报是否包含下周计划？收件群是「项目 A」还是「项目 A + 管理层」？",
+      instructions: "确认这两项后我就整理并发出周报。",
+      questions: [
+        selectQuestion({
+          id: "q-plan",
+          type: "single_select",
+          header: "下周计划",
+          prompt: "本周报是否包含下周计划？",
+          options: [
+            { id: "yes", label: "包含下周计划" },
+            { id: "no", label: "只写本周进展" },
+          ],
+        }),
+        selectQuestion({
+          id: "q-recipients",
+          type: "multi_select",
+          header: "收件范围",
+          prompt: "发到哪些群？（可多选）",
+          description: "至少选择一个群。",
+          minSelections: 1,
+          options: [
+            { id: "proj", label: "项目 A 群", description: "核心项目成员" },
+            { id: "mgmt", label: "管理层群", description: "周报汇报对象" },
+            { id: "all", label: "全员群", description: "全公司可见" },
+          ],
+          allowOther: true,
+        }),
+      ],
     }),
   }),
   msg({

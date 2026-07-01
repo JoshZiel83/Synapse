@@ -57,6 +57,7 @@ import {
   AlertTriangle,
   AtSign,
   Copy,
+  Check,
   CornerUpLeft,
   Expand,
   CheckCircle2,
@@ -559,6 +560,47 @@ function TaskStateChip({
   )
 }
 
+// Radio (single-select) or checkbox (multi-select) mark, in the accent color.
+function OptionMark({
+  multi,
+  selected,
+  submitting,
+}: {
+  multi: boolean
+  selected: boolean
+  submitting?: boolean
+}) {
+  if (submitting) {
+    return (
+      <Loader2 className="mt-0.5 size-4 shrink-0 animate-spin text-muted-foreground" />
+    )
+  }
+  if (multi) {
+    return (
+      <span
+        className={cn(
+          "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-[5px] border-2 transition-colors",
+          selected
+            ? "border-primary bg-primary text-primary-foreground"
+            : "border-muted-foreground/35"
+        )}
+      >
+        {selected ? <Check className="size-3" strokeWidth={3} /> : null}
+      </span>
+    )
+  }
+  return (
+    <span
+      className={cn(
+        "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border-2 transition-colors",
+        selected ? "border-primary" : "border-muted-foreground/35"
+      )}
+    >
+      {selected ? <span className="size-1.5 rounded-full bg-primary" /> : null}
+    </span>
+  )
+}
+
 function formatRuntimeAuthorizationPresetLabel(
   preset: RuntimeAuthorizationPreset
 ) {
@@ -1027,27 +1069,14 @@ function TaskCard({
               questions.length > 1 || question.prompt !== userInput.title
 
             return (
-              <div
-                key={question.id}
-                className="space-y-2 rounded-2xl border border-border/70 bg-muted/20 px-4 py-3"
-              >
+              <div key={question.id} className="space-y-2">
                 {shouldShowFieldHeading ? (
-                  <div className="space-y-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="text-sm font-medium text-foreground">
-                        {question.header}
-                      </div>
-                      {question.required ? (
-                        <Badge
-                          variant="outline"
-                          className="rounded-full border-border/70 bg-background/70 text-[10px] text-muted-foreground"
-                        >
-                          Required
-                        </Badge>
-                      ) : null}
-                    </div>
-                    <div className="text-sm text-foreground">
+                  <div className="space-y-0.5">
+                    <div className="text-sm font-medium text-foreground">
                       {question.prompt}
+                      {question.required ? (
+                        <span className="ml-1 text-muted-foreground">*</span>
+                      ) : null}
                     </div>
                     {question.description ? (
                       <div className="text-xs text-muted-foreground">
@@ -1069,10 +1098,10 @@ function TaskCard({
                       }
                       placeholder={question.placeholder || "Type your answer"}
                       disabled={Boolean(submittingAction)}
-                      className="min-h-24 resize-y rounded-2xl bg-background"
+                      className="min-h-20 resize-y rounded-lg bg-background text-sm"
                     />
                   ) : questionAnswerText ? (
-                    <div className="rounded-xl border border-border/70 bg-background px-3 py-2 text-sm whitespace-pre-wrap text-foreground">
+                    <div className="text-sm whitespace-pre-wrap text-foreground">
                       {questionAnswerText}
                     </div>
                   ) : (
@@ -1088,11 +1117,14 @@ function TaskCard({
                         submittingAction === `${question.id}:${option.id}`
 
                       if (canResolveUserInput && isSimpleSingleSelect) {
+                        // Single yes/no-style prompt: tapping an option submits
+                        // immediately (no separate submit button).
                         return (
                           <Button
                             key={option.id}
                             type="button"
-                            variant={isSelected ? "default" : "outline"}
+                            variant="outline"
+                            size="sm"
                             disabled={Boolean(submittingAction)}
                             onClick={() =>
                               void submitResolution(
@@ -1107,31 +1139,20 @@ function TaskCard({
                                 }
                               )
                             }
-                            className="h-auto w-full justify-start rounded-2xl px-4 py-3 text-left"
+                            className="h-auto w-full justify-start rounded-lg px-3 py-2 text-left font-normal"
                           >
-                            <div className="flex min-w-0 flex-1 items-start gap-3">
-                              {isSubmitting ? (
-                                <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
-                              ) : isSelected ? (
-                                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
-                              ) : (
-                                <div className="mt-1 h-2 w-2 shrink-0 rounded-full bg-current/40" />
-                              )}
-                              <div className="min-w-0">
-                                <div className="font-medium whitespace-normal">
-                                  {option.label}
-                                </div>
-                                {option.description ? (
-                                  <div className="mt-1 text-xs whitespace-normal opacity-80">
-                                    {option.description}
-                                  </div>
-                                ) : null}
-                                {option.preview ? (
-                                  <div className="mt-2 rounded-xl border border-border/60 bg-background/80 px-3 py-2 text-xs text-muted-foreground">
-                                    {option.preview}
-                                  </div>
-                                ) : null}
+                            {isSubmitting ? (
+                              <Loader2 className="mr-2 size-4 shrink-0 animate-spin" />
+                            ) : null}
+                            <div className="min-w-0">
+                              <div className="text-sm font-medium whitespace-normal">
+                                {option.label}
                               </div>
+                              {option.description ? (
+                                <div className="mt-0.5 text-xs whitespace-normal text-muted-foreground">
+                                  {option.description}
+                                </div>
+                              ) : null}
                             </div>
                           </Button>
                         )
@@ -1169,28 +1190,25 @@ function TaskCard({
                               })
                             }
                             className={cn(
-                              "flex w-full items-start gap-3 rounded-2xl border px-4 py-3 text-left transition-colors",
-                              isSelected
-                                ? "border-emerald-500/25 bg-emerald-500/10"
-                                : "border-border/70 bg-background hover:bg-muted/30"
+                              "flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors",
+                              isSelected ? "bg-primary/8" : "hover:bg-muted/50"
                             )}
                           >
-                            {isSelected ? (
-                              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
-                            ) : (
-                              <div className="mt-1 h-2 w-2 shrink-0 rounded-full bg-muted-foreground/35" />
-                            )}
+                            <OptionMark
+                              multi={question.type === "multi_select"}
+                              selected={isSelected}
+                            />
                             <div className="min-w-0">
-                              <div className="font-medium text-foreground">
+                              <div className="text-sm text-foreground">
                                 {option.label}
                               </div>
                               {option.description ? (
-                                <div className="mt-1 text-xs text-muted-foreground">
+                                <div className="mt-0.5 text-xs text-muted-foreground">
                                   {option.description}
                                 </div>
                               ) : null}
                               {option.preview ? (
-                                <div className="mt-2 rounded-xl border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                                <div className="mt-1 font-mono text-xs text-muted-foreground">
                                   {option.preview}
                                 </div>
                               ) : null}
@@ -1203,33 +1221,28 @@ function TaskCard({
                         <div
                           key={option.id}
                           className={cn(
-                            "rounded-2xl border px-4 py-3",
-                            isSelected
-                              ? "border-emerald-500/25 bg-emerald-500/10"
-                              : "border-border/70 bg-background"
+                            "flex items-start gap-2.5 rounded-lg px-2.5 py-2",
+                            isSelected ? "bg-primary/8" : "opacity-55"
                           )}
                         >
-                          <div className="flex items-start gap-3">
-                            {isSelected ? (
-                              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
-                            ) : (
-                              <div className="mt-1 h-2 w-2 shrink-0 rounded-full bg-muted-foreground/35" />
-                            )}
-                            <div className="min-w-0">
-                              <div className="font-medium text-foreground">
-                                {option.label}
-                              </div>
-                              {option.description ? (
-                                <div className="mt-1 text-xs text-muted-foreground">
-                                  {option.description}
-                                </div>
-                              ) : null}
-                              {option.preview ? (
-                                <div className="mt-2 rounded-xl border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                                  {option.preview}
-                                </div>
-                              ) : null}
+                          <OptionMark
+                            multi={question.type === "multi_select"}
+                            selected={isSelected}
+                          />
+                          <div className="min-w-0">
+                            <div className="text-sm text-foreground">
+                              {option.label}
                             </div>
+                            {option.description ? (
+                              <div className="mt-0.5 text-xs text-muted-foreground">
+                                {option.description}
+                              </div>
+                            ) : null}
+                            {option.preview ? (
+                              <div className="mt-1 font-mono text-xs text-muted-foreground">
+                                {option.preview}
+                              </div>
+                            ) : null}
                           </div>
                         </div>
                       )
@@ -1237,31 +1250,26 @@ function TaskCard({
 
                     {question.allowOther ? (
                       canResolveUserInput ? (
-                        <div className="space-y-1">
-                          <div className="text-xs font-medium text-muted-foreground">
-                            Other
-                          </div>
-                          <Textarea
-                            value={draft.otherText}
-                            onChange={(event) =>
-                              updateDraftAnswer(question.id, (current) => ({
-                                ...current,
-                                otherText: event.target.value,
-                                selectedOptionIds:
-                                  question.type === "single_select" &&
-                                  event.target.value.trim()
-                                    ? []
-                                    : current.selectedOptionIds,
-                              }))
-                            }
-                            placeholder="Add another answer"
-                            disabled={Boolean(submittingAction)}
-                            className="min-h-20 resize-y rounded-2xl bg-background"
-                          />
-                        </div>
+                        <Textarea
+                          value={draft.otherText}
+                          onChange={(event) =>
+                            updateDraftAnswer(question.id, (current) => ({
+                              ...current,
+                              otherText: event.target.value,
+                              selectedOptionIds:
+                                question.type === "single_select" &&
+                                event.target.value.trim()
+                                  ? []
+                                  : current.selectedOptionIds,
+                            }))
+                          }
+                          placeholder="其它…"
+                          disabled={Boolean(submittingAction)}
+                          className="min-h-9 resize-y rounded-lg bg-background text-sm"
+                        />
                       ) : question.answer?.otherText ? (
-                        <div className="rounded-xl border border-border/70 bg-background px-3 py-2 text-sm whitespace-pre-wrap text-foreground">
-                          {`Other: ${question.answer.otherText}`}
+                        <div className="text-sm whitespace-pre-wrap text-foreground">
+                          {`其它：${question.answer.otherText}`}
                         </div>
                       ) : null
                     ) : null}
