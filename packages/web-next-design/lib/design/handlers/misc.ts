@@ -1,18 +1,13 @@
-import {
-  AuditLogListViewSchema,
-  StoredFileRecordViewSchema,
-  FileRecordViewSchema,
-} from "@synapse/shared/schemas"
+import { AuditLogListViewSchema } from "@synapse/shared/schemas"
 import { mock } from "../faker-setup"
+import { designUploadedFile } from "../fixtures/files"
 import type { DesignHandlers } from "./_types"
 
 // Cross-cutting odds and ends: the workspace audit-log feed and the file
-// upload / info endpoints. These back the audit page and any attachment UI.
+// upload / info endpoints. The file record schemas carry a z.custom field that
+// crashes zod-schema-faker, so upload/info return a curated record instead.
 export const miscHandlers = {
   getAuditLogs: async () => mock(AuditLogListViewSchema),
-  uploadFile: async () => mock(StoredFileRecordViewSchema),
-  // Re-enabled after the RC3 fix (b9647863): FileRecordViewSchema's
-  // originSummary.system now infers the FileOriginSystem union (not string),
-  // matching the hand-written FileRecordView (see contract-parity.ts).
-  getFileInfo: async () => mock(FileRecordViewSchema),
+  uploadFile: async () => designUploadedFile(),
+  getFileInfo: async () => designUploadedFile(),
 } satisfies DesignHandlers

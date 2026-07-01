@@ -174,6 +174,30 @@ function textBlocks(text: string): ContentBlock[] {
   return [textBlock(text)]
 }
 
+type FileCategory = Extract<ContentBlock, { type: "file_ref" }>["category"]
+
+// An uploaded-file attachment. Documents render a file card from this metadata;
+// images/video need resolveContentUrl to map the sha to a real asset (see the
+// design content map in lib/utils.ts) — pass the hero-reference sha for that.
+const HERO_IMAGE_SHA = "deadbeef".repeat(8)
+function fileBlock(o: {
+  name: string
+  mimeType: string
+  sizeBytes: number
+  category: FileCategory
+  sha256?: string
+}): ContentBlock {
+  return {
+    id: nextBlkId(),
+    type: "file_ref",
+    sha256: o.sha256 ?? "0".repeat(64),
+    mimeType: o.mimeType,
+    name: o.name,
+    sizeBytes: o.sizeBytes,
+    category: o.category,
+  }
+}
+
 function msg(o: {
   id: string
   conv: string
@@ -546,6 +570,22 @@ const c1Items: Item[] = [
     by: P.self,
     text: "陈晓，落地页的第二版设计稿我发你了，有空看一下？",
     at: "2026-06-30T09:40:00Z",
+    blocks: [
+      textBlock("陈晓，落地页的第二版设计稿我发你了，有空看一下？"),
+      fileBlock({
+        name: "落地页设计稿-v2.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 2_480_000,
+        category: "document",
+      }),
+      fileBlock({
+        name: "hero-参考截图.png",
+        mimeType: "image/png",
+        sizeBytes: 863_000,
+        category: "image",
+        sha256: HERO_IMAGE_SHA,
+      }),
+    ],
   }),
   msg({
     id: "c1-2",

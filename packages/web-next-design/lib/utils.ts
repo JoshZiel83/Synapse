@@ -36,7 +36,21 @@ export function resolveFileUrl(url?: string | null) {
 // (+ optional path); bytes are served by GET /api/v1/content/<sha256> (mounted
 // under /api/v1 so the dev Next rewrite + prod nginx proxy it like any API
 // route). This builds the absolute URL (reusing resolveFileUrl's origin logic).
+// web-next-design: the sandbox has no /api/v1/content backend, so file_ref
+// bytes (images/video) can't load. Map the fixtures' known content shas to real
+// assets shipped in public/ so the file-upload UI renders with actual media.
+// Documents render a card from block metadata and don't need this.
+const DESIGN_CONTENT_URLS: Record<string, string> = {
+  ["deadbeef".repeat(8)]: "/design/hero-reference.svg",
+}
+
 export function resolveContentUrl(sha256?: string | null) {
   if (!sha256) return undefined
+  if (
+    process.env.NEXT_PUBLIC_DESIGN_MOCK !== "0" &&
+    DESIGN_CONTENT_URLS[sha256]
+  ) {
+    return DESIGN_CONTENT_URLS[sha256]
+  }
   return resolveFileUrl(`/api/v1/content/${sha256}`)
 }
