@@ -22,6 +22,7 @@ import {
   History,
   RefreshCw,
 } from "lucide-react"
+import { ModelVendorIcon } from "@/components/model-vendor-icons"
 import ModelItemDialog from "./model-item-dialog"
 import ModelItemVersions from "./model-item-versions"
 import {
@@ -304,8 +305,9 @@ export default function ModelGroupDetail({
                             : "border-red-500/10 bg-red-500/10"
                         }`}
                       >
-                        <Cpu
-                          className={`h-5 w-5 ${item.isEnabled ? "text-emerald-400" : "text-red-400"}`}
+                        <ModelVendorIcon
+                          vendor={item.vendor}
+                          className="h-5 w-5"
                         />
                       </div>
                       <div>

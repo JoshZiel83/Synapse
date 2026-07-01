@@ -32,6 +32,7 @@ import {
   ShieldCheck,
   Trash2,
 } from "lucide-react"
+import { ModelVendorIcon } from "@/components/model-vendor-icons"
 import { toast } from "sonner"
 
 import { useWorkspace } from "../workspace-provider"
@@ -1758,7 +1759,10 @@ export default function ModelSettingsWorkbench() {
                                       : "bg-muted text-muted-foreground"
                                   }`}
                                 >
-                                  <Cpu className="size-4" />
+                                  <ModelVendorIcon
+                                    vendor={item.vendor}
+                                    className="size-4"
+                                  />
                                 </div>
                                 <div className="min-w-0">
                                   <div className="flex flex-wrap items-center gap-2">
