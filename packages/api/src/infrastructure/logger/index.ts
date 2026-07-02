@@ -86,7 +86,6 @@ const DOMAIN_SET: ReadonlySet<string> = new Set(LOG_DOMAINS)
 const SCOPE_TO_DOMAIN: Readonly<Record<string, DomainScope>> = {
   ai: { domain: "ai" },
   "ai.audio-fallback": { domain: "ai", component: "audio-fallback" },
-  "ai.image-fallback": { domain: "ai", component: "image-fallback" },
   "ai.sdk": { domain: "ai", component: "sdk" },
   "ai.to-model-messages": { domain: "ai", component: "to-model-messages" },
   audit: { domain: "audit" },
@@ -134,6 +133,7 @@ const SCOPE_TO_DOMAIN: Readonly<Record<string, DomainScope>> = {
   "mcp.tool-resolver": { domain: "mcp", component: "tool-resolver" },
   memory: { domain: "memory" },
   "memory-indexing": { domain: "memory", component: "indexing" },
+  "ocr.facade": { domain: "ocr", component: "facade" },
   "ocr.ppocr": { domain: "ocr", component: "ppocr" },
   "ocr.registry": { domain: "ocr", component: "registry" },
   "ocr.tesseract": { domain: "ocr", component: "tesseract" },

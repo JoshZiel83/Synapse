@@ -66,16 +66,18 @@ export async function buildImageFallbackContext(
 
   const fileRef = `<FileRef id="${block.sha256}"/>`
   const lines = [
-    `[Image fallback] ${reason} The platform ran a local OCR pass before building this request.`,
+    `[Image fallback] ${reason}`,
     `Original image FileRef: ${fileRef}`,
   ]
 
   if (ocr.ok && ocr.text) {
     lines.push(
-      `Reference OCR text (may be incomplete or incorrect): ${ocr.text}`
+      `The platform ran an OCR pass on this image; reference text (may be incomplete or incorrect): ${ocr.text}`
     )
   } else {
-    lines.push(`Reference OCR unavailable: ${ocr.error || "unknown error"}.`)
+    lines.push(
+      `Reference OCR text is unavailable (${ocr.error || "unknown error"}).`
+    )
   }
 
   lines.push(

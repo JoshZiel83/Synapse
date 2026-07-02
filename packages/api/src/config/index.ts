@@ -204,8 +204,7 @@ const envSchema = z
     }
     // A selected OCR provider must have its sidecar URL, or the api would run
     // "configured" but every OCR call would fail at request time.
-    const ocrProvider =
-      firstNonEmpty([env.OCR_PROVIDER, env.IMAGE_FALLBACK_PROVIDER]) ?? "none"
+    const ocrProvider = resolveOcrProviderName(env)
     if (ocrProvider === "tesseract" && !env.TESSERACT_URL) {
       ctx.addIssue({
         code: "custom",
@@ -237,6 +236,18 @@ function firstNonEmpty(
     if (trimmed) return trimmed
   }
   return undefined
+}
+
+/** Resolve the active OCR provider name: OCR_PROVIDER wins, then the deprecated
+ *  IMAGE_FALLBACK_PROVIDER alias, else "none". One place so the superRefine gate
+ *  and the config assembly can't diverge on the alias-precedence policy. */
+function resolveOcrProviderName(env: {
+  OCR_PROVIDER?: string
+  IMAGE_FALLBACK_PROVIDER?: string
+}): string {
+  return (
+    firstNonEmpty([env.OCR_PROVIDER, env.IMAGE_FALLBACK_PROVIDER]) ?? "none"
+  )
 }
 
 function loadEnvOrExit(): z.infer<typeof envSchema> {
@@ -360,8 +371,7 @@ export const config = {
   ocr: {
     // OCR_PROVIDER wins; deprecated IMAGE_FALLBACK_PROVIDER is the alias; else
     // "none" (image OCR is skipped).
-    provider:
-      firstNonEmpty([env.OCR_PROVIDER, env.IMAGE_FALLBACK_PROVIDER]) ?? "none",
+    provider: resolveOcrProviderName(env),
     inlineDeadlineMs: env.OCR_INLINE_DEADLINE_MS,
     tesseract: {
       url: env.TESSERACT_URL,

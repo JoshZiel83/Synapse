@@ -24,9 +24,10 @@ export interface OcrProviderRequest {
 
 /**
  * The normalized OCR result every adapter maps INTO. `text` is the only field
- * guaranteed on success (`ok:true` ⇒ non-empty `text`). Richer fields
- * (lines/bbox/confidence/tables) are intentionally deferred until a consumer
- * shapes them; `raw` always carries the untouched engine/vendor payload.
+ * guaranteed on success (`ok:true` ⇒ non-empty `text`). Richer fields (lines,
+ * bbox, confidence, tables, and the untouched vendor payload) are intentionally
+ * deferred until a real consumer shapes them — added back to this contract then,
+ * not carried speculatively.
  *
  * `retryable` classifies a FAILURE: true = transient (sidecar down / timeout /
  * 5xx) → the parse pipeline may retry and the facade must NOT cache it; false =
@@ -39,13 +40,7 @@ export interface OcrResult {
   readonly engineVersion: string
   readonly model?: string
   readonly retryable?: boolean
-  readonly raw?: unknown
   readonly error?: string
-}
-
-export interface OcrCapabilities {
-  readonly supportsPdf: boolean
-  readonly languages?: readonly string[] | "auto"
 }
 
 export interface OcrProvider {
@@ -55,7 +50,6 @@ export interface OcrProvider {
   readonly parserKey: string
   /** file_parse_runs.parser_version — provenance + facade cache-key component */
   readonly engineVersion: string
-  readonly capabilities: OcrCapabilities
   /** true only when the env needed to reach this engine is present */
   isConfigured(): boolean
   /** MUST always resolve (never reject); returns ok:false on any error. */

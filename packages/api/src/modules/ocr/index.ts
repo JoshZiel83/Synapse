@@ -15,7 +15,7 @@ import { readContentBufferBySha } from "../files/service.js"
 import { resolveOcrProvider } from "./registry.js"
 import type { OcrProvider, OcrResult, RecognizeOcrInput } from "./types.js"
 
-const log = createLogger("ocr.registry")
+const log = createLogger("ocr.facade")
 
 const cache = new LRUCache<string, Promise<OcrResult>>({
   max: 500,

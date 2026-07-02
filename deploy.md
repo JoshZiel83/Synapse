@@ -84,18 +84,19 @@ Build production images:
 docker compose --profile production build api web mobile-web
 ```
 
-The API image bakes in everything it needs at build time — no runtime model
-downloads, no silent degradation:
+The API image bakes in the memory embedding model
+(`Xenova/multilingual-e5-small`) into `/app/models/memory` at build time so
+vector search works offline — no runtime download, no silent degradation.
 
-- the memory embedding model (`Xenova/multilingual-e5-small`) into
-  `/app/models/memory` (so vector search works offline),
-- the tesseract OCR language data (`chi_sim`, `chi_tra`, `eng`, `jpn`) into
-  `/app/models/tessdata`.
-
-These live outside the `api_storage` volume mount on purpose (a mount under
-`/app/storage` would shadow them). If a model or language fails to fetch, the
-image build FAILS rather than degrading at runtime. `MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD`
+This lives outside the `api_storage` volume mount on purpose (a mount under
+`/app/storage` would shadow it). If the model fails to fetch, the image build
+FAILS rather than degrading at runtime. `MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD`
 is therefore `false` in the production container.
+
+OCR is **not** baked into the API image — it runs out-of-process. The
+`production` profile includes a `tesseract-ocr` sidecar (image OCR on by
+default); the optional `ppocr` profile adds a PP-OCRv6 sidecar. Select the
+provider with `OCR_PROVIDER` (see the OCR block in `.env.example`).
 
 Start infrastructure:
 

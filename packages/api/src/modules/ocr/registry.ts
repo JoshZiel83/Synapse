@@ -16,7 +16,6 @@ const nullProvider: OcrProvider = {
   key: "none",
   parserKey: "ocr_none",
   engineVersion: "0",
-  capabilities: { supportsPdf: false, languages: "auto" },
   isConfigured: () => false,
   recognize: async (): Promise<OcrResult> => ({
     ok: false,
