@@ -60,7 +60,15 @@ def build_pipeline(tier: str = TIER):
         use_textline_orientation=True,
         device="cpu",
         cpu_threads=int(os.environ.get("PPOCR_CPU_THREADS", "8")),
-        enable_mkldnn=True,
+        # MKL-DNN (oneDNN) is DISABLED by default: on paddlepaddle 3.x's PIR
+        # executor it raises at inference time
+        #   NotImplementedError: ConvertPirAttribute2RuntimeAttribute not support
+        #   [pir::ArrayAttribute<pir::DoubleAttribute>] (onednn_instruction.cc)
+        # (verified on paddlepaddle 3.3.1). The standard CPU kernels work fine.
+        # Opt back in with PPOCR_ENABLE_MKLDNN=1 only on a paddle build where you
+        # have verified oneDNN+PIR inference actually runs.
+        enable_mkldnn=os.environ.get("PPOCR_ENABLE_MKLDNN", "").lower()
+        in ("1", "true", "yes"),
     )
 
 

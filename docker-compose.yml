@@ -249,6 +249,10 @@ services:
       PPOCR_TIER: ${PPOCR_TIER:-small}
       PPOCR_MAX_CONCURRENCY: ${PPOCR_MAX_CONCURRENCY:-2}
       PPOCR_CPU_THREADS: ${PPOCR_CPU_THREADS:-8}
+      # oneDNN/MKL-DNN CPU accel is OFF by default — it crashes inference on
+      # paddlepaddle 3.x's PIR executor (verified on 3.3.1). Only set =1 on a
+      # paddle build where you've verified oneDNN+PIR inference runs.
+      PPOCR_ENABLE_MKLDNN: ${PPOCR_ENABLE_MKLDNN:-}
     expose:
       - "8770"
     healthcheck:
