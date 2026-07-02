@@ -1,0 +1,77 @@
+# PP-OCRv6 OCR sidecar — official `paddleocr` (PP-OCRv6) on the CPU PaddlePaddle
+# backend, behind a small FastAPI service. The Synapse api bundles NO OCR engine
+# (zero-OCR-api); it POSTs image bytes here over HTTP and gets back text. Build
+# context is the repo ROOT:
+#   docker build -f infrastructure/Dockerfile.ppocr -t synapse-ppocr .
+#
+# The recognition tier (tiny|small) is a BUILD-TIME choice: only the selected
+# tier's weights are baked in. Rebuild with --build-arg PPOCR_TIER=tiny to switch.
+# Heavier than the tesseract sidecar (~1–2 GB RSS from the Paddle CPU runtime).
+
+FROM python:3.12-slim
+
+# China mirror for resilient pip installs (matches the other sidecars). Paddle's
+# own CPU index is used explicitly below and is unaffected by this default.
+RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple || true
+
+# Runtime system libs: OpenCV needs libGL (libgl1) + glib (libglib2.0-0); the
+# Paddle CPU inference runtime needs OpenMP (libgomp1).
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 libgomp1 \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# PaddlePaddle CPU wheel MUST come from the Paddle CPU index (the PyPI build
+# differs / can lag). paddleocr requires PaddlePaddle >= 3.0; pin a FLOOR (not an
+# exact version) so the index resolves a wheel that actually exists for this
+# python/arch. VERIFY the resolved version on a real build.
+RUN pip install --no-cache-dir "paddlepaddle>=3.0,<4" \
+      -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
+
+# PaddleOCR (>=3.7 ships PP-OCRv6) + the FastAPI service deps.
+COPY sidecars/ppocr/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY sidecars/ppocr/ ./
+
+# Non-root runtime user. The paddle model cache lives under its home
+# (~/.paddlex/official_models) — so we prefetch AS this user below.
+RUN useradd --create-home --uid 10001 ocr && chown -R ocr:ocr /app
+USER ocr
+
+ENV PYTHONUNBUFFERED=1 \
+    PPOCR_HOST=0.0.0.0 \
+    PPOCR_PORT=8770 \
+    PPOCR_MAX_CONCURRENCY=2 \
+    PPOCR_CPU_THREADS=8
+
+# Bake the PP-OCRv6 weights for the selected tier (det + rec + textline-ori only;
+# doc-orientation/unwarping are disabled in pipeline.py) so runtime does no
+# network I/O. HF is the default source; PPOCR_MODEL_SOURCE=BOS uses the BOS
+# mirror for HF-blocked networks. Runs as `ocr`, so the cache lands in the same
+# home the service reads at runtime.
+ARG PPOCR_TIER=small
+# Model download source for the prefetch layer. PaddleX 3.x uses LOWERCASE
+# tokens: huggingface (default) | bos | aistudio | modelscope. Use `bos` for
+# HF-blocked build networks. VERIFY the exact accepted set on a real build.
+ARG PPOCR_MODEL_SOURCE=huggingface
+ENV PPOCR_TIER=${PPOCR_TIER} \
+    PADDLE_PDX_MODEL_SOURCE=${PPOCR_MODEL_SOURCE}
+RUN python prefetch_models.py
+
+# Record the baked tier so pipeline.py fails fast if a runtime PPOCR_TIER drifts
+# from it (weights for only this tier are cached). Force offline HF hub at
+# RUNTIME (weights are already downloaded above) so an egress-blocked host never
+# hangs on a network resolution during pipeline construction.
+ENV PPOCR_BAKED_TIER=${PPOCR_TIER} \
+    HF_HUB_OFFLINE=1
+
+EXPOSE 8770
+
+# Model warm-up on CPU takes a while → generous start_period; readiness gates
+# on /healthz.ready (false until the pipeline is warmed in serve.py's lifespan).
+HEALTHCHECK --interval=15s --timeout=5s --start-period=90s --retries=20 \
+  CMD python -c "import urllib.request,sys,json; sys.exit(0 if json.load(urllib.request.urlopen('http://127.0.0.1:8770/healthz', timeout=3))['ready'] else 1)" || exit 1
+
+CMD ["python", "serve.py"]

@@ -1,0 +1,12 @@
+# PP-OCRv6 sidecar runtime deps. The PaddlePaddle CPU wheel is installed
+# SEPARATELY from the Paddle CPU index in the Dockerfile (the PyPI build differs)
+# — do NOT add paddlepaddle here.
+#
+# paddleocr >=3.7 ships PP-OCRv6 (tiny/small/medium tiers). If pip can't resolve
+# >=3.7.0, confirm the exact published version at build time. opencv (cv2) is
+# pulled transitively by paddleocr; the Dockerfile apt layer (libgl1/libglib2.0-0)
+# satisfies its runtime libs.
+paddleocr>=3.7.0,<4
+fastapi>=0.110,<1
+uvicorn[standard]>=0.29,<1
+numpy>=1.24,<3

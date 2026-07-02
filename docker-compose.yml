@@ -223,6 +223,49 @@ services:
     profiles:
       - production
 
+  # Optional PP-OCRv6 OCR sidecar (compose `ppocr` profile). Heavier than
+  # tesseract: full PaddlePaddle CPU inference (~1–2 GB RSS). To use PP-OCRv6
+  # instead of tesseract, set OCR_PROVIDER=ppocr + PPOCR_URL=http://ppocr:8770/
+  # and start the profile:
+  #   docker compose --profile production --profile ppocr up -d --build ppocr api
+  # The recognition tier (tiny|small) is BAKED at build time — rebuild to change,
+  # and keep the api's PPOCR_TIER in sync (it labels parse provenance).
+  ppocr:
+    build:
+      context: .
+      dockerfile: infrastructure/Dockerfile.ppocr
+      args:
+        PPOCR_TIER: ${PPOCR_TIER:-small}
+        # PaddleX model source (lowercase): huggingface (default) | bos | aistudio.
+        PPOCR_MODEL_SOURCE: ${PPOCR_MODEL_SOURCE:-huggingface}
+    container_name: synapse-ppocr
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: ${PPOCR_MEM_LIMIT:-4g}
+    environment:
+      PPOCR_HOST: "0.0.0.0"
+      PPOCR_PORT: "8770"
+      # Must match the tier baked into the image (build arg above).
+      PPOCR_TIER: ${PPOCR_TIER:-small}
+      PPOCR_MAX_CONCURRENCY: ${PPOCR_MAX_CONCURRENCY:-2}
+      PPOCR_CPU_THREADS: ${PPOCR_CPU_THREADS:-8}
+    expose:
+      - "8770"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys,json; sys.exit(0 if json.load(urllib.request.urlopen('http://127.0.0.1:8770/healthz'))['ready'] else 1)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 90s
+    profiles:
+      - ppocr
+
   # Optional Mijia (Xiaomi smart-home) MCP sidecar. Multi-tenant: per-request
   # Xiaomi credentials arrive in the X-Mijia-Auth header from the API; nothing
   # is stored here long-term. Internal-only (no host port). Gate with the

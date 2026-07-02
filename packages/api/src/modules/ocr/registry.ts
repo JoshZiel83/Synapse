@@ -5,6 +5,7 @@
 
 import { config } from "../../config/index.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
+import { ppocrProvider } from "./providers/ppocr.js"
 import { tesseractProvider } from "./providers/tesseract.js"
 import type { OcrProvider, OcrResult } from "./types.js"
 
@@ -38,7 +39,8 @@ export function resolveOcrProvider(): OcrProvider {
   switch (provider) {
     case "tesseract":
       return tesseractProvider
-    // "ppocr" is wired in Phase 2.
+    case "ppocr":
+      return ppocrProvider
     case "none":
       return nullProvider
     default:
