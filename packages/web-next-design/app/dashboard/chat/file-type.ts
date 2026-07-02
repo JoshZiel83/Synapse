@@ -67,6 +67,13 @@ const GENERIC: Omit<Bucket, "exts"> = {
   tile: "bg-slate-400/10",
 }
 
+// Document types we can render an in-app preview for (PDF via pdf.js, DOCX via
+// docx-preview, spreadsheets via SheetJS). Everything else stays download-only.
+const PREVIEWABLE = new Set(["pdf", "docx", "xlsx", "xls", "csv", "tsv"])
+export function isPreviewable(ext: string): boolean {
+  return PREVIEWABLE.has(ext.toLowerCase())
+}
+
 export function resolveFileType(
   name: string,
   category?: string

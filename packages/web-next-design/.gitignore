@@ -36,3 +36,8 @@ pnpm-debug.log*
 next-env.d.ts
 # next-agents-md
 .next-docs/
+
+# Self-hosted Twemoji assets (fetched by scripts/fetch-twemoji.mjs; see lib/twemoji.ts)
+/public/twemoji/
+# Self-hosted emojibase data for Frimousse (copied by scripts/fetch-twemoji.mjs)
+/public/emojibase/

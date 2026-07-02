@@ -16,6 +16,10 @@ function EmojiPicker({
   return (
     <EmojiPickerPrimitive.Root
       data-slot="emoji-picker"
+      // web-next-design: load emojibase data from a self-hosted local copy
+      // (public/emojibase/, copied by scripts/fetch-twemoji.mjs) instead of
+      // Frimousse's default jsDelivr CDN — no external resources at runtime.
+      emojibaseUrl="/emojibase"
       className={cn(
         "isolate flex h-full w-fit flex-col overflow-hidden rounded-md bg-popover text-popover-foreground",
         className

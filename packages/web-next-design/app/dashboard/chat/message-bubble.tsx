@@ -33,6 +33,7 @@ import type {
 import { useRouter } from "next/navigation"
 import { createPortal } from "react-dom"
 import { useEffect, useMemo, useRef, useState } from "react"
+import dynamic from "next/dynamic"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -53,6 +54,7 @@ import {
   ChevronRight,
   ExternalLink,
   Download,
+  Eye,
   AlertTriangle,
   AtSign,
   Copy,
@@ -80,7 +82,7 @@ import type { ConversationMember } from "@/stores/chat-store"
 import type { ChatTaskResolveInput, ChatTaskResolvePayload } from "@/lib/api"
 import { cn, resolveContentUrl } from "@/lib/utils"
 import ChatAvatar from "./chat-avatar"
-import { resolveFileType } from "./file-type"
+import { isPreviewable, resolveFileType } from "./file-type"
 import { getRuntimeDetail, getRuntimeLabel } from "./runtime-ui"
 import { ToolIcon } from "./tool-icon"
 import { buildReplyPreviewText, getEntityDisplayName } from "./reply-utils"
@@ -1938,8 +1940,101 @@ function getSelectedTextWithinContainer(container: HTMLElement) {
   return text
 }
 
+// Dynamic, client-only media viewers — each mounts a browser-only engine (Web
+// Audio, video custom elements, pdf.js worker), so keep them out of SSR and the
+// message-timeline bundle; they load when a bubble/viewer first mounts.
+const VoiceBubble = dynamic(() => import("./media/voice-bubble"), {
+  ssr: false,
+  loading: () => (
+    <div className="h-[52px] w-64 max-w-full animate-pulse rounded-lg bg-muted" />
+  ),
+})
+const VideoPlayer = dynamic(() => import("./media/video-player"), {
+  ssr: false,
+  loading: () => (
+    <div className="aspect-video w-80 max-w-full animate-pulse rounded-lg bg-muted" />
+  ),
+})
+const ImageLightbox = dynamic(() => import("./media/image-lightbox"), {
+  ssr: false,
+})
+const DocumentPreview = dynamic(() => import("./media/document-preview"), {
+  ssr: false,
+})
+
+// A flat typed document launcher card. Previewable types (pdf/docx/xlsx/…) open
+// the in-app viewer; everything else is a plain download link. The glyph + tint
+// are keyed to the file type, always paired with an uppercase EXT label so type
+// never rides on color alone.
+function DocumentCard({
+  block,
+  url,
+  onPreview,
+}: {
+  block: FileRefBlock
+  url?: string
+  onPreview: () => void
+}) {
+  const ft = resolveFileType(block.name, block.category)
+  const canPreview = isPreviewable(ft.ext)
+  const cls =
+    "group/file flex w-full max-w-xs items-center gap-3 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-left transition-colors hover:bg-gray-100 dark:border-white/[0.06] dark:bg-white/[0.03] dark:hover:bg-white/[0.06]"
+  const inner = (
+    <>
+      <div
+        className={cn(
+          "flex size-10 shrink-0 items-center justify-center rounded-lg",
+          ft.tile
+        )}
+      >
+        <ft.Icon className={cn("size-[22px]", ft.tint)} />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm font-medium text-foreground/90">
+          {block.name}
+        </div>
+        <div className="text-xs text-muted-foreground">
+          {ft.ext} · {formatBytes(block.sizeBytes)}
+        </div>
+      </div>
+      {canPreview ? (
+        <Eye className="size-4 shrink-0 text-muted-foreground/40 transition-colors group-hover/file:text-primary" />
+      ) : (
+        <Download className="size-4 shrink-0 text-muted-foreground/40 transition-colors group-hover/file:text-primary" />
+      )}
+    </>
+  )
+  return canPreview ? (
+    <button type="button" onClick={onPreview} className={cls}>
+      {inner}
+    </button>
+  ) : (
+    <a href={url} target="_blank" rel="noopener noreferrer" className={cls}>
+      {inner}
+    </a>
+  )
+}
+
 function FileBlockPreview({ blocks }: { blocks: FileRefBlock[] }) {
-  const [expandedImage, setExpandedImage] = useState<string | null>(null)
+  // Every image in the message forms one paginated lightbox gallery.
+  const imageBlocks = useMemo(
+    () => blocks.filter((b) => b.category === "image"),
+    [blocks]
+  )
+  const slides = useMemo(
+    () =>
+      imageBlocks.map((b) => ({
+        src: resolveContentUrl(b.sha256) ?? "",
+        title: b.name,
+      })),
+    [imageBlocks]
+  )
+  const [lightboxIndex, setLightboxIndex] = useState(-1)
+  const [previewDoc, setPreviewDoc] = useState<{
+    url?: string
+    name: string
+    ext: string
+  } | null>(null)
 
   if (blocks.length === 0) return null
 
@@ -1951,13 +2046,14 @@ function FileBlockPreview({ blocks }: { blocks: FileRefBlock[] }) {
           const resolvedUrl = resolveContentUrl(block.sha256)
 
           if (cat === "image") {
+            const idx = imageBlocks.indexOf(block)
             return (
               <div key={block.id}>
                 <img
                   src={resolvedUrl}
                   alt={block.name}
                   className="max-h-80 max-w-xs cursor-pointer rounded-lg border border-gray-200 object-contain transition-opacity hover:opacity-90 dark:border-white/[0.06]"
-                  onClick={() => resolvedUrl && setExpandedImage(resolvedUrl)}
+                  onClick={() => setLightboxIndex(idx)}
                 />
               </div>
             )
@@ -1965,81 +2061,54 @@ function FileBlockPreview({ blocks }: { blocks: FileRefBlock[] }) {
 
           if (cat === "audio") {
             return (
-              <div
-                key={block.id}
-                className="rounded-lg bg-gray-50 p-2.5 ring-1 ring-gray-200 dark:bg-white/[0.03] dark:ring-white/[0.06]"
-              >
-                <div className="mb-1.5 truncate text-[11px] text-muted-foreground">
-                  {block.name}
-                </div>
-                <audio controls className="h-8 w-full" preload="metadata">
-                  <source src={resolvedUrl} type={block.mimeType} />
-                </audio>
-              </div>
+              <VoiceBubble key={block.id} url={resolvedUrl} name={block.name} />
             )
           }
 
           if (cat === "video") {
             return (
-              <div key={block.id}>
-                <video
-                  controls
-                  className="max-h-64 max-w-full rounded-lg"
-                  preload="metadata"
-                >
-                  <source src={resolvedUrl} type={block.mimeType} />
-                </video>
-              </div>
+              <VideoPlayer
+                key={block.id}
+                url={resolvedUrl}
+                mimeType={block.mimeType}
+                title={block.name}
+              />
             )
           }
 
-          // Document — a flat launcher card. The glyph + tint are keyed to the
-          // file type, always paired with an uppercase EXT label so type never
-          // rides on color alone.
-          const ft = resolveFileType(block.name, cat)
           return (
-            <a
+            <DocumentCard
               key={block.id}
-              href={resolvedUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="group/file flex max-w-xs items-center gap-3 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 transition-colors hover:bg-gray-100 dark:border-white/[0.06] dark:bg-white/[0.03] dark:hover:bg-white/[0.06]"
-            >
-              <div
-                className={cn(
-                  "flex size-10 shrink-0 items-center justify-center rounded-lg",
-                  ft.tile
-                )}
-              >
-                <ft.Icon className={cn("size-[22px]", ft.tint)} />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium text-foreground/90">
-                  {block.name}
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  {ft.ext} · {formatBytes(block.sizeBytes)}
-                </div>
-              </div>
-              <Download className="size-4 shrink-0 text-muted-foreground/40 transition-colors group-hover/file:text-primary" />
-            </a>
+              block={block}
+              url={resolvedUrl}
+              onPreview={() =>
+                setPreviewDoc({
+                  url: resolvedUrl,
+                  name: block.name,
+                  ext: resolveFileType(block.name, cat).ext,
+                })
+              }
+            />
           )
         })}
       </div>
 
-      {/* Image lightbox */}
-      {expandedImage ? (
-        <div
-          className="fixed inset-0 z-50 flex cursor-pointer items-center justify-center bg-black/80 p-4"
-          onClick={() => setExpandedImage(null)}
-        >
-          <img
-            src={expandedImage}
-            alt="Expanded"
-            className="max-h-full max-w-full rounded-lg object-contain"
-          />
-        </div>
-      ) : null}
+      {slides.length > 0 && (
+        <ImageLightbox
+          slides={slides}
+          index={lightboxIndex}
+          onClose={() => setLightboxIndex(-1)}
+        />
+      )}
+      {previewDoc && (
+        <DocumentPreview
+          url={previewDoc.url}
+          name={previewDoc.name}
+          ext={previewDoc.ext}
+          open
+          onClose={() => setPreviewDoc(null)}
+        />
+      )}
     </>
   )
 }
