@@ -103,9 +103,21 @@ const envSchema = z
     // importer (which can reach repo-paths), not here.
     MODEL_GROUPS_CONFIG_PATH: z.string().optional(),
 
-    AUDIO_FALLBACK_PROVIDER: withDefault(z.string().min(1), "sherpa-onnx"),
-    SHERPA_ONNX_CONFIG_JSON: withDefault(z.string(), ""),
-    SHERPA_ONNX_TIMEOUT_MS: withDefault(positiveInt, "15000"),
+    // Batch/file speech-to-text: the api bundles NO ASR engine. TRANSCRIPTION_PROVIDER
+    // selects an out-of-process provider (the sherpa-asr sidecar or, later, a
+    // cloud vendor). Default resolves to "none" => audio transcription is skipped
+    // (the AI audio-fallback degrades to "reference transcript unavailable", it
+    // does not fail). AUDIO_FALLBACK_PROVIDER is honoured as a DEPRECATED alias
+    // (TRANSCRIPTION_PROVIDER wins); its old default value "sherpa-onnx" maps to
+    // "sherpa". This is DISTINCT from ASR_PROVIDER above (realtime WS dictation).
+    TRANSCRIPTION_PROVIDER: z.string().optional(),
+    AUDIO_FALLBACK_PROVIDER: z.string().optional(),
+    // Short best-effort budget for the transcription call on the outbound-LLM
+    // path (audio fallback). Larger than OCR's 4000: speech recognition is slower.
+    TRANSCRIPTION_INLINE_DEADLINE_MS: withDefault(positiveInt, "8000"),
+    // sherpa provider → sherpa-asr sidecar (sherpa-onnx offline recognizer).
+    TRANSCRIPTION_SHERPA_URL: withDefault(z.string(), ""),
+    TRANSCRIPTION_SHERPA_TIMEOUT_MS: withDefault(positiveInt, "30000"),
 
     // OCR: the api bundles NO OCR engine. OCR_PROVIDER selects an
     // out-of-process provider (a sidecar or, later, a cloud vendor). Default
@@ -220,6 +232,26 @@ const envSchema = z
         message: "PPOCR_URL is required when OCR_PROVIDER=ppocr",
       })
     }
+    // A selected transcription provider must have its sidecar URL, or the api
+    // would run "configured" but every transcription call would fail at request
+    // time. The deprecated AUDIO_FALLBACK_PROVIDER alias degrades to "none" when
+    // it can't reach a sidecar (see resolveTranscriptionProviderName), so a stale
+    // legacy value never trips this gate — only an explicit opt-in does.
+    const transcriptionProvider = resolveTranscriptionProviderName(env)
+    // Trim to match resolveTranscriptionProviderName: a whitespace-only URL must
+    // trip this fail-fast gate, not boot "configured" and then silently cache a
+    // terminal URL-parse failure per sha256 at request time.
+    if (
+      transcriptionProvider === "sherpa" &&
+      !env.TRANSCRIPTION_SHERPA_URL?.trim()
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["TRANSCRIPTION_SHERPA_URL"],
+        message:
+          "TRANSCRIPTION_SHERPA_URL is required when TRANSCRIPTION_PROVIDER=sherpa (the api runs no in-process ASR engine)",
+      })
+    }
   })
 
 /**
@@ -248,6 +280,33 @@ function resolveOcrProviderName(env: {
   return (
     firstNonEmpty([env.OCR_PROVIDER, env.IMAGE_FALLBACK_PROVIDER]) ?? "none"
   )
+}
+
+/** Resolve the active batch-transcription provider name. TRANSCRIPTION_PROVIDER
+ *  wins; the deprecated AUDIO_FALLBACK_PROVIDER is an alias (its legacy default
+ *  value "sherpa-onnx" normalizes to "sherpa"); else "none". A sherpa selection
+ *  arriving ONLY via the legacy alias with no reachable sidecar URL degrades to
+ *  "none" (the old in-process engine is deleted) rather than crashing boot — the
+ *  alias was the old default, so a stale value must fail-open. An EXPLICIT
+ *  TRANSCRIPTION_PROVIDER=sherpa with no URL is still gated (fails fast) in
+ *  superRefine. One place so the gate and the config assembly can't diverge. */
+function resolveTranscriptionProviderName(env: {
+  TRANSCRIPTION_PROVIDER?: string
+  AUDIO_FALLBACK_PROVIDER?: string
+  TRANSCRIPTION_SHERPA_URL?: string
+}): string {
+  const normalize = (value: string | undefined): string | undefined => {
+    const trimmed = value?.trim()
+    if (!trimmed) return undefined
+    return trimmed === "sherpa-onnx" ? "sherpa" : trimmed
+  }
+  const explicit = normalize(env.TRANSCRIPTION_PROVIDER)
+  if (explicit) return explicit
+  const legacy = normalize(env.AUDIO_FALLBACK_PROVIDER)
+  if (!legacy) return "none"
+  if (legacy === "sherpa" && !env.TRANSCRIPTION_SHERPA_URL?.trim())
+    return "none"
+  return legacy
 }
 
 function loadEnvOrExit(): z.infer<typeof envSchema> {
@@ -363,10 +422,19 @@ export const config = {
     // uses the repo-default path. May be absolute or repo-root-relative.
     configPath: env.MODEL_GROUPS_CONFIG_PATH,
   },
-  audioFallback: {
-    provider: env.AUDIO_FALLBACK_PROVIDER,
-    sherpaOnnxConfigJson: env.SHERPA_ONNX_CONFIG_JSON,
-    timeoutMs: env.SHERPA_ONNX_TIMEOUT_MS,
+  transcription: {
+    // TRANSCRIPTION_PROVIDER wins; deprecated AUDIO_FALLBACK_PROVIDER is the
+    // alias (legacy value "sherpa-onnx" → "sherpa"); else "none" (audio
+    // transcription is skipped).
+    provider: resolveTranscriptionProviderName(env),
+    inlineDeadlineMs: env.TRANSCRIPTION_INLINE_DEADLINE_MS,
+    sherpa: {
+      // Trimmed so a whitespace-only value is the empty string the adapter's
+      // isConfigured()/`if (!url)` guard treats as unconfigured (the boot gate
+      // above rejects it for an explicit sherpa selection).
+      url: env.TRANSCRIPTION_SHERPA_URL.trim(),
+      timeoutMs: env.TRANSCRIPTION_SHERPA_TIMEOUT_MS,
+    },
   },
   ocr: {
     // OCR_PROVIDER wins; deprecated IMAGE_FALLBACK_PROVIDER is the alias; else

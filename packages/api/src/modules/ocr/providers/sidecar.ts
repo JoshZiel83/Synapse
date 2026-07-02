@@ -4,6 +4,7 @@
 // + never-reject contract live here ONCE, and each adapter is a small options
 // object. Keeps the retry-mapping in a single place so it can't drift.
 
+import { parseJsonObject } from "@synapse/shared"
 import { normalizeOcrText } from "../normalize.js"
 import type { OcrProvider, OcrProviderRequest, OcrResult } from "../types.js"
 
@@ -82,9 +83,12 @@ export function buildSidecarOcrProvider(opts: SidecarOcrOptions): OcrProvider {
         })
       }
 
-      const data = (await response.json()) as { text?: unknown }
+      // Read as text + parse via the shared object-only decoder (never throws;
+      // {} on malformed) rather than the unchecked response.json() the boundary
+      // guard forbids.
+      const data = parseJsonObject(await response.text())
       const text = normalizeOcrText(
-        typeof data?.text === "string" ? data.text : ""
+        typeof data.text === "string" ? data.text : ""
       )
       if (!text) {
         // Engine ran but found no text → deterministic, terminal (no retry).

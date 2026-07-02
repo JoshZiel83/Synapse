@@ -177,8 +177,6 @@ const classifiedJsonParseFiles = {
       "Seed metadata is bootstrap/config input.",
     "packages/api/src/infrastructure/http/json-body-parser.ts":
       "Fastify request body parsing is an HTTP adapter boundary.",
-    "packages/api/src/modules/ai/audio-fallback-config.ts":
-      "Sherpa ONNX fallback settings are environment config.",
     "packages/api/src/modules/sandbox/host-provider.ts":
       "synapse-device pair stdout is CLI adapter output.",
     "packages/api/src/modules/skills/mirror-import-codec.ts":

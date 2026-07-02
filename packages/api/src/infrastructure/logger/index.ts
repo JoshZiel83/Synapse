@@ -63,6 +63,7 @@ export const LOG_DOMAINS = [
   "session",
   "skills",
   "tasks",
+  "transcription",
   "workspace",
   "infra",
 ] as const
@@ -85,7 +86,6 @@ const DOMAIN_SET: ReadonlySet<string> = new Set(LOG_DOMAINS)
  */
 const SCOPE_TO_DOMAIN: Readonly<Record<string, DomainScope>> = {
   ai: { domain: "ai" },
-  "ai.audio-fallback": { domain: "ai", component: "audio-fallback" },
   "ai.sdk": { domain: "ai", component: "sdk" },
   "ai.to-model-messages": { domain: "ai", component: "to-model-messages" },
   audit: { domain: "audit" },
@@ -150,6 +150,9 @@ const SCOPE_TO_DOMAIN: Readonly<Record<string, DomainScope>> = {
   "session-thinking": { domain: "session", component: "thinking" },
   storage: { domain: "infra", component: "storage" },
   "task-projection": { domain: "tasks", component: "projection" },
+  "transcription.facade": { domain: "transcription", component: "facade" },
+  "transcription.registry": { domain: "transcription", component: "registry" },
+  "transcription.sherpa": { domain: "transcription", component: "sherpa" },
   workspace: { domain: "workspace" },
 }
 

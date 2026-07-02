@@ -86,6 +86,13 @@ services:
       TESSERACT_LANGS: ${TESSERACT_LANGS:-chi_sim+chi_tra+eng+jpn}
       PPOCR_URL: ${PPOCR_URL:-}
       PPOCR_TIER: ${PPOCR_TIER:-small}
+      # Batch audio transcription (ASR / speech-to-text) also runs OUT-OF-PROCESS
+      # — the api bundles no ASR engine. TRANSCRIPTION_PROVIDER selects the
+      # sherpa-asr sidecar (opt-in `asr` profile) or `none` (default => audio
+      # fallback degrades to "transcript unavailable"). DISTINCT from the realtime
+      # Volcengine dictation gateway (ASR_PROVIDER / VOLCENGINE_ASR_*).
+      TRANSCRIPTION_PROVIDER: ${TRANSCRIPTION_PROVIDER:-}
+      TRANSCRIPTION_SHERPA_URL: ${TRANSCRIPTION_SHERPA_URL:-http://sherpa-asr:8772/}
       # External-reachable registry URL the API embeds into the dashboard's
       # one-click daemon install command. Empty => command omits --registry.
       PUBLIC_NPM_REGISTRY_URL: ${PUBLIC_NPM_REGISTRY_URL:-}
@@ -269,6 +276,47 @@ services:
       start_period: 90s
     profiles:
       - ppocr
+
+  # Optional sherpa-onnx ASR sidecar (compose `asr` profile) — batch/file speech
+  # -to-text for the AI audio-fallback (a model that can't hear audio gets a
+  # pre-transcribed reference). The api bundles NO ASR engine; it POSTs audio
+  # bytes here and gets back text. ffmpeg (in the image) transcodes any container.
+  # To enable, set TRANSCRIPTION_PROVIDER=sherpa + start the profile:
+  #   docker compose --profile production --profile asr up -d --build sherpa-asr api
+  # The default model (SenseVoice-Small int8, zh/en/ja/ko/yue) is BAKED at build
+  # under the Alibaba FunASR Model License (NOT Apache-2.0). ~1–1.5 GB RSS from the
+  # onnxruntime CPU inference. DISTINCT from the realtime Volcengine ASR gateway.
+  sherpa-asr:
+    build:
+      context: .
+      dockerfile: infrastructure/Dockerfile.sherpa-asr
+    container_name: synapse-sherpa-asr
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: ${SHERPA_ASR_MEM_LIMIT:-2g}
+    environment:
+      SHERPA_ASR_HOST: "0.0.0.0"
+      SHERPA_ASR_PORT: "8772"
+      # Bounded worker pool — returns 503 (retryable) when saturated so a burst of
+      # audio can't pile onto one CPU container and blow every request's timeout.
+      SHERPA_ASR_MAX_CONCURRENCY: ${SHERPA_ASR_MAX_CONCURRENCY:-2}
+      SHERPA_ASR_NUM_THREADS: ${SHERPA_ASR_NUM_THREADS:-4}
+    expose:
+      - "8772"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys,json; sys.exit(0 if json.load(urllib.request.urlopen('http://127.0.0.1:8772/healthz'))['ready'] else 1)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+    profiles:
+      - asr
 
   # Optional Mijia (Xiaomi smart-home) MCP sidecar. Multi-tenant: per-request
   # Xiaomi credentials arrive in the X-Mijia-Auth header from the API; nothing

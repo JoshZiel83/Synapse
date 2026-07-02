@@ -1,0 +1,9 @@
+# sherpa-asr sidecar runtime deps. The ASR model weights are baked by the
+# Dockerfile (not pip); ffmpeg (native, apt) does the transcode. sherpa-onnx
+# ships the ONNX runtime + the SenseVoice recognizer. Pin a FLOOR that has
+# OfflineRecognizer.from_sense_voice (added mid-2024); VERIFY the resolved
+# version on a real build.
+sherpa-onnx>=1.10.20,<2
+fastapi>=0.110,<1
+uvicorn[standard]>=0.29,<1
+numpy>=1.24,<3
