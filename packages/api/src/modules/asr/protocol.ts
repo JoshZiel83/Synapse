@@ -119,6 +119,38 @@ function maybeDeserialize(serialization: number, payload: Buffer): unknown {
   throw new Error(`Unsupported serialization method: ${serialization}`)
 }
 
+// Error frames must never lose the numeric error code to a payload decode
+// failure. Decode best-effort: attempt gunzip, then JSON, falling back to the
+// raw UTF-8 text so mapProviderError still receives the real code + a message.
+// (The doc describes the error message as a UTF-8 string, not strict JSON.)
+function decodeErrorPayload(
+  serialization: number,
+  compression: number,
+  rawPayload: Buffer
+): unknown {
+  let bytes = rawPayload
+  try {
+    bytes = maybeDecompress(compression, rawPayload)
+  } catch {
+    bytes = rawPayload
+  }
+
+  const text = bytes.toString("utf8")
+  if (serialization === SERIALIZATION_JSON) {
+    const trimmed = text.trim()
+    if (!trimmed) {
+      return text
+    }
+    try {
+      return JSON.parse(trimmed) as unknown
+    } catch {
+      return text
+    }
+  }
+
+  return text
+}
+
 function assertLength(frame: Buffer, offset: number, requiredBytes: number) {
   if (frame.length < offset + requiredBytes) {
     throw new Error("Malformed Volcengine ASR frame: truncated payload")
@@ -212,10 +244,7 @@ export function decodeProviderFrame(frame: Buffer): DecodedProviderFrame {
     offset += 4
     assertLength(frame, offset, payloadSize)
     const rawPayload = frame.subarray(offset, offset + payloadSize)
-    const payload = maybeDeserialize(
-      serialization,
-      maybeDecompress(compression, rawPayload)
-    )
+    const payload = decodeErrorPayload(serialization, compression, rawPayload)
 
     return {
       kind: "error",

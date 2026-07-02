@@ -14,14 +14,22 @@ const ProviderUtteranceSchema = z
   })
   .passthrough()
 
+const ProviderResultSchema = z
+  .object({
+    text: z.string().optional(),
+    utterances: z.array(ProviderUtteranceSchema).optional(),
+  })
+  .passthrough()
+
 const ProviderPayloadSchema = z
   .object({
+    // The official doc §6 labels `result` a list while every observed
+    // bigmodel_async response returns it as a single object. Accept both and
+    // collapse an array to its last (most complete) entry so a documented-but-
+    // unobserved list shape does not silently drop the entire transcript.
     result: z
-      .object({
-        text: z.string().optional(),
-        utterances: z.array(ProviderUtteranceSchema).optional(),
-      })
-      .passthrough()
+      .union([ProviderResultSchema, z.array(ProviderResultSchema)])
+      .transform((value) => (Array.isArray(value) ? value.at(-1) : value))
       .optional(),
     audio_info: z
       .object({
@@ -34,15 +42,19 @@ const ProviderPayloadSchema = z
 
 type ProviderPayload = z.infer<typeof ProviderPayloadSchema>
 
+export type AsrPayloadParseError = {
+  payloadShape: string | string[]
+  issues: string[]
+}
+
 export type NormalizedAsrEvents = {
   partial?: RealtimeAsrSocketEventPayloadMap["asr.partial"]
   segmentFinals: RealtimeAsrFinalSegment[]
   completed?: RealtimeAsrSocketEventPayloadMap["asr.completed"]
-}
-
-function parseProviderPayload(value: unknown): ProviderPayload | null {
-  const parsed = ProviderPayloadSchema.safeParse(value)
-  return parsed.success ? parsed.data : null
+  // Set when the provider payload failed schema validation. The frame is still
+  // dropped (fail closed), but the caller can log the drift instead of the
+  // failure being silently swallowed.
+  parseError?: AsrPayloadParseError
 }
 
 export class AsrResultAccumulator {
@@ -57,10 +69,22 @@ export class AsrResultAccumulator {
     receivedAt: IsoInstantString,
     isFinal: boolean
   ): NormalizedAsrEvents {
-    const providerPayload = parseProviderPayload(payload)
-    if (!providerPayload) {
-      return { segmentFinals: [] }
+    const parsed = ProviderPayloadSchema.safeParse(payload)
+    if (!parsed.success) {
+      return {
+        segmentFinals: [],
+        parseError: {
+          payloadShape:
+            payload && typeof payload === "object" && !Array.isArray(payload)
+              ? Object.keys(payload as Record<string, unknown>)
+              : typeof payload,
+          issues: parsed.error.issues.map(
+            (issue) => `${issue.path.join(".")}: ${issue.message}`
+          ),
+        },
+      }
     }
+    const providerPayload: ProviderPayload = parsed.data
 
     const segmentFinals: RealtimeAsrFinalSegment[] = []
     const utterances = providerPayload.result?.utterances ?? []

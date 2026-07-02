@@ -101,6 +101,24 @@ test("decodeProviderFrame parses provider error frames", () => {
   })
 })
 
+test("decodeProviderFrame preserves the error code when the payload is not valid JSON", () => {
+  // serialization=JSON (byte2 high nibble 0x1) but payload is a bare non-JSON
+  // UTF-8 string, as the doc allows ("Error Message (UTF-8 String)"). The code
+  // must survive rather than being masked by a JSON.parse throw.
+  const message = Buffer.from("服务器繁忙", "utf8")
+  const header = Buffer.from([0x11, 0xf0, 0x10, 0x00])
+  const errorCode = Buffer.alloc(4)
+  errorCode.writeUInt32BE(55000031, 0)
+  const payloadSize = Buffer.alloc(4)
+  payloadSize.writeUInt32BE(message.length, 0)
+  const frame = Buffer.concat([header, errorCode, payloadSize, message])
+
+  const decoded = decodeProviderFrame(frame)
+  assert.equal(decoded.kind, "error")
+  assert.equal(decoded.code, 55000031)
+  assert.equal(decoded.payload, "服务器繁忙")
+})
+
 test("decodeProviderFrame rejects non-object JSON provider payloads", () => {
   for (const payload of [["not", "object"], "not-object", 123, null]) {
     assert.throws(

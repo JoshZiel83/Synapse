@@ -84,6 +84,11 @@ function providerErrorMessage(payload: unknown) {
     return payload.trim()
   }
 
+  if (Buffer.isBuffer(payload)) {
+    const text = payload.toString("utf8").trim()
+    return text || "ASR provider error"
+  }
+
   if (!isRecord(payload)) {
     return "ASR provider error"
   }
@@ -528,10 +533,25 @@ export class VolcengineRealtimeAsrSession {
       }
 
       const reason = reasonBuffer.toString("utf8").trim()
-      const shouldReportError = !this.completed
+      const alreadyCompleted = this.completed
+      // Snapshot recognized text before close() tears down state.
+      const fallback = this.accumulator.buildFallbackCompletedPayload()
       this.close()
 
-      if (!shouldReportError) {
+      if (alreadyCompleted) {
+        return
+      }
+
+      // The bigmodel_async provider can drop the connection after emitting
+      // definite segments without a FINAL-flagged frame. Surface the
+      // accumulated transcript as a normal completion instead of discarding it
+      // as an error; reserve the error for genuinely empty/failed sessions.
+      if (fallback.text.trim() || fallback.segments.length > 0) {
+        this.completed = true
+        this.sendEvent({
+          type: "asr.completed",
+          payload: fallback,
+        })
         return
       }
 
@@ -583,6 +603,21 @@ export class VolcengineRealtimeAsrSession {
       receivedAt,
       decodedFrame.isFinal
     )
+
+    if (normalized.parseError) {
+      // Fail closed but stay observable: a provider response-shape drift would
+      // otherwise be dropped with zero diagnostics. Log only the shape (keys /
+      // zod issue paths) — never the raw payload, which carries user speech.
+      this.logger.warn(
+        {
+          providerConnectId: this.providerConnectId,
+          providerLogId: this.providerLogId,
+          payloadShape: normalized.parseError.payloadShape,
+          issues: normalized.parseError.issues,
+        },
+        "ASR provider payload failed schema validation"
+      )
+    }
 
     if (normalized.partial) {
       this.sendEvent({

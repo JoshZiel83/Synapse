@@ -97,34 +97,80 @@ test("AsrResultAccumulator emits partial and final utterances without duplicates
   })
 })
 
-test("AsrResultAccumulator fails closed on drifted provider payload shapes", () => {
+test("AsrResultAccumulator fails closed but reports drifted provider payload shapes", () => {
   const accumulator = new AsrResultAccumulator()
   const receivedAt = assertIsoInstant("2026-04-02T00:00:00.000Z")
 
-  assert.deepEqual(
-    accumulator.ingest(
-      {
-        result: {
-          text: "ignored",
-          utterances: "not-an-array",
-        },
+  const drifted = accumulator.ingest(
+    {
+      result: {
+        text: "ignored",
+        utterances: "not-an-array",
       },
-      receivedAt,
-      true
-    ),
-    { segmentFinals: [] }
+    },
+    receivedAt,
+    true
+  )
+  assert.deepEqual(drifted.segmentFinals, [])
+  assert.equal(drifted.partial, undefined)
+  assert.equal(drifted.completed, undefined)
+  assert.ok(drifted.parseError)
+  assert.deepEqual(drifted.parseError?.payloadShape, ["result"])
+  assert.ok((drifted.parseError?.issues.length ?? 0) > 0)
+
+  const driftedDuration = accumulator.ingest(
+    {
+      audio_info: {
+        duration: "900",
+      },
+    },
+    receivedAt,
+    true
+  )
+  assert.deepEqual(driftedDuration.segmentFinals, [])
+  assert.ok(driftedDuration.parseError)
+})
+
+test("AsrResultAccumulator accepts result returned as a list (doc §6 shape)", () => {
+  const accumulator = new AsrResultAccumulator()
+
+  const result = accumulator.ingest(
+    {
+      result: [
+        {
+          text: "你好世界",
+          utterances: [
+            {
+              text: "你好世界",
+              start_time: 0,
+              end_time: 900,
+              definite: true,
+            },
+          ],
+        },
+      ],
+      audio_info: {
+        duration: 900,
+      },
+    },
+    assertIsoInstant("2026-04-02T00:00:00.000Z"),
+    true
   )
 
-  assert.deepEqual(
-    accumulator.ingest(
+  assert.equal(result.parseError, undefined)
+  assert.equal(result.segmentFinals.length, 1)
+  assert.equal(result.segmentFinals[0]?.text, "你好世界")
+  assert.deepEqual(result.completed, {
+    text: "你好世界",
+    segments: [
       {
-        audio_info: {
-          duration: "900",
-        },
+        text: "你好世界",
+        segmentIndex: 0,
+        startTimeMs: 0,
+        endTimeMs: 900,
+        receivedAt: "2026-04-02T00:00:00.000Z",
       },
-      receivedAt,
-      true
-    ),
-    { segmentFinals: [] }
-  )
+    ],
+    durationMs: 900,
+  })
 })
