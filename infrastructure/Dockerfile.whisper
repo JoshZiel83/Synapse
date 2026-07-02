@@ -1,0 +1,68 @@
+# Whisper ASR sidecar — faster-whisper (CTranslate2 CPU) + ffmpeg transcode behind
+# a small FastAPI service. The Synapse api bundles NO speech engine (zero-ASR-api);
+# it POSTs audio bytes here over HTTP and gets back text. Build context is the
+# repo ROOT:
+#   docker build -f infrastructure/Dockerfile.whisper -t synapse-whisper .
+#
+# The recognition model SIZE (tiny|base|small|medium|large-v3|...) is a BUILD-TIME
+# choice baked in; rebuild with --build-arg WHISPER_MODEL_SIZE=base to switch. Both
+# the Whisper weights (OpenAI) and the Systran CT2 conversions are MIT — the
+# permissive-license alternative to the sherpa/SenseVoice default. Heavier than the
+# tesseract OCR sidecar (~1–1.5 GB RSS from the CTranslate2 CPU runtime).
+
+FROM python:3.12-slim
+
+# China mirror for resilient pip installs (matches the other sidecars).
+RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple || true
+
+# ffmpeg transcodes arbitrary audio containers → 16 kHz mono PCM (the api ships no
+# ffmpeg). ca-certificates for the model download.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY sidecars/whisper/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY sidecars/whisper/ ./
+
+# Bake the CT2 Whisper weights for the selected size so runtime does no network
+# I/O. HF is the default source; HF_ENDPOINT can point at a mirror (e.g.
+# https://hf-mirror.com) for HF-blocked build networks. Runs as root -> the cache
+# is chowned to the runtime user below.
+# HF endpoint must be a full URL — default to the canonical host; override with a
+# mirror (e.g. https://hf-mirror.com) for HF-blocked build networks. (An EMPTY
+# value would make huggingface_hub treat "" as the endpoint and fail.)
+ARG WHISPER_MODEL_SIZE=small
+ARG HF_ENDPOINT=https://huggingface.co
+ENV WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE} \
+    WHISPER_MODEL_ROOT=/app/models/whisper \
+    HF_ENDPOINT=${HF_ENDPOINT}
+RUN python prefetch_models.py \
+  && test -n "$(find /app/models/whisper -name model.bin | head -1)"
+
+# Non-root runtime user; the model cache is read-only data owned by it.
+RUN useradd --create-home --uid 10001 asr && chown -R asr:asr /app
+USER asr
+
+ENV PYTHONUNBUFFERED=1 \
+    HF_HUB_OFFLINE=1 \
+    WHISPER_HOST=0.0.0.0 \
+    WHISPER_PORT=8773 \
+    WHISPER_MAX_CONCURRENCY=2 \
+    WHISPER_CPU_THREADS=4
+
+# Fail the build if the baked model can't construct + run (catches a bad download /
+# broken runtime HERE, not on the first request).
+RUN python -c "import numpy as np; from pipeline import build_model, transcribe; transcribe(build_model(True), np.zeros(8000, dtype='float32')); print('whisper model OK')"
+
+EXPOSE 8773
+
+# CTranslate2 model load takes a few seconds on CPU → modest start_period;
+# readiness gates on /healthz.ready (false until serve.py's lifespan warms it).
+HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=12 \
+  CMD python -c "import urllib.request,sys,json; sys.exit(0 if json.load(urllib.request.urlopen('http://127.0.0.1:8773/healthz', timeout=3))['ready'] else 1)" || exit 1
+
+CMD ["python", "serve.py"]

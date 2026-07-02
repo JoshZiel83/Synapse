@@ -118,6 +118,13 @@ const envSchema = z
     // sherpa provider → sherpa-asr sidecar (sherpa-onnx offline recognizer).
     TRANSCRIPTION_SHERPA_URL: withDefault(z.string(), ""),
     TRANSCRIPTION_SHERPA_TIMEOUT_MS: withDefault(positiveInt, "30000"),
+    // whisper provider → whisper sidecar (faster-whisper / CTranslate2). Whisper
+    // on CPU is slower than SenseVoice, so a larger default request timeout. The
+    // model SIZE is baked into the sidecar image; TRANSCRIPTION_WHISPER_MODEL is a
+    // provenance/cache-key LABEL that must match the baked size (like PPOCR_TIER).
+    TRANSCRIPTION_WHISPER_URL: withDefault(z.string(), ""),
+    TRANSCRIPTION_WHISPER_TIMEOUT_MS: withDefault(positiveInt, "60000"),
+    TRANSCRIPTION_WHISPER_MODEL: withDefault(z.string().min(1), "small"),
 
     // OCR: the api bundles NO OCR engine. OCR_PROVIDER selects an
     // out-of-process provider (a sidecar or, later, a cloud vendor). Default
@@ -250,6 +257,17 @@ const envSchema = z
         path: ["TRANSCRIPTION_SHERPA_URL"],
         message:
           "TRANSCRIPTION_SHERPA_URL is required when TRANSCRIPTION_PROVIDER=sherpa (the api runs no in-process ASR engine)",
+      })
+    }
+    if (
+      transcriptionProvider === "whisper" &&
+      !env.TRANSCRIPTION_WHISPER_URL?.trim()
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["TRANSCRIPTION_WHISPER_URL"],
+        message:
+          "TRANSCRIPTION_WHISPER_URL is required when TRANSCRIPTION_PROVIDER=whisper (the api runs no in-process ASR engine)",
       })
     }
   })
@@ -434,6 +452,13 @@ export const config = {
       // above rejects it for an explicit sherpa selection).
       url: env.TRANSCRIPTION_SHERPA_URL.trim(),
       timeoutMs: env.TRANSCRIPTION_SHERPA_TIMEOUT_MS,
+    },
+    whisper: {
+      url: env.TRANSCRIPTION_WHISPER_URL.trim(),
+      timeoutMs: env.TRANSCRIPTION_WHISPER_TIMEOUT_MS,
+      // Provenance/cache-key label; must match the model size baked into the
+      // whisper sidecar image.
+      model: env.TRANSCRIPTION_WHISPER_MODEL,
     },
   },
   ocr: {

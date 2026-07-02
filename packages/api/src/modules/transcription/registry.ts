@@ -7,6 +7,7 @@
 import { config } from "../../config/index.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
 import { sherpaProvider } from "./providers/sherpa.js"
+import { whisperProvider } from "./providers/whisper.js"
 import type { TranscriptionProvider, TranscriptionResult } from "./types.js"
 
 const log = createLogger("transcription.registry")
@@ -38,6 +39,8 @@ export function resolveTranscriptionProvider(): TranscriptionProvider {
   switch (provider) {
     case "sherpa":
       return sherpaProvider
+    case "whisper":
+      return whisperProvider
     case "none":
       return nullProvider
     default:

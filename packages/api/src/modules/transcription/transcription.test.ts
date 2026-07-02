@@ -7,9 +7,14 @@ import assert from "node:assert/strict"
 process.env.TRANSCRIPTION_PROVIDER = "sherpa"
 process.env.TRANSCRIPTION_SHERPA_URL = "http://sherpa-asr.test/"
 process.env.TRANSCRIPTION_SHERPA_TIMEOUT_MS = "5000"
+// whisper is a second, non-active provider here (active provider is sherpa); its
+// adapter is exercised directly. Configure its URL so isConfigured()=true.
+process.env.TRANSCRIPTION_WHISPER_URL = "http://whisper.test/"
+process.env.TRANSCRIPTION_WHISPER_MODEL = "small"
 
 const { normalizeTranscript } = await import("./normalize.js")
 const { sherpaProvider } = await import("./providers/sherpa.js")
+const { whisperProvider } = await import("./providers/whisper.js")
 const { resolveTranscriptionProvider } = await import("./registry.js")
 const { transcribe } = await import("./index.js")
 
@@ -100,6 +105,33 @@ test("sherpa adapter never rejects on a network error", async () => {
   assert.equal(result.ok, false)
   assert.equal(result.retryable, true)
   assert.match(result.error ?? "", /ECONNREFUSED/)
+})
+
+// --- whisper adapter (second provider, shared factory) ----------------------
+
+test("whisper adapter maps a successful response to ok+text+model", async () => {
+  globalThis.fetch = (async () =>
+    jsonResponse(200, { text: "  whisper \n text " })) as typeof fetch
+  const result = await whisperProvider.transcribe(req(sha("wok")))
+  assert.equal(result.ok, true)
+  assert.equal(result.text, "whisper text")
+  assert.equal(result.provider, "whisper")
+  assert.equal(result.engineVersion, "whisper:small")
+  assert.equal(result.model, "whisper-small")
+  assert.equal(whisperProvider.isConfigured(), true)
+})
+
+test("whisper adapter shares the retry classification (503 retryable, 4xx terminal)", async () => {
+  globalThis.fetch = (async () => jsonResponse(503, {})) as typeof fetch
+  assert.equal(
+    (await whisperProvider.transcribe(req(sha("wbusy")))).retryable,
+    true
+  )
+  globalThis.fetch = (async () => jsonResponse(400, {})) as typeof fetch
+  assert.equal(
+    (await whisperProvider.transcribe(req(sha("w4xx")))).retryable,
+    false
+  )
 })
 
 // --- facade cache policy ----------------------------------------------------

@@ -1,0 +1,8 @@
+# Whisper sidecar runtime deps. The CT2 model weights are baked by the Dockerfile
+# (not pip); ffmpeg (native, apt) does the transcode. faster-whisper pulls
+# ctranslate2 + tokenizers + huggingface-hub + av. VERIFY the resolved versions on
+# a real build.
+faster-whisper>=1.0,<2
+fastapi>=0.110,<1
+uvicorn[standard]>=0.29,<1
+numpy>=1.24,<3

@@ -93,6 +93,13 @@ services:
       # Volcengine dictation gateway (ASR_PROVIDER / VOLCENGINE_ASR_*).
       TRANSCRIPTION_PROVIDER: ${TRANSCRIPTION_PROVIDER:-}
       TRANSCRIPTION_SHERPA_URL: ${TRANSCRIPTION_SHERPA_URL:-http://sherpa-asr:8772/}
+      TRANSCRIPTION_WHISPER_URL: ${TRANSCRIPTION_WHISPER_URL:-http://whisper:8773/}
+      # Provenance/cache-key label — DEFAULTS TO the single WHISPER_MODEL_SIZE knob
+      # (which also drives the build-arg + sidecar runtime) so one variable keeps
+      # build, sidecar, and the api label in lockstep — like ppocr's PPOCR_TIER.
+      # Bumping WHISPER_MODEL_SIZE alone must not leave a stale api label (that
+      # would poison the facade cache + mislabel provenance).
+      TRANSCRIPTION_WHISPER_MODEL: ${TRANSCRIPTION_WHISPER_MODEL:-${WHISPER_MODEL_SIZE:-small}}
       # External-reachable registry URL the API embeds into the dashboard's
       # one-click daemon install command. Empty => command omits --registry.
       PUBLIC_NPM_REGISTRY_URL: ${PUBLIC_NPM_REGISTRY_URL:-}
@@ -315,6 +322,51 @@ services:
       timeout: 5s
       retries: 10
       start_period: 40s
+    profiles:
+      - asr
+
+  # Optional Whisper ASR sidecar (compose `asr` profile) — a SECOND batch/file
+  # speech-to-text engine behind the same abstraction (faster-whisper / CTranslate2
+  # vs sherpa-onnx). MIT-licensed end-to-end (the permissive alternative to the
+  # sherpa/SenseVoice default). To use it, set TRANSCRIPTION_PROVIDER=whisper +
+  # start the profile:
+  #   docker compose --profile production --profile asr up -d --build whisper api
+  # The model SIZE (default small) is BAKED at build (--build-arg WHISPER_MODEL_SIZE);
+  # keep the api's TRANSCRIPTION_WHISPER_MODEL in sync (it labels provenance).
+  whisper:
+    build:
+      context: .
+      dockerfile: infrastructure/Dockerfile.whisper
+      args:
+        WHISPER_MODEL_SIZE: ${WHISPER_MODEL_SIZE:-small}
+        # Full URL; override with a mirror (e.g. https://hf-mirror.com) for
+        # HF-blocked build networks. Must NOT be empty.
+        HF_ENDPOINT: ${HF_ENDPOINT:-https://huggingface.co}
+    container_name: synapse-whisper
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: ${WHISPER_MEM_LIMIT:-2g}
+    environment:
+      WHISPER_HOST: "0.0.0.0"
+      WHISPER_PORT: "8773"
+      # Must match the size baked into the image (build arg above).
+      WHISPER_MODEL_SIZE: ${WHISPER_MODEL_SIZE:-small}
+      WHISPER_MAX_CONCURRENCY: ${WHISPER_MAX_CONCURRENCY:-2}
+      WHISPER_CPU_THREADS: ${WHISPER_CPU_THREADS:-4}
+    expose:
+      - "8773"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys,json; sys.exit(0 if json.load(urllib.request.urlopen('http://127.0.0.1:8773/healthz'))['ready'] else 1)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
     profiles:
       - asr
 
