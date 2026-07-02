@@ -52,7 +52,6 @@ import {
   ChevronDown,
   ChevronRight,
   ExternalLink,
-  FileIcon,
   Download,
   AlertTriangle,
   AtSign,
@@ -81,6 +80,7 @@ import type { ConversationMember } from "@/stores/chat-store"
 import type { ChatTaskResolveInput, ChatTaskResolvePayload } from "@/lib/api"
 import { cn, resolveContentUrl } from "@/lib/utils"
 import ChatAvatar from "./chat-avatar"
+import { resolveFileType } from "./file-type"
 import { getRuntimeDetail, getRuntimeLabel } from "./runtime-ui"
 import { ToolIcon } from "./tool-icon"
 import { buildReplyPreviewText, getEntityDisplayName } from "./reply-utils"
@@ -1956,7 +1956,7 @@ function FileBlockPreview({ blocks }: { blocks: FileRefBlock[] }) {
                 <img
                   src={resolvedUrl}
                   alt={block.name}
-                  className="max-h-64 max-w-full cursor-pointer rounded-lg transition-opacity hover:opacity-90"
+                  className="max-h-80 max-w-xs cursor-pointer rounded-lg border border-gray-200 object-contain transition-opacity hover:opacity-90 dark:border-white/[0.06]"
                   onClick={() => resolvedUrl && setExpandedImage(resolvedUrl)}
                 />
               </div>
@@ -1993,27 +1993,35 @@ function FileBlockPreview({ blocks }: { blocks: FileRefBlock[] }) {
             )
           }
 
-          // Document
+          // Document — a flat launcher card. The glyph + tint are keyed to the
+          // file type, always paired with an uppercase EXT label so type never
+          // rides on color alone.
+          const ft = resolveFileType(block.name, cat)
           return (
             <a
               key={block.id}
               href={resolvedUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="group/file flex items-center gap-2.5 rounded-lg bg-gray-50 p-2.5 ring-1 ring-gray-200 transition-colors hover:bg-gray-100 dark:bg-white/[0.03] dark:ring-white/[0.06] dark:hover:bg-white/[0.06]"
+              className="group/file flex max-w-xs items-center gap-3 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 transition-colors hover:bg-gray-100 dark:border-white/[0.06] dark:bg-white/[0.03] dark:hover:bg-white/[0.06]"
             >
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">
-                <FileIcon className="h-4 w-4 text-primary" />
+              <div
+                className={cn(
+                  "flex size-10 shrink-0 items-center justify-center rounded-lg",
+                  ft.tile
+                )}
+              >
+                <ft.Icon className={cn("size-[22px]", ft.tint)} />
               </div>
               <div className="min-w-0 flex-1">
-                <div className="truncate text-xs text-foreground/80">
+                <div className="truncate text-sm font-medium text-foreground/90">
                   {block.name}
                 </div>
-                <div className="text-[10px] text-muted-foreground/50">
-                  {formatBytes(block.sizeBytes)}
+                <div className="text-xs text-muted-foreground">
+                  {ft.ext} · {formatBytes(block.sizeBytes)}
                 </div>
               </div>
-              <Download className="h-3.5 w-3.5 shrink-0 text-muted-foreground/40 transition-colors group-hover/file:text-primary" />
+              <Download className="size-4 shrink-0 text-muted-foreground/40 transition-colors group-hover/file:text-primary" />
             </a>
           )
         })}

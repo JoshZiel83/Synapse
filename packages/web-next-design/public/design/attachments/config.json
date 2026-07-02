@@ -1,0 +1,5 @@
+{
+  "theme": "system",
+  "locale": "zh-CN",
+  "features": { "emojiPicker": true, "attachments": true }
+}

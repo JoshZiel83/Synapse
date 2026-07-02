@@ -226,21 +226,22 @@ function textBlocks(text: string): ContentBlock[] {
 
 type FileCategory = Extract<ContentBlock, { type: "file_ref" }>["category"]
 
-// An uploaded-file attachment. Documents render a file card from this metadata;
-// images/video need resolveContentUrl to map the sha to a real asset (see the
-// design content map in lib/utils.ts) — pass the hero-reference sha for that.
-const HERO_IMAGE_SHA = "deadbeef".repeat(8)
+// An uploaded-file attachment. `asset` is a real file shipped in
+// public/design/attachments/; tagging the sha with the `design:` sentinel makes
+// resolveContentUrl (lib/utils.ts) serve those bytes so images/audio/video play
+// and documents are downloadable. Without `asset` the card still renders from
+// metadata but has no loadable bytes.
 function fileBlock(o: {
   name: string
   mimeType: string
   sizeBytes: number
   category: FileCategory
-  sha256?: string
+  asset?: string
 }): ContentBlock {
   return {
     id: nextBlkId(),
     type: "file_ref",
-    sha256: o.sha256 ?? "0".repeat(64),
+    sha256: o.asset ? `design:${o.asset}` : "0".repeat(64),
     mimeType: o.mimeType,
     name: o.name,
     sizeBytes: o.sizeBytes,
@@ -632,13 +633,14 @@ const c1Items: Item[] = [
         mimeType: "application/pdf",
         sizeBytes: 2_480_000,
         category: "document",
+        asset: "report.pdf",
       }),
       fileBlock({
-        name: "hero-参考截图.png",
+        name: "落地页-首屏截图.png",
         mimeType: "image/png",
         sizeBytes: 863_000,
         category: "image",
-        sha256: HERO_IMAGE_SHA,
+        asset: "screenshot.png",
       }),
     ],
   }),
@@ -1219,7 +1221,215 @@ const cvWau = conv({
   updatedAt: "2026-06-29T18:12:00Z",
 })
 
-// 14) A brand-new conversation with NO messages — for designing the empty-thread
+// 14) Attachment showcase — one dedicated thread exercising every attachment
+// type: images (png/jpg/svg/webp/gif), the full spread of typed document cards
+// (pdf/word/excel/ppt/csv/json/txt/code/zip), a voice clip, and a video.
+const cfItems: Item[] = [
+  msg({
+    id: "cf-1",
+    conv: "cv-files",
+    seq: 1,
+    by: P.chen,
+    at: "2026-07-01T09:00:00Z",
+    text: "落地页素材整理好了，发群里 👇",
+    blocks: [
+      textBlock("落地页素材整理好了，发群里 👇"),
+      fileBlock({
+        name: "落地页-首屏截图.png",
+        mimeType: "image/png",
+        sizeBytes: 512_000,
+        category: "image",
+        asset: "screenshot.png",
+      }),
+      fileBlock({
+        name: "banner-实拍图.jpg",
+        mimeType: "image/jpeg",
+        sizeBytes: 268_000,
+        category: "image",
+        asset: "photo.jpg",
+      }),
+      fileBlock({
+        name: "logo.svg",
+        mimeType: "image/svg+xml",
+        sizeBytes: 3_200,
+        category: "image",
+        asset: "hero-reference.svg",
+      }),
+    ],
+  }),
+  msg({
+    id: "cf-2",
+    conv: "cv-files",
+    seq: 2,
+    by: P.chen,
+    at: "2026-07-01T09:01:00Z",
+    text: "还有两张图",
+    blocks: [
+      textBlock("还有两张图"),
+      fileBlock({
+        name: "营收趋势图.webp",
+        mimeType: "image/webp",
+        sizeBytes: 24_000,
+        category: "image",
+        asset: "chart.webp",
+      }),
+      fileBlock({
+        name: "hello-动图.gif",
+        mimeType: "image/gif",
+        sizeBytes: 96_000,
+        category: "image",
+        asset: "sticker.gif",
+      }),
+    ],
+  }),
+  msg({
+    id: "cf-3",
+    conv: "cv-files",
+    seq: 3,
+    by: P.chen,
+    at: "2026-07-01T09:03:00Z",
+    text: "交付文档都在这——需求、说明、报价、汇报",
+    blocks: [
+      textBlock("交付文档都在这——需求、说明、报价、汇报"),
+      fileBlock({
+        name: "产品需求文档.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 2_480_000,
+        category: "document",
+        asset: "report.pdf",
+      }),
+      fileBlock({
+        name: "设计说明.docx",
+        mimeType:
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        sizeBytes: 148_000,
+        category: "document",
+        asset: "proposal.docx",
+      }),
+      fileBlock({
+        name: "报价与预算.xlsx",
+        mimeType:
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        sizeBytes: 96_000,
+        category: "document",
+        asset: "budget.xlsx",
+      }),
+      fileBlock({
+        name: "季度汇报.pptx",
+        mimeType:
+          "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        sizeBytes: 1_120_000,
+        category: "document",
+        asset: "slides.pptx",
+      }),
+    ],
+  }),
+  msg({
+    id: "cf-4",
+    conv: "cv-files",
+    seq: 4,
+    by: P.zhao,
+    at: "2026-07-01T09:06:00Z",
+    text: "补几个：数据、配置、说明、代码示例",
+    blocks: [
+      textBlock("补几个：数据、配置、说明、代码示例"),
+      fileBlock({
+        name: "转化数据.csv",
+        mimeType: "text/csv",
+        sizeBytes: 4_100,
+        category: "document",
+        asset: "data.csv",
+      }),
+      fileBlock({
+        name: "config.json",
+        mimeType: "application/json",
+        sizeBytes: 1_280,
+        category: "document",
+        asset: "config.json",
+      }),
+      fileBlock({
+        name: "会议纪要.txt",
+        mimeType: "text/plain",
+        sizeBytes: 2_048,
+        category: "document",
+        asset: "notes.txt",
+      }),
+      fileBlock({
+        name: "App.tsx",
+        mimeType: "text/plain",
+        sizeBytes: 3_600,
+        category: "document",
+        asset: "App.tsx",
+      }),
+    ],
+  }),
+  msg({
+    id: "cf-5",
+    conv: "cv-files",
+    seq: 5,
+    by: P.zhao,
+    at: "2026-07-01T09:07:00Z",
+    text: "切图统一打了个包",
+    blocks: [
+      textBlock("切图统一打了个包"),
+      fileBlock({
+        name: "落地页切图.zip",
+        mimeType: "application/zip",
+        sizeBytes: 8_640_000,
+        category: "document",
+        asset: "assets.zip",
+      }),
+    ],
+  }),
+  msg({
+    id: "cf-6",
+    conv: "cv-files",
+    seq: 6,
+    by: P.self,
+    at: "2026-07-01T09:12:00Z",
+    text: "收到！我录了段语音说下改动点",
+    blocks: [
+      textBlock("收到！我录了段语音说下改动点"),
+      fileBlock({
+        name: "改动说明.ogg",
+        mimeType: "audio/ogg",
+        sizeBytes: 25_000,
+        category: "audio",
+        asset: "voice.ogg",
+      }),
+    ],
+  }),
+  msg({
+    id: "cf-7",
+    conv: "cv-files",
+    seq: 7,
+    by: P.self,
+    at: "2026-07-01T09:15:00Z",
+    text: "顺手录了段交互演示",
+    blocks: [
+      textBlock("顺手录了段交互演示"),
+      fileBlock({
+        name: "交互演示.mp4",
+        mimeType: "video/mp4",
+        sizeBytes: 112_000,
+        category: "video",
+        asset: "clip.mp4",
+      }),
+    ],
+  }),
+]
+const cvFiles = conv({
+  id: "cv-files",
+  title: "落地页 · 素材与交付",
+  kind: "group",
+  isIm: false,
+  members: [P.self, P.chen, P.zhao],
+  items: cfItems,
+  unread: 3,
+  updatedAt: "2026-07-01T09:15:00Z",
+})
+
+// 15) A brand-new conversation with NO messages — for designing the empty-thread
 // state (no lastItem in the list, empty timeline in the pane).
 const cvEmpty = conv({
   id: "cv-empty",
@@ -1237,6 +1447,7 @@ export const designChatBootstrap: ChatBootstrapViewSchemaType = {
   workspaceMemberId: designViewerMemberId,
   clientInstanceRequired: true,
   conversations: [
+    cvFiles,
     cvEmpty,
     cv3,
     cv1,
@@ -1256,6 +1467,7 @@ export const designChatBootstrap: ChatBootstrapViewSchemaType = {
 }
 
 const byId: Record<string, MessagesView> = {
+  "cv-files": messagesView({ conversation: cvFiles, items: cfItems }),
   "cv-empty": messagesView({ conversation: cvEmpty, items: [] }),
   "cv-wecom": messagesView({ conversation: cvWecom, items: c9Items }),
   "cv-dingtalk": messagesView({ conversation: cvDingtalk, items: c10Items }),
