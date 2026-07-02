@@ -51,6 +51,7 @@ export const LOG_DOMAINS = [
   "memory",
   "model-groups",
   "notifications",
+  "ocr",
   "orchestrator",
   "organization",
   "platform",
@@ -133,6 +134,9 @@ const SCOPE_TO_DOMAIN: Readonly<Record<string, DomainScope>> = {
   "mcp.tool-resolver": { domain: "mcp", component: "tool-resolver" },
   memory: { domain: "memory" },
   "memory-indexing": { domain: "memory", component: "indexing" },
+  "ocr.ppocr": { domain: "ocr", component: "ppocr" },
+  "ocr.registry": { domain: "ocr", component: "registry" },
+  "ocr.tesseract": { domain: "ocr", component: "tesseract" },
   "outbox-sweeper": { domain: "infra", component: "outbox-sweeper" },
   "remote-agent-delivery-retry": {
     domain: "remote-agent",

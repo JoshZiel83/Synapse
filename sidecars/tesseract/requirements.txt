@@ -1,0 +1,6 @@
+# Tesseract OCR sidecar runtime deps. The native `tesseract` binary + tessdata
+# are provided by the image (infrastructure/Dockerfile.tesseract), not pip.
+fastapi>=0.110,<1
+uvicorn[standard]>=0.29,<1
+pytesseract>=0.3.10,<0.4
+pillow>=10.3,<12

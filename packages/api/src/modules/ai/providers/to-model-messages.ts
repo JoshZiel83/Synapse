@@ -98,21 +98,32 @@ async function resolveFileRef(
 
   if (!supported.has(block.category)) {
     let desc: string
-    switch (block.category) {
-      case "audio":
-        desc = await buildAudioFallbackContext(
-          { ...block, category: "audio" },
-          "Audio input is not enabled for this model configuration."
-        )
-        break
-      case "image":
-        desc = await buildImageFallbackContext(
-          { ...block, category: "image" },
-          "Image input is not enabled for this model configuration."
-        )
-        break
-      default:
-        desc = `[${block.category}: ${block.name} (${block.mimeType}, ${formatBytes(block.sizeBytes)})]`
+    try {
+      switch (block.category) {
+        case "audio":
+          desc = await buildAudioFallbackContext(
+            { ...block, category: "audio" },
+            "Audio input is not enabled for this model configuration."
+          )
+          break
+        case "image":
+          desc = await buildImageFallbackContext(
+            { ...block, category: "image" },
+            "Image input is not enabled for this model configuration."
+          )
+          break
+        default:
+          desc = `[${block.category}: ${block.name} (${block.mimeType}, ${formatBytes(block.sizeBytes)})]`
+      }
+    } catch (err) {
+      // The fallback builders are contracted never to throw (OCR/ASR run behind
+      // never-reject facades), but a bug must never crash outbound-message
+      // assembly — degrade to a plain attachment hint.
+      log.error(
+        { err, category: block.category },
+        "attachment fallback context build failed"
+      )
+      desc = `[${block.category}: ${block.name} (${block.mimeType}, ${formatBytes(block.sizeBytes)})]`
     }
     return [{ type: "text", text: desc }, hintPart]
   }

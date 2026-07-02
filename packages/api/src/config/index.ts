@@ -107,14 +107,23 @@ const envSchema = z
     SHERPA_ONNX_CONFIG_JSON: withDefault(z.string(), ""),
     SHERPA_ONNX_TIMEOUT_MS: withDefault(positiveInt, "15000"),
 
-    IMAGE_FALLBACK_PROVIDER: withDefault(z.string().min(1), "tesseract"),
+    // OCR: the api bundles NO OCR engine. OCR_PROVIDER selects an
+    // out-of-process provider (a sidecar or, later, a cloud vendor). Default
+    // resolves to "none" => image OCR is skipped (not failed). The deprecated
+    // IMAGE_FALLBACK_PROVIDER is honoured as an alias (OCR_PROVIDER wins).
+    OCR_PROVIDER: z.string().optional(),
+    IMAGE_FALLBACK_PROVIDER: z.string().optional(),
+    // Short best-effort budget for the OCR call on the outbound-LLM path
+    // (image fallback), independent of the parse-pipeline timeout below.
+    OCR_INLINE_DEADLINE_MS: withDefault(positiveInt, "4000"),
+    // tesseract provider → tesseract sidecar (native tesseract-ocr).
+    TESSERACT_URL: withDefault(z.string(), ""),
     TESSERACT_LANGS: withDefault(z.string().min(1), "eng"),
-    TESSERACT_LANG_PATH: withDefault(z.string(), ""),
-    TESSERACT_CACHE_PATH: withDefault(
-      z.string().min(1),
-      "/tmp/synapse-tesseract-cache"
-    ),
     TESSERACT_TIMEOUT_MS: withDefault(positiveInt, "20000"),
+    // ppocr provider → PP-OCRv6 sidecar (wired in Phase 2).
+    PPOCR_URL: withDefault(z.string(), ""),
+    PPOCR_TIER: withDefault(z.enum(["tiny", "small"]), "small"),
+    PPOCR_TIMEOUT_MS: withDefault(positiveInt, "20000"),
 
     MEMORY_RECALL_LIMIT: withDefault(positiveInt, "6"),
     MEMORY_SEARCH_CANDIDATE_LIMIT: withDefault(positiveInt, "40"),
@@ -192,6 +201,25 @@ const envSchema = z
             "production to sign auth sessions",
         })
       }
+    }
+    // A selected OCR provider must have its sidecar URL, or the api would run
+    // "configured" but every OCR call would fail at request time.
+    const ocrProvider =
+      firstNonEmpty([env.OCR_PROVIDER, env.IMAGE_FALLBACK_PROVIDER]) ?? "none"
+    if (ocrProvider === "tesseract" && !env.TESSERACT_URL) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["TESSERACT_URL"],
+        message:
+          "TESSERACT_URL is required when OCR_PROVIDER=tesseract (the api runs no in-process OCR engine)",
+      })
+    }
+    if (ocrProvider === "ppocr" && !env.PPOCR_URL) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["PPOCR_URL"],
+        message: "PPOCR_URL is required when OCR_PROVIDER=ppocr",
+      })
     }
   })
 
@@ -329,12 +357,22 @@ export const config = {
     sherpaOnnxConfigJson: env.SHERPA_ONNX_CONFIG_JSON,
     timeoutMs: env.SHERPA_ONNX_TIMEOUT_MS,
   },
-  imageFallback: {
-    provider: env.IMAGE_FALLBACK_PROVIDER,
-    tesseractLangs: env.TESSERACT_LANGS,
-    tesseractLangPath: env.TESSERACT_LANG_PATH,
-    tesseractCachePath: env.TESSERACT_CACHE_PATH,
-    timeoutMs: env.TESSERACT_TIMEOUT_MS,
+  ocr: {
+    // OCR_PROVIDER wins; deprecated IMAGE_FALLBACK_PROVIDER is the alias; else
+    // "none" (image OCR is skipped).
+    provider:
+      firstNonEmpty([env.OCR_PROVIDER, env.IMAGE_FALLBACK_PROVIDER]) ?? "none",
+    inlineDeadlineMs: env.OCR_INLINE_DEADLINE_MS,
+    tesseract: {
+      url: env.TESSERACT_URL,
+      langs: env.TESSERACT_LANGS,
+      timeoutMs: env.TESSERACT_TIMEOUT_MS,
+    },
+    ppocr: {
+      url: env.PPOCR_URL,
+      tier: env.PPOCR_TIER,
+      timeoutMs: env.PPOCR_TIMEOUT_MS,
+    },
   },
   memory: {
     recallLimit: env.MEMORY_RECALL_LIMIT,

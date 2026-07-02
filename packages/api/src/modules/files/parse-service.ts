@@ -5,7 +5,8 @@ import type {
   FileParseRunView,
 } from "@synapse/shared/types"
 import { fileParsingQueue } from "../../workers/queues.js"
-import { extractImageOcrText } from "../ai/image-fallback.js"
+import { createLogger } from "../../infrastructure/logger/index.js"
+import { recognizeOcr, resolveOcrProvider } from "../ocr/index.js"
 import { getFileDetail, getFileRecord, readFileBufferById } from "./service.js"
 import { normalizePdfParseMetadata } from "./parse-metadata.js"
 import {
@@ -25,14 +26,28 @@ import {
 } from "./presenter.js"
 
 const localRequire = createRequire(import.meta.url)
+const log = createLogger("file-parsing")
 
 export const DEFAULT_FILE_PARSE_PIPELINE = "default_extract"
 const UTF8_TEXT_PARSER_KEY = "utf8_text"
 const UTF8_TEXT_PARSER_VERSION = "1"
 const PDF_PARSE_PARSER_KEY = "pdf_parse"
 const PDF_PARSE_PARSER_VERSION = "1"
-const TESSERACT_OCR_PARSER_KEY = "tesseract_ocr"
-const TESSERACT_OCR_PARSER_VERSION = "7"
+
+/**
+ * A parse failure that carries a transient/terminal classification. Only
+ * transient failures (e.g. an OCR sidecar that is down/timed-out) are rethrown
+ * so BullMQ retries; terminal failures (no text found, corrupt input) are
+ * recorded and swallowed to avoid a pointless retry storm.
+ */
+class ParseError extends Error {
+  readonly retryable: boolean
+  constructor(message: string, retryable: boolean) {
+    super(message)
+    this.name = "ParseError"
+    this.retryable = retryable
+  }
+}
 
 type FileParseJobData = {
   runId: string
@@ -88,9 +103,24 @@ function resolveParseStrategy(params: {
   contentKind: FileContentKind
 }): ParseStrategy {
   if (params.contentKind === "image") {
+    // The api bundles no OCR engine; the active provider is selected by env.
+    // When none is configured, image text extraction is a SKIP (like an
+    // unsupported mime), not a failure — so a deployment without an OCR sidecar
+    // doesn't turn every image upload into a permanent parse failure.
+    const provider = resolveOcrProvider()
+    if (!provider.isConfigured()) {
+      return {
+        parserKey: "ocr_skipped",
+        parserVersion: null,
+        mode: "skip",
+        errorCode: "OCR_NOT_CONFIGURED",
+        errorMessage:
+          "No OCR provider is configured; image text extraction is skipped.",
+      }
+    }
     return {
-      parserKey: TESSERACT_OCR_PARSER_KEY,
-      parserVersion: TESSERACT_OCR_PARSER_VERSION,
+      parserKey: provider.parserKey,
+      parserVersion: provider.engineVersion,
       mode: "image_ocr",
     }
   }
@@ -176,9 +206,16 @@ async function extractParsedText(params: {
   if (!ocrRecord) {
     throw new Error("Image asset not found for OCR")
   }
-  const ocr = await extractImageOcrText(ocrRecord.sha256)
+  const ocr = await recognizeOcr({
+    sha256: ocrRecord.sha256,
+    mimeType: params.mimeType,
+    bytes: buffer,
+  })
   if (!ocr.ok || !ocr.text) {
-    throw new Error(ocr.error || "Image OCR did not return text")
+    throw new ParseError(
+      ocr.error || "Image OCR did not return text",
+      ocr.retryable === true
+    )
   }
   return {
     strategy,
@@ -335,6 +372,16 @@ export async function processFileParseRun(runId: string): Promise<void> {
     })
   } catch (error: any) {
     await markParseRunFailed(runId, error?.message || "Failed to parse file")
+    // Swallow (no BullMQ retry) ONLY a classified-terminal failure: a
+    // deterministic parse outcome where retrying cannot help (OCR found no text,
+    // corrupt input). Everything else is rethrown so BullMQ retries — that
+    // covers transient OCR failures AND unclassified infra errors (a storage
+    // blip in readFileBufferById, or a DB blip in completeParseRun AFTER OCR
+    // already succeeded), which must not be silently dropped as terminal.
+    if (error instanceof ParseError && !error.retryable) {
+      log.warn({ runId, err: error }, "file parse failed (terminal, no retry)")
+      return
+    }
     throw error
   }
 }

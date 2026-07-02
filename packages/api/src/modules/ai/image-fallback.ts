@@ -1,215 +1,57 @@
+// AI image fallback — builds the model-facing text shown when a candidate model
+// can't accept an image natively. This is PROMPT PRESENTATION (it emits hedging
+// copy + a <FileRef>), so it lives in ai/ alongside its audio twin; the actual
+// OCR runs through the provider-agnostic modules/ocr facade.
+//
+// The OCR here is on the OUTBOUND-LLM critical path (once per image block), so
+// it is bounded by a short best-effort inline deadline independent of the
+// parse-pipeline timeout: a slow OCR sidecar must not stall the prompt. The
+// underlying recognizeOcr() keeps running in the background and populates the
+// shared cache, so the next turn (or the parse pipeline) still benefits.
+
 import type { CanonicalContentBlock } from "@synapse/shared"
-import { createRequire } from "module"
-import { mkdir } from "node:fs/promises"
 import { config } from "../../config/index.js"
-import { createLogger } from "../../infrastructure/logger/index.js"
-import { withTimeout } from "../../infrastructure/async/index.js"
-import { LRUCache } from "lru-cache"
-import { readContentBufferBySha } from "../files/service.js"
+import { recognizeOcr } from "../ocr/index.js"
+import type { OcrResult } from "../ocr/index.js"
 
 type FileRefBlock = Extract<CanonicalContentBlock, { type: "file_ref" }>
 type ImageFileBlock = FileRefBlock & { category: "image" }
 
-interface ImageOcrResult {
-  ok: boolean
-  text?: string
-  error?: string
-}
-
-type TesseractWorker = {
-  recognize(image: Buffer): Promise<{ data?: { text?: string } }>
-  terminate(): Promise<unknown>
-}
-
-type TesseractModule = {
-  createWorker(
-    langs?: string | string[],
-    oem?: number,
-    options?: {
-      langPath?: string
-      cachePath?: string
-      workerPath?: string
-      logger?: (message: unknown) => void
-      errorHandler?: (err: unknown) => void
-    }
-  ): Promise<TesseractWorker>
-}
-
-// Bounded, TTL'd cache for OCR results (was an unbounded Map that grew for the
-// process lifetime, each entry holding up to ~4000 chars of OCR text). lru-cache
-// caps both count and age. We cache the in-flight Promise so concurrent callers
-// for the same key share one OCR run (single-flight).
-const ocrCache = new LRUCache<string, Promise<ImageOcrResult>>({
-  max: 500,
-  ttl: 60 * 60 * 1000, // 1h
-})
-const localRequire = createRequire(import.meta.url)
-const warnedMessages = new Set<string>()
-const log = createLogger("ai.image-fallback")
-
-let tesseractModulePromise: Promise<TesseractModule | null> | null = null
-let workerPathPromise: Promise<string | null> | null = null
-
-function warnOnce(message: string): void {
-  if (warnedMessages.has(message)) return
-  warnedMessages.add(message)
-  log.warn(`[image-fallback] ${message}`)
-}
-
-function normalizeOcrText(text: string): string {
-  return text.trim().replace(/\s+/g, " ").slice(0, 4000)
-}
-
-function getTesseractLangs(): string | string[] {
-  const raw = config.imageFallback.tesseractLangs.trim()
-  if (!raw) return "eng"
-
-  const commaSeparated = raw
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean)
-
-  if (commaSeparated.length > 1) return commaSeparated
-  return commaSeparated[0] || raw
-}
-
-async function loadTesseractModule(): Promise<TesseractModule | null> {
-  if (!tesseractModulePromise) {
-    tesseractModulePromise = Promise.resolve().then(() => {
-      try {
-        return localRequire("tesseract.js") as TesseractModule
-      } catch {
-        warnOnce(
-          "tesseract.js is not installed. Image OCR fallback will be skipped."
-        )
-        return null
-      }
-    })
-  }
-
-  return tesseractModulePromise
-}
-
-async function getWorkerPath(): Promise<string | null> {
-  if (!workerPathPromise) {
-    workerPathPromise = Promise.resolve().then(() => {
-      try {
-        return localRequire.resolve(
-          "tesseract.js/src/worker-script/node/index.js"
-        )
-      } catch {
-        warnOnce(
-          "tesseract.js worker script could not be resolved. Image OCR fallback will be skipped."
-        )
-        return null
-      }
-    })
-  }
-
-  return workerPathPromise
-}
-
-async function prepareImageForOcr(buffer: Buffer): Promise<Buffer> {
-  try {
-    const sharp = (await import("sharp")).default
-    return await sharp(buffer, { animated: true }).png().toBuffer()
-  } catch (err: any) {
-    warnOnce(
-      `sharp failed to normalize image input for OCR; falling back to original bytes. ${err?.message || "unknown error"}`
-    )
-    return buffer
-  }
-}
-
-async function transcribeImageWithTesseract(
-  block: ImageFileBlock
-): Promise<ImageOcrResult> {
-  const tesseract = await loadTesseractModule()
-  if (!tesseract) {
-    return {
-      ok: false,
-      error: "tesseract.js is not installed",
-    }
-  }
-
-  const workerPath = await getWorkerPath()
-  if (!workerPath) {
-    return {
-      ok: false,
-      error: "tesseract.js worker script could not be resolved",
-    }
-  }
-
-  try {
-    await mkdir(config.imageFallback.tesseractCachePath, { recursive: true })
-    const inputBuffer = await readContentBufferBySha(block.sha256)
-    if (!inputBuffer) {
-      return {
+/**
+ * Resolve `recognizeOcr` but give up after `inlineDeadlineMs`, returning a
+ * synthetic "unavailable" result. recognizeOcr never rejects and keeps running
+ * in the background (caching its eventual result), so abandoning it here only
+ * bounds THIS request's latency.
+ */
+function withInlineDeadline(
+  promise: Promise<OcrResult>,
+  deadlineMs: number
+): Promise<OcrResult> {
+  return new Promise<OcrResult>((resolve) => {
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      resolve({
         ok: false,
-        error: "image file not found",
-      }
-    }
-    const imageBuffer = await prepareImageForOcr(inputBuffer)
-    const worker = await tesseract.createWorker(getTesseractLangs(), 1, {
-      workerPath,
-      cachePath: config.imageFallback.tesseractCachePath,
-      langPath: config.imageFallback.tesseractLangPath || undefined,
-      logger: () => {},
-      errorHandler: (err) => {
-        const message = err instanceof Error ? err.message : String(err)
-        warnOnce(`tesseract worker error: ${message}`)
+        text: "",
+        provider: "",
+        engineVersion: "",
+        error: "OCR skipped (inline deadline exceeded)",
+        retryable: true,
+      })
+    }, deadlineMs)
+    promise.then(
+      (result) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(result)
       },
-    })
-
-    try {
-      const result = await withTimeout(
-        worker.recognize(imageBuffer),
-        config.imageFallback.timeoutMs,
-        "image OCR"
-      )
-      const text = normalizeOcrText(result?.data?.text || "")
-      if (!text) {
-        return {
-          ok: false,
-          error: "tesseract OCR did not return any text",
-        }
+      () => {
+        // recognizeOcr never rejects; guard anyway so the deadline still fires.
       }
-      return {
-        ok: true,
-        text,
-      }
-    } finally {
-      await worker.terminate().catch(() => {})
-    }
-  } catch (err: any) {
-    return {
-      ok: false,
-      error: err?.message || "failed to run OCR with tesseract.js",
-    }
-  }
-}
-
-async function getOcrResult(block: ImageFileBlock): Promise<ImageOcrResult> {
-  const cacheKey = `${config.imageFallback.provider}:${config.imageFallback.tesseractLangs}:${block.sha256}`
-  let pending = ocrCache.get(cacheKey)
-  if (!pending) {
-    pending = transcribeImageWithTesseract(block)
-    ocrCache.set(cacheKey, pending)
-  }
-  return pending
-}
-
-export async function extractImageOcrText(
-  sha256: string
-): Promise<ImageOcrResult> {
-  return getOcrResult({
-    id: `file-${sha256.slice(0, 12)}`,
-    type: "file_ref",
-    sha256,
-    mimeType: "image/*",
-    name: "image",
-    sizeBytes: 0,
-    category: "image",
+    )
   })
 }
 
@@ -217,10 +59,14 @@ export async function buildImageFallbackContext(
   block: ImageFileBlock,
   reason: string
 ): Promise<string> {
-  const ocr = await getOcrResult(block)
+  const ocr = await withInlineDeadline(
+    recognizeOcr({ sha256: block.sha256, mimeType: block.mimeType }),
+    config.ocr.inlineDeadlineMs
+  )
+
   const fileRef = `<FileRef id="${block.sha256}"/>`
   const lines = [
-    `[Image fallback] ${reason} The platform ran a local OCR pass with the default tesseract.js pipeline before building this request.`,
+    `[Image fallback] ${reason} The platform ran a local OCR pass before building this request.`,
     `Original image FileRef: ${fileRef}`,
   ]
 

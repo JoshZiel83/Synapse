@@ -67,22 +67,10 @@ RUN mkdir -p packages/api/dist/modules/mcp-plugins/builtin-plugins \
   && cp -r packages/api/src/modules/mcp-plugins/builtin-plugins/assets \
        packages/api/dist/modules/mcp-plugins/builtin-plugins/assets
 
-# --- BAKE: tesseract OCR language data (chi_sim, chi_tra, eng, jpn) ---
-# Baked under /app/models (NOT /app/storage — that path is a runtime
-# volume mount that would shadow anything baked beneath it). The OCR
-# worker reads ${TESSERACT_LANG_PATH}/<lang>.traineddata.gz and gunzips
-# by magic byte, so we gzip each file. Pinned to the tessdata_best 4.1.0
-# tag for reproducible builds. The trailing assertion turns a missing
-# language into a hard BUILD failure (no silent runtime CDN fetch).
-ENV TESSDATA_BEST_REF=4.1.0
-RUN set -eux; mkdir -p /app/models/tessdata; \
-  for lang in chi_sim chi_tra eng jpn; do \
-    curl -fsSL --retry 3 -o "/app/models/tessdata/${lang}.traineddata" \
-      "https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/${TESSDATA_BEST_REF}/${lang}.traineddata"; \
-    gzip -n -f "/app/models/tessdata/${lang}.traineddata"; \
-    test -s "/app/models/tessdata/${lang}.traineddata.gz" \
-      || { echo "FATAL: tesseract language ${lang} was not baked"; exit 1; }; \
-  done
+# OCR is NOT bundled in the api image (zero-OCR-api): the api runs no OCR
+# engine and no tessdata is baked here. OCR runs out-of-process in a sidecar
+# (sidecars/tesseract, sidecars/ppocr) reached over HTTP, selected by
+# OCR_PROVIDER + the sidecar URL env. See docs/ocr-abstraction-layer-plan-2026-07-01.md.
 
 # --- BAKE: memory embedding model (Xenova/multilingual-e5-small) ---
 # Run the COMPILED bootstrap (dist/*.js, plain node): the embedding worker
@@ -106,7 +94,7 @@ RUN set -eux; mkdir -p /app/models/memory; \
 # @huggingface/transformers (which bundles its own copy) — the API never
 # imports onnxruntime-node directly, so we don't test it standalone (a stray
 # top-level copy would clash .so symbols with the transformers-bundled one).
-RUN node -e "require('@huggingface/transformers'); require('sharp'); require('tesseract.js'); console.log('native deps OK')"
+RUN node -e "require('@huggingface/transformers'); require('sharp'); console.log('native deps OK')"
 
 # ── Rust builder: compile the fs-helper sidecar (supervisor-side CAS) ─────────
 # The API process ITSELF runs synapse-device-fs-helper for ALL sandbox CAS work
@@ -159,8 +147,6 @@ COPY --from=fs-helper-builder \
 # Baked-in immutable assets live OUTSIDE the api_storage volume mount.
 ENV MEMORY_MODEL_CACHE_DIR=/app/models/memory \
     MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD=false \
-    TESSERACT_LANG_PATH=/app/models/tessdata \
-    TESSERACT_LANGS=chi_sim+chi_tra+eng+jpn \
     SYNAPSE_DEVICE_FS_HELPER_PATH=/app/sidecars/fs-helper/target/release/synapse-device-fs-helper
 EXPOSE 3001
 # `--import` preloads the OpenTelemetry/Sentry instrumentation before app code so

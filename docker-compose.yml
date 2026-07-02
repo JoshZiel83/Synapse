@@ -70,14 +70,22 @@ services:
       HOST: "0.0.0.0"
       PLATFORM_ADMIN_EMAILS: ${PLATFORM_ADMIN_EMAILS:-demo@synapse.dev}
       STORAGE_DIR: /app/storage/files
-      # Embedding model + OCR data are baked into the image under /app/models
-      # (outside the api_storage volume mount, which would otherwise shadow
-      # them). Runtime model download is OFF — a missing model is a baked-in
-      # build failure, never a silent runtime degradation.
+      # Embedding model is baked into the image under /app/models (outside the
+      # api_storage volume mount, which would otherwise shadow it). Runtime model
+      # download is OFF — a missing model is a baked-in build failure, never a
+      # silent runtime degradation.
       MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD: ${MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD:-false}
       MEMORY_MODEL_CACHE_DIR: /app/models/memory
-      TESSERACT_LANG_PATH: /app/models/tessdata
+      # OCR runs OUT-OF-PROCESS — the api bundles no OCR engine and reads env
+      # only. OCR_PROVIDER selects the sidecar (tesseract | ppocr) or `none` to
+      # disable. The default keeps OCR on via the tesseract sidecar (shipped in
+      # the `production` profile); set OCR_PROVIDER=ppocr and start the `ppocr`
+      # profile to use PP-OCRv6 instead.
+      OCR_PROVIDER: ${OCR_PROVIDER:-tesseract}
+      TESSERACT_URL: ${TESSERACT_URL:-http://tesseract-ocr:8771/}
       TESSERACT_LANGS: ${TESSERACT_LANGS:-chi_sim+chi_tra+eng+jpn}
+      PPOCR_URL: ${PPOCR_URL:-}
+      PPOCR_TIER: ${PPOCR_TIER:-small}
       # External-reachable registry URL the API embeds into the dashboard's
       # one-click daemon install command. Empty => command omits --registry.
       PUBLIC_NPM_REGISTRY_URL: ${PUBLIC_NPM_REGISTRY_URL:-}
@@ -173,6 +181,45 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    profiles:
+      - production
+
+  # OCR sidecar: native tesseract-ocr behind a small FastAPI service. The api
+  # bundles NO OCR engine (zero-OCR-api); it POSTs image bytes here and gets back
+  # text. Shipped in the `production` profile so a default deploy keeps image OCR
+  # working out-of-process. Reached by the api at http://tesseract-ocr:8771/
+  # (OCR_PROVIDER=tesseract + TESSERACT_URL). Internal-only, no host port, no
+  # secrets (explicit env allowlist, NOT env_file).
+  tesseract-ocr:
+    build:
+      context: .
+      dockerfile: infrastructure/Dockerfile.tesseract
+    container_name: synapse-tesseract-ocr
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      TESSERACT_HOST: "0.0.0.0"
+      TESSERACT_PORT: "8771"
+      # Default languages when a request doesn't specify (the api passes
+      # TESSERACT_LANGS per request). Must match the traineddata baked into the
+      # sidecar image (see infrastructure/Dockerfile.tesseract).
+      TESSERACT_DEFAULT_LANGS: ${TESSERACT_LANGS:-chi_sim+chi_tra+eng+jpn}
+      # Bounded worker pool — returns 503 (retryable) when saturated so a burst
+      # of parses can't blow every request's timeout on one CPU container.
+      TESSERACT_MAX_CONCURRENCY: ${TESSERACT_MAX_CONCURRENCY:-2}
+    expose:
+      - "8771"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys,json; sys.exit(0 if json.load(urllib.request.urlopen('http://127.0.0.1:8771/healthz'))['ready'] else 1)",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 6
     profiles:
       - production
 

@@ -1,0 +1,51 @@
+# Tesseract OCR sidecar — native tesseract-ocr behind a small FastAPI service.
+# The Synapse api bundles NO OCR engine (zero-OCR-api); it POSTs image bytes here
+# over HTTP and gets back text. Build context is the repo ROOT:
+#   docker build -f infrastructure/Dockerfile.tesseract -t synapse-tesseract-ocr .
+#
+# Per-request image bytes only — no secrets, no per-tenant state. Runs non-root.
+
+FROM python:3.12-slim
+
+# China mirror for resilient pip installs (matches the other sidecars).
+RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple || true
+
+# The tesseract engine (apt) + tessdata_best language data baked for parity with
+# the previous in-api pipeline (chi_sim, chi_tra, eng, jpn — higher accuracy than
+# the apt "fast" data). Native tesseract reads UNCOMPRESSED .traineddata. Pinned
+# to the tessdata_best 4.1.0 tag; a missing language is a hard BUILD failure (no
+# silent runtime CDN fetch).
+ARG TESSDATA_BEST_REF=4.1.0
+RUN set -eux; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends tesseract-ocr ca-certificates curl; \
+  mkdir -p /usr/share/tessdata-best; \
+  for lang in chi_sim chi_tra eng jpn; do \
+    curl -fsSL --retry 3 -o "/usr/share/tessdata-best/${lang}.traineddata" \
+      "https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/${TESSDATA_BEST_REF}/${lang}.traineddata"; \
+    test -s "/usr/share/tessdata-best/${lang}.traineddata" \
+      || { echo "FATAL: tesseract language ${lang} was not baked"; exit 1; }; \
+  done; \
+  apt-get purge -y curl; apt-get autoremove -y; rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY sidecars/tesseract/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+COPY sidecars/tesseract/ ./
+
+RUN useradd --create-home --uid 10001 ocr && chown -R ocr:ocr /app
+USER ocr
+
+ENV PYTHONUNBUFFERED=1 \
+    TESSDATA_DIR=/usr/share/tessdata-best \
+    TESSERACT_HOST=0.0.0.0 \
+    TESSERACT_PORT=8771 \
+    TESSERACT_DEFAULT_LANGS=chi_sim+chi_tra+eng+jpn \
+    TESSERACT_MAX_CONCURRENCY=2
+
+EXPOSE 8771
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD python -c "import urllib.request,sys,json; sys.exit(0 if json.load(urllib.request.urlopen('http://127.0.0.1:8771/healthz', timeout=3))['ready'] else 1)" || exit 1
+
+CMD ["python", "serve.py"]

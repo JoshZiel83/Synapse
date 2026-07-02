@@ -45,7 +45,7 @@ test("string config values are non-empty strings", () => {
     config.host,
     config.nodeEnv,
     config.asr.provider,
-    config.imageFallback.provider,
+    config.ocr.provider,
     config.database.url,
     config.redis.url,
   ]) {

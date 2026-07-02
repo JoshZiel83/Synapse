@@ -1,0 +1,5 @@
+# Test-only deps — NOT installed into the runtime image. The FastAPI TestClient
+# needs httpx. Install alongside requirements.txt to run tests/:
+#   pip install -r requirements.txt -r requirements-dev.txt && pytest
+pytest>=8,<9
+httpx>=0.27,<1

@@ -105,7 +105,6 @@
     "pino-pretty": "^11.0.0",
     "qrcode": "^1.5.4",
     "sharp": "^0.34.5",
-    "tesseract.js": "^7.0.0",
     "undici": "^5.29.0",
     "unzipper": "^0.12.3",
     "uuid": "^11.0.0",

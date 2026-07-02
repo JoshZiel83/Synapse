@@ -51,6 +51,21 @@ export const SESSION_THINKING_JOB_DEFAULTS = {
   removeOnFail: { age: 86_400, count: 1_000 },
 } as const
 
+/**
+ * Retry policy for file-parse jobs. Without it BullMQ runs each parse exactly
+ * once, so a transient OCR sidecar outage would permanently fail the image with
+ * no recovery. The handler (processFileParseRun) rethrows ONLY transient
+ * (retryable) failures — terminal failures (no text found, corrupt input) are
+ * recorded and swallowed — so these attempts are burned only on genuinely
+ * transient errors, not on deterministic ones.
+ */
+export const FILE_PARSING_JOB_DEFAULTS = {
+  attempts: 3,
+  backoff: { type: "exponential" as const, delay: 5_000 },
+  removeOnComplete: { age: 3_600, count: 1_000 },
+  removeOnFail: { age: 86_400, count: 1_000 },
+} as const
+
 const sessionThinkingLazy = lazyQueue(
   QUEUE_NAMES.SESSION_THINKING,
   SESSION_THINKING_JOB_DEFAULTS
@@ -59,7 +74,10 @@ const automationSchedulerLazy = lazyQueue(QUEUE_NAMES.AUTOMATION_SCHEDULER)
 const automationExecutionLazy = lazyQueue(QUEUE_NAMES.AUTOMATION_EXECUTION)
 const imTransportDeliveryLazy = lazyQueue(QUEUE_NAMES.IM_TRANSPORT_DELIVERY)
 const memoryIndexingLazy = lazyQueue(QUEUE_NAMES.MEMORY_INDEXING)
-const fileParsingLazy = lazyQueue(QUEUE_NAMES.FILE_PARSING)
+const fileParsingLazy = lazyQueue(
+  QUEUE_NAMES.FILE_PARSING,
+  FILE_PARSING_JOB_DEFAULTS
+)
 const remoteAgentDeliveryRetryLazy = lazyQueue(
   QUEUE_NAMES.REMOTE_AGENT_DELIVERY_RETRY
 )
