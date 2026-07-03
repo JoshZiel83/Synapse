@@ -6,13 +6,7 @@
 // are progressive-disclosure sections; a Test-connection action decoupled from
 // Save; and a "saving mints version n+1" consequence line (edits are versioned).
 import { useMemo, useState } from "react"
-import {
-  ChevronDown,
-  Loader2,
-  Plug,
-  ShieldCheck,
-  TriangleAlert,
-} from "lucide-react"
+import { ChevronDown, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 import {
   getDefaultModelBaseUrl,
@@ -80,7 +74,6 @@ export function ItemEditor({
   const [advanced, setAdvanced] = useState(false)
   const [caps, setCaps] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [test, setTest] = useState<"idle" | "testing" | "ok" | "err">("idle")
 
   // reset when (re)opening
   const [seenOpen, setSeenOpen] = useState(false)
@@ -88,7 +81,6 @@ export function ItemEditor({
     setDraft(fromItem(initial))
     setAdvanced(false)
     setCaps(false)
-    setTest("idle")
     setSeenOpen(true)
   }
   if (!open && seenOpen) setSeenOpen(false)
@@ -105,12 +97,6 @@ export function ItemEditor({
       baseUrl: getDefaultModelBaseUrl(vendor),
       modelName: getDefaultModelName(vendor),
     })
-
-  const runTest = () => {
-    setTest("testing")
-    // design mock: succeed unless key empty on create
-    setTimeout(() => setTest(!initial && !draft.apiKey ? "err" : "ok"), 900)
-  }
 
   const save = async () => {
     if (!draft.displayName.trim()) return toast.error("请填写显示名")
@@ -298,33 +284,8 @@ export function ItemEditor({
           </div>
         </ScrollArea>
 
-        {/* footer: test + save */}
+        {/* footer */}
         <div className="space-y-2 border-t p-4">
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={runTest}
-              disabled={test === "testing"}
-            >
-              {test === "testing" ? (
-                <Loader2 className="mr-1 size-3.5 animate-spin" />
-              ) : (
-                <Plug className="mr-1 size-3.5" />
-              )}
-              测试连接
-            </Button>
-            {test === "ok" && (
-              <span className="flex items-center gap-1 text-xs text-emerald-600">
-                <ShieldCheck className="size-3.5" /> 连接成功
-              </span>
-            )}
-            {test === "err" && (
-              <span className="flex items-center gap-1 text-xs text-red-600">
-                <TriangleAlert className="size-3.5" /> 401 — 检查 API Key
-              </span>
-            )}
-          </div>
           <p className="text-[11px] text-muted-foreground/60">
             {initial
               ? "保存将生成新的一版配置（保留历史）。"
