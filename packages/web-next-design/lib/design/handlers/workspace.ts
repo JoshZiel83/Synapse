@@ -2,7 +2,6 @@ import {
   WorkspaceViewSchema,
   WorkspaceCreateResultViewSchema,
   WorkspaceMemberListViewSchema,
-  WorkspaceNavigationViewSchema,
   WorkspaceAccessBindingListViewSchema,
   WorkspaceAccessBindingViewSchema,
   WorkspaceCapabilityConversationTypePoliciesViewSchema,
@@ -20,7 +19,15 @@ export const workspaceHandlers = {
   getWorkspace: async () => mock(WorkspaceViewSchema),
   createWorkspace: async () => mock(WorkspaceCreateResultViewSchema),
   getWorkspaceMembers: async () => mock(WorkspaceMemberListViewSchema),
-  getWorkspaceNavigation: async () => mock(WorkspaceNavigationViewSchema),
+  // Stable nav flags (all true) — the design viewer is a full workspace member.
+  // Random-mocking these made the sidebar's Models/Access/Automation sections
+  // flicker in/out on every refresh.
+  getWorkspaceNavigation: async () => ({
+    canViewWorkspace: true,
+    canAccessWorkspaceModels: true,
+    canAccessWorkspaceMemberModels: true,
+    canAccessWorkspaceAccess: true,
+  }),
   getWorkspaceAccess: async () => mock(WorkspaceAccessBindingListViewSchema),
   grantWorkspaceAccess: async () => mock(WorkspaceAccessBindingViewSchema),
   revokeWorkspaceAccess: async () => mock(WorkspaceAccessBindingViewSchema),

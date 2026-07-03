@@ -1,5 +1,4 @@
 import {
-  PlatformNavigationViewSchema,
   PlatformAccessBindingListViewSchema,
   PlatformAccessBindingViewSchema,
 } from "@synapse/shared/schemas"
@@ -10,7 +9,13 @@ import type { DesignHandlers } from "./_types"
 // grant mutation. `revokePlatformAccess` returns the raw fetch wrapper (no
 // *View) so it is left to the Proxy catch-all.
 export const platformHandlers = {
-  getPlatformNavigation: async () => mock(PlatformNavigationViewSchema),
+  // Stable flags (all true) so every nav section is reachable + doesn't flicker
+  // on refresh (random-mocking booleans made menus appear/disappear).
+  getPlatformNavigation: async () => ({
+    canAccessPlatformModels: true,
+    canAccessPlatformAccess: true,
+    canAccessPlatformSkills: true,
+  }),
   getPlatformAccess: async () => mock(PlatformAccessBindingListViewSchema),
   grantPlatformAccess: async () => mock(PlatformAccessBindingViewSchema),
 } satisfies DesignHandlers
