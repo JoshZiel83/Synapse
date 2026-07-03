@@ -75,7 +75,16 @@ const envSchema = z
     REALTIME_OUTBOX_GC_INTERVAL_MS: withDefault(positiveInt, "60000"),
     REALTIME_OUTBOX_PROCESSING_TIMEOUT_MS: withDefault(positiveInt, "30000"),
 
-    ASR_PROVIDER: withDefault(z.string().min(1), "volcengine"),
+    // Realtime streaming ASR (语音识别): the /ws/asr WebSocket dictation gateway.
+    // ASR_PROVIDER selects the provider via modules/asr/registry.ts. Default
+    // resolves to "none" => realtime dictation is disabled (the null provider
+    // emits a clean asr.error), matching the OCR_PROVIDER / TRANSCRIPTION_PROVIDER
+    // opt-in convention. DISTINCT from TRANSCRIPTION_PROVIDER above (batch/file).
+    // NOTE: existing deploys that set VOLCENGINE_ASR_* must now ALSO set
+    // ASR_PROVIDER=volcengine — the pre-abstraction default was "volcengine". An
+    // explicit-but-uncredentialed volcengine still soft-fails per session (no boot
+    // gate), so this only changes the default, never crashes boot.
+    ASR_PROVIDER: z.string().optional(),
     VOLCENGINE_ASR_APP_ID: withDefault(z.string(), ""),
     VOLCENGINE_ASR_ACCESS_TOKEN: withDefault(z.string(), ""),
     VOLCENGINE_ASR_SECRET_KEY: withDefault(z.string(), ""),
@@ -90,6 +99,15 @@ const envSchema = z
     VOLCENGINE_ASR_MAX_CONCURRENCY: withDefault(positiveInt, "3"),
     VOLCENGINE_ASR_CONNECT_TIMEOUT_MS: withDefault(positiveInt, "10000"),
     VOLCENGINE_ASR_IDLE_TIMEOUT_MS: withDefault(positiveInt, "15000"),
+
+    // sherpa-stream provider → the self-hosted streaming sherpa-onnx sidecar
+    // (sidecars/sherpa-asr-streaming). WebSocket URL, NO auth (localhost /
+    // compose-network). Selected via ASR_PROVIDER=sherpa-stream; the superRefine
+    // gate below requires the URL for an explicit selection.
+    REALTIME_ASR_SHERPA_URL: withDefault(z.string(), ""),
+    REALTIME_ASR_SHERPA_CONNECT_TIMEOUT_MS: withDefault(positiveInt, "10000"),
+    REALTIME_ASR_SHERPA_IDLE_TIMEOUT_MS: withDefault(positiveInt, "15000"),
+    REALTIME_ASR_SHERPA_MAX_CONCURRENCY: withDefault(positiveInt, "4"),
 
     IM_RUNTIME_MANAGER_ENABLED: z.string().optional(),
 
@@ -270,6 +288,22 @@ const envSchema = z
           "TRANSCRIPTION_WHISPER_URL is required when TRANSCRIPTION_PROVIDER=whisper (the api runs no in-process ASR engine)",
       })
     }
+    // A selected sherpa-stream realtime provider must have its sidecar URL, or the
+    // api would boot "configured" but every /ws/asr session would fail to connect.
+    // (Unlike Volcengine — a cloud vendor that soft-fails per session via
+    // isConfigured() — the local sidecar URL is a hard boot requirement when
+    // explicitly selected, mirroring the batch sherpa/whisper gates above.)
+    if (
+      resolveAsrProviderName(env) === "sherpa-stream" &&
+      !env.REALTIME_ASR_SHERPA_URL?.trim()
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["REALTIME_ASR_SHERPA_URL"],
+        message:
+          "REALTIME_ASR_SHERPA_URL is required when ASR_PROVIDER=sherpa-stream (the api runs no in-process ASR engine)",
+      })
+    }
   })
 
 /**
@@ -325,6 +359,15 @@ function resolveTranscriptionProviderName(env: {
   if (legacy === "sherpa" && !env.TRANSCRIPTION_SHERPA_URL?.trim())
     return "none"
   return legacy
+}
+
+/** Resolve the active realtime-ASR provider name: ASR_PROVIDER wins, else "none"
+ *  (opt-in, like OCR/transcription). No deprecated alias exists; centralized in
+ *  one place so the config assembly — and any future gate/alias — can't diverge.
+ *  Unlike the batch sidecars, an unconfigured realtime provider degrades per
+ *  session (not at boot), so there is no ASR superRefine gate. */
+function resolveAsrProviderName(env: { ASR_PROVIDER?: string }): string {
+  return firstNonEmpty([env.ASR_PROVIDER]) ?? "none"
 }
 
 function loadEnvOrExit(): z.infer<typeof envSchema> {
@@ -412,7 +455,7 @@ export const config = {
     outboxProcessingTimeoutMs: env.REALTIME_OUTBOX_PROCESSING_TIMEOUT_MS,
   },
   asr: {
-    provider: env.ASR_PROVIDER,
+    provider: resolveAsrProviderName(env),
     volcengine: {
       appId: env.VOLCENGINE_ASR_APP_ID,
       accessToken: env.VOLCENGINE_ASR_ACCESS_TOKEN,
@@ -422,6 +465,15 @@ export const config = {
       maxConcurrency: env.VOLCENGINE_ASR_MAX_CONCURRENCY,
       connectTimeoutMs: env.VOLCENGINE_ASR_CONNECT_TIMEOUT_MS,
       idleTimeoutMs: env.VOLCENGINE_ASR_IDLE_TIMEOUT_MS,
+    },
+    sherpaStream: {
+      // Trimmed so a whitespace-only value is the empty string
+      // isSherpaStreamConfigured() treats as unconfigured (the boot gate rejects
+      // it for an explicit sherpa-stream selection).
+      url: env.REALTIME_ASR_SHERPA_URL.trim(),
+      connectTimeoutMs: env.REALTIME_ASR_SHERPA_CONNECT_TIMEOUT_MS,
+      idleTimeoutMs: env.REALTIME_ASR_SHERPA_IDLE_TIMEOUT_MS,
+      maxConcurrency: env.REALTIME_ASR_SHERPA_MAX_CONCURRENCY,
     },
   },
   im: {

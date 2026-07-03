@@ -1,0 +1,4 @@
+# Dev/test deps. The unit tests exercise the pure orchestration (StreamSession with
+# a fake recognizer) + PCM conversion — no native sherpa-onnx wheel or model needed.
+-r requirements.txt
+pytest>=8,<10

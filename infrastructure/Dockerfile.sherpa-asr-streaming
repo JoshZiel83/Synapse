@@ -1,0 +1,74 @@
+# sherpa-onnx STREAMING ASR sidecar — an online (streaming) recognizer behind a
+# small FastAPI WebSocket service. The self-hosted back-end for the Synapse api's
+# realtime /ws/asr sherpa-stream provider: the api opens a WebSocket, streams raw
+# 16 kHz mono s16le PCM, and receives partial/final/completed JSON. The api bundles
+# NO speech engine. Build context is the repo ROOT:
+#   docker build -f infrastructure/Dockerfile.sherpa-asr-streaming -t synapse-sherpa-asr-streaming .
+#
+# The default model is a streaming zipformer bilingual zh-en transducer (Apache-2.0,
+# int8, ~a few hundred MB), BAKED at build so runtime does no network I/O. No ffmpeg:
+# the api forwards raw PCM, so this sidecar never transcodes. Swap models at build:
+#   --build-arg SHERPA_STREAM_MODEL_URL=<a same-architecture streaming transducer export .tar.bz2>
+
+FROM python:3.12-slim
+
+# China mirror for resilient pip installs (matches the other sidecars).
+RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple || true
+
+# curl + bzip2 fetch/extract the model tarball at build. No ffmpeg (raw PCM only).
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates curl bzip2 \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Bake the streaming model FIRST (before app code) so this download layer is cached
+# across code changes. The tarball extracts to a dir holding encoder/decoder/joiner
+# in both fp32 and int8; keep the int8 export (smaller) + tokens.txt (+ LICENSE for
+# attribution if present), drop the rest, then normalize into /app/models/streaming
+# so pipeline.py finds them.
+ARG SHERPA_STREAM_MODEL_URL=https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20.tar.bz2
+RUN set -eux; \
+  mkdir -p /app/models/streaming; \
+  curl -fsSL --retry 3 -o /tmp/model.tar.bz2 "${SHERPA_STREAM_MODEL_URL}"; \
+  tar xjf /tmp/model.tar.bz2 -C /tmp; \
+  src="$(dirname "$(find /tmp -name tokens.txt | head -1)")"; \
+  test -n "${src}" || { echo "FATAL: tokens.txt not found in the model tarball"; exit 1; }; \
+  cp "${src}/tokens.txt" /app/models/streaming/; \
+  for part in encoder decoder joiner; do \
+    f="$(ls "${src}/${part}"*.int8.onnx 2>/dev/null | head -1 || true)"; \
+    if [ -z "${f}" ]; then f="$(ls "${src}/${part}"*.onnx | head -1)"; fi; \
+    test -n "${f}" || { echo "FATAL: ${part}*.onnx not found in the model tarball"; exit 1; }; \
+    cp "${f}" /app/models/streaming/; \
+  done; \
+  cp "${src}/LICENSE" /app/models/streaming/ 2>/dev/null || true; \
+  rm -rf /tmp/model.tar.bz2 "${src}"; \
+  test -s /app/models/streaming/tokens.txt
+
+COPY sidecars/sherpa-asr-streaming/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY sidecars/sherpa-asr-streaming/ ./
+
+# Non-root runtime user; the model dir is read-only data owned by it.
+RUN useradd --create-home --uid 10001 asr && chown -R asr:asr /app
+USER asr
+
+ENV PYTHONUNBUFFERED=1 \
+    SHERPA_STREAM_HOST=0.0.0.0 \
+    SHERPA_STREAM_PORT=8774 \
+    SHERPA_STREAM_MODEL_DIR=/app/models/streaming \
+    SHERPA_STREAM_MAX_CONCURRENCY=4 \
+    SHERPA_STREAM_NUM_THREADS=2
+
+# Fail the build if the baked model can't construct a recognizer (catches a bad
+# export / missing files / broken onnxruntime HERE, not on the first connection).
+RUN python -c "from pipeline import build_recognizer; build_recognizer(); print('sherpa-asr-streaming model OK')"
+
+EXPOSE 8774
+
+# Readiness gates on /healthz.ready (false until serve.py's lifespan warms the model).
+HEALTHCHECK --interval=15s --timeout=5s --start-period=40s --retries=10 \
+  CMD python -c "import urllib.request,sys,json; sys.exit(0 if json.load(urllib.request.urlopen('http://127.0.0.1:8774/healthz', timeout=3))['ready'] else 1)" || exit 1
+
+CMD ["python", "serve.py"]

@@ -1,0 +1,9 @@
+# sherpa-asr-streaming sidecar runtime deps. The streaming model weights are baked
+# by the Dockerfile (not pip). sherpa-onnx ships the ONNX runtime + the streaming
+# OnlineRecognizer; uvicorn[standard] provides the ASGI WebSocket transport. No
+# ffmpeg: the api forwards raw 16 kHz PCM, so this sidecar never transcodes.
+# Pin a FLOOR that has OnlineRecognizer.from_transducer; VERIFY on a real build.
+sherpa-onnx>=1.10.20,<2
+fastapi>=0.110,<1
+uvicorn[standard]>=0.29,<1
+numpy>=1.24,<3

@@ -11,7 +11,8 @@ import {
   authenticateSessionToken,
 } from "../../modules/auth/service.js"
 import { getWorkspaceMemberIdentity } from "../../modules/chat/workspace-identity.js"
-import { VolcengineRealtimeAsrSession } from "../../modules/asr/service.js"
+import { resolveRealtimeAsrProvider } from "../../modules/asr/registry.js"
+import type { RealtimeAsrSession } from "../../modules/asr/types.js"
 import { isShuttingDown } from "../shutdown/state.js"
 import {
   initAuthSessionRegistry,
@@ -30,7 +31,7 @@ interface AsrWsClient {
   authTimer?: ReturnType<typeof setTimeout>
   heartbeatTimer?: ReturnType<typeof setInterval>
   pongTimer?: ReturnType<typeof setTimeout>
-  asrSession?: VolcengineRealtimeAsrSession
+  asrSession?: RealtimeAsrSession
 }
 
 const asrClients = new Map<string, AsrWsClient>()
@@ -284,7 +285,7 @@ export function setupAsrWebSocket(app: FastifyInstance) {
           return
         }
 
-        const asrSession = new VolcengineRealtimeAsrSession({
+        const asrSession = resolveRealtimeAsrProvider().createSession({
           userId: client.userId,
           logger: app.log,
           sendEvent: (event) => {
@@ -377,11 +378,18 @@ export function setupAsrWebSocket(app: FastifyInstance) {
 export async function shutdownAsrWebSockets(
   reason = "Synapse API server is shutting down"
 ) {
+  const draining: Promise<void>[] = []
   for (const [clientId, client] of asrClients) {
     if (client.authTimer) clearTimeout(client.authTimer)
     if (client.heartbeatTimer) clearInterval(client.heartbeatTimer)
     if (client.pongTimer) clearTimeout(client.pongTimer)
-    client.asrSession?.close()
+    // close() is synchronous void for Volcengine, but the RealtimeAsrSession
+    // contract allows a Promise so a future gRPC/HTTP2/token-refresh adapter can
+    // drain its upstream. Collect any promise to await graceful teardown (bounded
+    // below) before the process exits. The redundant close() inside
+    // cleanupAsrClient is a no-op (idempotent).
+    const closing = client.asrSession?.close()
+    if (closing) draining.push(Promise.resolve(closing))
 
     if (client.ws.readyState === 1) {
       try {
@@ -401,5 +409,15 @@ export async function shutdownAsrWebSockets(
     }
 
     cleanupAsrClient(clientId)
+  }
+
+  // Bounded wait so a misbehaving async adapter's close() can't hang shutdown.
+  if (draining.length > 0) {
+    await Promise.race([
+      Promise.allSettled(draining),
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, 2000)
+      }),
+    ])
   }
 }

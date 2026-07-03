@@ -73,8 +73,10 @@ const classifiedJsonParseFiles = {
       "Auth-session websocket control frames are internal protocol payloads.",
     "packages/api/src/infrastructure/websocket/client-frame.ts":
       "Chat websocket client frames are wire payloads.",
-    "packages/api/src/modules/asr/protocol.ts":
-      "ASR protocol messages are wire payloads.",
+    "packages/api/src/modules/asr/providers/sherpa-stream/session.ts":
+      "sherpa-stream sidecar WebSocket frames are wire payloads.",
+    "packages/api/src/modules/asr/providers/volcengine/protocol.ts":
+      "Volcengine ASR protocol messages are wire payloads.",
     "packages/api/src/modules/auth/better-auth.ts":
       "Better Auth Feishu OAuth responses are provider payloads.",
     "packages/api/src/modules/automation/provider-response-codec.ts":

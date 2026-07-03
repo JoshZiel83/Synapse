@@ -1,16 +1,31 @@
 import type {
   RealtimeAsrAudioConfig,
-  RealtimeAsrSocketEvent,
   RealtimeAsrSocketEventPayloadMap,
 } from "@synapse/shared"
 import { nowIsoInstant } from "@synapse/shared/datetime"
-import { RealtimeAsrAudioConfigSchema } from "@synapse/shared/schemas"
 import type { IncomingMessage } from "node:http"
-import type { FastifyBaseLogger } from "fastify"
-import { z } from "zod"
 import WebSocket, { type RawData } from "ws"
-import { config } from "../../config/index.js"
+import { config } from "../../../../config/index.js"
+import { validateRealtimeAsrAudioConfig } from "../../audio.js"
+import {
+  acquireConcurrencySlot,
+  releaseConcurrencySlot,
+} from "../../concurrency.js"
+import type {
+  AsrLogger,
+  AsrSocketSender,
+  CreateSessionInput,
+  RealtimeAsrSession,
+} from "../../types.js"
+import {
+  AsrConcurrencyLimitError,
+  AsrNotConfiguredError,
+  startErrorCode,
+  startErrorMessage,
+  startRetryable,
+} from "../../preflight.js"
 import { AsrResultAccumulator } from "./normalizer.js"
+import { mapProviderError } from "./errors.js"
 import {
   decodeProviderFrame,
   encodeAudioOnlyRequest,
@@ -18,32 +33,17 @@ import {
   type VolcengineAsrFullClientRequest,
 } from "./protocol.js"
 
-type AsrSocketSender = (event: RealtimeAsrSocketEvent) => boolean
-
 type AsrErrorPayload = RealtimeAsrSocketEventPayloadMap["asr.error"]
 
-type AsrLogger = Pick<FastifyBaseLogger, "info" | "warn" | "error">
-
-const activeProviderSessionIds = new Set<string>()
-
-function acquireProviderConcurrencySlot(sessionId: string) {
-  if (activeProviderSessionIds.has(sessionId)) {
-    return true
-  }
-
-  if (
-    activeProviderSessionIds.size >=
-    Math.max(1, config.asr.volcengine.maxConcurrency)
-  ) {
-    return false
-  }
-
-  activeProviderSessionIds.add(sessionId)
-  return true
-}
-
-function releaseProviderConcurrencySlot(sessionId: string) {
-  activeProviderSessionIds.delete(sessionId)
+/** true only when the Volcengine env needed to reach the SAUC endpoint is
+ *  present. Exported so volcengineProvider.isConfigured() shares one definition. */
+export function isVolcengineConfigured() {
+  return Boolean(
+    config.asr.volcengine.appId &&
+    config.asr.volcengine.accessToken &&
+    config.asr.volcengine.resourceId &&
+    config.asr.volcengine.wsUrl
+  )
 }
 
 function toBuffer(raw: RawData): Buffer {
@@ -60,141 +60,6 @@ function toBuffer(raw: RawData): Buffer {
   }
 
   return Buffer.from(raw)
-}
-
-function isConfigured() {
-  return Boolean(
-    config.asr.volcengine.appId &&
-    config.asr.volcengine.accessToken &&
-    config.asr.volcengine.resourceId &&
-    config.asr.volcengine.wsUrl
-  )
-}
-
-function formatZodError(error: z.ZodError) {
-  return error.issues.map((issue) => issue.message).join("; ")
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value))
-}
-
-function providerErrorMessage(payload: unknown) {
-  if (typeof payload === "string" && payload.trim()) {
-    return payload.trim()
-  }
-
-  if (Buffer.isBuffer(payload)) {
-    const text = payload.toString("utf8").trim()
-    return text || "ASR provider error"
-  }
-
-  if (!isRecord(payload)) {
-    return "ASR provider error"
-  }
-
-  if (typeof payload.message === "string" && payload.message.trim()) {
-    return payload.message.trim()
-  }
-  if (typeof payload.error === "string" && payload.error.trim()) {
-    return payload.error.trim()
-  }
-
-  return "ASR provider error"
-}
-
-export function validateRealtimeAsrAudioConfig(input: unknown) {
-  return RealtimeAsrAudioConfigSchema.parse(input) as RealtimeAsrAudioConfig
-}
-
-function startErrorCode(error: unknown): AsrErrorPayload["code"] {
-  if (error instanceof z.ZodError) {
-    return "ASR_INVALID_AUDIO_CONFIG"
-  }
-  if (
-    error instanceof Error &&
-    error.message === "ASR concurrency limit reached"
-  ) {
-    return "ASR_CONCURRENCY_LIMIT_REACHED"
-  }
-  return "ASR_UPSTREAM_CONNECT_FAILED"
-}
-
-function startErrorMessage(error: unknown): string {
-  if (error instanceof z.ZodError) {
-    return formatZodError(error)
-  }
-  if (error instanceof Error) {
-    return error.message
-  }
-  return "Failed to connect to the ASR provider"
-}
-
-export function mapProviderError(
-  code: number,
-  payload: unknown,
-  providerLogId?: string
-): AsrErrorPayload {
-  const message = providerErrorMessage(payload)
-
-  if (code === 45000001) {
-    return {
-      code: "ASR_PROVIDER_INVALID_REQUEST",
-      message,
-      retryable: false,
-      providerCode: code,
-      providerLogId,
-    }
-  }
-
-  if (code === 45000002) {
-    return {
-      code: "ASR_PROVIDER_EMPTY_AUDIO",
-      message,
-      retryable: false,
-      providerCode: code,
-      providerLogId,
-    }
-  }
-
-  if (code === 45000081) {
-    return {
-      code: "ASR_PROVIDER_AUDIO_TIMEOUT",
-      message,
-      retryable: true,
-      providerCode: code,
-      providerLogId,
-    }
-  }
-
-  if (code === 45000151) {
-    return {
-      code: "ASR_PROVIDER_AUDIO_FORMAT_INVALID",
-      message,
-      retryable: false,
-      providerCode: code,
-      providerLogId,
-    }
-  }
-
-  if (code === 55000031) {
-    return {
-      code: "ASR_PROVIDER_BUSY",
-      message,
-      retryable: true,
-      providerCode: code,
-      providerLogId,
-    }
-  }
-
-  return {
-    code:
-      code >= 55000000 ? "ASR_PROVIDER_INTERNAL_ERROR" : "ASR_PROVIDER_ERROR",
-    message,
-    retryable: code >= 55000000,
-    providerCode: code,
-    providerLogId,
-  }
 }
 
 function buildFullClientRequest(
@@ -309,7 +174,7 @@ function sendProviderFrame(socket: WebSocket, payload: Buffer) {
   })
 }
 
-export class VolcengineRealtimeAsrSession {
+export class VolcengineRealtimeAsrSession implements RealtimeAsrSession {
   readonly sessionId = crypto.randomUUID()
 
   private readonly providerConnectId = crypto.randomUUID()
@@ -338,15 +203,9 @@ export class VolcengineRealtimeAsrSession {
 
   private closed = false
 
-  private concurrencySlotHeld = false
-
   private idleTimer?: NodeJS.Timeout
 
-  constructor(input: {
-    userId: string
-    logger: AsrLogger
-    sendEvent: AsrSocketSender
-  }) {
+  constructor(input: CreateSessionInput) {
     this.userId = input.userId
     this.logger = input.logger
     this.sendEvent = input.sendEvent
@@ -361,16 +220,37 @@ export class VolcengineRealtimeAsrSession {
       throw new Error("ASR session is already active")
     }
 
-    if (!isConfigured()) {
-      throw new Error("Volcengine ASR is not configured on the server")
+    // Operational preflight. Each failure here honors the RealtimeAsrSession
+    // start() contract: emit exactly one terminal asr.error via sendEvent, THEN
+    // reject. (These previously threw *before* the emit — startErrorCode /
+    // startErrorMessage already mapped ZodError/concurrency/not-configured but
+    // were unreachable until this preflight was wrapped.)
+    let audioConfig: RealtimeAsrAudioConfig
+    try {
+      if (!isVolcengineConfigured()) {
+        throw new AsrNotConfiguredError(
+          "Volcengine ASR is not configured on the server"
+        )
+      }
+      audioConfig = validateRealtimeAsrAudioConfig(audioConfigInput)
+      if (
+        !acquireConcurrencySlot(
+          this.sessionId,
+          config.asr.volcengine.maxConcurrency
+        )
+      ) {
+        throw new AsrConcurrencyLimitError()
+      }
+    } catch (error) {
+      this.emitErrorAndClose({
+        code: startErrorCode(error),
+        message: startErrorMessage(error),
+        retryable: startRetryable(error),
+        providerLogId: this.providerLogId,
+      })
+      throw error
     }
 
-    const audioConfig = validateRealtimeAsrAudioConfig(audioConfigInput)
-    if (!acquireProviderConcurrencySlot(this.sessionId)) {
-      throw new Error("ASR concurrency limit reached")
-    }
-
-    this.concurrencySlotHeld = true
     this.startInFlight = true
 
     try {
@@ -421,12 +301,7 @@ export class VolcengineRealtimeAsrSession {
       this.emitErrorAndClose({
         code: startErrorCode(error),
         message: startErrorMessage(error),
-        retryable:
-          !(error instanceof z.ZodError) &&
-          !(
-            error instanceof Error &&
-            error.message === "Volcengine ASR is not configured on the server"
-          ),
+        retryable: startRetryable(error),
         providerLogId: this.providerLogId,
       })
       throw error
@@ -489,8 +364,7 @@ export class VolcengineRealtimeAsrSession {
 
     this.closed = true
     this.clearIdleTimer()
-    releaseProviderConcurrencySlot(this.sessionId)
-    this.concurrencySlotHeld = false
+    releaseConcurrencySlot(this.sessionId)
 
     if (this.upstreamSocket) {
       this.upstreamSocket.removeAllListeners()
@@ -646,6 +520,12 @@ export class VolcengineRealtimeAsrSession {
   }
 
   private emitErrorAndClose(payload: AsrErrorPayload) {
+    // Idempotent: if an upstream 'close' already fired a terminal event during the
+    // handshake await, the subsequently-rejected sendProviderFrame must not emit a
+    // second asr.error.
+    if (this.closed) {
+      return
+    }
     this.sendEvent({
       type: "asr.error",
       payload,

@@ -100,6 +100,14 @@ services:
       # Bumping WHISPER_MODEL_SIZE alone must not leave a stale api label (that
       # would poison the facade cache + mislabel provenance).
       TRANSCRIPTION_WHISPER_MODEL: ${TRANSCRIPTION_WHISPER_MODEL:-${WHISPER_MODEL_SIZE:-small}}
+      # Realtime ASR (语音识别 / dictation) — the /ws/asr WebSocket gateway. Also
+      # OUT-OF-PROCESS: ASR_PROVIDER selects Volcengine 豆包 SAUC (cloud, via
+      # VOLCENGINE_ASR_*), the self-hosted streaming sherpa-onnx sidecar (opt-in
+      # `asr` profile), or `none` (default => realtime dictation is disabled).
+      # DISTINCT from TRANSCRIPTION_PROVIDER above (batch/file). Set
+      # ASR_PROVIDER=sherpa-stream to use the local streaming sidecar.
+      ASR_PROVIDER: ${ASR_PROVIDER:-}
+      REALTIME_ASR_SHERPA_URL: ${REALTIME_ASR_SHERPA_URL:-ws://sherpa-asr-streaming:8774/ws}
       # External-reachable registry URL the API embeds into the dashboard's
       # one-click daemon install command. Empty => command omits --registry.
       PUBLIC_NPM_REGISTRY_URL: ${PUBLIC_NPM_REGISTRY_URL:-}
@@ -367,6 +375,48 @@ services:
       timeout: 5s
       retries: 12
       start_period: 60s
+    profiles:
+      - asr
+
+  # Optional streaming sherpa-onnx REALTIME ASR sidecar (compose `asr` profile) —
+  # the self-hosted back-end for the /ws/asr dictation gateway's sherpa-stream
+  # provider, so realtime dictation can run fully on-prem with no cloud egress
+  # (the realtime analogue of the batch sherpa-asr sidecar above). The api opens a
+  # WebSocket here and streams raw 16 kHz PCM; the sidecar streams back partials +
+  # finals. The default model (streaming zipformer bilingual zh-en, Apache-2.0) is
+  # BAKED at build. To use it, set ASR_PROVIDER=sherpa-stream + start the profile:
+  #   docker compose --profile production --profile asr up -d --build sherpa-asr-streaming api
+  # DISTINCT from the batch sherpa-asr sidecar AND the cloud Volcengine gateway.
+  sherpa-asr-streaming:
+    build:
+      context: .
+      dockerfile: infrastructure/Dockerfile.sherpa-asr-streaming
+    container_name: synapse-sherpa-asr-streaming
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: ${SHERPA_STREAM_MEM_LIMIT:-2g}
+    environment:
+      SHERPA_STREAM_HOST: "0.0.0.0"
+      SHERPA_STREAM_PORT: "8774"
+      # Bounded session count — rejects new WebSocket sessions (error + close) when
+      # saturated so a burst can't pile onto one CPU container. Keep in sync with
+      # the api's REALTIME_ASR_SHERPA_MAX_CONCURRENCY.
+      SHERPA_STREAM_MAX_CONCURRENCY: ${SHERPA_STREAM_MAX_CONCURRENCY:-4}
+      SHERPA_STREAM_NUM_THREADS: ${SHERPA_STREAM_NUM_THREADS:-2}
+    expose:
+      - "8774"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys,json; sys.exit(0 if json.load(urllib.request.urlopen('http://127.0.0.1:8774/healthz'))['ready'] else 1)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
     profiles:
       - asr
 

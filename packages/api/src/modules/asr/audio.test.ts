@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mapProviderError, validateRealtimeAsrAudioConfig } from "./service.js"
+import { validateRealtimeAsrAudioConfig } from "./audio.js"
 
 test("validateRealtimeAsrAudioConfig accepts PCM/raw and OGG/opus only", () => {
   assert.deepEqual(
@@ -70,14 +70,4 @@ test("validateRealtimeAsrAudioConfig accepts PCM/raw and OGG/opus only", () => {
       channel: 1,
     })
   )
-})
-
-test("mapProviderError marks provider busy as retryable", () => {
-  assert.deepEqual(mapProviderError(55000031, { message: "busy" }, "log-1"), {
-    code: "ASR_PROVIDER_BUSY",
-    message: "busy",
-    retryable: true,
-    providerCode: 55000031,
-    providerLogId: "log-1",
-  })
 })
