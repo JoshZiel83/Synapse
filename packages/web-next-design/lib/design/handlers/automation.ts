@@ -1,33 +1,34 @@
 import {
-  AutomationEventSourceSchema,
-  AutomationEventSourceListSchema,
-  AutomationOccurrenceListSchema,
-  AutomationRuleSchema,
-  AutomationRuleListSchema,
-  AutomationExecutionListSchema,
-  AutomationSuccessSchema,
-} from "@synapse/shared/schemas"
-import { mock } from "../faker-setup"
+  designAutomationRules,
+  designEventSources,
+  designOccurrences,
+  buildRuleFromInput,
+} from "../fixtures/automation"
 import type { DesignHandlers } from "./_types"
 
-// Automation: event sources + their occurrences, automation rules (CRUD), and
-// rule executions. Lists feed the automation index pages; the single-rule and
-// event-source views feed the detail/edit screens. DELETE routes return the
-// shared `{ success }` envelope.
+// Automation: curated event sources + rules for the redesigned Automations
+// surface (the random faker output rendered "Invalid Date" / garbage counts).
+// Creates/updates echo a coherent rule; the sandbox is stateless so nothing
+// persists across refetches — the authoring FLOW is what these back.
+const ruleById = (id?: string) =>
+  designAutomationRules.find((r) => r.id === id) ?? designAutomationRules[0]
+
 export const automationHandlers = {
-  getAutomationEventSources: async () => mock(AutomationEventSourceListSchema),
-  createAutomationEventSource: async () => mock(AutomationEventSourceSchema),
-  updateAutomationEventSource: async () => mock(AutomationEventSourceSchema),
-  archiveAutomationEventSource: async () => mock(AutomationSuccessSchema),
-  getAutomationEventSourceOccurrences: async () =>
-    mock(AutomationOccurrenceListSchema),
-  getAutomations: async () => mock(AutomationRuleListSchema),
-  // Re-enabled after the RC1 fix (b9647863): automationDeliverySchema.messageBlocks
-  // now uses PersistedCanonicalContentBlockSchema (id required), matching
-  // AutomationRule.delivery.messageBlocks[].id.
-  getAutomation: async () => mock(AutomationRuleSchema),
-  createAutomation: async () => mock(AutomationRuleSchema),
-  updateAutomation: async () => mock(AutomationRuleSchema),
-  deleteAutomation: async () => mock(AutomationSuccessSchema),
-  getAutomationExecutions: async () => mock(AutomationExecutionListSchema),
+  getAutomationEventSources: async () => designEventSources,
+  createAutomationEventSource: async () => designEventSources[0],
+  updateAutomationEventSource: async () => designEventSources[0],
+  archiveAutomationEventSource: async () => ({ success: true }),
+  getAutomationEventSourceOccurrences: async (
+    _wsId: string,
+    sourceId: string
+  ) => designOccurrences[sourceId] ?? [],
+  getAutomations: async () => designAutomationRules,
+  getAutomation: async (_wsId: string, id: string) => ruleById(id),
+  createAutomation: async (
+    _wsId: string,
+    data: Parameters<typeof buildRuleFromInput>[0]
+  ) => buildRuleFromInput(data),
+  updateAutomation: async (_wsId: string, id: string) => ruleById(id),
+  deleteAutomation: async () => ({ success: true }),
+  getAutomationExecutions: async () => [],
 } satisfies DesignHandlers

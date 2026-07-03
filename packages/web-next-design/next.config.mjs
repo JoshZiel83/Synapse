@@ -70,6 +70,14 @@ const allowedDevOrigins = resolveAllowedDevOrigins()
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   allowedDevOrigins,
+  // Transpile the workspace @synapse dist packages through webpack's loaders so
+  // their cross-module named re-exports (shared/dist barrels re-exporting from
+  // datetime/access/automation, and from @synapse/device-protocol/enums) are
+  // re-analyzed on every compile. Without this, webpack's incremental HMR
+  // intermittently loses the re-export trace and throws "X is not exported
+  // from ../…" (e.g. dateToIsoInstant, BROWSER_OPERATION_REQUIRED_ACTION),
+  // 500-ing pages until a full .next rebuild.
+  transpilePackages: ["@synapse/shared", "@synapse/device-protocol"],
   // Hand compression to the nginx edge. `next start` can only emit gzip; the
   // edge does brotli + zstd on every response class (SSR HTML, RSC payloads,
   // API), and serves /_next/static from disk with precompressed br/zst + RFC

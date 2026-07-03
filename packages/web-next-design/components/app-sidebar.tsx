@@ -83,8 +83,7 @@ const knowledgeItems = [
 ]
 
 const automationItems = [
-  { href: "/dashboard/event-sources", label: "Event Sources", icon: Bell },
-  { href: "/dashboard/triggers", label: "Triggers", icon: Clock3 },
+  { href: "/dashboard/automations", label: "Automations", icon: Clock3 },
 ]
 
 const modelItems = [
@@ -141,8 +140,8 @@ function isItemActive(pathname: string, href: string) {
     return pathname === href || pathname.startsWith("/dashboard/remote-agents/")
   }
 
-  if (href === "/dashboard/triggers") {
-    return pathname === href || pathname.startsWith("/dashboard/triggers/")
+  if (href === "/dashboard/automations") {
+    return pathname === href || pathname.startsWith("/dashboard/automations/")
   }
 
   if (href === "/dashboard/skills") {
