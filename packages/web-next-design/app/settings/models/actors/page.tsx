@@ -1,5 +1,5 @@
-import ActorModelAssignmentBoard from "@/app/dashboard/settings/actor-model-assignment-board"
+import ActorBoard from "@/app/dashboard/settings/model-groups/actor-board"
 
 export default function SettingsModelActorsPage() {
-  return <ActorModelAssignmentBoard />
+  return <ActorBoard />
 }

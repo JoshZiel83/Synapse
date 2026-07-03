@@ -8,6 +8,8 @@ import type {
   ModelGroupGrantView,
   ModelGroupOwnerType,
   ProviderKind,
+  Actor,
+  ActorModelGroupAssignmentView,
 } from "@synapse/shared"
 import { dateToIsoInstant } from "@synapse/shared/datetime"
 import { designWorkspaceId, designWorkspaceMemberId } from "./identity"
@@ -286,4 +288,70 @@ export function findModelGroup(id: string): ModelGroupDetailView | undefined {
     if (g) return g
   }
   return undefined
+}
+
+// ── Actors + their model-group assignment chains (for the Actors board) ───────
+function actor(id: string, displayName: string, avatarEmoji: string): Actor {
+  return {
+    id,
+    workspaceId: WS,
+    displayName,
+    definition: {
+      displayName,
+      role: "specialist",
+      title: displayName,
+      avatarEmoji,
+      canRepresentUser: false,
+      docs: [],
+      specialties: [],
+      config: {},
+    },
+    currentVersion: 1,
+    isActive: true,
+    isPublicShared: false,
+    createdAt: ts("2026-06-01T08:00:00Z"),
+    updatedAt: ts("2026-06-20T08:00:00Z"),
+  }
+}
+
+export const designActors: Actor[] = [
+  actor("act-atlas", "运维 Atlas", "🛠️"),
+  actor("act-nova", "数据 Nova", "📊"),
+  actor("act-aria", "研究助理 Aria", "🔬"),
+]
+
+function assignment(
+  actorId: string,
+  group: ModelGroupDetailView,
+  priority: number
+): ActorModelGroupAssignmentView {
+  return {
+    actorId,
+    groupId: group.id,
+    priority,
+    createdAt: ts("2026-06-22T08:00:00Z"),
+    groupName: group.name,
+    routingStrategy: group.routingStrategy,
+    isDefault: group.isDefault,
+    workspaceId: group.workspaceId,
+    ownerType: group.ownerType,
+    ownerWorkspaceMemberId: group.ownerWorkspaceMemberId,
+  }
+}
+
+const gProd = findModelGroup("grp-prod")!
+const gBalance = findModelGroup("grp-balance")!
+
+export const designActorAssignments: Record<
+  string,
+  ActorModelGroupAssignmentView[]
+> = {
+  // Nova has an explicit chain: its granted balance group first, then prod fallback.
+  "act-nova": [
+    assignment("act-nova", gBalance, 0),
+    assignment("act-nova", gProd, 1),
+  ],
+  "act-atlas": [assignment("act-atlas", gProd, 0)],
+  // Aria has no chain yet → falls back to defaults (empty-state demo).
+  "act-aria": [],
 }

@@ -1,4 +1,8 @@
-import { designModelGroupList, findModelGroup } from "../fixtures/model-groups"
+import {
+  designModelGroupList,
+  designActorAssignments,
+  findModelGroup,
+} from "../fixtures/model-groups"
 import type { DesignHandlers } from "./_types"
 
 // Model-groups settings surface for the workspace-member ("me") routes plus the
@@ -23,7 +27,28 @@ export const modelGroupsMemberActorHandlers = {
   updateWorkspaceMemberModelItem: async (_ws: string, id: string) =>
     meById(id).items[0],
   getWorkspaceMemberItemVersions: async () => [],
-  getActorModelGroups: async () => [],
+  getActorModelGroups: async (_ws: string, actorId: string) =>
+    designActorAssignments[actorId] ?? [],
   getVisibleActorModelGroups: async () => designModelGroupList("workspace"),
-  setActorModelGroups: async () => [],
+  // Echo the full-replace chain back as assignment views.
+  setActorModelGroups: async (
+    _ws: string,
+    actorId: string,
+    groups: { groupId: string; priority: number }[]
+  ) =>
+    groups.map((g) => {
+      const grp = findModelGroup(g.groupId)
+      return {
+        actorId,
+        groupId: g.groupId,
+        priority: g.priority,
+        createdAt: null,
+        groupName: grp?.name ?? g.groupId,
+        routingStrategy: grp?.routingStrategy ?? ("priority_failover" as const),
+        isDefault: grp?.isDefault ?? false,
+        workspaceId: grp?.workspaceId ?? null,
+        ownerType: grp?.ownerType ?? ("workspace" as const),
+        ownerWorkspaceMemberId: grp?.ownerWorkspaceMemberId ?? null,
+      }
+    }),
 } satisfies DesignHandlers
