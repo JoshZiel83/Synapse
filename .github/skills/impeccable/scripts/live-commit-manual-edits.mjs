@@ -21,8 +21,8 @@ import {
   readBufferStrict,
   writeBuffer,
   countByPage,
-} from "./live-manual-edits-buffer.mjs"
-import { isGeneratedFile } from "./is-generated.mjs"
+} from "./live/manual-edits-buffer.mjs"
+import { isGeneratedFile } from "./lib/is-generated.mjs"
 import {
   runCopyEditBatchAgent,
   runCopyEditPostApplyChecks,
