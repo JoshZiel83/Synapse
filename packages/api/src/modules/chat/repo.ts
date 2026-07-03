@@ -2269,35 +2269,3 @@ export async function getWorkspaceMemberIdentity(
     trustLevel: row.trustLevel,
   }
 }
-
-export async function getWorkspaceMemberIdentityById(
-  workspaceMemberId: string
-): Promise<WorkspaceMemberIdentity | null> {
-  const row = await db
-    .selectFrom("workspaceMembers as wm")
-    .innerJoin("users as u", "u.id", "wm.userId")
-    .select([
-      "wm.id as workspaceMemberId",
-      "wm.workspaceId",
-      "wm.userId",
-      "wm.trustLevel",
-      "u.name as userName",
-      "u.avatarFileId",
-    ])
-    .where("wm.id", "=", workspaceMemberId)
-    .limit(1)
-    .executeTakeFirst()
-
-  if (!row) {
-    return null
-  }
-
-  return {
-    workspaceMemberId: row.workspaceMemberId,
-    workspaceId: row.workspaceId,
-    userId: row.userId,
-    userName: row.userName,
-    avatarFileId: row.avatarFileId,
-    trustLevel: row.trustLevel,
-  }
-}

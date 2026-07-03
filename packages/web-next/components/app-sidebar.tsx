@@ -13,7 +13,6 @@ import {
   Clock3,
   ContactRound,
   Cpu,
-  FileText,
   House,
   ImagePlus,
   Loader2,
@@ -79,7 +78,6 @@ const knowledgeItems = [
   { href: "/dashboard/memories", label: "Memories", icon: Brain },
   { href: "/dashboard/skills", label: "Skills", icon: ScrollText },
   { href: "/dashboard/plugins", label: "Plugins", icon: Puzzle },
-  { href: "/dashboard/audit", label: "Audit Log", icon: FileText },
 ]
 
 const automationItems = [

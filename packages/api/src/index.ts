@@ -33,7 +33,6 @@ import {
   startRealtimeEventOutboxDispatcher,
   shutdownEventBus,
 } from "./infrastructure/events/index.js"
-import { auditMiddleware } from "./infrastructure/middleware/audit.js"
 import serverTiming from "./infrastructure/observability/server-timing.js"
 import { beginShutdown } from "./infrastructure/shutdown/state.js"
 import { withTimeout } from "./infrastructure/async/index.js"
@@ -61,7 +60,6 @@ import devicesModule from "./modules/devices/index.js"
 import runtimeAuthorizationsModule from "./modules/runtime-authorizations/index.js"
 import modelGroupsModule from "./modules/model-groups/index.js"
 import platformModule from "./modules/platform/index.js"
-import auditModule from "./modules/audit/index.js"
 import imModule from "./modules/im/index.js"
 import installerModule from "./modules/installer/index.js"
 import logsModule from "./modules/logs/index.js"
@@ -253,9 +251,6 @@ async function main() {
   // Server-Timing response header (per-request timing + gated trace_id -> RUM).
   await app.register(serverTiming)
 
-  // Audit middleware
-  auditMiddleware(app)
-
   // WebSocket routes and auth/session registry
   setupWebSocket(app)
 
@@ -312,7 +307,6 @@ async function main() {
   await app.register(logsModule)
   await app.register(reportsModule)
   await app.register(platformModule)
-  await app.register(auditModule)
   await app.register(imModule)
   await app.register(installerModule)
 

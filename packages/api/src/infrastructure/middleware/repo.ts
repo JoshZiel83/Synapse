@@ -1,4 +1,4 @@
-import { db, type TableInsert } from "../database/kysely.js"
+import { db } from "../database/kysely.js"
 
 export type MiddlewareWorkspaceMember = {
   id: string
@@ -21,27 +21,4 @@ export async function findActiveWorkspaceMemberForMiddleware(input: {
       .where("status", "=", "active")
       .executeTakeFirst()
   )
-}
-
-export async function insertMiddlewareAuditLog(input: {
-  workspaceId: string | null
-  userId: string | null
-  action: string
-  resourceType: string
-  resourceId: string | null
-  details: Record<string, unknown>
-  ipAddress: string
-}): Promise<void> {
-  await db
-    .insertInto("auditLogs")
-    .values({
-      workspaceId: input.workspaceId,
-      userId: input.userId,
-      action: input.action,
-      resourceType: input.resourceType,
-      resourceId: input.resourceId,
-      details: input.details as TableInsert<"auditLogs">["details"],
-      ipAddress: input.ipAddress,
-    })
-    .execute()
 }

@@ -69,7 +69,6 @@ const JUNCTION_STATUS = new Set([
 // Append-only logs / immutable history (§3). Never soft-deleted; app role no
 // DELETE; offline purge only.
 const APPEND_ONLY = new Set([
-  "audit_logs",
   "actor_versions",
   "actor_version_docs",
   "model_profile_revisions",
@@ -288,10 +287,7 @@ function classifySetNull(fk) {
     /(created_by|assigned_by|granted_by|resolved_by|installed_by|uploader|requested_by|initiated_by|owner_user_id|created_by_user_id|created_by_actor_id|inbound_actor_id|source_actor_id)/.test(
       col
     )
-  // audit_logs identity columns are audit subjects → snapshot before purge (§7.3).
-  const auditSubject =
-    fk.childTable === "audit_logs" && (col === "user_id" || col === "actor_id")
-  if (attribution || auditSubject) {
+  if (attribution) {
     return {
       canLose: false,
       needsSnapshot: true,

@@ -7,7 +7,7 @@
  *
  * NOT included: schema `XViewSchema` vs a same-stem hand type `X` where `X` is a
  * SEPARATE internal/domain type and the real response type is `XView = z.infer`
- * (drift-proof) — e.g. ModelGroup/Workspace/AuditLog. Pairing those is a false
+ * (drift-proof) — e.g. ModelGroup/Workspace. Pairing those is a false
  * coupling, so they are intentionally absent.
  *
  * A mismatch makes Expect<false> a type error and fails `npm run build:shared`

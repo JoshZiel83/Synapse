@@ -248,7 +248,7 @@ export async function revokeWorkspaceAccess(
 
   // Soft revoke (design §6.2 option A): flip status instead of hard-deleting the
   // row (which sd_reject_delete forbids). Re-granting revives the row. The
-  // revoker identity is not threaded to this layer; audit_logs records the actor.
+  // revoker identity is not threaded to this layer.
   const row = await repo.softRevokeAccessBinding(workspaceMemberId, accessKey)
 
   if (!row) {

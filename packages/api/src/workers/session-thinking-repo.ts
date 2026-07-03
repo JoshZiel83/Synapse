@@ -1,9 +1,6 @@
-import {
-  DEFAULT_MAX_CONCURRENT_SESSIONS,
-  type ThinkingResult,
-} from "@synapse/shared"
+import { DEFAULT_MAX_CONCURRENT_SESSIONS } from "@synapse/shared"
 import { sql } from "kysely"
-import { db, type TableInsert } from "../infrastructure/database/kysely.js"
+import { db } from "../infrastructure/database/kysely.js"
 
 export async function getActorMaxSessions(actorId: string): Promise<number> {
   const row = await db
@@ -18,35 +15,6 @@ export async function getActorMaxSessions(actorId: string): Promise<number> {
     .where("id", "=", actorId)
     .executeTakeFirst()
   return row?.maxConcurrentSessions ?? DEFAULT_MAX_CONCURRENT_SESSIONS
-}
-
-export async function insertSessionThinkAuditLog(input: {
-  workspaceId: string
-  actorId: string
-  sessionId: string
-  trigger: string
-  tokensUsed: ThinkingResult["tokensUsed"]
-  actionsCount: number
-  reasoning: string
-  turnId: string
-}): Promise<void> {
-  await db
-    .insertInto("auditLogs")
-    .values({
-      workspaceId: input.workspaceId,
-      actorId: input.actorId,
-      action: "ai.think",
-      resourceType: "session",
-      resourceId: input.sessionId,
-      details: {
-        trigger: input.trigger,
-        tokensUsed: input.tokensUsed,
-        actionsCount: input.actionsCount,
-        reasoning: input.reasoning,
-        turnId: input.turnId,
-      } as TableInsert<"auditLogs">["details"],
-    })
-    .execute()
 }
 
 export async function markSessionMemoryBootstrapCompleted(

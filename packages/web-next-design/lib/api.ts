@@ -107,8 +107,6 @@ import {
 } from "@synapse/shared/types"
 import type {
   ActorPackageInstallInput,
-  AuditLogListQuery,
-  AuditLogListView,
   AutomationEventSourceCreateInput,
   AutomationEventSourceListQuery,
   AutomationEventSourceUpdateInput,
@@ -1137,16 +1135,6 @@ export class ApiClient {
       method: "POST",
       body: JSON.stringify(data),
     }).then((res) => res.data)
-  }
-
-  // Audit
-  getAuditLogs(
-    wsId: string,
-    query?: AuditLogListQuery
-  ): Promise<AuditLogListView> {
-    return this.fetch<{ data: AuditLogListView }>(
-      withQuery(`/workspaces/${wsId}/audit-logs`, query)
-    ).then((res) => res.data)
   }
 
   // Model Groups - Workspace

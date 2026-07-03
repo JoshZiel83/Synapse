@@ -1422,43 +1422,6 @@ export async function listAutomationExecutionRows(params: {
 export const withAutomationTransaction = withDbTransaction
 
 // ---------------------------------------------------------------------------
-// Audit log writer (replaces the inline db.insertInto("auditLogs") calls)
-// ---------------------------------------------------------------------------
-
-export type AutomationAuditLogRecord = {
-  workspaceId: string
-  userId?: string | null
-  actorId?: string | null
-  action: string
-  resourceType: string
-  resourceId: string
-  details: Record<string, unknown>
-}
-
-/**
- * Append an audit-log row via Kysely (CamelCasePlugin). Runs on the supplied
- * executor (defaulting to the pool) so it can participate in a write
- * transaction. `details` is JSON-encoded here at the repo boundary.
- */
-export async function appendAutomationAuditLog(
-  rec: AutomationAuditLogRecord,
-  run: Executor = db
-) {
-  await run
-    .insertInto("auditLogs")
-    .values({
-      workspaceId: rec.workspaceId,
-      userId: rec.userId ?? null,
-      actorId: rec.actorId ?? null,
-      action: rec.action,
-      resourceType: rec.resourceType,
-      resourceId: rec.resourceId,
-      details: JSON.stringify(rec.details),
-    })
-    .execute()
-}
-
-// ---------------------------------------------------------------------------
 // Event-source provider validation / key allocation probes
 // ---------------------------------------------------------------------------
 
@@ -1866,23 +1829,6 @@ export async function expireAutomationRuleRows(params: {
     )
   )
 
-  await Promise.all(
-    result.rows.map((row) =>
-      appendAutomationAuditLog(
-        {
-          workspaceId: row.workspaceId,
-          action: "automation_rule.expire",
-          resourceType: "automation_rule",
-          resourceId: row.id,
-          details: {
-            referenceTime: params.referenceTime,
-          },
-        },
-        executor
-      )
-    )
-  )
-
   return result.rows
 }
 
@@ -1908,37 +1854,18 @@ export async function pauseAutomationRuleRowsForInactiveCreators(params: {
     params.workspaceId ? [reason, params.workspaceId] : [reason]
   )
 
-  await Promise.all(
-    result.rows.map((row) =>
-      appendAutomationAuditLog(
-        {
-          workspaceId: row.workspaceId,
-          action: "automation_rule.pause",
-          resourceType: "automation_rule",
-          resourceId: row.id,
-          details: { reason },
-        },
-        executor
-      )
-    )
-  )
-
   return result.rows
 }
 
 /**
  * Bump the policy trigger count and, when the rule should complete, flip the
- * rule status + stamp completed_at + write the completion audit log — all on
+ * rule status + stamp completed_at — all on
  * the supplied executor so it joins the surrounding transaction. Returns the
  * policy snapshot used for the completion decision.
  */
 export async function applyAutomationPolicyAfterTrigger(params: {
   ruleId: string
-  workspaceId: string
-  occurrenceId: string
-  executionId: string
   completeNow?: boolean
-  completionReason: "max_trigger_count" | "schedule_exhausted"
   client?: Executor
 }) {
   const executor = params.client ?? db
@@ -1982,25 +1909,6 @@ export async function applyAutomationPolicyAfterTrigger(params: {
       completedAt: sql`COALESCE(${sql.ref("completedAt")}, NOW())`,
     })
     .where("ruleId", "=", params.ruleId)
-    .execute()
-  await executor
-    .insertInto("auditLogs")
-    .values({
-      workspaceId: params.workspaceId,
-      action: "automation_rule.complete",
-      resourceType: "automation_rule",
-      resourceId: params.ruleId,
-      details: JSON.stringify({
-        executionId: params.executionId,
-        occurrenceId: params.occurrenceId,
-        triggerCount: policy.triggerCount,
-        maxTriggerCount: policy.maxTriggerCount,
-        completionStatus: policy.completionStatus,
-        completionReason: reachedMax
-          ? "max_trigger_count"
-          : params.completionReason,
-      }),
-    })
     .execute()
 }
 
@@ -2508,25 +2416,6 @@ export async function markAutomationRuleTriggered(ruleId: string) {
     })
     .where("id", "=", ruleId)
     .execute()
-}
-
-// ---------------------------------------------------------------------------
-// Misc reads
-// ---------------------------------------------------------------------------
-
-/** Resolve a workspace owner id (fallback operator user). */
-export async function selectWorkspaceOwnerId(
-  workspaceId: string
-): Promise<string | null> {
-  const result = await runBuilder<{ ownerId: string | null }>(
-    db,
-    db
-      .selectFrom("workspaces")
-      .select("ownerId")
-      .where("id", "=", workspaceId)
-      .limit(1)
-  )
-  return result.rows[0]?.ownerId || null
 }
 
 // ---------------------------------------------------------------------------

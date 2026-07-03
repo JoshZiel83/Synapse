@@ -1080,14 +1080,6 @@ test(
         .executeTakeFirstOrThrow()
       assert.equal(futureRule.status, AUTOMATION_RULE_STATUSES[0])
 
-      const expireAudit = await db
-        .selectFrom("auditLogs")
-        .select(["action", "resourceId", "details"])
-        .where("resourceId", "=", expiredRuleId)
-        .executeTakeFirstOrThrow()
-      assert.equal(expireAudit.action, "automation_rule.expire")
-      assert.deepEqual(parseJsonObject(expireAudit.details), { referenceTime })
-
       const {
         workspaceId: pauseWorkspaceId,
         conversationId: pauseConversationId,
@@ -1133,16 +1125,6 @@ test(
         pausedRule.lastErrorMessage,
         "Creator participant is no longer active"
       )
-
-      const pauseAudit = await db
-        .selectFrom("auditLogs")
-        .select(["action", "resourceId", "details"])
-        .where("resourceId", "=", pauseRuleId)
-        .executeTakeFirstOrThrow()
-      assert.equal(pauseAudit.action, "automation_rule.pause")
-      assert.deepEqual(parseJsonObject(pauseAudit.details), {
-        reason: "Creator participant is no longer active",
-      })
     })
   }
 )

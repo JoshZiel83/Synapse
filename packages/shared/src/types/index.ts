@@ -762,48 +762,6 @@ export interface AutomationWebhookEndpointCreateResult {
   secret: string
 }
 
-// ============ Audit ============
-export type AuditAction =
-  | "user.register"
-  | "user.login"
-  | "workspace.create"
-  | "workspace.update"
-  | "workspace.delete"
-  | "actor.create"
-  | "actor.update"
-  | "actor.delete"
-  | "work_item.create"
-  | "work_item.transition"
-  | "work_item.assign"
-  | "message.create"
-  | "memory.create"
-  | "memory.update"
-  | "memory.delete"
-  | "ai.think"
-  | "ai.action"
-  | "automation_rule.create"
-  | "automation_rule.update"
-  | "automation_rule.delete"
-  | "automation_rule.pause"
-  | "automation_rule.trigger"
-  | "automation_event_source.create"
-  | "automation_event_source.update"
-  | "automation_event_source.archive"
-  | "automation_event_source.trigger"
-
-export interface AuditLog {
-  id: UUID
-  workspaceId?: UUID
-  userId?: UUID
-  actorId?: UUID
-  action: AuditAction
-  resourceType: string
-  resourceId?: UUID
-  details: Record<string, unknown>
-  ipAddress?: string
-  createdAt: Timestamp
-}
-
 // ============ Events ============
 export type EventType = (typeof EVENT_TYPES)[number]
 

@@ -38,7 +38,6 @@ export const PLATFORM_PERMISSION_RULES: Record<string, PlatformPermissionRule> =
       kind: "specific_keys",
       keys: ["super_admin", "support"],
     },
-    audit: { kind: "specific_keys", keys: ["super_admin", "auditor"] },
   }
 
 export function evaluatePlatformPermission(

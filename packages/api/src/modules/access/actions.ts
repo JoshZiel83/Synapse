@@ -14,7 +14,6 @@ export const ACCESS_ACTIONS = {
     resourceType: "platform",
     permission: "support_access",
   },
-  "platform.audit": { resourceType: "platform", permission: "audit" },
 
   "workspace.view": { resourceType: "workspace", permission: "view" },
   "workspace.manage": { resourceType: "workspace", permission: "manage" },

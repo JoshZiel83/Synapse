@@ -211,7 +211,7 @@ export type PayloadBlobsContentType = "json" | "text";
 
 export type PayloadBlobsRetentionClass = "audit" | "debug" | "ephemeral";
 
-export type PlatformAccessBindingsAccessKey = "auditor" | "model_admin" | "super_admin" | "support" | "workspace_admin";
+export type PlatformAccessBindingsAccessKey = "model_admin" | "super_admin" | "support" | "workspace_admin";
 
 export type PlatformAccessBindingsSource = "config" | "manual";
 
@@ -498,19 +498,6 @@ export interface ActorVersions {
   title: string;
   version: number;
   versionDelta: Json | null;
-}
-
-export interface AuditLogs {
-  action: string;
-  actorId: string | null;
-  createdAt: Generated<Date>;
-  details: Generated<Json | null>;
-  id: Generated<string>;
-  ipAddress: string | null;
-  resourceId: string | null;
-  resourceType: string;
-  userId: string | null;
-  workspaceId: string | null;
 }
 
 export interface AutomationDeliveries {
@@ -3104,7 +3091,6 @@ export interface DB {
   actorTemplateVersionSpecs: ActorTemplateVersionSpecs;
   actorVersionDocs: ActorVersionDocs;
   actorVersions: ActorVersions;
-  auditLogs: AuditLogs;
   automationDeliveries: AutomationDeliveries;
   automationDeliveryTargets: AutomationDeliveryTargets;
   automationEventSources: AutomationEventSources;

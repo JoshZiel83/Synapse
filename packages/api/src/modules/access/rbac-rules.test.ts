@@ -9,14 +9,14 @@ import {
 
 test("platform.manage requires any platform access key", () => {
   assert.equal(evaluatePlatformPermission("manage", []), false)
-  assert.equal(evaluatePlatformPermission("manage", ["auditor"]), true)
+  assert.equal(evaluatePlatformPermission("manage", ["support"]), true)
   assert.equal(evaluatePlatformPermission("manage", ["super_admin"]), true)
 })
 
 test("platform.manage_workspaces is granted by super_admin or workspace_admin", () => {
   assert.equal(evaluatePlatformPermission("manage_workspaces", []), false)
   assert.equal(
-    evaluatePlatformPermission("manage_workspaces", ["auditor"]),
+    evaluatePlatformPermission("manage_workspaces", ["support"]),
     false
   )
   assert.equal(
@@ -27,12 +27,6 @@ test("platform.manage_workspaces is granted by super_admin or workspace_admin", 
     evaluatePlatformPermission("manage_workspaces", ["super_admin"]),
     true
   )
-})
-
-test("platform.audit only granted by super_admin or auditor", () => {
-  assert.equal(evaluatePlatformPermission("audit", ["model_admin"]), false)
-  assert.equal(evaluatePlatformPermission("audit", ["auditor"]), true)
-  assert.equal(evaluatePlatformPermission("audit", ["super_admin"]), true)
 })
 
 test("unknown platform permission denies", () => {

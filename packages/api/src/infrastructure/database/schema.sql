@@ -3,7 +3,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "vector";
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 
-CREATE TYPE platform_access_bindings_access_key AS ENUM ('super_admin', 'workspace_admin', 'model_admin', 'support', 'auditor');
+CREATE TYPE platform_access_bindings_access_key AS ENUM ('super_admin', 'workspace_admin', 'model_admin', 'support');
 CREATE TYPE platform_access_bindings_source AS ENUM ('config', 'manual');
 CREATE TYPE workspace_members_trust_level AS ENUM ('admin', 'member', 'guest');
 -- soft-delete: workspace_members is a single durable identity row; leaving /
@@ -451,24 +451,6 @@ CREATE TABLE conversations (
 CREATE INDEX idx_conversations_kind ON conversations(kind, created_at DESC);
 CREATE INDEX idx_conversations_workspace
   ON conversations(workspace_id, created_at DESC);
-
--- ============ Audit Logs ============
-CREATE TABLE audit_logs (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID REFERENCES workspaces(id) ON DELETE RESTRICT,
-  user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-  actor_id UUID,
-  action VARCHAR(120) NOT NULL,
-  resource_type VARCHAR(120) NOT NULL,
-  resource_id UUID,
-  details JSONB DEFAULT '{}',
-  ip_address VARCHAR(120),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX idx_audit_logs_workspace ON audit_logs(workspace_id, created_at DESC);
-CREATE INDEX idx_audit_logs_action ON audit_logs(action);
-CREATE INDEX idx_audit_logs_resource ON audit_logs(resource_type, resource_id);
 
 -- ============ Files (content-addressed) ============
 -- file-service refactor: unified content-addressed store shared by the by-id
@@ -5819,8 +5801,6 @@ DROP TRIGGER IF EXISTS sd_reject_delete ON actor_versions;
 CREATE TRIGGER sd_reject_delete BEFORE DELETE ON actor_versions FOR EACH ROW EXECUTE FUNCTION sd_reject_delete();
 DROP TRIGGER IF EXISTS sd_reject_delete ON actors;
 CREATE TRIGGER sd_reject_delete BEFORE DELETE ON actors FOR EACH ROW EXECUTE FUNCTION sd_reject_delete();
-DROP TRIGGER IF EXISTS sd_reject_delete ON audit_logs;
-CREATE TRIGGER sd_reject_delete BEFORE DELETE ON audit_logs FOR EACH ROW EXECUTE FUNCTION sd_reject_delete();
 DROP TRIGGER IF EXISTS sd_reject_delete ON automation_event_sources;
 CREATE TRIGGER sd_reject_delete BEFORE DELETE ON automation_event_sources FOR EACH ROW EXECUTE FUNCTION sd_reject_delete();
 DROP TRIGGER IF EXISTS sd_reject_delete ON automation_integration_bindings;
@@ -6126,8 +6106,6 @@ DROP TRIGGER IF EXISTS sd_fk_live_workspace_invites_workspace_id ON workspace_in
 DROP TRIGGER IF EXISTS sd_fk_live_workspace_invites_created_by_workspace_member_id ON workspace_invites;
 DROP TRIGGER IF EXISTS sd_fk_live_conversations_workspace_id ON conversations;
 DROP TRIGGER IF EXISTS sd_fk_live_conversations_created_by_workspace_member_id ON conversations;
-DROP TRIGGER IF EXISTS sd_fk_live_audit_logs_workspace_id ON audit_logs;
-DROP TRIGGER IF EXISTS sd_fk_live_audit_logs_user_id ON audit_logs;
 DROP TRIGGER IF EXISTS sd_fk_live_file_assets_workspace_id ON file_assets;
 DROP TRIGGER IF EXISTS sd_fk_live_file_assets_uploader_user_id ON file_assets;
 DROP TRIGGER IF EXISTS sd_fk_live_file_assets_parent_asset_id ON file_assets;
@@ -6322,7 +6300,6 @@ CREATE TRIGGER sd_fk_live_workspace_resources_workspace_id BEFORE INSERT OR UPDA
 CREATE TRIGGER sd_fk_live_workspace_access_bindings_workspace_member_id BEFORE INSERT OR UPDATE OF workspace_member_id, status ON workspace_access_bindings FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspace_members', 'workspace_member_id', 'id', 'false', 'active');
 CREATE TRIGGER sd_fk_live_workspace_invites_workspace_id BEFORE INSERT OR UPDATE OF workspace_id ON workspace_invites FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'false', '');
 CREATE TRIGGER sd_fk_live_conversations_workspace_id BEFORE INSERT OR UPDATE OF workspace_id, deleted_at ON conversations FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'true', '');
-CREATE TRIGGER sd_fk_live_audit_logs_workspace_id BEFORE INSERT OR UPDATE OF workspace_id ON audit_logs FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'false', '');
 CREATE TRIGGER sd_fk_live_file_assets_workspace_id BEFORE INSERT OR UPDATE OF workspace_id, deleted_at ON file_assets FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'true', '');
 CREATE TRIGGER sd_fk_live_publishers_workspace_id BEFORE INSERT OR UPDATE OF workspace_id, deleted_at ON publishers FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'true', '');
 CREATE TRIGGER sd_fk_live_catalog_items_publisher_id BEFORE INSERT OR UPDATE OF publisher_id, deleted_at ON catalog_items FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('publishers', 'publisher_id', 'id', 'true', '');
@@ -6739,21 +6716,10 @@ DECLARE
   v_total bigint := 0;
   v_n bigint;
 BEGIN
-  -- Global deletion-ledger row (workspace_id NULL so it is NOT a tenant row and
-  -- survives the audit_logs delete in step 2). This tier ERASES the tenant's own
-  -- audit_logs + access_subjects (design §5.2-B); only the global ledger and the
-  -- cross-tenant transport_addresses registry remain. workspace_id is NULL also
-  -- because the workspace is (already) soft-deleted and the FK-liveness trigger
-  -- forbids a new audit_logs row pointing at it; the id is in resource_id.
-  INSERT INTO audit_logs (workspace_id, action, resource_type, resource_id, details)
-  VALUES (NULL, 'tenant.hard_erase', 'workspace', p_workspace_id,
-          jsonb_build_object('workspace_id', p_workspace_id, 'purged_at', NOW()));
-
   -- 1. break cycles: null nullable cross-table FKs for in-scope rows
   UPDATE platform_access_bindings t0 SET assigned_by_user_id = NULL WHERE assigned_by_user_id IS NOT NULL AND (EXISTS (SELECT 1 FROM users t1_0 WHERE t1_0.id = t0.user_id AND (EXISTS (SELECT 1 FROM file_assets t2_0 WHERE t2_0.id = t1_0.avatar_file_id AND t2_0.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM users t1_1 WHERE t1_1.id = t0.assigned_by_user_id AND (EXISTS (SELECT 1 FROM file_assets t2_0 WHERE t2_0.id = t1_1.avatar_file_id AND t2_0.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM users t1_2 WHERE t1_2.id = t0.revoked_by_user_id AND (EXISTS (SELECT 1 FROM file_assets t2_0 WHERE t2_0.id = t1_2.avatar_file_id AND t2_0.workspace_id = p_workspace_id))));
   UPDATE workspace_access_bindings t0 SET assigned_by_workspace_member_id = NULL WHERE assigned_by_workspace_member_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_members t1_0 WHERE t1_0.id = t0.workspace_member_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_1 WHERE t1_1.id = t0.assigned_by_workspace_member_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.revoked_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id));
   UPDATE conversations t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE audit_logs t0 SET user_id = NULL WHERE user_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE file_assets t0 SET uploader_user_id = NULL WHERE uploader_user_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE file_parse_outputs t0 SET derived_asset_id = NULL WHERE derived_asset_id IS NOT NULL AND (EXISTS (SELECT 1 FROM file_assets t1_0 WHERE t1_0.id = t0.derived_asset_id AND t1_0.workspace_id = p_workspace_id));
   UPDATE publishers t0 SET logo_file_id = NULL WHERE logo_file_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
@@ -6898,7 +6864,6 @@ BEGIN
   DELETE FROM actor_source_refs t0 WHERE (EXISTS (SELECT 1 FROM catalog_items t1_0 WHERE t1_0.id = t0.source_catalog_item_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM actor_template_version_specs t0 WHERE (EXISTS (SELECT 1 FROM file_assets t1_0 WHERE t1_0.id = t0.avatar_file_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM actor_version_docs t0 WHERE (EXISTS (SELECT 1 FROM actor_versions t1_0 WHERE t1_0.id = t0.actor_version_id AND (EXISTS (SELECT 1 FROM workspace_members t2_0 WHERE t2_0.id = t1_0.created_by_workspace_member_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t2_1 WHERE t2_1.id = t1_0.source_workspace_member_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t2_2 WHERE t2_2.id = t1_0.source_conversation_id AND t2_2.workspace_id = p_workspace_id)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM audit_logs t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_deliveries t0 WHERE (EXISTS (SELECT 1 FROM automation_rules t1_0 WHERE t1_0.id = t0.rule_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_delivery_targets t0 WHERE (EXISTS (SELECT 1 FROM automation_rules t1_0 WHERE t1_0.id = t0.rule_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_execution_targets t0 WHERE (EXISTS (SELECT 1 FROM automation_executions t1_0 WHERE t1_0.id = t0.execution_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_2 WHERE t1_2.id = t0.session_id AND t1_2.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -7038,10 +7003,6 @@ BEGIN
 
   -- 3. finally the workspace row itself
   DELETE FROM workspaces WHERE id = p_workspace_id;
-
-  INSERT INTO audit_logs (workspace_id, action, resource_type, resource_id, details)
-  VALUES (NULL, 'tenant.hard_erase.done', 'workspace', p_workspace_id,
-          jsonb_build_object('rows_deleted', v_total, 'finished_at', NOW()));
 END;
 $$;
 ALTER FUNCTION sd_purge_workspace(uuid) OWNER TO synapse_purge_fn_owner;
@@ -7049,7 +7010,7 @@ REVOKE EXECUTE ON FUNCTION sd_purge_workspace(uuid) FROM PUBLIC;
 
 -- Tier A: retention purge. For each expired soft-deleted root, deletes its
 -- child rows (leaf→root) then the root row. Skips never-purge registries +
--- audit (access_subjects/transport_addresses/audit_logs) and roots pinned by
+-- registries (access_subjects/transport_addresses) and roots pinned by
 -- them via RESTRICT (those are erased only by a tier-B tenant erase).
 CREATE OR REPLACE FUNCTION sd_purge_expired_soft_deleted(p_before timestamptz)
 RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
@@ -7194,17 +7155,13 @@ BEGIN
   DELETE FROM publishers WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM remote_agent_machines WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM workspace_resources WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  INSERT INTO audit_logs (workspace_id, action, resource_type, resource_id, details)
-  VALUES (NULL, 'soft_delete.retention_purge', 'system', NULL,
-          jsonb_build_object('before', p_before, 'rows_deleted', v_total, 'finished_at', NOW()));
   RETURN v_total;
 END;
 $$;
 ALTER FUNCTION sd_purge_expired_soft_deleted(timestamptz) OWNER TO synapse_purge_fn_owner;
 REVOKE EXECUTE ON FUNCTION sd_purge_expired_soft_deleted(timestamptz) FROM PUBLIC;
 
-GRANT SELECT, UPDATE, DELETE ON access_subjects, account, actor_model_group_assignments, actor_source_refs, actor_template_version_specs, actor_version_docs, actor_versions, actors, audit_logs, automation_deliveries, automation_delivery_targets, automation_event_sources, automation_execution_targets, automation_executions, automation_integration_bindings, automation_occurrences, automation_policies, automation_rules, automation_triggers, automation_webhook_endpoints, catalog_categories, catalog_item_categories, catalog_items, catalog_version_files, catalog_versions, chat_client_instances, chat_conversation_create_requests, chat_push_tokens, context_archive_frame_parts, context_archive_frames, context_archive_points, context_compaction_run_inputs, context_compaction_runs, conversation_context_states, conversation_device_states, conversation_item_context_targets, conversation_item_mentions, conversation_item_parts, conversation_item_targets, conversation_items, conversation_participant_addresses, conversation_participant_states, conversation_participants, conversation_transport_bindings, conversations, device_capabilities, device_catalog_revisions, device_code, device_control_plane_sessions, device_exposures, device_operation_attempts, device_operation_results, device_operations, device_pairing_sessions, device_runtime_session_services, device_runtime_sessions, device_service_keys, device_services, device_sync_sources, device_tool_revisions, device_tools, devices, direct_conversation_bindings, file_access_grants, file_assets, file_mounts, file_parse_outputs, file_parse_runs, file_snapshots, file_spaces, installed_skills, memory_access_grants, memory_item_chunks, memory_item_parts, memory_items, memory_recall_run_results, memory_recall_runs, memory_spaces, model_binding_versions, model_bindings, model_group_grants, model_groups, platform_access_bindings, plugin_auth_sessions, plugin_connections, plugin_installations, plugin_package_version_specs, plugin_source_refs, plugin_version_runtime_permissions, provider_steps, publishers, realtime_event_outbox, remote_agent_bindings, remote_agent_conversation_contexts, remote_agent_conversation_views, remote_agent_group_task_grants, remote_agent_machine_sessions, remote_agent_machines, remote_agent_message_deliveries, remote_agent_runs, remote_agent_runtime_catalog, remote_agents, runtime_authorization_grants, runtime_events, session, session_context_states, session_interrupts, session_wakeups, sessions, skill_package_version_specs, skill_source_refs, skill_versions, tool_call_task_action_tokens, tool_call_task_device_tool, tool_call_task_external_mcp, tool_call_task_output_chunks, tool_call_task_response_commands, tool_call_task_runtime_authorization, tool_call_task_transport_projections, tool_call_tasks, tool_calls, tool_execution_attempts, tool_result_parts, tool_results, transport_accounts, transport_endpoints, transport_message_links, turns, users, workspace_access_bindings, workspace_capability_conversation_type_policies, workspace_friend_entries, workspace_friend_requests, workspace_invites, workspace_member_conversation_views, workspace_member_preferences, workspace_member_sync_events, workspace_members, workspace_relationship_profiles, workspace_resource_grant_requests, workspace_resource_grants, workspace_resources, workspaces TO synapse_purge_fn_owner;
+GRANT SELECT, UPDATE, DELETE ON access_subjects, account, actor_model_group_assignments, actor_source_refs, actor_template_version_specs, actor_version_docs, actor_versions, actors, automation_deliveries, automation_delivery_targets, automation_event_sources, automation_execution_targets, automation_executions, automation_integration_bindings, automation_occurrences, automation_policies, automation_rules, automation_triggers, automation_webhook_endpoints, catalog_categories, catalog_item_categories, catalog_items, catalog_version_files, catalog_versions, chat_client_instances, chat_conversation_create_requests, chat_push_tokens, context_archive_frame_parts, context_archive_frames, context_archive_points, context_compaction_run_inputs, context_compaction_runs, conversation_context_states, conversation_device_states, conversation_item_context_targets, conversation_item_mentions, conversation_item_parts, conversation_item_targets, conversation_items, conversation_participant_addresses, conversation_participant_states, conversation_participants, conversation_transport_bindings, conversations, device_capabilities, device_catalog_revisions, device_code, device_control_plane_sessions, device_exposures, device_operation_attempts, device_operation_results, device_operations, device_pairing_sessions, device_runtime_session_services, device_runtime_sessions, device_service_keys, device_services, device_sync_sources, device_tool_revisions, device_tools, devices, direct_conversation_bindings, file_access_grants, file_assets, file_mounts, file_parse_outputs, file_parse_runs, file_snapshots, file_spaces, installed_skills, memory_access_grants, memory_item_chunks, memory_item_parts, memory_items, memory_recall_run_results, memory_recall_runs, memory_spaces, model_binding_versions, model_bindings, model_group_grants, model_groups, platform_access_bindings, plugin_auth_sessions, plugin_connections, plugin_installations, plugin_package_version_specs, plugin_source_refs, plugin_version_runtime_permissions, provider_steps, publishers, realtime_event_outbox, remote_agent_bindings, remote_agent_conversation_contexts, remote_agent_conversation_views, remote_agent_group_task_grants, remote_agent_machine_sessions, remote_agent_machines, remote_agent_message_deliveries, remote_agent_runs, remote_agent_runtime_catalog, remote_agents, runtime_authorization_grants, runtime_events, session, session_context_states, session_interrupts, session_wakeups, sessions, skill_package_version_specs, skill_source_refs, skill_versions, tool_call_task_action_tokens, tool_call_task_device_tool, tool_call_task_external_mcp, tool_call_task_output_chunks, tool_call_task_response_commands, tool_call_task_runtime_authorization, tool_call_task_transport_projections, tool_call_tasks, tool_calls, tool_execution_attempts, tool_result_parts, tool_results, transport_accounts, transport_endpoints, transport_message_links, turns, users, workspace_access_bindings, workspace_capability_conversation_type_policies, workspace_friend_entries, workspace_friend_requests, workspace_invites, workspace_member_conversation_views, workspace_member_preferences, workspace_member_sync_events, workspace_members, workspace_relationship_profiles, workspace_resource_grant_requests, workspace_resource_grants, workspace_resources, workspaces TO synapse_purge_fn_owner;
 GRANT SELECT ON access_subjects, transport_addresses TO synapse_purge_fn_owner;
-GRANT INSERT ON audit_logs TO synapse_purge_fn_owner;
 
 -- <<< SOFT-DELETE PURGE <<<

@@ -121,11 +121,6 @@ const platformAccessOptions: Array<{
     label: "Support",
     description: "Operational access for troubleshooting and support work.",
   },
-  {
-    value: PLATFORM_ACCESS_KEY.AUDITOR,
-    label: "Auditor",
-    description: "Read-only access for audit and compliance review.",
-  },
 ]
 
 function titleize(value: string) {

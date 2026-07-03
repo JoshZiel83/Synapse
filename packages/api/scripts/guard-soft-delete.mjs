@@ -129,7 +129,7 @@ const WRITE_ALLOWLIST = new Set([
   // none: managed deletes must always go through soft-delete / sd_* fns.
 ])
 // Read-rule infra exemption: files that legitimately read base tables (the
-// soft-delete module itself, schema/seed/bootstrap, the platform-admin/audit
+// soft-delete module itself, schema/seed/bootstrap, the platform-admin
 // path, content-addressed GC). These are NOT counted toward the read baseline.
 const READ_INFRA_ALLOWLIST = new Set([
   "modules/soft-delete/repo-live-reads.ts",

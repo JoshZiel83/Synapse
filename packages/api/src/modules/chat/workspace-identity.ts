@@ -5,15 +5,10 @@
 
 import {
   getWorkspaceMemberIdentity,
-  getWorkspaceMemberIdentityById,
   type WorkspaceMemberIdentity,
 } from "./repo.js"
 
-export {
-  getWorkspaceMemberIdentity,
-  getWorkspaceMemberIdentityById,
-  type WorkspaceMemberIdentity,
-}
+export { getWorkspaceMemberIdentity, type WorkspaceMemberIdentity }
 
 export async function requireWorkspaceMemberIdentity(
   workspaceId: string,

@@ -91,7 +91,6 @@ import { getAssistantSessionMessagePersistence } from "./session-message-persist
 import { createLogger } from "../infrastructure/logger/index.js"
 import {
   getActorMaxSessions,
-  insertSessionThinkAuditLog,
   markSessionMemoryBootstrapCompleted,
 } from "./session-thinking-repo.js"
 
@@ -1378,17 +1377,6 @@ export function startSessionThinkingWorker() {
         assertStillHoldLock()
         await markTurnWakeupsProcessed(turn.id)
         await updateTurnStatus(turn.id, "completed")
-
-        await insertSessionThinkAuditLog({
-          workspaceId,
-          actorId,
-          sessionId,
-          trigger,
-          tokensUsed: result.tokensUsed,
-          actionsCount: result.actions.length,
-          reasoning: result.reasoning,
-          turnId: turn.id,
-        })
 
         await emitEvent({
           type: "actor.action",

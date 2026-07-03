@@ -16,8 +16,6 @@
 //     interpolated into the log message (log-injection) nor promoted to a Loki
 //     label (cardinality). Only the allowlisted `reportType` is low-cardinality.
 //   - cookies (if same-origin) are ignored for authz and never logged.
-//   - the path is EXCLUDED from the audit middleware (see
-//     infrastructure/middleware/audit.ts) so a flood can't amplify DB writes.
 //
 // Same-origin (served under the same nginx as the app) so no CORS preflight is
 // needed; the app's global CORS already covers any cross-origin case.

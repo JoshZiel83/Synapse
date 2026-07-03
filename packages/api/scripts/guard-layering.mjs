@@ -66,9 +66,6 @@
 //   r19_model_groups_app_route_marker : model-groups is a plain app surface
 //       module that has been migrated to appRoute() markers; keep it from
 //       reintroducing bare app.<verb>(...) registrations.
-//   r20_audit_app_route_marker : audit is a plain app surface module that has
-//       been migrated to appRoute(); keep it from reintroducing bare
-//       app.<verb>(...) registrations.
 //   r21_auth_custom_app_route_marker : custom auth app endpoints have been
 //       migrated to appRoute(); Better Auth's native app.all wildcard remains
 //       an explicit passthrough exception.
@@ -119,8 +116,6 @@
 //   r41_mcp_visible_tool_manifest_json_repo_exit : visible plugin
 //       toolManifest JSON is decoded by mcp-plugins/repo.ts before the tool
 //       resolver consumes it.
-//   r42_audit_app_schema_shared_contract : audit list app query/response DTOs
-//       are shared contracts, not controller-local schemas/casts.
 //   r43_platform_app_schema_shared_contract : platform navigation/access app
 //       body/response DTOs are shared contracts, not controller-local schemas.
 //   r44_memory_app_schema_shared_contract : memory app body/query/response DTOs
@@ -280,8 +275,6 @@
 //       consumes decoded config/scope objects and does not parse JSON strings.
 //   r107_tasks_service_no_json_string_parse : tasks service consumes decoded
 //       task command/session-plan/runtime-auth JSON fields from repo helpers.
-//   r108_audit_details_schema_depth : audit app response details is a decoded
-//       JSON object, not an opaque z.unknown field.
 //   r109_organization_service_no_json_string_parse : organization service
 //       consumes decoded docs/metadata and delegates doc-array shaping to a
 //       pure codec; it must not parse JSON strings.
@@ -400,9 +393,6 @@
 //   r146_web_automation_list_facade_contract_shared : web automation list
 //       facades use shared list schema types instead of element-array return
 //       types.
-//   r147_web_audit_facade_contract_shared : web audit facade unwraps the
-//       appRoute envelope through a shared typed response instead of a cast or
-//       raw envelope return.
 //   r148_client_file_upload_facade_contract_shared : web/mobile file upload
 //       facades parse the shared upload response schema instead of casting the
 //       appRoute envelope to `{ data: FileRecordView }`.
@@ -467,10 +457,6 @@ const SKILLS_SHARED_SCHEMA = resolve(
 const PLATFORM_SHARED_SCHEMA = resolve(
   REPO_ROOT,
   "packages/shared/src/schemas/platform.ts"
-)
-const AUDIT_SHARED_SCHEMA = resolve(
-  REPO_ROOT,
-  "packages/shared/src/schemas/audit.ts"
 )
 const MCP_PLUGINS_SHARED_SCHEMA = resolve(
   REPO_ROOT,
@@ -754,8 +740,6 @@ const isPlatformAdminServiceFile = (p) =>
 const isPlatformPresenterFile = (p) => r8Key(p) === "platform/presenter.ts"
 const isMemoryControllerFile = (p) => r8Key(p) === "memory/controller.ts"
 const isMemoryPresenterFile = (p) => r8Key(p) === "memory/presenter.ts"
-const isAuditIndexFile = (p) => r8Key(p) === "audit/index.ts"
-const isAuditSharedSchemaFile = (p) => p === AUDIT_SHARED_SCHEMA
 const isAuthIndexFile = (p) => r8Key(p) === "auth/index.ts"
 const isBareAppRouteAllowedFile = (p) => r8Key(p) === "installer/controller.ts"
 const isChatServiceFile = (p) => r8Key(p) === "chat/service.ts"
@@ -837,7 +821,6 @@ const isWebMemoryFacadeContractFile = (p) => p === WEB_API_CLIENT
 const isWebRemoteAgentsFacadeContractFile = (p) => p === WEB_API_CLIENT
 const isWebImFacadeContractFile = (p) => p === WEB_API_CLIENT
 const isWebAutomationListFacadeContractFile = (p) => p === WEB_API_CLIENT
-const isWebAuditFacadeContractFile = (p) => p === WEB_API_CLIENT
 const isClientFileUploadFacadeContractFile = (p) =>
   p === WEB_API_CLIENT || p === MOBILE_API_CLIENT
 const isClientFacadeSurfaceFile = (p) =>
@@ -1717,26 +1700,6 @@ const RULES = [
       ),
   },
   {
-    // r147: audit app route already returns shared AuditLogListViewSchema.
-    // Keep the web facade typed against the appRoute envelope instead of
-    // recovering the contract with a local cast or returning the raw envelope.
-    id: "r147_web_audit_facade_contract_shared",
-    appliesTo: isWebAuditFacadeContractFile,
-    test: (src) =>
-      /\bgetAuditLogs\b[\s\S]{0,220}as\s+\{\s*data\s*:\s*AuditLogListView\s*\}/.test(
-        src
-      ) ||
-      /\bgetAuditLogs\b[\s\S]{0,180}Promise\s*<\s*\{\s*data\s*:\s*AuditLogListView\s*\}\s*>/.test(
-        src
-      ) ||
-      /\bgetAuditLogs\b[\s\S]{0,260}return\s+this\.fetch\(\s*withQuery\(\s*`\/workspaces\/\$\{wsId\}\/audit-logs`/.test(
-        src
-      ) ||
-      /\bgetAuditLogs\b[\s\S]{0,260}return\s+(?:res|response)\b(?!\.data)/.test(
-        src
-      ),
-  },
-  {
     // r148: file upload app route returns StoredFileRecordViewSchema inside
     // appRoute's { data } envelope. Keep web/mobile XHR facades parsing that
     // shared schema instead of casting the envelope to FileRecordView.
@@ -1757,14 +1720,6 @@ const RULES = [
     // expand incrementally.
     id: "r19_model_groups_app_route_marker",
     appliesTo: isModelGroupsControllerFile,
-    test: (src) => /\bapp\.(get|post|put|delete|patch)\s*[<(]/.test(src),
-  },
-  {
-    // r20: audit log reads are app-facing and now return a shared schema-backed
-    // `{ data }` envelope through appRoute(). Keep the cleaned route marker from
-    // regressing to bare Fastify registration.
-    id: "r20_audit_app_route_marker",
-    appliesTo: isAuditIndexFile,
     test: (src) => /\bapp\.(get|post|put|delete|patch)\s*[<(]/.test(src),
   },
   {
@@ -2072,20 +2027,6 @@ const RULES = [
       /\b(?:asArray|JSON\.parse)\s*(?:<[^>]+>)?\s*\(\s*plugin\.toolManifest\s*\)/.test(
         src
       ) || /\bplugin\.toolManifest\s+as\s+/.test(src),
-  },
-  {
-    // r42: audit log list is an app-facing route. Its list query and response
-    // DTO live in @synapse/shared/schemas; audit/index.ts should parse and
-    // return those contracts rather than recreating local schemas or casts.
-    id: "r42_audit_app_schema_shared_contract",
-    appliesTo: isAuditIndexFile,
-    test: (src) =>
-      /\brequest\.query\s+as\s+\{[\s\S]*?(?:action|resourceType|resourceId|page|pageSize)\??\s*:/.test(
-        src
-      ) ||
-      /z\.(?:object|strictObject)\s*\(\s*\{[\s\S]*?(?:action|resourceType|resourceId|page|pageSize|items|total|userName|actorName|createdAt)\s*:/.test(
-        src
-      ),
   },
   {
     // r43: platform navigation/access are app-facing DTOs shared by API and
@@ -3156,14 +3097,6 @@ const RULES = [
       /JSON\.parse\(\s*locked\.(?:grant_options|available_presets)\s*\)/.test(
         src
       ),
-  },
-  {
-    // r108: audit details is app-facing JSON object data. Keep the shared
-    // response schema explicit so callers don't receive arbitrary opaque
-    // values through AuditLogView.details.
-    id: "r108_audit_details_schema_depth",
-    appliesTo: isAuditSharedSchemaFile,
-    test: (src) => /details:\s*z\.unknown\(\)/.test(src),
   },
   {
     // r109: organization service consumes decoded actor docs / metadata from

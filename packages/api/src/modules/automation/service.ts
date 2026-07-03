@@ -53,7 +53,6 @@ import {
   type Executor,
 } from "../../infrastructure/database/kysely.js"
 import {
-  appendAutomationAuditLog,
   applyAutomationPolicyAfterTrigger as applyAutomationPolicyAfterTriggerRepo,
   claimPendingAutomationExecutionRow,
   clearAutomationRuleError,
@@ -112,7 +111,6 @@ import {
   selectExistingAutomationIntegrationBindingRow,
   selectWebhookAutomationEventSourceByPathToken,
   selectIntegrationEventSourceReuseRow,
-  selectWorkspaceOwnerId,
   setAutomationEventSourceStatus,
   softDeleteAutomationEventSource,
   softDeleteAutomationRule,
@@ -150,7 +148,6 @@ import {
 } from "./integrations.js"
 import { enqueueSessionWakeup } from "../session/runtime.js"
 import { getSession } from "../session/service.js"
-import { getWorkspaceMemberIdentityById } from "../chat/workspace-identity.js"
 import {
   readAutomationEventSourceAccessGrantTarget,
   type AutomationEventSourceGrantJoinedRow,
@@ -246,18 +243,6 @@ export interface AutomationCreatorInput {
 type AutomationOperatorInput = {
   workspaceMemberId?: string
   actorId?: string
-}
-
-async function resolveAutomationAuditUserId(params: {
-  workspaceMemberId?: string
-}) {
-  if (!params.workspaceMemberId) {
-    return null
-  }
-  const identity = await getWorkspaceMemberIdentityById(
-    params.workspaceMemberId
-  )
-  return identity?.userId || null
 }
 
 export interface AutomationTriggerInput {
@@ -807,30 +792,13 @@ async function allocateAutomationEventSourceKey(params: {
 
 async function pauseAutomationRulesForEventSource(
   eventSourceId: string,
-  operator: AutomationOperatorInput,
   reason: string
 ) {
-  const auditUserId = await resolveAutomationAuditUserId(operator)
-  const affected = await pauseAutomationRuleRowsForEventSource({
+  await pauseAutomationRuleRowsForEventSource({
     eventSourceId,
     reason,
     category: AUTOMATION_RULE_CATEGORY.EVENT_SUBSCRIPTION,
   })
-
-  for (const row of affected) {
-    await appendAutomationAuditLog({
-      workspaceId: row.workspaceId,
-      userId: auditUserId,
-      actorId: operator.actorId || null,
-      action: "automation_rule.pause",
-      resourceType: "automation_rule",
-      resourceId: row.id,
-      details: {
-        reason,
-        eventSourceId,
-      },
-    })
-  }
 }
 
 function resolveAutomationEventSourceConversationMask(
@@ -1057,32 +1025,12 @@ async function loadConversationWithImFlag(
   return { ...conversation, is_im: isIm }
 }
 
-async function pauseAutomationRule(params: {
-  ruleId: string
-  workspaceId: string
-  reason: string
-  operator: AutomationOperatorInput
-}) {
-  const auditUserId = await resolveAutomationAuditUserId(params.operator)
-  const didPause = await pauseActiveAutomationRule(params.ruleId, params.reason)
-  if (!didPause) {
-    return
-  }
-
-  await appendAutomationAuditLog({
-    workspaceId: params.workspaceId,
-    userId: auditUserId,
-    actorId: params.operator.actorId || null,
-    action: "automation_rule.pause",
-    resourceType: "automation_rule",
-    resourceId: params.ruleId,
-    details: { reason: params.reason },
-  })
+async function pauseAutomationRule(params: { ruleId: string; reason: string }) {
+  await pauseActiveAutomationRule(params.ruleId, params.reason)
 }
 
 async function pauseAutomationRulesMissingEventSourceAccess(
   eventSourceId: string,
-  operator: AutomationOperatorInput,
   reason: string
 ) {
   const rows = await listActiveEventSubscriptionRuleRowsByEventSource({
@@ -1111,9 +1059,7 @@ async function pauseAutomationRulesMissingEventSourceAccess(
     if (!stillAllowed) {
       await pauseAutomationRule({
         ruleId: row.id,
-        workspaceId: row.workspace_id,
         reason,
-        operator,
       })
     }
   }
@@ -1140,7 +1086,6 @@ export async function revokeAutomationEventSourceAccess(input: {
   })
   await pauseAutomationRulesMissingEventSourceAccess(
     input.eventSourceId,
-    input.operator,
     `Event source access grant ${input.grantId} was revoked`
   )
 }
@@ -1451,7 +1396,6 @@ async function createIntegrationAutomationEventSource(
   creator: AutomationCreatorInput,
   input: CreateAutomationEventSourceInput
 ) {
-  const auditUserId = await resolveAutomationAuditUserId(creator)
   if (!input.integration) {
     throw new Error(
       "integration event sources require integration configuration"
@@ -1459,7 +1403,6 @@ async function createIntegrationAutomationEventSource(
   }
   const integration = input.integration
 
-  const ingressKind = integration.ingressKind || "webhook"
   const installation = await getIntegrationInstallation(
     workspaceId,
     integration.installationId,
@@ -1541,29 +1484,6 @@ async function createIntegrationAutomationEventSource(
       await reconcileIntegrationBindingWebhook(binding.id)
     }
 
-    await appendAutomationAuditLog({
-      workspaceId: workspaceId,
-      userId: auditUserId,
-      actorId: creator.actorId || null,
-      action: "automation_event_source.update",
-      resourceType: "automation_event_source",
-      resourceId: existing.id,
-      details: {
-        providerKind: "integration",
-        sourceKey: normalizedSourceKey,
-        integration: {
-          bindingId: binding.id,
-          installationId: installation.id,
-          provider: integration.provider,
-          ingressKind,
-          targetKind: integration.targetKind,
-          targetId,
-          targetLabel,
-        },
-        reusedExisting: true,
-        status: nextStatus,
-      },
-    })
     const updated = await getAutomationEventSource(workspaceId, existing.id)
     if (!updated) {
       throw new Error(
@@ -1615,32 +1535,6 @@ async function createIntegrationAutomationEventSource(
       },
       trx
     )
-
-    await appendAutomationAuditLog(
-      {
-        workspaceId: workspaceId,
-        userId: auditUserId,
-        actorId: creator.actorId || null,
-        action: "automation_event_source.create",
-        resourceType: "automation_event_source",
-        resourceId: sourceId,
-        details: {
-          providerKind: "integration",
-          sourceKey: normalizedSourceKey,
-          integration: {
-            bindingId: binding.id,
-            installationId: installation.id,
-            provider: integration.provider,
-            ingressKind,
-            targetKind: integration.targetKind,
-            targetId,
-            targetLabel,
-          },
-          status: initialStatus,
-        },
-      },
-      trx
-    )
   })
 
   try {
@@ -1671,7 +1565,6 @@ export async function createAutomationEventSource(
   creator: AutomationCreatorInput,
   input: CreateAutomationEventSourceInput
 ) {
-  const auditUserId = await resolveAutomationAuditUserId(creator)
   if (input.providerKind === "integration") {
     return createIntegrationAutomationEventSource(workspaceId, creator, input)
   }
@@ -1723,23 +1616,6 @@ export async function createAutomationEventSource(
       },
     })
 
-    await appendAutomationAuditLog({
-      workspaceId: workspaceId,
-      userId: auditUserId,
-      actorId: creator.actorId || null,
-      action: "automation_event_source.update",
-      resourceType: "automation_event_source",
-      resourceId: existing.id,
-      details: {
-        providerKind: input.providerKind,
-        providerRef: providerBinding.providerRef,
-        sourceKey: normalizedSourceKey,
-        recommendedUsage: input.recommendedUsage?.trim() || "",
-        status: input.status || "active",
-        reusedExisting: true,
-      },
-    })
-
     const updated = await getAutomationEventSource(workspaceId, existing.id)
     if (!updated) {
       throw new Error(
@@ -1786,22 +1662,6 @@ export async function createAutomationEventSource(
     )
   })
 
-  await appendAutomationAuditLog({
-    workspaceId: workspaceId,
-    userId: auditUserId,
-    actorId: creator.actorId || null,
-    action: "automation_event_source.create",
-    resourceType: "automation_event_source",
-    resourceId: sourceId,
-    details: {
-      providerKind: input.providerKind,
-      providerRef: providerBinding.providerRef,
-      sourceKey: normalizedSourceKey,
-      recommendedUsage: input.recommendedUsage?.trim() || "",
-      status: input.status || "active",
-    },
-  })
-
   const created = await getAutomationEventSource(workspaceId, sourceId)
   if (!created) {
     throw new Error(`Automation event source ${sourceId} was not persisted`)
@@ -1815,7 +1675,6 @@ export async function updateAutomationEventSource(
   operator: AutomationOperatorInput,
   input: UpdateAutomationEventSourceInput
 ) {
-  const auditUserId = await resolveAutomationAuditUserId(operator)
   const existing = await getAutomationEventSource(workspaceId, eventSourceId)
   if (!existing) {
     throw new Error("Automation event source not found")
@@ -1904,28 +1763,9 @@ export async function updateAutomationEventSource(
   ) {
     await pauseAutomationRulesForEventSource(
       eventSourceId,
-      operator,
       `Event source ${eventSourceId} is ${nextStatus}`
     )
   }
-
-  await appendAutomationAuditLog({
-    workspaceId: workspaceId,
-    userId: auditUserId,
-    actorId: operator.actorId || null,
-    action: "automation_event_source.update",
-    resourceType: "automation_event_source",
-    resourceId: eventSourceId,
-    details: {
-      status: nextStatus,
-      providerRef: providerBinding.providerRef,
-      sourceKey: existing.sourceKey,
-      recommendedUsage:
-        input.recommendedUsage !== undefined
-          ? input.recommendedUsage.trim()
-          : existing.recommendedUsage || "",
-    },
-  })
 
   const updated = await getAutomationEventSource(workspaceId, eventSourceId)
   if (!updated) {
@@ -1941,7 +1781,6 @@ export async function archiveAutomationEventSource(
   eventSourceId: string,
   operator: AutomationOperatorInput
 ) {
-  const auditUserId = await resolveAutomationAuditUserId(operator)
   const existing = await getAutomationEventSource(workspaceId, eventSourceId)
   if (!existing) {
     throw new Error("Automation event source not found")
@@ -1963,19 +1802,8 @@ export async function archiveAutomationEventSource(
 
   await pauseAutomationRulesForEventSource(
     eventSourceId,
-    operator,
     `Event source ${eventSourceId} was archived`
   )
-
-  await appendAutomationAuditLog({
-    workspaceId: workspaceId,
-    userId: auditUserId,
-    actorId: operator.actorId || null,
-    action: "automation_event_source.archive",
-    resourceType: "automation_event_source",
-    resourceId: eventSourceId,
-    details: { archived: true },
-  })
 }
 
 async function getAutomationEventSourceByWebhookPathToken(
@@ -2178,34 +2006,6 @@ function buildAutomationNoticePayload(params: {
     message: params.rule.delivery.messageText,
     messageBlocks: params.rule.delivery.messageBlocks,
   }
-}
-
-async function resolveOperatorUserId(rule: AutomationRule) {
-  const creatorParticipant = await getConversationParticipant({
-    conversationId: rule.conversationId,
-    participantId: rule.createdByParticipantId,
-  })
-  if (creatorParticipant?.workspaceMemberId) {
-    const identity = await getWorkspaceMemberIdentityById(
-      creatorParticipant.workspaceMemberId as string
-    )
-    if (identity?.userId) return identity.userId
-  }
-
-  const members = await listConversationParticipants(rule.conversationId)
-  const firstUser = members.find(
-    (member: any) => member.state === "active" && member.workspaceMemberId
-  )
-  if (firstUser?.workspaceMemberId) {
-    const workspaceMember = await getWorkspaceMemberIdentityById(
-      firstUser.workspaceMemberId as string
-    )
-    if (workspaceMember) {
-      return workspaceMember.userId
-    }
-  }
-
-  return selectWorkspaceOwnerId(rule.workspaceId)
 }
 
 async function resolveCreatorParticipant(rule: AutomationRule) {
@@ -2435,7 +2235,6 @@ export async function createAutomationRule(
     creator,
     input.conversationId
   )
-  const auditUserId = await resolveAutomationAuditUserId(creator)
   const ruleId = uuidv4()
   const category: AutomationCategory =
     input.trigger.triggerKind === "schedule"
@@ -2497,33 +2296,6 @@ export async function createAutomationRule(
       ruleId,
       normalizedDelivery.targetParticipantIds
     )
-
-    await appendAutomationAuditLog(
-      {
-        workspaceId: workspaceId,
-        userId: auditUserId,
-        actorId: creator.actorId || null,
-        action: "automation_rule.create",
-        resourceType: "automation_rule",
-        resourceId: ruleId,
-        details: {
-          category,
-          triggerKind: normalizedTrigger.trigger_kind,
-          policy: {
-            activeFrom: normalizedPolicy.active_from,
-            activeUntil: normalizedPolicy.active_until,
-            maxTriggerCount: normalizedPolicy.max_trigger_count,
-            completionStatus: normalizedPolicy.completion_status,
-          },
-          sourceKind: normalizedTrigger.source_kind,
-          eventSourceId: normalizedTrigger.event_source_id,
-          conversationId: input.conversationId,
-          targetPolicy: normalizedDelivery.target_policy,
-          targetCount: normalizedDelivery.targetParticipantIds.length,
-        },
-      },
-      trx
-    )
   })
 
   const [rule] = await loadAutomationRulesByIds(workspaceId, [ruleId])
@@ -2559,7 +2331,6 @@ export async function updateAutomationRule(
   operator: AutomationOperatorInput,
   input: UpdateAutomationRuleInput
 ) {
-  const auditUserId = await resolveAutomationAuditUserId(operator)
   const existing = await getAutomationRule(workspaceId, ruleId)
   if (!existing) {
     throw new Error("Automation rule not found")
@@ -2648,31 +2419,6 @@ export async function updateAutomationRule(
       ruleId,
       normalizedDelivery.targetParticipantIds
     )
-
-    await appendAutomationAuditLog(
-      {
-        workspaceId: workspaceId,
-        userId: auditUserId,
-        actorId: operator.actorId || null,
-        action: "automation_rule.update",
-        resourceType: "automation_rule",
-        resourceId: ruleId,
-        details: {
-          triggerKind: normalizedTrigger.trigger_kind,
-          policy: {
-            activeFrom: normalizedPolicy.active_from,
-            activeUntil: normalizedPolicy.active_until,
-            maxTriggerCount: normalizedPolicy.max_trigger_count,
-            completionStatus: normalizedPolicy.completion_status,
-          },
-          sourceKind: normalizedTrigger.source_kind,
-          eventSourceId: normalizedTrigger.event_source_id,
-          targetPolicy: normalizedDelivery.target_policy,
-          targetCount: normalizedDelivery.targetParticipantIds.length,
-        },
-      },
-      trx
-    )
   })
 
   const updated = await getAutomationRule(workspaceId, ruleId)
@@ -2687,16 +2433,6 @@ export async function deleteAutomationRule(
   ruleId: string,
   operator: AutomationOperatorInput
 ) {
-  const auditUserId = await resolveAutomationAuditUserId(operator)
-  await appendAutomationAuditLog({
-    workspaceId: workspaceId,
-    userId: auditUserId,
-    actorId: operator.actorId || null,
-    action: "automation_rule.delete",
-    resourceType: "automation_rule",
-    resourceId: ruleId,
-    details: { deleted: true },
-  })
   // Soft delete (design §7.4): flip deleted_at (hard delete forbidden by
   // sd_reject_delete).
   await softDeleteAutomationRule(workspaceId, ruleId)
@@ -2861,18 +2597,6 @@ export async function ingestAutomationEvent(input: AutomationEventEnvelope) {
   }
 
   await touchAutomationEventSourceTriggered(eventSource.id)
-  await appendAutomationAuditLog({
-    workspaceId: input.workspaceId,
-    action: "automation_event_source.trigger",
-    resourceType: "automation_event_source",
-    resourceId: eventSource.id,
-    details: {
-      occurrenceId: occurrence.id,
-      occurrenceTitle: decoratedOccurrence.displayTitle,
-      executionCount: executions.length,
-    },
-  })
-
   return {
     occurrence: decoratedOccurrence,
     executions,
@@ -3171,7 +2895,6 @@ export async function processAutomationExecution(
       }
     }
 
-    const creatorParticipant = await resolveCreatorParticipant(rule)
     const { restrictedAudienceParticipantIds, targetParticipants } =
       await resolveDeliveryTargets(rule)
     if (targetParticipants.length === 0) {
@@ -3205,32 +2928,9 @@ export async function processAutomationExecution(
     await markAutomationRuleTriggered(rule.id)
     await applyAutomationPolicyAfterTriggerRepo({
       ruleId: rule.id,
-      workspaceId: rule.workspaceId,
-      occurrenceId: occurrence.id,
-      executionId,
       completeNow:
         rule.trigger.triggerKind === "schedule" && !rule.trigger.nextFireAt,
-      completionReason:
-        rule.trigger.triggerKind === "schedule"
-          ? "schedule_exhausted"
-          : "max_trigger_count",
     })
-    await appendAutomationAuditLog({
-      workspaceId: rule.workspaceId,
-      userId: (await resolveOperatorUserId(rule)) || null,
-      actorId: creatorParticipant?.actorId || null,
-      action: "automation_rule.trigger",
-      resourceType: "automation_rule",
-      resourceId: rule.id,
-      details: {
-        executionId,
-        occurrenceId: occurrence.id,
-        createdItemId,
-        wakeupCount,
-        targetCount: targetParticipants.length,
-      },
-    })
-
     return {
       executionId,
       createdItemId,

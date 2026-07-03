@@ -38,10 +38,6 @@ tables:
     softDelete: none
     workspaceScope: none
     livePredicate: TRUE
-  audit_logs:
-    class: append-only
-    softDelete: none
-    workspaceScope: nullable-global
   automation_deliveries:
     class: ephemeral
     softDelete: none
@@ -980,22 +976,6 @@ foreignKeys:
       snapshotColumn: created_by_workspace_member_id_snapshot
     _child: conversations(created_by_workspace_member_id)
     _parent: workspace_members(id)
-    _was: SET NULL
-  digest:24a75e9ae9931cae:
-    targetAction: RESTRICT
-    liveIntegrity: enforce
-    _child: audit_logs(workspace_id)
-    _parent: workspaces(id)
-    _was: CASCADE
-  digest:1a6778e2016a2463:
-    targetAction: SET NULL
-    liveIntegrity: historical
-    setNull:
-      canLose: false
-      needsSnapshot: true
-      snapshotColumn: user_id_snapshot
-    _child: audit_logs(user_id)
-    _parent: users(id)
     _was: SET NULL
   digest:4d2bcc747acadf6b:
     targetAction: RESTRICT

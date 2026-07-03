@@ -7,7 +7,6 @@ import { fileURLToPath } from "node:url"
 const schemasDir = dirname(fileURLToPath(import.meta.url))
 
 const classifiedOpenShapeFiles = {
-  "audit.ts": "Audit/event details are open records owned by audit producers.",
   "automation.ts":
     "Automation matcher, schedule, policy, and delivery payloads carry extensible rule config.",
   "chat-content-block.ts":
