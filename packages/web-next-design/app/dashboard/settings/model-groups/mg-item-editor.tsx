@@ -18,7 +18,6 @@ import {
   getDefaultModelBaseUrl,
   getDefaultModelName,
   getKnownModelDefinitions,
-  getProviderKindForVendor,
   listModelVendorDefinitions,
   vendorSupportsServerTools,
 } from "@synapse/shared"
@@ -94,18 +93,10 @@ export function ItemEditor({
   }
   if (!open && seenOpen) setSeenOpen(false)
 
-  const providerKind = getProviderKindForVendor(draft.vendor)
   const models = useMemo(
     () => getKnownModelDefinitions(draft.vendor),
     [draft.vendor]
   )
-  const modelOptions = [
-    ...models.map((m) => ({ value: m.modelName, label: m.label })),
-    // keep an already-saved model listed even if dropped from the catalog
-    ...(draft.modelName && !models.some((m) => m.modelName === draft.modelName)
-      ? [{ value: draft.modelName, label: `${draft.modelName}（自定义）` }]
-      : []),
-  ]
 
   const patch = (p: Partial<Draft>) => setDraft((d) => ({ ...d, ...p }))
   const pickVendor = (vendor: string) =>
@@ -176,21 +167,24 @@ export function ItemEditor({
                 placeholder="选择厂商"
                 searchPlaceholder="搜索厂商…"
               />
-              <div className="text-[11px] text-muted-foreground/60">
-                协议：<code className="font-mono">{providerKind}</code>
-                （由厂商推断）
-              </div>
             </div>
 
             <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">模型</Label>
-              <Combobox
-                options={modelOptions}
+              <Input
+                list="mg-model-suggestions"
                 value={draft.modelName}
-                onChange={(v) => patch({ modelName: v })}
-                placeholder="选择模型"
-                searchPlaceholder="搜索或输入模型 id…"
+                onChange={(e) => patch({ modelName: e.target.value })}
+                placeholder="输入模型 id（下拉为推荐，可自由填写）"
+                className="font-mono text-xs"
               />
+              <datalist id="mg-model-suggestions">
+                {models.map((m) => (
+                  <option key={m.modelName} value={m.modelName}>
+                    {m.label}
+                  </option>
+                ))}
+              </datalist>
             </div>
 
             <div className="space-y-1.5">
@@ -243,14 +237,8 @@ export function ItemEditor({
                   <Input
                     value={draft.baseUrl}
                     onChange={(e) => patch({ baseUrl: e.target.value })}
-                    disabled={providerKind !== "openai_compatible"}
                     className="font-mono text-xs"
                   />
-                  {providerKind !== "openai_compatible" && (
-                    <p className="text-[11px] text-muted-foreground/60">
-                      官方厂商地址由协议决定，不可改。
-                    </p>
-                  )}
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-xs text-muted-foreground">
