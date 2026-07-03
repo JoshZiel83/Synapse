@@ -1,7 +1,5 @@
-"use client"
-
-import { ContactHubClient } from "./contact-hub-client"
+import ContactsHub from "./contacts-hub"
 
 export default function ContactsPage() {
-  return <ContactHubClient />
+  return <ContactsHub />
 }

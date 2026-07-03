@@ -2,15 +2,17 @@ import {
   RelationshipProfileViewSchema,
   RelationshipScanResponseSchema,
   IdentitySearchResponseSchema,
-  ContactHubResponseSchema,
-  ContactHubDetailResponseSchema,
   DirectConversationOpenResponseSchema,
-  FriendRequestViewSchema,
-  ActorAccessRequestViewSchema,
-  RemoteAgentAccessRequestViewSchema,
   ResolveRequestResponseSchema,
 } from "@synapse/shared/schemas"
 import { mock } from "../faker-setup"
+import {
+  designContactHub,
+  designContactEntries,
+  findContactEntry,
+  designFriendRequests,
+  designActorAccessRequests,
+} from "../fixtures/contacts"
 import type { DesignHandlers } from "./_types"
 
 // Relationship + contacts: my/actor/remote-agent relationship profiles, QR scan
@@ -32,27 +34,15 @@ export const relationshipContactsHandlers = {
   searchIdentity: async () => mock(IdentitySearchResponseSchema),
   requestRelationshipByIdentityProfile: async () =>
     mock(RelationshipScanResponseSchema),
-  getContactHub: async () => mock(ContactHubResponseSchema),
-  getContactHubDetail: async () => mock(ContactHubDetailResponseSchema),
-  // Re-enabled after the RC2 fix (12b60ef5): the per-type request View schemas
-  // dropped .nullable().optional() on createdAt (the DB columns are NOT NULL) and
-  // now match their hand-written View types exactly (see contract-parity.ts). The
-  // wire `RequestListResponseSchema` uses the WIDER AnyRequestView union for its
-  // items, so we build each `{ incoming, outgoing }` envelope from the SPECIFIC
-  // item schema — type-correct against each *ListResponse and semantically right
-  // (a friend list shows friend requests, not a mixed union).
-  getFriendRequests: async () => ({
-    incoming: [mock(FriendRequestViewSchema), mock(FriendRequestViewSchema)],
-    outgoing: [mock(FriendRequestViewSchema)],
+  // Curated mixed roster + detail (real members/actors/agents/friends).
+  getContactHub: async () => designContactHub,
+  getContactHubDetail: async (_ws: string, kind: string, id: string) => ({
+    contact: findContactEntry(kind, id) ?? designContactEntries[0],
+    groups: [],
   }),
-  getActorAccessRequests: async () => ({
-    incoming: [mock(ActorAccessRequestViewSchema)],
-    outgoing: [mock(ActorAccessRequestViewSchema)],
-  }),
-  getRemoteAgentAccessRequests: async () => ({
-    incoming: [mock(RemoteAgentAccessRequestViewSchema)],
-    outgoing: [mock(RemoteAgentAccessRequestViewSchema)],
-  }),
+  getFriendRequests: async () => designFriendRequests,
+  getActorAccessRequests: async () => designActorAccessRequests,
+  getRemoteAgentAccessRequests: async () => ({ incoming: [], outgoing: [] }),
   approveFriendRequest: async () => mock(ResolveRequestResponseSchema),
   rejectFriendRequest: async () => mock(ResolveRequestResponseSchema),
   approveActorAccessRequest: async () => mock(ResolveRequestResponseSchema),
