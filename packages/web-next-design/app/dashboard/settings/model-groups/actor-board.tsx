@@ -10,6 +10,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   ChevronDown,
   ChevronUp,
+  Info,
   Loader2,
   Plus,
   Search,
@@ -35,6 +36,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import {
   getModelGroupScopeMeta,
   getModelGroupStrategyLabel,
 } from "../model-group-shared"
@@ -54,7 +61,7 @@ const toEntry = (a: ActorModelGroupAssignmentView): ChainEntry => ({
 })
 
 export default function ActorBoard() {
-  const { workspaceId, workspaceName } = useWorkspace()
+  const { workspaceId } = useWorkspace()
   const qc = useQueryClient()
   const [q, setQ] = useState("")
   const [actorId, setActorId] = useState<string>()
@@ -83,8 +90,7 @@ export default function ActorBoard() {
       <div className="mb-4">
         <h1 className="text-xl font-semibold">Actor 模型指派</h1>
         <p className="mt-0.5 text-sm text-muted-foreground">
-          为每个 Actor 配置一条有序的模型组故障转移链 ·{" "}
-          {workspaceName ?? "工作区"}
+          为 Actor 指派模型组的故障转移顺序
         </p>
       </div>
 
@@ -245,26 +251,27 @@ function ChainEditor({
 
   return (
     <div className="space-y-4">
-      {/* resolved precedence */}
-      <div className="rounded-xl border bg-muted/20 p-3 text-xs text-muted-foreground">
-        <div className="mb-1 font-medium text-foreground/80">解析优先级</div>
-        Actor 链 → 成员默认 → 工作区默认 → 平台默认
-        <div className="mt-1">
-          {chain.length > 0 ? (
-            <>
-              该 Actor 首先解析到「
-              <span className="text-foreground/80">{chain[0].groupName}</span>
-              」（actor 链覆盖各级默认）。
-            </>
-          ) : (
-            "该 Actor 未设置链，将回退到工作区 / 平台默认组。"
-          )}
-        </div>
-      </div>
-
       <div className="flex items-center justify-between">
-        <div className="text-sm font-medium">
-          {actor.displayName} 的模型链（{chain.length}）
+        <div className="flex items-center gap-1.5">
+          <span className="text-sm font-medium">模型链</span>
+          <span className="text-xs text-muted-foreground">{chain.length}</span>
+          <TooltipProvider delayDuration={150}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="解析优先级说明"
+                  className="text-muted-foreground/40 transition-colors hover:text-muted-foreground"
+                >
+                  <Info className="size-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-[15rem]">
+                解析顺序：Actor 链 → 成员默认 → 工作区默认 →
+                平台默认。设置了链就会覆盖各级默认。
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
         <Button
           variant="outline"
@@ -285,8 +292,11 @@ function ChainEditor({
       )}
 
       {chain.length === 0 ? (
-        <div className="rounded-xl border border-dashed py-12 text-center text-sm text-muted-foreground">
-          还没有指派模型组，点「添加组」开始。
+        <div className="rounded-xl border border-dashed px-4 py-12 text-center text-sm text-muted-foreground">
+          <p className="font-medium text-foreground/80">未指派模型组</p>
+          <p className="mt-1">
+            当前回退到工作区 / 平台默认组。点「添加组」为该 Actor 指定专属顺序。
+          </p>
         </div>
       ) : (
         <ul className="space-y-2">

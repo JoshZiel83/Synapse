@@ -34,7 +34,7 @@ import { GroupList } from "./mg-group-list"
 import { GroupDetail } from "./mg-group-detail"
 
 export default function ModelGroupsWorkbench() {
-  const { workspaceId, workspaceName } = useWorkspace()
+  const { workspaceId } = useWorkspace()
   const qc = useQueryClient()
   const [scope, setScope] = useState<Scope>("workspace")
   const [selectedId, setSelectedId] = useState<string>()
@@ -85,7 +85,7 @@ export default function ModelGroupsWorkbench() {
         <div>
           <h1 className="text-xl font-semibold">模型组</h1>
           <p className="mt-0.5 text-sm text-muted-foreground">
-            模型绑定 + 路由/故障转移策略 · {workspaceName ?? "工作区"}
+            模型绑定 + 路由/故障转移策略
           </p>
         </div>
         <Button onClick={() => setNewOpen(true)}>
