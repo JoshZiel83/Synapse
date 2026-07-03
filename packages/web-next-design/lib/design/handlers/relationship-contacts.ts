@@ -12,6 +12,7 @@ import {
   findContactEntry,
   designFriendRequests,
   designActorAccessRequests,
+  designActorProfile,
 } from "../fixtures/contacts"
 import type { DesignHandlers } from "./_types"
 
@@ -23,7 +24,8 @@ import type { DesignHandlers } from "./_types"
 export const relationshipContactsHandlers = {
   getMyRelationshipProfile: async () => mock(RelationshipProfileViewSchema),
   updateMyRelationshipProfile: async () => mock(RelationshipProfileViewSchema),
-  getActorRelationshipProfile: async () => mock(RelationshipProfileViewSchema),
+  getActorRelationshipProfile: async (_ws: string, actorId: string) =>
+    designActorProfile(actorId),
   updateActorRelationshipProfile: async () =>
     mock(RelationshipProfileViewSchema),
   getRemoteAgentRelationshipProfile: async () =>

@@ -72,8 +72,8 @@ export function ContactList({
   }
 
   return (
-    <div className="relative min-h-0 flex-1">
-      <div ref={scrollRef} className="h-full overflow-y-auto pr-5">
+    <div className="flex min-h-0 flex-1">
+      <div ref={scrollRef} className="min-w-0 flex-1 overflow-y-auto">
         {sections.map((sec) => (
           <div key={sec.key} data-sec={sec.key}>
             <div className="sticky top-0 z-10 flex items-center gap-1 bg-background/95 px-3 py-1 text-[11px] font-medium text-muted-foreground backdrop-blur">
@@ -163,8 +163,8 @@ export function ContactList({
         ))}
       </div>
 
-      {/* A–Z index rail */}
-      <div className="absolute top-0 right-0 flex h-full flex-col justify-center gap-0.5 py-2 select-none">
+      {/* A–Z index rail — a real column beside the scroll area, not over it */}
+      <div className="flex w-5 shrink-0 flex-col justify-center gap-0.5 py-2 select-none">
         {railKeys.map((k) => (
           <button
             key={k}

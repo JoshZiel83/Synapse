@@ -297,3 +297,18 @@ export const designActorAccessRequests: {
   ],
   outgoing: [],
 }
+
+// ── Actor relationship profile (for the actor QR share) ──────────────────────
+export function designActorProfile(actorId: string) {
+  const slug = actorId.replace(/[^a-z0-9]/gi, "").slice(0, 12) || "actor"
+  return {
+    subjectType: "actor" as const,
+    approvalMode: "manual" as const,
+    qrToken: `qr-${slug}`,
+    qrUrl: `https://app.synapse/scan/relationship/qr-${slug}`,
+    identityId: `actor-${slug}`,
+    identitySearchEnabled: true,
+    requiresContactApproval: true,
+    isPublicShared: false,
+  }
+}

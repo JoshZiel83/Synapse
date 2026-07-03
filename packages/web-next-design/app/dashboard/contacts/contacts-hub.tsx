@@ -124,7 +124,7 @@ export default function ContactsHub() {
   const pendingTotal = hub?.requestSummary.totalPendingCount ?? 0
 
   return (
-    <div className="grid h-[calc(100dvh-3.5rem)] grid-cols-[24rem_minmax(0,1fr)]">
+    <div className="grid h-full min-h-0 grid-cols-[24rem_minmax(0,1fr)] overflow-hidden">
       {/* LEFT — the roster is the hero */}
       <div className="flex min-h-0 flex-col border-r">
         <div className="flex items-center justify-between px-4 pt-4 pb-2">
@@ -258,6 +258,7 @@ export default function ContactsHub() {
               entry={detailQuery.data.contact}
               groups={detailQuery.data.groups}
               starred={starred.has(keyOf(selected))}
+              workspaceId={workspaceId!}
               onMessage={(e) =>
                 toast.success(
                   `${e.directState.status === "existing" ? "打开" : "发起"}与「${e.title}」的对话`

@@ -4,8 +4,9 @@
 // slots: identity block, a single dominant Message CTA (label adapts to
 // directState), shared groups, and a per-kind metadata slot. Owned actors get an
 // Edit affordance (the inline edit sheet is Phase 2; here it links to the route).
+import { useState } from "react"
 import Link from "next/link"
-import { MessageSquare, Pencil, Star, Users } from "lucide-react"
+import { MessageSquare, Pencil, QrCode, Star, Users } from "lucide-react"
 import type { ConversationSummaryView } from "@synapse/shared"
 import { Button } from "@/components/ui/button"
 import {
@@ -16,22 +17,27 @@ import {
   targetBadge,
   type Entry,
 } from "./contact-shared"
+import { ActorShareDialog } from "./actor-share-dialog"
 
 export function ContactDetail({
   entry,
   groups,
   starred,
+  workspaceId,
   onMessage,
   onToggleStar,
 }: {
   entry: Entry
   groups: ConversationSummaryView[]
   starred: boolean
+  workspaceId: string
   onMessage: (e: Entry) => void
   onToggleStar: (e: Entry) => void
 }) {
   const badge = targetBadge(entry.targetType)
   const cta = messageCtaLabel(entry.directState.status)
+  const [shareOpen, setShareOpen] = useState(false)
+  const isActor = entry.kind === "workspace-actor" && !!entry.actorId
 
   return (
     <div className="mx-auto max-w-2xl p-6">
@@ -87,15 +93,31 @@ export function ContactDetail({
           <MessageSquare className="mr-1.5 size-4" />
           {cta.label}
         </Button>
-        {entry.kind === "workspace-actor" && entry.actorId && (
-          <Button variant="outline" asChild>
-            <Link href={`/dashboard/actors/${entry.actorId}/edit`}>
-              <Pencil className="mr-1.5 size-4" />
-              编辑 Actor
-            </Link>
-          </Button>
+        {isActor && (
+          <>
+            <Button variant="outline" onClick={() => setShareOpen(true)}>
+              <QrCode className="mr-1.5 size-4" />
+              分享
+            </Button>
+            <Button variant="outline" asChild>
+              <Link href={`/dashboard/actors/${entry.actorId}/edit`}>
+                <Pencil className="mr-1.5 size-4" />
+                编辑 Actor
+              </Link>
+            </Button>
+          </>
         )}
       </div>
+
+      {isActor && (
+        <ActorShareDialog
+          open={shareOpen}
+          onOpenChange={setShareOpen}
+          workspaceId={workspaceId}
+          actorId={entry.actorId!}
+          actorName={entry.title}
+        />
+      )}
 
       {/* per-kind metadata */}
       <div className="mt-6 space-y-4">
