@@ -1,5 +1,5 @@
-import ModelSettingsWorkbench from "@/app/dashboard/settings/model-settings-workbench"
+import ModelGroupsWorkbench from "@/app/dashboard/settings/model-groups/model-groups-workbench"
 
 export default function SettingsModelsPage() {
-  return <ModelSettingsWorkbench />
+  return <ModelGroupsWorkbench />
 }
