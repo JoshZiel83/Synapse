@@ -52,7 +52,8 @@ export function GroupDetail({
   activeScope: ModelGroupOwnerType
   onSaveConfig: (
     strategy: ModelGroupRoutingStrategy,
-    items: ModelGroupItemView[]
+    items: ModelGroupItemView[],
+    attemptPolicy: Record<string, unknown>
   ) => Promise<void>
   onSaveItem: (
     input: ModelGroupItemCreateInput,

@@ -10,7 +10,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   ChevronDown,
   ChevronUp,
-  Info,
   Loader2,
   Plus,
   Search,
@@ -35,12 +34,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
+import { InfoTip } from "@/components/info-tip"
 import {
   getModelGroupScopeMeta,
   getModelGroupStrategyLabel,
@@ -255,23 +249,10 @@ function ChainEditor({
         <div className="flex items-center gap-1.5">
           <span className="text-sm font-medium">模型链</span>
           <span className="text-xs text-muted-foreground">{chain.length}</span>
-          <TooltipProvider delayDuration={150}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  aria-label="解析优先级说明"
-                  className="text-muted-foreground/40 transition-colors hover:text-muted-foreground"
-                >
-                  <Info className="size-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent className="max-w-[15rem]">
-                解析顺序：Actor 链 → 成员默认 → 工作区默认 →
-                平台默认。设置了链就会覆盖各级默认。
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <InfoTip
+            label="解析优先级说明"
+            text="解析顺序：Actor 链 → 成员默认 → 工作区默认 → 平台默认。设置了链就会覆盖各级默认。"
+          />
         </div>
         <Button
           variant="outline"

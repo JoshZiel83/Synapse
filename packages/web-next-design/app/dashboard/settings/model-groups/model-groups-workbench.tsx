@@ -146,9 +146,13 @@ export default function ModelGroupsWorkbench() {
               activeScope={scope}
               onSaveConfig={async (
                 strategy: ModelGroupRoutingStrategy,
-                items: ModelGroupItemView[]
+                items: ModelGroupItemView[],
+                attemptPolicy: Record<string, unknown>
               ) => {
-                await api.update(group.id, { routingStrategy: strategy })
+                await api.update(group.id, {
+                  routingStrategy: strategy,
+                  attemptPolicy,
+                })
                 await Promise.all(
                   items.map((it) =>
                     api.updateItem(group.id, it.id, {

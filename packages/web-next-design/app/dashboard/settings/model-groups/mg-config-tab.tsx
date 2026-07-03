@@ -3,13 +3,14 @@
 // Config tab: the routing strategy + its items as ONE runtime unit. The per-item
 // knob is context-conditional on the strategy — reorderable priority chain for
 // priority_failover (accessible Move up/down, last = floor), weight sliders with
-// live % share for weighted_random — fixing "priority AND weight always shown +
-// unexplained". attemptPolicy sits in its own collapsed container with defaults.
+// live % share for weighted_random. The strategy explainer lives behind an info
+// icon (progressive disclosure). attemptPolicy is a REAL editable advanced panel
+// (a supported ModelGroupUpdateInput field that drives the failover loop), not a
+// static display.
 import { useEffect, useState } from "react"
 import {
   ChevronDown,
   ChevronUp,
-  GripVertical,
   Loader2,
   Pencil,
   Plus,
@@ -23,9 +24,59 @@ import type {
 } from "@synapse/shared"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
+import { InfoTip } from "@/components/info-tip"
 
 type Strategy = ModelGroupRoutingStrategy
+
+interface Policy {
+  maxAttemptsTotal: number
+  maxAttemptsPerBinding: number
+  timeoutSec: number
+  continueOn: string[]
+  stopOn: string[]
+}
+const DEFAULT_POLICY: Policy = {
+  maxAttemptsTotal: 4,
+  maxAttemptsPerBinding: 2,
+  timeoutSec: 300,
+  continueOn: ["rate_limit", "5xx", "timeout", "network"],
+  stopOn: ["auth_error", "bad_request", "policy_block"],
+}
+const CONTINUE_OPTS: [string, string][] = [
+  ["rate_limit", "限流"],
+  ["5xx", "5xx"],
+  ["timeout", "超时"],
+  ["network", "网络错误"],
+]
+const STOP_OPTS: [string, string][] = [
+  ["auth_error", "鉴权错误"],
+  ["bad_request", "错误请求"],
+  ["policy_block", "策略拦截"],
+]
+
+function policyFromGroup(g: ModelGroupDetailView): Policy {
+  const p = (g.attemptPolicy ?? {}) as Record<string, unknown>
+  const num = (v: unknown, d: number) => (typeof v === "number" ? v : d)
+  const arr = (v: unknown, d: string[]) =>
+    Array.isArray(v) ? (v as string[]) : d
+  return {
+    maxAttemptsTotal: num(p.maxAttemptsTotal, DEFAULT_POLICY.maxAttemptsTotal),
+    maxAttemptsPerBinding: num(
+      p.maxAttemptsPerBinding,
+      DEFAULT_POLICY.maxAttemptsPerBinding
+    ),
+    timeoutSec: p.timeoutMsPerAttempt
+      ? Math.round(num(p.timeoutMsPerAttempt, 300000) / 1000)
+      : DEFAULT_POLICY.timeoutSec,
+    continueOn: arr(p.continueOn, DEFAULT_POLICY.continueOn),
+    stopOn: arr(p.stopOn, DEFAULT_POLICY.stopOn),
+  }
+}
+const isDefaultPolicy = (p: Policy) =>
+  JSON.stringify(p) === JSON.stringify(DEFAULT_POLICY)
 
 export function ConfigTab({
   group,
@@ -40,20 +91,27 @@ export function ConfigTab({
   onAddItem: () => void
   onEditItem: (item: ModelGroupItemView) => void
   onDeleteItem: (item: ModelGroupItemView) => void
-  onSave: (strategy: Strategy, items: ModelGroupItemView[]) => Promise<void>
+  onSave: (
+    strategy: Strategy,
+    items: ModelGroupItemView[],
+    attemptPolicy: Record<string, unknown>
+  ) => Promise<void>
 }) {
   const [strategy, setStrategy] = useState<Strategy>(group.routingStrategy)
   const [items, setItems] = useState<ModelGroupItemView[]>(group.items)
+  const [policy, setPolicy] = useState<Policy>(() => policyFromGroup(group))
   const [saving, setSaving] = useState(false)
   const [policyOpen, setPolicyOpen] = useState(false)
 
   useEffect(() => {
     setStrategy(group.routingStrategy)
     setItems(group.items)
+    setPolicy(policyFromGroup(group))
   }, [group])
 
   const dirty =
     strategy !== group.routingStrategy ||
+    JSON.stringify(policy) !== JSON.stringify(policyFromGroup(group)) ||
     JSON.stringify(
       items.map((i) => [i.id, i.priority, i.weight, i.isEnabled])
     ) !==
@@ -76,13 +134,28 @@ export function ConfigTab({
     setItems((prev) =>
       prev.map((it) => (it.id === id ? { ...it, isEnabled: on } : it))
     )
-
   const totalWeight = items.reduce((s, it) => s + Math.max(1, it.weight), 0)
+
+  const patchPolicy = (p: Partial<Policy>) =>
+    setPolicy((prev) => ({ ...prev, ...p }))
+  const toggleClass = (field: "continueOn" | "stopOn", key: string) =>
+    setPolicy((prev) => ({
+      ...prev,
+      [field]: prev[field].includes(key)
+        ? prev[field].filter((k) => k !== key)
+        : [...prev[field], key],
+    }))
 
   const save = async () => {
     setSaving(true)
     try {
-      await onSave(strategy, items)
+      await onSave(strategy, items, {
+        maxAttemptsTotal: policy.maxAttemptsTotal,
+        maxAttemptsPerBinding: policy.maxAttemptsPerBinding,
+        timeoutMsPerAttempt: policy.timeoutSec * 1000,
+        continueOn: policy.continueOn,
+        stopOn: policy.stopOn,
+      })
       toast.success("已保存")
     } catch {
       toast.error("保存失败")
@@ -95,7 +168,16 @@ export function ConfigTab({
     <div className="space-y-5">
       {/* strategy */}
       <div className="space-y-2">
-        <div className="text-sm font-medium">路由策略</div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-sm font-medium">路由策略</span>
+          <InfoTip
+            text={
+              strategy === "priority_failover"
+                ? "从上到下依次尝试，第一个成功的胜出。"
+                : "按权重比例随机选主，失败再按顺序回退。"
+            }
+          />
+        </div>
         <div className="grid grid-cols-2 gap-1.5 rounded-lg bg-muted p-1">
           {(["priority_failover", "weighted_random"] as Strategy[]).map((s) => (
             <button
@@ -114,11 +196,6 @@ export function ConfigTab({
             </button>
           ))}
         </div>
-        <p className="text-xs text-muted-foreground">
-          {strategy === "priority_failover"
-            ? "从上到下依次尝试，第一个成功的胜出。"
-            : "按权重比例随机选主，失败再按顺序回退。"}
-        </p>
       </div>
 
       {/* items */}
@@ -239,7 +316,7 @@ export function ConfigTab({
         </div>
       </div>
 
-      {/* attempt policy */}
+      {/* attempt policy — a real supported group setting */}
       <div className="rounded-lg border">
         <button
           type="button"
@@ -251,50 +328,56 @@ export function ConfigTab({
           />
           重试与故障转移策略
           <span className="ml-auto text-xs font-normal text-muted-foreground">
-            默认
+            {isDefaultPolicy(policy) ? "默认" : "自定义"}
           </span>
         </button>
         {policyOpen && (
-          <div className="space-y-3 border-t p-3 text-sm">
-            <div className="text-xs text-muted-foreground">重试</div>
-            <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
-              <span>总尝试上限：4</span>
-              <span>每模型上限：2</span>
-              <span>单次超时：5 分钟</span>
-              <span>退避：0 / 1s / 3s</span>
+          <div className="space-y-4 border-t p-3">
+            <div className="grid grid-cols-3 gap-3">
+              <PolicyNum
+                label="总尝试上限"
+                value={policy.maxAttemptsTotal}
+                onChange={(v) => patchPolicy({ maxAttemptsTotal: v })}
+                disabled={readOnly}
+              />
+              <PolicyNum
+                label="每模型上限"
+                value={policy.maxAttemptsPerBinding}
+                onChange={(v) => patchPolicy({ maxAttemptsPerBinding: v })}
+                disabled={readOnly}
+              />
+              <PolicyNum
+                label="单次超时(秒)"
+                value={policy.timeoutSec}
+                onChange={(v) => patchPolicy({ timeoutSec: v })}
+                disabled={readOnly}
+              />
             </div>
-            <div className="text-xs text-muted-foreground">
-              遇到以下情况换下一个模型
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {["限流", "5xx", "超时", "网络错误"].map((t) => (
-                <span
-                  key={t}
-                  className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] text-emerald-600"
-                >
-                  {t}
-                </span>
-              ))}
-            </div>
-            <div className="text-xs text-muted-foreground">
-              遇到以下情况立即失败（不转移）
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {["鉴权错误", "错误请求", "策略拦截"].map((t) => (
-                <span
-                  key={t}
-                  className="rounded-full bg-red-500/10 px-2 py-0.5 text-[11px] text-red-600"
-                >
-                  {t}
-                </span>
-              ))}
-            </div>
-            <button
-              type="button"
-              className="text-xs text-primary hover:underline"
-            >
-              恢复默认
-            </button>
+            <ClassRow
+              label="换下一个模型"
+              opts={CONTINUE_OPTS}
+              active={policy.continueOn}
+              tone="emerald"
+              onToggle={(k) => toggleClass("continueOn", k)}
+              disabled={readOnly}
+            />
+            <ClassRow
+              label="立即失败(不转移)"
+              opts={STOP_OPTS}
+              active={policy.stopOn}
+              tone="red"
+              onToggle={(k) => toggleClass("stopOn", k)}
+              disabled={readOnly}
+            />
+            {!readOnly && !isDefaultPolicy(policy) && (
+              <button
+                type="button"
+                onClick={() => setPolicy(DEFAULT_POLICY)}
+                className="text-xs text-primary hover:underline"
+              >
+                恢复默认
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -311,6 +394,80 @@ export function ConfigTab({
           </Button>
         </div>
       )}
+    </div>
+  )
+}
+
+function PolicyNum({
+  label,
+  value,
+  onChange,
+  disabled,
+}: {
+  label: string
+  value: number
+  onChange: (v: number) => void
+  disabled: boolean
+}) {
+  return (
+    <div className="space-y-1">
+      <Label className="text-[11px] text-muted-foreground">{label}</Label>
+      <Input
+        type="number"
+        min={1}
+        value={value}
+        onChange={(e) => onChange(Math.max(1, +e.target.value || 1))}
+        disabled={disabled}
+        className="h-8"
+      />
+    </div>
+  )
+}
+
+function ClassRow({
+  label,
+  opts,
+  active,
+  tone,
+  onToggle,
+  disabled,
+}: {
+  label: string
+  opts: [string, string][]
+  active: string[]
+  tone: "emerald" | "red"
+  onToggle: (key: string) => void
+  disabled: boolean
+}) {
+  return (
+    <div className="space-y-1.5">
+      <div className="text-xs text-muted-foreground">遇到以下情况{label}</div>
+      <div className="flex flex-wrap gap-1.5">
+        {opts.map(([key, cn2]) => {
+          const on = active.includes(key)
+          return (
+            <button
+              key={key}
+              type="button"
+              disabled={disabled}
+              onClick={() => onToggle(key)}
+              className={cn(
+                "rounded-full border px-2 py-0.5 text-[11px] transition",
+                on &&
+                  tone === "emerald" &&
+                  "border-emerald-500/30 bg-emerald-500/10 text-emerald-600",
+                on &&
+                  tone === "red" &&
+                  "border-red-500/30 bg-red-500/10 text-red-600",
+                !on &&
+                  "border-transparent bg-muted text-muted-foreground/60 hover:text-muted-foreground"
+              )}
+            >
+              {cn2}
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
 }
