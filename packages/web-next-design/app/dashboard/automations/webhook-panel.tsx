@@ -21,6 +21,7 @@ import type {
 } from "@synapse/shared"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
+import { InfoTip } from "@/components/info-tip"
 
 function copy(text: string) {
   navigator.clipboard?.writeText(text)
@@ -77,6 +78,7 @@ export function WebhookPanel({
       <div className="flex items-center gap-2 text-sm font-medium">
         <KeyRound className="size-4 text-muted-foreground" />
         入站 Webhook
+        <InfoTip text="安全性由每个端点独立的签名密钥保证（非地址保密）。轮换采用 24 小时双有效重叠期，不会打断在途请求。" />
         {endpoint && endpoint.status !== "active" && (
           <span className="text-xs text-amber-600">
             端点已{endpoint.status === "disabled" ? "停用" : "归档"}
@@ -96,15 +98,13 @@ export function WebhookPanel({
         </div>
       ) : (
         <div>
-          <div className="mb-1 text-xs text-muted-foreground">签名密钥</div>
-          <div className="flex items-center gap-2">
-            <code className="rounded-lg border bg-muted/30 px-3 py-2 font-mono text-xs text-muted-foreground">
-              {endpoint?.secretHint ?? "whsec_••••••••"}
-            </code>
-            <span className="text-xs text-muted-foreground/60">
-              用于校验请求签名（HMAC）
-            </span>
+          <div className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
+            签名密钥
+            <InfoTip text="用于校验入站请求的签名（HMAC）。" />
           </div>
+          <code className="inline-block rounded-lg border bg-muted/30 px-3 py-2 font-mono text-xs text-muted-foreground">
+            {endpoint?.secretHint ?? "whsec_••••••••"}
+          </code>
         </div>
       )}
 
@@ -137,10 +137,6 @@ export function WebhookPanel({
           发送测试事件
         </Button>
       </div>
-      <p className="text-[11px] text-muted-foreground/60">
-        安全性由每个端点独立的签名密钥保证（非地址保密）；轮换采用 24
-        小时双有效重叠期，不会打断在途请求。
-      </p>
     </div>
   )
 }

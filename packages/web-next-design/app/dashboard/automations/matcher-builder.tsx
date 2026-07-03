@@ -44,10 +44,6 @@ export function MatcherBuilder({
 
   return (
     <div className="space-y-3">
-      <div className="text-xs text-muted-foreground">
-        勾选下面的字段，仅当事件里这些字段完全相等时才触发；不勾选任何字段则每次都触发。
-      </div>
-
       {leaves.length === 0 ? (
         <div className="rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground">
           该事件源没有示例数据，可在事件源管理里补充。

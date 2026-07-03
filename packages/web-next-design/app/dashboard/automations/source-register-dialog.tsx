@@ -155,8 +155,7 @@ export function SourceRegisterDialog({
                     }
                   />
                   <p className="text-[11px] text-muted-foreground/60">
-                    需要已安装 official-mcp 集成；将通过 {provider} 的 webhook
-                    API 注册。
+                    需要已安装 official-mcp 集成。
                   </p>
                 </div>
               </>
@@ -173,8 +172,7 @@ export function SourceRegisterDialog({
                   />
                 </div>
                 <div className="rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground">
-                  创建后会生成入站地址与一次性签名密钥；随后可在详情里等待并捕获第一个真实事件，自动填充示例
-                  payload。
+                  创建后生成入站地址与一次性签名密钥。
                 </div>
               </>
             )}

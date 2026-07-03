@@ -3,10 +3,11 @@
 // Event branch: subscribe to exactly one reusable event source, then filter its
 // occurrences with the matcher builder driven by that source's example payload.
 import { useState } from "react"
-import { Plus, Zap } from "lucide-react"
+import { Plus } from "lucide-react"
 import type { AutomationEventSource } from "@synapse/shared"
 import { Badge } from "@/components/ui/badge"
 import { Label } from "@/components/ui/label"
+import { InfoTip } from "@/components/info-tip"
 import {
   PROVIDER_KIND_LABEL,
   SOURCE_STATUS_LABEL,
@@ -44,7 +45,10 @@ export function EventPicker({
     <div className="space-y-4">
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
-          <Label className="text-xs text-muted-foreground">事件源</Label>
+          <div className="flex items-center gap-1">
+            <Label className="text-xs text-muted-foreground">事件源</Label>
+            <InfoTip text="事件为实时触发，仅匹配订阅之后发生的事件。" />
+          </div>
           <button
             type="button"
             onClick={() => setRegisterOpen(true)}
@@ -84,44 +88,21 @@ export function EventPicker({
             )
           }}
         />
-        <p className="text-xs text-muted-foreground">
-          事件为实时触发，仅匹配订阅之后发生的事件。找不到需要的源？
-          <a
-            href="/dashboard/automations?tab=sources"
-            className="text-primary hover:underline"
-          >
-            管理事件源
-          </a>
-        </p>
       </div>
 
       {selected ? (
         <>
-          <div className="flex items-start gap-2 rounded-lg border bg-muted/20 p-3">
-            <Zap className="mt-0.5 size-4 shrink-0 text-primary" />
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1.5 text-sm font-medium">
-                {selected.name}
-                <Badge variant="secondary" className="text-[10px]">
-                  {PROVIDER_KIND_LABEL[selected.providerKind]}
-                </Badge>
-              </div>
-              {selected.recommendedUsage && (
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  {selected.recommendedUsage}
-                </p>
-              )}
-              {selected.integration && (
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  {selected.integration.provider} ·{" "}
-                  {selected.integration.targetLabel}
-                </p>
-              )}
-            </div>
-          </div>
+          {selected.recommendedUsage && (
+            <p className="text-xs text-muted-foreground">
+              {selected.recommendedUsage}
+            </p>
+          )}
 
           <div className="space-y-2">
-            <Label className="text-xs text-muted-foreground">匹配条件</Label>
+            <div className="flex items-center gap-1">
+              <Label className="text-xs text-muted-foreground">匹配条件</Label>
+              <InfoTip text="仅当事件里勾选的字段完全相等时才触发；不勾选任何字段则每次都触发。" />
+            </div>
             <MatcherBuilder
               examplePayload={selected.examplePayload}
               matcher={trigger.matcher}

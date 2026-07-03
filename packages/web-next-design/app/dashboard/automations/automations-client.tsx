@@ -35,7 +35,7 @@ import { RuleEditor, type ConversationOption } from "./rule-editor"
 import { EventSourcesTab } from "./event-sources-tab"
 
 export function AutomationsClient() {
-  const { workspaceId, workspaceName } = useWorkspace()
+  const { workspaceId } = useWorkspace()
   const queryClient = useQueryClient()
 
   const rulesQuery = useQuery({
@@ -149,7 +149,7 @@ export function AutomationsClient() {
         <div>
           <h1 className="text-xl font-semibold">自动化</h1>
           <p className="mt-0.5 text-sm text-muted-foreground">
-            定时与事件驱动的消息 · {workspaceName ?? "工作区"}
+            定时与事件驱动的消息
           </p>
         </div>
         <Button onClick={openNew}>

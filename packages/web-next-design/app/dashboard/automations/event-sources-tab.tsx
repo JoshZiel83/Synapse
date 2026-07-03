@@ -223,7 +223,7 @@ function SourceDetail({
           : []
 
   return (
-    <div className="space-y-4 rounded-xl border p-4">
+    <div className="space-y-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -277,9 +277,6 @@ function SourceDetail({
           <div className="text-xs text-muted-foreground">集成绑定</div>
           <div className="mt-0.5">
             {source.integration.provider} · {source.integration.targetLabel}
-            <span className="ml-2 text-xs text-primary hover:underline">
-              重新连接
-            </span>
           </div>
         </div>
       )}

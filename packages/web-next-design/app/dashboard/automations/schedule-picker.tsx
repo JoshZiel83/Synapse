@@ -8,6 +8,7 @@ import { ChevronDown } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { InfoTip } from "@/components/info-tip"
 import {
   Select,
   SelectContent,
@@ -387,10 +388,8 @@ function IntervalEditor({ trigger, patch }: { trigger: Trig; patch: Patch }) {
           </SelectContent>
         </Select>
         <span className="text-sm">运行一次</span>
+        <InfoTip text="首次约在保存后一个间隔触发，之后按间隔递推（时区无关）。" />
       </div>
-      <p className="text-xs text-muted-foreground">
-        首次约在保存后一个间隔触发，之后按间隔递推（时区无关）。
-      </p>
     </div>
   )
 }

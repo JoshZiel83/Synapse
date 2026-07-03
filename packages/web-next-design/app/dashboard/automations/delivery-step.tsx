@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import { InfoTip } from "@/components/info-tip"
 import type { RuleDraft } from "./types"
 
 type Delivery = RuleDraft["delivery"]
@@ -32,18 +33,13 @@ export function DeliveryStep({
           placeholder="到点/触发时，向会话里发送的消息…"
           rows={3}
         />
-        <p className="text-xs text-muted-foreground">
-          这条消息会出现在会话里，所有相关成员都能看到。
-        </p>
       </div>
 
       <div className="rounded-lg border p-3">
         <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
+          <div className="flex min-w-0 items-center gap-1">
             <div className="text-sm font-medium">唤醒 Actor 参与者</div>
-            <p className="text-xs text-muted-foreground">
-              让会话里的 Actor 被叫醒来处理，而不仅是收到消息。
-            </p>
+            <InfoTip text="让会话里的 Actor 被叫醒来处理，而不仅是收到消息。" />
           </div>
           <Switch
             checked={delivery.wakeEnabled}

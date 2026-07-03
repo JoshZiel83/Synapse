@@ -6,6 +6,7 @@
 import { CalendarClock } from "lucide-react"
 import { scheduleNextRuns, type ScheduleValue } from "@/lib/automation/schedule"
 import { formatInstant } from "@/lib/automation/describe"
+import { InfoTip } from "@/components/info-tip"
 
 export function NextRuns({
   value,
@@ -25,6 +26,7 @@ export function NextRuns({
             · {value.scheduleTimezone}
           </span>
         )}
+        <InfoTip text="调度器约 15 秒轮询一次，实际触发精度约 ±15 秒。" />
       </div>
       {runs.length === 0 ? (
         <div className="text-sm text-muted-foreground/70">
@@ -45,9 +47,6 @@ export function NextRuns({
           ))}
         </ol>
       )}
-      <p className="mt-2 text-[11px] text-muted-foreground/60">
-        调度器约 15 秒轮询一次，实际触发精度约 ±15 秒。
-      </p>
     </div>
   )
 }
