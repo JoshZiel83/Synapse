@@ -1,7 +1,6 @@
 // Load .env FIRST (before the logger or this schema read process.env). This is
 // a side-effect import and is intentionally placed above the others.
 import "../infrastructure/env-bootstrap.js"
-import { resolve } from "node:path"
 import { z } from "zod"
 
 import { createLogger } from "../infrastructure/logger/index.js"
@@ -165,19 +164,53 @@ const envSchema = z
     MEMORY_RECALL_LIMIT: withDefault(positiveInt, "6"),
     MEMORY_SEARCH_CANDIDATE_LIMIT: withDefault(positiveInt, "40"),
     MEMORY_RECALL_TOP_K: optionalPositiveInt(),
-    MEMORY_EMBEDDING_MODEL_ID: withDefault(
-      z.string().min(1),
-      "Xenova/multilingual-e5-small"
-    ),
-    MEMORY_MODEL_CACHE_DIR: z.string().optional(),
-    MEMORY_EMBED_BATCH_SIZE: withDefault(positiveInt, "12"),
     MEMORY_INDEX_QUEUE_CONCURRENCY: withDefault(positiveInt, "2"),
-    MEMORY_QUERY_EMBED_CACHE_TTL_SEC: withDefault(nonNegativeInt, "86400"),
     MEMORY_MMR_LAMBDA: withDefault(unitFloat, "0.8"),
     MEMORY_MMR_CANDIDATE_MULTIPLIER: withDefault(positiveInt, "4"),
     MEMORY_SUMMARY_DECAY_HALF_LIFE_DAYS: withDefault(positiveFloat, "30"),
     MEMORY_SUMMARY_DECAY_FLOOR: withDefault(unitFloat, "0.35"),
-    MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD: z.string().optional(),
+
+    // ===== Embedding (text → dense vector) =====
+    // The api bundles NO embedding engine. EMBEDDING_PROVIDER selects an
+    // out-of-process provider: the local bge-m3 sidecar, or a cloud/self-host
+    // vendor via the generic openai-compatible adapter (OpenAI / DashScope-compat /
+    // Zhipu / SiliconFlow / TEI / Ollama / vLLM). Default resolves to "none" =>
+    // semantic memory indexing is disabled and recall degrades to lexical-only (NOT
+    // an error). Serves memory today + intelligent-retrieval later. The compose
+    // production profile sets this to "local" + starts the embed sidecar.
+    EMBEDDING_PROVIDER: z.string().optional(),
+    // Deployment-wide vector width. MUST equal the pgvector column typmod (the boot
+    // guard asserts it) AND a width the active provider can emit. Default 1024 =
+    // bge-m3 native + DashScope-v3 / Cohere-v3 / Jina-v3 / SiliconFlow-bge-m3.
+    EMBEDDING_DIMENSION: withDefault(positiveInt, "1024"),
+    EMBEDDING_BATCH_SIZE: withDefault(positiveInt, "12"),
+    EMBEDDING_QUERY_CACHE_TTL_SEC: withDefault(nonNegativeInt, "86400"),
+    // local sidecar (bge-m3). URL required when EMBEDDING_PROVIDER=local. The model
+    // LABEL must match the baked sidecar model (provenance + cache key + the "one
+    // embedding space" identity, so a cloud serving the same model+dim is compatible).
+    EMBEDDING_LOCAL_URL: withDefault(z.string(), ""),
+    EMBEDDING_LOCAL_MODEL: withDefault(z.string().min(1), "bge-m3"),
+    EMBEDDING_LOCAL_TIMEOUT_MS: withDefault(positiveInt, "30000"),
+    // openai-compatible cloud/self-host. Selecting it sends memory text (query +
+    // every indexed passage) to EMBEDDING_OPENAI_BASE_URL — a PII-egress event, so
+    // the boot gate requires https:// and warns which host receives the data.
+    EMBEDDING_OPENAI_BASE_URL: withDefault(z.string(), ""),
+    EMBEDDING_OPENAI_API_KEY: withDefault(z.string(), ""),
+    EMBEDDING_OPENAI_MODEL: withDefault(z.string(), ""),
+    // input_type → per-vendor request field. "none" (symmetric — bge-m3, and the
+    // OpenAI-compat endpoints of DashScope/Zhipu/SiliconFlow, which ignore an
+    // asymmetric role field) or "jina-task" (Jina honors a top-level `task`).
+    EMBEDDING_OPENAI_INPUT_ROLE_MODE: withDefault(
+      z.enum(["none", "jina-task"]),
+      "none"
+    ),
+    // "true" => send `dimensions` (only for MRL models: DashScope v3/v4, Jina v3,
+    // Zhipu embedding-3, OpenAI v3). Sending it to a non-MRL model 400s/ignores it.
+    EMBEDDING_OPENAI_SUPPORTS_DIMENSIONS: z.string().optional(),
+    // Per-request cap the facade splits larger batches to (DashScope compat ≈ 10,
+    // Gemini-compat = 1). 0 => no cap.
+    EMBEDDING_OPENAI_MAX_BATCH: withDefault(nonNegativeInt, "0"),
+    EMBEDDING_OPENAI_TIMEOUT_MS: withDefault(positiveInt, "30000"),
 
     PLATFORM_ADMIN_EMAILS: withDefault(z.string(), ""),
 
@@ -304,6 +337,54 @@ const envSchema = z
           "REALTIME_ASR_SHERPA_URL is required when ASR_PROVIDER=sherpa-stream (the api runs no in-process ASR engine)",
       })
     }
+    // A selected embedding provider must have its reach-env, or the api would boot
+    // "configured" and then fail every embed at request time (silently lexical).
+    const embeddingProvider = resolveEmbeddingProviderName(env)
+    if (embeddingProvider === "local" && !env.EMBEDDING_LOCAL_URL?.trim()) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["EMBEDDING_LOCAL_URL"],
+        message:
+          "EMBEDDING_LOCAL_URL is required when EMBEDDING_PROVIDER=local (the api runs no in-process embedding engine)",
+      })
+    }
+    if (embeddingProvider === "openai-compatible") {
+      const baseUrl = env.EMBEDDING_OPENAI_BASE_URL?.trim()
+      if (!baseUrl) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["EMBEDDING_OPENAI_BASE_URL"],
+          message:
+            "EMBEDDING_OPENAI_BASE_URL is required when EMBEDDING_PROVIDER=openai-compatible",
+        })
+      } else if (!/^https:\/\//i.test(baseUrl)) {
+        // PII-egress guard: memory text (query + every indexed passage) is sent to
+        // this host, so require TLS. (SSRF is out of scope by construction — this
+        // is global operator env, never tenant-supplied.)
+        ctx.addIssue({
+          code: "custom",
+          path: ["EMBEDDING_OPENAI_BASE_URL"],
+          message:
+            "EMBEDDING_OPENAI_BASE_URL must be https:// — memory text is sent to this host for embedding (PII egress)",
+        })
+      }
+      if (!env.EMBEDDING_OPENAI_API_KEY?.trim()) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["EMBEDDING_OPENAI_API_KEY"],
+          message:
+            "EMBEDDING_OPENAI_API_KEY is required when EMBEDDING_PROVIDER=openai-compatible",
+        })
+      }
+      if (!env.EMBEDDING_OPENAI_MODEL?.trim()) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["EMBEDDING_OPENAI_MODEL"],
+          message:
+            "EMBEDDING_OPENAI_MODEL is required when EMBEDDING_PROVIDER=openai-compatible",
+        })
+      }
+    }
   })
 
 /**
@@ -368,6 +449,15 @@ function resolveTranscriptionProviderName(env: {
  *  session (not at boot), so there is no ASR superRefine gate. */
 function resolveAsrProviderName(env: { ASR_PROVIDER?: string }): string {
   return firstNonEmpty([env.ASR_PROVIDER]) ?? "none"
+}
+
+/** Resolve the active embedding provider name: EMBEDDING_PROVIDER, else "none"
+ *  (opt-in, like OCR/transcription/ASR — no deprecated alias exists). Centralized
+ *  so the superRefine gate and the config assembly can't diverge. */
+function resolveEmbeddingProviderName(env: {
+  EMBEDDING_PROVIDER?: string
+}): string {
+  return firstNonEmpty([env.EMBEDDING_PROVIDER]) ?? "none"
 }
 
 function loadEnvOrExit(): z.infer<typeof envSchema> {
@@ -533,19 +623,37 @@ export const config = {
     recallLimit: env.MEMORY_RECALL_LIMIT,
     searchCandidateLimit: env.MEMORY_SEARCH_CANDIDATE_LIMIT,
     topK: env.MEMORY_RECALL_TOP_K ?? env.MEMORY_RECALL_LIMIT,
-    modelId: env.MEMORY_EMBEDDING_MODEL_ID,
-    modelCacheDir:
-      env.MEMORY_MODEL_CACHE_DIR ||
-      resolve(process.cwd(), "storage/models/memory"),
-    embedBatchSize: env.MEMORY_EMBED_BATCH_SIZE,
     indexQueueConcurrency: env.MEMORY_INDEX_QUEUE_CONCURRENCY,
-    queryEmbedCacheTtlSec: env.MEMORY_QUERY_EMBED_CACHE_TTL_SEC,
     mmrLambda: env.MEMORY_MMR_LAMBDA,
     mmrCandidateMultiplier: env.MEMORY_MMR_CANDIDATE_MULTIPLIER,
     summaryDecayHalfLifeDays: env.MEMORY_SUMMARY_DECAY_HALF_LIFE_DAYS,
     summaryDecayFloor: env.MEMORY_SUMMARY_DECAY_FLOOR,
-    allowRuntimeModelDownload:
-      env.MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD === "true",
+  },
+  // Text → dense vector. The api bundles NO embedding engine (env-only provider
+  // selection). Consumed by memory (recall + indexing) today, intelligent-retrieval
+  // later. See modules/embedding/ + docs/embedding-abstraction-layer-plan-2026-07-02.md.
+  embedding: {
+    provider: resolveEmbeddingProviderName(env),
+    dimension: env.EMBEDDING_DIMENSION,
+    batchSize: env.EMBEDDING_BATCH_SIZE,
+    queryCacheTtlSec: env.EMBEDDING_QUERY_CACHE_TTL_SEC,
+    local: {
+      // Trimmed so a whitespace-only value is the empty string the adapter's
+      // isConfigured()/`if (!url)` guard treats as unconfigured (the boot gate
+      // rejects it for an explicit local selection).
+      url: env.EMBEDDING_LOCAL_URL.trim(),
+      model: env.EMBEDDING_LOCAL_MODEL,
+      timeoutMs: env.EMBEDDING_LOCAL_TIMEOUT_MS,
+    },
+    openai: {
+      baseUrl: env.EMBEDDING_OPENAI_BASE_URL.trim(),
+      apiKey: env.EMBEDDING_OPENAI_API_KEY.trim(),
+      model: env.EMBEDDING_OPENAI_MODEL.trim(),
+      inputRoleMode: env.EMBEDDING_OPENAI_INPUT_ROLE_MODE,
+      supportsDimensions: env.EMBEDDING_OPENAI_SUPPORTS_DIMENSIONS === "true",
+      maxBatch: env.EMBEDDING_OPENAI_MAX_BATCH,
+      timeoutMs: env.EMBEDDING_OPENAI_TIMEOUT_MS,
+    },
   },
   platform: {
     adminEmails: env.PLATFORM_ADMIN_EMAILS.split(",")

@@ -116,10 +116,10 @@ import {
   stopChatDedupCounterLogger,
 } from "./modules/chat/observability.js"
 import {
-  getMemoryEmbeddingRuntimeHealth,
-  shutdownMemoryEmbeddingRuntime,
-  warmMemoryEmbeddingRuntime,
-} from "./modules/memory/embedding-runtime.js"
+  getEmbeddingHealth,
+  warmEmbeddingProvider,
+} from "./modules/embedding/index.js"
+import { assertEmbeddingSpaceConsistent } from "./modules/memory/embedding-space-guard.js"
 
 const log = createLogger("server")
 
@@ -270,6 +270,16 @@ async function main() {
     process.exit(1)
   }
 
+  // Fail LOUD if the active embedding provider's dimension/space doesn't match the
+  // pgvector columns + existing memory (a corrupting swap or an un-migrated DDL).
+  // Skipped for provider=none. See docs/embedding-abstraction-layer-plan §5.
+  try {
+    await assertEmbeddingSpaceConsistent()
+  } catch (err) {
+    log.error({ err }, "Embedding space preflight failed")
+    process.exit(1)
+  }
+
   await startRealtimeEventOutboxDispatcher()
   if (process.env.CHAT_DEDUP_LOGGER === "1") {
     startChatDedupCounterLogger()
@@ -316,22 +326,21 @@ async function main() {
 
   // Health check
   app.get("/api/v1/health", async () => {
-    const [db, dbSchema, rds, memoryEmbeddings] = await Promise.all([
+    const [db, dbSchema, rds] = await Promise.all([
       testConnection(),
       testRequiredSchema(),
       testRedisConnection(),
-      Promise.resolve(getMemoryEmbeddingRuntimeHealth()),
     ])
     return {
-      status:
-        db && dbSchema && rds && memoryEmbeddings.ready
-          ? "healthy"
-          : "degraded",
+      status: db && dbSchema && rds ? "healthy" : "degraded",
       services: {
         database: db,
         databaseSchema: dbSchema,
         redis: rds,
-        memoryEmbeddings,
+        // Informational only — memory degrades to lexical-only when embedding is
+        // down, so it must NOT pin /health to degraded. Non-blocking snapshot (no
+        // synchronous provider round-trip).
+        embedding: getEmbeddingHealth(),
       },
       timestamp: nowIsoInstant(),
     }
@@ -403,8 +412,8 @@ async function main() {
   startFileParsingWorker()
   await ensureRemoteAgentDeliveryRetryJob()
   startRemoteAgentDeliveryRetryWorker()
-  void warmMemoryEmbeddingRuntime().catch((err) => {
-    log.error({ err }, "Failed to warm memory embedding runtime")
+  void warmEmbeddingProvider().catch((err) => {
+    log.error({ err }, "Failed to warm embedding provider")
   })
   if (config.im.runtimeManagerEnabled) {
     await startTransportRuntimeManager()
@@ -481,13 +490,6 @@ async function main() {
           app.log.error({ err }, "Queue shutdown timed out")
         }
       )
-      await waitWithTimeout(
-        "memory embedding runtime shutdown",
-        shutdownMemoryEmbeddingRuntime(),
-        3000
-      ).catch((err) => {
-        app.log.error({ err }, "Memory embedding runtime shutdown timed out")
-      })
       await waitWithTimeout(
         "event bus shutdown",
         shutdownEventBus(),

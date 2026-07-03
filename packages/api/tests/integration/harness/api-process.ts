@@ -110,7 +110,6 @@ export async function spawnApi(
     JWT_SECRET: "int_test_jwt_secret",
     JWT_REFRESH_SECRET: "int_test_jwt_refresh_secret",
     PLATFORM_ADMIN_EMAILS: "int-test@synapse.dev",
-    MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD: "false",
     ...(opts.extraEnv || {}),
   }
 

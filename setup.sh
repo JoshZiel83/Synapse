@@ -292,11 +292,10 @@ DATABASE_URL=postgresql://synapse:${POSTGRES_PASSWORD}@localhost:5432/synapse
 REDIS_URL=redis://:${REDIS_PASSWORD}@localhost:6379
 PLATFORM_ADMIN_EMAILS=demo@synapse.dev
 STORAGE_DIR=storage/files
-# Local-dev model settings. The production Docker image bakes the embedding
-# model in and overrides these (download off, /app/models/memory) via the
-# compose api environment block.
-MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD=true
-MEMORY_MODEL_CACHE_DIR=storage/models/memory
+# Embedding (semantic memory) is OFF by default in local dev (EMBEDDING_PROVIDER
+# unset => none => recall is lexical-only). The api bundles NO embedding engine; to
+# enable semantic memory, run the embed sidecar and set EMBEDDING_PROVIDER=local +
+# EMBEDDING_LOCAL_URL, or point at a cloud provider. See .env.example (Embedding).
 
 # Private npm registry (end-user reachable URL). Used by the API to build
 # the dashboard one-click daemon install command. Real host stays in .env.

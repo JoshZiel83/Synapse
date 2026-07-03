@@ -1,0 +1,11 @@
+# Embedding sidecar runtime deps. The bge-m3 ONNX weights + tokenizer are baked
+# by the Dockerfile (not pip). onnxruntime is the CPU inference runtime (NO torch
+# → a far smaller image than a sentence-transformers/torch variant); tokenizers is
+# the fast (Rust) XLM-R tokenizer; huggingface-hub fetches the baked snapshot.
+# VERIFY the resolved versions on a real build.
+onnxruntime>=1.17,<2
+tokenizers>=0.19,<1
+huggingface-hub>=0.23,<1
+fastapi>=0.110,<1
+uvicorn[standard]>=0.29,<1
+numpy>=1.24,<3

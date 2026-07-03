@@ -38,8 +38,8 @@ services:
       HOST: "0.0.0.0"
       PLATFORM_ADMIN_EMAILS: int-test@synapse.dev
       STORAGE_DIR: /app/storage/files
-      MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD: "false"
-      MEMORY_MODEL_CACHE_DIR: /app/storage/models/memory
+      # Embedding provider unset => none (semantic memory off; recall is lexical).
+      # The prod api image bundles no embedding engine.
     ports:
       - "127.0.0.1:${INT_PROD_API_PORT:-38001}:3001"
     volumes:

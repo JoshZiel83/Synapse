@@ -1,22 +1,21 @@
 import { extractText, type CanonicalContentBlock } from "@synapse/shared"
 import { config } from "../../config/index.js"
 import { itemPartsToCanonicalContentBlocks } from "../chat/message-content.js"
-import { embedMemoryPassages } from "./embedding-runtime.js"
+import { embedPassages, resolveEmbeddingProvider } from "../embedding/index.js"
 import { memoryIndexingQueue } from "../../workers/queues.js"
 import { hashMemoryEmbeddingText } from "./embedding-input.js"
+import { formatEmbeddingVector, parseEmbeddingVector } from "./vector-codec.js"
 import {
-  commitMemoryItemEmbeddingReady,
+  commitMemoryItemIndexOutcome,
   commitMemoryItemLexicalRebuild,
   loadMemoryItemChunksForVersion,
   loadMemoryItemIndexSourceRows,
   loadMemoryItemIndexVersions,
   loadMemoryPassageEmbeddingCacheRows,
-  markMemoryItemEmbeddingFailed,
   setMemoryItemChunkEmbedding,
   upsertMemoryPassageEmbeddingCache,
 } from "./repo.js"
 
-const MEMORY_VECTOR_DIMENSIONS = 384
 const TARGET_CHUNK_CHARS = 800
 const HARD_MAX_CHUNK_CHARS = 1000
 const CHUNK_OVERLAP_CHARS = 120
@@ -215,32 +214,16 @@ function buildMemoryChunkSpecs(params: {
   return specs
 }
 
-function formatEmbeddingVector(values: number[]) {
-  return `[${values.map((value) => (Number.isFinite(value) ? value.toFixed(8) : "0")).join(",")}]`
-}
-
-function parseEmbeddingVector(value: string | null | undefined) {
-  if (!value) return null
-  const trimmed = value.trim()
-  if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) return null
-  const parts = trimmed
-    .slice(1, -1)
-    .split(",")
-    .map((part) => Number(part.trim()))
-    .filter((part) => Number.isFinite(part))
-  return parts.length > 0 ? parts : null
-}
-
-async function loadCachedPassageEmbeddings(searchTexts: string[]) {
+async function loadCachedPassageEmbeddings(
+  searchTexts: string[],
+  engineVersion: string
+) {
   const hashes = Array.from(
-    new Set(searchTexts.map((text) => hashMemoryEmbeddingText(text, "passage")))
+    new Set(searchTexts.map((text) => hashMemoryEmbeddingText(text)))
   )
   if (hashes.length === 0) return new Map<string, number[]>()
 
-  const rows = await loadMemoryPassageEmbeddingCacheRows(
-    hashes,
-    config.memory.modelId
-  )
+  const rows = await loadMemoryPassageEmbeddingCacheRows(hashes, engineVersion)
 
   const cache = new Map<string, number[]>()
   for (const row of rows) {
@@ -253,26 +236,38 @@ async function loadCachedPassageEmbeddings(searchTexts: string[]) {
 }
 
 async function upsertCachedPassageEmbeddings(
-  entries: Array<{ searchText: string; embedding: number[] }>
+  entries: Array<{ searchText: string; embedding: number[] }>,
+  engineVersion: string
 ) {
   if (entries.length === 0) return
 
   const rows = entries
     .filter((entry) => entry.embedding.length > 0)
     .map((entry) => ({
-      contentHash: hashMemoryEmbeddingText(entry.searchText, "passage"),
+      contentHash: hashMemoryEmbeddingText(entry.searchText),
       embeddingLiteral: formatEmbeddingVector(entry.embedding),
       embeddingDim: entry.embedding.length,
     }))
 
-  await upsertMemoryPassageEmbeddingCache(rows, config.memory.modelId)
+  await upsertMemoryPassageEmbeddingCache(rows, engineVersion)
 }
 
+type BatchEmbedResult =
+  | { ok: true; embeddings: number[][] }
+  | { ok: false; retryable: boolean; error: string }
+
+/** Embed one chunk batch, serving hits from the Postgres passage cache and calling
+ *  the embedding facade only for misses. Propagates the facade's ok/retryable so
+ *  the caller (reindexMemoryItemEmbeddings) can classify — a transient failure must
+ *  NOT be written as a NULL/garbage vector. Cache entries are keyed by the active
+ *  provider's engineVersion. */
 async function embedPassageBatchWithCache(
-  batch: Array<{ id: string; searchText: string }>
-) {
+  batch: Array<{ id: string; searchText: string }>,
+  engineVersion: string
+): Promise<BatchEmbedResult> {
   const cached = await loadCachedPassageEmbeddings(
-    batch.map((chunk) => chunk.searchText)
+    batch.map((chunk) => chunk.searchText),
+    engineVersion
   )
   const embeddings: Array<number[] | null> = Array.from(
     { length: batch.length },
@@ -281,10 +276,7 @@ async function embedPassageBatchWithCache(
   const missing: Array<{ index: number; searchText: string }> = []
 
   for (let index = 0; index < batch.length; index += 1) {
-    const contentHash = hashMemoryEmbeddingText(
-      batch[index].searchText,
-      "passage"
-    )
+    const contentHash = hashMemoryEmbeddingText(batch[index].searchText)
     const embedding = cached.get(contentHash)
     if (embedding && embedding.length > 0) {
       embeddings[index] = embedding
@@ -297,14 +289,19 @@ async function embedPassageBatchWithCache(
   }
 
   if (missing.length > 0) {
-    const computed = await embedMemoryPassages(
-      missing.map((entry) => entry.searchText)
-    )
+    const result = await embedPassages(missing.map((entry) => entry.searchText))
+    if (!result.ok) {
+      return {
+        ok: false,
+        retryable: result.retryable ?? true,
+        error: result.error ?? "embedding failed",
+      }
+    }
     const newCacheEntries: Array<{ searchText: string; embedding: number[] }> =
       []
     for (let index = 0; index < missing.length; index += 1) {
       const missingEntry = missing[index]
-      const embedding = computed[index] || []
+      const embedding = result.vectors[index] || []
       embeddings[missingEntry.index] = embedding
       if (embedding.length > 0) {
         newCacheEntries.push({
@@ -313,10 +310,13 @@ async function embedPassageBatchWithCache(
         })
       }
     }
-    await upsertCachedPassageEmbeddings(newCacheEntries)
+    await upsertCachedPassageEmbeddings(newCacheEntries, engineVersion)
   }
 
-  return embeddings.map((embedding) => embedding || [])
+  return {
+    ok: true,
+    embeddings: embeddings.map((embedding) => embedding || []),
+  }
 }
 
 async function loadMemoryItemIndexSource(memoryItemId: string) {
@@ -418,66 +418,97 @@ export async function reindexMemoryItemEmbeddings(
     return { status: "stale" as const }
   }
 
+  const provider = resolveEmbeddingProvider()
   const chunks = await loadMemoryItemChunksForVersion(
     memoryItemId,
     targetIndexVersion
   )
 
-  if (chunks.length === 0) {
-    await commitMemoryItemEmbeddingReady({
+  // Provider disabled (none) or nothing to embed → promote the staged version with
+  // NO embeddings and stay lexical_ready (semantic arm intentionally off). This is
+  // NOT a failure: recall degrades to lexical. `lexical_ready`+NULL is reserved
+  // strictly for provider=none so a CONFIGURED provider's error stays queryable.
+  if (provider.key === "none" || chunks.length === 0) {
+    const disabled = provider.key === "none"
+    await commitMemoryItemIndexOutcome({
       memoryItemId,
       targetIndexVersion,
       activeIndexVersion,
       stagedIndexVersion,
-      embeddingModel: config.memory.modelId,
-      embeddingDim: MEMORY_VECTOR_DIMENSIONS,
+      embeddingModel: disabled ? "" : provider.engineVersion,
+      embeddingDim: disabled ? null : provider.dimension,
+      indexStatus: disabled ? "lexical_ready" : "ready",
     })
-    return { status: "ready" as const, chunkCount: 0 }
-  }
-
-  try {
-    for (const batch of chunkBatches(
-      chunks,
-      Math.max(1, config.memory.embedBatchSize)
-    )) {
-      const embeddings = await embedPassageBatchWithCache(batch)
-      for (let index = 0; index < batch.length; index += 1) {
-        const chunk = batch[index]
-        const embedding = embeddings[index]
-        await setMemoryItemChunkEmbedding(
-          chunk.id,
-          targetIndexVersion,
-          embedding && embedding.length > 0
-            ? formatEmbeddingVector(embedding)
-            : null
-        )
-      }
-    }
-
-    await commitMemoryItemEmbeddingReady({
-      memoryItemId,
-      targetIndexVersion,
-      activeIndexVersion,
-      stagedIndexVersion,
-      embeddingModel: config.memory.modelId,
-      embeddingDim: MEMORY_VECTOR_DIMENSIONS,
-    })
-
     return {
       status: "ready" as const,
       chunkCount: chunks.length,
+      semanticDisabled: disabled,
     }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    await markMemoryItemEmbeddingFailed({
-      memoryItemId,
-      embeddingModel: config.memory.modelId,
-      embeddingDim: MEMORY_VECTOR_DIMENSIONS,
-      indexError: message,
-    })
-    return {
-      status: "failed" as const,
-      error: message,
+  }
+
+  const writes: Array<{ id: string; literal: string | null }> = []
+  for (const batch of chunkBatches(
+    chunks,
+    Math.max(1, config.embedding.batchSize)
+  )) {
+    const batchResult = await embedPassageBatchWithCache(
+      batch,
+      provider.engineVersion
+    )
+    if (!batchResult.ok) {
+      // Transient (sidecar down / 503 / 5xx / 429) → throw so BullMQ retries
+      // (MEMORY_INDEXING_JOB_DEFAULTS: attempts 5). Leave the item lexical_ready —
+      // no premature 'failed'.
+      if (batchResult.retryable) {
+        throw new Error(
+          `memory embedding failed (retryable): ${batchResult.error}`
+        )
+      }
+      // Terminal for a CONFIGURED provider (4xx wrong model/key/param) → record
+      // failed + index_error (queryable/alertable) and stop; retrying won't help.
+      // Still PROMOTE the staged version (with no embeddings) so recall serves the
+      // edited lexical content instead of freezing on the stale prior version.
+      await commitMemoryItemIndexOutcome({
+        memoryItemId,
+        targetIndexVersion,
+        activeIndexVersion,
+        stagedIndexVersion,
+        indexStatus: "failed",
+        embeddingModel: provider.engineVersion,
+        embeddingDim: provider.dimension,
+        indexError: batchResult.error,
+      })
+      return { status: "failed" as const, error: batchResult.error }
     }
+    for (let index = 0; index < batch.length; index += 1) {
+      const embedding = batchResult.embeddings[index]
+      writes.push({
+        id: batch[index].id,
+        literal: embedding.length > 0 ? formatEmbeddingVector(embedding) : null,
+      })
+    }
+  }
+
+  for (const write of writes) {
+    await setMemoryItemChunkEmbedding(
+      write.id,
+      targetIndexVersion,
+      write.literal
+    )
+  }
+
+  await commitMemoryItemIndexOutcome({
+    memoryItemId,
+    targetIndexVersion,
+    activeIndexVersion,
+    stagedIndexVersion,
+    indexStatus: "ready",
+    embeddingModel: provider.engineVersion,
+    embeddingDim: provider.dimension,
+  })
+
+  return {
+    status: "ready" as const,
+    chunkCount: chunks.length,
   }
 }

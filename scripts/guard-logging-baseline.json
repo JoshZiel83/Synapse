@@ -19,12 +19,11 @@
     "packages/api/src/infrastructure/database/seed-builtin-mcp-plugins.ts": 3,
     "packages/api/src/infrastructure/database/seed-model-groups/cli.ts": 3,
     "packages/api/src/infrastructure/database/seed.ts": 4,
-    "packages/api/src/modules/memory/bootstrap-model.ts": 2,
     "packages/api/src/modules/sandbox/host-provider.ts": 2,
     "packages/api/src/modules/sandbox/service.ts": 24,
     "packages/api/src/workers/session-thinking.ts": 5,
     "packages/device-runtime/src/bin.ts": 19,
     "packages/web-next/scripts/build-repo-link-static.mjs": 2
   },
-  "totalRawConsole": 83
+  "totalRawConsole": 81
 }

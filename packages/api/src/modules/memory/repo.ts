@@ -48,6 +48,7 @@ import {
   revokeMemoryAccessGrant,
 } from "./access-grant-storage.js"
 import { MemoryError } from "./errors.js"
+import { formatEmbeddingVector } from "./vector-codec.js"
 import type { DraftConversationPart } from "../chat/message-content.js"
 import type {
   MemoryItemChunksMetadata,
@@ -415,6 +416,48 @@ export async function loadMemoryItemIndexVersions(memoryItemId: string) {
 }
 
 /**
+ * Read the live pgvector typmod (= declared dimension, or -1 unconstrained) of both
+ * fixed-width embedding columns. Powers the boot-time embedding-space guard. Raw
+ * pg_catalog SQL stays in the repo layer. (CamelCasePlugin surfaces table_name as
+ * tableName.)
+ */
+export async function loadMemoryVectorColumnDimensions(): Promise<
+  Array<{ tableName: string; typmod: number }>
+> {
+  const result = await sql<{ tableName: string; typmod: number }>`
+    SELECT c.relname AS table_name, a.atttypmod AS typmod
+    FROM pg_attribute a
+    JOIN pg_class c ON c.oid = a.attrelid
+    WHERE c.relname IN ('memory_item_chunks', 'memory_embedding_cache')
+      AND a.attname = 'embedding'
+      AND a.attnum > 0
+      AND NOT a.attisdropped
+  `.execute(db)
+  return result.rows
+}
+
+/**
+ * Return the first LIVE indexed memory item whose embedding provenance differs from
+ * `engineVersion` (a foreign embedding space that would mix incomparable vectors
+ * in the one HNSW graph), or null when the live corpus is homogeneous. Powers the
+ * boot guard's same-dimension-different-model check. Reads the soft-delete-aware
+ * memory_items_live view: only live items surface in recall, so a foreign space
+ * among them is what would corrupt results (soft-deleted rows are filtered + purged).
+ */
+export async function findForeignEmbeddingSpaceModel(
+  engineVersion: string
+): Promise<string | null> {
+  const result = await sql<{ embeddingModel: string }>`
+    SELECT DISTINCT embedding_model FROM memory_items_live
+    WHERE embedding_model <> ''
+      AND embedding_model <> ${engineVersion}
+      AND embedding_dim IS NOT NULL
+    LIMIT 1
+  `.execute(db)
+  return result.rows[0]?.embeddingModel ?? null
+}
+
+/**
  * Read the ordered chunks for a memory item at a specific index version
  * (embedding reindex).
  */
@@ -453,19 +496,26 @@ export async function setMemoryItemChunkEmbedding(
 }
 
 /**
- * Atomically flip a memory item to the `ready` embedding state and (when a
- * staged version superseded a prior active one) churn the now-stale active
- * version's chunks through the SECURITY DEFINER fn. One transaction so the
- * item update + chunk churn stay atomic. Shared by the no-chunk fast path and
- * the post-embedding success path.
+ * Finalize a memory item's index attempt at `targetIndexVersion`: promote the
+ * staged version to active and (when it superseded a prior active one) churn the
+ * now-stale active version's chunks through the SECURITY DEFINER fn — atomically.
+ * Runs for EVERY outcome (ready / lexical_ready / failed) so the promotion always
+ * happens: even on a terminal embed failure the NEW (edited) lexical chunks become
+ * live rather than the item freezing on the stale prior version.
+ *   - "ready"        = semantic embeddings written (indexedAt=NOW, no error).
+ *   - "lexical_ready"= provider disabled (none): promoted with NO embeddings.
+ *   - "failed"       = a configured provider hit a TERMINAL error: promoted with NO
+ *                      embeddings but index_error retained (queryable/alertable).
  */
-export async function commitMemoryItemEmbeddingReady(params: {
+export async function commitMemoryItemIndexOutcome(params: {
   memoryItemId: string
   targetIndexVersion: number
   activeIndexVersion: number
   stagedIndexVersion: number
+  indexStatus: "ready" | "lexical_ready" | "failed"
   embeddingModel: string
-  embeddingDim: number
+  embeddingDim: number | null
+  indexError?: string | null
 }): Promise<void> {
   await withDbTransaction(async (trx) => {
     await trx
@@ -473,11 +523,14 @@ export async function commitMemoryItemEmbeddingReady(params: {
       .set({
         activeIndexVersion: params.targetIndexVersion,
         stagedIndexVersion: null,
-        indexStatus: "ready",
+        indexStatus: params.indexStatus,
         embeddingModel: params.embeddingModel,
         embeddingDim: params.embeddingDim,
-        indexedAt: sql`NOW()`,
-        indexError: null,
+        indexedAt: params.indexStatus === "ready" ? sql`NOW()` : null,
+        indexError:
+          params.indexStatus === "failed"
+            ? (params.indexError ?? "embedding failed")
+            : null,
       })
       .where("id", "=", params.memoryItemId)
       .execute()
@@ -492,27 +545,6 @@ export async function commitMemoryItemEmbeddingReady(params: {
       )
     }
   })
-}
-
-/**
- * Mark a memory item's embedding index as failed (auto-commit error path).
- */
-export async function markMemoryItemEmbeddingFailed(params: {
-  memoryItemId: string
-  embeddingModel: string
-  embeddingDim: number
-  indexError: string
-}): Promise<void> {
-  await db
-    .updateTable("memoryItems")
-    .set({
-      indexStatus: "failed",
-      embeddingModel: params.embeddingModel,
-      embeddingDim: params.embeddingDim,
-      indexError: params.indexError,
-    })
-    .where("id", "=", params.memoryItemId)
-    .execute()
 }
 
 // ---------------------------------------------------------------------------
@@ -1310,12 +1342,6 @@ function buildMemoryListWhereClause(params: {
   }
 
   return sql`${sql.join(conditions, sql` AND `)}`
-}
-
-function formatEmbeddingVector(embedding: number[]) {
-  return `[${embedding
-    .map((value) => (Number.isFinite(value) ? value.toFixed(8) : "0"))
-    .join(",")}]`
 }
 
 /**

@@ -38,7 +38,6 @@
     "db:purge:workspace": "tsx src/infrastructure/database/purge.ts workspace",
     "gen:cutover-ddl": "node scripts/cutover-emit-ddl.mjs",
     "gen:purge-ddl": "node scripts/cutover-emit-purge.mjs",
-    "memory:bootstrap-model": "tsx src/modules/memory/bootstrap-model.ts",
     "lint": "eslint src tests",
     "lint:fix": "eslint src tests --fix",
     "lint:types": "NODE_OPTIONS=--max-old-space-size=8192 eslint --no-config-lookup -c eslint.config.types.mjs src tests"
@@ -60,7 +59,6 @@
     "@fastify/otel": "^0.19.0",
     "@fastify/rate-limit": "^9.1.0",
     "@fastify/websocket": "^10.0.0",
-    "@huggingface/transformers": "^3.8.0",
     "@larksuiteoapi/node-sdk": "^1.59.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@opentelemetry/api": "^1.9.1",

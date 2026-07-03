@@ -72,29 +72,17 @@ RUN mkdir -p packages/api/dist/modules/mcp-plugins/builtin-plugins \
 # (sidecars/tesseract, sidecars/ppocr) reached over HTTP, selected by
 # OCR_PROVIDER + the sidecar URL env. See docs/ocr-abstraction-layer-plan-2026-07-01.md.
 
-# --- BAKE: memory embedding model (Xenova/multilingual-e5-small) ---
-# Run the COMPILED bootstrap (dist/*.js, plain node): the embedding worker
-# is spawned as a worker_thread and only loads cleanly as .js — the tsx
-# (.ts) path fails with ERR_UNKNOWN_FILE_EXTENSION. Baked into /app/models
-# (outside the storage volume). The assertion makes a missing model a hard
-# build failure, since the runtime warm-up is fire-and-forget.
-RUN set -eux; mkdir -p /app/models/memory; \
-  MEMORY_MODEL_CACHE_DIR=/app/models/memory \
-  MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD=true \
-  MEMORY_EMBEDDING_MODEL_ID=Xenova/multilingual-e5-small \
-  node packages/api/dist/modules/memory/bootstrap-model.js; \
-  test -f "/app/models/memory/Xenova/multilingual-e5-small/onnx/model.onnx" \
-    || { echo "FATAL: embedding model onnx weights were not baked"; exit 1; }; \
-  test -f "/app/models/memory/Xenova/multilingual-e5-small/tokenizer.json" \
-    || { echo "FATAL: embedding model tokenizer was not baked"; exit 1; }
+# Embedding is NOT bundled in the api image (zero-embedding-api): the api runs no
+# embedding engine and no model is baked here. Embedding runs out-of-process — the
+# local bge-m3 sidecar (sidecars/embed) or a cloud vendor — reached over HTTP,
+# selected by EMBEDDING_PROVIDER + the provider env. See
+# docs/embedding-abstraction-layer-plan-2026-07-02.md.
 
 # --- BUILD-TIME ASSERTION: native bindings load (no silent runtime ENOENT) ---
-# --ignore-scripts skipped postinstall; prove the prebuilt native modules the
-# API actually uses load before shipping. onnxruntime is exercised THROUGH
-# @huggingface/transformers (which bundles its own copy) — the API never
-# imports onnxruntime-node directly, so we don't test it standalone (a stray
-# top-level copy would clash .so symbols with the transformers-bundled one).
-RUN node -e "require('@huggingface/transformers'); require('sharp'); console.log('native deps OK')"
+# --ignore-scripts skipped postinstall; prove the prebuilt native modules the API
+# actually uses load before shipping. (onnxruntime is gone with the in-process
+# embedder; sharp is still used for image processing.)
+RUN node -e "require('sharp'); console.log('native deps OK')"
 
 # ── Rust builder: compile the fs-helper sidecar (supervisor-side CAS) ─────────
 # The API process ITSELF runs synapse-device-fs-helper for ALL sandbox CAS work
@@ -132,8 +120,8 @@ RUN apt-get update \
   && apt-get autoremove -y \
   && rm -rf /var/lib/apt/lists/*
 # Carry the whole built tree: node_modules (with @synapse symlinks + native
-# binaries), every package's dist/, and the baked /app/models. dist/index.js
-# resolves @synapse/device-protocol + @synapse/device-runtime via these symlinks.
+# binaries) and every package's dist/. dist/index.js resolves
+# @synapse/device-protocol + @synapse/device-runtime via these symlinks.
 COPY --from=builder /app/ ./
 # fs-helper Rust sidecar — supervisor-side CAS engine for BOTH sandbox backends.
 # Placed at the path the api resolver climbs to (anchored on materialize.js via
@@ -144,10 +132,8 @@ COPY --from=builder /app/ ./
 COPY --from=fs-helper-builder \
      /build/sidecars/fs-helper/target/release/synapse-device-fs-helper \
      /app/sidecars/fs-helper/target/release/synapse-device-fs-helper
-# Baked-in immutable assets live OUTSIDE the api_storage volume mount.
-ENV MEMORY_MODEL_CACHE_DIR=/app/models/memory \
-    MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD=false \
-    SYNAPSE_DEVICE_FS_HELPER_PATH=/app/sidecars/fs-helper/target/release/synapse-device-fs-helper
+# The api resolver honors this env first when locating the fs-helper sidecar bin.
+ENV SYNAPSE_DEVICE_FS_HELPER_PATH=/app/sidecars/fs-helper/target/release/synapse-device-fs-helper
 EXPOSE 3001
 # `--import` preloads the OpenTelemetry/Sentry instrumentation before app code so
 # the HTTP instrumentation can patch node:http (inbound spans + outbound W3C

@@ -1,0 +1,73 @@
+# Embedding sidecar — bge-m3 dense (1024-d) over onnxruntime + tokenizers (CPU,
+# NO torch) behind a small FastAPI service. The Synapse api bundles NO embedding
+# engine (env-only EMBEDDING_PROVIDER); it POSTs texts here over HTTP and gets back
+# L2-normalized dense vectors. Build context is the repo ROOT:
+#   docker build -f infrastructure/Dockerfile.embed -t synapse-embed .
+#
+# The model is BAKED at build (Xenova/bge-m3 base onnx/model.onnx — the raw
+# XLM-RoBERTa transformer emitting last_hidden_state; pipeline.py hand-rolls the
+# bge-m3 dense head = CLS pooling [:,0] + L2-normalize) so runtime does no network
+# I/O. bge-m3 is heavier than the OCR/tesseract sidecar (~2.3 GB of baked weights +
+# ~1 GB RSS from the onnxruntime CPU session).
+
+FROM python:3.12-slim
+
+# China mirror for resilient pip installs (matches the other sidecars).
+RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple || true
+
+# ca-certificates for the build-time model download (HF / mirror).
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY sidecars/embed/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY sidecars/embed/ ./
+
+# Create the non-root user + chown /app BEFORE the model download (while /app holds
+# only the small code), then download AS that user. This avoids a `chown -R` over
+# the 2.3 GB model AFTER the fact, which would copy every weight file into a second
+# layer (overlayfs copy-up) and ~double the image.
+RUN useradd --create-home --uid 10001 embed \
+  && mkdir -p /app/models/embed \
+  && chown -R embed:embed /app
+USER embed
+
+# Bake the bge-m3 ONNX weights (base model.onnx + its external model.onnx_data) +
+# tokenizer as FLAT real files so runtime does no network I/O (serve.py loads with
+# local_files_only=True) AND onnxruntime can resolve the external-data file in-dir
+# (the HF blobs/snapshots symlink layout is rejected by its path check). Only these
+# 3 files are pulled (~2.3 GB) — NOT the ~10 quantized variants in the repo.
+# HF_ENDPOINT can point at a mirror (e.g. https://hf-mirror.com) for HF-blocked
+# build networks. (An EMPTY value would make huggingface_hub treat "" as the
+# endpoint and fail.)
+ARG HF_ENDPOINT=https://huggingface.co
+ENV EMBED_MODEL_ROOT=/app/models/embed \
+    HF_ENDPOINT=${HF_ENDPOINT}
+RUN python prefetch_models.py \
+  && test -f /app/models/embed/model.onnx \
+  && test -f /app/models/embed/model.onnx_data
+
+ENV PYTHONUNBUFFERED=1 \
+    HF_HUB_OFFLINE=1 \
+    EMBED_HOST=0.0.0.0 \
+    EMBED_PORT=8775 \
+    EMBED_MAX_CONCURRENCY=2 \
+    EMBED_ONNX_THREADS=4
+
+# Fail the build if the baked model can't construct + emit a 1024-d vector
+# (catches a bad download / broken runtime HERE, not on the first request).
+RUN python -c "from pipeline import build_model, embed_texts, EMBED_DIM; v = embed_texts(build_model(True), ['hello','world']); assert v.shape == (2, EMBED_DIM), v.shape; print('embed model OK', v.shape)"
+
+EXPOSE 8775
+
+# The onnxruntime session + 2.3 GB model load takes several seconds on CPU →
+# generous start_period; readiness gates on /healthz.ready (false until serve.py's
+# lifespan warms it).
+HEALTHCHECK --interval=15s --timeout=5s --start-period=90s --retries=12 \
+  CMD python -c "import urllib.request,sys,json; sys.exit(0 if json.load(urllib.request.urlopen('http://127.0.0.1:8775/healthz', timeout=3))['ready'] else 1)" || exit 1
+
+CMD ["python", "serve.py"]

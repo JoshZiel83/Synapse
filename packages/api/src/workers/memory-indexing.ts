@@ -26,8 +26,15 @@ export function startMemoryIndexingWorker() {
         memoryItemId,
         indexVersion
       )
+      // status 'failed' = a CONFIGURED provider returned a TERMINAL error (already
+      // recorded as index_status='failed' + index_error). Do NOT throw — it is
+      // deterministic (misconfig), so a BullMQ retry would only burn attempts.
+      // TRANSIENT embed failures are thrown from inside reindex to trigger a retry.
       if (result.status === "failed") {
-        throw new Error(result.error)
+        log.warn(
+          { memoryItemId, error: result.error },
+          "memory embedding index failed (terminal — recorded, not retried)"
+        )
       }
     },
     {

@@ -66,6 +66,23 @@ export const FILE_PARSING_JOB_DEFAULTS = {
   removeOnFail: { age: 86_400, count: 1_000 },
 } as const
 
+/**
+ * Retry policy for memory embedding-index jobs. Without it BullMQ runs each index
+ * exactly once, so a transient embed-sidecar/cloud outage (503 busy / model
+ * loading / 5xx / 429) would permanently strand the item at lexical_ready with no
+ * recovery — and a mass re-embed against the single-thread sidecar (which 503s
+ * under load) would strand a large fraction on the very first deploy.
+ * reindexMemoryItemEmbeddings rethrows ONLY transient (retryable) embed failures;
+ * a terminal failure (provider none / 4xx) is recorded and swallowed, so these
+ * attempts are burned only on genuinely transient errors.
+ */
+export const MEMORY_INDEXING_JOB_DEFAULTS = {
+  attempts: 5,
+  backoff: { type: "exponential" as const, delay: 5_000 },
+  removeOnComplete: { age: 3_600, count: 1_000 },
+  removeOnFail: { age: 86_400, count: 1_000 },
+} as const
+
 const sessionThinkingLazy = lazyQueue(
   QUEUE_NAMES.SESSION_THINKING,
   SESSION_THINKING_JOB_DEFAULTS
@@ -73,7 +90,10 @@ const sessionThinkingLazy = lazyQueue(
 const automationSchedulerLazy = lazyQueue(QUEUE_NAMES.AUTOMATION_SCHEDULER)
 const automationExecutionLazy = lazyQueue(QUEUE_NAMES.AUTOMATION_EXECUTION)
 const imTransportDeliveryLazy = lazyQueue(QUEUE_NAMES.IM_TRANSPORT_DELIVERY)
-const memoryIndexingLazy = lazyQueue(QUEUE_NAMES.MEMORY_INDEXING)
+const memoryIndexingLazy = lazyQueue(
+  QUEUE_NAMES.MEMORY_INDEXING,
+  MEMORY_INDEXING_JOB_DEFAULTS
+)
 const fileParsingLazy = lazyQueue(
   QUEUE_NAMES.FILE_PARSING,
   FILE_PARSING_JOB_DEFAULTS

@@ -14,7 +14,8 @@ test("numeric env values are coerced to real numbers (not NaN/strings)", () => {
     config.realtime.outboxPollMs,
     config.realtime.outboxRetentionHours,
     config.asr.volcengine.maxConcurrency,
-    config.memory.embedBatchSize,
+    config.embedding.batchSize,
+    config.embedding.dimension,
     config.memory.recallLimit,
   ]) {
     assert.equal(typeof n, "number")

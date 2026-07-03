@@ -70,12 +70,23 @@ services:
       HOST: "0.0.0.0"
       PLATFORM_ADMIN_EMAILS: ${PLATFORM_ADMIN_EMAILS:-demo@synapse.dev}
       STORAGE_DIR: /app/storage/files
-      # Embedding model is baked into the image under /app/models (outside the
-      # api_storage volume mount, which would otherwise shadow it). Runtime model
-      # download is OFF — a missing model is a baked-in build failure, never a
-      # silent runtime degradation.
-      MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD: ${MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD:-false}
-      MEMORY_MODEL_CACHE_DIR: /app/models/memory
+      # Embedding (text → dense vector) runs OUT-OF-PROCESS — the api bundles no
+      # embedding engine and reads env only. EMBEDDING_PROVIDER selects the local
+      # bge-m3 sidecar (shipped in the `production` profile), a cloud/self-host vendor
+      # via the generic openai-compatible adapter, or `none` (semantic memory off →
+      # recall degrades to lexical). Default keeps semantic memory on via the embed
+      # sidecar (the OCR/tesseract precedent). Selecting a cloud provider sends memory
+      # text off-box (PII egress) — see .env.example EMBEDDING_OPENAI_*.
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local}
+      EMBEDDING_LOCAL_URL: ${EMBEDDING_LOCAL_URL:-http://embed:8775/}
+      EMBEDDING_LOCAL_MODEL: ${EMBEDDING_LOCAL_MODEL:-bge-m3}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1024}
+      EMBEDDING_OPENAI_BASE_URL: ${EMBEDDING_OPENAI_BASE_URL:-}
+      EMBEDDING_OPENAI_API_KEY: ${EMBEDDING_OPENAI_API_KEY:-}
+      EMBEDDING_OPENAI_MODEL: ${EMBEDDING_OPENAI_MODEL:-}
+      EMBEDDING_OPENAI_INPUT_ROLE_MODE: ${EMBEDDING_OPENAI_INPUT_ROLE_MODE:-none}
+      EMBEDDING_OPENAI_SUPPORTS_DIMENSIONS: ${EMBEDDING_OPENAI_SUPPORTS_DIMENSIONS:-}
+      EMBEDDING_OPENAI_MAX_BATCH: ${EMBEDDING_OPENAI_MAX_BATCH:-0}
       # OCR runs OUT-OF-PROCESS — the api bundles no OCR engine and reads env
       # only. OCR_PROVIDER selects the sidecar (tesseract | ppocr) or `none` to
       # disable. The default keeps OCR on via the tesseract sidecar (shipped in
@@ -377,6 +388,49 @@ services:
       start_period: 60s
     profiles:
       - asr
+
+  # Embedding sidecar: bge-m3 dense (1024-d) over onnxruntime + tokenizers (CPU, no
+  # torch) behind FastAPI. The api bundles NO embedding engine (zero-embedding-api);
+  # it POSTs texts here and gets back L2-normalized vectors. Shipped in the
+  # `production` profile so a default deploy keeps SEMANTIC memory working
+  # out-of-process (recall degrades to lexical when it is down — the api is not
+  # coupled to its boot). Reached by the api at http://embed:8775/
+  # (EMBEDDING_PROVIDER=local + EMBEDDING_LOCAL_URL). Internal-only, no host port, no
+  # secrets. Heavier than the OCR sidecar (~2.3 GB baked weights); the model is baked
+  # at build so runtime does no network I/O.
+  embed:
+    build:
+      context: .
+      dockerfile: infrastructure/Dockerfile.embed
+      args:
+        # Full URL; override with a mirror (e.g. https://hf-mirror.com) for
+        # HF-blocked build networks. Must NOT be empty.
+        HF_ENDPOINT: ${HF_ENDPOINT:-https://huggingface.co}
+    container_name: synapse-embed
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: ${EMBED_MEM_LIMIT:-4g}
+    environment:
+      EMBED_HOST: "0.0.0.0"
+      EMBED_PORT: "8775"
+      EMBED_MAX_CONCURRENCY: ${EMBED_MAX_CONCURRENCY:-2}
+      EMBED_ONNX_THREADS: ${EMBED_ONNX_THREADS:-4}
+    expose:
+      - "8775"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys,json; sys.exit(0 if json.load(urllib.request.urlopen('http://127.0.0.1:8775/healthz'))['ready'] else 1)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 90s
+    profiles:
+      - production
 
   # Optional streaming sherpa-onnx REALTIME ASR sidecar (compose `asr` profile) —
   # the self-hosted back-end for the /ws/asr dictation gateway's sherpa-stream

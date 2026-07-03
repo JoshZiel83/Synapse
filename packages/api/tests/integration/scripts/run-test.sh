@@ -45,8 +45,4 @@ mkdir -p "$STORAGE_DIR"
 export JWT_SECRET="${JWT_SECRET:-int_test_jwt_secret}"
 export JWT_REFRESH_SECRET="${JWT_REFRESH_SECRET:-int_test_jwt_refresh_secret}"
 
-# Some module-load-time code may also try to connect at import time; isolate
-# memory-model bootstrap so it doesn't fetch.
-export MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD="${MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD:-false}"
-
 exec node --test --test-reporter=spec --import tsx "$@"
