@@ -107,9 +107,13 @@ WORKDIR /app
 # (absent → fs_search ENOENT-throws). Both are inert for the docker backend
 # (no co-located child) — only image size. Explicitly installed, so they
 # survive the `apt-get purge curl` / autoremove below.
+# ffmpeg is the audio transcoder the api spawns in-process for IM voice notes
+# (infrastructure/media/transcode.ts → OGG/Opus mono). Callers gate supportsVoice
+# on ffmpegAvailable(), so absent → outbound voice silently degrades to a document
+# attachment. The ASR sidecars bake their own ffmpeg; the api needs its own here.
 ARG DOCKER_CLI_VERSION=27.5.1
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl bubblewrap ripgrep \
+  && apt-get install -y --no-install-recommends ca-certificates curl bubblewrap ripgrep ffmpeg \
   && curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz" \
        -o /tmp/docker.tgz \
   && tar -xzf /tmp/docker.tgz -C /tmp \
