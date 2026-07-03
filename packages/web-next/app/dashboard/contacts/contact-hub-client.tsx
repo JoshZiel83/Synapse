@@ -375,7 +375,7 @@ export function ContactHubClient() {
       return
     }
 
-    if (match.state !== "requestable") return
+    if (match.state !== IDENTITY_SEARCH_MATCH_STATE.REQUESTABLE) return
 
     setSubmittingSearchProfileId(match.profileId)
     try {

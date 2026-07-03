@@ -1,5 +1,6 @@
 import {
   AvailableSkillSummary,
+  CONVERSATION_PARTICIPANT_TYPE,
   extractText,
   formatMentionText,
   normalizeActorDocs,
@@ -150,7 +151,7 @@ function hasHumanConversationParticipant(
   return participants.some(
     (participant) =>
       Boolean(participant.userId) ||
-      participant.participantType === "external" ||
+      participant.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL ||
       Boolean(participant.transportExternalId)
   )
 }
@@ -334,11 +335,13 @@ export function buildActorPrompt(
       conversationParticipants.find((member) => member.userId)?.userName ||
       conversationParticipants.find(
         (member) =>
-          member.participantType === "external" || member.transportExternalId
+          member.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL ||
+          member.transportExternalId
       )?.transportDisplayName ||
       conversationParticipants.find(
         (member) =>
-          member.participantType === "external" || member.transportExternalId
+          member.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL ||
+          member.transportExternalId
       )?.displayName ||
       "User"
     const roster = [
@@ -362,7 +365,7 @@ export function buildActorPrompt(
           return [buildRosterEntry(member)]
         }
         if (
-          member.participantType === "external" ||
+          member.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL ||
           member.transportExternalId
         ) {
           const externalName =

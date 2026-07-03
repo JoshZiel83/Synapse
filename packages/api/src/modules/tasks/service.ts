@@ -1,4 +1,5 @@
 import {
+  CONVERSATION_KIND,
   CONVERSATION_PARTICIPANT_TYPE,
   TASK_REQUEST_KIND,
   textBlocks,
@@ -1810,7 +1811,7 @@ export async function resolveTaskRequest(
       if (!conversationRow) {
         throw new Error(`Conversation ${locked.conversationId} not found`)
       }
-      if (conversationRow.kind !== "direct") {
+      if (conversationRow.kind !== CONVERSATION_KIND.DIRECT) {
         const hasGrant = await findRemoteAgentGroupTaskGrant(
           {
             remoteAgentId: locked.requesterRemoteAgentId,

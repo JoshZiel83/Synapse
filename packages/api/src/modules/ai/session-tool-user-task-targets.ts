@@ -1,3 +1,4 @@
+import { CONVERSATION_PARTICIPANT_TYPE } from "@synapse/shared"
 import type { ConversationParticipantEntry } from "@synapse/shared/types"
 
 export type UserTaskTargetCandidate = {
@@ -35,7 +36,11 @@ export function buildUserTaskTargetCandidatesFromRows(
 
   for (const participant of participants) {
     if (participant.state !== "active") continue
-    if (participant.participantType !== "workspace_member") continue
+    if (
+      participant.participantType !==
+      CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
+    )
+      continue
     if (!participant.workspaceMemberId) continue
 
     const name = participant.userName?.trim() || "User"
@@ -57,7 +62,11 @@ export function buildUserTaskTargetCandidatesFromEntries(
   const candidates: UserTaskTargetCandidate[] = []
 
   for (const participant of participants) {
-    if (participant.participantType !== "workspace_member") continue
+    if (
+      participant.participantType !==
+      CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
+    )
+      continue
     if (!participant.participantId) continue
 
     const name = participant.name.trim() || "User"

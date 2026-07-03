@@ -2,6 +2,7 @@ import Feather from "@expo/vector-icons/Feather"
 import { useLocalSearchParams, useRouter } from "expo-router"
 import { useState } from "react"
 import { Pressable, StyleSheet, Text, View } from "react-native"
+import { IDENTITY_SEARCH_MATCH_STATE } from "@shared"
 
 import {
   Avatar,
@@ -22,11 +23,11 @@ type SearchState =
 
 function statusLabel(state: SearchState) {
   switch (state) {
-    case "same_workspace_member":
+    case IDENTITY_SEARCH_MATCH_STATE.SAME_WORKSPACE_MEMBER:
       return "同 workspace 用户"
-    case "friend":
+    case IDENTITY_SEARCH_MATCH_STATE.FRIEND:
       return "已是好友"
-    case "pending_request":
+    case IDENTITY_SEARCH_MATCH_STATE.PENDING_REQUEST:
       return "好友申请待处理"
     default:
       return "可发起好友申请"
@@ -117,7 +118,7 @@ export default function SearchContactDetailScreen() {
         </View>
         <Button
           label={
-            state === "pending_request"
+            state === IDENTITY_SEARCH_MATCH_STATE.PENDING_REQUEST
               ? "等待处理"
               : submitting
                 ? "提交中..."
@@ -125,7 +126,9 @@ export default function SearchContactDetailScreen() {
           }
           icon="user-plus"
           onPress={() => void handleRequestFriend()}
-          disabled={state === "pending_request" || submitting}
+          disabled={
+            state === IDENTITY_SEARCH_MATCH_STATE.PENDING_REQUEST || submitting
+          }
         />
         {message ? <Text style={styles.message}>{message}</Text> : null}
       </SectionBlock>

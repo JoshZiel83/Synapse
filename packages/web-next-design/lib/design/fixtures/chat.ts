@@ -15,6 +15,7 @@ import type {
   TaskSummarySchemaType,
 } from "@synapse/shared/schemas"
 import { dateToIsoInstant } from "@synapse/shared/datetime"
+import { CONVERSATION_PARTICIPANT_TYPE } from "@synapse/shared"
 import {
   designWorkspaceId,
   designWorkspaceMemberId,
@@ -191,7 +192,10 @@ function participant(
     conversationId: conv,
     participantType: r.participantType,
     name: r.name ?? "",
-    roleKey: r.participantType === "actor" ? "assistant" : "member",
+    roleKey:
+      r.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
+        ? "assistant"
+        : "member",
     state: "active",
     metadata: {},
     joinedAt: ts("2026-06-20T09:00:00Z"),
@@ -261,7 +265,9 @@ function msg(o: {
   blocks?: ContentBlock[]
 }): MessageItem {
   const role: MessageItem["role"] =
-    o.by.ref.participantType === "actor" ? "assistant" : "user"
+    o.by.ref.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
+      ? "assistant"
+      : "user"
   return {
     id: o.id,
     conversationId: o.conv,

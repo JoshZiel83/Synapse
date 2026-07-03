@@ -1,6 +1,7 @@
 import { sql } from "kysely"
 import {
   ACCESS_BINDING_STATUS,
+  CONVERSATION_KIND,
   SUBJECT_KIND,
   WORKSPACE_RESOURCE_GRANT_PERMISSION,
   WORKSPACE_RESOURCE_KIND,
@@ -212,7 +213,8 @@ export async function loadConversationRow(
   if (
     !row?.id ||
     !row.workspaceId ||
-    (row.kind !== "direct" && row.kind !== "group")
+    (row.kind !== CONVERSATION_KIND.DIRECT &&
+      row.kind !== CONVERSATION_KIND.GROUP)
   ) {
     return null
   }

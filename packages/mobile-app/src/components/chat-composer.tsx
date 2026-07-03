@@ -45,6 +45,7 @@ import {
 import { createId } from "@/lib/ids"
 import { theme } from "@/theme/tokens"
 import {
+  CONVERSATION_KIND,
   fileRefBlock,
   type ChatConversationView,
   type ConversationReplyRef,
@@ -343,7 +344,7 @@ export function ChatComposer({
   const uploadControllersRef = useRef(new Map<string, AbortController>())
   const pendingMentionInsertIndexRef = useRef<number | null>(null)
   const maxInputHeight = Math.max(120, Math.floor(windowHeight * 0.4))
-  const mentionsEnabled = conversation.kind !== "direct"
+  const mentionsEnabled = conversation.kind !== CONVERSATION_KIND.DIRECT
 
   const mentionCandidates = useMemo(
     () =>

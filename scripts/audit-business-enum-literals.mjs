@@ -59,38 +59,51 @@ const checks = [
   {
     kind: "raw participantType comparison",
     regex:
-      /participantType\s*===\s*"(?<value>actor|workspace_member|remote_agent|external|system)"/g,
+      /participantType\s*(?:===|!==)\s*"(?<value>actor|workspace_member|remote_agent|external|system)"/g,
   },
   {
     kind: "raw targetType comparison",
-    regex: /targetType\s*===\s*"(?<value>member|actor|remote_agent)"/g,
+    regex: /targetType\s*(?:===|!==)\s*"(?<value>member|actor|remote_agent)"/g,
   },
   {
     kind: "raw participant.type comparison",
     regex:
-      /participant\.type\s*===\s*"(?<value>actor|workspace_member|remote_agent|external|system)"/g,
+      /participant\.type\s*(?:===|!==)\s*"(?<value>actor|workspace_member|remote_agent|external|system)"/g,
   },
   {
     kind: "raw approvalMode comparison",
-    regex: /approvalMode\s*===\s*"(?<value>auto|manual)"/g,
+    regex: /approvalMode\s*(?:===|!==)\s*"(?<value>auto|manual)"/g,
   },
   {
     kind: "raw accessPolicy comparison",
-    regex: /accessPolicy\s*===\s*"(?<value>workspace_open|approval_required)"/g,
+    regex:
+      /accessPolicy\s*(?:===|!==)\s*"(?<value>workspace_open|approval_required)"/g,
   },
   {
     kind: "raw identity match state comparison",
     regex:
-      /match\.state\s*===\s*"(?<value>same_workspace_member|friend|pending_request|requestable|existing|available|approval_required|pending_approval)"/g,
+      /match\.state\s*(?:===|!==)\s*"(?<value>same_workspace_member|friend|pending_request|requestable|existing|available|approval_required|pending_approval)"/g,
+  },
+  {
+    // Any-receiver guard for the identity-search match-state enum. These four
+    // values are unique to IDENTITY_SEARCH_MATCH_STATE, so this also catches
+    // comparisons whose receiver is a bare `state` (e.g. the mobile
+    // contact-search screen) rather than `match.state`.
+    kind: "raw identity match-state literal (any receiver)",
+    regex:
+      /(?:===|!==)\s*"(?<value>same_workspace_member|friend|pending_request|requestable)"/g,
   },
   {
     kind: "raw direct state comparison",
     regex:
-      /directState\.status\s*===\s*"(?<value>existing|available|approval_required|pending_approval)"/g,
+      /directState\.status\s*(?:===|!==)\s*"(?<value>existing|available|approval_required|pending_approval)"/g,
   },
   {
+    // Broadened beyond the `conversation.kind` receiver: the values group /
+    // direct are unique to the conversation-kind enum, so `row.kind`,
+    // `conversationRow.kind`, and bare `kind` comparisons are caught too.
     kind: "raw conversation kind comparison",
-    regex: /conversation\.kind\s*===\s*"(?<value>group|direct)"/g,
+    regex: /\bkind\s*(?:===|!==)\s*"(?<value>group|direct)"/g,
   },
   {
     // Regression guard for the conversation-type refactor: the `boundary` axis
@@ -115,7 +128,7 @@ const checks = [
   },
   {
     kind: "raw model-group grant status comparison",
-    regex: /grant\.status\s*===\s*"(?<value>active|revoked)"/g,
+    regex: /grant\.status\s*(?:===|!==)\s*"(?<value>active|revoked)"/g,
   },
   {
     kind: "raw z.enum business values",
