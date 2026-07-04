@@ -71,10 +71,15 @@ export const livenessDot = (online?: boolean) =>
   online ? "bg-emerald-500" : "bg-muted-foreground/40"
 
 // ── AXIS 3: run-state (agent activity) ───────────────────────────────────────
+// Restrained (impeccable quieter · 10% rule): a status DOT + a muted label, no
+// filled pills. Color is reserved for the two things that matter — 需要处理
+// (amber) and 出错 (red); running is conveyed by MOTION, not color; everything
+// else is neutral.
 export interface RunMeta {
   label: string
-  className: string
+  dot: string
   pulse: boolean
+  danger: boolean
 }
 export function runStateMeta(
   state: RuntimeState | "host_offline" | "host_untrusted" | "unbound"
@@ -83,62 +88,67 @@ export function runStateMeta(
     case "running":
       return {
         label: "运行中",
-        className: "border-blue-500/30 bg-blue-500/10 text-blue-600",
+        dot: "bg-foreground/40",
         pulse: true,
+        danger: false,
       }
     case "plan_drafting":
       return {
         label: "拟定计划中",
-        className: "border-blue-500/30 bg-blue-500/10 text-blue-600",
+        dot: "bg-foreground/40",
         pulse: true,
+        danger: false,
       }
     case "waiting_user_input":
       return {
         label: "等待输入",
-        className: "border-amber-500/30 bg-amber-500/10 text-amber-600",
+        dot: "bg-amber-500",
         pulse: true,
+        danger: false,
       }
     case "waiting_plan_approval":
       return {
         label: "待批准计划",
-        className: "border-amber-500/30 bg-amber-500/10 text-amber-600",
+        dot: "bg-amber-500",
         pulse: true,
-      }
-    case "idle":
-      return {
-        label: "空闲",
-        className: "border-transparent bg-muted text-muted-foreground",
-        pulse: false,
+        danger: false,
       }
     case "error":
-      return {
-        label: "出错",
-        className: "border-red-500/30 bg-red-500/10 text-red-600",
-        pulse: false,
-      }
-    case "host_offline":
-      return {
-        label: "主机离线",
-        className: "border-muted-foreground/25 bg-muted text-muted-foreground",
-        pulse: false,
-      }
+      return { label: "出错", dot: "bg-red-500", pulse: false, danger: true }
     case "host_untrusted":
       return {
         label: "主机未信任",
-        className: "border-amber-500/25 bg-amber-500/10 text-amber-600",
+        dot: "bg-muted-foreground/40",
         pulse: false,
+        danger: false,
       }
     case "unbound":
       return {
         label: "未绑定",
-        className: "border-muted-foreground/25 bg-muted text-muted-foreground",
+        dot: "bg-muted-foreground/40",
         pulse: false,
+        danger: false,
+      }
+    case "host_offline":
+      return {
+        label: "主机离线",
+        dot: "bg-muted-foreground/40",
+        pulse: false,
+        danger: false,
+      }
+    case "idle":
+      return {
+        label: "空闲",
+        dot: "bg-muted-foreground/40",
+        pulse: false,
+        danger: false,
       }
     default:
       return {
         label: "离线",
-        className: "border-muted-foreground/25 bg-muted text-muted-foreground",
+        dot: "bg-muted-foreground/40",
         pulse: false,
+        danger: false,
       }
   }
 }

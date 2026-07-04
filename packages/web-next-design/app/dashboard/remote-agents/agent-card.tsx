@@ -25,11 +25,9 @@ import {
 } from "@/components/ui/tooltip"
 import {
   effectiveState,
-  livenessDot,
   runtimeKindLabel,
   shortPath,
   statusLine,
-  trustMeta,
 } from "@/lib/remote-agent-status"
 
 export function AgentCard({
@@ -47,11 +45,6 @@ export function AgentCard({
   const rs = agent.runtimeSummary
   const unread = rs?.unreadDeliveryCount ?? 0
   const convo = rs?.pendingConversationCount ?? 0
-  const live =
-    !!agent.binding &&
-    machine?.trustStatus === "active" &&
-    agent.binding.machineLifecycleState !== "offline" &&
-    machine?.lifecycleState !== "offline"
 
   return (
     <div
@@ -60,7 +53,7 @@ export function AgentCard({
         !agent.isActive && "opacity-60"
       )}
     >
-      {/* avatar + liveness + unread bubble */}
+      {/* avatar + unread bubble (color only when there IS something unread) */}
       <button
         type="button"
         onClick={() => onOpen(agent)}
@@ -69,12 +62,6 @@ export function AgentCard({
         <span className="flex size-11 items-center justify-center rounded-2xl bg-muted text-xl">
           {agent.avatarEmoji ?? "🤖"}
         </span>
-        <span
-          className={cn(
-            "absolute -right-0.5 -bottom-0.5 size-3 rounded-full border-2 border-background",
-            livenessDot(live)
-          )}
-        />
         {unread > 0 && (
           <span className="absolute -top-1.5 -right-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-medium text-white">
             {unread > 9 ? "9+" : unread}
@@ -111,15 +98,9 @@ export function AgentCard({
         <div className="mt-0.5 truncate text-xs text-muted-foreground/80">
           {agent.binding ? (
             <>
-              <span
-                className={cn(
-                  "mr-1 inline-block size-1.5 rounded-full align-middle",
-                  livenessDot(machine?.lifecycleState === "online")
-                )}
-              />
               {machine?.title ?? agent.binding.machineTitle ?? "主机"}
               {machine?.trustStatus === "pending" && (
-                <span className="ml-1 text-amber-600">· 待批准</span>
+                <span className="ml-1 text-muted-foreground/60">· 待批准</span>
               )}
               {agent.binding.localRootPath && (
                 <>
@@ -132,7 +113,7 @@ export function AgentCard({
               )}
             </>
           ) : (
-            <span className="text-amber-600">未绑定 · 去绑定</span>
+            <span className="text-muted-foreground">未绑定 · 去绑定</span>
           )}
         </div>
         <div
@@ -151,18 +132,23 @@ export function AgentCard({
         </div>
       </button>
 
-      {/* run-state pill (the one color accent) + kebab */}
+      {/* run-state: a quiet dot + muted label (color only for 需要处理 / 出错) */}
       <div className="flex shrink-0 items-center gap-1">
-        <span
-          className={cn(
-            "flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]",
-            run.className
-          )}
-        >
-          {run.pulse && (
-            <span className="size-1.5 animate-pulse rounded-full bg-current" />
-          )}
-          {run.label}
+        <span className="flex items-center gap-1.5 text-xs">
+          <span
+            className={cn(
+              "size-1.5 rounded-full",
+              run.dot,
+              run.pulse && "animate-pulse"
+            )}
+          />
+          <span
+            className={cn(
+              run.danger ? "text-red-600" : "text-muted-foreground"
+            )}
+          >
+            {run.label}
+          </span>
         </span>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
