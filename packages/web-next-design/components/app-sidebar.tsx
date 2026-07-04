@@ -13,7 +13,6 @@ import {
   Clock3,
   ContactRound,
   Cpu,
-  House,
   ImagePlus,
   Loader2,
   Link2,
@@ -64,7 +63,6 @@ import { createLogger } from "@/lib/client-logger"
 const clientLog = createLogger("web.components.app-sidebar")
 
 const mainItems = [
-  { href: "/dashboard", label: "Home", icon: House },
   { href: "/dashboard/chat", label: "Chat", icon: MessageSquare },
   { href: "/dashboard/contacts", label: "Contacts", icon: ContactRound },
   {
@@ -174,10 +172,7 @@ function NavSection({
       <SidebarGroupContent>
         <SidebarMenu>
           {items.map((item) => {
-            const active =
-              item.href === "/dashboard"
-                ? pathname === item.href
-                : isItemActive(pathname, item.href)
+            const active = isItemActive(pathname, item.href)
             const Icon = item.icon
             const badge = item.href === "/dashboard/chat" ? unreadCount : 0
 

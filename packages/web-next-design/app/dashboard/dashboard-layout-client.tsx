@@ -15,7 +15,6 @@ import {
   ContactRound,
   MessageSquare,
   Brain,
-  House,
   ShieldCheck,
   Puzzle,
   Cpu,
@@ -25,7 +24,6 @@ import {
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 
 const navItems = [
-  { href: "/dashboard", label: "Home", icon: House },
   { href: "/dashboard/chat", label: "Chat", icon: MessageSquare },
   { href: "/dashboard/contacts", label: "Contacts", icon: ContactRound },
   {
@@ -81,7 +79,7 @@ function DashboardInner({ children }: { children: ReactNode }) {
     .sort((left, right) => right.href.length - left.href.length)[0]
   const pageTitle = pathname.startsWith("/dashboard/actors")
     ? "Actors"
-    : matchedNavItem?.label || "Home"
+    : matchedNavItem?.label || "Chat"
 
   const handleLogout = () => {
     void logout().finally(() => {

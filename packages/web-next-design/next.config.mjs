@@ -90,6 +90,18 @@ const nextConfig = {
     webpackBuildWorker: false,
   },
   outputFileTracingRoot: resolve(__dirname, "..", ".."),
+  // Chat is the home surface — /dashboard forwards to it at the HTTP layer, so
+  // every post-login `router.push("/dashboard")` lands in Chat. (There is no
+  // dashboard "Home" page anymore.)
+  async redirects() {
+    return [
+      {
+        source: "/dashboard",
+        destination: "/dashboard/chat",
+        permanent: false,
+      },
+    ]
+  },
   async rewrites() {
     if (!publicApiPrefix) {
       return []
