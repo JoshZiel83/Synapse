@@ -56,6 +56,7 @@ function installed(o: {
   enabled?: boolean
   manual?: boolean
   tools?: string[]
+  body?: string
   mirrorKind?: "github" | "clawhub"
   syncStatus?: "synced" | "error" | "pending"
   upgrade?: boolean
@@ -78,7 +79,7 @@ function installed(o: {
       allowedTools: o.tools ?? [],
       effort: o.effort,
     },
-    bodyBlocks: [descBlock(o.desc)],
+    bodyBlocks: [descBlock(o.body ?? o.desc)],
     entryPath: `skills/${o.slug}/SKILL.md`,
     contentHash: `hash-${o.slug}`,
     sourceWarnings: [],
@@ -105,6 +106,7 @@ export const designInstalledSkills: InstalledSkillView[] = [
     slug: "code-review",
     name: "代码评审",
     desc: "自动审查 PR 的正确性、边界情况与风格问题。当有人请求 review 或提交代码时使用。",
+    body: "按以下顺序审查：\n1. 正确性——逻辑是否符合需求，有没有明显 bug。\n2. 边界情况——空值、越界、并发、错误处理。\n3. 风格——命名、重复、可读性。\n\n只对确有问题的地方留评论，并给出可操作的修改建议；没问题就明确说通过。",
     effort: "high",
     tags: ["工程", "评审"],
     tools: ["read", "grep"],

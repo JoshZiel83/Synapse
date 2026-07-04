@@ -1,11 +1,7 @@
 "use client"
 
-import { useParams } from "next/navigation"
-
-import { MarketplaceSkillPreviewPage } from "../../skills-client"
+import { MarketSkillDetail } from "../../skill-detail"
 
 export default function MarketplaceSkillRoutePage() {
-  const params = useParams<{ skillId: string }>()
-
-  return <MarketplaceSkillPreviewPage skillId={params.skillId} />
+  return <MarketSkillDetail />
 }

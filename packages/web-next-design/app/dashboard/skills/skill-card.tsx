@@ -65,20 +65,23 @@ function Chip({ children }: { children: React.ReactNode }) {
   )
 }
 
-function SkillIcon({
+export function SkillIcon({
   url,
   name,
   dimmed,
+  className,
 }: {
   url?: string
   name: string
   dimmed?: boolean
+  className?: string
 }) {
   return (
     <span
       className={cn(
         "flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-muted text-base font-medium text-foreground/70",
-        dimmed && "grayscale"
+        dimmed && "grayscale",
+        className
       )}
     >
       {url ? (

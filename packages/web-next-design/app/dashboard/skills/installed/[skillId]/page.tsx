@@ -1,11 +1,7 @@
 "use client"
 
-import { useParams } from "next/navigation"
-
-import { InstalledSkillConfigurationPage } from "../../skills-client"
+import { InstalledSkillDetail } from "../../skill-detail"
 
 export default function InstalledSkillRoutePage() {
-  const params = useParams<{ skillId: string }>()
-
-  return <InstalledSkillConfigurationPage skillId={params.skillId} />
+  return <InstalledSkillDetail />
 }

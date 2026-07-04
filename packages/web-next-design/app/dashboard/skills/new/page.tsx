@@ -1,7 +1,7 @@
 "use client"
 
-import { WorkspaceSkillCreationPage } from "../skills-client"
+import { SkillForm } from "../skill-form"
 
 export default function NewWorkspaceSkillRoutePage() {
-  return <WorkspaceSkillCreationPage />
+  return <SkillForm mode="new" />
 }
