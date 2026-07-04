@@ -7,7 +7,14 @@
 // the roster under pending-requests + identity-ID + QR and split it into 4 lists.
 import { useEffect, useMemo, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { ChevronRight, Inbox, Loader2, RefreshCw, Search } from "lucide-react"
+import {
+  ChevronRight,
+  Inbox,
+  Loader2,
+  Plus,
+  RefreshCw,
+  Search,
+} from "lucide-react"
 import { toast } from "sonner"
 import { api } from "@/lib/api"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
@@ -16,6 +23,7 @@ import { cn, isFriend, type Entry, type TargetType } from "./contact-shared"
 import { ContactList } from "./contact-list"
 import { ContactDetail } from "./contact-detail"
 import { RequestsInbox } from "./requests-inbox"
+import { IdentitySheet } from "./identity-sheet"
 
 type TargetFacet = TargetType | "all"
 type RelationFacet = "all" | "workspace" | "friend"
@@ -38,6 +46,7 @@ export default function ContactsHub() {
   const [starredOnly, setStarredOnly] = useState(false)
   const [selected, setSelected] = useState<Entry>()
   const [pane, setPane] = useState<"detail" | "requests">("detail")
+  const [identityOpen, setIdentityOpen] = useState(false)
 
   const [starred, setStarred] = useState<Set<string>>(() => {
     if (typeof window === "undefined") return new Set()
@@ -129,16 +138,26 @@ export default function ContactsHub() {
       <div className="flex min-h-0 flex-col border-r">
         <div className="flex items-center justify-between px-4 pt-4 pb-2">
           <h1 className="text-lg font-semibold">通讯录</h1>
-          <button
-            type="button"
-            onClick={() => hubQuery.refetch()}
-            aria-label="刷新"
-            className="rounded-lg p-1.5 text-muted-foreground hover:bg-accent"
-          >
-            <RefreshCw
-              className={cn("size-4", hubQuery.isFetching && "animate-spin")}
-            />
-          </button>
+          <div className="flex items-center gap-0.5">
+            <button
+              type="button"
+              onClick={() => hubQuery.refetch()}
+              aria-label="刷新"
+              className="rounded-lg p-1.5 text-muted-foreground hover:bg-accent"
+            >
+              <RefreshCw
+                className={cn("size-4", hubQuery.isFetching && "animate-spin")}
+              />
+            </button>
+            <button
+              type="button"
+              onClick={() => setIdentityOpen(true)}
+              aria-label="添加联系人 / 我的身份"
+              className="rounded-lg p-1.5 text-muted-foreground hover:bg-accent"
+            >
+              <Plus className="size-4" />
+            </button>
+          </div>
         </div>
 
         <div className="px-4 pb-2">
@@ -277,6 +296,14 @@ export default function ContactsHub() {
           </div>
         )}
       </div>
+
+      {workspaceId && (
+        <IdentitySheet
+          open={identityOpen}
+          onOpenChange={setIdentityOpen}
+          workspaceId={workspaceId}
+        />
+      )}
     </div>
   )
 }

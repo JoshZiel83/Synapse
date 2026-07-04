@@ -72,11 +72,15 @@ export function messageCtaLabel(s: DirectStatus): {
   }
 }
 
+type AvatarLike = Pick<
+  Entry,
+  "avatarUrl" | "avatarEmoji" | "targetType" | "title"
+>
 export function ContactAvatar({
   entry,
   size = 40,
 }: {
-  entry: Entry
+  entry: AvatarLike
   size?: number
 }) {
   const px = { width: size, height: size }

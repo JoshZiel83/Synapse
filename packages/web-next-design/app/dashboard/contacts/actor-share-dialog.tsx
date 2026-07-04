@@ -1,17 +1,23 @@
 "use client"
 
-// Actor QR share — an ownership-scoped sharing card reachable from the actor's
-// contact detail (in the full design this folds into the actor edit sheet's
-// Config tab; surfaced here so it stays findable). Renders the relationship QR
-// from the actor's profile token, plus its identity ID + approval mode.
+// Actor "分享与访问" — the ownership-scoped Config surface for an owned actor
+// (the design's actor-edit Config tab), reachable from the actor contact detail.
+// Renders the relationship QR + the sharing/access settings (approval mode,
+// searchability, public) editable via updateActorRelationshipProfile. Core
+// identity (name/role/specialties/docs) stays on the /actors/:id/edit route.
 import { useEffect, useState } from "react"
 import QRCode from "qrcode"
 import { buildMobileScanUrl } from "@synapse/shared"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { Loader2 } from "lucide-react"
+import { toast } from "sonner"
 import { api } from "@/lib/api"
+import { Button } from "@/components/ui/button"
+import { Switch } from "@/components/ui/switch"
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
@@ -29,6 +35,7 @@ export function ActorShareDialog({
   actorId: string
   actorName: string
 }) {
+  const qc = useQueryClient()
   const { data: profile } = useQuery({
     queryKey: ["actor-profile", workspaceId, actorId],
     queryFn: () => api.getActorRelationshipProfile(workspaceId, actorId),
@@ -36,57 +43,125 @@ export function ActorShareDialog({
   })
 
   const [qr, setQr] = useState<string | null>(null)
+  const [manual, setManual] = useState(true)
+  const [searchable, setSearchable] = useState(true)
+  const [publicShared, setPublicShared] = useState(false)
+  const [saving, setSaving] = useState(false)
+
   useEffect(() => {
-    if (!open || !profile?.qrToken) {
-      setQr(null)
-      return
-    }
+    if (!open || !profile) return
+    setManual(profile.approvalMode === "manual")
+    setSearchable(profile.identitySearchEnabled)
+    setPublicShared(!!profile.isPublicShared)
     void QRCode.toDataURL(
       buildMobileScanUrl({
         origin: window.location.origin,
         kind: "relationship",
         token: profile.qrToken,
       }),
-      { width: 220, margin: 1 }
+      { width: 200, margin: 1 }
     ).then(setQr)
-  }, [open, profile?.qrToken])
+  }, [open, profile])
+
+  const dirty =
+    !!profile &&
+    (manual !== (profile.approvalMode === "manual") ||
+      searchable !== profile.identitySearchEnabled ||
+      publicShared !== !!profile.isPublicShared)
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      await api.updateActorRelationshipProfile(workspaceId, actorId, {
+        approvalMode: manual ? "manual" : "auto",
+        identitySearchEnabled: searchable,
+        isPublicShared: publicShared,
+      })
+      qc.invalidateQueries({
+        queryKey: ["actor-profile", workspaceId, actorId],
+      })
+      toast.success("已保存")
+    } catch {
+      toast.error("保存失败")
+    } finally {
+      setSaving(false)
+    }
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-xs">
+      <DialogContent className="sm:max-w-sm">
         <DialogHeader>
-          <DialogTitle>分享 {actorName}</DialogTitle>
+          <DialogTitle>分享与访问 · {actorName}</DialogTitle>
         </DialogHeader>
-        <div className="flex flex-col items-center gap-3">
-          {qr ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={qr}
-              alt="二维码"
-              width={220}
-              height={220}
-              className="rounded-lg border"
+        <div className="space-y-4">
+          <div className="flex flex-col items-center gap-2">
+            {qr ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={qr}
+                alt="二维码"
+                width={200}
+                height={200}
+                className="rounded-lg border"
+              />
+            ) : (
+              <div className="size-[200px] animate-pulse rounded-lg bg-muted" />
+            )}
+            <p className="text-center text-xs text-muted-foreground">
+              扫码添加「{actorName}」· ID {profile?.identityId ?? "…"}
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Row
+              label="加为联系人需验证"
+              hint={manual ? "对方需申请" : "自动通过"}
+              checked={manual}
+              onChange={setManual}
             />
-          ) : (
-            <div className="size-[220px] animate-pulse rounded-lg bg-muted" />
-          )}
-          <p className="text-center text-xs text-muted-foreground">
-            扫码添加「{actorName}」为联系人
-          </p>
-          {profile && (
-            <div className="w-full space-y-1 rounded-lg border bg-muted/20 px-3 py-2 text-xs">
-              <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">身份 ID</span>
-                <code className="font-mono">{profile.identityId}</code>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">加为联系人需验证</span>
-                <span>{profile.approvalMode === "manual" ? "开" : "关"}</span>
-              </div>
-            </div>
-          )}
+            <Row
+              label="允许被身份 ID 搜索到"
+              checked={searchable}
+              onChange={setSearchable}
+            />
+            <Row
+              label="公开分享"
+              hint="任何人可通过链接添加"
+              checked={publicShared}
+              onChange={setPublicShared}
+            />
+          </div>
         </div>
+        <DialogFooter>
+          <Button onClick={save} disabled={saving || !dirty}>
+            {saving && <Loader2 className="mr-1 size-4 animate-spin" />}
+            保存
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+function Row({
+  label,
+  hint,
+  checked,
+  onChange,
+}: {
+  label: string
+  hint?: string
+  checked: boolean
+  onChange: (v: boolean) => void
+}) {
+  return (
+    <label className="flex items-center justify-between rounded-lg border p-3 text-sm">
+      <div>
+        <div>{label}</div>
+        {hint && <div className="text-xs text-muted-foreground">{hint}</div>}
+      </div>
+      <Switch checked={checked} onCheckedChange={onChange} />
+    </label>
   )
 }

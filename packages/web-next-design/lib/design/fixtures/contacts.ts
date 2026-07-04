@@ -312,3 +312,48 @@ export function designActorProfile(actorId: string) {
     isPublicShared: false,
   }
 }
+
+// ── My identity profile + identity search (header "+" add/identity sheet) ─────
+export const designMyProfile = {
+  subjectType: "workspace_member" as const,
+  approvalMode: "manual" as const,
+  qrToken: "qr-me-linmo",
+  qrUrl: "https://app.synapse/scan/relationship/qr-me-linmo",
+  identityId: "linmo-design",
+  identitySearchEnabled: true,
+  requiresContactApproval: true,
+  isPublicShared: false,
+}
+
+export function designIdentitySearch(query: string) {
+  const q = query.trim()
+  if (q.length < 2) {
+    return { query: q, outcome: "empty" as const, matches: [] }
+  }
+  return {
+    query: q,
+    outcome: "found" as const,
+    matches: [
+      {
+        profileId: "prof-mochen",
+        targetType: "workspace_member" as const,
+        title: "墨尘",
+        subtitle: "研究工作区 · 产品",
+        workspace: RESEARCH,
+        userId: "user-mochen",
+        state: "requestable" as const,
+      },
+      {
+        profileId: "prof-sage",
+        targetType: "actor" as const,
+        title: "顾问 Sage",
+        subtitle: "策略咨询 Actor",
+        avatarEmoji: "🦉",
+        workspace: RESEARCH,
+        actorId: "act-sage",
+        state: "pending_request" as const,
+        requestId: "aar-sage",
+      },
+    ],
+  }
+}
