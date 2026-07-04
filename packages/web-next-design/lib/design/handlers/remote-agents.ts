@@ -1,29 +1,38 @@
 import {
-  RemoteAgentListResponseSchema,
   RemoteAgentResponseSchema,
   RemoteAgentMachinePairingSessionResponseSchema,
-  RemoteAgentMachineListResponseSchema,
   RemoteAgentMachineDetailResponseSchema,
   RemoteAgentGroupTaskGrantsResponseSchema,
   WorkspaceResourceSuccessViewSchema,
 } from "@synapse/shared/schemas"
 import { mock } from "../faker-setup"
+import {
+  designRemoteAgents,
+  designMachines,
+  findRemoteAgent,
+} from "../fixtures/remote-agents"
 import type { DesignHandlers } from "./_types"
 
 // Remote agents: list / detail / lifecycle mutations, machine pairing + machine
-// list/detail, and group-task grants. These drive the remote-agents console
-// (agent roster, machine pairing flow, per-agent grant editor).
+// list/detail, and group-task grants. Curated fixtures (a real Claude Code /
+// Codex fleet across paired machines) replace the random faker output; pairing +
+// machine-detail + grants stay mocked for Phase 2.
 export const remoteAgentsHandlers = {
-  getRemoteAgents: async () => mock(RemoteAgentListResponseSchema),
-  getRemoteAgent: async () => mock(RemoteAgentResponseSchema),
-  createRemoteAgent: async () => mock(RemoteAgentResponseSchema),
-  updateRemoteAgent: async () => mock(RemoteAgentResponseSchema),
+  getRemoteAgents: async () => ({ remoteAgents: designRemoteAgents }),
+  getRemoteAgent: async (_ws: string, id: string) => ({
+    remoteAgent: findRemoteAgent(id) ?? designRemoteAgents[0],
+  }),
+  createRemoteAgent: async () => ({ remoteAgent: designRemoteAgents[0] }),
+  updateRemoteAgent: async (_ws: string, id: string) => ({
+    remoteAgent: findRemoteAgent(id) ?? designRemoteAgents[0],
+  }),
   deleteRemoteAgent: async () => mock(WorkspaceResourceSuccessViewSchema),
-  bindRemoteAgent: async () => mock(RemoteAgentResponseSchema),
+  bindRemoteAgent: async (_ws: string, id: string) => ({
+    remoteAgent: findRemoteAgent(id) ?? designRemoteAgents[0],
+  }),
   createRemoteAgentMachinePairingSession: async () =>
     mock(RemoteAgentMachinePairingSessionResponseSchema),
-  getRemoteAgentMachines: async () =>
-    mock(RemoteAgentMachineListResponseSchema),
+  getRemoteAgentMachines: async () => ({ machines: designMachines }),
   getRemoteAgentMachine: async () =>
     mock(RemoteAgentMachineDetailResponseSchema),
   getRemoteAgentGroupTaskGrants: async () =>
