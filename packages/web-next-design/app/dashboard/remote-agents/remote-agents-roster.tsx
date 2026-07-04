@@ -5,9 +5,10 @@
 // 运行中 / 空闲 / 离线未就绪); machines are context (a chip per agent) with trust +
 // pairing living in a secondary view (Phase 2). Silent background refetch.
 import { useMemo, useState } from "react"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useQuery } from "@tanstack/react-query"
-import { Loader2, Plus, Search, Link2 } from "lucide-react"
+import { Loader2, Plus, Search, Link2, Server } from "lucide-react"
 import type { RemoteAgentView, RemoteAgentMachineView } from "@synapse/shared"
 import { api } from "@/lib/api"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
@@ -93,7 +94,16 @@ export default function RemoteAgentsRoster() {
             让 Claude Code / Codex 作为团队成员在你的机器上干活
           </p>
         </div>
-        <div className="flex shrink-0 gap-2">
+        <div className="flex shrink-0 items-center gap-2">
+          <Button variant="ghost" asChild className="text-muted-foreground">
+            <Link href="/dashboard/remote-agents/machines">
+              <Server className="mr-1 size-4" />
+              主机
+              {machinesQuery.data?.machines.length
+                ? `（${machinesQuery.data.machines.length}）`
+                : ""}
+            </Link>
+          </Button>
           <Button variant="outline" onClick={() => setPairingOpen(true)}>
             <Link2 className="mr-1 size-4" />
             配对主机

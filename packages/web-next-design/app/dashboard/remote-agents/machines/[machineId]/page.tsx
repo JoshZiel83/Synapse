@@ -1,384 +1,240 @@
 "use client"
 
+// Machine (daemon/host) detail — summary header (trust · liveness · last-seen ·
+// hosted counts), the runtime catalog (which agent binaries are installed + their
+// status), and the hosted-agent list (reconciled: a child agent under an offline/
+// untrusted host never reads live-green). Trust mutation has no API — displayed,
+// not faked. A collapsed debug block holds ids/timestamps.
+import { useState } from "react"
 import Link from "next/link"
 import { useParams } from "next/navigation"
-import { useEffect, useState } from "react"
-import { ArrowLeft, RefreshCcw, Server } from "lucide-react"
-import { RuntimeKindIcon } from "@/components/runtime-kind-icon"
-import { REMOTE_AGENT_BINDING_STATUS } from "@synapse/shared"
-
+import { useQuery } from "@tanstack/react-query"
+import { ArrowLeft, ChevronDown, ChevronRight, Loader2 } from "lucide-react"
+import type { RemoteAgentRuntimeKind } from "@synapse/shared"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
-import type {
-  RemoteAgentMachineDetailView,
-  RemoteAgentMachineTrustStatus,
-  RemoteAgentRuntimeSummaryView,
-  RemoteAgentRuntimeStatus,
-} from "@/lib/api"
 import { api } from "@/lib/api"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
+import { cn } from "@/lib/utils"
+import { RuntimeKindIcon } from "@/components/runtime-kind-icon"
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import { Skeleton } from "@/components/ui/skeleton"
-import { toast } from "sonner"
+  formatRelative,
+  livenessDot,
+  runtimeKindLabel,
+  shortPath,
+  trustMeta,
+} from "@/lib/remote-agent-status"
 
-import { createLogger } from "@/lib/client-logger"
-
-const clientLog = createLogger(
-  "web.dashboard.remote-agents.machines.[machineId]"
-)
-
-function formatDateTime(value?: string) {
-  if (!value) return "Never"
-  return new Date(value).toLocaleString()
+const CATALOG_META: Record<string, { label: string; className: string }> = {
+  available: { label: "可用", className: "text-emerald-600" },
+  missing_binary: { label: "未安装", className: "text-muted-foreground" },
+  broken_path: { label: "路径无效", className: "text-amber-600" },
+  unsupported_platform: {
+    label: "平台不支持",
+    className: "text-muted-foreground",
+  },
+  runtime_error: { label: "运行时错误", className: "text-red-600" },
 }
 
-function trustVariant(status?: RemoteAgentMachineTrustStatus) {
-  switch (status) {
-    case "active":
-      return "secondary"
-    case "blocked":
-    case "revoked":
-      return "destructive"
-    default:
-      return "outline"
-  }
-}
-
-function runtimeVariant(status?: RemoteAgentRuntimeStatus) {
-  switch (status) {
-    case "available":
-      return "secondary"
-    case "broken_path":
-    case "missing_binary":
-    case "runtime_error":
-      return "destructive"
-    default:
-      return "outline"
-  }
-}
-
-function runtimeLabel(value: string) {
-  return value === "claude_code" ? "Claude Code" : "Codex CLI"
-}
-
-function sessionStateVariant(state?: RemoteAgentRuntimeSummaryView["state"]) {
-  switch (state) {
-    case "running":
-    case "plan_drafting":
-      return "secondary"
-    case "waiting_user_input":
-    case "waiting_plan_approval":
-      return "default"
-    case "error":
-      return "destructive"
-    default:
-      return "outline"
-  }
-}
-
-function sessionStateLabel(state?: RemoteAgentRuntimeSummaryView["state"]) {
-  switch (state) {
-    case "waiting_user_input":
-      return "waiting input"
-    case "waiting_plan_approval":
-      return "waiting approval"
-    case "plan_drafting":
-      return "planning"
-    default:
-      return state || "offline"
-  }
-}
-
-export default function RemoteAgentMachineDetailPage() {
-  const params = useParams<{ machineId: string }>()
+export default function MachineDetailPage() {
   const { workspaceId } = useWorkspace()
-  const machineId = Array.isArray(params?.machineId)
-    ? params.machineId[0]
-    : params?.machineId
-  const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
-  const [detail, setDetail] = useState<RemoteAgentMachineDetailView | null>(
-    null
-  )
+  const params = useParams<{ machineId: string }>()
+  const id = params.machineId
+  const [debugOpen, setDebugOpen] = useState(false)
 
-  async function loadDetail(showLoading = true) {
-    if (!workspaceId || !machineId) return
-    if (showLoading) {
-      setLoading(true)
-    } else {
-      setRefreshing(true)
-    }
-    try {
-      const result = await api.getRemoteAgentMachine(workspaceId, machineId)
-      setDetail(result)
-    } catch (error) {
-      clientLog.error("Failed to load remote machine:", error)
-      toast.error(
-        error instanceof Error ? error.message : "Failed to load remote machine"
-      )
-    } finally {
-      setLoading(false)
-      setRefreshing(false)
-    }
+  const detailQuery = useQuery({
+    queryKey: ["remote-agent-machine", workspaceId, id],
+    queryFn: () => api.getRemoteAgentMachine(workspaceId!, id),
+    enabled: !!workspaceId && !!id,
+    refetchInterval: 15000,
+  })
+  const detail = detailQuery.data
+
+  if (detailQuery.isPending || !detail) {
+    return (
+      <div className="flex justify-center py-24">
+        <Loader2 className="size-5 animate-spin text-muted-foreground" />
+      </div>
+    )
   }
 
-  useEffect(() => {
-    void loadDetail()
-  }, [machineId, workspaceId])
+  const { machine, runtimeCatalog, bindings } = detail
+  const trust = trustMeta(machine.trustStatus)
+  const online = machine.lifecycleState === "online"
 
   return (
-    <div className="flex min-h-0 flex-col gap-6 px-4 py-4 lg:px-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="space-y-2">
-          <Link
-            href="/dashboard/remote-agents"
-            className="inline-flex items-center gap-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
-          >
-            <ArrowLeft className="size-4" />
-            Back to Remote Agents
-          </Link>
+    <div className="mx-auto max-w-2xl px-6 py-6">
+      <Link
+        href="/dashboard/remote-agents/machines"
+        className="mb-4 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+      >
+        <ArrowLeft className="size-4" /> 主机
+      </Link>
+
+      {/* header */}
+      <div className="flex items-start gap-3">
+        <span
+          className={cn(
+            "mt-1.5 size-2.5 shrink-0 rounded-full",
+            livenessDot(online)
+          )}
+        />
+        <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <Server className="size-5 text-muted-foreground" />
-            <h1 className="text-2xl font-semibold text-foreground">
-              {detail?.machine.title || "Remote machine"}
-            </h1>
+            <h1 className="truncate text-xl font-semibold">{machine.title}</h1>
+            <span
+              className={cn(
+                "shrink-0 rounded border px-1.5 py-0.5 text-[11px]",
+                trust.className
+              )}
+            >
+              {trust.label}
+            </span>
           </div>
-          <p className="text-sm text-muted-foreground">
-            {detail?.machine.description ||
-              "Daemon status, runtime discovery, and bound agents."}
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            {online ? "在线" : "离线"} · 活跃于{" "}
+            {formatRelative(machine.lastSeenAt)} · {bindings.length} 个 Agent ·{" "}
+            {runtimeCatalog.length} 个运行时
           </p>
+          {machine.description && (
+            <p className="text-xs text-muted-foreground/70">
+              {machine.description}
+            </p>
+          )}
         </div>
-        <Button
-          variant="outline"
-          className="rounded-full"
-          onClick={() => void loadDetail(false)}
-          disabled={refreshing}
-        >
-          <RefreshCcw className="mr-2 size-4" />
-          {refreshing ? "Refreshing..." : "Refresh"}
-        </Button>
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
-        <Card className="rounded-[28px] shadow-sm">
-          <CardHeader>
-            <CardTitle>Machine overview</CardTitle>
-            <CardDescription>
-              Workspace-scoped daemon status and last heartbeat information.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {loading || !detail ? (
-              <>
-                <Skeleton className="h-16 rounded-2xl" />
-                <Skeleton className="h-16 rounded-2xl" />
-                <Skeleton className="h-16 rounded-2xl" />
-              </>
-            ) : (
-              <>
-                <div className="flex flex-wrap gap-2">
-                  <Badge variant={trustVariant(detail.machine.trustStatus)}>
-                    {detail.machine.trustStatus}
-                  </Badge>
-                  <Badge
-                    variant={
-                      detail.machine.lifecycleState === "online"
-                        ? "secondary"
-                        : "outline"
-                    }
-                  >
-                    {detail.machine.lifecycleState || "offline"}
-                  </Badge>
-                </div>
-                <div className="grid gap-3 rounded-[24px] border border-border/70 p-4 text-sm text-muted-foreground">
-                  <div>Machine ID: {detail.machine.id}</div>
-                  <div>
-                    Last seen: {formatDateTime(detail.machine.lastSeenAt)}
-                  </div>
-                  <div>Created: {formatDateTime(detail.machine.createdAt)}</div>
-                  <div>Updated: {formatDateTime(detail.machine.updatedAt)}</div>
-                  <div>Bindings: {detail.bindings.length}</div>
-                </div>
-              </>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card className="rounded-[28px] shadow-sm">
-          <CardHeader>
-            <CardTitle>Runtime catalog</CardTitle>
-            <CardDescription>
-              What the daemon most recently detected on this machine.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            {loading || !detail ? (
-              <>
-                <Skeleton className="h-24 rounded-[24px]" />
-                <Skeleton className="h-24 rounded-[24px]" />
-              </>
-            ) : detail.runtimeCatalog.length > 0 ? (
-              detail.runtimeCatalog.map((entry) => (
+      <div className="mt-6 space-y-5">
+        {/* runtime catalog */}
+        <section>
+          <h2 className="mb-2 text-sm font-medium">运行时清单</h2>
+          <div className="divide-y rounded-lg border">
+            {runtimeCatalog.map((c) => {
+              const meta = CATALOG_META[c.status] ?? {
+                label: c.status,
+                className: "text-muted-foreground",
+              }
+              return (
                 <div
-                  key={`${entry.runtimeKind}:${entry.executablePath || "default"}`}
-                  className="rounded-[24px] border border-border/70 p-4"
+                  key={c.runtimeKind}
+                  className="flex items-center gap-3 px-3 py-2.5 text-sm"
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-1.5 text-base font-semibold text-foreground">
-                        <RuntimeKindIcon
-                          kind={entry.runtimeKind}
-                          className="size-4"
-                        />
-                        {runtimeLabel(entry.runtimeKind)}
-                      </div>
-                      <div className="text-sm text-muted-foreground">
-                        {entry.executablePath || "No executable path reported"}
-                      </div>
-                    </div>
-                    <Badge variant={runtimeVariant(entry.status)}>
-                      {entry.status}
-                    </Badge>
-                  </div>
-                  <div className="mt-3 grid gap-2 text-sm text-muted-foreground">
-                    <div>Version: {entry.version || "Unknown"}</div>
-                    <div>Last seen: {formatDateTime(entry.lastSeenAt)}</div>
-                    {entry.lastError ? (
-                      <div>Error: {entry.lastError}</div>
-                    ) : null}
-                  </div>
+                  <RuntimeKindIcon
+                    kind={c.runtimeKind as RemoteAgentRuntimeKind}
+                    className="size-4 text-muted-foreground/70"
+                  />
+                  <span className="font-medium">
+                    {runtimeKindLabel(c.runtimeKind)}
+                  </span>
+                  {c.version && (
+                    <span className="text-xs text-muted-foreground">
+                      v{c.version}
+                    </span>
+                  )}
+                  <span className="ml-auto flex items-center gap-1.5">
+                    <span
+                      className={cn(
+                        "size-1.5 rounded-full",
+                        c.status === "available"
+                          ? "bg-emerald-500"
+                          : c.status === "runtime_error"
+                            ? "bg-red-500"
+                            : "bg-muted-foreground/40"
+                      )}
+                    />
+                    <span className={cn("text-xs", meta.className)}>
+                      {meta.label}
+                    </span>
+                  </span>
                 </div>
-              ))
-            ) : (
-              <div className="rounded-[24px] border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
-                No runtime catalog received yet. Start the daemon once to
-                populate this.
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+              )
+            })}
+          </div>
+        </section>
 
-      <Card className="rounded-[28px] shadow-sm">
-        <CardHeader>
-          <CardTitle>Bound agents</CardTitle>
-          <CardDescription>
-            Active RemoteAgents currently attached to this machine.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          {loading || !detail ? (
-            <>
-              <Skeleton className="h-24 rounded-[24px]" />
-              <Skeleton className="h-24 rounded-[24px]" />
-            </>
-          ) : detail.bindings.length > 0 ? (
-            detail.bindings.map((binding) => (
-              <Link
-                key={binding.remoteAgentId}
-                href={`/dashboard/remote-agents/agents/${binding.remoteAgentId}`}
-                className="rounded-[24px] border border-border/70 p-4 transition-colors hover:bg-accent/40"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="space-y-1">
-                    <div className="text-base font-semibold text-foreground">
-                      {binding.displayName}
-                    </div>
-                    <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                      <RuntimeKindIcon
-                        kind={binding.runtimeKind}
-                        className="size-3.5"
-                      />
-                      {runtimeLabel(binding.runtimeKind)}
-                    </div>
-                  </div>
-                  <Badge
-                    variant={
-                      binding.status === REMOTE_AGENT_BINDING_STATUS.ACTIVE
-                        ? "secondary"
-                        : "outline"
-                    }
+        {/* hosted agents (reconciled) */}
+        <section>
+          <h2 className="mb-2 text-sm font-medium">
+            托管的 Agent（{bindings.length}）
+          </h2>
+          {bindings.length === 0 ? (
+            <p className="rounded-lg border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">
+              这台主机还没有绑定 Agent
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {bindings.map((bd) => {
+                // reconcile: child status defers to the host
+                const hostDown = !online || machine.trustStatus !== "active"
+                const label = hostDown
+                  ? online
+                    ? "主机未信任"
+                    : "主机离线"
+                  : bd.runtimeSummary?.state === "running"
+                    ? "运行中"
+                    : bd.runtimeSummary?.state === "error"
+                      ? "出错"
+                      : "空闲"
+                return (
+                  <Link
+                    key={bd.remoteAgentId}
+                    href={`/dashboard/remote-agents/agents/${bd.remoteAgentId}`}
+                    className="flex items-center gap-3 rounded-xl border p-3 transition-colors hover:border-foreground/20"
                   >
-                    {binding.status}
-                  </Badge>
-                </div>
-                {binding.runtimeSummary ? (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <Badge
-                      variant={sessionStateVariant(
-                        binding.runtimeSummary.state
+                    <RuntimeKindIcon
+                      kind={bd.runtimeKind as RemoteAgentRuntimeKind}
+                      className="size-4 shrink-0 text-muted-foreground/70"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium">
+                        {bd.displayName}
+                      </div>
+                      <div className="truncate text-xs text-muted-foreground">
+                        {bd.localRootPath ? (
+                          <code className="font-mono text-muted-foreground/60">
+                            {shortPath(bd.localRootPath)}
+                          </code>
+                        ) : (
+                          "仓库根目录（默认）"
+                        )}
+                      </div>
+                    </div>
+                    <span
+                      className={cn(
+                        "shrink-0 text-xs",
+                        label === "出错"
+                          ? "text-red-600"
+                          : "text-muted-foreground"
                       )}
                     >
-                      {sessionStateLabel(binding.runtimeSummary.state)}
-                    </Badge>
-                    <Badge variant="outline">
-                      {binding.runtimeSummary.unreadDeliveryCount} unread
-                    </Badge>
-                    <Badge variant="outline">
-                      {binding.runtimeSummary.pendingConversationCount} pending
-                      conversations
-                    </Badge>
-                  </div>
-                ) : null}
-                <div className="mt-3 grid gap-2 text-sm text-muted-foreground">
-                  <div>
-                    Runtime path: {binding.runtimePath || "Default detection"}
-                  </div>
-                  <div>
-                    Local root: {binding.localRootPath || "Not configured"}
-                  </div>
-                  {binding.runtimeSummary?.sessionId ? (
-                    <div>Session ID: {binding.runtimeSummary.sessionId}</div>
-                  ) : null}
-                  {binding.runtimeSummary?.statusText ? (
-                    <div>Status: {binding.runtimeSummary.statusText}</div>
-                  ) : null}
-                  {binding.runtimeSummary?.capabilities ? (
-                    <div>
-                      Capabilities:{" "}
-                      {[
-                        binding.runtimeSummary.capabilities
-                          .supportsRequestUserInput
-                          ? "request_user_input"
-                          : null,
-                        binding.runtimeSummary.capabilities.supportsPlanMode
-                          ? "plan_mode"
-                          : null,
-                        binding.runtimeSummary.capabilities
-                          .supportsPersistentSession
-                          ? "persistent_session"
-                          : null,
-                        binding.runtimeSummary.capabilities.supportsStructuredIo
-                          ? "structured_io"
-                          : null,
-                        binding.runtimeSummary.capabilities
-                          .supportsCodexAppServer
-                          ? "codex_app_server"
-                          : null,
-                      ]
-                        .filter(Boolean)
-                        .join(", ") || "none reported"}
-                    </div>
-                  ) : null}
-                  {binding.runtimeSummary?.lastError ? (
-                    <div>Error: {binding.runtimeSummary.lastError}</div>
-                  ) : null}
-                </div>
-              </Link>
-            ))
-          ) : (
-            <div className="rounded-[24px] border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
-              Nothing is bound to this machine yet.
+                      {label}
+                    </span>
+                    <ChevronRight className="size-4 shrink-0 text-muted-foreground/40" />
+                  </Link>
+                )
+              })}
             </div>
           )}
-        </CardContent>
-      </Card>
+        </section>
+
+        {/* debug */}
+        <div className="rounded-lg border">
+          <button
+            onClick={() => setDebugOpen((o) => !o)}
+            className="flex w-full items-center gap-1 px-3 py-2.5 text-sm font-medium text-muted-foreground"
+          >
+            <ChevronDown
+              className={cn("size-4 transition", debugOpen && "rotate-180")}
+            />{" "}
+            调试
+          </button>
+          {debugOpen && (
+            <div className="space-y-1 border-t p-3 font-mono text-[11px] text-muted-foreground">
+              <div>id: {machine.id}</div>
+              <div>createdAt: {machine.createdAt ?? "—"}</div>
+              <div>updatedAt: {machine.updatedAt ?? "—"}</div>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
