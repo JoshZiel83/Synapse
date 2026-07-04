@@ -5,7 +5,7 @@
 // and a right-edge index rail. Filters shrink this same list in place — they
 // never fork it back into the backend's 4 buckets.
 import { useMemo, useRef } from "react"
-import { Star } from "lucide-react"
+import { Check, Star } from "lucide-react"
 import {
   cn,
   ContactAvatar,
@@ -26,12 +26,21 @@ export function ContactList({
   selectedKey,
   onSelect,
   onToggleStar,
+  // select mode (the start-conversation picker): same list, a round-check
+  // affordance replaces the star and the row toggles selection instead of
+  // navigating. Omitting these keeps browse mode unchanged.
+  selectable = false,
+  selectedKeys,
+  onToggle,
 }: {
   entries: Entry[]
   starred: Set<string>
   selectedKey?: string
   onSelect: (e: Entry) => void
   onToggleStar: (e: Entry) => void
+  selectable?: boolean
+  selectedKeys?: Set<string>
+  onToggle?: (e: Entry) => void
 }) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -87,14 +96,19 @@ export function ContactList({
               const badge = targetBadge(e.targetType)
               const dm = directMeta(e.directState.status)
               const isStar = starred.has(k)
+              const isChecked = !!selectedKeys?.has(k)
+              const disabled =
+                selectable && e.directState.status === "pending_approval"
               return (
                 <button
                   key={k + sec.key}
                   type="button"
-                  onClick={() => onSelect(e)}
+                  disabled={disabled}
+                  onClick={() => (selectable ? onToggle?.(e) : onSelect(e))}
                   className={cn(
                     "group flex w-full items-center gap-3 rounded-2xl px-3 py-2 text-left transition-colors hover:bg-accent/50",
-                    k === selectedKey && "bg-accent"
+                    (selectable ? isChecked : k === selectedKey) && "bg-accent",
+                    disabled && "opacity-45 hover:bg-transparent"
                   )}
                 >
                   <span
@@ -131,30 +145,43 @@ export function ContactList({
                       </span>
                     )}
                     {dm.icon && <dm.icon className={cn("size-3.5", dm.tone)} />}
-                    <span
-                      role="button"
-                      tabIndex={-1}
-                      aria-label={isStar ? "取消星标" : "星标"}
-                      onClick={(ev) => {
-                        ev.stopPropagation()
-                        onToggleStar(e)
-                      }}
-                      className={cn(
-                        "cursor-pointer rounded p-0.5 transition-opacity",
-                        isStar
-                          ? "opacity-100"
-                          : "opacity-0 group-hover:opacity-100"
-                      )}
-                    >
-                      <Star
+                    {selectable ? (
+                      <span
                         className={cn(
-                          "size-3.5",
-                          isStar
-                            ? "fill-amber-400 text-amber-400"
-                            : "text-muted-foreground/50"
+                          "flex size-5 items-center justify-center rounded-full border transition-colors",
+                          isChecked
+                            ? "border-primary bg-primary text-primary-foreground"
+                            : "border-muted-foreground/40 text-transparent"
                         )}
-                      />
-                    </span>
+                      >
+                        <Check className="size-3.5" />
+                      </span>
+                    ) : (
+                      <span
+                        role="button"
+                        tabIndex={-1}
+                        aria-label={isStar ? "取消星标" : "星标"}
+                        onClick={(ev) => {
+                          ev.stopPropagation()
+                          onToggleStar(e)
+                        }}
+                        className={cn(
+                          "cursor-pointer rounded p-0.5 transition-opacity",
+                          isStar
+                            ? "opacity-100"
+                            : "opacity-0 group-hover:opacity-100"
+                        )}
+                      >
+                        <Star
+                          className={cn(
+                            "size-3.5",
+                            isStar
+                              ? "fill-amber-400 text-amber-400"
+                              : "text-muted-foreground/50"
+                          )}
+                        />
+                      </span>
+                    )}
                   </div>
                 </button>
               )

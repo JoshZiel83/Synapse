@@ -122,13 +122,24 @@ export default function ChatPage() {
     })
   }
 
-  async function handleCreateConversation(actorIds: string[]) {
+  async function handleCreateConversation(
+    mode: "direct" | "group",
+    ids: {
+      actorIds: string[]
+      workspaceMemberIds: string[]
+      remoteAgentIds: string[]
+    }
+  ) {
     if (!workspaceId) return
     try {
       const conversationId = await createWorkspaceThread(
         workspaceId,
-        "group",
-        actorIds
+        mode,
+        ids.actorIds,
+        {
+          workspaceMemberIds: ids.workspaceMemberIds,
+          remoteAgentIds: ids.remoteAgentIds,
+        }
       )
       updateConversationRoute(conversationId)
     } catch (err) {
