@@ -1,14 +1,15 @@
 "use client"
 
-// A status-first agent card. Identity + runtime badge + the binding SENTENCE
-// (「在 <主机> 的 <目录>」, not raw fields) + ONE status line + a run-state pill,
-// with a liveness dot and unread bubble on the avatar. No ids / raw counts /
-// Invalid Date ever reach this surface. Reconciled: a down/untrusted host never
-// shows a live-green agent.
-import { MoreHorizontal } from "lucide-react"
+// A status-first agent card, kept QUIET: the run-state pill is the only strong
+// color; the runtime is a monochrome brand mark (Claude Code / Codex), the
+// binding is a muted sentence 「在 <主机> 的 <目录>」, and a conversation count makes
+// clear an agent fields MANY conversations at once — not a single task. No ids /
+// raw counts / Invalid Date. Reconciled: a down/untrusted host shows no live pill.
+import { MessageSquare, MoreHorizontal } from "lucide-react"
 import { toast } from "sonner"
 import type { RemoteAgentView, RemoteAgentMachineView } from "@synapse/shared"
 import { cn } from "@/lib/utils"
+import { RuntimeKindIcon } from "@/components/runtime-kind-icon"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,6 +18,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import {
   effectiveState,
   livenessDot,
   runtimeKindLabel,
@@ -24,35 +31,6 @@ import {
   statusLine,
   trustMeta,
 } from "@/lib/remote-agent-status"
-
-function MachineChip({
-  machine,
-  title,
-}: {
-  machine?: RemoteAgentMachineView
-  title?: string
-}) {
-  const online = machine?.lifecycleState === "online"
-  const trust = machine ? trustMeta(machine.trustStatus) : null
-  return (
-    <span className="inline-flex items-center gap-1 align-middle">
-      <span className={cn("size-1.5 rounded-full", livenessDot(online))} />
-      <span className="text-foreground/70">
-        {machine?.title ?? title ?? "主机"}
-      </span>
-      {machine && machine.trustStatus === "pending" && (
-        <span
-          className={cn(
-            "rounded border px-1 text-[9px] leading-4",
-            trust!.className
-          )}
-        >
-          {trust!.label}
-        </span>
-      )}
-    </span>
-  )
-}
 
 export function AgentCard({
   agent,
@@ -66,8 +44,10 @@ export function AgentCard({
   const run = effectiveState(agent, machine)
   const line = statusLine(agent, machine)
   const isError = line.startsWith("出错")
-  const unread = agent.runtimeSummary?.unreadDeliveryCount ?? 0
-  const online =
+  const rs = agent.runtimeSummary
+  const unread = rs?.unreadDeliveryCount ?? 0
+  const convo = rs?.pendingConversationCount ?? 0
+  const live =
     !!agent.binding &&
     machine?.trustStatus === "active" &&
     agent.binding.machineLifecycleState !== "offline" &&
@@ -80,7 +60,7 @@ export function AgentCard({
         !agent.isActive && "opacity-60"
       )}
     >
-      {/* avatar + liveness + unread */}
+      {/* avatar + liveness + unread bubble */}
       <button
         type="button"
         onClick={() => onOpen(agent)}
@@ -92,7 +72,7 @@ export function AgentCard({
         <span
           className={cn(
             "absolute -right-0.5 -bottom-0.5 size-3 rounded-full border-2 border-background",
-            livenessDot(online)
+            livenessDot(live)
           )}
         />
         {unread > 0 && (
@@ -102,43 +82,52 @@ export function AgentCard({
         )}
       </button>
 
-      {/* identity + binding sentence + status line */}
+      {/* identity + binding + status */}
       <button
         type="button"
         onClick={() => onOpen(agent)}
         className="min-w-0 flex-1 text-left"
       >
         <div className="flex items-center gap-1.5">
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="text-muted-foreground/70">
+                  <RuntimeKindIcon
+                    kind={agent.runtimeKind}
+                    className="size-3.5"
+                  />
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>
+                {runtimeKindLabel(agent.runtimeKind)}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
           <span className="truncate text-sm font-medium">
             {agent.displayName}
           </span>
-          <span className="shrink-0 rounded-md border bg-muted/40 px-1 py-0 text-[10px] leading-4 text-muted-foreground">
-            {runtimeKindLabel(agent.runtimeKind)}
-          </span>
         </div>
-        <div className="mt-0.5 truncate text-xs text-muted-foreground">
+        <div className="mt-0.5 truncate text-xs text-muted-foreground/80">
           {agent.binding ? (
             <>
-              在{" "}
-              <MachineChip
-                machine={machine}
-                title={agent.binding.machineTitle}
+              <span
+                className={cn(
+                  "mr-1 inline-block size-1.5 rounded-full align-middle",
+                  livenessDot(machine?.lifecycleState === "online")
+                )}
               />
-              {agent.binding.localRootPath ? (
+              {machine?.title ?? agent.binding.machineTitle ?? "主机"}
+              {machine?.trustStatus === "pending" && (
+                <span className="ml-1 text-amber-600">· 待批准</span>
+              )}
+              {agent.binding.localRootPath && (
                 <>
                   {" "}
-                  的{" "}
-                  <code className="rounded bg-muted px-1 font-mono text-[11px]">
+                  ·{" "}
+                  <code className="font-mono text-muted-foreground/60">
                     {shortPath(agent.binding.localRootPath)}
                   </code>
-                </>
-              ) : (
-                <>
-                  {" "}
-                  的{" "}
-                  <span className="text-muted-foreground/70">
-                    仓库根目录（默认）
-                  </span>
                 </>
               )}
             </>
@@ -148,16 +137,22 @@ export function AgentCard({
         </div>
         <div
           className={cn(
-            "mt-0.5 truncate text-xs",
-            isError ? "text-red-600" : "text-muted-foreground/80"
+            "mt-0.5 flex items-center gap-2 truncate text-xs",
+            isError ? "text-red-600" : "text-muted-foreground/70"
           )}
         >
-          {line}
+          <span className="truncate">{line}</span>
+          {convo > 0 && (
+            <span className="flex shrink-0 items-center gap-0.5 text-muted-foreground/60">
+              <MessageSquare className="size-3" />
+              {convo} 个会话
+            </span>
+          )}
         </div>
       </button>
 
-      {/* run-state pill + kebab */}
-      <div className="flex shrink-0 items-center gap-1.5">
+      {/* run-state pill (the one color accent) + kebab */}
+      <div className="flex shrink-0 items-center gap-1">
         <span
           className={cn(
             "flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]",
@@ -174,23 +169,23 @@ export function AgentCard({
             <button
               type="button"
               aria-label="更多"
-              className="rounded-lg p-1 text-muted-foreground/60 hover:bg-accent hover:text-foreground"
+              className="rounded-lg p-1 text-muted-foreground/50 hover:bg-accent hover:text-foreground"
             >
               <MoreHorizontal className="size-4" />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuItem
-              disabled={!agent.runtimeSummary?.activeConversationId}
-              onClick={() => toast.success("打开会话")}
+              disabled={convo === 0}
+              onClick={() => toast.success("查看会话")}
             >
-              打开会话
+              查看会话{convo > 0 ? `（${convo}）` : ""}
             </DropdownMenuItem>
             <DropdownMenuItem
-              disabled={!agent.runtimeSummary?.activeTaskId}
-              onClick={() => toast.success("查看任务")}
+              disabled={!rs?.activeTaskId}
+              onClick={() => toast.success("查看当前任务")}
             >
-              查看任务
+              查看当前任务
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => toast.success("分配任务")}>
               分配任务

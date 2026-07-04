@@ -107,7 +107,7 @@ export function runStateMeta(
     case "idle":
       return {
         label: "空闲",
-        className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-600",
+        className: "border-transparent bg-muted text-muted-foreground",
         pulse: false,
       }
     case "error":
