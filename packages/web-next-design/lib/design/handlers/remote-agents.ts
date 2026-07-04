@@ -1,15 +1,12 @@
-import {
-  RemoteAgentResponseSchema,
-  RemoteAgentMachinePairingSessionResponseSchema,
-  RemoteAgentMachineDetailResponseSchema,
-  RemoteAgentGroupTaskGrantsResponseSchema,
-  WorkspaceResourceSuccessViewSchema,
-} from "@synapse/shared/schemas"
+import { WorkspaceResourceSuccessViewSchema } from "@synapse/shared/schemas"
 import { mock } from "../faker-setup"
 import {
   designRemoteAgents,
   designMachines,
   findRemoteAgent,
+  designPairingSession,
+  designMachineDetail,
+  designAgentGrants,
 } from "../fixtures/remote-agents"
 import type { DesignHandlers } from "./_types"
 
@@ -30,13 +27,13 @@ export const remoteAgentsHandlers = {
   bindRemoteAgent: async (_ws: string, id: string) => ({
     remoteAgent: findRemoteAgent(id) ?? designRemoteAgents[0],
   }),
-  createRemoteAgentMachinePairingSession: async () =>
-    mock(RemoteAgentMachinePairingSessionResponseSchema),
+  createRemoteAgentMachinePairingSession: async (
+    _ws: string,
+    input?: { title?: string }
+  ) => designPairingSession(input?.title),
   getRemoteAgentMachines: async () => ({ machines: designMachines }),
-  getRemoteAgentMachine: async () =>
-    mock(RemoteAgentMachineDetailResponseSchema),
-  getRemoteAgentGroupTaskGrants: async () =>
-    mock(RemoteAgentGroupTaskGrantsResponseSchema),
-  updateRemoteAgentGroupTaskGrants: async () =>
-    mock(RemoteAgentGroupTaskGrantsResponseSchema),
+  getRemoteAgentMachine: async (_ws: string, id: string) =>
+    designMachineDetail(id),
+  getRemoteAgentGroupTaskGrants: async () => ({ grants: designAgentGrants }),
+  updateRemoteAgentGroupTaskGrants: async () => ({ grants: designAgentGrants }),
 } satisfies DesignHandlers

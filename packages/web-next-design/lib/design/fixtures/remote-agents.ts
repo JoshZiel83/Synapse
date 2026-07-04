@@ -203,3 +203,85 @@ export const findRemoteAgent = (id: string) =>
   designRemoteAgents.find((a) => a.id === id)
 export const findMachine = (id: string) =>
   designMachines.find((m) => m.id === id)
+
+// ── Phase 2: pairing session · machine detail · group-task grants ────────────
+import type {
+  RemoteAgentMachinePairingSessionView,
+  RemoteAgentMachineDetailView,
+  RemoteAgentGroupTaskGrantView,
+} from "@synapse/shared"
+
+export function designPairingSession(
+  title?: string
+): RemoteAgentMachinePairingSessionView {
+  const machineId = "mch-new"
+  return {
+    machine: {
+      id: machineId,
+      workspaceId: WS,
+      title: title || "新主机",
+      trustStatus: "pending",
+      lifecycleState: "offline",
+      bindingCount: 0,
+    },
+    // Obviously-fake demo token for the pairing UI (not a real secret).
+    apiKey: "rad_sk_DEMO_pairing_token_shown_once", // gitleaks:allow
+    daemonCommand:
+      "npx @synapse/remote-agent-daemon connect --token rad_sk_9f3c… --workspace design",
+    oneClickCommands: {
+      unix: "curl -fsSL https://get.synapse.dev/rad | sh -s -- --token rad_sk_9f3c…",
+      windows: "irm https://get.synapse.dev/rad.ps1 | iex",
+    },
+  }
+}
+
+export function designMachineDetail(id: string): RemoteAgentMachineDetailView {
+  const machine = findMachine(id) ?? designMachines[0]
+  const hosted = designRemoteAgents.filter(
+    (a) => a.binding?.machineId === machine.id
+  )
+  return {
+    machine,
+    runtimeCatalog: [
+      {
+        runtimeKind: "claude_code",
+        status: "available",
+        version: "1.2.0",
+        executablePath: "/usr/local/bin/claude",
+        metadata: {},
+      },
+      {
+        runtimeKind: "codex",
+        status: machine.id === "mch-mbp" ? "available" : "missing_binary",
+        version: machine.id === "mch-mbp" ? "0.8.1" : undefined,
+        executablePath:
+          machine.id === "mch-mbp" ? "/usr/local/bin/codex" : undefined,
+        metadata: {},
+      },
+    ],
+    bindings: hosted.map((a) => ({
+      remoteAgentId: a.id,
+      displayName: a.displayName,
+      runtimeKind: a.runtimeKind,
+      status: a.binding!.status,
+      runtimePath: a.binding!.runtimePath,
+      localRootPath: a.binding!.localRootPath,
+      runtimeSummary: a.runtimeSummary,
+    })),
+  }
+}
+
+export const designAgentGrants: RemoteAgentGroupTaskGrantView[] = [
+  {
+    workspaceMemberId: "wm-chenxi",
+    userId: "user-chenxi",
+    name: "陈曦",
+    avatarUrl: undefined,
+  },
+  {
+    workspaceMemberId: "wm-wanglei",
+    userId: "user-wanglei",
+    name: "王磊",
+    avatarUrl: undefined,
+  },
+]

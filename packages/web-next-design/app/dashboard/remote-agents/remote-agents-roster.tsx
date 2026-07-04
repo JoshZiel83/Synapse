@@ -5,10 +5,10 @@
 // 运行中 / 空闲 / 离线未就绪); machines are context (a chip per agent) with trust +
 // pairing living in a secondary view (Phase 2). Silent background refetch.
 import { useMemo, useState } from "react"
+import { useRouter } from "next/navigation"
 import { useQuery } from "@tanstack/react-query"
 import { Loader2, Plus, Search, Link2 } from "lucide-react"
-import { toast } from "sonner"
-import type { RemoteAgentView } from "@synapse/shared"
+import type { RemoteAgentView, RemoteAgentMachineView } from "@synapse/shared"
 import { api } from "@/lib/api"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { cn } from "@/lib/utils"
@@ -21,15 +21,22 @@ import {
   type Attention,
 } from "@/lib/remote-agent-status"
 import { AgentCard } from "./agent-card"
+import { PairingDialog } from "./pairing-dialog"
+import { CreateAgentDialog } from "./create-agent-dialog"
+import { BindSheet } from "./bind-sheet"
 
 type RuntimeFilter = "all" | "claude_code" | "codex"
 
 export default function RemoteAgentsRoster() {
   const { workspaceId } = useWorkspace()
+  const router = useRouter()
   const [q, setQ] = useState("")
   const [runtime, setRuntime] = useState<RuntimeFilter>("all")
   const [statusFilter, setStatusFilter] = useState<Attention | "all">("all")
   const [byMachine, setByMachine] = useState(false)
+  const [pairingOpen, setPairingOpen] = useState(false)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [bindAgent, setBindAgent] = useState<RemoteAgentView | null>(null)
 
   const agentsQuery = useQuery({
     queryKey: ["remote-agents", workspaceId],
@@ -87,14 +94,11 @@ export default function RemoteAgentsRoster() {
           </p>
         </div>
         <div className="flex shrink-0 gap-2">
-          <Button
-            variant="outline"
-            onClick={() => toast.message("配对主机向导（Phase 2）")}
-          >
+          <Button variant="outline" onClick={() => setPairingOpen(true)}>
             <Link2 className="mr-1 size-4" />
             配对主机
           </Button>
-          <Button onClick={() => toast.message("新建 Agent（Phase 2）")}>
+          <Button onClick={() => setCreateOpen(true)}>
             <Plus className="mr-1 size-4" />
             新建 Agent
           </Button>
@@ -153,7 +157,7 @@ export default function RemoteAgentsRoster() {
           <Loader2 className="size-5 animate-spin text-muted-foreground" />
         </div>
       ) : isEmpty ? (
-        <EmptyState />
+        <EmptyState onPair={() => setPairingOpen(true)} />
       ) : noMatch ? (
         <div className="rounded-xl border border-dashed py-16 text-center text-sm text-muted-foreground">
           没有符合条件的 Agent ·{" "}
@@ -174,19 +178,45 @@ export default function RemoteAgentsRoster() {
           machineOf={machineOf}
           machines={machineMap}
           onOpen={openAgent}
+          onBind={setBindAgent}
         />
       ) : (
         <AttentionGroups
           agents={filtered}
           machineOf={machineOf}
           onOpen={openAgent}
+          onBind={setBindAgent}
         />
+      )}
+
+      {workspaceId && (
+        <>
+          <PairingDialog
+            open={pairingOpen}
+            onOpenChange={setPairingOpen}
+            workspaceId={workspaceId}
+          />
+          <CreateAgentDialog
+            open={createOpen}
+            onOpenChange={setCreateOpen}
+            workspaceId={workspaceId}
+          />
+          {bindAgent && (
+            <BindSheet
+              open={!!bindAgent}
+              onOpenChange={(o) => !o && setBindAgent(null)}
+              agent={bindAgent}
+              machines={machinesQuery.data?.machines ?? []}
+              workspaceId={workspaceId}
+            />
+          )}
+        </>
       )}
     </div>
   )
 
-  function openAgent() {
-    toast.message("Agent 详情（Phase 2）")
+  function openAgent(a: RemoteAgentView) {
+    router.push(`/dashboard/remote-agents/agents/${a.id}`)
   }
 }
 
@@ -194,10 +224,12 @@ function AttentionGroups({
   agents,
   machineOf,
   onOpen,
+  onBind,
 }: {
   agents: RemoteAgentView[]
-  machineOf: (a: RemoteAgentView) => any
+  machineOf: (a: RemoteAgentView) => RemoteAgentMachineView | undefined
   onOpen: (a: RemoteAgentView) => void
+  onBind: (a: RemoteAgentView) => void
 }) {
   const grouped = useMemo(() => {
     const m = new Map<Attention, RemoteAgentView[]>()
@@ -225,6 +257,7 @@ function AttentionGroups({
                 agent={a}
                 machine={machineOf(a)}
                 onOpen={onOpen}
+                onBind={onBind}
               />
             ))}
           </div>
@@ -239,11 +272,13 @@ function MachineGroups({
   machineOf,
   machines,
   onOpen,
+  onBind,
 }: {
   agents: RemoteAgentView[]
-  machineOf: (a: RemoteAgentView) => any
-  machines: Map<string, any>
+  machineOf: (a: RemoteAgentView) => RemoteAgentMachineView | undefined
+  machines: Map<string, RemoteAgentMachineView>
   onOpen: (a: RemoteAgentView) => void
+  onBind: (a: RemoteAgentView) => void
 }) {
   const grouped = useMemo(() => {
     const m = new Map<string, RemoteAgentView[]>()
@@ -272,6 +307,7 @@ function MachineGroups({
                   agent={a}
                   machine={machineOf(a)}
                   onOpen={onOpen}
+                  onBind={onBind}
                 />
               ))}
             </div>
@@ -282,7 +318,7 @@ function MachineGroups({
   )
 }
 
-function EmptyState() {
+function EmptyState({ onPair }: { onPair: () => void }) {
   const steps = [
     { n: 1, t: "配对主机", d: "在你的机器上启动守护进程" },
     { n: 2, t: "新建 Agent", d: "选择 Claude Code 或 Codex" },
@@ -306,10 +342,7 @@ function EmptyState() {
           </div>
         ))}
       </div>
-      <Button
-        className="mt-5"
-        onClick={() => toast.message("配对主机向导（Phase 2）")}
-      >
+      <Button className="mt-5" onClick={onPair}>
         <Link2 className="mr-1 size-4" />
         配对第一台主机
       </Button>

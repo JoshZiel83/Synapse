@@ -34,10 +34,12 @@ export function AgentCard({
   agent,
   machine,
   onOpen,
+  onBind,
 }: {
   agent: RemoteAgentView
   machine?: RemoteAgentMachineView
   onOpen: (a: RemoteAgentView) => void
+  onBind: (a: RemoteAgentView) => void
 }) {
   const run = effectiveState(agent, machine)
   const line = statusLine(agent, machine)
@@ -177,9 +179,7 @@ export function AgentCard({
               分配任务
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onClick={() => toast.message("改绑定（Phase 2）")}
-            >
+            <DropdownMenuItem onClick={() => onBind(agent)}>
               改绑定
             </DropdownMenuItem>
             <DropdownMenuItem
