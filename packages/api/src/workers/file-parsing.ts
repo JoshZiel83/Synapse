@@ -2,7 +2,10 @@ import { tracedWorker } from "./job-tracing.js"
 import { QUEUE_NAMES } from "@synapse/shared"
 import { redis } from "../infrastructure/redis/index.js"
 import { registerWorker } from "./registry.js"
-import { processFileParseRun } from "../modules/files/parse-service.js"
+import {
+  processFileParsePoll,
+  processFileParseRun,
+} from "../modules/files/parse-service.js"
 import { createLogger } from "../infrastructure/logger/index.js"
 
 const log = createLogger("file-parsing")
@@ -22,7 +25,13 @@ export function startFileParsingWorker() {
         return
       }
 
-      await processFileParseRun(runId)
+      // "poll" ticks advance a submitted async (submit-and-release) job; the
+      // default "parse" runs extraction (sync) or submits (async).
+      if (job.data?.kind === "poll") {
+        await processFileParsePoll(runId)
+      } else {
+        await processFileParseRun(runId)
+      }
     },
     {
       connection: redis,

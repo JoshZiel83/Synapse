@@ -6,6 +6,7 @@
 // service). Returns camelCase domain rows with Date objects KEPT (Date→ISO
 // serialization stays in presenter.ts per r3). round-6 P1-6.
 
+import { sql } from "kysely"
 import { parseJsonObjectOrUndefined } from "@synapse/shared"
 import { db } from "../../infrastructure/database/kysely.js"
 import type { FileParseRunRow, FileParseOutputRow } from "./presenter.js"
@@ -112,6 +113,30 @@ export async function completeParseRun(params: {
   parserVersion: string | null
 }): Promise<void> {
   await db.transaction().execute(async (trx) => {
+    // Flip to succeeded FIRST, conditional on the run still being 'running'. This
+    // is the idempotency gate: if a concurrent completer (e.g. a forked async poll
+    // chain) already finished this run, the flip affects 0 rows and we write NO
+    // outputs — so a run can never accumulate duplicate primary_text /
+    // structured_json rows. The winner (flip succeeded) writes the outputs.
+    const flip = await trx
+      .updateTable("fileParseRuns")
+      .set({
+        parserKey: params.parserKey,
+        parserVersion: params.parserVersion,
+        status: "succeeded",
+        errorCode: null,
+        errorMessage: null,
+        finishedAt: new Date(),
+      })
+      .where("id", "=", params.runId)
+      .where("status", "=", "running")
+      .executeTakeFirst()
+
+    if (Number(flip.numUpdatedRows) === 0) {
+      // Lost the race / already terminal — do not double-write outputs.
+      return
+    }
+
     if (params.text) {
       await trx
         .insertInto("fileParseOutputs")
@@ -137,26 +162,43 @@ export async function completeParseRun(params: {
         })
         .execute()
     }
-
-    await trx
-      .updateTable("fileParseRuns")
-      .set({
-        parserKey: params.parserKey,
-        parserVersion: params.parserVersion,
-        status: "succeeded",
-        errorCode: null,
-        errorMessage: null,
-        finishedAt: new Date(),
-      })
-      .where("id", "=", params.runId)
-      .execute()
   })
+}
+
+/** Persist the async submit-and-release state (vendor job token, provider,
+ *  submittedAt) into file_parse_runs.metadata — so a re-run POLLS the existing job
+ *  instead of re-submitting, and an api restart resumes from the token. */
+export async function setParseRunMetadata(
+  runId: string,
+  metadata: Record<string, unknown>
+): Promise<void> {
+  await db
+    .updateTable("fileParseRuns")
+    .set({ metadata: metadata as never })
+    .where("id", "=", runId)
+    .execute()
+}
+
+/** Read file_parse_runs.metadata as a plain object ({} when unset/malformed). */
+export async function getParseRunMetadata(
+  runId: string
+): Promise<Record<string, unknown>> {
+  const row = await db
+    .selectFrom("fileParseRuns")
+    .select("metadata")
+    .where("id", "=", runId)
+    .executeTakeFirst()
+  return row ? (parseJsonObjectOrUndefined(row.metadata) ?? {}) : {}
 }
 
 export async function markParseRunFailed(
   runId: string,
   errorMessage: string
 ): Promise<void> {
+  // Conditional on 'running' (idempotent): a run already flipped to succeeded by a
+  // concurrent completer must NOT be clobbered to failed by a forked poll chain or
+  // the reconciler. A retryable sync failure re-enters 'running' via
+  // markParseRunStrategy on the next attempt, so this never blocks a legit retry.
   await db
     .updateTable("fileParseRuns")
     .set({
@@ -166,7 +208,25 @@ export async function markParseRunFailed(
       finishedAt: new Date(),
     })
     .where("id", "=", runId)
+    .where("status", "=", "running")
     .execute()
+}
+
+/** Run IDs stuck in status='running' with a persisted async job token — the input
+ *  to the reconciliation sweep (re-drive a stranded poll chain, or fail past the
+ *  deadline). Bounded; the sweep filters by staleness/deadline per-run. */
+export async function findStrandedAsyncRunIds(
+  limit: number
+): Promise<string[]> {
+  const rows = await db
+    .selectFrom("fileParseRuns")
+    .select("id")
+    .where("status", "=", "running")
+    .where(sql<boolean>`(metadata->>'jobToken') is not null`)
+    .orderBy("createdAt", "asc")
+    .limit(limit)
+    .execute()
+  return rows.map((row) => row.id)
 }
 
 export async function listParseOutputRowsForRuns(

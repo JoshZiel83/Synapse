@@ -97,6 +97,31 @@ services:
       TESSERACT_LANGS: ${TESSERACT_LANGS:-chi_sim+chi_tra+eng+jpn}
       PPOCR_URL: ${PPOCR_URL:-}
       PPOCR_TIER: ${PPOCR_TIER:-small}
+      # Document extraction (PDF + office → text) runs OUT-OF-PROCESS — the api
+      # bundles no document engine and reads env only. It REPLACES the old
+      # in-process pdf-parse. DOCUMENT_EXTRACTION_PROVIDER selects the local Apache
+      # Tika sidecar (shipped in the `production` profile), the TextIn cloud vendor,
+      # or `none` (document parsing disabled → PDF/office uploads are SKIPPED and a
+      # LOUD boot warning fires). The default keeps document parsing on via the
+      # docextract sidecar.
+      DOCUMENT_EXTRACTION_PROVIDER: ${DOCUMENT_EXTRACTION_PROVIDER:-local}
+      DOCEXTRACT_URL: ${DOCEXTRACT_URL:-http://docextract:8776/}
+      # Provenance/cache-key label kept in lockstep with the TIKA_VERSION baked into
+      # the sidecar image (ONE knob drives both build + api label).
+      DOCEXTRACT_ENGINE_VERSION: ${DOCEXTRACT_ENGINE_VERSION:-tika-${TIKA_VERSION:-3.0.0}}
+      # Local output flavor: "text" (default) or "markdown" (Phase-2 rich tier —
+      # Tika XHTML → markdown with headings/lists/tables). Folded into the parse
+      # provenance label so switching it invalidates the cache.
+      DOCEXTRACT_OUTPUT_FORMAT: ${DOCEXTRACT_OUTPUT_FORMAT:-text}
+      # TextIn / 合合 xParse cloud vendor (opt-in): set DOCUMENT_EXTRACTION_PROVIDER=
+      # textin + these credentials to send document bytes off-box instead of using
+      # the local sidecar. Empty = unused. See .env.example.
+      DOCEXTRACT_TEXTIN_APP_ID: ${DOCEXTRACT_TEXTIN_APP_ID:-}
+      DOCEXTRACT_TEXTIN_SECRET_CODE: ${DOCEXTRACT_TEXTIN_SECRET_CODE:-}
+      # LlamaParse (LlamaCloud) — the ASYNC cloud vendor (submit→poll). Set
+      # DOCUMENT_EXTRACTION_PROVIDER=llamaparse + this key to use it. Async runs go
+      # through a durable poll job (file_parse_runs.metadata token), no worker held.
+      DOCEXTRACT_LLAMAPARSE_API_KEY: ${DOCEXTRACT_LLAMAPARSE_API_KEY:-}
       # Batch audio transcription (ASR / speech-to-text) also runs OUT-OF-PROCESS
       # — the api bundles no ASR engine. TRANSCRIPTION_PROVIDER selects the
       # sherpa-asr sidecar (opt-in `asr` profile) or `none` (default => audio
@@ -253,6 +278,51 @@ services:
       interval: 10s
       timeout: 3s
       retries: 6
+    profiles:
+      - production
+
+  # Document-extraction sidecar: Apache Tika Server (JVM) behind a small FastAPI
+  # shim. The api bundles NO document engine — it POSTs PDF/office bytes here and
+  # gets back text + page metadata. REPLACES the old in-process pdf-parse. Shipped
+  # in the `production` profile so a default deploy keeps document parsing working
+  # out-of-process. Reached by the api at http://docextract:8776/
+  # (DOCUMENT_EXTRACTION_PROVIDER=local + DOCEXTRACT_URL). Internal-only, no host
+  # port, no secrets (explicit env allowlist, NOT env_file).
+  docextract:
+    build:
+      context: .
+      dockerfile: infrastructure/Dockerfile.docextract
+      args:
+        # Pinned Apache Tika Server version — baked into the image AND surfaced as
+        # the api's provenance label (DOCEXTRACT_ENGINE_VERSION) so the two never
+        # drift. Bumping this one value moves both.
+        TIKA_VERSION: ${TIKA_VERSION:-3.0.0}
+    container_name: synapse-docextract
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: ${DOCEXTRACT_MEM_LIMIT:-2g}
+    environment:
+      DOCEXTRACT_HOST: "0.0.0.0"
+      DOCEXTRACT_PORT: "8776"
+      # Bounded worker pool — returns 503 (retryable) when saturated so a burst of
+      # parses can't blow every request's timeout on one container.
+      DOCEXTRACT_MAX_CONCURRENCY: ${DOCEXTRACT_MAX_CONCURRENCY:-2}
+      # JVM heap cap for the internal Tika Server (bounded well under mem_limit).
+      DOCEXTRACT_JAVA_OPTS: ${DOCEXTRACT_JAVA_OPTS:--Xmx1024m}
+    expose:
+      - "8776"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys,json; sys.exit(0 if json.load(urllib.request.urlopen('http://127.0.0.1:8776/healthz'))['ready'] else 1)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 45s
     profiles:
       - production
 

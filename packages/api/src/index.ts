@@ -97,6 +97,10 @@ import {
   stopDeviceTaskSweeper,
 } from "./workers/device-task-sweeper.js"
 import {
+  startDocExtractionSweeper,
+  stopDocExtractionSweeper,
+} from "./workers/doc-extraction-sweeper.js"
+import {
   startTransportOutboxSweeper,
   stopTransportOutboxSweeper,
 } from "./workers/outbox-sweeper.js"
@@ -404,6 +408,7 @@ async function main() {
   installActorStatusHooks()
   startMemoryIndexingWorker()
   startFileParsingWorker()
+  startDocExtractionSweeper()
   await ensureRemoteAgentDeliveryRetryJob()
   startRemoteAgentDeliveryRetryWorker()
   void warmEmbeddingProvider().catch((err) => {
@@ -471,6 +476,13 @@ async function main() {
         3000
       ).catch((err) => {
         app.log.error({ err }, "Device task sweeper shutdown timed out")
+      })
+      await waitWithTimeout(
+        "doc-extraction sweeper shutdown",
+        stopDocExtractionSweeper(),
+        3000
+      ).catch((err) => {
+        app.log.error({ err }, "Doc-extraction sweeper shutdown timed out")
       })
       await waitWithTimeout(
         "worker shutdown",

@@ -1,0 +1,55 @@
+# Document-extraction sidecar — Apache Tika Server (JVM) behind a small FastAPI
+# shim. The Synapse api bundles NO document-parsing engine (the 5th sibling of
+# the OCR/embedding/transcription/realtime-ASR provider abstractions); it POSTs
+# document bytes here over HTTP and gets back plaintext + minimal structure.
+# Build context is the repo ROOT:
+#   docker build -f infrastructure/Dockerfile.docextract -t synapse-docextract .
+#
+# Per-request document bytes only — no secrets, no per-tenant state. Runs non-root.
+# The Tika engine is baked at build time (pinned jar); runtime does no network I/O.
+
+FROM python:3.12-slim
+
+# China mirror for resilient pip installs (matches the other sidecars).
+RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple || true
+
+# A headless JRE for the Tika Server jar + the pinned tika-server-standard jar.
+# tika-server-standard bundles the common parsers (PDFBox, POI office, epub, ...).
+# A missing/empty jar is a hard BUILD failure (no silent runtime fetch), matching
+# the tesseract tessdata-bake discipline.
+ARG TIKA_VERSION=3.0.0
+ARG TIKA_MAVEN_BASE=https://repo1.maven.org/maven2
+RUN set -eux; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends default-jre-headless ca-certificates curl; \
+  mkdir -p /opt/tika; \
+  curl -fsSL --retry 3 -o /opt/tika/tika-server.jar \
+    "${TIKA_MAVEN_BASE}/org/apache/tika/tika-server-standard/${TIKA_VERSION}/tika-server-standard-${TIKA_VERSION}.jar"; \
+  test -s /opt/tika/tika-server.jar || { echo "FATAL: tika-server jar was not baked"; exit 1; }; \
+  apt-get purge -y curl; apt-get autoremove -y; rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY sidecars/docextract/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+COPY sidecars/docextract/ ./
+
+RUN useradd --create-home --uid 10001 docextract && chown -R docextract:docextract /app
+USER docextract
+
+ENV PYTHONUNBUFFERED=1 \
+    TIKA_JAR=/opt/tika/tika-server.jar \
+    TIKA_VERSION=${TIKA_VERSION} \
+    TIKA_INTERNAL_PORT=9998 \
+    DOCEXTRACT_HOST=0.0.0.0 \
+    DOCEXTRACT_PORT=8776 \
+    DOCEXTRACT_MAX_CONCURRENCY=2 \
+    DOCEXTRACT_JAVA_OPTS=-Xmx1024m
+
+EXPOSE 8776
+
+# start-period is generous: the JVM + Tika Server take several seconds to accept
+# requests, and /healthz reports ready=false until the internal Tika answers.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=45s --retries=6 \
+  CMD python -c "import urllib.request,sys,json; sys.exit(0 if json.load(urllib.request.urlopen('http://127.0.0.1:8776/healthz', timeout=3))['ready'] else 1)" || exit 1
+
+CMD ["python", "serve.py"]

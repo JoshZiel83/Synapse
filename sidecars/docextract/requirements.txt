@@ -1,0 +1,9 @@
+# Document-extraction sidecar (FastAPI shim over Apache Tika Server). The Tika
+# engine itself is a JVM jar baked into the image (see Dockerfile.docextract);
+# these are only the thin HTTP shim's deps. The internal Tika call uses stdlib
+# urllib, so no HTTP client dependency is needed here.
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+pydantic>=2,<3
+# XHTML → markdown for the rich/markdown output tier (pure-Python, no ML).
+markdownify>=0.13,<2

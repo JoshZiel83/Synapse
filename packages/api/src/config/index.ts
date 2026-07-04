@@ -212,6 +212,52 @@ const envSchema = z
     EMBEDDING_OPENAI_MAX_BATCH: withDefault(nonNegativeInt, "0"),
     EMBEDDING_OPENAI_TIMEOUT_MS: withDefault(positiveInt, "30000"),
 
+    // ===== Document extraction (files → text) =====
+    // The api bundles NO document-parsing engine (the 5th sibling of the OCR /
+    // embedding / transcription / realtime-ASR provider abstractions).
+    // DOCUMENT_EXTRACTION_PROVIDER selects an out-of-process provider: the local
+    // Apache Tika sidecar, or a cloud/API vendor (TextIn xParse). Default resolves
+    // to "none" => PDF + office parsing is SKIPPED (a LOUD boot warning fires, and
+    // each affected upload records a skip — never a crash). The compose production
+    // profile sets this to "local" + starts the docextract sidecar. NOTE: this is
+    // a clean-break replacement of the old in-process `pdf-parse` — a bare deploy
+    // that upgrades the image WITHOUT setting this + a sidecar loses PDF parsing.
+    DOCUMENT_EXTRACTION_PROVIDER: z.string().optional(),
+    // local Apache Tika sidecar. URL required when provider=local (superRefine).
+    DOCEXTRACT_URL: withDefault(z.string(), ""),
+    DOCEXTRACT_TIMEOUT_MS: withDefault(positiveInt, "60000"),
+    // Provenance/cache-key LABEL; MUST match the TIKA_VERSION baked into the
+    // sidecar image (single-knob lockstep, like WHISPER_MODEL / PPOCR_TIER — the
+    // compose file drives both from one value). Bumping the baked engine without
+    // this label would poison the facade cache + mislabel file_parse_runs.
+    DOCEXTRACT_ENGINE_VERSION: withDefault(z.string().min(1), "tika-3.0.0"),
+    // Output flavor for the local Tika provider: "text" (plaintext) or "markdown"
+    // (the Phase-2 rich tier — Tika XHTML → markdown, headings/lists/tables kept).
+    // Folded into the provenance label so switching it invalidates the parse cache.
+    DOCEXTRACT_OUTPUT_FORMAT: withDefault(z.enum(["text", "markdown"]), "text"),
+    // TextIn / 合合 xParse cloud provider (dual static-header auth). Selecting it
+    // sends document bytes off-box (egress) — the boot gate requires BOTH secrets.
+    DOCEXTRACT_TEXTIN_APP_ID: withDefault(z.string(), ""),
+    DOCEXTRACT_TEXTIN_SECRET_CODE: withDefault(z.string(), ""),
+    DOCEXTRACT_TEXTIN_BASE_URL: withDefault(
+      z.string(),
+      "https://api.textin.com"
+    ),
+    DOCEXTRACT_TEXTIN_TIMEOUT_MS: withDefault(positiveInt, "60000"),
+    // LlamaParse (LlamaCloud) — the ASYNC reference cloud vendor (Bearer auth,
+    // submit→poll). Selecting it sends document bytes off-box; the gate requires
+    // the API key. The poll cadence + deadline bound the submit-and-release loop.
+    DOCEXTRACT_LLAMAPARSE_API_KEY: withDefault(z.string(), ""),
+    DOCEXTRACT_LLAMAPARSE_BASE_URL: withDefault(
+      z.string(),
+      "https://api.cloud.llamaindex.ai"
+    ),
+    DOCEXTRACT_LLAMAPARSE_TIMEOUT_MS: withDefault(positiveInt, "30000"),
+    // How often to re-poll a submitted async job, and the wall-clock deadline after
+    // which a still-pending job is failed (submit-and-release, not in-handler poll).
+    DOCEXTRACT_ASYNC_POLL_INTERVAL_MS: withDefault(positiveInt, "5000"),
+    DOCEXTRACT_ASYNC_DEADLINE_MS: withDefault(positiveInt, "600000"),
+
     PLATFORM_ADMIN_EMAILS: withDefault(z.string(), ""),
 
     // ===== Better Auth =====
@@ -288,6 +334,42 @@ const envSchema = z
         code: "custom",
         path: ["PPOCR_URL"],
         message: "PPOCR_URL is required when OCR_PROVIDER=ppocr",
+      })
+    }
+    // A selected document-extraction provider must have its sidecar URL / vendor
+    // credentials, or the api would boot "configured" but every PDF/office parse
+    // would fail at request time. (An UNconfigured provider — "none" — is a valid
+    // opt-out that only skips document parsing, so it is not gated here.)
+    const docProvider = resolveDocumentExtractionProviderName(env)
+    if (docProvider === "local" && !env.DOCEXTRACT_URL?.trim()) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["DOCEXTRACT_URL"],
+        message:
+          "DOCEXTRACT_URL is required when DOCUMENT_EXTRACTION_PROVIDER=local (the api runs no in-process document engine)",
+      })
+    }
+    if (
+      docProvider === "textin" &&
+      (!env.DOCEXTRACT_TEXTIN_APP_ID?.trim() ||
+        !env.DOCEXTRACT_TEXTIN_SECRET_CODE?.trim())
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["DOCEXTRACT_TEXTIN_APP_ID"],
+        message:
+          "DOCEXTRACT_TEXTIN_APP_ID and DOCEXTRACT_TEXTIN_SECRET_CODE are required when DOCUMENT_EXTRACTION_PROVIDER=textin",
+      })
+    }
+    if (
+      docProvider === "llamaparse" &&
+      !env.DOCEXTRACT_LLAMAPARSE_API_KEY?.trim()
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["DOCEXTRACT_LLAMAPARSE_API_KEY"],
+        message:
+          "DOCEXTRACT_LLAMAPARSE_API_KEY is required when DOCUMENT_EXTRACTION_PROVIDER=llamaparse",
       })
     }
     // A selected transcription provider must have its sidecar URL, or the api
@@ -458,6 +540,15 @@ function resolveEmbeddingProviderName(env: {
   EMBEDDING_PROVIDER?: string
 }): string {
   return firstNonEmpty([env.EMBEDDING_PROVIDER]) ?? "none"
+}
+
+/** Resolve the active document-extraction provider name: DOCUMENT_EXTRACTION_PROVIDER,
+ *  else "none" (opt-in, like OCR/embedding — no deprecated alias exists). Centralized
+ *  so the superRefine gate and the config assembly can't diverge. */
+function resolveDocumentExtractionProviderName(env: {
+  DOCUMENT_EXTRACTION_PROVIDER?: string
+}): string {
+  return firstNonEmpty([env.DOCUMENT_EXTRACTION_PROVIDER]) ?? "none"
 }
 
 function loadEnvOrExit(): z.infer<typeof envSchema> {
@@ -655,6 +746,37 @@ export const config = {
       timeoutMs: env.EMBEDDING_OPENAI_TIMEOUT_MS,
     },
   },
+  // Document extraction (files → text). The api bundles NO document engine
+  // (env-only provider selection). Consumed by the file-parse pipeline. See
+  // modules/document-extraction/ + docs/document-extraction-abstraction-layer-plan.md.
+  documentExtraction: {
+    provider: resolveDocumentExtractionProviderName(env),
+    local: {
+      // Trimmed so a whitespace-only value is the empty string the adapter's
+      // isConfigured()/`if (!url)` guard treats as unconfigured (the boot gate
+      // rejects it for an explicit local selection).
+      url: env.DOCEXTRACT_URL.trim(),
+      timeoutMs: env.DOCEXTRACT_TIMEOUT_MS,
+      engineVersion: env.DOCEXTRACT_ENGINE_VERSION,
+      outputFormat: env.DOCEXTRACT_OUTPUT_FORMAT,
+    },
+    textin: {
+      appId: env.DOCEXTRACT_TEXTIN_APP_ID.trim(),
+      secretCode: env.DOCEXTRACT_TEXTIN_SECRET_CODE.trim(),
+      baseUrl: env.DOCEXTRACT_TEXTIN_BASE_URL.trim(),
+      timeoutMs: env.DOCEXTRACT_TEXTIN_TIMEOUT_MS,
+    },
+    llamaparse: {
+      apiKey: env.DOCEXTRACT_LLAMAPARSE_API_KEY.trim(),
+      baseUrl: env.DOCEXTRACT_LLAMAPARSE_BASE_URL.trim(),
+      timeoutMs: env.DOCEXTRACT_LLAMAPARSE_TIMEOUT_MS,
+    },
+    // Submit-and-release poll cadence + deadline (async providers).
+    async: {
+      pollIntervalMs: env.DOCEXTRACT_ASYNC_POLL_INTERVAL_MS,
+      deadlineMs: env.DOCEXTRACT_ASYNC_DEADLINE_MS,
+    },
+  },
   platform: {
     adminEmails: env.PLATFORM_ADMIN_EMAILS.split(",")
       .map((email) => email.trim().toLowerCase())
@@ -685,3 +807,25 @@ export const config = {
     intl: env.FEISHU_INTL === "true",
   },
 } as const
+
+// Guardrail 1 (document-extraction clean-break): the api bundles NO in-process
+// document engine — it replaced the old always-on `pdf-parse`. Warn LOUDLY at
+// startup (not just per-file) whenever the resolved provider is NOT a recognized,
+// enabled one — which covers BOTH "none" (unset) AND a typo like
+// `DOCUMENT_EXTRACTION_PROVIDER=tika` (the engine is Apache Tika but the provider
+// value is "local"): the registry resolves any unknown name to the null provider
+// and silently disables PDF/office parsing, so an operator who upgraded the image
+// without wiring a provider + sidecar — or fat-fingered the value — notices before
+// a user reports empty parses. See docs/document-extraction-abstraction-layer-plan.md.
+if (
+  config.documentExtraction.provider !== "local" &&
+  config.documentExtraction.provider !== "textin" &&
+  config.documentExtraction.provider !== "llamaparse"
+) {
+  log.warn(
+    `document extraction is DISABLED (DOCUMENT_EXTRACTION_PROVIDER="${config.documentExtraction.provider}" is not a recognized provider) — ` +
+      "PDF & office uploads will be SKIPPED, not parsed. Set " +
+      "DOCUMENT_EXTRACTION_PROVIDER=local + DOCEXTRACT_URL (the Tika sidecar) or " +
+      "=textin (+ credentials) to enable document parsing."
+  )
+}
