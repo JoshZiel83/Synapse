@@ -1,5 +1,5 @@
-"use client"
+import SkillsHub from "./skills-hub"
 
-import SkillsPage from "./skills-client"
-
-export default SkillsPage
+export default function SkillsPage() {
+  return <SkillsHub />
+}

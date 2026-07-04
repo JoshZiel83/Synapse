@@ -1,28 +1,37 @@
 import {
-  SkillMarketplaceListViewSchema,
   SkillMarketplaceItemViewSchema,
-  InstalledSkillListViewSchema,
   InstalledSkillItemViewSchema,
   WorkspaceResourceSuccessViewSchema,
 } from "@synapse/shared/schemas"
 import { mock } from "../faker-setup"
+import {
+  designInstalledSkills,
+  designMarketplaceSkills,
+  findInstalledSkill,
+  findMarketSkill,
+} from "../fixtures/skills"
 import type { DesignHandlers } from "./_types"
 
-// Skills marketplace + installed-skill lifecycle. The marketplace list/detail
-// feeds the browse pages; publish/import/refresh and the install/upgrade/update
-// flows all resolve to the same item envelopes, so the mocks reuse the shared
-// view schemas. uninstall returns the generic workspace-resource success view.
+// Skills marketplace + installed-skill lifecycle. Curated fixtures (real AI-agent
+// skill modules, Chinese) replace the random faker output that filled the old
+// table with lorem + "Unknown" dates; mutations echo a coherent item.
 export const skillsHandlers = {
-  getSkillMarketplace: async () => mock(SkillMarketplaceListViewSchema),
-  getSkillMarketplaceItem: async () => mock(SkillMarketplaceItemViewSchema),
+  getSkillMarketplace: async () => ({ skills: designMarketplaceSkills }),
+  getSkillMarketplaceItem: async (_ws: string, id: string) => ({
+    skill: findMarketSkill(id) ?? designMarketplaceSkills[0],
+  }),
   publishMarketplaceSkill: async () => mock(SkillMarketplaceItemViewSchema),
   importMarketplaceSkill: async () => mock(SkillMarketplaceItemViewSchema),
   refreshMarketplaceSkill: async () => mock(SkillMarketplaceItemViewSchema),
-  createWorkspaceSkill: async () => mock(InstalledSkillItemViewSchema),
-  getInstalledSkills: async () => mock(InstalledSkillListViewSchema),
-  getInstalledSkill: async () => mock(InstalledSkillItemViewSchema),
-  installSkill: async () => mock(InstalledSkillItemViewSchema),
-  updateInstalledSkill: async () => mock(InstalledSkillItemViewSchema),
-  upgradeInstalledSkill: async () => mock(InstalledSkillItemViewSchema),
+  createWorkspaceSkill: async () => ({ skill: designInstalledSkills[0] }),
+  getInstalledSkills: async () => ({ skills: designInstalledSkills }),
+  getInstalledSkill: async (_ws: string, id: string) => ({
+    skill: findInstalledSkill(id) ?? designInstalledSkills[0],
+  }),
+  installSkill: async () => ({ skill: designInstalledSkills[0] }),
+  updateInstalledSkill: async (_ws: string, id: string) => ({
+    skill: findInstalledSkill(id) ?? designInstalledSkills[0],
+  }),
+  upgradeInstalledSkill: async () => ({ skill: designInstalledSkills[0] }),
   uninstallInstalledSkill: async () => mock(WorkspaceResourceSuccessViewSchema),
 } satisfies DesignHandlers
