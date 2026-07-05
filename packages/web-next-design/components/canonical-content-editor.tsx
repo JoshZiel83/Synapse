@@ -131,6 +131,7 @@ function GripMenu({
 // ── one block row: hover gutter + content ────────────────────────────────────
 function BlockRow({
   block,
+  isActive,
   registerRef,
   onTextChange,
   onKeyDown,
@@ -140,6 +141,7 @@ function BlockRow({
   onRemove,
 }: {
   block: CanonicalContentBlock
+  isActive: boolean
   registerRef: (id: string, el: HTMLTextAreaElement | null) => void
   onTextChange: (id: string, text: string) => void
   onKeyDown: (
@@ -151,14 +153,8 @@ function BlockRow({
   onDuplicate: (id: string) => void
   onRemove: (id: string) => void
 }) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: block.id })
+  const { attributes, listeners, setNodeRef, transform, transition } =
+    useSortable({ id: block.id })
   const [insertOpen, setInsertOpen] = useState(false)
   const [gripOpen, setGripOpen] = useState(false)
 
@@ -166,9 +162,11 @@ function BlockRow({
     <div
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
+      // dim only while THIS block is the one being dragged (tracked by activeId,
+      // not the sortable's isDragging, which can read true at rest for a lone item)
       className={cn(
         "group relative flex items-start gap-1",
-        isDragging && "opacity-40"
+        isActive && "opacity-40"
       )}
     >
       {/* left gutter — hidden at rest, fades in on hover/focus-within/menu-open */}
@@ -544,6 +542,7 @@ export function CanonicalContentEditor({
                   <BlockRow
                     key={block.id}
                     block={block}
+                    isActive={activeId === block.id}
                     registerRef={registerRef}
                     onTextChange={updateText}
                     onKeyDown={onKeyDown}

@@ -110,7 +110,9 @@ export default function MemoryEditorPage({ memoryId }: { memoryId?: string }) {
       const actorItems = (Array.isArray(actorData) ? actorData : []).map(
         normalizeActorOption
       )
-      const groupItems = conversationData.map(normalizeGroupOption)
+      const groupItems = (
+        Array.isArray(conversationData) ? conversationData : []
+      ).map(normalizeGroupOption)
       setActors(actorItems)
       setGroups(groupItems)
 
