@@ -1,16 +1,19 @@
 import {
-  MarketplacePluginListViewSchema,
-  MarketplacePluginViewSchema,
-  PluginCategoryListViewSchema,
   MarketplacePublisherListViewSchema,
   MarketplacePublisherDetailViewSchema,
-  PluginInstallationListViewSchema,
   PluginInstallationDetailViewSchema,
   WorkspaceResourceSuccessViewSchema,
   PluginAuthSessionViewSchema,
   PluginAuditLogListSchema,
 } from "@synapse/shared/schemas"
 import { mock } from "../faker-setup"
+import {
+  designMarketplacePlugins,
+  designPluginCategories,
+  designInstalledPlugins,
+  findMarketplacePlugin,
+  findInstalledPlugin,
+} from "../fixtures/mcp-plugins"
 import type { DesignHandlers } from "./_types"
 
 // MCP plugin marketplace + installations: catalog browse (marketplace / plugin /
@@ -23,13 +26,15 @@ import type { DesignHandlers } from "./_types"
 // `return res.data`), so the session view is the realistic shape the install
 // dialog consumes.
 export const mcpPluginsHandlers = {
-  getMarketplace: async () => mock(MarketplacePluginListViewSchema),
-  getMarketplacePlugin: async () => mock(MarketplacePluginViewSchema),
-  getPluginCategories: async () => mock(PluginCategoryListViewSchema),
+  getMarketplace: async () => designMarketplacePlugins,
+  getMarketplacePlugin: async (id: string) =>
+    findMarketplacePlugin(id) ?? designMarketplacePlugins[0],
+  getPluginCategories: async () => designPluginCategories,
   getMcpOrganizations: async () => mock(MarketplacePublisherListViewSchema),
   getMcpOrganization: async () => mock(MarketplacePublisherDetailViewSchema),
-  getInstallations: async () => mock(PluginInstallationListViewSchema),
-  getInstallation: async () => mock(PluginInstallationDetailViewSchema),
+  getInstallations: async () => designInstalledPlugins,
+  getInstallation: async (_ws: string, id: string) =>
+    findInstalledPlugin(id) ?? designInstalledPlugins[0],
   installPlugin: async () => mock(PluginInstallationDetailViewSchema),
   updateInstallation: async () => mock(PluginInstallationDetailViewSchema),
   uninstallPlugin: async () => mock(WorkspaceResourceSuccessViewSchema),

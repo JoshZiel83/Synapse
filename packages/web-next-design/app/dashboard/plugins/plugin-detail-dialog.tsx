@@ -1,221 +1,238 @@
 "use client"
 
+// Plugin detail — a centered Dialog (not a drawer), the pre-install decision +
+// (when installed) management surface. Honest to the contract: renders the real
+// longDescription, the real toolsManifest (with the "discovered live" state when
+// it's []), the real requiredPermissions, and a preview of the configFields it
+// will ask for. No per-tool toggles, no invented permission tiers. Install /
+// connect / config editing are Phase 2 (buttons toast for now).
+import type {
+  MarketplacePluginView,
+  PluginInstallationDetailView,
+} from "@synapse/shared"
+import { ExternalLink, ShieldCheck, Wrench } from "lucide-react"
+import { toast } from "sonner"
+import { cn } from "@/lib/utils"
+import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import type { MarketplacePluginView } from "@synapse/shared"
-import { Globe, Code, Puzzle, Wrench, Key } from "lucide-react"
-import { PLUGIN_BRAND_ICONS } from "@/components/plugin-brand-icons"
+import { PluginIcon } from "./plugin-ui"
+import { pluginHealth } from "./plugin-card"
+import {
+  pluginAuthLabel,
+  pluginBrandSlug,
+  regionLabel,
+  transportLabel,
+} from "@/lib/design/fixtures/mcp-plugins"
 
-function getLocale(defaultLocale?: string) {
-  if (typeof navigator !== "undefined") {
-    return (
-      navigator.languages?.[0] || navigator.language || defaultLocale || "en"
-    )
-  }
-  return defaultLocale || "en"
+const FIELD_HINT: Record<string, string> = {
+  secret: "密钥 · 保存后仅显示后 4 位",
+  auth_connection: "账号授权",
+  text: "文本",
+  boolean: "开关",
+  select: "选项",
 }
 
-function translate(
-  text: Record<string, string> | undefined,
-  locale: string,
-  fallback?: string
-) {
-  if (!text || Object.keys(text).length === 0) return fallback || ""
+function Section({
+  icon,
+  title,
+  children,
+}: {
+  icon?: React.ReactNode
+  title: string
+  children: React.ReactNode
+}) {
   return (
-    text[locale] ||
-    text[locale.split("-")[0]] ||
-    text[fallback || ""] ||
-    text.en ||
-    Object.values(text)[0] ||
-    fallback ||
-    ""
+    <section>
+      <h3 className="mb-1.5 flex items-center gap-1.5 text-sm font-medium">
+        {icon}
+        {title}
+      </h3>
+      {children}
+    </section>
   )
 }
 
-interface Props {
-  plugin: MarketplacePluginView
-  installedCount: number
-  onInstall: () => void
-  onClose: () => void
-}
-
-type PluginToolSummary = { name?: string; description?: string }
-
-function asToolSummary(value: unknown): PluginToolSummary {
-  return value && typeof value === "object" ? (value as PluginToolSummary) : {}
-}
-
-const transportLabels: Record<string, string> = {
-  http: "Remote MCP (HTTP)",
-  builtin: "Built-in",
-  stdio: "Local (stdio)",
-}
-
-const reuseScopeLabels: Record<string, string> = {
-  turn: "Turn",
-  session: "Session",
-  conversation: "Conversation",
-  actor: "Actor",
-  workspace: "Workspace",
-}
-
-export default function PluginDetailDialog({
+export function PluginDetailDialog({
   plugin,
-  installedCount,
-  onInstall,
-  onClose,
-}: Props) {
-  const tools = plugin.toolsManifest || []
-  const configFields = plugin.configFields || []
-  const hasRequiredConfig = configFields.some((field) => field.required)
-  const locale = getLocale(plugin.defaultLocale)
-  const BrandIcon = plugin.orgSlug
-    ? PLUGIN_BRAND_ICONS[plugin.orgSlug]
-    : undefined
+  installation,
+  open,
+  onOpenChange,
+}: {
+  plugin: MarketplacePluginView | null
+  installation: PluginInstallationDetailView | null
+  open: boolean
+  onOpenChange: (o: boolean) => void
+}) {
+  if (!plugin) return null
+  const tools = plugin.toolsManifest as Array<{
+    name?: string
+    description?: string
+  }>
+  const health = installation ? pluginHealth(installation) : null
 
   return (
-    <Dialog open onOpenChange={() => onClose()}>
-      <DialogContent className="max-h-[85vh] max-w-lg overflow-y-auto border-gray-200 bg-white ring-1 ring-gray-200 dark:border-white/10 dark:bg-gray-900 dark:ring-white/10">
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[85vh] gap-0 overflow-y-auto sm:max-w-lg">
         <DialogHeader>
-          <div className="flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-white ring-1 ring-slate-200 dark:ring-white/10">
-              {BrandIcon ? (
-                <BrandIcon className="h-8 w-8" />
-              ) : plugin.transport === "http" ? (
-                <Globe className="h-6 w-6 text-blue-400" />
-              ) : plugin.transport === "builtin" ? (
-                <Code className="h-6 w-6 text-blue-400" />
-              ) : (
-                <Puzzle className="h-6 w-6 text-blue-400" />
-              )}
-            </div>
-            <div>
-              <DialogTitle>
-                {translate(
-                  plugin.displayNameI18n,
-                  locale,
-                  plugin.defaultLocale || "en"
-                ) || plugin.displayName}
-              </DialogTitle>
-              <p className="text-sm text-muted-foreground">
-                {plugin.orgDisplayName} · v{plugin.version}
-              </p>
-            </div>
-          </div>
+          <DialogTitle className="sr-only">{plugin.displayName}</DialogTitle>
         </DialogHeader>
 
-        <div className="mt-2 space-y-4">
-          <p className="text-sm text-muted-foreground">
-            {translate(
-              plugin.longDescriptionI18n || plugin.descriptionI18n,
-              locale,
-              plugin.defaultLocale || "en"
-            ) ||
-              plugin.longDescription ||
-              plugin.description}
-          </p>
-
-          <div className="flex flex-wrap gap-2">
-            <Badge
-              variant="outline"
-              className="border-gray-200 dark:border-white/10"
-            >
-              {transportLabels[plugin.transport] || plugin.transport}
-            </Badge>
-            <Badge
-              variant="outline"
-              className="border-gray-200 dark:border-white/10"
-            >
-              Runtime:{" "}
-              {reuseScopeLabels[plugin.lifecycleScope] || plugin.lifecycleScope}
-            </Badge>
-            {(plugin.categories || []).map((category) => (
-              <Badge
-                key={category.slug}
-                variant="outline"
-                className="border-blue-500/20 text-blue-500 dark:text-blue-300"
-              >
-                {translate(
-                  category.displayNameI18n,
-                  locale,
-                  category.defaultLocale || "en"
-                ) || category.displayName}
-              </Badge>
-            ))}
-            {(plugin.tags || []).map((tag: string) => (
-              <Badge
-                key={tag}
-                variant="secondary"
-                className="bg-gray-50 dark:bg-white/5"
-              >
-                {tag}
-              </Badge>
-            ))}
-          </div>
-
-          {/* Config requirements notice */}
-          {hasRequiredConfig ? (
-            <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
-              <div className="mb-1 flex items-center gap-2">
-                <Key className="h-4 w-4 text-amber-400" />
-                <span className="text-xs font-medium text-amber-300">
-                  Requires configuration
+        {/* header */}
+        <div className="flex items-start gap-3">
+          <PluginIcon
+            brandSlug={pluginBrandSlug(plugin.slug)}
+            title={plugin.displayName}
+            transport={plugin.transport}
+            className="size-7"
+            containerClassName="size-12 rounded-2xl"
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <h2 className="truncate text-lg font-semibold">
+                {plugin.displayName}
+              </h2>
+              {plugin.isBuiltin && (
+                <span className="shrink-0 rounded border px-1 text-[10px] leading-4 text-muted-foreground/70">
+                  官方
                 </span>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                This plugin requires an API key or other configuration to
-                function.
-              </p>
+              )}
             </div>
-          ) : null}
-
-          {tools.length > 0 ? (
-            <div>
-              <h4 className="mb-2 flex items-center gap-2 text-sm font-medium">
-                <Wrench className="h-4 w-4 text-blue-400" />
-                Tools ({tools.length})
-              </h4>
-              <div className="space-y-2">
-                {tools.map((rawTool) => {
-                  const tool = asToolSummary(rawTool)
-                  return (
-                    <div
-                      key={tool.name}
-                      className="rounded border border-gray-200 bg-gray-50 p-2 dark:border-white/10 dark:bg-white/5"
-                    >
-                      <p className="font-mono text-sm font-medium text-blue-400">
-                        {tool.name}
-                      </p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {tool.description}
-                      </p>
-                    </div>
-                  )
-                })}
-              </div>
+            <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+              <span>{plugin.categories[0]?.displayName}</span>
+              <span>· {transportLabel(plugin.transport)}</span>
+              <span>· {regionLabel(plugin.slug)}</span>
+              <span>· {pluginAuthLabel(plugin)}</span>
             </div>
-          ) : null}
-
-          <div className="flex gap-2 pt-2">
-            {installedCount > 0 ? (
-              <Badge className="border-green-500/30 bg-green-500/20 text-green-400">
-                Installed
-                {installedCount > 1 ? ` (${installedCount} instances)` : ""}
-              </Badge>
-            ) : null}
-            <Button onClick={onInstall} className="flex-1">
-              {installedCount > 0 ? "Create Another Installation" : "Install"}
-            </Button>
-            <Button variant="outline" onClick={onClose}>
-              Close
-            </Button>
           </div>
+          {health && (
+            <span className="mr-7 flex shrink-0 items-center gap-1.5 text-xs">
+              <span className={cn("size-1.5 rounded-full", health.dot)} />
+              <span
+                className={
+                  health.danger ? "text-red-600" : "text-muted-foreground"
+                }
+              >
+                {health.label}
+              </span>
+            </span>
+          )}
+        </div>
+
+        <div className="mt-5 space-y-5">
+          <Section title="简介">
+            <p className="text-sm leading-6 text-foreground/80">
+              {plugin.longDescription}
+            </p>
+          </Section>
+
+          <Section
+            icon={<Wrench className="size-3.5 text-muted-foreground" />}
+            title="工具"
+          >
+            {tools.length > 0 ? (
+              <div className="divide-y rounded-lg border">
+                {tools.map((t, i) => (
+                  <div key={i} className="px-3 py-2 text-sm">
+                    <code className="text-[13px]">{t.name}</code>
+                    {t.description && (
+                      <span className="ml-2 text-muted-foreground">
+                        {t.description}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="rounded-lg border border-dashed px-3 py-2.5 text-xs text-muted-foreground">
+                工具由「{plugin.displayName}
+                」服务在连接时实时下发，安装后可查看。
+              </p>
+            )}
+          </Section>
+
+          <Section
+            icon={<ShieldCheck className="size-3.5 text-muted-foreground" />}
+            title="需要的权限"
+          >
+            <div className="flex flex-wrap gap-1.5">
+              {plugin.authorization.requiredPermissions.map((p) => (
+                <span
+                  key={p}
+                  className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
+                >
+                  {p}
+                </span>
+              ))}
+            </div>
+            {plugin.authorization.reason && (
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                {plugin.authorization.reason}
+              </p>
+            )}
+          </Section>
+
+          {plugin.configFields.length > 0 && (
+            <Section title="配置项">
+              <div className="space-y-1.5">
+                {plugin.configFields.map((f) => (
+                  <div
+                    key={f.key}
+                    className="flex items-baseline gap-2 text-sm"
+                  >
+                    <span className="min-w-24 shrink-0">
+                      {f.titleI18n["zh-CN"] ?? f.key}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {FIELD_HINT[f.type] ?? f.type}
+                      {f.required && " · 必填"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </Section>
+          )}
+
+          <p className="rounded-lg bg-muted/40 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
+            插件仅在你授权的范围内调用外部服务，不会获得超出你自身权限的数据。
+          </p>
+        </div>
+
+        {/* footer */}
+        <div className="mt-5 flex items-center justify-between border-t pt-4">
+          <button
+            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+            onClick={() => toast.message("打开文档（Phase 2）")}
+          >
+            <ExternalLink className="size-3.5" /> 查看文档
+          </button>
+          {installation ? (
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                onClick={() =>
+                  toast.message(
+                    installation.isEnabled
+                      ? "已停用（Phase 2）"
+                      : "已启用（Phase 2）"
+                  )
+                }
+              >
+                {installation.isEnabled ? "停用" : "启用"}
+              </Button>
+              <Button onClick={() => toast.message("配置 / 连接（Phase 2）")}>
+                管理配置
+              </Button>
+            </div>
+          ) : (
+            <Button onClick={() => toast.message("安装流程（Phase 2）")}>
+              安装
+            </Button>
+          )}
         </div>
       </DialogContent>
     </Dialog>
