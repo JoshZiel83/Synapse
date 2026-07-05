@@ -1,9 +1,10 @@
 // Curated Skills fixtures — a realistic set of installable AI-agent skill modules
 // (Chinese, real use-cases) for the card-based Skills page, replacing the random
 // faker output (lorem names, "Unknown" dates, English) in the old table.
-import type {
-  InstalledSkillView,
-  SkillMarketplaceEntryView,
+import {
+  createCanonicalContentBlockId,
+  type InstalledSkillView,
+  type SkillMarketplaceEntryView,
 } from "@synapse/shared"
 import { dateToIsoInstant } from "@synapse/shared/datetime"
 import { designWorkspaceId, designWorkspaceMemberId } from "./identity"
@@ -12,8 +13,14 @@ const ts = (iso: string) => dateToIsoInstant(new Date(iso))
 const WS = designWorkspaceId
 
 type Block = InstalledSkillView["description"]
+// blocks MUST carry a unique id — the editor keys + dnd-kit sort by block.id; an
+// id-less block yields duplicate React keys and unsortable rows.
 const descBlock = (text: string): Block =>
-  ({ type: "text", text }) as unknown as Block
+  ({
+    id: createCanonicalContentBlockId(),
+    type: "text",
+    text,
+  }) as unknown as Block
 
 type Subject = InstalledSkillView["accessTarget"]["subject"]
 const SUBJECTS: Record<string, Subject> = {
