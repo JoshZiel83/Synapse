@@ -1,7 +1,11 @@
 "use client"
 
-import { SkillForm } from "../../../skill-form"
+import { useParams } from "next/navigation"
+
+import { InstalledSkillEditorPage } from "../../../skills-client"
 
 export default function InstalledSkillEditorRoutePage() {
-  return <SkillForm mode="edit" />
+  const params = useParams<{ skillId: string }>()
+
+  return <InstalledSkillEditorPage skillId={params.skillId} />
 }
