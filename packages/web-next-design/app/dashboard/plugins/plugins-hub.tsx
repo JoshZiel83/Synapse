@@ -222,12 +222,15 @@ export default function PluginsHub() {
         </div>
       )}
 
-      <PluginDetailDialog
-        plugin={detail?.plugin ?? null}
-        installation={detail?.installation ?? null}
-        open={!!detail}
-        onOpenChange={(o) => !o && setDetail(null)}
-      />
+      {workspaceId && (
+        <PluginDetailDialog
+          plugin={detail?.plugin ?? null}
+          installation={detail?.installation ?? null}
+          open={!!detail}
+          onOpenChange={(o) => !o && setDetail(null)}
+          workspaceId={workspaceId}
+        />
+      )}
     </div>
   )
 }

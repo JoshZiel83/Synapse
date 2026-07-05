@@ -452,17 +452,16 @@ export const findMarketplacePlugin = (id: string) =>
   designMarketplacePlugins.find((p) => p.id === id || p.slug === id)
 
 // ── installed builder + a few installed plugins with varied health ────────────
-function installed(
-  slug: string,
+export function buildInstallation(
+  p: MarketplacePluginView,
   o: {
     isEnabled: boolean
     status: "active" | "disabled" | "error" | "archived"
     configState: PluginInstallationDetailView["configState"]
   }
 ): PluginInstallationDetailView {
-  const p = designMarketplacePlugins.find((x) => x.slug === slug)!
   return {
-    id: `inst-${slug}`,
+    id: `inst-${p.slug}`,
     workspaceId: WS,
     pluginId: p.id,
     lifecycleScope: "workspace",
@@ -513,6 +512,29 @@ function installed(
     revision: { authorization: p.authorization },
   }
 }
+
+const installed = (
+  slug: string,
+  o: {
+    isEnabled: boolean
+    status: "active" | "disabled" | "error" | "archived"
+    configState: PluginInstallationDetailView["configState"]
+  }
+) =>
+  buildInstallation(designMarketplacePlugins.find((x) => x.slug === slug)!, o)
+
+// a fresh "just installed, needs config" installation for the install transition
+export const draftInstallation = (
+  p: MarketplacePluginView
+): PluginInstallationDetailView =>
+  buildInstallation(p, {
+    isEnabled: false,
+    status: "active",
+    configState: p.configFields.map((f) => ({
+      key: f.key,
+      isConfigured: false,
+    })),
+  })
 
 export const designInstalledPlugins: PluginInstallationDetailView[] = [
   // fully working: configured API key, enabled
@@ -580,3 +602,81 @@ export const findInstalledPlugin = (id: string) =>
   designInstalledPlugins.find(
     (p) => p.id === id || p.pluginId === id || p.pluginSlug === id
   )
+
+// ── auth-session flow (connect: OAuth redirect / feishu·mijia QR) ─────────────
+import type { PluginAuthSessionView } from "@synapse/shared"
+
+const FUTURE = ts("2026-07-06T08:00:00.000Z")
+const ACCOUNT: Record<string, string> = {
+  feishu: "林墨 · 设计工作区",
+  mijia: "小米账号 138****6621",
+  figma: "lin@studio.com",
+}
+export const pluginAccountName = (pluginId: string) =>
+  ACCOUNT[pluginId.replace(/^pl-/, "")] ?? "已连接账号"
+
+function driverOf(pluginId: string, bindingKey?: string) {
+  const p = findMarketplacePlugin(pluginId)
+  const b = bindingKey
+    ? p?.authBindings.find((x) => x.key === bindingKey)
+    : p?.authBindings[0]
+  return b?.driver ?? "oauth2_authorization_code_pkce"
+}
+
+export function designAuthSessionPending(
+  pluginId: string,
+  bindingKey: string
+): PluginAuthSessionView {
+  const driver = driverOf(pluginId, bindingKey)
+  const isQr = driver !== "oauth2_authorization_code_pkce"
+  return {
+    id: `sess-${pluginId}`,
+    workspaceId: WS,
+    packageId: pluginId,
+    bindingKey,
+    driver,
+    workspaceMemberId: "wm-lin",
+    status: "pending",
+    phase: isQr ? "pending_scan" : "awaiting_callback",
+    challenge: isQr
+      ? {
+          kind: "qr_code",
+          qrUrl: `https://app.synapse/connect/${pluginId}`,
+          expiresAt: FUTURE,
+        }
+      : {
+          kind: "redirect",
+          url: `https://provider.example/oauth/authorize?client_id=demo&plugin=${pluginId}`,
+          openMode: "popup",
+          expiresAt: FUTURE,
+        },
+    resultPreview: {},
+    metadata: {},
+    expiresAt: FUTURE,
+    createdAt: UPDATED,
+    updatedAt: UPDATED,
+  }
+}
+
+export function designAuthSessionCompleted(
+  sessionId: string
+): PluginAuthSessionView {
+  const pluginId = sessionId.replace(/^sess-/, "")
+  return {
+    id: sessionId,
+    workspaceId: WS,
+    packageId: pluginId,
+    bindingKey:
+      findMarketplacePlugin(pluginId)?.authBindings[0]?.key ?? "oauth",
+    driver: driverOf(pluginId),
+    workspaceMemberId: "wm-lin",
+    status: "completed",
+    phase: "finalizing",
+    resultPreview: { displayName: pluginAccountName(pluginId) },
+    authConnectionId: `conn-${pluginId}`,
+    metadata: {},
+    expiresAt: FUTURE,
+    createdAt: UPDATED,
+    updatedAt: UPDATED,
+  }
+}

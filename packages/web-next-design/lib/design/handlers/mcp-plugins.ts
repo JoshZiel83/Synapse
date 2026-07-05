@@ -13,6 +13,8 @@ import {
   designInstalledPlugins,
   findMarketplacePlugin,
   findInstalledPlugin,
+  designAuthSessionPending,
+  designAuthSessionCompleted,
 } from "../fixtures/mcp-plugins"
 import type { DesignHandlers } from "./_types"
 
@@ -38,8 +40,10 @@ export const mcpPluginsHandlers = {
   installPlugin: async () => mock(PluginInstallationDetailViewSchema),
   updateInstallation: async () => mock(PluginInstallationDetailViewSchema),
   uninstallPlugin: async () => mock(WorkspaceResourceSuccessViewSchema),
-  startPluginAuth: async () => mock(PluginAuthSessionViewSchema),
-  getPluginAuthSession: async () => mock(PluginAuthSessionViewSchema),
+  startPluginAuth: async (_ws: string, pluginId: string, bindingKey: string) =>
+    designAuthSessionPending(pluginId, bindingKey),
+  getPluginAuthSession: async (_ws: string, sessionId: string) =>
+    designAuthSessionCompleted(sessionId),
   inspectPluginAuthSession: async () => mock(PluginAuthSessionViewSchema),
   getMcpToolCallLogs: async () => mock(PluginAuditLogListSchema),
   getMcpEventLogs: async () => mock(PluginAuditLogListSchema),
