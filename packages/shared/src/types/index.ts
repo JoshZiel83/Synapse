@@ -180,6 +180,7 @@ import type { ToolSourceKind } from "../tool-source/kinds.js"
 import type {
   FilesystemPolicy as FilesystemPolicyBase,
   CUAPolicy as CUAPolicyBase,
+  PtyPolicy as PtyPolicyBase,
   BrowserPolicy as BrowserPolicyBase,
   CommandlinePolicy as CommandlinePolicyBase,
   GrantPolicy as GrantPolicyBase,
@@ -3316,6 +3317,8 @@ export interface RuntimeAuthorizationFilesystemPolicy extends FilesystemPolicyBa
 
 export interface RuntimeAuthorizationCUAPolicy extends CUAPolicyBase {}
 
+export interface RuntimeAuthorizationPtyPolicy extends PtyPolicyBase {}
+
 export interface RuntimeAuthorizationBrowserPolicy extends BrowserPolicyBase {}
 
 /**
@@ -3375,6 +3378,13 @@ export interface RuntimeAuthorizationRequestedAction {
   cua?: RuntimeAuthorizationCUAPolicy
   browser?: RuntimeAuthorizationRequestedActionBrowser
   commandline?: RuntimeAuthorizationCommandlinePolicy
+  /**
+   * pty session-open request block (§5 / P4a S8). Present only for a
+   * `capability:"pty"` action (produced by the pty projector on `pty.open`).
+   * Carries the session cwd (default /conversation); ptyPolicyAllows matches on
+   * it (cwd/isolation only — never command/byte content). Test-only in P4a.
+   */
+  pty?: RuntimeAuthorizationPtyPolicy
 }
 
 // subject-scope-refactor: SharedRuntimeAuthorizationGrantSpec (camelCase) is the

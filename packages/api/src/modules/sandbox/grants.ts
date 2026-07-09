@@ -100,6 +100,16 @@ export interface CreateSandboxGrantsParams {
    * (no bwrap/userns): only fs tools are authorized.
    */
   includeCommandline: boolean
+  /**
+   * The adapter descriptor's fs-confinement posture (P4a S13). 'native' (default)
+   * mints the SUB-PREFIX fs grant over the three mount points — the plane can
+   * realpath-confine to those. 'unsupported' (a genuinely remote fs that can't
+   * sub-confine, e.g. a degraded provider) REFUSES the sub-prefix grant and mints
+   * a WHOLE-SANDBOX-scope grant instead (pathPrefixes:["/"]) → deriveConfinementScope
+   * yields WHOLE_SCOPE (root-jail), NEVER []/deny (F-C). expected_sha256/create_only
+   * are then advisory (the descriptor's staleWriteGuard is 'advisory').
+   */
+  confinedFs?: "native" | "unsupported"
   createdByWorkspaceMemberId?: string | null
 }
 
@@ -137,12 +147,16 @@ export async function createSandboxGrants(
   const subject = actorRef(actorId)
   const scope = conversationRef(conversationId)
 
-  // (a) filesystem write over the three mount points.
+  // (a) filesystem write. 'native' confinement → the three mount points (the
+  // plane realpath-confines to them). 'unsupported' (degraded, S13) → REFUSE the
+  // sub-prefix grant; mint a WHOLE-SANDBOX-scope grant (the whole VFS root) so the
+  // plane runs root-jailed (WHOLE_SCOPE), never with an unenforceable sub-prefix.
   const fsPolicy: SharedRuntimeAuthorizationGrantSpec = {
     capability: "filesystem",
     filesystem: {
       access: "write",
-      pathPrefixes: [...SANDBOX_MOUNT_POINTS],
+      pathPrefixes:
+        params.confinedFs === "unsupported" ? ["/"] : [...SANDBOX_MOUNT_POINTS],
     },
   }
   await createRuntimeAuthorizationGrant({

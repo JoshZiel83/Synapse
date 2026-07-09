@@ -23,6 +23,7 @@ import {
 import {
   coreInvokeBarePlane,
   createLocalBareDataPlane,
+  createDockerBareDataPlane,
   deriveConfinementScope,
   EmptyScopeDeniedError,
   type ConfinementCtx,
@@ -81,11 +82,39 @@ export interface DispatchBareRuntimeToolInput {
   /** Test seams. */
   now?: () => number
   run?: Executor
-  /** Rebuild factory (default: in-process local:bare plane). */
+  /** Rebuild factory (default: scheme-forked local:bare / docker:bare plane). */
   planeFactory?: (opts: {
     sandboxRoot: string
     descriptor: SandboxCapabilityDescriptor
+    /** The persisted scheme-tagged endpoint (inprocess:/docker-exec:). */
+    dataPlaneEndpoint: string | null
   }) => SandboxDataPlane
+}
+
+/**
+ * Rebuild the correct plane kind from the persisted, scheme-tagged endpoint
+ * (never live config — mode-flip safety). `docker-exec:<cid>` → a docker:bare
+ * plane bound to that container; anything else (`inprocess:<id>`) → the in-process
+ * local:bare plane. The plane's fs is host-side either way (same vfs kernel).
+ */
+function rebuildBarePlane(opts: {
+  sandboxRoot: string
+  descriptor: SandboxCapabilityDescriptor
+  dataPlaneEndpoint: string | null
+}): SandboxDataPlane {
+  const endpoint = opts.dataPlaneEndpoint ?? ""
+  if (endpoint.startsWith("docker-exec:")) {
+    const containerId = endpoint.slice("docker-exec:".length)
+    return createDockerBareDataPlane({
+      sandboxRoot: opts.sandboxRoot,
+      descriptor: opts.descriptor,
+      containerId,
+    })
+  }
+  return createLocalBareDataPlane({
+    sandboxRoot: opts.sandboxRoot,
+    descriptor: opts.descriptor,
+  })
 }
 
 function errResult(
@@ -124,10 +153,11 @@ export async function dispatchBareRuntimeTool(
     }
     const descriptor =
       row.capabilityDescriptor as unknown as SandboxCapabilityDescriptor
-    const factory = input.planeFactory ?? ((o) => createLocalBareDataPlane(o))
+    const factory = input.planeFactory ?? rebuildBarePlane
     plane = factory({
       sandboxRoot: sandboxRootForSession(row.sessionId),
       descriptor,
+      dataPlaneEndpoint: row.dataPlaneEndpoint,
     })
     liveBarePlanes.set(input.runtimeId, plane)
   }

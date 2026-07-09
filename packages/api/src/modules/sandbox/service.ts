@@ -883,6 +883,10 @@ export async function provisionSandbox(
       conversationId: ctx.conversationId,
       builtins,
       includeCommandline: commandlineEnabled,
+      // P4a S13: a bare adapter whose descriptor declares confinedFs:'unsupported'
+      // (degraded) mints a whole-sandbox-scope fs grant instead of the sub-prefix
+      // one. A resident adapter has no descriptor (null) → 'native' default.
+      confinedFs: adapter.capabilities?.confinedFs ?? "native",
       createdByWorkspaceMemberId: options.createdByWorkspaceMemberId ?? null,
     })
 

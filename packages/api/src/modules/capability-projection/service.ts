@@ -586,11 +586,14 @@ function unionWithDevice(
         : undefined
     let requestedAction
     try {
+      // P4a S8: pass builtin_kind STRAIGHT THROUGH to the classifier registry.
+      // pty is now in RUNTIME_AUTHORIZATION_CAPABILITIES and has its own
+      // projector (capability:"pty", gated by ptyPolicyAllows on cwd/isolation),
+      // so the old `pty→null` special-case (which mis-routed pty into the cua
+      // generic shape) is DROPPED. A NULL builtin_kind (device-proxied
+      // non-builtin exposure) is handled by an explicit `case null` projector.
       requestedAction = buildRequestedAction({
-        // pty is a new builtin with no fine-grained authorization capability
-        // (not in RUNTIME_AUTHORIZATION_CAPABILITIES); fall through to the
-        // generic (null) requested-action shape.
-        capability: row.builtinKind === "pty" ? null : row.builtinKind,
+        capability: row.builtinKind,
         toolName: row.visibleToolName,
         visibleToolName: row.visibleToolName,
         args: sanitizedInput,
@@ -599,6 +602,18 @@ function unionWithDevice(
       })
     } catch (err) {
       if (err instanceof InvalidExecFileArgsError) {
+        return withDeviceToolOrigin(
+          synapseErrorBlock({
+            code: err.synapseCode,
+            message: err.message,
+            details: err.details,
+          }),
+          origin
+        )
+      }
+      // Fail-closed: a genuinely-unknown non-null builtin_kind → permission_denied
+      // (never mis-routed to a wrong capability's grant matcher).
+      if (err instanceof UnregisteredBuiltinKindError) {
         return withDeviceToolOrigin(
           synapseErrorBlock({
             code: err.synapseCode,
@@ -1267,6 +1282,29 @@ class InvalidExecFileArgsError extends Error {
   }
 }
 
+/**
+ * Raised by buildRequestedAction's classifier registry when a dispatched tool
+ * carries a builtin_kind that has NO registered requested-action projector — a
+ * genuinely-unknown NON-NULL kind (e.g. a future runtime_exposures_builtin_kind
+ * enum value not yet taught to this classifier). Fail-closed: the call site maps
+ * it to permission_denied rather than silently mis-routing the call to a wrong
+ * capability's grant matcher.
+ *
+ * NOTE (P4a S8 null-reachability analysis): a NULL builtin_kind (a device-proxied
+ * non-builtin/stdio exposure) is NOT unregistered — it has an EXPLICIT `case null`
+ * projector that preserves its historical cua-shaped behavior, so it never
+ * reaches this error. Only non-null unknowns fail closed here.
+ */
+class UnregisteredBuiltinKindError extends Error {
+  readonly synapseCode = "permission_denied"
+  readonly details: Record<string, unknown>
+  constructor(message: string, details: Record<string, unknown> = {}) {
+    super(message)
+    this.name = "UnregisteredBuiltinKindError"
+    this.details = details
+  }
+}
+
 function principalKindFor(principal: DevicePrincipal): OperationPrincipalKind {
   switch (principal.kind) {
     case "actor":
@@ -1294,7 +1332,15 @@ function principalKindFor(principal: DevicePrincipal): OperationPrincipalKind {
 // Exported for tests; not part of the module's stable surface (no consumers
 // outside this file at runtime).
 export function buildRequestedAction(args: {
-  capability: "filesystem" | "commandline" | "browser" | "cua" | null
+  /**
+   * The dispatched exposure's `builtin_kind` (a builtin_kind-keyed classifier
+   * registry, P4a S8). The four device builtins project identically to before;
+   * `pty` gets its own projector (was previously mis-routed pty→null→cua); a
+   * NULL kind (device-proxied non-builtin/stdio exposure) has an explicit
+   * cua-preserving projector; a genuinely-unknown non-null kind fail-closes via
+   * UnregisteredBuiltinKindError.
+   */
+  capability: "filesystem" | "commandline" | "browser" | "cua" | "pty" | null
   toolName: string
   /** The unnamespaced tool name as the device exposes it (e.g. "bash",
    *  "cua_click"). Used to distinguish read vs write at the tool level. */
@@ -1573,20 +1619,78 @@ export function buildRequestedAction(args: {
       }
     }
     case "cua":
-    default: {
-      // CUA_WRITE_TOOLS is the single source of truth for which cua tool
-      // names require runtime_authorization access='write'. Imported from
-      // @synapse/device-protocol so this classifier and the device-side
-      // enforcement in device-runtime/src/builtins/cua.ts stay in lockstep.
-      const writeTools = new Set<string>(CUA_WRITE_TOOLS)
+      return cuaProjector(tool, args.toolName, summary, detail)
+    case null:
+      // P4a S8 null-reachability analysis (explicit `case null` — preserves the
+      // pre-P4a `case "cua": default:` behavior for a NULL builtin_kind).
+      //
+      // A device-proxied NON-builtin exposure (transport='stdio'|'http'|'sse'|
+      // 'custom') projects builtin_kind=NULL (schema CHECK chk_runtime_exposures_
+      // builtin_kind). Such an exposure is dispatchable: device.catalog.sync
+      // persists whatever the authenticated device publishes with NO transport
+      // restriction, the projection SELECT + handler assembly have no transport
+      // filter, and dispatchDeviceTool routes it through here. No first-party
+      // device-runtime builtin emits a non-builtin transport today, but the wire
+      // contract fully supports it — so NULL is STRUCTURALLY REACHABLE for a real
+      // dispatched tool. Its historical behavior (the collapsed `default`) was a
+      // cua-shaped generic action; PRESERVED EXACTLY here to avoid a Mode-A
+      // regression. Only genuinely-unknown NON-NULL kinds fail closed (default).
+      return cuaProjector(tool, args.toolName, summary, detail)
+    case "pty":
+      // NEW pty projector (P4a S8). A pty builtin_kind produces a capability:
+      // "pty" action gated by ptyPolicyAllows on cwd/isolation ONLY — command/
+      // byte content is NEVER routed into a command-text matcher (that would be
+      // fail-OPEN: a narrow command grant would become a full interactive
+      // shell). The capability-equality guard makes a commandline/sandbox grant
+      // structurally unable to cover pty.open. This REPLACES the prior pty→null→
+      // cua mis-routing (the `row.builtinKind === "pty" ? null` call-site special
+      // case is dropped). pty is TEST-ONLY in P4a (no production pty exposure).
       return {
-        capability: "cua",
+        capability: "pty",
         toolName: args.toolName,
         summary,
         detail,
-        cua: { access: writeTools.has(tool) ? "write" : "read" },
+        pty: {
+          workingDirectory:
+            typeof args.args["working_directory"] === "string"
+              ? (args.args["working_directory"] as string)
+              : "/conversation",
+        },
       }
-    }
+    default:
+      // Genuinely-unknown NON-NULL builtin_kind (a future
+      // runtime_exposures_builtin_kind enum value this classifier hasn't been
+      // taught) → fail-closed deny. NULL is handled explicitly above, so for the
+      // current DeviceBuiltinKind union this branch is unreachable at the type
+      // level; it exists as a runtime backstop against enum drift.
+      throw new UnregisteredBuiltinKindError(
+        `no requested-action projector for builtin_kind '${String(args.capability)}'`,
+        { reason: "unregistered_builtin_kind" }
+      )
+  }
+}
+
+/**
+ * cua requested-action projector. CUA_WRITE_TOOLS is the single source of truth
+ * for which cua tool names require access='write' — imported from
+ * @synapse/device-protocol so this classifier and the device-side enforcement in
+ * device-runtime/src/builtins/cua.ts stay in lockstep. Also serves the NULL
+ * (device-proxied non-builtin) projector (P4a S8 — preserves historical
+ * behavior).
+ */
+function cuaProjector(
+  tool: string,
+  toolName: string,
+  summary: string,
+  detail: string
+): RuntimeAuthorizationRequestedAction {
+  const writeTools = new Set<string>(CUA_WRITE_TOOLS)
+  return {
+    capability: "cua",
+    toolName,
+    summary,
+    detail,
+    cua: { access: writeTools.has(tool) ? "write" : "read" },
   }
 }
 

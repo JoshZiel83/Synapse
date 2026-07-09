@@ -590,6 +590,211 @@ function makeDockerHandle(args: {
   }
 }
 
+// ─────────────────────────── docker:bare (Mode-B, P4a S10) ───────────────────
+
+export interface BuildBareDockerRunArgsInput {
+  opts: {
+    /** Stock hardened base image (NO device-runtime/frp/bootstrap/secrets). */
+    bareImage: string
+    storageVolume: string
+    /** uid the container runs as (uid-parity with the API — see config gate). */
+    runAsUid?: number
+    pidsLimit: number
+    memory: string
+    /** Opt-in egress network; when empty the container is `--network none`. */
+    pureNetwork?: string
+  }
+  spec: SandboxSpec
+  containerName: string
+  /**
+   * The mount-point subpaths (relative names, e.g. "conversation") that EXIST on
+   * the host under the session root. Each is mounted as a SEPARATE volume-subpath
+   * at its literal in-container path (/conversation, …). NEVER the whole session
+   * root — the host-side `.synapse-internal` staging namespace must never be
+   * in-container (a host-side atomicWrite following an agent-planted symlink would
+   * be an arbitrary host write). This is the S10 HOST-RCE TRAP defense.
+   */
+  mountPoints: string[]
+}
+
+/**
+ * Build the `docker run` argv for a HARDENED bare sandbox container (P4a S10).
+ * Inverse of the resident args: default seccomp/AppArmor ON, `--cap-drop ALL`,
+ * `--network none`, `--pids-limit`/`--memory`, NO secrets env, `sleep infinity`
+ * keepalive. The API never dispatches tools INTO this container over MCP — it
+ * `docker exec`s the confined data plane's commands and does fs ops HOST-SIDE.
+ */
+export function buildBareDockerRunArgs(
+  input: BuildBareDockerRunArgsInput
+): string[] {
+  const { opts, spec, containerName, mountPoints } = input
+  const subpathRoot = volumeSubpathFor(spec)
+  const network = opts.pureNetwork?.trim() || "none"
+  const args = [
+    "run",
+    "-d",
+    // PID 1 reaper so a `sleep infinity` keepalive + `docker exec` children are
+    // reaped and signals propagate.
+    "--init",
+    "--name",
+    containerName,
+    "--label",
+    `${SANDBOX_SESSION_LABEL}=${spec.sessionId}`,
+    // Hardened network: no egress by default (kernel-level). Opt-in egress only
+    // via a DEDICATED network (config-gated, never the compose default/frp net).
+    "--network",
+    network,
+    // Drop ALL capabilities (inverse of resident's --cap-add SYS_ADMIN).
+    "--cap-drop",
+    "ALL",
+    // No privilege escalation. Default seccomp + AppArmor stay ON — we do NOT add
+    // seccomp=unconfined / apparmor=unconfined (the resident's mount-rslave needs
+    // are absent here: the bare container never runs bwrap).
+    "--security-opt",
+    "no-new-privileges",
+    "--pids-limit",
+    String(opts.pidsLimit),
+    "--memory",
+    opts.memory,
+    "--user",
+    String(opts.runAsUid ?? 0),
+  ]
+  // Mount ONLY the mount points that exist, each as a separate volume-subpath at
+  // its literal in-container path — NEVER the session root (HOST-RCE trap).
+  for (const name of mountPoints) {
+    args.push(
+      "--mount",
+      `type=volume,src=${opts.storageVolume},dst=/${name},volume-subpath=${subpathRoot}/${name}`
+    )
+  }
+  // NO `-e` env — a bare container carries no bootstrap token, no frp secrets, no
+  // server origin. It is a dumb keepalive the API execs into.
+  args.push(opts.bareImage, "sleep", "infinity")
+  return args
+}
+
+/**
+ * Typed error for an externally-removed sandbox container (a `docker rm -f` mid
+ * session). `docker exec` on a gone container exits 125 with "No such container";
+ * runDockerCapture surfaces this so the dispatch fork can flip the sandbox to
+ * state='failed' + preserve any uncommitted work (B13), rather than treating it
+ * as an ordinary non-zero command result.
+ */
+export class SandboxResourceGoneError extends Error {
+  readonly code = "resource_gone" as const
+  constructor(message: string) {
+    super(message)
+    this.name = "SandboxResourceGoneError"
+  }
+}
+
+export interface DockerCaptureResult {
+  /** The wrapped command's exit code (124 = in-container timeout(1) fired). */
+  code: number | null
+  stdout: string
+  stderr: string
+  /** Either stream hit maxStreamBytes and was clipped. */
+  truncated: boolean
+  /** The API-side backstop (T+10s) killed the CLI child + `docker kill`ed. */
+  killed: boolean
+}
+
+/**
+ * Capture-mode docker exec runner (P4a S10). Unlike runDocker, a NON-ZERO exit is
+ * a RESULT (a failing user command is not an infrastructure failure) — it rejects
+ * ONLY on a spawn 'error' or an externally-gone container (SandboxResourceGoneError,
+ * exit 125 + "No such container"). Two-tier timeout: the caller wraps the payload
+ * in-container with `timeout(1)`; this adds an API-side BACKSTOP at T+10s that
+ * SIGKILLs the CLI child AND `docker kill`s the container (a hung `docker exec`
+ * that the in-container timeout can't reach), setting `killed`.
+ */
+export function runDockerCapture(
+  spawnImpl: SpawnImpl,
+  args: string[],
+  opts: {
+    timeoutMs?: number
+    maxStreamBytes?: number
+    /** Container id for the backstop `docker kill`. */
+    containerId?: string
+    /** Grace beyond timeoutMs before the API-side backstop fires (default 10s;
+     *  test seam so the backstop is exercisable without a 10s wait). */
+    backstopGraceMs?: number
+  } = {}
+): Promise<DockerCaptureResult> {
+  const maxBytes = opts.maxStreamBytes ?? 1_000_000
+  const backstopMs =
+    (opts.timeoutMs ?? 30_000) + (opts.backstopGraceMs ?? 10_000)
+  return new Promise((resolvePromise, reject) => {
+    const child = spawnImpl("docker", args, {
+      stdio: ["ignore", "pipe", "pipe"],
+    })
+    let stdout = ""
+    let stderr = ""
+    let truncated = false
+    let killed = false
+    let settled = false
+    const append = (cur: string, chunk: string): string => {
+      if (cur.length >= maxBytes) {
+        truncated = true
+        return cur
+      }
+      const next = cur + chunk
+      if (next.length > maxBytes) {
+        truncated = true
+        return next.slice(0, maxBytes)
+      }
+      return next
+    }
+    child.stdout?.on("data", (d) => {
+      stdout = append(stdout, d.toString())
+    })
+    child.stderr?.on("data", (d) => {
+      stderr = append(stderr, d.toString())
+    })
+    const backstop = setTimeout(() => {
+      killed = true
+      try {
+        child.kill("SIGKILL")
+      } catch {
+        /* already gone */
+      }
+      if (opts.containerId) {
+        try {
+          // Best-effort container kill (separate CLI; ignore its result).
+          spawnImpl("docker", ["kill", opts.containerId], {
+            stdio: "ignore",
+          })
+        } catch {
+          /* best-effort */
+        }
+      }
+    }, backstopMs)
+    backstop.unref?.()
+    child.on("error", (err) => {
+      if (settled) return
+      settled = true
+      clearTimeout(backstop)
+      reject(err)
+    })
+    child.on("exit", (code) => {
+      if (settled) return
+      settled = true
+      clearTimeout(backstop)
+      // Externally-removed container ⇒ typed resource_gone (not a command result).
+      if (code === 125 && /no such container/i.test(stderr)) {
+        reject(
+          new SandboxResourceGoneError(
+            `sandbox container gone: ${stderr.slice(0, 200)}`
+          )
+        )
+        return
+      }
+      // A non-zero exit (incl. 124 = in-container timeout) is a RESULT.
+      resolvePromise({ code, stdout, stderr, truncated, killed })
+    })
+  })
+}
+
 function runDocker(
   spawnImpl: SpawnImpl,
   args: string[]

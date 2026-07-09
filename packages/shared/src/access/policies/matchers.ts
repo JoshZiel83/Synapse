@@ -496,3 +496,55 @@ function sandboxPolicyAllows(
 
   return policy
 }
+
+// ─────────────────────────── pty session-scope matcher ──────────────────────
+
+export interface PtyPolicyShape {
+  workingDirectory?: string
+  allowedEnv?: string[]
+}
+
+/**
+ * Authoritative pty (interactive terminal) authorization decision (§5 / P4a S8).
+ * `pty.open` is matched ONCE against the session's working directory + isolation
+ * posture; the returned session id then covers every follow-on
+ * `pty.write`/`resize`/`signal`/`stream`/`close`, which are NEVER re-matched.
+ *
+ * SECURITY — mirrors sandboxPolicyAllows, and DELIBERATELY inspects only the cwd
+ * (never command/argv/byte content): routing pty bytes through a command-text
+ * matcher would be fail-OPEN (a narrow command grant would silently become a
+ * full interactive shell). A capability:"pty" action can ONLY be covered by a
+ * capability:"pty" grant — the caller's `grant.capability !== action.capability`
+ * short-circuit blocks a commandline/sandbox grant from ever reaching here.
+ *
+ * Linux/isolation-only (bwrap/container jail is the boundary). The cwd MUST
+ * resolve within a sandbox mount point (and within the grant's optional narrower
+ * `workingDirectory` cap). A request with NO cwd is denied — we cannot prove a
+ * pty runs inside the jail without knowing its cwd (a pty session always has one;
+ * provisioning defaults it to /conversation).
+ */
+export function ptyPolicyAllows(
+  policy: PtyPolicyShape,
+  args: { cwd?: string; platform?: "win32" | "linux" | "darwin" }
+): boolean {
+  // pty confinement is Linux/bwrap-only; a win32 request can never be inside a jail.
+  if (args.platform === "win32") return false
+
+  const callDir = normalizePathPrefix(args.cwd)
+  if (!callDir) return false
+
+  // Must be within at least one mount point.
+  const withinAMount = SANDBOX_MATCHER_MOUNT_POINTS.some((mount) =>
+    pathWithinPrefix(callDir, mount)
+  )
+  if (!withinAMount) return false
+
+  // Honor the grant's optional narrower cap (a sub-mount).
+  if (policy.workingDirectory) {
+    const cap = normalizePathPrefix(policy.workingDirectory)
+    if (!cap) return false
+    if (!pathWithinPrefix(callDir, cap)) return false
+  }
+
+  return true
+}

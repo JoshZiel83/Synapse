@@ -4,6 +4,7 @@ import { FilesystemPolicySchema } from "./filesystem.js"
 import { CUAPolicySchema } from "./cua.js"
 import { BrowserPolicySchema } from "./browser.js"
 import { CommandlinePolicySchema } from "./commandline.js"
+import { PtyPolicySchema } from "./pty.js"
 
 // GrantPolicy mirrors the wire shape of a single grant spec. The shared
 // matcher in `./matchers.ts` (used by both API + device runtime) is the
@@ -16,6 +17,7 @@ export const GrantPolicySchema = z.object({
   cua: CUAPolicySchema.optional(),
   browser: BrowserPolicySchema.optional(),
   commandline: CommandlinePolicySchema.optional(),
+  pty: PtyPolicySchema.optional(),
 })
 
 export type GrantPolicy = z.infer<typeof GrantPolicySchema>
@@ -53,6 +55,7 @@ const BRANCH_SCHEMAS = {
   cua: CUAPolicySchema,
   browser: BrowserPolicySchema,
   commandline: CommandlinePolicySchema,
+  pty: PtyPolicySchema,
 } as const
 
 export function validateGrantPolicyForCapability(

@@ -702,6 +702,14 @@ export interface BareSandboxDispatchRow {
   state: SandboxRow["state"]
   runtimeDeletedAt: Date | null
   capabilityDescriptor: Record<string, unknown>
+  /**
+   * The bare_dataplane service's scheme-tagged non-dialable endpoint
+   * (`inprocess:<runtimeId>` for local:bare; `docker-exec:<containerId>` for
+   * docker:bare). The rebuild-on-miss path forks on the scheme to reconstruct the
+   * correct plane (a docker:bare plane needs the container id). NULL only if the
+   * bare_dataplane service is somehow absent (a hard-deny condition upstream).
+   */
+  dataPlaneEndpoint: string | null
 }
 
 export async function getBareSandboxForDispatch(
@@ -711,6 +719,15 @@ export async function getBareSandboxForDispatch(
   const row = await run
     .selectFrom("sandboxes as sb")
     .innerJoin("runtimes as r", "r.id", "sb.id")
+    // Surface the bare_dataplane service's endpoint so the rebuild-on-miss path
+    // can reconstruct the correct plane kind (docker:bare needs the container id
+    // parsed from `docker-exec:<cid>`). LEFT JOIN so a missing service still
+    // returns the row (the upstream hard-deny gates handle it).
+    .leftJoin("runtimeServices as rs", (join) =>
+      join
+        .onRef("rs.runtimeId", "=", "sb.id")
+        .on("rs.serviceKind", "=", "bare_dataplane")
+    )
     .select([
       "sb.sessionId",
       "sb.mode",
@@ -718,6 +735,7 @@ export async function getBareSandboxForDispatch(
       "sb.state",
       "sb.capabilityDescriptor",
       "r.deletedAt as runtimeDeletedAt",
+      "rs.dataPlaneEndpoint as dataPlaneEndpoint",
     ])
     .where("sb.id", "=", runtimeId)
     .executeTakeFirst()
@@ -730,6 +748,7 @@ export async function getBareSandboxForDispatch(
     runtimeDeletedAt: (row.runtimeDeletedAt as Date | null) ?? null,
     capabilityDescriptor:
       (row.capabilityDescriptor as Record<string, unknown> | null) ?? {},
+    dataPlaneEndpoint: (row.dataPlaneEndpoint as string | null) ?? null,
   }
 }
 

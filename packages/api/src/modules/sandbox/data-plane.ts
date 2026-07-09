@@ -14,6 +14,7 @@
 //      empty = structural deny). One kernel, no drift.
 
 import { existsSync } from "node:fs"
+import { spawn as nodeSpawn } from "node:child_process"
 import { Buffer } from "node:buffer"
 import { SANDBOX_MOUNT_POINTS } from "@synapse/shared"
 import {
@@ -36,6 +37,11 @@ import {
   type SpawnDescriptor,
 } from "@synapse/device-runtime"
 import type { SynapseError } from "@synapse/device-protocol"
+import {
+  runDockerCapture,
+  SandboxResourceGoneError,
+  type SpawnImpl,
+} from "./docker-sandbox-backend.js"
 import type { McpDispatchResult } from "../devices/dispatch.js"
 import type { RuntimeAuthorizationGrantRecord } from "../runtime-authorizations/repo.types.js"
 import type { SandboxCapabilityDescriptor } from "./model.js"
@@ -95,6 +101,13 @@ export function deriveConfinementScope(
       throw new EmptyScopeDeniedError(
         "filesystem grant derived an empty prefix set"
       )
+    }
+    // S13 degraded (confinedFs:'unsupported'): a WHOLE-SANDBOX-scope fs grant
+    // (pathPrefixes:["/"] — the whole VFS root) → WHOLE_SCOPE root-jail, NOT a
+    // literal "/" prefix. collapsePrefixes(["/","/x",…]) already collapsed any
+    // sub-prefix under "/" away, so a surviving "/" means "the whole root".
+    if (collapsed.length === 1 && collapsed[0] === "/") {
+      return WHOLE_SCOPE
     }
     return collapsed
   }
@@ -227,15 +240,29 @@ export interface LocalBareDataPlaneOptions {
 }
 
 /**
- * In-process reference data plane for local:bare (§4.7.2). fs via
- * createLocalFsBackend + the vfs kernel; exec via a bwrap-jailed child. bwrap is
- * MANDATORY — when it is absent, `exec` throws (structural fail-closed: NEVER run
- * a command unconfined on the API host). Every child is tracked so dispose() can
- * SIGTERM/SIGKILL exactly this plane's own children (never a sibling runtime).
+ * The confined HOST-SIDE fs surface shared by BOTH bare reference adapters
+ * (§4.7.2 / §4.7.3). fs ops flow through the SAME `@synapse/device-runtime` vfs
+ * kernel the resident builtin uses, under `withGrantPrefixes(ctx.scope, …)` — for
+ * local:bare AND docker:bare alike, the bytes are host-local under
+ * STORAGE_DIR/sandboxes/<id> (docker:bare's container merely volume-subpath-mounts
+ * the SAME dirs). Host-side realpath even STRENGTHENS docker:bare: an in-container
+ * absolute symlink resolves host-side OUTSIDE the granted prefix → rejected. Only
+ * `exec` differs (bwrap child vs `docker exec`), so it is layered on top.
  */
-export function createLocalBareDataPlane(
-  opts: LocalBareDataPlaneOptions
-): SandboxDataPlane {
+interface ConfinedHostFs {
+  backend: ExtendedLocalBackend
+  ensureStarted: () => Promise<void>
+  fs: Pick<
+    SandboxDataPlane,
+    "stat" | "list" | "read" | "write" | "mkdir" | "move" | "remove" | "search"
+  >
+}
+
+function buildConfinedHostFs(opts: {
+  sandboxRoot: string
+  descriptor: SandboxCapabilityDescriptor
+  ripgrepPath?: string
+}): ConfinedHostFs {
   const backend: ExtendedLocalBackend = createLocalFsBackend({
     rootPath: opts.sandboxRoot,
   })
@@ -246,15 +273,12 @@ export function createLocalBareDataPlane(
     startedOnce = true
   }
   const caps = opts.descriptor.core
-  const execControllers = new Set<AbortController>()
-  let running = 0
 
   function withScope<T>(ctx: ConfinementCtx, fn: () => Promise<T>): Promise<T> {
     return backend.withGrantPrefixes(ctx.scope, fn)
   }
 
-  return {
-    descriptor: opts.descriptor,
+  const fs: ConfinedHostFs["fs"] = {
     async stat(path, ctx) {
       await ensureStarted()
       const canonical = canonicalVfsPath(path)
@@ -383,6 +407,29 @@ export function createLocalBareDataPlane(
       })
       return { hits: out.hits, truncated: out.truncated }
     },
+  }
+  return { backend, ensureStarted, fs }
+}
+
+/**
+ * In-process reference data plane for local:bare (§4.7.2). fs via
+ * createLocalFsBackend + the vfs kernel (shared buildConfinedHostFs); exec via a
+ * bwrap-jailed child. bwrap is MANDATORY — when it is absent, `exec` throws
+ * (structural fail-closed: NEVER run a command unconfined on the API host). Every
+ * child is tracked so dispose() can SIGTERM/SIGKILL exactly this plane's own
+ * children (never a sibling runtime).
+ */
+export function createLocalBareDataPlane(
+  opts: LocalBareDataPlaneOptions
+): SandboxDataPlane {
+  const { ensureStarted, fs } = buildConfinedHostFs(opts)
+  const caps = opts.descriptor.core
+  const execControllers = new Set<AbortController>()
+  let running = 0
+
+  return {
+    descriptor: opts.descriptor,
+    ...fs,
     async exec(payload, _ctx) {
       await ensureStarted()
       // bwrap MANDATORY (fail-closed): NEVER run a command unconfined on the API
@@ -454,6 +501,109 @@ export function createLocalBareDataPlane(
         }
       }
       execControllers.clear()
+    },
+  }
+}
+
+// ─────────────────────────── docker:bare reference plane ─────────────────────
+
+/** Default in-container exec timeout (before the T+10s API-side backstop). */
+const DEFAULT_DOCKER_EXEC_TIMEOUT_MS = 60_000
+
+export interface DockerBareDataPlaneOptions {
+  /** Per-session sandbox FS root — the SAME host dirs the container mounts. */
+  sandboxRoot: string
+  descriptor: SandboxCapabilityDescriptor
+  /** The hardened keepalive container id (the docker-exec: endpoint target). */
+  containerId: string
+  ripgrepPath?: string
+  /** Test seam: the docker CLI spawner. */
+  spawnImpl?: SpawnImpl
+}
+
+/**
+ * Reference data plane for docker:bare (§4.7.3). fs is HOST-SIDE — the SAME
+ * buildConfinedHostFs / vfs kernel / ConfinementCtx path as local:bare (the bytes
+ * are host-local under STORAGE_DIR/sandboxes/<id>; the container merely
+ * volume-subpath-mounts them). We NEVER `docker cp` / `tar -x` on sandbox output
+ * (host-RCE) and NEVER grep in-container — host-side realpath confinement is both
+ * simpler AND stronger. Only `exec` reaches into the container, via
+ * `docker exec -w /<cwd> <cid> timeout -k 5 -s TERM <secs> <payload>` (runDockerCapture:
+ * a failing command is a RESULT; a gone container is a typed resource_gone).
+ */
+export function createDockerBareDataPlane(
+  opts: DockerBareDataPlaneOptions
+): SandboxDataPlane {
+  const { fs } = buildConfinedHostFs({
+    sandboxRoot: opts.sandboxRoot,
+    descriptor: opts.descriptor,
+    ripgrepPath: opts.ripgrepPath,
+  })
+  const caps = opts.descriptor.core
+  const spawnImpl = opts.spawnImpl ?? nodeSpawn
+  let running = 0
+
+  return {
+    descriptor: opts.descriptor,
+    ...fs,
+    async exec(payload, _ctx) {
+      // Exec concurrency cap (per-op cap).
+      if (running >= caps.maxConcurrentExec) {
+        throw new PlaneCapError(
+          `exec_concurrency_exceeded: ${running}/${caps.maxConcurrentExec} in flight`
+        )
+      }
+      running += 1
+      try {
+        const timeoutMs = payload.timeoutMs ?? DEFAULT_DOCKER_EXEC_TIMEOUT_MS
+        const secs = Math.max(1, Math.ceil(timeoutMs / 1000))
+        const cwd = payload.cwd || DEFAULT_SANDBOX_CWD
+        // In-container payload. bash → `bash -c <cmd>`; exec_file → `<prog> <args>`.
+        // No shell interpolation: argv is always an array (docker exec never sees
+        // a shell string), so untrusted values can't inject.
+        const inner =
+          payload.executor === "bash"
+            ? ["bash", "-c", payload.command ?? ""]
+            : [payload.program ?? "", ...(payload.args ?? [])]
+        // Two-tier timeout: in-container timeout(1) (TERM then KILL after 5s) +
+        // the API-side backstop inside runDockerCapture (T+10s → SIGKILL CLI +
+        // `docker kill <cid>`).
+        const argv = [
+          "exec",
+          "-w",
+          cwd,
+          opts.containerId,
+          "timeout",
+          "-k",
+          "5",
+          "-s",
+          "TERM",
+          String(secs),
+          ...inner,
+        ]
+        const res = await runDockerCapture(spawnImpl, argv, {
+          timeoutMs,
+          containerId: opts.containerId,
+          maxStreamBytes: caps.maxReadBytes,
+        })
+        return {
+          exitCode: res.code,
+          stdout: res.stdout,
+          stderr: res.stderr,
+          truncated: res.truncated,
+          // 124 = the in-container timeout(1) fired; treat as killed.
+          killed: res.killed || res.code === 124,
+        }
+      } finally {
+        running -= 1
+      }
+    },
+    async dispose() {
+      // A docker:bare plane owns no host-side long-lived children: every
+      // `docker exec` runs to completion or is SIGKILLed by runDockerCapture's
+      // backstop, and any still-running in-container process dies when the
+      // container is torn down (the adapter's kill() → docker stop+rm). So there
+      // is nothing plane-scoped to abort here — teardown is container-scoped.
     },
   }
 }
@@ -575,6 +725,13 @@ function mapPlaneError(err: unknown): McpDispatchResult {
   }
   if (err instanceof PlaneExecUnconfinedError) {
     return errResult("runtime_constraint", err.message)
+  }
+  if (err instanceof SandboxResourceGoneError) {
+    // The container was externally removed mid-session (B13). No dedicated
+    // SynapseError code exists, so surface runtime_constraint + a `resource_gone`
+    // detail; the dispatch/teardown spine flips sandboxes.state='failed' and runs
+    // failed-commit preservation off this signal.
+    return errResult("runtime_constraint", err.message, { resource_gone: true })
   }
   const message = err instanceof Error ? err.message : String(err)
   return errResult("runtime_constraint", message)

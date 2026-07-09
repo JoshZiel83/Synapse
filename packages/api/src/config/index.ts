@@ -316,6 +316,21 @@ export const envSchema = z
       (v) => (v === "" || v == null ? undefined : v),
       z.coerce.number().int().min(0).optional()
     ),
+    // docker:bare (Mode-B) hardened-container knobs (P4a S10). The bare image is
+    // a STOCK hardened base (NO device-runtime/frp/bootstrap/secrets inside) — a
+    // keepalive `sleep infinity` container the API `docker exec`s into. Defaults
+    // to debian-slim.
+    SANDBOX_DOCKER_BARE_IMAGE: withDefault(z.string(), "debian:bookworm-slim"),
+    // Opt-in egress for a bare container: when true the container attaches to the
+    // named egress network instead of `--network none`. Must NOT be the compose
+    // default network or the resident egress network (superRefine).
+    SANDBOX_DOCKER_PURE_NETWORK: withDefault(z.string(), ""),
+    // Hardened-container resource caps (bare). Positive ints; conservative defaults.
+    SANDBOX_DOCKER_PIDS_LIMIT: z.preprocess(
+      (v) => (v === "" || v == null ? undefined : v),
+      z.coerce.number().int().min(1).default(512)
+    ),
+    SANDBOX_DOCKER_MEMORY: withDefault(z.string(), "1g"),
     // Shared transport facts, read under their EXISTING keys (NOT renamed).
     FRP_SHARED_TOKEN: withDefault(z.string(), ""),
     SYNAPSE_TUNNEL_VHOST_HOST: withDefault(z.string(), ""),
@@ -576,6 +591,52 @@ export const envSchema = z
           })
         }
       }
+      // docker:bare (Mode-B, P4a S10). frp is gated on mode==='resident' (above),
+      // so a docker bare sandbox boots WITHOUT frp (no tunnel). Two extra gates:
+      if (sandboxMode === "bare") {
+        // (1) uid-PARITY. docker:bare does host-side fs ops through the SAME
+        // ExtendedLocalBackend as local:bare (the bytes are host-local under
+        // STORAGE_DIR); the container runs `--user <runAsUid>` and writes to the
+        // volume-subpath mounts. If the container uid ≠ the API uid, host-side and
+        // in-container writes fight over ownership. Require runAsUid === the API's
+        // own uid. (When the API runs as root, getuid()===0 and runAsUid must be 0
+        // — a documented root-in-container caveat.)
+        const apiUid =
+          typeof process.getuid === "function" ? process.getuid() : undefined
+        const runAsUid = env.SANDBOX_DOCKER_RUN_AS_UID
+        if (apiUid !== undefined && (runAsUid ?? 0) !== apiUid) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["SANDBOX_DOCKER_RUN_AS_UID"],
+            message:
+              `SANDBOX_DOCKER_RUN_AS_UID (${runAsUid ?? 0}) must equal the API process uid ` +
+              `(${apiUid}) for SANDBOX_PROVIDER=docker + SANDBOX_MODE=bare — docker:bare fs ` +
+              `ops are host-side, so a uid mismatch corrupts shared-volume ownership`,
+          })
+        }
+        // (2) PURE-NETWORK guard. A bare container defaults to `--network none`
+        // (kernel-level no egress). Opt-in egress via SANDBOX_DOCKER_PURE_NETWORK
+        // must name a DEDICATED network — never the compose default or the
+        // resident frp egress network (which reach the API/tunnel).
+        const pureNet = env.SANDBOX_DOCKER_PURE_NETWORK?.trim()
+        if (
+          pureNet &&
+          (pureNet === env.SANDBOX_DOCKER_NETWORK?.trim() ||
+            pureNet === "synapse-sandbox-egress" ||
+            pureNet === "bridge" ||
+            pureNet === "host")
+        ) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["SANDBOX_DOCKER_PURE_NETWORK"],
+            message:
+              `SANDBOX_DOCKER_PURE_NETWORK ('${pureNet}') must be a DEDICATED egress ` +
+              `network — not the compose default, 'bridge', 'host', or the resident ` +
+              `'synapse-sandbox-egress' network (those reach the API/tunnel; a bare ` +
+              `sandbox must not)`,
+          })
+        }
+      }
     }
   })
 
@@ -742,6 +803,11 @@ export const config = {
       storageVolume: env.SANDBOX_DOCKER_STORAGE_VOLUME.trim(),
       storageVolumeMount: env.SANDBOX_DOCKER_STORAGE_VOLUME_MOUNT,
       runAsUid: env.SANDBOX_DOCKER_RUN_AS_UID,
+      // docker:bare (Mode-B, P4a S10) hardened-container facts.
+      bareImage: env.SANDBOX_DOCKER_BARE_IMAGE.trim(),
+      pureNetwork: env.SANDBOX_DOCKER_PURE_NETWORK.trim(),
+      pidsLimit: env.SANDBOX_DOCKER_PIDS_LIMIT,
+      memory: env.SANDBOX_DOCKER_MEMORY.trim(),
       // Shared frp transport facts (read under their EXISTING keys).
       tunnel: {
         frpSharedToken: env.FRP_SHARED_TOKEN.trim(),
