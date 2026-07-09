@@ -635,16 +635,12 @@ async function main() {
           registrationToken: tunnelRegistrationToken ?? "",
         }
       } else if (tunnelMode === "noop") {
-        // Direct loopback for a co-located API (local sandbox backend). The
-        // loopbackHost lets a docker-internal name be substituted if ever
-        // needed; default 127.0.0.1 is what the server's local-sandbox SSRF
-        // branch accepts.
+        // Direct loopback for a co-located API (local sandbox backend). The host
+        // is always literal 127.0.0.1 — the only value the server's local-sandbox
+        // SSRF branch (validateLocalLoopbackUrl) accepts (§3.1). A docker-internal
+        // runtime uses provider_endpoint direct, not this noop loopback path.
         tunnel = {
-          adapter: createNoopTunnelAdapter({
-            loopbackHost:
-              getFlag(args.flags, "tunnel-loopback-host") ??
-              process.env.SYNAPSE_TUNNEL_LOOPBACK_HOST,
-          }),
+          adapter: createNoopTunnelAdapter(),
           registrationToken: tunnelRegistrationToken ?? "",
         }
       }

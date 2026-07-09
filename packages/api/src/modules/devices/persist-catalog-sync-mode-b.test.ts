@@ -27,7 +27,7 @@ async function seedWorkspace(
 ): Promise<{ workspaceId: string; userId: string }> {
   const user = await db
     .insertInto("users")
-    .values({ email: uniq("u") + "@pcs", name: "u" })
+    .values({ email: `${uniq("u")}@pcs`, name: "u" })
     .returning("id")
     .executeTakeFirstOrThrow()
   const ws = await db
@@ -76,6 +76,7 @@ test("S0: a device-less (kind='sandbox') runtime persists an api-authored catalo
         serviceKind: "bare_dataplane",
         status: "online",
         dataPlaneEndpoint: `inprocess:${runtimeId}`,
+        transport: "direct",
       } as any)
       .returning("id")
       .executeTakeFirstOrThrow()
@@ -221,6 +222,7 @@ test("S0: persistCatalogSync rejects a missing or soft-deleted runtime", async (
         serviceKind: "bare_dataplane",
         status: "online",
         dataPlaneEndpoint: `inprocess:${runtimeId}`,
+        transport: "direct",
       } as any)
       .returning("id")
       .executeTakeFirstOrThrow()

@@ -15,27 +15,18 @@ import type {
   TunnelStartOptions,
 } from "@synapse/device-protocol"
 
-export interface NoopTunnelAdapterOptions {
-  /**
-   * Override the loopback host returned in the handle's internalUrl.
-   * Defaults to "127.0.0.1" — set this when the API process resolves
-   * the device's MCP host via a docker-internal name.
-   */
-  loopbackHost?: string
-}
-
-export function createNoopTunnelAdapter(
-  opts: NoopTunnelAdapterOptions = {}
-): TunnelAdapter {
-  const loopbackHost = opts.loopbackHost ?? "127.0.0.1"
+export function createNoopTunnelAdapter(): TunnelAdapter {
   const handles = new Map<string, TunnelHandle>()
   return {
     async start(startOpts: TunnelStartOptions): Promise<TunnelHandle> {
       const handle: TunnelHandle = {
         runtimeServiceId: startOpts.runtimeServiceId,
-        // Direct loopback — the test harness's API is co-located with the
-        // runtime so it can reach the MCP host without a tunnel hop.
-        internalUrl: `http://${loopbackHost}:${startOpts.localPort}`,
+        // Direct loopback — the API is co-located with the runtime so it reaches
+        // the MCP host without a tunnel hop. The host is ALWAYS literal loopback:
+        // the API-side SSRF gate (validateLocalLoopbackUrl) rejects any non-literal
+        // host, so a docker-internal-name override here would be dead and would
+        // contradict the {direct, loopback} self-label (§3.1).
+        internalUrl: `http://127.0.0.1:${startOpts.localPort}`,
       }
       handles.set(startOpts.runtimeServiceId, handle)
       return handle

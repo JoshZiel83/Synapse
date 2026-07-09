@@ -46,6 +46,7 @@ import {
   closeControlPlaneSessionRows,
   getDeviceWorkspaceId,
   selectTunnelPathToken,
+  updateRuntimeServiceTransport,
   hasLiveLocalSandboxMount,
 } from "./repo.js"
 import {
@@ -135,7 +136,9 @@ export async function validateTunnelInternalUrl(args: {
   /** Executor seam (the repo defaults to the global db); tests inject a
    *  testcontainer db, threaded down to the repo reads. */
   executor?: KyselyDb
-}): Promise<{ ok: true } | { ok: false; message: string }> {
+}): Promise<
+  { ok: true; reach: "direct" | "indirect" } | { ok: false; message: string }
+> {
   const executor = args.executor
   let candidateUrl: URL
   try {
@@ -165,11 +168,13 @@ export async function validateTunnelInternalUrl(args: {
       trustedUrl = null
     }
     if (trustedUrl && candidateUrl.origin === trustedUrl.origin) {
-      return validateFrpEdgeUrl({
+      const r = await validateFrpEdgeUrl({
         candidateUrl,
         runtimeServiceId: args.runtimeServiceId,
         executor,
       })
+      // frp reverse tunnel = the runtime dials back; the API dials the edge.
+      return r.ok ? { ok: true, reach: "indirect" } : r
     }
   }
 
@@ -179,12 +184,14 @@ export async function validateTunnelInternalUrl(args: {
   // this service belongs to a device with a LIVE local sandbox mount — so a
   // compromised cloud/remote device can never point the dispatcher at the API
   // host's own loopback (SSRF) by claiming a loopback endpoint.
-  return validateLocalLoopbackUrl({
+  const r = await validateLocalLoopbackUrl({
     candidateUrl,
     runtimeServiceId: args.runtimeServiceId,
     hadTrustedPrefix: Boolean(trustedPrefix),
     executor,
   })
+  // co-located loopback = the API dials the runtime directly (degenerate direct).
+  return r.ok ? { ok: true, reach: "direct" } : r
 }
 
 /** frp edge: origin already matched the trusted edge; require /d/<token> bound
@@ -617,7 +624,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
               candidate: parsedTunnel.data.internal_url,
               runtimeServiceId: state.authenticatedServiceId!,
             })
-              .then((validation) => {
+              .then(async (validation) => {
                 if (!validation.ok) {
                   writeError(
                     socket,
@@ -627,11 +634,20 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
                   )
                   return
                 }
+                // Stamp the registering CP session so a stale socket's later close
+                // cannot evict this entry (compare-and-delete, §3.3).
                 getDeviceTunnelRegistry().register({
                   runtimeServiceId: state.authenticatedServiceId!,
                   internalUrl: parsedTunnel.data.internal_url,
+                  sessionId: state.sessionId ?? undefined,
                 })
                 state.registeredTunnelServiceId = state.authenticatedServiceId
+                // Record the reachability the validator actually accepted so the
+                // transport column is truthful (frp → indirect, loopback → direct).
+                await updateRuntimeServiceTransport(
+                  state.authenticatedServiceId!,
+                  validation.reach
+                ).catch(() => {})
                 writeResult(socket, req.id ?? null, { registered: true })
               })
               .catch((err) =>
@@ -660,8 +676,10 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
               return
             }
             if (state.registeredTunnelServiceId) {
+              // compare-and-delete: only THIS session may retire its own entry.
               getDeviceTunnelRegistry().unregister(
-                state.registeredTunnelServiceId
+                state.registeredTunnelServiceId,
+                state.sessionId ?? undefined
               )
               state.registeredTunnelServiceId = null
             }
@@ -858,7 +876,14 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
 
       socket.on("close", () => {
         if (state.registeredTunnelServiceId) {
-          getDeviceTunnelRegistry().unregister(state.registeredTunnelServiceId)
+          // compare-and-delete on THIS socket's session: a half-open old socket's
+          // deferred close must not evict a live entry a newer socket re-registered
+          // for the same service (the stale-close race, §3.3). state.sessionId is
+          // still set here — the session close below nulls it afterwards.
+          getDeviceTunnelRegistry().unregister(
+            state.registeredTunnelServiceId,
+            state.sessionId ?? undefined
+          )
           state.registeredTunnelServiceId = null
         }
         if (state.sessionId) {

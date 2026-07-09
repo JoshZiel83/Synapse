@@ -200,6 +200,12 @@ CREATE TYPE devices_automation_lifecycle_state AS ENUM ('online', 'offline');
 -- see docs/soft-delete-design.md §5.3). source_session_id is a pure marker.
 CREATE TYPE runtime_services_service_kind AS ENUM ('device_runtime', 'remote_agent_daemon', 'bare_dataplane');
 CREATE TYPE runtime_services_status AS ENUM ('starting', 'online', 'degraded', 'offline');
+-- Data-plane reachability class (§3 dual-transport). 'indirect' = runtime dials a
+-- reverse tunnel back (frp) and the API dials the edge; 'direct' = the API dials the
+-- runtime (loopback / docker-internal DNS / provider domain, or the degenerate
+-- in-process / docker-exec bare planes that are never network-dialed); 'none' =
+-- CP-only, no data plane registered (registry-miss dispatch is a hard error, preserved).
+CREATE TYPE runtime_services_transport AS ENUM ('direct', 'indirect', 'none');
 CREATE TYPE runtime_control_plane_sessions_status AS ENUM ('connecting', 'active', 'closing', 'closed', 'rejected');
 CREATE TYPE runtime_control_plane_sessions_transport AS ENUM ('websocket');
 CREATE TYPE runtime_pairing_sessions_mode AS ENUM ('local_qr', 'cloud_bootstrap');
@@ -3874,6 +3880,11 @@ CREATE TABLE runtime_services (
   -- bare_dataplane (Mode-B sandbox) reachability: no CP session / tunnel; the API
   -- dials this endpoint directly (scheme-tagged: inprocess:/docker-exec:/https).
   data_plane_endpoint TEXT,
+  -- Reachability class for this service's data plane (§3). Provision-time fact set
+  -- from the resolved SANDBOX_TRANSPORT / adapter transportDefault (or established at
+  -- tunnel.up for a real device); NOT re-derived per dispatch. Default 'none' keeps a
+  -- freshly-minted CP-only service registry-miss-safe until a data plane comes up.
+  transport runtime_services_transport NOT NULL DEFAULT 'none',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(runtime_id, service_kind),
@@ -3892,6 +3903,15 @@ CREATE TABLE runtime_services (
       AND current_session_id IS NULL
       AND tunnel_path_token IS NULL
       AND data_plane_endpoint IS NOT NULL)
+  ),
+  -- Transport is constrained by service kind: a bare data plane is always API-dialed
+  -- ('direct', including the degenerate in/exec planes); the remote-agent daemon has no
+  -- data plane ('none'); a device_runtime may take any reachability (frp 'indirect',
+  -- loopback/docker-internal 'direct', or CP-only 'none').
+  CONSTRAINT chk_runtime_services_transport_kind CHECK (
+    (service_kind = 'bare_dataplane' AND transport = 'direct')
+    OR (service_kind = 'remote_agent_daemon' AND transport = 'none')
+    OR (service_kind = 'device_runtime')
   )
 );
 CREATE INDEX idx_runtime_services_device ON runtime_services(runtime_id, service_kind);

@@ -511,6 +511,27 @@ export async function selectTunnelPathToken(
   return (row?.tunnelPathToken as string | null) ?? null
 }
 
+/**
+ * Persist the established data-plane reachability for a device_runtime service at
+ * tunnel.up (§3). The value is set from the trust path the SSRF validator actually
+ * accepted (frp edge → 'indirect', loopback → 'direct'), so the column is truthful
+ * by construction rather than a separately-declared intent that could drift. Scoped
+ * to device_runtime — the CHECK forbids writing a non-'direct' transport onto a
+ * bare_dataplane row, and daemons have no data plane.
+ */
+export async function updateRuntimeServiceTransport(
+  runtimeServiceId: string,
+  transport: "direct" | "indirect",
+  executor: KyselyDb = db
+): Promise<void> {
+  await executor
+    .updateTable("runtimeServices")
+    .set({ transport })
+    .where("id", "=", runtimeServiceId)
+    .where("serviceKind", "=", "device_runtime")
+    .execute()
+}
+
 export type DeviceHelloAuthContext = {
   deviceExists: boolean
   service: { id: string; deviceId: string } | null
@@ -2192,8 +2213,11 @@ export async function mintBareSandboxRuntimeTx(args: {
         version: args.clientVersion ?? null,
         status: "online",
         // schema CHECK for bare_dataplane: data_plane_endpoint NOT NULL,
-        // tunnel_path_token / current_session_id / remote_agent_machine_id NULL.
+        // tunnel_path_token / current_session_id / remote_agent_machine_id NULL,
+        // and transport MUST be 'direct' (chk_runtime_services_transport_kind) — a
+        // bare data plane is always API-dialed (incl. the degenerate in/exec planes).
         dataPlaneEndpoint: args.dataPlaneEndpoint,
+        transport: "direct",
         metadata: sql`'{}'::jsonb`,
       } as never)
       .execute()

@@ -143,7 +143,7 @@ test("validateTunnelInternalUrl: frp edge URL with matching token is accepted", 
     const serviceId = await seedService(db, { tunnelPathToken: "tok-abc" })
     await withEdgeEnv(EDGE, async () => {
       const res = await validate(`${EDGE}/d/tok-abc`, serviceId)
-      assert.deepEqual(res, { ok: true })
+      assert.deepEqual(res, { ok: true, reach: "indirect" })
     })
   })
 })
@@ -166,7 +166,11 @@ test("validateTunnelInternalUrl: loopback accepted ONLY with a live local mount"
     const withoutMount = await seedService(db, { liveLocalMount: false })
     await withEdgeEnv(EDGE, async () => {
       const ok = await validate("http://127.0.0.1:45321", withMount)
-      assert.deepEqual(ok, { ok: true }, "live local mount → loopback accepted")
+      assert.deepEqual(
+        ok,
+        { ok: true, reach: "direct" },
+        "live local mount → loopback accepted"
+      )
       const no = await validate("http://127.0.0.1:45321", withoutMount)
       assert.equal(no.ok, false, "no live local mount → loopback rejected")
     })
@@ -233,7 +237,7 @@ test("validateTunnelInternalUrl: [::1] loopback accepted with a live local mount
     const svc = await seedService(db, { liveLocalMount: true })
     await withEdgeEnv(EDGE, async () => {
       const res = await validate("http://[::1]:45321", svc)
-      assert.deepEqual(res, { ok: true })
+      assert.deepEqual(res, { ok: true, reach: "direct" })
     })
   })
 })
@@ -244,7 +248,11 @@ test("validateTunnelInternalUrl: with no edge configured, only local loopback ca
     const svc = await seedService(db, { liveLocalMount: true })
     await withEdgeEnv(undefined, async () => {
       const loop = await validate("http://127.0.0.1:45321", svc)
-      assert.deepEqual(loop, { ok: true }, "loopback still works without edge")
+      assert.deepEqual(
+        loop,
+        { ok: true, reach: "direct" },
+        "loopback still works without edge"
+      )
       const edge = await validate("http://tunnel-edge:8080/d/whatever", svc)
       assert.equal(
         edge.ok,

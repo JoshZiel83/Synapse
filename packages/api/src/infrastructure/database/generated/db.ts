@@ -257,6 +257,8 @@ export type RuntimeServicesServiceKind = "bare_dataplane" | "device_runtime" | "
 
 export type RuntimeServicesStatus = "degraded" | "offline" | "online" | "starting";
 
+export type RuntimeServicesTransport = "direct" | "indirect" | "none";
+
 export type RuntimeSessionServicesStatus = "closed" | "open";
 
 export type RuntimeSessionsStatus = "aborted" | "closed" | "closing" | "open";
@@ -2296,6 +2298,7 @@ export interface RuntimeServices {
   runtimeId: string;
   serviceKind: RuntimeServicesServiceKind;
   status: Generated<RuntimeServicesStatus>;
+  transport: Generated<RuntimeServicesTransport>;
   tunnelPathToken: string | null;
   updatedAt: Generated<Date>;
   version: string | null;
@@ -2312,6 +2315,7 @@ export interface RuntimeServicesLive {
   runtimeId: string | null;
   serviceKind: RuntimeServicesServiceKind | null;
   status: RuntimeServicesStatus | null;
+  transport: RuntimeServicesTransport | null;
   tunnelPathToken: string | null;
   updatedAt: Date | null;
   version: string | null;

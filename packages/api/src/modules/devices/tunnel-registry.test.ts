@@ -45,6 +45,47 @@ test("registry re-register overwrites the prior endpoint", () => {
   })
 })
 
+test("compare-and-delete: a stale session's unregister cannot evict a live re-registered entry", () => {
+  const registry = createInMemoryDeviceTunnelRegistry()
+  // Old socket (session A) registers, then a NEW socket (session B) reconnects and
+  // re-registers the SAME service — overwriting the entry with B's sessionId.
+  registry.register({
+    runtimeServiceId: "svc-1",
+    internalUrl: "http://tunnel-edge:7000/d/a",
+    sessionId: "session-A",
+  })
+  registry.register({
+    runtimeServiceId: "svc-1",
+    internalUrl: "http://tunnel-edge:7000/d/b",
+    sessionId: "session-B",
+  })
+  // The old socket's deferred close fires unregister with its OWN (stale) session.
+  const removedStale = registry.unregister("svc-1", "session-A")
+  assert.equal(removedStale, false)
+  // The live entry (session B) MUST survive — this is the stale-close race fix.
+  assert.deepEqual(registry.resolve("svc-1"), {
+    runtimeServiceId: "svc-1",
+    internalUrl: "http://tunnel-edge:7000/d/b",
+    sessionId: "session-B",
+  })
+  // The owning session (B) can retire its own entry.
+  const removedOwner = registry.unregister("svc-1", "session-B")
+  assert.equal(removedOwner, true)
+  assert.equal(registry.resolve("svc-1"), undefined)
+})
+
+test("forced unregister (no expected session) removes unconditionally", () => {
+  const registry = createInMemoryDeviceTunnelRegistry()
+  registry.register({
+    runtimeServiceId: "svc-1",
+    internalUrl: "http://127.0.0.1:9000",
+    sessionId: "session-X",
+  })
+  // Teardown path passes no expectedSessionId → unconditional removal.
+  assert.equal(registry.unregister("svc-1"), true)
+  assert.equal(registry.resolve("svc-1"), undefined)
+})
+
 test("singleton getter is stable and replaceable via setter", () => {
   const r1 = getDeviceTunnelRegistry()
   const r2 = getDeviceTunnelRegistry()

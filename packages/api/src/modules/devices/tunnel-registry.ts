@@ -8,11 +8,19 @@
 export interface DeviceTunnelEndpoint {
   readonly runtimeServiceId: string
   readonly internalUrl: string
+  // The control-plane session that registered THIS entry. Stamped at register()
+  // so unregister can be a compare-and-delete: a half-open OLD socket's deferred
+  // `close` must not evict a LIVE entry a NEWER socket re-registered for the same
+  // service (the stale-close race, §3.3). Optional for legacy/test callers.
+  readonly sessionId?: string
 }
 
 export interface DeviceTunnelRegistry {
   register(endpoint: DeviceTunnelEndpoint): void
-  unregister(runtimeServiceId: string): void
+  // unregister is compare-and-delete when `expectedSessionId` is supplied: the entry
+  // is removed ONLY if its registering sessionId matches. A forced teardown (no
+  // expectedSessionId) removes unconditionally. Returns true iff an entry was removed.
+  unregister(runtimeServiceId: string, expectedSessionId?: string): boolean
   resolve(runtimeServiceId: string): DeviceTunnelEndpoint | undefined
   list(): DeviceTunnelEndpoint[]
 }
@@ -23,8 +31,14 @@ export function createInMemoryDeviceTunnelRegistry(): DeviceTunnelRegistry {
     register(endpoint) {
       endpoints.set(endpoint.runtimeServiceId, endpoint)
     },
-    unregister(runtimeServiceId) {
-      endpoints.delete(runtimeServiceId)
+    unregister(runtimeServiceId, expectedSessionId) {
+      if (expectedSessionId !== undefined) {
+        const current = endpoints.get(runtimeServiceId)
+        // Only the session that owns the current entry may evict it. A stale
+        // socket (different/absent sessionId on the live entry) is a no-op.
+        if (!current || current.sessionId !== expectedSessionId) return false
+      }
+      return endpoints.delete(runtimeServiceId)
     },
     resolve(runtimeServiceId) {
       return endpoints.get(runtimeServiceId)
