@@ -4,6 +4,8 @@ import {
   context,
   defaultTextMapGetter,
   defaultTextMapSetter,
+  isSpanContextValid,
+  ROOT_CONTEXT,
   SpanKind,
   SpanStatusCode,
   trace,
@@ -47,6 +49,64 @@ export function injectTraceContext<T>(data: T): T {
   tracePropagator.inject(context.active(), carrier, defaultTextMapSetter)
   if (Object.keys(carrier).length === 0) return data
   return { ...(data as Record<string, unknown>), [CARRIER_KEY]: carrier } as T
+}
+
+/**
+ * Run `fn` with a ROOT (span-less) OTel context so any `.add` inside it is
+ * enqueued as a FRESH trace root, NOT a continuation of the currently-active
+ * span.
+ *
+ * Use this for self-heal / fan-in requeues that are enqueued from INSIDE another
+ * job's CONSUMER span but semantically start a NEW turn — e.g. the session-think
+ * end-of-turn requeue that drains wakeups belonging to OTHER requests/users.
+ * Without it, `injectTraceContext` (which reads `context.active()` synchronously
+ * inside the queues.ts `.add` trap) would stamp the current job's trace onto the
+ * requeued job, cross-attributing an unrelated user's whole turn to the wrong
+ * trace. `injectTraceContext` sees ROOT_CONTEXT here → empty carrier → the
+ * consumer starts a fresh root. (Fan-in upstreams are re-attached as span LINKS,
+ * not as the parent — see `linkUpstreamTraces`.)
+ *
+ * Prefer this over a data-level "skip injection" marker: it needs no change to
+ * the deliberately-dumb injection choke point and cannot silently fail the way an
+ * identity-sensitive Symbol marker would under a dual ESM/CJS module load.
+ */
+export function withRootTrace<T>(fn: () => T): T {
+  return context.with(ROOT_CONTEXT, fn)
+}
+
+/**
+ * Attach a span LINK to the currently-active span for each upstream W3C
+ * traceparent — the causal join for a fan-in turn that drains N wakeups from N
+ * different upstream requests.
+ *
+ * The turn itself is a fresh root (see `withRootTrace`), so we do NOT parent it
+ * under any single upstream; instead each drained wakeup's originating trace
+ * (captured at enqueue time in the `session_wakeups.origin_traceparent` column)
+ * becomes a LINK, preserving "which requests caused this turn" without false
+ * single-parent attribution. Standard OTel messaging/batch modeling.
+ *
+ * No-op when OTel is off / there is no active span / a traceparent is malformed.
+ * A self-link is skipped — the idle→enqueue path legitimately continues its own
+ * request trace as the parent, so linking it to itself would be noise.
+ */
+export function linkUpstreamTraces(traceparents: Iterable<string>): void {
+  const span = trace.getActiveSpan()
+  if (!span) return
+  const ownTraceId = span.spanContext().traceId
+  for (const tp of traceparents) {
+    if (!tp) continue
+    const ctx = tracePropagator.extract(
+      ROOT_CONTEXT,
+      { traceparent: tp },
+      defaultTextMapGetter
+    )
+    const sc = trace.getSpanContext(ctx)
+    if (!sc || !isSpanContextValid(sc) || sc.traceId === ownTraceId) continue
+    span.addLink({
+      context: sc,
+      attributes: { "synapse.link.kind": "session_wakeup" },
+    })
+  }
 }
 
 type AnyJob = Job<unknown, unknown, string>

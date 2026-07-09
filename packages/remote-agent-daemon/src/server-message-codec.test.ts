@@ -44,6 +44,7 @@ test("parseServerMessage maps connected and start frames from snake_case wire", 
       sessionId: null,
       fencingToken: "fence-1",
       serverUrl: "https://api.example.test",
+      traceparent: undefined,
     }
   )
 })
@@ -71,6 +72,7 @@ test("parseServerMessage validates delivery and task-resolved frames", () => {
           deliveryId: "delivery-1",
           conversationId: "conversation-1",
           itemId: "item-1",
+          traceparent: undefined,
         },
       ],
     }
@@ -90,7 +92,57 @@ test("parseServerMessage validates delivery and task-resolved frames", () => {
       remoteAgentId: "agent-1",
       taskId: "task-1",
       task: { status: "resolved" },
+      traceparent: undefined,
     }
+  )
+})
+
+test("parseServerMessage carries W3C traceparent through start/deliver/task frames", () => {
+  const TP = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+
+  const start = parseServerMessage(
+    JSON.stringify({
+      type: "agent:start",
+      remote_agent_id: "agent-1",
+      runtime_kind: "codex",
+      traceparent: TP,
+    })
+  )
+  assert.equal(start?.type === "agent:start" ? start.traceparent : null, TP)
+
+  const deliver = parseServerMessage(
+    JSON.stringify({
+      type: "agent:deliver",
+      deliveries: [
+        {
+          remote_agent_id: "agent-1",
+          delivery_id: "delivery-1",
+          conversation_id: "conversation-1",
+          item_id: "item-1",
+          traceparent: TP,
+        },
+      ],
+    })
+  )
+  assert.equal(
+    deliver?.type === "agent:deliver"
+      ? deliver.deliveries[0].traceparent
+      : null,
+    TP
+  )
+
+  const resolved = parseServerMessage(
+    JSON.stringify({
+      type: "agent:task:resolved",
+      remote_agent_id: "agent-1",
+      task_id: "task-1",
+      task: { status: "resolved" },
+      traceparent: TP,
+    })
+  )
+  assert.equal(
+    resolved?.type === "agent:task:resolved" ? resolved.traceparent : null,
+    TP
   )
 })
 

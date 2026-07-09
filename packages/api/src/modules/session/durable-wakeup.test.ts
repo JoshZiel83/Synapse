@@ -3,9 +3,15 @@ import assert from "node:assert/strict"
 import crypto from "node:crypto"
 import { SUBJECT_KIND } from "@synapse/shared"
 import type { Kysely } from "kysely"
+import { context, ROOT_CONTEXT, trace } from "@opentelemetry/api"
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks"
 import { withTestDb } from "../../test/helpers/db.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
 import { insertSessionWakeupRow } from "./runtime.js"
+
+// Register a context manager so context.with(...) actually propagates the active
+// span, letting activeTraceparent() (read inside insertSessionWakeupRow) resolve.
+context.setGlobalContextManager(new AsyncLocalStorageContextManager())
 
 /**
  * Regression for the round-4 P0: resolved session_wakeup delivery wrote the
@@ -158,6 +164,59 @@ test(
         .executeTakeFirst()
       assert.ok(found, "wakeup row is present in the transaction")
       assert.equal(found?.status, "pending")
+    })
+  }
+)
+
+test(
+  "insertSessionWakeupRow: captures the active W3C traceparent into origin_traceparent",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const fx = await buildSessionFixture(db)
+      const sourceItemId = await newConversationItem(db, fx)
+
+      // A valid, sampled remote span context stands in for the enqueuing request.
+      const sc = {
+        traceId: "0af7651916cd43dd8448eb211c80319c",
+        spanId: "b7ad6b7169203331",
+        traceFlags: 1,
+        isRemote: false,
+      }
+      const expected = `00-${sc.traceId}-${sc.spanId}-01`
+
+      const created = await context.with(
+        trace.setSpanContext(ROOT_CONTEXT, sc),
+        () =>
+          insertSessionWakeupRow(db, {
+            ...wakeupParams(fx),
+            sourceItemId,
+          }).then((r) => r.created)
+      )
+
+      const row = await db
+        .selectFrom("sessionWakeups")
+        .select("originTraceparent")
+        .where("id", "=", created.id)
+        .executeTakeFirstOrThrow()
+      assert.equal(
+        row.originTraceparent,
+        expected,
+        "origin_traceparent column holds the enqueuer's W3C traceparent"
+      )
+
+      // OTEL-off / no active span → column stays NULL (clean no-op).
+      const sourceItemId2 = await newConversationItem(db, fx)
+      const untraced = await insertSessionWakeupRow(db, {
+        ...wakeupParams(fx),
+        sourceItemId: sourceItemId2,
+      })
+      const row2 = await db
+        .selectFrom("sessionWakeups")
+        .select("originTraceparent")
+        .where("id", "=", untraced.created.id)
+        .executeTakeFirstOrThrow()
+      assert.equal(row2.originTraceparent, null, "no active span → NULL")
     })
   }
 )

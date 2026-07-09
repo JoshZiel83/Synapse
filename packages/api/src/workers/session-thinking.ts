@@ -1,4 +1,4 @@
-import { tracedWorker } from "./job-tracing.js"
+import { tracedWorker, withRootTrace } from "./job-tracing.js"
 import { redis } from "../infrastructure/redis/index.js"
 import {
   acquireLock,
@@ -285,10 +285,19 @@ export function startSessionThinkingWorker() {
           // must NOT be swallowed-and-reported-as-scheduled. Let it throw: this
           // worker's job then fails, which surfaces in monitoring and (with job
           // attempts) gets retried, rather than silently stranding the wakeups.
-          await sessionThinkingQueue.add(
-            "think",
-            { sessionId, actorId, workspaceId, trigger, userId },
-            { delay: LOCK_CONTENDED_RETRY_DELAY_MS }
+          //
+          // Root it (like the end-of-turn requeue): this job carries the trace
+          // of whoever enqueued IT, but the retry re-drives the session for ALL
+          // pending wakeups — which in a multi-participant session belong to
+          // OTHER users. Inheriting this job's trace would cross-attribute the
+          // re-driven turn; a fresh root + per-wakeup LINKS (getPendingWakeups)
+          // is correct. Same session ≠ same user.
+          await withRootTrace(() =>
+            sessionThinkingQueue.add(
+              "think",
+              { sessionId, actorId, workspaceId, trigger, userId },
+              { delay: LOCK_CONTENDED_RETRY_DELAY_MS }
+            )
           )
           return {
             success: false,
@@ -1667,13 +1676,23 @@ export function startSessionThinkingWorker() {
         await releaseLock(redis, sessionLock)
         await redis.decr(actorSessionsKey)
         if (requeueAfterUnlock) {
-          await sessionThinkingQueue.add("think", {
-            sessionId,
-            actorId,
-            workspaceId,
-            trigger: requeueTrigger,
-            userId,
-          })
+          // This requeue drains wakeups that may belong to OTHER requests/users
+          // (a wakeup arriving while this session was 'running' enqueues no job
+          // of its own — runtime.ts nudgeSessionAfterWakeup). We are still inside
+          // THIS job's CONSUMER span here, so a plain `.add` would stamp this
+          // job's trace onto the requeue and cross-attribute the next turn to the
+          // wrong user. Root it → fresh trace; the drained wakeups' own traces
+          // are re-attached as span LINKS on the next turn (see getPendingWakeups
+          // / linkUpstreamTraces), not as the parent.
+          await withRootTrace(() =>
+            sessionThinkingQueue.add("think", {
+              sessionId,
+              actorId,
+              workspaceId,
+              trigger: requeueTrigger,
+              userId,
+            })
+          )
         }
       }
     },

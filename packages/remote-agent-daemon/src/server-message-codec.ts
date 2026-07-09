@@ -11,6 +11,8 @@ export type AgentStartMessage = {
   sessionId?: string | null
   fencingToken?: string
   serverUrl?: string
+  /** W3C traceparent of the api-side request that triggered this start. */
+  traceparent?: string
 }
 
 export type Delivery = {
@@ -18,6 +20,8 @@ export type Delivery = {
   deliveryId: string
   conversationId: string
   itemId: string
+  /** Per-delivery W3C traceparent (the enqueuing request's persisted trace). */
+  traceparent?: string
 }
 
 export type DeliveryMessage = {
@@ -30,6 +34,8 @@ export type TaskResolvedMessage = {
   remoteAgentId: string
   taskId: string
   task: Record<string, unknown>
+  /** W3C traceparent of the request that resolved this task. */
+  traceparent?: string
 }
 
 export type AgentStopMessage = {
@@ -101,6 +107,7 @@ const agentStartSchema = z.strictObject({
   session_id: z.string().nullable().optional(),
   fencing_token: z.string().optional(),
   server_url: z.string().optional(),
+  traceparent: z.string().optional(),
 })
 
 const agentStopSchema = z.strictObject({
@@ -113,6 +120,7 @@ const deliverySchema = z.strictObject({
   delivery_id: z.string().min(1),
   conversation_id: z.string().min(1),
   item_id: z.string().min(1),
+  traceparent: z.string().optional(),
 })
 
 const agentDeliverSchema = z.strictObject({
@@ -125,6 +133,7 @@ const taskResolvedSchema = z.strictObject({
   remote_agent_id: z.string().min(1),
   task_id: z.string().min(1),
   task: z.record(z.string(), z.unknown()),
+  traceparent: z.string().optional(),
 })
 
 const serverMessageWireSchema = z.discriminatedUnion("type", [
@@ -180,6 +189,7 @@ export function parseServerMessage(raw: unknown): ServerMessage | null {
         sessionId: message.session_id ?? null,
         fencingToken: message.fencing_token,
         serverUrl: message.server_url,
+        traceparent: message.traceparent,
       }
     case "agent:stop":
       return {
@@ -194,6 +204,7 @@ export function parseServerMessage(raw: unknown): ServerMessage | null {
           deliveryId: delivery.delivery_id,
           conversationId: delivery.conversation_id,
           itemId: delivery.item_id,
+          traceparent: delivery.traceparent,
         })),
       }
     case "agent:task:resolved":
@@ -202,6 +213,7 @@ export function parseServerMessage(raw: unknown): ServerMessage | null {
         remoteAgentId: message.remote_agent_id,
         taskId: message.task_id,
         task: message.task,
+        traceparent: message.traceparent,
       }
   }
 }

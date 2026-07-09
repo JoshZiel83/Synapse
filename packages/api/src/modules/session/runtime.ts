@@ -8,6 +8,7 @@ import type { Executor } from "../../infrastructure/database/kysely.js"
 import { emitEvent } from "../../infrastructure/events/index.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
 import { sessionThinkingQueue } from "../../workers/queues.js"
+import { linkUpstreamTraces } from "../../workers/job-tracing.js"
 import {
   ACTOR_RUNTIME_HEALTH,
   isThreadConversationKind,
@@ -1022,6 +1023,19 @@ export async function getPendingWakeupCount(
 
 export async function getPendingWakeups(sessionId: string) {
   const rows = await repo.listPendingSessionWakeups(sessionId)
+
+  // Fan-in causal join. The draining turn's requeue is rooted (session-thinking
+  // withRootTrace), so instead of a false single-parent we attach each drained
+  // wakeup's originating trace — captured in the origin_traceparent column at
+  // enqueue — as a span LINK on the active CONSUMER span. Reads the SAME rows (no
+  // second query → no TOCTOU vs the drained set); no-op when OTEL is off or on
+  // the idle→enqueue self-trace path. The DTO shape is unchanged (trace stays out
+  // of ActorRuntimeWakeup).
+  linkUpstreamTraces(
+    rows
+      .map((row) => row.originTraceparent)
+      .filter((tp): tp is string => typeof tp === "string")
+  )
 
   return rows.map(presentWakeup)
 }

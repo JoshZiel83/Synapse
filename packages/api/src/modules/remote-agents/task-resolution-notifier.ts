@@ -2,6 +2,7 @@ import { CONVERSATION_PARTICIPANT_TYPE } from "@synapse/shared"
 import { TaskSummarySchema } from "@synapse/shared/schemas"
 import type { TaskSummary } from "@synapse/shared/types"
 import type { RemoteAgentApiToDaemonMessage } from "./wire.js"
+import { activeTraceparent } from "../../infrastructure/observability/traceparent.js"
 
 export type ReplayResolvedTaskTarget = {
   remoteAgentId: string
@@ -74,6 +75,15 @@ export async function replayResolvedRemoteAgentTasksUseCase(
         remoteAgentId: row.remoteAgentId,
         taskId: row.activeTaskId,
         task: taskAsWirePayload(task),
+        // KNOWN LIMITATION: this is the reconnect REPLAY path (driven by the
+        // daemon `ready` handler, no request span), so activeTraceparent() is
+        // undefined and the replayed resolution is NOT trace-correlated. Unlike
+        // deliveries (which persist origin_traceparent to survive reconnect),
+        // resolved tasks have no persisted trace column — correlating the replay
+        // leg would need a traceparent column on the task's resolved state.
+        // Deferred as observability-only; the LIVE resolution path below IS
+        // correlated.
+        traceparent: activeTraceparent(),
       })
     ) {
       sent += 1
@@ -108,5 +118,8 @@ export async function notifyRemoteAgentTaskResolvedUseCase(
     remoteAgentId: task.requester.remoteAgentId,
     taskId,
     task: taskPayload,
+    // Live path: runs under the resolving request's span (e.g. a user-input
+    // reply), so the daemon's continued turn rejoins the resolver's trace.
+    traceparent: activeTraceparent(),
   })
 }

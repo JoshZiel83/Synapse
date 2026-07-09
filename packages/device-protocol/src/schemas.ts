@@ -637,6 +637,9 @@ export const RemoteAgentApiStartMessageSchema = z.strictObject({
   session_id: z.string().nullable().optional(),
   fencing_token: z.string().optional(),
   server_url: z.string().optional(),
+  // W3C traceparent of the request that triggered this start, so the daemon can
+  // continue the same distributed trace across its subprocess + api callbacks.
+  traceparent: z.string().optional(),
 })
 export type RemoteAgentApiStartMessage = z.infer<
   typeof RemoteAgentApiStartMessageSchema
@@ -655,6 +658,10 @@ export const RemoteAgentApiDeliveryWireSchema = z.strictObject({
   delivery_id: z.string().min(1),
   conversation_id: z.string().min(1),
   item_id: z.string().min(1),
+  // Per-delivery W3C traceparent (the enqueuing request's trace, persisted on
+  // the delivery row). Per-delivery, NOT per-frame: one agent:deliver batch
+  // fans in deliveries from many conversations/requests, each with its own trace.
+  traceparent: z.string().optional(),
 })
 export type RemoteAgentApiDeliveryWire = z.infer<
   typeof RemoteAgentApiDeliveryWireSchema
@@ -673,6 +680,9 @@ export const RemoteAgentApiTaskResolvedMessageSchema = z.strictObject({
   remote_agent_id: z.string().min(1),
   task_id: z.string().min(1),
   task: z.record(z.string(), z.unknown()),
+  // W3C traceparent of the request resolving this task (e.g. a user-input reply),
+  // so the daemon's continued turn rejoins the resolver's trace.
+  traceparent: z.string().optional(),
 })
 export type RemoteAgentApiTaskResolvedMessage = z.infer<
   typeof RemoteAgentApiTaskResolvedMessageSchema

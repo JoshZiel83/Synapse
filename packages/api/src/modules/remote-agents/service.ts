@@ -39,6 +39,7 @@ import {
 } from "../chat/remote-agent-bridge.js"
 import { getFileUrlById } from "../files/service.js"
 import { requireWorkspaceMemberIdentity } from "../chat/workspace-identity.js"
+import { activeTraceparent } from "../../infrastructure/observability/traceparent.js"
 import {
   notifyRemoteAgentTaskResolvedUseCase,
   replayResolvedRemoteAgentTasksUseCase,
@@ -255,6 +256,7 @@ async function startBoundRemoteAgents(machineId: string) {
       sessionId: target.runtimeSessionId,
       fencingToken: connection.fencingToken,
       serverUrl: config.app.baseUrl,
+      traceparent: activeTraceparent(),
     })
   }
 
@@ -429,6 +431,7 @@ async function sendAgentStartPrefix(
         null,
       fencingToken: connection.fencingToken,
       serverUrl: config.app.baseUrl,
+      traceparent: activeTraceparent(),
     })
   }
 }
@@ -446,6 +449,7 @@ async function notifyPendingRemoteAgentDeliveries(params: {
       deliveryId: string
       conversationId: string
       itemId: string
+      traceparent?: string
     }>
   >()
 
@@ -456,6 +460,9 @@ async function notifyPendingRemoteAgentDeliveries(params: {
       deliveryId: row.deliveryId,
       conversationId: row.conversationId,
       itemId: row.itemId,
+      // Per-delivery originating trace, persisted at enqueue → correct even on
+      // the reconnect-replay / retry-worker legs that have no active span here.
+      traceparent: row.originTraceparent ?? undefined,
     })
     grouped.set(row.machineId, current)
   }

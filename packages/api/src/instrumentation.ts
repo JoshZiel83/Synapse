@@ -33,6 +33,7 @@ import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-ho
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto"
 import { registerInstrumentations } from "@opentelemetry/instrumentation"
 import { HttpInstrumentation } from "@opentelemetry/instrumentation-http"
+import { UndiciInstrumentation } from "@opentelemetry/instrumentation-undici"
 import { resourceFromAttributes } from "@opentelemetry/resources"
 import {
   BatchSpanProcessor,
@@ -97,10 +98,27 @@ const provider = new NodeTracerProvider({
   spanProcessors,
 })
 
+// The global propagator ALWAYS speaks W3C `traceparent` (inject + extract), in
+// BOTH configs, so a single W3C trace context crosses every process boundary
+// regardless of Sentry:
+//   - Sentry OFF: W3C trace-context + baggage.
+//   - Sentry ON:  SentryPropagator (sentry-trace/baggage — it extends
+//     W3CBaggagePropagator, so baggage is its job) COMPOSED WITH
+//     W3CTraceContextPropagator (traceparent only — no baggage double-write).
+//     Without the W3C member, SentryPropagator neither emits (propagateTraceparent
+//     defaults false) nor extracts W3C `traceparent`, which would sever the
+//     Python sidecars, the remote-agent daemon callbacks, and every OTLP-only
+//     peer that speaks W3C. Composing restores W3C both directions while keeping
+//     Sentry's own sentry-trace continuity.
 provider.register(
   sentryClient
     ? {
-        propagator: new SentryPropagator(),
+        propagator: new CompositePropagator({
+          propagators: [
+            new SentryPropagator(),
+            new W3CTraceContextPropagator(),
+          ],
+        }),
         contextManager: new Sentry.SentryContextManager(),
       }
     : {
@@ -116,11 +134,21 @@ provider.register(
 
 registerInstrumentations({
   tracerProvider: provider,
-  // Patches node:http so inbound requests start a root span (continuing any
-  // inbound W3C traceparent) and outbound calls propagate it. @fastify/otel
-  // builds on this for route-level spans. (Log↔trace correlation is handled by
-  // the pino mixin, not by instrumentation-pino.)
-  instrumentations: [new HttpInstrumentation()],
+  instrumentations: [
+    // Patches node:http so inbound requests start a root span (continuing any
+    // inbound W3C traceparent) and outbound http/https calls propagate it.
+    // @fastify/otel builds on this for route-level spans. (Log↔trace
+    // correlation is handled by the pino mixin, not by instrumentation-pino.)
+    new HttpInstrumentation(),
+    // Patches undici / global `fetch` (which node:http does NOT cover). Node's
+    // global fetch is undici-based, and the MCP SDK + every FastAPI sidecar
+    // client (embedding / OCR / transcription / document-extraction / remote
+    // MCP) POST over it — without this their outbound requests carry no
+    // traceparent and each sidecar opens a fresh-root SERVER span. This makes
+    // W3C-injection automatic for ALL fetch egress via the global propagator
+    // above (correct under Sentry-on and -off).
+    new UndiciInstrumentation(),
+  ],
 })
 
 if (sentryClient) {

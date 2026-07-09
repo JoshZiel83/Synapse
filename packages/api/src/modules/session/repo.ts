@@ -45,6 +45,7 @@ import type {
 } from "./repo.types.js"
 import type { EnqueueSessionWakeupParams } from "./runtime.js"
 import { parseSessionCollaborationState } from "./collaboration-state.js"
+import { activeTraceparent } from "../../infrastructure/observability/traceparent.js"
 
 export type SessionCollaborationPatch = {
   collaborationMode?: SessionCollaborationMode
@@ -718,6 +719,13 @@ export async function insertSessionWakeupRow(
   let created: SessionWakeupRow | undefined
   let reusedExistingWakeup = false
 
+  // Capture the enqueuer's W3C trace at insert time. A wakeup arriving while the
+  // session is already 'running' enqueues NO think job (runtime.ts
+  // nudgeSessionAfterWakeup), so this row is the ONLY place its originating trace
+  // survives — the draining turn later reads origin_traceparent back to add a
+  // span LINK (job-tracing.linkUpstreamTraces). NULL when tracing is off.
+  const originTraceparent = activeTraceparent() ?? null
+
   if (params.sourceItemId) {
     const insertResult = await sql<SessionWakeupDbRow>`
         INSERT INTO session_wakeups (
@@ -734,7 +742,8 @@ export async function insertSessionWakeupRow(
           automation_execution_id,
           automation_occurrence_id,
           status,
-          metadata
+          metadata,
+          origin_traceparent
         )
         VALUES (
           ${crypto.randomUUID()},
@@ -750,7 +759,8 @@ export async function insertSessionWakeupRow(
           ${params.automationExecutionId || null},
           ${params.automationOccurrenceId || null},
           'pending',
-          ${JSON.stringify(params.metadata || {})}::jsonb
+          ${JSON.stringify(params.metadata || {})}::jsonb,
+          ${originTraceparent}
         )
         ON CONFLICT (session_id, source_type, source_item_id)
         WHERE source_item_id IS NOT NULL
@@ -795,6 +805,7 @@ export async function insertSessionWakeupRow(
         automationOccurrenceId: params.automationOccurrenceId || null,
         status: "pending",
         metadata: (params.metadata || {}) as SessionWakeupMetadataInsert,
+        originTraceparent,
       })
       .returningAll()
       .executeTakeFirst()

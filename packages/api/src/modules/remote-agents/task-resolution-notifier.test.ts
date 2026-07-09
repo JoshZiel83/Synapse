@@ -90,6 +90,8 @@ test("replayResolvedRemoteAgentTasksUseCase sends resolved task frames and skips
     remoteAgentId,
     taskId: task.id,
     task,
+    // No active OTel span in the unit context → activeTraceparent() is undefined.
+    traceparent: undefined,
   })
 })
 
@@ -176,6 +178,7 @@ test("notifyRemoteAgentTaskResolvedUseCase sends only remote-agent-requested tas
         remoteAgentId,
         taskId: task.id,
         task,
+        traceparent: undefined,
       },
     },
   ])

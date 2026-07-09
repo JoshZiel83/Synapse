@@ -42,6 +42,7 @@ npm run guard:soft-delete -w packages/api
 npm run guard:layering -w packages/api
 node ./scripts/guard-datetime-boundaries.mjs
 node ./scripts/guard-logging.mjs
+node ./scripts/guard-trace-propagation.mjs
 ok "guards clean"
 
 # ── 2b. Curated ESLint rule set (no-nested-ternary et al.) ──────────────────

@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { getTraceparent } from "./trace-context.js"
 
 export const RemoteAgentTaskCreateResponseSchema = z.strictObject({
   task: z.strictObject({
@@ -24,6 +25,11 @@ export async function requestJson<S extends z.ZodType>(
   if (init?.body && !headers.has("content-type")) {
     headers.set("content-type", "application/json")
   }
+  // Continue the current turn's distributed trace on the daemon→api callback.
+  // serverUrl is always the daemon's own first-party api (config.serverUrl), so
+  // the W3C traceparent (a random id, no PII) never leaks to a third party.
+  const traceparent = getTraceparent()
+  if (traceparent) headers.set("traceparent", traceparent)
   const response = await fetchImpl(url, { ...init, headers })
   if (!response.ok) {
     const bodyText = await response.text().catch(() => "")

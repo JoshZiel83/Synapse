@@ -2241,6 +2241,7 @@ export interface RemoteAgentMessageDeliveries {
   lastAckedAt: Date | null;
   lastFailureReason: string | null;
   nextAttemptAt: Date | null;
+  originTraceparent: string | null;
   remoteAgentId: string;
   status: Generated<RemoteAgentMessageDeliveriesStatus>;
   updatedAt: Generated<Date>;
@@ -2422,6 +2423,7 @@ export interface SessionWakeups {
   createdAt: Generated<Date>;
   id: Generated<string>;
   metadata: Generated<Json>;
+  originTraceparent: string | null;
   processedAt: Date | null;
   reasonText: string | null;
   sessionId: string;

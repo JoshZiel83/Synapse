@@ -36,6 +36,7 @@ import {
 } from "../workspace-resources/grant-storage.js"
 import { appendWorkspaceMemberSyncEvent } from "../chat/sync-events.js"
 import { nextAttemptAt, shouldFailDelivery } from "./delivery-retry.js"
+import { activeTraceparent } from "../../infrastructure/observability/traceparent.js"
 
 /**
  * Re-export of {@link withDbTransaction} under a module-local name so the
@@ -625,6 +626,7 @@ export async function loadPendingRemoteAgentDeliveriesRepo(
     machineId: string
     itemId: string
     conversationId: string
+    originTraceparent: string | null
   }>(
     executor,
     `
@@ -633,7 +635,8 @@ export async function loadPendingRemoteAgentDeliveriesRepo(
         delivery.remote_agent_id AS "remoteAgentId",
         binding.machine_id AS "machineId",
         delivery.item_id AS "itemId",
-        delivery.conversation_id AS "conversationId"
+        delivery.conversation_id AS "conversationId",
+        delivery.origin_traceparent AS "originTraceparent"
       FROM remote_agent_message_deliveries delivery
       INNER JOIN remote_agent_bindings binding
         ON binding.remote_agent_id = delivery.remote_agent_id
@@ -1757,6 +1760,10 @@ export async function insertDeliveryForParticipantRepo(
         itemId: params.itemId,
         status: "pending",
         attempts: 0,
+        // Capture the enqueuing request's W3C trace so a later reconnect-replay
+        // or retry-worker send (neither of which has an active request span) can
+        // still carry the originating trace to the daemon. NULL when tracing off.
+        originTraceparent: activeTraceparent() ?? null,
         createdAt: sql`NOW()`,
       })
       .onConflict((oc) => oc.columns(["remoteAgentId", "itemId"]).doNothing())

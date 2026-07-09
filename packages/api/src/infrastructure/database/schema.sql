@@ -1993,6 +1993,12 @@ CREATE TABLE remote_agent_message_deliveries (
   next_attempt_at TIMESTAMPTZ,
   last_failure_reason TEXT,
   last_acked_at TIMESTAMPTZ,
+  -- W3C traceparent of the request that enqueued this delivery, captured at
+  -- insert time. Lets a delivery replayed on daemon reconnect or by the retry
+  -- worker (both of which run with NO active request span) still be sent to the
+  -- daemon carrying its ORIGINATING trace, so the remote-agent turn correlates
+  -- back to the user request that caused it. NULL when tracing was off at enqueue.
+  origin_traceparent TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(remote_agent_id, item_id)
@@ -2385,6 +2391,12 @@ CREATE TABLE session_wakeups (
   reason_text TEXT,
   status session_wakeups_status NOT NULL DEFAULT 'pending',
   metadata JSONB NOT NULL DEFAULT '{}',
+  -- W3C traceparent of the request that enqueued this wakeup, captured at insert.
+  -- A wakeup that arrives while the session is already 'running' enqueues no
+  -- think job, so this row is the only place its originating trace survives; the
+  -- draining turn reads it back to add a span LINK (fan-in causal join). NULL
+  -- when tracing was off at enqueue.
+  origin_traceparent TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   attached_at TIMESTAMPTZ,
   processed_at TIMESTAMPTZ

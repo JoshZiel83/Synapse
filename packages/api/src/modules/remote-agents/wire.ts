@@ -71,6 +71,7 @@ export type RemoteAgentApiToDaemonMessage =
       sessionId?: string | null
       fencingToken?: string
       serverUrl?: string
+      traceparent?: string
     }
   | { type: "agent:stop"; remoteAgentId: string }
   | {
@@ -80,6 +81,7 @@ export type RemoteAgentApiToDaemonMessage =
         deliveryId: string
         conversationId: string
         itemId: string
+        traceparent?: string
       }>
     }
   | {
@@ -87,6 +89,7 @@ export type RemoteAgentApiToDaemonMessage =
       remoteAgentId: string
       taskId: string
       task: Record<string, unknown>
+      traceparent?: string
     }
 
 export function parseRemoteAgentMachineMessage(
@@ -183,6 +186,7 @@ function toWireApiMessage(
         session_id: message.sessionId,
         fencing_token: message.fencingToken,
         server_url: message.serverUrl,
+        traceparent: message.traceparent,
       }
     case "agent:stop":
       return {
@@ -197,6 +201,7 @@ function toWireApiMessage(
           delivery_id: delivery.deliveryId,
           conversation_id: delivery.conversationId,
           item_id: delivery.itemId,
+          traceparent: delivery.traceparent,
         })),
       }
     case "agent:task:resolved":
@@ -205,6 +210,7 @@ function toWireApiMessage(
         remote_agent_id: message.remoteAgentId,
         task_id: message.taskId,
         task: message.task,
+        traceparent: message.traceparent,
       }
   }
 }

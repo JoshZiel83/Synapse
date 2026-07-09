@@ -27,6 +27,7 @@ import type {
 import { ClaudeDriver } from "./drivers/claude-driver.js"
 import { CodexDriver } from "./drivers/codex-driver.js"
 import { registerDriver, tryGetDriver } from "./drivers/registry.js"
+import { getTraceparent, runWithTraceparent } from "./trace-context.js"
 import type {
   AgentSessionEvent,
   PermissionDecision,
@@ -134,7 +135,13 @@ function log(
     scope,
     msg: message,
   }
-  const traceparent = process.env.SYNAPSE_TRACEPARENT || process.env.TRACEPARENT
+  // Prefer the PER-TURN traceparent carried in the ALS (set from the api WS
+  // message currently being handled) over the process-lifetime spawn env, so
+  // each daemon log line joins the specific request's trace in Loki/Tempo.
+  const traceparent =
+    getTraceparent() ||
+    process.env.SYNAPSE_TRACEPARENT ||
+    process.env.TRACEPARENT
   if (traceparent) record.traceparent = traceparent
   let line: string
   try {
@@ -447,30 +454,38 @@ class DaemonSupervisor {
 
         if (message?.type === "agent:start") {
           const start = message
-          log(
-            "info",
-            `remote-agent:${start.remoteAgentId}`,
-            "Received agent:start",
-            {
-              runtimeKind: start.runtimeKind,
-              conversationId: start.conversationId,
-              sessionId: start.sessionId ?? undefined,
+          await runWithTraceparent(start.traceparent, async () => {
+            log(
+              "info",
+              `remote-agent:${start.remoteAgentId}`,
+              "Received agent:start",
+              {
+                runtimeKind: start.runtimeKind,
+                conversationId: start.conversationId,
+                sessionId: start.sessionId ?? undefined,
+              }
+            )
+            const agent = this.getOrCreateAgent(start.remoteAgentId)
+            if (start.conversationId && start.traceparent) {
+              agent.rememberConversationTrace(
+                start.conversationId,
+                start.traceparent
+              )
             }
-          )
-          const agent = this.getOrCreateAgent(start.remoteAgentId)
-          await agent.configure(start)
-          if (start.conversationId) {
-            // Server only sends agent:start for pairs with pending work, so
-            // bootstrapping the runtime here is enough — its initial prompt
-            // tells the agent to call check_messages immediately, and the
-            // subsequent agent:deliver (queued right after agent:start by
-            // startBoundRemoteAgents) is a no-op while a wake is in flight.
-            await agent.ensureRuntimeForConversation({
-              conversationId: start.conversationId,
-              resumeSessionId: start.sessionId ?? undefined,
-              wake: false,
-            })
-          }
+            await agent.configure(start)
+            if (start.conversationId) {
+              // Server only sends agent:start for pairs with pending work, so
+              // bootstrapping the runtime here is enough — its initial prompt
+              // tells the agent to call check_messages immediately, and the
+              // subsequent agent:deliver (queued right after agent:start by
+              // startBoundRemoteAgents) is a no-op while a wake is in flight.
+              await agent.ensureRuntimeForConversation({
+                conversationId: start.conversationId,
+                resumeSessionId: start.sessionId ?? undefined,
+                wake: false,
+              })
+            }
+          })
           return
         }
 
@@ -496,7 +511,11 @@ class DaemonSupervisor {
 
         if (message?.type === "agent:task:resolved") {
           const agent = this.agents.get(message.remoteAgentId)
-          if (agent) await agent.resolveTask(message)
+          if (agent) {
+            await runWithTraceparent(message.traceparent, () =>
+              agent.resolveTask(message)
+            )
+          }
         }
       })
 
@@ -539,6 +558,19 @@ class ManagedRemoteAgent {
   // failing. On runtime crash / stop, we POST these back to the server's
   // fail-deliveries endpoint so the backoff worker can reschedule.
   private readonly pendingDeliveryIds = new Map<string, Set<string>>()
+  // Per-conversation W3C traceparent (from the api WS message that most recently
+  // drove this conversation). Async delivery processing + its failure-report
+  // callback happen OUTSIDE the WS handler's ALS scope, so we re-enter this
+  // traceparent at those sites to keep the daemon→api callbacks + logs on the
+  // originating trace. Each turn set-or-DELETEs its slot (enqueueDeliveries) so
+  // an untraced turn never inherits a prior turn's trace, and stopAll clears it
+  // so it cannot grow unbounded across reconnects.
+  // Single-slot fidelity caveat: if turns on ONE conversation overlap with mixed
+  // sampling (a later untraced turn deletes the slot while an earlier traced
+  // turn's subprocess callback is still in flight), that callback loses its
+  // trace_id. Observability-only, never cross-user (one conversation = one
+  // principal); a refcounted/stacked slot would remove it if it ever matters.
+  private readonly traceparentByConversation = new Map<string, string>()
 
   constructor(
     private readonly params: {
@@ -548,6 +580,11 @@ class ManagedRemoteAgent {
       getMachineId: () => string | null
     }
   ) {}
+
+  /** Stash the originating traceparent for a conversation (see the map doc). */
+  rememberConversationTrace(conversationId: string, traceparent: string) {
+    this.traceparentByConversation.set(conversationId, traceparent)
+  }
 
   private trackPendingDeliveries(
     conversationId: string,
@@ -583,19 +620,28 @@ class ManagedRemoteAgent {
         if (set.size === 0) this.pendingDeliveryIds.delete(conversationId)
       }
     }
+    // This runs from async subprocess-crash / stopAll callbacks that are outside
+    // the WS-handler ALS scope, so re-enter the conversation's originating
+    // traceparent (falling back to any ambient one) → the fail-deliveries POST
+    // and its logs rejoin the request trace.
+    const traceparent =
+      (conversationId && this.traceparentByConversation.get(conversationId)) ||
+      getTraceparent()
     try {
-      await requestJson(
-        this.params.config.serverUrl,
-        this.params.config.apiKey,
-        `/api/v1/internal/remote-agents/${this.params.remoteAgentId}/fail-deliveries`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            delivery_ids: deliveryIds,
-            reason: reason.slice(0, 2000),
-          } satisfies RemoteAgentFailDeliveriesBody),
-        },
-        RemoteAgentFailDeliveriesResponseSchema
+      await runWithTraceparent(traceparent, () =>
+        requestJson(
+          this.params.config.serverUrl,
+          this.params.config.apiKey,
+          `/api/v1/internal/remote-agents/${this.params.remoteAgentId}/fail-deliveries`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              delivery_ids: deliveryIds,
+              reason: reason.slice(0, 2000),
+            } satisfies RemoteAgentFailDeliveriesBody),
+          },
+          RemoteAgentFailDeliveriesResponseSchema
+        )
       )
     } catch (error) {
       log(
@@ -705,35 +751,53 @@ class ManagedRemoteAgent {
       byConversation.set(delivery.conversationId, list)
     }
     for (const [conversationId, items] of byConversation) {
-      const deliveryIds = items.map((item) => item.deliveryId)
-      this.trackPendingDeliveries(conversationId, deliveryIds)
-      const hasRuntime = this.runtimes.has(conversationId)
-      try {
-        await this.ensureRuntimeForConversation({
-          conversationId,
-          // A fresh runtime starts with the bootstrap prompt, which already
-          // instructs the agent to check_messages; piling another wake prompt
-          // on top would duplicate the turn. An existing runtime needs the
-          // wake nudge to notice new work.
-          wake: hasRuntime,
-        })
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        log(
-          "error",
-          `remote-agent:${this.params.remoteAgentId}`,
-          "Routing deliveries to conversation runtime failed; reporting back to server",
-          { conversationId, count: items.length, error: message }
-        )
-        await this.reportDeliveryFailure(deliveryIds, message)
-        continue
-      }
-      log(
-        "debug",
-        `remote-agent:${this.params.remoteAgentId}`,
-        "Routed deliveries to conversation runtime",
-        { conversationId, count: items.length }
+      // Reflect THIS turn's trace in the stash: a batch fans in many requests,
+      // so take the last traced delivery for this conversation — but if none of
+      // this turn's deliveries is traced (e.g. tracing was off at enqueue), we
+      // DELETE the entry rather than leave it, so an untraced turn does not
+      // inherit the PRIOR turn's (already-ended, possibly other-user) trace on
+      // its async callbacks/logs. The stash exists to bridge the async gap to
+      // subprocess-driven callbacks that escape this ALS scope.
+      const turnTraceparent = items.reduce<string | undefined>(
+        (tp, item) => item.traceparent ?? tp,
+        undefined
       )
+      if (turnTraceparent) {
+        this.traceparentByConversation.set(conversationId, turnTraceparent)
+      } else {
+        this.traceparentByConversation.delete(conversationId)
+      }
+      await runWithTraceparent(turnTraceparent, async () => {
+        const deliveryIds = items.map((item) => item.deliveryId)
+        this.trackPendingDeliveries(conversationId, deliveryIds)
+        const hasRuntime = this.runtimes.has(conversationId)
+        try {
+          await this.ensureRuntimeForConversation({
+            conversationId,
+            // A fresh runtime starts with the bootstrap prompt, which already
+            // instructs the agent to check_messages; piling another wake
+            // prompt on top would duplicate the turn. An existing runtime
+            // needs the wake nudge to notice new work.
+            wake: hasRuntime,
+          })
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          log(
+            "error",
+            `remote-agent:${this.params.remoteAgentId}`,
+            "Routing deliveries to conversation runtime failed; reporting back to server",
+            { conversationId, count: items.length, error: message }
+          )
+          await this.reportDeliveryFailure(deliveryIds, message, conversationId)
+          return
+        }
+        log(
+          "debug",
+          `remote-agent:${this.params.remoteAgentId}`,
+          "Routed deliveries to conversation runtime",
+          { conversationId, count: items.length }
+        )
+      })
     }
   }
 
@@ -834,9 +898,14 @@ class ManagedRemoteAgent {
       this.runtimes.delete(conversationId)
       const ids = this.drainPendingDeliveries(conversationId)
       if (ids.length > 0) {
+        // reportDeliveryFailure reads traceparentByConversation synchronously
+        // (before its first await), so the post-loop clear() below is safe.
         void this.reportDeliveryFailure(ids, reason, conversationId)
       }
     }
+    // All runtimes are gone → drop every stashed trace so the map cannot grow
+    // across reconnects or leak a stale trace into a future turn.
+    this.traceparentByConversation.clear()
     this.publishStatus({
       conversationId: null,
       state: "offline",
@@ -901,20 +970,27 @@ class ManagedRemoteAgent {
       onUserInputRequested: async (conversationId, event) => {
         try {
           const runKey = `remote-agent:${this.params.remoteAgentId}:user-input:${randomUUID()}`
-          const result = await requestJson(
-            this.params.config.serverUrl,
-            this.params.config.apiKey,
-            `/api/v1/internal/remote-agents/${this.params.remoteAgentId}/tasks/user-input`,
-            {
-              method: "POST",
-              body: JSON.stringify({
-                conversation_id: conversationId,
-                run_key: runKey,
-                title: event.title,
-                questions: event.questions,
-              } satisfies RemoteAgentUserInputTaskBody),
-            },
-            RemoteAgentTaskCreateResponseSchema
+          // This callback fires from the detached drainEvents loop, OUTSIDE the
+          // enqueueDeliveries ALS scope, so re-enter the conversation's trace to
+          // keep the task-creation POST on the originating request's trace.
+          const result = await runWithTraceparent(
+            this.traceparentByConversation.get(conversationId),
+            () =>
+              requestJson(
+                this.params.config.serverUrl,
+                this.params.config.apiKey,
+                `/api/v1/internal/remote-agents/${this.params.remoteAgentId}/tasks/user-input`,
+                {
+                  method: "POST",
+                  body: JSON.stringify({
+                    conversation_id: conversationId,
+                    run_key: runKey,
+                    title: event.title,
+                    questions: event.questions,
+                  } satisfies RemoteAgentUserInputTaskBody),
+                },
+                RemoteAgentTaskCreateResponseSchema
+              )
           )
           this.pendingTasks.set(result.task.id, {
             taskId: result.task.id,
@@ -944,22 +1020,28 @@ class ManagedRemoteAgent {
       onPlanApprovalRequested: async (conversationId, event) => {
         try {
           const runKey = `remote-agent:${this.params.remoteAgentId}:plan:${randomUUID()}`
-          const result = await requestJson(
-            this.params.config.serverUrl,
-            this.params.config.apiKey,
-            `/api/v1/internal/remote-agents/${this.params.remoteAgentId}/tasks/plan-approval`,
-            {
-              method: "POST",
-              body: JSON.stringify({
-                conversation_id: conversationId,
-                run_key: runKey,
-                title: event.title,
-                summary: event.summary,
-                plan_markdown: event.planMarkdown,
-                checklist: event.checklist,
-              } satisfies RemoteAgentPlanApprovalTaskBody),
-            },
-            RemoteAgentTaskCreateResponseSchema
+          // Detached drainEvents callback (see onUserInputRequested) → re-enter
+          // the conversation's trace for the task-creation POST.
+          const result = await runWithTraceparent(
+            this.traceparentByConversation.get(conversationId),
+            () =>
+              requestJson(
+                this.params.config.serverUrl,
+                this.params.config.apiKey,
+                `/api/v1/internal/remote-agents/${this.params.remoteAgentId}/tasks/plan-approval`,
+                {
+                  method: "POST",
+                  body: JSON.stringify({
+                    conversation_id: conversationId,
+                    run_key: runKey,
+                    title: event.title,
+                    summary: event.summary,
+                    plan_markdown: event.planMarkdown,
+                    checklist: event.checklist,
+                  } satisfies RemoteAgentPlanApprovalTaskBody),
+                },
+                RemoteAgentTaskCreateResponseSchema
+              )
           )
           this.pendingTasks.set(result.task.id, {
             taskId: result.task.id,
