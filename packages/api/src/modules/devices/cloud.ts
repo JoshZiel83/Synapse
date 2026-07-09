@@ -16,6 +16,14 @@ export interface CreateCloudDeviceInput {
   title: string
   requestedByWorkspaceMemberId?: string | null
   preset?: string
+  /** P2 sandbox fork: which runtime kind this bootstrap mints (default 'device').
+   *  The docker sandbox backend passes 'sandbox' + the adapter/mode/session facts
+   *  the consume tx reads from context to author the sandboxes detail row. */
+  targetRuntimeKind?: "device" | "sandbox"
+  adapter?: string
+  mode?: "resident" | "bare"
+  sessionId?: string
+  capabilityDescriptor?: Record<string, unknown>
 }
 
 /**
@@ -56,12 +64,19 @@ export async function createCloudDevicePairing(
     sessionId: sessionId,
     workspaceId: input.workspaceId,
     requestedByWorkspaceMemberId: input.requestedByWorkspaceMemberId ?? null,
+    targetRuntimeKind: input.targetRuntimeKind ?? "device",
     requestedTitle: input.title,
     bootstrapTokenHash: bootstrapTokenHash,
     expiresAt: expiresAt,
+    // The sandbox fork facts (adapter/mode/session_id/capability_descriptor) are
+    // carried in context and read by consumeCloudBootstrapTx's 'sandbox' branch.
     contextJson: JSON.stringify({
       pending_runtime_id: pendingDeviceId,
       preset: input.preset ?? null,
+      adapter: input.adapter ?? null,
+      mode: input.mode ?? null,
+      session_id: input.sessionId ?? null,
+      capability_descriptor: input.capabilityDescriptor ?? {},
     }),
   })
 

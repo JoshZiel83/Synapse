@@ -127,13 +127,23 @@ export async function isFilesystemExposureHealthy(
 export async function listReconcileCandidateSessionIds(
   run: Executor = db
 ): Promise<string[]> {
-  const rows = await run
-    .selectFrom("fileMounts")
-    .select("sessionId")
-    .where("status", "in", ["provisioning", "active", "committing"])
-    .groupBy("sessionId")
-    .execute()
-  return rows.map((r) => r.sessionId as string)
+  // S10 UNION SUPERSET (§2.9/§E): candidates = live-mount arm ∪ live-sandbox arm.
+  // The union can only GROW liveSessionIds, so no live container drops out of the
+  // reaper shield during the mixed-shape interim. The sandboxes arm uses
+  // `state NOT IN ('closed','failed')` (includes 'closing', matches
+  // idx_sandboxes_reconcile — CORRECTION 8) so a 'closing' sandbox mid-teardown
+  // with a live container is not reaped before its commit completes.
+  const rows = await sql<{ sessionId: string | null }>`
+    SELECT session_id FROM file_mounts
+      WHERE status IN ('provisioning', 'active', 'committing')
+    UNION
+    SELECT s.session_id FROM sandboxes s
+      JOIN runtimes_live r ON r.id = s.id
+      WHERE s.state NOT IN ('closed', 'failed')
+        AND s.session_id IS NOT NULL`.execute(run)
+  return rows.rows
+    .map((r) => r.sessionId)
+    .filter((id): id is string => typeof id === "string" && id.length > 0)
 }
 
 /**
@@ -145,14 +155,15 @@ export async function listReconcileCandidateSessionIds(
 export async function hasDockerMountHistory(
   run: Executor = db
 ): Promise<boolean> {
-  return Boolean(
-    await run
-      .selectFrom("fileMounts")
-      .select("id")
-      .where("sandboxBackend", "=", "docker")
-      .limit(1)
-      .executeTakeFirst()
-  )
+  // S10: docker-coverage gate = EVER ran a docker sandbox, by EITHER the legacy
+  // file_mounts.sandbox_backend arm OR the P2 sandboxes.adapter arm. Over-firing
+  // the reap gate is a harmless no-op; under-firing would leak containers.
+  const row = await sql<{ ok: boolean }>`
+    SELECT (
+      EXISTS(SELECT 1 FROM file_mounts WHERE sandbox_backend = 'docker')
+      OR EXISTS(SELECT 1 FROM sandboxes WHERE adapter = 'docker')
+    ) AS ok`.execute(run)
+  return Boolean(row.rows[0]?.ok)
 }
 
 export async function listGcSnapshotManifestShas(
@@ -476,15 +487,15 @@ export async function getPairingSessionBootstrapState(
     .executeTakeFirst()
 }
 
-/** Resolve the most-recent device_runtime service id for a bootstrapped device. */
-export async function getLatestDeviceRuntimeServiceId(
-  deviceId: string,
+/** Resolve the most-recent device_runtime service id for a bootstrapped runtime. */
+export async function getLatestRuntimeServiceId(
+  runtimeId: string,
   run: Executor = db
 ): Promise<string | undefined> {
   const svc = await run
     .selectFrom("runtimeServices")
     .select("id")
-    .where("runtimeId", "=", deviceId)
+    .where("runtimeId", "=", runtimeId)
     .where("serviceKind", "=", "device_runtime")
     .orderBy("createdAt", "desc")
     .limit(1)
@@ -516,9 +527,9 @@ export interface DeviceBuiltinExposureRow {
 
 /** Resolve a device's active filesystem/commandline builtin exposures +
  *  capabilities (joined to its workspace resources, soft-delete + active filtered).
- *  Returns raw rows; the domain shaper (resolveDeviceBuiltinIds) folds them. */
-export async function selectDeviceBuiltinExposures(
-  deviceId: string,
+ *  Returns raw rows; the domain shaper (resolveRuntimeBuiltinIds) folds them. */
+export async function selectRuntimeBuiltinExposures(
+  runtimeId: string,
   run: Executor = db
 ): Promise<DeviceBuiltinExposureRow[]> {
   return run
@@ -526,17 +537,17 @@ export async function selectDeviceBuiltinExposures(
     .innerJoin("runtimeCapabilities as c", "c.exposureId", "e.id")
     .innerJoin("workspaceResources as resource", "resource.id", "c.id")
     .select(["e.id as exposureId", "c.id as capabilityId", "e.builtinKind"])
-    .where("e.runtimeId", "=", deviceId)
+    .where("e.runtimeId", "=", runtimeId)
     .where("resource.deletedAt", "is", null)
     .where("resource.status", "=", "active")
     .where("e.builtinKind", "in", ["filesystem", "commandline"])
     .execute() as Promise<DeviceBuiltinExposureRow[]>
 }
 
-/** Resolve THIS device's capability ids within a workspace (capability rows
- *  whose exposure belongs to the device). */
-export async function selectDeviceCapabilityIds(
-  params: { workspaceId: string; deviceId: string },
+/** Resolve THIS runtime's capability ids within a workspace (capability rows
+ *  whose exposure belongs to the runtime). */
+export async function selectRuntimeCapabilityIds(
+  params: { workspaceId: string; runtimeId: string },
   run: Executor = db
 ): Promise<string[]> {
   const rows = await run
@@ -550,15 +561,195 @@ export async function selectDeviceCapabilityIds(
       run
         .selectFrom("runtimeExposures")
         .select("id")
-        .where("runtimeId", "=", params.deviceId)
+        .where("runtimeId", "=", params.runtimeId)
     )
     .execute()
   return rows.map((r) => r.id as string)
 }
 
-/** Revoke all ACTIVE runtime-authorization grants for a device in a workspace. */
-export async function revokeActiveDeviceRuntimeGrants(
-  params: { workspaceId: string; deviceId: string },
+// ── sandboxes detail-table lifecycle (P2) ──────────────────────────────────
+//
+// The `sandboxes` CTI detail row is minted INSIDE backend.create() (docker: the
+// bootstrap-consume tx; local: mintLocalSandboxRuntimeTx) — both in the devices
+// repo, co-located with the pairing txns. THIS file owns the post-create
+// writers/readers the sandbox spine (service.ts) consumes: the state/resource
+// back-fill + the two lookup families.
+//
+// TWO lookup families (CORRECTION 5 — do NOT confuse them):
+//   • CONTROL-PATH (teardown / recovery / isSandboxRuntimeAlive): STATE-AGNOSTIC.
+//     getSandboxById (no filter) + getSandboxBySessionForControl (only
+//     runtimes.deleted_at IS NULL, ANY state) — a 'failed'/'closing' sandbox
+//     STILL resolves so a live runtime is killed before a recovery commit.
+//   • REUSE / FAST-PATH / reconcile enumeration: STATE-FILTERED.
+//     getLiveSandboxBySession (state NOT IN closed/failed).
+
+export interface SandboxRow {
+  id: string
+  workspaceId: string
+  sessionId: string | null
+  mode: "resident" | "bare"
+  adapter: string
+  state:
+    | "provisioning"
+    | "active"
+    | "committing"
+    | "closing"
+    | "closed"
+    | "failed"
+  resourceId: string | null
+  hostPid: number | null
+  pairingSessionId: string | null
+}
+
+const SANDBOX_ROW_COLUMNS = [
+  "id",
+  "workspaceId",
+  "sessionId",
+  "mode",
+  "adapter",
+  "state",
+  "resourceId",
+  "hostPid",
+  "pairingSessionId",
+] as const
+
+const SANDBOX_ROW_COLUMNS_PREFIXED = [
+  "sb.id",
+  "sb.workspaceId",
+  "sb.sessionId",
+  "sb.mode",
+  "sb.adapter",
+  "sb.state",
+  "sb.resourceId",
+  "sb.hostPid",
+  "sb.pairingSessionId",
+] as const
+
+function toSandboxRow(row: Record<string, unknown>): SandboxRow {
+  return {
+    id: row.id as string,
+    workspaceId: row.workspaceId as string,
+    sessionId: (row.sessionId as string | null) ?? null,
+    mode: row.mode as SandboxRow["mode"],
+    adapter: row.adapter as string,
+    state: row.state as SandboxRow["state"],
+    resourceId: (row.resourceId as string | null) ?? null,
+    hostPid: (row.hostPid as number | null) ?? null,
+    pairingSessionId: (row.pairingSessionId as string | null) ?? null,
+  }
+}
+
+/**
+ * Patch mutable columns on a sandboxes row (post-create back-fill + lifecycle
+ * transitions). resource_id/host_pid are written ONLY here (POST-create), never
+ * from onResourceCreated — for docker the container id arrives before the
+ * consume mints the row (CORRECTION 4).
+ */
+export async function updateSandboxRow(
+  id: string,
+  patch: Partial<{
+    state: SandboxRow["state"]
+    resourceId: string | null
+    hostPid: number | null
+    errorMessage: string | null
+    deadlineAt: Date | null
+  }>,
+  run: Executor = db
+): Promise<void> {
+  const set: Record<string, unknown> = {}
+  if (patch.state !== undefined) set.state = patch.state
+  if (patch.resourceId !== undefined) set.resourceId = patch.resourceId
+  if (patch.hostPid !== undefined) set.hostPid = patch.hostPid
+  if (patch.errorMessage !== undefined) set.errorMessage = patch.errorMessage
+  if (patch.deadlineAt !== undefined) set.deadlineAt = patch.deadlineAt
+  if (Object.keys(set).length === 0) return
+  set.updatedAt = new Date()
+  await run
+    .updateTable("sandboxes")
+    .set(set as never)
+    .where("id", "=", id)
+    .execute()
+}
+
+/**
+ * CONTROL-PATH resolver primary: load a sandboxes row by id with NO state filter
+ * (rows are never hard-deleted; resource_id/host_pid/adapter survive
+ * 'failed'/'closing'/'closed'). Used by teardown/recovery/liveness so a runtime
+ * behind a failed sandbox is still killed before a recovery commit.
+ */
+export async function getSandboxById(
+  id: string,
+  run: Executor = db
+): Promise<SandboxRow | null> {
+  const row = await run
+    .selectFrom("sandboxes")
+    .select(SANDBOX_ROW_COLUMNS)
+    .where("id", "=", id)
+    .executeTakeFirst()
+  return row ? toSandboxRow(row) : null
+}
+
+/**
+ * CONTROL-PATH resolver fallback: the latest sandbox for a session filtered ONLY
+ * on runtimes.deleted_at IS NULL (ANY state — NOT on sandboxes.state). Used when
+ * a mount has no sandbox_id back-filled yet (CORRECTION 5).
+ */
+export async function getSandboxBySessionForControl(
+  sessionId: string,
+  run: Executor = db
+): Promise<SandboxRow | null> {
+  const row = await run
+    .selectFrom("sandboxes as sb")
+    .innerJoin("runtimes as r", "r.id", "sb.id")
+    .select(SANDBOX_ROW_COLUMNS_PREFIXED)
+    .where("sb.sessionId", "=", sessionId)
+    .where("r.deletedAt", "is", null)
+    .orderBy("sb.createdAt", "desc")
+    .limit(1)
+    .executeTakeFirst()
+  return row ? toSandboxRow(row) : null
+}
+
+/**
+ * REUSE / FAST-PATH resolver: the latest LIVE sandbox for a session
+ * (state NOT IN closed/failed, runtimes.deleted_at IS NULL). NEVER use for
+ * teardown/recovery/liveness — reserved for reuse/fast-path (CORRECTION 5).
+ */
+export async function getLiveSandboxBySession(
+  sessionId: string,
+  run: Executor = db
+): Promise<SandboxRow | null> {
+  const row = await run
+    .selectFrom("sandboxes as sb")
+    .innerJoin("runtimes as r", "r.id", "sb.id")
+    .select(SANDBOX_ROW_COLUMNS_PREFIXED)
+    .where("sb.sessionId", "=", sessionId)
+    .where("r.deletedAt", "is", null)
+    .where(sql<boolean>`sb.state NOT IN ('closed', 'failed')`)
+    .orderBy("sb.createdAt", "desc")
+    .limit(1)
+    .executeTakeFirst()
+  return row ? toSandboxRow(row) : null
+}
+
+/** Whether this host has EVER minted a docker sandbox (any sandboxes row with
+ *  adapter='docker'). ORed into the reaper's docker-coverage gate (S10). */
+export async function hasDockerSandboxHistory(
+  run: Executor = db
+): Promise<boolean> {
+  return Boolean(
+    await run
+      .selectFrom("sandboxes")
+      .select("id")
+      .where("adapter", "=", "docker")
+      .limit(1)
+      .executeTakeFirst()
+  )
+}
+
+/** Revoke all ACTIVE runtime-authorization grants for a runtime in a workspace. */
+export async function revokeActiveRuntimeGrants(
+  params: { workspaceId: string; runtimeId: string },
   run: Executor = db
 ): Promise<void> {
   await run
@@ -567,7 +758,7 @@ export async function revokeActiveDeviceRuntimeGrants(
       status: "revoked",
       revokedAt: new Date(),
     } as never)
-    .where("runtimeId", "=", params.deviceId)
+    .where("runtimeId", "=", params.runtimeId)
     .where("workspaceId", "=", params.workspaceId)
     .where("status", "=", "active")
     .execute()

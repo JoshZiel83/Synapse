@@ -18,7 +18,7 @@
 # container and keeps the API on the default profile. On a BARE host (API not in
 # Docker) you need NONE of this — the host userns suffices.
 #
-# Layer this file ONLY when SYNAPSE_SANDBOX_BACKEND=local AND the API is
+# Layer this file ONLY when SANDBOX_PROVIDER=local AND the API is
 # containerized (scripts/deploy-sandbox-local.sh does this for you):
 #
 #   docker compose \
@@ -41,4 +41,4 @@ services:
       # is shared with the docker backend (which needs an internal address like
       # http://api:3001), so a stray .env value would break a later switch back
       # to docker.
-      SYNAPSE_SANDBOX_SERVER_ORIGIN: http://127.0.0.1:3001
+      SANDBOX_SERVER_ORIGIN: http://127.0.0.1:3001

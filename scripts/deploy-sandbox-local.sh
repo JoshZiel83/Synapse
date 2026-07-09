@@ -48,8 +48,7 @@ done
 # 2. Reject conflicting shell env (raw-exact — a set-empty shell var makes compose
 #    use the default, ignoring .env). A shell loopback origin is fine for local
 #    (the override sets it anyway), so origin is left unconstrained here.
-assert_shell_flag SYNAPSE_SANDBOX_ENABLED true
-assert_shell_flag SYNAPSE_SANDBOX_BACKEND local
+assert_shell_flag SANDBOX_PROVIDER local
 
 # Snapshot how api + tunnel-edge exist BEFORE we touch anything, so a failed
 # deploy can restore each to its pre-deploy operational state (existence / run
@@ -107,7 +106,7 @@ assert_shell_secret FRP_SHARED_TOKEN
 assert_shell_secret SYNAPSE_DEVICE_ENVELOPE_SIGNING_KEY
 
 # 4. Switch ONLY the mode flags (idempotent in-place upsert). Deliberately NOT
-#    SYNAPSE_SANDBOX_SERVER_ORIGIN — that loopback lives in the override only.
+#    SANDBOX_SERVER_ORIGIN — that loopback lives in the override only.
 upsert() {
   local key="$1" value="$2"
   if grep -qE "^${key}=" "$ENV_FILE"; then
@@ -117,9 +116,8 @@ upsert() {
     printf '%s=%s\n' "$key" "$value" >>"$ENV_FILE"
   fi
 }
-upsert SYNAPSE_SANDBOX_ENABLED true
-upsert SYNAPSE_SANDBOX_BACKEND local
-log "set SYNAPSE_SANDBOX_ENABLED=true, SYNAPSE_SANDBOX_BACKEND=local"
+upsert SANDBOX_PROVIDER local
+log "set SANDBOX_PROVIDER=local"
 
 # 5. Build, then smoke in a THROWAWAY container BEFORE `up`. If the cap stack is
 #    insufficient the smoke fails here and we never started a privileged API.

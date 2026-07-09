@@ -106,6 +106,22 @@ export async function findOwnedDeviceCapabilityIds(
   )
 }
 
+/**
+ * Run a consume/mint body either in a fresh atomic global-db transaction
+ * (production — the default) or DIRECTLY on an injected executor (a test's
+ * withTestDb transaction handle). The injected path does NOT open a nested
+ * transaction: the whole test already runs in one rolled-back transaction, so
+ * the deferred CTI detail-consistency triggers validate only at the outer
+ * boundary. Behavior-preserving: no production caller passes an executor.
+ */
+function runInInjectableTx<T>(
+  executor: KyselyDb | undefined,
+  fn: (trx: KyselyDb) => Promise<T>
+): Promise<T> {
+  if (executor) return fn(executor)
+  return db.transaction().execute((trx) => fn(trx as unknown as KyselyDb))
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // cloud.ts — cloud bootstrap pairing
 // ════════════════════════════════════════════════════════════════════════════
@@ -116,6 +132,7 @@ export async function insertCloudPairingSession(args: {
   sessionId: string
   workspaceId: string
   requestedByWorkspaceMemberId: string | null
+  targetRuntimeKind?: "device" | "sandbox"
   requestedTitle: string
   bootstrapTokenHash: Buffer
   expiresAt: Date
@@ -128,6 +145,7 @@ export async function insertCloudPairingSession(args: {
       workspaceId: args.workspaceId,
       requestedByWorkspaceMemberId: args.requestedByWorkspaceMemberId,
       runtimeId: null,
+      targetRuntimeKind: args.targetRuntimeKind ?? "device",
       mode: "cloud_bootstrap",
       serverBaseUrl: "",
       requestedTitle: args.requestedTitle,
@@ -188,8 +206,15 @@ export async function consumeCloudBootstrapTx(args: {
     pubkey: string
     pubkeyFingerprint: string
   }
+  /** TEST SEAM only (see below). */
+  executor?: KyselyDb
 }): Promise<ConsumeCloudBootstrapResult> {
-  return db.transaction().execute(async (trx) => {
+  // The optional `executor` is a TEST SEAM only: production callers pass nothing
+  // → the atomic global db.transaction() (unchanged). A test injects its
+  // withTestDb transaction handle so the consume runs on the same rolled-back
+  // connection (the deferred detail-consistency trigger validates at the outer
+  // boundary, i.e. never — the test rolls back).
+  return runInInjectableTx(args.executor, async (trx) => {
     // Atomic single-shot consume: flip status to "consumed" only if the
     // session is still pending + matching mode + not expired. Two concurrent
     // sandbox boots can no longer both succeed and double-insert a device.
@@ -240,35 +265,79 @@ export async function consumeCloudBootstrapTx(args: {
       return { outcome: "corrupt" }
     }
 
-    // runtimes is the CTI supertype root: the devices detail row's deferred
-    // root FK + the runtime detail-consistency trigger both validate at commit,
-    // so the runtimes(kind='device') parent MUST exist in the same tx before
-    // the devices insert (P1 sandbox provisioning stays device-shaped).
-    await trx
-      .insertInto("runtimes")
-      .values({
-        id: pendingDeviceId,
-        workspaceId: session.workspaceId as string,
-        kind: "device",
-      } as never)
-      .execute()
+    // P2 fork: which runtime kind this bootstrap mints. Defaults to 'device' so a
+    // real cloud device stays byte-identical; a docker sandbox sets 'sandbox'.
+    const targetRuntimeKind =
+      (session.targetRuntimeKind as string | undefined) ?? "device"
 
-    await trx
-      .insertInto("devices")
-      .values({
-        id: pendingDeviceId,
-        workspaceId: session.workspaceId as string,
-        ownerWorkspaceMemberId: session.requestedByWorkspaceMemberId ?? null,
-        title: (session.requestedTitle as string | null) ?? "Cloud Device",
-        description: null,
-        deviceType: "virtual_machine",
-        platform: args.device.platform,
-        arch: args.device.arch,
-        publicKey: args.device.publicKey,
-        publicKeyFingerprint: args.device.publicKeyFingerprint,
-        trustStatus: "trusted",
-      } as never)
-      .execute()
+    if (targetRuntimeKind === "device") {
+      // ── DEVICE branch — TODAY's INSERTs, VERBATIM (preservation contract #1) ──
+      // runtimes is the CTI supertype root: the devices detail row's deferred
+      // root FK + the runtime detail-consistency trigger both validate at commit,
+      // so the runtimes(kind='device') parent MUST exist in the same tx before
+      // the devices insert.
+      await trx
+        .insertInto("runtimes")
+        .values({
+          id: pendingDeviceId,
+          workspaceId: session.workspaceId as string,
+          kind: "device",
+        } as never)
+        .execute()
+
+      await trx
+        .insertInto("devices")
+        .values({
+          id: pendingDeviceId,
+          workspaceId: session.workspaceId as string,
+          ownerWorkspaceMemberId: session.requestedByWorkspaceMemberId ?? null,
+          title: (session.requestedTitle as string | null) ?? "Cloud Device",
+          description: null,
+          deviceType: "virtual_machine",
+          platform: args.device.platform,
+          arch: args.device.arch,
+          publicKey: args.device.publicKey,
+          publicKeyFingerprint: args.device.publicKeyFingerprint,
+          trustStatus: "trusted",
+        } as never)
+        .execute()
+    } else {
+      // ── SANDBOX branch (NEW) — a device-less kind='sandbox' runtime whose
+      // detail is the sandboxes row (NO devices row). The device pubkey args are
+      // ignored: identity lives in runtime_service_keys. adapter/mode/session_id/
+      // capability_descriptor come from the pairing context (set at
+      // createCloudDevicePairing). assert_runtime_detail_consistency (DEFERRED)
+      // is satisfied: exactly one sandboxes detail for this runtime. ──
+      const adapter = (context["adapter"] as string | null) ?? "docker"
+      const mode = (context["mode"] as string | null) ?? "resident"
+      const sandboxSessionId = (context["session_id"] as string | null) ?? null
+      const capabilityDescriptor =
+        (context["capability_descriptor"] as Record<string, unknown> | null) ??
+        {}
+      await trx
+        .insertInto("runtimes")
+        .values({
+          id: pendingDeviceId,
+          workspaceId: session.workspaceId as string,
+          kind: "sandbox",
+        } as never)
+        .execute()
+      await trx
+        .insertInto("sandboxes")
+        .values({
+          id: pendingDeviceId,
+          workspaceId: session.workspaceId as string,
+          sessionId: sandboxSessionId,
+          mode,
+          adapter,
+          state: "provisioning",
+          resourceId: "",
+          hostPid: null,
+          pairingSessionId: session.id as string,
+          capabilityDescriptor: sql`${JSON.stringify(capabilityDescriptor)}::jsonb`,
+        } as never)
+        .execute()
+    }
 
     await trx
       .insertInto("runtimeServices")
@@ -291,7 +360,7 @@ export async function consumeCloudBootstrapTx(args: {
       } as never)
       .execute()
     // Atomic UPDATE above already flipped status/timestamps. Just backfill
-    // the device_id FK now that the device row exists.
+    // the runtime_id FK now that the runtime detail row exists.
     await trx
       .updateTable("runtimePairingSessions")
       .set({
@@ -413,12 +482,15 @@ export async function closeControlPlaneSessionRows(
     .execute()
 }
 
-/** device.hello workspace cache lookup. Returns the device's workspaceId or null. */
+/** device.hello workspace cache lookup. Returns the runtime's workspaceId or
+ *  null. Generalized to the runtimes supertype (P2) so a device-less
+ *  kind='sandbox' runtime attributes its per-message runtime_events identically
+ *  (runtimes.workspace_id === devices.workspace_id for a device). */
 export async function getDeviceWorkspaceId(
   deviceId: string
 ): Promise<string | null> {
   const row = await db
-    .selectFrom("devices")
+    .selectFrom("runtimesLive")
     .select(["workspaceId"])
     .where("id", "=", deviceId)
     .executeTakeFirst()
@@ -454,12 +526,17 @@ export async function selectDeviceHelloAuthContext(
   input: { deviceId: string; serviceId: string },
   executor: KyselyDb = db
 ): Promise<DeviceHelloAuthContext> {
-  const device = await executor
-    .selectFrom("devices")
+  // Generalized to the runtimes supertype (P2): a device-less kind='sandbox'
+  // runtime must authenticate device.hello identically. Existence + liveness are
+  // rooted on runtimes (its sole soft-delete authority); the service + key reads
+  // below are already runtime-keyed, so a sandbox runtime with its
+  // runtime_service_keys row authenticates exactly like a device.
+  const runtime = await executor
+    .selectFrom("runtimesLive")
     .select(["id"])
     .where("id", "=", input.deviceId)
     .executeTakeFirst()
-  if (!device) return { deviceExists: false, service: null, activeKey: null }
+  if (!runtime) return { deviceExists: false, service: null, activeKey: null }
 
   const serviceRow = await executor
     .selectFrom("runtimeServices")
@@ -505,6 +582,25 @@ export async function hasLiveLocalSandboxMount(
   runtimeServiceId: string,
   executor: KyselyDb = db
 ): Promise<boolean> {
+  // Primary (P2): resolve via the sandboxes row directly (NOT file_mounts). The
+  // loopback gate fires DURING backend.create() — before the mount back-fill —
+  // but mintLocalSandboxRuntimeTx has already created the sandboxes row at
+  // create() start. A device-less local sandbox runtime has no file_mounts.device_id
+  // to join on, so the legacy path below never resolves it.
+  const bySandbox = await executor
+    .selectFrom("sandboxes as sb")
+    .innerJoin("runtimeServices as s", "s.runtimeId", "sb.id")
+    .innerJoin("runtimes as r", "r.id", "sb.id")
+    .select("sb.id")
+    .where("s.id", "=", runtimeServiceId)
+    .where("sb.adapter", "=", "local")
+    .where(sql<boolean>`sb.state NOT IN ('closed', 'failed')`)
+    .where("r.deletedAt", "is", null)
+    .limit(1)
+    .executeTakeFirst()
+  if (bySandbox) return true
+  // Legacy fallback (rolling-deploy): pre-P2 device-shaped local mounts whose
+  // identity is still the device_id, keyed via file_mounts.sandbox_backend='local'.
   const liveLocalMount = await executor
     .selectFrom("fileMounts as m")
     .innerJoin("runtimeServices as s", "s.runtimeId", "m.deviceId")
@@ -1646,6 +1742,7 @@ export async function insertLocalPairingSession(args: {
   workspaceId: string
   requestedByWorkspaceMemberId: string | null
   deviceId: string | null
+  targetRuntimeKind?: "device" | "sandbox"
   mode: string
   serverBaseUrl: string
   requestedTitle: string | null
@@ -1663,6 +1760,7 @@ export async function insertLocalPairingSession(args: {
       workspaceId: args.workspaceId,
       requestedByWorkspaceMemberId: args.requestedByWorkspaceMemberId,
       runtimeId: args.deviceId,
+      targetRuntimeKind: args.targetRuntimeKind ?? "device",
       mode: args.mode,
       serverBaseUrl: args.serverBaseUrl,
       requestedTitle: args.requestedTitle,
@@ -1719,8 +1817,10 @@ export async function consumeLocalPairingTx(args: {
   deviceType?: DeviceType
   platform?: string
   arch?: string
+  /** TEST SEAM only (see consumeCloudBootstrapTx / runInInjectableTx). */
+  executor?: KyselyDb
 }): Promise<ConsumeLocalPairingResult> {
-  return db.transaction().execute(async (trx) => {
+  return runInInjectableTx(args.executor, async (trx) => {
     // Atomic single-shot consume: UPDATE the pairing session with status
     // change conditioned on it still being pending + matching mode + not
     // expired. RETURNING gives us the full row on success; nothing on any
@@ -1776,40 +1876,84 @@ export async function consumeLocalPairingTx(args: {
     const deviceId = randomUUID()
     const serviceId = randomUUID()
     const serviceKeyId = randomUUID()
-    const title = args.title ?? session.requestedTitle ?? "Device"
-    const deviceType =
-      args.deviceType ??
-      (session.requestedDeviceType as DeviceType | null) ??
-      ("desktop_computer" as DeviceType)
 
-    // runtimes(kind='device') supertype root MUST be inserted in the same tx
-    // before the devices detail (deferred root FK + detail-consistency trigger
-    // validate at commit).
-    await trx
-      .insertInto("runtimes")
-      .values({
-        id: deviceId,
-        workspaceId: session.workspaceId as string,
-        kind: "device",
-      } as never)
-      .execute()
+    // P2 fork: which runtime kind this pairing mints. Defaults to 'device' so a
+    // real local device stays byte-identical. Local sandboxes normally use the
+    // direct-mint path (mintLocalSandboxRuntimeTx); this branch is the documented
+    // pairing-fork fallback (§4.6).
+    const targetRuntimeKind =
+      (session.targetRuntimeKind as string | undefined) ?? "device"
 
-    await trx
-      .insertInto("devices")
-      .values({
-        id: deviceId,
-        workspaceId: session.workspaceId as string,
-        ownerWorkspaceMemberId: session.requestedByWorkspaceMemberId ?? null,
-        title,
-        description: (session.requestedDescription as string | null) ?? null,
-        deviceType: deviceType,
-        platform: args.platform ?? null,
-        arch: args.arch ?? null,
-        publicKey: args.devicePubkey,
-        publicKeyFingerprint: args.pubkeyFingerprint,
-        trustStatus: "trusted",
-      } as never)
-      .execute()
+    if (targetRuntimeKind === "device") {
+      // ── DEVICE branch — TODAY's INSERTs, VERBATIM (preservation contract #1) ──
+      const title = args.title ?? session.requestedTitle ?? "Device"
+      const deviceType =
+        args.deviceType ??
+        (session.requestedDeviceType as DeviceType | null) ??
+        ("desktop_computer" as DeviceType)
+
+      // runtimes(kind='device') supertype root MUST be inserted in the same tx
+      // before the devices detail (deferred root FK + detail-consistency trigger
+      // validate at commit).
+      await trx
+        .insertInto("runtimes")
+        .values({
+          id: deviceId,
+          workspaceId: session.workspaceId as string,
+          kind: "device",
+        } as never)
+        .execute()
+
+      await trx
+        .insertInto("devices")
+        .values({
+          id: deviceId,
+          workspaceId: session.workspaceId as string,
+          ownerWorkspaceMemberId: session.requestedByWorkspaceMemberId ?? null,
+          title,
+          description: (session.requestedDescription as string | null) ?? null,
+          deviceType: deviceType,
+          platform: args.platform ?? null,
+          arch: args.arch ?? null,
+          publicKey: args.devicePubkey,
+          publicKeyFingerprint: args.pubkeyFingerprint,
+          trustStatus: "trusted",
+        } as never)
+        .execute()
+    } else {
+      // ── SANDBOX branch (NEW) — device-less kind='sandbox' runtime; the
+      // sandboxes detail row replaces devices. Mirrors the cloud consume fork. ──
+      const context = (session.context ?? {}) as Record<string, unknown>
+      const adapter = (context["adapter"] as string | null) ?? "local"
+      const mode = (context["mode"] as string | null) ?? "resident"
+      const sandboxSessionId = (context["session_id"] as string | null) ?? null
+      const capabilityDescriptor =
+        (context["capability_descriptor"] as Record<string, unknown> | null) ??
+        {}
+      await trx
+        .insertInto("runtimes")
+        .values({
+          id: deviceId,
+          workspaceId: session.workspaceId as string,
+          kind: "sandbox",
+        } as never)
+        .execute()
+      await trx
+        .insertInto("sandboxes")
+        .values({
+          id: deviceId,
+          workspaceId: session.workspaceId as string,
+          sessionId: sandboxSessionId,
+          mode,
+          adapter,
+          state: "provisioning",
+          resourceId: "",
+          hostPid: null,
+          pairingSessionId: session.id as string,
+          capabilityDescriptor: sql`${JSON.stringify(capabilityDescriptor)}::jsonb`,
+        } as never)
+        .execute()
+    }
 
     await trx
       .insertInto("runtimeServices")
@@ -1849,6 +1993,85 @@ export async function consumeLocalPairingTx(args: {
       deviceId,
       serviceId,
       serviceKeyId,
+    }
+  })
+}
+
+/**
+ * Direct-mint a device-less LOCAL sandbox runtime (§4.6). ONE tx:
+ * runtimes(kind='sandbox') + sandboxes(adapter='local', pairing_session_id=NULL)
+ * + runtime_services(device_runtime) + runtime_service_keys. Mirrors
+ * consumeLocalPairingTx's sandbox branch minus the pairing claim/backfill (there
+ * is no pairing session — the API authors the on-disk broker identity in-process
+ * and spawns `synapse-device run` directly). runtimeId is a FRESH UUID per
+ * provision (CORRECTION 1 — deriving it from sessionId would PK-collide with a
+ * soft-deleted row on re-provision). The device pubkey never persists (it lives
+ * in the on-disk identity file); only the SERVICE key is registered here — that
+ * is what device.hello verifies.
+ */
+export async function mintLocalSandboxRuntimeTx(args: {
+  runtimeId: string
+  workspaceId: string
+  sessionId: string
+  serviceId: string
+  serviceKeyId: string
+  servicePubkey: string
+  serviceFingerprint: string
+  adapter?: string
+  mode?: "resident" | "bare"
+  clientVersion?: string | null
+  capabilityDescriptor?: Record<string, unknown>
+  /** TEST SEAM only (see consumeCloudBootstrapTx / runInInjectableTx). */
+  executor?: KyselyDb
+}): Promise<{ runtimeId: string; serviceId: string; serviceKeyId: string }> {
+  return runInInjectableTx(args.executor, async (trx) => {
+    await trx
+      .insertInto("runtimes")
+      .values({
+        id: args.runtimeId,
+        workspaceId: args.workspaceId,
+        kind: "sandbox",
+      } as never)
+      .execute()
+    await trx
+      .insertInto("sandboxes")
+      .values({
+        id: args.runtimeId,
+        workspaceId: args.workspaceId,
+        sessionId: args.sessionId,
+        mode: args.mode ?? "resident",
+        adapter: args.adapter ?? "local",
+        state: "provisioning",
+        resourceId: "",
+        hostPid: null,
+        pairingSessionId: null,
+        capabilityDescriptor: sql`${JSON.stringify(args.capabilityDescriptor ?? {})}::jsonb`,
+      } as never)
+      .execute()
+    await trx
+      .insertInto("runtimeServices")
+      .values({
+        id: args.serviceId,
+        runtimeId: args.runtimeId,
+        serviceKind: "device_runtime",
+        version: args.clientVersion ?? null,
+        status: "starting",
+        metadata: sql`'{}'::jsonb`,
+      } as never)
+      .execute()
+    await trx
+      .insertInto("runtimeServiceKeys")
+      .values({
+        id: args.serviceKeyId,
+        serviceId: args.serviceId,
+        pubkey: args.servicePubkey,
+        pubkeyFingerprint: args.serviceFingerprint,
+      } as never)
+      .execute()
+    return {
+      runtimeId: args.runtimeId,
+      serviceId: args.serviceId,
+      serviceKeyId: args.serviceKeyId,
     }
   })
 }

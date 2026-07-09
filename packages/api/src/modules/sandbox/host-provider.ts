@@ -18,6 +18,7 @@ import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { z } from "zod"
 import { casDir } from "./materialize.js"
+import { config } from "../../config/index.js"
 import type { BackendId } from "../../infrastructure/storage/content-store.js"
 
 /**
@@ -57,8 +58,9 @@ export interface RunHandle {
 }
 
 export interface SpawnSandboxRuntimeParams {
-  /** Pairing code from startPairing(mode=local_qr). */
-  pairingCode: string
+  /** Pairing code (legacy `pair` path only). The direct-mint local backend
+   *  authors the broker identity in-process, so `run` needs no pairing code. */
+  pairingCode?: string
   /** Session-private broker dir (device-identity.json + keys). */
   brokerDir: string
   /** The sandbox FS root (its children are the materialized mount points). */
@@ -122,8 +124,8 @@ const PairOutputSchema = z.union([
 
 /** Resolve the synapse-device CLI entry (dist/bin.js). */
 function resolveDeviceCliPath(): string {
-  const fromEnv = process.env.SYNAPSE_DEVICE_CLI_PATH?.trim()
-  if (fromEnv && existsSync(fromEnv)) return fromEnv
+  const fromConfig = config.sandbox.local.cliPath
+  if (fromConfig && existsSync(fromConfig)) return fromConfig
   const here = fileURLToPath(import.meta.url)
   // Probe the device-runtime dist relative to api's dist/src + node_modules link.
   const candidates = [

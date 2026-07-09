@@ -11,50 +11,19 @@ import {
 } from "./service.js"
 import { config } from "../../config/index.js"
 
-// Save/restore the one env var sandboxLocalServerOrigin reads, mirroring the
-// withEnv harness in docker-backend-options.test.ts.
-function withEnv<T>(
-  overrides: Record<string, string | undefined>,
-  fn: () => T
-): T {
-  const keys = Object.keys(overrides)
-  const prev: Record<string, string | undefined> = {}
-  for (const k of keys) {
-    prev[k] = process.env[k]
-    const v = overrides[k]
-    if (v === undefined) delete process.env[k]
-    else process.env[k] = v
-  }
-  try {
-    return fn()
-  } finally {
-    for (const k of keys) {
-      if (prev[k] === undefined) delete process.env[k]
-      else process.env[k] = prev[k]!
-    }
-  }
-}
-
 // ── B1: sandboxLocalServerOrigin ─────────────────────────────────────────────
+// The origin is now resolved once at boot into config.sandbox.serverOrigin
+// (SANDBOX_SERVER_ORIGIN, else app.baseUrl); the helper is a thin read of that
+// frozen value, so we assert the wiring rather than mutating env.
 
-test("sandboxLocalServerOrigin: honors SYNAPSE_SANDBOX_SERVER_ORIGIN when set", () => {
-  withEnv({ SYNAPSE_SANDBOX_SERVER_ORIGIN: "http://127.0.0.1:3001" }, () => {
-    assert.equal(sandboxLocalServerOrigin(), "http://127.0.0.1:3001")
-  })
+test("sandboxLocalServerOrigin: returns config.sandbox.serverOrigin", () => {
+  assert.equal(sandboxLocalServerOrigin(), config.sandbox.serverOrigin)
 })
 
-test("sandboxLocalServerOrigin: falls back to config.app.baseUrl when unset", () => {
-  withEnv({ SYNAPSE_SANDBOX_SERVER_ORIGIN: undefined }, () => {
-    // Compare against the same frozen const the helper falls back to (the value
-    // is import-time-fixed, so this stays deterministic regardless of the env).
-    assert.equal(sandboxLocalServerOrigin(), config.app.baseUrl)
-  })
-})
-
-test("sandboxLocalServerOrigin: blank/whitespace value falls back (not used verbatim)", () => {
-  withEnv({ SYNAPSE_SANDBOX_SERVER_ORIGIN: "   " }, () => {
-    assert.equal(sandboxLocalServerOrigin(), config.app.baseUrl)
-  })
+test("sandboxLocalServerOrigin: falls back to app.baseUrl when SANDBOX_SERVER_ORIGIN is unset", () => {
+  // In the test env SANDBOX_SERVER_ORIGIN is unset, so serverOrigin resolves to
+  // the app base url — the frozen fallback the helper returns.
+  assert.equal(sandboxLocalServerOrigin(), config.app.baseUrl)
 })
 
 // ── B2: sandboxSpecVolumeSubpath (the bare-metal-local regression) ───────────

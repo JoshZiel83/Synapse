@@ -58,6 +58,10 @@ export interface FileMountRow {
   fileSpaceId: string
   mountSubpath: MountSubpath
   deviceId: string | null
+  /** Forward pointer to the CTI sandbox detail row (P2). Back-filled POST-create
+   *  (the sandboxes row is minted inside backend.create()); NULL in the insert→
+   *  onRuntimeReady window and for legacy device-shaped mounts. */
+  sandboxId: string | null
   pairingSessionId: string | null
   baseSnapshotId: string | null
   resultSnapshotId: string | null
@@ -189,7 +193,7 @@ export async function insertFileMount(
     VALUES (${uuidv4()}, ${input.workspaceId}, ${input.sessionId}, ${input.fileSpaceId}, ${input.mountSubpath},
             ${input.baseSnapshotId}, ${input.pairingSessionId ?? null}, ${input.refreshPolicy ?? "per_turn"}, 'provisioning', ${input.materializedDir ?? null}, ${input.sandboxBackend ?? null}, NOW(), NOW())
     RETURNING id, workspace_id, session_id, file_space_id, mount_subpath,
-              device_id, pairing_session_id, base_snapshot_id, result_snapshot_id,
+              device_id, sandbox_id, pairing_session_id, base_snapshot_id, result_snapshot_id,
               refresh_policy, status, materialized_dir, host_pid,
               sandbox_backend, sandbox_resource_id, error_message`.execute(
     client
@@ -206,6 +210,7 @@ export async function updateFileMount(
   patch: Partial<{
     status: FileMountRow["status"]
     deviceId: string | null
+    sandboxId: string | null
     hostPid: number | null
     pairingSessionId: string | null
     sandboxBackend: "local" | "docker" | null
@@ -223,6 +228,7 @@ export async function updateFileMount(
   }
   if (patch.status !== undefined) add("status", patch.status)
   if (patch.deviceId !== undefined) add("device_id", patch.deviceId)
+  if (patch.sandboxId !== undefined) add("sandbox_id", patch.sandboxId)
   if (patch.hostPid !== undefined) add("host_pid", patch.hostPid)
   if (patch.pairingSessionId !== undefined)
     add("pairing_session_id", patch.pairingSessionId)
@@ -253,7 +259,7 @@ export async function getActiveMountsForSession(
 ): Promise<FileMountRow[]> {
   const result = await sql<FileMountRow>`
     SELECT id, workspace_id, session_id, file_space_id, mount_subpath,
-           device_id, pairing_session_id, base_snapshot_id, result_snapshot_id,
+           device_id, sandbox_id, pairing_session_id, base_snapshot_id, result_snapshot_id,
            refresh_policy, status, materialized_dir, host_pid,
            sandbox_backend, sandbox_resource_id, error_message
     FROM file_mounts
@@ -273,7 +279,7 @@ export async function getFailedRecoverableMounts(
 ): Promise<FileMountRow[]> {
   const result = await sql<FileMountRow>`
     SELECT id, workspace_id, session_id, file_space_id, mount_subpath,
-           device_id, pairing_session_id, base_snapshot_id, result_snapshot_id,
+           device_id, sandbox_id, pairing_session_id, base_snapshot_id, result_snapshot_id,
            refresh_policy, status, materialized_dir, host_pid,
            sandbox_backend, sandbox_resource_id, error_message
     FROM file_mounts

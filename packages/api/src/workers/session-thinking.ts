@@ -127,7 +127,7 @@ function deriveThinkingPhase(status: string): ThinkingPhase {
 }
 
 // Opt-in file sandbox (device-runtime + content-addressed mounts).
-const sandboxEnabled = config.sandbox.enabled
+const sandboxEnabled = config.sandbox.provider !== "none"
 
 async function runCleanupStep(
   label: string,

@@ -16,7 +16,9 @@ const cloudBodySchema = CreateCloudDeviceInputSchema.omit({ workspaceId: true })
 const wsId = "00000000-0000-4000-8000-000000000001"
 
 test("cloud body: SDK shape (no workspaceId) is accepted", () => {
-  const body = { title: "Cloud", hostProvider: "e2b" as const, preset: "p" }
+  // NOTE: `hostProvider` was removed from CreateCloudDeviceInputSchema in P1
+  // (1847cb0c); the strictObject now rejects it. Body = title + preset only.
+  const body = { title: "Cloud", preset: "p" }
   assert.equal(cloudBodySchema.safeParse(body).success, true)
 })
 

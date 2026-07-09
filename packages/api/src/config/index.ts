@@ -47,7 +47,7 @@ function optionalPositiveInt() {
   )
 }
 
-const envSchema = z
+export const envSchema = z
   .object({
     PORT: withDefault(port, "3001"),
     HOST: withDefault(z.string().min(1), "0.0.0.0"),
@@ -285,6 +285,43 @@ const envSchema = z
     // so a missing key fails at STARTUP — not on the first encrypt/decrypt.
     MCP_ENCRYPTION_KEY: z.string().optional(),
     APP_SECRET: z.string().optional(),
+
+    // ===== Per-session actor sandbox (runtime + content-addressed mounts) =====
+    // SANDBOX_PROVIDER selects the runtime substrate: local (same-host
+    // device-runtime child), docker (DooD cloud-sandbox image), or e2b/cube
+    // (future bare adapters). Default resolves to "none" => sandbox provisioning
+    // is DISABLED (replaces the old SYNAPSE_SANDBOX_ENABLED boolean; a LOUD boot
+    // warning fires so a deploy that only set the removed flag notices). The
+    // shared transport facts (FRP_SHARED_TOKEN / SYNAPSE_TUNNEL_* /
+    // SYNAPSE_DEVICE_TUNNEL_EDGE_URL) are read under their EXISTING keys — they
+    // are shared with the frps compose service + the device control-plane SSRF
+    // gate, so they are NOT renamed here.
+    SANDBOX_PROVIDER: z.string().optional(),
+    SANDBOX_MODE: withDefault(z.enum(["resident", "bare", "auto"]), "auto"),
+    SANDBOX_TRANSPORT: withDefault(
+      z.enum(["direct", "indirect", "auto"]),
+      "auto"
+    ),
+    SANDBOX_LOCAL_CLI_PATH: withDefault(z.string(), ""),
+    SANDBOX_SERVER_ORIGIN: withDefault(z.string(), ""),
+    SANDBOX_DOCKER_IMAGE: withDefault(z.string(), ""),
+    SANDBOX_DOCKER_NETWORK: withDefault(z.string(), ""),
+    SANDBOX_DOCKER_STORAGE_VOLUME: withDefault(z.string(), ""),
+    SANDBOX_DOCKER_STORAGE_VOLUME_MOUNT: withDefault(
+      z.string().min(1),
+      "/app/storage"
+    ),
+    // Non-negative optional int — MUST permit 0 (root), today's docker default.
+    SANDBOX_DOCKER_RUN_AS_UID: z.preprocess(
+      (v) => (v === "" || v == null ? undefined : v),
+      z.coerce.number().int().min(0).optional()
+    ),
+    // Shared transport facts, read under their EXISTING keys (NOT renamed).
+    FRP_SHARED_TOKEN: withDefault(z.string(), ""),
+    SYNAPSE_TUNNEL_VHOST_HOST: withDefault(z.string(), ""),
+    SYNAPSE_DEVICE_TUNNEL_EDGE_URL: withDefault(z.string(), ""),
+    SYNAPSE_TUNNEL_SERVER_ADDR: withDefault(z.string(), ""),
+    SYNAPSE_TUNNEL_SERVER_PORT: withDefault(z.string(), ""),
   })
   .superRefine((env, ctx) => {
     if (
@@ -467,6 +504,79 @@ const envSchema = z
         })
       }
     }
+    // Sandbox: a docker provider is only reachable over the frp tunnel and needs
+    // its full run env at boot — move the old dockerBackendOptionsFromEnv
+    // fail-fast here so a misconfiguration is caught at STARTUP, not on the first
+    // provision. (An UNconfigured provider — "none" — is a valid opt-out.)
+    const sandboxProvider = resolveSandboxProviderName(env)
+    const sandboxMode = resolveSandboxMode(env)
+    if (sandboxProvider === "docker") {
+      if (!env.SANDBOX_DOCKER_IMAGE?.trim()) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["SANDBOX_DOCKER_IMAGE"],
+          message:
+            "SANDBOX_DOCKER_IMAGE is required when SANDBOX_PROVIDER=docker",
+        })
+      }
+      if (!env.SANDBOX_DOCKER_NETWORK?.trim()) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["SANDBOX_DOCKER_NETWORK"],
+          message:
+            "SANDBOX_DOCKER_NETWORK is required when SANDBOX_PROVIDER=docker",
+        })
+      }
+      if (!env.SANDBOX_DOCKER_STORAGE_VOLUME?.trim()) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["SANDBOX_DOCKER_STORAGE_VOLUME"],
+          message:
+            "SANDBOX_DOCKER_STORAGE_VOLUME is required when SANDBOX_PROVIDER=docker",
+        })
+      }
+      // A docker resident sandbox rides the frp tunnel (no co-located loopback),
+      // so it additionally requires FRP_SHARED_TOKEN + edge↔vhost consistency.
+      if (sandboxMode === "resident") {
+        if (!env.FRP_SHARED_TOKEN?.trim()) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["FRP_SHARED_TOKEN"],
+            message:
+              "FRP_SHARED_TOKEN is required when SANDBOX_PROVIDER=docker (a docker sandbox is only reachable over the frp tunnel)",
+          })
+        }
+        // frps routes by the HTTP Host header (SYNAPSE_TUNNEL_VHOST_HOST); the API
+        // reaches the device by fetching SYNAPSE_DEVICE_TUNNEL_EDGE_URL. If the two
+        // disagree the route silently won't match. Both default to `tunnel-edge`,
+        // so they only diverge under explicit custom config — reject there.
+        const effectiveVhost =
+          env.SYNAPSE_TUNNEL_VHOST_HOST?.trim() || "tunnel-edge"
+        const edgeUrl = env.SYNAPSE_DEVICE_TUNNEL_EDGE_URL?.trim()
+        let effectiveEdgeHost = "tunnel-edge"
+        if (edgeUrl) {
+          try {
+            effectiveEdgeHost = new URL(edgeUrl).hostname
+          } catch {
+            ctx.addIssue({
+              code: "custom",
+              path: ["SYNAPSE_DEVICE_TUNNEL_EDGE_URL"],
+              message: `SYNAPSE_DEVICE_TUNNEL_EDGE_URL is not a valid URL: '${edgeUrl}'`,
+            })
+          }
+        }
+        if (effectiveEdgeHost !== effectiveVhost) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["SYNAPSE_DEVICE_TUNNEL_EDGE_URL"],
+            message:
+              `SYNAPSE_DEVICE_TUNNEL_EDGE_URL host ('${effectiveEdgeHost}') must match ` +
+              `SYNAPSE_TUNNEL_VHOST_HOST ('${effectiveVhost}') — frps routes by the ` +
+              `vhost Host header, so a mismatch makes every sandbox dispatch fail to route`,
+          })
+        }
+      }
+    }
   })
 
 /**
@@ -551,6 +661,28 @@ function resolveDocumentExtractionProviderName(env: {
   return firstNonEmpty([env.DOCUMENT_EXTRACTION_PROVIDER]) ?? "none"
 }
 
+/** Resolve the active sandbox provider (runtime substrate) name: SANDBOX_PROVIDER,
+ *  else "none" (disabled — replaces the removed SYNAPSE_SANDBOX_ENABLED boolean).
+ *  Centralized so the superRefine gate and the config assembly can't diverge. */
+export function resolveSandboxProviderName(env: {
+  SANDBOX_PROVIDER?: string
+}): string {
+  return firstNonEmpty([env.SANDBOX_PROVIDER]) ?? "none"
+}
+
+/** Resolve the effective sandbox mode. SANDBOX_MODE=auto (the default) derives
+ *  from the provider: the bare-adapter providers (e2b/cube) default to 'bare',
+ *  everything else to 'resident'. An explicit resident/bare wins. P2 registers
+ *  only resident adapters (local/docker); bare is a P3/P4 surface. */
+export function resolveSandboxMode(env: {
+  SANDBOX_PROVIDER?: string
+  SANDBOX_MODE?: "resident" | "bare" | "auto"
+}): "resident" | "bare" {
+  if (env.SANDBOX_MODE && env.SANDBOX_MODE !== "auto") return env.SANDBOX_MODE
+  const provider = resolveSandboxProviderName(env)
+  return provider === "e2b" || provider === "cube" ? "bare" : "resident"
+}
+
 function loadEnvOrExit(): z.infer<typeof envSchema> {
   const parsed = envSchema.safeParse(process.env)
   if (parsed.success) return parsed.data
@@ -585,11 +717,40 @@ export const config = {
       "http://localhost:3001",
   },
   sandbox: {
-    // Per-session file sandbox (device-runtime + content-addressed mounts).
-    // Off by default: provisioning spawns a device-runtime child + requires the
-    // fs-helper binary, so it stays opt-in until an environment is validated.
-    enabled:
-      (process.env.SYNAPSE_SANDBOX_ENABLED || "").toLowerCase() === "true",
+    // Per-session actor sandbox (runtime substrate + content-addressed mounts).
+    // provider="none" (default) => disabled. Validated at boot (superRefine);
+    // the shared transport facts are read under their EXISTING keys.
+    provider: resolveSandboxProviderName(env),
+    mode: resolveSandboxMode(env),
+    transport: env.SANDBOX_TRANSPORT,
+    // Origin the LOCAL sandbox device-runtime dials back to (loopback for a
+    // containerized local deploy); falls back to app.baseUrl when unset.
+    serverOrigin:
+      env.SANDBOX_SERVER_ORIGIN.trim() ||
+      env.APP_BASE_URL ||
+      env.NEXT_PUBLIC_APP_URL ||
+      env.NEXT_PUBLIC_SITE_URL ||
+      "http://localhost:3001",
+    local: {
+      // Optional explicit synapse-device CLI dist/bin.js path; the host provider
+      // keeps its existsSync fallback chain when this is empty.
+      cliPath: env.SANDBOX_LOCAL_CLI_PATH.trim(),
+    },
+    docker: {
+      image: env.SANDBOX_DOCKER_IMAGE.trim(),
+      network: env.SANDBOX_DOCKER_NETWORK.trim(),
+      storageVolume: env.SANDBOX_DOCKER_STORAGE_VOLUME.trim(),
+      storageVolumeMount: env.SANDBOX_DOCKER_STORAGE_VOLUME_MOUNT,
+      runAsUid: env.SANDBOX_DOCKER_RUN_AS_UID,
+      // Shared frp transport facts (read under their EXISTING keys).
+      tunnel: {
+        frpSharedToken: env.FRP_SHARED_TOKEN.trim(),
+        vhostHost: env.SYNAPSE_TUNNEL_VHOST_HOST.trim(),
+        edgeUrl: env.SYNAPSE_DEVICE_TUNNEL_EDGE_URL.trim(),
+        serverAddr: env.SYNAPSE_TUNNEL_SERVER_ADDR.trim(),
+        serverPort: env.SYNAPSE_TUNNEL_SERVER_PORT.trim(),
+      },
+    },
   },
   remoteAgent: {
     // The npm registry URL embedded in the daemon install command shown
@@ -827,5 +988,18 @@ if (
       "PDF & office uploads will be SKIPPED, not parsed. Set " +
       "DOCUMENT_EXTRACTION_PROVIDER=local + DOCEXTRACT_URL (the Tika sidecar) or " +
       "=textin (+ credentials) to enable document parsing."
+  )
+}
+
+// Migration hazard (P2 config fold): SYNAPSE_SANDBOX_ENABLED was replaced by
+// SANDBOX_PROVIDER. A deploy that only set the removed boolean goes silently
+// sandbox-OFF, so warn LOUDLY whenever the sandbox is disabled — the runtime
+// backstop for the docs' "set SANDBOX_PROVIDER explicitly" instruction.
+if (config.sandbox.provider === "none") {
+  log.warn(
+    'per-session sandbox is DISABLED (SANDBOX_PROVIDER="none" or unset). ' +
+      "Set SANDBOX_PROVIDER=local (same-host device-runtime) or =docker " +
+      "(DooD cloud-sandbox image) to enable it. NOTE: SYNAPSE_SANDBOX_ENABLED " +
+      "was removed — a deploy that only set it now runs with the sandbox OFF."
   )
 }

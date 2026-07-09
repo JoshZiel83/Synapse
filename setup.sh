@@ -255,15 +255,13 @@ FEISHU_APP_ID=
 FEISHU_APP_SECRET=
 FEISHU_INTL=false
 
-# Server-side actor isolation (sandbox). Off by default; flip ENABLED + BACKEND
+# Server-side actor isolation (sandbox). Off by default; set SANDBOX_PROVIDER=local|docker
 # to turn on. Signing key is base64-encoded PEM (single line).
-#   local  → SYNAPSE_SANDBOX_TUNNEL is ignored (direct loopback endpoint).
-#   docker → requires SYNAPSE_SANDBOX_TUNNEL=frp + FRP_SHARED_TOKEN, AND layering
+#   local  → same-host device-runtime child (direct loopback endpoint).
+#   docker → requires FRP_SHARED_TOKEN, AND layering
 #            docker-compose.sandbox-docker.yml to mount the host docker socket.
 #            See deploy.md §8b.
-SYNAPSE_SANDBOX_ENABLED=false
-SYNAPSE_SANDBOX_BACKEND=local
-SYNAPSE_SANDBOX_TUNNEL=none
+SANDBOX_PROVIDER=none
 SYNAPSE_DEVICE_ENVELOPE_SIGNING_KEY=$SANDBOX_SIGNING_KEY
 FRP_SHARED_TOKEN=$FRP_SHARED_TOKEN_VALUE
 

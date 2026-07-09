@@ -18,7 +18,7 @@ import type { Executor } from "./repo.js"
 import * as repo from "./repo.js"
 import { STORAGE_DIR } from "../../infrastructure/storage/index.js"
 import { config } from "../../config/index.js"
-import { startPairing, deleteDevice } from "../devices/service.js"
+import { deleteDevice } from "../devices/service.js"
 import { getDeviceTunnelRegistry } from "../devices/tunnel-registry.js"
 import {
   ensureFileSpace,
@@ -57,9 +57,10 @@ import {
   createDockerReconnectBackend,
   reapDockerSandboxOrphans,
   type DockerSandboxBackendOptions,
+  type SpawnImpl,
 } from "./docker-sandbox-backend.js"
 import {
-  resolveDeviceBuiltinIds,
+  resolveRuntimeBuiltinIds,
   createSandboxGrants,
   revokeSandboxGrants,
 } from "./grants.js"
@@ -119,116 +120,41 @@ function selectSandboxBackend(
   options: ProvisionSandboxOptions
 ): SandboxBackend {
   if (options.sandboxBackend) return options.sandboxBackend
-  const kind = (process.env.SYNAPSE_SANDBOX_BACKEND || "local").toLowerCase()
-  if (kind === "docker") {
+  if (config.sandbox.provider === "docker") {
     return createDockerSandboxBackend(dockerBackendOptionsFromEnv())
   }
   const hostProvider = options.hostProvider ?? createLocalHostProvider()
-  return createLocalSandboxBackend({
-    hostProvider,
-    beginLocalPairing: async (spec) => {
-      const pairing = await startPairing({
-        workspaceId: spec.workspaceId,
-        mode: "local_qr",
-        serverBaseUrl: spec.serverOrigin,
-        title: spec.title ?? `Sandbox ${spec.sessionId.slice(0, 8)}`,
-      })
-      if (!pairing.pairingCode) {
-        throw new SandboxServiceError(
-          "startPairing returned no pairingCode",
-          500
-        )
-      }
-      return {
-        pairingCode: pairing.pairingCode,
-        brokerDir: brokerDirFor(spec.sessionId),
-        pairingSessionId: pairing.pairingSessionId,
-      }
-    },
-  })
+  // Direct-mint (§4.6): the local backend authors the device-less sandbox
+  // runtime + broker identity in-process, so no startPairing round-trip is wired.
+  return createLocalSandboxBackend({ hostProvider })
 }
 
-/** Build the docker backend options from env. The image/network/volume are
- *  required when docker is selected; missing values fail loudly. Exported for
- *  unit tests (the fail-fast tunnel/token contract). */
+/** Build the docker backend options from the validated config.sandbox namespace.
+ *  The image/network/volume/frp requirements + edge↔vhost consistency are enforced
+ *  at BOOT (config superRefine), so this is a pure config→options mapper. */
 export function dockerBackendOptionsFromEnv(): DockerSandboxBackendOptions {
-  const require_ = (name: string): string => {
-    const v = process.env[name]?.trim()
-    if (!v) {
-      throw new SandboxServiceError(
-        `${name} is required when SYNAPSE_SANDBOX_BACKEND=docker`,
-        500
-      )
-    }
-    return v
-  }
+  const dk = config.sandbox.docker
   // The docker sandbox runs on an internal-only network and is reachable from
   // the API ONLY through the frp tunnel — there is no co-located loopback path
-  // (that's the local backend). So docker REQUIRES tunnel=frp with a full edge
-  // config; anything else (none / missing FRP_SHARED_TOKEN / missing edge) is a
-  // misconfiguration that would provision a sandbox whose tools can never be
-  // dispatched. Fail fast at selection time rather than after a useless boot.
-  const tunnelRaw = (process.env.SYNAPSE_SANDBOX_TUNNEL || "frp").toLowerCase()
-  if (tunnelRaw !== "frp") {
-    throw new SandboxServiceError(
-      `SYNAPSE_SANDBOX_TUNNEL must be 'frp' when SYNAPSE_SANDBOX_BACKEND=docker ` +
-        `(got '${tunnelRaw}') — the docker sandbox is only reachable over the frp tunnel`,
-      500
-    )
-  }
+  // (that's the local backend). The boot gate already guaranteed the full edge
+  // config, so tunnel is always frp here.
   const tunnel: "frp" = "frp"
-  const tunnelAuthToken = require_("FRP_SHARED_TOKEN")
-  const tunnelVhostHost = process.env.SYNAPSE_TUNNEL_VHOST_HOST?.trim()
-  const tunnelInternalBaseUrl =
-    process.env.SYNAPSE_DEVICE_TUNNEL_EDGE_URL?.trim()
-  // Edge/vhost consistency: frps routes by the HTTP Host header, which frpc sets
-  // to SYNAPSE_TUNNEL_VHOST_HOST; the API reaches the device by fetching
-  // SYNAPSE_DEVICE_TUNNEL_EDGE_URL, whose Host header is that URL's hostname. If
-  // the two disagree the route silently won't match (or registration is rejected
-  // by the server's origin check). Both default to `tunnel-edge`, so they only
-  // diverge under explicit custom config — fail fast there instead of shipping a
-  // sandbox whose dispatch 404s at the edge. (effective vhost = explicit value
-  // or the tunnel-edge default the docker backend injects; effective edge host =
-  // hostname of the explicit edge URL, else the adapter's tunnel-edge default.)
-  const effectiveVhost = tunnelVhostHost || "tunnel-edge"
-  let effectiveEdgeHost = "tunnel-edge"
-  if (tunnelInternalBaseUrl) {
-    try {
-      effectiveEdgeHost = new URL(tunnelInternalBaseUrl).hostname
-    } catch {
-      throw new SandboxServiceError(
-        `SYNAPSE_DEVICE_TUNNEL_EDGE_URL is not a valid URL: '${tunnelInternalBaseUrl}'`,
-        500
-      )
-    }
-  }
-  if (effectiveEdgeHost !== effectiveVhost) {
-    throw new SandboxServiceError(
-      `SYNAPSE_DEVICE_TUNNEL_EDGE_URL host ('${effectiveEdgeHost}') must match ` +
-        `SYNAPSE_TUNNEL_VHOST_HOST ('${effectiveVhost}') — frps routes by the ` +
-        `vhost Host header, so a mismatch makes every sandbox dispatch fail to route`,
-      500
-    )
-  }
   return {
-    image: require_("SYNAPSE_SANDBOX_IMAGE"),
-    network: require_("SYNAPSE_SANDBOX_DOCKER_NETWORK"),
-    storageVolume: require_("SYNAPSE_SANDBOX_STORAGE_VOLUME"),
-    serverOrigin:
-      process.env.SYNAPSE_SANDBOX_SERVER_ORIGIN?.trim() || config.app.baseUrl,
+    image: dk.image,
+    network: dk.network,
+    storageVolume: dk.storageVolume,
+    serverOrigin: config.sandbox.serverOrigin,
     tunnel,
-    tunnelServerAddr: process.env.SYNAPSE_TUNNEL_SERVER_ADDR?.trim(),
-    tunnelServerPort: process.env.SYNAPSE_TUNNEL_SERVER_PORT?.trim(),
-    tunnelAuthToken,
-    tunnelVhostHost,
+    tunnelServerAddr: dk.tunnel.serverAddr || undefined,
+    tunnelServerPort: dk.tunnel.serverPort || undefined,
+    tunnelAuthToken: dk.tunnel.frpSharedToken,
+    tunnelVhostHost: dk.tunnel.vhostHost || undefined,
     // The container registers this as its internalUrl; the server validates the
-    // origin against SYNAPSE_DEVICE_TUNNEL_EDGE_URL. Default to that same env so
-    // a custom edge URL is honored end-to-end (origins match by construction);
-    // unset → the runtime adapter falls back to http://tunnel-edge:8080.
-    tunnelInternalBaseUrl,
-    runAsUid: process.env.SYNAPSE_SANDBOX_RUN_AS_UID
-      ? Number(process.env.SYNAPSE_SANDBOX_RUN_AS_UID)
-      : undefined,
+    // origin against SYNAPSE_DEVICE_TUNNEL_EDGE_URL. Pass the same edge URL so a
+    // custom edge is honored end-to-end (origins match by construction); unset →
+    // the runtime adapter falls back to http://tunnel-edge:8080.
+    tunnelInternalBaseUrl: dk.tunnel.edgeUrl || undefined,
+    runAsUid: dk.runAsUid,
   }
 }
 
@@ -246,7 +172,7 @@ type SessionContext = repo.SessionContext
  * dockerBackendOptionsFromEnv (opts.serverOrigin) — so this never affects it.
  */
 export function sandboxLocalServerOrigin(): string {
-  return process.env.SYNAPSE_SANDBOX_SERVER_ORIGIN?.trim() || config.app.baseUrl
+  return config.sandbox.serverOrigin
 }
 
 /**
@@ -279,62 +205,120 @@ export function sandboxSpecVolumeSubpath(
  * docker backend (docker CLI + persisted container id, no image/network/volume/
  * frp config), never createDockerSandboxBackend(dockerBackendOptionsFromEnv()).
  */
-function backendForKind(kind: SandboxBackendKind): SandboxBackend {
+function backendForKind(
+  kind: string,
+  dockerSpawnImpl?: SpawnImpl
+): SandboxBackend {
   if (kind === "docker") {
-    return createDockerReconnectBackend()
+    return createDockerReconnectBackend({ spawnImpl: dockerSpawnImpl })
   }
+  // Local connect-only: create() is never called on these (teardown/kill only),
+  // so the direct-mint deps are unused here.
   return createLocalSandboxBackend({
     hostProvider: createLocalHostProvider(),
-    beginLocalPairing: async () => {
-      throw new SandboxServiceError(
-        "beginLocalPairing is not available on a connect-only backend",
-        500
-      )
-    },
   })
 }
 
 /**
- * Rebuild a SandboxRef from the persisted file_mounts columns so teardown can
- * reconnect+kill a runtime started by another process / before a restart.
- * Returns null only when there's nothing killable (no device, no container, no
- * pid) — e.g. a mount that never got past materialize.
+ * LEGACY (device-shaped) ref resolver: rebuild a SandboxRef from the persisted
+ * file_mounts columns. Used only as the last fallback (a pre-P2 mount whose
+ * sandbox_id was never back-filled). Returns null when there's nothing killable.
  */
 function buildSandboxRefFromMounts(
   sessionId: string,
   mounts: FileMountRow[]
 ): SandboxRef | null {
-  const deviceId = mounts.find((m) => m.deviceId)?.deviceId ?? null
-  const sandboxResourceId =
+  const runtimeId = mounts.find((m) => m.deviceId)?.deviceId ?? null
+  const resourceId =
     mounts.find((m) => m.sandboxResourceId)?.sandboxResourceId ?? ""
   const hostPid = mounts.find((m) => m.hostPid)?.hostPid ?? undefined
   // Nothing to kill (crash before any runtime was started). The caller still
   // closes the mounts; there's no process/container to reap.
-  if (!deviceId && !sandboxResourceId && hostPid === undefined) return null
-  const backend = (mounts.find((m) => m.sandboxBackend)?.sandboxBackend ??
-    "local") as SandboxBackendKind
+  if (!runtimeId && !resourceId && hostPid === undefined) return null
+  const adapter =
+    mounts.find((m) => m.sandboxBackend)?.sandboxBackend ?? "local"
   const pairingSessionId =
     mounts.find((m) => m.pairingSessionId)?.pairingSessionId ?? undefined
   return {
-    backend,
+    adapter,
+    mode: "resident",
     sandboxId: sessionId,
-    sandboxResourceId,
+    resourceId,
     // May be "" when the API crashed after the container started but before the
-    // device was claimed — the kill path (docker rm by resource id / pid) does
-    // not need it; revoke/deleteDevice in teardown is guarded separately.
-    deviceId: deviceId ?? "",
+    // runtime was claimed — the kill path (docker rm by resource id / pid) does
+    // not need it; revoke/soft-delete in teardown is guarded separately.
+    runtimeId: runtimeId ?? "",
     pairingSessionId,
     hostPid: hostPid ?? undefined,
   }
 }
 
 /**
- * Whether the runtime behind a session's mounts is actually alive. Prefers the
- * in-process handle (cheap); otherwise rebuilds a SandboxRef and probes via the
- * owning backend (docker inspect / pid signal). On any error, treat as NOT
- * alive so the caller recovers rather than handing back a dead sandbox.
+ * CONTROL-PATH ref resolver (CORRECTION 5 — STATE-AGNOSTIC). Used by
+ * teardown / recovery / isSandboxRuntimeAlive: a sandbox reaches recovery
+ * precisely because its state is 'failed'/'closing', so this MUST resolve those
+ * too, else a live runtime is never killed and a recovery commit snapshots a
+ * directory under active write. Resolution order:
+ *   1. mount.sandbox_id → getSandboxById (NO state filter),
+ *   2. by-session → getSandboxBySessionForControl (only runtimes.deleted_at IS
+ *      NULL, ANY state),
+ *   3. legacy file_mounts columns (buildSandboxRefFromMounts).
+ * NEVER uses the state-filtered getLiveSandboxBySession (that is reuse-only).
+ * runtimeServiceId is intentionally omitted — the kill/liveness path (docker rm
+ * by resource id / pid signal) never needs it.
  */
-async function isSandboxRuntimeAlive(mounts: FileMountRow[]): Promise<boolean> {
+async function buildSandboxRefFromSandboxRow(
+  mounts: FileMountRow[],
+  run: Executor = repo.defaultDbh()
+): Promise<SandboxRef | null> {
+  const sessionId = mounts[0]?.sessionId ?? ""
+  const mountSandboxId = mounts.find((m) => m.sandboxId)?.sandboxId ?? null
+  let row: repo.SandboxRow | null = null
+  if (mountSandboxId) {
+    row = await repo.getSandboxById(mountSandboxId, run)
+  }
+  if (!row && sessionId) {
+    row = await repo.getSandboxBySessionForControl(sessionId, run)
+  }
+  if (row) {
+    return {
+      adapter: row.adapter,
+      mode: row.mode,
+      sandboxId: sessionId,
+      resourceId: row.resourceId ?? "",
+      runtimeId: row.id,
+      pairingSessionId: row.pairingSessionId ?? undefined,
+      hostPid: row.hostPid ?? undefined,
+    }
+  }
+  return buildSandboxRefFromMounts(sessionId, mounts)
+}
+
+/**
+ * Source the runtime id from a session's mounts (CORRECTION 7): prefer the P2
+ * back-filled sandbox_id (== runtimeId), else fall back to the legacy device_id
+ * so a pre-P2 device-shaped live mount (sandbox_id NULL) is not needlessly torn
+ * down. The device_id fallback is removed only in S11 (post-drain).
+ */
+function runtimeIdFromMounts(mounts: FileMountRow[]): string {
+  return (
+    mounts.find((m) => m.sandboxId)?.sandboxId ??
+    mounts.find((m) => m.deviceId)?.deviceId ??
+    ""
+  )
+}
+
+/**
+ * Whether the runtime behind a session's mounts is actually alive. Prefers the
+ * in-process handle (cheap); otherwise rebuilds a SandboxRef via the STATE-AGNOSTIC
+ * control-path resolver and probes via the owning adapter (docker inspect / pid
+ * signal). On any error, treat as NOT alive so the caller recovers rather than
+ * handing back a dead sandbox.
+ */
+export async function isSandboxRuntimeAlive(
+  mounts: FileMountRow[],
+  opts: { run?: Executor; dockerSpawnImpl?: SpawnImpl } = {}
+): Promise<boolean> {
   const sessionId = mounts[0]?.sessionId
   if (sessionId) {
     const live = liveSandboxHandles.get(sessionId)
@@ -346,10 +330,16 @@ async function isSandboxRuntimeAlive(mounts: FileMountRow[]): Promise<boolean> {
       }
     }
   }
-  const ref = buildSandboxRefFromMounts(sessionId ?? "", mounts)
+  const ref = await buildSandboxRefFromSandboxRow(
+    mounts,
+    opts.run ?? repo.defaultDbh()
+  )
   if (!ref) return false
   try {
-    const handle = await backendForKind(ref.backend).connect(ref)
+    const handle = await backendForKind(
+      ref.adapter,
+      opts.dockerSpawnImpl
+    ).connect(ref)
     return await handle.isRunning()
   } catch {
     return false
@@ -382,18 +372,50 @@ async function isSandboxRuntimeAlive(mounts: FileMountRow[]): Promise<boolean> {
  * isn't in the live-mount set. Only runs when the docker backend is selected.
  * Bounded; best-effort; logs.
  */
-export async function reconcileSandboxes(): Promise<void> {
-  const sessionIds = await repo.listReconcileCandidateSessionIds()
+/**
+ * Deps for reconcileSandboxes — all default to production. The reaper-survival
+ * pin injects `executor` (a testcontainer handle so the REAL
+ * listReconcileCandidateSessionIds + buildSandboxRefFromSandboxRow run against
+ * fixtures) + `dockerSpawnImpl` (the LOWEST docker seam: `docker inspect`/`ps`).
+ * Per CORRECTION 9 we do NOT inject isAlive — it runs for real so a
+ * CORRECTION-1/4/5 ref-resolution regression is actually caught.
+ */
+export interface ReconcileSandboxesDeps {
+  executor?: Executor
+  dockerSpawnImpl?: SpawnImpl
+  /** Override the candidate enumeration (defaults to the REAL repo reader). */
+  listCandidates?: (run: Executor) => Promise<string[]>
+  /** Override the orphan reap (defaults to the REAL reapDockerSandboxOrphans). */
+  reap?: (live: Set<string>) => Promise<{ removed: string[] }>
+}
+
+export async function reconcileSandboxes(
+  deps: ReconcileSandboxesDeps = {}
+): Promise<void> {
+  const run = deps.executor ?? repo.defaultDbh()
+  const listCandidates =
+    deps.listCandidates ?? repo.listReconcileCandidateSessionIds
+  const reap =
+    deps.reap ??
+    ((live: Set<string>) =>
+      reapDockerSandboxOrphans(live, { spawnImpl: deps.dockerSpawnImpl }))
+  const sessionIds = await listCandidates(run)
   const liveSessionIds = new Set<string>()
   for (const sessionId of sessionIds) {
     try {
-      const mounts = await getActiveMountsForSession(
-        repo.defaultDbh(),
-        sessionId
-      )
+      const mounts = await getActiveMountsForSession(run, sessionId)
+      // A sandboxes-only candidate (no live mounts) is NOT shielded here — for
+      // Mode-A this cannot happen (an active sandbox always co-holds its 3 live
+      // mounts). Liveness moves off mounts only in S11.
       if (mounts.length === 0) continue
       const allActive = mounts.every((m) => m.status === "active")
-      if (allActive && (await isSandboxRuntimeAlive(mounts))) {
+      if (
+        allActive &&
+        (await isSandboxRuntimeAlive(mounts, {
+          run,
+          dockerSpawnImpl: deps.dockerSpawnImpl,
+        }))
+      ) {
         // Healthy + alive — keep it (and shield its container from the orphan
         // reaper below).
         liveSessionIds.add(sessionId)
@@ -409,20 +431,19 @@ export async function reconcileSandboxes(): Promise<void> {
   }
 
   // Reap label-only Docker orphans (the crash window the DB sweep above can't
-  // see). We must NOT gate this solely on the CURRENT env being docker: a host
+  // see). We must NOT gate this solely on the CURRENT config being docker: a host
   // that ran docker sandboxes and then fell back to local (or temporarily lost
-  // its frp/token env) would otherwise leak every container. Fire when the
-  // current backend is docker OR the DB shows this host has ever run a docker
-  // sandbox (any file_mounts row with sandbox_backend='docker'). Pure-local
-  // deployments (no such row, env=local) skip the docker call entirely.
-  const envIsDocker =
-    (process.env.SYNAPSE_SANDBOX_BACKEND || "local").toLowerCase() === "docker"
+  // its frp/token config) would otherwise leak every container. Fire when the
+  // current provider is docker OR the DB shows this host has ever run a docker
+  // sandbox (via EITHER file_mounts.sandbox_backend OR sandboxes.adapter). Pure-
+  // local deployments (no such row, provider=local) skip the docker call entirely.
+  const envIsDocker = config.sandbox.provider === "docker"
   const hasDockerMountHistory = envIsDocker
     ? true
-    : await repo.hasDockerMountHistory()
+    : await repo.hasDockerMountHistory(run)
   if (hasDockerMountHistory) {
     try {
-      const { removed } = await reapDockerSandboxOrphans(liveSessionIds)
+      const { removed } = await reap(liveSessionIds)
       if (removed.length > 0) {
         console.warn(
           `[sandbox] reconcile: reaped ${removed.length} label-only docker orphan(s): ${removed.join(", ")}`
@@ -441,12 +462,8 @@ function sandboxRootFor(sessionId: string): string {
   return join(STORAGE_DIR, "sandboxes", sessionId)
 }
 
-const DEFAULT_STORAGE_VOLUME_MOUNT = "/app/storage"
 function storageVolumeMountPoint(): string {
-  return (
-    process.env.SYNAPSE_SANDBOX_STORAGE_VOLUME_MOUNT?.trim() ||
-    DEFAULT_STORAGE_VOLUME_MOUNT
-  )
+  return config.sandbox.docker.storageVolumeMount
 }
 
 /**
@@ -592,10 +609,10 @@ export async function provisionSandbox(
     allActive &&
     (await isSandboxRuntimeAlive(existing))
   ) {
-    const deviceIdForEndpoint = existing.find((m) => m.deviceId)?.deviceId ?? ""
+    const runtimeIdForEndpoint = runtimeIdFromMounts(existing)
     fastPathOk = await fastPathEndpointReady({
       sessionId,
-      deviceId: deviceIdForEndpoint,
+      deviceId: runtimeIdForEndpoint,
       tunnelTimeoutMs: options.tunnelTimeoutMs ?? 30_000,
     })
   }
@@ -607,11 +624,11 @@ export async function provisionSandbox(
     // runtime_exposures. A bare exposure check is looser — it would report
     // commandline "enabled" for a device whose capability was revoked or whose
     // exposure never went healthy, misleading the UI/caller.
-    const deviceId = existing.find((m) => m.deviceId)?.deviceId ?? ""
+    const runtimeId = runtimeIdFromMounts(existing)
     let commandlineEnabled = false
-    if (deviceId) {
+    if (runtimeId) {
       try {
-        const builtins = await resolveDeviceBuiltinIds(deviceId)
+        const builtins = await resolveRuntimeBuiltinIds(runtimeId)
         commandlineEnabled = builtins.commandlineCapabilityId != null
       } catch {
         // resolveDeviceBuiltinIds throws only when the filesystem capability is
@@ -662,7 +679,7 @@ export async function provisionSandbox(
     return {
       sessionId,
       sandboxRoot: sandboxRootFor(sessionId),
-      deviceId,
+      deviceId: runtimeId,
       commandlineEnabled,
       mountIds: existing.map((m) => m.id),
       sidecarRestoreOk,
@@ -797,24 +814,38 @@ export async function provisionSandbox(
       confineCommands: true,
       title: `Sandbox ${sessionId.slice(0, 8)}`,
       onPairingCreated: (pairingSessionId) => persistAll({ pairingSessionId }),
+      // Retain the file_mounts dual-write of sandbox_backend + sandbox_resource_id
+      // (label-reaper coverage for a pre-bootstrap docker crash). Do NOT touch the
+      // sandboxes row here — for docker it may not be minted yet (CORRECTION 4).
       onResourceCreated: (sandboxResourceId) =>
         persistAll({ sandboxResourceId }),
-      onDeviceClaimed: (deviceId) => persistAll({ deviceId }),
+      // Renamed from onDeviceClaimed: back-fill file_mounts.sandbox_id (NOT
+      // device_id — FK-impossible for a device-less sandbox runtime). This fires
+      // the instant the runtime's DB identity + sandboxes row exist.
+      onRuntimeReady: (runtimeId) => persistAll({ sandboxId: runtimeId }),
     }
     handle = await backend.create(spec)
     liveSandboxHandles.set(handle.sandboxId, handle)
 
-    // Record device + resource handle on all mounts (teardown/recovery need it;
-    // the staged callbacks above already wrote device_id, this also pins
-    // host_pid for the local backend's pid-based kill fallback).
+    const runtimeId = handle.runtimeLink.runtimeId
+    // CORRECTION 4 — POST-create back-fill ONLY. The sandboxes row is now
+    // committed (docker: bootstrap-consumed; local: minted at create() start), so
+    // this is the FIRST safe point to write file_mounts.sandbox_id + the sandbox
+    // row's resource_id/host_pid. We NEVER dual-write file_mounts.device_id (FK
+    // to devices — unsatisfiable for a sandbox runtime), and NEVER write
+    // sandboxes.resource_id from onResourceCreated (for docker the container id
+    // arrives before the consume mints the row → a 0-row UPDATE that drops it).
     await persistAll({
-      deviceId: handle.deviceId,
+      sandboxId: runtimeId,
       hostPid: handle.hostPid ?? null,
-      sandboxResourceId: handle.sandboxResourceId || null,
+    })
+    await repo.updateSandboxRow(runtimeId, {
+      resourceId: handle.resourceId || null,
+      hostPid: handle.hostPid ?? null,
     })
 
     // ⑦ wait for device.catalog.sync to land (filesystem exposure visible).
-    await waitForCatalog(handle.deviceId, {
+    await waitForCatalog(runtimeId, {
       timeoutMs: options.catalogTimeoutMs ?? 30_000,
     })
 
@@ -828,7 +859,7 @@ export async function provisionSandbox(
     // don't dispatch.
     const tunnelTimeoutMs = options.tunnelTimeoutMs ?? 30_000
     if (tunnelTimeoutMs > 0) {
-      await waitForTunnelEndpoint(handle.runtimeServiceId, {
+      await waitForTunnelEndpoint(handle.runtimeLink.runtimeServiceId, {
         timeoutMs: tunnelTimeoutMs,
       })
     }
@@ -841,11 +872,11 @@ export async function provisionSandbox(
     // is correct for BOTH backends: the local device runs on the API host, while
     // the docker device runs in the cloud-sandbox image (which has bubblewrap)
     // even though the API image ships only the docker CLI.
-    const builtins = await resolveDeviceBuiltinIds(handle.deviceId)
+    const builtins = await resolveRuntimeBuiltinIds(runtimeId)
     const commandlineEnabled = builtins.commandlineCapabilityId != null
     await createSandboxGrants({
       workspaceId: ctx.workspaceId,
-      deviceId: handle.deviceId,
+      runtimeId,
       actorId: ctx.actorId,
       conversationId: ctx.conversationId,
       builtins,
@@ -853,13 +884,15 @@ export async function provisionSandbox(
       createdByWorkspaceMemberId: options.createdByWorkspaceMemberId ?? null,
     })
 
-    // ⑨ mark mounts active.
+    // ⑨ mark mounts active + flip the sandbox row provisioning→active (fully
+    // provisioned: catalog synced, tunnel up, grants built).
     await persistAll({ status: "active" })
+    await repo.updateSandboxRow(runtimeId, { state: "active" })
 
     return {
       sessionId,
       sandboxRoot,
-      deviceId: handle.deviceId,
+      deviceId: runtimeId,
       commandlineEnabled,
       mountIds: mounts.map((m) => m.id),
       sidecarRestoreOk,
@@ -871,21 +904,28 @@ export async function provisionSandbox(
     // mounts get marked 'failed' (so getActiveMountsForSession excludes them
     // and teardown can't recover), which means cleanup MUST happen here:
     //  - kill the runtime the backend started + drop its in-process handle,
-    //  - revoke any partial grants + delete the paired device (cascades),
+    //  - revoke any partial grants + soft-delete the sandbox runtime,
+    //  - mark the sandboxes row 'failed',
     //  - remove the on-disk scratch dirs (CAS untouched).
-    const pairedDeviceId = handle?.deviceId ?? null
+    const pairedRuntimeId = handle?.runtimeLink.runtimeId ?? null
     if (handle) {
       await handle.kill().catch(() => {})
       liveSandboxHandles.delete(handle.sandboxId)
     }
-    if (pairedDeviceId) {
+    if (pairedRuntimeId) {
       await revokeSandboxGrants({
         workspaceId: ctx.workspaceId,
-        deviceId: pairedDeviceId,
+        runtimeId: pairedRuntimeId,
         actorId: ctx.actorId,
         conversationId: ctx.conversationId,
       }).catch(() => {})
-      await deleteDevice(ctx.workspaceId, pairedDeviceId).catch(() => {})
+      await repo
+        .updateSandboxRow(pairedRuntimeId, {
+          state: "failed",
+          errorMessage: message,
+        })
+        .catch(() => {})
+      await deleteDevice(ctx.workspaceId, pairedRuntimeId).catch(() => {})
     }
     await rm(sandboxRoot, { recursive: true, force: true }).catch(() => {})
     for (const mount of mounts) {
@@ -1793,28 +1833,28 @@ export async function teardownSandbox(
     console.error(`[sandbox] teardown commit failed for ${sessionId}:`, err)
   }
 
-  const deviceId = mounts.find((m) => m.deviceId)?.deviceId ?? null
+  const runtimeId = runtimeIdFromMounts(mounts) || null
 
   // ② stop the runtime the backend started. Prefer the in-process handle
-  // (keyed by sessionId); else rebuild a SandboxRef from the persisted mount
-  // columns and reconnect via the SAME backend that created it (recorded in
-  // sandbox_backend), so a docker sandbox is `docker rm`'d and a local one is
-  // SIGTERM'd — never guessed from the current env. Always — a failed commit
-  // doesn't justify leaving the runtime alive.
+  // (keyed by sessionId); else rebuild a SandboxRef via the STATE-AGNOSTIC
+  // control-path resolver and reconnect via the SAME adapter that created it
+  // (recorded on sandboxes.adapter), so a docker sandbox is `docker rm`'d and a
+  // local one is SIGTERM'd — never guessed from the current config. Always — a
+  // failed commit doesn't justify leaving the runtime alive.
   const liveHandle = liveSandboxHandles.get(sessionId)
   if (liveHandle) {
     await liveHandle.kill().catch(() => {})
     liveSandboxHandles.delete(sessionId)
   } else {
-    const ref = buildSandboxRefFromMounts(sessionId, mounts)
+    const ref = await buildSandboxRefFromSandboxRow(mounts)
     if (ref) {
       try {
-        const backend = backendForKind(ref.backend)
+        const backend = backendForKind(ref.adapter)
         const handle = await backend.connect(ref)
         await handle.kill()
       } catch (err) {
         console.error(
-          `[sandbox] teardown could not kill runtime for ${sessionId} via ${ref.backend} backend:`,
+          `[sandbox] teardown could not kill runtime for ${sessionId} via ${ref.adapter} adapter:`,
           err
         )
         // Last-resort local fallback: signal the persisted pid directly.
@@ -1855,20 +1895,26 @@ export async function teardownSandbox(
     )
   }
 
-  // ⑤ revoke grants + ⑥ delete device (cascades device_* children). The device
-  // is paired per-session and can't be reused, so it's removed even on a failed
-  // commit; the preserved live dirs do not depend on it.
-  if (ctx && deviceId) {
+  // ⑤ revoke grants + close the sandbox row + ⑥ soft-delete the runtime (keeps
+  // children for audit). The runtime is per-session and can't be reused, so it's
+  // removed even on a failed commit; the preserved live dirs do not depend on it.
+  if (ctx && runtimeId) {
     await revokeSandboxGrants({
       workspaceId: ctx.workspaceId,
-      deviceId,
+      runtimeId,
       actorId: ctx.actorId,
       conversationId: ctx.conversationId,
     }).catch((err) =>
       console.error(`[sandbox] revoke grants failed for ${sessionId}:`, err)
     )
-    await deleteDevice(ctx.workspaceId, deviceId).catch((err) =>
-      console.error(`[sandbox] deleteDevice failed for ${sessionId}:`, err)
+    await repo
+      .updateSandboxRow(runtimeId, { state: commitOk ? "closed" : "failed" })
+      .catch(() => {})
+    await deleteDevice(ctx.workspaceId, runtimeId).catch((err) =>
+      console.error(
+        `[sandbox] soft-delete runtime failed for ${sessionId}:`,
+        err
+      )
     )
   }
 }
@@ -1972,10 +2018,10 @@ async function ensureRuntimeStoppedForRecovery(
     await liveHandle.kill().catch(() => {})
     liveSandboxHandles.delete(sessionId)
   } else {
-    const ref = buildSandboxRefFromMounts(sessionId, mounts)
+    const ref = await buildSandboxRefFromSandboxRow(mounts)
     if (ref) {
       try {
-        const handle = await backendForKind(ref.backend).connect(ref)
+        const handle = await backendForKind(ref.adapter).connect(ref)
         await handle.kill()
       } catch (err) {
         console.error(

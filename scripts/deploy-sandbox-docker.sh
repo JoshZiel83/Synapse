@@ -12,7 +12,7 @@ set -euo pipefail
 #   2. Ensure the two sandbox secrets exist (signing key + frp token) — the
 #      docker backend fail-fasts at provision without FRP_SHARED_TOKEN.
 #   3. Switch the mode flags in .env (ENABLED=true, BACKEND=docker, TUNNEL=frp).
-#   4. Guard the EFFECTIVE SYNAPSE_SANDBOX_SERVER_ORIGIN: the docker sandbox is on
+#   4. Guard the EFFECTIVE SANDBOX_SERVER_ORIGIN: the docker sandbox is on
 #      an internal-only network, so the origin must be UNSET (compose default
 #      http://api:3001) or exactly that internal address — never a loopback (the
 #      container would dial itself) or a public domain (no egress). Compose reads
@@ -46,9 +46,7 @@ done
 
 # 1b. Reject conflicting shell env for the managed flags (raw-exact — a set-empty
 #     shell var makes compose use the default, ignoring .env). Origin handled in #4.
-assert_shell_flag SYNAPSE_SANDBOX_ENABLED true
-assert_shell_flag SYNAPSE_SANDBOX_BACKEND docker
-assert_shell_flag SYNAPSE_SANDBOX_TUNNEL frp
+assert_shell_flag SANDBOX_PROVIDER docker
 
 # Snapshot how api + tunnel-edge exist BEFORE we touch anything, so a failed
 # deploy can restore each to its pre-deploy operational state (existence / run
@@ -116,30 +114,28 @@ upsert() {
     printf '%s=%s\n' "$key" "$value" >>"$ENV_FILE"
   fi
 }
-upsert SYNAPSE_SANDBOX_ENABLED true
-upsert SYNAPSE_SANDBOX_BACKEND docker
-upsert SYNAPSE_SANDBOX_TUNNEL frp
-log "set SYNAPSE_SANDBOX_ENABLED=true, SYNAPSE_SANDBOX_BACKEND=docker, SYNAPSE_SANDBOX_TUNNEL=frp"
+upsert SANDBOX_PROVIDER docker
+log "set SANDBOX_PROVIDER=docker (frp tunnel via FRP_SHARED_TOKEN)"
 
 # 4. EFFECTIVE-origin guard. A stale loopback in .env (from a prior local run)
 #    is silently removed (compose default is the right internal address); a
 #    custom non-internal value — in .env OR the shell — is a hard error.
-env_origin="$(trim "$(sed -n 's/^SYNAPSE_SANDBOX_SERVER_ORIGIN=//p' "$ENV_FILE" | tail -n 1)")"
+env_origin="$(trim "$(sed -n 's/^SANDBOX_SERVER_ORIGIN=//p' "$ENV_FILE" | tail -n 1)")"
 case "$env_origin" in
   *127.0.0.1*|*localhost*|*"[::1]"*)
-    sed -i -E '/^SYNAPSE_SANDBOX_SERVER_ORIGIN=/d' "$ENV_FILE"
-    log "removed a stale loopback SYNAPSE_SANDBOX_SERVER_ORIGIN from .env (docker uses ${INTERNAL_ORIGIN})."
+    sed -i -E '/^SANDBOX_SERVER_ORIGIN=/d' "$ENV_FILE"
+    log "removed a stale loopback SANDBOX_SERVER_ORIGIN from .env (docker uses ${INTERNAL_ORIGIN})."
     env_origin=""
     ;;
 esac
 [ -z "$env_origin" ] || [ "$env_origin" = "$INTERNAL_ORIGIN" ] || \
-  die "SYNAPSE_SANDBOX_SERVER_ORIGIN in .env is '${env_origin}'; for the docker backend it must be unset or '${INTERNAL_ORIGIN}' (internal-only network)."
+  die "SANDBOX_SERVER_ORIGIN in .env is '${env_origin}'; for the docker backend it must be unset or '${INTERNAL_ORIGIN}' (internal-only network)."
 # Compose reads the shell env BEFORE .env, so a shell export overrides .env.
-shell_origin="$(trim "${SYNAPSE_SANDBOX_SERVER_ORIGIN:-}")"
+shell_origin="$(trim "${SANDBOX_SERVER_ORIGIN:-}")"
 if [ -n "$shell_origin" ] && [ "$shell_origin" != "$INTERNAL_ORIGIN" ]; then
-  die "shell env SYNAPSE_SANDBOX_SERVER_ORIGIN='${shell_origin}' would override .env (compose precedence); unset it or set it to '${INTERNAL_ORIGIN}' before deploying."
+  die "shell env SANDBOX_SERVER_ORIGIN='${shell_origin}' would override .env (compose precedence); unset it or set it to '${INTERNAL_ORIGIN}' before deploying."
 fi
-log "effective SYNAPSE_SANDBOX_SERVER_ORIGIN OK (unset → compose default ${INTERNAL_ORIGIN}, or explicitly ${INTERNAL_ORIGIN})."
+log "effective SANDBOX_SERVER_ORIGIN OK (unset → compose default ${INTERNAL_ORIGIN}, or explicitly ${INTERNAL_ORIGIN})."
 
 # 5. Build images, then bring up. tunnel-edge FIRST (no docker-socket), then the
 #    API last with the override, flagged so a bring-up failure rolls it back.

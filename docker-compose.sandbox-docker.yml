@@ -7,7 +7,7 @@
 # unconditionally would hand every production API container root on the host even
 # when sandboxes are disabled or using the default `local` backend.
 #
-# Layer this file ONLY when you run SYNAPSE_SANDBOX_BACKEND=docker:
+# Layer this file ONLY when you run SANDBOX_PROVIDER=docker:
 #
 #   docker compose \
 #     -f docker-compose.yml \
@@ -15,7 +15,7 @@
 #     --profile production up -d api tunnel-edge
 #
 # Compose appends the volume below to the api service's existing volumes. The
-# backend only ever `docker run`s the pinned SYNAPSE_SANDBOX_IMAGE with a fixed
+# backend only ever `docker run`s the pinned SANDBOX_DOCKER_IMAGE with a fixed
 # argument allowlist; for multi-tenant hosts, front the socket with a
 # docker-socket-proxy and point the API at it instead of the raw socket.
 

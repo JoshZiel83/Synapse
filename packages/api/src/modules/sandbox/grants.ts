@@ -22,9 +22,9 @@ import {
 } from "@synapse/shared"
 import type { Executor } from "./repo.js"
 import {
-  selectDeviceBuiltinExposures,
-  selectDeviceCapabilityIds,
-  revokeActiveDeviceRuntimeGrants,
+  selectRuntimeBuiltinExposures,
+  selectRuntimeCapabilityIds,
+  revokeActiveRuntimeGrants,
 } from "./repo.js"
 import {
   addDeviceCapabilitiesForTarget,
@@ -57,11 +57,11 @@ export interface DeviceBuiltinIds {
  * Throws if the filesystem exposure/capability is missing (a sandbox always
  * exposes filesystem).
  */
-export async function resolveDeviceBuiltinIds(
-  deviceId: string,
+export async function resolveRuntimeBuiltinIds(
+  runtimeId: string,
   run?: Executor
 ): Promise<DeviceBuiltinIds> {
-  const rows = await selectDeviceBuiltinExposures(deviceId, run)
+  const rows = await selectRuntimeBuiltinExposures(runtimeId, run)
 
   let fsExposure: string | null = null
   let fsCapability: string | null = null
@@ -78,7 +78,7 @@ export async function resolveDeviceBuiltinIds(
   }
   if (!fsExposure || !fsCapability) {
     throw new SandboxGrantsError(
-      `device ${deviceId} has no active filesystem capability (catalog not synced?)`
+      `runtime ${runtimeId} has no active filesystem capability (catalog not synced?)`
     )
   }
   return {
@@ -91,7 +91,7 @@ export async function resolveDeviceBuiltinIds(
 
 export interface CreateSandboxGrantsParams {
   workspaceId: string
-  deviceId: string
+  runtimeId: string
   actorId: string
   conversationId: string
   builtins: DeviceBuiltinIds
@@ -112,7 +112,7 @@ export interface CreateSandboxGrantsParams {
 export async function createSandboxGrants(
   params: CreateSandboxGrantsParams
 ): Promise<void> {
-  const { workspaceId, deviceId, actorId, conversationId, builtins } = params
+  const { workspaceId, runtimeId, actorId, conversationId, builtins } = params
 
   // ── Layer 1: capability device grant (ADDITIVE — only the sandbox's own
   // capabilities, never clobbering a pre-existing manual grant on this actor
@@ -147,7 +147,7 @@ export async function createSandboxGrants(
   }
   await createRuntimeAuthorizationGrant({
     workspaceId,
-    runtimeId: deviceId,
+    runtimeId,
     runtimeCapabilityId: builtins.filesystemCapabilityId,
     runtimeExposureId: builtins.filesystemExposureId,
     subject,
@@ -172,7 +172,7 @@ export async function createSandboxGrants(
     }
     await createRuntimeAuthorizationGrant({
       workspaceId,
-      runtimeId: deviceId,
+      runtimeId,
       runtimeCapabilityId: builtins.commandlineCapabilityId,
       runtimeExposureId: builtins.commandlineExposureId,
       subject,
@@ -194,15 +194,15 @@ export async function createSandboxGrants(
  */
 export async function revokeSandboxGrants(params: {
   workspaceId: string
-  deviceId: string
+  runtimeId: string
   actorId: string
   conversationId: string
 }): Promise<void> {
-  // Layer 1: resolve THIS device's capability ids, then targeted-revoke only
+  // Layer 1: resolve THIS runtime's capability ids, then targeted-revoke only
   // those bindings (leaving other capabilities the actor/conversation may hold).
-  const deviceCapabilityIds = await selectDeviceCapabilityIds({
+  const deviceCapabilityIds = await selectRuntimeCapabilityIds({
     workspaceId: params.workspaceId,
-    deviceId: params.deviceId,
+    runtimeId: params.runtimeId,
   })
   if (deviceCapabilityIds.length > 0) {
     await revokeDeviceCapabilitiesForTarget({
@@ -217,12 +217,12 @@ export async function revokeSandboxGrants(params: {
     })
   }
 
-  // Layer 2: revoke all active runtime grants for this device. The device is
-  // about to be deleted and its grant FK is ON DELETE CASCADE, so deletion
+  // Layer 2: revoke all active runtime grants for this runtime. The runtime is
+  // about to be soft-deleted and its grant FK is ON DELETE CASCADE, so deletion
   // alone would remove them — but we revoke first for a clean audit trail and
-  // so a teardown that stops short of deleteDevice still leaves no live grants.
-  await revokeActiveDeviceRuntimeGrants({
+  // so a teardown that stops short of deletion still leaves no live grants.
+  await revokeActiveRuntimeGrants({
     workspaceId: params.workspaceId,
-    deviceId: params.deviceId,
+    runtimeId: params.runtimeId,
   })
 }

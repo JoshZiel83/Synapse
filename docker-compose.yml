@@ -166,26 +166,26 @@ services:
       MCP_ENABLE_BILIBILI: ${MCP_ENABLE_BILIBILI:-}
       BILIBILI_MCP_URL: ${BILIBILI_MCP_URL:-}
       # --- server-side actor isolation (sandbox) ---
-      # Off by default. Set SYNAPSE_SANDBOX_ENABLED=true + SANDBOX_BACKEND=docker
-      # (+ run the 'sandbox' build + tunnel-edge) to enable containerized sandboxes.
-      SYNAPSE_SANDBOX_ENABLED: ${SYNAPSE_SANDBOX_ENABLED:-false}
-      SYNAPSE_SANDBOX_BACKEND: ${SYNAPSE_SANDBOX_BACKEND:-local}
-      # The docker backend is reachable ONLY over the frp tunnel (the container
-      # is on an internal-only network), so it requires SYNAPSE_SANDBOX_TUNNEL=frp
-      # + FRP_SHARED_TOKEN — anything else fails fast at provision. The local
-      # backend ignores this (its runtime uses a direct loopback endpoint).
-      SYNAPSE_SANDBOX_TUNNEL: ${SYNAPSE_SANDBOX_TUNNEL:-frp}
-      SYNAPSE_SANDBOX_IMAGE: ${SYNAPSE_SANDBOX_IMAGE:-synapse-device-runtime:latest}
-      SYNAPSE_SANDBOX_DOCKER_NETWORK: ${SYNAPSE_SANDBOX_DOCKER_NETWORK:-synapse-sandbox-egress}
-      SYNAPSE_SANDBOX_STORAGE_VOLUME: ${SYNAPSE_SANDBOX_STORAGE_VOLUME:-synapse_api_storage}
+      # Off by default (SANDBOX_PROVIDER=none). Set SANDBOX_PROVIDER=docker
+      # (+ run the 'sandbox' build + tunnel-edge) to enable containerized
+      # sandboxes, or =local for a same-host device-runtime child.
+      # SANDBOX_MODE defaults to 'resident' (device-runtime inside; Mode A).
+      # The docker + resident adapter is reachable ONLY over the frp tunnel
+      # (internal-only network), so it requires FRP_SHARED_TOKEN — enforced
+      # fail-fast at boot. The local adapter uses a direct loopback endpoint.
+      SANDBOX_PROVIDER: ${SANDBOX_PROVIDER:-none}
+      SANDBOX_MODE: ${SANDBOX_MODE:-auto}
+      SANDBOX_DOCKER_IMAGE: ${SANDBOX_DOCKER_IMAGE:-synapse-device-runtime:latest}
+      SANDBOX_DOCKER_NETWORK: ${SANDBOX_DOCKER_NETWORK:-synapse-sandbox-egress}
+      SANDBOX_DOCKER_STORAGE_VOLUME: ${SANDBOX_DOCKER_STORAGE_VOLUME:-synapse_api_storage}
       # Where api_storage is mounted INSIDE this container. The API derives each
       # sandbox's volume-subpath as STORAGE_DIR relative to this path (here
       # STORAGE_DIR=/app/storage/files under /app/storage → files/sandboxes/<id>).
       # Only override if you remount the volume elsewhere.
-      SYNAPSE_SANDBOX_STORAGE_VOLUME_MOUNT: ${SYNAPSE_SANDBOX_STORAGE_VOLUME_MOUNT:-/app/storage}
+      SANDBOX_DOCKER_STORAGE_VOLUME_MOUNT: ${SANDBOX_DOCKER_STORAGE_VOLUME_MOUNT:-/app/storage}
       # Internal address the sandbox container dials back to (NOT the public
       # APP_BASE_URL — the sandbox is on an internal-only network).
-      SYNAPSE_SANDBOX_SERVER_ORIGIN: ${SYNAPSE_SANDBOX_SERVER_ORIGIN:-http://api:3001}
+      SANDBOX_SERVER_ORIGIN: ${SANDBOX_SERVER_ORIGIN:-http://api:3001}
       # Tunnel + signing for device dispatch (required when sandbox+tunnel on).
       SYNAPSE_DEVICE_TUNNEL_EDGE_URL: ${SYNAPSE_DEVICE_TUNNEL_EDGE_URL:-http://tunnel-edge:8080}
       SYNAPSE_DEVICE_ENVELOPE_SIGNING_KEY: ${SYNAPSE_DEVICE_ENVELOPE_SIGNING_KEY:-}
@@ -850,10 +850,10 @@ services:
   # Build-only: produces the cloud-sandbox image the docker SandboxBackend runs
   # via DooD. NOT a long-running service. Build it with:
   #   docker compose --profile sandbox-build build sandbox-image
-  # then set SYNAPSE_SANDBOX_IMAGE=synapse-device-runtime:latest. Self-contained
+  # then set SANDBOX_DOCKER_IMAGE=synapse-device-runtime:latest. Self-contained
   # multi-stage (compiles TS + Rust inside), so no host prebuild is needed.
   sandbox-image:
-    image: ${SYNAPSE_SANDBOX_IMAGE:-synapse-device-runtime:latest}
+    image: ${SANDBOX_DOCKER_IMAGE:-synapse-device-runtime:latest}
     build:
       context: .
       dockerfile: packages/device-runtime/docker/Dockerfile

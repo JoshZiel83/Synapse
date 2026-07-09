@@ -353,7 +353,7 @@ or non-idempotent locations and forwarding `Early-Data: $ssl_early_data`.
 ## 8b. Server-side actor isolation (sandbox)
 
 Per-session actor sandboxes run each actor turn's filesystem + command tools in
-an isolated runtime. Two backends, selected by `SYNAPSE_SANDBOX_BACKEND`:
+an isolated runtime. Two backends, selected by `SANDBOX_PROVIDER` (local|docker|none):
 
 - **`local`** (default) — a same-host `device-runtime` child process. Command
   confinement needs `bwrap`; the API image bakes `bubblewrap` (+ `ripgrep` for
@@ -368,8 +368,8 @@ an isolated runtime. Two backends, selected by `SYNAPSE_SANDBOX_BACKEND`:
   container (DooD via the host docker socket), reached over the frp tunnel.
   Command confinement (bwrap) and network isolation live in that container.
   Because the container is on an internal-only network with no co-located
-  loopback path, the docker backend **requires** `SYNAPSE_SANDBOX_TUNNEL=frp`
-  and `FRP_SHARED_TOKEN`; any other value fails fast at provision rather than
+  loopback path, the docker + resident adapter **requires** `FRP_SHARED_TOKEN`
+  (frp tunnel); its absence fails fast at boot rather than
   booting a sandbox whose tools can never be dispatched.
 
 > **Image prerequisite (BOTH backends).** The API process itself runs the Rust
@@ -408,12 +408,11 @@ bash scripts/ensure-sandbox-secrets.sh
 docker compose --profile production build api
 docker compose --profile sandbox-build build sandbox-image
 
-# 2. In .env set the three flags (setup.sh defaults TUNNEL=none, so it MUST be
-#    changed for docker):
-#      SYNAPSE_SANDBOX_ENABLED=true
-#      SYNAPSE_SANDBOX_BACKEND=docker
-#      SYNAPSE_SANDBOX_TUNNEL=frp
-#    Leave SYNAPSE_SANDBOX_SERVER_ORIGIN UNSET (compose default http://api:3001)
+# 2. In .env set the provider (setup.sh defaults SANDBOX_PROVIDER=none):
+#      SANDBOX_PROVIDER=docker
+#    (SANDBOX_MODE defaults to 'resident'; the docker+resident adapter needs
+#     FRP_SHARED_TOKEN — set it too.)
+#    Leave SANDBOX_SERVER_ORIGIN UNSET (compose default http://api:3001)
 #    or set it to that internal address — NEVER a loopback or public domain (the
 #    sandbox is on an internal-only network). NB: compose reads the shell env
 #    before .env, so unset any stale value in your deploy shell too. (The script
@@ -435,8 +434,8 @@ Notes:
   container host-root-equivalent access even with sandboxes disabled or on the
   default `local` backend. The `docker-compose.sandbox-docker.yml` override
   appends the socket mount; layer it (`-f ... -f docker-compose.sandbox-docker.yml`)
-  only when `SYNAPSE_SANDBOX_BACKEND=docker`. The backend only ever runs the
-  pinned `SYNAPSE_SANDBOX_IMAGE` with a fixed argument list; a docker-socket-proxy
+  only when `SANDBOX_PROVIDER=docker`. The backend only ever runs the
+  pinned `SANDBOX_DOCKER_IMAGE` with a fixed argument list; a docker-socket-proxy
   is the recommended hardening for multi-tenant hosts.
 - Sandbox containers join the **internal** `synapse-sandbox-egress` network: they
   reach the API + tunnel-edge but have **no public egress and no DB/Redis
@@ -449,11 +448,11 @@ Notes:
 - **Storage volume layout:** each sandbox container mounts only its own session
   subpath of the shared `api_storage` volume. The API derives that subpath from
   `STORAGE_DIR` relative to the volume's mount point inside the API container
-  (default `/app/storage`; override with `SYNAPSE_SANDBOX_STORAGE_VOLUME_MOUNT`).
+  (default `/app/storage`; override with `SANDBOX_DOCKER_STORAGE_VOLUME_MOUNT`).
   In the reference compose `STORAGE_DIR=/app/storage/files` and the volume mounts
   at `/app/storage`, so the subpath is `files/sandboxes/<sessionId>`. If you
   remount the volume or change `STORAGE_DIR` so the storage dir no longer sits
-  under the mount point, set `SYNAPSE_SANDBOX_STORAGE_VOLUME_MOUNT` accordingly —
+  under the mount point, set `SANDBOX_DOCKER_STORAGE_VOLUME_MOUNT` accordingly —
   otherwise provisioning fails loudly rather than mounting the wrong directory.
 - **Custom tunnel edge:** the sandbox runtime registers its dispatch endpoint as
   `<internal-base>/d/<token>`, and the server only accepts an `internal_url`
@@ -486,7 +485,7 @@ isolation — strictly worse than the `docker` backend (which keeps the API on t
 default profile and confines each session in a separate container). **Use `local`
 only single-tenant / trusted; prefer `docker` for multi-tenant or untrusted
 workloads.** These caps live in the opt-in `docker-compose.sandbox-local.yml`
-override, which also injects `SYNAPSE_SANDBOX_SERVER_ORIGIN=http://127.0.0.1:3001`
+override, which also injects `SANDBOX_SERVER_ORIGIN=http://127.0.0.1:3001`
 (loopback) — kept in the override, **never in `.env`**, since that variable is
 shared with the docker backend (which needs an internal address instead).
 
@@ -511,7 +510,7 @@ userns/bwrap actually run (else commandline fail-closes off). The baked image
 bwrap does not help a bare-metal process.
 
 **Switching back to `docker`:** ensure no leftover loopback
-`SYNAPSE_SANDBOX_SERVER_ORIGIN` remains in `.env` **or your shell** (compose reads
+`SANDBOX_SERVER_ORIGIN` remains in `.env` **or your shell** (compose reads
 the shell first) — it must be unset or `http://api:3001`, never a loopback/public
 domain, or the docker sandbox container will dial the wrong address.
 

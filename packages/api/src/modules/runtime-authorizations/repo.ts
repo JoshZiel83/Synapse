@@ -58,12 +58,14 @@ export async function findAutoRetryTarget(args: {
     .selectFrom("runtimeCapabilities as dc")
     .innerJoin("workspaceResources as resource", "resource.id", "dc.id")
     .innerJoin("runtimeExposures as dx", "dx.id", "dc.exposureId")
-    .innerJoin("devices as d", "d.id", "dx.runtimeId")
-    .innerJoin("runtimes as r", "r.id", "d.id")
+    // Generalized to the runtimes supertype (P2): existence-only join, so a
+    // device-less sandbox runtime is an auto-retry target too. r.id === dx.runtimeId
+    // (=== d.id for a real device), so byte-identical for devices.
+    .innerJoin("runtimes as r", "r.id", "dx.runtimeId")
     .innerJoin("runtimeTools as dt", "dt.exposureId", "dx.id")
     .innerJoin("runtimeToolRevisions as dtr", "dtr.id", "dt.latestRevisionId")
     .select([
-      "d.id as runtimeId",
+      "r.id as runtimeId",
       "dx.serviceId as runtimeServiceId",
       "dx.id as runtimeExposureId",
       "dt.id as runtimeToolId",
@@ -109,23 +111,28 @@ export async function findDeviceCapabilityGrantTarget(
   runtimeCapabilityId: string,
   executor: Executor = db
 ): Promise<DeviceCapabilityGrantTarget | undefined> {
-  return executor
-    .selectFrom("runtimeCapabilities as dc")
-    .innerJoin("workspaceResources as resource", "resource.id", "dc.id")
-    .innerJoin("runtimeExposures as dx", "dx.id", "dc.exposureId")
-    .innerJoin("devices as d", "d.id", "dx.runtimeId")
-    .select([
-      "d.id as runtimeId",
-      "resource.workspaceId as workspaceId",
-      "dx.id as exposureId",
-      "dx.stableKey as exposureStableKey",
-      "dx.builtinKind as builtinKind",
-      "dx.runtimeStatus as runtimeStatus",
-      "resource.status as status",
-    ])
-    .where("dc.id", "=", runtimeCapabilityId)
-    .where("resource.deletedAt", "is", null)
-    .executeTakeFirst() as Promise<DeviceCapabilityGrantTarget | undefined>
+  return (
+    executor
+      .selectFrom("runtimeCapabilities as dc")
+      .innerJoin("workspaceResources as resource", "resource.id", "dc.id")
+      .innerJoin("runtimeExposures as dx", "dx.id", "dc.exposureId")
+      // Generalized to the runtimes supertype (P2): existence-only join (no device
+      // columns selected), so a device-less sandbox runtime resolves. r.id ===
+      // dx.runtimeId (=== d.id for a device) — byte-identical for devices.
+      .innerJoin("runtimes as r", "r.id", "dx.runtimeId")
+      .select([
+        "r.id as runtimeId",
+        "resource.workspaceId as workspaceId",
+        "dx.id as exposureId",
+        "dx.stableKey as exposureStableKey",
+        "dx.builtinKind as builtinKind",
+        "dx.runtimeStatus as runtimeStatus",
+        "resource.status as status",
+      ])
+      .where("dc.id", "=", runtimeCapabilityId)
+      .where("resource.deletedAt", "is", null)
+      .executeTakeFirst() as Promise<DeviceCapabilityGrantTarget | undefined>
+  )
 }
 
 /**
@@ -176,18 +183,21 @@ export async function loadDeviceCapabilityRequestState(
         "exposure.id",
         "capability.exposureId"
       )
-      .innerJoin("devices as device", "device.id", "exposure.runtimeId")
-      .innerJoin("runtimes as runtime", "runtime.id", "device.id")
+      // Generalized to the runtimes supertype (P2): a device-less sandbox
+      // runtime resolves its request state identically. workspace_id +
+      // control-plane-session id are both keyed on runtimes.id (=== devices.id
+      // for a device), so byte-identical for a real device.
+      .innerJoin("runtimes as runtime", "runtime.id", "exposure.runtimeId")
       .select([
         "capability.id as capabilityId",
         "resource.status as capabilityStatus",
         "exposure.id as exposureId",
         "exposure.runtimeStatus as exposureRuntimeStatus",
-        "device.workspaceId as ownerWorkspaceId",
+        "runtime.workspaceId as ownerWorkspaceId",
         sql<boolean>`EXISTS (
         SELECT 1
         FROM runtime_control_plane_sessions session_row
-        WHERE session_row.runtime_id = device.id
+        WHERE session_row.runtime_id = runtime.id
           AND session_row.status = 'active'
       )`.as("hasActiveDeviceSession"),
       ])

@@ -16,16 +16,20 @@
 //   - docker → DooD: `docker run`s the cloud-sandbox image and bridges the
 //     bootstrap-on-boot handshake. See docker-sandbox-backend.ts (Phase 3).
 
+import { join } from "node:path"
+import { randomUUID } from "node:crypto"
+import { rm } from "node:fs/promises"
+import { createFileBackedBroker } from "@synapse/device-runtime"
 import {
   type HostProvider,
   type RunHandle,
   type SpawnSandboxRuntimeParams,
 } from "./host-provider.js"
-import { deleteDevice } from "../devices/service.js"
-import { cancelPendingPairingSession } from "./repo.js"
+import { deleteDevice, mintLocalSandboxRuntime } from "../devices/service.js"
 
-/** Which backend produced/owns a sandbox. Persisted on file_mounts so teardown
- *  picks the right backend regardless of the API's current env. */
+/** Which adapter produced/owns a sandbox runtime. Persisted on sandboxes.adapter
+ *  (and legacy file_mounts.sandbox_backend) so teardown picks the right adapter
+ *  regardless of the API's current config. P2 registers local + docker (Mode-A). */
 export type SandboxBackendKind = "local" | "docker"
 
 /**
@@ -67,18 +71,26 @@ export interface SandboxSpec {
    */
   onPairingCreated?: (pairingSessionId: string) => Promise<void>
   onResourceCreated?: (sandboxResourceId: string) => Promise<void>
-  onDeviceClaimed?: (deviceId: string) => Promise<void>
+  /** Fired the instant the runtime's DB identity exists (docker: bootstrap
+   *  consumed; local: mintLocalSandboxRuntimeTx). Carries the runtime id (the
+   *  sandboxes.id, == runtimes.id). Renamed from onDeviceClaimed (a sandbox
+   *  runtime has no `devices` row — the identity is the runtime). */
+  onRuntimeReady?: (runtimeId: string) => Promise<void>
 }
 
 /** Identifies a sandbox runtime well enough to reconnect/kill it from another
- *  process (teardown after an API restart). Rebuilt from a file_mounts row. */
+ *  process (teardown after an API restart). Rebuilt from a sandboxes row
+ *  (state-agnostic control-path resolver) or legacy file_mounts columns. */
 export interface SandboxRef {
-  backend: SandboxBackendKind
-  /** == sessionId. */
+  /** The owning adapter (sandboxes.adapter — row-driven, never current config). */
+  adapter: string
+  mode: "resident" | "bare"
+  /** == sessionId (the liveSandboxHandles registry key). */
   sandboxId: string
   /** Provider resource id: docker container id; k8s pod; "" for local. */
-  sandboxResourceId: string
-  deviceId: string
+  resourceId: string
+  /** The runtime id (== sandboxes.id == runtimes.id). NO devices row for a sandbox. */
+  runtimeId: string
   runtimeServiceId?: string
   pairingSessionId?: string
   /** Local backend only: OS pid for SIGTERM/SIGKILL. */
@@ -87,9 +99,9 @@ export interface SandboxRef {
 
 /** Synapse convenience subset (NOT a 1:1 mirror of e2b's static getInfo). */
 export interface SandboxInfo {
-  backend: SandboxBackendKind
+  adapter: string
   sandboxId: string
-  deviceId: string
+  runtimeId: string
   runtimeServiceId: string
   /**
    * Wall-clock time the sandbox process was started. Undefined when the handle
@@ -102,13 +114,19 @@ export interface SandboxInfo {
 
 /** A live sandbox handle — mirrors the e2b Sandbox INSTANCE methods we use. */
 export interface SandboxHandle {
-  readonly backend: SandboxBackendKind
-  /** == sessionId. */
+  readonly adapter: string
+  readonly mode: "resident" | "bare"
+  /** == sessionId (the liveSandboxHandles registry key). */
   readonly sandboxId: string
   /** Provider resource id (container id / pod / ""). */
-  readonly sandboxResourceId: string
-  readonly deviceId: string
-  readonly runtimeServiceId: string
+  readonly resourceId: string
+  /** The runtime linkage: the sandbox-kind runtime id + its device_runtime
+   *  service id (NO devices row). P2 is resident-only. */
+  readonly runtimeLink: {
+    mode: "resident"
+    runtimeId: string
+    runtimeServiceId: string
+  }
   readonly pairingSessionId?: string
   /** Local backend only. */
   readonly hostPid?: number
@@ -154,56 +172,79 @@ export class SandboxBackendError extends Error {
 }
 
 /**
- * Local backend: adapts the existing two-phase HostProvider (startPairing is
- * driven by the spine and passed in via spec-less wiring — see service.ts).
- * The impedance (two-phase pair/run vs one-shot create) is absorbed here.
- *
- * NOTE: the local pairing handshake (startPairing(local_qr) → pairingCode)
- * still lives in the spine because it needs workspace/session context the
- * HostProvider abstraction deliberately doesn't carry; the spine passes the
- * resolved `pairingCode` + broker dir to `createLocalSandboxBackend(...).create`
- * via the `pairing` argument. This keeps the HostProvider contract unchanged.
+ * Local backend (§4.6 direct-mint): stands up a device-less sandbox-kind runtime
+ * as a same-host child WITHOUT the pairing-code round-trip. create() mints the
+ * runtime + service + service key in one DB tx (mintLocalSandboxRuntime), authors
+ * the on-disk broker identity the child `synapse-device run` loads, then spawns
+ * the daemon (no `pair` child, --tunnel-mode=noop loopback). The API reuses the
+ * SAME broker helpers the child reads, so there is zero identity-format drift:
+ * device.hello verifies the SERVICE key against runtime_service_keys (the device
+ * pubkey never persists — it lives only in the identity file).
  */
 export function createLocalSandboxBackend(deps: {
   hostProvider: HostProvider
-  /** Resolve the per-session pairing code + broker dir + control-plane facts.
-   *  Provided by the spine (it owns startPairing + session context). */
-  beginLocalPairing: (spec: SandboxSpec) => Promise<{
-    pairingCode: string
-    brokerDir: string
-    pairingSessionId: string
-  }>
+  /** Test seam: the atomic DB mint (defaults to the real mintLocalSandboxRuntime). */
+  mintRuntime?: typeof mintLocalSandboxRuntime
   /**
-   * Test seam: cleanup primitive run when create() fails after pairing. Defaults
-   * to the real DB-backed {@link defaultLocalFailCleanup} (delete device + cancel
-   * pairing); a unit test injects a spy to assert the leak is cleaned WITHOUT a
-   * live DB.
+   * Test seam: cleanup primitive run when create() fails after the mint.
+   * Defaults to {@link defaultLocalFailCleanup} (soft-delete the runtime + rm the
+   * broker dir); a unit test injects a spy to assert the leak is cleaned.
    */
   failCleanup?: (args: {
     workspaceId: string
-    deviceId: string | null
-    pairingSessionId: string | null
+    runtimeId: string | null
+    brokerDir: string
   }) => Promise<void>
 }): SandboxBackend {
-  const { hostProvider, beginLocalPairing } = deps
+  const { hostProvider } = deps
+  const mintRuntime = deps.mintRuntime ?? mintLocalSandboxRuntime
   const failCleanup = deps.failCleanup ?? defaultLocalFailCleanup
   return {
     kind: "local",
     async create(spec: SandboxSpec): Promise<SandboxHandle> {
-      // Track created facts so a failure at ANY point after pairing (run() or a
-      // staged callback throwing) self-cleans them — honoring the SandboxSpec
-      // contract. Without this, a device claimed by pair() (or a cancelled
-      // pairing) leaks: the spine's create() cleanup only runs when create()
-      // RETURNED a handle, which it never does on this path.
-      const { pairingCode, brokerDir, pairingSessionId } =
-        await beginLocalPairing(spec)
-      const workspaceId = spec.workspaceId
-      let deviceId: string | null = null
+      const brokerDir = join(spec.sandboxRoot, ".broker")
+      const broker = createFileBackedBroker({ brokerDir })
+      const deviceKey = await broker.generateKeyPair("device")
+      const serviceKey = await broker.generateKeyPair("service:device_runtime")
+      // FRESH UUID per provision (CORRECTION 1) — sessionId would PK-collide with
+      // a soft-deleted runtime on re-provision.
+      const runtimeId = randomUUID()
+      const serviceId = randomUUID()
+      const serviceKeyId = randomUUID()
+      let mintedRuntimeId: string | null = null
       try {
-        await spec.onPairingCreated?.(pairingSessionId)
-
+        // ① atomically mint the device-less sandbox-kind runtime (no pairing
+        // round-trip, no devices row).
+        await mintRuntime({
+          runtimeId,
+          workspaceId: spec.workspaceId,
+          sessionId: spec.sessionId,
+          serviceId,
+          serviceKeyId,
+          servicePubkey: serviceKey.publicKey,
+          serviceFingerprint: serviceKey.publicKeyFingerprint,
+        })
+        mintedRuntimeId = runtimeId
+        // ② author the on-disk identity the child `synapse-device run` loads.
+        await broker.saveDeviceIdentity({
+          deviceId: runtimeId,
+          serverOrigin: spec.serverOrigin,
+          hostKind: "local",
+          devicePubkeyFingerprint: deviceKey.publicKeyFingerprint,
+          devicePrivateKeyRef: deviceKey.privateKeyRef,
+          services: [
+            {
+              serviceKind: "device_runtime",
+              serviceId,
+              pubkeyFingerprint: serviceKey.publicKeyFingerprint,
+              privateKeyRef: serviceKey.privateKeyRef,
+            },
+          ],
+        })
+        // The runtime's DB identity now exists → let the spine back-fill mounts.
+        await spec.onRuntimeReady?.(runtimeId)
+        // ③ spawn the long-lived daemon (no `pair` child).
         const spawnParams: SpawnSandboxRuntimeParams = {
-          pairingCode,
           brokerDir,
           fsRoot: spec.sandboxRoot,
           fsHelperPath: spec.fsHelperPath,
@@ -212,31 +253,28 @@ export function createLocalSandboxBackend(deps: {
           confineCommands: spec.confineCommands,
           title: spec.title,
         }
-        const paired = await hostProvider.pair(spawnParams)
-        deviceId = paired.deviceId
-        await spec.onDeviceClaimed?.(paired.deviceId)
         const runHandle = await hostProvider.run(spawnParams)
         return makeLocalHandle({
           sessionId: spec.sessionId,
-          deviceId: paired.deviceId,
-          runtimeServiceId: paired.serviceId,
-          pairingSessionId,
+          runtimeId,
+          runtimeServiceId: serviceId,
           runHandle,
         })
       } catch (err) {
-        // Comprehensive self-cleanup: delete the paired device (cascades its
-        // services/exposures/grants) and cancel a still-pending pairing session
-        // so its code can't be reused. Idempotent + best-effort; rethrow.
-        await failCleanup({ workspaceId, deviceId, pairingSessionId }).catch(
-          () => {}
-        )
+        // Self-clean: soft-delete the minted sandbox runtime (keeps children for
+        // audit) + remove the broker dir so a re-provision starts clean.
+        await failCleanup({
+          workspaceId: spec.workspaceId,
+          runtimeId: mintedRuntimeId,
+          brokerDir,
+        }).catch(() => {})
         throw err
       }
     },
     async connect(ref: SandboxRef): Promise<SandboxHandle> {
-      if (ref.backend !== "local") {
+      if (ref.adapter !== "local") {
         throw new SandboxBackendError(
-          `local backend cannot connect to a ${ref.backend} sandbox`
+          `local backend cannot connect to a ${ref.adapter} sandbox`
         )
       }
       // Cross-process reconnect: we have no live ChildProcess handle, only the
@@ -247,40 +285,39 @@ export function createLocalSandboxBackend(deps: {
 }
 
 /**
- * Default self-cleanup for a local create() that failed after pairing. Deletes
- * the paired device (cascades its services/exposures/grants) and cancels a
- * still-pending pairing session so the code can't be reused. Best-effort +
- * idempotent. Overridable via createLocalSandboxBackend({ failCleanup }) for
- * DB-free unit tests.
+ * Default self-cleanup for a local create() that failed after the mint:
+ * soft-delete the sandbox runtime (flips runtimes.deleted_at, keeps children for
+ * audit) and remove the broker dir so its identity can't be reused. Best-effort +
+ * idempotent. Overridable via createLocalSandboxBackend({ failCleanup }).
  */
 async function defaultLocalFailCleanup(args: {
   workspaceId: string
-  deviceId: string | null
-  pairingSessionId: string | null
+  runtimeId: string | null
+  brokerDir: string
 }): Promise<void> {
-  if (args.deviceId) {
-    await deleteDevice(args.workspaceId, args.deviceId).catch(() => {})
+  if (args.runtimeId) {
+    await deleteDevice(args.workspaceId, args.runtimeId).catch(() => {})
   }
-  if (args.pairingSessionId) {
-    await cancelPendingPairingSession(args.pairingSessionId).catch(() => {})
-  }
+  await rm(args.brokerDir, { recursive: true, force: true }).catch(() => {})
 }
 
 function makeLocalHandle(args: {
   sessionId: string
-  deviceId: string
+  runtimeId: string
   runtimeServiceId: string
-  pairingSessionId: string
   runHandle: RunHandle
 }): SandboxHandle {
   const startedAt = new Date()
   return {
-    backend: "local",
+    adapter: "local",
+    mode: "resident",
     sandboxId: args.sessionId,
-    sandboxResourceId: "",
-    deviceId: args.deviceId,
-    runtimeServiceId: args.runtimeServiceId,
-    pairingSessionId: args.pairingSessionId,
+    resourceId: "",
+    runtimeLink: {
+      mode: "resident",
+      runtimeId: args.runtimeId,
+      runtimeServiceId: args.runtimeServiceId,
+    },
     hostPid: args.runHandle.pid,
     getHost(): string {
       throw new SandboxBackendError(
@@ -298,9 +335,9 @@ function makeLocalHandle(args: {
     },
     getInfo(): SandboxInfo {
       return {
-        backend: "local",
+        adapter: "local",
         sandboxId: args.sessionId,
-        deviceId: args.deviceId,
+        runtimeId: args.runtimeId,
         runtimeServiceId: args.runtimeServiceId,
         startedAt,
       }
@@ -313,11 +350,15 @@ function makeLocalHandle(args: {
 
 function makeLocalRefHandle(ref: SandboxRef): SandboxHandle {
   return {
-    backend: "local",
+    adapter: "local",
+    mode: ref.mode,
     sandboxId: ref.sandboxId,
-    sandboxResourceId: "",
-    deviceId: ref.deviceId,
-    runtimeServiceId: ref.runtimeServiceId ?? "",
+    resourceId: "",
+    runtimeLink: {
+      mode: "resident",
+      runtimeId: ref.runtimeId,
+      runtimeServiceId: ref.runtimeServiceId ?? "",
+    },
     pairingSessionId: ref.pairingSessionId,
     hostPid: ref.hostPid,
     getHost(): string {
@@ -335,9 +376,9 @@ function makeLocalRefHandle(ref: SandboxRef): SandboxHandle {
     },
     getInfo(): SandboxInfo {
       return {
-        backend: "local",
+        adapter: "local",
         sandboxId: ref.sandboxId,
-        deviceId: ref.deviceId,
+        runtimeId: ref.runtimeId,
         runtimeServiceId: ref.runtimeServiceId ?? "",
         // Re-attached from a persisted SandboxRef: the real start time is not
         // recorded in the ref, so leave it undefined rather than fabricating one.

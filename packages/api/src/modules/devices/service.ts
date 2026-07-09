@@ -28,6 +28,7 @@ import {
   insertLocalPairingSession,
   isDeviceServiceOwnedByWorkspace,
   listDeviceSummaries,
+  mintLocalSandboxRuntimeTx,
   softDeleteDevice,
 } from "./repo.js"
 import { config } from "../../config/index.js"
@@ -86,6 +87,29 @@ export async function getDevice(
   return detail
 }
 
+/**
+ * Direct-mint a device-less LOCAL sandbox runtime (§4.6) — the service-layer
+ * seam the local sandbox backend calls (it owns the on-disk broker identity;
+ * this owns the atomic DB mint). Always adapter='local', mode='resident' in P2.
+ */
+export async function mintLocalSandboxRuntime(args: {
+  runtimeId: string
+  workspaceId: string
+  sessionId: string
+  serviceId: string
+  serviceKeyId: string
+  servicePubkey: string
+  serviceFingerprint: string
+  clientVersion?: string | null
+  capabilityDescriptor?: Record<string, unknown>
+}): Promise<{ runtimeId: string; serviceId: string; serviceKeyId: string }> {
+  return mintLocalSandboxRuntimeTx({
+    ...args,
+    adapter: "local",
+    mode: "resident",
+  })
+}
+
 export async function deleteDevice(
   workspaceId: string,
   deviceId: string
@@ -133,6 +157,9 @@ export interface StartPairingInput {
   deviceType?: DeviceType
   /** Legacy field (was service_join mode only; that mode has been removed). */
   deviceId?: string
+  /** Which runtime kind this pairing mints (drives the P2 consume fork). Defaults
+   *  to 'device' so real-device pairing stays byte-identical. */
+  targetRuntimeKind?: "device" | "sandbox"
   /** mode-specific opaque context (cloud preset, service kind being joined, …) */
   context?: Record<string, unknown>
 }
@@ -174,6 +201,7 @@ export async function startPairing(
     workspaceId: input.workspaceId,
     requestedByWorkspaceMemberId: input.requestedByWorkspaceMemberId ?? null,
     deviceId: input.deviceId ?? null,
+    targetRuntimeKind: input.targetRuntimeKind ?? "device",
     mode: input.mode,
     serverBaseUrl: input.serverBaseUrl,
     requestedTitle: input.title ?? null,

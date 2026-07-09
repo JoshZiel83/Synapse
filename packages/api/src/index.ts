@@ -373,7 +373,7 @@ async function main() {
 
   // Recover sandbox mounts whose teardown commit failed earlier (live dirs were
   // preserved). Opt-in with the sandbox feature; best-effort.
-  if (config.sandbox.enabled) {
+  if (config.sandbox.provider !== "none") {
     try {
       const r = await recoverFailedSandboxMounts()
       if (r.attempted > 0) {

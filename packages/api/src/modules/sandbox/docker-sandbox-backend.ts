@@ -19,7 +19,7 @@ import {
 import { deleteDevice } from "../devices/service.js"
 import {
   getPairingSessionBootstrapState,
-  getLatestDeviceRuntimeServiceId,
+  getLatestRuntimeServiceId,
   cancelPendingPairingSession,
 } from "./repo.js"
 import {
@@ -31,17 +31,17 @@ import {
   type SandboxSpec,
 } from "./sandbox-backend.js"
 
-type SpawnImpl = typeof nodeSpawn
+export type SpawnImpl = typeof nodeSpawn
 
 export interface DockerSandboxBackendOptions {
-  /** The cloud-sandbox image to run (SYNAPSE_SANDBOX_IMAGE). */
+  /** The cloud-sandbox image to run (SANDBOX_DOCKER_IMAGE). */
   image: string
-  /** Docker network the sandbox attaches to (SYNAPSE_SANDBOX_DOCKER_NETWORK).
+  /** Docker network the sandbox attaches to (SANDBOX_DOCKER_NETWORK).
    *  Should be an internal network reaching only api + tunnel-edge. */
   network: string
-  /** Named volume holding the materialized sandbox roots (SYNAPSE_SANDBOX_STORAGE_VOLUME). */
+  /** Named volume holding the materialized sandbox roots (SANDBOX_DOCKER_STORAGE_VOLUME). */
   storageVolume: string
-  /** Internal API origin the container dials back to (SYNAPSE_SANDBOX_SERVER_ORIGIN, e.g. http://api:3001). */
+  /** Internal API origin the container dials back to (SANDBOX_SERVER_ORIGIN, e.g. http://api:3001). */
   serverOrigin: string
   /** Whether to wire the frp tunnel (SYNAPSE_SANDBOX_TUNNEL=frp|none). */
   tunnel: "frp" | "none"
@@ -74,6 +74,11 @@ export interface DockerSandboxBackendOptions {
   createPairing?: (input: {
     workspaceId: string
     title: string
+    targetRuntimeKind?: "device" | "sandbox"
+    adapter?: string
+    mode?: "resident" | "bare"
+    sessionId?: string
+    capabilityDescriptor?: Record<string, unknown>
   }) => Promise<CreateCloudDeviceResult>
   /** Test seam: override the post-failure cleanup (defaults to the DB-backed
    *  {@link defaultDockerFailCleanup}) so the leak-cleanup is assertable in a
@@ -120,12 +125,19 @@ export function createDockerSandboxBackend(
       let containerId: string | null = null
       let deviceId: string | null = null
       try {
-        // ① mint a one-time bootstrap token + pending device id.
+        // ① mint a one-time bootstrap token + pending runtime id. P2 fork: this
+        // pairing mints a device-less kind='sandbox' runtime — the consume tx
+        // reads adapter/mode/session_id/capability_descriptor from context.
         let pairing: CreateCloudDeviceResult
         try {
           pairing = await createPairing({
             workspaceId: spec.workspaceId,
             title: spec.title ?? `Sandbox ${spec.sessionId.slice(0, 8)}`,
+            targetRuntimeKind: "sandbox",
+            adapter: "docker",
+            mode: "resident",
+            sessionId: spec.sessionId,
+            capabilityDescriptor: {},
           })
         } catch (err) {
           throw new SandboxBackendError(
@@ -181,13 +193,13 @@ export function createDockerSandboxBackend(
           )
         }
         deviceId = resolved.deviceId
-        await spec.onDeviceClaimed?.(resolved.deviceId)
+        await spec.onRuntimeReady?.(resolved.deviceId)
 
         return makeDockerHandle({
           docker,
           sessionId: spec.sessionId,
           containerId,
-          deviceId: resolved.deviceId,
+          runtimeId: resolved.deviceId,
           runtimeServiceId: resolved.runtimeServiceId,
           pairingSessionId: pairing.pairingSessionId,
         })
@@ -207,21 +219,21 @@ export function createDockerSandboxBackend(
     },
 
     async connect(ref: SandboxRef): Promise<SandboxHandle> {
-      if (ref.backend !== "docker") {
+      if (ref.adapter !== "docker") {
         throw new SandboxBackendError(
-          `docker backend cannot connect to a ${ref.backend} sandbox`
+          `docker backend cannot connect to a ${ref.adapter} sandbox`
         )
       }
-      if (!ref.sandboxResourceId) {
+      if (!ref.resourceId) {
         throw new SandboxBackendError(
-          "docker connect: SandboxRef has no container id (sandboxResourceId)"
+          "docker connect: SandboxRef has no container id (resourceId)"
         )
       }
       return makeDockerHandle({
         docker,
         sessionId: ref.sandboxId,
-        containerId: ref.sandboxResourceId,
-        deviceId: ref.deviceId,
+        containerId: ref.resourceId,
+        runtimeId: ref.runtimeId,
         runtimeServiceId: ref.runtimeServiceId ?? "",
         pairingSessionId: ref.pairingSessionId,
       })
@@ -254,21 +266,21 @@ export function createDockerReconnectBackend(
       )
     },
     async connect(ref: SandboxRef): Promise<SandboxHandle> {
-      if (ref.backend !== "docker") {
+      if (ref.adapter !== "docker") {
         throw new SandboxBackendError(
-          `docker backend cannot connect to a ${ref.backend} sandbox`
+          `docker backend cannot connect to a ${ref.adapter} sandbox`
         )
       }
-      if (!ref.sandboxResourceId) {
+      if (!ref.resourceId) {
         throw new SandboxBackendError(
-          "docker connect: SandboxRef has no container id (sandboxResourceId)"
+          "docker connect: SandboxRef has no container id (resourceId)"
         )
       }
       return makeDockerHandle({
         docker,
         sessionId: ref.sandboxId,
-        containerId: ref.sandboxResourceId,
-        deviceId: ref.deviceId,
+        containerId: ref.resourceId,
+        runtimeId: ref.runtimeId,
         runtimeServiceId: ref.runtimeServiceId ?? "",
         pairingSessionId: ref.pairingSessionId,
       })
@@ -378,7 +390,7 @@ async function defaultPollBootstrapConsumed(
     if (row) {
       const status = row.status as string
       if (status === "consumed" && row.runtimeId) {
-        const runtimeServiceId = await getLatestDeviceRuntimeServiceId(
+        const runtimeServiceId = await getLatestRuntimeServiceId(
           row.runtimeId as string
         )
         if (runtimeServiceId) {
@@ -404,14 +416,25 @@ async function defaultPollBootstrapConsumed(
   }
 }
 
-/** Default pairing creation: the DB-backed cloud-bootstrap pairing. */
+/** Default pairing creation: the DB-backed cloud-bootstrap pairing, carrying the
+ *  P2 sandbox fork facts so the consume tx mints a device-less sandbox runtime. */
 function defaultCreatePairing(input: {
   workspaceId: string
   title: string
+  targetRuntimeKind?: "device" | "sandbox"
+  adapter?: string
+  mode?: "resident" | "bare"
+  sessionId?: string
+  capabilityDescriptor?: Record<string, unknown>
 }): Promise<CreateCloudDeviceResult> {
   return createCloudDevicePairing({
     workspaceId: input.workspaceId,
     title: input.title,
+    targetRuntimeKind: input.targetRuntimeKind,
+    adapter: input.adapter,
+    mode: input.mode,
+    sessionId: input.sessionId,
+    capabilityDescriptor: input.capabilityDescriptor,
   })
 }
 
@@ -517,17 +540,21 @@ function makeDockerHandle(args: {
   docker: (a: string[]) => Promise<{ stdout: string; stderr: string }>
   sessionId: string
   containerId: string
-  deviceId: string
+  runtimeId: string
   runtimeServiceId: string
   pairingSessionId?: string
 }): SandboxHandle {
   const startedAt = new Date()
   return {
-    backend: "docker",
+    adapter: "docker",
+    mode: "resident",
     sandboxId: args.sessionId,
-    sandboxResourceId: args.containerId,
-    deviceId: args.deviceId,
-    runtimeServiceId: args.runtimeServiceId,
+    resourceId: args.containerId,
+    runtimeLink: {
+      mode: "resident",
+      runtimeId: args.runtimeId,
+      runtimeServiceId: args.runtimeServiceId,
+    },
     pairingSessionId: args.pairingSessionId,
     getHost(): string {
       throw new SandboxBackendError(
@@ -547,9 +574,9 @@ function makeDockerHandle(args: {
     },
     getInfo(): SandboxInfo {
       return {
-        backend: "docker",
+        adapter: "docker",
         sandboxId: args.sessionId,
-        deviceId: args.deviceId,
+        runtimeId: args.runtimeId,
         runtimeServiceId: args.runtimeServiceId,
         startedAt,
       }

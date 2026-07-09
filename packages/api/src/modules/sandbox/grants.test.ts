@@ -5,11 +5,11 @@ import type { Kysely } from "kysely"
 import { withTestDb } from "../../test/helpers/db.js"
 import { insertDeviceRuntime } from "../../test/helpers/runtime-fixtures.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
-import { resolveDeviceBuiltinIds, SandboxGrantsError } from "./grants.js"
+import { resolveRuntimeBuiltinIds, SandboxGrantsError } from "./grants.js"
 
 /**
  * grants.ts unit coverage that doesn't require a live device/API:
- *  - resolveDeviceBuiltinIds maps a device's filesystem+commandline exposures to
+ *  - resolveRuntimeBuiltinIds maps a device's filesystem+commandline exposures to
  *    their capability ids (and tolerates a fs-only device). Whether the
  *    commandline grant is built is decided by the resolved catalog
  *    (commandlineCapabilityId != null), exercised by test:integration.
@@ -99,12 +99,12 @@ async function seedDeviceWithBuiltins(
   return { deviceId: device.id as string, fs, cmd }
 }
 
-test("grants.ts: resolveDeviceBuiltinIds maps fs + commandline builtins", async () => {
+test("grants.ts: resolveRuntimeBuiltinIds maps fs + commandline builtins", async () => {
   await withTestDb(async (db) => {
     const { deviceId, fs, cmd } = await seedDeviceWithBuiltins(db, {
       commandline: true,
     })
-    const ids = await resolveDeviceBuiltinIds(deviceId, db)
+    const ids = await resolveRuntimeBuiltinIds(deviceId, db)
     assert.equal(ids.filesystemExposureId, fs.exposureId)
     assert.equal(ids.filesystemCapabilityId, fs.capabilityId)
     assert.equal(ids.commandlineExposureId, cmd!.exposureId)
@@ -112,19 +112,19 @@ test("grants.ts: resolveDeviceBuiltinIds maps fs + commandline builtins", async 
   })
 })
 
-test("grants.ts: resolveDeviceBuiltinIds tolerates a filesystem-only device", async () => {
+test("grants.ts: resolveRuntimeBuiltinIds tolerates a filesystem-only device", async () => {
   await withTestDb(async (db) => {
     const { deviceId, fs } = await seedDeviceWithBuiltins(db, {
       commandline: false,
     })
-    const ids = await resolveDeviceBuiltinIds(deviceId, db)
+    const ids = await resolveRuntimeBuiltinIds(deviceId, db)
     assert.equal(ids.filesystemCapabilityId, fs.capabilityId)
     assert.equal(ids.commandlineExposureId, null)
     assert.equal(ids.commandlineCapabilityId, null)
   })
 })
 
-test("grants.ts: resolveDeviceBuiltinIds throws when filesystem capability is absent", async () => {
+test("grants.ts: resolveRuntimeBuiltinIds throws when filesystem capability is absent", async () => {
   await withTestDb(async (db) => {
     // A device with no exposures at all.
     const user = await db
@@ -144,7 +144,7 @@ test("grants.ts: resolveDeviceBuiltinIds throws when filesystem capability is ab
       publicKeyFingerprint: `fp-${rid()}`,
     })
     await assert.rejects(
-      () => resolveDeviceBuiltinIds(device.id as string, db),
+      () => resolveRuntimeBuiltinIds(device.id as string, db),
       (err: unknown) => err instanceof SandboxGrantsError
     )
   })

@@ -93,8 +93,9 @@ compose_args_for_form() {
 # Run docker compose with all managed sandbox vars UNSET (so the restored .env
 # wins over any shell flag). Usage: _compose_clean <-f args...> -- <compose args...>
 _compose_clean() {
-  env -u SYNAPSE_SANDBOX_ENABLED -u SYNAPSE_SANDBOX_BACKEND -u SYNAPSE_SANDBOX_TUNNEL \
-      -u SYNAPSE_SANDBOX_SERVER_ORIGIN \
+  env -u SANDBOX_PROVIDER -u SANDBOX_MODE -u SANDBOX_TRANSPORT \
+      -u SANDBOX_SERVER_ORIGIN -u SANDBOX_DOCKER_IMAGE -u SANDBOX_DOCKER_NETWORK \
+      -u SANDBOX_DOCKER_STORAGE_VOLUME -u SANDBOX_DOCKER_STORAGE_VOLUME_MOUNT \
     docker compose "$@" >/dev/null 2>&1
 }
 

@@ -99,7 +99,7 @@ test("docker create(): builds a correct `docker run` argv + completes the staged
       onResourceCreated: async (id) => {
         staged.push(`resource:${id}`)
       },
-      onDeviceClaimed: async (id) => {
+      onRuntimeReady: async (id) => {
         staged.push(`device:${id}`)
       },
     })
@@ -140,8 +140,8 @@ test("docker create(): builds a correct `docker run` argv + completes the staged
     runArgs.some((a) => a === "SYNAPSE_TUNNEL_MODE=frp"),
     "explicit frp tunnel mode env (never falls back to noop inside the container)"
   )
-  assert.equal(handle.backend, "docker")
-  assert.equal(handle.sandboxResourceId, "container-abc123")
+  assert.equal(handle.adapter, "docker")
+  assert.equal(handle.resourceId, "container-abc123")
   assert.deepEqual(staged, ["resource:container-abc123", "device:dev-1"])
 })
 
@@ -223,10 +223,11 @@ test("createDockerReconnectBackend: connect + kill by container id (no provision
   // Note: NO image/network/volume/frp opts — just the spawn seam.
   const backend = createDockerReconnectBackend({ spawnImpl })
   const handle = await backend.connect({
-    backend: "docker",
+    adapter: "docker",
+    mode: "resident",
     sandboxId: "sess-reconnect",
-    sandboxResourceId: "container-reconnect",
-    deviceId: "dev-x",
+    resourceId: "container-reconnect",
+    runtimeId: "dev-x",
   })
   assert.equal(await handle.isRunning(), true)
   await handle.kill()
@@ -255,20 +256,22 @@ test("createDockerReconnectBackend: rejects a non-docker ref + a ref without con
   await assert.rejects(
     () =>
       backend.connect({
-        backend: "local",
+        adapter: "local",
+        mode: "resident",
         sandboxId: "s",
-        sandboxResourceId: "c",
-        deviceId: "d",
+        resourceId: "c",
+        runtimeId: "d",
       }),
     SandboxBackendError
   )
   await assert.rejects(
     () =>
       backend.connect({
-        backend: "docker",
+        adapter: "docker",
+        mode: "resident",
         sandboxId: "s",
-        sandboxResourceId: "",
-        deviceId: "d",
+        resourceId: "",
+        runtimeId: "d",
       }),
     /no container id/
   )
@@ -333,7 +336,7 @@ test("docker create(): a throwing onDeviceClaimed self-cleans the bootstrapped d
     () =>
       backend.create(
         baseSpec({
-          onDeviceClaimed: async () => {
+          onRuntimeReady: async () => {
             throw new Error("persist boom")
           },
         })
@@ -356,20 +359,22 @@ test("docker connect(): rejects non-docker ref + requires a container id", async
   await assert.rejects(
     () =>
       backend.connect({
-        backend: "local",
+        adapter: "local",
+        mode: "resident",
         sandboxId: "s",
-        sandboxResourceId: "",
-        deviceId: "d",
+        resourceId: "",
+        runtimeId: "d",
       }),
     SandboxBackendError
   )
   await assert.rejects(
     () =>
       backend.connect({
-        backend: "docker",
+        adapter: "docker",
+        mode: "resident",
         sandboxId: "s",
-        sandboxResourceId: "",
-        deviceId: "d",
+        resourceId: "",
+        runtimeId: "d",
       }),
     /no container id/
   )
@@ -382,13 +387,14 @@ test("docker connect: empty deviceId still kills the container (half-provisioned
     return { stdout: "" }
   })
   const backend = createDockerSandboxBackend({ ...baseOpts, spawnImpl })
-  // Crash between onResourceCreated and onDeviceClaimed: container id known,
+  // Crash between onResourceCreated and onRuntimeReady: container id known,
   // deviceId is "". teardown must still reap the container.
   const handle = await backend.connect({
-    backend: "docker",
+    adapter: "docker",
+    mode: "resident",
     sandboxId: "sess-half",
-    sandboxResourceId: "container-half",
-    deviceId: "",
+    resourceId: "container-half",
+    runtimeId: "",
   })
   await handle.kill()
   assert.ok(
@@ -406,13 +412,14 @@ test("docker handle: kill() stops + removes the container; isRunning inspects", 
   })
   const backend = createDockerSandboxBackend({ ...baseOpts, spawnImpl })
   const handle = await backend.connect({
-    backend: "docker",
+    adapter: "docker",
+    mode: "resident",
     sandboxId: "sess-9",
-    sandboxResourceId: "container-xyz",
-    deviceId: "dev-9",
+    resourceId: "container-xyz",
+    runtimeId: "dev-9",
     runtimeServiceId: "svc-9",
   })
-  assert.equal(handle.sandboxResourceId, "container-xyz")
+  assert.equal(handle.resourceId, "container-xyz")
   assert.equal(await handle.isRunning(), true)
   await handle.kill()
   assert.ok(
@@ -429,10 +436,11 @@ test("docker handle: setTimeout + getHost throw (no silent no-op / fake host)", 
   const { spawnImpl } = fakeDocker(() => ({ stdout: "" }))
   const backend = createDockerSandboxBackend({ ...baseOpts, spawnImpl })
   const handle = await backend.connect({
-    backend: "docker",
+    adapter: "docker",
+    mode: "resident",
     sandboxId: "s",
-    sandboxResourceId: "c",
-    deviceId: "d",
+    resourceId: "c",
+    runtimeId: "d",
   })
   await assert.rejects(() => handle.setTimeout(1000), SandboxBackendError)
   assert.throws(() => handle.getHost(8080), SandboxBackendError)

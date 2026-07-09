@@ -558,8 +558,11 @@ export async function loadDeviceExposureDeviceId(
 ): Promise<string | null> {
   const row = await db
     .selectFrom("runtimeExposures as exposure")
-    .innerJoin("devices as device", "device.id", "exposure.runtimeId")
-    .select(["device.id as deviceId"])
+    // Generalized to the runtimes supertype (P2): a device-less sandbox runtime's
+    // exposure resolves its runtime principal id. runtime.id === exposure.runtimeId
+    // (=== device.id for a real device), so byte-identical for devices.
+    .innerJoin("runtimes as runtime", "runtime.id", "exposure.runtimeId")
+    .select(["runtime.id as deviceId"])
     .where("exposure.id", "=", exposureId)
     .limit(1)
     .executeTakeFirst()
@@ -583,7 +586,10 @@ export async function loadDeviceCapabilityAccessRow(
         "exposure.id",
         "capability.exposureId"
       )
-      .innerJoin("devices as device", "device.id", "exposure.runtimeId")
+      // Generalized to the runtimes supertype (P2): existence-only join (no
+      // device columns selected), so a device-less sandbox runtime's capability
+      // access row resolves. Byte-identical for a real device.
+      .innerJoin("runtimes as runtime", "runtime.id", "exposure.runtimeId")
       .leftJoin(
         "accessSubjects as owner_subject",
         "owner_subject.id",

@@ -7,7 +7,9 @@
   "r6_sql_construction_outside_repo": [],
   "r7_dual_naming": [],
   "g1_client_facade_no_public_data_envelope": [],
-  "g2_api_sql_construction_boundary": [],
+  "g2_api_sql_construction_boundary": [
+    "packages/api/src/test/helpers/runtime-fixtures.ts"
+  ],
   "g3_raw_snake_result_alias": [],
   "r8_db_client_outside_repo": [],
   "r9_sql_construction_in_clean_service": [],
