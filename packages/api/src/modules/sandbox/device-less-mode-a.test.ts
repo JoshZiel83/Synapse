@@ -60,7 +60,7 @@ async function seedSandboxRuntime(
 ): Promise<SandboxRuntimeSeed> {
   const user = await db
     .insertInto("users")
-    .values({ email: uniq("u") + "@dlm", name: "u" })
+    .values({ email: `${uniq("u")}@dlm`, name: "u" })
     .returning("id")
     .executeTakeFirstOrThrow()
   const ws = await db
@@ -216,7 +216,7 @@ async function seedSandboxRuntime(
 test("G3: a device-less sandbox runtime authenticates device.hello (runtimes existence probe)", async () => {
   await withTestDb(async (db) => {
     const seed = await seedSandboxRuntime(db)
-    const nonce = "hello-challenge-" + uniq("n")
+    const nonce = `hello-challenge-${uniq("n")}`
     const signedChallenge = cryptoSign(
       null,
       Buffer.from(nonce, "utf8"),

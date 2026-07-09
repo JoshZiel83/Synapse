@@ -35,7 +35,7 @@ async function seedSession(
 ): Promise<{ workspaceId: string; sessionId: string }> {
   const user = await db
     .insertInto("users")
-    .values({ email: uniq("u") + "@bare", name: "u" })
+    .values({ email: `${uniq("u")}@bare`, name: "u" })
     .returning("id")
     .executeTakeFirstOrThrow()
   const ws = await db

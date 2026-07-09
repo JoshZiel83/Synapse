@@ -24,7 +24,7 @@ function uniq(p: string): string {
 async function seedWorkspace(db: Kysely<any>): Promise<string> {
   const user = await db
     .insertInto("users")
-    .values({ email: uniq("u") + "@cf", name: "u" })
+    .values({ email: `${uniq("u")}@cf`, name: "u" })
     .returning("id")
     .executeTakeFirstOrThrow()
   const ws = await db

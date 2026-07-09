@@ -152,12 +152,9 @@ export function buildLocalBareDescriptor(overrides?: {
   isolation?: SandboxCapabilityDescriptor["isolation"]
   search?: boolean
 }): SandboxCapabilityDescriptor {
+  const probedIsolation = bwrapAvailable() ? "bwrap" : null
   const isolation =
-    overrides?.isolation !== undefined
-      ? overrides.isolation
-      : bwrapAvailable()
-        ? "bwrap"
-        : null
+    overrides?.isolation !== undefined ? overrides.isolation : probedIsolation
   const search =
     overrides?.search !== undefined
       ? overrides.search
@@ -467,10 +464,11 @@ export function makeDockerBareAdapter(
         typeof process.getuid === "function" ? process.getuid() : undefined
       if (apiUid !== undefined && (runOpts.runAsUid ?? 0) !== apiUid) {
         throw new SandboxBackendError(
-          `docker:bare uid-parity violation: runAsUid=${runOpts.runAsUid ?? 0} != API uid ${apiUid}` +
-            (apiUid === 0
+          `docker:bare uid-parity violation: runAsUid=${runOpts.runAsUid ?? 0} != API uid ${apiUid}${
+            apiUid === 0
               ? " (API runs as root → the container also runs as root; run the API unprivileged for real isolation)"
-              : "")
+              : ""
+          }`
         )
       }
       // Mount ONLY the mount-point dirs that EXIST on the host (never the session
