@@ -919,6 +919,13 @@ export interface BeginOperationInput {
   principalSubjectId: string
   initiatedByWorkspaceMemberId: string | null
   initiatedBySessionId: string | null
+  /**
+   * Attempt transport (§4.3). Defaults to 'mcp_http' so every existing caller
+   * (which omits it) writes a byte-identical attempt row. The Mode-B bare
+   * data-plane dispatch passes 'data_plane' (in-process / docker-exec — no
+   * dialable endpoint, so tunnel_internal_url is NULL).
+   */
+  transport?: "mcp_http" | "control_plane_task" | "data_plane"
 }
 
 export interface BeginOperationResult {
@@ -1008,7 +1015,7 @@ export async function beginDeviceOperationOn(
       id: attemptId,
       operationId: operationId,
       attemptSeq: 1n,
-      transport: "mcp_http",
+      transport: input.transport ?? "mcp_http",
       runtimeServiceId: input.runtimeServiceId,
       tunnelInternalUrl: input.tunnelInternalUrl,
       mcpRequestId: attemptId,
@@ -1161,6 +1168,13 @@ export interface PersistCatalogSyncInput {
   deviceId: string
   serviceId: string
   exposures: DeviceCatalogExposure[]
+  /**
+   * TEST SEAM only (mirrors mintLocalSandboxRuntimeTx.executor). When present,
+   * the sync runs inside the supplied handle instead of opening a fresh global
+   * `db.transaction()`, so a pin can drive the REAL persistCatalogSync against
+   * an ephemeral withTestDb transaction. Production omits it → unchanged.
+   */
+  executor?: KyselyDb
 }
 
 export interface AssignedToolIds {
@@ -1192,14 +1206,25 @@ export interface PersistCatalogSyncResult {
 export async function persistCatalogSync(
   input: PersistCatalogSyncInput
 ): Promise<PersistCatalogSyncResult> {
-  return db.transaction().execute(async (trx) => {
-    const device = await trx
-      .selectFrom("devices")
+  const run = async (
+    trx: DatabaseTransaction
+  ): Promise<PersistCatalogSyncResult> => {
+    // Generalized to the runtimes supertype (P4a / PREREQ-CAT): existence +
+    // workspace attribution are rooted on `runtimes` (the sole soft-delete
+    // root), NOT `devices` — a device-less kind='sandbox' runtime (bare or
+    // resident) has NO `devices` row, so the old `selectFrom("devices")`
+    // read made the api-authored catalog persist impossible for it. Byte-
+    // identical for a real device: its `runtimes` row carries the same
+    // workspace_id, and `workspace_id` for exposures/capabilities is
+    // denormalized from the authenticated runtime, never client catalog data.
+    const runtime = await trx
+      .selectFrom("runtimes")
       .select(["id", "workspaceId"])
       .where("id", "=", input.deviceId)
+      .where("deletedAt", "is", null)
       .executeTakeFirst()
-    if (!device) {
-      throw new Error(`persistCatalogSync: device ${input.deviceId} not found`)
+    if (!runtime) {
+      throw new Error(`persistCatalogSync: runtime ${input.deviceId} not found`)
     }
 
     let newRevisionCount = 0
@@ -1211,13 +1236,13 @@ export async function persistCatalogSync(
     for (const exposure of input.exposures) {
       const exposureId = await upsertExposure(trx, {
         runtimeId: input.deviceId,
-        workspaceId: device.workspaceId as string,
+        workspaceId: runtime.workspaceId as string,
         serviceId: input.serviceId,
         exposure,
       })
       seenExposureIds.add(exposureId)
       await ensureCapability(trx, {
-        workspaceId: device.workspaceId as string,
+        workspaceId: runtime.workspaceId as string,
         exposureId,
       })
       const { revisionId, isNew } = await ensureCatalogRevision(trx, {
@@ -1294,7 +1319,14 @@ export async function persistCatalogSync(
       removedToolCount,
       assignedIds,
     }
-  })
+  }
+  // Injected executor (test seam) runs the body directly — the whole test is
+  // already one rolled-back transaction; the deferred CTI-consistency triggers
+  // validate at the outer boundary. Production omits it → fresh atomic tx.
+  if (input.executor) {
+    return run(input.executor as unknown as DatabaseTransaction)
+  }
+  return db.transaction().execute(run)
 }
 
 async function upsertExposure(
@@ -1358,12 +1390,31 @@ async function ensureCapability(
   trx: DatabaseTransaction,
   args: { workspaceId: string; exposureId: string }
 ): Promise<void> {
+  // Owner attribution generalized to the runtimes supertype (P4a / PREREQ-CAT).
+  // Root on `runtimes` (always present) and LEFT JOIN `devices` — a bare/
+  // device-less sandbox runtime has no `devices` row, so its owner is NULL
+  // (owner-less, createdByPlatform). Byte-identical for a real device: the
+  // LEFT JOIN is a superset of the old INNER JOIN (devices.id === runtimes.id),
+  // and owner is surfaced ONLY for kind='device'.
   const capabilityOwner = await trx
     .selectFrom("runtimeExposures as exposure")
-    .innerJoin("devices as device", "device.id", "exposure.runtimeId")
-    .select(["device.ownerWorkspaceMemberId", "exposure.displayName"])
+    .innerJoin("runtimes as runtime", "runtime.id", "exposure.runtimeId")
+    .leftJoin("devices as device", "device.id", "runtime.id")
+    .select([
+      "device.ownerWorkspaceMemberId",
+      "exposure.displayName",
+      "runtime.kind as runtimeKind",
+    ])
     .where("exposure.id", "=", args.exposureId)
     .executeTakeFirst()
+  // owner only for kind='device' (bare capability is owner-less). The LEFT
+  // JOIN already yields NULL for a non-device runtime; the explicit gate makes
+  // the §4.3 owner-less-bare contract legible and defends against any future
+  // devices-row leakage.
+  const ownerWorkspaceMemberId =
+    (capabilityOwner?.runtimeKind as string | null) === "device"
+      ? ((capabilityOwner?.ownerWorkspaceMemberId as string | null) ?? null)
+      : null
   const existing = await trx
     .selectFrom("runtimeCapabilities")
     .select(["id"])
@@ -1374,8 +1425,7 @@ async function ensureCapability(
       id: existing.id as string,
       displayName:
         (capabilityOwner?.displayName as string | null) || "Device capability",
-      ownerWorkspaceMemberId:
-        (capabilityOwner?.ownerWorkspaceMemberId as string | null) ?? null,
+      ownerWorkspaceMemberId,
     })
     return
   }
@@ -1387,9 +1437,9 @@ async function ensureCapability(
     displayName:
       (capabilityOwner?.displayName as string | null) || "Device capability",
     // owner = the backing device's owner member subject (or NULL when the
-    // device has no owner); creator = platform (catalog-sync, no human). §B/§4.1
-    ownerWorkspaceMemberId:
-      (capabilityOwner?.ownerWorkspaceMemberId as string | null) ?? null,
+    // device has no owner, or the runtime is a device-less sandbox); creator =
+    // platform (catalog-sync, no human). §B/§4.1/§4.3
+    ownerWorkspaceMemberId,
     createdByPlatform: true,
     status: "active",
   })

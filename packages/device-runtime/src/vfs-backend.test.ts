@@ -21,6 +21,7 @@ import {
   InternalTokenError,
   CanonicalPathError,
   assertHelperWorkDirOutsideRoot,
+  WHOLE_SCOPE,
 } from "./vfs.js"
 
 function freshRoot(prefix = "synapse-vfs-be-"): string {
@@ -332,6 +333,199 @@ test("withGrantPrefixes isolates concurrent tool calls (no cross-talk)", async (
       "narrow grant scope must never see the symlink target despite concurrent wide-scope calls"
     )
     assert.equal(narrowDenied, iterations)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// ─────────────────────────── S3B / F-C: WHOLE_SCOPE ──────────────────────────
+
+test("S3B: withGrantPrefixes([]) is a structural deny-all (NOT allow-all)", async () => {
+  const root = freshRoot()
+  try {
+    mkdirSync(join(root, "pub"))
+    writeFileSync(join(root, "pub", "f"), "x")
+    const be = createLocalFsBackend({ rootPath: root })
+    await be.start()
+    // Pre-S3B this DISABLED the recheck (allow-all). Now every resolve denies.
+    await be.withGrantPrefixes([], async () => {
+      await assert.rejects(
+        () => be.safeResolve("/pub/f"),
+        GrantPrefixDeniedError,
+        "an explicit empty prefix set must deny every resolve, never allow-all"
+      )
+      await assert.rejects(() => be.safeResolve("/"), GrantPrefixDeniedError)
+    })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("S3B: withGrantPrefixes(WHOLE_SCOPE) root-jails within-root only", async () => {
+  const root = freshRoot()
+  const outside = freshRoot("synapse-vfs-out-")
+  try {
+    mkdirSync(join(root, "pub"))
+    writeFileSync(join(root, "pub", "f"), "x")
+    writeFileSync(join(outside, "secret"), "s")
+    // A symlink escaping the root must still be rejected under WHOLE_SCOPE
+    // (the root boundary escape check is independent of the prefix recheck).
+    symlinkSync(outside, join(root, "escape"))
+    const be = createLocalFsBackend({ rootPath: root })
+    await be.start()
+    await be.withGrantPrefixes(WHOLE_SCOPE, async () => {
+      // within-root resolves succeed (no prefix constraint)
+      await be.safeResolve("/pub/f")
+      await be.safeResolve("/")
+      // escaping the root via symlink is still denied (root-jail)
+      await assert.rejects(
+        () => be.safeResolve("/escape/secret"),
+        (e: unknown) =>
+          e instanceof CanonicalPathError ||
+          e instanceof GrantPrefixDeniedError,
+        "WHOLE_SCOPE must NOT allow escaping the sandbox root"
+      )
+    })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+    rmSync(outside, { recursive: true, force: true })
+  }
+})
+
+test("S3B / A9: legit non-empty and ['/'] whole-scope grants behave byte-identically (resident hardening parity)", async () => {
+  const root = freshRoot()
+  try {
+    mkdirSync(join(root, "conversation"))
+    writeFileSync(join(root, "conversation", "note.txt"), "hello")
+    const be = createLocalFsBackend({ rootPath: root })
+    await be.start()
+    // scoped grant (non-empty prefixes) → unchanged
+    await be.withGrantPrefixes(["/conversation"], async () => {
+      await be.safeResolve("/conversation/note.txt")
+    })
+    // legit whole-scope via ['/'] array path (pre-S3B representation) → unchanged
+    await be.withGrantPrefixes(["/"], async () => {
+      await be.safeResolve("/conversation/note.txt")
+    })
+    // WHOLE_SCOPE sentinel resolves the same within-root path identically
+    await be.withGrantPrefixes(WHOLE_SCOPE, async () => {
+      await be.safeResolve("/conversation/note.txt")
+    })
+    // store-unset (no grant frame) internal op path unchanged: recheck skipped
+    await be.safeResolve("/conversation/note.txt")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// ─────────────────────────── S3: mkdir / move / remove ───────────────────────
+
+test("S3: mkdir creates a directory (recursive creates parents) within the grant", async () => {
+  const root = freshRoot()
+  try {
+    const be = createLocalFsBackend({ rootPath: root })
+    await be.start()
+    await be.withGrantPrefixes(["/work"], async () => {
+      // parent /work does not exist yet → non-recursive fails
+      await assert.rejects(() => be.mkdir("/work/a", { recursive: false }))
+      const r = await be.mkdir("/work/a/b", { recursive: true })
+      assert.equal(r.created, true)
+      const st = await be.safeStat("/work/a/b")
+      assert.equal(st?.kind, "directory")
+    })
+    // mkdir outside the grant prefix is denied
+    await be.withGrantPrefixes(["/work"], async () => {
+      await assert.rejects(
+        () => be.mkdir("/other", { recursive: true }),
+        GrantPrefixDeniedError
+      )
+    })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("S3 / F-C: move resolves BOTH endpoints in the same grant frame (dest outside prefix denied)", async () => {
+  const root = freshRoot()
+  try {
+    mkdirSync(join(root, "allowed"))
+    mkdirSync(join(root, "secret"))
+    writeFileSync(join(root, "allowed", "src.txt"), "payload")
+    const be = createLocalFsBackend({ rootPath: root })
+    await be.start()
+    // happy path: src + dest both under the grant
+    await be.withGrantPrefixes(["/allowed"], async () => {
+      await be.move("/allowed/src.txt", "/allowed/dst.txt", {})
+      assert.equal((await be.safeStat("/allowed/dst.txt"))?.kind, "file")
+      assert.equal(await be.safeStat("/allowed/src.txt"), null)
+    })
+    // F-C: dest outside the granted prefix must be DENIED even though src is in.
+    writeFileSync(join(root, "allowed", "src2.txt"), "p2")
+    await be.withGrantPrefixes(["/allowed"], async () => {
+      await assert.rejects(
+        () => be.move("/allowed/src2.txt", "/secret/exfil.txt", {}),
+        GrantPrefixDeniedError,
+        "dest outside the grant frame cannot be authorized by a src-in-grant move"
+      )
+    })
+    // src still present (move aborted before rename)
+    assert.equal((await be.safeStat("/allowed/src2.txt"))?.kind, "file")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("S3: move honors expected_source_sha + overwrite guard", async () => {
+  const root = freshRoot()
+  try {
+    mkdirSync(join(root, "w"))
+    writeFileSync(join(root, "w", "a"), "content-a")
+    writeFileSync(join(root, "w", "b"), "content-b")
+    const be = createLocalFsBackend({ rootPath: root })
+    await be.start()
+    await be.withGrantPrefixes(["/w"], async () => {
+      // wrong source sha → StaleWriteError (nothing moved)
+      await assert.rejects(
+        () => be.move("/w/a", "/w/c", { expectedSourceSha: "deadbeef" }),
+        StaleWriteError
+      )
+      assert.equal((await be.safeStat("/w/a"))?.kind, "file")
+      // overwrite:false onto an existing dest → deny
+      await assert.rejects(
+        () => be.move("/w/a", "/w/b", { overwrite: false }),
+        StaleWriteError
+      )
+      // overwrite:true succeeds
+      await be.move("/w/a", "/w/b", { overwrite: true })
+      assert.equal(await be.safeStat("/w/a"), null)
+    })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("S3: remove deletes a file/subtree within the grant, denies outside", async () => {
+  const root = freshRoot()
+  try {
+    mkdirSync(join(root, "w"))
+    mkdirSync(join(root, "w", "sub"))
+    writeFileSync(join(root, "w", "sub", "x"), "x")
+    mkdirSync(join(root, "keep"))
+    writeFileSync(join(root, "keep", "y"), "y")
+    const be = createLocalFsBackend({ rootPath: root })
+    await be.start()
+    await be.withGrantPrefixes(["/w"], async () => {
+      // non-recursive remove of a non-empty dir fails
+      await assert.rejects(() => be.remove("/w/sub", { recursive: false }))
+      await be.remove("/w/sub", { recursive: true })
+      assert.equal(await be.safeStat("/w/sub"), null)
+      // removing outside the grant prefix is denied
+      await assert.rejects(
+        () => be.remove("/keep/y", { recursive: false }),
+        GrantPrefixDeniedError
+      )
+    })
+    assert.equal((await be.safeStat("/keep/y"))?.kind, "file")
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

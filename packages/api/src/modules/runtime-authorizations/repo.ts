@@ -45,6 +45,13 @@ import type { ZodIssue } from "zod"
 export interface AutoRetryTarget {
   runtimeId: string
   runtimeServiceId: string
+  /**
+   * Owning service kind (P4a / PREREQ-DISC). The auto-retry dispatch fork keys
+   * on 'bare_dataplane'; a device/resident target always resolves
+   * 'device_runtime' (F-B), so auto-retry reaches dispatchSyncTool byte-
+   * identically (A3).
+   */
+  serviceKind: "device_runtime" | "remote_agent_daemon" | "bare_dataplane"
   runtimeExposureId: string
   runtimeToolId: string
   runtimeToolRevisionId: string
@@ -58,6 +65,10 @@ export async function findAutoRetryTarget(args: {
     .selectFrom("runtimeCapabilities as dc")
     .innerJoin("workspaceResources as resource", "resource.id", "dc.id")
     .innerJoin("runtimeExposures as dx", "dx.id", "dc.exposureId")
+    // PREREQ-DISC (P4a): to-one join surfacing the owning service's kind so the
+    // auto-retry fork can key on 'bare_dataplane'. Byte-neutral for devices/
+    // resident (resolves 'device_runtime').
+    .innerJoin("runtimeServices as rs", "rs.id", "dx.serviceId")
     // Generalized to the runtimes supertype (P2): existence-only join, so a
     // device-less sandbox runtime is an auto-retry target too. r.id === dx.runtimeId
     // (=== d.id for a real device), so byte-identical for devices.
@@ -67,6 +78,7 @@ export async function findAutoRetryTarget(args: {
     .select([
       "r.id as runtimeId",
       "dx.serviceId as runtimeServiceId",
+      "rs.serviceKind as serviceKind",
       "dx.id as runtimeExposureId",
       "dt.id as runtimeToolId",
       "dtr.id as runtimeToolRevisionId",
@@ -85,6 +97,7 @@ export async function findAutoRetryTarget(args: {
   return {
     runtimeId: row.runtimeId as string,
     runtimeServiceId: row.runtimeServiceId as string,
+    serviceKind: row.serviceKind as AutoRetryTarget["serviceKind"],
     runtimeExposureId: row.runtimeExposureId as string,
     runtimeToolId: row.runtimeToolId as string,
     runtimeToolRevisionId: row.runtimeToolRevisionId as string,

@@ -190,6 +190,45 @@ export function collapsePrefixes(prefixes: readonly string[]): string[] {
   return out
 }
 
+// ─────────────────────────── grant-scope sentinels (S3B / F-C) ───────────────
+
+/**
+ * Grant-scope sentinel: request a whole-sandbox-ROOT grant. Passed to
+ * withGrantPrefixes in place of a prefix array. Under it the realpath *prefix*
+ * recheck is skipped, but the root-boundary escape check in safeResolve is
+ * STILL enforced (root-jail). This is the ONLY legitimate way to opt into
+ * whole-scope — an EMPTY prefix array is a structural deny-all, never
+ * allow-all. Used by the degraded-descriptor branch (confinedFs:'unsupported')
+ * and any caller holding a genuine whole-sandbox grant.
+ */
+export const WHOLE_SCOPE: unique symbol = Symbol("vfs.WHOLE_SCOPE")
+export type WholeScope = typeof WHOLE_SCOPE
+
+/**
+ * Internal grant-store marker for an EXPLICIT empty prefix set. Every
+ * safeResolve executed under it throws GrantPrefixDeniedError (structural
+ * deny-all). This closes the pre-S3B fail-open: `withGrantPrefixes([])` used
+ * to store `null`, which DISABLED the realpath recheck entirely (allow-all
+ * anywhere under the sandbox root). Not exported — callers express intent with
+ * a non-empty array (scoped), WHOLE_SCOPE (root-jail), or an empty array (deny).
+ */
+const GRANT_DENY_ALL: unique symbol = Symbol("vfs.GRANT_DENY_ALL")
+
+/**
+ * The four distinct grant states carried by the per-call AsyncLocalStorage:
+ *   - non-empty readonly array → realpath prefix recheck against these prefixes
+ *   - WHOLE_SCOPE              → recheck skipped, root boundary still enforced
+ *   - GRANT_DENY_ALL          → every resolve denied (explicit empty set)
+ *   - null                    → no grant frame established (store-unset /
+ *                               construction fallback absent) — internal /
+ *                               one-shot ops, recheck skipped (unchanged)
+ */
+type GrantScopeState =
+  | readonly string[]
+  | typeof WHOLE_SCOPE
+  | typeof GRANT_DENY_ALL
+  | null
+
 // ─────────────────────────── VfsService ──────────────────────────────────────
 
 export class VfsService {
@@ -336,6 +375,35 @@ export interface ExtendedLocalBackend extends VfsBackend {
     canonical: string,
     opts: { expectedShaForCAS?: string }
   ): Promise<void>
+  /**
+   * Create a directory (S3). safeResolve confines the target to the active
+   * grant scope + root boundary before creating. `recursive` creates missing
+   * ancestors — every ancestor of a within-grant path is itself within the
+   * grant subtree/root, so recursion cannot escape.
+   */
+  mkdir(
+    canonical: string,
+    opts: { recursive?: boolean }
+  ): Promise<{ created: boolean }>
+  /**
+   * Rename/move (S3). safeResolve is run on BOTH endpoints so a single grant
+   * frame (F-C) authorizes src AND dest — never a split frame that could
+   * authorize dest under a src-only prefix. Cross-mount rename → CrossMountError.
+   */
+  move(
+    src: string,
+    dest: string,
+    opts: { expectedSourceSha?: string | null; overwrite?: boolean }
+  ): Promise<{ mtimeMs: number }>
+  /**
+   * Remove a file or directory (S3). safeResolve confines the target; `recursive`
+   * removes a subtree but stays inside the grant subtree because safeResolve
+   * already denied any path outside it. `force:false` so a missing target errors.
+   */
+  remove(
+    canonical: string,
+    opts: { recursive?: boolean }
+  ): Promise<{ removed: boolean }>
   renameInternalTmpInto(opts: {
     kind: "tmp" | "restore"
     token: string
@@ -345,7 +413,17 @@ export interface ExtendedLocalBackend extends VfsBackend {
   }): Promise<{ sha256: string; mtimeMs: number; bytesWritten: number }>
   resolveInternalPath(kind: "tmp" | "restore", token: string): string
   withPathLock<T>(canonical: string, fn: () => Promise<T>): Promise<T>
-  withGrantPrefixes<T>(prefixes: string[], fn: () => Promise<T>): Promise<T>
+  /**
+   * Establish a grant frame for the duration of `fn` (S3B / F-C):
+   *   - non-empty array → realpath recheck confines resolves to these prefixes
+   *   - WHOLE_SCOPE     → root-jail (recheck skipped; root boundary enforced)
+   *   - EMPTY array     → structural deny-all (every resolve throws)
+   * There is no allow-all: an empty set can NEVER widen access.
+   */
+  withGrantPrefixes<T>(
+    prefixes: readonly string[] | WholeScope,
+    fn: () => Promise<T>
+  ): Promise<T>
   realpathToCanonical(hostPath: string): string | null
   readonly hostRootPath: string
   readonly hostRootWithSep: string
@@ -367,7 +445,7 @@ interface InternalState {
   // Concurrent tool calls must NOT share grant prefixes — AsyncLocalStorage
   // gives each invocation its own context, preventing a wide-grant call
   // from leaking permissions into a concurrent narrow-grant call.
-  grantPrefixStore: AsyncLocalStorage<readonly string[] | null>
+  grantPrefixStore: AsyncLocalStorage<GrantScopeState>
   // Fallback for direct backend consumers that set prefixes at construction
   // time (no per-call wrapping). Tests use this.
   fallbackGrantPrefixes: readonly string[] | null
@@ -386,14 +464,14 @@ export function createLocalFsBackend(
 
   const state: InternalState = {
     pathLocks: new Map(),
-    grantPrefixStore: new AsyncLocalStorage<readonly string[] | null>(),
+    grantPrefixStore: new AsyncLocalStorage<GrantScopeState>(),
     fallbackGrantPrefixes:
       opts.initialGrantPrefixes && opts.initialGrantPrefixes.length > 0
         ? [...opts.initialGrantPrefixes]
         : null,
   }
 
-  function currentGrantPrefixes(): readonly string[] | null {
+  function currentGrantPrefixes(): GrantScopeState {
     // AsyncLocalStorage carries the per-call value; fall back to the
     // construction-time prefixes (tests) when no call frame is active.
     const fromStore = state.grantPrefixStore.getStore()
@@ -410,7 +488,15 @@ export function createLocalFsBackend(
   }
 
   // Walk back ancestors of a non-existent target until we find one that exists,
-  // realpath that, then re-append the trailing segments.
+  // realpath that existing ancestor, then re-append EVERY missing segment down
+  // to the target — including `cursor`'s own segment at the boundary. (Fix:
+  // the pre-S3 version dropped the boundary segment, so it returned the nearest
+  // existing ancestor instead of the full target realpath. That was harmless
+  // for a 1-deep-missing write — the parent is still under the grant — but a
+  // ≥2-deep-missing target, e.g. a recursive mkdir /work/a/b under a `/work`
+  // grant, reconstructed to `/a/b` and was falsely denied. The missing tail
+  // cannot introduce a symlink because it does not exist yet, so appending it
+  // is a precise, not-widening approximation for the realpath grant recheck.)
   async function realpathOfPossiblyMissing(candidate: string): Promise<string> {
     try {
       return await fsp.realpath(candidate)
@@ -429,8 +515,11 @@ export function createLocalFsBackend(
       }
       try {
         const realParent = await fsp.realpath(parent)
+        // `cursor` is the (missing) child of the found existing `parent`; its
+        // own segment must be included alongside the deeper climbed segments.
+        tail.push(cursor.slice(parent.length + 1))
         tail.reverse()
-        return tail.length === 0 ? realParent : resolve(realParent, ...tail)
+        return resolve(realParent, ...tail)
       } catch (err) {
         const code = (err as NodeJS.ErrnoException).code
         if (code !== "ENOENT") throw err
@@ -468,10 +557,22 @@ export function createLocalFsBackend(
       )
     }
     // Realpath grant recheck (closes /allowed/link -> /secret bypass).
-    // The active prefixes come from AsyncLocalStorage so concurrent tool
-    // calls each see their own set, not a shared mutable field.
+    // The active grant state comes from AsyncLocalStorage so concurrent tool
+    // calls each see their own scope, not a shared mutable field.
+    //
+    // S3B / F-C — four distinct states, checked in order so an empty set can
+    // NEVER widen access:
+    //   GRANT_DENY_ALL → explicit empty prefix set ⇒ deny every resolve.
+    //   WHOLE_SCOPE    → root-jail: prefix recheck skipped, but the root
+    //                    boundary escape check above already ran.
+    //   array          → confine realpath to one of these prefixes.
+    //   null           → no grant frame (internal / one-shot) ⇒ recheck skipped
+    //                    (unchanged pre-S3B behavior for legitimate internal ops).
     const grants = currentGrantPrefixes()
-    if (grants) {
+    if (grants === GRANT_DENY_ALL) {
+      throw new GrantPrefixDeniedError(canonical)
+    }
+    if (grants !== WHOLE_SCOPE && grants) {
       const realCanonical = realpathToCanonical(real)
       if (realCanonical === null) {
         throw new GrantPrefixDeniedError(canonical)
@@ -656,11 +757,21 @@ export function createLocalFsBackend(
   }
 
   async function withGrantPrefixes<T>(
-    prefixes: string[],
+    prefixes: readonly string[] | WholeScope,
     fn: () => Promise<T>
   ): Promise<T> {
-    const scoped: readonly string[] | null =
-      prefixes.length > 0 ? Object.freeze([...prefixes]) : null
+    // S3B / F-C: the empty array no longer collapses to null (allow-all).
+    //   WHOLE_SCOPE → root-jail sentinel
+    //   non-empty   → frozen prefix array (realpath recheck)
+    //   empty       → GRANT_DENY_ALL (structural deny — every resolve throws)
+    let scoped: GrantScopeState
+    if (prefixes === WHOLE_SCOPE) {
+      scoped = WHOLE_SCOPE
+    } else if (prefixes.length === 0) {
+      scoped = GRANT_DENY_ALL
+    } else {
+      scoped = Object.freeze([...prefixes])
+    }
     return await state.grantPrefixStore.run(scoped, fn)
   }
 
@@ -794,6 +905,85 @@ export function createLocalFsBackend(
       }
     }
     await fsp.unlink(destHost)
+  }
+
+  async function mkdir(
+    canonical: string,
+    mopts: { recursive?: boolean }
+  ): Promise<{ created: boolean }> {
+    // safeResolve enforces the active grant scope + root boundary. The reserved
+    // internal namespace is already denied by the canonical gate / safeResolve.
+    const destHost = await safeResolve(canonical)
+    try {
+      const made = await fsp.mkdir(destHost, {
+        recursive: mopts.recursive ?? false,
+      })
+      // fsp.mkdir returns the first-created path (recursive) or undefined.
+      return { created: made !== undefined }
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code === "EEXIST") return { created: false }
+      throw err
+    }
+  }
+
+  async function move(
+    src: string,
+    dest: string,
+    mopts: { expectedSourceSha?: string | null; overwrite?: boolean }
+  ): Promise<{ mtimeMs: number }> {
+    // Resolve BOTH endpoints under the SAME (caller-established) grant frame —
+    // F-C: dest can never be authorized under a src-only prefix, because a
+    // split grant frame is impossible here. safeResolve rejects .synapse-internal
+    // (canonical gate) and any path escaping root / the active prefixes.
+    const srcHost = await safeResolve(src)
+    return await withPathLock(dest, async () => {
+      const destHost = await safeResolve(dest)
+      // Verify the source content if a CAS expectation was supplied.
+      if (mopts.expectedSourceSha != null) {
+        const srcSt = await fsp.lstat(srcHost)
+        if (!srcSt.isFile()) {
+          throw new Error(`move: expected_source_sha requires a regular file`)
+        }
+        const actual = await streamSha256Host(srcHost)
+        if (actual !== mopts.expectedSourceSha) {
+          throw new StaleWriteError("pre_rename", src)
+        }
+      }
+      if (!mopts.overwrite) {
+        try {
+          await fsp.lstat(destHost)
+          throw new StaleWriteError("pre_create", dest)
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException).code
+          if (code !== "ENOENT") throw err
+        }
+      }
+      try {
+        await fsp.rename(srcHost, destHost)
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code
+        if (code === "EXDEV") throw new CrossMountError(dest)
+        throw err
+      }
+      const st = await fsp.lstat(destHost)
+      return { mtimeMs: st.mtimeMs }
+    })
+  }
+
+  async function remove(
+    canonical: string,
+    ropts: { recursive?: boolean }
+  ): Promise<{ removed: boolean }> {
+    // safeResolve confines the target; recursion stays within the grant subtree
+    // because safeResolve already denied any out-of-scope path. force:false so a
+    // missing target surfaces ENOENT (callers decide idempotency).
+    const destHost = await safeResolve(canonical)
+    await fsp.rm(destHost, {
+      recursive: ropts.recursive ?? false,
+      force: false,
+    })
+    return { removed: true }
   }
 
   async function renameInternalTmpInto(ropts: {
@@ -1024,6 +1214,9 @@ export function createLocalFsBackend(
     readBytes,
     atomicWrite,
     deleteFile,
+    mkdir,
+    move,
+    remove,
     renameInternalTmpInto,
     resolveInternalPath,
     withPathLock,

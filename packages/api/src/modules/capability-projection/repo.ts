@@ -22,6 +22,16 @@ export interface DeviceCapabilityToolRow {
   runtimeId: string
   deviceName: string
   runtimeServiceId: string
+  /**
+   * The owning runtime_service's kind (P4a / PREREQ-DISC). The Mode-B dispatch
+   * fork keys STRICTLY on `service_kind='bare_dataplane'`. Because every
+   * device/resident builtin exposure is linked by mint code to that runtime's
+   * `device_runtime` service, this per-exposure projection ALWAYS yields
+   * 'device_runtime' for them — the enforcement substrate for closed-over-
+   * absence (F-B). A 'bare_dataplane' value is minted ONLY by a bare adapter's
+   * create().
+   */
+  serviceKind: "device_runtime" | "remote_agent_daemon" | "bare_dataplane"
   runtimeExposureId: string
   runtimeCapabilityId: string
   runtimeToolId: string
@@ -103,6 +113,14 @@ export async function selectDeviceCapabilityToolsForSubjects(
         .on("resource_grant.status", "=", "active")
     )
     .innerJoin("runtimeExposures as dx", "dx.id", "dc.exposureId")
+    // PREREQ-DISC (P4a): surface the owning service's kind per-exposure. This
+    // to-one join (dx.serviceId is a NOT NULL FK to runtime_services) is
+    // byte-neutral for existing rows — a device/resident exposure always
+    // resolves 'device_runtime'. It is ALSO the enforcement substrate for the
+    // closed-over-absence fork (F-B): a device/resident exposure can never
+    // project 'bare_dataplane' because mint code links it to a device_runtime
+    // service.
+    .innerJoin("runtimeServices as rs", "rs.id", "dx.serviceId")
     // Generalized to the runtimes supertype (P2): existence/liveness are rooted on
     // runtimes so a device-less kind='sandbox' runtime's tools project; the device
     // detail is LEFT-joined and its columns COALESCE'd (byte-identical for a real
@@ -121,6 +139,7 @@ export async function selectDeviceCapabilityToolsForSubjects(
       "r.id as runtimeId",
       sql<string>`COALESCE(d.title, 'Sandbox')`.as("deviceName"),
       "dx.serviceId as runtimeServiceId",
+      "rs.serviceKind as serviceKind",
       "dx.id as runtimeExposureId",
       "dc.id as runtimeCapabilityId",
       "dt.id as runtimeToolId",
@@ -193,6 +212,7 @@ export async function selectDeviceCapabilityToolsForSubjects(
       runtimeId: row.runtimeId,
       deviceName: row.deviceName,
       runtimeServiceId: row.runtimeServiceId,
+      serviceKind: row.serviceKind,
       runtimeExposureId: row.runtimeExposureId,
       runtimeCapabilityId: row.runtimeCapabilityId,
       runtimeToolId: row.runtimeToolId,

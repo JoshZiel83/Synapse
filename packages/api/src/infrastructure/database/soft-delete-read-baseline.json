@@ -17,7 +17,8 @@
     "users": 4
   },
   "modules/devices/repo.ts": {
-    "conversations": 1
+    "conversations": 1,
+    "runtimes": 1
   },
   "modules/files/repo.ts": {
     "workspaces": 1

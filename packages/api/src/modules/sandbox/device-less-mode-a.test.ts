@@ -260,6 +260,18 @@ test("G3: selectDeviceCapabilityToolsForSubjects surfaces the sandbox's fs + com
     const byBuiltin = new Map(rows.map((r) => [r.builtinKind, r]))
     assert.ok(byBuiltin.has("filesystem"), "fs tool surfaced")
     assert.ok(byBuiltin.has("commandline"), "commandline tool surfaced")
+    // F-B (closed-over-absence): every exposure of a runtime minted with a
+    // device_runtime service projects serviceKind='device_runtime' — NEVER
+    // 'bare_dataplane'. This is the enforcement substrate for the Mode-B
+    // dispatch fork: such a runtime can never take the bare branch (A1/A3).
+    assert.ok(rows.length > 0)
+    for (const r of rows) {
+      assert.equal(
+        r.serviceKind,
+        "device_runtime",
+        "device/resident exposure must project device_runtime, never bare_dataplane"
+      )
+    }
     // The runtimeId is the sandbox runtime id (r.id), NOT a device id.
     assert.equal(byBuiltin.get("filesystem")!.runtimeId, seed.runtimeId)
     // deviceName COALESCEs to 'Sandbox' (no devices row) and platform/arch to
