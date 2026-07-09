@@ -40,6 +40,7 @@ import {
   type ResolvedMcpTools,
 } from "../mcp-plugins/tool-resolver.js"
 import { dispatchSyncTool } from "../devices/dispatch.js"
+import { dispatchBareRuntimeTool } from "../sandbox/bare-dispatch.js"
 import { signEnvelopeForDispatch } from "../devices/envelope-signer.js"
 import {
   canonicalizeEnvelopePayload,
@@ -696,9 +697,18 @@ function unionWithDevice(
                   toolName: row.visibleToolName,
                   runtimeId: row.runtimeId,
                   runtimeServiceId: row.runtimeServiceId,
+                  // Bare (Mode-B) forks write transport='data_plane' with a NULL
+                  // tunnel_internal_url — there is no tunnel endpoint. The
+                  // resident path is unchanged (transport defaults to mcp_http).
+                  transport:
+                    row.serviceKind === "bare_dataplane"
+                      ? "data_plane"
+                      : undefined,
                   tunnelInternalUrl:
-                    getDeviceTunnelRegistry().resolve(row.runtimeServiceId)
-                      ?.internalUrl ?? null,
+                    row.serviceKind === "bare_dataplane"
+                      ? null
+                      : (getDeviceTunnelRegistry().resolve(row.runtimeServiceId)
+                          ?.internalUrl ?? null),
                   principalKind: principalKindFor(projectInput.principal),
                   principalSubjectId: device.subjects.principalSubjectId ?? "",
                   initiatedByWorkspaceMemberId:
@@ -769,21 +779,38 @@ function unionWithDevice(
       )
     }
 
-    const { prepared, operation } = claim
+    const { prepared, operation, grant } = claim
     const operationId = operation.operationId
     const attemptId = operation.attemptId
     const envelope = prepared.envelope
 
+    // The Mode-B fork (F-B, closed over absence): only a bare adapter's create()
+    // mints service_kind='bare_dataplane' and links exposures to it, so a
+    // device/resident exposure ALWAYS projects serviceKind='device_runtime' and
+    // takes the UNCHANGED dispatchSyncTool below. dispatchBareRuntimeTool returns
+    // the SAME McpDispatchResult shape, so completeDeviceOperation is unchanged.
+    //
     // dispatchSyncTool resolves the tunnel endpoint by runtimeServiceId, which
     // is the runtime_services row id (what the runtime registered its tunnel
     // under). We use row.runtimeServiceId from the catalog projection — NOT
     // runtime_exposure_id, which would never match a registered endpoint.
-    const result = await dispatchSyncTool({
-      runtimeServiceId: row.runtimeServiceId,
-      envelope,
-      args: sanitizedInput,
-      toolName: row.visibleToolName,
-    })
+    const result =
+      row.serviceKind === "bare_dataplane"
+        ? await dispatchBareRuntimeTool({
+            runtimeId: row.runtimeId,
+            runtimeServiceId: row.runtimeServiceId,
+            envelope,
+            args: sanitizedInput,
+            builtinKind: row.builtinKind,
+            toolName: row.visibleToolName,
+            grant,
+          })
+        : await dispatchSyncTool({
+            runtimeServiceId: row.runtimeServiceId,
+            envelope,
+            args: sanitizedInput,
+            toolName: row.visibleToolName,
+          })
     await completeDeviceOperation({
       operationId,
       attemptId,
@@ -1312,6 +1339,11 @@ export function buildRequestedAction(args: {
         "fs_edit",
         "fs_delete",
         "fs_history_restore",
+        // Layer-2 dir/move tools (S3). All are writers; the grant must cover
+        // their path(s). fs_move constrains BOTH endpoints (see below).
+        "fs_mkdir",
+        "fs_move",
+        "fs_remove",
       ])
       // Tools that take their scope from `subtree` (index status/rebuild).
       const subtreeTools = new Set(["fs_index_status", "fs_index_rebuild"])
@@ -1330,24 +1362,37 @@ export function buildRequestedAction(args: {
         tool === "fs_history_list" && typeof args.args["path"] !== "string"
       const isPushdown = noScopeReadTools.has(tool) || isPushdownHistoryList
       const access: "read" | "write" = writeTools.has(tool) ? "write" : "read"
-      let pathPrefix: string
+      let pathPrefixes: string[]
       if (isPushdown) {
         // "/"" is the only honest answer when there's no scoping info;
         // first-time callers without any fs grant still need an
         // approveable request, and "/" is what UI can render.
-        pathPrefix = "/"
+        pathPrefixes = ["/"]
       } else if (subtreeTools.has(tool)) {
         const sub =
           typeof args.args["subtree"] === "string"
             ? (args.args["subtree"] as string)
             : "/"
-        pathPrefix = sub
+        pathPrefixes = [sub]
+      } else if (tool === "fs_move") {
+        // fs_move constrains BOTH endpoints — the grant must cover source AND
+        // destination (F-C). Project both `source` and `destination` so the
+        // matcher rejects a grant that covers only one side.
+        const source =
+          typeof args.args["source"] === "string"
+            ? (args.args["source"] as string)
+            : "/"
+        const destination =
+          typeof args.args["destination"] === "string"
+            ? (args.args["destination"] as string)
+            : "/"
+        pathPrefixes = [source, destination]
       } else {
         const path =
           typeof args.args["path"] === "string"
             ? (args.args["path"] as string)
             : "/"
-        pathPrefix = path
+        pathPrefixes = [path]
       }
       // VFS paths are virtual-absolute (rooted at "/"); normalizePathPrefix
       // on both sides will canonicalize them.
@@ -1358,7 +1403,7 @@ export function buildRequestedAction(args: {
         detail,
         filesystem: {
           access,
-          pathPrefixes: [pathPrefix],
+          pathPrefixes,
           ...(isPushdown ? { scopeIsPushdown: true } : {}),
         },
       }

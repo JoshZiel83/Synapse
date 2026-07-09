@@ -33,6 +33,61 @@ export interface SidecarRestoreFailure {
   reason: SidecarRestoreFailureReason
 }
 
+/**
+ * Frozen capability descriptor for a sandbox adapter (§4.1 / §4.4). Persisted
+ * verbatim into `sandboxes.capability_descriptor` at mint and read back on
+ * reconnect (never re-derived from live config — mode-flip safety). It is the
+ * single source of truth for (a) which CORE tool families the api-authored
+ * static catalog exposes (the descriptor-gated subset, F-D), and (b) the per-op
+ * caps + confinement posture the canonical data-plane layer enforces.
+ */
+export interface SandboxCapabilityDescriptor {
+  /** Mode discriminant. 'resident' descriptors are `{}`-degenerate today. */
+  mode: "resident" | "bare"
+  /** Default transport to the data plane. 'direct' = in-process/docker-exec. */
+  transportDefault: "direct" | "indirect"
+  /**
+   * Whether the plane can confine fs ops to a sub-prefix of the sandbox root.
+   * 'native' = the host-side/in-process vfs kernel realpath-confines every op.
+   * 'unsupported' = a genuinely remote fs that can't (degraded branch, S13).
+   */
+  confinedFs: "native" | "unsupported"
+  /** CORE (always-present) tool-family features + per-op safety caps. */
+  core: {
+    atomicWrite: boolean
+    /** 'strict' = expected_sha256/create_only enforced; 'advisory' = best-effort. */
+    staleWriteGuard: "strict" | "advisory"
+    rangeRead: boolean
+    search: boolean
+    mkdir: boolean
+    move: boolean
+    remove: boolean
+    /** pty is machinery-only in P4a — NEVER true in the production catalog (F-D). */
+    pty: boolean
+    /** Whole-file read cap (bytes). */
+    maxReadBytes: number
+    /** Oversized-write reject-before-hash cap (bytes). */
+    maxWriteBytes: number
+    /** Concurrent exec cap. */
+    maxConcurrentExec: number
+  }
+  /** Advanced/optional tool families beyond CORE (none in P4a). */
+  advancedTools: string[]
+  /**
+   * Command isolation posture. null = NO commandline exposure/grant (fail-closed
+   * on the API host when bwrap is absent). 'bwrap' = bubblewrap jail (local:bare).
+   */
+  isolation: "bwrap" | "container" | "provider" | null
+  /** Egress posture (provider-backed; unused in P4a's direct adapters). */
+  egress?: "none" | "named"
+  /** Whether the adapter supports connect()/reconnect after an API restart. */
+  reconnectable: boolean
+  /** Provider-backed lifecycle knobs (unused/false in P4a). */
+  setTimeout?: boolean
+  pause?: boolean
+  portIngress?: boolean
+}
+
 export interface SandboxProvisionResult {
   sessionId: string
   /** The sandbox FS root; its children are the materialized mount points. */

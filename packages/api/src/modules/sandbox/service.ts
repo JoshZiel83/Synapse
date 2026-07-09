@@ -53,12 +53,15 @@ import {
   type SandboxSpec,
 } from "./sandbox-backend.js"
 import {
-  createDockerSandboxBackend,
-  createDockerReconnectBackend,
   reapDockerSandboxOrphans,
-  type DockerSandboxBackendOptions,
   type SpawnImpl,
 } from "./docker-sandbox-backend.js"
+import {
+  resolveSandboxAdapter,
+  adapterForRow,
+  dockerBackendOptionsFromEnv,
+  type SandboxAdapter,
+} from "./adapter-registry.js"
 import {
   resolveRuntimeBuiltinIds,
   createSandboxGrants,
@@ -112,51 +115,55 @@ export class SandboxServiceError extends Error {
 const liveSandboxHandles = new Map<string, SandboxHandle>()
 
 /**
- * Select the sandbox backend. `local` (default) spawns a same-host
- * device-runtime child; `docker` (Phase 3) runs the cloud-sandbox image via
- * DooD. A caller may inject its own backend/hostProvider for tests.
+ * Resolve the sandbox ADAPTER for the provision path (§4.1). Forks on BOTH
+ * provider AND mode via the registry (the P2 selectSandboxBackend forked only on
+ * provider, so SANDBOX_MODE=bare was inert). A test may inject a fully-built
+ * adapter (sandboxAdapter) or a legacy resident backend (sandboxBackend, wrapped
+ * as a control_plane resident adapter). The catalogSource on the returned adapter
+ * is what the provision spine forks on (waitForCatalog/waitForTunnelEndpoint vs
+ * the api-authored skip).
  */
-function selectSandboxBackend(
+function resolveAdapterForProvision(
   options: ProvisionSandboxOptions
-): SandboxBackend {
-  if (options.sandboxBackend) return options.sandboxBackend
-  if (config.sandbox.provider === "docker") {
-    return createDockerSandboxBackend(dockerBackendOptionsFromEnv())
+): SandboxAdapter {
+  if (options.sandboxAdapter) return options.sandboxAdapter
+  if (options.sandboxBackend) {
+    return wrapResidentBackendAsAdapter(options.sandboxBackend)
   }
-  const hostProvider = options.hostProvider ?? createLocalHostProvider()
-  // Direct-mint (§4.6): the local backend authors the device-less sandbox
-  // runtime + broker identity in-process, so no startPairing round-trip is wired.
-  return createLocalSandboxBackend({ hostProvider })
+  const adapter = resolveSandboxAdapter(
+    config.sandbox.provider,
+    config.sandbox.mode,
+    { hostProvider: options.hostProvider }
+  )
+  if (!adapter) {
+    throw new SandboxServiceError(
+      `no sandbox adapter registered for provider='${config.sandbox.provider}' mode='${config.sandbox.mode}'`,
+      500
+    )
+  }
+  return adapter
 }
 
-/** Build the docker backend options from the validated config.sandbox namespace.
- *  The image/network/volume/frp requirements + edge↔vhost consistency are enforced
- *  at BOOT (config superRefine), so this is a pure config→options mapper. */
-export function dockerBackendOptionsFromEnv(): DockerSandboxBackendOptions {
-  const dk = config.sandbox.docker
-  // The docker sandbox runs on an internal-only network and is reachable from
-  // the API ONLY through the frp tunnel — there is no co-located loopback path
-  // (that's the local backend). The boot gate already guaranteed the full edge
-  // config, so tunnel is always frp here.
-  const tunnel: "frp" = "frp"
+/** Wrap an injected resident SandboxBackend (test seam) as a control_plane
+ *  adapter so the provision spine keeps waitForCatalog/waitForTunnelEndpoint. */
+function wrapResidentBackendAsAdapter(backend: SandboxBackend): SandboxAdapter {
   return {
-    image: dk.image,
-    network: dk.network,
-    storageVolume: dk.storageVolume,
-    serverOrigin: config.sandbox.serverOrigin,
-    tunnel,
-    tunnelServerAddr: dk.tunnel.serverAddr || undefined,
-    tunnelServerPort: dk.tunnel.serverPort || undefined,
-    tunnelAuthToken: dk.tunnel.frpSharedToken,
-    tunnelVhostHost: dk.tunnel.vhostHost || undefined,
-    // The container registers this as its internalUrl; the server validates the
-    // origin against SYNAPSE_DEVICE_TUNNEL_EDGE_URL. Pass the same edge URL so a
-    // custom edge is honored end-to-end (origins match by construction); unset →
-    // the runtime adapter falls back to http://tunnel-edge:8080.
-    tunnelInternalBaseUrl: dk.tunnel.edgeUrl || undefined,
-    runAsUid: dk.runAsUid,
+    key: `${backend.kind}:resident`,
+    provider: backend.kind,
+    mode: "resident",
+    kind: backend.kind,
+    catalogSource: "control_plane",
+    transportDefault: "direct",
+    capabilities: null,
+    create: (spec) => backend.create(spec),
+    connect: (ref) => backend.connect(ref),
   }
 }
+
+// dockerBackendOptionsFromEnv now lives in adapter-registry.ts (so the registry
+// can build the LAZY provision backend without a value cycle). Re-exported here
+// for compatibility with existing importers.
+export { dockerBackendOptionsFromEnv }
 
 type SessionContext = repo.SessionContext
 
@@ -206,17 +213,13 @@ export function sandboxSpecVolumeSubpath(
  * frp config), never createDockerSandboxBackend(dockerBackendOptionsFromEnv()).
  */
 function backendForKind(
-  kind: string,
+  ref: SandboxRef,
   dockerSpawnImpl?: SpawnImpl
-): SandboxBackend {
-  if (kind === "docker") {
-    return createDockerReconnectBackend({ spawnImpl: dockerSpawnImpl })
-  }
-  // Local connect-only: create() is never called on these (teardown/kill only),
-  // so the direct-mint deps are unused here.
-  return createLocalSandboxBackend({
-    hostProvider: createLocalHostProvider(),
-  })
+): SandboxAdapter {
+  // Row-driven (adapter + mode), NEVER current config (inv-45). For docker this
+  // resolves the ENV-FREE reconnect backend (F-A); create() is never called on a
+  // connect-only adapter. adapterForRow keeps that split.
+  return adapterForRow(ref.adapter, ref.mode, { dockerSpawnImpl })
 }
 
 /**
@@ -336,10 +339,7 @@ export async function isSandboxRuntimeAlive(
   )
   if (!ref) return false
   try {
-    const handle = await backendForKind(
-      ref.adapter,
-      opts.dockerSpawnImpl
-    ).connect(ref)
+    const handle = await backendForKind(ref, opts.dockerSpawnImpl).connect(ref)
     return await handle.isRunning()
   } catch {
     return false
@@ -560,8 +560,10 @@ async function ensureSessionSpaces(ctx: SessionContext): Promise<SpaceSpec[]> {
 export interface ProvisionSandboxOptions {
   /** Inject a HostProvider (local backend wraps it). Test seam. */
   hostProvider?: HostProvider
-  /** Inject a fully-built backend (overrides hostProvider + env selection). */
+  /** Inject a fully-built resident backend (overrides hostProvider + env). */
   sandboxBackend?: SandboxBackend
+  /** Inject a fully-built ADAPTER (overrides everything — bare/Mode-B test seam). */
+  sandboxAdapter?: SandboxAdapter
   /** Max ms to wait for the device catalog to sync. */
   catalogTimeoutMs?: number
   /**
@@ -710,7 +712,7 @@ export async function provisionSandbox(
   const ctx = await loadSessionContext(sessionId)
   if (!ctx) throw new SandboxServiceError(`session ${sessionId} not found`, 404)
 
-  const backend = selectSandboxBackend(options)
+  const adapter = resolveAdapterForProvision(options)
   const fsHelperPath = resolveFsHelperPath()
   const sandboxRoot = sandboxRootFor(sessionId)
 
@@ -730,7 +732,7 @@ export async function provisionSandbox(
       mountSubpath: spec.subpath,
       baseSnapshotId: spec.baseSnapshotId,
       materializedDir: dir,
-      sandboxBackend: backend.kind,
+      sandboxBackend: adapter.kind,
     })
     mounts.push(mount)
     await materializeSnapshot({
@@ -796,7 +798,7 @@ export async function provisionSandbox(
       // volume mount (computed from STORAGE_DIR, never hardcoded). Undefined for
       // the local backend — computing it there throws when STORAGE_DIR isn't
       // under the volume mount point (bare-metal default /tmp/synapse-storage).
-      storageVolumeSubpath: sandboxSpecVolumeSubpath(backend.kind, {
+      storageVolumeSubpath: sandboxSpecVolumeSubpath(adapter.kind, {
         storageDir: STORAGE_DIR,
         mountPoint: storageVolumeMountPoint(),
         sessionId,
@@ -824,7 +826,7 @@ export async function provisionSandbox(
       // the instant the runtime's DB identity + sandboxes row exist.
       onRuntimeReady: (runtimeId) => persistAll({ sandboxId: runtimeId }),
     }
-    handle = await backend.create(spec)
+    handle = await adapter.create(spec)
     liveSandboxHandles.set(handle.sandboxId, handle)
 
     const runtimeId = handle.runtimeLink.runtimeId
@@ -844,24 +846,24 @@ export async function provisionSandbox(
       hostPid: handle.hostPid ?? null,
     })
 
-    // ⑦ wait for device.catalog.sync to land (filesystem exposure visible).
-    await waitForCatalog(runtimeId, {
-      timeoutMs: options.catalogTimeoutMs ?? 30_000,
-    })
-
-    // ⑦b wait for the device's tunnel endpoint to register. EVERY sandbox tool
-    // call is dispatched via DeviceTunnelRegistry.resolve(runtimeServiceId) —
-    // catalog sync alone does NOT prove the device is reachable. Without this
-    // wait, provision would mark mounts active + grant tools for a sandbox whose
-    // every dispatch returns no_tunnel_endpoint (a silent "provisioned but
-    // unusable"). On timeout we fall through to the catch, which tears the whole
-    // half-built sandbox down. Skippable (tunnelTimeoutMs=0) for tests that
-    // don't dispatch.
-    const tunnelTimeoutMs = options.tunnelTimeoutMs ?? 30_000
-    if (tunnelTimeoutMs > 0) {
-      await waitForTunnelEndpoint(handle.runtimeLink.runtimeServiceId, {
-        timeoutMs: tunnelTimeoutMs,
+    // ⑦/⑦b — catalog + tunnel readiness. Forked on adapter.catalogSource:
+    //   control_plane (resident) → wait for device.catalog.sync + the tunnel
+    //     endpoint to register (UNCHANGED Mode-A path).
+    //   api_authored (bare) → the API already authored + persisted the catalog
+    //     synchronously in create() (mintBareSandboxRuntimeTx) and there is NO
+    //     tunnel/endpoint to register (the data plane is dialed directly), so
+    //     BOTH waits are skipped. resolveRuntimeBuiltinIds below reads the same
+    //     already-committed catalog either way.
+    if (adapter.catalogSource === "control_plane") {
+      await waitForCatalog(runtimeId, {
+        timeoutMs: options.catalogTimeoutMs ?? 30_000,
       })
+      const tunnelTimeoutMs = options.tunnelTimeoutMs ?? 30_000
+      if (tunnelTimeoutMs > 0) {
+        await waitForTunnelEndpoint(handle.runtimeLink.runtimeServiceId, {
+          timeoutMs: tunnelTimeoutMs,
+        })
+      }
     }
 
     // ⑧ build both authorization layers (once, full capability list).
@@ -1849,7 +1851,7 @@ export async function teardownSandbox(
     const ref = await buildSandboxRefFromSandboxRow(mounts)
     if (ref) {
       try {
-        const backend = backendForKind(ref.adapter)
+        const backend = backendForKind(ref)
         const handle = await backend.connect(ref)
         await handle.kill()
       } catch (err) {
@@ -2021,7 +2023,7 @@ async function ensureRuntimeStoppedForRecovery(
     const ref = await buildSandboxRefFromSandboxRow(mounts)
     if (ref) {
       try {
-        const handle = await backendForKind(ref.adapter).connect(ref)
+        const handle = await backendForKind(ref).connect(ref)
         await handle.kill()
       } catch (err) {
         console.error(

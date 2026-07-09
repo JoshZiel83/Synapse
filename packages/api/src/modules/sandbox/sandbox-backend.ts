@@ -29,7 +29,11 @@ import { deleteDevice, mintLocalSandboxRuntime } from "../devices/service.js"
 
 /** Which adapter produced/owns a sandbox runtime. Persisted on sandboxes.adapter
  *  (and legacy file_mounts.sandbox_backend) so teardown picks the right adapter
- *  regardless of the API's current config. P2 registers local + docker (Mode-A). */
+ *  regardless of the API's current config. P2 registered local + docker (Mode-A
+ *  resident); P4a adds the bare (Mode-B) reference adapters under the SAME
+ *  provider strings ("local"/"docker") — the `sandboxes.mode` column
+ *  disambiguates resident vs bare. Future provider substrates (e2b/cube) widen
+ *  this when they land. */
 export type SandboxBackendKind = "local" | "docker"
 
 /**
@@ -120,13 +124,22 @@ export interface SandboxHandle {
   readonly sandboxId: string
   /** Provider resource id (container id / pod / ""). */
   readonly resourceId: string
-  /** The runtime linkage: the sandbox-kind runtime id + its device_runtime
-   *  service id (NO devices row). P2 is resident-only. */
-  readonly runtimeLink: {
-    mode: "resident"
-    runtimeId: string
-    runtimeServiceId: string
-  }
+  /** The runtime linkage: the sandbox-kind runtime id + its runtime-service id
+   *  (NO devices row). resident → a paired device_runtime service reached over a
+   *  tunnel; bare (P4a Mode-B) → a bare_dataplane service dialed directly at a
+   *  non-tunnel `dataPlaneEndpoint` (scheme-tagged inprocess:/docker-exec:). */
+  readonly runtimeLink:
+    | {
+        mode: "resident"
+        runtimeId: string
+        runtimeServiceId: string
+      }
+    | {
+        mode: "bare"
+        runtimeId: string
+        runtimeServiceId: string
+        dataPlaneEndpoint: string
+      }
   readonly pairingSessionId?: string
   /** Local backend only. */
   readonly hostPid?: number

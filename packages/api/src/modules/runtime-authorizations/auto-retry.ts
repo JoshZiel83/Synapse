@@ -21,6 +21,7 @@ import {
 } from "@synapse/device-protocol/instant"
 import { serializeCommandlinePolicyToWire } from "@synapse/shared/access/policies"
 import { dispatchSyncTool } from "../devices/dispatch.js"
+import { dispatchBareRuntimeTool } from "../sandbox/bare-dispatch.js"
 import { signEnvelopeForDispatch } from "../devices/envelope-signer.js"
 import { getDeviceTunnelRegistry } from "../devices/tunnel-registry.js"
 import {
@@ -230,9 +231,17 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
               toolName: args.visibleToolName,
               runtimeId: target.runtimeId,
               runtimeServiceId: target.runtimeServiceId,
+              // Bare (Mode-B) auto-retry writes transport='data_plane' + NULL
+              // tunnel_internal_url; resident is unchanged (defaults mcp_http).
+              transport:
+                target.serviceKind === "bare_dataplane"
+                  ? "data_plane"
+                  : undefined,
               tunnelInternalUrl:
-                getDeviceTunnelRegistry().resolve(target.runtimeServiceId)
-                  ?.internalUrl ?? null,
+                target.serviceKind === "bare_dataplane"
+                  ? null
+                  : (getDeviceTunnelRegistry().resolve(target.runtimeServiceId)
+                      ?.internalUrl ?? null),
               principalKind: args.audit.principalKind,
               principalSubjectId: args.audit.principalSubjectId,
               initiatedByWorkspaceMemberId:
@@ -276,16 +285,30 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
     }
   }
 
-  const { prepared, operation } = claim
+  const { prepared, operation, grant } = claim
   const operationId = operation.operationId
   const attemptId = operation.attemptId
 
-  const dispatchResult = await dispatchSyncTool({
-    runtimeServiceId: target.runtimeServiceId,
-    envelope: prepared.envelope,
-    args: args.sourceRequestArgs,
-    toolName: args.visibleToolName,
-  })
+  // Mode-B fork (F-B): a bare_dataplane target routes to the in-process/remote
+  // data plane; device/resident targets ALWAYS resolve 'device_runtime' and take
+  // the unchanged dispatchSyncTool (A3). Same McpDispatchResult shape.
+  const dispatchResult =
+    target.serviceKind === "bare_dataplane"
+      ? await dispatchBareRuntimeTool({
+          runtimeId: target.runtimeId,
+          runtimeServiceId: target.runtimeServiceId,
+          envelope: prepared.envelope,
+          args: args.sourceRequestArgs,
+          builtinKind: args.approvedGrant.capability,
+          toolName: args.visibleToolName,
+          grant,
+        })
+      : await dispatchSyncTool({
+          runtimeServiceId: target.runtimeServiceId,
+          envelope: prepared.envelope,
+          args: args.sourceRequestArgs,
+          toolName: args.visibleToolName,
+        })
   await completeDeviceOperation({
     operationId,
     attemptId,

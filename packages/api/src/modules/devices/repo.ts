@@ -2126,6 +2126,96 @@ export async function mintLocalSandboxRuntimeTx(args: {
   })
 }
 
+/**
+ * Direct-mint a device-less BARE (Mode-B) sandbox runtime (§4.3 / §4.7.1). ONE
+ * tx: runtimes(kind='sandbox') + sandboxes(mode='bare', pairing_session_id NULL,
+ * capability_descriptor=<frozen>) + runtime_services(service_kind='bare_dataplane',
+ * data_plane_endpoint=<scheme-tagged non-dialable>) — and NO runtime_service_keys
+ * (no keypair, no broker, no pairing). The api-authored catalog is persisted
+ * SYNCHRONOUSLY in the SAME tx via persistCatalogSync (S0-repointed), so the
+ * exposure/capability/tool/revision ids the fork's target-id check needs are
+ * committed atomically with the runtime. This bare create() is the ONLY code
+ * that ever mints `service_kind='bare_dataplane'` and links exposures to it —
+ * the mint-discipline half of the closed-over-absence proof (F-B).
+ */
+export async function mintBareSandboxRuntimeTx(args: {
+  runtimeId: string
+  workspaceId: string
+  sessionId: string
+  serviceId: string
+  adapter: string
+  /** Scheme-tagged non-dialable endpoint: 'inprocess:<id>' | 'docker-exec:<id>'. */
+  dataPlaneEndpoint: string
+  capabilityDescriptor: Record<string, unknown>
+  /** Descriptor-gated api-authored exposure set (buildBareCoreCatalog). */
+  exposures: DeviceCatalogExposure[]
+  clientVersion?: string | null
+  /** TEST SEAM only (see runInInjectableTx). */
+  executor?: KyselyDb
+}): Promise<{
+  runtimeId: string
+  serviceId: string
+  dataPlaneEndpoint: string
+  assignedIds: AssignedCatalogIds
+}> {
+  return runInInjectableTx(args.executor, async (trx) => {
+    await trx
+      .insertInto("runtimes")
+      .values({
+        id: args.runtimeId,
+        workspaceId: args.workspaceId,
+        kind: "sandbox",
+      } as never)
+      .execute()
+    await trx
+      .insertInto("sandboxes")
+      .values({
+        id: args.runtimeId,
+        workspaceId: args.workspaceId,
+        sessionId: args.sessionId,
+        mode: "bare",
+        adapter: args.adapter,
+        state: "provisioning",
+        resourceId: "",
+        hostPid: null,
+        // NO pairing session — a bare sandbox never pairs.
+        pairingSessionId: null,
+        capabilityDescriptor: sql`${JSON.stringify(args.capabilityDescriptor)}::jsonb`,
+      } as never)
+      .execute()
+    await trx
+      .insertInto("runtimeServices")
+      .values({
+        id: args.serviceId,
+        runtimeId: args.runtimeId,
+        serviceKind: "bare_dataplane",
+        version: args.clientVersion ?? null,
+        status: "online",
+        // schema CHECK for bare_dataplane: data_plane_endpoint NOT NULL,
+        // tunnel_path_token / current_session_id / remote_agent_machine_id NULL.
+        dataPlaneEndpoint: args.dataPlaneEndpoint,
+        metadata: sql`'{}'::jsonb`,
+      } as never)
+      .execute()
+    // NO runtime_service_keys insert — no keypair, no broker (§4.7.1).
+
+    // Persist the api-authored catalog SYNCHRONOUSLY inside this tx (the runtime
+    // row it reads for existence/workspace attribution is the one just inserted).
+    const persisted = await persistCatalogSync({
+      deviceId: args.runtimeId,
+      serviceId: args.serviceId,
+      exposures: args.exposures,
+      executor: trx,
+    })
+    return {
+      runtimeId: args.runtimeId,
+      serviceId: args.serviceId,
+      dataPlaneEndpoint: args.dataPlaneEndpoint,
+      assignedIds: persisted.assignedIds,
+    }
+  })
+}
+
 /** Discriminated outcome of the daemon-claim transaction. */
 export type ClaimRemoteAgentDaemonResult =
   | { outcome: "ok"; service: DeviceServiceRecord }

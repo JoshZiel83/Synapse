@@ -159,6 +159,10 @@ const SCOPE_TO_DOMAIN: Readonly<Record<string, DomainScope>> = {
     component: "delivery-retry",
   },
   "remote-agent.mcp": { domain: "remote-agent", component: "mcp" },
+  "sandbox.adapter-registry": {
+    domain: "sandbox",
+    component: "adapter-registry",
+  },
   "seed-model-groups": { domain: "model-groups", component: "seed" },
   server: { domain: "server" },
   session: { domain: "session" },

@@ -155,6 +155,21 @@ export async function dispatchSyncTool(
     }
   }
 
+  // Hard-refuse any non-http(s) endpoint scheme (inv-39). A bare (Mode-B)
+  // data_plane_endpoint is scheme-tagged non-dialable (inprocess:/docker-exec:)
+  // and is NEVER registered in the tunnel registry, so it can't reach here — but
+  // defend in depth so such a string can never be handed to fetch().
+  const scheme = endpoint.internalUrl.split(":", 1)[0]?.toLowerCase()
+  if (scheme !== "http" && scheme !== "https") {
+    return {
+      ok: false,
+      error: {
+        code: "runtime_constraint",
+        message: `refusing to dispatch to non-http(s) endpoint scheme '${scheme ?? ""}:'`,
+      },
+    }
+  }
+
   const fetchImpl = opts.fetchImpl ?? fetch
   const url = `${endpoint.internalUrl.replace(/\/$/, "")}/mcp`
 

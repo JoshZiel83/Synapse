@@ -18,6 +18,40 @@ test("buildRequestedAction — fs_write requests action=write", () => {
   assert.deepEqual(action.filesystem?.pathPrefixes, ["/repo/x.ts"])
 })
 
+test("B12: layer-2 fs tools (fs_mkdir/fs_move/fs_remove) request write; fs_move constrains BOTH endpoints", () => {
+  const mkdir = buildRequestedAction({
+    capability: "filesystem",
+    toolName: "device__cap__fs_mkdir",
+    visibleToolName: "fs_mkdir",
+    args: { path: "/repo/newdir", recursive: true },
+  })
+  assert.equal(mkdir.filesystem?.access, "write")
+  assert.deepEqual(mkdir.filesystem?.pathPrefixes, ["/repo/newdir"])
+
+  const remove = buildRequestedAction({
+    capability: "filesystem",
+    toolName: "device__cap__fs_remove",
+    visibleToolName: "fs_remove",
+    args: { path: "/repo/old", recursive: true },
+  })
+  assert.equal(remove.filesystem?.access, "write")
+  assert.deepEqual(remove.filesystem?.pathPrefixes, ["/repo/old"])
+
+  // fs_move MUST project source AND destination so the grant must cover both
+  // endpoints (F-C — a grant covering only one side does not satisfy the claim).
+  const move = buildRequestedAction({
+    capability: "filesystem",
+    toolName: "device__cap__fs_move",
+    visibleToolName: "fs_move",
+    args: { source: "/repo/a.ts", destination: "/repo/sub/b.ts" },
+  })
+  assert.equal(move.filesystem?.access, "write")
+  assert.deepEqual(move.filesystem?.pathPrefixes, [
+    "/repo/a.ts",
+    "/repo/sub/b.ts",
+  ])
+})
+
 test("buildRequestedAction — fs_edit / fs_delete / fs_history_restore request write", () => {
   for (const tool of ["fs_edit", "fs_delete", "fs_history_restore"]) {
     const action = buildRequestedAction({

@@ -690,6 +690,83 @@ export async function getSandboxById(
 }
 
 /**
+ * Bare-dispatch resolver (§4.7.1.1): everything dispatchBareRuntimeTool needs to
+ * (a) decide whether to lazy-rebuild the plane or hard-deny, and (b) rebuild the
+ * plane from the persisted descriptor (never live config — mode-flip safety). A
+ * missing row / soft-deleted runtime / non-live state ⇒ the fork hard-denies.
+ */
+export interface BareSandboxDispatchRow {
+  sessionId: string | null
+  mode: "resident" | "bare"
+  adapter: string
+  state: SandboxRow["state"]
+  runtimeDeletedAt: Date | null
+  capabilityDescriptor: Record<string, unknown>
+}
+
+export async function getBareSandboxForDispatch(
+  runtimeId: string,
+  run: Executor = db
+): Promise<BareSandboxDispatchRow | null> {
+  const row = await run
+    .selectFrom("sandboxes as sb")
+    .innerJoin("runtimes as r", "r.id", "sb.id")
+    .select([
+      "sb.sessionId",
+      "sb.mode",
+      "sb.adapter",
+      "sb.state",
+      "sb.capabilityDescriptor",
+      "r.deletedAt as runtimeDeletedAt",
+    ])
+    .where("sb.id", "=", runtimeId)
+    .executeTakeFirst()
+  if (!row) return null
+  return {
+    sessionId: (row.sessionId as string | null) ?? null,
+    mode: row.mode as SandboxRow["mode"],
+    adapter: row.adapter as string,
+    state: row.state as SandboxRow["state"],
+    runtimeDeletedAt: (row.runtimeDeletedAt as Date | null) ?? null,
+    capabilityDescriptor:
+      (row.capabilityDescriptor as Record<string, unknown> | null) ?? {},
+  }
+}
+
+/**
+ * Target-id binding for the bare fork (§4.7.1.1): the API-signed envelope's
+ * runtime_exposure_id must belong to THIS runtime + service, and its
+ * runtime_tool_id must belong to that exposure. This is the fork's own
+ * verification in place of the resident device's in-process envelope verifier —
+ * it rejects a replayed / cross-runtime envelope before any plane call.
+ */
+export async function verifyBareDispatchTarget(
+  args: {
+    runtimeId: string
+    runtimeServiceId: string
+    exposureId: string
+    toolId: string
+  },
+  run: Executor = db
+): Promise<boolean> {
+  const exp = await run
+    .selectFrom("runtimeExposures")
+    .select(["id"])
+    .where("id", "=", args.exposureId)
+    .where("runtimeId", "=", args.runtimeId)
+    .where("serviceId", "=", args.runtimeServiceId)
+    .executeTakeFirst()
+  if (!exp) return false
+  const tool = await run
+    .selectFrom("runtimeTools")
+    .select(["id"])
+    .where("id", "=", args.toolId)
+    .where("exposureId", "=", args.exposureId)
+    .executeTakeFirst()
+  return Boolean(tool)
+}
+
+/**
  * CONTROL-PATH resolver fallback: the latest sandbox for a session filtered ONLY
  * on runtimes.deleted_at IS NULL (ANY state — NOT on sandboxes.state). Used when
  * a mount has no sandbox_id back-filled yet (CORRECTION 5).

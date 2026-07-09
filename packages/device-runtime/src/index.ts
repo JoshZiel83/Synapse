@@ -3,10 +3,15 @@
 export * from "./types.js"
 export { createFileBackedBroker } from "./broker.js"
 export { createInMemoryMcpHost, toolErrorResult } from "./mcp-host.js"
-export { createFilesystemBuiltin } from "./builtins/filesystem.js"
+export {
+  createFilesystemBuiltin,
+  filesystemCoreToolDefs,
+  FILESYSTEM_CORE_TOOL_NAMES,
+} from "./builtins/filesystem.js"
 export {
   createCommandlineBuiltin,
   executeBash,
+  COMMANDLINE_CORE_TOOL_DEFS,
 } from "./builtins/commandline.js"
 export { createBrowserBuiltin, listCdpTargets } from "./builtins/browser.js"
 export {
@@ -42,6 +47,17 @@ export {
   createLocalFsBackend,
   createVfsService,
   VfsService,
+  canonicalVfsPath,
+  pathUnderPrefix,
+  collapsePrefixes,
+  WHOLE_SCOPE,
+  GrantPrefixDeniedError,
+  CanonicalPathError,
+  CrossMountError,
+  StaleWriteError,
+  type WholeScope,
+  type ExtendedLocalBackend,
+  type SafeStatInfo,
   type VfsBackend,
   type VfsEntry,
   type VfsExposure,
@@ -49,6 +65,53 @@ export {
   type VfsSessionState,
   type VfsWriteResult,
 } from "./vfs.js"
+
+// ── Mode-B (bare sandbox) reference-adapter surface (S4) ──────────────────────
+// Exposed so the API sandbox adapters (sandbox/adapter-registry.ts,
+// makeLocalBareAdapter) reuse the SAME confined exec + vfs + search kernel the
+// resident device-runtime does — one implementation, no drift. NOTE: this
+// deliberately does NOT export executeBash (the legacy UNconfined path) or
+// embedDeviceRuntime / createInMemoryEnvelopeVerifier / createFileBackedBroker
+// (Mode-A markers — a bare sandbox never pairs, never runs a resident runtime).
+export {
+  bwrapAvailable,
+  resolveBwrapPath,
+  buildBwrapArgs,
+  wrapDescriptorWithBwrap,
+  DEFAULT_SANDBOX_CWD,
+  type SandboxConfinement,
+} from "./terminal/sandbox-confinement.js"
+export {
+  spawnTerminalProcess,
+  previewSpawnEnv,
+  type SpawnTerminalProcessOptions,
+  type SpawnedTerminalResult,
+} from "./terminal/executor.js"
+export {
+  buildUtf8Env,
+  InvalidAllowedEnvError,
+  sanitizePathEnv,
+  type BuildUtf8EnvOptions,
+} from "./terminal/utf8.js"
+export {
+  PosixBashProvider,
+  PowerShellProvider,
+  buildExecFileDescriptor,
+  ShellNotAvailableError,
+} from "./terminal/shell-provider.js"
+export type {
+  SpawnDescriptor,
+  TerminalExecResult,
+  TerminalPlatform,
+} from "./terminal/types.js"
+export {
+  dispatchRipgrep,
+  detectRipgrep,
+  type RipgrepDeps,
+  type RipgrepDispatchInput,
+  type RipgrepDispatchOutput,
+  type RipgrepHit,
+} from "./builtins/ripgrep-runner.js"
 
 // Supervisor-side one-shot fs-helper driver + CAS/manifest RPC types. Exposed
 // so the API sandbox manager can materialize / commit / sync file spaces

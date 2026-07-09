@@ -29,8 +29,10 @@ import {
   isDeviceServiceOwnedByWorkspace,
   listDeviceSummaries,
   mintLocalSandboxRuntimeTx,
+  mintBareSandboxRuntimeTx,
   softDeleteDevice,
 } from "./repo.js"
+import type { DeviceCatalogExposure } from "@synapse/device-protocol"
 import { config } from "../../config/index.js"
 import {
   buildDeviceInstallCommands,
@@ -108,6 +110,26 @@ export async function mintLocalSandboxRuntime(args: {
     adapter: "local",
     mode: "resident",
   })
+}
+
+/**
+ * Direct-mint a device-less BARE (Mode-B) sandbox runtime (§4.3) — the
+ * service-layer seam the bare adapters call. No keypair/broker; the api-authored
+ * catalog is persisted synchronously in the same tx. Returns the minted ids +
+ * the assignedIds the dispatch fork's target-id check consumes.
+ */
+export async function mintBareSandboxRuntime(args: {
+  runtimeId: string
+  workspaceId: string
+  sessionId: string
+  serviceId: string
+  adapter: string
+  dataPlaneEndpoint: string
+  capabilityDescriptor: Record<string, unknown>
+  exposures: DeviceCatalogExposure[]
+  clientVersion?: string | null
+}): ReturnType<typeof mintBareSandboxRuntimeTx> {
+  return mintBareSandboxRuntimeTx(args)
 }
 
 export async function deleteDevice(

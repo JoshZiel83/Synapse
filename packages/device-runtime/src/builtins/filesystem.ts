@@ -277,6 +277,55 @@ const TOOLS: ToolDescriptor[] = [
       c.enableDelete && (a.historyAvailable || c.allowUnversionedWrite),
   },
   {
+    name: "fs_mkdir",
+    stable_key: "filesystem/mkdir",
+    description:
+      "Create a directory inside the VFS. recursive=true creates missing ancestors. Confined to the active write grant + sandbox root.",
+    input_schema: {
+      type: "object",
+      required: ["path"],
+      properties: {
+        path: { type: "string" },
+        recursive: { type: "boolean" },
+      },
+    },
+    visible: (c) => c.enableWrite,
+  },
+  {
+    name: "fs_move",
+    stable_key: "filesystem/move",
+    description:
+      "Move/rename a file or directory. Both source AND destination must be covered by the write grant (resolved in one grant frame). overwrite=false rejects an existing destination; expected_source_sha256 verifies the source content first. Cross-mount moves are rejected.",
+    input_schema: {
+      type: "object",
+      required: ["source", "destination"],
+      properties: {
+        source: { type: "string" },
+        destination: { type: "string" },
+        overwrite: { type: "boolean" },
+        expected_source_sha256: { type: "string" },
+      },
+    },
+    visible: (c, a) =>
+      c.enableWrite && (a.historyAvailable || c.allowUnversionedWrite),
+  },
+  {
+    name: "fs_remove",
+    stable_key: "filesystem/remove",
+    description:
+      "Remove a file or (with recursive=true) a directory subtree. Directory removal requires recursive=true. Confined to the active write grant + sandbox root. A file removal snapshots history like fs_delete.",
+    input_schema: {
+      type: "object",
+      required: ["path"],
+      properties: {
+        path: { type: "string" },
+        recursive: { type: "boolean" },
+      },
+    },
+    visible: (c, a) =>
+      c.enableDelete && (a.historyAvailable || c.allowUnversionedWrite),
+  },
+  {
     name: "fs_history_list",
     stable_key: "filesystem/history/list",
     description:
@@ -384,6 +433,37 @@ const TOOL_BY_NAME = new Map<string, ToolDescriptor>(
 
 function visibleTools(cfg: CfgWithDefaults, a: AvailabilityMatrix) {
   return TOOLS.filter((t) => t.visible(cfg, a))
+}
+
+/**
+ * CORE filesystem tool names the api-authored bare-sandbox catalog exposes
+ * (§4.3 / F-D). The bare data plane has NO sqlite fs-helper, so the history/index
+ * families (fs_history_*, fs_index_*) are stripped — durability comes from the
+ * CAS working-set bridge, not in-sandbox history. This is the SINGLE source of
+ * truth shared with `sandbox/core-catalog.ts` (golden-drift asserts equivalence).
+ */
+export const FILESYSTEM_CORE_TOOL_NAMES: readonly string[] = [
+  "list_dir",
+  "fs_stat",
+  "fs_read",
+  "fs_write",
+  "fs_edit",
+  "fs_mkdir",
+  "fs_move",
+  "fs_remove",
+  "fs_search",
+]
+
+/** The CORE filesystem tool DEFINITIONS (name/description/input_schema), derived
+ *  DOWN from the resident builtin's TOOLS[] so the bare catalog can never drift
+ *  from the schema the device actually serves. */
+export function filesystemCoreToolDefs(): DeviceCatalogTool[] {
+  const byName = new Map(TOOLS.map((t) => [t.name, t]))
+  return FILESYSTEM_CORE_TOOL_NAMES.map((name) => {
+    const t = byName.get(name)
+    if (!t) throw new Error(`filesystemCoreToolDefs: missing CORE tool ${name}`)
+    return toCatalogTool(t)
+  })
 }
 
 function toCatalogTool(t: ToolDescriptor): DeviceCatalogTool {
@@ -823,6 +903,12 @@ async function dispatch(
       return handleFsEdit(input.args, input.envelope, ctx)
     case "fs_delete":
       return handleFsDelete(input.args, input.envelope, ctx)
+    case "fs_mkdir":
+      return handleFsMkdir(input.args, input.envelope, ctx)
+    case "fs_move":
+      return handleFsMove(input.args, input.envelope, ctx)
+    case "fs_remove":
+      return handleFsRemove(input.args, input.envelope, ctx)
     case "fs_history_list":
       return handleHistoryList(input.args, input.envelope, ctx)
     case "fs_history_diff":
@@ -1613,6 +1699,237 @@ async function handleFsDelete(
           },
         ],
         _meta: { trash_mode: trashMode },
+      }
+    })
+  )
+}
+
+// ─────────────────────────── layer-2 dir/move tools (S3) ─────────────────────
+// fs_mkdir / fs_move / fs_remove — the §5 GAP-close. ONE impl consumed by BOTH
+// the resident device-runtime AND the local:bare data plane. Each wraps
+// ctx.backend.withGrantPrefixes(writePrefixes, …) exactly like fs_write/fs_delete
+// so the realpath grant recheck + WHOLE_SCOPE/empty-deny kernel (S3B) applies.
+
+async function handleFsMkdir(
+  args: Record<string, unknown>,
+  envelope: OperationEnvelope | undefined,
+  ctx: DispatchCtx
+): Promise<CatalogToolInvocationResult> {
+  const pathArg = asString(args["path"])
+  if (!pathArg) throw new ToolFailure("invalid_request", "path is required")
+  const canonical = canonicalVfsPath(pathArg)
+  const recursive = asBool(args["recursive"]) ?? false
+  const grants = getFsGrants(envelope)
+  if (envelope && !checkFsGrant(grants, "write", canonical)) {
+    throw new ToolFailure(
+      "permission_denied",
+      `fs_mkdir(${canonical}) not covered by any filesystem write grant`
+    )
+  }
+  const writePrefixes = canonicalGrantPrefixes(grants, "write")
+  return await ctx.backend.withGrantPrefixes(writePrefixes, () =>
+    ctx.backend.withPathLock(canonical, async () => {
+      // Directories carry no versioned content — no history snapshot. safeResolve
+      // (inside backend.mkdir) confines every created ancestor to the grant
+      // subtree + root boundary, so `recursive` cannot escape.
+      const res = await ctx.backend.mkdir(canonical, { recursive })
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ path: canonical, created: res.created }),
+          },
+        ],
+        _meta: { created: res.created },
+      }
+    })
+  )
+}
+
+async function handleFsMove(
+  args: Record<string, unknown>,
+  envelope: OperationEnvelope | undefined,
+  ctx: DispatchCtx
+): Promise<CatalogToolInvocationResult> {
+  const srcArg = asString(args["source"])
+  const destArg = asString(args["destination"])
+  if (!srcArg) throw new ToolFailure("invalid_request", "source is required")
+  if (!destArg) {
+    throw new ToolFailure("invalid_request", "destination is required")
+  }
+  const src = canonicalVfsPath(srcArg)
+  const dest = canonicalVfsPath(destArg)
+  const overwrite = asBool(args["overwrite"]) ?? false
+  const expectedSourceSha = asString(args["expected_source_sha256"])
+  const grants = getFsGrants(envelope)
+  // BOTH endpoints must be covered by a write grant. checkFsGrant is per-path;
+  // the confinement (below) then resolves both endpoints in a SINGLE grant frame
+  // (F-C) so dest can never be authorized under a src-only prefix.
+  if (envelope && !checkFsGrant(grants, "write", src)) {
+    throw new ToolFailure(
+      "permission_denied",
+      `fs_move source(${src}) not covered by any filesystem write grant`
+    )
+  }
+  if (envelope && !checkFsGrant(grants, "write", dest)) {
+    throw new ToolFailure(
+      "permission_denied",
+      `fs_move destination(${dest}) not covered by any filesystem write grant`
+    )
+  }
+  const writePrefixes = canonicalGrantPrefixes(grants, "write")
+  // ONE grant frame covering BOTH endpoints (F-C): backend.move runs safeResolve
+  // on src and dest under this single withGrantPrefixes — no split frame.
+  return await ctx.backend.withGrantPrefixes(writePrefixes, () =>
+    ctx.backend.withPathLock(src, async () => {
+      const info = await ctx.backend.safeStat(src)
+      if (!info) {
+        throw new ToolFailure(
+          "runtime_constraint",
+          `fs_move: source ${src} does not exist`
+        )
+      }
+      // History parity with fs_delete for FILE sources: the source path ceases
+      // to exist, so snapshot its prior bytes for rollback. Directory moves carry
+      // no per-file snapshot (declared limitation).
+      let priorSha: string | null = null
+      if (info.kind === "file") {
+        if (info.size > ctx.cfg.maxSnapshotBytes) {
+          throw new ToolFailure(
+            "runtime_constraint",
+            `snapshot_too_large: source ${info.size} bytes`
+          )
+        }
+        const h = await ctx.backend.streamSha256(src)
+        priorSha = h.sha256
+        if (ctx.helper && ctx.helper.isAvailable()) {
+          await ctx.helper.historySnapshotDelete({
+            path: src,
+            prior_exists: true,
+            expected_sha256: priorSha,
+            prior_size: info.size,
+            prior_mtime_ms: info.mtimeMs,
+          })
+        } else if (!ctx.cfg.allowUnversionedWrite) {
+          throw new ToolFailure(
+            "runtime_constraint",
+            "history_unavailable: cannot move a file without history"
+          )
+        }
+      }
+      const res = await ctx.backend.move(src, dest, {
+        expectedSourceSha: expectedSourceSha ?? null,
+        overwrite,
+      })
+      if (ctx.helper && ctx.helper.isAvailable() && ctx.avail.indexAvailable) {
+        await ctx.helper.indexRemove({ path: src }).catch(() => {})
+        await ctx.helper.indexUpsert({ path: dest }).catch(() => {})
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              source: src,
+              destination: dest,
+              mtime_ms: res.mtimeMs,
+            }),
+          },
+        ],
+        _meta: { moved: true },
+      }
+    })
+  )
+}
+
+async function handleFsRemove(
+  args: Record<string, unknown>,
+  envelope: OperationEnvelope | undefined,
+  ctx: DispatchCtx
+): Promise<CatalogToolInvocationResult> {
+  const pathArg = asString(args["path"])
+  if (!pathArg) throw new ToolFailure("invalid_request", "path is required")
+  const canonical = canonicalVfsPath(pathArg)
+  const recursive = asBool(args["recursive"]) ?? false
+  const grants = getFsGrants(envelope)
+  if (envelope && !checkFsGrant(grants, "write", canonical)) {
+    throw new ToolFailure(
+      "permission_denied",
+      `fs_remove(${canonical}) not covered by any filesystem write grant`
+    )
+  }
+  const writePrefixes = canonicalGrantPrefixes(grants, "write")
+  return await ctx.backend.withGrantPrefixes(writePrefixes, () =>
+    ctx.backend.withPathLock(canonical, async () => {
+      const info = await ctx.backend.safeStat(canonical)
+      if (!info) {
+        throw new ToolFailure(
+          "runtime_constraint",
+          `fs_remove: ${canonical} does not exist`
+        )
+      }
+      if (info.kind === "directory") {
+        if (!recursive) {
+          throw new ToolFailure(
+            "invalid_request",
+            `fs_remove: ${canonical} is a directory; pass recursive=true`
+          )
+        }
+        // A directory subtree carries no single versioned blob — no history
+        // snapshot. safeResolve already confined the target to the grant subtree
+        // so the recursive rm cannot escape it.
+        await ctx.backend.remove(canonical, { recursive: true })
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ path: canonical, removed: true }),
+            },
+          ],
+          _meta: { removed: true, kind: "directory" },
+        }
+      }
+      if (info.kind !== "file") {
+        throw new ToolFailure(
+          "runtime_constraint",
+          `fs_remove: ${canonical} kind=${info.kind} is not removable`
+        )
+      }
+      // File removal: snapshot history like fs_delete (permanent).
+      if (info.size > ctx.cfg.maxSnapshotBytes) {
+        throw new ToolFailure(
+          "runtime_constraint",
+          `snapshot_too_large: ${info.size} bytes`
+        )
+      }
+      const h = await ctx.backend.streamSha256(canonical)
+      const priorSha = h.sha256
+      if (ctx.helper && ctx.helper.isAvailable()) {
+        await ctx.helper.historySnapshotDelete({
+          path: canonical,
+          prior_exists: true,
+          expected_sha256: priorSha,
+          prior_size: info.size,
+          prior_mtime_ms: info.mtimeMs,
+        })
+      } else if (!ctx.cfg.allowUnversionedWrite) {
+        throw new ToolFailure(
+          "runtime_constraint",
+          "history_unavailable: cannot remove a file without history"
+        )
+      }
+      await ctx.backend.remove(canonical, { recursive: false })
+      if (ctx.helper && ctx.helper.isAvailable() && ctx.avail.indexAvailable) {
+        await ctx.helper.indexRemove({ path: canonical }).catch(() => {})
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ path: canonical, removed: true }),
+          },
+        ],
+        _meta: { removed: true, kind: "file" },
       }
     })
   )

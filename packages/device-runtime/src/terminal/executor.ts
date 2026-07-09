@@ -60,6 +60,14 @@ export interface SpawnTerminalProcessOptions {
    * per stream; clamped to [4 KiB, 64 MiB].
    */
   readonly maxOutputBytes?: number
+  /**
+   * Optional abort signal (S4). When it fires, THIS child's own process group
+   * is killed via the same SIGTERM→SIGKILL escalation as the timeout path — and
+   * ONLY this child's group (kill(-pid)); it never touches a sibling runtime.
+   * Used by the sandbox adapter's per-SandboxHandle scoped dispose() to drain
+   * exactly the children it spawned. Omitted → unchanged behavior.
+   */
+  readonly signal?: AbortSignal
 }
 
 /**
@@ -156,15 +164,34 @@ export async function spawnTerminalProcess(
       }
     }, timeoutMs)
 
+    // Scoped dispose (S4): abort → kill THIS child's own group only. Same
+    // escalation as timeout/overflow; never signals any other pid.
+    const onAbort = (): void => {
+      if (killed || timedOut) return
+      killed = true
+      killProcessTree(child.pid, platform, options.osEnv, "SIGTERM")
+      if (escalationTimer === null) {
+        escalationTimer = setTimeout(() => {
+          killProcessTree(child.pid, platform, options.osEnv, "SIGKILL")
+        }, KILL_ESCALATION_DELAY_MS)
+      }
+    }
+    if (options.signal) {
+      if (options.signal.aborted) onAbort()
+      else options.signal.addEventListener("abort", onAbort, { once: true })
+    }
+
     child.on("error", (err) => {
       clearTimeout(timer)
       if (escalationTimer) clearTimeout(escalationTimer)
+      options.signal?.removeEventListener("abort", onAbort)
       reject(err)
     })
 
     child.on("close", (code, signal) => {
       clearTimeout(timer)
       if (escalationTimer) clearTimeout(escalationTimer)
+      options.signal?.removeEventListener("abort", onAbort)
       const stdout = stdoutCollector.finish()
       const stderr = stderrCollector.finish()
       resolve({

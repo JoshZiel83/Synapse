@@ -151,6 +151,18 @@ const EXEC_FILE_TOOL: DeviceCatalogTool = {
   },
 }
 
+/**
+ * CORE commandline tool defs the api-authored bare-sandbox catalog derives from
+ * (§4.3 / F-D). Exported as the SINGLE source of truth so the static catalog and
+ * the device builtin's describeExposures() cannot drift — the golden-drift test
+ * asserts equivalence. Linux bare adapters expose bash + exec_file (no
+ * powershell). pty is NOT here (no device-runtime pty builtin exists in P4a).
+ */
+export const COMMANDLINE_CORE_TOOL_DEFS: readonly DeviceCatalogTool[] = [
+  BASH_TOOL,
+  EXEC_FILE_TOOL,
+]
+
 // ─────────────────────────── builtin factory ────────────────────────────────
 
 export interface CommandlineBuiltinOptions {
