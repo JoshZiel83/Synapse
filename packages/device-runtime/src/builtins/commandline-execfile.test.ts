@@ -47,11 +47,11 @@ function fakeEnvelope(
   return {
     operation_id: randomUUID(),
     attempt_id: randomUUID(),
-    device_runtime_session_id: randomUUID(),
-    device_capability_id: randomUUID(),
-    device_exposure_id: randomUUID(),
-    device_tool_id: randomUUID(),
-    device_tool_revision_id: randomUUID(),
+    runtime_session_id: randomUUID(),
+    runtime_capability_id: randomUUID(),
+    runtime_exposure_id: randomUUID(),
+    runtime_tool_id: randomUUID(),
+    runtime_tool_revision_id: randomUUID(),
     input_hash: "sha256:test",
     task_mode: "sync",
     runtime_authorization: {

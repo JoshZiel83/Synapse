@@ -462,10 +462,10 @@ export async function getTaskRowById(taskId: string, queryable?: Executor) {
             principal_subj.kind AS "principalSubjectKind",
             principal_subj.remote_agent_id AS "principalRemoteAgentId",
             ir.final_result_payload AS "resolutionPayload",
-            auth.device_id AS "deviceId",
-            auth.device_capability_id AS "deviceCapabilityId",
-            auth.device_exposure_id AS "deviceExposureId",
-            auth.device_tool_stable_key AS "deviceToolStableKey",
+            auth.runtime_id AS "deviceId",
+            auth.runtime_capability_id AS "runtimeCapabilityId",
+            auth.runtime_exposure_id AS "runtimeExposureId",
+            auth.runtime_tool_stable_key AS "runtimeToolStableKey",
             requester_subj.workspace_member_id AS "requesterWorkspaceMemberId",
             requester_subj.actor_id AS "requesterActorId",
             requester_subj.remote_agent_id AS "requesterRemoteAgentId",
@@ -556,9 +556,9 @@ export async function getTaskRowById(taskId: string, queryable?: Executor) {
      LEFT JOIN users resolver_user
        ON resolver_user.id = resolver_wm.user_id
      LEFT JOIN devices device
-       ON device.id = auth.device_id
-     LEFT JOIN device_exposures exposure
-       ON exposure.id = auth.device_exposure_id
+       ON device.id = auth.runtime_id
+     LEFT JOIN runtime_exposures exposure
+       ON exposure.id = auth.runtime_exposure_id
      WHERE ir.id = ${taskId}
      LIMIT 1
   `.compile(db)
@@ -590,10 +590,10 @@ export async function getTaskRowByIdForUpdate(
             principal_subj.kind AS "principalSubjectKind",
             principal_subj.remote_agent_id AS "principalRemoteAgentId",
             ir.final_result_payload AS "resolutionPayload",
-            auth.device_id AS "deviceId",
-            auth.device_capability_id AS "deviceCapabilityId",
-            auth.device_exposure_id AS "deviceExposureId",
-            auth.device_tool_stable_key AS "deviceToolStableKey",
+            auth.runtime_id AS "deviceId",
+            auth.runtime_capability_id AS "runtimeCapabilityId",
+            auth.runtime_exposure_id AS "runtimeExposureId",
+            auth.runtime_tool_stable_key AS "runtimeToolStableKey",
             requester_subj.workspace_member_id AS "requesterWorkspaceMemberId",
             requester_subj.actor_id AS "requesterActorId",
             requester_subj.remote_agent_id AS "requesterRemoteAgentId",
@@ -684,9 +684,9 @@ export async function getTaskRowByIdForUpdate(
      LEFT JOIN users resolver_user
        ON resolver_user.id = resolver_wm.user_id
      LEFT JOIN devices device
-       ON device.id = auth.device_id
-     LEFT JOIN device_exposures exposure
-       ON exposure.id = auth.device_exposure_id
+       ON device.id = auth.runtime_id
+     LEFT JOIN runtime_exposures exposure
+       ON exposure.id = auth.runtime_exposure_id
      WHERE ir.id = ${taskId}
      LIMIT 1
      FOR UPDATE OF ir
@@ -821,10 +821,10 @@ export async function insertRuntimeAuthorizationTaskDetails(
   params: {
     taskId: string
     deviceId: string
-    deviceCapabilityId: string
-    deviceExposureId: string
+    runtimeCapabilityId: string
+    runtimeExposureId: string
     requestedToolName: string
-    deviceToolStableKey: string
+    runtimeToolStableKey: string
     reason: string
     requestMode: RuntimeAuthorizationRequestMode
     sourceRuntimeSessionId?: string
@@ -843,11 +843,11 @@ export async function insertRuntimeAuthorizationTaskDetails(
     client,
     db.insertInto("toolCallTaskRuntimeAuthorization").values({
       taskId: params.taskId,
-      deviceId: params.deviceId,
-      deviceCapabilityId: params.deviceCapabilityId,
-      deviceExposureId: params.deviceExposureId,
+      runtimeId: params.deviceId,
+      runtimeCapabilityId: params.runtimeCapabilityId,
+      runtimeExposureId: params.runtimeExposureId,
       requestedToolName: params.requestedToolName,
-      deviceToolStableKey: params.deviceToolStableKey,
+      runtimeToolStableKey: params.runtimeToolStableKey,
       reason: params.reason,
       requestMode: params.requestMode,
       sourceRuntimeSessionId: params.sourceRuntimeSessionId || null,
@@ -1010,10 +1010,10 @@ export async function findOpenRuntimeAuthorizationTaskId(params: {
   conversationId: string
   requesterParticipantId: string
   deviceId: string
-  deviceCapabilityId: string
-  deviceExposureId: string
+  runtimeCapabilityId: string
+  runtimeExposureId: string
   requestedToolName: string
-  deviceToolStableKey: string
+  runtimeToolStableKey: string
   requestMode: RuntimeAuthorizationRequestMode
   dedupeKey: string
 }): Promise<string | null> {
@@ -1043,12 +1043,12 @@ export async function findOpenRuntimeAuthorizationTaskId(params: {
         eb("ir.expiresAt", ">", new Date()),
       ])
     )
-    .where("auth.deviceId", "=", params.deviceId)
-    .where("auth.deviceCapabilityId", "=", params.deviceCapabilityId)
-    .where("auth.deviceExposureId", "=", params.deviceExposureId)
+    .where("auth.runtimeId", "=", params.deviceId)
+    .where("auth.runtimeCapabilityId", "=", params.runtimeCapabilityId)
+    .where("auth.runtimeExposureId", "=", params.runtimeExposureId)
     .where("auth.requestedToolName", "=", params.requestedToolName)
     .where(
-      sql<boolean>`auth.device_tool_stable_key = ${params.deviceToolStableKey}`
+      sql<boolean>`auth.runtime_tool_stable_key = ${params.runtimeToolStableKey}`
     )
     .where("auth.requestMode", "=", params.requestMode)
     .where("auth.dedupeKey", "=", params.dedupeKey)

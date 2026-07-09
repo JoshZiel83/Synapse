@@ -88,8 +88,8 @@ export const RuntimeAuthorizationGrantRecordViewSchema = z
     id: z.string(),
     workspaceId: z.string(),
     deviceId: z.string(),
-    deviceCapabilityId: z.string(),
-    deviceExposureId: z.string(),
+    runtimeCapabilityId: z.string(),
+    runtimeExposureId: z.string(),
     subject: SubjectRefViewSchema,
     scope: SubjectRefViewSchema.optional(),
     scopeLabel: z.string(),
@@ -129,7 +129,7 @@ export type RuntimeAuthorizationGrantPolicyInput = z.infer<
 
 /** Body for POST /runtime-authorization-grants. App surface stays camelCase. */
 export const CreateManualRuntimeAuthorizationGrantInputSchema = z.strictObject({
-  deviceCapabilityId: z.uuid(),
+  runtimeCapabilityId: z.uuid(),
   policy: RuntimeAuthorizationGrantPolicyInputSchema,
 })
 export type CreateManualRuntimeAuthorizationGrantInput = z.infer<

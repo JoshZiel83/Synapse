@@ -128,7 +128,9 @@ const tableIsEphemeral = (entry) =>
 const tableHasDeclaredLiveSemantics = (entry) =>
   (Array.isArray(entry.liveValues) && entry.liveValues.length) ||
   Boolean(entry.livePredicate)
-const ADDITIONAL_PARENT_FOLDING_LIVE_VIEW_TABLES = new Set(["device_exposures"])
+const ADDITIONAL_PARENT_FOLDING_LIVE_VIEW_TABLES = new Set([
+  "runtime_exposures",
+])
 const tableHasManifestLiveView = (name, entry) =>
   !tableIsEphemeral(entry) &&
   (tableHasDeclaredLiveSemantics(entry) ||
@@ -528,9 +530,9 @@ function emitSecurityDefinerFns() {
       body: "DELETE FROM conversation_participant_addresses WHERE conversation_participant_id = p_participant_id AND transport_address_id = p_transport_address_id;",
     },
     {
-      name: "sd_detach_device_service",
-      args: "p_service_id uuid, p_device_id uuid",
-      body: "DELETE FROM device_services WHERE id = p_service_id AND device_id = p_device_id;",
+      name: "sd_detach_runtime_service",
+      args: "p_service_id uuid, p_runtime_id uuid",
+      body: "DELETE FROM runtime_services WHERE id = p_service_id AND runtime_id = p_runtime_id;",
     },
     {
       name: "sd_clear_member_preferences",
@@ -633,7 +635,7 @@ $sd_exec_grants$;`)
   const ownerTables = [
     "memory_item_parts",
     "conversation_participant_addresses",
-    "device_services",
+    "runtime_services",
     "workspace_member_preferences",
     "actor_model_group_assignments",
     "plugin_version_runtime_permissions",

@@ -1,7 +1,7 @@
 // Device Control Plane hello authentication (§7.1 handshake).
 // Verifies that the (device_id, service_id) pair claimed by the runtime is a
-// real device_services row in the DB AND that the runtime can sign a
-// server-issued nonce with the matching device_service_keys.pubkey.
+// real runtime_services row in the DB AND that the runtime can sign a
+// server-issued nonce with the matching runtime_service_keys.pubkey.
 
 import { createPublicKey, verify as cryptoVerify } from "node:crypto"
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
@@ -45,8 +45,8 @@ function decodeBase64(value: string): Buffer | null {
 
 /**
  * Verify a runtime's device.hello against the DB. On success returns the
- * authenticated device_service_keys.id so the caller can record it on the
- * device_control_plane_sessions row.
+ * authenticated runtime_service_keys.id so the caller can record it on the
+ * runtime_control_plane_sessions row.
  *
  * `executor` is optional; the repo lookup defaults to the global DB singleton.
  * Tests inject the testcontainer-backed handle (e.g. the `withTestDb`
@@ -76,7 +76,7 @@ export async function authenticateDeviceHello(
     return {
       ok: false,
       code: "service_key_missing",
-      message: `no active device_service_keys row for service ${input.serviceId}`,
+      message: `no active runtime_service_keys row for service ${input.serviceId}`,
     }
   }
 

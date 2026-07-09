@@ -4,7 +4,7 @@ import { computeWireNames, type NamePolicyItem } from "./name-policy.js"
 import {
   systemToolId,
   pluginToolId,
-  deviceToolId,
+  runtimeToolId,
   type ToolRef,
 } from "./ref.js"
 
@@ -36,19 +36,19 @@ function deviceRef(
   deviceName?: string
 ): ToolRef {
   return {
-    toolId: deviceToolId(deviceToolsId),
+    toolId: runtimeToolId(deviceToolsId),
     source: {
-      kind: "device",
-      deviceToolId: deviceToolsId,
+      kind: "runtime",
+      runtimeToolId: deviceToolsId,
       exposureStableKey,
       ...(deviceName !== undefined ? { deviceName } : {}),
     },
     binding: {
       transport: "device_tunnel",
-      deviceId: "dev-1",
-      deviceServiceId: "svc-1",
-      deviceCapabilityId: "cap-1",
-      deviceExposureId: "exp-1",
+      runtimeId: "dev-1",
+      runtimeServiceId: "svc-1",
+      runtimeCapabilityId: "cap-1",
+      runtimeExposureId: "exp-1",
     },
     identity: { stableKey: `device/${exposureStableKey}/${visibleName}` },
   }
@@ -69,7 +69,7 @@ test("globally unique leaf names stay bare", () => {
     reg.byToolId.get(pluginToolId("inst-a", "create_issue"))!.wireName,
     "create_issue"
   )
-  assert.equal(reg.byToolId.get(deviceToolId("dt-1"))!.wireName, "fs_read")
+  assert.equal(reg.byToolId.get(runtimeToolId("dt-1"))!.wireName, "fs_read")
 })
 
 test("same leaf across plugin + device: BOTH qualified, neither lost (finding #2/#6)", () => {

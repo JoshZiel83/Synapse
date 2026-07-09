@@ -15,11 +15,11 @@ import {
 const ENVELOPE: OperationEnvelope = OperationEnvelopeSchema.parse({
   operation_id: "00000000-0000-4000-8000-000000000001",
   attempt_id: "00000000-0000-4000-8000-000000000002",
-  device_runtime_session_id: "00000000-0000-4000-8000-000000000003",
-  device_capability_id: "00000000-0000-4000-8000-000000000004",
-  device_exposure_id: "00000000-0000-4000-8000-000000000005",
-  device_tool_id: "00000000-0000-4000-8000-000000000006",
-  device_tool_revision_id: "00000000-0000-4000-8000-000000000007",
+  runtime_session_id: "00000000-0000-4000-8000-000000000003",
+  runtime_capability_id: "00000000-0000-4000-8000-000000000004",
+  runtime_exposure_id: "00000000-0000-4000-8000-000000000005",
+  runtime_tool_id: "00000000-0000-4000-8000-000000000006",
+  runtime_tool_revision_id: "00000000-0000-4000-8000-000000000007",
   input_hash: "sha256:test",
   task_mode: "sync",
   issued_at: "2026-01-01T00:00:00.000Z",
@@ -63,7 +63,7 @@ async function withRegisteredTunnel<T>(
   const previousRegistry = getDeviceTunnelRegistry()
   const registry = createInMemoryDeviceTunnelRegistry()
   registry.register({
-    deviceServiceId: "svc-1",
+    runtimeServiceId: "svc-1",
     internalUrl: "http://device-runtime.local/session/",
   })
   setDeviceTunnelRegistry(registry)
@@ -77,7 +77,7 @@ async function withRegisteredTunnel<T>(
 
 function baseDispatchOptions(fetchImpl: typeof fetch) {
   return {
-    deviceServiceId: "svc-1",
+    runtimeServiceId: "svc-1",
     envelope: ENVELOPE,
     args: { input: "hello" },
     toolName: "tool.echo",

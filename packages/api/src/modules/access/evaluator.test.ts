@@ -6,6 +6,7 @@ import {
   WORKSPACE_RESOURCE_GRANT_PERMISSION,
 } from "@synapse/shared"
 import { withTestDb } from "../../test/helpers/db.js"
+import { insertDeviceRuntime } from "../../test/helpers/runtime-fixtures.js"
 import { checkPermission, lookupResources } from "./evaluator.js"
 import { setRequiresContactApproval } from "./contact-approval.js"
 import { upsertAccessSubject } from "./subject-registry.js"
@@ -1683,7 +1684,7 @@ async function insertResourceGrant(
     resourceType:
       | "installed_skill"
       | "plugin_installation"
-      | "device_capability"
+      | "runtime_capability"
       | "automation_event_source"
       | "actor"
       | "remote_agent"
@@ -1776,30 +1777,27 @@ async function insertDevice(
   ownerWorkspaceMemberId: string | null
 ): Promise<{ deviceId: string; exposureId: string; capabilityId: string }> {
   const suffix = Math.random().toString(36).slice(2, 10)
-  const dev = await db
-    .insertInto("devices")
-    .values({
-      workspaceId: workspaceId,
-      ownerWorkspaceMemberId: ownerWorkspaceMemberId,
-      title: "regression device",
-      publicKey: `pk-${suffix}`,
-      publicKeyFingerprint: `fp-${suffix}`,
-      trustStatus: "trusted",
-    } as any)
-    .returning("id")
-    .executeTakeFirstOrThrow()
+  const dev = await insertDeviceRuntime(db, {
+    workspaceId: workspaceId,
+    ownerWorkspaceMemberId: ownerWorkspaceMemberId,
+    title: "regression device",
+    publicKey: `pk-${suffix}`,
+    publicKeyFingerprint: `fp-${suffix}`,
+    trustStatus: "trusted",
+  })
   const svc = await db
-    .insertInto("deviceServices")
+    .insertInto("runtimeServices")
     .values({
-      deviceId: dev.id as string,
+      runtimeId: dev.id as string,
       serviceKind: "device_runtime",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   const exp = await db
-    .insertInto("deviceExposures")
+    .insertInto("runtimeExposures")
     .values({
-      deviceId: dev.id as string,
+      runtimeId: dev.id as string,
+      workspaceId: workspaceId,
       serviceId: svc.id as string,
       stableKey: `exp-${suffix}`,
       displayName: "regression exposure",
@@ -1815,7 +1813,7 @@ async function insertDevice(
     .values({
       id: crypto.randomUUID(),
       workspaceId: workspaceId,
-      kind: "device_capability",
+      kind: "runtime_capability",
       displayName: "regression exposure",
       ownerSubjectId: capOwnerSubjectId,
       createdBySubjectId:
@@ -1826,9 +1824,10 @@ async function insertDevice(
     .returning("id")
     .executeTakeFirstOrThrow()
   await db
-    .insertInto("deviceCapabilities")
+    .insertInto("runtimeCapabilities")
     .values({
       id: cap.id as string,
+      workspaceId: workspaceId,
       exposureId: exp.id as string,
     } as any)
     .execute()
@@ -1922,7 +1921,7 @@ test(
       })
       assert.equal(adminExposure, true)
       const adminCapability = await checkPermission(db, {
-        resourceType: "device_capability",
+        resourceType: "runtime_capability",
         resourceId: capabilityId,
         permission: "edit",
         subject: { type: "workspace_member", id: ownerMemberId },
@@ -1965,7 +1964,7 @@ test(
         .execute()
 
       const allowed = await checkPermission(db, {
-        resourceType: "device_capability",
+        resourceType: "runtime_capability",
         resourceId: capabilityId,
         permission: "grant",
         subject: { type: "workspace_member", id: guestMemberId },
@@ -1995,7 +1994,7 @@ test(
       // own-device only, so a non-owned capability is NOT enumerated. (It also
       // has no resource grant, so the granted-ids leg returns nothing.)
       const beforeKey = await lookupResources(db, {
-        resourceType: "device_capability",
+        resourceType: "runtime_capability",
         permission: "view",
         subject: { type: "workspace_member", id: guestMemberId },
       })
@@ -2004,7 +2003,7 @@ test(
       // device_admin alone no longer implies discovery of capability resources.
       await grantWorkspaceAccessKey(db, guestMemberId, "device_admin")
       const afterKey = await lookupResources(db, {
-        resourceType: "device_capability",
+        resourceType: "runtime_capability",
         permission: "view",
         subject: { type: "workspace_member", id: guestMemberId },
       })
@@ -2012,7 +2011,7 @@ test(
 
       // Even the workspace owner does not discover it without an explicit use grant.
       const adminIds = await lookupResources(db, {
-        resourceType: "device_capability",
+        resourceType: "runtime_capability",
         permission: "view",
         subject: { type: "workspace_member", id: ownerMemberId },
       })

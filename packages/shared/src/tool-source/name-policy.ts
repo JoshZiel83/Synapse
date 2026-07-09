@@ -59,10 +59,10 @@ function qualifierFor(ref: ToolRef): string {
       // installationId is a UUID; the upstream name is already the leaf, so the
       // installation prefix is what disambiguates two installs' same-named tool.
       return `plugin_${ref.source.installationId.slice(0, 8)}`
-    case "device":
+    case "runtime":
       return ref.source.deviceName
         ? sanitizeSegment(ref.source.deviceName)
-        : `device_${ref.source.deviceToolId.slice(0, 8)}`
+        : `device_${ref.source.runtimeToolId.slice(0, 8)}`
   }
 }
 

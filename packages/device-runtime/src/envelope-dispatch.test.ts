@@ -36,22 +36,22 @@ function makeEnvelope(
       : never
     : never,
   overrides?: Partial<{
-    device_capability_id: string
-    device_exposure_id: string
-    device_tool_id: string
-    device_tool_revision_id: string
+    runtime_capability_id: string
+    runtime_exposure_id: string
+    runtime_tool_id: string
+    runtime_tool_revision_id: string
   }>
 ): OperationEnvelope {
   return signOperationEnvelope(
     {
       operation_id: randomUUID(),
       attempt_id: randomUUID(),
-      device_runtime_session_id: randomUUID(),
-      device_capability_id: overrides?.device_capability_id ?? randomUUID(),
-      device_exposure_id: overrides?.device_exposure_id ?? randomUUID(),
-      device_tool_id: overrides?.device_tool_id ?? randomUUID(),
-      device_tool_revision_id:
-        overrides?.device_tool_revision_id ?? randomUUID(),
+      runtime_session_id: randomUUID(),
+      runtime_capability_id: overrides?.runtime_capability_id ?? randomUUID(),
+      runtime_exposure_id: overrides?.runtime_exposure_id ?? randomUUID(),
+      runtime_tool_id: overrides?.runtime_tool_id ?? randomUUID(),
+      runtime_tool_revision_id:
+        overrides?.runtime_tool_revision_id ?? randomUUID(),
       input_hash: hashArguments(args),
       task_mode: "sync",
       runtime_authorization: {
@@ -82,11 +82,11 @@ function seedBashCatalogTargetIds(
 ) {
   host.setCatalogTargetIds({
     "builtin/commandline": {
-      device_exposure_id: envelope.device_exposure_id,
+      runtime_exposure_id: envelope.runtime_exposure_id,
       tools: {
         bash: {
-          device_tool_id: envelope.device_tool_id,
-          device_tool_revision_id: envelope.device_tool_revision_id,
+          runtime_tool_id: envelope.runtime_tool_id,
+          runtime_tool_revision_id: envelope.runtime_tool_revision_id,
         },
       },
     },
@@ -278,7 +278,7 @@ test("envelope dispatch is rejected when catalog target index is empty (fail-clo
   }
 })
 
-test("envelope with mismatched device_tool_id is rejected even when name matches", async () => {
+test("envelope with mismatched runtime_tool_id is rejected even when name matches", async () => {
   const signer = buildSigner()
   const host = createInMemoryMcpHost({
     envelopeVerifier: createInMemoryEnvelopeVerifier(),
@@ -298,16 +298,16 @@ test("envelope with mismatched device_tool_id is rejected even when name matches
         },
       },
     ])
-    // Seed the target index with a DIFFERENT device_tool_id than the
+    // Seed the target index with a DIFFERENT runtime_tool_id than the
     // envelope carries — this simulates a forged/misrouted envelope
     // targeting a tool that doesn't live on this device.
     host.setCatalogTargetIds({
       "builtin/commandline": {
-        device_exposure_id: randomUUID(),
+        runtime_exposure_id: randomUUID(),
         tools: {
           bash: {
-            device_tool_id: randomUUID(),
-            device_tool_revision_id: randomUUID(),
+            runtime_tool_id: randomUUID(),
+            runtime_tool_revision_id: randomUUID(),
           },
         },
       },
@@ -373,11 +373,11 @@ test("expired envelope is rejected with expired_envelope", async () => {
       {
         operation_id: randomUUID(),
         attempt_id: randomUUID(),
-        device_runtime_session_id: randomUUID(),
-        device_capability_id: randomUUID(),
-        device_exposure_id: randomUUID(),
-        device_tool_id: randomUUID(),
-        device_tool_revision_id: randomUUID(),
+        runtime_session_id: randomUUID(),
+        runtime_capability_id: randomUUID(),
+        runtime_exposure_id: randomUUID(),
+        runtime_tool_id: randomUUID(),
+        runtime_tool_revision_id: randomUUID(),
         input_hash: hashArguments(args),
         task_mode: "sync",
         runtime_authorization: {

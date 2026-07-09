@@ -58,7 +58,9 @@ const VALID_ACTIONS = ["RESTRICT", "NO ACTION", "SET NULL", "CASCADE"]
 const VALID_SUBJECT_ROLES = ["user", "member", "scope", "target"]
 const VALID_PRINCIPAL_ACTIONS = ["revoke", "close", "update"]
 const VALID_LIVE_INTEGRITY = ["enforce", "historical", "none"]
-const ADDITIONAL_PARENT_FOLDING_LIVE_VIEW_TABLES = new Set(["device_exposures"])
+const ADDITIONAL_PARENT_FOLDING_LIVE_VIEW_TABLES = new Set([
+  "runtime_exposures",
+])
 
 function fail(errors) {
   console.error(`\n✗ derive-fk-policy: ${errors.length} violation(s):\n`)

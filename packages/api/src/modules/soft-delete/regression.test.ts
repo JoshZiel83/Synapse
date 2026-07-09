@@ -2,6 +2,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { sql } from "kysely"
 import { withTestDb } from "../../test/helpers/db.js"
+import { insertDeviceRuntime } from "../../test/helpers/runtime-fixtures.js"
 import {
   markUserDeleted,
   markWorkspaceDeleted,
@@ -597,16 +598,12 @@ test(
       const u = await insertUser(db)
       const ws = await insertWorkspace(db, u)
       const mid = await insertMember(db, ws, u, "admin")
-      const dev = await db
-        .insertInto("devices")
-        .values({
-          workspaceId: ws,
-          title: "d",
-          publicKey: "k",
-          publicKeyFingerprint: `fp-${uniq("d")}`,
-        })
-        .returning("id")
-        .executeTakeFirstOrThrow()
+      const dev = await insertDeviceRuntime(db, {
+        workspaceId: ws,
+        title: "d",
+        publicKey: "k",
+        publicKeyFingerprint: `fp-${uniq("d")}`,
+      })
       const subject = { type: "workspace_member" as const, id: mid }
       const before = await checkPermission(db as never, {
         resourceType: "device",
@@ -616,7 +613,7 @@ test(
       })
       assert.equal(before, true, "live device is viewable by admin")
       await db
-        .updateTable("devices")
+        .updateTable("runtimes")
         .set({ deletedAt: new Date() })
         .where("id", "=", dev.id)
         .execute()
@@ -1222,17 +1219,13 @@ async function insertInstallation(
 }
 
 async function insertDevice(db: AnyDb, ws: string): Promise<string> {
-  const row = await db
-    .insertInto("devices")
-    .values({
-      workspaceId: ws,
-      title: "soft-delete-device",
-      publicKey: uniq("device-pk"),
-      publicKeyFingerprint: uniq("device-fp"),
-      trustStatus: "trusted",
-    } as any)
-    .returning("id")
-    .executeTakeFirstOrThrow()
+  const row = await insertDeviceRuntime(db, {
+    workspaceId: ws,
+    title: "soft-delete-device",
+    publicKey: uniq("device-pk"),
+    publicKeyFingerprint: uniq("device-fp"),
+    trustStatus: "trusted",
+  })
   return row.id as string
 }
 
@@ -1242,18 +1235,19 @@ async function insertDeviceCapability(
 ): Promise<{ capabilityId: string; exposureId: string; serviceId: string }> {
   const deviceId = await insertDevice(db, ws)
   const service = await db
-    .insertInto("deviceServices")
+    .insertInto("runtimeServices")
     .values({
-      deviceId: deviceId,
+      runtimeId: deviceId,
       serviceKind: "device_runtime",
       status: "online",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   const exposure = await db
-    .insertInto("deviceExposures")
+    .insertInto("runtimeExposures")
     .values({
-      deviceId: deviceId,
+      runtimeId: deviceId,
+      workspaceId: ws,
       serviceId: service.id as string,
       stableKey: uniq("device-exposure"),
       displayName: "soft-delete exposure",
@@ -1268,16 +1262,17 @@ async function insertDeviceCapability(
     .values({
       id: capabilityId,
       workspaceId: ws,
-      kind: "device_capability",
+      kind: "runtime_capability",
       displayName: "soft-delete exposure",
       status: "active",
       createdBySubjectId: platformSubject,
     } as any)
     .execute()
   const capability = await db
-    .insertInto("deviceCapabilities")
+    .insertInto("runtimeCapabilities")
     .values({
       id: capabilityId,
+      workspaceId: ws,
       exposureId: exposure.id as string,
     } as any)
     .returning("id")
@@ -1614,9 +1609,9 @@ test(
       const ws = await insertWorkspace(db, u)
       const offlineDeviceId = await insertDevice(db, ws)
       const offlineService = await db
-        .insertInto("deviceServices")
+        .insertInto("runtimeServices")
         .values({
-          deviceId: offlineDeviceId,
+          runtimeId: offlineDeviceId,
           serviceKind: "device_runtime",
           status: "offline",
         } as any)
@@ -1624,7 +1619,7 @@ test(
         .executeTakeFirstOrThrow()
 
       const offlineServiceLive = await db
-        .selectFrom("deviceServicesLive")
+        .selectFrom("runtimeServicesLive")
         .select("id")
         .where("id", "=", offlineService.id)
         .execute()
@@ -1637,21 +1632,22 @@ test(
         db,
         () =>
           db
-            .insertInto("deviceExposures")
+            .insertInto("runtimeExposures")
             .values({
-              deviceId: offlineDeviceId,
+              runtimeId: offlineDeviceId,
+              workspaceId: ws,
               serviceId: offlineService.id as string,
               stableKey: uniq("offline-exposure"),
               displayName: "offline exposure",
               transport: "stdio",
             } as any)
             .execute(),
-        /references non-live device_services/
+        /references non-live runtime_services/
       )
 
       const { capabilityId, exposureId } = await insertDeviceCapability(db, ws)
       const hiddenTool = await db
-        .insertInto("deviceTools")
+        .insertInto("runtimeTools")
         .values({
           exposureId: exposureId,
           stableKey: uniq("hidden-tool"),
@@ -1661,7 +1657,7 @@ test(
         .returning("id")
         .executeTakeFirstOrThrow()
       const removedTool = await db
-        .insertInto("deviceTools")
+        .insertInto("runtimeTools")
         .values({
           exposureId: exposureId,
           stableKey: uniq("removed-tool"),
@@ -1671,7 +1667,7 @@ test(
         .returning("id")
         .executeTakeFirstOrThrow()
       const hiddenRemovedToolsLive = await db
-        .selectFrom("deviceToolsLive")
+        .selectFrom("runtimeToolsLive")
         .select("id")
         .where("id", "in", [hiddenTool.id, removedTool.id])
         .execute()
@@ -1682,7 +1678,7 @@ test(
       )
 
       const catalogRevision = await db
-        .insertInto("deviceCatalogRevisions")
+        .insertInto("runtimeCatalogRevisions")
         .values({
           exposureId: exposureId,
           revisionSeq: 1,
@@ -1695,14 +1691,14 @@ test(
         db,
         () =>
           db
-            .insertInto("deviceToolRevisions")
+            .insertInto("runtimeToolRevisions")
             .values({
               toolId: removedTool.id as string,
               catalogRevisionId: catalogRevision.id as string,
               toolName: "removed_tool",
             } as any)
             .execute(),
-        /references non-live device_tools/
+        /references non-live runtime_tools/
       )
 
       const subject = await db
@@ -1738,7 +1734,7 @@ test(
         .execute()
 
       const archivedCapabilityLive = await db
-        .selectFrom("deviceCapabilitiesLive")
+        .selectFrom("runtimeCapabilitiesLive")
         .select("id")
         .where("id", "=", capabilityId)
         .execute()
@@ -1749,7 +1745,7 @@ test(
       )
 
       const allowed = await checkPermission(db as never, {
-        resourceType: "device_capability",
+        resourceType: "runtime_capability",
         resourceId: capabilityId,
         permission: "view",
         subject: { type: "workspace_member", id: subject.id as string },

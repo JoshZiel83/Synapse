@@ -224,12 +224,12 @@ tables:
     class: root
     softDelete: deleted_at
     workspaceScope: workspace_id
-  device_capabilities:
+  runtime_capabilities:
     class: child
     softDelete: none
     workspaceScope: workspace_id
     livePredicate: TRUE
-  device_catalog_revisions:
+  runtime_catalog_revisions:
     class: append-only
     softDelete: none
     workspaceScope: none
@@ -241,7 +241,7 @@ tables:
     deleteWhitelist:
       - ba-kernel
       - revokeAuthRuntimeForUser
-  device_control_plane_sessions:
+  runtime_control_plane_sessions:
     class: ephemeral
     softDelete: none
     workspaceScope: none
@@ -251,29 +251,29 @@ tables:
       - closing
     deleteWhitelist:
       - securityDefinerFn
-  device_exposures:
+  runtime_exposures:
     class: child
     softDelete: none
-    workspaceScope: none
-  device_operation_attempts:
+    workspaceScope: workspace_id
+  runtime_operation_attempts:
     class: append-only
     softDelete: none
     workspaceScope: none
-  device_operation_results:
+  runtime_operation_results:
     class: append-only
     softDelete: none
     workspaceScope: none
-  device_operations:
+  runtime_operations:
     class: append-only
     softDelete: none
     workspaceScope: workspace_id
-  device_pairing_sessions:
+  runtime_pairing_sessions:
     class: ephemeral
     softDelete: none
     workspaceScope: workspace_id
     deleteWhitelist:
       - securityDefinerFn
-  device_runtime_session_services:
+  runtime_session_services:
     class: ephemeral
     softDelete: none
     workspaceScope: none
@@ -281,7 +281,7 @@ tables:
       - open
     deleteWhitelist:
       - securityDefinerFn
-  device_runtime_sessions:
+  runtime_sessions:
     class: ephemeral
     softDelete: none
     workspaceScope: none
@@ -290,11 +290,11 @@ tables:
       - closing
     deleteWhitelist:
       - securityDefinerFn
-  device_service_keys:
+  runtime_service_keys:
     class: child
     softDelete: none
     workspaceScope: none
-  device_services:
+  runtime_services:
     class: child
     softDelete: none
     workspaceScope: none
@@ -308,20 +308,30 @@ tables:
     workspaceScope: none
     deleteWhitelist:
       - securityDefinerFn
-  device_tool_revisions:
+  runtime_tool_revisions:
     class: append-only
     softDelete: none
     workspaceScope: none
-  device_tools:
+  runtime_tools:
     class: child
     softDelete: none
     workspaceScope: none
     liveValues:
       - active
-  devices:
+  runtimes:
     class: root
     softDelete: deleted_at
     workspaceScope: workspace_id
+  sandboxes:
+    class: child
+    softDelete: none
+    workspaceScope: workspace_id
+    livePredicate: TRUE
+  devices:
+    class: child
+    softDelete: none
+    workspaceScope: workspace_id
+    livePredicate: TRUE
   direct_conversation_bindings:
     class: child
     softDelete: none
@@ -599,8 +609,8 @@ tables:
     liveParents:
       - column: workspace_id
         parent: workspaces
-      - column: device_id
-        parent: devices
+      - column: runtime_id
+        parent: runtimes
   runtime_events:
     class: append-only
     softDelete: none
@@ -854,7 +864,7 @@ tables:
     workspaceScope: none
     deleteWhitelist:
       - securityDefinerFn
-  tool_call_task_device_tool:
+  tool_call_task_runtime_tool:
     class: ephemeral
     softDelete: none
     workspaceScope: none
@@ -1360,10 +1370,10 @@ foreignKeys:
     _child: plugin_installations(id)
     _parent: workspace_resources(id)
     _was: RESTRICT
-  constraint:fk_device_capabilities_workspace_resource_root:
+  constraint:fk_runtime_capabilities_workspace_resource_root:
     targetAction: RESTRICT
     liveIntegrity: enforce
-    _child: device_capabilities(id)
+    _child: runtime_capabilities(id)
     _parent: workspace_resources(id)
     _was: RESTRICT
   constraint:fk_automation_event_sources_workspace_resource_root:
@@ -1443,13 +1453,13 @@ foreignKeys:
   constraint:fk_runtime_authorization_grants_workspace_resource_root:
     targetAction: RESTRICT
     liveIntegrity: none
-    _child: runtime_authorization_grants(device_capability_id,workspace_id)
+    _child: runtime_authorization_grants(runtime_capability_id,workspace_id)
     _parent: workspace_resources(id,workspace_id)
     _was: RESTRICT
-  constraint:fk_device_operations_workspace_resource_root:
+  constraint:fk_runtime_operations_workspace_resource_root:
     targetAction: RESTRICT
     liveIntegrity: none
-    _child: device_operations(device_capability_id,workspace_id)
+    _child: runtime_operations(runtime_capability_id,workspace_id)
     _parent: workspace_resources(id,workspace_id)
     _was: RESTRICT
   digest:c8fc704a81fa28e1:
@@ -2920,253 +2930,253 @@ foreignKeys:
     _child: devices(owner_workspace_member_id)
     _parent: workspace_members(id)
     _was: SET NULL
-  digest:cb52c28edeca60b9:
+  digest:20c20349e3e1c0f8:
     targetAction: RESTRICT
-    _child: device_pairing_sessions(workspace_id)
+    _child: runtime_pairing_sessions(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
-  digest:45a6a07f4ad66b12:
+  digest:ee75fa47560c0ac0:
     targetAction: SET NULL
     setNull:
       canLose: false
       needsSnapshot: true
       snapshotColumn: requested_by_workspace_member_id_snapshot
-    _child: device_pairing_sessions(requested_by_workspace_member_id)
+    _child: runtime_pairing_sessions(requested_by_workspace_member_id)
     _parent: workspace_members(id)
     _was: SET NULL
-  digest:36492a099af137f0:
+  digest:bee90be20c6bcf2f:
     targetAction: SET NULL
     setNull:
       canLose: true
       needsSnapshot: false
-    _child: device_pairing_sessions(device_id)
-    _parent: devices(id)
+    _child: runtime_pairing_sessions(runtime_id)
+    _parent: runtimes(id)
     _was: SET NULL
-  digest:219cbc6806fa6300:
+  digest:3661146bd3147448:
     targetAction: RESTRICT
     liveIntegrity: enforce
-    _child: device_services(device_id)
-    _parent: devices(id)
+    _child: runtime_services(runtime_id)
+    _parent: runtimes(id)
     _was: CASCADE
-  digest:09df4e4e6a2ba89e:
+  digest:3450d226eb5a2dd8:
     targetAction: RESTRICT
     liveIntegrity: enforce
-    _child: device_services(remote_agent_machine_id)
+    _child: runtime_services(remote_agent_machine_id)
     _parent: remote_agent_machines(id)
     _was: CASCADE
-  digest:7c6c56871ef7db81:
+  digest:73c5c721f8351e7e:
     targetAction: RESTRICT
     liveIntegrity: enforce
-    _child: device_service_keys(service_id)
-    _parent: device_services(id)
+    _child: runtime_service_keys(service_id)
+    _parent: runtime_services(id)
     _was: CASCADE
-  digest:6a1719d83b48c095:
+  digest:6d329e4a5b44ad72:
     targetAction: RESTRICT
-    _child: device_control_plane_sessions(device_id)
-    _parent: devices(id)
+    _child: runtime_control_plane_sessions(runtime_id)
+    _parent: runtimes(id)
     _was: CASCADE
-  digest:6295307b7329dc5a:
+  digest:a3addb98be5eaff1:
     targetAction: RESTRICT
-    _child: device_control_plane_sessions(service_id)
-    _parent: device_services(id)
+    _child: runtime_control_plane_sessions(service_id)
+    _parent: runtime_services(id)
     _was: CASCADE
   digest:f4282f80f128aee2:
     targetAction: RESTRICT
     _child: device_sync_sources(device_id)
     _parent: devices(id)
     _was: CASCADE
-  digest:03b1a144c43cf372:
+  digest:38e5e235b1a4309e:
     targetAction: RESTRICT
     liveIntegrity: enforce
-    _child: device_exposures(device_id)
-    _parent: devices(id)
+    _child: runtime_exposures(runtime_id)
+    _parent: runtimes(id)
     _was: CASCADE
-  digest:437d60990f9981e2:
+  digest:31ebb42605220d2f:
     targetAction: RESTRICT
     liveIntegrity: enforce
-    _child: device_exposures(service_id)
-    _parent: device_services(id)
+    _child: runtime_exposures(service_id)
+    _parent: runtime_services(id)
     _was: CASCADE
-  digest:6b642d98d34cdb75:
+  digest:5e091ac62f42685c:
     targetAction: SET NULL
     setNull:
       canLose: true
       needsSnapshot: false
-    _child: device_exposures(sync_source_id)
+    _child: runtime_exposures(sync_source_id)
     _parent: device_sync_sources(id)
     _was: SET NULL
-  digest:cb560237bd041326:
+  digest:d8718a4537b48d3c:
     targetAction: RESTRICT
     liveIntegrity: enforce
-    _child: device_capabilities(exposure_id)
-    _parent: device_exposures(id)
+    _child: runtime_capabilities(exposure_id)
+    _parent: runtime_exposures(id)
     _was: CASCADE
-  digest:baf2c140d655eeda:
+  digest:044b9e85944d7a01:
     targetAction: RESTRICT
     liveIntegrity: enforce
-    _child: device_catalog_revisions(exposure_id)
-    _parent: device_exposures(id)
+    _child: runtime_catalog_revisions(exposure_id)
+    _parent: runtime_exposures(id)
     _was: CASCADE
-  digest:43ba841660e0ff81:
+  digest:5a552b01d1b45821:
     targetAction: RESTRICT
     liveIntegrity: enforce
-    _child: device_tools(exposure_id)
-    _parent: device_exposures(id)
+    _child: runtime_tools(exposure_id)
+    _parent: runtime_exposures(id)
     _was: CASCADE
-  digest:31bcc236048f94fa:
+  digest:b05bedf7b6b1d37e:
     targetAction: RESTRICT
     liveIntegrity: enforce
-    _child: device_tool_revisions(tool_id)
-    _parent: device_tools(id)
+    _child: runtime_tool_revisions(tool_id)
+    _parent: runtime_tools(id)
     _was: CASCADE
-  digest:a83120ad099019ea:
+  digest:ccb5f9c2467b2cf7:
     targetAction: RESTRICT
-    _child: device_tool_revisions(catalog_revision_id)
-    _parent: device_catalog_revisions(id)
+    _child: runtime_tool_revisions(catalog_revision_id)
+    _parent: runtime_catalog_revisions(id)
     _was: CASCADE
-  digest:7021d67abed84c4f:
+  digest:b19af07ab7a4390c:
     targetAction: RESTRICT
-    _child: device_runtime_sessions(device_id)
-    _parent: devices(id)
+    _child: runtime_sessions(runtime_id)
+    _parent: runtimes(id)
     _was: CASCADE
-  digest:02158d34291fa17d:
+  digest:0500c944accb2b5b:
     targetAction: SET NULL
     setNull:
       canLose: true
       needsSnapshot: false
-    _child: device_runtime_sessions(conversation_id)
+    _child: runtime_sessions(conversation_id)
     _parent: conversations(id)
     _was: SET NULL
-  digest:3aff297aa0f654f8:
+  digest:7172ac1ea6c6e378:
     targetAction: SET NULL
     setNull:
       canLose: true
       needsSnapshot: false
-    _child: device_runtime_sessions(actor_id)
+    _child: runtime_sessions(actor_id)
     _parent: actors(id)
     _was: SET NULL
-  digest:400fe8d1bdbfa005:
+  digest:f4dae8c71d7e8579:
     targetAction: RESTRICT
-    _child: device_runtime_session_services(session_id)
-    _parent: device_runtime_sessions(id)
+    _child: runtime_session_services(session_id)
+    _parent: runtime_sessions(id)
     _was: CASCADE
-  digest:603bb3b84d877441:
+  digest:c07c53d96761dd86:
     targetAction: RESTRICT
-    _child: device_runtime_session_services(service_id)
-    _parent: device_services(id)
+    _child: runtime_session_services(service_id)
+    _parent: runtime_services(id)
     _was: CASCADE
-  digest:ecbd09c11d253a5e:
+  digest:7b7ea2ff04b53062:
     targetAction: RESTRICT
     liveIntegrity: enforce
-    _child: device_operations(workspace_id)
+    _child: runtime_operations(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
-  digest:46cae3349ad773e0:
+  digest:174f89d06def2173:
     targetAction: SET NULL
     liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
-    _child: device_operations(conversation_id)
+    _child: runtime_operations(conversation_id)
     _parent: conversations(id)
     _was: SET NULL
-  digest:f2260a33d5336476:
+  digest:74dae055043d7dc3:
     targetAction: SET NULL
     setNull:
       canLose: true
       needsSnapshot: false
-    _child: device_operations(task_id)
+    _child: runtime_operations(task_id)
     _parent: tool_call_tasks(id)
     _was: SET NULL
-  digest:0f2500240099fc78:
+  digest:e13b94240db48401:
     targetAction: RESTRICT
-    _child: device_operations(principal_subject_id)
+    _child: runtime_operations(principal_subject_id)
     _parent: access_subjects(id)
     _was: RESTRICT
-  digest:9f8e4f3abb7abfb9:
+  digest:2b7b5d035f61d3ad:
     targetAction: SET NULL
     liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
       snapshotColumn: initiated_by_workspace_member_id_snapshot
-    _child: device_operations(initiated_by_workspace_member_id)
+    _child: runtime_operations(initiated_by_workspace_member_id)
     _parent: workspace_members(id)
     _was: SET NULL
-  digest:bad63f5dbeb8ff48:
+  digest:2d7a350a11ca3c09:
     targetAction: SET NULL
     setNull:
       canLose: false
       needsSnapshot: true
       snapshotColumn: initiated_by_session_id_snapshot
-    _child: device_operations(initiated_by_session_id)
+    _child: runtime_operations(initiated_by_session_id)
     _parent: sessions(id)
     _was: SET NULL
-  digest:da12cf2aa297a5a3:
+  digest:8a625e9c6cccb69c:
     targetAction: RESTRICT
     liveIntegrity: enforce
-    _child: device_operations(device_id)
-    _parent: devices(id)
+    _child: runtime_operations(runtime_id)
+    _parent: runtimes(id)
     _was: CASCADE
-  digest:1391ecf5e460d772:
+  digest:10a7d93a578ee1e6:
     targetAction: RESTRICT
     liveIntegrity: enforce
-    _child: device_operations(device_exposure_id)
-    _parent: device_exposures(id)
+    _child: runtime_operations(runtime_exposure_id)
+    _parent: runtime_exposures(id)
     _was: CASCADE
-  digest:b93337eb2ff8b5e3:
+  digest:f793f0839e989585:
     targetAction: RESTRICT
     liveIntegrity: enforce
-    _child: device_operations(device_capability_id)
-    _parent: device_capabilities(id)
+    _child: runtime_operations(runtime_capability_id)
+    _parent: runtime_capabilities(id)
     _was: CASCADE
-  digest:3cc73bc65a902f6d:
+  digest:d97ab5b7353d8fc4:
     targetAction: RESTRICT
-    _child: device_operations(catalog_revision_id)
-    _parent: device_catalog_revisions(id)
+    _child: runtime_operations(catalog_revision_id)
+    _parent: runtime_catalog_revisions(id)
     _was: CASCADE
-  digest:772cef5af5517737:
+  digest:51f0dd6e6b0ecb5b:
     targetAction: RESTRICT
     liveIntegrity: enforce
-    _child: device_operations(tool_id)
-    _parent: device_tools(id)
+    _child: runtime_operations(tool_id)
+    _parent: runtime_tools(id)
     _was: CASCADE
-  digest:d3b0439ad16a1ccc:
+  digest:ebbf618ed1e24b47:
     targetAction: RESTRICT
-    _child: device_operations(tool_revision_id)
-    _parent: device_tool_revisions(id)
+    _child: runtime_operations(tool_revision_id)
+    _parent: runtime_tool_revisions(id)
     _was: CASCADE
-  digest:57b4a7b36a435cff:
+  digest:4b4a919b4879d99a:
     targetAction: SET NULL
     setNull:
       canLose: true
       needsSnapshot: false
-    _child: device_operations(runtime_session_id)
-    _parent: device_runtime_sessions(id)
+    _child: runtime_operations(runtime_session_id)
+    _parent: runtime_sessions(id)
     _was: SET NULL
-  digest:b59d10e5c758fd0b:
+  digest:1b0b5a468f0a0f9a:
     targetAction: RESTRICT
-    _child: device_operation_attempts(operation_id)
-    _parent: device_operations(id)
+    _child: runtime_operation_attempts(operation_id)
+    _parent: runtime_operations(id)
     _was: CASCADE
-  digest:d22d8a1609442f69:
+  digest:6f8ecec9928a7c14:
     targetAction: RESTRICT
     liveIntegrity: enforce
-    _child: device_operation_attempts(device_service_id)
-    _parent: device_services(id)
+    _child: runtime_operation_attempts(runtime_service_id)
+    _parent: runtime_services(id)
     _was: CASCADE
-  digest:926b32c8e7aa6912:
+  digest:62cecc8c772059aa:
     targetAction: SET NULL
     setNull:
       canLose: true
       needsSnapshot: false
-    _child: device_operation_attempts(device_control_plane_session_id)
-    _parent: device_control_plane_sessions(id)
+    _child: runtime_operation_attempts(runtime_control_plane_session_id)
+    _parent: runtime_control_plane_sessions(id)
     _was: SET NULL
-  digest:fa4518abac019fa2:
+  digest:4719de8702e1825a:
     targetAction: RESTRICT
-    _child: device_operation_results(operation_id)
-    _parent: device_operations(id)
+    _child: runtime_operation_results(operation_id)
+    _parent: runtime_operations(id)
     _was: CASCADE
   digest:a6f24a23dcb0ecda:
     targetAction: RESTRICT
@@ -3322,13 +3332,13 @@ foreignKeys:
     _child: file_mounts(device_id)
     _parent: devices(id)
     _was: SET NULL
-  digest:36ae086b94ad33e7:
+  digest:bd1a81e2f0198efb:
     targetAction: SET NULL
     setNull:
       canLose: true
       needsSnapshot: false
     _child: file_mounts(pairing_session_id)
-    _parent: device_pairing_sessions(id)
+    _parent: runtime_pairing_sessions(id)
     _was: SET NULL
   digest:10782cbf8f2e2b30:
     targetAction: SET NULL
@@ -3398,14 +3408,14 @@ foreignKeys:
     _child: tool_calls(plugin_installation_id)
     _parent: plugin_installations(id)
     _was: SET NULL
-  constraint:fk_tool_calls_device_tool:
+  constraint:fk_tool_calls_runtime_tool:
     targetAction: SET NULL
     liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
-    _child: tool_calls(device_tool_id)
-    _parent: device_tools(id)
+    _child: tool_calls(runtime_tool_id)
+    _parent: runtime_tools(id)
     _was: SET NULL
   constraint:fk_catalog_items_latest_version:
     targetAction: SET NULL
@@ -3545,39 +3555,39 @@ foreignKeys:
     _child: runtime_authorization_grants(scope_subject_id)
     _parent: access_subjects(id)
     _was: CASCADE
-  constraint:fk_device_tools_latest_revision:
+  constraint:fk_runtime_tools_latest_revision:
     targetAction: SET NULL
     setNull:
       canLose: true
       needsSnapshot: false
-    _child: device_tools(latest_revision_id)
-    _parent: device_tool_revisions(id)
+    _child: runtime_tools(latest_revision_id)
+    _parent: runtime_tool_revisions(id)
     _was: SET NULL
-  constraint:fk_device_services_current_session:
+  constraint:fk_runtime_services_current_session:
     targetAction: SET NULL
     setNull:
       canLose: true
       needsSnapshot: false
-    _child: device_services(current_session_id)
-    _parent: device_control_plane_sessions(id)
+    _child: runtime_services(current_session_id)
+    _parent: runtime_control_plane_sessions(id)
     _was: SET NULL
-  constraint:fk_runtime_authorization_grants_device:
+  constraint:fk_runtime_authorization_grants_runtime:
     targetAction: RESTRICT
     liveIntegrity: enforce
-    _child: runtime_authorization_grants(device_id)
-    _parent: devices(id)
+    _child: runtime_authorization_grants(runtime_id)
+    _parent: runtimes(id)
     _was: CASCADE
-  constraint:fk_runtime_authorization_grants_device_capability:
+  constraint:fk_runtime_authorization_grants_runtime_capability:
     targetAction: RESTRICT
     liveIntegrity: enforce
-    _child: runtime_authorization_grants(device_capability_id)
-    _parent: device_capabilities(id)
+    _child: runtime_authorization_grants(runtime_capability_id)
+    _parent: runtime_capabilities(id)
     _was: CASCADE
-  constraint:fk_runtime_authorization_grants_device_exposure:
+  constraint:fk_runtime_authorization_grants_runtime_exposure:
     targetAction: RESTRICT
     liveIntegrity: enforce
-    _child: runtime_authorization_grants(device_exposure_id)
-    _parent: device_exposures(id)
+    _child: runtime_authorization_grants(runtime_exposure_id)
+    _parent: runtime_exposures(id)
     _was: CASCADE
   constraint:file_spaces_current_snapshot_fkey:
     targetAction: SET NULL
@@ -3614,9 +3624,9 @@ foreignKeys:
     targetAction: RESTRICT
     _child: tool_call_task_runtime_authorization(task_id)
     _parent: tool_call_tasks(id)
-  digest:a0e93efe8454dfe5:
+  digest:4225911228cb0fb7:
     targetAction: RESTRICT
-    _child: tool_call_task_device_tool(task_id)
+    _child: tool_call_task_runtime_tool(task_id)
     _parent: tool_call_tasks(id)
   digest:e7e69fab11a9c08c:
     targetAction: RESTRICT
@@ -3693,43 +3703,43 @@ foreignKeys:
     _parent: access_subjects(id)
   constraint:fk_tool_call_task_runtime_auth_device:
     targetAction: RESTRICT
-    _child: tool_call_task_runtime_authorization(device_id)
-    _parent: devices(id)
+    _child: tool_call_task_runtime_authorization(runtime_id)
+    _parent: runtimes(id)
   constraint:fk_tool_call_task_runtime_auth_device_capability:
     targetAction: RESTRICT
-    _child: tool_call_task_runtime_authorization(device_capability_id)
-    _parent: device_capabilities(id)
+    _child: tool_call_task_runtime_authorization(runtime_capability_id)
+    _parent: runtime_capabilities(id)
   constraint:fk_tool_call_task_runtime_auth_device_exposure:
     targetAction: RESTRICT
-    _child: tool_call_task_runtime_authorization(device_exposure_id)
-    _parent: device_exposures(id)
-  constraint:fk_tool_call_task_device_tool_device:
+    _child: tool_call_task_runtime_authorization(runtime_exposure_id)
+    _parent: runtime_exposures(id)
+  constraint:fk_tool_call_task_runtime_tool_device:
     targetAction: RESTRICT
-    _child: tool_call_task_device_tool(device_id)
-    _parent: devices(id)
-  constraint:fk_tool_call_task_device_tool_device_capability:
+    _child: tool_call_task_runtime_tool(runtime_id)
+    _parent: runtimes(id)
+  constraint:fk_tool_call_task_runtime_tool_device_capability:
     targetAction: RESTRICT
-    _child: tool_call_task_device_tool(device_capability_id)
-    _parent: device_capabilities(id)
-  constraint:fk_tool_call_task_device_tool_device_exposure:
+    _child: tool_call_task_runtime_tool(runtime_capability_id)
+    _parent: runtime_capabilities(id)
+  constraint:fk_tool_call_task_runtime_tool_device_exposure:
     targetAction: RESTRICT
-    _child: tool_call_task_device_tool(device_exposure_id)
-    _parent: device_exposures(id)
-  constraint:fk_tool_call_task_device_tool_tool:
+    _child: tool_call_task_runtime_tool(runtime_exposure_id)
+    _parent: runtime_exposures(id)
+  constraint:fk_tool_call_task_runtime_tool_tool:
     targetAction: RESTRICT
-    _child: tool_call_task_device_tool(tool_id)
-    _parent: device_tools(id)
-  constraint:fk_tool_call_task_device_tool_tool_revision:
+    _child: tool_call_task_runtime_tool(tool_id)
+    _parent: runtime_tools(id)
+  constraint:fk_tool_call_task_runtime_tool_tool_revision:
     targetAction: RESTRICT
-    _child: tool_call_task_device_tool(tool_revision_id)
-    _parent: device_tool_revisions(id)
-  constraint:fk_tool_call_task_device_tool_operation:
+    _child: tool_call_task_runtime_tool(tool_revision_id)
+    _parent: runtime_tool_revisions(id)
+  constraint:fk_tool_call_task_runtime_tool_operation:
     targetAction: SET NULL
     setNull:
       canLose: true
       needsSnapshot: false
-    _child: tool_call_task_device_tool(device_operation_id)
-    _parent: device_operations(id)
+    _child: tool_call_task_runtime_tool(runtime_operation_id)
+    _parent: runtime_operations(id)
   constraint:fk_tool_call_task_external_mcp_installation:
     targetAction: SET NULL
     setNull:
@@ -3737,3 +3747,90 @@ foreignKeys:
       needsSnapshot: false
     _child: tool_call_task_external_mcp(plugin_installation_id)
     _parent: plugin_installations(id)
+  digest:ef474658abbb978f:
+    targetAction: RESTRICT
+    liveIntegrity: enforce
+    _child: runtimes(workspace_id)
+    _parent: workspaces(id)
+    _was: RESTRICT
+  digest:f0e536d946568f96:
+    targetAction: SET NULL
+    setNull:
+      canLose: true
+      needsSnapshot: false
+    _child: file_mounts(sandbox_id)
+    _parent: sandboxes(id)
+    _was: SET NULL
+  digest:c80d90e51dc3e559:
+    targetAction: SET NULL
+    liveIntegrity: historical
+    setNull:
+      canLose: true
+      needsSnapshot: false
+    _child: runtime_authorization_grants(governing_resource_grant_id)
+    _parent: workspace_resource_grants(id)
+    _was: SET NULL
+  constraint:fk_runtime_exposures_runtime_ws:
+    targetAction: RESTRICT
+    liveIntegrity: none
+    _child: runtime_exposures(runtime_id,workspace_id)
+    _parent: runtimes(id,workspace_id)
+    _was: RESTRICT
+  constraint:fk_runtime_capabilities_exposure_ws:
+    targetAction: RESTRICT
+    liveIntegrity: none
+    _child: runtime_capabilities(exposure_id,workspace_id)
+    _parent: runtime_exposures(id,workspace_id)
+    _was: RESTRICT
+  constraint:fk_rag_runtime_ws:
+    targetAction: RESTRICT
+    liveIntegrity: none
+    _child: runtime_authorization_grants(runtime_id,workspace_id)
+    _parent: runtimes(id,workspace_id)
+    _was: RESTRICT
+  constraint:fk_rag_exposure_ws:
+    targetAction: RESTRICT
+    liveIntegrity: none
+    _child: runtime_authorization_grants(runtime_exposure_id,workspace_id)
+    _parent: runtime_exposures(id,workspace_id)
+    _was: RESTRICT
+  constraint:fk_devices_runtime_root:
+    targetAction: RESTRICT
+    liveIntegrity: enforce
+    _child: devices(id)
+    _parent: runtimes(id)
+    _was: RESTRICT
+  constraint:fk_sandboxes_runtime_root:
+    targetAction: RESTRICT
+    liveIntegrity: enforce
+    _child: sandboxes(id)
+    _parent: runtimes(id)
+    _was: RESTRICT
+  constraint:fk_devices_runtime_ws:
+    targetAction: RESTRICT
+    liveIntegrity: none
+    _child: devices(id,workspace_id)
+    _parent: runtimes(id,workspace_id)
+    _was: RESTRICT
+  constraint:fk_sandboxes_runtime_ws:
+    targetAction: RESTRICT
+    liveIntegrity: none
+    _child: sandboxes(id,workspace_id)
+    _parent: runtimes(id,workspace_id)
+    _was: RESTRICT
+  constraint:fk_sandboxes_session:
+    targetAction: SET NULL
+    setNull:
+      canLose: true
+      needsSnapshot: false
+    _child: sandboxes(session_id)
+    _parent: sessions(id)
+    _was: SET NULL
+  constraint:fk_sandboxes_pairing_session:
+    targetAction: SET NULL
+    setNull:
+      canLose: true
+      needsSnapshot: false
+    _child: sandboxes(pairing_session_id)
+    _parent: runtime_pairing_sessions(id)
+    _was: SET NULL

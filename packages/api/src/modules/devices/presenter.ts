@@ -27,8 +27,6 @@ export function presentDevice(record: DeviceSummaryRecord): DeviceView {
     id: record.id,
     workspaceId: record.workspaceId,
     title: record.title,
-    hostKind: record.hostKind,
-    hostProvider: record.hostProvider,
     deviceType: record.deviceType,
     platform: record.platform,
     trustStatus: record.trustStatus,

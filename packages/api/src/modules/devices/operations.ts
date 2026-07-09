@@ -14,7 +14,7 @@ import type { OperationPrincipalKind } from "./repo.js"
 
 /**
  * subject-scope-refactor: derive the (principalKind, principalSubjectId) audit
- * pair for `device_operations` from a RuntimePrincipalContext. The ONLY
+ * pair for `runtime_operations` from a RuntimePrincipalContext. The ONLY
  * supported construction path for `BeginOperationInput.principal{Kind,SubjectId}`
  * — kind/subject consistency is an app-only invariant (the DB CHECK only
  * enforces non-null; cross-table kind correspondence in PG would require
@@ -29,7 +29,7 @@ import type { OperationPrincipalKind } from "./repo.js"
  *
  * Note the scoped-actor case before the refactor
  * collapses to 'actor' — the conversation context is recorded separately via
- * `device_operations.conversation_id` + `authorization_payload`.
+ * `runtime_operations.conversation_id` + `authorization_payload`.
  */
 export function deriveOperationPrincipalAudit(ctx: RuntimePrincipalContext): {
   principalKind: OperationPrincipalKind

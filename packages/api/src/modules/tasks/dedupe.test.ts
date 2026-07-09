@@ -12,10 +12,10 @@ import { buildRuntimeAuthorizationDedupeKey } from "./service.js"
 
 const baseParams = {
   deviceId: "00000000-0000-0000-0000-000000000001",
-  deviceCapabilityId: "00000000-0000-0000-0000-000000000002",
-  deviceExposureId: "00000000-0000-0000-0000-000000000003",
+  runtimeCapabilityId: "00000000-0000-0000-0000-000000000002",
+  runtimeExposureId: "00000000-0000-0000-0000-000000000003",
   requestedToolName: "cua_click",
-  deviceToolStableKey: "cua/click",
+  runtimeToolStableKey: "cua/click",
   requestMode: "background" as const,
   requestedAction: {
     capability: "cua" as const,

@@ -205,12 +205,12 @@ export function parseRuntimeAuthorizationPresets(
 
 const RuntimeAuthorizationTaskDetailsSchema = z.object({
   requestedToolName: z.string(),
-  deviceToolStableKey: z.string(),
+  runtimeToolStableKey: z.string(),
   requestedAction: RuntimeAuthorizationRequestedActionSchema,
   reason: z.string(),
   deviceId: z.string(),
   deviceDisplayName: z.string(),
-  deviceCapabilityId: z.string(),
+  runtimeCapabilityId: z.string(),
   exposureId: z.string(),
   exposureDisplayName: z.string(),
   grantOptions: z.array(RuntimeAuthorizationGrantOptionSchema),

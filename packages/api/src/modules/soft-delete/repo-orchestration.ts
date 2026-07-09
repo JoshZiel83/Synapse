@@ -24,7 +24,10 @@ const WORKSPACE_SCOPED_ROOTS_BY_WORKSPACE_ID = [
   "workspace_resources",
   "remote_agent_machines",
   "conversations",
-  "devices",
+  // `runtimes` is the sole runtime soft-delete root (devices/sandboxes are CTI
+  // details with no `deleted_at`); flipping it folds into devices_live /
+  // sandboxes_live. UPDATE-ing the shed devices.deleted_at column would error.
+  "runtimes",
   "plugin_connections",
   "memory_spaces",
   "memory_items",

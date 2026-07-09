@@ -43,47 +43,49 @@ import type { ZodIssue } from "zod"
  * never auto-retry against a soft-closed device's tool or an inactive app.
  */
 export interface AutoRetryTarget {
-  deviceId: string
-  deviceServiceId: string
-  deviceExposureId: string
-  deviceToolId: string
-  deviceToolRevisionId: string
+  runtimeId: string
+  runtimeServiceId: string
+  runtimeExposureId: string
+  runtimeToolId: string
+  runtimeToolRevisionId: string
 }
 
 export async function findAutoRetryTarget(args: {
-  deviceCapabilityId: string
+  runtimeCapabilityId: string
   visibleToolName: string
 }): Promise<AutoRetryTarget | null> {
   const row = await db
-    .selectFrom("deviceCapabilities as dc")
+    .selectFrom("runtimeCapabilities as dc")
     .innerJoin("workspaceResources as resource", "resource.id", "dc.id")
-    .innerJoin("deviceExposures as dx", "dx.id", "dc.exposureId")
-    .innerJoin("devices as d", "d.id", "dx.deviceId")
-    .innerJoin("deviceTools as dt", "dt.exposureId", "dx.id")
-    .innerJoin("deviceToolRevisions as dtr", "dtr.id", "dt.latestRevisionId")
+    .innerJoin("runtimeExposures as dx", "dx.id", "dc.exposureId")
+    .innerJoin("devices as d", "d.id", "dx.runtimeId")
+    .innerJoin("runtimes as r", "r.id", "d.id")
+    .innerJoin("runtimeTools as dt", "dt.exposureId", "dx.id")
+    .innerJoin("runtimeToolRevisions as dtr", "dtr.id", "dt.latestRevisionId")
     .select([
-      "d.id as deviceId",
-      "dx.serviceId as deviceServiceId",
-      "dx.id as deviceExposureId",
-      "dt.id as deviceToolId",
-      "dtr.id as deviceToolRevisionId",
+      "d.id as runtimeId",
+      "dx.serviceId as runtimeServiceId",
+      "dx.id as runtimeExposureId",
+      "dt.id as runtimeToolId",
+      "dtr.id as runtimeToolRevisionId",
     ])
-    .where("dc.id", "=", args.deviceCapabilityId)
+    .where("dc.id", "=", args.runtimeCapabilityId)
     .where("resource.deletedAt", "is", null)
     .where("resource.status", "=", "active")
     .where("dt.currentName", "=", args.visibleToolName)
     .where("dt.status", "=", "active")
-    // Soft-delete (§8.6): never auto-retry against a soft-closed device's tool.
-    .where("d.deletedAt", "is", null)
+    // Soft-delete (§8.6): never auto-retry against a soft-closed runtime's tool.
+    // runtimes.deleted_at is the sole runtime soft-delete root.
+    .where("r.deletedAt", "is", null)
     .limit(1)
     .executeTakeFirst()
   if (!row) return null
   return {
-    deviceId: row.deviceId as string,
-    deviceServiceId: row.deviceServiceId as string,
-    deviceExposureId: row.deviceExposureId as string,
-    deviceToolId: row.deviceToolId as string,
-    deviceToolRevisionId: row.deviceToolRevisionId as string,
+    runtimeId: row.runtimeId as string,
+    runtimeServiceId: row.runtimeServiceId as string,
+    runtimeExposureId: row.runtimeExposureId as string,
+    runtimeToolId: row.runtimeToolId as string,
+    runtimeToolRevisionId: row.runtimeToolRevisionId as string,
   }
 }
 
@@ -94,7 +96,7 @@ export async function findAutoRetryTarget(args: {
  * resource.deletedAt is null soft-delete guard) preserved verbatim.
  */
 export interface DeviceCapabilityGrantTarget {
-  deviceId: string
+  runtimeId: string
   workspaceId: string
   exposureId: string
   exposureStableKey: string
@@ -104,16 +106,16 @@ export interface DeviceCapabilityGrantTarget {
 }
 
 export async function findDeviceCapabilityGrantTarget(
-  deviceCapabilityId: string,
+  runtimeCapabilityId: string,
   executor: Executor = db
 ): Promise<DeviceCapabilityGrantTarget | undefined> {
   return executor
-    .selectFrom("deviceCapabilities as dc")
+    .selectFrom("runtimeCapabilities as dc")
     .innerJoin("workspaceResources as resource", "resource.id", "dc.id")
-    .innerJoin("deviceExposures as dx", "dx.id", "dc.exposureId")
-    .innerJoin("devices as d", "d.id", "dx.deviceId")
+    .innerJoin("runtimeExposures as dx", "dx.id", "dc.exposureId")
+    .innerJoin("devices as d", "d.id", "dx.runtimeId")
     .select([
-      "d.id as deviceId",
+      "d.id as runtimeId",
       "resource.workspaceId as workspaceId",
       "dx.id as exposureId",
       "dx.stableKey as exposureStableKey",
@@ -121,7 +123,7 @@ export async function findDeviceCapabilityGrantTarget(
       "dx.runtimeStatus as runtimeStatus",
       "resource.status as status",
     ])
-    .where("dc.id", "=", deviceCapabilityId)
+    .where("dc.id", "=", runtimeCapabilityId)
     .where("resource.deletedAt", "is", null)
     .executeTakeFirst() as Promise<DeviceCapabilityGrantTarget | undefined>
 }
@@ -163,18 +165,19 @@ export async function loadDeviceCapabilityRequestState(
 ): Promise<DeviceCapabilityRequestState | undefined> {
   return (
     db
-      .selectFrom("deviceCapabilities as capability")
+      .selectFrom("runtimeCapabilities as capability")
       .innerJoin(
         "workspaceResources as resource",
         "resource.id",
         "capability.id"
       )
       .innerJoin(
-        "deviceExposures as exposure",
+        "runtimeExposures as exposure",
         "exposure.id",
         "capability.exposureId"
       )
-      .innerJoin("devices as device", "device.id", "exposure.deviceId")
+      .innerJoin("devices as device", "device.id", "exposure.runtimeId")
+      .innerJoin("runtimes as runtime", "runtime.id", "device.id")
       .select([
         "capability.id as capabilityId",
         "resource.status as capabilityStatus",
@@ -183,15 +186,19 @@ export async function loadDeviceCapabilityRequestState(
         "device.workspaceId as ownerWorkspaceId",
         sql<boolean>`EXISTS (
         SELECT 1
-        FROM device_control_plane_sessions session_row
-        WHERE session_row.device_id = device.id
+        FROM runtime_control_plane_sessions session_row
+        WHERE session_row.runtime_id = device.id
           AND session_row.status = 'active'
       )`.as("hasActiveDeviceSession"),
       ])
       .where("capability.id", "=", capabilityId)
+      // TWO independent soft-delete roots gate a request: the capability-as-
+      // resource axis (workspace_resources) AND the owning runtime's liveness
+      // (principal axis). runtime_capabilities has no deleted_at, so both are
+      // load-bearing. Keep resource.deletedAt verbatim; swap only the former
+      // device-principal term for the runtimes root (sole runtime root).
       .where("resource.deletedAt", "is", null)
-      // A soft-deleted device exposes no capabilities to the request-gating path.
-      .where("device.deletedAt", "is", null)
+      .where("runtime.deletedAt", "is", null)
       .limit(1)
       .executeTakeFirst() as Promise<DeviceCapabilityRequestState | undefined>
   )
@@ -252,9 +259,9 @@ function runtimeAuthorizationGrantSelectColumns() {
   return [
     "g.id",
     "g.workspaceId",
-    "g.deviceId",
-    "g.deviceCapabilityId",
-    "g.deviceExposureId",
+    "g.runtimeId",
+    "g.runtimeCapabilityId",
+    "g.runtimeExposureId",
     "g.subjectId",
     "g.scopeSubjectId",
     "g.createdByWorkspaceMemberId",
@@ -268,6 +275,7 @@ function runtimeAuthorizationGrantSelectColumns() {
     "g.consumedAt",
     "g.revokedAt",
     "g.supersededAt",
+    "g.governingResourceGrantId",
     "g.createdAt",
     "g.updatedAt",
     "subj.kind as subjectKind",
@@ -391,9 +399,9 @@ function normalizeRuntimeAuthorizationGrantRow(
   return {
     id: row.id,
     workspaceId: row.workspaceId,
-    deviceId: row.deviceId,
-    deviceCapabilityId: row.deviceCapabilityId,
-    deviceExposureId: row.deviceExposureId,
+    runtimeId: row.runtimeId,
+    runtimeCapabilityId: row.runtimeCapabilityId,
+    runtimeExposureId: row.runtimeExposureId,
     subjectId: row.subjectId,
     scopeSubjectId: row.scopeSubjectId,
     createdByWorkspaceMemberId: row.createdByWorkspaceMemberId,
@@ -410,6 +418,7 @@ function normalizeRuntimeAuthorizationGrantRow(
     consumedAt: row.consumedAt,
     revokedAt: row.revokedAt,
     supersededAt: row.supersededAt,
+    governingResourceGrantId: row.governingResourceGrantId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   }
@@ -516,9 +525,9 @@ export async function getRuntimeAuthorizationGrantRow(
 
 export interface InsertRuntimeAuthorizationGrantValues {
   workspaceId: string
-  deviceId: string
-  deviceCapabilityId: string
-  deviceExposureId: string
+  runtimeId: string
+  runtimeCapabilityId: string
+  runtimeExposureId: string
   subjectId: string
   scopeSubjectId: string | null
   createdByWorkspaceMemberId: string | null
@@ -532,18 +541,18 @@ export interface InsertRuntimeAuthorizationGrantValues {
 
 /**
  * The set of CLI-Anything entry_points the device currently reports as runnable,
- * read from device_exposures.metadata.availableClis on the given exposure (plan
+ * read from runtime_exposures.metadata.availableClis on the given exposure (plan
  * §5.C). Keyed by entry_point (the bare program a program_only grant authorizes).
  * Empty set when the exposure has no availableClis (no catalog reported).
  */
 export async function selectExposureAvailableCliEntryPoints(
-  deviceExposureId: string,
+  runtimeExposureId: string,
   queryable: Executor = db
 ): Promise<Set<string>> {
   const row = await queryable
-    .selectFrom("deviceExposures")
+    .selectFrom("runtimeExposures")
     .select("metadata")
-    .where("id", "=", deviceExposureId)
+    .where("id", "=", runtimeExposureId)
     .executeTakeFirst()
   const metadata = row?.metadata as
     | { availableClis?: Record<string, { available?: boolean }> }
@@ -571,9 +580,9 @@ export async function insertRuntimeAuthorizationGrantRow(
     .insertInto("runtimeAuthorizationGrants")
     .values({
       workspaceId: values.workspaceId,
-      deviceId: values.deviceId,
-      deviceCapabilityId: values.deviceCapabilityId,
-      deviceExposureId: values.deviceExposureId,
+      runtimeId: values.runtimeId,
+      runtimeCapabilityId: values.runtimeCapabilityId,
+      runtimeExposureId: values.runtimeExposureId,
       subjectId: values.subjectId,
       scopeSubjectId: values.scopeSubjectId,
       createdByWorkspaceMemberId: values.createdByWorkspaceMemberId,
@@ -637,6 +646,11 @@ export async function consumeRuntimeAuthorizationGrantRow(
     WHERE id = (
       SELECT id FROM runtime_authorization_grants
       WHERE id = ${id} AND status = 'active'
+        AND EXISTS (
+          SELECT 1 FROM runtimes rt
+          WHERE rt.id = runtime_authorization_grants.runtime_id
+            AND rt.deleted_at IS NULL
+        )
       FOR UPDATE SKIP LOCKED
     )
     RETURNING id
@@ -647,9 +661,9 @@ export async function consumeRuntimeAuthorizationGrantRow(
 
 export interface ListCandidateRowsForDispatchParams {
   workspaceId: string
-  deviceId: string
-  deviceCapabilityId: string
-  deviceExposureId: string
+  runtimeId: string
+  runtimeCapabilityId: string
+  runtimeExposureId: string
   runtimeSubjectIds: string[]
   runtimeScopeSubjectIds: string[]
   retryNonce?: string
@@ -674,11 +688,16 @@ export async function listCandidateRowsForDispatch(
       "scope_subj.id",
       "g.scopeSubjectId"
     )
+    // Liveness gate: never surface a grant whose owning runtime is soft-deleted
+    // (runtimes.deleted_at is the sole runtime root). The consume-claim path
+    // gates independently; this pre-filters the dispatch candidate set.
+    .innerJoin("runtimes as rt", "rt.id", "g.runtimeId")
     .select(runtimeAuthorizationGrantSelectColumns())
+    .where("rt.deletedAt", "is", null)
     .where("g.workspaceId", "=", params.workspaceId)
-    .where("g.deviceId", "=", params.deviceId)
-    .where("g.deviceCapabilityId", "=", params.deviceCapabilityId)
-    .where("g.deviceExposureId", "=", params.deviceExposureId)
+    .where("g.runtimeId", "=", params.runtimeId)
+    .where("g.runtimeCapabilityId", "=", params.runtimeCapabilityId)
+    .where("g.runtimeExposureId", "=", params.runtimeExposureId)
     .where("g.status", "=", "active")
     .where("g.subjectId", "in", params.runtimeSubjectIds)
     .where((eb) =>
@@ -721,7 +740,7 @@ export async function listCandidateRowsForDispatch(
 export async function listDashboardGrantRows(
   input: {
     workspaceId: string
-    deviceCapabilityId: string
+    runtimeCapabilityId: string
     includeRevoked?: boolean
   },
   executor: Executor = db
@@ -736,7 +755,7 @@ export async function listDashboardGrantRows(
     )
     .select(runtimeAuthorizationGrantSelectColumns())
     .where("g.workspaceId", "=", input.workspaceId)
-    .where("g.deviceCapabilityId", "=", input.deviceCapabilityId)
+    .where("g.runtimeCapabilityId", "=", input.runtimeCapabilityId)
     .orderBy("g.createdAt", "desc")
   if (!input.includeRevoked) {
     query = query.where("g.status", "=", "active")
@@ -767,7 +786,7 @@ export async function runRuntimeAuthorizationGrantTransaction<T>(
 
 /**
  * `SET LOCAL lock_timeout = '500ms'` for the claim transaction: a lock_timeout
- * means another connection is updating device_tools (catalog sync); the service
+ * means another connection is updating runtime_tools (catalog sync); the service
  * aborts and surfaces a transient runtime_constraint rather than waiting.
  */
 export async function setLocalLockTimeout(
@@ -777,7 +796,7 @@ export async function setLocalLockTimeout(
 }
 
 /**
- * FOR SHARE read of device_tools.latest_revision_id inside the claim tx: blocks
+ * FOR SHARE read of runtime_tools.latest_revision_id inside the claim tx: blocks
  * the catalog UPDATE without blocking other dispatch share-lockers. Returns the
  * row (or undefined) so the service does its drift comparison.
  */
@@ -786,7 +805,7 @@ export async function lockDeviceToolLatestRevisionForShare(
   toolId: string
 ): Promise<{ latestRevisionId: string | null } | undefined> {
   const row = await trx
-    .selectFrom("deviceTools")
+    .selectFrom("runtimeTools")
     .select(["latestRevisionId"])
     .where("id", "=", toolId)
     .forShare()

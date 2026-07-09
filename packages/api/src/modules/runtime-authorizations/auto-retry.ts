@@ -79,7 +79,7 @@ export function cuaFocusScopeForAutoRetry(args: {
  * model re-author them.
  */
 export async function autoDispatchRuntimeAuthorizationRetry(args: {
-  deviceCapabilityId: string
+  runtimeCapabilityId: string
   /** What the planner/projection called the tool when dispatching — the
    * device-side stable_key, same value passed as params.name. */
   visibleToolName: string
@@ -107,7 +107,7 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
   }
 }): Promise<AutoRetryDispatchResult> {
   const target = await findAutoRetryTarget({
-    deviceCapabilityId: args.deviceCapabilityId,
+    runtimeCapabilityId: args.runtimeCapabilityId,
     visibleToolName: args.visibleToolName,
   })
   if (!target) {
@@ -165,9 +165,9 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
 
   const claim = await selectAndClaimRuntimeAuthorizationGrant({
     workspaceId: args.audit.workspaceId,
-    deviceId: target.deviceId,
-    deviceCapabilityId: args.deviceCapabilityId,
-    deviceExposureId: target.deviceExposureId,
+    runtimeId: target.runtimeId,
+    runtimeCapabilityId: args.runtimeCapabilityId,
+    runtimeExposureId: target.runtimeExposureId,
     runtimeSubjectIds: args.runtimeSubjectIds,
     runtimeScopeSubjectIds: args.runtimeScopeSubjectIds,
     retryNonce: args.sourceRetryNonce,
@@ -199,11 +199,11 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
         const envelope = signEnvelopeForDispatch({
           operation_id: randomUUID(),
           attempt_id: randomUUID(),
-          device_runtime_session_id: randomUUID(),
-          device_capability_id: args.deviceCapabilityId,
-          device_exposure_id: target.deviceExposureId,
-          device_tool_id: target.deviceToolId,
-          device_tool_revision_id: target.deviceToolRevisionId,
+          runtime_session_id: randomUUID(),
+          runtime_capability_id: args.runtimeCapabilityId,
+          runtime_exposure_id: target.runtimeExposureId,
+          runtime_tool_id: target.runtimeToolId,
+          runtime_tool_revision_id: target.runtimeToolRevisionId,
           input_hash: inputHash,
           task_mode: "sync" as const,
           runtime_authorization: {
@@ -220,18 +220,18 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
           ok: true,
           prepared: {
             envelope,
-            toolId: target.deviceToolId,
-            toolRevisionId: target.deviceToolRevisionId,
+            toolId: target.runtimeToolId,
+            toolRevisionId: target.runtimeToolRevisionId,
             beginInput: {
               workspaceId: args.audit.workspaceId,
               conversationId: args.audit.conversationId,
               envelope,
               args: args.sourceRequestArgs,
               toolName: args.visibleToolName,
-              deviceId: target.deviceId,
-              deviceServiceId: target.deviceServiceId,
+              runtimeId: target.runtimeId,
+              runtimeServiceId: target.runtimeServiceId,
               tunnelInternalUrl:
-                getDeviceTunnelRegistry().resolve(target.deviceServiceId)
+                getDeviceTunnelRegistry().resolve(target.runtimeServiceId)
                   ?.internalUrl ?? null,
               principalKind: args.audit.principalKind,
               principalSubjectId: args.audit.principalSubjectId,
@@ -281,7 +281,7 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
   const attemptId = operation.attemptId
 
   const dispatchResult = await dispatchSyncTool({
-    deviceServiceId: target.deviceServiceId,
+    runtimeServiceId: target.runtimeServiceId,
     envelope: prepared.envelope,
     args: args.sourceRequestArgs,
     toolName: args.visibleToolName,

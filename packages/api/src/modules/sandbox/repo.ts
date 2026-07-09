@@ -89,9 +89,9 @@ export async function resolveDeviceRuntimeServiceId(
   run: Executor = db
 ): Promise<string | null> {
   const svc = await run
-    .selectFrom("deviceServices")
+    .selectFrom("runtimeServices")
     .select("id")
-    .where("deviceId", "=", deviceId)
+    .where("runtimeId", "=", deviceId)
     .where("serviceKind", "=", "device_runtime")
     .orderBy("createdAt", "desc")
     .limit(1)
@@ -109,9 +109,9 @@ export async function isFilesystemExposureHealthy(
   run: Executor = db
 ): Promise<boolean> {
   const ready = await run
-    .selectFrom("deviceExposures")
+    .selectFrom("runtimeExposures")
     .select("id")
-    .where("deviceId", "=", deviceId)
+    .where("runtimeId", "=", deviceId)
     .where("builtinKind", "=", "filesystem")
     .where("runtimeStatus", "=", "healthy")
     .limit(1)
@@ -461,7 +461,7 @@ export async function clearPendingRefreshConflicts(
 
 export interface PairingBootstrapResolution {
   status: string
-  deviceId: string | null
+  runtimeId: string | null
 }
 
 /** Read the pairing session's bootstrap state (status + claimed device id). */
@@ -470,8 +470,8 @@ export async function getPairingSessionBootstrapState(
   run: Executor = db
 ): Promise<PairingBootstrapResolution | undefined> {
   return run
-    .selectFrom("devicePairingSessions")
-    .select(["status", "deviceId"])
+    .selectFrom("runtimePairingSessions")
+    .select(["status", "runtimeId"])
     .where("id", "=", pairingSessionId)
     .executeTakeFirst()
 }
@@ -482,9 +482,9 @@ export async function getLatestDeviceRuntimeServiceId(
   run: Executor = db
 ): Promise<string | undefined> {
   const svc = await run
-    .selectFrom("deviceServices")
+    .selectFrom("runtimeServices")
     .select("id")
-    .where("deviceId", "=", deviceId)
+    .where("runtimeId", "=", deviceId)
     .where("serviceKind", "=", "device_runtime")
     .orderBy("createdAt", "desc")
     .limit(1)
@@ -499,7 +499,7 @@ export async function cancelPendingPairingSession(
   run: Executor = db
 ): Promise<void> {
   await run
-    .updateTable("devicePairingSessions")
+    .updateTable("runtimePairingSessions")
     .set({ status: "cancelled" } as never)
     .where("id", "=", pairingSessionId)
     .where("status", "=", "pending")
@@ -522,11 +522,11 @@ export async function selectDeviceBuiltinExposures(
   run: Executor = db
 ): Promise<DeviceBuiltinExposureRow[]> {
   return run
-    .selectFrom("deviceExposures as e")
-    .innerJoin("deviceCapabilities as c", "c.exposureId", "e.id")
+    .selectFrom("runtimeExposures as e")
+    .innerJoin("runtimeCapabilities as c", "c.exposureId", "e.id")
     .innerJoin("workspaceResources as resource", "resource.id", "c.id")
     .select(["e.id as exposureId", "c.id as capabilityId", "e.builtinKind"])
-    .where("e.deviceId", "=", deviceId)
+    .where("e.runtimeId", "=", deviceId)
     .where("resource.deletedAt", "is", null)
     .where("resource.status", "=", "active")
     .where("e.builtinKind", "in", ["filesystem", "commandline"])
@@ -540,7 +540,7 @@ export async function selectDeviceCapabilityIds(
   run: Executor = db
 ): Promise<string[]> {
   const rows = await run
-    .selectFrom("deviceCapabilities as capability")
+    .selectFrom("runtimeCapabilities as capability")
     .innerJoin("workspaceResources as resource", "resource.id", "capability.id")
     .select("capability.id")
     .where("resource.workspaceId", "=", params.workspaceId)
@@ -548,9 +548,9 @@ export async function selectDeviceCapabilityIds(
       "capability.exposureId",
       "in",
       run
-        .selectFrom("deviceExposures")
+        .selectFrom("runtimeExposures")
         .select("id")
-        .where("deviceId", "=", params.deviceId)
+        .where("runtimeId", "=", params.deviceId)
     )
     .execute()
   return rows.map((r) => r.id as string)
@@ -567,7 +567,7 @@ export async function revokeActiveDeviceRuntimeGrants(
       status: "revoked",
       revokedAt: new Date(),
     } as never)
-    .where("deviceId", "=", params.deviceId)
+    .where("runtimeId", "=", params.deviceId)
     .where("workspaceId", "=", params.workspaceId)
     .where("status", "=", "active")
     .execute()

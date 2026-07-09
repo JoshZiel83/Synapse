@@ -96,7 +96,7 @@ test("auto-retry helper fails closed when the device tool isn't in the catalog",
     // Random UUID that won't resolve in resolveAutoRetryTarget — the
     // helper should return ok:false rather than throw or paper over the
     // missing device with a fake success result.
-    deviceCapabilityId: "00000000-0000-0000-0000-000000000000",
+    runtimeCapabilityId: "00000000-0000-0000-0000-000000000000",
     visibleToolName: "definitely-not-a-real-tool",
     sourceRequestArgs: { foo: "bar" },
     sourceRetryNonce: "nonce-xyz",

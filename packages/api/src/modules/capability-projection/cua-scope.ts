@@ -4,7 +4,7 @@
 // To key it correctly we sign a `cua_focus_scope_id` into every cua envelope
 // on the server side. This file owns the derivation rule.
 //
-// Why a dedicated field (not device_runtime_session_id)? The latter is
+// Why a dedicated field (not runtime_session_id)? The latter is
 // freshly randomUUID'd per dispatch in capability-projection/service.ts and
 // would never persist focus across two consecutive cua calls. We need a key
 // that:

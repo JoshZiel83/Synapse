@@ -85,10 +85,10 @@ async function buildToolCall(opts: {
   // (NOT NULL, CHECK-consistent).
   const sourceSnapshot = (() => {
     switch (opts.sourceKind) {
-      case "device":
+      case "runtime":
         return {
-          kind: "device",
-          deviceToolId: uuidv4(),
+          kind: "runtime",
+          runtimeToolId: uuidv4(),
           exposureStableKey: "synapse.builtin.filesystem.v1",
         }
       case "plugin":
@@ -165,7 +165,7 @@ test("Device path: createToolResult persists origin into tool_results.metadata J
   if (!client || !seed) throw new Error("fixtures missing")
 
   const toolCallId = await buildToolCall({
-    sourceKind: "device",
+    sourceKind: "runtime",
     toolName: "filesystem__View",
   })
 
@@ -176,8 +176,8 @@ test("Device path: createToolResult persists origin into tool_results.metadata J
       toolCallId: "call-1",
       toolName: "filesystem__View",
       origin: {
-        kind: "device",
-        deviceToolId: "dev-mcp-1",
+        kind: "runtime",
+        runtimeToolId: "dev-mcp-1",
         exposureStableKey: "synapse.builtin.filesystem.v1",
       },
       structuredContent: { entries: 12 },
@@ -191,8 +191,8 @@ test("Device path: createToolResult persists origin into tool_results.metadata J
   )
   assert.equal(rows.rows.length, 1)
   const meta = rows.rows[0].metadata
-  assert.equal(meta.origin.kind, "device")
-  assert.equal(meta.origin.deviceToolId, "dev-mcp-1")
+  assert.equal(meta.origin.kind, "runtime")
+  assert.equal(meta.origin.runtimeToolId, "dev-mcp-1")
   assert.equal(meta.origin.exposureStableKey, "synapse.builtin.filesystem.v1")
   assert.deepEqual(meta.structuredContent, { entries: 12 })
 })
@@ -240,8 +240,8 @@ test("Origin survives all 5 ToolResultOrigin kinds through the JSONB column", as
       upstreamToolName: "github_search",
     },
     {
-      kind: "device",
-      deviceToolId: "dev-x",
+      kind: "runtime",
+      runtimeToolId: "dev-x",
       exposureStableKey: "syn.builtin.cua.v1",
     },
     { kind: "provider_native", providerType: "openai", toolName: "web_search" },
@@ -251,7 +251,7 @@ test("Origin survives all 5 ToolResultOrigin kinds through the JSONB column", as
   for (const origin of kinds) {
     const mappedSourceKind = origin.kind === "plugin" ? "plugin" : "system"
     const toolCallId = await buildToolCall({
-      sourceKind: origin.kind === "device" ? "device" : mappedSourceKind,
+      sourceKind: origin.kind === "runtime" ? "runtime" : mappedSourceKind,
       toolName: `probe_${origin.kind}`,
     })
     await createToolResult({

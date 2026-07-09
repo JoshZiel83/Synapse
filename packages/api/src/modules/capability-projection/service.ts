@@ -6,8 +6,8 @@
 // device_capability tools alongside so the planner sees device-side bash /
 // list_dir / etc. alongside MCP plugins. Device dispatch goes through
 // DeviceTunnelRegistry + the synchronous tools/call client in
-// devices/dispatch.ts; every dispatch opens a device_operations + first
-// device_operation_attempts row pair (see devices/operations.ts).
+// devices/dispatch.ts; every dispatch opens a runtime_operations + first
+// runtime_operation_attempts row pair (see devices/operations.ts).
 
 import { randomUUID } from "node:crypto"
 import {
@@ -24,7 +24,7 @@ import type {
 import {
   SUBJECT_KIND,
   textBlock,
-  deviceToolId as makeDeviceToolId,
+  runtimeToolId as makeDeviceToolId,
   type SubjectRef,
   type ProjectedToolDefinition,
   type ToolRef,
@@ -245,7 +245,7 @@ async function projectLegacyTools(
 
 interface DeviceToolBundle {
   tools: ProjectedToolDefinition[]
-  /** Keyed by deterministic device toolId (`device:<device_tool_id>`). */
+  /** Keyed by deterministic runtime toolId (`runtime:<runtime_tool_id>`). */
   handlers: Map<string, DeviceCapabilityToolRow>
   subjects: ResolvedPrincipalSubjects
 }
@@ -253,33 +253,33 @@ interface DeviceToolBundle {
 /** Build a device ToolRef from a projected capability row. */
 function buildDeviceToolRef(row: DeviceCapabilityToolRow): ToolRef {
   return {
-    toolId: makeDeviceToolId(row.deviceToolId),
+    toolId: makeDeviceToolId(row.runtimeToolId),
     source: {
-      kind: "device",
-      deviceToolId: row.deviceToolId,
+      kind: "runtime",
+      runtimeToolId: row.runtimeToolId,
       exposureStableKey: row.exposureStableKey,
       deviceName: row.deviceName,
       visibleToolName: row.visibleToolName,
     },
     binding: {
       transport: "device_tunnel",
-      deviceId: row.deviceId,
-      deviceServiceId: row.deviceServiceId,
-      deviceCapabilityId: row.deviceCapabilityId,
-      deviceExposureId: row.deviceExposureId,
-      deviceToolRevisionId: row.deviceToolRevisionId,
+      runtimeId: row.runtimeId,
+      runtimeServiceId: row.runtimeServiceId,
+      runtimeCapabilityId: row.runtimeCapabilityId,
+      runtimeExposureId: row.runtimeExposureId,
+      runtimeToolRevisionId: row.runtimeToolRevisionId,
     },
     identity: {
       stableKey: `${row.exposureStableKey}/${row.visibleToolName}`,
-      revisionId: row.deviceToolRevisionId,
+      revisionId: row.runtimeToolRevisionId,
     },
   }
 }
 
 function deviceToolOrigin(row: DeviceCapabilityToolRow): ToolResultOrigin {
   return {
-    kind: "device",
-    deviceToolId: row.deviceToolId,
+    kind: "runtime",
+    runtimeToolId: row.runtimeToolId,
     deviceName: row.deviceName,
     exposureStableKey: row.exposureStableKey,
     visibleToolName: row.visibleToolName,
@@ -458,7 +458,7 @@ async function projectDeviceTools(
   const workspacePolicies =
     await getWorkspaceCapabilityConversationTypePolicyMap([input.workspaceId])
   const workspaceDefault =
-    workspacePolicies.get(input.workspaceId)?.device_capability ?? null
+    workspacePolicies.get(input.workspaceId)?.runtime_capability ?? null
   const filteredRows = rows.filter((row) => {
     if (!conversationTypeKey) {
       // No conversation context (e.g. dashboard introspection) — surface
@@ -574,7 +574,7 @@ function unionWithDevice(
     // by subject + scope (no more "list everything and filter in TS",
     // no more cross-actor leakage), (b) bounded retry for `consume_once` race,
     // (c) atomic claim in the same Kysely transaction that opens the
-    // device_operations row (no more "dispatch first, consume later" window),
+    // runtime_operations row (no more "dispatch first, consume later" window),
     // (d) prepareGrant signs the envelope BEFORE the claim so signing failures
     // don't burn a grant. The legacy list-then-filter path
     // (listActiveRuntimeAuthorizationGrantsForExposure + manual TS filter +
@@ -586,7 +586,10 @@ function unionWithDevice(
     let requestedAction
     try {
       requestedAction = buildRequestedAction({
-        capability: row.builtinKind,
+        // pty is a new builtin with no fine-grained authorization capability
+        // (not in RUNTIME_AUTHORIZATION_CAPABILITIES); fall through to the
+        // generic (null) requested-action shape.
+        capability: row.builtinKind === "pty" ? null : row.builtinKind,
         toolName: row.visibleToolName,
         visibleToolName: row.visibleToolName,
         args: sanitizedInput,
@@ -631,9 +634,9 @@ function unionWithDevice(
     try {
       claim = await selectAndClaimRuntimeAuthorizationGrant({
         workspaceId: projectInput.workspaceId,
-        deviceId: row.deviceId,
-        deviceCapabilityId: row.deviceCapabilityId,
-        deviceExposureId: row.deviceExposureId,
+        runtimeId: row.runtimeId,
+        runtimeCapabilityId: row.runtimeCapabilityId,
+        runtimeExposureId: row.runtimeExposureId,
         runtimeSubjectIds: device.subjects.allIds,
         runtimeScopeSubjectIds: device.subjects.scopeSubjectIds,
         retryNonce: envelopeRetryNonce,
@@ -660,11 +663,11 @@ function unionWithDevice(
             const envelope = signEnvelopeForDispatch({
               operation_id: randomUUID(),
               attempt_id: randomUUID(),
-              device_runtime_session_id: randomUUID(),
-              device_capability_id: row.deviceCapabilityId,
-              device_exposure_id: row.deviceExposureId,
-              device_tool_id: row.deviceToolId,
-              device_tool_revision_id: row.deviceToolRevisionId,
+              runtime_session_id: randomUUID(),
+              runtime_capability_id: row.runtimeCapabilityId,
+              runtime_exposure_id: row.runtimeExposureId,
+              runtime_tool_id: row.runtimeToolId,
+              runtime_tool_revision_id: row.runtimeToolRevisionId,
               input_hash: inputHash,
               task_mode: "sync" as const,
               runtime_authorization: {
@@ -683,18 +686,18 @@ function unionWithDevice(
               ok: true,
               prepared: {
                 envelope,
-                toolId: row.deviceToolId,
-                toolRevisionId: row.deviceToolRevisionId,
+                toolId: row.runtimeToolId,
+                toolRevisionId: row.runtimeToolRevisionId,
                 beginInput: {
                   workspaceId: projectInput.workspaceId,
                   conversationId: projectInput.conversationId ?? null,
                   envelope,
                   args: sanitizedInput,
                   toolName: row.visibleToolName,
-                  deviceId: row.deviceId,
-                  deviceServiceId: row.deviceServiceId,
+                  runtimeId: row.runtimeId,
+                  runtimeServiceId: row.runtimeServiceId,
                   tunnelInternalUrl:
-                    getDeviceTunnelRegistry().resolve(row.deviceServiceId)
+                    getDeviceTunnelRegistry().resolve(row.runtimeServiceId)
                       ?.internalUrl ?? null,
                   principalKind: principalKindFor(projectInput.principal),
                   principalSubjectId: device.subjects.principalSubjectId ?? "",
@@ -722,7 +725,7 @@ function unionWithDevice(
     } catch (err) {
       return withDeviceToolOrigin(
         mcpErrorBlock(
-          `grant claim failed for capability ${row.deviceCapabilityId}: ${(err as Error).message}`
+          `grant claim failed for capability ${row.runtimeCapabilityId}: ${(err as Error).message}`
         ),
         origin
       )
@@ -771,12 +774,12 @@ function unionWithDevice(
     const attemptId = operation.attemptId
     const envelope = prepared.envelope
 
-    // dispatchSyncTool resolves the tunnel endpoint by deviceServiceId, which
-    // is the device_services row id (what the runtime registered its tunnel
-    // under). We use row.deviceServiceId from the catalog projection — NOT
-    // device_exposure_id, which would never match a registered endpoint.
+    // dispatchSyncTool resolves the tunnel endpoint by runtimeServiceId, which
+    // is the runtime_services row id (what the runtime registered its tunnel
+    // under). We use row.runtimeServiceId from the catalog projection — NOT
+    // runtime_exposure_id, which would never match a registered endpoint.
     const result = await dispatchSyncTool({
-      deviceServiceId: row.deviceServiceId,
+      runtimeServiceId: row.runtimeServiceId,
       envelope,
       args: sanitizedInput,
       toolName: row.visibleToolName,
@@ -1048,11 +1051,11 @@ export function buildRuntimeAuthorizationRequestParams(args: {
       workspaceMemberId: projectInput.workspaceMemberId,
     },
     runtimeTarget: {
-      deviceCapabilityId: row.deviceCapabilityId,
-      deviceId: row.deviceId,
-      deviceExposureId: row.deviceExposureId,
+      runtimeCapabilityId: row.runtimeCapabilityId,
+      runtimeId: row.runtimeId,
+      runtimeExposureId: row.runtimeExposureId,
       requestedToolName: toolName,
-      deviceToolStableKey: row.visibleToolName,
+      runtimeToolStableKey: row.visibleToolName,
       // Persist the source Agent session id so the post-approval auto-retry
       // path can stamp the same cua_focus_scope_id this dispatch would have
       // used (session:<sessionId>). Without it the device cua builtin
@@ -1076,7 +1079,7 @@ export function buildRuntimeAuthorizationRequestParams(args: {
       principal.kind === "remote_agent"
         ? ["once", "remote_agent", "conversation", "workspace"]
         : ["once", "actor", "conversation", "workspace"],
-    reason: `Tool ${toolName} requires authorization for device capability ${row.deviceCapabilityId}`,
+    reason: `Tool ${toolName} requires authorization for device capability ${row.runtimeCapabilityId}`,
     sourceRequestArgs: args.sanitizedInput,
   }
 }
@@ -1127,7 +1130,7 @@ async function requestAuthorizationOrDeny(args: {
     projectInput.principal.kind === "remote_agent"
   if (!supportsAuthRequest) {
     return mcpErrorBlock(
-      `permission_denied: no active grant covers device capability ${row.deviceCapabilityId} for this ${projectInput.principal.kind} principal`,
+      `permission_denied: no active grant covers device capability ${row.runtimeCapabilityId} for this ${projectInput.principal.kind} principal`,
       undefined,
       origin
     )

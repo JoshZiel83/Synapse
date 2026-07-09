@@ -40,7 +40,7 @@ function makeRuntimeAuthSummary(
     },
     runtimeAuthorization: {
       requestedToolName: "cua_click",
-      deviceToolStableKey: "cua/click",
+      runtimeToolStableKey: "cua/click",
       requestedAction: {
         capability: "cua",
         toolName: "cua_click",
@@ -51,7 +51,7 @@ function makeRuntimeAuthSummary(
       reason: "test",
       deviceId: "00000000-0000-0000-0000-00000000000d",
       deviceDisplayName: "Test Device",
-      deviceCapabilityId: "00000000-0000-0000-0000-00000000000e",
+      runtimeCapabilityId: "00000000-0000-0000-0000-00000000000e",
       exposureId: "00000000-0000-0000-0000-00000000000f",
       exposureDisplayName: "CUA",
       grantOptions: [],

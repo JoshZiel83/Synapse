@@ -40,9 +40,11 @@ export function mapRuntimeAuthorizationGrantCandidate(
   return {
     id: row.id,
     workspaceId: row.workspaceId,
-    deviceId: row.deviceId,
-    deviceCapabilityId: row.deviceCapabilityId,
-    deviceExposureId: row.deviceExposureId,
+    // App-facing wire field stays `deviceId` (schemas/runtime-authorizations.ts);
+    // the internal grant column is now `runtimeId` (runtimes CTI root).
+    deviceId: row.runtimeId,
+    runtimeCapabilityId: row.runtimeCapabilityId,
+    runtimeExposureId: row.runtimeExposureId,
     subject: candidate.subject,
     scope: candidate.scope,
     scopeLabel,

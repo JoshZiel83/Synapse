@@ -85,7 +85,7 @@ export async function findRemoteAgentWorkspace(
 }
 
 /**
- * deviceCapabilities ⋈ workspaceResources: of the requested capabilityIds, return
+ * runtimeCapabilities ⋈ workspaceResources: of the requested capabilityIds, return
  * the set actually owned by `workspaceId` (app not deleted). The caller derives
  * the `missing` set from this — ownership comparison is validation, not query.
  */
@@ -95,7 +95,7 @@ export async function findOwnedDeviceCapabilityIds(
 ): Promise<Set<string>> {
   if (capabilityIds.length === 0) return new Set()
   const rows = await db
-    .selectFrom("deviceCapabilities as capability")
+    .selectFrom("runtimeCapabilities as capability")
     .innerJoin("workspaceResources as resource", "resource.id", "capability.id")
     .select(["capability.id as id", "resource.workspaceId as workspaceId"])
     .where("capability.id", "in", capabilityIds)
@@ -122,12 +122,12 @@ export async function insertCloudPairingSession(args: {
   contextJson: string
 }): Promise<void> {
   await db
-    .insertInto("devicePairingSessions")
+    .insertInto("runtimePairingSessions")
     .values({
       id: args.sessionId,
       workspaceId: args.workspaceId,
       requestedByWorkspaceMemberId: args.requestedByWorkspaceMemberId,
-      deviceId: null,
+      runtimeId: null,
       mode: "cloud_bootstrap",
       serverBaseUrl: "",
       requestedTitle: args.requestedTitle,
@@ -157,7 +157,6 @@ export type ConsumeCloudBootstrapResult =
       outcome: "ok"
       session: ConsumedCloudPairingSession
       pendingDeviceId: string
-      hostProvider: string
     }
   | {
       outcome: "not_found" | "not_pending" | "expired" | "race" | "corrupt"
@@ -167,7 +166,7 @@ export type ConsumeCloudBootstrapResult =
 
 /**
  * Owns the whole consume transaction: claim UPDATE (returningAll), diagnostic
- * SELECT, three INSERTs (devices, deviceServices, deviceServiceKeys) and the
+ * SELECT, three INSERTs (devices, runtimeServices, runtimeServiceKeys) and the
  * device_id FK backfill — atomic in ONE db.transaction(). Returns a
  * discriminated domain result; the 404/409/410/500 DeviceModuleError mapping +
  * wire-shape assembly stay in cloud.ts. `pending_device_id` / `host_provider`
@@ -195,7 +194,7 @@ export async function consumeCloudBootstrapTx(args: {
     // session is still pending + matching mode + not expired. Two concurrent
     // sandbox boots can no longer both succeed and double-insert a device.
     const claimedRows = await trx
-      .updateTable("devicePairingSessions")
+      .updateTable("runtimePairingSessions")
       .set({
         status: "consumed",
         confirmedAt: sql`NOW()`,
@@ -211,7 +210,7 @@ export async function consumeCloudBootstrapTx(args: {
     if (!session) {
       // Diagnose which precondition failed for a sharper error code.
       const existing = await trx
-        .selectFrom("devicePairingSessions")
+        .selectFrom("runtimePairingSessions")
         .selectAll()
         .where("bootstrapTokenHash", "=", args.tokenHash)
         .where("mode", "=", "cloud_bootstrap")
@@ -236,12 +235,23 @@ export async function consumeCloudBootstrapTx(args: {
     }
 
     const context = (session.context ?? {}) as Record<string, unknown>
-    const pendingDeviceId = context["pending_device_id"] as string | undefined
+    const pendingDeviceId = context["pending_runtime_id"] as string | undefined
     if (!pendingDeviceId) {
       return { outcome: "corrupt" }
     }
-    const hostProvider =
-      (context["host_provider"] as string | undefined) ?? "e2b"
+
+    // runtimes is the CTI supertype root: the devices detail row's deferred
+    // root FK + the runtime detail-consistency trigger both validate at commit,
+    // so the runtimes(kind='device') parent MUST exist in the same tx before
+    // the devices insert (P1 sandbox provisioning stays device-shaped).
+    await trx
+      .insertInto("runtimes")
+      .values({
+        id: pendingDeviceId,
+        workspaceId: session.workspaceId as string,
+        kind: "device",
+      } as never)
+      .execute()
 
     await trx
       .insertInto("devices")
@@ -251,9 +261,7 @@ export async function consumeCloudBootstrapTx(args: {
         ownerWorkspaceMemberId: session.requestedByWorkspaceMemberId ?? null,
         title: (session.requestedTitle as string | null) ?? "Cloud Device",
         description: null,
-        hostKind: "cloud",
-        hostProvider: hostProvider,
-        deviceType: "cloud_sandbox",
+        deviceType: "virtual_machine",
         platform: args.device.platform,
         arch: args.device.arch,
         publicKey: args.device.publicKey,
@@ -263,10 +271,10 @@ export async function consumeCloudBootstrapTx(args: {
       .execute()
 
     await trx
-      .insertInto("deviceServices")
+      .insertInto("runtimeServices")
       .values({
         id: args.service.serviceId,
-        deviceId: pendingDeviceId,
+        runtimeId: pendingDeviceId,
         serviceKind: "device_runtime",
         version: args.service.version,
         status: "starting",
@@ -274,7 +282,7 @@ export async function consumeCloudBootstrapTx(args: {
       } as never)
       .execute()
     await trx
-      .insertInto("deviceServiceKeys")
+      .insertInto("runtimeServiceKeys")
       .values({
         id: args.serviceKey.serviceKeyId,
         serviceId: args.service.serviceId,
@@ -285,9 +293,9 @@ export async function consumeCloudBootstrapTx(args: {
     // Atomic UPDATE above already flipped status/timestamps. Just backfill
     // the device_id FK now that the device row exists.
     await trx
-      .updateTable("devicePairingSessions")
+      .updateTable("runtimePairingSessions")
       .set({
-        deviceId: pendingDeviceId,
+        runtimeId: pendingDeviceId,
       } as never)
       .where("id", "=", session.id as string)
       .execute()
@@ -295,7 +303,6 @@ export async function consumeCloudBootstrapTx(args: {
     return {
       outcome: "ok",
       pendingDeviceId,
-      hostProvider,
       session: {
         id: session.id as string,
         workspaceId: session.workspaceId as string,
@@ -314,7 +321,7 @@ export async function consumeCloudBootstrapTx(args: {
 // control-plane.ts — session lifecycle, tunnel token, validation reads
 // ════════════════════════════════════════════════════════════════════════════
 
-/** Insert a device_control_plane_sessions row + bump device_services pointer. */
+/** Insert a runtime_control_plane_sessions row + bump runtime_services pointer. */
 export async function insertControlPlaneSession(args: {
   sessionId: string
   deviceId: string
@@ -323,10 +330,10 @@ export async function insertControlPlaneSession(args: {
   remoteAddr: string | null
 }): Promise<void> {
   await db
-    .insertInto("deviceControlPlaneSessions")
+    .insertInto("runtimeControlPlaneSessions")
     .values({
       id: args.sessionId,
-      deviceId: args.deviceId,
+      runtimeId: args.deviceId,
       serviceId: args.serviceId,
       protocolVersion: 1,
       clientVersion: args.clientVersion,
@@ -339,7 +346,7 @@ export async function insertControlPlaneSession(args: {
     } as never)
     .execute()
   await db
-    .updateTable("deviceServices")
+    .updateTable("runtimeServices")
     .set({
       currentSessionId: args.sessionId,
       lastSeenAt: sql`NOW()`,
@@ -358,13 +365,13 @@ export async function issueTunnelPathToken(
   freshToken: string
 ): Promise<string | null> {
   await db
-    .updateTable("deviceServices")
+    .updateTable("runtimeServices")
     .set({ tunnelPathToken: freshToken } as never)
     .where("id", "=", serviceId)
     .where("tunnelPathToken", "is", null)
     .execute()
   const row = await db
-    .selectFrom("deviceServices")
+    .selectFrom("runtimeServices")
     .select(["tunnelPathToken"])
     .where("id", "=", serviceId)
     .executeTakeFirst()
@@ -376,20 +383,20 @@ export async function selectControlPlaneSessionDeviceId(
   sessionId: string
 ): Promise<string | null> {
   const row = await db
-    .selectFrom("deviceControlPlaneSessions")
-    .select("deviceId")
+    .selectFrom("runtimeControlPlaneSessions")
+    .select("runtimeId")
     .where("id", "=", sessionId)
     .executeTakeFirst()
-  return (row?.deviceId as string | null) ?? null
+  return (row?.runtimeId as string | null) ?? null
 }
 
-/** Close a control-plane session: mark it closed + clear the device_services pointer. */
+/** Close a control-plane session: mark it closed + clear the runtime_services pointer. */
 export async function closeControlPlaneSessionRows(
   sessionId: string,
   reason: string
 ): Promise<void> {
   await db
-    .updateTable("deviceControlPlaneSessions")
+    .updateTable("runtimeControlPlaneSessions")
     .set({
       status: "closed",
       endedAt: sql`NOW()`,
@@ -398,7 +405,7 @@ export async function closeControlPlaneSessionRows(
     .where("id", "=", sessionId)
     .execute()
   await db
-    .updateTable("deviceServices")
+    .updateTable("runtimeServices")
     .set({
       currentSessionId: null,
     } as never)
@@ -421,13 +428,13 @@ export async function getDeviceWorkspaceId(
 /** Read the persisted tunnel_path_token bound to a device_service (frp-edge
  *  validation). Executor-injectable (tests pass a testcontainer db). */
 export async function selectTunnelPathToken(
-  deviceServiceId: string,
+  runtimeServiceId: string,
   executor: KyselyDb = db
 ): Promise<string | null> {
   const row = await executor
-    .selectFrom("deviceServices")
+    .selectFrom("runtimeServices")
     .select(["tunnelPathToken"])
-    .where("id", "=", deviceServiceId)
+    .where("id", "=", runtimeServiceId)
     .executeTakeFirst()
   return (row?.tunnelPathToken as string | null) ?? null
 }
@@ -455,21 +462,21 @@ export async function selectDeviceHelloAuthContext(
   if (!device) return { deviceExists: false, service: null, activeKey: null }
 
   const serviceRow = await executor
-    .selectFrom("deviceServices")
-    .select(["id", "deviceId"])
+    .selectFrom("runtimeServices")
+    .select(["id", "runtimeId"])
     .where("id", "=", input.serviceId)
     .executeTakeFirst()
   const service =
-    serviceRow && serviceRow.deviceId === input.deviceId
+    serviceRow && serviceRow.runtimeId === input.deviceId
       ? {
           id: serviceRow.id as string,
-          deviceId: serviceRow.deviceId as string,
+          deviceId: serviceRow.runtimeId as string,
         }
       : null
   if (!service) return { deviceExists: true, service: null, activeKey: null }
 
   const keyRow = await executor
-    .selectFrom("deviceServiceKeys")
+    .selectFrom("runtimeServiceKeys")
     .select(["id", "pubkey", "pubkeyFingerprint"])
     .where("serviceId", "=", input.serviceId)
     .where("revokedAt", "is", null)
@@ -495,14 +502,14 @@ export async function selectDeviceHelloAuthContext(
  * testcontainer db).
  */
 export async function hasLiveLocalSandboxMount(
-  deviceServiceId: string,
+  runtimeServiceId: string,
   executor: KyselyDb = db
 ): Promise<boolean> {
   const liveLocalMount = await executor
     .selectFrom("fileMounts as m")
-    .innerJoin("deviceServices as s", "s.deviceId", "m.deviceId")
+    .innerJoin("runtimeServices as s", "s.runtimeId", "m.deviceId")
     .select("m.id")
-    .where("s.id", "=", deviceServiceId)
+    .where("s.id", "=", runtimeServiceId)
     .where("m.sandboxBackend", "=", "local")
     .where(sql<boolean>`m.status NOT IN ('closed', 'failed')`)
     .limit(1)
@@ -524,10 +531,10 @@ export async function upsertRuntimeSessionOpened(input: {
 }): Promise<void> {
   await db.transaction().execute(async (trx) => {
     await trx
-      .insertInto("deviceRuntimeSessions")
+      .insertInto("runtimeSessions")
       .values({
         id: input.runtimeSessionId,
-        deviceId: input.deviceId,
+        runtimeId: input.deviceId,
         conversationId: input.conversationId,
         actorId: input.actorId,
         status: "open",
@@ -541,7 +548,7 @@ export async function upsertRuntimeSessionOpened(input: {
       )
       .execute()
     await trx
-      .insertInto("deviceRuntimeSessionServices")
+      .insertInto("runtimeSessionServices")
       .values({
         sessionId: input.runtimeSessionId,
         serviceId: input.serviceId,
@@ -566,16 +573,16 @@ export async function closeRuntimeSession(input: {
 }): Promise<void> {
   await db.transaction().execute(async (trx) => {
     await trx
-      .updateTable("deviceRuntimeSessions")
+      .updateTable("runtimeSessions")
       .set({
         status: "closed",
         closedAt: sql`NOW()`,
       })
       .where("id", "=", input.runtimeSessionId)
-      .where("deviceId", "=", input.deviceId)
+      .where("runtimeId", "=", input.deviceId)
       .execute()
     await trx
-      .updateTable("deviceRuntimeSessionServices")
+      .updateTable("runtimeSessionServices")
       .set({ status: "closed", closedAt: sql`NOW()` })
       .where("sessionId", "=", input.runtimeSessionId)
       .where("serviceId", "=", input.serviceId)
@@ -583,36 +590,36 @@ export async function closeRuntimeSession(input: {
   })
 }
 
-/** Operation-ownership read: the device_operations row (id + owning device). */
+/** Operation-ownership read: the runtime_operations row (id + owning device). */
 export async function selectDeviceOperationOwner(
   operationId: string
 ): Promise<{ id: string; deviceId: string } | undefined> {
   const op = await db
-    .selectFrom("deviceOperations")
-    .select(["id", "deviceId"])
+    .selectFrom("runtimeOperations")
+    .select(["id", "runtimeId"])
     .where("id", "=", operationId)
     .executeTakeFirst()
   return op
-    ? { id: op.id as string, deviceId: op.deviceId as string }
+    ? { id: op.id as string, deviceId: op.runtimeId as string }
     : undefined
 }
 
-/** Operation-ownership read: the device_operation_attempts row. */
+/** Operation-ownership read: the runtime_operation_attempts row. */
 export async function selectDeviceOperationAttempt(
   attemptId: string
 ): Promise<
-  { id: string; operationId: string; deviceServiceId: string } | undefined
+  { id: string; operationId: string; runtimeServiceId: string } | undefined
 > {
   const attempt = await db
-    .selectFrom("deviceOperationAttempts")
-    .select(["id", "operationId", "deviceServiceId"])
+    .selectFrom("runtimeOperationAttempts")
+    .select(["id", "operationId", "runtimeServiceId"])
     .where("id", "=", attemptId)
     .executeTakeFirst()
   return attempt
     ? {
         id: attempt.id as string,
         operationId: attempt.operationId as string,
-        deviceServiceId: attempt.deviceServiceId as string,
+        runtimeServiceId: attempt.runtimeServiceId as string,
       }
     : undefined
 }
@@ -622,38 +629,38 @@ export async function selectTaskIdForOperation(
   operationId: string
 ): Promise<string | null> {
   const row = await db
-    .selectFrom("deviceOperations")
+    .selectFrom("runtimeOperations")
     .select("taskId")
     .where("id", "=", operationId)
     .executeTakeFirst()
   return (row?.taskId as string | null) || null
 }
 
-/** Set a device_operations.status (scoped to the owning device). */
+/** Set a runtime_operations.status (scoped to the owning device). */
 export async function setDeviceOperationStatus(
   operationId: string,
   deviceId: string,
   status: string
 ): Promise<void> {
   await db
-    .updateTable("deviceOperations")
+    .updateTable("runtimeOperations")
     .set({ status } as never)
     .where("id", "=", operationId)
-    .where("deviceId", "=", deviceId)
+    .where("runtimeId", "=", deviceId)
     .execute()
 }
 
-/** Set a device_operation_attempts.status (scoped to the owning service). */
+/** Set a runtime_operation_attempts.status (scoped to the owning service). */
 export async function setDeviceOperationAttemptStatus(
   attemptId: string,
   serviceId: string,
   status: string
 ): Promise<void> {
   await db
-    .updateTable("deviceOperationAttempts")
+    .updateTable("runtimeOperationAttempts")
     .set({ status } as never)
     .where("id", "=", attemptId)
-    .where("deviceServiceId", "=", serviceId)
+    .where("runtimeServiceId", "=", serviceId)
     .execute()
 }
 
@@ -663,10 +670,10 @@ export async function markDeviceOperationOutputStreaming(
   deviceId: string
 ): Promise<void> {
   await db
-    .updateTable("deviceOperations")
+    .updateTable("runtimeOperations")
     .set({ status: "output_streaming" } as never)
     .where("id", "=", operationId)
-    .where("deviceId", "=", deviceId)
+    .where("runtimeId", "=", deviceId)
     .where("status", "in", ["started", "output_streaming"])
     .execute()
 }
@@ -688,7 +695,7 @@ export async function finalizeDeviceOperationResult(input: {
 }): Promise<void> {
   await db.transaction().execute(async (trx) => {
     await trx
-      .updateTable("deviceOperations")
+      .updateTable("runtimeOperations")
       .set({
         status: input.ok ? "succeeded" : "failed",
         resultHash: input.resultHash,
@@ -697,18 +704,18 @@ export async function finalizeDeviceOperationResult(input: {
         completedAt: sql`NOW()`,
       })
       .where("id", "=", input.operationId)
-      .where("deviceId", "=", input.deviceId)
+      .where("runtimeId", "=", input.deviceId)
       .execute()
     if (input.attemptId) {
       await trx
-        .updateTable("deviceOperationAttempts")
+        .updateTable("runtimeOperationAttempts")
         .set({
           status: input.ok ? "acknowledged" : "failed",
           responseAt: sql`NOW()`,
           acknowledgedAt: input.ok ? sql`NOW()` : null,
         })
         .where("id", "=", input.attemptId)
-        .where("deviceServiceId", "=", input.serviceId)
+        .where("runtimeServiceId", "=", input.serviceId)
         .execute()
     }
   })
@@ -719,10 +726,10 @@ export async function selectInFlightDeviceTaskIds(
   deviceId: string
 ): Promise<string[]> {
   const rows = await db
-    .selectFrom("deviceOperations as op")
+    .selectFrom("runtimeOperations as op")
     .innerJoin("toolCallTasks as t", "t.id", "op.taskId")
     .select("op.taskId as taskId")
-    .where("op.deviceId", "=", deviceId)
+    .where("op.runtimeId", "=", deviceId)
     .where("op.taskId", "is not", null)
     .where("t.lifecycleStatus", "in", [
       "submitted",
@@ -741,7 +748,7 @@ export async function selectExpiredDeviceTaskIds(now: Date): Promise<string[]> {
   const rows = await db
     .selectFrom("toolCallTasks")
     .select("id")
-    .where("executorKind", "=", "device_tool")
+    .where("executorKind", "=", "runtime_tool")
     .where("lifecycleStatus", "in", [
       "submitted",
       "working",
@@ -777,19 +784,19 @@ export async function insertRuntimeEvent(input: {
     .execute()
 }
 
-/** Merge a vfs snapshot into device_exposures.metadata (jsonb COALESCE/|| merge). */
+/** Merge a vfs snapshot into runtime_exposures.metadata (jsonb COALESCE/|| merge). */
 export async function mergeVfsExposureMetadata(
   exposureId: string,
   deviceId: string,
   vfsJson: string
 ): Promise<void> {
   await db
-    .updateTable("deviceExposures")
+    .updateTable("runtimeExposures")
     .set({
       metadata: sql`COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('vfs', ${vfsJson}::jsonb)`,
     } as never)
     .where("id", "=", exposureId)
-    .where("deviceId", "=", deviceId)
+    .where("runtimeId", "=", deviceId)
     .execute()
 }
 
@@ -809,8 +816,8 @@ export interface BeginOperationInput {
   envelope: OperationEnvelope
   args: Record<string, unknown>
   toolName: string
-  deviceId: string
-  deviceServiceId: string
+  runtimeId: string
+  runtimeServiceId: string
   tunnelInternalUrl: string | null
   principalKind: OperationPrincipalKind
   principalSubjectId: string
@@ -846,7 +853,7 @@ export async function assertNoDeviceToolRevisionDrift(
   expectedRevisionId: string
 ): Promise<void> {
   const tool = await dbOrTrx
-    .selectFrom("deviceTools")
+    .selectFrom("runtimeTools")
     .select(["latestRevisionId"])
     .where("id", "=", toolId)
     .executeTakeFirst()
@@ -869,7 +876,7 @@ export async function beginDeviceOperationOn(
   const operationId = input.envelope.operation_id
   const attemptId = input.envelope.attempt_id
   await trx
-    .insertInto("deviceOperations")
+    .insertInto("runtimeOperations")
     .values({
       id: operationId,
       workspaceId: input.workspaceId,
@@ -878,15 +885,15 @@ export async function beginDeviceOperationOn(
       principalSubjectId: input.principalSubjectId,
       initiatedByWorkspaceMemberId: input.initiatedByWorkspaceMemberId,
       initiatedBySessionId: input.initiatedBySessionId,
-      deviceId: input.deviceId,
-      deviceExposureId: input.envelope.device_exposure_id,
-      deviceCapabilityId: input.envelope.device_capability_id,
+      runtimeId: input.runtimeId,
+      runtimeExposureId: input.envelope.runtime_exposure_id,
+      runtimeCapabilityId: input.envelope.runtime_capability_id,
       catalogRevisionId: await getCatalogRevisionForToolRevision(
         trx,
-        input.envelope.device_tool_revision_id
+        input.envelope.runtime_tool_revision_id
       ),
-      toolId: input.envelope.device_tool_id,
-      toolRevisionId: input.envelope.device_tool_revision_id,
+      toolId: input.envelope.runtime_tool_id,
+      toolRevisionId: input.envelope.runtime_tool_revision_id,
       visibleToolName: input.toolName,
       taskMode: input.envelope.task_mode,
       status: "dispatched",
@@ -900,13 +907,13 @@ export async function beginDeviceOperationOn(
     .execute()
 
   await trx
-    .insertInto("deviceOperationAttempts")
+    .insertInto("runtimeOperationAttempts")
     .values({
       id: attemptId,
       operationId: operationId,
       attemptSeq: 1n,
       transport: "mcp_http",
-      deviceServiceId: input.deviceServiceId,
+      runtimeServiceId: input.runtimeServiceId,
       tunnelInternalUrl: input.tunnelInternalUrl,
       mcpRequestId: attemptId,
       envelopeSignatureKid: input.envelope.signature_kid,
@@ -923,7 +930,7 @@ async function getCatalogRevisionForToolRevision(
   toolRevisionId: string
 ): Promise<string> {
   const row = await trx
-    .selectFrom("deviceToolRevisions")
+    .selectFrom("runtimeToolRevisions")
     .select(["catalogRevisionId"])
     .where("id", "=", toolRevisionId)
     .executeTakeFirst()
@@ -936,9 +943,9 @@ async function getCatalogRevisionForToolRevision(
 }
 
 /**
- * Insert a device_operations + first device_operation_attempts row pair, with a
- * revision drift check: the envelope's device_tool_revision_id must match
- * device_tools.latest_revision_id, otherwise we throw tool_definition_changed
+ * Insert a runtime_operations + first runtime_operation_attempts row pair, with a
+ * revision drift check: the envelope's runtime_tool_revision_id must match
+ * runtime_tools.latest_revision_id, otherwise we throw tool_definition_changed
  * before issuing the dispatch. The drift check + INSERT run in the same Kysely
  * transaction so a concurrent catalog sync can't slip in between.
  */
@@ -948,8 +955,8 @@ export async function beginDeviceOperation(
   return db.transaction().execute(async (trx: DatabaseTransaction) => {
     await assertNoDeviceToolRevisionDrift(
       trx,
-      input.envelope.device_tool_id,
-      input.envelope.device_tool_revision_id
+      input.envelope.runtime_tool_id,
+      input.envelope.runtime_tool_revision_id
     )
     return beginDeviceOperationOn(trx, input)
   })
@@ -965,7 +972,7 @@ export async function completeDeviceOperation(
 ): Promise<void> {
   await db.transaction().execute(async (trx: DatabaseTransaction) => {
     await trx
-      .updateTable("deviceOperationAttempts")
+      .updateTable("runtimeOperationAttempts")
       .set({
         status: input.ok ? "acknowledged" : "failed",
         responseAt: sql`NOW()`,
@@ -977,7 +984,7 @@ export async function completeDeviceOperation(
       .where("id", "=", input.attemptId)
       .execute()
     await trx
-      .updateTable("deviceOperations")
+      .updateTable("runtimeOperations")
       .set({
         // Schema's device_operations_status terminal enum value is
         // 'succeeded' (not 'completed'). Failed dispatches use 'failed'.
@@ -996,9 +1003,9 @@ export async function completeDeviceOperation(
 // catalog-sync.ts — device.catalog.sync persistence (one large transaction)
 // ════════════════════════════════════════════════════════════════════════════
 //
-// The whole sync is ONE db.transaction(): it spans device_exposures,
-// device_capabilities, device_catalog_revisions, device_tools,
-// device_tool_revisions PLUS the cross-module workspace_resources writes
+// The whole sync is ONE db.transaction(): it spans runtime_exposures,
+// runtime_capabilities, runtime_catalog_revisions, runtime_tools,
+// runtime_tool_revisions PLUS the cross-module workspace_resources writes
 // (insertWorkspaceResourceRoot/updateWorkspaceResourceRoot), and the stale-state reap.
 // Atomicity is load-bearing (idempotent upserts + revision supersession +
 // stale reaping must not partially commit), so the entire orchestration lives
@@ -1061,11 +1068,11 @@ export interface PersistCatalogSyncInput {
 }
 
 export interface AssignedToolIds {
-  device_tool_id: string
-  device_tool_revision_id: string
+  runtime_tool_id: string
+  runtime_tool_revision_id: string
 }
 export interface AssignedExposureIds {
-  device_exposure_id: string
+  runtime_exposure_id: string
   tools: Record<string, AssignedToolIds>
 }
 export type AssignedCatalogIds = Record<string, AssignedExposureIds>
@@ -1107,7 +1114,8 @@ export async function persistCatalogSync(
 
     for (const exposure of input.exposures) {
       const exposureId = await upsertExposure(trx, {
-        deviceId: input.deviceId,
+        runtimeId: input.deviceId,
+        workspaceId: device.workspaceId as string,
         serviceId: input.serviceId,
         exposure,
       })
@@ -1130,7 +1138,7 @@ export async function persistCatalogSync(
       toolRevisionCount += writtenRevisions
       seenToolIdsByExposure.set(exposureId, seenToolIds)
       assignedIds[exposure.stable_key] = {
-        device_exposure_id: exposureId,
+        runtime_exposure_id: exposureId,
         tools: assignedTools,
       }
     }
@@ -1143,16 +1151,16 @@ export async function persistCatalogSync(
     let offlineExposureCount = 0
     let removedToolCount = 0
     const allExposureIds = await trx
-      .selectFrom("deviceExposures")
+      .selectFrom("runtimeExposures")
       .select(["id"])
-      .where("deviceId", "=", input.deviceId)
+      .where("runtimeId", "=", input.deviceId)
       .execute()
     const staleExposureIds = allExposureIds
       .map((r) => r.id as string)
       .filter((id) => !seenExposureIds.has(id))
     if (staleExposureIds.length > 0) {
       const updated = await trx
-        .updateTable("deviceExposures")
+        .updateTable("runtimeExposures")
         .set({
           runtimeStatus: "offline",
         } as never)
@@ -1163,7 +1171,7 @@ export async function persistCatalogSync(
     }
     for (const [exposureId, seenToolIds] of seenToolIdsByExposure) {
       const allToolIds = await trx
-        .selectFrom("deviceTools")
+        .selectFrom("runtimeTools")
         .select(["id"])
         .where("exposureId", "=", exposureId)
         .execute()
@@ -1172,7 +1180,7 @@ export async function persistCatalogSync(
         .filter((id) => !seenToolIds.has(id))
       if (stale.length === 0) continue
       const updated = await trx
-        .updateTable("deviceTools")
+        .updateTable("runtimeTools")
         .set({
           status: "removed",
         } as never)
@@ -1196,21 +1204,22 @@ export async function persistCatalogSync(
 async function upsertExposure(
   trx: DatabaseTransaction,
   args: {
-    deviceId: string
+    runtimeId: string
+    workspaceId: string
     serviceId: string
     exposure: DeviceCatalogExposure
   }
 ): Promise<string> {
   const existing = await trx
-    .selectFrom("deviceExposures")
+    .selectFrom("runtimeExposures")
     .select(["id"])
-    .where("deviceId", "=", args.deviceId)
+    .where("runtimeId", "=", args.runtimeId)
     .where("stableKey", "=", args.exposure.stable_key)
     .executeTakeFirst()
   const metadata = sql`${JSON.stringify(args.exposure.metadata ?? {})}::jsonb`
   if (existing) {
     await trx
-      .updateTable("deviceExposures")
+      .updateTable("runtimeExposures")
       .set({
         serviceId: args.serviceId,
         displayName: args.exposure.display_name,
@@ -1227,9 +1236,12 @@ async function upsertExposure(
     return existing.id as string
   }
   const inserted = await trx
-    .insertInto("deviceExposures")
+    .insertInto("runtimeExposures")
     .values({
-      deviceId: args.deviceId,
+      runtimeId: args.runtimeId,
+      // workspace_id is NOT NULL and denormalized from the authenticated
+      // runtime's workspace — NEVER from client-supplied catalog data.
+      workspaceId: args.workspaceId,
       serviceId: args.serviceId,
       stableKey: args.exposure.stable_key,
       displayName: args.exposure.display_name,
@@ -1251,13 +1263,13 @@ async function ensureCapability(
   args: { workspaceId: string; exposureId: string }
 ): Promise<void> {
   const capabilityOwner = await trx
-    .selectFrom("deviceExposures as exposure")
-    .innerJoin("devices as device", "device.id", "exposure.deviceId")
+    .selectFrom("runtimeExposures as exposure")
+    .innerJoin("devices as device", "device.id", "exposure.runtimeId")
     .select(["device.ownerWorkspaceMemberId", "exposure.displayName"])
     .where("exposure.id", "=", args.exposureId)
     .executeTakeFirst()
   const existing = await trx
-    .selectFrom("deviceCapabilities")
+    .selectFrom("runtimeCapabilities")
     .select(["id"])
     .where("exposureId", "=", args.exposureId)
     .executeTakeFirst()
@@ -1275,7 +1287,7 @@ async function ensureCapability(
   await insertWorkspaceResourceRoot(trx, {
     id: capabilityId,
     workspaceId: args.workspaceId,
-    kind: "device_capability",
+    kind: "runtime_capability",
     displayName:
       (capabilityOwner?.displayName as string | null) || "Device capability",
     // owner = the backing device's owner member subject (or NULL when the
@@ -1286,10 +1298,14 @@ async function ensureCapability(
     status: "active",
   })
   await trx
-    .insertInto("deviceCapabilities")
+    .insertInto("runtimeCapabilities")
     .values({
       id: capabilityId,
       exposureId: args.exposureId,
+      // workspace_id is NOT NULL and denormalized from the authenticated
+      // runtime's workspace (ensureCapability's caller passes device.workspaceId,
+      // pinned by the composite FK to runtime_exposures(id,workspace_id)).
+      workspaceId: args.workspaceId,
     } as never)
     .execute()
 }
@@ -1318,7 +1334,7 @@ async function ensureCatalogRevision(
   args: { exposureId: string; schemaHash: string }
 ): Promise<{ revisionId: string; isNew: boolean }> {
   const latest = await trx
-    .selectFrom("deviceCatalogRevisions")
+    .selectFrom("runtimeCatalogRevisions")
     .select(["id", "revisionSeq", "schemaHash", "status"])
     .where("exposureId", "=", args.exposureId)
     .orderBy("revisionSeq", "desc")
@@ -1333,7 +1349,7 @@ async function ensureCatalogRevision(
   }
   if (latest && (latest.status as string) === "active") {
     await trx
-      .updateTable("deviceCatalogRevisions")
+      .updateTable("runtimeCatalogRevisions")
       .set({
         status: "superseded",
         invalidatedAt: sql`NOW()`,
@@ -1345,7 +1361,7 @@ async function ensureCatalogRevision(
   const latestSeqNumber = revisionSeqToNumber(latestSeqRaw)
   const nextSeqNumber = latestSeqNumber + 1
   const inserted = await trx
-    .insertInto("deviceCatalogRevisions")
+    .insertInto("runtimeCatalogRevisions")
     .values({
       exposureId: args.exposureId,
       revisionSeq: nextSeqNumber,
@@ -1376,7 +1392,7 @@ async function upsertTools(
   for (const tool of args.tools) {
     const definitionHash = toolDefinitionHash(tool)
     const existingTool = await trx
-      .selectFrom("deviceTools")
+      .selectFrom("runtimeTools")
       .select(["id", "latestRevisionId"])
       .where("exposureId", "=", args.exposureId)
       .where("stableKey", "=", tool.stable_key)
@@ -1385,7 +1401,7 @@ async function upsertTools(
     if (existingTool) {
       toolId = existingTool.id as string
       await trx
-        .updateTable("deviceTools")
+        .updateTable("runtimeTools")
         .set({
           currentName: tool.name,
           status: "active",
@@ -1395,7 +1411,7 @@ async function upsertTools(
         .execute()
     } else {
       const insertedTool = await trx
-        .insertInto("deviceTools")
+        .insertInto("runtimeTools")
         .values({
           exposureId: args.exposureId,
           stableKey: tool.stable_key,
@@ -1409,7 +1425,7 @@ async function upsertTools(
     seenToolIds.add(toolId)
 
     const existingRevision = await trx
-      .selectFrom("deviceToolRevisions")
+      .selectFrom("runtimeToolRevisions")
       .select(["id", "definitionHash"])
       .where("toolId", "=", toolId)
       .where("catalogRevisionId", "=", args.catalogRevisionId)
@@ -1419,7 +1435,7 @@ async function upsertTools(
       revisionId = existingRevision.id as string
       if ((existingRevision.definitionHash as string) !== definitionHash) {
         await trx
-          .updateTable("deviceToolRevisions")
+          .updateTable("runtimeToolRevisions")
           .set({
             toolName: tool.name,
             description: tool.description,
@@ -1432,7 +1448,7 @@ async function upsertTools(
       }
     } else {
       const insertedRevision = await trx
-        .insertInto("deviceToolRevisions")
+        .insertInto("runtimeToolRevisions")
         .values({
           toolId: toolId,
           catalogRevisionId: args.catalogRevisionId,
@@ -1448,13 +1464,13 @@ async function upsertTools(
       writtenRevisions += 1
     }
     await trx
-      .updateTable("deviceTools")
+      .updateTable("runtimeTools")
       .set({ latestRevisionId: revisionId } as never)
       .where("id", "=", toolId)
       .execute()
     assignedTools[tool.name] = {
-      device_tool_id: toolId,
-      device_tool_revision_id: revisionId,
+      runtime_tool_id: toolId,
+      runtime_tool_revision_id: revisionId,
     }
   }
   return { writtenRevisions, seenToolIds, assignedTools }
@@ -1469,8 +1485,6 @@ function toDeviceSummaryRecord(row: {
   id: string
   workspaceId: string
   title: string
-  hostKind: HostKind
-  hostProvider: string | null
   deviceType: DeviceType
   platform: string | null
   trustStatus: DeviceTrustStatus
@@ -1481,8 +1495,6 @@ function toDeviceSummaryRecord(row: {
     id: row.id,
     workspaceId: row.workspaceId,
     title: row.title,
-    hostKind: row.hostKind,
-    hostProvider: row.hostProvider,
     deviceType: row.deviceType,
     platform: row.platform,
     trustStatus: row.trustStatus,
@@ -1495,11 +1507,12 @@ function toDeviceSummaryRecord(row: {
 export async function listDeviceSummaries(
   workspaceId: string
 ): Promise<DeviceSummaryRecord[]> {
+  // devicesLive folds the runtimes soft-delete root (runtimes.deleted_at);
+  // devices no longer carries its own deleted_at column.
   const rows = await db
-    .selectFrom("devices")
+    .selectFrom("devicesLive")
     .selectAll()
     .where("workspaceId", "=", workspaceId)
-    .where("deletedAt", "is", null)
     .orderBy("createdAt", "desc")
     .execute()
   return rows.map((row) =>
@@ -1507,8 +1520,6 @@ export async function listDeviceSummaries(
       id: row.id as string,
       workspaceId: row.workspaceId as string,
       title: row.title as string,
-      hostKind: row.hostKind as HostKind,
-      hostProvider: row.hostProvider as string | null,
       deviceType: row.deviceType as DeviceType,
       platform: row.platform as string | null,
       trustStatus: row.trustStatus as DeviceTrustStatus,
@@ -1527,26 +1538,26 @@ export async function findDeviceDetail(
   workspaceId: string,
   deviceId: string
 ): Promise<DeviceDetailRecord | null> {
+  // devicesLive folds the runtimes soft-delete root; devices has no deleted_at.
   const deviceRow = await db
-    .selectFrom("devices")
+    .selectFrom("devicesLive")
     .selectAll()
     .where("workspaceId", "=", workspaceId)
     .where("id", "=", deviceId)
-    .where("deletedAt", "is", null)
     .executeTakeFirst()
   if (!deviceRow) {
     return null
   }
 
   const serviceRows = await db
-    .selectFrom("deviceServices")
+    .selectFrom("runtimeServices")
     .selectAll()
-    .where("deviceId", "=", deviceId)
+    .where("runtimeId", "=", deviceId)
     .orderBy("createdAt", "asc")
     .execute()
   const services: DeviceServiceRecord[] = serviceRows.map((row) => ({
     id: row.id as string,
-    deviceId: row.deviceId as string,
+    deviceId: row.runtimeId as string,
     serviceKind: row.serviceKind as DeviceServiceKind,
     version: (row.version as string | null) ?? null,
     status: row.status as DeviceServiceRecord["status"],
@@ -1555,9 +1566,9 @@ export async function findDeviceDetail(
   }))
 
   const capabilityRows = await db
-    .selectFrom("deviceCapabilities as dc")
+    .selectFrom("runtimeCapabilities as dc")
     .innerJoin("workspaceResources as resource", "resource.id", "dc.id")
-    .innerJoin("deviceExposures as dx", "dx.id", "dc.exposureId")
+    .innerJoin("runtimeExposures as dx", "dx.id", "dc.exposureId")
     .select([
       "dc.id as id",
       "resource.workspaceId as workspaceId",
@@ -1569,7 +1580,7 @@ export async function findDeviceDetail(
       "dx.runtimeStatus as runtimeStatus",
       "dx.metadata as exposureMetadata",
     ])
-    .where("dx.deviceId", "=", deviceId)
+    .where("dx.runtimeId", "=", deviceId)
     .where("resource.deletedAt", "is", null)
     .where("resource.status", "=", "active")
     .execute()
@@ -1591,8 +1602,6 @@ export async function findDeviceDetail(
       id: deviceRow.id as string,
       workspaceId: deviceRow.workspaceId as string,
       title: deviceRow.title as string,
-      hostKind: deviceRow.hostKind as HostKind,
-      hostProvider: deviceRow.hostProvider as string | null,
       deviceType: deviceRow.deviceType as DeviceType,
       platform: deviceRow.platform as string | null,
       trustStatus: deviceRow.trustStatus as DeviceTrustStatus,
@@ -1617,8 +1626,11 @@ export async function softDeleteDevice(
   workspaceId: string,
   deviceId: string
 ): Promise<number> {
+  // runtimes.deleted_at is the SOLE runtime soft-delete root (devices/sandboxes
+  // shed their own deleted_at). Flip the supertype row; the device detail stays
+  // for audit and is hidden via runtimes-liveness folds (devices_live).
   const result = await db
-    .updateTable("devices")
+    .updateTable("runtimes")
     .set({ deletedAt: new Date() })
     .where("workspaceId", "=", workspaceId)
     .where("id", "=", deviceId)
@@ -1645,12 +1657,12 @@ export async function insertLocalPairingSession(args: {
   contextJson: string
 }): Promise<void> {
   await db
-    .insertInto("devicePairingSessions")
+    .insertInto("runtimePairingSessions")
     .values({
       id: args.sessionId,
       workspaceId: args.workspaceId,
       requestedByWorkspaceMemberId: args.requestedByWorkspaceMemberId,
-      deviceId: args.deviceId,
+      runtimeId: args.deviceId,
       mode: args.mode,
       serverBaseUrl: args.serverBaseUrl,
       requestedTitle: args.requestedTitle,
@@ -1690,8 +1702,8 @@ export type ConsumeLocalPairingResult =
 /**
  * Owns the whole local-pairing consume transaction: a single-shot claim
  * UPDATE...RETURNING (status pending + mode local_qr + not expired), a
- * diagnostic SELECT on race-loss, three INSERTs (devices, deviceServices,
- * deviceServiceKeys) and the device_id FK backfill — atomic in ONE
+ * diagnostic SELECT on race-loss, three INSERTs (devices, runtimeServices,
+ * runtimeServiceKeys) and the device_id FK backfill — atomic in ONE
  * db.transaction(). Returns a discriminated domain result; the service maps the
  * failure outcomes to the right DeviceModuleError code and assembles the wire
  * response with control_plane_url.
@@ -1715,7 +1727,7 @@ export async function consumeLocalPairingTx(args: {
     // race-loss or invalid state. Two concurrent claim attempts can no
     // longer both produce a trusted device.
     const claimedRows = await trx
-      .updateTable("devicePairingSessions")
+      .updateTable("runtimePairingSessions")
       .set({
         status: "consumed",
         confirmedAt: sql`NOW()`,
@@ -1733,7 +1745,7 @@ export async function consumeLocalPairingTx(args: {
       // operator/runtime can react. We do a follow-up SELECT (still inside
       // the transaction) to figure out which precondition failed.
       const existing = await trx
-        .selectFrom("devicePairingSessions")
+        .selectFrom("runtimePairingSessions")
         .selectAll()
         .where("pairingCode", "=", args.pairingCode)
         .executeTakeFirst()
@@ -1770,6 +1782,18 @@ export async function consumeLocalPairingTx(args: {
       (session.requestedDeviceType as DeviceType | null) ??
       ("desktop_computer" as DeviceType)
 
+    // runtimes(kind='device') supertype root MUST be inserted in the same tx
+    // before the devices detail (deferred root FK + detail-consistency trigger
+    // validate at commit).
+    await trx
+      .insertInto("runtimes")
+      .values({
+        id: deviceId,
+        workspaceId: session.workspaceId as string,
+        kind: "device",
+      } as never)
+      .execute()
+
     await trx
       .insertInto("devices")
       .values({
@@ -1778,8 +1802,6 @@ export async function consumeLocalPairingTx(args: {
         ownerWorkspaceMemberId: session.requestedByWorkspaceMemberId ?? null,
         title,
         description: (session.requestedDescription as string | null) ?? null,
-        hostKind: "local",
-        hostProvider: null,
         deviceType: deviceType,
         platform: args.platform ?? null,
         arch: args.arch ?? null,
@@ -1790,10 +1812,10 @@ export async function consumeLocalPairingTx(args: {
       .execute()
 
     await trx
-      .insertInto("deviceServices")
+      .insertInto("runtimeServices")
       .values({
         id: serviceId,
-        deviceId: deviceId,
+        runtimeId: deviceId,
         serviceKind: "device_runtime",
         version: args.clientVersion ?? null,
         status: "starting",
@@ -1802,7 +1824,7 @@ export async function consumeLocalPairingTx(args: {
       .execute()
 
     await trx
-      .insertInto("deviceServiceKeys")
+      .insertInto("runtimeServiceKeys")
       .values({
         id: serviceKeyId,
         serviceId: serviceId,
@@ -1815,9 +1837,9 @@ export async function consumeLocalPairingTx(args: {
     // earlier atomic UPDATE flipped status/timestamps; we just need the FK
     // wired now that the device row exists.
     await trx
-      .updateTable("devicePairingSessions")
+      .updateTable("runtimePairingSessions")
       .set({
-        deviceId: deviceId,
+        runtimeId: deviceId,
       } as never)
       .where("id", "=", session.id as string)
       .execute()
@@ -1844,7 +1866,7 @@ export type ClaimRemoteAgentDaemonResult =
 
 /**
  * Owns the whole daemon-claim transaction: device ownership SELECT, machine
- * SELECT + workspace check, existing-claim SELECT, the deviceServices INSERT
+ * SELECT + workspace check, existing-claim SELECT, the runtimeServices INSERT
  * and the read-back — atomic in ONE db.transaction(). Returns a discriminated
  * domain result; the service maps the failure outcomes to DeviceModuleError.
  */
@@ -1877,7 +1899,7 @@ export async function claimRemoteAgentDaemonTx(input: {
     }
 
     const existing = await trx
-      .selectFrom("deviceServices")
+      .selectFrom("runtimeServices")
       .selectAll()
       .where("remoteAgentMachineId", "=", input.remoteAgentMachineId)
       .where("serviceKind", "=", "remote_agent_daemon")
@@ -1888,10 +1910,10 @@ export async function claimRemoteAgentDaemonTx(input: {
 
     const serviceId = randomUUID()
     await trx
-      .insertInto("deviceServices")
+      .insertInto("runtimeServices")
       .values({
         id: serviceId,
-        deviceId: input.deviceId,
+        runtimeId: input.deviceId,
         serviceKind: "remote_agent_daemon",
         version: null,
         status: "online",
@@ -1901,7 +1923,7 @@ export async function claimRemoteAgentDaemonTx(input: {
       .execute()
 
     const row = await trx
-      .selectFrom("deviceServices")
+      .selectFrom("runtimeServices")
       .selectAll()
       .where("id", "=", serviceId)
       .executeTakeFirstOrThrow()
@@ -1910,7 +1932,7 @@ export async function claimRemoteAgentDaemonTx(input: {
       outcome: "ok",
       service: {
         id: row.id as string,
-        deviceId: row.deviceId as string,
+        deviceId: row.runtimeId as string,
         serviceKind: row.serviceKind as DeviceServiceKind,
         version: (row.version as string | null) ?? null,
         status: row.status as DeviceServiceRecord["status"],
@@ -1932,26 +1954,26 @@ export async function isDeviceServiceOwnedByWorkspace(
   serviceId: string
 ): Promise<boolean> {
   const owned = await db
-    .selectFrom("deviceServices as ds")
-    .innerJoin("devices as d", "d.id", "ds.deviceId")
+    .selectFrom("runtimeServices as ds")
+    .innerJoin("devices as d", "d.id", "ds.runtimeId")
     .select("ds.id")
     .where("ds.id", "=", serviceId)
-    .where("ds.deviceId", "=", deviceId)
+    .where("ds.runtimeId", "=", deviceId)
     .where("d.workspaceId", "=", workspaceId)
     .executeTakeFirst()
   return Boolean(owned)
 }
 
 /**
- * Physical detach of a device_service via the SECURITY DEFINER fn. device_services
+ * Physical detach of a device_service via the SECURITY DEFINER fn. runtime_services
  * is a persistent child guarded by sd_reject_delete; the detach goes through
- * sd_detach_device_service (design §7.5/§11). Raw RPC kept verbatim.
+ * sd_detach_runtime_service (design §7.5/§11). Raw RPC kept verbatim.
  */
 export async function detachDeviceServiceRpc(
   serviceId: string,
   deviceId: string
 ): Promise<void> {
-  await sql`SELECT sd_detach_device_service(${serviceId}::uuid, ${deviceId}::uuid)`.execute(
+  await sql`SELECT sd_detach_runtime_service(${serviceId}::uuid, ${deviceId}::uuid)`.execute(
     db
   )
 }

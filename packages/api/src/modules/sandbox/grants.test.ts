@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import { SUBJECT_KIND } from "@synapse/shared"
 import type { Kysely } from "kysely"
 import { withTestDb } from "../../test/helpers/db.js"
+import { insertDeviceRuntime } from "../../test/helpers/runtime-fixtures.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
 import { resolveDeviceBuiltinIds, SandboxGrantsError } from "./grants.js"
 
@@ -33,20 +34,16 @@ async function seedDeviceWithBuiltins(
     .values({ ownerId: user.id, slug: `ws-${rid()}`, name: `${NS} ws` })
     .returning("id")
     .executeTakeFirstOrThrow()
-  const device = await db
-    .insertInto("devices")
-    .values({
-      workspaceId: ws.id,
-      title: "sandbox-dev",
-      publicKey: `pk-${rid()}`,
-      publicKeyFingerprint: `fp-${rid()}`,
-    } as any)
-    .returning("id")
-    .executeTakeFirstOrThrow()
+  const device = await insertDeviceRuntime(db, {
+    workspaceId: ws.id,
+    title: "sandbox-dev",
+    publicKey: `pk-${rid()}`,
+    publicKeyFingerprint: `fp-${rid()}`,
+  })
   const service = await db
-    .insertInto("deviceServices")
+    .insertInto("runtimeServices")
     .values({
-      deviceId: device.id,
+      runtimeId: device.id,
       serviceKind: "device_runtime",
       status: "online",
     } as any)
@@ -55,9 +52,10 @@ async function seedDeviceWithBuiltins(
 
   async function addBuiltin(kind: "filesystem" | "commandline") {
     const exposure = await db
-      .insertInto("deviceExposures")
+      .insertInto("runtimeExposures")
       .values({
-        deviceId: device.id,
+        runtimeId: device.id,
+        workspaceId: ws.id,
         serviceId: service.id,
         stableKey: `synapse.builtin.${kind}.v1`,
         displayName: kind,
@@ -74,7 +72,7 @@ async function seedDeviceWithBuiltins(
       .insertInto("workspaceResources")
       .values({
         workspaceId: ws.id,
-        kind: "device_capability",
+        kind: "runtime_capability",
         displayName: kind,
         createdBySubjectId,
         status: "active",
@@ -82,9 +80,10 @@ async function seedDeviceWithBuiltins(
       .returning("id")
       .executeTakeFirstOrThrow()
     const capability = await db
-      .insertInto("deviceCapabilities")
+      .insertInto("runtimeCapabilities")
       .values({
         id: capabilityRoot.id as string,
+        workspaceId: ws.id,
         exposureId: exposure.id,
       } as any)
       .returning("id")
@@ -138,16 +137,12 @@ test("grants.ts: resolveDeviceBuiltinIds throws when filesystem capability is ab
       .values({ ownerId: user.id, slug: `ws-${rid()}`, name: `${NS} ws` })
       .returning("id")
       .executeTakeFirstOrThrow()
-    const device = await db
-      .insertInto("devices")
-      .values({
-        workspaceId: ws.id,
-        title: "bare",
-        publicKey: `pk-${rid()}`,
-        publicKeyFingerprint: `fp-${rid()}`,
-      } as any)
-      .returning("id")
-      .executeTakeFirstOrThrow()
+    const device = await insertDeviceRuntime(db, {
+      workspaceId: ws.id,
+      title: "bare",
+      publicKey: `pk-${rid()}`,
+      publicKeyFingerprint: `fp-${rid()}`,
+    })
     await assert.rejects(
       () => resolveDeviceBuiltinIds(device.id as string, db),
       (err: unknown) => err instanceof SandboxGrantsError

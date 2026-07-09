@@ -113,7 +113,7 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
       challengeNonce: string
     ): Promise<DeviceHelloParams> => {
       // PR #21: sign the server-issued challenge with the service private key
-      // so the API can verify against device_service_keys.pubkey before
+      // so the API can verify against runtime_service_keys.pubkey before
       // accepting any further frames.
       const { createPrivateKey, sign: cryptoSign } = await import("node:crypto")
       const keyEntry = await broker.loadKeyPair(runtimeService.privateKeyRef)
@@ -202,7 +202,7 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
         // re-issued) for this service. Falls back to the env-supplied
         // registrationToken when the server didn't ship one. The token
         // becomes the `/d/<token>` segment the frp edge routes on; the
-        // server validates it against device_services.tunnel_path_token
+        // server validates it against runtime_services.tunnel_path_token
         // when device.tunnel.up arrives.
         const tunnelAck =
           ack &&
@@ -221,12 +221,12 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
             serverTunnelToken || this.opts.tunnel.registrationToken
           try {
             this.tunnelHandle = await this.opts.tunnel.adapter.start({
-              deviceServiceId: runtimeService.serviceId,
+              runtimeServiceId: runtimeService.serviceId,
               localPort: this.mcpHost!.localPort,
               registrationToken: effectiveToken,
             })
             logger.info("device tunnel up", {
-              deviceServiceId: runtimeService.serviceId,
+              runtimeServiceId: runtimeService.serviceId,
               internalUrl: this.tunnelHandle.internalUrl,
               localPort: this.mcpHost!.localPort,
               tokenSource: serverTunnelToken ? "server_issued" : "fallback_env",
@@ -287,8 +287,8 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
     // accepted the catalog. notify() silently returns if the socket isn't
     // OPEN, which was the original race that lost the initial sync.
     const ack = await this.transport.request("device.catalog.sync", params)
-    // Server returns assigned_ids: a {stable_key -> {device_exposure_id,
-    // tools: {tool_name -> {device_tool_id, device_tool_revision_id}}}}
+    // Server returns assigned_ids: a {stable_key -> {runtime_exposure_id,
+    // tools: {tool_name -> {runtime_tool_id, runtime_tool_revision_id}}}}
     // map. We store it in the MCP host so dispatchCallTool can reject any
     // envelope whose target IDs don't match our local catalog — without
     // this check a forged or misrouted envelope could trick us into

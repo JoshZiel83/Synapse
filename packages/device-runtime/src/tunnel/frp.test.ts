@@ -2,7 +2,7 @@
 // the supplied TunnelHandle is the CURRENT managed entry. If a caller
 // retains an old TunnelHandle after a restart and then calls
 // stop(oldHandle), the previous implementation would look up the entry
-// by deviceServiceId alone and SIGTERM the live tunnel — silently
+// by runtimeServiceId alone and SIGTERM the live tunnel — silently
 // breaking a healthy connection. Same risk for rotateToken(oldHandle).
 //
 // The assertions look at the stub's own signal log (the stub appends
@@ -120,7 +120,7 @@ test("stop() with a stale-shape handle does NOT signal the live tunnel", async (
       startupGraceMs: 200,
     })
     const handle = await adapter.start({
-      deviceServiceId: "svc-stale-stop",
+      runtimeServiceId: "svc-stale-stop",
       localPort: 14001,
       registrationToken: "tok-live",
     })
@@ -128,7 +128,7 @@ test("stop() with a stale-shape handle does NOT signal the live tunnel", async (
     // Construct a separate handle pointing at the same service id (the
     // typical "I cached an old handle" scenario after a restart).
     const staleHandle: TunnelHandle = {
-      deviceServiceId: "svc-stale-stop",
+      runtimeServiceId: "svc-stale-stop",
       internalUrl: "http://stale-tunnel-edge:8080/d/orphan",
     }
     assert.notStrictEqual(staleHandle, handle)
@@ -179,7 +179,7 @@ test("rotateToken() with a stale-shape handle does NOT signal or rewrite the liv
       startupGraceMs: 200,
     })
     const handle = await adapter.start({
-      deviceServiceId: "svc-stale-rotate",
+      runtimeServiceId: "svc-stale-rotate",
       localPort: 14002,
       registrationToken: "tok-original",
     })
@@ -201,7 +201,7 @@ test("rotateToken() with a stale-shape handle does NOT signal or rewrite the liv
     )
 
     const staleHandle: TunnelHandle = {
-      deviceServiceId: "svc-stale-rotate",
+      runtimeServiceId: "svc-stale-rotate",
       internalUrl: "http://stale-tunnel-edge:8080/d/orphan",
     }
 
@@ -273,7 +273,7 @@ test("happy path: start/rotateToken/stop on the same handle delivers SIGHUP + SI
       startupGraceMs: 200,
     })
     const handle = await adapter.start({
-      deviceServiceId: "svc-happy",
+      runtimeServiceId: "svc-happy",
       localPort: 14003,
       registrationToken: "tok-a",
     })
@@ -317,7 +317,7 @@ test("frp start(): internalUrl defaults to http://tunnel-edge:8080/d/<token>", a
       startupGraceMs: 200,
     })
     const handle = await adapter.start({
-      deviceServiceId: "svc-url-1",
+      runtimeServiceId: "svc-url-1",
       localPort: 14010,
       registrationToken: "tok-default",
     })
@@ -353,7 +353,7 @@ test("frp start(): internalBaseUrl override is honored (custom edge) + trailing 
       startupGraceMs: 200,
     })
     const handle = await adapter.start({
-      deviceServiceId: "svc-url-2",
+      runtimeServiceId: "svc-url-2",
       localPort: 14011,
       registrationToken: "tok-custom",
     })

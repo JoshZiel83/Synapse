@@ -10,16 +10,14 @@
   },
   "modules/automation/repo.ts": {
     "automation_rules": 1,
-    "workspace_resources": 6,
-    "workspaces": 1
+    "workspace_resources": 6
   },
   "modules/chat/repo.ts": {
     "conversations": 4,
     "users": 4
   },
   "modules/devices/repo.ts": {
-    "conversations": 1,
-    "devices": 6
+    "conversations": 1
   },
   "modules/files/repo.ts": {
     "workspaces": 1
@@ -55,7 +53,8 @@
     "users": 1
   },
   "modules/runtime-authorizations/repo.ts": {
-    "conversations": 1
+    "conversations": 1,
+    "runtimes": 1
   },
   "modules/sandbox/repo-space.ts": {
     "file_spaces": 2
@@ -68,7 +67,6 @@
   },
   "modules/tasks/repo.ts": {
     "conversations": 1,
-    "devices": 2,
     "users": 6
   },
   "modules/workspace/invite/repo.ts": {

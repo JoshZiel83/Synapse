@@ -68,7 +68,7 @@ export interface DockerSandboxBackendOptions {
   pollBootstrapConsumed?: (
     pairingSessionId: string,
     timeoutMs: number
-  ) => Promise<{ deviceId: string; deviceServiceId: string }>
+  ) => Promise<{ deviceId: string; runtimeServiceId: string }>
   /** Test seam: override pairing creation (defaults to the DB-backed
    *  createCloudDevicePairing) so create() is exercisable without a live DB. */
   createPairing?: (input: {
@@ -167,7 +167,7 @@ export function createDockerSandboxBackend(
 
         // ④ wait for the container to consume its bootstrap token (it self-
         // registers the device on first boot). Surface docker logs on early exit.
-        let resolved: { deviceId: string; deviceServiceId: string }
+        let resolved: { deviceId: string; runtimeServiceId: string }
         try {
           resolved = await (
             opts.pollBootstrapConsumed ?? defaultPollBootstrapConsumed
@@ -188,7 +188,7 @@ export function createDockerSandboxBackend(
           sessionId: spec.sessionId,
           containerId,
           deviceId: resolved.deviceId,
-          deviceServiceId: resolved.deviceServiceId,
+          runtimeServiceId: resolved.runtimeServiceId,
           pairingSessionId: pairing.pairingSessionId,
         })
       } catch (err) {
@@ -222,7 +222,7 @@ export function createDockerSandboxBackend(
         sessionId: ref.sandboxId,
         containerId: ref.sandboxResourceId,
         deviceId: ref.deviceId,
-        deviceServiceId: ref.deviceServiceId ?? "",
+        runtimeServiceId: ref.runtimeServiceId ?? "",
         pairingSessionId: ref.pairingSessionId,
       })
     },
@@ -269,7 +269,7 @@ export function createDockerReconnectBackend(
         sessionId: ref.sandboxId,
         containerId: ref.sandboxResourceId,
         deviceId: ref.deviceId,
-        deviceServiceId: ref.deviceServiceId ?? "",
+        runtimeServiceId: ref.runtimeServiceId ?? "",
         pairingSessionId: ref.pairingSessionId,
       })
     },
@@ -366,25 +366,25 @@ function buildDockerRunArgs(params: {
   return args
 }
 
-/** Poll device_pairing_sessions until the container consumes its bootstrap
+/** Poll runtime_pairing_sessions until the container consumes its bootstrap
  *  token, then resolve the created device + device_runtime service ids. */
 async function defaultPollBootstrapConsumed(
   pairingSessionId: string,
   timeoutMs: number
-): Promise<{ deviceId: string; deviceServiceId: string }> {
+): Promise<{ deviceId: string; runtimeServiceId: string }> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     const row = await getPairingSessionBootstrapState(pairingSessionId)
     if (row) {
       const status = row.status as string
-      if (status === "consumed" && row.deviceId) {
-        const deviceServiceId = await getLatestDeviceRuntimeServiceId(
-          row.deviceId as string
+      if (status === "consumed" && row.runtimeId) {
+        const runtimeServiceId = await getLatestDeviceRuntimeServiceId(
+          row.runtimeId as string
         )
-        if (deviceServiceId) {
+        if (runtimeServiceId) {
           return {
-            deviceId: row.deviceId as string,
-            deviceServiceId,
+            deviceId: row.runtimeId as string,
+            runtimeServiceId,
           }
         }
       } else if (
@@ -412,7 +412,6 @@ function defaultCreatePairing(input: {
   return createCloudDevicePairing({
     workspaceId: input.workspaceId,
     title: input.title,
-    hostProvider: "docker",
   })
 }
 
@@ -519,7 +518,7 @@ function makeDockerHandle(args: {
   sessionId: string
   containerId: string
   deviceId: string
-  deviceServiceId: string
+  runtimeServiceId: string
   pairingSessionId?: string
 }): SandboxHandle {
   const startedAt = new Date()
@@ -528,7 +527,7 @@ function makeDockerHandle(args: {
     sandboxId: args.sessionId,
     sandboxResourceId: args.containerId,
     deviceId: args.deviceId,
-    deviceServiceId: args.deviceServiceId,
+    runtimeServiceId: args.runtimeServiceId,
     pairingSessionId: args.pairingSessionId,
     getHost(): string {
       throw new SandboxBackendError(
@@ -551,7 +550,7 @@ function makeDockerHandle(args: {
         backend: "docker",
         sandboxId: args.sessionId,
         deviceId: args.deviceId,
-        deviceServiceId: args.deviceServiceId,
+        runtimeServiceId: args.runtimeServiceId,
         startedAt,
       }
     },

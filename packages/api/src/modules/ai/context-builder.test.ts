@@ -52,7 +52,7 @@ test("buildSessionContextItems: tool_result session message becomes tool_result_
         toolName: "View",
         origin: {
           kind: "device",
-          deviceToolId: "device-tool-1",
+          runtimeToolId: "device-tool-1",
           exposureStableKey: "synapse.builtin.filesystem.v1",
         },
         structuredContent: { path: "/tmp/x", lines: 1 },
@@ -70,7 +70,7 @@ test("buildSessionContextItems: tool_result session message becomes tool_result_
   assert.equal(tr.isError, false)
   assert.deepEqual(tr.structuredContent, { path: "/tmp/x", lines: 1 })
   assert.equal(tr.origin.kind, "device")
-  assert.equal(tr.origin.deviceToolId, "device-tool-1")
+  assert.equal(tr.origin.runtimeToolId, "device-tool-1")
   const text = extractText(tr.content)
   assert.equal(text, "file contents: hello")
   assert.doesNotMatch(text, /\[Tool Result\]/)
@@ -152,7 +152,7 @@ test("buildSessionContextItems: executionToolResults map overrides metadata-base
     isError: false,
     origin: {
       kind: "device",
-      deviceToolId: "device-tool-1",
+      runtimeToolId: "device-tool-1",
       exposureStableKey: "k",
     },
     structuredContent: { authoritative: true },

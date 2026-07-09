@@ -79,7 +79,7 @@ export interface SandboxRef {
   /** Provider resource id: docker container id; k8s pod; "" for local. */
   sandboxResourceId: string
   deviceId: string
-  deviceServiceId?: string
+  runtimeServiceId?: string
   pairingSessionId?: string
   /** Local backend only: OS pid for SIGTERM/SIGKILL. */
   hostPid?: number
@@ -90,7 +90,7 @@ export interface SandboxInfo {
   backend: SandboxBackendKind
   sandboxId: string
   deviceId: string
-  deviceServiceId: string
+  runtimeServiceId: string
   /**
    * Wall-clock time the sandbox process was started. Undefined when the handle
    * was re-attached from a persisted SandboxRef across a process restart — the
@@ -108,7 +108,7 @@ export interface SandboxHandle {
   /** Provider resource id (container id / pod / ""). */
   readonly sandboxResourceId: string
   readonly deviceId: string
-  readonly deviceServiceId: string
+  readonly runtimeServiceId: string
   readonly pairingSessionId?: string
   /** Local backend only. */
   readonly hostPid?: number
@@ -117,7 +117,7 @@ export interface SandboxHandle {
    * e2b: getHost(port) → public host for an EXPOSED USER port (an http server /
    * chromium the agent started). This is NOT the MCP dispatch channel (that is
    * reached by dispatchSyncTool via the tunnel registry, keyed by
-   * deviceServiceId). v1 has no consumer and no per-port routing, so this
+   * runtimeServiceId). v1 has no consumer and no per-port routing, so this
    * THROWS rather than return an unusable address.
    */
   getHost(port: number): string
@@ -219,7 +219,7 @@ export function createLocalSandboxBackend(deps: {
         return makeLocalHandle({
           sessionId: spec.sessionId,
           deviceId: paired.deviceId,
-          deviceServiceId: paired.serviceId,
+          runtimeServiceId: paired.serviceId,
           pairingSessionId,
           runHandle,
         })
@@ -269,7 +269,7 @@ async function defaultLocalFailCleanup(args: {
 function makeLocalHandle(args: {
   sessionId: string
   deviceId: string
-  deviceServiceId: string
+  runtimeServiceId: string
   pairingSessionId: string
   runHandle: RunHandle
 }): SandboxHandle {
@@ -279,7 +279,7 @@ function makeLocalHandle(args: {
     sandboxId: args.sessionId,
     sandboxResourceId: "",
     deviceId: args.deviceId,
-    deviceServiceId: args.deviceServiceId,
+    runtimeServiceId: args.runtimeServiceId,
     pairingSessionId: args.pairingSessionId,
     hostPid: args.runHandle.pid,
     getHost(): string {
@@ -301,7 +301,7 @@ function makeLocalHandle(args: {
         backend: "local",
         sandboxId: args.sessionId,
         deviceId: args.deviceId,
-        deviceServiceId: args.deviceServiceId,
+        runtimeServiceId: args.runtimeServiceId,
         startedAt,
       }
     },
@@ -317,7 +317,7 @@ function makeLocalRefHandle(ref: SandboxRef): SandboxHandle {
     sandboxId: ref.sandboxId,
     sandboxResourceId: "",
     deviceId: ref.deviceId,
-    deviceServiceId: ref.deviceServiceId ?? "",
+    runtimeServiceId: ref.runtimeServiceId ?? "",
     pairingSessionId: ref.pairingSessionId,
     hostPid: ref.hostPid,
     getHost(): string {
@@ -338,7 +338,7 @@ function makeLocalRefHandle(ref: SandboxRef): SandboxHandle {
         backend: "local",
         sandboxId: ref.sandboxId,
         deviceId: ref.deviceId,
-        deviceServiceId: ref.deviceServiceId ?? "",
+        runtimeServiceId: ref.runtimeServiceId ?? "",
         // Re-attached from a persisted SandboxRef: the real start time is not
         // recorded in the ref, so leave it undefined rather than fabricating one.
       }

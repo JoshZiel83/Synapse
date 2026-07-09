@@ -4,6 +4,7 @@ import { sql } from "kysely"
 import type { Kysely } from "kysely"
 import { SUBJECT_KIND } from "@synapse/shared"
 import { withTestDb } from "../../test/helpers/db.js"
+import { insertDeviceRuntime } from "../../test/helpers/runtime-fixtures.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
 import { insertToolCallTaskDeduped } from "./service.js"
 import { writeRuntimeAuthorizationTaskDetailInTx } from "../tasks/service.js"
@@ -116,29 +117,26 @@ async function buildFixture(db: Kysely<any>): Promise<Fixture> {
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
-  const dev = await db
-    .insertInto("devices")
-    .values({
-      workspaceId: ws.id as string,
-      title: `${NS} device`,
-      publicKey: `pk-${rid()}`,
-      publicKeyFingerprint: `fp-${rid()}-${rid()}`,
-      trustStatus: "trusted",
-    } as any)
-    .returning("id")
-    .executeTakeFirstOrThrow()
+  const dev = await insertDeviceRuntime(db, {
+    workspaceId: ws.id as string,
+    title: `${NS} device`,
+    publicKey: `pk-${rid()}`,
+    publicKeyFingerprint: `fp-${rid()}-${rid()}`,
+    trustStatus: "trusted",
+  })
   const svc = await db
-    .insertInto("deviceServices")
+    .insertInto("runtimeServices")
     .values({
-      deviceId: dev.id as string,
+      runtimeId: dev.id as string,
       serviceKind: "device_runtime",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   const exp = await db
-    .insertInto("deviceExposures")
+    .insertInto("runtimeExposures")
     .values({
-      deviceId: dev.id as string,
+      runtimeId: dev.id as string,
+      workspaceId: ws.id as string,
       serviceId: svc.id as string,
       stableKey: `exp-${rid()}`,
       displayName: `${NS} exposure`,
@@ -150,7 +148,7 @@ async function buildFixture(db: Kysely<any>): Promise<Fixture> {
     .insertInto("workspaceResources")
     .values({
       workspaceId: ws.id as string,
-      kind: "device_capability",
+      kind: "runtime_capability",
       displayName: `${NS} capability`,
       createdBySubjectId,
       status: "active",
@@ -158,9 +156,10 @@ async function buildFixture(db: Kysely<any>): Promise<Fixture> {
     .returning("id")
     .executeTakeFirstOrThrow()
   const cap = await db
-    .insertInto("deviceCapabilities")
+    .insertInto("runtimeCapabilities")
     .values({
       id: capRoot.id as string,
+      workspaceId: ws.id as string,
       exposureId: exp.id as string,
     } as any)
     .returning("id")
@@ -233,10 +232,10 @@ test(
       await writeRuntimeAuthorizationTaskDetailInTx(db, {
         taskId: task!.id,
         deviceId: fx.deviceId,
-        deviceCapabilityId: fx.capabilityId,
-        deviceExposureId: fx.exposureId,
+        runtimeCapabilityId: fx.capabilityId,
+        runtimeExposureId: fx.exposureId,
         requestedToolName: `${NS}.tool`,
-        deviceToolStableKey: `${NS}-stable-key`,
+        runtimeToolStableKey: `${NS}-stable-key`,
         reason: "regression-test",
         requestMode: "blocking",
         sourceRuntimeSessionId: `rt-${rid()}`,

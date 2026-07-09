@@ -4,6 +4,7 @@ import crypto from "node:crypto"
 import { SUBJECT_KIND } from "@synapse/shared"
 import type { Kysely } from "kysely"
 import { withTestDb } from "../../test/helpers/db.js"
+import { insertDeviceRuntime } from "../../test/helpers/runtime-fixtures.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
 import {
   addDeviceCapabilitiesForTarget,
@@ -82,29 +83,26 @@ async function seed(db: Kysely<any>) {
     .executeTakeFirstOrThrow()
   // Three device capabilities: one "pre-existing manual" + two "sandbox".
   async function newCapability() {
-    const device = await db
-      .insertInto("devices")
-      .values({
-        workspaceId: ws.id,
-        title: `dev-${rid()}`,
-        publicKey: `pk-${rid()}`,
-        publicKeyFingerprint: `fp-${rid()}`,
-      } as any)
-      .returning("id")
-      .executeTakeFirstOrThrow()
+    const device = await insertDeviceRuntime(db, {
+      workspaceId: ws.id,
+      title: `dev-${rid()}`,
+      publicKey: `pk-${rid()}`,
+      publicKeyFingerprint: `fp-${rid()}`,
+    })
     const service = await db
-      .insertInto("deviceServices")
+      .insertInto("runtimeServices")
       .values({
-        deviceId: device.id,
+        runtimeId: device.id,
         serviceKind: "device_runtime",
         status: "online",
       } as any)
       .returning("id")
       .executeTakeFirstOrThrow()
     const exposure = await db
-      .insertInto("deviceExposures")
+      .insertInto("runtimeExposures")
       .values({
-        deviceId: device.id,
+        runtimeId: device.id,
+        workspaceId: ws.id,
         serviceId: service.id,
         stableKey: `k-${rid()}`,
         displayName: "x",
@@ -120,16 +118,17 @@ async function seed(db: Kysely<any>) {
       .values({
         id: capId,
         workspaceId: ws.id,
-        kind: "device_capability",
+        kind: "runtime_capability",
         displayName: "x",
         createdBySubjectId,
         status: "active",
       } as any)
       .execute()
     const cap = await db
-      .insertInto("deviceCapabilities")
+      .insertInto("runtimeCapabilities")
       .values({
         id: capId,
+        workspaceId: ws.id,
         exposureId: exposure.id,
       } as any)
       .returning("id")

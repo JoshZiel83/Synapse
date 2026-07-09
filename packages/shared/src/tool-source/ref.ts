@@ -36,8 +36,8 @@ export type ToolSource =
       itemSlug?: string
     }
   | {
-      kind: "device"
-      deviceToolId: string
+      kind: "runtime"
+      runtimeToolId: string
       exposureStableKey: string
       deviceName?: string
       // Durable display field (the device-visible tool name) for the same reason.
@@ -50,11 +50,11 @@ export type ToolBinding =
   | { transport: "stdio" | "http" | "sse"; instanceKey: string }
   | {
       transport: "device_tunnel"
-      deviceId: string
-      deviceServiceId: string
-      deviceCapabilityId: string
-      deviceExposureId: string
-      deviceToolRevisionId?: string
+      runtimeId: string
+      runtimeServiceId: string
+      runtimeCapabilityId: string
+      runtimeExposureId: string
+      runtimeToolRevisionId?: string
     }
 
 export interface ToolRef {
@@ -78,8 +78,8 @@ export function pluginToolId(
 ): string {
   return `plugin:${installationId}:${upstreamToolName}`
 }
-export function deviceToolId(deviceToolsId: string): string {
-  return `device:${deviceToolsId}`
+export function runtimeToolId(runtimeToolsId: string): string {
+  return `runtime:${runtimeToolsId}`
 }
 
 // ---------------------------------------------------------------------------
@@ -114,10 +114,10 @@ export function stripForAuditSnapshot(ref: ToolRef): SourceSnapshot {
           : {}),
         stableKey,
       }
-    case "device":
+    case "runtime":
       return {
-        kind: "device",
-        deviceToolId: ref.source.deviceToolId,
+        kind: "runtime",
+        runtimeToolId: ref.source.runtimeToolId,
         exposureStableKey: ref.source.exposureStableKey,
         ...(ref.source.deviceName !== undefined
           ? { deviceName: ref.source.deviceName }
@@ -157,10 +157,10 @@ export function toPublicOrigin(ref: ToolRef): ToolResultOrigin {
           ? { itemSlug: ref.source.itemSlug }
           : {}),
       }
-    case "device":
+    case "runtime":
       return {
-        kind: "device",
-        deviceToolId: ref.source.deviceToolId,
+        kind: "runtime",
+        runtimeToolId: ref.source.runtimeToolId,
         exposureStableKey: ref.source.exposureStableKey,
         ...(ref.source.deviceName !== undefined
           ? { deviceName: ref.source.deviceName }
@@ -175,7 +175,7 @@ export function toPublicOrigin(ref: ToolRef): ToolResultOrigin {
 export function originKindToSourceKind(
   kind: ToolResultOriginKind
 ): ToolSourceKind | null {
-  return kind === "system" || kind === "plugin" || kind === "device"
+  return kind === "system" || kind === "plugin" || kind === "runtime"
     ? kind
     : null
 }

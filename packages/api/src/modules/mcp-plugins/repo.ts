@@ -1269,7 +1269,7 @@ export type ToolCallAuditLogRecord = {
   sourceKind: ToolSourceKind
   sourceSnapshot: unknown
   pluginInstallationId: string | null
-  deviceToolId: string | null
+  runtimeToolId: string | null
   normalizedInput: Record<string, unknown>
   status: string
   createdAt: Date
@@ -1309,7 +1309,7 @@ export async function listToolCallAuditLogs(
       "tc.sourceKind",
       "tc.sourceSnapshot",
       "tc.pluginInstallationId",
-      "tc.deviceToolId",
+      "tc.runtimeToolId",
       "tc.normalizedInput",
       "tc.status",
       "tc.createdAt",

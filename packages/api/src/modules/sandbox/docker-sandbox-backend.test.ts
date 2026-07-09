@@ -91,7 +91,7 @@ test("docker create(): builds a correct `docker run` argv + completes the staged
     // Skip the DB poll — simulate the container bootstrapping.
     pollBootstrapConsumed: async () => ({
       deviceId: "dev-1",
-      deviceServiceId: "svc-1",
+      runtimeServiceId: "svc-1",
     }),
   })
   const handle = await backend.create(
@@ -160,7 +160,7 @@ test("docker create(): tunnel=frp injects SYNAPSE_TUNNEL_* env", async () => {
     createPairing: fakePairing(),
     pollBootstrapConsumed: async () => ({
       deviceId: "d",
-      deviceServiceId: "s",
+      runtimeServiceId: "s",
     }),
   })
   await backend.create(baseSpec())
@@ -200,7 +200,7 @@ test("docker create(): omits SYNAPSE_TUNNEL_INTERNAL_BASE_URL when not configure
     createPairing: fakePairing(),
     pollBootstrapConsumed: async () => ({
       deviceId: "d",
-      deviceServiceId: "s",
+      runtimeServiceId: "s",
     }),
   })
   await backend.create(baseSpec())
@@ -323,7 +323,7 @@ test("docker create(): a throwing onDeviceClaimed self-cleans the bootstrapped d
     createPairing: fakePairing(),
     pollBootstrapConsumed: async () => ({
       deviceId: "dev-leak",
-      deviceServiceId: "svc",
+      runtimeServiceId: "svc",
     }),
     failCleanup: async (a) => {
       cleaned.push(a)
@@ -410,7 +410,7 @@ test("docker handle: kill() stops + removes the container; isRunning inspects", 
     sandboxId: "sess-9",
     sandboxResourceId: "container-xyz",
     deviceId: "dev-9",
-    deviceServiceId: "svc-9",
+    runtimeServiceId: "svc-9",
   })
   assert.equal(handle.sandboxResourceId, "container-xyz")
   assert.equal(await handle.isRunning(), true)
@@ -493,7 +493,7 @@ test("docker create(): spec without storageVolumeSubpath fails loud (never mount
     createPairing: fakePairing(),
     pollBootstrapConsumed: async () => ({
       deviceId: "d",
-      deviceServiceId: "s",
+      runtimeServiceId: "s",
     }),
     failCleanup: async (a) => {
       cleaned.push(a)

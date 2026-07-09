@@ -10,7 +10,7 @@ export {
   type SourceSnapshot,
   systemToolId,
   pluginToolId,
-  deviceToolId,
+  runtimeToolId,
   stripForAuditSnapshot,
   toPublicOrigin,
   originKindToSourceKind,

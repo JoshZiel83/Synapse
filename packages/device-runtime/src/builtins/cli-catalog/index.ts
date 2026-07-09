@@ -5,7 +5,7 @@
 //   • async, INVALIDATABLE memoized prereq probe (binary-on-PATH / service-
 //     reachable / platform / minVersion + entry_point-on-PATH)
 //   • emits an entryPoint-keyed availableClis map for the commandline exposure
-//     metadata (device_exposures.metadata.availableClis)
+//     metadata (runtime_exposures.metadata.availableClis)
 //   • onChange/emitChange drive the post-install catalog re-sync (P4)
 //
 // availableClis is keyed by entryPoint (the bare program the agent runs) — NOT
@@ -61,7 +61,7 @@ export interface CliPrereq {
   reviewed: boolean
 }
 
-/** One entry in device_exposures.metadata.availableClis, keyed by entryPoint. */
+/** One entry in runtime_exposures.metadata.availableClis, keyed by entryPoint. */
 export interface AvailableCliEntry {
   available: boolean
   source: "harness-cli" | "public-cli"

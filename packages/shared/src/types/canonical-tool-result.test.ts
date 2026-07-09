@@ -11,10 +11,10 @@ import type { CanonicalToolResult, ToolResultOrigin } from "./index.js"
 
 test("TOOL_RESULT_ORIGIN_KINDS enumerates all five kinds", () => {
   assert.deepEqual([...TOOL_RESULT_ORIGIN_KINDS].sort(), [
-    "device",
     "model_response",
     "plugin",
     "provider_native",
+    "runtime",
     "system",
   ])
 })
@@ -30,8 +30,8 @@ test("isToolResultOrigin accepts each valid kind shape", () => {
       itemSlug: "github",
     },
     {
-      kind: "device",
-      deviceToolId: "tool-1",
+      kind: "runtime",
+      runtimeToolId: "tool-1",
       deviceName: "MacBook",
       exposureStableKey: "synapse.builtin.filesystem.v1",
       visibleToolName: "View",
@@ -62,7 +62,10 @@ test("isToolResultOrigin rejects malformed input", () => {
     isToolResultOrigin({ kind: "plugin", installationId: "x" }),
     false
   )
-  assert.equal(isToolResultOrigin({ kind: "device", deviceToolId: "x" }), false)
+  assert.equal(
+    isToolResultOrigin({ kind: "runtime", runtimeToolId: "x" }),
+    false
+  )
   assert.equal(isToolResultOrigin({ kind: "provider_native" }), false)
   assert.equal(isToolResultOrigin({ kind: "model_response" }), false)
 })
@@ -92,8 +95,8 @@ test("canonicalToolResult builds the minimal shape", () => {
 
 test("canonicalToolResult carries all optional fields when set", () => {
   const origin: ToolResultOrigin = {
-    kind: "device",
-    deviceToolId: "tool-1",
+    kind: "runtime",
+    runtimeToolId: "tool-1",
     exposureStableKey: "synapse.builtin.filesystem.v1",
   }
   const r: CanonicalToolResult = canonicalToolResult({

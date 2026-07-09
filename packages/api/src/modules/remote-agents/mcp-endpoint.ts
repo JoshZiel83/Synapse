@@ -126,7 +126,7 @@ export function readMcpToolContentBlocks(
 // results back to the source. Reads the structured ToolRef (Layer A).
 function describeToolOrigin(ref: ToolRef): string {
   switch (ref.source.kind) {
-    case "device":
+    case "runtime":
       return ref.source.deviceName
         ? `[device:${ref.source.deviceName}]`
         : "[device]"

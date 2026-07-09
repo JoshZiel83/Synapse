@@ -101,47 +101,9 @@ export type ConversationsKind = "direct" | "group";
 
 export type ConversationTransportBindingsInboundActorMode = "inherit_account" | "none" | "specified_actor";
 
-export type DeviceCatalogRevisionsStatus = "active" | "invalid" | "superseded";
-
-export type DeviceControlPlaneSessionsStatus = "active" | "closed" | "closing" | "connecting" | "rejected";
-
-export type DeviceControlPlaneSessionsTransport = "websocket";
-
-export type DeviceExposuresBuiltinKind = "browser" | "commandline" | "cua" | "filesystem";
-
-export type DeviceExposuresRuntimeStatus = "degraded" | "discovered" | "failed" | "healthy" | "offline" | "quarantined";
-
-export type DeviceExposuresTransport = "builtin" | "custom" | "http" | "sse" | "stdio";
-
-export type DeviceOperationAttemptsStatus = "abandoned" | "acknowledged" | "failed" | "issued" | "response_received" | "sent";
-
-export type DeviceOperationAttemptsTransport = "control_plane_task" | "mcp_http";
-
-export type DeviceOperationsPrincipalKind = "actor" | "conversation" | "remote_agent" | "workspace_member";
-
-export type DeviceOperationsStatus = "awaiting_authorization" | "cancelled" | "created" | "dispatched" | "expired" | "failed" | "output_streaming" | "received" | "started" | "succeeded";
-
-export type DeviceOperationsTaskMode = "async" | "sync";
-
-export type DevicePairingSessionsMode = "cloud_bootstrap" | "local_qr" | "service_join";
-
-export type DevicePairingSessionsStatus = "cancelled" | "confirmed" | "consumed" | "expired" | "pending" | "rejected";
-
-export type DeviceRuntimeSessionServicesStatus = "closed" | "open";
-
-export type DeviceRuntimeSessionsStatus = "aborted" | "closed" | "closing" | "open";
-
 export type DevicesAutomationLifecycleState = "offline" | "online";
 
-export type DevicesDeviceType = "cloud_sandbox" | "custom" | "desktop_computer" | "laptop_computer" | "mobile_phone" | "server" | "tablet" | "virtual_machine";
-
-export type DeviceServicesServiceKind = "device_runtime" | "remote_agent_daemon";
-
-export type DeviceServicesStatus = "degraded" | "offline" | "online" | "starting";
-
-export type DevicesHostKind = "cloud" | "local";
-
-export type DevicesLifecycleKind = "registered" | "sandbox_ephemeral";
+export type DevicesDeviceType = "custom" | "desktop_computer" | "laptop_computer" | "mobile_phone" | "server" | "tablet" | "virtual_machine";
 
 export type DevicesTrustStatus = "pending" | "revoked" | "trusted";
 
@@ -150,8 +112,6 @@ export type DeviceSyncSourcesSourceKind = "claude_code" | "claude_desktop" | "co
 export type DeviceSyncSourcesStatus = "disabled" | "error" | "idle" | "syncing" | "unknown";
 
 export type DeviceSyncSourcesSyncMode = "follow" | "snapshot";
-
-export type DeviceToolsStatus = "active" | "hidden" | "removed";
 
 export type FileAccessGrantsStatus = "active" | "revoked" | "superseded";
 
@@ -263,9 +223,51 @@ export type RuntimeAuthorizationGrantsStatus = "active" | "consumed" | "revoked"
 
 export type RuntimeAuthorizationRequestMode = "background" | "blocking";
 
+export type RuntimeCatalogRevisionsStatus = "active" | "invalid" | "superseded";
+
+export type RuntimeControlPlaneSessionsStatus = "active" | "closed" | "closing" | "connecting" | "rejected";
+
+export type RuntimeControlPlaneSessionsTransport = "websocket";
+
 export type RuntimeEventsLevel = "debug" | "error" | "info" | "warn";
 
 export type RuntimeEventsSource = "conversation" | "device" | "provider" | "system" | "tool";
+
+export type RuntimeExposuresBuiltinKind = "browser" | "commandline" | "cua" | "filesystem" | "pty";
+
+export type RuntimeExposuresRuntimeStatus = "degraded" | "discovered" | "failed" | "healthy" | "offline" | "quarantined";
+
+export type RuntimeExposuresTransport = "builtin" | "custom" | "http" | "sse" | "stdio";
+
+export type RuntimeOperationAttemptsStatus = "abandoned" | "acknowledged" | "failed" | "issued" | "response_received" | "sent";
+
+export type RuntimeOperationAttemptsTransport = "control_plane_task" | "data_plane" | "mcp_http";
+
+export type RuntimeOperationsPrincipalKind = "actor" | "conversation" | "remote_agent" | "workspace_member";
+
+export type RuntimeOperationsStatus = "awaiting_authorization" | "cancelled" | "created" | "dispatched" | "expired" | "failed" | "output_streaming" | "received" | "started" | "succeeded";
+
+export type RuntimeOperationsTaskMode = "async" | "sync";
+
+export type RuntimePairingSessionsMode = "cloud_bootstrap" | "local_qr";
+
+export type RuntimePairingSessionsStatus = "cancelled" | "confirmed" | "consumed" | "expired" | "pending" | "rejected";
+
+export type RuntimeServicesServiceKind = "bare_dataplane" | "device_runtime" | "remote_agent_daemon";
+
+export type RuntimeServicesStatus = "degraded" | "offline" | "online" | "starting";
+
+export type RuntimeSessionServicesStatus = "closed" | "open";
+
+export type RuntimeSessionsStatus = "aborted" | "closed" | "closing" | "open";
+
+export type RuntimesKind = "device" | "sandbox";
+
+export type RuntimeToolsStatus = "active" | "hidden" | "removed";
+
+export type SandboxesMode = "bare" | "resident";
+
+export type SandboxesState = "active" | "closed" | "closing" | "committing" | "failed" | "provisioning";
 
 export type SessionInterruptsType = "remote_control_terminated";
 
@@ -289,7 +291,7 @@ export type SkillSourceRefsSyncMode = "detached" | "follow_upstream" | "manual_m
 
 export type SubjectKind = "actor" | "conversation" | "external" | "platform" | "remote_agent" | "user" | "workspace" | "workspace_member";
 
-export type ToolCallsSourceKind = "device" | "plugin" | "system";
+export type ToolCallsSourceKind = "plugin" | "runtime" | "system";
 
 export type ToolCallsStatus = "completed" | "failed" | "pending" | "running" | "skipped";
 
@@ -297,7 +299,7 @@ export type ToolCallTaskOutputChunksStream = "stderr" | "stdout" | "system";
 
 export type ToolCallTasksDeliveryKind = "none" | "remote_agent_channel" | "session_wakeup";
 
-export type ToolCallTasksExecutorKind = "device_tool" | "external_mcp" | "plan_approval" | "runtime_authorization" | "user_input";
+export type ToolCallTasksExecutorKind = "external_mcp" | "plan_approval" | "runtime_authorization" | "runtime_tool" | "user_input";
 
 export type ToolCallTasksHumanSurface = "needs_response" | "silent";
 
@@ -349,7 +351,7 @@ export type WorkspaceResourceGrantsSource = "approval" | "manual" | "system";
 
 export type WorkspaceResourceGrantsStatus = "active" | "revoked";
 
-export type WorkspaceResourcesKind = "actor" | "automation_event_source" | "device_capability" | "installed_skill" | "plugin_installation" | "remote_agent";
+export type WorkspaceResourcesKind = "actor" | "automation_event_source" | "installed_skill" | "plugin_installation" | "remote_agent" | "runtime_capability";
 
 export type WorkspaceResourcesStatus = "active" | "archived" | "deprecated" | "disabled" | "error";
 
@@ -1081,32 +1083,6 @@ export interface ConversationTransportBindings {
   workspaceId: string;
 }
 
-export interface DeviceCapabilities {
-  createdAt: Generated<Date>;
-  exposureId: string;
-  id: Generated<string>;
-  updatedAt: Generated<Date>;
-}
-
-export interface DeviceCapabilitiesLive {
-  createdAt: Date | null;
-  exposureId: string | null;
-  id: string | null;
-  updatedAt: Date | null;
-}
-
-export interface DeviceCatalogRevisions {
-  activatedAt: Generated<Date | null>;
-  createdAt: Generated<Date>;
-  exposureId: string;
-  id: Generated<string>;
-  invalidatedAt: Date | null;
-  revisionSeq: Int8;
-  schemaHash: string;
-  status: Generated<DeviceCatalogRevisionsStatus>;
-  updatedAt: Generated<Date>;
-}
-
 export interface DeviceCode {
   clientId: string | null;
   createdAt: Generated<Date>;
@@ -1122,167 +1098,6 @@ export interface DeviceCode {
   userId: string | null;
 }
 
-export interface DeviceControlPlaneSessions {
-  clientVersion: string | null;
-  closeReason: string | null;
-  createdAt: Generated<Date>;
-  deviceId: string;
-  endedAt: Date | null;
-  id: Generated<string>;
-  lastHeartbeatAt: Date | null;
-  lastSequence: Generated<Int8>;
-  protocolVersion: Generated<number>;
-  remoteAddr: string | null;
-  serviceId: string;
-  startedAt: Generated<Date | null>;
-  status: Generated<DeviceControlPlaneSessionsStatus>;
-  transport: Generated<DeviceControlPlaneSessionsTransport>;
-  updatedAt: Generated<Date>;
-}
-
-export interface DeviceExposures {
-  builtinKind: DeviceExposuresBuiltinKind | null;
-  createdAt: Generated<Date>;
-  description: string | null;
-  deviceId: string;
-  displayName: string;
-  id: Generated<string>;
-  lastError: string | null;
-  lastHealthyAt: Date | null;
-  lastSeenAt: Date | null;
-  metadata: Generated<Json>;
-  runtimeStatus: Generated<DeviceExposuresRuntimeStatus>;
-  serviceId: string;
-  stableKey: string;
-  syncSourceId: string | null;
-  transport: DeviceExposuresTransport;
-  updatedAt: Generated<Date>;
-}
-
-export interface DeviceExposuresLive {
-  builtinKind: DeviceExposuresBuiltinKind | null;
-  createdAt: Date | null;
-  description: string | null;
-  deviceId: string | null;
-  displayName: string | null;
-  id: string | null;
-  lastError: string | null;
-  lastHealthyAt: Date | null;
-  lastSeenAt: Date | null;
-  metadata: Json | null;
-  runtimeStatus: DeviceExposuresRuntimeStatus | null;
-  serviceId: string | null;
-  stableKey: string | null;
-  syncSourceId: string | null;
-  transport: DeviceExposuresTransport | null;
-  updatedAt: Date | null;
-}
-
-export interface DeviceOperationAttempts {
-  acknowledgedAt: Date | null;
-  attemptSeq: Int8;
-  createdAt: Generated<Date>;
-  deviceControlPlaneSessionId: string | null;
-  deviceServiceId: string;
-  envelopeSignatureKid: string | null;
-  id: Generated<string>;
-  mcpRequestId: string | null;
-  metadata: Generated<Json>;
-  operationId: string;
-  responseAt: Date | null;
-  startedAt: Date | null;
-  status: Generated<DeviceOperationAttemptsStatus>;
-  transport: DeviceOperationAttemptsTransport;
-  tunnelInternalUrl: string | null;
-  updatedAt: Generated<Date>;
-}
-
-export interface DeviceOperationResults {
-  createdAt: Generated<Date>;
-  id: Generated<string>;
-  operationId: string;
-  outputPayload: Generated<Json>;
-  outputPreview: string | null;
-  resultHash: string | null;
-  updatedAt: Generated<Date>;
-}
-
-export interface DeviceOperations {
-  authorizationPayload: Generated<Json>;
-  catalogRevisionId: string;
-  completedAt: Date | null;
-  conversationId: string | null;
-  createdAt: Generated<Date>;
-  deviceCapabilityId: string;
-  deviceExposureId: string;
-  deviceId: string;
-  errorCode: string | null;
-  errorMessage: string | null;
-  expiresAt: Date | null;
-  id: Generated<string>;
-  initiatedBySessionId: string | null;
-  initiatedByWorkspaceMemberId: string | null;
-  inputHash: string;
-  inputPayload: Generated<Json>;
-  operationTimeoutMs: number | null;
-  principalKind: DeviceOperationsPrincipalKind;
-  principalSubjectId: string | null;
-  requiresReplan: Generated<boolean>;
-  resultHash: string | null;
-  runtimeSessionId: string | null;
-  status: Generated<DeviceOperationsStatus>;
-  taskId: string | null;
-  taskMode: Generated<DeviceOperationsTaskMode>;
-  toolId: string;
-  toolRevisionId: string;
-  updatedAt: Generated<Date>;
-  visibleToolName: string;
-  workspaceId: string;
-}
-
-export interface DevicePairingSessions {
-  bootstrapTokenHash: Buffer | null;
-  confirmedAt: Date | null;
-  consumedAt: Date | null;
-  context: Generated<Json>;
-  createdAt: Generated<Date>;
-  deviceId: string | null;
-  expiresAt: Date;
-  id: Generated<string>;
-  mode: DevicePairingSessionsMode;
-  pairingCode: string | null;
-  requestedByWorkspaceMemberId: string | null;
-  requestedDescription: string | null;
-  requestedDeviceType: DevicesDeviceType | null;
-  requestedTitle: string | null;
-  serverBaseUrl: string;
-  status: Generated<DevicePairingSessionsStatus>;
-  updatedAt: Generated<Date>;
-  verificationUri: string | null;
-  verificationUriComplete: string | null;
-  workspaceId: string;
-}
-
-export interface DeviceRuntimeSessions {
-  actorId: string | null;
-  closedAt: Date | null;
-  conversationId: string | null;
-  createdAt: Generated<Date>;
-  deviceId: string;
-  id: Generated<string>;
-  openedAt: Generated<Date | null>;
-  status: Generated<DeviceRuntimeSessionsStatus>;
-  updatedAt: Generated<Date>;
-}
-
-export interface DeviceRuntimeSessionServices {
-  closedAt: Date | null;
-  openedAt: Generated<Date | null>;
-  serviceId: string;
-  sessionId: string;
-  status: Generated<DeviceRuntimeSessionServicesStatus>;
-}
-
 export interface Devices {
   arch: string | null;
   automationLifecycleEventAt: Date | null;
@@ -1290,64 +1105,20 @@ export interface Devices {
   automationLifecycleState: DevicesAutomationLifecycleState | null;
   conversationTypeMaskOverride: number | null;
   createdAt: Generated<Date>;
-  deletedAt: Date | null;
   description: string | null;
   deviceType: Generated<DevicesDeviceType>;
-  hostKind: Generated<DevicesHostKind>;
-  hostProvider: string | null;
   id: Generated<string>;
   lastCatalogChangedAt: Date | null;
   lastConnectedAt: Date | null;
   lastSeenAt: Date | null;
-  lifecycleKind: Generated<DevicesLifecycleKind>;
   ownerWorkspaceMemberId: string | null;
   platform: string | null;
   publicKey: string;
   publicKeyFingerprint: string;
-  sourceSessionId: string | null;
   title: string;
   trustStatus: Generated<DevicesTrustStatus>;
   updatedAt: Generated<Date>;
   workspaceId: string;
-}
-
-export interface DeviceServiceKeys {
-  createdAt: Generated<Date>;
-  id: Generated<string>;
-  pubkey: string;
-  pubkeyFingerprint: string;
-  revokedAt: Date | null;
-  serviceId: string;
-}
-
-export interface DeviceServices {
-  createdAt: Generated<Date>;
-  currentSessionId: string | null;
-  deviceId: string;
-  id: Generated<string>;
-  lastSeenAt: Date | null;
-  metadata: Generated<Json>;
-  remoteAgentMachineId: string | null;
-  serviceKind: DeviceServicesServiceKind;
-  status: Generated<DeviceServicesStatus>;
-  tunnelPathToken: string | null;
-  updatedAt: Generated<Date>;
-  version: string | null;
-}
-
-export interface DeviceServicesLive {
-  createdAt: Date | null;
-  currentSessionId: string | null;
-  deviceId: string | null;
-  id: string | null;
-  lastSeenAt: Date | null;
-  metadata: Json | null;
-  remoteAgentMachineId: string | null;
-  serviceKind: DeviceServicesServiceKind | null;
-  status: DeviceServicesStatus | null;
-  tunnelPathToken: string | null;
-  updatedAt: Date | null;
-  version: string | null;
 }
 
 export interface DevicesLive {
@@ -1357,21 +1128,16 @@ export interface DevicesLive {
   automationLifecycleState: DevicesAutomationLifecycleState | null;
   conversationTypeMaskOverride: number | null;
   createdAt: Date | null;
-  deletedAt: Date | null;
   description: string | null;
   deviceType: DevicesDeviceType | null;
-  hostKind: DevicesHostKind | null;
-  hostProvider: string | null;
   id: string | null;
   lastCatalogChangedAt: Date | null;
   lastConnectedAt: Date | null;
   lastSeenAt: Date | null;
-  lifecycleKind: DevicesLifecycleKind | null;
   ownerWorkspaceMemberId: string | null;
   platform: string | null;
   publicKey: string | null;
   publicKeyFingerprint: string | null;
-  sourceSessionId: string | null;
   title: string | null;
   trustStatus: DevicesTrustStatus | null;
   updatedAt: Date | null;
@@ -1390,46 +1156,6 @@ export interface DeviceSyncSources {
   status: Generated<DeviceSyncSourcesStatus>;
   syncMode: Generated<DeviceSyncSourcesSyncMode>;
   updatedAt: Generated<Date>;
-}
-
-export interface DeviceToolRevisions {
-  annotations: Generated<Json>;
-  catalogRevisionId: string;
-  createdAt: Generated<Date>;
-  definitionHash: string;
-  description: Generated<string>;
-  id: Generated<string>;
-  inputSchema: Generated<Json>;
-  toolId: string;
-  toolName: string;
-}
-
-export interface DeviceTools {
-  createdAt: Generated<Date>;
-  currentName: string;
-  exposureId: string;
-  firstSeenAt: Generated<Date | null>;
-  id: Generated<string>;
-  lastSeenAt: Generated<Date | null>;
-  latestRevisionId: string | null;
-  metadata: Generated<Json>;
-  stableKey: string;
-  status: Generated<DeviceToolsStatus>;
-  updatedAt: Generated<Date>;
-}
-
-export interface DeviceToolsLive {
-  createdAt: Date | null;
-  currentName: string | null;
-  exposureId: string | null;
-  firstSeenAt: Date | null;
-  id: string | null;
-  lastSeenAt: Date | null;
-  latestRevisionId: string | null;
-  metadata: Json | null;
-  stableKey: string | null;
-  status: DeviceToolsStatus | null;
-  updatedAt: Date | null;
 }
 
 export interface DirectConversationBindings {
@@ -1529,6 +1255,7 @@ export interface FileMounts {
   refreshPolicy: Generated<string>;
   resultSnapshotId: string | null;
   sandboxBackend: string | null;
+  sandboxId: string | null;
   sandboxResourceId: string | null;
   sessionId: string;
   status: Generated<FileMountStatus>;
@@ -2306,13 +2033,14 @@ export interface RuntimeAuthorizationGrants {
   consumedAt: Date | null;
   createdAt: Generated<Date>;
   createdByWorkspaceMemberId: string | null;
-  deviceCapabilityId: string;
-  deviceExposureId: string;
-  deviceId: string;
+  governingResourceGrantId: string | null;
   id: Generated<string>;
   policy: Generated<Json>;
   retention: RuntimeAuthorizationGrantsRetention;
   revokedAt: Date | null;
+  runtimeCapabilityId: string;
+  runtimeExposureId: string;
+  runtimeId: string;
   scopeSubjectId: string | null;
   sourceRequestArgs: Generated<Json>;
   sourceRetryNonce: string | null;
@@ -2329,13 +2057,14 @@ export interface RuntimeAuthorizationGrantsLive {
   consumedAt: Date | null;
   createdAt: Date | null;
   createdByWorkspaceMemberId: string | null;
-  deviceCapabilityId: string | null;
-  deviceExposureId: string | null;
-  deviceId: string | null;
+  governingResourceGrantId: string | null;
   id: string | null;
   policy: Json | null;
   retention: RuntimeAuthorizationGrantsRetention | null;
   revokedAt: Date | null;
+  runtimeCapabilityId: string | null;
+  runtimeExposureId: string | null;
+  runtimeId: string | null;
   scopeSubjectId: string | null;
   sourceRequestArgs: Json | null;
   sourceRetryNonce: string | null;
@@ -2346,6 +2075,52 @@ export interface RuntimeAuthorizationGrantsLive {
   supersededAt: Date | null;
   updatedAt: Date | null;
   workspaceId: string | null;
+}
+
+export interface RuntimeCapabilities {
+  createdAt: Generated<Date>;
+  exposureId: string;
+  id: Generated<string>;
+  updatedAt: Generated<Date>;
+  workspaceId: string;
+}
+
+export interface RuntimeCapabilitiesLive {
+  createdAt: Date | null;
+  exposureId: string | null;
+  id: string | null;
+  updatedAt: Date | null;
+  workspaceId: string | null;
+}
+
+export interface RuntimeCatalogRevisions {
+  activatedAt: Generated<Date | null>;
+  createdAt: Generated<Date>;
+  exposureId: string;
+  id: Generated<string>;
+  invalidatedAt: Date | null;
+  revisionSeq: Int8;
+  schemaHash: string;
+  status: Generated<RuntimeCatalogRevisionsStatus>;
+  updatedAt: Generated<Date>;
+}
+
+export interface RuntimeControlPlaneSessions {
+  clientVersion: string | null;
+  closeReason: string | null;
+  createdAt: Generated<Date>;
+  endedAt: Date | null;
+  id: Generated<string>;
+  lastHeartbeatAt: Date | null;
+  lastSequence: Generated<Int8>;
+  protocolVersion: Generated<number>;
+  remoteAddr: string | null;
+  runtimeId: string;
+  serviceId: string;
+  startedAt: Generated<Date | null>;
+  status: Generated<RuntimeControlPlaneSessionsStatus>;
+  transport: Generated<RuntimeControlPlaneSessionsTransport>;
+  updatedAt: Generated<Date>;
 }
 
 export interface RuntimeEvents {
@@ -2363,6 +2138,289 @@ export interface RuntimeEvents {
   toolCallId: string | null;
   turnId: string | null;
   userId: string | null;
+  workspaceId: string | null;
+}
+
+export interface RuntimeExposures {
+  builtinKind: RuntimeExposuresBuiltinKind | null;
+  createdAt: Generated<Date>;
+  description: string | null;
+  displayName: string;
+  id: Generated<string>;
+  lastError: string | null;
+  lastHealthyAt: Date | null;
+  lastSeenAt: Date | null;
+  metadata: Generated<Json>;
+  runtimeId: string;
+  runtimeStatus: Generated<RuntimeExposuresRuntimeStatus>;
+  serviceId: string;
+  stableKey: string;
+  syncSourceId: string | null;
+  transport: RuntimeExposuresTransport;
+  updatedAt: Generated<Date>;
+  workspaceId: string;
+}
+
+export interface RuntimeExposuresLive {
+  builtinKind: RuntimeExposuresBuiltinKind | null;
+  createdAt: Date | null;
+  description: string | null;
+  displayName: string | null;
+  id: string | null;
+  lastError: string | null;
+  lastHealthyAt: Date | null;
+  lastSeenAt: Date | null;
+  metadata: Json | null;
+  runtimeId: string | null;
+  runtimeStatus: RuntimeExposuresRuntimeStatus | null;
+  serviceId: string | null;
+  stableKey: string | null;
+  syncSourceId: string | null;
+  transport: RuntimeExposuresTransport | null;
+  updatedAt: Date | null;
+  workspaceId: string | null;
+}
+
+export interface RuntimeOperationAttempts {
+  acknowledgedAt: Date | null;
+  attemptSeq: Int8;
+  createdAt: Generated<Date>;
+  envelopeSignatureKid: string | null;
+  id: Generated<string>;
+  mcpRequestId: string | null;
+  metadata: Generated<Json>;
+  operationId: string;
+  responseAt: Date | null;
+  runtimeControlPlaneSessionId: string | null;
+  runtimeServiceId: string;
+  startedAt: Date | null;
+  status: Generated<RuntimeOperationAttemptsStatus>;
+  transport: RuntimeOperationAttemptsTransport;
+  tunnelInternalUrl: string | null;
+  updatedAt: Generated<Date>;
+}
+
+export interface RuntimeOperationResults {
+  createdAt: Generated<Date>;
+  id: Generated<string>;
+  operationId: string;
+  outputPayload: Generated<Json>;
+  outputPreview: string | null;
+  resultHash: string | null;
+  updatedAt: Generated<Date>;
+}
+
+export interface RuntimeOperations {
+  authorizationPayload: Generated<Json>;
+  catalogRevisionId: string;
+  completedAt: Date | null;
+  conversationId: string | null;
+  createdAt: Generated<Date>;
+  errorCode: string | null;
+  errorMessage: string | null;
+  expiresAt: Date | null;
+  id: Generated<string>;
+  initiatedBySessionId: string | null;
+  initiatedByWorkspaceMemberId: string | null;
+  inputHash: string;
+  inputPayload: Generated<Json>;
+  operationTimeoutMs: number | null;
+  principalKind: RuntimeOperationsPrincipalKind;
+  principalSubjectId: string | null;
+  requiresReplan: Generated<boolean>;
+  resultHash: string | null;
+  runtimeCapabilityId: string;
+  runtimeExposureId: string;
+  runtimeId: string;
+  runtimeSessionId: string | null;
+  status: Generated<RuntimeOperationsStatus>;
+  taskId: string | null;
+  taskMode: Generated<RuntimeOperationsTaskMode>;
+  toolId: string;
+  toolRevisionId: string;
+  updatedAt: Generated<Date>;
+  visibleToolName: string;
+  workspaceId: string;
+}
+
+export interface RuntimePairingSessions {
+  bootstrapTokenHash: Buffer | null;
+  confirmedAt: Date | null;
+  consumedAt: Date | null;
+  context: Generated<Json>;
+  createdAt: Generated<Date>;
+  expiresAt: Date;
+  id: Generated<string>;
+  mode: RuntimePairingSessionsMode;
+  pairingCode: string | null;
+  requestedByWorkspaceMemberId: string | null;
+  requestedDescription: string | null;
+  requestedDeviceType: DevicesDeviceType | null;
+  requestedTitle: string | null;
+  runtimeId: string | null;
+  serverBaseUrl: string;
+  status: Generated<RuntimePairingSessionsStatus>;
+  targetRuntimeKind: Generated<RuntimesKind>;
+  updatedAt: Generated<Date>;
+  verificationUri: string | null;
+  verificationUriComplete: string | null;
+  workspaceId: string;
+}
+
+export interface Runtimes {
+  createdAt: Generated<Date>;
+  deletedAt: Date | null;
+  id: Generated<string>;
+  kind: RuntimesKind;
+  updatedAt: Generated<Date>;
+  workspaceId: string;
+}
+
+export interface RuntimeServiceKeys {
+  createdAt: Generated<Date>;
+  id: Generated<string>;
+  pubkey: string;
+  pubkeyFingerprint: string;
+  revokedAt: Date | null;
+  serviceId: string;
+}
+
+export interface RuntimeServices {
+  createdAt: Generated<Date>;
+  currentSessionId: string | null;
+  dataPlaneEndpoint: string | null;
+  id: Generated<string>;
+  lastSeenAt: Date | null;
+  metadata: Generated<Json>;
+  remoteAgentMachineId: string | null;
+  runtimeId: string;
+  serviceKind: RuntimeServicesServiceKind;
+  status: Generated<RuntimeServicesStatus>;
+  tunnelPathToken: string | null;
+  updatedAt: Generated<Date>;
+  version: string | null;
+}
+
+export interface RuntimeServicesLive {
+  createdAt: Date | null;
+  currentSessionId: string | null;
+  dataPlaneEndpoint: string | null;
+  id: string | null;
+  lastSeenAt: Date | null;
+  metadata: Json | null;
+  remoteAgentMachineId: string | null;
+  runtimeId: string | null;
+  serviceKind: RuntimeServicesServiceKind | null;
+  status: RuntimeServicesStatus | null;
+  tunnelPathToken: string | null;
+  updatedAt: Date | null;
+  version: string | null;
+}
+
+export interface RuntimeSessions {
+  actorId: string | null;
+  closedAt: Date | null;
+  conversationId: string | null;
+  createdAt: Generated<Date>;
+  id: Generated<string>;
+  openedAt: Generated<Date | null>;
+  runtimeId: string;
+  status: Generated<RuntimeSessionsStatus>;
+  updatedAt: Generated<Date>;
+}
+
+export interface RuntimeSessionServices {
+  closedAt: Date | null;
+  openedAt: Generated<Date | null>;
+  serviceId: string;
+  sessionId: string;
+  status: Generated<RuntimeSessionServicesStatus>;
+}
+
+export interface RuntimesLive {
+  createdAt: Date | null;
+  deletedAt: Date | null;
+  id: string | null;
+  kind: RuntimesKind | null;
+  updatedAt: Date | null;
+  workspaceId: string | null;
+}
+
+export interface RuntimeToolRevisions {
+  annotations: Generated<Json>;
+  catalogRevisionId: string;
+  createdAt: Generated<Date>;
+  definitionHash: string;
+  description: Generated<string>;
+  id: Generated<string>;
+  inputSchema: Generated<Json>;
+  toolId: string;
+  toolName: string;
+}
+
+export interface RuntimeTools {
+  createdAt: Generated<Date>;
+  currentName: string;
+  exposureId: string;
+  firstSeenAt: Generated<Date | null>;
+  id: Generated<string>;
+  lastSeenAt: Generated<Date | null>;
+  latestRevisionId: string | null;
+  metadata: Generated<Json>;
+  stableKey: string;
+  status: Generated<RuntimeToolsStatus>;
+  updatedAt: Generated<Date>;
+}
+
+export interface RuntimeToolsLive {
+  createdAt: Date | null;
+  currentName: string | null;
+  exposureId: string | null;
+  firstSeenAt: Date | null;
+  id: string | null;
+  lastSeenAt: Date | null;
+  latestRevisionId: string | null;
+  metadata: Json | null;
+  stableKey: string | null;
+  status: RuntimeToolsStatus | null;
+  updatedAt: Date | null;
+}
+
+export interface Sandboxes {
+  adapter: string;
+  capabilityDescriptor: Generated<Json>;
+  createdAt: Generated<Date>;
+  dataPlaneCertFingerprint: string | null;
+  deadlineAt: Date | null;
+  errorMessage: string | null;
+  hostPid: number | null;
+  id: string;
+  mode: SandboxesMode;
+  pairingSessionId: string | null;
+  resourceId: string | null;
+  sessionId: string | null;
+  stashManifestId: string | null;
+  state: Generated<SandboxesState>;
+  updatedAt: Generated<Date>;
+  workspaceId: string;
+}
+
+export interface SandboxesLive {
+  adapter: string | null;
+  capabilityDescriptor: Json | null;
+  createdAt: Date | null;
+  dataPlaneCertFingerprint: string | null;
+  deadlineAt: Date | null;
+  errorMessage: string | null;
+  hostPid: number | null;
+  id: string | null;
+  mode: SandboxesMode | null;
+  pairingSessionId: string | null;
+  resourceId: string | null;
+  sessionId: string | null;
+  stashManifestId: string | null;
+  state: SandboxesState | null;
+  updatedAt: Date | null;
   workspaceId: string | null;
 }
 
@@ -2522,12 +2580,12 @@ export interface ToolCalls {
   completedAt: Date | null;
   conversationId: string;
   createdAt: Generated<Date>;
-  deviceToolId: string | null;
   id: Generated<string>;
   normalizedInput: Generated<Json>;
   pluginInstallationId: string | null;
   providerCallId: string | null;
   providerStepId: string | null;
+  runtimeToolId: string | null;
   sessionId: string | null;
   sourceKind: ToolCallsSourceKind;
   sourceSnapshot: Generated<Json>;
@@ -2542,19 +2600,6 @@ export interface ToolCallTaskActionTokens {
   payload: Json;
   taskId: string;
   token: Generated<string>;
-}
-
-export interface ToolCallTaskDeviceTool {
-  deviceCapabilityId: string;
-  deviceExposureId: string;
-  deviceId: string;
-  deviceOperationId: string | null;
-  inputHash: Generated<string>;
-  operationTimeoutMs: number | null;
-  taskId: string;
-  taskMode: Generated<DeviceOperationsTaskMode>;
-  toolId: string;
-  toolRevisionId: string;
 }
 
 export interface ToolCallTaskExternalMcp {
@@ -2593,10 +2638,6 @@ export interface ToolCallTaskResponseCommands {
 export interface ToolCallTaskRuntimeAuthorization {
   availablePresets: Generated<Json>;
   dedupeKey: string;
-  deviceCapabilityId: string;
-  deviceExposureId: string;
-  deviceId: string;
-  deviceToolStableKey: string;
   grantOptions: Generated<Json>;
   principalScopeSubjectId: string | null;
   principalSubjectId: string;
@@ -2604,10 +2645,27 @@ export interface ToolCallTaskRuntimeAuthorization {
   requestedAction: Generated<Json>;
   requestedToolName: string;
   requestMode: RuntimeAuthorizationRequestMode;
+  runtimeCapabilityId: string;
+  runtimeExposureId: string;
+  runtimeId: string;
+  runtimeToolStableKey: string;
   sourceRequestArgs: Generated<Json>;
   sourceRetryNonce: string | null;
   sourceRuntimeSessionId: string | null;
   taskId: string;
+}
+
+export interface ToolCallTaskRuntimeTool {
+  inputHash: Generated<string>;
+  operationTimeoutMs: number | null;
+  runtimeCapabilityId: string;
+  runtimeExposureId: string;
+  runtimeId: string;
+  runtimeOperationId: string | null;
+  taskId: string;
+  taskMode: Generated<RuntimeOperationsTaskMode>;
+  toolId: string;
+  toolRevisionId: string;
 }
 
 export interface ToolCallTasks {
@@ -3137,28 +3195,10 @@ export interface DB {
   conversations: Conversations;
   conversationsLive: ConversationsLive;
   conversationTransportBindings: ConversationTransportBindings;
-  deviceCapabilities: DeviceCapabilities;
-  deviceCapabilitiesLive: DeviceCapabilitiesLive;
-  deviceCatalogRevisions: DeviceCatalogRevisions;
   deviceCode: DeviceCode;
-  deviceControlPlaneSessions: DeviceControlPlaneSessions;
-  deviceExposures: DeviceExposures;
-  deviceExposuresLive: DeviceExposuresLive;
-  deviceOperationAttempts: DeviceOperationAttempts;
-  deviceOperationResults: DeviceOperationResults;
-  deviceOperations: DeviceOperations;
-  devicePairingSessions: DevicePairingSessions;
-  deviceRuntimeSessions: DeviceRuntimeSessions;
-  deviceRuntimeSessionServices: DeviceRuntimeSessionServices;
   devices: Devices;
-  deviceServiceKeys: DeviceServiceKeys;
-  deviceServices: DeviceServices;
-  deviceServicesLive: DeviceServicesLive;
   devicesLive: DevicesLive;
   deviceSyncSources: DeviceSyncSources;
-  deviceToolRevisions: DeviceToolRevisions;
-  deviceTools: DeviceTools;
-  deviceToolsLive: DeviceToolsLive;
   directConversationBindings: DirectConversationBindings;
   fileAccessGrants: FileAccessGrants;
   fileAccessGrantsLive: FileAccessGrantsLive;
@@ -3219,7 +3259,29 @@ export interface DB {
   remoteAgentsLive: RemoteAgentsLive;
   runtimeAuthorizationGrants: RuntimeAuthorizationGrants;
   runtimeAuthorizationGrantsLive: RuntimeAuthorizationGrantsLive;
+  runtimeCapabilities: RuntimeCapabilities;
+  runtimeCapabilitiesLive: RuntimeCapabilitiesLive;
+  runtimeCatalogRevisions: RuntimeCatalogRevisions;
+  runtimeControlPlaneSessions: RuntimeControlPlaneSessions;
   runtimeEvents: RuntimeEvents;
+  runtimeExposures: RuntimeExposures;
+  runtimeExposuresLive: RuntimeExposuresLive;
+  runtimeOperationAttempts: RuntimeOperationAttempts;
+  runtimeOperationResults: RuntimeOperationResults;
+  runtimeOperations: RuntimeOperations;
+  runtimePairingSessions: RuntimePairingSessions;
+  runtimes: Runtimes;
+  runtimeServiceKeys: RuntimeServiceKeys;
+  runtimeServices: RuntimeServices;
+  runtimeServicesLive: RuntimeServicesLive;
+  runtimeSessions: RuntimeSessions;
+  runtimeSessionServices: RuntimeSessionServices;
+  runtimesLive: RuntimesLive;
+  runtimeToolRevisions: RuntimeToolRevisions;
+  runtimeTools: RuntimeTools;
+  runtimeToolsLive: RuntimeToolsLive;
+  sandboxes: Sandboxes;
+  sandboxesLive: SandboxesLive;
   schemaMigrations: SchemaMigrations;
   session: Session;
   sessionContextStates: SessionContextStates;
@@ -3234,11 +3296,11 @@ export interface DB {
   skillVersions: SkillVersions;
   toolCalls: ToolCalls;
   toolCallTaskActionTokens: ToolCallTaskActionTokens;
-  toolCallTaskDeviceTool: ToolCallTaskDeviceTool;
   toolCallTaskExternalMcp: ToolCallTaskExternalMcp;
   toolCallTaskOutputChunks: ToolCallTaskOutputChunks;
   toolCallTaskResponseCommands: ToolCallTaskResponseCommands;
   toolCallTaskRuntimeAuthorization: ToolCallTaskRuntimeAuthorization;
+  toolCallTaskRuntimeTool: ToolCallTaskRuntimeTool;
   toolCallTasks: ToolCallTasks;
   toolCallTaskTransportProjections: ToolCallTaskTransportProjections;
   toolExecutionAttempts: ToolExecutionAttempts;

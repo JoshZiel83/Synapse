@@ -1,6 +1,6 @@
 // Unit + integration test for device.hello authentication. Exercises the
 // real authenticateDeviceHello against a test database with a known
-// (device, device_services, device_service_keys) seed and validates each
+// (device, runtime_services, runtime_service_keys) seed and validates each
 // failure mode.
 
 import test from "node:test"
@@ -40,24 +40,33 @@ async function seedDeviceWithService(db: any): Promise<Seed> {
   const pubFp = randomUUID().replace(/-/g, "") // any unique string
 
   const deviceId = randomUUID()
+  // devices is a CTI detail of runtimes — insert the runtimes parent first (same
+  // rolled-back test transaction; deferred detail-consistency validates at the
+  // tx boundary).
   await db.executeQuery(
     sql`
-      INSERT INTO devices (id, workspace_id, title, host_kind, device_type, public_key, public_key_fingerprint, trust_status)
-      VALUES (${deviceId}, ${workspaceId}, 'test-device', 'local', 'desktop_computer', ${pubPem}, ${pubFp}, 'trusted')
+      INSERT INTO runtimes (id, workspace_id, kind)
+      VALUES (${deviceId}, ${workspaceId}, 'device')
+    `.compile(db)
+  )
+  await db.executeQuery(
+    sql`
+      INSERT INTO devices (id, workspace_id, title, device_type, public_key, public_key_fingerprint, trust_status)
+      VALUES (${deviceId}, ${workspaceId}, 'test-device', 'desktop_computer', ${pubPem}, ${pubFp}, 'trusted')
     `.compile(db)
   )
 
   const serviceId = randomUUID()
   await db.executeQuery(
     sql`
-      INSERT INTO device_services (id, device_id, service_kind, status)
+      INSERT INTO runtime_services (id, runtime_id, service_kind, status)
       VALUES (${serviceId}, ${deviceId}, 'device_runtime', 'starting')
     `.compile(db)
   )
 
   await db.executeQuery(
     sql`
-      INSERT INTO device_service_keys (id, service_id, pubkey, pubkey_fingerprint)
+      INSERT INTO runtime_service_keys (id, service_id, pubkey, pubkey_fingerprint)
       VALUES (${randomUUID()}, ${serviceId}, ${pubPem}, ${pubFp})
     `.compile(db)
   )
@@ -147,7 +156,7 @@ test("authenticateDeviceHello rejects a revoked service key", async () => {
   await withTestDb(async (db) => {
     const seed = await seedDeviceWithService(db)
     await db.executeQuery(
-      sql`UPDATE device_service_keys SET revoked_at = NOW() WHERE service_id = ${seed.serviceId}`.compile(
+      sql`UPDATE runtime_service_keys SET revoked_at = NOW() WHERE service_id = ${seed.serviceId}`.compile(
         db
       )
     )

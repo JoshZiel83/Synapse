@@ -33,8 +33,8 @@ async function withEdgeEnv<T>(
  *  production default executor is the global singleton, which the testcontainer
  *  db is NOT). */
 function validatorFor(db: KyselyDb) {
-  return (candidate: string, deviceServiceId: string) =>
-    validateTunnelInternalUrl({ candidate, deviceServiceId, executor: db })
+  return (candidate: string, runtimeServiceId: string) =>
+    validateTunnelInternalUrl({ candidate, runtimeServiceId, executor: db })
 }
 
 /** Seed workspace + device + device_runtime service, optionally with a live
@@ -62,14 +62,19 @@ async function seedService(
   )
   const deviceId = randomUUID()
   await db.executeQuery(
-    sql`INSERT INTO devices (id, workspace_id, title, host_kind, device_type, public_key, public_key_fingerprint, trust_status)
-        VALUES (${deviceId}, ${workspaceId}, 'd', 'local', 'desktop_computer', ${`pk-${deviceId}`}, ${`fp-${deviceId}`}, 'trusted')`.compile(
+    sql`INSERT INTO runtimes (id, workspace_id, kind) VALUES (${deviceId}, ${workspaceId}, 'device')`.compile(
+      db
+    )
+  )
+  await db.executeQuery(
+    sql`INSERT INTO devices (id, workspace_id, title, device_type, public_key, public_key_fingerprint, trust_status)
+        VALUES (${deviceId}, ${workspaceId}, 'd', 'desktop_computer', ${`pk-${deviceId}`}, ${`fp-${deviceId}`}, 'trusted')`.compile(
       db
     )
   )
   const serviceId = randomUUID()
   await db.executeQuery(
-    sql`INSERT INTO device_services (id, device_id, service_kind, status, tunnel_path_token)
+    sql`INSERT INTO runtime_services (id, runtime_id, service_kind, status, tunnel_path_token)
         VALUES (${serviceId}, ${deviceId}, 'device_runtime', 'online', ${opts.tunnelPathToken ?? null})`.compile(
       db
     )

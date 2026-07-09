@@ -93,8 +93,8 @@ test("origin discriminator carries through for all 4 'tool_output' kinds", async
       upstreamToolName: "search",
     },
     {
-      kind: "device",
-      deviceToolId: "device-tool-1",
+      kind: "runtime",
+      runtimeToolId: "device-tool-1",
       exposureStableKey: "synapse.builtin.filesystem.v1",
     },
     { kind: "system", registryKey: "create_memory" },

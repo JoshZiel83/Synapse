@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import {
   systemToolId,
   pluginToolId,
-  deviceToolId,
+  runtimeToolId,
   stripForAuditSnapshot,
   stripForProvider,
   toPublicOrigin,
@@ -13,20 +13,20 @@ import {
 import type { ToolDefinition } from "../types/index.js"
 
 const deviceRef: ToolRef = {
-  toolId: deviceToolId("dt-1"),
+  toolId: runtimeToolId("dt-1"),
   source: {
-    kind: "device",
-    deviceToolId: "dt-1",
+    kind: "runtime",
+    runtimeToolId: "dt-1",
     exposureStableKey: "builtin/filesystem",
     deviceName: "laptop",
     visibleToolName: "fs_read",
   },
   binding: {
     transport: "device_tunnel",
-    deviceId: "d-1",
-    deviceServiceId: "s-1",
-    deviceCapabilityId: "c-1",
-    deviceExposureId: "e-1",
+    runtimeId: "d-1",
+    runtimeServiceId: "s-1",
+    runtimeCapabilityId: "c-1",
+    runtimeExposureId: "e-1",
   },
   identity: { stableKey: "builtin/filesystem/fs_read" },
 }
@@ -50,13 +50,13 @@ test("toolId constructors are deterministic", () => {
     pluginToolId("inst-1", "create_issue"),
     "plugin:inst-1:create_issue"
   )
-  assert.equal(deviceToolId("dt-1"), "device:dt-1")
+  assert.equal(runtimeToolId("dt-1"), "runtime:dt-1")
 })
 
 test("stripForAuditSnapshot carries the full public source + stableKey per kind", () => {
   assert.deepEqual(stripForAuditSnapshot(deviceRef), {
-    kind: "device",
-    deviceToolId: "dt-1",
+    kind: "runtime",
+    runtimeToolId: "dt-1",
     exposureStableKey: "builtin/filesystem",
     deviceName: "laptop",
     visibleToolName: "fs_read",
@@ -115,7 +115,7 @@ test("stripForProvider yields a source-free ToolDefinition with the wire name", 
 
 test("originKindToSourceKind maps routed kinds, rejects non-routed", () => {
   assert.equal(originKindToSourceKind("plugin"), "plugin")
-  assert.equal(originKindToSourceKind("device"), "device")
+  assert.equal(originKindToSourceKind("runtime"), "runtime")
   assert.equal(originKindToSourceKind("system"), "system")
   assert.equal(originKindToSourceKind("provider_native"), null)
   assert.equal(originKindToSourceKind("model_response"), null)

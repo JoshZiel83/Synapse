@@ -64,7 +64,7 @@ export type ResourceGrantRow = {
 export type WorkspaceResourceBindableResourceType =
   | "installed_skill"
   | "plugin_installation"
-  | "device_capability"
+  | "runtime_capability"
 
 type WorkspaceResourceGrantResourceType =
   | WorkspaceResourceBindableResourceType
@@ -111,7 +111,7 @@ const BINDABLE_WORKSPACE_RESOURCE_KIND: Record<
 > = {
   installed_skill: WORKSPACE_RESOURCE_KIND.INSTALLED_SKILL,
   plugin_installation: WORKSPACE_RESOURCE_KIND.PLUGIN_INSTALLATION,
-  device_capability: WORKSPACE_RESOURCE_KIND.DEVICE_CAPABILITY,
+  runtime_capability: WORKSPACE_RESOURCE_KIND.RUNTIME_CAPABILITY,
 }
 
 export async function loadWorkspaceMemberAccess(
@@ -557,8 +557,8 @@ export async function loadDeviceExposureDeviceId(
   exposureId: string
 ): Promise<string | null> {
   const row = await db
-    .selectFrom("deviceExposures as exposure")
-    .innerJoin("devices as device", "device.id", "exposure.deviceId")
+    .selectFrom("runtimeExposures as exposure")
+    .innerJoin("devices as device", "device.id", "exposure.runtimeId")
     .select(["device.id as deviceId"])
     .where("exposure.id", "=", exposureId)
     .limit(1)
@@ -572,18 +572,18 @@ export async function loadDeviceCapabilityAccessRow(
 ): Promise<WorkspaceResourceResourceAccessRow | null> {
   return (
     (await db
-      .selectFrom("deviceCapabilities as capability")
+      .selectFrom("runtimeCapabilities as capability")
       .innerJoin(
         "workspaceResources as resource",
         "resource.id",
         "capability.id"
       )
       .innerJoin(
-        "deviceExposures as exposure",
+        "runtimeExposures as exposure",
         "exposure.id",
         "capability.exposureId"
       )
-      .innerJoin("devices as device", "device.id", "exposure.deviceId")
+      .innerJoin("devices as device", "device.id", "exposure.runtimeId")
       .leftJoin(
         "accessSubjects as owner_subject",
         "owner_subject.id",

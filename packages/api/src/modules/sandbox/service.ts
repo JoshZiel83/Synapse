@@ -604,7 +604,7 @@ export async function provisionSandbox(
     // hardcoded false. Use the SAME source of truth as the cold provision path
     // (resolveDeviceBuiltinIds → commandlineCapabilityId != null): an ACTIVE
     // commandline capability joined to its exposure, not merely a row in
-    // device_exposures. A bare exposure check is looser — it would report
+    // runtime_exposures. A bare exposure check is looser — it would report
     // commandline "enabled" for a device whose capability was revoked or whose
     // exposure never went healthy, misleading the UI/caller.
     const deviceId = existing.find((m) => m.deviceId)?.deviceId ?? ""
@@ -819,7 +819,7 @@ export async function provisionSandbox(
     })
 
     // ⑦b wait for the device's tunnel endpoint to register. EVERY sandbox tool
-    // call is dispatched via DeviceTunnelRegistry.resolve(deviceServiceId) —
+    // call is dispatched via DeviceTunnelRegistry.resolve(runtimeServiceId) —
     // catalog sync alone does NOT prove the device is reachable. Without this
     // wait, provision would mark mounts active + grant tools for a sandbox whose
     // every dispatch returns no_tunnel_endpoint (a silent "provisioned but
@@ -828,7 +828,7 @@ export async function provisionSandbox(
     // don't dispatch.
     const tunnelTimeoutMs = options.tunnelTimeoutMs ?? 30_000
     if (tunnelTimeoutMs > 0) {
-      await waitForTunnelEndpoint(handle.deviceServiceId, {
+      await waitForTunnelEndpoint(handle.runtimeServiceId, {
         timeoutMs: tunnelTimeoutMs,
       })
     }
@@ -900,7 +900,7 @@ export async function provisionSandbox(
   }
 }
 
-/** Poll device_exposures until the filesystem builtin is healthy, or time out. */
+/** Poll runtime_exposures until the filesystem builtin is healthy, or time out. */
 async function waitForCatalog(
   deviceId: string,
   opts: { timeoutMs: number; pollMs?: number }
@@ -926,12 +926,12 @@ async function waitForCatalog(
  * is registered (the device-runtime sent device.tunnel.up and it passed the
  * SSRF/token gate), or time out. A sandbox whose endpoint never appears can't
  * dispatch any tool, so a timeout aborts provision (the caller's catch tears
- * the half-built sandbox down). An empty deviceServiceId (shouldn't happen for a
+ * the half-built sandbox down). An empty runtimeServiceId (shouldn't happen for a
  * freshly created handle) is treated as "never registers" → times out.
  * Exported for the fast-path endpoint integration test.
  */
 export async function waitForTunnelEndpoint(
-  deviceServiceId: string,
+  runtimeServiceId: string,
   opts: { timeoutMs: number; pollMs?: number }
 ): Promise<void> {
   const pollMs = opts.pollMs ?? 250
@@ -939,10 +939,10 @@ export async function waitForTunnelEndpoint(
   const registry = getDeviceTunnelRegistry()
 
   while (true) {
-    if (deviceServiceId && registry.resolve(deviceServiceId)) return
+    if (runtimeServiceId && registry.resolve(runtimeServiceId)) return
     if (Date.now() >= deadline) {
       throw new SandboxServiceError(
-        `device_service ${deviceServiceId || "(none)"} did not register a tunnel ` +
+        `device_service ${runtimeServiceId || "(none)"} did not register a tunnel ` +
           `endpoint within ${opts.timeoutMs}ms — the sandbox would be unreachable ` +
           `for tool dispatch`,
         504

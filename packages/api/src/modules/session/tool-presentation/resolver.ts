@@ -41,7 +41,7 @@ export function stableKeyFromSnapshot(
   const frozen = str(snap.stableKey)
   if (frozen) return frozen
   if (sourceKind === "system") return str(snap.registryKey)
-  if (sourceKind === "device") {
+  if (sourceKind === "runtime") {
     const exposure = str(snap.exposureStableKey)
     const visible = str(snap.visibleToolName)
     return exposure && visible ? `${exposure}/${visible}` : undefined
@@ -105,7 +105,7 @@ export async function resolveToolPresentation(
     return genericDescriptor(stableKey)
   }
 
-  if (input.sourceKind === "device") {
+  if (input.sourceKind === "runtime") {
     return BUILTIN_PRESENTATION[stableKey] ?? genericDescriptor(stableKey)
   }
 

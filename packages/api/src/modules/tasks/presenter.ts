@@ -553,9 +553,9 @@ export function presentTaskSummary(row: RawTaskRow): TaskSummary {
       row.requestedToolName,
       `Task ${row.id} requested_tool_name`
     ),
-    deviceToolStableKey: requireTrimmedString(
-      row.deviceToolStableKey,
-      `Task ${row.id} device_tool_stable_key`
+    runtimeToolStableKey: requireTrimmedString(
+      row.runtimeToolStableKey,
+      `Task ${row.id} runtime_tool_stable_key`
     ),
     requestedAction,
     reason: requireTrimmedString(
@@ -567,13 +567,13 @@ export function presentTaskSummary(row: RawTaskRow): TaskSummary {
       row.deviceDisplayName,
       `Task ${row.id} device_display_name`
     ),
-    deviceCapabilityId: requireTrimmedString(
-      row.deviceCapabilityId,
-      `Task ${row.id} device_capability_id`
+    runtimeCapabilityId: requireTrimmedString(
+      row.runtimeCapabilityId,
+      `Task ${row.id} runtime_capability_id`
     ),
     exposureId: requireTrimmedString(
-      row.deviceExposureId,
-      `Task ${row.id} device_exposure_id`
+      row.runtimeExposureId,
+      `Task ${row.id} runtime_exposure_id`
     ),
     exposureDisplayName: requireTrimmedString(
       row.exposureDisplayName,

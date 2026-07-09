@@ -98,7 +98,7 @@ type AccessResourceType =
   | "automation_event_source"
   | "device"
   | "device_exposure"
-  | "device_capability"
+  | "runtime_capability"
   | "conversation"
   | "memory_space"
   | "memory_item"
@@ -475,7 +475,7 @@ async function hasWorkspaceResourceGrant(
     resourceType:
       | "installed_skill"
       | "plugin_installation"
-      | "device_capability"
+      | "runtime_capability"
       | "actor"
       | "remote_agent"
       | "automation_event_source"
@@ -503,7 +503,7 @@ async function listGrantedWorkspaceResourceIds(
     resourceType:
       | "installed_skill"
       | "plugin_installation"
-      | "device_capability"
+      | "runtime_capability"
       | "actor"
       | "remote_agent"
       | "automation_event_source"
@@ -624,7 +624,7 @@ async function listBindableWorkspaceResourceIdsForPermission(
   }
 
   if (params.permission === "request_runtime_authorization") {
-    return params.resourceType === "device_capability"
+    return params.resourceType === "runtime_capability"
       ? listGrantedWorkspaceResourceIds(db, {
           resourceType: params.resourceType,
           requiredGrantPermission: WORKSPACE_RESOURCE_GRANT_PERMISSION.USE,
@@ -973,7 +973,7 @@ async function hasCapabilityPermission(
   }
 
   return resolveBindableResourceAccess(db, {
-    resourceType: "device_capability",
+    resourceType: "runtime_capability",
     resourceId: capabilityId,
     workspaceId: row.workspaceId,
     ownerWorkspaceMemberId: row.ownerWorkspaceMemberId,
@@ -1628,7 +1628,7 @@ export async function checkPermission(
         params.resourceId,
         params.permission
       )
-    case "device_capability":
+    case "runtime_capability":
       return hasCapabilityPermission(
         db,
         params.subject,
@@ -1761,9 +1761,9 @@ export async function lookupResources(
         runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
         runtimeSubjectIds: params.runtimeSubjectIds,
       })
-    case "device_capability":
+    case "runtime_capability":
       return listBindableWorkspaceResourceIdsForPermission(db, {
-        resourceType: "device_capability",
+        resourceType: "runtime_capability",
         permission: params.permission,
         manageAccessKey: "manage_devices",
         subject: params.subject,

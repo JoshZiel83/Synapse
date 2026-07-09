@@ -19,16 +19,16 @@ import { upsertAccessSubject } from "../access/subject-registry.js"
 import { upsertAccessSubjectDefault } from "../access/guards.js"
 
 export interface DeviceCapabilityToolRow {
-  deviceId: string
+  runtimeId: string
   deviceName: string
-  deviceServiceId: string
-  deviceExposureId: string
-  deviceCapabilityId: string
-  deviceToolId: string
-  deviceToolRevisionId: string
+  runtimeServiceId: string
+  runtimeExposureId: string
+  runtimeCapabilityId: string
+  runtimeToolId: string
+  runtimeToolRevisionId: string
   catalogRevisionId: string
   transport: "builtin" | "stdio" | "http" | "sse" | "custom"
-  builtinKind: "filesystem" | "commandline" | "browser" | "cua" | null
+  builtinKind: "filesystem" | "commandline" | "browser" | "cua" | "pty" | null
   visibleToolName: string
   visibleDescription: string
   inputSchema: unknown
@@ -95,31 +95,32 @@ export async function selectDeviceCapabilityToolsForSubjects(
   // bash tool — without distinctOn the projection surfaces it twice and the
   // planner sees duplicate names).
   let query = run
-    .selectFrom("deviceCapabilities as dc")
+    .selectFrom("runtimeCapabilities as dc")
     .innerJoin("workspaceResources as resource", "resource.id", "dc.id")
     .innerJoin("workspaceResourceGrants as resource_grant", (join) =>
       join
         .onRef("resource_grant.workspaceResourceId", "=", "dc.id")
         .on("resource_grant.status", "=", "active")
     )
-    .innerJoin("deviceExposures as dx", "dx.id", "dc.exposureId")
-    .innerJoin("devices as d", "d.id", "dx.deviceId")
-    .innerJoin("deviceTools as dt", "dt.exposureId", "dx.id")
-    .innerJoin("deviceToolRevisions as dtr", "dtr.id", "dt.latestRevisionId")
+    .innerJoin("runtimeExposures as dx", "dx.id", "dc.exposureId")
+    .innerJoin("devices as d", "d.id", "dx.runtimeId")
+    .innerJoin("runtimes as r", "r.id", "d.id")
+    .innerJoin("runtimeTools as dt", "dt.exposureId", "dx.id")
+    .innerJoin("runtimeToolRevisions as dtr", "dtr.id", "dt.latestRevisionId")
     .innerJoin(
-      "deviceCatalogRevisions as dcr",
+      "runtimeCatalogRevisions as dcr",
       "dcr.id",
       "dtr.catalogRevisionId"
     )
     .distinctOn(["dt.id"])
     .select([
-      "d.id as deviceId",
+      "d.id as runtimeId",
       "d.title as deviceName",
-      "dx.serviceId as deviceServiceId",
-      "dx.id as deviceExposureId",
-      "dc.id as deviceCapabilityId",
-      "dt.id as deviceToolId",
-      "dtr.id as deviceToolRevisionId",
+      "dx.serviceId as runtimeServiceId",
+      "dx.id as runtimeExposureId",
+      "dc.id as runtimeCapabilityId",
+      "dt.id as runtimeToolId",
+      "dtr.id as runtimeToolRevisionId",
       "dcr.id as catalogRevisionId",
       "dx.transport as transport",
       "dx.builtinKind as builtinKind",
@@ -145,11 +146,14 @@ export async function selectDeviceCapabilityToolsForSubjects(
     ])
     .where("resource.workspaceId", "=", params.workspaceId)
     .where("resource.deletedAt", "is", null)
-    // Soft-delete (§8.6): a soft-closed sandbox device keeps its child rows for
-    // audit, but its tools must NOT be projected/resolved. Filter on device
-    // liveness here (the projection joins device_* child tables directly rather
-    // than through devices_live).
-    .where("d.deletedAt", "is", null)
+    // Soft-delete (§8.6): a soft-closed sandbox runtime keeps its child rows for
+    // audit, but its tools must NOT be projected/resolved. Two independent
+    // soft-delete roots gate a projected capability: `resource.deletedAt`
+    // (workspace_resources — the capability-as-resource axis, above) AND the
+    // owning runtime's liveness (the principal axis). runtime_capabilities has
+    // no deleted_at, so BOTH gates are load-bearing. `runtimes.deleted_at` is
+    // the sole runtime soft-delete root (devices/sandboxes shed theirs).
+    .where("r.deletedAt", "is", null)
     .where("resource.status", "=", "active")
     .where("dt.status", "=", "active")
     .where("dcr.status", "=", "active")
@@ -179,13 +183,13 @@ export async function selectDeviceCapabilityToolsForSubjects(
   // and we read them directly. JSONB/Date values pass through untouched.
   return rows.map((row) => {
     return {
-      deviceId: row.deviceId,
+      runtimeId: row.runtimeId,
       deviceName: row.deviceName,
-      deviceServiceId: row.deviceServiceId,
-      deviceExposureId: row.deviceExposureId,
-      deviceCapabilityId: row.deviceCapabilityId,
-      deviceToolId: row.deviceToolId,
-      deviceToolRevisionId: row.deviceToolRevisionId,
+      runtimeServiceId: row.runtimeServiceId,
+      runtimeExposureId: row.runtimeExposureId,
+      runtimeCapabilityId: row.runtimeCapabilityId,
+      runtimeToolId: row.runtimeToolId,
+      runtimeToolRevisionId: row.runtimeToolRevisionId,
       catalogRevisionId: row.catalogRevisionId,
       transport: row.transport,
       builtinKind: row.builtinKind,

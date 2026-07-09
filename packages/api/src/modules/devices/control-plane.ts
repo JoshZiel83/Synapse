@@ -7,10 +7,10 @@ import { nowIsoInstant } from "@synapse/shared/datetime"
 //   2. Device responds with `device.hello` whose `signed_challenge` is the
 //      base64-Ed25519 signature of the nonce, signed by its service private
 //      key (loaded from the broker).
-//   3. Server verifies the signature against the device_service_keys row
+//   3. Server verifies the signature against the runtime_service_keys row
 //      matching the claimed (device_id, service_id) pair. On success, a
-//      device_control_plane_sessions row is INSERTed with status='active'
-//      and device_services.current_session_id is bumped.
+//      runtime_control_plane_sessions row is INSERTed with status='active'
+//      and runtime_services.current_session_id is bumped.
 //   4. Server returns the envelope-signing pubkey + kid in the hello ack so
 //      the runtime can populate its trusted_server_keys map without out-of-
 //      band config.
@@ -115,7 +115,7 @@ function writePersistResult(
  *
  *   2. Token binding — the URL path must contain "/d/<token>" where
  *      <token> matches the per-service path token issued by the server at
- *      device.hello time and persisted on device_services.tunnel_path_token.
+ *      device.hello time and persisted on runtime_services.tunnel_path_token.
  *      Without this check, a compromised device could squat on another
  *      device's tunnel route by registering an internal_url that includes
  *      a peer's well-known path segment.
@@ -131,7 +131,7 @@ function writePersistResult(
  */
 export async function validateTunnelInternalUrl(args: {
   candidate: string
-  deviceServiceId: string
+  runtimeServiceId: string
   /** Executor seam (the repo defaults to the global db); tests inject a
    *  testcontainer db, threaded down to the repo reads. */
   executor?: KyselyDb
@@ -167,7 +167,7 @@ export async function validateTunnelInternalUrl(args: {
     if (trustedUrl && candidateUrl.origin === trustedUrl.origin) {
       return validateFrpEdgeUrl({
         candidateUrl,
-        deviceServiceId: args.deviceServiceId,
+        runtimeServiceId: args.runtimeServiceId,
         executor,
       })
     }
@@ -181,7 +181,7 @@ export async function validateTunnelInternalUrl(args: {
   // host's own loopback (SSRF) by claiming a loopback endpoint.
   return validateLocalLoopbackUrl({
     candidateUrl,
-    deviceServiceId: args.deviceServiceId,
+    runtimeServiceId: args.runtimeServiceId,
     hadTrustedPrefix: Boolean(trustedPrefix),
     executor,
   })
@@ -191,7 +191,7 @@ export async function validateTunnelInternalUrl(args: {
  *  to this service (the server issues the token in the device.hello ack). */
 async function validateFrpEdgeUrl(args: {
   candidateUrl: URL
-  deviceServiceId: string
+  runtimeServiceId: string
   executor: KyselyDb | undefined
 }): Promise<{ ok: true } | { ok: false; message: string }> {
   const tokenMatch = /\/d\/([^/]+)/.exec(args.candidateUrl.pathname)
@@ -203,18 +203,18 @@ async function validateFrpEdgeUrl(args: {
   }
   const presentedToken = tokenMatch[1]!
   // The server issues tunnel_path_token in the device.hello ack and persists
-  // it on the device_services row. Any mismatch means either the device is
+  // it on the runtime_services row. Any mismatch means either the device is
   // out of sync (re-registered without re-reading the ack) or is attempting
   // to claim a peer's route — either way we reject.
   const expectedToken = await selectTunnelPathToken(
-    args.deviceServiceId,
+    args.runtimeServiceId,
     args.executor
   )
   if (!expectedToken) {
     return {
       ok: false,
       message:
-        "device_services row has no tunnel_path_token; reconnect to receive a fresh token via device.hello",
+        "runtime_services row has no tunnel_path_token; reconnect to receive a fresh token via device.hello",
     }
   }
   if (presentedToken !== expectedToken) {
@@ -236,7 +236,7 @@ const LOCAL_LOOPBACK_HOSTS = new Set(["127.0.0.1", "[::1]", "::1"])
  *  the service maps to a device with a LIVE local sandbox mount. */
 async function validateLocalLoopbackUrl(args: {
   candidateUrl: URL
-  deviceServiceId: string
+  runtimeServiceId: string
   hadTrustedPrefix: boolean
   executor: KyselyDb | undefined
 }): Promise<{ ok: true } | { ok: false; message: string }> {
@@ -275,7 +275,7 @@ async function validateLocalLoopbackUrl(args: {
   // status comparison (matching getActiveMountsForSession) so the file_mount_status
   // enum compares against literals without a parameterized-text cast mismatch.
   const liveLocalMount = await hasLiveLocalSandboxMount(
-    args.deviceServiceId,
+    args.runtimeServiceId,
     args.executor
   )
   if (!liveLocalMount) {
@@ -343,7 +343,7 @@ async function ensureTunnelPathToken(serviceId: string): Promise<string> {
   const token = await issueTunnelPathToken(serviceId, fresh)
   if (!token) {
     throw new Error(
-      `device_services ${serviceId} disappeared while issuing tunnel_path_token`
+      `runtime_services ${serviceId} disappeared while issuing tunnel_path_token`
     )
   }
   return token
@@ -615,7 +615,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
             // service so peer devices can't squat on its route.
             validateTunnelInternalUrl({
               candidate: parsedTunnel.data.internal_url,
-              deviceServiceId: state.authenticatedServiceId!,
+              runtimeServiceId: state.authenticatedServiceId!,
             })
               .then((validation) => {
                 if (!validation.ok) {
@@ -628,7 +628,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
                   return
                 }
                 getDeviceTunnelRegistry().register({
-                  deviceServiceId: state.authenticatedServiceId!,
+                  runtimeServiceId: state.authenticatedServiceId!,
                   internalUrl: parsedTunnel.data.internal_url,
                 })
                 state.registeredTunnelServiceId = state.authenticatedServiceId

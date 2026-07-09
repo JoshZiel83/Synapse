@@ -184,27 +184,27 @@ export const ACCESS_ACTIONS = {
 
   // v3 device-runtime parallel actions.
   "device_capability.view": {
-    resourceType: "device_capability",
+    resourceType: "runtime_capability",
     permission: "view",
   },
   "device_capability.use": {
-    resourceType: "device_capability",
+    resourceType: "runtime_capability",
     permission: "use",
   },
   "device_capability.request_runtime_authorization": {
-    resourceType: "device_capability",
+    resourceType: "runtime_capability",
     permission: "request_runtime_authorization",
   },
   "device_capability.edit": {
-    resourceType: "device_capability",
+    resourceType: "runtime_capability",
     permission: "edit",
   },
   "device_capability.grant": {
-    resourceType: "device_capability",
+    resourceType: "runtime_capability",
     permission: "grant",
   },
   "device_capability.delete": {
-    resourceType: "device_capability",
+    resourceType: "runtime_capability",
     permission: "delete",
   },
 

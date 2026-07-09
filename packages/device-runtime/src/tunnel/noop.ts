@@ -32,19 +32,19 @@ export function createNoopTunnelAdapter(
   return {
     async start(startOpts: TunnelStartOptions): Promise<TunnelHandle> {
       const handle: TunnelHandle = {
-        deviceServiceId: startOpts.deviceServiceId,
+        runtimeServiceId: startOpts.runtimeServiceId,
         // Direct loopback — the test harness's API is co-located with the
         // runtime so it can reach the MCP host without a tunnel hop.
         internalUrl: `http://${loopbackHost}:${startOpts.localPort}`,
       }
-      handles.set(startOpts.deviceServiceId, handle)
+      handles.set(startOpts.runtimeServiceId, handle)
       return handle
     },
     async rotateToken(): Promise<void> {
       /* no-op: there's no upstream token to rotate */
     },
     async stop(handle: TunnelHandle): Promise<void> {
-      handles.delete(handle.deviceServiceId)
+      handles.delete(handle.runtimeServiceId)
     },
   }
 }

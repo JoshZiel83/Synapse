@@ -67,14 +67,14 @@ export interface RuntimeAuthorizationRequestSource {
 }
 
 export interface RuntimeAuthorizationRequestTarget {
-  deviceCapabilityId: string
-  deviceId: string
-  deviceExposureId: string
+  runtimeCapabilityId: string
+  runtimeId: string
+  runtimeExposureId: string
   requestedToolName: string
-  deviceToolStableKey: string
+  runtimeToolStableKey: string
   // The originating chat-runtime session id (sessions.id) — backs
   // tool_call_task_runtime_authorization.source_runtime_session_id. Named
-  // distinctly from device_runtime_sessions.id (also a "runtime session").
+  // distinctly from runtime_sessions.id (also a "runtime session").
   sourceRuntimeSessionId: string
   deviceDisplayName?: string
   exposureDisplayName?: string
@@ -214,7 +214,7 @@ async function canActorRequestRuntimeAuthorization(
   }
 
   const capabilityState = await loadDeviceCapabilityRequestState(
-    params.runtimeTarget.deviceCapabilityId
+    params.runtimeTarget.runtimeCapabilityId
   )
   if (
     !capabilityState ||
@@ -282,7 +282,7 @@ export async function createRuntimeAuthorizationRequest(
       allowed: await authorizeActionDefault({
         subject: { type: "workspace_member", id: candidate.workspaceMemberId },
         action: "device_capability.request_runtime_authorization",
-        resourceId: params.runtimeTarget.deviceCapabilityId,
+        resourceId: params.runtimeTarget.runtimeCapabilityId,
       }),
     }))
   )
@@ -303,11 +303,11 @@ export async function createRuntimeAuthorizationRequest(
       workspaceId: params.source.workspaceId,
       conversationId: params.source.conversationId,
       requesterParticipantId: requesterMember.id,
-      deviceCapabilityId: params.runtimeTarget.deviceCapabilityId,
-      deviceId: params.runtimeTarget.deviceId,
-      deviceExposureId: params.runtimeTarget.deviceExposureId,
+      runtimeCapabilityId: params.runtimeTarget.runtimeCapabilityId,
+      deviceId: params.runtimeTarget.runtimeId,
+      runtimeExposureId: params.runtimeTarget.runtimeExposureId,
       requestedToolName: params.runtimeTarget.requestedToolName,
-      deviceToolStableKey: params.runtimeTarget.deviceToolStableKey,
+      runtimeToolStableKey: params.runtimeTarget.runtimeToolStableKey,
       requestedAction: params.authorizationPlan.requestedAction,
       grantOptions: params.authorizationPlan.grantOptions,
       availablePresets: params.availablePresets,
@@ -359,11 +359,11 @@ export async function createRuntimeAuthorizationRequest(
   // dispatches dedupe onto one task (partial-unique on tool_call_tasks).
   const isRemoteAgent = !!params.source.remoteAgentId
   const dedupeKey = buildRuntimeAuthorizationDedupeKey({
-    deviceId: params.runtimeTarget.deviceId,
-    deviceCapabilityId: params.runtimeTarget.deviceCapabilityId,
-    deviceExposureId: params.runtimeTarget.deviceExposureId,
+    deviceId: params.runtimeTarget.runtimeId,
+    runtimeCapabilityId: params.runtimeTarget.runtimeCapabilityId,
+    runtimeExposureId: params.runtimeTarget.runtimeExposureId,
     requestedToolName: params.runtimeTarget.requestedToolName,
-    deviceToolStableKey: params.runtimeTarget.deviceToolStableKey,
+    runtimeToolStableKey: params.runtimeTarget.runtimeToolStableKey,
     requestMode: params.requestMode,
     requestedAction: params.authorizationPlan.requestedAction,
     grantOptions: params.authorizationPlan.grantOptions,
@@ -395,12 +395,12 @@ export async function createRuntimeAuthorizationRequest(
       ),
       supportsCancel: true,
       requestPayload: {
-        deviceCapabilityId: params.runtimeTarget.deviceCapabilityId,
-        deviceId: params.runtimeTarget.deviceId,
-        deviceExposureId: params.runtimeTarget.deviceExposureId,
+        runtimeCapabilityId: params.runtimeTarget.runtimeCapabilityId,
+        deviceId: params.runtimeTarget.runtimeId,
+        runtimeExposureId: params.runtimeTarget.runtimeExposureId,
         sourceRuntimeSessionId: params.runtimeTarget.sourceRuntimeSessionId,
         requestedToolName: params.runtimeTarget.requestedToolName,
-        deviceToolStableKey: params.runtimeTarget.deviceToolStableKey,
+        runtimeToolStableKey: params.runtimeTarget.runtimeToolStableKey,
         reason: params.reason,
         requestMode: params.requestMode,
         requestedAction: params.authorizationPlan.requestedAction,
@@ -415,11 +415,11 @@ export async function createRuntimeAuthorizationRequest(
     async (createdTask, trx) => {
       await writeRuntimeAuthorizationTaskDetailInTx(trx, {
         taskId: createdTask.id,
-        deviceId: params.runtimeTarget.deviceId,
-        deviceCapabilityId: params.runtimeTarget.deviceCapabilityId,
-        deviceExposureId: params.runtimeTarget.deviceExposureId,
+        deviceId: params.runtimeTarget.runtimeId,
+        runtimeCapabilityId: params.runtimeTarget.runtimeCapabilityId,
+        runtimeExposureId: params.runtimeTarget.runtimeExposureId,
         requestedToolName: params.runtimeTarget.requestedToolName,
-        deviceToolStableKey: params.runtimeTarget.deviceToolStableKey,
+        runtimeToolStableKey: params.runtimeTarget.runtimeToolStableKey,
         reason: params.reason,
         requestMode: params.requestMode,
         sourceRuntimeSessionId: params.runtimeTarget.sourceRuntimeSessionId,
@@ -461,12 +461,12 @@ export async function createRuntimeAuthorizationRequest(
       conversationId: params.source.conversationId,
       taskId: taskRecord.id,
       requesterParticipantId: requesterMember.id,
-      deviceCapabilityId: params.runtimeTarget.deviceCapabilityId,
-      deviceId: params.runtimeTarget.deviceId,
-      deviceExposureId: params.runtimeTarget.deviceExposureId,
+      runtimeCapabilityId: params.runtimeTarget.runtimeCapabilityId,
+      deviceId: params.runtimeTarget.runtimeId,
+      runtimeExposureId: params.runtimeTarget.runtimeExposureId,
       requestedToolName: params.runtimeTarget.requestedToolName,
       sourceRuntimeSessionId: params.runtimeTarget.sourceRuntimeSessionId,
-      deviceToolStableKey: params.runtimeTarget.deviceToolStableKey,
+      runtimeToolStableKey: params.runtimeTarget.runtimeToolStableKey,
       reason: params.reason,
       requestedAction: params.authorizationPlan.requestedAction,
       grantOptions: params.authorizationPlan.grantOptions,

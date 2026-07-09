@@ -60,7 +60,9 @@ const ROOT_TABLES = new Set(
 // Keep in lockstep with cutover-emit-ddl.mjs: these softDelete:none child tables
 // expose canonical `_live` views even without their own liveValues because their
 // liveness is inherited entirely from parent `_live` views.
-const ADDITIONAL_PARENT_FOLDING_LIVE_VIEW_TABLES = new Set(["device_exposures"])
+const ADDITIONAL_PARENT_FOLDING_LIVE_VIEW_TABLES = new Set([
+  "runtime_exposures",
+])
 const tableHasManifestLiveView = (name, entry) =>
   !tableIsEphemeral(entry) &&
   (tableHasDeclaredLiveSemantics(entry) ||

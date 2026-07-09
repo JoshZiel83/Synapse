@@ -141,7 +141,7 @@ function getToolSource(
   if (
     sourceKind !== "system" &&
     sourceKind !== "plugin" &&
-    sourceKind !== "device"
+    sourceKind !== "runtime"
   ) {
     return undefined
   }
@@ -164,9 +164,9 @@ function getToolSource(
         : {}),
     }
   }
-  if (sourceKind === "device") {
+  if (sourceKind === "runtime") {
     return {
-      kind: "device",
+      kind: "runtime",
       ...(str(snap.deviceName) ? { displayName: str(snap.deviceName) } : {}),
       ...(str(snap.visibleToolName)
         ? { upstreamToolName: str(snap.visibleToolName) }

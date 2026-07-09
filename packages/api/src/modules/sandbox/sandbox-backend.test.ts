@@ -67,7 +67,7 @@ test("local backend create(): fires staged callbacks in order and builds handle"
   assert.equal(handle.backend, "local")
   assert.equal(handle.sandboxId, "sess-123") // == sessionId
   assert.equal(handle.deviceId, "dev-1")
-  assert.equal(handle.deviceServiceId, "svc-1")
+  assert.equal(handle.runtimeServiceId, "svc-1")
   assert.equal(handle.pairingSessionId, "pair-1")
   assert.equal(handle.hostPid, 999999)
   assert.equal(handle.sandboxResourceId, "") // local has no provider resource id
@@ -234,7 +234,7 @@ test("local backend connect(): rebuilds a kill-capable handle from a ref", async
     sandboxId: "sess-9",
     sandboxResourceId: "",
     deviceId: "dev-9",
-    deviceServiceId: "svc-9",
+    runtimeServiceId: "svc-9",
     hostPid: undefined,
   })
   assert.equal(handle.sandboxId, "sess-9")

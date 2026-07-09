@@ -83,11 +83,11 @@ function envWithGrants(
     {
       operation_id: "00000000-0000-0000-0000-000000000001",
       attempt_id: "00000000-0000-0000-0000-000000000002",
-      device_runtime_session_id: "00000000-0000-0000-0000-000000000003",
-      device_capability_id: "00000000-0000-0000-0000-000000000004",
-      device_exposure_id: "00000000-0000-0000-0000-000000000005",
-      device_tool_id: "00000000-0000-0000-0000-000000000006",
-      device_tool_revision_id: "00000000-0000-0000-0000-000000000007",
+      runtime_session_id: "00000000-0000-0000-0000-000000000003",
+      runtime_capability_id: "00000000-0000-0000-0000-000000000004",
+      runtime_exposure_id: "00000000-0000-0000-0000-000000000005",
+      runtime_tool_id: "00000000-0000-0000-0000-000000000006",
+      runtime_tool_revision_id: "00000000-0000-0000-0000-000000000007",
       input_hash: "sha256:0",
       task_mode: "sync",
       runtime_authorization: {

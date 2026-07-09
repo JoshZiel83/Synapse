@@ -5,7 +5,7 @@ import {
   RuntimeAuthorizationGrantRecordViewSchema,
 } from "@synapse/shared/schemas"
 
-const deviceCapabilityId = "00000000-0000-4000-8000-000000000001"
+const runtimeCapabilityId = "00000000-0000-4000-8000-000000000001"
 
 function browserGrantPolicy(
   overrides: Record<string, unknown> = {}
@@ -24,7 +24,7 @@ function browserGrantPolicy(
 
 test("manual runtime authorization grant input uses app-facing camelCase", () => {
   const parsed = CreateManualRuntimeAuthorizationGrantInputSchema.safeParse({
-    deviceCapabilityId,
+    runtimeCapabilityId,
     policy: browserGrantPolicy(),
   })
   assert.ok(parsed.success, JSON.stringify(parsed.error?.issues))
@@ -33,14 +33,14 @@ test("manual runtime authorization grant input uses app-facing camelCase", () =>
 test("manual runtime authorization grant input validates grant policy branch", () => {
   assert.equal(
     CreateManualRuntimeAuthorizationGrantInputSchema.safeParse({
-      deviceCapabilityId,
+      runtimeCapabilityId,
       policy: { capability: "browser" },
     }).success,
     false
   )
   assert.equal(
     CreateManualRuntimeAuthorizationGrantInputSchema.safeParse({
-      deviceCapabilityId,
+      runtimeCapabilityId,
       policy: browserGrantPolicy({ operations: ["not.a.real.operation"] }),
     }).success,
     false
@@ -49,7 +49,7 @@ test("manual runtime authorization grant input validates grant policy branch", (
 
 test("manual runtime authorization grant input strips browser scopeSource", () => {
   const parsed = CreateManualRuntimeAuthorizationGrantInputSchema.parse({
-    deviceCapabilityId,
+    runtimeCapabilityId,
     policy: browserGrantPolicy({ scopeSource: "requested_action" }),
   })
   assert.equal("scopeSource" in parsed.policy.browser!, false)
@@ -57,7 +57,7 @@ test("manual runtime authorization grant input strips browser scopeSource", () =
 
 test("manual runtime authorization grant input rejects legacy snake_case", () => {
   const parsed = CreateManualRuntimeAuthorizationGrantInputSchema.safeParse({
-    device_capability_id: deviceCapabilityId,
+    runtime_capability_id: runtimeCapabilityId,
     policy: browserGrantPolicy(),
   })
   assert.equal(parsed.success, false)
@@ -70,8 +70,8 @@ function runtimeAuthorizationGrantView(
     id: "grant-1",
     workspaceId: "workspace-1",
     deviceId: "device-1",
-    deviceCapabilityId,
-    deviceExposureId: "exposure-1",
+    runtimeCapabilityId,
+    runtimeExposureId: "exposure-1",
     subject: { kind: "workspace", workspaceId: "workspace-1" },
     scopeLabel: "workspace",
     sourceRequestArgs: {},

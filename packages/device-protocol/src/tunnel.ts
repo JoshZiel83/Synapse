@@ -2,8 +2,8 @@
 // Future swap path: replace frp adapter without touching DeviceTunnelRegistry callers.
 
 export interface TunnelStartOptions {
-  /** The device_services row this tunnel belongs to. */
-  readonly deviceServiceId: string
+  /** The runtime_services row this tunnel belongs to. */
+  readonly runtimeServiceId: string
   /** Local loopback port the runtime's MCP HTTP server is listening on. */
   readonly localPort: number
   /** Short-lived per-service registration token issued via Control Plane. */
@@ -11,8 +11,8 @@ export interface TunnelStartOptions {
 }
 
 export interface TunnelHandle {
-  /** The device_services row this tunnel belongs to. */
-  readonly deviceServiceId: string
+  /** The runtime_services row this tunnel belongs to. */
+  readonly runtimeServiceId: string
   /**
    * Base URL the API uses to reach the device's MCP HTTP endpoint through the
    * tunnel edge, e.g. `http://tunnel-edge:N/d/<service-token>`. NEVER public.

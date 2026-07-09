@@ -14,15 +14,15 @@ test("registry register / resolve / unregister round-trip", () => {
   const registry = createInMemoryDeviceTunnelRegistry()
   assert.equal(registry.resolve("svc-1"), undefined)
   registry.register({
-    deviceServiceId: "svc-1",
+    runtimeServiceId: "svc-1",
     internalUrl: "http://tunnel-edge:7000/d/abc",
   })
   assert.deepEqual(registry.resolve("svc-1"), {
-    deviceServiceId: "svc-1",
+    runtimeServiceId: "svc-1",
     internalUrl: "http://tunnel-edge:7000/d/abc",
   })
   assert.deepEqual(registry.list(), [
-    { deviceServiceId: "svc-1", internalUrl: "http://tunnel-edge:7000/d/abc" },
+    { runtimeServiceId: "svc-1", internalUrl: "http://tunnel-edge:7000/d/abc" },
   ])
   registry.unregister("svc-1")
   assert.equal(registry.resolve("svc-1"), undefined)
@@ -32,15 +32,15 @@ test("registry register / resolve / unregister round-trip", () => {
 test("registry re-register overwrites the prior endpoint", () => {
   const registry = createInMemoryDeviceTunnelRegistry()
   registry.register({
-    deviceServiceId: "svc-1",
+    runtimeServiceId: "svc-1",
     internalUrl: "http://tunnel-edge:7000/d/old",
   })
   registry.register({
-    deviceServiceId: "svc-1",
+    runtimeServiceId: "svc-1",
     internalUrl: "http://tunnel-edge:7000/d/new",
   })
   assert.deepEqual(registry.resolve("svc-1"), {
-    deviceServiceId: "svc-1",
+    runtimeServiceId: "svc-1",
     internalUrl: "http://tunnel-edge:7000/d/new",
   })
 })

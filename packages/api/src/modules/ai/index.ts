@@ -503,7 +503,7 @@ function toolCallProvenance(
   sourceKind: ToolSourceKind
   sourceSnapshot: SourceSnapshot
   pluginInstallationId: string | null
-  deviceToolId: string | null
+  runtimeToolId: string | null
 } {
   if (!ref) {
     return {
@@ -517,7 +517,7 @@ function toolCallProvenance(
         stableKey: wireName,
       },
       pluginInstallationId: null,
-      deviceToolId: null,
+      runtimeToolId: null,
     }
   }
   const snapshot = stripForAuditSnapshot(ref)
@@ -526,7 +526,8 @@ function toolCallProvenance(
     sourceSnapshot: snapshot,
     pluginInstallationId:
       ref.source.kind === "plugin" ? ref.source.installationId : null,
-    deviceToolId: ref.source.kind === "device" ? ref.source.deviceToolId : null,
+    runtimeToolId:
+      ref.source.kind === "runtime" ? ref.source.runtimeToolId : null,
   }
 }
 
@@ -1296,7 +1297,7 @@ export async function actorThink(
               sourceKind: provenance.sourceKind,
               sourceSnapshot: provenance.sourceSnapshot,
               pluginInstallationId: provenance.pluginInstallationId,
-              deviceToolId: provenance.deviceToolId,
+              runtimeToolId: provenance.runtimeToolId,
               normalizedInput: tc.input,
             })
             if (!row) {

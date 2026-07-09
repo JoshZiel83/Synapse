@@ -110,10 +110,10 @@ export type RawTaskRow = {
   resolvedByWorkspaceMemberId: string | null
   resolvedByRemoteAgentId: string | null
   resolvedByParticipantId: string | null
-  deviceCapabilityId: string | null
+  runtimeCapabilityId: string | null
   deviceId: string | null
-  deviceExposureId: string | null
-  deviceToolStableKey: string | null
+  runtimeExposureId: string | null
+  runtimeToolStableKey: string | null
   deviceDisplayName: string | null
   exposureDisplayName: string | null
   exposureStableKey: string | null

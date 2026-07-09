@@ -16,7 +16,6 @@ export interface CreateCloudDeviceInput {
   title: string
   requestedByWorkspaceMemberId?: string | null
   preset?: string
-  hostProvider?: string // 'e2b' in v3.0
 }
 
 /**
@@ -61,9 +60,8 @@ export async function createCloudDevicePairing(
     bootstrapTokenHash: bootstrapTokenHash,
     expiresAt: expiresAt,
     contextJson: JSON.stringify({
-      pending_device_id: pendingDeviceId,
+      pending_runtime_id: pendingDeviceId,
       preset: input.preset ?? null,
-      host_provider: input.hostProvider ?? "e2b",
     }),
   })
 
@@ -80,7 +78,6 @@ export interface ConsumeBootstrapInput {
   devicePubkey: string
   servicePubkey: string
   clientVersion?: string
-  hostProvider?: string
   platform?: string
   arch?: string
 }
@@ -93,7 +90,7 @@ export type ConsumeBootstrapResult = CloudBootstrapResult
 /**
  * Sandbox boot handler. Resolves the bootstrap_token (hashed) to its
  * pairing session, atomically INSERTs devices (using context.pending_device_id
- * as the id) + device_services + device_service_keys, and marks the session
+ * as the id) + runtime_services + runtime_service_keys, and marks the session
  * consumed.
  */
 export async function consumeCloudBootstrap(
@@ -150,7 +147,7 @@ export async function consumeCloudBootstrap(
         throw new DeviceModuleError({
           statusCode: 500,
           code: "pairing_session_corrupt",
-          message: "pairing session is missing pending_device_id",
+          message: "pairing session is missing pending_runtime_id",
         })
       case "race":
         throw new DeviceModuleError({

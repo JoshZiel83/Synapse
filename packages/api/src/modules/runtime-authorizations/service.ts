@@ -260,9 +260,9 @@ export class UnsupportedGrantTargetError extends Error {
 
 export interface CreateRuntimeAuthorizationGrantParams {
   workspaceId: string
-  deviceId: string
-  deviceCapabilityId: string
-  deviceExposureId: string
+  runtimeId: string
+  runtimeCapabilityId: string
+  runtimeExposureId: string
   subject: SubjectRef
   scope?: SubjectRef
   retention: RuntimeAuthorizationGrantRetention
@@ -364,10 +364,10 @@ function normalizeCommandlineGrantSpec(
 export class ProgramOnlyGrantNotAllowedError extends Error {
   constructor(
     readonly program: string,
-    readonly deviceExposureId: string
+    readonly runtimeExposureId: string
   ) {
     super(
-      `program_only grant rejected: '${program}' is not in device exposure ${deviceExposureId} availableClis`
+      `program_only grant rejected: '${program}' is not in device exposure ${runtimeExposureId} availableClis`
     )
     this.name = "ProgramOnlyGrantNotAllowedError"
   }
@@ -427,7 +427,7 @@ async function createGrantInKyselyTx(
     commandline.commandMatchType === "program_only"
   ) {
     const allowed = await selectExposureAvailableCliEntryPoints(
-      params.deviceExposureId,
+      params.runtimeExposureId,
       trx
     )
     const normalizedAllowed = new Set(
@@ -436,7 +436,7 @@ async function createGrantInKyselyTx(
     if (!normalizedAllowed.has(normalizeProgramName(commandline.program))) {
       throw new ProgramOnlyGrantNotAllowedError(
         commandline.program,
-        params.deviceExposureId
+        params.runtimeExposureId
       )
     }
   }
@@ -446,9 +446,9 @@ async function createGrantInKyselyTx(
     : null
   const inserted = await insertRuntimeAuthorizationGrantRow(trx, {
     workspaceId: params.workspaceId,
-    deviceId: params.deviceId,
-    deviceCapabilityId: params.deviceCapabilityId,
-    deviceExposureId: params.deviceExposureId,
+    runtimeId: params.runtimeId,
+    runtimeCapabilityId: params.runtimeCapabilityId,
+    runtimeExposureId: params.runtimeExposureId,
     subjectId: subjectId,
     scopeSubjectId: scopeSubjectId,
     createdByWorkspaceMemberId: params.createdByWorkspaceMemberId || null,
@@ -953,9 +953,9 @@ export type PrepareFailure =
 
 export interface SelectAndClaimParams {
   workspaceId: string
-  deviceId: string
-  deviceCapabilityId: string
-  deviceExposureId: string
+  runtimeId: string
+  runtimeCapabilityId: string
+  runtimeExposureId: string
   runtimeSubjectIds: string[]
   runtimeScopeSubjectIds: string[]
   retryNonce?: string
@@ -996,9 +996,9 @@ export async function selectAndClaimRuntimeAuthorizationGrant(
   // independent transactions on consume race).
   const candidates = await listCandidatesForDispatch({
     workspaceId: params.workspaceId,
-    deviceId: params.deviceId,
-    deviceCapabilityId: params.deviceCapabilityId,
-    deviceExposureId: params.deviceExposureId,
+    runtimeId: params.runtimeId,
+    runtimeCapabilityId: params.runtimeCapabilityId,
+    runtimeExposureId: params.runtimeExposureId,
     runtimeSubjectIds: params.runtimeSubjectIds,
     runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
     retryNonce: params.retryNonce,
@@ -1129,7 +1129,7 @@ async function tryClaimAndBegin(input: {
       await runRuntimeAuthorizationGrantTransaction<TryClaimResult>(
         async (trx) => {
           // Short lock timeout: a lock_timeout means another connection is
-          // updating device_tools (e.g., catalog sync); abort and surface as a
+          // updating runtime_tools (e.g., catalog sync); abort and surface as a
           // transient runtime_constraint instead of waiting indefinitely.
           await setLocalLockTimeout(trx)
           // FOR SHARE: blocks catalog UPDATE without blocking other dispatch
@@ -1186,9 +1186,9 @@ async function tryClaimAndBegin(input: {
 
 async function listCandidatesForDispatch(params: {
   workspaceId: string
-  deviceId: string
-  deviceCapabilityId: string
-  deviceExposureId: string
+  runtimeId: string
+  runtimeCapabilityId: string
+  runtimeExposureId: string
   runtimeSubjectIds: string[]
   runtimeScopeSubjectIds: string[]
   retryNonce?: string
@@ -1197,9 +1197,9 @@ async function listCandidatesForDispatch(params: {
   if (params.runtimeSubjectIds.length === 0) return []
   const rows = await listCandidateRowsForDispatch({
     workspaceId: params.workspaceId,
-    deviceId: params.deviceId,
-    deviceCapabilityId: params.deviceCapabilityId,
-    deviceExposureId: params.deviceExposureId,
+    runtimeId: params.runtimeId,
+    runtimeCapabilityId: params.runtimeCapabilityId,
+    runtimeExposureId: params.runtimeExposureId,
     runtimeSubjectIds: params.runtimeSubjectIds,
     runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
     retryNonce: params.retryNonce,
@@ -1237,12 +1237,12 @@ export interface DashboardGrantListResult {
 
 export async function listDeviceCapabilityRuntimeAuthorizationGrantsForDashboard(input: {
   workspaceId: string
-  deviceCapabilityId: string
+  runtimeCapabilityId: string
   includeRevoked?: boolean
 }): Promise<DashboardGrantListResult> {
   const rows = await listDashboardGrantRows({
     workspaceId: input.workspaceId,
-    deviceCapabilityId: input.deviceCapabilityId,
+    runtimeCapabilityId: input.runtimeCapabilityId,
     includeRevoked: input.includeRevoked,
   })
   const valid: RuntimeAuthorizationGrantRecord[] = []

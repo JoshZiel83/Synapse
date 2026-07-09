@@ -278,9 +278,9 @@ export function isToolResultOrigin(value: unknown): value is ToolResultOrigin {
         typeof v.installationId === "string" &&
         typeof v.upstreamToolName === "string"
       )
-    case "device":
+    case "runtime":
       return (
-        typeof v.deviceToolId === "string" &&
+        typeof v.runtimeToolId === "string" &&
         typeof v.exposureStableKey === "string"
       )
     case "provider_native":

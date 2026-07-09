@@ -341,7 +341,7 @@ function isPermanentResolveError(err: unknown): boolean {
     msg.includes("only the targeted user can resolve this task") ||
     msg.includes("you are not allowed to resolve") ||
     msg.includes("missing device_id") ||
-    msg.includes("missing device_capability_id") ||
+    msg.includes("missing runtime_capability_id") ||
     msg.includes(
       "commandid"
     ) /* commandId reuse with a different payload (programmer error) */

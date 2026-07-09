@@ -189,7 +189,7 @@ export async function createToolCall(params: {
   sourceKind: ToolSourceKind
   sourceSnapshot: Record<string, unknown>
   pluginInstallationId?: string | null
-  deviceToolId?: string | null
+  runtimeToolId?: string | null
   normalizedInput: Record<string, unknown>
 }) {
   const row = await insertToolCall(params)

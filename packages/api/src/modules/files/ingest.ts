@@ -99,7 +99,7 @@ function originToFileOrigin(
   } else if (origin.kind === "plugin") {
     providerKey = origin.installationId
     pluginId = origin.installationId
-  } else if (origin.kind === "device") {
+  } else if (origin.kind === "runtime") {
     providerKey = origin.exposureStableKey
   } else if (origin.kind === "provider_native") {
     providerKey = `${origin.providerType}:${origin.toolName}`

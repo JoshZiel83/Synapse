@@ -9,7 +9,6 @@ import {
   DEVICE_SERVICE_STATUSES,
   DEVICE_TRUST_STATUSES,
   DEVICE_TYPES,
-  HOST_KINDS,
 } from "@synapse/device-protocol/enums"
 import {
   DEVICE_CAPABILITY_ACCESS_SCOPE_KIND,
@@ -31,8 +30,6 @@ export const DeviceViewSchema = z.strictObject({
   id: z.uuid(),
   workspaceId: z.uuid(),
   title: z.string(),
-  hostKind: z.enum(HOST_KINDS),
-  hostProvider: z.string().nullable(),
   deviceType: z.enum(DEVICE_TYPES),
   platform: z.string().nullable(),
   trustStatus: z.enum(DEVICE_TRUST_STATUSES),
@@ -114,12 +111,10 @@ export type DevicePairingTicketView = z.infer<
 
 export const CreateCloudDeviceInputSchema = z.strictObject({
   workspaceId: z.uuid(),
-  // title/hostProvider are optional: the server applies defaults (title →
-  // "Cloud Device", hostProvider → "e2b") when omitted, so the app contract
-  // must accept their absence too — otherwise the SDK would reject requests the
-  // server happily serves.
+  // title is optional: the server applies a default ("Cloud Device") when
+  // omitted, so the app contract must accept its absence too — otherwise the
+  // SDK would reject requests the server happily serves.
   title: z.string().min(1).optional(),
-  hostProvider: z.literal("e2b").optional(),
   preset: z.string().optional(),
 })
 export type CreateCloudDeviceInput = z.infer<
@@ -150,7 +145,8 @@ export const StartPairingInputSchema = z.strictObject({
   description: z.string().max(2000).optional(),
   deviceType: z.enum(DEVICE_TYPES).optional(),
   context: z.record(z.string(), z.unknown()).optional(),
-  // service_join only:
+  // Legacy field (was service_join only; that pairing mode has been removed).
+  // Retained as an accepted-but-ignored optional for wire back-compat.
   deviceId: z.uuid().optional(),
   requestedPubkeyFingerprint: z.string().optional(),
   selfChallenge: z.string().optional(),

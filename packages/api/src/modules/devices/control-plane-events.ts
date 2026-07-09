@@ -103,7 +103,7 @@ export async function persistRuntimeSessionClosed(
   }
 }
 
-// ─── device.task.* (async lifecycle for existing device_operations) ─────────
+// ─── device.task.* (async lifecycle for existing runtime_operations) ─────────
 
 /**
  * Verifies the operation row belongs to the authenticated device + the
@@ -148,7 +148,7 @@ async function assertOperationOwnership(args: {
         message: `attempt ${args.attemptId} does not belong to operation ${args.operationId}`,
       }
     }
-    if (attempt.deviceServiceId !== args.serviceId) {
+    if (attempt.runtimeServiceId !== args.serviceId) {
       return {
         ok: false,
         code: -32005,
@@ -171,7 +171,7 @@ async function assertOperationOwnership(args: {
 // skips already-terminal tasks, so a replayed/out-of-order output can neither
 // collide on seq nor mutate a completed task. NOTE: per-frame monotonic
 // ordering across the control-plane socket is NOT yet enforced
-// (device_control_plane_sessions.last_sequence is still unused); the guards
+// (runtime_control_plane_sessions.last_sequence is still unused); the guards
 // above are what make replay/out-of-order safe today.
 
 async function taskIdForOperation(operationId: string): Promise<string | null> {
@@ -426,7 +426,7 @@ export async function persistDeviceEventEmit(
  * VFS exposures are projections on top of filesystem / browser / cua
  * exposures. The v3.0 skeleton doesn't have a dedicated table for the
  * semantic tree; instead the device-side runtime maintains the projection
- * and the API persists a JSON snapshot on device_exposures.metadata.vfs so
+ * and the API persists a JSON snapshot on runtime_exposures.metadata.vfs so
  * the dashboard can render it.
  */
 export async function persistVfsExposureUpsert(

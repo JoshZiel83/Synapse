@@ -34,8 +34,8 @@ export interface RuntimeAuthorizationGrantRecord extends SharedRuntimeAuthorizat
   id: string
   workspaceId: string
   deviceId: string
-  deviceCapabilityId: string
-  deviceExposureId: string
+  runtimeCapabilityId: string
+  runtimeExposureId: string
   /** Authorization subject (workspace / workspace_member / actor / remote_agent / conversation). */
   subject: SubjectRef
   /** Optional runtime-context scope (workspace or conversation). */

@@ -301,7 +301,7 @@ test("reconcileToolPairing preserves routed origin for an interrupted orphan too
   }
   const deviceOrigin = {
     kind: "device" as const,
-    deviceToolId: "device-tool-1",
+    runtimeToolId: "device-tool-1",
     exposureStableKey: "synapse.builtin.filesystem.v1",
   }
   const messages: ConversationMessage[] = [

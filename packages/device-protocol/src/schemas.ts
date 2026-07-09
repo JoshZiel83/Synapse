@@ -226,11 +226,11 @@ export type RuntimeAuthorizationGrantWireSpec = z.infer<
 export const OperationEnvelopeSchema = z.object({
   operation_id: z.uuid(),
   attempt_id: z.uuid(),
-  device_runtime_session_id: z.uuid(),
-  device_capability_id: z.uuid(),
-  device_exposure_id: z.uuid(),
-  device_tool_id: z.uuid(),
-  device_tool_revision_id: z.uuid(),
+  runtime_session_id: z.uuid(),
+  runtime_capability_id: z.uuid(),
+  runtime_exposure_id: z.uuid(),
+  runtime_tool_id: z.uuid(),
+  runtime_tool_revision_id: z.uuid(),
   input_hash: z.string(),
   task_mode: z.enum(DEVICE_OPERATION_TASK_MODES),
   runtime_authorization: z

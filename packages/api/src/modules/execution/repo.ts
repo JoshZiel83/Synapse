@@ -247,7 +247,7 @@ export async function insertToolCall(params: {
   sourceKind: ToolSourceKind
   sourceSnapshot: Record<string, unknown>
   pluginInstallationId?: string | null
-  deviceToolId?: string | null
+  runtimeToolId?: string | null
   normalizedInput: Record<string, unknown>
 }) {
   return db
@@ -265,7 +265,7 @@ export async function insertToolCall(params: {
       sourceKind: params.sourceKind,
       sourceSnapshot: params.sourceSnapshot as ToolCallsSourceSnapshot,
       pluginInstallationId: params.pluginInstallationId || null,
-      deviceToolId: params.deviceToolId || null,
+      runtimeToolId: params.runtimeToolId || null,
       normalizedInput: params.normalizedInput as ToolCallsNormalizedInput,
       status: "pending",
       createdAt: sql`NOW()`,
@@ -428,7 +428,7 @@ export async function getToolHistoryForSession(sessionId: string) {
       "tc.sourceKind",
       "tc.sourceSnapshot",
       "tc.pluginInstallationId",
-      "tc.deviceToolId",
+      "tc.runtimeToolId",
       "tc.normalizedInput",
       "tc.status",
       "tc.createdAt",

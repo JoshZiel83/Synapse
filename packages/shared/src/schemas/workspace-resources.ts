@@ -337,7 +337,7 @@ export const UpdateWorkspaceResourceInputSchema = z.discriminatedUnion("kind", [
     attachmentFiles: z.array(SkillAttachmentInputSchema).optional(),
   }),
   z.object({
-    kind: z.literal(WORKSPACE_RESOURCE_KIND.DEVICE_CAPABILITY),
+    kind: z.literal(WORKSPACE_RESOURCE_KIND.RUNTIME_CAPABILITY),
     displayName: z.string().trim().min(1).max(255).optional(),
     conversationTypeMaskOverride: conversationTypeMaskSchema
       .nullable()

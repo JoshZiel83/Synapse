@@ -77,7 +77,7 @@ function workspaceResourceKindAdminKey(kind: WorkspaceResourceKind): string {
       return "actor_admin"
     case WORKSPACE_RESOURCE_KIND.REMOTE_AGENT:
       return "remote_agent_admin"
-    case WORKSPACE_RESOURCE_KIND.DEVICE_CAPABILITY:
+    case WORKSPACE_RESOURCE_KIND.RUNTIME_CAPABILITY:
       return "device_admin"
     case WORKSPACE_RESOURCE_KIND.AUTOMATION_EVENT_SOURCE:
       return "automation_admin"
@@ -740,7 +740,7 @@ export async function updateWorkspaceResource(params: {
         }>
       }
     | {
-        kind: typeof WORKSPACE_RESOURCE_KIND.DEVICE_CAPABILITY
+        kind: typeof WORKSPACE_RESOURCE_KIND.RUNTIME_CAPABILITY
         displayName?: string
         conversationTypeMaskOverride?: number | null
       }
@@ -815,7 +815,7 @@ export async function updateWorkspaceResource(params: {
         updatedByWorkspaceMemberId: access.workspaceMemberId,
       })
       break
-    case WORKSPACE_RESOURCE_KIND.DEVICE_CAPABILITY:
+    case WORKSPACE_RESOURCE_KIND.RUNTIME_CAPABILITY:
       await updateWorkspaceResourceRootDefault({
         id: params.resourceId,
         displayName: params.input.displayName,
@@ -861,7 +861,7 @@ export async function deleteWorkspaceResource(params: {
     case WORKSPACE_RESOURCE_KIND.PLUGIN_INSTALLATION:
       await uninstallPluginUnified(params.resourceId)
       return true
-    case WORKSPACE_RESOURCE_KIND.DEVICE_CAPABILITY:
+    case WORKSPACE_RESOURCE_KIND.RUNTIME_CAPABILITY:
       await updateWorkspaceResourceRootDefault({
         id: params.resourceId,
         status: WORKSPACE_RESOURCE_STATUS.ARCHIVED,

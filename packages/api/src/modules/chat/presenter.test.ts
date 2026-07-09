@@ -162,7 +162,7 @@ const runtimeAuthorizationTask: TaskSummary = {
   lifecycleStatus: "auth_required",
   runtimeAuthorization: {
     requestedToolName: "fs.write",
-    deviceToolStableKey: "filesystem.write",
+    runtimeToolStableKey: "filesystem.write",
     requestedAction: {
       capability: "filesystem",
       toolName: "fs.write",
@@ -176,7 +176,7 @@ const runtimeAuthorizationTask: TaskSummary = {
     reason: "Need to write output",
     deviceId: "device-1",
     deviceDisplayName: "Local device",
-    deviceCapabilityId: "capability-1",
+    runtimeCapabilityId: "capability-1",
     exposureId: "exposure-1",
     exposureDisplayName: "Filesystem",
     grantOptions: [

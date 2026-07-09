@@ -1818,8 +1818,8 @@ export type ToolResultOrigin =
       itemSlug?: string
     }
   | {
-      kind: "device"
-      deviceToolId: string
+      kind: "runtime"
+      runtimeToolId: string
       exposureStableKey: string
       deviceName?: string
       visibleToolName?: string
@@ -3408,18 +3408,18 @@ export interface RuntimeAuthorizationGrantSummary extends SharedRuntimeAuthoriza
 export interface RuntimeAuthorizationGrantView extends RuntimeAuthorizationGrantSummary {
   workspaceId: UUID
   deviceId: UUID
-  deviceCapabilityId: UUID
+  runtimeCapabilityId: UUID
   exposureId: UUID
 }
 
 export interface RuntimeAuthorizationTaskDetails {
   requestedToolName: string
-  deviceToolStableKey: string
+  runtimeToolStableKey: string
   requestedAction: RuntimeAuthorizationRequestedAction
   reason: string
   deviceId: UUID
   deviceDisplayName: string
-  deviceCapabilityId: UUID
+  runtimeCapabilityId: UUID
   exposureId: UUID
   exposureDisplayName: string
   grantOptions: RuntimeAuthorizationGrantOption[]

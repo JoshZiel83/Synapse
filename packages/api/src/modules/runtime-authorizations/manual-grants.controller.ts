@@ -82,7 +82,7 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
           request,
           reply,
           "device_capability.grant",
-          parsed.data.deviceCapabilityId,
+          parsed.data.runtimeCapabilityId,
           "Cannot grant runtime authorization on this device capability"
         ))
       )
@@ -91,12 +91,12 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
       // JOIN reverse-lookup: pull device_id / exposure_id / builtin_kind /
       // workspace_id / status. Verify they line up before the write.
       const row = await findDeviceCapabilityGrantTarget(
-        parsed.data.deviceCapabilityId
+        parsed.data.runtimeCapabilityId
       )
       if (!row) {
         reply.status(404).send({
           code: "device_capability_not_found",
-          message: `device capability ${parsed.data.deviceCapabilityId} not found`,
+          message: `device capability ${parsed.data.runtimeCapabilityId} not found`,
         })
         return
       }
@@ -165,9 +165,9 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
           // maps to subject=workspace + retention=until_revoked + the parsed
           // policy. No scope (workspace grants are unscoped).
           workspaceId: pathWorkspaceId,
-          deviceId: row.deviceId,
-          deviceCapabilityId: parsed.data.deviceCapabilityId,
-          deviceExposureId: row.exposureId,
+          runtimeId: row.runtimeId,
+          runtimeCapabilityId: parsed.data.runtimeCapabilityId,
+          runtimeExposureId: row.exposureId,
           subject: workspaceRef(pathWorkspaceId),
           retention: "until_revoked",
           policy,

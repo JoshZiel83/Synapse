@@ -159,12 +159,12 @@ export interface CreateRuntimeAuthorizationTaskParams {
    */
   taskId?: string
   requesterParticipantId: string
-  deviceCapabilityId: string
+  runtimeCapabilityId: string
   deviceId: string
-  deviceExposureId: string
+  runtimeExposureId: string
   requestedToolName: string
   sourceRuntimeSessionId: string
-  deviceToolStableKey: string
+  runtimeToolStableKey: string
   reason: string
   requestedAction: RuntimeAuthorizationRequestedAction
   grantOptions: RuntimeAuthorizationGrantOption[]
@@ -209,11 +209,11 @@ export interface FindOpenRuntimeAuthorizationTaskParams {
   workspaceId: string
   conversationId: string
   requesterParticipantId: string
-  deviceCapabilityId: string
+  runtimeCapabilityId: string
   deviceId: string
-  deviceExposureId: string
+  runtimeExposureId: string
   requestedToolName: string
-  deviceToolStableKey: string
+  runtimeToolStableKey: string
   requestedAction: RuntimeAuthorizationRequestedAction
   grantOptions: RuntimeAuthorizationGrantOption[]
   availablePresets: RuntimeAuthorizationPreset[]
@@ -261,10 +261,10 @@ function isJsonObjectRecord(value: unknown): value is Record<string, unknown> {
  */
 export function buildRuntimeAuthorizationDedupeKey(params: {
   deviceId: string
-  deviceCapabilityId: string
-  deviceExposureId: string
+  runtimeCapabilityId: string
+  runtimeExposureId: string
   requestedToolName: string
-  deviceToolStableKey: string
+  runtimeToolStableKey: string
   requestMode: RuntimeAuthorizationRequestMode
   requestedAction: RuntimeAuthorizationRequestedAction
   grantOptions: RuntimeAuthorizationGrantOption[]
@@ -284,10 +284,10 @@ export function buildRuntimeAuthorizationDedupeKey(params: {
 }) {
   return stableJsonStringify({
     deviceId: params.deviceId,
-    deviceCapabilityId: params.deviceCapabilityId,
-    deviceExposureId: params.deviceExposureId,
+    runtimeCapabilityId: params.runtimeCapabilityId,
+    runtimeExposureId: params.runtimeExposureId,
     requestedToolName: params.requestedToolName,
-    deviceToolStableKey: params.deviceToolStableKey,
+    runtimeToolStableKey: params.runtimeToolStableKey,
     requestMode: params.requestMode,
     requestedAction: params.requestedAction,
     grantOptions: params.grantOptions,
@@ -691,9 +691,9 @@ async function maybeAutoRetryAfterApproval(args: {
   }
 
   const visibleToolName =
-    runtimeAuth.deviceToolStableKey || runtimeAuth.requestedToolName
+    runtimeAuth.runtimeToolStableKey || runtimeAuth.requestedToolName
   const retry = await autoDispatchRuntimeAuthorizationRetry({
-    deviceCapabilityId: runtimeAuth.deviceCapabilityId,
+    runtimeCapabilityId: runtimeAuth.runtimeCapabilityId,
     visibleToolName,
     sourceRequestArgs: args.sourceRequestArgs,
     sourceRetryNonce: args.sourceRetryNonce,
@@ -847,10 +847,10 @@ export async function writeRuntimeAuthorizationTaskDetailInTx(
   params: {
     taskId: string
     deviceId: string
-    deviceCapabilityId: string
-    deviceExposureId: string
+    runtimeCapabilityId: string
+    runtimeExposureId: string
     requestedToolName: string
-    deviceToolStableKey: string
+    runtimeToolStableKey: string
     reason: string
     requestMode: RuntimeAuthorizationRequestMode
     sourceRuntimeSessionId: string
@@ -865,10 +865,10 @@ export async function writeRuntimeAuthorizationTaskDetailInTx(
 ) {
   const dedupeKey = buildRuntimeAuthorizationDedupeKey({
     deviceId: params.deviceId,
-    deviceCapabilityId: params.deviceCapabilityId,
-    deviceExposureId: params.deviceExposureId,
+    runtimeCapabilityId: params.runtimeCapabilityId,
+    runtimeExposureId: params.runtimeExposureId,
     requestedToolName: params.requestedToolName,
-    deviceToolStableKey: params.deviceToolStableKey,
+    runtimeToolStableKey: params.runtimeToolStableKey,
     requestMode: params.requestMode,
     requestedAction: params.requestedAction,
     grantOptions: params.grantOptions,
@@ -878,10 +878,10 @@ export async function writeRuntimeAuthorizationTaskDetailInTx(
   await insertRuntimeAuthorizationTaskDetails(client, {
     taskId: params.taskId,
     deviceId: params.deviceId,
-    deviceCapabilityId: params.deviceCapabilityId,
-    deviceExposureId: params.deviceExposureId,
+    runtimeCapabilityId: params.runtimeCapabilityId,
+    runtimeExposureId: params.runtimeExposureId,
     requestedToolName: params.requestedToolName,
-    deviceToolStableKey: params.deviceToolStableKey,
+    runtimeToolStableKey: params.runtimeToolStableKey,
     reason: params.reason,
     requestMode: params.requestMode,
     sourceRuntimeSessionId: params.sourceRuntimeSessionId,
@@ -1365,10 +1365,10 @@ export async function findOpenRuntimeAuthorizationTask(
 ) {
   const dedupeKey = buildRuntimeAuthorizationDedupeKey({
     deviceId: params.deviceId,
-    deviceCapabilityId: params.deviceCapabilityId,
-    deviceExposureId: params.deviceExposureId,
+    runtimeCapabilityId: params.runtimeCapabilityId,
+    runtimeExposureId: params.runtimeExposureId,
     requestedToolName: params.requestedToolName,
-    deviceToolStableKey: params.deviceToolStableKey,
+    runtimeToolStableKey: params.runtimeToolStableKey,
     requestMode: params.requestMode,
     requestedAction: params.requestedAction,
     grantOptions: params.grantOptions,
@@ -1380,10 +1380,10 @@ export async function findOpenRuntimeAuthorizationTask(
     conversationId: params.conversationId,
     requesterParticipantId: params.requesterParticipantId,
     deviceId: params.deviceId,
-    deviceCapabilityId: params.deviceCapabilityId,
-    deviceExposureId: params.deviceExposureId,
+    runtimeCapabilityId: params.runtimeCapabilityId,
+    runtimeExposureId: params.runtimeExposureId,
     requestedToolName: params.requestedToolName,
-    deviceToolStableKey: params.deviceToolStableKey,
+    runtimeToolStableKey: params.runtimeToolStableKey,
     requestMode: params.requestMode,
     dedupeKey,
   })
@@ -1502,15 +1502,15 @@ export async function canUserResolveTask(params: {
   }
 
   const deviceId = task.runtimeAuthorization?.deviceId
-  const deviceCapabilityId = task.runtimeAuthorization?.deviceCapabilityId
-  if (!deviceId || !deviceCapabilityId) {
+  const runtimeCapabilityId = task.runtimeAuthorization?.runtimeCapabilityId
+  if (!deviceId || !runtimeCapabilityId) {
     return false
   }
 
   return authorizeActionDefault({
     subject: userSubject(userId),
     action: "device_capability.request_runtime_authorization",
-    resourceId: deviceCapabilityId,
+    resourceId: runtimeCapabilityId,
   })
 }
 
@@ -1832,14 +1832,14 @@ export async function resolveTaskRequest(
       if (!deviceId) {
         throw new Error(`Task ${locked.id} is missing device_id`)
       }
-      const deviceCapabilityId = locked.deviceCapabilityId || ""
-      if (!deviceCapabilityId) {
-        throw new Error(`Task ${locked.id} is missing device_capability_id`)
+      const runtimeCapabilityId = locked.runtimeCapabilityId || ""
+      if (!runtimeCapabilityId) {
+        throw new Error(`Task ${locked.id} is missing runtime_capability_id`)
       }
       const canResolveRuntimeAuthorization = await authorizeActionDefault({
         subject: workspaceMemberSubject(params.resolverWorkspaceMemberId),
         action: "device_capability.request_runtime_authorization",
-        resourceId: deviceCapabilityId,
+        resourceId: runtimeCapabilityId,
       })
       if (!canResolveRuntimeAuthorization) {
         throw new Error(
@@ -2089,9 +2089,9 @@ export async function resolveTaskRequest(
         createdGrant = await createRuntimeAuthorizationGrant(
           {
             workspaceId: locked.workspaceId,
-            deviceId: locked.deviceId || "",
-            deviceCapabilityId: locked.deviceCapabilityId || "",
-            deviceExposureId: locked.deviceExposureId || "",
+            runtimeId: locked.deviceId || "",
+            runtimeCapabilityId: locked.runtimeCapabilityId || "",
+            runtimeExposureId: locked.runtimeExposureId || "",
             subject: presetTriple.subject,
             scope: presetTriple.scope,
             retention: presetTriple.retention,

@@ -1,4 +1,4 @@
-// Device dispatcher — server side. Given a (device_service_id,
+// Device dispatcher — server side. Given a (runtime_service_id,
 // operation envelope, args), resolves the device's MCP HTTP endpoint via
 // DeviceTunnelRegistry and issues a `tools/call` to it.
 //
@@ -42,7 +42,7 @@ export interface McpDispatchResult {
 }
 
 export interface DispatchOptions {
-  deviceServiceId: string
+  runtimeServiceId: string
   envelope: OperationEnvelope
   args: Record<string, unknown>
   toolName: string
@@ -144,13 +144,13 @@ export async function dispatchSyncTool(
   opts: DispatchOptions
 ): Promise<McpDispatchResult> {
   const registry = getDeviceTunnelRegistry()
-  const endpoint = registry.resolve(opts.deviceServiceId)
+  const endpoint = registry.resolve(opts.runtimeServiceId)
   if (!endpoint) {
     return {
       ok: false,
       error: {
         code: "runtime_constraint",
-        message: `no tunnel endpoint registered for device_service ${opts.deviceServiceId}`,
+        message: `no tunnel endpoint registered for device_service ${opts.runtimeServiceId}`,
       },
     }
   }
@@ -166,7 +166,7 @@ export async function dispatchSyncTool(
     {
       kind: SpanKind.CLIENT,
       attributes: {
-        "synapse.device_service_id": opts.deviceServiceId,
+        "synapse.runtime_service_id": opts.runtimeServiceId,
         "synapse.tool_name": opts.toolName,
         "synapse.attempt_id": opts.envelope.attempt_id,
       },

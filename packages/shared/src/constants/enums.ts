@@ -561,7 +561,7 @@ export const DEFAULT_CONVERSATION_TYPE_MASK = CONVERSATION_TYPE_MASK_PRESETS.ALL
 export const CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES = [
   "plugin_installation",
   "installed_skill",
-  "device_capability",
+  "runtime_capability",
 ] as const
 export const ACCESS_TARGET_TYPES = [
   "workspace",
@@ -1663,7 +1663,7 @@ export const PLUGIN_TRANSPORTS = [
 export const TOOL_RESULT_ORIGIN_KINDS = [
   "system",
   "plugin",
-  "device",
+  "runtime",
   "provider_native",
   "model_response",
 ] as const

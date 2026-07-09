@@ -10,8 +10,8 @@ import { normalizeMcpToolResult } from "./result-normalizer.js"
 import type { ToolResultOrigin } from "@synapse/shared"
 
 const MCP_DEVICE_ORIGIN: ToolResultOrigin = {
-  kind: "device",
-  deviceToolId: "device-tool-1",
+  kind: "runtime",
+  runtimeToolId: "device-tool-1",
   deviceName: "MacBook Pro",
   exposureStableKey: "synapse.builtin.filesystem.v1",
   visibleToolName: "View",
@@ -91,7 +91,7 @@ test("origin kind enumeration covers all 5 documented ToolResultOrigin kinds", a
       installationId: "plugin-installation-1",
       upstreamToolName: "search",
     },
-    { kind: "device", deviceToolId: "device-tool-1", exposureStableKey: "e" },
+    { kind: "runtime", runtimeToolId: "device-tool-1", exposureStableKey: "e" },
     { kind: "provider_native", providerType: "openai", toolName: "web_search" },
     { kind: "model_response", providerType: "anthropic" },
   ]

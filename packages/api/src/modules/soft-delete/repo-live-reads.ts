@@ -25,6 +25,7 @@ export const liveConversations = (db: Executor) =>
 export const liveConversationParticipants = (db: Executor) =>
   db.selectFrom("conversationParticipantsLive")
 export const liveDevices = (db: Executor) => db.selectFrom("devicesLive")
+export const liveRuntimes = (db: Executor) => db.selectFrom("runtimesLive")
 export const livePluginInstallations = (db: Executor) =>
   db.selectFrom("pluginInstallationsLive")
 export const liveInstalledSkills = (db: Executor) =>
@@ -49,15 +50,15 @@ export const liveTransportAccounts = (db: Executor) =>
 export const liveWorkspaceMembers = (db: Executor) =>
   db.selectFrom("workspaceMembersLive")
 
-/** Device child live views (§8.6) — hide children of soft-closed devices. */
-export const liveDeviceServices = (db: Executor) =>
-  db.selectFrom("deviceServicesLive")
-export const liveDeviceExposures = (db: Executor) =>
-  db.selectFrom("deviceExposuresLive")
-export const liveDeviceCapabilities = (db: Executor) =>
-  db.selectFrom("deviceCapabilitiesLive")
-export const liveDeviceTools = (db: Executor) =>
-  db.selectFrom("deviceToolsLive")
+/** Runtime child live views (§8.6) — hide children of soft-closed runtimes. */
+export const liveRuntimeServices = (db: Executor) =>
+  db.selectFrom("runtimeServicesLive")
+export const liveRuntimeExposures = (db: Executor) =>
+  db.selectFrom("runtimeExposuresLive")
+export const liveRuntimeCapabilities = (db: Executor) =>
+  db.selectFrom("runtimeCapabilitiesLive")
+export const liveRuntimeTools = (db: Executor) =>
+  db.selectFrom("runtimeToolsLive")
 
 /**
  * SQL predicate fragment for "user is live" — for raw/compiled queries that

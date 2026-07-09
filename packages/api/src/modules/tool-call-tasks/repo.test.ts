@@ -22,7 +22,7 @@ function rawTaskRow(
     id: "00000000-0000-4000-8000-000000000101",
     workspaceId: "00000000-0000-4000-8000-000000000102",
     conversationId: "00000000-0000-4000-8000-000000000103",
-    executorKind: "device_tool",
+    executorKind: "runtime_tool",
     deliveryKind: "session_wakeup",
     humanSurface: "silent",
     principalSubjectId: "00000000-0000-4000-8000-000000000104",

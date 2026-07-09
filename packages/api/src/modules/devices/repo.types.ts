@@ -22,8 +22,6 @@ export interface DeviceSummaryRecord {
   id: string
   workspaceId: string
   title: string
-  hostKind: HostKind
-  hostProvider: string | null
   deviceType: DeviceType
   platform: string | null
   trustStatus: DeviceTrustStatus

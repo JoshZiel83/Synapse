@@ -66,10 +66,10 @@ export interface InMemoryMcpHostHandle extends McpHost {
     map: Record<
       string,
       {
-        device_exposure_id: string
+        runtime_exposure_id: string
         tools: Record<
           string,
-          { device_tool_id: string; device_tool_revision_id: string }
+          { runtime_tool_id: string; runtime_tool_revision_id: string }
         >
       }
     >
@@ -111,7 +111,7 @@ export function createInMemoryMcpHost(
   )
   // Server-assigned catalog target IDs, populated by setCatalogTargetIds()
   // after each device.catalog.sync ack. Keyed by the server-assigned
-  // device_tool_id (a globally unique UUID) so multiple exposures that
+  // runtime_tool_id (a globally unique UUID) so multiple exposures that
   // happen to ship same-named tools (search/read/bash) don't collide on
   // dispatch. The value carries the composite (exposure_stable_key,
   // tool_name) that maps back to the local provider's tool definition.
@@ -120,8 +120,8 @@ export function createInMemoryMcpHost(
     {
       exposureStableKey: string
       toolName: string
-      deviceExposureId: string
-      deviceToolRevisionId: string
+      runtimeExposureId: string
+      runtimeToolRevisionId: string
     }
   >()
   let server: Server | null = null
@@ -261,17 +261,17 @@ export function createInMemoryMcpHost(
           _meta: { synapse_error: synapseError },
         }
       }
-      // Route by envelope.device_tool_id — a globally unique server-issued
+      // Route by envelope.runtime_tool_id — a globally unique server-issued
       // UUID. Bare params.name routing collapses two providers that ship
       // same-named tools (search/read/bash) so we can't use it as the
       // primary key.
       const expectedTarget = toolTargetIndex.get(
-        verifiedEnvelope.device_tool_id
+        verifiedEnvelope.runtime_tool_id
       )
       if (!expectedTarget) {
         const synapseError: SynapseError = {
           code: "permission_denied",
-          message: `envelope device_tool_id ${verifiedEnvelope.device_tool_id} is not in this device's synced catalog`,
+          message: `envelope runtime_tool_id ${verifiedEnvelope.runtime_tool_id} is not in this device's synced catalog`,
         }
         return {
           content: [{ type: "text", text: synapseError.message }],
@@ -280,10 +280,10 @@ export function createInMemoryMcpHost(
         }
       }
       if (
-        verifiedEnvelope.device_exposure_id !==
-          expectedTarget.deviceExposureId ||
-        verifiedEnvelope.device_tool_revision_id !==
-          expectedTarget.deviceToolRevisionId
+        verifiedEnvelope.runtime_exposure_id !==
+          expectedTarget.runtimeExposureId ||
+        verifiedEnvelope.runtime_tool_revision_id !==
+          expectedTarget.runtimeToolRevisionId
       ) {
         const synapseError: SynapseError = {
           code: "permission_denied",
@@ -322,7 +322,7 @@ export function createInMemoryMcpHost(
     let entry: ToolEntry | undefined
     if (opts.envelopeVerifier && verifiedEnvelope) {
       const expectedTarget = toolTargetIndex.get(
-        verifiedEnvelope.device_tool_id
+        verifiedEnvelope.runtime_tool_id
       )!
       entry = index.get(
         compositeToolKey(
@@ -529,14 +529,14 @@ export function createInMemoryMcpHost(
       toolTargetIndex.clear()
       for (const [exposureStableKey, exposure] of Object.entries(map)) {
         for (const [toolName, ids] of Object.entries(exposure.tools)) {
-          // Keyed by device_tool_id (globally unique server UUID), not
+          // Keyed by runtime_tool_id (globally unique server UUID), not
           // toolName — two exposures with same-named tools must each
           // route correctly.
-          toolTargetIndex.set(ids.device_tool_id, {
+          toolTargetIndex.set(ids.runtime_tool_id, {
             exposureStableKey,
             toolName,
-            deviceExposureId: exposure.device_exposure_id,
-            deviceToolRevisionId: ids.device_tool_revision_id,
+            runtimeExposureId: exposure.runtime_exposure_id,
+            runtimeToolRevisionId: ids.runtime_tool_revision_id,
           })
         }
       }

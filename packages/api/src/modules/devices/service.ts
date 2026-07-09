@@ -131,7 +131,7 @@ export interface StartPairingInput {
   title?: string
   description?: string
   deviceType?: DeviceType
-  /** for service_join mode only */
+  /** Legacy field (was service_join mode only; that mode has been removed). */
   deviceId?: string
   /** mode-specific opaque context (cloud preset, service kind being joined, …) */
   context?: Record<string, unknown>
@@ -145,13 +145,6 @@ export async function startPairing(
       statusCode: 400,
       code: "invalid_pairing_mode",
       message: `unsupported pairing mode ${input.mode}`,
-    })
-  }
-  if (input.mode === "service_join" && !input.deviceId) {
-    throw new DeviceModuleError({
-      statusCode: 400,
-      code: "service_join_requires_device_id",
-      message: "service_join pairing requires deviceId",
     })
   }
   if (input.deviceType && !DEVICE_TYPES.includes(input.deviceType)) {
@@ -202,7 +195,7 @@ export async function startPairing(
     verificationUriComplete: null,
     status: "pending",
     // One-click bootstrap only applies to the local_qr code flow (pairingCode
-    // present). cloud_bootstrap / service_join don't use the device installer.
+    // present). cloud_bootstrap doesn't use the device installer.
     oneClickCommands:
       pairingCode !== null ? buildDeviceOneClick(pairingCode) : null,
   }
@@ -234,7 +227,7 @@ export interface ConsumePairingResult {
 /**
  * Local-pairing claim handler. The runtime exchanges its short pairing_code
  * for long-term credentials. The atomic consume (claim UPDATE + diagnostic
- * SELECT + devices/device_services/device_service_keys INSERTs + FK backfill)
+ * SELECT + devices/runtime_services/runtime_service_keys INSERTs + FK backfill)
  * is owned by repo.consumeLocalPairingTx as ONE transaction; this fn does the
  * pre-flight validation, fingerprint hashing, and maps the discriminated
  * failure outcomes to DeviceModuleError codes.
@@ -392,7 +385,7 @@ export async function detachDeviceService(
       message: `device_service ${serviceId} not found on device ${deviceId}`,
     })
   }
-  // device_services is a persistent child guarded by sd_reject_delete; the
+  // runtime_services is a persistent child guarded by sd_reject_delete; the
   // physical detach goes through the SECURITY DEFINER fn (design §7.5/§11).
   await detachDeviceServiceRpc(serviceId, deviceId)
 }

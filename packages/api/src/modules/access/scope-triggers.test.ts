@@ -9,8 +9,9 @@ import {
   isWorkspaceBoundSubjectKind,
   type SubjectRef,
 } from "@synapse/shared"
-import type { Kysely } from "kysely"
+import { sql, type Kysely } from "kysely"
 import { withTestDb } from "../../test/helpers/db.js"
+import { insertDeviceRuntime } from "../../test/helpers/runtime-fixtures.js"
 import { upsertAccessSubject } from "./subject-registry.js"
 
 /**
@@ -248,29 +249,26 @@ async function newDevice(
   db: Kysely<any>,
   workspaceId: string
 ): Promise<{ deviceId: string; capabilityId: string; exposureId: string }> {
-  const dev = await db
-    .insertInto("devices")
-    .values({
-      workspaceId: workspaceId,
-      title: `${NS} device`,
-      publicKey: `pk-${rid()}`,
-      publicKeyFingerprint: `fp-${rid()}-${rid()}`,
-      trustStatus: "trusted",
-    } as any)
-    .returning("id")
-    .executeTakeFirstOrThrow()
+  const dev = await insertDeviceRuntime(db, {
+    workspaceId: workspaceId,
+    title: `${NS} device`,
+    publicKey: `pk-${rid()}`,
+    publicKeyFingerprint: `fp-${rid()}-${rid()}`,
+    trustStatus: "trusted",
+  })
   const svc = await db
-    .insertInto("deviceServices")
+    .insertInto("runtimeServices")
     .values({
-      deviceId: dev.id as string,
+      runtimeId: dev.id as string,
       serviceKind: "device_runtime",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   const exp = await db
-    .insertInto("deviceExposures")
+    .insertInto("runtimeExposures")
     .values({
-      deviceId: dev.id as string,
+      runtimeId: dev.id as string,
+      workspaceId: workspaceId,
       serviceId: svc.id as string,
       stableKey: `exp-${rid()}`,
       displayName: `${NS} exposure`,
@@ -284,16 +282,17 @@ async function newDevice(
     .values({
       id: capabilityId,
       workspaceId: workspaceId,
-      kind: "device_capability",
+      kind: "runtime_capability",
       displayName: `${NS} capability`,
       status: "active",
       createdBySubjectId: await creatorSubjectIdFor(db, workspaceId),
     } as any)
     .execute()
   const cap = await db
-    .insertInto("deviceCapabilities")
+    .insertInto("runtimeCapabilities")
     .values({
       id: capabilityId,
+      workspaceId: workspaceId,
       exposureId: exp.id as string,
     } as any)
     .returning("id")
@@ -318,9 +317,9 @@ test(
           .insertInto("runtimeAuthorizationGrants")
           .values({
             workspaceId: wsId,
-            deviceId: deviceId,
-            deviceCapabilityId: capabilityId,
-            deviceExposureId: exposureId,
+            runtimeId: deviceId,
+            runtimeCapabilityId: capabilityId,
+            runtimeExposureId: exposureId,
             subjectId: null,
             retention: "consume_once",
           } as any)
@@ -353,9 +352,9 @@ test(
           .insertInto("runtimeAuthorizationGrants")
           .values({
             workspaceId: wsId,
-            deviceId: deviceId,
-            deviceCapabilityId: capabilityId,
-            deviceExposureId: exposureId,
+            runtimeId: deviceId,
+            runtimeCapabilityId: capabilityId,
+            runtimeExposureId: exposureId,
             subjectId: workspaceSubj,
             scopeSubjectId: actorSubj,
             retention: "consume_once",
@@ -381,22 +380,27 @@ test(
         workspaceId: wsA,
       })
 
-      // Try to mix wsA device with wsB capability — the helper device_capability_workspace_id
-      // also enforces capability.exposure_id = exposure_id, so this throws either at the
-      // membership check or the workspace alignment.
+      // Mix wsA device with wsB capability. Post-refactor the capability↔workspace
+      // pin is the DEFERRABLE composite root FK
+      // fk_runtime_authorization_grants_workspace_resource_root
+      // (runtime_capability_id, workspace_id) → workspace_resources(id, workspace_id),
+      // which normally fires at COMMIT. This test's transaction is rolled back, so
+      // force the deferred check to run at the statement with SET CONSTRAINTS ALL
+      // IMMEDIATE (runtime/exposure mismatches are caught by the IMMEDIATE fk_rag_*).
+      await sql`SET CONSTRAINTS ALL IMMEDIATE`.execute(db)
       await expectReject(
         db
           .insertInto("runtimeAuthorizationGrants")
           .values({
             workspaceId: wsA,
-            deviceId: a.deviceId,
-            deviceCapabilityId: b.capabilityId,
-            deviceExposureId: a.exposureId,
+            runtimeId: a.deviceId,
+            runtimeCapabilityId: b.capabilityId,
+            runtimeExposureId: a.exposureId,
             subjectId: wsASubj,
             retention: "until_revoked",
           } as any)
           .execute(),
-        /does not belong|workspace mismatch|does not match grant workspace/
+        /does not belong|workspace mismatch|does not match grant workspace|foreign key constraint "fk_runtime_authorization_grants_workspace_resource_root"/
       )
     })
   }
@@ -427,9 +431,9 @@ test(
           .insertInto("runtimeAuthorizationGrants")
           .values({
             workspaceId: wsId,
-            deviceId: deviceId,
-            deviceCapabilityId: capabilityId,
-            deviceExposureId: exposureId,
+            runtimeId: deviceId,
+            runtimeCapabilityId: capabilityId,
+            runtimeExposureId: exposureId,
             subjectId: userSubj,
             retention: "until_revoked",
           } as any)

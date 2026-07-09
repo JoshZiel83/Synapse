@@ -9,6 +9,7 @@ export type HostKind = (typeof HOST_KINDS)[number]
 export const DEVICE_SERVICE_KINDS = [
   "device_runtime",
   "remote_agent_daemon",
+  "bare_dataplane",
 ] as const
 export type DeviceServiceKind = (typeof DEVICE_SERVICE_KINDS)[number]
 
@@ -30,12 +31,11 @@ export const DEVICE_TYPES = [
   "tablet",
   "server",
   "virtual_machine",
-  "cloud_sandbox",
   "custom",
 ] as const
 export type DeviceType = (typeof DEVICE_TYPES)[number]
 
-// device_exposures.transport — same as relay_exposures.transport plus stays
+// runtime_exposures.transport — same as relay_exposures.transport plus stays
 // stable across the rename.
 export const DEVICE_EXPOSURE_TRANSPORTS = [
   "builtin",
@@ -55,6 +55,7 @@ export const DEVICE_BUILTIN_KINDS = [
   "commandline",
   "browser",
   "cua",
+  "pty",
 ] as const
 export type DeviceBuiltinKind = (typeof DEVICE_BUILTIN_KINDS)[number]
 
@@ -134,11 +135,7 @@ export type DeviceControlPlaneTransport =
   (typeof DEVICE_CONTROL_PLANE_TRANSPORTS)[number]
 
 // Pairing modes — see §8 of the spec.
-export const DEVICE_PAIRING_MODES = [
-  "local_qr",
-  "cloud_bootstrap",
-  "service_join",
-] as const
+export const DEVICE_PAIRING_MODES = ["local_qr", "cloud_bootstrap"] as const
 export type DevicePairingMode = (typeof DEVICE_PAIRING_MODES)[number]
 
 export const DEVICE_PAIRING_STATUSES = [
@@ -275,6 +272,7 @@ export type DeviceOperationTaskMode =
 export const DEVICE_OPERATION_ATTEMPT_TRANSPORTS = [
   "mcp_http",
   "control_plane_task",
+  "data_plane",
 ] as const
 export type DeviceOperationAttemptTransport =
   (typeof DEVICE_OPERATION_ATTEMPT_TRANSPORTS)[number]

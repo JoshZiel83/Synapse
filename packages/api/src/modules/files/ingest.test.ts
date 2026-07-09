@@ -292,8 +292,8 @@ test("storage receives our ToolResultOrigin via origin.details.originKind", asyn
     {
       workspaceId: "ws",
       origin: {
-        kind: "device",
-        deviceToolId: "device-tool-1",
+        kind: "runtime",
+        runtimeToolId: "device-tool-1",
         exposureStableKey: "synapse.builtin.filesystem.v1",
       },
       storage,
@@ -301,8 +301,8 @@ test("storage receives our ToolResultOrigin via origin.details.originKind", asyn
   )
   assert.equal(saveBase64Calls.length, 1)
   assert.equal(saveBase64Calls[0].origin.family, "tool_output")
-  assert.equal(saveBase64Calls[0].origin.details.originKind, "device")
-  assert.equal(saveBase64Calls[0].origin.details.deviceToolId, "device-tool-1")
+  assert.equal(saveBase64Calls[0].origin.details.originKind, "runtime")
+  assert.equal(saveBase64Calls[0].origin.details.runtimeToolId, "device-tool-1")
 })
 
 test("model_response origin routes to model_output family", async () => {

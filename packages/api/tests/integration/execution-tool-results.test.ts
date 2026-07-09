@@ -76,10 +76,10 @@ async function buildFixture(opts: {
   const sourceKind = opts.sourceKind || "plugin"
   const sourceSnapshot = (() => {
     switch (sourceKind) {
-      case "device":
+      case "runtime":
         return {
-          kind: "device",
-          deviceToolId: "dev-abc",
+          kind: "runtime",
+          runtimeToolId: "dev-abc",
           exposureStableKey: "synapse.builtin.filesystem.v1",
         }
       case "system":
@@ -152,7 +152,7 @@ async function buildFixture(opts: {
 test("loadExecutionToolResultsForSession returns rehydrated CanonicalToolResult keyed by provider_call_id", async () => {
   const { sessionId, toolCallId, providerCallId } = await buildFixture({
     toolName: "filesystem__View",
-    sourceKind: "device",
+    sourceKind: "runtime",
   })
 
   // Write a tool_results row with origin / structuredContent / inner metadata
@@ -165,8 +165,8 @@ test("loadExecutionToolResultsForSession returns rehydrated CanonicalToolResult 
       toolName: "filesystem__View",
       providerCallId,
       origin: {
-        kind: "device",
-        deviceToolId: "dev-abc",
+        kind: "runtime",
+        runtimeToolId: "dev-abc",
         exposureStableKey: "synapse.builtin.filesystem.v1",
       },
       structuredContent: { lines: 1, path: "/tmp/x" },
@@ -191,7 +191,7 @@ test("loadExecutionToolResultsForSession returns rehydrated CanonicalToolResult 
   assert.equal(byProviderId!.toolCallId, toolCallId)
   assert.equal(byProviderId!.providerCallId, providerCallId)
   assert.equal(byProviderId!.isError, false)
-  assert.equal(byProviderId!.origin.kind, "device")
+  assert.equal(byProviderId!.origin.kind, "runtime")
   assert.deepEqual(byProviderId!.structuredContent, {
     lines: 1,
     path: "/tmp/x",

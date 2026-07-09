@@ -59,7 +59,7 @@ export interface FrpTunnelAdapterOptions {
    * notification (test-only).
    */
   onUnexpectedExit?: (info: {
-    deviceServiceId: string
+    runtimeServiceId: string
     code: number | null
     signal: NodeJS.Signals | null
   }) => void
@@ -141,7 +141,7 @@ export function createFrpTunnelAdapter(
         opts.internalBaseUrl ?? "http://tunnel-edge:8080"
       ).replace(/\/+$/, "")
       const handle: TunnelHandle = {
-        deviceServiceId: startOpts.deviceServiceId,
+        runtimeServiceId: startOpts.runtimeServiceId,
         internalUrl: `${internalBase}/d/${startOpts.registrationToken}`,
       }
       const frpcPath = opts.frpcPath ?? "frpc"
@@ -234,18 +234,18 @@ export function createFrpTunnelAdapter(
       // accepting dispatches against this handle.
       child.on("error", (err) => {
         opts.logger?.error("frpc post-spawn error", {
-          deviceServiceId: startOpts.deviceServiceId,
+          runtimeServiceId: startOpts.runtimeServiceId,
           error: err.message,
         })
       })
       child.stdout?.on("data", (b) =>
-        opts.logger?.info(`frpc[${startOpts.deviceServiceId}] ${b}`)
+        opts.logger?.info(`frpc[${startOpts.runtimeServiceId}] ${b}`)
       )
       child.stderr?.on("data", (b) =>
-        opts.logger?.info(`frpc[${startOpts.deviceServiceId}] ${b}`)
+        opts.logger?.info(`frpc[${startOpts.runtimeServiceId}] ${b}`)
       )
       // Build the managed record FIRST so we can close over its identity
-      // in the exit handler. Without this, if the same deviceServiceId
+      // in the exit handler. Without this, if the same runtimeServiceId
       // starts a new frpc before the old child's exit event fires, the
       // stale exit handler would `managed.delete(id)` AND fire
       // onUnexpectedExit against the FRESH tunnel — silently tearing
@@ -261,11 +261,11 @@ export function createFrpTunnelAdapter(
       }
       child.on("exit", (code, signal) => {
         opts.logger?.info("frpc exited", {
-          deviceServiceId: startOpts.deviceServiceId,
+          runtimeServiceId: startOpts.runtimeServiceId,
           code,
           signal,
         })
-        const current = managed.get(startOpts.deviceServiceId)
+        const current = managed.get(startOpts.runtimeServiceId)
         // Stale exit (a fresh start() already replaced us in the map):
         // best-effort tmpdir cleanup and bail out. Don't touch the
         // current managed entry — that's the new tunnel, still alive.
@@ -281,7 +281,7 @@ export function createFrpTunnelAdapter(
         // stop() sets it but does NOT delete (so the exit handler is the
         // single point that cleans up + decides whether to notify).
         const intentional = record.intentionallyStopped
-        managed.delete(startOpts.deviceServiceId)
+        managed.delete(startOpts.runtimeServiceId)
         try {
           rmSync(tmpDir, { recursive: true, force: true })
         } catch {
@@ -295,20 +295,20 @@ export function createFrpTunnelAdapter(
         // for no reason).
         if (intentional) return
         opts.onUnexpectedExit?.({
-          deviceServiceId: startOpts.deviceServiceId,
+          runtimeServiceId: startOpts.runtimeServiceId,
           code,
           signal,
         })
       })
 
-      managed.set(startOpts.deviceServiceId, record)
+      managed.set(startOpts.runtimeServiceId, record)
       return handle
     },
     async rotateToken(
       handle: TunnelHandle,
       registrationToken: string
     ): Promise<void> {
-      const existing = managed.get(handle.deviceServiceId)
+      const existing = managed.get(handle.runtimeServiceId)
       if (!existing) return
       // Identity check: ignore stale handles. A caller that retained an
       // old TunnelHandle after a restart would otherwise rewrite the
@@ -342,7 +342,7 @@ export function createFrpTunnelAdapter(
       }
     },
     async stop(handle: TunnelHandle): Promise<void> {
-      const existing = managed.get(handle.deviceServiceId)
+      const existing = managed.get(handle.runtimeServiceId)
       if (!existing) return
       // Same identity guard as rotateToken — calling stop(oldHandle)
       // after a fresh start() replaced the entry would otherwise SIGTERM

@@ -42,7 +42,7 @@ const deviceId = "00000000-0000-4000-8000-000000000006"
 test("start pairing body schema uses shared app fields with workspaceId in path", () => {
   const sharedInput = {
     workspaceId: wsId,
-    mode: "service_join" as const,
+    mode: "cloud_bootstrap" as const,
     title: "Remote daemon",
     description: "Join remote agent daemon",
     deviceType: "desktop_computer" as const,

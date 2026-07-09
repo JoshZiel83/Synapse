@@ -112,7 +112,7 @@ test("fastPathEndpointReady (real registry + waiter): empty → false; populated
     assert.equal(timedOut, false, "empty registry → timeout → not reusable")
 
     registry.register({
-      deviceServiceId: "svc-real",
+      runtimeServiceId: "svc-real",
       internalUrl: "http://127.0.0.1:9/d/x",
     })
     const nowOk = await fastPathEndpointReady(

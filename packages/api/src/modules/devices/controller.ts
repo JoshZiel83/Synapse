@@ -400,7 +400,6 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
           workspaceId,
           title: parsedBody.data.title ?? "Cloud Device",
           preset: parsedBody.data.preset,
-          hostProvider: parsedBody.data.hostProvider,
           requestedByWorkspaceMemberId: session?.workspaceMemberId ?? null,
         })
         return result
@@ -413,7 +412,7 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
 
   // Sandbox boot handler — runs INSIDE the sandbox. Unauthenticated;
   // bootstrap_token (sha256-hashed and matched against
-  // device_pairing_sessions.bootstrap_token_hash) is the credential.
+  // runtime_pairing_sessions.bootstrap_token_hash) is the credential.
   // WIRE — machine bootstrap handshake; bare payload.
   wireRoute(
     app,
@@ -438,7 +437,6 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
             devicePubkey: body.device_pubkey,
             servicePubkey: body.service_pubkey,
             clientVersion: body.client_version,
-            hostProvider: body.host_provider,
             platform: body.platform,
             arch: body.arch,
           },

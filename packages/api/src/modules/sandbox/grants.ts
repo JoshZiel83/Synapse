@@ -40,13 +40,13 @@ export class SandboxGrantsError extends Error {
 }
 
 export interface DeviceBuiltinIds {
-  /** device_exposures.id for builtin_kind='filesystem'. */
+  /** runtime_exposures.id for builtin_kind='filesystem'. */
   filesystemExposureId: string
-  /** device_capabilities.id for the filesystem exposure. */
+  /** runtime_capabilities.id for the filesystem exposure. */
   filesystemCapabilityId: string
-  /** device_exposures.id for builtin_kind='commandline' (null if absent). */
+  /** runtime_exposures.id for builtin_kind='commandline' (null if absent). */
   commandlineExposureId: string | null
-  /** device_capabilities.id for the commandline exposure (null if absent). */
+  /** runtime_capabilities.id for the commandline exposure (null if absent). */
   commandlineCapabilityId: string | null
 }
 
@@ -147,9 +147,9 @@ export async function createSandboxGrants(
   }
   await createRuntimeAuthorizationGrant({
     workspaceId,
-    deviceId,
-    deviceCapabilityId: builtins.filesystemCapabilityId,
-    deviceExposureId: builtins.filesystemExposureId,
+    runtimeId: deviceId,
+    runtimeCapabilityId: builtins.filesystemCapabilityId,
+    runtimeExposureId: builtins.filesystemExposureId,
     subject,
     scope,
     retention: "until_revoked",
@@ -172,9 +172,9 @@ export async function createSandboxGrants(
     }
     await createRuntimeAuthorizationGrant({
       workspaceId,
-      deviceId,
-      deviceCapabilityId: builtins.commandlineCapabilityId,
-      deviceExposureId: builtins.commandlineExposureId,
+      runtimeId: deviceId,
+      runtimeCapabilityId: builtins.commandlineCapabilityId,
+      runtimeExposureId: builtins.commandlineExposureId,
       subject,
       scope,
       retention: "until_revoked",
