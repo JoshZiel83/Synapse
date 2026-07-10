@@ -5,7 +5,7 @@
 // to mcp-plugins/tool-resolver.ts for plugin projections, then unions
 // device_capability tools alongside so the planner sees device-side bash /
 // list_dir / etc. alongside MCP plugins. Device dispatch goes through
-// DeviceTunnelRegistry + the synchronous tools/call client in
+// RuntimeEndpointRegistry + the synchronous tools/call client in
 // devices/dispatch.ts; every dispatch opens a runtime_operations + first
 // runtime_operation_attempts row pair (see devices/operations.ts).
 
@@ -70,7 +70,7 @@ import {
   RevisionDriftError,
   type OperationPrincipalKind,
 } from "../devices/operations.js"
-import { getDeviceTunnelRegistry } from "../devices/tunnel-registry.js"
+import { getRuntimeEndpointRegistry } from "../devices/tunnel-registry.js"
 import { deriveCuaFocusScopeId, type PrincipalForScope } from "./cua-scope.js"
 import {
   loadDeviceCapabilityToolsForSubjects,
@@ -722,8 +722,9 @@ function unionWithDevice(
                   tunnelInternalUrl:
                     row.serviceKind === "bare_dataplane"
                       ? null
-                      : (getDeviceTunnelRegistry().resolve(row.runtimeServiceId)
-                          ?.internalUrl ?? null),
+                      : (getRuntimeEndpointRegistry().resolve(
+                          row.runtimeServiceId
+                        )?.internalUrl ?? null),
                   principalKind: principalKindFor(projectInput.principal),
                   principalSubjectId: device.subjects.principalSubjectId ?? "",
                   initiatedByWorkspaceMemberId:

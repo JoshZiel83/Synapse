@@ -1,17 +1,17 @@
-// Unit test for the in-memory DeviceTunnelRegistry. The frp-backed
+// Unit test for the in-memory RuntimeEndpointRegistry. The frp-backed
 // implementation in PR #6 will replace the singleton via
-// setDeviceTunnelRegistry; this contract test pins the interface.
+// setRuntimeEndpointRegistry; this contract test pins the interface.
 
 import test from "node:test"
 import assert from "node:assert/strict"
 import {
-  createInMemoryDeviceTunnelRegistry,
-  getDeviceTunnelRegistry,
-  setDeviceTunnelRegistry,
+  createInMemoryRuntimeEndpointRegistry,
+  getRuntimeEndpointRegistry,
+  setRuntimeEndpointRegistry,
 } from "./tunnel-registry.js"
 
 test("registry register / resolve / unregister round-trip", () => {
-  const registry = createInMemoryDeviceTunnelRegistry()
+  const registry = createInMemoryRuntimeEndpointRegistry()
   assert.equal(registry.resolve("svc-1"), undefined)
   registry.register({
     runtimeServiceId: "svc-1",
@@ -30,7 +30,7 @@ test("registry register / resolve / unregister round-trip", () => {
 })
 
 test("registry re-register overwrites the prior endpoint", () => {
-  const registry = createInMemoryDeviceTunnelRegistry()
+  const registry = createInMemoryRuntimeEndpointRegistry()
   registry.register({
     runtimeServiceId: "svc-1",
     internalUrl: "http://tunnel-edge:7000/d/old",
@@ -46,7 +46,7 @@ test("registry re-register overwrites the prior endpoint", () => {
 })
 
 test("compare-and-delete: a stale session's unregister cannot evict a live re-registered entry", () => {
-  const registry = createInMemoryDeviceTunnelRegistry()
+  const registry = createInMemoryRuntimeEndpointRegistry()
   // Old socket (session A) registers, then a NEW socket (session B) reconnects and
   // re-registers the SAME service — overwriting the entry with B's sessionId.
   registry.register({
@@ -75,7 +75,7 @@ test("compare-and-delete: a stale session's unregister cannot evict a live re-re
 })
 
 test("forced unregister (no expected session) removes unconditionally", () => {
-  const registry = createInMemoryDeviceTunnelRegistry()
+  const registry = createInMemoryRuntimeEndpointRegistry()
   registry.register({
     runtimeServiceId: "svc-1",
     internalUrl: "http://127.0.0.1:9000",
@@ -87,13 +87,13 @@ test("forced unregister (no expected session) removes unconditionally", () => {
 })
 
 test("singleton getter is stable and replaceable via setter", () => {
-  const r1 = getDeviceTunnelRegistry()
-  const r2 = getDeviceTunnelRegistry()
+  const r1 = getRuntimeEndpointRegistry()
+  const r2 = getRuntimeEndpointRegistry()
   assert.strictEqual(r1, r2)
-  const fresh = createInMemoryDeviceTunnelRegistry()
-  setDeviceTunnelRegistry(fresh)
-  assert.strictEqual(getDeviceTunnelRegistry(), fresh)
-  setDeviceTunnelRegistry(null)
-  const r3 = getDeviceTunnelRegistry()
+  const fresh = createInMemoryRuntimeEndpointRegistry()
+  setRuntimeEndpointRegistry(fresh)
+  assert.strictEqual(getRuntimeEndpointRegistry(), fresh)
+  setRuntimeEndpointRegistry(null)
+  const r3 = getRuntimeEndpointRegistry()
   assert.notStrictEqual(r3, fresh)
 })

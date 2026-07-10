@@ -1,6 +1,6 @@
 // Device dispatcher — server side. Given a (runtime_service_id,
 // operation envelope, args), resolves the device's MCP HTTP endpoint via
-// DeviceTunnelRegistry and issues a `tools/call` to it.
+// RuntimeEndpointRegistry and issues a `tools/call` to it.
 //
 // **INTERIM IMPLEMENTATION — not the v3 data-plane terminus.** This is a
 // hand-rolled JSON-RPC HTTP client, paired with the equally hand-rolled
@@ -19,7 +19,7 @@ import {
   type OperationEnvelope,
   type SynapseError,
 } from "@synapse/device-protocol"
-import { getDeviceTunnelRegistry } from "./tunnel-registry.js"
+import { getRuntimeEndpointRegistry } from "./tunnel-registry.js"
 import { SpanKind, SpanStatusCode, trace } from "@opentelemetry/api"
 import { activeTraceparent } from "../../infrastructure/observability/traceparent.js"
 
@@ -143,7 +143,7 @@ function malformedDispatchResponse(message: string): McpDispatchResult {
 export async function dispatchSyncTool(
   opts: DispatchOptions
 ): Promise<McpDispatchResult> {
-  const registry = getDeviceTunnelRegistry()
+  const registry = getRuntimeEndpointRegistry()
   const endpoint = registry.resolve(opts.runtimeServiceId)
   if (!endpoint) {
     return {

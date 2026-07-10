@@ -7,9 +7,9 @@ import {
 } from "@synapse/device-protocol"
 import { dispatchSyncTool } from "./dispatch.js"
 import {
-  createInMemoryDeviceTunnelRegistry,
-  getDeviceTunnelRegistry,
-  setDeviceTunnelRegistry,
+  createInMemoryRuntimeEndpointRegistry,
+  getRuntimeEndpointRegistry,
+  setRuntimeEndpointRegistry,
 } from "./tunnel-registry.js"
 
 const ENVELOPE: OperationEnvelope = OperationEnvelopeSchema.parse({
@@ -60,18 +60,18 @@ async function withRegisteredTunnel<T>(
   run: (fetchImpl: typeof fetch, calls: FetchCall[]) => Promise<T>,
   responseText: string
 ): Promise<T> {
-  const previousRegistry = getDeviceTunnelRegistry()
-  const registry = createInMemoryDeviceTunnelRegistry()
+  const previousRegistry = getRuntimeEndpointRegistry()
+  const registry = createInMemoryRuntimeEndpointRegistry()
   registry.register({
     runtimeServiceId: "svc-1",
     internalUrl: "http://device-runtime.local/session/",
   })
-  setDeviceTunnelRegistry(registry)
+  setRuntimeEndpointRegistry(registry)
   const { fetchImpl, calls } = makeFetchResponse(responseText)
   try {
     return await run(fetchImpl, calls)
   } finally {
-    setDeviceTunnelRegistry(previousRegistry)
+    setRuntimeEndpointRegistry(previousRegistry)
   }
 }
 

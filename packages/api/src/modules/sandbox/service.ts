@@ -19,7 +19,7 @@ import * as repo from "./repo.js"
 import { STORAGE_DIR } from "../../infrastructure/storage/index.js"
 import { config } from "../../config/index.js"
 import { deleteDevice } from "../devices/service.js"
-import { getDeviceTunnelRegistry } from "../devices/tunnel-registry.js"
+import { getRuntimeEndpointRegistry } from "../devices/tunnel-registry.js"
 import {
   ensureFileSpace,
   insertFileMount,
@@ -531,7 +531,7 @@ export interface ProvisionSandboxOptions {
   catalogTimeoutMs?: number
   /**
    * Max ms to wait for the device's tunnel endpoint to register in the
-   * DeviceTunnelRegistry (after catalog). A sandbox whose endpoint never
+   * RuntimeEndpointRegistry (after catalog). A sandbox whose endpoint never
    * registers can't dispatch ANY tool, so provision fails+cleans rather than
    * marking such mounts active. Default 30s; set 0 to skip the wait (only for
    * tests that don't dispatch).
@@ -561,7 +561,7 @@ export async function provisionSandbox(
   const allActive =
     existing.length > 0 && existing.every((m) => m.status === "active")
   // Fast path also requires a DISPATCHABLE tunnel endpoint, not just a live
-  // runtime. After an API restart the in-memory DeviceTunnelRegistry is empty
+  // runtime. After an API restart the in-memory RuntimeEndpointRegistry is empty
   // even though the runtime/container is still alive and reconnecting over the
   // control-plane; returning here would hand back a sandbox whose every
   // dispatchSyncTool call fails with no_tunnel_endpoint. So when the runtime is
@@ -925,7 +925,7 @@ async function waitForCatalog(
 }
 
 /**
- * Poll the in-process DeviceTunnelRegistry until this service's tunnel endpoint
+ * Poll the in-process RuntimeEndpointRegistry until this service's tunnel endpoint
  * is registered (the device-runtime sent device.tunnel.up and it passed the
  * SSRF/token gate), or time out. A sandbox whose endpoint never appears can't
  * dispatch any tool, so a timeout aborts provision (the caller's catch tears
@@ -939,7 +939,7 @@ export async function waitForTunnelEndpoint(
 ): Promise<void> {
   const pollMs = opts.pollMs ?? 250
   const deadline = Date.now() + opts.timeoutMs
-  const registry = getDeviceTunnelRegistry()
+  const registry = getRuntimeEndpointRegistry()
 
   while (true) {
     if (runtimeServiceId && registry.resolve(runtimeServiceId)) return
@@ -984,7 +984,7 @@ function defaultFastPathEndpointDeps(): FastPathEndpointDeps {
 /**
  * Decide whether the fast path may reuse an existing live sandbox: it can ONLY
  * when the device's runtime service has a dispatchable tunnel endpoint. After an
- * API restart the in-memory DeviceTunnelRegistry is empty even though the
+ * API restart the in-memory RuntimeEndpointRegistry is empty even though the
  * runtime/container is still alive, so we wait (briefly) for re-registration.
  * Returns false (→ caller tears down + re-provisions) when there is no
  * device_runtime service or the endpoint never (re)registers within the timeout.

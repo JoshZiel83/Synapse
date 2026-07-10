@@ -23,7 +23,7 @@ import { serializeCommandlinePolicyToWire } from "@synapse/shared/access/policie
 import { dispatchSyncTool } from "../devices/dispatch.js"
 import { dispatchBareRuntimeTool } from "../sandbox/bare-dispatch.js"
 import { signEnvelopeForDispatch } from "../devices/envelope-signer.js"
-import { getDeviceTunnelRegistry } from "../devices/tunnel-registry.js"
+import { getRuntimeEndpointRegistry } from "../devices/tunnel-registry.js"
 import {
   completeDeviceOperation,
   type OperationPrincipalKind,
@@ -240,8 +240,9 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
               tunnelInternalUrl:
                 target.serviceKind === "bare_dataplane"
                   ? null
-                  : (getDeviceTunnelRegistry().resolve(target.runtimeServiceId)
-                      ?.internalUrl ?? null),
+                  : (getRuntimeEndpointRegistry().resolve(
+                      target.runtimeServiceId
+                    )?.internalUrl ?? null),
               principalKind: args.audit.principalKind,
               principalSubjectId: args.audit.principalSubjectId,
               initiatedByWorkspaceMemberId:

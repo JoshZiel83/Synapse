@@ -17,7 +17,7 @@ import { nowIsoInstant } from "@synapse/shared/datetime"
 //   5. Catalog sync + runtime sessions + tunnel registration are gated behind
 //      requireAuthenticated.
 //   6. On `device.tunnel.up`, the server registers the device's internalUrl
-//      with DeviceTunnelRegistry so dispatchSyncTool can route to it. On
+//      with RuntimeEndpointRegistry so dispatchSyncTool can route to it. On
 //      `device.tunnel.down` (or socket close), the registry entry is removed.
 
 import { randomBytes, randomUUID } from "node:crypto"
@@ -38,7 +38,7 @@ import { persistCatalogSync } from "./catalog-sync.js"
 import { authenticateDeviceHello } from "./control-plane-auth.js"
 import { mintDeviceLogToken } from "../logs/device-token.js"
 import { getEnvelopeServerPublicKey } from "./envelope-signer.js"
-import { getDeviceTunnelRegistry } from "./tunnel-registry.js"
+import { getRuntimeEndpointRegistry } from "./tunnel-registry.js"
 import {
   insertControlPlaneSession as insertControlPlaneSessionRow,
   issueTunnelPathToken,
@@ -123,7 +123,7 @@ function writePersistResult(
  */
 /**
  * Validate a device-supplied tunnel internal_url before registering it in the
- * DeviceTunnelRegistry. Exported for unit tests; the control-plane handler is
+ * RuntimeEndpointRegistry. Exported for unit tests; the control-plane handler is
  * the only production caller. Two accept paths:
  *  - frp edge: origin matches SYNAPSE_DEVICE_TUNNEL_EDGE_URL + /d/<token> bound
  *    to this service (production cloud/docker).
@@ -641,7 +641,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
                 if (!state.sessionId) return
                 // Stamp the registering CP session so a stale socket's later close
                 // cannot evict this entry (compare-and-delete, §3.3).
-                getDeviceTunnelRegistry().register({
+                getRuntimeEndpointRegistry().register({
                   runtimeServiceId: state.authenticatedServiceId!,
                   internalUrl: parsedTunnel.data.internal_url,
                   sessionId: state.sessionId ?? undefined,
@@ -682,7 +682,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
             }
             if (state.registeredTunnelServiceId) {
               // compare-and-delete: only THIS session may retire its own entry.
-              getDeviceTunnelRegistry().unregister(
+              getRuntimeEndpointRegistry().unregister(
                 state.registeredTunnelServiceId,
                 state.sessionId ?? undefined
               )
@@ -885,7 +885,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           // deferred close must not evict a live entry a newer socket re-registered
           // for the same service (the stale-close race, §3.3). state.sessionId is
           // still set here — the session close below nulls it afterwards.
-          getDeviceTunnelRegistry().unregister(
+          getRuntimeEndpointRegistry().unregister(
             state.registeredTunnelServiceId,
             state.sessionId ?? undefined
           )

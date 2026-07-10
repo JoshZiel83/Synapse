@@ -12,7 +12,7 @@ import type { Kysely } from "kysely"
 import type { OperationEnvelope } from "@synapse/device-protocol"
 import { withTestDb } from "../../test/helpers/db.js"
 import { mintBareSandboxRuntimeTx } from "../devices/repo.js"
-import { getDeviceTunnelRegistry } from "../devices/tunnel-registry.js"
+import { getRuntimeEndpointRegistry } from "../devices/tunnel-registry.js"
 import { buildLocalBareDescriptor } from "./adapter-registry.js"
 import { buildBareCoreCatalog } from "./core-catalog.js"
 import {
@@ -263,7 +263,7 @@ test("B3/B11: dispatchBareRuntimeTool routes to the plane, checks envelope expir
 
     // B3: no tunnel endpoint is EVER registered for a bare runtime.
     assert.equal(
-      getDeviceTunnelRegistry().resolve(serviceId),
+      getRuntimeEndpointRegistry().resolve(serviceId),
       undefined,
       "bare fork registers no tunnel endpoint"
     )

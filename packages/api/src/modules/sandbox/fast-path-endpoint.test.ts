@@ -1,6 +1,6 @@
 // Service-level coverage for the fast-path tunnel-endpoint gate (R4 #1 / R5
 // residual #1): when an existing sandbox is reused but the in-memory
-// DeviceTunnelRegistry has no endpoint for it (e.g. after an API restart), the
+// RuntimeEndpointRegistry has no endpoint for it (e.g. after an API restart), the
 // fast path must NOT reuse it — it waits, and on timeout returns false so the
 // caller tears down + re-provisions. Driven through fastPathEndpointReady with a
 // mix of the REAL registry/waiter and injected stubs.
@@ -8,9 +8,9 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import {
-  getDeviceTunnelRegistry,
-  setDeviceTunnelRegistry,
-  createInMemoryDeviceTunnelRegistry,
+  getRuntimeEndpointRegistry,
+  setRuntimeEndpointRegistry,
+  createInMemoryRuntimeEndpointRegistry,
 } from "../devices/tunnel-registry.js"
 import { fastPathEndpointReady, waitForTunnelEndpoint } from "./service.js"
 
@@ -93,12 +93,12 @@ test("fastPathEndpointReady: endpoint never registers (timeout) → NOT reusable
 // Integration with the REAL registry + REAL waiter (only the DB-backed
 // service-id resolver is stubbed): an empty registry makes fastPathEndpointReady
 // time out → false; registering the endpoint flips a later call to true. This
-// proves the production wiring (waitForTunnelEndpoint ↔ DeviceTunnelRegistry),
+// proves the production wiring (waitForTunnelEndpoint ↔ RuntimeEndpointRegistry),
 // not just the injected-stub branches above.
 test("fastPathEndpointReady (real registry + waiter): empty → false; populated → true", async () => {
-  const prev = getDeviceTunnelRegistry()
-  const registry = createInMemoryDeviceTunnelRegistry()
-  setDeviceTunnelRegistry(registry)
+  const prev = getRuntimeEndpointRegistry()
+  const registry = createInMemoryRuntimeEndpointRegistry()
+  setRuntimeEndpointRegistry(registry)
   try {
     const realDeps = {
       resolveServiceId: async () => "svc-real",
@@ -121,6 +121,6 @@ test("fastPathEndpointReady (real registry + waiter): empty → false; populated
     )
     assert.equal(nowOk, true, "endpoint registered → reusable")
   } finally {
-    setDeviceTunnelRegistry(prev)
+    setRuntimeEndpointRegistry(prev)
   }
 })
