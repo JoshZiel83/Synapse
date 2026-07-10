@@ -43,7 +43,8 @@ export interface DockerSandboxBackendOptions {
   storageVolume: string
   /** Internal API origin the container dials back to (SANDBOX_SERVER_ORIGIN, e.g. http://api:3001). */
   serverOrigin: string
-  /** Whether to wire the frp tunnel (SYNAPSE_SANDBOX_TUNNEL=frp|none). */
+  /** Whether to wire the frp tunnel. Docker resident forces 'frp' (the adapter's
+   *  transportDefault='indirect'); derived from the resolved transport, not a raw env. */
   tunnel: "frp" | "none"
   /** frp facts (only used when tunnel==="frp"). */
   tunnelServerAddr?: string

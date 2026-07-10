@@ -169,7 +169,7 @@ type SessionContext = repo.SessionContext
 
 /**
  * Origin the LOCAL sandbox device-runtime dials back to (passed as `--server=`
- * and to startPairing). Honors SYNAPSE_SANDBOX_SERVER_ORIGIN — a containerized
+ * and to startPairing). Honors SANDBOX_SERVER_ORIGIN — a containerized
  * local deploy sets it to http://127.0.0.1:3001 (loopback) so the same-host
  * child doesn't have to round-trip the public domain (DNS/hairpin-NAT). Falls
  * back to config.app.baseUrl (the prior unconditional value) when unset.
@@ -446,7 +446,7 @@ export function toSandboxVolumeSubpath(input: {
     throw new SandboxServiceError(
       `STORAGE_DIR (${input.storageDir}) is not under the sandbox storage ` +
         `volume mount point (${input.mountPoint}); set ` +
-        `SYNAPSE_SANDBOX_STORAGE_VOLUME_MOUNT so volume-subpath can be derived. ` +
+        `SANDBOX_DOCKER_STORAGE_VOLUME_MOUNT so volume-subpath can be derived. ` +
         `Computed relative path: '${rel}'`,
       500
     )
@@ -766,7 +766,7 @@ export async function provisionSandbox(
         sessionId,
       }),
       fsHelperPath,
-      // The device dials back to the API. LOCAL backend: SYNAPSE_SANDBOX_SERVER_ORIGIN
+      // The device dials back to the API. LOCAL backend: SANDBOX_SERVER_ORIGIN
       // (loopback for a containerized local deploy) or config.app.baseUrl. The
       // docker backend ignores this and builds its own origin from env.
       serverOrigin: sandboxLocalServerOrigin(),

@@ -671,7 +671,7 @@ export function startSessionThinkingWorker() {
         })
         const primaryModel = resolvedModelPlan?.candidates[0] || null
 
-        // File sandbox lifecycle (opt-in via SYNAPSE_SANDBOX_ENABLED). Runs
+        // File sandbox lifecycle (opt-in via SANDBOX_PROVIDER!=none). Runs
         // BEFORE the context window is built so (a) the agent's file view
         // reflects other writers' new commits this turn, and (b) any merge
         // conflict is injected as a system notice the agent actually sees.
