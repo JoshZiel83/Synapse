@@ -122,3 +122,84 @@ test("mcp host returns structured error for unknown tool", async () => {
     await host.stop()
   }
 })
+
+// ─────────────────── §3.4 inbound-bearer gate (direct data plane) ───────────────
+
+async function rpcAuth(
+  base: string,
+  authorization: string | undefined,
+  body: { id: string; method: string; params?: unknown }
+): Promise<{ status: number; payload: JsonRpcResponse }> {
+  const headers: Record<string, string> = { "content-type": "application/json" }
+  if (authorization !== undefined) headers.authorization = authorization
+  const res = await fetch(`${base}/mcp`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ jsonrpc: "2.0", ...body }),
+  })
+  return { status: res.status, payload: (await res.json()) as JsonRpcResponse }
+}
+
+test("requiredInboundAuth gates initialize + tools/list + tools/call alike", async () => {
+  const BEARER = "deadbeef".repeat(8)
+  const host = createInMemoryMcpHost({ requiredInboundAuth: BEARER })
+  await host.start()
+  try {
+    await host.registerCatalog(createCommandlineBuiltin())
+    const base = `http://127.0.0.1:${host.localPort}`
+    for (const method of ["initialize", "tools/list", "tools/call"]) {
+      // no Authorization → 401 (closes the unauthenticated-enumeration gap).
+      const none = await rpcAuth(base, undefined, { id: "1", method })
+      assert.equal(none.status, 401, `${method} without bearer must be 401`)
+      // wrong bearer → 401.
+      const wrong = await rpcAuth(base, "Bearer not-the-token", {
+        id: "2",
+        method,
+      })
+      assert.equal(wrong.status, 401, `${method} with wrong bearer must be 401`)
+      // malformed header (no "Bearer " prefix) → 401.
+      const bare = await rpcAuth(base, BEARER, { id: "3", method })
+      assert.equal(
+        bare.status,
+        401,
+        `${method} with a non-Bearer header must be 401`
+      )
+    }
+    // correct bearer → the method runs (200).
+    const ok = await rpcAuth(base, `Bearer ${BEARER}`, {
+      id: "4",
+      method: "tools/list",
+    })
+    assert.equal(ok.status, 200)
+    assert.ok(ok.payload.result?.tools)
+  } finally {
+    await host.stop()
+  }
+})
+
+test("no requiredInboundAuth → loopback path unchanged (bearer not required, zero cost)", async () => {
+  const host = createInMemoryMcpHost()
+  await host.start()
+  try {
+    const base = `http://127.0.0.1:${host.localPort}`
+    const res = await rpcAuth(base, undefined, {
+      id: "1",
+      method: "tools/list",
+    })
+    assert.equal(res.status, 200)
+  } finally {
+    await host.stop()
+  }
+})
+
+test("fail-closed bind: a non-loopback bind without requiredInboundAuth throws at startup", async () => {
+  const host = createInMemoryMcpHost({ host: "0.0.0.0" })
+  await assert.rejects(host.start(), /non-loopback.*requiredInboundAuth/)
+  // and with a bearer configured, a non-loopback bind is permitted.
+  const ok = createInMemoryMcpHost({
+    host: "0.0.0.0",
+    requiredInboundAuth: "x".repeat(16),
+  })
+  await ok.start()
+  await ok.stop()
+})

@@ -20,6 +20,7 @@
 // CallTool contract.
 
 import { createServer, type Server } from "node:http"
+import { timingSafeEqual } from "node:crypto"
 import type { AddressInfo } from "node:net"
 import {
   DeviceCatalogExposure,
@@ -89,6 +90,18 @@ export interface InMemoryMcpHostOptions {
    */
   envelopeVerifier?: EnvelopeVerifier
   serverPublicKeys?: ReadonlyMap<string, string>
+  /**
+   * Per-runtime inbound bearer for a DIRECT (network-reachable) data plane (§3.4
+   * layer 2). When set, EVERY request (initialize / tools/list / tools/call) must
+   * carry `Authorization: Bearer <this>` — closing the unauthenticated-enumeration
+   * gap that is harmless under loopback/frp isolation but fatal off-box. When unset
+   * the host may bind ONLY to loopback (fail-closed bind, §3.4 review fix G):
+   * binding a non-loopback address without this configured throws at startup, so a
+   * misconfigured template can never come "online" serving unauthenticated tools.
+   * The API derives it as HMAC(server_secret, runtime_id) and injects it via env;
+   * the host merely compares — it never derives.
+   */
+  requiredInboundAuth?: string
 }
 
 interface ToolEntry {
@@ -440,16 +453,58 @@ export function createInMemoryMcpHost(
     }
   }
 
+  // Constant-time inbound-bearer check (§3.4 layer 2). Returns true when no bearer
+  // is required (loopback/indirect isolation — path unchanged, zero cost); otherwise
+  // the request MUST present exactly `Authorization: Bearer <requiredInboundAuth>`.
+  // Gates initialize / tools/list / tools/call alike, BEFORE body parse.
+  function inboundAuthOk(authorization: string | undefined): boolean {
+    const required = opts.requiredInboundAuth
+    if (!required) return true
+    if (!authorization) return false
+    const m = /^Bearer (.+)$/.exec(authorization)
+    if (!m) return false
+    const presented = Buffer.from(m[1], "utf8")
+    const expected = Buffer.from(required, "utf8")
+    if (presented.length !== expected.length) return false
+    return timingSafeEqual(presented, expected)
+  }
+
   async function startServer(): Promise<void> {
     if (server) return
     const host = opts.host ?? "127.0.0.1"
     const port = opts.port ?? 0
+    // Fail-closed bind (§3.4 review fix G): a non-loopback bind without a required
+    // inbound bearer would serve unauthenticated initialize/tools/list off-box.
+    // Refuse at startup, mirroring the frp readiness fail-hard — a misconfigured
+    // template (e.g. 0.0.0.0 bind with an unset bearer env) can never come online.
+    const LOOPBACK_BIND = new Set(["127.0.0.1", "::1", "localhost"])
+    if (!LOOPBACK_BIND.has(host) && !opts.requiredInboundAuth) {
+      throw new Error(
+        `refusing to bind MCP host to non-loopback ${host} without requiredInboundAuth (§3.4): ` +
+          `would serve unauthenticated tools off-box`
+      )
+    }
     server = createServer((req, res) => {
       if (req.method !== "POST" || req.url !== "/mcp") {
         res.statusCode = 404
         res.setHeader("content-type", "application/json")
         res.end(
           JSON.stringify({ error: { code: -32601, message: "not found" } })
+        )
+        return
+      }
+      if (!inboundAuthOk(req.headers.authorization)) {
+        res.statusCode = 401
+        res.setHeader("content-type", "application/json")
+        res.end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: null,
+            error: {
+              code: -32001,
+              message: "unauthorized: missing or invalid inbound bearer",
+            },
+          })
         )
         return
       }

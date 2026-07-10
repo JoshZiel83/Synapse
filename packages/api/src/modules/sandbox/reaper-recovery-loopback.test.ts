@@ -368,6 +368,6 @@ test("(f) loopback: a device-less local sandbox is accepted by hasLiveLocalSandb
       runtimeServiceId: minted.serviceId,
       executor: db as any,
     })
-    assert.deepEqual(result, { ok: true })
+    assert.deepEqual(result, { ok: true, reach: "direct" })
   })
 })

@@ -615,6 +615,11 @@ export async function hasLiveLocalSandboxMount(
     .select("sb.id")
     .where("s.id", "=", runtimeServiceId)
     .where("sb.adapter", "=", "local")
+    // Belt-and-braces (§3.5): only a RESIDENT local sandbox reaches the loopback
+    // branch. A bare local sandbox has no CP session and never sends tunnel.up, so
+    // it can't get here anyway — but the mode term makes "loopback ⇒ resident-local"
+    // structural, not incidental.
+    .where("sb.mode", "=", "resident")
     .where(sql<boolean>`sb.state NOT IN ('closed', 'failed')`)
     .where("r.deletedAt", "is", null)
     .limit(1)
