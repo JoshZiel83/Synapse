@@ -304,7 +304,7 @@ export async function createRuntimeAuthorizationRequest(
       conversationId: params.source.conversationId,
       requesterParticipantId: requesterMember.id,
       runtimeCapabilityId: params.runtimeTarget.runtimeCapabilityId,
-      deviceId: params.runtimeTarget.runtimeId,
+      runtimeId: params.runtimeTarget.runtimeId,
       runtimeExposureId: params.runtimeTarget.runtimeExposureId,
       requestedToolName: params.runtimeTarget.requestedToolName,
       runtimeToolStableKey: params.runtimeTarget.runtimeToolStableKey,
@@ -359,7 +359,7 @@ export async function createRuntimeAuthorizationRequest(
   // dispatches dedupe onto one task (partial-unique on tool_call_tasks).
   const isRemoteAgent = !!params.source.remoteAgentId
   const dedupeKey = buildRuntimeAuthorizationDedupeKey({
-    deviceId: params.runtimeTarget.runtimeId,
+    runtimeId: params.runtimeTarget.runtimeId,
     runtimeCapabilityId: params.runtimeTarget.runtimeCapabilityId,
     runtimeExposureId: params.runtimeTarget.runtimeExposureId,
     requestedToolName: params.runtimeTarget.requestedToolName,
@@ -396,7 +396,7 @@ export async function createRuntimeAuthorizationRequest(
       supportsCancel: true,
       requestPayload: {
         runtimeCapabilityId: params.runtimeTarget.runtimeCapabilityId,
-        deviceId: params.runtimeTarget.runtimeId,
+        runtimeId: params.runtimeTarget.runtimeId,
         runtimeExposureId: params.runtimeTarget.runtimeExposureId,
         sourceRuntimeSessionId: params.runtimeTarget.sourceRuntimeSessionId,
         requestedToolName: params.runtimeTarget.requestedToolName,
@@ -415,7 +415,7 @@ export async function createRuntimeAuthorizationRequest(
     async (createdTask, trx) => {
       await writeRuntimeAuthorizationTaskDetailInTx(trx, {
         taskId: createdTask.id,
-        deviceId: params.runtimeTarget.runtimeId,
+        runtimeId: params.runtimeTarget.runtimeId,
         runtimeCapabilityId: params.runtimeTarget.runtimeCapabilityId,
         runtimeExposureId: params.runtimeTarget.runtimeExposureId,
         requestedToolName: params.runtimeTarget.requestedToolName,
@@ -462,7 +462,7 @@ export async function createRuntimeAuthorizationRequest(
       taskId: taskRecord.id,
       requesterParticipantId: requesterMember.id,
       runtimeCapabilityId: params.runtimeTarget.runtimeCapabilityId,
-      deviceId: params.runtimeTarget.runtimeId,
+      runtimeId: params.runtimeTarget.runtimeId,
       runtimeExposureId: params.runtimeTarget.runtimeExposureId,
       requestedToolName: params.runtimeTarget.requestedToolName,
       sourceRuntimeSessionId: params.runtimeTarget.sourceRuntimeSessionId,

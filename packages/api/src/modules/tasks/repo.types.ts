@@ -111,7 +111,7 @@ export type RawTaskRow = {
   resolvedByRemoteAgentId: string | null
   resolvedByParticipantId: string | null
   runtimeCapabilityId: string | null
-  deviceId: string | null
+  runtimeId: string | null
   runtimeExposureId: string | null
   runtimeToolStableKey: string | null
   deviceDisplayName: string | null

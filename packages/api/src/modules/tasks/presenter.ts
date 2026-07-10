@@ -562,7 +562,7 @@ export function presentTaskSummary(row: RawTaskRow): TaskSummary {
       row.reason,
       `Task ${row.id} runtime_authorization.reason`
     ),
-    deviceId: requireTrimmedString(row.deviceId, `Task ${row.id} device_id`),
+    runtimeId: requireTrimmedString(row.runtimeId, `Task ${row.id} runtime_id`),
     deviceDisplayName: requireTrimmedString(
       row.deviceDisplayName,
       `Task ${row.id} device_display_name`

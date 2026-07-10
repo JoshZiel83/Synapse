@@ -49,7 +49,7 @@ function makeRuntimeAuthSummary(
         cua: { access: "write" },
       },
       reason: "test",
-      deviceId: "00000000-0000-0000-0000-00000000000d",
+      runtimeId: "00000000-0000-0000-0000-00000000000d",
       deviceDisplayName: "Test Device",
       runtimeCapabilityId: "00000000-0000-0000-0000-00000000000e",
       exposureId: "00000000-0000-0000-0000-00000000000f",

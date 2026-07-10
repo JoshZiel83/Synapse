@@ -462,7 +462,7 @@ export async function getTaskRowById(taskId: string, queryable?: Executor) {
             principal_subj.kind AS "principalSubjectKind",
             principal_subj.remote_agent_id AS "principalRemoteAgentId",
             ir.final_result_payload AS "resolutionPayload",
-            auth.runtime_id AS "deviceId",
+            auth.runtime_id AS "runtimeId",
             auth.runtime_capability_id AS "runtimeCapabilityId",
             auth.runtime_exposure_id AS "runtimeExposureId",
             auth.runtime_tool_stable_key AS "runtimeToolStableKey",
@@ -590,7 +590,7 @@ export async function getTaskRowByIdForUpdate(
             principal_subj.kind AS "principalSubjectKind",
             principal_subj.remote_agent_id AS "principalRemoteAgentId",
             ir.final_result_payload AS "resolutionPayload",
-            auth.runtime_id AS "deviceId",
+            auth.runtime_id AS "runtimeId",
             auth.runtime_capability_id AS "runtimeCapabilityId",
             auth.runtime_exposure_id AS "runtimeExposureId",
             auth.runtime_tool_stable_key AS "runtimeToolStableKey",
@@ -820,7 +820,7 @@ export async function insertRuntimeAuthorizationTaskDetails(
   client: Executor,
   params: {
     taskId: string
-    deviceId: string
+    runtimeId: string
     runtimeCapabilityId: string
     runtimeExposureId: string
     requestedToolName: string
@@ -843,7 +843,7 @@ export async function insertRuntimeAuthorizationTaskDetails(
     client,
     db.insertInto("toolCallTaskRuntimeAuthorization").values({
       taskId: params.taskId,
-      runtimeId: params.deviceId,
+      runtimeId: params.runtimeId,
       runtimeCapabilityId: params.runtimeCapabilityId,
       runtimeExposureId: params.runtimeExposureId,
       requestedToolName: params.requestedToolName,
@@ -1009,7 +1009,7 @@ export async function findOpenRuntimeAuthorizationTaskId(params: {
   workspaceId: string
   conversationId: string
   requesterParticipantId: string
-  deviceId: string
+  runtimeId: string
   runtimeCapabilityId: string
   runtimeExposureId: string
   requestedToolName: string
@@ -1043,7 +1043,7 @@ export async function findOpenRuntimeAuthorizationTaskId(params: {
         eb("ir.expiresAt", ">", new Date()),
       ])
     )
-    .where("auth.runtimeId", "=", params.deviceId)
+    .where("auth.runtimeId", "=", params.runtimeId)
     .where("auth.runtimeCapabilityId", "=", params.runtimeCapabilityId)
     .where("auth.runtimeExposureId", "=", params.runtimeExposureId)
     .where("auth.requestedToolName", "=", params.requestedToolName)

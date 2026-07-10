@@ -87,7 +87,7 @@ export const RuntimeAuthorizationGrantRecordViewSchema = z
   .object({
     id: z.string(),
     workspaceId: z.string(),
-    deviceId: z.string(),
+    runtimeId: z.string(),
     runtimeCapabilityId: z.string(),
     runtimeExposureId: z.string(),
     subject: SubjectRefViewSchema,

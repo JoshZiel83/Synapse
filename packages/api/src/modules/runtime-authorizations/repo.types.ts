@@ -33,7 +33,7 @@ import type {
 export interface RuntimeAuthorizationGrantRecord extends SharedRuntimeAuthorizationGrantSpec {
   id: string
   workspaceId: string
-  deviceId: string
+  runtimeId: string
   runtimeCapabilityId: string
   runtimeExposureId: string
   /** Authorization subject (workspace / workspace_member / actor / remote_agent / conversation). */

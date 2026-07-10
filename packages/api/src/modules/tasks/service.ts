@@ -160,7 +160,7 @@ export interface CreateRuntimeAuthorizationTaskParams {
   taskId?: string
   requesterParticipantId: string
   runtimeCapabilityId: string
-  deviceId: string
+  runtimeId: string
   runtimeExposureId: string
   requestedToolName: string
   sourceRuntimeSessionId: string
@@ -210,7 +210,7 @@ export interface FindOpenRuntimeAuthorizationTaskParams {
   conversationId: string
   requesterParticipantId: string
   runtimeCapabilityId: string
-  deviceId: string
+  runtimeId: string
   runtimeExposureId: string
   requestedToolName: string
   runtimeToolStableKey: string
@@ -260,7 +260,7 @@ function isJsonObjectRecord(value: unknown): value is Record<string, unknown> {
  * (and, post-approval, never inherit each other's source_runtime_session_id).
  */
 export function buildRuntimeAuthorizationDedupeKey(params: {
-  deviceId: string
+  runtimeId: string
   runtimeCapabilityId: string
   runtimeExposureId: string
   requestedToolName: string
@@ -283,7 +283,7 @@ export function buildRuntimeAuthorizationDedupeKey(params: {
   sourceRuntimeSessionId: string
 }) {
   return stableJsonStringify({
-    deviceId: params.deviceId,
+    runtimeId: params.runtimeId,
     runtimeCapabilityId: params.runtimeCapabilityId,
     runtimeExposureId: params.runtimeExposureId,
     requestedToolName: params.requestedToolName,
@@ -846,7 +846,7 @@ export async function writeRuntimeAuthorizationTaskDetailInTx(
   client: Executor,
   params: {
     taskId: string
-    deviceId: string
+    runtimeId: string
     runtimeCapabilityId: string
     runtimeExposureId: string
     requestedToolName: string
@@ -864,7 +864,7 @@ export async function writeRuntimeAuthorizationTaskDetailInTx(
   }
 ) {
   const dedupeKey = buildRuntimeAuthorizationDedupeKey({
-    deviceId: params.deviceId,
+    runtimeId: params.runtimeId,
     runtimeCapabilityId: params.runtimeCapabilityId,
     runtimeExposureId: params.runtimeExposureId,
     requestedToolName: params.requestedToolName,
@@ -877,7 +877,7 @@ export async function writeRuntimeAuthorizationTaskDetailInTx(
   })
   await insertRuntimeAuthorizationTaskDetails(client, {
     taskId: params.taskId,
-    deviceId: params.deviceId,
+    runtimeId: params.runtimeId,
     runtimeCapabilityId: params.runtimeCapabilityId,
     runtimeExposureId: params.runtimeExposureId,
     requestedToolName: params.requestedToolName,
@@ -1364,7 +1364,7 @@ export async function findOpenRuntimeAuthorizationTask(
   params: FindOpenRuntimeAuthorizationTaskParams
 ) {
   const dedupeKey = buildRuntimeAuthorizationDedupeKey({
-    deviceId: params.deviceId,
+    runtimeId: params.runtimeId,
     runtimeCapabilityId: params.runtimeCapabilityId,
     runtimeExposureId: params.runtimeExposureId,
     requestedToolName: params.requestedToolName,
@@ -1379,7 +1379,7 @@ export async function findOpenRuntimeAuthorizationTask(
     workspaceId: params.workspaceId,
     conversationId: params.conversationId,
     requesterParticipantId: params.requesterParticipantId,
-    deviceId: params.deviceId,
+    runtimeId: params.runtimeId,
     runtimeCapabilityId: params.runtimeCapabilityId,
     runtimeExposureId: params.runtimeExposureId,
     requestedToolName: params.requestedToolName,
@@ -1501,9 +1501,9 @@ export async function canUserResolveTask(params: {
     })
   }
 
-  const deviceId = task.runtimeAuthorization?.deviceId
+  const runtimeId = task.runtimeAuthorization?.runtimeId
   const runtimeCapabilityId = task.runtimeAuthorization?.runtimeCapabilityId
-  if (!deviceId || !runtimeCapabilityId) {
+  if (!runtimeId || !runtimeCapabilityId) {
     return false
   }
 
@@ -1828,9 +1828,9 @@ export async function resolveTaskRequest(
     }
 
     if (locked.kind === TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION) {
-      const deviceId = locked.deviceId || ""
-      if (!deviceId) {
-        throw new Error(`Task ${locked.id} is missing device_id`)
+      const runtimeId = locked.runtimeId || ""
+      if (!runtimeId) {
+        throw new Error(`Task ${locked.id} is missing runtime_id`)
       }
       const runtimeCapabilityId = locked.runtimeCapabilityId || ""
       if (!runtimeCapabilityId) {
@@ -2089,7 +2089,7 @@ export async function resolveTaskRequest(
         createdGrant = await createRuntimeAuthorizationGrant(
           {
             workspaceId: locked.workspaceId,
-            runtimeId: locked.deviceId || "",
+            runtimeId: locked.runtimeId || "",
             runtimeCapabilityId: locked.runtimeCapabilityId || "",
             runtimeExposureId: locked.runtimeExposureId || "",
             subject: presetTriple.subject,

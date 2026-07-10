@@ -49,7 +49,7 @@ type Fixture = {
   workspaceId: string
   conversationId: string
   remoteAgentSubjectId: string
-  deviceId: string
+  runtimeId: string
   capabilityId: string
   exposureId: string
 }
@@ -169,7 +169,7 @@ async function buildFixture(db: Kysely<any>): Promise<Fixture> {
     workspaceId: ws.id as string,
     conversationId: conv.id as string,
     remoteAgentSubjectId: subject.id as string,
-    deviceId: dev.id as string,
+    runtimeId: dev.id as string,
     capabilityId: cap.id as string,
     exposureId: exp.id as string,
   }
@@ -231,7 +231,7 @@ test(
       // `onCreatedInTx` callback.
       await writeRuntimeAuthorizationTaskDetailInTx(db, {
         taskId: task!.id,
-        deviceId: fx.deviceId,
+        runtimeId: fx.runtimeId,
         runtimeCapabilityId: fx.capabilityId,
         runtimeExposureId: fx.exposureId,
         requestedToolName: `${NS}.tool`,

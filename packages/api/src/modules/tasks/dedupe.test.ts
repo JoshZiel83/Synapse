@@ -11,7 +11,7 @@ import assert from "node:assert/strict"
 import { buildRuntimeAuthorizationDedupeKey } from "./service.js"
 
 const baseParams = {
-  deviceId: "00000000-0000-0000-0000-000000000001",
+  runtimeId: "00000000-0000-0000-0000-000000000001",
   runtimeCapabilityId: "00000000-0000-0000-0000-000000000002",
   runtimeExposureId: "00000000-0000-0000-0000-000000000003",
   requestedToolName: "cua_click",

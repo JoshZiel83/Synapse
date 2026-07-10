@@ -3417,7 +3417,7 @@ export interface RuntimeAuthorizationGrantSummary extends SharedRuntimeAuthoriza
 
 export interface RuntimeAuthorizationGrantView extends RuntimeAuthorizationGrantSummary {
   workspaceId: UUID
-  deviceId: UUID
+  runtimeId: UUID
   runtimeCapabilityId: UUID
   exposureId: UUID
 }
@@ -3427,7 +3427,7 @@ export interface RuntimeAuthorizationTaskDetails {
   runtimeToolStableKey: string
   requestedAction: RuntimeAuthorizationRequestedAction
   reason: string
-  deviceId: UUID
+  runtimeId: UUID
   deviceDisplayName: string
   runtimeCapabilityId: UUID
   exposureId: UUID
