@@ -69,7 +69,7 @@ function runtimeAuthorizationGrantView(
   return {
     id: "grant-1",
     workspaceId: "workspace-1",
-    deviceId: "device-1",
+    runtimeId: "device-1",
     runtimeCapabilityId,
     runtimeExposureId: "exposure-1",
     subject: { kind: "workspace", workspaceId: "workspace-1" },
