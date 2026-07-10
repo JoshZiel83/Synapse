@@ -633,6 +633,12 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
                   )
                   return
                 }
+                // If the socket closed DURING the async validation above, the close
+                // handler already ran (registeredTunnelServiceId was still null then,
+                // so it did NOT unregister) and nulled state.sessionId. Registering now
+                // would strand an ownerless entry no close event can ever clean up — so
+                // bail out instead of leaking a dead-tunnel registry row.
+                if (!state.sessionId) return
                 // Stamp the registering CP session so a stale socket's later close
                 // cannot evict this entry (compare-and-delete, §3.3).
                 getDeviceTunnelRegistry().register({

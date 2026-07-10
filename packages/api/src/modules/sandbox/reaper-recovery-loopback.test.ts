@@ -2,12 +2,12 @@
 //   (b) RECOVERY (S9/CORRECTION 5): a 'failed' sandbox row still resolves a ref
 //       (state-agnostic) so isSandboxRuntimeAlive reports ALIVE ⇒ a live runtime
 //       is killed before a recovery commit snapshots a dir under active write.
-//   (c) REAPER-SURVIVAL (S10/CORRECTION 9): a healthy docker session survives
-//       reconcile+reap via the REAL listReconcileCandidateSessionIds + REAL
-//       buildSandboxRefFromSandboxRow with an EMPTY liveSandboxHandles map, for
-//       BOTH an interim device-shaped fixture AND a sandbox-shaped fixture.
-//       Only the LOWEST docker seam (inspect/ps) is stubbed.
-//   UNION-superset (S10): candidate set = live-mount arm ∪ live-sandbox arm.
+//   (c) REAPER-SURVIVAL: healthy docker sessions survive reconcile+reap via the REAL
+//       listReconcileCandidateSessionIds + REAL buildSandboxRefFromSandboxRow with an
+//       EMPTY liveSandboxHandles map. Only the LOWEST docker seam (inspect/ps) stubbed.
+//   (d) PRE-BOOTSTRAP ORPHAN: a labeled container with NO sandboxes row (live mount,
+//       sandbox_id NULL) is reaped even when the current provider is not docker.
+//   UNION-superset: candidate set = live-mount arm ∪ live-sandbox arm.
 //   (f) LOOPBACK (S7/CORRECTION 6): a device-less local sandbox's endpoint is
 //       accepted by validateTunnelInternalUrl → hasLiveLocalSandboxMount
 //       (re-keyed to the sandboxes row).
@@ -335,6 +335,51 @@ test("(c) reaper-survival: healthy docker sessions survive reconcile+reap", asyn
     assert.ok(
       !docker.calls.some((c) => c[0] === "rm"),
       "no container was rm'd — both healthy sessions survived"
+    )
+  })
+})
+
+// ── (d) PRE-BOOTSTRAP ORPHAN: reaped even after flip-to-local (P3d regression) ─
+
+test("(d) a pre-bootstrap docker orphan (live mount, NO sandboxes row) is reaped even when the current provider is not docker", async () => {
+  await withTestDb(async (db) => {
+    // The API `docker run`+LABELED a container, then crashed BEFORE the bootstrap
+    // consume minted the sandboxes row: a live 'provisioning' mount with sandbox_id
+    // STILL NULL, and NO sandboxes row. Operator restarts with provider≠docker.
+    const orphan = await seedSession(db)
+    await insertFileMount(db as any, {
+      workspaceId: orphan.workspaceId,
+      sessionId: orphan.sessionId,
+      fileSpaceId: orphan.fileSpaceId,
+      mountSubpath: "conversation",
+      baseSnapshotId: null,
+    })
+
+    // The reap gate must fire via hasDockerMountHistory's live-mount arm — arm (1)
+    // (sandboxes.adapter='docker') is blind here (no sandboxes row was ever minted).
+    assert.equal(
+      await hasDockerMountHistory(db),
+      true,
+      "a live mount with NULL sandbox_id trips the reap gate (pre-bootstrap fingerprint)"
+    )
+
+    // The labeled orphan container is running; the current provider is NOT docker.
+    const docker = fakeDocker((args) => {
+      if (args[0] === "ps")
+        return { stdout: `cid-orphan ${orphan.sessionId}\n` }
+      return { stdout: "" }
+    })
+    await reconcileSandboxes({
+      executor: db as any,
+      dockerSpawnImpl: docker.spawnImpl,
+      reap: (live) =>
+        reapDockerSandboxOrphans(live, { spawnImpl: docker.spawnImpl }),
+    })
+    // The orphan's mounts were torn down (not in liveSessionIds) AND its labeled
+    // container was rm'd — the leak the P3d narrowing had reintroduced.
+    assert.ok(
+      docker.calls.some((c) => c[0] === "rm" && c.includes("cid-orphan")),
+      "pre-bootstrap orphan container is reaped despite the flip-to-local"
     )
   })
 })

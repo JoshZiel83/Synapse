@@ -227,11 +227,12 @@ function backendForKind(
  * teardown / recovery / isSandboxRuntimeAlive: a sandbox reaches recovery
  * precisely because its state is 'failed'/'closing', so this MUST resolve those
  * too, else a live runtime is never killed and a recovery commit snapshots a
- * directory under active write. Resolution order:
+ * directory under active write. Resolution order (P3 — the sandboxes row is the sole
+ * identity; there is NO file_mounts-column fallback, so this returns null when neither
+ * resolves = nothing killable):
  *   1. mount.sandbox_id → getSandboxById (NO state filter),
  *   2. by-session → getSandboxBySessionForControl (only runtimes.deleted_at IS
- *      NULL, ANY state),
- *   3. legacy file_mounts columns (buildSandboxRefFromMounts).
+ *      NULL, ANY state).
  * NEVER uses the state-filtered getLiveSandboxBySession (that is reuse-only).
  * runtimeServiceId is intentionally omitted — the kill/liveness path (docker rm
  * by resource id / pid signal) never needs it.
@@ -358,6 +359,15 @@ export async function reconcileSandboxes(
     ((live: Set<string>) =>
       reapDockerSandboxOrphans(live, { spawnImpl: deps.dockerSpawnImpl }))
   const sessionIds = await listCandidates(run)
+  // Compute the docker-orphan reap gate BEFORE the teardown loop below closes any
+  // pre-bootstrap orphan's mounts. hasDockerMountHistory's live-mount arm (its ONLY
+  // signal for a container whose sandboxes row was never minted — the pre-bootstrap
+  // crash window) reads live file_mounts; teardownSandbox() closes those mounts, so
+  // deferring this read until after the loop would erase the signal and leak the
+  // labeled orphan (adversarial-review finding, P3d regression).
+  const shouldReapDockerOrphans =
+    config.sandbox.provider === "docker" ||
+    (await repo.hasDockerMountHistory(run))
   const liveSessionIds = new Set<string>()
   for (const sessionId of sessionIds) {
     try {
@@ -388,18 +398,13 @@ export async function reconcileSandboxes(
     }
   }
 
-  // Reap label-only Docker orphans (the crash window the DB sweep above can't
-  // see). We must NOT gate this solely on the CURRENT config being docker: a host
-  // that ran docker sandboxes and then fell back to local (or temporarily lost
-  // its frp/token config) would otherwise leak every container. Fire when the
-  // current provider is docker OR the DB shows this host has ever run a docker
-  // sandbox (a sandboxes row with adapter='docker'). Pure-local deployments (no such
-  // row, provider=local) skip the docker call entirely.
-  const envIsDocker = config.sandbox.provider === "docker"
-  const hasDockerMountHistory = envIsDocker
-    ? true
-    : await repo.hasDockerMountHistory(run)
-  if (hasDockerMountHistory) {
+  // Reap label-only Docker orphans (the crash window the DB sweep above can't see),
+  // using the gate captured BEFORE the teardown loop. We must NOT gate solely on the
+  // CURRENT config being docker: a host that ran docker sandboxes and then fell back
+  // to local (or crashed pre-bootstrap and restarted local) would otherwise leak
+  // every container. Pure-local deployments with no docker evidence skip the docker
+  // call entirely.
+  if (shouldReapDockerOrphans) {
     try {
       const { removed } = await reap(liveSessionIds)
       if (removed.length > 0) {

@@ -220,9 +220,6 @@ test("docker:bare create() runs the hardened container, probes timeout/bash, min
   const staged: string[] = []
   const handle = await adapter.create(
     baseSpec(root, {
-      onResourceCreated: async (id) => {
-        staged.push(`resource:${id}`)
-      },
       onRuntimeReady: async (id) => {
         staged.push(`runtime:${id}`)
       },
@@ -238,7 +235,10 @@ test("docker:bare create() runs the hardened container, probes timeout/bash, min
   )
   assert.equal(mintArgs!.adapter, "docker")
   assert.match(String(mintArgs!.dataPlaneEndpoint), /^docker-exec:/)
-  assert.ok(staged.includes("resource:container-bare-1"))
+  assert.ok(
+    staged.some((s) => s.startsWith("runtime:")),
+    "onRuntimeReady fired (mount sandbox_id back-fill)"
+  )
   assert.ok(runArgvSeen.length === 1)
 })
 

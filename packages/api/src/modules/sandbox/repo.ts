@@ -147,18 +147,36 @@ export async function listReconcileCandidateSessionIds(
 }
 
 /**
- * Whether this host has EVER run a docker sandbox (any sandboxes row with
- * adapter='docker', live or soft-deleted). Drives whether reconcile fires the
- * docker orphan reaper even after a fallback to the local backend. Over-firing the
- * reap gate is a harmless no-op; under-firing would leak containers.
+ * Whether reconcile should fire the docker orphan reaper — TRUE on ANY evidence this
+ * host could have leaked a labeled docker sandbox container:
+ *
+ *  (1) a `sandboxes` row adapter='docker' (post-bootstrap; live or soft-deleted).
+ *      Covers a host that ran docker sandboxes and later fell back to local.
+ *  (2) a live (non-closed/failed) `file_mount` whose `sandbox_id` is STILL NULL — the
+ *      fingerprint of a PRE-BOOTSTRAP crash orphan: the API `docker run`+LABELED a
+ *      container, then died BEFORE the bootstrap-consume minted the sandboxes row (so
+ *      arm (1) is blind to it) and before sandbox_id was back-filled. At STARTUP (the
+ *      only reconcile caller) such a mount is ALWAYS a crash orphan — no in-flight
+ *      provision exists yet — so this never false-positives on a healthy provision. A
+ *      pure-local pre-mint crash also matches, but the reaper then finds no labeled
+ *      container and no-ops. **Must be read BEFORE the reconcile teardown loop closes
+ *      the orphan's mounts**, else the signal is erased.
+ *
+ * Over-firing is a harmless no-op; under-firing leaks containers — exactly what
+ * dropping the old file_mounts.sandbox_backend arm (P3d) reintroduced for arm (2),
+ * restored here structurally.
  */
 export async function hasDockerMountHistory(
   run: Executor = db
 ): Promise<boolean> {
   const row = await sql<{ ok: boolean }>`
-    SELECT EXISTS(SELECT 1 FROM sandboxes WHERE adapter = 'docker') AS ok`.execute(
-    run
-  )
+    SELECT (
+      EXISTS(SELECT 1 FROM sandboxes WHERE adapter = 'docker')
+      OR EXISTS(
+        SELECT 1 FROM file_mounts
+        WHERE sandbox_id IS NULL AND status NOT IN ('closed', 'failed')
+      )
+    ) AS ok`.execute(run)
   return Boolean(row.rows[0]?.ok)
 }
 

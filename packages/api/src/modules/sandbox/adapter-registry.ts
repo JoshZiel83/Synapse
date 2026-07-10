@@ -61,7 +61,7 @@ export interface SandboxAdapter {
   readonly key: string
   readonly provider: string
   readonly mode: "resident" | "bare"
-  /** Written to sandboxes.adapter / file_mounts.sandbox_backend (== provider). */
+  /** Written to sandboxes.adapter (== provider); the sole persisted adapter tag (P3). */
   readonly kind: SandboxBackendKind
   readonly catalogSource: "control_plane" | "api_authored"
   readonly transportDefault: "direct" | "indirect"
@@ -512,7 +512,6 @@ export function makeDockerBareAdapter(
       }
       let mintedRuntimeId: string | null = null
       try {
-        await spec.onResourceCreated?.(containerId)
         // create-time probe: the image must carry `timeout` + `bash` for exec.
         const probe = await runDockerCapture(
           spawnImpl,

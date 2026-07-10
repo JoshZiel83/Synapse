@@ -16,6 +16,7 @@
 import { existsSync } from "node:fs"
 import { spawn as nodeSpawn } from "node:child_process"
 import { Buffer } from "node:buffer"
+import { createHash } from "node:crypto"
 import { SANDBOX_MOUNT_POINTS } from "@synapse/shared"
 import {
   WHOLE_SCOPE,
@@ -943,8 +944,14 @@ async function coreEdit(
     bytes,
     {
       createParents: false,
-      // CAS on the prior content sha when the descriptor enforces it.
-      expectedSha256: priorStat.exists ? undefined : null,
+      // Stale-write guard (read-modify-write CAS): expect the file to still hold the
+      // EXACT content we read at the top of this edit. If a concurrent writer changed
+      // it between our read and this write, the sha no longer matches and the write is
+      // rejected — preventing a silent lost update. `undefined` here would DISABLE the
+      // guard (the bug this replaces). null = must-not-exist (file was gone at stat).
+      expectedSha256: priorStat.exists
+        ? createHash("sha256").update(Buffer.from(cur.bytes)).digest("hex")
+        : null,
     },
     ctx
   )

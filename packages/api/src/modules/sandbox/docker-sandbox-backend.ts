@@ -145,7 +145,6 @@ export function createDockerSandboxBackend(
           )
         }
         pairingSessionId = pairing.pairingSessionId
-        await spec.onPairingCreated?.(pairing.pairingSessionId)
 
         const containerName = `synapse-sbx-${sanitizeName(spec.sessionId)}`
 
@@ -175,7 +174,6 @@ export function createDockerSandboxBackend(
             ? err
             : new SandboxBackendError(`docker run failed: ${errMsg(err)}`)
         }
-        await spec.onResourceCreated?.(containerId)
 
         // ④ wait for the container to consume its bootstrap token (it self-
         // registers the device on first boot). Surface docker logs on early exit.

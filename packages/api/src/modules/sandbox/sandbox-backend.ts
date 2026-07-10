@@ -66,25 +66,24 @@ export interface SandboxSpec {
   confineCommands: boolean
   title?: string
   /**
-   * Lifecycle callbacks for STAGED persistence (crash recovery). The backend
-   * MUST `await` each as soon as the underlying fact exists, so a mid-provision
-   * crash leaves enough in file_mounts for the startup reconciler to reattach
-   * or safely clean up. Each callback must be idempotent across the session's
-   * mounts. A callback that throws aborts create() (which then runs its own
-   * cleanup).
+   * Fired the instant the runtime's DB identity exists (docker: bootstrap consumed;
+   * local: mintLocalSandboxRuntimeTx). Carries the runtime id (the sandboxes.id ==
+   * runtimes.id) so the spine can back-fill the mount's sole identity column,
+   * file_mounts.sandbox_id. MUST be awaited; idempotent; a throw aborts create()
+   * (which then runs its own cleanup). Renamed from onDeviceClaimed (a sandbox runtime
+   * has no `devices` row — the identity is the runtime).
+   *
+   * (P3: the former onPairingCreated / onResourceCreated staged-persistence callbacks
+   * are gone — pairing + resource id live on the sandboxes row, written at mint /
+   * post-create, and a pre-bootstrap docker container is reaped by its session label,
+   * not a mount column. The mount carries only sandbox_id now.)
    */
-  onPairingCreated?: (pairingSessionId: string) => Promise<void>
-  onResourceCreated?: (sandboxResourceId: string) => Promise<void>
-  /** Fired the instant the runtime's DB identity exists (docker: bootstrap
-   *  consumed; local: mintLocalSandboxRuntimeTx). Carries the runtime id (the
-   *  sandboxes.id, == runtimes.id). Renamed from onDeviceClaimed (a sandbox
-   *  runtime has no `devices` row — the identity is the runtime). */
   onRuntimeReady?: (runtimeId: string) => Promise<void>
 }
 
 /** Identifies a sandbox runtime well enough to reconnect/kill it from another
- *  process (teardown after an API restart). Rebuilt from a sandboxes row
- *  (state-agnostic control-path resolver) or legacy file_mounts columns. */
+ *  process (teardown after an API restart). Rebuilt from the owning sandboxes row
+ *  (state-agnostic control-path resolver — the sole identity source; P3). */
 export interface SandboxRef {
   /** The owning adapter (sandboxes.adapter — row-driven, never current config). */
   adapter: string

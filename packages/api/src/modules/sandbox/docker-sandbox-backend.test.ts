@@ -96,9 +96,6 @@ test("docker create(): builds a correct `docker run` argv + completes the staged
   })
   const handle = await backend.create(
     baseSpec({
-      onResourceCreated: async (id) => {
-        staged.push(`resource:${id}`)
-      },
       onRuntimeReady: async (id) => {
         staged.push(`device:${id}`)
       },
@@ -142,7 +139,7 @@ test("docker create(): builds a correct `docker run` argv + completes the staged
   )
   assert.equal(handle.adapter, "docker")
   assert.equal(handle.resourceId, "container-abc123")
-  assert.deepEqual(staged, ["resource:container-abc123", "device:dev-1"])
+  assert.deepEqual(staged, ["device:dev-1"])
 })
 
 test("docker create(): tunnel=frp injects SYNAPSE_TUNNEL_* env", async () => {
@@ -301,8 +298,8 @@ test("docker create(): bootstrap timeout self-cleans container + pairing + devic
     },
   })
   await assert.rejects(() => backend.create(baseSpec()), /did not bootstrap/)
-  // The container WAS created (onResourceCreated fired) but no device was
-  // claimed → cleanup reaps the container + cancels the pairing, deviceId null.
+  // The container WAS created (docker run returned an id) but the runtime never
+  // bootstrapped → cleanup reaps the container + cancels the pairing, deviceId null.
   assert.deepEqual(cleaned, [
     {
       workspaceId: "ws-1",
@@ -387,7 +384,7 @@ test("docker connect: empty deviceId still kills the container (half-provisioned
     return { stdout: "" }
   })
   const backend = createDockerSandboxBackend({ ...baseOpts, spawnImpl })
-  // Crash between onResourceCreated and onRuntimeReady: container id known,
+  // Crash after `docker run` but before the runtime was ready: container id known,
   // deviceId is "". teardown must still reap the container.
   const handle = await backend.connect({
     adapter: "docker",
