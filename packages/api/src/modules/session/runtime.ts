@@ -167,7 +167,7 @@ function getToolSource(
   if (sourceKind === "runtime") {
     return {
       kind: "runtime",
-      ...(str(snap.deviceName) ? { displayName: str(snap.deviceName) } : {}),
+      ...(str(snap.runtimeName) ? { displayName: str(snap.runtimeName) } : {}),
       ...(str(snap.visibleToolName)
         ? { upstreamToolName: str(snap.visibleToolName) }
         : {}),

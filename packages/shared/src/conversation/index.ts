@@ -258,20 +258,20 @@ export function summarizeConversationEvent(
       }
       return `Plan approval requested from ${targetName}: ${title}`
     }
-    const deviceName =
+    const runtimeName =
       task.runtimeAuthorization?.deviceDisplayName?.trim() || "device"
     if (task.lifecycleStatus === "cancelled") {
-      return `Runtime authorization request was cancelled for ${deviceName}`
+      return `Runtime authorization request was cancelled for ${runtimeName}`
     }
     if (task.lifecycleStatus === "completed" && task.outcome === "denied") {
       const resolverName = task.resolvedBy?.name?.trim() || "A user"
-      return `${resolverName} rejected access for ${deviceName}`
+      return `${resolverName} rejected access for ${runtimeName}`
     }
     if (task.lifecycleStatus === "completed" && task.outcome === "granted") {
       const resolverName = task.resolvedBy?.name?.trim() || "A user"
-      return `${resolverName} approved access for ${deviceName}`
+      return `${resolverName} approved access for ${runtimeName}`
     }
-    return `Runtime authorization requested for ${deviceName}`
+    return `Runtime authorization requested for ${runtimeName}`
   }
 
   return `[Event: ${eventType}]`

@@ -60,8 +60,8 @@ function qualifierFor(ref: ToolRef): string {
       // installation prefix is what disambiguates two installs' same-named tool.
       return `plugin_${ref.source.installationId.slice(0, 8)}`
     case "runtime":
-      return ref.source.deviceName
-        ? sanitizeSegment(ref.source.deviceName)
+      return ref.source.runtimeName
+        ? sanitizeSegment(ref.source.runtimeName)
         : `device_${ref.source.runtimeToolId.slice(0, 8)}`
   }
 }

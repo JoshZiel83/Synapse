@@ -20,7 +20,7 @@ import { upsertAccessSubjectDefault } from "../access/guards.js"
 
 export interface DeviceCapabilityToolRow {
   runtimeId: string
-  deviceName: string
+  runtimeName: string
   runtimeServiceId: string
   /**
    * The owning runtime_service's kind (P4a / PREREQ-DISC). The Mode-B dispatch
@@ -137,7 +137,7 @@ export async function selectDeviceCapabilityToolsForSubjects(
     .distinctOn(["dt.id"])
     .select([
       "r.id as runtimeId",
-      sql<string>`COALESCE(d.title, 'Sandbox')`.as("deviceName"),
+      sql<string>`COALESCE(d.title, 'Sandbox')`.as("runtimeName"),
       "dx.serviceId as runtimeServiceId",
       "rs.serviceKind as serviceKind",
       "dx.id as runtimeExposureId",
@@ -210,7 +210,7 @@ export async function selectDeviceCapabilityToolsForSubjects(
   return rows.map((row) => {
     return {
       runtimeId: row.runtimeId,
-      deviceName: row.deviceName,
+      runtimeName: row.runtimeName,
       runtimeServiceId: row.runtimeServiceId,
       serviceKind: row.serviceKind,
       runtimeExposureId: row.runtimeExposureId,

@@ -1822,7 +1822,7 @@ export type ToolResultOrigin =
       kind: "runtime"
       runtimeToolId: string
       exposureStableKey: string
-      deviceName?: string
+      runtimeName?: string
       visibleToolName?: string
     }
   | { kind: "provider_native"; providerType: ProviderType; toolName: string }

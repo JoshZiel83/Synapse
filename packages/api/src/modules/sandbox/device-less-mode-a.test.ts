@@ -274,9 +274,9 @@ test("G3: selectDeviceCapabilityToolsForSubjects surfaces the sandbox's fs + com
     }
     // The runtimeId is the sandbox runtime id (r.id), NOT a device id.
     assert.equal(byBuiltin.get("filesystem")!.runtimeId, seed.runtimeId)
-    // deviceName COALESCEs to 'Sandbox' (no devices row) and platform/arch to
+    // runtimeName COALESCEs to 'Sandbox' (no devices row) and platform/arch to
     // linux/x64 defaults.
-    assert.equal(byBuiltin.get("filesystem")!.deviceName, "Sandbox")
+    assert.equal(byBuiltin.get("filesystem")!.runtimeName, "Sandbox")
     assert.equal(byBuiltin.get("filesystem")!.devicePlatform, "linux")
     assert.equal(byBuiltin.get("filesystem")!.deviceArch, "x64")
   })

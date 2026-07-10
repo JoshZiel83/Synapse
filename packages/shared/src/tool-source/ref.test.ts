@@ -18,7 +18,7 @@ const deviceRef: ToolRef = {
     kind: "runtime",
     runtimeToolId: "dt-1",
     exposureStableKey: "builtin/filesystem",
-    deviceName: "laptop",
+    runtimeName: "laptop",
     visibleToolName: "fs_read",
   },
   binding: {
@@ -58,7 +58,7 @@ test("stripForAuditSnapshot carries the full public source + stableKey per kind"
     kind: "runtime",
     runtimeToolId: "dt-1",
     exposureStableKey: "builtin/filesystem",
-    deviceName: "laptop",
+    runtimeName: "laptop",
     visibleToolName: "fs_read",
     stableKey: "builtin/filesystem/fs_read",
   })

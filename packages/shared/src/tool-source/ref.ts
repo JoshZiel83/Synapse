@@ -39,7 +39,7 @@ export type ToolSource =
       kind: "runtime"
       runtimeToolId: string
       exposureStableKey: string
-      deviceName?: string
+      runtimeName?: string
       // Durable display field (the device-visible tool name) for the same reason.
       visibleToolName?: string
     }
@@ -119,8 +119,8 @@ export function stripForAuditSnapshot(ref: ToolRef): SourceSnapshot {
         kind: "runtime",
         runtimeToolId: ref.source.runtimeToolId,
         exposureStableKey: ref.source.exposureStableKey,
-        ...(ref.source.deviceName !== undefined
-          ? { deviceName: ref.source.deviceName }
+        ...(ref.source.runtimeName !== undefined
+          ? { runtimeName: ref.source.runtimeName }
           : {}),
         ...(ref.source.visibleToolName !== undefined
           ? { visibleToolName: ref.source.visibleToolName }
@@ -162,8 +162,8 @@ export function toPublicOrigin(ref: ToolRef): ToolResultOrigin {
         kind: "runtime",
         runtimeToolId: ref.source.runtimeToolId,
         exposureStableKey: ref.source.exposureStableKey,
-        ...(ref.source.deviceName !== undefined
-          ? { deviceName: ref.source.deviceName }
+        ...(ref.source.runtimeName !== undefined
+          ? { runtimeName: ref.source.runtimeName }
           : {}),
         ...(ref.source.visibleToolName !== undefined
           ? { visibleToolName: ref.source.visibleToolName }

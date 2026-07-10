@@ -259,7 +259,7 @@ function buildDeviceToolRef(row: DeviceCapabilityToolRow): ToolRef {
       kind: "runtime",
       runtimeToolId: row.runtimeToolId,
       exposureStableKey: row.exposureStableKey,
-      deviceName: row.deviceName,
+      runtimeName: row.runtimeName,
       visibleToolName: row.visibleToolName,
     },
     binding: {
@@ -281,7 +281,7 @@ function deviceToolOrigin(row: DeviceCapabilityToolRow): ToolResultOrigin {
   return {
     kind: "runtime",
     runtimeToolId: row.runtimeToolId,
-    deviceName: row.deviceName,
+    runtimeName: row.runtimeName,
     exposureStableKey: row.exposureStableKey,
     visibleToolName: row.visibleToolName,
   }
@@ -489,7 +489,7 @@ async function projectDeviceTools(
       name: row.visibleToolName,
       description:
         row.visibleDescription ||
-        `Device tool: ${row.visibleToolName} on ${row.deviceName}`,
+        `Device tool: ${row.visibleToolName} on ${row.runtimeName}`,
       parameters: normalizeInputSchema(row.inputSchema),
       ref,
     })
@@ -1107,7 +1107,7 @@ export function buildRuntimeAuthorizationRequestParams(args: {
       // tool_call_task_runtime_authorization.source_runtime_session_id (TEXT)
       // — the chat-runtime session.id.
       sourceRuntimeSessionId: projectInput.sessionId ?? "",
-      deviceDisplayName: row.deviceName,
+      deviceDisplayName: row.runtimeName,
     },
     authorizationPlan: {
       requestedAction,

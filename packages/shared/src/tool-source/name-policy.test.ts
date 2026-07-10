@@ -33,7 +33,7 @@ function deviceRef(
   deviceToolsId: string,
   exposureStableKey: string,
   visibleName: string,
-  deviceName?: string
+  runtimeName?: string
 ): ToolRef {
   return {
     toolId: runtimeToolId(deviceToolsId),
@@ -41,7 +41,7 @@ function deviceRef(
       kind: "runtime",
       runtimeToolId: deviceToolsId,
       exposureStableKey,
-      ...(deviceName !== undefined ? { deviceName } : {}),
+      ...(runtimeName !== undefined ? { runtimeName } : {}),
     },
     binding: {
       transport: "device_tunnel",

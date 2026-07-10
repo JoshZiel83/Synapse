@@ -12,7 +12,7 @@ import type { ToolResultOrigin } from "@synapse/shared"
 const MCP_DEVICE_ORIGIN: ToolResultOrigin = {
   kind: "runtime",
   runtimeToolId: "device-tool-1",
-  deviceName: "MacBook Pro",
+  runtimeName: "MacBook Pro",
   exposureStableKey: "synapse.builtin.filesystem.v1",
   visibleToolName: "View",
 }

@@ -279,7 +279,7 @@ test("Batch 14: buildRuntimeAuthorizationRequestParams round-trips scope + sanit
     },
     row: {
       runtimeId: "dev-1",
-      deviceName: "dev",
+      runtimeName: "dev",
       runtimeServiceId: "svc-1",
       serviceKind: "device_runtime",
       runtimeExposureId: "exp-1",
@@ -344,7 +344,7 @@ test("Batch 14: buildRuntimeAuthorizationRequestParams round-trips scope + sanit
     },
     row: {
       runtimeId: "dev-1",
-      deviceName: "dev",
+      runtimeName: "dev",
       runtimeServiceId: "svc-1",
       serviceKind: "device_runtime",
       runtimeExposureId: "exp-1",

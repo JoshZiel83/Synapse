@@ -127,9 +127,9 @@ export function readMcpToolContentBlocks(
 function describeToolOrigin(ref: ToolRef): string {
   switch (ref.source.kind) {
     case "runtime":
-      return ref.source.deviceName
-        ? `[device:${ref.source.deviceName}]`
-        : "[device]"
+      return ref.source.runtimeName
+        ? `[runtime:${ref.source.runtimeName}]`
+        : "[runtime]"
     case "plugin":
       return `[plugin:${ref.source.installationId}]`
     case "system":

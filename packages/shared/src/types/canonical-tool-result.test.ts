@@ -32,7 +32,7 @@ test("isToolResultOrigin accepts each valid kind shape", () => {
     {
       kind: "runtime",
       runtimeToolId: "tool-1",
-      deviceName: "MacBook",
+      runtimeName: "MacBook",
       exposureStableKey: "synapse.builtin.filesystem.v1",
       visibleToolName: "View",
     },
