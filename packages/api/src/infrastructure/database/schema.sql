@@ -5789,29 +5789,22 @@ CREATE TABLE file_mounts (
   file_space_id UUID NOT NULL REFERENCES file_spaces(id) ON DELETE RESTRICT,
   mount_subpath TEXT NOT NULL
     CHECK (mount_subpath IN ('conversation', 'actor', 'actor-conversation')),
-  device_id UUID REFERENCES devices(id) ON DELETE SET NULL,
-  -- P1: dormant forward pointer to the CTI sandbox detail row. Written by NOBODY
-  -- until P2 (interim sandboxes are still device-shaped; device_id/sandbox_backend
-  -- remain the load-bearing mount identity for reconcile/reap). See design §10 / §E.
+  -- The sandbox that owns this mount (CTI detail row; sandboxes.id == runtimes.id).
+  -- This is the SOLE mount→runtime identity (P3): reconcile/teardown resolve the
+  -- sandbox row from here and read adapter / resource_id / host_pid / pairing_session
+  -- off THAT row — never duplicated onto the mount. SET NULL so teardown never blocks
+  -- on a live mount and the mount audit survives the sandbox.
   sandbox_id UUID REFERENCES sandboxes(id) ON DELETE SET NULL,
-  pairing_session_id UUID REFERENCES runtime_pairing_sessions(id) ON DELETE SET NULL,
   base_snapshot_id UUID,
   result_snapshot_id UUID,
   refresh_policy TEXT NOT NULL DEFAULT 'per_turn'
     CHECK (refresh_policy IN ('per_turn', 'on_teardown')),
   status file_mount_status NOT NULL DEFAULT 'provisioning',
   materialized_dir TEXT,
-  host_pid INT,
-  -- Which sandbox backend owns the runtime, and that backend's resource id.
-  -- Persisted so teardown/reconnect picks the right backend regardless of the
-  -- API's current SYNAPSE_SANDBOX_BACKEND env (a sandbox created under docker
-  -- must be torn down as docker even if the env later says local). NULL backend
-  -- = legacy/local rows that predate this column. host_pid stays the local
-  -- backend's resource handle; sandbox_resource_id carries docker container id
-  -- (and future k8s pod / vm id).
-  sandbox_backend TEXT
-    CHECK (sandbox_backend IS NULL OR sandbox_backend IN ('local', 'docker')),
-  sandbox_resource_id TEXT,
+  -- NOTE (P3): the mount no longer carries device_id / host_pid / sandbox_backend /
+  -- sandbox_resource_id / pairing_session_id. Backend adapter, resource id, host pid
+  -- and pairing all live on the owning `sandboxes` row (resolved via sandbox_id) —
+  -- the pre-P2 device-shaped mount identity is gone (no back-compat data).
   error_message TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -5832,19 +5825,11 @@ CREATE UNIQUE INDEX uq_file_mounts_active_session_space
 CREATE UNIQUE INDEX uq_file_mounts_active_session_subpath
   ON file_mounts(session_id, mount_subpath)
   WHERE status NOT IN ('closed', 'failed');
-CREATE INDEX idx_file_mounts_device ON file_mounts(device_id) WHERE device_id IS NOT NULL;
--- Dormant (P1): live mounts by CTI sandbox detail id. NULL through the interim.
+-- Live mounts by owning CTI sandbox detail id (the sole mount→runtime identity).
 CREATE INDEX idx_file_mounts_live_sandbox
   ON file_mounts(sandbox_id)
   WHERE sandbox_id IS NOT NULL AND status NOT IN ('closed', 'failed');
 CREATE INDEX idx_file_mounts_status ON file_mounts(status, created_at DESC);
--- The startup reconciler scans live (non-closed/failed) mounts by backend to
--- reconcile against actually-running sandbox resources (e.g. docker containers).
--- Partial on the same "live" predicate as the uniqueness indexes so it also
--- covers 'provisioning' rows left by a mid-provision crash.
-CREATE INDEX idx_file_mounts_live_backend
-  ON file_mounts(sandbox_backend, sandbox_resource_id)
-  WHERE sandbox_resource_id IS NOT NULL AND status NOT IN ('closed', 'failed');
 CREATE INDEX idx_file_mounts_space ON file_mounts(file_space_id);
 
 -- ============================================================================
@@ -7077,9 +7062,7 @@ BEGIN
   UPDATE file_snapshots t0 SET created_by_session_id = NULL WHERE created_by_session_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE file_access_grants t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE file_access_grants t0 SET source_task_id = NULL WHERE source_task_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE file_mounts t0 SET device_id = NULL WHERE device_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE file_mounts t0 SET sandbox_id = NULL WHERE sandbox_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE file_mounts t0 SET pairing_session_id = NULL WHERE pairing_session_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE file_mounts t0 SET base_snapshot_id = NULL WHERE base_snapshot_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE file_mounts t0 SET result_snapshot_id = NULL WHERE result_snapshot_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE session_wakeups t0 SET automation_execution_id = NULL WHERE automation_execution_id IS NOT NULL AND (EXISTS (SELECT 1 FROM sessions t1_0 WHERE t1_0.id = t0.session_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.source_session_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM automation_executions t1_2 WHERE t1_2.id = t0.automation_execution_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM automation_occurrences t1_3 WHERE t1_3.id = t0.automation_occurrence_id AND t1_3.workspace_id = p_workspace_id));

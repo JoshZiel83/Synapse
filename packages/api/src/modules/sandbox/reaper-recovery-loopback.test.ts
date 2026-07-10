@@ -176,11 +176,7 @@ async function insertSandboxRuntime(
 async function insertActiveMount(
   db: Kysely<any>,
   seed: { workspaceId: string; sessionId: string; fileSpaceId: string },
-  patch: Partial<{
-    sandboxBackend: "local" | "docker"
-    sandboxResourceId: string
-    sandboxId: string
-  }>
+  patch: { sandboxId?: string } = {}
 ): Promise<FileMountRow> {
   const mount = await insertFileMount(db as any, {
     workspaceId: seed.workspaceId,
@@ -188,11 +184,10 @@ async function insertActiveMount(
     fileSpaceId: seed.fileSpaceId,
     mountSubpath: "conversation",
     baseSnapshotId: null,
-    sandboxBackend: patch.sandboxBackend ?? null,
   })
   await updateFileMount(db as any, mount.id, {
     status: "active",
-    sandboxResourceId: patch.sandboxResourceId ?? null,
+    // P3: the mount's sole identity is sandbox_id → the owning sandboxes row.
     sandboxId: patch.sandboxId ?? null,
   })
   return mount
@@ -255,15 +250,20 @@ test("(b) recovery: a 'failed' sandbox row resolves a ref (state-agnostic) ⇒ i
 
 // ── UNION-superset: candidate set = live-mount ∪ live-sandbox ─────────────────
 
-test("UNION-superset: candidates = device-shaped-mount session ∪ sandbox-row session", async () => {
+test("UNION-superset: candidates = mount-bearing session ∪ mount-less sandbox session", async () => {
   await withTestDb(async (db) => {
-    // sess-A: a device-shaped active mount, NO sandboxes row.
+    // sess-A: a live sandboxes row + an active mount (the mount-arm candidate).
     const a = await seedSession(db)
-    await insertActiveMount(db, a, {
-      sandboxBackend: "docker",
-      sandboxResourceId: "cid-A",
+    const runtimeA = await insertSandboxRuntime(db, {
+      workspaceId: a.workspaceId,
+      sessionId: a.sessionId,
+      adapter: "docker",
+      state: "active",
+      resourceId: "cid-A",
     })
-    // sess-C: a live sandboxes row, NO file_mount.
+    await insertActiveMount(db, a, { sandboxId: runtimeA })
+    // sess-C: a live sandboxes row, NO file_mount (the sandbox-arm candidate — a
+    // mount-less sandbox is invisible to a mount-only scan).
     const c = await seedSession(db)
     await insertSandboxRuntime(db, {
       workspaceId: c.workspaceId,
@@ -275,23 +275,29 @@ test("UNION-superset: candidates = device-shaped-mount session ∪ sandbox-row s
 
     const ids = await listReconcileCandidateSessionIds(db)
     assert.ok(ids.includes(a.sessionId), "mount-arm session included")
-    assert.ok(ids.includes(c.sessionId), "sandbox-arm session included")
+    assert.ok(
+      ids.includes(c.sessionId),
+      "sandbox-arm (mount-less) session included"
+    )
     assert.equal(await hasDockerMountHistory(db), true)
   })
 })
 
 // ── (c) REAPER-SURVIVAL: both docker sessions survive reconcile+reap ──────────
 
-test("(c) reaper-survival: healthy docker sessions (interim + sandbox-shaped) survive reconcile+reap", async () => {
+test("(c) reaper-survival: healthy docker sessions survive reconcile+reap", async () => {
   await withTestDb(async (db) => {
-    // Fixture A — interim/device-shaped: active mount, sandbox_backend='docker',
-    // sandbox_resource_id='cid-A', NO sandboxes row.
+    // Fixture A — live sandboxes row + active mount (sandbox_id).
     const a = await seedSession(db)
-    await insertActiveMount(db, a, {
-      sandboxBackend: "docker",
-      sandboxResourceId: "cid-A",
+    const runtimeA = await insertSandboxRuntime(db, {
+      workspaceId: a.workspaceId,
+      sessionId: a.sessionId,
+      adapter: "docker",
+      state: "active",
+      resourceId: "cid-A",
     })
-    // Fixture B — sandbox-shaped: live sandboxes row + active mount w/ sandbox_id.
+    await insertActiveMount(db, a, { sandboxId: runtimeA })
+    // Fixture B — live sandboxes row + active mount (sandbox_id).
     const b = await seedSession(db)
     const runtimeB = await insertSandboxRuntime(db, {
       workspaceId: b.workspaceId,
@@ -300,11 +306,7 @@ test("(c) reaper-survival: healthy docker sessions (interim + sandbox-shaped) su
       state: "active",
       resourceId: "cid-B",
     })
-    await insertActiveMount(db, b, {
-      sandboxBackend: "docker",
-      sandboxResourceId: "cid-B",
-      sandboxId: runtimeB,
-    })
+    await insertActiveMount(db, b, { sandboxId: runtimeB })
 
     // Lowest seam ONLY: inspect → running; ps → both labeled containers.
     const psLine = `cid-A ${a.sessionId}\ncid-B ${b.sessionId}\n`

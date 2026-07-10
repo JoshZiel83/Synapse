@@ -109,9 +109,9 @@ export class SandboxServiceError extends Error {
 
 // In-process registry of live sandbox handles, keyed by sessionId (== the
 // SandboxHandle.sandboxId), so teardown can kill the runtime it started.
-// The backend + sandbox_resource_id (+ host_pid for local) are ALSO persisted
-// on file_mounts so a different process / post-restart teardown can rebuild a
-// SandboxRef and kill it without the in-process handle.
+// The adapter + resource_id (+ host_pid for local) are persisted on the owning
+// `sandboxes` row (P3) so a different process / post-restart teardown can rebuild a
+// SandboxRef (via the mount's sandbox_id) and kill it without the in-process handle.
 const liveSandboxHandles = new Map<string, SandboxHandle>()
 
 /**
@@ -223,40 +223,6 @@ function backendForKind(
 }
 
 /**
- * LEGACY (device-shaped) ref resolver: rebuild a SandboxRef from the persisted
- * file_mounts columns. Used only as the last fallback (a pre-P2 mount whose
- * sandbox_id was never back-filled). Returns null when there's nothing killable.
- */
-function buildSandboxRefFromMounts(
-  sessionId: string,
-  mounts: FileMountRow[]
-): SandboxRef | null {
-  const runtimeId = mounts.find((m) => m.deviceId)?.deviceId ?? null
-  const resourceId =
-    mounts.find((m) => m.sandboxResourceId)?.sandboxResourceId ?? ""
-  const hostPid = mounts.find((m) => m.hostPid)?.hostPid ?? undefined
-  // Nothing to kill (crash before any runtime was started). The caller still
-  // closes the mounts; there's no process/container to reap.
-  if (!runtimeId && !resourceId && hostPid === undefined) return null
-  const adapter =
-    mounts.find((m) => m.sandboxBackend)?.sandboxBackend ?? "local"
-  const pairingSessionId =
-    mounts.find((m) => m.pairingSessionId)?.pairingSessionId ?? undefined
-  return {
-    adapter,
-    mode: "resident",
-    sandboxId: sessionId,
-    resourceId,
-    // May be "" when the API crashed after the container started but before the
-    // runtime was claimed — the kill path (docker rm by resource id / pid) does
-    // not need it; revoke/soft-delete in teardown is guarded separately.
-    runtimeId: runtimeId ?? "",
-    pairingSessionId,
-    hostPid: hostPid ?? undefined,
-  }
-}
-
-/**
  * CONTROL-PATH ref resolver (CORRECTION 5 — STATE-AGNOSTIC). Used by
  * teardown / recovery / isSandboxRuntimeAlive: a sandbox reaches recovery
  * precisely because its state is 'failed'/'closing', so this MUST resolve those
@@ -294,21 +260,19 @@ async function buildSandboxRefFromSandboxRow(
       hostPid: row.hostPid ?? undefined,
     }
   }
-  return buildSandboxRefFromMounts(sessionId, mounts)
+  // No owning sandbox row resolvable (crash before the sandbox was minted, or a
+  // mount with no runtime yet) → nothing killable. The pre-P2 device-shaped
+  // file_mounts fallback is gone (P3): the sandboxes row is the sole identity.
+  return null
 }
 
 /**
- * Source the runtime id from a session's mounts (CORRECTION 7): prefer the P2
- * back-filled sandbox_id (== runtimeId), else fall back to the legacy device_id
- * so a pre-P2 device-shaped live mount (sandbox_id NULL) is not needlessly torn
- * down. The device_id fallback is removed only in S11 (post-drain).
+ * Source the runtime id from a session's mounts: the P2/P3 back-filled sandbox_id
+ * (== runtimeId). The pre-P2 device_id fallback is gone (P3) — every live mount has
+ * a sandbox_id.
  */
 function runtimeIdFromMounts(mounts: FileMountRow[]): string {
-  return (
-    mounts.find((m) => m.sandboxId)?.sandboxId ??
-    mounts.find((m) => m.deviceId)?.deviceId ??
-    ""
-  )
+  return mounts.find((m) => m.sandboxId)?.sandboxId ?? ""
 }
 
 /**
@@ -348,29 +312,23 @@ export async function isSandboxRuntimeAlive(
 
 /**
  * Startup reconciler: tear down sandboxes left dangling by a crash so the next
- * turn re-provisions cleanly. teardownSandbox() handles every crash-state via
- * the persisted file_mounts columns — the recovery matrix it implements:
+ * turn re-provisions cleanly. teardownSandbox() resolves a killable SandboxRef
+ * from the owning `sandboxes` row (via the mount's sandbox_id, state-agnostic —
+ * {@link buildSandboxRefFromSandboxRow}), reading adapter / resource_id / host_pid
+ * off THAT row (P3 — the mount no longer carries them). The recovery matrix:
  *
- *   mount.status   device_id  sandbox_resource_id  →  teardown action
- *   ------------   ---------  -------------------     ------------------------
- *   provisioning   null       null                    nothing to kill; close mounts
- *   provisioning   null       set (container up,      docker rm by resource id;
- *                             pre-bootstrap)          close mounts (no device yet)
- *   provisioning   set        set (bootstrapped,      kill runtime + deleteDevice
- *                             pre-active)             + revoke grants; close mounts
- *   active         set        set/null                normal teardown (commit→kill)
- *   committing     set        set/null                commit completes then kill
- *
- * `buildSandboxRefFromMounts` returns a killable ref whenever ANY of device /
- * container-id / pid is set (so a half-provisioned container is never leaked),
- * with deviceId="" when the crash happened before the device was claimed.
+ *   sandboxes.state   resource_id  →  teardown action
+ *   ---------------   -----------     ------------------------
+ *   (no row yet)      —               nothing to kill; close mounts
+ *   provisioning      set             docker rm by resource id; close mounts
+ *   active/committing set/null        normal teardown (commit→kill runtime)
+ *   failed/closing    set/null        state-agnostic resolve still kills it
  *
  * Label-only orphans — a container the API `docker run` started but crashed
- * BEFORE persisting its `sandbox_resource_id`, so no file_mounts row can build a
- * killable ref — are reaped separately via {@link reapDockerSandboxOrphans},
- * which scans `docker ps` by the session label and removes any whose session
- * isn't in the live-mount set. Only runs when the docker backend is selected.
- * Bounded; best-effort; logs.
+ * BEFORE the sandboxes row was minted (docker pre-bootstrap), so no row can build a
+ * killable ref — are reaped separately via {@link reapDockerSandboxOrphans}, which
+ * scans `docker ps` by the session LABEL and removes any whose session isn't in the
+ * live set. Only runs when the docker backend has history. Bounded; best-effort; logs.
  */
 /**
  * Deps for reconcileSandboxes — all default to production. The reaper-survival
@@ -435,8 +393,8 @@ export async function reconcileSandboxes(
   // that ran docker sandboxes and then fell back to local (or temporarily lost
   // its frp/token config) would otherwise leak every container. Fire when the
   // current provider is docker OR the DB shows this host has ever run a docker
-  // sandbox (via EITHER file_mounts.sandbox_backend OR sandboxes.adapter). Pure-
-  // local deployments (no such row, provider=local) skip the docker call entirely.
+  // sandbox (a sandboxes row with adapter='docker'). Pure-local deployments (no such
+  // row, provider=local) skip the docker call entirely.
   const envIsDocker = config.sandbox.provider === "docker"
   const hasDockerMountHistory = envIsDocker
     ? true
@@ -732,7 +690,6 @@ export async function provisionSandbox(
       mountSubpath: spec.subpath,
       baseSnapshotId: spec.baseSnapshotId,
       materializedDir: dir,
-      sandboxBackend: adapter.kind,
     })
     mounts.push(mount)
     await materializeSnapshot({
@@ -815,15 +772,13 @@ export async function provisionSandbox(
       // pre-authorize the commandline grant, not whether the device runs unconfined.
       confineCommands: true,
       title: `Sandbox ${sessionId.slice(0, 8)}`,
-      onPairingCreated: (pairingSessionId) => persistAll({ pairingSessionId }),
-      // Retain the file_mounts dual-write of sandbox_backend + sandbox_resource_id
-      // (label-reaper coverage for a pre-bootstrap docker crash). Do NOT touch the
-      // sandboxes row here — for docker it may not be minted yet (CORRECTION 4).
-      onResourceCreated: (sandboxResourceId) =>
-        persistAll({ sandboxResourceId }),
-      // Renamed from onDeviceClaimed: back-fill file_mounts.sandbox_id (NOT
-      // device_id — FK-impossible for a device-less sandbox runtime). This fires
-      // the instant the runtime's DB identity + sandboxes row exist.
+      // P3: the mount no longer carries pairing_session_id / sandbox_resource_id /
+      // host_pid. Pairing + resource id live on the sandboxes row (docker consume
+      // sets pairing_session_id; resource_id is written post-create via
+      // updateSandboxRow below), and a pre-bootstrap docker container is reaped by
+      // its session LABEL (reapDockerSandboxOrphans), not by a mount column — so
+      // onPairingCreated / onResourceCreated have nothing to persist and are dropped.
+      // onRuntimeReady still back-fills the mount's sole identity column, sandbox_id.
       onRuntimeReady: (runtimeId) => persistAll({ sandboxId: runtimeId }),
     }
     handle = await adapter.create(spec)
@@ -832,15 +787,12 @@ export async function provisionSandbox(
     const runtimeId = handle.runtimeLink.runtimeId
     // CORRECTION 4 — POST-create back-fill ONLY. The sandboxes row is now
     // committed (docker: bootstrap-consumed; local: minted at create() start), so
-    // this is the FIRST safe point to write file_mounts.sandbox_id + the sandbox
-    // row's resource_id/host_pid. We NEVER dual-write file_mounts.device_id (FK
-    // to devices — unsatisfiable for a sandbox runtime), and NEVER write
-    // sandboxes.resource_id from onResourceCreated (for docker the container id
-    // arrives before the consume mints the row → a 0-row UPDATE that drops it).
-    await persistAll({
-      sandboxId: runtimeId,
-      hostPid: handle.hostPid ?? null,
-    })
+    // this is the FIRST safe point to write file_mounts.sandbox_id (the mount's sole
+    // identity) and the sandbox row's resource_id/host_pid. resource_id/host_pid live
+    // ONLY on the sandboxes row now (P3) — the container id arrives before the docker
+    // consume mints the row, so it is written HERE (post-create), not from
+    // onResourceCreated (which would 0-row-UPDATE a not-yet-existent row).
+    await persistAll({ sandboxId: runtimeId })
     await repo.updateSandboxRow(runtimeId, {
       resourceId: handle.resourceId || null,
       hostPid: handle.hostPid ?? null,

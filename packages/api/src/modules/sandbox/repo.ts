@@ -147,22 +147,18 @@ export async function listReconcileCandidateSessionIds(
 }
 
 /**
- * Whether this host has EVER run a docker sandbox (any file_mounts row with
- * sandbox_backend='docker'). Drives whether reconcile fires the docker orphan
- * reaper even after a fallback to the local backend. The `limit(1)` existence
- * probe is kept verbatim.
+ * Whether this host has EVER run a docker sandbox (any sandboxes row with
+ * adapter='docker', live or soft-deleted). Drives whether reconcile fires the
+ * docker orphan reaper even after a fallback to the local backend. Over-firing the
+ * reap gate is a harmless no-op; under-firing would leak containers.
  */
 export async function hasDockerMountHistory(
   run: Executor = db
 ): Promise<boolean> {
-  // S10: docker-coverage gate = EVER ran a docker sandbox, by EITHER the legacy
-  // file_mounts.sandbox_backend arm OR the P2 sandboxes.adapter arm. Over-firing
-  // the reap gate is a harmless no-op; under-firing would leak containers.
   const row = await sql<{ ok: boolean }>`
-    SELECT (
-      EXISTS(SELECT 1 FROM file_mounts WHERE sandbox_backend = 'docker')
-      OR EXISTS(SELECT 1 FROM sandboxes WHERE adapter = 'docker')
-    ) AS ok`.execute(run)
+    SELECT EXISTS(SELECT 1 FROM sandboxes WHERE adapter = 'docker') AS ok`.execute(
+    run
+  )
   return Boolean(row.rows[0]?.ok)
 }
 

@@ -603,11 +603,10 @@ export async function hasLiveLocalSandboxMount(
   runtimeServiceId: string,
   executor: KyselyDb = db
 ): Promise<boolean> {
-  // Primary (P2): resolve via the sandboxes row directly (NOT file_mounts). The
-  // loopback gate fires DURING backend.create() — before the mount back-fill —
-  // but mintLocalSandboxRuntimeTx has already created the sandboxes row at
-  // create() start. A device-less local sandbox runtime has no file_mounts.device_id
-  // to join on, so the legacy path below never resolves it.
+  // Resolve via the sandboxes row directly (the sole identity, P3). The loopback
+  // gate fires DURING backend.create() — before the mount back-fill — but
+  // mintLocalSandboxRuntimeTx has already created the sandboxes row at create()
+  // start, so a device-less local sandbox resolves here without any mount.
   const bySandbox = await executor
     .selectFrom("sandboxes as sb")
     .innerJoin("runtimeServices as s", "s.runtimeId", "sb.id")
@@ -624,19 +623,7 @@ export async function hasLiveLocalSandboxMount(
     .where("r.deletedAt", "is", null)
     .limit(1)
     .executeTakeFirst()
-  if (bySandbox) return true
-  // Legacy fallback (rolling-deploy): pre-P2 device-shaped local mounts whose
-  // identity is still the device_id, keyed via file_mounts.sandbox_backend='local'.
-  const liveLocalMount = await executor
-    .selectFrom("fileMounts as m")
-    .innerJoin("runtimeServices as s", "s.runtimeId", "m.deviceId")
-    .select("m.id")
-    .where("s.id", "=", runtimeServiceId)
-    .where("m.sandboxBackend", "=", "local")
-    .where(sql<boolean>`m.status NOT IN ('closed', 'failed')`)
-    .limit(1)
-    .executeTakeFirst()
-  return Boolean(liveLocalMount)
+  return Boolean(bySandbox)
 }
 
 // ════════════════════════════════════════════════════════════════════════════

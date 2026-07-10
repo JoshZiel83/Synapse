@@ -277,10 +277,9 @@ async function validateLocalLoopbackUrl(args: {
       message: "local sandbox loopback internal_url must not carry a path",
     }
   }
-  // Bind the loopback grant to a LIVE local sandbox: this device must own a
-  // file_mounts row with sandbox_backend='local' that isn't closed/failed. Raw
-  // status comparison (matching getActiveMountsForSession) so the file_mount_status
-  // enum compares against literals without a parameterized-text cast mismatch.
+  // Bind the loopback grant to a LIVE local sandbox: the service's runtime must be a
+  // resident local sandbox (a sandboxes row adapter='local', mode='resident', state
+  // NOT closed/failed) — resolved from the sandboxes row, not any file_mount (P3).
   const liveLocalMount = await hasLiveLocalSandboxMount(
     args.runtimeServiceId,
     args.executor

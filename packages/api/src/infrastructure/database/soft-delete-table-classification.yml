@@ -3324,22 +3324,6 @@ foreignKeys:
     _child: file_mounts(file_space_id)
     _parent: file_spaces(id)
     _was: CASCADE
-  digest:6a0e66a6070ed03d:
-    targetAction: SET NULL
-    setNull:
-      canLose: true
-      needsSnapshot: false
-    _child: file_mounts(device_id)
-    _parent: devices(id)
-    _was: SET NULL
-  digest:bd1a81e2f0198efb:
-    targetAction: SET NULL
-    setNull:
-      canLose: true
-      needsSnapshot: false
-    _child: file_mounts(pairing_session_id)
-    _parent: runtime_pairing_sessions(id)
-    _was: SET NULL
   digest:10782cbf8f2e2b30:
     targetAction: SET NULL
     setNull:

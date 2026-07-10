@@ -60,80 +60,44 @@ async function seedService(
       db
     )
   )
-  const deviceId = randomUUID()
-  await db.executeQuery(
-    sql`INSERT INTO runtimes (id, workspace_id, kind) VALUES (${deviceId}, ${workspaceId}, 'device')`.compile(
-      db
-    )
-  )
-  await db.executeQuery(
-    sql`INSERT INTO devices (id, workspace_id, title, device_type, public_key, public_key_fingerprint, trust_status)
-        VALUES (${deviceId}, ${workspaceId}, 'd', 'desktop_computer', ${`pk-${deviceId}`}, ${`fp-${deviceId}`}, 'trusted')`.compile(
-      db
-    )
-  )
-  const serviceId = randomUUID()
-  await db.executeQuery(
-    sql`INSERT INTO runtime_services (id, runtime_id, service_kind, status, tunnel_path_token)
-        VALUES (${serviceId}, ${deviceId}, 'device_runtime', 'online', ${opts.tunnelPathToken ?? null})`.compile(
-      db
-    )
-  )
+  const runtimeId = randomUUID()
   if (opts.liveLocalMount) {
-    // Minimal FK chain for a file_mount: actor + conversation + session +
-    // access_subject(actor) + file_space.
-    const actorId = randomUUID()
-    // workspace_resources.created_by_subject_id is NOT NULL with no default; mint
-    // a workspace-kind access_subject (same workspace) as the creator. The
-    // fixture has no owning member, so owner_subject_id stays NULL.
-    const creatorSubjectId = randomUUID()
+    // A resident SANDBOX runtime. The loopback SSRF gate (hasLiveLocalSandboxMount)
+    // resolves liveness from the sandboxes row — adapter='local' AND mode='resident'
+    // AND state NOT IN ('closed','failed') — NOT from any file_mount (P3). The
+    // mountBackend / mountStatus knobs map to the sandbox's adapter / state so the
+    // docker-sandbox and closed-sandbox rejection cases stay covered.
     await db.executeQuery(
-      sql`INSERT INTO access_subjects (id, kind, workspace_id) VALUES (${creatorSubjectId}, 'workspace', ${workspaceId})`.compile(
+      sql`INSERT INTO runtimes (id, workspace_id, kind) VALUES (${runtimeId}, ${workspaceId}, 'sandbox')`.compile(
         db
       )
     )
     await db.executeQuery(
-      sql`INSERT INTO workspace_resources (id, workspace_id, kind, display_name, status, created_by_subject_id)
-          VALUES (${actorId}, ${workspaceId}, 'actor', 'a', 'active', ${creatorSubjectId})`.compile(
+      sql`INSERT INTO sandboxes (id, workspace_id, mode, adapter, state)
+          VALUES (${runtimeId}, ${workspaceId}, 'resident', ${opts.mountBackend ?? "local"}, ${opts.mountStatus ?? "active"}::sandboxes_state)`.compile(
+        db
+      )
+    )
+  } else {
+    await db.executeQuery(
+      sql`INSERT INTO runtimes (id, workspace_id, kind) VALUES (${runtimeId}, ${workspaceId}, 'device')`.compile(
         db
       )
     )
     await db.executeQuery(
-      sql`INSERT INTO actors (id, role, title) VALUES (${actorId}, 'assistant', 'A')`.compile(
-        db
-      )
-    )
-    const convId = randomUUID()
-    await db.executeQuery(
-      sql`INSERT INTO conversations (id, workspace_id, kind) VALUES (${convId}, ${workspaceId}, 'direct')`.compile(
-        db
-      )
-    )
-    const sessionId = randomUUID()
-    await db.executeQuery(
-      sql`INSERT INTO sessions (id, workspace_id, actor_id, conversation_id) VALUES (${sessionId}, ${workspaceId}, ${actorId}, ${convId})`.compile(
-        db
-      )
-    )
-    const subjectId = randomUUID()
-    await db.executeQuery(
-      sql`INSERT INTO access_subjects (id, kind, workspace_id, actor_id) VALUES (${subjectId}, 'actor', ${workspaceId}, ${actorId})`.compile(
-        db
-      )
-    )
-    const spaceId = randomUUID()
-    await db.executeQuery(
-      sql`INSERT INTO file_spaces (id, workspace_id, owner_subject_id) VALUES (${spaceId}, ${workspaceId}, ${subjectId})`.compile(
-        db
-      )
-    )
-    await db.executeQuery(
-      sql`INSERT INTO file_mounts (id, workspace_id, session_id, file_space_id, mount_subpath, device_id, status, sandbox_backend)
-          VALUES (${randomUUID()}, ${workspaceId}, ${sessionId}, ${spaceId}, 'actor', ${deviceId}, ${opts.mountStatus ?? "active"}, ${opts.mountBackend ?? "local"})`.compile(
+      sql`INSERT INTO devices (id, workspace_id, title, device_type, public_key, public_key_fingerprint, trust_status)
+          VALUES (${runtimeId}, ${workspaceId}, 'd', 'desktop_computer', ${`pk-${runtimeId}`}, ${`fp-${runtimeId}`}, 'trusted')`.compile(
         db
       )
     )
   }
+  const serviceId = randomUUID()
+  await db.executeQuery(
+    sql`INSERT INTO runtime_services (id, runtime_id, service_kind, status, tunnel_path_token)
+        VALUES (${serviceId}, ${runtimeId}, 'device_runtime', 'online', ${opts.tunnelPathToken ?? null})`.compile(
+      db
+    )
+  )
   return serviceId
 }
 
