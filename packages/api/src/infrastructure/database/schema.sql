@@ -4239,29 +4239,29 @@ ALTER TABLE runtime_authorization_grants
 -- (subject_id → actor/remote_agent subject, scope_subject_id → conversation
 -- subject) and enforced by tg_runtime_authorization_grant_validate.
 ALTER TABLE tool_call_task_runtime_authorization
-  ADD CONSTRAINT fk_tool_call_task_runtime_auth_device
+  ADD CONSTRAINT fk_tool_call_task_runtime_auth_runtime
   FOREIGN KEY (runtime_id) REFERENCES runtimes(id) ON DELETE RESTRICT;
 ALTER TABLE tool_call_task_runtime_authorization
-  ADD CONSTRAINT fk_tool_call_task_runtime_auth_device_capability
+  ADD CONSTRAINT fk_tool_call_task_runtime_auth_runtime_capability
   FOREIGN KEY (runtime_capability_id) REFERENCES runtime_capabilities(id) ON DELETE RESTRICT;
 ALTER TABLE tool_call_task_runtime_authorization
-  ADD CONSTRAINT fk_tool_call_task_runtime_auth_device_exposure
+  ADD CONSTRAINT fk_tool_call_task_runtime_auth_runtime_exposure
   FOREIGN KEY (runtime_exposure_id) REFERENCES runtime_exposures(id) ON DELETE RESTRICT;
 
--- Indexes covering device-side columns so chat dispatch reading device-capability
+-- Indexes covering the runtime-capability column so chat dispatch reading runtime-capability
 -- grants stays on an index plan.
-CREATE INDEX idx_tool_call_task_runtime_auth_device_capability
+CREATE INDEX idx_tool_call_task_runtime_auth_runtime_capability
   ON tool_call_task_runtime_authorization(runtime_capability_id, task_id);
 
 -- runtime_tool detail FKs (executor_kind='runtime_tool'; design §3.6 / step 4).
 ALTER TABLE tool_call_task_runtime_tool
-  ADD CONSTRAINT fk_tool_call_task_runtime_tool_device
+  ADD CONSTRAINT fk_tool_call_task_runtime_tool_runtime
   FOREIGN KEY (runtime_id) REFERENCES runtimes(id) ON DELETE RESTRICT;
 ALTER TABLE tool_call_task_runtime_tool
-  ADD CONSTRAINT fk_tool_call_task_runtime_tool_device_capability
+  ADD CONSTRAINT fk_tool_call_task_runtime_tool_runtime_capability
   FOREIGN KEY (runtime_capability_id) REFERENCES runtime_capabilities(id) ON DELETE RESTRICT;
 ALTER TABLE tool_call_task_runtime_tool
-  ADD CONSTRAINT fk_tool_call_task_runtime_tool_device_exposure
+  ADD CONSTRAINT fk_tool_call_task_runtime_tool_runtime_exposure
   FOREIGN KEY (runtime_exposure_id) REFERENCES runtime_exposures(id) ON DELETE RESTRICT;
 ALTER TABLE tool_call_task_runtime_tool
   ADD CONSTRAINT fk_tool_call_task_runtime_tool_tool
@@ -4272,7 +4272,7 @@ ALTER TABLE tool_call_task_runtime_tool
 ALTER TABLE tool_call_task_runtime_tool
   ADD CONSTRAINT fk_tool_call_task_runtime_tool_operation
   FOREIGN KEY (runtime_operation_id) REFERENCES runtime_operations(id) ON DELETE SET NULL;
-CREATE INDEX idx_tool_call_task_runtime_tool_device_capability
+CREATE INDEX idx_tool_call_task_runtime_tool_runtime_capability
   ON tool_call_task_runtime_tool(runtime_capability_id, task_id);
 
 -- ============================================================================
