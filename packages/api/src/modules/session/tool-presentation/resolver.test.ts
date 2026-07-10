@@ -4,7 +4,7 @@ import { stableKeyFromSnapshot } from "./resolver.js"
 
 test("stableKeyFromSnapshot reads object snapshots and JSON string snapshots", () => {
   assert.equal(
-    stableKeyFromSnapshot("device", {
+    stableKeyFromSnapshot("runtime", {
       exposureStableKey: "synapse.builtin.filesystem.v1",
       visibleToolName: "read_file",
     }),
@@ -29,6 +29,6 @@ test("stableKeyFromSnapshot ignores non-object snapshots", () => {
     stableKeyFromSnapshot("system", JSON.stringify(["bad"])),
     undefined
   )
-  assert.equal(stableKeyFromSnapshot("device", "not json"), undefined)
+  assert.equal(stableKeyFromSnapshot("runtime", "not json"), undefined)
   assert.equal(stableKeyFromSnapshot("plugin", 42), undefined)
 })
