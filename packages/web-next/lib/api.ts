@@ -2687,7 +2687,7 @@ class ApiClient {
     )
     return res.data
   }
-  detachDeviceService(
+  detachRuntimeService(
     wsId: string,
     deviceId: string,
     serviceId: string

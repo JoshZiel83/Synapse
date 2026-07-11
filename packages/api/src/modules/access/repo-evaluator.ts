@@ -552,7 +552,7 @@ export async function loadDeviceAccessRow(
   }
 }
 
-export async function loadDeviceExposureDeviceId(
+export async function loadRuntimeExposureRuntimeId(
   db: KyselyDb,
   exposureId: string
 ): Promise<string | null> {
@@ -562,14 +562,14 @@ export async function loadDeviceExposureDeviceId(
     // exposure resolves its runtime principal id. runtime.id === exposure.runtimeId
     // (=== device.id for a real device), so byte-identical for devices.
     .innerJoin("runtimes as runtime", "runtime.id", "exposure.runtimeId")
-    .select(["runtime.id as deviceId"])
+    .select(["runtime.id as runtimeId"])
     .where("exposure.id", "=", exposureId)
     .limit(1)
     .executeTakeFirst()
-  return row?.deviceId ?? null
+  return row?.runtimeId ?? null
 }
 
-export async function loadDeviceCapabilityAccessRow(
+export async function loadRuntimeCapabilityAccessRow(
   db: KyselyDb,
   capabilityId: string
 ): Promise<WorkspaceResourceResourceAccessRow | null> {

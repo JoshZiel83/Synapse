@@ -6,7 +6,7 @@ import {
   ConsumePairingInputSchema,
   type ConsumePairingInput,
   type ConsumePairingResult,
-  type DeviceCapabilityAccessTarget,
+  type RuntimeCapabilityAccessTarget,
 } from "@synapse/device-protocol"
 import {
   DeviceDetailViewSchema,
@@ -17,7 +17,7 @@ import {
   CreateCloudDeviceResultViewSchema,
   StartPairingInputSchema,
   ClaimDaemonServiceInputSchema,
-  SetActiveDeviceCapabilitiesInputSchema,
+  SetActiveRuntimeCapabilitiesInputSchema,
   type DeviceDetailView,
   type DeviceListView,
   type DevicePairingTicketView,
@@ -26,21 +26,21 @@ import {
   type CreateCloudDeviceInput,
   type CreateCloudDeviceResultView,
   type ClaimDaemonServiceInput,
-  type SetActiveDeviceCapabilitiesInput,
+  type SetActiveRuntimeCapabilitiesInput,
   type StartPairingInput,
 } from "@synapse/shared/schemas"
 
 /**
  * AccessTarget — re-export of the narrow wire type
- * `DeviceCapabilityAccessTarget` from @synapse/device-protocol. SDK callers
+ * `RuntimeCapabilityAccessTarget` from @synapse/device-protocol. SDK callers
  * see the device-specific shape (no workspace_member, no scope=workspace etc.;
  * see ScopedSubjectTargetWireSchema superRefine in
  * packages/device-protocol/src/schemas.ts).
  */
-export type AccessTarget = DeviceCapabilityAccessTarget
+export type AccessTarget = RuntimeCapabilityAccessTarget
 
-// subject-scope-refactor: DevicePrincipal SDK-local type removed at cutover.
-// The server-internal `DevicePrincipal` union was renamed/collapsed: the
+// subject-scope-refactor: RuntimePrincipal SDK-local type removed at cutover.
+// The server-internal `RuntimePrincipal` union was renamed/collapsed: the
 // scoped-actor case ('actor_in_conversation') is now expressed as
 // (principal.kind='actor', activeConversationSubjectId set) inside
 // RuntimePrincipalContext. SDK consumers that need to identify a principal at
@@ -224,10 +224,10 @@ export class DeviceSdk {
    *     belongs to the same workspace
    *   - every listed capability belongs to the same workspace
    */
-  async setActiveDeviceCapabilitiesForTarget(
-    input: SetActiveDeviceCapabilitiesInput
+  async setActiveRuntimeCapabilitiesForTarget(
+    input: SetActiveRuntimeCapabilitiesInput
   ): Promise<void> {
-    const parsed = SetActiveDeviceCapabilitiesInputSchema.parse(input)
+    const parsed = SetActiveRuntimeCapabilitiesInputSchema.parse(input)
     await this.request<void>(
       "POST",
       `/api/v1/workspaces/${parsed.workspaceId}/devices/access-bindings`,
@@ -249,7 +249,7 @@ export type {
   CreateCloudDeviceInput,
   CreateCloudDeviceResultView,
   ClaimDaemonServiceInput,
-  SetActiveDeviceCapabilitiesInput,
+  SetActiveRuntimeCapabilitiesInput,
   StartPairingInput,
 }
 export type { ConsumePairingInput, ConsumePairingResult }

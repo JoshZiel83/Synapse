@@ -10,7 +10,7 @@
 // The sweep is idempotent: completeToolCallTask's terminal guard makes a task
 // that completed between the SELECT and the UPDATE a no-op.
 
-import { sweepExpiredDeviceTasks } from "../modules/devices/control-plane-events.js"
+import { sweepExpiredRuntimeTasks } from "../modules/devices/control-plane-events.js"
 import { createLogger } from "../infrastructure/logger/index.js"
 
 const log = createLogger("device-task-sweeper")
@@ -23,7 +23,7 @@ interface WorkerHandle {
 
 let active: WorkerHandle | null = null
 
-export function startDeviceTaskSweeper(): WorkerHandle {
+export function startRuntimeTaskSweeper(): WorkerHandle {
   if (active) return active
   let stopped = false
   let timer: ReturnType<typeof setInterval> | null = null
@@ -31,7 +31,7 @@ export function startDeviceTaskSweeper(): WorkerHandle {
   const tick = async () => {
     if (stopped) return
     try {
-      const swept = await sweepExpiredDeviceTasks()
+      const swept = await sweepExpiredRuntimeTasks()
       if (swept > 0) {
         log.info({ swept }, "failed expired device_tool tasks")
       }
@@ -57,7 +57,7 @@ export function startDeviceTaskSweeper(): WorkerHandle {
   return handle
 }
 
-export async function stopDeviceTaskSweeper(): Promise<void> {
+export async function stopRuntimeTaskSweeper(): Promise<void> {
   if (!active) return
   await active.stop()
   active = null

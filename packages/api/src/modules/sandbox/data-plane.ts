@@ -661,7 +661,7 @@ function resolveBashPath(): string | null {
 // Written ONCE: arg validation + VFS→in-sandbox lowering + cwc-default + per-op
 // caps live here; adapters (the plane) receive already-validated primitives.
 // dispatchBareRuntimeTool calls this; it returns the same McpDispatchResult
-// shape dispatchSyncTool does, so `completeDeviceOperation` + downstream handling
+// shape dispatchSyncTool does, so `completeRuntimeOperation` + downstream handling
 // are byte-identical.
 
 function textResult(

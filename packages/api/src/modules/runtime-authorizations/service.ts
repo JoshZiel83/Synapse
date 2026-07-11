@@ -51,8 +51,8 @@ import {
 } from "@synapse/shared/access/policies"
 import { upsertAccessSubject } from "../access/subject-registry.js"
 import {
-  assertNoDeviceToolRevisionDrift,
-  beginDeviceOperationOn,
+  assertNoRuntimeToolRevisionDrift,
+  beginRuntimeOperationOn,
   type BeginOperationInput,
   type BeginOperationResult,
 } from "../devices/operations.js"
@@ -1136,7 +1136,7 @@ async function tryClaimAndBegin(input: {
               return { kind: "race_lost" as const }
             }
           }
-          const operation = await beginDeviceOperationOn(
+          const operation = await beginRuntimeOperationOn(
             trx,
             input.prepared.beginInput
           )
@@ -1193,7 +1193,7 @@ async function listCandidatesForDispatch(params: {
 }
 
 // ============================================================================
-// listDeviceCapabilityRuntimeAuthorizationGrantsForDashboard — UI list path.
+// listRuntimeAuthorizationGrantsForDashboard — UI list path.
 // Returns a dual stream: valid records + corrupt diagnostic rows. Never
 // throws on per-row corruption.
 // ============================================================================
@@ -1209,7 +1209,7 @@ export interface DashboardGrantListResult {
   corrupt: CorruptGrantRow[]
 }
 
-export async function listDeviceCapabilityRuntimeAuthorizationGrantsForDashboard(input: {
+export async function listRuntimeAuthorizationGrantsForDashboard(input: {
   workspaceId: string
   runtimeCapabilityId: string
   includeRevoked?: boolean
@@ -1259,7 +1259,7 @@ export async function listDeviceCapabilityRuntimeAuthorizationGrantsForDashboard
 // helper selectAndClaimRuntimeAuthorizationGrant does SQL-side filtering
 // by (subject, scope) and atomic claim in a single transaction. There is
 // no longer a public "list grants" API on the dispatch path — dashboards
-// use listDeviceCapabilityRuntimeAuthorizationGrantsForDashboard, which
+// use listRuntimeAuthorizationGrantsForDashboard, which
 // emits {valid, corrupt} for surfacing instead.
 
 // subject-scope-refactor: RUNTIME_AUTHORIZATION_GRANT_SCOPE shim DROPPED.

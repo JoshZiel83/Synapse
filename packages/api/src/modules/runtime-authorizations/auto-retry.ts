@@ -25,7 +25,7 @@ import { dispatchBareRuntimeTool } from "../sandbox/bare-dispatch.js"
 import { signEnvelopeForDispatch } from "../devices/envelope-signer.js"
 import { getRuntimeEndpointRegistry } from "../devices/tunnel-registry.js"
 import {
-  completeDeviceOperation,
+  completeRuntimeOperation,
   type OperationPrincipalKind,
 } from "../devices/operations.js"
 import {
@@ -54,7 +54,7 @@ export interface AutoRetryDispatchResult {
  * "approved" notice in the UI.
  *
  * Auto-retry only has `initiatedBySessionId` from the audit context, not the
- * full DevicePrincipal — so we use the same `session:<id>` primary key
+ * full RuntimePrincipal — so we use the same `session:<id>` primary key
  * deriveCuaFocusScopeId would have produced for the original projection
  * dispatch. The principal-derived fallback table is intentionally NOT
  * reproduced here: when sessionId is missing we return undefined and let
@@ -310,7 +310,7 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
           args: args.sourceRequestArgs,
           toolName: args.visibleToolName,
         })
-  await completeDeviceOperation({
+  await completeRuntimeOperation({
     operationId,
     attemptId,
     ok: dispatchResult.ok,

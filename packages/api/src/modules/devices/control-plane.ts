@@ -36,21 +36,21 @@ import {
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
 import { persistCatalogSync } from "./catalog-sync.js"
 import { authenticateRuntimeHello } from "./control-plane-auth.js"
-import { mintDeviceLogToken } from "../logs/device-token.js"
+import { mintRuntimeLogToken } from "../logs/device-token.js"
 import { getEnvelopeServerPublicKey } from "./envelope-signer.js"
 import { getRuntimeEndpointRegistry } from "./tunnel-registry.js"
 import {
   insertControlPlaneSession as insertControlPlaneSessionRow,
   issueTunnelPathToken,
-  selectControlPlaneSessionDeviceId,
+  selectControlPlaneSessionRuntimeId,
   closeControlPlaneSessionRows,
-  getDeviceWorkspaceId,
+  getRuntimeWorkspaceId,
   selectTunnelPathToken,
   updateRuntimeServiceTransport,
   hasLiveLocalSandboxMount,
 } from "./repo.js"
 import {
-  persistDeviceEventEmit,
+  persistRuntimeEventEmit,
   persistRuntimeSessionClosed,
   persistRuntimeSessionOpened,
   persistTaskOutput,
@@ -59,7 +59,7 @@ import {
   persistTaskStarted,
   persistTaskStatus,
   persistVfsExposureUpsert,
-  failInFlightDeviceTasksForDevice,
+  failInFlightRuntimeTasksForRuntime,
   type PersistResult,
 } from "./control-plane-events.js"
 
@@ -321,7 +321,7 @@ function jsonRpcCodeForAuthFailure(code: string): number {
 }
 
 async function insertControlPlaneSession(args: {
-  deviceId: string
+  runtimeId: string
   serviceId: string
   clientVersion: string | null
   remoteAddr: string | null
@@ -329,7 +329,7 @@ async function insertControlPlaneSession(args: {
   const sessionId = randomUUID()
   await insertControlPlaneSessionRow({
     sessionId,
-    deviceId: args.deviceId,
+    runtimeId: args.runtimeId,
     serviceId: args.serviceId,
     clientVersion: args.clientVersion,
     remoteAddr: args.remoteAddr,
@@ -360,12 +360,12 @@ async function closeControlPlaneSession(
   reason: string
 ): Promise<void> {
   try {
-    const deviceId = await selectControlPlaneSessionDeviceId(sessionId)
+    const runtimeId = await selectControlPlaneSessionRuntimeId(sessionId)
     await closeControlPlaneSessionRows(sessionId, reason)
     // Task unification (design §3.6): fail in-flight device_tool tasks so the
     // waiting agent is woken instead of hanging when the device drops.
-    if (deviceId) {
-      await failInFlightDeviceTasksForDevice(deviceId).catch(() => undefined)
+    if (runtimeId) {
+      await failInFlightRuntimeTasksForRuntime(runtimeId).catch(() => undefined)
     }
   } catch {
     /* best effort; DB unavailability shouldn't block socket teardown */
@@ -472,7 +472,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
                 // Cache the device's workspace_id so per-message event
                 // persistence (runtime_events) doesn't have to re-query it.
                 try {
-                  state.authenticatedWorkspaceId = await getDeviceWorkspaceId(
+                  state.authenticatedWorkspaceId = await getRuntimeWorkspaceId(
                     result.runtimeId
                   )
                 } catch {
@@ -484,7 +484,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
                 // can find an active session and not reject themselves.
                 try {
                   state.sessionId = await insertControlPlaneSession({
-                    deviceId: result.runtimeId,
+                    runtimeId: result.runtimeId,
                     serviceId: result.serviceId,
                     clientVersion: parsed.data.client_version ?? null,
                     remoteAddr: request.ip ?? null,
@@ -547,7 +547,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
                   // Short-lived bearer token for the device to ship logs to
                   // POST /api/v1/logs. Null (omitted use) when log ingest is not
                   // configured (SYNAPSE_LOG_INGEST_SECRET unset).
-                  log_ingest_token: mintDeviceLogToken(
+                  log_ingest_token: mintRuntimeLogToken(
                     result.runtimeId,
                     result.serviceId,
                     Date.now()
@@ -580,7 +580,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
               return
             }
             persistCatalogSync({
-              deviceId: state.authenticatedRuntimeId!,
+              runtimeId: state.authenticatedRuntimeId!,
               serviceId: state.authenticatedServiceId!,
               exposures: parsedCatalog.data.exposures,
             })
@@ -842,7 +842,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
               )
               return
             }
-            persistDeviceEventEmit(state.authenticatedWorkspaceId, req.params)
+            persistRuntimeEventEmit(state.authenticatedWorkspaceId, req.params)
               .then((r) => writePersistResult(socket, req.id ?? null, r))
               .catch((err) =>
                 writeError(

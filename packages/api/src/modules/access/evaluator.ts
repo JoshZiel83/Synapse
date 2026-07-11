@@ -24,8 +24,8 @@ import {
   listWorkspaceResourceGrantRows,
   listWorkspaceMemberModelGroupIds,
   loadDeviceAccessRow,
-  loadDeviceCapabilityAccessRow,
-  loadDeviceExposureDeviceId,
+  loadRuntimeCapabilityAccessRow,
+  loadRuntimeExposureRuntimeId,
   loadActorRow,
   loadConversationRow,
   loadInstalledSkillAccessRow,
@@ -935,14 +935,14 @@ async function hasExposurePermission(
   permission: string
 ): Promise<boolean> {
   const managementVisiblePermissions = ["edit", "grant", "delete"] as const
-  const deviceId = await loadDeviceExposureDeviceId(db, exposureId)
-  if (!deviceId) {
+  const runtimeId = await loadRuntimeExposureRuntimeId(db, exposureId)
+  if (!runtimeId) {
     return false
   }
   return hasDevicePermission(
     db,
     subject,
-    deviceId,
+    runtimeId,
     permission === "view" ? "view" : "manage"
   )
 }
@@ -956,7 +956,7 @@ async function hasCapabilityPermission(
   runtimeSubjectIds?: readonly string[]
 ): Promise<boolean> {
   const managementVisiblePermissions = ["edit", "grant", "delete"] as const
-  const row = await loadDeviceCapabilityAccessRow(db, capabilityId)
+  const row = await loadRuntimeCapabilityAccessRow(db, capabilityId)
   if (!row) {
     return false
   }

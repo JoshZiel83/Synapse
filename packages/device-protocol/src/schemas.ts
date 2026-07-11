@@ -90,7 +90,7 @@ export const ScopedSubjectTargetWireSchema = z
       })
     }
   })
-export type DeviceCapabilityAccessTarget = z.infer<
+export type RuntimeCapabilityAccessTarget = z.infer<
   typeof ScopedSubjectTargetWireSchema
 >
 

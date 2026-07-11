@@ -16,15 +16,15 @@ import {
 import {
   upsertRuntimeSessionOpened,
   closeRuntimeSession,
-  selectDeviceOperationOwner,
-  selectDeviceOperationAttempt,
+  selectRuntimeOperationOwner,
+  selectRuntimeOperationAttempt,
   selectTaskIdForOperation,
-  setDeviceOperationStatus,
-  setDeviceOperationAttemptStatus,
-  markDeviceOperationOutputStreaming,
-  finalizeDeviceOperationResult,
-  selectInFlightDeviceTaskIds,
-  selectExpiredDeviceTaskIds,
+  setRuntimeOperationStatus,
+  setRuntimeOperationAttemptStatus,
+  markRuntimeOperationOutputStreaming,
+  finalizeRuntimeOperationResult,
+  selectInFlightRuntimeTaskIds,
+  selectExpiredRuntimeTaskIds,
   insertRuntimeEvent,
   mergeVfsExposureMetadata,
 } from "./repo.js"
@@ -44,7 +44,7 @@ export type PersistResult =
 // ─── device.runtime_session.opened / closed ─────────────────────────────────
 
 export async function persistRuntimeSessionOpened(
-  deviceId: string,
+  runtimeId: string,
   serviceId: string,
   raw: unknown
 ): Promise<PersistResult> {
@@ -59,7 +59,7 @@ export async function persistRuntimeSessionOpened(
   try {
     await upsertRuntimeSessionOpened({
       runtimeSessionId: parsed.data.runtime_session_id,
-      deviceId: deviceId,
+      runtimeId: runtimeId,
       serviceId: serviceId,
       conversationId: parsed.data.conversation_id ?? null,
       actorId: parsed.data.actor_id ?? null,
@@ -75,7 +75,7 @@ export async function persistRuntimeSessionOpened(
 }
 
 export async function persistRuntimeSessionClosed(
-  deviceId: string,
+  runtimeId: string,
   serviceId: string,
   raw: unknown
 ): Promise<PersistResult> {
@@ -90,7 +90,7 @@ export async function persistRuntimeSessionClosed(
   try {
     await closeRuntimeSession({
       runtimeSessionId: parsed.data.runtime_session_id,
-      deviceId: deviceId,
+      runtimeId: runtimeId,
       serviceId: serviceId,
     })
     return { ok: true }
@@ -114,10 +114,10 @@ export async function persistRuntimeSessionClosed(
 async function assertOperationOwnership(args: {
   operationId: string
   attemptId?: string
-  deviceId: string
+  runtimeId: string
   serviceId: string
 }): Promise<PersistResult> {
-  const op = await selectDeviceOperationOwner(args.operationId)
+  const op = await selectRuntimeOperationOwner(args.operationId)
   if (!op) {
     return {
       ok: false,
@@ -125,7 +125,7 @@ async function assertOperationOwnership(args: {
       message: `operation ${args.operationId} not found`,
     }
   }
-  if (op.deviceId !== args.deviceId) {
+  if (op.runtimeId !== args.runtimeId) {
     return {
       ok: false,
       code: -32005,
@@ -133,7 +133,7 @@ async function assertOperationOwnership(args: {
     }
   }
   if (args.attemptId) {
-    const attempt = await selectDeviceOperationAttempt(args.attemptId)
+    const attempt = await selectRuntimeOperationAttempt(args.attemptId)
     if (!attempt) {
       return {
         ok: false,
@@ -167,7 +167,7 @@ async function assertOperationOwnership(args: {
 // emitTaskNotice's atomic RETURNING flip make a retransmitted device.task.result
 // an idempotent no-op (delivery fires exactly once even under concurrent
 // terminal sources). Output seq is allocated atomically in-DB
-// (appendToolCallTaskOutput without an explicit seq), and driveDeviceTaskOutput
+// (appendToolCallTaskOutput without an explicit seq), and driveRuntimeTaskOutput
 // skips already-terminal tasks, so a replayed/out-of-order output can neither
 // collide on seq nor mutate a completed task. NOTE: per-frame monotonic
 // ordering across the control-plane socket is NOT yet enforced
@@ -179,7 +179,7 @@ async function taskIdForOperation(operationId: string): Promise<string | null> {
 }
 
 /** Drive the task to `working` when the device acks/starts (best-effort). */
-async function driveDeviceTaskWorking(operationId: string) {
+async function driveRuntimeTaskWorking(operationId: string) {
   const taskId = await taskIdForOperation(operationId)
   if (!taskId) return
   const task = await getToolCallTask(taskId)
@@ -188,7 +188,7 @@ async function driveDeviceTaskWorking(operationId: string) {
 }
 
 /** Append a device output chunk to the task's output tail (best-effort). */
-async function driveDeviceTaskOutput(operationId: string, output: unknown) {
+async function driveRuntimeTaskOutput(operationId: string, output: unknown) {
   const taskId = await taskIdForOperation(operationId)
   if (!taskId) return
   const task = await getToolCallTask(taskId)
@@ -215,7 +215,7 @@ async function driveDeviceTaskOutput(operationId: string, output: unknown) {
 }
 
 /** Terminalize the task from the device result + deliver (idempotent). */
-async function driveDeviceTaskResult(
+async function driveRuntimeTaskResult(
   operationId: string,
   result: { ok: boolean; errorMessage?: string; resultHash?: string }
 ) {
@@ -244,11 +244,11 @@ async function driveDeviceTaskResult(
  * failure instead of hanging forever (design §3.6). Operations that already
  * completed are skipped via the task's terminal guard.
  */
-export async function failInFlightDeviceTasksForDevice(
-  deviceId: string,
+export async function failInFlightRuntimeTasksForRuntime(
+  runtimeId: string,
   reason = "Device disconnected before the tool finished."
 ): Promise<number> {
-  const taskIds = await selectInFlightDeviceTaskIds(deviceId)
+  const taskIds = await selectInFlightRuntimeTaskIds(runtimeId)
   let failed = 0
   for (const taskId of taskIds) {
     const task = await getToolCallTask(taskId)
@@ -270,10 +270,10 @@ export async function failInFlightDeviceTasksForDevice(
  * non-terminal (design §3.6 — `expires_at` was written but never enforced).
  * Returns the count swept. Call from a periodic worker.
  */
-export async function sweepExpiredDeviceTasks(
+export async function sweepExpiredRuntimeTasks(
   now = new Date()
 ): Promise<number> {
-  const taskIds = await selectExpiredDeviceTaskIds(now)
+  const taskIds = await selectExpiredRuntimeTaskIds(now)
   let swept = 0
   for (const taskId of taskIds) {
     const reason = "Device tool timed out."
@@ -289,7 +289,7 @@ export async function sweepExpiredDeviceTasks(
 }
 
 export async function persistTaskReceived(
-  deviceId: string,
+  runtimeId: string,
   serviceId: string,
   raw: unknown
 ): Promise<PersistResult> {
@@ -300,24 +300,28 @@ export async function persistTaskReceived(
   const ownership = await assertOperationOwnership({
     operationId: parsed.data.operation_id,
     attemptId: parsed.data.attempt_id,
-    deviceId,
+    runtimeId,
     serviceId,
   })
   if (!ownership.ok) return ownership
-  await setDeviceOperationStatus(parsed.data.operation_id, deviceId, "received")
+  await setRuntimeOperationStatus(
+    parsed.data.operation_id,
+    runtimeId,
+    "received"
+  )
   if (parsed.data.attempt_id) {
-    await setDeviceOperationAttemptStatus(
+    await setRuntimeOperationAttemptStatus(
       parsed.data.attempt_id,
       serviceId,
       "sent"
     )
   }
-  await driveDeviceTaskWorking(parsed.data.operation_id)
+  await driveRuntimeTaskWorking(parsed.data.operation_id)
   return { ok: true }
 }
 
 export async function persistTaskStarted(
-  deviceId: string,
+  runtimeId: string,
   serviceId: string,
   raw: unknown
 ): Promise<PersistResult> {
@@ -328,17 +332,21 @@ export async function persistTaskStarted(
   const ownership = await assertOperationOwnership({
     operationId: parsed.data.operation_id,
     attemptId: parsed.data.attempt_id,
-    deviceId,
+    runtimeId,
     serviceId,
   })
   if (!ownership.ok) return ownership
-  await setDeviceOperationStatus(parsed.data.operation_id, deviceId, "started")
-  await driveDeviceTaskWorking(parsed.data.operation_id)
+  await setRuntimeOperationStatus(
+    parsed.data.operation_id,
+    runtimeId,
+    "started"
+  )
+  await driveRuntimeTaskWorking(parsed.data.operation_id)
   return { ok: true }
 }
 
 export async function persistTaskOutput(
-  deviceId: string,
+  runtimeId: string,
   serviceId: string,
   raw: unknown
 ): Promise<PersistResult> {
@@ -349,25 +357,25 @@ export async function persistTaskOutput(
   const ownership = await assertOperationOwnership({
     operationId: parsed.data.operation_id,
     attemptId: parsed.data.attempt_id,
-    deviceId,
+    runtimeId,
     serviceId,
   })
   if (!ownership.ok) return ownership
-  await markDeviceOperationOutputStreaming(parsed.data.operation_id, deviceId)
-  await driveDeviceTaskOutput(parsed.data.operation_id, parsed.data.output)
+  await markRuntimeOperationOutputStreaming(parsed.data.operation_id, runtimeId)
+  await driveRuntimeTaskOutput(parsed.data.operation_id, parsed.data.output)
   return { ok: true }
 }
 
 export async function persistTaskStatus(
-  deviceId: string,
+  runtimeId: string,
   serviceId: string,
   raw: unknown
 ): Promise<PersistResult> {
-  return persistTaskStarted(deviceId, serviceId, raw)
+  return persistTaskStarted(runtimeId, serviceId, raw)
 }
 
 export async function persistTaskResult(
-  deviceId: string,
+  runtimeId: string,
   serviceId: string,
   raw: unknown
 ): Promise<PersistResult> {
@@ -378,13 +386,13 @@ export async function persistTaskResult(
   const ownership = await assertOperationOwnership({
     operationId: parsed.data.operation_id,
     attemptId: parsed.data.attempt_id,
-    deviceId,
+    runtimeId,
     serviceId,
   })
   if (!ownership.ok) return ownership
-  await finalizeDeviceOperationResult({
+  await finalizeRuntimeOperationResult({
     operationId: parsed.data.operation_id,
-    deviceId,
+    runtimeId,
     attemptId: parsed.data.attempt_id,
     serviceId,
     ok: parsed.data.ok,
@@ -392,7 +400,7 @@ export async function persistTaskResult(
     errorCode: parsed.data.error_code ?? null,
     errorMessage: parsed.data.error_message ?? null,
   })
-  await driveDeviceTaskResult(parsed.data.operation_id, {
+  await driveRuntimeTaskResult(parsed.data.operation_id, {
     ok: parsed.data.ok,
     errorMessage: parsed.data.error_message,
     resultHash: parsed.data.result_hash,
@@ -402,7 +410,7 @@ export async function persistTaskResult(
 
 // ─── device.event.emit ──────────────────────────────────────────────────────
 
-export async function persistDeviceEventEmit(
+export async function persistRuntimeEventEmit(
   workspaceId: string,
   raw: unknown
 ): Promise<PersistResult> {
@@ -430,7 +438,7 @@ export async function persistDeviceEventEmit(
  * the dashboard can render it.
  */
 export async function persistVfsExposureUpsert(
-  deviceId: string,
+  runtimeId: string,
   raw: unknown
 ): Promise<PersistResult> {
   const parsed = DeviceVfsExposureUpsertParamsSchema.safeParse(raw)
@@ -439,7 +447,7 @@ export async function persistVfsExposureUpsert(
   }
   await mergeVfsExposureMetadata(
     parsed.data.exposure_id,
-    deviceId,
+    runtimeId,
     JSON.stringify(parsed.data.vfs)
   )
   return { ok: true }

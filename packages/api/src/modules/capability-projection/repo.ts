@@ -18,7 +18,7 @@ import { buildRuntimePrincipalContext } from "../access/subject-resolution.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
 import { upsertAccessSubjectDefault } from "../access/guards.js"
 
-export interface DeviceCapabilityToolRow {
+export interface RuntimeCapabilityToolRow {
   runtimeId: string
   runtimeName: string
   runtimeServiceId: string
@@ -65,7 +65,7 @@ export interface DeviceCapabilityToolRow {
   deviceArch: string | null
 }
 
-export interface LoadDeviceToolsParams {
+export interface LoadRuntimeToolsParams {
   workspaceId: string
   /** subject_ids whose grants should count. */
   subjectIds: string[]
@@ -95,10 +95,10 @@ export type CapabilityProjectionRuntimeContextDb = KyselyDb
  * the module's stable camelCase domain rows. Keeps the exposureMetadata
  * normalization map at the repo exit.
  */
-export async function selectDeviceCapabilityToolsForSubjects(
-  params: LoadDeviceToolsParams,
+export async function selectRuntimeCapabilityToolsForSubjects(
+  params: LoadRuntimeToolsParams,
   run: Executor = db
-): Promise<DeviceCapabilityToolRow[]> {
+): Promise<RuntimeCapabilityToolRow[]> {
   if (params.subjectIds.length === 0) return []
   // distinctOn collapses duplicate rows when multiple subject grants cover
   // the same capability (e.g. workspace-scope + actor-scope both grant the
@@ -320,7 +320,7 @@ export async function loadRuntimePrincipalContextForCapabilityProjection(params:
   })
 }
 
-export interface ReplaceDeviceCapabilityGrantsParams {
+export interface ReplaceRuntimeCapabilityGrantsParams {
   workspaceId: string
   subjectId: string
   scopeSubjectId?: string
@@ -330,13 +330,13 @@ export interface ReplaceDeviceCapabilityGrantsParams {
 }
 
 /**
- * Full-replace transaction body of setActiveDeviceCapabilitiesForTarget: a
+ * Full-replace transaction body of setActiveRuntimeCapabilitiesForTarget: a
  * tuple-precise revoke of the target's active `use` grants followed by the
  * insert of the new grant set. Both statements run inside a single
  * transaction so the replace is atomic.
  */
-export async function replaceDeviceCapabilityGrants(
-  params: ReplaceDeviceCapabilityGrantsParams,
+export async function replaceRuntimeCapabilityGrants(
+  params: ReplaceRuntimeCapabilityGrantsParams,
   run: Executor = db
 ): Promise<void> {
   await run.transaction().execute(async (trx) => {
@@ -383,7 +383,7 @@ export async function replaceDeviceCapabilityGrants(
   })
 }
 
-export interface MutateDeviceCapabilityGrantsParams {
+export interface MutateRuntimeCapabilityGrantsParams {
   workspaceId: string
   subjectId: string
   scopeSubjectId?: string
@@ -398,8 +398,8 @@ export interface MutateDeviceCapabilityGrantsParams {
  * other capability grants. Idempotent per (capability, subject, scope) via
  * the active partial-unique.
  */
-export async function insertDeviceCapabilityGrants(
-  params: MutateDeviceCapabilityGrantsParams,
+export async function insertRuntimeCapabilityGrants(
+  params: MutateRuntimeCapabilityGrantsParams,
   run: Executor = db
 ): Promise<void> {
   if (params.capabilityIds.length === 0) return
@@ -425,8 +425,8 @@ export async function insertDeviceCapabilityGrants(
  * TARGETED revoke: revoke ONLY the given capability ids' active grants on
  * (subject, scope), leaving the target's other capabilities intact.
  */
-export async function revokeDeviceCapabilityGrants(
-  params: MutateDeviceCapabilityGrantsParams,
+export async function revokeRuntimeCapabilityGrants(
+  params: MutateRuntimeCapabilityGrantsParams,
   run: Executor = db
 ): Promise<void> {
   if (params.capabilityIds.length === 0) return
@@ -455,7 +455,7 @@ export async function revokeDeviceCapabilityGrants(
  * Active `use`-permission device-capability grants for (subject, scope) in a
  * workspace. Returns the filtered workspace_resource_id string[].
  */
-export async function selectActiveDeviceCapabilityIdsForSubject(
+export async function selectActiveRuntimeCapabilityIdsForSubject(
   workspaceId: string,
   subjectId: string,
   scopeSubjectId: string | undefined,

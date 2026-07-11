@@ -1,7 +1,7 @@
 // device-sdk boundary tests — lock the app-facing camelCase contract.
 //
 // The management methods (listDevices / getDevice / createCloudDevice /
-// startPairing / claimRemoteAgentDaemon / setActiveDeviceCapabilitiesForTarget)
+// startPairing / claimRemoteAgentDaemon / setActiveRuntimeCapabilitiesForTarget)
 // are app-facing: they SEND camelCase bodies and PARSE the shared camelCase
 // view schemas (@synapse/shared). Only the true handshake wire method
 // (consumePairing) keeps the device-protocol snake_case shape. These tests pin
@@ -189,18 +189,18 @@ test("claimRemoteAgentDaemon SENDS camelCase body + PARSES the service view", as
   assert.equal(service.serviceKind, "remote_agent_daemon")
 })
 
-test("setActiveDeviceCapabilitiesForTarget SENDS camelCase deviceCapabilityIds", async () => {
+test("setActiveRuntimeCapabilitiesForTarget SENDS camelCase runtimeCapabilityIds", async () => {
   const { sdk, captured } = makeSdk(null, 204)
-  await sdk.setActiveDeviceCapabilitiesForTarget({
+  await sdk.setActiveRuntimeCapabilitiesForTarget({
     workspaceId: wsId,
     target: { subject: { kind: "workspace", workspaceId: wsId } },
-    deviceCapabilityIds: [capId],
+    runtimeCapabilityIds: [capId],
   })
   const body = captured[0]?.body as Record<string, unknown>
-  assert.deepEqual(body.deviceCapabilityIds, [capId])
+  assert.deepEqual(body.runtimeCapabilityIds, [capId])
   assert.ok(
-    !("device_capability_ids" in body),
-    "must not send snake device_capability_ids"
+    !("runtime_capability_ids" in body),
+    "must not send snake runtime_capability_ids"
   )
 })
 

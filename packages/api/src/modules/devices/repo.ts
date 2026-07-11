@@ -89,7 +89,7 @@ export async function findRemoteAgentWorkspace(
  * the set actually owned by `workspaceId` (app not deleted). The caller derives
  * the `missing` set from this — ownership comparison is validation, not query.
  */
-export async function findOwnedDeviceCapabilityIds(
+export async function findOwnedRuntimeCapabilityIds(
   workspaceId: string,
   capabilityIds: string[]
 ): Promise<Set<string>> {
@@ -395,7 +395,7 @@ export async function consumeCloudBootstrapTx(args: {
 /** Insert a runtime_control_plane_sessions row + bump runtime_services pointer. */
 export async function insertControlPlaneSession(args: {
   sessionId: string
-  deviceId: string
+  runtimeId: string
   serviceId: string
   clientVersion: string | null
   remoteAddr: string | null
@@ -404,7 +404,7 @@ export async function insertControlPlaneSession(args: {
     .insertInto("runtimeControlPlaneSessions")
     .values({
       id: args.sessionId,
-      runtimeId: args.deviceId,
+      runtimeId: args.runtimeId,
       serviceId: args.serviceId,
       protocolVersion: 1,
       clientVersion: args.clientVersion,
@@ -449,8 +449,8 @@ export async function issueTunnelPathToken(
   return (row?.tunnelPathToken as string | null) ?? null
 }
 
-/** Read a control-plane session's deviceId (for in-flight task failure on close). */
-export async function selectControlPlaneSessionDeviceId(
+/** Read a control-plane session's runtimeId (for in-flight task failure on close). */
+export async function selectControlPlaneSessionRuntimeId(
   sessionId: string
 ): Promise<string | null> {
   const row = await db
@@ -488,13 +488,13 @@ export async function closeControlPlaneSessionRows(
  *  null. Generalized to the runtimes supertype (P2) so a device-less
  *  kind='sandbox' runtime attributes its per-message runtime_events identically
  *  (runtimes.workspace_id === devices.workspace_id for a device). */
-export async function getDeviceWorkspaceId(
-  deviceId: string
+export async function getRuntimeWorkspaceId(
+  runtimeId: string
 ): Promise<string | null> {
   const row = await db
     .selectFrom("runtimesLive")
     .select(["workspaceId"])
-    .where("id", "=", deviceId)
+    .where("id", "=", runtimeId)
     .executeTakeFirst()
   return (row?.workspaceId as string | undefined) ?? null
 }
@@ -636,7 +636,7 @@ export async function hasLiveLocalSandboxMount(
 /** Open (upsert) a runtime session + its service row in one transaction. */
 export async function upsertRuntimeSessionOpened(input: {
   runtimeSessionId: string
-  deviceId: string
+  runtimeId: string
   serviceId: string
   conversationId: string | null
   actorId: string | null
@@ -646,7 +646,7 @@ export async function upsertRuntimeSessionOpened(input: {
       .insertInto("runtimeSessions")
       .values({
         id: input.runtimeSessionId,
-        runtimeId: input.deviceId,
+        runtimeId: input.runtimeId,
         conversationId: input.conversationId,
         actorId: input.actorId,
         status: "open",
@@ -680,7 +680,7 @@ export async function upsertRuntimeSessionOpened(input: {
 /** Close a runtime session + its service row in one transaction. */
 export async function closeRuntimeSession(input: {
   runtimeSessionId: string
-  deviceId: string
+  runtimeId: string
   serviceId: string
 }): Promise<void> {
   await db.transaction().execute(async (trx) => {
@@ -691,7 +691,7 @@ export async function closeRuntimeSession(input: {
         closedAt: sql`NOW()`,
       })
       .where("id", "=", input.runtimeSessionId)
-      .where("runtimeId", "=", input.deviceId)
+      .where("runtimeId", "=", input.runtimeId)
       .execute()
     await trx
       .updateTable("runtimeSessionServices")
@@ -703,21 +703,21 @@ export async function closeRuntimeSession(input: {
 }
 
 /** Operation-ownership read: the runtime_operations row (id + owning device). */
-export async function selectDeviceOperationOwner(
+export async function selectRuntimeOperationOwner(
   operationId: string
-): Promise<{ id: string; deviceId: string } | undefined> {
+): Promise<{ id: string; runtimeId: string } | undefined> {
   const op = await db
     .selectFrom("runtimeOperations")
     .select(["id", "runtimeId"])
     .where("id", "=", operationId)
     .executeTakeFirst()
   return op
-    ? { id: op.id as string, deviceId: op.runtimeId as string }
+    ? { id: op.id as string, runtimeId: op.runtimeId as string }
     : undefined
 }
 
 /** Operation-ownership read: the runtime_operation_attempts row. */
-export async function selectDeviceOperationAttempt(
+export async function selectRuntimeOperationAttempt(
   attemptId: string
 ): Promise<
   { id: string; operationId: string; runtimeServiceId: string } | undefined
@@ -749,21 +749,21 @@ export async function selectTaskIdForOperation(
 }
 
 /** Set a runtime_operations.status (scoped to the owning device). */
-export async function setDeviceOperationStatus(
+export async function setRuntimeOperationStatus(
   operationId: string,
-  deviceId: string,
+  runtimeId: string,
   status: string
 ): Promise<void> {
   await db
     .updateTable("runtimeOperations")
     .set({ status } as never)
     .where("id", "=", operationId)
-    .where("runtimeId", "=", deviceId)
+    .where("runtimeId", "=", runtimeId)
     .execute()
 }
 
 /** Set a runtime_operation_attempts.status (scoped to the owning service). */
-export async function setDeviceOperationAttemptStatus(
+export async function setRuntimeOperationAttemptStatus(
   attemptId: string,
   serviceId: string,
   status: string
@@ -777,15 +777,15 @@ export async function setDeviceOperationAttemptStatus(
 }
 
 /** Guarded transition to output_streaming (only from started/output_streaming). */
-export async function markDeviceOperationOutputStreaming(
+export async function markRuntimeOperationOutputStreaming(
   operationId: string,
-  deviceId: string
+  runtimeId: string
 ): Promise<void> {
   await db
     .updateTable("runtimeOperations")
     .set({ status: "output_streaming" } as never)
     .where("id", "=", operationId)
-    .where("runtimeId", "=", deviceId)
+    .where("runtimeId", "=", runtimeId)
     .where("status", "in", ["started", "output_streaming"])
     .execute()
 }
@@ -795,9 +795,9 @@ export async function markDeviceOperationOutputStreaming(
  * matching attempt (acknowledged/failed + responseAt/acknowledgedAt) in one
  * transaction.
  */
-export async function finalizeDeviceOperationResult(input: {
+export async function finalizeRuntimeOperationResult(input: {
   operationId: string
-  deviceId: string
+  runtimeId: string
   attemptId?: string
   serviceId: string
   ok: boolean
@@ -816,7 +816,7 @@ export async function finalizeDeviceOperationResult(input: {
         completedAt: sql`NOW()`,
       })
       .where("id", "=", input.operationId)
-      .where("runtimeId", "=", input.deviceId)
+      .where("runtimeId", "=", input.runtimeId)
       .execute()
     if (input.attemptId) {
       await trx
@@ -834,14 +834,14 @@ export async function finalizeDeviceOperationResult(input: {
 }
 
 /** In-flight (non-terminal) device_tool task ids for a device (join select). */
-export async function selectInFlightDeviceTaskIds(
-  deviceId: string
+export async function selectInFlightRuntimeTaskIds(
+  runtimeId: string
 ): Promise<string[]> {
   const rows = await db
     .selectFrom("runtimeOperations as op")
     .innerJoin("toolCallTasks as t", "t.id", "op.taskId")
     .select("op.taskId as taskId")
-    .where("op.runtimeId", "=", deviceId)
+    .where("op.runtimeId", "=", runtimeId)
     .where("op.taskId", "is not", null)
     .where("t.lifecycleStatus", "in", [
       "submitted",
@@ -856,7 +856,9 @@ export async function selectInFlightDeviceTaskIds(
 }
 
 /** Expired-but-non-terminal device_tool task ids (TTL sweeper select). */
-export async function selectExpiredDeviceTaskIds(now: Date): Promise<string[]> {
+export async function selectExpiredRuntimeTaskIds(
+  now: Date
+): Promise<string[]> {
   const rows = await db
     .selectFrom("toolCallTasks")
     .select("id")
@@ -899,7 +901,7 @@ export async function insertRuntimeEvent(input: {
 /** Merge a vfs snapshot into runtime_exposures.metadata (jsonb COALESCE/|| merge). */
 export async function mergeVfsExposureMetadata(
   exposureId: string,
-  deviceId: string,
+  runtimeId: string,
   vfsJson: string
 ): Promise<void> {
   await db
@@ -908,7 +910,7 @@ export async function mergeVfsExposureMetadata(
       metadata: sql`COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('vfs', ${vfsJson}::jsonb)`,
     } as never)
     .where("id", "=", exposureId)
-    .where("runtimeId", "=", deviceId)
+    .where("runtimeId", "=", runtimeId)
     .execute()
 }
 
@@ -966,7 +968,7 @@ export class RevisionDriftError extends Error {
   }
 }
 
-export async function assertNoDeviceToolRevisionDrift(
+export async function assertNoRuntimeToolRevisionDrift(
   dbOrTrx: KyselyDb | DatabaseTransaction,
   toolId: string,
   expectedRevisionId: string
@@ -988,7 +990,7 @@ export async function assertNoDeviceToolRevisionDrift(
   }
 }
 
-export async function beginDeviceOperationOn(
+export async function beginRuntimeOperationOn(
   trx: DatabaseTransaction,
   input: BeginOperationInput
 ): Promise<BeginOperationResult> {
@@ -1068,16 +1070,16 @@ async function getCatalogRevisionForToolRevision(
  * before issuing the dispatch. The drift check + INSERT run in the same Kysely
  * transaction so a concurrent catalog sync can't slip in between.
  */
-export async function beginDeviceOperation(
+export async function beginRuntimeOperation(
   input: BeginOperationInput
 ): Promise<BeginOperationResult> {
   return db.transaction().execute(async (trx: DatabaseTransaction) => {
-    await assertNoDeviceToolRevisionDrift(
+    await assertNoRuntimeToolRevisionDrift(
       trx,
       input.envelope.runtime_tool_id,
       input.envelope.runtime_tool_revision_id
     )
-    return beginDeviceOperationOn(trx, input)
+    return beginRuntimeOperationOn(trx, input)
   })
 }
 
@@ -1086,7 +1088,7 @@ export async function beginDeviceOperation(
  * the dispatch loop's `finally` so partial states (errors mid-dispatch) still
  * land in the audit trail.
  */
-export async function completeDeviceOperation(
+export async function completeRuntimeOperation(
   input: CompleteOperationInput
 ): Promise<void> {
   await db.transaction().execute(async (trx: DatabaseTransaction) => {
@@ -1181,7 +1183,7 @@ function exposureSchemaHash(exposure: DeviceCatalogExposure): string {
 }
 
 export interface PersistCatalogSyncInput {
-  deviceId: string
+  runtimeId: string
   serviceId: string
   exposures: DeviceCatalogExposure[]
   /**
@@ -1236,11 +1238,13 @@ export async function persistCatalogSync(
     const runtime = await trx
       .selectFrom("runtimes")
       .select(["id", "workspaceId"])
-      .where("id", "=", input.deviceId)
+      .where("id", "=", input.runtimeId)
       .where("deletedAt", "is", null)
       .executeTakeFirst()
     if (!runtime) {
-      throw new Error(`persistCatalogSync: runtime ${input.deviceId} not found`)
+      throw new Error(
+        `persistCatalogSync: runtime ${input.runtimeId} not found`
+      )
     }
 
     let newRevisionCount = 0
@@ -1251,7 +1255,7 @@ export async function persistCatalogSync(
 
     for (const exposure of input.exposures) {
       const exposureId = await upsertExposure(trx, {
-        runtimeId: input.deviceId,
+        runtimeId: input.runtimeId,
         workspaceId: runtime.workspaceId as string,
         serviceId: input.serviceId,
         exposure,
@@ -1290,7 +1294,7 @@ export async function persistCatalogSync(
     const allExposureIds = await trx
       .selectFrom("runtimeExposures")
       .select(["id"])
-      .where("runtimeId", "=", input.deviceId)
+      .where("runtimeId", "=", input.runtimeId)
       .execute()
     const staleExposureIds = allExposureIds
       .map((r) => r.id as string)
@@ -2187,7 +2191,7 @@ export async function mintBareSandboxRuntimeTx(args: {
     // Persist the api-authored catalog SYNCHRONOUSLY inside this tx (the runtime
     // row it reads for existence/workspace attribution is the one just inserted).
     const persisted = await persistCatalogSync({
-      deviceId: args.runtimeId,
+      runtimeId: args.runtimeId,
       serviceId: args.serviceId,
       exposures: args.exposures,
       executor: trx,
@@ -2296,9 +2300,9 @@ export async function claimRemoteAgentDaemonTx(input: {
  * Verify a device_service belongs to a device in `workspaceId`. Returns whether
  * it is owned; the service maps a false result to the 404 DeviceModuleError.
  */
-export async function isDeviceServiceOwnedByWorkspace(
+export async function isRuntimeServiceOwnedByWorkspace(
   workspaceId: string,
-  deviceId: string,
+  runtimeId: string,
   serviceId: string
 ): Promise<boolean> {
   const owned = await db
@@ -2306,7 +2310,7 @@ export async function isDeviceServiceOwnedByWorkspace(
     .innerJoin("devices as d", "d.id", "ds.runtimeId")
     .select("ds.id")
     .where("ds.id", "=", serviceId)
-    .where("ds.runtimeId", "=", deviceId)
+    .where("ds.runtimeId", "=", runtimeId)
     .where("d.workspaceId", "=", workspaceId)
     .executeTakeFirst()
   return Boolean(owned)
@@ -2317,11 +2321,11 @@ export async function isDeviceServiceOwnedByWorkspace(
  * is a persistent child guarded by sd_reject_delete; the detach goes through
  * sd_detach_runtime_service (design §7.5/§11). Raw RPC kept verbatim.
  */
-export async function detachDeviceServiceRpc(
+export async function detachRuntimeServiceRpc(
   serviceId: string,
-  deviceId: string
+  runtimeId: string
 ): Promise<void> {
-  await sql`SELECT sd_detach_runtime_service(${serviceId}::uuid, ${deviceId}::uuid)`.execute(
+  await sql`SELECT sd_detach_runtime_service(${serviceId}::uuid, ${runtimeId}::uuid)`.execute(
     db
   )
 }

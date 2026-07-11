@@ -534,7 +534,7 @@ export async function cancelPendingPairingSession(
 
 // ── grants.ts: builtin-exposure resolution + grant revocation ───────────────
 
-export interface DeviceBuiltinExposureRow {
+export interface RuntimeBuiltinExposureRow {
   exposureId: string
   capabilityId: string
   builtinKind: string
@@ -546,7 +546,7 @@ export interface DeviceBuiltinExposureRow {
 export async function selectRuntimeBuiltinExposures(
   runtimeId: string,
   run: Executor = db
-): Promise<DeviceBuiltinExposureRow[]> {
+): Promise<RuntimeBuiltinExposureRow[]> {
   return run
     .selectFrom("runtimeExposures as e")
     .innerJoin("runtimeCapabilities as c", "c.exposureId", "e.id")
@@ -556,7 +556,7 @@ export async function selectRuntimeBuiltinExposures(
     .where("resource.deletedAt", "is", null)
     .where("resource.status", "=", "active")
     .where("e.builtinKind", "in", ["filesystem", "commandline"])
-    .execute() as Promise<DeviceBuiltinExposureRow[]>
+    .execute() as Promise<RuntimeBuiltinExposureRow[]>
 }
 
 /** Resolve THIS runtime's capability ids within a workspace (capability rows

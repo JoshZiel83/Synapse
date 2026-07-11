@@ -15,8 +15,8 @@ const SECRET = process.env.SYNAPSE_LOG_INGEST_SECRET
 // Tokens are re-minted on every hello/reconnect, so a short TTL is fine.
 const TTL_MS = 12 * 60 * 60 * 1000 // 12h
 
-interface DeviceLogTokenPayload {
-  d: string // deviceId
+interface RuntimeLogTokenPayload {
+  d: string // runtimeId
   s: string // serviceId
   exp: number // epoch ms
 }
@@ -28,14 +28,14 @@ function sign(body: string): string {
 }
 
 /** Mint a device log-ingest token, or null when ingest is not configured. */
-export function mintDeviceLogToken(
-  deviceId: string,
+export function mintRuntimeLogToken(
+  runtimeId: string,
   serviceId: string,
   nowMs: number
 ): string | null {
   if (!SECRET) return null
-  const payload: DeviceLogTokenPayload = {
-    d: deviceId,
+  const payload: RuntimeLogTokenPayload = {
+    d: runtimeId,
     s: serviceId,
     exp: nowMs + TTL_MS,
   }
@@ -46,10 +46,10 @@ export function mintDeviceLogToken(
 }
 
 /** Verify a device log-ingest token; returns the device/service or null. */
-export function verifyDeviceLogToken(
+export function verifyRuntimeLogToken(
   token: string,
   nowMs: number
-): { deviceId: string; serviceId: string } | null {
+): { runtimeId: string; serviceId: string } | null {
   if (!SECRET) return null
   const dot = token.indexOf(".")
   if (dot <= 0) return null
@@ -64,12 +64,12 @@ export function verifyDeviceLogToken(
   try {
     const payload = JSON.parse(
       Buffer.from(body, "base64url").toString("utf8")
-    ) as DeviceLogTokenPayload
+    ) as RuntimeLogTokenPayload
     if (typeof payload.exp !== "number" || payload.exp < nowMs) return null
     if (typeof payload.d !== "string" || typeof payload.s !== "string") {
       return null
     }
-    return { deviceId: payload.d, serviceId: payload.s }
+    return { runtimeId: payload.d, serviceId: payload.s }
   } catch {
     return null
   }

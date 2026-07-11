@@ -83,7 +83,7 @@ test("S0: a device-less (kind='sandbox') runtime persists an api-authored catalo
     const serviceId = svc.id as string
 
     const result = await persistCatalogSync({
-      deviceId: runtimeId,
+      runtimeId: runtimeId,
       serviceId,
       exposures: fsExposures(),
       executor: db,
@@ -166,7 +166,7 @@ test("A7: persistCatalogSync owner attribution for a real device is byte-identic
       .executeTakeFirstOrThrow()
 
     const result = await persistCatalogSync({
-      deviceId: runtimeId,
+      runtimeId: runtimeId,
       serviceId: svc.id as string,
       exposures: fsExposures(),
       executor: db,
@@ -200,7 +200,7 @@ test("S0: persistCatalogSync rejects a missing or soft-deleted runtime", async (
     // never-existed runtime id
     await assert.rejects(
       persistCatalogSync({
-        deviceId: randomUUID(),
+        runtimeId: randomUUID(),
         serviceId: randomUUID(),
         exposures: fsExposures(),
         executor: db,
@@ -233,7 +233,7 @@ test("S0: persistCatalogSync rejects a missing or soft-deleted runtime", async (
       .execute()
     await assert.rejects(
       persistCatalogSync({
-        deviceId: runtimeId,
+        runtimeId: runtimeId,
         serviceId: svc.id as string,
         exposures: fsExposures(),
         executor: db,

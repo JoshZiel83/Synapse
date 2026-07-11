@@ -4,8 +4,8 @@
 //
 // This management write is app-facing (§5.1.1/§8.3): both the SDK/web client
 // and the server route parse the SAME shared camelCase schema
-// (`SetActiveDeviceCapabilitiesInputSchema` from @synapse/shared:
-// `{ workspaceId, target: ScopedSubjectTarget, deviceCapabilityIds, reason? }`).
+// (`SetActiveRuntimeCapabilitiesInputSchema` from @synapse/shared:
+// `{ workspaceId, target: ScopedSubjectTarget, runtimeCapabilityIds, reason? }`).
 // These tests pin both directions of the contract so they cannot drift:
 //
 //   (a) The client-sent shape parses server-side (route schema == shared schema).
@@ -19,9 +19,9 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import type { Kysely } from "kysely"
 import {
-  ActiveDeviceCapabilitiesListQuerySchema,
+  ActiveRuntimeCapabilitiesListQuerySchema,
   DevicePairingTicketViewSchema,
-  SetActiveDeviceCapabilitiesInputSchema,
+  SetActiveRuntimeCapabilitiesInputSchema,
   StartPairingInputSchema,
 } from "@synapse/shared/schemas"
 import {
@@ -110,10 +110,10 @@ test("POST body accepts the client shape — unscoped workspace target", () => {
   const body = {
     workspaceId: wsId,
     target: { subject: { kind: "workspace" as const, workspaceId: wsId } },
-    deviceCapabilityIds: [capId],
+    runtimeCapabilityIds: [capId],
   }
   // The client calls this first — shared-schema parse.
-  const sdkParsed = SetActiveDeviceCapabilitiesInputSchema.safeParse(body)
+  const sdkParsed = SetActiveRuntimeCapabilitiesInputSchema.safeParse(body)
   assert.equal(sdkParsed.success, true)
   // The server-side route schema parses the same body.
   const serverParsed = setActiveBodySchema.safeParse(body)
@@ -131,9 +131,9 @@ test("POST body accepts the client shape — actor + scope=conversation", () => 
       subject: { kind: "actor" as const, actorId },
       scope: { kind: "conversation" as const, conversationId: convId },
     },
-    deviceCapabilityIds: [capId],
+    runtimeCapabilityIds: [capId],
   }
-  const sdkParsed = SetActiveDeviceCapabilitiesInputSchema.safeParse(body)
+  const sdkParsed = SetActiveRuntimeCapabilitiesInputSchema.safeParse(body)
   assert.equal(sdkParsed.success, true)
   const serverParsed = setActiveBodySchema.safeParse(body)
   assert.equal(
@@ -150,9 +150,9 @@ test("POST body accepts the client shape — remote_agent + scope=conversation",
       subject: { kind: "remote_agent" as const, remoteAgentId },
       scope: { kind: "conversation" as const, conversationId: convId },
     },
-    deviceCapabilityIds: [capId],
+    runtimeCapabilityIds: [capId],
   }
-  const sdkParsed = SetActiveDeviceCapabilitiesInputSchema.safeParse(body)
+  const sdkParsed = SetActiveRuntimeCapabilitiesInputSchema.safeParse(body)
   assert.equal(sdkParsed.success, true)
   const serverParsed = setActiveBodySchema.safeParse(body)
   assert.equal(serverParsed.success, true)
@@ -162,7 +162,7 @@ test("POST body rejects legacy {kind: 'actor', actorId} flat shape", () => {
   const legacyBody = {
     workspaceId: wsId,
     target: { kind: "actor", actorId },
-    deviceCapabilityIds: [capId],
+    runtimeCapabilityIds: [capId],
   }
   const parsed = setActiveBodySchema.safeParse(legacyBody)
   assert.equal(parsed.success, false)
@@ -170,7 +170,7 @@ test("POST body rejects legacy {kind: 'actor', actorId} flat shape", () => {
 
 test("GET list query accepts app-facing active-capability target filters", () => {
   assert.deepEqual(
-    ActiveDeviceCapabilitiesListQuerySchema.parse({
+    ActiveRuntimeCapabilitiesListQuerySchema.parse({
       subjectKind: "remote_agent",
       subjectRemoteAgentId: remoteAgentId,
       scopeKind: "conversation",
@@ -187,14 +187,14 @@ test("GET list query accepts app-facing active-capability target filters", () =>
 
 test("GET list query rejects invalid active-capability target filters", () => {
   assert.equal(
-    ActiveDeviceCapabilitiesListQuerySchema.safeParse({
+    ActiveRuntimeCapabilitiesListQuerySchema.safeParse({
       subjectKind: "workspace_member",
       subjectWorkspaceMemberId: actorId,
     }).success,
     false
   )
   assert.equal(
-    ActiveDeviceCapabilitiesListQuerySchema.safeParse({
+    ActiveRuntimeCapabilitiesListQuerySchema.safeParse({
       subjectKind: "workspace",
       scopeKind: "conversation",
       scopeConversationId: convId,
@@ -202,7 +202,7 @@ test("GET list query rejects invalid active-capability target filters", () => {
     false
   )
   assert.equal(
-    ActiveDeviceCapabilitiesListQuerySchema.safeParse({
+    ActiveRuntimeCapabilitiesListQuerySchema.safeParse({
       subjectKind: "actor",
       subjectActorId: actorId,
       scopeKind: "conversation",
@@ -210,7 +210,7 @@ test("GET list query rejects invalid active-capability target filters", () => {
     false
   )
   assert.equal(
-    ActiveDeviceCapabilitiesListQuerySchema.safeParse({
+    ActiveRuntimeCapabilitiesListQuerySchema.safeParse({
       subjectKind: "remote_agent",
       subjectRemoteAgentId: "not-a-uuid",
     }).success,
@@ -227,7 +227,7 @@ test("POST body rejects scoped combinations outside (actor|remote_agent, convers
     target: {
       subject: { kind: "workspace_member", workspaceMemberId: actorId },
     },
-    deviceCapabilityIds: [capId],
+    runtimeCapabilityIds: [capId],
   }
   assert.equal(setActiveBodySchema.safeParse(memberBody).success, false)
 
@@ -238,7 +238,7 @@ test("POST body rejects scoped combinations outside (actor|remote_agent, convers
       subject: { kind: "actor" as const, actorId },
       scope: { kind: "workspace" as const, workspaceId: wsId },
     },
-    deviceCapabilityIds: [capId],
+    runtimeCapabilityIds: [capId],
   }
   assert.equal(setActiveBodySchema.safeParse(actorScopeWsBody).success, false)
 
@@ -249,7 +249,7 @@ test("POST body rejects scoped combinations outside (actor|remote_agent, convers
       subject: { kind: "conversation" as const, conversationId: convId },
       scope: { kind: "conversation" as const, conversationId: convId },
     },
-    deviceCapabilityIds: [capId],
+    runtimeCapabilityIds: [capId],
   }
   assert.equal(setActiveBodySchema.safeParse(convScopeConvBody).success, false)
 })

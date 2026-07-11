@@ -30,7 +30,7 @@ import {
 import {
   hasNewUserFacingConversationMessage,
   loadConversationKindRow,
-  loadDeviceCapabilityRequestState,
+  loadRuntimeCapabilityRequestState,
 } from "./repo.js"
 
 export interface RuntimeAuthorizationRequestSource {
@@ -213,14 +213,14 @@ async function canActorRequestRuntimeAuthorization(
     return false
   }
 
-  const capabilityState = await loadDeviceCapabilityRequestState(
+  const capabilityState = await loadRuntimeCapabilityRequestState(
     params.runtimeTarget.runtimeCapabilityId
   )
   if (
     !capabilityState ||
     capabilityState.capabilityStatus !== "active" ||
     capabilityState.exposureRuntimeStatus !== "healthy" ||
-    !capabilityState.hasActiveDeviceSession
+    !capabilityState.hasActiveRuntimeSession
   ) {
     return false
   }

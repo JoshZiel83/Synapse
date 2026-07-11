@@ -23,10 +23,10 @@ import type {
 import {
   claimRemoteAgentDaemonTx,
   consumeLocalPairingTx,
-  detachDeviceServiceRpc,
+  detachRuntimeServiceRpc,
   findDeviceDetail,
   insertLocalPairingSession,
-  isDeviceServiceOwnedByWorkspace,
+  isRuntimeServiceOwnedByWorkspace,
   listDeviceSummaries,
   mintLocalSandboxRuntimeTx,
   mintBareSandboxRuntimeTx,
@@ -418,13 +418,13 @@ export async function claimRemoteAgentDaemon(
   return result.service
 }
 
-export async function detachDeviceService(
+export async function detachRuntimeService(
   workspaceId: string,
   deviceId: string,
   serviceId: string
 ): Promise<void> {
   // Verify the service belongs to a device in this workspace before detaching.
-  const owned = await isDeviceServiceOwnedByWorkspace(
+  const owned = await isRuntimeServiceOwnedByWorkspace(
     workspaceId,
     deviceId,
     serviceId
@@ -438,5 +438,5 @@ export async function detachDeviceService(
   }
   // runtime_services is a persistent child guarded by sd_reject_delete; the
   // physical detach goes through the SECURITY DEFINER fn (design §7.5/§11).
-  await detachDeviceServiceRpc(serviceId, deviceId)
+  await detachRuntimeServiceRpc(serviceId, deviceId)
 }

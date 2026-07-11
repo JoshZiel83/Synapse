@@ -11,10 +11,10 @@ import {
   DEVICE_TYPES,
 } from "@synapse/device-protocol/enums"
 import {
-  DEVICE_CAPABILITY_ACCESS_SCOPE_KIND,
-  DEVICE_CAPABILITY_ACCESS_SCOPE_KINDS,
-  DEVICE_CAPABILITY_ACCESS_SUBJECT_KIND,
-  DEVICE_CAPABILITY_ACCESS_SUBJECT_KINDS,
+  RUNTIME_CAPABILITY_ACCESS_SCOPE_KIND,
+  RUNTIME_CAPABILITY_ACCESS_SCOPE_KINDS,
+  RUNTIME_CAPABILITY_ACCESS_SUBJECT_KIND,
+  RUNTIME_CAPABILITY_ACCESS_SUBJECT_KINDS,
 } from "../constants/enums.js"
 import { IsoInstantStringSchema } from "./datetime.js"
 
@@ -161,21 +161,21 @@ export type ClaimDaemonServiceInput = z.infer<
   typeof ClaimDaemonServiceInputSchema
 >
 
-const DeviceCapabilitySubjectRefSchema = z.discriminatedUnion("kind", [
+const RuntimeCapabilitySubjectRefSchema = z.discriminatedUnion("kind", [
   z.strictObject({
-    kind: z.literal(DEVICE_CAPABILITY_ACCESS_SUBJECT_KIND.WORKSPACE),
+    kind: z.literal(RUNTIME_CAPABILITY_ACCESS_SUBJECT_KIND.WORKSPACE),
     workspaceId: z.uuid(),
   }),
   z.strictObject({
-    kind: z.literal(DEVICE_CAPABILITY_ACCESS_SUBJECT_KIND.ACTOR),
+    kind: z.literal(RUNTIME_CAPABILITY_ACCESS_SUBJECT_KIND.ACTOR),
     actorId: z.uuid(),
   }),
   z.strictObject({
-    kind: z.literal(DEVICE_CAPABILITY_ACCESS_SUBJECT_KIND.REMOTE_AGENT),
+    kind: z.literal(RUNTIME_CAPABILITY_ACCESS_SUBJECT_KIND.REMOTE_AGENT),
     remoteAgentId: z.uuid(),
   }),
   z.strictObject({
-    kind: z.literal(DEVICE_CAPABILITY_ACCESS_SUBJECT_KIND.CONVERSATION),
+    kind: z.literal(RUNTIME_CAPABILITY_ACCESS_SUBJECT_KIND.CONVERSATION),
     conversationId: z.uuid(),
   }),
 ])
@@ -186,20 +186,20 @@ const DeviceCapabilitySubjectRefSchema = z.discriminatedUnion("kind", [
  * unscoped workspace/actor/remote_agent/conversation, or actor/remote_agent
  * scoped to a conversation.
  */
-export const DeviceCapabilityAccessTargetInputSchema = z
+export const RuntimeCapabilityAccessTargetInputSchema = z
   .strictObject({
-    subject: DeviceCapabilitySubjectRefSchema,
-    scope: DeviceCapabilitySubjectRefSchema.optional(),
+    subject: RuntimeCapabilitySubjectRefSchema,
+    scope: RuntimeCapabilitySubjectRefSchema.optional(),
   })
   .superRefine((target, ctx) => {
     if (!target.scope) {
       return
     }
     const allowed =
-      (target.subject.kind === DEVICE_CAPABILITY_ACCESS_SUBJECT_KIND.ACTOR ||
+      (target.subject.kind === RUNTIME_CAPABILITY_ACCESS_SUBJECT_KIND.ACTOR ||
         target.subject.kind ===
-          DEVICE_CAPABILITY_ACCESS_SUBJECT_KIND.REMOTE_AGENT) &&
-      target.scope.kind === DEVICE_CAPABILITY_ACCESS_SCOPE_KIND.CONVERSATION
+          RUNTIME_CAPABILITY_ACCESS_SUBJECT_KIND.REMOTE_AGENT) &&
+      target.scope.kind === RUNTIME_CAPABILITY_ACCESS_SCOPE_KIND.CONVERSATION
     if (!allowed) {
       ctx.addIssue({
         code: "custom",
@@ -208,8 +208,8 @@ export const DeviceCapabilityAccessTargetInputSchema = z
       })
     }
   })
-export type DeviceCapabilityAccessTargetInput = z.infer<
-  typeof DeviceCapabilityAccessTargetInputSchema
+export type RuntimeCapabilityAccessTargetInput = z.infer<
+  typeof RuntimeCapabilityAccessTargetInputSchema
 >
 
 /**
@@ -217,14 +217,14 @@ export type DeviceCapabilityAccessTargetInput = z.infer<
  * camelCase body, shared-owned target schema, and no device-protocol wire schema
  * reuse.
  */
-export const SetActiveDeviceCapabilitiesInputSchema = z.strictObject({
+export const SetActiveRuntimeCapabilitiesInputSchema = z.strictObject({
   workspaceId: z.uuid(),
-  target: DeviceCapabilityAccessTargetInputSchema,
-  deviceCapabilityIds: z.array(z.uuid()),
+  target: RuntimeCapabilityAccessTargetInputSchema,
+  runtimeCapabilityIds: z.array(z.uuid()),
   reason: z.string().max(2000).optional(),
 })
-export type SetActiveDeviceCapabilitiesInput = z.infer<
-  typeof SetActiveDeviceCapabilitiesInputSchema
+export type SetActiveRuntimeCapabilitiesInput = z.infer<
+  typeof SetActiveRuntimeCapabilitiesInputSchema
 >
 
 /**
@@ -233,18 +233,18 @@ export type SetActiveDeviceCapabilitiesInput = z.infer<
  * the flattened query form back to the internal AccessTarget at the route
  * boundary.
  */
-export const ActiveDeviceCapabilitiesListQuerySchema = z
+export const ActiveRuntimeCapabilitiesListQuerySchema = z
   .object({
-    subjectKind: z.enum(DEVICE_CAPABILITY_ACCESS_SUBJECT_KINDS),
+    subjectKind: z.enum(RUNTIME_CAPABILITY_ACCESS_SUBJECT_KINDS),
     subjectWorkspaceId: z.uuid().optional(),
     subjectActorId: z.uuid().optional(),
     subjectConversationId: z.uuid().optional(),
     subjectRemoteAgentId: z.uuid().optional(),
-    scopeKind: z.enum(DEVICE_CAPABILITY_ACCESS_SCOPE_KINDS).optional(),
+    scopeKind: z.enum(RUNTIME_CAPABILITY_ACCESS_SCOPE_KINDS).optional(),
     scopeConversationId: z.uuid().optional(),
   })
   .superRefine((query, ctx) => {
-    if (query.scopeKind !== DEVICE_CAPABILITY_ACCESS_SCOPE_KIND.CONVERSATION)
+    if (query.scopeKind !== RUNTIME_CAPABILITY_ACCESS_SCOPE_KIND.CONVERSATION)
       return
     if (!query.scopeConversationId) {
       ctx.addIssue({
@@ -254,8 +254,8 @@ export const ActiveDeviceCapabilitiesListQuerySchema = z
       })
     }
     if (
-      query.subjectKind !== DEVICE_CAPABILITY_ACCESS_SUBJECT_KIND.ACTOR &&
-      query.subjectKind !== DEVICE_CAPABILITY_ACCESS_SUBJECT_KIND.REMOTE_AGENT
+      query.subjectKind !== RUNTIME_CAPABILITY_ACCESS_SUBJECT_KIND.ACTOR &&
+      query.subjectKind !== RUNTIME_CAPABILITY_ACCESS_SUBJECT_KIND.REMOTE_AGENT
     ) {
       ctx.addIssue({
         code: "custom",
@@ -264,14 +264,14 @@ export const ActiveDeviceCapabilitiesListQuerySchema = z
       })
     }
   })
-export type ActiveDeviceCapabilitiesListQuery = z.infer<
-  typeof ActiveDeviceCapabilitiesListQuerySchema
+export type ActiveRuntimeCapabilitiesListQuery = z.infer<
+  typeof ActiveRuntimeCapabilitiesListQuerySchema
 >
 
 /** GET active-capabilities list result for a target (app-facing). */
-export const ActiveDeviceCapabilitiesViewSchema = z.strictObject({
-  deviceCapabilityIds: z.array(z.uuid()),
+export const ActiveRuntimeCapabilitiesViewSchema = z.strictObject({
+  runtimeCapabilityIds: z.array(z.uuid()),
 })
-export type ActiveDeviceCapabilitiesView = z.infer<
-  typeof ActiveDeviceCapabilitiesViewSchema
+export type ActiveRuntimeCapabilitiesView = z.infer<
+  typeof ActiveRuntimeCapabilitiesViewSchema
 >

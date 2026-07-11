@@ -25,7 +25,7 @@ import type { OperationPrincipalKind } from "./repo.js"
  *   - principal.kind === 'remote_agent'    → 'remote_agent'
  *   - principal.kind === 'conversation'    → 'conversation'
  *   - principal.kind === 'workspace_member'→ 'workspace_member'
- *   - other (workspace, user, external, system) → throw InvalidPrincipalKindForDeviceOperation
+ *   - other (workspace, user, external, system) → throw InvalidPrincipalKindForRuntimeOperation
  *
  * Note the scoped-actor case before the refactor
  * collapses to 'actor' — the conversation context is recorded separately via
@@ -58,24 +58,24 @@ export function deriveOperationPrincipalAudit(ctx: RuntimePrincipalContext): {
         principalSubjectId: ctx.principalSubjectId,
       }
     default:
-      throw new InvalidPrincipalKindForDeviceOperation(kind)
+      throw new InvalidPrincipalKindForRuntimeOperation(kind)
   }
 }
 
-export class InvalidPrincipalKindForDeviceOperation extends Error {
+export class InvalidPrincipalKindForRuntimeOperation extends Error {
   constructor(kind: string) {
     super(
       `principal kind "${kind}" is not allowed to dispatch device operations (only actor / remote_agent / conversation / workspace_member)`
     )
-    this.name = "InvalidPrincipalKindForDeviceOperation"
+    this.name = "InvalidPrincipalKindForRuntimeOperation"
   }
 }
 
 export {
-  assertNoDeviceToolRevisionDrift,
-  beginDeviceOperation,
-  beginDeviceOperationOn,
-  completeDeviceOperation,
+  assertNoRuntimeToolRevisionDrift,
+  beginRuntimeOperation,
+  beginRuntimeOperationOn,
+  completeRuntimeOperation,
   RevisionDriftError,
 } from "./repo.js"
 export type {

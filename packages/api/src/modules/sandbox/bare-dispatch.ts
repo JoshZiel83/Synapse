@@ -126,7 +126,7 @@ function errResult(
 
 /**
  * The bare fork. Returns the SAME McpDispatchResult shape dispatchSyncTool does,
- * so `completeDeviceOperation` + downstream handling are byte-identical.
+ * so `completeRuntimeOperation` + downstream handling are byte-identical.
  */
 export async function dispatchBareRuntimeTool(
   input: DispatchBareRuntimeToolInput

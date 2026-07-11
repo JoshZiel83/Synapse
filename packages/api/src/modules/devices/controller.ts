@@ -38,7 +38,7 @@ import {
   claimRemoteAgentDaemon,
   consumePairing,
   deleteDevice,
-  detachDeviceService,
+  detachRuntimeService,
   getDevice,
   listDevices,
   startPairing,
@@ -344,7 +344,7 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
       )
         return
       try {
-        await detachDeviceService(workspaceId, deviceId, serviceId)
+        await detachRuntimeService(workspaceId, deviceId, serviceId)
         reply.status(204).send()
       } catch (err) {
         if (sendModuleError(reply, err)) return

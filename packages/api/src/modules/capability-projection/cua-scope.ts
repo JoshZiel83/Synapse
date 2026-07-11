@@ -23,12 +23,12 @@
 // sessionId; production paths today always have one.
 
 /**
- * Mirrors the canonical `DevicePrincipal` (capability-projection/service.ts).
+ * Mirrors the canonical `RuntimePrincipal` (capability-projection/service.ts).
  * Kept as a structurally-identical local type (not an import) only to avoid a
  * circular-feeling dependency for this otherwise-pure helper — it MUST stay in
- * lock-step with DevicePrincipal. subject-scope-refactor dropped the legacy
+ * lock-step with RuntimePrincipal. subject-scope-refactor dropped the legacy
  * flat scoped-actor discriminator, so it is intentionally absent here;
- * the exhaustive switch below throws on any kind DevicePrincipal grows that
+ * the exhaustive switch below throws on any kind RuntimePrincipal grows that
  * this helper hasn't handled, forcing an explicit decision.
  */
 export type PrincipalForScope =

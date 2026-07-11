@@ -110,7 +110,7 @@ export async function findAutoRetryTarget(args: {
  * runtime_status / status before the write. WHERE clauses (dc.id match +
  * resource.deletedAt is null soft-delete guard) preserved verbatim.
  */
-export interface DeviceCapabilityGrantTarget {
+export interface RuntimeCapabilityGrantTarget {
   runtimeId: string
   workspaceId: string
   exposureId: string
@@ -120,10 +120,10 @@ export interface DeviceCapabilityGrantTarget {
   status: string
 }
 
-export async function findDeviceCapabilityGrantTarget(
+export async function findRuntimeCapabilityGrantTarget(
   runtimeCapabilityId: string,
   executor: Executor = db
-): Promise<DeviceCapabilityGrantTarget | undefined> {
+): Promise<RuntimeCapabilityGrantTarget | undefined> {
   return (
     executor
       .selectFrom("runtimeCapabilities as dc")
@@ -144,7 +144,7 @@ export async function findDeviceCapabilityGrantTarget(
       ])
       .where("dc.id", "=", runtimeCapabilityId)
       .where("resource.deletedAt", "is", null)
-      .executeTakeFirst() as Promise<DeviceCapabilityGrantTarget | undefined>
+      .executeTakeFirst() as Promise<RuntimeCapabilityGrantTarget | undefined>
   )
 }
 
@@ -166,23 +166,23 @@ export async function loadConversationKindRow(
 
 /**
  * Capability/exposure/device reachability state for the request-gating helper.
- * The `hasActiveDeviceSession` field comes from an inline raw `sql<boolean>`
+ * The `hasActiveRuntimeSession` field comes from an inline raw `sql<boolean>`
  * EXISTS subquery referencing snake_case columns — that raw fragment is NOT
  * camelCase-rewritten, so it is copied verbatim. WHERE clauses (capability.id
  * match + resource.deletedAt is null soft-delete guard) preserved verbatim.
  */
-export interface DeviceCapabilityRequestState {
+export interface RuntimeCapabilityRequestState {
   capabilityId: string
   capabilityStatus: string
   exposureId: string
   exposureRuntimeStatus: string
   ownerWorkspaceId: string
-  hasActiveDeviceSession: boolean
+  hasActiveRuntimeSession: boolean
 }
 
-export async function loadDeviceCapabilityRequestState(
+export async function loadRuntimeCapabilityRequestState(
   capabilityId: string
-): Promise<DeviceCapabilityRequestState | undefined> {
+): Promise<RuntimeCapabilityRequestState | undefined> {
   return (
     db
       .selectFrom("runtimeCapabilities as capability")
@@ -212,7 +212,7 @@ export async function loadDeviceCapabilityRequestState(
         FROM runtime_control_plane_sessions session_row
         WHERE session_row.runtime_id = runtime.id
           AND session_row.status = 'active'
-      )`.as("hasActiveDeviceSession"),
+      )`.as("hasActiveRuntimeSession"),
       ])
       .where("capability.id", "=", capabilityId)
       // TWO independent soft-delete roots gate a request: the capability-as-
@@ -223,7 +223,7 @@ export async function loadDeviceCapabilityRequestState(
       .where("resource.deletedAt", "is", null)
       .where("runtime.deletedAt", "is", null)
       .limit(1)
-      .executeTakeFirst() as Promise<DeviceCapabilityRequestState | undefined>
+      .executeTakeFirst() as Promise<RuntimeCapabilityRequestState | undefined>
   )
 }
 
@@ -266,7 +266,7 @@ export async function hasNewUserFacingConversationMessage(
 // r8). Every fn takes an injected `executor: Executor` (db or an in-flight
 // transaction) so the service can keep its multi-statement transactions atomic
 // and thread the same trx into both these repo fns and the cross-module
-// helpers (upsertAccessSubject, beginDeviceOperationOn). Rows are returned
+// helpers (upsertAccessSubject, beginRuntimeOperationOn). Rows are returned
 // camelCase via CamelCasePlugin, Date objects intact. This repo layer owns
 // subject hydration and business JSON policy parsing/validation; presenter owns
 // instant serialization.
@@ -799,7 +799,7 @@ export async function listDashboardGrantRows(
  * Open a fresh runtime-authorization transaction and run `fn` inside it. The
  * service uses this for the no-executor create path and the claim path so the
  * subject upsert + INSERT + refetch (create) and lock_timeout + FOR SHARE
- * drift/race checks + beginDeviceOperationOn (claim) all run atomically.
+ * drift/race checks + beginRuntimeOperationOn (claim) all run atomically.
  */
 export async function runRuntimeAuthorizationGrantTransaction<T>(
   fn: (trx: DatabaseTransaction) => Promise<T>

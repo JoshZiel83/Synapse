@@ -65,16 +65,16 @@ import {
 } from "@synapse/shared"
 import { serializeCommandlinePolicyToWire } from "@synapse/shared/access/policies"
 import {
-  beginDeviceOperation,
-  completeDeviceOperation,
+  beginRuntimeOperation,
+  completeRuntimeOperation,
   RevisionDriftError,
   type OperationPrincipalKind,
 } from "../devices/operations.js"
 import { getRuntimeEndpointRegistry } from "../devices/tunnel-registry.js"
 import { deriveCuaFocusScopeId, type PrincipalForScope } from "./cua-scope.js"
 import {
-  loadDeviceCapabilityToolsForSubjects,
-  type DeviceCapabilityToolRow,
+  loadRuntimeCapabilityToolsForSubjects,
+  type RuntimeCapabilityToolRow,
 } from "./device-capabilities.js"
 import {
   loadRuntimePrincipalContextForCapabilityProjection,
@@ -126,7 +126,7 @@ const CAPABILITY_PROJECTION_ORIGIN: ToolResultOrigin = {
  * grants match SQL-side rather than requiring an extra principal-kind
  * branch in every dispatcher.
  */
-export type DevicePrincipal =
+export type RuntimePrincipal =
   | { kind: "actor"; actorId: string; conversationId?: string }
   | { kind: "conversation"; conversationId: string }
   | { kind: "remote_agent"; remoteAgentId: string; conversationId: string }
@@ -154,7 +154,7 @@ export interface ProjectToolsInput extends Omit<
   "actorId"
 > {
   workspaceId: string
-  principal: DevicePrincipal
+  principal: RuntimePrincipal
   conversationId?: string
   conversationKind?: "direct" | "group"
   isImConversation?: boolean
@@ -178,9 +178,9 @@ export async function projectToolsForPrincipal(
   input: ProjectToolsInput
 ): Promise<ProjectedToolList> {
   const legacy = await projectLegacyTools(input)
-  const device = await projectDeviceTools(input)
+  const device = await projectRuntimeTools(input)
   if (device.tools.length === 0) return legacy
-  return unionWithDevice(input, legacy, device)
+  return unionWithRuntime(input, legacy, device)
 }
 
 async function projectLegacyTools(
@@ -244,15 +244,15 @@ async function projectLegacyTools(
   }
 }
 
-interface DeviceToolBundle {
+interface RuntimeToolBundle {
   tools: ProjectedToolDefinition[]
   /** Keyed by deterministic runtime toolId (`runtime:<runtime_tool_id>`). */
-  handlers: Map<string, DeviceCapabilityToolRow>
+  handlers: Map<string, RuntimeCapabilityToolRow>
   subjects: ResolvedPrincipalSubjects
 }
 
 /** Build a device ToolRef from a projected capability row. */
-function buildDeviceToolRef(row: DeviceCapabilityToolRow): ToolRef {
+function buildRuntimeToolRef(row: RuntimeCapabilityToolRow): ToolRef {
   return {
     toolId: makeDeviceToolId(row.runtimeToolId),
     source: {
@@ -277,7 +277,7 @@ function buildDeviceToolRef(row: DeviceCapabilityToolRow): ToolRef {
   }
 }
 
-function deviceToolOrigin(row: DeviceCapabilityToolRow): ToolResultOrigin {
+function runtimeToolOrigin(row: RuntimeCapabilityToolRow): ToolResultOrigin {
   return {
     kind: "runtime",
     runtimeToolId: row.runtimeToolId,
@@ -287,7 +287,7 @@ function deviceToolOrigin(row: DeviceCapabilityToolRow): ToolResultOrigin {
   }
 }
 
-function withDeviceToolOrigin(
+function withRuntimeToolOrigin(
   result: Omit<NormalizedMcpToolResult, "origin">,
   origin: ToolResultOrigin
 ): NormalizedMcpToolResult {
@@ -326,7 +326,7 @@ export interface ResolvedPrincipalSubjects {
    * subject-scope-refactor: scope_subject_id values that may pin a binding /
    * grant. For `actor` + active conversation, this contains the conversation
    * subject. Empty when no active conversation scope applies. Wire this
-   * through `loadDeviceCapabilityToolsForSubjects.runtimeScopeSubjectIds`
+   * through `loadRuntimeCapabilityToolsForSubjects.runtimeScopeSubjectIds`
    * and `selectAndClaimRuntimeAuthorizationGrant.runtimeScopeSubjectIds`
    * so scoped grants are accepted only inside the matching scope.
    */
@@ -338,8 +338,8 @@ export interface ResolvedPrincipalSubjects {
   activeConversationSubjectId?: string
 }
 
-function devicePrincipalToSubjectRef(
-  principal: DevicePrincipal
+function runtimePrincipalToSubjectRef(
+  principal: RuntimePrincipal
 ): SubjectRef | null {
   switch (principal.kind) {
     case "actor":
@@ -355,7 +355,7 @@ function devicePrincipalToSubjectRef(
         remoteAgentId: principal.remoteAgentId,
       }
     case "workspace_member":
-      // Filtered out by projectDeviceTools (dashboard introspection path
+      // Filtered out by projectRuntimeTools (dashboard introspection path
       // doesn't dispatch).
       return null
   }
@@ -378,7 +378,7 @@ export async function principalSubjectIds(
   input: ProjectToolsInput,
   options?: { db?: CapabilityProjectionRuntimeContextDb }
 ): Promise<ResolvedPrincipalSubjects> {
-  const subjectRef = devicePrincipalToSubjectRef(input.principal)
+  const subjectRef = runtimePrincipalToSubjectRef(input.principal)
   if (!subjectRef) {
     return {
       principalSubjectId: null,
@@ -420,9 +420,9 @@ export async function principalSubjectIds(
   }
 }
 
-async function projectDeviceTools(
+async function projectRuntimeTools(
   input: ProjectToolsInput
-): Promise<DeviceToolBundle> {
+): Promise<RuntimeToolBundle> {
   // workspace_member never reaches here (throws above) and the chat-runtime
   // consumer is the only one currently wired for device dispatch.
   if (input.principal.kind === "workspace_member") {
@@ -437,7 +437,7 @@ async function projectDeviceTools(
     }
   }
   const subjects = await principalSubjectIds(input)
-  const rows = await loadDeviceCapabilityToolsForSubjects({
+  const rows = await loadRuntimeCapabilityToolsForSubjects({
     workspaceId: input.workspaceId,
     subjectIds: subjects.allIds,
     runtimeScopeSubjectIds: subjects.scopeSubjectIds,
@@ -476,10 +476,10 @@ async function projectDeviceTools(
     return maskAllowsConversationTypeKey(effectiveMask, conversationTypeKey)
   })
 
-  const handlers = new Map<string, DeviceCapabilityToolRow>()
+  const handlers = new Map<string, RuntimeCapabilityToolRow>()
   const tools: ProjectedToolDefinition[] = []
   for (const row of filteredRows) {
-    const ref = buildDeviceToolRef(row)
+    const ref = buildRuntimeToolRef(row)
     // Keyed by the deterministic device toolId — the wire name is assigned
     // later by the surface's NameRegistry (NamePolicy), not here.
     handlers.set(ref.toolId, row)
@@ -514,10 +514,10 @@ function normalizeInputSchema(raw: unknown): ToolDefinition["parameters"] {
   return { type: "object", properties: {}, required: [] }
 }
 
-function unionWithDevice(
+function unionWithRuntime(
   projectInput: ProjectToolsInput,
   legacy: ProjectedToolList,
-  device: DeviceToolBundle
+  device: RuntimeToolBundle
 ): ProjectedToolList {
   const dispatchDeviceTool = async (
     toolId: string,
@@ -527,7 +527,7 @@ function unionWithDevice(
     if (!row) {
       return mcpErrorBlock(`device tool ${toolId} not found in projection`)
     }
-    const origin = deviceToolOrigin(row)
+    const origin = runtimeToolOrigin(row)
     // Normalize device platform ONCE per dispatch so both the
     // grant-coverage try block AND the authorization-request try block
     // read the same value. Each try has its own lexical scope, so
@@ -555,7 +555,7 @@ function unionWithDevice(
         sanitizedInput
       )
       if (denial) {
-        return withDeviceToolOrigin(
+        return withRuntimeToolOrigin(
           synapseErrorBlock({
             code: denial.code,
             message: denial.message,
@@ -602,7 +602,7 @@ function unionWithDevice(
       })
     } catch (err) {
       if (err instanceof InvalidExecFileArgsError) {
-        return withDeviceToolOrigin(
+        return withRuntimeToolOrigin(
           synapseErrorBlock({
             code: err.synapseCode,
             message: err.message,
@@ -614,7 +614,7 @@ function unionWithDevice(
       // Fail-closed: a genuinely-unknown non-null builtin_kind → permission_denied
       // (never mis-routed to a wrong capability's grant matcher).
       if (err instanceof UnregisteredBuiltinKindError) {
-        return withDeviceToolOrigin(
+        return withRuntimeToolOrigin(
           synapseErrorBlock({
             code: err.synapseCode,
             message: err.message,
@@ -635,7 +635,7 @@ function unionWithDevice(
       devicePlatform === "win32" &&
       requestedAction.commandline?.workingDirectory
     ) {
-      return withDeviceToolOrigin(
+      return withRuntimeToolOrigin(
         synapseErrorBlock({
           code: "permission_denied",
           message:
@@ -749,7 +749,7 @@ function unionWithDevice(
         },
       })
     } catch (err) {
-      return withDeviceToolOrigin(
+      return withRuntimeToolOrigin(
         mcpErrorBlock(
           `grant claim failed for capability ${row.runtimeCapabilityId}: ${(err as Error).message}`
         ),
@@ -758,7 +758,7 @@ function unionWithDevice(
     }
 
     if (claim.kind === "no_match") {
-      return withDeviceToolOrigin(
+      return withRuntimeToolOrigin(
         await requestAuthorizationOrDeny({
           projectInput,
           row,
@@ -773,7 +773,7 @@ function unionWithDevice(
       )
     }
     if (claim.kind === "race_lost") {
-      return withDeviceToolOrigin(
+      return withRuntimeToolOrigin(
         mcpErrorBlock(
           `runtime_constraint: grant race lost (${claim.reason}); please retry`
         ),
@@ -781,13 +781,13 @@ function unionWithDevice(
       )
     }
     if (claim.kind === "lock_timeout") {
-      return withDeviceToolOrigin(
+      return withRuntimeToolOrigin(
         mcpErrorBlock(`runtime_constraint: catalog lock timeout; please retry`),
         origin
       )
     }
     if (claim.kind === "denied") {
-      return withDeviceToolOrigin(
+      return withRuntimeToolOrigin(
         mcpErrorBlock(
           `runtime_constraint: ${claim.reason}${claim.grantId ? ` (grant ${claim.grantId})` : ""}`
         ),
@@ -804,7 +804,7 @@ function unionWithDevice(
     // mints service_kind='bare_dataplane' and links exposures to it, so a
     // device/resident exposure ALWAYS projects serviceKind='device_runtime' and
     // takes the UNCHANGED dispatchSyncTool below. dispatchBareRuntimeTool returns
-    // the SAME McpDispatchResult shape, so completeDeviceOperation is unchanged.
+    // the SAME McpDispatchResult shape, so completeRuntimeOperation is unchanged.
     //
     // dispatchSyncTool resolves the tunnel endpoint by runtimeServiceId, which
     // is the runtime_services row id (what the runtime registered its tunnel
@@ -827,7 +827,7 @@ function unionWithDevice(
             args: sanitizedInput,
             toolName: row.visibleToolName,
           })
-    await completeDeviceOperation({
+    await completeRuntimeOperation({
       operationId,
       attemptId,
       ok: result.ok,
@@ -850,7 +850,7 @@ function unionWithDevice(
       // `_meta.synapse_error.details` block emitted by the chrome-devtools-mcp
       // provider's permission_denied path gets collapsed to plain text
       // before chat ever sees it.
-      return withDeviceToolOrigin(
+      return withRuntimeToolOrigin(
         {
           content: [
             textBlock(
@@ -873,7 +873,7 @@ function unionWithDevice(
     // Forward non-error _meta back to the planner too — runtime providers
     // attach contextual data (e.g. synapse_list_pages) that the chat-side
     // renderer may want to read.
-    return withDeviceToolOrigin(
+    return withRuntimeToolOrigin(
       {
         content: tool?.content ?? [],
         isError: tool?.isError,
@@ -899,7 +899,7 @@ function unionWithDevice(
     // Re-query device tools on each refresh so newly granted bindings show
     // up without restarting the session. Use the captured input so the
     // principal + subject set stays consistent across refreshes.
-    const freshDevice = await projectDeviceTools(projectInput)
+    const freshDevice = await projectRuntimeTools(projectInput)
     // Replace the stale device-bundle handlers/subjectIds in place so the
     // dispatchDeviceTool closure (which closes over `device`) sees the
     // refreshed handlers on the next tool call.
@@ -959,7 +959,7 @@ interface BrowserPreflightDenial {
 }
 
 function browserPreflightDeny(
-  row: DeviceCapabilityToolRow,
+  row: RuntimeCapabilityToolRow,
   visibleToolName: string,
   args: Record<string, unknown>
 ): BrowserPreflightDenial | null {
@@ -1059,7 +1059,7 @@ function browserPreflightDeny(
  */
 export function buildRuntimeAuthorizationRequestParams(args: {
   projectInput: ProjectToolsInput
-  row: DeviceCapabilityToolRow
+  row: RuntimeCapabilityToolRow
   toolName: string
   /** The post-`stripPlannerNonce` payload — this is what the device sees and what input_hash is computed over. */
   sanitizedInput: Record<string, unknown>
@@ -1148,7 +1148,7 @@ export function stripPlannerNonce(
 
 async function requestAuthorizationOrDeny(args: {
   projectInput: ProjectToolsInput
-  row: DeviceCapabilityToolRow
+  row: RuntimeCapabilityToolRow
   toolName: string
   input: Record<string, unknown>
   sanitizedInput: Record<string, unknown>
@@ -1167,7 +1167,7 @@ async function requestAuthorizationOrDeny(args: {
   principalScopeSubjectId?: string
 }): Promise<NormalizedMcpToolResult> {
   const { projectInput, row, toolName } = args
-  const origin = deviceToolOrigin(row)
+  const origin = runtimeToolOrigin(row)
   const supportsAuthRequest =
     projectInput.principal.kind === "actor" ||
     projectInput.principal.kind === "remote_agent"
@@ -1306,7 +1306,7 @@ class UnregisteredBuiltinKindError extends Error {
   }
 }
 
-function principalKindFor(principal: DevicePrincipal): OperationPrincipalKind {
+function principalKindFor(principal: RuntimePrincipal): OperationPrincipalKind {
   switch (principal.kind) {
     case "actor":
     case "conversation":

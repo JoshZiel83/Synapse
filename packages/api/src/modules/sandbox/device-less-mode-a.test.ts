@@ -4,9 +4,9 @@
 // used to hard-check the `devices` table:
 //   1. device.hello auth  (selectRuntimeHelloAuthContext → runtimes existence)
 //   2. catalog readiness  (isFilesystemExposureHealthy — the waitForCatalog tick)
-//   3. tool projection     (selectDeviceCapabilityToolsForSubjects surfaces
+//   3. tool projection     (selectRuntimeCapabilityToolsForSubjects surfaces
 //                           the sandbox's fs + commandline tools)
-//   4. access evaluation   (loadDeviceExposureDeviceId + loadDeviceCapabilityAccessRow
+//   4. access evaluation   (loadRuntimeExposureRuntimeId + loadRuntimeCapabilityAccessRow
 //                           resolve non-null for the sandbox's capability)
 // Without S3 every one of these drops the device-less runtime, so Mode-A
 // provision would ALWAYS fail. This fixture never inserts a `devices` row.
@@ -25,10 +25,10 @@ import { withTestDb } from "../../test/helpers/db.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
 import { authenticateRuntimeHello } from "../devices/control-plane-auth.js"
 import { isFilesystemExposureHealthy } from "./repo.js"
-import { selectDeviceCapabilityToolsForSubjects } from "../capability-projection/repo.js"
+import { selectRuntimeCapabilityToolsForSubjects } from "../capability-projection/repo.js"
 import {
-  loadDeviceExposureDeviceId,
-  loadDeviceCapabilityAccessRow,
+  loadRuntimeExposureRuntimeId,
+  loadRuntimeCapabilityAccessRow,
 } from "../access/repo-evaluator.js"
 
 function uniq(prefix: string): string {
@@ -246,10 +246,10 @@ test("G3: waitForCatalog tick (isFilesystemExposureHealthy) sees the sandbox's f
   })
 })
 
-test("G3: selectDeviceCapabilityToolsForSubjects surfaces the sandbox's fs + commandline tools", async () => {
+test("G3: selectRuntimeCapabilityToolsForSubjects surfaces the sandbox's fs + commandline tools", async () => {
   await withTestDb(async (db) => {
     const seed = await seedSandboxRuntime(db)
-    const rows = await selectDeviceCapabilityToolsForSubjects(
+    const rows = await selectRuntimeCapabilityToolsForSubjects(
       {
         workspaceId: seed.workspaceId,
         subjectIds: [seed.grantSubjectId],
@@ -285,12 +285,12 @@ test("G3: selectDeviceCapabilityToolsForSubjects surfaces the sandbox's fs + com
 test("G3: the access-evaluator resolves a non-null access row for the sandbox's capability", async () => {
   await withTestDb(async (db) => {
     const seed = await seedSandboxRuntime(db)
-    const resolvedRuntimeId = await loadDeviceExposureDeviceId(
+    const resolvedRuntimeId = await loadRuntimeExposureRuntimeId(
       db,
       seed.builtins.filesystem.exposureId
     )
     assert.equal(resolvedRuntimeId, seed.runtimeId)
-    const accessRow = await loadDeviceCapabilityAccessRow(
+    const accessRow = await loadRuntimeCapabilityAccessRow(
       db,
       seed.builtins.filesystem.capabilityId
     )

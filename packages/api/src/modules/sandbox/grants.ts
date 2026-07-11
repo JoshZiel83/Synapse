@@ -4,7 +4,7 @@
 // either alone results in a local deny:
 //   Layer 1 — capability device grant (workspace_resource_grants): binds the
 //     actor (scope=conversation) to the device's filesystem + commandline
-//     capabilities, so projectDeviceTools surfaces the tools at all.
+//     capabilities, so projectRuntimeTools surfaces the tools at all.
 //   Layer 2 — runtime-authorization grants: a filesystem write grant over the
 //     three mount points + a commandline grant with the executor:"sandbox"
 //     variant (bwrap-confined any-command). Pre-authorized once at provision so
@@ -27,8 +27,8 @@ import {
   revokeActiveRuntimeGrants,
 } from "./repo.js"
 import {
-  addDeviceCapabilitiesForTarget,
-  revokeDeviceCapabilitiesForTarget,
+  addRuntimeCapabilitiesForTarget,
+  revokeRuntimeCapabilitiesForTarget,
 } from "../capability-projection/device-capabilities.js"
 import { createRuntimeAuthorizationGrant } from "../runtime-authorizations/service.js"
 
@@ -39,7 +39,7 @@ export class SandboxGrantsError extends Error {
   }
 }
 
-export interface DeviceBuiltinIds {
+export interface RuntimeBuiltinIds {
   /** runtime_exposures.id for builtin_kind='filesystem'. */
   filesystemExposureId: string
   /** runtime_capabilities.id for the filesystem exposure. */
@@ -60,7 +60,7 @@ export interface DeviceBuiltinIds {
 export async function resolveRuntimeBuiltinIds(
   runtimeId: string,
   run?: Executor
-): Promise<DeviceBuiltinIds> {
+): Promise<RuntimeBuiltinIds> {
   const rows = await selectRuntimeBuiltinExposures(runtimeId, run)
 
   let fsExposure: string | null = null
@@ -94,7 +94,7 @@ export interface CreateSandboxGrantsParams {
   runtimeId: string
   actorId: string
   conversationId: string
-  builtins: DeviceBuiltinIds
+  builtins: RuntimeBuiltinIds
   /**
    * Whether to build the commandline sandbox grant. false = fail-closed
    * (no bwrap/userns): only fs tools are authorized.
@@ -115,7 +115,7 @@ export interface CreateSandboxGrantsParams {
 
 /**
  * Create BOTH authorization layers for a sandbox, scoped to (actor, conversation).
- * Idempotent at Layer 1 (setActiveDeviceCapabilitiesForTarget revokes-then-inserts
+ * Idempotent at Layer 1 (setActiveRuntimeCapabilitiesForTarget revokes-then-inserts
  * the full list in one pass). Layer 2 grants are created with retention
  * 'until_revoked' so they live for the session and are torn down explicitly.
  */
@@ -131,14 +131,14 @@ export async function createSandboxGrants(
   if (params.includeCommandline && builtins.commandlineCapabilityId) {
     capabilityIds.push(builtins.commandlineCapabilityId)
   }
-  await addDeviceCapabilitiesForTarget({
+  await addRuntimeCapabilitiesForTarget({
     workspaceId,
     target: {
       kind: "actor",
       actorId,
       conversationId,
     },
-    deviceCapabilityIds: capabilityIds,
+    runtimeCapabilityIds: capabilityIds,
     createdByWorkspaceMemberId: params.createdByWorkspaceMemberId ?? null,
     reason: "sandbox provision",
   })
@@ -214,19 +214,19 @@ export async function revokeSandboxGrants(params: {
 }): Promise<void> {
   // Layer 1: resolve THIS runtime's capability ids, then targeted-revoke only
   // those bindings (leaving other capabilities the actor/conversation may hold).
-  const deviceCapabilityIds = await selectRuntimeCapabilityIds({
+  const runtimeCapabilityIds = await selectRuntimeCapabilityIds({
     workspaceId: params.workspaceId,
     runtimeId: params.runtimeId,
   })
-  if (deviceCapabilityIds.length > 0) {
-    await revokeDeviceCapabilitiesForTarget({
+  if (runtimeCapabilityIds.length > 0) {
+    await revokeRuntimeCapabilitiesForTarget({
       workspaceId: params.workspaceId,
       target: {
         kind: "actor",
         actorId: params.actorId,
         conversationId: params.conversationId,
       },
-      deviceCapabilityIds,
+      runtimeCapabilityIds,
       reason: "sandbox teardown",
     })
   }

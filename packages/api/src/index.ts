@@ -93,8 +93,8 @@ import {
   stopTaskProjectionWorker,
 } from "./workers/task-projection.js"
 import {
-  startDeviceTaskSweeper,
-  stopDeviceTaskSweeper,
+  startRuntimeTaskSweeper,
+  stopRuntimeTaskSweeper,
 } from "./workers/device-task-sweeper.js"
 import {
   startDocExtractionSweeper,
@@ -404,7 +404,7 @@ async function main() {
   startImTransportDeliveryWorker()
   startTransportOutboxSweeper()
   startTaskProjectionWorker()
-  startDeviceTaskSweeper()
+  startRuntimeTaskSweeper()
   installActorStatusHooks()
   startMemoryIndexingWorker()
   startFileParsingWorker()
@@ -472,7 +472,7 @@ async function main() {
       })
       await waitWithTimeout(
         "device task sweeper shutdown",
-        stopDeviceTaskSweeper(),
+        stopRuntimeTaskSweeper(),
         3000
       ).catch((err) => {
         app.log.error({ err }, "Device task sweeper shutdown timed out")

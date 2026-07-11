@@ -31,7 +31,7 @@ import {
   createRuntimeAuthorizationGrant,
   ProgramOnlyGrantNotAllowedError,
 } from "./service.js"
-import { findDeviceCapabilityGrantTarget } from "./repo.js"
+import { findRuntimeCapabilityGrantTarget } from "./repo.js"
 
 export function registerManualRuntimeAuthorizationGrantRoutes(
   app: FastifyInstance
@@ -90,7 +90,7 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
 
       // JOIN reverse-lookup: pull device_id / exposure_id / builtin_kind /
       // workspace_id / status. Verify they line up before the write.
-      const row = await findDeviceCapabilityGrantTarget(
+      const row = await findRuntimeCapabilityGrantTarget(
         parsed.data.runtimeCapabilityId
       )
       if (!row) {

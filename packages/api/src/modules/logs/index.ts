@@ -21,7 +21,7 @@ import { z } from "zod"
 import { logger } from "../../infrastructure/logger/index.js"
 import { wireRoute } from "../../infrastructure/http/route.js"
 import { authenticateRequestSession } from "../auth/service.js"
-import { verifyDeviceLogToken } from "./device-token.js"
+import { verifyRuntimeLogToken } from "./device-token.js"
 
 const LEVELS = ["debug", "info", "warn", "error"] as const
 type Level = (typeof LEVELS)[number]
@@ -83,7 +83,7 @@ export default fp(
             typeof authz === "string" && authz.startsWith("Bearer ")
               ? authz.slice("Bearer ".length)
               : null
-          const device = token ? verifyDeviceLogToken(token, Date.now()) : null
+          const device = token ? verifyRuntimeLogToken(token, Date.now()) : null
           if (!device) {
             return reply
               .status(401)
@@ -91,7 +91,7 @@ export default fp(
           }
           base = ingestLog.child({
             source: "device",
-            deviceId: device.deviceId,
+            runtimeId: device.runtimeId,
             serviceId: device.serviceId,
           })
         }

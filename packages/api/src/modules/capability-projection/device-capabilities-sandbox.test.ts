@@ -7,17 +7,17 @@ import { withTestDb } from "../../test/helpers/db.js"
 import { insertDeviceRuntime } from "../../test/helpers/runtime-fixtures.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
 import {
-  addDeviceCapabilitiesForTarget,
-  revokeDeviceCapabilitiesForTarget,
+  addRuntimeCapabilitiesForTarget,
+  revokeRuntimeCapabilitiesForTarget,
 } from "./device-capabilities.js"
 
 /**
- * Regression for the sandbox-grant clobber bug: addDeviceCapabilitiesForTarget
- * and revokeDeviceCapabilitiesForTarget must be ADDITIVE / TARGETED — they must
+ * Regression for the sandbox-grant clobber bug: addRuntimeCapabilitiesForTarget
+ * and revokeRuntimeCapabilitiesForTarget must be ADDITIVE / TARGETED — they must
  * never disturb a pre-existing manual capability binding on the same
  * (actor, conversation) target, unlike the full-replace setter.
  *
- * Note: listActiveDeviceCapabilitiesForTarget reads the singleton db, so this
+ * Note: listActiveRuntimeCapabilitiesForTarget reads the singleton db, so this
  * test asserts via a direct query on the test client instead.
  */
 
@@ -162,7 +162,7 @@ async function activeCapIds(
   )
 }
 
-test("addDeviceCapabilitiesForTarget is additive; revoke is targeted", async () => {
+test("addRuntimeCapabilitiesForTarget is additive; revoke is targeted", async () => {
   await withTestDb(async (db) => {
     const s = await seed(db)
     const target = {
@@ -172,22 +172,22 @@ test("addDeviceCapabilitiesForTarget is additive; revoke is targeted", async () 
     }
 
     // A pre-existing manual binding (e.g. an operator granted this capability).
-    await addDeviceCapabilitiesForTarget(
+    await addRuntimeCapabilitiesForTarget(
       {
         workspaceId: s.workspaceId,
         target,
-        deviceCapabilityIds: [s.preExistingCap],
+        runtimeCapabilityIds: [s.preExistingCap],
         reason: "manual",
       },
       { db }
     )
 
     // Sandbox provision adds ITS capabilities — must NOT clobber the manual one.
-    await addDeviceCapabilitiesForTarget(
+    await addRuntimeCapabilitiesForTarget(
       {
         workspaceId: s.workspaceId,
         target,
-        deviceCapabilityIds: [s.sandboxCap1, s.sandboxCap2],
+        runtimeCapabilityIds: [s.sandboxCap1, s.sandboxCap2],
         reason: "sandbox provision",
       },
       { db }
@@ -199,11 +199,11 @@ test("addDeviceCapabilitiesForTarget is additive; revoke is targeted", async () 
     assert.ok(active.has(s.sandboxCap2))
 
     // Re-provision (idempotent): adding the same sandbox caps again is a no-op.
-    await addDeviceCapabilitiesForTarget(
+    await addRuntimeCapabilitiesForTarget(
       {
         workspaceId: s.workspaceId,
         target,
-        deviceCapabilityIds: [s.sandboxCap1, s.sandboxCap2],
+        runtimeCapabilityIds: [s.sandboxCap1, s.sandboxCap2],
       },
       { db }
     )
@@ -217,11 +217,11 @@ test("addDeviceCapabilitiesForTarget is additive; revoke is targeted", async () 
     assert.equal(Number(dupCount.c), 1, "no duplicate active binding")
 
     // Sandbox teardown revokes ONLY its capabilities — the manual one survives.
-    await revokeDeviceCapabilitiesForTarget(
+    await revokeRuntimeCapabilitiesForTarget(
       {
         workspaceId: s.workspaceId,
         target,
-        deviceCapabilityIds: [s.sandboxCap1, s.sandboxCap2],
+        runtimeCapabilityIds: [s.sandboxCap1, s.sandboxCap2],
         reason: "sandbox teardown",
       },
       { db }

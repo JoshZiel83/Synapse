@@ -7,34 +7,34 @@
 // round-6 P1-6: all db-client access now lives in ./repo.ts (guard r8). This
 // file is the orchestration / DTO layer — it resolves AccessTarget DTOs to
 // subject ids and calls the repo helpers. The public function names and the
-// `DeviceCapabilityToolRow` / `AccessTargetInput` types are re-exported here so
+// `RuntimeCapabilityToolRow` / `AccessTargetInput` types are re-exported here so
 // external importers (index.ts `export *`, sandbox/grants.ts,
 // devices/access-bindings.ts, service.ts, tests) need no changes.
 
 import type { Executor } from "../../infrastructure/database/kysely.js"
 import {
-  selectDeviceCapabilityToolsForSubjects,
+  selectRuntimeCapabilityToolsForSubjects,
   resolveScopedSubjectTarget,
-  replaceDeviceCapabilityGrants,
-  insertDeviceCapabilityGrants,
-  revokeDeviceCapabilityGrants,
-  selectActiveDeviceCapabilityIdsForSubject,
-  type DeviceCapabilityToolRow,
-  type LoadDeviceToolsParams,
+  replaceRuntimeCapabilityGrants,
+  insertRuntimeCapabilityGrants,
+  revokeRuntimeCapabilityGrants,
+  selectActiveRuntimeCapabilityIdsForSubject,
+  type RuntimeCapabilityToolRow,
+  type LoadRuntimeToolsParams,
   type AccessTargetInput,
 } from "./repo.js"
 
 export type {
-  DeviceCapabilityToolRow,
-  LoadDeviceToolsParams,
+  RuntimeCapabilityToolRow,
+  LoadRuntimeToolsParams,
   AccessTargetInput,
 }
 export { resolveScopedSubjectTarget }
 
-export async function loadDeviceCapabilityToolsForSubjects(
-  params: LoadDeviceToolsParams
-): Promise<DeviceCapabilityToolRow[]> {
-  return selectDeviceCapabilityToolsForSubjects(params)
+export async function loadRuntimeCapabilityToolsForSubjects(
+  params: LoadRuntimeToolsParams
+): Promise<RuntimeCapabilityToolRow[]> {
+  return selectRuntimeCapabilityToolsForSubjects(params)
 }
 
 /**
@@ -49,38 +49,38 @@ export async function resolveAccessTargetSubjectId(
   return resolved.subjectId
 }
 
-export interface SetActiveDeviceCapabilitiesParams {
+export interface SetActiveRuntimeCapabilitiesParams {
   workspaceId: string
   target: AccessTargetInput
-  deviceCapabilityIds: string[]
+  runtimeCapabilityIds: string[]
   createdByWorkspaceMemberId?: string | null
   reason?: string
 }
 
-export async function setActiveDeviceCapabilitiesForTarget(
-  params: SetActiveDeviceCapabilitiesParams
+export async function setActiveRuntimeCapabilitiesForTarget(
+  params: SetActiveRuntimeCapabilitiesParams
 ): Promise<void> {
   const { subjectId, scopeSubjectId } = await resolveScopedSubjectTarget(
     params.target
   )
-  await replaceDeviceCapabilityGrants({
+  await replaceRuntimeCapabilityGrants({
     workspaceId: params.workspaceId,
     subjectId,
     scopeSubjectId,
-    capabilityIds: params.deviceCapabilityIds,
+    capabilityIds: params.runtimeCapabilityIds,
     createdByWorkspaceMemberId: params.createdByWorkspaceMemberId,
     reason: params.reason,
   })
 }
 
-export async function listActiveDeviceCapabilitiesForTarget(params: {
+export async function listActiveRuntimeCapabilitiesForTarget(params: {
   workspaceId: string
   target: AccessTargetInput
 }): Promise<string[]> {
   const { subjectId, scopeSubjectId } = await resolveScopedSubjectTarget(
     params.target
   )
-  return selectActiveDeviceCapabilityIdsForSubject(
+  return selectActiveRuntimeCapabilityIdsForSubject(
     params.workspaceId,
     subjectId,
     scopeSubjectId
@@ -90,26 +90,26 @@ export async function listActiveDeviceCapabilitiesForTarget(params: {
 /**
  * ADDITIVE capability grant: activate bindings for exactly the given capability
  * ids on (subject, scope), WITHOUT touching the target's other capability
- * bindings. Unlike setActiveDeviceCapabilitiesForTarget (a full replace), this
+ * bindings. Unlike setActiveRuntimeCapabilitiesForTarget (a full replace), this
  * is safe when several independent grantors (e.g. a sandbox provision + a
  * manually-granted device capability) coexist on the same actor/conversation.
  * Idempotent per (capability, subject, scope) via the active partial-unique.
  */
-export async function addDeviceCapabilitiesForTarget(
-  params: SetActiveDeviceCapabilitiesParams,
+export async function addRuntimeCapabilitiesForTarget(
+  params: SetActiveRuntimeCapabilitiesParams,
   options?: { db?: Executor }
 ): Promise<void> {
-  if (params.deviceCapabilityIds.length === 0) return
+  if (params.runtimeCapabilityIds.length === 0) return
   const { subjectId, scopeSubjectId } = await resolveScopedSubjectTarget(
     params.target,
     { db: options?.db }
   )
-  await insertDeviceCapabilityGrants(
+  await insertRuntimeCapabilityGrants(
     {
       workspaceId: params.workspaceId,
       subjectId,
       scopeSubjectId,
-      capabilityIds: params.deviceCapabilityIds,
+      capabilityIds: params.runtimeCapabilityIds,
       createdByWorkspaceMemberId: params.createdByWorkspaceMemberId,
       reason: params.reason,
     },
@@ -120,24 +120,24 @@ export async function addDeviceCapabilitiesForTarget(
 /**
  * TARGETED capability revoke: revoke ONLY the given capability ids' active
  * bindings on (subject, scope), leaving the target's other capabilities intact.
- * The inverse of addDeviceCapabilitiesForTarget — used at sandbox teardown so we
+ * The inverse of addRuntimeCapabilitiesForTarget — used at sandbox teardown so we
  * don't clobber an unrelated manual grant on the same actor/conversation.
  */
-export async function revokeDeviceCapabilitiesForTarget(
-  params: SetActiveDeviceCapabilitiesParams,
+export async function revokeRuntimeCapabilitiesForTarget(
+  params: SetActiveRuntimeCapabilitiesParams,
   options?: { db?: Executor }
 ): Promise<void> {
-  if (params.deviceCapabilityIds.length === 0) return
+  if (params.runtimeCapabilityIds.length === 0) return
   const { subjectId, scopeSubjectId } = await resolveScopedSubjectTarget(
     params.target,
     { db: options?.db }
   )
-  await revokeDeviceCapabilityGrants(
+  await revokeRuntimeCapabilityGrants(
     {
       workspaceId: params.workspaceId,
       subjectId,
       scopeSubjectId,
-      capabilityIds: params.deviceCapabilityIds,
+      capabilityIds: params.runtimeCapabilityIds,
       createdByWorkspaceMemberId: params.createdByWorkspaceMemberId,
       reason: params.reason,
     },

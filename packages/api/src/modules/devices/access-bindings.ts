@@ -1,20 +1,20 @@
 // REST routes for the active-device picker (§9.1). Mounted by the devices
-// module so the picker can call setActiveDeviceCapabilitiesForTarget without
+// module so the picker can call setActiveRuntimeCapabilitiesForTarget without
 // going through capability-projection's internal module boundary.
 //
 // subject-scope-refactor: the app shape is a shared-owned `ScopedSubjectTarget`
-// (`{subject, scope?}`) nested in SetActiveDeviceCapabilitiesInputSchema. The
+// (`{subject, scope?}`) nested in SetActiveRuntimeCapabilitiesInputSchema. The
 // SDK/web send this app contract; the route maps it to AccessTargetInput at the
 // boundary via appTargetToInternalAccessTarget.
 
 import { formatValidationDetails } from "../../infrastructure/validation-error.js"
 import type { FastifyInstance } from "fastify"
-import type { DeviceCapabilityAccessTargetInput } from "@synapse/shared"
+import type { RuntimeCapabilityAccessTargetInput } from "@synapse/shared"
 import {
-  SetActiveDeviceCapabilitiesInputSchema,
-  ActiveDeviceCapabilitiesViewSchema,
-  ActiveDeviceCapabilitiesListQuerySchema,
-  type ActiveDeviceCapabilitiesListQuery,
+  SetActiveRuntimeCapabilitiesInputSchema,
+  ActiveRuntimeCapabilitiesViewSchema,
+  ActiveRuntimeCapabilitiesListQuerySchema,
+  type ActiveRuntimeCapabilitiesListQuery,
 } from "@synapse/shared/schemas"
 import { appRoute } from "../../infrastructure/http/route.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
@@ -24,20 +24,20 @@ import {
   findActorWorkspace,
   findConversationWorkspace,
   findRemoteAgentWorkspace,
-  findOwnedDeviceCapabilityIds,
+  findOwnedRuntimeCapabilityIds,
 } from "./repo.js"
 import {
-  listActiveDeviceCapabilitiesForTarget,
-  setActiveDeviceCapabilitiesForTarget,
+  listActiveRuntimeCapabilitiesForTarget,
+  setActiveRuntimeCapabilitiesForTarget,
   type AccessTargetInput,
 } from "../capability-projection/device-capabilities.js"
 
 // Exported for regression tests that pin the app-facing input contract — the
 // bug pattern under guard is the route accepting a different shape than the
 // SDK/web sends. Per §5.1.1/§8.3 this management write is app-facing camelCase
-// (shared `SetActiveDeviceCapabilitiesInput`: `deviceCapabilityIds`), with a
+// (shared `SetActiveRuntimeCapabilitiesInput`: `runtimeCapabilityIds`), with a
 // shared-owned target whitelist.
-export const setActiveBodySchema = SetActiveDeviceCapabilitiesInputSchema
+export const setActiveBodySchema = SetActiveRuntimeCapabilitiesInputSchema
 
 /**
  * Map the app `(subject, scope?)` shape onto `AccessTargetInput`.
@@ -52,7 +52,7 @@ export const setActiveBodySchema = SetActiveDeviceCapabilitiesInputSchema
 // at the mapper (which is what happened pre-Batch-19 with
 // `(remote_agent, conversation)`).
 export function appTargetToInternalAccessTarget(
-  target: DeviceCapabilityAccessTargetInput
+  target: RuntimeCapabilityAccessTargetInput
 ): AccessTargetInput {
   const { subject, scope } = target
   if (scope) {
@@ -103,11 +103,11 @@ export function appTargetToInternalAccessTarget(
  * `scopeKind=workspace` is explicitly rejected — the binding model only supports
  * `actor|remote_agent + conversation`.
  */
-const listQuerySchema = ActiveDeviceCapabilitiesListQuerySchema
+const listQuerySchema = ActiveRuntimeCapabilitiesListQuerySchema
 
 function listQueryToInternalAccessTarget(
   workspaceId: string,
-  q: ActiveDeviceCapabilitiesListQuery
+  q: ActiveRuntimeCapabilitiesListQuery
 ): AccessTargetInput | null {
   if (q.scopeKind === "conversation" && q.scopeConversationId) {
     if (q.subjectKind === "actor" && q.subjectActorId) {
@@ -231,7 +231,7 @@ async function assertCapabilitiesInWorkspace(
   capabilityIds: string[]
 ): Promise<{ ok: true } | { ok: false; missing: string[] }> {
   if (capabilityIds.length === 0) return { ok: true }
-  const ownedIds = await findOwnedDeviceCapabilityIds(
+  const ownedIds = await findOwnedRuntimeCapabilityIds(
     workspaceId,
     capabilityIds
   )
@@ -250,7 +250,7 @@ export function registerDeviceAccessBindingRoutes(app: FastifyInstance): void {
     app,
     "POST",
     "/api/v1/workspaces/:workspaceId/devices/access-bindings",
-    { schema: ActiveDeviceCapabilitiesViewSchema, options: workspaceHook },
+    { schema: ActiveRuntimeCapabilitiesViewSchema, options: workspaceHook },
     async (request, reply): Promise<undefined> => {
       const { workspaceId: pathWorkspaceId } = request.params as {
         workspaceId: string
@@ -286,7 +286,7 @@ export function registerDeviceAccessBindingRoutes(app: FastifyInstance): void {
       )
         return
 
-      for (const capId of parsed.data.deviceCapabilityIds) {
+      for (const capId of parsed.data.runtimeCapabilityIds) {
         if (
           !(await requireRequestAction(
             request,
@@ -324,12 +324,12 @@ export function registerDeviceAccessBindingRoutes(app: FastifyInstance): void {
 
       const capabilitiesCheck = await assertCapabilitiesInWorkspace(
         pathWorkspaceId,
-        parsed.data.deviceCapabilityIds
+        parsed.data.runtimeCapabilityIds
       )
       if (!capabilitiesCheck.ok) {
         reply.status(400).send({
           code: "invalid_capability",
-          message: "one or more deviceCapabilityIds not in this workspace",
+          message: "one or more runtimeCapabilityIds not in this workspace",
           missing: capabilitiesCheck.missing,
         })
         return
@@ -338,10 +338,10 @@ export function registerDeviceAccessBindingRoutes(app: FastifyInstance): void {
       const session = (request as { session?: { workspaceMemberId?: string } })
         .session
       try {
-        await setActiveDeviceCapabilitiesForTarget({
+        await setActiveRuntimeCapabilitiesForTarget({
           workspaceId: pathWorkspaceId,
           target: internalTarget,
-          deviceCapabilityIds: parsed.data.deviceCapabilityIds,
+          runtimeCapabilityIds: parsed.data.runtimeCapabilityIds,
           createdByWorkspaceMemberId: session?.workspaceMemberId ?? null,
           reason: parsed.data.reason,
         })
@@ -358,7 +358,7 @@ export function registerDeviceAccessBindingRoutes(app: FastifyInstance): void {
     app,
     "GET",
     "/api/v1/workspaces/:workspaceId/devices/access-bindings",
-    { schema: ActiveDeviceCapabilitiesViewSchema, options: workspaceHook },
+    { schema: ActiveRuntimeCapabilitiesViewSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       const queryParsed = listQuerySchema.safeParse(request.query)
@@ -401,11 +401,11 @@ export function registerDeviceAccessBindingRoutes(app: FastifyInstance): void {
         return
       }
       try {
-        const ids = await listActiveDeviceCapabilitiesForTarget({
+        const ids = await listActiveRuntimeCapabilitiesForTarget({
           workspaceId,
           target,
         })
-        return { deviceCapabilityIds: ids }
+        return { runtimeCapabilityIds: ids }
       } catch (err) {
         reply
           .status(500)

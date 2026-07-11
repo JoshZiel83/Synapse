@@ -47,7 +47,7 @@ import {
   principalSubjectIds,
   buildRuntimeAuthorizationRequestParams,
   stripPlannerNonce,
-  type DevicePrincipal,
+  type RuntimePrincipal,
   type ProjectToolsInput,
 } from "./service.js"
 
@@ -400,7 +400,7 @@ test("Batch 14: stripPlannerNonce removes __synapse_retry_nonce and leaves input
 
 // --- (d) Source-text inspection for the dispatch-closure wiring ---
 //
-// The dispatcher is a closure inside `unionWithDevice` — not directly
+// The dispatcher is a closure inside `unionWithRuntime` — not directly
 // callable. To lock the load-bearing line
 //
 //   principalScopeSubjectId: device.subjects.activeConversationSubjectId,
@@ -441,11 +441,11 @@ test("Batch 14: capability-projection dispatcher stamps device origin", async ()
     "utf8"
   )
   assert.ok(
-    /const origin\s*=\s*deviceToolOrigin\(row\)/.test(source),
+    /const origin\s*=\s*runtimeToolOrigin\(row\)/.test(source),
     "dispatch closure no longer derives a device ToolResultOrigin from the projected row"
   )
   assert.ok(
-    /return withDeviceToolOrigin\(\s*\{\s*content:\s*tool\?\.content/s.test(
+    /return withRuntimeToolOrigin\(\s*\{\s*content:\s*tool\?\.content/s.test(
       source
     ),
     "successful device dispatch no longer returns NormalizedMcpToolResult.origin"

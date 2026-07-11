@@ -123,8 +123,8 @@ import {
   RELATIONSHIP_SCAN_OUTCOMES,
   DEVICE_ACCESS_DENIAL_KINDS,
   DEVICE_ACCESS_DENIAL_RESOLUTIONS,
-  DEVICE_CAPABILITY_ACCESS_SCOPE_KINDS,
-  DEVICE_CAPABILITY_ACCESS_SUBJECT_KINDS,
+  RUNTIME_CAPABILITY_ACCESS_SCOPE_KINDS,
+  RUNTIME_CAPABILITY_ACCESS_SUBJECT_KINDS,
   RUNTIME_AUTHORIZATION_BROWSER_ACTIONS,
   RUNTIME_AUTHORIZATION_BROWSER_SCOPE_TYPES,
   RUNTIME_AUTHORIZATION_CAPABILITIES,
@@ -2259,9 +2259,9 @@ export type CapabilityAccessTargetType =
 export type ConversationMessageTransportDirection =
   (typeof CONVERSATION_MESSAGE_TRANSPORT_DIRECTIONS)[number]
 export type DeviceCapabilityAccessSubjectKind =
-  (typeof DEVICE_CAPABILITY_ACCESS_SUBJECT_KINDS)[number]
+  (typeof RUNTIME_CAPABILITY_ACCESS_SUBJECT_KINDS)[number]
 export type DeviceCapabilityAccessScopeKind =
-  (typeof DEVICE_CAPABILITY_ACCESS_SCOPE_KINDS)[number]
+  (typeof RUNTIME_CAPABILITY_ACCESS_SCOPE_KINDS)[number]
 export type ReuseScope = (typeof REUSE_SCOPES)[number]
 export type PlatformAccessSource = (typeof PLATFORM_ACCESS_SOURCES)[number]
 export type MarketplaceSourceType = (typeof MARKETPLACE_SOURCE_TYPES)[number]
@@ -4551,9 +4551,9 @@ export type {
   CreateCloudDeviceResultView,
   StartPairingInput,
   ClaimDaemonServiceInput,
-  DeviceCapabilityAccessTargetInput,
-  SetActiveDeviceCapabilitiesInput,
-  ActiveDeviceCapabilitiesView,
+  RuntimeCapabilityAccessTargetInput,
+  SetActiveRuntimeCapabilitiesInput,
+  ActiveRuntimeCapabilitiesView,
 } from "../schemas/devices.js"
 export type {
   RuntimeAuthorizationGrantRecordView,
