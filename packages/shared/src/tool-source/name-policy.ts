@@ -5,7 +5,7 @@
 //
 // Rules (plan §1, findings #2/#4/#6):
 //   - PRIMARY KEY is `toolId`, NOT the name — so two tools that share a leaf
-//     name (e.g. plugin "read" + device "read") never overwrite each other.
+//     name (e.g. plugin "read" + runtime "read") never overwrite each other.
 //   - A leaf name that is globally unique across the whole batch → bare name.
 //   - A leaf-name COLLISION → BOTH sides get a source-derived qualifier prefix
 //     (no implicit priority; symmetric & predictable).
@@ -62,7 +62,7 @@ function qualifierFor(ref: ToolRef): string {
     case "runtime":
       return ref.source.runtimeName
         ? sanitizeSegment(ref.source.runtimeName)
-        : `device_${ref.source.runtimeToolId.slice(0, 8)}`
+        : `runtime_${ref.source.runtimeToolId.slice(0, 8)}`
   }
 }
 
@@ -76,7 +76,7 @@ function clampLen(name: string): string {
 /**
  * Compute wire names for a batch of projected tools.
  *
- * @param items projected tools (system/plugin/device), keyed internally by toolId
+ * @param items projected tools (system/plugin/runtime), keyed internally by toolId
  * @param reservedNames names that must not be produced (e.g. provider_native);
  *        they still occupy the collision space so a colliding tool gets qualified.
  */

@@ -102,7 +102,7 @@ export type DevicePairingTicketView = z.infer<
 // ============================================================================
 // App-facing WRITE-path input contracts (camelCase). Per master plan §5.1.1 /
 // §8.3, the request bodies for the device MANAGEMENT methods (createCloudDevice
-// / startPairing / claimRemoteAgentDaemon / setActiveDeviceCapabilities) are
+// / startPairing / claimRemoteAgentDaemon / setActiveRuntimeCapabilities) are
 // app contracts too — defined here in camelCase, paired with their *View
 // result. controller parses with these; web-next + consumer-side device-sdk
 // send camelCase bodies. The true wire/handshake inputs (consume / bootstrap)

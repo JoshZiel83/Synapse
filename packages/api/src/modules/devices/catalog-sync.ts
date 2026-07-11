@@ -5,9 +5,9 @@
 // `runtime_tool_revisions` / `runtime_catalog_revisions`.
 //
 // Idempotency contract:
-//  - For each incoming exposure: upsert by (device_id, stable_key) and bump
+//  - For each incoming exposure: upsert by (runtime_id, stable_key) and bump
 //    runtime_status + last_seen_at. Create the matching runtime_capabilities
-//    row if missing (workspace_id from devices.workspace_id).
+//    row if missing (workspace_id from the authenticated runtime (runtimes.workspace_id)).
 //  - Compute a stable schema_hash from the exposure's tool set. If it has
 //    moved since the last runtime_catalog_revisions row for this exposure,
 //    create a new revision (revision_seq = max+1) and mark the previous one

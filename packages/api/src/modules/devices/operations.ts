@@ -9,7 +9,7 @@ import type { OperationPrincipalKind } from "./repo.js"
 // principal_kind enum. The scoped-actor semantics is expressed as
 // (principal.kind='actor', activeConversationSubjectId set) in
 // RuntimePrincipalContext; deriveOperationPrincipalAudit collapses it back to
-// 'actor' for the audit row. The DB enum device_operations_principal_kind
+// 'actor' for the audit row. The DB enum runtime_operations_principal_kind
 // matches. The persisted operation input/result types live in repo.ts.
 
 /**
@@ -72,8 +72,6 @@ export class InvalidPrincipalKindForRuntimeOperation extends Error {
 }
 
 export {
-  assertNoRuntimeToolRevisionDrift,
-  beginRuntimeOperation,
   beginRuntimeOperationOn,
   completeRuntimeOperation,
   RevisionDriftError,

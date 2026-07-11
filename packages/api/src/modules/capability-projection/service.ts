@@ -63,11 +63,8 @@ import {
   isBundleEligibleProgram,
   normalizeDevicePlatform,
 } from "@synapse/shared"
-import { serializeCommandlinePolicyToWire } from "@synapse/shared/access/policies"
 import {
-  beginRuntimeOperation,
   completeRuntimeOperation,
-  RevisionDriftError,
   type OperationPrincipalKind,
 } from "../devices/operations.js"
 import { getRuntimeEndpointRegistry } from "../devices/tunnel-registry.js"
@@ -178,9 +175,9 @@ export async function projectToolsForPrincipal(
   input: ProjectToolsInput
 ): Promise<ProjectedToolList> {
   const legacy = await projectLegacyTools(input)
-  const device = await projectRuntimeTools(input)
-  if (device.tools.length === 0) return legacy
-  return unionWithRuntime(input, legacy, device)
+  const runtimeBundle = await projectRuntimeTools(input)
+  if (runtimeBundle.tools.length === 0) return legacy
+  return unionWithRuntime(input, legacy, runtimeBundle)
 }
 
 async function projectLegacyTools(
@@ -517,13 +514,13 @@ function normalizeInputSchema(raw: unknown): ToolDefinition["parameters"] {
 function unionWithRuntime(
   projectInput: ProjectToolsInput,
   legacy: ProjectedToolList,
-  device: RuntimeToolBundle
+  runtimeBundle: RuntimeToolBundle
 ): ProjectedToolList {
   const dispatchRuntimeTool = async (
     toolId: string,
     input: Record<string, unknown>
   ): Promise<NormalizedMcpToolResult> => {
-    const row = device.handlers.get(toolId)
+    const row = runtimeBundle.handlers.get(toolId)
     if (!row) {
       return mcpErrorBlock(`device tool ${toolId} not found in projection`)
     }
@@ -653,8 +650,8 @@ function unionWithRuntime(
         runtimeId: row.runtimeId,
         runtimeCapabilityId: row.runtimeCapabilityId,
         runtimeExposureId: row.runtimeExposureId,
-        runtimeSubjectIds: device.subjects.allIds,
-        runtimeScopeSubjectIds: device.subjects.scopeSubjectIds,
+        runtimeSubjectIds: runtimeBundle.subjects.allIds,
+        runtimeScopeSubjectIds: runtimeBundle.subjects.scopeSubjectIds,
         retryNonce: envelopeRetryNonce,
         requestedAction,
         prepareGrant: async (
@@ -726,7 +723,8 @@ function unionWithRuntime(
                           row.runtimeServiceId
                         )?.internalUrl ?? null),
                   principalKind: principalKindFor(projectInput.principal),
-                  principalSubjectId: device.subjects.principalSubjectId ?? "",
+                  principalSubjectId:
+                    runtimeBundle.subjects.principalSubjectId ?? "",
                   initiatedByWorkspaceMemberId:
                     projectInput.workspaceMemberId ?? null,
                   initiatedBySessionId: projectInput.sessionId ?? null,
@@ -766,8 +764,9 @@ function unionWithRuntime(
           input,
           sanitizedInput,
           requestedAction,
-          principalSubjectId: device.subjects.principalSubjectId ?? "",
-          principalScopeSubjectId: device.subjects.activeConversationSubjectId,
+          principalSubjectId: runtimeBundle.subjects.principalSubjectId ?? "",
+          principalScopeSubjectId:
+            runtimeBundle.subjects.activeConversationSubjectId,
         }),
         origin
       )
@@ -888,7 +887,7 @@ function unionWithRuntime(
     input: Record<string, unknown>,
     executionContext?: McpExecutionContext
   ): Promise<NormalizedMcpToolResult> => {
-    if (device.handlers.has(toolId)) {
+    if (runtimeBundle.handlers.has(toolId)) {
       return dispatchRuntimeTool(toolId, input)
     }
     return legacy.executor(toolId, input, executionContext)
@@ -899,21 +898,21 @@ function unionWithRuntime(
     // Re-query device tools on each refresh so newly granted bindings show
     // up without restarting the session. Use the captured input so the
     // principal + subject set stays consistent across refreshes.
-    const freshDevice = await projectRuntimeTools(projectInput)
-    // Replace the stale device-bundle handlers/subjectIds in place so the
-    // dispatchRuntimeTool closure (which closes over `device`) sees the
+    const freshRuntime = await projectRuntimeTools(projectInput)
+    // Replace the stale runtime-bundle handlers/subjectIds in place so the
+    // dispatchRuntimeTool closure (which closes over `runtimeBundle`) sees the
     // refreshed handlers on the next tool call.
-    device.tools = freshDevice.tools
-    device.handlers = freshDevice.handlers
-    device.subjects = freshDevice.subjects
+    runtimeBundle.tools = freshRuntime.tools
+    runtimeBundle.handlers = freshRuntime.handlers
+    runtimeBundle.subjects = freshRuntime.subjects
     return {
-      tools: [...refreshed.tools, ...device.tools],
+      tools: [...refreshed.tools, ...runtimeBundle.tools],
       mcpVersion: refreshed.mcpVersion,
     }
   }
 
   return {
-    tools: [...legacy.tools, ...device.tools],
+    tools: [...legacy.tools, ...runtimeBundle.tools],
     executor,
     mcpVersion: legacy.mcpVersion,
     refresh,

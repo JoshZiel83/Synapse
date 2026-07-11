@@ -37,7 +37,6 @@ import type {
   DeviceServiceKind,
   DeviceTrustStatus,
   DeviceType,
-  HostKind,
 } from "@synapse/device-protocol/enums"
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -968,28 +967,6 @@ export class RevisionDriftError extends Error {
   }
 }
 
-export async function assertNoRuntimeToolRevisionDrift(
-  dbOrTrx: KyselyDb | DatabaseTransaction,
-  toolId: string,
-  expectedRevisionId: string
-): Promise<void> {
-  const tool = await dbOrTrx
-    .selectFrom("runtimeTools")
-    .select(["latestRevisionId"])
-    .where("id", "=", toolId)
-    .executeTakeFirst()
-  if (!tool) {
-    throw new RevisionDriftError(
-      `device_tool ${toolId} not found (catalog may have been re-synced and removed the tool)`
-    )
-  }
-  if ((tool.latestRevisionId as string | null) !== expectedRevisionId) {
-    throw new RevisionDriftError(
-      `device_tool ${toolId} revision drifted: envelope expected ${expectedRevisionId}, current latest is ${tool.latestRevisionId ?? "null"}`
-    )
-  }
-}
-
 export async function beginRuntimeOperationOn(
   trx: DatabaseTransaction,
   input: BeginOperationInput
@@ -1057,30 +1034,10 @@ async function getCatalogRevisionForToolRevision(
     .executeTakeFirst()
   if (!row) {
     throw new Error(
-      `device_tool_revision ${toolRevisionId} not found — envelope is stale`
+      `runtime_tool_revision ${toolRevisionId} not found — envelope is stale`
     )
   }
   return row.catalogRevisionId as string
-}
-
-/**
- * Insert a runtime_operations + first runtime_operation_attempts row pair, with a
- * revision drift check: the envelope's runtime_tool_revision_id must match
- * runtime_tools.latest_revision_id, otherwise we throw tool_definition_changed
- * before issuing the dispatch. The drift check + INSERT run in the same Kysely
- * transaction so a concurrent catalog sync can't slip in between.
- */
-export async function beginRuntimeOperation(
-  input: BeginOperationInput
-): Promise<BeginOperationResult> {
-  return db.transaction().execute(async (trx: DatabaseTransaction) => {
-    await assertNoRuntimeToolRevisionDrift(
-      trx,
-      input.envelope.runtime_tool_id,
-      input.envelope.runtime_tool_revision_id
-    )
-    return beginRuntimeOperationOn(trx, input)
-  })
 }
 
 /**
@@ -1107,7 +1064,7 @@ export async function completeRuntimeOperation(
     await trx
       .updateTable("runtimeOperations")
       .set({
-        // Schema's device_operations_status terminal enum value is
+        // Schema's runtime_operations_status terminal enum value is
         // 'succeeded' (not 'completed'). Failed dispatches use 'failed'.
         status: input.ok ? "succeeded" : "failed",
         resultHash: input.resultHash ?? null,
@@ -1469,7 +1426,7 @@ async function ensureCapability(
       id: capabilityId,
       exposureId: args.exposureId,
       // workspace_id is NOT NULL and denormalized from the authenticated
-      // runtime's workspace (ensureCapability's caller passes device.workspaceId,
+      // runtime's workspace (ensureCapability's caller passes runtime.workspaceId,
       // pinned by the composite FK to runtime_exposures(id,workspace_id)).
       workspaceId: args.workspaceId,
     } as never)
@@ -1871,7 +1828,7 @@ export type ConsumeLocalPairingResult =
  * Owns the whole local-pairing consume transaction: a single-shot claim
  * UPDATE...RETURNING (status pending + mode local_qr + not expired), a
  * diagnostic SELECT on race-loss, three INSERTs (devices, runtimeServices,
- * runtimeServiceKeys) and the device_id FK backfill — atomic in ONE
+ * runtimeServiceKeys) and the runtime_id FK backfill — atomic in ONE
  * db.transaction(). Returns a discriminated domain result; the service maps the
  * failure outcomes to the right DeviceModuleError code and assembles the wire
  * response with control_plane_url.
@@ -2013,7 +1970,7 @@ export async function consumeLocalPairingTx(args: {
       } as never)
       .execute()
 
-    // Backfill device_id on the already-consumed pairing session row. The
+    // Backfill runtime_id on the already-consumed pairing session row. The
     // earlier atomic UPDATE flipped status/timestamps; we just need the FK
     // wired now that the device row exists.
     await trx

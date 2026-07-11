@@ -26,7 +26,7 @@
 //
 //   - A static-text inspection over `service.ts` catches the third revert
 //     site (dispatch-level wiring at line ~558 that passes
-//     `principalScopeSubjectId: device.subjects.activeConversationSubjectId`
+//     `principalScopeSubjectId: runtimeBundle.subjects.activeConversationSubjectId`
 //     to the helper). The dispatcher is a closure so it isn't directly
 //     unit-testable; the text check is the targeted lock for that line.
 
@@ -403,7 +403,7 @@ test("Batch 14: stripPlannerNonce removes __synapse_retry_nonce and leaves input
 // The dispatcher is a closure inside `unionWithRuntime` — not directly
 // callable. To lock the load-bearing line
 //
-//   principalScopeSubjectId: device.subjects.activeConversationSubjectId,
+//   principalScopeSubjectId: runtimeBundle.subjects.activeConversationSubjectId,
 //
 // (the wiring that propagates active scope from the projection into the
 // auth request), inspect the source. If anyone reverts the line to
@@ -415,10 +415,10 @@ test("Batch 14: capability-projection dispatch closure wires activeConversationS
     "utf8"
   )
   assert.ok(
-    /principalScopeSubjectId:\s*device\.subjects\.activeConversationSubjectId/.test(
+    /principalScopeSubjectId:\s*runtimeBundle\.subjects\.activeConversationSubjectId/.test(
       source
     ),
-    "dispatch closure no longer passes `principalScopeSubjectId: device.subjects.activeConversationSubjectId` — the locked principal_scope_subject_id will be NULL and approval will throw ScopeRebuildMismatchError"
+    "dispatch closure no longer passes `principalScopeSubjectId: runtimeBundle.subjects.activeConversationSubjectId` — the locked principal_scope_subject_id will be NULL and approval will throw ScopeRebuildMismatchError"
   )
 })
 

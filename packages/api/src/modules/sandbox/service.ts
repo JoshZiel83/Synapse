@@ -495,10 +495,10 @@ async function ensureSessionSpaces(ctx: SessionContext): Promise<SpaceSpec[]> {
 export interface ProvisionSandboxOptions {
   /** Inject a HostProvider (local backend wraps it). Test seam. */
   hostProvider?: HostProvider
-  /** Max ms to wait for the device catalog to sync. */
+  /** Max ms to wait for the runtime catalog to sync. */
   catalogTimeoutMs?: number
   /**
-   * Max ms to wait for the device's tunnel endpoint to register in the
+   * Max ms to wait for the runtime's tunnel endpoint to register in the
    * RuntimeEndpointRegistry (after catalog). A sandbox whose endpoint never
    * registers can't dispatch ANY tool, so provision fails+cleans rather than
    * marking such mounts active. Default 30s; set 0 to skip the wait (only for
@@ -552,7 +552,7 @@ export async function provisionSandbox(
   if (fastPathOk) {
     // Already provisioned this session — report the ACTUAL state, not a
     // hardcoded false. Use the SAME source of truth as the cold provision path
-    // (resolveDeviceBuiltinIds → commandlineCapabilityId != null): an ACTIVE
+    // (resolveRuntimeBuiltinIds → commandlineCapabilityId != null): an ACTIVE
     // commandline capability joined to its exposure, not merely a row in
     // runtime_exposures. A bare exposure check is looser — it would report
     // commandline "enabled" for a device whose capability was revoked or whose
@@ -564,7 +564,7 @@ export async function provisionSandbox(
         const builtins = await resolveRuntimeBuiltinIds(runtimeId)
         commandlineEnabled = builtins.commandlineCapabilityId != null
       } catch {
-        // resolveDeviceBuiltinIds throws only when the filesystem capability is
+        // resolveRuntimeBuiltinIds throws only when the filesystem capability is
         // absent (catalog not synced) — for a live, all-active sandbox that
         // shouldn't happen, but treat it as "no commandline" rather than fail
         // the fast path.

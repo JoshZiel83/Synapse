@@ -26,7 +26,7 @@ const EMPTY_MCP_TOOLS: ResolvedMcpTools = {
   shutdown: async () => {},
 }
 
-// The dashboard surface label IS the routed source kind (system/plugin/device).
+// The dashboard surface label IS the routed source kind (system/plugin/runtime).
 // The prior `device__`-prefix sniff and the builtin/plugin_installation/
 // runtime_capability relabel shim are gone — provenance is `ref.source.kind`.
 function mapToolSurfaceItem(tool: ProjectedToolDefinition): ToolSurfaceItem {

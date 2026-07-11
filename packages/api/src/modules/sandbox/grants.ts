@@ -2,8 +2,8 @@
 //
 // A sandbox can only run its fs + commandline tools once BOTH layers exist —
 // either alone results in a local deny:
-//   Layer 1 — capability device grant (workspace_resource_grants): binds the
-//     actor (scope=conversation) to the device's filesystem + commandline
+//   Layer 1 — capability runtime grant (workspace_resource_grants): binds the
+//     actor (scope=conversation) to the sandbox runtime's filesystem + commandline
 //     capabilities, so projectRuntimeTools surfaces the tools at all.
 //   Layer 2 — runtime-authorization grants: a filesystem write grant over the
 //     three mount points + a commandline grant with the executor:"sandbox"
@@ -51,9 +51,9 @@ export interface RuntimeBuiltinIds {
 }
 
 /**
- * Resolve the filesystem + commandline exposure/capability ids for a device
+ * Resolve the filesystem + commandline exposure/capability ids for a runtime
  * after its catalog has synced. Returns null for commandline ids when the
- * device didn't advertise a commandline builtin (mac/win/no-bwrap fallback).
+ * runtime didn't advertise a commandline builtin (mac/win/no-bwrap fallback).
  * Throws if the filesystem exposure/capability is missing (a sandbox always
  * exposes filesystem).
  */
@@ -124,7 +124,7 @@ export async function createSandboxGrants(
 ): Promise<void> {
   const { workspaceId, runtimeId, actorId, conversationId, builtins } = params
 
-  // ── Layer 1: capability device grant (ADDITIVE — only the sandbox's own
+  // ── Layer 1: capability runtime grant (ADDITIVE — only the sandbox's own
   // capabilities, never clobbering a pre-existing manual grant on this actor
   // /conversation) ──
   const capabilityIds = [builtins.filesystemCapabilityId]
@@ -201,9 +201,9 @@ export async function createSandboxGrants(
 
 /**
  * Revoke both layers for a torn-down sandbox. Layer 1 is a TARGETED revoke of
- * only THIS device's capability bindings on (actor, conversation) — never the
+ * only THIS runtime's capability bindings on (actor, conversation) — never the
  * full-replace empty-list path, which would also revoke any unrelated manual
- * capability grant on the same actor/conversation. Layer 2 revokes this device's
+ * capability grant on the same actor/conversation. Layer 2 revokes this runtime's
  * active runtime grants.
  */
 export async function revokeSandboxGrants(params: {

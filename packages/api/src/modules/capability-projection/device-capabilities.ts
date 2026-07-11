@@ -1,5 +1,6 @@
-// Device capability aggregator for capability-projection. Loads device-side
-// tools that an actor / conversation has access to via workspace_resource_grants
+// Runtime-capability aggregator for capability-projection. Loads runtime-side
+// tools (real devices AND device-less sandbox runtimes) that an actor /
+// conversation has access to via workspace_resource_grants
 // (subject_id → access_subjects → workspace_resource_id=runtime_capability id).
 //
 // v3.0 ships the read path; PR #8 wires the write path UI for group chat.

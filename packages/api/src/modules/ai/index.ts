@@ -458,14 +458,14 @@ function buildSleepWithoutSendToReminder(params: {
 }
 
 // A per-turn registry mapping the wire name the model sees to the routed
-// ToolRef. Built by NamePolicy from the projected mcp/device tools; system
+// ToolRef. Built by NamePolicy from the projected mcp/runtime tools; system
 // callable tools occupy the collision space as reserved bare names.
 interface ToolWireRegistry {
-  /** wireName -> ref for mcp/device routed tools. */
+  /** wireName -> ref for mcp/runtime routed tools. */
   refByWireName: Map<string, ToolRef>
   /** wire-named ToolDefinitions to send to the provider (binding stripped). */
   wireTools: ToolDefinition[]
-  /** wire names of mcp/device tools (the "mcp bucket" membership set). */
+  /** wire names of mcp/runtime tools (the "mcp bucket" membership set). */
   mcpWireNames: Set<string>
 }
 
@@ -494,7 +494,7 @@ function buildToolWireRegistry(
 }
 
 // Derive the tool_calls provenance columns for one model tool call. A routed
-// ref (plugin/device) yields its snapshot + soft pointer; everything else is a
+// ref (plugin/runtime) yields its snapshot + soft pointer; everything else is a
 // system tool whose source is the bare wire name.
 function toolCallProvenance(
   wireName: string,
@@ -712,7 +712,7 @@ export async function actorThink(
     multimodal: resolved?.multimodal || null,
   })
 
-  // MCP/device tools (already resolved and authorized by tool-resolver.ts /
+  // MCP/runtime tools (already resolved and authorized by tool-resolver.ts /
   // capability-projection). These carry Layer-A ToolRefs; the per-turn
   // NameRegistry assigns each a collision-safe wire name and lets dispatch map
   // wireName -> toolId -> ref without parsing the name.
@@ -806,12 +806,12 @@ export async function actorThink(
         fallback: currentToolConversationParticipants,
       })
     const resolvedCallable = await resolveLocalCallableTools(buildResolveCtx())
-    // Reserved names the NameRegistry must NOT hand to a plugin/device tool:
+    // Reserved names the NameRegistry must NOT hand to a plugin/runtime tool:
     //   - system (callable) tool names — kept bare, collisions qualify.
     //   - provider-native server tool names (web_search/web_fetch) that any
     //     candidate may merge into the ToolSet after buildAiTools (see the
     //     `...buildServerTools(...)` spread). Without reserving these, a plugin
-    //     /device tool NamePolicy happened to name `web_search` would be
+    //     /runtime tool NamePolicy happened to name `web_search` would be
     //     silently shadowed by the server tool, desyncing model<->routing.
     const reservedNames = [
       ...resolvedCallable.map((tool) => tool.name),
@@ -991,7 +991,7 @@ export async function actorThink(
               candidate.serverTools
             )
             // Invariant: server tool names are reserved in the NameRegistry, so
-            // they must never collide with a custom (plugin/device/system) tool
+            // they must never collide with a custom (plugin/runtime/system) tool
             // name. If this fires, a provider-native name leaked into the wire
             // surface and the spread below would silently shadow it.
             for (const serverToolName of Object.keys(serverTools)) {
@@ -1224,8 +1224,8 @@ export async function actorThink(
         usedDraftProvider = true
       }
 
-      // Dispatch: local callables and projected MCP/device tools. The model
-      // emits WIRE names; mcp/device membership is by NameRegistry, the rest are
+      // Dispatch: local callables and projected MCP/runtime tools. The model
+      // emits WIRE names; mcp/runtime membership is by NameRegistry, the rest are
       // callable (system) tools. Unknown/stale names land in the callable bucket
       // so executeCallableTools returns a model-actionable unknown_tool result.
       const mcpCalls = toolCalls.filter((tc: any) =>

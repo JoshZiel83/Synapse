@@ -154,7 +154,7 @@ export async function pair(opts: PairOptions): Promise<PairResult> {
  * Re-key flow (§5.3). v3.0 stub — full re-key handler lands in PR #12
  * (cloud) and PR #5 (UI). For now the function generates a new service key,
  * persists it locally, and the caller is expected to drive the
- * service_join pairing-session loop.
+ * pairing-session loop.
  */
 export async function rekeyDeviceRuntime(
   opts: RekeyOptions
@@ -167,7 +167,7 @@ export async function rekeyDeviceRuntime(
     "service:device_runtime:rekey"
   )
   // v3.0 skeleton returns the pubkey fingerprint as the synthesized service
-  // key id. PR #5 wires the actual service_join pairing-session exchange.
+  // key id. PR #5 wires the actual pairing-session exchange.
   return {
     serviceId: identity.services[0]?.serviceId ?? "",
     serviceKeyId: createHash("sha256")

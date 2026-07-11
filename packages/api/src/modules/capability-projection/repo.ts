@@ -1,9 +1,9 @@
-// capability-projection/repo.ts — DB-touching helpers for device capability
-// projection (the device-side read/write path of capability-projection).
+// capability-projection/repo.ts — DB-touching helpers for runtime-capability
+// projection (the runtime-side read/write path of capability-projection).
 //
 // The only file in this module's device-capabilities boundary permitted to
 // import the db client (guard r8). Owns the workspace_resource_grants reads/writes
-// and the multi-join device-tool projection SELECT, plus the
+// and the multi-join runtime-tool projection SELECT, plus the
 // access_subjects resolution that threads a db handle into upsertAccessSubject.
 // Orchestration / DTO shaping stays in device-capabilities.ts. round-6 P1-6.
 

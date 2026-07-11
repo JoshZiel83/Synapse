@@ -2089,7 +2089,7 @@ export interface NormalizedMcpToolResult {
   content: CanonicalContentBlock[]
   isError?: boolean
   structuredContent?: Record<string, unknown>
-  // Provenance of the result (system / plugin / device / provider / model).
+  // Provenance of the result (system / plugin / runtime / provider / model).
   // Filled by the
   // ingest pipeline so downstream code can attribute the result without
   // tracking it out-of-band.
@@ -2258,9 +2258,9 @@ export type CapabilityAccessTargetType =
   (typeof CAPABILITY_ACCESS_TARGET_TYPES)[number]
 export type ConversationMessageTransportDirection =
   (typeof CONVERSATION_MESSAGE_TRANSPORT_DIRECTIONS)[number]
-export type DeviceCapabilityAccessSubjectKind =
+export type RuntimeCapabilityAccessSubjectKind =
   (typeof RUNTIME_CAPABILITY_ACCESS_SUBJECT_KINDS)[number]
-export type DeviceCapabilityAccessScopeKind =
+export type RuntimeCapabilityAccessScopeKind =
   (typeof RUNTIME_CAPABILITY_ACCESS_SCOPE_KINDS)[number]
 export type ReuseScope = (typeof REUSE_SCOPES)[number]
 export type PlatformAccessSource = (typeof PLATFORM_ACCESS_SOURCES)[number]

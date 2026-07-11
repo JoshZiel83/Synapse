@@ -378,8 +378,8 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
         ))
       )
         return
-      // Body carries title/preset/hostProvider (camelCase, §5.1.1); workspaceId
-      // travels in the URL param. title/hostProvider are already optional on the
+      // Body carries title/preset (camelCase, §5.1.1); workspaceId
+      // travels in the URL param. title is optional on the
       // shared schema (server applies defaults), so the SDK and server validate
       // the identical body shape.
       const cloudBodySchema = CreateCloudDeviceInputSchema.omit({

@@ -34,13 +34,13 @@ import {
 import type { ZodIssue } from "zod"
 
 /**
- * Device tool runtime target (service id, tool revision, etc.) for a freshly
+ * Runtime tool target (service id, tool revision, etc.) for a freshly
  * approved runtime authorization. Returns null when any piece is missing —
- * caller falls back to the static approval notice (e.g. the device went
+ * caller falls back to the static approval notice (e.g. the runtime went
  * offline between request and approval).
  *
  * Soft-delete (§8.6) and active-status WHERE clauses are preserved verbatim:
- * never auto-retry against a soft-closed device's tool or an inactive app.
+ * never auto-retry against a soft-closed runtime's tool or an inactive app.
  */
 export interface AutoRetryTarget {
   runtimeId: string
@@ -621,38 +621,6 @@ export async function insertRuntimeAuthorizationGrantRow(
     .executeTakeFirst()
 }
 
-/** Status-flip to 'revoked' (NOW()), guarded by status='active'. */
-export async function revokeRuntimeAuthorizationGrantRow(
-  id: string,
-  executor: Executor = db
-): Promise<void> {
-  await executor
-    .updateTable("runtimeAuthorizationGrants")
-    .set({
-      status: "revoked",
-      revokedAt: sql`NOW()`,
-    })
-    .where("id", "=", id)
-    .where("status", "=", "active")
-    .execute()
-}
-
-/** Status-flip to 'superseded' (NOW()), guarded by status='active'. */
-export async function supersedeRuntimeAuthorizationGrantRow(
-  id: string,
-  executor: Executor = db
-): Promise<void> {
-  await executor
-    .updateTable("runtimeAuthorizationGrants")
-    .set({
-      status: "superseded",
-      supersededAt: sql`NOW()`,
-    })
-    .where("id", "=", id)
-    .where("status", "=", "active")
-    .execute()
-}
-
 /**
  * Atomic consume of a `consume_once` grant via raw SQL FOR UPDATE SKIP LOCKED —
  * snake_case identifiers are intentional (this fragment is NOT rewritten by the
@@ -823,7 +791,7 @@ export async function setLocalLockTimeout(
  * the catalog UPDATE without blocking other dispatch share-lockers. Returns the
  * row (or undefined) so the service does its drift comparison.
  */
-export async function lockDeviceToolLatestRevisionForShare(
+export async function lockRuntimeToolLatestRevisionForShare(
   trx: DatabaseTransaction,
   toolId: string
 ): Promise<{ latestRevisionId: string | null } | undefined> {

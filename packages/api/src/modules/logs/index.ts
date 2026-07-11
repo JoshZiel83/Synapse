@@ -118,7 +118,7 @@ export default fp(
           }
           // Namespace ALL client-controlled data under reserved keys so it can
           // never collide with (and last-wins-override) the TRUSTED attribution
-          // on `base` (source/userId/deviceId/serviceId) or the server's own
+          // on `base` (source/userId/runtimeId/serviceId) or the server's own
           // `trace_id` (from the logger mixin). A client must not be able to
           // forge provenance or attach to a victim's trace.
           base[level](

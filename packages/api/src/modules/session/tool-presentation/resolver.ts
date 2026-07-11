@@ -6,7 +6,7 @@
 //
 // Cascade by source_kind:
 //   system  → in-process registry (getToolPlugin) by registryKey
-//   device  → builtin leaf (BUILTIN_PRESENTATION) by stableKey  [builtins]
+//   runtime → builtin leaf (BUILTIN_PRESENTATION) by stableKey  [builtins]
 //   plugin  → live catalog tool_manifest.synapse.presentation by installation
 //   (anything not found) → genericDescriptor(stableKey)
 //

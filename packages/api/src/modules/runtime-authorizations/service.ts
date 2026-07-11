@@ -35,14 +35,12 @@ import {
   listCandidateRowsForDispatch,
   listDashboardGrantRows,
   lockActiveGrantForShare,
-  lockDeviceToolLatestRevisionForShare,
+  lockRuntimeToolLatestRevisionForShare,
   runtimeAuthorizationGrantPolicyCapability,
   runtimeAuthorizationGrantRowToCandidate as rowToCandidate,
   runtimeAuthorizationGrantSubjectFailure,
-  revokeRuntimeAuthorizationGrantRow,
   runRuntimeAuthorizationGrantTransaction,
   setLocalLockTimeout,
-  supersedeRuntimeAuthorizationGrantRow,
 } from "./repo.js"
 import {
   BrowserGrantPolicyError,
@@ -51,7 +49,6 @@ import {
 } from "@synapse/shared/access/policies"
 import { upsertAccessSubject } from "../access/subject-registry.js"
 import {
-  assertNoRuntimeToolRevisionDrift,
   beginRuntimeOperationOn,
   type BeginOperationInput,
   type BeginOperationResult,
@@ -1108,7 +1105,7 @@ async function tryClaimAndBegin(input: {
           await setLocalLockTimeout(trx)
           // FOR SHARE: blocks catalog UPDATE without blocking other dispatch
           // share-lockers.
-          const toolRow = await lockDeviceToolLatestRevisionForShare(
+          const toolRow = await lockRuntimeToolLatestRevisionForShare(
             trx,
             input.prepared.toolId
           )

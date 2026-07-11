@@ -4,7 +4,8 @@
 export const HOST_KINDS = ["local", "cloud"] as const
 export type HostKind = (typeof HOST_KINDS)[number]
 
-// v3.0: only device_runtime + remote_agent_daemon. DeskAct is supervised by
+// v3.0: device_runtime + remote_agent_daemon + bare_dataplane (the bare-sandbox
+// data-plane service kind). DeskAct is supervised by
 // device_runtime as a child process, NOT a service. See §5.2.
 export const DEVICE_SERVICE_KINDS = [
   "device_runtime",
@@ -292,7 +293,7 @@ export type DeviceOperationAttemptStatus =
 // subject-scope-refactor: 'actor_in_conversation' removed at cutover. The
 // scoped-actor semantics is expressed by (principal.kind='actor',
 // activeConversationSubjectId set) in RuntimePrincipalContext. The DB enum
-// device_operations_principal_kind matches.
+// runtime_operations_principal_kind matches.
 export const DEVICE_PRINCIPAL_KINDS = [
   "actor",
   "conversation",

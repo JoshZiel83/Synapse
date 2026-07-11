@@ -1,10 +1,10 @@
-// Device-task TTL sweeper (task unification, design §3.6).
+// Runtime-task TTL sweeper (task unification, design §3.6).
 //
-// device_tool tasks carry an `expires_at` deadline. If a device never sends a
+// runtime_tool tasks carry an `expires_at` deadline. If a device never sends a
 // terminal `device.task.result` (crash, network partition that outlives the
 // control-plane socket-close handler, etc.), the task would otherwise sit
 // non-terminal forever and the waiting agent would hang. This worker
-// periodically fails expired-but-still-pending device_tool tasks, which fires
+// periodically fails expired-but-still-pending runtime_tool tasks, which fires
 // the normal terminal delivery (notice + session wakeup) so the agent resumes.
 //
 // The sweep is idempotent: completeToolCallTask's terminal guard makes a task
@@ -33,7 +33,7 @@ export function startRuntimeTaskSweeper(): WorkerHandle {
     try {
       const swept = await sweepExpiredRuntimeTasks()
       if (swept > 0) {
-        log.info({ swept }, "failed expired device_tool tasks")
+        log.info({ swept }, "failed expired runtime_tool tasks")
       }
     } catch (err) {
       log.warn({ err }, "device-task sweep tick failed")

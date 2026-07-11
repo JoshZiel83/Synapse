@@ -8,7 +8,6 @@ import type {
   DeviceServiceStatus,
   DeviceTrustStatus,
   DeviceType,
-  HostKind,
 } from "@synapse/device-protocol/enums"
 
 /**

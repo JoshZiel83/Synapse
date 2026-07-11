@@ -273,12 +273,12 @@ export type SynapseError = z.infer<typeof SynapseErrorSchema>
 // (schemas/devices.ts), consumed by web-next + the consumer-side device-sdk.
 // They are NOT machine/wire shapes, so they no longer live here (master plan
 // §2.3-6). The MANAGEMENT WRITE inputs (createCloudDevice / startPairing /
-// claimRemoteAgentDaemon / setActiveDeviceCapabilities) + the cloud RESULT
+// claimRemoteAgentDaemon / setActiveRuntimeCapabilities) + the cloud RESULT
 // view are likewise app-facing camelCase and now live in @synapse/shared
 // (§5.1.1/§8.3). Only the true handshake wire shapes (consume / bootstrap /
 // control-plane) remain below — device-runtime/sandbox are their sole callers.
 
-// Local-QR / service-join handshake. The runtime reports its self-describing
+// Local-QR consume handshake. The runtime reports its self-describing
 // device facts (title / device_type / platform / arch) up-front so the API can
 // persist platformKey from pairing onwards (see device-runtime/src/pairing.ts:
 // without platform+arch the bundle-eligibility gate falls back to the

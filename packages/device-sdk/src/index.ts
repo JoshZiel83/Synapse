@@ -120,7 +120,7 @@ export class DeviceSdk {
   // PR #12: createCloudDevice + bootstrap flow.
   //
   // The API does NOT immediately return a DeviceDetail — it returns the
-  // pending pairing session info (pending_device_id, one-time
+  // pending pairing session info (pendingRuntimeId, one-time
   // bootstrap_token, expires_at). The caller injects the token into the
   // sandbox env; the runtime inside the sandbox then calls
   // /api/v1/devices/bootstrap to claim the actual device row. Polling for
