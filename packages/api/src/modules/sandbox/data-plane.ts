@@ -818,6 +818,20 @@ function parseExpectedMtimeMs(x: unknown): number | null {
   return n
 }
 
+/**
+ * Parse a caller's expected_sha256 stale-write precondition. Present-but-not-a-
+ * string fails CLOSED (PlaneCapError → invalid_request) rather than silently
+ * dropping the optimistic-concurrency guard — symmetric with parseExpectedMtimeMs.
+ * (undefined/null = no precondition supplied.)
+ */
+function parseExpectedSha256(x: unknown): string | null {
+  if (x === undefined || x === null) return null
+  if (typeof x !== "string") {
+    throw new PlaneCapError("expected_sha256 must be a string")
+  }
+  return x
+}
+
 /** Map a thrown error from the plane/kernel to the McpDispatchResult error taxonomy. */
 function mapPlaneError(err: unknown): McpDispatchResult {
   if (err instanceof EmptyScopeDeniedError) {
@@ -942,7 +956,7 @@ export async function coreInvokeBarePlane(input: {
           bytes,
           {
             createParents: asBool(args["create_parents"]) ?? false,
-            expectedSha256: asString(args["expected_sha256"]) ?? null,
+            expectedSha256: parseExpectedSha256(args["expected_sha256"]),
             // P6: accept the fractional mtime (asNumber, not asInt) so the
             // stale-write guard is honored instead of silently dropped; a
             // present-but-unparseable value fails closed (invalid_request).
@@ -1056,7 +1070,7 @@ async function coreEdit(
   // lost-update). expected_mtime_ms fails CLOSED on an unparseable value
   // (parseExpectedMtimeMs throws PlaneCapError → invalid_request).
   const callerExpectedMtimeMs = parseExpectedMtimeMs(args["expected_mtime_ms"])
-  const callerExpectedSha = asString(args["expected_sha256"])
+  const callerExpectedSha = parseExpectedSha256(args["expected_sha256"])
   // Read current (utf-8), apply old→new sequentially, write back with a CAS
   // expectation on the prior sha (mirrors the resident edit's stale-write guard).
   const cur = await plane.read(path, {}, ctx)
@@ -1067,7 +1081,7 @@ async function coreEdit(
   // hashing it is exactly the fresh-hash pre-check fs_write does. A mismatch
   // means the file already differs from what the caller expected → stale_write,
   // rejected BEFORE any mutation.
-  if (callerExpectedSha !== undefined) {
+  if (callerExpectedSha !== null) {
     const curSha = createHash("sha256")
       .update(Buffer.from(cur.bytes))
       .digest("hex")

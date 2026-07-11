@@ -1,6 +1,7 @@
 import { readFileSync } from "fs"
 import { dirname, join, resolve } from "path"
 import { fileURLToPath } from "url"
+import { createHash } from "node:crypto"
 import { sql } from "kysely"
 import { db } from "./kysely.js"
 
@@ -40,6 +41,22 @@ export const CURRENT_SCHEMA_DESCRIPTION =
   "(PRIOR) Account/auth redesign onto Better Auth (better-auth@1.6.13). " +
   "(PRIOR) MCP official remote endpoints: plugin_package_version_specs_transport enum gains 'sse'. Server-side actor sandbox: file_mounts.sandbox_backend/sandbox_resource_id. conversation-type derived-IM + file-service CAS carried forward unchanged."
 
+// STRUCTURAL recurrence guard (P1): the version actually written to + compared
+// against schema_migrations is the human slug PLUS a hash of the applied schema
+// DDL. This makes the fail-loud guard self-enforcing — ANY edit to schema.sql
+// changes EFFECTIVE_SCHEMA_VERSION, so a DB bootstrapped on an older schema never
+// matches (decideBootstrapAction → "fail" → db:rebuild), with NO reliance on a
+// developer remembering to bump CURRENT_SCHEMA_VERSION. The human slug is still
+// bumped for the description/readability, but DETECTION no longer depends on it —
+// closing the recurrence the review flagged (schema.sql rewritten, slug forgotten
+// → silent noop on a stale schema). 12 hex chars keeps this well under VARCHAR(64)
+// (slug<=51 + '-' + 12 <= 64; bootstrap.test enforces the length invariant).
+export const SCHEMA_CONTENT_HASH = createHash("sha256")
+  .update(schemaSqlWithoutExtensions)
+  .digest("hex")
+  .slice(0, 12)
+export const EFFECTIVE_SCHEMA_VERSION = `${CURRENT_SCHEMA_VERSION}-${SCHEMA_CONTENT_HASH}`
+
 async function ensureSchemaMigrationsTable() {
   await sql`
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -65,7 +82,7 @@ async function hasCurrentSchemaVersion() {
     SELECT EXISTS (
       SELECT 1
       FROM schema_migrations
-      WHERE version = ${CURRENT_SCHEMA_VERSION}
+      WHERE version = ${EFFECTIVE_SCHEMA_VERSION}
     ) AS exists`.execute(db)
   return result.rows[0]?.exists === true
 }
@@ -73,7 +90,7 @@ async function hasCurrentSchemaVersion() {
 async function recordCurrentSchemaVersion() {
   await sql`
     INSERT INTO schema_migrations (version, description)
-    VALUES (${CURRENT_SCHEMA_VERSION}, ${CURRENT_SCHEMA_DESCRIPTION})
+    VALUES (${EFFECTIVE_SCHEMA_VERSION}, ${CURRENT_SCHEMA_DESCRIPTION})
     ON CONFLICT (version) DO NOTHING`.execute(db)
 }
 
@@ -139,7 +156,7 @@ export async function bootstrapDatabaseSchema() {
   const decision = decideBootstrapAction({
     hasCurrentVersion,
     tableCount,
-    currentVersion: CURRENT_SCHEMA_VERSION,
+    currentVersion: EFFECTIVE_SCHEMA_VERSION,
   })
 
   try {
