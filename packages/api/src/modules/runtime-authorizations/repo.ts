@@ -11,6 +11,7 @@ import type {
   DatabaseTransaction,
   Executor,
 } from "../../infrastructure/database/kysely.js"
+import { config } from "../../config/index.js"
 import type {
   RuntimeAuthorizationGrantCandidate,
   RuntimeAuthorizationGrantCandidateRecord,
@@ -57,11 +58,15 @@ export interface AutoRetryTarget {
   runtimeToolRevisionId: string
 }
 
-export async function findAutoRetryTarget(args: {
-  runtimeCapabilityId: string
-  visibleToolName: string
-}): Promise<AutoRetryTarget | null> {
-  const row = await db
+export async function findAutoRetryTarget(
+  args: {
+    runtimeCapabilityId: string
+    visibleToolName: string
+  },
+  run: Executor = db,
+  opts: { sandboxProvider?: string } = {}
+): Promise<AutoRetryTarget | null> {
+  let query = run
     .selectFrom("runtimeCapabilities as dc")
     .innerJoin("workspaceResources as resource", "resource.id", "dc.id")
     .innerJoin("runtimeExposures as dx", "dx.id", "dc.exposureId")
@@ -91,8 +96,20 @@ export async function findAutoRetryTarget(args: {
     // Soft-delete (§8.6): never auto-retry against a soft-closed runtime's tool.
     // runtimes.deleted_at is the sole runtime soft-delete root.
     .where("r.deletedAt", "is", null)
-    .limit(1)
-    .executeTakeFirst()
+  // P2 (SANDBOX_PROVIDER=none): the sandbox substrate is disabled, so a resident
+  // (Mode-A, kind='sandbox' + serviceKind='device_runtime') sandbox must NOT be
+  // an auto-retry target — otherwise auto-retry re-dispatches it through the
+  // ungated dispatchSyncTool path, bypassing bare-dispatch's none gate. Gate on
+  // the runtime KIND, NEVER serviceKind (a resident sandbox mints
+  // serviceKind='device_runtime' identical to a real device, so a serviceKind
+  // filter would wrongly refuse real device tools). Mirrors the projection gate
+  // (capability-projection/repo.ts). A null result surfaces as the same
+  // "not currently in catalog" refusal the caller already handles.
+  const sandboxProvider = opts.sandboxProvider ?? config.sandbox.provider
+  if (sandboxProvider === "none") {
+    query = query.where("r.kind", "<>", "sandbox")
+  }
+  const row = await query.limit(1).executeTakeFirst()
   if (!row) return null
   return {
     runtimeId: row.runtimeId as string,

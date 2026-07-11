@@ -6,7 +6,15 @@
 
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, mkdir, writeFile, symlink, stat } from "node:fs/promises"
+import {
+  mkdtemp,
+  mkdir,
+  writeFile,
+  readFile,
+  symlink,
+  stat,
+} from "node:fs/promises"
+import { createHash } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { WHOLE_SCOPE, bwrapAvailable } from "@synapse/device-runtime"
@@ -14,6 +22,7 @@ import {
   createLocalBareDataPlane,
   coreInvokeBarePlane,
   deriveConfinementScope,
+  deriveConfinementAccess,
   EmptyScopeDeniedError,
   type ConfinementCtx,
   type SandboxDataPlane,
@@ -236,6 +245,245 @@ test("B4: fs_move dest under a src-only scope is denied (both endpoints in one g
   })
   assert.equal(res.ok, false)
   assert.equal(res.error?.code, "permission_denied")
+})
+
+function bodyOf(res: { result?: unknown }): Record<string, unknown> {
+  return JSON.parse(
+    (res.result as { content: { text: string }[] }).content[0]!.text
+  ) as Record<string, unknown>
+}
+
+test("P5b: list_dir({}) defaults the omitted path to /conversation (granted cwd), not '/'", async () => {
+  const { root, plane } = await makeSandbox()
+  await writeFile(join(root, "conversation", "hello.txt"), "x")
+  // Grant covers ONLY /conversation (a mount) — NOT '/'. Under the old '/'
+  // default an omitted-path list_dir resolved '/', which no mount grant covers,
+  // and HARD-DENIED at the vfs (GrantPrefixDenied) even though it passed the
+  // matcher. The /conversation default makes auth and execution agree.
+  const res = await coreInvokeBarePlane({
+    plane,
+    builtinKind: "filesystem",
+    toolName: "list_dir",
+    args: {},
+    ctx: { scope: ["/conversation"], access: READ },
+  })
+  assert.equal(res.ok, true, "omitted-path list_dir must list /conversation")
+  const body = bodyOf(res)
+  assert.equal(body["path"], "/conversation")
+  assert.ok(
+    (body["entries"] as { name: string }[]).some((e) => e.name === "hello.txt")
+  )
+})
+
+test("P5b sanity: an EXPLICIT '/' under the same /conversation-only scope IS denied", async () => {
+  // Proves the pass above is due to the /conversation default, not a lax scope:
+  // the old '/' default would have hit exactly this deny.
+  const { plane } = await makeSandbox()
+  const res = await coreInvokeBarePlane({
+    plane,
+    builtinKind: "filesystem",
+    toolName: "list_dir",
+    args: { path: "/" },
+    ctx: { scope: ["/conversation"], access: READ },
+  })
+  assert.equal(res.ok, false)
+  assert.equal(res.error?.code, "permission_denied")
+})
+
+test("P6: fs_write with a stale FRACTIONAL expected_mtime_ms is REJECTED (guard honored, not dropped by asInt)", async () => {
+  const { root, plane } = await makeSandbox()
+  const ctx: ConfinementCtx = { scope: ["/conversation"], access: WRITE }
+  const abs = join(root, "conversation", "note.txt")
+  await writeFile(abs, "hello")
+
+  const statRes = await coreInvokeBarePlane({
+    plane,
+    builtinKind: "filesystem",
+    toolName: "fs_stat",
+    args: { path: "/conversation/note.txt" },
+    ctx,
+  })
+  assert.equal(statRes.ok, true)
+  const mCur = bodyOf(statRes)["mtimeMs"] as number
+  assert.equal(typeof mCur, "number")
+
+  // A deliberately FRACTIONAL, stale mtime. Under the old asInt parse this
+  // becomes undefined → null → the mtime guard is SKIPPED and the write would
+  // SUCCEED. With the asNumber parse it is honored and the mismatch REJECTS.
+  const staleFractional = 1_699_999_999_123.456
+  assert.notEqual(staleFractional, mCur)
+  const stale = await coreInvokeBarePlane({
+    plane,
+    builtinKind: "filesystem",
+    toolName: "fs_write",
+    args: {
+      path: "/conversation/note.txt",
+      content: "world",
+      expected_mtime_ms: staleFractional,
+    },
+    ctx,
+  })
+  assert.equal(stale.ok, false, "stale fractional mtime must REJECT")
+  assert.equal(stale.error?.code, "runtime_constraint")
+  assert.equal(
+    (stale.error?.details as Record<string, unknown>)?.["stale_write"],
+    true
+  )
+  assert.equal(
+    await readFile(abs, "utf-8"),
+    "hello",
+    "rejected write is a no-op"
+  )
+
+  // A MATCHING (fractional) current mtime is ACCEPTED — asNumber round-trips the
+  // exact value fs_stat returned.
+  const ok = await coreInvokeBarePlane({
+    plane,
+    builtinKind: "filesystem",
+    toolName: "fs_write",
+    args: {
+      path: "/conversation/note.txt",
+      content: "world",
+      expected_mtime_ms: mCur,
+    },
+    ctx,
+  })
+  assert.equal(ok.ok, true, "matching current mtime must be accepted")
+  assert.equal(await readFile(abs, "utf-8"), "world")
+})
+
+test("P6: a present-but-unparseable expected_mtime_ms fails CLOSED (invalid_request)", async () => {
+  const { root, plane } = await makeSandbox()
+  const ctx: ConfinementCtx = { scope: ["/conversation"], access: WRITE }
+  await writeFile(join(root, "conversation", "n.txt"), "hi")
+  const res = await coreInvokeBarePlane({
+    plane,
+    builtinKind: "filesystem",
+    toolName: "fs_write",
+    args: {
+      path: "/conversation/n.txt",
+      content: "x",
+      expected_mtime_ms: "not-a-number",
+    },
+    ctx,
+  })
+  assert.equal(res.ok, false)
+  assert.equal(res.error?.code, "invalid_request")
+})
+
+test("P6-schema: bare fs_edit with a stale expected_sha256 is REJECTED (precondition honored)", async () => {
+  const { root, plane } = await makeSandbox()
+  const ctx: ConfinementCtx = { scope: ["/conversation"], access: WRITE }
+  const abs = join(root, "conversation", "doc.txt")
+  await writeFile(abs, "alpha")
+
+  // A stale sha (of some OTHER content): the file already differs from what the
+  // caller expected → stale_write, rejected BEFORE any mutation. (Before the fix
+  // coreEdit never read expected_sha256, so this edit applied silently.)
+  const staleSha = createHash("sha256").update("DIFFERENT").digest("hex")
+  const stale = await coreInvokeBarePlane({
+    plane,
+    builtinKind: "filesystem",
+    toolName: "fs_edit",
+    args: {
+      path: "/conversation/doc.txt",
+      edits: [{ old_string: "alpha", new_string: "beta" }],
+      expected_sha256: staleSha,
+    },
+    ctx,
+  })
+  assert.equal(stale.ok, false, "stale expected_sha256 must REJECT")
+  assert.equal(stale.error?.code, "runtime_constraint")
+  assert.equal(
+    (stale.error?.details as Record<string, unknown>)?.["stale_write"],
+    true
+  )
+  assert.equal(
+    await readFile(abs, "utf-8"),
+    "alpha",
+    "rejected edit is a no-op"
+  )
+
+  // The CORRECT current sha is honored → the edit applies.
+  const curSha = createHash("sha256").update("alpha").digest("hex")
+  const ok = await coreInvokeBarePlane({
+    plane,
+    builtinKind: "filesystem",
+    toolName: "fs_edit",
+    args: {
+      path: "/conversation/doc.txt",
+      edits: [{ old_string: "alpha", new_string: "beta" }],
+      expected_sha256: curSha,
+    },
+    ctx,
+  })
+  assert.equal(ok.ok, true, "matching expected_sha256 must be accepted")
+  assert.equal(await readFile(abs, "utf-8"), "beta")
+})
+
+test("P6-schema: bare fs_edit with a stale FRACTIONAL expected_mtime_ms is REJECTED", async () => {
+  const { root, plane } = await makeSandbox()
+  const ctx: ConfinementCtx = { scope: ["/conversation"], access: WRITE }
+  const abs = join(root, "conversation", "m.txt")
+  await writeFile(abs, "alpha")
+  const stale = await coreInvokeBarePlane({
+    plane,
+    builtinKind: "filesystem",
+    toolName: "fs_edit",
+    args: {
+      path: "/conversation/m.txt",
+      edits: [{ old_string: "alpha", new_string: "beta" }],
+      expected_mtime_ms: 1_699_999_999_123.456,
+    },
+    ctx,
+  })
+  assert.equal(stale.ok, false)
+  assert.equal(stale.error?.code, "runtime_constraint")
+  assert.equal(
+    (stale.error?.details as Record<string, unknown>)?.["stale_write"],
+    true
+  )
+  assert.equal(await readFile(abs, "utf-8"), "alpha")
+})
+
+test("P7: deriveConfinementAccess is FAIL-CLOSED (read/unknown tool → read; write tool needs a write grant)", () => {
+  // A read tool always yields 'read', regardless of the grant's access.
+  assert.equal(
+    deriveConfinementAccess(fsGrant(["/conversation"], "write"), "fs_read"),
+    "read"
+  )
+  assert.equal(
+    deriveConfinementAccess(fsGrant(["/conversation"], "write"), "list_dir"),
+    "read"
+  )
+  assert.equal(
+    deriveConfinementAccess(fsGrant(["/conversation"], "read"), "fs_stat"),
+    "read"
+  )
+  // A write tool under a WRITE grant → 'write'.
+  assert.equal(
+    deriveConfinementAccess(fsGrant(["/conversation"], "write"), "fs_write"),
+    "write"
+  )
+  assert.equal(
+    deriveConfinementAccess(fsGrant(["/conversation"], "write"), "fs_edit"),
+    "write"
+  )
+  // A write tool under a READ grant → 'read' (assertWriteAccess then rejects it).
+  assert.equal(
+    deriveConfinementAccess(fsGrant(["/conversation"], "read"), "fs_write"),
+    "read"
+  )
+  // An unclassified/unknown tool never silently gets 'write'.
+  assert.equal(
+    deriveConfinementAccess(
+      fsGrant(["/conversation"], "write"),
+      "fs_totally_unknown"
+    ),
+    "read"
+  )
+  // A commandline grant confers no fs-plane write.
+  assert.equal(deriveConfinementAccess(cmdGrant(), "fs_write"), "read")
 })
 
 test("B5: exec concurrency cap rejects an over-cap concurrent invocation", async (t) => {

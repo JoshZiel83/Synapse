@@ -47,6 +47,7 @@ import { signEnvelopeForDispatch } from "../devices/envelope-signer.js"
 import {
   canonicalizeEnvelopePayload,
   CUA_WRITE_TOOLS,
+  FILESYSTEM_WRITE_TOOLS,
 } from "@synapse/device-protocol"
 import type { SynapseError } from "@synapse/device-protocol"
 import { createHash } from "node:crypto"
@@ -1418,17 +1419,12 @@ export function buildRequestedAction(args: {
       //      "/" would force a scoped (/repo) user to widen; the matcher
       //      flags such requests with `scopeIsPushdown:true` so any
       //      compatible read grant satisfies them.
-      const writeTools = new Set([
-        "fs_write",
-        "fs_edit",
-        "fs_delete",
-        "fs_history_restore",
-        // Layer-2 dir/move tools (S3). All are writers; the grant must cover
-        // their path(s). fs_move constrains BOTH endpoints (see below).
-        "fs_mkdir",
-        "fs_move",
-        "fs_remove",
-      ])
+      // Single source of truth (FILESYSTEM_WRITE_TOOLS, device-protocol): the
+      // SAME set the bare sandbox data plane keys its fail-closed access
+      // derivation on, so "this tool needs a write grant" can't drift between the
+      // matcher and the plane. Includes the layer-2 dir/move writers; fs_move
+      // constrains BOTH endpoints (see below).
+      const writeTools = new Set<string>(FILESYSTEM_WRITE_TOOLS)
       // Tools that take their scope from `subtree` (index status/rebuild).
       const subtreeTools = new Set(["fs_index_status", "fs_index_rebuild"])
       // Tools that have no path/subtree of their own and run over the

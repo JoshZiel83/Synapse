@@ -329,3 +329,22 @@ export type ServerFacadeErrorCode = (typeof SERVER_FACADE_ERROR_CODES)[number]
 // will join this list when Phase 2 lands cua_window_op.
 export const CUA_WRITE_TOOLS = ["cua_click", "cua_type_text"] as const
 export type CuaWriteTool = (typeof CUA_WRITE_TOOLS)[number]
+
+// Filesystem tool names that require runtime_authorization access='write'. Single
+// source of truth shared between the projection matcher
+// (`api/src/modules/capability-projection/service.ts` — "this tool needs a write
+// grant") and the bare (Mode-B) sandbox data plane's fail-closed ConfinementCtx
+// access derivation (`api/src/modules/sandbox/bare-dispatch.ts`). Keeping ONE list
+// means a read/unknown tool can never silently be treated as a writer on either
+// side. fs_delete/fs_history_restore are resident-only tools (never dispatched on
+// the reduced bare surface) but belong here so the matcher classifies them too.
+export const FILESYSTEM_WRITE_TOOLS = [
+  "fs_write",
+  "fs_edit",
+  "fs_delete",
+  "fs_history_restore",
+  "fs_mkdir",
+  "fs_move",
+  "fs_remove",
+] as const
+export type FilesystemWriteTool = (typeof FILESYSTEM_WRITE_TOOLS)[number]

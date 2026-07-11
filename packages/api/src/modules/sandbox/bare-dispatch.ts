@@ -26,6 +26,7 @@ import {
   createLocalBareDataPlane,
   createDockerBareDataPlane,
   deriveConfinementScope,
+  deriveConfinementAccess,
   EmptyScopeDeniedError,
   type ConfinementCtx,
   type SandboxDataPlane,
@@ -253,11 +254,11 @@ export async function dispatchBareRuntimeTool(
   let ctx: ConfinementCtx
   try {
     const scope = deriveConfinementScope(input.grant)
-    const access: "read" | "write" =
-      input.grant.capability === "filesystem" &&
-      input.grant.filesystem?.access === "read"
-        ? "read"
-        : "write"
+    // P7: recover the read/write bit the scope-collapse discarded, FAIL-CLOSED —
+    // 'write' requires BOTH a write-classified tool AND a grant that explicitly
+    // confers write, so an unknown grant/tool can never silently mutate (see
+    // deriveConfinementAccess). assertWriteAccess re-imposes it in the plane.
+    const access = deriveConfinementAccess(input.grant, input.toolName)
     ctx = { scope, access }
   } catch (err) {
     if (err instanceof EmptyScopeDeniedError) {

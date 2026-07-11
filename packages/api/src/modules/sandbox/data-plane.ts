@@ -38,6 +38,7 @@ import {
   type SpawnDescriptor,
 } from "@synapse/device-runtime"
 import type { SynapseError } from "@synapse/device-protocol"
+import { FILESYSTEM_WRITE_TOOLS } from "@synapse/device-protocol"
 import {
   runDockerCapture,
   SandboxResourceGoneError,
@@ -147,6 +148,34 @@ export function deriveConfinementScope(
   throw new EmptyScopeDeniedError(
     `grant capability ${String(grant.capability)} is not dispatchable on the bare data plane`
   )
+}
+
+/**
+ * Derive the ConfinementCtx access bit (P7) FAIL-CLOSED. deriveConfinementScope
+ * flattens a grant to prefixes+WHOLE_SCOPE and LOSES the read/write bit; this
+ * recovers it so assertWriteAccess can re-impose it on the mutating plane methods.
+ *
+ * 'write' requires BOTH authoritative signals to agree — so neither an unknown
+ * grant NOR an unclassified tool can silently confer write:
+ *   - the tool is write-classified in FILESYSTEM_WRITE_TOOLS — the SAME set the
+ *     projection matcher uses (single source of truth in device-protocol), so a
+ *     read/unknown tool yields 'read'.
+ *   - the claimed filesystem grant EXPLICITLY permits writes (a read-only or
+ *     malformed grant does not). Non-filesystem (commandline) grants never confer
+ *     fs-plane write — exec is bwrap-jailed separately, not assertWriteAccess-gated.
+ * A write tool under a read/unknown grant therefore collapses to 'read' →
+ * assertWriteAccess rejects (defense-in-depth for direct/internal callers).
+ */
+export function deriveConfinementAccess(
+  grant: RuntimeAuthorizationGrantRecord,
+  toolName: string
+): "read" | "write" {
+  const toolIsWrite = (FILESYSTEM_WRITE_TOOLS as readonly string[]).includes(
+    toolName
+  )
+  const grantConfersWrite =
+    grant.capability === "filesystem" && grant.filesystem?.access === "write"
+  return toolIsWrite && grantConfersWrite ? "write" : "read"
 }
 
 // ─────────────────────────── plane surface ───────────────────────────────────
@@ -764,6 +793,30 @@ function asBool(x: unknown): boolean | undefined {
 function asInt(x: unknown): number | undefined {
   return typeof x === "number" && Number.isInteger(x) ? x : undefined
 }
+/** Accepts a FRACTIONAL number (unlike asInt). fs_stat/fs_write RETURN the raw
+ *  float mtimeMs, so any guard that round-trips it must accept the float. */
+function asNumber(x: unknown): number | undefined {
+  return typeof x === "number" && Number.isFinite(x) ? x : undefined
+}
+
+/**
+ * Parse the OPTIONAL caller-supplied `expected_mtime_ms` stale-write precondition
+ * (P6). ABSENT ⇒ no precondition (null). PRESENT ⇒ must be a finite number — the
+ * fractional mtimeMs a prior stat/write returned. asInt would DROP the float
+ * (Number.isInteger(1699999999123.456) === false) → the mtime pre-check silently
+ * SKIPS (fails OPEN). A present-but-unparseable value fails CLOSED (throws
+ * PlaneCapError → invalid_request) rather than dropping the guard. Matches the
+ * resident builtin, which reads expected_mtime_ms via asNumber and compares the
+ * float directly.
+ */
+function parseExpectedMtimeMs(x: unknown): number | null {
+  if (x === undefined || x === null) return null
+  const n = asNumber(x)
+  if (n === undefined) {
+    throw new PlaneCapError("expected_mtime_ms must be a finite number")
+  }
+  return n
+}
 
 /** Map a thrown error from the plane/kernel to the McpDispatchResult error taxonomy. */
 function mapPlaneError(err: unknown): McpDispatchResult {
@@ -829,7 +882,15 @@ export async function coreInvokeBarePlane(input: {
         return textResult(st, { kind: st.kind })
       }
       case "list_dir": {
-        const path = asString(args["path"]) ?? "/"
+        // P5b: an omitted list_dir path defaults to the sandbox cwd
+        // (/conversation, a granted mount) — the SAME default the auth layer
+        // projects (buildRequestedAction's defaultPathPrefix for a sandbox) — so
+        // list_dir({}) lists /conversation instead of "/", which no mount-scoped
+        // grant covers and which the vfs would HARD-DENY (GrantPrefixDeniedError)
+        // after passing the matcher. The bare data plane is ALWAYS a sandbox
+        // context, so this default is unconditional here. (Every other fs tool
+        // requires an explicit path via requirePath and is unaffected.)
+        const path = asString(args["path"]) ?? DEFAULT_SANDBOX_CWD
         const entries = await plane.list(path, ctx)
         return textResult({ path, entries }, { entry_count: entries.length })
       }
@@ -882,7 +943,10 @@ export async function coreInvokeBarePlane(input: {
           {
             createParents: asBool(args["create_parents"]) ?? false,
             expectedSha256: asString(args["expected_sha256"]) ?? null,
-            expectedMtimeMs: asInt(args["expected_mtime_ms"]) ?? null,
+            // P6: accept the fractional mtime (asNumber, not asInt) so the
+            // stale-write guard is honored instead of silently dropped; a
+            // present-but-unparseable value fails closed (invalid_request).
+            expectedMtimeMs: parseExpectedMtimeMs(args["expected_mtime_ms"]),
           },
           ctx
         )
@@ -985,11 +1049,31 @@ async function coreEdit(
   if (!Array.isArray(rawEdits) || rawEdits.length === 0) {
     return errResult("invalid_request", "edits (non-empty array) is required")
   }
+  // Caller optimistic-concurrency preconditions (P6-schema). The bare fs_edit
+  // schema ADVERTISES expected_sha256/expected_mtime_ms, so they must be HONORED
+  // — pre-checked against a fresh read/stat of the target and rejected on
+  // mismatch — never silently dropped (a dropped precondition is a silent
+  // lost-update). expected_mtime_ms fails CLOSED on an unparseable value
+  // (parseExpectedMtimeMs throws PlaneCapError → invalid_request).
+  const callerExpectedMtimeMs = parseExpectedMtimeMs(args["expected_mtime_ms"])
+  const callerExpectedSha = asString(args["expected_sha256"])
   // Read current (utf-8), apply old→new sequentially, write back with a CAS
   // expectation on the prior sha (mirrors the resident edit's stale-write guard).
   const cur = await plane.read(path, {}, ctx)
   if (cur.truncated) {
     return errResult("runtime_constraint", "edit_source_too_large")
+  }
+  // Caller sha precondition: cur.bytes IS the freshly-read current content, so
+  // hashing it is exactly the fresh-hash pre-check fs_write does. A mismatch
+  // means the file already differs from what the caller expected → stale_write,
+  // rejected BEFORE any mutation.
+  if (callerExpectedSha !== undefined) {
+    const curSha = createHash("sha256")
+      .update(Buffer.from(cur.bytes))
+      .digest("hex")
+    if (curSha !== callerExpectedSha) {
+      throw new StaleWriteError("pre_open", path)
+    }
   }
   // Reject a non-UTF-8 target instead of a lossy decode. Buffer.toString('utf-8')
   // replaces invalid byte sequences with U+FFFD, so an edit that "found" old_string
@@ -1043,6 +1127,10 @@ async function coreEdit(
       expectedSha256: priorStat.exists
         ? createHash("sha256").update(Buffer.from(cur.bytes)).digest("hex")
         : null,
+      // Caller mtime precondition (P6-schema): honored ATOMICALLY inside the
+      // write's path lock against a fresh stat — a stale mtime ⇒ StaleWriteError.
+      // null when the caller supplied none (no-op).
+      expectedMtimeMs: callerExpectedMtimeMs,
     },
     ctx
   )
