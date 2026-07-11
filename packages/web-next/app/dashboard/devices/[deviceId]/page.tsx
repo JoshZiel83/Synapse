@@ -81,8 +81,7 @@ export default function DeviceDetailPage() {
           <div>
             <h1 className="text-xl font-semibold">{device.title}</h1>
             <p className="text-sm text-muted-foreground">
-              {device.hostKind} · {device.deviceType} ·{" "}
-              {device.platform ?? "unknown platform"}
+              {device.deviceType} · {device.platform ?? "unknown platform"}
             </p>
           </div>
         </div>

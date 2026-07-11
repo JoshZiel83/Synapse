@@ -831,7 +831,7 @@ export function ChatTaskCard({
       : task.kind === TASK_REQUEST_KIND.PLAN_APPROVAL
         ? task.planApproval?.title || "计划审批"
         : task.runtimeAuthorization
-          ? `授权 ${task.runtimeAuthorization.deviceToolStableKey}`
+          ? `授权 ${task.runtimeAuthorization.runtimeToolStableKey}`
           : "授权请求"
 
   const cardDescription =

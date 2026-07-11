@@ -60,8 +60,6 @@ const deviceViewJson = {
   id: deviceId,
   workspaceId: wsId,
   title: "Box",
-  hostKind: "local",
-  hostProvider: null,
   deviceType: "desktop_computer",
   platform: null,
   trustStatus: "trusted",
@@ -84,7 +82,6 @@ test("listDevices parses the camelCase DeviceView array (app contract)", async (
   const devices = await sdk.listDevices(wsId)
   assert.equal(devices.length, 1)
   assert.equal(devices[0]?.workspaceId, wsId)
-  assert.equal(devices[0]?.hostKind, "local")
   assert.equal(captured[0]?.method, "GET")
   assert.match(captured[0]?.url ?? "", /\/workspaces\/.*\/devices$/)
 })
@@ -128,7 +125,6 @@ test("createCloudDevice SENDS camelCase body + PARSES camelCase result view", as
   const result = await sdk.createCloudDevice({
     workspaceId: wsId,
     title: "Cloud",
-    hostProvider: "e2b",
   })
   // workspaceId travels in the URL, NOT the body (the API body schema is a
   // strictObject that omits workspaceId and rejects unknown keys).
@@ -139,9 +135,7 @@ test("createCloudDevice SENDS camelCase body + PARSES camelCase result view", as
   const body = captured[0]?.body as Record<string, unknown>
   assert.ok(!("workspaceId" in body), "workspaceId must NOT be in the body")
   assert.equal(body.title, "Cloud")
-  assert.equal(body.hostProvider, "e2b")
   assert.ok(!("workspace_id" in body), "must not send snake workspace_id")
-  assert.ok(!("host_provider" in body), "must not send snake host_provider")
   // parses camelCase result
   assert.equal(result.bootstrapToken, "btok")
   assert.equal(result.pendingRuntimeId, deviceId)
@@ -151,7 +145,7 @@ test("startPairing SENDS camelCase body + PARSES the camelCase ticket view", asy
   const { sdk, captured } = makeSdk({
     data: {
       pairingSessionId: "11111111-0000-4000-8000-000000000002",
-      mode: "service_join",
+      mode: "local_qr",
       pairingCode: "abc",
       bootstrapToken: null,
       expiresAt: "2099-01-01T00:00:00.000Z",
@@ -163,7 +157,7 @@ test("startPairing SENDS camelCase body + PARSES the camelCase ticket view", asy
   })
   const ticket = await sdk.startPairing({
     workspaceId: wsId,
-    mode: "service_join",
+    mode: "local_qr",
     description: "Join remote agent daemon",
     deviceType: "desktop_computer",
     context: { serviceKind: "remote_agent_daemon" },
