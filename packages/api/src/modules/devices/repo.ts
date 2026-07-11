@@ -1740,25 +1740,33 @@ export async function findDeviceDetail(
 }
 
 /**
- * Soft-delete a device (design §5.3): never hard-deleted — flip deleted_at and
- * KEEP all device_* child rows for audit. Returns numUpdatedRows so the service
- * can decide the 404. Child rows are hidden via the device-liveness filter and
- * *_live views (§8.6); hard delete is forbidden by sd_reject_delete.
+ * Soft-delete a runtime (design §5.3): never hard-deleted — flip runtimes.deleted_at
+ * and KEEP all runtime_* child rows for audit. Returns numUpdatedRows so the service
+ * can decide the 404. Child rows are hidden via the runtimes-liveness filter and
+ * *_live views (§8.6); hard delete is forbidden by sd_reject_delete. Pass
+ * `requireKind` to scope the delete to one runtime kind (device vs sandbox).
  */
-export async function softDeleteDevice(
+export async function softDeleteRuntime(
   workspaceId: string,
-  deviceId: string
+  runtimeId: string,
+  opts?: { requireKind?: "device" | "sandbox" }
 ): Promise<number> {
   // runtimes.deleted_at is the SOLE runtime soft-delete root (devices/sandboxes
-  // shed their own deleted_at). Flip the supertype row; the device detail stays
-  // for audit and is hidden via runtimes-liveness folds (devices_live).
-  const result = await db
+  // shed their own deleted_at). Flip the supertype row; the detail stays for
+  // audit and is hidden via runtimes-liveness folds (*_live). `requireKind`
+  // scopes the flip: the /devices/:id endpoint passes 'device' so a sandbox
+  // runtime id never matches (0 rows → the caller's 404), preventing a
+  // manage_devices holder from terminating an Actor sandbox via the device API.
+  let q = db
     .updateTable("runtimes")
     .set({ deletedAt: new Date() })
     .where("workspaceId", "=", workspaceId)
-    .where("id", "=", deviceId)
+    .where("id", "=", runtimeId)
     .where("deletedAt", "is", null)
-    .executeTakeFirst()
+  if (opts?.requireKind) {
+    q = q.where("kind", "=", opts.requireKind)
+  }
+  const result = await q.executeTakeFirst()
   return Number(result.numUpdatedRows ?? 0)
 }
 

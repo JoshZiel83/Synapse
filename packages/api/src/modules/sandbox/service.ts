@@ -18,7 +18,7 @@ import type { Executor } from "./repo.js"
 import * as repo from "./repo.js"
 import { STORAGE_DIR } from "../../infrastructure/storage/index.js"
 import { config } from "../../config/index.js"
-import { deleteDevice } from "../devices/service.js"
+import { deleteRuntime } from "../devices/service.js"
 import { getRuntimeEndpointRegistry } from "../devices/tunnel-registry.js"
 import {
   ensureFileSpace,
@@ -856,7 +856,7 @@ export async function provisionSandbox(
           errorMessage: message,
         })
         .catch(() => {})
-      await deleteDevice(ctx.workspaceId, pairedRuntimeId).catch(() => {})
+      await deleteRuntime(ctx.workspaceId, pairedRuntimeId).catch(() => {})
     }
     await rm(sandboxRoot, { recursive: true, force: true }).catch(() => {})
     for (const mount of mounts) {
@@ -1841,7 +1841,7 @@ export async function teardownSandbox(
     await repo
       .updateSandboxRow(runtimeId, { state: commitOk ? "closed" : "failed" })
       .catch(() => {})
-    await deleteDevice(ctx.workspaceId, runtimeId).catch((err) =>
+    await deleteRuntime(ctx.workspaceId, runtimeId).catch((err) =>
       console.error(
         `[sandbox] soft-delete runtime failed for ${sessionId}:`,
         err

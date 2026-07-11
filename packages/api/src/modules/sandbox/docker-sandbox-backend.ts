@@ -16,7 +16,7 @@ import {
   createCloudDevicePairing,
   type CreateCloudDeviceResult,
 } from "../devices/cloud.js"
-import { deleteDevice } from "../devices/service.js"
+import { deleteRuntime } from "../devices/service.js"
 import {
   getPairingSessionBootstrapState,
   getLatestRuntimeServiceId,
@@ -447,11 +447,11 @@ async function defaultDockerFailCleanup(
     runtimeId: string | null
   }
 ): Promise<void> {
-  // Order: runtime first (deleteDevice → softDeleteDevice just flips
+  // Order: runtime first (deleteRuntime → softDeleteRuntime just flips
   // runtimes.deleted_at; it does NOT cascade-delete services/exposures/grants,
   // which are kept for audit), then the pairing session, then the container.
   if (args.runtimeId) {
-    await deleteDevice(args.workspaceId, args.runtimeId).catch(() => {})
+    await deleteRuntime(args.workspaceId, args.runtimeId).catch(() => {})
   }
   // Cancel the (still-pending) pairing session so the token can't be reused. A
   // consumed session already carries its runtime_id FK and is left as-is.

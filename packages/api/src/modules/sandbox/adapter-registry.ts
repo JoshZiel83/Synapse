@@ -20,7 +20,7 @@ import { spawn as nodeSpawn } from "node:child_process"
 import { SANDBOX_MOUNT_POINTS } from "@synapse/shared"
 import { config } from "../../config/index.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
-import { deleteDevice, mintBareSandboxRuntime } from "../devices/service.js"
+import { deleteRuntime, mintBareSandboxRuntime } from "../devices/service.js"
 import { bwrapAvailable, detectRipgrep } from "@synapse/device-runtime"
 import {
   createLocalSandboxBackend,
@@ -244,7 +244,7 @@ export function makeLocalBareAdapter(
         if (minted) {
           const p = unregisterBareDataPlane(runtimeId)
           if (p) await p.dispose().catch(() => {})
-          await deleteDevice(spec.workspaceId, runtimeId).catch(() => {})
+          await deleteRuntime(spec.workspaceId, runtimeId).catch(() => {})
         }
         throw err
       }
@@ -565,7 +565,7 @@ export function makeDockerBareAdapter(
         if (mintedRuntimeId) {
           const p = unregisterBareDataPlane(mintedRuntimeId)
           if (p) await p.dispose().catch(() => {})
-          await deleteDevice(spec.workspaceId, mintedRuntimeId).catch(() => {})
+          await deleteRuntime(spec.workspaceId, mintedRuntimeId).catch(() => {})
         }
         // Always reap the container we ran.
         await runDockerCapture(spawnImpl, ["rm", "-f", containerId]).catch(

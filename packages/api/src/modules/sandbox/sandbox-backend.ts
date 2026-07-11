@@ -25,7 +25,7 @@ import {
   type RunHandle,
   type SpawnSandboxRuntimeParams,
 } from "./host-provider.js"
-import { deleteDevice, mintLocalSandboxRuntime } from "../devices/service.js"
+import { deleteRuntime, mintLocalSandboxRuntime } from "../devices/service.js"
 
 /** Which adapter produced/owns a sandbox runtime. Persisted on sandboxes.adapter
  *  so teardown picks the right adapter regardless of the API's current config. P2 registered local + docker (Mode-A
@@ -307,7 +307,7 @@ async function defaultLocalFailCleanup(args: {
   brokerDir: string
 }): Promise<void> {
   if (args.runtimeId) {
-    await deleteDevice(args.workspaceId, args.runtimeId).catch(() => {})
+    await deleteRuntime(args.workspaceId, args.runtimeId).catch(() => {})
   }
   await rm(args.brokerDir, { recursive: true, force: true }).catch(() => {})
 }

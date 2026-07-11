@@ -22,17 +22,19 @@ const schemaSqlWithoutExtensions = schemaSql.replace(
  * `CURRENT_SCHEMA_DESCRIPTION` instead. A unit test in
  * `bootstrap.test.ts` enforces the length invariant.
  */
-// MERGE (feat/file-service-cas-manifest <- dev): the applied schema.sql carries
-// BOTH the conversation-type/derived-IM reshape (dev) AND the file-service CAS
-// refactor (this branch). A single combined version slug + description records
-// both so schema_migrations is not mislabeled. Slug kept <=64 chars (VARCHAR(64);
-// bootstrap.test.ts enforces); full narrative lives in the (unbounded) description.
-export const CURRENT_SCHEMA_VERSION = "2026-06-16-inbound-dedupe"
+// Slug bumped for the runtime/sandbox generalization (the device_* substrate was
+// rewritten onto a runtimes CTI supertype; NO back-compat). Any pre-existing DB at
+// an older slug now fail-louds on boot (decideBootstrapAction → "fail") and must
+// db:rebuild, instead of silently noop-ing on a schema that lacks runtimes/sandboxes.
+// Slug kept <=64 chars (VARCHAR(64); bootstrap.test.ts enforces); full narrative
+// lives in the (unbounded) description.
+export const CURRENT_SCHEMA_VERSION = "2026-07-11-runtime-sandbox"
 export const CURRENT_SCHEMA_DESCRIPTION =
+  "Runtime/sandbox generalization: the device_* substrate is rewritten onto a `runtimes` CTI supertype with devices (kind='device') + sandboxes (kind='sandbox', device-less) detail tables and runtime_* services/sessions/operations/capabilities/exposures/authorizations; device_* tables/columns removed, NO back-compat. Requires db:rebuild for existing databases (no in-place migrations during initial design). " +
   "IM inbound dedupe hardening: transport_message_links now has a partial unique index on non-empty inbound external_message_id per account+endpoint, so concurrent duplicate inbound messages cannot create multiple link rows. Requires db:rebuild for existing databases (no in-place migrations during initial design). " +
   "Datetime hardening: created_at/updated_at columns that default to NOW() are now NOT NULL by schema contract, all persisted instants remain TIMESTAMPTZ-backed Dates in generated/db.ts, shared protocol timestamps are branded IsoInstantString values, and schema bootstrap installs a generic updated_at auto-touch trigger across every public base table that exposes updated_at. Requires db:rebuild for existing databases (no in-place migrations during initial design). " +
   "Task unification naming cleanup: human-facing requests are first-class tool_call_tasks; removed the remaining task-response compatibility naming from response surfaces, active task pointers, source task pointers, remote-agent group task grants, and remote-agent run task linkage. Requires db:rebuild for existing databases (no in-place migrations during initial design). " +
-  "Tool provenance & routing refactor: tool_calls.tool_name now holds the model-facing WIRE name; added immutable source_snapshot JSONB + GENERATED source_kind (system|plugin|device) + soft pointers plugin_installation_id/runtime_tool_id (ON DELETE SET NULL, snapshot is the durable audit truth) with a source↔column consistency CHECK; dropped legacy tool_calls.plugin_id/device_id and tool_execution_attempts.plugin_id/device_id/instance_key (attempt provenance derives from the parent tool_calls row). Routing no longer parses tool names — projection mints deterministic ToolRefs and a per-turn NameRegistry maps wire↔toolId. Requires db:rebuild for existing databases (no in-place migrations during initial design). " +
+  "Tool provenance & routing refactor: tool_calls.tool_name now holds the model-facing WIRE name; added immutable source_snapshot JSONB + GENERATED source_kind (system|plugin|runtime) + soft pointers plugin_installation_id/runtime_tool_id (ON DELETE SET NULL, snapshot is the durable audit truth) with a source↔column consistency CHECK; dropped legacy tool_calls.plugin_id/device_id and tool_execution_attempts.plugin_id/device_id/instance_key (attempt provenance derives from the parent tool_calls row). Routing no longer parses tool names — projection mints deterministic ToolRefs and a per-turn NameRegistry maps wire↔toolId. Requires db:rebuild for existing databases (no in-place migrations during initial design). " +
   "(PRIOR) Chat multi-client broadcast correctness: workspace_member_sync_events.member_seq commit-ordered client sync cursor. " +
   "(PRIOR) Soft-delete: deleted_at on 24 root tables, _live views, sd_reject_delete + sd_assert_parent_live triggers, sd_* SECURITY DEFINER purge fns. " +
   "(PRIOR) Account/auth redesign onto Better Auth (better-auth@1.6.13). " +

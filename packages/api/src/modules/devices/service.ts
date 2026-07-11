@@ -30,7 +30,7 @@ import {
   listDeviceSummaries,
   mintLocalSandboxRuntimeTx,
   mintBareSandboxRuntimeTx,
-  softDeleteDevice,
+  softDeleteRuntime,
 } from "./repo.js"
 import type { DeviceCatalogExposure } from "@synapse/device-protocol"
 import { config } from "../../config/index.js"
@@ -137,18 +137,46 @@ export async function deleteDevice(
   deviceId: string
 ): Promise<void> {
   // Soft delete (design §5.3): runtimes are never hard-deleted in production —
-  // softDeleteDevice flips runtimes.deleted_at (the SOLE runtime soft-delete
+  // softDeleteRuntime flips runtimes.deleted_at (the SOLE runtime soft-delete
   // root; the devices table has no deleted_at of its own) and KEEPS the runtime
   // detail + its runtime_* child rows (services/capabilities/operations) for
   // audit. Those rows are hidden from projection via the runtimes-liveness folds
   // and the *_live views (§8.6). Hard delete is forbidden by sd_reject_delete;
   // physical removal happens only via offline purge.
-  const updated = await softDeleteDevice(workspaceId, deviceId)
+  //
+  // requireKind:'device' — this is the workspace.manage_devices /devices/:id API,
+  // which MUST NOT be able to terminate a sandbox runtime. A sandbox id fails the
+  // kind guard (0 rows → 404), so device-management permission can't kill an Actor
+  // sandbox. Sandbox teardown goes through deleteRuntime (below), never this.
+  const updated = await softDeleteRuntime(workspaceId, deviceId, {
+    requireKind: "device",
+  })
   if (updated === 0) {
     throw new DeviceModuleError({
       statusCode: 404,
       code: "device_not_found",
       message: `device ${deviceId} not found in workspace ${workspaceId}`,
+    })
+  }
+}
+
+/**
+ * Soft-delete a runtime of ANY kind (device or sandbox) by id. Internal sandbox
+ * teardown path only (adapters + provision cleanup) — NOT reachable from the
+ * device-management API, which uses the kind-scoped deleteDevice above. Throws
+ * device_not_found if the runtime is already gone (callers treat teardown as
+ * best-effort and swallow it).
+ */
+export async function deleteRuntime(
+  workspaceId: string,
+  runtimeId: string
+): Promise<void> {
+  const updated = await softDeleteRuntime(workspaceId, runtimeId)
+  if (updated === 0) {
+    throw new DeviceModuleError({
+      statusCode: 404,
+      code: "device_not_found",
+      message: `runtime ${runtimeId} not found in workspace ${workspaceId}`,
     })
   }
 }
