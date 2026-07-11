@@ -24,7 +24,7 @@ import type {
 import {
   SUBJECT_KIND,
   textBlock,
-  runtimeToolId as makeDeviceToolId,
+  runtimeToolId as makeRuntimeToolId,
   type SubjectRef,
   type ProjectedToolDefinition,
   type ToolRef,
@@ -254,7 +254,7 @@ interface RuntimeToolBundle {
 /** Build a device ToolRef from a projected capability row. */
 function buildRuntimeToolRef(row: RuntimeCapabilityToolRow): ToolRef {
   return {
-    toolId: makeDeviceToolId(row.runtimeToolId),
+    toolId: makeRuntimeToolId(row.runtimeToolId),
     source: {
       kind: "runtime",
       runtimeToolId: row.runtimeToolId,
@@ -519,7 +519,7 @@ function unionWithRuntime(
   legacy: ProjectedToolList,
   device: RuntimeToolBundle
 ): ProjectedToolList {
-  const dispatchDeviceTool = async (
+  const dispatchRuntimeTool = async (
     toolId: string,
     input: Record<string, unknown>
   ): Promise<NormalizedMcpToolResult> => {
@@ -889,7 +889,7 @@ function unionWithRuntime(
     executionContext?: McpExecutionContext
   ): Promise<NormalizedMcpToolResult> => {
     if (device.handlers.has(toolId)) {
-      return dispatchDeviceTool(toolId, input)
+      return dispatchRuntimeTool(toolId, input)
     }
     return legacy.executor(toolId, input, executionContext)
   }
@@ -901,7 +901,7 @@ function unionWithRuntime(
     // principal + subject set stays consistent across refreshes.
     const freshDevice = await projectRuntimeTools(projectInput)
     // Replace the stale device-bundle handlers/subjectIds in place so the
-    // dispatchDeviceTool closure (which closes over `device`) sees the
+    // dispatchRuntimeTool closure (which closes over `device`) sees the
     // refreshed handlers on the next tool call.
     device.tools = freshDevice.tools
     device.handlers = freshDevice.handlers
@@ -946,7 +946,7 @@ function mcpErrorBlock(
 }
 
 // v3.1 browser preflight (plan §#3, #13, #14, #17, #18). Runs in
-// dispatchDeviceTool BEFORE grant lookup so disabled exposures, unknown tools,
+// dispatchRuntimeTool BEFORE grant lookup so disabled exposures, unknown tools,
 // scheme violations, and navigate_page arg-shape mismatches never spawn an
 // empty authorization request. Returns a structured denial — caller wraps
 // it into NormalizedMcpToolResult.metadata.synapse_error so the upstream
@@ -1551,7 +1551,7 @@ export function buildRequestedAction(args: {
     case "browser": {
       // v3.1: look up the descriptor in BROWSER_TOOL_MAP (single source of
       // truth — see @synapse/device-protocol/browser-tools). Unknown tools
-      // should never reach this point because dispatchDeviceTool's
+      // should never reach this point because dispatchRuntimeTool's
       // browserPreflightDeny rejects them first; return a fail-closed
       // shape just in case (empty operations → matcher always false).
       const descriptor = BROWSER_TOOL_MAP[tool]
@@ -1630,7 +1630,7 @@ export function buildRequestedAction(args: {
       // builtin_kind). Such an exposure is dispatchable: device.catalog.sync
       // persists whatever the authenticated device publishes with NO transport
       // restriction, the projection SELECT + handler assembly have no transport
-      // filter, and dispatchDeviceTool routes it through here. No first-party
+      // filter, and dispatchRuntimeTool routes it through here. No first-party
       // device-runtime builtin emits a non-builtin transport today, but the wire
       // contract fully supports it — so NULL is STRUCTURALLY REACHABLE for a real
       // dispatched tool. Its historical behavior (the collapsed `default`) was a
