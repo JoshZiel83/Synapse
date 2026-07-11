@@ -418,13 +418,14 @@ async function main() {
         )
         const { removed } = await reapDockerSandboxOrphans(liveSessionIds)
         if (removed.length > 0) {
-          console.warn(
-            `[sandbox] none-boot orphan reap: removed ${removed.length} label-only docker orphan(s): ${removed.join(", ")}`
+          log.warn(
+            { removed },
+            `[sandbox] none-boot orphan reap: removed ${removed.length} label-only docker orphan(s)`
           )
         }
       }
     } catch (err) {
-      console.error("Failed to reap sandbox orphans on none boot:", err)
+      log.error({ err }, "Failed to reap sandbox orphans on none boot")
     }
   }
 
