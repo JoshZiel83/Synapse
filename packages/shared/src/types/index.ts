@@ -2169,7 +2169,7 @@ export interface ToolSurfaceItem {
   id: string
   name: string
   // Canonical routed-source vocabulary. Was previously a parallel display
-  // vocabulary (builtin/plugin_installation/device_capability); collapsed onto
+  // vocabulary (builtin/plugin_installation/runtime_capability); collapsed onto
   // the one ToolSourceKind axis.
   source: ToolSourceKind
 }

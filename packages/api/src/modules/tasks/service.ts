@@ -1509,7 +1509,7 @@ export async function canUserResolveTask(params: {
 
   return authorizeActionDefault({
     subject: userSubject(userId),
-    action: "device_capability.request_runtime_authorization",
+    action: "runtime_capability.request_runtime_authorization",
     resourceId: runtimeCapabilityId,
   })
 }
@@ -1838,7 +1838,7 @@ export async function resolveTaskRequest(
       }
       const canResolveRuntimeAuthorization = await authorizeActionDefault({
         subject: workspaceMemberSubject(params.resolverWorkspaceMemberId),
-        action: "device_capability.request_runtime_authorization",
+        action: "runtime_capability.request_runtime_authorization",
         resourceId: runtimeCapabilityId,
       })
       if (!canResolveRuntimeAuthorization) {

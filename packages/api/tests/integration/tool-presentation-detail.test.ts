@@ -102,7 +102,7 @@ async function buildDeviceFixture(opts: {
        id, turn_id, conversation_id, session_id,
        bundle_id, tool_name, status,
        source_kind, source_snapshot, normalized_input
-     ) VALUES ($1, $2, $3, $4, $5, $6, 'completed', 'device', $7, $8)`,
+     ) VALUES ($1, $2, $3, $4, $5, $6, 'completed', 'runtime', $7, $8)`,
     [
       toolCallId,
       turnId,
@@ -111,10 +111,10 @@ async function buildDeviceFixture(opts: {
       uuidv4(),
       opts.visibleToolName,
       JSON.stringify({
-        kind: "device",
-        deviceToolId: uuidv4(),
+        kind: "runtime",
+        runtimeToolId: uuidv4(),
         exposureStableKey: opts.exposureStableKey,
-        deviceName: "laptop",
+        runtimeName: "laptop",
         visibleToolName: opts.visibleToolName,
         stableKey,
       }),

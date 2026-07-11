@@ -44,7 +44,7 @@ function deviceRef(
       ...(runtimeName !== undefined ? { runtimeName } : {}),
     },
     binding: {
-      transport: "device_tunnel",
+      transport: "runtime_tunnel",
       runtimeId: "dev-1",
       runtimeServiceId: "svc-1",
       runtimeCapabilityId: "cap-1",

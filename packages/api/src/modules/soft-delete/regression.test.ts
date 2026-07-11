@@ -51,7 +51,7 @@ async function insertWorkspaceSubject(db: AnyDb, ws: string): Promise<string> {
   return row.id as string
 }
 // The platform singleton subject (access_subjects has a partial unique index on
-// kind='platform'). device_capability roots are catalog-synced — no human
+// kind='platform'). runtime_capability roots are catalog-synced — no human
 // creator — so their `created_by_subject_id` is `platform` (plan §4.1).
 async function ensurePlatformSubject(db: AnyDb): Promise<string> {
   const existing = await db

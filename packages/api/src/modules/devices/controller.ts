@@ -94,8 +94,8 @@ async function authorizeWorkspaceDeviceAction(
   action:
     | "workspace.manage_devices"
     | "workspace.view"
-    | "device_capability.grant"
-    | "device_capability.use",
+    | "runtime_capability.grant"
+    | "runtime_capability.use",
   resourceId: string,
   errorMessage = "Forbidden"
 ): Promise<boolean> {

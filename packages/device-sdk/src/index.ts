@@ -219,7 +219,7 @@ export class DeviceSdk {
    * PR #8 (group-chat actor-hover) both call this with the right
    * AccessTarget kind. The server validates that:
    *   - the caller has workspace.manage_devices on the workspace
-   *   - the caller has device_capability.grant on every listed capability
+   *   - the caller has runtime_capability.grant on every listed capability
    *   - the AccessTarget's target row (actor / conversation / context)
    *     belongs to the same workspace
    *   - every listed capability belongs to the same workspace

@@ -432,7 +432,7 @@ export async function detachDeviceService(
   if (!owned) {
     throw new DeviceModuleError({
       statusCode: 404,
-      code: "device_service_not_found",
+      code: "runtime_service_not_found",
       message: `device_service ${serviceId} not found on device ${deviceId}`,
     })
   }

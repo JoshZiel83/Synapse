@@ -295,7 +295,7 @@ async function buildResolvedTools(params: {
   reservedNames?: readonly string[]
 }): Promise<{ tools: RegisteredTool[]; shutdown: () => Promise<void> }> {
   // The resolver evaluates workspace_resource_grants exactly like an actor would
-  // and returns ready-to-execute plugin + device_capability tools.
+  // and returns ready-to-execute plugin + runtime_capability tools.
   const resolved = await projectToolsForPrincipal({
     workspaceId: params.workspaceId,
     principal: {

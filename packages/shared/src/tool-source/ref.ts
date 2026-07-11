@@ -49,7 +49,7 @@ export type ToolBinding =
   | { transport: "in_process" }
   | { transport: "stdio" | "http" | "sse"; instanceKey: string }
   | {
-      transport: "device_tunnel"
+      transport: "runtime_tunnel"
       runtimeId: string
       runtimeServiceId: string
       runtimeCapabilityId: string

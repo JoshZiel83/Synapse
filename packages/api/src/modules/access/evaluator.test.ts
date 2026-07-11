@@ -659,12 +659,12 @@ test(
 )
 
 // 3d hardening: the bindable "manage-or-grant" resources (installed_skill /
-// plugin_installation / device_capability) historically returned `canManage`
+// plugin_installation / runtime_capability) historically returned `canManage`
 // for ANY permission string — i.e. an unknown/typo'd permission was fail-OPEN
 // to workspace managers and the resource creator. resolveBindableResourceAccess
 // now gates on an explicit manageablePermissions whitelist, so an unknown
 // permission denies even for the owner/creator, matching the `default: return
-// false` arms of the actor/remote_agent/device helpers. device_capability
+// false` arms of the actor/remote_agent/device helpers. runtime_capability
 // shares the identical code path, so these skill/plugin cases cover its logic.
 test(
   "checkPermission(installed_skill, <unknown permission>) is fail-closed even for the owner/creator",
@@ -1701,7 +1701,7 @@ async function insertResourceGrant(
 ) {
   // Post-fold: every resource kind — including automation_event_source — is
   // authorized through workspace_resource_grants. actor/remote_agent take a
-  // contact_visible grant; everything else (skill / plugin / device_capability /
+  // contact_visible grant; everything else (skill / plugin / runtime_capability /
   // automation_event_source) takes a use grant.
   const subject = (() => {
     switch (params.target.subjectKind) {
@@ -1914,7 +1914,7 @@ test(
       // the admin reaches them too (regression: the capability manage path also
       // used the stale manage_relays key).
       const adminExposure = await checkPermission(db, {
-        resourceType: "device_exposure",
+        resourceType: "runtime_exposure",
         resourceId: exposureId,
         permission: "manage",
         subject: { type: "workspace_member", id: ownerMemberId },
@@ -1947,7 +1947,7 @@ test(
 )
 
 test(
-  "checkPermission(device_capability.grant) stays true for a deprecated capability the member owns",
+  "checkPermission(runtime_capability.grant) stays true for a deprecated capability the member owns",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -1975,7 +1975,7 @@ test(
 )
 
 test(
-  "lookupResources(device_capability.view) returns a non-owned active capability only when explicitly granted",
+  "lookupResources(runtime_capability.view) returns a non-owned active capability only when explicitly granted",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {

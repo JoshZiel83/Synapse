@@ -54,7 +54,7 @@ import type {
  * workspace_resources root row from the member who installed/created it.
  *
  * owner    = the installer member's workspace_member subject (or NULL when no
- *            human owner — e.g. device_capability catalog-sync).
+ *            human owner — e.g. runtime_capability catalog-sync).
  * creator  = the installer member's subject for member-created kinds, else the
  *            single platform-wide subject (system-generated roots, D4).
  */

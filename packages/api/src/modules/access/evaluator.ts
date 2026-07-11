@@ -97,7 +97,7 @@ type AccessResourceType =
   | "plugin_installation"
   | "automation_event_source"
   | "device"
-  | "device_exposure"
+  | "runtime_exposure"
   | "runtime_capability"
   | "conversation"
   | "memory_space"
@@ -687,7 +687,7 @@ function finalizeResourceIdList(groups: readonly string[][], limit?: number) {
 
 /**
  * 3d: shared access skeleton for the workspace-bound, bindable, "manage-or-grant"
- * resources — installed_skill / plugin_installation / device_capability. Once
+ * resources — installed_skill / plugin_installation / runtime_capability. Once
  * the resource row is loaded (which is the only genuinely per-resource step:
  * different table / columns / active predicate), all three resolved access
  * identically:
@@ -1621,7 +1621,7 @@ export async function checkPermission(
         params.resourceId,
         params.permission
       )
-    case "device_exposure":
+    case "runtime_exposure":
       return hasExposurePermission(
         db,
         params.subject,

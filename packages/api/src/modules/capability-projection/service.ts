@@ -3,7 +3,7 @@
 //
 // Single canonical entry point used by chat runtime and reverse MCP. Delegates
 // to mcp-plugins/tool-resolver.ts for plugin projections, then unions
-// device_capability tools alongside so the planner sees device-side bash /
+// runtime_capability tools alongside so the planner sees device-side bash /
 // list_dir / etc. alongside MCP plugins. Device dispatch goes through
 // RuntimeEndpointRegistry + the synchronous tools/call client in
 // devices/dispatch.ts; every dispatch opens a runtime_operations + first
@@ -171,7 +171,7 @@ export type ProjectedToolList = ResolvedMcpTools
 
 /**
  * Single canonical entry point. Routes to the legacy actor / remote_agent
- * resolver in v3.0 skeleton; PR #7 extends it to union device_capability
+ * resolver in v3.0 skeleton; PR #7 extends it to union runtime_capability
  * exposures.
  */
 export async function projectToolsForPrincipal(
@@ -263,7 +263,7 @@ function buildDeviceToolRef(row: DeviceCapabilityToolRow): ToolRef {
       visibleToolName: row.visibleToolName,
     },
     binding: {
-      transport: "device_tunnel",
+      transport: "runtime_tunnel",
       runtimeId: row.runtimeId,
       runtimeServiceId: row.runtimeServiceId,
       runtimeCapabilityId: row.runtimeCapabilityId,

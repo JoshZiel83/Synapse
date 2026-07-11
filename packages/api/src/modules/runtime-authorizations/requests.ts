@@ -281,7 +281,7 @@ export async function createRuntimeAuthorizationRequest(
       candidate,
       allowed: await authorizeActionDefault({
         subject: { type: "workspace_member", id: candidate.workspaceMemberId },
-        action: "device_capability.request_runtime_authorization",
+        action: "runtime_capability.request_runtime_authorization",
         resourceId: params.runtimeTarget.runtimeCapabilityId,
       }),
     }))

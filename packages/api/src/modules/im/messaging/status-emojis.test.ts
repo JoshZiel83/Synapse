@@ -46,7 +46,7 @@ test("resolveToolStatusLevel maps web tools to web", () => {
 
 test("resolveToolStatusLevel maps generic tool names to tool", () => {
   assert.equal(resolveToolStatusLevel("mcp_invoke"), "tool")
-  assert.equal(resolveToolStatusLevel("call_device_capability"), "tool")
+  assert.equal(resolveToolStatusLevel("call_runtime_capability"), "tool")
   assert.equal(resolveToolStatusLevel("totally_unknown"), "tool")
   assert.equal(resolveToolStatusLevel(""), "tool")
 })

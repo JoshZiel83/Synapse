@@ -65,7 +65,7 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
       // browser-only request fields such as scopeSource at the app boundary.
       const policy = parsed.data.policy
 
-      // Permission: workspace.manage_devices + device_capability.grant on
+      // Permission: workspace.manage_devices + runtime_capability.grant on
       // the target capability. Mirrors access-bindings.ts.
       if (
         !(await requireRequestAction(
@@ -81,7 +81,7 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
         !(await requireRequestAction(
           request,
           reply,
-          "device_capability.grant",
+          "runtime_capability.grant",
           parsed.data.runtimeCapabilityId,
           "Cannot grant runtime authorization on this device capability"
         ))
@@ -95,7 +95,7 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
       )
       if (!row) {
         reply.status(404).send({
-          code: "device_capability_not_found",
+          code: "runtime_capability_not_found",
           message: `device capability ${parsed.data.runtimeCapabilityId} not found`,
         })
         return
@@ -103,20 +103,20 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
       if (row.workspaceId !== pathWorkspaceId) {
         reply.status(400).send({
           code: "workspace_id_mismatch",
-          message: "device_capability does not belong to this workspace",
+          message: "runtime_capability does not belong to this workspace",
         })
         return
       }
       if (row.status !== "active") {
         reply.status(409).send({
-          code: "device_capability_inactive",
-          message: `device_capability status is ${row.status}`,
+          code: "runtime_capability_inactive",
+          message: `runtime_capability status is ${row.status}`,
         })
         return
       }
       if (row.runtimeStatus === "offline") {
         reply.status(409).send({
-          code: "device_exposure_offline",
+          code: "runtime_exposure_offline",
           message: "underlying device exposure is offline",
         })
         return

@@ -22,7 +22,7 @@ const deviceRef: ToolRef = {
     visibleToolName: "fs_read",
   },
   binding: {
-    transport: "device_tunnel",
+    transport: "runtime_tunnel",
     runtimeId: "d-1",
     runtimeServiceId: "s-1",
     runtimeCapabilityId: "c-1",

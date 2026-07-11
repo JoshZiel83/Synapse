@@ -271,7 +271,7 @@ export function registerDeviceAccessBindingRoutes(app: FastifyInstance): void {
         return
       }
 
-      // Require manage_devices on the workspace AND device_capability.grant
+      // Require manage_devices on the workspace AND runtime_capability.grant
       // on each capability being granted/revoked. Without the latter check
       // a workspace_member with manage_devices could write grants for a
       // capability they shouldn't see.
@@ -291,7 +291,7 @@ export function registerDeviceAccessBindingRoutes(app: FastifyInstance): void {
           !(await requireRequestAction(
             request,
             reply,
-            "device_capability.grant",
+            "runtime_capability.grant",
             capId,
             "Cannot grant access to one of the listed device capabilities"
           ))
