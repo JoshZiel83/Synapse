@@ -13,6 +13,7 @@ import { join } from "node:path"
 import type { OperationEnvelope } from "@synapse/device-protocol"
 import { fromExternalRfc3339 } from "@synapse/device-protocol/instant"
 import { STORAGE_DIR } from "../../infrastructure/storage/index.js"
+import { config } from "../../config/index.js"
 import type { McpDispatchResult } from "../devices/dispatch.js"
 import type { RuntimeAuthorizationGrantRecord } from "../runtime-authorizations/repo.types.js"
 import {
@@ -79,6 +80,12 @@ export interface DispatchBareRuntimeToolInput {
   toolName: string
   /** The claimed grant record (never re-parsed from the envelope). */
   grant: RuntimeAuthorizationGrantRecord
+  /**
+   * The active sandbox substrate name (P2). Defaults to config.sandbox.provider.
+   * When "none" the substrate is disabled and this (kind='sandbox') dispatch is
+   * refused. A test seam so a provider can be forced independent of ambient env.
+   */
+  sandboxProvider?: string
   /** Test seams. */
   now?: () => number
   run?: Executor
@@ -117,6 +124,22 @@ function rebuildBarePlane(opts: {
   })
 }
 
+/**
+ * The bare data-plane endpoint schemes rebuildBarePlane recognizes:
+ * `docker-exec:<cid>` → a docker:bare plane; `inprocess:<id>` → the local:bare
+ * plane. ANYTHING else — null / empty / a typo / a future DIALABLE scheme like
+ * `https:` — is row CORRUPTION, NOT an implicit local plane on the API host.
+ * Kept in lockstep with rebuildBarePlane's fork so the fail-closed guard (P8A)
+ * and the (TOTAL, never-throwing) rebuild can never disagree on what "local"
+ * means. An empty endpoint is corruption, not a fall-through to local.
+ */
+function isRecognizedBarePlaneEndpoint(endpoint: string | null): boolean {
+  return (
+    endpoint !== null &&
+    (endpoint.startsWith("docker-exec:") || endpoint.startsWith("inprocess:"))
+  )
+}
+
 function errResult(
   code: "permission_denied" | "runtime_constraint" | "invalid_request",
   message: string
@@ -132,6 +155,21 @@ export async function dispatchBareRuntimeTool(
   input: DispatchBareRuntimeToolInput
 ): Promise<McpDispatchResult> {
   const now = input.now ?? Date.now
+
+  // (0) SANDBOX_PROVIDER=none gate (P2(B)). This fork is reached ONLY for a
+  // kind='sandbox' bare runtime — getBareSandboxForDispatch selects from the
+  // `sandboxes` detail table, so every dispatch here is by construction a
+  // sandbox dispatch. Refusing when the substrate is disabled is exactly
+  // "refuse a dispatch to a kind='sandbox' runtime when provider=none",
+  // defense-in-depth over the projection gate. Real devices dispatch through
+  // dispatchSyncTool and never reach this code, so they are NOT gated here.
+  const provider = input.sandboxProvider ?? config.sandbox.provider
+  if (provider === "none") {
+    return errResult(
+      "runtime_constraint",
+      `sandbox runtime ${input.runtimeId} is not dispatchable: SANDBOX_PROVIDER=none`
+    )
+  }
 
   // (1) Resolve the plane. HIT = live; MISS = lazy rebuild (this branch only).
   let plane = liveBarePlanes.get(input.runtimeId)
@@ -149,6 +187,19 @@ export async function dispatchBareRuntimeTool(
       return errResult(
         "runtime_constraint",
         `bare sandbox ${input.runtimeId} is not dispatchable (rebuild refused)`
+      )
+    }
+    // P8(A): the persisted data-plane endpoint MUST carry a recognized,
+    // non-dialable scheme. A null / empty / typo'd / future 'https:' endpoint is
+    // CORRUPTION — NOT an implicit local plane. Without this guard
+    // rebuildBarePlane's else-branch silently falls through to the LOCAL plane
+    // and executes on the API host. Fail-closed here (rebuildBarePlane stays
+    // TOTAL for the recognized set — a raw throw there would escape the
+    // McpDispatchResult contract).
+    if (!isRecognizedBarePlaneEndpoint(row.dataPlaneEndpoint)) {
+      return errResult(
+        "runtime_constraint",
+        `bare sandbox ${input.runtimeId} has an unrecognized data-plane endpoint scheme (rebuild refused)`
       )
     }
     const descriptor =

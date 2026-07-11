@@ -255,7 +255,12 @@ test("G3: selectRuntimeCapabilityToolsForSubjects surfaces the sandbox's fs + co
         subjectIds: [seed.grantSubjectId],
         runtimeScopeSubjectIds: [],
       },
-      db
+      db,
+      // This pin drives a PROVISIONED kind='sandbox' runtime, which only exists
+      // when the substrate is enabled; declare it so the P2 provider gate (which
+      // defaults to the test env's SANDBOX_PROVIDER=none) doesn't exclude the very
+      // sandbox tools this test asserts on.
+      { sandboxProvider: "local" }
     )
     const byBuiltin = new Map(rows.map((r) => [r.builtinKind, r]))
     assert.ok(byBuiltin.has("filesystem"), "fs tool surfaced")

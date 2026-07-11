@@ -19,7 +19,10 @@ import {
   dateToIsoInstant as dateToWireIsoInstant,
   nowIsoInstant as nowWireIsoInstant,
 } from "@synapse/device-protocol/instant"
-import { serializeCommandlinePolicyToWire } from "@synapse/shared/access/policies"
+import type {
+  RuntimeAuthorizationRequestedAction,
+  RuntimeAuthorizationCommandlinePolicy,
+} from "@synapse/shared"
 import { dispatchSyncTool } from "../devices/dispatch.js"
 import { dispatchBareRuntimeTool } from "../sandbox/bare-dispatch.js"
 import { signEnvelopeForDispatch } from "../devices/envelope-signer.js"
@@ -43,6 +46,88 @@ export interface AutoRetryDispatchResult {
   result?: { content: unknown[]; isError?: boolean; metadata?: unknown }
   errorCode?: string
   errorMessage?: string
+}
+
+/**
+ * Map a GRANT-side commandline policy (camelCase, discriminated by executor —
+ * may be shell / exec_file / sandbox) onto the narrower REQUESTED-ACTION-side
+ * commandline shape the matcher consumes. The requested-action union has NO
+ * sandbox branch (sandbox is a grant-level "any command in the jail" policy)
+ * and its shell branch requires a `commandText`. Kept exhaustive so the
+ * compiler enforces the app shape end-to-end.
+ *
+ * A sandbox grant has no per-command requested-action form → returns undefined.
+ * That branch is defensive only: sandboxes are pre-authorized-only (no async
+ * approval → no auto-retry), so a sandbox commandline grant never reaches here.
+ */
+function grantCommandlineToRequestedAction(
+  cmd: NonNullable<RuntimeAuthorizationGrantRecord["commandline"]>
+): RuntimeAuthorizationCommandlinePolicy | undefined {
+  if (cmd.executor === "exec_file") {
+    return {
+      executor: "exec_file",
+      commandMatchType: cmd.commandMatchType,
+      program: cmd.program,
+      argvPrefix: cmd.argvPrefix,
+      workingDirectory: cmd.workingDirectory,
+      allowBundledToolchain: cmd.allowBundledToolchain,
+      allowedEnv: cmd.allowedEnv,
+    }
+  }
+  if (cmd.executor === "sandbox") {
+    return undefined
+  }
+  return {
+    executor: cmd.executor,
+    commandMatchType: cmd.commandMatchType,
+    commandText: cmd.commandText ?? "",
+    workingDirectory: cmd.workingDirectory,
+    allowBundledToolchain: cmd.allowBundledToolchain,
+    allowedEnv: cmd.allowedEnv,
+  }
+}
+
+/**
+ * Build the APP-shape RuntimeAuthorizationRequestedAction mirror of an approved
+ * grant (camelCase throughout: pathPrefixes / scopeType / operations) so the
+ * server-side matcher validates coverage without a wire↔app shape mismatch.
+ * Exported so auto-retry.test.ts can lock the camelCase contract directly.
+ */
+export function buildAutoRetryRequestedAction(
+  approvedGrant: RuntimeAuthorizationGrantRecord,
+  visibleToolName: string
+): RuntimeAuthorizationRequestedAction {
+  return {
+    capability: approvedGrant.capability,
+    toolName: visibleToolName,
+    summary: `Auto-retry approved grant ${approvedGrant.id}`,
+    filesystem: approvedGrant.filesystem
+      ? {
+          access: approvedGrant.filesystem.access,
+          pathPrefixes: approvedGrant.filesystem.pathPrefixes ?? [],
+        }
+      : undefined,
+    cua: approvedGrant.cua ? { access: approvedGrant.cua.access } : undefined,
+    browser: approvedGrant.browser
+      ? {
+          action: approvedGrant.browser.action,
+          scopeType: approvedGrant.browser.scopeType,
+          origin: approvedGrant.browser.origin,
+          host: approvedGrant.browser.host,
+          registrableDomain: approvedGrant.browser.registrableDomain,
+          // Forward operations[] so the matcher can fail-closed on missing/wrong
+          // op. scopeSource is intentionally not propagated — it's request-only.
+          operations:
+            approvedGrant.browser.operations &&
+            approvedGrant.browser.operations.length > 0
+              ? approvedGrant.browser.operations
+              : undefined,
+        }
+      : undefined,
+    commandline: approvedGrant.commandline
+      ? grantCommandlineToRequestedAction(approvedGrant.commandline)
+      : undefined,
+  }
 }
 
 /**
@@ -129,40 +214,19 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
   // approved grant already passed the action match (otherwise the approval
   // wouldn't have been issued), so this is defensive coverage rather than a
   // gate, but it keeps the canonical helper invariants honest.
-  const requestedAction = {
-    capability: args.approvedGrant.capability,
-    summary: `Auto-retry approved grant ${args.approvedGrant.id}`,
-    detail: undefined,
-    filesystem: args.approvedGrant.filesystem
-      ? {
-          access: args.approvedGrant.filesystem.access,
-          path_prefixes: args.approvedGrant.filesystem.pathPrefixes ?? [],
-        }
-      : undefined,
-    cua: args.approvedGrant.cua
-      ? { access: args.approvedGrant.cua.access }
-      : undefined,
-    browser: args.approvedGrant.browser
-      ? {
-          action: args.approvedGrant.browser.action,
-          scope_type: args.approvedGrant.browser.scopeType,
-          origin: args.approvedGrant.browser.origin,
-          host: args.approvedGrant.browser.host,
-          registrable_domain: args.approvedGrant.browser.registrableDomain,
-          // v3.1: forward operations[] on the wire so the runtime matcher
-          // can fail-closed on missing/wrong op. scopeSource is intentionally
-          // not propagated — it's a request-only signal.
-          operations:
-            args.approvedGrant.browser.operations &&
-            args.approvedGrant.browser.operations.length > 0
-              ? args.approvedGrant.browser.operations
-              : undefined,
-        }
-      : undefined,
-    commandline: args.approvedGrant.commandline
-      ? serializeCommandlinePolicyToWire(args.approvedGrant.commandline)
-      : undefined,
-  } as const
+  //
+  // CRITICAL: the mirror is the APP-shape RuntimeAuthorizationRequestedAction
+  // (camelCase pathPrefixes / scopeType / …) — the exact shape the matcher
+  // (filesystemPolicyMatches / commandlinePolicyMatches / browserPolicyMatches)
+  // reads. It is NOT the snake_case wire spec. Emitting the wire spec here
+  // (path_prefixes / scope_type / serializeCommandlinePolicyToWire) left the
+  // matcher reading `undefined.length` (filesystem TypeError) and silently
+  // no-matching commandline/browser. buildAutoRetryRequestedAction returns the
+  // typed app shape so the compiler enforces it — no `as unknown as` cast.
+  const requestedAction = buildAutoRetryRequestedAction(
+    args.approvedGrant,
+    args.visibleToolName
+  )
 
   const claim = await selectAndClaimRuntimeAuthorizationGrant({
     workspaceId: args.audit.workspaceId,
@@ -173,8 +237,7 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
     runtimeScopeSubjectIds: args.runtimeScopeSubjectIds,
     retryNonce: args.sourceRetryNonce,
     sourceTaskId: args.sourceTaskId,
-    requestedAction:
-      requestedAction as unknown as import("@synapse/shared").RuntimeAuthorizationRequestedAction,
+    requestedAction,
     preferredGrantId: args.approvedGrant.id,
     prepareGrant: async (
       grant: RuntimeAuthorizationGrantRecord

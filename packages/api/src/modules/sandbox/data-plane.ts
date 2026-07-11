@@ -75,6 +75,32 @@ export class EmptyScopeDeniedError extends Error {
 }
 
 /**
+ * Raised when a MUTATING plane method (write/mkdir/move/remove) is invoked under
+ * a ConfinementCtx whose `access` is 'read'. ConfinementCtx.access is a mandatory
+ * boundary (§4.7.1): a read-only grant must never mutate. Enforced fail-closed at
+ * the TOP of each mutating method — this catches direct/internal callers, not just
+ * the CORE dispatch fork. Maps to permission_denied. (The resident path enforces
+ * write via prefix-narrowing in the vfs frame; the bare plane collapses a scope to
+ * prefixes+WHOLE_SCOPE and loses the read/write bit, so it is asserted here.)
+ */
+export class GrantAccessDeniedError extends Error {
+  constructor(
+    message = "operation requires a write grant (grant access is read-only)"
+  ) {
+    super(message)
+    this.name = "GrantAccessDeniedError"
+  }
+}
+
+/** Fail-closed write-access assertion for the mutating plane methods (P7). One
+ *  assertion per method — DRY, no separate write-tool allowlist to drift. */
+function assertWriteAccess(ctx: ConfinementCtx): void {
+  if (ctx.access !== "write") {
+    throw new GrantAccessDeniedError()
+  }
+}
+
+/**
  * Derive the ConfinementCtx scope from the claimed grant (§4.7.1 / F-C).
  *   - filesystem grant → collapsePrefixes(pathPrefixes.map(canonicalVfsPath));
  *     a NON-empty array confines to those prefixes; ∅ ⇒ HARD DENY (throws).
@@ -175,7 +201,14 @@ export interface SandboxDataPlane {
   write(
     path: string,
     bytes: Uint8Array,
-    opts: { createParents?: boolean; expectedSha256?: string | null },
+    opts: {
+      createParents?: boolean
+      expectedSha256?: string | null
+      // Caller stale-write conditions (staleWriteGuard:'strict'). Both are
+      // PRE-CHECKED against a fresh stat/hash of the target and reject on
+      // mismatch; the CAS write itself still uses a self-computed fresh sha.
+      expectedMtimeMs?: number | null
+    },
     ctx: ConfinementCtx
   ): Promise<{ sha256: string; bytesWritten: number; mtimeMs: number }>
   mkdir(
@@ -332,6 +365,7 @@ function buildConfinedHostFs(opts: {
       })
     },
     async write(path, bytes, writeOpts, ctx) {
+      assertWriteAccess(ctx)
       await ensureStarted()
       const canonical = canonicalVfsPath(path)
       // Oversized-write reject BEFORE hashing/IO (per-op cap).
@@ -340,17 +374,47 @@ function buildConfinedHostFs(opts: {
           `write_too_large: ${bytes.length} bytes exceeds cap ${caps.maxWriteBytes}`
         )
       }
+      const strict = opts.descriptor.core.staleWriteGuard === "strict"
       return withScope(ctx, () =>
         backend.withPathLock(canonical, async () => {
           const info = await backend.safeStat(canonical)
           const priorExists = !!info && info.kind === "file"
+          // Fresh prior sha (strict guard only): computed ONCE under the path lock
+          // and reused for BOTH the caller pre-check and the compare-and-swap
+          // guard. Skipped entirely in the 'advisory' posture (no forced CAS).
+          const priorSha =
+            strict && priorExists
+              ? (await backend.streamSha256(canonical)).sha256
+              : null
+          if (strict) {
+            // Stale-write guard (staleWriteGuard:'strict'): PRE-CHECK the caller's
+            // conditions against the FRESH stat/hash and reject on mismatch. The
+            // descriptor advertises this guard, so it must actually be enforced —
+            // previously expected_mtime_ms was ignored and expected_sha256 was only
+            // wired to the CAS. A mismatch is a lost-update signal → StaleWriteError.
+            if (
+              writeOpts.expectedMtimeMs != null &&
+              (!priorExists || info!.mtimeMs !== writeOpts.expectedMtimeMs)
+            ) {
+              throw new StaleWriteError("pre_open", canonical)
+            }
+            if (
+              writeOpts.expectedSha256 != null &&
+              (!priorExists || priorSha !== writeOpts.expectedSha256)
+            ) {
+              throw new StaleWriteError("pre_open", canonical)
+            }
+          }
+          // CAS guard for the write itself: RETAIN the self-computed fresh prior
+          // sha (never null when a prior file exists) so a concurrent writer that
+          // mutates the file between this pre-check and the rename still loses-safe.
+          // A brand-new file uses createOnly (must-not-exist) instead. Only the
+          // 'advisory' posture drops the CAS.
+          const expectedShaForCAS = strict && priorExists ? priorSha : null
           const res = await backend.atomicWrite(canonical, bytes, {
             createOnly: !priorExists,
             createParents: writeOpts.createParents ?? false,
-            expectedShaForCAS:
-              opts.descriptor.core.staleWriteGuard === "strict"
-                ? (writeOpts.expectedSha256 ?? null)
-                : null,
+            expectedShaForCAS,
           })
           return {
             sha256: res.sha256,
@@ -361,6 +425,7 @@ function buildConfinedHostFs(opts: {
       )
     },
     async mkdir(path, mkdirOpts, ctx) {
+      assertWriteAccess(ctx)
       await ensureStarted()
       const canonical = canonicalVfsPath(path)
       return withScope(ctx, () =>
@@ -368,6 +433,7 @@ function buildConfinedHostFs(opts: {
       )
     },
     async move(src, dest, moveOpts, ctx) {
+      assertWriteAccess(ctx)
       await ensureStarted()
       const s = canonicalVfsPath(src)
       const d = canonicalVfsPath(dest)
@@ -380,6 +446,7 @@ function buildConfinedHostFs(opts: {
       )
     },
     async remove(path, removeOpts, ctx) {
+      assertWriteAccess(ctx)
       await ensureStarted()
       const canonical = canonicalVfsPath(path)
       return withScope(ctx, () =>
@@ -703,6 +770,9 @@ function mapPlaneError(err: unknown): McpDispatchResult {
   if (err instanceof EmptyScopeDeniedError) {
     return errResult("permission_denied", err.message)
   }
+  if (err instanceof GrantAccessDeniedError) {
+    return errResult("permission_denied", err.message)
+  }
   if (err instanceof GrantPrefixDeniedError) {
     return errResult("permission_denied", err.message)
   }
@@ -794,13 +864,25 @@ export async function coreInvokeBarePlane(input: {
           return errResult("invalid_request", "content is required")
         }
         const encoding = args["encoding"] === "base64" ? "base64" : "utf-8"
-        const bytes = new Uint8Array(Buffer.from(content, encoding))
+        let bytes: Uint8Array
+        try {
+          // STRICT decode: Buffer.from(x,'base64') silently drops non-alphabet
+          // chars → truncated/garbage bytes written with no error (silent data
+          // corruption). decodeWriteContent validates and throws on malformed b64.
+          bytes = decodeWriteContent(content, encoding)
+        } catch (err) {
+          return errResult(
+            "invalid_request",
+            err instanceof Error ? err.message : String(err)
+          )
+        }
         const res = await plane.write(
           path,
           bytes,
           {
             createParents: asBool(args["create_parents"]) ?? false,
             expectedSha256: asString(args["expected_sha256"]) ?? null,
+            expectedMtimeMs: asInt(args["expected_mtime_ms"]) ?? null,
           },
           ctx
         )
@@ -909,7 +991,16 @@ async function coreEdit(
   if (cur.truncated) {
     return errResult("runtime_constraint", "edit_source_too_large")
   }
-  let text = Buffer.from(cur.bytes).toString("utf-8")
+  // Reject a non-UTF-8 target instead of a lossy decode. Buffer.toString('utf-8')
+  // replaces invalid byte sequences with U+FFFD, so an edit that "found" old_string
+  // in the mangled text would write BACK corrupted bytes over the original binary
+  // (silent data corruption). A fatal TextDecoder throws on the first invalid byte.
+  let text: string
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(cur.bytes)
+  } catch {
+    return errResult("runtime_constraint", `edit_source_not_utf8: ${path}`)
+  }
   for (const raw of rawEdits) {
     if (typeof raw !== "object" || raw === null) {
       return errResult("invalid_request", "each edit must be an object")
@@ -1014,4 +1105,32 @@ function requirePath(value: unknown, name = "path"): string {
   const s = asString(value)
   if (!s) throw new CanonicalPathError("invalid_path", `${name} is required`)
   return s
+}
+
+/**
+ * Strict content decode for fs_write (mirrors the resident builtin's
+ * decodeWriteContent). Node's `Buffer.from(x, 'base64')` is LENIENT: it silently
+ * strips any character outside the base64 alphabet and truncates at the first `=`,
+ * so a corrupt payload decodes to shorter/garbage bytes with NO error and is
+ * written verbatim — silent data corruption. Validate the alphabet, padding, and
+ * length BEFORE decoding and throw on malformed input. utf-8 strings are always
+ * valid JS strings, so they pass straight through. Whitespace inside base64 is
+ * tolerated (stripped) to match the resident surface. The per-op size cap is
+ * enforced downstream in the plane's write() (maxWriteBytes), not here.
+ */
+function decodeWriteContent(
+  content: string,
+  encoding: "utf-8" | "base64"
+): Uint8Array {
+  if (encoding === "utf-8") {
+    return new Uint8Array(Buffer.from(content, "utf8"))
+  }
+  const cleaned = content.replace(/\s+/g, "")
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(cleaned)) {
+    throw new Error("invalid_base64: alphabet/padding check failed")
+  }
+  if (cleaned.length % 4 !== 0) {
+    throw new Error("invalid_base64: clean length is not a multiple of 4")
+  }
+  return new Uint8Array(Buffer.from(cleaned, "base64"))
 }

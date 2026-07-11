@@ -16,7 +16,12 @@ import { fastPathEndpointReady, waitForTunnelEndpoint } from "./service.js"
 
 test("fastPathEndpointReady: no device_runtime service → not reusable", async () => {
   const ok = await fastPathEndpointReady(
-    { sessionId: "s1", runtimeId: "dev-1", tunnelTimeoutMs: 1000 },
+    {
+      sessionId: "s1",
+      runtimeId: "dev-1",
+      mode: "resident",
+      tunnelTimeoutMs: 1000,
+    },
     {
       resolveServiceId: async () => null,
       waitForEndpoint: async () => {
@@ -30,7 +35,7 @@ test("fastPathEndpointReady: no device_runtime service → not reusable", async 
 test("fastPathEndpointReady: empty runtimeId → not reusable (no resolve attempt)", async () => {
   let resolveCalled = false
   const ok = await fastPathEndpointReady(
-    { sessionId: "s1", runtimeId: "", tunnelTimeoutMs: 1000 },
+    { sessionId: "s1", runtimeId: "", mode: "resident", tunnelTimeoutMs: 1000 },
     {
       resolveServiceId: async () => {
         resolveCalled = true
@@ -46,7 +51,12 @@ test("fastPathEndpointReady: empty runtimeId → not reusable (no resolve attemp
 test("fastPathEndpointReady: tunnelTimeoutMs<=0 skips the wait (test opt-out)", async () => {
   let waited = false
   const ok = await fastPathEndpointReady(
-    { sessionId: "s1", runtimeId: "dev-1", tunnelTimeoutMs: 0 },
+    {
+      sessionId: "s1",
+      runtimeId: "dev-1",
+      mode: "resident",
+      tunnelTimeoutMs: 0,
+    },
     {
       resolveServiceId: async () => "svc-1",
       waitForEndpoint: async () => {
@@ -60,7 +70,12 @@ test("fastPathEndpointReady: tunnelTimeoutMs<=0 skips the wait (test opt-out)", 
 
 test("fastPathEndpointReady: endpoint present → reusable", async () => {
   const ok = await fastPathEndpointReady(
-    { sessionId: "s1", runtimeId: "dev-1", tunnelTimeoutMs: 1000 },
+    {
+      sessionId: "s1",
+      runtimeId: "dev-1",
+      mode: "resident",
+      tunnelTimeoutMs: 1000,
+    },
     {
       resolveServiceId: async () => "svc-1",
       waitForEndpoint: async () => {
@@ -73,7 +88,12 @@ test("fastPathEndpointReady: endpoint present → reusable", async () => {
 
 test("fastPathEndpointReady: endpoint never registers (timeout) → NOT reusable → reprovision", async () => {
   const ok = await fastPathEndpointReady(
-    { sessionId: "s1", runtimeId: "dev-1", tunnelTimeoutMs: 1000 },
+    {
+      sessionId: "s1",
+      runtimeId: "dev-1",
+      mode: "resident",
+      tunnelTimeoutMs: 1000,
+    },
     {
       resolveServiceId: async () => "svc-1",
       waitForEndpoint: async () => {
@@ -88,6 +108,33 @@ test("fastPathEndpointReady: endpoint never registers (timeout) → NOT reusable
     false,
     "timeout means the caller must teardown + reprovision"
   )
+})
+
+// P4: a BARE (Mode-B) runtime has no device_runtime service — the fast path must
+// reuse it immediately WITHOUT resolving a device_runtime service (which it would
+// never have → false every turn → needless teardown + reprovision). The
+// resolveServiceId / waitForEndpoint stubs THROW to prove the bare branch never
+// touches the device_runtime lookup.
+test("fastPathEndpointReady: mode='bare' → reusable without any device_runtime lookup", async () => {
+  const ok = await fastPathEndpointReady(
+    {
+      sessionId: "s1",
+      runtimeId: "bare-1",
+      mode: "bare",
+      tunnelTimeoutMs: 1000,
+    },
+    {
+      resolveServiceId: async () => {
+        throw new Error(
+          "bare fast path must NOT resolve a device_runtime service"
+        )
+      },
+      waitForEndpoint: async () => {
+        throw new Error("bare fast path must NOT wait for a tunnel endpoint")
+      },
+    }
+  )
+  assert.equal(ok, true, "bare runtime is reused directly")
 })
 
 // Integration with the REAL registry + REAL waiter (only the DB-backed
@@ -106,7 +153,12 @@ test("fastPathEndpointReady (real registry + waiter): empty → false; populated
         waitForTunnelEndpoint(serviceId, { timeoutMs, pollMs: 50 }),
     }
     const timedOut = await fastPathEndpointReady(
-      { sessionId: "s-real", runtimeId: "dev-real", tunnelTimeoutMs: 400 },
+      {
+        sessionId: "s-real",
+        runtimeId: "dev-real",
+        mode: "resident",
+        tunnelTimeoutMs: 400,
+      },
       realDeps
     )
     assert.equal(timedOut, false, "empty registry → timeout → not reusable")
@@ -116,7 +168,12 @@ test("fastPathEndpointReady (real registry + waiter): empty → false; populated
       internalUrl: "http://127.0.0.1:9/d/x",
     })
     const nowOk = await fastPathEndpointReady(
-      { sessionId: "s-real", runtimeId: "dev-real", tunnelTimeoutMs: 400 },
+      {
+        sessionId: "s-real",
+        runtimeId: "dev-real",
+        mode: "resident",
+        tunnelTimeoutMs: 400,
+      },
       realDeps
     )
     assert.equal(nowOk, true, "endpoint registered → reusable")

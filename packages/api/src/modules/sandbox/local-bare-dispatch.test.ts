@@ -284,6 +284,10 @@ test("B3/B11: dispatchBareRuntimeTool routes to the plane, checks envelope expir
       toolName: "fs_read",
       grant: fsReadGrant(),
       run: db,
+      // These tests simulate an active-provider world (a bare sandbox only exists
+      // when the substrate is enabled); force it so the P2(B) none-gate doesn't
+      // pre-empt the dispatch under the test env's ambient SANDBOX_PROVIDER=none.
+      sandboxProvider: "local",
     })
     assert.equal(okRes.ok, true, "fresh envelope dispatches to the plane")
     const body = JSON.parse(
@@ -307,6 +311,10 @@ test("B3/B11: dispatchBareRuntimeTool routes to the plane, checks envelope expir
       toolName: "fs_read",
       grant: fsReadGrant(),
       run: db,
+      // These tests simulate an active-provider world (a bare sandbox only exists
+      // when the substrate is enabled); force it so the P2(B) none-gate doesn't
+      // pre-empt the dispatch under the test env's ambient SANDBOX_PROVIDER=none.
+      sandboxProvider: "local",
     })
     assert.equal(expired.ok, false)
     assert.equal(expired.error?.code, "runtime_constraint")
@@ -328,6 +336,10 @@ test("B3/B11: dispatchBareRuntimeTool routes to the plane, checks envelope expir
       toolName: "fs_read",
       grant: fsReadGrant(),
       run: db,
+      // These tests simulate an active-provider world (a bare sandbox only exists
+      // when the substrate is enabled); force it so the P2(B) none-gate doesn't
+      // pre-empt the dispatch under the test env's ambient SANDBOX_PROVIDER=none.
+      sandboxProvider: "local",
     })
     assert.equal(wrongTarget.ok, false)
     assert.equal(wrongTarget.error?.code, "permission_denied")
@@ -372,6 +384,10 @@ test("B3: lazy rebuild-on-miss hard-denies a non-active/deleted runtime (registr
       toolName: "fs_read",
       grant: fsReadGrant(),
       run: db,
+      // These tests simulate an active-provider world (a bare sandbox only exists
+      // when the substrate is enabled); force it so the P2(B) none-gate doesn't
+      // pre-empt the dispatch under the test env's ambient SANDBOX_PROVIDER=none.
+      sandboxProvider: "local",
     })
     assert.equal(res.ok, false)
     assert.equal(res.error?.code, "runtime_constraint")

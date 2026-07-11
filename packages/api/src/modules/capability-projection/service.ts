@@ -41,6 +41,8 @@ import {
 } from "../mcp-plugins/tool-resolver.js"
 import { dispatchSyncTool } from "../devices/dispatch.js"
 import { dispatchBareRuntimeTool } from "../sandbox/bare-dispatch.js"
+import { sandboxUnauthorizedDeny } from "../sandbox/service.js"
+import { DEFAULT_SANDBOX_CWD } from "@synapse/device-runtime"
 import { signEnvelopeForDispatch } from "../devices/envelope-signer.js"
 import {
   canonicalizeEnvelopePayload,
@@ -596,6 +598,12 @@ function unionWithRuntime(
         args: sanitizedInput,
         devicePlatform,
         deviceArch,
+        // P5b: a sandbox's omitted-path filesystem tools default to its cwd
+        // (/conversation, a granted mount) rather than "/", so a default read
+        // (list_dir({})) authorizes against a covered mount instead of hard-denying
+        // under pre-authorized-only. Devices keep "/" (unchanged).
+        defaultPathPrefix:
+          row.runtimeKind === "sandbox" ? DEFAULT_SANDBOX_CWD : "/",
       })
     } catch (err) {
       if (err instanceof InvalidExecFileArgsError) {
@@ -756,6 +764,25 @@ function unionWithRuntime(
     }
 
     if (claim.kind === "no_match") {
+      // Pre-authorized-only sandboxes (P5c/d, owner decision): an unauthorized
+      // SANDBOX tool call denies SYNCHRONOUSLY in-turn — NOT via an async
+      // human-approval request. A sandbox has no control-plane session to approve
+      // over, and the turn-end teardown soft-deletes the target runtime before a
+      // later approval could land. Real devices are unaffected (returns null →
+      // the existing async approval-request path below runs unchanged).
+      const sandboxDeny = await sandboxUnauthorizedDeny(
+        row.runtimeId,
+        row.runtimeCapabilityId
+      )
+      if (sandboxDeny) {
+        return withRuntimeToolOrigin(
+          synapseErrorBlock({
+            code: sandboxDeny.code,
+            message: sandboxDeny.message,
+          }),
+          origin
+        )
+      }
       return withRuntimeToolOrigin(
         await requestAuthorizationOrDeny({
           projectInput,
@@ -1359,7 +1386,18 @@ export function buildRequestedAction(args: {
    *  bundled-fallback grant strictly — the runtime manifest matches on
    *  `<platform>-<arch>` exactly. NULL/undefined → no bundled grant. */
   deviceArch?: string | null
+  /**
+   * The path prefix to request when a filesystem tool omits its path/subtree
+   * (P5b). Defaults to "/" (device behaviour, unchanged). A SANDBOX passes its
+   * default cwd ("/conversation", a granted mount) so a default read (e.g.
+   * list_dir({})) authorizes against a covered mount instead of "/", which no
+   * sandbox mount grant covers — otherwise, with pre-authorized-only sandboxes,
+   * an omitted-path read would hard-deny. Pushdown read tools keep "/" (the
+   * matcher ignores their pathPrefixes via scopeIsPushdown).
+   */
+  defaultPathPrefix?: string
 }): RuntimeAuthorizationRequestedAction {
+  const defaultPathPrefix = args.defaultPathPrefix ?? "/"
   const summary = `Tool ${args.toolName} requires authorization`
   const detail = `args: ${JSON.stringify(args.args).slice(0, 200)}`
   const tool = (args.visibleToolName ?? args.toolName).toLowerCase()
@@ -1418,7 +1456,7 @@ export function buildRequestedAction(args: {
         const sub =
           typeof args.args["subtree"] === "string"
             ? (args.args["subtree"] as string)
-            : "/"
+            : defaultPathPrefix
         pathPrefixes = [sub]
       } else if (tool === "fs_move") {
         // fs_move constrains BOTH endpoints — the grant must cover source AND
@@ -1427,17 +1465,17 @@ export function buildRequestedAction(args: {
         const source =
           typeof args.args["source"] === "string"
             ? (args.args["source"] as string)
-            : "/"
+            : defaultPathPrefix
         const destination =
           typeof args.args["destination"] === "string"
             ? (args.args["destination"] as string)
-            : "/"
+            : defaultPathPrefix
         pathPrefixes = [source, destination]
       } else {
         const path =
           typeof args.args["path"] === "string"
             ? (args.args["path"] as string)
-            : "/"
+            : defaultPathPrefix
         pathPrefixes = [path]
       }
       // VFS paths are virtual-absolute (rooted at "/"); normalizePathPrefix

@@ -283,6 +283,67 @@ export async function isSandboxRuntimeAlive(
   }
 }
 
+/** Injectable seam for {@link isSandboxRuntime} / {@link sandboxUnauthorizedDeny}
+ *  so the sandbox-vs-device discriminator is unit-testable without a DB. */
+export interface SandboxRuntimeLookupDeps {
+  getSandboxById?: (
+    id: string,
+    run?: Executor
+  ) => Promise<repo.SandboxRow | null>
+}
+
+/**
+ * Discriminator: is this runtime a SANDBOX (runtimes.kind='sandbox') rather than
+ * a real paired device? The CTI `sandboxes` detail row shares its primary key
+ * with the `runtimes` supertype (sandboxes.id = runtimes.id, fk_sandboxes_runtime_root),
+ * so a resolvable sandboxes row for `runtimeId` means kind='sandbox'; no row (a
+ * device, or an unknown id) means it is not a sandbox.
+ */
+export async function isSandboxRuntime(
+  runtimeId: string,
+  deps: SandboxRuntimeLookupDeps = {}
+): Promise<boolean> {
+  if (!runtimeId) return false
+  const getRow = deps.getSandboxById ?? repo.getSandboxById
+  return (await getRow(runtimeId)) !== null
+}
+
+export interface SandboxUnauthorizedDeny {
+  code: "permission_denied"
+  message: string
+}
+
+/**
+ * PRE-AUTHORIZED-ONLY gate (owner decision, P5c/d): ephemeral sandboxes do NOT
+ * use async human approval. When a tool call finds no matching grant AND the
+ * target runtime is a SANDBOX, dispatch must fail SYNCHRONOUSLY in-turn
+ * (permission_denied) instead of minting a runtime-authorization REQUEST — a
+ * sandbox request would (i) need a control-plane approval session the bare plane
+ * never has and (ii) target a runtime the turn-end teardown soft-deletes before
+ * anyone could approve it. Real devices are unaffected: returns null for a
+ * device runtime so the caller keeps the existing async approval-request path.
+ *
+ * CROSS-FILE HOOK (the branch point lives in capability-projection, which this
+ * agent does not own): capability-projection/service.ts `requestAuthorizationOrDeny`
+ * (invoked from the `claim.kind === "no_match"` branch of dispatchRuntimeTool)
+ * must call this FIRST and, when it returns non-null, return
+ * `synapseErrorBlock({ code: "permission_denied", message })` INSTEAD of calling
+ * `createRuntimeAuthorizationRequest(...)`.
+ */
+export async function sandboxUnauthorizedDeny(
+  runtimeId: string,
+  runtimeCapabilityId: string,
+  deps: SandboxRuntimeLookupDeps = {}
+): Promise<SandboxUnauthorizedDeny | null> {
+  if (!(await isSandboxRuntime(runtimeId, deps))) return null
+  return {
+    code: "permission_denied",
+    message:
+      `sandbox capability ${runtimeCapabilityId} is not pre-authorized for ` +
+      `this call; ephemeral sandboxes require pre-authorization (no async approval)`,
+  }
+}
+
 /**
  * Startup reconciler: tear down sandboxes left dangling by a crash so the next
  * turn re-provisions cleanly. teardownSandbox() resolves a killable SandboxRef
@@ -543,9 +604,19 @@ export async function provisionSandbox(
     (await isSandboxRuntimeAlive(existing))
   ) {
     const runtimeIdForEndpoint = runtimeIdFromMounts(existing)
+    // Mode gates the endpoint probe: 'bare' has no device_runtime service to
+    // resolve (P4), 'resident' must wait for its tunnel endpoint. A missing
+    // sandboxes row (shouldn't happen for a live all-active sandbox) defaults to
+    // 'resident' — fail-safe toward the endpoint-probe path.
+    const sandboxMode =
+      (runtimeIdForEndpoint
+        ? await repo.getSandboxById(runtimeIdForEndpoint)
+        : null
+      )?.mode ?? "resident"
     fastPathOk = await fastPathEndpointReady({
       sessionId,
       runtimeId: runtimeIdForEndpoint,
+      mode: sandboxMode,
       tunnelTimeoutMs: options.tunnelTimeoutMs ?? 30_000,
     })
   }
@@ -962,9 +1033,22 @@ function defaultFastPathEndpointDeps(): FastPathEndpointDeps {
  * testable without standing up a full sandbox.
  */
 export async function fastPathEndpointReady(
-  args: { sessionId: string; runtimeId: string; tunnelTimeoutMs: number },
+  args: {
+    sessionId: string
+    runtimeId: string
+    mode: "resident" | "bare"
+    tunnelTimeoutMs: number
+  },
   deps: FastPathEndpointDeps = defaultFastPathEndpointDeps()
 ): Promise<boolean> {
+  // P4 (bare fast-path): a bare (Mode-B) runtime has NO device_runtime service
+  // — its dispatch rides the in-process/remote data plane, so resolveServiceId
+  // would return null and force a teardown + reprovision EVERY turn. The runtime
+  // was already proven alive to reach here (isSandboxRuntimeAlive), and bare
+  // dispatch self-heals via lazy plane rebuild (a missing bare_dataplane row
+  // already hard-denies at dispatch). So reuse it directly rather than probing a
+  // device_runtime endpoint it will never have. No bare_dataplane liveness ping.
+  if (args.mode === "bare") return true
   const serviceId = args.runtimeId
     ? await deps.resolveServiceId(args.runtimeId)
     : null

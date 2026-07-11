@@ -15,6 +15,7 @@ import {
   type SubjectRef,
 } from "@synapse/shared"
 import { serializeCommandlinePolicyToWire } from "@synapse/shared/access/policies"
+import { DEFAULT_SANDBOX_CWD } from "@synapse/device-runtime"
 import type {
   RuntimeAuthorizationGrantRetention,
   RuntimeAuthorizationRequestedAction,
@@ -627,10 +628,15 @@ export function commandlinePolicyMatches(
   // hand the sandbox policy + the requested command's cwd to the shared matcher,
   // which ignores command text and only checks the mount-point containment.
   if (granted.executor === "sandbox") {
-    const requestedDir =
-      requested.executor === "exec_file"
-        ? requested.workingDirectory
-        : requested.workingDirectory
+    // DEFAULT CWD (P5a): a sandbox command that omits working_directory means
+    // "the sandbox default" — the runtime/data-plane run it in DEFAULT_SANDBOX_CWD
+    // (/conversation, see data-plane cwd = payload.cwd || DEFAULT_SANDBOX_CWD).
+    // Supply that same default HERE, before matching, so an omitted-cwd command
+    // authorizes against the jail default instead of being force-denied. The
+    // shared matcher (sandboxPolicyAllows) stays fail-closed on a truly unknown
+    // cwd — we only inject the exact cwd the executor would itself use, and
+    // ONLY in this sandbox (granted.executor==='sandbox') branch.
+    const requestedDir = requested.workingDirectory ?? DEFAULT_SANDBOX_CWD
     return Boolean(
       sharedCommandlinePolicyAllows(
         {

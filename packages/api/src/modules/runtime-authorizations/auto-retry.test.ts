@@ -7,7 +7,16 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 
-import { cuaFocusScopeForAutoRetry } from "./auto-retry.js"
+import {
+  cuaFocusScopeForAutoRetry,
+  buildAutoRetryRequestedAction,
+} from "./auto-retry.js"
+import {
+  filesystemPolicyMatches,
+  browserPolicyMatches,
+  commandlinePolicyMatches,
+  type RuntimeAuthorizationGrantRecord,
+} from "./service.js"
 
 test("auto-retry helper is exported with the contract the approval flow expects", async () => {
   const mod = await import("./auto-retry.js")
@@ -86,6 +95,100 @@ test("end-to-end wiring: grant record's sourceRuntimeSessionId drives cua_focus_
     got,
     "session:agent-session-abc",
     "auto-retry must inherit the source session id end-to-end so the cua envelope it dispatches survives the device-side fail-closed check"
+  )
+})
+
+// ─────────────────────────── P5e: wire↔app shape ────────────────────────────
+// The auto-retry requestedAction is the APP-shape RuntimeAuthorizationRequestedAction
+// the server-side matcher reads (camelCase pathPrefixes / scopeType), NOT the
+// snake_case wire spec. The old code emitted the wire shape (path_prefixes /
+// scope_type / serializeCommandlinePolicyToWire), so the filesystem matcher read
+// `requested.pathPrefixes` = undefined → `undefined.length` TypeError, and
+// commandline/browser silently no-matched. These tests LOCK the camelCase shape.
+
+function fsGrant(): RuntimeAuthorizationGrantRecord {
+  return {
+    id: "grant-fs-1",
+    capability: "filesystem",
+    filesystem: { access: "write", pathPrefixes: ["/conversation"] },
+  } as unknown as RuntimeAuthorizationGrantRecord
+}
+
+test("P5e: filesystem requestedAction from an approved grant matches WITHOUT throwing (camelCase locked)", () => {
+  const grant = fsGrant()
+  const action = buildAutoRetryRequestedAction(grant, "fs_write")
+
+  // The exact field the matcher reads. A regression to the wire key
+  // `path_prefixes` makes this undefined → the matcher's `.length` throws.
+  assert.deepEqual(action.filesystem?.pathPrefixes, ["/conversation"])
+  assert.equal(
+    (action.filesystem as unknown as { path_prefixes?: unknown })
+      ?.path_prefixes,
+    undefined,
+    "no snake_case wire key must leak into the app-shape action"
+  )
+
+  let threw: unknown = null
+  let matched = false
+  try {
+    matched = filesystemPolicyMatches(grant, action)
+  } catch (err) {
+    threw = err
+  }
+  assert.equal(
+    threw,
+    null,
+    "matcher must not throw on the reconstructed action"
+  )
+  assert.equal(matched, true, "the grant covers its own mirrored action")
+})
+
+test("P5e: browser requestedAction is camelCase and matches its own grant", () => {
+  const grant = {
+    id: "grant-br-1",
+    capability: "browser",
+    browser: {
+      action: "read",
+      scopeType: "host",
+      host: "example.com",
+      operations: ["take_snapshot"],
+    },
+  } as unknown as RuntimeAuthorizationGrantRecord
+
+  const action = buildAutoRetryRequestedAction(grant, "browser_read")
+  assert.equal(action.browser?.scopeType, "host")
+  assert.equal(
+    (action.browser as unknown as { scope_type?: unknown })?.scope_type,
+    undefined,
+    "no snake_case wire key must leak"
+  )
+  assert.equal(browserPolicyMatches(grant, action), true)
+})
+
+test("P5e: commandline requestedAction is camelCase (exec_file) and matches its own grant", () => {
+  const grant = {
+    id: "grant-cmd-1",
+    capability: "commandline",
+    commandline: {
+      executor: "exec_file",
+      commandMatchType: "argv_exact",
+      program: "ls",
+      argvPrefix: ["-la"],
+      workingDirectory: "/conversation",
+    },
+  } as unknown as RuntimeAuthorizationGrantRecord
+
+  const action = buildAutoRetryRequestedAction(grant, "exec_file")
+  assert.equal(action.commandline?.executor, "exec_file")
+  // No serializeCommandlinePolicyToWire → no snake_case command_match_type.
+  assert.equal(
+    (action.commandline as unknown as { command_match_type?: unknown })
+      ?.command_match_type,
+    undefined
+  )
+  assert.equal(
+    commandlinePolicyMatches(grant, action, { platform: "linux" }),
+    true
   )
 })
 

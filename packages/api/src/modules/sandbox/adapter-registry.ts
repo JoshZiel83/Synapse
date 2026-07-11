@@ -714,6 +714,30 @@ function makeDockerBareRefHandle(
 let warnedNullResolve = false
 
 /**
+ * The SINGLE `${provider}:${mode}` → adapter-factory map (P8B). Both the
+ * provision resolver (resolveSandboxAdapter) and the persisted-row resolver
+ * (adapterForRow) consume it, so the 4-key adapter set is declared ONCE and the
+ * fail-closed default falls out of a single lookup — there is no second switch
+ * to drift. e2b/cube (residual) stay UNregistered in P4a; a miss is the
+ * fail-closed case both consumers key off of.
+ */
+const ADAPTER_FACTORIES: Record<
+  string,
+  (deps?: {
+    hostProvider?: HostProvider
+    dockerSpawnImpl?: SpawnImpl
+  }) => SandboxAdapter
+> = {
+  "local:resident": (deps) =>
+    makeLocalResidentAdapter({ hostProvider: deps?.hostProvider }),
+  "docker:resident": (deps) =>
+    makeDockerResidentAdapter({ dockerSpawnImpl: deps?.dockerSpawnImpl }),
+  "local:bare": () => makeLocalBareAdapter(),
+  "docker:bare": (deps) =>
+    makeDockerBareAdapter({ dockerSpawnImpl: deps?.dockerSpawnImpl }),
+}
+
+/**
  * Resolve the adapter for the CURRENT config (provision path). Returns null when
  * the provider is disabled ('none') or unregistered — warn-once, mirroring the
  * embedding/registry pattern. `${provider}:${mode}` keying: SANDBOX_MODE=bare now
@@ -725,35 +749,31 @@ export function resolveSandboxAdapter(
   deps?: { hostProvider?: HostProvider; dockerSpawnImpl?: SpawnImpl }
 ): SandboxAdapter | null {
   const key = `${provider}:${mode}`
-  switch (key) {
-    case "local:resident":
-      return makeLocalResidentAdapter({ hostProvider: deps?.hostProvider })
-    case "docker:resident":
-      return makeDockerResidentAdapter({
-        dockerSpawnImpl: deps?.dockerSpawnImpl,
-      })
-    case "local:bare":
-      return makeLocalBareAdapter()
-    case "docker:bare":
-      return makeDockerBareAdapter({ dockerSpawnImpl: deps?.dockerSpawnImpl })
-    // e2b/cube (residual) are NOT registered in P4a.
-    default: {
-      if (provider !== "none" && !warnedNullResolve) {
-        warnedNullResolve = true
-        log.warn(
-          { provider, mode, key },
-          `no sandbox adapter registered for '${key}'; sandbox provisioning is unavailable`
-        )
-      }
-      return null
-    }
+  const factory = ADAPTER_FACTORIES[key]
+  if (factory) return factory(deps)
+  // e2b/cube (residual) are NOT registered in P4a.
+  if (provider !== "none" && !warnedNullResolve) {
+    warnedNullResolve = true
+    log.warn(
+      { provider, mode, key },
+      `no sandbox adapter registered for '${key}'; sandbox provisioning is unavailable`
+    )
   }
+  return null
 }
 
 /**
  * Resolve a teardown/liveness/reconnect adapter from a PERSISTED row's
  * (adapter, mode) — NEVER current config (inv-45). Its create() is never called
  * (connect-only), and for docker it uses the env-free reconnect backend (F-A).
+ *
+ * FAIL-CLOSED (P8B): an unknown persisted adapter key THROWS rather than
+ * silently downgrading to a local resident adapter. A silent downgrade would run
+ * teardown / liveness / reconnect on the WRONG substrate (e.g. treat a persisted
+ * docker/e2b row as a local in-process runtime), potentially mis-reaping or
+ * declaring a live sandbox dead. Throwing is safe because every teardown caller
+ * try/catches with a hostPid fallback, so an unrecognized legacy row degrades to
+ * that fallback instead of a wrong-substrate action.
  */
 export function adapterForRow(
   adapter: string,
@@ -761,26 +781,11 @@ export function adapterForRow(
   deps?: { dockerSpawnImpl?: SpawnImpl }
 ): SandboxAdapter {
   const key = `${adapter}:${mode}`
-  switch (key) {
-    case "local:resident":
-      return makeLocalResidentAdapter()
-    case "docker:resident":
-      return makeDockerResidentAdapter({
-        dockerSpawnImpl: deps?.dockerSpawnImpl,
-      })
-    case "local:bare":
-      return makeLocalBareAdapter()
-    case "docker:bare":
-      return makeDockerBareAdapter({ dockerSpawnImpl: deps?.dockerSpawnImpl })
-    default:
-      // Unknown/deferred (e2b/cube): fall back to a resident adapter of the same
-      // provider so a legacy row is still killable. docker rides the env-free
-      // reconnect backend either way.
-      if (adapter === "docker") {
-        return makeDockerResidentAdapter({
-          dockerSpawnImpl: deps?.dockerSpawnImpl,
-        })
-      }
-      return makeLocalResidentAdapter()
+  const factory = ADAPTER_FACTORIES[key]
+  if (!factory) {
+    throw new SandboxBackendError(
+      `adapterForRow: unknown persisted adapter key '${key}' (fail-closed; no legacy downgrade)`
+    )
   }
+  return factory(deps)
 }

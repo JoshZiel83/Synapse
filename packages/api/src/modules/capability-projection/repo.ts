@@ -9,6 +9,7 @@
 
 import { sql } from "kysely"
 import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
+import { config } from "../../config/index.js"
 import {
   db,
   type Executor,
@@ -32,6 +33,15 @@ export interface RuntimeCapabilityToolRow {
    * create().
    */
   serviceKind: "device_runtime" | "remote_agent_daemon" | "bare_dataplane"
+  /**
+   * The owning runtime supertype's kind. Gated by SANDBOX_PROVIDER (P2): when the
+   * substrate is disabled ('none') a kind='sandbox' runtime's tools are excluded
+   * from this projection, so a returned row is always 'device' in that config.
+   * The gate keys on THIS (runtime kind), NEVER serviceKind — a resident sandbox
+   * mints serviceKind='device_runtime' identical to a real device, so a
+   * serviceKind filter would wrongly hide real device tools.
+   */
+  runtimeKind: "device" | "sandbox"
   runtimeExposureId: string
   runtimeCapabilityId: string
   runtimeToolId: string
@@ -97,7 +107,8 @@ export type CapabilityProjectionRuntimeContextDb = KyselyDb
  */
 export async function selectRuntimeCapabilityToolsForSubjects(
   params: LoadRuntimeToolsParams,
-  run: Executor = db
+  run: Executor = db,
+  opts: { sandboxProvider?: string } = {}
 ): Promise<RuntimeCapabilityToolRow[]> {
   if (params.subjectIds.length === 0) return []
   // distinctOn collapses duplicate rows when multiple subject grants cover
@@ -140,6 +151,7 @@ export async function selectRuntimeCapabilityToolsForSubjects(
       sql<string>`COALESCE(d.title, 'Sandbox')`.as("runtimeName"),
       "dx.serviceId as runtimeServiceId",
       "rs.serviceKind as serviceKind",
+      "r.kind as runtimeKind",
       "dx.id as runtimeExposureId",
       "dc.id as runtimeCapabilityId",
       "dt.id as runtimeToolId",
@@ -188,6 +200,15 @@ export async function selectRuntimeCapabilityToolsForSubjects(
     .where(
       sql<boolean>`'use'::workspace_resource_grant_permission = ANY(resource_grant.permissions)`
     )
+  // P2 (SANDBOX_PROVIDER=none): the sandbox substrate is disabled, so a
+  // kind='sandbox' runtime's tools must NOT project (their dispatch is also
+  // refused in bare-dispatch). Gate on the runtime KIND, NEVER serviceKind — a
+  // resident sandbox mints serviceKind='device_runtime' identical to a real
+  // device, so a serviceKind filter would wrongly hide real device tools.
+  const sandboxProvider = opts.sandboxProvider ?? config.sandbox.provider
+  if (sandboxProvider === "none") {
+    query = query.where("r.kind", "<>", "sandbox")
+  }
   if (params.runtimeScopeSubjectIds.length > 0) {
     query = query.where((eb) =>
       eb.or([
@@ -213,6 +234,7 @@ export async function selectRuntimeCapabilityToolsForSubjects(
       runtimeName: row.runtimeName,
       runtimeServiceId: row.runtimeServiceId,
       serviceKind: row.serviceKind,
+      runtimeKind: row.runtimeKind,
       runtimeExposureId: row.runtimeExposureId,
       runtimeCapabilityId: row.runtimeCapabilityId,
       runtimeToolId: row.runtimeToolId,

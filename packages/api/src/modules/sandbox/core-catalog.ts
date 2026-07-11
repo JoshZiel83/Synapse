@@ -21,8 +21,66 @@ import {
   filesystemCoreToolDefs,
   COMMANDLINE_CORE_TOOL_DEFS,
 } from "@synapse/device-runtime"
-import type { DeviceCatalogExposure } from "@synapse/device-protocol"
+import type {
+  DeviceCatalogExposure,
+  DeviceCatalogTool,
+} from "@synapse/device-protocol"
 import type { SandboxCapabilityDescriptor } from "./model.js"
+
+/**
+ * REDUCED-FIDELITY surface (owner decision): the bare data plane is a documented
+ * safety subset of the resident device builtin — NOT a byte-identical drop-in. The
+ * catalog schema below is trimmed so the ADVERTISED contract matches what
+ * `coreInvokeBarePlane` actually honors, rather than copying the resident schema
+ * verbatim and lying about params it ignores. Known, deliberate drifts:
+ *   - fs_read: no `line_range` (bare returns raw byte windows, no line slicing).
+ *   - fs_stat: no `include_sha256` (bare stat returns no hash).
+ *   - result field names differ (bare `total_size` vs resident `total_bytes`, no
+ *     history/index families) — those are documented, NOT implemented here.
+ * Each entry maps a tool name → the params stripped from its BARE input_schema
+ * (each verified ignored by coreInvokeBarePlane before removal).
+ */
+const REDUCED_FIDELITY_STRIP: Readonly<Record<string, readonly string[]>> = {
+  fs_read: ["line_range"],
+  fs_stat: ["include_sha256"],
+}
+
+/** Deep-clone a catalog tool and delete the named keys from its
+ *  input_schema.properties. structuredClone is MANDATORY: filesystemCoreToolDefs
+ *  hands back input_schema BY REFERENCE to the shared resident TOOLS[] table, so a
+ *  direct delete would corrupt the schema the device itself serves. */
+function stripUnhonoredParams(
+  tool: DeviceCatalogTool,
+  paramsToStrip: readonly string[]
+): DeviceCatalogTool {
+  const clone = structuredClone(tool)
+  const schema = clone.input_schema as {
+    properties?: Record<string, unknown>
+  }
+  if (schema && typeof schema === "object" && schema.properties) {
+    for (const p of paramsToStrip) {
+      delete schema.properties[p]
+    }
+  }
+  return clone
+}
+
+/** The descriptor-gated, reduced-fidelity bare filesystem tool set: derive DOWN
+ *  from the resident builtin, strip params the bare plane ignores, and OMIT
+ *  fs_search when the plane has no ripgrep (descriptor.core.search === false) so
+ *  it is never advertised as a dead/unbacked tool (fail-closed). */
+function bareFilesystemTools(
+  descriptor: SandboxCapabilityDescriptor
+): DeviceCatalogTool[] {
+  const tools = filesystemCoreToolDefs().map((t) => {
+    const strip = REDUCED_FIDELITY_STRIP[t.name]
+    return strip ? stripUnhonoredParams(t, strip) : t
+  })
+  if (!descriptor.core.search) {
+    return tools.filter((t) => t.name !== "fs_search")
+  }
+  return tools
+}
 
 /** Stable keys the bare catalog uses (mirror the resident builtin exposures). */
 export const BARE_FILESYSTEM_EXPOSURE_KEY = "builtin/filesystem"
@@ -59,7 +117,10 @@ export function buildBareCoreCatalog(
           indexedSearch: false,
         },
       },
-      tools: filesystemCoreToolDefs(),
+      // Reduced-fidelity schema (see REDUCED_FIDELITY_STRIP): trimmed to what
+      // coreInvokeBarePlane honors; fs_search omitted when the plane has no
+      // ripgrep. NOT the resident schema copied verbatim.
+      tools: bareFilesystemTools(descriptor),
     },
   ]
   // commandline ONLY when the adapter can confine commands (F-D + fail-closed).

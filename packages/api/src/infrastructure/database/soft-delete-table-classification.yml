@@ -1,6 +1,7 @@
 _doc: >-
-  Soft-delete classification manifest — single source of truth (design §7.6). Edit by hand; derive-fk-policy.mjs is the
-  CI gate. Generated initially by bootstrap-soft-delete-manifest.mjs.
+  Soft-delete classification manifest — single source of truth (design §7.6). Hand-maintained; derive-fk-policy.mjs is the
+  CI gate. (The one-shot bootstrap generator was removed after the runtime/sandbox rewrite — it hard-coded the pre-rewrite
+  device_* roots and would emit a broken manifest if re-run; this YAML is now the authoritative, hand-edited source.)
 tables:
   access_subjects:
     class: reference

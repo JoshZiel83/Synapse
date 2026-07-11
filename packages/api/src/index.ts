@@ -78,6 +78,12 @@ import {
   recoverFailedSandboxMounts,
   reconcileSandboxes,
 } from "./modules/sandbox/index.js"
+import { reapDockerSandboxOrphans } from "./modules/sandbox/docker-sandbox-backend.js"
+import {
+  defaultDbh,
+  hasDockerMountHistory,
+  listReconcileCandidateSessionIds,
+} from "./modules/sandbox/repo.js"
 import { registerActorStateCallableToolPlugins } from "./modules/ai/tools.js"
 import { registerActorFileToolPlugins } from "./modules/ai/file-tools.js"
 import { registerCallableToolPlugins } from "./modules/ai/session-tools.js"
@@ -391,6 +397,34 @@ async function main() {
       await reconcileSandboxes()
     } catch (err) {
       console.error("Failed to reconcile sandboxes:", err)
+    }
+  } else {
+    // SANDBOX_PROVIDER=none (P2, owner decision): `none` is a PROVISIONING
+    // selector, NOT a teardown switch. We do NOT provision, reconcile, tear down,
+    // or soft-delete any existing DB sandbox. We DO still reap TRULY-orphaned
+    // docker containers a crash left behind — a container carrying our session
+    // label whose session has no live sandbox / mount row — while SHIELDING every
+    // live DB sandbox session so a real (merely dormant) sandbox's container is
+    // never removed. This is the orphan reaper split OUT of the (destructive)
+    // reconcile teardown loop, which stays gated off under 'none'.
+    try {
+      const run = defaultDbh()
+      // Same evidence gate reconcileSandboxes uses, minus its provider===docker
+      // arm (always false under 'none'): only touch docker when this host shows
+      // docker-sandbox history, so a pure-local/never-docker host no-ops.
+      if (await hasDockerMountHistory(run)) {
+        const liveSessionIds = new Set(
+          await listReconcileCandidateSessionIds(run)
+        )
+        const { removed } = await reapDockerSandboxOrphans(liveSessionIds)
+        if (removed.length > 0) {
+          console.warn(
+            `[sandbox] none-boot orphan reap: removed ${removed.length} label-only docker orphan(s): ${removed.join(", ")}`
+          )
+        }
+      }
+    } catch (err) {
+      console.error("Failed to reap sandbox orphans on none boot:", err)
     }
   }
 
