@@ -1,7 +1,7 @@
 // FrpTunnelAdapter — frp implementation of @synapse/device-protocol's
 // TunnelAdapter (§4.4). v3.0 ships the supervision side: the device runtime
 // spawns frpc with a per-service config, and the adapter exposes the
-// resulting internal URL (which the API resolves via DeviceTunnelRegistry).
+// resulting internal URL (which the API resolves via RuntimeEndpointRegistry).
 //
 // FAIL-HARD POLICY: if the operator configured a tunnel (via
 // SYNAPSE_TUNNEL_*) and the frpc binary can't actually start, this adapter

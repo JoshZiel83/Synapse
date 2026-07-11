@@ -121,9 +121,10 @@ export function readMcpToolContentBlocks(
   return content
 }
 
-// PR #14: surface a [device:<name>] / [plugin:<name>] / [skill:<name>]
-// origin badge in the tool description so reverse-MCP callers can attribute
-// results back to the source. Reads the structured ToolRef (Layer A).
+// PR #14: surface a [runtime:<name>] / [plugin:<name>] origin badge in the tool
+// description so reverse-MCP callers can attribute results back to the source
+// (ToolSource kinds are system | plugin | runtime; system emits no badge).
+// Reads the structured ToolRef (Layer A).
 function describeToolOrigin(ref: ToolRef): string {
   switch (ref.source.kind) {
     case "runtime":

@@ -80,18 +80,19 @@ export async function loadSessionContext(
 }
 
 /**
- * Resolve the device_runtime service id for a device (the id dispatchSyncTool
- * keys the tunnel registry on). Returns null if the device has no device_runtime
- * service yet. Mirrors the lookup the docker bootstrap poller + dispatch use.
+ * Resolve the device_runtime service id for a runtime (the id dispatchSyncTool
+ * keys the endpoint registry on). Returns null if the runtime has no
+ * device_runtime service yet. Mirrors the lookup the docker bootstrap poller +
+ * dispatch use.
  */
 export async function resolveDeviceRuntimeServiceId(
-  deviceId: string,
+  runtimeId: string,
   run: Executor = db
 ): Promise<string | null> {
   const svc = await run
     .selectFrom("runtimeServices")
     .select("id")
-    .where("runtimeId", "=", deviceId)
+    .where("runtimeId", "=", runtimeId)
     .where("serviceKind", "=", "device_runtime")
     .orderBy("createdAt", "desc")
     .limit(1)
@@ -100,18 +101,18 @@ export async function resolveDeviceRuntimeServiceId(
 }
 
 /**
- * One readiness tick for waitForCatalog: is the device's filesystem builtin
+ * One readiness tick for waitForCatalog: is the runtime's filesystem builtin
  * exposure healthy yet? The service keeps the poll loop and calls this each tick
  * (preserving the predicate set: builtinKind=filesystem + runtimeStatus=healthy).
  */
 export async function isFilesystemExposureHealthy(
-  deviceId: string,
+  runtimeId: string,
   run: Executor = db
 ): Promise<boolean> {
   const ready = await run
     .selectFrom("runtimeExposures")
     .select("id")
-    .where("runtimeId", "=", deviceId)
+    .where("runtimeId", "=", runtimeId)
     .where("builtinKind", "=", "filesystem")
     .where("runtimeStatus", "=", "healthy")
     .limit(1)
@@ -840,21 +841,6 @@ export async function getLiveSandboxBySession(
     .limit(1)
     .executeTakeFirst()
   return row ? toSandboxRow(row) : null
-}
-
-/** Whether this host has EVER minted a docker sandbox (any sandboxes row with
- *  adapter='docker'). ORed into the reaper's docker-coverage gate (S10). */
-export async function hasDockerSandboxHistory(
-  run: Executor = db
-): Promise<boolean> {
-  return Boolean(
-    await run
-      .selectFrom("sandboxes")
-      .select("id")
-      .where("adapter", "=", "docker")
-      .limit(1)
-      .executeTakeFirst()
-  )
 }
 
 /** Revoke all ACTIVE runtime-authorization grants for a runtime in a workspace. */

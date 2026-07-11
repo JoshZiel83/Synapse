@@ -136,10 +136,11 @@ export async function deleteDevice(
   workspaceId: string,
   deviceId: string
 ): Promise<void> {
-  // Soft delete (design §5.3): devices are never hard-deleted in production —
-  // both user-registered devices and per-session sandbox devices flip deleted_at
-  // and KEEP their device_* child rows (services/capabilities/operations) for
-  // audit. Child rows are hidden from projection via the device-liveness filter
+  // Soft delete (design §5.3): runtimes are never hard-deleted in production —
+  // softDeleteDevice flips runtimes.deleted_at (the SOLE runtime soft-delete
+  // root; the devices table has no deleted_at of its own) and KEEPS the runtime
+  // detail + its runtime_* child rows (services/capabilities/operations) for
+  // audit. Those rows are hidden from projection via the runtimes-liveness folds
   // and the *_live views (§8.6). Hard delete is forbidden by sd_reject_delete;
   // physical removal happens only via offline purge.
   const updated = await softDeleteDevice(workspaceId, deviceId)

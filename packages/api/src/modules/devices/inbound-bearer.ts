@@ -12,10 +12,16 @@
 //   - domain-separated ("runtime-inbound:") so it can never collide with another
 //     HMAC use of the same server secret (e.g. the OAuth state MAC).
 //
-// The API uses it in two places: it injects the value into a direct runtime's env
-// at create() (→ the MCP host's requiredInboundAuth), and it appends it as the
-// dispatch Authorization header for a direct network endpoint. The runtime side
-// only ever COMPARES — it never derives (it has no server secret).
+// ⚠️ NOT YET WIRED. This is the auth spine for a DIRECT off-box endpoint, which only
+// the envd/E2B adapter (P4b) introduces — that phase is deferred (no E2B account to
+// verify against), so there is currently NO producer: nothing injects this into a
+// runtime's env and dispatchSyncTool sends no Authorization header (docker resident
+// stays on frp/indirect, local is loopback, bare is co-located — none are direct
+// off-box). When P4b lands it will (a) inject this into the direct runtime's env →
+// the MCP host's requiredInboundAuth, and (b) append it as the dispatch Authorization
+// header. The runtime side only ever COMPARES — it never derives (no server secret).
+// Kept (with its unit test + the MCP-host fail-closed gate) as the reviewed, tested
+// primitive P4b consumes; delete both if P4b is abandoned.
 
 import { createHmac } from "node:crypto"
 import { config } from "../../config/index.js"

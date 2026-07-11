@@ -3652,7 +3652,7 @@ CREATE TABLE runtime_authorization_grants (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_tool_call_task_runtime_authorization_device
+CREATE INDEX idx_tool_call_task_runtime_authorization_runtime
   ON tool_call_task_runtime_authorization(runtime_id, task_id);
 CREATE INDEX idx_tool_call_task_runtime_authorization_dedupe
   ON tool_call_task_runtime_authorization(dedupe_key);
@@ -3852,7 +3852,7 @@ CREATE TABLE runtime_pairing_sessions (
 );
 CREATE INDEX idx_runtime_pairing_sessions_workspace
   ON runtime_pairing_sessions(workspace_id, created_at DESC);
-CREATE INDEX idx_runtime_pairing_sessions_device
+CREATE INDEX idx_runtime_pairing_sessions_runtime
   ON runtime_pairing_sessions(runtime_id, status, created_at DESC)
   WHERE runtime_id IS NOT NULL;
 
@@ -3914,7 +3914,7 @@ CREATE TABLE runtime_services (
     OR (service_kind = 'device_runtime')
   )
 );
-CREATE INDEX idx_runtime_services_device ON runtime_services(runtime_id, service_kind);
+CREATE INDEX idx_runtime_services_runtime ON runtime_services(runtime_id, service_kind);
 -- One daemon-association row per underlying machine.
 CREATE UNIQUE INDEX uq_runtime_services_daemon_machine
   ON runtime_services(remote_agent_machine_id)
@@ -3951,7 +3951,7 @@ CREATE TABLE runtime_control_plane_sessions (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX idx_runtime_control_plane_sessions_device
+CREATE INDEX idx_runtime_control_plane_sessions_runtime
   ON runtime_control_plane_sessions(runtime_id, status, started_at DESC);
 CREATE INDEX idx_runtime_control_plane_sessions_service
   ON runtime_control_plane_sessions(service_id, status, started_at DESC);
@@ -3995,7 +3995,7 @@ CREATE TABLE runtime_exposures (
     (transport <> 'builtin' AND builtin_kind IS NULL)
   )
 );
-CREATE INDEX idx_runtime_exposures_device
+CREATE INDEX idx_runtime_exposures_runtime
   ON runtime_exposures(runtime_id, runtime_status, last_seen_at DESC);
 CREATE INDEX idx_runtime_exposures_service
   ON runtime_exposures(service_id, runtime_status, last_seen_at DESC);
@@ -4104,7 +4104,7 @@ CREATE TABLE runtime_sessions (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX idx_runtime_sessions_device
+CREATE INDEX idx_runtime_sessions_runtime
   ON runtime_sessions(runtime_id, status, opened_at DESC);
 CREATE INDEX idx_runtime_sessions_conversation
   ON runtime_sessions(conversation_id, status, opened_at DESC)
@@ -4173,7 +4173,7 @@ CREATE TABLE runtime_operations (
     AND principal_subject_id IS NOT NULL
   )
 );
-CREATE INDEX idx_runtime_operations_device_status
+CREATE INDEX idx_runtime_operations_runtime_status
   ON runtime_operations(runtime_id, status, created_at DESC);
 CREATE INDEX idx_runtime_operations_task
   ON runtime_operations(task_id)

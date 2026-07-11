@@ -8,7 +8,7 @@ import {
   SandboxBackendError,
   type SandboxSpec,
 } from "./sandbox-backend.js"
-import type { HostProvider, PairResult, RunHandle } from "./host-provider.js"
+import type { HostProvider, RunHandle } from "./host-provider.js"
 import type { mintLocalSandboxRuntime } from "../devices/service.js"
 
 // Direct-mint (§4.6): the local backend authors a device-less sandbox-kind
@@ -43,9 +43,6 @@ function stubProvider(over: Partial<HostProvider> = {}): HostProvider {
   return {
     blobAccess() {
       return { kind: "local_cas", casDir: "/tmp/cas" }
-    },
-    async pair(): Promise<PairResult> {
-      return { deviceId: "dev-1", serviceId: "svc-1" }
     },
     async run(): Promise<RunHandle> {
       return { pid: 999999, stop: async () => {} }

@@ -241,7 +241,7 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
         // Order matters here. We MUST push the catalog (and absorb the
         // server-assigned IDs into the MCP host's target index) BEFORE
         // calling device.tunnel.up — the latter writes
-        // DeviceTunnelRegistry, after which dispatchSyncTool can route to
+        // RuntimeEndpointRegistry, after which dispatchSyncTool can route to
         // us. If we registered the tunnel first there's a window where
         // the device is reachable but the envelope target index is
         // empty, and the mcp-host fail-closed gate would reject every
@@ -256,7 +256,7 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
         // the half-initialized state where dispatch would reject every
         // call.
         await this.pushCatalog()
-        // Announce our tunnel internal URL so the API's DeviceTunnelRegistry
+        // Announce our tunnel internal URL so the API's RuntimeEndpointRegistry
         // can route dispatchSyncTool to us. Without this, every device tool
         // call returns no_tunnel_endpoint. Throws on failure for the same
         // fail-closed reason as pushCatalog above.
@@ -342,7 +342,7 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
   }
 
   /**
-   * Notify the API that our tunnel went down so DeviceTunnelRegistry stops
+   * Notify the API that our tunnel went down so RuntimeEndpointRegistry stops
    * routing dispatches to it, then force the WSS to reconnect so the full
    * hello → catalog → tunnel sequence reruns. Called from the
    * FrpTunnelAdapter's onUnexpectedExit hook when frpc dies after passing

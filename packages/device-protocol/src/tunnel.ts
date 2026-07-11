@@ -1,5 +1,5 @@
 // @synapse/device-protocol — TunnelAdapter interface (§4.4).
-// Future swap path: replace frp adapter without touching DeviceTunnelRegistry callers.
+// Future swap path: replace frp adapter without touching RuntimeEndpointRegistry callers.
 
 export interface TunnelStartOptions {
   /** The runtime_services row this tunnel belongs to. */

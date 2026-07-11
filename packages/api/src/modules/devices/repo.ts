@@ -184,13 +184,15 @@ export type ConsumeCloudBootstrapResult =
 
 /**
  * Owns the whole consume transaction: claim UPDATE (returningAll), diagnostic
- * SELECT, three INSERTs (devices, runtimeServices, runtimeServiceKeys) and the
- * device_id FK backfill — atomic in ONE db.transaction(). Returns a
- * discriminated domain result; the 404/409/410/500 DeviceModuleError mapping +
- * wire-shape assembly stay in cloud.ts. `pending_device_id` / `host_provider`
- * are extracted from the claimed session's context HERE (they are only known
- * after the claim and gate the device INSERT), and surfaced on the `ok`
- * result so cloud.ts can build the wire response.
+ * SELECT, then — forking on the session's target_runtime_kind — either
+ * runtimes(kind='device')+devices OR runtimes(kind='sandbox')+sandboxes,
+ * followed by the shared runtimeServices + runtimeServiceKeys INSERTs and the
+ * runtime_id FK backfill on the pairing session — atomic in ONE
+ * db.transaction(). Returns a discriminated domain result; the 404/409/410/500
+ * DeviceModuleError mapping + wire-shape assembly stay in cloud.ts.
+ * `pending_runtime_id` is read from the claimed session's context HERE (only
+ * known after the claim; it is the id of the device- OR sandbox-detail runtime)
+ * and surfaced on the `ok` result so cloud.ts can build the wire response.
  */
 export async function consumeCloudBootstrapTx(args: {
   tokenHash: Buffer
@@ -593,11 +595,12 @@ export async function selectDeviceHelloAuthContext(
 }
 
 /**
- * Whether the device_service maps to a device with a LIVE local sandbox mount.
- * Raw status comparison (matching getActiveMountsForSession) so the
- * file_mount_status enum compares against literals without a parameterized-text
- * cast mismatch — copied verbatim. Executor-injectable (tests pass a
- * testcontainer db).
+ * Whether the runtime_service belongs to a LIVE, resident local sandbox — the
+ * loopback-SSRF liveness predicate that gates acceptance of a loopback
+ * internal_url. Resolves purely from the `sandboxes` row (adapter='local',
+ * mode='resident', state NOT IN closed/failed, runtimes.deleted_at IS NULL); it
+ * touches NO file_mount. The "...Mount" suffix on the name is retained only for
+ * call-site stability. Executor-injectable (tests pass a testcontainer db).
  */
 export async function hasLiveLocalSandboxMount(
   runtimeServiceId: string,
@@ -1944,79 +1947,45 @@ export async function consumeLocalPairingTx(args: {
     // real local device stays byte-identical. Local sandboxes normally use the
     // direct-mint path (mintLocalSandboxRuntimeTx); this branch is the documented
     // pairing-fork fallback (§4.6).
-    const targetRuntimeKind =
-      (session.targetRuntimeKind as string | undefined) ?? "device"
+    // local_qr pairing is ALWAYS a device: startPairing never sets
+    // targetRuntimeKind='sandbox', and local sandboxes direct-mint via
+    // mintLocalSandboxRuntimeTx (they never pair). The old target_runtime_kind fork's
+    // sandbox arm here was unreachable and has been removed; runtimes(kind='device') +
+    // a devices detail row remain the verbatim device-pairing inserts.
+    const title = args.title ?? session.requestedTitle ?? "Device"
+    const deviceType =
+      args.deviceType ??
+      (session.requestedDeviceType as DeviceType | null) ??
+      ("desktop_computer" as DeviceType)
 
-    if (targetRuntimeKind === "device") {
-      // ── DEVICE branch — TODAY's INSERTs, VERBATIM (preservation contract #1) ──
-      const title = args.title ?? session.requestedTitle ?? "Device"
-      const deviceType =
-        args.deviceType ??
-        (session.requestedDeviceType as DeviceType | null) ??
-        ("desktop_computer" as DeviceType)
+    // runtimes(kind='device') supertype root MUST be inserted in the same tx
+    // before the devices detail (deferred root FK + detail-consistency trigger
+    // validate at commit).
+    await trx
+      .insertInto("runtimes")
+      .values({
+        id: deviceId,
+        workspaceId: session.workspaceId as string,
+        kind: "device",
+      } as never)
+      .execute()
 
-      // runtimes(kind='device') supertype root MUST be inserted in the same tx
-      // before the devices detail (deferred root FK + detail-consistency trigger
-      // validate at commit).
-      await trx
-        .insertInto("runtimes")
-        .values({
-          id: deviceId,
-          workspaceId: session.workspaceId as string,
-          kind: "device",
-        } as never)
-        .execute()
-
-      await trx
-        .insertInto("devices")
-        .values({
-          id: deviceId,
-          workspaceId: session.workspaceId as string,
-          ownerWorkspaceMemberId: session.requestedByWorkspaceMemberId ?? null,
-          title,
-          description: (session.requestedDescription as string | null) ?? null,
-          deviceType: deviceType,
-          platform: args.platform ?? null,
-          arch: args.arch ?? null,
-          publicKey: args.devicePubkey,
-          publicKeyFingerprint: args.pubkeyFingerprint,
-          trustStatus: "trusted",
-        } as never)
-        .execute()
-    } else {
-      // ── SANDBOX branch (NEW) — device-less kind='sandbox' runtime; the
-      // sandboxes detail row replaces devices. Mirrors the cloud consume fork. ──
-      const context = (session.context ?? {}) as Record<string, unknown>
-      const adapter = (context["adapter"] as string | null) ?? "local"
-      const mode = (context["mode"] as string | null) ?? "resident"
-      const sandboxSessionId = (context["session_id"] as string | null) ?? null
-      const capabilityDescriptor =
-        (context["capability_descriptor"] as Record<string, unknown> | null) ??
-        {}
-      await trx
-        .insertInto("runtimes")
-        .values({
-          id: deviceId,
-          workspaceId: session.workspaceId as string,
-          kind: "sandbox",
-        } as never)
-        .execute()
-      await trx
-        .insertInto("sandboxes")
-        .values({
-          id: deviceId,
-          workspaceId: session.workspaceId as string,
-          sessionId: sandboxSessionId,
-          mode,
-          adapter,
-          state: "provisioning",
-          resourceId: "",
-          hostPid: null,
-          pairingSessionId: session.id as string,
-          capabilityDescriptor: sql`${JSON.stringify(capabilityDescriptor)}::jsonb`,
-        } as never)
-        .execute()
-    }
+    await trx
+      .insertInto("devices")
+      .values({
+        id: deviceId,
+        workspaceId: session.workspaceId as string,
+        ownerWorkspaceMemberId: session.requestedByWorkspaceMemberId ?? null,
+        title,
+        description: (session.requestedDescription as string | null) ?? null,
+        deviceType: deviceType,
+        platform: args.platform ?? null,
+        arch: args.arch ?? null,
+        publicKey: args.devicePubkey,
+        publicKeyFingerprint: args.pubkeyFingerprint,
+        trustStatus: "trusted",
+      } as never)
+      .execute()
 
     await trx
       .insertInto("runtimeServices")

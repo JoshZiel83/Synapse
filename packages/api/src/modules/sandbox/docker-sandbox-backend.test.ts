@@ -90,7 +90,7 @@ test("docker create(): builds a correct `docker run` argv + completes the staged
     createPairing: fakePairing(),
     // Skip the DB poll — simulate the container bootstrapping.
     pollBootstrapConsumed: async () => ({
-      deviceId: "dev-1",
+      runtimeId: "dev-1",
       runtimeServiceId: "svc-1",
     }),
   })
@@ -156,7 +156,7 @@ test("docker create(): tunnel=frp injects SYNAPSE_TUNNEL_* env", async () => {
     spawnImpl,
     createPairing: fakePairing(),
     pollBootstrapConsumed: async () => ({
-      deviceId: "d",
+      runtimeId: "d",
       runtimeServiceId: "s",
     }),
   })
@@ -196,7 +196,7 @@ test("docker create(): omits SYNAPSE_TUNNEL_INTERNAL_BASE_URL when not configure
     spawnImpl,
     createPairing: fakePairing(),
     pollBootstrapConsumed: async () => ({
-      deviceId: "d",
+      runtimeId: "d",
       runtimeServiceId: "s",
     }),
   })
@@ -299,13 +299,13 @@ test("docker create(): bootstrap timeout self-cleans container + pairing + devic
   })
   await assert.rejects(() => backend.create(baseSpec()), /did not bootstrap/)
   // The container WAS created (docker run returned an id) but the runtime never
-  // bootstrapped → cleanup reaps the container + cancels the pairing, deviceId null.
+  // bootstrapped → cleanup reaps the container + cancels the pairing, runtimeId null.
   assert.deepEqual(cleaned, [
     {
       workspaceId: "ws-1",
       containerId: "container-leak",
       pairingSessionId: "pair-1",
-      deviceId: null,
+      runtimeId: null,
     },
   ])
 })
@@ -322,7 +322,7 @@ test("docker create(): a throwing onDeviceClaimed self-cleans the bootstrapped d
     spawnImpl,
     createPairing: fakePairing(),
     pollBootstrapConsumed: async () => ({
-      deviceId: "dev-leak",
+      runtimeId: "dev-leak",
       runtimeServiceId: "svc",
     }),
     failCleanup: async (a) => {
@@ -345,7 +345,7 @@ test("docker create(): a throwing onDeviceClaimed self-cleans the bootstrapped d
       workspaceId: "ws-1",
       containerId: "container-x",
       pairingSessionId: "pair-1",
-      deviceId: "dev-leak",
+      runtimeId: "dev-leak",
     },
   ])
 })
@@ -377,7 +377,7 @@ test("docker connect(): rejects non-docker ref + requires a container id", async
   )
 })
 
-test("docker connect: empty deviceId still kills the container (half-provisioned crash recovery)", async () => {
+test("docker connect: empty runtimeId still kills the container (half-provisioned crash recovery)", async () => {
   const seen: string[][] = []
   const { spawnImpl } = fakeDocker((args) => {
     seen.push(args)
@@ -385,7 +385,7 @@ test("docker connect: empty deviceId still kills the container (half-provisioned
   })
   const backend = createDockerSandboxBackend({ ...baseOpts, spawnImpl })
   // Crash after `docker run` but before the runtime was ready: container id known,
-  // deviceId is "". teardown must still reap the container.
+  // runtimeId is "". teardown must still reap the container.
   const handle = await backend.connect({
     adapter: "docker",
     mode: "resident",
@@ -497,7 +497,7 @@ test("docker create(): spec without storageVolumeSubpath fails loud (never mount
     spawnImpl,
     createPairing: fakePairing(),
     pollBootstrapConsumed: async () => ({
-      deviceId: "d",
+      runtimeId: "d",
       runtimeServiceId: "s",
     }),
     failCleanup: async (a) => {
@@ -518,7 +518,7 @@ test("docker create(): spec without storageVolumeSubpath fails loud (never mount
       workspaceId: "ws-1",
       containerId: null,
       pairingSessionId: "pair-1",
-      deviceId: null,
+      runtimeId: null,
     },
   ])
 })

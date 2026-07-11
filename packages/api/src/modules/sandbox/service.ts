@@ -116,20 +116,13 @@ const liveSandboxHandles = new Map<string, SandboxHandle>()
 
 /**
  * Resolve the sandbox ADAPTER for the provision path (§4.1). Forks on BOTH
- * provider AND mode via the registry (the P2 selectSandboxBackend forked only on
- * provider, so SANDBOX_MODE=bare was inert). A test may inject a fully-built
- * adapter (sandboxAdapter) or a legacy resident backend (sandboxBackend, wrapped
- * as a control_plane resident adapter). The catalogSource on the returned adapter
+ * provider AND mode via the registry. The catalogSource on the returned adapter
  * is what the provision spine forks on (waitForCatalog/waitForTunnelEndpoint vs
  * the api-authored skip).
  */
 function resolveAdapterForProvision(
   options: ProvisionSandboxOptions
 ): SandboxAdapter {
-  if (options.sandboxAdapter) return options.sandboxAdapter
-  if (options.sandboxBackend) {
-    return wrapResidentBackendAsAdapter(options.sandboxBackend)
-  }
   const adapter = resolveSandboxAdapter(
     config.sandbox.provider,
     config.sandbox.mode,
@@ -143,27 +136,6 @@ function resolveAdapterForProvision(
   }
   return adapter
 }
-
-/** Wrap an injected resident SandboxBackend (test seam) as a control_plane
- *  adapter so the provision spine keeps waitForCatalog/waitForTunnelEndpoint. */
-function wrapResidentBackendAsAdapter(backend: SandboxBackend): SandboxAdapter {
-  return {
-    key: `${backend.kind}:resident`,
-    provider: backend.kind,
-    mode: "resident",
-    kind: backend.kind,
-    catalogSource: "control_plane",
-    transportDefault: "direct",
-    capabilities: null,
-    create: (spec) => backend.create(spec),
-    connect: (ref) => backend.connect(ref),
-  }
-}
-
-// dockerBackendOptionsFromEnv now lives in adapter-registry.ts (so the registry
-// can build the LAZY provision backend without a value cycle). Re-exported here
-// for compatibility with existing importers.
-export { dockerBackendOptionsFromEnv }
 
 type SessionContext = repo.SessionContext
 
@@ -523,10 +495,6 @@ async function ensureSessionSpaces(ctx: SessionContext): Promise<SpaceSpec[]> {
 export interface ProvisionSandboxOptions {
   /** Inject a HostProvider (local backend wraps it). Test seam. */
   hostProvider?: HostProvider
-  /** Inject a fully-built resident backend (overrides hostProvider + env). */
-  sandboxBackend?: SandboxBackend
-  /** Inject a fully-built ADAPTER (overrides everything — bare/Mode-B test seam). */
-  sandboxAdapter?: SandboxAdapter
   /** Max ms to wait for the device catalog to sync. */
   catalogTimeoutMs?: number
   /**
@@ -577,7 +545,7 @@ export async function provisionSandbox(
     const runtimeIdForEndpoint = runtimeIdFromMounts(existing)
     fastPathOk = await fastPathEndpointReady({
       sessionId,
-      deviceId: runtimeIdForEndpoint,
+      runtimeId: runtimeIdForEndpoint,
       tunnelTimeoutMs: options.tunnelTimeoutMs ?? 30_000,
     })
   }
@@ -644,7 +612,7 @@ export async function provisionSandbox(
     return {
       sessionId,
       sandboxRoot: sandboxRootFor(sessionId),
-      deviceId: runtimeId,
+      runtimeId: runtimeId,
       commandlineEnabled,
       mountIds: existing.map((m) => m.id),
       sidecarRestoreOk,
@@ -855,7 +823,7 @@ export async function provisionSandbox(
     return {
       sessionId,
       sandboxRoot,
-      deviceId: runtimeId,
+      runtimeId: runtimeId,
       commandlineEnabled,
       mountIds: mounts.map((m) => m.id),
       sidecarRestoreOk,
@@ -905,18 +873,18 @@ export async function provisionSandbox(
 
 /** Poll runtime_exposures until the filesystem builtin is healthy, or time out. */
 async function waitForCatalog(
-  deviceId: string,
+  runtimeId: string,
   opts: { timeoutMs: number; pollMs?: number }
 ): Promise<void> {
   const pollMs = opts.pollMs ?? 250
   const deadline = Date.now() + opts.timeoutMs
 
   while (true) {
-    const ready = await repo.isFilesystemExposureHealthy(deviceId)
+    const ready = await repo.isFilesystemExposureHealthy(runtimeId)
     if (ready) return
     if (Date.now() >= deadline) {
       throw new SandboxServiceError(
-        `device ${deviceId} catalog did not sync within ${opts.timeoutMs}ms`,
+        `runtime ${runtimeId} catalog did not sync within ${opts.timeoutMs}ms`,
         504
       )
     }
@@ -961,15 +929,15 @@ export async function waitForTunnelEndpoint(
  * service yet. Mirrors the lookup the docker bootstrap poller + dispatch use.
  */
 async function resolveDeviceRuntimeServiceId(
-  deviceId: string
+  runtimeId: string
 ): Promise<string | null> {
-  return repo.resolveDeviceRuntimeServiceId(deviceId)
+  return repo.resolveDeviceRuntimeServiceId(runtimeId)
 }
 
 /** Injectable seams for {@link fastPathEndpointReady} (tests stub these so the
  *  empty-registry → timeout → reprovision branch is exercised without a DB). */
 export interface FastPathEndpointDeps {
-  resolveServiceId: (deviceId: string) => Promise<string | null>
+  resolveServiceId: (runtimeId: string) => Promise<string | null>
   waitForEndpoint: (serviceId: string, timeoutMs: number) => Promise<void>
 }
 
@@ -994,11 +962,11 @@ function defaultFastPathEndpointDeps(): FastPathEndpointDeps {
  * testable without standing up a full sandbox.
  */
 export async function fastPathEndpointReady(
-  args: { sessionId: string; deviceId: string; tunnelTimeoutMs: number },
+  args: { sessionId: string; runtimeId: string; tunnelTimeoutMs: number },
   deps: FastPathEndpointDeps = defaultFastPathEndpointDeps()
 ): Promise<boolean> {
-  const serviceId = args.deviceId
-    ? await deps.resolveServiceId(args.deviceId)
+  const serviceId = args.runtimeId
+    ? await deps.resolveServiceId(args.runtimeId)
     : null
   if (!serviceId) return false
   if (args.tunnelTimeoutMs <= 0) return true

@@ -506,64 +506,7 @@ export async function createRuntimeAuthorizationRequest(
   }
 }
 
-export async function waitForRuntimeAuthorizationResolution<T>(
-  params: WaitForRuntimeAuthorizationResolutionParams<T>
-): Promise<RuntimeAuthorizationWaitResult<T>> {
-  const startedAt = Date.now()
-  const maxWaitMs = params.maxWaitMs ?? 10 * 60 * 1000
-
-  while (Date.now() - startedAt < maxWaitMs) {
-    if (
-      await hasNewUserFacingConversationMessage(
-        params.conversationId,
-        params.createdAt
-      )
-    ) {
-      const superseded = await markRuntimeAuthorizationTaskSuperseded(
-        params.taskId,
-        "Superseded by a newer user message."
-      )
-      return {
-        status: "superseded",
-        task: superseded,
-      }
-    }
-
-    const task = await getTaskSummary(params.taskId)
-    if (!task) {
-      throw new Error("Authorization task could not be reloaded.")
-    }
-    if (isTaskOpen(task)) {
-      await sleep(1000)
-      continue
-    }
-    if (task.lifecycleStatus === "completed" && task.outcome === "granted") {
-      return {
-        status: "approved",
-        task,
-        approvedValue: await params.onApproved(task),
-      }
-    }
-    if (task.lifecycleStatus === "cancelled") {
-      return {
-        status: "cancelled",
-        task,
-      }
-    }
-    if (task.lifecycleStatus === "expired") {
-      return {
-        status: "expired",
-        task,
-      }
-    }
-    return {
-      status: "rejected",
-      task,
-    }
-  }
-
-  return {
-    status: "expired",
-    task: await getTaskSummary(params.taskId),
-  }
-}
+// (waitForRuntimeAuthorizationResolution removed — dead: a ~60-line up-to-10-minute
+// in-process polling loop with zero callers repo-wide. The live flow is event-based:
+// the request returns a `runtime_authorization_requested` event and resolution is
+// driven by task lifecycle updates, not a blocking wait.)

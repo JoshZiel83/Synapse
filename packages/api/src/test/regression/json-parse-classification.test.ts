@@ -177,8 +177,6 @@ const classifiedJsonParseFiles = {
       "Seed metadata is bootstrap/config input.",
     "packages/api/src/infrastructure/http/json-body-parser.ts":
       "Fastify request body parsing is an HTTP adapter boundary.",
-    "packages/api/src/modules/sandbox/host-provider.ts":
-      "synapse-device pair stdout is CLI adapter output.",
     "packages/api/src/modules/skills/mirror-import-codec.ts":
       "Skill mirror metadata and GitHub responses are import-adapter payloads.",
     "packages/device-runtime/src/terminal/manifest.ts":

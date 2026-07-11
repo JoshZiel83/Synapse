@@ -480,67 +480,9 @@ async function createGrantInKyselyTx(
   )
 }
 
-export async function getRuntimeAuthorizationGrant(
-  id: string,
-  queryable?: Executor
-): Promise<RuntimeAuthorizationGrantRecord | null> {
-  const row = queryable
-    ? await getRuntimeAuthorizationGrantRow(id, queryable)
-    : await getRuntimeAuthorizationGrantRow(id)
-  if (!row) return null
-  const candidate = rowToCandidate(row)
-  if (!candidate.policyValidationResult.ok) {
-    // Read path: surface as null rather than throw, so dashboard "valid"
-    // listings don't break on a single corrupt row. Dashboard dual-stream
-    // (Batch 7 lists) handles corrupt visibility separately.
-    return null
-  }
-  return mapRuntimeAuthorizationGrantCandidate(
-    candidate,
-    candidate.policyValidationResult.parsed
-  )
-}
-
-export async function revokeRuntimeAuthorizationGrant(
-  id: string,
-  queryable?: Executor
-) {
-  if (queryable) {
-    await revokeRuntimeAuthorizationGrantRow(id, queryable)
-    return
-  }
-  await revokeRuntimeAuthorizationGrantRow(id)
-}
-
-export async function supersedeRuntimeAuthorizationGrant(
-  id: string,
-  queryable?: Executor
-) {
-  if (queryable) {
-    await supersedeRuntimeAuthorizationGrantRow(id, queryable)
-    return
-  }
-  await supersedeRuntimeAuthorizationGrantRow(id)
-}
-
-// ============================================================================
-// consumeRuntimeAuthorizationGrant: SKIP LOCKED, returns boolean (true = this
-// caller actually flipped the row to 'consumed'; false = another concurrent
-// dispatch won the race, or the row was already non-active). MUST only be
-// called on `consume_once` retention candidates; until_revoked grants are
-// validated separately via FOR SHARE (no state mutation). The raw FOR UPDATE
-// SKIP LOCKED statement lives in repo.ts (guard r8); this thin wrapper keeps the
-// public service symbol + signature stable for the module barrel.
-// ============================================================================
-
-export async function consumeRuntimeAuthorizationGrant(
-  id: string,
-  executor?: Executor
-): Promise<boolean> {
-  return executor
-    ? consumeRuntimeAuthorizationGrantRow(id, executor)
-    : consumeRuntimeAuthorizationGrantRow(id)
-}
+// (getRuntimeAuthorizationGrant / revoke / supersede / consumeRuntimeAuthorizationGrant
+// service wrappers removed — dead: zero callers repo-wide; the live paths call the
+// *Row repo functions directly, e.g. consumeRuntimeAuthorizationGrantRow at dispatch.)
 
 // ============================================================================
 // Policy matchers (unchanged from dev — capability-specific allow checks).

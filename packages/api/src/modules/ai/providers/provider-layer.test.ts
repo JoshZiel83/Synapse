@@ -299,8 +299,8 @@ test("reconcileToolPairing preserves routed origin for an interrupted orphan too
     installationId: "install-1",
     upstreamToolName: "search",
   }
-  const deviceOrigin = {
-    kind: "device" as const,
+  const runtimeOrigin = {
+    kind: "runtime" as const,
     runtimeToolId: "device-tool-1",
     exposureStableKey: "synapse.builtin.filesystem.v1",
   }
@@ -319,7 +319,7 @@ test("reconcileToolPairing preserves routed origin for an interrupted orphan too
           callId: "c-device",
           toolName: "filesystem__View",
           input: {},
-          metadata: { origin: deviceOrigin },
+          metadata: { origin: runtimeOrigin },
         },
       ],
     },
@@ -331,7 +331,7 @@ test("reconcileToolPairing preserves routed origin for an interrupted orphan too
   assert.equal(last.role, "tool_result")
   if (last.role === "tool_result") {
     assert.deepEqual(last.results[0].origin, pluginOrigin)
-    assert.deepEqual(last.results[1].origin, deviceOrigin)
+    assert.deepEqual(last.results[1].origin, runtimeOrigin)
   }
 })
 

@@ -288,7 +288,7 @@ async function validateLocalLoopbackUrl(args: {
     return {
       ok: false,
       message:
-        "loopback internal_url is only accepted for a device with a live local sandbox mount",
+        "loopback internal_url is only accepted for a resident local sandbox runtime",
     }
   }
   return { ok: true }

@@ -92,7 +92,8 @@ export interface SandboxProvisionResult {
   sessionId: string
   /** The sandbox FS root; its children are the materialized mount points. */
   sandboxRoot: string
-  deviceId: string
+  /** The provisioned sandbox runtime id (== sandboxes.id; device-less). */
+  runtimeId: string
   /** Whether the commandline (bwrap-confined) tool was authorized. */
   commandlineEnabled: boolean
   mountIds: string[]

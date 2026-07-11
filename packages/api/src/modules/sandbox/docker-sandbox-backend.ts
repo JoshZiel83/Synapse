@@ -69,7 +69,7 @@ export interface DockerSandboxBackendOptions {
   pollBootstrapConsumed?: (
     pairingSessionId: string,
     timeoutMs: number
-  ) => Promise<{ deviceId: string; runtimeServiceId: string }>
+  ) => Promise<{ runtimeId: string; runtimeServiceId: string }>
   /** Test seam: override pairing creation (defaults to the DB-backed
    *  createCloudDevicePairing) so create() is exercisable without a live DB. */
   createPairing?: (input: {
@@ -88,7 +88,7 @@ export interface DockerSandboxBackendOptions {
     workspaceId: string
     containerId: string | null
     pairingSessionId: string | null
-    deviceId: string | null
+    runtimeId: string | null
   }) => Promise<void>
 }
 
@@ -124,7 +124,7 @@ export function createDockerSandboxBackend(
       // session, the container, and/or the bootstrapped device.
       let pairingSessionId: string | null = null
       let containerId: string | null = null
-      let deviceId: string | null = null
+      let runtimeId: string | null = null
       try {
         // ① mint a one-time bootstrap token + pending runtime id. P2 fork: this
         // pairing mints a device-less kind='sandbox' runtime — the consume tx
@@ -177,8 +177,9 @@ export function createDockerSandboxBackend(
         }
 
         // ④ wait for the container to consume its bootstrap token (it self-
-        // registers the device on first boot). Surface docker logs on early exit.
-        let resolved: { deviceId: string; runtimeServiceId: string }
+        // registers the sandbox runtime on first boot). Surface docker logs on
+        // early exit.
+        let resolved: { runtimeId: string; runtimeServiceId: string }
         try {
           resolved = await (
             opts.pollBootstrapConsumed ?? defaultPollBootstrapConsumed
@@ -191,14 +192,14 @@ export function createDockerSandboxBackend(
             `sandbox container did not bootstrap within ${bootstrapTimeoutMs}ms: ${errMsg(err)}\n--- container logs ---\n${logs}`
           )
         }
-        deviceId = resolved.deviceId
-        await spec.onRuntimeReady?.(resolved.deviceId)
+        runtimeId = resolved.runtimeId
+        await spec.onRuntimeReady?.(resolved.runtimeId)
 
         return makeDockerHandle({
           docker,
           sessionId: spec.sessionId,
           containerId,
-          runtimeId: resolved.deviceId,
+          runtimeId: resolved.runtimeId,
           runtimeServiceId: resolved.runtimeServiceId,
           pairingSessionId: pairing.pairingSessionId,
         })
@@ -211,7 +212,7 @@ export function createDockerSandboxBackend(
           workspaceId: spec.workspaceId,
           containerId,
           pairingSessionId,
-          deviceId,
+          runtimeId,
         }).catch(() => {})
         throw err
       }
@@ -382,7 +383,7 @@ function buildDockerRunArgs(params: {
 async function defaultPollBootstrapConsumed(
   pairingSessionId: string,
   timeoutMs: number
-): Promise<{ deviceId: string; runtimeServiceId: string }> {
+): Promise<{ runtimeId: string; runtimeServiceId: string }> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     const row = await getPairingSessionBootstrapState(pairingSessionId)
@@ -394,7 +395,7 @@ async function defaultPollBootstrapConsumed(
         )
         if (runtimeServiceId) {
           return {
-            deviceId: row.runtimeId as string,
+            runtimeId: row.runtimeId as string,
             runtimeServiceId,
           }
         }
@@ -443,17 +444,17 @@ async function defaultDockerFailCleanup(
     workspaceId: string
     containerId: string | null
     pairingSessionId: string | null
-    deviceId: string | null
+    runtimeId: string | null
   }
 ): Promise<void> {
-  // Order: device first (a consumed pairing session has device_id set with ON
-  // DELETE SET NULL, and deleting the device cascades its services/exposures/
-  // grants), then the pairing session, then the container.
-  if (args.deviceId) {
-    await deleteDevice(args.workspaceId, args.deviceId).catch(() => {})
+  // Order: runtime first (deleteDevice → softDeleteDevice just flips
+  // runtimes.deleted_at; it does NOT cascade-delete services/exposures/grants,
+  // which are kept for audit), then the pairing session, then the container.
+  if (args.runtimeId) {
+    await deleteDevice(args.workspaceId, args.runtimeId).catch(() => {})
   }
   // Cancel the (still-pending) pairing session so the token can't be reused. A
-  // consumed session is left as-is (the device delete already handled its FK).
+  // consumed session already carries its runtime_id FK and is left as-is.
   if (args.pairingSessionId) {
     await cancelPendingPairingSession(args.pairingSessionId).catch(() => {})
   }

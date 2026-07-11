@@ -3,20 +3,17 @@
 // can be unit-tested with a stub, and so a future e2b/remote provider can slot
 // in without touching the sandbox service.
 //
-// The local provider runs the two-step local pairing:
-//   1. `synapse-device pair --code <code> --broker-dir <session-dir>` — claims
-//      the pairing session, writes device-identity.json + ed25519 keys into the
-//      session-private broker dir (NEVER the shared default — broker.ts:27 would
-//      let concurrent sessions clobber each other's identity).
-//   2. `synapse-device run --broker-dir <session-dir> --fs-root <sandbox> ...` —
-//      a long-lived daemon (blocks until SIGTERM) advertising the filesystem +
-//      commandline builtins over device.catalog.sync.
+// The local provider only spawns the long-lived runtime daemon:
+//   `synapse-device run --broker-dir <session-dir> --fs-root <sandbox> ...` —
+//   blocks until SIGTERM, advertising the filesystem + commandline builtins over
+//   device.catalog.sync. The session-private broker dir (device-identity.json +
+//   ed25519 keys) is written up front by the local backend's direct-mint (§4.6),
+//   NOT by a pairing round-trip — so there is no `pair` step here.
 
 import { spawn, type ChildProcess } from "node:child_process"
 import { existsSync } from "node:fs"
 import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { z } from "zod"
 import { casDir } from "./materialize.js"
 import { config } from "../../config/index.js"
 import type { BackendId } from "../../infrastructure/storage/content-store.js"
@@ -44,12 +41,6 @@ export class HostProviderError extends Error {
   }
 }
 
-export interface PairResult {
-  deviceId: string
-  serviceId: string
-  controlPlaneUrl?: string
-}
-
 export interface RunHandle {
   /** OS pid of the device-runtime daemon (for teardown SIGTERM/SIGKILL). */
   pid: number
@@ -58,9 +49,6 @@ export interface RunHandle {
 }
 
 export interface SpawnSandboxRuntimeParams {
-  /** Pairing code (legacy `pair` path only). The direct-mint local backend
-   *  authors the broker identity in-process, so `run` needs no pairing code. */
-  pairingCode?: string
   /** Session-private broker dir (device-identity.json + keys). */
   brokerDir: string
   /** The sandbox FS root (its children are the materialized mount points). */
@@ -82,8 +70,6 @@ export interface SpawnSandboxRuntimeParams {
 }
 
 export interface HostProvider {
-  /** Run `synapse-device pair`; resolves with the new device/service ids. */
-  pair(params: SpawnSandboxRuntimeParams): Promise<PairResult>
   /** Run `synapse-device run` as a daemon; resolves once it's spawned. */
   run(params: SpawnSandboxRuntimeParams): Promise<RunHandle>
   /**
@@ -96,31 +82,6 @@ export interface HostProvider {
 }
 
 const KILL_GRACE_MS = 2_000
-
-const PairOutputSchema = z.union([
-  z
-    .object({
-      deviceId: z.string().min(1),
-      serviceId: z.string().min(1),
-      controlPlaneUrl: z.string().optional(),
-    })
-    .passthrough()
-    .transform((value): PairResult => value),
-  z
-    .object({
-      device_id: z.string().min(1),
-      service_id: z.string().min(1),
-      control_plane_url: z.string().optional(),
-    })
-    .passthrough()
-    .transform(
-      (value): PairResult => ({
-        deviceId: value.device_id,
-        serviceId: value.service_id,
-        controlPlaneUrl: value.control_plane_url,
-      })
-    ),
-])
 
 /** Resolve the synapse-device CLI entry (dist/bin.js). */
 function resolveDeviceCliPath(): string {
@@ -194,26 +155,6 @@ export function createLocalHostProvider(opts?: {
       // is pointed at (materialize.ts), so BlobAccess.casDir matches exactly what
       // the helper uses.
       return { kind: "local_cas", casDir: casDir() }
-    },
-
-    async pair(params: SpawnSandboxRuntimeParams): Promise<PairResult> {
-      const args = [
-        cliPath,
-        "pair",
-        `--code=${params.pairingCode}`,
-        `--broker-dir=${params.brokerDir}`,
-        `--server=${params.serverOrigin}`,
-        `--title=${params.title ?? "Sandbox"}`,
-      ]
-      const { stdout } = await runToCompletion(spawnImpl, args)
-      // pair() prints the PairResult JSON (device_id, service_id, control_plane_url).
-      const parsed = parsePairOutput(stdout)
-      if (!parsed) {
-        throw new HostProviderError(
-          `synapse-device pair produced no parseable result: ${stdout.slice(0, 200)}`
-        )
-      }
-      return parsed
     },
 
     async run(params: SpawnSandboxRuntimeParams): Promise<RunHandle> {
@@ -314,69 +255,6 @@ export function createLocalHostProvider(opts?: {
   }
 }
 
-function runToCompletion(
-  spawnImpl: typeof spawn,
-  args: string[]
-): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolvePromise, reject) => {
-    const child = spawnImpl(process.execPath, args, {
-      stdio: ["ignore", "pipe", "pipe"],
-    })
-    let stdout = ""
-    let stderr = ""
-    child.stdout?.on("data", (d) => (stdout += d.toString()))
-    child.stderr?.on("data", (d) => (stderr += d.toString()))
-    child.on("error", (err) => reject(err))
-    child.on("exit", (code) => {
-      if (code === 0) resolvePromise({ stdout, stderr })
-      else
-        reject(
-          new HostProviderError(
-            `synapse-device pair exited ${code}: ${stderr.slice(0, 300)}`
-          )
-        )
-    })
-  })
-}
-
-function parsePairOutput(stdout: string): PairResult | null {
-  // The CLI prints the result via JSON.stringify(result, null, 2) — pretty,
-  // MULTI-LINE JSON — possibly preceded/followed by log lines. Extract the
-  // first balanced {...} block (from the first '{' to its matching '}') and
-  // parse that, rather than scanning line-by-line (which never sees a complete
-  // object).
-  const start = stdout.indexOf("{")
-  if (start < 0) return null
-  let depth = 0
-  let inStr = false
-  let escaped = false
-  for (let i = start; i < stdout.length; i++) {
-    const ch = stdout[i]
-    if (inStr) {
-      if (escaped) escaped = false
-      else if (ch === "\\") escaped = true
-      else if (ch === '"') inStr = false
-      continue
-    }
-    if (ch === '"') inStr = true
-    else if (ch === "{") depth++
-    else if (ch === "}") {
-      depth--
-      if (depth === 0) {
-        const block = stdout.slice(start, i + 1)
-        try {
-          const parsed = PairOutputSchema.safeParse(JSON.parse(block))
-          return parsed.success ? parsed.data : null
-        } catch {
-          // Not valid JSON — fall through to null.
-        }
-        return null
-      }
-    }
-  }
-  return null
-}
-
 async function stopChild(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return
   child.kill("SIGTERM")
@@ -396,4 +274,4 @@ async function stopChild(child: ChildProcess): Promise<void> {
   })
 }
 
-export { resolveDeviceCliPath, parsePairOutput }
+export { resolveDeviceCliPath }

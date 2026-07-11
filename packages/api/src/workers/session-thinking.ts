@@ -178,7 +178,8 @@ async function putSessionToIdle(sessionId: string) {
 
   // Tear down the file sandbox on the clean running→idle transition: commit all
   // dirty spaces, stop the daemon, delete live dirs, revoke grants, delete the
-  // device. Best-effort — a teardown failure must not block the idle transition.
+  // sandbox runtime. Best-effort — a teardown failure must not block the idle
+  // transition.
   if (sandboxEnabled) {
     try {
       await teardownSandbox(sessionId)

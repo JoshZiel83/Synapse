@@ -45,8 +45,9 @@ export interface CreateCloudDeviceResult {
  * cloud_bootstrap pairing session, and return the token for the caller (the
  * API server) to inject into the sandbox env. The `devices` row is NOT
  * created here — see consumeCloudBootstrap below — because
- * devices.public_key is NOT NULL (§6 Notes: pending_device_id stored in
- * context, never in the FK column).
+ * devices.public_key is NOT NULL (§6 Notes: pending_runtime_id — the id of the
+ * device- OR sandbox-detail runtime — stored in context, never in the FK
+ * column).
  */
 export async function createCloudDevicePairing(
   input: CreateCloudDeviceInput
@@ -104,8 +105,9 @@ export type ConsumeBootstrapResult = CloudBootstrapResult
 
 /**
  * Sandbox boot handler. Resolves the bootstrap_token (hashed) to its
- * pairing session, atomically INSERTs devices (using context.pending_device_id
- * as the id) + runtime_services + runtime_service_keys, and marks the session
+ * pairing session, atomically INSERTs the runtime detail (device OR sandbox,
+ * using context.pending_runtime_id — the id of a device- or sandbox-detail
+ * runtime) + runtime_services + runtime_service_keys, and marks the session
  * consumed.
  */
 export async function consumeCloudBootstrap(

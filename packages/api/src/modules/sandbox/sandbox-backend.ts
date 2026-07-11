@@ -28,8 +28,7 @@ import {
 import { deleteDevice, mintLocalSandboxRuntime } from "../devices/service.js"
 
 /** Which adapter produced/owns a sandbox runtime. Persisted on sandboxes.adapter
- *  (and legacy file_mounts.sandbox_backend) so teardown picks the right adapter
- *  regardless of the API's current config. P2 registered local + docker (Mode-A
+ *  so teardown picks the right adapter regardless of the API's current config. P2 registered local + docker (Mode-A
  *  resident); P4a adds the bare (Mode-B) reference adapters under the SAME
  *  provider strings ("local"/"docker") — the `sandboxes.mode` column
  *  disambiguates resident vs bare. Future provider substrates (e2b/cube) widen

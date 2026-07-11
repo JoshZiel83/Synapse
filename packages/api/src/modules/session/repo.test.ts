@@ -141,17 +141,17 @@ test("normalizeSessionWakeupRow decodes wakeup metadata at repo exit", () => {
 test("normalizeRuntimeToolCallRow decodes tool call JSON at repo exit", () => {
   const row = normalizeRuntimeToolCallRow({
     normalizedInput: JSON.stringify({ path: "/tmp/a.txt" }),
-    sourceSnapshot: JSON.stringify({ kind: "device", stableKey: "tool/a" }),
+    sourceSnapshot: JSON.stringify({ kind: "runtime", stableKey: "tool/a" }),
   } as ToolCallDbRow)
 
   assert.deepEqual(row.normalizedInput, { path: "/tmp/a.txt" })
-  assert.deepEqual(row.sourceSnapshot, { kind: "device", stableKey: "tool/a" })
+  assert.deepEqual(row.sourceSnapshot, { kind: "runtime", stableKey: "tool/a" })
 
   assert.throws(
     () =>
       normalizeRuntimeToolCallRow({
         normalizedInput: JSON.stringify(["not-object"]),
-        sourceSnapshot: JSON.stringify({ kind: "device" }),
+        sourceSnapshot: JSON.stringify({ kind: "runtime" }),
       } as ToolCallDbRow),
     /runtime tool call normalizedInput must be a JSON object/
   )
