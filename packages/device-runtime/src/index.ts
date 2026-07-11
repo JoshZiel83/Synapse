@@ -10,7 +10,6 @@ export {
 } from "./builtins/filesystem.js"
 export {
   createCommandlineBuiltin,
-  executeBash,
   COMMANDLINE_CORE_TOOL_DEFS,
 } from "./builtins/commandline.js"
 export { createBrowserBuiltin, listCdpTargets } from "./builtins/browser.js"
@@ -70,11 +69,10 @@ export {
 // Exposed so the API sandbox adapters (sandbox/adapter-registry.ts,
 // makeLocalBareAdapter) reuse the SAME confined exec + vfs + search kernel the
 // resident device-runtime does — one implementation, no drift. NOTE: the
-// bare-sandbox adapter deliberately does NOT USE executeBash (the legacy
-// UNconfined path) or embedDeviceRuntime / createInMemoryEnvelopeVerifier /
-// createFileBackedBroker (Mode-A markers — a bare sandbox never pairs, never
-// runs a resident runtime), even though the package still exports them for the
-// resident Mode-A runtime.
+// bare-sandbox adapter deliberately does NOT USE embedDeviceRuntime /
+// createInMemoryEnvelopeVerifier / createFileBackedBroker (Mode-A markers — a
+// bare sandbox never pairs, never runs a resident runtime), even though the
+// package still exports them for the resident Mode-A runtime.
 export {
   bwrapAvailable,
   resolveBwrapPath,

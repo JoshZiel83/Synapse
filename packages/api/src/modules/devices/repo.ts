@@ -1776,7 +1776,6 @@ export async function insertLocalPairingSession(args: {
   sessionId: string
   workspaceId: string
   requestedByWorkspaceMemberId: string | null
-  deviceId: string | null
   targetRuntimeKind?: "device" | "sandbox"
   mode: string
   serverBaseUrl: string
@@ -1794,7 +1793,7 @@ export async function insertLocalPairingSession(args: {
       id: args.sessionId,
       workspaceId: args.workspaceId,
       requestedByWorkspaceMemberId: args.requestedByWorkspaceMemberId,
-      runtimeId: args.deviceId,
+      runtimeId: null,
       targetRuntimeKind: args.targetRuntimeKind ?? "device",
       mode: args.mode,
       serverBaseUrl: args.serverBaseUrl,

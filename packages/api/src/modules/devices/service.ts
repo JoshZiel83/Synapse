@@ -206,8 +206,6 @@ export interface StartPairingInput {
   title?: string
   description?: string
   deviceType?: DeviceType
-  /** Legacy field (was service_join mode only; that mode has been removed). */
-  deviceId?: string
   /** Which runtime kind this pairing mints (drives the P2 consume fork). Defaults
    *  to 'device' so real-device pairing stays byte-identical. */
   targetRuntimeKind?: "device" | "sandbox"
@@ -251,7 +249,6 @@ export async function startPairing(
     sessionId,
     workspaceId: input.workspaceId,
     requestedByWorkspaceMemberId: input.requestedByWorkspaceMemberId ?? null,
-    deviceId: input.deviceId ?? null,
     targetRuntimeKind: input.targetRuntimeKind ?? "device",
     mode: input.mode,
     serverBaseUrl: input.serverBaseUrl,

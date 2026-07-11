@@ -37,7 +37,6 @@ const actorId = "00000000-0000-4000-8000-000000000002"
 const convId = "00000000-0000-4000-8000-000000000003"
 const remoteAgentId = "00000000-0000-4000-8000-000000000004"
 const capId = "00000000-0000-4000-8000-000000000005"
-const deviceId = "00000000-0000-4000-8000-000000000006"
 
 test("start pairing body schema uses shared app fields with workspaceId in path", () => {
   const sharedInput = {
@@ -46,7 +45,6 @@ test("start pairing body schema uses shared app fields with workspaceId in path"
     title: "Remote daemon",
     description: "Join remote agent daemon",
     deviceType: "desktop_computer" as const,
-    deviceId,
     context: { serviceKind: "remote_agent_daemon" },
   }
 

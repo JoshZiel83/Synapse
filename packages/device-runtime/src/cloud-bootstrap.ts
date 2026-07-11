@@ -37,7 +37,6 @@ export async function bootstrapCloudDevice(
     device_pubkey: deviceKey.publicKey,
     service_pubkey: serviceKey.publicKey,
     client_version: opts.clientVersion,
-    host_provider: "e2b",
     platform: process.platform,
     arch: process.arch,
   })

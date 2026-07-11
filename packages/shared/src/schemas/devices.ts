@@ -145,9 +145,6 @@ export const StartPairingInputSchema = z.strictObject({
   description: z.string().max(2000).optional(),
   deviceType: z.enum(DEVICE_TYPES).optional(),
   context: z.record(z.string(), z.unknown()).optional(),
-  // Legacy field (was service_join only; that pairing mode has been removed).
-  // Retained as an accepted-but-ignored optional for wire back-compat.
-  deviceId: z.uuid().optional(),
   requestedPubkeyFingerprint: z.string().optional(),
   selfChallenge: z.string().optional(),
 })

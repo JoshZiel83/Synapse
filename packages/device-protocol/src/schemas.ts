@@ -316,7 +316,6 @@ export const CloudBootstrapInputSchema = z.object({
   device_pubkey: z.string().min(1),
   service_pubkey: z.string().min(1),
   client_version: z.string().optional(),
-  host_provider: z.string().optional(),
   platform: z.string().optional(),
   arch: z.string().optional(),
 })

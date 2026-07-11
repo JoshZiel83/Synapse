@@ -230,7 +230,6 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
           title: parsed.data.title,
           description: parsed.data.description,
           deviceType: parsed.data.deviceType,
-          deviceId: parsed.data.deviceId,
           context: parsed.data.context,
         })
         return presentDevicePairingTicket(result)

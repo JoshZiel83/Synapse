@@ -75,11 +75,9 @@ test("CloudBootstrapInputSchema accepts the sandbox bootstrap body", () => {
     device_pubkey: "dpk",
     service_pubkey: "spk",
     client_version: "1.0.0",
-    host_provider: "e2b",
     platform: "linux",
     arch: "x64",
   })
-  assert.equal(parsed.host_provider, "e2b")
   assert.equal(parsed.platform, "linux")
 })
 

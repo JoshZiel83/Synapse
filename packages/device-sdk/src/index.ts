@@ -130,7 +130,7 @@ export class DeviceSdk {
   ): Promise<CreateCloudDeviceResultView> {
     const parsed = CreateCloudDeviceInputSchema.parse(input)
     // workspaceId travels in the URL; the body carries only the app fields
-    // (title/preset/hostProvider). The API route validates the body with
+    // (title/preset). The API route validates the body with
     // CreateCloudDeviceInputSchema.omit({ workspaceId }) (a strictObject), so
     // sending workspaceId in the body would be rejected as an unknown key.
     const { workspaceId, ...body } = parsed
@@ -157,7 +157,6 @@ export class DeviceSdk {
         description: parsed.description,
         deviceType: parsed.deviceType,
         context: parsed.context,
-        deviceId: parsed.deviceId,
         requestedPubkeyFingerprint: parsed.requestedPubkeyFingerprint,
         selfChallenge: parsed.selfChallenge,
       }
