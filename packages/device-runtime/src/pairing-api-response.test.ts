@@ -65,7 +65,7 @@ test("bootstrapCloudDevice validates the bare wire result before saving identity
   const { broker, saved } = createBroker()
   installFetch(t, async () =>
     jsonResponse({
-      device_id: DEVICE_ID,
+      runtime_id: DEVICE_ID,
       service_id: SERVICE_ID,
       service_key_id: SERVICE_KEY_ID,
       control_plane_url: "wss://api.example.test/control",
@@ -92,7 +92,7 @@ test("bootstrapCloudDevice rejects malformed wire results without saving identit
   const { broker, saved } = createBroker()
   installFetch(t, async () =>
     jsonResponse({
-      device_id: DEVICE_ID,
+      runtime_id: DEVICE_ID,
       service_id: "not-a-uuid",
       service_key_id: SERVICE_KEY_ID,
       control_plane_url: "wss://api.example.test/control",

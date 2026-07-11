@@ -323,7 +323,7 @@ export const CloudBootstrapInputSchema = z.object({
 export type CloudBootstrapInput = z.infer<typeof CloudBootstrapInputSchema>
 
 export const CloudBootstrapResultSchema = z.object({
-  device_id: z.uuid(),
+  runtime_id: z.uuid(),
   service_id: z.uuid(),
   service_key_id: z.uuid(),
   control_plane_url: z.string(),
@@ -764,14 +764,14 @@ export const JsonRpcResponseSchema = z.object({
 export type JsonRpcResponse = z.infer<typeof JsonRpcResponseSchema>
 
 // device → server
-export const DeviceHelloParamsSchema = z.object({
-  device_id: z.uuid(),
+export const RuntimeHelloParamsSchema = z.object({
+  runtime_id: z.uuid(),
   service_id: z.uuid(),
   service_kind: z.enum(DEVICE_SERVICE_KINDS),
   client_version: z.string(),
   signed_challenge: z.string(),
 })
-export type DeviceHelloParams = z.infer<typeof DeviceHelloParamsSchema>
+export type RuntimeHelloParams = z.infer<typeof RuntimeHelloParamsSchema>
 
 export const DeviceCatalogToolSchema = z.object({
   stable_key: z.string(),

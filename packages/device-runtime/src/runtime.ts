@@ -3,7 +3,7 @@
 import { EventEmitter } from "node:events"
 import type {
   DeviceCatalogSyncParams,
-  DeviceHelloParams,
+  RuntimeHelloParams,
   DeviceTunnelDownParams,
   DeviceTunnelUpParams,
   TunnelHandle,
@@ -111,7 +111,7 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
 
     const helloFactory = async (
       challengeNonce: string
-    ): Promise<DeviceHelloParams> => {
+    ): Promise<RuntimeHelloParams> => {
       // PR #21: sign the server-issued challenge with the service private key
       // so the API can verify against runtime_service_keys.pubkey before
       // accepting any further frames.
@@ -142,7 +142,7 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
         privKey
       )
       return {
-        device_id: identity.deviceId,
+        runtime_id: identity.deviceId,
         service_id: runtimeService.serviceId,
         service_kind: "device_runtime",
         client_version: this.opts.clientVersion,

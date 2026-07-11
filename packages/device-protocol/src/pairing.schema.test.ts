@@ -94,7 +94,7 @@ test("CloudBootstrapInputSchema requires the credential triple", () => {
 
 test("CloudBootstrapResultSchema validates the bootstrap result", () => {
   const parsed = CloudBootstrapResultSchema.parse({
-    device_id: DEVICE_ID,
+    runtime_id: DEVICE_ID,
     service_id: SERVICE_ID,
     service_key_id: SERVICE_KEY_ID,
     control_plane_url: "wss://cp.test/control-plane",

@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto"
 import {
   JsonRpcRequestSchema,
   JsonRpcResponseSchema,
-  type DeviceHelloParams,
+  type RuntimeHelloParams,
   type DeviceServiceKind,
   type JsonRpcRequest,
   type JsonRpcResponse,
@@ -21,7 +21,7 @@ const BACKOFF_JITTER = 0.25
 
 export interface TransportClientOptions {
   controlPlaneUrl: string
-  hello: (challengeNonce: string) => Promise<DeviceHelloParams>
+  hello: (challengeNonce: string) => Promise<RuntimeHelloParams>
   /**
    * Called after a successful device.hello round-trip with the ack payload
    * from the server. Lets the runtime absorb the envelope-signing pubkey

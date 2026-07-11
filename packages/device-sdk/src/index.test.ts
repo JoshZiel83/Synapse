@@ -119,7 +119,7 @@ test("getDevice parses the camelCase DeviceDetailView", async () => {
 test("createCloudDevice SENDS camelCase body + PARSES camelCase result view", async () => {
   const { sdk, captured } = makeSdk({
     data: {
-      pendingDeviceId: deviceId,
+      pendingRuntimeId: deviceId,
       bootstrapToken: "btok",
       pairingSessionId: "11111111-0000-4000-8000-000000000001",
       expiresAt: "2099-01-01T00:00:00.000Z",
@@ -144,7 +144,7 @@ test("createCloudDevice SENDS camelCase body + PARSES camelCase result view", as
   assert.ok(!("host_provider" in body), "must not send snake host_provider")
   // parses camelCase result
   assert.equal(result.bootstrapToken, "btok")
-  assert.equal(result.pendingDeviceId, deviceId)
+  assert.equal(result.pendingRuntimeId, deviceId)
 })
 
 test("startPairing SENDS camelCase body + PARSES the camelCase ticket view", async () => {

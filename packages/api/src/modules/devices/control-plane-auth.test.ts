@@ -1,5 +1,5 @@
 // Unit + integration test for device.hello authentication. Exercises the
-// real authenticateDeviceHello against a test database with a known
+// real authenticateRuntimeHello against a test database with a known
 // (device, runtime_services, runtime_service_keys) seed and validates each
 // failure mode.
 
@@ -12,7 +12,7 @@ import {
 } from "node:crypto"
 import { sql } from "kysely"
 import { withTestDb } from "../../test/helpers/db.js"
-import { authenticateDeviceHello } from "./control-plane-auth.js"
+import { authenticateRuntimeHello } from "./control-plane-auth.js"
 
 interface Seed {
   workspaceId: string
@@ -80,13 +80,13 @@ function signNonce(privateKey: any, nonce: string): string {
   )
 }
 
-test("authenticateDeviceHello accepts a valid signature", async () => {
+test("authenticateRuntimeHello accepts a valid signature", async () => {
   await withTestDb(async (db) => {
     const seed = await seedDeviceWithService(db)
     const nonce = "0123456789abcdef"
-    const result = await authenticateDeviceHello(
+    const result = await authenticateRuntimeHello(
       {
-        deviceId: seed.deviceId,
+        runtimeId: seed.deviceId,
         serviceId: seed.serviceId,
         signedChallenge: signNonce(seed.privateKey, nonce),
         challengeNonce: nonce,
@@ -95,17 +95,17 @@ test("authenticateDeviceHello accepts a valid signature", async () => {
     )
     assert.equal(result.ok, true)
     if (result.ok) {
-      assert.equal(result.deviceId, seed.deviceId)
+      assert.equal(result.runtimeId, seed.deviceId)
       assert.equal(result.serviceId, seed.serviceId)
     }
   })
 })
 
-test("authenticateDeviceHello rejects unknown device_id", async () => {
+test("authenticateRuntimeHello rejects unknown runtime_id", async () => {
   await withTestDb(async (db) => {
-    const result = await authenticateDeviceHello(
+    const result = await authenticateRuntimeHello(
       {
-        deviceId: randomUUID(),
+        runtimeId: randomUUID(),
         serviceId: randomUUID(),
         signedChallenge: "AAAA",
         challengeNonce: "n",
@@ -117,12 +117,12 @@ test("authenticateDeviceHello rejects unknown device_id", async () => {
   })
 })
 
-test("authenticateDeviceHello rejects mismatched service/device pair", async () => {
+test("authenticateRuntimeHello rejects mismatched service/device pair", async () => {
   await withTestDb(async (db) => {
     const seed = await seedDeviceWithService(db)
-    const result = await authenticateDeviceHello(
+    const result = await authenticateRuntimeHello(
       {
-        deviceId: seed.deviceId,
+        runtimeId: seed.deviceId,
         serviceId: randomUUID(), // not a child of seed.deviceId
         signedChallenge: "AAAA",
         challengeNonce: "n",
@@ -134,13 +134,13 @@ test("authenticateDeviceHello rejects mismatched service/device pair", async () 
   })
 })
 
-test("authenticateDeviceHello rejects a wrong signature", async () => {
+test("authenticateRuntimeHello rejects a wrong signature", async () => {
   await withTestDb(async (db) => {
     const seed = await seedDeviceWithService(db)
     const wrongPrivate = generateKeyPairSync("ed25519").privateKey
-    const result = await authenticateDeviceHello(
+    const result = await authenticateRuntimeHello(
       {
-        deviceId: seed.deviceId,
+        runtimeId: seed.deviceId,
         serviceId: seed.serviceId,
         signedChallenge: signNonce(wrongPrivate, "the-nonce"),
         challengeNonce: "the-nonce",
@@ -152,7 +152,7 @@ test("authenticateDeviceHello rejects a wrong signature", async () => {
   })
 })
 
-test("authenticateDeviceHello rejects a revoked service key", async () => {
+test("authenticateRuntimeHello rejects a revoked service key", async () => {
   await withTestDb(async (db) => {
     const seed = await seedDeviceWithService(db)
     await db.executeQuery(
@@ -160,9 +160,9 @@ test("authenticateDeviceHello rejects a revoked service key", async () => {
         db
       )
     )
-    const result = await authenticateDeviceHello(
+    const result = await authenticateRuntimeHello(
       {
-        deviceId: seed.deviceId,
+        runtimeId: seed.deviceId,
         serviceId: seed.serviceId,
         signedChallenge: signNonce(seed.privateKey, "n"),
         challengeNonce: "n",

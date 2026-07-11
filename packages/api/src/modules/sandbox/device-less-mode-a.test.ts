@@ -2,7 +2,7 @@
 // substrate generalization, §4.7 / CORRECTION 3). Drives a kind='sandbox'
 // runtime with NO `devices` row through the four cross-module read paths that
 // used to hard-check the `devices` table:
-//   1. device.hello auth  (selectDeviceHelloAuthContext → runtimes existence)
+//   1. device.hello auth  (selectRuntimeHelloAuthContext → runtimes existence)
 //   2. catalog readiness  (isFilesystemExposureHealthy — the waitForCatalog tick)
 //   3. tool projection     (selectDeviceCapabilityToolsForSubjects surfaces
 //                           the sandbox's fs + commandline tools)
@@ -23,7 +23,7 @@ import type { Kysely } from "kysely"
 import { SUBJECT_KIND } from "@synapse/shared"
 import { withTestDb } from "../../test/helpers/db.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
-import { authenticateDeviceHello } from "../devices/control-plane-auth.js"
+import { authenticateRuntimeHello } from "../devices/control-plane-auth.js"
 import { isFilesystemExposureHealthy } from "./repo.js"
 import { selectDeviceCapabilityToolsForSubjects } from "../capability-projection/repo.js"
 import {
@@ -222,9 +222,9 @@ test("G3: a device-less sandbox runtime authenticates device.hello (runtimes exi
       Buffer.from(nonce, "utf8"),
       seed.servicePrivateKey
     ).toString("base64")
-    const result = await authenticateDeviceHello(
+    const result = await authenticateRuntimeHello(
       {
-        deviceId: seed.runtimeId,
+        runtimeId: seed.runtimeId,
         serviceId: seed.serviceId,
         signedChallenge,
         challengeNonce: nonce,
@@ -233,7 +233,7 @@ test("G3: a device-less sandbox runtime authenticates device.hello (runtimes exi
     )
     assert.equal(result.ok, true, "sandbox runtime hello must authenticate")
     if (result.ok) {
-      assert.equal(result.deviceId, seed.runtimeId)
+      assert.equal(result.runtimeId, seed.runtimeId)
       assert.equal(result.serviceId, seed.serviceId)
     }
   })

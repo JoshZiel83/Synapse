@@ -8,7 +8,7 @@ import { nowIsoInstant } from "@synapse/shared/datetime"
 //      base64-Ed25519 signature of the nonce, signed by its service private
 //      key (loaded from the broker).
 //   3. Server verifies the signature against the runtime_service_keys row
-//      matching the claimed (device_id, service_id) pair. On success, a
+//      matching the claimed (runtime_id, service_id) pair. On success, a
 //      runtime_control_plane_sessions row is INSERTed with status='active'
 //      and runtime_services.current_session_id is bumped.
 //   4. Server returns the envelope-signing pubkey + kid in the hello ack so
@@ -27,7 +27,7 @@ import { formatValidationDetails } from "../../infrastructure/validation-error.j
 import { wireRoute } from "../../infrastructure/http/route.js"
 import {
   DeviceCatalogSyncParamsSchema,
-  DeviceHelloParamsSchema,
+  RuntimeHelloParamsSchema,
   DeviceTunnelDownParamsSchema,
   DeviceTunnelUpParamsSchema,
   parseJsonRpcRequestFrame,
@@ -35,7 +35,7 @@ import {
 } from "@synapse/device-protocol"
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
 import { persistCatalogSync } from "./catalog-sync.js"
-import { authenticateDeviceHello } from "./control-plane-auth.js"
+import { authenticateRuntimeHello } from "./control-plane-auth.js"
 import { mintDeviceLogToken } from "../logs/device-token.js"
 import { getEnvelopeServerPublicKey } from "./envelope-signer.js"
 import { getRuntimeEndpointRegistry } from "./tunnel-registry.js"
@@ -297,7 +297,7 @@ async function validateLocalLoopbackUrl(args: {
 interface ConnectionState {
   challengeNonce: string
   helloSeen: boolean
-  authenticatedDeviceId: string | null
+  authenticatedRuntimeId: string | null
   authenticatedServiceId: string | null
   authenticatedWorkspaceId: string | null
   sessionId: string | null
@@ -387,7 +387,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
       const state: ConnectionState = {
         challengeNonce: randomBytes(32).toString("hex"),
         helloSeen: false,
-        authenticatedDeviceId: null,
+        authenticatedRuntimeId: null,
         authenticatedServiceId: null,
         authenticatedWorkspaceId: null,
         sessionId: null,
@@ -399,7 +399,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
       })
 
       const requireAuthenticated = (req: JsonRpcRequest): boolean => {
-        if (state.authenticatedDeviceId && state.authenticatedServiceId) {
+        if (state.authenticatedRuntimeId && state.authenticatedServiceId) {
           return true
         }
         writeError(
@@ -433,7 +433,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
               )
               return
             }
-            const parsed = DeviceHelloParamsSchema.safeParse(req.params)
+            const parsed = RuntimeHelloParamsSchema.safeParse(req.params)
             if (!parsed.success) {
               writeError(
                 socket,
@@ -445,8 +445,8 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
               return
             }
             state.helloSeen = true
-            authenticateDeviceHello({
-              deviceId: parsed.data.device_id,
+            authenticateRuntimeHello({
+              runtimeId: parsed.data.runtime_id,
               serviceId: parsed.data.service_id,
               signedChallenge: parsed.data.signed_challenge,
               challengeNonce: state.challengeNonce,
@@ -467,13 +467,13 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
                   }
                   return
                 }
-                state.authenticatedDeviceId = result.deviceId
+                state.authenticatedRuntimeId = result.runtimeId
                 state.authenticatedServiceId = result.serviceId
                 // Cache the device's workspace_id so per-message event
                 // persistence (runtime_events) doesn't have to re-query it.
                 try {
                   state.authenticatedWorkspaceId = await getDeviceWorkspaceId(
-                    result.deviceId
+                    result.runtimeId
                   )
                 } catch {
                   /* workspace lookup is best-effort; event.emit will
@@ -484,7 +484,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
                 // can find an active session and not reject themselves.
                 try {
                   state.sessionId = await insertControlPlaneSession({
-                    deviceId: result.deviceId,
+                    deviceId: result.runtimeId,
                     serviceId: result.serviceId,
                     clientVersion: parsed.data.client_version ?? null,
                     remoteAddr: request.ip ?? null,
@@ -548,7 +548,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
                   // POST /api/v1/logs. Null (omitted use) when log ingest is not
                   // configured (SYNAPSE_LOG_INGEST_SECRET unset).
                   log_ingest_token: mintDeviceLogToken(
-                    result.deviceId,
+                    result.runtimeId,
                     result.serviceId,
                     Date.now()
                   ),
@@ -580,7 +580,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
               return
             }
             persistCatalogSync({
-              deviceId: state.authenticatedDeviceId!,
+              deviceId: state.authenticatedRuntimeId!,
               serviceId: state.authenticatedServiceId!,
               exposures: parsedCatalog.data.exposures,
             })
@@ -700,7 +700,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
             writeResult(socket, req.id ?? null, {
               accepted: true,
               method: req.method,
-              device_id: state.authenticatedDeviceId,
+              runtime_id: state.authenticatedRuntimeId,
               service_id: state.authenticatedServiceId,
             })
             return
@@ -708,7 +708,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           case "device.runtime_session.opened": {
             if (!requireAuthenticated(req)) return
             persistRuntimeSessionOpened(
-              state.authenticatedDeviceId!,
+              state.authenticatedRuntimeId!,
               state.authenticatedServiceId!,
               req.params
             )
@@ -726,7 +726,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           case "device.runtime_session.closed": {
             if (!requireAuthenticated(req)) return
             persistRuntimeSessionClosed(
-              state.authenticatedDeviceId!,
+              state.authenticatedRuntimeId!,
               state.authenticatedServiceId!,
               req.params
             )
@@ -744,7 +744,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           case "device.task.received": {
             if (!requireAuthenticated(req)) return
             persistTaskReceived(
-              state.authenticatedDeviceId!,
+              state.authenticatedRuntimeId!,
               state.authenticatedServiceId!,
               req.params
             )
@@ -762,7 +762,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           case "device.task.started": {
             if (!requireAuthenticated(req)) return
             persistTaskStarted(
-              state.authenticatedDeviceId!,
+              state.authenticatedRuntimeId!,
               state.authenticatedServiceId!,
               req.params
             )
@@ -780,7 +780,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           case "device.task.output": {
             if (!requireAuthenticated(req)) return
             persistTaskOutput(
-              state.authenticatedDeviceId!,
+              state.authenticatedRuntimeId!,
               state.authenticatedServiceId!,
               req.params
             )
@@ -798,7 +798,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           case "device.task.status": {
             if (!requireAuthenticated(req)) return
             persistTaskStatus(
-              state.authenticatedDeviceId!,
+              state.authenticatedRuntimeId!,
               state.authenticatedServiceId!,
               req.params
             )
@@ -816,7 +816,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           case "device.task.result": {
             if (!requireAuthenticated(req)) return
             persistTaskResult(
-              state.authenticatedDeviceId!,
+              state.authenticatedRuntimeId!,
               state.authenticatedServiceId!,
               req.params
             )
@@ -856,7 +856,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           }
           case "device.vfs.exposure.upsert": {
             if (!requireAuthenticated(req)) return
-            persistVfsExposureUpsert(state.authenticatedDeviceId!, req.params)
+            persistVfsExposureUpsert(state.authenticatedRuntimeId!, req.params)
               .then((r) => writePersistResult(socket, req.id ?? null, r))
               .catch((err) =>
                 writeError(

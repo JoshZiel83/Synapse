@@ -174,7 +174,7 @@ export type ConsumeCloudBootstrapResult =
   | {
       outcome: "ok"
       session: ConsumedCloudPairingSession
-      pendingDeviceId: string
+      pendingRuntimeId: string
     }
   | {
       outcome: "not_found" | "not_pending" | "expired" | "race" | "corrupt"
@@ -262,8 +262,8 @@ export async function consumeCloudBootstrapTx(args: {
     }
 
     const context = (session.context ?? {}) as Record<string, unknown>
-    const pendingDeviceId = context["pending_runtime_id"] as string | undefined
-    if (!pendingDeviceId) {
+    const pendingRuntimeId = context["pending_runtime_id"] as string | undefined
+    if (!pendingRuntimeId) {
       return { outcome: "corrupt" }
     }
 
@@ -281,7 +281,7 @@ export async function consumeCloudBootstrapTx(args: {
       await trx
         .insertInto("runtimes")
         .values({
-          id: pendingDeviceId,
+          id: pendingRuntimeId,
           workspaceId: session.workspaceId as string,
           kind: "device",
         } as never)
@@ -290,7 +290,7 @@ export async function consumeCloudBootstrapTx(args: {
       await trx
         .insertInto("devices")
         .values({
-          id: pendingDeviceId,
+          id: pendingRuntimeId,
           workspaceId: session.workspaceId as string,
           ownerWorkspaceMemberId: session.requestedByWorkspaceMemberId ?? null,
           title: (session.requestedTitle as string | null) ?? "Cloud Device",
@@ -319,7 +319,7 @@ export async function consumeCloudBootstrapTx(args: {
       await trx
         .insertInto("runtimes")
         .values({
-          id: pendingDeviceId,
+          id: pendingRuntimeId,
           workspaceId: session.workspaceId as string,
           kind: "sandbox",
         } as never)
@@ -327,7 +327,7 @@ export async function consumeCloudBootstrapTx(args: {
       await trx
         .insertInto("sandboxes")
         .values({
-          id: pendingDeviceId,
+          id: pendingRuntimeId,
           workspaceId: session.workspaceId as string,
           sessionId: sandboxSessionId,
           mode,
@@ -345,7 +345,7 @@ export async function consumeCloudBootstrapTx(args: {
       .insertInto("runtimeServices")
       .values({
         id: args.service.serviceId,
-        runtimeId: pendingDeviceId,
+        runtimeId: pendingRuntimeId,
         serviceKind: "device_runtime",
         version: args.service.version,
         status: "starting",
@@ -366,14 +366,14 @@ export async function consumeCloudBootstrapTx(args: {
     await trx
       .updateTable("runtimePairingSessions")
       .set({
-        runtimeId: pendingDeviceId,
+        runtimeId: pendingRuntimeId,
       } as never)
       .where("id", "=", session.id as string)
       .execute()
 
     return {
       outcome: "ok",
-      pendingDeviceId,
+      pendingRuntimeId,
       session: {
         id: session.id as string,
         workspaceId: session.workspaceId as string,
@@ -534,9 +534,9 @@ export async function updateRuntimeServiceTransport(
     .execute()
 }
 
-export type DeviceHelloAuthContext = {
-  deviceExists: boolean
-  service: { id: string; deviceId: string } | null
+export type RuntimeHelloAuthContext = {
+  runtimeExists: boolean
+  service: { id: string; runtimeId: string } | null
   activeKey: {
     id: string
     pubkey: string
@@ -544,22 +544,22 @@ export type DeviceHelloAuthContext = {
   } | null
 }
 
-/** device.hello auth lookup. Signature verification stays in control-plane-auth. */
-export async function selectDeviceHelloAuthContext(
-  input: { deviceId: string; serviceId: string },
+/** runtime.hello auth lookup. Signature verification stays in control-plane-auth. */
+export async function selectRuntimeHelloAuthContext(
+  input: { runtimeId: string; serviceId: string },
   executor: KyselyDb = db
-): Promise<DeviceHelloAuthContext> {
+): Promise<RuntimeHelloAuthContext> {
   // Generalized to the runtimes supertype (P2): a device-less kind='sandbox'
-  // runtime must authenticate device.hello identically. Existence + liveness are
+  // runtime must authenticate runtime.hello identically. Existence + liveness are
   // rooted on runtimes (its sole soft-delete authority); the service + key reads
   // below are already runtime-keyed, so a sandbox runtime with its
   // runtime_service_keys row authenticates exactly like a device.
   const runtime = await executor
     .selectFrom("runtimesLive")
     .select(["id"])
-    .where("id", "=", input.deviceId)
+    .where("id", "=", input.runtimeId)
     .executeTakeFirst()
-  if (!runtime) return { deviceExists: false, service: null, activeKey: null }
+  if (!runtime) return { runtimeExists: false, service: null, activeKey: null }
 
   const serviceRow = await executor
     .selectFrom("runtimeServices")
@@ -567,13 +567,13 @@ export async function selectDeviceHelloAuthContext(
     .where("id", "=", input.serviceId)
     .executeTakeFirst()
   const service =
-    serviceRow && serviceRow.runtimeId === input.deviceId
+    serviceRow && serviceRow.runtimeId === input.runtimeId
       ? {
           id: serviceRow.id as string,
-          deviceId: serviceRow.runtimeId as string,
+          runtimeId: serviceRow.runtimeId as string,
         }
       : null
-  if (!service) return { deviceExists: true, service: null, activeKey: null }
+  if (!service) return { runtimeExists: true, service: null, activeKey: null }
 
   const keyRow = await executor
     .selectFrom("runtimeServiceKeys")
@@ -582,7 +582,7 @@ export async function selectDeviceHelloAuthContext(
     .where("revokedAt", "is", null)
     .executeTakeFirst()
   return {
-    deviceExists: true,
+    runtimeExists: true,
     service,
     activeKey: keyRow
       ? {

@@ -1,23 +1,23 @@
-// Device Control Plane hello authentication (§7.1 handshake).
-// Verifies that the (device_id, service_id) pair claimed by the runtime is a
+// Runtime Control Plane hello authentication (§7.1 handshake).
+// Verifies that the (runtime_id, service_id) pair claimed by the runtime is a
 // real runtime_services row in the DB AND that the runtime can sign a
 // server-issued nonce with the matching runtime_service_keys.pubkey.
 
 import { createPublicKey, verify as cryptoVerify } from "node:crypto"
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
-import { selectDeviceHelloAuthContext } from "./repo.js"
+import { selectRuntimeHelloAuthContext } from "./repo.js"
 
-export interface DeviceHelloAuthInput {
-  deviceId: string
+export interface RuntimeHelloAuthInput {
+  runtimeId: string
   serviceId: string
   signedChallenge: string
   challengeNonce: string
 }
 
-export type DeviceHelloAuthResult =
+export type RuntimeHelloAuthResult =
   | {
       ok: true
-      deviceId: string
+      runtimeId: string
       serviceId: string
       serviceKeyId: string
       pubkeyFingerprint: string
@@ -52,23 +52,23 @@ function decodeBase64(value: string): Buffer | null {
  * Tests inject the testcontainer-backed handle (e.g. the `withTestDb`
  * transaction) so lookups run against the same isolated schema they seeded.
  */
-export async function authenticateDeviceHello(
-  input: DeviceHelloAuthInput,
+export async function authenticateRuntimeHello(
+  input: RuntimeHelloAuthInput,
   executor?: KyselyDb
-): Promise<DeviceHelloAuthResult> {
-  const context = await selectDeviceHelloAuthContext(input, executor)
-  if (!context.deviceExists) {
+): Promise<RuntimeHelloAuthResult> {
+  const context = await selectRuntimeHelloAuthContext(input, executor)
+  if (!context.runtimeExists) {
     return {
       ok: false,
       code: "device_not_found",
-      message: `device ${input.deviceId} not found`,
+      message: `device ${input.runtimeId} not found`,
     }
   }
   if (!context.service) {
     return {
       ok: false,
       code: "service_not_found",
-      message: `device_service ${input.serviceId} not found on device ${input.deviceId}`,
+      message: `device_service ${input.serviceId} not found on device ${input.runtimeId}`,
     }
   }
   const key = context.activeKey
@@ -121,7 +121,7 @@ export async function authenticateDeviceHello(
   }
   return {
     ok: true,
-    deviceId: input.deviceId,
+    runtimeId: input.runtimeId,
     serviceId: input.serviceId,
     serviceKeyId: key.id,
     pubkeyFingerprint: key.pubkeyFingerprint,

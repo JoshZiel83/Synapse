@@ -57,7 +57,7 @@ export async function bootstrapCloudDevice(
   )
 
   const identity: DeviceIdentityRecord = {
-    deviceId: result.device_id,
+    deviceId: result.runtime_id,
     serverOrigin: opts.serverOrigin,
     hostKind: "cloud",
     devicePubkeyFingerprint: deviceKey.publicKeyFingerprint,
@@ -74,7 +74,7 @@ export async function bootstrapCloudDevice(
   await opts.broker.saveDeviceIdentity(identity)
 
   return {
-    deviceId: result.device_id,
+    deviceId: result.runtime_id,
     serviceId: result.service_id,
     controlPlaneUrl: result.control_plane_url,
   }

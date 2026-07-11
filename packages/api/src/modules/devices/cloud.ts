@@ -34,14 +34,14 @@ export interface CreateCloudDeviceInput {
  * handshake — same logical value, two surfaces, two contracts (§13.1).
  */
 export interface CreateCloudDeviceResult {
-  pendingDeviceId: string
+  pendingRuntimeId: string
   bootstrapToken: string
   pairingSessionId: string
   expiresAt: IsoInstantString
 }
 
 /**
- * Allocate a pending device id + one-time bootstrap_token, persist them in a
+ * Allocate a pending runtime id + one-time bootstrap_token, persist them in a
  * cloud_bootstrap pairing session, and return the token for the caller (the
  * API server) to inject into the sandbox env. The `devices` row is NOT
  * created here — see consumeCloudBootstrap below — because
@@ -52,7 +52,7 @@ export interface CreateCloudDeviceResult {
 export async function createCloudDevicePairing(
   input: CreateCloudDeviceInput
 ): Promise<CreateCloudDeviceResult> {
-  const pendingDeviceId = randomUUID()
+  const pendingRuntimeId = randomUUID()
   const bootstrapToken =
     randomUUID().replace(/-/g, "") + randomUUID().replace(/-/g, "")
   const bootstrapTokenHash = createHash("sha256")
@@ -72,7 +72,7 @@ export async function createCloudDevicePairing(
     // The sandbox fork facts (adapter/mode/session_id/capability_descriptor) are
     // carried in context and read by consumeCloudBootstrapTx's 'sandbox' branch.
     contextJson: JSON.stringify({
-      pending_runtime_id: pendingDeviceId,
+      pending_runtime_id: pendingRuntimeId,
       preset: input.preset ?? null,
       adapter: input.adapter ?? null,
       mode: input.mode ?? null,
@@ -82,7 +82,7 @@ export async function createCloudDevicePairing(
   })
 
   return {
-    pendingDeviceId: pendingDeviceId,
+    pendingRuntimeId: pendingRuntimeId,
     bootstrapToken: bootstrapToken,
     pairingSessionId: sessionId,
     expiresAt: dateToIsoInstant(expiresAt),
@@ -177,7 +177,7 @@ export async function consumeCloudBootstrap(
   }
 
   return {
-    device_id: result.pendingDeviceId,
+    runtime_id: result.pendingRuntimeId,
     service_id: serviceId,
     service_key_id: serviceKeyId,
     control_plane_url: opts.controlPlaneUrl,

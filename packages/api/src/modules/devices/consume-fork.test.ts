@@ -89,7 +89,7 @@ test("(d) consumeCloudBootstrapTx DEVICE branch: runtimes(kind=device)+devices, 
     })
     assert.equal(result.outcome, "ok")
     if (result.outcome !== "ok") return
-    assert.equal(result.pendingDeviceId, pendingRuntimeId)
+    assert.equal(result.pendingRuntimeId, pendingRuntimeId)
 
     const runtime = await db
       .selectFrom("runtimes")

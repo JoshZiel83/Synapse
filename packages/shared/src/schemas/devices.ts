@@ -129,7 +129,7 @@ export type CreateCloudDeviceInput = z.infer<
  * same logical value, two surfaces, two independent contracts (§13.1).
  */
 export const CreateCloudDeviceResultViewSchema = z.strictObject({
-  pendingDeviceId: z.uuid(),
+  pendingRuntimeId: z.uuid(),
   bootstrapToken: z.string(),
   pairingSessionId: z.uuid(),
   expiresAt: IsoInstantStringSchema,
