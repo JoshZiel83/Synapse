@@ -1710,18 +1710,6 @@ export type SystemGeneratedFileOriginSystem =
 export type FileParseRunStatus = (typeof FILE_PARSE_RUN_STATUSES)[number]
 export type FileParseOutputKind = (typeof FILE_PARSE_OUTPUT_KINDS)[number]
 
-export interface DeviceMcpFileSourceMetadata {
-  kind: "device_mcp"
-  deviceId: UUID
-  deviceDisplayName?: string
-  exposureId: UUID
-  exposureStableKey: string
-  exposureDisplayName?: string
-  runtimeSessionId: UUID
-  visibleToolName: string
-  namespacedToolName: string
-}
-
 export interface FileOriginSummary {
   family: FileOriginFamily
   system: FileOriginSystem
@@ -1730,7 +1718,11 @@ export interface FileOriginSummary {
   providerKey?: string
   parentFileId?: UUID | null
   externalResourceKey?: string
-  details?: DeviceMcpFileSourceMetadata | Record<string, unknown>
+  // Genuinely-open metadata bag. The live ingest path writes a ToolResultOrigin
+  // snapshot (originKind:'runtime', runtimeToolId, taskId, ...) here; there is no
+  // fixed schema. (The old DeviceMcpFileSourceMetadata shape was device-era dead
+  // code — nothing constructed kind:'device_mcp' after the runtime rename.)
+  details?: Record<string, unknown>
 }
 
 export interface FileCreateOriginInput {
@@ -3428,7 +3420,7 @@ export interface RuntimeAuthorizationTaskDetails {
   requestedAction: RuntimeAuthorizationRequestedAction
   reason: string
   runtimeId: UUID
-  deviceDisplayName: string
+  runtimeDisplayName: string
   runtimeCapabilityId: UUID
   exposureId: UUID
   exposureDisplayName: string

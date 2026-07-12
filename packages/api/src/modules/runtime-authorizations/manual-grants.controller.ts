@@ -96,7 +96,7 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
       if (!row) {
         reply.status(404).send({
           code: "runtime_capability_not_found",
-          message: `device capability ${parsed.data.runtimeCapabilityId} not found`,
+          message: `runtime capability ${parsed.data.runtimeCapabilityId} not found`,
         })
         return
       }

@@ -88,7 +88,7 @@ function buildTaskDbRow(overrides: Partial<RawTaskDbRow> = {}): RawTaskDbRow {
     runtimeId: null,
     runtimeExposureId: null,
     runtimeToolStableKey: null,
-    deviceDisplayName: null,
+    runtimeDisplayName: null,
     exposureDisplayName: null,
     exposureStableKey: null,
     requesterParticipantType: CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER,
@@ -437,7 +437,7 @@ function runtimeAuthorizationTaskRow(
       runtimeId: "device-1",
       runtimeCapabilityId: "capability-1",
       runtimeExposureId: "exposure-1",
-      deviceDisplayName: "Laptop",
+      runtimeDisplayName: "Laptop",
       exposureDisplayName: "Shell",
       ...overrides,
     })

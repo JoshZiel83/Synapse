@@ -552,7 +552,7 @@ function buildPlanApprovalRevisionNotice(task: TaskSummary) {
 function buildRuntimeAuthorizationRejectedNotice(task: TaskSummary) {
   const resolverName = task.resolvedBy?.name || "An authorized user"
   const runtimeName =
-    task.runtimeAuthorization?.deviceDisplayName || "the device"
+    task.runtimeAuthorization?.runtimeDisplayName || "the runtime"
   const summary = `${resolverName} rejected access for ${runtimeName}.`
   const lines = [
     summary,
@@ -587,7 +587,7 @@ function buildRuntimeAuthorizationRejectedNotice(task: TaskSummary) {
 function buildRuntimeAuthorizationApprovedNotice(task: TaskSummary) {
   const resolverName = task.resolvedBy?.name || "An authorized user"
   const runtimeName =
-    task.runtimeAuthorization?.deviceDisplayName || "the device"
+    task.runtimeAuthorization?.runtimeDisplayName || "the runtime"
   const approvedPreset =
     task.runtimeAuthorization?.approvedPreset || "conversation"
   const summary = `${resolverName} approved ${approvedPreset} access for ${runtimeName}.`

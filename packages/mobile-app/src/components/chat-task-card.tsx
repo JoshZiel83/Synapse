@@ -1159,7 +1159,7 @@ export function ChatTaskCard({
                       <View style={styles.summarySection}>
                         <Text style={styles.summaryIndex}>设备</Text>
                         <Text style={styles.summaryTitle}>
-                          {task.runtimeAuthorization?.deviceDisplayName ||
+                          {task.runtimeAuthorization?.runtimeDisplayName ||
                             "Device"}
                         </Text>
                         <Text style={styles.summaryDescription}>

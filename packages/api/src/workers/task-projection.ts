@@ -360,8 +360,8 @@ async function processOne(
       ? buildFallbackCanonical(fallbackText)
       : buildKeyboardCanonical({
           taskId: task.id,
-          title: task.runtimeAuthorization?.deviceDisplayName
-            ? `${task.runtimeAuthorization.deviceDisplayName} 请求授权`
+          title: task.runtimeAuthorization?.runtimeDisplayName
+            ? `${task.runtimeAuthorization.runtimeDisplayName} 请求授权`
             : "需要审批",
           fallbackText,
           options: mintedOptions,
@@ -559,11 +559,11 @@ function buildItemParts(msg: CanonicalMessage): ConversationItemPartInput[] {
 }
 
 function buildFallbackText(params: {
-  task: { runtimeAuthorization?: { deviceDisplayName?: string } }
+  task: { runtimeAuthorization?: { runtimeDisplayName?: string } }
 }): string {
-  const device = params.task.runtimeAuthorization?.deviceDisplayName
-  if (device) {
-    return `${device} 请求授权 — ${FALLBACK_TEXT_DEFAULT}`
+  const runtimeName = params.task.runtimeAuthorization?.runtimeDisplayName
+  if (runtimeName) {
+    return `${runtimeName} 请求授权 — ${FALLBACK_TEXT_DEFAULT}`
   }
   return FALLBACK_TEXT_DEFAULT
 }

@@ -50,7 +50,7 @@ function makeRuntimeAuthSummary(
       },
       reason: "test",
       runtimeId: "00000000-0000-0000-0000-00000000000d",
-      deviceDisplayName: "Test Device",
+      runtimeDisplayName: "Test Device",
       runtimeCapabilityId: "00000000-0000-0000-0000-00000000000e",
       exposureId: "00000000-0000-0000-0000-00000000000f",
       exposureDisplayName: "CUA",

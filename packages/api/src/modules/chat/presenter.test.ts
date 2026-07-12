@@ -175,7 +175,7 @@ const runtimeAuthorizationTask: TaskSummary = {
     },
     reason: "Need to write output",
     runtimeId: "device-1",
-    deviceDisplayName: "Local device",
+    runtimeDisplayName: "Local device",
     runtimeCapabilityId: "capability-1",
     exposureId: "exposure-1",
     exposureDisplayName: "Filesystem",

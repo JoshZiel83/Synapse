@@ -76,7 +76,7 @@ export interface RuntimeAuthorizationRequestTarget {
   // tool_call_task_runtime_authorization.source_runtime_session_id. Named
   // distinctly from runtime_sessions.id (also a "runtime session").
   sourceRuntimeSessionId: string
-  deviceDisplayName?: string
+  runtimeDisplayName?: string
   exposureDisplayName?: string
 }
 
@@ -176,8 +176,8 @@ export type RuntimeAuthorizationWaitResult<T> =
       task: TaskSummary | null
     }
 
-function buildWaitingSummary(deviceDisplayName?: string) {
-  return `Waiting for a user to authorize ${deviceDisplayName?.trim() || "the device"}.`
+function buildWaitingSummary(runtimeDisplayName?: string) {
+  return `Waiting for a user to authorize ${runtimeDisplayName?.trim() || "the runtime"}.`
 }
 
 function isTaskOpen(task: TaskSummary) {
@@ -391,7 +391,7 @@ export async function createRuntimeAuthorizationRequest(
       requesterParticipantId: requesterMember.id,
       lifecycleStatus: "auth_required",
       statusMessage: buildWaitingSummary(
-        params.runtimeTarget.deviceDisplayName
+        params.runtimeTarget.runtimeDisplayName
       ),
       supportsCancel: true,
       requestPayload: {
@@ -490,10 +490,10 @@ export async function createRuntimeAuthorizationRequest(
     }
   } catch (error) {
     await cancelToolCallTask(taskRecord.id, {
-      summary: `Runtime authorization request for ${params.runtimeTarget.deviceDisplayName?.trim() || "the device"} failed before dispatch.`,
+      summary: `Runtime authorization request for ${params.runtimeTarget.runtimeDisplayName?.trim() || "the runtime"} failed before dispatch.`,
       finalResultPayload: {
         content: textBlocks(
-          `Runtime authorization request for ${params.runtimeTarget.deviceDisplayName?.trim() || "the device"} failed before dispatch.`
+          `Runtime authorization request for ${params.runtimeTarget.runtimeDisplayName?.trim() || "the runtime"} failed before dispatch.`
         ),
         isError: true,
       },

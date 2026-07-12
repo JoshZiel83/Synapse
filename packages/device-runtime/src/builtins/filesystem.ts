@@ -2297,7 +2297,15 @@ async function handleIndexStatus(
   if (!ctx.helper) {
     throw new ToolFailure("runtime_constraint", "index_disabled")
   }
-  const subtree = asString(args["subtree"]) ?? "/"
+  // Omitted-subtree default mirrors handleListDir: a sandbox-confined runtime
+  // defaults to DEFAULT_SANDBOX_CWD (/conversation, a granted mount) so an
+  // unqualified fs_index_status/rebuild AUTHORIZES (matcher projects the same
+  // defaultPathPrefix for these subtreeTools) AND executes against a covered
+  // mount; a real device keeps "/". Without this the call authorized
+  // /conversation at the API but hard-denied "/" at the vfs (the P5b split).
+  const subtree =
+    asString(args["subtree"]) ??
+    (ctx.cfg.sandboxConfined ? DEFAULT_SANDBOX_CWD : "/")
   const canonical = canonicalVfsPath(subtree)
   const grants = getFsGrants(envelope)
   if (envelope && !checkFsGrant(grants, "read", canonical)) {
@@ -2343,7 +2351,15 @@ async function handleIndexRebuild(
   if (!ctx.helper) {
     throw new ToolFailure("runtime_constraint", "index_disabled")
   }
-  const subtree = asString(args["subtree"]) ?? "/"
+  // Omitted-subtree default mirrors handleListDir: a sandbox-confined runtime
+  // defaults to DEFAULT_SANDBOX_CWD (/conversation, a granted mount) so an
+  // unqualified fs_index_status/rebuild AUTHORIZES (matcher projects the same
+  // defaultPathPrefix for these subtreeTools) AND executes against a covered
+  // mount; a real device keeps "/". Without this the call authorized
+  // /conversation at the API but hard-denied "/" at the vfs (the P5b split).
+  const subtree =
+    asString(args["subtree"]) ??
+    (ctx.cfg.sandboxConfined ? DEFAULT_SANDBOX_CWD : "/")
   const canonical = canonicalVfsPath(subtree)
   const grants = getFsGrants(envelope)
   if (envelope && !checkFsGrant(grants, "read", canonical)) {

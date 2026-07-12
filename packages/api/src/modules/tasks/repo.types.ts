@@ -114,7 +114,7 @@ export type RawTaskRow = {
   runtimeId: string | null
   runtimeExposureId: string | null
   runtimeToolStableKey: string | null
-  deviceDisplayName: string | null
+  runtimeDisplayName: string | null
   exposureDisplayName: string | null
   exposureStableKey: string | null
   requesterParticipantType: string | null

@@ -563,8 +563,8 @@ export function presentTaskSummary(row: RawTaskRow): TaskSummary {
       `Task ${row.id} runtime_authorization.reason`
     ),
     runtimeId: requireTrimmedString(row.runtimeId, `Task ${row.id} runtime_id`),
-    deviceDisplayName: requireTrimmedString(
-      row.deviceDisplayName,
+    runtimeDisplayName: requireTrimmedString(
+      row.runtimeDisplayName,
       `Task ${row.id} device_display_name`
     ),
     runtimeCapabilityId: requireTrimmedString(

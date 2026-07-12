@@ -499,7 +499,7 @@ export async function getTaskRowById(taskId: string, queryable?: Executor) {
             resolver_user.avatar_file_id AS "resolvedByUserAvatarFileId",
             resolver_remote_agent.avatar_file_id AS "resolvedByRemoteAgentAvatarFileId",
             COALESCE(resolver_remote_agent.avatar_emoji, resolver_actor.avatar_emoji) AS "resolvedByAvatarEmoji",
-            COALESCE(device.title, 'Sandbox') AS "deviceDisplayName",
+            COALESCE(device.title, 'Sandbox') AS "runtimeDisplayName",
             exposure.display_name AS "exposureDisplayName",
             exposure.stable_key AS "exposureStableKey"
      FROM tool_call_tasks ir
@@ -627,7 +627,7 @@ export async function getTaskRowByIdForUpdate(
             resolver_user.avatar_file_id AS "resolvedByUserAvatarFileId",
             resolver_remote_agent.avatar_file_id AS "resolvedByRemoteAgentAvatarFileId",
             COALESCE(resolver_remote_agent.avatar_emoji, resolver_actor.avatar_emoji) AS "resolvedByAvatarEmoji",
-            COALESCE(device.title, 'Sandbox') AS "deviceDisplayName",
+            COALESCE(device.title, 'Sandbox') AS "runtimeDisplayName",
             exposure.display_name AS "exposureDisplayName",
             exposure.stable_key AS "exposureStableKey"
      FROM tool_call_tasks ir

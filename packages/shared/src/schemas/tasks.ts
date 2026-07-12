@@ -209,7 +209,7 @@ const RuntimeAuthorizationTaskDetailsSchema = z.object({
   requestedAction: RuntimeAuthorizationRequestedActionSchema,
   reason: z.string(),
   runtimeId: z.string(),
-  deviceDisplayName: z.string(),
+  runtimeDisplayName: z.string(),
   runtimeCapabilityId: z.string(),
   exposureId: z.string(),
   exposureDisplayName: z.string(),

@@ -1134,7 +1134,7 @@ export function buildRuntimeAuthorizationRequestParams(args: {
       // tool_call_task_runtime_authorization.source_runtime_session_id (TEXT)
       // — the chat-runtime session.id.
       sourceRuntimeSessionId: projectInput.sessionId ?? "",
-      deviceDisplayName: row.runtimeName,
+      runtimeDisplayName: row.runtimeName,
     },
     authorizationPlan: {
       requestedAction,

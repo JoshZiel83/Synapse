@@ -175,7 +175,10 @@ export async function deleteRuntime(
   if (updated === 0) {
     throw new DeviceModuleError({
       statusCode: 404,
-      code: "device_not_found",
+      // kind-neutral: deleteRuntime tears down a runtime of ANY kind (incl. a
+      // device-less sandbox), so a device-specific code would misdescribe it.
+      // The kind-scoped device paths (getDevice/deleteDevice) keep device_not_found.
+      code: "runtime_not_found",
       message: `runtime ${runtimeId} not found in workspace ${workspaceId}`,
     })
   }

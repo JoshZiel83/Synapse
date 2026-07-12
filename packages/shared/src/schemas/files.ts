@@ -55,7 +55,7 @@ export const FileOriginSummaryViewSchema = z.object({
   providerKey: z.string().optional(),
   parentFileId: z.string().nullish(),
   externalResourceKey: z.string().optional(),
-  // Genuinely-open: DeviceMcpFileSourceMetadata | Record<string, unknown>.
+  // Genuinely-open metadata bag (ToolResultOrigin snapshot); no fixed schema.
   details: fileOriginSummaryDetailsSchema.optional(),
 })
 export type FileOriginSummaryView = z.infer<typeof FileOriginSummaryViewSchema>

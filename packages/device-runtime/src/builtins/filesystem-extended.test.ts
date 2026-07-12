@@ -1502,3 +1502,64 @@ test("P5b (resident): a real-device list_dir({}) still defaults to '/' (unchange
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+// P5b SIBLING (adversarial-review finding): the omitted-subtree default for
+// fs_index_status / fs_index_rebuild must ALSO be sandbox-aware — they are
+// `subtreeTools` in the API matcher, which projects DEFAULT_SANDBOX_CWD for a
+// sandbox. The list_dir fix (a95ad2d5) missed these two siblings, leaving the
+// identical auth/execution split OPEN: a sandbox's fs_index_status({}) authorized
+// /conversation at the matcher but the resident handler defaulted subtree to "/"
+// → hard-denied under the /conversation mount grant.
+test("P5b (resident): sandbox-confined fs_index_status/rebuild({}) default subtree to /conversation, not '/'", async () => {
+  const convGrant = () =>
+    makeEnvelope([{ access: "read", pathPrefixes: ["/conversation"] }])
+
+  const sbx = await makeBuiltin({ enableIndex: true, sandboxConfined: true })
+  try {
+    // Omitted subtree resolves to /conversation (granted) → NOT hard-denied.
+    const status = await sbx.builtin.invokeTool!({
+      toolName: "fs_index_status",
+      args: {},
+      envelope: convGrant(),
+    })
+    assert.equal(status.isError, undefined, JSON.stringify(status._meta))
+    const rebuild = await sbx.builtin.invokeTool!({
+      toolName: "fs_index_rebuild",
+      args: {},
+      envelope: convGrant(),
+    })
+    assert.equal(rebuild.isError, undefined, JSON.stringify(rebuild._meta))
+
+    // Contrast: an EXPLICIT "/" under the same /conversation-only grant is still
+    // denied — proving the passes above are the /conversation default (the exact
+    // hard-deny the old "/" default produced), not a lax scope.
+    for (const toolName of ["fs_index_status", "fs_index_rebuild"] as const) {
+      const denied = await sbx.builtin.invokeTool!({
+        toolName,
+        args: { subtree: "/" },
+        envelope: convGrant(),
+      })
+      assert.equal(denied.isError, true, `${toolName}({subtree:'/'}) must deny`)
+      assert.equal(getMeta(denied).synapse_error?.code, "permission_denied")
+    }
+  } finally {
+    sbx.cleanup()
+  }
+
+  // Real device (sandboxConfined omitted) still defaults to "/" — unchanged.
+  const dev = await makeBuiltin({ enableIndex: true })
+  try {
+    const rootStatus = await dev.builtin.invokeTool!({
+      toolName: "fs_index_status",
+      args: {},
+      envelope: makeEnvelope([{ access: "read", pathPrefixes: ["/"] }]),
+    })
+    assert.equal(
+      rootStatus.isError,
+      undefined,
+      JSON.stringify(rootStatus._meta)
+    )
+  } finally {
+    dev.cleanup()
+  }
+})

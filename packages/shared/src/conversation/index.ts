@@ -259,7 +259,7 @@ export function summarizeConversationEvent(
       return `Plan approval requested from ${targetName}: ${title}`
     }
     const runtimeName =
-      task.runtimeAuthorization?.deviceDisplayName?.trim() || "device"
+      task.runtimeAuthorization?.runtimeDisplayName?.trim() || "runtime"
     if (task.lifecycleStatus === "cancelled") {
       return `Runtime authorization request was cancelled for ${runtimeName}`
     }
