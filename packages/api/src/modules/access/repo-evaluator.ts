@@ -569,6 +569,60 @@ export async function loadRuntimeExposureRuntimeId(
   return row?.runtimeId ?? null
 }
 
+export type RuntimeExposureOwnerRow = {
+  runtimeId: string
+  /** runtimes.kind — 'device' | 'sandbox' (the CTI discriminant). */
+  runtimeKind: string
+  /**
+   * For a kind='sandbox' runtime: the owning session's actor id (the sandbox's
+   * owning subject, via sandboxes.session_id → sessions.actor_id). NULL for a
+   * device runtime, or for a sandbox with no session bound yet (pre-session
+   * provisioning) — in which case the caller fails CLOSED via the sandbox branch.
+   */
+  sandboxOwnerActorId: string | null
+}
+
+/**
+ * Resolve a runtime exposure to its owning runtime id + kind, and (for a sandbox)
+ * the owning-subject actor. hasExposurePermission routes on `runtimeKind`: a
+ * device exposure keeps the devices-table permission path; a sandbox exposure —
+ * which has NO `devices` row and would ALWAYS deny under the device path — routes
+ * through its owning actor instead. Existence join on `runtimes` (no device
+ * columns selected), so a device-less sandbox resolves; byte-identical runtimeId
+ * for a device (runtime.id === device.id). Mirrors loadRuntimeExposureRuntimeId
+ * but carries the kind + sandbox owner needed for the supertype routing.
+ */
+export async function loadRuntimeExposureOwner(
+  db: KyselyDb,
+  exposureId: string
+): Promise<RuntimeExposureOwnerRow | null> {
+  const row = await db
+    .selectFrom("runtimeExposures as exposure")
+    .innerJoin("runtimes as runtime", "runtime.id", "exposure.runtimeId")
+    // Detail + session are LEFT joins: a device runtime has neither; a sandbox
+    // has a `sandboxes` detail (id === runtime.id) whose session_id → sessions
+    // carries the owning actor. A sandbox without a bound session yields NULL
+    // sandboxOwnerActorId → fail-closed in the evaluator's sandbox branch.
+    .leftJoin("sandboxes as sandbox", "sandbox.id", "runtime.id")
+    .leftJoin("sessions as session", "session.id", "sandbox.sessionId")
+    .select([
+      "runtime.id as runtimeId",
+      "runtime.kind as runtimeKind",
+      "session.actorId as sandboxOwnerActorId",
+    ])
+    .where("exposure.id", "=", exposureId)
+    .limit(1)
+    .executeTakeFirst()
+  if (!row?.runtimeId) {
+    return null
+  }
+  return {
+    runtimeId: row.runtimeId as string,
+    runtimeKind: row.runtimeKind as string,
+    sandboxOwnerActorId: (row.sandboxOwnerActorId as string | null) ?? null,
+  }
+}
+
 export async function loadRuntimeCapabilityAccessRow(
   db: KyselyDb,
   capabilityId: string

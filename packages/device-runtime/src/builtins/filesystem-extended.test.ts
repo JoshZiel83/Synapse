@@ -1,6 +1,12 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, rmSync, writeFileSync, promises as fsp } from "node:fs"
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  writeFileSync,
+  promises as fsp,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -1407,5 +1413,92 @@ test("fs_read can read later chunks of files larger than maxReadBytes", async ()
   } catch (err) {
     rmSync(root, { recursive: true, force: true })
     throw err
+  }
+})
+
+// ─────────── P5b (resident): sandbox list_dir({}) default cwd ─────────────────
+// The bare data-plane already defaults an omitted-path list_dir to
+// DEFAULT_SANDBOX_CWD (/conversation) for a sandbox. The RESIDENT executor must
+// match: a sandbox-confined builtin (device-runtime run --cmd-sandbox →
+// sandboxConfined:true) lists /conversation, a real device still lists "/".
+// Without this the sandbox path authorized /conversation at the matcher but the
+// resident executor listed "/" → hard-deny under the /conversation grant.
+
+test("P5b (resident): a sandbox-confined list_dir({}) defaults to /conversation (granted cwd), not '/'", async () => {
+  const { tmpdir } = await import("node:os")
+  const { join } = await import("node:path")
+  const root = mkdtempSync(join(tmpdir(), "synapse-fs-sbx-"))
+  try {
+    mkdirSync(join(root, "conversation"), { recursive: true })
+    writeFileSync(join(root, "conversation", "hello.txt"), "x")
+    const builtin = createFilesystemBuiltin({
+      rootPath: root,
+      sandboxConfined: true,
+      skipWorkDirAssertion: true,
+      enableLiveSearch: false,
+      enableIndex: false,
+    })
+    // Grant covers ONLY /conversation (a mount) — NOT '/'. Under the old '/'
+    // default the omitted-path list_dir resolved '/', which no mount grant
+    // covers, and HARD-DENIED at the vfs even though it passed the matcher.
+    const r = await builtin.invokeTool!({
+      toolName: "list_dir",
+      args: {},
+      envelope: makeEnvelope([
+        { access: "read", pathPrefixes: ["/conversation"] },
+      ]),
+    })
+    assert.equal(r.isError, undefined, JSON.stringify(r._meta))
+    const body = JSON.parse((r.content[0] as { text: string }).text) as {
+      path: string
+      entries: Array<{ name: string }>
+    }
+    assert.equal(body.path, "/conversation")
+    assert.ok(body.entries.some((e) => e.name === "hello.txt"))
+
+    // Sanity: an EXPLICIT '/' under the same /conversation-only grant is still
+    // denied — proving the pass above is the /conversation default, not a lax
+    // scope (the old '/' default would have hit exactly this deny).
+    const denied = await builtin.invokeTool!({
+      toolName: "list_dir",
+      args: { path: "/" },
+      envelope: makeEnvelope([
+        { access: "read", pathPrefixes: ["/conversation"] },
+      ]),
+    })
+    assert.equal(denied.isError, true)
+    assert.equal(getMeta(denied).synapse_error?.code, "permission_denied")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("P5b (resident): a real-device list_dir({}) still defaults to '/' (unchanged)", async () => {
+  const { tmpdir } = await import("node:os")
+  const { join } = await import("node:path")
+  const root = mkdtempSync(join(tmpdir(), "synapse-fs-dev-"))
+  try {
+    writeFileSync(join(root, "top.txt"), "x")
+    // sandboxConfined omitted → defaults to false (a real device).
+    const builtin = createFilesystemBuiltin({
+      rootPath: root,
+      skipWorkDirAssertion: true,
+      enableLiveSearch: false,
+      enableIndex: false,
+    })
+    const r = await builtin.invokeTool!({
+      toolName: "list_dir",
+      args: {},
+      envelope: makeEnvelope([{ access: "read", pathPrefixes: ["/"] }]),
+    })
+    assert.equal(r.isError, undefined, JSON.stringify(r._meta))
+    const body = JSON.parse((r.content[0] as { text: string }).text) as {
+      path: string
+      entries: Array<{ name: string }>
+    }
+    assert.equal(body.path, "/")
+    assert.ok(body.entries.some((e) => e.name === "top.txt"))
+  } finally {
+    rmSync(root, { recursive: true, force: true })
   }
 })

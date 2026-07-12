@@ -1,7 +1,8 @@
 // GROUP G — S13 degraded-descriptor variant (B9) + §4.7.7 matrix pins that are
 // DB-FREE. Proves: a confinedFs:'unsupported' fs grant derives WHOLE_SCOPE (NOT
-// a sub-prefix, NOT []/deny — F-C); staleWriteGuard:'advisory' degrades (does not
-// reject) expected_sha256/create_only; and the Mode-A REGRESSION pins that the
+// a sub-prefix, NOT []/deny — F-C); staleWriteGuard:'advisory' relaxes ONLY the
+// no-caller forced self-CAS (a caller's EXPLICIT expected_sha256 is still honored
+// under advisory — it is never dropped); and the Mode-A REGRESSION pins that the
 // WHOLE_SCOPE-mapping + classifier changes do NOT alter native sub-prefix
 // confinement. The DB-backed grant MINT branch (createSandboxGrants confinedFs)
 // is covered in the DB tier; here we pin the ConfinementCtx derivation + plane
@@ -109,13 +110,15 @@ test("S13 F-C — a scoped fs grant deriving ∅ still HARD-DENIES (does not fal
   )
 })
 
-// ─────────── S13 (d): staleWriteGuard:'advisory' degrades expected_sha256 ──────
+// ─────────── S13 (d): a caller's explicit expected_sha256 is honored in BOTH
+// postures; 'advisory' relaxes ONLY the no-caller forced self-CAS ──────────────
 
-test("S13 (d) — staleWriteGuard:'strict' REJECTS a wrong expected_sha256; 'advisory' DEGRADES (accepts)", async () => {
+test("S13 (d) — a caller's explicit expected_sha256 is REJECTED-on-mismatch under BOTH 'strict' and 'advisory' (advisory relaxes only the forced self-CAS)", async () => {
   const root = await makeRoot()
   const wholeCtx: ConfinementCtx = { scope: WHOLE_SCOPE, access: "write" }
 
-  // strict: a mismatched expected_sha256 on an existing file is a stale-write reject.
+  // strict: a mismatched caller expected_sha256 on an existing file is a
+  // stale-write reject.
   const strict = createLocalBareDataPlane({
     sandboxRoot: root,
     descriptor: descriptor({ staleWriteGuard: "strict" }),
@@ -141,7 +144,11 @@ test("S13 (d) — staleWriteGuard:'strict' REJECTS a wrong expected_sha256; 'adv
   assert.equal(strictRes.ok, false, "strict enforces expected_sha256")
   assert.equal(strictRes.error?.code, "runtime_constraint")
 
-  // advisory: the same mismatched expected_sha256 is IGNORED (degraded) → write OK.
+  // advisory: a caller's EXPLICIT (wrong) expected_sha256 is STILL rejected. A
+  // caller-supplied optimistic-concurrency precondition is honored regardless of
+  // posture — 'advisory' relaxes ONLY the no-caller forced self-CAS, never a
+  // caller's own precondition (previously advisory silently dropped it → a stale
+  // caller write applied; that fail-open was the bug this pins closed).
   const advisory = createLocalBareDataPlane({
     sandboxRoot: root,
     descriptor: descriptor({ staleWriteGuard: "advisory" }),
@@ -153,7 +160,7 @@ test("S13 (d) — staleWriteGuard:'strict' REJECTS a wrong expected_sha256; 'adv
     args: { path: "/actor/g.txt", content: "v1" },
     ctx: wholeCtx,
   })
-  const advisoryRes = await coreInvokeBarePlane({
+  const advisoryStale = await coreInvokeBarePlane({
     plane: advisory,
     builtinKind: "filesystem",
     toolName: "fs_write",
@@ -165,9 +172,25 @@ test("S13 (d) — staleWriteGuard:'strict' REJECTS a wrong expected_sha256; 'adv
     ctx: wholeCtx,
   })
   assert.equal(
-    advisoryRes.ok,
+    advisoryStale.ok,
+    false,
+    "advisory still honors a caller's explicit expected_sha256"
+  )
+  assert.equal(advisoryStale.error?.code, "runtime_constraint")
+
+  // advisory with NO caller precondition succeeds — the forced (no-caller)
+  // self-CAS is the ONLY thing advisory relaxes.
+  const advisoryNoPre = await coreInvokeBarePlane({
+    plane: advisory,
+    builtinKind: "filesystem",
+    toolName: "fs_write",
+    args: { path: "/actor/g.txt", content: "v3" },
+    ctx: wholeCtx,
+  })
+  assert.equal(
+    advisoryNoPre.ok,
     true,
-    "advisory degrades (ignores) expected_sha256"
+    "advisory drops only the no-caller forced self-CAS"
   )
 })
 

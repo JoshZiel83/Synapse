@@ -41,6 +41,7 @@ import {
   detectRipgrep,
   type RipgrepDeps,
 } from "./ripgrep-runner.js"
+import { DEFAULT_SANDBOX_CWD } from "../terminal/sandbox-confinement.js"
 
 const PROVIDER_KEY = "builtin.filesystem"
 
@@ -79,6 +80,20 @@ export interface FilesystemBuiltinOptions {
   helperClientImpl?: FsHelperClient
   ripgrepDeps?: RipgrepDeps
   displayName?: string
+  /**
+   * True when this runtime is confined to a sandbox (device-runtime launched
+   * with --cmd-sandbox by the sandbox provisioner). It changes ONE thing: an
+   * omitted-path `list_dir({})` defaults to the sandbox's default cwd
+   * (DEFAULT_SANDBOX_CWD = /conversation, a granted mount) instead of the device
+   * root "/". This keeps the resident executor in agreement with the API-side
+   * matcher, which projects the SAME default (`defaultPathPrefix` =
+   * DEFAULT_SANDBOX_CWD for runtimeKind='sandbox' in capability-projection). Under
+   * the old "/" default a sandbox `list_dir({})` authorized /conversation at the
+   * matcher but then tried to list "/", which no mount grant covers → hard-denied
+   * at the vfs (same P5b auth/execution split the bare data-plane already closed).
+   * A real device keeps "/" (unchanged).
+   */
+  sandboxConfined?: boolean
 }
 
 const DEFAULTS = {
@@ -139,6 +154,7 @@ function withDefaults(opts: FilesystemBuiltinOptions) {
     ripgrepPath: opts.ripgrepPath ?? "",
     skipWorkDirAssertion: opts.skipWorkDirAssertion ?? false,
     displayName: opts.displayName ?? "Filesystem",
+    sandboxConfined: opts.sandboxConfined ?? false,
   }
 }
 
@@ -934,7 +950,13 @@ async function handleListDir(
   envelope: OperationEnvelope | undefined,
   ctx: DispatchCtx
 ): Promise<CatalogToolInvocationResult> {
-  const rawPath = asString(args["path"]) ?? "/"
+  // Omitted-path default: a sandbox-confined runtime lists its default cwd
+  // (DEFAULT_SANDBOX_CWD = /conversation, a granted mount) so an unqualified
+  // list_dir({}) authorizes AND executes against a covered mount; a real device
+  // keeps "/". See FilesystemBuiltinOptions.sandboxConfined for the auth/execution
+  // split this closes (mirrors the bare data-plane's DEFAULT_SANDBOX_CWD default).
+  const defaultListPath = ctx.cfg.sandboxConfined ? DEFAULT_SANDBOX_CWD : "/"
+  const rawPath = asString(args["path"]) ?? defaultListPath
   const canonical = canonicalVfsPath(rawPath)
   const grants = getFsGrants(envelope)
   if (envelope && !checkFsGrant(grants, "read", canonical)) {

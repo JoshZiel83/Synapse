@@ -446,6 +446,109 @@ test("P6-schema: bare fs_edit with a stale FRACTIONAL expected_mtime_ms is REJEC
   assert.equal(await readFile(abs, "utf-8"), "alpha")
 })
 
+test("advisory posture: a caller's EXPLICIT stale expected_sha256 / expected_mtime_ms is STILL rejected (posture relaxes only the forced self-CAS)", async () => {
+  // No advisory adapter ships today (every descriptor is 'strict'), so this is
+  // structural: an 'advisory' descriptor must still honor a caller-supplied
+  // optimistic-concurrency precondition — advisory only drops the no-caller
+  // forced self-CAS, never a caller's explicit expected_sha256 / expected_mtime_ms.
+  const desc = buildLocalBareDescriptor({ isolation: "bwrap" })
+  desc.core.staleWriteGuard = "advisory"
+  const { root, plane } = await makeSandbox(desc)
+  const ctx: ConfinementCtx = { scope: ["/conversation"], access: WRITE }
+  const abs = join(root, "conversation", "adv.txt")
+  await writeFile(abs, "alpha")
+
+  // Stale caller expected_sha256 (of DIFFERENT content) → REJECTED under advisory.
+  const staleSha = createHash("sha256").update("DIFFERENT").digest("hex")
+  const rejSha = await coreInvokeBarePlane({
+    plane,
+    builtinKind: "filesystem",
+    toolName: "fs_write",
+    args: {
+      path: "/conversation/adv.txt",
+      content: "beta",
+      expected_sha256: staleSha,
+    },
+    ctx,
+  })
+  assert.equal(
+    rejSha.ok,
+    false,
+    "stale caller expected_sha256 must REJECT under advisory"
+  )
+  assert.equal(rejSha.error?.code, "runtime_constraint")
+  assert.equal(
+    (rejSha.error?.details as Record<string, unknown>)?.["stale_write"],
+    true
+  )
+  assert.equal(
+    await readFile(abs, "utf-8"),
+    "alpha",
+    "rejected write is a no-op"
+  )
+
+  // Stale caller expected_mtime_ms → REJECTED under advisory too.
+  const rejMtime = await coreInvokeBarePlane({
+    plane,
+    builtinKind: "filesystem",
+    toolName: "fs_write",
+    args: {
+      path: "/conversation/adv.txt",
+      content: "beta",
+      expected_mtime_ms: 1_699_999_999_123.456,
+    },
+    ctx,
+  })
+  assert.equal(
+    rejMtime.ok,
+    false,
+    "stale caller expected_mtime_ms must REJECT under advisory"
+  )
+  assert.equal(rejMtime.error?.code, "runtime_constraint")
+  assert.equal(
+    (rejMtime.error?.details as Record<string, unknown>)?.["stale_write"],
+    true
+  )
+  assert.equal(await readFile(abs, "utf-8"), "alpha")
+
+  // Control: under advisory a write with NO caller precondition succeeds — the
+  // forced self-CAS is the ONLY thing advisory relaxes.
+  const ok = await coreInvokeBarePlane({
+    plane,
+    builtinKind: "filesystem",
+    toolName: "fs_write",
+    args: { path: "/conversation/adv.txt", content: "gamma" },
+    ctx,
+  })
+  assert.equal(
+    ok.ok,
+    true,
+    "advisory write with no caller precondition succeeds"
+  )
+  assert.equal(await readFile(abs, "utf-8"), "gamma")
+
+  // A MATCHING caller expected_sha256 is honored → the write applies (the
+  // precondition is enforced both ways under advisory).
+  const curSha = createHash("sha256").update("gamma").digest("hex")
+  const okSha = await coreInvokeBarePlane({
+    plane,
+    builtinKind: "filesystem",
+    toolName: "fs_write",
+    args: {
+      path: "/conversation/adv.txt",
+      content: "delta",
+      expected_sha256: curSha,
+    },
+    ctx,
+  })
+  assert.equal(
+    okSha.ok,
+    true,
+    "matching caller expected_sha256 is accepted under advisory"
+  )
+  assert.equal(await readFile(abs, "utf-8"), "delta")
+})
+
 test("P7: deriveConfinementAccess is FAIL-CLOSED (read/unknown tool → read; write tool needs a write grant)", () => {
   // A read tool always yields 'read', regardless of the grant's access.
   assert.equal(

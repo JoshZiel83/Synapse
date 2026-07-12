@@ -404,42 +404,51 @@ function buildConfinedHostFs(opts: {
         )
       }
       const strict = opts.descriptor.core.staleWriteGuard === "strict"
+      // A caller-supplied expected_sha256 is an EXPLICIT precondition and must be
+      // honored regardless of posture — the 'advisory' posture only relaxes the
+      // FORCED self-CAS (the no-caller-sha guard strict imposes on every write),
+      // never a caller's own optimistic-concurrency check.
+      const callerSuppliedSha = writeOpts.expectedSha256 != null
       return withScope(ctx, () =>
         backend.withPathLock(canonical, async () => {
           const info = await backend.safeStat(canonical)
           const priorExists = !!info && info.kind === "file"
-          // Fresh prior sha (strict guard only): computed ONCE under the path lock
-          // and reused for BOTH the caller pre-check and the compare-and-swap
-          // guard. Skipped entirely in the 'advisory' posture (no forced CAS).
+          // Fresh prior sha: computed ONCE under the path lock and reused for BOTH
+          // the caller pre-check and the compare-and-swap guard. Needed whenever the
+          // strict forced-CAS applies OR the caller supplied an expected_sha256 to
+          // verify (the latter holds even under the 'advisory' posture).
           const priorSha =
-            strict && priorExists
+            priorExists && (strict || callerSuppliedSha)
               ? (await backend.streamSha256(canonical)).sha256
               : null
-          if (strict) {
-            // Stale-write guard (staleWriteGuard:'strict'): PRE-CHECK the caller's
-            // conditions against the FRESH stat/hash and reject on mismatch. The
-            // descriptor advertises this guard, so it must actually be enforced —
-            // previously expected_mtime_ms was ignored and expected_sha256 was only
-            // wired to the CAS. A mismatch is a lost-update signal → StaleWriteError.
-            if (
-              writeOpts.expectedMtimeMs != null &&
-              (!priorExists || info!.mtimeMs !== writeOpts.expectedMtimeMs)
-            ) {
-              throw new StaleWriteError("pre_open", canonical)
-            }
-            if (
-              writeOpts.expectedSha256 != null &&
-              (!priorExists || priorSha !== writeOpts.expectedSha256)
-            ) {
-              throw new StaleWriteError("pre_open", canonical)
-            }
+          // Stale-write PRE-CHECK — ALWAYS honor a caller-supplied precondition,
+          // regardless of posture. A caller's explicit expected_mtime_ms /
+          // expected_sha256 is a lost-update signal and rejects on mismatch even
+          // under 'advisory'; only the no-caller forced CAS below is posture-gated.
+          // (Previously the whole pre-check was wrapped in `if (strict)`, so an
+          // advisory descriptor silently dropped a caller's EXPLICIT precondition
+          // alongside the forced CAS — fixed structurally here.)
+          if (
+            writeOpts.expectedMtimeMs != null &&
+            (!priorExists || info!.mtimeMs !== writeOpts.expectedMtimeMs)
+          ) {
+            throw new StaleWriteError("pre_open", canonical)
+          }
+          if (
+            writeOpts.expectedSha256 != null &&
+            (!priorExists || priorSha !== writeOpts.expectedSha256)
+          ) {
+            throw new StaleWriteError("pre_open", canonical)
           }
           // CAS guard for the write itself: RETAIN the self-computed fresh prior
           // sha (never null when a prior file exists) so a concurrent writer that
           // mutates the file between this pre-check and the rename still loses-safe.
-          // A brand-new file uses createOnly (must-not-exist) instead. Only the
-          // 'advisory' posture drops the CAS.
-          const expectedShaForCAS = strict && priorExists ? priorSha : null
+          // A brand-new file uses createOnly (must-not-exist) instead. Under strict
+          // this forced self-CAS is unconditional; under 'advisory' it is dropped
+          // UNLESS the caller supplied an expected_sha256 (then we still feed the
+          // fresh prior sha so their explicit precondition stays TOCTOU-safe).
+          const expectedShaForCAS =
+            priorExists && (strict || callerSuppliedSha) ? priorSha : null
           const res = await backend.atomicWrite(canonical, bytes, {
             createOnly: !priorExists,
             createParents: writeOpts.createParents ?? false,

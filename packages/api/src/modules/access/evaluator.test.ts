@@ -1849,6 +1849,68 @@ async function grantWorkspaceAccessKey(
     .execute()
 }
 
+// Seed a kind='sandbox' runtime (runtimes supertype + sandboxes detail) bound to
+// a session whose actor is `ownerActorId` — the sandbox's OWNING SUBJECT — plus a
+// runtime exposure on it. NO `devices` row (a sandbox never has one), which is the
+// whole point: hasExposurePermission must route this through the owning actor, not
+// the device table (which would ALWAYS deny for a sandbox exposure).
+async function insertSandboxExposure(
+  db: AnyDb,
+  workspaceId: string,
+  ownerActorId: string
+): Promise<{ exposureId: string; sandboxRuntimeId: string }> {
+  const suffix = Math.random().toString(36).slice(2, 10)
+  const runtimeId = crypto.randomUUID()
+  await db
+    .insertInto("runtimes")
+    .values({ id: runtimeId, workspaceId, kind: "sandbox" } as any)
+    .execute()
+  const conv = await db
+    .insertInto("conversations")
+    .values({ workspaceId, kind: "direct" } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const session = await db
+    .insertInto("sessions")
+    .values({
+      workspaceId,
+      actorId: ownerActorId,
+      conversationId: conv.id as string,
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  // sandboxes detail keyed by the shared runtime id; session_id is the owning
+  // subject linkage the evaluator follows to the actor.
+  await db
+    .insertInto("sandboxes")
+    .values({
+      id: runtimeId,
+      workspaceId,
+      sessionId: session.id as string,
+      mode: "resident",
+      adapter: "local",
+    } as any)
+    .execute()
+  const svc = await db
+    .insertInto("runtimeServices")
+    .values({ runtimeId, serviceKind: "device_runtime" } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const exp = await db
+    .insertInto("runtimeExposures")
+    .values({
+      runtimeId,
+      workspaceId,
+      serviceId: svc.id as string,
+      stableKey: `sbx-exp-${suffix}`,
+      displayName: "sandbox exposure",
+      transport: "stdio",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return { exposureId: exp.id as string, sandboxRuntimeId: runtimeId }
+}
+
 test(
   "checkPermission(device.manage) is granted to a device_admin keyholder for a device they do not own",
   { timeout: 5 * 60_000 },
@@ -1942,6 +2004,114 @@ test(
         subject: { type: "workspace_member", id: strangerMemberId },
       })
       assert.equal(strangerDenied, false)
+    })
+  }
+)
+
+test(
+  "checkPermission(runtime_exposure) on a SANDBOX runtime resolves through the owning actor (grant→allow, no-grant→deny); a device exposure is unchanged",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const { workspaceId, ownerMemberId, guestMemberId } =
+        await seedOwnerMemberAndGuest(db)
+      // The sandbox's owning actor + a sandbox exposure that has NO devices row.
+      const actorId = await insertActor(db, workspaceId)
+      const { exposureId } = await insertSandboxExposure(
+        db,
+        workspaceId,
+        actorId
+      )
+
+      // A workspace admin (owner) can manage any actor in the workspace → so the
+      // sandbox exposure's "manage" resolves ALLOW through the owning actor. Under
+      // the old device-table routing this would have denied (no devices row).
+      const adminManage = await checkPermission(db, {
+        resourceType: "runtime_exposure",
+        resourceId: exposureId,
+        permission: "manage",
+        subject: { type: "workspace_member", id: ownerMemberId },
+      })
+      assert.equal(
+        adminManage,
+        true,
+        "admin manages the sandbox exposure via the owning actor"
+      )
+
+      // A plain guest with NO grant over the owning actor is denied — via the
+      // explicit sandbox→actor branch (not the device-table miss).
+      const guestBefore = await checkPermission(db, {
+        resourceType: "runtime_exposure",
+        resourceId: exposureId,
+        permission: "manage",
+        subject: { type: "workspace_member", id: guestMemberId },
+      })
+      assert.equal(
+        guestBefore,
+        false,
+        "no actor grant → sandbox exposure denied"
+      )
+
+      // Grant the guest a MANAGE grant on the owning actor → the SAME sandbox
+      // exposure now resolves ALLOW, proving it truly routes through the actor.
+      await insertWorkspaceResourceGrant(db, {
+        workspaceId,
+        workspaceResourceId: actorId,
+        target: {
+          subject: {
+            kind: "workspace_member",
+            workspaceMemberId: guestMemberId,
+          },
+        },
+        permissions: [WORKSPACE_RESOURCE_GRANT_PERMISSION.MANAGE],
+      })
+      const guestAfter = await checkPermission(db, {
+        resourceType: "runtime_exposure",
+        resourceId: exposureId,
+        permission: "manage",
+        subject: { type: "workspace_member", id: guestMemberId },
+      })
+      assert.equal(
+        guestAfter,
+        true,
+        "an actor manage-grant flips the sandbox exposure to allow"
+      )
+
+      // A DEVICE exposure is unchanged: it still resolves via the device path
+      // (admin manages a workspace device; a stranger cannot).
+      const { exposureId: deviceExposureId } = await insertDevice(
+        db,
+        workspaceId,
+        guestMemberId
+      )
+      const deviceAdmin = await checkPermission(db, {
+        resourceType: "runtime_exposure",
+        resourceId: deviceExposureId,
+        permission: "manage",
+        subject: { type: "workspace_member", id: ownerMemberId },
+      })
+      assert.equal(
+        deviceAdmin,
+        true,
+        "device exposure still resolves through the device path"
+      )
+      const strangerUserId = await insertUser(db)
+      const strangerMemberId = await insertWorkspaceMember(
+        db,
+        workspaceId,
+        strangerUserId
+      )
+      const deviceStranger = await checkPermission(db, {
+        resourceType: "runtime_exposure",
+        resourceId: deviceExposureId,
+        permission: "manage",
+        subject: { type: "workspace_member", id: strangerMemberId },
+      })
+      assert.equal(
+        deviceStranger,
+        false,
+        "a stranger cannot manage the device exposure"
+      )
     })
   }
 )

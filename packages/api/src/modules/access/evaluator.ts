@@ -25,7 +25,7 @@ import {
   listWorkspaceMemberModelGroupIds,
   loadDeviceAccessRow,
   loadRuntimeCapabilityAccessRow,
-  loadRuntimeExposureRuntimeId,
+  loadRuntimeExposureOwner,
   loadActorRow,
   loadConversationRow,
   loadInstalledSkillAccessRow,
@@ -934,15 +934,42 @@ async function hasExposurePermission(
   exposureId: string,
   permission: string
 ): Promise<boolean> {
-  const managementVisiblePermissions = ["edit", "grant", "delete"] as const
-  const runtimeId = await loadRuntimeExposureRuntimeId(db, exposureId)
-  if (!runtimeId) {
+  const owner = await loadRuntimeExposureOwner(db, exposureId)
+  if (!owner) {
     return false
   }
+
+  // Sandbox routing (runtimes supertype). A kind='sandbox' runtime is
+  // session/actor-scoped and ephemeral: it has NO `devices` row and no
+  // device-style "manage" owner, so it MUST NOT flow through hasDevicePermission
+  // (which reads only the devices table → a sandbox exposure would ALWAYS deny
+  // via the accidental table miss). Conservative, safe resolution (design call):
+  // derive the permission from the sandbox's OWNING SUBJECT — the actor of the
+  // session the sandbox belongs to (sandboxes.session_id → sessions.actor_id).
+  // The caller may view/manage a sandbox exposure iff they may view/manage that
+  // owning actor (owner-implicit, workspace admin, actor_admin, or an explicit
+  // manage grant — all already modeled by hasActorPermission). If the owning
+  // subject isn't resolvable (no session bound to the sandbox yet), FAIL CLOSED
+  // here — via this explicit sandbox branch, never the device-table miss.
+  // Follow-up: if a sandbox later carries its own first-class owner_subject_id,
+  // prefer it over the session→actor hop.
+  if (owner.runtimeKind === "sandbox") {
+    if (!owner.sandboxOwnerActorId) {
+      return false
+    }
+    return hasActorPermission(
+      db,
+      subject,
+      owner.sandboxOwnerActorId,
+      permission === "view" ? "view" : "edit"
+    )
+  }
+
+  // Device runtime — unchanged: route through the device permission path.
   return hasDevicePermission(
     db,
     subject,
-    runtimeId,
+    owner.runtimeId,
     permission === "view" ? "view" : "manage"
   )
 }

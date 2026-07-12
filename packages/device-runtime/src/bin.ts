@@ -389,6 +389,12 @@ async function main() {
           keepRecentVersionsPerPath: fsKeepRecentVersions,
           helperRpcTimeoutMs: fsHelperRpcTimeoutMs,
           indexIgnore: fsIndexIgnore,
+          // --cmd-sandbox is the sandbox provisioner's "this runtime is a
+          // confined sandbox" signal (always set for a Mode-A sandbox; never for
+          // a real device). It defaults an omitted-path list_dir({}) to the
+          // sandbox cwd (/conversation) instead of the device root "/", so the
+          // resident executor agrees with the API-side matcher's sandbox default.
+          sandboxConfined: cmdSandbox,
         }),
       ]
       // Commandline builtin. Fail-closed for sandbox runtimes: when --cmd-sandbox
