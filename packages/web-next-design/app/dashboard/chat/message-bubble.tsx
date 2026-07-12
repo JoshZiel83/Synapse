@@ -1466,7 +1466,7 @@ function TaskCard({
 
         <div className="space-y-0.5">
           <p className="text-sm font-medium text-foreground">
-            {`Authorize ${runtimeAuthorization.deviceToolStableKey} on ${runtimeAuthorization.deviceDisplayName}`}
+            {`Authorize ${runtimeAuthorization.runtimeToolStableKey} on ${runtimeAuthorization.deviceDisplayName}`}
           </p>
           <p className="text-xs leading-5 text-muted-foreground">
             {runtimeAuthorization.reason}

@@ -555,7 +555,7 @@ function actorRuntime(o: {
           processingTargets: [],
           activeTool: {
             toolCallId: `tc-${o.actor.ref.actorId}`,
-            toolKind: "device",
+            toolKind: "runtime",
             toolName: "shell",
             state: "running",
             displayTitle: o.activeTool,

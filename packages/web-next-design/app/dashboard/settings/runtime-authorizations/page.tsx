@@ -185,7 +185,7 @@ export default function RuntimeAuthorizationsSettingsPage() {
     setSubmitting(true)
     try {
       await api.createManualRuntimeAuthorizationGrant(workspaceId, {
-        deviceCapabilityId: capabilityId,
+        runtimeCapabilityId: capabilityId,
         policy,
       })
       setSubmittedMsg(

@@ -224,10 +224,10 @@ const workspaceCapabilityPolicyFamilies: Array<{
       "Default conversation types for installed skills before any installation or grant override narrows them further.",
   },
   {
-    family: "device_capability",
-    label: "Device Capabilities",
+    family: "runtime_capability",
+    label: "Runtime Capabilities",
     description:
-      "Default conversation types for devices and exposures before any device, exposure, or grant override narrows them further.",
+      "Default conversation types for runtimes and exposures before any runtime, exposure, or grant override narrows them further.",
   },
 ]
 

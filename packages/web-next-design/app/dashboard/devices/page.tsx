@@ -121,7 +121,7 @@ export default function DevicesIndexPage() {
                   <div>
                     <div className="font-medium">{device.title}</div>
                     <div className="text-xs text-muted-foreground">
-                      {device.hostKind} · {device.deviceType} ·{" "}
+                      {device.deviceType} ·{" "}
                       {device.platform ?? "unknown platform"}
                     </div>
                   </div>
