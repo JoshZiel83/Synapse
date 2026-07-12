@@ -12,7 +12,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import type { Kysely } from "kysely"
-import type { DeviceCatalogExposure } from "@synapse/device-protocol"
+import type { RuntimeCatalogExposure } from "@synapse/device-protocol"
 import { SUBJECT_KIND } from "@synapse/shared"
 import { withTestDb } from "../../test/helpers/db.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
@@ -39,7 +39,7 @@ async function seedWorkspace(
 }
 
 /** A single filesystem exposure with one tool — the minimal api-authored catalog. */
-function fsExposures(): DeviceCatalogExposure[] {
+function fsExposures(): RuntimeCatalogExposure[] {
   return [
     {
       stable_key: "synapse.builtin.filesystem.v1",

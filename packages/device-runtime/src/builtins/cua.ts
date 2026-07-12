@@ -20,8 +20,8 @@
 
 import type { CatalogProvider, CatalogToolInvocationResult } from "../types.js"
 import type {
-  DeviceCatalogExposure,
-  DeviceCatalogTool,
+  RuntimeCatalogExposure,
+  RuntimeCatalogTool,
   RuntimeMcpErrorCode,
   SynapseError,
 } from "@synapse/device-protocol"
@@ -44,7 +44,7 @@ const DEVICE_ERROR_CODE_SET = new Set<RuntimeMcpErrorCode>(
 
 // ───────────────────────────── legacy tools (kept) ──────────────────────────
 
-const LIST_DISPLAYS_TOOL: DeviceCatalogTool = {
+const LIST_DISPLAYS_TOOL: RuntimeCatalogTool = {
   stable_key: "cua/list-displays",
   name: "cua_list_displays",
   description:
@@ -56,7 +56,7 @@ const LIST_DISPLAYS_TOOL: DeviceCatalogTool = {
   },
 }
 
-const CAPTURE_DISPLAY_TOOL: DeviceCatalogTool = {
+const CAPTURE_DISPLAY_TOOL: RuntimeCatalogTool = {
   stable_key: "cua/capture-display",
   name: "cua_capture_display",
   description:
@@ -73,7 +73,7 @@ const CAPTURE_DISPLAY_TOOL: DeviceCatalogTool = {
   },
 }
 
-const CLICK_TOOL: DeviceCatalogTool = {
+const CLICK_TOOL: RuntimeCatalogTool = {
   stable_key: "cua/click",
   name: "cua_click",
   description:
@@ -94,7 +94,7 @@ const CLICK_TOOL: DeviceCatalogTool = {
   },
 }
 
-const TYPE_TEXT_TOOL: DeviceCatalogTool = {
+const TYPE_TEXT_TOOL: RuntimeCatalogTool = {
   stable_key: "cua/type-text",
   name: "cua_type_text",
   description:
@@ -115,7 +115,7 @@ const TYPE_TEXT_TOOL: DeviceCatalogTool = {
 
 // ───────────────────────────── focus-aware tools (new) ──────────────────────
 
-const LIST_WINDOWS_TOOL: DeviceCatalogTool = {
+const LIST_WINDOWS_TOOL: RuntimeCatalogTool = {
   stable_key: "cua/list-windows",
   name: "cua_list_windows",
   description:
@@ -127,7 +127,7 @@ const LIST_WINDOWS_TOOL: DeviceCatalogTool = {
   },
 }
 
-const SET_FOCUS_TOOL: DeviceCatalogTool = {
+const SET_FOCUS_TOOL: RuntimeCatalogTool = {
   stable_key: "cua/set-focus",
   name: "cua_set_focus",
   description:
@@ -156,7 +156,7 @@ const SET_FOCUS_TOOL: DeviceCatalogTool = {
   },
 }
 
-const GET_FOCUS_TOOL: DeviceCatalogTool = {
+const GET_FOCUS_TOOL: RuntimeCatalogTool = {
   stable_key: "cua/get-focus",
   name: "cua_get_focus",
   description:
@@ -168,7 +168,7 @@ const GET_FOCUS_TOOL: DeviceCatalogTool = {
   },
 }
 
-const CAPTURE_VIEW_TOOL: DeviceCatalogTool = {
+const CAPTURE_VIEW_TOOL: RuntimeCatalogTool = {
   stable_key: "cua/capture-view",
   name: "cua_capture_view",
   description:
@@ -275,7 +275,7 @@ export function createCuaBuiltin(
 
   return {
     providerKey: PROVIDER_KEY,
-    async describeExposures(): Promise<DeviceCatalogExposure[]> {
+    async describeExposures(): Promise<RuntimeCatalogExposure[]> {
       return [
         {
           stable_key: "builtin/cua",

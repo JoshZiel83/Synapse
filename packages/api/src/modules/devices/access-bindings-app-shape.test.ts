@@ -20,7 +20,7 @@ import assert from "node:assert/strict"
 import type { Kysely } from "kysely"
 import {
   ActiveRuntimeCapabilitiesListQuerySchema,
-  DevicePairingTicketViewSchema,
+  RuntimePairingTicketViewSchema,
   SetActiveRuntimeCapabilitiesInputSchema,
   StartPairingInputSchema,
 } from "@synapse/shared/schemas"
@@ -86,16 +86,16 @@ test("pairing ticket view schema validates finite shared pairing mode and status
     oneClickCommands: null,
   }
 
-  assert.deepEqual(DevicePairingTicketViewSchema.parse(ticket), ticket)
+  assert.deepEqual(RuntimePairingTicketViewSchema.parse(ticket), ticket)
   assert.equal(
-    DevicePairingTicketViewSchema.safeParse({
+    RuntimePairingTicketViewSchema.safeParse({
       ...ticket,
       mode: "nearby_bluetooth",
     }).success,
     false
   )
   assert.equal(
-    DevicePairingTicketViewSchema.safeParse({
+    RuntimePairingTicketViewSchema.safeParse({
       ...ticket,
       status: "stale",
     }).success,

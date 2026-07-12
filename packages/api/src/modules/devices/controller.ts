@@ -26,8 +26,8 @@ import {
   DeviceViewSchema,
   DeviceListViewSchema,
   DeviceDetailViewSchema,
-  DevicePairingTicketViewSchema,
-  DeviceServiceViewSchema,
+  RuntimePairingTicketViewSchema,
+  RuntimeServiceViewSchema,
 } from "@synapse/shared/schemas"
 import { appRoute, wireRoute } from "../../infrastructure/http/route.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
@@ -196,7 +196,7 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
     app,
     "POST",
     "/api/v1/workspaces/:workspaceId/devices/pairing-sessions",
-    { schema: DevicePairingTicketViewSchema, options: workspaceHook },
+    { schema: RuntimePairingTicketViewSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
       if (
@@ -283,7 +283,7 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
     app,
     "POST",
     "/api/v1/workspaces/:workspaceId/devices/:deviceId/services",
-    { schema: DeviceServiceViewSchema, options: workspaceHook },
+    { schema: RuntimeServiceViewSchema, options: workspaceHook },
     async (request, reply) => {
       const { workspaceId, deviceId } = request.params as {
         workspaceId: string
@@ -325,7 +325,7 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
     app,
     "DELETE",
     "/api/v1/workspaces/:workspaceId/devices/:deviceId/services/:serviceId",
-    { schema: DeviceServiceViewSchema, options: workspaceHook },
+    { schema: RuntimeServiceViewSchema, options: workspaceHook },
     async (request, reply): Promise<undefined> => {
       const { workspaceId, deviceId, serviceId } = request.params as {
         workspaceId: string

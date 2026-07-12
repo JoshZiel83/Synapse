@@ -772,106 +772,110 @@ export const RuntimeHelloParamsSchema = z.object({
 })
 export type RuntimeHelloParams = z.infer<typeof RuntimeHelloParamsSchema>
 
-export const DeviceCatalogToolSchema = z.object({
+export const RuntimeCatalogToolSchema = z.object({
   stable_key: z.string(),
   name: z.string(),
   description: z.string(),
   input_schema: z.record(z.string(), z.unknown()),
   annotations: z.record(z.string(), z.unknown()).optional(),
 })
-export type DeviceCatalogTool = z.infer<typeof DeviceCatalogToolSchema>
+export type RuntimeCatalogTool = z.infer<typeof RuntimeCatalogToolSchema>
 
-export const DeviceCatalogExposureSchema = z.object({
+export const RuntimeCatalogExposureSchema = z.object({
   stable_key: z.string(),
   display_name: z.string(),
   description: z.string().optional(),
   transport: z.enum(RUNTIME_EXPOSURE_TRANSPORTS),
   builtin_kind: z.enum(RUNTIME_BUILTIN_KINDS).nullable().optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
-  tools: z.array(DeviceCatalogToolSchema),
+  tools: z.array(RuntimeCatalogToolSchema),
 })
-export type DeviceCatalogExposure = z.infer<typeof DeviceCatalogExposureSchema>
-
-export const DeviceCatalogSyncParamsSchema = z.object({
-  exposures: z.array(DeviceCatalogExposureSchema),
-})
-export type DeviceCatalogSyncParams = z.infer<
-  typeof DeviceCatalogSyncParamsSchema
+export type RuntimeCatalogExposure = z.infer<
+  typeof RuntimeCatalogExposureSchema
 >
 
-export const DeviceServiceStatusParamsSchema = z.object({
+export const RuntimeCatalogSyncParamsSchema = z.object({
+  exposures: z.array(RuntimeCatalogExposureSchema),
+})
+export type RuntimeCatalogSyncParams = z.infer<
+  typeof RuntimeCatalogSyncParamsSchema
+>
+
+export const RuntimeServiceStatusParamsSchema = z.object({
   status: z.enum(RUNTIME_SERVICE_STATUSES),
   detail: z.string().optional(),
 })
-export type DeviceServiceStatusParams = z.infer<
-  typeof DeviceServiceStatusParamsSchema
+export type RuntimeServiceStatusParams = z.infer<
+  typeof RuntimeServiceStatusParamsSchema
 >
 
-export const DeviceTunnelUpParamsSchema = z.object({
+export const RuntimeTunnelUpParamsSchema = z.object({
   internal_url: z.string(),
 })
-export type DeviceTunnelUpParams = z.infer<typeof DeviceTunnelUpParamsSchema>
+export type RuntimeTunnelUpParams = z.infer<typeof RuntimeTunnelUpParamsSchema>
 
-export const DeviceTunnelDownParamsSchema = z.object({
+export const RuntimeTunnelDownParamsSchema = z.object({
   reason: z.string().optional(),
 })
-export type DeviceTunnelDownParams = z.infer<
-  typeof DeviceTunnelDownParamsSchema
+export type RuntimeTunnelDownParams = z.infer<
+  typeof RuntimeTunnelDownParamsSchema
 >
 
-export const DeviceRuntimeSessionOpenedParamsSchema = z.object({
+export const RuntimeSessionOpenedParamsSchema = z.object({
   runtime_session_id: z.uuid(),
   conversation_id: z.uuid().nullable().optional(),
   actor_id: z.uuid().nullable().optional(),
 })
-export type DeviceRuntimeSessionOpenedParams = z.infer<
-  typeof DeviceRuntimeSessionOpenedParamsSchema
+export type RuntimeSessionOpenedParams = z.infer<
+  typeof RuntimeSessionOpenedParamsSchema
 >
 
-export const DeviceRuntimeSessionClosedParamsSchema = z.object({
+export const RuntimeSessionClosedParamsSchema = z.object({
   runtime_session_id: z.uuid(),
 })
-export type DeviceRuntimeSessionClosedParams = z.infer<
-  typeof DeviceRuntimeSessionClosedParamsSchema
+export type RuntimeSessionClosedParams = z.infer<
+  typeof RuntimeSessionClosedParamsSchema
 >
 
-export const DeviceTaskRefParamsSchema = z.object({
+export const RuntimeTaskRefParamsSchema = z.object({
   operation_id: z.uuid(),
   attempt_id: z.uuid().optional(),
 })
-export type DeviceTaskRefParams = z.infer<typeof DeviceTaskRefParamsSchema>
+export type RuntimeTaskRefParams = z.infer<typeof RuntimeTaskRefParamsSchema>
 
-export const DeviceTaskOutputParamsSchema = DeviceTaskRefParamsSchema.extend({
+export const RuntimeTaskOutputParamsSchema = RuntimeTaskRefParamsSchema.extend({
   output: z.unknown(),
 })
-export type DeviceTaskOutputParams = z.infer<
-  typeof DeviceTaskOutputParamsSchema
+export type RuntimeTaskOutputParams = z.infer<
+  typeof RuntimeTaskOutputParamsSchema
 >
 
-export const DeviceTaskResultParamsSchema = DeviceTaskRefParamsSchema.extend({
+export const RuntimeTaskResultParamsSchema = RuntimeTaskRefParamsSchema.extend({
   ok: z.boolean(),
   error_code: z.string().optional(),
   error_message: z.string().optional(),
   result_hash: z.string().optional(),
 })
-export type DeviceTaskResultParams = z.infer<
-  typeof DeviceTaskResultParamsSchema
+export type RuntimeTaskResultParams = z.infer<
+  typeof RuntimeTaskResultParamsSchema
 >
 
-export const DeviceEventEmitParamsSchema = z.object({
+export const RuntimeEventEmitParamsSchema = z.object({
   event_type: z.string().min(1).max(80),
   level: z.enum(["debug", "info", "warn", "error"]).optional(),
   conversation_id: z.uuid().nullable().optional(),
   payload: z.record(z.string(), z.unknown()).optional(),
 })
-export type DeviceEventEmitParams = z.infer<typeof DeviceEventEmitParamsSchema>
+export type RuntimeEventEmitParams = z.infer<
+  typeof RuntimeEventEmitParamsSchema
+>
 
-export const DeviceVfsExposureUpsertParamsSchema = z.object({
+export const RuntimeVfsExposureUpsertParamsSchema = z.object({
   exposure_id: z.uuid(),
   vfs: z.record(z.string(), z.unknown()),
 })
-export type DeviceVfsExposureUpsertParams = z.infer<
-  typeof DeviceVfsExposureUpsertParamsSchema
+export type RuntimeVfsExposureUpsertParams = z.infer<
+  typeof RuntimeVfsExposureUpsertParamsSchema
 >
 
 // server → device

@@ -1,8 +1,8 @@
 import type {
   DeviceCapabilityView,
   DeviceDetailView,
-  DevicePairingTicketView,
-  DeviceServiceView,
+  RuntimePairingTicketView,
+  RuntimeServiceView,
   DeviceView,
 } from "@synapse/shared"
 import { serializeOptionalInstant } from "../../infrastructure/datetime.js"
@@ -10,8 +10,8 @@ import { serializeInstant } from "../../infrastructure/datetime.js"
 import type {
   DeviceCapabilityRecord,
   DeviceDetailRecord,
-  DevicePairingTicketRecord,
-  DeviceServiceRecord,
+  RuntimePairingTicketRecord,
+  RuntimeServiceRecord,
   DeviceSummaryRecord,
 } from "./repo.types.js"
 
@@ -36,8 +36,8 @@ export function presentDevice(record: DeviceSummaryRecord): DeviceView {
 }
 
 export function presentDeviceService(
-  record: DeviceServiceRecord
-): DeviceServiceView {
+  record: RuntimeServiceRecord
+): RuntimeServiceView {
   return {
     id: record.id,
     deviceId: record.deviceId,
@@ -78,8 +78,8 @@ export function presentDeviceDetail(
 }
 
 export function presentDevicePairingTicket(
-  record: DevicePairingTicketRecord
-): DevicePairingTicketView {
+  record: RuntimePairingTicketRecord
+): RuntimePairingTicketView {
   return {
     pairingSessionId: record.pairingSessionId,
     mode: record.mode,

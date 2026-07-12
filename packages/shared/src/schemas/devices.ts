@@ -41,7 +41,7 @@ export type DeviceView = z.infer<typeof DeviceViewSchema>
 export const DeviceListViewSchema = z.array(DeviceViewSchema)
 export type DeviceListView = z.infer<typeof DeviceListViewSchema>
 
-export const DeviceServiceViewSchema = z.strictObject({
+export const RuntimeServiceViewSchema = z.strictObject({
   id: z.uuid(),
   deviceId: z.uuid(),
   serviceKind: z.enum(RUNTIME_SERVICE_KINDS),
@@ -50,7 +50,7 @@ export const DeviceServiceViewSchema = z.strictObject({
   lastSeenAt: IsoInstantStringSchema.nullable(),
   remoteAgentMachineId: z.uuid().nullable(),
 })
-export type DeviceServiceView = z.infer<typeof DeviceServiceViewSchema>
+export type RuntimeServiceView = z.infer<typeof RuntimeServiceViewSchema>
 
 export const DeviceCapabilityViewSchema = z.strictObject({
   id: z.uuid(),
@@ -69,7 +69,7 @@ export type DeviceCapabilityView = z.infer<typeof DeviceCapabilityViewSchema>
 export const DeviceDetailViewSchema = DeviceViewSchema.extend({
   description: z.string().nullable(),
   ownerWorkspaceMemberId: z.uuid().nullable(),
-  services: z.array(DeviceServiceViewSchema),
+  services: z.array(RuntimeServiceViewSchema),
   capabilities: z.array(DeviceCapabilityViewSchema),
 })
 export type DeviceDetailView = z.infer<typeof DeviceDetailViewSchema>
@@ -82,7 +82,7 @@ export type DeviceDetailView = z.infer<typeof DeviceDetailViewSchema>
  * the snake_case wire `bootstrap_token` stays in device-protocol for the
  * sandbox→/devices/bootstrap handshake.
  */
-export const DevicePairingTicketViewSchema = z.strictObject({
+export const RuntimePairingTicketViewSchema = z.strictObject({
   pairingSessionId: z.uuid(),
   mode: z.enum(RUNTIME_PAIRING_MODES),
   pairingCode: z.string().nullable(),
@@ -95,8 +95,8 @@ export const DevicePairingTicketViewSchema = z.strictObject({
     .strictObject({ unix: z.string(), windows: z.string() })
     .nullish(),
 })
-export type DevicePairingTicketView = z.infer<
-  typeof DevicePairingTicketViewSchema
+export type RuntimePairingTicketView = z.infer<
+  typeof RuntimePairingTicketViewSchema
 >
 
 // ============================================================================

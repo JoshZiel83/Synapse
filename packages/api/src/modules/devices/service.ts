@@ -16,8 +16,8 @@ import {
 import type { OneClickInstallCommands } from "@synapse/shared"
 import type {
   DeviceDetailRecord,
-  DevicePairingTicketRecord,
-  DeviceServiceRecord,
+  RuntimePairingTicketRecord,
+  RuntimeServiceRecord,
   DeviceSummaryRecord,
 } from "./repo.types.js"
 import {
@@ -32,7 +32,7 @@ import {
   mintBareSandboxRuntimeTx,
   softDeleteRuntime,
 } from "./repo.js"
-import type { DeviceCatalogExposure } from "@synapse/device-protocol"
+import type { RuntimeCatalogExposure } from "@synapse/device-protocol"
 import { config } from "../../config/index.js"
 import {
   buildDeviceInstallCommands,
@@ -126,7 +126,7 @@ export async function mintBareSandboxRuntime(args: {
   adapter: string
   dataPlaneEndpoint: string
   capabilityDescriptor: Record<string, unknown>
-  exposures: DeviceCatalogExposure[]
+  exposures: RuntimeCatalogExposure[]
   clientVersion?: string | null
 }): ReturnType<typeof mintBareSandboxRuntimeTx> {
   return mintBareSandboxRuntimeTx(args)
@@ -196,7 +196,7 @@ function generateBootstrapToken(): { token: string; hash: Buffer } {
   return { token, hash }
 }
 
-export type StartPairingResult = DevicePairingTicketRecord
+export type StartPairingResult = RuntimePairingTicketRecord
 
 export interface StartPairingInput {
   workspaceId: string
@@ -409,7 +409,7 @@ export interface ClaimDaemonInput {
 
 export async function claimRemoteAgentDaemon(
   input: ClaimDaemonInput
-): Promise<DeviceServiceRecord> {
+): Promise<RuntimeServiceRecord> {
   const result = await claimRemoteAgentDaemonTx(input)
   if (result.outcome !== "ok") {
     switch (result.outcome) {

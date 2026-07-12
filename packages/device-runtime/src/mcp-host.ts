@@ -23,8 +23,8 @@ import { createServer, type Server } from "node:http"
 import { timingSafeEqual } from "node:crypto"
 import type { AddressInfo } from "node:net"
 import {
-  DeviceCatalogExposure,
-  DeviceCatalogTool,
+  RuntimeCatalogExposure,
+  RuntimeCatalogTool,
   OperationEnvelope,
   OperationEnvelopeSchema,
   SynapseError,
@@ -48,7 +48,7 @@ type ExtractEnvelopeResult =
   | { kind: "ok"; envelope: OperationEnvelope }
 
 export interface InMemoryMcpHostHandle extends McpHost {
-  getCatalogSnapshot(): Promise<DeviceCatalogExposure[]>
+  getCatalogSnapshot(): Promise<RuntimeCatalogExposure[]>
   /**
    * Push a freshly delivered server public key (e.g. learned from the
    * device.hello ack envelope_signing block) into the verifier's trusted
@@ -106,7 +106,7 @@ export interface InMemoryMcpHostOptions {
 
 interface ToolEntry {
   exposureKey: string
-  tool: DeviceCatalogTool
+  tool: RuntimeCatalogTool
   provider: CatalogProvider
 }
 
@@ -166,8 +166,8 @@ export function createInMemoryMcpHost(
     return index
   }
 
-  async function listAllTools(): Promise<DeviceCatalogTool[]> {
-    const out: DeviceCatalogTool[] = []
+  async function listAllTools(): Promise<RuntimeCatalogTool[]> {
+    const out: RuntimeCatalogTool[] = []
     for (const entry of (await buildToolIndex()).values()) {
       out.push(entry.tool)
     }
@@ -603,7 +603,7 @@ export function createInMemoryMcpHost(
       providers.delete(providerKey)
     },
     async getCatalogSnapshot() {
-      const all: DeviceCatalogExposure[] = []
+      const all: RuntimeCatalogExposure[] = []
       for (const provider of providers.values()) {
         const exposures = await provider.describeExposures()
         all.push(...exposures)

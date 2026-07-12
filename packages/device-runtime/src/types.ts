@@ -1,7 +1,7 @@
 // @synapse/device-runtime — public types.
 
 import type {
-  DeviceCatalogExposure,
+  RuntimeCatalogExposure,
   RuntimePairingMode,
   RuntimeServiceKind,
   HostKind,
@@ -55,7 +55,7 @@ export interface DeviceIdentityRecord {
  */
 export interface CatalogProvider {
   readonly providerKey: string
-  describeExposures(): Promise<DeviceCatalogExposure[]>
+  describeExposures(): Promise<RuntimeCatalogExposure[]>
   /**
    * Optional tool invocation hook. Called when the MCP host receives a
    * tools/call for a tool the provider declared in describeExposures().

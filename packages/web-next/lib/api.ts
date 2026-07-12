@@ -6,9 +6,9 @@ import {
 import type {
   DeviceListView,
   DeviceDetailView,
-  DeviceServiceView,
+  RuntimeServiceView,
   DeviceCapabilityView,
-  DevicePairingTicketView,
+  RuntimePairingTicketView,
   MarketplacePluginView,
   PluginAuditLogList,
   ModelGroupView,
@@ -2660,7 +2660,7 @@ class ApiClient {
   async startDevicePairingSession(
     wsId: string,
     body: Omit<StartPairingInput, "workspaceId">
-  ): Promise<DevicePairingTicketView> {
+  ): Promise<RuntimePairingTicketView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/devices/pairing-sessions`,
       {
@@ -2674,7 +2674,7 @@ class ApiClient {
     wsId: string,
     deviceId: string,
     remoteAgentMachineId: string
-  ): Promise<DeviceServiceView> {
+  ): Promise<RuntimeServiceView> {
     const res = await this.fetch(
       `/workspaces/${wsId}/devices/${deviceId}/services`,
       {

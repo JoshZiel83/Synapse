@@ -26,10 +26,10 @@ import type { WebSocket } from "ws"
 import { formatValidationDetails } from "../../infrastructure/validation-error.js"
 import { wireRoute } from "../../infrastructure/http/route.js"
 import {
-  DeviceCatalogSyncParamsSchema,
+  RuntimeCatalogSyncParamsSchema,
   RuntimeHelloParamsSchema,
-  DeviceTunnelDownParamsSchema,
-  DeviceTunnelUpParamsSchema,
+  RuntimeTunnelDownParamsSchema,
+  RuntimeTunnelUpParamsSchema,
   parseJsonRpcRequestFrame,
   type JsonRpcRequest,
 } from "@synapse/device-protocol"
@@ -566,7 +566,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           }
           case "device.catalog.sync": {
             if (!requireAuthenticated(req)) return
-            const parsedCatalog = DeviceCatalogSyncParamsSchema.safeParse(
+            const parsedCatalog = RuntimeCatalogSyncParamsSchema.safeParse(
               req.params
             )
             if (!parsedCatalog.success) {
@@ -602,7 +602,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           }
           case "device.tunnel.up": {
             if (!requireAuthenticated(req)) return
-            const parsedTunnel = DeviceTunnelUpParamsSchema.safeParse(
+            const parsedTunnel = RuntimeTunnelUpParamsSchema.safeParse(
               req.params
             )
             if (!parsedTunnel.success) {
@@ -667,7 +667,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           }
           case "device.tunnel.down": {
             if (!requireAuthenticated(req)) return
-            const parsedTunnel = DeviceTunnelDownParamsSchema.safeParse(
+            const parsedTunnel = RuntimeTunnelDownParamsSchema.safeParse(
               req.params ?? {}
             )
             if (!parsedTunnel.success) {

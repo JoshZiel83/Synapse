@@ -22,8 +22,8 @@ import {
   COMMANDLINE_CORE_TOOL_DEFS,
 } from "@synapse/device-runtime"
 import type {
-  DeviceCatalogExposure,
-  DeviceCatalogTool,
+  RuntimeCatalogExposure,
+  RuntimeCatalogTool,
 } from "@synapse/device-protocol"
 import type { SandboxCapabilityDescriptor } from "./model.js"
 
@@ -50,9 +50,9 @@ const REDUCED_FIDELITY_STRIP: Readonly<Record<string, readonly string[]>> = {
  *  hands back input_schema BY REFERENCE to the shared resident TOOLS[] table, so a
  *  direct delete would corrupt the schema the device itself serves. */
 function stripUnhonoredParams(
-  tool: DeviceCatalogTool,
+  tool: RuntimeCatalogTool,
   paramsToStrip: readonly string[]
-): DeviceCatalogTool {
+): RuntimeCatalogTool {
   const clone = structuredClone(tool)
   const schema = clone.input_schema as {
     properties?: Record<string, unknown>
@@ -71,7 +71,7 @@ function stripUnhonoredParams(
  *  it is never advertised as a dead/unbacked tool (fail-closed). */
 function bareFilesystemTools(
   descriptor: SandboxCapabilityDescriptor
-): DeviceCatalogTool[] {
+): RuntimeCatalogTool[] {
   const tools = filesystemCoreToolDefs().map((t) => {
     const strip = REDUCED_FIDELITY_STRIP[t.name]
     return strip ? stripUnhonoredParams(t, strip) : t
@@ -93,8 +93,8 @@ export const BARE_COMMANDLINE_EXPOSURE_KEY = "builtin/commandline"
  */
 export function buildBareCoreCatalog(
   descriptor: SandboxCapabilityDescriptor
-): DeviceCatalogExposure[] {
-  const exposures: DeviceCatalogExposure[] = [
+): RuntimeCatalogExposure[] {
+  const exposures: RuntimeCatalogExposure[] = [
     {
       stable_key: BARE_FILESYSTEM_EXPOSURE_KEY,
       display_name: "Filesystem",

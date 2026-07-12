@@ -9,12 +9,12 @@ import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { api } from "@/lib/api"
 import { qk } from "@/lib/query-keys"
 import { Button } from "@/components/ui/button"
-import type { DevicePairingTicketView } from "@synapse/shared"
+import type { RuntimePairingTicketView } from "@synapse/shared"
 
 export default function DevicesIndexPage() {
   const { workspaceId } = useWorkspace()
   const [pairingTicket, setPairingTicket] =
-    useState<DevicePairingTicketView | null>(null)
+    useState<RuntimePairingTicketView | null>(null)
 
   const devicesQuery = useQuery({
     queryKey: workspaceId ? qk.devices(workspaceId) : ["devices", "disabled"],

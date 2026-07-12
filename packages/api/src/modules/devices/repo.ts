@@ -11,8 +11,8 @@
 import { createHash, randomUUID } from "node:crypto"
 import { sql } from "kysely"
 import type {
-  DeviceCatalogExposure,
-  DeviceCatalogTool,
+  RuntimeCatalogExposure,
+  RuntimeCatalogTool,
   OperationEnvelope,
   SynapseError,
 } from "@synapse/device-protocol"
@@ -30,7 +30,7 @@ import { parseInstantString } from "../../infrastructure/datetime.js"
 import type {
   DeviceCapabilityRecord,
   DeviceDetailRecord,
-  DeviceServiceRecord,
+  RuntimeServiceRecord,
   DeviceSummaryRecord,
 } from "./repo.types.js"
 import type {
@@ -1108,7 +1108,7 @@ function stableStringify(value: unknown): string {
     .join(",")}}`
 }
 
-function toolDefinitionHash(tool: DeviceCatalogTool): string {
+function toolDefinitionHash(tool: RuntimeCatalogTool): string {
   return createHash("sha256")
     .update(
       stableStringify({
@@ -1122,7 +1122,7 @@ function toolDefinitionHash(tool: DeviceCatalogTool): string {
     .digest("hex")
 }
 
-function exposureSchemaHash(exposure: DeviceCatalogExposure): string {
+function exposureSchemaHash(exposure: RuntimeCatalogExposure): string {
   const toolDigests = exposure.tools
     .map((t) => `${t.stable_key}:${toolDefinitionHash(t)}`)
     .sort()
@@ -1142,7 +1142,7 @@ function exposureSchemaHash(exposure: DeviceCatalogExposure): string {
 export interface PersistCatalogSyncInput {
   runtimeId: string
   serviceId: string
-  exposures: DeviceCatalogExposure[]
+  exposures: RuntimeCatalogExposure[]
   /**
    * TEST SEAM only (mirrors mintLocalSandboxRuntimeTx.executor). When present,
    * the sync runs inside the supplied handle instead of opening a fresh global
@@ -1312,7 +1312,7 @@ async function upsertExposure(
     runtimeId: string
     workspaceId: string
     serviceId: string
-    exposure: DeviceCatalogExposure
+    exposure: RuntimeCatalogExposure
   }
 ): Promise<string> {
   const existing = await trx
@@ -1502,7 +1502,7 @@ async function upsertTools(
   args: {
     exposureId: string
     catalogRevisionId: string
-    tools: DeviceCatalogTool[]
+    tools: RuntimeCatalogTool[]
   }
 ): Promise<{
   writtenRevisions: number
@@ -1678,12 +1678,12 @@ export async function findDeviceDetail(
     .where("runtimeId", "=", deviceId)
     .orderBy("createdAt", "asc")
     .execute()
-  const services: DeviceServiceRecord[] = serviceRows.map((row) => ({
+  const services: RuntimeServiceRecord[] = serviceRows.map((row) => ({
     id: row.id as string,
     deviceId: row.runtimeId as string,
     serviceKind: row.serviceKind as RuntimeServiceKind,
     version: (row.version as string | null) ?? null,
-    status: row.status as DeviceServiceRecord["status"],
+    status: row.status as RuntimeServiceRecord["status"],
     lastSeenAt: row.lastSeenAt as Date | null,
     remoteAgentMachineId: (row.remoteAgentMachineId as string | null) ?? null,
   }))
@@ -2098,7 +2098,7 @@ export async function mintBareSandboxRuntimeTx(args: {
   dataPlaneEndpoint: string
   capabilityDescriptor: Record<string, unknown>
   /** Descriptor-gated api-authored exposure set (buildBareCoreCatalog). */
-  exposures: DeviceCatalogExposure[]
+  exposures: RuntimeCatalogExposure[]
   clientVersion?: string | null
   /** TEST SEAM only (see runInInjectableTx). */
   executor?: KyselyDb
@@ -2171,7 +2171,7 @@ export async function mintBareSandboxRuntimeTx(args: {
 
 /** Discriminated outcome of the daemon-claim transaction. */
 export type ClaimRemoteAgentDaemonResult =
-  | { outcome: "ok"; service: DeviceServiceRecord }
+  | { outcome: "ok"; service: RuntimeServiceRecord }
   | {
       outcome:
         | "device_not_found"
@@ -2251,7 +2251,7 @@ export async function claimRemoteAgentDaemonTx(input: {
         deviceId: row.runtimeId as string,
         serviceKind: row.serviceKind as RuntimeServiceKind,
         version: (row.version as string | null) ?? null,
-        status: row.status as DeviceServiceRecord["status"],
+        status: row.status as RuntimeServiceRecord["status"],
         lastSeenAt: row.lastSeenAt as Date | null,
         remoteAgentMachineId:
           (row.remoteAgentMachineId as string | null) ?? null,

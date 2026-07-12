@@ -9,8 +9,8 @@ import { Buffer } from "node:buffer"
 import { createHash } from "node:crypto"
 import type { CatalogProvider, CatalogToolInvocationResult } from "../types.js"
 import type {
-  DeviceCatalogExposure,
-  DeviceCatalogTool,
+  RuntimeCatalogExposure,
+  RuntimeCatalogTool,
   OperationEnvelope,
 } from "@synapse/device-protocol"
 import {
@@ -473,7 +473,7 @@ export const FILESYSTEM_CORE_TOOL_NAMES: readonly string[] = [
 /** The CORE filesystem tool DEFINITIONS (name/description/input_schema), derived
  *  DOWN from the resident builtin's TOOLS[] so the bare catalog can never drift
  *  from the schema the device actually serves. */
-export function filesystemCoreToolDefs(): DeviceCatalogTool[] {
+export function filesystemCoreToolDefs(): RuntimeCatalogTool[] {
   const byName = new Map(TOOLS.map((t) => [t.name, t]))
   return FILESYSTEM_CORE_TOOL_NAMES.map((name) => {
     const t = byName.get(name)
@@ -482,7 +482,7 @@ export function filesystemCoreToolDefs(): DeviceCatalogTool[] {
   })
 }
 
-function toCatalogTool(t: ToolDescriptor): DeviceCatalogTool {
+function toCatalogTool(t: ToolDescriptor): RuntimeCatalogTool {
   return {
     stable_key: t.stable_key,
     name: t.name,
@@ -806,7 +806,7 @@ export function createFilesystemBuiltin(
 
   return {
     providerKey: PROVIDER_KEY,
-    async describeExposures(): Promise<DeviceCatalogExposure[]> {
+    async describeExposures(): Promise<RuntimeCatalogExposure[]> {
       const avail: AvailabilityMatrix = {
         liveAvailable,
         indexAvailable,

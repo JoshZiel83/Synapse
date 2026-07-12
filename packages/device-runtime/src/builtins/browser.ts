@@ -11,14 +11,14 @@ import WebSocket from "ws"
 import { z } from "zod"
 import type { CatalogProvider, CatalogToolInvocationResult } from "../types.js"
 import type {
-  DeviceCatalogExposure,
-  DeviceCatalogTool,
+  RuntimeCatalogExposure,
+  RuntimeCatalogTool,
 } from "@synapse/device-protocol"
 import { toolErrorResult } from "../mcp-host.js"
 
 const PROVIDER_KEY = "builtin.browser"
 
-const NAVIGATE_TOOL: DeviceCatalogTool = {
+const NAVIGATE_TOOL: RuntimeCatalogTool = {
   stable_key: "browser/navigate",
   name: "browser_navigate",
   description:
@@ -37,7 +37,7 @@ const NAVIGATE_TOOL: DeviceCatalogTool = {
   },
 }
 
-const READ_TOOL: DeviceCatalogTool = {
+const READ_TOOL: RuntimeCatalogTool = {
   stable_key: "browser/read-text",
   name: "browser_read_text",
   description:
@@ -69,7 +69,7 @@ export function createBrowserBuiltin(
 ): CatalogProvider {
   return {
     providerKey: PROVIDER_KEY,
-    async describeExposures(): Promise<DeviceCatalogExposure[]> {
+    async describeExposures(): Promise<RuntimeCatalogExposure[]> {
       return [
         {
           stable_key: "builtin/browser",

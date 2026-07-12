@@ -22,8 +22,8 @@
 
 import type { CatalogProvider, CatalogToolInvocationResult } from "../types.js"
 import type {
-  DeviceCatalogExposure,
-  DeviceCatalogTool,
+  RuntimeCatalogExposure,
+  RuntimeCatalogTool,
 } from "@synapse/device-protocol"
 import { toolErrorResult } from "../mcp-host.js"
 import { isBareCommandName, isBundleEligibleProgram } from "@synapse/shared"
@@ -76,7 +76,7 @@ const PROVIDER_KEY = "builtin.commandline"
 
 // ───────────────────────────── tool definitions ─────────────────────────────
 
-const BASH_TOOL: DeviceCatalogTool = {
+const BASH_TOOL: RuntimeCatalogTool = {
   stable_key: "commandline/bash",
   name: "bash",
   description:
@@ -98,7 +98,7 @@ const BASH_TOOL: DeviceCatalogTool = {
   },
 }
 
-const POWERSHELL_TOOL: DeviceCatalogTool = {
+const POWERSHELL_TOOL: RuntimeCatalogTool = {
   stable_key: "commandline/powershell",
   name: "powershell",
   description:
@@ -120,7 +120,7 @@ const POWERSHELL_TOOL: DeviceCatalogTool = {
   },
 }
 
-const EXEC_FILE_TOOL: DeviceCatalogTool = {
+const EXEC_FILE_TOOL: RuntimeCatalogTool = {
   stable_key: "commandline/exec_file",
   name: "exec_file",
   description:
@@ -158,7 +158,7 @@ const EXEC_FILE_TOOL: DeviceCatalogTool = {
  * asserts equivalence. Linux bare adapters expose bash + exec_file (no
  * powershell). pty is NOT here (no device-runtime pty builtin exists in P4a).
  */
-export const COMMANDLINE_CORE_TOOL_DEFS: readonly DeviceCatalogTool[] = [
+export const COMMANDLINE_CORE_TOOL_DEFS: readonly RuntimeCatalogTool[] = [
   BASH_TOOL,
   EXEC_FILE_TOOL,
 ]
@@ -208,9 +208,9 @@ export function createCommandlineBuiltin(
 ): CatalogProvider {
   return {
     providerKey: PROVIDER_KEY,
-    async describeExposures(): Promise<DeviceCatalogExposure[]> {
+    async describeExposures(): Promise<RuntimeCatalogExposure[]> {
       const env = await resolveEnvironment(opts)
-      const tools: DeviceCatalogTool[] = []
+      const tools: RuntimeCatalogTool[] = []
       const executors: string[] = []
       if (env.platform === "win32") {
         if (env.powershell) {

@@ -17,7 +17,7 @@ import {
   createCommandlineBuiltin,
   WHOLE_SCOPE,
 } from "@synapse/device-runtime"
-import type { DeviceCatalogTool } from "@synapse/device-protocol"
+import type { RuntimeCatalogTool } from "@synapse/device-protocol"
 import { buildBareCoreCatalog } from "./core-catalog.js"
 import { buildLocalBareDescriptor } from "./adapter-registry.js"
 import {
@@ -28,7 +28,7 @@ import {
 } from "./data-plane.js"
 import type { McpDispatchResult } from "../devices/dispatch.js"
 
-function toolMap(tools: DeviceCatalogTool[]): Map<string, DeviceCatalogTool> {
+function toolMap(tools: RuntimeCatalogTool[]): Map<string, RuntimeCatalogTool> {
   return new Map(tools.map((t) => [t.name, t]))
 }
 
@@ -38,7 +38,7 @@ interface JsonSchema {
   properties?: Record<string, unknown>
 }
 
-function schemaOf(t: DeviceCatalogTool): JsonSchema {
+function schemaOf(t: RuntimeCatalogTool): JsonSchema {
   return t.input_schema as JsonSchema
 }
 

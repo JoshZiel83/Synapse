@@ -4543,10 +4543,10 @@ export type {
 export type {
   DeviceView,
   DeviceListView,
-  DeviceServiceView,
+  RuntimeServiceView,
   DeviceCapabilityView,
   DeviceDetailView,
-  DevicePairingTicketView,
+  RuntimePairingTicketView,
   CreateCloudDeviceInput,
   CreateCloudDeviceResultView,
   StartPairingInput,

@@ -5,13 +5,13 @@
 // the control-plane handler can write a structured JSON-RPC error.
 
 import {
-  DeviceEventEmitParamsSchema,
-  DeviceRuntimeSessionClosedParamsSchema,
-  DeviceRuntimeSessionOpenedParamsSchema,
-  DeviceTaskOutputParamsSchema,
-  DeviceTaskRefParamsSchema,
-  DeviceTaskResultParamsSchema,
-  DeviceVfsExposureUpsertParamsSchema,
+  RuntimeEventEmitParamsSchema,
+  RuntimeSessionClosedParamsSchema,
+  RuntimeSessionOpenedParamsSchema,
+  RuntimeTaskOutputParamsSchema,
+  RuntimeTaskRefParamsSchema,
+  RuntimeTaskResultParamsSchema,
+  RuntimeVfsExposureUpsertParamsSchema,
 } from "@synapse/device-protocol"
 import {
   upsertRuntimeSessionOpened,
@@ -48,7 +48,7 @@ export async function persistRuntimeSessionOpened(
   serviceId: string,
   raw: unknown
 ): Promise<PersistResult> {
-  const parsed = DeviceRuntimeSessionOpenedParamsSchema.safeParse(raw)
+  const parsed = RuntimeSessionOpenedParamsSchema.safeParse(raw)
   if (!parsed.success) {
     return {
       ok: false,
@@ -79,7 +79,7 @@ export async function persistRuntimeSessionClosed(
   serviceId: string,
   raw: unknown
 ): Promise<PersistResult> {
-  const parsed = DeviceRuntimeSessionClosedParamsSchema.safeParse(raw)
+  const parsed = RuntimeSessionClosedParamsSchema.safeParse(raw)
   if (!parsed.success) {
     return {
       ok: false,
@@ -293,7 +293,7 @@ export async function persistTaskReceived(
   serviceId: string,
   raw: unknown
 ): Promise<PersistResult> {
-  const parsed = DeviceTaskRefParamsSchema.safeParse(raw)
+  const parsed = RuntimeTaskRefParamsSchema.safeParse(raw)
   if (!parsed.success) {
     return { ok: false, code: -32602, message: parsed.error.message }
   }
@@ -325,7 +325,7 @@ export async function persistTaskStarted(
   serviceId: string,
   raw: unknown
 ): Promise<PersistResult> {
-  const parsed = DeviceTaskRefParamsSchema.safeParse(raw)
+  const parsed = RuntimeTaskRefParamsSchema.safeParse(raw)
   if (!parsed.success) {
     return { ok: false, code: -32602, message: parsed.error.message }
   }
@@ -350,7 +350,7 @@ export async function persistTaskOutput(
   serviceId: string,
   raw: unknown
 ): Promise<PersistResult> {
-  const parsed = DeviceTaskOutputParamsSchema.safeParse(raw)
+  const parsed = RuntimeTaskOutputParamsSchema.safeParse(raw)
   if (!parsed.success) {
     return { ok: false, code: -32602, message: parsed.error.message }
   }
@@ -379,7 +379,7 @@ export async function persistTaskResult(
   serviceId: string,
   raw: unknown
 ): Promise<PersistResult> {
-  const parsed = DeviceTaskResultParamsSchema.safeParse(raw)
+  const parsed = RuntimeTaskResultParamsSchema.safeParse(raw)
   if (!parsed.success) {
     return { ok: false, code: -32602, message: parsed.error.message }
   }
@@ -414,7 +414,7 @@ export async function persistRuntimeEventEmit(
   workspaceId: string,
   raw: unknown
 ): Promise<PersistResult> {
-  const parsed = DeviceEventEmitParamsSchema.safeParse(raw)
+  const parsed = RuntimeEventEmitParamsSchema.safeParse(raw)
   if (!parsed.success) {
     return { ok: false, code: -32602, message: parsed.error.message }
   }
@@ -441,7 +441,7 @@ export async function persistVfsExposureUpsert(
   runtimeId: string,
   raw: unknown
 ): Promise<PersistResult> {
-  const parsed = DeviceVfsExposureUpsertParamsSchema.safeParse(raw)
+  const parsed = RuntimeVfsExposureUpsertParamsSchema.safeParse(raw)
   if (!parsed.success) {
     return { ok: false, code: -32602, message: parsed.error.message }
   }

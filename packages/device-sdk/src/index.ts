@@ -11,8 +11,8 @@ import {
 import {
   DeviceDetailViewSchema,
   DeviceListViewSchema,
-  DevicePairingTicketViewSchema,
-  DeviceServiceViewSchema,
+  RuntimePairingTicketViewSchema,
+  RuntimeServiceViewSchema,
   CreateCloudDeviceInputSchema,
   CreateCloudDeviceResultViewSchema,
   StartPairingInputSchema,
@@ -20,8 +20,8 @@ import {
   SetActiveRuntimeCapabilitiesInputSchema,
   type DeviceDetailView,
   type DeviceListView,
-  type DevicePairingTicketView,
-  type DeviceServiceView,
+  type RuntimePairingTicketView,
+  type RuntimeServiceView,
   type DeviceView,
   type CreateCloudDeviceInput,
   type CreateCloudDeviceResultView,
@@ -146,7 +146,7 @@ export class DeviceSdk {
 
   async startPairing(
     input: StartPairingInput
-  ): Promise<DevicePairingTicketView> {
+  ): Promise<RuntimePairingTicketView> {
     const parsed = StartPairingInputSchema.parse(input)
     const res = await this.request<{ data: unknown }>(
       "POST",
@@ -161,7 +161,7 @@ export class DeviceSdk {
         selfChallenge: parsed.selfChallenge,
       }
     )
-    return DevicePairingTicketViewSchema.parse(res.data)
+    return RuntimePairingTicketViewSchema.parse(res.data)
   }
 
   // Used by the Device Runtime (not the chat client), but exposed here so
@@ -184,7 +184,7 @@ export class DeviceSdk {
     workspaceId: string,
     deviceId: string,
     input: { remoteAgentMachineId: string }
-  ): Promise<DeviceServiceView> {
+  ): Promise<RuntimeServiceView> {
     const parsed = ClaimDaemonServiceInputSchema.parse({
       serviceKind: "remote_agent_daemon",
       remoteAgentMachineId: input.remoteAgentMachineId,
@@ -197,7 +197,7 @@ export class DeviceSdk {
         remoteAgentMachineId: parsed.remoteAgentMachineId,
       }
     )
-    return DeviceServiceViewSchema.parse(res.data)
+    return RuntimeServiceViewSchema.parse(res.data)
   }
 
   async detachService(
@@ -243,8 +243,8 @@ export type {
   DeviceView,
   DeviceListView,
   DeviceDetailView,
-  DeviceServiceView,
-  DevicePairingTicketView,
+  RuntimeServiceView,
+  RuntimePairingTicketView,
   CreateCloudDeviceInput,
   CreateCloudDeviceResultView,
   ClaimDaemonServiceInput,

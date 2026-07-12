@@ -2,10 +2,10 @@
 
 import { EventEmitter } from "node:events"
 import type {
-  DeviceCatalogSyncParams,
+  RuntimeCatalogSyncParams,
   RuntimeHelloParams,
-  DeviceTunnelDownParams,
-  DeviceTunnelUpParams,
+  RuntimeTunnelDownParams,
+  RuntimeTunnelUpParams,
   TunnelHandle,
 } from "@synapse/device-protocol"
 import { TransportClient } from "./transport.js"
@@ -261,7 +261,7 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
         // call returns no_tunnel_endpoint. Throws on failure for the same
         // fail-closed reason as pushCatalog above.
         if (this.tunnelHandle) {
-          const params: DeviceTunnelUpParams = {
+          const params: RuntimeTunnelUpParams = {
             internal_url: this.tunnelHandle.internalUrl,
           }
           await this.transport!.request("device.tunnel.up", params)
@@ -282,7 +282,7 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
   private async pushCatalog() {
     if (!this.mcpHost || !this.transport) return
     const exposures = await this.mcpHost.getCatalogSnapshot()
-    const params: DeviceCatalogSyncParams = { exposures }
+    const params: RuntimeCatalogSyncParams = { exposures }
     // Use request (not notify) so we know whether the server actually
     // accepted the catalog. notify() silently returns if the socket isn't
     // OPEN, which was the original race that lost the initial sync.
@@ -356,7 +356,7 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
     this.updateStatus("degraded")
     if (!this.transport) return
     try {
-      const params: DeviceTunnelDownParams = { reason }
+      const params: RuntimeTunnelDownParams = { reason }
       this.transport.notify("device.tunnel.down", params)
     } catch {
       /* best-effort: WSS may already be gone */

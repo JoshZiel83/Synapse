@@ -1,8 +1,8 @@
 import {
   DeviceListViewSchema,
   DeviceDetailViewSchema,
-  DevicePairingTicketViewSchema,
-  DeviceServiceViewSchema,
+  RuntimePairingTicketViewSchema,
+  RuntimeServiceViewSchema,
   RuntimeAuthorizationGrantRecordViewSchema,
 } from "@synapse/shared/schemas"
 import { mock } from "../faker-setup"
@@ -15,8 +15,8 @@ import type { DesignHandlers } from "./_types"
 export const devicesRuntimeAuthHandlers = {
   listDevices: async () => mock(DeviceListViewSchema),
   getDevice: async () => mock(DeviceDetailViewSchema),
-  startDevicePairingSession: async () => mock(DevicePairingTicketViewSchema),
-  claimRemoteAgentDaemon: async () => mock(DeviceServiceViewSchema),
+  startDevicePairingSession: async () => mock(RuntimePairingTicketViewSchema),
+  claimRemoteAgentDaemon: async () => mock(RuntimeServiceViewSchema),
   createManualRuntimeAuthorizationGrant: async () =>
     mock(RuntimeAuthorizationGrantRecordViewSchema),
 } satisfies DesignHandlers

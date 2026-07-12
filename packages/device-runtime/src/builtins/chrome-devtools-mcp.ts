@@ -35,8 +35,8 @@ import {
   type EffectiveTarget,
 } from "@synapse/device-protocol/browser-tools"
 import type {
-  DeviceCatalogExposure,
-  DeviceCatalogTool,
+  RuntimeCatalogExposure,
+  RuntimeCatalogTool,
   OperationEnvelope,
   RuntimeAuthorizationGrantWireSpec,
 } from "@synapse/device-protocol"
@@ -199,7 +199,7 @@ function staticInputSchema(toolName: string): Record<string, unknown> {
   return { type: "object" }
 }
 
-function buildCatalogTool(toolName: string): DeviceCatalogTool {
+function buildCatalogTool(toolName: string): RuntimeCatalogTool {
   const descriptor = BROWSER_TOOL_MAP[toolName]
   return {
     stable_key: `browser/${toolName}`,
@@ -1089,7 +1089,7 @@ export function createChromeDevtoolsMcpBuiltin(
 
   return {
     providerKey: PROVIDER_KEY,
-    async describeExposures(): Promise<DeviceCatalogExposure[]> {
+    async describeExposures(): Promise<RuntimeCatalogExposure[]> {
       return exposurePlans.map((plan) => {
         const tools = BROWSER_EXPOSURE_TOOLS[plan.key]
         const metadata: Record<string, unknown> = {

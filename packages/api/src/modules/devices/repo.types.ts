@@ -28,7 +28,7 @@ export interface DeviceSummaryRecord {
   lastConnectedAt: Date | null
 }
 
-export interface DeviceServiceRecord {
+export interface RuntimeServiceRecord {
   id: string
   deviceId: string
   serviceKind: RuntimeServiceKind
@@ -53,17 +53,17 @@ export interface DeviceCapabilityRecord {
 export interface DeviceDetailRecord extends DeviceSummaryRecord {
   description: string | null
   ownerWorkspaceMemberId: string | null
-  services: DeviceServiceRecord[]
+  services: RuntimeServiceRecord[]
   capabilities: DeviceCapabilityRecord[]
 }
 
 /**
  * Pairing-ticket domain record produced by startPairing (camelCase, Date
- * instant). The presenter turns it into the app-facing DevicePairingTicketView.
+ * instant). The presenter turns it into the app-facing RuntimePairingTicketView.
  * `oneClickCommands` carries dashboard-only install commands; `bootstrapToken`
  * is the app copy handed to web (the wire snake `bootstrap_token` is separate).
  */
-export interface DevicePairingTicketRecord {
+export interface RuntimePairingTicketRecord {
   pairingSessionId: string
   mode: RuntimePairingMode
   pairingCode: string | null

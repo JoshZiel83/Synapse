@@ -9,8 +9,8 @@ import {
   type ConsumePairingResult,
 } from "@synapse/device-protocol"
 import {
-  DevicePairingTicketViewSchema,
-  type DevicePairingTicketView,
+  RuntimePairingTicketViewSchema,
+  type RuntimePairingTicketView,
   type StartPairingInput as ApiStartPairingInput,
 } from "@synapse/shared/schemas"
 import { readJsonResponse } from "./api-response-codec.js"
@@ -27,8 +27,8 @@ function joinUrl(origin: string, path: string): string {
   return `${origin.replace(/\/$/, "")}${path.startsWith("/") ? path : `/${path}`}`
 }
 
-const DevicePairingTicketEnvelopeSchema = z.strictObject({
-  data: DevicePairingTicketViewSchema,
+const RuntimePairingTicketEnvelopeSchema = z.strictObject({
+  data: RuntimePairingTicketViewSchema,
 })
 
 async function postJson<TBody, S extends z.ZodType>(
@@ -54,7 +54,7 @@ export async function startPairingSession(
   workspaceId: string,
   input: Omit<ApiStartPairingInput, "workspaceId">,
   authToken: string
-): Promise<DevicePairingTicketView> {
+): Promise<RuntimePairingTicketView> {
   const url = joinUrl(
     serverOrigin,
     `/api/v1/workspaces/${workspaceId}/devices/pairing-sessions`
@@ -73,7 +73,7 @@ export async function startPairingSession(
   }
   const envelope = await readJsonResponse(
     res,
-    DevicePairingTicketEnvelopeSchema,
+    RuntimePairingTicketEnvelopeSchema,
     "startPairing"
   )
   return envelope.data
