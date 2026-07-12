@@ -1,12 +1,12 @@
 import { z } from "zod"
 import {
-  DEVICE_BUILTIN_KINDS,
-  DEVICE_EXPOSURE_RUNTIME_STATUSES,
-  DEVICE_EXPOSURE_TRANSPORTS,
-  DEVICE_PAIRING_MODES,
-  DEVICE_PAIRING_STATUSES,
-  DEVICE_SERVICE_KINDS,
-  DEVICE_SERVICE_STATUSES,
+  RUNTIME_BUILTIN_KINDS,
+  RUNTIME_EXPOSURE_RUNTIME_STATUSES,
+  RUNTIME_EXPOSURE_TRANSPORTS,
+  RUNTIME_PAIRING_MODES,
+  RUNTIME_PAIRING_STATUSES,
+  RUNTIME_SERVICE_KINDS,
+  RUNTIME_SERVICE_STATUSES,
   DEVICE_TRUST_STATUSES,
   DEVICE_TYPES,
 } from "@synapse/device-protocol/enums"
@@ -44,9 +44,9 @@ export type DeviceListView = z.infer<typeof DeviceListViewSchema>
 export const DeviceServiceViewSchema = z.strictObject({
   id: z.uuid(),
   deviceId: z.uuid(),
-  serviceKind: z.enum(DEVICE_SERVICE_KINDS),
+  serviceKind: z.enum(RUNTIME_SERVICE_KINDS),
   version: z.string().nullable(),
-  status: z.enum(DEVICE_SERVICE_STATUSES),
+  status: z.enum(RUNTIME_SERVICE_STATUSES),
   lastSeenAt: IsoInstantStringSchema.nullable(),
   remoteAgentMachineId: z.uuid().nullable(),
 })
@@ -58,9 +58,9 @@ export const DeviceCapabilityViewSchema = z.strictObject({
   exposureId: z.uuid(),
   exposureStableKey: z.string(),
   displayName: z.string(),
-  transport: z.enum(DEVICE_EXPOSURE_TRANSPORTS),
-  builtinKind: z.enum(DEVICE_BUILTIN_KINDS).nullable(),
-  runtimeStatus: z.enum(DEVICE_EXPOSURE_RUNTIME_STATUSES),
+  transport: z.enum(RUNTIME_EXPOSURE_TRANSPORTS),
+  builtinKind: z.enum(RUNTIME_BUILTIN_KINDS).nullable(),
+  runtimeStatus: z.enum(RUNTIME_EXPOSURE_RUNTIME_STATUSES),
   // exposure-level metadata pass-through (provider-defined; open shape).
   metadata: z.record(z.string(), z.unknown()).nullable().optional(),
 })
@@ -84,13 +84,13 @@ export type DeviceDetailView = z.infer<typeof DeviceDetailViewSchema>
  */
 export const DevicePairingTicketViewSchema = z.strictObject({
   pairingSessionId: z.uuid(),
-  mode: z.enum(DEVICE_PAIRING_MODES),
+  mode: z.enum(RUNTIME_PAIRING_MODES),
   pairingCode: z.string().nullable(),
   bootstrapToken: z.string().nullish(),
   expiresAt: IsoInstantStringSchema,
   verificationUri: z.string().nullable(),
   verificationUriComplete: z.string().nullable(),
-  status: z.enum(DEVICE_PAIRING_STATUSES),
+  status: z.enum(RUNTIME_PAIRING_STATUSES),
   oneClickCommands: z
     .strictObject({ unix: z.string(), windows: z.string() })
     .nullish(),
@@ -140,7 +140,7 @@ export type CreateCloudDeviceResultView = z.infer<
 
 export const StartPairingInputSchema = z.strictObject({
   workspaceId: z.uuid(),
-  mode: z.enum(DEVICE_PAIRING_MODES),
+  mode: z.enum(RUNTIME_PAIRING_MODES),
   title: z.string().optional(),
   description: z.string().max(2000).optional(),
   deviceType: z.enum(DEVICE_TYPES).optional(),

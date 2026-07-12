@@ -1695,7 +1695,7 @@ export function buildRequestedAction(args: {
       // Genuinely-unknown NON-NULL builtin_kind (a future
       // runtime_exposures_builtin_kind enum value this classifier hasn't been
       // taught) → fail-closed deny. NULL is handled explicitly above, so for the
-      // current DeviceBuiltinKind union this branch is unreachable at the type
+      // current RuntimeBuiltinKind union this branch is unreachable at the type
       // level; it exists as a runtime backstop against enum drift.
       throw new UnregisteredBuiltinKindError(
         `no requested-action projector for builtin_kind '${String(args.capability)}'`,

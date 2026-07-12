@@ -54,7 +54,7 @@ import {
   RUNTIME_AUTHORIZATION_GRANT_STATUSES,
   RUNTIME_AUTHORIZATION_REQUEST_MODES,
   PLUGIN_SPEC_TRANSPORTS,
-  DEVICE_EXPOSURE_TRANSPORTS,
+  RUNTIME_EXPOSURE_TRANSPORTS,
   TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES,
   TRANSPORT_ACCOUNT_OWNER_SCOPES,
   TRANSPORT_ACCOUNT_STATUSES,
@@ -63,7 +63,7 @@ import {
   TRANSPORT_KINDS,
   WORKSPACE_ACCESS_KEYS,
 } from "@synapse/shared/constants"
-import type { DeviceExposureTransport as DeviceProtocolExposureTransport } from "@synapse/device-protocol"
+import type { RuntimeExposureTransport as DeviceProtocolExposureTransport } from "@synapse/device-protocol"
 import type {
   CatalogVersionFilesFileRole,
   ActorsRole,
@@ -143,7 +143,7 @@ type _PluginSpecTransportMatchesDb = Assert<
 // and @synapse/device-protocol package boundaries; assert they never drift.
 type _DeviceExposureTransportSharedMatchesProtocol = Assert<
   IsEqual<
-    (typeof DEVICE_EXPOSURE_TRANSPORTS)[number],
+    (typeof RUNTIME_EXPOSURE_TRANSPORTS)[number],
     DeviceProtocolExposureTransport
   >
 >

@@ -6,11 +6,11 @@
 
 import { randomUUID, randomBytes, createHash } from "node:crypto"
 import {
-  DEVICE_PAIRING_MODES,
-  DEVICE_SERVICE_KINDS,
+  RUNTIME_PAIRING_MODES,
+  RUNTIME_SERVICE_KINDS,
   DEVICE_TYPES,
-  type DevicePairingMode,
-  type DeviceServiceKind,
+  type RuntimePairingMode,
+  type RuntimeServiceKind,
   type DeviceType,
 } from "@synapse/device-protocol"
 import type { OneClickInstallCommands } from "@synapse/shared"
@@ -201,7 +201,7 @@ export type StartPairingResult = DevicePairingTicketRecord
 export interface StartPairingInput {
   workspaceId: string
   requestedByWorkspaceMemberId?: string | null
-  mode: DevicePairingMode
+  mode: RuntimePairingMode
   serverBaseUrl: string
   title?: string
   description?: string
@@ -216,7 +216,7 @@ export interface StartPairingInput {
 export async function startPairing(
   input: StartPairingInput
 ): Promise<StartPairingResult> {
-  if (!DEVICE_PAIRING_MODES.includes(input.mode)) {
+  if (!RUNTIME_PAIRING_MODES.includes(input.mode)) {
     throw new DeviceModuleError({
       statusCode: 400,
       code: "invalid_pairing_mode",
@@ -281,7 +281,7 @@ export interface ConsumePairingInput {
   pairingCode: string
   devicePubkey: string
   servicePubkey: string
-  serviceKind: DeviceServiceKind
+  serviceKind: RuntimeServiceKind
   clientVersion?: string
   /** required at consume time for new local devices; ignored for cloud_bootstrap */
   title?: string
@@ -315,7 +315,7 @@ export async function consumePairing(
   input: ConsumePairingInput,
   opts: { controlPlaneUrl: string }
 ): Promise<ConsumePairingResult> {
-  if (!DEVICE_SERVICE_KINDS.includes(input.serviceKind)) {
+  if (!RUNTIME_SERVICE_KINDS.includes(input.serviceKind)) {
     throw new DeviceModuleError({
       statusCode: 400,
       code: "invalid_service_kind",

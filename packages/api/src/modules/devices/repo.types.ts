@@ -1,11 +1,11 @@
 import type {
-  DeviceBuiltinKind,
-  DeviceExposureRuntimeStatus,
-  DeviceExposureTransport,
-  DevicePairingMode,
-  DevicePairingStatus,
-  DeviceServiceKind,
-  DeviceServiceStatus,
+  RuntimeBuiltinKind,
+  RuntimeExposureRuntimeStatus,
+  RuntimeExposureTransport,
+  RuntimePairingMode,
+  RuntimePairingStatus,
+  RuntimeServiceKind,
+  RuntimeServiceStatus,
   DeviceTrustStatus,
   DeviceType,
 } from "@synapse/device-protocol/enums"
@@ -31,9 +31,9 @@ export interface DeviceSummaryRecord {
 export interface DeviceServiceRecord {
   id: string
   deviceId: string
-  serviceKind: DeviceServiceKind
+  serviceKind: RuntimeServiceKind
   version: string | null
-  status: DeviceServiceStatus
+  status: RuntimeServiceStatus
   lastSeenAt: Date | null
   remoteAgentMachineId: string | null
 }
@@ -44,9 +44,9 @@ export interface DeviceCapabilityRecord {
   exposureId: string
   exposureStableKey: string
   displayName: string
-  transport: DeviceExposureTransport
-  builtinKind: DeviceBuiltinKind | null
-  runtimeStatus: DeviceExposureRuntimeStatus
+  transport: RuntimeExposureTransport
+  builtinKind: RuntimeBuiltinKind | null
+  runtimeStatus: RuntimeExposureRuntimeStatus
   metadata: Record<string, unknown> | null
 }
 
@@ -65,12 +65,12 @@ export interface DeviceDetailRecord extends DeviceSummaryRecord {
  */
 export interface DevicePairingTicketRecord {
   pairingSessionId: string
-  mode: DevicePairingMode
+  mode: RuntimePairingMode
   pairingCode: string | null
   bootstrapToken: string | null
   expiresAt: Date
   verificationUri: string | null
   verificationUriComplete: string | null
-  status: DevicePairingStatus
+  status: RuntimePairingStatus
   oneClickCommands: { unix: string; windows: string } | null
 }

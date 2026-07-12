@@ -8,7 +8,7 @@ import {
   JsonRpcRequestSchema,
   JsonRpcResponseSchema,
   type RuntimeHelloParams,
-  type DeviceServiceKind,
+  type RuntimeServiceKind,
   type JsonRpcRequest,
   type JsonRpcResponse,
 } from "@synapse/device-protocol"
@@ -343,4 +343,4 @@ export class TransportClient {
   }
 }
 
-export type { DeviceServiceKind }
+export type { RuntimeServiceKind }

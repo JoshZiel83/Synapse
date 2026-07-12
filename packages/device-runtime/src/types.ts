@@ -2,8 +2,8 @@
 
 import type {
   DeviceCatalogExposure,
-  DevicePairingMode,
-  DeviceServiceKind,
+  RuntimePairingMode,
+  RuntimeServiceKind,
   HostKind,
   OperationEnvelope,
   TunnelAdapter,
@@ -36,7 +36,7 @@ export interface DeviceIdentityRecord {
   serverOrigin: string
   hostKind: HostKind
   services: Array<{
-    serviceKind: DeviceServiceKind
+    serviceKind: RuntimeServiceKind
     serviceId: string
     pubkeyFingerprint: string
     /** Broker-internal handle to the service private key. */
@@ -185,7 +185,7 @@ export interface PairOptions {
   broker: DeviceIdentityBroker
   pairingCode?: string
   bootstrapToken?: string
-  mode: DevicePairingMode
+  mode: RuntimePairingMode
   title?: string
   clientVersion: string
 }

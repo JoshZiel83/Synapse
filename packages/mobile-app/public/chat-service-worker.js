@@ -340,7 +340,7 @@
   }
 
   // ../device-protocol/dist/enums.js
-  var DEVICE_MCP_ERROR_CODES = [
+  var RUNTIME_MCP_ERROR_CODES = [
     "tool_definition_changed",
     "permission_denied",
     "runtime_constraint",
@@ -349,7 +349,7 @@
     "replay_detected"
   ];
   var SERVER_FACADE_ERROR_CODES = [
-    ...DEVICE_MCP_ERROR_CODES,
+    ...RUNTIME_MCP_ERROR_CODES,
     "runtime_authorization_requested"
   ];
 

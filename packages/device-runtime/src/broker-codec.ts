@@ -1,4 +1,4 @@
-import { DEVICE_SERVICE_KINDS, HOST_KINDS } from "@synapse/device-protocol"
+import { RUNTIME_SERVICE_KINDS, HOST_KINDS } from "@synapse/device-protocol"
 import { z } from "zod"
 import type { DeviceIdentityRecord } from "./types.js"
 
@@ -13,7 +13,7 @@ export type PersistedKeyEntry = z.infer<typeof PersistedKeyEntrySchema>
 const KeystoreSchema = z.record(z.string(), PersistedKeyEntrySchema)
 
 const DeviceIdentityServiceSchema = z.strictObject({
-  serviceKind: z.enum(DEVICE_SERVICE_KINDS),
+  serviceKind: z.enum(RUNTIME_SERVICE_KINDS),
   serviceId: z.string().min(1),
   pubkeyFingerprint: z.string().min(1),
   privateKeyRef: z.string().min(1),

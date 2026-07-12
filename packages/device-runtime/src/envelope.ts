@@ -1,6 +1,6 @@
 // EnvelopeVerifier — v3.0 implementation of the §4.5 device-side verification
 // chain. The MCP host calls verify() before any side effect; failures map to
-// the device-side error codes in DEVICE_MCP_ERROR_CODES.
+// the device-side error codes in RUNTIME_MCP_ERROR_CODES.
 
 import {
   createHash,

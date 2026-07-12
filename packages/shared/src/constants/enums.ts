@@ -1618,7 +1618,7 @@ export const DEVICE_TRUST_STATUSES_V3 = [
   "trusted",
   "revoked",
 ] as const
-export const DEVICE_EXPOSURE_RUNTIME_STATUSES = [
+export const RUNTIME_EXPOSURE_RUNTIME_STATUSES = [
   "discovered",
   "healthy",
   "degraded",
@@ -1626,7 +1626,7 @@ export const DEVICE_EXPOSURE_RUNTIME_STATUSES = [
   "quarantined",
   "offline",
 ] as const
-export const DEVICE_EXPOSURE_TRANSPORTS = [
+export const RUNTIME_EXPOSURE_TRANSPORTS = [
   "builtin",
   "stdio",
   "http",

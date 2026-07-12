@@ -7,20 +7,20 @@ export type HostKind = (typeof HOST_KINDS)[number]
 // v3.0: device_runtime + remote_agent_daemon + bare_dataplane (the bare-sandbox
 // data-plane service kind). DeskAct is supervised by
 // device_runtime as a child process, NOT a service. See §5.2.
-export const DEVICE_SERVICE_KINDS = [
+export const RUNTIME_SERVICE_KINDS = [
   "device_runtime",
   "remote_agent_daemon",
   "bare_dataplane",
 ] as const
-export type DeviceServiceKind = (typeof DEVICE_SERVICE_KINDS)[number]
+export type RuntimeServiceKind = (typeof RUNTIME_SERVICE_KINDS)[number]
 
-export const DEVICE_SERVICE_STATUSES = [
+export const RUNTIME_SERVICE_STATUSES = [
   "starting",
   "online",
   "degraded",
   "offline",
 ] as const
-export type DeviceServiceStatus = (typeof DEVICE_SERVICE_STATUSES)[number]
+export type RuntimeServiceStatus = (typeof RUNTIME_SERVICE_STATUSES)[number]
 
 export const DEVICE_TRUST_STATUSES = ["pending", "trusted", "revoked"] as const
 export type DeviceTrustStatus = (typeof DEVICE_TRUST_STATUSES)[number]
@@ -38,29 +38,29 @@ export type DeviceType = (typeof DEVICE_TYPES)[number]
 
 // runtime_exposures.transport — same as relay_exposures.transport plus stays
 // stable across the rename.
-export const DEVICE_EXPOSURE_TRANSPORTS = [
+export const RUNTIME_EXPOSURE_TRANSPORTS = [
   "builtin",
   "stdio",
   "http",
   "sse",
   "custom",
 ] as const
-export type DeviceExposureTransport =
-  (typeof DEVICE_EXPOSURE_TRANSPORTS)[number]
+export type RuntimeExposureTransport =
+  (typeof RUNTIME_EXPOSURE_TRANSPORTS)[number]
 
 // Built-in MCP server kinds. v3.0 set: filesystem, commandline, browser, cua.
 // VFS is NOT a capability_kind — it's an internal projection on top of
 // filesystem/browser/cua (§6 Notes).
-export const DEVICE_BUILTIN_KINDS = [
+export const RUNTIME_BUILTIN_KINDS = [
   "filesystem",
   "commandline",
   "browser",
   "cua",
   "pty",
 ] as const
-export type DeviceBuiltinKind = (typeof DEVICE_BUILTIN_KINDS)[number]
+export type RuntimeBuiltinKind = (typeof RUNTIME_BUILTIN_KINDS)[number]
 
-export const DEVICE_EXPOSURE_RUNTIME_STATUSES = [
+export const RUNTIME_EXPOSURE_RUNTIME_STATUSES = [
   "discovered",
   "healthy",
   "degraded",
@@ -68,8 +68,8 @@ export const DEVICE_EXPOSURE_RUNTIME_STATUSES = [
   "quarantined",
   "offline",
 ] as const
-export type DeviceExposureRuntimeStatus =
-  (typeof DEVICE_EXPOSURE_RUNTIME_STATUSES)[number]
+export type RuntimeExposureRuntimeStatus =
+  (typeof RUNTIME_EXPOSURE_RUNTIME_STATUSES)[number]
 
 // Sync sources (claude_code, etc.) — preserved from relay v2.
 export const DEVICE_SYNC_SOURCE_KINDS = [
@@ -121,25 +121,25 @@ export const DEVICE_SYNC_STATUSES = [
 export type DeviceSyncStatus = (typeof DEVICE_SYNC_STATUSES)[number]
 
 // Control Plane session enums.
-export const DEVICE_CONTROL_PLANE_SESSION_STATUSES = [
+export const RUNTIME_CONTROL_PLANE_SESSION_STATUSES = [
   "connecting",
   "active",
   "closing",
   "closed",
   "rejected",
 ] as const
-export type DeviceControlPlaneSessionStatus =
-  (typeof DEVICE_CONTROL_PLANE_SESSION_STATUSES)[number]
+export type RuntimeControlPlaneSessionStatus =
+  (typeof RUNTIME_CONTROL_PLANE_SESSION_STATUSES)[number]
 
-export const DEVICE_CONTROL_PLANE_TRANSPORTS = ["websocket"] as const
-export type DeviceControlPlaneTransport =
-  (typeof DEVICE_CONTROL_PLANE_TRANSPORTS)[number]
+export const RUNTIME_CONTROL_PLANE_TRANSPORTS = ["websocket"] as const
+export type RuntimeControlPlaneTransport =
+  (typeof RUNTIME_CONTROL_PLANE_TRANSPORTS)[number]
 
 // Pairing modes — see §8 of the spec.
-export const DEVICE_PAIRING_MODES = ["local_qr", "cloud_bootstrap"] as const
-export type DevicePairingMode = (typeof DEVICE_PAIRING_MODES)[number]
+export const RUNTIME_PAIRING_MODES = ["local_qr", "cloud_bootstrap"] as const
+export type RuntimePairingMode = (typeof RUNTIME_PAIRING_MODES)[number]
 
-export const DEVICE_PAIRING_STATUSES = [
+export const RUNTIME_PAIRING_STATUSES = [
   "pending",
   "confirmed",
   "consumed",
@@ -147,7 +147,7 @@ export const DEVICE_PAIRING_STATUSES = [
   "cancelled",
   "rejected",
 ] as const
-export type DevicePairingStatus = (typeof DEVICE_PAIRING_STATUSES)[number]
+export type RuntimePairingStatus = (typeof RUNTIME_PAIRING_STATUSES)[number]
 
 // subject-scope-refactor: RUNTIME_AUTHORIZATION_GRANT_SCOPES enum dropped at
 // cutover. The envelope `runtime_authorization.grant_scope` field is now a
@@ -252,7 +252,7 @@ export function browserActionCoversOperations(
 }
 
 // Operation lifecycle statuses. awaiting_authorization is new in v3 (§6).
-export const DEVICE_OPERATION_STATUSES = [
+export const RUNTIME_OPERATION_STATUSES = [
   "created",
   "dispatched",
   "awaiting_authorization",
@@ -264,21 +264,21 @@ export const DEVICE_OPERATION_STATUSES = [
   "cancelled",
   "expired",
 ] as const
-export type DeviceOperationStatus = (typeof DEVICE_OPERATION_STATUSES)[number]
+export type RuntimeOperationStatus = (typeof RUNTIME_OPERATION_STATUSES)[number]
 
-export const DEVICE_OPERATION_TASK_MODES = ["sync", "async"] as const
-export type DeviceOperationTaskMode =
-  (typeof DEVICE_OPERATION_TASK_MODES)[number]
+export const RUNTIME_OPERATION_TASK_MODES = ["sync", "async"] as const
+export type RuntimeOperationTaskMode =
+  (typeof RUNTIME_OPERATION_TASK_MODES)[number]
 
-export const DEVICE_OPERATION_ATTEMPT_TRANSPORTS = [
+export const RUNTIME_OPERATION_ATTEMPT_TRANSPORTS = [
   "mcp_http",
   "control_plane_task",
   "data_plane",
 ] as const
-export type DeviceOperationAttemptTransport =
-  (typeof DEVICE_OPERATION_ATTEMPT_TRANSPORTS)[number]
+export type RuntimeOperationAttemptTransport =
+  (typeof RUNTIME_OPERATION_ATTEMPT_TRANSPORTS)[number]
 
-export const DEVICE_OPERATION_ATTEMPT_STATUSES = [
+export const RUNTIME_OPERATION_ATTEMPT_STATUSES = [
   "issued",
   "sent",
   "response_received",
@@ -286,25 +286,25 @@ export const DEVICE_OPERATION_ATTEMPT_STATUSES = [
   "failed",
   "abandoned",
 ] as const
-export type DeviceOperationAttemptStatus =
-  (typeof DEVICE_OPERATION_ATTEMPT_STATUSES)[number]
+export type RuntimeOperationAttemptStatus =
+  (typeof RUNTIME_OPERATION_ATTEMPT_STATUSES)[number]
 
 // Principal kinds passed to capability-projection.projectToolsForPrincipal.
 // subject-scope-refactor: 'actor_in_conversation' removed at cutover. The
 // scoped-actor semantics is expressed by (principal.kind='actor',
 // activeConversationSubjectId set) in RuntimePrincipalContext. The DB enum
 // runtime_operations_principal_kind matches.
-export const DEVICE_PRINCIPAL_KINDS = [
+export const RUNTIME_PRINCIPAL_KINDS = [
   "actor",
   "conversation",
   "remote_agent",
   "workspace_member",
 ] as const
-export type DevicePrincipalKind = (typeof DEVICE_PRINCIPAL_KINDS)[number]
+export type RuntimePrincipalKind = (typeof RUNTIME_PRINCIPAL_KINDS)[number]
 
 // §4.5 device-side error contract. runtime_authorization_requested is
 // server-side-only and intentionally NOT in this list.
-export const DEVICE_MCP_ERROR_CODES = [
+export const RUNTIME_MCP_ERROR_CODES = [
   "tool_definition_changed",
   "permission_denied",
   "runtime_constraint",
@@ -312,11 +312,11 @@ export const DEVICE_MCP_ERROR_CODES = [
   "expired_envelope",
   "replay_detected",
 ] as const
-export type DeviceMcpErrorCode = (typeof DEVICE_MCP_ERROR_CODES)[number]
+export type RuntimeMcpErrorCode = (typeof RUNTIME_MCP_ERROR_CODES)[number]
 
 // §4.5 server-side facade adds runtime_authorization_requested on top.
 export const SERVER_FACADE_ERROR_CODES = [
-  ...DEVICE_MCP_ERROR_CODES,
+  ...RUNTIME_MCP_ERROR_CODES,
   "runtime_authorization_requested",
 ] as const
 export type ServerFacadeErrorCode = (typeof SERVER_FACADE_ERROR_CODES)[number]

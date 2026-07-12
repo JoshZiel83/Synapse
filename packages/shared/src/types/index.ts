@@ -65,7 +65,7 @@ import {
   FILE_PARSE_RUN_STATUSES,
   CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES,
   CONVERSATION_TYPE_KEYS,
-  DEVICE_EXPOSURE_TRANSPORTS,
+  RUNTIME_EXPOSURE_TRANSPORTS,
   MCP_SERVER_TRANSPORTS,
   PLUGIN_SPEC_TRANSPORTS,
   PLUGIN_TRANSPORTS,
@@ -2243,12 +2243,12 @@ export type MarketplaceItemKind = (typeof MARKETPLACE_ITEM_KINDS)[number]
 // McpServerTransport: what the runtime instance-manager can start.
 // PluginSpecTransport: the DB catalog spec column.
 // PluginTransport: full application union (adds "filesystem").
-// DeviceExposureTransport: the device-exposure transport set (has "custom").
+// RuntimeExposureTransport: the device-exposure transport set (has "custom").
 export type McpServerTransport = (typeof MCP_SERVER_TRANSPORTS)[number]
 export type PluginSpecTransport = (typeof PLUGIN_SPEC_TRANSPORTS)[number]
 export type PluginTransport = (typeof PLUGIN_TRANSPORTS)[number]
-export type DeviceExposureTransport =
-  (typeof DEVICE_EXPOSURE_TRANSPORTS)[number]
+export type RuntimeExposureTransport =
+  (typeof RUNTIME_EXPOSURE_TRANSPORTS)[number]
 export type ConversationTypeKey = (typeof CONVERSATION_TYPE_KEYS)[number]
 export type ConversationTypeMask = number
 export type CapabilityConversationTypePolicyResourceFamily =
@@ -2852,7 +2852,7 @@ export interface McpDeviceServer {
   id: string
   deviceId: string
   name: string
-  transport: DeviceExposureTransport
+  transport: RuntimeExposureTransport
   command?: string
   endpoint?: string
   envVars: Record<string, unknown>

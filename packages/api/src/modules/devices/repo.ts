@@ -34,7 +34,7 @@ import type {
   DeviceSummaryRecord,
 } from "./repo.types.js"
 import type {
-  DeviceServiceKind,
+  RuntimeServiceKind,
   DeviceTrustStatus,
   DeviceType,
 } from "@synapse/device-protocol/enums"
@@ -1681,7 +1681,7 @@ export async function findDeviceDetail(
   const services: DeviceServiceRecord[] = serviceRows.map((row) => ({
     id: row.id as string,
     deviceId: row.runtimeId as string,
-    serviceKind: row.serviceKind as DeviceServiceKind,
+    serviceKind: row.serviceKind as RuntimeServiceKind,
     version: (row.version as string | null) ?? null,
     status: row.status as DeviceServiceRecord["status"],
     lastSeenAt: row.lastSeenAt as Date | null,
@@ -2249,7 +2249,7 @@ export async function claimRemoteAgentDaemonTx(input: {
       service: {
         id: row.id as string,
         deviceId: row.runtimeId as string,
-        serviceKind: row.serviceKind as DeviceServiceKind,
+        serviceKind: row.serviceKind as RuntimeServiceKind,
         version: (row.version as string | null) ?? null,
         status: row.status as DeviceServiceRecord["status"],
         lastSeenAt: row.lastSeenAt as Date | null,

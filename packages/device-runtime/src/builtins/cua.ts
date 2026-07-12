@@ -22,12 +22,12 @@ import type { CatalogProvider, CatalogToolInvocationResult } from "../types.js"
 import type {
   DeviceCatalogExposure,
   DeviceCatalogTool,
-  DeviceMcpErrorCode,
+  RuntimeMcpErrorCode,
   SynapseError,
 } from "@synapse/device-protocol"
 import {
   CUA_WRITE_TOOLS,
-  DEVICE_MCP_ERROR_CODES,
+  RUNTIME_MCP_ERROR_CODES,
 } from "@synapse/device-protocol"
 import {
   startSidecar,
@@ -38,8 +38,8 @@ import { toolErrorResult } from "../mcp-host.js"
 
 const PROVIDER_KEY = "builtin.cua"
 
-const DEVICE_ERROR_CODE_SET = new Set<DeviceMcpErrorCode>(
-  DEVICE_MCP_ERROR_CODES
+const DEVICE_ERROR_CODE_SET = new Set<RuntimeMcpErrorCode>(
+  RUNTIME_MCP_ERROR_CODES
 )
 
 // ───────────────────────────── legacy tools (kept) ──────────────────────────
@@ -240,8 +240,8 @@ function resolveSidecarSynapseCode(raw: unknown): {
   rejectedRaw?: string
 } {
   if (typeof raw !== "string") return { code: "runtime_constraint" }
-  if (DEVICE_ERROR_CODE_SET.has(raw as DeviceMcpErrorCode)) {
-    return { code: raw as DeviceMcpErrorCode }
+  if (DEVICE_ERROR_CODE_SET.has(raw as RuntimeMcpErrorCode)) {
+    return { code: raw as RuntimeMcpErrorCode }
   }
   return { code: "runtime_constraint", rejectedRaw: raw }
 }

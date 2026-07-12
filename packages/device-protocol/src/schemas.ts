@@ -4,20 +4,20 @@
 import { z } from "zod"
 import { IsoInstantStringSchema } from "./instant.schema.js"
 import {
-  DEVICE_BUILTIN_KINDS,
-  DEVICE_CONTROL_PLANE_SESSION_STATUSES,
-  DEVICE_EXPOSURE_RUNTIME_STATUSES,
-  DEVICE_EXPOSURE_TRANSPORTS,
-  DEVICE_MCP_ERROR_CODES,
-  DEVICE_OPERATION_ATTEMPT_STATUSES,
-  DEVICE_OPERATION_ATTEMPT_TRANSPORTS,
-  DEVICE_OPERATION_STATUSES,
-  DEVICE_OPERATION_TASK_MODES,
-  DEVICE_PAIRING_MODES,
-  DEVICE_PAIRING_STATUSES,
-  DEVICE_PRINCIPAL_KINDS,
-  DEVICE_SERVICE_KINDS,
-  DEVICE_SERVICE_STATUSES,
+  RUNTIME_BUILTIN_KINDS,
+  RUNTIME_CONTROL_PLANE_SESSION_STATUSES,
+  RUNTIME_EXPOSURE_RUNTIME_STATUSES,
+  RUNTIME_EXPOSURE_TRANSPORTS,
+  RUNTIME_MCP_ERROR_CODES,
+  RUNTIME_OPERATION_ATTEMPT_STATUSES,
+  RUNTIME_OPERATION_ATTEMPT_TRANSPORTS,
+  RUNTIME_OPERATION_STATUSES,
+  RUNTIME_OPERATION_TASK_MODES,
+  RUNTIME_PAIRING_MODES,
+  RUNTIME_PAIRING_STATUSES,
+  RUNTIME_PRINCIPAL_KINDS,
+  RUNTIME_SERVICE_KINDS,
+  RUNTIME_SERVICE_STATUSES,
   DEVICE_SYNC_MODES,
   DEVICE_SYNC_SOURCE_KINDS,
   DEVICE_SYNC_STATUSES,
@@ -232,7 +232,7 @@ export const OperationEnvelopeSchema = z.object({
   runtime_tool_id: z.uuid(),
   runtime_tool_revision_id: z.uuid(),
   input_hash: z.string(),
-  task_mode: z.enum(DEVICE_OPERATION_TASK_MODES),
+  task_mode: z.enum(RUNTIME_OPERATION_TASK_MODES),
   runtime_authorization: z
     .object({
       grant_ids: z.array(z.string()),
@@ -289,7 +289,7 @@ export const ConsumePairingInputSchema = z.object({
   pairing_code: z.string().min(1),
   device_pubkey: z.string(),
   service_pubkey: z.string(),
-  service_kind: z.enum(DEVICE_SERVICE_KINDS).default("device_runtime"),
+  service_kind: z.enum(RUNTIME_SERVICE_KINDS).default("device_runtime"),
   client_version: z.string().optional(),
   title: z.string().optional(),
   device_type: z.enum(DEVICE_TYPES).optional(),
@@ -766,7 +766,7 @@ export type JsonRpcResponse = z.infer<typeof JsonRpcResponseSchema>
 export const RuntimeHelloParamsSchema = z.object({
   runtime_id: z.uuid(),
   service_id: z.uuid(),
-  service_kind: z.enum(DEVICE_SERVICE_KINDS),
+  service_kind: z.enum(RUNTIME_SERVICE_KINDS),
   client_version: z.string(),
   signed_challenge: z.string(),
 })
@@ -785,8 +785,8 @@ export const DeviceCatalogExposureSchema = z.object({
   stable_key: z.string(),
   display_name: z.string(),
   description: z.string().optional(),
-  transport: z.enum(DEVICE_EXPOSURE_TRANSPORTS),
-  builtin_kind: z.enum(DEVICE_BUILTIN_KINDS).nullable().optional(),
+  transport: z.enum(RUNTIME_EXPOSURE_TRANSPORTS),
+  builtin_kind: z.enum(RUNTIME_BUILTIN_KINDS).nullable().optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
   tools: z.array(DeviceCatalogToolSchema),
 })
@@ -800,7 +800,7 @@ export type DeviceCatalogSyncParams = z.infer<
 >
 
 export const DeviceServiceStatusParamsSchema = z.object({
-  status: z.enum(DEVICE_SERVICE_STATUSES),
+  status: z.enum(RUNTIME_SERVICE_STATUSES),
   detail: z.string().optional(),
 })
 export type DeviceServiceStatusParams = z.infer<
@@ -896,20 +896,20 @@ export const ServerCuaTerminateParamsSchema = z.object({
 
 // Re-export the enum lists so consumers can iterate.
 export {
-  DEVICE_BUILTIN_KINDS,
-  DEVICE_CONTROL_PLANE_SESSION_STATUSES,
-  DEVICE_EXPOSURE_RUNTIME_STATUSES,
-  DEVICE_EXPOSURE_TRANSPORTS,
-  DEVICE_MCP_ERROR_CODES,
-  DEVICE_OPERATION_ATTEMPT_STATUSES,
-  DEVICE_OPERATION_ATTEMPT_TRANSPORTS,
-  DEVICE_OPERATION_STATUSES,
-  DEVICE_OPERATION_TASK_MODES,
-  DEVICE_PAIRING_MODES,
-  DEVICE_PAIRING_STATUSES,
-  DEVICE_PRINCIPAL_KINDS,
-  DEVICE_SERVICE_KINDS,
-  DEVICE_SERVICE_STATUSES,
+  RUNTIME_BUILTIN_KINDS,
+  RUNTIME_CONTROL_PLANE_SESSION_STATUSES,
+  RUNTIME_EXPOSURE_RUNTIME_STATUSES,
+  RUNTIME_EXPOSURE_TRANSPORTS,
+  RUNTIME_MCP_ERROR_CODES,
+  RUNTIME_OPERATION_ATTEMPT_STATUSES,
+  RUNTIME_OPERATION_ATTEMPT_TRANSPORTS,
+  RUNTIME_OPERATION_STATUSES,
+  RUNTIME_OPERATION_TASK_MODES,
+  RUNTIME_PAIRING_MODES,
+  RUNTIME_PAIRING_STATUSES,
+  RUNTIME_PRINCIPAL_KINDS,
+  RUNTIME_SERVICE_KINDS,
+  RUNTIME_SERVICE_STATUSES,
   DEVICE_SYNC_MODES,
   DEVICE_SYNC_SOURCE_KINDS,
   DEVICE_SYNC_STATUSES,
