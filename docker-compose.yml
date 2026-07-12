@@ -169,10 +169,16 @@ services:
       # Off by default (SANDBOX_PROVIDER=none). Set SANDBOX_PROVIDER=docker
       # (+ run the 'sandbox' build + tunnel-edge) to enable containerized
       # sandboxes, or =local for a same-host device-runtime child.
-      # SANDBOX_MODE defaults to 'resident' (device-runtime inside; Mode A).
-      # The docker + resident adapter is reachable ONLY over the frp tunnel
-      # (internal-only network), so it requires FRP_SHARED_TOKEN — enforced
-      # fail-fast at boot. The local adapter uses a direct loopback endpoint.
+      # SANDBOX_MODE defaults to 'auto', which derives 'resident' (a device-
+      # runtime runs INSIDE the sandbox; Mode A) for the local/docker providers.
+      # Set SANDBOX_MODE=bare to select the Mode-B data-plane adapters
+      # (local:bare / docker:bare): no in-sandbox control plane — the API drives
+      # fs/exec over the direct data plane (reduced-fidelity tool contract). The
+      # e2b/cube cloud Mode-B providers are not registered yet (auto derives
+      # 'bare' for them once added). The docker + resident adapter is reachable
+      # ONLY over the frp tunnel (internal-only network), so it requires
+      # FRP_SHARED_TOKEN — enforced fail-fast at boot; the local adapter uses a
+      # direct loopback endpoint.
       SANDBOX_PROVIDER: ${SANDBOX_PROVIDER:-none}
       SANDBOX_MODE: ${SANDBOX_MODE:-auto}
       SANDBOX_DOCKER_IMAGE: ${SANDBOX_DOCKER_IMAGE:-synapse-device-runtime:latest}
