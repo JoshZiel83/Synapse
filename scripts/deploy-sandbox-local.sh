@@ -117,7 +117,23 @@ upsert() {
   fi
 }
 upsert SANDBOX_PROVIDER local
-log "set SANDBOX_PROVIDER=local"
+upsert SANDBOX_MODE resident
+log "set SANDBOX_PROVIDER=local + SANDBOX_MODE=resident"
+
+# 4b. Guard the EFFECTIVE SANDBOX_MODE. Switching a prior local:bare deploy back
+#     to resident must NOT leave a stale SANDBOX_MODE=bare silently winning: a
+#     shell export beats the .env we just wrote (compose reads the shell first),
+#     so resolve the value compose will use — shell (if set non-empty) → .env →
+#     the compose default 'auto' — and require it to select the resident (Mode-A)
+#     adapter, i.e. resident or auto (auto derives resident for the local provider).
+resolved_mode="$(trim "${SANDBOX_MODE:-}")"
+[ -n "$resolved_mode" ] || resolved_mode="$(trim "$(sed -n 's/^SANDBOX_MODE=//p' "$ENV_FILE" | tail -n 1)")"
+[ -n "$resolved_mode" ] || resolved_mode="auto"
+case "$resolved_mode" in
+  resident|auto) ;;
+  *) die "resolved SANDBOX_MODE='${resolved_mode}' would not select the resident (Mode-A) adapter; unset any shell SANDBOX_MODE (or set it to resident/auto) before deploying." ;;
+esac
+log "effective SANDBOX_MODE OK (${resolved_mode} → resident/Mode-A)."
 
 # 5. Build, then smoke in a THROWAWAY container BEFORE `up`. If the cap stack is
 #    insufficient the smoke fails here and we never started a privileged API.

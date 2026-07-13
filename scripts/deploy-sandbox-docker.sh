@@ -115,7 +115,23 @@ upsert() {
   fi
 }
 upsert SANDBOX_PROVIDER docker
-log "set SANDBOX_PROVIDER=docker (frp tunnel via FRP_SHARED_TOKEN)"
+upsert SANDBOX_MODE resident
+log "set SANDBOX_PROVIDER=docker + SANDBOX_MODE=resident (frp tunnel via FRP_SHARED_TOKEN)"
+
+# 3b. Guard the EFFECTIVE SANDBOX_MODE. Switching a prior docker:bare deploy back
+#     to resident must NOT leave a stale SANDBOX_MODE=bare silently winning: a
+#     shell export beats the .env we just wrote (compose reads the shell first),
+#     so resolve the value compose will use — shell (if set non-empty) → .env →
+#     the compose default 'auto' — and require it to select the resident (Mode-A)
+#     adapter, i.e. resident or auto (auto derives resident for the docker provider).
+resolved_mode="$(trim "${SANDBOX_MODE:-}")"
+[ -n "$resolved_mode" ] || resolved_mode="$(trim "$(sed -n 's/^SANDBOX_MODE=//p' "$ENV_FILE" | tail -n 1)")"
+[ -n "$resolved_mode" ] || resolved_mode="auto"
+case "$resolved_mode" in
+  resident|auto) ;;
+  *) die "resolved SANDBOX_MODE='${resolved_mode}' would not select the resident (Mode-A) adapter; unset any shell SANDBOX_MODE (or set it to resident/auto) before deploying." ;;
+esac
+log "effective SANDBOX_MODE OK (${resolved_mode} → resident/Mode-A)."
 
 # 4. EFFECTIVE-origin guard. A stale loopback in .env (from a prior local run)
 #    is silently removed (compose default is the right internal address); a

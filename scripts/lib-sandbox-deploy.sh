@@ -93,9 +93,16 @@ compose_args_for_form() {
 # Run docker compose with all managed sandbox vars UNSET (so the restored .env
 # wins over any shell flag). Usage: _compose_clean <-f args...> -- <compose args...>
 _compose_clean() {
-  env -u SANDBOX_PROVIDER -u SANDBOX_MODE -u SANDBOX_TRANSPORT \
+  # Unset EVERY sandbox var compose interpolates for the api service (see the api
+  # `environment:` block in docker-compose.yml), so the restored .env — not a
+  # stale shell value we accepted for THIS deploy — wins on rollback. Keep this in
+  # sync with that block: SANDBOX_TRANSPORT was removed; the Mode-B docker knobs
+  # (BARE_IMAGE / PURE_NETWORK / RUN_AS_UID / PIDS_LIMIT / MEMORY) were added.
+  env -u SANDBOX_PROVIDER -u SANDBOX_MODE \
       -u SANDBOX_SERVER_ORIGIN -u SANDBOX_DOCKER_IMAGE -u SANDBOX_DOCKER_NETWORK \
       -u SANDBOX_DOCKER_STORAGE_VOLUME -u SANDBOX_DOCKER_STORAGE_VOLUME_MOUNT \
+      -u SANDBOX_DOCKER_BARE_IMAGE -u SANDBOX_DOCKER_PURE_NETWORK \
+      -u SANDBOX_DOCKER_RUN_AS_UID -u SANDBOX_DOCKER_PIDS_LIMIT -u SANDBOX_DOCKER_MEMORY \
     docker compose "$@" >/dev/null 2>&1
 }
 
