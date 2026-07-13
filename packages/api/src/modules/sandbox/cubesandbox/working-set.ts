@@ -201,5 +201,11 @@ export function createCubeEnvdWorkingSetBridge(opts: {
     async pull(input) {
       await scopedBridge(input.dir).fetchChangedIntoMirror()
     },
+    // (R4 review fix) Release the per-bridge envd client's undici Agent — the spine
+    // calls this after each push/pull so the keep-alive socket pool to CubeProxy is
+    // not leaked on every provision/teardown/recovery under sustained session churn.
+    async dispose() {
+      await opts.envd.close().catch(() => {})
+    },
   }
 }

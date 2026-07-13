@@ -1258,13 +1258,18 @@ export async function provisionSandbox(
     // materialized), so the redundant second host materialize is gated off here.
     if (adapter.meta.offBox) {
       const pushBridge = adapter.workingSet(handle)
-      for (let i = 0; i < mounts.length; i++) {
-        const dir = mounts[i].materializedDir
-        if (!dir) continue
-        await pushBridge.applyManifest({
-          manifestSha256: specs[i]?.baseManifestSha ?? undefined,
-          targetDir: dir,
-        })
+      try {
+        for (let i = 0; i < mounts.length; i++) {
+          const dir = mounts[i].materializedDir
+          if (!dir) continue
+          await pushBridge.applyManifest({
+            manifestSha256: specs[i]?.baseManifestSha ?? undefined,
+            targetDir: dir,
+          })
+        }
+      } finally {
+        // (R4 review fix) release the bridge's undici Agent (no per-push leak).
+        await pushBridge.dispose?.()
       }
     }
 
@@ -2268,20 +2273,40 @@ export interface TeardownSandboxOptions {
 /**
  * P1.5: a bare data-plane dispatch reported `resource_gone` (the sandbox
  * container/process vanished out from under us mid-turn). Flip the sandbox to
- * 'failed' so it stops being treated as live: the next turn reprovisions, and the
- * reconcile reaper won't keep retrying a resource that no longer exists. The live
- * dirs are left in place for the existing teardown/commit-failure preservation
- * path. Best-effort — the dispatch has already failed and returned its error.
+ * 'closing' — the state that NEEDS teardown convergence — via the SAME CAS the
+ * teardown close-gate uses, so the row stops being treated as live yet a subsequent
+ * teardown (the pre-provision stale-mount teardown, the closing reaper, or the
+ * turn-end putSessionToIdle) COMMITS whatever survived (a host adapter's mirror still
+ * holds the turn's bytes even though the container is gone), CLOSES the mounts,
+ * revokes grants, and soft-deletes.
+ *
+ * (R4 review fix) This function does NO cleanup itself, so it MUST NOT leave the row
+ * 'failed': the R4 Link A close-gate CAS matches only provisioning/active/closing, so
+ * a 'failed' row made every later teardown BAIL — stranding the still-'active' mounts,
+ * which then collided on the partial unique index and broke re-provision FOREVER (plus
+ * leaked the runtime + its grants). 'closing' keeps mounts convergeable. CAS so a
+ * teardown that already drove the row terminal wins (never resurrect a closed row).
+ * Best-effort — the dispatch has already failed and returned its error.
  */
 export async function markSandboxResourceGone(
-  runtimeId: string
+  runtimeId: string,
+  run: Executor = repo.defaultDbh()
 ): Promise<void> {
-  await repo.updateSandboxRow(runtimeId, { state: "failed" }).catch((err) => {
-    log.warn(
-      { runtimeId, err },
-      "markSandboxResourceGone: failed to flip sandbox state to 'failed'"
+  const fenced = await repo
+    .casFlipSandboxClosing(runtimeId, run)
+    .catch((err) => {
+      log.warn(
+        { runtimeId, err },
+        "markSandboxResourceGone: CAS flip to 'closing' failed"
+      )
+      return false
+    })
+  if (!fenced) {
+    log.info(
+      { runtimeId },
+      "markSandboxResourceGone: row already terminal / owned by a concurrent teardown — no-op"
     )
-  })
+  }
 }
 
 /**
@@ -2383,6 +2408,7 @@ async function teardownOffBoxSandbox(args: TeardownOffBoxArgs): Promise<void> {
     let pullOk = true
     let commitOk = true
     if (mounts.length > 0) {
+      let wsBridge: WorkingSetBridge | null = null
       try {
         // Decrypt the persisted creds so reconnect can FALL BACK to them when the
         // deployment's connect does not re-mint (§6.2).
@@ -2397,7 +2423,7 @@ async function teardownOffBoxSandbox(args: TeardownOffBoxArgs): Promise<void> {
         // The reconnect's confined plane is unused here — we drive the raw
         // working-set transport (built from the same token-bearing creds).
         await rc.plane.dispose().catch(() => {})
-        const wsBridge: WorkingSetBridge = adapter.workingSet(
+        wsBridge = adapter.workingSet(
           workingSetHandleFromRef(ref, rc.credentials)
         )
         // ⑤ PULL each mount VM→mirror(materializedDir) with delete-prune (F1).
@@ -2412,6 +2438,9 @@ async function teardownOffBoxSandbox(args: TeardownOffBoxArgs): Promise<void> {
           { sessionId, runtimeId, err },
           "off-box teardown reconnect/pull failed — preserving VM for recovery re-pull"
         )
+      } finally {
+        // (R4 review fix) release the pull bridge's undici Agent.
+        await wsBridge?.dispose?.()
       }
 
       // ⑥ COMMIT (scan the PULLED mirror = materializedDir) only if the pull
@@ -2917,6 +2946,7 @@ async function recoverOffBoxSession(
   const run = repo.defaultDbh()
   const runtimeId = ref.runtimeId
   // ① reconnect a token-bearing transport + PULL each mount VM→mirror (VM alive).
+  let wsBridge: WorkingSetBridge | null = null
   try {
     const persisted =
       (await repo.getBareSandboxForDispatch(runtimeId, run))?.credentials ??
@@ -2927,9 +2957,7 @@ async function recoverOffBoxSession(
       workspaceId: sessionMounts[0]?.workspaceId,
     })
     await rc.plane.dispose().catch(() => {})
-    const wsBridge: WorkingSetBridge = adapter.workingSet(
-      workingSetHandleFromRef(ref, rc.credentials)
-    )
+    wsBridge = adapter.workingSet(workingSetHandleFromRef(ref, rc.credentials))
     for (const mount of sessionMounts) {
       if (mount.materializedDir && wsBridge.pull) {
         await wsBridge.pull({ dir: mount.materializedDir })
@@ -2942,6 +2970,9 @@ async function recoverOffBoxSession(
       err
     )
     return { recovered: 0, stillFailed: sessionMounts.length }
+  } finally {
+    // (R4 review fix) release the recovery pull bridge's undici Agent.
+    await wsBridge?.dispose?.()
   }
 
   // ② commit each mount (scans the mirror the pull populated) — same engine as host.

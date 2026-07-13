@@ -25,6 +25,7 @@ import {
   getLiveBareDataPlane,
   __clearBareDataPlanes,
 } from "./bare-dispatch.js"
+import { markSandboxResourceGone } from "./service.js"
 import type { RuntimeAuthorizationGrantRecord } from "../runtime-authorizations/repo.types.js"
 
 function uniq(p: string): string {
@@ -457,5 +458,67 @@ test("#5-B: a HIT whose row went 'closing' cross-process is denied + the stale p
       "the stale local plane is dropped so the next dispatch re-gates via the DB"
     )
     __clearBareDataPlanes()
+  })
+})
+
+test("resource_gone flips an active sandbox to 'closing' (NOT 'failed') so teardown still converges its mounts", async () => {
+  await withTestDb(async (db) => {
+    const { workspaceId, sessionId } = await seedSession(db)
+    const runtimeId = randomUUID()
+    const serviceId = randomUUID()
+    const descriptor = buildLocalBareDescriptor({ isolation: "bwrap" })
+    await mintBareSandboxRuntimeTx({
+      runtimeId,
+      workspaceId,
+      sessionId,
+      serviceId,
+      adapter: "local",
+      dataPlaneEndpoint: `inprocess:${runtimeId}`,
+      capabilityDescriptor: descriptor as unknown as Record<string, unknown>,
+      exposures: buildBareCoreCatalog(descriptor),
+      executor: db,
+    })
+    // Model a LIVE sandbox mid-turn.
+    await db
+      .updateTable("sandboxes")
+      .set({ state: "active" } as never)
+      .where("id", "=", runtimeId)
+      .execute()
+
+    await markSandboxResourceGone(runtimeId, db)
+
+    // The regression this guards: flipping to 'failed' left mounts stranded because
+    // the Link A close-gate CAS excludes 'failed' → every teardown bailed → re-provision
+    // collided on the partial unique index forever. 'closing' IS in the CAS set, so a
+    // later teardown/reaper converges the row.
+    const row = await db
+      .selectFrom("sandboxes")
+      .select("state")
+      .where("id", "=", runtimeId)
+      .executeTakeFirstOrThrow()
+    assert.equal(
+      row.state,
+      "closing",
+      "resource_gone must leave a convergeable 'closing' row"
+    )
+
+    // Idempotent + safe: a second call (or a call after teardown drove it terminal) is a
+    // no-op, never resurrecting a closed row.
+    await db
+      .updateTable("sandboxes")
+      .set({ state: "closed" } as never)
+      .where("id", "=", runtimeId)
+      .execute()
+    await markSandboxResourceGone(runtimeId, db)
+    const row2 = await db
+      .selectFrom("sandboxes")
+      .select("state")
+      .where("id", "=", runtimeId)
+      .executeTakeFirstOrThrow()
+    assert.equal(
+      row2.state,
+      "closed",
+      "a terminal row is never resurrected to 'closing'"
+    )
   })
 })

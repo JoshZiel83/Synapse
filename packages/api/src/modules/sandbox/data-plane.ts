@@ -331,6 +331,15 @@ export interface WorkingSetBridge {
    * undefined — their bytes are always in the mirror dir (no pull).
    */
   pull?(input: { dir: string }): Promise<void>
+  /**
+   * (R4 review fix) Release any transport the bridge owns. The OFF-BOX bridge mints
+   * a FRESH envd client (its own undici Agent + keep-alive socket pool to CubeProxy)
+   * per workingSet() call, so the spine MUST dispose it after each push/pull —
+   * otherwise the Agents leak under sustained session churn (FD/socket exhaustion).
+   * Host bridges (docker-exec / local) own no persistent transport and leave it
+   * undefined (a no-op `?.()`).
+   */
+  dispose?(): Promise<void>
 }
 
 // ─────────────────────────── local:bare reference plane ──────────────────────
