@@ -107,12 +107,6 @@ export type DevicesDeviceType = "custom" | "desktop_computer" | "laptop_computer
 
 export type DevicesTrustStatus = "pending" | "revoked" | "trusted";
 
-export type DeviceSyncSourcesSourceKind = "claude_code" | "claude_desktop" | "codex" | "custom" | "gemini" | "manual" | "opencode";
-
-export type DeviceSyncSourcesStatus = "disabled" | "error" | "idle" | "syncing" | "unknown";
-
-export type DeviceSyncSourcesSyncMode = "follow" | "snapshot";
-
 export type FileAccessGrantsStatus = "active" | "revoked" | "superseded";
 
 export type FileContentKind = "audio" | "document" | "image" | "video";
@@ -1146,20 +1140,6 @@ export interface DevicesLive {
   workspaceId: string | null;
 }
 
-export interface DeviceSyncSources {
-  configPath: string | null;
-  createdAt: Generated<Date>;
-  deviceId: string;
-  id: Generated<string>;
-  lastError: string | null;
-  lastSyncedAt: Date | null;
-  sourceKey: string;
-  sourceKind: DeviceSyncSourcesSourceKind;
-  status: Generated<DeviceSyncSourcesStatus>;
-  syncMode: Generated<DeviceSyncSourcesSyncMode>;
-  updatedAt: Generated<Date>;
-}
-
 export interface DirectConversationBindings {
   conversationId: string;
   createdAt: Generated<Date>;
@@ -2152,7 +2132,6 @@ export interface RuntimeExposures {
   runtimeStatus: Generated<RuntimeExposuresRuntimeStatus>;
   serviceId: string;
   stableKey: string;
-  syncSourceId: string | null;
   transport: RuntimeExposuresTransport;
   updatedAt: Generated<Date>;
   workspaceId: string;
@@ -2172,7 +2151,6 @@ export interface RuntimeExposuresLive {
   runtimeStatus: RuntimeExposuresRuntimeStatus | null;
   serviceId: string | null;
   stableKey: string | null;
-  syncSourceId: string | null;
   transport: RuntimeExposuresTransport | null;
   updatedAt: Date | null;
   workspaceId: string | null;
@@ -2387,6 +2365,7 @@ export interface RuntimeToolsLive {
 
 export interface Sandboxes {
   adapter: string;
+  arch: string | null;
   capabilityDescriptor: Generated<Json>;
   createdAt: Generated<Date>;
   dataPlaneCertFingerprint: string | null;
@@ -2396,6 +2375,7 @@ export interface Sandboxes {
   id: string;
   mode: SandboxesMode;
   pairingSessionId: string | null;
+  platform: string | null;
   resourceId: string | null;
   sessionId: string | null;
   stashManifestId: string | null;
@@ -2406,6 +2386,7 @@ export interface Sandboxes {
 
 export interface SandboxesLive {
   adapter: string | null;
+  arch: string | null;
   capabilityDescriptor: Json | null;
   createdAt: Date | null;
   dataPlaneCertFingerprint: string | null;
@@ -2415,6 +2396,7 @@ export interface SandboxesLive {
   id: string | null;
   mode: SandboxesMode | null;
   pairingSessionId: string | null;
+  platform: string | null;
   resourceId: string | null;
   sessionId: string | null;
   stashManifestId: string | null;
@@ -3197,7 +3179,6 @@ export interface DB {
   deviceCode: DeviceCode;
   devices: Devices;
   devicesLive: DevicesLive;
-  deviceSyncSources: DeviceSyncSources;
   directConversationBindings: DirectConversationBindings;
   fileAccessGrants: FileAccessGrants;
   fileAccessGrantsLive: FileAccessGrantsLive;

@@ -303,12 +303,6 @@ tables:
       - starting
       - online
       - degraded
-  device_sync_sources:
-    class: ephemeral
-    softDelete: none
-    workspaceScope: none
-    deleteWhitelist:
-      - securityDefinerFn
   runtime_tool_revisions:
     class: append-only
     softDelete: none
@@ -2981,11 +2975,6 @@ foreignKeys:
     _child: runtime_control_plane_sessions(service_id)
     _parent: runtime_services(id)
     _was: CASCADE
-  digest:f4282f80f128aee2:
-    targetAction: RESTRICT
-    _child: device_sync_sources(device_id)
-    _parent: devices(id)
-    _was: CASCADE
   digest:38e5e235b1a4309e:
     targetAction: RESTRICT
     liveIntegrity: enforce
@@ -2998,14 +2987,6 @@ foreignKeys:
     _child: runtime_exposures(service_id)
     _parent: runtime_services(id)
     _was: CASCADE
-  digest:5e091ac62f42685c:
-    targetAction: SET NULL
-    setNull:
-      canLose: true
-      needsSnapshot: false
-    _child: runtime_exposures(sync_source_id)
-    _parent: device_sync_sources(id)
-    _was: SET NULL
   digest:d8718a4537b48d3c:
     targetAction: RESTRICT
     liveIntegrity: enforce

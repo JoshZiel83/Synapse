@@ -71,18 +71,6 @@ export const RUNTIME_EXPOSURE_RUNTIME_STATUSES = [
 export type RuntimeExposureRuntimeStatus =
   (typeof RUNTIME_EXPOSURE_RUNTIME_STATUSES)[number]
 
-// Sync sources (claude_code, etc.) — preserved from relay v2.
-export const DEVICE_SYNC_SOURCE_KINDS = [
-  "manual",
-  "claude_code",
-  "claude_desktop",
-  "codex",
-  "gemini",
-  "opencode",
-  "custom",
-] as const
-export type DeviceSyncSourceKind = (typeof DEVICE_SYNC_SOURCE_KINDS)[number]
-
 export const REMOTE_AGENT_RUNTIME_KINDS = ["claude_code", "codex"] as const
 export type RemoteAgentRuntimeKind = (typeof REMOTE_AGENT_RUNTIME_KINDS)[number]
 
@@ -107,18 +95,6 @@ export const REMOTE_AGENT_RUNTIME_CATALOG_STATUSES = [
 ] as const
 export type RemoteAgentRuntimeCatalogStatus =
   (typeof REMOTE_AGENT_RUNTIME_CATALOG_STATUSES)[number]
-
-export const DEVICE_SYNC_MODES = ["snapshot", "follow"] as const
-export type DeviceSyncMode = (typeof DEVICE_SYNC_MODES)[number]
-
-export const DEVICE_SYNC_STATUSES = [
-  "unknown",
-  "idle",
-  "syncing",
-  "error",
-  "disabled",
-] as const
-export type DeviceSyncStatus = (typeof DEVICE_SYNC_STATUSES)[number]
 
 // Control Plane session enums.
 export const RUNTIME_CONTROL_PLANE_SESSION_STATUSES = [
