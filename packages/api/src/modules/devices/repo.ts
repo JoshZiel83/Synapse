@@ -2121,8 +2121,28 @@ export async function mintBareSandboxRuntimeTx(args: {
   sessionId: string
   serviceId: string
   adapter: string
-  /** Scheme-tagged non-dialable endpoint: 'inprocess:<id>' | 'docker-exec:<id>'. */
+  /** Scheme-tagged non-dialable endpoint: 'inprocess:<id>' | 'docker-exec:<id>' | 'envd:<id>'. */
   dataPlaneEndpoint: string
+  /**
+   * (R4 §1.7/3c) The AUTHORITATIVE provider resource id, written in THIS insert
+   * (not '' -then-backfilled) so a crash between mint and the post-create
+   * back-fill can't leave resource_id='' (→ kill DELETEs an empty id → orphan).
+   * off-box (cube) passes the sandbox id; host bare passes '' (no resource).
+   */
+  resourceId?: string
+  /**
+   * (R4 §1.3/3c) base64 AES-256-GCM envelope of the off-box data-plane creds,
+   * bound (AAD) to this row's identity. NULL for host/resident + the
+   * unauthenticated local cube. Written atomically with the row — no window.
+   */
+  credentialsEncrypted?: string | null
+  /**
+   * (R4 §1.6/2e) provider platform/arch facts (off-box VM), PREFERRED over
+   * process.* — an arm64 API standing up an x86_64 cube must persist the VM's
+   * arch, not the host's. Absent for host bare → sandboxHostPlatformArch.
+   */
+  platform?: string
+  arch?: string
   capabilityDescriptor: Record<string, unknown>
   /** Descriptor-gated api-authored exposure set (buildBareCoreCatalog). */
   exposures: RuntimeCatalogExposure[]
@@ -2153,12 +2173,21 @@ export async function mintBareSandboxRuntimeTx(args: {
         mode: "bare",
         adapter: args.adapter,
         state: "provisioning",
-        resourceId: "",
+        // R4 §1.7/3c: real provider resource id in the SAME insert (not '' then
+        // backfilled) — closes the crash-between-mint-and-backfill orphan window.
+        resourceId: args.resourceId ?? "",
+        // R4 §1.3/3c: encrypted data-plane creds atomic with the row (NULL for
+        // host/resident + the unauthenticated local cube).
+        dataPlaneCredentialsEncrypted: args.credentialsEncrypted ?? null,
         hostPid: null,
         // NO pairing session — a bare sandbox never pairs.
         pairingSessionId: null,
         capabilityDescriptor: sql`${JSON.stringify(args.capabilityDescriptor)}::jsonb`,
-        ...sandboxHostPlatformArch(args.adapter),
+        // R4 §1.6/2e: provider platform/arch facts PREFERRED over process.* for
+        // off-box; host bare falls back to the API-host facts.
+        ...(args.platform && args.arch
+          ? { platform: args.platform, arch: args.arch }
+          : sandboxHostPlatformArch(args.adapter)),
       } as never)
       .execute()
     await trx

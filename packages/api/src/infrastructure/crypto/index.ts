@@ -150,6 +150,62 @@ export function decrypt(encryptedValue: string): string {
   return plaintext.toString("utf8")
 }
 
+// ── AAD-bound envelope (base64) ───────────────────────────────────────────────
+// A second envelope shape for callers that must BIND the ciphertext to a
+// specific record identity via AES-GCM Additional Authenticated Data (AAD).
+// Reuses the SAME master key (getKey → MCP_ENCRYPTION_KEY, prod-fail-closed), so
+// there is no new key management — only the wire shape + the AAD differ:
+//   `enc:b1:<base64(nonce ‖ ciphertext ‖ authTag)>`
+// The AAD is authenticated but NOT encrypted; a decrypt with a different AAD
+// fails the GCM tag check (throws), which is exactly the anti-swap property the
+// sandbox data-plane creds rely on (§6.7/3b): a blob written for row A cannot be
+// pasted onto row B and decrypt.
+const AAD_ENVELOPE_VERSION = "b1"
+const AAD_PREFIX = `${ENCRYPTED_PREFIX}${AAD_ENVELOPE_VERSION}:` // "enc:b1:"
+
+/** Encrypt `plaintext` under the app master key, binding `aad` into the GCM tag.
+ *  Returns the `enc:b1:<base64>` envelope. */
+export function encryptWithAad(plaintext: string, aad: string): string {
+  const iv = randomBytes(IV_LENGTH)
+  const key = getKey()
+  const cipher = createCipheriv(ALGORITHM, key, iv, {
+    authTagLength: AUTH_TAG_LENGTH,
+  })
+  cipher.setAAD(Buffer.from(aad, "utf8"))
+  const ciphertext = Buffer.concat([
+    cipher.update(plaintext, "utf8"),
+    cipher.final(),
+  ])
+  const authTag = cipher.getAuthTag()
+  return `${AAD_PREFIX}${Buffer.concat([iv, ciphertext, authTag]).toString("base64")}`
+}
+
+/** Decrypt an `enc:b1:` envelope, requiring the SAME `aad` used to encrypt.
+ *  THROWS on any mismatch (wrong AAD, wrong key, tampered/corrupt bytes) — the
+ *  caller decides whether that is fatal or a degrade-to-null. */
+export function decryptWithAad(envelope: string, aad: string): string {
+  if (!envelope.startsWith(AAD_PREFIX)) {
+    throw new Error("Unsupported AAD encryption envelope")
+  }
+  const raw = Buffer.from(envelope.slice(AAD_PREFIX.length), "base64")
+  if (raw.length < IV_LENGTH + AUTH_TAG_LENGTH) {
+    throw new Error("Invalid AAD envelope: too short")
+  }
+  const iv = raw.subarray(0, IV_LENGTH)
+  const authTag = raw.subarray(raw.length - AUTH_TAG_LENGTH)
+  const ciphertext = raw.subarray(IV_LENGTH, raw.length - AUTH_TAG_LENGTH)
+  const key = getKey()
+  const decipher = createDecipheriv(ALGORITHM, key, iv, {
+    authTagLength: AUTH_TAG_LENGTH,
+  })
+  decipher.setAAD(Buffer.from(aad, "utf8"))
+  decipher.setAuthTag(authTag)
+  return Buffer.concat([
+    decipher.update(ciphertext),
+    decipher.final(),
+  ]).toString("utf8")
+}
+
 export function encryptSensitiveFields(
   config: Record<string, unknown>,
   schema: Record<string, unknown>

@@ -37,7 +37,19 @@ import {
 import type { BareDataPlaneRebuildRow, SandboxDataPlane } from "./data-plane.js"
 import { createProductWorkingSetBridge } from "./working-set-bridge.js"
 import { sandboxAdapterMetadata } from "./adapter-metadata.js"
-import type { SandboxAdapter } from "./adapter-registry.js"
+import type {
+  AdapterReadyOptions,
+  ReadinessReport,
+  SandboxAdapter,
+  SandboxReconnectOptions,
+} from "./adapter-registry.js"
+import {
+  brandRedactedCredentials,
+  encodeSandboxDataPlaneCredentials,
+  hasAnyToken,
+  tokensForEnvd,
+} from "./data-plane-credentials.js"
+import { repersistBareSandboxCredentials } from "./repo.js"
 import {
   CubeControlClient,
   CubeEnvdClient,
@@ -102,6 +114,107 @@ function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
+/**
+ * (§1.5/§6.9) Minimum envd version the readiness gate accepts. The cube data
+ * plane was pinned against envd 0.5.11; anything below the 0.5 line is a
+ * different, unvalidated wire shape. Bump when a newer envd introduces a
+ * breaking data-plane change the plane relies on.
+ */
+const MIN_ENVD_VERSION = "0.5.0"
+
+/** Compare dotted numeric versions ("0.5.11" >= "0.5.0"). A non-numeric / empty
+ *  version fails the gate (treated as below-min) rather than passing blindly. */
+export function envdVersionMeetsMin(version: string, min: string): boolean {
+  const parse = (v: string): number[] | null => {
+    const parts = v.trim().split(".")
+    if (parts.length === 0 || parts.some((p) => !/^\d+$/.test(p))) return null
+    return parts.map((p) => Number(p))
+  }
+  const a = parse(version)
+  const b = parse(min)
+  if (!a || !b) return false
+  const len = Math.max(a.length, b.length)
+  for (let i = 0; i < len; i++) {
+    const av = a[i] ?? 0
+    const bv = b[i] ?? 0
+    if (av > bv) return true
+    if (av < bv) return false
+  }
+  return true // equal
+}
+
+/** Map `uname -s` / `uname -m` to node-style platform/arch so the persisted
+ *  facts share the vocabulary host adapters write (process.platform/arch) — the
+ *  capability projection COALESCEs + exact-matches bundle platformKeys on it. */
+const UNAME_ARCH_TO_NODE: Readonly<Record<string, string>> = {
+  x86_64: "x64",
+  amd64: "x64",
+  aarch64: "arm64",
+  arm64: "arm64",
+  armv7l: "arm",
+  armv6l: "arm",
+  i386: "ia32",
+  i686: "ia32",
+}
+function unameSysToNodePlatform(s: string): string {
+  if (s === "linux") return "linux"
+  if (s === "darwin") return "darwin"
+  if (
+    s.startsWith("mingw") ||
+    s.startsWith("cygwin") ||
+    s.includes("windows")
+  ) {
+    return "win32"
+  }
+  return s
+}
+export function unameToNodeFacts(
+  unameS: string,
+  unameM: string
+): { platform: string; arch: string } {
+  const m = unameM.trim().toLowerCase()
+  return {
+    platform: unameSysToNodePlatform(unameS.trim().toLowerCase()),
+    arch: UNAME_ARCH_TO_NODE[m] ?? m,
+  }
+}
+
+/** Whether a freshly re-minted token differs from the persisted one (gates the
+ *  reconnect re-persist so the read path stays write-free when nothing changed). */
+function tokensDiffer(
+  fresh: { envdAccessToken?: string; trafficAccessToken?: string },
+  persisted: SandboxDataPlaneCredentials | null
+): boolean {
+  return (
+    fresh.envdAccessToken !== (persisted?.envdAccessToken ?? undefined) ||
+    fresh.trafficAccessToken !== (persisted?.trafficAccessToken ?? undefined)
+  )
+}
+
+/**
+ * (§1.6/2e) Obtain the OFF-BOX VM's platform/arch via a one-shot envd exec — the
+ * cube control plane carries no arch, and the API host's process.* would misgrant
+ * bundles (arm64 API standing up an x86_64 VM). Best-effort: any failure returns
+ * null and the mint falls back to sandboxHostPlatformArch (no worse than pre-R4).
+ */
+export async function detectCubePlatformArch(
+  envd: RemoteEnvdTransport,
+  timeoutMs = 15_000
+): Promise<{ platform: string; arch: string } | null> {
+  try {
+    const res = await envd.exec({ cmd: "uname -s && uname -m" }, { timeoutMs })
+    if (res.exitCode !== 0) return null
+    const lines = res.stdout
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0)
+    if (lines.length < 2) return null
+    return unameToNodeFacts(lines[0], lines[1])
+  } catch {
+    return null
+  }
+}
+
 export interface MakeCubesandboxBareAdapterDeps {
   /** Force the descriptor (test seam). */
   descriptorOverride?: SandboxCapabilityDescriptor
@@ -160,6 +273,14 @@ export function makeCubesandboxBareAdapter(
         )
       }
       let mintedRuntimeId: string | null = null
+      // ② build the REMOTE envd transport (with the freshly-minted tokens, if the
+      // deployment gated envd behind them). Declared OUT of the try so a failure
+      // BEFORE the plane takes ownership (register) closes it here, no leak.
+      const envd = envdFactory(runOpts, sandboxID, {
+        trafficAccessToken: created.trafficAccessToken,
+        envdAccessToken: created.envdAccessToken,
+      })
+      let envdOwnedByPlane = false
       try {
         const runtimeId = randomUUID()
         const serviceId = randomUUID()
@@ -167,6 +288,21 @@ export function makeCubesandboxBareAdapter(
         // sandbox id (== sandboxes.resource_id), never sliced back out of the
         // free-string endpoint on dispatch.
         const dataPlaneEndpoint = `envd:${sandboxID}`
+        // (R4 §1.3/§1.6/§6.7) Compute resource_id + encrypted creds + provider
+        // platform/arch BEFORE mint so they persist ATOMICALLY in the sandbox
+        // INSERT (no back-fill window). The AAD binds the cred envelope to THIS
+        // row's identity (runtimeId ‖ workspaceId) so it can't be swapped onto
+        // another row. Creds are null on the unauthenticated local cube (no
+        // tokens) → the column stays NULL, dormant until a gated deploy.
+        const rawCredentials = {
+          envdAccessToken: created.envdAccessToken,
+          trafficAccessToken: created.trafficAccessToken,
+        }
+        const platformArch = await detectCubePlatformArch(envd)
+        const credentialsEncrypted = encodeSandboxDataPlaneCredentials(
+          rawCredentials,
+          { sandboxRowId: runtimeId, workspaceId: spec.workspaceId }
+        )
         await mint({
           runtimeId,
           workspaceId: spec.workspaceId,
@@ -174,6 +310,10 @@ export function makeCubesandboxBareAdapter(
           serviceId,
           adapter: "cubesandbox",
           dataPlaneEndpoint,
+          resourceId: sandboxID,
+          credentialsEncrypted,
+          platform: platformArch?.platform,
+          arch: platformArch?.arch,
           capabilityDescriptor: descriptor as unknown as Record<
             string,
             unknown
@@ -181,17 +321,13 @@ export function makeCubesandboxBareAdapter(
           exposures: buildBareCoreCatalog(descriptor),
         })
         mintedRuntimeId = runtimeId
-        // ② build + register the REMOTE confined plane bound to this sandbox id.
-        const envd = envdFactory(runOpts, sandboxID, {
-          trafficAccessToken: created.trafficAccessToken,
-          envdAccessToken: created.envdAccessToken,
-        })
         const plane = createRemoteBareDataPlane({
           sandboxID,
           descriptor,
           vmRoot: runOpts.vmRoot,
           envd,
         })
+        envdOwnedByPlane = true // dispose(plane) now closes envd
         registerBareDataPlane(runtimeId, plane)
         // ③ the runtime's DB identity now exists → let the spine back-fill mounts.
         await spec.onRuntimeReady?.(runtimeId)
@@ -201,13 +337,10 @@ export function makeCubesandboxBareAdapter(
           serviceId,
           sandboxID,
           control,
-          // R4 Phase 1b: CAPTURE the off-box data-plane tokens on the handle. NOT
-          // persisted yet — the encrypted-column write + re-inject-at-rebuild land
-          // in a later sub-phase; today the plane above already holds live tokens.
-          credentials: {
-            envdAccessToken: created.envdAccessToken,
-            trafficAccessToken: created.trafficAccessToken,
-          },
+          // (R4 §1.3/§6.7) BRANDED redacted creds on the handle — the plane above
+          // already holds the live tokens; these are persisted (encrypted) and
+          // redacted so a stray log/serialize can't leak them.
+          credentials: brandRedactedCredentials(rawCredentials),
         })
       } catch (err) {
         // Self-clean on ANY failure: drop the plane, soft-delete the runtime, and
@@ -217,6 +350,9 @@ export function makeCubesandboxBareAdapter(
           if (p) await p.dispose().catch(() => {})
           await deleteRuntime(spec.workspaceId, mintedRuntimeId).catch(() => {})
         }
+        // No plane took ownership of the transport → close it so its pooled
+        // dispatcher doesn't leak (e.g. a mint failure before the plane build).
+        if (!envdOwnedByPlane) await envd.close().catch(() => {})
         await control.kill(sandboxID).catch(() => {})
         throw err
       }
@@ -231,25 +367,89 @@ export function makeCubesandboxBareAdapter(
       // the next dispatch (bare-dispatch registry miss → rebuildDataPlane).
       return makeCubesandboxBareRefHandle(ref, controlFactory(runOpts))
     },
-    // OFF-BOX readiness (§1.5). R4 Phase 1a: return ok immediately to PRESERVE
-    // today's api-authored behavior (the catalogSource fork skipped the wait). The
-    // control.health() + envd version gate + domain-suffix (SSRF-inversion) check
-    // land in a later sub-phase.
-    ready: async () => ({ ok: true }),
+    // OFF-BOX readiness negotiation (§1.5/§6.9): control reachability + an envd
+    // version gate + a domain-suffix (SSRF-inversion) guard + envd data-plane
+    // reachability, BEFORE the spine flips the sandbox active. On any failure
+    // returns { ok:false, reason } — the spine's provision-fail fork then re-probes
+    // liveness and LEAVES the (possibly-live) VM in 'closing' rather than DELETEing
+    // it (§6.9). `tunnelTimeoutMs <= 0` opts out of the envd reachability probe
+    // (test seam), mirroring the resident tunnel-wait opt-out.
+    async ready(
+      handle: SandboxHandle,
+      opts: AdapterReadyOptions
+    ): Promise<ReadinessReport> {
+      const sandboxID = handle.resourceId
+      const control = controlFactory(runOpts)
+      // (1) control-plane reachability + the authoritative envdVersion/domain.
+      let info: CubeSandboxInfo | null
+      try {
+        info = await control.getInfo(sandboxID)
+      } catch (err) {
+        return { ok: false, reason: `control_unreachable: ${errMessage(err)}` }
+      }
+      if (!info) return { ok: false, reason: "sandbox_absent" }
+      // (2) version gate — reject an envd below the validated data-plane floor.
+      if (!envdVersionMeetsMin(info.envdVersion, MIN_ENVD_VERSION)) {
+        return {
+          ok: false,
+          reason: `envd_version_below_min: ${info.envdVersion || "<none>"} < ${MIN_ENVD_VERSION}`,
+        }
+      }
+      // (3) domain-suffix guard (SSRF-inversion): the VM's reported vhost domain
+      // MUST be the deployment's configured domain — a rogue control plane can't
+      // redirect our envd dials at an attacker-chosen host.
+      if (
+        info.domain &&
+        info.domain !== runOpts.domain &&
+        !info.domain.endsWith(`.${runOpts.domain}`)
+      ) {
+        return {
+          ok: false,
+          reason: `domain_mismatch: ${info.domain} not under ${runOpts.domain}`,
+        }
+      }
+      // (4) envd data-plane reachability. envd speaks the Connect protocol (no
+      // plain GET /health on this deployment), so a proven unary fs RPC (stat the
+      // VM root) is the reachability signal. tunnelTimeoutMs<=0 skips it (test).
+      if (opts.tunnelTimeoutMs > 0) {
+        const envd = envdFactory(
+          runOpts,
+          sandboxID,
+          tokensForEnvd(handle.credentials)
+        )
+        try {
+          await envd.stat(runOpts.vmRoot)
+        } catch (err) {
+          await envd.close?.().catch(() => {})
+          return { ok: false, reason: `envd_unreachable: ${errMessage(err)}` }
+        }
+        await envd.close?.().catch(() => {})
+      }
+      return {
+        ok: true,
+        envdVersion: info.envdVersion,
+        domain: info.domain,
+      }
+    },
     // R4 Phase 1c: ALL adapters return the pass-through product bridge for now;
     // the off-box envd DETACHED bridge (delete-aware mirror over the plane's
     // RemoteEnvdTransport) replaces this in a later sub-phase.
     workingSet: () => createProductWorkingSetBridge(),
-    // §1.8 seam: reconstruct the REMOTE plane from the PERSISTED row only —
-    // resource_id (== sandbox id) + the row's descriptor; deployment-wide
-    // connection facts (domain/proxy/vmRoot/port) come from config, never live
-    // config for the adapter kind. ASYNC now (§1.2). R4 Phase 1b: still token-less
-    // (connect + re-mint envd/traffic tokens land in a later sub-phase).
+    // §1.8 seam: reconstruct the REMOTE plane from the PERSISTED row — resource_id
+    // (== sandbox id) + descriptor + the DECRYPTED creds threaded by the dispatch
+    // repo exit. deployment-wide connection facts (domain/proxy/vmRoot/port) come
+    // from config, never live config for the adapter kind. ASYNC (§1.2). The
+    // dispatch fast path is DB-read-only: it re-injects the PERSISTED token (no
+    // control-plane connect/re-mint here — that is the reconnect seam's job, §6.2).
     async rebuildDataPlane(
       row: BareDataPlaneRebuildRow
     ): Promise<SandboxDataPlane> {
       const sandboxID = row.resourceId ?? ""
-      const envd = envdFactory(runOpts, sandboxID)
+      const envd = envdFactory(
+        runOpts,
+        sandboxID,
+        tokensForEnvd(row.credentials)
+      )
       return createRemoteBareDataPlane({
         sandboxID,
         descriptor: row.descriptor,
@@ -257,24 +457,72 @@ export function makeCubesandboxBareAdapter(
         envd,
       })
     },
-    // R4 Phase 1b: token-bearing off-box reconnect (§6.2). Still token-less — the
-    // control.connect + re-mint + re-persist land in a later sub-phase. Uncalled
-    // in Phase 1a.
-    async reconnectDataPlane(ref: SandboxRef): Promise<{
+    // Token-bearing off-box reconnect (§6.2), for teardown/recovery pull (wired
+    // later). control.connect MAY re-mint tokens (E2B does; the local
+    // unauthenticated deploy returns none — live-verified). Prefer a FRESH token;
+    // else fall back to the persisted decrypted creds. When the token CHANGED and
+    // the sandbox is non-terminal, re-persist the fresh envelope via the injected
+    // executor (skipped on the read-only path unless it changed).
+    async reconnectDataPlane(
+      ref: SandboxRef,
+      opts?: SandboxReconnectOptions
+    ): Promise<{
       plane: SandboxDataPlane
       credentials: SandboxDataPlaneCredentials | null
     }> {
       const sandboxID = ref.resourceId
-      const envd = envdFactory(runOpts, sandboxID)
-      return {
-        plane: createRemoteBareDataPlane({
-          sandboxID,
-          descriptor,
-          vmRoot: runOpts.vmRoot,
-          envd,
-        }),
-        credentials: null,
+      const control = controlFactory(runOpts)
+      const connected = await control.connect(sandboxID).catch(() => null)
+      const fresh =
+        connected && (connected.envdAccessToken || connected.trafficAccessToken)
+          ? {
+              envdAccessToken: connected.envdAccessToken,
+              trafficAccessToken: connected.trafficAccessToken,
+            }
+          : null
+      const persisted = opts?.persistedCredentials ?? null
+      // Prefer the fresh re-minted token; else fall back to the persisted creds.
+      const chosen =
+        fresh ??
+        (hasAnyToken(persisted)
+          ? {
+              envdAccessToken: persisted?.envdAccessToken,
+              trafficAccessToken: persisted?.trafficAccessToken,
+            }
+          : null)
+      const envd = envdFactory(runOpts, sandboxID, chosen ?? undefined)
+      const plane = createRemoteBareDataPlane({
+        sandboxID,
+        descriptor,
+        vmRoot: runOpts.vmRoot,
+        envd,
+      })
+      const credentials = chosen ? brandRedactedCredentials(chosen) : null
+      // Re-persist ONLY when connect actually re-minted a token that DIFFERS from
+      // the persisted one, and we can (executor + workspaceId). The repo update
+      // CASes on non-terminal state so a racing teardown can't resurrect it.
+      if (
+        fresh &&
+        opts?.executor &&
+        opts?.workspaceId &&
+        tokensDiffer(fresh, persisted)
+      ) {
+        const encrypted = encodeSandboxDataPlaneCredentials(
+          brandRedactedCredentials(fresh),
+          { sandboxRowId: ref.runtimeId, workspaceId: opts.workspaceId }
+        )
+        await repersistBareSandboxCredentials(
+          ref.runtimeId,
+          encrypted,
+          opts.executor
+        ).catch((err) => {
+          log.warn(
+            { sandboxID, err: errMessage(err) },
+            "reconnect re-persist of fresh creds failed (non-fatal)"
+          )
+        })
       }
+      return { plane, credentials }
     },
     // R4 Phase 1d: the control-plane list-by-metadata sweep lands in a later
     // sub-phase; inert for now (the create() TTL is the paid-resource safety net).
@@ -296,7 +544,7 @@ function makeCubesandboxBareHandle(args: {
     mode: "bare",
     sandboxId: args.sessionId,
     resourceId: args.sandboxID,
-    // R4 Phase 1b: captured at create, not yet persisted.
+    // (R4 §1.3) captured at create + persisted encrypted at mint; BRANDED redacted.
     credentials: args.credentials ?? null,
     runtimeLink: {
       mode: "bare",

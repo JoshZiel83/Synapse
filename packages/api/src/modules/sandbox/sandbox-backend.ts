@@ -179,10 +179,12 @@ export interface SandboxInfo {
 /**
  * (R4 §1.3, 2b) provider data-plane credentials captured at create() for an
  * off-box adapter — the envd/traffic access tokens `control.create()` returns.
- * NULL for adapters with no data-plane secret (local/docker bare, resident).
- * R4 Phase 1b: captured here but NOT yet persisted (the encrypted-column write +
- * re-inject-at-rebuild land in a later sub-phase). Never logged, never in
- * provenance.
+ * NULL for adapters with no data-plane secret (local/docker bare, resident) and
+ * for the UNAUTHENTICATED local cube (create returns no tokens). Encrypted at
+ * mint onto `sandboxes.data_plane_credentials_encrypted` and re-injected
+ * (decrypted) on rebuild/reconnect (R4 Phase 1b). BRANDED redacted in memory
+ * (see data-plane-credentials.ts#brandRedactedCredentials) so a stray
+ * log/serialize can't leak the tokens — never logged, never in provenance.
  */
 export interface SandboxDataPlaneCredentials {
   envdAccessToken?: string
@@ -196,8 +198,9 @@ export interface SandboxHandle {
   readonly adapter: string
   readonly mode: "resident" | "bare"
   /**
-   * (R4 §1.3, 2b) provider credentials captured at create, to be persisted
-   * encrypted in a later sub-phase. null for adapters with no data-plane secret.
+   * (R4 §1.3, 2b) provider credentials captured at create, persisted encrypted
+   * at mint. null for adapters with no data-plane secret. BRANDED redacted so a
+   * `log({handle})` can't leak the tokens (§6.7/3d).
    */
   readonly credentials?: SandboxDataPlaneCredentials | null
   /** == sessionId (the liveSandboxHandles registry key). */

@@ -157,6 +157,40 @@ export class CubeControlClient {
     }
   }
 
+  /**
+   * POST /sandboxes/{id}/connect — E2B-compat reconnect to a LIVE sandbox.
+   * Returns a create-shaped connection descriptor. A gated deployment MAY re-mint
+   * `envd/trafficAccessToken` here (E2B does); the local UNAUTHENTICATED
+   * deployment returns the descriptor with NO tokens (live-verified) — so the
+   * caller prefers a fresh token when present, else falls back to the persisted
+   * decrypted creds (§6.2 / §1.3).
+   */
+  async connect(sandboxID: string): Promise<CreateSandboxResult> {
+    const { status, text } = await this.request(
+      "POST",
+      `/sandboxes/${sandboxID}/connect`
+    )
+    if (status < 200 || status >= 300) {
+      await this.fail("connect sandbox failed", status, text)
+    }
+    const raw: unknown = text ? JSON.parse(text) : {}
+    if (!isRecord(raw) || typeof raw.sandboxID !== "string") {
+      throw new CubeControlError(
+        "connect sandbox: malformed response body",
+        status
+      )
+    }
+    return {
+      sandboxID: raw.sandboxID,
+      templateID: asString(raw.templateID) ?? "",
+      clientID: asString(raw.clientID) ?? "",
+      domain: asString(raw.domain) ?? this.defaultDomain,
+      envdVersion: asString(raw.envdVersion) ?? "",
+      envdAccessToken: asString(raw.envdAccessToken),
+      trafficAccessToken: asString(raw.trafficAccessToken),
+    }
+  }
+
   /** GET /sandboxes/{id} — sandbox detail, or `null` when it no longer exists. */
   async getInfo(sandboxID: string): Promise<SandboxInfo | null> {
     const { status, text } = await this.request(

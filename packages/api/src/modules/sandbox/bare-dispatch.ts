@@ -15,7 +15,10 @@ import { fromExternalRfc3339 } from "@synapse/device-protocol/instant"
 import { STORAGE_DIR } from "../../infrastructure/storage/index.js"
 import { config } from "../../config/index.js"
 import { adapterForRow } from "./adapter-registry.js"
-import { SandboxBackendError } from "./sandbox-backend.js"
+import {
+  SandboxBackendError,
+  type SandboxDataPlaneCredentials,
+} from "./sandbox-backend.js"
 import { sandboxAdapterMetadata } from "./adapter-metadata.js"
 import type { McpDispatchResult } from "../devices/dispatch.js"
 import type { RuntimeAuthorizationGrantRecord } from "../runtime-authorizations/repo.types.js"
@@ -177,6 +180,13 @@ export interface DispatchBareRuntimeToolInput {
     dataPlaneEndpoint: string | null
     /** R3.2: the AUTHORITATIVE provider resource id (docker container id / sandbox id / ""). */
     resourceId: string | null
+    /** (R4 §1.3) the row's workspace id (creds AAD half). */
+    workspaceId: string
+    /** (R4 §1.3, F7) DECRYPTED off-box creds → token-bearing plane; null → token-less. */
+    credentials: SandboxDataPlaneCredentials | null
+    /** (R4 §1.6) provider platform/arch facts. */
+    platform: string | null
+    arch: string | null
   }) => SandboxDataPlane | Promise<SandboxDataPlane>
 }
 
@@ -198,6 +208,10 @@ async function rebuildBarePlane(opts: {
   descriptor: SandboxCapabilityDescriptor
   dataPlaneEndpoint: string | null
   resourceId: string | null
+  workspaceId: string
+  credentials: SandboxDataPlaneCredentials | null
+  platform: string | null
+  arch: string | null
 }): Promise<SandboxDataPlane> {
   const adapter = adapterForRow(opts.adapter, "bare")
   if (!adapter.rebuildDataPlane) {
@@ -211,6 +225,12 @@ async function rebuildBarePlane(opts: {
     dataPlaneEndpoint: opts.dataPlaneEndpoint,
     descriptor: opts.descriptor,
     sandboxRoot: opts.sandboxRoot,
+    // R4 §1.3/§1.6: thread the decrypted creds + provider facts so the off-box
+    // rebuild builds a TOKEN-BEARING plane (host adapters ignore them).
+    workspaceId: opts.workspaceId,
+    credentials: opts.credentials,
+    platform: opts.platform,
+    arch: opts.arch,
   })
 }
 
@@ -333,6 +353,12 @@ export async function dispatchBareRuntimeTool(
             descriptor: row.capabilityDescriptor,
             dataPlaneEndpoint: row.dataPlaneEndpoint,
             resourceId: row.resourceId,
+            // R4 §1.3/§1.6: decrypted creds (token-bearing off-box rebuild) +
+            // provider facts, from the SAME single-read dispatch row.
+            workspaceId: row.workspaceId,
+            credentials: row.credentials,
+            platform: row.platform,
+            arch: row.arch,
           })
         } catch {
           return {

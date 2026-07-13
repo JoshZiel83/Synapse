@@ -163,6 +163,10 @@ const SCOPE_TO_DOMAIN: Readonly<Record<string, DomainScope>> = {
     domain: "sandbox",
     component: "adapter-registry",
   },
+  "sandbox.credentials": {
+    domain: "sandbox",
+    component: "credentials",
+  },
   "sandbox.cubesandbox": {
     domain: "sandbox",
     component: "cubesandbox",

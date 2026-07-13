@@ -126,6 +126,13 @@ export async function mintBareSandboxRuntime(args: {
   serviceId: string
   adapter: string
   dataPlaneEndpoint: string
+  /** (R4 §1.7/3c) authoritative provider resource id, written atomically. */
+  resourceId?: string
+  /** (R4 §1.3/3c) base64 AES-256-GCM envelope of the off-box data-plane creds. */
+  credentialsEncrypted?: string | null
+  /** (R4 §1.6/2e) provider platform/arch facts, preferred over process.*. */
+  platform?: string
+  arch?: string
   capabilityDescriptor: Record<string, unknown>
   exposures: RuntimeCatalogExposure[]
   clientVersion?: string | null
@@ -175,7 +182,12 @@ export async function deleteRuntime(
 ): Promise<void> {
   // `run` (optional) threads the sandbox teardown/crash-recovery executor into
   // the soft-delete flip; undefined preserves prod (global db) behaviour.
-  const updated = await softDeleteRuntime(workspaceId, runtimeId, undefined, run)
+  const updated = await softDeleteRuntime(
+    workspaceId,
+    runtimeId,
+    undefined,
+    run
+  )
   if (updated === 0) {
     throw new DeviceModuleError({
       statusCode: 404,

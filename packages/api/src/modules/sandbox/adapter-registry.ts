@@ -61,6 +61,7 @@ import {
   type WorkingSetBridge,
 } from "./data-plane.js"
 import { createProductWorkingSetBridge } from "./working-set-bridge.js"
+import type { Executor } from "./repo.js"
 import { makeCubesandboxBareAdapter } from "./cubesandbox-adapter.js"
 import {
   registerBareDataPlane,
@@ -120,6 +121,20 @@ export interface AdapterReadyOptions {
   tunnelTimeoutMs: number
 }
 
+/** (§6.2) options threaded into the token-bearing reconnect seam. */
+export interface SandboxReconnectOptions {
+  /** Executor for the FRESH-token re-persist (skipped when absent). */
+  executor?: Executor
+  /**
+   * The persisted decrypted creds to FALL BACK to when connect does not re-mint
+   * (the local unauthenticated cube returns no tokens). The caller (teardown /
+   * recovery) already decrypted the row, so it supplies them here.
+   */
+  persistedCredentials?: SandboxDataPlaneCredentials | null
+  /** Workspace id for the re-persist AAD (SandboxRef carries no workspace id). */
+  workspaceId?: string
+}
+
 export interface SandboxAdapter {
   // ── identity / metadata ────────────────────────────────────────────────────
   readonly key: string
@@ -175,13 +190,17 @@ export interface SandboxAdapter {
   rebuildDataPlane?(row: BareDataPlaneRebuildRow): Promise<SandboxDataPlane>
 
   /**
-   * (2b/§6.2) token-bearing reconnect seam for teardown/recovery pull. R4 Phase
-   * 1b: host adapters wrap their existing plane; off-box re-uses the token-less
-   * remote rebuild (tokens + re-persist land later). Uncalled in Phase 1a.
+   * (2b/§6.2) token-bearing reconnect seam for teardown/recovery pull. off-box
+   * (cube) = control.connect(resourceId) → prefer a FRESH re-minted token, else
+   * fall back to the persisted decrypted creds → build a token-bearing remote
+   * plane; when the token CHANGED and the sandbox is non-terminal, re-persist the
+   * fresh envelope via the injected executor (NEVER on the read-only dispatch fast
+   * path unless it changed). host adapters wrap their existing plane (no secret).
+   * Wired by teardown/recovery in a later sub-phase.
    */
   reconnectDataPlane?(
     ref: SandboxRef,
-    opts: { executor?: unknown }
+    opts?: SandboxReconnectOptions
   ): Promise<{
     plane: SandboxDataPlane
     credentials: SandboxDataPlaneCredentials | null

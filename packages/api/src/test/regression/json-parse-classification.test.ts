@@ -87,6 +87,8 @@ const classifiedJsonParseFiles = {
       "CubeSandbox control-plane REST responses are off-box provider wire payloads.",
     "packages/api/src/modules/sandbox/cubesandbox/envd-client.ts":
       "CubeSandbox envd data-plane responses (filesystem/process) are off-box provider wire payloads.",
+    "packages/api/src/modules/sandbox/data-plane-credentials.ts":
+      "Off-box data-plane credentials are decoded from an app-encrypted (AES-GCM) blob at the credential boundary.",
     "packages/api/src/modules/im/connectors/dingtalk/response-codec.ts":
       "DingTalk HTTP provider responses are provider payloads.",
     "packages/api/src/modules/im/connectors/dingtalk/stream-codec.ts":

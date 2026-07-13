@@ -23,6 +23,8 @@ import {
   type SandboxCapabilityDescriptor,
   decodeSandboxCapabilityDescriptor,
 } from "./model.js"
+import { decodeSandboxDataPlaneCredentials } from "./data-plane-credentials.js"
+import type { SandboxDataPlaneCredentials } from "./sandbox-backend.js"
 
 // Re-export the Executor type so module files (e.g. grants.ts) can accept an
 // injectable executor WITHOUT importing the forbidden kysely.js path.
@@ -621,11 +623,16 @@ export interface SandboxRow {
    */
   hostPidIdentity: string | null
   pairingSessionId: string | null
+  /**
+   * (R4 §1.3/#6) The raw base64 AES-256-GCM envelope of the off-box data-plane
+   * creds (nonce‖ct‖tag, AAD-bound to the row id). NULL for host/resident + the
+   * unauthenticated local cube. The general read surface carries the CIPHERTEXT;
+   * the decrypt-at-exit (→ SandboxDataPlaneCredentials) is confined to the
+   * dispatch/rebuild path (getBareSandboxForDispatch), never the generic reader.
+   */
+  dataPlaneCredentialsEncrypted: string | null
 }
 
-// R4 #6: data_plane_credentials_encrypted is SELECTed so the sandbox read surface
-// carries the AES-256-GCM envelope. Decrypt-at-repo-exit (surfacing it on
-// SandboxRow) is a LATER phase — Phase 0 only lands the column + generated type.
 const SANDBOX_ROW_COLUMNS = [
   "id",
   "workspaceId",
@@ -666,6 +673,8 @@ function toSandboxRow(row: Record<string, unknown>): SandboxRow {
     hostPid: (row.hostPid as number | null) ?? null,
     hostPidIdentity: (row.hostPidIdentity as string | null) ?? null,
     pairingSessionId: (row.pairingSessionId as string | null) ?? null,
+    dataPlaneCredentialsEncrypted:
+      (row.dataPlaneCredentialsEncrypted as string | null) ?? null,
   }
 }
 
@@ -837,6 +846,20 @@ export interface BareSandboxDispatchRow {
    */
   resourceId: string | null
   runtimeDeletedAt: Date | null
+  /** (R4 §1.3) the row's workspace id — the second half of the creds AAD, and
+   *  threaded onto the rebuild row for a future per-ws key rotation. */
+  workspaceId: string
+  /**
+   * (R4 §1.3, F7) the DECRYPTED off-box data-plane creds, or null. A creds-only
+   * decrypt MISS (rotated key / tampered AAD / corrupt blob) is null — NOT a null
+   * ROW (the reconnect re-mint heals it); whole-row-null stays reserved for a
+   * descriptor decode miss (capabilityDescriptor null → hard-deny below). null for
+   * host/resident + the unauthenticated local cube.
+   */
+  credentials: SandboxDataPlaneCredentials | null
+  /** (R4 §1.6) provider platform/arch facts, threaded onto the rebuild row. */
+  platform: string | null
+  arch: string | null
   /**
    * Zod-decoded (P1.3) persisted descriptor, or NULL when the JSONB failed to
    * decode (corrupt/hand-edited row). The dispatch fork hard-denies on null
@@ -873,10 +896,14 @@ export async function getBareSandboxForDispatch(
     )
     .select([
       "sb.sessionId",
+      "sb.workspaceId",
       "sb.mode",
       "sb.adapter",
       "sb.state",
       "sb.resourceId",
+      "sb.platform",
+      "sb.arch",
+      "sb.dataPlaneCredentialsEncrypted",
       "sb.capabilityDescriptor",
       "r.deletedAt as runtimeDeletedAt",
       "rs.dataPlaneEndpoint as dataPlaneEndpoint",
@@ -884,13 +911,24 @@ export async function getBareSandboxForDispatch(
     .where("sb.id", "=", runtimeId)
     .executeTakeFirst()
   if (!row) return null
+  const workspaceId = row.workspaceId as string
   return {
     sessionId: (row.sessionId as string | null) ?? null,
+    workspaceId,
     mode: row.mode as SandboxRow["mode"],
     adapter: row.adapter as string,
     state: row.state as SandboxRow["state"],
     resourceId: (row.resourceId as string | null) ?? null,
     runtimeDeletedAt: (row.runtimeDeletedAt as Date | null) ?? null,
+    // R4 §1.3 (F7): decrypt the off-box creds bound (AAD) to THIS row's identity.
+    // A creds-only MISS → null (NOT a null row) so the rebuild degrades to a
+    // token-less/re-mint heal instead of a hard-deny. Never throws.
+    credentials: decodeSandboxDataPlaneCredentials(
+      (row.dataPlaneCredentialsEncrypted as string | null) ?? null,
+      { sandboxRowId: runtimeId, workspaceId }
+    ),
+    platform: (row.platform as string | null) ?? null,
+    arch: (row.arch as string | null) ?? null,
     // P1.3: Zod-decode at the repo exit; null on any decode failure so the
     // dispatch fork fails closed instead of trusting a corrupt safety cap.
     capabilityDescriptor: decodeSandboxCapabilityDescriptor(
@@ -898,6 +936,30 @@ export async function getBareSandboxForDispatch(
     ),
     dataPlaneEndpoint: (row.dataPlaneEndpoint as string | null) ?? null,
   }
+}
+
+/**
+ * (R4 §6.2) Re-persist FRESH off-box data-plane creds after a reconnect re-mint,
+ * gated on the sandbox still being non-terminal (CAS on state) so a teardown
+ * racing the re-mint doesn't resurrect a cred blob on a closing/closed/failed
+ * row. NEVER called on the read-only dispatch fast path unless the token changed.
+ * Returns true iff it wrote exactly one row.
+ */
+export async function repersistBareSandboxCredentials(
+  runtimeId: string,
+  credentialsEncrypted: string | null,
+  run: Executor = db
+): Promise<boolean> {
+  const res = await run
+    .updateTable("sandboxes")
+    .set({
+      dataPlaneCredentialsEncrypted: credentialsEncrypted,
+      updatedAt: new Date(),
+    } as never)
+    .where("id", "=", runtimeId)
+    .where("state", "not in", ["closing", "closed", "failed"])
+    .executeTakeFirst()
+  return Number(res.numUpdatedRows ?? 0n) === 1
 }
 
 /**

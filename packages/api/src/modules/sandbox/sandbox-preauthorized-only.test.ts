@@ -27,6 +27,7 @@ const SANDBOX_ROW: SandboxRow = {
   hostPid: null,
   hostPidIdentity: null,
   pairingSessionId: null,
+  dataPlaneCredentialsEncrypted: null,
 }
 
 const sandboxDeps = { getSandboxById: async () => SANDBOX_ROW }

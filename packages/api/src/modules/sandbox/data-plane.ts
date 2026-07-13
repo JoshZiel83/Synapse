@@ -47,6 +47,7 @@ import {
 import type { McpDispatchResult } from "../devices/dispatch.js"
 import type { RuntimeAuthorizationGrantRecord } from "../runtime-authorizations/repo.types.js"
 import type { SandboxCapabilityDescriptor } from "./model.js"
+import type { SandboxDataPlaneCredentials } from "./sandbox-backend.js"
 
 /** Mount roots the whole-scope search fans out over (== SANDBOX_MOUNT_POINTS). */
 const MOUNT_ROOTS: readonly string[] = [...SANDBOX_MOUNT_POINTS]
@@ -291,6 +292,19 @@ export interface BareDataPlaneRebuildRow {
   dataPlaneEndpoint: string | null
   descriptor: SandboxCapabilityDescriptor
   sandboxRoot: string
+  // ── R4 additions (§1.3/§1.6) ──
+  /** The row's workspace id (creds AAD half; future per-ws key rotation). */
+  workspaceId: string
+  /**
+   * (§1.3, F7) DECRYPTED off-box data-plane creds (envd/traffic tokens), or null.
+   * The off-box rebuildDataPlane builds a TOKEN-BEARING plane from these; null for
+   * host-side adapters + a creds decrypt miss (→ token-less; reconnect heals).
+   * BRANDED redacted so a stray serialize can't leak the tokens (§6.7/3d).
+   */
+  credentials: SandboxDataPlaneCredentials | null
+  /** (§1.6) provider platform/arch facts for readiness / bundle projection. */
+  platform: string | null
+  arch: string | null
 }
 
 /**

@@ -1059,7 +1059,12 @@ export async function provisionSandbox(
         ? readHostPidIdentity(handle.hostPid)
         : null
     await repo.updateSandboxRow(runtimeId, {
-      resourceId: handle.resourceId || null,
+      // R4 §1.7: an OFF-BOX adapter already wrote the AUTHORITATIVE resource_id in
+      // its mint INSERT (the VM id is known before mint), closing the crash-window
+      // where a '' -then-backfill would leave kill() DELETEing an empty id. Only
+      // the host/resident path back-fills here (docker:resident's container id
+      // genuinely arrives after the bootstrap-consume mints the row).
+      resourceId: adapter.meta.offBox ? undefined : handle.resourceId || null,
       hostPid: handle.hostPid ?? null,
       hostPidIdentity,
       // R3.P2b: stamp the provision budget so a stuck 'provisioning' row is
@@ -1146,8 +1151,25 @@ export async function provisionSandbox(
     //  - mark the sandboxes row 'failed',
     //  - remove the on-disk scratch dirs (CAS untouched).
     const pairedRuntimeId = handle?.runtimeLink.runtimeId ?? null
-    if (handle) {
+    // R4 §1.7/§6.9 — off-box provision-fail fork. A ready()/provision failure
+    // must NOT `handle.kill()` (DELETE) a possibly-STILL-LIVE off-box VM without a
+    // re-probe. For an off-box adapter, re-probe liveness: on 'alive'/'unknown'
+    // LEAVE the row 'closing' (the closing reaper + the Phase-1d orphan sweep
+    // converge it on a confirmed-dead re-probe / TTL) and keep the VM + its
+    // soft-delete UNwritten; only a confirmed-'dead' VM falls through to the
+    // terminal DELETE+soft-delete cleanup. Host adapters keep kill-then-fail
+    // (compute-only; a stray host child is cheap to SIGTERM).
+    let offBoxPreserve = false
+    if (handle && adapter.meta.offBox) {
+      const liveness = await handle.probeLiveness().catch(() => "unknown")
+      offBoxPreserve = liveness !== "dead"
+    }
+    if (handle && !offBoxPreserve) {
       await handle.kill().catch(() => {})
+      liveSandboxHandles.delete(handle.sandboxId)
+    } else if (handle) {
+      // Preserve the live off-box VM: drop only the in-process handle registration
+      // (a fresh reconnect re-attaches it) — do NOT kill.
       liveSandboxHandles.delete(handle.sandboxId)
     }
     if (pairedRuntimeId) {
@@ -1159,11 +1181,18 @@ export async function provisionSandbox(
       }).catch(() => {})
       await repo
         .updateSandboxRow(pairedRuntimeId, {
-          state: "failed",
+          // Leave a possibly-live off-box VM in 'closing' (reaper/orphan-sweep
+          // converges it); a host or confirmed-dead off-box row goes 'failed'.
+          state: offBoxPreserve ? "closing" : "failed",
           errorMessage: message,
         })
         .catch(() => {})
-      await deleteRuntime(ctx.workspaceId, pairedRuntimeId).catch(() => {})
+      // Only soft-delete the runtime when we are NOT preserving a live off-box VM
+      // (a soft-delete would strand the VM: teardown resolves via the sandboxes
+      // row + runtime, and the closing reaper needs a non-deleted runtime).
+      if (!offBoxPreserve) {
+        await deleteRuntime(ctx.workspaceId, pairedRuntimeId).catch(() => {})
+      }
     }
     await rm(sandboxRoot, { recursive: true, force: true }).catch(() => {})
     for (const mount of mounts) {
